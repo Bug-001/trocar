@@ -33,7 +33,7 @@
 | D10 | 采集↔适配统一信封 | **canonical 定义单一权威在 [4.1](4.1-capture-sources.md) §统一原始信封**(3.1 命名 + 观测元数据字段),3.1/4.2 引同一定义 | demo 的 `request_headers/request/response` 命名 / 两处各定义 | 接缝单源、避免两处定义漂移(不变式 3 在采集端的兑现) |
 | D11 | 查询传输 | **服务端 HTTP 返 JSON(A)** for v1:查询在服务端跑 SQL+分页,浏览器只取所需页/单 call | 浏览器内 DuckDB-Wasm(B) | 单机个人仪器最简、零浏览器依赖;大 trace 留服务端(正避开 800MB-入-tab 问题);(B) 记为 Extension,契约保持传输无关(同形结果集)(3.5/4.4/4.3) |
 | D12 | 上下文窗口折叠记忆 | **按 turn-anchor `content_hash` 记忆折叠态**(持久 localStorage):跨 scrub 存活、compaction 自然重置(新 turn=新 hash);未触碰 turn 默认末轮展开;+ 全展/全折便捷 | reset-on-scrub(无记忆)/ 粗粒度 sticky view mode | 复用既有 dedup/cache-break 键(3.2 `content_hash`),跨步稳定、不靠易漂移的 turn 索引(1.4/2.2/2.3) |
-| D13 | 时间轴缩放 / 大 session 导航 | **真·zoom = Extension**;v1 大 session:`.bar` min-width + `#saw`/`#rails` 横向滚动(ticks/cache 带同轴锁步),采样已封顶 300 | 全 zoom/pan 入 v1 / 纯 Extension 不处理 | index-spaced 轴 + nearestX 已够点选;min-width+滚动最小成本救大 session 可读性(1.3/2.1) |
+| D13 | 时间轴导航(overview+detail brush) | **概览条 + brush 视口**:排轴下一条全-session 概览条(step 少=每 call 柱、多=降采样 streamline,标「采样显示」)+ 半透明 brush(拖体=平移、拖边=缩放);detail 排轴只渲 brush 内 call、`xOf` 对 brush 窗重标定,**所有轨+cache 带+ticks 同轴锁步**;playhead 与 brush 同步 | min-width+横滚 / 纯 Extension zoom | 经典 focus+context 交互一举给缩放+平移,救大 session 导航且不撕裂 /N 对齐(1.3/2.1) |
 | D14 | 单价 / 花费 | **单价 = 可编辑配置**(provider 只回 token usage,无 $ 单价);cost = `usage × 单价` 派生,**MUST NOT 入归一化模型** | 单价烤进查询视图(改价=改码)/ 存 cost 进表 | 单价是外部可变量、用户可编辑;cost 是本地估算非源真相(2.2/4.4) |
 | D15 | tools 保真度 | **采集逐字存 tools schema**(关掉 demo `summarizeRequest` 的元数据降解,摘要上移 adapter);tools **纳入 AC-1 逐字**,不再 metadata 例外 | 保持 tools = 元数据(AC-1 排除) | 中央看板须忠实呈现原上下文(D-永久不变式);tools schema 是模型真实所见的一部分(4.1/4.2/3.2) |
 
