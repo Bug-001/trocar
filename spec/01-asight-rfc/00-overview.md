@@ -31,6 +31,17 @@
 | D8 | schema 粒度 vs UI 分组 | **schema 存 provider-中立细粒度**(resource `kind` 含 `scaffold`、`calls.lane` 到 `aux`);分组(2.4 六组)/ 子类文案(aux→notify/titlegen/quota)是**渲染期投影**;only-seen 名字 = `event='seen'`(metadata) | 加 `capability` 伞 kind / 加 CC lane 子类 / only-seen 只在部件本地派生 | 中心契约保通用,harness 专属聚合留在渲染层——不污染 schema、不破适配缝(3.1/3.2/2.4/2.6) |
 | D9 | 控制面(session-less 底噪)归宿 | **`calls.class='control'` + `session_id NULL` + `control_calls` 投影**;adapter 出归一化 `control_kind`;`sessions` 保持纯会话 | 合成 `sessions.kind='control'` 伪会话 / 全表 nullable | 最真实、不发明伪会话、不误导;NULL 只局限控制面查询(3.2/3.4/3.1/2.6) |
 | D10 | 采集↔适配统一信封 | **canonical 定义单一权威在 [4.1](4.1-capture-sources.md) §统一原始信封**(3.1 命名 + 观测元数据字段),3.1/4.2 引同一定义 | demo 的 `request_headers/request/response` 命名 / 两处各定义 | 接缝单源、避免两处定义漂移(不变式 3 在采集端的兑现) |
+| D11 | 查询传输 | **服务端 HTTP 返 JSON(A)** for v1:查询在服务端跑 SQL+分页,浏览器只取所需页/单 call | 浏览器内 DuckDB-Wasm(B) | 单机个人仪器最简、零浏览器依赖;大 trace 留服务端(正避开 800MB-入-tab 问题);(B) 记为 Extension,契约保持传输无关(同形结果集)(3.5/4.4/4.3) |
+| D12 | 上下文窗口折叠记忆 | **按 turn-anchor `content_hash` 记忆折叠态**(持久 localStorage):跨 scrub 存活、compaction 自然重置(新 turn=新 hash);未触碰 turn 默认末轮展开;+ 全展/全折便捷 | reset-on-scrub(无记忆)/ 粗粒度 sticky view mode | 复用既有 dedup/cache-break 键(3.2 `content_hash`),跨步稳定、不靠易漂移的 turn 索引(1.4/2.2/2.3) |
+| D13 | 时间轴缩放 / 大 session 导航 | **真·zoom = Extension**;v1 大 session:`.bar` min-width + `#saw`/`#rails` 横向滚动(ticks/cache 带同轴锁步),采样已封顶 300 | 全 zoom/pan 入 v1 / 纯 Extension 不处理 | index-spaced 轴 + nearestX 已够点选;min-width+滚动最小成本救大 session 可读性(1.3/2.1) |
+| D14 | 单价 / 花费 | **单价 = 可编辑配置**(provider 只回 token usage,无 $ 单价);cost = `usage × 单价` 派生,**MUST NOT 入归一化模型** | 单价烤进查询视图(改价=改码)/ 存 cost 进表 | 单价是外部可变量、用户可编辑;cost 是本地估算非源真相(2.2/4.4) |
+
+### 待数据决策(deferred-until-capture · 非 v1 阻塞)
+以下三项**须先有真实抓包 / harness 接入才能定**,现记为**显式延迟(带触发条件)**——非悬空 OPEN:
+- **R · CC `/rewind` 线上表现**([3.4](3.4-session-identity.md)):开发者 rewind 在 wire 如何呈现(疑似 message_count 骤降)→ 待一次真实 `/rewind` 抓包确认后补判定。
+- **DS · DeepSeek 合成 session 键 + `reasoning_content` 解析**([3.1](3.1-adapter-contract.md)/[3.4](3.4-session-identity.md)):DeepSeek 无 session id、reasoning 为字符串 → 合成键启发式与解析**先对真实 DeepSeek 抓包核对再硬编码**(现仅 CC 有数据)。
+- **X · Codex relay-tee 机制**([4.1](4.1-capture-sources.md)):在 Codex 既有本地 relay 加 tee 吐同信封的落地细节 → 待接入 Codex relay 时定;落地前 Codex 采集不完整,UI 须标注。
+> 触发即解:对应 harness / 功能首次被真实采集时,补判定并写回决策表。
 
 > 三家 provider 的 cache 设计(D3 的技术后果,直接喂意图②):Anthropic = 显式 `cache_control` 断点(tools→system→messages 前缀、TTL);OpenAI(Codex)= 自动前缀缓存(`cached_tokens`、1024-tok 起);DeepSeek = 自动磁盘缓存(`prompt_cache_hit/miss_tokens`)。cache 抽象(3.3)MUST 能表达这三种。
 
