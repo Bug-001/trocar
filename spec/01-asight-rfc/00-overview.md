@@ -36,6 +36,7 @@
 | D13 | 时间轴导航(overview+detail brush) | **概览条 + brush 视口**:排轴下一条全-session 概览条(step 少=每 call 柱、多=降采样 streamline,标「采样显示」)+ 半透明 brush(拖体=平移、拖边=缩放);detail 排轴只渲 brush 内 call、`xOf` 对 brush 窗重标定,**所有轨+cache 带+ticks 同轴锁步**;playhead 与 brush 同步 | min-width+横滚 / 纯 Extension zoom | 经典 focus+context 交互一举给缩放+平移,救大 session 导航且不撕裂 /N 对齐(1.3/2.1) |
 | D14 | 单价 / 花费 | **单价 = 可编辑配置**(provider 只回 token usage,无 $ 单价);cost = `usage × 单价` 派生,**MUST NOT 入归一化模型** | 单价烤进查询视图(改价=改码)/ 存 cost 进表 | 单价是外部可变量、用户可编辑;cost 是本地估算非源真相(2.2/4.4) |
 | D15 | tools 保真度 | **采集逐字存 tools schema**(关掉 demo `summarizeRequest` 的元数据降解,摘要上移 adapter);tools **纳入 AC-1 逐字**,不再 metadata 例外 | 保持 tools = 元数据(AC-1 排除) | 中央看板须忠实呈现原上下文(D-永久不变式);tools schema 是模型真实所见的一部分(4.1/4.2/3.2) |
+| D16 | OBSERVE-only 模式化(为主动模式预留) | **不变式 1 从绝对律 → 模式边界**:**观测模式**(默认 · v1 全部 · 唯一已建)恒 OBSERVE-only(永不 originate/注入/改写/用被测 token),模式内违反 = **必拒**;**主动模式**(intercept/modify/inject/relay + auto-adapt)是**独立 · 显式 · 消费者授权 · 非默认 · 未 v1** 的第二形态,MUST 走专门下游 build-RFC 才落地(见 [5.1](5.1-active-mode-reserved.md)),落地前主动发请求/改包仍 = **必拒**;观测模式纯粹性 MUST NOT 被主动模式污染(独立源类型 + 独立服务/模式 + 消费者授权门) | 保绝对律(active 另立独立产品)/ 仅留 vision note 不动不变式 | asight「另一面」=直接反哺 agent 开发(auto-adapt + agent 界 burpsuite);模式边界让未来可能而今不破 today(承 [1.1](1.1-product-definition.md):65) |
 
 ### 待数据决策(deferred-until-capture · 非 v1 阻塞)
 以下三项**须先有真实抓包 / harness 接入才能定**,现记为**显式延迟(带触发条件)**——非悬空 OPEN:
@@ -74,6 +75,7 @@
 | [4.2-storage-etl](4.2-storage-etl.md) | NDJSON → ETL → DuckDB/Parquet + 增量 | **已成文** |
 | [4.3-parse-index-cache](4.3-parse-index-cache.md) | 解析/索引/缓存(治反复解析卡顿) | **已成文** |
 | [4.4-server](4.4-server.md) | 本地服务(serve 前端 + DuckDB 查询 API vs DuckDB-Wasm 决策) | **已成文** |
+| [5.1-active-mode-reserved](5.1-active-mode-reserved.md) | asight 的另一面(预留):自动适配 + 主动干预(agent 界 burpsuite)· OBSERVE-only 模式边界(D16)· 预留架构缝 | **预留 · 非 v1**(须专门 build-RFC + 消费者授权才落地) |
 
 ---
 
