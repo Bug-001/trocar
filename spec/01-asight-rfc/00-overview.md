@@ -35,6 +35,7 @@
 | D12 | 上下文窗口折叠记忆 | **按 turn-anchor `content_hash` 记忆折叠态**(持久 localStorage):跨 scrub 存活、compaction 自然重置(新 turn=新 hash);未触碰 turn 默认末轮展开;+ 全展/全折便捷 | reset-on-scrub(无记忆)/ 粗粒度 sticky view mode | 复用既有 dedup/cache-break 键(3.2 `content_hash`),跨步稳定、不靠易漂移的 turn 索引(1.4/2.2/2.3) |
 | D13 | 时间轴缩放 / 大 session 导航 | **真·zoom = Extension**;v1 大 session:`.bar` min-width + `#saw`/`#rails` 横向滚动(ticks/cache 带同轴锁步),采样已封顶 300 | 全 zoom/pan 入 v1 / 纯 Extension 不处理 | index-spaced 轴 + nearestX 已够点选;min-width+滚动最小成本救大 session 可读性(1.3/2.1) |
 | D14 | 单价 / 花费 | **单价 = 可编辑配置**(provider 只回 token usage,无 $ 单价);cost = `usage × 单价` 派生,**MUST NOT 入归一化模型** | 单价烤进查询视图(改价=改码)/ 存 cost 进表 | 单价是外部可变量、用户可编辑;cost 是本地估算非源真相(2.2/4.4) |
+| D15 | tools 保真度 | **采集逐字存 tools schema**(关掉 demo `summarizeRequest` 的元数据降解,摘要上移 adapter);tools **纳入 AC-1 逐字**,不再 metadata 例外 | 保持 tools = 元数据(AC-1 排除) | 中央看板须忠实呈现原上下文(D-永久不变式);tools schema 是模型真实所见的一部分(4.1/4.2/3.2) |
 
 ### 待数据决策(deferred-until-capture · 非 v1 阻塞)
 以下三项**须先有真实抓包 / harness 接入才能定**,现记为**显式延迟(带触发条件)**——非悬空 OPEN:
