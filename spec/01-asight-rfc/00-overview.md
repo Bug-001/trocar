@@ -50,11 +50,11 @@
 | `2.4-resource-explorer` | 资源管理器(文件/MCP/skill/plugin/tool 进出 + 生命周期) | 待设计 |
 | `2.5-outline-nav` | 左栏 outline 导航 | 待设计 |
 | `2.6-detail-panel` | 右下可关闭 panel(原始数据流)+ 非核心流侧栏 | 待设计 |
-| ★★ `3.1-adapter-contract` | 适配层契约(provider 线格式 × harness 约定 → 归一化)——**产品的心脏** | 待设计 |
-| ★★ `3.2-normalized-model` | 归一化 schema(sessions/calls/blocks/resources/cache_events) | 待设计 |
-| ★ `3.3-cache-model` | cache 抽象:统一命中/断点/前缀复用,能表达三家 cache 设计,用真实 usage | 待设计 |
-| `3.4-session-identity` | session / fork / 分支识别(顶栏同名 session 问题的权威) | 待设计 |
-| `3.5-query-layer` | 前端 ↔ DuckDB 查询契约 | 待设计 |
+| ★★ [3.1-adapter-contract](3.1-adapter-contract.md) | 适配层契约(provider 线格式 × harness 约定 → 归一化)——**产品的心脏** | **已成文** |
+| ★★ [3.2-normalized-model](3.2-normalized-model.md) | 归一化 schema(sessions/calls/blocks/resources/cache_events) | **已成文** |
+| ★ [3.3-cache-model](3.3-cache-model.md) | cache 抽象:统一命中/断点/前缀复用,能表达三家 cache 设计,用真实 usage | **已成文** |
+| [3.4-session-identity](3.4-session-identity.md) | session / fork / 分支识别(顶栏同名 session 问题的权威) | **已成文** |
+| [3.5-query-layer](3.5-query-layer.md) | 前端 ↔ DuckDB 查询契约 | **已成文** |
 | `4.1-capture-sources` | 可插拔采集源 + onboard/证书/代理配置 + 测试(Codex relay-tee 细节 TODO) | 待设计 |
 | `4.2-storage-etl` | NDJSON → ETL → DuckDB/Parquet + 增量 | 待设计 |
 | `4.3-parse-index-cache` | 解析/索引/缓存(治反复解析卡顿) | 待设计 |
