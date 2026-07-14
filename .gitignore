@@ -3,3 +3,6 @@ node_modules/
 *.log
 # captured LLM traffic — keep local, never redistribute
 **/*.ndjson
+
+# brainstorming visual-companion mockups — local scratch
+.superpowers/
