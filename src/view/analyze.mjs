@@ -1,0 +1,731 @@
+// analyze.mjs — turn a session's captured /v1/messages NDJSON into the structures the
+// dashboard renders. A single Claude session is NOT one stream of calls — transparent
+// capture reveals several concurrent LANES sharing the wire:
+//   • main        the ReAct conversation (the turns you actually see)
+//   • subagent    each spawned Agent/Task — its own fresh context stream
+//   • monitor     🛡 a background "security monitor" (prompt-injection guardrail): Claude
+//                 Code feeds the running <transcript> to an opus with max_tokens=64 that
+//                 replies <block>no</block> / <block>yes</block>. Always a NON-streaming
+//                 JSON response, so its usage lives in response.body (see normResp).
+//   • aux         warmup / quota / title-gen utility calls (0 tools, tiny)
+// (count_tokens probes are a 5th lane, added by the UI from probes.ndjson.)
+//
+// Pure: analyze(records) -> { streams, steps, stats, lanes }. No I/O.
+
+const FILE_OPS = new Set(['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
+const DIR_OPS = new Set(['Glob', 'Grep', 'LS'])
+const SPAWN_OPS = new Set(['Agent', 'Task'])
+
+function hash(s) {
+  let h = 0
+  for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0
+  return (h >>> 0).toString(16).padStart(8, '0')
+}
+const sysText = (r) => (r.request?.system || []).map((b) => b.text || '').join('\n')
+const isSub = (r) => /cc_is_subagent=true/.test(sysText(r))
+const isMonitor = (r) => /you are a security monitor/i.test(sysText(r))
+const userTextOf = (r) => (r.request?.messages || [])
+  .map((m) => Array.isArray(m.content) ? m.content.map((b) => (b.type === 'text' ? b.text || '' : '')).join('') : String(m.content || ''))
+  .join(' ')
+
+// The "aux" wire (0 tools, ≤2 msgs) is really THREE utilities with different fates for their output:
+//   notify   = background activity summarizer (system: "…walked away. Read the tail…") → JSON status
+//              that drives Claude Desktop's push notifications; output consumed by the client, never shown.
+//   titlegen = "2-4 word lowercase label for this job" → becomes the session's human-readable name.
+//   quota    = max_tokens:1 "quota" ping → liveness / keep-alive; the 1-token reply is discarded.
+function auxSubkind(r, userText) {
+  const mt = r.request?.max_tokens || 0
+  if (mt <= 1 || /^\s*quota\s*$/i.test(userText)) return 'quota'
+  if (/lowercase label for this job/i.test(userText)) return 'titlegen'
+  if (/walked away|Read the tail of what the agent/i.test(sysText(r))) return 'notify'
+  return 'aux'
+}
+
+// Unify the two response shapes: streamed SSE (already reconstructed into
+// response.{usage,text,tool_calls}) and non-streaming JSON (raw body in response.body).
+// Without this, JSON responses (all the security-monitor calls) read as ctx=0 / no text.
+export function normResp(r) {
+  const rs = r.response || {}
+  if (rs.kind === 'json' && rs.body && typeof rs.body === 'object') {
+    const c = Array.isArray(rs.body.content) ? rs.body.content : []
+    return {
+      status: rs.status,
+      usage: rs.body.usage || {},
+      text: c.filter((b) => b.type === 'text').map((b) => b.text || '').join(''),
+      thinking: c.filter((b) => b.type === 'thinking').map((b) => b.thinking || '').join('') || undefined,
+      tool_calls: c.filter((b) => b.type === 'tool_use' || b.type === 'server_tool_use')
+        .map((b) => ({ id: b.id, name: b.name, input: b.input })),
+      stop_reason: rs.body.stop_reason,
+    }
+  }
+  return {
+    status: rs.status, usage: rs.usage || {}, text: rs.text || '',
+    thinking: rs.thinking, tool_calls: rs.tool_calls || [], stop_reason: rs.stop_reason,
+  }
+}
+const ctxTokens = (r) => {
+  const u = normResp(r).usage
+  return (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0)
+}
+
+// Pull a short readable label from a tool call's input.
+export function toolArg(name, input = {}) {
+  if (input.file_path || input.path || input.notebook_path)
+    return String(input.file_path || input.path || input.notebook_path)
+  if (name === 'Bash' && input.command) return String(input.command)
+  if (name === 'Glob' && input.pattern) return String(input.pattern)
+  if (name === 'Grep' && input.pattern) return String(input.pattern)
+  if ((name === 'WebFetch' || name === 'WebSearch') && (input.url || input.query))
+    return String(input.url || input.query)
+  if (SPAWN_OPS.has(name)) return String(input.description || input.subagent_type || '')
+  return ''
+}
+
+function textOfMessage(m) {
+  if (typeof m.content === 'string') return m.content
+  return (m.content || []).map((b) => (b.type === 'text' ? b.text : '')).join('\n')
+}
+
+// Which slice of a file entered context (from Read offset/limit), or how it was touched.
+function rangeOf(name, input = {}) {
+  if (name === 'Read') {
+    const o = input.offset, l = input.limit
+    if (o && l) return `L${o}–${o + l}`
+    if (l) return `L1–${l}`
+    if (o) return `L${o}–end`
+    return 'full file'
+  }
+  if (name === 'Write') return 'written'
+  if (name === 'Edit' || name === 'MultiEdit') return 'edited'
+  if (name === 'NotebookEdit') return 'notebook edit'
+  return null
+}
+
+// A file whose content is dumped by a Bash command (cat/head/tail/sed -n …) IS resident
+// in context just like a Read — so it belongs in the "Opened" tier, not "Only seen".
+// Parse read-like commands out of a bash string (conservative: miss rather than mislabel).
+const BASH_READ = /^(cat|bat|head|tail|tac|nl|less|more|xxd|od|strings)$/
+function parseBashReads(command) {
+  if (!command || typeof command !== 'string') return []
+  const out = []
+  for (const seg of command.split(/\||&&|;|\n/)) {
+    if (/>/.test(seg)) continue // an output redirect → writing, not reading into context
+    const toks = seg.match(/"[^"]*"|'[^']*'|\S+/g)
+    if (!toks || !toks.length) continue
+    const cmd = toks[0].replace(/^['"]|['"]$/g, '').split('/').pop()
+    const isSed = cmd === 'sed'
+    if (!BASH_READ.test(cmd) && !isSed) continue
+    let range = 'full file'
+    if (isSed) { const sm = seg.match(/-n\s*['"]?(\d+),(\d+)\s*p/); if (sm) range = `L${sm[1]}–${sm[2]}`; else continue }
+    else { const hn = seg.match(/-n?\s*(\d+)\b/); if (cmd === 'head' && hn) range = `L1–${hn[1]}`; else if (cmd === 'tail' && hn) range = `tail ${hn[1]}` }
+    for (const t0 of toks.slice(1)) {
+      const t = t0.replace(/^['"]|['"]$/g, '')
+      if (t.startsWith('-') || /^[|&;<>]/.test(t) || /^https?:/i.test(t)) continue
+      if (!/[./]/.test(t) || /[*?{}]/.test(t)) continue // needs a dot or slash; skip globs
+      out.push({ path: t, range })
+    }
+  }
+  return out
+}
+
+// Detect resources introduced by a set of (new) messages.
+function extractResources(messages, step, out) {
+  for (const m of messages) {
+    const content = Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }]
+    for (const b of content) {
+      if (b.type === 'tool_use') {
+        const arg = toolArg(b.name, b.input)
+        if (FILE_OPS.has(b.name) && arg) addRes(out, 'file', arg, step, b.name, rangeOf(b.name, b.input))
+        else if (b.name === 'Bash' && b.input?.command) {
+          for (const rd of parseBashReads(b.input.command)) addRes(out, 'file', rd.path, step, 'Bash', rd.range)
+        } else if (DIR_OPS.has(b.name) && arg) addRes(out, 'dir', arg, step, b.name)
+        else if ((b.name === 'WebFetch' || b.name === 'WebSearch') && arg)
+          addRes(out, 'link', arg, step, b.name)
+        // Skill invocation: fine-grained kind:'skill' (schema 3.2 kind enum / D8 — no `capability` umbrella).
+        // The tool_use is the point-marker + args source; the resident SKILL.md body is caught below.
+        // normalize to the bare skill name (basename) so a namespaced invocation
+        // (`plugin:skill`) keys to the SAME resource as its resident SKILL.md body
+        // (whose "Base directory" basename is unqualified) — else the card splits in two.
+        else if (b.name === 'Skill') addRes(out, 'skill', String(b.input?.skill || b.input?.command || '?').split(':').pop().split('/').pop(), step, 'Skill')
+      } else if (b.type === 'image') {
+        addRes(out, 'capability', 'image (' + (b.source?.media_type || '?') + ')', step, 'image')
+      } else if (b.type === 'document') {
+        addRes(out, 'capability', 'document (' + (b.source?.media_type || b.title || '?') + ')', step, 'document')
+      } else if (b.type === 'text' && typeof b.text === 'string') {
+        // Skill residency: a skill enters context as a bare `user` `text` block carrying the
+        // verbatim SKILL.md, prefixed "Base directory for this skill: <dir>" — NOT a Read of a
+        // file (so it never lands in "files opened"). basename(dir) = skill name. The body IS
+        // verbatim on the wire, so its length is the resident size (fine kind:'skill', schema 3.2).
+        const sk = b.text.match(/^Base directory for this skill: (\S+)/)
+        if (sk) addRes(out, 'skill', sk[1].split('/').pop(), step, 'skill', `${b.text.length} chars (verbatim body)`)
+        if (/<system-reminder>/.test(b.text)) {
+          if (/CLAUDE\.md/i.test(b.text)) addRes(out, 'scaffold', 'CLAUDE.md', step, 'auto-load')
+          if (/\bMEMORY\.md\b|auto-memory|persists across conversations/i.test(b.text))
+            addRes(out, 'scaffold', 'memory (MEMORY.md)', step, 'auto-load')
+        }
+        // only genuine URLs — strip trailing markdown/punctuation so `**http://x**` or `http://x,`
+        // don't leak the surrounding prose into the label
+        const urls = b.text.match(/https?:\/\/[^\s"'`<>)\]]+/g)
+        if (urls) for (const raw of urls.slice(0, 3)) {
+          const u = raw.replace(/[*_~.,;:!?)\]}>'"]+$/, '')
+          if (/^https?:\/\/[^/]+\.[^/]/.test(u) || /^https?:\/\/[^/]+:\d/.test(u)) addRes(out, 'link', u, step, 'mention')
+        }
+      }
+    }
+  }
+}
+function addRes(map, kind, label, step, via, range) {
+  const key = kind + '::' + label
+  let r = map.get(key)
+  if (!r) {
+    r = { kind, label, via, segments: [{ enter: step, evict: null }], loads: [], hits: 1 }
+    map.set(key, r)
+  } else {
+    r.hits++
+    const last = r.segments[r.segments.length - 1]
+    if (last.evict != null && step >= last.evict) r.segments.push({ enter: step, evict: null })
+  }
+  if (range) r.loads.push({ step, range, via })
+}
+
+// "Seen but never opened" filenames: path-like tokens the agent saw in tool RESULTS
+// (Grep/LS/Glob/Bash output) or in prose, but never Read/Wrote/Edited. Answers
+// "did the agent actually use file X, or just see its name?". A single grep can spray
+// hundreds of paths, so: strict token (must have a '/' OR a known code extension),
+// trailing punctuation stripped, and a per-text cap so one huge result can't dominate.
+const KNOWN_EXT = 'mjs|js|ts|tsx|jsx|cjs|json|jsonl|ndjson|html|htm|css|scss|less|py|sh|bash|zsh|fish|md|mdx|rst|yaml|yml|toml|txt|rs|go|c|h|hpp|cpp|cc|java|kt|swift|rb|php|sql|xml|svg|lock|cfg|conf|ini|env|plist|log|csv|tsv|tif|png|jpg|jpeg|gif|webp|pdf|ipynb|proto|gradle|properties|map|patch|diff|sock'
+const KNOWN_EXT_SET = new Set(KNOWN_EXT.split('|'))
+// well-known extensionless files (PATH_RE requires a dot, so match these as whole tokens)
+const KNOWN_FILE = new Set(['Makefile', 'GNUmakefile', 'Dockerfile', 'Containerfile', 'LICENSE', 'COPYING', 'README', 'CHANGELOG', 'Procfile', 'Rakefile', 'Gemfile', 'Vagrantfile', 'Jenkinsfile', '.gitignore', '.dockerignore', '.editorconfig', '.npmrc', '.env'])
+const PATH_RE = new RegExp('(?:[\\w.@\\-]+/)+[\\w.@\\-]+\\.\\w{1,8}|\\b[\\w.@\\-]+\\.(?:' + KNOWN_EXT + ')\\b|\\b(?:Makefile|GNUmakefile|Dockerfile|Containerfile|Procfile|Rakefile|Gemfile|Vagrantfile|Jenkinsfile)\\b|(?:^|[\\s"\'(])(\\.(?:gitignore|dockerignore|editorconfig|npmrc|env))\\b', 'gi')
+const CODE_STEM = /^(process|console|import|module|exports|window|document|globalThis|self|Math|JSON|Object|Array|res|req|err|ctx|response|resp|reply|result|body|payload|data|obj|item|row|self)$/i
+const TECH_STEM = /^(node|vue|next|nuxt|react|angular|svelte|d3|three|express|jquery|ember|backbone|preact|solid|remix|astro|webpack|rollup|vite)$/i
+// Precision filter: reject version strings (HTTP/1.1), code identifiers (process.env, response.json())
+// and technology names (Node.js), while keeping real files. Runs on tokens the loose regex grabbed.
+function acceptPath(p) {
+  const base = p.split('/').pop()
+  const dot = base.lastIndexOf('.')
+  if (dot <= 0) return KNOWN_FILE.has(base) // extensionless / dotfile → only well-known names
+  const stem = base.slice(0, dot), ext = base.slice(dot + 1).toLowerCase()
+  if (!KNOWN_EXT_SET.has(ext)) return false // "extensions" like test/length/toString/1 → not a file (kills slash-bypass noise)
+  if (!p.includes('/')) { // bare tokens are ambiguous with code identifiers & tech names; a slash implies a real path
+    if (stem.length <= 2) return false // r.json, e.env → almost always code
+    if (CODE_STEM.test(stem)) return false // process.env, response.json, payload.yaml (bare)
+    if (TECH_STEM.test(stem)) return false // Node.js, Vue.js in prose
+    if (ext === 'log' || ext === 'env') return false // console.log without a path
+  }
+  return true
+}
+function extractSeenPaths(text, step, seen, cap) {
+  if (!text || typeof text !== 'string') return
+  text = text.replace(/https?:\/\/[^\s"'`<>)\]]+/g, ' ') // drop URLs so remote asset paths aren't "seen files"
+  PATH_RE.lastIndex = 0
+  let m, n = 0
+  while ((m = PATH_RE.exec(text)) && n < cap) {
+    const raw = m[1] || m[0] // group 1 = the dotfile capture; else whole match
+    const end = m.index + m[0].length
+    if (text[end] === '(') continue // response.json() etc. — a method call, not a file
+    const p = raw.replace(/^[\s"'(]+/, '').replace(/[.,;:!?)\]}>'"`]+$/, '')
+    if (p.length < 3 || p.endsWith('/') || !acceptPath(p)) continue
+    const ex = seen.get(p)
+    if (ex) ex.count++
+    else { seen.set(p, { path: p, firstStep: step, count: 1 }); n++ } // cap counts DISTINCT paths
+  }
+}
+function textOfResult(b) {
+  const c = b.content
+  return typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => x.text || '').join('\n') : ''
+}
+
+// Classify the assistant turn a call PRODUCED into ReAct events (uses normResp).
+function responseEvents(r, step, streamId) {
+  const rs = normResp(r)
+  const ev = []
+  if (rs.thinking) ev.push({ type: 'thought', step, streamId, text: rs.thinking })
+  if (rs.text) ev.push({ type: 'say', step, streamId, text: rs.text })
+  for (const c of rs.tool_calls || []) {
+    const spawn = SPAWN_OPS.has(c.name)
+    ev.push({
+      type: spawn ? 'spawn' : 'action',
+      step, streamId, tool: c.name, id: c.id,
+      arg: toolArg(c.name, c.input), input: c.input,
+    })
+  }
+  return ev
+}
+
+function observationEvents(newMessages, step, streamId, toolNameById) {
+  const ev = []
+  for (const m of newMessages) {
+    if (m.role !== 'user' || !Array.isArray(m.content)) continue
+    for (const b of m.content) {
+      if (b.type !== 'tool_result') continue
+      const src = toolNameById.get(b.tool_use_id) || 'tool'
+      const c = b.content
+      const text = typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => x.text || `[${x.type}]`).join('\n') : JSON.stringify(c)
+      ev.push({ type: 'observation', step, streamId, source: src, tool_use_id: b.tool_use_id, text })
+    }
+  }
+  return ev
+}
+
+function userEvents(newMessages, step, streamId) {
+  const ev = []
+  for (const m of newMessages) {
+    if (m.role !== 'user') continue
+    const content = Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }]
+    const hasToolResult = content.some((b) => b.type === 'tool_result')
+    if (hasToolResult) continue
+    const text = content.filter((b) => b.type === 'text').map((b) => b.text).join('\n')
+    const human = text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim()
+    if (human) ev.push({ type: 'user', step, streamId, text: human })
+  }
+  return ev
+}
+
+const LANE_META = {
+  main: { icon: '💬', label: 'conversation' },
+  subagent: { icon: '🧬', label: 'subagent' },
+  monitor: { icon: '🛡', label: 'security-monitor' },
+  notify: { icon: '📣', label: 'activity → notification' },
+  titlegen: { icon: '🏷', label: 'session title-gen' },
+  quota: { icon: '🔌', label: 'quota / keep-alive' },
+  aux: { icon: '⚙', label: 'other util' },
+  probe: { icon: '👁', label: 'count_tokens probes' },
+}
+const LANE_ORDER = { main: 0, subagent: 1, monitor: 2, notify: 3, titlegen: 4, quota: 5, aux: 6 }
+const AUX_KINDS = new Set(['aux', 'notify', 'titlegen', 'quota'])
+
+export function analyze(records) {
+  const llm = records.filter(
+    (r) => r.is_llm_call && r.request && Array.isArray(r.request.messages) && (r.response?.status === 200 || !r.response || r.error),
+  )
+  llm.sort((a, b) => String(a.ts_request).localeCompare(String(b.ts_request)) || String(a.id).localeCompare(String(b.id)))
+
+  // ── segment into streams/lanes by lineage + role marker ─────────────────────
+  const streams = []
+  let mainStream = null, curSub = null, monitorStream = null
+  const auxStreams = new Map()
+  let prevKind = null
+  const stepList = []
+
+  for (const r of llm) {
+    const msgCount = r.request.message_count
+    const tools = r.request.tool_count || 0
+    const sub = isSub(r)
+    // The main conversation runs on the primary (opus) model; utility calls run on a small model
+    // (haiku). A tiny haiku call (≤2 msgs) is background util REGARDLESS of tool count — otherwise
+    // a burst of failed haiku retries (tools≥1) during a network drop pollutes the conversation lane.
+    const small = /haiku/i.test(r.request.model || '')
+    let stream
+    if (isMonitor(r)) {
+      stream = monitorStream || (monitorStream = mkStream('monitor'))
+    } else if (msgCount <= 2 && !sub && (tools === 0 || small)) {
+      const sk = auxSubkind(r, userTextOf(r))
+      stream = auxStreams.get(sk) || auxStreams.set(sk, mkStream(sk)).get(sk)
+    } else if (sub) {
+      const fresh = !curSub || msgCount <= (curSub._lastMsg ?? 0) || prevKind === 'main'
+      if (fresh) curSub = mkStream('subagent')
+      stream = curSub
+    } else {
+      if (!mainStream) mainStream = mkStream('main')
+      stream = mainStream
+    }
+    stream._lastMsg = msgCount
+    prevKind = stream.kind
+    const step = { gi: stepList.length, id: r.id, streamId: stream.id, rec: r, norm: normResp(r),
+      msgCount, tools, ctx: ctxTokens(r), status: r.response?.status ?? null,
+      ts: r.ts_request, compaction: false,
+      error: !!r.error || (r.response?.status || 0) >= 500,
+      errMsg: r.response?.error?.message || ((r.response?.status || 0) >= 500 ? `HTTP ${r.response.status}` : null) }
+    stream.calls.push(step)
+    stepList.push(step)
+  }
+  function mkStream(kind) {
+    const s = { id: 's' + streams.length, kind, calls: [], events: [], resources: [], parent: null, spawnArg: null }
+    streams.push(s)
+    return s
+  }
+
+  // ── per stream: deltas → events + resources ─────────────────────────────────
+  const toolNameById = new Map()
+  for (const s of streams) {
+    // monitor + aux-family lanes: no ReAct/resource extraction — just one event per call
+    if (s.kind === 'monitor' || AUX_KINDS.has(s.kind)) {
+      let prevCtx = 0
+      for (const step of s.calls) {
+        step.dCtx = step.ctx - prevCtx; prevCtx = step.ctx
+        if (step.error) { s.events.push({ type: 'error', step: step.gi, streamId: s.id, msg: step.errMsg }); continue }
+        if (s.kind === 'monitor') {
+          const v = (step.norm.text || '').replace(/<\/?block>/g, '').trim()
+          step.flagged = !/^no\b/i.test(v)
+          step.verdict = v
+          s.events.push({ type: 'monitor', step: step.gi, streamId: s.id, verdict: v, flagged: step.flagged })
+        } else {
+          s.events.push({ type: 'aux', subkind: s.kind, step: step.gi, streamId: s.id, text: step.norm.text || '', model: step.rec.request?.model })
+        }
+      }
+      continue
+    }
+    // main / subagent lanes
+    const resMap = new Map()
+    const seenMap = new Map() // filenames the agent saw (in results/prose) but never opened
+    let prevCount = 0, prevCtx = 0
+    for (let k = 0; k < s.calls.length; k++) {
+      const step = s.calls[k]
+      step.dCtx = step.ctx - prevCtx
+      prevCtx = step.ctx
+      const msgs = step.rec.request.messages
+      for (const m of msgs) {
+        if (Array.isArray(m.content))
+          for (const b of m.content) if (b.type === 'tool_use') toolNameById.set(b.id, b.name)
+      }
+      for (const c of step.norm.tool_calls || []) toolNameById.set(c.id, c.name)
+      for (const t of step.rec.request.tools || []) {
+        if (/^mcp__/.test(t.name || '')) addRes(resMap, 'capability', 'MCP: ' + (String(t.name).split('__')[1] || t.name), step.gi, 'mcp')
+      }
+
+      const drop = msgs.length < prevCount
+      const bigDrop = drop && msgs.length < prevCount - 5 && msgs.length < prevCount * 0.7
+      const hasPreamble = msgs.slice(0, 4).some((m) => /continued from a previous conversation/i.test(textOfMessage(m)))
+      const isSummarize = /^\s*<analysis>/.test(step.norm.text || '')
+      let newMsgs
+      if (bigDrop || (drop && hasPreamble)) {
+        step.compaction = true
+        step.evictedFrom = prevCount
+        step.evictedTo = msgs.length
+        for (const res of resMap.values()) {
+          const last = res.segments[res.segments.length - 1]
+          if (last.evict == null) last.evict = step.gi
+        }
+        newMsgs = msgs
+      } else if (drop) {
+        newMsgs = []
+      } else {
+        newMsgs = msgs.slice(prevCount)
+      }
+      if (step.compaction)
+        s.events.push({ type: 'compaction', step: step.gi, streamId: s.id, from: step.evictedFrom, to: step.evictedTo })
+      if (isSummarize) {
+        step.summarizing = true
+        s.events.push({ type: 'summarize', step: step.gi, streamId: s.id, out: step.norm.usage?.output_tokens })
+      }
+      extractResources(newMsgs, step.gi, resMap)
+      // seen-but-not-opened filenames: scan tool-result text (bigger cap) + prose (smaller)
+      for (const m of newMsgs) {
+        const content = Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }]
+        for (const b of content) {
+          if (b.type === 'tool_result') extractSeenPaths(textOfResult(b), step.gi, seenMap, 80)
+          else if (b.type === 'text') extractSeenPaths(b.text, step.gi, seenMap, 40)
+        }
+      }
+      extractSeenPaths(step.norm.text || '', step.gi, seenMap, 40)
+      s.events.push(...userEvents(newMsgs, step.gi, s.id))
+      s.events.push(...observationEvents(newMsgs, step.gi, s.id, toolNameById))
+      if (step.error) s.events.push({ type: 'error', step: step.gi, streamId: s.id, msg: step.errMsg })
+      else if (!isSummarize) s.events.push(...responseEvents(step.rec, step.gi, s.id))
+      prevCount = msgs.length
+    }
+    s.resources = [...resMap.values()]
+    // "only seen" = matched paths minus anything actually opened. Dedupe absolute-vs-relative
+    // spellings of the SAME opened file (path-boundary suffix), but keep distinct-directory
+    // files that merely share a basename (src/index.js opened ≠ test/index.js seen).
+    const openedArr = [...new Set([...resMap.values()].filter((r) => r.kind === 'file').map((r) => r.label))]
+    const sameFile = (a, b) => a === b || a.endsWith('/' + b) || b.endsWith('/' + a)
+    s.seenFiles = [...seenMap.values()]
+      .filter((sf) => !openedArr.some((o) => sameFile(o, sf.path)))
+      .sort((a, b) => a.firstStep - b.firstStep || b.count - a.count)
+      .slice(0, 200)
+  }
+
+  // ── link subagents to their spawning Agent/Task call ────────────────────────
+  for (const s of streams.filter((x) => x.kind === 'subagent')) {
+    const firstUser = s.calls[0]?.rec.request.messages.find((m) => m.role === 'user')
+    const firstText = firstUser ? textOfMessage(firstUser).replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '') : ''
+    let best = null
+    for (const st of streams) {
+      for (const e of st.events) {
+        if (e.type !== 'spawn') continue
+        const p = (e.input?.prompt || '').slice(0, 60)
+        if (p && firstText.includes(p.slice(0, 40))) best = e
+      }
+    }
+    if (best) {
+      s.parent = best.streamId
+      s.spawnArg = best.arg
+      s.spawnStep = best.step
+      best.childStreamId = s.id
+    }
+  }
+
+  // ── lanes: a per-session view model the UI can tab between ───────────────────
+  const lanes = streams.slice()
+    .sort((a, b) => (LANE_ORDER[a.kind] - LANE_ORDER[b.kind]) || String(a.id).localeCompare(String(b.id)))
+    .map((s) => {
+      const giLocal = new Map(s.calls.map((c, i) => [c.gi, i]))
+      const laneId = s.kind === 'subagent' ? s.id : s.kind
+      return {
+        id: laneId, streamId: s.id, kind: s.kind, icon: LANE_META[s.kind].icon,
+        label: s.kind === 'subagent' ? `subagent: ${s.spawnArg || 'task'}` : LANE_META[s.kind].label,
+        calls: s.calls, events: s.events, resources: s.resources, seenFiles: s.seenFiles || [], giLocal,
+        peakCtx: s.calls.reduce((m, c) => Math.max(m, c.ctx), 1),
+        spawnStep: s.spawnStep ?? null, parent: s.parent,
+        flagged: s.kind === 'monitor' ? s.events.filter((e) => e.flagged).length : 0,
+      }
+    })
+
+  // NOTE: the true-order linear context (linearContext) + per-step cache-break (cacheBreak) are
+  // computed lazily by the UI for just the current + previous call — NOT precomputed for every
+  // call here — since analyze() re-runs on every poll and a session has hundreds of calls.
+
+  const stats = {
+    calls: stepList.length,
+    streams: streams.length,
+    subagents: streams.filter((s) => s.kind === 'subagent').length,
+    monitors: (streams.find((s) => s.kind === 'monitor')?.calls.length) || 0,
+    compactions: stepList.filter((s) => s.compaction).length,
+    totalIn: llm.reduce((a, r) => a + (normResp(r).usage.input_tokens || 0), 0),
+    totalOut: llm.reduce((a, r) => a + (normResp(r).usage.output_tokens || 0), 0),
+    peakCtx: stepList.reduce((a, s) => Math.max(a, s.ctx), 0),
+  }
+  return { streams, steps: stepList, stats, lanes }
+}
+
+// ── the linear context: the exact tools → system → messages sequence the model assembles ──
+// The request body is a JSON object with three SEPARATE top-level fields; its byte/key order is
+// an SDK detail and is irrelevant to the model. What the model actually reads top-to-bottom — and
+// what the Anthropic prompt cache uses as its prefix — is tools, then system, then messages.
+// So THIS is "the original order of the context", not the JSON key order.
+function blkHashText(b) {
+  if (typeof b === 'string') return b
+  if (!b || typeof b !== 'object') return String(b)
+  if (b.type === 'text') return b.text || ''
+  if (b.type === 'thinking') return b.thinking || ''
+  if (b.type === 'redacted_thinking') return 'redacted_thinking'
+  if (b.type === 'tool_use' || b.type === 'server_tool_use') return (b.name || '') + '::' + JSON.stringify(b.input || {})
+  if (b.type === 'tool_result') {
+    const c = b.content
+    const t = typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => x.text || `[${x.type}]`).join('\n') : JSON.stringify(c)
+    return (b.tool_use_id || '') + '::' + t + (b.is_error ? '::ERR' : '')
+  }
+  if (b.type === 'image') return 'image:' + (b.source?.media_type || b.source?.type || '')
+  if (b.type === 'document') return 'document:' + (b.source?.media_type || b.title || '')
+  return JSON.stringify(b)
+}
+// hash a bounded prefix — plenty to distinguish blocks, and O(1) per block regardless of size
+const blkKey = (prefix, b) => prefix + hash(blkHashText(b).slice(0, 4096))
+
+// short structural label for a system block (Claude Code stacks several)
+export function sysLabel(text) {
+  const t = text || ''
+  // structural blocks first, anchored on their opening line — so a big prompt block that merely
+  // EMBEDS a <system-reminder> (Claude Code appends CLAUDE.md / memory into the system prompt) is
+  // named by its dominant content, not by the reminder buried inside it.
+  if (/^x-anthropic-billing-header/.test(t)) return 'billing header'
+  if (/^You are (Claude Code|a Claude agent)/.test(t)) return 'identity'
+  if (/^\s*You are an interactive agent/.test(t)) return 'agent instructions'
+  // a block that is ITSELF just a reminder (starts with the tag)
+  if (/^\s*<system-reminder>/.test(t)) {
+    if (/CLAUDE\.md/i.test(t)) return 'CLAUDE.md'
+    if (/\bMEMORY\.md\b|auto-memory|persists across conversations/i.test(t)) return 'memory'
+    return 'system-reminder'
+  }
+  // otherwise a system-prompt block; note if it carries embedded CLAUDE.md / memory context
+  const carries = []
+  if (/CLAUDE\.md/i.test(t)) carries.push('CLAUDE.md')
+  if (/\bMEMORY\.md\b|auto-memory|persists across conversations/i.test(t)) carries.push('memory')
+  return 'system prompt' + (carries.length ? ' +' + carries.join(' +') : '')
+}
+
+// Flatten a captured request into ordered block descriptors. Each carries a stable content `key`
+// (for prefix-diffing against the previous call), its `cache_control` if Claude Code set one, and
+// enough metadata for the view to render + link it to the resource ledger.
+export function linearContext(request) {
+  const flat = []
+  for (const [i, t] of (request?.tools || []).entries()) {
+    const mcp = /^mcp__/.test(t.name || '')
+    // D15: capture now stores tools VERBATIM (full description + input_schema). Derive the display
+    // metadata here (summarization moved up to the adapter, RFC 4.1 §验收#3). Back-compat: old v0
+    // traces only have description_chars / input_schema_props — fall back to those, and mark the
+    // block non-verbatim so the UI keeps the honest "metadata only" faithfulness badge for them.
+    const hasSchema = t.input_schema !== undefined && t.input_schema !== null
+    const hasDesc = typeof t.description === 'string'
+    const verbatim = hasSchema || hasDesc
+    const props = hasSchema ? (t.input_schema?.properties ? Object.keys(t.input_schema.properties) : []) : (t.input_schema_props || [])
+    const descChars = hasDesc ? t.description.length : (t.description_chars || 0)
+    flat.push({
+      sec: 'tools', kind: 'tool', role: 'tool', name: t.name || '', ttype: t.type || '',
+      props, descChars, cc: t.cache_control || null, mcp,
+      verbatim, desc: hasDesc ? t.description : undefined, schema: hasSchema ? t.input_schema : undefined,
+      resKey: mcp ? 'mcp::' + (String(t.name).split('__')[1] || '') : '',
+      key: 'T:' + (t.name || i) + ':' + descChars + ':' + props.length,
+    })
+  }
+  for (const [i, b] of (request?.system || []).entries()) {
+    const text = b?.text || ''
+    // the billing-header block carries a per-request nonce (cch=…, cc_prev_req=…) so its bytes change
+    // every call — yet cache-hit stays ~100%, i.e. Anthropic excludes this billing signal from the
+    // cache key. Flag it volatile so the cache-break marker doesn't falsely trip on it.
+    const volatile = /^x-anthropic-billing-header/.test(text)
+    flat.push({ sec: 'system', kind: 'system', role: 'system', si: i, label: sysLabel(text), text, chars: text.length, volatile, cc: b?.cache_control || null, key: blkKey('S:', { type: 'text', text }) })
+  }
+  for (const [mi, m] of (request?.messages || []).entries()) {
+    const content = Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }]
+    for (const [bi, b] of content.entries()) {
+      const type = typeof b === 'string' ? 'text' : (b?.type || 'text')
+      flat.push({
+        sec: 'messages', kind: type, role: m.role, mi, bi, block: b,
+        toolName: type === 'tool_use' || type === 'server_tool_use' ? (b.name || '') : '',
+        cc: (b && b.cache_control) || null,
+        resKey: msgResKey(b), key: blkKey('M:' + m.role + ':' + type + ':', b),
+      })
+    }
+  }
+  return flat
+}
+// link a message block back to a ledger resource (file / skill / mcp), matching addRes() keys
+function msgResKey(b) {
+  if (!b || typeof b !== 'object') return ''
+  // the resident SKILL.md body block → link it to its skill resource so the card can reveal the
+  // verbatim body (basename of the "Base directory" path === skill name === addRes label above)
+  if (b.type === 'text' && typeof b.text === 'string') {
+    const sk = b.text.match(/^Base directory for this skill: (\S+)/)
+    if (sk) return 'skill::' + sk[1].split('/').pop()
+    // scaffold (auto-loaded context) → link the verbatim system-reminder block to its ledger
+    // resource so "loaded context" can reveal it (labels MUST match extractResources' addRes above)
+    if (/<system-reminder>/.test(b.text)) {
+      if (/CLAUDE\.md/i.test(b.text)) return 'scaffold::CLAUDE.md'
+      if (/\bMEMORY\.md\b|auto-memory|persists across conversations/i.test(b.text)) return 'scaffold::memory (MEMORY.md)'
+    }
+    return ''
+  }
+  if (b.type !== 'tool_use') return ''
+  const p = b.input?.file_path || b.input?.path || b.input?.notebook_path
+  if (p) return 'file::' + p
+  // a Bash read (cat/head/…) makes its first dumped file resident — key the block to it so the
+  // "files opened" nav item can reveal this Bash block (mirrors extractResources' Bash branch)
+  if (b.name === 'Bash' && b.input?.command) { const rd = parseBashReads(b.input.command); if (rd.length) return 'file::' + rd[0].path }
+  if (b.name === 'Skill') return 'skill::' + (b.input?.skill || b.input?.command || '')
+  if ((b.name || '').startsWith('mcp__')) return 'mcp::' + (String(b.name).split('__')[1] || '')
+  return ''
+}
+
+// ── D17① prefix-divergence localization (RFC 3.3 前缀分叉定位 + 分叉成因分类) ──
+// canonicalize (sort object keys, recurse) so a pure key-reorder can be told apart from a real
+// content change. Used ONLY for cause classification — never for dedup/hashing (that stays byte-exact).
+function canonJSON(v) {
+  if (Array.isArray(v)) return v.map(canonJSON)
+  if (v && typeof v === 'object') { const o = {}; for (const k of Object.keys(v).sort()) o[k] = canonJSON(v[k]); return o }
+  return v
+}
+// a flat block's canonical text — for byte-level divergence localization within the first diverging block.
+function flatBlockText(b) {
+  if (b.sec === 'tools') return 'T:' + (b.name || '') + '\u0001' + (b.desc != null ? b.desc : '') + '\u0001' + (b.schema !== undefined ? JSON.stringify(b.schema) : '')
+  if (b.sec === 'system') return b.text || ''
+  return blkHashText(b.block)
+}
+// first differing char offset between two strings (structural estimate of the byte where the prefix broke).
+function firstDiffOffset(a, b) {
+  const n = Math.min(a.length, b.length)
+  for (let i = 0; i < n; i++) if (a[i] !== b[i]) return i
+  return a.length === b.length ? -1 : n
+}
+// the reorderable structure of a block (tool input_schema / tool_use input), or null if plain text.
+function structForReorder(b) {
+  if (b.sec === 'tools') return b.schema !== undefined ? b.schema : null
+  const bl = b.block
+  if (bl && typeof bl === 'object' && (bl.type === 'tool_use' || bl.type === 'server_tool_use')) return bl.input || {}
+  return null
+}
+// same content up to JSON key/array ordering, but different raw bytes → nondeterministic serialization.
+function keyReorder(prev, cur) {
+  const pj = structForReorder(prev), cj = structForReorder(cur)
+  if (pj == null || cj == null) return false
+  if (JSON.stringify(pj) === JSON.stringify(cj)) return false // byte-identical structure → not why it diverged
+  return JSON.stringify(canonJSON(pj)) === JSON.stringify(canonJSON(cj))
+}
+// canonical divergence_cause → display label + attribution + fix hint (RFC 3.3 分叉成因分类 table).
+// attribution: harmless | provider-excluded | harness | yours | review. Only the causes cleanly
+// detectable from two flat block sequences are emitted here; provider/usage/model-dependent causes
+// (breakpoint-out-of-window, mid-turn-retry, model-or-route-change) are left to the product's adapter.
+const CAUSE_META = {
+  'first-call': { label: 'first captured call', attr: 'harmless', fix: '' },
+  'append': { label: 'normal append', attr: 'harmless', fix: '' },
+  'volatile-nonce-only': { label: 'only a per-call nonce changed', attr: 'provider-excluded', fix: 'confirm the block is cache-excluded (marked volatile)' },
+  'compaction': { label: 'compaction rewrote history', attr: 'harness', fix: 'compaction always discards the prefix — review its trigger threshold / timing' },
+  'tool-array-reorder': { label: 'tools array reordered', attr: 'yours', fix: 'emit the tools array in a stable order (kill the nondeterminism)' },
+  'json-key-reorder': { label: 'JSON keys reordered', attr: 'yours', fix: 'serialize JSON object keys in a stable order' },
+  'content-changed': { label: 'a shared-prefix block changed in place', attr: 'review', fix: 'a historical block changed — check for in-place edits / nondeterministic serialization' },
+}
+
+// Where does this call's context first diverge from the previous call's? Everything before the
+// break is a stable prefix the KV cache can reuse; from the break on it's genuinely new content.
+// We SKIP volatile blocks (the billing-header nonce) because they differ every call yet don't
+// break the cache. `rawIdx` keeps the naive first-byte divergence for the "why" annotation.
+//   • pure append (a normal turn)  → break at the first appended block (end of prev context)
+//   • compaction (history rewritten) → break at the first message block (only tools+system survive)
+//   • first call                    → break at 0 (nothing cached yet)
+// D17① deepens this: beyond WHERE the prefix broke, it classifies WHY (cause) + names the byte inside
+// the diverging block. All of it is a STRUCTURAL inference — the numeric hit truth stays with usage
+// (RFC 3.3 真相规则), and the UI MUST label the cause "结构估计, 非 provider 真实边界" (invariant 4).
+// `opts.compaction` = analyze()'s authoritative compaction verdict (message-count drop): a real
+// compaction can PRESERVE the first user turn and rewrite the middle, so the structural break lands
+// mid-history — the hint makes the cause say "compaction" while byteOffset still localizes the rewrite.
+export function cacheBreak(prevFlat, curFlat, opts = {}) {
+  if (!prevFlat || !prevFlat.length)
+    return { idx: 0, rawIdx: 0, prefixLen: 0, total: curFlat.length, firstCall: true, cause: 'first-call', causeLabel: 'first captured call', attribution: 'harmless', fixHint: '', byteOffset: null, byteContext: '' }
+  const n = Math.min(prevFlat.length, curFlat.length)
+  let rawIdx = -1, idx = -1
+  for (let i = 0; i < n; i++) {
+    if (prevFlat[i].key === curFlat[i].key) continue
+    if (rawIdx < 0) rawIdx = i
+    if (curFlat[i].volatile) continue // billing nonce — differs but cache-irrelevant
+    idx = i; break
+  }
+  if (idx < 0) idx = n // no meaningful divergence within the shared region → new content is the appended tail (idx===prevLen) or nothing
+  if (rawIdx < 0) rawIdx = idx
+  const out = { idx, rawIdx, prefixLen: idx, total: curFlat.length, firstCall: false, cause: 'append', causeLabel: '', attribution: 'harmless', fixHint: '', byteOffset: null, byteContext: '' }
+  // classify WHY (structural inference — labelled as such in the UI; numeric truth stays with usage)
+  if (idx >= n) {
+    // shared prefix fully reused; only a volatile block changed, or new content was appended
+    out.cause = (curFlat.length <= prevFlat.length && rawIdx < n) ? 'volatile-nonce-only' : 'append'
+  } else {
+    const cur = curFlat[idx], prev = prevFlat[idx]
+    // a bare "first messages block changed" is NOT reliable for compaction (real traces over-fire:
+    // CC re-injects scaffolding into the first user turn, forks, etc.). Compaction is decided by
+    // analyze()'s authoritative drop verdict (opts.compaction) below, not by structure.
+    if (cur.sec === 'tools') {
+      const ps = prevFlat.filter((b) => b.sec === 'tools').map((b) => b.name)
+      const cs = curFlat.filter((b) => b.sec === 'tools').map((b) => b.name)
+      const sameSet = ps.length === cs.length && ps.slice().sort().join('\u0001') === cs.slice().sort().join('\u0001')
+      if (sameSet && ps.join('\u0001') !== cs.join('\u0001')) out.cause = 'tool-array-reorder'
+      else out.cause = keyReorder(prev, cur) ? 'json-key-reorder' : 'content-changed'
+    } else {
+      out.cause = keyReorder(prev, cur) ? 'json-key-reorder' : 'content-changed'
+    }
+    // byte-level localization within the first diverging block (structural estimate)
+    const off = firstDiffOffset(flatBlockText(prev), flatBlockText(cur))
+    if (off >= 0) { out.byteOffset = off; out.byteContext = flatBlockText(cur).slice(off, off + 48) }
+    // analyze()'s drop-based compaction verdict is authoritative — a compaction that kept the first
+    // user turn breaks mid-history; without the hint that reads as 'content-changed'.
+    if (opts.compaction) out.cause = 'compaction'
+  }
+  const meta = CAUSE_META[out.cause] || CAUSE_META['content-changed']
+  out.causeLabel = meta.label; out.attribution = meta.attr; out.fixHint = meta.fix
+  return out
+}
+
+// ── D17④ ground-truth verification (RFC 3.3 地面真相验证) ──
+// With a reusable structural prefix (idx>0), cross-check what the provider's usage actually credited:
+//   read>0            → prefix genuinely reused              → null (normal)
+//   read=0 & write>0  → cache entry expired (TTL), re-cached → 'ttl-rebuild' (not a contradiction)
+//   read=0 & write=0  → prefix was reusable yet NEITHER read NOR written → suspect PROVIDER
+//                       mis-cache/mis-bill (research pain #9: SHA256-identical prefix, cached_tokens=0)
+// The prefix match here is STRUCTURAL (content_hash sequence — demo proxy). The product proves it with
+// an independent `prefix_sha256` over verbatim source bytes (RFC 3.3); the claim is strictly "MY
+// outbound prefix is identical ⇒ the suspicion points at the provider" — never "the provider is wrong".
+export function groundTruth(brk, read, create) {
+  if (!brk || brk.firstCall || brk.idx <= 0) return null // no reusable prefix to reason about
+  if (read > 0) return null
+  return create > 0 ? 'ttl-rebuild' : 'provider-contradiction'
+}
