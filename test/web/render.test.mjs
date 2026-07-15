@@ -36,13 +36,14 @@ test('★ renderContextWindow: EXACT verbatim block bytes + .cblk[data-bi] ancho
   for (const c of calls) { const b = await callContext(conn, c.call_id, resolve); if (b.length) { blocks = b; break; } }
   assert.ok(blocks.length >= 1, 'found a call with context blocks');
   const html = renderContextWindow(blocks);
-  assert.match(html, /class="cblk"/);
+  assert.match(html, /class="cblk collapsed"/, 'blocks are collapsed cards by default');
   assert.match(html, /data-bi="0"/);
-  // AC-1: the EXACT escaped verbatim bytes of a real block appear in the rendered HTML.
+  assert.match(html, /class="cwsec"/, 'section headers present');
+  // AC-1: the EXACT escaped verbatim bytes of a real block still live in the (collapsed) body.
   const sample = blocks.find((b) => b.text && b.text.length > 30);
   assert.ok(sample, 'a non-trivial verbatim block');
   assert.ok(html.includes(esc(sample.text)), 'rendered HTML contains the byte-verbatim (escaped) block text');
-  assert.ok(html.includes(`${sample.text.length} chars`));
+  assert.ok(html.includes(`${sample.text.length}c`));
 });
 
 test('renderCacheOverlay: canonical usage roles, hit ratio, no provider-native names (AC-2)', async () => {

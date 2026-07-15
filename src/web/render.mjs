@@ -87,16 +87,68 @@ export function renderScrub(calls, activeCallId) {
     + `<button class="scrub-btn" data-scrub="end" title="jump to latest (End)">⇥</button>`;
 }
 
-// ★ heart: faithful context replay — verbatim blocks (AC-1). .cblk[data-bi] anchors.
+// ── context-window helpers: parse a block's verbatim text into a clean header summary ──
+const SECMETA = { tools: { ic: '⚙', t: 'TOOLS' }, system: { ic: '▤', t: 'SYSTEM' }, messages: { ic: '💬', t: 'MESSAGES' } };
+const clip = (s, n = 96) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
+
+function toolSummary(text) {
+  try {
+    const o = JSON.parse(text);
+    const verbatim = typeof o.description === 'string'; // D15 verbatim vs v0 metadata (description_chars)
+    const props = o.input_schema_props
+      || (o.input_schema && o.input_schema.properties ? Object.keys(o.input_schema.properties) : []);
+    const descChars = o.description_chars ?? (typeof o.description === 'string' ? o.description.length : null);
+    return { name: o.name || 'tool', props: props || [], descChars, verbatim };
+  } catch { return null; }
+}
+// a message/system content block's human preview
+function blockPreview(text) {
+  try {
+    const o = JSON.parse(text);
+    if (typeof o.text === 'string') return o.text;
+    if (typeof o.content === 'string') return o.content;
+    if (o.type === 'tool_use' && o.input) return `${o.name || ''} ${JSON.stringify(o.input)}`;
+    if (o.type === 'tool_result') return typeof o.content === 'string' ? o.content : JSON.stringify(o.content);
+    return text;
+  } catch { return text; }
+}
+
+// ★ heart: faithful context replay. Blocks render as COLLAPSED, structured cards under section
+// headers (tools/system/messages) — click a header to expand the verbatim body (AC-1: the exact
+// bytes live in .cbc). Tool blocks parse to a clean name/params/desc summary + fidelity badge,
+// never a raw-JSON wall.
 export function renderContextWindow(blocks) {
   if (!blocks?.length) return `<div class="empty">no context blocks for this call</div>`;
-  return blocks.map((b, i) => {
+  const counts = {};
+  for (const b of blocks) counts[b.section] = (counts[b.section] || 0) + 1;
+  let html = '', lastSec = null;
+  blocks.forEach((b, i) => {
+    if (b.section !== lastSec) {
+      const m = SECMETA[b.section] || { ic: '•', t: String(b.section || '').toUpperCase() };
+      html += `<div class="cwsec"><span class="cwsecic">${m.ic}</span><b>${esc(m.t)}</b><span class="cwsecn">${counts[b.section] || 0}</span></div>`;
+      lastSec = b.section;
+    }
     const text = b.text == null ? '' : b.text;
-    return `<div class="cblk" data-bi="${i}" data-section="${esc(b.section)}">
-      <div class="cblk-h"><span class="cblk-sec">${esc(b.section)}</span>${b.role ? `<span class="cblk-role">${esc(b.role)}</span>` : ''}${fidelityBadge(b.faithfulness)}<span class="cblk-len">${text.length} chars</span></div>
-      <pre class="cblk-body">${esc(text)}</pre>
-    </div>`;
-  }).join('');
+    let head, badge = '';
+    if (b.section === 'tools') {
+      const t = toolSummary(text);
+      head = `<span class="cbtag">def</span><span class="cblabel">${esc(t?.name || 'tool')}</span>`
+        + (t ? `<span class="cbmeta">${t.props.length} params · ${t.descChars ?? '?'}c desc</span>` : '');
+      badge = t && !t.verbatim
+        ? `<span class="fid fid-metadata" title="v0 trace stored only name + param names + description length — NOT the verbatim schema. The model received the full schema; capture didn't store it (fixed by D15).">metadata</span>`
+        : (t?.verbatim ? `<span class="fid fid-verbatim" title="full schema captured verbatim (D15) — byte-faithful, part of AC-1">verbatim</span>` : '');
+    } else if (b.section === 'system') {
+      head = `<span class="cbtag">system</span><span class="cblabel">${esc(clip(blockPreview(text)))}</span>`;
+      badge = fidelityBadge(b.faithfulness);
+    } else {
+      head = `<span class="cbrole">${esc(b.role || '')}</span><span class="cbtag">${esc(b.kind || 'text')}</span><span class="cblabel">${esc(clip(blockPreview(text)))}</span>`;
+      badge = fidelityBadge(b.faithfulness);
+    }
+    html += `<div class="cblk collapsed" data-bi="${i}" data-section="${esc(b.section)}">`
+      + `<div class="cbh">${head}${badge}<span class="cbchars">${text.length}c</span></div>`
+      + `<pre class="cbc">${esc(text)}</pre></div>`;
+  });
+  return html;
 }
 
 // cache-break marker (#cachebrk) — canonical divergence_cause + byte offset (structural estimate)
@@ -128,12 +180,32 @@ export function renderCacheOverlay(call) {
   </div>${cacheBreakMarker(call)}`;
 }
 
-// resource lifecycle (2.4)
+// resource explorer (2.4): grouped by kind, each resource FOLDED to a compact lifecycle
+// (e.g. "seen ×23" / "enter · evict"), floods capped — never a raw "enter → enter → enter" chain.
+const RESGROUP = { file: '📄 files', dir: '📁 dirs', link: '🔗 links', mcp: '🧩 MCP', skill: '🧠 skills', tool: '⚙ tools', scaffold: '▦ scaffold', image: '🖼 images' };
+const RES_CAP = 12;
+
 export function renderResources(resources) {
   if (!resources?.length) return `<div class="empty">no resources in this session</div>`;
-  return resources.map((r) => `<div class="res res-${esc(r.kind)}">
-    <span class="res-kind">${esc(r.kind)}</span>
-    <span class="res-label">${esc(r.label || r.resource_id)}</span>
-    <span class="res-ev">${r.events.map((e) => esc(e.event)).join(' → ')}</span>
-  </div>`).join('');
+  const groups = new Map();
+  for (const r of resources) {
+    const g = r.kind || 'other';
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(r);
+  }
+  let html = '';
+  for (const [kind, items] of groups) {
+    html += `<div class="resgrp"><span class="resgrp-t">${esc(RESGROUP[kind] || '• ' + kind)}</span><span class="resgrp-n">${items.length}</span></div>`;
+    for (const r of items.slice(0, RES_CAP)) {
+      const evc = {};
+      for (const e of (r.events || [])) evc[e.event] = (evc[e.event] || 0) + 1;
+      const evicted = !!evc.evict;
+      const life = Object.entries(evc).map(([k, n]) => (n > 1 ? `${k} ×${n}` : k)).join(' · ') || '—';
+      html += `<div class="res${evicted ? ' evicted' : ''}" title="${esc(r.resource_id)}">`
+        + `<span class="res-label">${esc(r.label || r.resource_id)}</span>`
+        + `<span class="res-life">${esc(life)}</span></div>`;
+    }
+    if (items.length > RES_CAP) html += `<div class="res-more">… ${items.length - RES_CAP} more</div>`;
+  }
+  return html;
 }

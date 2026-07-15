@@ -72,6 +72,13 @@ document.addEventListener('click', (e) => {
   const b = close('.scrub-btn'); if (b && !b.disabled) return void step(b.dataset.scrub);
   const t = close('.tbar'); if (t) return void selectCall(t.dataset.cid);
   const cb = close('.cband-cell'); if (cb) return void selectCall(cb.dataset.cid);
+  const ta = close('[data-ctxtoggle]');
+  if (ta) {
+    const expand = ta.dataset.ctxtoggle === 'expand';
+    document.querySelectorAll('#context .cblk').forEach((el) => el.classList.toggle('collapsed', !expand));
+    return;
+  }
+  const h = close('.cbh'); if (h && h.parentElement) return void h.parentElement.classList.toggle('collapsed');
 });
 
 document.addEventListener('keydown', (e) => {
