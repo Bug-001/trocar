@@ -31,14 +31,17 @@ test('ccControlKind maps endpoints to the 3.2 enum (imported from 3.4 identity)'
   assert.equal(ccControlKind('/v1/whatever'), 'other');
 });
 
-test('per-call lane: subagent marker → subagent; count_tokens → probe; monitor reserved → main (Phase 1)', () => {
+test('per-call lane: subagent → subagent; count_tokens → probe; monitor/aux detected (demo v6/v10)', () => {
   const sub = ccLlmRecord({ req: { system: [{ type: 'text', text: 'cc_is_subagent=true' }] } });
   assert.equal(parseCall(sub).lane, 'subagent');
   const probe = ccLlmRecord({ env: { endpoint: '/v1/messages/count_tokens' } });
   assert.equal(parseCall(probe).lane, 'probe');
-  // monitor/aux have no distinguishing CC online signal in Phase 1 → 3.4 identity reserves them → main
+  // monitor: CC's built-in security-monitor lane (system marker) — demo v6
   const mon = ccLlmRecord({ req: { system: [{ type: 'text', text: 'You are a security monitor' }] } });
-  assert.equal(parseCall(mon).lane, 'main');
+  assert.equal(parseCall(mon).lane, 'monitor');
+  // aux: small background model (haiku) + tiny message array — notify/titlegen/quota — demo v10
+  const aux = ccLlmRecord({ req: { model: 'claude-haiku-4-5', messages: [{ role: 'user', content: 'quota' }] } });
+  assert.equal(parseCall(aux).lane, 'aux');
 });
 
 test('parseCall flags error records (resp.kind=error or >=500), never counts them as success', () => {

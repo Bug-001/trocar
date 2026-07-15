@@ -82,13 +82,25 @@ export function isSubagent(record) {
   return /cc_is_subagent=true/.test(sys)
 }
 
+// Security-monitor marker (demo v6: CC's built-in prompt-injection / autonomous-agent
+// guardrail — system prompt "You are a security monitor for autonomous AI coding agents…",
+// a distinct always-on lane, ~1 per 2 turns, non-streaming JSON, tools=0).
+export function isMonitor(record) {
+  const sys = (record.req_body?.system || []).map((b) => b?.text || '').join('')
+  return /you are a security monitor/i.test(sys)
+}
+
 // lane ∈ main|subagent|monitor|aux|probe (per-CALL, per B-lane the ETL reads call.lane not
-// session.lane). CC online signals distinguish probe/subagent/main only. monitor/aux are
-// cross-harness lanes with no distinguishing CC online signal in Phase 1 (aux sub-classes
-// notify/titlegen/quota are render-time projections per D8 / 3.2, NOT schema enums) — reserved,
-// default main. Probe wins: a count_tokens under a subagent is still a probe.
+// session.lane). CC online signals (demo v6/v9/v10): probe = count_tokens endpoint; monitor =
+// security-monitor system marker; aux = a small background model (haiku) with a tiny message
+// array — the notify/titlegen/quota util calls ("classify lanes by MODEL, not tool-count" —
+// demo v10 lesson; aux sub-classes are render-time projections per D8, NOT schema enums);
+// subagent = cc_is_subagent marker. Precedence probe > monitor > aux > subagent > main
+// (a count_tokens under a subagent is still a probe; subagents run the main model, not haiku).
 export function lane(record) {
   if (/\/messages\/count_tokens/.test(String(record.endpoint || ''))) return 'probe'
+  if (isMonitor(record)) return 'monitor'
+  if (/haiku/i.test(String(record.req_body?.model || '')) && messageCount(record) <= 2) return 'aux'
   if (isSubagent(record)) return 'subagent'
   return 'main'
 }
