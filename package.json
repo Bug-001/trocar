@@ -8,7 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test",
+    "test": "node --test --test-force-exit",
     "etl": "node src/etl/orchestrator.mjs",
     "serve": "node src/server.mjs",
     "build": "node build.mjs"
