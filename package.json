@@ -1,0 +1,22 @@
+{
+  "name": "asight",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "asight — transparent, byte-faithful, cross-provider tracer of what an agent app really sends the LLM (product build).",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test",
+    "etl": "node src/etl/orchestrator.mjs",
+    "serve": "node src/server.mjs",
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@duckdb/node-api": "^1.5.4-r.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
+  }
+}

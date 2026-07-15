@@ -6,3 +6,9 @@ node_modules/
 
 # brainstorming visual-companion mockups — local scratch
 .superpowers/
+
+# asight product build — derived DuckDB store (rebuildable from source NDJSON) + bundles
+db/*.duckdb
+db/*.duckdb.wal
+db/*.parquet
+public/
