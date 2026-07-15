@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>asight — agent context oscilloscope</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header id="topbar">
+    <span class="brand">asight</span>
+    <span class="tagline">what the agent really sent the LLM — per step, byte-faithful</span>
+    <span class="fidnote" title="This store was built from demo v0-converted capture: req_body is re-serialized, not the original wire bytes. Per-block fidelity badges still apply.">fidelity: source may be v0-converted · badges show non-verbatim blocks</span>
+  </header>
+  <main id="shell">
+    <aside id="left">
+      <div class="pane-h">sessions</div>
+      <div id="sessions" class="scroll"><div class="empty">loading…</div></div>
+    </aside>
+    <section id="center">
+      <div id="timeline-wrap"><div class="pane-h">timeline · one bar per call (height = context tokens, tint = cache state)</div><div id="timeline"></div></div>
+      <div id="board">
+        <div class="pane-h" id="ctxhead">context replay</div>
+        <div id="context" class="scroll"><div class="empty">pick a session</div></div>
+      </div>
+    </section>
+    <aside id="right">
+      <div class="pane-h">cache &amp; usage</div>
+      <div id="overlay"></div>
+      <div class="pane-h">resources</div>
+      <div id="resources" class="scroll"></div>
+    </aside>
+  </main>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

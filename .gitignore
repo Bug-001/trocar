@@ -12,3 +12,6 @@ db/*.duckdb
 db/*.duckdb.wal
 db/*.parquet
 public/
+
+# frontend build artifact (rebuildable via npm run build)
+src/web/dist/
