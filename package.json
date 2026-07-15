@@ -7,6 +7,15 @@
   "engines": {
     "node": ">=20"
   },
+  "bin": {
+    "asight": "bin/asight.mjs"
+  },
+  "files": [
+    "src/",
+    "bin/",
+    "build.mjs",
+    "README.md"
+  ],
   "scripts": {
     "test": "node --test --test-force-exit",
     "etl": "node src/etl/cli.mjs",
