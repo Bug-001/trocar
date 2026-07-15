@@ -41,6 +41,19 @@ export async function sessionCalls(conn, sessionId) {
      ORDER BY c.seq`, [sessionId]);
 }
 
+// per-call context composition by section (tools/system/messages) — feeds the multi-color
+// timeline bars (1.3) + schema-tax (D17②). Canonical: reads block_contents.section/chars only.
+export async function sessionComposition(conn, sessionId) {
+  return q(conn,
+    `SELECT cb.call_id, bc.section, sum(bc.chars) AS chars, count(*) AS n
+     FROM call_blocks cb
+     JOIN block_contents bc ON bc.content_hash = cb.content_hash
+     JOIN calls c ON c.call_id = cb.call_id
+     WHERE c.session_id = $1
+     GROUP BY cb.call_id, bc.section
+     ORDER BY cb.call_id`, [sessionId]);
+}
+
 // resource explorer (2.4): flat resource_events folded into per-resource lifecycle.
 export async function sessionResources(conn, sessionId) {
   const evs = await q(conn,

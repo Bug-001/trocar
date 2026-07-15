@@ -5,10 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { etlFile } from '../../src/etl/cli.mjs';
 import { openDb } from '../../src/db.mjs';
-import { listSessions, sessionCalls, sessionResources, callContext } from '../../src/query/queries.mjs';
+import { listSessions, sessionCalls, sessionComposition, sessionResources, callContext } from '../../src/query/queries.mjs';
 import { buildResolver } from '../../src/query/source.mjs';
 import {
-  esc, renderSessions, renderTimeline, renderContextWindow, renderCacheOverlay, renderResources,
+  esc, renderSessions, compositionMap, renderTimeline, renderCacheBand, renderScrub,
+  renderContextWindow, renderCacheOverlay, renderResources,
 } from '../../src/web/render.mjs';
 
 const FIXTURE = path.resolve('test/fixtures/cc-session-real.ndjson');
@@ -55,9 +56,26 @@ test('renderCacheOverlay: canonical usage roles, hit ratio, no provider-native n
   assert.ok(!html.includes('cache_read_input_tokens'), 'no provider-native leak');
 });
 
-test('renderTimeline + renderResources produce markup on real data', async () => {
+test('timeline: multi-color composition bars + cache band + scrub (Batch A)', async () => {
   const calls = await sessionCalls(conn, topSid);
-  assert.match(renderTimeline(calls, calls[0].call_id), /class="tbar/);
+  const comp = compositionMap(await sessionComposition(conn, topSid));
+  assert.ok(comp.size >= 1, 'composition map built from real store');
+  const tl = renderTimeline(calls, comp, calls[0].call_id);
+  assert.match(tl, /class="tbar active"/);
+  // multi-color: at least one section segment class is present (real CC calls have tools+system+messages)
+  assert.ok(/tseg-(tools|system|messages)/.test(tl), 'bars are colored by section composition');
+  // cache band: one cell per call, tiered by hit_ratio
+  const band = renderCacheBand(calls, calls[0].call_id);
+  assert.match(band, /cband-cell cb-(hi|mid|lo|none)/);
+  assert.equal((band.match(/cband-cell/g) || []).length, calls.length, 'one band cell per call');
+  // scrub: playhead N/M + prev disabled at head
+  const scrub = renderScrub(calls, calls[0].call_id);
+  assert.match(scrub, new RegExp(`1/${calls.length}`));
+  assert.match(scrub, /data-scrub="prev"[^>]*disabled/);
+  assert.match(scrub, /data-scrub="end"/);
+});
+
+test('renderResources produces markup on real data', async () => {
   const html = renderResources(await sessionResources(conn, topSid));
   assert.ok(html.length > 0);
 });

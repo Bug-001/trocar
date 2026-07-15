@@ -18,7 +18,14 @@
       <div id="sessions" class="scroll"><div class="empty">loading…</div></div>
     </aside>
     <section id="center">
-      <div id="timeline-wrap"><div class="pane-h">timeline · one bar per call (height = context tokens, tint = cache state)</div><div id="timeline"></div></div>
+      <div id="timeline-wrap">
+        <div class="pane-h">timeline · bar = context by section (≈ char proportion) · band = cache hit
+          <span class="tlegend"><i class="lg lg-tools"></i>tools<i class="lg lg-system"></i>system<i class="lg lg-messages"></i>messages</span>
+        </div>
+        <div id="timeline"></div>
+        <div id="cacheband"></div>
+        <div id="scrub"></div>
+      </div>
       <div id="board">
         <div class="pane-h" id="ctxhead">context replay</div>
         <div id="context" class="scroll"><div class="empty">pick a session</div></div>

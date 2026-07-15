@@ -9,7 +9,7 @@ import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb, DEFAULT_DB_PATH } from './db.mjs';
-import { listSessions, sessionCalls, sessionResources, callContext } from './query/queries.mjs';
+import { listSessions, sessionCalls, sessionComposition, sessionResources, callContext } from './query/queries.mjs';
 import { buildResolver } from './query/source.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -61,7 +61,11 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         const id = decodeURIComponent(m[1]);
         const calls = await sessionCalls(db.connection, id);
         if (!calls.length) return notFound(res, 'session not found');
-        return sendJson(res, 200, { session_id: id, calls, resources: await sessionResources(db.connection, id) });
+        return sendJson(res, 200, {
+          session_id: id, calls,
+          composition: await sessionComposition(db.connection, id),
+          resources: await sessionResources(db.connection, id),
+        });
       }
       if ((m = p.match(/^\/api\/call\/([^/]+)\/context$/))) {
         const id = decodeURIComponent(m[1]);

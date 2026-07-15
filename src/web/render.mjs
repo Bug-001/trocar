@@ -27,17 +27,64 @@ export function renderSessions(sessions, activeId) {
   }).join('');
 }
 
-// top: timeline — one bar per call, height ~ total_input, tint by cache state
-export function renderTimeline(calls, activeCallId) {
+// fold /api/session composition rows into call_id -> {tools,system,messages,total} char sums.
+const SECTIONS = ['tools', 'system', 'messages'];
+export function compositionMap(rows) {
+  const m = new Map();
+  for (const r of rows || []) {
+    if (!m.has(r.call_id)) m.set(r.call_id, { tools: 0, system: 0, messages: 0, total: 0 });
+    const e = m.get(r.call_id);
+    const c = num(r.chars) || 0;
+    if (SECTIONS.includes(r.section)) e[r.section] += c; else e.messages += c;
+    e.total += c;
+  }
+  return m;
+}
+
+// timeline (1.3): per-call bar, height ~ context chars, STACKED + colored by section
+// (tools/system/messages, ≈ by char proportion). Falls back to a cache-tinted bar without comp.
+export function renderTimeline(calls, compMap, activeCallId) {
   if (!calls?.length) return '';
-  const max = Math.max(1, ...calls.map((c) => num(c.total_input) || 0));
-  return calls.map((c) => {
-    const h = Math.round(6 + 44 * ((num(c.total_input) || 0) / max));
+  const comp = compMap || new Map();
+  const totals = calls.map((c) => (comp.get(c.call_id)?.total) || num(c.total_input) || 0);
+  const max = Math.max(1, ...totals);
+  return calls.map((c, i) => {
+    const H = Math.round(6 + 44 * (totals[i] / max));
+    const active = c.call_id === activeCallId ? ' active' : '';
+    const e = comp.get(c.call_id);
+    let segs;
+    if (e && e.total > 0) {
+      segs = SECTIONS.map((s) => (e[s] > 0 ? `<div class="tseg tseg-${s}" style="height:${(e[s] / e.total * 100).toFixed(1)}%"></div>` : '')).join('');
+    } else {
+      const hit = num(c.hit_ratio);
+      segs = `<div class="tseg ${hit > 0 ? 'tseg-cached' : 'tseg-fresh'}" style="height:100%"></div>`;
+    }
+    const badge = c.error ? '<span class="tflag err">⚠</span>' : c.compaction ? '<span class="tflag comp">✂</span>' : '';
     const hit = num(c.hit_ratio);
-    const cls = c.error ? 'err' : c.compaction ? 'compact' : (hit != null && hit > 0 ? 'cached' : 'fresh');
-    const title = `#${num(c.seq)} ${c.model || ''} · in ${num(c.total_input) ?? '?'} · hit ${hit != null ? (hit * 100).toFixed(0) + '%' : '—'}`;
-    return `<div class="tbar ${cls}${c.call_id === activeCallId ? ' active' : ''}" data-cid="${esc(c.call_id)}" style="height:${h}px" title="${esc(title)}"></div>`;
+    const title = `#${num(c.seq)} ${c.model || ''} · ctx ${totals[i]}B · hit ${hit != null ? (hit * 100).toFixed(0) + '%' : '—'}${c.compaction ? ' · ✂compaction' : ''}${c.error ? ' · ⚠error' : ''}`;
+    return `<div class="tbar${active}" data-cid="${esc(c.call_id)}" style="height:${H}px" title="${esc(title)}">${segs}${badge}</div>`;
   }).join('');
+}
+
+// cache band (1.3): one cell per call, 1:1 under the bars, 3-tier by hit_ratio.
+export function renderCacheBand(calls, activeCallId) {
+  if (!calls?.length) return '';
+  return calls.map((c) => {
+    const hit = num(c.hit_ratio);
+    const tier = hit == null ? 'none' : hit >= 0.7 ? 'hi' : hit > 0 ? 'mid' : 'lo';
+    return `<div class="cband-cell cb-${tier}${c.call_id === activeCallId ? ' active' : ''}" data-cid="${esc(c.call_id)}" title="hit ${hit != null ? (hit * 100).toFixed(0) + '%' : '—'}"></div>`;
+  }).join('');
+}
+
+// scrub bar (1.4): prev / next / jump-to-latest + playhead N/M label.
+export function renderScrub(calls, activeCallId) {
+  if (!calls?.length) return '';
+  const idx = calls.findIndex((c) => c.call_id === activeCallId);
+  const n = idx < 0 ? 0 : idx + 1;
+  return `<button class="scrub-btn" data-scrub="prev" title="previous call (←)"${n <= 1 ? ' disabled' : ''}>◄</button>`
+    + `<span class="scrub-pos">${n}/${calls.length}</span>`
+    + `<button class="scrub-btn" data-scrub="next" title="next call (→)"${n >= calls.length || n === 0 ? ' disabled' : ''}>►</button>`
+    + `<button class="scrub-btn" data-scrub="end" title="jump to latest (End)">⇥</button>`;
 }
 
 // ★ heart: faithful context replay — verbatim blocks (AC-1). .cblk[data-bi] anchors.
