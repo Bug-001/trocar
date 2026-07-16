@@ -19,7 +19,7 @@ import { listSessions, sessionCalls, sessionComposition, sessionResources, callC
   filesEverInContext, cacheHitDistribution, breakKindComparison, unmappedFields, forkTree } from './query/queries.mjs';
 import { buildResolver } from './query/source.mjs';
 import { readRecords } from './etl/ingest.mjs';
-import { projectsView, sessionView, controlView } from './view/board.mjs';
+import { projectsView, sessionView, controlView, pageView } from './view/board.mjs';
 import { createLru, memoKey } from './query/memo.mjs';
 import { loadPricing } from './view/pricing.mjs';
 
@@ -42,6 +42,28 @@ function sendJson(res, status, obj) {
   res.end(body);
 }
 const notFound = (res, msg = 'not found') => sendJson(res, 404, { error: msg });
+
+// /api/session paging (4.4:88② · 3.5 游标契约): cursor/limit over the global call index (gi).
+// Opt-in — absent both params → no paging (full send, back-compat). Strict integer validation so a
+// malformed query is a 400, never a silent mis-window. Returns { page } | { page:null } | { error }.
+const MAX_PAGE = 2000; // a generous cap: no single view page needs more calls than this
+const UINT_RE = /^\d+$/;
+function parsePageParams(sp) {
+  const rawC = sp.get('cursor'), rawL = sp.get('limit');
+  if (rawC == null && rawL == null) return { page: null }; // paging not requested
+  const page = {};
+  if (rawC != null) {
+    if (!UINT_RE.test(rawC)) return { error: 'cursor must be a non-negative integer' };
+    page.cursor = Number(rawC);
+  }
+  if (rawL != null) {
+    if (!UINT_RE.test(rawL)) return { error: 'limit must be a positive integer' };
+    const l = Number(rawL);
+    if (l < 1 || l > MAX_PAGE) return { error: `limit must be in [1, ${MAX_PAGE}]` };
+    page.limit = l;
+  }
+  return { page };
+}
 
 // Static serve — only files INSIDE WEB_DIR (path-traversal guard: resolve + prefix check).
 async function serveStatic(res, urlPath) {
@@ -143,13 +165,16 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
       if (p === '/api/session') {
         const id = url.searchParams.get('id');
         if (!id) return notFound(res, 'session not found');
+        const { page, error } = parsePageParams(url.searchParams);
+        if (error) return sendJson(res, 400, { error });
         const records = await loadRecords();
-        // D21 memo: skip re-assembling (full analyze) when neither the source nor this session changed.
+        // D21 memo: memoize the FULL assembled view (keyed by id + source sig) — paging is a cheap,
+        // non-mutating post-transform (pageView) so many page requests reuse one analyze() run.
         const key = memoKey(id, loadRecords.sig);
-        let out = sessionMemo.get(key);
-        if (out === undefined) { out = sessionView(records, id, { enrich }); if (out) sessionMemo.set(key, out); }
-        if (!out) return notFound(res, 'session not found');
-        return sendJson(res, 200, out);
+        let full = sessionMemo.get(key);
+        if (full === undefined) { full = sessionView(records, id, { enrich }); if (full) sessionMemo.set(key, full); }
+        if (!full) return notFound(res, 'session not found');
+        return sendJson(res, 200, page ? pageView(full, page) : full);
       }
       if (p === '/api/control') {
         const cls = url.searchParams.get('class');

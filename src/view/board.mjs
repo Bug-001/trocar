@@ -96,7 +96,16 @@ export function projectsView(records, { enrich } = {}) {
 // analyze() sees LLM calls only (count_tokens probes are passed separately, as the demo did);
 // `records` is SLIMMED to what the browser still needs locally (errStats status + change-sig) —
 // the heavy request bodies ride inside `analyzed.…calls[].rec`, never duplicated.
-export function sessionView(records, sessionId, { enrich, bound } = {}) {
+//
+// PAGING (4.4:88② · 3.5 游标契约 · D25 轻路):`page = {cursor, limit}` returns only the view page.
+// Cursor unit = the GLOBAL call index `gi` (analyze's step order = timeline order). Every call still
+// carries its CHEAP meta (ctx/usage/cacheBreak/gi — the overview strip + brush need the whole strip);
+// the HEAVY payload (rec request body / flat verbatim blocks / norm.text) rides ONLY on calls whose gi
+// is in [cursor, cursor+limit). Out-of-window calls are marked `paged_out` (invariant 4 — the body was
+// not shipped on THIS page, not silently dropped). No `page` → full send (back-compat; render gate/demo
+// board unchanged). Windowing is a SHALLOW non-mutating transform over an already-assembled view, so a
+// memoized full view (D21) can back many page requests without re-running analyze.
+export function sessionView(records, sessionId, { enrich, bound, page } = {}) {
   const g = groupSessions(records);
   const recs = g.get(sessionId);
   if (!recs) return null;
@@ -106,13 +115,50 @@ export function sessionView(records, sessionId, { enrich, bound } = {}) {
     is_llm_call: !!r.is_llm_call, ts_request: r.ts_request, id: r.id,
     response: { status: (r.response && r.response.status) || null },
   }));
-  return {
+  const view = {
     records: slim,
     analyzed,
     probes: { count: probes.length, series: probeSeries(probes) },
     meta: sessionMetaFor(sessionId, recs, enrich),
     truncated: bound || null, // 保真边界 hook (invariant 4): set when a large session was tail-bounded
   };
+  return page ? pageView(view, page) : view;
+}
+
+// Slim a call to CHEAP meta only — drop the heavy request body + reconstructed blocks + response text,
+// keep everything the timeline/overview reads (ctx/usage/gi/cacheBreak/error/compaction) plus the model
+// (so cost + labels still resolve). Non-mutating: returns a NEW object, leaves the source call intact.
+function slimCall(c) {
+  const { rec, flat, norm, _comp, ...rest } = c;
+  return {
+    ...rest,
+    paged_out: true, // invariant 4: this call's body was not shipped on this page
+    flat: [],
+    norm: norm ? { usage: norm.usage } : norm,
+    rec: rec ? { id: rec.id, request: { model: rec.request && rec.request.model } } : rec,
+  };
+}
+
+// Apply the cursor/limit window over an assembled view WITHOUT mutating it (clones only the lane/call
+// spine; shares in-window call objects, slims out-of-window ones). Returns the view + `page` metadata.
+export function pageView(view, { cursor = 0, limit = Infinity } = {}) {
+  const lo = Math.max(0, cursor | 0);
+  const hi = limit === Infinity ? Infinity : lo + Math.max(0, limit | 0);
+  const lanes = (view.analyzed && view.analyzed.lanes) || [];
+  let total = 0, returned = 0;
+  const pagedLanes = lanes.map((lane) => {
+    const calls = (lane.calls || []).map((c) => {
+      total++;
+      const inWin = c.gi >= lo && c.gi < hi;
+      if (inWin) { returned++; return c; }
+      return slimCall(c);
+    });
+    return { ...lane, calls };
+  });
+  const analyzed = { ...view.analyzed, lanes: pagedLanes };
+  const nextCursor = hi !== Infinity && hi < total ? hi : null;
+  const page = { cursor: lo, limit: limit === Infinity ? null : (limit | 0), total, returned, nextCursor, hasMore: nextCursor != null };
+  return { ...view, analyzed, page };
 }
 
 // ── /api/control ──────────────────────────────────────────────────────────────
