@@ -618,8 +618,9 @@ function canonJSON(v) {
   if (v && typeof v === 'object') { const o = {}; for (const k of Object.keys(v).sort()) o[k] = canonJSON(v[k]); return o }
   return v
 }
-// a flat block's canonical text — for byte-level divergence localization within the first diverging block.
-function flatBlockText(b) {
+// a flat block's canonical text — for byte-level divergence localization within the first diverging block,
+// and the verbatim byte source for the D17④ prefix SHA-256 (exported; used by the server-side assembler).
+export function flatBlockText(b) {
   if (b.sec === 'tools') return 'T:' + (b.name || '') + '\u0001' + (b.desc != null ? b.desc : '') + '\u0001' + (b.schema !== undefined ? JSON.stringify(b.schema) : '')
   if (b.sec === 'system') return b.text || ''
   return blkHashText(b.block)

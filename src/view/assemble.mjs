@@ -4,7 +4,27 @@
 // of calling analyze functions in the browser. Result: the demo's exact look, with ZERO
 // provider parsing in the browser → invariant 3 / AC-3 intact (adding a provider = a new
 // server-side analyzer, frontend unchanged).
-import { analyze, linearContext, cacheBreak, groundTruth, normResp } from './analyze.mjs';
+import { createHash } from 'node:crypto';
+import { analyze, linearContext, cacheBreak, normResp, flatBlockText } from './analyze.mjs';
+
+// D17④ 地面真相(RFC 3.3:65 · 独立字节护城河). The demo proxied prefix identity with the 32-bit
+// bounded content_hash SEQUENCE (collision-prone). Product MUST use a REAL full SHA-256 over the
+// VERBATIM prefix bytes (skipping volatile) — so a 32-bit-key collision hiding a real byte difference
+// makes the prefixes hash-UNequal → no false ground-truth flag. Computed SERVER-SIDE (不变式 3).
+function prefixSha256(flat, idx) {
+  if (!flat || idx <= 0) return null; // no reusable prefix
+  const h = createHash('sha256');
+  // length-prefixed frames = unambiguous block boundaries with NO delimiter byte (ASCII-only source).
+  for (let i = 0; i < idx; i++) { const b = flat[i]; if (b.volatile) continue; const t = flatBlockText(b); h.update(String(t.length) + ':' + t); }
+  return h.digest('hex');
+}
+// Ground-truth from PROVEN byte-identity (not the structural proxy). Strict wording per 3.3:73 — the
+// claim is only "MY outbound prefix is byte-identical", never "the provider is wrong".
+function realGroundTruth(prefixByteIdentical, read, create) {
+  if (!prefixByteIdentical) return null;             // no proven byte-identical reusable prefix
+  if (read > 0) return null;                          // genuinely reused → normal
+  return create > 0 ? 'ttl-rebuild' : 'provider-contradiction';
+}
 
 // CC dissector · board intake (RFC 3.1 dissector · D18a). The board's block extractor (linearContext /
 // analyze) reads a PARSED v0-shape record: `.request` (object) + `.response`. The PRODUCT capture (D10,
@@ -75,9 +95,19 @@ export function assembleSession(records) {
       };
       // cacheBreak with prevFlat=null on the first call — matches the demo render's own call site.
       const brk = cacheBreak(prevFlat, flat, { compaction: !!call.compaction });
-      brk.gt = groundTruth(brk, u.cache_read_input_tokens || 0, u.cache_creation_input_tokens || 0); // baked onto brk for cacheMarker
+      // D17④: REAL prefix SHA-256 over verbatim bytes (not the demo's 32-bit structural proxy). Two calls'
+      // prefixes are byte-identical iff their full SHA-256 over [0,idx) match → independent byte truth.
+      const read = u.cache_read_input_tokens || 0, create = u.cache_creation_input_tokens || 0;
+      const curPfx = prefixSha256(flat, brk.idx);
+      const prevPfx = prefixSha256(prevFlat, brk.idx);
+      const prefixByteIdentical = brk.idx > 0 && curPfx != null && curPfx === prevPfx;
+      brk.prefixSha256 = curPfx;                       // 逐字字节事实(可独立复算)
+      brk.prefixByteIdentical = prefixByteIdentical;
+      brk.gt = realGroundTruth(prefixByteIdentical, read, create); // byte-truth-backed, not structural proxy
+      brk.gtReal = true;                               // marker MAY drop the "结构估计" caveat for the gt claim
       call.cacheBreak = brk;
       call.gt = brk.gt;
+      call.prefixSha256 = curPfx;
       prevFlat = flat;
     }
   }
