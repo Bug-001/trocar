@@ -1735,19 +1735,13 @@ function renderMon(el,d){
     +(m.autostart?`<span class="monbadge" title="已加入用户级开机自启(非全机)">开机自启</span>`:'')
     +(m.caTrusted?`<span class="monbadge" title="采集 CA 已装入用户级信任库(非全机弱化 TLS)">CA✓</span>`:'')
   const btn=document.getElementById('monBtn'); if(!btn) return
-  btn.onclick=async()=>{
+  btn.onclick=async()=>{ // 开就是开、关就是关 — 直接切,无确认框(服务端 CSRF/Host/Origin 门才是护栏)
     const action=on?'off':'on'
-    const msg=action==='on'
-      ?'开启透明监测将:生成/装采集 CA(仅用户级信任)+ steer CC-CLI + 加开机自启。继续?'
-      :'关闭透明监测:撤销 steer + 移除开机自启(CA 保留;要连 CA 一起移除请用 CLI: asight monitor off --remove-ca)。继续?'
-    if(typeof confirm==='function' && !confirm(msg)) return
     btn.textContent='…'; btn.disabled=true
     try{
-      const r=await fetch('/control/monitoring',{method:'POST',headers:{'content-type':'application/json','x-asight-csrf':d.csrf},body:JSON.stringify({action})})
-      const out=await r.json().catch(()=>({}))
-      if(!r.ok && typeof alert==='function') alert('monitoring '+action+' failed: '+(out.error||r.status))
+      await fetch('/control/monitoring',{method:'POST',headers:{'content-type':'application/json','x-asight-csrf':d.csrf},body:JSON.stringify({action})})
       const s=await fetch('/control/status',{cache:'no-store'}); if(s.ok) renderMon(el, await s.json())
-    }catch(e){ if(typeof alert==='function') alert('control error: '+e.message); btn.disabled=false; btn.textContent='监测 ?' }
+    }catch(e){ btn.disabled=false; btn.textContent='监测 ✗' }
   }
 }
 ;(async()=>{ const el=document.getElementById('monctl'); if(!el) return
