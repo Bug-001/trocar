@@ -107,6 +107,17 @@ const ENVELOPE_CONSUMED = new Set([
   'error',
 ]);
 
+// req_body keys this adapter maps to canonical columns / blocks / identity. The remainder (real
+// provider request fields — max_tokens / temperature / top_p / top_k / tool_choice / thinking /
+// stop_sequences …) are UNMAPPED and MUST surface in calls.extra.req_body + unmapped_count (RFC
+// 3.1:44 — canonical ∪ extra == all keys, per layer; D7 auto-evolution signal). The envelope-level
+// collectExtra treats req_body as consumed-whole, so without this pass those fields silently vanish.
+const REQ_BODY_CONSUMED = new Set([
+  'model', 'stream', 'system', 'tools', 'messages', 'metadata',
+  // demo-capture derived summaries (not provider wire fields; consumed so they don't inflate count)
+  'system_chars', 'tool_count', 'message_count', 'context_chars',
+]);
+
 function stopReasonOf(resp = {}) {
   if (resp.kind === 'json' && resp.body && typeof resp.body === 'object') return resp.body.stop_reason ?? null;
   return resp.stop_reason ?? null;
@@ -118,7 +129,14 @@ export function parseCall(record) {
   const resp = record?.resp || {};
   const cls = classOf(norm); // 'llm' | 'control' (3.4)
   const isLlm = cls === 'llm';
-  const { extra, unmapped_count } = collectExtra(record, ENVELOPE_CONSUMED);
+  const env = collectExtra(record, ENVELOPE_CONSUMED);
+  // ALSO diff req_body's inner keys — unmapped provider request fields flatten in with a `req_body.`
+  // prefix (keeps the contract invariant unmapped_count == |extra keys|, and gives the D7
+  // unmapped_fields view a precise path like `req_body.max_tokens` rather than an opaque `req_body`).
+  const body = req && typeof req === 'object' ? collectExtra(req, REQ_BODY_CONSUMED) : { extra: {}, unmapped_count: 0 };
+  const extra = { ...env.extra };
+  for (const [k, v] of Object.entries(body.extra)) extra['req_body.' + k] = v;
+  const unmapped_count = env.unmapped_count + body.unmapped_count;
   return {
     class: cls,
     control_kind: controlKindFor(norm), // NULL for llm; config|account|registry|telemetry|other for control
