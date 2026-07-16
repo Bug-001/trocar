@@ -5,6 +5,7 @@
 //   on      — onboard: generate CA + install user-level trust + steer CC-CLI (D22)
 //   off     — revert steer (+ optional --remove-ca)
 //   verify  — assert the CA is in the user-level trust store (no machine trust)
+//   doctor  — onboard self-check: deps probe + 「测试」四问 (4.1:61 / 4.5:41,77)
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
@@ -87,6 +88,35 @@ async function main() {
         : 'CA not installed ✗ (run: asight on)');
       break;
     }
+    case 'doctor': case 'test': {
+      // onboard 自检:依赖探测 + 「测试」四问(4.1:61 / 4.5:41,77). Human reviews the four answers;
+      // exit non-zero ONLY on a credential leak (the one non-negotiable security red line).
+      const { spawnSync } = await import('node:child_process');
+      const { readRecords } = await import(r('src', 'etl', 'ingest.mjs'));
+      const st = await import(r('src', 'capture', 'selftest.mjs'));
+      const ob = await import(r('src', 'capture', 'onboard.mjs'));
+      const has = (bin) => spawnSync(process.platform === 'win32' ? 'where' : 'which', [bin], { stdio: 'ignore' }).status === 0;
+      const source = flag('--source', process.env.ASIGHT_SOURCE || path.join(os.homedir(), '.atrace', 'capture.ndjson'));
+      const LIMIT = 5000;
+      let srcMeta = null, records = [];
+      try { const s = fs.statSync(source); srcMeta = { exists: true, bytes: s.size, mtimeMs: s.mtimeMs }; } catch { srcMeta = { exists: false }; }
+      if (srcMeta.exists) { try { records = await readRecords(source, { limit: LIMIT }); } catch (e) { console.error('read error:', e.message); } }
+      const deps = st.checkDeps({ has });
+      const res = st.runSelfTest({ records, srcMeta, deps, verify: () => ob.verifyUserTrustOnly() });
+      const mark = (b, warn) => (b ? '✓' : warn ? '⚠' : '✗');
+      console.log('asight doctor — onboard 自检(依赖探测 + 「测试」四问)\n');
+      console.log('deps:');
+      for (const d of deps) console.log(`  ${mark(d.present, true)} ${d.bin} — ${d.present ? 'found' : 'MISSING · ' + d.hint} (${d.why})`);
+      console.log(`\n源:${source}${srcMeta.exists ? ` · ${(srcMeta.bytes / 1024).toFixed(0)} KB${records.length >= LIMIT ? ` · sampled first ${LIMIT} records` : ''}` : ' · (not found)'}\n`);
+      console.log('四问(人核对):');
+      console.log(`  ${mark(res.q1.ok, true)} ① 是否真在抓   — ${res.q1.note}`);
+      console.log(`  ${mark(res.q2.ok, res.q2.llm === 0)} ② 抓得对       — ${res.q2.note}`);
+      console.log(`  ${mark(res.q3.ok)} ③ 凭据没漏     — ${res.q3.note}`);
+      console.log(`  ${mark(res.q4.ok, true)} ④ 没弱化全机 TLS — ${res.q4.note}`);
+      if (res.hardFail) { console.error('\n✗ credential leak detected — the redact firewall MUST be fixed before capturing further.'); process.exit(1); }
+      console.log('\n✓ no credential leak. (①②④ are for your review — see notes above.)');
+      break;
+    }
     default:
       console.log(`asight — transparent, byte-faithful tracer of what an agent app sends the LLM
 
@@ -98,6 +128,7 @@ usage:
   asight off  [--remove-ca]
   asight uninstall                              one-step revert: remove CA + clear steer
   asight verify
+  asight doctor [--source <ndjson>]             self-check: deps probe + 「测试」四问 (是否真在抓/抓得对/凭据没漏/没弱化全机 TLS)
   asight --version`);
   }
 }

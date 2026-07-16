@@ -29,7 +29,7 @@ export function normalizeRecord(raw) {
 // Stream NDJSON line-by-line (readline — never readFileSync a whole large trace; V8's
 // ~512MB single-string cap bites otherwise). Returns an array of (optionally normalized)
 // records. Blank / unparseable lines are skipped.
-export async function readRecords(filePath, { normalize = true } = {}) {
+export async function readRecords(filePath, { normalize = true, limit = Infinity } = {}) {
   const out = [];
   const rl = createInterface({ input: createReadStream(filePath, 'utf8'), crlfDelay: Infinity });
   for await (const line of rl) {
@@ -38,6 +38,7 @@ export async function readRecords(filePath, { normalize = true } = {}) {
     let raw;
     try { raw = JSON.parse(s); } catch { continue; }
     out.push(normalize ? normalizeRecord(raw) : raw);
+    if (out.length >= limit) { rl.close(); break; } // bounded read (e.g. the self-test samples a head)
   }
   return out;
 }
