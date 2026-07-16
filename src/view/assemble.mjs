@@ -88,6 +88,11 @@ function assembleOpenai(records) {
   for (const r of llm) {
     let req; try { req = JSON.parse(r.req_body); } catch { req = {}; }
     r.request = req; // so the board's callComp / cost read the parsed request
+    // derived counts the board header + raw card read (parallel to hydrateForBoard for CC)
+    req.message_count = Array.isArray(req.input) ? req.input.length : 0;
+    req.tool_count = Array.isArray(req.tools) ? req.tools.length : 0;
+    req.system_chars = typeof req.instructions === 'string' ? req.instructions.length : 0;
+    req.context_chars = (r.req_body || '').length; // verbatim wire byte count
     const flat = openai.boardFlat(req);
     const norm = openai.normResp(r);
     const usage = norm.canonUsage;
