@@ -15,7 +15,8 @@ import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb, DEFAULT_DB_PATH } from './db.mjs';
-import { listSessions, sessionCalls, sessionComposition, sessionResources, callContext } from './query/queries.mjs';
+import { listSessions, sessionCalls, sessionComposition, sessionResources, callContext,
+  filesEverInContext, cacheHitDistribution, breakKindComparison, unmappedFields, forkTree } from './query/queries.mjs';
 import { buildResolver } from './query/source.mjs';
 import { readRecords } from './etl/ingest.mjs';
 import { projectsView, sessionView, controlView } from './view/board.mjs';
@@ -165,6 +166,25 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         const blocks = await callContext(db.connection, id, resolve);
         if (!blocks.length) return notFound(res, 'call not found');
         return sendJson(res, 200, { call_id: id, blocks, source_resolved: resolve.size ? true : false });
+      }
+      // cross-session analysis (3.5 signature ②) — the whole-corpus SQL views.
+      if (p === '/api/analysis') {
+        if (!db) return notFound(res, 'no analytics db');
+        return sendJson(res, 200, {
+          files: await filesEverInContext(db.connection),
+          cacheHits: await cacheHitDistribution(db.connection),
+          breakKinds: await breakKindComparison(db.connection),
+        });
+      }
+      if (p === '/api/unmapped') { // D7 fidelity backstop — provider keys still unmapped
+        if (!db) return notFound(res, 'no analytics db');
+        return sendJson(res, 200, { unmapped: await unmappedFields(db.connection) });
+      }
+      if (p === '/api/forktree') { // recursive session lineage rooted at ?root=<id>
+        if (!db) return notFound(res, 'no analytics db');
+        const root = url.searchParams.get('root');
+        if (!root) return notFound(res, 'forktree needs ?root=<session_id>');
+        return sendJson(res, 200, { tree: await forkTree(db.connection, root) });
       }
 
       if (p.startsWith('/api/')) return notFound(res, 'unknown endpoint');
