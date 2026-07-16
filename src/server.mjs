@@ -21,6 +21,7 @@ import { buildResolver } from './query/source.mjs';
 import { readRecords } from './etl/ingest.mjs';
 import { projectsView, sessionView, controlView } from './view/board.mjs';
 import { createLru, memoKey } from './query/memo.mjs';
+import { loadPricing } from './view/pricing.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = path.join(HERE, 'web'); // src/web — the reused demo board (self-contained index.html)
@@ -153,6 +154,10 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
       if (p === '/api/control') {
         const cls = url.searchParams.get('class');
         return sendJson(res, 200, controlView(await loadRecords(), cls));
+      }
+      if (p === '/api/pricing') { // D14: editable unit-price config (cost = usage × price, derived)
+        const { pricing, source } = loadPricing();
+        return sendJson(res, 200, { pricing, source, editable: true });
       }
 
       // ── SQL family (DuckDB canonical; optional) ───────────────────────────
