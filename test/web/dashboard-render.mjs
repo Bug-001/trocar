@@ -116,6 +116,68 @@ function buildGateModule(payloadJson) {
     if(!/Δ vs <b>#1<\\/b>/.test(h)) F.push('step-diff: arbitrary reference step not honored (Δ vs #1 expected)')
     diffRef=null
   } else F.push('step-diff: fixture has no compaction step to exercise removal-aware diff')
+
+  // ── 1.2 §验收#2 (AC-3 shell) — agentChip is TABLE-DRIVEN off meta.harness, not hardcoded ──
+  if(!/Claude Code/.test(chipFor({harness:'claude-code',entrypoint:'cli'}))) F.push('1.2: chipFor(claude-code) != Claude Code')
+  if(!/Codex/.test(chipFor({harness:'codex',entrypoint:'cli'}))) F.push('1.2 AC-3: chipFor(codex) not table-driven (hardcoded chip?)')
+  if(!/DeepSeek/.test(chipFor({harness:'deepseek-cli'}))) F.push('1.2 AC-3: chipFor(deepseek) not table-driven')
+
+  // ── 2.6 §验收#1 — raw panel usage reads CANONICAL roles (read/new-cache/fresh/out), zero provider names ──
+  playhead=N-1; renderRawPanel()
+  { const h=document.getElementById('rawpanel').innerHTML
+    if(!/read/.test(h)||!/new-cache/.test(h)||!/fresh/.test(h)||!/out/.test(h)) F.push('2.6: raw panel missing a canonical usage role (read/new-cache/fresh/out)')
+    if(/cache_read_input_tokens|cache_creation_input_tokens|input_tokens|output_tokens/.test(h)) F.push('2.6: raw panel leaks provider-native usage names (invariant 3)') }
+
+  // ── 1.4 §验收 — assembly order in the window is tools → system → messages ──
+  playhead=N-1; render()
+  { const h=$('ctxwin'), it=h.indexOf('id="sec-tools"'), is=h.indexOf('id="sec-system"'), im=h.indexOf('id="sec-messages"')
+    if(it>=0&&is>=0&&!(it<is)) F.push('1.4: section order — tools not before system')
+    if(is>=0&&im>=0&&!(is<im)) F.push('1.4: section order — system not before messages') }
+
+  // ── 1.3 §验收#5 — compaction bar carries the ✂/compact marker, no new track ──
+  if(compIdx>0){ playhead=compIdx; render()
+    if(!new RegExp('class="bar[^"]*compact[^"]*" data-i="'+compIdx+'"').test($('sawrow'))) F.push('1.3: compaction step bar lacks the compact/✂ marker') }
+
+  // ── 2.1 §验收 — #rails renderTicks: one tick per in-window lane call (left% via xOf) ──
+  setView(0,N,true); playhead=N-1; render()
+  { const sub=lanes.find(l=>l!==anchor&&l.kind!=='probe'&&l.calls&&l.calls.length)
+    if(sub){ const ticks=cnt(renderTicks(sub),/data-i=/g)
+      if(ticks!==sub.calls.length) F.push('2.1: renderTicks '+ticks+' ticks != lane calls '+sub.calls.length) }
+    else F.push('2.1: no non-anchor lane to exercise #rails') }
+
+  // ── 1.4 §验收 — cache overlay wording rendered across steps (prefix-reuse / whole-recompute) ──
+  { let saw=false
+    for(let p=1;p<N;p++){ const c2=anchor.calls[p]; if(!c2||!c2.rec) continue; playhead=p; renderContextWindow()
+      if(/reused KV-cache prefix|cache-identical to call #|whole context recomputed/.test($('ctxwin'))){ saw=true; break } }
+    if(!saw) F.push('1.4: no cache-break marker wording rendered across steps') }
+
+  // ── 1.3 §验收#8 / D13 — overview+detail brush slices the detail to [lo,hi) in lockstep ──
+  if(N>=3){ const lo=1, hi=N-1; setView(lo,hi,true)
+    const b2=cnt(document.getElementById('sawrow').innerHTML,/class="bar /g)
+    const c2=cnt(document.getElementById('cacherow').innerHTML,/class="cbar /g)
+    if(b2!==hi-lo) F.push('D13: windowed sawrow bars '+b2+' != '+(hi-lo))
+    if(c2!==hi-lo) F.push('D13: windowed cacherow '+c2+' != '+(hi-lo)+' (not in lockstep)')
+    setView(0,N,true) }
+
+  // ── 2.4 §验收 — files opened carry a view affordance; viewing switches the panel (presence-gated) ──
+  playhead=N-1; render()
+  { const rex=document.getElementById('resexp').innerHTML
+    if(/files opened/.test(rex)){
+      if((rex.match(/class="viewbtn"/g)||[]).length===0) F.push('2.4: files opened have no view button')
+      const m=rex.match(/data-view="([^"]+)" data-viewstep="(\\d+)" data-viewlabel="([^"]*)"/)
+      if(m){ viewResource(+m[2],m[1],m[3])
+        if(!/📄/.test(document.getElementById('rawpanel').innerHTML)) F.push('2.4: view did not switch panel to file content')
+        viewPin=null; renderRawPanel() } } }
+
+  // ── 1.5 §验收 — error call → .err bar (presence-gated on a main-lane error call) ──
+  { setView(0,N,true); const ei=anchor.calls.findIndex(c=>c.error)
+    if(ei>=0){ playhead=ei; render()
+      if(!new RegExp('class="bar[^"]*err[^"]*" data-i="'+ei+'"').test($('sawrow'))) F.push('1.5: error call lacks .err bar') } }
+
+  // ── 1.5 §验收 — empty state clears the panels (run LAST — it wipes the board) ──
+  renderEmpty('No sessions captured yet.')
+  if(!/class="empty"/.test(document.getElementById('ctxwin').innerHTML)) F.push('1.5: empty state — ctxwin missing .empty')
+  if(document.getElementById('rails').innerHTML!=='') F.push('1.5: empty state — #rails not cleared')
 })()
 `;
   // No stripping needed: the shim neutralizes the page's bootstrap — poll() awaits a fetch that
