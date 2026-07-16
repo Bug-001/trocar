@@ -293,7 +293,8 @@ async function main() {
   const port = Number(process.env.ASIGHT_PORT || 9800);
   const dbPath = process.env.ASIGHT_DB || DEFAULT_DB_PATH;
   const sourcePath = process.env.ASIGHT_SOURCE || null;
-  const { server } = await createServer({ dbPath, sourcePath });
+  const control = process.env.ASIGHT_CONTROL === '1' || process.argv.includes('--control'); // D26 opt-in
+  const { server } = await createServer({ dbPath, sourcePath, control });
   server.on('error', (e) => {
     console.error('server error:', e.message);
     if (e.code === 'EADDRINUSE') process.exit(1);
