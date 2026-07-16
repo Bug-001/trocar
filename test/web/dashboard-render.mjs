@@ -117,6 +117,40 @@ function buildGateModule(payloadJson) {
   if((curFlat||[]).length){ openBlocks.clear(); openBlocks.add(0); renderContextWindow()
     if(/class="cblk collapsed[^"]*" data-bi="0"/.test(document.getElementById('ctxwin').innerHTML)) F.push('block expand not persisted across re-render')
     openBlocks.clear() }
+
+  // ── D12 §验收 (1.4:40/80/91) — turn fold-state memorized by turn-anchor content_hash, not turn index ──
+  // state-based (turnIsOpen/turnAnchorKey) + fixed-string DOM counts; NO regex built from the hash
+  // (harness is a template literal — a dollar-brace interpolation or stray backslash would break parsing).
+  { const openC=hh=>(hh.match(/class="cwturn "/g)||[]).length, allC=hh=>(hh.match(/class="cwturn /g)||[]).length
+    const multi=anchor.calls.map((c,p)=>({p,n:(c.flat?messageTurns(c.flat).length:0)})).filter(x=>x.n>=2)
+    if(!multi.length) F.push('D12: fixture has no step with >=2 turns to exercise fold-memory')
+    else{ const P=multi[multi.length-1].p
+      // (a) default: exactly the LAST turn open, the rest collapsed (untouched → last-turn-open)
+      turnFold.clear(); playhead=P; renderContextWindow()
+      let h=document.getElementById('ctxwin').innerHTML
+      const turns=messageTurns(curFlat), lastTi=turns.length-1
+      if(openC(h)!==1) F.push('D12: default fold — expected exactly 1 open turn (last), got '+openC(h))
+      if(!turnIsOpen(curFlat,turns[lastTi],lastTi,lastTi)) F.push('D12: default fold — last turn not open')
+      if(turnIsOpen(curFlat,turns[0],0,lastTi)) F.push('D12: default fold — a historical turn is open (should be collapsed)')
+      // (b) memory keyed by ANCHOR content_hash: opening the FIRST (historical) turn → 2 open now
+      const firstAh=turnAnchorKey(curFlat,turns[0])
+      turnFold.set(firstAh,true); renderContextWindow(); h=document.getElementById('ctxwin').innerHTML
+      if(openC(h)!==2) F.push('D12: opening first turn by anchor did not open it (expected 2 open, got '+openC(h)+')')
+      if(!turnIsOpen(curFlat,turns[0],0,lastTi)) F.push('D12: first turn not open after setting its anchor')
+      // (c) survives scrub: same anchor at a DIFFERENT playhead stays open (not reset-on-scrub, index-independent)
+      const other=multi.find(x=>x.p!==P && messageTurns(anchor.calls[x.p].flat).some(t=>turnAnchorKey(anchor.calls[x.p].flat,t)===firstAh))
+      if(other){ playhead=other.p; renderContextWindow()
+        const t2=messageTurns(curFlat), ti2=t2.findIndex(t=>turnAnchorKey(curFlat,t)===firstAh)
+        if(ti2<0) F.push('D12: anchor turn missing at the scrubbed step')
+        else if(!turnIsOpen(curFlat,t2[ti2],ti2,t2.length-1)) F.push('D12: fold-memory did NOT survive scrub (anchor-opened turn collapsed at another step)') }
+      // (d) collapse-all / expand-all convenience (render P first so foldAll operates on THIS step's flat)
+      playhead=P; renderContextWindow(); foldAll(false); h=document.getElementById('ctxwin').innerHTML
+      if(openC(h)!==0) F.push('D12: collapse-all left '+openC(h)+' turns open')
+      foldAll(true); h=document.getElementById('ctxwin').innerHTML
+      if(openC(h)!==allC(h)) F.push('D12: expand-all left some turns collapsed ('+openC(h)+'/'+allC(h)+')')
+      turnFold.clear() }
+  }
+
   // 2.3 §验收#6 — 步间 diff · removal-aware + arbitrary reference (D24)
   const compIdx=anchor.calls.findIndex(c=>c.compaction && c.flat)
   if(compIdx>0){
