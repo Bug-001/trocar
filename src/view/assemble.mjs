@@ -6,6 +6,7 @@
 // server-side analyzer, frontend unchanged).
 import { createHash } from 'node:crypto';
 import { analyze, linearContext, cacheBreak, normResp, flatBlockText } from './analyze.mjs';
+import * as openai from '../dissect/openai.mjs'; // D25 · Phase 4: the OpenAI/Codex dissector
 
 // D17④ 地面真相(RFC 3.3:65 · 独立字节护城河). The demo proxied prefix identity with the 32-bit
 // bounded content_hash SEQUENCE (collision-prone). Product MUST use a REAL full SHA-256 over the
@@ -52,9 +53,13 @@ function hydrateForBoard(r) {
   return { ...r, request, response: r.response || r.resp || {} };
 }
 
-const SIDH = ['x-claude-code-session-id', 'x-session-id'];
+// session-id signals across harnesses: CC (x-claude-code-session-id / x-session-id) + Codex (session-id
+// / thread-id headers, = its prompt_cache_key). headersOf tolerates BOTH the demo v0 `request_headers`
+// and the product D10 `req_headers` envelope key, so a Codex D10 record groups into its session.
+const SIDH = ['x-claude-code-session-id', 'x-session-id', 'session-id', 'thread-id'];
+export const headersOf = (rec) => (rec && (rec.request_headers || rec.req_headers)) || {};
 export function sessionIdOf(rec) {
-  const h = rec.request_headers || {};
+  const h = headersOf(rec);
   for (const k of SIDH) if (h[k]) return h[k];
   return null;
 }
@@ -62,9 +67,68 @@ export function recordsForSession(records, sessionId) {
   return records.filter((r) => sessionIdOf(r) === sessionId);
 }
 
+// pick the harness/provider assembler for a session's records (D25 · one dissector per provider).
+function providerOf(records) {
+  for (const r of records || []) if (openai.detect(r)) return 'openai';
+  return 'cc';
+}
+
+// Codex/OpenAI assembler (Phase 4). Produces the SAME `analyzed` shape the CC path does — a single
+// `main` lane of calls, each baked with the neutral fields the board reads (flat/usage/cacheBreak/gt/
+// prefixSha256) — but via the OpenAI dissector (src/dissect/openai.mjs). The cache-break + ground-truth
+// machinery (cacheBreak / prefixSha256 / realGroundTruth) is provider-agnostic over the flat block
+// vocabulary, so it is REUSED verbatim. Lanes beyond `main` (subagent/monitor/aux) + the resource
+// ledger are CC-specific and left empty here (fidelity: not-yet-extracted for Codex, not misreported).
+function assembleOpenai(records) {
+  const isResp = (r) => r && r.is_llm_call && /(^|\/)responses$/.test(String(r.endpoint || '').split('?')[0]);
+  const llm = (records || []).filter(isResp)
+    .sort((a, b) => String(a.ts_request || a.ts || '').localeCompare(String(b.ts_request || b.ts || '')));
+  const calls = [];
+  let prevFlat = null, gi = 0;
+  for (const r of llm) {
+    let req; try { req = JSON.parse(r.req_body); } catch { req = {}; }
+    r.request = req; // so the board's callComp / cost read the parsed request
+    const flat = openai.boardFlat(req);
+    const norm = openai.normResp(r);
+    const usage = norm.canonUsage;
+    const brk = cacheBreak(prevFlat, flat, {});
+    const curPfx = prefixSha256(flat, brk.idx);
+    const prevPfx = prefixSha256(prevFlat, brk.idx);
+    const prefixByteIdentical = brk.idx > 0 && curPfx != null && curPfx === prevPfx;
+    brk.prefixSha256 = curPfx;
+    brk.prefixByteIdentical = prefixByteIdentical;
+    brk.gt = realGroundTruth(prefixByteIdentical, usage.read, usage.create);
+    brk.gtReal = true;
+    calls.push({
+      gi: gi++, id: r.id, streamId: 'main', rec: r, norm,
+      ctx: openai.ctxTokens(norm),
+      msgCount: Array.isArray(req.input) ? req.input.length : 0,
+      tools: Array.isArray(req.tools) ? req.tools.length : 0,
+      ts: r.ts_request || r.ts || '', status: (r.resp && r.resp.status) || null,
+      compaction: false, error: !!r.error,
+      flat, usage, cacheBreak: brk, gt: brk.gt, prefixSha256: curPfx,
+    });
+    prevFlat = flat;
+  }
+  const mainLane = {
+    id: 'main', streamId: 'main', kind: 'main', icon: '💬', label: 'conversation',
+    calls, events: [], resources: [], seenFiles: [], giLocal: new Map(),
+    peakCtx: calls.reduce((m, c) => Math.max(m, c.ctx), 1),
+    spawnStep: null, parent: null, flagged: 0,
+  };
+  const stats = {
+    calls: calls.length, streams: 1, subagents: 0, monitors: 0, compactions: 0,
+    totalIn: calls.reduce((a, c) => a + ((c.norm.usage || {}).input_tokens || 0), 0),
+    totalOut: calls.reduce((a, c) => a + ((c.norm.usage || {}).output_tokens || 0), 0),
+    peakCtx: calls.reduce((a, c) => Math.max(a, c.ctx), 0),
+  };
+  return { streams: [{ id: 'main', kind: 'main', calls }], steps: calls, stats, lanes: [mainLane] };
+}
+
 // records = ONE session's raw (v0/demo-shape) records. Returns analyze() output with each
 // call augmented: .flat (linearContext), .cacheBreak (vs prev in lane), .gt (groundTruth).
 export function assembleSession(records) {
+  if (providerOf(records) === 'openai') return assembleOpenai(records); // Phase 4: Codex/OpenAI path
   // Dissect each record to the shape the board's block extractor reads (v0 in-place; D10 req_body→request).
   const A = analyze(records.map(hydrateForBoard));
   for (const lane of A.lanes || []) {

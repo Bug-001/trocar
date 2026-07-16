@@ -6,7 +6,10 @@
 // All provider parsing happens in assembleSession (analyze) HERE, server-side — the browser
 // receives only canonical `analyzed` (invariant 3 / AC-3). Pure over its `records` input;
 // human-title / cwd enrichment is injected via `enrich(id)` so this module stays testable.
-import { assembleSession, sessionIdOf } from './assemble.mjs';
+import { assembleSession, sessionIdOf, headersOf } from './assemble.mjs';
+
+// tolerate both envelope shapes: demo v0 `request_headers` + product D10 `req_headers` (Codex).
+const anyHeaders = (recs) => headersOf(recs.find((r) => r.request_headers || r.req_headers));
 
 const base = (p) => String(p).replace(/\/+$/, '').split('/').pop() || String(p);
 const isProbe = (r) => /count_tokens/.test(r.endpoint || '');
@@ -33,8 +36,8 @@ const probeSeries = (precs) =>
   precs.map((r) => ({ ts: r.ts_request, tokens: (r.response && r.response.body && r.response.body.input_tokens) ?? null }))
     .filter((p) => p.tokens != null);
 function entrypointOf(recs) {
-  const h = (recs.find((r) => r.request_headers) || {}).request_headers || {};
-  const app = String(h['x-app'] || '').toLowerCase(), ua = String(h['user-agent'] || '').toLowerCase();
+  const h = anyHeaders(recs);
+  const app = String(h['x-app'] || '').toLowerCase(), ua = String(h['user-agent'] || h['originator'] || '').toLowerCase();
   if (app === 'desktop' || /desktop/.test(ua)) return 'desktop';
   if (app === 'cli' || /cli|sdk-cli/.test(ua)) return 'cli';
   return null;
@@ -43,15 +46,15 @@ function entrypointOf(recs) {
 // (not a hardcode), so onboarding Codex/DeepSeek is a new row here + a new server-side analyzer,
 // with the frontend chip table untouched (invariant 3 / AC-3).
 function harnessOf(recs) {
-  const h = (recs.find((r) => r.request_headers) || {}).request_headers || {};
-  const ua = String(h['user-agent'] || '').toLowerCase();
+  const h = anyHeaders(recs);
+  const ua = String(h['user-agent'] || h['originator'] || '').toLowerCase();
   if (/claude-cli|claude-code/.test(ua)) return { harness: 'claude-code', provider: 'anthropic' };
   if (/codex/.test(ua)) return { harness: 'codex', provider: 'openai' };
   if (/deepseek/.test(ua)) return { harness: 'deepseek-cli', provider: 'deepseek' };
   return { harness: null, provider: null };
 }
 // a subagent turn carries its own x-claude-code-agent-id (differs from the main lane's absence)
-const hasSubagent = (recs) => recs.some((r) => String((r.request_headers || {})['x-claude-code-agent-id'] || '').trim());
+const hasSubagent = (recs) => recs.some((r) => String(headersOf(r)['x-claude-code-agent-id'] || '').trim());
 function lastTs(recs) { let m = ''; for (const r of recs) { const t = String(r.ts_request || ''); if (t > m) m = t; } return m; }
 
 function sessionMetaFor(id, recs, enrich) {
