@@ -6,6 +6,32 @@
 // server-side analyzer, frontend unchanged).
 import { analyze, linearContext, cacheBreak, groundTruth, normResp } from './analyze.mjs';
 
+// CC dissector · board intake (RFC 3.1 dissector · D18a). The board's block extractor (linearContext /
+// analyze) reads a PARSED v0-shape record: `.request` (object) + `.response`. The PRODUCT capture (D10,
+// see 4.1/3.1:12) stores the request as a VERBATIM `req_body` STRING and the response under `resp`. So a
+// D10 record renders EMPTY on the board unless we dissect it first. hydrateForBoard parses req_body →
+// request (carrying the FULL verbatim tool `input_schema` → analyze marks tools verbatim, not metadata)
+// and aliases resp→response. This is the source truth (不变式 2): blocks are sliced from the verbatim
+// wire req_body, so AC-1 holds MORE directly for D10 than v0. No-op for records already in v0 shape.
+function hydrateForBoard(r) {
+  if (!r || r.request !== undefined || typeof r.req_body !== 'string') return r; // already v0 / not a D10 body
+  let body;
+  try { body = JSON.parse(r.req_body); } catch { return r; } // unparseable → leave (analyze filters it)
+  const system = Array.isArray(body.system) ? body.system
+    : (typeof body.system === 'string' ? [{ type: 'text', text: body.system }] : []);
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const tools = Array.isArray(body.tools) ? body.tools : [];
+  const request = {
+    ...body, system, messages, tools,
+    // derived counts the v0 capture used to bake (the raw wire body doesn't carry them)
+    message_count: messages.length,
+    tool_count: tools.length,
+    system_chars: system.reduce((a, b) => a + String((b && b.text) || '').length, 0),
+    context_chars: r.req_body.length,
+  };
+  return { ...r, request, response: r.response || r.resp || {} };
+}
+
 const SIDH = ['x-claude-code-session-id', 'x-session-id'];
 export function sessionIdOf(rec) {
   const h = rec.request_headers || {};
@@ -19,7 +45,8 @@ export function recordsForSession(records, sessionId) {
 // records = ONE session's raw (v0/demo-shape) records. Returns analyze() output with each
 // call augmented: .flat (linearContext), .cacheBreak (vs prev in lane), .gt (groundTruth).
 export function assembleSession(records) {
-  const A = analyze(records);
+  // Dissect each record to the shape the board's block extractor reads (v0 in-place; D10 req_body→request).
+  const A = analyze(records.map(hydrateForBoard));
   for (const lane of A.lanes || []) {
     let prevFlat = null;
     for (const call of lane.calls || []) {
