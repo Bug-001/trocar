@@ -19,7 +19,7 @@ import { listSessions, sessionCalls, sessionComposition, sessionResources, callC
   filesEverInContext, cacheHitDistribution, breakKindComparison, unmappedFields, forkTree } from './query/queries.mjs';
 import { buildResolver } from './query/source.mjs';
 import { readRecords } from './etl/ingest.mjs';
-import { projectsView, sessionView, controlView, compareView } from './view/board.mjs';
+import { projectsView, sessionView, controlView } from './view/board.mjs';
 import { createLru, memoKey } from './query/memo.mjs';
 import { loadPricing } from './view/pricing.mjs';
 
@@ -154,13 +154,6 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
       if (p === '/api/control') {
         const cls = url.searchParams.get('class');
         return sendJson(res, 200, controlView(await loadRecords(), cls));
-      }
-      if (p === '/api/compare') { // D17③ 跨-run 逐步结构 diff (two session ids, server-side canonical)
-        const a = url.searchParams.get('a'), b = url.searchParams.get('b');
-        if (!a || !b) return notFound(res, 'compare needs ?a=<sessionId>&b=<sessionId>');
-        const out = compareView(await loadRecords(), a, b, { enrich });
-        if (!out) return notFound(res, 'one or both sessions not found');
-        return sendJson(res, 200, out);
       }
       if (p === '/api/pricing') { // D14: editable unit-price config (cost = usage × price, derived)
         const { pricing, source } = loadPricing();

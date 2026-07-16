@@ -44,17 +44,6 @@ test('D14 /api/pricing: editable config served (defaults present)', async () => 
   assert.ok(d.editable === true && d.pricing && Array.isArray(d.pricing.opus) && d.pricing.opus.length === 4);
 });
 
-test('D17③ /api/compare: 404 on missing id; 200 canonical for a self-compare', async () => {
-  assert.equal((await get(port, '/api/compare?a=' + MAIN)).status, 404, 'missing b → 404');
-  assert.equal((await get(port, `/api/compare?a=${MAIN}&b=nope`)).status, 404, 'unknown id → 404 (no empty shell)');
-  const r = await get(port, `/api/compare?a=${MAIN}&b=${MAIN}`);
-  assert.equal(r.status, 200);
-  const d = JSON.parse(r.body);
-  assert.ok(d.a && d.b && d.align && d.resources, 'compare canonical shape');
-  assert.equal(d.align.firstDiverge, -1, 'self-compare has no divergence');
-  assert.ok(!JSON.stringify(d).match(/cache_read_input_tokens|input_tokens|output_tokens/), 'no provider-native usage leak (invariant 3)');
-});
-
 test('4.4 §验收#5 — concurrent poll during ETL append reads a self-consistent snapshot', async () => {
   // simulate ETL appending: a COMPLETE record then a HALF-written line (no newline), racing a poll.
   const complete = JSON.stringify({ id: 'req_appended', ts_request: '2026-07-16T00:00:00Z', is_llm_call: false, endpoint: '/x', request_headers: {}, response: { status: 200 } }) + '\n';
