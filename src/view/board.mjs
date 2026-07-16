@@ -131,3 +131,53 @@ export function controlView(records, cls) {
   for (const r of ctrl) { const c = controlClass(r); counts.set(c, (counts.get(c) || 0) + 1); }
   return { classes: [...counts.entries()].map(([c, n]) => ({ class: c, count: n })) };
 }
+
+// ── /api/compare (D17③ 跨-run 逐步结构 diff) ──────────────────────────────────────
+// 两条 run/session 的**确定性离线** content_hash 序列比对(**非**重调模型;复用同一 cache-break 前缀
+// 原语,对象=两 session,承 3.3:100 + 3.5 + 1.4)。全服务端(不变式 3:浏览器零 provider 解析)→
+// 加 provider 只加服务端 analyzer,compare 页零改(AC-3)。
+const resBase = (p) => String(p || '').replace(/\/+$/, '').split('/').pop() || p;
+const resIdentity = (r) => r.kind + '::' + ((r.kind === 'file' || r.kind === 'dir') ? resBase(r.label) : r.label);
+function runModel(recs, sessionId, enrich) {
+  const A = assembleSession(llmRecs(recs));
+  const main = (A.lanes || []).find((l) => l.kind === 'main') || (A.lanes || [])[0] || { calls: [] };
+  // per main-lane call: the content_hash sequence (skip per-call nonce blocks — their bytes churn but
+  // stay cache-excluded, so they're not part of the structural identity). This IS the cache-break primitive.
+  const steps = (main.calls || []).map((c) => ({
+    ctx: c.ctx || 0, compaction: !!c.compaction,
+    keys: (c.flat || []).filter((b) => !b.volatile).map((b) => b.key),
+  }));
+  const resMap = new Map();
+  for (const l of A.lanes || []) for (const r of l.resources || []) { const k = resIdentity(r); if (!resMap.has(k)) resMap.set(k, { kind: r.kind, label: r.label }); }
+  return { meta: sessionMetaFor(sessionId, recs, enrich), stats: A.stats, steps, resources: [...resMap.values()] };
+}
+// index-aligned stepwise structural diff: walk both runs in lockstep; a step is identical iff its block-key
+// SET matches; sharedPrefix = how many leading steps stayed byte-structurally identical (the cross-run
+// analogue of the cache-break shared prefix); firstDiverge = where the two runs first differ.
+function alignRuns(a, b) {
+  const n = Math.min(a.steps.length, b.steps.length), per = [];
+  let firstDiverge = -1;
+  for (let i = 0; i < n; i++) {
+    const ka = a.steps[i].keys, kb = b.steps[i].keys, sa = new Set(ka), sb = new Set(kb);
+    const added = kb.filter((k) => !sa.has(k)).length, removed = ka.filter((k) => !sb.has(k)).length;
+    const identical = added === 0 && removed === 0 && ka.length === kb.length;
+    if (!identical && firstDiverge < 0) firstDiverge = i;
+    per.push({ i, identical, added, removed, aBlocks: ka.length, bBlocks: kb.length });
+  }
+  return { compared: n, firstDiverge, sharedPrefix: firstDiverge < 0 ? n : firstDiverge, aExtra: Math.max(0, a.steps.length - n), bExtra: Math.max(0, b.steps.length - n), per };
+}
+export function compareView(records, idA, idB, { enrich } = {}) {
+  const g = groupSessions(records);
+  const ra = g.get(idA), rb = g.get(idB);
+  if (!ra || !rb) return null; // 404: at least one session id not in this source
+  const a = runModel(ra, idA, enrich), b = runModel(rb, idB, enrich);
+  const idxA = new Map(a.resources.map((r) => [resIdentity(r), r])), idxB = new Map(b.resources.map((r) => [resIdentity(r), r]));
+  const keys = new Set([...idxA.keys(), ...idxB.keys()]);
+  const both = [], aonly = [], bonly = [];
+  for (const k of [...keys].sort()) { const inA = idxA.get(k), inB = idxB.get(k); (inA && inB ? both : inA ? aonly : bonly).push(inA || inB); }
+  const align = alignRuns(a, b);
+  // strip the heavy per-step content_hash arrays off the wire — the page needs ctx/compaction curves,
+  // the align summary, and the resource set-diff (not the raw hashes).
+  const strip = (run) => ({ meta: run.meta, stats: run.stats, steps: run.steps.map((s) => ({ ctx: s.ctx, compaction: s.compaction })), resources: run.resources });
+  return { a: strip(a), b: strip(b), align, resources: { both, aonly, bonly } };
+}
