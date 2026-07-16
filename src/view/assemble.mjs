@@ -25,6 +25,14 @@ export function assembleSession(records) {
     for (const call of lane.calls || []) {
       if (!call.rec || !call.rec.request) { call.flat = []; call.cacheBreak = null; call.gt = null; continue; }
       const flat = linearContext(call.rec.request);
+      // Tag per-block faithfulness SERVER-SIDE (reads provider block shape here, not in the browser →
+      // invariant 3). opaque = encrypted/redacted reasoning replayed as signature-only, no plaintext on
+      // the wire (thinking/redacted_thinking with a signature but empty text). The board renders a badge
+      // off b.faithfulness so nobody mistakes ciphertext for verbatim content (invariant 4). (1.4:52)
+      for (const b of flat) {
+        const bl = b.block || {};
+        if ((b.kind === 'thinking' || b.kind === 'redacted_thinking') && bl.signature && !(bl.thinking || bl.text)) b.faithfulness = 'opaque';
+      }
       call.flat = flat;
       call.norm = call.norm || normResp(call.rec);
       const u = call.norm.usage || {};

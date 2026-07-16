@@ -208,6 +208,9 @@
   .ccbadge{color:var(--green);font-size:9px;white-space:nowrap;border:1px solid color-mix(in srgb,var(--green) 40%,var(--border));border-radius:10px;padding:0 5px;}
   .volbadge{color:var(--amber);font-size:9px;white-space:nowrap;border:1px solid color-mix(in srgb,var(--amber) 40%,var(--border));border-radius:10px;padding:0 5px;}
   .metabadge{color:var(--dim);font-size:9px;white-space:nowrap;border:1px dashed var(--border);border-radius:10px;padding:0 5px;cursor:help;}
+  /* per-block faithfulness (1.4:52 / 不变式4): dashed = NOT byte-verbatim. Muted amber so it reads as a caveat, not an error. */
+  .ffbadge{font-size:9px;white-space:nowrap;border:1px dashed color-mix(in srgb,var(--amber) 45%,var(--border));border-radius:10px;padding:0 5px;cursor:help;color:var(--amber);}
+  .ff-opaque{color:var(--dim);border-color:color-mix(in srgb,var(--dim) 45%,var(--border));}
   .cbc{padding:0 9px;} .cblk.collapsed .cbc{display:none;}
   /* messages grouped into turns (point 2): user-query header ▸ nested call-turn blocks */
   .cwturn{border:1px solid var(--border);border-radius:7px;margin-bottom:6px;overflow:hidden;background:color-mix(in srgb,var(--accent) 3%,transparent);}
@@ -1148,10 +1151,16 @@ function ctxBlock(b,i,prevKeys){
   const meta=b.sec==='tools'?(b.verbatim
     ?`<span class="metabadge" style="border-style:solid;color:var(--green);border-color:var(--green)" title="faithfulness: verbatim — the full tool schema (description + JSON input_schema) is captured on the wire (D15). Byte-faithful, part of AC-1.">verbatim</span>`
     :`<span class="metabadge" title="faithfulness: metadata — this v0 trace stored only name + param names + description length; the full JSON schema text was NOT retained. The model received the full schema; asight didn't store it. Fixed going forward by D15 verbatim capture (RFC 4.1 §验收 #3).">metadata</span>`):''
+  // per-block faithfulness badge (1.4:52 / 不变式 4): server-baked b.faithfulness — never let ciphertext/summary pass as verbatim.
+  const ff=b.faithfulness
+  const ffb=ff==='opaque'?`<span class="ffbadge ff-opaque" title="opaque — encrypted/redacted reasoning: the model got a signature/ciphertext, NO plaintext on the wire. Not verbatim-readable (there is nothing to reconstruct).">🔒 opaque</span>`
+    :ff==='summarized'?`<span class="ffbadge ff-summarized" title="summarized — a client-side summary stands in for the original (e.g. compaction). Not the verbatim original.">📝 summarized</span>`
+    :ff==='truncated'?`<span class="ffbadge ff-truncated" title="truncated — content exceeded a capture display cap; the raw NDJSON stays complete but this block was cut.">✂ truncated</span>`
+    :''
   const rk=b.resKey?` data-rk="${esc(b.resKey)}"`:''
   const open=openBlocks.has(i) // remembered across re-renders so the live poll can't collapse it
   return `<div class="cblk ${open?'':'collapsed'} s-${b.sec} r-${esc(b.role)} k-${esc(b.kind)}" data-bi="${i}"${rk}>`+
-    `<div class="cbh"><span class="cbrole">${esc(h.role)}</span><span class="cbtag">${h.tag}</span>${h.label?`<span class="cblabel">${h.label}</span>`:''}${cc}${vol}${meta}${life}<span class="cbchars">${b.sec==='system'?kf(b.chars)+'c':''}</span></div>`+
+    `<div class="cbh"><span class="cbrole">${esc(h.role)}</span><span class="cbtag">${h.tag}</span>${h.label?`<span class="cblabel">${h.label}</span>`:''}${cc}${vol}${meta}${ffb}${life}<span class="cbchars">${b.sec==='system'?kf(b.chars)+'c':''}</span></div>`+
     `<div class="cbc"${open?' data-filled="1"':''}>${open?ctxBody(b):''}</div></div>`
 }
 function ctxBody(b){
@@ -1160,6 +1169,13 @@ function ctxBody(b){
     ? `${b.name}${b.ttype?' · '+b.ttype:''}\n\ndescription:\n${b.desc||'—'}${b.schema!==undefined?`\n\ninput_schema:\n${JSON.stringify(b.schema,null,2)}`:''}`
     : `${b.name}${b.ttype?' · '+b.ttype:''}\nparams (names only): ${(b.props||[]).join(', ')||'—'}\ndescription: ${kf(b.descChars)} chars captured — schema text not retained (length only)\n\n⚠ metadata only: the full JSON schema (param types / required / enums / nesting) and the description text were NOT captured in this v0 trace. The model DID receive the full schema — asight's v0 capture just didn't store it. This is a capture boundary, not display-clipping or source-truncation. Fixed going forward by verbatim req_body capture (D15, RFC 4.1 §验收 #3).`
   else if(b.sec==='system') txt=b.text
+  else if(b.faithfulness==='opaque'){
+    // spec 2.3:44 / 不变式4 — opaque reasoning MUST show a placeholder, NEVER empty text or fake plaintext.
+    // Signature-only thinking has no plaintext on the wire; keep any existing placeholder ([redacted_thinking]),
+    // else state plainly there is nothing to reconstruct. Gated on the SERVER-baked flag (no browser sniff → 不变式3).
+    const raw=String(rawContentText(b.block)||'')
+    txt=raw||'[opaque reasoning — encrypted/redacted: only a signature/ciphertext was on the wire, no plaintext. Nothing to reconstruct verbatim.]'
+  }
   else txt=rawContentText(b.block)
   const t=String(txt||'')
   const shown=t.length>20000?t.slice(0,20000)+`\n… (${kf(t.length)} chars total)`:t

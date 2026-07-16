@@ -98,6 +98,20 @@ function buildGateModule(payloadJson) {
   playhead=N-1; render()
   const tf=(curFlat||[]).map((b,i)=>({b,i})).find(x=>x.b.sec==='tools')
   if(tf && !/class="metabadge"/.test(document.getElementById('ctxwin').innerHTML)) F.push('tools block missing faithfulness badge')
+  // spec 1.4:52 / 不变式4: opaque reasoning (signature-only thinking) MUST render a 🔒 opaque badge so
+  // ciphertext is never mistaken for verbatim. Find the step whose baked flat carries an opaque block.
+  { const op=anchor.calls.map((c,p)=>({p,i:(c.flat||[]).findIndex(b=>b.faithfulness==='opaque')})).find(x=>x.i>=0)
+    if(op){ playhead=op.p; renderContextWindow()
+      const h=document.getElementById('ctxwin').innerHTML
+      if(!/class="ffbadge ff-opaque"/.test(h)) F.push('1.4: opaque thinking block missing 🔒 opaque faithfulness badge')
+      if(!/🔒 opaque/.test(h)) F.push('1.4: opaque badge label not rendered')
+      // §验收#2 — expanding the opaque block MUST show a placeholder, NOT empty text (不显空文本)
+      openBlocks.clear(); openBlocks.add(op.i); renderContextWindow()
+      const body=String(ctxBody(curFlat[op.i])||'')
+      if(!/opaque reasoning|redacted_thinking/.test(body)) F.push('§验收#2: opaque block body shows empty text instead of a placeholder')
+      openBlocks.clear()
+    } else F.push('1.4: fixture has no opaque thinking block to exercise the faithfulness badge') }
+  playhead=N-1; render()
   // block-expand persistence: an opened context block must survive a re-render (live poll used to collapse it)
   playhead=N-1; render()
   if((curFlat||[]).length){ openBlocks.clear(); openBlocks.add(0); renderContextWindow()
