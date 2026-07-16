@@ -134,6 +134,9 @@
   #rawpanel{flex:none;max-height:42%;overflow-y:auto;border-top:1px solid var(--border);background:var(--rail);padding:8px 10px;}
   .rphd{font-family:var(--mono);font-size:11px;color:var(--fg);margin-bottom:4px;}
   .rpk{font-size:10.5px;color:var(--dim);margin:2px 0;} .rpk b{color:var(--fg);font-family:var(--mono);}
+  .rpcost b{color:var(--amber);}
+  /* D14 花费保真标:虚线徽章 = 非线上事实,本地估价(可编辑单价) */
+  .estbadge{font-size:9px;color:var(--amber);border:1px dashed color-mix(in srgb,var(--amber) 45%,var(--border));border-radius:10px;padding:0 5px;cursor:help;white-space:nowrap;margin-left:4px;}
   .rpempty{font-size:10px;color:var(--dimmer);}
   .viewname{cursor:pointer;} .viewname:hover{text-decoration:underline;color:var(--fg);}
   .viewbtn{cursor:pointer;opacity:.45;font-size:10px;margin-left:4px;} .viewbtn:hover{opacity:1;}
@@ -479,6 +482,14 @@ const fmtDur = ms => ms==null?'?':ms>=1000?(ms/1000).toFixed(1)+'s':ms+'ms'
 let PRICING={opus:[15,75,18.75,1.5],sonnet:[3,15,3.75,0.3],haiku:[1,5,1.25,0.1]} // D14: overridden by /api/pricing (editable config); cost = usage × price, derived-only
 const priceKey=m=>/opus/.test(m||'')?'opus':/sonnet/.test(m||'')?'sonnet':'haiku'
 function costOf(model,u){ const [i,o,cw,cr]=PRICING[priceKey(model)]; return ((u.fresh||0)*i+(u.out||0)*o+(u.create||0)*cw+(u.read||0)*cr)/1e6 } // u = neutral canonical usage (D18a Q1)
+// D14 保真标:花费 = 本地估价(canonical usage × 可编辑单价),非线上账单事实。就地标 → 不变式4;可复算 → §验收#3。(usd() 见下方 demo 复用的格式化器)
+const COSTTITLE='≈ 本地估价(local estimate, NOT a wire fact): Σ(canonical usage × 你的本地单价, opus/sonnet/haiku 四价 input/output/cache-write/cache-read). Provider 不在 wire 上返回金额;单价是可编辑配置(pricing.json / ASIGHT_PRICING),改价即改此估算。cost 是派生-only,绝不入归一化存储(D14 / 不变式2·4).'
+const estBadge=`<span class="estbadge" title="${COSTTITLE}">≈ 本地估价 · editable</span>`
+// D14 花费行 for a BILLED off-main lane-call detail card (monitor / notify / titlegen). probe(量尺·不计费)
+// 与 quota(max_tokens:1·回复丢弃)不走这条 → 各自卡上如实标"不计费/已丢弃"(2.2:101),不冒充成本。
+function costDin(c){ const u=c.usage||{}, m=String(c.rec?.request?.model||'').replace('claude-',''), tot=(u.read||0)+(u.create||0)+(u.fresh||0)+(u.out||0)
+  if(tot<=0) return `<div class="din" style="color:var(--dim)">${esc(m)} · usage 未返回 — 成本 n/a(不冒充 $0)</div>`
+  return `<div class="din" style="color:var(--dim)">${esc(m)} · ${kf(u.out||0)} out tok · ≈ cost <b>${usd(costOf(c.rec?.request?.model,u))}</b> ${estBadge}</div>` }
 const usd=n=>n>=1?'$'+n.toFixed(2):n>=0.01?'$'+n.toFixed(3):n>0?'$'+n.toFixed(4):'$0'
 // display a path relative to the session's cwd when it's inside it, else absolute (no symlink resolution)
 function relPath(p){ const cwd=meta&&meta.project_path; return (cwd&&String(p).startsWith(cwd+'/'))?String(p).slice(cwd.length+1):String(p) }
@@ -1093,6 +1104,7 @@ function openDetail(lane,i){
     } else msgHtml=esc(user)
     title=`🛡 security check #${i+1} · ${fmtTime(c.ts)} · ${kf(c.ctx)} tok`
     body=`<div class="din">verdict: <b style="color:${c.flagged?'var(--red)':'var(--green)'}">${esc(v||'clear')}</b> · reviewed your conversation ${callRef(1)} → ${callRef(k)}</div>`+
+      costDin(c)+
       `<div class="din" style="color:var(--dim)">the monitor's exact input message (原文) — only the repeated <code>&lt;transcript&gt;</code> is folded:</div>`+
       `<div class="din monmsg">${msgHtml}</div>`+
       `<div class="din" style="color:var(--dim)">▸ monitor system rules (${kf(sysFull.length)} chars, identical every check):</div>`+
@@ -1115,7 +1127,7 @@ function openDetail(lane,i){
     } else {
       lead=`<div class="din">${esc(model)} · output: <b>${esc(out||'(none)')}</b></div>`
     }
-    body=lead+`<div class="din persona">${esc(persona)}</div>`+
+    body=lead+(lane.kind!=='quota'?costDin(c):'')+`<div class="din persona">${esc(persona)}</div>`+
       `<div class="din" style="color:var(--dim)">input (原文):</div>`+collapse('<pre>'+esc(user)+'</pre>',user.length,'det:'+lane.id+':'+i)
   }
   det.className='open k-'+lane.kind
@@ -1287,10 +1299,15 @@ function renderRawPanel(){
   if(!call||!call.rec){ el.innerHTML='<div class="rpempty">no request captured for this step</div>'; return }
   const rq=call.rec.request||{}, u=call.usage||{} // neutral canonical usage (D18a Q1)
   const read=u.read||0, create=u.create||0, fresh=u.fresh||0, out=u.out||0
+  // D14 花费:本地估价 = costOf(model, canonical usage)。无 usage(error/interrupted)→ 显 '?',MUST NOT 填 $0 冒充(2.2:102)。
+  const hasU=(read+create+fresh+out)>0
+  const costLine=hasU?`≈ cost <b>${usd(costOf(rq.model,u))}</b> ${estBadge}`
+    :`≈ cost <b title="no usage returned for this step — not faked as $0 (不变式4)">?</b> ${estBadge}`
   el.innerHTML=`<div class="rphd">🩻 raw · call #${playhead+1}</div>`+
     `<div class="rpk">${esc(String(rq.model||'').replace('claude-',''))} · ${kf(rq.context_chars)} bytes wire</div>`+
     `<div class="rpk">msgs <b>${kf(rq.message_count)}</b> · tools <b>${kf(rq.tool_count)}</b> · system <b>${kf(rq.system_chars)}</b>c</div>`+
-    `<div class="rpk">usage · read <b>${kf(read)}</b> · new-cache <b>${kf(create)}</b> · fresh <b>${kf(fresh)}</b> · out <b>${kf(out)}</b></div>`
+    `<div class="rpk">usage · read <b>${kf(read)}</b> · new-cache <b>${kf(create)}</b> · fresh <b>${kf(fresh)}</b> · out <b>${kf(out)}</b></div>`+
+    `<div class="rpk rpcost">${costLine}</div>`
 }
 function renderContextWindow(){
   renderRawPanel()

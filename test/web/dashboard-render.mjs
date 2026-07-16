@@ -176,6 +176,17 @@ function buildGateModule(payloadJson) {
     if(!/read/.test(h)||!/new-cache/.test(h)||!/fresh/.test(h)||!/out/.test(h)) F.push('2.6: raw panel missing a canonical usage role (read/new-cache/fresh/out)')
     if(/cache_read_input_tokens|cache_creation_input_tokens|input_tokens|output_tokens/.test(h)) F.push('2.6: raw panel leaks provider-native usage names (invariant 3)') }
 
+  // ── D14 §验收#3 — 花费 = 本地估价(canonical usage × 可编辑单价):就地标 "≈ 本地估价" + 可复算 ──
+  playhead=N-1; renderRawPanel()
+  { const h=document.getElementById('rawpanel').innerHTML
+    if(!/≈ 本地估价/.test(h)) F.push('D14: raw panel cost missing the "≈ 本地估价" fidelity marker (不变式4)')
+    const call=anchor.calls[playhead], u=call.usage||{}, m=(call.rec&&call.rec.request&&call.rec.request.model)||''
+    const tot=(u.read||0)+(u.create||0)+(u.fresh||0)+(u.out||0)
+    if(tot>0){ const want=usd(costOf(m,u)) // independently recompute cost = usage × local price
+      if(h.indexOf('>'+want+'<')<0) F.push('D14: rendered cost not recomputable as usage×price (expected '+want+')') }
+    // cost is derived-only: PRICING is an editable view-layer table, never a wire fact
+    if(typeof PRICING!=='object'||!PRICING.opus) F.push('D14: editable PRICING table not present in the view layer') }
+
   // ── 1.4 §验收 — assembly order in the window is tools → system → messages ──
   playhead=N-1; render()
   { const h=$('ctxwin'), it=h.indexOf('id="sec-tools"'), is=h.indexOf('id="sec-system"'), im=h.indexOf('id="sec-messages"')

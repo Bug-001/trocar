@@ -62,6 +62,19 @@ test('usage cache_write NULL is preserved, never coerced to 0', async () => {
   assert.equal(Number(row.cache_read), 20);
 });
 
+test('D14 §验收#3: cost/price never a normalized-model column (cost is derived-only, not source truth)', async () => {
+  const db = await freshDb();
+  // Spec 2.2:43/2.2:89 + D14: unit price is an editable view-layer config; cost = usage × price is a
+  // LOCAL estimate. It MUST NOT enter the normalized store (that would fake a wire fact as source truth,
+  // 不变式2/4). Assert the real applied schema exposes no cost/price/usd column on ANY table or view.
+  const hits = (await db.runAndReadAll(
+    "SELECT table_name, column_name FROM information_schema.columns " +
+    "WHERE lower(column_name) LIKE '%cost%' OR lower(column_name) LIKE '%price%' " +
+    "OR lower(column_name) IN ('usd','dollars','amount','billing')",
+  )).getRowObjects();
+  assert.deepEqual(hits, [], 'no cost/price column may exist in the normalized model: ' + JSON.stringify(hits));
+});
+
 test('extra JSON round-trips losslessly via cast + json_extract_string', async () => {
   const db = await freshDb();
   const extra = { prompt_cache_key: 'k1', prompt_cache_options: { ttl: '1h' }, n: 3 };
