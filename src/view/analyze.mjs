@@ -11,6 +11,12 @@
 // (count_tokens probes are a 5th lane, added by the UI from probes.ndjson.)
 //
 // Pure: analyze(records) -> { streams, steps, stats, lanes }. No I/O.
+//
+// D25: the CC block model (assembly-order walk, volatile rule, resource linking, system labels,
+// bash-read parsing) lives in ONE dissector — src/dissect/cc.mjs — shared with the ETL adapter.
+// linearContext (below) is now just the board's PROJECTION of that dissector's canonical spine.
+import { dissectBlocks, sysLabel, parseBashReads } from '../dissect/cc.mjs'
+export { sysLabel } // re-exported for back-compat (was defined here before the D25 extraction)
 
 const FILE_OPS = new Set(['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
 const DIR_OPS = new Set(['Glob', 'Grep', 'LS'])
@@ -101,32 +107,8 @@ function rangeOf(name, input = {}) {
   return null
 }
 
-// A file whose content is dumped by a Bash command (cat/head/tail/sed -n …) IS resident
-// in context just like a Read — so it belongs in the "Opened" tier, not "Only seen".
-// Parse read-like commands out of a bash string (conservative: miss rather than mislabel).
-const BASH_READ = /^(cat|bat|head|tail|tac|nl|less|more|xxd|od|strings)$/
-function parseBashReads(command) {
-  if (!command || typeof command !== 'string') return []
-  const out = []
-  for (const seg of command.split(/\||&&|;|\n/)) {
-    if (/>/.test(seg)) continue // an output redirect → writing, not reading into context
-    const toks = seg.match(/"[^"]*"|'[^']*'|\S+/g)
-    if (!toks || !toks.length) continue
-    const cmd = toks[0].replace(/^['"]|['"]$/g, '').split('/').pop()
-    const isSed = cmd === 'sed'
-    if (!BASH_READ.test(cmd) && !isSed) continue
-    let range = 'full file'
-    if (isSed) { const sm = seg.match(/-n\s*['"]?(\d+),(\d+)\s*p/); if (sm) range = `L${sm[1]}–${sm[2]}`; else continue }
-    else { const hn = seg.match(/-n?\s*(\d+)\b/); if (cmd === 'head' && hn) range = `L1–${hn[1]}`; else if (cmd === 'tail' && hn) range = `tail ${hn[1]}` }
-    for (const t0 of toks.slice(1)) {
-      const t = t0.replace(/^['"]|['"]$/g, '')
-      if (t.startsWith('-') || /^[|&;<>]/.test(t) || /^https?:/i.test(t)) continue
-      if (!/[./]/.test(t) || /[*?{}]/.test(t)) continue // needs a dot or slash; skip globs
-      out.push({ path: t, range })
-    }
-  }
-  return out
-}
+// parseBashReads (bash read-target parsing) now lives in the shared CC dissector (src/dissect/cc.mjs,
+// imported above) — a file dumped by cat/head/sed -n … IS resident in context like a Read.
 
 // Detect resources introduced by a set of (new) messages.
 function extractResources(messages, step, out) {
@@ -515,99 +497,46 @@ function blkHashText(b) {
 // hash a bounded prefix — plenty to distinguish blocks, and O(1) per block regardless of size
 const blkKey = (prefix, b) => prefix + hash(blkHashText(b).slice(0, 4096))
 
-// short structural label for a system block (Claude Code stacks several)
-export function sysLabel(text) {
-  const t = text || ''
-  // structural blocks first, anchored on their opening line — so a big prompt block that merely
-  // EMBEDS a <system-reminder> (Claude Code appends CLAUDE.md / memory into the system prompt) is
-  // named by its dominant content, not by the reminder buried inside it.
-  if (/^x-anthropic-billing-header/.test(t)) return 'billing header'
-  if (/^You are (Claude Code|a Claude agent)/.test(t)) return 'identity'
-  if (/^\s*You are an interactive agent/.test(t)) return 'agent instructions'
-  // a block that is ITSELF just a reminder (starts with the tag)
-  if (/^\s*<system-reminder>/.test(t)) {
-    if (/CLAUDE\.md/i.test(t)) return 'CLAUDE.md'
-    if (/\bMEMORY\.md\b|auto-memory|persists across conversations/i.test(t)) return 'memory'
-    return 'system-reminder'
-  }
-  // otherwise a system-prompt block; note if it carries embedded CLAUDE.md / memory context
-  const carries = []
-  if (/CLAUDE\.md/i.test(t)) carries.push('CLAUDE.md')
-  if (/\bMEMORY\.md\b|auto-memory|persists across conversations/i.test(t)) carries.push('memory')
-  return 'system prompt' + (carries.length ? ' +' + carries.join(' +') : '')
-}
-
-// Flatten a captured request into ordered block descriptors. Each carries a stable content `key`
-// (for prefix-diffing against the previous call), its `cache_control` if Claude Code set one, and
-// enough metadata for the view to render + link it to the resource ledger.
+// Flatten a captured request into ordered block descriptors — the board's PROJECTION of the shared
+// CC dissector's canonical spine (src/dissect/cc.mjs · D25). Each descriptor carries a stable content
+// `key` (for prefix-diffing vs the previous call), its `cache_control` if Claude Code set one, and
+// enough metadata for the view to render + link it to the resource ledger. sysLabel / resourceRef /
+// the volatile rule now come from the dissector, so board & ETL never drift.
 export function linearContext(request) {
   const flat = []
-  for (const [i, t] of (request?.tools || []).entries()) {
-    const mcp = /^mcp__/.test(t.name || '')
-    // D15: capture now stores tools VERBATIM (full description + input_schema). Derive the display
-    // metadata here (summarization moved up to the adapter, RFC 4.1 §验收#3). Back-compat: old v0
-    // traces only have description_chars / input_schema_props — fall back to those, and mark the
-    // block non-verbatim so the UI keeps the honest "metadata only" faithfulness badge for them.
-    const hasSchema = t.input_schema !== undefined && t.input_schema !== null
-    const hasDesc = typeof t.description === 'string'
-    const verbatim = hasSchema || hasDesc
-    const props = hasSchema ? (t.input_schema?.properties ? Object.keys(t.input_schema.properties) : []) : (t.input_schema_props || [])
-    const descChars = hasDesc ? t.description.length : (t.description_chars || 0)
-    flat.push({
-      sec: 'tools', kind: 'tool', role: 'tool', name: t.name || '', ttype: t.type || '',
-      props, descChars, cc: t.cache_control || null, mcp,
-      verbatim, desc: hasDesc ? t.description : undefined, schema: hasSchema ? t.input_schema : undefined,
-      resKey: mcp ? 'mcp::' + (String(t.name).split('__')[1] || '') : '',
-      key: 'T:' + (t.name || i) + ':' + descChars + ':' + props.length,
-    })
-  }
-  for (const [i, b] of (request?.system || []).entries()) {
-    const text = b?.text || ''
-    // the billing-header block carries a per-request nonce (cch=…, cc_prev_req=…) so its bytes change
-    // every call — yet cache-hit stays ~100%, i.e. Anthropic excludes this billing signal from the
-    // cache key. Flag it volatile so the cache-break marker doesn't falsely trip on it.
-    const volatile = /^x-anthropic-billing-header/.test(text)
-    flat.push({ sec: 'system', kind: 'system', role: 'system', si: i, label: sysLabel(text), text, chars: text.length, volatile, cc: b?.cache_control || null, key: blkKey('S:', { type: 'text', text }) })
-  }
-  for (const [mi, m] of (request?.messages || []).entries()) {
-    const content = Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }]
-    for (const [bi, b] of content.entries()) {
-      const type = typeof b === 'string' ? 'text' : (b?.type || 'text')
+  for (const e of dissectBlocks(request)) {
+    if (e.section === 'tools') {
+      const t = e.parsed
+      const mcp = /^mcp__/.test(t.name || '')
+      // D15: capture stores tools VERBATIM (full description + input_schema). Derive display metadata
+      // here. Back-compat: old v0 traces only have description_chars / input_schema_props — fall back
+      // and mark the block non-verbatim so the UI keeps the honest "metadata only" badge for them.
+      const hasSchema = t.input_schema !== undefined && t.input_schema !== null
+      const hasDesc = typeof t.description === 'string'
+      const verbatim = hasSchema || hasDesc
+      const props = hasSchema ? (t.input_schema?.properties ? Object.keys(t.input_schema.properties) : []) : (t.input_schema_props || [])
+      const descChars = hasDesc ? t.description.length : (t.description_chars || 0)
       flat.push({
-        sec: 'messages', kind: type, role: m.role, mi, bi, block: b,
+        sec: 'tools', kind: 'tool', role: 'tool', name: t.name || '', ttype: t.type || '',
+        props, descChars, cc: t.cache_control || null, mcp,
+        verbatim, desc: hasDesc ? t.description : undefined, schema: hasSchema ? t.input_schema : undefined,
+        resKey: mcp ? 'mcp::' + (String(t.name).split('__')[1] || '') : '',
+        key: 'T:' + (t.name || e.path.i) + ':' + descChars + ':' + props.length,
+      })
+    } else if (e.section === 'system') {
+      const b = e.parsed, text = b?.text || ''
+      flat.push({ sec: 'system', kind: 'system', role: 'system', si: e.path.i, label: sysLabel(text), text, chars: text.length, volatile: e.volatile, cc: b?.cache_control || null, key: blkKey('S:', { type: 'text', text }) })
+    } else {
+      const b = e.parsed, type = typeof b === 'string' ? 'text' : (b?.type || 'text')
+      flat.push({
+        sec: 'messages', kind: type, role: e.role, mi: e.path.mi, bi: e.path.bi, block: b,
         toolName: type === 'tool_use' || type === 'server_tool_use' ? (b.name || '') : '',
         cc: (b && b.cache_control) || null,
-        resKey: msgResKey(b), key: blkKey('M:' + m.role + ':' + type + ':', b),
+        resKey: e.resourceRef, key: blkKey('M:' + e.role + ':' + type + ':', b),
       })
     }
   }
   return flat
-}
-// link a message block back to a ledger resource (file / skill / mcp), matching addRes() keys
-function msgResKey(b) {
-  if (!b || typeof b !== 'object') return ''
-  // the resident SKILL.md body block → link it to its skill resource so the card can reveal the
-  // verbatim body (basename of the "Base directory" path === skill name === addRes label above)
-  if (b.type === 'text' && typeof b.text === 'string') {
-    const sk = b.text.match(/^Base directory for this skill: (\S+)/)
-    if (sk) return 'skill::' + sk[1].split('/').pop()
-    // scaffold (auto-loaded context) → link the verbatim system-reminder block to its ledger
-    // resource so "loaded context" can reveal it (labels MUST match extractResources' addRes above)
-    if (/<system-reminder>/.test(b.text)) {
-      if (/CLAUDE\.md/i.test(b.text)) return 'scaffold::CLAUDE.md'
-      if (/\bMEMORY\.md\b|auto-memory|persists across conversations/i.test(b.text)) return 'scaffold::memory (MEMORY.md)'
-    }
-    return ''
-  }
-  if (b.type !== 'tool_use') return ''
-  const p = b.input?.file_path || b.input?.path || b.input?.notebook_path
-  if (p) return 'file::' + p
-  // a Bash read (cat/head/…) makes its first dumped file resident — key the block to it so the
-  // "files opened" nav item can reveal this Bash block (mirrors extractResources' Bash branch)
-  if (b.name === 'Bash' && b.input?.command) { const rd = parseBashReads(b.input.command); if (rd.length) return 'file::' + rd[0].path }
-  if (b.name === 'Skill') return 'skill::' + (b.input?.skill || b.input?.command || '')
-  if ((b.name || '').startsWith('mcp__')) return 'mcp::' + (String(b.name).split('__')[1] || '')
-  return ''
 }
 
 // ── D17① prefix-divergence localization (RFC 3.3 前缀分叉定位 + 分叉成因分类) ──
