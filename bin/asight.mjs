@@ -51,10 +51,14 @@ async function main() {
       const target = flag('--target', 'https://api.anthropic.com');
       const upstreamProxy = flag('--upstream', process.env.HTTPS_PROXY || process.env.https_proxy || '');
       const out = flag('--out', process.env.ASIGHT_SOURCE || path.join(os.homedir(), '.atrace', 'capture.ndjson'));
+      // --raw-sse: retain the verbatim streamed events in resp.raw_sse. REQUIRED for providers whose
+      // SSE the reconstructor doesn't yet parse (it's Anthropic-shaped) — e.g. OpenAI Responses (Codex):
+      // without it the reconstructed resp is empty and the events are LOST (invariant 2 · source truth).
+      const keepRawSse = rest.includes('--raw-sse') || process.env.ASIGHT_RAW_SSE === '1';
       fs.mkdirSync(path.dirname(out), { recursive: true });
       const sink = fs.createWriteStream(out, { flags: 'a' });
       let n = 0;
-      const server = createReverseProxy({ target, upstreamProxy, onEnvelope: (env) => { sink.write(JSON.stringify(env) + '\n'); if (++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
+      const server = createReverseProxy({ target, upstreamProxy, keepRawSse, onEnvelope: (env) => { sink.write(JSON.stringify(env) + '\n'); if (++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
       server.on('error', (e) => { console.error('capture error:', e.message); if (e.code === 'EADDRINUSE') process.exit(1); });
       server.listen(port, '127.0.0.1', () => console.log(`asight capture (reverse-proxy tee) → ${target}\n  listening http://127.0.0.1:${port}  → ${out}\n  point the harness at it: HTTPS_PROXY / base_url → http://127.0.0.1:${port} (or run: asight on)`));
       break;
@@ -123,7 +127,7 @@ async function main() {
 usage:
   asight serve [--port 9800] [--db <path>] [--source <ndjson|dir>]
   asight etl <ndjson> [--db <path>] [--rebuild]
-  asight capture [--port 8899] [--target https://api.anthropic.com] [--out <ndjson>] [--upstream <proxy>]
+  asight capture [--port 8899] [--target https://api.anthropic.com] [--out <ndjson>] [--upstream <proxy>] [--raw-sse]
   asight on   [--proxy http://127.0.0.1:8899]   generate CA + install (user-level) + steer CC-CLI
   asight off  [--remove-ca]
   asight uninstall                              one-step revert: remove CA + clear steer

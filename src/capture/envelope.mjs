@@ -13,8 +13,18 @@ export const HOP_BY_HOP = new Set([
   'te', 'trailer', 'transfer-encoding', 'upgrade', 'content-length',
 ])
 
+// is_llm_call = the derived "是否真推理" tag (RFC 4.1:34) — provider-agnostic: whether this endpoint
+// is a real model-inference call (→ req_body stored VERBATIM), not control-plane / token-count traffic.
+// Recognizes the v1 harnesses' inference endpoints: Anthropic Messages, OpenAI Responses (Codex, e.g.
+// /codex/responses through the capture tee), OpenAI/DeepSeek Chat Completions. Capture stays a thin tee
+// — this is endpoint recognition, NOT provider parsing (that lives in the 3.1 adapter / D25 dissector).
 export function isLlmCall(endpoint) {
-  return endpoint.startsWith('/v1/messages') && !endpoint.includes('count_tokens')
+  const e = String(endpoint || '').split('?')[0]
+  if (e.includes('count_tokens')) return false
+  if (e.startsWith('/v1/messages')) return true      // Anthropic Messages
+  if (/(^|\/)responses$/.test(e)) return true         // OpenAI Responses (Codex) — /responses, /v1/responses, /codex/responses
+  if (/(^|\/)chat\/completions$/.test(e)) return true // OpenAI / DeepSeek Chat Completions
+  return false
 }
 
 // Build the canonical D10 envelope. reqBody is the raw request Buffer as captured off the wire.
