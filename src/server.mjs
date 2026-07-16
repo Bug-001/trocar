@@ -20,6 +20,7 @@ import { listSessions, sessionCalls, sessionComposition, sessionResources, callC
 import { buildResolver } from './query/source.mjs';
 import { readRecords } from './etl/ingest.mjs';
 import { projectsView, sessionView, controlView } from './view/board.mjs';
+import { createLru, memoKey } from './query/memo.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = path.join(HERE, 'web'); // src/web — the reused demo board (self-contained index.html)
@@ -59,17 +60,22 @@ async function serveStatic(res, urlPath) {
 }
 
 // ── raw source loader (mtime-cached; streaming read never builds a >512MB string) ─────────
+// The returned loader exposes `.sig` = the source's current size.mtime signature, so the board
+// view memo (D21) can key on it: a source append changes the sig → recompute; else O(1).
 function makeRecordLoader(sourcePath) {
   let cache = { sig: null, records: [] };
-  return async () => {
-    if (!sourcePath) return [];
+  const load = async () => {
+    if (!sourcePath) { load.sig = '∅'; return []; }
     let sig = '0';
-    try { const s = await stat(sourcePath); sig = s.size + '.' + Math.round(s.mtimeMs); } catch { return []; }
+    try { const s = await stat(sourcePath); sig = s.size + '.' + Math.round(s.mtimeMs); } catch { load.sig = '0'; return []; }
+    load.sig = sig;
     if (cache.sig === sig) return cache.records;
     const records = await readRecords(sourcePath, { normalize: false }); // raw v0 records verbatim
     cache = { sig, records };
     return records;
   };
+  load.sig = null;
+  return load;
 }
 
 // ── human-title / cwd enrichment from Claude's own session store (read-only, mtime-cached) ──
@@ -120,6 +126,7 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
   try { db = await openDb(dbPath, { readOnly: true }); } catch { db = null; } // SQL family optional
   const resolve = sourcePath ? await buildResolver(sourcePath) : () => null;
   const loadRecords = makeRecordLoader(sourcePath);
+  const sessionMemo = createLru(8); // D21: assembled per-session views keyed by (id, source sig, strategy)
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -135,7 +142,11 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
       if (p === '/api/session') {
         const id = url.searchParams.get('id');
         if (!id) return notFound(res, 'session not found');
-        const out = sessionView(await loadRecords(), id, { enrich });
+        const records = await loadRecords();
+        // D21 memo: skip re-assembling (full analyze) when neither the source nor this session changed.
+        const key = memoKey(id, loadRecords.sig);
+        let out = sessionMemo.get(key);
+        if (out === undefined) { out = sessionView(records, id, { enrich }); if (out) sessionMemo.set(key, out); }
         if (!out) return notFound(res, 'session not found');
         return sendJson(res, 200, out);
       }
