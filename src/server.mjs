@@ -1,19 +1,28 @@
 #!/usr/bin/env node
 // src/server.mjs — asight local server (RFC 4.4). Zero-dep, single-process, LOOPBACK-ONLY,
-// READ-ONLY. Static-serves the built frontend + exposes the 3.5 named queries as
-// provider-neutral JSON. OBSERVE-only: never originates LLM calls, never writes storage
-// (openDb readOnly), no route replays to upstream. no-store is a CORRECTNESS requirement
-// (live-poll MUST never eat a stale cached response).
+// READ-ONLY. Serves the reused demo dashboard (src/web/index.html) + two API families:
+//   • BOARD (D18a Option-2): /api/projects · /api/session · /api/control — assembled from the
+//     raw source NDJSON (invariant 2), analyze() run SERVER-SIDE so the browser gets canonical
+//     `analyzed` only (invariant 3 / AC-3). The demo render code reads pre-baked per-call fields.
+//   • SQL (RFC 3.5): /api/sessions · /api/session/:id · /api/call/:id/context — DuckDB-backed
+//     canonical rows for cross-session analytics + AC-1 byte-verbatim context (optional; needs a db).
+// OBSERVE-only: never originates LLM calls, never writes storage. no-store is a CORRECTNESS
+// requirement (the 1.5s live poll MUST never eat a stale cached response).
 import http from 'node:http';
+import fssync from 'node:fs';
+import os from 'node:os';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb, DEFAULT_DB_PATH } from './db.mjs';
 import { listSessions, sessionCalls, sessionComposition, sessionResources, callContext } from './query/queries.mjs';
 import { buildResolver } from './query/source.mjs';
+import { readRecords } from './etl/ingest.mjs';
+import { projectsView, sessionView, controlView } from './view/board.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const WEB_DIR = path.join(HERE, 'web', 'dist');
+const WEB_DIR = path.join(HERE, 'web'); // src/web — the reused demo board (self-contained index.html)
+const CLAUDE_PROJECTS = process.env.ASIGHT_CLAUDE_PROJECTS || path.join(os.homedir(), '.claude', 'projects');
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -48,16 +57,99 @@ async function serveStatic(res, urlPath) {
   } catch { notFound(res); }
 }
 
-export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null } = {}) {
-  const db = await openDb(dbPath, { readOnly: true });
+// ── raw source loader (mtime-cached; streaming read never builds a >512MB string) ─────────
+function makeRecordLoader(sourcePath) {
+  let cache = { sig: null, records: [] };
+  return async () => {
+    if (!sourcePath) return [];
+    let sig = '0';
+    try { const s = await stat(sourcePath); sig = s.size + '.' + Math.round(s.mtimeMs); } catch { return []; }
+    if (cache.sig === sig) return cache.records;
+    const records = await readRecords(sourcePath, { normalize: false }); // raw v0 records verbatim
+    cache = { sig, records };
+    return records;
+  };
+}
+
+// ── human-title / cwd enrichment from Claude's own session store (read-only, mtime-cached) ──
+// Optional: when found, a session gets its real title + project cwd/slug; otherwise it lands in
+// the "_unresolved" bucket. Reads only a bounded head so a giant .jsonl can't blow the string cap.
+const titleCache = new Map();
+function readHead(p, maxBytes = 8 * 1048576) {
+  const fd = fssync.openSync(p, 'r');
+  try {
+    const size = fssync.fstatSync(fd).size, n = Math.min(size, maxBytes);
+    const buf = Buffer.allocUnsafe(n); fssync.readSync(fd, buf, 0, n, 0);
+    return buf.toString('utf8', 0, n);
+  } finally { fssync.closeSync(fd); }
+}
+function enrichClaude(id) {
+  const safe = String(id).replace(/[^a-zA-Z0-9._-]/g, ''); // no path traversal via id
+  if (!safe) return null;
+  let slug = null, p = null;
+  try {
+    for (const d of fssync.readdirSync(CLAUDE_PROJECTS)) {
+      const cand = path.join(CLAUDE_PROJECTS, d, safe + '.jsonl');
+      if (fssync.existsSync(cand)) { slug = d; p = cand; break; }
+    }
+  } catch { return null; }
+  if (!p) return null;
+  let mtime = 0; try { mtime = fssync.statSync(p).mtimeMs; } catch {}
+  const hit = titleCache.get(id);
+  if (hit && hit.p === p && hit.mtime === mtime) return hit.info;
+  let title = null, cwd = null;
+  try {
+    const txt = readHead(p);
+    let custom = null, ai = null;
+    for (const m of txt.matchAll(/"(customTitle|aiTitle)":"((?:[^"\\]|\\.)*)"/g)) {
+      const v = m[2].replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+      if (m[1] === 'customTitle') custom = v; else ai = v;
+    }
+    title = custom || ai || null;
+    const mm = txt.match(/"cwd":"((?:[^"\\]|\\.)*)"/);
+    if (mm) cwd = mm[1].replace(/\\\\/g, '\\');
+  } catch {}
+  const info = { slug, cwd, title };
+  titleCache.set(id, { p, mtime, info });
+  return info;
+}
+
+export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null, enrich = enrichClaude } = {}) {
+  let db = null;
+  try { db = await openDb(dbPath, { readOnly: true }); } catch { db = null; } // SQL family optional
   const resolve = sourcePath ? await buildResolver(sourcePath) : () => null;
+  const loadRecords = makeRecordLoader(sourcePath);
+
   const server = http.createServer(async (req, res) => {
     try {
       if (req.method !== 'GET') return sendJson(res, 405, { error: 'method not allowed' });
-      const p = new URL(req.url, 'http://127.0.0.1').pathname;
+      const url = new URL(req.url, 'http://127.0.0.1');
+      const p = url.pathname;
       let m;
-      if (p === '/api/sessions') return sendJson(res, 200, await listSessions(db.connection));
+
+      // ── BOARD family (source NDJSON → canonical) ──────────────────────────
+      if (p === '/api/projects') {
+        return sendJson(res, 200, projectsView(await loadRecords(), { enrich }));
+      }
+      if (p === '/api/session') {
+        const id = url.searchParams.get('id');
+        if (!id) return notFound(res, 'session not found');
+        const out = sessionView(await loadRecords(), id, { enrich });
+        if (!out) return notFound(res, 'session not found');
+        return sendJson(res, 200, out);
+      }
+      if (p === '/api/control') {
+        const cls = url.searchParams.get('class');
+        return sendJson(res, 200, controlView(await loadRecords(), cls));
+      }
+
+      // ── SQL family (DuckDB canonical; optional) ───────────────────────────
+      if (p === '/api/sessions') {
+        if (!db) return notFound(res, 'no analytics db');
+        return sendJson(res, 200, await listSessions(db.connection));
+      }
       if ((m = p.match(/^\/api\/session\/([^/]+)$/))) {
+        if (!db) return notFound(res, 'no analytics db');
         const id = decodeURIComponent(m[1]);
         const calls = await sessionCalls(db.connection, id);
         if (!calls.length) return notFound(res, 'session not found');
@@ -68,18 +160,22 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         });
       }
       if ((m = p.match(/^\/api\/call\/([^/]+)\/context$/))) {
+        if (!db) return notFound(res, 'no analytics db');
         const id = decodeURIComponent(m[1]);
         const blocks = await callContext(db.connection, id, resolve);
         if (!blocks.length) return notFound(res, 'call not found');
         return sendJson(res, 200, { call_id: id, blocks, source_resolved: resolve.size ? true : false });
       }
+
       if (p.startsWith('/api/')) return notFound(res, 'unknown endpoint');
       return serveStatic(res, p);
     } catch (e) {
-      sendJson(res, 500, { error: String((e && e.message) || e) });
+      // Never let one bad request take the server down — respond 500, stay up.
+      if (!res.headersSent) sendJson(res, 500, { error: String((e && e.message) || e) });
+      else try { res.end(); } catch {}
     }
   });
-  server.on('close', () => { db.close(); });
+  server.on('close', () => { if (db) db.close(); if (resolve && resolve.dispose) resolve.dispose(); });
   return { server, db, resolve };
 }
 

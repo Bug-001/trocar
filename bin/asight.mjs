@@ -2,7 +2,6 @@
 // bin/asight.mjs — the asight CLI (D23 `npx asight`). Subcommands:
 //   serve   — start the loopback read-only dashboard server (4.4)
 //   etl     — populate the derived DuckDB store from an NDJSON capture (4.2)
-//   build   — bundle the frontend (esbuild, Phase 3)
 //   on      — onboard: generate CA + install user-level trust + steer CC-CLI (D22)
 //   off     — revert steer (+ optional --remove-ca)
 //   verify  — assert the CA is in the user-level trust store (no machine trust)
@@ -37,11 +36,6 @@ async function main() {
       console.log(`ETL: ${out.records} records from ${out.file} → ${out.dbPath}`, JSON.stringify(out.stats));
       break;
     }
-    case 'build': {
-      const { build } = await import(r('build.mjs'));
-      await build();
-      break;
-    }
     case 'on': {
       const ob = await import(r('src', 'capture', 'onboard.mjs'));
       const out = ob.atraceOn({ proxyUrl: flag('--proxy', 'http://127.0.0.1:8899') });
@@ -70,7 +64,6 @@ async function main() {
 usage:
   asight serve [--port 9800] [--db <path>] [--source <ndjson|dir>]
   asight etl <ndjson> [--db <path>] [--rebuild]
-  asight build
   asight on   [--proxy http://127.0.0.1:8899]   generate CA + install (user-level) + steer CC-CLI
   asight off  [--remove-ca]
   asight verify`);

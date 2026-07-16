@@ -27,12 +27,22 @@ export function assembleSession(records) {
       const flat = linearContext(call.rec.request);
       call.flat = flat;
       call.norm = call.norm || normResp(call.rec);
-      if (prevFlat) {
-        const brk = cacheBreak(prevFlat, flat, { compaction: !!call.compaction });
-        const u = call.norm.usage || {};
-        call.cacheBreak = brk;
-        call.gt = groundTruth(brk, u.cache_read_input_tokens || 0, u.cache_creation_input_tokens || 0);
-      } else { call.cacheBreak = null; call.gt = null; }
+      const u = call.norm.usage || {};
+      // Bake NEUTRAL canonical usage (D18a Q1 / D24): the board frontend reads call.usage.{read,
+      // create,fresh,out} — ZERO provider-native usage field names in the browser. Provider→canonical
+      // mapping happens HERE (server-side normResp), so adding a harness never touches the frontend (AC-3).
+      // Names track the 3.2 usage columns (cache_read / cache_write / input_uncached / output).
+      call.usage = {
+        read: u.cache_read_input_tokens || 0,
+        create: u.cache_creation_input_tokens || 0,
+        fresh: u.input_tokens || 0,
+        out: u.output_tokens || 0,
+      };
+      // cacheBreak with prevFlat=null on the first call — matches the demo render's own call site.
+      const brk = cacheBreak(prevFlat, flat, { compaction: !!call.compaction });
+      brk.gt = groundTruth(brk, u.cache_read_input_tokens || 0, u.cache_creation_input_tokens || 0); // baked onto brk for cacheMarker
+      call.cacheBreak = brk;
+      call.gt = brk.gt;
       prevFlat = flat;
     }
   }

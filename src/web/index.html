@@ -1,45 +1,1671 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>asight — agent context oscilloscope</title>
-  <link rel="stylesheet" href="./style.css">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>atrace — agent context tracer</title>
+<style>
+  :root {
+    --bg:#0e0f13; --panel:#16181f; --panel2:#1c1f28; --rail:#12141a;
+    --fg:#e6e8ee; --dim:#9096a6; --dimmer:#5b6070; --border:#262a35;
+    --accent:#7aa2f7; --green:#9ece6a; --amber:#e0af68; --cyan:#7dcfff;
+    --purple:#bb9af7; --pink:#f7768e; --red:#f7768e;
+    --sans:ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: light){:root{
+    --bg:#eef0f4; --panel:#fff; --panel2:#f3f5f9; --rail:#f7f8fb;
+    --fg:#1a1d26; --dim:#5c6270; --dimmer:#99a0af; --border:#dde1ea;
+    --accent:#3b5bdb; --green:#2f9e44; --amber:#b47407; --cyan:#0c8599;
+    --purple:#6f42c1; --pink:#d6336c; --red:#e03131;
+  }}
+  :root[data-theme="dark"]{--bg:#0e0f13;--panel:#16181f;--panel2:#1c1f28;--rail:#12141a;--fg:#e6e8ee;--dim:#9096a6;--dimmer:#5b6070;--border:#262a35;--accent:#7aa2f7;--green:#9ece6a;--amber:#e0af68;--cyan:#7dcfff;--purple:#bb9af7;--pink:#f7768e;--red:#f7768e;}
+  :root[data-theme="light"]{--bg:#eef0f4;--panel:#fff;--panel2:#f3f5f9;--rail:#f7f8fb;--fg:#1a1d26;--dim:#5c6270;--dimmer:#99a0af;--border:#dde1ea;--accent:#3b5bdb;--green:#2f9e44;--amber:#b47407;--cyan:#0c8599;--purple:#6f42c1;--pink:#d6336c;--red:#e03131;}
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:13px;line-height:1.5;height:100vh;display:flex;flex-direction:column;overflow:hidden;}
+  .mono{font-family:var(--mono);}
+  header{display:flex;align-items:center;gap:14px;padding:9px 16px;background:var(--panel);border-bottom:1px solid var(--border);flex-wrap:wrap;}
+  h1{font-family:var(--mono);font-size:16px;margin:0;letter-spacing:.5px;font-weight:600;}
+  h1 b{color:var(--accent);}
+  .spacer{flex:1;}
+  select,button{font:inherit;background:var(--panel2);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:3px 8px;max-width:340px;}
+  button{cursor:pointer;} button:disabled{opacity:.4;cursor:default;}
+  .live{display:flex;align-items:center;gap:5px;color:var(--dim);font-size:11px;}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--dimmer);}
+  .dot.on{background:var(--green);box-shadow:0 0 6px var(--green);}
+  .stats{display:flex;gap:14px;font-size:11px;color:var(--dim);}
+  .stats b{color:var(--fg);font-family:var(--mono);}
+  .sesstitle{font-size:12px;color:var(--fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .sessmeta{font-size:10px;color:var(--dim);font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  /* top-bar identity (point 6): agent type · path · session name · fork/branch */
+  .ident{display:flex;align-items:center;gap:8px;min-width:0;max-width:52vw;}
+  .agentchip{display:inline-flex;align-items:center;gap:4px;font-size:11px;background:var(--panel2);border:1px solid var(--border);border-radius:20px;padding:2px 9px;white-space:nowrap;color:var(--fg);}
+  .forkchip{font-size:10px;background:color-mix(in srgb,var(--amber) 12%,transparent);border:1px solid color-mix(in srgb,var(--amber) 40%,var(--border));color:var(--amber);border-radius:20px;padding:2px 8px;white-space:nowrap;font-family:var(--mono);cursor:default;}
+  .idchip{font-size:9px;color:var(--dimmer);font-family:var(--mono);}
+
+  /* main conversation sawtooth */
+  #saw{background:var(--rail);border-bottom:1px solid var(--border);padding:6px 12px 4px;user-select:none;}
+  .sawrow{display:flex;align-items:flex-end;gap:1px;height:74px;cursor:pointer;position:relative;}
+  .bar{flex:1 1 0;min-width:2px;position:relative;opacity:.62;border-radius:2px 2px 0 0;transition:opacity .1s;display:flex;flex-direction:column-reverse;overflow:hidden;}
+  .bar>span{display:block;width:100%;}
+  .bar.cur{opacity:1;outline:2px solid var(--fg);outline-offset:0;z-index:2;}
+  .bar:hover{opacity:.85;}
+  .bar.reviewed{opacity:.95;box-shadow:inset 0 0 0 1.5px var(--pink);}
+  .bar.err{background:var(--red);opacity:.8;}
+  /* context-type colors (stacked bar segments + legend swatches) */
+  .ct-tools{background:var(--amber);} .ct-system{background:var(--purple);} .ct-user{background:var(--accent);}
+  .ct-assistant{background:var(--green);} .ct-thinking{background:var(--pink);} .ct-tool_use{background:var(--cyan);}
+  .ct-tool_result{background:var(--dim);} .ct-image{background:var(--dimmer);}
+  .barlegend{display:flex;gap:6px;font-size:9px;color:var(--dim);align-items:center;flex-wrap:wrap;}
+  .barlegend i{width:8px;height:8px;border-radius:2px;display:inline-block;margin-right:2px;vertical-align:middle;}
+  .bar.err::after{content:"⚠";position:absolute;top:-15px;left:50%;transform:translateX(-50%);color:var(--red);font-size:10px;}
+  .bar.compact::after{content:"✂";position:absolute;top:-15px;left:50%;transform:translateX(-50%);color:var(--red);font-size:11px;}
+  .ev.err{background:color-mix(in srgb,var(--red) 10%,transparent);border:1px solid color-mix(in srgb,var(--red) 40%,var(--border));border-radius:8px;padding:5px 8px;margin:4px 0;}
+  .ev.err .ic{color:var(--red);}
+  .ev.errgroup{background:color-mix(in srgb,var(--red) 7%,transparent);border-style:dashed;opacity:.9;}
+  #reviewbracket{position:absolute;left:0;bottom:-3px;height:3px;background:var(--pink);display:none;border-radius:2px;pointer-events:none;z-index:3;}
+  /* per-call cache reading — one cell per call, 1:1 under the bars (same flex axis → aligned) */
+  .cacherow{display:flex;gap:1px;height:5px;margin-top:2px;}
+  .cbar{flex:1 1 0;min-width:2px;border-radius:1px;background:var(--dimmer);opacity:.45;}
+  .cbar.hi{background:var(--green);opacity:.9;} .cbar.mid{background:var(--amber);opacity:.85;} .cbar.lo{background:var(--red);opacity:.8;}
+  .cbar.cur{outline:1px solid var(--fg);outline-offset:0;}
+  .sawaxis{display:flex;justify-content:space-between;color:var(--dimmer);font-size:9px;margin-top:2px;font-family:var(--mono);}
+  /* D13 overview strip + brush (focus+context navigator) */
+  .ovstrip{position:relative;height:24px;margin-top:3px;border:1px solid var(--border);border-radius:3px;background:color-mix(in srgb,var(--panel) 60%,transparent);overflow:hidden;touch-action:none;}
+  .ovbars{display:flex;align-items:flex-end;gap:0;height:100%;padding:1px;}
+  .ovbar{flex:1 1 0;min-width:0;background:var(--dim);opacity:.5;border-radius:1px 1px 0 0;}
+  .ovbar.err{background:var(--red);opacity:.6;}
+  .ovsvg{position:absolute;inset:1px;width:calc(100% - 2px);height:calc(100% - 2px);}
+  .ovsvg polyline{fill:none;stroke:var(--dim);stroke-width:.8;opacity:.75;vector-effect:non-scaling-stroke;}
+  .ovsample{position:absolute;top:1px;right:3px;font-size:8px;color:var(--amber);font-family:var(--mono);opacity:.85;pointer-events:none;}
+  .ovpin{position:absolute;top:0;bottom:0;width:1px;background:var(--fg);opacity:.55;pointer-events:none;}
+  .ovbrush{position:absolute;top:0;bottom:0;min-width:6px;background:color-mix(in srgb,var(--accent) 22%,transparent);border:1px solid var(--accent);border-radius:2px;cursor:grab;box-sizing:border-box;}
+  .ovbrush:active{cursor:grabbing;}
+  .ovh{position:absolute;top:-1px;bottom:-1px;width:7px;cursor:col-resize;background:var(--accent);opacity:.55;}
+  .ovh-l{left:-1px;border-radius:2px 0 0 2px;} .ovh-r{right:-1px;border-radius:0 2px 2px 0;}
+  .ovh:hover{opacity:.9;}
+  .sawlegend{display:flex;gap:12px;font-size:10px;color:var(--dim);margin-top:3px;flex-wrap:wrap;align-items:center;}
+  .navbtns{display:flex;gap:4px;align-items:center;margin-left:auto;}
+  /* shared timeline grid: fixed left gutter (track titles) | aligned plotting lane (point 3) */
+  #saw,#rails{--gut:140px;}
+  .trow{display:grid;grid-template-columns:var(--gut) 1fr;align-items:center;column-gap:8px;}
+  .trow-bars{align-items:end;}
+  .tgut{font-size:10px;color:var(--dim);text-align:right;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;padding-right:2px;}
+  .tgut-ctx{font-family:var(--mono);color:var(--fg);}
+  .tlane{position:relative;min-width:0;}
+  .railname{text-align:left;cursor:pointer;color:var(--dim);display:flex;align-items:center;gap:5px;}
+  .railname:hover{color:var(--fg);} .railname.col{opacity:.72;}
+  .railname .rc{font-family:var(--mono);font-size:9px;color:var(--dimmer);}
+  .railname .rflag{color:var(--red);font-family:var(--mono);font-size:9px;}
+
+  /* lane rails — every other lane of this session, time-aligned under the conversation */
+  #rails{background:var(--rail);border-bottom:1px solid var(--border);padding:2px 12px 6px;user-select:none;}
+  .rail{border-top:1px solid var(--border);}
+  .subgrouphd b{color:var(--amber);font-weight:600;}
+  .subgroup .subkids{margin-left:12px;border-left:2px solid color-mix(in srgb,var(--amber) 30%,var(--border));padding-left:4px;}
+  .subgroup .subkids .rail{border-top:1px dashed color-mix(in srgb,var(--border) 70%,transparent);}
+  .railhead{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dim);cursor:pointer;padding:4px 0 2px;}
+  .railhead:hover{color:var(--fg);}
+  .railhead .rc{font-family:var(--mono);font-size:10px;color:var(--dimmer);}
+  .railhead .rflag{color:var(--red);font-family:var(--mono);font-size:10px;}
+  .railhead .rkind{margin-left:auto;font-size:9px;color:var(--dimmer);font-style:italic;}
+  .railbody{position:relative;height:20px;margin-bottom:3px;border-radius:4px;cursor:pointer;background:color-mix(in srgb,var(--fg) 3%,transparent);}
+  .railbody:hover{background:color-mix(in srgb,var(--fg) 7%,transparent);}
+  .rail.k-probe .railbody{height:28px;}
+  .tick{position:absolute;top:5px;width:9px;height:9px;border-radius:50%;background:var(--dim);transform:translateX(-50%);cursor:pointer;border:1.5px solid var(--rail);}
+  .rail.k-monitor .tick{background:var(--pink);} .rail.k-aux .tick{background:var(--dimmer);} .rail.k-subagent .tick{background:var(--amber);}
+  .rail.k-notify .tick{background:var(--green);} .rail.k-titlegen .tick{background:var(--cyan);} .rail.k-quota .tick{background:var(--dimmer);opacity:.6;}
+  #detail.k-notify{border-top-color:var(--green);} #detail.k-titlegen{border-top-color:var(--cyan);} #detail.k-quota{border-top-color:var(--dimmer);}
+  .tick:hover,.tick.sel{outline:2px solid var(--fg);z-index:2;}
+  .tick.flag{background:var(--red);box-shadow:0 0 6px var(--red);}
+  .tick.errtick{background:var(--red)!important;opacity:.85;width:6px;height:6px;top:7px;}
+  .pbar{position:absolute;bottom:0;width:2px;background:var(--cyan);opacity:.45;transform:translateX(-50%);cursor:pointer;border-radius:1px 1px 0 0;}
+  .pbar:hover,.pbar.sel{opacity:1;}
+
+  /* B layout: left page (replay backbone) | divider | right page (overlays as wing) */
+  #pages{flex:1;display:flex;min-height:0;}
+  #leftpage{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;}
+  #divider{flex:none;width:6px;cursor:col-resize;background:repeating-linear-gradient(180deg,var(--border) 0 4px,transparent 4px 8px);touch-action:none;}
+  #divider:hover{background:var(--accent);}
+  body.resizing{cursor:col-resize;user-select:none;}
+  body.resizing #ctxwin,body.resizing #resexp{pointer-events:none;}
+  #rightpage{flex:none;width:var(--rightpage-w,320px);display:flex;flex-direction:column;min-height:0;border-left:1px solid var(--border);background:var(--panel);}
+  #resexp{flex:1;overflow-y:auto;padding:9px 10px 30px;}
+  #rawpanel{flex:none;max-height:42%;overflow-y:auto;border-top:1px solid var(--border);background:var(--rail);padding:8px 10px;}
+  .rphd{font-family:var(--mono);font-size:11px;color:var(--fg);margin-bottom:4px;}
+  .rpk{font-size:10.5px;color:var(--dim);margin:2px 0;} .rpk b{color:var(--fg);font-family:var(--mono);}
+  .rpempty{font-size:10px;color:var(--dimmer);}
+  .viewname{cursor:pointer;} .viewname:hover{text-decoration:underline;color:var(--fg);}
+  .viewbtn{cursor:pointer;opacity:.45;font-size:10px;margin-left:4px;} .viewbtn:hover{opacity:1;}
+  .rawpre{font-family:var(--mono);font-size:10px;line-height:1.45;white-space:pre-wrap;word-break:break-word;color:var(--dim);margin:5px 0 0;}
+  .rpx{float:right;cursor:pointer;color:var(--dimmer);font-size:9px;border:1px solid var(--border);border-radius:5px;padding:0 5px;} .rpx:hover{color:var(--fg);}
+  .resz{font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--dimmer);margin:0 0 5px;}
+  body.ctrlmode #rightpage,body.ctrlmode #divider{display:none;}
+  @media(max-width:900px){#pages{flex-direction:column;} #rightpage{width:auto;max-height:38vh;border-left:none;border-top:1px solid var(--border);} #divider{display:none;}}
+
+  /* session mode: nav sidebar + the ONE faithful context window. control mode: timeline + ledger. */
+  main{flex:1;display:grid;grid-template-columns:var(--outline-w,270px) 6px 1fr;min-height:0;}
+  body.ctrlmode main{grid-template-columns:1fr 356px;}
+  @media(max-width:820px){main{grid-template-columns:1fr;} #ctxnav,#maindiv{display:none;}}
+  /* outline ↔ center adjustable boundary (Q1) — second draggable gutter, own CSS var + LS key */
+  #maindiv{cursor:col-resize;background:repeating-linear-gradient(180deg,var(--border) 0 4px,transparent 4px 8px);touch-action:none;}
+  #maindiv:hover{background:var(--accent);}
+  body.ctrlmode #maindiv{display:none;}
+  #ctxnav{overflow-y:auto;border-right:1px solid var(--border);background:var(--panel);padding:10px 9px 40px;}
+  #ctxwin{overflow-y:auto;padding:12px 20px 60px;}
+  body.ctrlmode #ctxnav,body.ctrlmode #ctxwin{display:none;}
+  #timeline,#ledger{display:none;}
+  body.ctrlmode #timeline{display:block;overflow-y:auto;padding:14px 18px;}
+  body.ctrlmode #ledger{display:block;overflow-y:auto;border-left:1px solid var(--border);background:var(--panel);padding:12px 14px;}
+
+  /* ── the context window (tools → system → messages, faithful order) ── */
+  .cwmeta{border-bottom:1px solid var(--border);padding-bottom:9px;margin-bottom:6px;}
+  .cwtitle{font-family:var(--mono);font-size:12.5px;color:var(--fg);}
+  .cwtitle b{color:var(--accent);}
+  .cwsub{font-size:10.5px;color:var(--dim);margin-top:2px;}
+  .cwsub b{color:var(--fg);font-family:var(--mono);}
+  .cwcache{font-size:11px;color:var(--dim);margin-top:6px;background:color-mix(in srgb,var(--cyan) 8%,transparent);border:1px solid color-mix(in srgb,var(--cyan) 24%,var(--border));border-radius:6px;padding:5px 9px;}
+  .cwcache b{font-family:var(--mono);color:var(--fg);} .cwcache .chit{color:var(--cyan);}
+  .cwsec{display:flex;align-items:baseline;gap:8px;margin:16px 0 6px;padding-top:8px;border-top:2px solid var(--border);scroll-margin-top:8px;}
+  .cwsec b{font-size:11px;letter-spacing:1.5px;color:var(--fg);}
+  .cwsecic{font-size:13px;} .cwsecn{font-family:var(--mono);font-size:10px;color:var(--dimmer);}
+  .cwsecd{font-size:10px;color:var(--dimmer);font-style:italic;margin-left:auto;text-align:right;max-width:45%;}
+  .cwsecw{font-family:var(--mono);font-size:9.5px;color:var(--dim);white-space:nowrap;}
+  .cwsecest{color:var(--dimmer);font-style:italic;}
+  /* D17② schema-tax summary */
+  .cwtax{margin-top:7px;}
+  .taxbar{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--rail);border:1px solid var(--border);}
+  .taxseg{display:block;height:100%;}
+  .taxseg-tools{background:var(--amber);} .taxseg-system{background:var(--purple);} .taxseg-history{background:var(--dim);} .taxseg-task{background:var(--accent);}
+  .taxlegend{display:flex;flex-wrap:wrap;gap:10px;margin-top:4px;font-size:9.5px;color:var(--dim);}
+  .taxlg{display:inline-flex;align-items:center;gap:4px;} .taxlg i{width:8px;height:8px;border-radius:2px;display:inline-block;} .taxlg b{font-family:var(--mono);color:var(--fg);}
+  .taxculprit{font-size:10px;color:var(--dim);margin-top:4px;} .taxculprit b{font-family:var(--mono);color:var(--amber);}
+  .taxest{color:var(--dimmer);font-style:italic;font-size:9px;margin-left:6px;}
+  .cwgrowth{font-size:10px;color:var(--dim);margin-top:5px;} .cwgrowth b{font-family:var(--mono);color:var(--fg);}
+  /* 步间 diff (2.3/D24): reference picker + removal-aware section */
+  .cwdiff{font-size:10px;color:var(--dim);margin-top:5px;display:flex;align-items:center;gap:5px;} .cwdiff b{font-family:var(--mono);color:var(--fg);}
+  .diffbtn{font-size:10px;background:transparent;border:1px solid var(--border);color:var(--dim);border-radius:5px;padding:0 5px;cursor:pointer;line-height:1.5;} .diffbtn:hover{color:var(--fg);border-color:var(--fg);}
+  .cwrem-n{font-size:9px;color:var(--amber,#e8c15a);border:1px solid color-mix(in srgb,var(--amber,#e8c15a) 35%,transparent);border-radius:8px;padding:0 6px;font-family:var(--mono);}
+  .cwremoved{margin:6px 0;border:1px dashed color-mix(in srgb,var(--amber,#e8c15a) 40%,transparent);border-radius:6px;background:color-mix(in srgb,var(--amber,#e8c15a) 6%,transparent);}
+  .cwremhd{font-size:10px;color:var(--amber,#e8c15a);padding:5px 9px;cursor:pointer;} .cwremhd b{font-family:var(--mono);}
+  .cwrembody{padding:0 8px 6px;} .cblk.removed{opacity:.72;} .cblk.removed .cbh{text-decoration:line-through solid color-mix(in srgb,var(--amber,#e8c15a) 50%,transparent);}
+  .rembadge{font-size:8.5px;color:var(--amber,#e8c15a);border:1px solid color-mix(in srgb,var(--amber,#e8c15a) 40%,transparent);border-radius:8px;padding:0 5px;white-space:nowrap;font-family:var(--mono);text-decoration:none;}
+  .cwgrowth.compact b{color:var(--amber);}
+  .lifemark{font-size:8.5px;color:var(--green);border:1px solid color-mix(in srgb,var(--green) 35%,transparent);border-radius:8px;padding:0 5px;white-space:nowrap;font-family:var(--mono);}
+  /* one block */
+  .cblk{border:1px solid var(--border);border-radius:6px;margin-bottom:4px;overflow:hidden;background:var(--panel);scroll-margin-top:8px;}
+  .cblk.s-tools{background:color-mix(in srgb,var(--amber) 4%,transparent);}
+  .cblk.s-system{background:color-mix(in srgb,var(--purple) 5%,transparent);}
+  .cblk.hl{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 55%,transparent);}
+  .cbh{display:flex;gap:7px;align-items:center;padding:4px 9px;font-family:var(--mono);font-size:10.5px;color:var(--dim);cursor:pointer;}
+  .cbh:hover{color:var(--fg);}
+  .cbh::before{content:"▸";color:var(--dimmer);font-size:9px;width:8px;}
+  .cblk:not(.collapsed) .cbh::before{content:"▾";}
+  .cbrole{color:var(--fg);font-weight:600;min-width:0;}
+  .cbtag{color:var(--dimmer);}
+  .cblabel{color:var(--cyan);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;}
+  .cbchars{margin-left:auto;color:var(--dimmer);font-size:9px;white-space:nowrap;}
+  .ccbadge{color:var(--green);font-size:9px;white-space:nowrap;border:1px solid color-mix(in srgb,var(--green) 40%,var(--border));border-radius:10px;padding:0 5px;}
+  .volbadge{color:var(--amber);font-size:9px;white-space:nowrap;border:1px solid color-mix(in srgb,var(--amber) 40%,var(--border));border-radius:10px;padding:0 5px;}
+  .metabadge{color:var(--dim);font-size:9px;white-space:nowrap;border:1px dashed var(--border);border-radius:10px;padding:0 5px;cursor:help;}
+  .cbc{padding:0 9px;} .cblk.collapsed .cbc{display:none;}
+  /* messages grouped into turns (point 2): user-query header ▸ nested call-turn blocks */
+  .cwturn{border:1px solid var(--border);border-radius:7px;margin-bottom:6px;overflow:hidden;background:color-mix(in srgb,var(--accent) 3%,transparent);}
+  .cwturnhd{display:flex;align-items:center;gap:8px;padding:6px 10px;cursor:pointer;font-size:11.5px;}
+  .cwturnhd::before{content:"▾";color:var(--dimmer);font-size:10px;width:8px;}
+  .cwturn.collapsed .cwturnhd::before{content:"▸";}
+  .cwturnhd:hover{background:color-mix(in srgb,var(--fg) 4%,transparent);}
+  .cwturnq{color:var(--fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;}
+  .cwturnq .qk{color:var(--dimmer);font-weight:400;font-family:var(--mono);font-size:9px;margin-left:6px;}
+  .cwturnn{color:var(--dimmer);font-size:9px;white-space:nowrap;border:1px solid var(--border);border-radius:10px;padding:0 6px;font-family:var(--mono);}
+  .cwturnbody{padding:2px 8px 6px;} .cwturn.collapsed .cwturnbody{display:none;}
+  .cbpre{margin:2px 0 7px;font-family:var(--mono);font-size:11px;white-space:pre-wrap;word-break:break-word;max-height:340px;overflow:auto;color:var(--fg);}
+  .cbc .md{padding:3px 0 7px;font-size:12px;}
+  /* role accents on the message blocks */
+  .cblk.r-user .cbrole{color:var(--green);} .cblk.r-assistant .cbrole{color:var(--accent);}
+  .cblk.k-thinking .cbrole{color:var(--purple);} .cblk.k-tool_use .cbrole{color:var(--amber);} .cblk.k-tool_result .cbrole{color:var(--cyan);}
+  .cblk.r-system .cbrole{color:var(--purple);}
+  /* the KV-cache break marker */
+  .cachemark{display:flex;align-items:center;gap:9px;margin:12px 0 8px;scroll-margin-top:8px;}
+  .cachemark .cmline{flex:0 0 auto;width:5px;align-self:stretch;min-height:24px;background:var(--cyan);border-radius:3px;box-shadow:0 0 8px color-mix(in srgb,var(--cyan) 60%,transparent);}
+  .cachemark .cmtext{font-size:10.5px;color:var(--cyan);line-height:1.45;}
+  .cachemark .cmnote{color:var(--dimmer);font-style:italic;}
+  .cachemark.whole .cmline{background:var(--red);box-shadow:0 0 8px color-mix(in srgb,var(--red) 60%,transparent);} .cachemark.whole .cmtext{color:var(--red);}
+  .cmwhy{margin-top:4px;display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;font-size:10px;line-height:1.4;}
+  .cmcause{font-weight:600;padding:1px 6px;border-radius:4px;border:1px solid transparent;}
+  .cmc-ok{color:var(--green);border-color:color-mix(in srgb,var(--green) 40%,transparent);background:color-mix(in srgb,var(--green) 12%,transparent);}
+  .cmc-warn{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 40%,transparent);background:color-mix(in srgb,var(--amber) 12%,transparent);}
+  .cmc-bad{color:var(--red);border-color:color-mix(in srgb,var(--red) 45%,transparent);background:color-mix(in srgb,var(--red) 14%,transparent);}
+  .cmloc{color:var(--dim);font-family:var(--mono,monospace);}
+  .cmfix{color:var(--dimmer);font-style:italic;}
+  .cmest{color:var(--dimmer);font-size:9px;opacity:.75;margin-left:auto;letter-spacing:.3px;}
+
+  /* ── nav sidebar ── */
+  .navz{font-size:9px;text-transform:uppercase;letter-spacing:1.4px;color:var(--dimmer);margin:12px 4px 5px;}
+  .navz:first-child{margin-top:2px;}
+  .navrow{display:flex;align-items:center;gap:7px;padding:4px 7px;border-radius:6px;cursor:pointer;font-size:11.5px;color:var(--dim);}
+  .navrow:hover{background:color-mix(in srgb,var(--accent) 9%,transparent);color:var(--fg);}
+  .navrow .navic{width:15px;text-align:center;flex:0 0 auto;}
+  .navrow .navlbl{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .navrow .navct{font-family:var(--mono);font-size:9.5px;color:var(--dimmer);}
+  .navrow.head .navlbl{color:var(--fg);font-weight:600;}
+  .navrow.head::before{content:"▸";color:var(--dimmer);font-size:9px;margin-right:-2px;}
+  .navrow.head.open::before{content:"▾";}
+  .navkids{margin:1px 0 4px 12px;border-left:1px solid var(--border);padding-left:4px;}
+  .navsub{display:flex;align-items:baseline;gap:6px;padding:3px 6px;border-radius:5px;cursor:pointer;font-size:10.5px;color:var(--dim);font-family:var(--mono);}
+  .navsub:hover{background:color-mix(in srgb,var(--accent) 9%,transparent);color:var(--fg);}
+  .navsub .nsl{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .navsub .nsx{color:var(--dimmer);font-size:9px;white-space:nowrap;}
+  .navsub .cc{color:var(--green);} .navsub .vol{color:var(--amber);}
+  .navsub.pend{opacity:.42;} .navsub.dead{opacity:.5;text-decoration:line-through;text-decoration-color:var(--dimmer);}
+  .navsub .en{color:var(--green);} .navsub .ev{color:var(--red);}
+  .navseen{display:flex;flex-wrap:wrap;gap:3px 4px;margin:2px 0 4px 14px;}
+  .navchip{font-family:var(--mono);font-size:9.5px;color:var(--dim);background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:0 5px;cursor:pointer;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .navchip:hover{color:var(--fg);border-color:var(--dim);} .navchip.future{opacity:.4;}
+  .navmore{font-size:9px;color:var(--dimmer);cursor:pointer;padding:2px 0 2px 14px;font-family:var(--mono);}
+  .navmore:hover{color:var(--accent);}
+  .res{cursor:pointer;}
+
+  /* react events */
+  .ev{display:grid;grid-template-columns:22px 1fr;gap:9px;padding:5px 0;position:relative;}
+  .ev .ic{font-size:13px;text-align:center;line-height:1.4;}
+  .ev .body{min-width:0;}
+  .ev .lbl{font-family:var(--mono);font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--dim);}
+  .ev .txt{white-space:pre-wrap;word-break:break-word;}
+  .ev pre{margin:3px 0 0;background:var(--panel2);padding:6px 9px;border-radius:6px;font-size:11.5px;font-family:var(--mono);white-space:pre-wrap;word-break:break-word;max-height:200px;overflow:auto;}
+  .ev.future{opacity:.34;}
+  .ev.cur{background:color-mix(in srgb,var(--accent) 12%,transparent);border-radius:8px;margin:0 -8px;padding:5px 8px;}
+  .ev.user .ic{color:var(--green);} .ev.user .lbl{color:var(--green);}
+  .ev.thought .ic{color:var(--purple);} .ev.thought .lbl{color:var(--purple);} .ev.thought .txt{color:var(--dim);font-style:italic;}
+  .ev.say .ic{color:var(--accent);}
+  .ev.action .ic{color:var(--amber);} .ev.action .lbl{color:var(--amber);}
+  .ev.observation .ic{color:var(--cyan);} .ev.observation .lbl{color:var(--cyan);}
+  .ev.spawn .ic{color:var(--pink);} .ev.spawn .lbl{color:var(--pink);}
+  .ev.compaction{background:color-mix(in srgb,var(--red) 14%,transparent);border:1px solid var(--red);border-radius:8px;padding:8px 10px;margin:8px 0;grid-template-columns:1fr;}
+  .fp{font-family:var(--mono);color:var(--cyan);}
+  .stepno{font-family:var(--mono);color:var(--dimmer);font-size:9px;}
+  .subinfo{font-size:11px;color:var(--amber);border-left:2px solid var(--amber);padding:3px 0 3px 10px;margin:4px 0;background:color-mix(in srgb,var(--amber) 7%,transparent);border-radius:0 6px 6px 0;}
+
+  /* markdown */
+  .md code{font-family:var(--mono);font-size:.92em;background:var(--panel2);border:1px solid var(--border);border-radius:4px;padding:0 4px;}
+  .md pre.mdc{margin:4px 0;background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;word-break:break-word;overflow:auto;}
+  .md strong{color:var(--fg);font-weight:600;} .md em{font-style:italic;} .md a{color:var(--cyan);} .md .mdh{font-weight:700;color:var(--fg);}
+
+  /* ledger */
+  h2{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--dim);margin:16px 0 7px;display:flex;align-items:center;gap:6px;}
+  h2:first-child{margin-top:0;}
+  h2 .gi{width:8px;height:8px;border-radius:2px;display:inline-block;} h2 .ct{color:var(--dimmer);font-weight:400;letter-spacing:0;}
+  .res{margin-bottom:11px;}
+  .res .top{display:flex;gap:6px;align-items:baseline;}
+  .res .nm{font-family:var(--mono);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .res .via{font-size:9px;color:var(--dimmer);margin-left:auto;white-space:nowrap;}
+  .res.file .nm{color:var(--fg);} .res.scaffold .nm{color:var(--purple);} .res.dir .nm{color:var(--amber);} .res.link .nm{color:var(--cyan);} .res.capability .nm{color:var(--pink);}
+  .res.dead{opacity:.45;}
+  .pill{font-size:8.5px;font-family:var(--mono);text-transform:uppercase;letter-spacing:.4px;padding:1px 5px;border-radius:20px;border:1px solid var(--border);}
+  .pill.on{color:var(--green);border-color:color-mix(in srgb,var(--green) 45%,var(--border));}
+  .pill.off{color:var(--red);border-color:color-mix(in srgb,var(--red) 45%,var(--border));}
+  .pill.pend{color:var(--dimmer);}
+  .track{position:relative;height:16px;background:var(--panel2);border-radius:5px;margin-top:4px;overflow:hidden;
+    background-image:repeating-linear-gradient(90deg,transparent 0,transparent calc(10% - 1px),color-mix(in srgb,var(--border) 55%,transparent) calc(10% - 1px),color-mix(in srgb,var(--border) 55%,transparent) 10%);}
+  .track .span{position:absolute;top:2px;bottom:2px;background:var(--accent);border-radius:3px;opacity:.55;}
+  .res.scaffold .span{background:var(--purple);} .res.dir .span{background:var(--amber);} .res.link .span{background:var(--cyan);} .res.capability .span{background:var(--pink);}
+  .track .load{position:absolute;top:0;bottom:0;width:2px;background:var(--fg);opacity:.85;border-radius:2px;}
+  .track .load::after{content:"";position:absolute;top:-1px;left:-1px;width:4px;height:4px;border-radius:50%;background:var(--fg);}
+  .track .evict{position:absolute;top:0;bottom:0;width:0;border-left:2px dashed var(--red);}
+  .track .ph{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--fg);box-shadow:0 0 4px var(--fg);}
+  .res .sub2{display:flex;gap:8px;align-items:baseline;margin-top:3px;}
+  .res .ranges{font-family:var(--mono);font-size:9.5px;color:var(--cyan);opacity:.9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .res .hits{font-size:9px;color:var(--dimmer);margin-left:auto;white-space:nowrap;}
+  /* opened-file expand */
+  .res.file .res-hd{cursor:pointer;}
+  .res.file .res-hd .nm::before{content:"▸ ";color:var(--dimmer);}
+  .res.file.expanded .res-hd .nm::before{content:"▾ ";}
+  .lifesum{font-family:var(--mono);font-size:9.5px;color:var(--dim);margin-top:3px;}
+  .lifesum .ev{color:var(--dimmer);}
+  .filedetail{display:none;margin:6px 0 2px 10px;border-left:1px solid var(--border);padding-left:9px;}
+  .res.file.expanded .filedetail{display:block;}
+  .fload{font-family:var(--mono);font-size:10px;color:var(--dim);padding:2px 0;cursor:pointer;display:flex;gap:7px;align-items:baseline;}
+  .fload:hover{color:var(--fg);}
+  .fload .fk{color:var(--accent);} .fload.evict .fk{color:var(--red);} .fload.reinj .fk{color:var(--green);}
+  .fload .fvia{color:var(--dimmer);} .fload .frng{color:var(--cyan);opacity:.85;}
+  .res-viewtext{display:inline-block;margin-top:5px;font-size:10px;font-family:var(--mono);color:var(--accent);cursor:pointer;border:1px solid color-mix(in srgb,var(--accent) 40%,var(--border));border-radius:5px;padding:2px 7px;}
+  .res-viewtext:hover{background:color-mix(in srgb,var(--accent) 14%,transparent);}
+  /* only-seen filenames */
+  .seenhint{font-size:9px;color:var(--dimmer);margin:-2px 0 6px;line-height:1.4;}
+  .seenlist{display:flex;flex-wrap:wrap;gap:4px 6px;}
+  .seenchip{font-family:var(--mono);font-size:10px;color:var(--dim);background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:1px 6px;cursor:pointer;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis;}
+  .seenchip:hover{color:var(--fg);border-color:var(--dim);}
+  .seenchip.future{opacity:.38;}
+  .seenchip .sdot{color:var(--dimmer);}
+  .seenmore{font-size:9.5px;color:var(--dimmer);cursor:pointer;padding:3px 0;font-family:var(--mono);}
+  .seenmore:hover{color:var(--accent);}
+  /* monitor raw message (原文) with folded transcript */
+  .monmsg{white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:11px;color:var(--fg);background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;}
+  .monmsg .collapsible{margin:6px 0;}
+  .empty{color:var(--dimmer);padding:40px 12px;text-align:center;}
+  kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--border);border-radius:4px;padding:0 5px;font-size:10px;}
+  .curmeta{font-family:var(--mono);font-size:10px;color:var(--dim);margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--border);}
+  .stepdiv{font-family:var(--mono);font-size:9.5px;color:var(--dimmer);margin:11px 0 3px;padding-top:6px;border-top:1px dashed var(--border);letter-spacing:.2px;}
+  .stepdiv.curdiv{color:var(--accent);border-top-color:var(--accent);}
+  .stepdiv .grow{color:var(--green);} .stepdiv .drop{color:var(--red);font-weight:600;}
+  .collapsible{position:relative;padding-left:12px;}
+  .collapsible .edge{position:absolute;left:0;top:0;bottom:20px;width:9px;cursor:pointer;border-left:3px solid var(--border);border-radius:3px;}
+  .collapsible .edge:hover{border-left-color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent);}
+  .collapsible .cwrap{max-height:150px;overflow:hidden;position:relative;}
+  .collapsible.open .cwrap{max-height:none;}
+  .collapsible:not(.open) .cwrap::after{content:"";position:absolute;left:0;right:0;bottom:0;height:40px;background:linear-gradient(transparent,var(--panel2));pointer-events:none;}
+  .collapsible .more{cursor:pointer;color:var(--dim);font-family:var(--mono);font-size:10px;padding:3px 0 0;user-select:none;}
+  .collapsible .more:hover{color:var(--accent);}
+
+  /* lane-call detail panel (slides up from bottom) */
+  #detail{position:fixed;left:0;right:0;bottom:0;max-height:48vh;overflow:auto;background:var(--panel);border-top:2px solid var(--accent);box-shadow:0 -10px 30px rgba(0,0,0,.45);padding:12px 20px 18px;transform:translateY(101%);transition:transform .18s ease;z-index:30;}
+  #detail.open{transform:none;}
+  #detail.k-monitor{border-top-color:var(--pink);} #detail.k-probe{border-top-color:var(--cyan);} #detail.k-aux{border-top-color:var(--dimmer);}
+  #detail h3{margin:0 0 8px;font-size:13px;font-family:var(--mono);}
+  #detail .dclose{position:absolute;top:10px;right:16px;cursor:pointer;color:var(--dim);border:1px solid var(--border);border-radius:6px;padding:2px 9px;font-size:11px;}
+  #detail .din{font-size:11.5px;margin:5px 0;}
+  #detail .persona{color:var(--dim);font-style:italic;}
+  #detail pre{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:8px 11px;font-family:var(--mono);font-size:11px;white-space:pre-wrap;word-break:break-word;margin:4px 0;}
+  #detail .callref{color:var(--accent);cursor:pointer;text-decoration:underline;font-family:var(--mono);}
+  #detail .callref:hover{color:var(--fg);}
+
+  /* control-plane (session-less) view */
+  .ctrlhdr{font-size:11.5px;color:var(--dim);margin-bottom:12px;line-height:1.55;}
+  .ctrlhdr code{font-family:var(--mono);font-size:.9em;background:var(--panel2);border-radius:4px;padding:0 4px;}
+  .ctrlsec{border:1px solid var(--border);border-radius:8px;margin-bottom:9px;overflow:hidden;}
+  .ctrlsec>summary{cursor:pointer;padding:8px 11px;background:var(--panel2);font-size:12px;display:flex;align-items:center;gap:8px;list-style:none;}
+  .ctrlsec>summary::-webkit-details-marker{display:none;}
+  .ctrlsec>summary::before{content:"▸";color:var(--dimmer);font-size:10px;}
+  .ctrlsec[open]>summary::before{content:"▾";}
+  .ctrlsec .cc{font-family:var(--mono);font-size:10px;color:var(--dimmer);}
+  .ctrlsec .cwhat{color:var(--dim);font-size:10px;font-style:italic;margin-left:auto;text-align:right;max-width:55%;}
+  .ctrlrow{display:flex;gap:10px;align-items:baseline;padding:4px 12px;border-top:1px solid var(--border);font-size:11px;cursor:pointer;font-family:var(--mono);}
+  .ctrlrow:hover{background:color-mix(in srgb,var(--accent) 8%,transparent);}
+  .ctrlrow .tm{color:var(--dimmer);white-space:nowrap;}
+  .ctrlrow .m{color:var(--amber);width:40px;}
+  .ctrlrow .ep{color:var(--fg);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .ctrlrow .st{color:var(--green);} .ctrlrow .st.err{color:var(--red);}
+</style>
 </head>
 <body>
-  <header id="topbar">
-    <span class="brand">asight</span>
-    <span class="tagline">what the agent really sent the LLM — per step, byte-faithful</span>
-    <span class="fidnote" title="This store was built from demo v0-converted capture: req_body is re-serialized, not the original wire bytes. Per-block fidelity badges still apply.">fidelity: source may be v0-converted · badges show non-verbatim blocks</span>
-  </header>
-  <main id="shell">
-    <aside id="left">
-      <div class="pane-h">sessions</div>
-      <div id="sessions" class="scroll"><div class="empty">loading…</div></div>
-    </aside>
-    <section id="center">
-      <div id="timeline-wrap">
-        <div class="pane-h">timeline · bar = context by section (≈ char proportion) · band = cache hit
-          <span class="tlegend"><i class="lg lg-tools"></i>tools<i class="lg lg-system"></i>system<i class="lg lg-messages"></i>messages</span>
-        </div>
-        <div id="timeline"></div>
-        <div id="cacheband"></div>
-        <div id="scrub"></div>
-      </div>
-      <div id="board">
-        <div class="pane-h board-h"><span id="ctxhead">context replay</span>
-          <span class="ctxtools"><button class="mini" data-ctxtoggle="expand">expand all</button><button class="mini" data-ctxtoggle="collapse">collapse all</button></span>
-        </div>
-        <div id="context" class="scroll"><div class="empty">pick a session</div></div>
-      </div>
-    </section>
-    <aside id="right">
-      <div class="pane-h">cache &amp; usage</div>
-      <div id="overlay"></div>
-      <div class="pane-h">resources</div>
-      <div id="resources" class="scroll"></div>
-    </aside>
-  </main>
-  <script type="module" src="./app.js"></script>
+<header>
+  <h1><b>a</b>trace</h1>
+  <a href="/compare.html" style="color:var(--dim);font-size:11px;text-decoration:none;border:1px solid var(--border);border-radius:6px;padding:2px 7px">⇄ compare</a>
+  <select id="fileSel" title="project · session"></select>
+  <div class="ident">
+    <span class="agentchip" id="agentChip">🟠 Claude Code</span>
+    <div style="min-width:0">
+      <div class="sesstitle" id="sessTitle">—</div>
+      <div class="sessmeta" id="sessMeta"></div>
+    </div>
+    <span class="forkchip" id="forkChip" style="display:none"></span>
+  </div>
+  <div class="live"><span class="dot" id="dot"></span><label><input type="checkbox" id="liveChk" checked style="vertical-align:middle"> live</label></div>
+  <div class="spacer"></div>
+  <div class="stats" id="stats"></div>
+</header>
+
+<div id="pages">
+<div id="leftpage">
+<div id="saw">
+  <div class="trow trow-bars">
+    <div class="tgut tgut-ctx">context ↑</div>
+    <div class="tlane"><div class="sawrow" id="sawrow"><div id="reviewbracket"></div></div></div>
+  </div>
+  <div class="trow">
+    <div class="tgut">cache</div>
+    <div class="tlane"><div class="cacherow" id="cacherow" title="per-call cache reuse — green: mostly read (KV reused) · amber: partial · red: cold / prefix broke"></div></div>
+  </div>
+  <div class="trow">
+    <div class="tgut" title="whole session at a glance — drag the bracket to pan, drag an edge to zoom the bars above">nav</div>
+    <div class="tlane"><div class="ovstrip" id="ovstrip"></div></div>
+  </div>
+  <div class="trow">
+    <div class="tgut"></div>
+    <div class="tlane"><div class="sawaxis"><span id="sawstart">call #1</span><span id="sawmid"></span><span id="sawend"></span></div></div>
+  </div>
+  <div class="sawlegend">
+    <span id="lanehint"></span>
+    <span class="barlegend"><i class="ct-tools"></i>tools<i class="ct-system"></i>sys<i class="ct-user"></i>user<i class="ct-assistant"></i>asst<i class="ct-thinking"></i>think<i class="ct-tool_use"></i>tool<i class="ct-tool_result"></i>result</span>
+    <span class="spacer"></span>
+    <div class="navbtns">
+      <kbd>←</kbd><kbd>→</kbd> scrub &nbsp;
+      <button id="prev">◄</button><span class="mono" id="phlabel"></span><button id="next">►</button>
+      <button id="endBtn" title="jump to latest">⇥ latest</button>
+    </div>
+  </div>
+</div>
+
+<div id="rails"></div>
+<div id="truncbar" style="display:none"></div>
+
+<main>
+  <div id="ctxnav"></div>
+  <div id="maindiv" title="drag to resize the outline · double-click to reset"></div>
+  <div id="ctxwin"><div class="empty">Loading trace…</div></div>
+  <div id="timeline"></div>
+  <div id="ledger"></div>
+</main>
+</div><!--leftpage-->
+<div id="divider"></div>
+<div id="rightpage">
+  <div id="resexp"></div>
+  <div id="rawpanel"></div>
+</div>
+</div><!--pages-->
+
+<div id="detail"></div>
+
+<script type="module">
+// D18a Option-2: analyze runs SERVER-SIDE. The browser reads PRE-BAKED per-call fields
+// (call.norm / call.flat / call.cacheBreak with .gt) off /api/session's `analyzed` payload —
+// ZERO provider parsing in the browser, so invariant 3 / AC-3 hold (a new provider = a new
+// server-side analyzer; this frontend is untouched).
+
+const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+const kf = n => n==null?'?':n>=1000?(n/1000).toFixed(n>=10000?0:1)+'k':''+n
+const base = p => String(p).replace(/\/+$/,'').split('/').pop() || p
+const fmtTime = ts => { try{ return new Date(ts).toLocaleTimeString() }catch{ return ts||'' } }
+const fmtDur = ms => ms==null?'?':ms>=1000?(ms/1000).toFixed(1)+'s':ms+'ms'
+// rough cost estimate ($/Mtok: input, output, cache-write-5m, cache-read) — editable
+const PRICING={opus:[15,75,18.75,1.5],sonnet:[3,15,3.75,0.3],haiku:[1,5,1.25,0.1]}
+const priceKey=m=>/opus/.test(m||'')?'opus':/sonnet/.test(m||'')?'sonnet':'haiku'
+function costOf(model,u){ const [i,o,cw,cr]=PRICING[priceKey(model)]; return ((u.fresh||0)*i+(u.out||0)*o+(u.create||0)*cw+(u.read||0)*cr)/1e6 } // u = neutral canonical usage (D18a Q1)
+const usd=n=>n>=1?'$'+n.toFixed(2):n>=0.01?'$'+n.toFixed(3):n>0?'$'+n.toFixed(4):'$0'
+// display a path relative to the session's cwd when it's inside it, else absolute (no symlink resolution)
+function relPath(p){ const cwd=meta&&meta.project_path; return (cwd&&String(p).startsWith(cwd+'/'))?String(p).slice(cwd.length+1):String(p) }
+function scaffoldPath(label){
+  if(/MEMORY/i.test(label)) return meta&&meta.project_slug?`~/.claude/projects/${meta.project_slug}/memory/MEMORY.md`:'MEMORY.md'
+  if(/CLAUDE/i.test(label)) return meta&&meta.project_path?`${meta.project_path}/CLAUDE.md`:'CLAUDE.md'
+  return label
+}
+
+function md(s){
+  s = esc(s)
+  const blocks=[], S0=String.fromCharCode(0xE000), S1=String.fromCharCode(0xE001)
+  s = s.replace(/```(\w*)\n?([\s\S]*?)```/g,(_,lang,code)=>{blocks.push(code.replace(/\n+$/,''));return S0+(blocks.length-1)+S1})
+  s = s.replace(/^(#{1,4})\s+(.+)$/gm,'<span class="mdh">$2</span>')
+  s = s.replace(/\*\*([^\n*]+)\*\*/g,'<strong>$1</strong>')
+  s = s.replace(/(^|[^*\w])\*([^\n*]+)\*(?!\w)/g,'$1<em>$2</em>')
+  s = s.replace(/(^|[^_\w])_([^\n_]+)_(?!\w)/g,'$1<em>$2</em>')
+  s = s.replace(/`([^`\n]+)`/g,'<code>$1</code>')
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>')
+  s = s.replace(new RegExp(S0+'(\\d+)'+S1,'g'),(_,i)=>`<pre class="mdc">${blocks[+i]}</pre>`)
+  return s
+}
+
+// agent chip is TABLE-DRIVEN off the server's meta.harness (not a hardcode) — a new harness is a
+// new row here + a server-side analyzer; this render code is untouched (invariant 3 / AC-3).
+const CHIP={'claude-code':{ic:'🟠',name:'Claude Code'},'codex':{ic:'🟢',name:'Codex'},'deepseek-cli':{ic:'🔵',name:'DeepSeek CLI'}}
+const chipFor=m=>{ const h=(m&&CHIP[m.harness])||{ic:'🟠',name:(m&&m.harness)||'agent'}; const ep=m&&m.entrypoint==='desktop'?' · Desktop':m&&m.entrypoint==='cli'?' · CLI':''; return `${h.ic} ${h.name}${ep}` }
+let A=null, raw=[], probes={count:0,series:[]}, meta=null
+let projectsFlat=[] // all sessions across projects (for same-name / fork detection in the top bar)
+let lanes=[], anchor=null, anchorTs=[], playhead=0, follow=true, lastScrolled=-1, curSel=null
+// D13 overview+detail brush: the detail axis renders only the step window [view.lo,view.hi);
+// the overview strip + brush drive it. view is reset to full on session change (see poll()).
+let view={lo:0,hi:0}, viewSig=null, viewPrevN=0, brushDragging=false
+let selTick=null // {laneId,i} — a pinned lane-call selection
+let controlSig=null, controlData={} // session-less control-plane cache
+const collapsedRails=new Set(), expanded=new Set(); const COLLAPSE=600;
+const expandedFiles=new Set(); let seenExpanded=false; // FILE ledger: opened-file expand state + seen-list "show all"
+let subgroupOpen=false; const subSeeded=new Set(); // group many subagents under one collapsed rail; each starts collapsed
+// context window / nav state
+let curFlat=[] // the linear context of the current playhead call (tools→system→messages)
+const navOpen=new Set(['sys','life-file']) // which nav groups are expanded
+const turnOpen=new Set() // which message turns are expanded in the board (point 2)
+let lastTurnCall=-1 // playhead we last seeded turnOpen for (default: latest turn open)
+let viewPin=null // when set, the right-bottom panel shows a resource's content instead of the call raw (point 4)
+let diffRef=null // 步间 diff reference step index (null = previous in-lane step); 2.3/D24 removal-aware + arbitrary-ref
+const openBlocks=new Set() // context-block indices expanded in the current call (survives the live re-render)
+let lastRenderSig=null // poll skips re-analyze+render when the session's data hasn't changed
+let lastCheapSig=null   // poll skips the whole /api/session fetch when calls/last_ts (from the cheap projects list) are unchanged — avoids re-shipping a large trace every 1.5s
+let navSeenExpanded=false
+
+async function poll(){
+  try{
+    const sel=document.getElementById('fileSel')
+    const pj=await fetch('/api/projects').then(r=>r.json()).catch(()=>({projects:[]}))
+    const projects=pj.projects||[]
+    projectsFlat=projects.flatMap(p=>p.sessions||[])
+    const realP=projects.filter(p=>p.slug!=='_unresolved'), unres=projects.filter(p=>p.slug==='_unresolved')
+    const optFor=s=>{
+      const label=s.title||(String(s.session_id).startsWith('sess-')?'untitled':'· '+String(s.session_id).slice(0,8))
+      const kinds=[s.calls?`${s.calls} call${s.calls!==1?'s':''}`:null,s.probes?`${s.probes} probe${s.probes!==1?'s':''}`:null].filter(Boolean).join(' · ')
+      const ic=s.entrypoint==='desktop'?'🖥':'⌨'
+      return `<option value="${esc(s.project_slug)}::${esc(s.session_id)}">${ic} ${esc(label)}${s.has_subagent?' 🧬':''} — ${kinds}</option>`
+    }
+    const grp=p=>`<optgroup label="${esc(p.name)}">${p.sessions.map(optFor).join('')}</optgroup>`
+    const opts=realP.map(grp).join('')+unres.map(p=>`<optgroup label="⋯ ${esc(p.name)}">${p.sessions.map(optFor).join('')}</optgroup>`).join('')
+      +`<optgroup label="⚙ session-less"><option value="__control__">⚙ control-plane (telemetry · flags · account · registry)</option></optgroup>`
+    if(sel.dataset.sig!==opts){ sel.innerHTML=opts; sel.dataset.sig=opts; if(curSel)sel.value=curSel }
+    if(!curSel){ const p0=realP[0]||unres[0]; if(p0)curSel=`${p0.sessions[0].project_slug}::${p0.sessions[0].session_id}`; if(curSel)sel.value=curSel }
+    if(!curSel){ renderEmpty('No sessions captured yet. Run Claude Code (or the Desktop app) through the atrace MITM.'); return }
+    if(curSel==='__control__'){ document.body.classList.add('ctrlmode'); await renderControlView(); return }
+    document.body.classList.remove('ctrlmode'); controlSig=null // leaving control view: force a full re-render next time (else a stale session header sticks)
+    hideSessionChrome(false)
+    const [slug,id]=curSel.split('::')
+    // cheap short-circuit: the /api/projects list (already fetched above) carries each
+    // session's live calls-count + last_ts. If ours is unchanged, skip the heavy
+    // /api/session fetch entirely — a big session no longer re-ships every poll.
+    const cur=projectsFlat.find(s=>s.project_slug===slug&&s.session_id===id)
+    if(cur){ const cs=curSel+'|'+cur.calls+'|'+cur.last_ts
+      if(cs===lastCheapSig){ document.getElementById('dot').classList.toggle('on',document.getElementById('liveChk').checked); return }
+      lastCheapSig=cs }
+    const d=await fetch(`/api/session?project=${encodeURIComponent(slug)}&id=${encodeURIComponent(id)}`).then(r=>r.json())
+    raw=d.records||[]; probes=d.probes||{count:0,series:[]}; meta=d.meta||null
+    // 保真边界: a session too large to ship whole arrives truncated to its most-recent calls.
+    // The raw NDJSON on disk stays complete — mark the view non-complete (invariant 4).
+    const tb=document.getElementById('truncbar'), t=d.truncated
+    if(tb){ if(t){ tb.innerHTML=`⚠ 非完整视图 · showing the most recent <b>${t.shown}</b> of <b>${t.total||'?'}</b> calls (${t.kept_mb} MB of ${t.file_mb} MB) — this session is too large for the demo loader; older calls are omitted from the view but intact in the raw trace.`
+      tb.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #7a5b18;background:#241d0b;color:#e8c15a;border-radius:5px;font-size:11px;line-height:1.45'
+    } else { tb.style.display='none'; tb.innerHTML='' } }
+    // skip the whole re-analyze+render when this session's data is unchanged — otherwise the
+    // 1.5s live poll rebuilds the context window and wipes any block you just expanded.
+    const sig=curSel+'|'+raw.length+'|'+(raw.length?String(raw[raw.length-1]?.ts_request||raw[raw.length-1]?.id||''):'')
+    if(sig===lastRenderSig){ document.getElementById('dot').classList.toggle('on',document.getElementById('liveChk').checked); return }
+    lastRenderSig=sig
+    A=d.analyzed||{lanes:[],calls:[]} // server-side analyze() output, per-call fields pre-baked
+    lanes=buildLanes(A,probes)
+    anchor=lanes.find(l=>l.kind==='main')||lanes[0]||null
+    if(!anchor){ render(); return }
+    anchorTs=anchor.calls.map(c=>Date.parse(c.ts))
+    const before=anchor._prev||0; anchor._prev=anchor.calls.length
+    const prevPh=playhead
+    if(follow && anchor.calls.length>before) playhead=Math.max(0,anchor.calls.length-1)
+    playhead=Math.min(playhead,Math.max(0,anchor.calls.length-1))
+    if(playhead!==prevPh) openBlocks.clear() // live-follow jumped to a new call
+    // D13 brush window: reset to full on session switch; on same-session live growth keep the
+    // user's window but clamp it, and if they were parked at the end, extend to follow new calls.
+    { const N=anchor.calls.length
+      if(curSel!==viewSig){ viewSig=curSel; view={lo:0,hi:N} }
+      else { if(view.hi>=(viewPrevN||N)) view.hi=N
+        view.hi=Math.min(N,view.hi||N); view.lo=Math.max(0,Math.min(view.lo,N-1)); if(view.hi<=view.lo) view.hi=Math.min(N,view.lo+1) }
+      viewPrevN=N }
+    render()
+    document.getElementById('dot').classList.toggle('on',document.getElementById('liveChk').checked)
+  }catch(e){ document.getElementById('dot').classList.remove('on'); console.error(e) }
+}
+function renderEmpty(msg){ document.body.classList.remove('ctrlmode'); document.getElementById('ctxwin').innerHTML=`<div class="empty">${esc(msg)}</div>`; document.getElementById('ctxnav').innerHTML=''; document.getElementById('rails').innerHTML=''; document.getElementById('sawrow').innerHTML='<div id="reviewbracket"></div>'; const rx=document.getElementById('resexp'); if(rx)rx.innerHTML=''; const rp=document.getElementById('rawpanel'); if(rp)rp.innerHTML=''; const cr=document.getElementById('cacherow'); if(cr)cr.innerHTML='' }
+function hideSessionChrome(hide){ document.getElementById('saw').style.display=hide?'none':''; document.getElementById('rails').style.display=hide?'none':'' }
+
+// ── control-plane view: the session-LESS traffic, categorized ────────────────
+const CTRL_META={
+  control:{ic:'🚩',what:'feature flags & experiments — the config your client is actually running'},
+  account:{ic:'👤',what:'account & onboarding settings'},
+  registry:{ic:'🧩',what:'MCP server registry lookups (installable + configured)'},
+  telemetry:{ic:'📊',what:'usage/UI analytics batches (event bodies not on the wire capture; response = accepted count)'},
+  other:{ic:'❔',what:'uncategorized session-less calls'},
+}
+const CTRL_ORDER=['control','account','registry','telemetry','other']
+async function renderControlView(){
+  hideSessionChrome(true)
+  document.getElementById('dot').classList.toggle('on',document.getElementById('liveChk').checked)
+  const list=await fetch('/api/control').then(r=>r.json()).catch(()=>({classes:[]}))
+  const sig=JSON.stringify(list.classes)
+  const tl=document.getElementById('timeline')
+  if(sig===controlSig && tl.dataset.mode==='control') return
+  controlSig=sig
+  const got=await Promise.all((list.classes||[]).map(c=>fetch('/api/control?class='+encodeURIComponent(c.class)).then(r=>r.json()).then(d=>({class:c.class,records:d.records||[]})).catch(()=>({class:c.class,records:[]}))))
+  controlData={}; got.forEach(c=>controlData[c.class]=c.records)
+  const total=got.reduce((a,c)=>a+c.records.length,0)
+  document.getElementById('agentChip').textContent='⚙ control-plane'
+  document.getElementById('forkChip').style.display='none'
+  document.getElementById('sessTitle').textContent='control-plane'
+  document.getElementById('sessMeta').textContent='session-less traffic'
+  document.getElementById('stats').innerHTML=`<span><b>${total}</b> calls</span><span><b>${got.length}</b> categories</span>`
+  const cls=got.slice().sort((a,b)=>(CTRL_ORDER.indexOf(a.class)+99)%99 - (CTRL_ORDER.indexOf(b.class)+99)%99)
+  let html=`<div class="ctrlhdr">⚙ <b>Control-plane traffic</b> — the session-less calls Claude Code makes around your conversations (no <code>x-claude-code-session-id</code>). Captured but kept out of the conversation picker. Click any call for its request + response.</div>`
+  for(const c of cls){
+    const m=CTRL_META[c.class]||{ic:'•',what:''}
+    const recent=c.records.slice(-80).reverse()
+    const rows=recent.map((r)=>{
+      const gi=c.records.indexOf(r), st=(r.response||{}).status
+      return `<div class="ctrlrow" data-cls="${esc(c.class)}" data-i="${gi}"><span class="tm">${fmtTime(r.ts_request)}</span><span class="m">${esc(r.method||'')}</span><span class="ep">${esc((r.endpoint||'').split('?')[0])}</span><span class="st ${st>=400?'err':''}">${st??'?'}</span></div>`
+    }).join('')
+    const more=c.records.length>80?`<div class="ctrlrow" style="cursor:default;color:var(--dimmer)">… ${c.records.length-80} older not shown</div>`:''
+    html+=`<details class="ctrlsec" ${c.class==='control'?'open':''}><summary>${m.ic} <b>${esc(c.class)}</b> <span class="cc">${c.records.length}</span><span class="cwhat">${esc(m.what)}</span></summary>${rows}${more}</details>`
+  }
+  tl.dataset.mode='control'; tl.innerHTML=html
+  document.getElementById('ledger').innerHTML=controlLedger(got,total)
+  document.querySelectorAll('#timeline .ctrlrow[data-cls]').forEach(row=>row.onclick=()=>openControlDetail(row.dataset.cls,+row.dataset.i))
+}
+function controlLedger(got,total){
+  let html=`<div class="curmeta">⚙ control-plane · ${total} session-less calls</div>`
+  html+=`<div style="color:var(--dim);font-size:10px;margin-bottom:6px">Claude Code's telemetry &amp; config plumbing — never part of a conversation.</div>`
+  // surface the actual feature flags observed (the genuinely interesting bit)
+  const flags=new Map()
+  for(const r of controlData.control||[]){ const f=(r.response||{}).body?.features; if(f&&typeof f==='object') for(const [k,v] of Object.entries(f)) flags.set(k, v&&typeof v==='object'?v.value:v) }
+  if(flags.size){
+    html+=`<h2><span class="gi" style="background:var(--pink)"></span>Feature flags observed <span class="ct">(${flags.size})</span></h2>`
+    html+=[...flags].slice(0,40).map(([k,v])=>`<div class="res"><div class="top"><span class="nm" title="${esc(k)}">${esc(k)}</span><span class="via">${esc(JSON.stringify(v)).slice(0,18)}</span></div></div>`).join('')
+  }
+  html+=`<h2><span class="gi" style="background:var(--accent)"></span>Categories</h2>`
+  for(const c of got.slice().sort((a,b)=>b.records.length-a.records.length)){
+    const m=CTRL_META[c.class]||{ic:'•'}
+    html+=`<div class="res"><div class="top"><span class="nm">${m.ic} ${esc(c.class)}</span><span class="via">${c.records.length}</span></div></div>`
+  }
+  return html
+}
+function openControlDetail(cls,i){
+  const r=(controlData[cls]||[])[i]; if(!r)return
+  const det=document.getElementById('detail'), resp=r.response||{}, hdr=r.request_headers||{}
+  const body=resp.body, bodyStr=body==null?'(empty)':(typeof body==='string'?body:JSON.stringify(body,null,2))
+  det.className='open'
+  det.innerHTML=`<div class="dclose" id="dclose">✕ close</div>`+
+    `<h3>${esc(r.method||'')} ${esc((r.endpoint||'').split('?')[0])} · ${resp.status??'?'}</h3>`+
+    `<div class="din">${fmtTime(r.ts_request)} · UA <b>${esc(hdr['user-agent']||'?')}</b> · request ${kf((r.request||{}).raw_chars)} bytes (request body isn't decoded for non-LLM calls; the response is)</div>`+
+    `<div class="din" style="color:var(--dim)">response body:</div>`+
+    collapse('<pre>'+esc(bodyStr)+'</pre>',bodyStr.length,'ctrl:'+cls+':'+i)
+}
+
+function buildLanes(A,probes){
+  // D18a Option-2: `analyzed` arrives as JSON from the server, so each lane's giLocal (a Map in
+  // analyze()) deserialized to {}. Rebuild it here from the lane's calls (a pure derived index —
+  // no provider logic) so the reused render code gets its Map back.
+  const ls=(A.lanes||[]).map(l=>({...l,giLocal:new Map((l.calls||[]).map((c,i)=>[c.gi,i]))}))
+  const series=probes.series||[]
+  if(series.length){
+    const calls=series.map((p,i)=>({gi:i,ts:p.ts,ctx:p.tokens||0,probe:true,usage:{read:0,create:0,fresh:p.tokens||0,out:0}}))
+    ls.push({id:'probe',kind:'probe',icon:'👁',label:'count_tokens probes',calls,events:[],resources:[],
+      giLocal:new Map(calls.map((c,i)=>[c.gi,i])),peakCtx:calls.reduce((m,c)=>Math.max(m,c.ctx),1),flagged:0})
+  }
+  return ls
+}
+function errStats(){
+  const bad=raw.filter(r=>r.is_llm_call&&r.response&&r.response.status&&r.response.status!==200)
+  const by={}; bad.forEach(r=>{by[r.response.status]=(by[r.response.status]||0)+1})
+  return Object.entries(by).map(([k,v])=>`${k}×${v}`).join(' ')
+}
+
+// x-position (0..1) of a wall-clock time on the conversation axis
+// un-normalized fractional step position in [0, n]: which turn (+frac) a ts falls at.
+function stepPos(ts){
+  const t=typeof ts==='number'?ts:Date.parse(ts), A=anchorTs, n=A.length
+  if(!n) return 0
+  if(t<=A[0]) return 0
+  if(t>=A[n-1]) return (n-1)+0.999
+  let i=0; while(i<n-1 && A[i+1]<t) i++
+  const frac=(t-A[i])/Math.max(1,A[i+1]-A[i])
+  return i+frac
+}
+// D13: project a call's step position into the CURRENT brush window [view.lo,view.hi) → [0,1).
+// Full window (lo=0,hi=n) is byte-identical to the old (i+frac)/n; a narrowed window re-scales
+// every track (bars/ticks/pbars/cache/nearestX) through this one function → lockstep (1.3 /N 收敛).
+function xOf(ts){
+  const n=anchorTs.length; if(!n) return 0
+  const lo=view.lo|0, hi=Math.max(lo+1, view.hi||n)
+  const x=(stepPos(ts)-lo)/(hi-lo)
+  return x<=0?0:x>=1?0.999:x
+}
+const turnsReviewed = ts => anchorTs.filter(x=>x<=(Date.parse(ts))).length
+
+function render(){
+  // top bar (point 6): agent type · path · session name · fork/branch chip
+  document.getElementById('agentChip').textContent=chipFor(meta)
+  document.getElementById('sessTitle').textContent=(meta&&meta.title)||(meta?'untitled session':'—')
+  document.getElementById('sessMeta').innerHTML=meta?`${esc(meta.project_path||meta.project_slug||'')} · <span class="idchip">${esc(String(meta.session_id).slice(0,8))}</span>`:''
+  const fc=document.getElementById('forkChip'), sub=(A&&A.stats&&A.stats.subagents)||0
+  const _title=(meta&&meta.title)||'', _same=_title?projectsFlat.filter(s=>s&&s.title===_title).length:0
+  let _fork=''
+  if(sub>0) _fork+=`🧬 ${sub} branch${sub>1?'es':''}`
+  if(_same>1) _fork+=`${_fork?' · ':''}⑂ ${_same}× same-name`
+  if(fc){ fc.textContent=_fork; fc.style.display=_fork?'':'none'; fc.title=_same>1?'other sessions share this title — likely forks / different branches; the id chip disambiguates':'subagent branches spawned from this session' }
+  if(!anchor){ renderEmpty('No LLM calls traced yet.'); document.getElementById('stats').innerHTML=''; return }
+  const st=A.stats, err=errStats()
+  document.getElementById('stats').innerHTML=
+    `<span><b>${(A.lanes.find(l=>l.kind==='main')||{calls:[]}).calls.length}</b> turns</span>`+
+    (st.monitors?`<span title="prompt-injection / safety monitor">🛡 <b>${st.monitors}</b></span>`:'')+
+    (probes.count?`<span title="count_tokens measurements">👁 <b>${probes.count}</b></span>`:'')+
+    (st.subagents?`<span>🧬 <b>${st.subagents}</b></span>`:'')+
+    `<span>✂ <b>${st.compactions}</b></span>`+
+    `<span>peak ctx <b>${kf(st.peakCtx)}</b></span>`+
+    (err?`<span style="color:var(--red)">${err} <span style="color:var(--dimmer)">(retries)</span></span>`:'')
+  renderSaw()
+  renderRails()
+  renderOverview()
+  renderContextWindow()
+  renderContextNav()
+  if(selTick){ const l=lanes.find(x=>x.id===selTick.laneId); if(l&&(l.kind==='monitor'||l.kind==='probe')) highlightRange(l,selTick.i) }
+}
+
+// per-call context composition by type (chars, a cheap proxy for token share), cached on the step.
+// Used to paint each timeline bar as a stacked multi-color column (point 3).
+function callComp(s){
+  if(s._comp) return s._comp
+  const rq=(s.rec&&s.rec.request)||{}
+  const c={tools:0,system:0,user:0,assistant:0,thinking:0,tool_use:0,tool_result:0,image:0}
+  for(const t of rq.tools||[]) c.tools += (String(t.name||'').length+String(t.description||'').length+(t.input_schema?JSON.stringify(t.input_schema).length:0))||40
+  for(const b of rq.system||[]) c.system += String((typeof b==='string'?b:b.text)||'').length
+  for(const m of rq.messages||[]){
+    const parts=Array.isArray(m.content)?m.content:[{type:'text',text:m.content}]
+    for(const b of parts){
+      const t=b.type||'text'
+      if(t==='thinking'||t==='redacted_thinking') c.thinking+=String(b.thinking||'').length||60
+      else if(t==='tool_use'||t==='server_tool_use') c.tool_use+=JSON.stringify(b.input||{}).length+String(b.name||'').length
+      else if(t==='tool_result') c.tool_result+=JSON.stringify(b.content??'').length
+      else if(t==='image') c.image+=800
+      else if(m.role==='assistant') c.assistant+=String(b.text||'').length
+      else c.user+=String(b.text||'').length
+    }
+  }
+  return s._comp=c
+}
+const CT_ORDER=['tools','system','user','assistant','thinking','tool_use','tool_result','image']
+function barSegs(s,h){
+  const c=callComp(s), tot=CT_ORDER.reduce((a,k)=>a+(c[k]||0),0)||1
+  return CT_ORDER.map(k=>{ const sh=(c[k]||0)/tot*h; return sh<0.4?'':`<span class="ct-${k}" style="height:${sh.toFixed(2)}px"></span>` }).join('')
+}
+// ── D17② schema-tax segment weights (RFC 2.2/2.3 · research pain #5: "tools = 72% of the window") ──
+// Break the RE-SENT context into 4 assembly buckets — tools / system / history / task — with real
+// content BYTES (UTF-8) + an ≈token estimate (char-proxy, MUST be labelled). Bytes are the model-
+// visible content length (not exact wire bytes: the wire JSON adds scaffolding), so proportions —
+// "who eats the window before any user message" — are the honest signal, not an absolute wire total.
+const enc = (s) => { try { return new TextEncoder().encode(String(s ?? '')).length } catch { return String(s ?? '').length } }
+function flatBytes(b){
+  if(b.sec==='tools'){ // D15 verbatim: real desc+schema bytes; old v0 trace: metadata char proxy
+    return enc(b.name)+(b.verbatim?enc(b.desc!=null?b.desc:'')+(b.schema!==undefined?enc(JSON.stringify(b.schema)):0):(b.descChars||0))
+  }
+  if(b.sec==='system') return enc(b.text)
+  const bl=b.block
+  if(bl==null) return 0
+  if(typeof bl==='string') return enc(bl)
+  if(bl.type==='text') return enc(bl.text)
+  if(bl.type==='thinking'||bl.type==='redacted_thinking') return enc(bl.thinking||'')
+  if(bl.type==='tool_use'||bl.type==='server_tool_use') return enc(bl.name)+enc(JSON.stringify(bl.input||{}))
+  if(bl.type==='tool_result'){ const c=bl.content; return enc(typeof c==='string'?c:JSON.stringify(c??'')) }
+  if(bl.type==='image') return 800
+  return enc(JSON.stringify(bl))
+}
+const TAX_ORDER=['tools','system','history','task']
+function segTax(flat){
+  const turns=messageTurns(flat)
+  const taskItems=turns.length?new Set(turns[turns.length-1].items):new Set() // last turn = the current task
+  const allVerbatim=flat.filter(b=>b.sec==='tools').every(b=>b.verbatim!==false)
+  const seg={tools:0,system:0,history:0,task:0}
+  flat.forEach((b,i)=>{
+    const n=flatBytes(b)
+    if(b.sec==='tools') seg.tools+=n
+    else if(b.sec==='system') seg.system+=n
+    else if(taskItems.has(i)) seg.task+=n
+    else seg.history+=n
+  })
+  const total=TAX_ORDER.reduce((a,k)=>a+seg[k],0)||1
+  const culprit=TAX_ORDER.reduce((a,k)=>seg[k]>seg[a]?k:a,'tools')
+  return { seg, total, culprit, allVerbatim,
+    pct:(k)=>Math.round(seg[k]/total*100), est:(k)=>Math.round(seg[k]/4) } // ≈token = bytes/4 (char-proxy)
+}
+const TAX_META={tools:{ic:'⚙',c:'amber'},system:{ic:'▤',c:'purple'},history:{ic:'📜',c:'dim'},task:{ic:'🎯',c:'accent'}}
+// a compact stacked bar + culprit callout for the context-window header (the "card" schema-tax summary)
+function taxSummary(tax){
+  const bar=TAX_ORDER.map(k=>{const p=tax.pct(k);return p<1?'':`<span class="taxseg taxseg-${k}" style="width:${p}%" title="${k}: ${kf(tax.seg[k])} bytes · ${p}%"></span>`}).join('')
+  const legend=TAX_ORDER.map(k=>`<span class="taxlg"><i class="taxseg-${k}"></i>${k} <b>${tax.pct(k)}%</b></span>`).join('')
+  const cp=tax.culprit
+  return `<div class="cwtax"><div class="taxbar">${bar}</div>`+
+    `<div class="taxlegend">${legend}</div>`+
+    `<div class="taxculprit">⚖ schema-tax: <b>${cp}</b> = <b>${tax.pct(cp)}%</b> of the re-sent context (${kf(tax.seg[cp])} bytes · ≈${kf(tax.est(cp))} tok, re-sent every call)`+
+    `<span class="taxest" title="segment bytes are model-visible content (UTF-8), not exact wire bytes; ≈tok is a char/4 proxy — provider gives no per-segment token count">字节=内容真数 · ≈tok 估算${tax.allVerbatim?'':' · tools 段含旧-trace 元数据估算'}</span></div></div>`
+}
+// D17② context-growth Δ (research pain #4: cost grows superlinearly, can't attribute to a step).
+// Per call: how many re-sent bytes were ADDED vs the previous call, and which segment they landed in.
+// Honest boundary: asight names the culprit (diagnose) — pruning is the harness's job (诊断非裁剪).
+function growthLine(tax,prevTax,brk){
+  if(!prevTax) return '' // first captured call — nothing to diff against
+  const dTotal=tax.total-prevTax.total
+  const deltas=TAX_ORDER.map(k=>({k,d:tax.seg[k]-prevTax.seg[k]}))
+  const dom=deltas.reduce((a,b)=>Math.abs(b.d)>Math.abs(a.d)?b:a,{k:'tools',d:0})
+  const sg=(x)=>(x>=0?'+':'')+kf(x)
+  if(brk&&brk.cause==='compaction')
+    return `<div class="cwgrowth compact">↺ context Δ <b>${sg(dTotal)} B</b> vs call #${playhead} — <b>compaction rewrote history</b> (not a linear append; the prefix was rebuilt) <span class="taxest">字节=内容真数</span></div>`
+  return `<div class="cwgrowth">📈 re-sent Δ <b>${sg(dTotal)} B</b> vs call #${playhead}${dom.d?` · mostly <b>${dom.k}</b> (${sg(dom.d)} B)`:''} <span class="taxest">字节=内容真数 · 诊断非裁剪(裁剪归 harness)</span></div>`
+}
+// 步间 diff control (2.3 · D24): pick the diff reference step (default = previous). ◂/▸ move the
+// reference, ⟲ resets to previous. Shows the removed-count when the reference has blocks this step dropped.
+function diffControl(refIdx,removedN){
+  const ref=refIdx==null?'—':('#'+(refIdx+1)), pinned=diffRef!=null
+  return `<div class="cwdiff">Δ vs <b>${ref}</b>`+
+    `<button class="diffbtn" data-diff="prevref" title="reference an earlier step">◂</button>`+
+    `<button class="diffbtn" data-diff="nextref" title="reference a later step">▸</button>`+
+    (pinned?`<button class="diffbtn" data-diff="resetref" title="back to the previous step">⟲ prev</button>`:'')+
+    (removedN?`<span class="cwrem-n" title="blocks present in ${ref} but gone this step">⊖ ${removedN} removed</span>`:'')+
+    `</div>`
+}
+// removal-aware section (2.3 §验收#6 / D24): blocks that were in the reference step but are NOT in
+// this step — the demo's ◆new marking only showed additions, so compaction/rewrite drops were invisible.
+function removedSection(removed,refIdx){
+  if(!removed.length) return ''
+  const open=navOpen.has('cwremoved'), refN=refIdx!=null?('#'+(refIdx+1)):'?'
+  const rows=removed.map(b=>{ const h=blockHead(b)
+    return `<div class="cblk removed collapsed s-${b.sec}"><div class="cbh"><span class="cbrole">${esc(h.role)}</span><span class="cbtag">${h.tag}</span>${h.label?`<span class="cblabel">${h.label}</span>`:''}<span class="rembadge" title="was in ${refN}, dropped by this step — full text via 回源">⊖ removed</span></div></div>` }).join('')
+  return `<div class="cwremoved ${open?'open':''}"><div class="cwremhd" data-navtoggle-rem="1">⊖ <b>${removed.length}</b> block${removed.length!==1?'s':''} removed since ${refN} <span class="taxest">(present in the reference step, gone here)</span></div>${open?`<div class="cwrembody">${rows}</div>`:''}</div>`
+}
+function renderSaw(){
+  const peak=Math.max(1,anchor.peakCtx), N=anchor.calls.length
+  // D13: detail renders only the brush window [lo,hi); bars keep GLOBAL data-i (clicks/playhead
+  // stay correct), just fewer & wider. ticks/cache re-scale through the view-aware xOf → lockstep.
+  const lo=Math.max(0,Math.min(N-1,view.lo|0)), hi=Math.max(lo+1,Math.min(N,view.hi||N))
+  const win=[]; for(let i=lo;i<hi;i++) win.push([anchor.calls[i],i])
+  document.getElementById('sawrow').innerHTML='<div id="reviewbracket"></div>'+win.map(([s,i])=>{
+    const h=s.error?20:Math.max(3,Math.round((s.ctx||0)/peak*72))
+    return `<div class="bar ${s.error?'err':''} ${s.compaction?'compact':''} ${i===playhead?'cur':''}" data-i="${i}" style="height:${h}px" title="#${i+1} · ${s.error?'⚠ interrupted':kf(s.ctx)+' tok'}">${s.error?'':barSegs(s,h)}</div>`
+  }).join('')
+  document.querySelectorAll('#sawrow .bar').forEach(b=>b.onclick=()=>setPlayhead(+b.dataset.i,true))
+  // per-call cache reading, aligned 1:1 under the bars (truthful: read/total from real usage)
+  document.getElementById('cacherow').innerHTML=win.map(([s,i])=>{
+    const u=s.usage||{}, read=u.read||0, tot=(s.ctx||0)||1, r=read/tot
+    const cls=s.error?'lo':r>=0.7?'hi':r>=0.3?'mid':'lo'
+    return `<div class="cbar ${cls} ${i===playhead?'cur':''}" title="#${i+1} · cache read ${kf(read)}/${kf(tot)} · ${Math.round(r*100)}%"></div>`
+  }).join('')
+  const full=(lo===0&&hi===N)
+  document.getElementById('sawmid').textContent='conversation ctx ↑'
+  const ss=document.getElementById('sawstart'); if(ss) ss.textContent=full?'call #1':('call #'+(lo+1))
+  document.getElementById('sawend').textContent=full?('call #'+N):(`#${lo+1}–#${hi} of ${N}`)
+  document.getElementById('phlabel').textContent=` ${playhead+1}/${N} `
+  document.getElementById('lanehint').innerHTML=`💬 <b style="color:var(--fg)">conversation</b> — ${N} turns, peak ${kf(anchor.peakCtx)} tok${full?'':` · <span style="color:var(--dim)">viewing ${hi-lo}</span>`}`
+}
+// ── D13 overview strip + brush (focus+context navigator) ─────────────────────
+const OVW_BARCAP=60
+function renderOverview(){
+  const strip=document.getElementById('ovstrip'); if(!strip) return
+  const N=anchor?anchor.calls.length:0
+  if(!N){ strip.innerHTML=''; return }
+  // don't destroy the brush element (+ its pointer capture / drag closure) mid-drag: a live poll's
+  // render() would otherwise silently kill an in-flight drag. Just reposition; rebuild after the drag.
+  if(brushDragging){ repositionBrush(); return }
+  const peak=Math.max(1,anchor.peakCtx)
+  let bg='', sampled=false
+  if(N<=OVW_BARCAP){
+    // few steps: one discrete mini-bar per call (faithful, per-step)
+    bg='<div class="ovbars">'+anchor.calls.map((s,i)=>{
+      const h=Math.max(1,Math.round((s.ctx||0)/peak*20))
+      return `<div class="ovbar ${s.error?'err':''}" style="height:${h}px" title="#${i+1}"></div>`
+    }).join('')+'</div>'
+  } else {
+    // many steps: streamline. buckets B=min(N,240); each point on the SAME /N axis as the brush/pin
+    // (bucket-center step / N), so the streamline and the brush can't fencepost-drift. Only mark
+    // 采样显示 when buckets actually MERGE steps (N>240) — for 60<N≤240 it's per-step, no false label.
+    const B=Math.min(N,240); sampled=(N>B)
+    const pts=[]
+    for(let k=0;k<B;k++){
+      const a=Math.floor(k*N/B), b=Math.max(a+1,Math.floor((k+1)*N/B))
+      let mx=0; for(let j=a;j<b&&j<N;j++){ const cv=anchor.calls[j].ctx||0; if(cv>mx)mx=cv }
+      pts.push((((a+b)/2)/N*100).toFixed(2)+','+(22-Math.max(0.5,mx/peak*20)).toFixed(2))
+    }
+    bg=`<svg class="ovsvg" viewBox="0 0 100 22" preserveAspectRatio="none"><polyline points="${pts.join(' ')}"/></svg>`
+  }
+  strip.innerHTML=bg
+    +(sampled?'<span class="ovsample" title="downsampled — one point per bucket, not per step (fidelity: overview is a map, not verbatim)">采样显示 · sampled</span>':'')
+    +'<div class="ovpin" id="ovpin"></div>'
+    +'<div class="ovbrush" id="ovbrush" title="drag = pan · drag an edge = zoom · dbl-click = full"><span class="ovh ovh-l"></span><span class="ovh ovh-r"></span></div>'
+  repositionBrush()
+  wireBrush()
+}
+function repositionBrush(){
+  const N=anchor?anchor.calls.length:1
+  const b=document.getElementById('ovbrush')
+  if(b&&b.style){ b.style.left=(view.lo/N*100).toFixed(3)+'%'; b.style.width=((view.hi-view.lo)/N*100).toFixed(3)+'%' }
+  const p=document.getElementById('ovpin')
+  if(p&&p.style) p.style.left=((playhead+0.5)/N*100).toFixed(3)+'%'
+}
+// single entry point for changing the window. redraw=true rebuilds the overview backdrop
+// (session load / reset); during a drag we pass false so the captured brush element survives.
+function setView(lo,hi,redraw){
+  const N=anchor?anchor.calls.length:0; if(!N) return
+  lo=Math.max(0,Math.min(N-1,Math.round(lo)))
+  hi=Math.max(lo+1,Math.min(N,Math.round(hi)))
+  if(lo===view.lo&&hi===view.hi&&redraw!==true){ return }
+  view.lo=lo; view.hi=hi
+  renderSaw(); renderRails()
+  if(redraw) renderOverview(); else repositionBrush()
+}
+function wireBrush(){
+  const strip=document.getElementById('ovstrip'), brush=document.getElementById('ovbrush')
+  if(!strip||!brush||!brush.addEventListener) return
+  const N=()=>anchor?anchor.calls.length:1
+  const stripW=()=>{ try{ const r=strip.getBoundingClientRect(); return Math.max(1,r.width) }catch{ return 1 } }
+  let mode=null, startX=0, startLo=0, startHi=0
+  const down=(e,m)=>{ mode=m; brushDragging=true; startX=e.clientX; startLo=view.lo; startHi=view.hi
+    try{ const t=e.currentTarget||brush; t.setPointerCapture&&t.setPointerCapture(e.pointerId) }catch{}
+    if(e&&e.stopPropagation)e.stopPropagation(); if(e&&e.preventDefault)e.preventDefault() }
+  const move=e=>{ if(!mode) return
+    const n=N(), d=Math.round((e.clientX-startX)/stripW()*n)
+    if(mode==='pan'){ const dd=Math.max(-startLo,Math.min(n-startHi,d)); setView(startLo+dd,startHi+dd,false) }
+    else if(mode==='l'){ setView(Math.min(startHi-1,startLo+d),startHi,false) }
+    else if(mode==='r'){ setView(startLo,Math.max(startLo+1,startHi+d),false) } }
+  const up=()=>{ if(!mode)return; mode=null; brushDragging=false; renderOverview() } // rebuild backdrop (may be stale from a poll during the drag)
+  brush.addEventListener('pointerdown',e=>{ if(e&&e.target&&e.target.classList&&e.target.classList.contains('ovh')) return; down(e,'pan') })
+  brush.addEventListener('pointermove',move); brush.addEventListener('pointerup',up); brush.addEventListener('pointercancel',up)
+  brush.addEventListener('dblclick',e=>{ if(e&&e.preventDefault)e.preventDefault(); setView(0,N(),true) })
+  const hl=brush.querySelector('.ovh-l'), hr=brush.querySelector('.ovh-r')
+  ;[[hl,'l'],[hr,'r']].forEach(([h,m])=>{ if(h&&h.addEventListener){
+    h.addEventListener('pointerdown',e=>down(e,m)); h.addEventListener('pointermove',move)
+    h.addEventListener('pointerup',up); h.addEventListener('pointercancel',up) } })
+}
+
+// ── lane rails ──────────────────────────────────────────────────────────────
+const RKIND = {
+  monitor:'verbatim context · hover a tick to see what it reviewed',
+  probe:'measures the full context · hover to see the span',
+  aux:'no real context · click a tick for the input',
+  notify:'summarizes your activity → drives Desktop notifications · click for the output',
+  titlegen:'names the session (2-4 words) · click to see the label it produced',
+  quota:'max_tokens:1 keep-alive ping · output discarded · click for detail',
+  subagent:'own context stream · click a tick for detail',
+}
+function railHtml(l){
+  const col=collapsedRails.has(l.id)
+  const errs=l.calls.filter(c=>c.error).length
+  // point 3: title in the fixed left gutter (one row per track), lane aligned to the bars;
+  // the descriptive RKIND hint moves to the title tooltip to save width.
+  const title=`<div class="tgut railname ${col?'col':''}" data-toggle="${esc(l.id)}" title="${esc(RKIND[l.kind]||'')}">`+
+    `<span>${col?'▸':'▾'}</span> ${l.icon} <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(l.label)}</span> <span class="rc">${l.calls.length}</span>`+
+    `${l.kind==='monitor'&&l.flagged?` <span class="rflag">${l.flagged}⚑</span>`:''}${errs?` <span class="rflag" title="${errs} interrupted">⚠${errs}</span>`:''}</div>`
+  return `<div class="rail k-${l.kind} trow">${title}${col?'<div class="tlane"></div>':`<div class="tlane railbody" data-lane="${esc(l.id)}">${renderTicks(l)}</div>`}</div>`
+}
+function renderRails(){
+  const rl=lanes.filter(l=>l!==anchor)
+  // many short subagent lanes (e.g. a review/eval workflow's fan-out) would otherwise flood the
+  // rail area and bury the conversation — group them under ONE collapsed rail (default closed).
+  const subs=rl.filter(l=>l.kind==='subagent'), others=rl.filter(l=>l.kind!=='subagent')
+  subs.forEach(l=>{ if(!subSeeded.has(l.id)){ subSeeded.add(l.id); collapsedRails.add(l.id) } }) // each subagent starts collapsed
+  let html=''
+  if(subs.length>1){
+    const totalCalls=subs.reduce((n,l)=>n+l.calls.length,0)
+    html+=`<div class="rail k-subagent subgroup">`+
+      `<div class="railhead subgrouphd" data-subtoggle="1">${subgroupOpen?'▾':'▸'} 🧬 <b>subagents</b> <span class="rc">${subs.length} lanes · ${totalCalls} calls</span><span class="rkind">spawned Task/Agent streams (incl. review/eval fan-out) · expand to see each</span></div>`+
+      (subgroupOpen?`<div class="subkids">${subs.map(railHtml).join('')}</div>`:'')+
+      `</div>`
+  } else if(subs.length===1){ html+=railHtml(subs[0]) }
+  html+=others.map(railHtml).join('')
+  document.getElementById('rails').innerHTML = html || '<div style="color:var(--dimmer);font-size:10px;padding:6px 0">no other lanes in this session</div>'
+  // wire the subagent-group toggle
+  const sg=document.querySelector('#rails [data-subtoggle]'); if(sg) sg.onclick=()=>{ subgroupOpen=!subgroupOpen; renderRails() }
+  // wire per-lane toggles + ticks (only real lane heads, NOT the group head)
+  document.querySelectorAll('#rails [data-toggle]').forEach(h=>h.onclick=()=>{ const id=h.dataset.toggle; if(collapsedRails.has(id))collapsedRails.delete(id); else collapsedRails.add(id); renderRails() })
+  document.querySelectorAll('#rails .tick, #rails .pbar').forEach(t=>{
+    const lane=lanes.find(l=>l.id===t.dataset.lane), i=+t.dataset.i
+    t.onmouseenter=()=>{ if(lane.kind==='monitor'||lane.kind==='probe') highlightRange(lane,i) }
+    t.onmouseleave=()=>{ if(!selTick) clearRange() }
+    t.onclick=(e)=>{ e.stopPropagation(); selectTick(lane,i) }
+  })
+  // whole-rail interaction: click/hover ANYWHERE picks the nearest call (so every probe is reachable,
+  // not just the ~300 rendered ticks)
+  document.querySelectorAll('#rails .railbody').forEach(body=>{
+    const lane=lanes.find(l=>l.id===body.dataset.lane); if(!lane||!lane.calls.length)return
+    // pick the nearest call — but only among those IN the current window (matching what's rendered;
+    // out-of-window calls all sit clamped at an edge and would hijack edge clicks). Full window ⇒
+    // every call is in-window ⇒ full reachability (2.1 AC-全量可达) preserved. Fallback if none in-window.
+    const nearestX=e=>{ const r=body.getBoundingClientRect(); const f=(e.clientX-r.left)/Math.max(1,r.width)
+      let b=-1,bd=Infinity; lane.calls.forEach((c,i)=>{ if(!inWindow(c.ts))return; const d=Math.abs(xOf(c.ts)-f); if(d<bd){bd=d;b=i} })
+      if(b<0) lane.calls.forEach((c,i)=>{const d=Math.abs(xOf(c.ts)-f); if(d<bd){bd=d;b=i}}); return b }
+    body.style.cursor='pointer'
+    body.onmousemove=e=>{ if(lane.kind==='monitor'||lane.kind==='probe') highlightRange(lane,nearestX(e)) }
+    body.onmouseleave=()=>{ if(!selTick) clearRange() }
+    body.onclick=e=>selectTick(lane,nearestX(e))
+  })
+  if(selTick){ const el=document.querySelector(`#rails [data-lane="${cssq(selTick.laneId)}"][data-i="${selTick.i}"]`); if(el) el.classList.add('sel') }
+}
+function cssq(s){ return String(s).replace(/"/g,'\\"') }
+// D13: the saw is windowed to [view.lo,view.hi) — the rails MUST be too. Ticks whose step
+// position is outside the window are CULLED (not clamp-piled at the edges, which would desync
+// the rails from the bars = a visual lie). data-i stays the GLOBAL index so selectTick is correct.
+function inWindow(ts){ const lo=view.lo|0, hi=Math.max(lo+1, view.hi||anchorTs.length), p=stepPos(ts); return p>=lo && p<hi }
+function renderTicks(lane){
+  const win=lane.calls.map((c,i)=>({c,i})).filter(o=>inWindow(o.c.ts))
+  if(lane.kind==='probe'){
+    const MAX=300, step=Math.max(1,Math.ceil(win.length/MAX))
+    const peak=Math.max(1,lane.peakCtx)
+    return win.filter((_,j)=>j%step===0).map(({c,i})=>{
+      const h=Math.max(1,Math.round(c.ctx/peak*24))
+      return `<span class="pbar" data-lane="probe" data-i="${i}" style="left:${(xOf(c.ts)*100).toFixed(2)}%;height:${h}px" title="${kf(c.ctx)} tok @ ${fmtTime(c.ts)}"></span>`
+    }).join('')
+  }
+  return win.map(({c,i})=>
+    `<span class="tick ${c.flagged?'flag':''} ${c.error?'errtick':''}" data-lane="${esc(lane.id)}" data-i="${i}" style="left:${(xOf(c.ts)*100).toFixed(2)}%" title="${lane.icon} @ ${fmtTime(c.ts)} · ${c.error?'⚠ interrupted':'ctx '+kf(c.ctx)}"></span>`
+  ).join('')
+}
+function highlightRange(lane,i){
+  const c=lane.calls[i]; if(!c) return
+  const k=turnsReviewed(c.ts)
+  // bars carry a GLOBAL data-i, so gate on that (correct whether or not the view is windowed)
+  const bars=[...document.querySelectorAll('#sawrow .bar')]
+  bars.forEach(b=>b.classList.toggle('reviewed', (+b.dataset.i)<k))
+  const br=document.getElementById('reviewbracket')
+  // bracket spans the reviewed fraction of the CURRENT window, clamped to it
+  if(br){ br.style.display='block'; const frac=Math.max(0,Math.min(1,(k-view.lo)/Math.max(1,view.hi-view.lo))); br.style.width=(frac*100).toFixed(2)+'%' }
+}
+function clearRange(){ document.querySelectorAll('#sawrow .bar.reviewed').forEach(b=>b.classList.remove('reviewed')); const br=document.getElementById('reviewbracket'); if(br)br.style.display='none' }
+
+// ── lane-call detail panel ──────────────────────────────────────────────────
+function callInput(c){
+  const rq=c.rec?.request||{}
+  const sys=(rq.system||[]).map(b=>b.text||'').join('\n')
+  const persona=(sys.match(/You are [^\n]+/)||[''])[0]
+  const user=(rq.messages||[]).map(m=>Array.isArray(m.content)?m.content.map(b=>b.type==='text'?(b.text||''):`[${b.type}]`).join(''):String(m.content||'')).join('\n')
+  return {persona,sysFull:sys,user}
+}
+const callRef = k => `<a class="callref" data-call="${k}">call #${k}</a>`
+function selectTick(lane,i){
+  if(i==null||i<0||!lane.calls[i]) return // guard nearestX's empty-window fallback (never openDetail(-1))
+  selTick={laneId:lane.id,i}
+  document.querySelectorAll('#rails .tick.sel, #rails .pbar.sel').forEach(e=>e.classList.remove('sel'))
+  const el=document.querySelector(`#rails [data-lane="${cssq(lane.id)}"][data-i="${i}"]`); if(el)el.classList.add('sel')
+  if(lane.kind==='monitor'||lane.kind==='probe') highlightRange(lane,i); else clearRange()
+  // jump the conversation to the same moment in time
+  const c=lane.calls[i]; if(c&&anchor.calls.length){ playhead=nearestByTs(anchor,c.ts); follow=false; renderSaw(); renderContextWindow(); renderContextNav() }
+  openDetail(lane,i)
+}
+function openDetail(lane,i){
+  const c=lane.calls[i], det=document.getElementById('detail')
+  let title, body
+  if(lane.kind==='probe'){
+    const k=Math.max(1,turnsReviewed(c.ts))
+    const turn=anchor.calls[Math.min(anchor.calls.length-1,k-1)], rq=turn?.rec?.request||{}
+    title=`👁 count_tokens measurement · ${fmtTime(c.ts)}`
+    body=`<div class="din">A probe that sends the <b>entire</b> context to be counted (verbatim) and gets back only its size. A ruler, not a turn — no model output, not billed.</div>`+
+      `<div class="din">measured <b>${kf(c.ctx)}</b> tokens</div>`+
+      `<div class="din">payload ≈ the context around ${callRef(k)}: <b>${kf(rq.message_count)}</b> messages · system <b>${kf(rq.system_chars)}</b> chars · <b>${kf(rq.tool_count)}</b> tools · ${kf(rq.context_chars)} bytes on the wire.</div>`
+  } else if(lane.kind==='monitor'){
+    const {sysFull,user}=callInput(c), nr=c.norm||{}, k=Math.max(1,turnsReviewed(c.ts))
+    const v=(nr.text||'').replace(/<\/?block>/g,'').trim()
+    const ti=user.indexOf('<transcript>'), te=user.lastIndexOf('</transcript>')
+    // show the EXACT input message (原文); fold only the verbatim <transcript> body IN PLACE,
+    // so the reader sees the real structure of what was sent, not a description of it
+    let msgHtml
+    if(ti>=0&&te>ti){
+      const pre=user.slice(0,ti), trans=user.slice(ti,te+'</transcript>'.length), post=user.slice(te+'</transcript>'.length)
+      msgHtml=esc(pre)+collapse('<pre>'+esc(trans)+'</pre>',trans.length,'montr:'+lane.id+':'+i,`⟨verbatim conversation transcript · ${kf(c.ctx)} tok · call #1→#${k} · click to unfold⟩`)+esc(post)
+    } else msgHtml=esc(user)
+    title=`🛡 security check #${i+1} · ${fmtTime(c.ts)} · ${kf(c.ctx)} tok`
+    body=`<div class="din">verdict: <b style="color:${c.flagged?'var(--red)':'var(--green)'}">${esc(v||'clear')}</b> · reviewed your conversation ${callRef(1)} → ${callRef(k)}</div>`+
+      `<div class="din" style="color:var(--dim)">the monitor's exact input message (原文) — only the repeated <code>&lt;transcript&gt;</code> is folded:</div>`+
+      `<div class="din monmsg">${msgHtml}</div>`+
+      `<div class="din" style="color:var(--dim)">▸ monitor system rules (${kf(sysFull.length)} chars, identical every check):</div>`+
+      collapse('<pre>'+esc(sysFull)+'</pre>',sysFull.length,'det:'+lane.id+':'+i)
+  } else {
+    // aux family — differentiated per subkind (activity→notify / title-gen / quota), each with its raw input
+    const {persona,user}=callInput(c), nr=c.norm||{}
+    const out=nr.text||'', model=String(c.rec?.request?.model||'').replace('claude-','')
+    title=`${lane.icon} ${esc(lane.label)} #${i+1} · ${fmtTime(c.ts)}`
+    let lead
+    if(lane.kind==='notify'){
+      let st; try{ const j=JSON.parse(out.replace(/```json|```/g,'').trim()); st=`state=<b>${esc(j.state||'?')}</b> · tempo=${esc(j.tempo||'?')}${j.needs?` · <b style="color:var(--amber)">needs: ${esc(j.needs)}</b>`:''}<br>${esc(j.detail||j.output?.result||'')}` }catch{ st=esc(clip(out,300)) }
+      lead=`<div class="din">📣 <b>Background activity summary</b> → drives Claude Desktop's push notifications (agent done / needs you). The client consumes this; it never enters your conversation.</div>`+
+        `<div class="din" style="border-left:2px solid var(--green);padding-left:8px">${st}</div>`
+    } else if(lane.kind==='titlegen'){
+      lead=`<div class="din">🏷 <b>Session title generator</b> — this is where the session's short name comes from.</div>`+
+        `<div class="din">generated label: <b style="color:var(--cyan)">${esc(out||'(none)')}</b></div>`
+    } else if(lane.kind==='quota'){
+      lead=`<div class="din">🔌 <b>Quota / keep-alive ping</b> · <code>max_tokens:1</code>. Confirms the account can call and warms the connection; the reply <code>${esc(out||'#')}</code> is <b>discarded</b>.</div>`
+    } else {
+      lead=`<div class="din">${esc(model)} · output: <b>${esc(out||'(none)')}</b></div>`
+    }
+    body=lead+`<div class="din persona">${esc(persona)}</div>`+
+      `<div class="din" style="color:var(--dim)">input (原文):</div>`+collapse('<pre>'+esc(user)+'</pre>',user.length,'det:'+lane.id+':'+i)
+  }
+  det.className='open k-'+lane.kind
+  det.innerHTML=`<div class="dclose" id="dclose">✕ close</div><h3>${title}</h3>${body}`
+}
+function closeDetail(){ selTick=null; clearRange(); const d=document.getElementById('detail'); d.className=''; document.querySelectorAll('#rails .sel').forEach(e=>e.classList.remove('sel')) }
+
+// ── the ONE faithful context window: exactly tools → system → messages, in assembly order ──
+// The middle window IS the ground truth of what the model received this call — no "not in list",
+// no separate raw column. Compaction naturally swaps the whole window (its content changed).
+function ctxArg(b){ // short arg preview for a tool_use block header
+  const inp=(b&&b.input)||{}
+  if(inp.file_path||inp.path||inp.notebook_path) return relPath(String(inp.file_path||inp.path||inp.notebook_path))
+  if(inp.command) return String(inp.command)
+  if(inp.pattern) return String(inp.pattern)
+  if(inp.url||inp.query) return String(inp.url||inp.query)
+  if(inp.description||inp.subagent_type) return String(inp.description||inp.subagent_type)
+  if(inp.skill) return 'skill: '+String(inp.skill||inp.command||'')
+  return ''
+}
+const preview=s=>String(s||'').replace(/\s+/g,' ').trim().slice(0,90)
+function blockHead(b){
+  if(b.sec==='tools') return {role:'tool',tag:'def'+(b.mcp?' · MCP':''),label:esc(b.name)}
+  if(b.sec==='system') return {role:'system',tag:b.label,label:''}
+  const r=b.role, k=b.kind
+  if(k==='thinking'||k==='redacted_thinking') return {role:'assistant',tag:'thinking',label:''}
+  if(k==='tool_use'||k==='server_tool_use') return {role:'assistant',tag:'action · '+esc(b.toolName),label:esc(preview(ctxArg(b.block)))}
+  if(k==='tool_result') return {role:r,tag:'observation'+(b.block&&b.block.is_error?' · error':''),label:''}
+  if(k==='image') return {role:r,tag:'image',label:''}
+  if(k==='document') return {role:r,tag:'document',label:''}
+  const tag = r==='user'?'user':r==='assistant'?'say':r==='system'?'system-reminder':'text'
+  const txt = typeof b.block==='string'?b.block:(b.block&&typeof b.block.text==='string')?b.block.text:''
+  return {role:r,tag,label:esc(preview(txt))}
+}
+function ctxBlock(b,i,prevKeys){
+  const h=blockHead(b)
+  // D17② per-block first-appearance: this block is NEW this call (not carried from the previous one),
+  // i.e. part of the growth. Reused blocks (the cache-eligible prefix) stay unmarked to keep it quiet.
+  const life=(prevKeys&&!b.volatile&&!prevKeys.has(b.key))?`<span class="lifemark" title="first appears this call — new content added to the context (part of the re-sent Δ)">◆ new</span>`:''
+  const cc=b.cc?`<span class="ccbadge" title="Claude Code set a cache_control breakpoint here — the cacheable prefix is stored up to and including this block (${esc(JSON.stringify(b.cc))})">⟐ cache bp</span>`:''
+  const vol=b.volatile?`<span class="volbadge" title="carries a per-request nonce (cch=…, cc_prev_req=…): its bytes change every call, yet cache-hit stays ~100% — Anthropic excludes this billing block from the cache key">↻ per-call nonce</span>`:''
+  // 保真标 (invariant 4 / spec 2.3 §验收#2): mark each tool def's faithfulness. D15 capture stores
+  // the full schema verbatim → 'verbatim' (part of AC-1). Old v0 traces kept only name + param names
+  // + description length → 'metadata', so nobody mistakes the metadata for a verbatim schema.
+  const meta=b.sec==='tools'?(b.verbatim
+    ?`<span class="metabadge" style="border-style:solid;color:var(--green);border-color:var(--green)" title="faithfulness: verbatim — the full tool schema (description + JSON input_schema) is captured on the wire (D15). Byte-faithful, part of AC-1.">verbatim</span>`
+    :`<span class="metabadge" title="faithfulness: metadata — this v0 trace stored only name + param names + description length; the full JSON schema text was NOT retained. The model received the full schema; asight didn't store it. Fixed going forward by D15 verbatim capture (RFC 4.1 §验收 #3).">metadata</span>`):''
+  const rk=b.resKey?` data-rk="${esc(b.resKey)}"`:''
+  const open=openBlocks.has(i) // remembered across re-renders so the live poll can't collapse it
+  return `<div class="cblk ${open?'':'collapsed'} s-${b.sec} r-${esc(b.role)} k-${esc(b.kind)}" data-bi="${i}"${rk}>`+
+    `<div class="cbh"><span class="cbrole">${esc(h.role)}</span><span class="cbtag">${h.tag}</span>${h.label?`<span class="cblabel">${h.label}</span>`:''}${cc}${vol}${meta}${life}<span class="cbchars">${b.sec==='system'?kf(b.chars)+'c':''}</span></div>`+
+    `<div class="cbc"${open?' data-filled="1"':''}>${open?ctxBody(b):''}</div></div>`
+}
+function ctxBody(b){
+  let txt
+  if(b.sec==='tools') txt=b.verbatim
+    ? `${b.name}${b.ttype?' · '+b.ttype:''}\n\ndescription:\n${b.desc||'—'}${b.schema!==undefined?`\n\ninput_schema:\n${JSON.stringify(b.schema,null,2)}`:''}`
+    : `${b.name}${b.ttype?' · '+b.ttype:''}\nparams (names only): ${(b.props||[]).join(', ')||'—'}\ndescription: ${kf(b.descChars)} chars captured — schema text not retained (length only)\n\n⚠ metadata only: the full JSON schema (param types / required / enums / nesting) and the description text were NOT captured in this v0 trace. The model DID receive the full schema — asight's v0 capture just didn't store it. This is a capture boundary, not display-clipping or source-truncation. Fixed going forward by verbatim req_body capture (D15, RFC 4.1 §验收 #3).`
+  else if(b.sec==='system') txt=b.text
+  else txt=rawContentText(b.block)
+  const t=String(txt||'')
+  const shown=t.length>20000?t.slice(0,20000)+`\n… (${kf(t.length)} chars total)`:t
+  return `<pre class="cbpre">${esc(shown)}</pre>`
+}
+function toggleCtxBlock(el){
+  if(!el)return
+  const i=+el.dataset.bi, wasCollapsed=el.classList.contains('collapsed')
+  el.classList.toggle('collapsed')
+  if(wasCollapsed){ openBlocks.add(i); const bc=el.querySelector('.cbc'); if(bc&&!bc.dataset.filled){ bc.innerHTML=ctxBody(curFlat[i]); bc.dataset.filled='1' } }
+  else openBlocks.delete(i)
+}
+function sectionHeader(sec,counts,tax){
+  const M={tools:{ic:'⚙',t:'TOOLS',d:'definitions — the tools the model can call (per-block faithfulness badge: verbatim full schema under D15, or metadata-only for old v0 traces)'},
+    system:{ic:'▤',t:'SYSTEM',d:'the system-prompt stack Claude Code assembles'},
+    messages:{ic:'💬',t:'MESSAGES',d:'the conversation, in order'}}[sec]||{ic:'•',t:sec,d:''}
+  // D17② per-section weight read-out: bytes (content real) + % of call + ≈tok (char-proxy estimate).
+  // messages splits into history / task (承 turn 分组); provider gives no per-segment token → 估.
+  let w=''
+  if(tax){
+    if(sec==='tools'||sec==='system') w=`<span class="cwsecw">${kf(tax.seg[sec])} B · ${tax.pct(sec)}% · ≈${kf(tax.est(sec))} tok</span>`
+    else if(sec==='messages'){ const mB=tax.seg.history+tax.seg.task
+      w=`<span class="cwsecw">${kf(mB)} B · ${tax.pct('history')+tax.pct('task')}% · history ${tax.pct('history')}% / task ${tax.pct('task')}% <span class="cwsecest" title="bytes = model-visible content; ≈tok is a char/4 proxy (no per-segment token truth)">≈估</span></span>` }
+  }
+  return `<div class="cwsec" id="sec-${sec}"><span class="cwsecic">${M.ic}</span><b>${M.t}</b> <span class="cwsecn">${counts[sec]||0}</span>${w}<span class="cwsecd">${M.d}</span></div>`
+}
+// Truthful cache marker. "cache-identical" (not byte-identical — the volatile billing block's bytes
+// change yet stay cache-excluded). read>0 → actually reused; read===0 → prefix matched but the cache
+// entry expired (TTL) so it was re-cached, not read. idx===0 → the leading block itself diverged.
+// D17④ ground-truth: read=0 & write=0 with a reusable prefix = the provider didn't credit a prefix
+// that WAS reusable → suspect provider mis-cache/mis-bill (research pain #9), not your drift.
+function cacheMarker(brk,read,create){
+  const whole=brk.idx===0
+  const note=brk.rawIdx<brk.idx?` <span class="cmnote">(billing nonce at block #${brk.rawIdx+1} changed but is cache-excluded)</span>`:''
+  const gt=brk.gt // baked server-side by assembleSession (D18a)
+  let txt
+  if(whole) txt=`⚡ whole context recomputed — the leading block changed (tool-set / system prefix), so no prefix is reusable vs call #${playhead}. ${kf(read)} tok read from cache.`
+  else if(read>0) txt=`⚡ ${brk.idx} block${brk.idx!==1?'s':''} above form the reused KV-cache prefix — cache-identical to call #${playhead} (${kf(read)} tok read). New content below ↓${note}`
+  else if(gt==='provider-contradiction') txt=`⚡ ${brk.idx} block${brk.idx!==1?'s':''} above are cache-identical to call #${playhead} — yet 0 read AND 0 written. The reusable prefix wasn't credited: suspect provider mis-cache / mis-bill, not your prefix drift. New content below ↓${note}`
+  else txt=`⚡ ${brk.idx} block${brk.idx!==1?'s':''} above are cache-identical to call #${playhead}, but the cached prefix expired (TTL) — re-cached (${kf(create)} tok), 0 read. New content below ↓${note}`
+  const gtRow=gt==='provider-contradiction'
+    ? `<div class="cmwhy"><span class="cmcause cmc-bad" title="your outbound prefix is byte-consistent, yet the provider credited neither read nor write — the suspicion points at the provider (product proves it with an independent prefix_sha256)">⚠ ground-truth: provider-contradiction</span> <span class="cmest">结构估计(独立字节校验见 prefix_sha256)</span></div>`
+    : ''
+  return `<div class="cachemark ${whole?'whole':''}" id="cachebrk"><div class="cmline"></div><div class="cmtext">${txt}${cacheWhy(brk)}${gtRow}</div></div>`
+}
+// D17① — WHY the prefix diverged + is-it-your-fault + fix hint. This is a STRUCTURAL inference (not
+// the provider's real cache boundary — the numeric hit truth above comes from usage), so it's tagged
+// "结构估计" per invariant 4. Attribution color-codes ok/warn/bad; byte offset localizes the break.
+function cacheWhy(brk){
+  if(!brk.cause||brk.cause==='first-call'||brk.cause==='append') return ''
+  const cls={harmless:'ok','provider-excluded':'ok',review:'warn',harness:'warn',yours:'bad'}[brk.attribution]||'warn'
+  const loc=brk.byteOffset!=null?` <span class="cmloc">first differs at byte ~${brk.byteOffset} in block #${brk.idx+1}${brk.byteContext?': “'+esc(clip(brk.byteContext,40))+'”':''}</span>`:''
+  const fix=brk.fixHint?` <span class="cmfix">↳ ${esc(brk.fixHint)}</span>`:''
+  return `<div class="cmwhy"><span class="cmcause cmc-${cls}" title="structural inference — not the provider's real cache boundary">why: ${esc(brk.causeLabel||brk.cause)}</span>${loc}${fix} <span class="cmest" title="structural estimate, not the provider's real cache boundary">结构估计</span></div>`
+}
+// point 4: click a resource's name / its 👁 button → show its content here instead of the call raw
+function viewResource(step,resKey,label){
+  if(step!=null && step>=0 && step!==playhead) setPlayhead(step,true) // load the call where it's live (clears viewPin)
+  viewPin={resKey,label}; renderRawPanel()
+}
+function renderResourceView(el){
+  const flat=curFlat||[]
+  // prefer a verbatim-content block (e.g. a skill's SKILL.md text body) over a tool_use call
+  // record when both carry the same resKey; files (resKey only on their Read tool_use) fall back.
+  let b=viewPin.resKey&&(flat.find(x=>x.resKey===viewPin.resKey&&x.kind!=='tool_use')||flat.find(x=>x.resKey===viewPin.resKey))
+  if(!b&&viewPin.label){ const lab=viewPin.label
+    b=flat.find(x=>{ const bl=x.block; if(!bl)return false; const inp=bl.input||{}
+      if((inp.file_path||inp.path||inp.notebook_path)===lab) return true
+      const t=typeof bl==='string'?bl:(bl.text||''); return typeof t==='string'&&t.length>0&&t.includes(lab) }) }
+  const path=relPath(viewPin.label||viewPin.resKey||'')
+  const notResolvable=`<div class="rpk">not resolvable to a single block in this call (entered earlier or evicted) — click the card to locate it on the timeline.</div>`
+  let body
+  if(String(viewPin.resKey||'').startsWith('mcp::')){
+    // an MCP capability = the tool schemas that server put on the wire. Show them as metadata (v0
+    // capture stored metadata, not the verbatim schema text) — labelled honestly, never faked as content.
+    const tools=flat.filter(x=>x.sec==='tools'&&x.resKey===viewPin.resKey)
+    const vb=tools.some(t=>t.verbatim)
+    body=tools.length
+      ? `<div class="rpk">🧩 <b>${esc(viewPin.label||viewPin.resKey)}</b> · <b>${tools.length}</b> tool${tools.length>1?'s':''} on the wire</div>`+
+        tools.map(t=>`<div class="rpk">⚙ ${esc(t.name)} · ${kf(t.descChars||0)}c desc · ${(t.props||[]).length} params</div>`).join('')+
+        (vb
+          ? `<div class="rpk" style="color:var(--green)">✓ full schemas captured verbatim (D15) — open a tool block in the context window (⚙ TOOLS) to read the exact schema.</div>`
+          : `<div class="rpk" style="color:var(--amber)">⚠ metadata only — the model received the full MCP tool schemas; this v0 trace stored just their metadata (names / param counts / sizes), not the verbatim schema text (fixed going forward by D15).</div>`)
+      : notResolvable
+  } else {
+    body=b
+      ? `<pre class="rawpre">${esc(clip(String(rawContentText(b.block)||(b.sec==='tools'?b.name:'')||''),6000))}</pre>`
+      : notResolvable
+  }
+  el.innerHTML=`<div class="rphd">📄 ${esc(path)} <span class="rpx" id="rpx">✕ call raw</span></div>${body}`
+  const x=document.getElementById('rpx'); if(x)x.onclick=()=>{ viewPin=null; renderRawPanel() }
+}
+function renderRawPanel(){
+  const el=document.getElementById('rawpanel'); if(!el) return
+  if(viewPin) return renderResourceView(el)
+  const call=anchor&&anchor.calls[playhead]
+  if(!call||!call.rec){ el.innerHTML='<div class="rpempty">no request captured for this step</div>'; return }
+  const rq=call.rec.request||{}, u=call.usage||{} // neutral canonical usage (D18a Q1)
+  const read=u.read||0, create=u.create||0, fresh=u.fresh||0, out=u.out||0
+  el.innerHTML=`<div class="rphd">🩻 raw · call #${playhead+1}</div>`+
+    `<div class="rpk">${esc(String(rq.model||'').replace('claude-',''))} · ${kf(rq.context_chars)} bytes wire</div>`+
+    `<div class="rpk">msgs <b>${kf(rq.message_count)}</b> · tools <b>${kf(rq.tool_count)}</b> · system <b>${kf(rq.system_chars)}</b>c</div>`+
+    `<div class="rpk">usage · read <b>${kf(read)}</b> · new-cache <b>${kf(create)}</b> · fresh <b>${kf(fresh)}</b> · out <b>${kf(out)}</b></div>`
+}
+function renderContextWindow(){
+  renderRawPanel()
+  const win=document.getElementById('ctxwin')
+  const call=anchor&&anchor.calls[playhead]
+  if(!call||!call.rec){ curFlat=[]; win.innerHTML='<div class="empty">No request captured for this step (a probe or an interrupted call).</div>'; return }
+  const flat=call.flat||[]; curFlat=flat // pre-baked server-side (D18a)
+  const rq=call.rec.request||{}, u=call.usage||{} // neutral canonical usage (D18a Q1)
+  // cache-break vs the PREVIOUS in-lane call (compute both flats on demand — light: 2 calls, not all)
+  const prevCall=playhead>0?anchor.calls[playhead-1]:null
+  const prevFlat=prevCall&&prevCall.rec?(prevCall.flat||null):null // pre-baked (for D17② segTax Δ below)
+  const brk=call.cacheBreak||{idx:0,rawIdx:0,gt:null} // pre-baked cache-break vs prev in-lane call
+  const read=u.read||0, create=u.create||0, fresh=u.fresh||0
+  const totIn=read+create+fresh, hitPct=totIn?Math.round(read/totIn*100):0
+  const model=String(rq.model||'').replace('claude-','')
+  const counts={}; flat.forEach(b=>counts[b.sec]=(counts[b.sec]||0)+1)
+  const tax=segTax(flat) // D17② schema-tax segment weights
+  const prevTax=prevFlat?segTax(prevFlat):null // D17② context-growth Δ
+  // 步间 diff (2.3 · D24): reference = diffRef when valid, else the previous in-lane step. added =
+  // ◆new (cur key ∉ ref); removed = ref blocks absent from cur — surfaced EXPLICITLY (the gap the
+  // demo's ◆new-only marking missed under compaction/rewrite). Pure key-set diff, zero byte-diff.
+  const refIdx=(diffRef!=null&&diffRef>=0&&diffRef<anchor.calls.length&&diffRef!==playhead&&anchor.calls[diffRef]&&anchor.calls[diffRef].flat)?diffRef:(prevCall?playhead-1:null)
+  const refFlat=refIdx!=null?(anchor.calls[refIdx].flat||null):null
+  const refKeys=refFlat?new Set(refFlat.map(b=>b.key)):null // ◆new marks vs the diff reference
+  const curKeys=new Set(flat.map(b=>b.key))
+  const removed=refFlat?refFlat.filter(b=>!b.volatile&&!curKeys.has(b.key)):[]
+  let html=`<div class="cwmeta">`+
+    `<div class="cwtitle">context @ call <b>#${playhead+1}</b>/${anchor.calls.length} · ${esc(model)} · ${fmtTime(call.ts)}</div>`+
+    `<div class="cwsub">the exact input to the model, in assembly order <b>tools → system → messages</b> · ${kf(flat.length)} blocks · ${kf(rq.context_chars)} bytes on the wire</div>`+
+    `<div class="cwcache">⚡ KV cache this call: <b class="chit">${hitPct}%</b> reused · <b>${kf(read)}</b> tok read · <b>${kf(create)}</b> newly cached · <b>${kf(fresh)}</b> fresh${brk.firstCall?(read?' · first captured call — reuse is from a warm cross-session cache prefix (tools+system)':' · first call, nothing to reuse'):''}</div>`+
+    taxSummary(tax)+growthLine(tax,prevTax,brk)+diffControl(refIdx,removed.length)+
+  `</div>`+removedSection(removed,refIdx)
+  const mark=i=>(!brk.firstCall && i===brk.idx && brk.idx<flat.length)?cacheMarker(brk,read,create):''
+  const msgStart=flat.findIndex(b=>b.sec==='messages')
+  // tools + system: flat blocks (unchanged)
+  let lastSec=null
+  flat.forEach((b,i)=>{
+    if(msgStart>=0 && i>=msgStart) return
+    if(b.sec!==lastSec){ html+=sectionHeader(b.sec,counts,tax); lastSec=b.sec }
+    html+=mark(i)+ctxBlock(b,i,refKeys)
+  })
+  // messages: grouped into collapsible turns (user query ▸ call turn)
+  if(msgStart>=0){
+    html+=sectionHeader('messages',counts,tax)
+    const turns=messageTurns(flat)
+    if(lastTurnCall!==playhead){ turnOpen.clear(); if(turns.length) turnOpen.add(turns.length-1); lastTurnCall=playhead } // default: latest turn open
+    turns.forEach((t,ti)=>{
+      const body=t.items.map(i=>mark(i)+ctxBlock(flat[i],i,refKeys)).join('')
+      html+=`<div class="cwturn ${turnOpen.has(ti)?'':'collapsed'}" data-turn="${ti}">`+
+        `<div class="cwturnhd"><span class="cwturnq">${t.query?'🗣 ':'⋯ '}${esc(t.label)}${t.acts?`<span class="qk">${esc(t.acts)}</span>`:''}</span><span class="cwturnn">${t.items.length}</span></div>`+
+        `<div class="cwturnbody">${body}</div></div>`
+    })
+  }
+  win.innerHTML=html
+  win.querySelectorAll('.diffbtn').forEach(b=>b.onclick=()=>{ const a=b.dataset.diff, N=anchor.calls.length, base=refIdx==null?playhead:refIdx
+    if(a==='resetref') diffRef=null
+    else if(a==='prevref'){ let r=base-1; if(r<0)r=0; if(r===playhead)r=Math.max(0,r-1); diffRef=r }
+    else if(a==='nextref'){ let r=base+1; if(r>=N)r=N-1; if(r===playhead)r=Math.min(N-1,r+1); diffRef=(r===playhead)?null:r }
+    renderContextWindow() })
+  win.querySelectorAll('[data-navtoggle-rem]').forEach(h=>h.onclick=()=>{ navOpen.has('cwremoved')?navOpen.delete('cwremoved'):navOpen.add('cwremoved'); renderContextWindow() })
+  win.querySelectorAll('.cbh').forEach(h=>h.onclick=()=>toggleCtxBlock(h.closest('.cblk')))
+  win.querySelectorAll('.cwturnhd').forEach(h=>h.onclick=()=>{ const ti=+h.closest('.cwturn').dataset.turn; turnOpen.has(ti)?turnOpen.delete(ti):turnOpen.add(ti); renderContextWindow() })
+}
+function clip(s,n){ s=String(s??''); return s.length>n?s.slice(0,n)+' …':s }
+function ekey(e){ return `${e.step}:${e.type}:${(e.text||e.arg||e.source||'').length}` }
+function collapse(inner,len,key,label){
+  if(len<=COLLAPSE) return inner
+  const open=expanded.has(key)
+  const shut=label||('▼ show all '+kf(len)+' chars')
+  return `<div class="collapsible ${open?'open':''}" data-k="${esc(key)}"><span class="edge" title="expand / collapse"></span><div class="cwrap">${inner}</div><div class="more" data-len="${kf(len)}"${label?` data-label="${esc(label)}"`:''}>${open?'▲ collapse':shut}</div></div>`
+}
+
+// ── nav sidebar: outline of THIS context (jump within the window) + lifecycle ACROSS the session ──
+const navGroup=(key,ic,label,count,kidsHtml)=>{
+  const open=navOpen.has(key)
+  return `<div class="navrow head ${open?'open':''}" data-navtoggle="${esc(key)}"><span class="navic">${ic}</span><span class="navlbl">${esc(label)}</span><span class="navct">${count}</span></div>`+
+    (open?`<div class="navkids">${kidsHtml}</div>`:'')
+}
+function humanTurns(flat){
+  const out=[]
+  flat.forEach((b,i)=>{
+    if(b.sec!=='messages'||b.role!=='user'||b.kind!=='text')return
+    const raw=(b.block&&b.block.text)||''
+    const human=raw.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g,'').trim()
+    if(human) out.push({label:preview(human),fi:i})
+  })
+  return out
+}
+// Group the messages section into TURNS (point 2): a turn opens at a human user-text
+// message (query) and runs until the next one — carrying the assistant's call turn
+// (thinking / tool_use / text) and the tool_results that answer it.
+function messageTurns(flat){
+  const turns=[]; let cur=null
+  flat.forEach((b,i)=>{
+    if(b.sec!=='messages') return
+    const raw=(b.block&&b.block.text)||''
+    const human=(b.role==='user'&&b.kind==='text')?raw.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g,'').trim():''
+    if(human||!cur){ cur={label:human?preview(human):'(context / tool results)',query:!!human,items:[]}; turns.push(cur) }
+    cur.items.push(i)
+  })
+  // per-turn action summary for the collapsed header (what the call turn did)
+  turns.forEach(t=>{ const k=t.items.map(i=>flat[i].kind); t.acts=[k.filter(x=>x==='tool_use'||x==='server_tool_use').length&&(k.filter(x=>x==='tool_use'||x==='server_tool_use').length+' tool'),k.includes('thinking')&&'think',k.includes('tool_result')&&'result'].filter(Boolean).join(' · ') })
+  return turns
+}
+function openTurnFor(fi){ const turns=messageTurns(curFlat); const ti=turns.findIndex(t=>t.items.includes(fi)); if(ti>=0&&!turnOpen.has(ti)){ turnOpen.add(ti); renderContextWindow(); return true } return false }
+function renderContextNav(){
+  // B split: the OUTLINE of this context stays in the board (#ctxnav); the resource
+  // lifecycle ("across the session") moves to the right page (#resexp).
+  const nav=document.getElementById('ctxnav'), rex=document.getElementById('resexp')
+  const call=anchor&&anchor.calls[playhead]
+  if(!call){ nav.innerHTML=''; if(rex)rex.innerHTML=''; return }
+  const flat=curFlat.length?curFlat:(call.flat||[]) // pre-baked (D18a)
+  const counts={}; flat.forEach(b=>counts[b.sec]=(counts[b.sec]||0)+1)
+  const sysBlocks=flat.map((b,i)=>({b,i})).filter(x=>x.b.sec==='system')
+  const u=call.usage||{}, read=u.read||0, tot=read+(u.create||0)+(u.fresh||0)
+  let h=`<div class="navz">this context · #${playhead+1}</div>`
+  const toolBlocks=flat.map((b,i)=>({b,i})).filter(x=>x.b.sec==='tools')
+  const toolKids=toolBlocks.map(x=>`<div class="navsub" data-jumpfi="${x.i}"><span class="nsl">${x.b.mcp?'🔌':'⚙'} ${esc(x.b.name)}</span></div>`).join('')||'<div class="navsub" style="opacity:.5">no tools in view</div>'
+  h+=navGroup('tools','⚙','tools',counts.tools||0,toolKids)
+  const sysKids=sysBlocks.map(x=>`<div class="navsub" data-jumpfi="${x.i}"><span class="nsl">${esc(x.b.label)}</span>${x.b.cc?'<span class="cc" title="cache breakpoint">⟐</span>':''}${x.b.volatile?'<span class="vol" title="per-call nonce">↻</span>':''}<span class="nsx">${kf(x.b.chars)}c</span></div>`).join('')
+  h+=navGroup('sys','▤','system',counts.system||0,sysKids)
+  const turns=humanTurns(flat)
+  const turnKids=turns.length?turns.map(t=>`<div class="navsub" data-jumpfi="${t.fi}"><span class="nsl">🗣 ${esc(t.label)}</span></div>`).join(''):'<div class="navsub" style="opacity:.5">no plain-text user turns in view</div>'
+  h+=navGroup('msg','💬','messages',counts.messages||0,turnKids)
+  h+=`<div class="navrow" data-jump="cachebrk"><span class="navic">⚡</span><span class="navlbl">cache break</span><span class="navct">${tot?Math.round(read/tot*100):0}%</span></div>`
+  nav.innerHTML=h
+  if(rex) rex.innerHTML=`<div class="resz">resources · across the session</div>`+lifecycleNav()
+  // wire jump/toggle handlers on BOTH containers (outline + resource explorer)
+  ;[nav,rex].filter(Boolean).forEach(root=>{
+    root.querySelectorAll('[data-navtoggle]').forEach(e=>e.onclick=()=>{ const k=e.dataset.navtoggle; navOpen.has(k)?navOpen.delete(k):navOpen.add(k); renderContextNav() })
+    root.querySelectorAll('[data-jump]').forEach(e=>e.onclick=()=>jumpToAnchor(e.dataset.jump))
+    root.querySelectorAll('[data-jumpfi]').forEach(e=>e.onclick=()=>jumpToBlockIndex(+e.dataset.jumpfi))
+    root.querySelectorAll('[data-view]').forEach(e=>e.onclick=ev=>{ ev.stopPropagation(); viewResource(+e.dataset.viewstep,e.dataset.view,e.dataset.viewlabel) })
+    root.querySelectorAll('[data-navstep]').forEach(e=>e.onclick=()=>jumpToStepAndBlock(+e.dataset.navstep,e.dataset.navres||''))
+    root.querySelectorAll('[data-navmore]').forEach(e=>e.onclick=()=>{ navSeenExpanded=!navSeenExpanded; renderContextNav() })
+  })
+}
+// lifecycle lists — the evict/inj history, reused from the resource ledger data (across steps).
+function lifecycleNav(){
+  const N=Math.max(1,anchor.calls.length)
+  const L=gi=>{ const v=anchor.giLocal.get(gi); return v==null?N:v }
+  const res=anchor.resources||[], seen=anchor.seenFiles||[]
+  const files=res.filter(r=>r.kind==='file'), loaded=res.filter(r=>r.kind==='scaffold')
+  const skills=res.filter(r=>r.kind==='skill')
+  const caps=res.filter(r=>r.kind==='capability'), dl=[...res.filter(r=>r.kind==='dir'),...res.filter(r=>r.kind==='link')]
+  let h=''
+  if(files.length){
+    const kids=files.map(r=>{
+      const enter=L(r.segments[0].enter), lastSeg=r.segments[r.segments.length-1]
+      const live=r.segments.some(s=>{const e=L(s.enter),ev=s.evict==null?N:L(s.evict);return e<=playhead&&ev>playhead})
+      const notYet=enter>playhead, evAt=lastSeg.evict==null?null:L(lastSeg.evict)
+      const state=notYet?'pend':(!live&&!notYet?'dead':'')
+      const life=live?'<span class="en">live</span>':(evAt!=null?`<span class="ev">✂#${evAt+1}</span>`:'')
+      const vd=`data-view="file::${esc(r.label)}" data-viewstep="${enter}" data-viewlabel="${esc(r.label)}"`
+      return `<div class="navsub ${state}" data-navstep="${enter}" data-navres="file::${esc(r.label)}"><span class="nsl viewname" ${vd}>${esc(relPath(r.label))}</span><span class="viewbtn" ${vd} title="show file content in the panel">👁</span>${life}<span class="nsx">#${enter+1}</span></div>`
+    }).join('')
+    h+=navGroup('life-file','📂','files opened',files.length,kids)
+  }
+  if(seen.length){
+    const CAP=40, show=navSeenExpanded?seen:seen.slice(0,CAP)
+    const chips=show.map(s=>{ const fl=L(s.firstStep); return `<span class="navchip ${fl>playhead?'future':''}" data-navstep="${fl}" title="${esc(s.path)} · seen ${s.count}× · first @#${fl+1}">${esc(relPath(s.path))}</span>` }).join('')
+    const more=seen.length>CAP?`<div class="navmore" data-navmore="1">${navSeenExpanded?'▲ fewer':'▼ all '+seen.length}</div>`:''
+    h+=navGroup('life-seen','👁','only seen (names)',seen.length,`<div class="navseen">${chips}</div>${more}`)
+  }
+  if(loaded.length){
+    // loaded context (auto-loaded scaffold) resolves to a VERBATIM system-reminder block → give it
+    // the same files-style preview affordance (name/👁 → viewResource, card body → locate).
+    const kids=loaded.map(r=>{ const enter=L(r.segments[0].enter)
+      const vd=`data-view="scaffold::${esc(r.label)}" data-viewstep="${enter}" data-viewlabel="${esc(r.label)}"`
+      return `<div class="navsub" data-navstep="${enter}" data-navres="scaffold::${esc(r.label)}"><span class="nsl viewname" ${vd} title="auto-loaded into context — 👁 shows the verbatim block">🧠 ${esc(r.label)}</span><span class="viewbtn" ${vd} title="show the verbatim loaded content in the panel">👁</span><span class="nsx">#${enter+1}</span></div>` }).join('')
+    h+=navGroup('life-load','🧠','loaded context',loaded.length,kids)
+  }
+  if(skills.length||caps.length){
+    // 🧩 capabilities — spec 2.4 §19/§33 keep skill + MCP in ONE display group (six-group
+    // projection; schema keeps the fine kind, D8). Skills are the one capability whose full
+    // instructions are actually RESIDENT + viewable (verbatim SKILL.md body on the wire) → a
+    // richer card: enter step + segment residency + resident size + 👁 that reveals the verbatim
+    // body (never a fabricated schema). MCP/other caps stay metadata chips (schema not verbatim, §58).
+    const skKids=skills.map(r=>{
+      const enter=L(r.segments[0].enter), lastSeg=r.segments[r.segments.length-1]
+      const live=r.segments.some(s=>{const e=L(s.enter),ev=s.evict==null?N:L(s.evict);return e<=playhead&&ev>playhead})
+      const notYet=enter>playhead, evAt=lastSeg.evict==null?null:L(lastSeg.evict)
+      const state=notYet?'pend':(!live&&!notYet?'dead':'')
+      const life=live?'<span class="en">resident</span>':(evAt!=null?`<span class="ev">✂#${evAt+1}</span>`:'')
+      const size=r.loads.length?r.loads[r.loads.length-1].range:''
+      const vd=`data-view="skill::${esc(r.label)}" data-viewstep="${enter}" data-viewlabel="${esc(r.label)}"`
+      // size present ⇒ the verbatim body was captured; absent ⇒ only the Skill invocation was seen (labelled honestly)
+      return `<div class="navsub ${state}" data-navstep="${enter}" data-navres="skill::${esc(r.label)}"><span class="nsl viewname" ${vd} title="skill (asight inference from the wire) — 👁 shows the verbatim SKILL.md body">🧩 skill: ${esc(r.label)}</span>`+
+        (size?`<span class="viewbtn" ${vd} title="show the verbatim SKILL.md body in the panel">👁</span>`:'')+
+        `${life}${size?`<span class="nsx" title="resident instructions size — verbatim body on the wire">${esc(size)}</span>`:`<span class="nsx" title="invocation seen; resident body not in the captured window">invocation only</span>`}<span class="nsx">#${enter+1}</span></div>`
+    }).join('')
+    // unify the caps' name click with files: name/👁 → viewResource (raw preview), card body → locate.
+    // MCP resolves to its tool block (metadata, honestly noted in the panel); image/document have no
+    // verbatim text block → viewResource falls back to the honest "click the card to locate" message.
+    const capKids=caps.map(r=>{ const enter=L(r.segments[0].enter)
+      // map the ledger label back to the block's resKey so the reveal can find it (MCP: → mcp::)
+      const mm=/^MCP:\s*(.+)$/.exec(r.label), rk=mm?'mcp::'+mm[1]:''
+      const vd=`data-view="${esc(rk)}" data-viewstep="${enter}" data-viewlabel="${esc(r.label)}"`
+      return `<div class="navsub" data-navstep="${enter}"${rk?` data-navres="${esc(rk)}"`:''}><span class="nsl viewname" ${vd} title="capability — 👁 shows what's on the wire (MCP: tool metadata; image/document: located on the timeline)">🧩 ${esc(r.label)}</span><span class="viewbtn" ${vd} title="show in the panel">👁</span><span class="nsx">#${enter+1}</span></div>` }).join('')
+    h+=navGroup('life-cap','🧩','capabilities',skills.length+caps.length,skKids+capKids)
+  }
+  if(dl.length){
+    const kids=dl.map(r=>{ const enter=L(r.segments[0].enter), ic=r.kind==='dir'?'📁':'🔗'; return `<div class="navsub" data-navstep="${enter}"><span class="nsl">${ic} ${esc(relPath(r.label))}</span><span class="nsx">#${enter+1}</span></div>` }).join('')
+    h+=navGroup('life-dl','🔗','dirs & links',dl.length,kids)
+  }
+  const comps=(anchor.events||[]).filter(e=>e.type==='compaction'||e.type==='summarize')
+  if(comps.length){
+    const kids=comps.map(e=>{ const at=L(e.step), lbl=e.type==='compaction'?`✂ compaction ${e.from}→${e.to} msgs`:`🗜 summary (${kf(e.out)} tok out)`; return `<div class="navsub" data-navstep="${at}"><span class="nsl">${lbl}</span><span class="nsx">#${at+1}</span></div>` }).join('')
+    h+=navGroup('life-comp','✂','context resets',comps.length,kids)
+  }
+  return h||'<div class="navsub" style="opacity:.5">no resources tracked yet</div>'
+}
+// ── jump helpers: within the window (block anchors) and across the session (playhead) ──
+function jumpToAnchor(id){
+  const el=document.getElementById(id); if(!el)return
+  el.scrollIntoView({block:'start',behavior:'smooth'}); el.classList.add('hl'); setTimeout(()=>el&&el.classList.remove('hl'),1600)
+}
+function jumpToBlockIndex(fi){
+  openTurnFor(fi) // if the block lives in a collapsed turn, open it first
+  const el=document.querySelector(`#ctxwin .cblk[data-bi="${fi}"]`); if(!el)return
+  if(el.classList.contains('collapsed')) toggleCtxBlock(el)
+  el.scrollIntoView({block:'center',behavior:'smooth'}); el.classList.add('hl'); setTimeout(()=>el&&el.classList.remove('hl'),2000)
+}
+function jumpToStepAndBlock(step,resKey){
+  setPlayhead(step,true)
+  if(resKey){ const el=document.querySelector(`#ctxwin .cblk[data-rk="${cssq(resKey)}"]`); if(el){ if(el.classList.contains('collapsed'))toggleCtxBlock(el); el.scrollIntoView({block:'center',behavior:'smooth'}); el.classList.add('hl'); setTimeout(()=>el&&el.classList.remove('hl'),2000) } }
+}
+
+// render a message content-block's body text (reused by the context window's lazy bodies)
+function rawContentText(b){
+  if(typeof b==='string') return b
+  if(b.type==='text') return b.text||''
+  if(b.type==='tool_use'||b.type==='server_tool_use') return `${b.name}(\n${JSON.stringify(b.input,null,2)}\n)`
+  if(b.type==='tool_result'){ const c=b.content; return (typeof c==='string'?c:Array.isArray(c)?c.map(x=>x.text||`[${x.type}]`).join('\n'):JSON.stringify(c))+(b.is_error?'  ⟨is_error⟩':'') }
+  if(b.type==='image') return `[image ${b.source?.media_type||b.source?.type||''}]`
+  if(b.type==='document') return `[document ${b.source?.media_type||b.source?.type||b.title||''}]`
+  if(b.type==='thinking') return b.thinking||''
+  if(b.type==='redacted_thinking') return '[redacted_thinking]'
+  return JSON.stringify(b,null,2)
+}
+
+// ── navigation ──────────────────────────────────────────────────────────────
+function nearestByTs(lane,ts){
+  if(!lane.calls.length)return 0
+  const t=Date.parse(ts); if(isNaN(t))return Math.min(playhead,lane.calls.length-1)
+  let best=0,bd=Infinity
+  lane.calls.forEach((c,i)=>{ const d=Math.abs(Date.parse(c.ts)-t); if(d<bd){bd=d;best=i} })
+  return best
+}
+function setPlayhead(i,manual){
+  if(!anchor)return
+  viewPin=null // scrubbing returns the panel to the call raw
+  const np=Math.max(0,Math.min(anchor.calls.length-1,i))
+  if(np!==playhead) openBlocks.clear() // a different call → its blocks start collapsed
+  playhead=np
+  if(manual) follow=(playhead===anchor.calls.length-1)
+  // D13: keep the scrub target inside the brush window (pan, preserve width) — 1.4 follow
+  if(playhead<view.lo||playhead>=view.hi){
+    const w=Math.max(1,view.hi-view.lo), N=anchor.calls.length
+    const lo=Math.min(Math.max(0,playhead-((w/2)|0)),Math.max(0,N-w))
+    view.lo=lo; view.hi=Math.min(N,lo+w)
+  }
+  renderSaw(); renderRails(); renderContextWindow(); renderContextNav(); repositionBrush()
+  if(selTick){ const l=lanes.find(x=>x.id===selTick.laneId); if(l&&(l.kind==='monitor'||l.kind==='probe'))highlightRange(l,selTick.i) }
+}
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){ closeDetail(); return }
+  if(!anchor)return
+  if(e.key==='ArrowLeft'){setPlayhead(playhead-1,true);e.preventDefault()}
+  else if(e.key==='ArrowRight'){setPlayhead(playhead+1,true);e.preventDefault()}
+  else if(e.key==='Home'){setPlayhead(0,true);e.preventDefault()}
+  else if(e.key==='End'){setPlayhead(anchor.calls.length-1,true);e.preventDefault()}
+})
+document.getElementById('prev').onclick=()=>setPlayhead(playhead-1,true)
+document.getElementById('next').onclick=()=>setPlayhead(playhead+1,true)
+document.getElementById('endBtn').onclick=()=>{follow=true;setPlayhead(anchor.calls.length-1,true)}
+document.addEventListener('click',ev=>{
+  if(ev.target.closest('#dclose')){ closeDetail(); return }
+  const cr=ev.target.closest('.callref')
+  if(cr){ const k=+cr.dataset.call; if(k>=1){ setPlayhead(k-1,true); jumpToAnchor('cachebrk') } return }
+  const t=ev.target.closest('.collapsible > .edge, .collapsible > .more')
+  if(!t) return
+  const c=t.parentElement, k=c.dataset.k, nowOpen=!c.classList.contains('open')
+  if(nowOpen) expanded.add(k); else expanded.delete(k)
+  c.classList.toggle('open',nowOpen)
+  const more=c.querySelector(':scope > .more')
+  if(more) more.textContent=nowOpen?'▲ collapse':(more.dataset.label||('▼ show all '+more.dataset.len+' chars'))
+  ev.preventDefault()
+})
+document.getElementById('fileSel').onchange=()=>{curSel=document.getElementById('fileSel').value;playhead=0;follow=true;selTick=null;closeDetail();poll()}
+document.getElementById('liveChk').onchange=e=>{if(e.target.checked){follow=true;poll()}}
+
+// ── draggable board boundary: #ctxwin (center) ↔ #rightpage (right) ──────────────
+// Spec 1.2 §39-40/§77/§83: the #divider affordance is rendered but drag was never wired.
+// Drive #rightpage width from a root custom prop (never inline — inline would beat the
+// @media narrow-stack rule), with min/max clamp + per-boundary localStorage persistence
+// (dbl-click = reset). Defensive by construction so the headless render gate (DOM shim
+// with no-op addEventListener, no documentElement, no localStorage) imports without throwing.
+;(function(){
+  try{
+    const KEY='atrace.split.rightpage', DEF=320, MIN=220
+    const divider=document.getElementById('divider'), pages=document.getElementById('pages'), rightpage=document.getElementById('rightpage')
+    const root=document.documentElement
+    let curW=DEF
+    const setW=w=>{ curW=w; if(root&&root.style&&root.style.setProperty) root.style.setProperty('--rightpage-w',w+'px') }
+    const lsGet=k=>{ try{ return (typeof localStorage!=='undefined')?localStorage.getItem(k):null }catch{ return null } }
+    const lsSet=(k,v)=>{ try{ if(typeof localStorage!=='undefined') localStorage.setItem(k,v) }catch{} }
+    const lsDel=k=>{ try{ if(typeof localStorage!=='undefined') localStorage.removeItem(k) }catch{} }
+    const clampW=w=>{
+      let max=720
+      try{ const pr=pages&&pages.getBoundingClientRect&&pages.getBoundingClientRect(); if(pr&&pr.width) max=Math.min(720,pr.width-380) }catch{}
+      if(!(max>MIN)) max=MIN
+      return Math.max(MIN,Math.min(max, (isFinite(w)?w:DEF)))
+    }
+    // restore persisted width (runs at import — must not throw under the shim)
+    const saved=parseFloat(lsGet(KEY))
+    if(saved>0) setW(clampW(saved))
+    if(!divider||!pages||!rightpage) return
+    let dragging=false
+    divider.addEventListener('pointerdown',e=>{
+      dragging=true
+      try{ divider.setPointerCapture&&divider.setPointerCapture(e.pointerId) }catch{}
+      if(document.body&&document.body.classList) document.body.classList.add('resizing')
+      if(e&&e.preventDefault) e.preventDefault()
+    })
+    divider.addEventListener('pointermove',e=>{
+      if(!dragging) return
+      const pr=pages.getBoundingClientRect()
+      setW(clampW(pr.right - e.clientX))
+    })
+    const end=()=>{
+      if(!dragging) return
+      dragging=false
+      if(document.body&&document.body.classList) document.body.classList.remove('resizing')
+      lsSet(KEY,String(Math.round(curW)))
+    }
+    divider.addEventListener('pointerup',end)
+    divider.addEventListener('pointercancel',end)
+    divider.addEventListener('dblclick',()=>{ setW(DEF); lsDel(KEY) }) // reset affordance (spec §83)
+  }catch(e){ /* never let layout wiring break the app / the render gate */ }
+})()
+
+// ── draggable board boundary #2: #ctxnav (outline) ↔ #ctxwin (center) ────────────
+// Q1 / spec 1.2 §maindiv: a second gutter inside <main>. Independent of #divider — its own
+// CSS var (--outline-w) + its own localStorage key. Same defensive construction as above so
+// the headless render gate imports without throwing.
+;(function(){
+  try{
+    const KEY='atrace.split.outline', DEF=270, MIN=160
+    const md=document.getElementById('maindiv'), main=document.querySelector('main')
+    const root=document.documentElement
+    let curW=DEF
+    const setW=w=>{ curW=w; if(root&&root.style&&root.style.setProperty) root.style.setProperty('--outline-w',w+'px') }
+    const lsGet=k=>{ try{ return (typeof localStorage!=='undefined')?localStorage.getItem(k):null }catch{ return null } }
+    const lsSet=(k,v)=>{ try{ if(typeof localStorage!=='undefined') localStorage.setItem(k,v) }catch{} }
+    const lsDel=k=>{ try{ if(typeof localStorage!=='undefined') localStorage.removeItem(k) }catch{} }
+    const clampW=w=>{
+      let max=560
+      try{ const mr=main&&main.getBoundingClientRect&&main.getBoundingClientRect(); if(mr&&mr.width) max=Math.min(560,mr.width-360) }catch{}
+      if(!(max>MIN)) max=MIN
+      return Math.max(MIN,Math.min(max,(isFinite(w)?w:DEF)))
+    }
+    const saved=parseFloat(lsGet(KEY))
+    if(saved>0) setW(clampW(saved))
+    if(!md||!main) return
+    let dragging=false
+    md.addEventListener('pointerdown',e=>{
+      dragging=true
+      try{ md.setPointerCapture&&md.setPointerCapture(e.pointerId) }catch{}
+      if(document.body&&document.body.classList) document.body.classList.add('resizing')
+      if(e&&e.preventDefault) e.preventDefault()
+    })
+    md.addEventListener('pointermove',e=>{
+      if(!dragging) return
+      const mr=main.getBoundingClientRect()
+      setW(clampW(e.clientX - mr.left))
+    })
+    const end=()=>{
+      if(!dragging) return
+      dragging=false
+      if(document.body&&document.body.classList) document.body.classList.remove('resizing')
+      lsSet(KEY,String(Math.round(curW)))
+    }
+    md.addEventListener('pointerup',end)
+    md.addEventListener('pointercancel',end)
+    md.addEventListener('dblclick',()=>{ setW(DEF); lsDel(KEY) })
+  }catch(e){ /* never let layout wiring break the app / the render gate */ }
+})()
+
+poll()
+setInterval(()=>{if(document.getElementById('liveChk').checked)poll()},1500)
+
+// auto-reload when the dashboard's own code (index.html) is redeployed, so you never sit on a
+// stale tab after a deploy. (analyze now runs server-side — the browser has no analyze.mjs asset.)
+let assetSig=null
+async function checkAssets(){
+  try{
+    const a=await fetch('/index.html',{cache:'no-store'}).then(r=>r.text())
+    const sig=String(a.length)
+    if(assetSig!==null && sig!==assetSig){ location.reload() }
+    assetSig=sig
+  }catch{}
+}
+setInterval(checkAssets,4000)
+</script>
 </body>
 </html>

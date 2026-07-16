@@ -13,19 +13,14 @@
   "files": [
     "src/",
     "bin/",
-    "build.mjs",
     "README.md"
   ],
   "scripts": {
     "test": "node --test --test-force-exit",
     "etl": "node src/etl/cli.mjs",
-    "serve": "node src/server.mjs",
-    "build": "node build.mjs"
+    "serve": "node src/server.mjs"
   },
   "dependencies": {
     "@duckdb/node-api": "^1.5.4-r.1"
-  },
-  "devDependencies": {
-    "esbuild": "^0.28.1"
   }
 }
