@@ -22,6 +22,8 @@ import { readRecords } from './etl/ingest.mjs';
 import { projectsView, sessionView, controlView, pageView } from './view/board.mjs';
 import { createLru, memoKey } from './query/memo.mjs';
 import { loadPricing } from './view/pricing.mjs';
+import { randomBytes } from 'node:crypto';
+import { monitoringStatus, monitoringOn, monitoringOff } from './capture/control.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = path.join(HERE, 'web'); // src/web — the reused demo board (self-contained index.html)
@@ -42,6 +44,25 @@ function sendJson(res, status, obj) {
   res.end(body);
 }
 const notFound = (res, msg = 'not found') => sendJson(res, 404, { error: msg });
+
+// ── control-plane security gate (D26) — mutation endpoints exist ONLY when control is enabled, and
+// only for same-loopback callers. Host allowlist blocks DNS-rebind (an attacker domain resolving to
+// 127.0.0.1 sends its own Host → rejected); Origin check + a GET-issued CSRF token (verified via a
+// custom header on POST, which a cross-origin page can't set without a preflight we reject) block
+// blind cross-site POSTs. Loopback bind (4.4) is the outer wall. ─────────────────────────────────
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
+function hostOk(req) {
+  const name = String(req.headers.host || '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+  return LOOPBACK_HOSTS.has(name);
+}
+function originOk(req) {
+  const o = req.headers.origin;
+  if (!o) return true; // same-origin fetches / curl omit Origin
+  try { return LOOPBACK_HOSTS.has(new URL(o).hostname); } catch { return false; }
+}
+function readBody(req, cap = 1 << 20) {
+  return new Promise((resolve) => { let b = ''; req.on('data', (c) => { b += c; if (b.length > cap) req.destroy(); }); req.on('end', () => resolve(b)); req.on('error', () => resolve('')); });
+}
 
 // /api/session paging (4.4:88② · 3.5 游标契约): cursor/limit over the global call index (gi).
 // Opt-in — absent both params → no paging (full send, back-compat). Strict integer validation so a
@@ -144,18 +165,46 @@ function enrichClaude(id) {
   return info;
 }
 
-export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null, enrich = enrichClaude } = {}) {
+// D26 control plane — the three (and only three) mutation/status endpoints, mounted only when
+// `control` is enabled. Directly maps to the underlying onboard commands (atraceOn/atraceOff via
+// control.mjs). OBSERVE-only: arranges capture, never originates. Gated by hostOk/originOk + CSRF.
+async function handleControl(req, res, { p, csrf, captureTarget, proxyUrl, deps }) {
+  if (!hostOk(req)) return sendJson(res, 403, { error: 'forbidden: non-loopback Host (anti DNS-rebind)' });
+  if (!originOk(req)) return sendJson(res, 403, { error: 'forbidden: cross-origin request' });
+  const base = { captureTarget, proxyUrl, ...deps }; // deps (onboard/autostart) injectable for tests
+  if (p === '/control/status' && req.method === 'GET') {
+    return sendJson(res, 200, { csrf, monitoring: monitoringStatus(base) });
+  }
+  if (p === '/control/monitoring' && req.method === 'POST') {
+    if ((req.headers['x-asight-csrf'] || '') !== csrf) return sendJson(res, 403, { error: 'bad or missing CSRF token' });
+    let body = {};
+    try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return sendJson(res, 400, { error: 'invalid JSON body' }); }
+    try {
+      if (body.action === 'on') return sendJson(res, 200, monitoringOn({ ...base, withAutostart: body.autostart !== false }));
+      if (body.action === 'off') return sendJson(res, 200, monitoringOff({ ...base, removeCa: !!body.removeCa }));
+    } catch (e) { return sendJson(res, 500, { error: String((e && e.message) || e) }); }
+    return sendJson(res, 400, { error: "action must be 'on' or 'off'" });
+  }
+  return sendJson(res, 404, { error: 'unknown control endpoint' });
+}
+
+export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null, enrich = enrichClaude,
+  control = false, captureTarget = process.env.ASIGHT_CAPTURE_TARGET || 'https://api.anthropic.com',
+  proxyUrl = process.env.ASIGHT_PROXY_URL || 'http://127.0.0.1:8899', controlDeps = {} } = {}) {
   let db = null;
   try { db = await openDb(dbPath, { readOnly: true }); } catch { db = null; } // SQL family optional
   const resolve = sourcePath ? await buildResolver(sourcePath) : () => null;
   const loadRecords = makeRecordLoader(sourcePath);
   const sessionMemo = createLru(8); // D21: assembled per-session views keyed by (id, source sig, strategy)
+  const csrf = control ? randomBytes(18).toString('hex') : null; // D26: per-process CSRF token
 
   const server = http.createServer(async (req, res) => {
     try {
-      if (req.method !== 'GET') return sendJson(res, 405, { error: 'method not allowed' });
       const url = new URL(req.url, 'http://127.0.0.1');
       const p = url.pathname;
+      // D26: opt-in control plane (mutations) — mounted only when enabled; data plane stays read-only.
+      if (control && p.startsWith('/control/')) return handleControl(req, res, { p, csrf, captureTarget, proxyUrl, deps: controlDeps });
+      if (req.method !== 'GET') return sendJson(res, 405, { error: 'method not allowed' });
       let m;
 
       // ── BOARD family (source NDJSON → canonical) ──────────────────────────

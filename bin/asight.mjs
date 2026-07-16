@@ -27,12 +27,26 @@ async function main() {
     case 'serve': {
       const { createServer } = await import(r('src', 'server.mjs'));
       const port = Number(flag('--port', process.env.ASIGHT_PORT || 9800));
+      const control = rest.includes('--control') || process.env.ASIGHT_CONTROL === '1'; // D26 opt-in
       const { server } = await createServer({
         dbPath: flag('--db', process.env.ASIGHT_DB || undefined),
         sourcePath: flag('--source', process.env.ASIGHT_SOURCE || null),
+        control,
+        captureTarget: flag('--capture-target', undefined),
+        proxyUrl: flag('--proxy', undefined),
       });
       server.on('error', (e) => { console.error('server error:', e.message); if (e.code === 'EADDRINUSE') process.exit(1); });
-      server.listen(port, '127.0.0.1', () => console.log(`asight serving http://127.0.0.1:${port}`));
+      server.listen(port, '127.0.0.1', () => console.log(`asight serving http://127.0.0.1:${port}${control ? '  (control plane ON — /control/* enabled)' : ''}`));
+      break;
+    }
+    // D26: transparent-monitoring on/off/status — the CLI face of the control plane (web toggle maps here).
+    case 'monitor': {
+      const ctl = await import(r('src', 'capture', 'control.mjs'));
+      const sub = positional() || 'status';
+      const opts = { proxyUrl: flag('--proxy', undefined), captureTarget: flag('--capture-target', undefined) };
+      if (sub === 'on') { const out = ctl.monitoringOn({ ...opts, withAutostart: !rest.includes('--no-autostart') }); console.log('monitoring ON:', JSON.stringify(out.status, null, 2)); console.log('CA:', out.onboard.install.ok ? 'user-level trust OK' : 'FAILED', '· autostart:', out.autostart ? (out.autostart.ok ? out.autostart.plistPath : out.autostart.reason) : 'skipped'); }
+      else if (sub === 'off') { const out = ctl.monitoringOff({ ...opts, removeCa: rest.includes('--remove-ca') }); console.log('monitoring OFF:', JSON.stringify(out.status, null, 2)); }
+      else { console.log(JSON.stringify(ctl.monitoringStatus(opts), null, 2)); }
       break;
     }
     case 'etl': {

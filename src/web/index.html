@@ -25,6 +25,14 @@
   body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:13px;line-height:1.5;height:100vh;display:flex;flex-direction:column;overflow:hidden;}
   .mono{font-family:var(--mono);}
   header{display:flex;align-items:center;gap:14px;padding:9px 16px;background:var(--panel);border-bottom:1px solid var(--border);flex-wrap:wrap;}
+  /* D26 transparent-monitoring control (only shown when the server's control plane is enabled) */
+  .monctl{display:inline-flex;align-items:center;gap:7px;font-size:11px;padding:3px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg);}
+  .monctl .mondot{width:8px;height:8px;border-radius:50%;background:var(--dimmer);box-shadow:0 0 0 2px var(--panel);}
+  .monctl .mondot.on{background:#39d353;}
+  .monbtn{font:inherit;font-size:11px;cursor:pointer;background:var(--panel);color:var(--fg);border:1px solid var(--border);border-radius:5px;padding:2px 8px;}
+  .monbtn:hover{border-color:var(--fg);}
+  .monwhere{color:var(--dim);font-family:var(--mono,monospace);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .monbadge{color:var(--dimmer);font-size:9px;border:1px solid var(--border);border-radius:4px;padding:0 4px;}
   h1{font-family:var(--mono);font-size:16px;margin:0;letter-spacing:.5px;font-weight:600;}
   h1 b{color:var(--accent);}
   .spacer{flex:1;}
@@ -412,6 +420,7 @@
     <span class="forkchip" id="forkChip" style="display:none"></span>
   </div>
   <div class="live"><span class="dot" id="dot"></span><label><input type="checkbox" id="liveChk" checked style="vertical-align:middle"> live</label></div>
+  <span class="monctl" id="monctl" style="display:none"></span>
   <div class="spacer"></div>
   <div class="stats" id="stats"></div>
 </header>
@@ -1714,6 +1723,36 @@ document.getElementById('liveChk').onchange=e=>{if(e.target.checked){follow=true
 
 // D14: pull the editable unit-price config once (falls back to the hardcoded defaults on failure)
 ;(async()=>{ try{ const d=await fetch('/api/pricing').then(r=>r.json()); if(d&&d.pricing&&typeof d.pricing==='object') PRICING=d.pricing }catch{} })()
+
+// D26: transparent-monitoring control. Only appears when the server was started with --control;
+// otherwise (plain read-only viewer) the pill stays hidden. The toggle POSTs the CSRF token the
+// status endpoint issues. Non-destructive on a read-only server — /control/status simply 404/errs.
+function renderMon(el,d){
+  const m=(d&&d.monitoring)||{}, on=!!m.active
+  el.innerHTML=`<span class="mondot ${on?'on':''}" title="透明监测 ${on?'开启中':'已关闭'}"></span>`
+    +`<button class="monbtn" id="monBtn">监测 ${on?'ON':'OFF'}</button>`
+    +`<span class="monwhere" title="透明监测把被测流量转发到的真实上游端点">→ ${esc(m.forwardingTarget||'—')}</span>`
+    +(m.autostart?`<span class="monbadge" title="已加入用户级开机自启(非全机)">开机自启</span>`:'')
+    +(m.caTrusted?`<span class="monbadge" title="采集 CA 已装入用户级信任库(非全机弱化 TLS)">CA✓</span>`:'')
+  const btn=document.getElementById('monBtn'); if(!btn) return
+  btn.onclick=async()=>{
+    const action=on?'off':'on'
+    const msg=action==='on'
+      ?'开启透明监测将:生成/装采集 CA(仅用户级信任)+ steer CC-CLI + 加开机自启。继续?'
+      :'关闭透明监测:撤销 steer + 移除开机自启(CA 保留;要连 CA 一起移除请用 CLI: asight monitor off --remove-ca)。继续?'
+    if(typeof confirm==='function' && !confirm(msg)) return
+    btn.textContent='…'; btn.disabled=true
+    try{
+      const r=await fetch('/control/monitoring',{method:'POST',headers:{'content-type':'application/json','x-asight-csrf':d.csrf},body:JSON.stringify({action})})
+      const out=await r.json().catch(()=>({}))
+      if(!r.ok && typeof alert==='function') alert('monitoring '+action+' failed: '+(out.error||r.status))
+      const s=await fetch('/control/status',{cache:'no-store'}); if(s.ok) renderMon(el, await s.json())
+    }catch(e){ if(typeof alert==='function') alert('control error: '+e.message); btn.disabled=false; btn.textContent='监测 ?' }
+  }
+}
+;(async()=>{ const el=document.getElementById('monctl'); if(!el) return
+  try{ const r=await fetch('/control/status',{cache:'no-store'}); if(!r.ok) return; const d=await r.json(); el.style.display=''; renderMon(el,d) }catch{} })()
+
 poll()
 setInterval(()=>{if(document.getElementById('liveChk').checked)poll()},1500)
 
