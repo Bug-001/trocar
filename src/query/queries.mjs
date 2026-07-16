@@ -33,7 +33,8 @@ export async function sessionCalls(conn, sessionId) {
             c.stop_reason, c.error, c.duration_ms, c.compaction, c.request_bytes,
             u.input_uncached, u.cache_read, u.cache_write, u.output, u.reasoning, u.total_input,
             ce.break_kind, ce.hit_ratio, ce.divergence_cause, ce.divergence_byte_offset,
-            ce.structural_divergence_seq, ce.ground_truth_flag, ce.declared_breakpoints
+            ce.structural_divergence_seq, ce.ground_truth_flag, ce.declared_breakpoints,
+            ce.prefix_sha256 -- D17④ byte-SHA ground-truth moat (was omitted; the real reuse-prefix hash, not the structural proxy)
      FROM calls c
      LEFT JOIN usage u ON u.call_id = c.call_id
      LEFT JOIN cache_events ce ON ce.call_id = c.call_id
