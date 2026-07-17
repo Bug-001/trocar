@@ -77,6 +77,29 @@ async function main() {
       server.listen(port, '127.0.0.1', () => console.log(`asight capture (reverse-proxy tee) → ${target}\n  listening http://127.0.0.1:${port}  → ${out}\n  point the harness at it: HTTPS_PROXY / base_url → http://127.0.0.1:${port} (or run: asight on)`));
       break;
     }
+    case 'mitm': {
+      // MITM source (RFC 4.1 采集源#2 · D20 纯 tee): CONNECT proxy that TLS-terminates ONLY the
+      // target host (blind-tunnels every other host — 采集安全#1), and appends D10 envelopes to a
+      // source NDJSON — same envelope builder as the reverse-proxy tee, differing only in
+      // capture:'mitm'. This is the product runner for CC-Desktop, whose base_url is force-
+      // overwritten (4.1:19) so a reverse-proxy can't reach it: steer Desktop→here via a Clash rule.
+      const { createMitmProxy } = await import(r('src', 'capture', 'mitm.mjs'));
+      const { generateCa } = await import(r('src', 'capture', 'onboard.mjs'));
+      const port = Number(flag('--port', process.env.ASIGHT_MITM_PORT || 9899));
+      const targetHost = flag('--host', 'api.anthropic.com');
+      const upstreamProxy = flag('--upstream', process.env.ATRACE_UPSTREAM_PROXY || 'http://127.0.0.1:7897');
+      const out = flag('--out', process.env.ASIGHT_SOURCE || path.join(os.homedir(), '.atrace', 'asight', 'claude-capture.ndjson'));
+      const ca = generateCa(); // idempotent — reuses the existing atrace CA + api.anthropic.com leaf
+      const leaf = { key: fs.readFileSync(ca.leafKey), cert: fs.readFileSync(ca.leafCrt) };
+      const keepRawSse = rest.includes('--raw-sse') || process.env.ASIGHT_RAW_SSE === '1';
+      fs.mkdirSync(path.dirname(out), { recursive: true });
+      const sink = fs.createWriteStream(out, { flags: 'a' });
+      let n = 0;
+      const server = createMitmProxy({ targetHost, leaf, upstreamProxy, keepRawSse, onEnvelope: (env) => { sink.write(JSON.stringify(env) + '\n'); if (++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
+      server.on('error', (e) => { console.error('mitm error:', e.message); if (e.code === 'EADDRINUSE') process.exit(1); });
+      server.listen(port, '127.0.0.1', () => console.log(`asight mitm (CONNECT · TLS-terminate ${targetHost}, blind-tunnel rest) → ${out}\n  listening http://127.0.0.1:${port}  · upstream ${upstreamProxy}\n  steer CC-Desktop here via a Clash rule (4.1); every other host passes through untouched`));
+      break;
+    }
     case 'uninstall': {
       // one-step revert (4.5 §C): drop CA from the user trust store + clear the CC-CLI steer.
       const ob = await import(r('src', 'capture', 'onboard.mjs'));

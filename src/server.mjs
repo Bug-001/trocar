@@ -106,15 +106,31 @@ async function serveStatic(res, urlPath) {
 // ── raw source loader (mtime-cached; streaming read never builds a >512MB string) ─────────
 // The returned loader exposes `.sig` = the source's current size.mtime signature, so the board
 // view memo (D21) can key on it: a source append changes the sig → recompute; else O(1).
+// A source may be a single NDJSON file OR a directory of them (D20: one append-only file per
+// physical capture source — codex-capture.ndjson, claude-capture.ndjson, … — with session
+// grouping done downstream by 3.4 signals, so ONE dir renders every harness side by side).
+// Each file is streamed independently (readRecords never builds a >512MB string), so a dir of
+// N sources costs the same peak string as the largest single file (honors 4.4:91 / D24(i)).
+function sourceFiles(sourcePath) {
+  const st = fssync.statSync(sourcePath); // throws if missing → caller resets sig
+  if (!st.isDirectory()) return { files: [sourcePath], sig: st.size + '.' + Math.round(st.mtimeMs) };
+  const files = fssync.readdirSync(sourcePath) // non-recursive: never descends into ~/.atrace's GB dumps
+    .filter((f) => f.endsWith('.ndjson')).sort().map((f) => path.join(sourcePath, f));
+  const sig = files.map((f) => { try { const s = fssync.statSync(f); return `${path.basename(f)}:${s.size}.${Math.round(s.mtimeMs)}`; } catch { return ''; } }).join('|') || '∅dir';
+  return { files, sig };
+}
 function makeRecordLoader(sourcePath) {
   let cache = { sig: null, records: [] };
   const load = async () => {
     if (!sourcePath) { load.sig = '∅'; return []; }
-    let sig = '0';
-    try { const s = await stat(sourcePath); sig = s.size + '.' + Math.round(s.mtimeMs); } catch { load.sig = '0'; return []; }
+    let files, sig;
+    try { ({ files, sig } = sourceFiles(sourcePath)); } catch { load.sig = '0'; return []; }
     load.sig = sig;
     if (cache.sig === sig) return cache.records;
-    const records = await readRecords(sourcePath, { normalize: false }); // raw v0 records verbatim
+    const records = [];
+    for (const f of files) { // stream each file; concat raw v0/D10 records verbatim
+      for (const r of await readRecords(f, { normalize: false })) records.push(r);
+    }
     cache = { sig, records };
     return records;
   };
