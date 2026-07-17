@@ -97,7 +97,33 @@ async function main() {
       let n = 0;
       const server = createMitmProxy({ targetHost, leaf, upstreamProxy, keepRawSse, onEnvelope: (env) => { sink.write(JSON.stringify(env) + '\n'); if (++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
       server.on('error', (e) => { console.error('mitm error:', e.message); if (e.code === 'EADDRINUSE') process.exit(1); });
-      server.listen(port, '127.0.0.1', () => console.log(`asight mitm (CONNECT · TLS-terminate ${targetHost}, blind-tunnel rest) → ${out}\n  listening http://127.0.0.1:${port}  · upstream ${upstreamProxy}\n  steer CC-Desktop here via a Clash rule (4.1); every other host passes through untouched`));
+      server.listen(port, '127.0.0.1', () => console.log(`asight mitm (CONNECT · TLS-terminate ${targetHost}, blind-tunnel rest) → ${out}\n  listening http://127.0.0.1:${port}  · upstream ${upstreamProxy}\n  steer CC-Desktop here via a Clash rule (4.1) — run: asight desktop on --port ${port}`));
+      break;
+    }
+    case 'desktop': {
+      // macOS-only Clash-Verge steer for CC-Desktop capture (4.1:61 · D22). Durable global-Script
+      // splice (survives Verge regen) + one hot mihomo reload so it goes live now. Never touches the
+      // system proxy. --port MUST match the `asight mitm` port the traffic is steered into.
+      const { getDesktopSteer } = await import(r('src', 'capture', 'desktop-steer.mjs'));
+      const sub = positional() || 'status';
+      const port = Number(flag('--port', process.env.ASIGHT_MITM_PORT || 9899));
+      const steer = getDesktopSteer();
+      if (sub === 'on') {
+        const out = await steer.on({ port });
+        if (out.reserved) { console.log('desktop steer:', out.reason); break; }
+        console.log(`desktop steer ON → CC-Desktop's claude-code → api.anthropic.com routed to asight mitm :${out.port}`);
+        console.log('  durable: global Script.js spliced (survives Verge regen) ·', out.scriptPath);
+        console.log('  mihomo reload:', out.reload.status === 204 || out.reload.status === 200 ? 'OK' : `status ${out.reload.status}${out.reload.error ? ' ' + out.reload.error : ''}`);
+        console.log('  live now:', out.status.live === true ? 'yes ✓' : out.status.live === false ? `NO — is \`asight mitm --port ${port}\` running?` : 'unknown');
+        console.log(`  ⚠ Desktop must trust the atrace CA (run \`asight on\` / \`asight monitor on\`) or it refuses the leaf.`);
+      } else if (sub === 'off') {
+        const out = await steer.off();
+        if (out.reserved) { console.log('desktop steer:', out.reason); break; }
+        console.log('desktop steer OFF → global Script.js restored + runtime splice removed + mihomo reloaded (zero residual)');
+        console.log('  mihomo reload:', out.reload.status === 204 || out.reload.status === 200 ? 'OK' : `status ${out.reload.status}`);
+      } else {
+        console.log(JSON.stringify(await steer.status(), null, 2));
+      }
       break;
     }
     case 'uninstall': {
@@ -165,6 +191,8 @@ usage:
   asight serve [--port 9800] [--db <path>] [--source <ndjson|dir>]
   asight etl <ndjson> [--db <path>] [--rebuild]
   asight capture [--port 8899] [--target https://api.anthropic.com] [--out <ndjson>] [--upstream <proxy>] [--raw-sse]
+  asight mitm    [--port 9899] [--host api.anthropic.com] [--out <ndjson>] [--upstream <proxy>]   CC-Desktop MITM source (D10 tee)
+  asight desktop {on|off|status} [--port 9899]  macOS-only: steer CC-Desktop's claude-code→anthropic into asight mitm (durable, reversible)
   asight on   [--proxy http://127.0.0.1:8899]   generate CA + install (user-level) + steer CC-CLI
   asight off  [--remove-ca]
   asight uninstall                              one-step revert: remove CA + clear steer
