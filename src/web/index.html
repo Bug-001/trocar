@@ -587,7 +587,18 @@ async function poll(){
     if(cur){ const cs=curSel+'|'+cur.calls+'|'+cur.last_ts
       if(cs===lastCheapSig){ document.getElementById('dot').classList.toggle('on',document.getElementById('liveChk').checked); return }
       lastCheapSig=cs }
-    const d=await fetch(`/api/session?project=${encodeURIComponent(slug)}&id=${encodeURIComponent(id)}`).then(r=>r.json())
+    // Distinguish FAILED-to-load from genuinely-empty: a 500 (or a dead server) used to fall through
+    // to raw=[] and render "No LLM calls traced yet", which LIES about a session that has calls.
+    const res=await fetch(`/api/session?project=${encodeURIComponent(slug)}&id=${encodeURIComponent(id)}`).catch(e=>({ok:false,status:0,_err:String(e&&e.message||e)}))
+    const d=res.ok?await res.json().catch(e=>({error:'malformed JSON from server: '+(e&&e.message||e)})):{error:res._err||('HTTP '+res.status)}
+    if(d.error){
+      const eb=document.getElementById('truncbar')
+      if(eb){ eb.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #7a2b18;background:#2a1210;color:#f08a6a;border-radius:5px;font-size:11px;line-height:1.45'
+        eb.innerHTML=`⚠ 加载失败 · could not load this session: <b>${String(d.error).replace(/[<>&]/g,'')}</b> — the raw trace on disk is intact (source truth unaffected). If the server died, restart it; if the session is huge, it is served tail-bounded.` }
+      renderEmpty('Could not load this session — see the banner above.')
+      document.getElementById('stats').innerHTML=''
+      return
+    }
     raw=d.records||[]; probes=d.probes||{count:0,series:[]}; meta=d.meta||null
     // 保真边界: a session too large to ship whole arrives truncated to its most-recent calls.
     // The raw NDJSON on disk stays complete — mark the view non-complete (invariant 4).

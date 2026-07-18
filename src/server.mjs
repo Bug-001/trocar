@@ -68,6 +68,14 @@ function readBody(req, cap = 1 << 20) {
 // Opt-in — absent both params → no paging (full send, back-compat). Strict integer validation so a
 // malformed query is a 400, never a silent mis-window. Returns { page } | { page:null } | { error }.
 const MAX_PAGE = 2000; // a generous cap: no single view page needs more calls than this
+// Raw request-bytes budget for ONE assembled session view (4.4:90). The assembled+serialized view
+// runs ~10x the raw bytes it came from (each call re-carries the whole conversation, then blocks +
+// norm on top), so this is deliberately small: it keeps the JSON far below V8's max string (an
+// unbounded send 500s "Invalid string length" and can OOM the process) AND small enough that the
+// browser can actually parse it. Every SHIPPED call stays complete — we bound HOW MANY we ship, not
+// what's in them, so scrubbing never hits a silently-empty call; omitted ones are disclosed via
+// `truncated` (invariant 4). Small sessions never trip this. Override: ASIGHT_SESSION_MAX_MB.
+const SESSION_BYTE_BUDGET = Math.max(1, Number(process.env.ASIGHT_SESSION_MAX_MB) || 6) * 1048576;
 const UINT_RE = /^\d+$/;
 function parsePageParams(sp) {
   const rawC = sp.get('cursor'), rawL = sp.get('limit');
@@ -237,7 +245,11 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         // non-mutating post-transform (pageView) so many page requests reuse one analyze() run.
         const key = memoKey(id, loadRecords.sig);
         let full = sessionMemo.get(key);
-        if (full === undefined) { full = sessionView(records, id, { enrich }); if (full) sessionMemo.set(key, full); }
+        // maxBytes: NEVER assemble/ship a whole large session (4.4:90). Unbounded, a big session
+        // overruns V8's max string on JSON.stringify (500 "Invalid string length") and can OOM the
+        // process — the board then shows its empty state and falsely reports "no LLM calls". Bounded,
+        // the response is the most-recent calls that fit + a `truncated` marker (invariant 4).
+        if (full === undefined) { full = sessionView(records, id, { enrich, maxBytes: SESSION_BYTE_BUDGET }); if (full) sessionMemo.set(key, full); }
         if (!full) return notFound(res, 'session not found');
         return sendJson(res, 200, page ? pageView(full, page) : full);
       }

@@ -108,10 +108,33 @@ export function projectsView(records, { enrich } = {}) {
 // not shipped on THIS page, not silently dropped). No `page` → full send (back-compat; render gate/demo
 // board unchanged). Windowing is a SHALLOW non-mutating transform over an already-assembled view, so a
 // memoized full view (D21) can back many page requests without re-running analyze.
-export function sessionView(records, sessionId, { enrich, bound, page } = {}) {
+// Tail-bound a session's records to a raw-bytes budget (4.4:90 "服务端只回当前视图所需的页 · 不再整条下发").
+// An UNBOUNDED session view is the whole-page-breaks bug: assembling + JSON.stringify-ing a large
+// session overruns V8's max string length (500 "Invalid string length") and can OOM the process, so
+// the board falls through to its empty state and LIES that there are no calls. Keep the MOST RECENT
+// calls that fit; the omitted ones stay intact in the raw NDJSON and the view is MARKED non-complete
+// (invariant 4) via `truncated`, which the board renders as the 非完整视图 banner.
+export function tailBound(recs, maxBytes) {
+  const bytesOf = (r) => (typeof r.req_body === 'string' ? r.req_body.length
+    : (r.request ? JSON.stringify(r.request).length : 0));
+  const calls = (rs) => rs.reduce((n, r) => n + (r.is_llm_call ? 1 : 0), 0);
+  let total = 0;
+  for (const r of recs) total += bytesOf(r);
+  if (!maxBytes || total <= maxBytes) return { recs, bound: null };
+  let kept = 0, i = recs.length;
+  while (i > 0 && kept + bytesOf(recs[i - 1]) <= maxBytes) kept += bytesOf(recs[--i]);
+  if (i === recs.length && recs.length) { i = recs.length - 1; kept = bytesOf(recs[i]); } // always keep ≥1
+  const out = recs.slice(i);
+  const mb = (n) => Math.round((n / 1048576) * 10) / 10;
+  return { recs: out, bound: { shown: calls(out), total: calls(recs), kept_mb: mb(kept), file_mb: mb(total) } };
+}
+
+export function sessionView(records, sessionId, { enrich, bound, page, maxBytes } = {}) {
   const g = groupSessions(records);
-  const recs = g.get(sessionId);
+  let recs = g.get(sessionId);
   if (!recs) return null;
+  let autoBound = null;
+  ({ recs, bound: autoBound } = tailBound(recs, maxBytes));
   const probes = probeRecs(recs);
   const analyzed = assembleSession(llmRecs(recs));
   const slim = recs.map((r) => ({
@@ -123,7 +146,7 @@ export function sessionView(records, sessionId, { enrich, bound, page } = {}) {
     analyzed,
     probes: { count: probes.length, series: probeSeries(probes) },
     meta: sessionMetaFor(sessionId, recs, enrich),
-    truncated: bound || null, // 保真边界 hook (invariant 4): set when a large session was tail-bounded
+    truncated: bound || autoBound || null, // 保真边界 (invariant 4): set when a large session was tail-bounded
   };
   return page ? pageView(view, page) : view;
 }
