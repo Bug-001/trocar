@@ -56,8 +56,20 @@ asight monitor off     # revert everything below   (add --remove-ca for a full p
 | 4 | autostart (optional) | a **user** LaunchAgent `com.asight.monitor` (macOS) running `asight capture` at login | your login session — **never** a machine daemon | `off` unloads + deletes the plist |
 
 **What it NEVER touches** (so you don't get trapped): your **system / network proxy**; the **machine-wide**
-trust store or TLS; your **API keys or tokens** (a capture records only an `api-key`/`oauth` *label*,
-never the secret); anything outside `~/.atrace` and that one `settings.json` env block.
+trust store or TLS; anything outside `~/.atrace` and that one `settings.json` env block.
+
+**What it DOES record — read this before capturing.** The whole point is byte-faithful capture, so:
+
+- **Credential headers are redacted** — a capture stores only an `api-key`/`oauth` *label*, never the
+  `authorization` / `x-api-key` value.
+- **Request bodies are stored VERBATIM, with no redaction.** That is the feature (invariant 2: raw bytes
+  are the source of truth) — but it means **everything in your conversation lands on disk in plaintext**:
+  your prompts, file contents the agent read, tool output, and any secret you happened to paste into a
+  chat. Treat `~/.atrace/**` as sensitive: it is a full transcript of your work.
+- Traces are written under your home dir with default permissions, so **other local accounts on a shared
+  machine may be able to read them**. On a multi-user box, tighten it (`chmod -R go-rwx ~/.atrace`).
+- The dashboard binds loopback only **and** enforces a loopback `Host`/`Origin` allowlist, so a website
+  you visit cannot reach it via DNS rebinding.
 
 **Undo is first-class** — you are never stuck:
 

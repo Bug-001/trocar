@@ -226,6 +226,14 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
     try {
       const url = new URL(req.url, 'http://127.0.0.1');
       const p = url.pathname;
+      // SECURITY — anti DNS-rebind, applied to EVERY request (data plane + static), not just the
+      // control plane. Binding to 127.0.0.1 is NOT sufficient on its own: a page on any site the user
+      // visits can point its own hostname at 127.0.0.1, and the browser then treats
+      // http://evil.example:<port>/api/session as SAME-ORIGIN — so CORS never engages and the whole
+      // verbatim LLM corpus (contexts, tool output, source code) is readable by that page. A loopback
+      // Host allowlist is the defense. Read-only + loopback-bound does not make exfiltration harmless.
+      if (!hostOk(req)) return sendJson(res, 403, { error: 'forbidden: non-loopback Host (anti DNS-rebind)' });
+      if (!originOk(req)) return sendJson(res, 403, { error: 'forbidden: cross-origin request' });
       // D26: opt-in control plane (mutations) — mounted only when enabled; data plane stays read-only.
       if (control && p.startsWith('/control/')) return handleControl(req, res, { p, csrf, captureTarget, proxyUrl, deps: controlDeps });
       if (req.method !== 'GET') return sendJson(res, 405, { error: 'method not allowed' });
