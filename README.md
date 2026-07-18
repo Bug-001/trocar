@@ -86,6 +86,9 @@ The default path assumes almost nothing about your setup:
   cross-platform (macOS + Linux), no proxy manager, no VPN, no kernel hooks. It needs only OpenSSL (for
   the one-time CA) and a harness that honors `settings.json`/`base_url`. This is the zero-assumption default.
 - **Codex → relay-tee**: point Codex's `base_url` at the local tee; no CA, no system changes.
+- **OpenCode → relay-tee**: set `provider.openai.options.baseURL` in `~/.config/opencode/opencode.json`
+  to the local tee. Same deal — no CA, no proxy manager, no system changes, and nothing outside that
+  one config file. (OpenCode speaks the OpenAI **Responses** wire, so it reuses the Codex dissector.)
 
 **Claude Desktop is the one env-dependent case — read before relying on it.** Desktop *force-overwrites*
 its base URL and ignores `settings.json`, so it can't be steered by env. Its capture instead rides a

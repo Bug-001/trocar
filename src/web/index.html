@@ -524,8 +524,10 @@ function md(s){
 
 // agent chip is TABLE-DRIVEN off the server's meta.harness (not a hardcode) — a new harness is a
 // new row here + a server-side analyzer; this render code is untouched (invariant 3 / AC-3).
-const CHIP={'claude-code':{ic:'🟠',name:'Claude Code'},'codex':{ic:'🟢',name:'Codex'},'deepseek-cli':{ic:'🔵',name:'DeepSeek CLI'}}
-const chipFor=m=>{ const h=(m&&CHIP[m.harness])||{ic:'🟠',name:(m&&m.harness)||'agent'}; const ep=m&&m.entrypoint==='desktop'?' · Desktop':m&&m.entrypoint==='cli'?' · CLI':''; return `${h.ic} ${h.name}${ep}` }
+const CHIP={'claude-code':{ic:'🟠',name:'Claude Code'},'codex':{ic:'🟢',name:'Codex'},'deepseek-cli':{ic:'🔵',name:'DeepSeek CLI'},'opencode':{ic:'🟣',name:'OpenCode'}}
+// unknown harness MUST NOT borrow Claude's 🟠 — that would silently pass foreign bytes off as CC
+// (invariant 4). Render an explicit unlabeled state instead.
+const chipFor=m=>{ const h=(m&&CHIP[m.harness])||{ic:'⬜',name:(m&&m.harness)||'unidentified agent'};const ep=m&&m.entrypoint==='desktop'?' · Desktop':m&&m.entrypoint==='cli'?' · CLI':''; return `${h.ic} ${h.name}${ep}` }
 let A=null, raw=[], probes={count:0,series:[]}, meta=null
 let projectsFlat=[] // all sessions across projects (for same-name / fork detection in the top bar)
 let lanes=[], anchor=null, anchorTs=[], playhead=0, follow=true, lastScrolled=-1, curSel=null

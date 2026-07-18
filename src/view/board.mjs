@@ -45,10 +45,23 @@ function entrypointOf(recs) {
 // harness + provider identity from the request UA — drives the board's agent chip via a TABLE
 // (not a hardcode), so onboarding Codex/DeepSeek is a new row here + a new server-side analyzer,
 // with the frontend chip table untouched (invariant 3 / AC-3).
+// A harness that can be pointed at ANY backend (OpenCode) MUST NOT have its provider inferred from
+// its name — we report the wire dialect we actually saw, or null. Never claim a provider unobserved.
+function wireProviderOf(recs) {
+  for (const r of recs || []) {
+    const ep = String((r && r.endpoint) || '').split('?')[0];
+    if (/(^|\/)(responses|chat\/completions)$/.test(ep)) return 'openai';
+    if (/(^|\/)messages$/.test(ep)) return 'anthropic';
+  }
+  return null;
+}
 function harnessOf(recs) {
   const h = anyHeaders(recs);
   const ua = String(h['user-agent'] || h['originator'] || '').toLowerCase();
   if (/claude-cli|claude-code/.test(ua)) return { harness: 'claude-code', provider: 'anthropic' };
+  // before /codex/: OpenCode is provider-agnostic, so its provider comes from the wire (D3 amended
+  // 2026-07-18 — a 4th harness on the EXISTING OpenAI-Responses wire, zero new dissector).
+  if (/opencode/.test(ua)) return { harness: 'opencode', provider: wireProviderOf(recs) };
   if (/codex/.test(ua)) return { harness: 'codex', provider: 'openai' };
   if (/deepseek/.test(ua)) return { harness: 'deepseek-cli', provider: 'deepseek' };
   return { harness: null, provider: null };
