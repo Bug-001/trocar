@@ -79,7 +79,18 @@ async function indexFile(file, idx) {
         if (raw != null) {
           const id = String(raw);
           const loc = { file, offset: lineStart, length: lineBuf.length };
-          idx.qual.set(base + '#' + id, loc);
+          // WITHIN-FILE collision. The qualified key is documented as "the authoritative key", but a
+          // plain set() overwrites — so when one file carries the same id twice, the LAST record
+          // indexed silently becomes the answer for the first one's ref, and the verbatim panel
+          // serves one record's bytes as another's. Live measurement on the author's capture:
+          // 36,876 records, 165 duplicated ids, because the writer mints from a per-PROCESS counter
+          // (req_00001…) and every MITM restart appends to the SAME file. Poison instead: the ref
+          // genuinely does not name one record, and refusing loudly is the only answer that keeps
+          // "verbatim" true (invariant 2) and the loss visible (invariant 4).
+          const qk = base + '#' + id;
+          const prev = idx.qual.get(qk);
+          idx.qual.set(qk, prev === undefined ? loc
+            : { dup: true, dupCount: (prev.dupCount || 1) + 1, file });
           // bare-id fallback: first writer wins, a second file poisons the entry to AMBIGUOUS
           idx.byId.set(id, idx.byId.has(id) ? AMBIGUOUS : loc);
         } else {
@@ -152,6 +163,15 @@ export async function buildResolver(sourcePath) {
   // when that id is unambiguous across the whole source. Never picks a winner among collisions.
   const locate = (stream, recordId) => {
     const q = idx.qual.get(stream + '#' + recordId);
+    if (q && q.dup) {
+      throw new Error(
+        `source: ambiguous record id "${recordId}" — it occurs ${q.dupCount} times inside a SINGLE ` +
+        `capture file (${path.basename(q.file)}), so the text_ref names more than one record. This is ` +
+        `the capture writer minting ids from a per-process counter and appending across restarts. ` +
+        `Refusing to guess: serving one of them under a "verbatim" label would misreport the source ` +
+        `truth (invariant 2). The bytes of both are intact in the raw NDJSON.`,
+      );
+    }
     if (q) return { key: stream + '#' + recordId, loc: q };
     const e = idx.byId.get(recordId);
     if (e === undefined) return null;                 // genuinely absent → null (callers expect it)

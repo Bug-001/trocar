@@ -91,3 +91,65 @@ test('BUG2: a single-FILE source is unaffected (no collisions possible)', async 
   } finally { resolve.dispose(); }
   rmSync(dir, { recursive: true, force: true });
 });
+
+// ── WITHIN-FILE COLLISION (found on live data, 2026-07-20) ──────────────────────────────
+// The fix above closed the ACROSS-files hole. The same id can collide WITHIN ONE file, and that
+// hole stayed open: `idx.qual.set(base + '#' + id, loc)` overwrites, so the qualified key — the
+// one called "the authoritative key" — silently resolves to whichever record was indexed LAST.
+//
+// This is not hypothetical. The capture writer mints ids from a per-PROCESS counter starting at
+// req_00001, and every MITM restart appends to the SAME file. Measured on the user's live
+// ~/.atrace/asight/claude-capture.ndjson: 36,876 records, **165 duplicated ids**
+// (req_00001…req_00165, each twice). So on real data today, a "verbatim" panel for one of those
+// records serves a DIFFERENT record's bytes, under a label asserting byte-faithfulness.
+//
+// Refusing is the only correct answer: the ref genuinely does not identify one record. Guessing
+// is what makes it a lie (invariant 2), and guessing silently is what makes it undetectable
+// (invariant 4). The loud error is also what makes the capture-side fix findable.
+function oneFileTwice() {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'asight-collide1-'));
+  writeFileSync(path.join(dir, 'claude-capture.ndjson'),
+    REC('req_00001', { model: 'FIRST-writer', messages: [] }) +
+    REC('req_00002', { model: 'unique-one', messages: [] }) +
+    // ← MITM restarted here; its counter went back to 1 and it kept appending to the same file
+    REC('req_00001', { model: 'SECOND-writer', messages: [] }) +
+    REC('req_00003', { model: 'unique-two', messages: [] }));
+  return dir;
+}
+
+test('a record id duplicated WITHIN one file refuses to resolve, instead of serving the last writer', async () => {
+  const dir = oneFileTwice();
+  const resolve = await buildResolver(dir);
+  try {
+    assert.throws(
+      () => resolve(refFor('claude-capture.ndjson', 'req_00001', 0, 40)),
+      /ambiguous record id "req_00001"/,
+      'the qualified key resolved a DUPLICATED id instead of refusing — whichever record was '
+      + 'indexed last is being served as the verbatim bytes of the other one',
+    );
+  } finally { resolve.dispose?.(); rmSync(dir, { recursive: true, force: true }) }
+});
+
+test('the refusal names the collision as WITHIN one file, so the real cause is findable', async () => {
+  const dir = oneFileTwice();
+  const resolve = await buildResolver(dir);
+  try {
+    let msg = '';
+    try { resolve(refFor('claude-capture.ndjson', 'req_00001', 0, 40)) } catch (e) { msg = e.message }
+    assert.match(msg, /claude-capture\.ndjson/, 'the message must name the file');
+    assert.match(msg, /2 times|twice|2 records|duplicate/i,
+      `the message must say the id occurs more than once IN that file — otherwise it reads as the `
+      + `across-files case and sends the reader hunting for a second capture file. Got: ${msg}`);
+  } finally { resolve.dispose?.(); rmSync(dir, { recursive: true, force: true }) }
+});
+
+test('unique ids in the SAME file are unaffected — only the duplicated one refuses', async () => {
+  const dir = oneFileTwice();
+  const resolve = await buildResolver(dir);
+  try {
+    assert.match(resolve(refFor('claude-capture.ndjson', 'req_00002', 0, 200)) || '', /unique-one/,
+      'a non-colliding record must still resolve verbatim');
+    assert.match(resolve(refFor('claude-capture.ndjson', 'req_00003', 0, 200)) || '', /unique-two/,
+      'a record AFTER the collision must still resolve — poisoning must not cascade');
+  } finally { resolve.dispose?.(); rmSync(dir, { recursive: true, force: true }) }
+});
