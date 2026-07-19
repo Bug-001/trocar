@@ -6,7 +6,7 @@
 // All provider parsing happens in assembleSession (analyze) HERE, server-side — the browser
 // receives only canonical `analyzed` (invariant 3 / AC-3). Pure over its `records` input;
 // human-title / cwd enrichment is injected via `enrich(id)` so this module stays testable.
-import { assembleSession, sessionIdOf, headersOf } from './assemble.mjs';
+import { assembleSession, sessionIdOf, headersOf, respOf } from './assemble.mjs';
 
 // tolerate both envelope shapes: demo v0 `request_headers` + product D10 `req_headers` (Codex).
 const anyHeaders = (recs) => headersOf(recs.find((r) => r.request_headers || r.req_headers));
@@ -33,7 +33,7 @@ export const controlRecords = (records) => records.filter((r) => !sessionIdOf(r)
 const llmRecs = (recs) => recs.filter((r) => r.is_llm_call);
 const probeRecs = (recs) => recs.filter(isProbe);
 const probeSeries = (precs) =>
-  precs.map((r) => ({ ts: r.ts_request, tokens: (r.response && r.response.body && r.response.body.input_tokens) ?? null }))
+  precs.map((r) => { const rp = respOf(r); return { ts: r.ts_request, tokens: (rp && rp.body && rp.body.input_tokens) ?? null }; })
     .filter((p) => p.tokens != null);
 function entrypointOf(recs) {
   const h = anyHeaders(recs);
@@ -152,7 +152,7 @@ export function sessionView(records, sessionId, { enrich, bound, page, maxBytes 
   const analyzed = assembleSession(llmRecs(recs));
   const slim = recs.map((r) => ({
     is_llm_call: !!r.is_llm_call, ts_request: r.ts_request, id: r.id,
-    response: { status: (r.response && r.response.status) || null },
+    response: { status: (respOf(r) || {}).status ?? null }, // R1: read via respOf (D10 `resp` + v0 `response`)
   }));
   const view = {
     records: slim,

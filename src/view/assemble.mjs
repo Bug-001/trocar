@@ -58,6 +58,13 @@ function hydrateForBoard(r) {
 // and the product D10 `req_headers` envelope key, so a Codex D10 record groups into its session.
 const SIDH = ['x-claude-code-session-id', 'x-session-id', 'session-id', 'thread-id'];
 export const headersOf = (rec) => (rec && (rec.request_headers || rec.req_headers)) || {};
+// Envelope drift guard (R1, audit 2026-07-19). The product D10 envelope stores the response under
+// `resp` (src/capture/envelope.mjs); demo v0 used `response`. Readers MUST go through this helper —
+// reading `.response` directly is what silently killed the probe rail, every HTTP status and the
+// whole control-plane view on real captures (`.response` was present on 0 of 25,817 live records)
+// while the pre-D10 test fixture kept them green. Mirrors headersOf: tolerate BOTH shapes forever,
+// because old captures on disk are still the user's data (invariant 2).
+export const respOf = (rec) => (rec && (rec.resp || rec.response)) || null;
 export function sessionIdOf(rec) {
   const h = headersOf(rec);
   for (const k of SIDH) if (h[k]) return h[k];
