@@ -68,13 +68,30 @@ export function blockKind(block) {
   return t === 'redacted_thinking' ? 'thinking' : t;
 }
 
+// After a compaction, Claude Code drops the earlier turns and injects a CLIENT-GENERATED summary as
+// an ordinary user text block. Anchored at the START of the block: a user who merely QUOTES this
+// sentence mid-message is sending real context and MUST stay verbatim. Both wordings below are real
+// (fixture cc-session-real.ndjson + live capture); the stable part is the leading sentence, so the
+// trailing "summary below…" / "conversation is summarized below" variants are matched loosely.
+const COMPACTION_SUMMARY = /^\s*This session is being continued from a previous conversation/;
+
 // Faithfulness (invariant 4): opaque = CC replays only a signature / ciphertext, not
-// the reasoning plaintext. Everything else on the wire is verbatim (tools D15, system, text, tool_use,
-// tool_result, image, thinking-with-text).
+// the reasoning plaintext. summarized = the bytes ARE verbatim, but what they CONTAIN is a client-side
+// summary standing in for the original turns, not the original context (spec 2.3:45, enum 3.2:63) —
+// unbadged it is indistinguishable from the real earlier conversation. Everything else on the wire is
+// verbatim (tools D15, system, text, tool_use, tool_result, image, thinking-with-text).
+//
+// NOT produced here (honest gap, not an oversight): `truncated`. Per spec 2.3:46 显示剪裁 ≠ 源截断 —
+// truncated means the SOURCE was not captured whole, and the CC capture path stores the whole
+// req_body; a truncated/corrupt body fails to parse and surfaces at CALL level as the `_unparsed`
+// sentinel (analyze.mjs), which yields no blocks at all. The board's ~20,000-char expand clip is
+// DISPLAY clipping with the full text still recoverable from the NDJSON source, and 2.3:46 forbids
+// conflating the two. `metadata` / `omitted` likewise have no CC producer (see the report).
 export function faithfulness(block) {
   if (!block || typeof block !== 'object') return 'verbatim';
   if (block.type === 'redacted_thinking') return 'opaque'; // encrypted reasoning, no plaintext on the wire
   if (block.type === 'thinking' && !(block.thinking && String(block.thinking).length) && block.signature) return 'opaque';
+  if (block.type === 'text' && typeof block.text === 'string' && COMPACTION_SUMMARY.test(block.text)) return 'summarized';
   return 'verbatim';
 }
 

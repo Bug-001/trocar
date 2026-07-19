@@ -51,6 +51,12 @@ export function composeTextRef(rawRef, span) {
 }
 export function parseTextRef(textRef) {
   const i = textRef.lastIndexOf('::');
+  // No `::span` suffix is legitimate (a raw ref addresses the whole record). Guard it: with i === -1
+  // the old `slice(0, i)` was `slice(0, -1)`, which silently CHOPPED THE LAST CHARACTER off the ref —
+  // so `req_plain` looked up as `req_plai` and the resolver reported the record "absent" rather than
+  // reporting a malformed ref. A silently wrong answer from the source-truth resolver is the worst
+  // failure mode this module can have.
+  if (i < 0) return { rawRef: textRef, start: null, end: null, recordId: textRef.slice(textRef.lastIndexOf('#') + 1) };
   const rawRef = textRef.slice(0, i);
   const [start, end] = textRef.slice(i + 2).split('-').map(Number);
   return { rawRef, start, end, recordId: rawRef.slice(rawRef.lastIndexOf('#') + 1) };

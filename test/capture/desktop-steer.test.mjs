@@ -131,6 +131,94 @@ test('B5 a healthy runtime is still ok:true (the happy path is not collateral da
   assert.equal((await steer.on({ port: 9898 })).ok, true);
 });
 
+// ── B6: `off()` must report the REAL teardown outcome ─────────────────────────────────────────
+// A failed `off` that reports ok:true tells the user monitoring is off while their traffic is STILL
+// routed into the MITM. Undo is first-class (4.1:64 「off 对称 … 零残留」) — so a failed undo MUST
+// be loud.
+test('B6 off() reports ok:false when the mihomo reload is rejected (traffic may still be routed)', async () => {
+  const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 500 }), probeLive: () => Promise.resolve(true) });
+  await steer.on({ port: 9898 });
+  const out = await steer.off();
+  assert.equal(out.ok, false, 'a rejected reload is not a clean teardown');
+  assert.match(out.reason, /reload/i, 'says WHY');
+  assert.match(out.reason, /500/, 'carries the actual status');
+});
+
+test('B6 off() reports ok:false when the mihomo socket is unreachable (status 0 + error)', async () => {
+  const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 0, error: 'ENOENT /tmp/verge/verge-mihomo.sock' }), probeLive: () => Promise.resolve(false) });
+  await steer.on({ port: 9898 });
+  const out = await steer.off();
+  assert.equal(out.ok, false);
+  assert.match(out.reason, /ENOENT|reload/i);
+});
+
+test('B6 off() reports ok:false when the Script.js restore itself failed', async () => {
+  const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 204 }), probeLive: () => Promise.resolve(false) });
+  await steer.on({ port: 9898 });
+  // now the Script.js becomes unwritable (read-only file / EACCES) — the restore cannot land
+  const realWrite = fs.writeFileSync;
+  fs.writeFileSync = (p, c) => { if (p === '/s.js') { const e = new Error('EACCES: permission denied'); e.code = 'EACCES'; throw e; } return realWrite(p, c); };
+  const out = await steer.off();
+  fs.writeFileSync = realWrite;
+  assert.equal(out.ok, false, 'the steer is STILL installed — that is not a clean off');
+  assert.match(out.reason, /s\.js/, 'names the file that could not be restored');
+  assert.equal(out.status.scriptInstalled, true, 'and says so in the status');
+});
+
+test('B6 the clean teardown path is still ok:true (no collateral damage)', async () => {
+  const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 204 }), probeLive: () => Promise.resolve(false) });
+  await steer.on({ port: 9898 });
+  const out = await steer.off();
+  assert.equal(out.ok, true);
+  assert.equal(out.status.scriptInstalled, false);
+});
+
+// ── B7: `on()` must fold the mihomo reload status into its own ok ──────────────────────────────
+test('B7 on() reports ok:false when mihomo REJECTS the reloaded config (status 500)', async () => {
+  const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 500 }), probeLive: () => Promise.resolve(false) });
+  const out = await steer.on({ port: 9898 });
+  assert.equal(out.ok, false, 'a rejected reload means capture is NOT live now');
+  assert.match(out.reason, /reload/i);
+  assert.match(out.reason, /500/);
+  assert.equal(out.status.scriptInstalled, true, 'the durable half still landed — say that too');
+});
+
+test('B7 on() reports ok:false when the mihomo control socket is unreachable (status 0)', async () => {
+  const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 0, error: 'connect ENOENT /tmp/verge/verge-mihomo.sock' }), probeLive: () => Promise.resolve(false) });
+  const out = await steer.on({ port: 9898 });
+  assert.equal(out.ok, false);
+  assert.match(out.reason, /ENOENT|reload/i);
+});
+
+// ── B8: a Script.js we cannot READ must never be overwritten ──────────────────────────────────
+// read() defaulting every error to '' turns "EACCES on the user's real Script.js" into "empty file,
+// use the stub" — and then on() writes a GENERATED script over the user's own Clash logic.
+test('B8 on() REFUSES to overwrite a present-but-unreadable Script.js', async () => {
+  const CUSTOM = '// the user\'s own global script\nfunction main(config) { config.rules.unshift("MATCH,DIRECT"); return config; }\n';
+  const fs = fakeFs({ '/s.js': CUSTOM, '/rt.yaml': RT });
+  const realRead = fs.readFileSync;
+  fs.readFileSync = (p) => { if (p === '/s.js') { const e = new Error('EACCES: permission denied'); e.code = 'EACCES'; throw e; } return realRead(p); };
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 204 }), probeLive: () => Promise.resolve(false) });
+  await assert.rejects(() => steer.on({ port: 9898 }), (e) => e.message.includes('/s.js') && /EACCES|read/i.test(e.message), 'throws, naming the file it could not read');
+  fs.readFileSync = realRead;
+  assert.equal(fs.files.get('/s.js'), CUSTOM, 'the user\'s Script.js is byte-identical — never written on a failed read');
+  assert.equal(fs.files.has('/s.js.atrace-bak'), false, 'and no bogus backup of an unread file');
+});
+
+test('B8 an ABSENT Script.js is still fine — ENOENT means "start from the no-op stub"', async () => {
+  const fs = fakeFs({ '/rt.yaml': RT });
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 204 }), probeLive: () => Promise.resolve(true) });
+  const out = await steer.on({ port: 9898 });
+  assert.equal(out.ok, true);
+  assert.match(fs.files.get('/s.js'), /port: 9898/, 'a fresh Script.js was generated from the stub');
+});
+
 test('non-darwin: explicit reserved refusal, never a silent no-op (D22)', () => {
   const steer = getDesktopSteer('linux', {});
   const out = steer.on({ port: 9898 });

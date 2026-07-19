@@ -80,7 +80,7 @@ async function loadModule() {
   const html = fs.readFileSync(INDEX, 'utf8');
   const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)];
   const moduleJs = scripts[scripts.length - 1][1];
-  const expose = '\n;globalThis.__M__={poll, renderEmpty, setPlayhead, get anchor(){return anchor}, set anchor(v){anchor=v}};\n';
+  const expose = '\n;globalThis.__M__={poll, renderEmpty, setPlayhead, get anchor(){return anchor}, set anchor(v){anchor=v}, setBrushDragging(v){brushDragging=v}, getBrushDragging(){return brushDragging}};\n';
   const bust = `\n//# fresh-instance-${++loadSeq}\n`;
   const url = `data:text/javascript;base64,${Buffer.from(moduleJs + expose + bust).toString('base64')}`;
   await import(url);
@@ -128,4 +128,21 @@ test('"⇥ latest" does not throw on a session with zero calls', async () => {
   M.anchor = { calls: [] };
   assert.doesNotThrow(() => M.setPlayhead(M.anchor.calls.length - 1, true),
     'jumping to latest on an empty session must be a no-op, not a TypeError');
+});
+
+// REGRESSION GUARD (collateral-damage audit, 2026-07-19).
+// renderEmpty() was extended to clear the overview strip (so a failed session stops showing the
+// PREVIOUS session's waveform). But `#ovbrush` lives inside `#ovstrip`, and it owns the drag's
+// pointer capture — the `up()` handler that resets `brushDragging` is bound to that element. If a
+// poll hits the empty/error path while the user happens to be dragging the brush, the element is
+// destroyed, `pointerup` never reaches its handler, `brushDragging` stays true, and renderOverview()
+// early-returns forever: the overview strip stays blank for the rest of the page session, with no
+// way back short of a reload. Clearing the flag alongside the DOM it depended on closes it.
+test('renderEmpty() releases a brush drag instead of wedging the overview', async () => {
+  harness({ sessionResponder: () => OK() });
+  const M = await loadModule();
+  M.setBrushDragging(true);              // user is mid-drag
+  M.renderEmpty('nothing to show');      // a poll fails underneath them
+  assert.equal(M.getBrushDragging(), false,
+    'the drag flag must not outlive the element whose handler would have cleared it');
 });

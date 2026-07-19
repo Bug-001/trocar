@@ -434,6 +434,15 @@ export function analyze(records) {
       let newMsgs
       if (bigDrop || (drop && hasPreamble)) {
         step.compaction = true
+        // 保真边界 (invariant 4 · spec 1.5:37 / 3.4:16,21): CC emits NO explicit compaction marker —
+        // this verdict is INFERRED from observed shape, never confirmed by the harness. Carry that in
+        // the data so a consumer can render "≈ inferred" instead of asserting it; spec 3.4:21 pins the
+        // level at medium. `basis` names WHICH evidence fired: CC's own "continued from a previous
+        // conversation" preamble (the stronger signal, and the harness's own words) vs. a bare
+        // message-count collapse (a number going down — the weaker guess).
+        step.compactionInferred = true
+        step.compactionConfidence = 'medium'
+        step.compactionBasis = hasPreamble ? 'preamble+msg-count-drop' : 'msg-count-drop'
         step.evictedFrom = prevCount
         step.evictedTo = msgs.length
         for (const res of resMap.values()) {
@@ -447,7 +456,10 @@ export function analyze(records) {
         newMsgs = msgs.slice(prevCount)
       }
       if (step.compaction)
-        s.events.push({ type: 'compaction', step: step.gi, streamId: s.id, from: step.evictedFrom, to: step.evictedTo })
+        s.events.push({ type: 'compaction', step: step.gi, streamId: s.id, from: step.evictedFrom, to: step.evictedTo,
+          // the event travels to the UI on its own — it MUST carry the inference marker with it,
+          // otherwise the timeline re-asserts as fact what the step knows is a guess (invariant 4).
+          inferred: true, confidence: step.compactionConfidence, basis: step.compactionBasis })
       if (isSummarize) {
         step.summarizing = true
         s.events.push({ type: 'summarize', step: step.gi, streamId: s.id, out: step.norm.usage?.output_tokens })

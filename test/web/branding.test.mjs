@@ -37,3 +37,22 @@ test('every command the empty state tells the user to run actually exists in the
       `empty state suggests "asight ${v}" but bin/asight.mjs implements no such subcommand (has: ${[...implemented].join(', ')})`);
   }
 });
+
+// The <title> check above missed the most visible instance: the page wordmark was
+// `<h1><b>a</b>trace</h1>`, so a plain source grep for "atrace" found nothing while every user saw
+// it in the top-left corner. Assert on RENDERED TEXT (tags stripped), not on source strings.
+const visibleText = html
+  .replace(/<script[\s\S]*?<\/script>/g, '')   // ignore JS identifiers/localStorage keys
+  .replace(/<style[\s\S]*?<\/style>/g, '')
+  .replace(/<[^>]+>/g, '');                     // strip tags so split words rejoin
+
+test('the old product name is not visible anywhere in the rendered page', () => {
+  const hit = /atrace/i.exec(visibleText);
+  assert.equal(hit, null,
+    hit ? `visible chrome still reads "atrace" near: ${JSON.stringify(visibleText.slice(Math.max(0, hit.index - 40), hit.index + 40))}` : '');
+});
+
+test('the wordmark reads asight', () => {
+  const h1 = (html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/) || [])[1] || '';
+  assert.match(h1.replace(/<[^>]+>/g, ''), /^asight$/i, `wordmark renders as "${h1.replace(/<[^>]+>/g, '')}"`);
+});

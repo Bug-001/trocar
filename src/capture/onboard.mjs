@@ -177,9 +177,35 @@ export function clearCliSteer({ settingsPath = DEFAULT_SETTINGS_PATH, stashPath 
 }
 
 // One-call onboard: generate CA (if needed) + install into user trust + steer CC-CLI.
+// The steer's PRECONDITION is a trusted CA. Steering the harness at a MITM whose CA was never
+// installed does not degrade gracefully — every request dies at the TLS handshake, with nothing to
+// point at the cause. So a failed install ABORTS before the steer is written, leaving the harness
+// exactly as it was (direct). It throws rather than returning ok:false because the callers
+// (bin/asight.mjs `on`, control.mjs `monitoringOn`) both read the result as an already-succeeded
+// onboard; a throw is the only shape they surface truthfully today (see WIRING GAP note below).
 export function atraceOn({ caDir, proxyUrl = 'http://127.0.0.1:8899', settingsPath, stashPath, platform, installerOpts, run } = {}) {
   const ca = generateCa({ caDir, run })
   const install = installCa({ caCrt: ca.caCrt, platform, installerOpts })
+  // The precondition is "is the CA trusted", NOT "did the installer exit 0". macOS
+  // `security add-certificates` exits NON-ZERO when the cert is already in the keychain, so on every
+  // already-onboarded machine the SUCCESS path looks like a failure. Aborting on the exit code alone
+  // broke `asight on` (and the board's 监测 toggle, which surfaced it as a silent no-op) for exactly
+  // the users who had it working. Ask the trust store directly before giving up.
+  const trusted = install.ok || (() => {
+    try { return !!verifyUserTrustOnly({ platform, installerOpts }) } catch { return false }
+  })()
+  if (!trusted) {
+    const detail = install.result?.stderr?.trim() || install.result?.stdout?.trim() || `exit status ${install.result?.status}`
+    const e = new Error(
+      `asight on ABORTED: installing the capture CA into the ${install.platform} user trust store FAILED (${detail}). ` +
+      `NOTHING was steered — ${settingsPath || DEFAULT_SETTINGS_PATH} is unchanged and the harness still talks to the API directly. ` +
+      `The CA itself was generated at ${ca.caCrt}; trust it (or fix the installer) and re-run \`asight on\`. ` +
+      `Steering the harness at the capture proxy without a trusted CA would break every request with a TLS error.`,
+    )
+    e.ca = ca
+    e.install = install
+    throw e
+  }
   const steer = writeCliSteer({ settingsPath, stashPath, proxyUrl })
   return { ca, install, steer }
 }

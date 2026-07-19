@@ -408,7 +408,7 @@
 </head>
 <body>
 <header>
-  <h1><b>a</b>trace</h1>
+  <h1><b>a</b>sight</h1>
 
   <select id="fileSel" title="project · session"></select>
   <div class="ident">
@@ -489,8 +489,37 @@ const fmtTime = ts => { try{ return new Date(ts).toLocaleTimeString() }catch{ re
 const fmtDur = ms => ms==null?'?':ms>=1000?(ms/1000).toFixed(1)+'s':ms+'ms'
 // rough cost estimate ($/Mtok: input, output, cache-write-5m, cache-read) — editable
 let PRICING={opus:[15,75,18.75,1.5],sonnet:[3,15,3.75,0.3],haiku:[1,5,1.25,0.1]} // D14: overridden by /api/pricing (editable config); cost = usage × price, derived-only
-const priceKey=m=>/opus/.test(m||'')?'opus':/sonnet/.test(m||'')?'sonnet':'haiku'
-function costOf(model,u){ const [i,o,cw,cr]=PRICING[priceKey(model)]; return ((u.fresh||0)*i+(u.out||0)*o+(u.create||0)*cw+(u.read||0)*cr)/1e6 } // u = neutral canonical usage (D18a Q1)
+// BUG 3 (audit 2026-07-19): pricing is a (provider, model) space — spec 2.2:42 `price[provider,
+// model, role]` / 2.2:44 「单价表按 (provider, model) 扩展」. The old priceKey() matched the
+// ANTHROPIC family names opus/sonnet/haiku as substrings **with haiku as the fallback**, so every
+// OpenAI / DeepSeek model silently got haiku rates and a confident $ figure. A wrong number is
+// worse than no number (不变式4): no row for (provider, model) ⇒ NO number, never a guess.
+const PRICING_PROVIDER='anthropic' // whose $/Mtok the editable PRICING table above holds
+const ANTHROPIC_FAMILY=[[/opus/,'opus'],[/sonnet/,'sonnet'],[/haiku/,'haiku']]
+const curProvider=()=>(meta&&meta.provider)||null // observed on the wire server-side; may be null
+// priceRow(model, provider) → [in,out,cache_write,cache_read] | null
+function priceRow(model,provider){
+  const m=String(model||''); if(!m) return null
+  const p=(provider===undefined?curProvider():provider)
+  // an EXACT model key in the editable table wins for any provider — that is the D14 escape hatch:
+  // add "gpt-5.5":[…] to pricing.json / ASIGHT_PRICING and the board prices it for real.
+  if(Array.isArray(PRICING[m])) return PRICING[m]
+  const bare=m.replace(/^claude-/,''); if(Array.isArray(PRICING[bare])) return PRICING[bare]
+  // Family substrings (opus/sonnet/haiku) are ANTHROPIC model names, so they may only be matched
+  // against an Anthropic-shaped MODEL NAME. Gating on the wire dialect (`p`) instead was wrong in
+  // both directions: claude-opus-4-6 reached over an OpenAI-Responses endpoint (OpenCode is
+  // provider-agnostic) lost its correct opus price, while `sonnet-mini-2` with an unknown dialect
+  // still pulled Anthropic rates. The model decides the price; the transport is irrelevant.
+  if(!/^claude[-.]/i.test(m)) return null
+  for(const [re,k] of ANTHROPIC_FAMILY) if(re.test(m)&&Array.isArray(PRICING[k])) return PRICING[k]
+  return null // no fallback (the defect): an unrecognized model has no price, not haiku's
+}
+function costOf(model,u,provider){ const r=priceRow(model,provider); if(!r) return null
+  const [i,o,cw,cr]=r; return ((u.fresh||0)*i+(u.out||0)*o+(u.create||0)*cw+(u.read||0)*cr)/1e6 } // u = neutral canonical usage (D18a Q1)
+// Render a cost cell. No price row ⇒ "n/a" + why, reusing the SAME treatment as the existing
+// "usage 未返回" case (2.2:102 不冒充 $0) rather than inventing a new visual language.
+const NOPRICE='no local unit price for this (provider, model) — asight does NOT guess (a fabricated figure is worse than none, 不变式4). Add a row for this model to pricing.json / ASIGHT_PRICING to price it (D14).'
+const costCell=(model,u)=>{ const c=costOf(model,u); return c==null?`<b title="${NOPRICE}">n/a</b>`:`<b>${usd(c)}</b>` }
 // D14 保真标:花费 = 本地估价(canonical usage × 可编辑单价),非线上账单事实。就地标 → 不变式4;可复算 → §验收#3。(usd() 见下方 demo 复用的格式化器)
 const COSTTITLE='≈ 本地估价(local estimate, NOT a wire fact): Σ(canonical usage × 你的本地单价, opus/sonnet/haiku 四价 input/output/cache-write/cache-read). Provider 不在 wire 上返回金额;单价是可编辑配置(pricing.json / ASIGHT_PRICING),改价即改此估算。cost 是派生-only,绝不入归一化存储(D14 / 不变式2·4).'
 const estBadge=`<span class="estbadge" title="${COSTTITLE}">≈ 本地估价 · editable</span>`
@@ -498,7 +527,7 @@ const estBadge=`<span class="estbadge" title="${COSTTITLE}">≈ 本地估价 · 
 // 与 quota(max_tokens:1·回复丢弃)不走这条 → 各自卡上如实标"不计费/已丢弃"(2.2:101),不冒充成本。
 function costDin(c){ const u=c.usage||{}, m=String(c.rec?.request?.model||'').replace('claude-',''), tot=(u.read||0)+(u.create||0)+(u.fresh||0)+(u.out||0)
   if(tot<=0) return `<div class="din" style="color:var(--dim)">${esc(m)} · usage 未返回 — 成本 n/a(不冒充 $0)</div>`
-  return `<div class="din" style="color:var(--dim)">${esc(m)} · ${kf(u.out||0)} out tok · ≈ cost <b>${usd(costOf(c.rec?.request?.model,u))}</b> ${estBadge}</div>` }
+  return `<div class="din" style="color:var(--dim)">${esc(m)} · ${kf(u.out||0)} out tok · ≈ cost ${costCell(c.rec?.request?.model,u)} ${estBadge}</div>` }
 const usd=n=>n>=1?'$'+n.toFixed(2):n>=0.01?'$'+n.toFixed(3):n>0?'$'+n.toFixed(4):'$0'
 // display a path relative to the session's cwd when it's inside it, else absolute (no symlink resolution)
 function relPath(p){ const cwd=meta&&meta.project_path; return (cwd&&String(p).startsWith(cwd+'/'))?String(p).slice(cwd.length+1):String(p) }
@@ -641,7 +670,19 @@ async function poll(){
     document.getElementById('dot').classList.toggle('on',document.getElementById('liveChk').checked)
   }catch(e){ document.getElementById('dot').classList.remove('on'); console.error(e) }
 }
-function renderEmpty(msg){ document.body.classList.remove('ctrlmode'); document.getElementById('ctxwin').innerHTML=`<div class="empty">${esc(msg)}</div>`; document.getElementById('ctxnav').innerHTML=''; document.getElementById('rails').innerHTML=''; document.getElementById('sawrow').innerHTML='<div id="reviewbracket"></div>'; const rx=document.getElementById('resexp'); if(rx)rx.innerHTML=''; const rp=document.getElementById('rawpanel'); if(rp)rp.innerHTML=''; const cr=document.getElementById('cacherow'); if(cr)cr.innerHTML='' }
+// BUG 2 (audit 2026-07-19): this used to clear only the panels, leaving the overview strip, the
+// position indicator, the axis captions and the header stats carrying the PREVIOUS session's data
+// — so a session that failed or is empty rendered under another session's waveform and a header
+// like "6 turns · peak 140k". Every widget that carries per-session data MUST be neutralized here
+// (不变式4 · 1.5:64 "不残留上一 session chrome"). The top bar is deliberately NOT cleared: it is
+// set for the CURRENT session before render()'s !anchor early-exit.
+function renderEmpty(msg){ document.body.classList.remove('ctrlmode'); brushDragging=false; /* the brush element is about to be destroyed; its up() handler is the only thing that clears this flag, and renderOverview() early-returns while it is set */ document.getElementById('ctxwin').innerHTML=`<div class="empty">${esc(msg)}</div>`; document.getElementById('ctxnav').innerHTML=''; document.getElementById('rails').innerHTML=''; document.getElementById('sawrow').innerHTML='<div id="reviewbracket"></div>'; const rx=document.getElementById('resexp'); if(rx)rx.innerHTML=''; const rp=document.getElementById('rawpanel'); if(rp)rp.innerHTML=''; const cr=document.getElementById('cacherow'); if(cr)cr.innerHTML=''
+  const st=document.getElementById('stats'); if(st)st.innerHTML=''                       // header stats (turns / peak ctx / errors)
+  const ov=document.getElementById('ovstrip'); if(ov)ov.innerHTML=''                     // overview waveform + brush + pin
+  for(const id of ['sawmid','sawstart','sawend']){ const e=document.getElementById(id); if(e)e.textContent='' } // axis captions
+  const ph=document.getElementById('phlabel'); if(ph)ph.textContent=''                   // position indicator (#n/N)
+  const lh=document.getElementById('lanehint'); if(lh)lh.innerHTML=''                    // which lane / how many turns
+}
 function hideSessionChrome(hide){ document.getElementById('saw').style.display=hide?'none':''; document.getElementById('rails').style.display=hide?'none':'' }
 
 // Envelope-tolerant readers (R1, audit 2026-07-19). /api/control ships RAW records: the product
@@ -777,8 +818,12 @@ function render(){
   if(fc){ fc.textContent=_fork; fc.style.display=_fork?'':'none'; fc.title=_same>1?'other sessions share this title — likely forks / different branches; the id chip disambiguates':'subagent branches spawned from this session' }
   if(!anchor){ renderEmpty('No LLM calls traced yet.'); document.getElementById('stats').innerHTML=''; return }
   const st=A.stats, err=errStats()
+  // BUG 1 (audit 2026-07-19): this used to count `A.lanes.find(kind==='main')` while the board
+  // RENDERS `anchor` — on a capture with no main lane (routine on real Desktop traces) the header
+  // read "0 turns" over N drawn bars. The count MUST come from the lane actually on screen, and
+  // "turns" is a main-conversation word: an off-main anchor is counted in its own calls (不变式4).
   document.getElementById('stats').innerHTML=
-    `<span><b>${(A.lanes.find(l=>l.kind==='main')||{calls:[]}).calls.length}</b> turns</span>`+
+    `<span><b>${anchor.calls.length}</b> ${anchor.kind==='main'?'turns':`${esc(anchor.label||anchor.kind)} calls`}</span>`+
     (st.monitors?`<span title="prompt-injection / safety monitor">🛡 <b>${st.monitors}</b></span>`:'')+
     (probes.count?`<span title="count_tokens measurements">👁 <b>${probes.count}</b></span>`:'')+
     (st.subagents?`<span>🧬 <b>${st.subagents}</b></span>`:'')+
@@ -921,11 +966,19 @@ function renderSaw(){
     return `<div class="cbar ${cls} ${i===playhead?'cur':''}" title="#${i+1} · cache read ${kf(read)}/${kf(tot)} · ${Math.round(r*100)}%"></div>`
   }).join('')
   const full=(lo===0&&hi===N)
-  document.getElementById('sawmid').textContent='conversation ctx ↑'
+  // BUG 1 (audit 2026-07-19): the label was hardcoded `💬 conversation` while the anchor may be
+  // ANY lane (`lanes.find(main)||lanes[0]` — real Desktop captures often have no main lane), so a
+  // security-monitor / subagent lane was presented AS the conversation. Name the lane we are
+  // actually drawing (server ships lane.icon/lane.label — invariant 3: no provider logic here).
+  const isMain=anchor.kind==='main'
+  const laneName=isMain?'conversation':(anchor.label||anchor.kind||'lane'), laneIcon=isMain?'💬':(anchor.icon||'▤')
+  document.getElementById('sawmid').textContent=`${laneName} ctx ↑`
   const ss=document.getElementById('sawstart'); if(ss) ss.textContent=full?'call #1':('call #'+(lo+1))
   document.getElementById('sawend').textContent=full?('call #'+N):(`#${lo+1}–#${hi} of ${N}`)
   document.getElementById('phlabel').textContent=` ${playhead+1}/${N} `
-  document.getElementById('lanehint').innerHTML=`💬 <b style="color:var(--fg)">conversation</b> — ${N} turns, peak ${kf(anchor.peakCtx)} tok${full?'':` · <span style="color:var(--dim)">viewing ${hi-lo}</span>`}`
+  document.getElementById('lanehint').innerHTML=`${esc(laneIcon)} <b style="color:var(--fg)">${esc(laneName)}</b>`+
+    (isMain?'':` <span class="estbadge" title="this capture has no main conversation lane; the board is anchored on this off-main lane instead — its calls are NOT conversation turns (不变式4)">no main lane · off-main anchor</span>`)+
+    ` — ${N} ${isMain?'turns':'calls'}, peak ${kf(anchor.peakCtx)} tok${full?'':` · <span style="color:var(--dim)">viewing ${hi-lo}</span>`}`
 }
 // ── D13 overview strip + brush (focus+context navigator) ─────────────────────
 const OVW_BARCAP=60
@@ -1345,7 +1398,7 @@ function renderRawPanel(){
   const read=u.read||0, create=u.create||0, fresh=u.fresh||0, out=u.out||0
   // D14 花费:本地估价 = costOf(model, canonical usage)。无 usage(error/interrupted)→ 显 '?',MUST NOT 填 $0 冒充(2.2:102)。
   const hasU=(read+create+fresh+out)>0
-  const costLine=hasU?`≈ cost <b>${usd(costOf(rq.model,u))}</b> ${estBadge}`
+  const costLine=hasU?`≈ cost ${costCell(rq.model,u)} ${estBadge}`
     :`≈ cost <b title="no usage returned for this step — not faked as $0 (不变式4)">?</b> ${estBadge}`
   el.innerHTML=`<div class="rphd">🩻 raw · call #${playhead+1}</div>`+
     `<div class="rpk">${esc(String(rq.model||'').replace('claude-',''))} · ${kf(rq.context_chars)} bytes wire</div>`+

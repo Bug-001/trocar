@@ -266,6 +266,44 @@ test('B2 atraceOn/atraceOff thread the stash end-to-end (the round trip users ac
   assert.equal(env.NO_PROXY, '*.corp.internal')
 })
 
+// ── B9: never steer the harness at a MITM whose CA was never trusted ─────────────────────────
+// installCa maps a non-zero installer exit to ok:false. Writing the steer anyway leaves the harness
+// pointed at a MITM it cannot validate → EVERY request dies in a TLS error the user cannot explain.
+// The steer is a write whose precondition (CA is trusted) MUST be verified first.
+test('B9 atraceOn does NOT write the CLI steer when the CA trust install failed', () => {
+  const caDir = path.join(tmp('asight-ca-'), 'ca')
+  const { settingsPath, stashPath } = steerPaths()
+  const failing = () => ({ status: 1, stdout: '', stderr: 'certutil: could not open the database' })
+  assert.throws(
+    () => atraceOn({ caDir, settingsPath, stashPath, platform: 'linux', installerOpts: { run: failing, nssdb: '/tmp/nss' } }),
+    (e) => /trust|CA/i.test(e.message) && /steer/i.test(e.message) && /certutil: could not open the database/.test(e.message),
+    'throws, saying the CA install failed, that no steer was written, and what the installer said',
+  )
+  assert.equal(fs.existsSync(settingsPath), false, 'settings.json was never written — the harness is left untouched (still direct)')
+})
+
+test('B9 the failed-install error still tells the user the machine state (CA generated, not trusted)', () => {
+  const caDir = path.join(tmp('asight-ca-'), 'ca')
+  const { settingsPath, stashPath } = steerPaths()
+  const failing = () => ({ status: 1, stderr: 'nope' })
+  let err
+  try { atraceOn({ caDir, settingsPath, stashPath, platform: 'linux', installerOpts: { run: failing, nssdb: '/tmp/nss' } }) } catch (e) { err = e }
+  assert.ok(err, 'it threw')
+  assert.equal(err.install.ok, false, 'the install result is attached for programmatic callers')
+  assert.ok(fs.existsSync(err.ca.caCrt), 'the CA it generated is named, so the user can retry the install')
+  assert.match(err.message, new RegExp(err.ca.caCrt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), 'and the message names the CA path')
+})
+
+test('B9 an existing settings.json is left byte-identical when the CA install fails', () => {
+  const caDir = path.join(tmp('asight-ca-'), 'ca')
+  const { settingsPath, stashPath } = steerPaths()
+  const original = JSON.stringify({ model: 'opus', env: { FOO: 'bar' } }, null, 2) + '\n'
+  fs.writeFileSync(settingsPath, original)
+  assert.throws(() => atraceOn({ caDir, settingsPath, stashPath, platform: 'linux', installerOpts: { run: () => ({ status: 1 }), nssdb: '/tmp/nss' } }))
+  assert.equal(fs.readFileSync(settingsPath, 'utf8'), original, 'untouched')
+  assert.equal(fs.existsSync(stashPath), false, 'and no half-written stash to confuse a later off()')
+})
+
 test('atraceOn/atraceOff full onboard, fully injected (hermetic — no real keychain/settings)', () => {
   const caDir = path.join(tmp('asight-ca-'), 'ca')
   const { settingsPath, stashPath } = steerPaths()
@@ -280,4 +318,46 @@ test('atraceOn/atraceOff full onboard, fully injected (hermetic — no real keyc
   assert.equal(off.ca, null)
   assert.equal(rec.calls.length, before) // no extra installer call
   assert.equal(JSON.parse(fs.readFileSync(settingsPath, 'utf8')).env.HTTPS_PROXY, undefined)
+})
+
+// REGRESSION GUARD (collateral-damage audit, 2026-07-19).
+// The `!install.ok` abort added above treats a non-zero installer exit as "the CA is not trusted".
+// On macOS the installer is `security add-certificates -k login.keychain-db <ca>`, which EXITS
+// NON-ZERO WHEN THE CERT IS ALREADY PRESENT ("already in <keychain>"). So on any machine that has
+// already been onboarded — including the developer's own — the SUCCESS path reported ok:false and
+// `asight on` aborted without writing the steer, and the board's 监测 toggle silently did nothing.
+// The precondition we actually care about is "is the CA trusted", not "did the installer exit 0".
+const keychainRun = ({ certPresent }) => (file, args) => {
+  const a = (args || []).join(' ')
+  if (a.includes('add-certificates')) return { status: 1, stdout: '', stderr: 'security: ca.crt: already in login.keychain-db' }
+  if (a.includes('find-certificate')) return { status: certPresent ? 0 : 1, stdout: '', stderr: '' }
+  return { status: 0, stdout: '', stderr: '' }
+}
+
+test('atraceOn proceeds when the installer fails BECAUSE the CA is already trusted', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-dup-ca-'))
+  const settingsPath = path.join(dir, 'settings.json')
+  try {
+    atraceOn({
+      caDir: path.join(dir, 'ca'), settingsPath, stashPath: path.join(dir, 'stash.json'),
+      platform: 'darwin',
+      installerOpts: { run: keychainRun({ certPresent: true }), keychain: path.join(dir, 'kc') },
+    })
+    assert.ok(fs.existsSync(settingsPath),
+      'the steer MUST be written when the CA is verifiably trusted — a duplicate-install exit code '
+      + 'is a SUCCESS signal on macOS, and aborting on it breaks every already-onboarded machine')
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('atraceOn still aborts when the CA is genuinely NOT trusted', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-no-ca-'))
+  const settingsPath = path.join(dir, 'settings.json')
+  try {
+    assert.throws(() => atraceOn({
+      caDir: path.join(dir, 'ca'), settingsPath, stashPath: path.join(dir, 'stash.json'),
+      platform: 'darwin',
+      installerOpts: { run: keychainRun({ certPresent: false }), keychain: path.join(dir, 'kc') },
+    }), /ABORTED/, 'a real install failure must still abort rather than steer into a broken TLS path')
+    assert.ok(!fs.existsSync(settingsPath), 'no steer may be written when the CA is absent')
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })

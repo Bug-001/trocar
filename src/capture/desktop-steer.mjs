@@ -144,17 +144,37 @@ export function getDesktopSteer(platform = process.platform, deps = {}) {
   const probeLive = deps.probeLive || defaultProbeLive(sock);
   const NO_OP = '// Define main function (script entry)\nfunction main(config, profileName) { return config; }\n';
 
-  const read = (p, dflt = '') => { try { return fs.readFileSync(p, 'utf8'); } catch { return dflt; } };
-  const backupOnce = (p) => { const bak = p + '.atrace-bak'; if (fs.existsSync(p) && !fs.existsSync(bak)) fs.writeFileSync(bak, fs.readFileSync(p, 'utf8')); };
+  // ONLY a genuinely absent file may fall back to the default. Every other read failure (EACCES on
+  // the user's own Script.js, a directory, a broken symlink) MUST NOT degrade into "empty → use the
+  // NO_OP stub", because on() would then write a GENERATED script over Clash logic it never saw.
+  // Throw, naming the file, before anything is written (same discipline as onboard's settings.json).
+  const read = (p, dflt = '') => {
+    try { return fs.readFileSync(p, 'utf8'); } catch (e) {
+      if (e && e.code === 'ENOENT') return dflt;
+      throw new Error(`asight refused to touch ${p}: cannot read it (${e.code || e.message}). Nothing was written — fix or move the file, then retry.`);
+    }
+  };
+  const backupOnce = (p, content) => { const bak = p + '.atrace-bak'; if (content !== null && !fs.existsSync(bak)) fs.writeFileSync(bak, content); };
+  // A reload we never had to make (no runtime config on disk) is not a failure; any attempted reload
+  // that mihomo did not accept IS one — the steer is not live, whatever the durable half did.
+  const reloadOk = (r) => r == null || r.status === null || r.status === 200 || r.status === 204;
+  const reloadWhy = (r) => `mihomo reload FAILED (status ${r?.status}${r?.error ? `: ${r.error}` : ''})`;
 
   async function on({ port = 9899 } = {}) {
-    // 1. DURABLE: augment the global Script (rebuild from the clean original each time → idempotent)
-    backupOnce(scriptPath);
-    const base = stripBlock(read(scriptPath, NO_OP)) || NO_OP;
+    // 1. DURABLE: augment the global Script (rebuild from the clean original each time → idempotent).
+    //    READ FIRST: a present-but-unreadable Script.js throws here, before the backup or the write.
+    const original = read(scriptPath, null);
+    backupOnce(scriptPath, original);
+    const base = stripBlock(original ?? NO_OP) || NO_OP;
     fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
     fs.writeFileSync(scriptPath, injectScript(base, port));
-    // 2. CLEANUP: drop any legacy inert atrace block the old Merge.yaml path left (wrong/9899 port)
-    if (fs.existsSync(mergePath)) { const m = read(mergePath); const cleaned = stripBlock(stripMergeLegacy(m)); if (cleaned !== m) fs.writeFileSync(mergePath, cleaned); }
+    // 2. CLEANUP: drop any legacy inert atrace block the old Merge.yaml path left (wrong/9899 port).
+    //    Best-effort: that block is INERT on Verge 2.5.1, so failing to tidy it neither routes nor
+    //    un-routes anything — but never let it abort (or silently pass for) the real steer.
+    let mergeCleanup = null;
+    try {
+      if (fs.existsSync(mergePath)) { const m = read(mergePath); const cleaned = stripBlock(stripMergeLegacy(m)); if (cleaned !== m) fs.writeFileSync(mergePath, cleaned); }
+    } catch (e) { mergeCleanup = { ok: false, path: mergePath, error: e.message }; }
     // 3. IMMEDIATE: splice the current runtime + hot-reload mihomo so it goes live now (mihomo
     //    validates & keeps the old config on error → the VPN can't break on a bad edit)
     //    A splice that found no `proxies:`/`rules:` anchor (quoted keys, flow-style arrays, …) is a
@@ -169,27 +189,64 @@ export function getDesktopSteer(platform = process.platform, deps = {}) {
         return {
           ok: false,
           reason: `runtime splice found no ${missing} anchor in ${runtimePath} — NOT live now (mihomo was not reloaded). The durable Script.js steer IS installed and should apply on the next Verge enhance/regen.`,
-          port, scriptPath, reload, status: await status(),
+          port, scriptPath, reload, status: await status(), ...(mergeCleanup ? { mergeCleanup } : {}),
         };
       }
       reload = await mihomoReload(yaml);
     }
-    return { ok: true, port, scriptPath, reload, status: await status() };
+    // A reload mihomo refused (rejected config) or never received (control socket down) means the
+    // steer is NOT live now — the machine-readable result MUST say so, not just the CLI's printout.
+    if (!reloadOk(reload)) {
+      return {
+        ok: false,
+        reason: `${reloadWhy(reload)} — NOT live now. The durable Script.js steer IS installed and should apply on the next Verge enhance/regen; check that Clash Verge is running (${sock}).`,
+        port, scriptPath, reload, status: await status(), ...(mergeCleanup ? { mergeCleanup } : {}),
+      };
+    }
+    return { ok: true, port, scriptPath, reload, status: await status(), ...(mergeCleanup ? { mergeCleanup } : {}) };
   }
 
+  // off() MUST report the REAL teardown outcome. A failed undo that reports ok:true tells the user
+  // monitoring is off while CC-Desktop traffic is STILL routed into the MITM — the worst shape of
+  // failure for a tool whose undo is first-class (4.1:64 「off 对称 … 零残留」).
   async function off() {
-    if (fs.existsSync(scriptPath)) { const bak = scriptPath + '.atrace-bak'; fs.writeFileSync(scriptPath, fs.existsSync(bak) ? fs.readFileSync(bak, 'utf8') : stripBlock(read(scriptPath, NO_OP))); }
-    if (fs.existsSync(mergePath)) fs.writeFileSync(mergePath, stripBlock(stripMergeLegacy(read(mergePath))));
+    let restoreError = null;
+    if (fs.existsSync(scriptPath)) {
+      const bak = scriptPath + '.atrace-bak';
+      try {
+        fs.writeFileSync(scriptPath, fs.existsSync(bak) ? fs.readFileSync(bak, 'utf8') : stripBlock(read(scriptPath, NO_OP)));
+      } catch (e) { restoreError = `could not restore ${scriptPath} (${e.code || e.message})`; }
+    }
+    let mergeCleanup = null;
+    try {
+      if (fs.existsSync(mergePath)) fs.writeFileSync(mergePath, stripBlock(stripMergeLegacy(read(mergePath))));
+    } catch (e) { mergeCleanup = { ok: false, path: mergePath, error: e.message }; }
     let reload = { status: null };
     const rt = read(runtimePath, null);
     if (rt) reload = await mihomoReload(stripRuntime(rt));
-    return { ok: true, reload, status: await status() };
+    const st = await status();
+    // Verify the undo actually landed — do not take the write's word for it.
+    const why = [];
+    if (restoreError) why.push(restoreError);
+    else if (st.scriptInstalled) why.push(`${scriptPath} still carries the atrace block after the restore`);
+    if (!reloadOk(reload)) why.push(reloadWhy(reload));
+    if (why.length) {
+      return {
+        ok: false,
+        reason: `desktop steer NOT fully removed — ${why.join('; ')}. CC-Desktop traffic may STILL be routed into the MITM; re-run \`asight desktop off\` and check \`asight desktop status\`.`,
+        reload, status: st, ...(mergeCleanup ? { mergeCleanup } : {}),
+      };
+    }
+    return { ok: true, reload, status: st, ...(mergeCleanup ? { mergeCleanup } : {}) };
   }
 
   async function status() {
-    const scriptInstalled = read(scriptPath).includes(BEGIN);
+    // status() must never crash: an unreadable Script.js is reported as UNKNOWN (null) + why, which
+    // is honest, rather than as `false` (= "not installed"), which would be a lie.
+    let scriptInstalled = false, readError = null;
+    try { scriptInstalled = read(scriptPath).includes(BEGIN); } catch (e) { scriptInstalled = null; readError = e.message; }
     let live = null; try { live = await probeLive(); } catch { live = null; }
-    return { platform, scriptInstalled, live, proxyName: PROXY_NAME, scriptPath };
+    return { platform, scriptInstalled, live, proxyName: PROXY_NAME, scriptPath, ...(readError ? { readError } : {}) };
   }
 
   return { platform, on, off, status };

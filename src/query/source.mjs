@@ -33,6 +33,33 @@ const AMBIGUOUS = Symbol('ambiguous-record-id');
 // rawRef = `<sessionId>/<streamBasename>#<recordId>` → the stream component.
 const streamOfRawRef = (rawRef) => rawRef.slice(rawRef.indexOf('/') + 1, rawRef.lastIndexOf('#'));
 
+// ── fidelity of the bytes we hand back (audit 2026-07-19 · invariant 4 保真边界写明) ──────────
+// NOT every record we can resolve is byte-faithful. `normalizeRecord` (src/etl/ingest.mjs:14)
+// has two branches:
+//   · D10 — `req_body` is the VERBATIM captured request string → the bytes that went on the wire.
+//   · demo v0 — the capture stored the request as PARSED JSON, so the body is rebuilt with
+//     JSON.stringify. Whitespace, key order, duplicate keys, number formatting and unicode
+//     escaping can all differ from the wire. It is a RE-SERIALIZATION, not the wire bytes.
+// Both used to come back as bare strings, so the "回源 verbatim bytes" panel labelled the
+// re-serialized ones verbatim too — presenting a reconstruction as the source truth, which is
+// exactly the promise this tool exists to keep. So classify, and let every consumer label it.
+// This is a CLASSIFIER only: it mirrors normalizeRecord's branches, it never rewrites anything.
+function classifyFidelity(raw) {
+  if (typeof raw.req_body === 'string') return 'verbatim';   // D10: the captured wire string
+  if (raw.request === undefined) return null;                // not an llm record — no body at all
+  if (raw.request === null) return 'reserialized';           // '' stand-in, synthesized not captured
+  if (typeof raw.request === 'string') return 'verbatim';    // v0 stored raw text → passed through
+  return 'reserialized';                                     // v0 parsed JSON → JSON.stringify(…)
+}
+
+// ── outcomes (audit 2026-07-19) ───────────────────────────────────────────────────────────────
+// "no such record", "the record's bytes are damaged" and "the record carries no body" used to
+// collapse into a single `null`, so the caller of the SOURCE-TRUTH resolver — the one place the
+// difference matters most — could not tell missing from broken. They are distinct now, and the
+// plain resolve() stays non-throwing/string-or-null for back-compat.
+const OUT = (status, reason = null, text = null, fidelity = null) => ({ status, reason, text, fidelity });
+const COMPRESSED = new Set(['.gz', '.zst', '.bz2', '.xz', '.zip', '.br', '.lz4']);
+
 // Byte-scan a file line-by-line, recording each record's { offset, length } WITHOUT retaining any
 // body. Peak memory ≈ one chunk + one line + the index (O(records) small entries).
 async function indexFile(file, idx) {
@@ -55,8 +82,17 @@ async function indexFile(file, idx) {
           idx.qual.set(base + '#' + id, loc);
           // bare-id fallback: first writer wins, a second file poisons the entry to AMBIGUOUS
           idx.byId.set(id, idx.byId.has(id) ? AMBIGUOUS : loc);
+        } else {
+          // parseable, but nothing to key on — indexable content silently dropped. Report it.
+          idx.scan.unidentifiedLines++;
         }
-      } catch {}
+      } catch {
+        // A corrupt NDJSON line can never be indexed, so it can never surface per-record: the
+        // record it was meant to carry just looks ABSENT. Count it so the omission is at least
+        // reportable at scan level (invariant 4 — never let a loss be invisible).
+        idx.scan.corruptLines++;
+        idx.scan.corruptByFile[base] = (idx.scan.corruptByFile[base] || 0) + 1;
+      }
     };
     while (filePos < size) {
       const { bytesRead } = await fd.read(buf, 0, CHUNK, filePos);
@@ -82,13 +118,30 @@ async function indexFile(file, idx) {
 // byte-offset index + ≤ BODY_LRU cached req_body strings, never the whole corpus.
 export async function buildResolver(sourcePath) {
   const files = [];
+  // scan (audit 2026-07-19): the directory walk is non-recursive and .ndjson-only, so a nested
+  // or compressed capture is simply INVISIBLE — the "source" shrinks and nobody is told. Keep
+  // the same (conservative) selection, but record every entry we declined and why, so the
+  // omission is reportable rather than silent.
+  const scan = { files, skipped: [], corruptLines: 0, corruptByFile: {}, unidentifiedLines: 0 };
   if (statSync(sourcePath).isDirectory()) {
-    for (const f of await readdir(sourcePath)) if (f.endsWith('.ndjson')) files.push(path.join(sourcePath, f));
+    for (const ent of await readdir(sourcePath, { withFileTypes: true })) {
+      const name = ent.name;
+      // NOT `ent.isFile()`: readdir(withFileTypes) does not follow symlinks, so isFile() is FALSE
+      // for a symlinked capture — and a capture reached through a symlink is still a capture. Using
+      // isFile() here silently dropped a whole harness from the unified board (the live source dir
+      // holds codex-capture.ndjson as a symlink) and mislabelled it "not-ndjson". Exclude only what
+      // we can positively identify as a directory.
+      if (!ent.isDirectory() && name.endsWith('.ndjson')) { files.push(path.join(sourcePath, name)); continue; }
+      const reason = ent.isDirectory() ? 'directory'
+        : COMPRESSED.has(path.extname(name).toLowerCase()) ? 'compressed'
+        : 'not-ndjson';
+      scan.skipped.push({ name, reason });
+    }
   } else files.push(sourcePath);
 
   // qual: "<streamBasename>#<recordId>" -> { file, offset, length }  (the authoritative key)
   // byId: "<recordId>" -> loc | AMBIGUOUS                            (back-compat fallback only)
-  const idx = { qual: new Map(), byId: new Map() };
+  const idx = { qual: new Map(), byId: new Map(), scan };
   for (const f of files) await indexFile(f, idx);
 
   const fds = new Map();       // file -> open fd (reused across resolves)
@@ -113,27 +166,58 @@ export async function buildResolver(sourcePath) {
     return { key: e.file + '#' + recordId, loc: e };
   };
 
+  // → an OUTCOME, never a bare string: { status, reason, text, fidelity }. `text` is the whole
+  // record body; the caller slices it. Statuses: ok | absent | corrupt | no-body.
   const bodyOf = (stream, recordId) => {
     const hit = locate(stream, recordId);             // may throw on ambiguity — deliberately loud
-    if (!hit) return null;
+    if (!hit) return OUT('absent', `no record "${recordId}" in stream "${stream}" in this source`);
     if (bodyCache.has(hit.key)) return bodyCache.get(hit.key);
     const { loc } = hit;
     const buf = Buffer.allocUnsafe(loc.length);
     readSync(fdFor(loc.file), buf, 0, loc.length, loc.offset);
-    let body = null;
-    try { body = normalizeRecord(JSON.parse(buf.toString('utf8'))).req_body; } catch {}
+    let out;
+    try {
+      const raw = JSON.parse(buf.toString('utf8'));
+      const body = normalizeRecord(raw).req_body;
+      out = typeof body === 'string'
+        ? OUT('ok', null, body, classifyFidelity(raw))
+        // present and readable, but it carries no request body — a real answer ("there are no
+        // bytes"), categorically different from "the record is missing" or "the bytes are damaged".
+        : OUT('no-body', `record "${recordId}" has no request body (neither req_body nor a v0 request)`);
+    } catch (e) {
+      // The line was parseable when we indexed it and is not now: the source bytes under this
+      // record are DAMAGED (truncated / rewritten / partially flushed). Surface it — reporting
+      // damage as absence would let a byte-faithfulness tool hide exactly the loss it exists to
+      // detect. No fidelity claim is made about bytes we could not parse.
+      out = OUT('corrupt',
+        `record "${recordId}" in ${path.basename(loc.file)} @${loc.offset}+${loc.length} could not be ` +
+        `parsed back from the source (${e.message}) — the bytes changed since indexing or are damaged`);
+    }
     // cache on the QUALIFIED key — a bare-id cache key reintroduced the very collision above
-    bodyCache.set(hit.key, body);
+    bodyCache.set(hit.key, out);
     if (bodyCache.size > BODY_LRU) bodyCache.delete(bodyCache.keys().next().value);
-    return body;
+    return out;
   };
 
-  const resolve = (textRef) => {
-    if (!textRef) return null;
+  // The detailed read: every consumer that wants to LABEL what it renders uses this.
+  const detail = (textRef) => {
+    if (!textRef) return OUT('no-ref', 'block has no text_ref — nothing points at the source');
     const { rawRef, recordId, start, end } = parseTextRef(textRef);
-    const body = bodyOf(streamOfRawRef(rawRef), recordId);
-    return typeof body === 'string' ? body.slice(start, end) : null;
+    const got = bodyOf(streamOfRawRef(rawRef), recordId);
+    // A ref with NO byte span addresses the WHOLE record body. `slice(null, null)` returns '', which
+    // would hand back empty bytes under an "ok" status — a silently wrong answer from the source-truth
+    // resolver. Only slice when a real span was supplied.
+    if (got.status !== 'ok') return got;
+    return (start == null || end == null) ? got : { ...got, text: got.text.slice(start, end) };
   };
+
+  // Back-compat surface: string-or-null, non-throwing (except the deliberate ambiguity throw).
+  const resolve = (textRef) => {
+    const got = detail(textRef);
+    return got.status === 'ok' ? got.text : null;
+  };
+  resolve.detail = detail;
+  resolve.scan = scan;
   resolve.size = idx.qual.size;
   resolve.dispose = () => { for (const fd of fds.values()) try { closeSync(fd); } catch {} fds.clear(); bodyCache.clear(); };
   return resolve;
