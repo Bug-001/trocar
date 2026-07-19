@@ -185,7 +185,15 @@ const KNOWN_EXT = 'mjs|js|ts|tsx|jsx|cjs|json|jsonl|ndjson|html|htm|css|scss|les
 const KNOWN_EXT_SET = new Set(KNOWN_EXT.split('|'))
 // well-known extensionless files (PATH_RE requires a dot, so match these as whole tokens)
 const KNOWN_FILE = new Set(['Makefile', 'GNUmakefile', 'Dockerfile', 'Containerfile', 'LICENSE', 'COPYING', 'README', 'CHANGELOG', 'Procfile', 'Rakefile', 'Gemfile', 'Vagrantfile', 'Jenkinsfile', '.gitignore', '.dockerignore', '.editorconfig', '.npmrc', '.env'])
-const PATH_RE = new RegExp('(?:[\\w.@\\-]+/)+[\\w.@\\-]+\\.\\w{1,8}|\\b[\\w.@\\-]+\\.(?:' + KNOWN_EXT + ')\\b|\\b(?:Makefile|GNUmakefile|Dockerfile|Containerfile|Procfile|Rakefile|Gemfile|Vagrantfile|Jenkinsfile)\\b|(?:^|[\\s"\'(])(\\.(?:gitignore|dockerignore|editorconfig|npmrc|env))\\b', 'gi')
+// SEGMENT/DEPTH BOUNDS ARE LOAD-BEARING, not tidiness. With plain `+` quantifiers this pattern
+// backtracks quadratically over any long run of word characters — a minified bundle, a base64 blob, a
+// lockfile dump in a tool_result. Profiling one render: 25.4 of 25.5 seconds inside this regex, and the
+// board is single-threaded, so one such block hangs every session's poll, not just its own. `{1,64}`
+// per segment and `{1,16}` segments deep cap the backtracking to a constant per start offset, making
+// the scan linear in the text. The cost is that a path segment longer than 64 chars, or nested deeper
+// than 16, is not recognised as "seen" — both are far outside real repo paths, and this lane is a
+// convenience index, never a fidelity claim.
+const PATH_RE = new RegExp('(?:[\\w.@\\-]{1,64}/){1,16}[\\w.@\\-]{1,64}\\.\\w{1,8}|\\b[\\w.@\\-]{1,64}\\.(?:' + KNOWN_EXT + ')\\b|\\b(?:Makefile|GNUmakefile|Dockerfile|Containerfile|Procfile|Rakefile|Gemfile|Vagrantfile|Jenkinsfile)\\b|(?:^|[\\s"\'(])(\\.(?:gitignore|dockerignore|editorconfig|npmrc|env))\\b', 'gi')
 const CODE_STEM = /^(process|console|import|module|exports|window|document|globalThis|self|Math|JSON|Object|Array|res|req|err|ctx|response|resp|reply|result|body|payload|data|obj|item|row|self)$/i
 const TECH_STEM = /^(node|vue|next|nuxt|react|angular|svelte|d3|three|express|jquery|ember|backbone|preact|solid|remix|astro|webpack|rollup|vite)$/i
 // Precision filter: reject version strings (HTTP/1.1), code identifiers (process.env, response.json())
@@ -574,9 +582,38 @@ const blkKey = (prefix, b) => prefix + hash(blkHashText(b).slice(0, 4096))
 // `key` (for prefix-diffing vs the previous call), its `cache_control` if Claude Code set one, and
 // enough metadata for the view to render + link it to the resource ledger. sysLabel / resourceRef /
 // the volatile rule now come from the dissector, so board & ETL never drift.
+// A tool_result's own truncation notice, QUOTED from the harness — never inferred. Claude Code /
+// Desktop write their cut in the block text itself (observed verbatim on the wire as
+// "[truncated to 3000 chars]"). We surface only that literal: length is NOT evidence of truncation
+// (invariant 4 — a marker we invented would be exactly the "plausible but wrong" failure), and a
+// display clip is a different thing entirely (spec 2.3:46).
+const TRUNC_NOTE = /\[truncated[^\]\n]{0,80}\]/g
+function truncNote(text) {
+  const m = String(text || '').match(TRUNC_NOTE)
+  return m ? m[m.length - 1] : null
+}
+
 export function linearContext(request) {
   const flat = []
-  for (const e of dissectBlocks(request)) {
+  // ── resource ↔ RESULT linking (audit 2026-07-19) ────────────────────────────────────────
+  // The 📂 resource explorer promises "the bytes that entered the context". The dissector keys a
+  // file resource to its `tool_use` (that is where the path is), but a tool_use carries only the
+  // ARGUMENTS the model sent — the file's bytes live in the sibling `tool_result`. The board's
+  // resolver prefers a non-tool_use block with the same resKey and falls back to the tool_use, so
+  // with nothing else carrying the key it previewed the request JSON as if it were the file.
+  // Mirror the file resKey onto its sibling result here, and mark BOTH ends' role, so the request
+  // JSON is never silently passed off as content. Scoped to `file::` on purpose: skill/mcp/scaffold
+  // resources already resolve to their own verbatim body block, and stealing that is a regression.
+  const spine = dissectBlocks(request)
+  const fileKeyByUseId = new Map()  // tool_use_id → 'file::<path>'
+  const answered = new Set()        // tool_use_ids that have a result IN THIS request
+  for (const e of spine) {
+    const b = e.parsed
+    if (!b || typeof b !== 'object') continue
+    if (b.type === 'tool_use' && b.id && String(e.resourceRef || '').startsWith('file::')) fileKeyByUseId.set(b.id, e.resourceRef)
+    else if (b.type === 'tool_result' && b.tool_use_id) answered.add(b.tool_use_id)
+  }
+  for (const e of spine) {
     if (e.section === 'tools') {
       const t = e.parsed
       const mcp = /^mcp__/.test(t.name || '')
@@ -600,12 +637,30 @@ export function linearContext(request) {
       flat.push({ sec: 'system', kind: 'system', role: 'system', si: e.path.i, label: sysLabel(text), text, chars: text.length, volatile: e.volatile, cc: b?.cache_control || null, key: blkKey('S:', { type: 'text', text }) })
     } else {
       const b = e.parsed, type = typeof b === 'string' ? 'text' : (b?.type || 'text')
-      flat.push({
+      const d = {
         sec: 'messages', kind: type, role: e.role, mi: e.path.mi, bi: e.path.bi, block: b,
         toolName: type === 'tool_use' || type === 'server_tool_use' ? (b.name || '') : '',
         cc: (b && b.cache_control) || null,
         resKey: e.resourceRef, key: blkKey('M:' + e.role + ':' + type + ':', b),
-      })
+      }
+      // `key` above is UNCHANGED — the cache-prefix chain diffs on it, so the linking below only
+      // ever ADDS descriptive fields.
+      if (type === 'tool_use' && d.resKey && d.resKey.startsWith('file::')) {
+        d.resRole = 'request'
+        // No sibling result in THIS request: the call that ISSUED the tool_use gets its result in
+        // the NEXT one. The honest render is "result not in this call's context yet" — showing the
+        // arguments as though they were the file is the bug this flag exists to prevent.
+        d.resPending = !answered.has(b.id)
+      } else if (type === 'tool_result' && b && b.tool_use_id && fileKeyByUseId.has(b.tool_use_id)) {
+        d.resKey = fileKeyByUseId.get(b.tool_use_id)
+        d.resRole = 'result'
+        // An error result IS what entered the context — link it, but flag it so the panel says
+        // "the tool failed" instead of presenting the error text as the file's contents.
+        if (b.is_error) d.resError = true
+        const tn = truncNote(textOfResult(b))
+        if (tn) d.resTruncNote = tn
+      }
+      flat.push(d)
     }
   }
   return flat

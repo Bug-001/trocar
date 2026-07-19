@@ -377,8 +377,16 @@ const KNOWN_FILE = new Set([
   'Procfile', 'Rakefile', 'Gemfile', 'Vagrantfile', 'Jenkinsfile', '.gitignore', '.dockerignore',
   '.editorconfig', '.npmrc', '.env',
 ]);
+// SEGMENT/DEPTH BOUNDS ARE LOAD-BEARING, not tidiness. With plain `+` quantifiers this pattern
+// backtracks quadratically over any long run of word characters — a minified bundle, a base64 blob, a
+// lockfile dump in a tool_result. Profiling one render: 25.4 of 25.5 seconds inside this regex, and the
+// board is single-threaded, so one such block hangs every session's poll, not just its own. `{1,64}`
+// per segment and `{1,16}` segments deep cap the backtracking to a constant per start offset, making
+// the scan linear in the text. The cost is that a path segment longer than 64 chars, or nested deeper
+// than 16, is not recognised as "seen" — both are far outside real repo paths, and this lane is a
+// convenience index, never a fidelity claim.
 const PATH_RE = new RegExp(
-  '(?:[\\w.@\\-]+/)+[\\w.@\\-]+\\.\\w{1,8}|\\b[\\w.@\\-]+\\.(?:' +
+  '(?:[\\w.@\\-]{1,64}/){1,16}[\\w.@\\-]{1,64}\\.\\w{1,8}|\\b[\\w.@\\-]{1,64}\\.(?:' +
     KNOWN_EXT +
     ')\\b|\\b(?:Makefile|GNUmakefile|Dockerfile|Containerfile|Procfile|Rakefile|Gemfile|Vagrantfile|Jenkinsfile)\\b|(?:^|[\\s"\'(])(\\.(?:gitignore|dockerignore|editorconfig|npmrc|env))\\b',
   'gi',
