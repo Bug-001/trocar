@@ -11,8 +11,6 @@ Observe-only by design: it never originates requests, never uses your app's toke
 
 Supported harnesses: **Claude Code** (CLI + Desktop), **Codex**, **OpenCode**.
 
-![the asight board](docs/img/board.png)
-
 ## See it in 30 seconds, with no capture and no setup
 
 ```sh
