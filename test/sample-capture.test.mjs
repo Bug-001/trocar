@@ -68,3 +68,39 @@ test('the sample contains no real credentials', () => {
   }
   assert.doesNotMatch(raw, /sk-ant-|sk-[A-Za-z0-9]{20}/, 'no API-key-shaped strings may ship');
 });
+
+// The documented one-liner must ACTUALLY WORK. `npm run demo` was defined as
+// `node src/server.mjs --source samples/demo-session.ndjson`, but src/server.mjs only ever read the
+// ASIGHT_SOURCE env var and silently ignored --source — so the command a new user is told to run
+// served an empty board. It was verified during development with the env var, which is exactly the
+// class of mistake that produces a README that traps people: the maintainer never types what the
+// docs say. This drives the REAL published script.
+test('`npm run demo` — the documented command — actually serves the sample', async () => {
+  const { spawn } = await import('node:child_process');
+  const pkg = JSON.parse(readFileSync(path.join(HERE, '..', 'package.json'), 'utf8'));
+  const cmd = pkg.scripts.demo;
+  assert.ok(cmd, 'package.json must define a demo script');
+
+  const port = 9861;
+  const child = spawn('sh', ['-c', cmd], {
+    cwd: path.join(HERE, '..'),
+    env: { ...process.env, ASIGHT_PORT: String(port), ASIGHT_SOURCE: '' },
+    stdio: 'ignore',
+  });
+  try {
+    let body = null;
+    for (let i = 0; i < 40 && body == null; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/api/projects`);
+        if (res.ok) body = await res.json();
+      } catch { /* not up yet */ }
+    }
+    assert.ok(body, 'the demo server never came up');
+    const sessions = (body.projects || []).flatMap((p) => p.sessions || []);
+    assert.ok(sessions.length > 0,
+      'the demo command served ZERO sessions — the sample is not reaching the board, so a new '
+      + 'user following the README sees an empty page');
+    assert.ok(sessions[0].calls >= 6, 'the demo session should carry its calls');
+  } finally { child.kill('SIGKILL'); }
+});

@@ -132,7 +132,17 @@ function makeRecordLoader(sourcePath) {
   const load = async () => {
     if (!sourcePath) { load.sig = '∅'; return []; }
     let files, sig;
-    try { ({ files, sig } = sourceFiles(sourcePath)); } catch { load.sig = '0'; return []; }
+    // A source that cannot be STATTED under a live board (deleted, rotated away, its directory made
+    // unreadable) used to be swallowed into an empty record set — the board then calmly renders "no
+    // sessions captured yet" about a capture that is broken or still being written. Broken MUST NOT
+    // look like empty (invariant 4): propagate, and the request handler turns it into a 500 {error}.
+    // (An absent source at STARTUP is already refused by buildResolver, so this is never the benign
+    // "capture has not started yet" state — that one is `!sourcePath` above.)
+    try { ({ files, sig } = sourceFiles(sourcePath)); }
+    catch (e) {
+      load.sig = '0';
+      throw new Error(`capture source unreadable (${sourcePath}): ${String((e && e.message) || e)}`);
+    }
     load.sig = sig;
     if (cache.sig === sig) return cache.records;
     const records = [];
@@ -215,8 +225,21 @@ async function handleControl(req, res, { p, csrf, captureTarget, proxyUrl, deps 
 export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null, enrich = enrichClaude,
   control = false, captureTarget = process.env.ASIGHT_CAPTURE_TARGET || 'https://api.anthropic.com',
   proxyUrl = process.env.ASIGHT_PROXY_URL || 'http://127.0.0.1:8899', controlDeps = {} } = {}) {
-  let db = null;
-  try { db = await openDb(dbPath, { readOnly: true }); } catch { db = null; } // SQL family optional
+  // The SQL family is OPTIONAL — a board with no DuckDB store is a normal, fully-working state.
+  // But "the store was never built" and "the store is BROKEN" are different truths, and collapsing
+  // them (a bare catch → db=null → 404 "no analytics db") made every corruption, permission problem
+  // and lock conflict render as the innocuous empty state. asight's whole claim is that what it
+  // shows is what is really there; an empty answer that actually means "I could not read it" is the
+  // worst failure it can have (invariant 4). Only DuckDB's own "does not exist" is benign.
+  let db = null, dbError = null;
+  try { db = await openDb(dbPath, { readOnly: true }); }
+  catch (e) {
+    const msg = String((e && e.message) || e);
+    if (!/database does not exist/i.test(msg)) dbError = `analytics store unreadable (${dbPath}): ${msg}`;
+  }
+  // 503, not 404: the store is a dependency that IS configured and IS failing — a retryable outage,
+  // not an absence. Carries the underlying reason so the board's {error} banner names the real cause.
+  const noDb = (res) => (dbError ? sendJson(res, 503, { error: dbError }) : notFound(res, 'no analytics db'));
   const resolve = sourcePath ? await buildResolver(sourcePath) : () => null;
   const loadRecords = makeRecordLoader(sourcePath);
   const sessionMemo = createLru(8); // D21: assembled per-session views keyed by (id, source sig, strategy)
@@ -272,11 +295,11 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
 
       // ── SQL family (DuckDB canonical; optional) ───────────────────────────
       if (p === '/api/sessions') {
-        if (!db) return notFound(res, 'no analytics db');
+        if (!db) return noDb(res);
         return sendJson(res, 200, await listSessions(db.connection));
       }
       if ((m = p.match(/^\/api\/session\/([^/]+)$/))) {
-        if (!db) return notFound(res, 'no analytics db');
+        if (!db) return noDb(res);
         const id = decodeURIComponent(m[1]);
         const calls = await sessionCalls(db.connection, id);
         if (!calls.length) return notFound(res, 'session not found');
@@ -287,7 +310,7 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         });
       }
       if ((m = p.match(/^\/api\/call\/([^/]+)\/context$/))) {
-        if (!db) return notFound(res, 'no analytics db');
+        if (!db) return noDb(res);
         const id = decodeURIComponent(m[1]);
         const blocks = await callContext(db.connection, id, resolve);
         if (!blocks.length) return notFound(res, 'call not found');
@@ -295,7 +318,7 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
       }
       // cross-session analysis (3.5 signature ②) — the whole-corpus SQL views.
       if (p === '/api/analysis') {
-        if (!db) return notFound(res, 'no analytics db');
+        if (!db) return noDb(res);
         return sendJson(res, 200, {
           files: await filesEverInContext(db.connection),
           cacheHits: await cacheHitDistribution(db.connection),
@@ -303,11 +326,11 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         });
       }
       if (p === '/api/unmapped') { // D7 fidelity backstop — provider keys still unmapped
-        if (!db) return notFound(res, 'no analytics db');
+        if (!db) return noDb(res);
         return sendJson(res, 200, { unmapped: await unmappedFields(db.connection) });
       }
       if (p === '/api/forktree') { // recursive session lineage rooted at ?root=<id>
-        if (!db) return notFound(res, 'no analytics db');
+        if (!db) return noDb(res);
         const root = url.searchParams.get('root');
         if (!root) return notFound(res, 'forktree needs ?root=<session_id>');
         return sendJson(res, 200, { tree: await forkTree(db.connection, root) });
@@ -326,9 +349,15 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
 }
 
 async function main() {
-  const port = Number(process.env.ASIGHT_PORT || 9800);
-  const dbPath = process.env.ASIGHT_DB || DEFAULT_DB_PATH;
-  const sourcePath = process.env.ASIGHT_SOURCE || null;
+  // Accept the same flags the CLI does. This module used to read ONLY env vars while silently
+  // ignoring --source, so `npm run demo` (documented as the first thing a new user types) served an
+  // empty board — the command was only ever exercised via the env var during development, which is
+  // precisely how docs come to lie. argv wins over env; env remains supported.
+  const argv = process.argv.slice(2);
+  const flag = (name) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
+  const port = Number(flag('--port') || process.env.ASIGHT_PORT || 9800);
+  const dbPath = flag('--db') || process.env.ASIGHT_DB || DEFAULT_DB_PATH;
+  const sourcePath = flag('--source') || process.env.ASIGHT_SOURCE || null;
   const control = process.env.ASIGHT_CONTROL === '1' || process.argv.includes('--control'); // D26 opt-in
   const { server } = await createServer({ dbPath, sourcePath, control });
   server.on('error', (e) => {
