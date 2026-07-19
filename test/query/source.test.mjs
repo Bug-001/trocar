@@ -4,6 +4,7 @@ import path from 'node:path';
 import { buildResolver } from '../../src/query/source.mjs';
 import { readRecords } from '../../src/etl/ingest.mjs';
 import { composeTextRef, mintRawRef } from '../../src/etl/orchestrator.mjs';
+import { fixtureGate } from '../helpers/fixture.mjs';
 
 const refFor = (r, start, end) => composeTextRef(mintRawRef('sess', 'stream', r.id), [start, end]);
 
@@ -11,7 +12,7 @@ const FIXTURE = path.resolve('test/fixtures/cc-session-real.ndjson');
 
 // The lean offset-index resolver (D24(i)) must produce byte-IDENTICAL slices to reading the
 // normalized req_body directly — the whole point is faithfulness without loading the corpus.
-test('resolver: offset-index slices are byte-identical to the normalized req_body', async () => {
+test('resolver: offset-index slices are byte-identical to the normalized req_body', fixtureGate(), async () => {
   const resolve = await buildResolver(FIXTURE);
   try {
     const recs = await readRecords(FIXTURE); // normalized (req_body = the string spans index into)

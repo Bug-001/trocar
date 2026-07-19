@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { readRecords } from '../../src/etl/ingest.mjs';
 import { checkDeps, qCapturing, qCorrect, qNoLeak, qUserTrustOnly, runSelfTest } from '../../src/capture/selftest.mjs';
+import { fixtureGate } from '../helpers/fixture.mjs';
 
 const FIXTURE = path.resolve('test/fixtures/cc-session-real.ndjson');
 
@@ -30,7 +31,7 @@ test('qCapturing: no source → not ok; source with records → ok', () => {
 });
 
 // ② 抓得对 — over the REAL fixture: every LLM call carries verbatim req_body + a reconstructed response.
-test('qCorrect: real capture — LLM calls have verbatim req_body + response, none missing req', async () => {
+test('qCorrect: real capture — LLM calls have verbatim req_body + response, none missing req', fixtureGate(), async () => {
   const recs = await readRecords(FIXTURE);
   const q = qCorrect(recs);
   assert.ok(q.llm > 0, 'fixture has LLM calls');
@@ -48,7 +49,7 @@ test('qNoLeak: redacted headers pass; an un-redacted secret header fails', () =>
   assert.deepEqual(leaked.unredacted, ['authorization']);
 });
 
-test('qNoLeak: real fixture leaks no un-redacted secret header', async () => {
+test('qNoLeak: real fixture leaks no un-redacted secret header', fixtureGate(), async () => {
   const recs = await readRecords(FIXTURE);
   const q = qNoLeak(recs);
   assert.equal(q.ok, true, 'real capture keeps every secret header redacted: ' + JSON.stringify(q.unredacted));
@@ -72,7 +73,7 @@ test('qUserTrustOnly: verify()=true → ok; false → not onboarded; throw → c
 });
 
 // assembled: hardFail gates ONLY on a credential leak
-test('runSelfTest: hardFail true iff a secret header is un-redacted', async () => {
+test('runSelfTest: hardFail true iff a secret header is un-redacted', fixtureGate(), async () => {
   const recs = await readRecords(FIXTURE);
   const good = runSelfTest({ records: recs, srcMeta: { exists: true, bytes: 10, mtimeMs: 1 }, deps: checkDeps({ platform: 'darwin', has: () => true }), verify: () => true });
   assert.equal(good.hardFail, false);
@@ -82,7 +83,7 @@ test('runSelfTest: hardFail true iff a secret header is un-redacted', async () =
 });
 
 // bounded read: the self-test samples a head rather than loading a whole large capture
-test('readRecords honors a limit (bounded sampling for the self-test)', async () => {
+test('readRecords honors a limit (bounded sampling for the self-test)', fixtureGate(), async () => {
   const capped = await readRecords(FIXTURE, { limit: 5 });
   assert.equal(capped.length, 5);
 });
