@@ -5,6 +5,7 @@
 // store.route replaced by injected onEnvelope (D20 pure tee, no per-session split); connectToRealApi
 // + blind tunnel made injectable (connectUpstream/blindTunnel) so the source has an offline harness.
 import http from 'node:http'
+import { randomBytes } from 'node:crypto'
 import https from 'node:https'
 import net from 'node:net'
 import tls from 'node:tls'
@@ -50,14 +51,22 @@ export function makeBlindTunnel({ upstreamProxy }) {
   }
 }
 
+// RUN-SCOPED ID PREFIX. `seq` restarts at 0 with the process, but the OUTPUT FILE does not — every
+// restart appends to it — so a bare ordinal re-issues req_00001 on the second run. Measured on the
+// author's live capture: 165 duplicated ids. The id is what a text_ref resolves through, so a
+// duplicate makes "these are that block's verbatim bytes" ambiguous, and the reader must refuse the
+// ref (invariant 2) — the blocks become unviewable. A short run tag, minted once per writer, is
+// enough: unique per run, still ordinal and readable inside it (req_k3f9a1-00007).
+const runTag = () => Date.now().toString(36).slice(-4) + randomBytes(2).toString('hex');
 export function createMitmProxy({ targetHost, leaf, upstreamProxy, connectUpstream, blindTunnel, keepRawSse = false, onEnvelope }) {
   const connect = connectUpstream || makeUpstreamConnector({ upstreamProxy, targetHost })
   const blind = blindTunnel || makeBlindTunnel({ upstreamProxy })
   let seq = 0
+  const run = runTag()
 
   // decrypted-request handler (client <-> us, plaintext HTTP/1.1 over the terminated TLS)
   const mitmHttps = https.createServer({ key: leaf.key, cert: leaf.cert, ALPNProtocols: ['http/1.1'] }, (req, res) => {
-    const id = `req_${String(++seq).padStart(5, '0')}`
+    const id = `req_${run}-${String(++seq).padStart(5, '0')}`
     const tsRequest = isoStamp()
     const t0 = process.hrtime.bigint()
     const dur = () => Math.round(Number(process.hrtime.bigint() - t0) / 1e6)
