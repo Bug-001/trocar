@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>atrace — agent context tracer</title>
+<title>asight — agent context oscilloscope</title>
 <style>
   :root {
     --bg:#0e0f13; --panel:#16181f; --panel2:#1c1f28; --rail:#12141a;
@@ -577,7 +577,7 @@ async function poll(){
       +`<optgroup label="⚙ session-less"><option value="__control__">⚙ control-plane (telemetry · flags · account · registry)</option></optgroup>`
     if(sel.dataset.sig!==opts){ sel.innerHTML=opts; sel.dataset.sig=opts; if(curSel)sel.value=curSel }
     if(!curSel){ const p0=realP[0]||unres[0]; if(p0)curSel=`${p0.sessions[0].project_slug}::${p0.sessions[0].session_id}`; if(curSel)sel.value=curSel }
-    if(!curSel){ renderEmpty('No sessions captured yet. Run Claude Code (or the Desktop app) through the atrace MITM.'); return }
+    if(!curSel){ renderEmpty('No sessions captured yet. Start a tap with `asight monitor on` (Claude Code CLI) or `asight desktop on` (Claude Desktop, macOS + Clash Verge), then run your agent. Check what is arranged with `asight monitor status`.'); return }
     if(curSel==='__control__'){ document.body.classList.add('ctrlmode'); await renderControlView(); return }
     document.body.classList.remove('ctrlmode'); controlSig=null // leaving control view: force a full re-render next time (else a stale session header sticks)
     hideSessionChrome(false)
@@ -599,6 +599,13 @@ async function poll(){
         eb.innerHTML=`⚠ 加载失败 · could not load this session: <b>${String(d.error).replace(/[<>&]/g,'')}</b> — the raw trace on disk is intact (source truth unaffected). If the server died, restart it; if the session is huge, it is served tail-bounded.` }
       renderEmpty('Could not load this session — see the banner above.')
       document.getElementById('stats').innerHTML=''
+      // R8 (audit 2026-07-19): the cheap short-circuit sig was set BEFORE this fetch, so leaving it
+      // set means the next poll skips the retry and the board stays wedged even after the server
+      // recovers — re-selecting the same session could not un-stick it. Clear both sigs so the very
+      // next poll re-fetches. And drop the live dot: a green dot during an outage claims a freshness
+      // we do not have (invariant 4).
+      lastCheapSig=null; lastRenderSig=null
+      document.getElementById('dot').classList.remove('on')
       return
     }
     raw=d.records||[]; probes=d.probes||{count:0,series:[]}; meta=d.meta||null
@@ -637,6 +644,15 @@ async function poll(){
 function renderEmpty(msg){ document.body.classList.remove('ctrlmode'); document.getElementById('ctxwin').innerHTML=`<div class="empty">${esc(msg)}</div>`; document.getElementById('ctxnav').innerHTML=''; document.getElementById('rails').innerHTML=''; document.getElementById('sawrow').innerHTML='<div id="reviewbracket"></div>'; const rx=document.getElementById('resexp'); if(rx)rx.innerHTML=''; const rp=document.getElementById('rawpanel'); if(rp)rp.innerHTML=''; const cr=document.getElementById('cacherow'); if(cr)cr.innerHTML='' }
 function hideSessionChrome(hide){ document.getElementById('saw').style.display=hide?'none':''; document.getElementById('rails').style.display=hide?'none':'' }
 
+// Envelope-tolerant readers (R1, audit 2026-07-19). /api/control ships RAW records: the product
+// D10 envelope uses `resp`/`req_headers`/`req_body`, demo v0 used `response`/`request_headers`/
+// `request`. Reading only the v0 names made every status cell render "?" (260/260 rows on a real
+// capture), the feature-flags section never render, and the detail panel show UA "?" with blank
+// byte counts. Mirror of respOf()/headersOf() on the server (src/view/assemble.mjs).
+const rsp=r=>(r&&(r.resp||r.response))||{}
+const rhdr=r=>(r&&(r.req_headers||r.request_headers))||{}
+const rbytes=r=>(r&&r.request&&r.request.raw_chars)??(typeof (r&&r.req_body)==='string'?r.req_body.length:null)
+
 // ── control-plane view: the session-LESS traffic, categorized ────────────────
 const CTRL_META={
   control:{ic:'🚩',what:'feature flags & experiments — the config your client is actually running'},
@@ -668,7 +684,7 @@ async function renderControlView(){
     const m=CTRL_META[c.class]||{ic:'•',what:''}
     const recent=c.records.slice(-80).reverse()
     const rows=recent.map((r)=>{
-      const gi=c.records.indexOf(r), st=(r.response||{}).status
+      const gi=c.records.indexOf(r), st=rsp(r).status
       return `<div class="ctrlrow" data-cls="${esc(c.class)}" data-i="${gi}"><span class="tm">${fmtTime(r.ts_request)}</span><span class="m">${esc(r.method||'')}</span><span class="ep">${esc((r.endpoint||'').split('?')[0])}</span><span class="st ${st>=400?'err':''}">${st??'?'}</span></div>`
     }).join('')
     const more=c.records.length>80?`<div class="ctrlrow" style="cursor:default;color:var(--dimmer)">… ${c.records.length-80} older not shown</div>`:''
@@ -683,7 +699,7 @@ function controlLedger(got,total){
   html+=`<div style="color:var(--dim);font-size:10px;margin-bottom:6px">Claude Code's telemetry &amp; config plumbing — never part of a conversation.</div>`
   // surface the actual feature flags observed (the genuinely interesting bit)
   const flags=new Map()
-  for(const r of controlData.control||[]){ const f=(r.response||{}).body?.features; if(f&&typeof f==='object') for(const [k,v] of Object.entries(f)) flags.set(k, v&&typeof v==='object'?v.value:v) }
+  for(const r of controlData.control||[]){ const f=rsp(r).body?.features; if(f&&typeof f==='object') for(const [k,v] of Object.entries(f)) flags.set(k, v&&typeof v==='object'?v.value:v) }
   if(flags.size){
     html+=`<h2><span class="gi" style="background:var(--pink)"></span>Feature flags observed <span class="ct">(${flags.size})</span></h2>`
     html+=[...flags].slice(0,40).map(([k,v])=>`<div class="res"><div class="top"><span class="nm" title="${esc(k)}">${esc(k)}</span><span class="via">${esc(JSON.stringify(v)).slice(0,18)}</span></div></div>`).join('')
@@ -697,12 +713,12 @@ function controlLedger(got,total){
 }
 function openControlDetail(cls,i){
   const r=(controlData[cls]||[])[i]; if(!r)return
-  const det=document.getElementById('detail'), resp=r.response||{}, hdr=r.request_headers||{}
+  const det=document.getElementById('detail'), resp=rsp(r), hdr=rhdr(r)
   const body=resp.body, bodyStr=body==null?'(empty)':(typeof body==='string'?body:JSON.stringify(body,null,2))
   det.className='open'
   det.innerHTML=`<div class="dclose" id="dclose">✕ close</div>`+
     `<h3>${esc(r.method||'')} ${esc((r.endpoint||'').split('?')[0])} · ${resp.status??'?'}</h3>`+
-    `<div class="din">${fmtTime(r.ts_request)} · UA <b>${esc(hdr['user-agent']||'?')}</b> · request ${kf((r.request||{}).raw_chars)} bytes (request body isn't decoded for non-LLM calls; the response is)</div>`+
+    `<div class="din">${fmtTime(r.ts_request)} · UA <b>${esc(hdr['user-agent']||'?')}</b> · request ${kf(rbytes(r))} bytes (request body isn't decoded for non-LLM calls; the response is)</div>`+
     `<div class="din" style="color:var(--dim)">response body:</div>`+
     collapse('<pre>'+esc(bodyStr)+'</pre>',bodyStr.length,'ctrl:'+cls+':'+i)
 }
@@ -1596,6 +1612,7 @@ function nearestByTs(lane,ts){
 }
 function setPlayhead(i,manual){
   if(!anchor)return
+  if(!anchor.calls||!anchor.calls.length)return // R10: zero-call session — "⇥ latest" is a no-op, not a TypeError
   viewPin=null // scrubbing returns the panel to the call raw
   const np=Math.max(0,Math.min(anchor.calls.length-1,i))
   if(np!==playhead) openBlocks.clear() // a different call → its blocks start collapsed
