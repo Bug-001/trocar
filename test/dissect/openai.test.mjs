@@ -76,9 +76,24 @@ test('normResp reconstructs text + usage from raw_sse response.completed', () =>
   assert.deepEqual(n.canonUsage, { read: 40, create: 0, fresh: 60, out: 2 });
 });
 
-test('detect: codex UA / originator / /responses endpoint → openai; CC → not', () => {
+// UPDATED 2026-07-19 (audit) — this test ENCODED THE BUG. Its middle assertion required
+//     detect({ req_headers: { originator: 'codex_exec' }, endpoint: '/x' }) === true
+// i.e. a record with NO BODY and a meaningless endpoint claimed purely on a header string. That is
+// exactly the UA/header-keyed detection D25 names as the defect: it claims traffic for the OpenAI
+// dissector regardless of what the bytes actually are, and an impostor UA then renders a foreign body
+// under OpenAI's vocabulary. Detection is now by WIRE SHAPE, so a header alone no longer claims.
+// Checked against the real captures before changing it: every record carrying an `originator` header
+// (17/17 opencode, 13/13 codex) ALSO carries `input[]`, so 0 real records lose detection — the
+// originator rule was dead weight on real traffic, and only ever load-bearing for this synthetic case.
+test('detect: claims by wire shape, not by a header alone; CC → not', () => {
   assert.equal(detect({ req_headers: { 'user-agent': 'codex_exec/0.1' }, endpoint: '/codex/responses' }), true);
-  assert.equal(detect({ req_headers: { originator: 'codex_exec' }, endpoint: '/x' }), true);
+  // a header alone, with no wire evidence, MUST NOT claim the record (was: expected true)
+  assert.equal(detect({ req_headers: { originator: 'codex_exec' }, endpoint: '/x' }), false);
+  // ...but the same originator WITH real Responses bytes is claimed, on the strength of the bytes
+  assert.equal(detect({
+    req_headers: { originator: 'codex_exec' }, endpoint: '/x',
+    req_body: JSON.stringify({ model: 'gpt-5.5', input: [{ type: 'message', role: 'user', content: [] }] }),
+  }), true);
   assert.equal(detect({ req_headers: { 'user-agent': 'claude-cli/1.2' }, endpoint: '/v1/messages' }), false);
 });
 

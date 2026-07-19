@@ -57,7 +57,7 @@ ln -sf "$PWD/bin/asight.mjs" ~/.local/bin/asight    # or: npm link
 **1. Start the tap** — a plain local HTTP server that forwards to the real API and records a side-copy:
 
 ```sh
-asight capture --port 8899          # writes into ~/.atrace/asight/, where the board looks
+asight capture --port 8899          # writes into ~/.asight/, where the board looks by default
 # OpenAI-shaped wire (Codex / OpenCode) — --raw-sse is REQUIRED or the streamed reply is lost:
 asight capture --port 8899 --target https://api.openai.com --raw-sse
 ```
@@ -72,6 +72,10 @@ file. For Claude Code CLI, `asight on` writes the steer for you (see *What it to
 asight serve          # → http://127.0.0.1:9800
 ```
 
+Everything asight writes lives under `~/.asight/`. Captures made before 2026-07-20 sit under
+`~/.atrace/asight/` and are **still read** — the board lists both, so upgrading never costs you a
+session (the older `atrace` name was this project's v0 prototype).
+
 No ETL, no database, no build step — the board reads the NDJSON directly. With no `--source` it reads
 the capture directory every tap writes into, so **Claude Code, Codex and OpenCode sessions appear side
 by side on one board**. Pass `--source <file|dir>` to look somewhere else.
@@ -83,7 +87,7 @@ wire body) · **cache overlay** (real `cache_read` / `cache_write` counts, the m
 and fix hint) · **reconstructed streamed reply** with usage and an estimated cost · **resource
 lifecycle** — which files entered context, when, via which tool *(Claude Code only — see Limits)*.
 
-Cost is a local, editable estimate in `~/.atrace/pricing.json`; providers return usage, never dollars.
+Cost is a local, editable estimate in `~/.asight/pricing.json`; providers return usage, never dollars.
 
 Optional: `asight etl <capture.ndjson> --rebuild` loads a DuckDB projection
 (`sessions / calls / call_blocks / block_contents / usage / resource_events / cache_events`) for
@@ -96,7 +100,7 @@ never changes your system proxy, never adds machine-wide trust, never needs root
 
 | what | where | undo |
 |---|---|---|
-| capture CA (generated once) | `~/.atrace/ca/atrace-ca.crt` | `monitor off --remove-ca` deletes it |
+| capture CA (generated once) | `~/.asight/ca/` | `monitor off --remove-ca` deletes it |
 | CA trust, **user-level only** | macOS login keychain / Linux `~/.pki/nssdb` — never the machine store | symmetric removal on `off --remove-ca` |
 | CC-CLI steer | `HTTPS_PROXY` + `NO_PROXY` in `~/.claude/settings.json` | `monitor off` clears it |
 | autostart (optional) | user LaunchAgent `com.asight.monitor` — never a machine daemon | `monitor off` unloads + deletes it |
@@ -108,7 +112,7 @@ answers four questions: am I capturing, is it correct, did credentials leak, is 
 `cookie`, `proxy-authorization`) are replaced with `<redacted>` — only a label survives. Request
 bodies are **not** redacted; storing them verbatim is the entire point. Your prompts, every file the
 agent read, all tool output, and any secret you pasted into a chat land on disk in the clear. Treat
-`~/.atrace/**` as sensitive; on a shared machine, `chmod -R go-rwx ~/.atrace`. The dashboard binds
+`~/.asight/**` as sensitive; on a shared machine, `chmod -R go-rwx ~/.asight`. The dashboard binds
 loopback and enforces a Host/Origin allowlist, so a website you visit cannot reach it.
 
 ## Claude Desktop — the one environment-dependent case

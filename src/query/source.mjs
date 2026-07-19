@@ -127,7 +127,13 @@ async function indexFile(file, idx) {
 
 // Build resolve(text_ref) -> the block's exact byte slice (or null if unresolvable). Lean: holds a
 // byte-offset index + ≤ BODY_LRU cached req_body strings, never the whole corpus.
-export async function buildResolver(sourcePath) {
+// `source` may be one path or SEVERAL roots (D27: the new home plus the legacy one that still holds
+// the user's captures). Scanning only the first would make raw-byte refs from the other root
+// unresolvable — the block viewer would report "record not found" for bytes that are on disk.
+export async function buildResolver(source) {
+  const roots = (Array.isArray(source) ? source : [source]).filter(Boolean);
+  if (roots.length > 1) return buildMultiResolver(roots);
+  const sourcePath = roots[0];
   const files = [];
   // scan (audit 2026-07-19): the directory walk is non-recursive and .ndjson-only, so a nested
   // or compressed capture is simply INVISIBLE — the "source" shrinks and nobody is told. Keep
@@ -240,5 +246,35 @@ export async function buildResolver(sourcePath) {
   resolve.scan = scan;
   resolve.size = idx.qual.size;
   resolve.dispose = () => { for (const fd of fds.values()) try { closeSync(fd); } catch {} fds.clear(); bodyCache.clear(); };
+  return resolve;
+}
+
+
+// Several roots: index each independently and try them in order. Order matters only for a bare-id
+// fallback, and the qualified key (`<file>#<id>`) is unaffected, so this cannot invent a winner
+// among collisions — a ref that is ambiguous within a root still throws from that root's resolver.
+async function buildMultiResolver(roots) {
+  const parts = [];
+  for (const r of roots) parts.push(await buildResolver(r));
+  const resolve = (...args) => {
+    let lastErr = null;
+    for (const p of parts) {
+      try { const hit = p(...args); if (hit) return hit; } catch (e) { lastErr = e; }
+    }
+    if (lastErr) throw lastErr;   // an ambiguity/corruption report must not be swallowed by a miss
+    return null;
+  };
+  resolve.scan = {
+    files: parts.flatMap((p) => (p.scan && p.scan.files) || []),
+    skipped: parts.flatMap((p) => (p.scan && p.scan.skipped) || []),
+    corruptLines: parts.reduce((n, p) => n + ((p.scan && p.scan.corruptLines) || 0), 0),
+    corruptByFile: Object.assign({}, ...parts.map((p) => (p.scan && p.scan.corruptByFile) || {})),
+    unidentifiedLines: parts.reduce((n, p) => n + ((p.scan && p.scan.unidentifiedLines) || 0), 0),
+  };
+  for (const k of ['detail', 'close']) {
+    if (typeof parts[0]?.[k] === 'function') {
+      resolve[k] = (...a) => { for (const p of parts) { const v = p[k](...a); if (k === 'detail' && v) return v; } return null; };
+    }
+  }
   return resolve;
 }

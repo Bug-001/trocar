@@ -147,9 +147,16 @@ export function sessionView(records, sessionId, { enrich, bound, page, maxBytes 
   let recs = g.get(sessionId);
   if (!recs) return null;
   let autoBound = null;
-  ({ recs, bound: autoBound } = tailBound(recs, maxBytes));
+  // PAGING SUPERSEDES TAIL-BOUNDING. Both exist to keep one response serializable, but they answer
+  // it differently, and running the bound FIRST silently defeated paging: on a real 578-call session
+  // tailBound discarded 573 calls before pageView ever saw them, so the board paged through a
+  // 5-call stub and the timeline showed 5 bars for a session with 578. Whenever the client asks for a
+  // window it is asking for the WHOLE session's shape plus one page of bodies — which the retention
+  // window below delivers at bounded cost, with nothing dropped and so nothing to disclose.
+  const win = page ? windowOf(page) : null;
+  if (!win) ({ recs, bound: autoBound } = tailBound(recs, maxBytes));
   const probes = probeRecs(recs);
-  const analyzed = assembleSession(llmRecs(recs));
+  const analyzed = assembleSession(llmRecs(recs), win ? { keepFlat: (gi) => inPage(gi, win) } : undefined);
   const slim = recs.map((r) => ({
     is_llm_call: !!r.is_llm_call, ts_request: r.ts_request, id: r.id,
     response: { status: (respOf(r) || {}).status ?? null }, // R1: read via respOf (D10 `resp` + v0 `response`)
@@ -180,24 +187,77 @@ function slimCall(c) {
 
 // Apply the cursor/limit window over an assembled view WITHOUT mutating it (clones only the lane/call
 // spine; shares in-window call objects, slims out-of-window ones). Returns the view + `page` metadata.
-export function pageView(view, { cursor = 0, limit = Infinity } = {}) {
+// A page ships ONE CALL MORE than it displays: the call just before the window. That call is the
+// diff baseline for the first call ON the window, and without it the very first step of every page
+// can only report "Δ 无法计算" — a hole in the answer at a boundary the user did not choose and cannot
+// see. One extra body per page buys an exact ◆new / ⊖removed at every boundary, so scrolling a long
+// session reads the same as scrolling a short one.
+const inPage = (gi, { lo, hi }) => gi >= lo - 1 && gi < hi;
+
+function windowOf({ cursor = 0, limit = Infinity } = {}) {
   const lo = Math.max(0, cursor | 0);
-  const hi = limit === Infinity ? Infinity : lo + Math.max(0, limit | 0);
+  const lim = limit == null ? Infinity : limit;
+  return { lo, hi: lim === Infinity ? Infinity : lo + Math.max(0, lim | 0), limit: lim };
+}
+
+export function pageView(view, spec = {}) {
+  const { lo, hi, limit } = windowOf(spec);
   const lanes = (view.analyzed && view.analyzed.lanes) || [];
-  let total = 0, returned = 0;
-  const pagedLanes = lanes.map((lane) => {
-    const calls = (lane.calls || []).map((c) => {
-      total++;
-      const inWin = c.gi >= lo && c.gi < hi;
-      if (inWin) { returned++; return c; }
-      return slimCall(c);
-    });
-    return { ...lane, calls };
-  });
-  const analyzed = { ...view.analyzed, lanes: pagedLanes };
+  // analyze() puts each call object in TWO arrays — `lanes[].calls` and the flat `steps` — as the same
+  // object. Slimming only the lanes therefore left every body still reachable through `steps`, and the
+  // response barely shrank (measured 367 KB → 286 KB on an 8-call sample, i.e. paging bought ~nothing
+  // on the one axis it exists for). Slim ONCE into a map keyed by the original object, then rewrite
+  // both arrays through it, so the two views stay the same object as they were before paging.
+  const slimmed = new Map();
+  let returned = 0;
+  const paged = (c) => {
+    if (inPage(c.gi, { lo, hi })) return c;
+    if (!slimmed.has(c)) slimmed.set(c, slimCall(c));
+    return slimmed.get(c);
+  };
+  const pagedLanes = lanes.map((lane) => ({ ...lane, calls: (lane.calls || []).map(paged) }));
+  const steps = (view.analyzed && view.analyzed.steps) || [];
+  const pagedSteps = steps.map(paged);
+  // …and `streams`, the THIRD array holding the same objects. Missing it shipped every body anyway,
+  // and a deep window then 500'd with "Invalid string length" — which the board shows as its empty
+  // state, reporting a many-hundred-call session as having none.
+  const pagedStreams = ((view.analyzed && view.analyzed.streams) || [])
+    .map((st) => ({ ...st, calls: (st.calls || []).map(paged) }));
+  // Count over the UNION of both arrays, deduped by object identity: `steps` and `lanes[].calls` hold
+  // the same call objects in real assembler output, but a view may legitimately carry one and not the
+  // other, and counting the wrong array reports a session length that does not exist.
+  const seen = new Set([...pagedSteps, ...pagedLanes.flatMap((l) => l.calls)]);
+  const total = seen.size;
+  for (const c of seen) if (!c.paged_out) returned++;
+  const analyzed = { ...view.analyzed, lanes: pagedLanes, steps: pagedSteps, streams: pagedStreams };
   const nextCursor = hi !== Infinity && hi < total ? hi : null;
-  const page = { cursor: lo, limit: limit === Infinity ? null : (limit | 0), total, returned, nextCursor, hasMore: nextCursor != null };
+  // `returned` counts every call shipped WITH its body, which is the window plus `baseline` — the one
+  // call before it, sent so the first step of the page can still be diffed (see inPage). `baseline` is
+  // named on the wire rather than left as an unexplained off-by-one.
+  const baseline = lo > 0 && lo <= total ? lo - 1 : null;
+  const page = { cursor: lo, limit: limit === Infinity ? null : (limit | 0), total, returned, baseline, nextCursor, hasMore: nextCursor != null };
   return { ...view, analyzed, page };
+}
+
+// Project an assembled view onto WHAT THE BOARD ACTUALLY READS, for the wire.
+//
+// analyze() stores each call in three arrays — `steps`, `lanes[].calls`, `streams[].calls` — as the
+// SAME object. In memory that is one object and two extra references; serialized it is three full
+// copies, because JSON has no references. The browser reads `lanes` (buildLanes, index.html:823) and
+// `stats`, and never touches the other two: `grep -n '\.steps\|\.streams' src/web/index.html`
+// returns nothing. So two thirds of every session response was inert — 20.5 MB shipped for 6.4 MB of
+// distinct content on a 6-call fixture with 1.2 MB contexts.
+//
+// This is orthogonal to paging and compounded with it: paging bounds WHICH calls carry bodies, this
+// bounds how many times each one is written out. Together they are what let a large session's window
+// stay under V8's max string instead of 500-ing.
+//
+// A PROJECTION, never a mutation: the same assembled view is memoized and backs later page requests,
+// and server-side callers (ETL, the test suite) legitimately read `steps`. Returns a new object.
+export function forWire(view) {
+  if (!view || !view.analyzed) return view;
+  const { steps, streams, ...analyzed } = view.analyzed;
+  return { ...view, analyzed };
 }
 
 // ── /api/control ──────────────────────────────────────────────────────────────

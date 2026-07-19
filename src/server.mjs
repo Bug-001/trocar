@@ -19,7 +19,7 @@ import { listSessions, sessionCalls, sessionComposition, sessionResources, callC
   filesEverInContext, cacheHitDistribution, breakKindComparison, unmappedFields, forkTree } from './query/queries.mjs';
 import { buildResolver } from './query/source.mjs';
 import { readRecords } from './etl/ingest.mjs';
-import { projectsView, sessionView, controlView, pageView } from './view/board.mjs';
+import { projectsView, sessionView, controlView, forWire } from './view/board.mjs';
 import { createLru, memoKey } from './query/memo.mjs';
 import { loadPricing } from './view/pricing.mjs';
 import { randomBytes } from 'node:crypto';
@@ -127,21 +127,33 @@ function sourceFiles(sourcePath) {
   const sig = files.map((f) => { try { const s = fssync.statSync(f); return `${path.basename(f)}:${s.size}.${Math.round(s.mtimeMs)}`; } catch { return ''; } }).join('|') || '∅dir';
   return { files, sig };
 }
-function makeRecordLoader(sourcePath) {
+// A source may be ONE path or SEVERAL roots. Several is what D27 needs: after the home moved to
+// ~/.asight the user's existing captures still sit under ~/.atrace/asight, and they must keep showing
+// up on the board — a rename that quietly stops listing three gigabytes of history would be an
+// invariant-2 loss with no file deleted and no error raised.
+function makeRecordLoader(source) {
+  const roots = (Array.isArray(source) ? source : [source]).filter(Boolean);
   let cache = { sig: null, records: [] };
   const load = async () => {
-    if (!sourcePath) { load.sig = '∅'; return []; }
-    let files, sig;
+    if (!roots.length) { load.sig = '∅'; return []; }
+    let files = [], sig;
     // A source that cannot be STATTED under a live board (deleted, rotated away, its directory made
     // unreadable) used to be swallowed into an empty record set — the board then calmly renders "no
     // sessions captured yet" about a capture that is broken or still being written. Broken MUST NOT
     // look like empty (invariant 4): propagate, and the request handler turns it into a 500 {error}.
     // (An absent source at STARTUP is already refused by buildResolver, so this is never the benign
     // "capture has not started yet" state — that one is `!sourcePath` above.)
-    try { ({ files, sig } = sourceFiles(sourcePath)); }
-    catch (e) {
+    // EVERY configured root must resolve. Skipping the ones that fail would turn a mistyped or
+    // half-migrated path into "you captured less than you thought" — the failure this loader's
+    // existing comment already refuses to allow for a single source, and which multiplying the roots
+    // would otherwise reintroduce through the back door.
+    try {
+      const parts = roots.map((r) => sourceFiles(r));
+      files = parts.flatMap((p) => p.files);
+      sig = parts.map((p) => p.sig).join('#');
+    } catch (e) {
       load.sig = '0';
-      throw new Error(`capture source unreadable (${sourcePath}): ${String((e && e.message) || e)}`);
+      throw new Error(`capture source unreadable (${roots.join(', ')}): ${String((e && e.message) || e)}`);
     }
     load.sig = sig;
     if (cache.sig === sig) return cache.records;
@@ -240,7 +252,7 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
   // 503, not 404: the store is a dependency that IS configured and IS failing — a retryable outage,
   // not an absence. Carries the underlying reason so the board's {error} banner names the real cause.
   const noDb = (res) => (dbError ? sendJson(res, 503, { error: dbError }) : notFound(res, 'no analytics db'));
-  const resolve = sourcePath ? await buildResolver(sourcePath) : () => null;
+  const resolve = (Array.isArray(sourcePath) ? sourcePath.length : sourcePath) ? await buildResolver(sourcePath) : () => null;
   const loadRecords = makeRecordLoader(sourcePath);
   const sessionMemo = createLru(8); // D21: assembled per-session views keyed by (id, source sig, strategy)
   const csrf = control ? randomBytes(18).toString('hex') : null; // D26: per-process CSRF token
@@ -272,17 +284,33 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         const { page, error } = parsePageParams(url.searchParams);
         if (error) return sendJson(res, 400, { error });
         const records = await loadRecords();
-        // D21 memo: memoize the FULL assembled view (keyed by id + source sig) — paging is a cheap,
-        // non-mutating post-transform (pageView) so many page requests reuse one analyze() run.
-        const key = memoKey(id, loadRecords.sig);
-        let full = sessionMemo.get(key);
-        // maxBytes: NEVER assemble/ship a whole large session (4.4:90). Unbounded, a big session
-        // overruns V8's max string on JSON.stringify (500 "Invalid string length") and can OOM the
-        // process — the board then shows its empty state and falsely reports "no LLM calls". Bounded,
-        // the response is the most-recent calls that fit + a `truncated` marker (invariant 4).
-        if (full === undefined) { full = sessionView(records, id, { enrich, maxBytes: SESSION_BYTE_BUDGET }); if (full) sessionMemo.set(key, full); }
-        if (!full) return notFound(res, 'session not found');
-        return sendJson(res, 200, page ? pageView(full, page) : full);
+        // D21 memo: assembled views are cached by (id, source sig, window) so repeated polls of the
+        // same page reuse one analyze() run.
+        // THE WINDOW MUST REACH sessionView. This used to assemble the tail-bounded FULL view and then
+        // pageView() it — so on a long session the bound discarded 99% of the calls BEFORE the cursor
+        // window was applied, and the board paged through a stub: a 578-call session drew 5 bars. Every
+        // paging fix below the HTTP layer was unreachable from the only path a user takes.
+        //
+        // maxBytes vs page — two answers to the same "never ship a session whole" problem (4.4:90):
+        //   unpaged → tail-bound to the most recent calls that fit, and DISCLOSE it (`truncated`).
+        //   paged   → assemble every call, keep bodies only for the window (+ its diff baseline). The
+        //             whole timeline is present at bounded cost, so nothing is dropped and there is
+        //             nothing to disclose. Without a bound, JSON.stringify overruns V8's max string
+        //             ("Invalid string length") and the board falls back to its empty state, which
+        //             LIES that the session has no calls.
+        // Memo key carries the window: each entry is bounded, and a full view can no longer be served
+        // as if it were a page (or the reverse).
+        const key = memoKey(id, loadRecords.sig) + (page ? `|p${page.cursor}:${page.limit}` : '|full');
+        let view = sessionMemo.get(key);
+        if (view === undefined) {
+          view = sessionView(records, id, { enrich, page, maxBytes: page ? null : SESSION_BYTE_BUDGET });
+          if (view) sessionMemo.set(key, view);
+        }
+        if (!view) return notFound(res, 'session not found');
+        // forWire, not the view itself: the memo holds the full assembled object (server-side
+        // callers read `steps`), while the response carries only what the board reads — one copy
+        // of each call instead of three.
+        return sendJson(res, 200, forWire(view));
       }
       if (p === '/api/control') {
         const cls = url.searchParams.get('class');

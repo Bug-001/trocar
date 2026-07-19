@@ -64,6 +64,10 @@
   .ct-tools{background:var(--amber);} .ct-system{background:var(--purple);} .ct-user{background:var(--accent);}
   .ct-assistant{background:var(--green);} .ct-thinking{background:var(--pink);} .ct-tool_use{background:var(--cyan);}
   .ct-tool_result{background:var(--dim);} .ct-image{background:var(--dimmer);}
+  /* an unrecognized block role — shown as its own colour, never mis-coloured as user/system */
+  .ct-other{background:repeating-linear-gradient(45deg,var(--dimmer) 0 2px,transparent 2px 4px);}
+  /* a call whose body was not shipped on this page (paged_out): composition UNKNOWN, not empty */
+  .ct-unloaded{background:repeating-linear-gradient(45deg,var(--dim) 0 3px,transparent 3px 6px);opacity:.55;}
   .barlegend{display:flex;gap:6px;font-size:9px;color:var(--dim);align-items:center;flex-wrap:wrap;}
   .barlegend i{width:8px;height:8px;border-radius:2px;display:inline-block;margin-right:2px;vertical-align:middle;}
   .bar.err::after{content:"⚠";position:absolute;top:-15px;left:50%;transform:translateX(-50%);color:var(--red);font-size:10px;}
@@ -202,6 +206,7 @@
   .cwrembody{padding:0 8px 6px;} .cblk.removed{opacity:.72;} .cblk.removed .cbh{text-decoration:line-through solid color-mix(in srgb,var(--amber,#e8c15a) 50%,transparent);}
   .rembadge{font-size:8.5px;color:var(--amber,#e8c15a);border:1px solid color-mix(in srgb,var(--amber,#e8c15a) 40%,transparent);border-radius:8px;padding:0 5px;white-space:nowrap;font-family:var(--mono);text-decoration:none;}
   .cwgrowth.compact b{color:var(--amber);}
+  .cwgrowth.off{color:var(--amber);} .cwgrowth.off .diffbtn{margin-left:6px;}
   .lifemark{font-size:8.5px;color:var(--green);border:1px solid color-mix(in srgb,var(--green) 35%,transparent);border-radius:8px;padding:0 5px;white-space:nowrap;font-family:var(--mono);}
   /* one block */
   .cblk{border:1px solid var(--border);border-radius:6px;margin-bottom:4px;overflow:hidden;background:var(--panel);scroll-margin-top:8px;}
@@ -362,6 +367,14 @@
   .monmsg{white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:11px;color:var(--fg);background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;}
   .monmsg .collapsible{margin:6px 0;}
   .empty{color:var(--dimmer);padding:40px 12px;text-align:center;}
+  /* BUG 1: a call whose body was not shipped on this page. Deliberately NOT styled like .empty —
+     "we didn't fetch it" must never look like "there was nothing here" (不变式4). */
+  .pagedout{margin:24px auto;max-width:560px;padding:14px 16px;border:1px dashed var(--dim);border-radius:6px;background:rgba(255,255,255,.02);}
+  .pohd{font-size:12px;color:var(--amber);margin-bottom:6px;}
+  .pobody{font-size:11px;color:var(--dim);line-height:1.6;margin-bottom:10px;}
+  .pobtn{font:inherit;font-size:11px;padding:4px 10px;border:1px solid var(--dim);border-radius:4px;background:transparent;color:var(--fg);cursor:pointer;}
+  .pobtn:hover{border-color:var(--accent);color:var(--accent);}
+  .pobadge{color:var(--amber);border:1px solid var(--amber);border-radius:3px;padding:0 4px;font-size:9px;}
   kbd{font-family:var(--mono);background:var(--panel2);border:1px solid var(--border);border-radius:4px;padding:0 5px;font-size:10px;}
   .curmeta{font-family:var(--mono);font-size:10px;color:var(--dim);margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--border);}
   .stepdiv{font-family:var(--mono);font-size:9.5px;color:var(--dimmer);margin:11px 0 3px;padding-top:6px;border-top:1px dashed var(--border);letter-spacing:.2px;}
@@ -588,6 +601,21 @@ let lastRenderSig=null // poll skips re-analyze+render when the session's data h
 let lastCheapSig=null   // poll skips the whole /api/session fetch when calls/last_ts (from the cheap projects list) are unchanged — avoids re-shipping a large trace every 1.5s
 let navSeenExpanded=false
 
+// ── BUG 1 (audit 2026-07-19): cursor paging, browser half (3.5 游标契约 · 4.4:88②) ────────────
+// The server has shipped `?cursor=<gi>&limit=<n>` since 2026-07-16 and the board never once called
+// it, so it could only ever ask for the WHOLE session — which cannot be shipped, so the server
+// tail-bounds the view and the user sees a handful of calls out of hundreds. We now request a
+// WINDOW: every call still arrives with its cheap meta (ctx/usage/cacheBreak/gi — the timeline and
+// the brush stay whole-session), and only calls inside [cursor, cursor+limit) carry the heavy
+// payload (rec body / flat blocks / norm.text). Calls outside it arrive marked `paged_out` and are
+// rendered as "not loaded on this page" — 不变式4: the body was not SHIPPED on this page, it was
+// not lost, and it must never look like an empty call.
+const PAGE_LIMIT=60 // calls whose verbatim body rides on one page; the timeline is not limited by it
+let pageCur=0       // cursor (global call index `gi`) of the window we are currently asking for
+let pageInfo=null   // the server's `page` envelope for the loaded view: {cursor,limit,total,returned,…}
+let pageSig=null    // which session `pageCur` was chosen for (re-park the window on a session switch)
+let pageReaimed=false // guard: the "window past what the server assembled" re-aim fires at most once
+
 async function poll(){
   try{
     const sel=document.getElementById('fileSel')
@@ -615,12 +643,25 @@ async function poll(){
     // session's live calls-count + last_ts. If ours is unchanged, skip the heavy
     // /api/session fetch entirely — a big session no longer re-ships every poll.
     const cur=projectsFlat.find(s=>s.project_slug===slug&&s.session_id===id)
-    if(cur){ const cs=curSel+'|'+cur.calls+'|'+cur.last_ts
+    // BUG 1: pick the WINDOW before the fetch. /api/projects already carries this session's true
+    // call count (it counts the whole session, unbounded), so the tail window is known without a
+    // round-trip. On a session switch — and while live-following — the window parks on the tail:
+    // that is where `follow` sits and what the user is watching. A manual scrub off the live end
+    // clears `follow` (setPlayhead) so the window then stays where the user put it.
+    // Prefer the total the SERVER reported for this session over the projects count: a large session
+    // is tail-bounded server-side before paging, so the two can disagree, and aiming at a tail the
+    // server does not have would re-aim (below) on every single poll — an oscillation that would
+    // also fight live-follow. Once a page has landed, its `total` is the authority.
+    { const srvTotal=(curSel===pageSig&&pageInfo&&typeof pageInfo.total==='number')?pageInfo.total:null
+      const tailCur=Math.max(0,(srvTotal!=null?srvTotal:((cur&&cur.calls)||0))-PAGE_LIMIT)
+      if(curSel!==pageSig){ pageSig=curSel; pageCur=tailCur; pageInfo=null; pageReaimed=false }
+      else if(follow) pageCur=tailCur }
+    if(cur){ const cs=curSel+'|'+cur.calls+'|'+cur.last_ts+'|'+pageCur // window is part of the sig: moving it MUST re-fetch
       if(cs===lastCheapSig){ document.getElementById('dot').classList.toggle('on',document.getElementById('liveChk').checked); return }
       lastCheapSig=cs }
     // Distinguish FAILED-to-load from genuinely-empty: a 500 (or a dead server) used to fall through
     // to raw=[] and render "No LLM calls traced yet", which LIES about a session that has calls.
-    const res=await fetch(`/api/session?project=${encodeURIComponent(slug)}&id=${encodeURIComponent(id)}`).catch(e=>({ok:false,status:0,_err:String(e&&e.message||e)}))
+    const res=await fetch(`/api/session?project=${encodeURIComponent(slug)}&id=${encodeURIComponent(id)}&cursor=${pageCur|0}&limit=${PAGE_LIMIT}`).catch(e=>({ok:false,status:0,_err:String(e&&e.message||e)}))
     const d=res.ok?await res.json().catch(e=>({error:'malformed JSON from server: '+(e&&e.message||e)})):{error:res._err||('HTTP '+res.status)}
     if(d.error){
       const eb=document.getElementById('truncbar')
@@ -637,6 +678,19 @@ async function poll(){
       document.getElementById('dot').classList.remove('on')
       return
     }
+    pageInfo=d.page||null
+    // BUG 1 · self-correct. The server may assemble FEWER calls than /api/projects counted (a large
+    // session is tail-bounded server-side BEFORE paging is applied — see the WIRING GAP note in the
+    // audit). If our window landed entirely past what it actually assembled, every call would render
+    // paged_out and the board would go BLANK — strictly worse than the pre-paging behaviour of
+    // showing the tail. Re-aim once at the tail the server really has.
+    if(pageInfo&&pageInfo.returned===0&&pageInfo.total>0){
+      const c2=Math.max(0,pageInfo.total-PAGE_LIMIT)
+      // NOTE: `follow` is deliberately NOT cleared here — c2 IS the live end of what the server has,
+      // so we are still following it. Clearing it would silently stop live-follow on exactly the big
+      // sessions this path exists for.
+      if(c2!==(pageCur|0)&&!pageReaimed){ pageReaimed=true; pageCur=c2; lastCheapSig=null; lastRenderSig=null; return poll() }
+    } else pageReaimed=false
     raw=d.records||[]; probes=d.probes||{count:0,series:[]}; meta=d.meta||null
     // 保真边界: a session too large to ship whole arrives truncated to its most-recent calls.
     // The raw NDJSON on disk stays complete — mark the view non-complete (invariant 4).
@@ -646,7 +700,9 @@ async function poll(){
     } else { tb.style.display='none'; tb.innerHTML='' } }
     // skip the whole re-analyze+render when this session's data is unchanged — otherwise the
     // 1.5s live poll rebuilds the context window and wipes any block you just expanded.
-    const sig=curSel+'|'+raw.length+'|'+(raw.length?String(raw[raw.length-1]?.ts_request||raw[raw.length-1]?.id||''):'')
+    // BUG 1: the window is part of the render sig — the slim `records` list does NOT change when the
+    // cursor moves, so without this a re-aimed page would fetch and then silently skip its render.
+    const sig=curSel+'|'+(pageCur|0)+'|'+raw.length+'|'+(raw.length?String(raw[raw.length-1]?.ts_request||raw[raw.length-1]?.id||''):'')
     if(sig===lastRenderSig){ document.getElementById('dot').classList.toggle('on',document.getElementById('liveChk').checked); return }
     lastRenderSig=sig
     A=d.analyzed||{lanes:[],calls:[]} // server-side analyze() output, per-call fields pre-baked
@@ -838,30 +894,40 @@ function render(){
   if(selTick){ const l=lanes.find(x=>x.id===selTick.laneId); if(l&&(l.kind==='monitor'||l.kind==='probe')) highlightRange(l,selTick.i) }
 }
 
-// per-call context composition by type (chars, a cheap proxy for token share), cached on the step.
-// Used to paint each timeline bar as a stacked multi-color column (point 3).
+// per-call context composition by type, cached on the step. Paints each timeline bar as a stacked
+// multi-color column (point 3).
+//
+// BUG 2 (audit 2026-07-19) — invariant 3 / AC-3. This used to read the ANTHROPIC wire body
+// (`rq.system[]`, `rq.messages[].content[]`, block `.type`) directly. An OpenAI-Responses body has
+// none of those (it carries `instructions` + `input[]`), so every Codex / OpenCode call scored 0 in
+// every bucket except `tools` and the signature multi-colour bar rendered as one solid column —
+// provider knowledge in the browser, exactly what the invariant forbids. Composition is now derived
+// from `s.flat`, the ONE cross-provider block vocabulary both dissectors already emit server-side
+// (sec: tools|system|messages · kind: text|thinking|tool_use|tool_result|image · role), sized by the
+// same provider-agnostic flatBytes() that segTax() uses. A new provider = a new server-side
+// dissector; this function never changes again.
+const COMP_KIND={thinking:'thinking',redacted_thinking:'thinking',tool_use:'tool_use',server_tool_use:'tool_use',tool_result:'tool_result',image:'image'}
+// Roles are part of the common block vocabulary, not a wire shape. Anything NOT in this table lands
+// in `other` rather than being silently folded into `user` — an unrecognized role must be VISIBLE,
+// never mis-coloured as something we didn't observe (不变式4).
+const COMP_ROLE={assistant:'assistant',user:'user',system:'system',developer:'system',tool:'tool_result'}
+function compBucket(b){
+  if(b.sec==='tools') return 'tools'
+  if(b.sec==='system') return 'system'
+  const k=COMP_KIND[b.kind]; if(k) return k
+  return COMP_ROLE[b.role]||'other'
+}
 function callComp(s){
   if(s._comp) return s._comp
-  const rq=(s.rec&&s.rec.request)||{}
-  const c={tools:0,system:0,user:0,assistant:0,thinking:0,tool_use:0,tool_result:0,image:0}
-  for(const t of rq.tools||[]) c.tools += (String(t.name||'').length+String(t.description||'').length+(t.input_schema?JSON.stringify(t.input_schema).length:0))||40
-  for(const b of rq.system||[]) c.system += String((typeof b==='string'?b:b.text)||'').length
-  for(const m of rq.messages||[]){
-    const parts=Array.isArray(m.content)?m.content:[{type:'text',text:m.content}]
-    for(const b of parts){
-      const t=b.type||'text'
-      if(t==='thinking'||t==='redacted_thinking') c.thinking+=String(b.thinking||'').length||60
-      else if(t==='tool_use'||t==='server_tool_use') c.tool_use+=JSON.stringify(b.input||{}).length+String(b.name||'').length
-      else if(t==='tool_result') c.tool_result+=JSON.stringify(b.content??'').length
-      else if(t==='image') c.image+=800
-      else if(m.role==='assistant') c.assistant+=String(b.text||'').length
-      else c.user+=String(b.text||'').length
-    }
-  }
+  const c={tools:0,system:0,user:0,assistant:0,thinking:0,tool_use:0,tool_result:0,image:0,other:0}
+  for(const b of s.flat||[]) c[compBucket(b)] += flatBytes(b)
   return s._comp=c
 }
-const CT_ORDER=['tools','system','user','assistant','thinking','tool_use','tool_result','image']
+const CT_ORDER=['tools','system','user','assistant','thinking','tool_use','tool_result','image','other']
 function barSegs(s,h){
+  // BUG 1: a paged-out call has no `flat` — its composition is UNKNOWN on this page, not zero.
+  // Paint one honest "not loaded" column instead of a blank bar that reads as "nothing in context".
+  if(s&&s.paged_out) return `<span class="ct-unloaded" style="height:${h.toFixed?h.toFixed(2):h}px"></span>`
   const c=callComp(s), tot=CT_ORDER.reduce((a,k)=>a+(c[k]||0),0)||1
   return CT_ORDER.map(k=>{ const sh=(c[k]||0)/tot*h; return sh<0.4?'':`<span class="ct-${k}" style="height:${sh.toFixed(2)}px"></span>` }).join('')
 }
@@ -918,7 +984,21 @@ function taxSummary(tax){
 // D17② context-growth Δ (research pain #4: cost grows superlinearly, can't attribute to a step).
 // Per call: how many re-sent bytes were ADDED vs the previous call, and which segment they landed in.
 // Honest boundary: asight names the culprit (diagnose) — pruning is the harness's job (诊断非裁剪).
-function growthLine(tax,prevTax,brk){
+// THE DIFF BASELINE, and the one way to ask for it. A call whose body was not shipped on this page
+// carries `flat: []` — empty, but NOT because the model saw an empty context. `[]` is truthy, so
+// `prevCall.flat||null` yields it, every block then counts as absent from the baseline, and the board
+// reports the entire context as newly added at every page boundary (measured: ◆new 1/376 → 375/376,
+// re-sent Δ +42 B → +689k B). `paged_out` is the only thing that tells "empty" from "not shipped", so
+// no code may reach for a baseline except through here: null means NO COMPARISON IS POSSIBLE, and the
+// UI must say so (invariant 4) rather than quietly diffing against nothing.
+const blocksOf=c=>(c&&!c.paged_out&&c.flat&&c.flat.length)?c.flat:null
+function growthLine(tax,prevTax,brk,baselineOffPage){
+  // Not "no change" and not "first call" — the comparison simply cannot be made from this page. Say
+  // which, and offer the one action that fixes it.
+  if(!prevTax&&baselineOffPage)
+    return `<div class="cwgrowth off"><b>Δ 无法计算</b> · 上一步 (#${playhead}) 的正文不在本页 — the previous `+
+      `call's body was left off this page, so nothing can be diffed against it. Its ctx / usage figures `+
+      `stay real. <button class="diffbtn" data-diff="loadbase">⤓ 载入基线 · load it</button></div>`
   if(!prevTax) return '' // first captured call — nothing to diff against
   const dTotal=tax.total-prevTax.total
   const deltas=TAX_ORDER.map(k=>({k,d:tax.seg[k]-prevTax.seg[k]}))
@@ -956,7 +1036,11 @@ function renderSaw(){
   const win=[]; for(let i=lo;i<hi;i++) win.push([anchor.calls[i],i])
   document.getElementById('sawrow').innerHTML='<div id="reviewbracket"></div>'+win.map(([s,i])=>{
     const h=s.error?20:Math.max(3,Math.round((s.ctx||0)/peak*72))
-    return `<div class="bar ${s.error?'err':''} ${s.compaction?'compact':''} ${i===playhead?'cur':''}" data-i="${i}" style="height:${h}px" title="#${i+1} · ${s.error?'⚠ interrupted':kf(s.ctx)+' tok'}">${s.error?'':barSegs(s,h)}</div>`
+    // BUG 1: the bar HEIGHT (ctx) is real for every call — cheap meta always ships. Only the
+    // composition breakdown is unknown for a paged-out call; say so in the tooltip rather than
+    // letting a hatched column read as a rendering glitch.
+    const po=s.paged_out?' · 正文未随本页下发 (body not on this page — click to load)':''
+    return `<div class="bar ${s.error?'err':''} ${s.compaction?'compact':''} ${i===playhead?'cur':''}" data-i="${i}" style="height:${h}px" title="#${i+1} · ${s.error?'⚠ interrupted':kf(s.ctx)+' tok'}${po}">${s.error?'':barSegs(s,h)}</div>`
   }).join('')
   document.querySelectorAll('#sawrow .bar').forEach(b=>b.onclick=()=>setPlayhead(+b.dataset.i,true))
   // per-call cache reading, aligned 1:1 under the bars (truthful: read/total from real usage)
@@ -1400,6 +1484,15 @@ function renderRawPanel(){
   const hasU=(read+create+fresh+out)>0
   const costLine=hasU?`≈ cost ${costCell(rq.model,u)} ${estBadge}`
     :`≈ cost <b title="no usage returned for this step — not faked as $0 (不变式4)">?</b> ${estBadge}`
+  // BUG 1: on a paged-out call the wire/msgs/tools counts did NOT arrive — print "not on this page",
+  // never kf(undefined) → "?", which reads as "the capture didn't have it". usage/cost DID arrive
+  // (cheap meta) and stay truthful.
+  if(call.paged_out){
+    el.innerHTML=`<div class="rphd">🩻 raw · call #${playhead+1}</div>`+
+      `<div class="rpk">${esc(String(rq.model||'').replace('claude-',''))} · <span class="pobadge" title="this call's verbatim body was not shipped on this page — it is intact in the raw trace (不变式4)">正文未随本页下发 · body not on this page</span></div>`+
+      `<div class="rpk">usage · read <b>${kf(read)}</b> · new-cache <b>${kf(create)}</b> · fresh <b>${kf(fresh)}</b> · out <b>${kf(out)}</b></div>`+
+      `<div class="rpk rpcost">${costLine}</div>`
+    return }
   el.innerHTML=`<div class="rphd">🩻 raw · call #${playhead+1}</div>`+
     `<div class="rpk">${esc(String(rq.model||'').replace('claude-',''))} · ${kf(rq.context_chars)} bytes wire</div>`+
     `<div class="rpk">msgs <b>${kf(rq.message_count)}</b> · tools <b>${kf(rq.tool_count)}</b> · system <b>${kf(rq.system_chars)}</b>c</div>`+
@@ -1411,11 +1504,27 @@ function renderContextWindow(){
   const win=document.getElementById('ctxwin')
   const call=anchor&&anchor.calls[playhead]
   if(!call||!call.rec){ curFlat=[]; win.innerHTML='<div class="empty">No request captured for this step (a probe or an interrupted call).</div>'; return }
+  // BUG 1 · 不变式4. This call's body was not shipped on THIS page. It is NOT empty, NOT truncated
+  // and NOT lost — say exactly that, and offer to go get it. Falling through would render a context
+  // window of zero blocks and "? bytes on the wire", indistinguishable from a call that really had
+  // no content, which is the single worst outcome for a tool whose value is "what you see IS the wire".
+  if(call.paged_out){ curFlat=[]
+    const lo=(pageCur|0)+1, hi=(pageCur|0)+PAGE_LIMIT, tot=(pageInfo&&pageInfo.total)||null
+    win.innerHTML=`<div class="pagedout">`+
+      `<div class="pohd">⏸ 正文未随本页下发 · body not loaded on this page</div>`+
+      `<div class="pobody">Call <b>#${playhead+1}</b> of ${anchor.calls.length} sits outside the loaded window `+
+      `(calls <b>#${lo}</b>–<b>#${Math.min(hi,tot||hi)}</b>${tot?` of ${tot}`:''}). Its ctx / usage / cache figures above and `+
+      `on the timeline are <b>real</b> — only the verbatim request body was left off this page to keep the `+
+      `response shippable. <b>Not lost</b>: it is intact in the raw NDJSON (不变式4 · 未下发 ≠ 丢失).</div>`+
+      `<div><button class="pobtn" id="loadpage">⤓ 载入这一页 · load this window</button></div>`+
+    `</div>`
+    const lb=document.getElementById('loadpage'); if(lb) lb.onclick=()=>ensurePage(call,true)
+    return }
   const flat=call.flat||[]; curFlat=flat // pre-baked server-side (D18a)
   const rq=call.rec.request||{}, u=call.usage||{} // neutral canonical usage (D18a Q1)
   // cache-break vs the PREVIOUS in-lane call (compute both flats on demand — light: 2 calls, not all)
   const prevCall=playhead>0?anchor.calls[playhead-1]:null
-  const prevFlat=prevCall&&prevCall.rec?(prevCall.flat||null):null // pre-baked (for D17② segTax Δ below)
+  const prevFlat=blocksOf(prevCall) // pre-baked (for D17② segTax Δ below)
   const brk=call.cacheBreak||{idx:0,rawIdx:0,gt:null} // pre-baked cache-break vs prev in-lane call
   const read=u.read||0, create=u.create||0, fresh=u.fresh||0
   const totIn=read+create+fresh, hitPct=totIn?Math.round(read/totIn*100):0
@@ -1426,8 +1535,8 @@ function renderContextWindow(){
   // 步间 diff (2.3 · D24): reference = diffRef when valid, else the previous in-lane step. added =
   // ◆new (cur key ∉ ref); removed = ref blocks absent from cur — surfaced EXPLICITLY (the gap the
   // demo's ◆new-only marking missed under compaction/rewrite). Pure key-set diff, zero byte-diff.
-  const refIdx=(diffRef!=null&&diffRef>=0&&diffRef<anchor.calls.length&&diffRef!==playhead&&anchor.calls[diffRef]&&anchor.calls[diffRef].flat)?diffRef:(prevCall?playhead-1:null)
-  const refFlat=refIdx!=null?(anchor.calls[refIdx].flat||null):null
+  const refIdx=(diffRef!=null&&diffRef>=0&&diffRef<anchor.calls.length&&diffRef!==playhead&&blocksOf(anchor.calls[diffRef]))?diffRef:(prevCall?playhead-1:null)
+  const refFlat=refIdx!=null?blocksOf(anchor.calls[refIdx]):null
   const refKeys=refFlat?new Set(refFlat.map(b=>b.key)):null // ◆new marks vs the diff reference
   const curKeys=new Set(flat.map(b=>b.key))
   const removed=refFlat?refFlat.filter(b=>!b.volatile&&!curKeys.has(b.key)):[]
@@ -1435,7 +1544,7 @@ function renderContextWindow(){
     `<div class="cwtitle">context @ call <b>#${playhead+1}</b>/${anchor.calls.length} · ${esc(model)} · ${fmtTime(call.ts)}</div>`+
     `<div class="cwsub">the exact input to the model, in assembly order <b>tools → system → messages</b> · ${kf(flat.length)} blocks · ${kf(rq.context_chars)} bytes on the wire</div>`+
     `<div class="cwcache">⚡ KV cache this call: <b class="chit">${hitPct}%</b> reused · <b>${kf(read)}</b> tok read · <b>${kf(create)}</b> newly cached · <b>${kf(fresh)}</b> fresh${brk.firstCall?(read?' · first captured call — reuse is from a warm cross-session cache prefix (tools+system)':' · first call, nothing to reuse'):''}</div>`+
-    taxSummary(tax)+growthLine(tax,prevTax,brk)+diffControl(refIdx,removed.length)+
+    taxSummary(tax)+growthLine(tax,prevTax,brk,!!(prevCall&&prevCall.paged_out))+diffControl(refIdx,removed.length)+
   `</div>`+removedSection(removed,refIdx)
   const mark=i=>(!brk.firstCall && i===brk.idx && brk.idx<flat.length)?cacheMarker(brk,read,create):''
   const msgStart=flat.findIndex(b=>b.sec==='messages')
@@ -1463,6 +1572,7 @@ function renderContextWindow(){
   }
   win.innerHTML=html
   win.querySelectorAll('.diffbtn').forEach(b=>b.onclick=()=>{ const a=b.dataset.diff, N=anchor.calls.length, base=refIdx==null?playhead:refIdx
+    if(a==='loadbase'){ ensurePage(prevCall,true); return }
     if(a==='resetref') diffRef=null
     else if(a==='prevref'){ let r=base-1; if(r<0)r=0; if(r===playhead)r=Math.max(0,r-1); diffRef=r }
     else if(a==='nextref'){ let r=base+1; if(r>=N)r=N-1; if(r===playhead)r=Math.min(N-1,r+1); diffRef=(r===playhead)?null:r }
@@ -1663,6 +1773,21 @@ function nearestByTs(lane,ts){
   lane.calls.forEach((c,i)=>{ const d=Math.abs(Date.parse(c.ts)-t); if(d<bd){bd=d;best=i} })
   return best
 }
+// BUG 1: the playhead landed on a call whose body did NOT ride on the loaded page. Re-aim the cursor
+// window around it (centred, so scrubbing a few steps either way stays inside it) and re-poll. The
+// call keeps rendering meanwhile — its cheap meta is real — marked "not loaded on this page", never
+// blank (不变式4). Returns whether a fetch was kicked off.
+function ensurePage(call,force){
+  if(!call||!call.paged_out) return false
+  const c=Math.max(0,(call.gi|0)-((PAGE_LIMIT/2)|0))
+  if(c===(pageCur|0)&&!force) return false // already asking for this window; a re-poll would loop
+  pageCur=c
+  follow=false      // we are deliberately looking away from the live end; don't let poll() re-park on the tail
+  pageReaimed=false // a user-driven move gets a fresh self-correct budget
+  lastCheapSig=null; lastRenderSig=null
+  poll()
+  return true
+}
 function setPlayhead(i,manual){
   if(!anchor)return
   if(!anchor.calls||!anchor.calls.length)return // R10: zero-call session — "⇥ latest" is a no-op, not a TypeError
@@ -1678,6 +1803,7 @@ function setPlayhead(i,manual){
     view.lo=lo; view.hi=Math.min(N,lo+w)
   }
   renderSaw(); renderRails(); renderContextWindow(); renderContextNav(); repositionBrush()
+  ensurePage(anchor.calls[playhead]) // BUG 1: scrubbed outside the loaded window → go get that window
   if(selTick){ const l=lanes.find(x=>x.id===selTick.laneId); if(l&&(l.kind==='monitor'||l.kind==='probe'))highlightRange(l,selTick.i) }
 }
 document.addEventListener('keydown',e=>{
@@ -1827,8 +1953,21 @@ function renderMon(el,d){
     }catch(e){ btn.disabled=false; btn.textContent='监测 ✗' }
   }
 }
+// BUG 3 (audit 2026-07-19): probed EXACTLY ONCE, at boot — never from poll()'s 1.5s loop (the audit
+// suspected a 404-per-cycle; measured, it was already one-shot, and control-availability.test.mjs
+// now pins that). The real defect was the failure path: a bare `return` left the pill
+// `display:none` forever, so on a read-only server (D26 control is opt-in) the user could not tell
+// "monitoring control is off" from "this build has no such feature" — a silent failure, which is
+// what 不变式4 forbids the UI to do. Now it says so once and stays inert: no toggle is rendered,
+// because a button that cannot work is worse than no button.
 ;(async()=>{ const el=document.getElementById('monctl'); if(!el) return
-  try{ const r=await fetch('/control/status',{cache:'no-store'}); if(!r.ok) return; const d=await r.json(); el.style.display=''; renderMon(el,d) }catch{} })()
+  let r=null
+  try{ r=await fetch('/control/status',{cache:'no-store'}) }catch(e){ r=null }
+  if(r&&r.ok){ try{ const d=await r.json(); el.style.display=''; renderMon(el,d); return }catch(e){ /* malformed → fall through to the honest unavailable pill */ } }
+  el.style.display=''
+  el.innerHTML=`<span class="mondot" title="监测控制未启用"></span>`
+    +`<span class="monwhere" title="This board was started read-only, so the D26 control endpoints are not mounted. Restart the server with --control to arrange transparent monitoring from here. Either way the board keeps showing what was captured — only the on/off switch is absent.">监测控制未启用 · control not enabled${r?` · HTTP ${r.status}`:''} — read-only board</span>`
+})()
 
 poll()
 setInterval(()=>{if(document.getElementById('liveChk').checked)poll()},1500)

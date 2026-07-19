@@ -151,7 +151,11 @@ export function getDesktopSteer(platform = process.platform, deps = {}) {
   const read = (p, dflt = '') => {
     try { return fs.readFileSync(p, 'utf8'); } catch (e) {
       if (e && e.code === 'ENOENT') return dflt;
-      throw new Error(`asight refused to touch ${p}: cannot read it (${e.code || e.message}). Nothing was written — fix or move the file, then retry.`);
+      // carry the cause forward: callers that already wrote something MUST render their own,
+      // accurate "what state is the machine in now" message rather than this pre-write one.
+      const err = new Error(`asight refused to touch ${p}: cannot read it (${e.code || e.message}). Nothing was written — fix or move the file, then retry.`);
+      err.code = e && e.code; err.path = p;
+      throw err;
     }
   };
   const backupOnce = (p, content) => { const bak = p + '.atrace-bak'; if (content !== null && !fs.existsSync(bak)) fs.writeFileSync(bak, content); };
@@ -180,8 +184,18 @@ export function getDesktopSteer(platform = process.platform, deps = {}) {
     //    A splice that found no `proxies:`/`rules:` anchor (quoted keys, flow-style arrays, …) is a
     //    NO-OP: reloading that config would route nothing while reporting success, so the user would
     //    believe capture is live and silently record nothing. Refuse loudly instead.
+    //    An UNREADABLE runtime (EACCES/EISDIR) must not throw out of on(): Script.js has already
+    //    been written by this point, so an exception would leave the machine half-applied AND give
+    //    the caller no structured result to report. Fail loudly, as a result.
     let reload = { status: null };
-    const rt = read(runtimePath, null);
+    let rt;
+    try { rt = read(runtimePath, null); } catch (e) {
+      return {
+        ok: false,
+        reason: `cannot read the runtime config ${runtimePath} (${e.code || e.message}) — NOT live now (mihomo was not reloaded). The durable Script.js steer IS installed and should apply on the next Verge enhance/regen.`,
+        port, scriptPath, reload, status: await status(), ...(mergeCleanup ? { mergeCleanup } : {}),
+      };
+    }
     if (rt) {
       const { yaml, splicedProxies, splicedRules } = spliceRuntime(rt, port);
       if (!splicedProxies || !splicedRules) {
@@ -221,14 +235,22 @@ export function getDesktopSteer(platform = process.platform, deps = {}) {
     try {
       if (fs.existsSync(mergePath)) fs.writeFileSync(mergePath, stripBlock(stripMergeLegacy(read(mergePath))));
     } catch (e) { mergeCleanup = { ok: false, path: mergePath, error: e.message }; }
+    // An unreadable runtime must not throw out of off() either: the Script.js restore has ALREADY
+    // run, so a throw leaves the machine half-torn-down with no structured result at all.
     let reload = { status: null };
-    const rt = read(runtimePath, null);
+    let runtimeError = null, rt = null;
+    try { rt = read(runtimePath, null); } catch (e) {
+      runtimeError = `cannot read the runtime config ${runtimePath} (${e.code || e.message}) — the runtime splice was NOT cleared`;
+    }
     if (rt) reload = await mihomoReload(stripRuntime(rt));
     const st = await status();
     // Verify the undo actually landed — do not take the write's word for it.
     const why = [];
     if (restoreError) why.push(restoreError);
     else if (st.scriptInstalled) why.push(`${scriptPath} still carries the atrace block after the restore`);
+    // UNKNOWN (unreadable Script.js) is not "clean": never claim a teardown we could not verify.
+    else if (st.scriptInstalled === null) why.push(`could not verify the restore — ${scriptPath} is unreadable (${st.readError || 'unknown error'})`);
+    if (runtimeError) why.push(runtimeError);
     if (!reloadOk(reload)) why.push(reloadWhy(reload));
     if (why.length) {
       return {

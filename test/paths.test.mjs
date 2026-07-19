@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import os from 'node:os';
-import { captureOut, mitmOut, serveSource, ATRACE_DIR } from '../src/paths.mjs';
+import { captureOut, mitmOut, serveSource, asightHome } from '../src/paths.mjs';
 
 // FIRST-RUN DEAD END (audit 2026-07-19). The capture writers and the board reader defaulted to
 // DIFFERENT paths: `asight capture` → ~/.atrace/capture.ndjson, `asight mitm` →
@@ -14,22 +14,25 @@ import { captureOut, mitmOut, serveSource, ATRACE_DIR } from '../src/paths.mjs';
 // The invariant these tests pin: whatever a capture writer writes, the default board reads.
 // Centralising the defaults in one module is what makes that checkable at all.
 
+// serveSource() returns the roots to READ (D27: the new home, plus the legacy one while it still
+// holds the user's history). The invariant below is about the WRITE side landing inside them.
 test('serve reads the directory that the capture writers write into', () => {
-  const dir = serveSource();
-  assert.equal(path.dirname(captureOut()), dir,
+  const roots = [].concat(serveSource());
+  assert.ok(roots.includes(path.dirname(captureOut())),
     'asight capture must write where asight serve looks');
-  assert.equal(path.dirname(mitmOut()), dir,
+  assert.ok(roots.includes(path.dirname(mitmOut())),
     'asight mitm must write where asight serve looks — this was the actual first-run dead end');
 });
 
 test('the default source is a DIRECTORY, so every harness renders on one board', () => {
-  assert.equal(serveSource(), ATRACE_DIR,
+  const roots = [].concat(serveSource());
+  assert.ok(roots.includes(asightHome()),
     'a directory source lists Claude Code / Codex / OpenCode sessions side by side; a single-file '
     + 'default silently hides every other harness the user captured');
 });
 
 test('defaults live under the user home, never outside it', () => {
-  for (const p of [captureOut(), mitmOut(), serveSource()]) {
+  for (const p of [captureOut(), mitmOut(), ...[].concat(serveSource())]) {
     assert.ok(p.startsWith(os.homedir() + path.sep), `${p} escapes the home directory`);
   }
 });

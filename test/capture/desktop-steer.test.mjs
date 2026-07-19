@@ -219,6 +219,67 @@ test('B8 an ABSENT Script.js is still fine — ENOENT means "start from the no-o
   assert.match(fs.files.get('/s.js'), /port: 9898/, 'a fresh Script.js was generated from the stub');
 });
 
+// ── B9: an unreadable RUNTIME config must not throw out of on()/off() ─────────────────────────
+// read(runtimePath) throws on anything that is not ENOENT (EACCES / EISDIR). Both call sites run
+// AFTER the durable half has already been written, so an uncaught throw leaves the machine in a
+// half-applied / half-torn-down state and returns NO structured result at all — the user cannot
+// tell what state their traffic routing is in. Fail loudly, but as a RESULT, not an exception.
+function denyRead(fs, target, code = 'EACCES') {
+  const real = fs.readFileSync;
+  fs.readFileSync = (p) => { if (p === target) { const e = new Error(`${code}: denied`); e.code = code; throw e; } return real(p); };
+  return () => { fs.readFileSync = real; };
+}
+
+test('B9 on() returns a structured ok:false when the runtime config is unreadable (never throws)', async () => {
+  const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
+  const reloads = [];
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: (y) => (reloads.push(y), Promise.resolve({ status: 204 })), probeLive: () => Promise.resolve(false) });
+  const restore = denyRead(fs, '/rt.yaml');
+  let out;
+  try { out = await steer.on({ port: 9898 }); } finally { restore(); }
+  assert.equal(out.ok, false, 'an unreadable runtime means capture is NOT live now');
+  assert.match(out.reason, /rt\.yaml/, 'names the file it could not read');
+  assert.equal(reloads.length, 0, 'never reload from a config we could not read');
+  assert.equal(out.status.scriptInstalled, true, 'the durable half DID land — the result must say so');
+});
+
+test('B9 off() returns a structured ok:false when the runtime config is unreadable (never throws)', async () => {
+  const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 204 }), probeLive: () => Promise.resolve(true) });
+  await steer.on({ port: 9898 });
+  const restore = denyRead(fs, '/rt.yaml');
+  let out;
+  try { out = await steer.off(); } finally { restore(); }
+  // the Script.js restore already ran → the machine is HALF torn down. Saying so is the whole point.
+  assert.equal(out.ok, false, 'a teardown that could not clear the runtime splice is not clean');
+  assert.match(out.reason, /rt\.yaml/, 'names the file it could not read');
+  assert.equal(fs.files.get('/s.js'), NO_OP, 'the durable half was still restored');
+});
+
+test('B9 an ABSENT runtime config is still fine — ENOENT means "nothing live to splice"', async () => {
+  const fs = fakeFs({ '/s.js': NO_OP });
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 204 }), probeLive: () => Promise.resolve(false) });
+  assert.equal((await steer.on({ port: 9898 })).ok, true, 'no runtime on disk is not a failure');
+  assert.equal((await steer.off()).ok, true);
+});
+
+// ── B10: off() must not claim a clean teardown it could not VERIFY ────────────────────────────
+// status() honestly reports scriptInstalled:null (UNKNOWN) for an unreadable Script.js. `else if
+// (st.scriptInstalled)` treats null as falsy → off() reports a clean undo it never confirmed.
+test('B10 off() reports ok:false when it CANNOT VERIFY the Script.js restore (scriptInstalled null)', async () => {
+  const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 204 }), probeLive: () => Promise.resolve(true) });
+  await steer.on({ port: 9898 });
+  // the restore itself lands (it is written from the backup) but Script.js is then unreadable, so
+  // status() cannot confirm the block is gone → UNKNOWN, which MUST NOT be reported as success.
+  const restore = denyRead(fs, '/s.js');
+  let out;
+  try { out = await steer.off(); } finally { restore(); }
+  assert.equal(out.status.scriptInstalled, null, 'status is honest: UNKNOWN, not false');
+  assert.equal(out.ok, false, 'unverified is not verified — never claim a clean teardown');
+  assert.match(out.reason, /s\.js/, 'names the file whose state is unknown');
+});
+
 test('non-darwin: explicit reserved refusal, never a silent no-op (D22)', () => {
   const steer = getDesktopSteer('linux', {});
   const out = steer.on({ port: 9898 });

@@ -33,7 +33,7 @@ test('no paging params → full send (no page field, every call keeps its heavy 
 
 test('pageView window [0,5): only in-window calls keep heavy payload; page metadata correct', () => {
   const v = pageView(FULL, { cursor: 0, limit: 5 });
-  assert.deepEqual(v.page, { cursor: 0, limit: 5, total: 35, returned: 5, nextCursor: 5, hasMore: true });
+  assert.deepEqual(v.page, { cursor: 0, limit: 5, total: 35, returned: 5, baseline: null, nextCursor: 5, hasMore: true });
   for (const c of allCalls(v)) {
     if (c.gi < 5) {
       assert.ok(!c.paged_out, `gi ${c.gi} in window is not paged_out`);
@@ -59,16 +59,22 @@ test('paged-out calls keep the cheap meta the timeline needs (ctx/usage/gi/cache
   }
 });
 
-test('window in the middle [10,15): returned=5, correct nextCursor', () => {
+// A page ships the window PLUS the call immediately before it. That call is the diff baseline for the
+// first call on the page; without it the board can say nothing about what changed at every page
+// boundary, which is a hole in the answer at a place the user did not choose. `returned` counts bodies
+// actually shipped, and `baseline` names the extra one so the +1 is explicit on the wire.
+test('window in the middle [10,15): ships the window plus its diff baseline', () => {
   const v = pageView(FULL, { cursor: 10, limit: 5 });
-  assert.deepEqual(v.page, { cursor: 10, limit: 5, total: 35, returned: 5, nextCursor: 15, hasMore: true });
+  assert.deepEqual(v.page,
+    { cursor: 10, limit: 5, total: 35, returned: 6, baseline: 9, nextCursor: 15, hasMore: true });
   const heavy = allCalls(v).filter((c) => !c.paged_out).map((c) => c.gi).sort((a, b) => a - b);
-  assert.deepEqual(heavy, [10, 11, 12, 13, 14]);
+  assert.deepEqual(heavy, [9, 10, 11, 12, 13, 14], 'call #9 rides along solely as the diff baseline');
 });
 
 test('last page [30,40): clamps to end, nextCursor null, hasMore false', () => {
   const v = pageView(FULL, { cursor: 30, limit: 10 });
-  assert.deepEqual(v.page, { cursor: 30, limit: 10, total: 35, returned: 5, nextCursor: null, hasMore: false });
+  assert.deepEqual(v.page,
+    { cursor: 30, limit: 10, total: 35, returned: 6, baseline: 29, nextCursor: null, hasMore: false });
 });
 
 test('cursor past the end → empty window, hasMore false (no throw)', () => {
@@ -103,7 +109,8 @@ test('HTTP /api/session?cursor&limit → paged payload with page metadata', asyn
   const r = await get(port, `/api/session?id=${MAIN}&cursor=0&limit=3`);
   assert.equal(r.status, 200);
   const d = JSON.parse(r.body);
-  assert.deepEqual(d.page, { cursor: 0, limit: 3, total: 35, returned: 3, nextCursor: 3, hasMore: true });
+  assert.deepEqual(d.page,
+    { cursor: 0, limit: 3, total: 35, returned: 3, baseline: null, nextCursor: 3, hasMore: true });
 });
 
 test('HTTP /api/session with NO paging params → full (back-compat, no page field)', async () => {

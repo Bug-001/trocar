@@ -74,10 +74,71 @@ export function recordsForSession(records, sessionId) {
   return records.filter((r) => sessionIdOf(r) === sessionId);
 }
 
-// pick the harness/provider assembler for a session's records (D25 · one dissector per provider).
+// ── provider dispatch (D25 · one dissector per provider) ──────────────────────────────────────
+// Positive CC/Anthropic detection. This USED to be the implicit `else` branch — anything the OpenAI
+// dissector did not claim was handed to the Claude Code dissector, so foreign bytes (Gemini, or any
+// harness we have no dissector for) rendered under Claude Code's vocabulary with NO label, zeroed
+// usage, and — because the CC walker finds nothing — could even emit a FALSE 'provider-contradiction'
+// accusation. Invariant 4 requires the opposite: what we cannot faithfully represent MUST say so.
+// Signals are the wire-stable ones 3.1:23 asks for (endpoint / header / body shape), most reliable
+// first. Body shape is required because the frozen view fixtures carry no `endpoint` at all.
+//
+// WIRING GAP (reported, not made): this belongs in src/dissect/cc.mjs as `detect(rec)`, next to the
+// dissector it speaks for — cc.mjs is outside this change's file scope.
+function looksCC(rec) {
+  if (!rec) return false;
+  const h = headersOf(rec);
+  if (h['anthropic-version'] || h['anthropic-beta']) return true;
+  const ua = String(h['user-agent'] || h['originator'] || '').toLowerCase();
+  if (/claude|anthropic/.test(ua)) return true;
+  if (h['x-claude-code-session-id']) return true;
+  const ep = String(rec.endpoint || '').split('?')[0];
+  if (/(^|\/)v1\/messages$/.test(ep)) return true;
+  // Anthropic request-body shape (D10 verbatim string or a v0 parsed `request` object)
+  let body = rec.request && typeof rec.request === 'object' ? rec.request : null;
+  if (!body && typeof rec.req_body === 'string') { try { body = JSON.parse(rec.req_body); } catch { body = null; } }
+  if (!body || !Array.isArray(body.messages)) return false;
+  if (body.system !== undefined || body.max_tokens !== undefined) return true;
+  const tools = Array.isArray(body.tools) ? body.tools : [];
+  if (tools.some((t) => t && t.input_schema !== undefined)) return true;
+  return body.messages.some((m) => Array.isArray(m && m.content)
+    && m.content.some((c) => c && (c.type === 'tool_use' || c.type === 'tool_result')));
+}
+// 'openai' | 'cc' | 'unknown' — an EXPLICIT unknown, never a silent fallback to a known dissector.
 function providerOf(records) {
   for (const r of records || []) if (openai.detect(r)) return 'openai';
-  return 'cc';
+  for (const r of records || []) if (looksCC(r)) return 'cc';
+  return 'unknown';
+}
+
+// No dissector claimed these bytes. Report that IN PLACE (invariant 4) and COUNT them (3.1:44 — an
+// unclaimed record MUST land in a labelled "unrecognized" state, MUST NOT be silently dropped).
+// We deliberately emit ZERO calls/lanes/blocks: any number we printed here would be a number we did
+// not parse. The evidence below (endpoints, user-agents, models) is copied verbatim from the envelope
+// so a human can see WHAT arrived without us pretending to have understood it.
+function assembleUnknown(records) {
+  const recs = records || [];
+  const uniq = (xs) => [...new Set(xs.filter(Boolean))];
+  const models = uniq(recs.map((r) => {
+    let b = r && r.request && typeof r.request === 'object' ? r.request : null;
+    if (!b && r && typeof r.req_body === 'string') { try { b = JSON.parse(r.req_body); } catch { b = null; } }
+    return b && typeof b.model === 'string' ? b.model : null;
+  }));
+  return {
+    provider: 'unknown',
+    unknown: {
+      reason: 'No dissector recognizes this traffic. asight has dissectors for the Anthropic '
+        + '(Claude Code) and OpenAI (Responses / Chat Completions) wire formats; these bytes match '
+        + 'neither, so they are NOT parsed and NOT rendered — showing them under another provider\'s '
+        + 'vocabulary would be a fabrication.',
+      records: recs.length,
+      endpoints: uniq(recs.map((r) => String((r && r.endpoint) || '').split('?')[0])),
+      userAgents: uniq(recs.map((r) => (headersOf(r) || {})['user-agent'])),
+      models,
+    },
+    streams: [], steps: [], lanes: [],
+    stats: { calls: 0, streams: 0, subagents: 0, monitors: 0, compactions: 0, totalIn: 0, totalOut: 0, peakCtx: 0 },
+  };
 }
 
 // Codex/OpenAI assembler (Phase 4). Produces the SAME `analyzed` shape the CC path does — a single
@@ -86,22 +147,25 @@ function providerOf(records) {
 // machinery (cacheBreak / prefixSha256 / realGroundTruth) is provider-agnostic over the flat block
 // vocabulary, so it is REUSED verbatim. Lanes beyond `main` (subagent/monitor/aux) + the resource
 // ledger are CC-specific and left empty here (fidelity: not-yet-extracted for Codex, not misreported).
-function assembleOpenai(records) {
-  const isResp = (r) => r && r.is_llm_call && /(^|\/)responses$/.test(String(r.endpoint || '').split('?')[0]);
-  const llm = (records || []).filter(isResp)
+function assembleOpenai(records, opts = {}) {
+  // Admit every record the dissector CLAIMS, keyed on its wire shape. This used to be a hard-coded
+  // `/responses` endpoint test, which is the half of D25's warning that renders a blank board: once
+  // detect() claims Chat Completions, an endpoint-only filter drops all of it and the session shows
+  // as empty. Shape in, shape out — the dissector dispatches, the shared layer does not branch.
+  const shapeOf = (r) => (r && r.is_llm_call ? openai.wireShape(r) : null);
+  const llm = (records || []).filter((r) => shapeOf(r) !== null)
     .sort((a, b) => String(a.ts_request || a.ts || '').localeCompare(String(b.ts_request || b.ts || '')));
   const calls = [];
   let prevFlat = null, gi = 0;
   for (const r of llm) {
-    let req; try { req = JSON.parse(r.req_body); } catch { req = {}; }
+    const shape = shapeOf(r);
+    let req; try { req = JSON.parse(r.req_body); } catch { req = (r.request && typeof r.request === 'object') ? r.request : {}; }
     r.request = req; // so the board's callComp / cost read the parsed request
     // derived counts the board header + raw card read (parallel to hydrateForBoard for CC)
-    req.message_count = Array.isArray(req.input) ? req.input.length : 0;
-    req.tool_count = Array.isArray(req.tools) ? req.tools.length : 0;
-    req.system_chars = typeof req.instructions === 'string' ? req.instructions.length : 0;
+    Object.assign(req, openai.reqCountsFor(shape, req));
     req.context_chars = (r.req_body || '').length; // verbatim wire byte count
-    const flat = openai.boardFlat(req);
-    const norm = openai.normResp(r);
+    const flat = openai.boardFlatFor(shape, req);
+    const norm = openai.normRespFor(shape, r);
     const usage = norm.canonUsage;
     const brk = cacheBreak(prevFlat, flat, {});
     const curPfx = prefixSha256(flat, brk.idx);
@@ -111,14 +175,16 @@ function assembleOpenai(records) {
     brk.prefixByteIdentical = prefixByteIdentical;
     brk.gt = realGroundTruth(prefixByteIdentical, usage.read, usage.create);
     brk.gtReal = true;
+    const kept = !opts.keepFlat || opts.keepFlat(gi); // see assembleSession: retention window
     calls.push({
-      gi: gi++, id: r.id, streamId: 'main', rec: r, norm,
+      gi: gi++, id: r.id, streamId: 'main', rec: r, norm, wireShape: shape,
       ctx: openai.ctxTokens(norm),
-      msgCount: Array.isArray(req.input) ? req.input.length : 0,
+      msgCount: req.message_count || 0,
       tools: Array.isArray(req.tools) ? req.tools.length : 0,
       ts: r.ts_request || r.ts || '', status: (r.resp && r.resp.status) || null,
       compaction: false, error: !!r.error,
-      flat, usage, cacheBreak: brk, gt: brk.gt, prefixSha256: curPfx,
+      flat: kept ? flat : [], ...(kept ? null : { paged_out: true }),
+      usage, cacheBreak: brk, gt: brk.gt, prefixSha256: curPfx,
     });
     // Same rule as the CC assembler: a call that failed never established a cache prefix, so it
     // MUST NOT become the baseline for the next one (otherwise the board invents a cache break).
@@ -137,13 +203,22 @@ function assembleOpenai(records) {
     totalOut: calls.reduce((a, c) => a + ((c.norm.usage || {}).output_tokens || 0), 0),
     peakCtx: calls.reduce((a, c) => Math.max(a, c.ctx), 0),
   };
-  return { streams: [{ id: 'main', kind: 'main', calls }], steps: calls, stats, lanes: [mainLane] };
+  return { provider: 'openai', streams: [{ id: 'main', kind: 'main', calls }], steps: calls, stats, lanes: [mainLane] };
 }
 
 // records = ONE session's raw (v0/demo-shape) records. Returns analyze() output with each
 // call augmented: .flat (linearContext), .cacheBreak (vs prev in lane), .gt (groundTruth).
-export function assembleSession(records) {
-  if (providerOf(records) === 'openai') return assembleOpenai(records); // Phase 4: Codex/OpenAI path
+// `opts.keepFlat(gi)` — RETENTION WINDOW. The cache-break chain is inherently sequential: call N's
+// diff needs call N-1's flat blocks, so every call must be assembled. But only the calls the browser
+// is actually about to render need to KEEP their blocks. When a window is supplied, an out-of-window
+// call is assembled, used as the next call's baseline, and then has its blocks dropped — so peak cost
+// is two flats plus N cheap metas instead of N flats. That is what lets a 578-call session be
+// assembled whole (all 578 bars on the timeline, correct diffs) without the assembled view growing
+// past what can be serialized. Omitted → keep everything (unchanged full-send behaviour).
+export function assembleSession(records, opts = {}) {
+  const provider = providerOf(records);
+  if (provider === 'openai') return assembleOpenai(records, opts); // Phase 4: Codex/OpenAI path
+  if (provider === 'unknown') return assembleUnknown(records); // no dissector → labelled, never faked
   // Dissect each record to the shape the board's block extractor reads (v0 in-place; D10 req_body→request).
   const A = analyze(records.map(hydrateForBoard));
   for (const lane of A.lanes || []) {
@@ -193,7 +268,11 @@ export function assembleSession(records) {
       // board then reports a cache break that did not happen, with a cause and a fix hint. analyze()
       // marks this as `chainsPrefix`; undefined (older shapes) means "assume it chained".
       if (call.chainsPrefix !== false) prevFlat = flat;
+      // Blocks kept only inside the retention window; `prevFlat` above still holds the real array, so
+      // the NEXT call's diff is computed against the true baseline, not against an emptied one.
+      if (opts.keepFlat && !opts.keepFlat(call.gi)) { call.flat = []; call.paged_out = true; }
     }
   }
+  A.provider = 'cc';
   return A;
 }

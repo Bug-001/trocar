@@ -31,7 +31,12 @@ async function main() {
       const control = rest.includes('--control') || process.env.ASIGHT_CONTROL === '1'; // D26 opt-in
       const { server } = await createServer({
         dbPath: flag('--db', process.env.ASIGHT_DB || undefined),
-        sourcePath: flag('--source', process.env.ASIGHT_SOURCE || null),
+        // No --source means the DEFAULT capture location, not "nothing" (README:72-77). This
+        // passed a bare null, so a plain `asight serve` rendered an empty board on a machine
+        // full of captures — a failure shaped exactly like the honest "nothing captured yet"
+        // state, which is why it survived. src/paths.mjs exists to keep what capture WRITES and
+        // what serve READS in agreement; this verb is the one it was written for.
+        sourcePath: flag('--source', process.env.ASIGHT_SOURCE || serveSource()),
         control,
         captureTarget: flag('--capture-target', undefined),
         proxyUrl: flag('--proxy', undefined),
