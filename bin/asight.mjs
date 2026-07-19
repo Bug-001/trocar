@@ -6,7 +6,8 @@
 //   off     — revert steer (+ optional --remove-ca)
 //   verify  — assert the CA is in the user-level trust store (no machine trust)
 //   doctor  — onboard self-check: deps probe + 「测试」四问 (4.1:61 / 4.5:41,77)
-import path from 'node:path';
+import path from 'node:path'
+import { captureOut, mitmOut, serveSource } from '../src/paths.mjs';
 import os from 'node:os';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -64,7 +65,7 @@ async function main() {
       const port = Number(flag('--port', process.env.ASIGHT_CAPTURE_PORT || 8899));
       const target = flag('--target', 'https://api.anthropic.com');
       const upstreamProxy = flag('--upstream', process.env.HTTPS_PROXY || process.env.https_proxy || '');
-      const out = flag('--out', process.env.ASIGHT_SOURCE || path.join(os.homedir(), '.atrace', 'capture.ndjson'));
+      const out = flag('--out', process.env.ASIGHT_SOURCE || captureOut());
       // --raw-sse: retain the verbatim streamed events in resp.raw_sse. REQUIRED for providers whose
       // SSE the reconstructor doesn't yet parse (it's Anthropic-shaped) — e.g. OpenAI Responses (Codex):
       // without it the reconstructed resp is empty and the events are LOST (invariant 2 · source truth).
@@ -88,8 +89,8 @@ async function main() {
       const port = Number(flag('--port', process.env.ASIGHT_MITM_PORT || 9899));
       const targetHost = flag('--host', 'api.anthropic.com');
       const upstreamProxy = flag('--upstream', process.env.ATRACE_UPSTREAM_PROXY || 'http://127.0.0.1:7897');
-      const out = flag('--out', process.env.ASIGHT_SOURCE || path.join(os.homedir(), '.atrace', 'asight', 'claude-capture.ndjson'));
-      const ca = generateCa(); // idempotent — reuses the existing atrace CA + api.anthropic.com leaf
+      const out = flag('--out', process.env.ASIGHT_SOURCE || mitmOut());
+      const ca = generateCa({ hosts: [targetHost] }); // leaf must cover the host we are actually terminating
       const leaf = { key: fs.readFileSync(ca.leafKey), cert: fs.readFileSync(ca.leafCrt) };
       const keepRawSse = rest.includes('--raw-sse') || process.env.ASIGHT_RAW_SSE === '1';
       fs.mkdirSync(path.dirname(out), { recursive: true });
@@ -163,7 +164,7 @@ async function main() {
       const st = await import(r('src', 'capture', 'selftest.mjs'));
       const ob = await import(r('src', 'capture', 'onboard.mjs'));
       const has = (bin) => spawnSync(process.platform === 'win32' ? 'where' : 'which', [bin], { stdio: 'ignore' }).status === 0;
-      const source = flag('--source', process.env.ASIGHT_SOURCE || path.join(os.homedir(), '.atrace', 'capture.ndjson'));
+      const source = flag('--source', process.env.ASIGHT_SOURCE || serveSource());
       const LIMIT = 5000;
       let srcMeta = null, records = [];
       try { const s = fs.statSync(source); srcMeta = { exists: true, bytes: s.size, mtimeMs: s.mtimeMs }; } catch { srcMeta = { exists: false }; }

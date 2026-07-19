@@ -92,6 +92,45 @@ test('darwin off(): restores the no-op Script from backup + reloads a clean runt
   assert.equal(out.status.scriptInstalled, false);
 });
 
+// ── B5: a splice that found no anchor is NOT a successful steer ───────────────────────────────
+// A runtime YAML with quoted keys ("proxies":) or flow-style rules has no bare `proxies:`/`rules:`
+// line, so spliceRuntime is a no-op. Reporting ok:true there tells the user monitoring is live when
+// nothing was routed — the worst possible failure for a capture tool (保真边界写明).
+const UNSPLICEABLE = '"mixed-port": 7897\n"proxies": [{name: VPN}]\n"rules": ["MATCH,AI"]\n';
+
+test('B5 on() reports ok:false and SKIPS the reload when the runtime splice finds no anchor', async () => {
+  const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': UNSPLICEABLE });
+  const reloads = [];
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: (y) => (reloads.push(y), Promise.resolve({ status: 204 })), probeLive: () => Promise.resolve(false) });
+  const out = await steer.on({ port: 9898 });
+  assert.equal(out.ok, false, 'a no-op splice must not be reported as success');
+  assert.match(out.reason, /splice/i, 'says WHY');
+  assert.equal(reloads.length, 0, 'never reload mihomo with a config that has no atrace route');
+});
+
+test('B5 a runtime missing only `rules:` still fails loudly (a proxy with no rule routes nothing)', async () => {
+  const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': 'proxies:\n- {name: VPN}\n"rules": ["MATCH,AI"]\n' });
+  const reloads = [];
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: (y) => (reloads.push(y), Promise.resolve({ status: 204 })), probeLive: () => Promise.resolve(false) });
+  const out = await steer.on({ port: 9898 });
+  assert.equal(out.ok, false);
+  assert.equal(reloads.length, 0);
+});
+
+test('B5 the durable Script.js steer still lands even when the runtime splice fails', async () => {
+  const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': UNSPLICEABLE });
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 204 }), probeLive: () => Promise.resolve(false) });
+  const out = await steer.on({ port: 9898 });
+  assert.match(fs.files.get('/s.js'), /port: 9898/, 'durable half succeeded — it just is not live until a regen');
+  assert.equal(out.status.scriptInstalled, true);
+});
+
+test('B5 a healthy runtime is still ok:true (the happy path is not collateral damage)', async () => {
+  const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 204 }), probeLive: () => Promise.resolve(true) });
+  assert.equal((await steer.on({ port: 9898 })).ok, true);
+});
+
 test('non-darwin: explicit reserved refusal, never a silent no-op (D22)', () => {
   const steer = getDesktopSteer('linux', {});
   const out = steer.on({ port: 9898 });

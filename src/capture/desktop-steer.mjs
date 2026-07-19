@@ -157,9 +157,23 @@ export function getDesktopSteer(platform = process.platform, deps = {}) {
     if (fs.existsSync(mergePath)) { const m = read(mergePath); const cleaned = stripBlock(stripMergeLegacy(m)); if (cleaned !== m) fs.writeFileSync(mergePath, cleaned); }
     // 3. IMMEDIATE: splice the current runtime + hot-reload mihomo so it goes live now (mihomo
     //    validates & keeps the old config on error → the VPN can't break on a bad edit)
+    //    A splice that found no `proxies:`/`rules:` anchor (quoted keys, flow-style arrays, …) is a
+    //    NO-OP: reloading that config would route nothing while reporting success, so the user would
+    //    believe capture is live and silently record nothing. Refuse loudly instead.
     let reload = { status: null };
     const rt = read(runtimePath, null);
-    if (rt) { const { yaml } = spliceRuntime(rt, port); reload = await mihomoReload(yaml); }
+    if (rt) {
+      const { yaml, splicedProxies, splicedRules } = spliceRuntime(rt, port);
+      if (!splicedProxies || !splicedRules) {
+        const missing = [!splicedProxies && 'proxies:', !splicedRules && 'rules:'].filter(Boolean).join(' + ');
+        return {
+          ok: false,
+          reason: `runtime splice found no ${missing} anchor in ${runtimePath} — NOT live now (mihomo was not reloaded). The durable Script.js steer IS installed and should apply on the next Verge enhance/regen.`,
+          port, scriptPath, reload, status: await status(),
+        };
+      }
+      reload = await mihomoReload(yaml);
+    }
     return { ok: true, port, scriptPath, reload, status: await status() };
   }
 

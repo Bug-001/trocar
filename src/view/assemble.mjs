@@ -120,7 +120,10 @@ function assembleOpenai(records) {
       compaction: false, error: !!r.error,
       flat, usage, cacheBreak: brk, gt: brk.gt, prefixSha256: curPfx,
     });
-    prevFlat = flat;
+    // Same rule as the CC assembler: a call that failed never established a cache prefix, so it
+    // MUST NOT become the baseline for the next one (otherwise the board invents a cache break).
+    const oaStatus = (respOf(r) || {}).status;
+    if (!(r.error || (oaStatus != null && oaStatus !== 200))) prevFlat = flat;
   }
   const mainLane = {
     id: 'main', streamId: 'main', kind: 'main', icon: '💬', label: 'conversation',
@@ -184,7 +187,12 @@ export function assembleSession(records) {
       call.cacheBreak = brk;
       call.gt = brk.gt;
       call.prefixSha256 = curPfx;
-      prevFlat = flat;
+      // Advance the cache-prefix baseline ONLY for calls that actually established one. A call that
+      // 4xx'd/5xx'd never got far enough for the provider to write a KV-cache prefix, so chaining
+      // through it makes the NEXT successful call diff against context that was never cached — the
+      // board then reports a cache break that did not happen, with a cause and a fix hint. analyze()
+      // marks this as `chainsPrefix`; undefined (older shapes) means "assume it chained".
+      if (call.chainsPrefix !== false) prevFlat = flat;
     }
   }
   return A;

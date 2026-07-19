@@ -16,6 +16,12 @@
 // bash-read parsing) lives in ONE dissector — src/dissect/cc.mjs — shared with the ETL adapter.
 // linearContext (below) is now just the board's PROJECTION of that dissector's canonical spine.
 import { dissectBlocks, sysLabel, parseBashReads } from '../dissect/cc.mjs'
+// Envelope drift guard (R1): the D10 envelope stores the response under `resp`, demo v0 under
+// `response`. Reading `.response` directly is the bug class that silently killed every HTTP status
+// on real captures — so go through the shared helper, never the raw key. (assemble.mjs imports
+// analyze.mjs too; the cycle is safe because respOf is only CALLED at runtime, after both modules
+// have finished evaluating. test/view/analyze-admission.test.mjs pins both module load orders.)
+import { respOf } from './assemble.mjs'
 export { sysLabel } // re-exported for back-compat (was defined here before the D25 extraction)
 
 const FILE_OPS = new Set(['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
@@ -51,7 +57,7 @@ function auxSubkind(r, userText) {
 // response.{usage,text,tool_calls}) and non-streaming JSON (raw body in response.body).
 // Without this, JSON responses (all the security-monitor calls) read as ctx=0 / no text.
 export function normResp(r) {
-  const rs = r.response || {}
+  const rs = respOf(r) || {}
   if (rs.kind === 'json' && rs.body && typeof rs.body === 'object') {
     const c = Array.isArray(rs.body.content) ? rs.body.content : []
     return {
@@ -278,10 +284,37 @@ const LANE_META = {
 const LANE_ORDER = { main: 0, subagent: 1, monitor: 2, notify: 3, titlegen: 4, quota: 5, aux: 6 }
 const AUX_KINDS = new Set(['aux', 'notify', 'titlegen', 'quota'])
 
+// ── admission (audit 2026-07-19 · invariant 4) ──────────────────────────────────────────
+// EVERY captured LLM call is admitted, whatever its HTTP status. The old filter demanded a
+// parsed 200, which made the spec's `status≠200 → 红柱` unreachable BY CONSTRUCTION (the call
+// never reached the timeline) while the board's errStats() counted the same failures straight
+// off the raw records — the stats bar printed "401×1 502×1" over a timeline with no such bars.
+// Silently dropping a call the user genuinely captured is exactly what invariant 4 forbids.
+//
+// A record whose req_body never parsed (truncated / corrupt capture — hydrateForBoard leaves it
+// without a `.request`) is admitted as a SENTINEL: it has no renderable context, so it gets an
+// empty request stub plus `unparsed:true`, and the view shows an explicit "unrenderable" call
+// rather than a hole in the numbering. Marked, never invented.
+const isUnparsed = (r) => !(r.request && Array.isArray(r.request.messages))
+// A call is "failed" if it carries an error key, a non-200 status, or is an unparsed sentinel.
+// (Status-less records — an in-flight capture with no response yet — are NOT failures.)
+function failedCall(r) {
+  if (r.error) return true
+  if (r._unparsed || isUnparsed(r)) return true // `_unparsed` = already stubbed by admission
+  const st = respOf(r)?.status
+  return st != null && st !== 200
+}
+
 export function analyze(records) {
-  const llm = records.filter(
-    (r) => r.is_llm_call && r.request && Array.isArray(r.request.messages) && (r.response?.status === 200 || !r.response || r.error),
-  )
+  // Admit on `is_llm_call` alone. Non-LLM records stay out (they carry only a response body by
+  // design — 保真边界, not a loss). Sentinels get an empty request stub so the downstream walkers
+  // never dereference a missing `.request`; `rec` here is already a view-side hydrated clone, so
+  // stubbing does not touch the raw NDJSON source truth (invariant 2).
+  const llm = records.filter((r) => r && r.is_llm_call).map((r) => (
+    isUnparsed(r)
+      ? { ...r, request: { messages: [], tools: [], system: [], message_count: 0, tool_count: 0 }, _unparsed: true }
+      : r
+  ))
   llm.sort((a, b) => String(a.ts_request).localeCompare(String(b.ts_request)) || String(a.id).localeCompare(String(b.id)))
 
   // ── segment into streams/lanes by lineage + role marker ─────────────────────
@@ -300,7 +333,14 @@ export function analyze(records) {
     // a burst of failed haiku retries (tools≥1) during a network drop pollutes the conversation lane.
     const small = /haiku/i.test(r.request.model || '')
     let stream
-    if (isMonitor(r)) {
+    if (r._unparsed) {
+      // An unparsed sentinel has no system text / message count to classify on. Every lane guess
+      // would be a fabrication; route it to `main` — the lane the user is actually watching — so the
+      // gap is VISIBLE. The alternative (0 msgs / 0 tools → the aux heuristic) would file a broken
+      // conversation turn under "quota / keep-alive", asserting a lane we do not know (invariant 4).
+      if (!mainStream) mainStream = mkStream('main')
+      stream = mainStream
+    } else if (isMonitor(r)) {
       stream = monitorStream || (monitorStream = mkStream('monitor'))
     } else if (msgCount <= 2 && !sub && (tools === 0 || small)) {
       const sk = auxSubkind(r, userTextOf(r))
@@ -315,11 +355,23 @@ export function analyze(records) {
     }
     stream._lastMsg = msgCount
     prevKind = stream.kind
+    const rs = respOf(r) || {}
+    const status = rs.status ?? null
+    const failed = failedCall(r)
     const step = { gi: stepList.length, id: r.id, streamId: stream.id, rec: r, norm: normResp(r),
-      msgCount, tools, ctx: ctxTokens(r), status: r.response?.status ?? null,
+      msgCount, tools, ctx: ctxTokens(r), status,
       ts: r.ts_request, compaction: false,
-      error: !!r.error || (r.response?.status || 0) >= 500,
-      errMsg: r.response?.error?.message || ((r.response?.status || 0) >= 500 ? `HTTP ${r.response.status}` : null) }
+      unparsed: !!r._unparsed,
+      // `error` now covers EVERY non-200 (was: only 5xx — so a 401/429 rendered as a normal call).
+      error: failed,
+      errMsg: r._unparsed ? 'unrenderable: req_body could not be parsed (truncated / corrupt capture)'
+        : (rs.error?.message || (status != null && status !== 200 ? `HTTP ${status}` : (r.error ? String(r.error.message || r.error) : null))),
+      // Cache-prefix chaining (audit 2026-07-19). A call that FAILED did not establish a new cache
+      // prefix at the provider — a 401/429/502 never got far enough to write one — so the next call's
+      // prefix diff must be taken against the last SUCCESSFUL call, not against the failure. This flag
+      // makes that skip EXPLICIT and inspectable; the call still APPEARS on the timeline (that was the
+      // whole bug). Consumers that chain `prevFlat` MUST advance it only when chainsPrefix is true.
+      chainsPrefix: !failed }
     stream.calls.push(step)
     stepList.push(step)
   }
@@ -355,6 +407,14 @@ export function analyze(records) {
     let prevCount = 0, prevCtx = 0
     for (let k = 0; k < s.calls.length; k++) {
       const step = s.calls[k]
+      // Unparsed sentinel: no context to diff. Emit the visible error marker and leave prevCount /
+      // prevCtx anchored to the last RENDERABLE call — its empty stub would otherwise read as a
+      // message-count collapse and fabricate a compaction event out of a capture defect.
+      if (step.unparsed) {
+        step.dCtx = 0
+        s.events.push({ type: 'error', step: step.gi, streamId: s.id, msg: step.errMsg, unparsed: true })
+        continue
+      }
       step.dCtx = step.ctx - prevCtx
       prevCtx = step.ctx
       const msgs = step.rec.request.messages
