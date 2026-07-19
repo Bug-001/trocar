@@ -18,7 +18,8 @@
   "scripts": {
     "test": "node --test --test-force-exit",
     "etl": "node src/etl/cli.mjs",
-    "serve": "node src/server.mjs"
+    "serve": "node src/server.mjs",
+    "demo": "node src/server.mjs --source samples/demo-session.ndjson"
   },
   "dependencies": {
     "@duckdb/node-api": "^1.5.4-r.1"
