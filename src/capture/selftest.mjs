@@ -47,6 +47,18 @@ export function qCorrect(records) {
 // 另扫存储字节里的裸 `sk-ant-` token 形(高置信 Anthropic 前缀,正常内容不会撞)→ 记为告警。
 const ANT_TOKEN = /sk-ant-[A-Za-z0-9._-]{6,}/;
 export function qNoLeak(records) {
+  // EXAMINED NOTHING ≠ FOUND NOTHING. This is the tool's only hard failure, so it is the one answer a
+  // user is entitled to trust without reading the rest — and it used to return ok:true for an empty
+  // record set, because an empty scan trivially contains no un-redacted header. Combined with a
+  // source-resolution bug that fed it `[]` on every default install, `asight doctor` printed
+  // 「✓ all secret headers redacted」 and exited 0 over captures it had never opened.
+  // Absence of evidence reported as evidence of absence, on a credential check (invariant 4).
+  if (!records || records.length === 0) {
+    return { ok: false, examined: 0, unredacted: [], tokens: [], tokenCount: 0,
+      note: '✗ 没有检查任何记录 — no records were examined, so nothing can be certified. '
+        + 'The capture source resolved to zero readable records (wrong --source, an unreadable '
+        + 'directory, or a capture that has not started). This is NOT a clean bill of health.' };
+  }
   const unredacted = new Set(), tokens = [];
   for (const r of records) {
     const h = r.req_headers || r.request_headers || {};
@@ -60,7 +72,7 @@ export function qNoLeak(records) {
   // ok gates ONLY on the firewall's job (header redaction). A token-shaped string in a request BODY is
   // the user's own sent content or a firewall miss → surfaced as a warning, not a hard fail on its own.
   const ur = [...unredacted];
-  return { ok: ur.length === 0, unredacted: ur, tokens: tokens.slice(0, 10), tokenCount: tokens.length,
+  return { ok: ur.length === 0, examined: records.length, unredacted: ur, tokens: tokens.slice(0, 10), tokenCount: tokens.length,
     note: ur.length ? `✗ ${ur.length} un-redacted secret header(s) [${ur.join(', ')}] — redact firewall breached`
       : 'all secret headers redacted' + (tokens.length ? ` · ⚠ ${tokens.length} sk-ant token-shaped string(s) inside request bodies (user-sent content or a firewall miss — inspect)` : ' · no raw token bytes in bodies') };
 }

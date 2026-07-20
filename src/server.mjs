@@ -119,7 +119,12 @@ async function serveStatic(res, urlPath) {
 // grouping done downstream by 3.4 signals, so ONE dir renders every harness side by side).
 // Each file is streamed independently (readRecords never builds a >512MB string), so a dir of
 // N sources costs the same peak string as the largest single file (honors 4.4:91 / D24(i)).
-function sourceFiles(sourcePath) {
+// Exported because `asight doctor` needs the SAME resolution the board uses. It had its own
+// (`fs.statSync(source)` + a single readRecords) which understood neither a directory nor the ARRAY
+// of roots serveSource() has returned since D27 — so on a default install it examined ZERO records
+// and still printed 「✓ 凭据没漏」. Two resolvers for one concept is how that drift happened; one is
+// the fix.
+export function sourceFiles(sourcePath) {
   const st = fssync.statSync(sourcePath); // throws if missing → caller resets sig
   if (!st.isDirectory()) return { files: [sourcePath], sig: st.size + '.' + Math.round(st.mtimeMs) };
   const files = fssync.readdirSync(sourcePath) // non-recursive: never descends into ~/.atrace's GB dumps

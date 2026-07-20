@@ -169,11 +169,34 @@ async function main() {
       const st = await import(r('src', 'capture', 'selftest.mjs'));
       const ob = await import(r('src', 'capture', 'onboard.mjs'));
       const has = (bin) => spawnSync(process.platform === 'win32' ? 'where' : 'which', [bin], { stdio: 'ignore' }).status === 0;
-      const source = flag('--source', process.env.ASIGHT_SOURCE || serveSource());
+      // Resolve the source the SAME way the board does. `serveSource()` returns an ARRAY of roots
+      // (D27), and a root is usually a DIRECTORY — `fs.statSync(array)` throws ERR_INVALID_ARG_TYPE,
+      // the catch below swallowed it, and doctor then certified a capture it had read nothing from.
+      // One resolver, shared: src/server.mjs::sourceFiles.
+      const sources = [].concat(flag('--source', process.env.ASIGHT_SOURCE || serveSource())).filter(Boolean);
       const LIMIT = 5000;
-      let srcMeta = null, records = [];
-      try { const s = fs.statSync(source); srcMeta = { exists: true, bytes: s.size, mtimeMs: s.mtimeMs }; } catch { srcMeta = { exists: false }; }
-      if (srcMeta.exists) { try { records = await readRecords(source, { limit: LIMIT }); } catch (e) { console.error('read error:', e.message); } }
+      let srcMeta = { exists: false, bytes: 0 }, records = [];
+      const readErrors = [];
+      let files = [];
+      for (const root of sources) {
+        try {
+          const part = (await import(r('src', 'server.mjs'))).sourceFiles(root);
+          files.push(...part.files);
+        } catch (e) { readErrors.push(`${root}: ${e.message}`); }
+      }
+      if (files.length) {
+        let bytes = 0;
+        for (const f of files) { try { bytes += fs.statSync(f).size; } catch {} }
+        srcMeta = { exists: true, bytes, mtimeMs: Date.now() };
+        for (const f of files) {
+          if (records.length >= LIMIT) break;
+          try { for (const rec of await readRecords(f, { limit: LIMIT - records.length })) records.push(rec); }
+          catch (e) { readErrors.push(`${f}: ${e.message}`); }
+        }
+      }
+      // A read failure MUST be visible: a silently-swallowed error is what let ③ pass vacuously.
+      for (const e of readErrors) console.error('read error:', e);
+      const source = sources.join(', ') || '(none)';
       const deps = st.checkDeps({ has });
       const res = st.runSelfTest({ records, srcMeta, deps, verify: () => ob.verifyUserTrustOnly() });
       const mark = (b, warn) => (b ? '✓' : warn ? '⚠' : '✗');
