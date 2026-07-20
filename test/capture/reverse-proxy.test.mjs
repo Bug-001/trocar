@@ -67,8 +67,13 @@ test('reverse-proxy: byte-transparent to client + faithful envelope + zero leak'
   assert.equal(env.resp.usage.output_tokens, 9) // terminal value
   assert.equal(typeof env.req_body, 'string') // D10: verbatim captured string (adapter parses it)
   assert.deepEqual(JSON.parse(env.req_body).messages, [{ role: 'user', content: 'hi' }]) // verbatim content survives
-  assert.equal(env.req_headers.authorization, '<redacted>')
-  assert.ok(!JSON.stringify(env).includes('SECRET'))
+  // 2026-07-20 contract change: headers stored VERBATIM (spec 4.1 §采集安全, patched same commit).
+  assert.notEqual(env.req_headers.authorization, '<redacted>',
+    'redaction must be gone — the capture records what really went over the wire')
+  // Inverted with the contract: the token IS in the envelope now, on purpose. Asserting its ABSENCE
+  // was the old zero-leak check; asserting its PRESENCE is what byte-fidelity means here.
+  assert.ok(JSON.stringify(env.req_headers).includes('SECRET'),
+    'the credential must be stored verbatim — that is the whole point of removing redaction')
 
   proxy.close(); upstream.close()
 })

@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import os from 'node:os';
+import fs from 'node:fs';
 import path from 'node:path';
 import { readRecords } from '../../src/etl/ingest.mjs';
 import { checkDeps, qCapturing, qCorrect, qNoLeak, qUserTrustOnly, runSelfTest } from '../../src/capture/selftest.mjs';
@@ -40,19 +42,25 @@ test('qCorrect: real capture — LLM calls have verbatim req_body + response, no
   assert.ok(q.ok);
 });
 
-// ③ 凭据没漏 — the redact firewall is the acceptance face.
-test('qNoLeak: redacted headers pass; an un-redacted secret header fails', () => {
-  const clean = qNoLeak([{ req_headers: { authorization: '<redacted>', 'content-type': 'application/json' }, req_body: '{"messages":[]}' }]);
-  assert.equal(clean.ok, true);
-  const leaked = qNoLeak([{ req_headers: { authorization: 'Bearer sk-ant-oat-REALTOKEN123' }, req_body: '{}' }]);
-  assert.equal(leaked.ok, false);
-  assert.deepEqual(leaked.unredacted, ['authorization']);
+// ③ 凭据 — CONTRACT CHANGED 2026-07-20 (spec 4.1 §采集安全 patched same commit).
+// The redact firewall is gone: headers are stored VERBATIM, because rewriting them made the capture
+// non-verbatim at the layer whose whole thesis is byte-fidelity. So ③ REPORTS rather than gates, and
+// the hard red line moved to ④b (the file holding those credentials must be owner-only).
+// This is not a weakened assertion — it is the inverse contract, and ④b below is stricter than what
+// it replaced, because the old check could pass while a 0644 file sat full of `<redacted>` sentinels
+// and real token-shaped bodies.
+test('qNoLeak: reports credential-bearing records, does not fail on them', () => {
+  const withCreds = qNoLeak([{ req_headers: { authorization: 'Bearer sk-ant-oat-REALTOKEN123' }, req_body: '{}' }]);
+  assert.equal(withCreds.ok, true, 'credentials in the capture are by design now');
+  assert.equal(withCreds.withCreds, 1, 'but their presence MUST be counted and surfaced');
+  assert.equal(qNoLeak([]).ok, false, 'a scan that examined nothing still certifies nothing');
 });
 
 test('qNoLeak: real fixture leaks no un-redacted secret header', fixtureGate(), async () => {
   const recs = await readRecords(FIXTURE);
   const q = qNoLeak(recs);
-  assert.equal(q.ok, true, 'real capture keeps every secret header redacted: ' + JSON.stringify(q.unredacted));
+  assert.equal(q.ok, true, 'reporting a real capture must not fail: ' + q.note);
+  assert.equal(typeof q.withCreds, 'number', 'and it must count how many records carry credentials');
 });
 
 test('qNoLeak: a raw sk-ant token in a request BODY is a warning, not a hard fail (user-sent content)', () => {
@@ -73,13 +81,27 @@ test('qUserTrustOnly: verify()=true → ok; false → not onboarded; throw → c
 });
 
 // assembled: hardFail gates ONLY on a credential leak
-test('runSelfTest: hardFail true iff a secret header is un-redacted', fixtureGate(), async () => {
+test('runSelfTest: hardFail gates on FILE PERMISSIONS and on a vacuous scan', fixtureGate(), async () => {
   const recs = await readRecords(FIXTURE);
-  const good = runSelfTest({ records: recs, srcMeta: { exists: true, bytes: 10, mtimeMs: 1 }, deps: checkDeps({ platform: 'darwin', has: () => true }), verify: () => true });
-  assert.equal(good.hardFail, false);
-  assert.equal(good.q3.ok, true);
-  const bad = runSelfTest({ records: [{ req_headers: { 'x-api-key': 'sk-leak' }, req_body: '{}', endpoint: '/v1/messages' }], srcMeta: { exists: true }, verify: () => true });
-  assert.equal(bad.hardFail, true, 'a leaked x-api-key hard-fails the doctor');
+  const okFile = path.join(os.tmpdir(), `asight-perm-ok-${process.pid}.ndjson`);
+  fs.writeFileSync(okFile, '{}\n'); fs.chmodSync(okFile, 0o600);
+  try {
+    const good = runSelfTest({ records: recs, srcMeta: { exists: true, bytes: 10, mtimeMs: 1 }, files: [okFile], deps: checkDeps({ platform: 'darwin', has: () => true }), verify: () => true });
+    assert.equal(good.hardFail, false, 'a real capture in an owner-only file must pass');
+
+    // A credential-bearing record is NO LONGER a hard failure — that is the point of the change.
+    const creds = runSelfTest({ records: [{ req_headers: { 'x-api-key': 'sk-leak' }, req_body: '{}', endpoint: '/v1/messages' }], srcMeta: { exists: true }, files: [okFile], verify: () => true });
+    assert.equal(creds.hardFail, false, 'credentials present = by design, not a failure');
+
+    // A world-readable file holding them IS.
+    fs.chmodSync(okFile, 0o644);
+    const loose = runSelfTest({ records: recs, srcMeta: { exists: true }, files: [okFile], verify: () => true });
+    assert.equal(loose.hardFail, true, 'a 0644 capture full of live credentials must hard-fail');
+
+    // …and so is examining nothing.
+    const vacuous = runSelfTest({ records: [], srcMeta: { exists: true }, files: [okFile], verify: () => true });
+    assert.equal(vacuous.hardFail, true, 'a scan of zero records must never exit 0');
+  } finally { fs.rmSync(okFile, { force: true }); }
 });
 
 // bounded read: the self-test samples a head rather than loading a whole large capture

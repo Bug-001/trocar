@@ -2,6 +2,7 @@
 // 1.1 六要素#5「把委派代价压到最小」)。这是 demo `run-selftest.sh` + `verify.mjs` 的 §验收 check 的
 // CLI 化(`asight doctor`)——受众是人,核对四问:**是否真在抓 · 抓得对 · 凭据没漏 · 没弱化全机 TLS**。
 // 全为纯函数(probe / records / trust 皆注入)→ 离线可单测,不碰真实信任库/网络。
+import fsMod from 'node:fs';
 import { SECRET_HEADERS } from './redact.mjs';
 import { isLlmCall } from './envelope.mjs';
 
@@ -43,38 +44,52 @@ export function qCorrect(records) {
         + (badReq ? ` · ✗ ${badReq} missing verbatim req_body` : '') + (badResp ? ` · ⚠ ${badResp} missing response (interrupted?)` : '') };
 }
 
-// ③ 凭据没漏(硬红线):每条记录的 secret header MUST 为 `<redacted>`(redact 防火墙的验收面);
-// 另扫存储字节里的裸 `sk-ant-` token 形(高置信 Anthropic 前缀,正常内容不会撞)→ 记为告警。
+// ③ 凭据(2026-07-20 起改义)。**旧契约**:secret header MUST 为 `<redacted>`,泄漏 = 硬失败。
+// **新契约**:采集逐字存 header —— 凭据在采集里是**设计如此**(见 envelope.mjs 的说明),所以"存在
+// 凭据"不再是失败,否则这条红线每次都喊狼来了、从此没人看。风险搬到了 ④b:**持有凭据的文件不得被
+// 他人读取**。本问退化为"报告实情"+ 保留空扫描守卫。
 const ANT_TOKEN = /sk-ant-[A-Za-z0-9._-]{6,}/;
 export function qNoLeak(records) {
-  // EXAMINED NOTHING ≠ FOUND NOTHING. This is the tool's only hard failure, so it is the one answer a
-  // user is entitled to trust without reading the rest — and it used to return ok:true for an empty
-  // record set, because an empty scan trivially contains no un-redacted header. Combined with a
-  // source-resolution bug that fed it `[]` on every default install, `asight doctor` printed
-  // 「✓ all secret headers redacted」 and exited 0 over captures it had never opened.
-  // Absence of evidence reported as evidence of absence, on a credential check (invariant 4).
+  // EXAMINED NOTHING ≠ FOUND NOTHING —— 这条守卫比它守的那个契约活得更久,别删。
+  // 它曾经让 doctor 在读到零条记录时打印「✓ 凭据没漏」并退出 0。
   if (!records || records.length === 0) {
-    return { ok: false, examined: 0, unredacted: [], tokens: [], tokenCount: 0,
-      note: '✗ 没有检查任何记录 — no records were examined, so nothing can be certified. '
+    return { ok: false, examined: 0, withCreds: 0, tokens: [], tokenCount: 0,
+      note: '✗ 没有检查任何记录 — no records were examined, so nothing can be reported. '
         + 'The capture source resolved to zero readable records (wrong --source, an unreadable '
-        + 'directory, or a capture that has not started). This is NOT a clean bill of health.' };
+        + 'directory, or a capture that has not started).' };
   }
-  const unredacted = new Set(), tokens = [];
+  let withCreds = 0; const tokens = [];
   for (const r of records) {
     const h = r.req_headers || r.request_headers || {};
-    for (const k of Object.keys(h)) {
-      const v = h[k];
-      if (SECRET_HEADERS.has(k.toLowerCase()) && v != null && v !== '' && v !== '<redacted>') unredacted.add(k.toLowerCase());
-    }
+    if (Object.keys(h).some((k) => SECRET_HEADERS.has(k.toLowerCase()) && h[k] && h[k] !== '<redacted>')) withCreds++;
     const body = typeof r.req_body === 'string' ? r.req_body : '';
     const m = body.match(ANT_TOKEN); if (m) tokens.push(m[0].slice(0, 10) + '…');
   }
-  // ok gates ONLY on the firewall's job (header redaction). A token-shaped string in a request BODY is
-  // the user's own sent content or a firewall miss → surfaced as a warning, not a hard fail on its own.
-  const ur = [...unredacted];
-  return { ok: ur.length === 0, examined: records.length, unredacted: ur, tokens: tokens.slice(0, 10), tokenCount: tokens.length,
-    note: ur.length ? `✗ ${ur.length} un-redacted secret header(s) [${ur.join(', ')}] — redact firewall breached`
-      : 'all secret headers redacted' + (tokens.length ? ` · ⚠ ${tokens.length} sk-ant token-shaped string(s) inside request bodies (user-sent content or a firewall miss — inspect)` : ' · no raw token bytes in bodies') };
+  return { ok: true, examined: records.length, withCreds, tokens: tokens.slice(0, 10), tokenCount: tokens.length,
+    note: `${withCreds}/${records.length} record(s) carry credential headers — 逐字存储,by design `
+      + '(asight records what really went over the wire; the protection is file permissions, see ④b)'
+      + (tokens.length ? ` · ${tokens.length} sk-ant token-shaped string(s) inside request bodies` : '') };
+}
+
+// ④b 采集文件不可被他人读取(**新硬红线**)。凭据现在就在这些字节里,所以唯一还成立的保证是
+// 「只有属主读得到」。一次 stat,取代原来那套改写防火墙。
+export function qFilePerms(files) {
+  if (!files || files.length === 0) {
+    return { ok: false, checked: 0, bad: [],
+      note: '✗ 没有检查任何文件 — no capture files were examined, so permissions cannot be certified.' };
+  }
+  const bad = [];
+  for (const f of files) {
+    try {
+      const st = fsMod.statSync(f);
+      const mode = st.mode & 0o777;
+      if (mode & 0o077) bad.push({ file: f, mode: '0' + mode.toString(8) });
+    } catch (e) { bad.push({ file: f, mode: 'unreadable: ' + e.message }); }
+  }
+  return { ok: bad.length === 0, checked: files.length, bad,
+    note: bad.length
+      ? `✗ ${bad.length} capture file(s) readable by group/others [${bad.map((b) => `${b.file.split('/').pop()} ${b.mode}`).join(', ')}] — these bytes contain live API credentials. Fix: chmod 600`
+      : `all ${files.length} capture file(s) are owner-only (0600)` };
 }
 
 // ④ 没弱化全机 TLS:CA 只在用户级信任库(import-only,D22 — asight 从不写全机信任)。verify=()->bool 注入。
@@ -88,11 +103,15 @@ export function qUserTrustOnly(verify) {
 }
 
 // 组装四问 + 依赖探测为一个结构化结果。hardFail = 凭据泄漏(唯一不可谈判的安全红线;其余是给人核对的诊断)。
-export function runSelfTest({ records = [], srcMeta = null, deps = [], verify = null } = {}) {
+export function runSelfTest({ records = [], srcMeta = null, deps = [], verify = null, files = [] } = {}) {
   const q1 = qCapturing(records, srcMeta);
   const q2 = qCorrect(records);
   const q3 = qNoLeak(records);
   const q4 = qUserTrustOnly(verify);
+  // The red line MOVED (2026-07-20): credentials are stored verbatim by design, so the failure is no
+  // longer "a secret is present" but "the file holding it is readable by someone else". q3 still
+  // hard-fails on a VACUOUS scan — reading nothing must never certify anything.
+  const q4b = qFilePerms(files);
   const depsMissing = deps.filter((d) => !d.present);
-  return { deps, depsMissing, q1, q2, q3, q4, hardFail: !q3.ok, sampled: records.length };
+  return { deps, depsMissing, q1, q2, q3, q4, q4b, hardFail: !q3.ok || !q4b.ok, sampled: records.length };
 }

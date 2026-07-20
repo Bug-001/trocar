@@ -86,12 +86,18 @@ test('MITM: decrypts + records the target host, blind-tunnels (never decrypts) t
   assert.equal(typeof llm[0].req_body, 'string') // D10: verbatim captured string (adapter parses it)
   assert.deepEqual(JSON.parse(llm[0].req_body).messages, [{ role: 'user', content: 'ping' }])
   assert.equal(llm[0].capture, 'mitm')
-  assert.equal(llm[0].req_headers.authorization, '<redacted>')
+  // 2026-07-20 contract change: headers are stored VERBATIM (spec 4.1 §采集安全, patched same
+  // commit). The credential protection is file permissions (0600 + doctor ④b), not rewriting.
+  assert.match(llm[0].req_headers.authorization, /^Bearer /,
+    'the Authorization header must reach the capture byte-for-byte')
+  assert.notEqual(llm[0].req_headers.authorization, '<redacted>', 'redaction must be gone')
   // ... while the non-target host went through the blind tunnel: bytes flowed, NOTHING recorded
   assert.ok(blindCalled)
   assert.ok(echoed.includes(PROBE))
   assert.equal(envelopes.filter((e) => JSON.stringify(e).includes(PROBE)).length, 0)
-  assert.ok(!JSON.stringify(envelopes).includes('SECRET'))
+  // Inverted with the contract: the token IS in the envelope now, on purpose.
+  assert.ok(JSON.stringify(llm[0].req_headers).includes('SECRET'),
+    'the credential must be stored verbatim — that is the whole point of removing redaction')
 
   proxy.close(); mockApi.close()
 })

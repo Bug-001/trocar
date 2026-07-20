@@ -3,7 +3,7 @@
 // seam does not leak at the capture end (invariant 3). Field names are canonical (req_headers /
 // req_body / resp + observ-meta) — the demo's request_headers/request/response names are renamed.
 import fs from 'node:fs'
-import { safeHeaders, detectAuthMode } from './redact.mjs'
+import { detectAuthMode } from './redact.mjs'
 
 export function isoStamp(d = new Date()) { return d.toISOString() }
 
@@ -51,7 +51,13 @@ export function buildEnvelope({
   return {
     // core
     ts: tsRequest, endpoint, method,
-    req_headers: safeHeaders(reqHeaders),
+    // VERBATIM (2026-07-20). This used to be `safeHeaders(reqHeaders)`, which rewrote
+    // Authorization / x-api-key / Cookie / Proxy-Authorization to `<redacted>`. asight exists to show
+    // what really went over the wire, and that rewrite made the capture non-verbatim at exactly the
+    // layer whose thesis is byte-fidelity. The risk did not disappear, it MOVED: the file now holds
+    // live credentials, so it is created 0600 and `asight doctor` hard-fails if it is readable by
+    // anyone else (src/capture/selftest.mjs::qFilePerms). See spec 4.1 §采集安全.
+    req_headers: { ...reqHeaders },
     req_body, resp,
     // observ-meta
     id, ts_request: tsRequest, ts_response_start: tsRespStart,
@@ -68,7 +74,12 @@ export function buildEnvelope({
 // crash never loses a captured turn (invariant 2: raw NDJSON is the source of truth). Frequency
 // is one write per completed LLM call, so the blocking cost is negligible.
 export function createEnvelopeWriter(filePath) {
-  const fd = fs.openSync(filePath, 'a')
+  // 0600 — OWNER ONLY. Since 2026-07-20 the envelope stores request headers VERBATIM, so these bytes
+  // contain live API credentials. The mode argument only applies when open() CREATES the file, so an
+  // existing capture is chmod'd too: the real ~/.asight files were 0644 when this landed, i.e. every
+  // account on the machine could read them. `asight doctor` ④b hard-fails on anything looser.
+  const fd = fs.openSync(filePath, 'a', 0o600)
+  try { fs.fchmodSync(fd, 0o600) } catch { /* best effort: some filesystems refuse chmod */ }
   let open = true
   return {
     write(env) { fs.writeSync(fd, JSON.stringify(env) + '\n') },

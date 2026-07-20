@@ -66,10 +66,20 @@ test('non-llm req_body is labeled metadata, not verbatim', () => {
   assert.deepEqual(env.req_body, { raw_chars: 42, verbatim: false })
 })
 
-test('credentials never reach the envelope (zero-leak)', () => {
+// CONTRACT CHANGE, not a relaxation (2026-07-20 · spec 4.1 §采集安全 patched in the
+// same commit). This asserted the opposite — that Authorization arrived as `<redacted>`. asight
+// exists to show what really went over the wire, and rewriting a header made the capture
+// non-verbatim at exactly the layer whose thesis is byte-fidelity. The protection MOVED to file
+// permissions: these bytes hold live credentials, so the writer creates 0600 and `asight doctor` ④b
+// hard-fails on anything looser (test/capture/verbatim-headers.test.mjs).
+test('credential headers are stored VERBATIM (they are what went over the wire)', () => {
   const env = buildEnvelope({ ...baseArgs, reqBody: Buffer.from('{}'), capture: 'mitm' })
-  assert.equal(env.req_headers.authorization, '<redacted>')
-  assert.ok(!JSON.stringify(env).includes('SECRET'))
+  assert.equal(env.req_headers.authorization, baseArgs.reqHeaders.authorization,
+    'the Authorization header must survive byte-for-byte')
+  assert.doesNotMatch(JSON.stringify(env.req_headers), /<redacted>/,
+    'a `<redacted>` sentinel survives — a half-removed firewall leaves some captures verbatim and '
+    + 'some not, with nothing saying which')
+  assert.equal(env.auth_mode, 'oauth', 'the derived auth_mode label still works off real headers')
 })
 
 test('interrupted turn produces an error:true envelope with resp.kind=error', () => {

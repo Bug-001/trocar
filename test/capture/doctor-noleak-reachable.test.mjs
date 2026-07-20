@@ -26,6 +26,18 @@ import { qNoLeak, runSelfTest } from '../../src/capture/selftest.mjs';
 //
 // Together: the user runs `asight doctor`, sees ✓ 凭据没漏, gets exit 0, and their capture may be
 // full of Authorization headers. The tool is not merely unhelpful here, it is actively reassuring.
+//
+// 2026-07-20, LATER THAT DAY — redaction was REMOVED (spec 4.1 §采集安全 patched in
+// the same commit): headers are now stored verbatim, so "a credential is present" is the expected
+// state and can no longer be the red line. Half of this file's original subject is therefore retired,
+// and the assertions that pinned it are GONE rather than softened — keeping them as warnings would
+// leave a test file asserting a contract the product no longer has.
+//
+// WHAT SURVIVES, because it is independent of which contract is in force and was the deeper defect:
+//   • a scan that examined NOTHING must never certify anything (the vacuous-truth guard), and
+//   • `asight doctor` must actually RESOLVE its source — array roots (D27) and directories — instead
+//     of silently reading zero records.
+// The red line's new home (file permissions) is pinned in test/capture/verbatim-headers.test.mjs.
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
@@ -72,9 +84,12 @@ test('qNoLeak still passes on a genuinely clean capture', () => {
   assert.equal(clean.ok, true, `a properly redacted record must pass: ${clean.note}`);
 });
 
-test('qNoLeak catches an un-redacted secret header', () => {
-  const leak = qNoLeak([{ req_headers: { authorization: 'Bearer sk-ant-api03-oops' }, req_body: '{}' }]);
-  assert.equal(leak.ok, false, 'an un-redacted Authorization header must fail the red line');
+test('qNoLeak counts credential-bearing records instead of failing on them', () => {
+  // Retired contract, inverted deliberately: presence is by design now, but it MUST still be counted
+  // and surfaced, or the user has no way to know what is in the file they are about to share.
+  const r = qNoLeak([{ req_headers: { authorization: 'Bearer sk-ant-api03-oops' }, req_body: '{}' }]);
+  assert.equal(r.ok, true, 'credentials present is no longer a failure');
+  assert.equal(r.withCreds, 1, 'but it must be reported');
 });
 
 test('runSelfTest hard-fails when nothing was examined', () => {
@@ -84,22 +99,26 @@ test('runSelfTest hard-fails when nothing was examined', () => {
     + 'read failed — which is exactly the D27 array-source bug — and must not exit 0.');
 });
 
-test('END TO END: `asight doctor` on a multi-root source finds the leak and exits non-zero', () => {
-  // The product path. The unit tests above would all pass while bin/asight.mjs still handed an ARRAY
-  // to statSync and read nothing — that is the wiring half of this defect, and only running the real
-  // CLI can see it.
+test('END TO END: doctor hard-fails on a world-readable capture (the red line\'s new home)', () => {
+  // Replaces two tests that asserted "finds an un-redacted credential and exits non-zero". Those
+  // would now pass for the WRONG REASON — their fixtures were 0644, so ④b would trip regardless of
+  // any credential — which is exactly the kind of accidentally-green assertion this suite keeps
+  // finding. Assert the real thing directly.
   const dir = leakyRoot();
   try {
+    fs.chmodSync(path.join(dir, 'capture.ndjson'), 0o644);
     let status = 0, out = '';
     try {
       out = execFileSync(process.execPath, [CLI, 'doctor', '--source', dir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-    } catch (e) {
-      status = e.status; out = String(e.stdout || '') + String(e.stderr || '');
-    }
+    } catch (e) { status = e.status; out = String(e.stdout || '') + String(e.stderr || ''); }
     assert.notEqual(status, 0,
-      `doctor exited 0 on a capture containing an un-redacted Authorization header.\n--- output ---\n${out}`);
-    assert.match(out, /authorization|凭据|redact/i,
-      `doctor did not name the leaked header.\n--- output ---\n${out}`);
+      `doctor exited 0 on a world-readable capture holding live credentials.\n--- output ---\n${out}`);
+    assert.match(out, /0644|属主|owner-only|readable/i, `doctor did not name the permission problem.\n${out}`);
+
+    // …and passes once the file is owner-only, credentials and all.
+    fs.chmodSync(path.join(dir, 'capture.ndjson'), 0o600);
+    const ok = execFileSync(process.execPath, [CLI, 'doctor', '--source', dir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    assert.match(ok, /record\(s\) captured/, 'a 0600 capture must pass and report what it read');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -125,6 +144,9 @@ test('END TO END: a bare doctor on a CLEAN multi-root capture examines records a
     };
     fs.writeFileSync(path.join(legacy, 'capture.ndjson'), JSON.stringify(clean) + '\n');
     fs.writeFileSync(path.join(newHome, 'capture.ndjson'), '');
+    // owner-only, or ④b hard-fails and this test stops measuring source RESOLUTION (its subject)
+    fs.chmodSync(path.join(legacy, 'capture.ndjson'), 0o600);
+    fs.chmodSync(path.join(newHome, 'capture.ndjson'), 0o600);
 
     let status = 0, out = '';
     try {
@@ -161,6 +183,8 @@ test('END TO END: a BARE `asight doctor` reads the D27 multi-root default', () =
     fs.writeFileSync(path.join(newHome, 'capture.ndjson'), '');
     // the leak lives in the LEGACY root — so a doctor that only ever looks at one root also fails
     fs.copyFileSync(path.join(leakySource(), 'capture.ndjson'), path.join(legacy, 'capture.ndjson'));
+    fs.chmodSync(path.join(legacy, 'capture.ndjson'), 0o600);
+    fs.chmodSync(path.join(newHome, 'capture.ndjson'), 0o600);
 
     let status = 0, out = '';
     try {
@@ -168,9 +192,10 @@ test('END TO END: a BARE `asight doctor` reads the D27 multi-root default', () =
         encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: home, ASIGHT_SOURCE: '' },
       });
     } catch (e) { status = e.status; out = String(e.stdout || '') + String(e.stderr || ''); }
-    assert.notEqual(status, 0,
-      `a bare \`asight doctor\` exited 0 while the legacy capture root holds an un-redacted `
-      + `Authorization header. This is the default install.\n--- output ---\n${out}`);
-    assert.match(out, /authorization|凭据/i, `doctor did not name the leak.\n--- output ---\n${out}`);
+    // Subject is SOURCE RESOLUTION, not credentials: a bare doctor must find the legacy root and
+    // read the record in it. Before the fix it statSync'd an array, read zero records, and said ✓.
+    assert.equal(status, 0, `bare doctor hard-failed on a healthy multi-root capture.\n${out}`);
+    assert.match(out, /1 record\(s\) captured/,
+      `bare doctor did not read the record sitting in the legacy root — the D27 array-source defect.\n${out}`);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

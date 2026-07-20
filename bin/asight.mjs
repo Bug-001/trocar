@@ -198,7 +198,7 @@ async function main() {
       for (const e of readErrors) console.error('read error:', e);
       const source = sources.join(', ') || '(none)';
       const deps = st.checkDeps({ has });
-      const res = st.runSelfTest({ records, srcMeta, deps, verify: () => ob.verifyUserTrustOnly() });
+      const res = st.runSelfTest({ records, srcMeta, deps, files, verify: () => ob.verifyUserTrustOnly() });
       const mark = (b, warn) => (b ? '✓' : warn ? '⚠' : '✗');
       console.log('asight doctor — onboard 自检(依赖探测 + 「测试」四问)\n');
       console.log('deps:');
@@ -209,8 +209,9 @@ async function main() {
       console.log(`  ${mark(res.q2.ok, res.q2.llm === 0)} ② 抓得对       — ${res.q2.note}`);
       console.log(`  ${mark(res.q3.ok)} ③ 凭据没漏     — ${res.q3.note}`);
       console.log(`  ${mark(res.q4.ok, true)} ④ 没弱化全机 TLS — ${res.q4.note}`);
+      console.log(`  ${mark(res.q4b.ok)} ④b 采集文件仅属主可读 — ${res.q4b.note}`);
       if (res.hardFail) { console.error('\n✗ credential leak detected — the redact firewall MUST be fixed before capturing further.'); process.exit(1); }
-      console.log('\n✓ no credential leak. (①②④ are for your review — see notes above.)');
+      console.log('\n✓ 采集文件仅属主可读;凭据逐字存储 = 设计如此。(①②③④ 供你核对 — 见上方说明)');
       break;
     }
     default:
