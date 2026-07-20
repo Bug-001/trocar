@@ -7,7 +7,7 @@
 //   verify  — assert the CA is in the user-level trust store (no machine trust)
 //   doctor  — onboard self-check: deps probe + 「测试」四问 (4.1:61 / 4.5:41,77)
 import path from 'node:path'
-import { captureOut, mitmOut, serveSource } from '../src/paths.mjs';
+import { asightHome, captureOut, mitmOut, serveSource } from '../src/paths.mjs';
 import os from 'node:os';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -61,6 +61,44 @@ async function main() {
       if (!file) die('usage: asight etl <ndjson> [--db <path>] [--rebuild]');
       const out = await etlFile(file, { dbPath: flag('--db', undefined), rebuild: rest.includes('--rebuild') });
       console.log(`ETL: ${out.records} records from ${out.file} → ${out.dbPath}`, JSON.stringify(out.stats));
+      break;
+    }
+    case 'shard': {
+      // Per-session sharding of the capture stream (RFC 4.2 / D20: capture stays a pure tee, this
+      // grouping is ETL). One week of real use produced a 7.58 GB single file that `asight serve`
+      // could not open; sharded, the board reads only the session being viewed.
+      const { shardOnce } = await import(r('src', 'etl', 'shard.mjs'));
+      const file = positional() || flag('--file', mitmOut());
+      const outDir = flag('--out', path.join(asightHome(), 'sessions'));
+      const watch = rest.includes('--watch');
+      const every = Number(flag('--interval', 5)) * 1000;
+
+      const run = async () => {
+        const t0 = Date.now();
+        const res = await shardOnce({ file, outDir });
+        if (res.missing) { console.error(`shard: no such capture: ${file}`); return res; }
+        // Report rotation loudly: it means the watermark was discarded and the whole file re-read.
+        if (res.rotated) console.log(`shard: capture ${res.reason} — re-read from 0`);
+        if (res.records || !watch) {
+          const secs = ((Date.now() - t0) / 1000).toFixed(1);
+          console.log(
+            `shard: +${res.records} records (${(res.bytes / 1e6).toFixed(1)} MB) from offset `
+            + `${res.resumedFrom} → ${res.offset} in ${secs}s`
+            + (res.unassigned ? `, ${res.unassigned} without a session header` : '')
+            + (res.partial ? ', trailing partial record left for next run' : ''),
+          );
+        }
+        return res;
+      };
+
+      await run();
+      if (watch) {
+        console.log(`shard: watching ${file} → ${outDir} every ${every / 1000}s`);
+        for (;;) {
+          await new Promise((res2) => setTimeout(res2, every));
+          try { await run(); } catch (e) { console.error(`shard: ${e.message}`); }
+        }
+      }
       break;
     }
     case 'capture': {
