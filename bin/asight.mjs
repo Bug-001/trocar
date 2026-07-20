@@ -8,6 +8,7 @@
 //   doctor  — onboard self-check: deps probe + 「测试」四问 (4.1:61 / 4.5:41,77)
 import path from 'node:path'
 import { asightHome, captureOut, mitmOut, serveSource } from '../src/paths.mjs';
+import { parseArgs } from '../src/cli-args.mjs';
 import os from 'node:os';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -15,8 +16,11 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const [cmd, ...rest] = process.argv.slice(2);
 const die = (m) => { console.error(m); process.exit(1); };
-const flag = (name, def) => { const i = rest.indexOf(name); return i >= 0 ? (rest[i + 1] ?? true) : def; };
-const positional = () => rest.find((a) => !a.startsWith('--'));
+// Parsing lives in src/cli-args.mjs so it can be tested: `positional()` used to return the first
+// non-flag-NAME argument, i.e. the VALUE of any valued flag (`--interval 10` → "10" as the file).
+const args = parseArgs(rest);
+const flag = args.flag;
+const positional = args.positional;
 const r = (...p) => path.join(ROOT, ...p);
 
 async function main() {
