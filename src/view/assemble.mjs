@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { analyze, linearContext, cacheBreak, normResp, flatBlockText } from './analyze.mjs';
 import * as openai from '../dissect/openai.mjs'; // D25 · Phase 4: the OpenAI/Codex dissector
 import { blockSpans } from '../adapters/cc.mjs';
-import { slimBlock } from './blockmeta.mjs';
+import { slimBlock, compBuckets } from './blockmeta.mjs';
 import { mintRawRef, composeTextRef } from '../etl/orchestrator.mjs';
 
 // D17④ 地面真相(RFC 3.3:65 · 独立字节护城河). The demo proxied prefix identity with the 32-bit
@@ -193,6 +193,10 @@ function assembleOpenai(records, opts = {}) {
       ts: r.ts_request || r.ts || '', status: (r.resp && r.resp.status) || null,
       compaction: false, error: !!r.error,
       flat: kept ? flat : [], ...(kept ? null : { paged_out: true }),
+      // Tier A, same as the CC path: computed from `flat` BEFORE the retention window drops it, so a
+      // Codex session's timeline is as complete as a Claude Code one. Omitting it here is the same
+      // family of bug as this branch skipping withRefs/slimRec — one endpoint, two block shapes.
+      comp: compBuckets(flat),
       usage, cacheBreak: brk, gt: brk.gt, prefixSha256: curPfx,
     });
     // Same rule as the CC assembler: a call that failed never established a cache prefix, so it
@@ -323,6 +327,11 @@ export function assembleSession(records, opts = {}) {
       // board then reports a cache break that did not happen, with a cause and a fix hint. analyze()
       // marks this as `chainsPrefix`; undefined (older shapes) means "assume it chained".
       if (call.chainsPrefix !== false) prevFlat = flat;
+      // COMPOSITION IS TIER A — computed HERE, while the blocks are still in hand, because the very
+      // next line throws them away for out-of-window calls. Nine integers, 125 bytes: it rides on
+      // every call whether or not its body does, so the timeline draws the WHOLE session rather than
+      // hatching everything outside the current page as "composition unknown".
+      call.comp = compBuckets(flat);
       // Blocks kept only inside the retention window; `prevFlat` above still holds the real array, so
       // the NEXT call's diff is computed against the true baseline, not against an emptied one.
       if (opts.keepFlat && !opts.keepFlat(call.gi)) { call.flat = []; call.paged_out = true; continue; }

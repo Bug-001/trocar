@@ -926,15 +926,26 @@ function compBucket(b){
 }
 function callComp(s){
   if(s._comp) return s._comp
+  // The SERVER's answer wins. blockmeta.mjs::compBuckets is a verbatim port of the branches below,
+  // computed while the blocks are still in hand — which is the only moment it CAN be computed for a
+  // call whose body is out of the page window. The local path stays for full-bodied callers: frozen
+  // fixtures, the reused demo board, anything that never went through forWire.
+  if(s&&s.comp) return s._comp=s.comp
   const c={tools:0,system:0,user:0,assistant:0,thinking:0,tool_use:0,tool_result:0,image:0,other:0}
   for(const b of s.flat||[]) c[compBucket(b)] += flatBytes(b)
   return s._comp=c
 }
 const CT_ORDER=['tools','system','user','assistant','thinking','tool_use','tool_result','image','other']
 function barSegs(s,h){
-  // BUG 1: a paged-out call has no `flat` — its composition is UNKNOWN on this page, not zero.
-  // Paint one honest "not loaded" column instead of a blank bar that reads as "nothing in context".
-  if(s&&s.paged_out) return `<span class="ct-unloaded" style="height:${h.toFixed?h.toFixed(2):h}px"></span>`
+  // COMPOSITION UNKNOWN ≠ BODY NOT ON THIS PAGE. This used to key off `paged_out`, which conflated
+  // the two: on a live 115-call session ~40 bars rendered as hatched "unknown" purely because their
+  // BODIES were outside the current window — while the server had already analysed every one of them
+  // to draw the cache band underneath. Lazy belongs on bodies (~87 KB/call), never on the nine
+  // integers of a composition (125 B/call), which now ride on every call.
+  //
+  // The hatched column stays for the case it was written for: a composition nobody has computed yet.
+  // Painting that as a blank bar would read as "nothing was in this context" (invariant 4).
+  if(!s||(!s.comp&&!(s.flat&&s.flat.length))) return `<span class="ct-unloaded" title="组成尚未计算 — composition not yet computed for this call" style="height:${h.toFixed?h.toFixed(2):h}px"></span>`
   const c=callComp(s), tot=CT_ORDER.reduce((a,k)=>a+(c[k]||0),0)||1
   return CT_ORDER.map(k=>{ const sh=(c[k]||0)/tot*h; return sh<0.4?'':`<span class="ct-${k}" style="height:${sh.toFixed(2)}px"></span>` }).join('')
 }

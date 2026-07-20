@@ -115,6 +115,50 @@ export function blockHead(b) {
 /** 短预览 for the row body — distinct from head.label, which previews the tool ARGUMENT. */
 export const blockPreview = (b) => shorten(bodyTextOf(b));
 
+// ── composition: what this call's context is MADE OF, in nine buckets ────────────────────────────
+//
+// Ported verbatim from the browser's COMP_KIND / COMP_ROLE / compBucket / callComp (index.html:916).
+// Same rule as blockBytes: the numbers must not move, or every historical reading of a session
+// silently changes meaning.
+//
+// WHY IT MOVED SERVER-SIDE. Two reasons, and the second is the one that mattered to a user.
+//   1. Invariant 3. Bucketing must read the ONE cross-provider block vocabulary, never a wire shape.
+//      Computing it here means a new harness never touches the browser.
+//   2. It is CHEAP — 125 bytes per call, ~72 KB for a 578-call session — and it belongs to the tier
+//      that ships for every call, always. Paging withheld it along with the block bodies, and the
+//      timeline then drew ~40 of a live session's calls as diagonal-hatched "composition unknown"
+//      bars. Lazy belongs on bodies (87 KB/call), not on nine integers.
+//
+// Roles NOT in the table land in `other` rather than being folded into `user`: an unrecognized role
+// must be VISIBLE, never mis-coloured as something we did not observe (invariant 4).
+const COMP_KIND = { thinking: 'thinking', redacted_thinking: 'thinking', tool_use: 'tool_use', server_tool_use: 'tool_use', tool_result: 'tool_result', image: 'image' };
+const COMP_ROLE = { assistant: 'assistant', user: 'user', system: 'system', developer: 'system', tool: 'tool_result' };
+export const COMP_KEYS = ['tools', 'system', 'user', 'assistant', 'thinking', 'tool_use', 'tool_result', 'image', 'other'];
+
+export function compBucket(b) {
+  if (!b) return 'other';
+  if (b.sec === 'tools') return 'tools';
+  if (b.sec === 'system') return 'system';
+  const k = COMP_KIND[b.kind];
+  if (k) return k;
+  return COMP_ROLE[b.role] || 'other';
+}
+
+/**
+ * The call's composition, in UTF-8 bytes per bucket. All nine keys are always present — a missing
+ * key and a zero bucket are different claims, and the renderer must be able to tell them apart.
+ *
+ * MUST be called while the blocks are still in hand. assembleSession drops out-of-window `flat` for
+ * the retention window, so computing this afterwards yields nine zeros: a bar that draws blank while
+ * asserting the composition is known, which is strictly worse than the hatching it replaced.
+ */
+export function compBuckets(flat) {
+  const c = {};
+  for (const k of COMP_KEYS) c[k] = 0;
+  for (const b of flat || []) c[compBucket(b)] += blockBytes(b);
+  return c;
+}
+
 /**
  * Is this block a HUMAN QUERY — the thing that opens a turn?
  *
