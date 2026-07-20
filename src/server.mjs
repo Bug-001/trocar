@@ -127,8 +127,22 @@ async function serveStatic(res, urlPath) {
 export function sourceFiles(sourcePath) {
   const st = fssync.statSync(sourcePath); // throws if missing → caller resets sig
   if (!st.isDirectory()) return { files: [sourcePath], sig: st.size + '.' + Math.round(st.mtimeMs) };
-  const files = fssync.readdirSync(sourcePath) // non-recursive: never descends into ~/.atrace's GB dumps
-    .filter((f) => f.endsWith('.ndjson')).sort().map((f) => path.join(sourcePath, f));
+  // Flat *.ndjson in the root (one file per physical capture source, D20), PLUS the per-session
+  // shards ETL writes at <root>/<session-id>/calls.ndjson.
+  //
+  // The descent is deliberately ONE level and deliberately limited to that single filename. The
+  // original scan was flat precisely so that a source path anywhere near ~/.atrace could not pull
+  // in the v0 demo's multi-GB per-project dumps; a general recursive walk would undo that. A
+  // subdirectory is also not an invitation to load whatever NDJSON is sitting in it — that is how a
+  // stray export gets rendered as if it were captured traffic.
+  const entries = fssync.readdirSync(sourcePath, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1));
+  const files = [];
+  for (const e of entries) {
+    if (e.isFile() && e.name.endsWith('.ndjson')) { files.push(path.join(sourcePath, e.name)); continue; }
+    if (!e.isDirectory()) continue;
+    const shard = path.join(sourcePath, e.name, 'calls.ndjson');
+    try { if (fssync.statSync(shard).isFile()) files.push(shard); } catch { /* not a shard dir */ }
+  }
   const sig = files.map((f) => { try { const s = fssync.statSync(f); return `${path.basename(f)}:${s.size}.${Math.round(s.mtimeMs)}`; } catch { return ''; } }).join('|') || '∅dir';
   return { files, sig };
 }
@@ -139,6 +153,9 @@ export function sourceFiles(sourcePath) {
 function makeRecordLoader(source) {
   const roots = (Array.isArray(source) ? source : [source]).filter(Boolean);
   let cache = { sig: null, records: [] };
+  // per-file watermark: path -> { size, records } — the byte offset already consumed and what it
+  // yielded, so a refresh parses only the tail.
+  let marks = new Map();
   const load = async () => {
     if (!roots.length) { load.sig = '∅'; return []; }
     let files = [], sig;
@@ -162,10 +179,36 @@ function makeRecordLoader(source) {
     }
     load.sig = sig;
     if (cache.sig === sig) return cache.records;
+
+    // INCREMENTAL: read only the bytes that arrived since last time (spec 4.2:49).
+    //
+    // This used to re-read and re-parse EVERY file on EVERY signature change — and under a live
+    // capture the signature changes every turn. Measured on the user's 6.88 GB capture: reading is
+    // 70 ms per 286 MB, JSON.parse is 2,931 ms for the same bytes, so a refresh cost ~70 s of pure
+    // parse with every record resident simultaneously. `asight serve` simply could not open it.
+    //
+    // Append-only makes the watermark a single number per file. The dangerous case is a file that
+    // is NOT append-only after all — truncated, rotated, restored, or a fresh capture reusing the
+    // name — where reading from a stale offset would silently skip every real record and render an
+    // empty session. So a file that SHRANK is re-read from zero, and the fact is recorded on
+    // `load.resets` rather than being handled silently (invariant 4).
     const records = [];
-    for (const f of files) { // stream each file; concat raw v0/D10 records verbatim
-      for (const r of await readRecords(f, { normalize: false })) records.push(r);
+    const resets = [];
+    const nextMarks = new Map();
+    for (const f of files) {
+      let size = 0;
+      try { size = fssync.statSync(f).size; } catch { continue; } // vanished mid-refresh → skip this pass
+      const prev = marks.get(f);
+      let from = 0, keep = [];
+      if (prev && size >= prev.size) { from = prev.size; keep = prev.records; }
+      else if (prev) { resets.push({ file: f, was: prev.size, now: size, why: 'file shrank — rotated, truncated or replaced' }); }
+      const fresh = from > 0 ? await readRecords(f, { normalize: false, startOffset: from }) : await readRecords(f, { normalize: false });
+      const all = from > 0 ? keep.concat(fresh) : fresh;
+      nextMarks.set(f, { size, records: all });
+      for (const r of all) records.push(r);
     }
+    marks = nextMarks;   // files no longer listed drop out, releasing their records
+    load.resets = resets;
     cache = { sig, records };
     return records;
   };
