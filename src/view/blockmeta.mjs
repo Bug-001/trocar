@@ -115,6 +115,28 @@ export function blockHead(b) {
 /** 短预览 for the row body — distinct from head.label, which previews the tool ARGUMENT. */
 export const blockPreview = (b) => shorten(bodyTextOf(b));
 
+/**
+ * Is this block a HUMAN QUERY — the thing that opens a turn?
+ *
+ * The context window groups messages into turns: a turn opens at a user text message the human
+ * actually typed and runs until the next one, carrying the assistant's thinking / tool_use / text and
+ * the tool_results that answer it. What makes it "human" is that something survives after stripping
+ * the harness's injected <system-reminder> blocks — a message that is ONLY reminders is scaffolding,
+ * not a turn boundary.
+ *
+ * Computed HERE because the browser used to do it by reading `b.block.text`, which a slimmed block no
+ * longer carries: every message then landed in one turn, the outline's query rows went blank, and the
+ * D17② section tax booked the whole conversation as `task` with `history` = 0 — a number the board
+ * presents as a research finding. It also belongs here on principle (invariant 3): `<system-reminder>`
+ * is Claude-Code-shaped knowledge, and the browser must not branch on a harness's wire shape.
+ */
+export function blockQuery(b) {
+  if (!b || b.sec !== 'messages' || b.role !== 'user' || b.kind !== 'text') return null;
+  const raw = bodyTextOf(b);
+  const human = String(raw || '').replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
+  return human ? shorten(human) : null;
+}
+
 // Fields that carry the block's CONTENT. These are what must not cross the wire; everything else on
 // a block is metadata the collapsed row, the diff and the timeline need on every call.
 const HEAVY = ['text', 'block', 'desc', 'schema', 'props'];
@@ -148,6 +170,8 @@ export function slimBlock(b, textRef) {
   out.chars = blockChars(b);
   out.head = blockHead(b);
   out.preview = blockPreview(b);
+  const q = blockQuery(b);
+  if (q) out.query = q;   // turn boundary + outline row; see blockQuery for why it is not the browser's job
   if (textRef) {
     // Addressable: drop the body, ship the locator. The browser fetches it on expand.
     for (const k of HEAVY) delete out[k];

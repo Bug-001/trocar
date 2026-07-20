@@ -1256,9 +1256,22 @@ function clearRange(){ document.querySelectorAll('#sawrow .bar.reviewed').forEac
 // ── lane-call detail panel ──────────────────────────────────────────────────
 function callInput(c){
   const rq=c.rec?.request||{}
-  const sys=(rq.system||[]).map(b=>b.text||'').join('\n')
+  // BUILT FROM THE ASSEMBLED BLOCKS, NOT FROM THE RAW REQUEST BODY.
+  //
+  // This used to read rq.system / rq.messages, which slimRec()'s five-field whitelist dropped — so
+  // the persona line and the user excerpt went permanently blank with no explanation. The same
+  // content is already here, normalized and cross-provider, in c.flat: the server's `preview` for
+  // every block, plus `query` marking the human turns. Reading it from there also honours invariant 3
+  // — rq.system[]/rq.messages[].content[].type is Anthropic wire shape, and an OpenAI-Responses body
+  // has none of those keys, so this panel was Anthropic-only besides being empty.
+  const flat=c.flat||[]
+  const sys=flat.filter(b=>b.sec==='system').map(b=>b.preview!==undefined?b.preview:(b.text||'')).join('\n')
   const persona=(sys.match(/You are [^\n]+/)||[''])[0]
-  const user=(rq.messages||[]).map(m=>Array.isArray(m.content)?m.content.map(b=>b.type==='text'?(b.text||''):`[${b.type}]`).join(''):String(m.content||'')).join('\n')
+  const user=flat.filter(b=>b.sec==='messages'&&b.query).map(b=>b.query).join('\n')
+  // A paged-out call ships no blocks at all, so say that rather than render three blank lines.
+  if(!flat.length&&(c.paged_out||rq.context_chars!==undefined)){
+    return {persona:'',sysFull:'',user:'',notShipped:'context not shipped on this page — scroll this call into the window to load it'}
+  }
   return {persona,sysFull:sys,user}
 }
 const callRef = k => `<a class="callref" data-call="${k}">call #${k}</a>`
@@ -1354,7 +1367,17 @@ function blockHead(b){
   return {role:r,tag,label:esc(preview(txt))}
 }
 function ctxBlock(b,i,prevKeys){
-  const h=blockHead(b)
+  // READ THE SERVER'S HEADER. blockHead() below re-derives it from b.block / b.text / b.desc, and a
+  // block on the wire carries none of those — so every row rendered as a bare tag: hundreds of
+  // identical `user` / `say` / `action · Read` lines with no argument, no preview, nothing to scan.
+  // The server computes the same thing off the ONE cross-provider block vocabulary (blockmeta.mjs,
+  // invariant 3); the local version stays only for full-bodied blocks (older payloads, tests).
+  // NOT `b.head || blockHead(b)` as a style choice: it is the difference between reading the answer
+  // and recomputing it from an input that was deliberately removed.
+  const h=b.head?{role:esc(b.head.role||''),tag:esc(b.head.tag||''),label:esc(b.head.label||'')}:blockHead(b)
+  // …and the row's 短预览 (RFC 1.4:35). head.label previews a tool's ARGUMENT; for everything else
+  // the body preview is what makes one row distinguishable from the next.
+  if(!h.label&&b.preview) h.label=esc(b.preview)
   // D17② per-block first-appearance: this block is NEW this call (not carried from the previous one),
   // i.e. part of the growth. Reused blocks (the cache-eligible prefix) stay unmarked to keep it quiet.
   const life=(prevKeys&&!b.volatile&&!prevKeys.has(b.key))?`<span class="lifemark" title="first appears this call — new content added to the context (part of the re-sent Δ)">◆ new</span>`:''
@@ -1363,7 +1386,14 @@ function ctxBlock(b,i,prevKeys){
   // 保真标 (invariant 4 / spec 2.3 §验收#2): mark each tool def's faithfulness. D15 capture stores
   // the full schema verbatim → 'verbatim' (part of AC-1). Old v0 traces kept only name + param names
   // + description length → 'metadata', so nobody mistakes the metadata for a verbatim schema.
-  const meta=b.sec==='tools'?(b.verbatim
+  // A tools row whose schema is ADDRESSED but not yet fetched must not wear the green byte-faithful
+  // badge: that badge sat above 「description: —」, i.e. it asserted as source truth that the tool has
+  // no description, when the description is in the capture and this block carries a locator to it.
+  // "Not shipped on this page" and "does not exist" are different claims (invariant 4).
+  const toolPending=b.sec==='tools'&&b.text_ref&&b.desc===undefined&&b.schema===undefined
+  const meta=toolPending
+    ?`<span class="metabadge" title="addressed, not yet fetched — this tool's description and JSON schema were captured verbatim (D15) but are not shipped with the page. Expand the row to resolve them from the raw capture.">已寻址 · 未取回</span>`
+    :b.sec==='tools'?(b.verbatim
     ?`<span class="metabadge" style="border-style:solid;color:var(--green);border-color:var(--green)" title="faithfulness: verbatim — the full tool schema (description + JSON input_schema) is captured on the wire (D15). Byte-faithful, part of AC-1.">verbatim</span>`
     :`<span class="metabadge" title="faithfulness: metadata — this v0 trace stored only name + param names + description length; the full JSON schema text was NOT retained. The model received the full schema; asight didn't store it. Fixed going forward by D15 verbatim capture (RFC 4.1 §验收 #3).">metadata</span>`):''
   // per-block faithfulness badge (1.4:52 / 不变式 4): server-baked b.faithfulness — never let ciphertext/summary pass as verbatim.
@@ -1378,7 +1408,54 @@ function ctxBlock(b,i,prevKeys){
     `<div class="cbh"><span class="cbrole">${esc(h.role)}</span><span class="cbtag">${h.tag}</span>${h.label?`<span class="cblabel">${h.label}</span>`:''}${cc}${vol}${meta}${ffb}${life}<span class="cbchars">${b.sec==='system'?kf(b.chars)+'c':''}</span></div>`+
     `<div class="cbc"${open?' data-filled="1"':''}>${open?ctxBody(b):''}</div></div>`
 }
+// ── 点开惰性填正文 (RFC 1.4:35 / 2.3:18 / 4.2:55 「看全文=回源」) ──────────────────
+//
+// A block ships as metadata + a `text_ref`; its body is NOT on the wire. So expanding a row is a
+// read: fetch the bytes from /api/block, which slices them out of the raw capture through the one
+// resolver the analysis path also uses. Resolved bodies are cached by ref, because an append-only
+// conversation re-sends the same block on every call — 17,594 blocks carried only 494 distinct
+// contents on a real session, so the cache hit rate here is ~97%.
+const bodyCache=new Map()   // text_ref -> {status, text, fidelity, error}
+// A body that has not arrived MUST NOT render as blank: an empty <pre> reads as "the model saw
+// nothing here", which is the invariant-4 failure the whole locator design exists to avoid.
+function pendingBody(b){
+  return `<pre class="cbpre" data-ref="${esc(b.text_ref)}">↻ 回源中 — fetching these bytes from the raw capture…</pre>`
+}
+function resolvedBody(got,b){
+  if(!got||got.status!=='ok'){
+    const why=(got&&(got.error||got.reason))||'the capture could not be read'
+    // State the failure in place, with the locator, so it is diagnosable rather than mysterious.
+    return `<pre class="cbpre">⚠ 无法回源 — could not fetch this block's bytes from the capture.\n\n${esc(why)}\n\nlocator: ${esc(b.text_ref||'—')}</pre>`
+  }
+  const t=String(got.text||'')
+  const shown=t.length>20000?t.slice(0,20000)+`\n… (${kf(t.length)} chars total)`:t
+  // 保真标 (invariant 4): bytes sliced verbatim from the capture and bytes that were re-serialized on
+  // the way in are not equally trustworthy, and rendering them identically is exactly what the
+  // resolver's fidelity classification exists to prevent.
+  const badge=got.fidelity==='verbatim'
+    ? `<div class="cbsrc" title="resolved by 「定位源记录 → slice(start,end)」 over the raw NDJSON — the bytes the model received (AC-1)">✓ 逐字回源 · verbatim from capture</div>`
+    : got.fidelity
+      ? `<div class="cbsrc" title="these bytes were re-serialized on the way into the capture, so they are NOT a byte-verbatim record of the wire">⚠ ${esc(got.fidelity)} — not byte-verbatim</div>`
+      : ''
+  return badge+`<pre class="cbpre">${esc(shown)}</pre>`
+}
+async function fetchBody(b,bc){
+  const ref=b.text_ref
+  if(bodyCache.has(ref)){ bc.innerHTML=resolvedBody(bodyCache.get(ref),b); return }
+  let got
+  try{
+    const r=await fetch('/api/block?ref='+encodeURIComponent(ref))
+    got=await r.json().catch(()=>({status:'error',error:'response was not JSON'}))
+    if(!r.ok&&!got.error) got={status:'error',error:'HTTP '+r.status}
+  }catch(e){ got={status:'error',error:String((e&&e.message)||e)} }
+  bodyCache.set(ref,got)
+  bc.innerHTML=resolvedBody(got,b)
+}
+
 function ctxBody(b){
+  // Addressable and bodyless → the body lives in the capture. Render the pending state; the caller
+  // kicks off the fetch that replaces it.
+  if(b.text_ref&&b.text===undefined&&b.block===undefined&&b.desc===undefined&&b.schema===undefined) return pendingBody(b)
   let txt
   if(b.sec==='tools') txt=b.verbatim
     ? `${b.name}${b.ttype?' · '+b.ttype:''}\n\ndescription:\n${b.desc||'—'}${b.schema!==undefined?`\n\ninput_schema:\n${JSON.stringify(b.schema,null,2)}`:''}`
@@ -1400,7 +1477,12 @@ function toggleCtxBlock(el){
   if(!el)return
   const i=+el.dataset.bi, wasCollapsed=el.classList.contains('collapsed')
   el.classList.toggle('collapsed')
-  if(wasCollapsed){ openBlocks.add(i); const bc=el.querySelector('.cbc'); if(bc&&!bc.dataset.filled){ bc.innerHTML=ctxBody(curFlat[i]); bc.dataset.filled='1' } }
+  if(wasCollapsed){ openBlocks.add(i); const bc=el.querySelector('.cbc'); if(bc&&!bc.dataset.filled){
+    const b=curFlat[i]
+    bc.innerHTML=ctxBody(b); bc.dataset.filled='1'
+    // 惰性回源: the row painted its pending state synchronously; the bytes arrive and replace it.
+    if(bc.innerHTML.indexOf('data-ref=')>=0) fetchBody(b,bc)
+  } }
   else openBlocks.delete(i)
 }
 function sectionHeader(sec,counts,tax){
@@ -1621,8 +1703,11 @@ function humanTurns(flat){
   const out=[]
   flat.forEach((b,i)=>{
     if(b.sec!=='messages'||b.role!=='user'||b.kind!=='text')return
-    const raw=(b.block&&b.block.text)||''
-    const human=raw.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g,'').trim()
+    // b.query is the server's answer (blockmeta.mjs::blockQuery): the human text with the harness's
+    // <system-reminder> blocks stripped, or absent when nothing human remains. Re-deriving it here
+    // read b.block.text, which a slimmed block does not carry, so every outline query row went blank.
+    // Stripping `<system-reminder>` is also harness-shaped knowledge that must not live here (inv. 3).
+    const human=b.query!==undefined?b.query:(((b.block&&b.block.text)||'').replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g,'').trim()||null)
     if(human) out.push({label:preview(human),fi:i})
   })
   return out
@@ -1634,8 +1719,11 @@ function messageTurns(flat){
   const turns=[]; let cur=null
   flat.forEach((b,i)=>{
     if(b.sec!=='messages') return
-    const raw=(b.block&&b.block.text)||''
-    const human=(b.role==='user'&&b.kind==='text')?raw.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g,'').trim():''
+    // Same server-baked field as humanTurns(). Without it every message fell into ONE turn, and the
+    // D17② section tax then booked the whole conversation as `task` with `history` = 0 — a number the
+    // board publishes as a finding about how the harness spends its context window.
+    const human=b.query!==undefined?(b.query||'')
+      :((b.role==='user'&&b.kind==='text')?(((b.block&&b.block.text)||'').replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g,'').trim()):'')
     if(human||!cur){ cur={label:human?preview(human):'(context / tool results)',query:!!human,items:[]}; turns.push(cur) }
     cur.items.push(i)
   })

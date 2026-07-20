@@ -337,6 +337,50 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
           resources: await sessionResources(db.connection, id),
         });
       }
+      // 看全文 = 回源 (RFC 4.2:55 · 2.3:18 · 1.4:35 「点开惰性填正文」). A context block ships as
+      // metadata + a `text_ref`; this is the read that turns the locator back into bytes when the
+      // user expands the row. ONE resolver serves it — the same buildResolver the analysis path uses
+      // — so what the browser displays is produced by 「定位源记录 → slice(start,end)」 over the raw
+      // capture (the AC-1 algorithm), never by a second copy that can drift from it.
+      //
+      // OBSERVE-only (invariant 1) is not implicated: this originates nothing, it reads bytes already
+      // on disk. The ref is UNTRUSTED client input, so it is handed to the resolver as an opaque key
+      // — the resolver only ever addresses records inside the configured capture roots, so a ref
+      // cannot name a path outside them.
+      if (p === '/api/block') {
+        const ref = url.searchParams.get('ref');
+        if (!ref) return sendJson(res, 400, { error: 'missing ref' });
+        // Shape-check before the resolver sees it. The resolver addresses records by an INDEX it
+        // built from the configured roots, so a ref can never become a file read — but it also falls
+        // back to a bare record id when the `<session>/<stream>` prefix does not match, which means a
+        // malformed ref would quietly return SOME record's bytes rather than an error. Bytes served
+        // under the wrong identity are an invariant-2 problem even when they are real bytes, so a ref
+        // that is not the documented form (RFC 4.2:40) is rejected rather than best-guessed.
+        if (!/^[^/]+\/[^/#]+#[^:]+::\d+-\d+$/.test(ref)) {
+          return sendJson(res, 400, { error: 'malformed ref — expected <session>/<stream>#<recordId>::<start>-<end>', ref });
+        }
+        if (typeof resolve.detail !== 'function') {
+          return sendJson(res, 503, { error: 'no capture source configured — nothing to resolve against' });
+        }
+        let out;
+        // A malformed or ambiguous ref must come back as a stated failure, never as empty text: the
+        // board renders this into a body, and a silent blank reads as "the model saw nothing here"
+        // (invariant 4).
+        try { out = resolve.detail(ref); }
+        catch (e) { return sendJson(res, 409, { error: `ref is ambiguous or the source is corrupt: ${(e && e.message) || e}` }); }
+        if (!out) return sendJson(res, 404, { error: 'ref not found in any capture root', ref });
+        if (out.status !== 'ok') {
+          return sendJson(res, 404, { ref, status: out.status, error: out.reason || `unresolvable (${out.status})` });
+        }
+        // `fidelity` travels with the bytes, always. Bytes sliced verbatim from the capture and bytes
+        // that were re-serialized on the way in are not equally trustworthy, and rendering them
+        // identically is the exact defect the resolver's own fidelity classification exists to
+        // prevent (invariant 4).
+        return sendJson(res, 200, {
+          ref, status: 'ok', text: out.text,
+          fidelity: out.fidelity || null, source_status: out.source_status || null,
+        });
+      }
       if ((m = p.match(/^\/api\/call\/([^/]+)\/context$/))) {
         if (!db) return noDb(res);
         const id = decodeURIComponent(m[1]);
