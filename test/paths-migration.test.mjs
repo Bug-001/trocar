@@ -52,10 +52,19 @@ test('capture and mitm still write DISTINCT files (D20: one file per physical so
     'two capture sources appending to one file would interleave two harnesses into one stream');
 });
 
+// 2026-07-20: asserted against the CONFIGURED home rather than whatever this machine happens to have
+// captured. serveSource() now filters the new home for existence — it always had to, since naming an
+// absent root crashed `asight serve` at startup on a machine holding only the legacy capture — so a
+// bare call here would make the check pass or fail depending on the developer's laptop. Same claim,
+// made unconditional.
 test('serve reads the directory the capture writers write into (the first-run dead end)', () => {
-  const roots = [].concat(serveSource());
-  assert.ok(roots.includes(path.dirname(captureOut())), 'asight capture must write where asight serve looks');
-  assert.ok(roots.includes(path.dirname(mitmOut())), 'asight mitm must write where asight serve looks');
+  assert.equal(path.dirname(captureOut()), asightHome(), 'asight capture must write where asight serve looks');
+  assert.equal(path.dirname(mitmOut()), asightHome(), 'asight mitm must write where asight serve looks');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-mig-home-'));
+  try {
+    assert.ok([].concat(serveSource({ home, legacyExists: false })).includes(home),
+      'an existing home must be offered as a root');
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
 // The one that would have caught a silent history loss.

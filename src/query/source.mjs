@@ -255,7 +255,17 @@ export async function buildResolver(source) {
 // among collisions — a ref that is ambiguous within a root still throws from that root's resolver.
 async function buildMultiResolver(roots) {
   const parts = [];
-  for (const r of roots) parts.push(await buildResolver(r));
+  const unreadable = [];
+  for (const r of roots) {
+    // FAIL SOFT PER ROOT. A root can be absent, unreadable, or deleted between the caller's existence
+    // check and this open — the legacy home is exactly the kind of directory a user tidies away, and
+    // the live one is being written to while we read it. One bad root must cost the sessions in that
+    // root, never the whole board: throwing here takes down `asight serve` at startup and the user
+    // sees a crash where they should see the sessions that ARE readable (invariant 2 — a capture on
+    // disk stays readable). What is dropped is recorded so `scan` can report it rather than hide it.
+    try { parts.push(await buildResolver(r)); }
+    catch (e) { unreadable.push({ root: r, reason: (e && e.message) || String(e) }); }
+  }
   const resolve = (...args) => {
     let lastErr = null;
     for (const p of parts) {
@@ -270,11 +280,38 @@ async function buildMultiResolver(roots) {
     corruptLines: parts.reduce((n, p) => n + ((p.scan && p.scan.corruptLines) || 0), 0),
     corruptByFile: Object.assign({}, ...parts.map((p) => (p.scan && p.scan.corruptByFile) || {})),
     unidentifiedLines: parts.reduce((n, p) => n + ((p.scan && p.scan.unidentifiedLines) || 0), 0),
+    unreadableRoots: unreadable,
   };
-  for (const k of ['detail', 'close']) {
-    if (typeof parts[0]?.[k] === 'function') {
-      resolve[k] = (...a) => { for (const p of parts) { const v = p[k](...a); if (k === 'detail' && v) return v; } return null; };
+
+  // A MISS IS AN OBJECT, SO "TRUTHY" IS NOT "FOUND".
+  //
+  // This used to be `for (const k of ['detail','close']) … if (k === 'detail' && v) return v`, and
+  // detail() never returns falsy — a miss is `{status:'absent', reason}`, which is truthy. So the
+  // FIRST root's miss was returned as the answer and no later root was ever consulted. Every block
+  // whose bytes live in the legacy home rendered `absent` on the board while sitting on disk, which
+  // is AC-1 (回源逐字, RFC 4.2:41,77) silently unavailable to precisely the users the D27 home move
+  // created. Ask each root in turn, accept only an actual hit, and when they all miss return the LAST
+  // reasoned miss so the row can say why rather than render empty (invariant 4).
+  resolve.detail = (...a) => {
+    let last = null;
+    for (const p of parts) {
+      if (typeof p.detail !== 'function') continue;
+      const v = p.detail(...a);
+      if (v && v.status === 'ok') return v;
+      if (v) last = v;
     }
-  }
+    return last;
+  };
+
+  // The server reports `source_resolved` as `resolve.size ? true : false` (RFC 4.4:98). With no size
+  // the post-D27 DEFAULT configuration announced its capture source was unreadable while serving from
+  // it. Sum the roots: the resolved corpus really is all of them.
+  resolve.size = parts.reduce((n, p) => n + (typeof p.size === 'number' ? p.size : 0), 0);
+
+  // …and teardown. The old loop forwarded 'close', but a resolver's teardown is `dispose`, so no root
+  // was ever closed and every indexed file's fd leaked for the life of the process. Idempotent and
+  // non-throwing: shutdown paths overlap, and a failure to close must not mask the reason for the
+  // shutdown.
+  resolve.dispose = () => { for (const p of parts) { try { p.dispose && p.dispose(); } catch {} } };
   return resolve;
 }

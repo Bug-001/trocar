@@ -53,8 +53,14 @@ export function caDir({ home = asightHome(), legacyCa = path.join(os.homedir(), 
 // home plus, while it still holds anything, the legacy one — so upgrading never costs the user a
 // session. Listing an absent root would make the loader throw "capture source unreadable" on a clean
 // machine, turning "nothing captured yet" into "something is broken", so absence is filtered here.
+// 2026-07-20: the comment above was already right and the code only did half of it. `home` was pushed
+// UNCONDITIONALLY while only `legacy` was existence-checked, so on a machine holding just the legacy
+// capture — every user who upgraded past D27 and has not captured since — the list named a directory
+// that is not there, buildResolver stat()ed it, and `asight serve` died at startup instead of serving
+// the sessions plainly sitting in the other root. Filter both.
 export function serveSource({ home = asightHome(), legacy = legacyHome(), legacyExists = null } = {}) {
-  const roots = [home];
+  const roots = [];
+  if (existsQuiet(home)) roots.push(home);
   const hasLegacy = legacyExists == null ? existsQuiet(legacy) : legacyExists;
   if (hasLegacy) roots.push(legacy);
   return roots;
