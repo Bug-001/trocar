@@ -154,13 +154,28 @@ test('paged: the WHOLE session is on the timeline, and only the window carries b
   }
 
   // The out-of-window calls must be slim in the way that actually costs bytes: no blocks, and no
-  // copy of the request body hiding under `rec`. Asserting only `flat.length === 0` above would
-  // still pass with the 120 MB of request bodies that made this endpoint 500.
+  // copy of the request body hiding under `rec`.
+  //
+  // 2026-07-20 — this loop used to assert `c.rec.request.messages === undefined`, under a comment
+  // claiming it caught the 120 MB of request bodies that made this endpoint 500. It could not:
+  // slimRec()'s REQ_KEEP whitelist (src/view/assemble.mjs) permits five scalar fields, so
+  // `rec.request.messages` is undefined for EVERY call, in or out of window, whether or not
+  // slimCall() and slimRec() exist at all. It passed with both deleted — decoration in the shape of
+  // a guard. Pin the fields that genuinely differ between a windowed call and a paged-out one, so
+  // deleting slimCall() reddens this.
   for (const c of steps.slice(5)) {
     assert.equal(c.flat.length, 0, `call #${c.gi} is outside the window and must ship no blocks`);
-    assert.equal(c.rec.request.messages, undefined,
-      `call #${c.gi} ships a full copy of its request body under rec.request — the payload never shrank`);
+    for (const k of ['context_chars', 'message_count', 'tool_count', 'system_chars']) {
+      assert.equal(c.rec.request[k], undefined,
+        `call #${c.gi} is outside the window yet still ships rec.request.${k} — it was not slimmed`);
+    }
     assert.equal(c.paged_out, true, 'invariant 4: a body that was not shipped must say so in place');
+  }
+  // …and an IN-window call keeps exactly those counters, so the check above is a real difference
+  // between the two states rather than a field nobody ever sends.
+  for (const k of ['context_chars', 'message_count', 'tool_count', 'system_chars']) {
+    assert.equal(typeof steps[2].rec.request[k], 'number',
+      `an in-window call must still carry rec.request.${k} — the raw panel prints "?" without it`);
   }
   // …and the IN-window calls are bodyless too: a block ships metadata + a locator, never its text.
   for (const b of steps[2].flat) {
