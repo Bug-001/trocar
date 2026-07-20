@@ -7,6 +7,9 @@
 import { createHash } from 'node:crypto';
 import { analyze, linearContext, cacheBreak, normResp, flatBlockText } from './analyze.mjs';
 import * as openai from '../dissect/openai.mjs'; // D25 · Phase 4: the OpenAI/Codex dissector
+import { blockSpans } from '../adapters/cc.mjs';
+import { slimBlock } from './blockmeta.mjs';
+import { mintRawRef, composeTextRef } from '../etl/orchestrator.mjs';
 
 // D17④ 地面真相(RFC 3.3:65 · 独立字节护城河). The demo proxied prefix identity with the 32-bit
 // bounded content_hash SEQUENCE (collision-prone). Product MUST use a REAL full SHA-256 over the
@@ -50,7 +53,13 @@ function hydrateForBoard(r) {
     system_chars: system.reduce((a, b) => a + String((b && b.text) || '').length, 0),
     context_chars: r.req_body.length,
   };
-  return { ...r, request, response: r.response || r.resp || {} };
+  // Carry the source-stream stamp across the copy. `{...r}` takes only ENUMERABLE properties, and
+  // `_stream` is deliberately non-enumerable (so it never appears in stored or shipped JSON) — which
+  // means a spread silently drops it, and every block downstream loses the half of its text_ref that
+  // says WHICH capture file its bytes are in. Silent, because the result is simply a missing locator.
+  const out = { ...r, request, response: r.response || r.resp || {} };
+  if (r._stream) Object.defineProperty(out, '_stream', { value: r._stream, enumerable: false, configurable: true });
+  return out;
 }
 
 // session-id signals across harnesses: CC (x-claude-code-session-id / x-session-id) + Codex (session-id
@@ -208,6 +217,52 @@ function assembleOpenai(records, opts = {}) {
 
 // records = ONE session's raw (v0/demo-shape) records. Returns analyze() output with each
 // call augmented: .flat (linearContext), .cacheBreak (vs prev in lane), .gt (groundTruth).
+
+
+// The per-call record, reduced to what the board renders FROM it.
+//
+// /api/session used to ship `rec.request` whole — the entire wire body — to a browser that had just
+// been sent every block of that same body, assembled. On a real 115-call session that was ~120 MB of
+// a 142.8 MB response. The frontend was checked line by line against this: it reads `rq.model`,
+// `rq.context_chars`, `rq.message_count`, `rq.tool_count`, `rq.system_chars` and nothing else. Every
+// computation that genuinely needs the body — composition buckets, section tax, diff keys,
+// cache-break — already runs server-side over the blocks (invariant 3 requires that anyway: the
+// browser must never branch on a provider's wire shape).
+//
+// The body is not lost, it is where it always was: in the raw NDJSON, addressed by the same ref its
+// blocks carry.
+const REQ_KEEP = ['model', 'context_chars', 'message_count', 'tool_count', 'system_chars'];
+function slimRec(rec) {
+  if (!rec) return rec;
+  const rq = rec.request || {};
+  const request = {};
+  for (const k of REQ_KEEP) if (rq[k] !== undefined) request[k] = rq[k];
+  return { id: rec.id, request };
+}
+
+// Turn a call's assembled blocks into their WIRE shape: metadata + a text_ref locator, no body.
+//
+// The locator is minted in the SAME form the DuckDB projection persists (RFC 4.2:40 —
+// `<session>/<stream>#<recordId>::<start>-<end>`), so the board and the analysis path address bytes
+// identically and ONE resolver serves both. That is also what keeps AC-1 honest: what the browser
+// eventually displays is produced by 「定位源记录 → slice(start,end)」 over the raw capture, not by a
+// second copy of the text that could drift from it.
+//
+// Blocks whose span could not be located, or whose record cannot be addressed (no id, no known
+// stream), keep no ref — slimBlock marks them `unresolvable` so the row can say so. Silence would
+// render as an empty body, which reads as "the model saw nothing" (invariant 4).
+function withRefs(flat, rec) {
+  let spans = null;
+  try { spans = blockSpans(rec); } catch { spans = null; }
+  const id = rec && rec.id != null ? String(rec.id) : null;
+  const stream = rec && rec._stream;
+  const base = id && stream ? mintRawRef(sessionIdOf(rec), stream, id) : null;
+  return flat.map((b, i) => {
+    const span = spans && spans[i];
+    return slimBlock(b, base && span ? composeTextRef(base, span) : null);
+  });
+}
+
 // `opts.keepFlat(gi)` — RETENTION WINDOW. The cache-break chain is inherently sequential: call N's
 // diff needs call N-1's flat blocks, so every call must be assembled. But only the calls the browser
 // is actually about to render need to KEEP their blocks. When a window is supplied, an out-of-window
@@ -270,7 +325,13 @@ export function assembleSession(records, opts = {}) {
       if (call.chainsPrefix !== false) prevFlat = flat;
       // Blocks kept only inside the retention window; `prevFlat` above still holds the real array, so
       // the NEXT call's diff is computed against the true baseline, not against an emptied one.
-      if (opts.keepFlat && !opts.keepFlat(call.gi)) { call.flat = []; call.paged_out = true; }
+      if (opts.keepFlat && !opts.keepFlat(call.gi)) { call.flat = []; call.paged_out = true; continue; }
+      // SHIP METADATA + A LOCATOR, NEVER THE BODY (RFC 4.2:55 「看全文=回源」 · 1.4:35 「点开惰性填正文」).
+      // Everything above this line needed the real text — the diff chain, the prefix sha-256, the
+      // byte weights — and all of it has now been computed. What leaves the process is the collapsed
+      // row plus a text_ref, and the body is fetched from the raw capture when a row is opened.
+      call.flat = withRefs(flat, call.rec);
+      call.rec = slimRec(call.rec);
     }
   }
   A.provider = 'cc';

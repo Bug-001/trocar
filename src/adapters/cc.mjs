@@ -253,6 +253,43 @@ export function parseBlocks(record) {
   return out;
 }
 
+// SPANS ONLY — the same walk as parseBlocks, stopping before the expensive part.
+//
+// The board needs each block's byte span so it can mint a text_ref and ship a LOCATOR instead of the
+// body (RFC 4.2:55 「看全文=回源」). It does NOT need what mkBlock does next: slicing the verbatim
+// text out of req_body and sha-256'ing it. Calling parseBlocks for spans would materialise every
+// block's text — the exact allocation the locator exists to avoid — so this returns the spans and
+// nothing else. Same spine, same nodeFor, so span[i] belongs to the same block as
+// linearContext()[i]; test/dissect/cc.test.mjs pins that the two projections stay block-for-block
+// aligned, which is what makes indexing by position sound.
+//
+// A null entry is a block whose bytes could not be located (malformed source). It stays null rather
+// than being filled with a guess: the row then says its body is unresolvable instead of showing
+// someone else's bytes (invariant 2/4).
+export function blockSpans(record) {
+  const src = reqSource(record);
+  let req;
+  try { req = JSON.parse(src) } catch { req = {} }
+  let root = null;
+  try { root = scanJson(src) } catch { root = null }
+  const props = root && root.kind === 'object' ? root.props : new Map();
+  const toolsNode = props.get('tools');
+  const sysNode = props.get('system');
+  const msgsNode = props.get('messages');
+  const nodeFor = (e) => {
+    if (e.section === 'tools') return toolsNode && toolsNode.kind === 'array' ? toolsNode.items[e.path.i] : null;
+    if (e.section === 'system') {
+      if (e.path.str) return sysNode;
+      return sysNode && sysNode.kind === 'array' ? sysNode.items[e.path.i] : null;
+    }
+    const mNode = msgsNode && msgsNode.kind === 'array' ? msgsNode.items[e.path.mi] : null;
+    const contentNode = mNode && mNode.kind === 'object' ? mNode.props.get('content') : null;
+    if (e.path.arrayContent) return contentNode && contentNode.kind === 'array' ? contentNode.items[e.path.bi] : null;
+    return contentNode && contentNode.kind === 'string' ? contentNode : null;
+  };
+  return dissectBlocks(req).map((e) => { const n = nodeFor(e); return n ? spanOf(n) : null });
+}
+
 // ── parseSession — delegates to 3.4 identity.parseSessionCC, adds the cwd column ──
 // parseSessionCC gives {native_id, native_id_confidence, parent(null; ETL resolves),
 // fork_of, forked_at, lane, entrypoint, title, extra}. The 3.1 shape also carries cwd,

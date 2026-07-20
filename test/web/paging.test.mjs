@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readRecords } from '../../src/etl/ingest.mjs';
-import { sessionView, pageView } from '../../src/view/board.mjs';
+import { sessionView, pageView, forWire } from '../../src/view/board.mjs';
+import { buildResolver } from '../../src/query/source.mjs';
 
 // BUG 1 (audit 2026-07-19) — THE SERVER IMPLEMENTS CURSOR PAGING; THE BROWSER NEVER CALLED IT.
 //
@@ -23,6 +24,41 @@ import { sessionView, pageView } from '../../src/view/board.mjs';
 //   D. a small session (the demo / the render-gate fixture) is UNCHANGED: one page holds it all.
 //   E. a window that lands outside what the server actually assembled self-corrects to the tail
 //      rather than rendering an all-paged_out (blank) board.
+//
+// UPDATED for the slim /api/session wire contract (2026-07-20). Paging and the slim wire are the two
+// halves of the same answer to "never ship a session whole", and this file now exercises BOTH,
+// because the board only ever sees them composed:
+//   - `analyzed.steps` is THE array of call objects; `analyzed.lanes[].calls` names them by `gi`
+//     NUMBER; `analyzed.streams` is gone. `forWire()` applies that encoding, `buildLanes()`
+//     re-hydrates it. sessionView() still returns SHARED REFERENCES in-process, so the harness must
+//     put its payload through forWire() or it would serve a shape no browser ever receives — and
+//     since buildLanes() tolerates both, that mistake is silent. `wireOf()` below does it, and
+//     test A asserts the payload really is gi-encoded so the re-hydration path cannot fall out of
+//     the test without a failure.
+//   - a block ships metadata + a `text_ref` locator instead of its body (RFC 1.4:35 / 4.2:55), so
+//     "the context window rendered" can no longer mean "the payload carried the text". D pins the
+//     block ROWS instead — that is what the user sees, and it is what a bodyless block must still
+//     produce — and then RESOLVES every locator back against the raw NDJSON (RFC 2.3 §验收1's
+//     「重建 … 逐字 diff = 0」), which is the only thing that makes a bodyless block honest.
+//
+// TWO ASSERTIONS HERE WERE DECORATION UNTIL 2026-07-20; mutation-checking found them, and both are
+// fixed above rather than left as passing decoration:
+//   - E polled TWICE (the module's boot poll + an explicit one). The second poll masks the defect
+//     entirely: by then the server's `total` has arrived and poll()'s own tail-aiming picks a valid
+//     cursor, so E passed with the self-correct DELETED. E now polls once — the first paint is the
+//     one that would be blank, and 1.5s of blank board is the bug.
+//   - F asserted only that the fetch count stops growing. A board frozen on an empty tail is just as
+//     quiet as one that converged (the cheap-signature guard suppresses re-fetching an unchanged
+//     cursor), so F passed with the "prefer the SERVER's total" rule deleted, pinned at cursor=840
+//     with returned=0. F now also asserts WHERE it settled.
+// Mutation log for this file (each confirmed RED, then restored): gi-encoding removed from onWire;
+// `streams` put back on the wire; buildLanes' gi→steps re-hydration removed; the block body kept
+// alongside its locator; the text_ref span shifted one byte; the locator dropped with no
+// `unaddressable` marker; the paged_out branch bypassed; cursor/limit dropped from the request URL;
+// the self-correct removed; the srvTotal preference removed. NOT independently covered: the
+// `pageReaimed` latch alone — with the srvTotal rule intact the cursor never alternates, so removing
+// the latch changes no observable behaviour here; only removing BOTH oscillates (and that hangs the
+// run outright).
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
@@ -41,14 +77,26 @@ async function fullView() {
 }
 const callCount = (v) => v.analyzed.lanes.reduce((n, l) => n + (l.calls || []).length, 0);
 
+// The WIRE shape. sessionView()/pageView() return the in-process view, whose `steps`,
+// `lanes[].calls` and `streams[].calls` are SHARED REFERENCES to the same call objects. The server
+// never serves that: /api/session sends `forWire(view)` (src/server.mjs:313), which drops `streams`
+// and rewrites every lane's calls to `gi` NUMBERS so each call crosses the wire once. buildLanes()
+// tolerates BOTH shapes, so a harness that skipped forWire would silently test a shape no browser
+// receives — and the re-hydration path would never be exercised. Everything the fake server hands
+// back goes through here.
+const wireOf = (v) => forWire(v);
+
 // A session LONGER than one page, built by repeating the REAL assembled calls (real `flat` blocks,
 // real `rec` bodies, real usage) with sequential `gi`. The demo capture is 8 calls; the defect only
 // bites past PAGE_LIMIT, and no committed fixture is that long.
+// `steps` is rebuilt from the SAME call objects, in gi order, exactly as analyze() produces it —
+// required now that the wire names lane calls by gi and the browser resolves them through `steps`.
+// A fixture that left the original 8-entry `steps` in place would re-hydrate to 8 calls out of 200.
 function bigView(v, n) {
   const lane = v.analyzed.lanes[0];
   const src = lane.calls;
   const calls = Array.from({ length: n }, (_, i) => ({ ...src[i % src.length], gi: i }));
-  return { ...v, analyzed: { ...v.analyzed, lanes: [{ ...lane, calls }] } };
+  return { ...v, analyzed: { ...v.analyzed, lanes: [{ ...lane, calls }], steps: calls } };
 }
 
 // ── DOM shim ────────────────────────────────────────────────────────────────────────────────
@@ -93,6 +141,7 @@ function harness({ view, serverLimit = null, totalCalls = null }) {
   globalThis.requestAnimationFrame = () => 0;
 
   const urls = [];
+  const served = []; // the exact wire payloads the fake server handed the board
   const PROJECTS = {
     projects: [{
       slug: 'P', name: 'P', path: '/p', last_ts: 'T1',
@@ -111,12 +160,14 @@ function harness({ view, serverLimit = null, totalCalls = null }) {
       const cursor = sp.get('cursor') == null ? 0 : Number(sp.get('cursor'));
       const limit = serverLimit != null ? serverLimit : (sp.get('limit') == null ? Infinity : Number(sp.get('limit')));
       const paged = sp.get('cursor') == null && sp.get('limit') == null ? view : pageView(view, { cursor, limit });
-      return Promise.resolve({ ok: true, json: () => Promise.resolve(paged) });
+      const wire = wireOf(paged); // what src/server.mjs:313 actually sends
+      served.push(wire);
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(wire) });
     }
     return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) });
   };
   const sessionUrls = () => urls.filter((u) => u.startsWith('/api/session'));
-  return { getEl, urls, sessionUrls };
+  return { getEl, urls, sessionUrls, served };
 }
 
 let loadSeq = 0;
@@ -150,6 +201,30 @@ test('A · /api/session is requested as a cursor/limit WINDOW, not as the whole 
     assert.match(u, /[?&]limit=\d+/, `board asked for an UNBOUNDED session: ${u}`);
     assert.match(u, /[?&]cursor=\d+/, `board asked without a cursor: ${u}`);
   }
+  // The payload really WAS the slim wire shape — otherwise the rest of this file would be exercising
+  // the in-process view (objects in lanes, `streams` present) that no browser ever receives, and the
+  // re-hydration path in buildLanes() would silently drop out of the test.
+  const wire = h.served[h.served.length - 1];
+  assert.equal(wire.analyzed.streams, undefined, '`streams` (the third copy of every call) is still on the wire');
+  const laneCalls = wire.analyzed.lanes.flatMap((l) => l.calls || []);
+  assert.ok(laneCalls.length > 0, 'the wire payload carried no lane calls at all');
+  for (const c of laneCalls) {
+    assert.equal(typeof c, 'number', `a lane shipped a whole call OBJECT instead of its gi: ${JSON.stringify(c).slice(0, 120)}`);
+  }
+  // …and the board re-hydrated them back into the SAME call objects `steps` carries. A gi-encoded
+  // wire that the browser cannot resolve renders an empty board, so both halves are pinned together.
+  assert.equal(M.anchor.calls.length, laneCalls.length, 'buildLanes() lost calls re-hydrating gi → step');
+  M.anchor.calls.forEach((c, i) => {
+    assert.equal(typeof c, 'object', 'a lane call stayed a bare gi number after re-hydration');
+    assert.equal(c.gi, laneCalls[i], `re-hydrated call ${i} resolved to the wrong step (gi ${c.gi} ≠ ${laneCalls[i]})`);
+    assert.ok(c.rec, 're-hydrated call lost its `rec` — the raw panel would render empty');
+  });
+  // The slim `rec` contract (2): the body is gone, the five fields the frontend reads are not.
+  const rec = M.anchor.calls.find((c) => !c.paged_out).rec;
+  assert.deepEqual(Object.keys(rec).sort(), ['id', 'request'], `\`rec\` still ships more than {id,request}: ${Object.keys(rec)}`);
+  assert.deepEqual(Object.keys(rec.request).sort(),
+    ['context_chars', 'message_count', 'model', 'system_chars', 'tool_count'],
+    `\`rec.request\` is not the slim five fields: ${Object.keys(rec.request)}`);
 });
 
 test('B · a paged_out call renders "not loaded on this page", never a blank/empty panel', async () => {
@@ -203,6 +278,111 @@ test('D · a small session is UNCHANGED — one page holds it, nothing renders a
   const html = h.getEl('ctxwin').innerHTML;
   assert.ok(/context @ call/.test(html), 'the demo context window stopped rendering');
   assert.ok(!/not loaded on this page/i.test(html), 'a fully-loaded call was mislabelled as paged out');
+  // A loaded call must render one ROW PER BLOCK. Under the slim wire the block carries no body — only
+  // metadata + a `text_ref` locator (RFC 1.4:35 / 4.2:55) — so "the context window rendered" can no
+  // longer be read off the payload carrying text. The rows are what the user sees, and a bodyless
+  // block MUST still produce its row: this is the assertion that fails if the slim block ever stops
+  // carrying enough metadata (sec/role/kind) to render a header.
+  const call = M.anchor.calls[0];
+  const rows = [...html.matchAll(/class="cblk /g)].length;
+  assert.ok(call.flat.length > 0, 'the demo call assembled no blocks — D is not exercising anything');
+  assert.equal(rows, call.flat.length,
+    `the context window rendered ${rows} block rows for ${call.flat.length} blocks`);
+  // And each row must be a real header, not a placeholder: role + tag come from the block's `head`.
+  for (const b of call.flat) {
+    assert.ok(b.head && b.head.role && b.head.tag, `block ${b.key} shipped without a renderable head`);
+    assert.ok(html.includes(`>${b.head.role}<`), `block role "${b.head.role}" never reached the DOM`);
+  }
+  // The slim contract, pinned at the block level: an addressable block ships a LOCATOR, not a body.
+  const addressable = call.flat.filter((b) => b.text_ref);
+  assert.ok(addressable.length > 0, 'no block carried a text_ref — the fixture is not on the new contract');
+  for (const b of addressable) {
+    assert.match(b.text_ref, /^[^/]+\/.+#.+::\d+-\d+$/, `malformed text_ref: ${b.text_ref}`);
+    for (const heavy of ['text', 'block', 'desc', 'schema', 'props']) {
+      assert.ok(!(heavy in b), `an addressable block still ships its body (\`${heavy}\`) alongside text_ref`);
+    }
+  }
+  // AC-1 ROUND-TRIP (RFC 2.3 §验收1): 「从 call_blocks + text_ref **重建**窗口全文,与 NDJSON 源该 call
+  // 的 system/messages 块逐字 diff = 0」. A well-formed-but-WRONG locator passes the regex above, so
+  // resolve every one back against the raw capture and diff bytes. This is the assertion that makes
+  // the bodyless block contract honest: the board stopped shipping the text on the promise that the
+  // locator can go get it, and only a resolve proves the promise. It is testable for the first time
+  // now that the locator ships at all — the old contract could only compare `b.text` to req_body,
+  // which never touched the source file.
+  // NOTE on lengths: a span addresses the RAW JSON of one block element in the request body, where
+  // the text is still JSON-escaped (`\n`, `\"`). `b.chars` counts the DECODED text the row renders.
+  // So the two are NOT equal, and asserting they are would be asserting a bug. The round-trip is:
+  // JSON.parse the resolved span (an off-by-one span does not parse), then re-derive the rendered
+  // text from the parsed block with the definition below — deliberately re-implemented here rather
+  // than imported from blockmeta.mjs, so the test cannot agree with the implementation by sharing
+  // its mistake — and diff that against the metadata the wire shipped.
+  const renderOf = (sec, o) => {
+    if (sec === 'tools') return (o.description || '') + (o.input_schema !== undefined ? JSON.stringify(o.input_schema) : '');
+    if (typeof o === 'string') return o;
+    if (o.type === 'text') return o.text || '';
+    if (o.type === 'thinking') return o.thinking || '';
+    if (o.type === 'tool_use' || o.type === 'server_tool_use') return `${o.name}(${JSON.stringify(o.input ?? {})})`;
+    if (o.type === 'tool_result') {
+      const c = o.content;
+      return typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => x.text || `[${x.type}]`).join('\n') : JSON.stringify(c ?? '');
+    }
+    return null; // a kind this test does not model — skip rather than assert a wrong expectation
+  };
+  const resolver = await buildResolver(DEMO);
+  let roundTripped = 0;
+  try {
+    for (const b of addressable) {
+      const got = resolver.detail(b.text_ref);
+      assert.equal(got.status, 'ok',
+        `block ${b.key} points at bytes the source cannot serve: ${got.status} — ${got.reason}`);
+      let parsed;
+      assert.doesNotThrow(() => { parsed = JSON.parse(got.text); },
+        `block ${b.key}'s span does not delimit one whole JSON block in the source — `
+        + `the locator is off: ${JSON.stringify(got.text.slice(0, 120))}`);
+      const rendered = renderOf(b.sec, parsed);
+      if (rendered == null) continue;
+      roundTripped++;
+      // 逐字 diff = 0 (RFC 2.3 §验收1): the text reconstructed FROM THE SOURCE is byte-identical to
+      // what the shipped metadata describes. A locator aimed at the wrong record or the wrong block
+      // resolves to real, parseable bytes — and fails right here.
+      assert.equal(rendered.length, b.chars,
+        `block ${b.key}: source round-trip gives ${rendered.length} chars, the wire claims ${b.chars}`);
+      // `preview` is whitespace-collapsed + trimmed before it is sliced (blockmeta.mjs `shorten`),
+      // so normalize the source side identically — comparing a raw prefix would fail on any block
+      // whose text contains a newline, which is most of them.
+      const prefix = String(b.preview);
+      const norm = rendered.replace(/\s+/g, ' ').trim();
+      assert.ok(norm.startsWith(prefix),
+        `block ${b.key}: the preview shipped on the wire is not a prefix of the bytes its text_ref `
+        + `resolves to — the locator names a DIFFERENT block.\n  preview: ${JSON.stringify(prefix.slice(0, 80))}`
+        + `\n  source:  ${JSON.stringify(norm.slice(0, 80))}`);
+      if (b.sec === 'tools') assert.equal(parsed.name, b.name, `block ${b.key} resolved to tool "${parsed.name}"`);
+    }
+    assert.ok(roundTripped >= 5,
+      `only ${roundTripped} blocks were round-tripped against the source — the AC-1 check is not exercising the fixture`);
+    // The window as a whole reconstructs: every addressable block's bytes come from the record this
+    // call was assembled from, in assembly order, with spans that do not overlap and do not go
+    // backwards. A resolver that returned plausible-looking bytes from the WRONG record fails here.
+    const spans = addressable
+      .filter((b) => b.text_ref.startsWith(b.text_ref.split('#')[0]))
+      .map((b) => {
+        const [, span] = b.text_ref.split('::');
+        const [s, e] = span.split('-').map(Number);
+        return { rec: b.text_ref.split('::')[0], s, e, key: b.key };
+      });
+    for (const sp of spans) assert.ok(sp.e > sp.s, `block ${sp.key} has an empty/inverted span ${sp.s}-${sp.e}`);
+    const byRec = spans.filter((sp) => sp.rec === spans[0].rec).sort((a, b2) => a.s - b2.s);
+    for (let i = 1; i < byRec.length; i++) {
+      assert.ok(byRec[i].s >= byRec[i - 1].e,
+        `blocks ${byRec[i - 1].key} and ${byRec[i].key} claim OVERLAPPING source spans `
+        + `(${byRec[i - 1].s}-${byRec[i - 1].e} vs ${byRec[i].s}-${byRec[i].e}) — the reconstruction would double-count bytes`);
+    }
+  } finally { resolver.dispose(); }
+  // …and a block is NEVER both bodyless and locator-less (invariant 4: unaddressable must say so).
+  for (const b of call.flat) {
+    if (b.text_ref) continue;
+    assert.ok(b.unaddressable, `block ${b.key} has neither a text_ref nor an \`unaddressable\` marker`);
+  }
 });
 
 test('E · a window past what the server assembled self-corrects instead of rendering blank', async () => {
@@ -211,9 +391,15 @@ test('E · a window past what the server assembled self-corrects instead of rend
   // while /api/session is tail-bounded server-side), so the tail window the board picks lands far
   // beyond anything the server assembled → returned:0 → an all-paged_out board unless it re-aims.
   const h = harness({ view: v, totalCalls: 900 });
+  // ONE POLL ONLY — loadModule() awaits the module's own boot poll, and this test deliberately does
+  // NOT add another. That is the whole defect: the FIRST paint is the one that would be blank. A
+  // second poll masks it, because by then `pageInfo.total` (8) has arrived and the tail-aiming in
+  // poll() picks a valid cursor on its own — so a test that polled twice passed with the
+  // self-correct deleted (verified 2026-07-20 by mutation). The user does not get a second poll for
+  // 1.5s, and a board that is blank for 1.5s on every large session is the bug.
   const M = await loadModule();
-  await M.poll();
   await settle();
+  assert.equal(h.sessionUrls().length >= 1, true, 'the boot poll never requested a session');
   assert.ok(M.anchor, 'board failed to render any lane');
   const loaded = M.anchor.calls.filter((c) => !c.paged_out).length;
   assert.ok(loaded > 0,
@@ -234,4 +420,15 @@ test('F · the re-aim SETTLES — it must not re-fire every poll (and must not k
   assert.equal(h.sessionUrls().length, settled,
     `the window is oscillating: 2 more polls added ${h.sessionUrls().length - settled} fetches ` +
     `(${JSON.stringify(h.sessionUrls().slice(settled))})`);
+  // …and it settled somewhere USEFUL. "No more fetches" is also true of a window that is stuck on an
+  // empty tail forever: the cheap-signature guard stops re-fetching a cursor that never changes, so a
+  // board frozen blank looks exactly as quiet as a board that converged. Mutation-checked 2026-07-20:
+  // removing the "prefer the SERVER's total" rule leaves the fetch count at 2 while pinning the window
+  // at cursor=840 with returned=0 — quiet, and permanently empty. Assert the destination, not just the
+  // silence.
+  assert.ok(M.pageInfo && M.pageInfo.returned > 0,
+    `the window settled on a page with NO calls (pageCur=${M.pageCur}, page=${JSON.stringify(M.pageInfo)}) — `
+    + 'quiet, but permanently blank');
+  assert.ok(M.anchor.calls.some((c) => !c.paged_out),
+    'every call is still paged_out after the window settled — the board converged on a blank view');
 });

@@ -8,6 +8,7 @@
 // RE-SERIALIZED, not the original wire bytes (demo stored parsed JSON), so AC-1 holds
 // against this converted source, NOT against the lost original wire. UI/README MUST label it.
 import { createReadStream } from 'node:fs';
+import { basename } from 'node:path';
 import { createInterface } from 'node:readline';
 
 // True D10 record → passthrough. Demo v0 record → convert. Anything else → passthrough.
@@ -65,7 +66,16 @@ export async function readRecords(filePath, { normalize = true, limit = Infinity
       continue;
     }
     scan.parsedLines++;
-    out.push(normalize ? normalizeRecord(raw) : raw);
+    const rec = normalize ? normalizeRecord(raw) : raw;
+    // Which FILE these bytes came from. A text_ref is `<session>/<stream>#<id>::<start>-<end>`
+    // (RFC 4.2:40) and the stream basename is the half that disambiguates: record ids are only
+    // unique within a capture file. The record itself never carries it — only the reader knows —
+    // so stamp it here, non-enumerably: invisible to JSON.stringify, so no stored or shipped shape
+    // changes, but available to anything that has to mint a locator back to these bytes.
+    if (rec && typeof rec === 'object' && !Object.prototype.hasOwnProperty.call(rec, '_stream')) {
+      Object.defineProperty(rec, '_stream', { value: basename(filePath), enumerable: false, configurable: true });
+    }
+    out.push(rec);
     if (out.length >= limit) { rl.close(); break; } // bounded read (e.g. the self-test samples a head)
   }
   Object.defineProperty(out, 'scan', { value: scan, enumerable: false, configurable: true });

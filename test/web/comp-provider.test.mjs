@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { boardFlat } from '../../src/dissect/openai.mjs';
 import { linearContext } from '../../src/view/analyze.mjs';
 import { readRecords } from '../../src/etl/ingest.mjs';
-import { sessionView } from '../../src/view/board.mjs';
+import { sessionView, forWire } from '../../src/view/board.mjs';
 
 // BUG 2 (audit 2026-07-19) — PROVIDER KNOWLEDGE LEAKED INTO THE BROWSER (invariant 3 / AC-3).
 //
@@ -21,6 +21,20 @@ import { sessionView } from '../../src/view/board.mjs';
 //
 // The fix is to compute composition over `s.flat` only, so the browser holds ZERO provider
 // knowledge and one code path lights the bars for every harness at once.
+//
+// 2026-07-20 — RE-PINNED AGAINST THE SLIMMED /api/session WIRE CONTRACT.
+// Two things moved under this file:
+//  (a) a lane no longer carries call OBJECTS. `analyzed.steps` is the one array of calls (gi order);
+//      `analyzed.lanes[].calls` is an array of `gi` NUMBERS, and the browser re-hydrates in
+//      buildLanes(). The transform lives in forWire() (board.mjs::onWire) — sessionView() keeps its
+//      shared references — so the real-capture tests below go through forWire() and then re-hydrate
+//      exactly the way index.html does; feeding a lane's raw wire entry to callComp() would hand it
+//      the number 12, not the call.
+//  (b) a block on the wire is METADATA + a `text_ref`, not a body: `text` / `block` / `desc` /
+//      `schema` are deleted and the block's weight is pre-computed server-side into `b.bytes`
+//      (src/view/blockmeta.mjs::blockBytes, ported verbatim from the browser's flatBytes()).
+// (b) is what the real-capture tests exercise, and it is the reason the last one is RED: see the
+// note above them.
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
@@ -108,6 +122,45 @@ async function loadModule() {
 
 const nonZero = (c) => Object.entries(c).filter(([, v]) => v > 0).map(([k]) => k).sort();
 
+// The `analyzed` the BROWSER actually receives. sessionView() keeps shared references in-process;
+// forWire() is the wire transform (drops `streams`, replaces each lane's calls with `gi` numbers),
+// and JSON round-tripping it is what the board really parses. Calling sessionView() alone would
+// hand callComp() richer objects than any browser ever sees — the exact way an end-to-end test
+// decays into a unit test of something the product does not do.
+// Returns BOTH halves: the in-process view (shared references — lanes hold call objects) and the
+// JSON the browser parses. The pair is what makes the re-hydration check below meaningful.
+function wireOf(recs, sid) {
+  const view = sessionView(recs, sid, { maxBytes: 0 });
+  return { view, A: JSON.parse(JSON.stringify(forWire(view))).analyzed };
+}
+
+// Re-hydrate lanes the way the browser does (index.html::buildLanes): a lane names its calls by
+// `gi`, the objects live once in `analyzed.steps`. Kept behaviourally equivalent to buildLanes so a
+// change to the wire shape breaks BOTH, instead of this test quietly diverging from the板.
+function hydrateLanes(A) {
+  const steps = A.steps || [];
+  return (A.lanes || []).map((l) => ({
+    ...l,
+    calls: (l.calls || []).map((c) => (typeof c === 'number' ? steps[c] : c)).filter(Boolean),
+  }));
+}
+
+// The re-hydration above is only sound if a lane's `gi` numbers select THE SAME calls the lane held
+// in-process. An index shift would silently attribute every composition bar to a neighbouring call —
+// which no bucket assertion below could ever notice, because the neighbour's bar looks plausible.
+// So compare the round-trip against the in-process view, call identity by call identity. (Checking
+// `steps[gi].gi === gi` alone is NOT enough: a uniform off-by-one satisfies it trivially.)
+function assertRehydratesToTheSameCalls(A, inProcess) {
+  const raw = (A.lanes || []).flatMap((l) => l.calls || []);
+  assert.ok(raw.length > 0, 'session has no lane calls at all');
+  assert.ok(raw.every((c) => typeof c === 'number'),
+    'lanes[].calls must cross the wire as gi NUMBERS (one copy of each call, in analyzed.steps)');
+  const idsOf = (lanes) => lanes.map((l) => (l.calls || []).map((c) => `${c.gi}:${c.id}`));
+  assert.deepEqual(idsOf(hydrateLanes(A)), idsOf(inProcess.analyzed.lanes || []),
+    're-hydrating lanes by gi does not reproduce the in-process lanes — the board would render each '
+    + "call's bar against another call's context");
+}
+
 test('composition bar lights up for an OpenAI-Responses call (blank bar = invariant-3 leak)', async () => {
   const M = await loadModule();
   const call = { rec: { request: OA_REQ }, flat: boardFlat(OA_REQ) };
@@ -146,12 +199,34 @@ test('composition is computed from s.flat, not from the request body', async () 
   assert.deepEqual(viaFlat, viaBody, 'callComp still depends on provider-specific request fields');
 });
 
-// ── REAL captured OpenAI traffic (not only the synthetic shape above) ────────────────────────
+// ── REAL captured traffic, THROUGH THE WIRE SHAPE (not only the synthetic full-body blocks above) ──
+//
+// These two are the end-to-end half of this file: sessionView() → the exact `analyzed` the browser
+// receives → the browser's own callComp(). They are the only assertions here that see a SLIMMED
+// block (metadata + text_ref, `text`/`block`/`desc`/`schema` deleted), and that is deliberate — the
+// synthetic cases above hand callComp() full-bodied blocks it will never actually be given.
+//
+// Only the CC path is slimmed today: assembleSession() dispatches to assembleOpenai() for an
+// OpenAI/Codex session and that branch returns BEFORE withRefs()/slimRec() (src/view/assemble.mjs),
+// so the OpenCode test below still sees full-bodied blocks and a whole `rec`. That is a gap in the
+// payload fix, not something this file asserts — it is why test 5 is green and test 6 is not.
+//
+// TEST 6 IS CURRENTLY RED, AND THE DEFECT IS IN src/web/index.html, NOT HERE.
+// index.html::flatBytes() still weighs a block by re-reading its body (`b.text`, `b.block.text`,
+// `b.block.thinking`, `b.desc`/`b.schema`) — all of which slimBlock() now deletes. The server
+// already ships the answer as `b.bytes` (blockmeta.mjs::blockBytes, ported verbatim from this very
+// function precisely so "the numbers must not move"), but the browser never reads it. Measured on
+// samples/demo-session.ndjson's last call: flatBytes() totals 20 bytes across 27 blocks where the
+// truth is 2830 — every non-tools bucket scores 0, so the bar renders as one solid colour. That is
+// the SAME failure mode this file was written to prevent (BUG 2), re-introduced from the other side:
+// not provider knowledge in the browser this time, but body-shape knowledge about a body that is no
+// longer there. Fixing flatBytes to prefer the pre-computed `b.bytes` turns both tests green.
 test('real OpenCode capture: every call renders a multi-colour bar', { skip: !fs.existsSync(OPENCODE) && 'no local opencode capture' }, async () => {
   const M = await loadModule();
   const recs = await readRecords(OPENCODE, { normalize: false });
-  const v = sessionView(recs, 'ses_08aa59b0cffehiYOnFojwsNWWO', { maxBytes: 0 });
-  const calls = v.analyzed.lanes.flatMap((l) => l.calls || []);
+  const { view, A } = wireOf(recs, 'ses_08aa59b0cffehiYOnFojwsNWWO');
+  assertRehydratesToTheSameCalls(A, view);
+  const calls = hydrateLanes(A).flatMap((l) => l.calls || []);
   assert.ok(calls.length >= 4, 'fixture session should have several calls');
   // the richest call (the last one) must show tools + system + user + assistant + thinking +
   // tool_use + tool_result — the real reason the user sees "one solid colour".
@@ -166,9 +241,14 @@ test('real OpenCode capture: every call renders a multi-colour bar', { skip: !fs
 test('real demo (Anthropic) capture: bars stay multi-colour', async () => {
   const M = await loadModule();
   const recs = await readRecords(path.join(ROOT, 'samples', 'demo-session.ndjson'), { normalize: false });
-  const v = sessionView(recs, 'demo-0000-4a1b-9c2d-000000000001', { maxBytes: 0 });
-  const calls = v.analyzed.lanes.flatMap((l) => l.calls || []);
+  const { view, A } = wireOf(recs, 'demo-0000-4a1b-9c2d-000000000001');
+  assertRehydratesToTheSameCalls(A, view);
+  const calls = hydrateLanes(A).flatMap((l) => l.calls || []);
   const last = calls[calls.length - 1];
+  // The blocks reaching callComp() here MUST be the slimmed wire shape — otherwise this test would
+  // be re-testing the synthetic cases above and would stop covering the板's real input.
+  assert.ok(last.flat.some((b) => b.text_ref) && last.flat.every((b) => b.text === undefined && b.block === undefined),
+    'expected slimmed, body-less blocks on the wire (metadata + text_ref)');
   const c = M.callComp(last);
   for (const k of ['tools', 'system', 'user']) {
     assert.ok(c[k] > 0, `demo capture: bucket "${k}" empty; lit=${JSON.stringify(nonZero(c))}`);

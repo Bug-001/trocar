@@ -24,7 +24,7 @@ test.before(async () => {
 });
 test.after(() => srv?.close());
 
-test('BOARD /api/projects + /api/session: canonical, no provider-native usage leak, no-store', async () => {
+test('BOARD /api/projects + /api/session: canonical, baked neutral usage, one copy per call, no-store', async () => {
   const pj = JSON.parse((await get(port, '/api/projects')).body);
   assert.ok(pj.projects.length >= 1);
   const s = await get(port, `/api/session?id=${MAIN}`);
@@ -32,9 +32,67 @@ test('BOARD /api/projects + /api/session: canonical, no provider-native usage le
   assert.equal(s.headers['cache-control'], 'no-store');
   const d = JSON.parse(s.body);
   assert.ok(d.analyzed && d.analyzed.lanes && d.meta && Array.isArray(d.records));
-  // baked neutral usage on calls; NO provider-native usage names anywhere in the payload's baked fields
+
+  // ONE COPY PER CALL ON THE WIRE (src/view/board.mjs::onWire). analyze() puts the same call object
+  // in `steps`, `lanes[].calls` and `streams[].calls`; JSON has no references, so it used to write
+  // each call three times. On the wire now: `steps` is THE array of call objects, a lane names its
+  // calls by `gi`, and `streams` is dropped. (In-process sessionView() still shares references — a
+  // test that calls it directly sees objects in lanes; this one reads HTTP, so it sees numbers.)
+  assert.ok(Array.isArray(d.analyzed.steps) && d.analyzed.steps.length > 0);
+  assert.equal(d.analyzed.streams, undefined, '`streams` is dropped on the wire (nothing reads it)');
   const main = d.analyzed.lanes.find((l) => l.kind === 'main');
-  assert.ok(main.calls.some((c) => c.usage && 'read' in c.usage), 'calls carry baked neutral usage');
+  assert.ok(main.calls.length > 0);
+  assert.ok(main.calls.every((c) => typeof c === 'number'), 'a lane names its calls by gi, not by value');
+  // …and the gi index really addresses the call it claims to (this is what buildLanes() re-hydrates
+  // through; an off-by-one here would silently repaint the whole timeline with the wrong calls).
+  const byGi = new Map(d.analyzed.steps.map((c) => [c.gi, c]));
+  const mainCalls = main.calls.map((gi) => {
+    const c = byGi.get(gi);
+    assert.ok(c, `lane gi ${gi} re-hydrates to a call in steps`);
+    return c;
+  });
+  // no call object is duplicated across the lanes — each crosses the wire exactly once
+  const laneGis = d.analyzed.lanes.flatMap((l) => l.calls);
+  assert.equal(new Set(laneGis).size, laneGis.length, 'each call is named by exactly one lane');
+
+  // ORIGINAL GUARD, unchanged in strength: the re-hydrated calls carry BAKED NEUTRAL usage
+  // (read/create/fresh/out), so the browser never has to know a provider's native usage names.
+  assert.ok(mainCalls.some((c) => c.usage && 'read' in c.usage), 'calls carry baked neutral usage');
+  for (const c of mainCalls) {
+    if (!c.usage) continue;
+    for (const k of Object.keys(c.usage)) {
+      assert.ok(['read', 'create', 'fresh', 'out'].includes(k), `neutral usage key, got ${k}`);
+    }
+  }
+
+  // `call.rec` IS SLIMMED (no raw request body on the wire — ~120 MB of a measured 142.8 MB payload
+  // was request bodies re-sent every turn). Only the fields the frontend actually reads survive.
+  const withRec = d.analyzed.steps.filter((c) => c.rec);
+  assert.ok(withRec.length > 0);
+  for (const c of withRec) {
+    assert.deepEqual(Object.keys(c.rec).sort(), ['id', 'request']);
+    for (const k of Object.keys(c.rec.request)) {
+      assert.ok(['model', 'context_chars', 'message_count', 'tool_count', 'system_chars'].includes(k),
+        `rec.request carries only counts, got ${k}`);
+    }
+    assert.ok(!('messages' in c.rec.request) && !('system' in c.rec.request), 'no request body on the wire');
+  }
+
+  // A BLOCK IS NEVER BOTH BODYLESS AND LOCATOR-LESS (invariant 4). Either it ships a `text_ref`
+  // locator into the raw capture (「看全文=回源」, RFC 4.2:55) with the heavy fields removed, or —
+  // for records like this fixture, whose original wire bytes are genuinely gone (parsed `request`
+  // was stored, so no span is computable) — it keeps its body AND says so via `unaddressable`.
+  const blocks = d.analyzed.steps.flatMap((c) => c.flat || []);
+  assert.ok(blocks.length > 0);
+  for (const b of blocks) {
+    const hasBody = b.text != null || b.block != null || b.desc != null || b.schema != null || b.props != null;
+    assert.ok(b.text_ref || hasBody, 'a block is never both bodyless and locator-less');
+    if (!b.text_ref) assert.ok(b.unaddressable, 'an inlined block is labelled as not resolved from the capture');
+    if (b.text_ref) assert.match(b.text_ref, /^[^/]+\/[^#]+#.+::\d+-\d+$/, 'locator is <session>/<stream>#<recordId>::<start>-<end>');
+    // metadata the row renders from is present either way
+    assert.equal(typeof b.kind, 'string');
+    assert.equal(typeof b.chars, 'number');
+  }
 });
 
 test('D14 /api/pricing: editable config served (defaults present)', async () => {

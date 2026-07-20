@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
 import { createServer } from '../../src/server.mjs';
+import { buildResolver } from '../../src/query/source.mjs';
 
 // THE BUG THE USER HIT, END TO END: "这个session明明对话很多，但只显示两个step？"
 //
@@ -24,6 +25,17 @@ import { createServer } from '../../src/server.mjs';
 //      board-module level passes while the product stays broken, which is exactly how this shipped.
 //
 // So this test drives the REAL HTTP endpoint against a session far larger than the byte budget.
+//
+// 2026-07-20 — THE WIRE CONTRACT UNDER THIS TEST CHANGED; the bug it guards did not.
+//   a) `analyzed.steps` is now THE array of call objects; `analyzed.lanes[].calls` carries `gi`
+//      NUMBERS and the browser re-hydrates in buildLanes(). `analyzed.streams` is gone. So this
+//      file re-hydrates exactly the way the board does (`lane()` below) and keeps asserting over
+//      call objects — the timeline it checks is still the timeline the user sees.
+//   b) A windowed call's blocks no longer carry their body: each ships metadata + a `text_ref`
+//      locator into the raw capture (RFC 4.2:55 「表里不留全文(存 text_ref)」). "Only the window
+//      carries bodies" therefore became "only the window carries BLOCKS", and the body assertion
+//      was upgraded to the check RFC 2.3 §验收1 actually asks for: resolve the locator back
+//      against the NDJSON source and diff the bytes = 0.
 
 const HERE = path.dirname(new URL(import.meta.url).pathname);
 const N = 40;                                  // calls
@@ -74,6 +86,34 @@ const get = (port, p) => new Promise((resolve, reject) => {
   req.on('error', reject); req.end();
 });
 
+// Re-hydrate lane 0 the way the browser does (buildLanes): a lane names its calls by `gi`, and the
+// call objects themselves live once, in `analyzed.steps`. Asserting on the raw gi numbers instead
+// would stop checking that the timeline's calls EXIST — which is the whole bug — so we resolve them.
+function lane(d, i = 0) {
+  const byGi = new Map(d.analyzed.steps.map((c) => [c.gi, c]));
+  assert.equal(d.analyzed.streams, undefined, 'wire contract: `streams` is dropped, nothing reads it');
+  return d.analyzed.lanes[i].calls.map((gi) => {
+    assert.equal(typeof gi, 'number', 'wire contract: a lane names its calls by gi, not by copying them');
+    const c = byGi.get(gi);
+    assert.ok(c, `lane names call #${gi}, but no such call is on the wire — the timeline cannot draw it`);
+    return c;
+  });
+}
+
+// The NDJSON source, read straight off disk — the only source of truth (invariant 2). The file is
+// ~160 MB, so the one raw body a round-trip needs is cached rather than re-read per assertion.
+const bodyCache = new Map();
+function rawBodyOf(gi) {
+  if (!bodyCache.has(gi)) {
+    const buf = fs.readFileSync(FIXTURE);      // Buffer, never one giant JS string (V8 caps at 512 MB)
+    let from = 0;
+    for (let n = 0; n < gi; n++) from = buf.indexOf(0x0a, from) + 1;
+    const end = buf.indexOf(0x0a, from);
+    bodyCache.set(gi, JSON.parse(buf.toString('utf8', from, end)).req_body);
+  }
+  return bodyCache.get(gi);
+}
+
 let srv, port, prevBudget;
 test.before(async () => {
   prevBudget = process.env.ASIGHT_SESSION_MAX_MB;
@@ -91,12 +131,12 @@ test.after(() => {
 test('unpaged: a session over the budget is still tail-bounded, and says so', async () => {
   const d = JSON.parse((await get(port, `/api/session?id=${SID}`)).body);
   assert.ok(d.truncated, 'an unpaged over-budget session must disclose that it was cut (invariant 4)');
-  assert.ok(d.analyzed.lanes[0].calls.length < N, 'precondition: the byte budget really does bite here');
+  assert.ok(lane(d).length < N, 'precondition: the byte budget really does bite here');
 });
 
-test('paged: the WHOLE session is on the timeline, and only the window carries bodies', async () => {
+test('paged: the WHOLE session is on the timeline, and only the window carries blocks', async () => {
   const d = JSON.parse((await get(port, `/api/session?id=${SID}&cursor=0&limit=5`)).body);
-  const steps = d.analyzed.lanes[0].calls;   // `steps` no longer crosses the wire (forWire)
+  const steps = lane(d);   // lanes carry gi numbers on the wire; re-hydrated exactly as buildLanes does
 
   assert.equal(steps.length, N,
     `the timeline shows ${steps.length} of ${N} calls. This is the reported bug: a session with `
@@ -112,13 +152,66 @@ test('paged: the WHOLE session is on the timeline, and only the window carries b
     assert.equal(typeof c.ctx, 'number', 'every call keeps the cheap meta the timeline draws from');
     assert.ok(c.usage && 'read' in c.usage, 'every call keeps its usage, so the cache band is complete');
   }
+
+  // The out-of-window calls must be slim in the way that actually costs bytes: no blocks, and no
+  // copy of the request body hiding under `rec`. Asserting only `flat.length === 0` above would
+  // still pass with the 120 MB of request bodies that made this endpoint 500.
+  for (const c of steps.slice(5)) {
+    assert.equal(c.flat.length, 0, `call #${c.gi} is outside the window and must ship no blocks`);
+    assert.equal(c.rec.request.messages, undefined,
+      `call #${c.gi} ships a full copy of its request body under rec.request — the payload never shrank`);
+    assert.equal(c.paged_out, true, 'invariant 4: a body that was not shipped must say so in place');
+  }
+  // …and the IN-window calls are bodyless too: a block ships metadata + a locator, never its text.
+  for (const b of steps[2].flat) {
+    assert.equal(b.text, undefined, 'RFC 4.2:55 — a block on the wire carries no full text');
+    assert.ok(b.text_ref || b.unaddressable,
+      'a block is never both bodyless and locator-less: it resolves from the capture, or says why not');
+  }
+});
+
+// RFC 2.3 §验收1: 「从 call_blocks + block_contents + text_ref **重建**窗口全文,与 NDJSON 源该 call 的
+// system/messages 块逐字 diff = 0」. Now that the wire ships locators rather than text, this endpoint
+// can finally be held to the acceptance criterion itself: take the blocks the board received, resolve
+// each locator back against the raw capture, and diff the bytes against the source request.
+test('paged: the window rebuilds byte-for-byte from the capture through its text_refs', async () => {
+  const d = JSON.parse((await get(port, `/api/session?id=${SID}&cursor=10&limit=3`)).body);
+  const calls = lane(d).filter((c) => c.flat && c.flat.length);
+  assert.deepEqual(calls.map((c) => c.gi), [9, 10, 11, 12], 'precondition: window + diff baseline');
+
+  const resolve = await buildResolver(FIXTURE);
+  try {
+    for (const c of calls) {
+      const raw = rawBodyOf(c.gi);                       // the exact bytes on disk for this call
+      const src = JSON.parse(raw);
+      const expected = [
+        ...src.system,
+        ...src.messages.flatMap((m) => m.content),
+      ];
+      const got = c.flat.filter((b) => b.sec === 'system' || b.sec === 'messages');
+      assert.equal(got.length, expected.length,
+        `call #${c.gi}: the board received ${got.length} system/message blocks for ${expected.length} in the source`);
+      got.forEach((b, i) => {
+        const out = resolve.detail(b.text_ref);
+        assert.equal(out.status, 'ok',
+          `call #${c.gi} block ${i}: text_ref "${b.text_ref}" does not resolve (${out.reason}) — the board `
+          + 'cannot show the full text at all, which is what shipping a locator instead of the body buys');
+        // diff = 0, twice over: the resolved slice is a VERBATIM substring of the source line, and it
+        // decodes to exactly the source content block. Either alone would pass on a mis-aimed span.
+        assert.ok(raw.includes(out.text),
+          `call #${c.gi} block ${i}: the resolved bytes are not a verbatim slice of the NDJSON req_body`);
+        assert.deepEqual(JSON.parse(out.text), expected[i],
+          `call #${c.gi} block ${i}: the span names the wrong bytes — rebuilt content ≠ source content`);
+      });
+    }
+  } finally { resolve.dispose && resolve.dispose(); }
 });
 
 test('paged: the response scales with the WINDOW, not with the session', async () => {
   const r5 = await get(port, `/api/session?id=${SID}&cursor=30&limit=5`);
   const d5 = JSON.parse(r5.body);
-  assert.equal(d5.analyzed.lanes[0].calls.length, N, 'the full timeline is present at any cursor');
-  const fat = d5.analyzed.lanes[0].calls.filter((c) => c.flat && c.flat.length).map((c) => c.gi);
+  assert.equal(lane(d5).length, N, 'the full timeline is present at any cursor');
+  const fat = lane(d5).filter((c) => c.flat && c.flat.length).map((c) => c.gi);
   assert.deepEqual(fat, [29, 30, 31, 32, 33, 34], 'the window plus its diff baseline (#29)');
 
   // The bound that matters is proportionality: doubling the window should roughly double the payload,
@@ -131,6 +224,17 @@ test('paged: the response scales with the WINDOW, not with the session', async (
   assert.ok(ratio > 1.4 && ratio < 2.6,
     `a 10-wide window is ${ratio.toFixed(2)}× a 5-wide one; expected roughly 2×. Far below means the `
     + 'window is not what determines the payload; far above means something scales super-linearly.');
+
+  // …and an ABSOLUTE ceiling, which only the locator contract can satisfy: the whole 5-call window
+  // response must be smaller than the context of ONE call it displays. (Proportionality alone stays
+  // true even if every body came back — both windows would just be enormous. This is the assertion
+  // that fails the moment `text` or a request body creeps back onto the wire.)
+  const shown = lane(d5).find((c) => c.gi === 34);
+  const oneContext = shown.rec.request.context_chars;
+  assert.ok(oneContext > 5e6, `precondition: call #34 carries a huge context (got ${oneContext} chars)`);
+  assert.ok(bytes(d5) < oneContext,
+    `a 5-call window costs ${bytes(d5)} bytes, more than the ${oneContext}-char context of a single call `
+    + 'it displays — blocks are shipping their text instead of a text_ref into the capture (RFC 4.2:55).');
 });
 
 test('paged: cache-break analysis is computed against the TRUE previous call, not the page edge', async () => {
@@ -142,8 +246,10 @@ test('paged: cache-break analysis is computed against the TRUE previous call, no
   // measuring V8's string ceiling, not the cache-break chain.
   const whole = JSON.parse((await get(port, `/api/session?id=${SID}&cursor=20&limit=20`)).body);
   const deep = JSON.parse((await get(port, `/api/session?id=${SID}&cursor=30&limit=5`)).body);
+  const wide = lane(whole), narrow = lane(deep);
   for (const gi of [30, 31, 32]) {
-    const a = whole.analyzed.lanes[0].calls[gi].cacheBreak, b = deep.analyzed.lanes[0].calls[gi].cacheBreak;
+    const a = wide[gi].cacheBreak, b = narrow[gi].cacheBreak;
+    assert.ok(a && b, `call #${gi}: cacheBreak is missing from one of the windows`);
     assert.equal(b.idx, a.idx, `call #${gi}: the break index changed with the window`);
     assert.equal(b.cause, a.cause, `call #${gi}: the break CAUSE changed with the window`);
     assert.equal(b.prefixSha256, a.prefixSha256, `call #${gi}: the verbatim prefix hash changed with the window`);

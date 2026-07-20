@@ -520,6 +520,34 @@ export function analyze(records) {
     }
   }
 
+  // ── events keep their SHAPE, not a second copy of the session's text ─────────
+  //
+  // userEvents() / observationEvents() above build each event around the FULL user message or the
+  // FULL tool_result. That text is the heaviest thing in a session and it is already carried, once,
+  // as blocks — so every event was a verbatim second copy, uncapped and with no locator. Measured on
+  // a 40-call fixture it was 7.8 MB of a 10.1 MB response; and because events are not indexed by the
+  // page window, paging did not shrink them at all (a 10-wide window came out 1.04× a 5-wide one).
+  //
+  // Nothing reads that text after this point. Inside analyze() the only event field consulted later
+  // is `input.prompt`, for subagent spawn-linking above — which is why this runs AFTER that loop.
+  // The board renders one event kind (`grep -n '\.events' src/web/index.html` → :1739, filtered to
+  // compaction / summarize) and those carry no `text` at all.
+  //
+  // Invariant 4: the body is not silently emptied. `preview` + `chars` are what the collapsed row
+  // shows anyway, and `text_omitted` states in place that the full text lives on this step's blocks —
+  // an event is derived from them and owns no byte span of its own, so there is no honest locator to
+  // mint here.
+  for (const s of streams) {
+    for (const e of s.events) {
+      if (typeof e.text !== 'string') continue
+      const full = e.text
+      delete e.text
+      e.preview = full.replace(/\s+/g, ' ').trim().slice(0, 200)
+      e.chars = full.length
+      e.text_omitted = 'derived event — full text is not shipped here; read it from this step\'s blocks'
+    }
+  }
+
   // ── lanes: a per-session view model the UI can tab between ───────────────────
   const lanes = streams.slice()
     .sort((a, b) => (LANE_ORDER[a.kind] - LANE_ORDER[b.kind]) || String(a.id).localeCompare(String(b.id)))

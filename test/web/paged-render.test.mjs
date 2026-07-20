@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sessionView } from '../../src/view/board.mjs';
+import { sessionView, forWire } from '../../src/view/board.mjs';
 
 // THE CONTRACT THIS PINS: paging is a TRANSPORT concern. Which calls' bodies happen to be on the
 // current page must never change a single number the board reports about a call that IS on it.
@@ -24,6 +24,15 @@ import { sessionView } from '../../src/view/board.mjs';
 // apart, and only `paged_out` distinguishes them. So this drives the REAL module twice over the SAME
 // call — once with the whole session sent, once with that call's predecessor paged out — and demands
 // the rendered diff agree. Rendering against the sample means it runs on a fresh clone.
+//
+// UPDATED for the one-copy-per-call wire contract (2026-07-20). The board no longer receives the
+// in-process view: `/api/session` sends `forWire(view)`, in which `analyzed.steps` is THE array of
+// call objects, `analyzed.lanes[].calls` names them by `gi` NUMBER, and `streams` is gone. So both
+// payloads here are put through `forWire` + a JSON round-trip — exactly the bytes the browser parses
+// — and buildLanes() has to re-hydrate them. That is strictly stronger than rendering the in-process
+// object: it also catches a paged view whose lanes lose their gi naming (which would leave the board
+// with call objects that have no `ts`/`gi` at all, i.e. an empty timeline) and a wire projection that
+// drops `steps` (which would leave every lane hydrating to nothing). Both were live defects.
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
@@ -95,21 +104,32 @@ async function renderAt(payload, at) {
   return globalThis.__PR_OUT__;
 }
 
+// What the browser actually parses: the wire projection, serialized and re-parsed.
+const wire = (view) => JSON.parse(JSON.stringify(forWire(view)));
+
 const full = sessionView(records, SID);
 const AT = full.analyzed.steps.length - 1;   // last call — the first call of a 1-wide window at the end
 
 test('the step-diff at a page boundary is identical to the unpaged one', async () => {
   // The tightest possible window: it DISPLAYS one call, so `AT` sits on a boundary where the diff
   // used to be computed against nothing.
-  const paged = sessionView(records, SID, { page: { cursor: AT, limit: 1 } });
-  const calls = paged.analyzed.lanes[0].calls;
+  const paged = wire(sessionView(records, SID, { page: { cursor: AT, limit: 1 } }));
+  // On the wire a call object exists ONCE, in `steps`; the lane names it by gi. Assert both halves,
+  // because the render below can only find the call at all if the pair still lines up.
+  const calls = paged.analyzed.steps;
+  const laneCalls = paged.analyzed.lanes[0].calls;
+  assert.ok(laneCalls.length && laneCalls.every((c) => typeof c === 'number'),
+    'a lane must name its calls by gi NUMBER — objects here mean the wire is carrying every call '
+    + 'twice again, and a paged lane that lost its gi hydrates to calls with no ts at all');
+  assert.deepEqual(laneCalls, calls.map((c) => c.gi),
+    'the lane\'s gi list must index `steps` positionally — buildLanes() re-hydrates by steps[gi]');
   assert.equal(calls[AT].paged_out, undefined, 'precondition: the displayed call is on the page');
   assert.equal(calls[AT - 1].paged_out, undefined,
     'a page must ship the call BEFORE its window — that call is the diff baseline, and without it '
     + 'the first step of every page can say nothing about what changed');
   assert.equal(calls[AT - 2].paged_out, true, 'precondition: paging is otherwise still in effect');
 
-  const a = await renderAt(full, AT);
+  const a = await renderAt(wire(full), AT);
   const b = await renderAt(paged, AT);
 
   assert.ok(a.blocks > 0, 'sanity: the unpaged render produced context blocks');
@@ -126,11 +146,11 @@ test('the step-diff at a page boundary is identical to the unpaged one', async (
 // silent diff against an empty context. This asserts BOTH halves: no invented ◆new, and the reason
 // said out loud (invariant 4).
 test('a genuinely missing baseline is reported, not silently diffed against nothing', async () => {
-  const paged = JSON.parse(JSON.stringify(sessionView(records, SID, { page: { cursor: AT, limit: 1 } })));
-  for (const arr of [paged.analyzed.steps, paged.analyzed.lanes[0].calls]) {
-    arr[AT - 1] = { ...arr[AT - 1], paged_out: true, flat: [] };
-  }
-  const a = await renderAt(full, AT);
+  const paged = wire(sessionView(records, SID, { page: { cursor: AT, limit: 1 } }));
+  // One edit is enough now: on the wire the call object lives only in `steps`, and the lane points at
+  // it by gi. (It used to take two edits, one per copy of the same object.)
+  paged.analyzed.steps[AT - 1] = { ...paged.analyzed.steps[AT - 1], paged_out: true, flat: [] };
+  const a = await renderAt(wire(full), AT);
   const b = await renderAt(paged, AT);
 
   assert.equal(b.blocks, a.blocks, 'the displayed call itself still renders in full');

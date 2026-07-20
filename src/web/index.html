@@ -824,7 +824,14 @@ function buildLanes(A,probes){
   // D18a Option-2: `analyzed` arrives as JSON from the server, so each lane's giLocal (a Map in
   // analyze()) deserialized to {}. Rebuild it here from the lane's calls (a pure derived index —
   // no provider logic) so the reused render code gets its Map back.
-  const ls=(A.lanes||[]).map(l=>({...l,giLocal:new Map((l.calls||[]).map((c,i)=>[c.gi,i]))}))
+  // A lane names its calls by `gi`; the call objects themselves arrive once, in A.steps. They used
+  // to be serialized three times over (steps + lanes + streams), which on a real session is hundreds
+  // of megabytes of the same content. Re-hydrate by index — steps is in gi order by construction.
+  const steps=A.steps||[]
+  const ls=(A.lanes||[]).map(l=>{
+    const calls=(l.calls||[]).map(c=>typeof c==='number'?steps[c]:c).filter(Boolean)
+    return {...l,calls,giLocal:new Map(calls.map((c,i)=>[c.gi,i]))}
+  })
   const series=probes.series||[]
   if(series.length){
     const calls=series.map((p,i)=>({gi:i,ts:p.ts,ctx:p.tokens||0,probe:true,usage:{read:0,create:0,fresh:p.tokens||0,out:0}}))
@@ -938,6 +945,15 @@ function barSegs(s,h){
 // "who eats the window before any user message" — are the honest signal, not an absolute wire total.
 const enc = (s) => { try { return new TextEncoder().encode(String(s ?? '')).length } catch { return String(s ?? '').length } }
 function flatBytes(b){
+  // PREFER THE SERVER'S ANSWER. blockmeta.mjs::blockBytes is a verbatim port of the branches below,
+  // made so the numbers cannot drift between the two — and since a block now ships as metadata + a
+  // text_ref, it is the ONLY path that still works: slimBlock() deletes `text`, `block`, `desc` and
+  // `schema`, so re-deriving here read 20 bytes across 27 blocks where the truth was 2830. Every
+  // non-tools bucket scored 0 and the composition bar rendered as one solid colour — the same
+  // failure this file's tests exist to catch, arriving from the other side (not provider knowledge
+  // in the browser, but body-shape knowledge about a body that is no longer sent).
+  // The branches below remain for full-bodied blocks: server-side callers and pre-slim payloads.
+  if(typeof b.bytes==='number') return b.bytes
   if(b.sec==='tools'){ // D15 verbatim: real desc+schema bytes; old v0 trace: metadata char proxy
     return enc(b.name)+(b.verbatim?enc(b.desc!=null?b.desc:'')+(b.schema!==undefined?enc(JSON.stringify(b.schema)):0):(b.descChars||0))
   }

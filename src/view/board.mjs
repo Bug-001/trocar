@@ -142,6 +142,31 @@ export function tailBound(recs, maxBytes) {
   return { recs: out, bound: { shown: calls(out), total: calls(recs), kept_mb: mb(kept), file_mb: mb(total) } };
 }
 
+// ONE COPY OF EACH CALL ON THE WIRE.
+//
+// analyze() returns the same call objects in THREE places — `steps` (global order), `lanes[].calls`
+// (partitioned) and `streams[].calls` — because in-process they are shared references and cost
+// nothing. JSON.stringify does not share: it wrote every call, and every block of it, three times.
+// Measured on the 8-call sample: 216 KB of `analyzed`, of which 73 KB was `streams`, 69 KB `steps`
+// and 73 KB `lanes` — the same content, thrice.
+//
+// The board reads NEITHER `streams` NOR `steps`: it renders entirely from `lanes` (buildLanes). So
+// the wire carries `steps` as the one array of call objects, and a lane names its calls by `gi` —
+// the global index it already carries. The browser re-hydrates in one map(). `streams` is dropped
+// outright; nothing has ever read it.
+//
+// This is a WIRE transform only: the in-process view keeps its shared references, so every
+// server-side consumer (paging, memoisation, tests) is untouched.
+// (The other full-text channel, `lanes[].events[].text`, is NOT slimmed here. It carried a verbatim
+// second copy of every user message and tool_result — 7.8 of 10.1 MB on a 40-call fixture — but it
+// was dead weight in-process too: nothing reads it after analyze() derives the event. So it is
+// dropped at its source, in analyze(), rather than projected away at the wire.)
+function onWire(analyzed) {
+  if (!analyzed) return analyzed;
+  const { streams, ...rest } = analyzed;
+  const lanes = (analyzed.lanes || []).map((l) => ({ ...l, calls: (l.calls || []).map((c) => c.gi) }));
+  return { ...rest, lanes };
+}
 export function sessionView(records, sessionId, { enrich, bound, page, maxBytes } = {}) {
   const g = groupSessions(records);
   let recs = g.get(sessionId);
@@ -256,8 +281,8 @@ export function pageView(view, spec = {}) {
 // and server-side callers (ETL, the test suite) legitimately read `steps`. Returns a new object.
 export function forWire(view) {
   if (!view || !view.analyzed) return view;
-  const { steps, streams, ...analyzed } = view.analyzed;
-  return { ...view, analyzed };
+  const { streams, ...analyzed } = view.analyzed;
+  return { ...view, analyzed: onWire(analyzed) };
 }
 
 // ── /api/control ──────────────────────────────────────────────────────────────

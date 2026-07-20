@@ -4,6 +4,25 @@
 // { analyzed, records, probes, meta }), NOT analyze(records) in the browser. Proves the ported
 // board still populates every panel and that the SERVER-baked context window is byte-verbatim (AC-1)
 // against a real captured CC session — with zero provider parsing in the browser (invariant 3 / AC-3).
+//
+// ── 2026-07-20 · brought to the new /api/session wire contract ────────────────────────────────
+// Two things this file used to assume are gone, and BOTH of them had quietly turned an assertion
+// into decoration:
+//
+//  (1) It fed the board `sessionView(...)` verbatim and called that "exactly what /api/session
+//      emits". It no longer is: the server ships `forWire(view)` — `streams` dropped, and each call
+//      serialized ONCE (`analyzed.steps`), with `lanes[].calls` naming its calls by `gi` for the
+//      browser to re-hydrate in buildLanes(). Feeding the in-process view meant the gate never
+//      exercised the projection the browser actually receives. It now feeds forWire(), so the
+//      re-hydration path is under the gate too.
+//
+//  (2) AC-1 was asserted IN THE BROWSER against `call.rec.request.system` / `.messages` — i.e. the
+//      board was checked against a copy of the body that was sitting in the very same payload. That
+//      body is no longer shipped (`rec` is slimmed to {id, request:{model, …counts}}), so those two
+//      loops iterated over `undefined` and could not fail: the file stayed green with AC-1 checking
+//      nothing at all. AC-1 moved to Node (below), where the SOURCE — the raw NDJSON — is readable,
+//      which is what RFC 2.3 §验收1 asks for in the first place: 「从 call_blocks + block_contents +
+//      text_ref 重建窗口全文,与 NDJSON 源该 call 的 system/messages 块逐字 diff = 0」.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -11,7 +30,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readRecords } from '../../src/etl/ingest.mjs';
-import { sessionView } from '../../src/view/board.mjs';
+import { sessionView, forWire } from '../../src/view/board.mjs';
+import { buildResolver } from '../../src/query/source.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
@@ -80,18 +100,22 @@ function buildGateModule(payloadJson) {
     if(!/resources · across the session/.test($('resexp'))) F.push('#'+p+' resource explorer (#resexp) empty')
     if(!/usage · read/.test($('rawpanel'))) F.push('#'+p+' raw panel missing usage')
   }
-  // AC-1: the SERVER-baked context window (call.flat) is the VERBATIM assembled request.
+  // The baked window still exists on the wire. (AC-1 itself — is what it holds byte-verbatim
+  // against the source? — is asserted in Node below, against the raw NDJSON rather than against a
+  // second copy of the body that used to ride along in this same payload.)
   playhead=N-1; render()
   const call=anchor.calls[playhead], req=(call.rec&&call.rec.request)||{}
   const flat=call.flat||[]
   if(!flat.length) F.push('AC-1: baked call.flat is empty')
-  const sysTexts=flat.filter(b=>b.sec==='system').map(b=>b.text)
-  for(const s of (req.system||[])){ const want=(typeof s==='string')?s:s.text
-    if(want && !sysTexts.some(t=>t===want)) F.push('AC-1: a system block is NOT byte-verbatim in the baked window') }
-  const msgTexts=flat.filter(b=>b.sec==='messages').map(b=>{const bl=b.block; return typeof bl==='string'?bl:(bl&&bl.text)||''})
-  for(const m of (req.messages||[])){ const parts=Array.isArray(m.content)?m.content:[{type:'text',text:m.content}]
-    for(const c of parts){ if(c&&c.type==='text'&&c.text && !msgTexts.some(t=>t.includes(c.text)))
-      F.push('AC-1: a user/assistant text block is NOT verbatim in the baked window') } }
+  // 1.4:35 「头显 role · kind-tag · 短预览 · 字符数」 — the collapsed row is baked SERVER-side
+  // (blockmeta), so a bodyless block still renders a full header. Assert the metadata is present on
+  // the wire AND reaches the DOM: without it every row would degrade to an unlabelled blank line.
+  for(const b of flat){
+    if(!b.head||typeof b.head.role!=='string'||typeof b.head.tag!=='string'){ F.push('1.4: block row lost its server-baked head {role,tag,label}'); break }
+    if(typeof b.chars!=='number'||typeof b.bytes!=='number'){ F.push('1.4: block row lost its server-baked chars/bytes'); break }
+  }
+  { const h=$('ctxwin'), miss=flat.filter(b=>b.head&&b.head.role&&h.indexOf('>'+b.head.role+'<')<0)
+    if(miss.length) F.push('1.4: '+miss.length+' baked block heads never reached the DOM (row renders unlabelled)') }
   // point 6: the top-bar agent chip is present + table-driven (harness = Claude Code here)
   if(!/Claude Code/.test(document.getElementById('agentChip').textContent||'')) F.push('point 6: agent chip missing/wrong')
   // spec 1.4:80 / 2.3 §验收#2 / D15: every tool block carries a faithfulness badge
@@ -245,11 +269,15 @@ function buildGateModule(payloadJson) {
   return `globalThis.__RG_PAYLOAD__ = ${payloadJson};\nglobalThis.__RG_FAILS__ = [];\n${moduleJs}\n${harness}`;
 }
 
-test('render gate: reused demo board renders every panel + AC-1 from frozen canonical payload', async () => {
+test('render gate: reused demo board renders every panel from the frozen canonical WIRE payload', async () => {
   installShim();
   const records = await readRecords(FIXTURE, { normalize: false });
-  const payload = sessionView(records, MAIN, { enrich: null }); // hermetic: no ~/.claude dependency
-  assert.ok(payload && payload.analyzed, 'sessionView produced a payload');
+  const view = sessionView(records, MAIN, { enrich: null }); // hermetic: no ~/.claude dependency
+  assert.ok(view && view.analyzed, 'sessionView produced a payload');
+  // What /api/session actually sends (src/server.mjs → sendJson(res, 200, forWire(view))). The gate
+  // is only a gate if it renders THIS shape: lanes name their calls by gi, the call objects ride in
+  // `steps` once, `streams` is gone — and buildLanes() has to put it back together.
+  const payload = forWire(view);
 
   const combined = buildGateModule(JSON.stringify(payload));
   const tmp = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'asight-rendergate-')), 'gate.mjs');
@@ -258,4 +286,152 @@ test('render gate: reused demo board renders every panel + AC-1 from frozen cano
 
   const fails = globalThis.__RG_FAILS__ || ['harness did not run'];
   assert.deepEqual(fails, [], 'render gate failures:\n  - ' + fails.join('\n  - '));
+});
+
+// ── the wire payload no longer carries the bodies it used to (the reason any of this changed) ──
+// 4.2:55 「表里不留全文(存 text_ref)……强制『看全文=回源』」 + 1.4:35 「点开惰性填正文」. These are
+// the assertions that go red if `slimRec` / `slimBlock` are reverted — without them "the board still
+// renders" would be satisfied by shipping 142.8 MB again.
+test('wire contract: /api/session ships no request bodies, and no block is left both bodyless and locator-less', async () => {
+  const records = await readRecords(FIXTURE, { normalize: false });
+  const payload = forWire(sessionView(records, MAIN, { enrich: null }));
+  const calls = payload.analyzed.steps || payload.analyzed.lanes.flatMap((l) => l.calls);
+  assert.ok(calls.length, 'wire payload carries the session calls');
+
+  let blocks = 0;
+  for (const c of calls) {
+    // `rec` is meta only. The raw request body was ~120 MB of a 142.8 MB response on a real session.
+    const rq = (c.rec && c.rec.request) || {};
+    for (const k of ['system', 'messages', 'tools']) {
+      assert.equal(rq[k], undefined, `call ${c.id}: rec.request.${k} is back on the wire — the body must stay in the NDJSON`);
+    }
+    for (const k of Object.keys(rq)) {
+      assert.ok(['model', 'context_chars', 'message_count', 'tool_count', 'system_chars'].includes(k),
+        `call ${c.id}: unexpected field rec.request.${k} on the wire (only the five the frontend reads may ship)`);
+    }
+    for (const b of c.flat || []) {
+      blocks++;
+      // ADDRESS IT, OR INLINE IT — never neither. A row with no body AND no locator can be neither
+      // read nor fetched: content that is sitting in the capture becomes permanently invisible.
+      const heavy = ['text', 'block', 'desc', 'schema', 'props'].filter((k) => b[k] !== undefined);
+      if (b.text_ref) {
+        assert.deepEqual(heavy, [], `block ${b.key}: carries a text_ref AND its body (${heavy}) — the body must not ship`);
+      } else {
+        assert.ok(heavy.length, `block ${b.key}: no text_ref and no body — unreadable and unfetchable`);
+        // invariant 4: an inlined body is re-serialized, not resolved from the capture. Say so.
+        assert.match(String(b.unaddressable || ''), /NOT resolved from the raw capture/,
+          `block ${b.key}: body inlined without the 保真边界 label`);
+      }
+    }
+  }
+  assert.ok(blocks > 100, `expected the real session's blocks to be exercised, saw ${blocks}`);
+});
+
+// ── AC-1 · RFC 2.3 §验收1 — 「从 … text_ref 重建窗口全文,与 NDJSON 源该 call 的 system/messages
+// 块逐字 diff = 0」. This is the round-trip the old in-browser check could not do: it compared the
+// board's copy of the body against another copy of the body in the SAME payload, which proves
+// nothing about the capture on disk. Here the locator is resolved back against the raw NDJSON
+// (src/query/source.mjs) and the bytes are diffed against the source record.
+//
+// The committed fixture is a v0/demo-converted capture: it stored PARSED JSON, so the original wire
+// bytes are genuinely gone and no span can honestly be computed — every block takes the inlined
+// path, and there is nothing to resolve. So AC-1 is asserted twice, once per fidelity class:
+//   (a) inlined  — over the real fixture, against the SOURCE record (not against `call.rec`, which
+//       no longer carries the body). This is the assertion this file has always made, re-pointed at
+//       the source of truth.
+//   (b) resolved — over a D10-shaped capture (`req_body` = the verbatim bytes) derived from that
+//       same session, written to tmp. That file is then the source of truth for its own resolver,
+//       so「定位源记录 → slice(start,end)」 must reproduce its system/messages/tools nodes exactly.
+test('AC-1: the baked window is byte-verbatim against the raw capture — inlined AND resolved-by-text_ref', async () => {
+  const records = await readRecords(FIXTURE, { normalize: false });
+  const view = sessionView(records, MAIN, { enrich: null });
+  const srcOf = (id) => records.find((r) => r.id === id);
+  const callsOf = (v) => v.analyzed.lanes.flatMap((l) => l.calls).filter((c) => (c.flat || []).length);
+
+  // ── (a) inlined path — the v0 fixture, diffed against the SOURCE record ──────────────────────
+  let sysChecked = 0, msgChecked = 0;
+  const calls = callsOf(view);
+  assert.ok(calls.length, 'the fixture session has calls with a baked window');
+  for (const call of calls) {
+    const src = srcOf(call.rec.id);
+    assert.ok(src && src.request, `source record ${call.rec.id} readable from the NDJSON`);
+    const flat = call.flat;
+    assert.ok(flat.every((b) => b.unaddressable),
+      `${call.rec.id}: the committed fixture is v0-converted, so every block must take the inlined path `
+      + '(if this fails the fixture gained verbatim bytes — move this call into branch (b))');
+    const sysTexts = flat.filter((b) => b.sec === 'system').map((b) => b.text);
+    for (const s of src.request.system || []) {
+      const want = typeof s === 'string' ? s : s.text;
+      if (!want) continue;
+      assert.ok(sysTexts.some((t) => t === want),
+        `AC-1 (${call.rec.id}): a system block is NOT byte-verbatim in the baked window`);
+      sysChecked++;
+    }
+    const msgTexts = flat.filter((b) => b.sec === 'messages')
+      .map((b) => { const bl = b.block; return typeof bl === 'string' ? bl : (bl && bl.text) || ''; });
+    for (const m of src.request.messages || []) {
+      const parts = Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }];
+      for (const c of parts) {
+        if (!(c && c.type === 'text' && c.text)) continue;
+        assert.ok(msgTexts.some((t) => t.includes(c.text)),
+          `AC-1 (${call.rec.id}): a user/assistant text block is NOT verbatim in the baked window`);
+        msgChecked++;
+      }
+    }
+  }
+  assert.ok(sysChecked > 0 && msgChecked > 0,
+    `AC-1 (inlined) must actually compare something — system:${sysChecked} messages:${msgChecked}`);
+
+  // ── (b) resolved path — same session, D10 verbatim shape, locator resolved back to the bytes ──
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-ac1-'));
+  const cap = path.join(dir, 'cc-verbatim.ndjson');
+  // Promote the v0 records to the D10 envelope: req_body = the verbatim request bytes. This tmp file
+  // is a TEST source, not a re-labelling of the committed capture (invariant 2 — the fixture is
+  // untouched); it exists so the resolver has an addressable capture to resolve against.
+  fs.writeFileSync(cap, fs.readFileSync(FIXTURE, 'utf8').split('\n').filter(Boolean)
+    .map((line) => { const o = JSON.parse(line); if (o.request) o.req_body = JSON.stringify(o.request); return JSON.stringify(o); })
+    .join('\n') + '\n');
+  const vrecs = await readRecords(cap, { normalize: false });   // readRecords stamps `_stream` — no stamp, no ref
+  const vview = sessionView(vrecs, MAIN, { enrich: null });
+  const resolve = await buildResolver(cap);
+  try {
+    let resolved = 0;
+    for (const call of callsOf(vview)) {
+      const body = JSON.parse(vrecs.find((r) => r.id === call.rec.id).req_body);
+      // The window in assembly order: tools → system → messages, one entry per content part.
+      const want = [];
+      for (const t of body.tools || []) want.push(['tools', t]);
+      const sys = Array.isArray(body.system) ? body.system : (typeof body.system === 'string' ? [body.system] : []);
+      for (const s of sys) want.push(['system', s]);
+      for (const m of body.messages || []) {
+        const c = m.content;
+        if (Array.isArray(c)) for (const b of c) want.push(['messages', b]); else want.push(['messages', c]);
+      }
+      // A locator per source block, in the source's own order — the alignment is what makes
+      // indexing by position sound (test/dissect/cc.test.mjs pins the same alignment upstream).
+      assert.equal(call.flat.length, want.length, `AC-1 (${call.rec.id}): baked window has ${call.flat.length} blocks for ${want.length} source blocks`);
+      for (let i = 0; i < want.length; i++) {
+        const b = call.flat[i], [sec, node] = want[i];
+        assert.equal(b.sec, sec, `AC-1 (${call.rec.id}) block #${i}: section drifted from the source order`);
+        assert.ok(b.text_ref, `AC-1 (${call.rec.id}) block #${i}: verbatim capture but no text_ref to resolve`);
+        // The committed fixture is entirely unaddressable, so this is the ONLY place the
+        // addressable half of 「表里不留全文」 can be pinned: a located block ships the locator
+        // INSTEAD of the body, not as well as it.
+        for (const k of ['text', 'block', 'desc', 'schema', 'props']) {
+          assert.equal(b[k], undefined, `AC-1 (${call.rec.id}) block #${i}: addressable block still ships its ${k}`);
+        }
+        const got = resolve.detail(b.text_ref);
+        assert.equal(got.status, 'ok', `AC-1 (${call.rec.id}) block #${i}: text_ref did not resolve (${got.reason})`);
+        // 逐字 diff = 0: the resolved slice is the source's own bytes for that node — same content,
+        // same key order. Compare the bytes, then the parsed value, so neither a shifted span nor a
+        // ref pointing at the WRONG (but equally well-formed) node can slip through.
+        assert.ok(vrecs.find((r) => r.id === call.rec.id).req_body.includes(got.text),
+          `AC-1 (${call.rec.id}) block #${i}: resolved bytes are not a slice of the source record`);
+        assert.equal(got.text, JSON.stringify(node),
+          `AC-1 (${call.rec.id}) block #${i}: resolved bytes differ from the source block (diff != 0)`);
+        resolved++;
+      }
+    }
+    assert.ok(resolved > 100, `AC-1 (resolved) must actually resolve the session's blocks, saw ${resolved}`);
+  } finally { resolve.dispose && resolve.dispose(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
