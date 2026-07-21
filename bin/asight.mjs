@@ -133,11 +133,17 @@ async function main() {
       // overwritten (4.1:19) so a reverse-proxy can't reach it: steer Desktop→here via a Clash rule.
       const { createMitmProxy } = await import(r('src', 'capture', 'mitm.mjs'));
       const { generateCa } = await import(r('src', 'capture', 'onboard.mjs'));
+      const { caDir } = await import(r('src', 'paths.mjs'));
       const port = Number(flag('--port', process.env.ASIGHT_MITM_PORT || 9899));
       const targetHost = flag('--host', 'api.anthropic.com');
       const upstreamProxy = flag('--upstream', process.env.ATRACE_UPSTREAM_PROXY || 'http://127.0.0.1:7897');
       const out = flag('--out', process.env.ASIGHT_SOURCE || mitmOut());
-      const ca = generateCa({ hosts: [targetHost] }); // leaf must cover the host we are actually terminating
+      // Leaf/CA MUST live in the D27 canonical dir (paths.caDir() → ~/.asight/ca), not onboard's
+      // legacy DEFAULT_CA_DIR (~/.atrace/ca). generateCa defaulting to the legacy dir is what let a
+      // SECOND same-CN CA exist in two places — the collision that broke every steered TLS handshake
+      // on 2026-07-21. Pinning the dir here keeps
+      // the leaf the mitm presents and the CA in NODE_EXTRA_CA_CERTS the SAME file.
+      const ca = generateCa({ hosts: [targetHost], caDir: caDir() }); // leaf must cover the host we terminate
       const leaf = { key: fs.readFileSync(ca.leafKey), cert: fs.readFileSync(ca.leafCrt) };
       const keepRawSse = rest.includes('--raw-sse') || process.env.ASIGHT_RAW_SSE === '1';
       fs.mkdirSync(path.dirname(out), { recursive: true });

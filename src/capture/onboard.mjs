@@ -9,8 +9,14 @@ import { mkdirSync, chmodSync, existsSync, readFileSync, writeFileSync, rmSync, 
 import path from 'node:path'
 import os from 'node:os'
 import { getTrustStoreInstaller, CA_CN } from './trust-store.mjs'
+import { caDir as canonicalCaDir } from '../paths.mjs'
 
-export const DEFAULT_CA_DIR = path.join(os.homedir(), '.atrace', 'ca')
+// D27 canonical CA home. It MUST equal paths.caDir() so every CA consumer (mitm, onboard install,
+// leafHosts) resolves the SAME directory — a second dir is how a second same-CN CA came to exist and
+// broke every steered TLS handshake on 2026-07-21.
+// caDir() already falls back to the legacy ~/.atrace/ca when only that exists, so old installs still
+// resolve; fresh ones land in ~/.asight/ca.
+export const DEFAULT_CA_DIR = canonicalCaDir()
 export const DEFAULT_SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json')
 // Where `on` stashes the proxy env it displaced, so `off` can hand it back (injectable for tests).
 export const DEFAULT_STASH_PATH = path.join(os.homedir(), '.atrace', 'steer-backup.json')
