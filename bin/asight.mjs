@@ -159,32 +159,58 @@ async function main() {
       // splice (survives Verge regen) + one hot mihomo reload so it goes live now. Never touches the
       // system proxy. --port MUST match the `asight mitm` port the traffic is steered into.
       const { getDesktopSteer } = await import(r('src', 'capture', 'desktop-steer.mjs'));
+      const { installCaptureAgents, removeCaptureAgents, statusCaptureAgents, MITM_LABEL, ENV_LABEL } = await import(r('src', 'capture', 'capture-agents.mjs'));
+      const { caDir } = await import(r('src', 'paths.mjs'));
       const sub = positional() || 'status';
-      const port = Number(flag('--port', process.env.ASIGHT_MITM_PORT || 9899));
+      const port = Number(flag('--port', process.env.ASIGHT_MITM_PORT || 9898));
       const steer = getDesktopSteer();
       if (sub === 'on') {
         const out = await steer.on({ port });
         if (out.reserved) { console.log('desktop steer:', out.reason); break; }
+        // Desktop capture = Clash steer (routing) + the durable mitm + the NODE_EXTRA_CA_CERTS primer
+        // (trust). All three are now product-managed together so `desktop off` / `uninstall` clean up
+        // — the 2026-07-21 incident happened because the last two were hand-made and unmanaged.
+        const agents = installCaptureAgents({
+          caPath: path.join(caDir(), 'atrace-ca.crt'), port, out: mitmOut(),
+          asightBin: fileURLToPath(import.meta.url),
+        });
         console.log(`desktop steer ON → CC-Desktop's claude-code → api.anthropic.com routed to asight mitm :${out.port}`);
         console.log('  durable: global Script.js spliced (survives Verge regen) ·', out.scriptPath);
         console.log('  mihomo reload:', out.reload.status === 204 || out.reload.status === 200 ? 'OK' : `status ${out.reload.status}${out.reload.error ? ' ' + out.reload.error : ''}`);
-        console.log('  live now:', out.status.live === true ? 'yes ✓' : out.status.live === false ? `NO — is \`asight mitm --port ${port}\` running?` : 'unknown');
-        console.log(`  ⚠ Desktop must trust the atrace CA (run \`asight on\` / \`asight monitor on\`) or it refuses the leaf.`);
+        if (agents.reserved) console.log('  capture agents:', agents.reason);
+        else console.log(`  capture agents: mitm(${MITM_LABEL}) + CA-trust primer(${ENV_LABEL}) installed → ${agents.mitm.plistPath}, ${agents.env.plistPath}`);
+        console.log('  live now:', out.status.live === true ? 'yes ✓' : out.status.live === false ? 'NO — capture agent starting…' : 'unknown');
+        console.log('  ⚠ FULLY quit + reopen Claude Desktop so it inherits NODE_EXTRA_CA_CERTS (a new conversation is not enough).');
       } else if (sub === 'off') {
         const out = await steer.off();
-        if (out.reserved) { console.log('desktop steer:', out.reason); break; }
-        console.log('desktop steer OFF → global Script.js restored + runtime splice removed + mihomo reloaded (zero residual)');
-        console.log('  mihomo reload:', out.reload.status === 204 || out.reload.status === 200 ? 'OK' : `status ${out.reload.status}`);
+        const agents = removeCaptureAgents();
+        if (out.reserved) { console.log('desktop steer:', out.reason); }
+        else {
+          console.log('desktop steer OFF → global Script.js restored + runtime splice removed + mihomo reloaded (zero residual)');
+          console.log('  mihomo reload:', out.reload.status === 204 || out.reload.status === 200 ? 'OK' : `status ${out.reload.status}`);
+        }
+        if (!agents.reserved) console.log('  capture agents removed:', MITM_LABEL, '+', ENV_LABEL);
       } else {
-        console.log(JSON.stringify(await steer.status(), null, 2));
+        console.log(JSON.stringify({ steer: await steer.status(), agents: statusCaptureAgents() }, null, 2));
       }
       break;
     }
     case 'uninstall': {
-      // one-step revert (4.5 §C): drop CA from the user trust store + clear the CC-CLI steer.
+      // one-step revert (4.5 §C): drop CA from the user trust store + clear the CC-CLI steer + tear
+      // down the Desktop Clash steer AND the two capture agents (durable mitm + NODE_EXTRA_CA_CERTS
+      // primer). Before this landed, uninstall left the agents running — the orphan problem the
+      // 2026-07-21 incident exposed. Everything asight installs, asight removes.
       const ob = await import(r('src', 'capture', 'onboard.mjs'));
+      const { removeCaptureAgents } = await import(r('src', 'capture', 'capture-agents.mjs'));
       ob.atraceOff({ removeCa: true });
-      console.log('asight uninstalled: CA removed from the user-level trust store + CC-CLI steer cleared. (data/db left intact)');
+      let steer = null;
+      try { const { getDesktopSteer } = await import(r('src', 'capture', 'desktop-steer.mjs')); steer = await getDesktopSteer().off(); } catch { /* non-mac / no verge */ }
+      const agents = removeCaptureAgents();
+      console.log('asight uninstalled:');
+      console.log('  · CA removed from the user-level trust store + CC-CLI settings.json steer cleared');
+      console.log('  · Desktop Clash steer:', steer && !steer.reserved ? 'removed' : 'n/a');
+      console.log('  · capture agents:', agents.reserved ? 'n/a' : 'removed (com.asight.mitm + com.asight.env)');
+      console.log('  · data/db left intact. NOTE: NODE_EXTRA_CA_CERTS in the live login session persists until logout (run: launchctl unsetenv NODE_EXTRA_CA_CERTS).');
       break;
     }
     case 'on': {

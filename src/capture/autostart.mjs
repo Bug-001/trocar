@@ -19,8 +19,15 @@ function xmlEscape(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&
 // ── macOS: a user LaunchAgent (RunAtLoad + KeepAlive), loaded via launchctl ──────────────────────
 function macAutostart({ home = os.homedir(), run = defaultRun, fs = realFs } = {}) {
   const plistPath = (label) => path.join(home, 'Library', 'LaunchAgents', `${label}.plist`);
-  const buildPlist = ({ label, programArguments, workingDirectory, logPath }) => {
+  const buildPlist = ({ label, programArguments, workingDirectory, logPath, keepAlive, environmentVariables }) => {
     const argsXml = programArguments.map((a) => `    <string>${xmlEscape(a)}</string>`).join('\n');
+    // KeepAlive is per-agent: the durable mitm restarts on crash (true), but a one-shot
+    // `launchctl setenv` primer exits immediately and MUST NOT be respawn-looped (false).
+    const keepAliveXml = keepAlive ? '  <key>KeepAlive</key><true/>\n' : '';
+    const envXml = environmentVariables && Object.keys(environmentVariables).length
+      ? `  <key>EnvironmentVariables</key><dict>\n${Object.entries(environmentVariables)
+        .map(([k, v]) => `    <key>${xmlEscape(k)}</key><string>${xmlEscape(v)}</string>`).join('\n')}\n  </dict>\n`
+      : '';
     return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -29,16 +36,15 @@ function macAutostart({ home = os.homedir(), run = defaultRun, fs = realFs } = {
 ${argsXml}
   </array>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-${workingDirectory ? `  <key>WorkingDirectory</key><string>${xmlEscape(workingDirectory)}</string>\n` : ''}${logPath ? `  <key>StandardOutPath</key><string>${xmlEscape(logPath)}</string>\n  <key>StandardErrorPath</key><string>${xmlEscape(logPath)}</string>\n` : ''}</dict></plist>
+${keepAliveXml}${envXml}${workingDirectory ? `  <key>WorkingDirectory</key><string>${xmlEscape(workingDirectory)}</string>\n` : ''}${logPath ? `  <key>StandardOutPath</key><string>${xmlEscape(logPath)}</string>\n  <key>StandardErrorPath</key><string>${xmlEscape(logPath)}</string>\n` : ''}</dict></plist>
 `;
   };
   return {
     platform: 'darwin',
-    install({ label = MONITOR_LABEL, programArguments, workingDirectory = null, logPath = null }) {
+    install({ label = MONITOR_LABEL, programArguments, workingDirectory = null, logPath = null, keepAlive = true, environmentVariables = null }) {
       const p = plistPath(label);
       fs.mkdirSync(path.dirname(p), { recursive: true });
-      fs.writeFileSync(p, buildPlist({ label, programArguments, workingDirectory, logPath }));
+      fs.writeFileSync(p, buildPlist({ label, programArguments, workingDirectory, logPath, keepAlive, environmentVariables }));
       try { run('launchctl', ['unload', p]); } catch { /* not loaded yet */ }
       try { run('launchctl', ['load', p]); } catch { /* plist is written; load best-effort */ }
       return { ok: true, plistPath: p };
