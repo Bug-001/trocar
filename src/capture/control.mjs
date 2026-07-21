@@ -50,7 +50,7 @@ export function monitoringOn({
   let auto = null;
   if (withAutostart) {
     const args = [asightBin || defaultAsightBin(), 'capture', '--port', String(safePort(proxyUrl)), '--target', captureTarget, '--out', capturePath, '--raw-sse'];
-    auto = autostart.install({ label: MONITOR_LABEL, programArguments: [nodeBin, ...args], logPath: path.join(HOME, '.atrace', 'logs', 'monitor.log') });
+    auto = autostart.install({ label: MONITOR_LABEL, programArguments: [nodeBin, ...args], logPath: path.join(HOME, '.asight', 'logs', 'monitor.log') });
   }
   return { ok: true, onboard: ob, autostart: auto, status: monitoringStatus({ settingsPath, captureTarget, proxyUrl, onboard, autostart }) };
 }

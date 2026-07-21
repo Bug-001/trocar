@@ -170,6 +170,10 @@ async function main() {
         // Desktop capture = Clash steer (routing) + the durable mitm + the NODE_EXTRA_CA_CERTS primer
         // (trust). All three are now product-managed together so `desktop off` / `uninstall` clean up
         // — the 2026-07-21 incident happened because the last two were hand-made and unmanaged.
+        // Ensure the CA exists first: the env primer points NODE_EXTRA_CA_CERTS at atrace-ca.crt, and
+        // on a fresh machine nothing else has created it yet (F5, 2026-07-21 review).
+        const { generateCa } = await import(r('src', 'capture', 'onboard.mjs'));
+        generateCa({ hosts: [flag('--host', 'api.anthropic.com')], caDir: caDir() });
         const agents = installCaptureAgents({
           caPath: path.join(caDir(), 'atrace-ca.crt'), port, out: mitmOut(),
           asightBin: fileURLToPath(import.meta.url),

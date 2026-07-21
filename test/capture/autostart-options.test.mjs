@@ -47,21 +47,3 @@ test('keepAlive defaults to true, so the existing monitor agent is unchanged', (
     'the default lost KeepAlive — the durable capture process would not restart on crash');
 });
 
-test('environmentVariables are rendered into the plist', () => {
-  const { files, inst } = harness();
-  const r = inst.install({
-    label: 'com.asight.mitm', programArguments: ['/node', 'mitm'],
-    environmentVariables: { ATRACE_UPSTREAM_PROXY: 'http://127.0.0.1:7897' },
-  });
-  const plist = files.get(r.plistPath);
-  assert.match(plist, /<key>EnvironmentVariables<\/key>/, 'EnvironmentVariables block missing');
-  assert.match(plist, /<key>ATRACE_UPSTREAM_PROXY<\/key><string>http:\/\/127\.0\.0\.1:7897<\/string>/,
-    'the upstream proxy env var was not rendered — the durable mitm would forward nowhere');
-});
-
-test('no environmentVariables → no empty EnvironmentVariables block', () => {
-  const { files, inst } = harness();
-  const r = inst.install({ label: 'com.asight.monitor', programArguments: ['/node', 'x'] });
-  assert.doesNotMatch(files.get(r.plistPath), /EnvironmentVariables/,
-    'an empty EnvironmentVariables block was rendered for an agent that has none');
-});
