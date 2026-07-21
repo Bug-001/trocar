@@ -19,7 +19,8 @@ import { listSessions, sessionCalls, sessionComposition, sessionResources, callC
   filesEverInContext, cacheHitDistribution, breakKindComparison, unmappedFields, forkTree } from './query/queries.mjs';
 import { buildResolver } from './query/source.mjs';
 import { readRecords } from './etl/ingest.mjs';
-import { projectsView, sessionView, controlView, forWire } from './view/board.mjs';
+import { projectsView, projectsViewFromMetas, sessionView, controlView, forWire } from './view/board.mjs';
+import { sessionIdOf } from './view/assemble.mjs';
 import { createLru, memoKey } from './query/memo.mjs';
 import { loadPricing } from './view/pricing.mjs';
 import { randomBytes } from 'node:crypto';
@@ -302,6 +303,78 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
   const noDb = (res) => (dbError ? sendJson(res, 503, { error: dbError }) : notFound(res, 'no analytics db'));
   const resolve = (Array.isArray(sourcePath) ? sourcePath.length : sourcePath) ? await buildResolver(sourcePath) : () => null;
   const loadRecords = makeRecordLoader(sourcePath);
+
+  // ── ARCHIVE LAYER (per-session shards + precomputed meta) ────────────────────
+  // The reason `asight serve` could open a single session but never the whole capture: /api/projects
+  // and /api/session both loaded EVERY record. On a sharded source we don't need to. The session list
+  // reads the tiny meta.json the sharder wrote (no records at all); opening a session reads ONLY that
+  // one shard. loadRecords stays the fallback for a flat (unsharded) source.
+  // A session's records now live SPLIT across calls/probes/other.ndjson (the demo's classOf layout,
+  // 4.2:51). `control/` holds session-less traffic and is NOT a session dir.
+  const SESSION_STREAMS = ['calls.ndjson', 'probes.ndjson', 'other.ndjson'];
+  const shardDirsOf = () => {
+    const roots = (Array.isArray(sourcePath) ? sourcePath : [sourcePath]).filter(Boolean);
+    const dirs = [];
+    for (const root of roots) {
+      let st; try { st = fssync.statSync(root); } catch { continue; }
+      if (!st.isDirectory()) continue;
+      for (const e of fssync.readdirSync(root, { withFileTypes: true })) {
+        if (!e.isDirectory() || e.name === 'control') continue; // control/ is session-less
+        const dir = path.join(root, e.name);
+        // A session dir has meta.json (the archive-layer summary) or at least one stream file. Keying
+        // on any stream — not just calls.ndjson — means a probes-only session still lists.
+        if (fssync.existsSync(path.join(dir, 'meta.json'))
+          || SESSION_STREAMS.some((s) => fssync.existsSync(path.join(dir, s)))) dirs.push(dir);
+      }
+    }
+    return dirs;
+  };
+  const loadSessionMetas = () => {
+    const dirs = shardDirsOf();
+    if (!dirs.length) return null; // not a sharded source → caller falls back to the record path
+    const metas = [];
+    for (const d of dirs) {
+      // A shard without meta.json (sharded before the archive layer, or a partial write) just doesn't
+      // list until re-sharded — a degrade, not a crash. Session-less _unassigned has no meta by design.
+      try { metas.push(JSON.parse(fssync.readFileSync(path.join(d, 'meta.json'), 'utf8'))); } catch { /* no meta yet */ }
+    }
+    return metas;
+  };
+  const loadSessionRecords = async (id) => {
+    const hit = shardDirsOf().find((d) => path.basename(d) === id);
+    if (hit) {
+      // Read every stream the session has (calls/probes/other) and concatenate. readRecords stamps
+      // each record's `_stream` = the file basename, so a block's raw_ref (`<session>/<stream>#<id>`,
+      // 4.2:39) resolves back to the right shard file. The board re-derives call/probe/other from
+      // is_llm_call/endpoint, so concatenation order is immaterial (assembleSession sorts by ts).
+      const out = [];
+      for (const s of SESSION_STREAMS) {
+        const f = path.join(hit, s);
+        if (fssync.existsSync(f)) out.push(...await readRecords(f, { normalize: false }));
+      }
+      return out;
+    }
+    // flat source, or an id that isn't its own shard → fall back to the whole corpus, filtered.
+    return (await loadRecords()).filter((r) => sessionIdOf(r) === id);
+  };
+  // Session-less control-plane records now live in `control/*.ndjson` (4.2:51), NOT the top-level files
+  // loadRecords reads. On a sharded source, read those; else fall back to filtering the flat corpus.
+  const loadControlRecords = async () => {
+    const roots = (Array.isArray(sourcePath) ? sourcePath : [sourcePath]).filter(Boolean);
+    const out = [];
+    let sharded = false;
+    for (const root of roots) {
+      const cdir = path.join(root, 'control');
+      let ents; try { ents = fssync.readdirSync(cdir, { withFileTypes: true }); } catch { continue; }
+      sharded = true;
+      for (const e of ents) {
+        if (e.isFile() && e.name.endsWith('.ndjson')) out.push(...await readRecords(path.join(cdir, e.name), { normalize: false }));
+      }
+    }
+    if (sharded) return out;
+    return (await loadRecords()).filter((r) => !sessionIdOf(r)); // flat source: control = the session-less records
+  };
+
   const sessionMemo = createLru(8); // D21: assembled per-session views keyed by (id, source sig, strategy)
   const csrf = control ? randomBytes(18).toString('hex') : null; // D26: per-process CSRF token
 
@@ -324,6 +397,10 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
 
       // ── BOARD family (source NDJSON → canonical) ──────────────────────────
       if (p === '/api/projects') {
+        // Archive layer: on a sharded source, list from the precomputed metas — never load a record,
+        // so a 7.4 GB / 24-session capture enumerates instantly instead of OOM-ing.
+        const metas = loadSessionMetas();
+        if (metas) return sendJson(res, 200, projectsViewFromMetas(metas, { enrich }));
         return sendJson(res, 200, projectsView(await loadRecords(), { enrich }));
       }
       if (p === '/api/session') {
@@ -331,7 +408,8 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         if (!id) return notFound(res, 'session not found');
         const { page, error } = parsePageParams(url.searchParams);
         if (error) return sendJson(res, 400, { error });
-        const records = await loadRecords();
+        // Archive layer: read ONLY this session's shard, not the whole corpus.
+        const records = await loadSessionRecords(id);
         // D21 memo: assembled views are cached by (id, source sig, window) so repeated polls of the
         // same page reuse one analyze() run.
         // THE WINDOW MUST REACH sessionView. This used to assemble the tail-bounded FULL view and then
@@ -362,7 +440,7 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
       }
       if (p === '/api/control') {
         const cls = url.searchParams.get('class');
-        return sendJson(res, 200, controlView(await loadRecords(), cls));
+        return sendJson(res, 200, controlView(await loadControlRecords(), cls));
       }
       if (p === '/api/pricing') { // D14: editable unit-price config (cost = usage × price, derived)
         const { pricing, source } = loadPricing();

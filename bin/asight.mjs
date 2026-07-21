@@ -71,9 +71,26 @@ async function main() {
       // Per-session sharding of the capture stream (RFC 4.2 / D20: capture stays a pure tee, this
       // grouping is ETL). One week of real use produced a 7.58 GB single file that `asight serve`
       // could not open; sharded, the board reads only the session being viewed.
-      const { shardOnce } = await import(r('src', 'etl', 'shard.mjs'));
+      const { shardOnce, rebuildMeta, resplitShards } = await import(r('src', 'etl', 'shard.mjs'));
       const file = positional() || flag('--file', mitmOut());
       const outDir = flag('--out', path.join(asightHome(), 'sessions'));
+      if (rest.includes('--resplit')) {
+        // One-time migration: split LEGACY single-calls.ndjson shards into {calls,probes,other}.ndjson
+        // (byte-conserving, keeps a backup until each swap lands). Then refresh meta so counts match.
+        const t0 = Date.now();
+        const res = await resplitShards(outDir);
+        console.log(`shard: resplit ${res.done} sessions (${res.skipped} already split, ${res.failed} failed) in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+        const mr = await rebuildMeta(outDir);
+        console.log(`shard: rebuilt meta for ${mr.sessions} sessions (${mr.records} records)`);
+        break;
+      }
+      if (rest.includes('--rebuild-meta')) {
+        // Backfill/repair per-session meta.json (the archive layer) by streaming each existing shard.
+        const t0 = Date.now();
+        const res = await rebuildMeta(outDir);
+        console.log(`shard: rebuilt meta for ${res.sessions} sessions (${res.records} records) in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+        break;
+      }
       const watch = rest.includes('--watch');
       const every = Number(flag('--interval', 5)) * 1000;
 

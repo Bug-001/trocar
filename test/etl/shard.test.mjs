@@ -41,6 +41,40 @@ function mkMonolith(lines) {
   return { dir, src, out: path.join(dir, 'sessions') };
 }
 
+// A count_tokens probe and a non-inference session record — the two non-`call` classes classOf splits
+// out (4.2:51). Same awkward-bytes shape as line() so the round-trip test still proves byte fidelity.
+const probeLine = (sid, tag) => (
+  '{"ts":"2026-07-20T00:00:00.000Z","endpoint":"/v1/messages/count_tokens","method":"POST"'
+  + `,"req_headers":{"host":"api.anthropic.com","x-claude-code-session-id":"${sid}"}`
+  + `,"req_body":"{\\"messages\\":[{\\"role\\":\\"user\\",\\"content\\":\\"${tag} 中文\\"}]}"`
+  + ',"resp":{"status":200},"zz_late_key":1.50,"is_llm_call":false}'
+);
+const otherLine = (sid, tag, endpoint = '/api/roles') => (
+  '{"ts":"2026-07-20T00:00:00.000Z","endpoint":"' + endpoint + '","method":"POST"'
+  + `,"req_headers":{"host":"api.anthropic.com","x-claude-code-session-id":"${sid}"}`
+  + `,"req_body":"{\\"x\\":\\"${tag} 中文\\"}","resp":{"status":200},"zz_late_key":1.50,"is_llm_call":false}`
+);
+// Session-LESS control-plane record (no session header) at a given endpoint → control/<class>.ndjson.
+const controlLine = (tag, endpoint) => (
+  '{"ts":"2026-07-20T00:00:00.000Z","endpoint":"' + endpoint + '","method":"POST"'
+  + ',"req_headers":{"host":"api.anthropic.com"}'
+  + `,"req_body":"{\\"x\\":\\"${tag}\\"}","resp":{"status":200},"is_llm_call":false}`
+);
+
+// Every non-empty line under out/, across all stream files (session calls/probes/other + control/*).
+function allShardLines(out) {
+  const got = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const f = path.join(d, e.name);
+      if (e.isDirectory()) walk(f);
+      else if (e.name.endsWith('.ndjson')) for (const l of fs.readFileSync(f, 'utf8').split('\n')) if (l) got.push(l);
+    }
+  };
+  walk(out);
+  return got;
+}
+
 test('sessionIdOfLine reads the header without parsing the record', () => {
   assert.equal(sessionIdOfLine(line(SID_A, 'x')), SID_A);
   assert.equal(sessionIdOfLine(line(null, 'x')), null, 'a record with no session header must report null, not a guess');
@@ -61,34 +95,68 @@ test('a session id appearing OUTSIDE req_headers is NOT mistaken for the header'
     'the scan escaped req_headers and picked a session id out of the response body');
 });
 
-test('every byte of every line survives the split', async () => {
-  const lines = [line(SID_A, 'a1'), line(SID_B, 'b1'), line(SID_A, 'a2'), line(null, 'orphan')];
+test('every byte of every line survives the split — across ALL stream files', async () => {
+  // The split now spreads a session across calls/probes/other.ndjson and control-plane traffic into
+  // control/<class>.ndjson. The round-trip guarantee is unchanged: every source line's bytes appear
+  // EXACTLY ONCE somewhere under out/, byte-for-byte. Summing only calls.ndjson (the old test) would
+  // now silently pass a sharder that dropped every probe.
+  const lines = [
+    line(SID_A, 'a1'), probeLine(SID_A, 'p1'), otherLine(SID_A, 'o1'),
+    line(SID_B, 'b1'), controlLine('tel', '/api/event_logging'), line(SID_A, 'a2'),
+  ];
   const { dir, src, out } = mkMonolith(lines);
   try {
     await shardStream({ file: src, outDir: out });
-
-    const got = [];
-    for (const sub of fs.readdirSync(out)) {
-      const f = path.join(out, sub, 'calls.ndjson');
-      for (const l of fs.readFileSync(f, 'utf8').split('\n')) if (l) got.push(l);
-    }
-    assert.deepEqual(got.slice().sort(), lines.slice().sort(),
-      'a shard line differs from its source line — the sharder is reserialising, not copying bytes '
-      + '(invariant 2: derived layers MUST NOT rewrite the source)');
+    assert.deepEqual(allShardLines(out).slice().sort(), lines.slice().sort(),
+      'a shard line differs from its source line, or a class was dropped — the sharder is reserialising '
+      + 'or losing records (invariant 2: derived layers MUST NOT rewrite or drop the source)');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('records are filed under their own session, and orphans are kept', async () => {
-  const lines = [line(SID_A, 'a1'), line(SID_B, 'b1'), line(SID_A, 'a2'), line(null, 'orphan')];
+test('classOf splits a session into calls / probes / other streams (4.2:51)', async () => {
+  const lines = [line(SID_A, 'a1'), probeLine(SID_A, 'p1'), probeLine(SID_A, 'p2'), otherLine(SID_A, 'o1'), line(SID_A, 'a2')];
+  const { dir, src, out } = mkMonolith(lines);
+  try {
+    await shardStream({ file: src, outDir: out });
+    const n = (f) => fs.readFileSync(path.join(out, SID_A, f), 'utf8').trim().split('\n').filter(Boolean).length;
+    assert.equal(n('calls.ndjson'), 2, 'real inference belongs in calls.ndjson');
+    assert.equal(n('probes.ndjson'), 2, 'count_tokens probes belong in probes.ndjson, not the calls timeline');
+    assert.equal(n('other.ndjson'), 1, 'session-tagged non-inference belongs in other.ndjson');
+    // the probe must NOT pollute the calls stream — that was the whole point of the split
+    assert.equal(fs.readFileSync(path.join(out, SID_A, 'calls.ndjson'), 'utf8').includes('count_tokens'), false,
+      'a count_tokens probe leaked into calls.ndjson');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('session-less traffic is bucketed into control/<class>.ndjson, never dropped', async () => {
+  const lines = [
+    controlLine('t', '/api/event_logging/batch'),   // telemetry
+    controlLine('r', '/api/mcp_servers'),            // registry
+    controlLine('a', '/oauth/token'),                // account
+    controlLine('c', '/api/bootstrap'),              // control
+    controlLine('o', '/api/misc'),                   // other
+  ];
   const { dir, src, out } = mkMonolith(lines);
   try {
     const r = await shardStream({ file: src, outDir: out });
-    assert.equal(r.records, 4);
+    assert.equal(r.unassigned, 5, 'every session-less record must be counted, not silently absorbed');
+    for (const cls of ['telemetry', 'registry', 'account', 'control', 'other']) {
+      assert.ok(fs.existsSync(path.join(out, 'control', cls + '.ndjson')),
+        `control class ${cls} was not written — a session-less record with no bucket is a dropped record (invariant 2)`);
+    }
+    // and none of it landed in a session dir
+    assert.equal(fs.existsSync(path.join(out, '_unassigned')), false, 'control traffic must go to control/, not a fake session');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('records are filed under their own session', async () => {
+  const lines = [line(SID_A, 'a1'), line(SID_B, 'b1'), line(SID_A, 'a2')];
+  const { dir, src, out } = mkMonolith(lines);
+  try {
+    const r = await shardStream({ file: src, outDir: out });
+    assert.equal(r.records, 3);
     assert.equal(fs.readFileSync(path.join(out, SID_A, 'calls.ndjson'), 'utf8').trim().split('\n').length, 2);
     assert.equal(fs.readFileSync(path.join(out, SID_B, 'calls.ndjson'), 'utf8').trim().split('\n').length, 1);
-    assert.ok(fs.existsSync(path.join(out, '_unassigned', 'calls.ndjson')),
-      'a record with no session header was DROPPED — deleting source records is an invariant-2 violation, '
-      + 'not a tidy-up');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -165,5 +233,83 @@ test('an ALREADY-WIDE shard file is tightened, not appended to as-is', async () 
     await shardStream({ file: src, outDir: out });
     assert.equal(fs.statSync(f).mode & 0o077, 0,
       'the sharder appended to a world-readable shard without tightening it');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ── legacy migration: single calls.ndjson → classOf split ─────────────────────
+import { shardOnce, resplitShards } from '../../src/etl/shard.mjs';
+
+// Build a legacy shard the OLD way: every class in one calls.ndjson under <sid>/. That is exactly what
+// the 23 real shards on disk look like — sharded before the split, and now the ONLY copy of their bytes.
+function mkLegacyShard(sid, lines) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-legacy-'));
+  const out = path.join(dir, 'sessions');
+  const sdir = path.join(out, sid);
+  fs.mkdirSync(sdir, { recursive: true });
+  fs.writeFileSync(path.join(sdir, 'calls.ndjson'), lines.join('\n') + '\n', { mode: 0o600 });
+  return { dir, out, sdir };
+}
+
+test('resplit migrates a legacy mixed calls.ndjson into calls/probes/other — byte-exact', async () => {
+  const lines = [line(SID_A, 'a1'), probeLine(SID_A, 'p1'), otherLine(SID_A, 'o1'), line(SID_A, 'a2'), probeLine(SID_A, 'p2')];
+  const { dir, out, sdir } = mkLegacyShard(SID_A, lines);
+  try {
+    const r = await resplitShards(out);
+    assert.equal(r.done, 1, 'the one legacy session must be migrated');
+    // classes now live apart
+    assert.equal(fs.readFileSync(path.join(sdir, 'calls.ndjson'), 'utf8').trim().split('\n').length, 2);
+    assert.equal(fs.readFileSync(path.join(sdir, 'probes.ndjson'), 'utf8').trim().split('\n').length, 2);
+    assert.equal(fs.readFileSync(path.join(sdir, 'other.ndjson'), 'utf8').trim().split('\n').length, 1);
+    // NOT ONE BYTE LOST OR CHANGED: every source line is present exactly once across the new streams
+    assert.deepEqual(allShardLines(out).slice().sort(), lines.slice().sort(),
+      'the migration lost or rewrote a byte — these shards are the source truth now (invariant 2)');
+    // backup removed once the swap landed
+    assert.equal(fs.existsSync(path.join(sdir, 'calls.ndjson.premigrate')), false, 'the premigrate backup must be dropped after a clean swap');
+    // meta reflects the split
+    const meta = JSON.parse(fs.readFileSync(path.join(sdir, 'meta.json'), 'utf8'));
+    assert.deepEqual([meta.calls, meta.probes, meta.other], [2, 2, 1], 'meta must match the resplit counts');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('resplit is idempotent — a second run skips the already-split session', async () => {
+  const lines = [line(SID_A, 'a1'), probeLine(SID_A, 'p1')];
+  const { dir, out } = mkLegacyShard(SID_A, lines);
+  try {
+    assert.equal((await resplitShards(out)).done, 1);
+    const r2 = await resplitShards(out);
+    assert.equal(r2.done, 0, 'a re-run must not re-migrate');
+    assert.equal(r2.skipped, 1, 'the already-split session must be skipped');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a NATIVELY split shard (shardOnce) is left untouched by resplit', async () => {
+  // Going forward, shardOnce already writes the split. resplit must not touch those.
+  const lines = [line(SID_A, 'a1'), probeLine(SID_A, 'p1'), otherLine(SID_A, 'o1')];
+  const { dir, src, out } = mkMonolith(lines);
+  try {
+    await shardOnce({ file: src, outDir: out });
+    const before = allShardLines(out).slice().sort();
+    const r = await resplitShards(out);
+    assert.equal(r.done, 0, 'a natively-split shard has probes/other already → skipped');
+    assert.deepEqual(allShardLines(out).slice().sort(), before, 'resplit must be a no-op on native shards');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a session id that sanitises to an unusable dir name does not crash the sharder', async () => {
+  // Regression: safeName once fell back to an UNASSIGNED constant that was later removed, so a session
+  // id of exactly "." or ".." threw a ReferenceError mid-stream and aborted the whole shard run.
+  const bad = '..';
+  const l = '{"ts":"2026-07-20T00:00:00.000Z","endpoint":"/v1/messages","method":"POST"'
+    + `,"req_headers":{"host":"api.anthropic.com","x-claude-code-session-id":"${bad}"}`
+    + ',"req_body":"{}","resp":{"status":200},"is_llm_call":true}';
+  const { dir, src, out } = mkMonolith([l, line(SID_A, 'a1')]);
+  try {
+    const r = await shardStream({ file: src, outDir: out });
+    assert.equal(r.records, 2, 'the degenerate-id record must be sharded, not crash the run');
+    // it lands in a reserved bucket INSIDE the shard root (never escapes via ../)
+    assert.equal(fs.existsSync(path.join(out, '_badsid', 'calls.ndjson')), true,
+      'a "." / ".." session id must be parked in a reserved bucket, not written to the parent dir');
+    assert.equal(fs.readFileSync(path.join(out, SID_A, 'calls.ndjson'), 'utf8').trim(), line(SID_A, 'a1'),
+      'the good session after the bad one must still be sharded (the run did not abort)');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

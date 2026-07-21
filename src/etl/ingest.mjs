@@ -42,12 +42,31 @@ export function normalizeRecord(raw) {
 // files' arrays lose that property by construction, so `onSkip` gives them a push-based channel.
 const EXCERPT = 160;
 
-export async function readRecords(filePath, { normalize = true, limit = Infinity, onSkip = null } = {}) {
+// `startOffset` — READ ONLY WHAT ARRIVED SINCE LAST TIME (spec 4.2:49).
+//
+// The streams are append-only, so "what is new" is exactly `size - lastOffset`. Without this the
+// board re-read and re-parsed every capture file on every refresh: measured on a real 6.88 GB
+// capture, 286 MB parses in 2,931 ms against a 70 ms read, i.e. ~70 s of pure JSON.parse per refresh
+// with every record resident at once — which is why `asight serve` could not open it at all.
+//
+// The caller owns the watermark and MUST reset it to 0 when the file shrinks or is replaced
+// (rotation, restore, a new capture reusing the name); see src/server.mjs::makeRecordLoader. This
+// function's own contract is narrower and defensive: start where told, and never emit a record from
+// a partial line — an offset landing mid-record must drop that fragment rather than half-parse it.
+export async function readRecords(filePath, { normalize = true, limit = Infinity, onSkip = null, startOffset = 0 } = {}) {
   const out = [];
   // skipped: one entry per line that carried a record we could NOT recover. blankLines are tracked
   // separately and are NOT a loss (whitespace carries no record) — conflating them would cry wolf.
-  const scan = { file: filePath, parsedLines: 0, blankLines: 0, skippedLines: 0, skipped: [] };
-  const rl = createInterface({ input: createReadStream(filePath, 'utf8'), crlfDelay: Infinity });
+  const scan = { file: filePath, parsedLines: 0, blankLines: 0, skippedLines: 0, skipped: [], startOffset };
+  const start = Number(startOffset) > 0 ? Number(startOffset) : 0;
+  if (start > 0) {
+    // Past EOF is an EMPTY read, not an error: it is the normal steady state (nothing new since the
+    // last poll) and also what a stale watermark on a shrunken file looks like.
+    let size = 0;
+    try { size = (await import('node:fs')).statSync(filePath).size; } catch { return out; }
+    if (start >= size) return out;
+  }
+  const rl = createInterface({ input: createReadStream(filePath, { encoding: 'utf8', start }), crlfDelay: Infinity });
   let lineNo = 0;
   for await (const line of rl) {
     lineNo++;

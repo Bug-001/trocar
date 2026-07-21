@@ -119,3 +119,30 @@ test('a corrupt state file degrades to a full re-shard, not a crash', async () =
     assert.equal(r.records, 1, 'a corrupt state file must fall back to reading from zero');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('the sharder writes a per-session meta.json the board can list from', async () => {
+  const { dir, src, out } = mk();
+  try {
+    fs.writeFileSync(src, line('a') + '\n' + line('b') + '\n');
+    await shardOnce({ file: src, outDir: out });
+    const meta = JSON.parse(fs.readFileSync(path.join(out, SID, 'meta.json'), 'utf8'));
+    assert.equal(meta.session_id, SID, 'meta must name its session');
+    assert.equal(meta.calls, 2, 'meta.calls must count the LLM calls sharded');
+    // no meta.json is a permitted degrade, but a WRONG count silently mislabels the session list
+    assert.equal(fs.statSync(path.join(out, SID, 'meta.json')).mode & 0o077, 0, 'meta.json must be 0600');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('meta.json accumulates across incremental runs, matching the shard', async () => {
+  const { dir, src, out } = mk();
+  try {
+    fs.writeFileSync(src, line('a') + '\n');
+    await shardOnce({ file: src, outDir: out });
+    fs.appendFileSync(src, line('b') + '\n' + line('c') + '\n');
+    await shardOnce({ file: src, outDir: out });   // incremental: only b,c are new
+    const meta = JSON.parse(fs.readFileSync(path.join(out, SID, 'meta.json'), 'utf8'));
+    const shardLen = fs.readFileSync(path.join(out, SID, 'calls.ndjson'), 'utf8').trim().split('\n').length;
+    assert.equal(meta.calls, 3, 'incremental meta must accumulate (a + b,c), not reset to the last run');
+    assert.equal(meta.calls, shardLen, 'meta.calls must equal the records actually in the shard');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

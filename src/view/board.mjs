@@ -13,6 +13,9 @@ const anyHeaders = (recs) => headersOf(recs.find((r) => r.request_headers || r.r
 
 const base = (p) => String(p).replace(/\/+$/, '').split('/').pop() || String(p);
 const isProbe = (r) => /count_tokens/.test(r.endpoint || '');
+// A session record that is neither real inference nor a count_tokens probe — the sharder's `other`
+// stream. Kept exactly complementary to is_llm_call/isProbe so calls+probes+other = the session total.
+const isOther = (r) => !r.is_llm_call && !isProbe(r);
 
 // ── grouping ────────────────────────────────────────────────────────────────
 // Records carrying x-claude-code-session-id belong to a session; the rest are the
@@ -32,6 +35,7 @@ export const controlRecords = (records) => records.filter((r) => !sessionIdOf(r)
 // ── per-session derived meta (cheap; no analyze) ──────────────────────────────
 const llmRecs = (recs) => recs.filter((r) => r.is_llm_call);
 const probeRecs = (recs) => recs.filter(isProbe);
+const otherRecs = (recs) => recs.filter(isOther);
 const probeSeries = (precs) =>
   precs.map((r) => { const rp = respOf(r); return { ts: r.ts_request, tokens: (rp && rp.body && rp.body.input_tokens) ?? null }; })
     .filter((p) => p.tokens != null);
@@ -70,42 +74,68 @@ function harnessOf(recs) {
 const hasSubagent = (recs) => recs.some((r) => String(headersOf(r)['x-claude-code-agent-id'] || '').trim());
 function lastTs(recs) { let m = ''; for (const r of recs) { const t = String(r.ts_request || ''); if (t > m) m = t; } return m; }
 
-function sessionMetaFor(id, recs, enrich) {
-  const info = enrich ? enrich(id) : null; // { slug, cwd, title } | null
+// project_slug / project_path / title are a BOARD-side lookup (enrich against ~/.claude/projects),
+// not a capture fact — so they are layered on separately from the per-session facts. This is applied
+// both to metas computed from records (sessionMetaFor) and to metas precomputed by the archive layer
+// (projectsViewFromMetas), so the two paths produce identical session objects.
+function applyEnrich(base, enrich) {
+  const info = enrich ? enrich(base.session_id) : null; // { slug, cwd, title } | null
   return {
-    session_id: id,
+    session_id: base.session_id,
     project_slug: info && info.slug ? info.slug : '_unresolved',
     project_path: (info && info.cwd) || null,
-    entrypoint: entrypointOf(recs),
-    ...harnessOf(recs), // { harness, provider }
+    entrypoint: base.entrypoint ?? null,
+    harness: base.harness ?? null,
+    provider: base.provider ?? null,
     title: (info && info.title) || null,
-    calls: llmRecs(recs).length,
-    probes: probeRecs(recs).length,
-    has_subagent: hasSubagent(recs),
-    last_ts: lastTs(recs),
+    calls: base.calls || 0,
+    probes: base.probes || 0,
+    other: base.other || 0,
+    has_subagent: !!base.has_subagent,
+    last_ts: base.last_ts || '',
   };
 }
 
-// ── /api/projects ─────────────────────────────────────────────────────────────
-export function projectsView(records, { enrich } = {}) {
-  const g = groupSessions(records);
+function sessionMetaFor(id, recs, enrich) {
+  return applyEnrich({
+    session_id: id,
+    entrypoint: entrypointOf(recs),
+    ...harnessOf(recs), // { harness, provider }
+    calls: llmRecs(recs).length,
+    probes: probeRecs(recs).length,
+    other: otherRecs(recs).length,
+    has_subagent: hasSubagent(recs),
+    last_ts: lastTs(recs),
+  }, enrich);
+}
+
+function groupIntoProjects(sessions) {
   const byProj = new Map();
-  for (const [id, recs] of g) {
-    const m = sessionMetaFor(id, recs, enrich);
-    m.project_slug = m.project_slug; // keep as computed
+  for (const m of sessions) {
     if (!byProj.has(m.project_slug)) byProj.set(m.project_slug, []);
     byProj.get(m.project_slug).push(m);
   }
-  const projects = [...byProj.entries()].map(([slug, sessions]) => {
-    sessions.sort((a, b) => String(b.last_ts).localeCompare(String(a.last_ts)));
-    const anyPath = sessions.find((s) => s.project_path)?.project_path;
+  const projects = [...byProj.entries()].map(([slug, ss]) => {
+    ss.sort((a, b) => String(b.last_ts).localeCompare(String(a.last_ts)));
+    const anyPath = ss.find((s) => s.project_path)?.project_path;
     const name = slug === '_unresolved' ? 'unresolved' : anyPath ? base(anyPath) : slug;
-    return { slug, path: anyPath || slug, name, last_ts: sessions[0].last_ts, sessions };
+    return { slug, path: anyPath || slug, name, last_ts: ss[0].last_ts, sessions: ss };
   });
   // real projects first (newest), the _unresolved bucket last
   projects.sort((a, b) =>
     a.slug === '_unresolved' ? 1 : b.slug === '_unresolved' ? -1 : String(b.last_ts).localeCompare(String(a.last_ts)));
   return { projects };
+}
+
+// ── /api/projects ─────────────────────────────────────────────────────────────
+export function projectsView(records, { enrich } = {}) {
+  return groupIntoProjects([...groupSessions(records)].map(([id, recs]) => sessionMetaFor(id, recs, enrich)));
+}
+
+// Same view, but from per-session metas the archive layer precomputed (src/etl/session-meta.mjs) —
+// so the board can list every session of a multi-GB capture without loading a single record.
+export function projectsViewFromMetas(metas, { enrich } = {}) {
+  return groupIntoProjects((metas || []).map((m) => applyEnrich(m, enrich)));
 }
 
 // ── /api/session ──────────────────────────────────────────────────────────────

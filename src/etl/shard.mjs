@@ -14,13 +14,41 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { emptyMeta, foldRecord, mergeMeta } from './session-meta.mjs';
 
 const NL = 0x0a;
 const SID_KEY = /"x-claude-code-session-id"\s*:\s*"([^"]+)"/i;
 
 // Records with no session header still belong to the corpus — dropping them would be an
-// invariant-2 violation dressed up as tidying. They get their own bucket.
-export const UNASSIGNED = '_unassigned';
+// invariant-2 violation dressed up as tidying. Session-LESS traffic is the control plane; it lands
+// under `control/<class>.ndjson`, bucketed by endpoint (4.2:51 · demo sessions.mjs controlClass).
+export const CONTROL_DIR = 'control';
+
+// Which per-session stream a record belongs to (4.2:51 · demo sessions.mjs classOf). The split keeps
+// the board's calls timeline clean: `calls.ndjson` = real inference (the ReAct spine, feeds every
+// table), `probes.ndjson` = count_tokens context-size measurements (the probe rail — a ruler, not a
+// turn), `other.ndjson` = any other session-tagged non-inference traffic. Storing them apart is what
+// lets the big-session read path load only the calls it draws, not the probe flood interleaved with it.
+const STREAM_FILE = { call: 'calls.ndjson', probe: 'probes.ndjson', other: 'other.ndjson' };
+export function classOf(rec) {
+  if (rec && rec.is_llm_call) return 'call';                    // /v1/messages — real inference
+  if (/\/messages\/count_tokens/.test(String((rec && rec.endpoint) || ''))) return 'probe';
+  return 'other';
+}
+
+// Bucket session-LESS control-plane traffic by endpoint (4.2:51 · demo sessions.mjs controlClass).
+// This is a STORAGE bucket only; the board's own control-plane VIEW re-derives its display classes
+// server-side (board.mjs controlClass) — 3.1's normalized `control_kind` is the eventual home, and
+// per 2.6:106 the two class vocabularies are knowingly parallel. Keeping the demo's exact buckets here
+// is the faithful port; the board reads the raw records back out, it does not read these filenames.
+export function controlClass(endpoint) {
+  const e = String(endpoint || '');
+  if (/event_logging/.test(e)) return 'telemetry';
+  if (/mcp[-_]registry|mcp_servers/.test(e)) return 'registry';
+  if (/oauth|account/.test(e)) return 'account';
+  if (/bootstrap|grove|penguin|eval|triggers|code\//.test(e)) return 'control';
+  return 'other';
+}
 
 /**
  * Read the session id out of a raw NDJSON line without parsing it.
@@ -41,32 +69,40 @@ export function sessionIdOfLine(line) {
   return m ? m[1] : null;
 }
 
+// A session id that survives sanitisation but is still an unusable directory name ('' / '.' / '..').
+// The record HAS a session id (so it isn't control-plane), just one we can't make a folder from —
+// park it under a reserved bucket rather than crash or let it escape the shard root.
+const UNSAFE_SID = '_badsid';
+
 // A session id reaches the filesystem as a directory name. It comes from a header, i.e. from the
 // wire, so it is untrusted: `../` or a NUL would escape the shard root.
 function safeName(sid) {
   const s = String(sid).replace(/[^A-Za-z0-9._-]/g, '_');
-  return !s || s === '.' || s === '..' ? UNASSIGNED : s.slice(0, 128);
+  return !s || s === '.' || s === '..' ? UNSAFE_SID : s.slice(0, 128);
 }
 
 class ShardWriter {
   constructor(outDir, flushBytes) {
     this.outDir = outDir;
     this.flushBytes = flushBytes;
-    this.buffers = new Map();  // name -> { chunks: Buffer[], bytes: number }
+    this.buffers = new Map();  // relPath -> { chunks: Buffer[], bytes: number }
   }
 
-  add(name, lineWithNl) {
-    let b = this.buffers.get(name);
-    if (!b) { b = { chunks: [], bytes: 0 }; this.buffers.set(name, b); }
+  // relPath is the shard file this line belongs in, e.g. `<sid>/calls.ndjson`, `<sid>/probes.ndjson`,
+  // or `control/telemetry.ndjson` — the demo's per-class split (sessions.mjs classOf/controlClass),
+  // now in the ETL layer per D20.
+  add(relPath, lineWithNl) {
+    let b = this.buffers.get(relPath);
+    if (!b) { b = { chunks: [], bytes: 0 }; this.buffers.set(relPath, b); }
     b.chunks.push(lineWithNl);
     b.bytes += lineWithNl.length;
-    if (b.bytes >= this.flushBytes) this.flush(name);
+    if (b.bytes >= this.flushBytes) this.flush(relPath);
   }
 
-  flush(name) {
-    const b = this.buffers.get(name);
+  flush(relPath) {
+    const b = this.buffers.get(relPath);
     if (!b || !b.chunks.length) return;
-    const file = path.join(this.outDir, name, 'calls.ndjson');
+    const file = path.join(this.outDir, relPath);
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     // Headers are stored verbatim (2026-07-20: no redaction, local-only deployment), which makes
     // file permissions the only thing protecting the corpus. Shards MUST match the source's 0600.
@@ -79,10 +115,135 @@ class ShardWriter {
     b.bytes = 0;
   }
 
-  flushAll() { for (const name of this.buffers.keys()) this.flush(name); }
+  flushAll() { for (const relPath of this.buffers.keys()) this.flush(relPath); }
 }
 
 const STATE_FILE = '.shard-state.json';
+
+/**
+ * Rebuild meta.json for every already-written shard under `outDir`, by STREAMING each
+ * `<id>/calls.ndjson` (never reading a whole shard into memory — the biggest is multi-GB). Used to
+ * backfill shards written before the archive layer; going forward `shardOnce` keeps meta fresh
+ * incrementally, so this is a one-time / repair operation.
+ */
+export async function rebuildMeta(outDir) {
+  const { createInterface } = await import('node:readline');
+  let sessions = 0, records = 0;
+  let entries = [];
+  try { entries = fs.readdirSync(outDir, { withFileTypes: true }); } catch { return { sessions: 0, records: 0 }; }
+  for (const e of entries) {
+    // control/ is session-less (no meta); skip it. Everything else is a session dir.
+    if (!e.isDirectory() || e.name === CONTROL_DIR) continue;
+    const meta = emptyMeta(e.name);
+    let seen = false;
+    // Fold ALL of a session's streams (calls/probes/other) so meta.calls/probes/other match the split
+    // — reading only calls.ndjson would undercount probes and other, which the board lists.
+    for (const stream of Object.values(STREAM_FILE)) {
+      const shard = path.join(outDir, e.name, stream);
+      let size = 0;
+      try { size = fs.statSync(shard).size; } catch { continue; }
+      if (!size) continue;
+      seen = true;
+      const rl = createInterface({ input: fs.createReadStream(shard, { encoding: 'utf8' }), crlfDelay: Infinity });
+      for await (const line of rl) {
+        if (!line) continue;
+        records++;
+        try { foldRecord(meta, JSON.parse(line)); } catch { /* malformed line — skip its contribution */ }
+      }
+    }
+    if (!seen) continue;
+    try { fs.writeFileSync(path.join(outDir, e.name, 'meta.json'), JSON.stringify(meta), { mode: 0o600 }); sessions++; } catch { /* best-effort */ }
+  }
+  return { sessions, records };
+}
+
+// Sum bytes of every *.ndjson file under `dir` (one level of nesting: dir/*.ndjson + dir/*/*.ndjson).
+function ndjsonBytes(dir) {
+  let total = 0;
+  let entries = [];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return 0; }
+  for (const e of entries) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) { for (const f of fs.readdirSync(p)) if (f.endsWith('.ndjson')) total += fs.statSync(path.join(p, f)).size; }
+    else if (e.name.endsWith('.ndjson')) total += fs.statSync(p).size;
+  }
+  return total;
+}
+
+/**
+ * Migrate LEGACY shards (written before the classOf split, when a session's whole traffic sat in ONE
+ * `calls.ndjson`) into the split layout `{calls,probes,other}.ndjson` + `control/<class>.ndjson`.
+ *
+ * These shards are now the SOURCE TRUTH for their sessions (the monolith they came from was deleted),
+ * so the migration MUST NOT lose or rewrite a byte. It reuses the SAME tested `shardStream` to do the
+ * classification, guards on exact byte conservation before swapping anything in, and keeps the
+ * original as `calls.ndjson.premigrate` until every rename has landed — so a crash at any point leaves
+ * either the intact original or the complete new set, never a half-written session (invariant 2).
+ *
+ * Idempotent: a dir already carrying `probes.ndjson`/`other.ndjson` or the `.split-v2` marker is skipped.
+ */
+export async function resplitShards(outDir) {
+  let entries = [];
+  try { entries = fs.readdirSync(outDir, { withFileTypes: true }); } catch { return { done: 0, skipped: 0, failed: 0 }; }
+  let done = 0, skipped = 0, failed = 0;
+  for (const e of entries) {
+    if (!e.isDirectory() || e.name === CONTROL_DIR) continue;
+    const sdir = path.join(outDir, e.name);
+    const calls = path.join(sdir, 'calls.ndjson');
+    if (!fs.existsSync(calls)) { skipped++; continue; }
+    if (fs.existsSync(path.join(sdir, 'probes.ndjson')) || fs.existsSync(path.join(sdir, 'other.ndjson'))
+      || fs.existsSync(path.join(sdir, '.split-v2'))) { skipped++; continue; }
+
+    const before = fs.statSync(calls).size;
+    const tmp = path.join(sdir, '.resplit-tmp');
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try {
+      // Re-run the tested split over just this session's mixed calls.ndjson. Every line already carries
+      // this session's id, so they land under tmp/<e.name>/; any truly session-less line (there should
+      // be none in a session shard) would surface under tmp/control/ and is handled below.
+      await shardStream({ file: calls, outDir: tmp });
+      const after = ndjsonBytes(tmp);
+      if (after !== before) { // byte-conservation guard: refuse to swap if a single byte went missing
+        failed++;
+        fs.rmSync(tmp, { recursive: true, force: true });
+        continue;
+      }
+      const produced = path.join(tmp, e.name);
+      // Back the original up (instant rename, same fs), then move each produced stream into place.
+      fs.renameSync(calls, calls + '.premigrate');
+      for (const s of Object.values(STREAM_FILE)) {
+        const src = path.join(produced, s);
+        if (fs.existsSync(src)) fs.renameSync(src, path.join(sdir, s));
+      }
+      // shardStream already folded the correct split meta while copying — carry it into place so a
+      // direct resplit leaves the archive layer consistent without a separate rebuildMeta pass.
+      const pmeta = path.join(produced, 'meta.json');
+      if (fs.existsSync(pmeta)) fs.renameSync(pmeta, path.join(sdir, 'meta.json'));
+      // Fold any stray control lines up into the shared control/ bucket (append, byte-exact).
+      const tmpControl = path.join(tmp, CONTROL_DIR);
+      if (fs.existsSync(tmpControl)) {
+        const dstControl = path.join(outDir, CONTROL_DIR);
+        fs.mkdirSync(dstControl, { recursive: true, mode: 0o700 });
+        for (const f of fs.readdirSync(tmpControl)) {
+          if (!f.endsWith('.ndjson')) continue;
+          const buf = fs.readFileSync(path.join(tmpControl, f));
+          const fd = fs.openSync(path.join(dstControl, f), 'a', 0o600);
+          try { fs.writeSync(fd, buf); } finally { fs.closeSync(fd); }
+        }
+      }
+      fs.writeFileSync(path.join(sdir, '.split-v2'), '', { mode: 0o600 });
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(calls + '.premigrate', { force: true }); // new set is fully in place; drop the backup
+      done++;
+    } catch {
+      // Roll forward-safe: if the original was backed up but the swap failed, restore it.
+      fs.rmSync(tmp, { recursive: true, force: true });
+      if (!fs.existsSync(calls) && fs.existsSync(calls + '.premigrate')) fs.renameSync(calls + '.premigrate', calls);
+      failed++;
+    }
+  }
+  return { done, skipped, failed };
+}
 
 /**
  * Read the shard watermarks. This file is a CACHE, never a source of truth (invariant 2): if it is
@@ -153,6 +314,10 @@ export async function shardStream({
   const size = fs.statSync(file).size;
   const start = Number(fromOffset) > 0 ? Number(fromOffset) : 0;
   const counts = new Map();
+  // Per-session meta accumulated by folding each record — the archive layer that lets the board list
+  // every session without loading records (src/etl/session-meta.mjs). Built alongside the raw byte
+  // copy; the shard bytes stay verbatim, the meta is a derived projection.
+  const metas = new Map();
   const out = {
     records: 0, bytes: 0, offset: start, sessions: counts, unassigned: 0, partial: false,
   };
@@ -178,9 +343,34 @@ export async function shardStream({
       from = nl + 1;
       if (lineWithNl.length > 1) {
         const sid = sessionIdOfLine(lineWithNl.subarray(0, Math.min(lineWithNl.length, 8192)).toString('utf8'));
-        const name = sid ? safeName(sid) : UNASSIGNED;
-        if (!sid) out.unassigned++;
-        w.add(name, lineWithNl);
+        // Parse the record ONCE, for classification (classOf/controlClass need is_llm_call + endpoint)
+        // and the meta fold. The RAW bytes are still what gets written — this parse never touches the
+        // shard content, so invariant 2 holds. A partial/malformed line fails to parse (rec=null); its
+        // bytes are still kept, it just can't be classified beyond its session id.
+        let rec = null;
+        try { rec = JSON.parse(lineWithNl.subarray(0, lineWithNl.length - 1).toString('utf8')); } catch { /* keep bytes, skip derivation */ }
+        let relPath, name;
+        if (sid) {
+          name = safeName(sid);
+          // Unparseable-but-session-tagged records default to the calls stream: they belong to the
+          // session, and 'calls' is the stream the read path always loads, so a byte-preserved record
+          // is never orphaned into a stream the board might skip.
+          relPath = name + '/' + STREAM_FILE[rec ? classOf(rec) : 'call'];
+          // Fold every session-tagged record (calls/probes/other) into its meta; foldRecord itself
+          // decides which counter each one bumps. Malformed → bytes kept above, meta contribution skipped.
+          if (rec) {
+            let meta = metas.get(name);
+            if (!meta) { meta = emptyMeta(sid); metas.set(name, meta); }
+            foldRecord(meta, rec);
+          }
+        } else {
+          // Session-less control plane: bucket by endpoint (demo controlClass). No per-session meta —
+          // control traffic never appears in the board's session list (4.2:51 "不进 3.2 会话表").
+          out.unassigned++;
+          name = CONTROL_DIR;
+          relPath = CONTROL_DIR + '/' + controlClass(rec ? rec.endpoint : '') + '.ndjson';
+        }
+        w.add(relPath, lineWithNl);
         counts.set(name, (counts.get(name) || 0) + 1);
         out.records++;
       }
@@ -200,5 +390,22 @@ export async function shardStream({
   out.partial = carry.length > 0;
   out.offset = consumed;
   w.flushAll();
+
+  // Write each touched session's meta.json. A resumed run (start>0) only saw NEW records, so its meta
+  // MERGES with what is already on disk; a full run (start===0) saw everything from the top and
+  // OVERWRITES (else a re-shard would double-count). The board reads these instead of the records.
+  for (const [name, meta] of metas) {
+    const metaPath = path.join(outDir, name, 'meta.json');
+    let merged = meta;
+    if (start > 0) {
+      let prev = null;
+      try { prev = JSON.parse(fs.readFileSync(metaPath, 'utf8')); } catch { /* first meta for this session */ }
+      merged = mergeMeta(prev, meta);
+    }
+    try {
+      fs.mkdirSync(path.dirname(metaPath), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(metaPath, JSON.stringify(merged), { mode: 0o600 });
+    } catch { /* best-effort: a missing meta only means the list re-derives from records */ }
+  }
   return out;
 }
