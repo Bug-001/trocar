@@ -46,7 +46,9 @@ test('`asight uninstall` deletes BOTH capture-agent plists (product path, not ju
     assert.ok(fs.existsSync(path.join(la, 'com.asight.env.plist')), 'precondition: env agent present');
 
     execFileSync(process.execPath, [BIN, 'uninstall'], {
-      env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` },
+      // uninstall also tears down the Desktop Clash steer: pin its mihomo socket to a dead path so
+      // this run can never discover (let alone reload) the developer's own Clash core (D29)
+      env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, ASIGHT_MIHOMO_SOCK: path.join(home, 'no-such-mihomo.sock') },
       stdio: 'ignore',
     });
 

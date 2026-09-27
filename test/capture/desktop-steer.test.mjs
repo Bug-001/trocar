@@ -1,13 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
+import * as nodeFs from 'node:fs';
 import {
   getDesktopSteer, injectScript, stripBlock, spliceRuntime, stripRuntime,
   stripMergeLegacy, scriptBlock, PROXY_NAME, DESKTOP_RULE,
+  mihomoSockCandidates, knownMihomoSocks, discoverMihomoSock,
 } from '../../src/capture/desktop-steer.mjs';
 
 // 4.1:61 / D22 — the macOS-only CC-Desktop Clash steer. Durable mechanism = the Verge global
 // Script (imperative unshift, survives regen). All I/O is injected so NO real Clash config is
 // touched: an in-memory fs + spy mihomoReload/probeLive.
+// A developer's own ASIGHT_MIHOMO_SOCK would outrank the controlled discovery below and point the
+// default reload at their REAL core — never inherit it here.
+delete process.env.ASIGHT_MIHOMO_SOCK;
 
 const NO_OP = '// Define main function (script entry)\nfunction main(config, profileName) { return config; }\n';
 
@@ -353,6 +361,299 @@ test('D28 off() with no atrace block present leaves Script.js unwritten', async 
   assert.equal(out.ok, true);
   assert.ok(!writes.includes('/s.js'), 'nothing to strip → no write');
   assert.equal(fs.files.get('/s.js'), USER_MAIN);
+});
+
+// ── D29: the immediate step on Clash Verge 2.5.x service mode ────────────────────────────────
+// Verified 2026-09-27 on Verge 2.5.5 + mihomo v1.19.31 (service mode):
+//  · the control socket is /var/run/clash-verge-service/users/<uid>/verge-mihomo.sock (mihomo runs as
+//    root with `-ext-ctl-unix <that>`); /tmp/verge is gone and the runtime yaml's
+//    external-controller-unix is stale → discover the socket, never hard-code one;
+//  · PUT /configs {path} → 400 "not subpath of home directory or SAFE_PATHS" (home = a root-owned dir);
+//    PUT /configs {payload} → 204 → reload by payload, write no file;
+//  · after ANY Verge regen the runtime already carries the Script-produced proxy + rule WITHOUT our
+//    sentinels → splicing again = duplicate proxy name → mihomo 400; and an off() that strips only
+//    sentinel lines leaves the live route in place while claiming a clean teardown.
+
+// what Verge writes after a regen with the durable Script.js steer in place (serde_yaml block style)
+const RT_REGEN = [
+  'mixed-port: 7897',
+  'external-controller-unix: /var/folders/xx/T/verge-mihomo.sock',
+  'proxies:',
+  '- name: atrace-mitm',
+  '  type: http',
+  '  server: 127.0.0.1',
+  '  port: 9898',
+  '- name: VPN',
+  '  type: anytls',
+  '  alpn:',
+  '  - h2',
+  'proxy-groups:',
+  '- name: AI',
+  '  type: select',
+  '  proxies:',
+  '  - VPN',
+  'rules:',
+  '- DST-PORT,25,DIRECT',
+  `- ${DESKTOP_RULE}`,
+  '- MATCH,AI',
+  '',
+].join('\n');
+const RT_REGEN_CLEAN = RT_REGEN.replace('- name: atrace-mitm\n  type: http\n  server: 127.0.0.1\n  port: 9898\n', '').replace(`- ${DESKTOP_RULE}\n`, '');
+const countProxy = (y) => (y.match(/name: '?atrace-mitm'?[,}\s]/g) || []).length;
+const countRule = (y) => y.split('\n').filter((l) => l.includes(DESKTOP_RULE)).length;
+
+test('D29 stripRuntime also removes the Script-produced (unmarked, block-style) proxy + rule', () => {
+  assert.equal(RT_REGEN_CLEAN.includes('atrace-mitm'), false, 'fixture sanity');
+  assert.equal(stripRuntime(RT_REGEN), RT_REGEN_CLEAN, 'exactly our two entries go; the VPN item keeps its nested list, other rules stay');
+});
+
+test('D29 spliceRuntime over a regenerated runtime yields exactly ONE proxy + ONE rule (mihomo 400s on a duplicate name)', () => {
+  const { yaml, splicedProxies, splicedRules } = spliceRuntime(RT_REGEN, 9899);
+  assert.ok(splicedProxies && splicedRules);
+  assert.equal(countProxy(yaml), 1, 'one atrace-mitm proxy');
+  assert.equal(countRule(yaml), 1, 'one atrace rule');
+  assert.match(yaml, /port: 9899\}/, 'the requested port wins over the regenerated one');
+  assert.doesNotMatch(yaml, /port: 9898/);
+  assert.equal(stripRuntime(yaml), RT_REGEN_CLEAN, 'and it still strips back to the clean runtime');
+});
+
+test('D29 stripRuntime handles key order, quoting and indented-list variants — and only the EXACT name', () => {
+  const rt = [
+    'proxies:',
+    '  - type: http',
+    "    name: 'atrace-mitm'",
+    '    port: 9898',
+    '  - {name: atrace-mitm, type: http, server: 127.0.0.1, port: 9898}',
+    '  - name: atrace-mitm-backup',
+    '    type: http',
+    'rules:',
+    `  - '${DESKTOP_RULE}'`,
+    '  - MATCH,DIRECT',
+    '',
+  ].join('\n');
+  assert.equal(stripRuntime(rt), 'proxies:\n  - name: atrace-mitm-backup\n    type: http\nrules:\n  - MATCH,DIRECT\n');
+});
+
+test('D29 stripRuntime never deletes a user proxy for a NESTED `name: atrace-mitm` (only the item\'s own name)', () => {
+  const rt = [
+    'proxies:',
+    '- name: VPN',
+    '  type: ss',
+    '  plugin-opts:',
+    '    name: atrace-mitm',
+    '-',
+    '  name: atrace-mitm',
+    '  type: http',
+    'rules:',
+    '- MATCH,VPN',
+    '',
+  ].join('\n');
+  assert.equal(stripRuntime(rt), 'proxies:\n- name: VPN\n  type: ss\n  plugin-opts:\n    name: atrace-mitm\nrules:\n- MATCH,VPN\n',
+    'the VPN proxy survives; the bare-dash atrace item goes');
+});
+
+test('D29 stripRuntime works on a CRLF runtime (else on() 400s on a duplicate and off() leaves the route)', () => {
+  const crlf = RT_REGEN.replace(/\n/g, '\r\n');
+  assert.equal(stripRuntime(crlf), RT_REGEN_CLEAN.replace(/\n/g, '\r\n'));
+});
+
+test('D29 mihomoSockCandidates: the live core\'s -ext-ctl-unix first, then the runtime yaml, then known locations (deduped)', () => {
+  const ps = [
+    '/Applications/Clash Verge.app/Contents/MacOS/clash-verge',
+    '/Library/Application Support/clash-verge-service/cores/verge-mihomo -d /Library/Application Support/clash-verge-service/users/501/runtime -f /Library/Application Support/clash-verge-service/users/501/runtime/config.yaml -ext-ctl-unix /var/run/clash-verge-service/users/501/verge-mihomo.sock',
+    '/opt/mihomo -ext-ctl-unix /Users/me/My Socks/m.sock -secret s3cr3t',
+    '/opt/other-core --ext-ctl-unix=/run/x.sock',
+  ].join('\n');
+  const got = mihomoSockCandidates({ psText: ps, runtimeYaml: RT_REGEN, known: knownMihomoSocks(501) });
+  assert.deepEqual(got, [
+    '/var/run/clash-verge-service/users/501/verge-mihomo.sock',
+    '/Users/me/My Socks/m.sock',
+    '/run/x.sock',
+    '/var/folders/xx/T/verge-mihomo.sock',
+    '/tmp/verge/verge-mihomo.sock',
+  ]);
+  assert.deepEqual(mihomoSockCandidates({}), [], 'nothing known → nothing to try (never a made-up path)');
+});
+
+test('D29 discoverMihomoSock takes the first candidate that ANSWERS and says what it tried', async () => {
+  const alive = new Set(['/b.sock', '/c.sock']);
+  assert.deepEqual(await discoverMihomoSock(['/a.sock', '/b.sock', '/c.sock'], async (p) => alive.has(p)), { sock: '/b.sock', tried: ['/a.sock', '/b.sock'] });
+  assert.deepEqual(await discoverMihomoSock(['/a.sock'], async () => false), { sock: null, tried: ['/a.sock'] });
+});
+
+// A fake mihomo on a REAL unix socket (temp dir) — exercises the product path end to end (discovery →
+// payload reload → live probe) without ever touching the machine's own Clash. It enforces the two
+// behaviours of the real v1.19.31 core that broke the old path: SAFE_PATHS on {path}, and a
+// duplicate-proxy-name rejection.
+async function fakeMihomo({ rejectAll = null } = {}) {
+  const dir = nodeFs.mkdtempSync(path.join(os.tmpdir(), 'asight-mh-'));
+  const sock = path.join(dir, 'm.sock');
+  const state = { puts: [], live: false };
+  const send = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(obj ? JSON.stringify(obj) : ''); };
+  const srv = http.createServer((req, res) => {
+    let b = ''; req.on('data', (c) => (b += c));
+    req.on('end', () => {
+      if (req.method === 'GET' && req.url === '/version') return send(res, 200, { meta: true, version: 'v1.19.31' });
+      if (req.method === 'GET' && req.url === '/proxies') return send(res, 200, { proxies: state.live ? { [PROXY_NAME]: { type: 'Http' } } : {} });
+      if (req.method === 'PUT' && req.url.startsWith('/configs')) {
+        const body = JSON.parse(b); state.puts.push(body);
+        if (body.path) return send(res, 400, { message: `path is not subpath of home directory or SAFE_PATHS: ${body.path}` });
+        if (countProxy(body.payload) > 1) return send(res, 400, { message: `proxy ${PROXY_NAME} is the duplicate name` });
+        if (rejectAll) return send(res, 400, { message: rejectAll });
+        state.live = countProxy(body.payload) === 1 && countRule(body.payload) === 1;
+        return send(res, 204);
+      }
+      send(res, 404, { message: 'no route' });
+    });
+  });
+  await new Promise((r) => srv.listen(sock, r));
+  return { sock, state, close: () => new Promise((r) => srv.close(() => { nodeFs.rmSync(dir, { recursive: true, force: true }); r(); })) };
+}
+// deps for the REAL default reload/probe: discovery is fed a controlled ps listing + known list, so the
+// test can never find (let alone reload) the developer's own mihomo.
+const psFor = (sock) => () => `/x/verge-mihomo -d /x/runtime -ext-ctl-unix ${sock}`;
+
+test('D29 on() finds the live socket via ps, reloads by PAYLOAD (never a file path), status() probes the same socket', async () => {
+  const mh = await fakeMihomo();
+  try {
+    const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT_REGEN });
+    const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', psText: psFor(mh.sock), knownSocks: [] });
+    const out = await steer.on({ port: 9898 });
+    assert.equal(out.ok, true, out.reason);
+    assert.equal(mh.state.puts.length, 1, 'one reload');
+    assert.deepEqual(Object.keys(mh.state.puts[0]), ['payload'], 'payload form only — no path, so no SAFE_PATHS 400');
+    assert.equal(countProxy(mh.state.puts[0].payload), 1, 'the Script-produced copy was not duplicated');
+    // (the payload-only key check above is what rules out the old apply-file: it was written via the
+    // real fs, not deps.fs — this line only proves on() adds nothing next to Verge's own files)
+    assert.deepEqual([...fs.files.keys()].sort(), ['/rt.yaml', '/s.js'], 'nothing written beside Script.js');
+    assert.equal(out.status.live, true, 'the probe reached the same (discovered) socket');
+    assert.equal(out.status.mihomoSock, mh.sock);
+  } finally { await mh.close(); }
+});
+
+test('D29 off() over a regenerated runtime drops the Script-produced route from the LIVE core, not just the file', async () => {
+  const mh = await fakeMihomo();
+  try {
+    const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
+    const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', psText: psFor(mh.sock), knownSocks: [] });
+    assert.equal((await steer.on({ port: 9898 })).ok, true);
+    fs.files.set('/rt.yaml', RT_REGEN); // Verge regenerated meanwhile: the route is now unmarked
+    const out = await steer.off();
+    assert.equal(out.ok, true, out.reason);
+    const last = mh.state.puts.at(-1).payload;
+    assert.equal(countProxy(last), 0, 'no atrace-mitm proxy pushed to the core');
+    assert.equal(countRule(last), 0, 'no atrace rule pushed to the core');
+    assert.equal(last, RT_REGEN_CLEAN);
+    assert.equal(out.status.live, false);
+  } finally { await mh.close(); }
+});
+
+test('D29 no reachable socket → ok:false naming what was tried + the Profiles → reactivate fallback', async () => {
+  const gone = path.join(os.tmpdir(), `asight-no-such-${process.pid}.sock`);
+  const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', psText: () => '', knownSocks: [gone] });
+  const on = await steer.on({ port: 9898 });
+  assert.equal(on.ok, false);
+  assert.ok(on.reason.includes(gone), 'names the socket paths it tried');
+  assert.match(on.reason, /Profiles/, 'tells the user how to apply it by hand');
+  assert.match(on.reason, /reactivate/);
+  assert.equal(on.status.scriptInstalled, true, 'the durable half landed');
+  assert.equal(on.status.live, null, 'no socket → live is UNKNOWN, not "no"');
+  const off = await steer.off();
+  assert.equal(off.ok, false);
+  assert.match(off.reason, /reactivate/, 'the block is gone from Script.js → reactivating drops the live route');
+});
+
+test('D29 a mihomo rejection surfaces mihomo\'s OWN message, not just a status code', async () => {
+  const mh = await fakeMihomo({ rejectAll: 'rules[3] [NOPE] error: unsupported rule type' });
+  try {
+    const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
+    const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', psText: psFor(mh.sock), knownSocks: [] });
+    const out = await steer.on({ port: 9898 });
+    assert.equal(out.ok, false);
+    assert.match(out.reason, /400/);
+    assert.match(out.reason, /unsupported rule type/);
+    assert.match(out.reason, /reactivate/);
+  } finally { await mh.close(); }
+});
+
+test('D29 off(): the reactivate hint appears ONLY once the Script.js block is really gone', async () => {
+  const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 0, error: 'no socket' }), probeLive: () => Promise.resolve(null) });
+  await steer.on({ port: 9898 });
+  const realWrite = fs.writeFileSync;
+  fs.writeFileSync = (p, c) => { if (p === '/s.js') { const e = new Error('EACCES'); e.code = 'EACCES'; throw e; } return realWrite(p, c); };
+  const stuck = await steer.off();
+  fs.writeFileSync = realWrite;
+  assert.equal(stuck.ok, false);
+  assert.doesNotMatch(stuck.reason, /reactivate/, 'reactivating would RE-APPLY a block that is still in Script.js');
+});
+
+test('D29 an ACCEPTED reload is not proof: on() with the proxy absent from the live core is ok:false', async () => {
+  const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 204 }), probeLive: () => Promise.resolve(false) });
+  const out = await steer.on({ port: 9898 });
+  assert.equal(out.ok, false);
+  assert.match(out.reason, /accepted the reload but atrace-mitm is NOT/);
+  assert.match(out.reason, /reactivate/);
+});
+
+test('D29 an ACCEPTED reload is not proof: off() with the proxy STILL live is ok:false (never a false "clean")', async () => {
+  const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 204 }), probeLive: () => Promise.resolve(true) });
+  await steer.on({ port: 9898 });
+  const out = await steer.off();
+  assert.equal(out.ok, false, 'the core still routes into the MITM');
+  assert.match(out.reason, /STILL in its live proxy list/);
+  assert.match(out.reason, /reactivate/, 'Script.js is clean → a Verge regen is the by-hand fix');
+});
+
+test('D29 live UNKNOWN (null) after an accepted reload does not fail on()/off() — only a definite answer does', async () => {
+  const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 204 }), probeLive: () => Promise.resolve(null) });
+  assert.equal((await steer.on({ port: 9898 })).ok, true);
+  assert.equal((await steer.off()).ok, true);
+});
+
+test('D29 no Verge runtime config for this HOME → no discovery at all (never probes some other core), live UNKNOWN', async () => {
+  let psCalls = 0;
+  const fs = fakeFs({ '/s.js': NO_OP });
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', psText: () => (psCalls++, ''), knownSocks: [] });
+  const st = await steer.status();
+  assert.equal(psCalls, 0, 'ps never consulted');
+  assert.equal(st.live, null);
+  assert.equal(st.mihomoSock, null);
+});
+
+test('D29 ASIGHT_MIHOMO_SOCK pins the socket: no ps, no known locations, reload goes exactly there', async () => {
+  const mh = await fakeMihomo();
+  const prev = process.env.ASIGHT_MIHOMO_SOCK;
+  process.env.ASIGHT_MIHOMO_SOCK = mh.sock;
+  try {
+    const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
+    const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', psText: () => { throw new Error('ps must not run when pinned'); }, knownSocks: ['/must/not/be/tried.sock'] });
+    const out = await steer.on({ port: 9898 });
+    assert.equal(out.ok, true, out.reason);
+    assert.equal(mh.state.puts.length, 1);
+    assert.equal(out.status.mihomoSock, mh.sock);
+  } finally {
+    if (prev === undefined) delete process.env.ASIGHT_MIHOMO_SOCK; else process.env.ASIGHT_MIHOMO_SOCK = prev;
+    await mh.close();
+  }
+});
+
+test('D29 discovery only accepts a real socket (a regular file at a candidate path is skipped, not PUT to)', async () => {
+  const dir = nodeFs.mkdtempSync(path.join(os.tmpdir(), 'asight-nosock-'));
+  const file = path.join(dir, 'verge-mihomo.sock');
+  nodeFs.writeFileSync(file, 'not a socket');
+  const mh = await fakeMihomo();
+  try {
+    const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
+    const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', psText: () => '', knownSocks: [file, mh.sock] });
+    const out = await steer.on({ port: 9898 });
+    assert.equal(out.ok, true, out.reason);
+    assert.equal(out.status.mihomoSock, mh.sock, 'the regular file was passed over');
+  } finally { await mh.close(); nodeFs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('non-darwin: explicit reserved refusal, never a silent no-op (D22)', () => {

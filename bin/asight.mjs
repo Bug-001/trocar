@@ -195,18 +195,24 @@ async function main() {
           caPath: path.join(caDir(), 'atrace-ca.crt'), port, out: mitmOut(),
           asightBin: fileURLToPath(import.meta.url),
         });
-        console.log(`desktop steer ON → CC-Desktop's claude-code → api.anthropic.com routed to asight mitm :${out.port}`);
+        console.log(out.ok
+          ? `desktop steer ON → CC-Desktop's claude-code → api.anthropic.com routed to asight mitm :${out.port}`
+          : `desktop steer INSTALLED (durable) but NOT live yet → claude-code → api.anthropic.com will route to asight mitm :${out.port} after Verge regenerates`);
         console.log('  durable: global Script.js spliced (survives Verge regen) ·', out.scriptPath);
-        console.log('  mihomo reload:', out.reload.status === 204 || out.reload.status === 200 ? 'OK' : `status ${out.reload.status}${out.reload.error ? ' ' + out.reload.error : ''}`);
+        console.log('  mihomo reload:', out.reload.status === 204 || out.reload.status === 200 ? `OK (${out.status.mihomoSock || 'socket'})` : `status ${out.reload.status}${out.reload.error ? ' ' + out.reload.error : ''}`);
         if (agents.reserved) console.log('  capture agents:', agents.reason);
         else console.log(`  capture agents: mitm(${MITM_LABEL}) + CA-trust primer(${ENV_LABEL}) installed → ${agents.mitm.plistPath}, ${agents.env.plistPath}`);
-        console.log('  live now:', out.status.live === true ? 'yes ✓' : out.status.live === false ? 'NO — capture agent starting…' : 'unknown');
+        // the immediate step failed → say why and how to apply it by hand (D29), never just a status code
+        if (!out.ok) console.log('  ⚠ route NOT live now:', out.reason);
+        else console.log('  route live in mihomo:', out.status.live === true ? 'yes ✓' : out.status.live === false ? 'NO' : 'unknown');
         console.log('  ⚠ FULLY quit + reopen Claude Desktop so it inherits NODE_EXTRA_CA_CERTS (a new conversation is not enough).');
       } else if (sub === 'off') {
         const out = await steer.off();
         const agents = removeCaptureAgents();
         if (out.reserved) { console.log('desktop steer:', out.reason); }
-        else {
+        else if (!out.ok) {
+          console.log('⚠ desktop steer NOT fully off:', out.reason);
+        } else {
           console.log('desktop steer OFF → atrace block stripped from global Script.js (the rest kept as-is) + runtime splice removed + mihomo reloaded');
           console.log('  mihomo reload:', out.reload.status === 204 || out.reload.status === 200 ? 'OK' : `status ${out.reload.status}`);
         }
@@ -229,7 +235,7 @@ async function main() {
       const agents = removeCaptureAgents();
       console.log('asight uninstalled:');
       console.log('  · CA removed from the user-level trust store + CC-CLI settings.json steer cleared');
-      console.log('  · Desktop Clash steer:', steer && !steer.reserved ? 'removed' : 'n/a');
+      console.log('  · Desktop Clash steer:', steer && !steer.reserved ? (steer.ok ? 'removed' : `⚠ NOT fully removed — ${steer.reason}`) : 'n/a');
       console.log('  · capture agents:', agents.reserved ? 'n/a' : 'removed (com.asight.mitm + com.asight.env)');
       console.log('  · data/db left intact. NOTE: NODE_EXTRA_CA_CERTS in the live login session persists until logout (run: launchctl unsetenv NODE_EXTRA_CA_CERTS).');
       break;

@@ -11,12 +11,14 @@
 // global Script instead runs LAST on the fully-assembled config on EVERY enhance (subscription /
 // profile update, restart), so imperatively unshifting the proxy + rule both SURVIVES a regen and
 // is RELIABLY applied. We also hot-reload mihomo once so it goes live immediately, without waiting
-// for a natural regen. mihomo validates a reload and keeps the OLD config on error → a bad edit
-// can't break the VPN. macOS-only: non-darwin refuses explicitly (D22 — not a cross-OS contract).
+// for a natural regen (D29: discover the live control socket, reload by `{payload}`, write no file).
+// mihomo validates a reload and keeps the OLD config on error → a bad edit can't break the VPN.
+// macOS-only: non-darwin refuses explicitly (D22 — not a cross-OS contract).
 
 import { homedir } from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
+import { execFileSync } from 'node:child_process';
 import * as realFs from 'node:fs';
 
 export const PROXY_NAME = 'atrace-mitm';
@@ -92,34 +94,134 @@ export function spliceRuntime(yaml, port) {
   }
   return { yaml: out.join('\n'), splicedProxies: didP, splicedRules: didR };
 }
-export function stripRuntime(yaml) { return stripBlock(yaml); }
+
+// Remove EVERY atrace route from a runtime yaml: our sentinel-marked splice, AND the unmarked copy
+// the durable Script.js puts there at each Verge regen (serde_yaml block style, `- name: atrace-mitm`
+// + `- <DESKTOP_RULE>`). Stripping only the sentinel form was D29's bug: after any regen, on()
+// spliced a second proxy of the same name (mihomo 400 "duplicate name") and off() pushed a config
+// that still routed into the MITM. Only the top-level `proxies:` items named EXACTLY atrace-mitm and
+// `rules:` items equal to DESKTOP_RULE go; every other byte stays.
+export function stripRuntime(yaml) {
+  const lines = stripBlock(yaml).split('\n');
+  const tail = lines.at(-1) === '' ? lines.pop() : null; // keep the final newline out of any item
+  const out = [];
+  let section = null, listIndent = null, item = null;
+  // the item's OWN `name` only (the dash line, or a key at the item's key column) — never a nested
+  // `name:` deeper inside some other proxy (e.g. plugin-opts), which would delete the user's proxy
+  const nameIs = `name:\\s*(['"]?)${escapeRe(PROXY_NAME)}\\1\\s*(?:[,}]|$)`;
+  const isOurProxy = ([head, ...rest]) => {
+    if (new RegExp(`^\\s*-\\s+(?:\\{\\s*)?${nameIs}`).test(head)) return true;
+    const inline = /^(\s*-\s+)\S/.exec(head); // `- key: v` → keys sit where `key` starts
+    const keyCol = inline ? inline[1].length : (rest.find((l) => l.trim()) || '').search(/\S/); // bare `-`
+    return rest.some((l) => l.length - l.trimStart().length === keyCol && new RegExp(`^\\s*${nameIs}`).test(l));
+  };
+  const isOurRule = (l) => new RegExp(`^\\s*-\\s+(['"]?)${escapeRe(DESKTOP_RULE)}\\1\\s*$`).test(l);
+  const flush = () => { if (item && !isOurProxy(item)) out.push(...item); item = null; };
+  for (const ln of lines) {
+    const top = /^[^\s#-][^:]*:/.test(ln);
+    if (top) { flush(); section = ln.split(':')[0]; listIndent = null; out.push(ln); continue; }
+    const dash = /^(\s*)-(?:\s|$)/.exec(ln);
+    if (dash && listIndent === null) listIndent = dash[1].length;
+    if (section === 'proxies') {
+      if (dash && dash[1].length === listIndent) { flush(); item = [ln]; continue; }
+      if (item) { item.push(ln); continue; }
+    } else if (section === 'rules' && dash && dash[1].length === listIndent && isOurRule(ln)) continue;
+    out.push(ln);
+  }
+  flush();
+  if (tail !== null) out.push(tail);
+  return out.join('\n');
+}
 
 function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
-// ── the mihomo hot-reload (injectable; default = the Verge control unix socket) ────────────────
+// ── the mihomo control socket: discovered, never hard-coded (D29) ─────────────────────────────
+// Where the live core listens depends on how Verge runs it: 2.5.x service mode = clash-verge-service
+// starts mihomo as root with `-ext-ctl-unix /var/run/clash-verge-service/users/<uid>/…`; older service
+// mode used /tmp/verge/…; sidecar mode uses the runtime yaml's external-controller-unix (which service
+// mode leaves STALE). So: ask the running process first, then the yaml, then the known spots — and
+// only trust a candidate that actually answers.
+export const knownMihomoSocks = (uid) => [
+  ...(uid != null ? [`/var/run/clash-verge-service/users/${uid}/verge-mihomo.sock`] : []),
+  '/tmp/verge/verge-mihomo.sock',
+];
 
-// mihomo's /configs PUT reloads from a FILE path (the `{payload}` form is rejected 400 on Verge's
-// mihomo). So write the spliced config to a sibling file (NOT Verge's own clash-verge.yaml — Verge
-// owns that) and reload from it. mihomo validates and keeps the OLD config on error → VPN-safe.
-export function defaultMihomoReload(sock, applyPath) {
-  return (yamlPayload) => new Promise((resolve) => {
-    try { realFs.writeFileSync(applyPath, yamlPayload); } catch (e) { return resolve({ status: 0, error: e.message }); }
-    const body = JSON.stringify({ path: applyPath });
-    const req = http.request({ socketPath: sock, method: 'PUT', path: '/configs?force=true', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } },
-      (res) => { res.resume(); res.on('end', () => resolve({ status: res.statusCode })); });
-    req.on('error', (e) => resolve({ status: 0, error: e.message }));
-    req.write(body); req.end();
-  });
+export function mihomoSockCandidates({ psText = '', runtimeYaml = '', known = [] } = {}) {
+  const fromPs = [];
+  for (const line of psText.split('\n')) {
+    // the path may contain spaces (ps joins argv with ' '): take it up to the next ` -flag` or EOL
+    const m = /(?:^|\s)--?ext-ctl-unix(?:=|\s+)(.+?)(?=\s+-{1,2}[A-Za-z][\w-]*(?:[=\s]|$)|\s*$)/.exec(line);
+    if (m) fromPs.push(m[1]);
+  }
+  const y = /^external-controller-unix:[ \t]*(['"]?)(.+?)\1[ \t]*$/m.exec(runtimeYaml);
+  return [...new Set([...fromPs, ...(y ? [y[2]] : []), ...known])];
 }
-function defaultProbeLive(sock) {
-  return () => new Promise((resolve) => {
-    const req = http.request({ socketPath: sock, method: 'GET', path: '/proxies' }, (res) => {
-      let b = ''; res.on('data', (c) => (b += c));
-      res.on('end', () => { try { resolve(!!JSON.parse(b).proxies?.[PROXY_NAME]); } catch { resolve(false); } });
+
+export async function discoverMihomoSock(candidates, probe = probeVersion) {
+  const tried = [];
+  for (const c of candidates) {
+    tried.push(c);
+    if (await probe(c).catch(() => false)) return { sock: c, tried };
+  }
+  return { sock: null, tried };
+}
+
+// read-only: does something speaking mihomo's API answer on this socket? Only a socket owned by root
+// (service mode) or by us (sidecar mode) qualifies: the reload sends it the WHOLE config inline,
+// subscription credentials included, so a socket another local user planted (world-writable /tmp,
+// or a `-ext-ctl-unix` on some other process's command line) must never be picked.
+function probeVersion(sock) {
+  try {
+    const st = realFs.statSync(sock);
+    if (!st.isSocket() || (st.uid !== 0 && st.uid !== process.getuid?.())) return Promise.resolve(false);
+  } catch { return Promise.resolve(false); }
+  return new Promise((resolve) => {
+    const req = http.request({ socketPath: sock, method: 'GET', path: '/version', timeout: 1500 }, (res) => {
+      let b = ''; res.setEncoding('utf8'); res.on('data', (c) => (b += c));
+      res.on('end', () => { try { resolve(res.statusCode === 200 && !!JSON.parse(b).version); } catch { resolve(false); } });
     });
+    req.on('timeout', () => req.destroy(new Error('timeout')));
     req.on('error', () => resolve(false)); req.end();
   });
 }
+
+// ── the mihomo hot-reload: PUT /configs {payload} ─────────────────────────────────────────────
+// The `{path}` form is dead in service mode: mihomo only loads files under its home dir / SAFE_PATHS,
+// and there that is a root-owned dir the user cannot write (400 "path is not subpath of home
+// directory or SAFE_PATHS"). `{payload}` carries the config inline (204 on v1.19.31) → no file is
+// written anywhere. mihomo validates and keeps the OLD config on error → VPN-safe; its own error
+// message is carried back so a rejection is diagnosable, not just a status code.
+export function mihomoPayloadReload(sock) {
+  return (yamlPayload) => new Promise((resolve) => {
+    const body = JSON.stringify({ payload: yamlPayload });
+    const req = http.request({ socketPath: sock, method: 'PUT', path: '/configs?force=true', timeout: 30000, headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } },
+      (res) => {
+        let b = ''; res.setEncoding('utf8'); res.on('data', (c) => (b += c));
+        res.on('end', () => {
+          const r = { status: res.statusCode };
+          if (res.statusCode >= 300) { let msg = b.trim(); try { msg = JSON.parse(b).message || msg; } catch { /* not JSON */ } if (msg) r.error = msg; }
+          resolve(r);
+        });
+      });
+    req.on('timeout', () => req.destroy(new Error('timed out waiting for mihomo')));
+    req.on('error', (e) => resolve({ status: 0, error: e.message }));
+    req.end(body);
+  });
+}
+function probeProxy(sock) {
+  return new Promise((resolve) => {
+    const req = http.request({ socketPath: sock, method: 'GET', path: '/proxies', timeout: 5000 }, (res) => {
+      let b = ''; res.on('data', (c) => (b += c));
+      res.on('end', () => { try { resolve(!!JSON.parse(b).proxies?.[PROXY_NAME]); } catch { resolve(null); } });
+    });
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', () => resolve(null)); req.end(); // could not ask → UNKNOWN, never "not live"
+  });
+}
+
+// The by-hand way to make Verge regenerate (and so apply the durable Script.js state) when the
+// immediate step cannot: there is no supported external API for "regenerate" in Verge 2.5.x.
+export const REACTIVATE_HINT = 'open Clash Verge → Profiles and click the flame (reactivate) button on the active profile';
 
 // ── the macOS steer + non-darwin reserved stub ───────────────────────────────────────────────
 
@@ -138,11 +240,33 @@ export function getDesktopSteer(platform = process.platform, deps = {}) {
   const scriptPath = deps.scriptPath || path.join(vergeDir, 'profiles', 'Script.js');
   const runtimePath = deps.runtimePath || path.join(vergeDir, 'clash-verge.yaml');
   const mergePath = deps.mergePath || path.join(vergeDir, 'profiles', 'Merge.yaml');
-  const sock = deps.sock || '/tmp/verge/verge-mihomo.sock';
-  const applyPath = deps.applyPath || path.join(vergeDir, 'clash-verge-asight.yaml');
-  const mihomoReload = deps.mihomoReload || defaultMihomoReload(sock, applyPath);
-  const probeLive = deps.probeLive || defaultProbeLive(sock);
   const NO_OP = '// Define main function (script entry)\nfunction main(config, profileName) { return config; }\n';
+
+  // The live control socket (D29). deps.sock pins it; otherwise it is discovered lazily — only by the
+  // DEFAULT reload/probe, so a caller that injects both never has the real machine probed. A found
+  // socket is remembered for this steer; a miss is retried next call (Verge may just be starting).
+  // ASIGHT_MIHOMO_SOCK pins it too (unusual installs; and CLI tests, so a sandboxed run can never reach
+  // the developer's own core). No Verge runtime config for this HOME → there is no Verge to look for.
+  const pinned = deps.sock || process.env.ASIGHT_MIHOMO_SOCK;
+  let located = pinned ? { sock: pinned, tried: [pinned] } : null;
+  const locate = async () => {
+    if (located?.sock) return located;
+    if (!fs.existsSync(runtimePath)) return (located = { sock: null, tried: [] });
+    let psText = '';
+    try { psText = deps.psText ? deps.psText() : execFileSync('/bin/ps', ['-axww', '-o', 'command='], { encoding: 'utf8', timeout: 3000 }); } catch { /* no ps → other candidates */ }
+    let runtimeYaml = '';
+    try { runtimeYaml = fs.readFileSync(runtimePath, 'utf8'); } catch { /* absent/unreadable → other candidates */ }
+    const known = deps.knownSocks || knownMihomoSocks(process.getuid?.());
+    located = await discoverMihomoSock(mihomoSockCandidates({ psText, runtimeYaml, known }));
+    return located;
+  };
+  const noSock = (l) => `no live mihomo control socket found (tried: ${l.tried.join(', ') || 'none'})`;
+  const mihomoReload = deps.mihomoReload || (async (yaml) => {
+    const l = await locate();
+    return l.sock ? mihomoPayloadReload(l.sock)(yaml) : { status: 0, error: noSock(l) };
+  });
+  // no socket → UNKNOWN (null), never "not live": we could not ask
+  const probeLive = deps.probeLive || (async () => { const l = await locate(); return l.sock ? probeProxy(l.sock) : null; });
 
   // ONLY a genuinely absent file may fall back to the default. Every other read failure (EACCES on
   // the user's own Script.js, a directory, a broken symlink) MUST NOT degrade into "empty → use the
@@ -191,7 +315,7 @@ export function getDesktopSteer(platform = process.platform, deps = {}) {
     try { rt = read(runtimePath, null); } catch (e) {
       return {
         ok: false,
-        reason: `cannot read the runtime config ${runtimePath} (${e.code || e.message}) — NOT live now (mihomo was not reloaded). The durable Script.js steer IS installed and should apply on the next Verge enhance/regen.`,
+        reason: `cannot read the runtime config ${runtimePath} (${e.code || e.message}) — NOT live now (mihomo was not reloaded). The durable Script.js steer IS installed and applies at Verge's next regen — to apply it now, ${REACTIVATE_HINT}.`,
         port, scriptPath, reload, status: await status(), ...(mergeCleanup ? { mergeCleanup } : {}),
       };
     }
@@ -201,7 +325,7 @@ export function getDesktopSteer(platform = process.platform, deps = {}) {
         const missing = [!splicedProxies && 'proxies:', !splicedRules && 'rules:'].filter(Boolean).join(' + ');
         return {
           ok: false,
-          reason: `runtime splice found no ${missing} anchor in ${runtimePath} — NOT live now (mihomo was not reloaded). The durable Script.js steer IS installed and should apply on the next Verge enhance/regen.`,
+          reason: `runtime splice found no ${missing} anchor in ${runtimePath} — NOT live now (mihomo was not reloaded). The durable Script.js steer IS installed and applies at Verge's next regen — to apply it now, ${REACTIVATE_HINT}.`,
           port, scriptPath, reload, status: await status(), ...(mergeCleanup ? { mergeCleanup } : {}),
         };
       }
@@ -209,14 +333,17 @@ export function getDesktopSteer(platform = process.platform, deps = {}) {
     }
     // A reload mihomo refused (rejected config) or never received (control socket down) means the
     // steer is NOT live now — the machine-readable result MUST say so, not just the CLI's printout.
-    if (!reloadOk(reload)) {
+    const st = await status();
+    // an ACCEPTED reload is not proof: check the core really carries the route now (null = could not ask)
+    if (reloadOk(reload) && reload.status != null && st.live === false) reload = { ...reload, notLive: true };
+    if (!reloadOk(reload) || reload.notLive) {
       return {
         ok: false,
-        reason: `${reloadWhy(reload)} — NOT live now. The durable Script.js steer IS installed and should apply on the next Verge enhance/regen; check that Clash Verge is running (${sock}).`,
-        port, scriptPath, reload, status: await status(), ...(mergeCleanup ? { mergeCleanup } : {}),
+        reason: `${reload.notLive ? `mihomo accepted the reload but ${PROXY_NAME} is NOT in its live proxy list` : reloadWhy(reload)} — NOT live now. The durable Script.js steer IS installed and applies at Verge's next regen — to apply it now, ${REACTIVATE_HINT}.`,
+        port, scriptPath, reload, status: st, ...(mergeCleanup ? { mergeCleanup } : {}),
       };
     }
-    return { ok: true, port, scriptPath, reload, status: await status(), ...(mergeCleanup ? { mergeCleanup } : {}) };
+    return { ok: true, port, scriptPath, reload, status: st, ...(mergeCleanup ? { mergeCleanup } : {}) };
   }
 
   // off() MUST report the REAL teardown outcome. A failed undo that reports ok:true tells the user
@@ -255,10 +382,16 @@ export function getDesktopSteer(platform = process.platform, deps = {}) {
     else if (st.scriptInstalled === null) why.push(`could not verify the strip — ${scriptPath} is unreadable (${st.readError || 'unknown error'})`);
     if (runtimeError) why.push(runtimeError);
     if (!reloadOk(reload)) why.push(reloadWhy(reload));
+    // an ACCEPTED reload is not proof either: if the core still lists the proxy, the route is live
+    else if (reload.status != null && st.live === true) why.push(`mihomo accepted the reload but ${PROXY_NAME} is STILL in its live proxy list`);
     if (why.length) {
       return {
         ok: false,
-        reason: `desktop steer NOT fully removed — ${why.join('; ')}. CC-Desktop traffic may STILL be routed into the MITM; re-run \`asight desktop off\` and check \`asight desktop status\`.`,
+        // Once the block is really gone from Script.js, a Verge regen drops the live route too — so
+        // that is the by-hand fix. While the block is still there, reactivating would RE-APPLY it.
+        reason: `desktop steer NOT fully removed — ${why.join('; ')}. CC-Desktop traffic may STILL be routed into the MITM; ${st.scriptInstalled === false
+          ? `the atrace block IS gone from Script.js — to drop the live route now, ${REACTIVATE_HINT}`
+          : 're-run \`asight desktop off\` and check \`asight desktop status\`'}.`,
         reload, status: st, ...(mergeCleanup ? { mergeCleanup } : {}),
       };
     }
@@ -271,7 +404,7 @@ export function getDesktopSteer(platform = process.platform, deps = {}) {
     let scriptInstalled = false, readError = null;
     try { scriptInstalled = read(scriptPath).includes(BEGIN); } catch (e) { scriptInstalled = null; readError = e.message; }
     let live = null; try { live = await probeLive(); } catch { live = null; }
-    return { platform, scriptInstalled, live, proxyName: PROXY_NAME, scriptPath, ...(readError ? { readError } : {}) };
+    return { platform, scriptInstalled, live, proxyName: PROXY_NAME, scriptPath, ...(located ? { mihomoSock: located.sock } : {}), ...(readError ? { readError } : {}) };
   }
 
   return { platform, on, off, status };
