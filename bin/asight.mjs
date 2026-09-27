@@ -207,7 +207,7 @@ async function main() {
         const agents = removeCaptureAgents();
         if (out.reserved) { console.log('desktop steer:', out.reason); }
         else {
-          console.log('desktop steer OFF → global Script.js restored + runtime splice removed + mihomo reloaded (zero residual)');
+          console.log('desktop steer OFF → atrace block stripped from global Script.js (the rest kept as-is) + runtime splice removed + mihomo reloaded');
           console.log('  mihomo reload:', out.reload.status === 204 || out.reload.status === 200 ? 'OK' : `status ${out.reload.status}`);
         }
         if (!agents.reserved) console.log('  capture agents removed:', MITM_LABEL, '+', ENV_LABEL);

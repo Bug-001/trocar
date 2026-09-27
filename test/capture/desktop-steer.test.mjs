@@ -65,14 +65,14 @@ function fakeFs(seed = {}) {
 }
 const RT = 'mixed-port: 7897\nproxies:\n- {name: VPN}\nrules:\n- MATCH,AI\n';
 
-test('darwin on(): augments the global Script, backs up the original, reloads mihomo, reports live', async () => {
+test('darwin on(): augments the global Script, writes no whole-file backup, reloads mihomo, reports live', async () => {
   const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT, '/m.yaml': 'profile:\n  store-selected: true\nprepend-proxies:\n  - {name: atrace-mitm, type: http, server: 127.0.0.1, port: 9899}\n' });
   const reloads = [];
   const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: (y) => (reloads.push(y), Promise.resolve({ status: 204 })), probeLive: () => Promise.resolve(true) });
   const out = await steer.on({ port: 9898 });
   assert.equal(out.ok, true);
   assert.match(fs.files.get('/s.js'), /port: 9898/, 'Script.js carries the atrace unshift');
-  assert.equal(fs.files.get('/s.js.atrace-bak'), NO_OP, 'original Script.js backed up');
+  assert.equal(fs.files.has('/s.js.atrace-bak'), false, 'no .atrace-bak snapshot (D28: undo = strip the sentinel block)');
   assert.doesNotMatch(fs.files.get('/m.yaml'), /prepend-proxies/, 'legacy Merge.yaml block cleaned');
   assert.equal(reloads.length, 1);
   assert.match(reloads[0], /atrace-mitm, type: http, server: 127\.0\.0\.1, port: 9898/, 'reloaded config has the runtime splice');
@@ -80,14 +80,19 @@ test('darwin on(): augments the global Script, backs up the original, reloads mi
   assert.equal(out.status.live, true);
 });
 
-test('darwin off(): restores the no-op Script from backup + reloads a clean runtime (zero residual)', async () => {
+test('darwin off(): strips the atrace block back to a no-op main + reloads a clean runtime (zero residual)', async () => {
   const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
   const reloads = [];
   const deps = { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: (y) => (reloads.push(y), Promise.resolve({ status: 204 })), probeLive: () => Promise.resolve(false) };
   const steer = getDesktopSteer('darwin', deps);
   await steer.on({ port: 9898 });
   const out = await steer.off();
-  assert.equal(fs.files.get('/s.js'), NO_OP, 'Script.js restored to the pristine no-op');
+  const after = fs.files.get('/s.js');
+  assert.doesNotMatch(after, /atrace|unshift|9898/, 'no atrace residue in Script.js');
+  assert.match(after, /function main\([^)]*\)\s*\{\s*return config;\s*\}/, 'a no-op main that still returns config');
+  await steer.on({ port: 9898 });
+  await steer.off();
+  assert.equal(fs.files.get('/s.js'), after, 'on→off is a fixpoint from the second round on');
   assert.doesNotMatch(reloads.at(-1), /atrace-mitm/, 'final reload carries a clean runtime');
   assert.equal(out.status.scriptInstalled, false);
 });
@@ -253,7 +258,7 @@ test('B9 off() returns a structured ok:false when the runtime config is unreadab
   // the Script.js restore already ran → the machine is HALF torn down. Saying so is the whole point.
   assert.equal(out.ok, false, 'a teardown that could not clear the runtime splice is not clean');
   assert.match(out.reason, /rt\.yaml/, 'names the file it could not read');
-  assert.equal(fs.files.get('/s.js'), NO_OP, 'the durable half was still restored');
+  assert.doesNotMatch(fs.files.get('/s.js'), /atrace/, 'the durable half was still stripped');
 });
 
 test('B9 an ABSENT runtime config is still fine — ENOENT means "nothing live to splice"', async () => {
@@ -270,14 +275,84 @@ test('B10 off() reports ok:false when it CANNOT VERIFY the Script.js restore (sc
   const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
   const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 204 }), probeLive: () => Promise.resolve(true) });
   await steer.on({ port: 9898 });
-  // the restore itself lands (it is written from the backup) but Script.js is then unreadable, so
-  // status() cannot confirm the block is gone → UNKNOWN, which MUST NOT be reported as success.
-  const restore = denyRead(fs, '/s.js');
+  // the strip itself lands (off() reads + rewrites Script.js) but the file is unreadable by the time
+  // status() re-reads it → UNKNOWN, which MUST NOT be reported as success.
+  const realRead = fs.readFileSync;
+  let reads = 0;
+  fs.readFileSync = (p) => { if (p === '/s.js' && ++reads > 1) { const e = new Error('EACCES: denied'); e.code = 'EACCES'; throw e; } return realRead(p); };
   let out;
-  try { out = await steer.off(); } finally { restore(); }
+  try { out = await steer.off(); } finally { fs.readFileSync = realRead; }
+  assert.doesNotMatch(fs.files.get('/s.js'), /atrace/, 'the strip did land');
   assert.equal(out.status.scriptInstalled, null, 'status is honest: UNKNOWN, not false');
   assert.equal(out.ok, false, 'unverified is not verified — never claim a clean teardown');
   assert.match(out.reason, /s\.js/, 'names the file whose state is unknown');
+});
+
+// ── D28: off() strips ONLY the sentinel block — never a whole-file snapshot restore ────────────
+// The global Script is shared with the user's own Clash logic (e.g. "SMTP ports → DIRECT" because
+// the subscription's nodes block 25/465/587). Restoring a snapshot taken at the first on() silently
+// deletes every rule the user added since; stripping the sentinel block cannot.
+const USER_MAIN = [
+  '// the user\'s own global script',
+  'function main(config, profileName) {',
+  '  // >>> mail smtp direct (manual) >>>',
+  '  config.rules = config.rules || [];',
+  "  ['DST-PORT,587,DIRECT', 'DST-PORT,465,DIRECT', 'DST-PORT,25,DIRECT'].forEach(function (r) {",
+  '    if (config.rules.indexOf(r) === -1) config.rules.unshift(r);',
+  '  });',
+  '  // <<< mail smtp direct <<<',
+  '  return config;',
+  '}',
+  '',
+].join('\n');
+
+test('D28 on()→off() round-trips a custom global Script byte-for-byte (user logic outside the block survives)', async () => {
+  const fs = fakeFs({ '/s.js': USER_MAIN, '/rt.yaml': RT });
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 204 }), probeLive: () => Promise.resolve(false) });
+  await steer.on({ port: 9898 });
+  const on = fs.files.get('/s.js');
+  assert.match(on, /port: 9898/, 'steer installed');
+  assert.match(on, /DST-PORT,465,DIRECT/, 'user rules kept while on');
+  const out = await steer.off();
+  assert.equal(out.ok, true);
+  assert.equal(fs.files.get('/s.js'), USER_MAIN, 'byte-identical to the pre-on() Script');
+});
+
+test('D28 rules the user adds WHILE capture is on survive off() (the snapshot-restore regression)', async () => {
+  const fs = fakeFs({ '/s.js': NO_OP, '/rt.yaml': RT });
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 204 }), probeLive: () => Promise.resolve(false) });
+  await steer.on({ port: 9898 });
+  // the user edits the global Script by hand: a rule after the atrace block, before `return config`
+  const edited = fs.files.get('/s.js').replace(/\n(\s*return config;)/, "\n  config.rules.unshift('DST-PORT,465,DIRECT');\n$1");
+  assert.notEqual(edited, fs.files.get('/s.js'), 'fixture edit applied');
+  fs.files.set('/s.js', edited);
+  const out = await steer.off();
+  assert.equal(out.ok, true);
+  const after = fs.files.get('/s.js');
+  assert.match(after, /config\.rules\.unshift\('DST-PORT,465,DIRECT'\);/, 'the user rule survived off()');
+  assert.doesNotMatch(after, /atrace|9898/, 'and only the atrace block is gone');
+  assert.equal(after, stripBlock(edited), 'off() == stripBlock(current file), nothing else');
+});
+
+test('D28 a stale .atrace-bak left by an older asight is neither restored nor touched', async () => {
+  const fs = fakeFs({ '/s.js': USER_MAIN, '/s.js.atrace-bak': NO_OP, '/rt.yaml': RT });
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 204 }), probeLive: () => Promise.resolve(false) });
+  await steer.on({ port: 9898 });
+  await steer.off();
+  assert.equal(fs.files.get('/s.js'), USER_MAIN, 'the live Script is not rolled back to the stale snapshot');
+  assert.equal(fs.files.get('/s.js.atrace-bak'), NO_OP, 'the legacy file is left alone (the user decides whether to delete it)');
+});
+
+test('D28 off() with no atrace block present leaves Script.js unwritten', async () => {
+  const fs = fakeFs({ '/s.js': USER_MAIN, '/rt.yaml': RT });
+  const writes = [];
+  const realWrite = fs.writeFileSync;
+  fs.writeFileSync = (p, c) => { writes.push(p); return realWrite(p, c); };
+  const steer = getDesktopSteer('darwin', { fs, scriptPath: '/s.js', runtimePath: '/rt.yaml', mergePath: '/m.yaml', mihomoReload: () => Promise.resolve({ status: 204 }), probeLive: () => Promise.resolve(false) });
+  const out = await steer.off();
+  assert.equal(out.ok, true);
+  assert.ok(!writes.includes('/s.js'), 'nothing to strip → no write');
+  assert.equal(fs.files.get('/s.js'), USER_MAIN);
 });
 
 test('non-darwin: explicit reserved refusal, never a silent no-op (D22)', () => {

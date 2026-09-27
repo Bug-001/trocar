@@ -158,7 +158,6 @@ export function getDesktopSteer(platform = process.platform, deps = {}) {
       throw err;
     }
   };
-  const backupOnce = (p, content) => { const bak = p + '.atrace-bak'; if (content !== null && !fs.existsSync(bak)) fs.writeFileSync(bak, content); };
   // A reload we never had to make (no runtime config on disk) is not a failure; any attempted reload
   // that mihomo did not accept IS one — the steer is not live, whatever the durable half did.
   const reloadOk = (r) => r == null || r.status === null || r.status === 200 || r.status === 204;
@@ -166,9 +165,9 @@ export function getDesktopSteer(platform = process.platform, deps = {}) {
 
   async function on({ port = 9899 } = {}) {
     // 1. DURABLE: augment the global Script (rebuild from the clean original each time → idempotent).
-    //    READ FIRST: a present-but-unreadable Script.js throws here, before the backup or the write.
+    //    READ FIRST: a present-but-unreadable Script.js throws here, before anything is written.
+    //    No whole-file backup (D28): the undo is stripping our sentinel block, not a snapshot restore.
     const original = read(scriptPath, null);
-    backupOnce(scriptPath, original);
     const base = stripBlock(original ?? NO_OP) || NO_OP;
     fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
     fs.writeFileSync(scriptPath, injectScript(base, port));
@@ -223,19 +222,23 @@ export function getDesktopSteer(platform = process.platform, deps = {}) {
   // off() MUST report the REAL teardown outcome. A failed undo that reports ok:true tells the user
   // monitoring is off while CC-Desktop traffic is STILL routed into the MITM — the worst shape of
   // failure for a tool whose undo is first-class (4.1:64 「off 对称 … 零残留」).
+  // The undo strips ONLY the sentinel block (D28). Everything outside it — the user's own global-
+  // Script logic, including rules added while capture was on — stays byte-for-byte. Never roll the
+  // whole file back to a snapshot: that silently deletes whatever the user changed since it was taken.
   async function off() {
     let restoreError = null;
     if (fs.existsSync(scriptPath)) {
-      const bak = scriptPath + '.atrace-bak';
       try {
-        fs.writeFileSync(scriptPath, fs.existsSync(bak) ? fs.readFileSync(bak, 'utf8') : stripBlock(read(scriptPath, NO_OP)));
-      } catch (e) { restoreError = `could not restore ${scriptPath} (${e.code || e.message})`; }
+        const cur = read(scriptPath);
+        const clean = stripBlock(cur);
+        if (clean !== cur) fs.writeFileSync(scriptPath, clean);
+      } catch (e) { restoreError = `could not strip the atrace block from ${scriptPath} (${e.code || e.message})`; }
     }
     let mergeCleanup = null;
     try {
       if (fs.existsSync(mergePath)) fs.writeFileSync(mergePath, stripBlock(stripMergeLegacy(read(mergePath))));
     } catch (e) { mergeCleanup = { ok: false, path: mergePath, error: e.message }; }
-    // An unreadable runtime must not throw out of off() either: the Script.js restore has ALREADY
+    // An unreadable runtime must not throw out of off() either: the Script.js strip has ALREADY
     // run, so a throw leaves the machine half-torn-down with no structured result at all.
     let reload = { status: null };
     let runtimeError = null, rt = null;
@@ -247,9 +250,9 @@ export function getDesktopSteer(platform = process.platform, deps = {}) {
     // Verify the undo actually landed — do not take the write's word for it.
     const why = [];
     if (restoreError) why.push(restoreError);
-    else if (st.scriptInstalled) why.push(`${scriptPath} still carries the atrace block after the restore`);
+    else if (st.scriptInstalled) why.push(`${scriptPath} still carries the atrace block after the strip (sentinel lines edited or missing?)`);
     // UNKNOWN (unreadable Script.js) is not "clean": never claim a teardown we could not verify.
-    else if (st.scriptInstalled === null) why.push(`could not verify the restore — ${scriptPath} is unreadable (${st.readError || 'unknown error'})`);
+    else if (st.scriptInstalled === null) why.push(`could not verify the strip — ${scriptPath} is unreadable (${st.readError || 'unknown error'})`);
     if (runtimeError) why.push(runtimeError);
     if (!reloadOk(reload)) why.push(reloadWhy(reload));
     if (why.length) {
