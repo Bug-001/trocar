@@ -3,15 +3,18 @@
 //   dirs     directories asight created (removed at the end of uninstall if empty)
 //   files    files asight owns (CA, extra trust files) — deleted on uninstall
 //   entries  every user file asight changed: {path, existed_before, mode, pre_sha256, post_sha256, ops,
-//            prior_value, installed_at} + {harness, keys, value, existing_depth, created_dirs}. ops are splices
-//            {offset, removed, inserted}; `removed` is only ever the value asight replaced (a path, never a
-//            secret). The user's file is NEVER copied here (Codex / Hermes .env files hold API keys).
+//            prior_value, installed_at, created_dirs} + per kind: `json-key` (no kind on older manifests) {keys,
+//            value, existing_depth}; `text` {format, vars | line} (text-edit.mjs: a dotenv block, a shell-rc line,
+//            a YAML list row). ops are splices {offset, removed, inserted}; `removed` is only ever the value asight
+//            replaced (a path, or a YAML `[]`, never a secret). The user's file is NEVER copied here (Codex /
+//            Hermes .env files hold API keys).
 // Write-ahead: the intent (no post_sha256) is fsynced before the user's file is touched, so an install that
 // crashed half-way is still found and undone. No whole-file snapshot rollback, ever (D28).
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { setKey, removeKey, reverseOps, getPath } from './json-text.mjs'
+import { dotenvBlock, insertLine, removeAsightText, onlySkeleton, BLOCK_BEGIN } from './text-edit.mjs'
 
 export const MANIFEST = 'install-manifest.json'
 export const manifestPath = (dir) => path.join(dir, MANIFEST)
@@ -71,13 +74,28 @@ export function saveManifest(dir, m, fs = nodeFs) {
   writeDurable(manifestPath(dir), JSON.stringify(m, null, 2) + '\n', 0o600, fs)
 }
 
-// A file asight owns (e.g. a trust file of certificate blocks): listed before it is written, 0600. `sources` names the
-// user files a trust file carries certificates from (paths, never contents), so the merge stays auditable.
-export function writeOwnedFile({ dir, manifest, harness = null, role, file, data, sources = null, fs = nodeFs }) {
-  manifest.files.push({ path: file, role, harness, sha256: sha256(Buffer.from(data)), ...(sources ? { sources } : {}) })
+// A file asight owns (a trust file of certificate blocks, a trust plugin, a launch shim): listed before it is written,
+// with the directories its write creates. `sources` names the user files a trust file carries certificates from
+// (paths, never contents), so the merge stays auditable. `exclusive`: a file already there is never written over
+// (an agent's plugin directory is the user's; asight only adds its own file to it).
+export function writeOwnedFile({ dir, manifest, harness = null, role, file, data, sources = null, mode = 0o600, exclusive = false, fs = nodeFs }) {
+  if (exclusive && fs.existsSync(file)) throw new Error(`${file} already exists; asight will not write over it`)
+  const created = missingDirs(path.dirname(file), fs)
+  manifest.files.push({ path: file, role, harness, sha256: sha256(Buffer.from(data)), mode, created_dirs: created, ...(sources ? { sources } : {}) })
   saveManifest(dir, manifest, fs)
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-  writeDurable(file, data, 0o600, fs)
+  for (const d of created) fs.mkdirSync(d, { mode: 0o700 })
+  writeDurable(file, data, mode, fs)
+}
+
+// Remove a file asight owns, then the directories its write created when they are empty. `changed`: the file was
+// not what asight wrote (removed all the same: it is asight's, the manifest lists it; the caller says so).
+export function removeOwnedFile(item, fs = nodeFs) {
+  sweepTemps(item.path, fs)
+  const cur = readOrNull(fs, item.path)
+  if (cur == null) { removeEmptyDirs(item.created_dirs, fs); return { path: item.path, result: 'already-removed' } }
+  fs.rmSync(item.path, { force: true })
+  removeEmptyDirs(item.created_dirs, fs)
+  return { path: item.path, result: 'removed', ...(item.sha256 && sha256(cur) !== item.sha256 ? { changed: true } : {}) }
 }
 
 // Set one string key in a JSON file the user owns (CC settings.json, Z-Code config.json). Returns the entry, or
@@ -112,6 +130,50 @@ export function applyJsonKey({ dir, manifest, harness, file, keys, value, now = 
   saveManifest(dir, manifest, fs)
   return entry
 }
+
+// A text entry (text-edit.mjs): edit = { format: 'dotenv-block', vars } | { format: 'line', line, after? } |
+// { format: 'yaml-list', line }. Text asight already put there under an install this manifest does not list is
+// refused: a second block or row would only be undone once.
+function editText(file, text, edit) {
+  if (text != null && (text.includes(BLOCK_BEGIN) || (edit.line && text.includes(edit.line)))) {
+    throw new Error(`${file} already holds asight's text from an install this manifest does not list; take it out, then install again`)
+  }
+  try {
+    if (edit.format === 'dotenv-block') return dotenvBlock(text, edit.vars)
+    if (edit.format === 'line' || edit.format === 'yaml-list') return { ...insertLine(text, { line: edit.line, after: edit.after || null, format: edit.format === 'yaml-list' ? 'yaml-list' : 'lines' }), prior: null }
+  } catch (e) { throw new Error(`${file}: ${e.message}`) }
+  throw new Error(`${file}: unknown text edit ${edit.format}`)
+}
+export function previewTextEntry({ file, edit, fs = nodeFs }) {
+  const real = editTarget(file, fs)
+  const before = readOrNull(fs, real)
+  editText(file, before == null ? null : before.toString('utf8'), edit)
+  return { path: file, ...(real !== file ? { real_path: real } : {}), changes: true }
+}
+export function applyTextEntry({ dir, manifest, harness, file, edit, now = new Date(), fs = nodeFs }) {
+  const real = editTarget(file, fs)
+  const before = readOrNull(fs, real)
+  const res = editText(file, before == null ? null : before.toString('utf8'), edit)
+  const entry = {
+    kind: 'text', harness, path: file, ...(real !== file ? { real_path: real } : {}), format: edit.format,
+    ...(edit.vars ? { vars: edit.vars } : { line: edit.line }),
+    existed_before: before != null, mode: before != null ? fs.statSync(real).mode & 0o777 : (edit.mode || 0o600),
+    pre_sha256: sha256(before), post_sha256: null, ops: res.ops, prior_value: res.prior,
+    created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(),
+  }
+  manifest.entries.push(entry)
+  saveManifest(dir, manifest, fs) // the intent is durable before the user's file changes
+  for (const d of entry.created_dirs) fs.mkdirSync(d, { mode: 0o700 })
+  writeDurable(real, res.text, entry.mode, fs)
+  entry.post_sha256 = sha256(Buffer.from(res.text))
+  saveManifest(dir, manifest, fs)
+  return entry
+}
+
+// What an entry put where, for messages: the key and value of a JSON entry, the variables of a block, the line.
+export const describeEntry = (e) => (e.kind === 'text'
+  ? (e.vars ? `block with ${Object.entries(e.vars).map(([k, v]) => `${k}=${v}`).join(', ')}` : `line ${JSON.stringify(e.line)}`)
+  : `${e.keys.join('.')} = ${e.value}`)
 
 // When asight installed the value a config layer holds (ms), or null. A layer counts when an entry changed its file
 // (`path`, or the link target `real_path`) and the layer still holds that entry's value under its last key; the
@@ -151,7 +213,7 @@ function undoTarget(entry, fs) {
 export function undoEntry(entry, { fs = nodeFs } = {}) {
   const done = (result, extra = {}) => ({ path: entry.path, ...(entry.real_path ? { real_path: entry.real_path } : {}), harness: entry.harness, result, ...extra })
   const target = undoTarget(entry, fs)
-  if (target.refuse) return done('left-link', { reason: `${target.refuse}; asight did not touch it, and its ${entry.keys.join('.')} = ${entry.value} may still be in ${entry.real_path || entry.path}` })
+  if (target.refuse) return done('left-link', { reason: `${target.refuse}; asight did not touch it, and its ${describeEntry(entry)} may still be in ${entry.real_path || entry.path}` })
   const file = target.file
   sweepTemps(file, fs)
   const cur = readOrNull(fs, file)
@@ -167,6 +229,13 @@ export function undoEntry(entry, { fs = nodeFs } = {}) {
     if (entry.existed_before) writeDurable(file, back, entry.mode, fs)
     else { fs.rmSync(file, { force: true }); removeEmptyDirs(entry.created_dirs, fs) }
     return done('restored')
+  }
+  if (entry.kind === 'text') { // edited since: only asight's block / line goes, the user's commented line comes back
+    const out = removeAsightText(text, entry.ops)
+    if (!out.found) return done('already-removed')
+    if (!entry.existed_before && onlySkeleton(out.text, entry.format)) { fs.rmSync(file, { force: true }); removeEmptyDirs(entry.created_dirs, fs); return done('reverted-not-identical', { deleted: true }) }
+    writeDurable(file, out.text, fs.statSync(file).mode & 0o777, fs)
+    return done('reverted-not-identical')
   }
   let doc
   try { doc = JSON.parse(text) } catch { return done('left-unparsable') }
