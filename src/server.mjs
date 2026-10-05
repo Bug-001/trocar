@@ -25,7 +25,7 @@ import { createLru, memoKey } from './query/memo.mjs';
 import { loadPricing } from './view/pricing.mjs';
 import { randomBytes } from 'node:crypto';
 import { monitoringStatus, monitoringOn, monitoringOff } from './capture/control.mjs';
-import { listSources, resolveCoexistence, isSealedPath, sealedSources, unreadCapture } from './raw/discover.mjs';
+import { listSources, dirInputs, isSealedPath, sealedSources, unreadCapture } from './raw/discover.mjs';
 import { sealedReadProblem } from './raw/journal.mjs';
 import { emptyMeta, mergeMeta, foldSealed } from './etl/session-meta.mjs';
 
@@ -467,10 +467,9 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
   // a continuation — whose it is cannot be told; it is reported where it lies (unreadableSealedInShards
   // in sharded mode, the flat read otherwise), never allowed to switch the board's mode.
   const continuationsIn = (dir) => sealedIn(dir).filter((f) => { const src = sealedSources(f); return !!src && src.some((x) => path.dirname(x.abs) !== path.resolve(dir)); });
-  const shardInputs = (dir, names) => {
-    const originals = names.map((n) => path.join(dir, n)).filter((f) => fssync.existsSync(f));
-    return resolveCoexistence([...originals, ...sealedIn(dir)]);
-  };
+  // in record order: calls → probes → other (then any other stream), segments by number, a live
+  // original after its stream's segments — the same sequence before and after sealing (review 3 F2)
+  const shardInputs = (dir, names, order = names) => dirInputs(dir, { originals: names, order });
   // meta.json covers `asight shard`'s streams (calls/probes/other, or their sealed segments). Sealed
   // files of OTHER streams in a session dir are per-session files of a collector shard (D35): the
   // sealer writes no meta.json, so they are folded here — memoised by the files' size/mtime — and
@@ -557,8 +556,8 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
     if (hit) {
       // Read every stream the session has (calls/probes/other) and concatenate. readRecords stamps
       // each record's `_stream` = the file basename, so a block's raw_ref (`<session>/<stream>#<id>`,
-      // 4.2:39) resolves back to the right shard file. The board re-derives call/probe/other from
-      // is_llm_call/endpoint, so concatenation order is immaterial (assembleSession sorts by ts).
+      // 4.2:39) resolves back to the right shard file. The order is the session's record sequence
+      // (4.2 「watermark」): the tail bound and the slim `records` list follow it.
       const out = [];
       const inputs = shardInputs(hit, SESSION_STREAMS);
       out.sourceErrors = coexistNotes(inputs.mismatched);
@@ -581,7 +580,8 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
       const cdir = path.join(root, 'control');
       let ents; try { ents = fssync.readdirSync(cdir, { withFileTypes: true }); } catch { continue; }
       sharded = true;
-      const inputs = shardInputs(cdir, ents.filter((e) => e.isFile() && e.name.endsWith('.ndjson')).map((e) => e.name));
+      // classes by name, originals or sealed alike: readdir order is not an order (review 3 F2)
+      const inputs = shardInputs(cdir, ents.filter((e) => e.isFile() && e.name.endsWith('.ndjson')).map((e) => e.name), []);
       out.sourceErrors.push(...coexistNotes(inputs.mismatched));
       await readAll(inputs.files, out, out.sourceErrors);
     }

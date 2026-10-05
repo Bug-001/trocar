@@ -27,9 +27,24 @@ import { readIndex } from './format.mjs';
 import { isCaptureFile, skipReason } from '../paths.mjs';
 
 export const SEALED_EXT = '.sealed';
-const SEG = /^(.+)\.\d{4,}\.sealed$/;
+const SEG = /^(.+)\.(\d{4,})\.sealed$/;
 export const isSealedPath = (p) => SEG.test(path.basename(p));
 export const streamOfSealed = (name) => { const m = SEG.exec(path.basename(name)); return m ? m[1] : null; };
+
+// The order a reader reads one directory's files in (4.2 「watermark」: a session's record sequence is
+// the same before and after sealing). By stream — `streams` first, in that order, then any other
+// stream by name — then by segment number, numerically (…9999, 10000), and a stream's live original
+// after its segments: it holds what was written after them (`asight shard` writing a fresh
+// calls.ndjson beside the sealed one). Sorting by file name read a session's sealed `other` before its
+// sealed `probes`, unlike the originals (review 3 F2). Stable for files of one stream in several dirs.
+export function orderInputs(files, streams = []) {
+  const rank = (f) => {
+    const n = path.basename(f), m = SEG.exec(n), stream = m ? m[1] : n, k = streams.indexOf(stream);
+    return { k: k < 0 ? streams.length : k, stream, seg: m ? Number(m[2]) : Infinity };
+  };
+  const cmp = (a, b) => a.k - b.k || (a.stream < b.stream ? -1 : a.stream > b.stream ? 1 : 0) || (a.seg === b.seg ? 0 : a.seg < b.seg ? -1 : 1);
+  return files.map((f) => [f, rank(f)]).sort((x, y) => cmp(x[1], y[1])).map(([f]) => f);
+}
 // A file that looks like captured bytes (a stream, a sealed file, a compressed capture) — what a reader
 // that does NOT read it must report (4.2 「读」: skipped or unrecognised files are reported, never folded
 // into empty). Not the sealer's own sidecars (close marker, lock, dot-temps), not anything else.
@@ -70,14 +85,14 @@ const fileLike = (fs, dir, e) => e.isFile() || (e.isSymbolicLink() && (() => { t
 function scanRoot(root, fs) {
   const st = fs.statSync(root);                        // missing root throws: broken MUST NOT look empty
   if (!st.isDirectory()) return { files: [root], skipped: [] };
-  const files = [], skipped = [];
+  const flat = [], below = [], skipped = [];
   for (const e of fs.readdirSync(root, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
     const p = path.join(root, e.name);
     // not `isFile()`: a symlinked capture is still a capture (test/query/source-symlink.test.mjs), and a
     // link to nothing, or to a directory, is not one — it is listed with its reason instead of being
     // opened (src/paths.mjs isCaptureFile / skipReason, the classifier read-cc-line gave the readers).
     if (!e.isDirectory()) {
-      if (isCaptureFile(root, e) || (isSealedPath(e.name) && fileLike(fs, root, e))) files.push(p);
+      if (isCaptureFile(root, e) || (isSealedPath(e.name) && fileLike(fs, root, e))) flat.push(p);
       else {
         // reason + attention (may it hold capture bytes?), and a `report` when the name looks like a
         // capture the readers must name (unreadCapture)
@@ -92,19 +107,20 @@ function scanRoot(root, fs) {
     }
     const dirSkip = { name: e.name, reason: 'directory', attention: e.name.endsWith('.ndjson') };
     let sub; try { sub = fs.readdirSync(p, { withFileTypes: true }); } catch { skipped.push(dirSkip); continue; }
-    let took = false;
+    const took = [];
     for (const s of sub.sort((a, b) => (a.name < b.name ? -1 : 1))) {
       if (s.isDirectory()) continue;
       const q = path.join(p, s.name);
-      if (s.name === 'calls.ndjson') { files.push(q); took = true; continue; }
+      if (s.name === 'calls.ndjson') { took.push(q); continue; }
       if (!isSealedPath(s.name)) continue;
       const src = sealedSources(q, { fs });
       const sameDir = src && src.every((x) => path.dirname(x.abs) === path.resolve(p));   // resolved: a relative root too
-      if (!src || !sameDir || streamOfSealed(s.name) === 'calls.ndjson') { files.push(q); took = true; }
+      if (!src || !sameDir || streamOfSealed(s.name) === 'calls.ndjson') took.push(q);
     }
-    if (!took) skipped.push(dirSkip);
+    if (!took.length) skipped.push(dirSkip);
+    else below.push(...orderInputs(took, ['calls.ndjson']));
   }
-  return { files, skipped };
+  return { files: [...orderInputs(flat), ...below], skipped };
 }
 
 // Coexistence over an explicit list of files (a session dir, the control dir, or a whole scan): drop
@@ -133,6 +149,18 @@ export function resolveCoexistence(all, { fs = nodeFs } = {}) {
     if (present.length && present.every(Boolean)) { drop.add(f); superseded.push({ sealed: f, original: present[0] }); }
   }
   return { files: all.filter((f) => !drop.has(f)), superseded, mismatched, drop };
+}
+
+// One directory as the board reads a session dir or `control/`: the named original streams that
+// exist, plus every sealed file in it, one copy per line (coexistence), in record order (orderInputs).
+// `exclude`: paths to treat as absent — `asight raw compare` reads the state after originals are
+// deleted through this same function (review 3 F1).
+export function dirInputs(dir, { originals = [], order = originals, fs = nodeFs, exclude = null } = {}) {
+  const own = originals.map((n) => path.join(dir, n)).filter((f) => fs.existsSync(f));
+  let sealed = [];
+  try { sealed = fs.readdirSync(dir).filter((n) => isSealedPath(n)).map((n) => path.join(dir, n)); } catch {}
+  const r = resolveCoexistence([...own, ...sealed].filter((f) => !exclude || !exclude.has(f)), { fs });
+  return { ...r, files: orderInputs(r.files, order) };
 }
 
 const realCache = new Map();
