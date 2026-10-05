@@ -16,6 +16,7 @@
 // bash-read parsing) lives in ONE dissector — src/dissect/cc.mjs — shared with the ETL adapter.
 // linearContext (below) is now just the board's PROJECTION of that dissector's canonical spine.
 import { dissectBlocks, sysLabel, parseBashReads } from '../dissect/cc.mjs'
+import { reqIncompleteOf } from '../dissect/capture-labels.mjs'
 // Envelope drift guard (R1): the D10 envelope stores the response under `resp`, demo v0 under
 // `response`. Reading `.response` directly is the bug class that silently killed every HTTP status
 // on real captures — so go through the shared helper, never the raw key. (assemble.mjs imports
@@ -366,13 +367,18 @@ export function analyze(records) {
     const rs = respOf(r) || {}
     const status = rs.status ?? null
     const failed = failedCall(r)
+    // #21: the collector's own word on WHY the stored body is incomplete (null when it is complete).
+    const reqIncomplete = reqIncompleteOf(r)
     const step = { gi: stepList.length, id: r.id, streamId: stream.id, rec: r, norm: normResp(r),
       msgCount, tools, ctx: ctxTokens(r), status,
       ts: r.ts_request, compaction: false,
       unparsed: !!r._unparsed,
+      reqIncomplete,
       // `error` now covers EVERY non-200 (was: only 5xx — so a 401/429 rendered as a normal call).
       error: failed,
-      errMsg: r._unparsed ? 'unrenderable: req_body could not be parsed (truncated / corrupt capture)'
+      // A labelled body says exactly what happened. The old wording stays for captures with no label
+      // (v0, legacy MITM), where truncation and corruption cannot be told apart.
+      errMsg: r._unparsed ? (reqIncomplete ? `unrenderable: req_body could not be parsed — ${reqIncomplete.text}` : 'unrenderable: req_body could not be parsed (truncated / corrupt capture)')
         : (rs.error?.message || (status != null && status !== 200 ? `HTTP ${status}` : (r.error ? String(r.error.message || r.error) : null))),
       // Cache-prefix chaining (audit 2026-07-19). A call that FAILED did not establish a new cache
       // prefix at the provider — a 401/429/502 never got far enough to write one — so the next call's

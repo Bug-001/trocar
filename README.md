@@ -147,7 +147,9 @@ your machine — every path above still is. `asight desktop off` restores the co
 - **Non-verbatim data is labelled in place.** Raw NDJSON is the only source of truth; DuckDB is
   rebuildable from it. SSE replies are faithful reconstructions of the streamed frames. Data imported
   from the v0 demo is badged `v0-converted` (re-serialized bodies, summarized tool schemas); fresh
-  captures are byte-exact with full tool schemas.
+  captures are byte-exact with full tool schemas. A request body the collector stored only in part is
+  badged on its call with the exact reason: 已截断 (cut at the 64 MiB capture cap) or 不完整 (it never
+  finished uploading, e.g. the upstream answered 413 first).
 - **No npm distribution, no LICENSE.** The package is `private`, so `npx asight` does not exist. Clone
   it and treat it as source-available for personal research.
 - **Personal research instrument.** Single-user, loopback-only, observe-only: it will never inject or

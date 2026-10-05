@@ -1582,6 +1582,14 @@ function renderResourceView(el){
   el.innerHTML=`<div class="rphd">📄 ${esc(path)} <span class="rpx" id="rpx">✕ call raw</span></div>${body}`
   const x=document.getElementById('rpx'); if(x)x.onclick=()=>{ viewPin=null; renderRawPanel() }
 }
+// #21 · 不变式4 · 4.6 「不完整的标注,各说一件事」: the capture stored only part of this request body. Say which
+// thing happened where the call is shown: 已截断 = cut at the capture cap; 不完整 = never finished uploading.
+// Wording is baked server-side (call.reqIncomplete); this only picks the tag from its two booleans.
+function reqBadge(c){
+  const q=c&&c.reqIncomplete; if(!q) return ''
+  const tag=[q.truncated?'请求体已截断 · request body truncated':'',q.partial?'请求体不完整 · request body incomplete':''].filter(Boolean).join(' · ')||'请求体不完整 · request body incomplete'
+  return `<div class="rpk"><span class="pobadge" title="${esc(q.text)}">${tag}</span> ${esc(q.text)}</div>`
+}
 function renderRawPanel(){
   const el=document.getElementById('rawpanel'); if(!el) return
   if(viewPin) return renderResourceView(el)
@@ -1600,13 +1608,13 @@ function renderRawPanel(){
     el.innerHTML=`<div class="rphd">🩻 raw · call #${playhead+1}</div>`+
       `<div class="rpk">${esc(String(rq.model||'').replace('claude-',''))} · <span class="pobadge" title="this call's verbatim body was not shipped on this page — it is intact in the raw trace (不变式4)">正文未随本页下发 · body not on this page</span></div>`+
       `<div class="rpk">usage · read <b>${kf(read)}</b> · new-cache <b>${kf(create)}</b> · fresh <b>${kf(fresh)}</b> · out <b>${kf(out)}</b></div>`+
-      `<div class="rpk rpcost">${costLine}</div>`
+      `<div class="rpk rpcost">${costLine}</div>`+reqBadge(call)
     return }
   el.innerHTML=`<div class="rphd">🩻 raw · call #${playhead+1}</div>`+
-    `<div class="rpk">${esc(String(rq.model||'').replace('claude-',''))} · ${kf(rq.context_chars)} bytes wire</div>`+
+    `<div class="rpk">${esc(String(rq.model||'').replace('claude-',''))} · ${kf(rq.context_chars)} ${call.reqIncomplete?'bytes stored (not the whole request)':'bytes wire'}</div>`+
     `<div class="rpk">msgs <b>${kf(rq.message_count)}</b> · tools <b>${kf(rq.tool_count)}</b> · system <b>${kf(rq.system_chars)}</b>c</div>`+
     `<div class="rpk">usage · read <b>${kf(read)}</b> · new-cache <b>${kf(create)}</b> · fresh <b>${kf(fresh)}</b> · out <b>${kf(out)}</b></div>`+
-    `<div class="rpk rpcost">${costLine}</div>`
+    `<div class="rpk rpcost">${costLine}</div>`+reqBadge(call)
 }
 function renderContextWindow(){
   renderRawPanel()
@@ -1629,6 +1637,14 @@ function renderContextWindow(){
     `</div>`
     const lb=document.getElementById('loadpage'); if(lb) lb.onclick=()=>ensurePage(call,true)
     return }
+  // 不变式4: an unparsed call has no blocks. Drawing the window anyway shows "0 blocks · ? bytes" and
+  // every earlier block as removed, which reads as "the model saw nothing". Say what happened instead
+  // (errMsg is baked server-side; it carries the capture's own label when the collector set one).
+  if(call.unparsed){ curFlat=[]
+    win.innerHTML=`<div class="pagedout"><div class="pohd">⚠ 无法呈现 · nothing to render for this call</div>`+
+      `<div class="pobody">${esc(call.errMsg||'the request body could not be parsed')}. `+
+      (call.reqIncomplete?'The raw record holds only the bytes that were stored; the rest was never captured.':'The raw record is on disk unchanged (不变式4).')+`</div></div>`
+    return }
   const flat=call.flat||[]; curFlat=flat // pre-baked server-side (D18a)
   const rq=call.rec.request||{}, u=call.usage||{} // neutral canonical usage (D18a Q1)
   // cache-break vs the PREVIOUS in-lane call (compute both flats on demand — light: 2 calls, not all)
@@ -1649,9 +1665,9 @@ function renderContextWindow(){
   const refKeys=refFlat?new Set(refFlat.map(b=>b.key)):null // ◆new marks vs the diff reference
   const curKeys=new Set(flat.map(b=>b.key))
   const removed=refFlat?refFlat.filter(b=>!b.volatile&&!curKeys.has(b.key)):[]
-  let html=`<div class="cwmeta">`+
+  let html=reqBadge(call)+`<div class="cwmeta">`+
     `<div class="cwtitle">context @ call <b>#${playhead+1}</b>/${anchor.calls.length} · ${esc(model)} · ${fmtTime(call.ts)}</div>`+
-    `<div class="cwsub">the exact input to the model, in assembly order <b>tools → system → messages</b> · ${kf(flat.length)} blocks · ${kf(rq.context_chars)} bytes on the wire</div>`+
+    `<div class="cwsub">the exact input to the model, in assembly order <b>tools → system → messages</b> · ${kf(flat.length)} blocks · ${kf(rq.context_chars)} ${call.reqIncomplete?'bytes stored (not the whole request)':'bytes on the wire'}</div>`+
     `<div class="cwcache">⚡ KV cache this call: <b class="chit">${hitPct}%</b> reused · <b>${kf(read)}</b> tok read · <b>${kf(create)}</b> newly cached · <b>${kf(fresh)}</b> fresh${brk.firstCall?(read?' · first captured call — reuse is from a warm cross-session cache prefix (tools+system)':' · first call, nothing to reuse'):''}</div>`+
     taxSummary(tax)+growthLine(tax,prevTax,brk,!!(prevCall&&prevCall.paged_out))+diffControl(refIdx,removed.length)+
   `</div>`+removedSection(removed,refIdx)
