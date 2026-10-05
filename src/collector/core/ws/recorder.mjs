@@ -28,6 +28,7 @@ import { isLlmCall } from '../../../capture/envelope.mjs'
 const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }) // a BOM stays: bytes, not text
 const CLOSED = { type: 'ws_closed', message: 'connection closed before the terminal message' }
 const REASONS = ['off-window', 'write-failed', 'decode-failed']
+export const MAX_CALL_BYTES = 64 << 20 // per call, like the HTTP body cap (RFC 4.6 §传输与帧级记录 大小上限)
 
 /** compileTerminal(spec, target) → null | (bytes) => boolean
  *  spec = [{pathSuffix?, patterns:[RegExp source], headBytes = 256}]: the first entry whose pathSuffix
@@ -52,7 +53,7 @@ export function compileTerminal(spec, target) {
  * upgrade = {req:{head}, resp:{head}} (the exchange tee's heads); terminal = FlowExtras.wsTerminal.
  * summary() = {frames, calls, recorded, partial, dropped_frames, tail_raw?, broken?} for flows/.
  */
-export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordStore, isRecording = () => true, terminal = null, maxCallBytes = 64 << 20, now = () => new Date() }) {
+export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordStore, isRecording = () => true, terminal = null, maxCallBytes = MAX_CALL_BYTES, now = () => new Date() }) {
   const ext = (upgrade.resp.head.headers || []).filter(([k]) => k.toLowerCase() === 'sec-websocket-extensions').map(([, v]) => v).join(', ')
   const { deflate } = parseExtensions(ext)
   const isTerminal = compileTerminal(terminal, upgrade.req.head.target)

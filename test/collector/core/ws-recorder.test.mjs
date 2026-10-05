@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import zlib from 'node:zlib'
 import { randomBytes } from 'node:crypto'
-import { createWsRecorder, compileTerminal } from '../../../src/collector/core/ws/recorder.mjs'
+import { createWsRecorder, compileTerminal, MAX_CALL_BYTES } from '../../../src/collector/core/ws/recorder.mjs'
 import { rebuildWsWire } from '../../../src/collector/core/ws/raw.mjs'
 import { encodeFrame } from '../../lab/ws-client.mjs'
 
@@ -82,6 +82,7 @@ test('W14: a server message with no call open is its own envelope (req_body null
   assert.equal(t.out.length, 1)
   t.c(cli(1, ev('response.create'))); t.s(srv(1, ev('response.completed')))
   assert.deepEqual(t.out[1].ws_raw.map((f) => f.i), [1, 2, 3, 4], 'the ping / pong before the call ride with it')
+  assert.deepEqual(t.out.map((e) => e.seq), [0, 1], 'the push takes a seq of its own')
   t.c(Buffer.concat([cli(1, 'unfinished', { fin: false }), cli(8, Buffer.from([3, 232]))])); t.s(srv(8, Buffer.from([3, 232])))
   t.r.end(null)
   assert.equal(t.out.length, 2, 'a message that never finished opens no call')
@@ -99,7 +100,7 @@ test('no terminal pattern for this path: a call runs to the next client message,
   t.c(cli(1, 'b', { fin: false })); t.s(srv(1, 'A3')); t.s(srv(9, 'pg')); t.c(cli(0, 'b2'))
   assert.deepEqual(t.out.map((e) => [e.req_body, e.resp.messages, e.ws_raw.map((f) => f.i)]), [['a', ['A1', ev('response.completed'), 'A3'], [0, 1, 2, 4]]], 'A3 completed in this call: its frame goes with it, b\'s first frame waits for b')
   t.s(srv(1, 'B1')); t.r.end(null)
-  assert.deepEqual(t.out.map((e) => e.ws_frames), [[0, 4], [3, 7]], 'W18: all on, the ranges overlap (A3 is A\'s, b began at 3), the frame ids do not')
+  assert.deepEqual(t.out.map((e) => [e.ws_frames, e.partial]), [[[0, 4], undefined], [[3, 7], undefined]], 'W18: all on, the ranges overlap (A3 is A\'s, b began at 3), the frame ids do not; no gap, nothing partial')
   assert.deepEqual(t.out.map((e) => [e.req_body, e.error]), [['a', undefined], ['bb2', undefined]], 'a clean close ends the last call normally')
   assert.deepEqual(t.out[1].ws_raw.map((f) => [f.i, f.m]), [[3, [0, 0]], [5, undefined], [6, [0, 1]], [7, [0, 0]]], 'the ping after b began is b\'s')
   assertWholeWire(t)
@@ -341,4 +342,33 @@ test('D38: no silent failure — a failed write, an undecodable message and a st
   const lostAtEnd = [], y = createWsRecorder({ flow: FLOW, upgrade: upgrade({}), terminal: TERMINAL, genId: () => { throw new Error('id source gone') }, recordStore: { envelope: () => true, failure: (f) => lostAtEnd.push(f) } })
   y.fromClient(cli(1, 'a')); assert.doesNotThrow(() => y.end(null))
   assert.deepEqual(lostAtEnd.map((f) => [f.reason, f.error]), [['recorder-error', 'id source gone']], 'an internal error at the end is recorded too')
+})
+
+test('more pinned details: decoded bytes in req_body_b64; a server message begun in the previous call joins the next one; a terminal past the call total keeps the window; the default cap', async () => {
+  const ctx = rig({ ext: 'permessage-deflate; client_no_context_takeover' }), raw = Buffer.from([0, 1, 2, 255, 254])
+  ctx.c(cli(2, strip(zlib.deflateRawSync(raw, { finishFlush: zlib.constants.Z_SYNC_FLUSH })), { rsv1: true })); ctx.s(srv(1, ev('response.completed')))
+  assert.equal(ctx.out[0].req_body_b64, raw.toString('base64'), 'the decompressed bytes, not the wire bytes')
+  const f = rig({ terminal: null })
+  f.c(cli(1, 'a')); f.s(srv(1, 'S-', { fin: false })); f.c(cli(1, 'b')); f.s(srv(0, 'end')); f.r.end(null)
+  assert.deepEqual(f.out.map((e) => [e.req_body, e.resp.messages]), [['a', []], ['b', ['S-end']]], 'judged when complete, also in the fallback cut')
+  const sz = deflater(true), delta = () => ev('response.output_text.delta', { d: randomBytes(100).toString('hex') })
+  const w1 = await sz(delta()), w2 = await sz(delta()), w3 = await sz(ev('response.completed', { r: 'done' })), w4 = await sz(ev('response.completed', { r: 'next' }))
+  const t = rig({ ext: 'permessage-deflate', maxCallBytes: 26 + w1.length + 1 })
+  t.c(cli(1, ev('response.create'))); for (const w of [w1, w2, w3]) t.s(srv(1, w, { rsv1: true }))
+  assert.deepEqual([t.out.length, t.out[0].resp.messages.slice(1), t.out[0].ws_truncated], [1, [{ omitted_bytes: w2.length }, { omitted_bytes: w3.length }], true], 'the call total ran out at w2; w3 is still recognised as the terminal (W10)')
+  t.c(cli(1, ev('response.create'))); t.s(srv(1, w4, { rsv1: true }))
+  assert.deepEqual([t.out[1].resp.messages, t.out[1].partial], [[ev('response.completed', { r: 'next' })], undefined], 'it was still inflated: the window holds')
+  assert.equal(MAX_CALL_BYTES, 64 << 20)
+  const d = rig(), two = 'x'.repeat(2 << 20)
+  d.c(cli(1, ev('response.create'))); d.s(srv(1, two)); d.s(srv(1, ev('response.completed')))
+  assert.equal(d.out[0].resp.messages[0].length, two.length, 'the default cap is the large one')
+})
+
+test('C14 on a fragmented opener: begun on and finished off it is recorded with every fragment; begun off and finished on it is not', () => {
+  const t = rig()
+  t.c(cli(1, '{"type":"response.create",', { fin: false })); t.on = false; t.c(cli(0, '"x":1}')); t.s(srv(1, ev('response.completed')))
+  assert.deepEqual([t.out.map((e) => e.ws_raw.map((f) => f.i)), t.out[0].req_body], [[[0, 1, 2]], '{"type":"response.create","x":1}'])
+  assert.ok(rebuildWsWire(t.out[0], 'c').c.equals(Buffer.concat(t.wire.c)))
+  t.c(cli(1, '{"type":"response.create",', { fin: false })); t.on = true; t.c(cli(0, '"x":2}')); t.s(srv(1, ev('response.completed')))
+  assert.deepEqual([t.out.length, t.r.summary().calls], [1, 2])
 })

@@ -20,6 +20,7 @@ test('envelope: D10 fields first, new fields after req_body, raw heads verbatim'
   assert.equal(env.req_body, '{"model":"m"}'); assert.equal(env.is_llm_call, true)
   assert.equal(env.req_headers['x-dup'], 'a, b'); assert.equal(env.req_head_raw, reqRaw)
   assert.equal(env.capture, 'transparent'); assert.deepEqual(env.resp.body, { ok: 1 })
+  assert.equal('transport' in env, false, 'an HTTP envelope carries no transport (absent = http)')
   const line = JSON.stringify(env)
   assert.ok(line.indexOf('"req_headers":{') < line.indexOf('"req_body"'))
 })
