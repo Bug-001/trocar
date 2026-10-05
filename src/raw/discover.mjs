@@ -14,6 +14,13 @@
 //    sealed copies are then "superseded" and skipped, so no record is read twice and none is lost. A
 //    different file at the original's path is not the source: both are read; if it is the same inode
 //    changed in place, that is reported (invariant 4).
+// 3. Continuations (review 2026-10-06 F2). The marker-gated sealer files a shard's records by session
+//    under <sessionsRoot>/<key>/ (`asight raw seal`'s default --sessions, ~/.asight/sessions — 0.2
+//    状态表 「封存文件」). Those files continue a shard that lived in some directory, so a reader that
+//    serves THAT directory reads them as part of it and shows the same records after the seal as
+//    before (4.6 E8). Only sealed files whose source shard's directory is a served root are taken —
+//    never `asight shard` copies, which are a second copy of a stream read elsewhere. Callers opt in
+//    by passing `sessionsRoot` (the CLI does; a test that wants a hermetic scan does not).
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { readIndex } from './format.mjs';
@@ -105,12 +112,51 @@ export function resolveCoexistence(all, { fs = nodeFs } = {}) {
   return { files: all.filter((f) => !drop.has(f)), superseded, mismatched, drop };
 }
 
-// roots → { files (to read, in a stable order), perRoot, skipped, superseded, mismatched, sig }.
-export function listSources(roots, { fs = nodeFs } = {}) {
+const realCache = new Map();
+const realDir = (fs, d) => { if (!realCache.has(d)) { let r = null; try { r = fs.realpathSync(d); } catch {} realCache.set(d, r); } return realCache.get(d); };
+function addContinuations(perRoot, sessionsRoot, fs) {
+  const unattributed = [];
+  const want = new Map();
+  perRoot.forEach((r, k) => { try { if (fs.statSync(r.root).isDirectory()) want.set(fs.realpathSync(r.root), k); } catch {} });
+  if (!want.size) return unattributed;
+  let ents; try { ents = fs.readdirSync(sessionsRoot, { withFileTypes: true }); } catch { return unattributed; }
+  const have = new Set(perRoot.flatMap((r) => r.files.map((f) => path.resolve(f))));
+  for (const e of ents.sort((a, b) => (a.name < b.name ? -1 : 1))) {
+    if (!e.isDirectory()) continue;
+    const dir = path.join(sessionsRoot, e.name);
+    let names; try { names = fs.readdirSync(dir).sort(); } catch { continue; }
+    for (const n of names) {
+      const q = path.join(dir, n);
+      if (!isSealedPath(n) || have.has(path.resolve(q))) continue;
+      const src = sealedSources(q, { fs });
+      // unreadable: whose continuation it is cannot be told — say so rather than drop it silently
+      if (!src) { unattributed.push({ file: q, reason: 'sealed file under the sessions directory could not be opened, so it is unknown whether its records belong to this source' }); continue; }
+      const k = src.length === 1 ? want.get(realDir(fs, path.dirname(src[0].abs))) : undefined;
+      if (k !== undefined) perRoot[k].files.push(q);
+    }
+  }
+  return unattributed;
+}
+
+// Every sealed file directly in `dir` and one level down (doctor ④b: owner-only check).
+export function sealedUnder(dir, { fs = nodeFs } = {}) {
+  const out = [];
+  let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const e of ents) {
+    const p = path.join(dir, e.name);
+    if (!e.isDirectory()) { if (isSealedPath(e.name)) out.push(p); continue; }
+    try { for (const n of fs.readdirSync(p)) if (isSealedPath(n)) out.push(path.join(p, n)); } catch {}
+  }
+  return out.sort();
+}
+
+// roots → { files (to read, in a stable order), perRoot, skipped, superseded, mismatched, unattributed, sig }.
+export function listSources(roots, { fs = nodeFs, sessionsRoot = null } = {}) {
   const perRoot = roots.map((root) => ({ root, ...scanRoot(root, fs) }));
+  const unattributed = sessionsRoot ? addContinuations(perRoot, sessionsRoot, fs) : [];
   const { superseded, mismatched, drop } = resolveCoexistence(perRoot.flatMap((r) => r.files), { fs });
   for (const r of perRoot) r.files = r.files.filter((f) => !drop.has(f));
   const files = perRoot.flatMap((r) => r.files);
   const sig = files.map((f) => { try { const s = fs.statSync(f); return `${f}:${s.size}.${Math.round(s.mtimeMs)}`; } catch { return ''; } }).join('|') || '∅dir';
-  return { files, perRoot, skipped: perRoot.flatMap((r) => r.skipped), superseded, mismatched, sig };
+  return { files, perRoot, skipped: perRoot.flatMap((r) => r.skipped), superseded, mismatched, unattributed, sig };
 }

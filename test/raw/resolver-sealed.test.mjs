@@ -40,7 +40,8 @@ test('E2: every text_ref resolves to the same bytes before and after sealing per
     const callIds = (await db.connection.runAndReadAll('SELECT call_id, raw_ref FROM calls ORDER BY raw_ref')).getRowObjects();
     assert.ok(refs.some((r) => r.includes('capture-2026-10-06.ndjson#req_00000')) && refs.some((r) => r.includes('capture-2026-10-05.ndjson#req_00000')), 'the fixture must have the same id in both shards');
 
-    const before = await buildResolver([cap, ses]);
+    // the product layout: `asight serve --source <collector>` (bin passes the sessions dir the sealer files into)
+    const before = await buildResolver(cap, { sessionsRoot: ses });
     const bytesBefore = refs.map((r) => before.detail(r));
     assert.ok(bytesBefore.every((o) => o.status === 'ok'), 'precondition: every ref resolves from the NDJSON');
     const ctxBefore = [];
@@ -53,8 +54,11 @@ test('E2: every text_ref resolves to the same bytes before and after sealing per
     assert.equal(listFiles(cap, /\.ndjson$/).length, 0, 'the originals are gone — only sealed files can answer now');
     assert.equal(listFiles(path.join(ses, S)).length, 2, 'S has one sealed file per source shard');
 
-    const after = await buildResolver([cap, ses]);
+    const after = await buildResolver(cap, { sessionsRoot: ses });
     assert.deepEqual(refs.map((r) => after.detail(r)), bytesBefore);
+    const twoRoots = await buildResolver([cap, ses]);
+    assert.deepEqual(refs.map((r) => twoRoots.detail(r)), bytesBefore, 'serving both dirs as roots must agree');
+    twoRoots.dispose();
     const db2 = await openDb(dbPath, { readOnly: true });
     for (let k = 0; k < callIds.length; k++) assert.deepEqual(await rebuildContext(db2.connection, callIds[k].call_id, after), ctxBefore[k]);
     await db2.close();

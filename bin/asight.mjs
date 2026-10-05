@@ -42,6 +42,7 @@ async function main() {
         // state, which is why it survived. src/paths.mjs exists to keep what capture WRITES and
         // what serve READS in agreement; this verb is the one it was written for.
         sourcePath: flag('--source', process.env.ASIGHT_SOURCE || serveSource()),
+        sessionsRoot: path.join(asightHome(), 'sessions'),   // where `asight raw seal` files by session (D35)
         control,
         captureTarget: flag('--capture-target', undefined),
         proxyUrl: flag('--proxy', undefined),
@@ -374,12 +375,14 @@ async function main() {
       const extraPerm = [];
       for (const root of sources) {
         try {
-          const part = (await import(r('src', 'server.mjs'))).sourceFiles(root);
+          const part = (await import(r('src', 'server.mjs'))).sourceFiles(root, { sessionsRoot: path.join(asightHome(), 'sessions') });
           files.push(...part.files);
           extraPerm.push(...part.superseded.map((x) => x.sealed));
         } catch (e) { readErrors.push(`${root}: ${e.message}`); }
       }
       extraPerm.push(...(await import(r('src', 'raw', 'export.mjs'))).exportFiles());
+      // every sealed file `asight raw seal` filed by session, whichever source it continues
+      extraPerm.push(...(await import(r('src', 'raw', 'discover.mjs'))).sealedUnder(path.join(asightHome(), 'sessions')).filter((f) => !files.includes(f)));
       if (files.length) {
         let bytes = 0;
         for (const f of files) { try { bytes += fs.statSync(f).size; } catch {} }

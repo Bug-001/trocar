@@ -139,9 +139,9 @@ const fileSig = (st) => `${st.size}.${Math.round(st.mtimeMs)}.${st.ctimeMs}`;
 // its sealed copy coexist, and the reason for every entry NOT read (a dangling link, a compressed
 // capture; 4.4:83, never folded into empty) — lives in src/raw/discover.mjs, shared with the resolver.
 const sigOf = (files) => files.map((f) => { try { return `${f}:${fileSig(fssync.statSync(f))}`; } catch { return ''; } }).join('|') || '∅dir';
-export function sourceFiles(sourcePath) {
-  const r = listSources([sourcePath]); // throws if missing → caller resets sig
-  return { files: r.files, skipped: r.skipped.map((x) => ({ root: sourcePath, ...x })), sig: sigOf(r.files), superseded: r.superseded, mismatched: r.mismatched };
+export function sourceFiles(sourcePath, { sessionsRoot = null } = {}) {
+  const r = listSources([sourcePath], { sessionsRoot }); // throws if missing → caller resets sig
+  return { files: r.files, skipped: r.skipped.map((x) => ({ root: sourcePath, ...x })), sig: sigOf(r.files), superseded: r.superseded, mismatched: r.mismatched, unattributed: r.unattributed };
 }
 // What went wrong reading a set of files, as the board labels it (`source_errors`). A sealed file
 // that could not be read in full is COUNTED and named, never a silently shorter board (user
@@ -161,7 +161,7 @@ async function readAll(files, out, errors) {
 // ~/.asight) is read as a root, so it is not listed as skipped. Throws if a root cannot be listed
 // (broken ≠ empty), unless `tolerant`: then that root is listed as `root-unreadable` and the others
 // are still scanned.
-export function scanRoots(roots, { tolerant = false } = {}) {
+export function scanRoots(roots, { tolerant = false, sessionsRoot = null } = {}) {
   const failed = [], good = [];
   for (const r of roots) {
     try { listSources([r]); good.push(r); }
@@ -170,7 +170,7 @@ export function scanRoots(roots, { tolerant = false } = {}) {
       failed.push({ root: path.dirname(r), name: path.basename(r), reason: 'root-unreadable', error: (e && e.code) || String(e), attention: true });
     }
   }
-  const ls = listSources(good);
+  const ls = listSources(good, { sessionsRoot });
   const rootSet = new Set(roots.map((r) => path.resolve(r)));
   const skipped = failed.concat(ls.perRoot.flatMap((p) => p.skipped.map((x) => ({ root: p.root, ...x })))
     .filter((x) => !(x.reason === 'directory' && rootSet.has(path.resolve(x.root, x.name)))));
@@ -184,7 +184,7 @@ export function scanRoots(roots, { tolerant = false } = {}) {
     skipped.push({ root: path.dirname(f), name: path.basename(f), reason: 'same-file', of: seen.get(k), attention: false });
     return false;
   });
-  return { files, skipped, sig: sigOf(files), superseded: ls.superseded, mismatched: ls.mismatched };
+  return { files, skipped, sig: sigOf(files), superseded: ls.superseded, mismatched: ls.mismatched, unattributed: ls.unattributed };
 }
 
 // The offset just past the last newline in [from, size) — `from` if there is none. Reading only that
@@ -207,7 +207,7 @@ function completeEnd(f, from, size) {
 // ~/.asight the user's existing captures still sit under ~/.atrace/asight, and they must keep showing
 // up on the board — a rename that quietly stops listing three gigabytes of history would be an
 // invariant-2 loss with no file deleted and no error raised.
-function makeRecordLoader(source, { retryMs = 30000 } = {}) {
+function makeRecordLoader(source, { retryMs = 30000, sessionsRoot = null } = {}) {
   const roots = (Array.isArray(source) ? source : [source]).filter(Boolean);
   let cache = { sig: null, records: [], passSkips: [], at: 0, loadSig: null, sourceErrors: [] };
   // per-file watermark: path -> { size, records } — the byte offset already consumed and what it
@@ -227,7 +227,7 @@ function makeRecordLoader(source, { retryMs = 30000 } = {}) {
     // existing comment already refuses to allow for a single source, and which multiplying the roots
     // would otherwise reintroduce through the back door.
     try {
-      listed = scanRoots(roots);   // one coexistence decision across ALL roots (4.2 「并存期」)
+      listed = scanRoots(roots, { sessionsRoot });   // one coexistence decision across ALL roots (4.2 「并存期」)
       ({ files, sig, skipped: load.skipped } = listed);
     } catch (e) {
       load.sig = '0';
@@ -255,7 +255,7 @@ function makeRecordLoader(source, { retryMs = 30000 } = {}) {
     // `load.resets` rather than being handled silently (invariant 4).
     const records = [];
     const resets = [], pending = {};
-    const sourceErrors = coexistNotes(listed.mismatched);
+    const sourceErrors = [...coexistNotes(listed.mismatched), ...listed.unattributed];
     const nextMarks = new Map();
     const passSkips = [];
     for (const f of files) {
@@ -389,7 +389,10 @@ async function handleControl(req, res, { p, csrf, captureTarget, proxyUrl, deps 
 
 export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null, enrich = enrichClaude,
   control = false, captureTarget = process.env.ASIGHT_CAPTURE_TARGET || 'https://api.anthropic.com',
-  proxyUrl = process.env.ASIGHT_PROXY_URL || 'http://127.0.0.1:8899', controlDeps = {}, readRetryMs = 30000 } = {}) {
+  proxyUrl = process.env.ASIGHT_PROXY_URL || 'http://127.0.0.1:8899', controlDeps = {}, readRetryMs = 30000,
+  // where `asight raw seal` files a shard's records by session (bin passes ~/.asight/sessions): sealed
+  // files there continuing a shard of a served root are read with it (src/raw/discover.mjs rule 3)
+  sessionsRoot = null } = {}) {
   // The SQL family is OPTIONAL — a board with no DuckDB store is a normal, fully-working state.
   // But "the store was never built" and "the store is BROKEN" are different truths, and collapsing
   // them (a bare catch → db=null → 404 "no analytics db") made every corruption, permission problem
@@ -405,8 +408,8 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
   // 503, not 404: the store is a dependency that IS configured and IS failing — a retryable outage,
   // not an absence. Carries the underlying reason so the board's {error} banner names the real cause.
   const noDb = (res) => (dbError ? sendJson(res, 503, { error: dbError }) : notFound(res, 'no analytics db'));
-  const resolve = (Array.isArray(sourcePath) ? sourcePath.length : sourcePath) ? await buildResolver(sourcePath, { retryMs: readRetryMs }) : () => null;
-  const loadRecords = makeRecordLoader(sourcePath, { retryMs: readRetryMs });
+  const resolve = (Array.isArray(sourcePath) ? sourcePath.length : sourcePath) ? await buildResolver(sourcePath, { retryMs: readRetryMs, sessionsRoot }) : () => null;
+  const loadRecords = makeRecordLoader(sourcePath, { retryMs: readRetryMs, sessionsRoot });
 
   // ── ARCHIVE LAYER (per-session shards + precomputed meta) ────────────────────
   // The reason `asight serve` could open a single session but never the whole capture: /api/projects
@@ -463,7 +466,7 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
     const roots = (Array.isArray(sourcePath) ? sourcePath : [sourcePath]).filter(Boolean);
     let skipped = [...(loadRecords.skipped || [])];
     if (metas) {
-      const scan = scanRoots(roots, { tolerant: true }); // a root shard mode cannot list is reported, the rest still are
+      const scan = scanRoots(roots, { tolerant: true, sessionsRoot }); // a root shard mode cannot list is reported, the rest still are
       const rootSet = new Set(roots.map((r) => path.resolve(r))), shardSet = new Set(metas.dirs.map((d) => path.resolve(d)));
       skipped = scan.skipped.filter((x) => !(x.reason === 'directory' && shardSet.has(path.resolve(x.root, x.name))))
         .concat(scan.files.filter((f) => rootSet.has(path.resolve(path.dirname(f))))

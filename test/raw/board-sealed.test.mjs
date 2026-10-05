@@ -17,8 +17,8 @@ import { markClosed } from '../../src/raw/closed.mjs';
 const get = (port, p) => new Promise((res, rej) => {
   http.get({ host: '127.0.0.1', port, path: p }, (r) => { let b = ''; r.on('data', (c) => (b += c)); r.on('end', () => res(JSON.parse(b))); }).on('error', rej);
 });
-async function serve(sourcePath) {
-  const { server } = await createServer({ dbPath: '/nonexistent-db', sourcePath, enrich: () => null });
+async function serve(sourcePath, opts = {}) {
+  const { server } = await createServer({ dbPath: '/nonexistent-db', sourcePath, enrich: () => null, ...opts });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   return { server, port: server.address().port };
 }
@@ -65,13 +65,16 @@ test('E8: a legacy `asight shard` root looks the same to the board after every s
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('E8: a collector shard read flat — the board is the same before, during and after sealing', async () => {
+// Two ways to serve it: the collector dir alone with the sessions dir `asight raw seal` files into
+// (what `asight serve --source <collector>` does — bin passes sessionsRoot), and both as roots.
+for (const layout of ['--source <collector dir>', 'two roots [collector, sessions]']) test(`E8: a collector shard read flat (${layout}) — the board is the same before, during and after sealing`, async () => {
   const root = tmpDir();
   try {
     const cap = path.join(root, 'collector'), ses = path.join(root, 'sessions');
     fs.mkdirSync(ses, { recursive: true });
     const shard = writeShard(path.join(cap, 'capture-2026-10-05.ndjson'), capture());
-    const s = await serve([cap, ses]);
+    const src = layout.startsWith('--source') ? [cap, { sessionsRoot: ses }] : [[cap, ses]];
+    const s = await serve(...src);
     try {
       const before = await board(s.port);
       assert.equal(Object.keys(before.sessions).length, 2);
@@ -82,7 +85,7 @@ test('E8: a collector shard read flat — the board is the same before, during a
       for (const [p, seen] of during) assert.deepEqual(seen, before, `the board changed at phase "${p}"`);
       assert.equal(fs.existsSync(shard), false);
       assert.deepEqual(await board(s.port), before, 'the live board changed once only sealed files were left');
-      const fresh = await serve([cap, ses]);
+      const fresh = await serve(...src);
       assert.deepEqual(await board(fresh.port), before, 'a fresh board over the sealed files differs');
       fresh.server.close();
     } finally { s.server.close(); }

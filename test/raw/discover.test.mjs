@@ -82,3 +82,24 @@ test('a missing root throws (broken MUST NOT look empty); a damaged sealed file 
     assert.deepEqual(rel(root, r.files), ['calls.ndjson.0001.sealed'], 'the reader must open it and fail loudly, not skip it');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+// Rule 3 (review F2): with a sessionsRoot, a served directory also reads the sealed files there that
+// continue ITS shards — and nothing else from that tree.
+test('continuations: only sealed files whose source shard lived in a served root are pulled in', async () => {
+  const root = tmpDir();
+  try {
+    const cap = path.join(root, 'collector'), other = path.join(root, 'other'), ses = path.join(root, 'sessions');
+    const mine = shardOf(path.join(cap, 'capture-2026-10-05.ndjson'), 'S-1');
+    const theirs = shardOf(path.join(other, 'capture-2026-10-05.ndjson'), 'S-1');
+    await sealUnchecked(mine, { sessionsRoot: ses, deleteOriginal: true });
+    await sealUnchecked(theirs, { sessionsRoot: ses, deleteOriginal: true });
+    const legacy = shardOf(path.join(ses, 'S-2', 'calls.ndjson'), 'S-2');               // an `asight shard` stream sealed in place
+    await sealUnchecked(legacy, { split: false, deleteOriginal: true });
+    fs.mkdirSync(path.join(ses, 'S-3')); fs.writeFileSync(path.join(ses, 'S-3', 'x.ndjson.0001.sealed'), 'damaged');
+    const r = listSources([cap], { sessionsRoot: ses });
+    assert.deepEqual(rel(root, r.files), ['sessions/S-1/capture-2026-10-05.ndjson.0001.sealed']);
+    assert.deepEqual(rel(root, r.unattributed.map((u) => u.file)), ['sessions/S-3/x.ndjson.0001.sealed'], 'an unreadable file there must be named, not dropped');
+    assert.deepEqual(rel(root, listSources([cap]).files), [], 'without a sessionsRoot nothing is pulled in');
+    assert.equal(listSources([cap, ses], { sessionsRoot: ses }).files.length, listSources([cap, ses]).files.length, 'a served sessions dir is not read twice');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
