@@ -11,6 +11,7 @@ import { SCENARIOS, isScenario, pickScenario, errorFor } from './scenarios.mjs'
 import { writeResponse, jsonReply } from './transport.mjs'
 import * as anthropic from './anthropic.mjs'
 import * as openai from './openai.mjs'
+import * as ws from './ws.mjs'
 
 const iso = () => new Date().toISOString()
 
@@ -19,6 +20,7 @@ const ROUTES = [
   { re: /\/v1\/messages\/count_tokens$/, methods: ['POST'], kind: 'count', dialect: anthropic },
   { re: /\/v1\/messages$/, methods: ['POST'], kind: 'model', dialect: anthropic },
   { re: /\/responses$/, methods: ['POST'], kind: 'model', dialect: openai.responses }, // also Codex's /codex/responses
+  { re: /\/responses$/, methods: ['GET'], kind: 'ws', dialect: openai.responses }, // the Responses WebSocket (ws.mjs)
   { re: /\/chat\/completions$/, methods: ['POST'], kind: 'model', dialect: openai.chat },
   { re: /^\/api\/hello$/, methods: ['HEAD', 'GET'], kind: 'hello', dialect: anthropic },
   { re: /\/models$/, methods: ['GET'], kind: 'models' },
@@ -44,6 +46,11 @@ async function dispatch(req, io, state) {
   if (!sc) res = dialect.errorReply(400, `mock-upstream: unknown scenario "${pick.name}"`)
   else if (sc.status) res = errorFor(sc, dialect)
   else if (!route) res = dialect.errorReply(404, `mock-upstream: no route for ${req.method} ${p}`)
+  else if (route.kind === 'ws') {
+    const up = ws.handshake(req)
+    if (up.res) res = up.res
+    else return { scenario: pick.name, source: pick.source, complete: ws.accept(io, up, pick.name), upgrade: up }
+  }
   else if (route.kind === 'model') res = route.dialect.reply(parseJson(req.body), req.body, sc)
   else if (route.kind === 'count') res = jsonReply(200, { input_tokens: Math.max(1, Math.ceil(req.body.length / 4)) })
   else if (route.kind === 'models') res = jsonReply(200, MODELS)
@@ -57,7 +64,8 @@ async function dispatch(req, io, state) {
 function serveConn(conn, state, record) {
   let buf = Buffer.alloc(0), busy = false, seq = 0
   const { sock } = conn
-  sock.on('data', (d) => { conn.bytesIn += d.length; buf = Buffer.concat([buf, d]); pump() })
+  const pending = () => (conn.ws ? conn.ws.pending() : buf) // unparsed input: HTTP, or frames after an upgrade
+  sock.on('data', (d) => { conn.bytesIn += d.length; if (conn.ws) return conn.ws.feed(d); buf = Buffer.concat([buf, d]); pump() })
   sock.on('error', (e) => { conn.error = e.code || e.message })
   sock.on('secure', () => { conn.secured = true })
   sock.on('close', () => {
@@ -66,7 +74,7 @@ function serveConn(conn, state, record) {
     // after any in-flight request entry, which is recorded once its sleeper wakes
     setImmediate(() => record({
       type: 'conn', ts: iso(), conn_id: conn.id, tls: conn.tls, requests: seq, bytes_in: conn.bytesIn, bytes_out: conn.bytesOut,
-      ...(buf.length ? { leftover_in_b64: buf.toString('base64') } : {}),
+      ...(pending().length ? { leftover_in_b64: pending().toString('base64') } : {}),
       // a client that rejects our cert usually just hangs up (TLS 1.3), so say the handshake never finished
       ...(conn.error || (conn.tls && !conn.secured) ? { error: conn.error || 'tls handshake not completed' } : {}),
     }))
@@ -74,7 +82,7 @@ function serveConn(conn, state, record) {
   async function pump() {
     // once a reply ended the connection, pipelined requests behind it are never served: their bytes
     // stay in buf and are logged as leftover, not as requests that got an answer
-    while (!busy && !conn.closed && !conn.ended) {
+    while (!busy && !conn.closed && !conn.ended && !conn.ws) {
       let req
       try { req = parseRequest(buf) } catch { sock.destroy(); return }
       if (!req) return
@@ -83,6 +91,7 @@ function serveConn(conn, state, record) {
       busy = true
       await handle(conn, req, raw, ++seq, state, record)
       busy = false
+      if (conn.ws) { const rest = buf; buf = Buffer.alloc(0); conn.ws.feed(rest) } // bytes behind the upgrade are frames
     }
   }
 }
@@ -108,12 +117,13 @@ async function handle(conn, req, raw, seq, state, record) {
   }
   let meta
   try { meta = await dispatch(req, io, state) } catch (e) { meta = { error: String(e?.stack || e), complete: false }; conn.raw.destroy() }
-  const { complete, ...rest } = meta
+  const { complete, upgrade, ...rest } = meta
   record({
     type: 'request', ts, conn_id: conn.id, seq, ...rest, method: req.method, path: req.target, status: io.status,
     req_raw_b64: raw.toString('base64'), resp_raw_b64: Buffer.concat(out).toString('base64'), resp_writes: out.map((b) => b.length),
     ...(complete ? {} : { aborted: true }),
   })
+  if (upgrade) conn.ws = ws.serve(conn, req, upgrade, state, record) // the socket speaks WebSocket from here on
 }
 
 const readLog = (f) => fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
