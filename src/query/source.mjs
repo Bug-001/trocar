@@ -7,13 +7,16 @@
 // lean `recordId → {file, offset, length}` byte-offset index (a byte-scan that never retains a
 // body), then on resolve we seek+read only the ONE needed record's line and slice it. A tiny
 // req_body LRU makes rendering a call's many blocks read that call's line once, not per block.
+//
+// Which files are read at all is src/raw/discover.mjs, the one rule the board loader and doctor use too
+// (its top-level classification is src/paths.mjs isCaptureFile / skipReason: a symlinked capture counts,
+// a dangling link is reported, not opened).
 import { open } from 'node:fs/promises';
-import { statSync, openSync, readSync, closeSync, existsSync } from 'node:fs';
-import { readdir } from 'node:fs/promises';
+import { statSync, openSync, readSync, closeSync, fstatSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { parseTextRef } from '../etl/orchestrator.mjs';
 import { normalizeRecord } from '../etl/ingest.mjs';
-import { isCaptureFile, skipReason } from '../paths.mjs';
+import { listSources, isSealedPath } from '../raw/discover.mjs';
 
 const NL = 0x0a;
 const BODY_LRU = 8; // req_body strings held at once — a call's blocks resolve off one cached body
@@ -67,58 +70,51 @@ const OUT = (status, reason = null, text = null, fidelity = null) => ({ status, 
 // or a file without a final newline) did to the index, so a refresh can undo it and re-read it whole.
 // `log` (optional) collects what an attempt did that a scan cannot undo — a key it turned into a
 // duplicate, a bare id it turned AMBIGUOUS — plus a count of records it indexed (undoAttempt).
-async function indexFile(file, idx, from = 0, log = null) {
+function lineIndexer(file, idx, from, log) {
   const base = path.basename(file);
-  const fd = await open(file, 'r');
-  try {
-    const st = await fd.stat();
-    const size = st.size;
-    const CHUNK = 1 << 20;
-    const buf = Buffer.allocUnsafe(CHUNK);
-    let filePos = from, lineStart = from, pending = Buffer.alloc(0);
-    const record = (lineBuf) => {
-      if (!lineBuf.length) return null;
-      // key by String(id): parseTextRef always yields recordId as a string, so coerce to match
-      // regardless of whether the harness minted numeric or string record ids.
-      try {
-        const raw = JSON.parse(lineBuf.toString('utf8')).id;
-        if (raw != null) {
-          const id = String(raw);
-          const loc = { file, offset: lineStart, length: lineBuf.length };
-          // WITHIN-FILE collision. The qualified key is documented as "the authoritative key", but a
-          // plain set() overwrites — so when one file carries the same id twice, the LAST record
-          // indexed silently becomes the answer for the first one's ref, and the verbatim panel
-          // serves one record's bytes as another's. Live measurement on the author's capture:
-          // 36,876 records, 165 duplicated ids, because the writer mints from a per-PROCESS counter
-          // (req_00001…) and every MITM restart appends to the SAME file. Poison instead: the ref
-          // genuinely does not name one record, and refusing loudly is the only answer that keeps
-          // "verbatim" true (invariant 2) and the loss visible (invariant 4).
-          const qk = base + '#' + id;
-          const prev = idx.qual.get(qk);
-          idx.qual.set(qk, prev === undefined ? loc
-            : { dup: true, dupCount: (prev.dupCount || 1) + 1, file });
-          // bare-id fallback: first writer wins, a second file poisons the entry to AMBIGUOUS
-          const prevB = idx.byId.get(id), setB = prevB === undefined ? loc : AMBIGUOUS;
-          idx.byId.set(id, setB);
-          if (log) { log.n++; if (prev !== undefined) log.q.push([qk, prev]); if (prevB !== undefined) log.b.push([id, prevB]); }
-          return { kind: 'indexed', qk, id, prev, prevB, setB };
-        } else {
-          // parseable, but nothing to key on — indexable content silently dropped. Report it.
-          idx.scan.unidentifiedLines++;
-          return { kind: 'unidentified' };
-        }
-      } catch {
-        // A corrupt NDJSON line can never be indexed, so it can never surface per-record: the
-        // record it was meant to carry just looks ABSENT. Count it so the omission is at least
-        // reportable at scan level (invariant 4 — never let a loss be invisible).
-        idx.scan.corruptLines++;
-        idx.scan.corruptByFile[base] = (idx.scan.corruptByFile[base] || 0) + 1;
-        return { kind: 'corrupt' };
+  let lineStart = from, pending = Buffer.alloc(0);
+  const record = (lineBuf) => {
+    if (!lineBuf.length) return null;
+    // key by String(id): parseTextRef always yields recordId as a string, so coerce to match
+    // regardless of whether the harness minted numeric or string record ids.
+    try {
+      const raw = JSON.parse(lineBuf.toString('utf8')).id;
+      if (raw != null) {
+        const id = String(raw);
+        const loc = { file, offset: lineStart, length: lineBuf.length };
+        // WITHIN-FILE collision. The qualified key is documented as "the authoritative key", but a
+        // plain set() overwrites — so when one file carries the same id twice, the LAST record
+        // indexed silently becomes the answer for the first one's ref, and the verbatim panel
+        // serves one record's bytes as another's. Live measurement on the author's capture:
+        // 36,876 records, 165 duplicated ids, because the writer mints from a per-PROCESS counter
+        // (req_00001…) and every MITM restart appends to the SAME file. Poison instead: the ref
+        // genuinely does not name one record, and refusing loudly is the only answer that keeps
+        // "verbatim" true (invariant 2) and the loss visible (invariant 4).
+        const qk = base + '#' + id;
+        const prev = idx.qual.get(qk);
+        idx.qual.set(qk, prev === undefined ? loc
+          : { dup: true, dupCount: (prev.dupCount || 1) + 1, file });
+        // bare-id fallback: first writer wins, a second file poisons the entry to AMBIGUOUS
+        const prevB = idx.byId.get(id), setB = prevB === undefined ? loc : AMBIGUOUS;
+        idx.byId.set(id, setB);
+        if (log) { log.n++; if (prev !== undefined) log.q.push([qk, prev]); if (prevB !== undefined) log.b.push([id, prevB]); }
+        return { kind: 'indexed', qk, id, prev, prevB, setB };
+      } else {
+        // parseable, but nothing to key on — indexable content silently dropped. Report it.
+        idx.scan.unidentifiedLines++;
+        return { kind: 'unidentified' };
       }
-    };
-    while (filePos < size) {
-      const { bytesRead } = await fd.read(buf, 0, CHUNK, filePos);
-      if (!bytesRead) break;
+    } catch {
+      // A corrupt NDJSON line can never be indexed, so it can never surface per-record: the
+      // record it was meant to carry just looks ABSENT. Count it so the omission is at least
+      // reportable at scan level (invariant 4 — never let a loss be invisible).
+      idx.scan.corruptLines++;
+      idx.scan.corruptByFile[base] = (idx.scan.corruptByFile[base] || 0) + 1;
+      return { kind: 'corrupt' };
+    }
+  };
+  return {
+    feed(buf, bytesRead) {
       let segStart = 0;
       for (let i = 0; i < bytesRead; i++) {
         if (buf[i] === NL) {
@@ -130,13 +126,47 @@ async function indexFile(file, idx, from = 0, log = null) {
         }
       }
       if (segStart < bytesRead) pending = pending.length ? Buffer.concat([pending, buf.subarray(segStart, bytesRead)]) : Buffer.from(buf.subarray(segStart, bytesRead));
+    },
+    finish(st, filePos) {
+      const end = lineStart;
+      const tail = record(pending); // trailing line without a newline (null when the file ends in one)
+      idx.scan.bytesIndexed = (idx.scan.bytesIndexed || 0) + (filePos - from);
+      return { size: st.size, ino: st.ino, end, tail };
+    },
+  };
+}
+const CHUNK = 1 << 20;
+async function indexFile(file, idx, from = 0, log = null) {
+  const fd = await open(file, 'r');
+  try {
+    const st = await fd.stat();
+    const buf = Buffer.allocUnsafe(CHUNK), li = lineIndexer(file, idx, from, log);
+    let filePos = from;
+    while (filePos < st.size) {
+      const { bytesRead } = await fd.read(buf, 0, CHUNK, filePos);
+      if (!bytesRead) break;
+      li.feed(buf, bytesRead);
       filePos += bytesRead;
     }
-    const end = lineStart;
-    const tail = record(pending); // trailing line without a newline (null when the file ends in one)
-    idx.scan.bytesIndexed = (idx.scan.bytesIndexed || 0) + (filePos - from);
-    return { size, ino: st.ino, end, tail };
+    return li.finish(st, filePos);
   } finally { await fd.close(); }
+}
+// The same scan, synchronous: only for the in-place re-index when an indexed file disappears under a
+// read (`Stale` below), which runs inside a synchronous detail() call.
+function indexFileSync(file, idx, from = 0, log = null) {
+  const fd = openSync(file, 'r');
+  try {
+    const st = fstatSync(fd);
+    const buf = Buffer.allocUnsafe(CHUNK), li = lineIndexer(file, idx, from, log);
+    let filePos = from;
+    while (filePos < st.size) {
+      const bytesRead = readSync(fd, buf, 0, CHUNK, filePos);
+      if (!bytesRead) break;
+      li.feed(buf, bytesRead);
+      filePos += bytesRead;
+    }
+    return li.finish(st, filePos);
+  } finally { closeSync(fd); }
 }
 
 // Take back what an unterminated last line did to the index, before a refresh re-reads it in full
@@ -171,40 +201,48 @@ function undoAttempt(idx, file, from, log, counts) {
   if (counts.cb) idx.scan.corruptByFile[base] = counts.cb; else delete idx.scan.corruptByFile[base];
 }
 
+// An indexed file gone at read time (the sealer deleted a verified original, or it rotated away): its
+// records may live on in sealed copies that the listing set aside while it existed, so the index is
+// rebuilt in place once instead of reporting them absent (4.2 「并存期」). An fd opened before the unlink
+// keeps reading the old inode and needs nothing.
+class Stale extends Error {}
+
+// What one root lists: discover's rule over this root alone, or — under several roots — this root's
+// share of ONE listing across all of them, so an original in one root supersedes its sealed copy in
+// another (4.2 「并存期」: every reader makes the same choice).
+const listRoot = (root) => {
+  const ls = listSources([root]);
+  return { ...ls.perRoot[0], superseded: ls.superseded, mismatched: ls.mismatched };
+};
+
 // Build resolve(text_ref) -> the block's exact byte slice (or null if unresolvable). Lean: holds a
 // byte-offset index + ≤ BODY_LRU cached req_body strings, never the whole corpus.
 // `source` may be one path or SEVERAL roots (D27: the new home plus the legacy one that still holds
 // the user's captures). Scanning only the first would make raw-byte refs from the other root
 // unresolvable — the block viewer would report "record not found" for bytes that are on disk.
-export async function buildResolver(source, { retryMs = 30000 } = {}) {
+export async function buildResolver(source, { retryMs = 30000, lister = listRoot } = {}) {
   const roots = (Array.isArray(source) ? source : [source]).filter(Boolean);
   if (roots.length > 1) return buildMultiResolver(roots, { retryMs });
   const sourcePath = roots[0];
   const files = [];
-  // scan (audit 2026-07-19): the directory walk is non-recursive and .ndjson-only, so a nested
-  // or compressed capture is simply INVISIBLE — the "source" shrinks and nobody is told. Keep
-  // the same (conservative) selection, but record every entry we declined and why, so the
-  // omission is reportable rather than silent.
-  const scan = { files, skipped: [], corruptLines: 0, corruptByFile: {}, unidentifiedLines: 0, bytesIndexed: 0 };
+  // scan (audit 2026-07-19): what is not read is recorded with its reason, so the omission is
+  // reportable rather than silent. Which files are read, and the reasons for the rest, come from the
+  // shared rule (src/raw/discover.mjs): the flat *.ndjson, one level down `<sid>/calls.ndjson`, and
+  // sealed files — listed here but not read by this resolver yet.
+  const scan = { files, skipped: [], corruptLines: 0, corruptByFile: {}, unidentifiedLines: 0, bytesIndexed: 0, superseded: [], mismatched: [] };
   const isDir = statSync(sourcePath).isDirectory();
-  const listFiles = async (skipped) => {
-    if (!isDir) return [sourcePath];
+  const listFiles = (skipped) => {
+    const ls = lister(sourcePath); // throws if the root cannot be listed (broken ≠ empty)
+    scan.superseded = ls.superseded || []; scan.mismatched = ls.mismatched || [];
     const out = [];
-    for (const ent of await readdir(sourcePath, { withFileTypes: true })) {
-      const name = ent.name;
-      // NOT `ent.isFile()`: readdir(withFileTypes) does not follow symlinks, so isFile() is FALSE
-      // for a symlinked capture — and a capture reached through a symlink is still a capture. Using
-      // isFile() here silently dropped a whole harness from the unified board (the live source dir
-      // holds codex-capture.ndjson as a symlink) and mislabelled it "not-ndjson". One rule for the
-      // three readers (paths.mjs isCaptureFile); a link to nothing is reported, not opened — opening
-      // it failed this root's whole index.
-      if (isCaptureFile(sourcePath, ent)) { out.push(path.join(sourcePath, name)); continue; }
-      if (!skipped) continue;
-      skipped.push({ name, reason: skipReason(sourcePath, ent).reason }); // one classifier, paths.mjs
+    for (const f of ls.files) {
+      if (isSealedPath(f)) { if (skipped) skipped.push({ name: path.basename(f), reason: 'sealed (not read by this resolver yet)' }); continue; }
+      out.push(f);
     }
+    if (skipped) skipped.push(...ls.skipped);
     return out;
   };
-  files.push(...await listFiles(scan.skipped));
+  files.push(...listFiles(scan.skipped));
 
   // qual: "<streamBasename>#<recordId>" -> { file, offset, length }  (the authoritative key)
   // byId: "<recordId>" -> loc | AMBIGUOUS                            (back-compat fallback only)
@@ -227,28 +265,40 @@ export async function buildResolver(source, { retryMs = 30000 } = {}) {
   const failedAt = new Map(); // file -> { sig, e, at } of its last failed read
   const statSig = (f) => { try { const st = statSync(f); return `${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`; } catch { return 'gone'; } };
   const unchangedFailure = (f) => { const x = failedAt.get(f); return !!x && x.sig === statSig(f) && Date.now() - x.at < retryMs; };
-  const indexSafe = async (f, from = 0) => {
+  const attempt = (f, from, run) => {
     const sig = statSig(f); // before the read: a change that lands during it must not be absorbed
     const log = { n: 0, q: [], b: [] }, counts = { c: scan.corruptLines, u: scan.unidentifiedLines, cb: scan.corruptByFile[path.basename(f)] };
-    try { const mk = await indexFile(f, idx, from, log); failedAt.delete(f); unnote((x) => x.root === path.dirname(f) && x.name === path.basename(f)); return mk; }
-    catch (e) {
+    const ok = (mk) => { failedAt.delete(f); unnote((x) => x.root === path.dirname(f) && x.name === path.basename(f)); return mk; };
+    const fail = (e) => {
       undoAttempt(idx, f, from, log, counts);
       failedAt.set(f, { sig, e, at: Date.now() });
       note(path.dirname(f), path.basename(f), 'unreadable', e);
       return null;
-    }
+    };
+    return run(log, ok, fail);
   };
+  const indexSafe = (f, from = 0) => attempt(f, from, (log, ok, fail) => indexFile(f, idx, from, log).then(ok, fail));
+  const indexSafeSync = (f, from = 0) => attempt(f, from, (log, ok, fail) => { try { return ok(indexFileSync(f, idx, from, log)); } catch (e) { return fail(e); } });
   for (const f of [...files]) { const mk = await indexSafe(f); if (mk) marks.set(f, mk); else files.splice(files.indexOf(f), 1); }
-  // A file that left the root takes its failure (and its note) with it.
+  // A file that left the root takes its failure (and its note) with it. By full path: one level down,
+  // every session dir holds a `calls.ndjson`, so a basename names no one file.
   const fileRoot = path.dirname(isDir ? path.join(sourcePath, '_') : sourcePath); // as notes file it: `traces/` and `./traces` too
+  const under = (dir) => dir === fileRoot || dir.startsWith(fileRoot + path.sep);
   const forgetUnlisted = (listed) => {
-    const names = new Set(listed.map((f) => path.basename(f)));
-    for (const f of [...failedAt.keys()]) if (!names.has(path.basename(f))) failedAt.delete(f);
-    unnote((x) => x.root === fileRoot && !names.has(x.name));
+    const keep = new Set(listed.map((f) => path.resolve(f)));
+    for (const f of [...failedAt.keys()]) if (!keep.has(path.resolve(f))) failedAt.delete(f);
+    unnote((x) => under(x.root) && !keep.has(path.resolve(x.root, x.name)));
   };
 
   const fds = new Map();       // file -> open fd (reused across resolves)
-  const fdFor = (f) => { let fd = fds.get(f); if (fd === undefined) { fd = openSync(f, 'r'); fds.set(f, fd); } return fd; };
+  const fdFor = (f) => {
+    let fd = fds.get(f);
+    if (fd === undefined) {
+      try { fd = openSync(f, 'r'); } catch (e) { if (e.code === 'ENOENT') throw new Stale(f); throw e; }
+      fds.set(f, fd);
+    }
+    return fd;
+  };
   const bodyCache = new Map(); // QUALIFIED key -> normalized req_body string (LRU)
 
   // Locate the ONE record a ref names. Prefers the qualified key; falls back to the bare id only
@@ -316,8 +366,10 @@ export async function buildResolver(source, { retryMs = 30000 } = {}) {
     return out;
   };
 
-  // The detailed read: every consumer that wants to LABEL what it renders uses this.
-  const detail = (textRef) => {
+  // The detailed read: every consumer that wants to LABEL what it renders uses this. `detailOnce` may
+  // throw Stale (an indexed file is gone); `detail` re-indexes in place once and asks again. Under
+  // several roots the multi-root resolver catches Stale itself, so every root re-lists together.
+  const detailOnce = (textRef) => {
     if (!textRef) return OUT('no-ref', 'block has no text_ref — nothing points at the source');
     const { rawRef, recordId, start, end } = parseTextRef(textRef);
     const got = bodyOf(streamOfRawRef(rawRef), recordId);
@@ -327,6 +379,10 @@ export async function buildResolver(source, { retryMs = 30000 } = {}) {
     if (got.status !== 'ok') return got;
     return (start == null || end == null) ? got : { ...got, text: got.text.slice(start, end) };
   };
+  const detail = (textRef) => {
+    try { return detailOnce(textRef); }
+    catch (e) { if (!(e instanceof Stale)) throw e; rebuildSync(); return detailOnce(textRef); }
+  };
 
   // Back-compat surface: string-or-null, non-throwing (except the deliberate ambiguity throw).
   const resolve = (textRef) => {
@@ -334,8 +390,9 @@ export async function buildResolver(source, { retryMs = 30000 } = {}) {
     return got.status === 'ok' ? got.text : null;
   };
   resolve.detail = detail;
+  resolve.detailOnce = detailOnce;
   resolve.scan = scan;
-  resolve.size = idx.qual.size;
+  Object.defineProperty(resolve, 'size', { get: () => idx.qual.size, enumerable: true });
   resolve.dispose = () => { for (const fd of fds.values()) try { closeSync(fd); } catch {} fds.clear(); bodyCache.clear(); };
 
   // LIVE SOURCES (4.4 #10). The index used to be built once, at startup, so under a running
@@ -346,7 +403,7 @@ export async function buildResolver(source, { retryMs = 30000 } = {}) {
   // or was replaced (inode changed) is not append-only, so the whole index is rebuilt. Concurrent
   // callers share one in-flight refresh. Resolves to true when the index changed.
   let inflight = null;
-  const rebuildAll = async () => {
+  const clearIndex = () => {
     idx.qual.clear(); idx.byId.clear(); marks.clear(); bodyCache.clear();
     for (const fd of fds.values()) try { closeSync(fd); } catch {}
     fds.clear();
@@ -354,21 +411,38 @@ export async function buildResolver(source, { retryMs = 30000 } = {}) {
     // Notes are not cleared up front: a reader polling during the rebuild must still see a failure
     // that persists. A recovered file's note goes when it indexes; a gone file's, below.
     files.length = 0;
-    const listed = await listFiles(null);
+  };
+  const rebuildAll = async () => {
+    clearIndex();
+    const listed = listFiles(null);
     forgetUnlisted(listed);
     for (const f of listed) {
       if (unchangedFailure(f)) { note(path.dirname(f), path.basename(f), 'unreadable', failedAt.get(f).e); continue; }
       const mk = await indexSafe(f); if (mk) { files.push(f); marks.set(f, mk); }
     }
   };
+  // The same, synchronously, for Stale: it runs inside a detail() call.
+  const rebuildSync = () => {
+    clearIndex();
+    const listed = listFiles(null);
+    forgetUnlisted(listed);
+    for (const f of listed) {
+      if (unchangedFailure(f)) { note(path.dirname(f), path.basename(f), 'unreadable', failedAt.get(f).e); continue; }
+      const mk = indexSafeSync(f); if (mk) { files.push(f); marks.set(f, mk); }
+    }
+  };
+  resolve.rebuildSync = rebuildSync;
   const doRefresh = async () => {
     let now;
-    try { now = await listFiles(null); } catch (e) { note(path.dirname(sourcePath), path.basename(sourcePath), 'unreadable', e); return false; }
+    try { now = listFiles(null); } catch (e) { note(path.dirname(sourcePath), path.basename(sourcePath), 'unreadable', e); return false; }
     if (isDir) unnote((x) => x.root === path.dirname(sourcePath) && x.name === path.basename(sourcePath)); // the listing note; a file source has none
     unnote((x) => x.reason === 'vanished'); // a pass's own observation; the board's loader reports it live
     forgetUnlisted(now);
     let changed = false;
-    for (const f of now) {
+    // A file indexed earlier and no longer listed (deleted, or set aside by the listing): its entries
+    // must go, and whatever replaces it (its sealed copies) be read — rebuild.
+    if ([...marks.keys()].some((f) => !now.includes(f))) { await rebuildAll(); changed = true; }
+    else for (const f of now) {
       if (unchangedFailure(f)) { note(path.dirname(f), path.basename(f), 'unreadable', failedAt.get(f).e); continue; } // tried again once it changes or retryMs passes
       let st; try { st = statSync(f); } catch (e) { note(path.dirname(f), path.basename(f), 'vanished', e); continue; }
       const m = marks.get(f);
@@ -380,7 +454,7 @@ export async function buildResolver(source, { retryMs = 30000 } = {}) {
       marks.set(f, mk || { ...m, tail: null }); // tail already taken back: never undo it twice
       changed = true;
     }
-    if (changed) { bodyCache.clear(); resolve.size = idx.qual.size; }
+    if (changed) bodyCache.clear();
     return changed;
   };
   resolve.refresh = () => inflight || (inflight = doRefresh().finally(() => { inflight = null; }));
@@ -391,9 +465,21 @@ export async function buildResolver(source, { retryMs = 30000 } = {}) {
 // Several roots: index each independently and try them in order. Order matters only for a bare-id
 // fallback, and the qualified key (`<file>#<id>`) is unaffected, so this cannot invent a winner
 // among collisions — a ref that is ambiguous within a root still throws from that root's resolver.
+// Which files each root reads is ONE listing across all of them (src/raw/discover.mjs), so an
+// original in one root and its sealed copy in another are never both read.
 async function buildMultiResolver(roots, opts) {
   const parts = [];
   const unreadable = [];
+  // the roots a listing can include: one that cannot be listed is left out of it (and fails alone)
+  const listable = () => roots.filter((r) => { try { listSources([r]); return true; } catch { return false; } });
+  const shared = { at: null, ls: null };
+  const lister = (root) => {
+    const good = listable();
+    if (!good.includes(root)) return listRoot(root); // throws this root's own error
+    const ls = listSources(good);
+    shared.ls = ls;
+    return { ...ls.perRoot.find((p) => p.root === root), superseded: ls.superseded, mismatched: ls.mismatched };
+  };
   for (const r of roots) {
     // FAIL SOFT PER ROOT. A root can be absent, unreadable, or deleted between the caller's existence
     // check and this open — the legacy home is exactly the kind of directory a user tidies away, and
@@ -401,17 +487,27 @@ async function buildMultiResolver(roots, opts) {
     // root, never the whole board: throwing here takes down `asight serve` at startup and the user
     // sees a crash where they should see the sessions that ARE readable (invariant 2 — a capture on
     // disk stays readable). What is dropped is recorded so `scan` can report it rather than hide it.
-    try { parts.push(Object.assign(await buildResolver(r, opts), { rootPath: r })); }
+    try { parts.push(Object.assign(await buildResolver(r, { ...opts, lister }), { rootPath: r })); }
     catch (e) { unreadable.push({ root: r, reason: (e && e.message) || String(e) }); }
   }
-  const resolve = (...args) => {
+  // Stale (an indexed file is gone): every root re-lists and re-indexes together, then the ref is asked
+  // again once — the copy that replaces the file may sit in another root.
+  const withRelist = (fn) => {
+    try { return fn(); }
+    catch (e) {
+      if (!(e instanceof Stale)) throw e;
+      for (const p of parts) p.rebuildSync();
+      return fn();
+    }
+  };
+  const resolve = (...args) => withRelist(() => {
     let lastErr = null;
     for (const p of parts) {
-      try { const hit = p(...args); if (hit) return hit; } catch (e) { lastErr = e; }
+      try { const got = p.detailOnce(...args); if (got.status === 'ok') return got.text; } catch (e) { if (e instanceof Stale) throw e; lastErr = e; }
     }
     if (lastErr) throw lastErr;   // an ambiguity/corruption report must not be swallowed by a miss
     return null;
-  };
+  });
   const scanOf = () => ({
     files: parts.flatMap((p) => (p.scan && p.scan.files) || []),
     skipped: parts.flatMap((p) => (p.scan && p.scan.skipped) || []),
@@ -419,6 +515,7 @@ async function buildMultiResolver(roots, opts) {
     corruptByFile: Object.assign({}, ...parts.map((p) => (p.scan && p.scan.corruptByFile) || {})),
     unidentifiedLines: parts.reduce((n, p) => n + ((p.scan && p.scan.unidentifiedLines) || 0), 0),
     bytesIndexed: parts.reduce((n, p) => n + ((p.scan && p.scan.bytesIndexed) || 0), 0),
+    superseded: (shared.ls && shared.ls.superseded) || [], mismatched: (shared.ls && shared.ls.mismatched) || [],
     unreadableRoots: unreadable,
   });
   // live: a refresh that changed nothing can still have noted a skip
@@ -433,22 +530,20 @@ async function buildMultiResolver(roots, opts) {
   // is AC-1 (回源逐字, RFC 4.2:41,77) silently unavailable to precisely the users the D27 home move
   // created. Ask each root in turn, accept only an actual hit, and when they all miss return the LAST
   // reasoned miss so the row can say why rather than render empty (invariant 4).
-  resolve.detail = (...a) => {
+  resolve.detail = (...a) => withRelist(() => {
     let last = null;
     for (const p of parts) {
-      if (typeof p.detail !== 'function') continue;
-      const v = p.detail(...a);
+      const v = p.detailOnce(...a);
       if (v && v.status === 'ok') return v;
       if (v) last = v;
     }
     return last;
-  };
+  });
 
   // The server reports `source_resolved` as `resolve.size ? true : false` (RFC 4.4:98). With no size
   // the post-D27 DEFAULT configuration announced its capture source was unreadable while serving from
   // it. Sum the roots: the resolved corpus really is all of them.
-  const sizeOf = () => parts.reduce((n, p) => n + (typeof p.size === 'number' ? p.size : 0), 0);
-  resolve.size = sizeOf();
+  Object.defineProperty(resolve, 'size', { get: () => parts.reduce((n, p) => n + (typeof p.size === 'number' ? p.size : 0), 0), enumerable: true });
   resolve.refresh = async () => {
     let changed = false;
     for (const p of parts) {
@@ -458,7 +553,6 @@ async function buildMultiResolver(roots, opts) {
         if (sk && !sk.some((x) => x.root === root && x.name === name && x.reason === 'unreadable')) sk.push({ root, name, reason: 'unreadable', error: (e && e.code) || String(e) });
       }
     }
-    if (changed) resolve.size = sizeOf();
     return changed;
   };
 

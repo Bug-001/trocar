@@ -17,6 +17,7 @@
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { readIndex } from './format.mjs';
+import { isCaptureFile, skipReason } from '../paths.mjs';
 
 export const SEALED_EXT = '.sealed';
 const SEG = /^(.+)\.\d{4,}\.sealed$/;
@@ -42,16 +43,21 @@ export function sealedSources(file, { fs = nodeFs } = {}) {
   return v;
 }
 
+// a regular file, or a symlink to one
+const fileLike = (fs, dir, e) => e.isFile() || (e.isSymbolicLink() && (() => { try { return fs.statSync(path.join(dir, e.name)).isFile(); } catch { return false; } })());
+
 function scanRoot(root, fs) {
   const st = fs.statSync(root);                        // missing root throws: broken MUST NOT look empty
   if (!st.isDirectory()) return { files: [root], skipped: [] };
   const files = [], skipped = [];
   for (const e of fs.readdirSync(root, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
     const p = path.join(root, e.name);
-    // not `isFile()`: a symlinked capture is still a capture (test/query/source-symlink.test.mjs)
+    // not `isFile()`: a symlinked capture is still a capture (test/query/source-symlink.test.mjs), and a
+    // link to nothing, or to a directory, is not one — it is listed with its reason instead of being
+    // opened (src/paths.mjs isCaptureFile / skipReason, the classifier read-cc-line gave the readers).
     if (!e.isDirectory()) {
-      if (e.name.endsWith('.ndjson') || isSealedPath(e.name)) files.push(p);
-      else skipped.push({ name: e.name, reason: /\.(gz|zst|bz2|xz|zip|br|lz4)$/i.test(e.name) ? 'compressed' : 'not-ndjson' });
+      if (isCaptureFile(root, e) || (isSealedPath(e.name) && fileLike(fs, root, e))) files.push(p);
+      else skipped.push({ name: e.name, reason: skipReason(root, e).reason });
       continue;
     }
     let sub; try { sub = fs.readdirSync(p, { withFileTypes: true }); } catch { skipped.push({ name: e.name, reason: 'directory' }); continue; }
