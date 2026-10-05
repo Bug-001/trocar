@@ -59,6 +59,10 @@ function anthropicBlocks(body) {
   })
 }
 
+// The whole prompt in the same estimate a model call's usage adds up to (input + creation + read);
+// count_tokens answers with it so the two never drift apart.
+export const anthropicTokens = (body) => Math.max(1, anthropicBlocks(body).at(-1)?.tokens || 0)
+
 // Usage per the docs: A = highest hit, B = last 1h breakpoint after A, C = last breakpoint; read A,
 // write 1h (B - A) and 5m (C - B); input_tokens is what follows C. Each breakpoint looks back over
 // 20 positions (itself first) for an entry an earlier request wrote; writes happen only at breakpoints.
