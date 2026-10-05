@@ -14,6 +14,7 @@ import { planTrust } from './core/trust/plan.mjs'
 import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, writeOwnedFile, undoEntry, removeEmptyDirs, manifestPath, sweepTemps } from './core/trust/journal.mjs'
 import { controlRequest } from './core/control.mjs'
 import { readText } from './core/config-read.mjs'
+import { appendEvent } from './core/events.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const pidAlive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' } }
@@ -44,9 +45,22 @@ function refuseRoot(verb) {
 // 2026-10-06: 安装 MUST 先列出要改的每个文件,再动手). A first plan without the CA's certificate has the same paths
 // (the certificate only fills the trust files' contents) and runs every refusal first, so a refused plan writes
 // nothing at all, not even the manifest.
-export async function installCollector({ home = os.homedir(), env = process.env, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), freePort = freeEnginePort, onPlan = () => {} } = {}) {
+// A failed install or uninstall step is recorded where status finds it (D38) — when the collector directory exists;
+// otherwise (nothing installed, or refused as root) the command's own output is the only report.
+async function recorded(dir, where, fn) {
+  try { return await fn() } catch (e) {
+    if (fs.existsSync(dir)) appendEvent(dir, { event: 'failure', where, reason: String((e && e.message) || e) })
+    throw e
+  }
+}
+
+export async function installCollector({ home = os.homedir(), ...opts } = {}) {
   refuseRoot('install')
   const dir = collectorHome(path.join(home, '.asight')) // collectorHome takes the asight home
+  return recorded(dir, 'install', () => install(dir, { home, ...opts }))
+}
+
+async function install(dir, { home, env = process.env, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), freePort = freeEnginePort, onPlan = () => {} }) {
   const prior = readManifest(dir)
   if (prior && prior.complete) return { already: true, manifest: prior, plan: null }
   if (prior) throw new Error(`an earlier install did not finish (${manifestPath(dir)}); run "asight collector uninstall" first`)
@@ -111,9 +125,13 @@ export async function stopDaemon({ socketPath, lockFile, request = controlReques
   return 'stopped'
 }
 
-export async function uninstallCollector({ home = os.homedir(), env = process.env, purgeData = false, scan = async () => [], match = () => ({ agent: null }), stop = null } = {}) {
+export async function uninstallCollector({ home = os.homedir(), ...opts } = {}) {
   refuseRoot('uninstall')
   const dir = collectorHome(path.join(home, '.asight')) // collectorHome takes the asight home
+  return recorded(dir, 'uninstall', () => uninstall(dir, { home, ...opts }))
+}
+
+async function uninstall(dir, { env = process.env, purgeData = false, scan = async () => [], match = () => ({ agent: null }), stop = null }) {
   const runtime = env.XDG_RUNTIME_DIR ? path.join(env.XDG_RUNTIME_DIR, 'asight') : null
   const report = { daemon: null, entries: [], removed: [], still_trusting: [], kept_captures: !purgeData, notes: [] }
   report.daemon = await (stop || (() => stopDaemon({ socketPath: runtime && path.join(runtime, 'collector.sock'), lockFile: path.join(dir, 'lock') })))()
@@ -122,7 +140,12 @@ export async function uninstallCollector({ home = os.homedir(), env = process.en
   if (!m) report.notes.push('nothing is installed for this user')
   else {
     // trust entries, newest first (4.6 撤销顺序 step 1), then the append-semantics trust files (step 3)
-    for (const e of [...m.entries].reverse()) report.entries.push(undoEntry(e))
+    for (const e of [...m.entries].reverse()) {
+      const r = undoEntry(e)
+      report.entries.push(r)
+      // asight's key may still be in a file it can no longer parse: the user has to look (D38)
+      if (r.result === 'left-unparsable') appendEvent(dir, { event: 'failure', where: 'uninstall', reason: `${e.path} is no longer valid JSON; asight's ${e.keys.join('.')} = ${e.value} may still be in it` })
+    }
     for (const f of m.files.filter((x) => x.role === 'trust-file' || x.role === 'ca-cert')) rm(f.path)
     // step 5: report, never restart — append-semantics entries are read at start, so these still trust asight
     for (const f of await scan()) { const a = match(f).agent; if (a && m.entries.some((e) => e.harness === a)) report.still_trusting.push({ pid: f.pid, agent: a, until: 'restart' }) }

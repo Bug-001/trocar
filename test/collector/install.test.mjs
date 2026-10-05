@@ -194,7 +194,31 @@ test('a refused plan entry or a non-JSON settings file leaves every user file un
     await assert.rejects(installCollector(base(b)))
     assert.equal(fs.readFileSync(settingsOf(b), 'utf8'), '{"model": "x",, }', 'a file that is not JSON is never rewritten')
     await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
-    assert.deepEqual([fs.existsSync(b.dir), fs.readFileSync(settingsOf(b), 'utf8')], [false, '{"model": "x",, }'])
+    assert.deepEqual([listAll(b.dir).filter((n) => !n.startsWith('flows')), fs.readFileSync(settingsOf(b), 'utf8')], [[], '{"model": "x",, }'], 'only the failure record is left (flows/ is data, kept like captures)')
+    const recs = fs.readdirSync(path.join(b.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(b.dir, 'flows', n), 'utf8').trim().split('\n').map((l) => JSON.parse(l)))
+    assert.deepEqual(recs.map((r) => [r.event, r.where]), [['failure', 'install']], 'the failed install step is recorded with its reason (D38)')
+    assert.match(recs[0].reason, /JSON/)
+  } finally { b.done() }
+})
+
+test('uninstall records a file it could not undo because it is no longer JSON (D38); status shows the failures without a daemon', async () => {
+  const b = box()
+  try {
+    fs.mkdirSync(path.join(b.home, '.claude')); fs.writeFileSync(settingsOf(b), '{"model":"x"}')
+    await installCollector(base(b))
+    fs.writeFileSync(settingsOf(b), fs.readFileSync(settingsOf(b), 'utf8') + ' trailing garbage')
+    const r = await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
+    assert.deepEqual(r.entries.map((e) => e.result), ['left-unparsable'])
+    const { recentFailures } = await import('../../src/collector/core/events.mjs')
+    const f = recentFailures(b.dir)
+    assert.deepEqual(f.map((x) => [x.event, x.where]), [['failure', 'uninstall']])
+    assert.match(f[0].reason, /settings\.json is no longer valid JSON; asight's env\.NODE_EXTRA_CA_CERTS = .*asight-ca\.pem may still be in it/)
+    const { runCollector } = await import('../../src/collector/cli.mjs')
+    const out = []; const err = []
+    const code = await runCollector(['status'], { home: b.home, env: { XDG_RUNTIME_DIR: path.join(b.home, 'run') }, out: (x) => out.push(x), err: (x) => err.push(x) })
+    assert.equal(code, 3)
+    assert.match(err[0], /daemon is not running/)
+    assert.match(out[0], /^recent failures \(1\):\n  \S+ failure \(uninstall\): .*no longer valid JSON/, 'read from disk, with no daemon')
   } finally { b.done() }
 })
 

@@ -7,6 +7,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { controlSocketPath, controlRequest } from './core/control.mjs'
+import { recentFailures } from './core/events.mjs'
+import { collectorHome } from '../paths.mjs'
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -25,7 +27,14 @@ export function formatStatus(s) {
   const agents = s.agents || []
   lines.push(agents.length ? `agents (${agents.length}, ${s.running_untrusted} running but untrusted):` : 'agents: none running')
   for (const a of agents) lines.push(`  ${a.pid} ${a.agent} ${a.trusted ? `decrypt (${a.trust_var} via ${a.trust_via})` : `untrusted: ${a.reason}`} · ${a.direct ?? '?'} direct`)
+  if (s.failures && s.failures.length) lines.push(formatFailures(s.failures))
   return lines.join('\n')
+}
+
+// Durable failure records (D38), newest last: what failed, where, and why.
+export function formatFailures(list) {
+  const one = (f) => `  ${f.ts} ${f.event || `flow ${f.flow_id}`}${f.where ? ` (${f.where})` : ''}${f.pid != null ? ` pid ${f.pid}` : ''}${f.agent ? ` ${f.agent}` : ''}: ${f.reason || f.error?.message || f.error || f.not_captured || ''}${f.suppressed ? ` (+${f.suppressed} more)` : ''}${f.hint ? ` — ${f.hint}` : ''}`
+  return [`recent failures (${list.length}):`, ...list.map(one)].join('\n')
 }
 
 // Every file install will write or change, printed before it writes any (4.6).
@@ -88,7 +97,12 @@ export async function runCollector(argv, { env = process.env, home = os.homedir(
   const json = rest.includes('--json')
   let r
   try { r = await request({ socketPath, method: verb === 'status' ? 'GET' : 'POST', path: `/${verb}`, body: verb === 'on' ? {} : undefined }) } catch (e) {
-    if (e.code === 'ENOENT' || e.code === 'ECONNREFUSED') { err('the collector daemon is not running: start it with "asight collector start"'); return 3 }
+    if (e.code === 'ENOENT' || e.code === 'ECONNREFUSED') {
+      err('the collector daemon is not running: start it with "asight collector start"')
+      const failures = recentFailures(collectorHome(path.join(home, '.asight'))) // read from disk: why it is not running, what failed last
+      if (failures.length) out(formatFailures(failures))
+      return 3
+    }
     err(e.message); return 1
   }
   out(json ? JSON.stringify(r, null, 2) : formatStatus(r))

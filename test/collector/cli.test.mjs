@@ -67,5 +67,7 @@ test('cli: the real bin dispatches `collector` (usage → 2) and `collector stat
   const r = spawnSync(process.execPath, [BIN, 'collector', 'status'], { env, encoding: 'utf8' })
   assert.equal(r.status, 2); assert.match(r.stderr, /XDG_RUNTIME_DIR is not set/)
   assert.ok(formatStatus({ ...STATUS, agents: [] }).includes('agents: none running'))
+  const withFailures = formatStatus({ ...STATUS, failures: [{ ts: 'T1', event: 'agent-untrusted', pid: 11, agent: 'claude-code', reason: 'config-after-start' }, { ts: 'T2', event: 'failure', where: 'engine', reason: 'no original destination', suppressed: 3 }] })
+  assert.match(withFailures, /recent failures \(2\):\n  T1 agent-untrusted pid 11 claude-code: config-after-start\n  T2 failure \(engine\): no original destination \(\+3 more\)$/, 'status prints the durable failure records (D38)')
   assert.ok(path.isAbsolute(BIN))
 })
