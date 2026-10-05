@@ -58,3 +58,26 @@ test('framing violations are reported, not thrown', () => {
   const ev = same('request', 'POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nZZ\r\n')
   assert.equal(ev.at(-1)[0], 'error')
 })
+
+// RFC 4.6 §引擎 6 (D37): after a 101 the raw bytes keep flowing and the side copy goes to ws/. The bytes
+// that followed the 101 head in the same chunk belong to the new protocol; on the request side the bytes
+// after an Upgrade request wait until the exchange layer knows whether the upgrade happened.
+test('upgrade: the bytes after a 101 head are handed over; a request that asks to upgrade holds what follows until told', () => {
+  let rest = null
+  const r = createFramer('response', { onHead() {}, onBody() {}, onEnd() {}, onUpgrade: (u) => { rest = u.rest }, onError() {} })
+  r.expect({ method: 'GET' }); r.push(Buffer.from('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n\x81\x02hi', 'latin1'))
+  assert.equal(rest.toString('latin1'), '\x81\x02hi')
+  const heads = []
+  const q = createFramer('request', { onHead: (h) => heads.push(h.target), onBody() {}, onEnd() {}, onUpgrade() {}, onError() {} })
+  q.push(Buffer.from('GET /ws HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\nGET /next HTTP/1.1\r\n\r\n'))
+  assert.deepEqual(heads, ['/ws'], 'held while the upgrade is undecided')
+  q.release(); assert.deepEqual(heads, ['/ws', '/next'], 'refused: framed as HTTP again')
+  const w = createFramer('request', { onHead() {}, onBody() {}, onEnd() {}, onUpgrade() {}, onError() {} })
+  w.push(Buffer.from('GET /ws HTTP/1.1\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\n\r\n\x81\x80abcd', 'latin1'))
+  w.push(Buffer.from('\x88\x80wxyz', 'latin1'))
+  assert.equal(w.takeRest().toString('latin1'), '\x81\x80abcd\x88\x80wxyz', 'every byte held, across pushes')
+  const plain = []
+  const p = createFramer('request', { onHead: (h) => plain.push(h.target), onBody() {}, onEnd() {}, onUpgrade() {}, onError() {} })
+  p.push(Buffer.from('GET /a HTTP/1.1\r\nUpgrade: websocket\r\n\r\nGET /b HTTP/1.1\r\n\r\n'))
+  assert.deepEqual(plain, ['/a', '/b'], 'an Upgrade header without Connection: upgrade asks for nothing')
+})

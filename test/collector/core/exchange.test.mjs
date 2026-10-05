@@ -100,3 +100,48 @@ test('abort mid-response emits an error envelope carrying the partial body', () 
   // 4.6 T2: the error envelope carries the partial body it did receive (带部分内容)
   assert.ok(JSON.stringify(out[0].resp.partial).includes('data:'), 'partial response bytes are preserved')
 })
+
+// RFC 4.6 §传输与帧级记录「升级与中断」+ §记录 seq (D37): the upgrade is not an envelope of its own; the
+// first call after the 101 takes the upgrade request's seq, later calls count on, and every call carries
+// the upgrade request and the 101 verbatim. A refused upgrade (426) is an ordinary HTTP exchange.
+const UPGRADE = 'GET /v1/responses HTTP/1.1\r\nHost: api.openai.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n'
+const SWITCH = 'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n'
+const cframe = (text) => Buffer.from([0x81, 0x80 | text.length, 0, 0, 0, 0, ...Buffer.from(text)]) // masked with key 0
+const sframe = (text) => Buffer.from([0x81, text.length, ...Buffer.from(text)])
+
+test('WebSocket 101: no HTTP envelope for the upgrade; frames after it (even in the 101 chunk, even before the 101) go to the ws recorder', () => {
+  const { out, store } = sink()
+  const t = createExchangeTee({ flow: FLOW, recordStore: store, wsTerminal: [{ patterns: ['^done$'] }] })
+  t.fromClient(Buffer.from('GET /v1/models HTTP/1.1\r\n\r\n'))
+  t.fromUpstream(Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}'))
+  t.fromClient(Buffer.concat([Buffer.from(UPGRADE), cframe('early')])) // a client that does not wait for the 101
+  t.fromUpstream(Buffer.concat([Buffer.from(SWITCH), sframe('done')]))
+  t.fromClient(cframe('ping'))
+  t.fromUpstream(sframe('done'))
+  assert.deepEqual(out.map((e) => [e.seq, e.transport, e.req_body, e.resp.messages ?? e.resp.status]),
+    [[0, undefined, { raw_chars: 0, verbatim: false }, 200], [1, 'ws', 'early', ['done']], [2, 'ws', 'ping', ['done']]], 'the first call takes the upgrade\'s seq: no gap, no duplicate')
+  assert.equal(out[2].req_head_raw, UPGRADE); assert.equal(out[2].resp_head_raw, SWITCH)
+  assert.equal(t.wsSummary().calls, 2)
+  t.upstreamEnded(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }))
+  assert.equal(t.wsSummary().calls, 2)
+})
+
+test('WebSocket: a connection error reaches the recorder, so the open call is an error envelope with its type', () => {
+  const { out, store } = sink()
+  const t = createExchangeTee({ flow: FLOW, recordStore: store, wsTerminal: [{ patterns: ['^done$'] }] })
+  t.fromClient(Buffer.from(UPGRADE)); t.fromUpstream(Buffer.from(SWITCH))
+  t.fromClient(cframe('go')); t.fromUpstream(sframe('half'))
+  t.upstreamEnded(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }))
+  assert.deepEqual(out.map((e) => [e.error, e.resp.error.type, e.resp.partial.messages]), [[true, 'ECONNRESET', ['half']]])
+  t.abort({ type: 'ECONNRESET', message: 'flow closed' }) // the flow's teardown after it: nothing more
+  assert.equal(out.length, 1)
+})
+
+test('an upgrade refused with 426 is an ordinary exchange, and the next request on the connection is framed as HTTP', () => {
+  const { out, store } = sink()
+  const t = createExchangeTee({ flow: FLOW, recordStore: store })
+  t.fromClient(Buffer.from(UPGRADE + 'POST /v1/responses HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}'))
+  t.fromUpstream(Buffer.from('HTTP/1.1 426 Upgrade Required\r\nContent-Length: 0\r\n\r\nHTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}'))
+  assert.deepEqual(out.map((e) => [e.seq, e.method, e.resp.status, e.transport]), [[0, 'GET', 426, undefined], [1, 'POST', 200, undefined]])
+  assert.equal(t.wsSummary(), null)
+})
