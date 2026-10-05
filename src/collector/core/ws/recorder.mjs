@@ -57,8 +57,8 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
   const { deflate } = parseExtensions(ext)
   const isTerminal = compileTerminal(terminal, upgrade.req.head.target)
   const keepClient = isLlmCall(upgrade.req.head.target) // a non-LLM client message is metadata only (RFC 4.1)
-  const side = (noCtx) => ({ parser: createFrameParser({ maxPayload: maxCallBytes }), asm: createMessageAssembler(), inflater: deflate ? createInflater({ noContextTakeover: noCtx }) : null, msg: null, broken: null })
-  const dirs = { c: side(!!deflate && deflate.clientNoContextTakeover), s: side(!!deflate && deflate.serverNoContextTakeover) }
+  const side = (noCtx, name) => ({ name, parser: createFrameParser({ maxPayload: maxCallBytes }), asm: createMessageAssembler(), inflater: deflate ? createInflater({ noContextTakeover: noCtx }) : null, msg: null, broken: null })
+  const dirs = { c: side(!!deflate && deflate.clientNoContextTakeover, 'c'), s: side(!!deflate && deflate.serverNoContextTakeover, 's') }
   const stats = { frames: 0, calls: 0, recorded: 0, partial: 0, dropped_frames: 0 }
   const lost = new Set() // why later calls are partial (REASONS)
   let kept = []    // frames waiting for an envelope: {i, d, header, payload, msg, off}, in number order
@@ -67,6 +67,7 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
   let idx = 0
   let seq = seqStart
   let ended = false
+  let failures = 0
   const iso = () => now().toISOString()
 
   // A ws_raw entry: p = the payload; m = [k, offset] into message k of this envelope (stored bytes,
@@ -78,6 +79,13 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
     if (h && h.call === call && h.slice) out.m = [h.k, e.off]
     else if (e.payload) out.p = e.payload.toString('base64')
     return out
+  }
+
+  // User requirement 2026-10-06 (proposed D38, number pending in RFC 4.6 §记录): a capture failure is never silent. Each one is written at once, with its
+  // reason, to the store's failures/ stream; summary().failures counts them for flows/.
+  function fail(reason, error, extra) {
+    failures++
+    try { recordStore.failure({ ts: iso(), flow_id: flow.id, transport: 'ws', reason, error: String((error && error.message) || error), ...extra }) } catch { /* the store counts and reports its own failures */ }
   }
 
   function newCall(h) {
@@ -95,11 +103,11 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
     const partial = REASONS.filter((r) => lost.has(r))
     const env = buildWsEnvelope({
       id: genId(), flow, seq: call.seq, upgrade, error, wsRaw: take.map((e) => entry(e, call)),
-      call: { client: call.client, server: call.server, tsStart: call.tsStart, tsRespStart: call.tsRespStart, tsEnd: iso(), partial, truncated: call.truncated },
+      call: { client: call.client, server: call.server, tsStart: call.tsStart, tsRespStart: call.tsRespStart, tsEnd: iso(), partial, truncated: call.truncated || !!(dirs.c.broken || dirs.s.broken) }, // a stopped direction lost its bytes
     })
-    let ok = false
-    try { ok = recordStore.envelope(env) !== false } catch { ok = false }
-    if (!ok) { lost.add('write-failed'); return }
+    let ok = false, why = null
+    try { ok = recordStore.envelope(env) !== false } catch (e) { why = e }
+    if (!ok) { lost.add('write-failed'); fail('write-failed', why || recordStore.lastError || 'the store did not write the envelope', { seq: call.seq, id: env.id }); return }
     stats.recorded++
     if (partial.length) stats.partial++
   }
@@ -117,17 +125,18 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
     if (h.d === 's' && !call.tsRespStart) call.tsRespStart = h.ts
   }
 
-  function decode(D, ev) {
+  function undecodable(h, error) { lost.add('decode-failed'); fail('decode-failed', error, { d: h.d, i: h.first }); return error }
+
+  function decode(D, ev, h) {
     if (ev.message === null) { // past the cap on its own: a takeover window is broken from here
       if (ev.compressed && D.inflater) D.inflater.skip()
       return { value: { omitted_bytes: ev.omitted_bytes }, omitted: true }
     }
     let bytes = ev.message
     if (ev.compressed) {
-      if (!D.inflater) { lost.add('decode-failed'); return { value: { b64: bytes.toString('base64'), decode_error: 'RSV1 set but the 101 agreed no permessage-deflate' } } }
+      if (!D.inflater) return { value: { b64: bytes.toString('base64'), decode_error: undecodable(h, 'RSV1 set but the 101 agreed no permessage-deflate') } }
       try { bytes = D.inflater.inflate(ev.message) } catch (err) {
-        lost.add('decode-failed')
-        return { value: { b64: ev.message.toString('base64'), decode_error: String((err && err.message) || err) } }
+        return { value: { b64: ev.message.toString('base64'), decode_error: undecodable(h, String((err && err.message) || err)) } }
       }
     }
     if (ev.opcode === OP.TEXT) { try { return { value: utf8.decode(bytes), bytes } } catch { /* not UTF-8: kept as bytes */ } }
@@ -136,7 +145,7 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
 
   // A complete data message joins a call (cut rules in the header comment).
   function complete(D, h, ev) {
-    const { value, bytes, omitted } = decode(D, ev)
+    const { value, bytes, omitted } = decode(D, ev, h)
     if (omitted) h.omit = true
     h.value = h.meta ? { raw_chars: bytes ? bytes.length : h.wire, verbatim: false } : value
     h.slice = !h.meta && !h.compressed && messageBytes(value) !== null
@@ -186,7 +195,7 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
     else if (ev.type === 'data' && ev.done) { D.msg = null; complete(D, h, ev) }
   }
 
-  function broke(D, why) { D.broken = why; lost.add('decode-failed') } // this direction is not followed any more
+  function broke(D, why) { D.broken = why; lost.add('decode-failed'); fail('broken', why, { d: D.name }) } // this direction is not followed any more
 
   function feed(d, chunk) {
     const D = dirs[d]
@@ -205,7 +214,7 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
       if (open) { const call = open; open = null; close(call, Infinity, error || (isTerminal && !call.blind && !dirs.s.broken ? CLOSED : null), true) }
       tail = kept.map((e) => entry(e, null))
       kept = []
-    } catch { /* never into the relay */ }
+    } catch (e) { fail('recorder-error', e) } // never into the relay, never silent
   }
 
   return {
@@ -214,7 +223,7 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
     end: (error) => finish(error || null),
     summary: () => {
       const broken = Object.fromEntries(['c', 's'].filter((d) => dirs[d].broken).map((d) => [d, dirs[d].broken]))
-      return { ...stats, ...(tail.length ? { tail_raw: tail } : {}), ...(Object.keys(broken).length ? { broken } : {}) }
+      return { ...stats, ...(tail.length ? { tail_raw: tail } : {}), ...(Object.keys(broken).length ? { broken } : {}), ...(failures ? { failures } : {}) }
     },
   }
 }

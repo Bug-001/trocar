@@ -9,6 +9,7 @@ import path from 'node:path'
 export function createRecordStore({ root, onError = () => {} }) {
   const fds = new Map() // filePath → open fd
   let errors = 0
+  let lastError = null // the reason of the last failed write, for the caller's failure record (RFC 4.6 §记录 采集失败不静默)
 
   const dateOf = (rec) => String(rec && rec.ts ? rec.ts : new Date().toISOString()).slice(0, 10) // YYYY-MM-DD (UTC)
 
@@ -30,6 +31,7 @@ export function createRecordStore({ root, onError = () => {} }) {
       return true
     } catch (e) {
       errors++
+      lastError = e
       onError(e)
       return false
     }
@@ -40,6 +42,8 @@ export function createRecordStore({ root, onError = () => {} }) {
     flow(rec) { write((d) => path.join(root, 'flows', `${d}.ndjson`), rec) },
     audit(rec) { write((d) => path.join(root, 'audit', `${d}.ndjson`), rec) },
     replay(env) { write((d) => path.join(root, 'replays', `${d}.ndjson`), env) },
+    failure(rec) { return write((d) => path.join(root, 'failures', `${d}.ndjson`), rec) }, // capture failures, never silent (RFC 4.6 §记录)
+    get lastError() { return lastError },
     get errors() { return errors },
     close() { for (const fd of fds.values()) { try { fs.closeSync(fd) } catch { /* already closed */ } } fds.clear() },
   }

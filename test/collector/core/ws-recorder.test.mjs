@@ -23,12 +23,12 @@ function upgrade({ ext, offer, target = '/v1/responses' }) {
   }
 }
 function rig({ ext = null, offer, terminal = TERMINAL, target, write, maxCallBytes, split = Infinity, seqStart = 0 } = {}) {
-  const out = []; let on = true; let n = 0
-  const r = createWsRecorder({ flow: FLOW, upgrade: upgrade({ ext, offer, target }), seqStart, genId: () => `id${n++}`, isRecording: () => on, terminal, maxCallBytes,
-    recordStore: { envelope: (e) => (write ? write(e, out) : (out.push(e), true)) } })
+  const out = [], failures = []; let on = true; let n = 0
+  const store = { envelope: (e) => (write ? write(e, out, store) : (out.push(e), true)), failure: (f) => failures.push(f), lastError: null }
+  const r = createWsRecorder({ flow: FLOW, upgrade: upgrade({ ext, offer, target }), seqStart, genId: () => `id${n++}`, isRecording: () => on, terminal, maxCallBytes, recordStore: store })
   const wire = { c: [], s: [] }
   const feed = (fn, b) => { for (let i = 0; i < b.length; i += split) fn(b.subarray(i, i + split)) }
-  return { r, out, wire, c: (b) => { wire.c.push(b); feed(r.fromClient, b) }, s: (b) => { wire.s.push(b); feed(r.fromUpstream, b) }, set on(v) { on = v } }
+  return { r, out, failures, wire, c: (b) => { wire.c.push(b); feed(r.fromClient, b) }, s: (b) => { wire.s.push(b); feed(r.fromUpstream, b) }, set on(v) { on = v } }
 }
 const ev = (type, extra = {}) => JSON.stringify({ type, ...extra })
 const srv = (op, payload, opts) => encodeFrame(op, payload, { mask: false, ...opts })
@@ -324,4 +324,21 @@ test('seq: the first call takes seqStart (the upgrade request\'s number), later 
   const t = rig({ seqStart: 7 })
   for (const [m, on] of [['a', true], ['b', false], ['c', true]]) { t.on = on; t.c(cli(1, m)); t.s(srv(1, ev('response.completed'))) }
   assert.deepEqual(t.out.map((e) => [e.req_body, e.seq]), [['a', 7], ['c', 9]])
+})
+
+test('D38: no silent failure — a failed write, an undecodable message and a stopped direction each leave a record with its reason at once; a stopped direction truncates the call it cuts', () => {
+  const t = rig({ ext: 'permessage-deflate', write: (e, out, store) => { out.push(e); if (out.length > 1) return true; store.lastError = new Error('ENOSPC: no space left'); return false } })
+  t.c(cli(1, ev('response.create'))); t.s(srv(1, ev('response.completed')))                                       // the store does not write it
+  t.c(cli(1, ev('response.create'))); t.s(srv(1, Buffer.from([0xff, 0xff]), { rsv1: true })); t.s(srv(1, ev('response.completed')))
+  t.c(cli(1, ev('response.create'))); t.s(srv(1, ev('response.output_text.delta'))); t.s(Buffer.from([0x83, 0]))
+  assert.deepEqual(t.failures.map((f) => [f.reason, f.flow_id, f.transport, f.d, f.i, f.seq]), [['write-failed', 'f1', 'ws', undefined, undefined, 0], ['decode-failed', 'f1', 'ws', 's', 3, undefined], ['broken', 'f1', 'ws', 's', undefined, undefined]], 'written when they happen')
+  assert.deepEqual([t.failures[0].error, typeof t.failures[1].error, t.failures[2].error], ['ENOSPC: no space left', 'string', 'reserved opcode 3'])
+  t.r.end(null)
+  assert.deepEqual([t.out.at(-1).ws_truncated, t.out.at(-1).partial_reasons, t.out[1].ws_truncated, t.r.summary().failures], [true, ['write-failed', 'decode-failed'], undefined, 3], 'the stopped direction lost bytes of the open call')
+  const x = rig({ write: () => { throw new Error('EIO: disk gone') } })
+  x.c(cli(1, 'a')); x.s(srv(1, ev('response.completed')))
+  assert.deepEqual(x.failures.map((f) => [f.reason, f.error]), [['write-failed', 'EIO: disk gone']])
+  const lostAtEnd = [], y = createWsRecorder({ flow: FLOW, upgrade: upgrade({}), terminal: TERMINAL, genId: () => { throw new Error('id source gone') }, recordStore: { envelope: () => true, failure: (f) => lostAtEnd.push(f) } })
+  y.fromClient(cli(1, 'a')); assert.doesNotThrow(() => y.end(null))
+  assert.deepEqual(lostAtEnd.map((f) => [f.reason, f.error]), [['recorder-error', 'id source gone']], 'an internal error at the end is recorded too')
 })
