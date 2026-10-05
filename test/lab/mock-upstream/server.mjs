@@ -7,7 +7,7 @@ import path from 'node:path'
 import tls from 'node:tls'
 import { once } from 'node:events'
 import { parseRequest } from './http1.mjs'
-import { SCENARIOS, isScenario, pickScenario, errorFor } from './scenarios.mjs'
+import { SCENARIOS, isScenario, pickScenario, errorFor, expandSteps } from './scenarios.mjs'
 import { writeResponse, jsonReply } from './transport.mjs'
 import * as anthropic from './anthropic.mjs'
 import * as openai from './openai.mjs'
@@ -37,7 +37,7 @@ async function dispatch(req, io, state) {
   const p = req.target.split('?')[0]
   const route = ROUTES.find((r) => r.re.test(p) && r.methods.includes(req.method))
   const pick = pickScenario(req.headers, req.body, route?.kind === 'model', state.queue)
-  const sc = isScenario(pick.name) ? SCENARIOS[pick.name] : null
+  const sc = isScenario(pick.name) ? { ...SCENARIOS[pick.name], via: pick } : null
   // errors on routes no dialect owns (models, unknown paths) take the shape the client speaks
   const dialect = route?.dialect || (req.headers['anthropic-version'] ? anthropic : openai.chat)
   let res
@@ -137,10 +137,9 @@ function adminServer(state, logFile) {
       return send(200, { ok: true })
     }
     if (route === 'POST /__mock/script') {
-      const steps = Array.isArray(body.steps) ? body.steps : null
-      const bad = steps ? steps.filter((s) => !isScenario(s)) : ['steps must be an array']
-      if (bad.length) return send(400, { error: `unknown scenario(s): ${bad.join(', ')}` })
-      state.queue.splice(0, Infinity, ...steps)
+      const steps = Array.isArray(body.steps) ? expandSteps(body.steps) : { bad: ['steps must be an array'] }
+      if (steps.bad.length) return send(400, { error: `unknown scenario(s): ${steps.bad.join(', ')}` })
+      state.queue.splice(0, Infinity, ...steps.out)
       return send(200, { queue: state.queue })
     }
     send(404, { error: `no admin route ${route}` })
