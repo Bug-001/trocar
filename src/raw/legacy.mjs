@@ -13,11 +13,11 @@
 // file that already has a sealed copy is checked byte for byte against that copy and only then
 // deleted — no second encode. Legacy files are not split by session: `sessions/` files already are
 // per session, and the old flat streams stay where readers already look for them.
-// The old root `~/.atrace/asight/` is never touched by any of this unless the operator names it.
+// The old root `~/.atrace/asight/` is refused outright (oldRootReason in seal.mjs), even when named.
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { sealUnchecked, SealRefused } from './seal.mjs';
+import { sealUnchecked, SealRefused, oldRootReason } from './seal.mjs';
 import { verifyAgainst } from './verify.mjs';
 import { sealedSources, isSealedPath } from './discover.mjs';
 import { fsyncDir, closedMarkerPath } from './closed.mjs';
@@ -43,6 +43,7 @@ export function legacyTargets(target, { fs = nodeFs } = {}) {
   for (const e of fs.readdirSync(target, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
     const p = path.join(target, e.name);
     if (e.name.endsWith('.ndjson') && !e.isDirectory()) consider(p);
+    else if (e.isSymbolicLink() && !e.name.endsWith('.ndjson')) refused.push({ file: p, reason: 'symlinked directory — not followed; seal what it points at by its own path' });
     else if (e.isDirectory()) {
       for (const s of fs.readdirSync(p, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
         if (s.name.endsWith('.ndjson') && !s.isDirectory()) consider(path.join(p, s.name));
@@ -62,11 +63,11 @@ export function parseLsof(out) {
   }
   return holders;
 }
-export async function defaultFdHolders(files, { fs = nodeFs } = {}) {
+export async function defaultFdHolders(files, { fs = nodeFs, platform = process.platform, run = spawnSync } = {}) {
   const real = new Map(files.map((f) => [fs.realpathSync(f), f]));
   const out = new Map();
   const add = (f, pid) => { if (!out.has(f)) out.set(f, []); out.get(f).push(pid); };
-  if (process.platform === 'linux') {
+  if (platform === 'linux') {
     for (const pid of fs.readdirSync('/proc')) {
       if (!/^\d+$/.test(pid)) continue;
       let fds; try { fds = fs.readdirSync(`/proc/${pid}/fd`); } catch { continue; }   // other users' processes
@@ -74,13 +75,16 @@ export async function defaultFdHolders(files, { fs = nodeFs } = {}) {
     }
     return out;
   }
-  if (process.platform === 'darwin') {
-    const r = spawnSync('lsof', ['-F', 'pn', '--', ...real.keys()], { encoding: 'utf8', maxBuffer: 64 << 20 });
+  if (platform === 'darwin') {
+    // lsof exits 1 both when nobody holds the files and when it fails; only stderr tells them apart
+    // (-w keeps warnings out of it). "Cannot tell" MUST NOT read as "nobody".
+    const r = run('lsof', ['-w', '-F', 'pn', '--', ...real.keys()], { encoding: 'utf8', maxBuffer: 64 << 20 });
     if (r.error) throw new Error(`cannot check open file descriptors: lsof failed (${r.error.message})`);
+    if (r.status !== 0 && String(r.stderr || '').trim()) throw new Error(`cannot check open file descriptors: ${String(r.stderr).trim().split('\n')[0]}`);
     for (const [f, pids] of parseLsof(r.stdout)) if (real.has(f)) for (const p of pids) add(real.get(f), p);
     return out;
   }
-  throw new Error(`cannot check open file descriptors on ${process.platform}`);
+  throw new Error(`cannot check open file descriptors on ${platform}`);
 }
 export async function defaultProcessList({ fs = nodeFs } = {}) {
   if (process.platform === 'linux') {
@@ -107,6 +111,9 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
     appendJournal({ op: 'seal-legacy', outcome: 'refused', target, reason }, { journal });
     return new SealRefused(`refusing to seal ${target}: ${reason}`);
   };
+  if (!(Number.isFinite(quietMs) && quietMs >= 0)) throw new SealRefused(`the quiet window must be a non-negative number of seconds (got ${quietMs / 1000})`);
+  const old = oldRootReason(target, { fs });
+  if (old) throw refuseAll(old);
   const { files, refused } = legacyTargets(target, { fs });
   // 1. the writer that appends to these files
   let procs;

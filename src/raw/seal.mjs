@@ -23,6 +23,7 @@ import { readIndex } from './format.mjs';
 import { closedState, closedMarkerPath, fsyncDir } from './closed.mjs';
 import { sessionKeyOfLine } from './session-key.mjs';
 import { appendJournal, defaultJournalPath } from './journal.mjs';
+import { asightHome, legacyHome } from '../paths.mjs';
 
 export class SealRefused extends Error { constructor(m) { super(m); this.name = 'SealRefused'; this.code = 'SEAL_REFUSED'; } }
 
@@ -64,6 +65,8 @@ export async function sealUnchecked(shard, { journal = defaultJournalPath(), ...
 async function sealCore(shard, { fs = nodeFs, sessionsRoot, split = true, deleteOriginal = true,
   frameBytes = FRAME_BYTES, onPhase = () => {} } = {}) {
   if (split && !sessionsRoot) throw new Error('sealUnchecked: sessionsRoot is required to split by session');
+  const old = oldRootReason(shard, { fs }) || (split && oldRootReason(sessionsRoot, { fs }));
+  if (old) throw new SealRefused(`refusing to seal ${shard}: ${old}`);
   const srcDir = path.dirname(shard), name = path.basename(shard);
   const lock = acquireLock(fs, shard);
   const outs = new Map();            // key ('' = per-shard) → { dir, tmp, fd, writer }
@@ -166,6 +169,23 @@ function lateChange(fs, shard, outs, { sum, length, was, now }) {
     throw new SealRefused(`refusing to finish sealing ${shard}: it grew after verification (size ${was} → ${now}); its sealed copies were removed and the original is kept whole — seal it again once nothing writes it`);
   }
   throw new Error(`seal failed after rename: ${shard} was rewritten in place after verification — original kept, and the sealed copies ${outs.map((o) => path.basename(o.final)).join(', ')} hold its earlier bytes; compare with \`asight raw verify\` before removing either`);
+}
+
+// 4.2 OPEN 「旧根」(recommended default): the old root ~/.atrace/asight/ is never written — D27① keeps
+// it readable as it is. Its files are sealed only after the operator moves them into ~/.asight
+// (D27③, a same-device rename). Compared by real path, so a symlink into it is caught too.
+function realish(fs, p) {                     // realpath of the longest existing prefix, plus the rest
+  let cur = path.resolve(p);
+  const tail = [];
+  for (;;) {
+    try { return path.join(fs.realpathSync(cur), ...tail); }
+    catch { const up = path.dirname(cur); if (up === cur) return path.resolve(p); tail.unshift(path.basename(cur)); cur = up; }
+  }
+}
+export function oldRootReason(p, { fs = nodeFs } = {}) {
+  const old = realish(fs, legacyHome()), rp = realish(fs, p);
+  if (rp !== old && !rp.startsWith(old + path.sep)) return null;
+  return `${p} is under the old root ${legacyHome()}, which asight never rewrites (D27①). Move it into ${asightHome()} first (D27③: a same-device rename), then seal it there`;
 }
 
 // Every line of the shard as its own Buffer, "\n" included (CR stays part of the line); the last
