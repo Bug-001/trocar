@@ -55,7 +55,14 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     try { meta = await redirector.lookup(peer) }
     catch (e) { lookupError = e; onError(e) }
     // RFC 4.6 §引擎 1: no envelope, no flows/ — but the connection is closed, so it is not silent (D38)
-    if (!meta) { counters.lookupMisses++; failure({ reason: 'lookup-miss', peer, ...(lookupError ? { error: String(lookupError.message || lookupError) } : {}) }); socket.destroy(); return }
+    // ...and the daemon hears it too (onError, code 'lookup-miss'), so its own flows/ record and status see it
+    if (!meta) {
+      counters.lookupMisses++
+      failure({ reason: 'lookup-miss', peer, ...(lookupError ? { error: String(lookupError.message || lookupError) } : {}) })
+      socket.destroy()
+      onError(Object.assign(new Error(`no original destination for ${peer.address}:${peer.port}; the steered connection was closed`), { code: 'lookup-miss' }))
+      return
+    }
     // FlowExtras from the daemon. A throw must not cost the agent its connection: the flow goes on with
     // none (fail-open: no WS patterns → fallback cut), and the throw is recorded (D38).
     try { meta = { ...meta, ...(describe(meta) || {}) } } catch (e) {
@@ -92,7 +99,11 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
         const host = hosts[i++]
         const srv = net.createServer(onConnection)
         srv.once('error', reject)
-        srv.listen(boundPort, host, () => { boundPort = srv.address().port; servers.push(srv); bindNext() })
+        srv.listen(boundPort, host, () => {
+          srv.removeListener('error', reject)
+          srv.on('error', onError) // after listen (e.g. EMFILE on accept): reported, never an uncaught exception
+          boundPort = srv.address().port; servers.push(srv); bindNext()
+        })
       }
       bindNext()
     })

@@ -188,6 +188,8 @@ test('daemon: a helper death is degraded and on reports why; a protocol mismatch
     const on = await req(s.sock, 'POST', '/on', {})
     assert.deepEqual([on.desired, on.actual], ['on', 'off'])
     assert.ok(flowsOf(s).some((f) => f.event === 'attach-failed' && /helper is down/.test(f.error)))
+    const failures = (await req(s.sock, 'GET', '/status')).failures.map((f) => f.event)
+    assert.ok(failures.includes('helper-down') && failures.includes('attach-failed'), `status reports both (D38): ${failures}`)
   } finally { await d.stop() }
   const mis = fakeArch(p, { ASIGHT_FAKE_PROTO: '2' })
   const d2 = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: mis.arch, harnesses: [cc] })
@@ -205,6 +207,7 @@ test('daemon: the install-time engine port held by another process → start fai
     await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [cc], freePort: async () => squat.address().port })
     const { arch, clients } = fakeArch(p)
     await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }), /recorded at install is held by another process; nothing is steered/)
+    assert.ok(flowsOf(s).some((f) => f.event === 'failure' && f.where === 'start' && /held by another process/.test(f.reason)), 'the refusal to start is recorded (D38)')
     assert.equal(clients.length, 0, 'the helper was never spawned, so no connection is redirected')
     assert.ok(!fs.existsSync(path.join(s.collector, 'lock')))
     squat.close()
@@ -246,5 +249,57 @@ test('daemon: a Claude Code started before install is config-after-start — unt
     const row = on.agents.find((a) => a.pid === 6161)
     assert.deepEqual([row.agent, row.trusted, row.reason, row.decrypt, row.trust_via.startsWith('user settings env')], ['claude-code', false, 'config-after-start', false, true])
     assert.equal((await clients[0].raw({ op: '__watched' })).watch['6161'], 0, 'the kernel only observes it: its connections go direct')
+    await req(s.sock, 'POST', '/off'); await req(s.sock, 'POST', '/on', {}) // a second judgment of the same pid and reason
+    const recs = flowsOf(s).filter((f) => f.event === 'agent-untrusted')
+    assert.deepEqual(recs.map((f) => [f.pid, f.agent, f.reason, f.via.startsWith('user settings env')]), [[6161, 'claude-code', 'config-after-start', true]], 'a durable record with the reason, once per pid and reason (D38)')
+    assert.ok((await req(s.sock, 'GET', '/status')).failures.some((f) => f.event === 'agent-untrusted' && f.pid === 6161), 'status shows it')
   } finally { await d.stop(); p.done(); s.done() }
+})
+
+test('daemon: failures it owns leave a durable record with a reason, also when it cannot be seen live (D38)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  fs.writeFileSync(path.join(s.collector, 'lock'), JSON.stringify({ pid: 999999, socket: s.sock })) // a daemon that was killed -9
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] })
+  const fails = (where) => flowsOf(s).filter((f) => f.event === 'failure' && f.where === where)
+  try {
+    assert.match(fails('daemon')[0].reason, /previous daemon \(pid 999999\) ended without a clean stop/)
+    // engine: a connection steered to it whose original destination is unknown is closed — recorded, folded within 10 s
+    for (let i = 0; i < 2; i++) { const c = net.connect(d.port, '127.0.0.1'); await once(c, 'close') }
+    await until(() => fails('engine').length === 1)
+    assert.match(fails('engine')[0].reason, /no original destination for 127\.0\.0\.1:\d+; the steered connection was closed/)
+    // helper-reported errors and failed heartbeats
+    await clients[0].raw({ op: '__emit', ev: 'error', reason: 'ringbuf poll failed' })
+    d.redirector.emit('heartbeat-error', { reason: 'timed out' })
+    await until(() => fails('helper').length && fails('heartbeat').length)
+    assert.match(fails('heartbeat')[0].reason, /timed out; once the last beat is 2 s old the kernel stops steering/)
+    const st = await req(s.sock, 'GET', '/status')
+    assert.deepEqual(['daemon', 'engine', 'helper', 'heartbeat'].map((w) => st.failures.some((f) => f.where === w)), [true, true, true, true], 'status reports them')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+test('daemon: an envelope that cannot be written is a durable failure record, not a stderr line (D38)', async () => {
+  const s = sandbox(); const p = fakeProc(); const up = await relay()
+  const relayCa = path.join(s.home, 'relay-ca.pem'); fs.writeFileSync(relayCa, up.ca.certPem)
+  fs.mkdirSync(path.join(s.home, '.claude'))
+  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }))
+  await install(s)
+  fs.mkdirSync(path.join(s.collector, `capture-${new Date().toISOString().slice(0, 10)}.ndjson`)) // the day's capture file cannot be opened
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], upstreamCa: up.ca.certPem })
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    p.add(7171, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
+    await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 7171, pid: 7171, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
+    await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 7171 && a.trusted))
+    const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
+    await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 7171, decrypt: 1 })
+    const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: fs.readFileSync(path.join(s.collector, 'ca', 'extra-cc.pem')) }); await once(c, 'secureConnect')
+    const body = JSON.stringify({ model: 'claude-x', max_tokens: 1, messages: [{ role: 'user', content: 'x' }] })
+    c.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test\r\ncontent-type: application/json\r\ncontent-length: ${body.length}\r\n\r\n${body}`)
+    await until(() => flowsOf(s).some((f) => f.event === 'failure' && f.where === 'record'))
+    assert.match(flowsOf(s).find((f) => f.where === 'record').reason, /EISDIR/)
+    c.destroy()
+  } finally { await d.stop(); up.close(); p.done(); s.done() }
 })

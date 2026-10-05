@@ -17,7 +17,7 @@ function replyFor(msg) {
 
 // A mock child process whose stdout is a real stream (so the client's readline works) and whose
 // stdin captures every frame. autoReply answers each request with ok so client promises resolve.
-function mock({ autoReply = true } = {}) {
+function mock({ autoReply = true, reply = replyFor } = {}) {
   const stdout = new PassThrough()
   const writes = []
   const child = new EventEmitter()
@@ -31,7 +31,7 @@ function mock({ autoReply = true } = {}) {
       writes.push(line)
       if (autoReply) {
         let msg; try { msg = JSON.parse(line) } catch {}
-        if (msg && msg.id != null) setImmediate(() => stdout.write(JSON.stringify(replyFor(msg)) + '\n'))
+        if (msg && msg.id != null) setImmediate(() => stdout.write(JSON.stringify(reply(msg)) + '\n'))
       }
       if (cb) cb()
       return true
@@ -146,4 +146,13 @@ test('a helper that dies under a write (stdin EPIPE) is reported down, never an 
   m.child.stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))
   assert.match((await down)[0].reason, /loader stdin: EPIPE/)
   await assert.rejects(pending, /redirector loader down: loader stdin: EPIPE/)
+})
+
+test('a failed periodic heartbeat is reported (heartbeat-error), never swallowed (D38)', async () => {
+  const { c } = await started({ autoHeartbeatMs: 20, mock: { reply: (msg) => (msg.op === 'heartbeat' && msg.id > 3 ? { id: msg.id, ok: false, error: 'config map write failed' } : replyFor(msg)) } })
+  const got = once(c, 'heartbeat-error')
+  const keepAlive = setTimeout(() => {}, 5000) // the client's beat timer is unref'd
+  await c.attach() // its own first beat succeeds; the periodic ones fail
+  assert.deepEqual((await got)[0], { reason: 'config map write failed' })
+  clearTimeout(keepAlive); await c.close()
 })

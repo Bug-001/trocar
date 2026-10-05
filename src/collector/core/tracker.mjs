@@ -19,7 +19,9 @@ function call(fn, ctx, row) {
 const mtimeOfFile = (f) => { try { return fs.statSync(f).mtimeMs } catch { return null } }
 const listDirNames = (d) => { try { return fs.readdirSync(d) } catch { return [] } }
 
-export function createTracker({ redirector, registry, trust, home = os.homedir(), readText = defaultReadText, mtimeOf = mtimeOfFile, listDir = listDirNames, now = () => Date.now() }) {
+// onVerdict(row, prev) is told every agent verdict (prev: the row this pid had before, or null), so the daemon can
+// leave a durable record when one is untrusted or its watch failed (D38).
+export function createTracker({ redirector, registry, trust, home = os.homedir(), readText = defaultReadText, mtimeOf = mtimeOfFile, listDir = listDirNames, now = () => Date.now(), onVerdict = () => {} }) {
   const table = new Map() // pid → AgentRow (agents only)
   const subs = []
   let mode = 'auto'
@@ -43,6 +45,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     Object.assign(row, { trusted: t.trusted, reason: t.reason, trustVar: t.var, trustVia: t.via, decrypt: t.trusted, hosts })
     table.set(facts.pid, row)
     try { await redirector.watch(facts.pid, { decrypt: row.decrypt, agent: row.agent }) } catch (e) { row.watchError = String((e && e.message) || e) }
+    onVerdict(row, prev || null)
     return row
   }
 

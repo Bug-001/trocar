@@ -26,6 +26,7 @@ export function createLinuxRedirector({ makeClient, procRoot = '/proc', uid = pr
     c.on('down', (d) => { if (client === c) ev.emit('down', d) })
     c.on('version-mismatch', (m) => ev.emit('version-mismatch', m))
     c.on('loader-error', (m) => ev.emit('helper-error', m))
+    c.on('heartbeat-error', (m) => ev.emit('heartbeat-error', m))
   }
   const need = () => { if (!client) throw new Error('redirector helper is not running'); return client }
 

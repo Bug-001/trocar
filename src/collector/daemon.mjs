@@ -19,6 +19,7 @@ import { loadCa } from './core/tls/ca.mjs'
 import { createLeafIssuer } from './core/tls/leaf.mjs'
 import { createRecordStore } from './core/record/store.mjs'
 import { createEngine } from './core/engine/engine.mjs'
+import { appendEvent, recentFailures } from './core/events.mjs'
 
 export { loadArch } // the CLI reaches arch only through this file (layering rule 5)
 
@@ -37,8 +38,32 @@ const errText = (e) => String((e && e.message) || e)
 
 // upstreamCa: test seam only (the CLI never passes it). Upstreams are verified against Node's default store, so a
 // relay with a private CA is trusted through NODE_EXTRA_CA_CERTS in the daemon's own environment (gate G8).
-export async function startDaemon({ dir = collectorHome(asightHome()), env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log = () => {} } = {}) {
+// Every failure this daemon owns leaves a durable record with a reason in flows/ and shows in status (D38, user
+// 2026-10-06). The same `where` is recorded at most once per 10 s; the record says how many were folded into it.
+function failureRecorder(dir, log) {
+  const last = new Map()
+  return (where, e, extra = {}) => {
+    log(where, e)
+    const now = Date.now(); const prev = last.get(where)
+    if (prev && now - prev.at < 10_000) { prev.suppressed++; return }
+    last.set(where, { at: now, suppressed: 0 })
+    try { appendEvent(dir, { event: 'failure', where, reason: errText(e), ...(prev && prev.suppressed ? { suppressed: prev.suppressed } : {}), ...extra }) } catch (w) { log('events', w) }
+  }
+}
+
+export async function startDaemon(opts = {}) {
+  const dir = opts.dir || collectorHome(asightHome())
+  const log = opts.log || (() => {})
+  try { return await runDaemon({ ...opts, dir, log }) } catch (e) {
+    // the refusal is recorded where status finds it — unless nothing is installed here (no directory to write into)
+    if (fs.existsSync(dir)) { try { appendEvent(dir, { event: 'failure', where: 'start', reason: errText(e) }) } catch (w) { log('events', w) } }
+    throw e
+  }
+}
+
+async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log }) {
   const P = collectorPaths(dir)
+  const failure = failureRecorder(P.dir, log)
   const manifest = readManifest(P.dir)
   const ca = manifest && manifest.complete ? readCa({ dir: P.caDir }) : null
   if (!ca) throw new Error('the collector is not installed for this user: run "asight collector install" first')
@@ -52,12 +77,22 @@ export async function startDaemon({ dir = collectorHome(asightHome()), env = pro
   let redirector = null
   try {
     const issuer = createLeafIssuer(loadCa(ca))
-    const store = createRecordStore({ root: P.dir, onError: (e) => log('record', e) })
+    const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', e) })
+    let stale = null
+    try { stale = JSON.parse(fs.readFileSync(P.lock, 'utf8')) } catch { /* no lock: the last daemon stopped cleanly */ }
+    if (stale && stale.pid) failure('daemon', new Error(`the previous daemon (pid ${stale.pid}) ended without a clean stop (crash, kill -9 or power loss); its helper and links went with it`))
     const event = (e) => store.flow({ ts: new Date().toISOString(), ...e })
 
     const { registry, arch: A } = await loadParts({ arch, harnesses, env })
     redirector = A.createRedirector({ env })
-    const tracker = createTracker({ redirector, registry, trust: createTrustChecker({ caCertPem: ca.certPem }) })
+    const onVerdict = (row, prev) => {
+      if (row.watchError) failure('watch', new Error(`watching ${row.agent} pid ${row.pid} failed: ${row.watchError}`))
+      if (row.trusted || (prev && !prev.trusted && prev.reason === row.reason)) return // recorded once per pid and reason
+      const d = registry.get(row.agent)
+      const hint = d && d.trust && d.trust.hints ? d.trust.hints[row.reason] : null
+      try { appendEvent(P.dir, { event: 'agent-untrusted', pid: row.pid, agent: row.agent, reason: row.reason, via: row.trustVia ?? null, ...(hint ? { hint } : {}) }) } catch (w) { log('events', w) }
+    }
+    const tracker = createTracker({ redirector, registry, trust: createTrustChecker({ caCertPem: ca.certPem }), onVerdict })
     let helperDown = null
     let sw = null
 
@@ -72,7 +107,7 @@ export async function startDaemon({ dir = collectorHome(asightHome()), env = pro
       issuer, store, upstreamCa,
       policy: (meta, host) => tracker.policy(meta, host),
       isRecording: () => sw.isRecording(), // sampled per request (4.6 §开关): a request after off is never recorded
-      onError: (e) => log('engine', e),
+      onError: (e) => failure('engine', e),
     })
     const want = enginePort ?? manifest.engine_port ?? 0
     const { port } = await engine.listen({ port: want, hosts: ['127.0.0.1'] }).catch((e) => {
@@ -96,6 +131,8 @@ export async function startDaemon({ dir = collectorHome(asightHome()), env = pro
     }
     redirector.on('down', ({ reason }) => { helperDown = reason; sw.markDown(reason); event({ event: 'helper-down', reason }) })
     redirector.on('version-mismatch', (m) => event({ event: 'helper-version-mismatch', ...m }))
+    redirector.on('helper-error', ({ reason }) => failure('helper', new Error(reason)))
+    redirector.on('heartbeat-error', ({ reason }) => failure('heartbeat', new Error(`${reason}; once the last beat is 2 s old the kernel stops steering (connections go direct)`)))
     redirector.on('flow-meta', ({ pid, dst }) => { // a watched but untrusted agent's connection went direct (D31: metadata only)
       const r = tracker.describe(pid)
       store.flow({ ts: new Date().toISOString(), flow_id: null, pid, agent: r ? r.agent : null, dst, decision: 'direct', reason: r ? `untrusted: ${r.reason}` : 'untracked' })
@@ -120,6 +157,7 @@ export async function startDaemon({ dir = collectorHome(asightHome()), env = pro
         engine: { port, v6: v6Held ? null : port, v6_error: v6Held, ...engine.stats() },
         helper: { pid, proto, build, expected_proto: redirector.expectedProto, ok: proto === redirector.expectedProto, down: helperDown },
         agents, running_untrusted: agents.filter((a) => !a.trusted).length,
+        failures: recentFailures(P.dir),
       }
     }
     Object.assign(impl, {

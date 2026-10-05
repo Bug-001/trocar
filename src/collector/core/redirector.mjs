@@ -23,7 +23,9 @@
 //   watch(pid, verdict): void      — mark a pid decrypt/observe-only (Plan 2).
 //   unwatch(pid): void             — stop managing a pid (Plan 2).
 //   heartbeat(): void              — liveness the kernel gates redirection on (Plan 2).
-//   events: 'exec' | 'exit' | 'flow-meta' | 'down'  — process + redirector lifecycle (Plan 2).
+//   events: 'exec' | 'exit' | 'flow-meta' | 'down'  — process + redirector lifecycle (Plan 2); 'helper-error' {reason}
+//           (the helper reported an error) and 'heartbeat-error' {reason} (a heartbeat failed) — failures the daemon
+//           records (D38).
 //
 // What the daemon (src/collector/daemon.mjs, Plan 3a) also needs from an arch adapter — the Linux one is
 // arch/linux/redirector.mjs; a later OS implements the same names:

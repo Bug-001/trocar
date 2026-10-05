@@ -69,3 +69,16 @@ test('arch: only Linux is wired; another platform is a clear error', async () =>
   assert.equal((await loadArch('linux')).os, 'linux')
   await assert.rejects(loadArch('darwin'), /darwin is not supported yet/)
 })
+
+test('adapter: helper and heartbeat errors are forwarded for the daemon to record (D38)', async () => {
+  const p = fakeProc(); const { r, clients } = rig(p)
+  try {
+    await r.start()
+    const got = []
+    r.on('helper-error', (m) => got.push(['helper', m.reason])); r.on('heartbeat-error', (m) => got.push(['heartbeat', m.reason]))
+    await clients[0].raw({ op: '__emit', ev: 'error', reason: 'ringbuf poll failed' })
+    clients[0].emit('heartbeat-error', { reason: 'timeout' })
+    await new Promise((res) => setTimeout(res, 50))
+    assert.deepEqual(got.sort(), [['heartbeat', 'timeout'], ['helper', 'ringbuf poll failed']])
+  } finally { await r.close(); p.done() }
+})

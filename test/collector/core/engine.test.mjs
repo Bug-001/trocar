@@ -134,3 +134,21 @@ test('engine: a flows/ record that cannot be written is a flow-write-failed fail
   fs.rmSync(root, { recursive: true, force: true })
   assert.deepEqual(lines.map((l) => [l.reason, l.flow_id, /flows/.test(l.error)]), [['flow-write-failed', 'flow_000001', true]])
 })
+
+// Both halves of the union (feat/collector-v1): ws-recorder's lookup-miss failure record AND the daemon's onError
+// (code 'lookup-miss') for the same miss, plus the daemon's listener 'error' handler after listen.
+test('engine: a lookup miss and a listener error after listen reach onError, never an uncaught exception (D38)', async () => {
+  const errors = [], failures = []
+  const made = []; const orig = net.createServer
+  net.createServer = (...a) => { const s = orig(...a); made.push(s); return s }
+  let engine
+  try {
+    engine = createEngine({ redirector: createStaticRedirector(), issuer: createLeafIssuer(loadCa(createCa())), store: { envelope() {}, flow() {}, failure: (f) => failures.push(f) }, onError: (e) => errors.push(e) })
+    const { port } = await engine.listen({})
+    await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('close', r); c.on('error', () => {}) })
+    made[0].emit('error', Object.assign(new Error('accept EMFILE'), { code: 'EMFILE' }))
+    assert.deepEqual(errors.map((e) => e.code), ['lookup-miss', 'EMFILE'])
+    assert.match(errors[0].message, /no original destination for 127\.0\.0\.1:\d+; the steered connection was closed/)
+    assert.deepEqual(failures.map((f) => [f.reason, f.peer.address]), [['lookup-miss', '127.0.0.1']])
+  } finally { net.createServer = orig; if (engine) await engine.close() }
+})

@@ -137,7 +137,8 @@ export function createRedirectorClient({
 
   function startHeartbeat() {
     if (autoHeartbeatMs > 0 && !hbTimer) {
-      hbTimer = setInterval(() => { heartbeat().catch(() => {}) }, autoHeartbeatMs)
+      // a failed beat lets the kernel's freshness lapse (steering stops, fail-open): never silent (D38)
+      hbTimer = setInterval(() => { heartbeat().catch((e) => { if (!down) emitter.emit('heartbeat-error', { reason: String((e && e.message) || e) }) }) }, autoHeartbeatMs)
       if (hbTimer.unref) hbTimer.unref()
     }
   }
