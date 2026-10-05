@@ -241,6 +241,28 @@ function undoAttempt(idx, file, from, log, counts) {
 // keeps reading the old inode and needs nothing.
 class Stale extends Error {}
 
+// Sealing splits one shard by session, possibly into files under different roots. Two records with
+// one (stream, id) in that shard were ambiguous before (one file); each root alone may now hold the id
+// once, and "first root that answers wins" would serve the other record's bytes. They come from one
+// source shard (name + sha256 in each sealed file's shard table), so poison them across every root:
+// "和封存前同名文件里撞 id 的行为一致" (4.2 「读」). Within one root the index already poisons them.
+function poisonSplitDuplicates(idxs) {
+  const where = new Map();           // shard sha256 \0 stream#id → [{ idx, qk, file }]
+  for (const idx of idxs) {
+    for (const [qk, loc] of idx.qual) {
+      if (!loc.sealed) continue;     // an NDJSON line, or an entry already poisoned within its file
+      const sh = loc.sealed.shards[loc.sealed.records[loc.i][R.shard]];
+      const k = sh.sha256 + '\0' + qk;
+      if (!where.has(k)) where.set(k, []);
+      where.get(k).push({ idx, qk, file: loc.file, shard: sh.name });
+    }
+  }
+  for (const hits of where.values()) {
+    if (hits.length < 2) continue;
+    for (const h of hits) h.idx.qual.set(h.qk, { dup: true, dupCount: hits.length, file: h.shard, sealedInto: hits.map((x) => path.basename(x.file)) });
+  }
+}
+
 // What one root lists: discover's rule over this root alone, or — under several roots — this root's
 // share of ONE listing across all of them, so an original in one root supersedes its sealed copy in
 // another (4.2 「并存期」: every reader makes the same choice).
@@ -338,7 +360,7 @@ export async function buildResolver(source, { retryMs = 30000, lister = listRoot
     if (q && q.dup) {
       throw new Error(
         `source: ambiguous record id "${recordId}" — it occurs ${q.dupCount} times inside a SINGLE ` +
-        `capture file (${path.basename(q.file)}), so the text_ref names more than one record. This is ` +
+        `capture file (${path.basename(q.file)}${q.sealedInto ? `, now sealed into ${q.sealedInto.join(', ')}` : ''}), so the text_ref names more than one record. This is ` +
         `the capture writer minting ids from a per-process counter and appending across restarts. ` +
         `Refusing to guess: serving one of them under a "verbatim" label would misreport the source ` +
         `truth (invariant 2). The bytes of both are intact in the raw NDJSON.`,
@@ -438,6 +460,7 @@ export async function buildResolver(source, { retryMs = 30000, lister = listRoot
   };
   resolve.detail = detail;
   resolve.detailOnce = detailOnce;
+  Object.defineProperty(resolve, 'index', { value: idx });   // for the multi-root poisoning pass only
   resolve.scan = scan;
   Object.defineProperty(resolve, 'size', { get: () => idx.qual.size, enumerable: true });
   const closeSealed = () => { for (const sf of idx.sealed) sf.close(); idx.sealed.length = 0; frameCache.clear(); };
@@ -541,6 +564,8 @@ async function buildMultiResolver(roots, opts) {
     try { parts.push(Object.assign(await buildResolver(r, { ...opts, lister, frameCache, unreadableSealed }), { rootPath: r })); }
     catch (e) { unreadable.push({ root: r, reason: (e && e.message) || String(e) }); }
   }
+  const poison = () => poisonSplitDuplicates(parts.map((p) => p.index));
+  poison();
   // Stale (an indexed file is gone): every root re-lists and re-indexes together, then the ref is asked
   // again once — the copy that replaces the file may sit in another root.
   const withRelist = (fn) => {
@@ -548,6 +573,7 @@ async function buildMultiResolver(roots, opts) {
     catch (e) {
       if (!(e instanceof Stale)) throw e;
       for (const p of parts) p.rebuildSync();
+      poison();
       return fn();
     }
   };
@@ -605,6 +631,7 @@ async function buildMultiResolver(roots, opts) {
         if (sk && !sk.some((x) => x.root === root && x.name === name && x.reason === 'unreadable')) sk.push({ root, name, reason: 'unreadable', error: (e && e.code) || String(e) });
       }
     }
+    if (changed) poison();   // a root that re-indexed has un-poisoned entries again
     return changed;
   };
 
