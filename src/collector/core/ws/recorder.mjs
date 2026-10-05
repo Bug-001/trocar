@@ -33,13 +33,14 @@ export const MAX_CALL_BYTES = 64 << 20 // per call, like the HTTP body cap (RFC 
 /** compileTerminal(spec, target) → null | (bytes) => boolean
  *  spec = [{pathSuffix?, patterns:[RegExp source], headBytes = 256}]: the first entry whose pathSuffix
  *  ends the target's path (query stripped) and has a usable pattern wins; patterns are tested against
- *  the message's first headBytes bytes read as latin1 (byte patterns). */
-export function compileTerminal(spec, target) {
+ *  the message's first headBytes bytes read as latin1 (byte patterns). A pattern that does not compile is
+ *  skipped and handed to onInvalid(source, error) (the recorder writes pattern-invalid, D38). */
+export function compileTerminal(spec, target, onInvalid = () => {}) {
   const path = String(target || '').split('?')[0]
   for (const t of [].concat(spec || [])) {
     if (!t || (t.pathSuffix && !path.endsWith(t.pathSuffix))) continue
     const res = []
-    for (const src of t.patterns || []) { try { res.push(new RegExp(src)) } catch { /* unusable harness data: skipped */ } }
+    for (const src of t.patterns || []) { try { res.push(new RegExp(src)) } catch (e) { onInvalid(src, e) } } // unusable harness data: skipped, reported
     if (!res.length) continue
     const n = t.headBytes ?? 256
     return (bytes) => { const h = bytes.subarray(0, n).toString('latin1'); return res.some((r) => r.test(h)) }
@@ -56,7 +57,6 @@ export function compileTerminal(spec, target) {
 export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordStore, isRecording = () => true, terminal = null, maxCallBytes = MAX_CALL_BYTES, now = () => new Date() }) {
   const ext = (upgrade.resp.head.headers || []).filter(([k]) => k.toLowerCase() === 'sec-websocket-extensions').map(([, v]) => v).join(', ')
   const { deflate } = parseExtensions(ext)
-  const isTerminal = compileTerminal(terminal, upgrade.req.head.target)
   const keepClient = isLlmCall(upgrade.req.head.target) // a non-LLM client message is metadata only (RFC 4.1)
   const side = (noCtx, name) => ({ name, parser: createFrameParser({ maxPayload: maxCallBytes }), asm: createMessageAssembler(), inflater: deflate ? createInflater({ noContextTakeover: noCtx }) : null, msg: null, broken: null })
   const dirs = { c: side(!!deflate && deflate.clientNoContextTakeover, 'c'), s: side(!!deflate && deflate.serverNoContextTakeover, 's') }
@@ -70,6 +70,7 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
   let ended = false
   let failures = 0
   const iso = () => now().toISOString()
+  const isTerminal = compileTerminal(terminal, upgrade.req.head.target, (pattern, e) => fail('pattern-invalid', e, { pattern }))
 
   // A ws_raw entry: p = the payload; m = [k, offset] into message k of this envelope (stored bytes,
   // uncompressed); neither = the payload is not retained (non-LLM client message, past the cap).

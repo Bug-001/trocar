@@ -396,3 +396,15 @@ test('switch details at call boundaries: frames between calls go with an off-beg
   c.c(cli(1, 'b')); c.s(srv(0, 'end')); c.s(srv(1, 'B1')); c.c(cli(1, 'c')); c.r.end(null)            // S completes in B: dropped, B marked
   assert.deepEqual(c.out.map((e) => [e.req_body, e.resp.messages, e.partial_reasons]), [['a', [], undefined], ['b', ['B1'], ['off-window']], ['c', [], ['off-window']]])
 })
+
+// D38: a terminal pattern from the daemon that does not compile is skipped — and recorded, once, on the
+// connection it would have cut (RFC 4.6 §记录 pattern-invalid); the usable patterns still cut.
+test('an invalid terminal pattern is a pattern-invalid failure record; the usable one still cuts the call', () => {
+  const t = rig({ terminal: [{ pathSuffix: '/responses', patterns: ['(', '^\\{"type":"response\\.completed"'] }] })
+  assert.deepEqual(t.failures.map((f) => [f.reason, f.flow_id, f.transport, f.pattern, typeof f.error]), [['pattern-invalid', 'f1', 'ws', '(', 'string']])
+  t.c(cli(1, ev('response.create'))); t.s(srv(1, ev('response.completed')))
+  assert.equal(t.out.length, 1, 'cut at the terminal message by the usable pattern')
+  assert.equal(t.r.summary().failures, 1)
+  const none = rig({ terminal: [{ patterns: ['['] }] })
+  assert.deepEqual(none.failures.map((f) => f.reason), ['pattern-invalid'])
+})

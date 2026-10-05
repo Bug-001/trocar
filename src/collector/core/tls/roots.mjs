@@ -28,23 +28,29 @@ export function systemRoots({ api = tls.getCACertificates, files = SYSTEM_BUNDLE
   }
   for (const f of files) {
     let c
-    try { c = pems(read(f)) } catch { continue } // not on this OS
+    try { c = pems(read(f)) } catch (e) {
+      if (!(e && (e.code === 'ENOENT' || e.code === 'ENOTDIR'))) errors.push(`${f}: ${msg(e)}`) // there but unreadable: say so (D38)
+      continue                                                                                   // not on this OS
+    }
     if (c.length) { certs.push(...c); sources.push(f); break }
   }
   return { certs, sources, errors }
 }
 
-/** nodeRoots({api, env, read}) → PEM[]: Node's bundled roots plus NODE_EXTRA_CA_CERTS of this process. */
-export function nodeRoots({ api = tls.getCACertificates, env = process.env, read = readText } = {}) {
+/** nodeRoots({api, env, read, errors}) → PEM[]: Node's bundled roots plus NODE_EXTRA_CA_CERTS of this
+ *  process; a read failure is pushed to `errors`. */
+export function nodeRoots({ api = tls.getCACertificates, env = process.env, read = readText, errors = [] } = {}) {
   if (typeof api === 'function') { try { return api('default') } catch { /* fall back to the pieces */ } }
   let extra = []
-  if (env.NODE_EXTRA_CA_CERTS) { try { extra = pems(read(env.NODE_EXTRA_CA_CERTS)) } catch { /* Node itself only warns */ } }
+  if (env.NODE_EXTRA_CA_CERTS) { try { extra = pems(read(env.NODE_EXTRA_CA_CERTS)) } catch (e) { errors.push(`NODE_EXTRA_CA_CERTS ${env.NODE_EXTRA_CA_CERTS}: ${msg(e)}`) } }
   return [...tls.rootCertificates, ...extra]
 }
 
 /** createUpstreamTrust({system, node, extra}) → {secureContext, count, sources, missingSystem, errors}
  *  extra = the engine's upstreamCa option (PEM text / Buffer / array), added to the union. */
-export function createUpstreamTrust({ system = systemRoots(), node = nodeRoots(), extra = [] } = {}) {
-  const ca = [...new Set([...node, ...system.certs, ...[].concat(extra || []).flatMap(pems)].map((p) => p.trim()))]
-  return { secureContext: tls.createSecureContext({ ca }), count: ca.length, sources: system.sources, missingSystem: system.certs.length === 0, errors: system.errors }
+export function createUpstreamTrust({ system = systemRoots(), node, extra = [] } = {}) {
+  const errors = [...system.errors]
+  const roots = node ?? nodeRoots({ errors })
+  const ca = [...new Set([...roots, ...system.certs, ...[].concat(extra || []).flatMap(pems)].map((p) => p.trim()))]
+  return { secureContext: tls.createSecureContext({ ca }), count: ca.length, sources: system.sources, missingSystem: system.certs.length === 0, errors }
 }

@@ -32,7 +32,7 @@ async function harness({ meta = {}, policy = () => true, upstream, onAccept = ()
   // or envelopes only after this: the client can see the response end (the forwarded TLS
   // close_notify) before the engine has handled the upstream FIN that finalizes the flow.
   const settled = () => Promise.all(done)
-  return { port, envelopes, flows, failures, ctx, settled, close: async () => { await within(settled(), 'every flow finalized'); engine.close(); upstream.close() } }
+  return { port, envelopes, flows, failures, ctx, settled, direct: [], close: async () => { await within(settled(), 'every flow finalized'); engine.close(); upstream.close() } }
 }
 const httpsUpstream = (handler) => tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)), ALPNProtocols: ['http/1.1'] }, handler)
 const request = (port, ca, raw, opts = {}) => new Promise((resolve, reject) => {
@@ -266,7 +266,18 @@ test('a network failure during our upstream handshake still closes the client: n
   const r = await talk(h.port, upCa.certPem)
   await h.close()
   assert.equal(r, 'closed'); assert.equal(conns, 1)
-  assert.equal(h.ctx.negCache.list().length, 0); assert.equal(h.flows[0].not_captured, undefined); assert.ok(h.flows[0].error)
+  assert.equal(h.ctx.negCache.list().length, 0); assert.equal(h.flows[0].not_captured, undefined)
+  assert.equal(h.flows[0].error.side, 'upstream', 'our upstream handshake failed: the upstream side (D38)')
+})
+
+test('an upstream that refuses the connection: flows/ error names the upstream side (D38)', async () => {
+  const dead = net.createServer(); const deadPort = await listen(dead); dead.close()
+  const h = await harness({ upstream: net.createServer() })
+  const engine = net.createServer((c) => { h.direct.push(handleFlow(c, { dst: { address: '127.0.0.1', port: deadPort, family: 4 }, pid: 1, agent: 't', decrypt: true }, h.ctx)) })
+  const port = await listen(engine)
+  assert.equal(await talk(port, asightCa.certPem), 'closed')
+  await within(Promise.all(h.direct), 'flow finalized'); engine.close(); await h.close()
+  assert.deepEqual([h.flows[0].decision, h.flows[0].error.type, h.flows[0].error.side], ['error', 'ECONNREFUSED', 'upstream'])
 })
 
 test('inside a CONNECT tunnel an unverifiable upstream closes that one flow (no prelude replay); the retry is spliced (W12, invariant 1)', async () => {
@@ -332,7 +343,7 @@ test('client reset before a routing decision is caught: flow finalized with the 
     await h.close()
     await within(upClosed, `${when}: upstream dropped`)
     assert.equal(h.flows.length, 1, when); assert.equal(h.flows[0].decision, 'error', when)
-    assert.equal(h.flows[0].error?.type, 'ECONNRESET', when)
+    assert.equal(h.flows[0].error?.type, 'ECONNRESET', when); assert.equal(h.flows[0].error?.side, 'client', when)
   }
 })
 
@@ -394,4 +405,16 @@ test('flows/ bytes_up / bytes_down == the agent socket\'s own counters: decrypte
   const r3 = await new Promise((resolve) => { const c = net.connect(s.port, '127.0.0.1', () => c.write('hello?')); c.resume(); c.on('close', () => resolve(c)) })
   await s.close()
   assert.equal(s.flows[0].decision, 'splice'); assert.deepEqual(counted(s), [6, 12]); assert.deepEqual(counted(s), [r3.bytesWritten, r3.bytesRead])
+})
+
+// D38 / invariant 4: an HTTP framing error stops recording the rest of the connection — recorded when it
+// happens, and the open exchange says framer_error, not a connection reset it never was.
+test('an upstream framing error is a failures/ framer-error with the flow id; the open exchange is written as framer_error (D38)', async () => {
+  const bad = 'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nZZ\r\nxx\r\n0\r\n\r\n'
+  const h = await harness({ upstream: httpsUpstream((s) => s.on('data', () => s.end(bad))) })
+  const r = await request(h.port, asightCa.certPem, REQ)
+  await h.close()
+  assert.equal(r.got, bad, 'forwarded untouched')
+  assert.deepEqual(h.failures.map((f) => [f.reason, f.flow_id, f.side]), [['framer-error', h.flows[0].flow_id, 'response']])
+  assert.deepEqual(h.envelopes.map((e) => [e.error, e.resp.error?.type]), [[true, 'framer_error']])
 })

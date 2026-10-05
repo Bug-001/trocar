@@ -25,6 +25,7 @@ export function handleFlow(client, meta, ctx) {
   let finished = false
   let handedOff = false     // true once a routing decision hands the sockets to relay()
   let selfClosed = false    // the engine tore this flow down itself (internalError)
+  let upstream = null       // the TCP connection to the original destination
   let firstByteTimer = null
   function finish(decision, extra = {}) {
     if (finished) return
@@ -62,12 +63,14 @@ export function handleFlow(client, meta, ctx) {
     ctx.failure({ reason: 'engine-error', flow_id: rec.flow_id, error: msgOf(e) })
     handedOff = true; selfClosed = true
     try { client.destroy() } catch { /* ignore */ }
-    try { upstream.destroy() } catch { /* ignore */ }
+    if (upstream) { try { upstream.destroy() } catch { /* ignore */ } }
     finish('error', { error: { type: 'engine_error', message: msgOf(e), side: 'engine' } })
   }
   const guard = (fn) => (...a) => { try { return fn(...a) } catch (e) { internalError(e) } }
   function teardown() {
-    if (activeTee) { try { activeTee.abort({ type: 'ECONNRESET', message: 'flow closed' }) } catch { /* ignore */ } }
+    // open exchanges carry the connection's first error; a plain 'flow closed' only when there was none
+    const why = rec.error ? { type: rec.error.type, message: rec.error.message } : { type: 'ECONNRESET', message: 'flow closed' }
+    if (activeTee) { try { activeTee.abort(why) } catch (e) { ctx.failure({ reason: 'engine-error', flow_id: rec.flow_id, error: `recording stopped: ${msgOf(e)}` }) } }
     finish()
   }
   function setDecision(inner, isTunnel) {
@@ -85,15 +88,16 @@ export function handleFlow(client, meta, ctx) {
     try { if (!upstream.destroyed) upstream.destroy() } catch { /* ignore */ }
   }
 
-  const upstream = ctx.connectUpstream(meta.dst)
-  upstream.once('error', (err) => preTeardown({ type: err.code || 'upstream_error', message: String((err && err.message) || err) }))
+  // a synchronous throw (e.g. net.connect on a bad port) ends this flow with a record (D38)
+  try { upstream = ctx.connectUpstream(meta.dst) } catch (e) { internalError(e); return flowDone }
+  upstream.once('error', (err) => preTeardown({ type: err.code || 'upstream_error', message: msgOf(err), side: 'upstream' }))
   upstream.on('close', () => preTeardown())
   client.on('close', () => preTeardown())
   client.on('end', () => preTeardown())
   // The client socket is ours from accept: an error on it (a reset before we have decided, a write
   // to a client that already left) MUST be handled here, or it is an uncaughtException that takes
   // the whole collector down (RFC 4.6 fail-open). relay() and the TLS wrap own it after the decision.
-  client.on('error', (err) => preTeardown({ type: err.code || 'client_error', message: String((err && err.message) || err) }))
+  client.on('error', (err) => preTeardown({ type: err.code || 'client_error', message: msgOf(err), side: 'client' }))
 
   // Passive bidirectional relay; forwards received bytes untouched and (optionally) tees a copy.
   // The upstream's FIN half-closes the client gracefully (the client drains the response, then
@@ -212,7 +216,7 @@ export function handleFlow(client, meta, ctx) {
     rec.not_captured = cause; rec.reason = why
     if (isTunnel) {
       try { cSock.destroy() } catch { /* ignore */ }
-      return finish('tunnel', { host, error: { type: cause.replace('-', '_'), message: why } })
+      return finish('tunnel', { host, error: { type: cause.replace('-', '_'), message: why, side: cause === 'upstream-cert' ? 'upstream' : 'engine' } })
     }
     setDecision('splice', false)
     const fresh = ctx.connectUpstream(meta.dst)
@@ -230,7 +234,7 @@ export function handleFlow(client, meta, ctx) {
     const upTls = tls.connect({ socket: uSock, servername: sni || undefined, ALPNProtocols: ['http/1.1'], secureContext: ctx.upstreamTrust.secureContext, rejectUnauthorized: false })
     let clientTls = null
     upTls.on('error', (err) => {
-      if (!clientTls) { try { cSock.destroy() } catch { /* ignore */ }; finish(isTunnel ? 'tunnel' : 'decrypt', { host, error: { type: err.code || 'upstream_tls_error', message: String((err && err.message) || err) } }) }
+      if (!clientTls) { try { cSock.destroy() } catch { /* ignore */ }; finish(isTunnel ? 'tunnel' : 'decrypt', { host, error: { type: err.code || 'upstream_tls_error', message: msgOf(err), side: 'upstream' } }) }
     })
     upTls.on('secureConnect', guard(() => {
       if (!upTls.authorized) return stepAside(upTls, buf, cSock, host, isTunnel, key, 'upstream-cert', String(upTls.authorizationError || 'upstream certificate not verified'))
@@ -261,7 +265,7 @@ export function handleFlow(client, meta, ctx) {
       clientTls.on('error', judge); clientTls.on('end', judge); clientTls.on('close', judge)
       activeTee = createExchangeTee({
         flow: { id: rec.flow_id, host, scheme: 'https', dst: meta.dst, proc: { pid: meta.pid, exe: meta.exe ?? null, agent: meta.agent } },
-        recordStore: ctx.store, isRecording: ctx.isRecording, wsTerminal: meta.wsTerminal ?? null,
+        recordStore: ctx.store, isRecording: ctx.isRecording, wsTerminal: meta.wsTerminal ?? null, onFailure: ctx.failure,
       })
       relay(clientTls, upTls)
     }))
@@ -319,7 +323,7 @@ export function handleFlow(client, meta, ctx) {
       setDecision('decrypt', isTunnel)
       activeTee = createExchangeTee({
         flow: { id: rec.flow_id, host, scheme: 'http', dst: meta.dst, proc: { pid: meta.pid, exe: meta.exe ?? null, agent: meta.agent } },
-        recordStore: ctx.store, isRecording: ctx.isRecording, wsTerminal: meta.wsTerminal ?? null,
+        recordStore: ctx.store, isRecording: ctx.isRecording, wsTerminal: meta.wsTerminal ?? null, onFailure: ctx.failure,
       })
       activeTee.fromClient(buf)
       uSock.write(buf)
@@ -337,11 +341,11 @@ export function handleFlow(client, meta, ctx) {
 
   // First-byte safety valve: if neither side ever speaks, finalize and drop the connection rather
   // than leak it. unref so a pending timer can't hold the event loop open.
-  firstByteTimer = setTimeout(() => preTeardown({ type: 'first_byte_timeout', message: 'no bytes before timeout' }), ctx.firstByteTimeoutMs ?? 5000)
+  firstByteTimer = setTimeout(() => preTeardown({ type: 'first_byte_timeout', message: 'no bytes before timeout', side: 'engine' }), ctx.firstByteTimeoutMs ?? 5000)
   if (firstByteTimer.unref) firstByteTimer.unref()
 
   // Catch a client that was already gone before our listeners attached (accept/lookup raced the close).
-  if (client.destroyed) queueMicrotask(() => preTeardown(client.errored ? { type: client.errored.code || 'client_error', message: String(client.errored.message || client.errored) } : undefined))
+  if (client.destroyed) queueMicrotask(() => preTeardown(client.errored ? { type: client.errored.code || 'client_error', message: msgOf(client.errored), side: 'client' } : undefined))
 
   return flowDone
 }

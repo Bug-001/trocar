@@ -145,3 +145,16 @@ test('an upgrade refused with 426 is an ordinary exchange, and the next request 
   assert.deepEqual(out.map((e) => [e.seq, e.method, e.resp.status, e.transport]), [[0, 'GET', 426, undefined], [1, 'POST', 200, undefined]])
   assert.equal(t.wsSummary(), null)
 })
+
+test('a framing error on either side calls onFailure once with its side; open exchanges are written with the framer error', () => {
+  const { out, store } = sink(); const failures = []
+  const t = createExchangeTee({ flow: FLOW, recordStore: store, onFailure: (f) => failures.push(f) })
+  t.fromClient(Buffer.from('POST /v1/messages HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}'))
+  t.fromUpstream(Buffer.from('HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nZZ\r\n'))
+  t.fromUpstream(Buffer.from('more'))
+  assert.deepEqual(failures.map((f) => [f.reason, f.flow_id, f.side]), [['framer-error', 'f', 'response']])
+  assert.deepEqual(out.map((e) => [e.error, e.resp.error.type, e.resp.status]), [[true, 'framer_error', 200]])
+  const q = createExchangeTee({ flow: FLOW, recordStore: sink().store, onFailure: (f) => failures.push(f) })
+  q.fromClient(Buffer.from('POST /a HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nQQ\r\n'))
+  assert.deepEqual(failures.at(-1).side, 'request')
+})

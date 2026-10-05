@@ -19,11 +19,13 @@ const isWsUpgrade = (req, resp) => resp.head.status === 101 && tokens(req.head.h
 // a socket error as the ws recorder records it; 'end' / 'close' (no Error) are a clean end
 const errOf = (e) => (e ? { type: e.code || e.type || 'error', message: String(e.message || e) } : null)
 
-/** createExchangeTee({flow, recordStore, isRecording, maxBodyBytes, newId, wsTerminal})
+/** createExchangeTee({flow, recordStore, isRecording, maxBodyBytes, newId, wsTerminal, onFailure})
  *   → {fromClient, fromUpstream, clientEnded(err?), upstreamEnded(err?), abort(error), wsSummary(), stats}
  * wsTerminal = FlowExtras.wsTerminal (harness data, Plan 3c §2); wsSummary() = the ws recorder's summary
- * for flows/ once the connection switched to WebSocket, else null. */
-export function createExchangeTee({ flow, recordStore, isRecording = () => true, maxBodyBytes = 64 << 20, newId, wsTerminal = null }) {
+ * for flows/ once the connection switched to WebSocket, else null. onFailure(record) takes the capture
+ * failures (RFC 4.6 §记录, D38): a framing error stops recording the rest of the connection. */
+export function createExchangeTee({ flow, recordStore, isRecording = () => true, maxBodyBytes = 64 << 20, newId, wsTerminal = null,
+  onFailure = (r) => { if (recordStore.failure) recordStore.failure({ ts: new Date().toISOString(), ...r }) } }) {
   const stats = { exchanges: 0, recorded: 0 }
   const run = defaultRunTag()
   let idSeq = 0
@@ -64,7 +66,10 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
     onBody(b) { if (curReq) append(curReq, b) },
     onEnd() { curReq = null },
     onUpgrade() {},
-    onError() { if (curReq) { curReq.partial = 'framer-error'; curReq = null } },  // body never completes
+    onError(e) { // body never completes; no later request on this connection is framed
+      if (curReq) { curReq.partial = 'framer-error'; curReq = null }
+      onFailure({ reason: 'framer-error', flow_id: flow.id, side: 'request', error: e.message })
+    },
   })
 
   const respFramer = createFramer('response', {
@@ -89,7 +94,8 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
       if (early.length) ws.fromClient(early) // frames sent before the 101 arrived (RFC 6455 says wait; some don't)
       if (rest && rest.length) ws.fromUpstream(rest)
     },
-    onError() {},
+    // no later response is framed: the open exchanges end here, labelled with the cause (invariant 4)
+    onError(e) { onFailure({ reason: 'framer-error', flow_id: flow.id, side: 'response', error: e.message }); abort({ type: 'framer_error', message: e.message }) },
   })
 
   function respPartOf(resp, aborted) {

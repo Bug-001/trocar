@@ -11,7 +11,7 @@ import { createNegativeCache } from './negcache.mjs'
 import { createUpstreamTrust, systemRoots } from '../tls/roots.mjs'
 
 // upstreamCa: extra CAs the engine trusts upstream (test seam); systemCa: stands in for the OS store
-// (tests; undefined = read it). The upstream trust set is built once (RFC 4.6 §引擎 5, tls/roots.mjs).
+// (tests; undefined = read it): PEM text / array, or a systemRoots()-shaped {certs, errors}. The upstream trust set is built once (RFC 4.6 §引擎 5, tls/roots.mjs).
 export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, describe = () => ({}), onError = () => {} }) {
   const counters = { active: 0, total: 0, decrypted: 0, spliced: 0, lookupMisses: 0, notCaptured: { h2: 0, httpsProxy: 0, upstreamCert: 0, negative: 0, leafError: 0 } }
   const servers = []
@@ -30,11 +30,16 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     } catch (e) { onError(e) }
   }
   const upstreamTrust = createUpstreamTrust({
-    system: systemCa === undefined ? systemRoots() : { certs: [].concat(systemCa).map(String).filter((p) => p.includes('BEGIN CERTIFICATE')), sources: ['option:systemCa'], errors: [] },
+    system: systemCa === undefined ? systemRoots()
+      : Array.isArray(systemCa.certs) ? { sources: ['option:systemCa'], errors: [], ...systemCa }
+        : { certs: [].concat(systemCa).map(String).filter((p) => p.includes('BEGIN CERTIFICATE')), sources: ['option:systemCa'], errors: [] },
     extra: upstreamCa,
   })
-  if (upstreamTrust.missingSystem) { // the engine still verifies against Node's roots; corporate CAs are missing
-    const error = `no OS trust store found${upstreamTrust.errors.length ? ` (${upstreamTrust.errors.join('; ')})` : ''}: upstreams signed by a system-only CA will step aside`
+  // a trust-store source that is there but unreadable, or no OS store at all: the engine still verifies
+  // against what it has, but upstreams signed by a CA only the missing part holds will step aside (D38)
+  for (const error of upstreamTrust.errors) { onError(new Error(error)); failure({ reason: 'trust-store-error', error }) }
+  if (upstreamTrust.missingSystem) {
+    const error = 'no OS trust store found: upstreams signed by a system-only CA will step aside'
     onError(new Error(error)); failure({ reason: 'system-roots-unavailable', error })
   }
 

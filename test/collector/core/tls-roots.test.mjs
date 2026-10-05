@@ -21,11 +21,17 @@ test('systemRoots: Node\'s system store and the first existing OS bundle togethe
   assert.equal(both.certs.length, 2); assert.ok(both.certs[1].startsWith('-----BEGIN CERTIFICATE-----') && !both.certs[1].includes('\r'))
   assert.deepEqual(systemRoots({ api: () => [], read }).sources, ['/etc/pki/tls/certs/ca-bundle.crt'], 'an empty API answer (Linux without --use-system-ca paths) falls back to the bundle')
   assert.deepEqual(systemRoots({ api: null, read }).sources, ['/etc/pki/tls/certs/ca-bundle.crt'], 'Node 20: no getCACertificates')
-  assert.deepEqual(systemRoots({ api: () => { throw new Error('boom') }, read: () => { throw new Error('ENOENT') } }), { certs: [], sources: [], errors: ['node:system: boom'] })
+  const missing = () => { throw Object.assign(new Error('ENOENT: no such file'), { code: 'ENOENT' }) }
+  assert.deepEqual(systemRoots({ api: () => { throw new Error('boom') }, read: missing }), { certs: [], sources: [], errors: ['node:system: boom'] }, 'a bundle that is not on this OS is no error')
+  const denied = systemRoots({ api: null, read: (f) => { if (f === SYSTEM_BUNDLES[0]) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); return f === '/etc/pki/tls/certs/ca-bundle.crt' ? b.certPem : missing() } })
+  assert.deepEqual([denied.sources, denied.errors], [['/etc/pki/tls/certs/ca-bundle.crt'], [`${SYSTEM_BUNDLES[0]}: EACCES: permission denied`]], 'a bundle that exists but cannot be read is reported')
   assert.ok(SYSTEM_BUNDLES.includes('/etc/ssl/certs/ca-certificates.crt') && SYSTEM_BUNDLES.includes('/etc/pki/tls/certs/ca-bundle.crt'))
 })
 
 test('nodeRoots: without the API, Node\'s bundled roots plus this process\'s NODE_EXTRA_CA_CERTS', () => {
+  const errors = []
+  assert.equal(nodeRoots({ api: null, env: { NODE_EXTRA_CA_CERTS: '/gone.pem' }, read: () => { throw new Error('ENOENT: gone') }, errors }).length, tls.rootCertificates.length)
+  assert.deepEqual(errors, ['NODE_EXTRA_CA_CERTS /gone.pem: ENOENT: gone'], 'an unreadable NODE_EXTRA_CA_CERTS is reported')
   const roots = nodeRoots({ api: null, env: { NODE_EXTRA_CA_CERTS: '/x.pem' }, read: (f) => (f === '/x.pem' ? x.certPem : '') })
   assert.equal(roots.length, tls.rootCertificates.length + 1); assert.equal(roots.at(-1), x.certPem.replace(/\r\n/g, '\n').trim())
   assert.equal(nodeRoots({ api: (t) => (t === 'default' ? ['d'] : []) }).join(), 'd')
@@ -70,4 +76,7 @@ test('engine: an upstream signed by a CA only the (injected) system store holds 
   assert.match(none.issuer, /corporate inspection CA/, 'no system roots: the corporate upstream is not trusted either, so it steps aside')
   assert.deepEqual(none.failures.map((f) => f.reason), ['system-roots-unavailable'], 'and that is not silent')
   assert.equal(none.errors.length, 1)
+  const partial = await run(corp, asightCa.certPem, { certs: [corp.certPem], errors: ['/etc/ssl/certs/ca-certificates.crt: EACCES: permission denied'] })
+  assert.match(partial.issuer, /asight collector CA/, 'what was read is still used')
+  assert.deepEqual(partial.failures.map((f) => [f.reason, f.error]), [['trust-store-error', '/etc/ssl/certs/ca-certificates.crt: EACCES: permission denied']], 'an unreadable source is not silent')
 })

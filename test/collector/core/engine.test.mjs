@@ -107,15 +107,16 @@ test('engine: two consecutive rejections on one host splice that host only; anot
 
 // D38: asight's own failures are recorded and cost the agent one connection at most, never the collector.
 test('engine: connectUpstream throwing (e.g. a bad destination port) is an engine-error record, the socket is closed, the engine lives on (D38)', async () => {
-  const failures = [], errors = []
+  const failures = [], errors = [], flows = []
   const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: 1, family: 4 }, pid: 1, agent: 'x', decrypt: false })
   const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(createCa())), connectUpstream: () => { throw new RangeError('bad port') },
-    store: { envelope() {}, flow() {}, failure: (f) => failures.push(f) }, onError: (e) => errors.push(e.message) })
+    store: { envelope() {}, flow: (f) => flows.push(f), failure: (f) => failures.push(f) }, onError: (e) => errors.push(e.message) })
   const { port } = await engine.listen({})
   for (let i = 0; i < 2; i++) await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('close', r); c.on('error', () => {}) })
   await engine.close()
-  assert.deepEqual(failures.map((f) => [f.reason, f.pid, f.error]), [['engine-error', 1, 'bad port'], ['engine-error', 1, 'bad port']])
-  assert.deepEqual(errors, ['bad port', 'bad port']); assert.equal(engine.stats().active, 0)
+  assert.deepEqual(failures.map((f) => [f.reason, f.flow_id, f.error]), [['engine-error', 'flow_000001', 'bad port'], ['engine-error', 'flow_000002', 'bad port']])
+  assert.deepEqual(flows.map((f) => [f.flow_id, f.decision, f.error.type, f.error.side]), [['flow_000001', 'error', 'engine_error', 'engine'], ['flow_000002', 'error', 'engine_error', 'engine']])
+  assert.equal(engine.stats().active, 0)
 })
 
 test('engine: a flows/ record that cannot be written is a flow-write-failed failure record (D38)', async () => {
