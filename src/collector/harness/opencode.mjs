@@ -6,7 +6,8 @@
 // OPENCODE_CONFIG, project, OPENCODE_CONFIG_CONTENT, managed), `{env:VAR}` substituted.
 // Trust entry (D37④): asight's plugin ~/.config/opencode/plugins/asight-ca.js (OpenCode discovers it) wraps
 // globalThis.fetch to append the asight CA and writes the per-pid marker (`asight:marker`, core/trust/confirm.mjs).
-// `--pure` / OPENCODE_PURE skips plugins. Not via the trust path (4.6, never decrypted, under `all` too): requests made
+// `--pure` / OPENCODE_PURE skip only external (npm) plugins: 1.18.34 still loads this file plugin, only later — after
+// the run's first provider request, which then goes direct while the marker is pending (lab ⑥). Not via the trust path (4.6, never decrypted, under `all` too): requests made
 // before plugins load (models.dev), and, when OPENCODE_EXPERIMENTAL_WEBSOCKETS is on, the openai provider's `ws` path
 // (lab ⑥, from source; local / dev / beta builds turn it on too and are not recognised here).
 import path from 'node:path'
@@ -42,7 +43,7 @@ function inject(ctx) {
     watch: ['package.json', 'package-lock.json', 'bun.lock', 'node_modules'].map((n) => ({ path: path.join(dir, n), why: 'OpenCode installs @opencode-ai/plugin there on its first run with any plugin' })),
     notes: [
       { code: 'harness-note', text: `with any plugin present, OpenCode's next first run fetches @opencode-ai/plugin from the npm registry once and may write package.json, package-lock.json and node_modules/ in ${dir}; uninstall reports those and never deletes them` },
-      { code: 'harness-note', text: 'an OpenCode started with --pure or OPENCODE_PURE skips plugins and is not captured' },
+      { code: 'harness-note', text: 'OpenCode loads asight\'s plugin also under --pure / OPENCODE_PURE (they skip only npm plugins), so such a run is captured too' },
     ],
   }
 }
@@ -68,13 +69,9 @@ export default {
   trust: {
     // the marker first: when it is there, a failure names it, not a CA file the user exported for OpenCode
     chain: [{ var: MARKER_VAR, semantic: 'append' }, { var: 'NODE_EXTRA_CA_CERTS', semantic: 'append' }],
-    refine: (r, env, { argv = [] }) => {
-      if (r.var === MARKER_VAR || !['var-missing', 'ca-not-in-file', 'file-unreadable'].includes(r.reason)) return null
-      return argv.includes('--pure') || truthy(env.get('OPENCODE_PURE')) ? 'opencode-pure' : 'no-marker'
-    },
+    refine: (r) => (r.var === MARKER_VAR || !['var-missing', 'ca-not-in-file', 'file-unreadable'].includes(r.reason) ? null : 'no-marker'),
     hints: {
-      'opencode-pure': '--pure / OPENCODE_PURE skips plugins, so the asight CA plugin did not load; start OpenCode without it to be captured',
-      'no-marker': 'the asight plugin did not report trust for this OpenCode (the plugin file is gone, or the process started before install); restart it once',
+      'no-marker': 'the asight plugin did not report trust for this OpenCode within 10 s of its start: the plugin file is gone or the process started before install (restart it once), or this is OpenCode\'s first run with a plugin, which installs @opencode-ai/plugin before loading plugins (an agent-trusted record follows then)',
     },
   },
 }

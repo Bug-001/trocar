@@ -45,7 +45,7 @@ test('opencode: hosts not via the trust path — models.dev always; the openai A
   } finally { s.done() }
 })
 
-test('opencode: trusted by its plugin marker only while the start time matches; --pure / OPENCODE_PURE and a missing marker name their reason (T12)', () => {
+test('opencode: trusted by its plugin marker only while the start time matches; a missing marker is no-marker, --pure included (T12, acceptance ⑥)', () => {
   const s = sandbox()
   try {
     const caPem = s.put('.asight/collector/ca/asight-ca.pem', CA.certPem)
@@ -55,15 +55,16 @@ test('opencode: trusted by its plugin marker only while the start time matches; 
     assert.deepEqual([ok.trust.trusted, ok.trust.via], [true, 'plugin marker'])
     assert.equal(judge(oc, ctxFor({ home: s.home, argv, startTicks: 778 }), { markerDir: markers, caPem }).trust.reason, 'marker-stale', 'a reused pid is not believed')
     const none = path.join(s.home, 'no-markers')
-    assert.equal(judge(oc, ctxFor({ home: s.home, argv: ['opencode', '--pure', 'run'] }), { markerDir: none, caPem }).trust.reason, 'opencode-pure')
-    assert.equal(judge(oc, ctxFor({ home: s.home, env: { OPENCODE_PURE: '1' }, argv }), { markerDir: none, caPem }).trust.reason, 'opencode-pure')
+    // --pure / OPENCODE_PURE do not keep this file plugin out (acceptance ⑥): no marker yet is pending, like any start
+    assert.equal(judge(oc, ctxFor({ home: s.home, argv: ['opencode', '--pure', 'run'] }), { markerDir: none, caPem }).trust.reason, 'no-marker')
+    assert.equal(judge(oc, ctxFor({ home: s.home, env: { OPENCODE_PURE: '1' }, argv }), { markerDir: none, caPem }).trust.reason, 'no-marker')
     assert.equal(judge(oc, ctxFor({ home: s.home, argv }), { markerDir: none, caPem }).trust.reason, 'no-marker')
     const corp = s.put('corp.pem', OTHER.certPem)
     assert.equal(judge(oc, ctxFor({ home: s.home, argv, env: { NODE_EXTRA_CA_CERTS: corp } }), { markerDir: none, caPem }).trust.reason, 'no-marker', 'a user CA file without the asight CA is not the reason: the plugin has not reported')
     fs.writeFileSync(caPem, OTHER.certPem) // the asight CA file no longer holds the asight CA
     const lost = judge(oc, ctxFor({ home: s.home, argv, startTicks: 777, env: { NODE_EXTRA_CA_CERTS: corp } }), { markerDir: markers, caPem })
     assert.deepEqual([lost.trust.trusted, lost.trust.reason, lost.trust.var], [false, 'ca-not-in-file', 'asight:marker'], 'a marker next to a CA file without the asight CA does not trust')
-    assert.ok(oc.trust.hints['opencode-pure'] && oc.trust.hints['no-marker'])
+    assert.ok(oc.trust.hints['no-marker'] && !oc.trust.hints['opencode-pure'])
   } finally { s.done() }
 })
 
