@@ -8,6 +8,12 @@ import { handleFlow } from '../../../src/collector/core/engine/flow.mjs'
 const upCa = createCa({ commonName: 'upstream test CA' }); const upIssuer = createLeafIssuer(loadCa(upCa))
 const asightCa = createCa(); const issuer = createLeafIssuer(loadCa(asightCa))
 const listen = (srv) => new Promise((r) => srv.listen(0, '127.0.0.1', () => r(srv.address().port)))
+// Await an event-backed promise, but fail with a message instead of hanging the whole run if the
+// event never comes (e.g. a flow that is never finalized).
+const within = (p, what, ms = 5000) => {
+  let t
+  return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error(`${what}: not within ${ms}ms`)), ms) })]).finally(() => clearTimeout(t))
+}
 
 async function harness({ meta = {}, policy = () => true, upstream, onAccept = () => {} }) {
   const upPort = await listen(upstream)
@@ -22,7 +28,7 @@ async function harness({ meta = {}, policy = () => true, upstream, onAccept = ()
   // or envelopes only after this: the client can see the response end (the forwarded TLS
   // close_notify) before the engine has handled the upstream FIN that finalizes the flow.
   const settled = () => Promise.all(done)
-  return { port, envelopes, flows, settled, close: async () => { await settled(); engine.close(); upstream.close() } }
+  return { port, envelopes, flows, settled, close: async () => { await within(settled(), 'every flow finalized'); engine.close(); upstream.close() } }
 }
 const httpsUpstream = (handler) => tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)), ALPNProtocols: ['http/1.1'] }, handler)
 const request = (port, ca, raw, opts = {}) => new Promise((resolve, reject) => {
@@ -116,7 +122,7 @@ test('CONNECT tunnel: the proxy reply is relayed verbatim, then the inner TLS is
       let b = ''; t.on('data', (x) => (b += x.toString('latin1'))); t.on('end', () => resolve({ reply, b })); t.on('error', reject)
     })
   })
-  await proxy.closed()
+  await within(proxy.closed(), 'both proxy legs closed')
   await h.close(); origin.close()
   assert.equal(result.reply, proxyReply); assert.equal(result.b, RESP)
   assert.equal(h.flows[0].decision, 'tunnel'); assert.equal(h.envelopes[0].host, 'upstream.test')
@@ -157,13 +163,14 @@ test('client abort mid-flight tears down the upstream socket (acceptance T3)', a
   assert.ok(upClosedAt > 0 && upClosedAt - t < 120, `upstream closed ${upClosedAt - t}ms after client abort`)
 })
 
-test('client reset before a routing decision is caught: flow finalized with the error, upstream dropped (T3)', { timeout: 10000 }, async () => {
+test('client reset before a routing decision is caught: flow finalized with the error, upstream dropped (T3)', async () => {
   const hello = await clientHello()
   // [when, first bytes the client sends, what shows the engine is inside that window]
   const cases = [
     ['before its first byte', null, 'accepted'],
     ['mid-ClientHello', hello.subarray(0, 20), 'engine-read'],
     ['mid-CONNECT head', Buffer.from('CONNECT x.test:443 HTTP/1.1\r\n'), 'engine-read'],
+    ['waiting for the proxy reply to its CONNECT', Buffer.from('CONNECT x.test:443 HTTP/1.1\r\n\r\n'), 'upstream-read'], // upstream never replies
     ['during the upstream TLS handshake', hello, 'upstream-read'], // upstream never answers the engine's ClientHello
   ]
   for (const [when, first, ready] of cases) {
@@ -172,12 +179,12 @@ test('client reset before a routing decision is caught: flow finalized with the 
     const upAccepted = once(upstream, 'connection')
     const h = await harness({ upstream, onAccept: (c) => { engineRead = once(c, 'data') } })
     const c = net.connect(h.port, '127.0.0.1', () => { if (first) c.write(first) }); c.on('error', () => {})
-    await upAccepted // the engine has accepted the client and dialled the upstream: no decision yet
-    if (ready === 'engine-read') await engineRead
-    if (ready === 'upstream-read') await once(upSock, 'data')
+    await within(upAccepted, when) // the engine has accepted the client and dialled the upstream: no decision yet
+    if (ready === 'engine-read') await within(engineRead, when)
+    if (ready === 'upstream-read') await within(once(upSock, 'data'), when)
     c.resetAndDestroy()
     await h.close()
-    await upClosed
+    await within(upClosed, `${when}: upstream dropped`)
     assert.equal(h.flows.length, 1, when); assert.equal(h.flows[0].decision, 'error', when)
     assert.equal(h.flows[0].error?.type, 'ECONNRESET', when)
   }
