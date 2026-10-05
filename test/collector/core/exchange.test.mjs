@@ -25,7 +25,9 @@ test('recording switch is sampled at request start: in-flight exchange is still 
   t.fromUpstream(Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'))
   t.fromClient(Buffer.from('GET /b HTTP/1.1\r\n\r\n'))
   t.fromUpstream(Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'))
-  assert.deepEqual(out.map((e) => e.endpoint), ['/a'])
+  on = true; t.fromClient(Buffer.from('GET /c HTTP/1.1\r\n\r\n'))
+  t.fromUpstream(Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'))
+  assert.deepEqual(out.map((e) => [e.endpoint, e.seq]), [['/a', 0], ['/c', 2]], 'an exchange not recorded still takes its seq')
 })
 
 test('a request body past maxBodyBytes reaches the envelope labelled req_truncated; one under the cap does not', () => {

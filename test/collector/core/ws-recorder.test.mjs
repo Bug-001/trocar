@@ -22,9 +22,9 @@ function upgrade({ ext, offer, target = '/v1/responses' }) {
     resp: { head: head(raw('HTTP/1.1 101 Switching Protocols', respH), { status: 101, headers: respH }) },
   }
 }
-function rig({ ext = null, offer, terminal = TERMINAL, target, write, maxCallBytes, split = Infinity } = {}) {
+function rig({ ext = null, offer, terminal = TERMINAL, target, write, maxCallBytes, split = Infinity, seqStart = 0 } = {}) {
   const out = []; let on = true; let n = 0
-  const r = createWsRecorder({ flow: FLOW, upgrade: upgrade({ ext, offer, target }), seqStart: 0, genId: () => `id${n++}`, isRecording: () => on, terminal, maxCallBytes,
+  const r = createWsRecorder({ flow: FLOW, upgrade: upgrade({ ext, offer, target }), seqStart, genId: () => `id${n++}`, isRecording: () => on, terminal, maxCallBytes,
     recordStore: { envelope: (e) => (write ? write(e, out) : (out.push(e), true)) } })
   const wire = { c: [], s: [] }
   const feed = (fn, b) => { for (let i = 0; i < b.length; i += split) fn(b.subarray(i, i + split)) }
@@ -92,13 +92,14 @@ test('W14: a server message with no call open is its own envelope (req_body null
   }
 })
 
-test('no terminal pattern for this path: a call runs to the next client message, the last one to the end of the connection; a reset ends it as an error', () => {
+test('no terminal pattern for this path: a call runs to the next client message, the last one to the end of the connection; a reset ends it as an error; W18 overlapping ws_frames', () => {
   const t = rig({ terminal: [{ pathSuffix: '/other', patterns: ['.'] }] })
   t.c(cli(1, 'a')); t.s(srv(1, 'A1')); t.s(srv(1, ev('response.completed')))
   assert.equal(t.out.length, 0, 'the fallback waits for the next client message')
   t.c(cli(1, 'b', { fin: false })); t.s(srv(1, 'A3')); t.s(srv(9, 'pg')); t.c(cli(0, 'b2'))
   assert.deepEqual(t.out.map((e) => [e.req_body, e.resp.messages, e.ws_raw.map((f) => f.i)]), [['a', ['A1', ev('response.completed'), 'A3'], [0, 1, 2, 4]]], 'A3 completed in this call: its frame goes with it, b\'s first frame waits for b')
   t.s(srv(1, 'B1')); t.r.end(null)
+  assert.deepEqual(t.out.map((e) => e.ws_frames), [[0, 4], [3, 7]], 'W18: all on, the ranges overlap (A3 is A\'s, b began at 3), the frame ids do not')
   assert.deepEqual(t.out.map((e) => [e.req_body, e.error]), [['a', undefined], ['bb2', undefined]], 'a clean close ends the last call normally')
   assert.deepEqual(t.out[1].ws_raw.map((f) => [f.i, f.m]), [[3, [0, 0]], [5, undefined], [6, [0, 1]], [7, [0, 0]]], 'the ping after b began is b\'s')
   assertWholeWire(t)
@@ -279,4 +280,48 @@ test('a call whose server messages no longer decode (takeover window lost, or th
   u.c(cli(1, ev('response.create', { input: 1 }))); u.s(srv(1, ev('response.output_text.delta'))); u.s(Buffer.from([0x83, 0]))
   u.c(cli(1, ev('response.create', { input: 2 }))); u.c(cli(1, ev('response.create', { input: 3 }))); u.r.end(null)
   assert.deepEqual(u.out.map((e) => [JSON.parse(e.req_body).input, e.req_extra_messages, e.error]), [[1, undefined, undefined], [2, undefined, undefined], [3, undefined, undefined]])
+})
+
+test('an opener past the cap on its own, or one that does not inflate, is req_body:null, labelled, with its client data frames in ws_raw (past the cap: headers only; undecodable: p kept)', () => {
+  const big = rig({ maxCallBytes: 100 })
+  big.c(Buffer.concat([cli(1, 'x'.repeat(80), { fin: false }), cli(0, 'y'.repeat(40))])); big.s(srv(1, ev('response.completed')))
+  const [a] = big.out
+  assert.deepEqual([a.req_body, 'req_body_b64' in a, a.ws_truncated, a.partial], [null, false, true, undefined])
+  assert.deepEqual(a.ws_raw.map((f) => [f.d, 'p' in f || 'm' in f]), [['c', false], ['c', false], ['s', true]], 'its frames are there, headers only')
+  const junk = Buffer.from([0xff, 0xff, 0xff]), bad = rig({ ext: 'permessage-deflate' })
+  bad.c(cli(1, junk, { rsv1: true })); bad.s(srv(1, ev('response.completed')))
+  const [b] = bad.out
+  assert.deepEqual([b.req_body, 'req_body_b64' in b, b.ws_truncated, b.partial_reasons], [null, false, undefined, ['decode-failed']], 'its compressed bytes are not passed off as decoded')
+  assert.deepEqual(b.ws_raw.map((f) => [f.d, f.p]), [['c', junk.toString('base64')], ['s', undefined]], 'the compressed frame keeps its wire payload')
+})
+
+test('a server message is judged when complete: a push begun before the opener and completed after it joins that call', () => {
+  const t = rig(), push = ev('rate_limits.updated', { n: 1 })
+  t.s(srv(1, push.slice(0, 8), { fin: false })); t.c(cli(1, ev('response.create')))
+  t.s(srv(0, push.slice(8))); assert.equal(t.out.length, 0, 'not an envelope of its own')
+  t.s(srv(1, ev('response.completed'))); t.r.end(null)
+  assert.deepEqual(t.out.map((e) => [e.req_body, e.resp.messages, e.ws_raw.map((f) => f.i)]), [[ev('response.create'), [push, ev('response.completed')], [0, 1, 2, 3]]])
+  assertWholeWire(t)
+})
+
+test('a control frame lost while off does not make later calls partial (only a lost data message does)', () => {
+  const t = rig()
+  t.c(cli(1, ev('response.create'))); t.s(srv(1, ev('response.completed')))
+  t.on = false; t.c(cli(9, 'hb')); t.s(srv(10, 'hb')); t.on = true
+  t.c(cli(1, ev('response.create'))); t.s(srv(1, ev('response.completed'))); t.r.end(null)
+  assert.deepEqual([t.out.map((e) => e.partial_reasons), t.r.summary().dropped_frames], [[undefined, undefined], 2])
+})
+
+test('clean close, judged per call: the last call is ws_closed unless it itself cannot see its terminal message', () => {
+  const t = rig({ ext: 'permessage-deflate; server_no_context_takeover' })
+  t.c(cli(1, ev('response.create', { input: 1 }))); t.s(srv(1, Buffer.from([0xff, 0xff, 0xff]), { rsv1: true })) // call 1 cannot see its terminal
+  t.c(cli(1, ev('response.create', { input: 2 }))); t.s(srv(1, ev('response.output_text.delta')))               // call 2 can
+  t.r.end(null)
+  assert.deepEqual(t.out.map((e) => [JSON.parse(e.req_body).input, e.error, e.resp.error && e.resp.error.type]), [[1, undefined, undefined], [2, true, 'ws_closed']])
+})
+
+test('seq: the first call takes seqStart (the upgrade request\'s number), later calls count on, recorded or not', () => {
+  const t = rig({ seqStart: 7 })
+  for (const [m, on] of [['a', true], ['b', false], ['c', true]]) { t.on = on; t.c(cli(1, m)); t.s(srv(1, ev('response.completed'))) }
+  assert.deepEqual(t.out.map((e) => [e.req_body, e.seq]), [['a', 7], ['c', 9]])
 })
