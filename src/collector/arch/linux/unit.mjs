@@ -8,12 +8,19 @@ import { spawnSync } from 'node:child_process'
 
 export const UNIT_NAME = 'asight-collector.service'
 export const unitPath = (home) => path.join(home, '.config', 'systemd', 'user', UNIT_NAME)
-const quote = (s) => `"${String(s).replace(/(["\\])/g, '\\$1')}"` // systemd ExecStart: C-style escapes inside quotes
+// systemd: C-style escapes inside quotes; `%` starts a specifier in Environment= and ExecStart=, `$` a variable in ExecStart=
+const esc = (s) => String(s).replace(/(["\\])/g, '\\$1').replace(/%/g, '%%')
+const quoteExec = (s) => `"${esc(s).replace(/\$/g, '$$$$')}"`
+// The link `systemctl --user enable` creates for WantedBy=default.target (listed by install before it is made).
+export const wantsLink = (home) => path.join(path.dirname(unitPath(home)), 'default.target.wants', UNIT_NAME)
 
-export function unitText({ node, script }) {
+// env: what the daemon's own environment needs that systemd --user does not give it (install decides: the install
+// shell's NODE_EXTRA_CA_CERTS, 4.6 §引擎 5) — the daemon's only, never the login environment.
+export function unitText({ node, script, env = {} }) {
   return [
     '[Unit]', 'Description=asight transparent collector (per user)', '',
-    '[Service]', 'Type=simple', `ExecStart=${quote(node)} ${quote(script)} collector start`, 'Restart=on-failure', 'RestartSec=2', '',
+    '[Service]', 'Type=simple', ...Object.entries(env).map(([k, v]) => `Environment="${esc(`${k}=${v}`)}"`),
+    `ExecStart=${quoteExec(node)} ${quoteExec(script)} collector start`, 'Restart=on-failure', 'RestartSec=2', '',
     '[Install]', 'WantedBy=default.target', '',
   ].join('\n')
 }

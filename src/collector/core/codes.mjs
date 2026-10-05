@@ -48,6 +48,7 @@ export const CODE = Object.freeze({
   residue: 'residue-not-removed', // files an agent wrote because of asight's plugin; reported, never deleted
   harnessNote: 'harness-note', // anything else a descriptor's inject() says the user should know
   unitNotEnabled: 'unit-not-enabled', // the autostart unit is written but the OS service manager refused to enable it
+  unitEnvNotCarried: 'unit-env-not-carried', // the install shell's NODE_EXTRA_CA_CERTS could not be given to the autostart unit
 })
 
 export const trustReasonText = (code) => TRUST_REASON[code] || null

@@ -51,7 +51,8 @@ export function formatPlan(p) {
     ...p.files.map((f) => `  ${f.harness}: ${f.path} = ${f.sources.length ? `the certificates of ${f.sources.join(', ')} + ` : ''}the collector CA`),
     ...(p.owned || []).map((o) => `  ${o.harness}: ${o.path} (asight's ${o.role})`),
     ...p.entries.map((e) => `  ${e.harness}: ${e.path}${e.real_path ? ` → ${e.real_path}` : ''} ${e.what || `${e.keys.join('.')} = ${e.value}`}`),
-    ...(p.unit ? [`  autostart unit (systemd --user, enabled --now): ${p.unit}`] : []),
+    ...(p.unit ? [`  autostart unit (systemd --user, enabled --now): ${p.unit.path}${Object.keys(p.unit.env).length ? ` with ${Object.entries(p.unit.env).map(([k, v]) => `${k}=${v}`).join(' ')} for the daemon alone (it checks a relay's certificate with it)` : ''}`,
+      ...p.unit.links.map((l) => `  autostart link (made by systemctl --user enable): ${l}`)] : []),
     ...(p.records ? [`  install notes (event log): ${p.records}/`] : []),
     ...(p.watch || []).map((w) => `  ${w.harness} itself may write ${w.path} (${w.why}); uninstall reports it, never deletes it`)].join('\n')
 }
@@ -65,7 +66,7 @@ function unitOf(parts, home, script) {
   const U = parts.arch && parts.arch.unit
   if (!U) return null
   return {
-    path: U.unitPath(home), text: U.unitText({ node: process.execPath, script }),
+    path: U.unitPath(home), links: [U.wantsLink(home)], text: (env) => U.unitText({ node: process.execPath, script, env }),
     enable: () => U.systemctl(['enable', '--now', U.UNIT_NAME]), disable: () => U.systemctl(['disable', '--now', U.UNIT_NAME]),
     stop: () => U.systemctl(['stop', U.UNIT_NAME]), removeWants: () => U.removeWantsLinks(home),
   }

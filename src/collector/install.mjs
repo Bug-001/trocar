@@ -72,7 +72,19 @@ export function readRoots(osRootsFile, { nodeRoots = tls.rootCertificates } = {}
   return { node: [...nodeRoots], osText }
 }
 
-// unit: the arch's per-user autostart unit as { path, text, enable, disable, stop, removeWants } (null: none / --no-unit).
+// 4.6 §引擎 5: the engine checks an upstream with Node's roots + NODE_EXTRA_CA_CERTS of the daemon's own environment. A
+// daemon the autostart unit starts has no login shell's exports, so the unit carries this shell's value — an absolute
+// path outside asight's home only; anything else is said, never dropped silently (review 3 #1, D38).
+export function daemonEnv(env, dir) {
+  const v = env.NODE_EXTRA_CA_CERTS
+  if (typeof v !== 'string' || v === '') return { env: {}, note: null }
+  const why = !path.isAbsolute(v) ? 'it is a relative path' : v.startsWith(path.dirname(dir) + path.sep) ? "it is asight's own file" : null
+  if (why) return { env: {}, note: `NODE_EXTRA_CA_CERTS of this shell (${v}) is not given to the autostart unit (${why}); a daemon the unit starts checks a relay's certificate with Node's roots only` }
+  return { env: { NODE_EXTRA_CA_CERTS: v }, note: null }
+}
+
+// unit: the arch's per-user autostart unit as { path, links, text(env), enable, disable, stop, removeWants } (null: none /
+// --no-unit); links = what enabling it creates.
 async function install(dir, { home, env = process.env, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), freePort = freeEnginePort, onPlan = () => {}, osRootsFile = null, roots = null, unit = null }) {
   const prior = readManifest(dir)
   if (prior && prior.complete) return { already: true, manifest: prior, plan: null }
@@ -90,6 +102,8 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
   const draft = planTrust({ descriptors: harnesses, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
   // every per-file refusal too (a dangling link, a file that is not JSON, a patch file that is not a list, a plugin
   // file already there) — before onPlan, before any write
+  const daemon = unit ? daemonEnv(env, dir) : null
+  if (daemon && daemon.note) draft.notes.push(daemon.note)
   const preview = draft.entries.map((e) => (e.kind === 'text' ? previewTextEntry({ file: e.path, edit: e }) : previewJsonKey({ file: e.path, keys: e.keys, value: e.value })))
   for (const o of draft.owned) if (fs.existsSync(o.path)) throw new Error(`${o.harness}: ${o.path} already exists; asight will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`)
   onPlan({
@@ -98,7 +112,7 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
     files: draft.files.map((f) => ({ harness: f.harness, path: f.path, sources: f.sources })),
     owned: draft.owned.map((o) => ({ harness: o.harness, path: o.path, role: o.role })),
     entries: draft.entries.map((e, i) => ({ harness: e.harness, path: e.path, ...(preview[i].real_path ? { real_path: preview[i].real_path } : {}), ...(e.kind === 'text' ? { what: describeEntry(e) } : { keys: e.keys, value: e.value }) })),
-    ...(unit ? { unit: unit.path } : {}),
+    ...(unit ? { unit: { path: unit.path, env: daemon.env, links: unit.links || [] } } : {}),
     watch: draft.watch,
     notes: draft.notes,
     records: path.join(dir, 'flows'), // install notes are kept here as install-note events (D38)
@@ -112,6 +126,7 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
   const { certPem } = loadOrCreateCa({ dir: ca.dir })
   m.engine_port = await freePort()
   const plan = planTrust({ descriptors: harnesses, ctxFor, caCertPem: certPem, collectorDir: dir, roots: R })
+  if (daemon && daemon.note) { plan.notes.push(daemon.note); plan.records.push({ code: CODE.unitEnvNotCarried, reason: daemon.note }) }
   if (unit && fs.existsSync(unit.path)) throw new Error(`${unit.path} already exists; asight will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`)
   if (JSON.stringify(plan.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${plan.paths.join(', ')}); only the CA was written; run "asight collector uninstall", then install again`)
   m.planned = plan.paths
@@ -127,14 +142,15 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
   }
   // the per-user autostart unit (arch: systemd --user on Linux), listed like every other file, then enabled --now; a
   // refused enable is recorded (D38), the daemon can still be started by hand
+  // The manifest is complete before the unit starts the daemon, which refuses an incomplete one (review 3 #8).
+  if (unit) writeOwnedFile({ dir, manifest: m, role: 'unit', file: unit.path, data: unit.text(daemon.env), mode: 0o644, exclusive: true })
+  m.complete = true
+  saveManifest(dir, m)
   let unitFailed = null
   if (unit) {
-    writeOwnedFile({ dir, manifest: m, role: 'unit', file: unit.path, data: unit.text, mode: 0o644, exclusive: true })
     const r = unit.enable()
     if (r.code !== 0) unitFailed = `${unit.path} is written but "systemctl --user enable --now" failed (${r.err || `exit ${r.code}`}); start the daemon with "asight collector start", or enable the unit once systemd --user runs`
   }
-  m.complete = true
-  saveManifest(dir, m)
   for (const r of plan.records) appendEvent(dir, { event: EVENT.installNote, where: 'install', ...r }) // D38: what install said, kept where status finds it
   if (unitFailed) { plan.notes.push(unitFailed); appendEvent(dir, { event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed }) }
   return { already: false, manifest: m, plan }

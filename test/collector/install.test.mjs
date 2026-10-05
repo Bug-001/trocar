@@ -8,7 +8,7 @@ import path from 'node:path'
 import { X509Certificate } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { startControlServer } from '../../src/collector/core/control.mjs'
-import { installCollector, uninstallCollector, stopDaemon, freeEnginePort } from '../../src/collector/install.mjs'
+import { installCollector, uninstallCollector, stopDaemon, freeEnginePort, daemonEnv } from '../../src/collector/install.mjs'
 import { readManifest } from '../../src/collector/core/trust/journal.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
 import cc from '../../src/collector/harness/claude-code.mjs'
@@ -19,6 +19,7 @@ function box() {
 }
 const base = (b, o = {}) => ({ home: b.home, env: { HOME: b.home }, osName: 'none', harnesses: [cc], freePort: async () => 47011, ...o })
 const stopNone = async () => 'none'
+const readEvents = (dir) => (fs.existsSync(path.join(dir, 'flows')) ? fs.readdirSync(path.join(dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(dir, 'flows', n), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))) : [])
 const settingsOf = (b) => path.join(b.home, '.claude', 'settings.json')
 const listAll = (d) => (fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? [e.name + '/', ...listAll(path.join(d, e.name)).map((x) => `${e.name}/${x}`)] : [e.name])) : [])
 
@@ -460,20 +461,26 @@ test('uninstall step 2: a harness that re-reads its entry while running keeps th
   } finally { b.done() }
 })
 
-test('install / uninstall: the autostart unit is listed, enabled, then stopped through systemd, disabled and removed with its dirs (S10)', async () => {
+test('install / uninstall: the autostart unit is listed with its env and link, written complete, enabled, then stopped through systemd, disabled and removed with its dirs (S10, review 3 #1 #8 #10)', async () => {
   const b = box()
   try {
     const calls = []
     const unitFile = path.join(b.home, '.config', 'systemd', 'user', 'asight-collector.service')
-    const unit = { path: unitFile, text: '[Unit]\n', enable: () => { calls.push('enable'); return { code: 0 } }, disable: () => { calls.push('disable'); return { code: 0 } }, stop: () => calls.push('stop'), removeWants: () => { calls.push('wants'); return [] } }
+    const link = path.join(b.home, '.config', 'systemd', 'user', 'default.target.wants', 'asight-collector.service')
+    const enable = () => { calls.push(`enable, manifest complete: ${readManifest(b.dir).complete}`); return { code: 0 } }
+    const unit = { path: unitFile, links: [link], text: (env) => `[Service]\n${JSON.stringify(env)}\n`, enable, disable: () => { calls.push('disable'); return { code: 0 } }, stop: () => calls.push('stop'), removeWants: () => { calls.push('wants'); return [] } }
     let listed = null
-    await installCollector(base(b, { unit, onPlan: (p) => { listed = p } }))
-    assert.equal(listed.unit, unitFile, 'listed before anything is written')
+    const env = { HOME: b.home, NODE_EXTRA_CA_CERTS: '/corp/relay-ca.pem' }
+    await installCollector(base(b, { unit, env, onPlan: (p) => { listed = p } }))
+    assert.deepEqual(listed.unit, { path: unitFile, env: { NODE_EXTRA_CA_CERTS: '/corp/relay-ca.pem' }, links: [link] }, 'listed, with what the daemon gets and the link enable makes, before anything is written')
+    assert.equal(fs.readFileSync(unitFile, 'utf8'), '[Service]\n{"NODE_EXTRA_CA_CERTS":"/corp/relay-ca.pem"}\n', 'the install shell\'s CA for upstream checks is in the unit (4.6 §引擎 5)')
     const m = readManifest(b.dir)
     assert.deepEqual(m.files.filter((f) => f.role === 'unit').map((f) => f.path), [unitFile])
     assert.equal(fs.statSync(unitFile).mode & 0o777, 0o644)
+    assert.deepEqual(calls, ['enable, manifest complete: true'], 'the daemon the unit starts finds a complete manifest')
+    calls.length = 0
     await uninstallCollector({ home: b.home, env: {}, unit, stop: async () => { calls.push('stopped'); return 'stopped' } })
-    assert.deepEqual(calls, ['enable', 'stopped', 'disable', 'wants'])
+    assert.deepEqual(calls, ['stopped', 'disable', 'wants'])
     assert.ok(!fs.existsSync(path.join(b.home, '.config')), 'the unit and the directories asight created for it are gone')
   } finally { b.done() }
 })
@@ -481,7 +488,7 @@ test('install / uninstall: the autostart unit is listed, enabled, then stopped t
 test('install: a unit systemd refuses to enable is a recorded failure, the install still completes; stopDaemon stops a unit-managed daemon through systemd, a hand-started one by pid', async () => {
   const b = box()
   try {
-    const unit = { path: path.join(b.home, '.config', 'systemd', 'user', 'asight-collector.service'), text: '[Unit]\n', enable: () => ({ code: 1, err: 'Failed to connect to bus' }), disable: () => ({ code: 0 }), stop: () => {}, removeWants: () => [] }
+    const unit = { path: path.join(b.home, '.config', 'systemd', 'user', 'asight-collector.service'), text: () => '[Unit]\n', enable: () => ({ code: 1, err: 'Failed to connect to bus' }), disable: () => ({ code: 0 }), stop: () => {}, removeWants: () => [] }
     const r = await installCollector(base(b, { unit }))
     assert.ok(r.manifest.complete)
     const { recentFailures } = await import('../../src/collector/core/events.mjs')
@@ -497,5 +504,23 @@ test('install: a unit systemd refuses to enable is a recorded failure, the insta
     const seen2 = []; let up2 = true
     const res2 = await stopDaemon({ socketPath: sock, lockFile: lock, request: async () => ({}), alive: () => up2, kill: (pid, sig) => { seen2.push(`kill ${pid} ${sig}`); up2 = false }, stopUnit: () => seen2.push('unit-stop') })
     assert.deepEqual([res2, seen2], ['stopped', ['unit-stop', 'kill 4242 SIGTERM']])
+  } finally { b.done() }
+})
+
+test('daemonEnv: the install shell\'s NODE_EXTRA_CA_CERTS goes to the unit when it is an absolute path outside asight\'s home; otherwise it is said and recorded (review 3 #1, D38)', async () => {
+  const dir = '/h/.asight/collector'
+  assert.deepEqual(daemonEnv({}, dir), { env: {}, note: null })
+  assert.deepEqual(daemonEnv({ NODE_EXTRA_CA_CERTS: '/corp/ca.pem' }, dir), { env: { NODE_EXTRA_CA_CERTS: '/corp/ca.pem' }, note: null })
+  assert.match(daemonEnv({ NODE_EXTRA_CA_CERTS: 'ca.pem' }, dir).note, /\(it is a relative path\)/)
+  assert.match(daemonEnv({ NODE_EXTRA_CA_CERTS: '/h/.asight/collector/ca/extra-cc.pem' }, dir).note, /asight's own file/)
+  assert.deepEqual(daemonEnv({ NODE_EXTRA_CA_CERTS: '/h/.asightful/ca.pem' }, dir).env, { NODE_EXTRA_CA_CERTS: '/h/.asightful/ca.pem' }, 'a sibling whose name only starts the same is not asight\'s')
+  const b = box()
+  try {
+    const unit = { path: path.join(b.home, '.config', 'systemd', 'user', 'asight-collector.service'), links: [], text: (env) => JSON.stringify(env), enable: () => ({ code: 0 }), disable: () => ({ code: 0 }), stop: () => {}, removeWants: () => [] }
+    let listed = null
+    const r = await installCollector(base(b, { unit, env: { HOME: b.home, NODE_EXTRA_CA_CERTS: 'rel/ca.pem' }, onPlan: (p) => { listed = p } }))
+    assert.ok(listed.notes.some((n) => /\(rel\/ca\.pem\) is not given to the autostart unit/.test(n)), 'said in the list printed before anything is written')
+    assert.ok(r.plan.notes.some((n) => /\(rel\/ca\.pem\) is not given to the autostart unit/.test(n)))
+    assert.deepEqual(readEvents(b.dir).filter((e) => e.code === 'unit-env-not-carried').map((e) => e.event), ['install-note'])
   } finally { b.done() }
 })
