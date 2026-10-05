@@ -442,6 +442,7 @@ export async function buildResolver(source, { retryMs = 30000, lister = listRoot
   Object.defineProperty(resolve, 'size', { get: () => idx.qual.size, enumerable: true });
   const closeSealed = () => { for (const sf of idx.sealed) sf.close(); idx.sealed.length = 0; frameCache.clear(); };
   resolve.dispose = () => { for (const fd of fds.values()) try { closeSync(fd); } catch {} fds.clear(); bodyCache.clear(); closeSealed(); };
+  resolve.frameStats = frameCache.stats;   // sealed-frame LRU: decodes / hits / most frames ever resident
 
   // LIVE SOURCES (4.4 #10). The index used to be built once, at startup, so under a running
   // collector a call captured after `asight serve` started was listed by the board but its blocks
@@ -611,6 +612,7 @@ async function buildMultiResolver(roots, opts) {
   // was ever closed and every indexed file's fd leaked for the life of the process. Idempotent and
   // non-throwing: shutdown paths overlap, and a failure to close must not mask the reason for the
   // shutdown.
+  resolve.frameStats = frameCache.stats;   // sealed-frame LRU (shared by every root): decodes / hits / most frames ever resident
   resolve.dispose = () => { for (const p of parts) { try { p.dispose && p.dispose(); } catch {} } };
   return resolve;
 }

@@ -19,11 +19,13 @@ export const AMBIGUOUS = -2;
 
 export function createFrameCache(max = 8) {
   const m = new Map();
+  const stats = { hits: 0, decodes: 0, maxResident: 0 };
   return {
-    get(k) { const v = m.get(k); if (v !== undefined) { m.delete(k); m.set(k, v); } return v; },
-    set(k, v) { m.set(k, v); while (m.size > max) m.delete(m.keys().next().value); },
+    get(k) { const v = m.get(k); if (v !== undefined) { stats.hits++; m.delete(k); m.set(k, v); } return v; },
+    set(k, v) { stats.decodes++; m.set(k, v); while (m.size > max) m.delete(m.keys().next().value); stats.maxResident = Math.max(stats.maxResident, m.size); },
     clear() { m.clear(); },
     get size() { return m.size; },
+    stats,
   };
 }
 
