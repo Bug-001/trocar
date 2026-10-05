@@ -88,9 +88,9 @@ export function serve(conn, req, { deflate }, state, record) {
   const log = (dir, raw, f) => record({ type: 'ws_frame', ts: iso(), conn_id: conn.id, dir, opcode: f.opcode, fin: f.fin, rsv1: f.rsv1, len: f.len, raw_b64: raw.toString('base64') })
   const live = () => !conn.closed && !conn.ended
   const write = (b) => { conn.bytesOut += b.length; conn.sock.write(b) }
-  const frame = (opcode, payload, rsv1 = false) => {
-    const raw = Buffer.concat([head(0x80 | (rsv1 ? 0x40 : 0) | opcode, payload.length), payload])
-    log('out', raw, { opcode, fin: true, rsv1, len: payload.length })
+  const frame = (opcode, payload, rsv1 = false, fin = true) => {
+    const raw = Buffer.concat([head((fin ? 0x80 : 0) | (rsv1 ? 0x40 : 0) | opcode, payload.length), payload])
+    log('out', raw, { opcode, fin, rsv1, len: payload.length })
     return raw
   }
   const sleep = (ms) => new Promise((resolve) => {
@@ -117,7 +117,16 @@ export function serve(conn, req, { deflate }, state, record) {
       if (!deflate.serverNoTakeover) outDict = tail(outDict, p)
       p = z.subarray(0, z.length - TAIL.length) // RFC 7692 7.2.1: drop the sync flush's 00 00 ff ff
     }
-    write(frame(1, p, !!deflate))
+    const n = state.cfg.wsFragmentBytes
+    if (!(n > 0 && p.length > n)) { write(frame(1, p, !!deflate)); return true }
+    // fragmented: n-byte pieces (RSV1 on the first only, RFC 7692 6.1) with a Ping after the first
+    // piece, as RFC 6455 5.4 allows; logged and written in wire order
+    const out = []
+    for (let at = 0; at < p.length; at += n) {
+      out.push(frame(at ? 0 : 1, p.subarray(at, at + n), !at && !!deflate, at + n >= p.length))
+      if (!at) out.push(frame(9, Buffer.from('mock-frag-ping')))
+    }
+    write(Buffer.concat(out))
     return true
   }
 
