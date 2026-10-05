@@ -164,6 +164,7 @@ reads sealed files directly and shows exactly the same records; the original is 
 every record and the whole file are proven to decode back byte for byte.
 
 ```sh
+asight raw seal --legacy ~/.asight/sessions --dry-run   # every check, nothing written: what would be sealed or refused, and why
 asight raw seal --legacy ~/.asight/sessions        # pre-2026-10 files: refuses while anything writes them; keeps originals
 asight raw verify ~/.asight/sessions               # decode every sealed copy, compare byte for byte with its original
 asight raw seal --legacy ~/.asight/sessions --delete-original   # deletes each original only after that check
@@ -221,7 +222,7 @@ asight capture [--port 8899] [--target <url>] [--out <ndjson>] [--upstream <prox
 asight serve   [--port 9800] [--source <ndjson|dir>] [--db <path>] [--control]
 asight etl <ndjson|sealed|dir> [--rebuild]
 asight on [--proxy <url>] | off [--remove-ca] | uninstall | verify | doctor
-asight raw seal <closed-shard> | seal --legacy <file|dir> [--delete-original]
+asight raw seal <closed-shard> | seal --legacy <file|dir> [--dry-run] [--delete-original]
 asight raw verify <sealed|dir> [--against <original>] | export <session|file.sealed> | journal
 asight monitor {on|off|status}
 asight mitm [--port 9899] [--host api.anthropic.com]
