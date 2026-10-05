@@ -167,9 +167,13 @@ export function handleFlow(client, meta, ctx) {
       // TLSSocket never fires 'secure' (the peer sends unknown_ca/bad_certificate, or — e.g.
       // SELF_SIGNED_CERT_IN_CHAIN on Node/LibreSSL — just closes). Negative-cache (pid,host) so the
       // engine stops trying to decrypt that process and splices from here on (RFC 4.6 §引擎 5).
-      let handshook = false
+      // Recorded on whichever of error/end/close comes first, by listeners added BEFORE relay()'s: the
+      // emitter runs them in order, so the reason is on the record before relay's teardown writes it
+      // (the store serializes at call time; a reason set afterwards never reaches flows/).
+      let handshook = false, rejected = false
       clientTls.once('secure', () => { handshook = true })
-      clientTls.once('close', () => { if (!handshook) { ctx.negCache.set(negKey, Date.now()); rec.reason = 'client-rejected-leaf' } })
+      const goneBeforeHandshake = () => { if (handshook || rejected) return; rejected = true; ctx.negCache.set(negKey, Date.now()); rec.reason = 'client-rejected-leaf' }
+      clientTls.on('error', goneBeforeHandshake); clientTls.on('end', goneBeforeHandshake); clientTls.on('close', goneBeforeHandshake)
       activeTee = createExchangeTee({
         flow: { id: rec.flow_id, host, scheme: 'https', dst: meta.dst, proc: { pid: meta.pid, exe: meta.exe ?? null, agent: meta.agent } },
         recordStore: ctx.store, isRecording: ctx.isRecording, wsTerminal: meta.wsTerminal ?? null,

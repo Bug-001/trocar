@@ -19,7 +19,9 @@ async function harness({ meta = {}, policy = () => true, upstream, onAccept = ()
   const upPort = await listen(upstream)
   const envelopes = [], flows = []
   const ctx = { issuer, upstreamCa: upCa.certPem, policy, isRecording: () => true, negCache: new Map(), newFlowId: () => 'f' + flows.length,
-    store: { envelope: (e) => envelopes.push(e), flow: (f) => flows.push(f) },
+    // Snapshot each record when it is written, as the real store does (it serializes at call time):
+    // a field the engine sets on the record afterwards never reaches flows/ on disk.
+    store: { envelope: (e) => envelopes.push(structuredClone(e)), flow: (f) => flows.push(structuredClone(f)) },
     connectUpstream: (dst) => net.connect(dst.port, dst.address) }
   const done = []
   const engine = net.createServer((c) => { done.push(handleFlow(c, { dst: { address: '127.0.0.1', port: upPort, family: 4 }, pid: 1, agent: 't', decrypt: true, ...meta }, ctx)); onAccept(c) })
@@ -142,7 +144,8 @@ test('CONNECT refused by the proxy: the client receives the proxy refusal verbat
 test('client rejects the leaf (does not trust asight CA): negative-cached, next connection spliced', async () => {
   const h = await harness({ upstream: httpsUpstream((s) => s.on('data', () => s.end(RESP))) })
   await request(h.port, upCa.certPem, REQ).catch(() => {})
-  await new Promise((r) => setTimeout(r, 50))
+  await within(h.settled(), 'first flow finalized') // the rejection is recorded and negative-cached before that
+  assert.equal(h.flows[0].reason, 'client-rejected-leaf')
   const r = await request(h.port, upCa.certPem, REQ)
   await h.close()
   assert.match(r.cert.issuer, /upstream test CA/)
