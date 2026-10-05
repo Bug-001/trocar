@@ -22,9 +22,11 @@ const splitMidChar = (b) => { const i = b.findIndex((x) => x >= 0xc0); return i 
 
 // One compressor across the whole body, flushed after every piece, the way a compressing proxy
 // streams SSE: each event is decodable on arrival, and the deflate state carries across events.
+// gzip needs Z_SYNC_FLUSH for that: its default flush (Z_FULL_FLUSH) resets the dictionary.
 async function compress(pieces, enc) {
   const z = enc === 'br' ? zlib.createBrotliCompress() : zlib.createGzip(), out = []
-  for (const p of pieces) { z.write(p); await new Promise((r) => z.flush(r)); out.push(z.read() || Buffer.alloc(0)) }
+  const flush = (r) => (enc === 'br' ? z.flush(r) : z.flush(zlib.constants.Z_SYNC_FLUSH, r))
+  for (const p of pieces) { z.write(p); await new Promise(flush); out.push(z.read() || Buffer.alloc(0)) }
   z.end()
   const tail = []
   for await (const c of z) tail.push(c)
