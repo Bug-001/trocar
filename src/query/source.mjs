@@ -8,15 +8,21 @@
 // body), then on resolve we seek+read only the ONE needed record's line and slice it. A tiny
 // req_body LRU makes rendering a call's many blocks read that call's line once, not per block.
 //
-// Which files are read at all is src/raw/discover.mjs, the one rule the board loader and doctor use too
-// (its top-level classification is src/paths.mjs isCaptureFile / skipReason: a symlinked capture counts,
-// a dangling link is reported, not opened).
+// SEALED FILES (D35 · RFC 4.2 「读」): the same index also holds records that live in sealed files —
+// keyed by the record's ORIGINAL stream from the sealed index, so a text_ref minted before sealing
+// resolves to the same bytes after it, and DuckDB is never rebuilt. Their lines are decoded through one
+// bounded frame LRU shared by every sealed file (~8 frames), and every line's sha256 is checked.
+// Which files are read at all — and which copy wins while an original and its sealed copy coexist — is
+// src/raw/discover.mjs, the one rule the board loader and doctor use too (its top-level classification
+// is src/paths.mjs isCaptureFile / skipReason: a symlinked capture counts, a dangling link is reported).
 import { open } from 'node:fs/promises';
 import { statSync, openSync, readSync, closeSync, fstatSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { parseTextRef } from '../etl/orchestrator.mjs';
 import { normalizeRecord } from '../etl/ingest.mjs';
 import { listSources, isSealedPath } from '../raw/discover.mjs';
+import { openSealed, createFrameCache } from '../raw/reader.mjs';
+import { R, FLAG_NL, FLAG_UNPARSEABLE } from '../raw/format.mjs';
 
 const NL = 0x0a;
 const BODY_LRU = 8; // req_body strings held at once — a call's blocks resolve off one cached body
@@ -169,6 +175,34 @@ function indexFileSync(file, idx, from = 0, log = null) {
   } finally { closeSync(fd); }
 }
 
+// A sealed file contributes its index entries (id + ORIGINAL stream, computed at seal time exactly as
+// the NDJSON scan computes them), with the same duplicate poisoning and corrupt / unidentified counts.
+// It is read whole and never grows. One that cannot be opened is COUNTED and named, never silently
+// absent (user requirement 2026-10-06): a ref into it then says why it cannot be found.
+function indexSealed(file, idx, frameCache) {
+  const st = statSync(file);
+  const mark = { size: st.size, ino: st.ino, end: st.size, tail: null, sealed: true };
+  let sf;
+  try { sf = openSealed(file, { frameCache }); }
+  catch (e) {
+    if (!idx.scan.unreadableSealed.some((x) => x.file === file)) idx.scan.unreadableSealed.push({ file, reason: e.message });
+    return mark;
+  }
+  idx.sealed.push(sf);
+  const base = path.basename(file);
+  for (let i = 0; i < sf.count; i++) {
+    const r = sf.records[i];
+    if (r[R.len] - (r[R.flags] & FLAG_NL ? 1 : 0) === 0) continue;    // an empty line, as in the NDJSON scan
+    if (r[R.flags] & FLAG_UNPARSEABLE) { idx.scan.corruptLines++; idx.scan.corruptByFile[base] = (idx.scan.corruptByFile[base] || 0) + 1; continue; }
+    if (r[R.id] == null) { idx.scan.unidentifiedLines++; continue; }
+    const id = String(r[R.id]), qk = sf.streams[r[R.stream]] + '#' + id, loc = { file, sealed: sf, i };
+    const prev = idx.qual.get(qk);
+    idx.qual.set(qk, prev === undefined ? loc : { dup: true, dupCount: (prev.dupCount || 1) + 1, file });
+    idx.byId.set(id, idx.byId.has(id) ? AMBIGUOUS : loc);
+  }
+  return mark;
+}
+
 // Take back what an unterminated last line did to the index, before a refresh re-reads it in full
 // (it may have been half a record then, or have since grown). Only the qualified key is exactly
 // restorable — no other file writes `<this file>#<id>`; a bare-id entry is restored only if nothing
@@ -220,7 +254,7 @@ const listRoot = (root) => {
 // `source` may be one path or SEVERAL roots (D27: the new home plus the legacy one that still holds
 // the user's captures). Scanning only the first would make raw-byte refs from the other root
 // unresolvable — the block viewer would report "record not found" for bytes that are on disk.
-export async function buildResolver(source, { retryMs = 30000, lister = listRoot } = {}) {
+export async function buildResolver(source, { retryMs = 30000, lister = listRoot, frameCache = createFrameCache(8), unreadableSealed = null } = {}) {
   const roots = (Array.isArray(source) ? source : [source]).filter(Boolean);
   if (roots.length > 1) return buildMultiResolver(roots, { retryMs });
   const sourcePath = roots[0];
@@ -228,25 +262,20 @@ export async function buildResolver(source, { retryMs = 30000, lister = listRoot
   // scan (audit 2026-07-19): what is not read is recorded with its reason, so the omission is
   // reportable rather than silent. Which files are read, and the reasons for the rest, come from the
   // shared rule (src/raw/discover.mjs): the flat *.ndjson, one level down `<sid>/calls.ndjson`, and
-  // sealed files — listed here but not read by this resolver yet.
-  const scan = { files, skipped: [], corruptLines: 0, corruptByFile: {}, unidentifiedLines: 0, bytesIndexed: 0, superseded: [], mismatched: [] };
+  // sealed files standing where those streams would be read.
+  const scan = { files, skipped: [], corruptLines: 0, corruptByFile: {}, unidentifiedLines: 0, bytesIndexed: 0, unreadableSealed: [], superseded: [], mismatched: [] };
   const isDir = statSync(sourcePath).isDirectory();
   const listFiles = (skipped) => {
     const ls = lister(sourcePath); // throws if the root cannot be listed (broken ≠ empty)
     scan.superseded = ls.superseded || []; scan.mismatched = ls.mismatched || [];
-    const out = [];
-    for (const f of ls.files) {
-      if (isSealedPath(f)) { if (skipped) skipped.push({ name: path.basename(f), reason: 'sealed (not read by this resolver yet)' }); continue; }
-      out.push(f);
-    }
     if (skipped) skipped.push(...ls.skipped);
-    return out;
+    return [...ls.files];
   };
   files.push(...listFiles(scan.skipped));
 
   // qual: "<streamBasename>#<recordId>" -> { file, offset, length }  (the authoritative key)
   // byId: "<recordId>" -> loc | AMBIGUOUS                            (back-compat fallback only)
-  const idx = { qual: new Map(), byId: new Map(), scan };
+  const idx = { qual: new Map(), byId: new Map(), sealed: [], scan };
   const marks = new Map();     // file -> { size, ino, end, tail } as of its last indexing
 
   // A file that cannot be read is skipped, not fatal, at startup and on refresh: one unreadable
@@ -277,8 +306,9 @@ export async function buildResolver(source, { retryMs = 30000, lister = listRoot
     };
     return run(log, ok, fail);
   };
-  const indexSafe = (f, from = 0) => attempt(f, from, (log, ok, fail) => indexFile(f, idx, from, log).then(ok, fail));
-  const indexSafeSync = (f, from = 0) => attempt(f, from, (log, ok, fail) => { try { return ok(indexFileSync(f, idx, from, log)); } catch (e) { return fail(e); } });
+  // a sealed file is indexed whole from its own index (sync); an NDJSON file by the line scan
+  const indexSafe = (f, from = 0) => attempt(f, from, (log, ok, fail) => (isSealedPath(f) ? Promise.resolve().then(() => indexSealed(f, idx, frameCache)) : indexFile(f, idx, from, log)).then(ok, fail));
+  const indexSafeSync = (f, from = 0) => attempt(f, from, (log, ok, fail) => { try { return ok(isSealedPath(f) ? indexSealed(f, idx, frameCache) : indexFileSync(f, idx, from, log)); } catch (e) { return fail(e); } });
   for (const f of [...files]) { const mk = await indexSafe(f); if (mk) marks.set(f, mk); else files.splice(files.indexOf(f), 1); }
   // A file that left the root takes its failure (and its note) with it. By full path: one level down,
   // every session dir holds a `calls.ndjson`, so a basename names no one file.
@@ -333,17 +363,34 @@ export async function buildResolver(source, { retryMs = 30000, lister = listRoot
     return { key: e.file + '#' + recordId, loc: e };
   };
 
+  // Under several roots `unreadableSealed` is every root's list: a miss names all of them.
+  const absentReason = (stream, recordId) => {
+    const bad = unreadableSealed ? unreadableSealed() : scan.unreadableSealed;
+    return `no record "${recordId}" in stream "${stream}" in this source` + (bad.length
+      ? ` — note: ${bad.length} sealed file(s) here could not be read (${bad.map((b) => path.basename(b.file)).join(', ')}), so a record inside them cannot be found`
+      : '');
+  };
+
   // → an OUTCOME, never a bare string: { status, reason, text, fidelity }. `text` is the whole
   // record body; the caller slices it. Statuses: ok | absent | corrupt | no-body.
   const bodyOf = (stream, recordId) => {
     const hit = locate(stream, recordId);             // may throw on ambiguity — deliberately loud
-    if (!hit) return OUT('absent', `no record "${recordId}" in stream "${stream}" in this source`);
+    if (!hit) return OUT('absent', absentReason(stream, recordId));
     if (bodyCache.has(hit.key)) return bodyCache.get(hit.key);
     const { loc } = hit;
-    const buf = Buffer.allocUnsafe(loc.length);
-    readSync(fdFor(loc.file), buf, 0, loc.length, loc.offset);
-    let out;
-    try {
+    let buf, out = null;
+    if (loc.sealed) {
+      try {
+        buf = loc.sealed.lineAt(loc.i);
+        if (buf.length && buf[buf.length - 1] === NL) buf = buf.subarray(0, buf.length - 1);
+      } catch (e) {
+        out = OUT('corrupt', `record "${recordId}" in sealed file ${path.basename(loc.file)} could not be decoded (${e.message})`);
+      }
+    } else {
+      buf = Buffer.allocUnsafe(loc.length);
+      readSync(fdFor(loc.file), buf, 0, loc.length, loc.offset);
+    }
+    if (!out) try {
       const raw = JSON.parse(buf.toString('utf8'));
       const body = normalizeRecord(raw).req_body;
       out = typeof body === 'string'
@@ -357,7 +404,7 @@ export async function buildResolver(source, { retryMs = 30000, lister = listRoot
       // damage as absence would let a byte-faithfulness tool hide exactly the loss it exists to
       // detect. No fidelity claim is made about bytes we could not parse.
       out = OUT('corrupt',
-        `record "${recordId}" in ${path.basename(loc.file)} @${loc.offset}+${loc.length} could not be ` +
+        `record "${recordId}" in ${path.basename(loc.file)} @${loc.offset ?? 'record ' + loc.i}+${loc.length ?? buf.length} could not be ` +
         `parsed back from the source (${e.message}) — the bytes changed since indexing or are damaged`);
     }
     // cache on the QUALIFIED key — a bare-id cache key reintroduced the very collision above
@@ -393,7 +440,8 @@ export async function buildResolver(source, { retryMs = 30000, lister = listRoot
   resolve.detailOnce = detailOnce;
   resolve.scan = scan;
   Object.defineProperty(resolve, 'size', { get: () => idx.qual.size, enumerable: true });
-  resolve.dispose = () => { for (const fd of fds.values()) try { closeSync(fd); } catch {} fds.clear(); bodyCache.clear(); };
+  const closeSealed = () => { for (const sf of idx.sealed) sf.close(); idx.sealed.length = 0; frameCache.clear(); };
+  resolve.dispose = () => { for (const fd of fds.values()) try { closeSync(fd); } catch {} fds.clear(); bodyCache.clear(); closeSealed(); };
 
   // LIVE SOURCES (4.4 #10). The index used to be built once, at startup, so under a running
   // collector a call captured after `asight serve` started was listed by the board but its blocks
@@ -406,8 +454,8 @@ export async function buildResolver(source, { retryMs = 30000, lister = listRoot
   const clearIndex = () => {
     idx.qual.clear(); idx.byId.clear(); marks.clear(); bodyCache.clear();
     for (const fd of fds.values()) try { closeSync(fd); } catch {}
-    fds.clear();
-    Object.assign(scan, { corruptLines: 0, corruptByFile: {}, unidentifiedLines: 0 });
+    fds.clear(); closeSealed();
+    Object.assign(scan, { corruptLines: 0, corruptByFile: {}, unidentifiedLines: 0, unreadableSealed: [] });
     // Notes are not cleared up front: a reader polling during the rebuild must still see a failure
     // that persists. A recovered file's note goes when it indexes; a gone file's, below.
     files.length = 0;
@@ -447,7 +495,7 @@ export async function buildResolver(source, { retryMs = 30000, lister = listRoot
       let st; try { st = statSync(f); } catch (e) { note(path.dirname(f), path.basename(f), 'vanished', e); continue; }
       const m = marks.get(f);
       if (!m) { const mk = await indexSafe(f); if (mk) { files.push(f); marks.set(f, mk); changed = true; } continue; }
-      if (st.ino !== m.ino || st.size < m.size) { await rebuildAll(); changed = true; break; }
+      if (st.ino !== m.ino || st.size < m.size || (m.sealed && st.size !== m.size)) { await rebuildAll(); changed = true; break; } // a sealed file never grows
       if (st.size === m.size) continue;
       undoTail(idx, path.basename(f), m.tail);
       const mk = await indexSafe(f, m.end);
@@ -473,6 +521,8 @@ async function buildMultiResolver(roots, opts) {
   // the roots a listing can include: one that cannot be listed is left out of it (and fails alone)
   const listable = () => roots.filter((r) => { try { listSources([r]); return true; } catch { return false; } });
   const shared = { at: null, ls: null };
+  const frameCache = createFrameCache(8);   // one frame LRU for every root's sealed files
+  const unreadableSealed = () => parts.flatMap((p) => (p.scan && p.scan.unreadableSealed) || []);
   const lister = (root) => {
     const good = listable();
     if (!good.includes(root)) return listRoot(root); // throws this root's own error
@@ -487,7 +537,7 @@ async function buildMultiResolver(roots, opts) {
     // root, never the whole board: throwing here takes down `asight serve` at startup and the user
     // sees a crash where they should see the sessions that ARE readable (invariant 2 — a capture on
     // disk stays readable). What is dropped is recorded so `scan` can report it rather than hide it.
-    try { parts.push(Object.assign(await buildResolver(r, { ...opts, lister }), { rootPath: r })); }
+    try { parts.push(Object.assign(await buildResolver(r, { ...opts, lister, frameCache, unreadableSealed }), { rootPath: r })); }
     catch (e) { unreadable.push({ root: r, reason: (e && e.message) || String(e) }); }
   }
   // Stale (an indexed file is gone): every root re-lists and re-indexes together, then the ref is asked
@@ -515,6 +565,7 @@ async function buildMultiResolver(roots, opts) {
     corruptByFile: Object.assign({}, ...parts.map((p) => (p.scan && p.scan.corruptByFile) || {})),
     unidentifiedLines: parts.reduce((n, p) => n + ((p.scan && p.scan.unidentifiedLines) || 0), 0),
     bytesIndexed: parts.reduce((n, p) => n + ((p.scan && p.scan.bytesIndexed) || 0), 0),
+    unreadableSealed: unreadableSealed(),
     superseded: (shared.ls && shared.ls.superseded) || [], mismatched: (shared.ls && shared.ls.mismatched) || [],
     unreadableRoots: unreadable,
   });
