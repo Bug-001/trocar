@@ -252,8 +252,12 @@ test('daemon: a Claude Code started before install is config-after-start — unt
     assert.equal((await clients[0].raw({ op: '__watched' })).watch['6161'], 0, 'the kernel only observes it: its connections go direct')
     await req(s.sock, 'POST', '/off'); await req(s.sock, 'POST', '/on', {}) // a second judgment of the same pid and reason
     const recs = flowsOf(s).filter((f) => f.event === 'agent-untrusted')
-    assert.deepEqual(recs.map((f) => [f.pid, f.agent, f.reason, f.via.startsWith('user settings env')]), [[6161, 'claude-code', 'config-after-start', true]], 'a durable record with the reason, once per pid and reason (D38)')
+    assert.deepEqual(recs.map((f) => [f.pid, f.agent, f.code, f.via.startsWith('user settings env')]), [[6161, 'claude-code', 'config-after-start', true]], 'a durable record with the reason code, once per pid and reason (D38)')
+    assert.match(recs[0].reason, /restart it to be captured/, 'reason is the text that says what to do; the code is machine-readable (D38 event shape)')
     assert.ok((await req(s.sock, 'GET', '/status')).failures.some((f) => f.event === 'agent-untrusted' && f.pid === 6161), 'status shows it')
+    await clients[0].raw({ op: '__emit', ev: 'exit', tgid: 6161, ts_ns: 9 })
+    const exit = await until(() => flowsOf(s).find((f) => f.event === 'agent-exit' && f.pid === 6161))
+    assert.equal(exit.code, 'config-after-start', 'its exit ends the condition, and says which one (D38)')
   } finally { await d.stop(); p.done(); s.done() }
 })
 
@@ -394,7 +398,11 @@ test('daemon: a CC started after install stays trusted when settings.json is lat
     await req(s.sock, 'POST', '/off'); const again = (await req(s.sock, 'POST', '/on', {})).agents.find((a) => a.pid === 7171)
     assert.deepEqual([again.trusted, again.reason], [false, 'config-after-start'])
     const rec = flowsOf(s).find((f) => f.event === 'agent-untrusted' && f.pid === 7171)
-    assert.match(rec.hint, /started before the CA was in its settings.*restart it to be captured/)
+    assert.deepEqual([rec.code, /started before the CA was in its settings.*restart it to be captured/.test(rec.reason)], ['config-after-start', true])
+    edit((j) => { j.env.NODE_EXTRA_CA_CERTS = path.join(s.collector, 'ca', 'asight-ca.pem') }) // the value asight installed, again
+    await req(s.sock, 'POST', '/off'); await req(s.sock, 'POST', '/on', {})
+    const back = flowsOf(s).find((f) => f.event === 'agent-trusted' && f.pid === 7171)
+    assert.ok(back && back.code === 'ok', 'a pid recorded untrusted that is trusted again says so: the condition clears (D38)')
   } finally { await d.stop(); p.done(); s.done() }
 })
 

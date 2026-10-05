@@ -20,6 +20,7 @@ import { createLeafIssuer } from './core/tls/leaf.mjs'
 import { createRecordStore } from './core/record/store.mjs'
 import { createEngine } from './core/engine/engine.mjs'
 import { appendEvent, recentFailures, createFailureRecorder } from './core/events.mjs'
+import { EVENT, trustReasonText } from './core/codes.mjs'
 
 export { loadArch } // the CLI reaches arch only through this file (layering rule 5)
 
@@ -81,13 +82,23 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
 
     const { registry, arch: A } = await loadParts({ arch, harnesses, env })
     redirector = A.createRedirector({ env })
-    const onVerdict = (row, prev) => {
+    // D38: one `agent-untrusted` per pid and reason (code = the resolver's reason, reason = what to do about it); a pid
+    // recorded so gets `agent-trusted` once it is trusted and `agent-exit` when it exits, so the condition can clear.
+    const recordedUntrusted = new Map() // pid → the reason code last recorded
+    const note = (rec) => { try { appendEvent(P.dir, rec) } catch (w) { log('events', w) } }
+    const onVerdict = (row) => {
       if (row.watchError) failure('watch', new Error(`watching ${row.agent} pid ${row.pid} failed: ${row.watchError}`))
       if (row.configError) failure('harness', new Error(`${row.agent} pid ${row.pid}: reading its configuration failed (${row.configError}); judged on its known hosts only`))
-      if (row.trusted || (prev && !prev.trusted && prev.reason === row.reason)) return // recorded once per pid and reason
+      const last = recordedUntrusted.get(row.pid)
+      if (row.trusted) {
+        if (last != null) { recordedUntrusted.delete(row.pid); note({ event: EVENT.agentTrusted, pid: row.pid, agent: row.agent, code: 'ok', reason: `trusted now (${row.trustVar} via ${row.trustVia})` }) }
+        return
+      }
+      if (last === row.reason) return // recorded once per pid and reason
+      recordedUntrusted.set(row.pid, row.reason)
       const d = registry.get(row.agent)
-      const hint = d && d.trust && d.trust.hints ? d.trust.hints[row.reason] : null
-      try { appendEvent(P.dir, { event: 'agent-untrusted', pid: row.pid, agent: row.agent, reason: row.reason, via: row.trustVia ?? null, ...(hint ? { hint } : {}) }) } catch (w) { log('events', w) }
+      const text = (d && d.trust && d.trust.hints && d.trust.hints[row.reason]) || trustReasonText(row.reason) || row.reason
+      note({ event: EVENT.agentUntrusted, pid: row.pid, agent: row.agent, code: row.reason, reason: text, via: row.trustVia ?? null })
     }
     const tracker = createTracker({ redirector, registry, trust: createTrustChecker({ caCertPem: ca.certPem }), onVerdict,
       installedAt: (l) => installedAt(manifest, l), // config-after-start is judged against when asight wrote the value
@@ -132,6 +143,12 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     redirector.on('version-mismatch', (m) => event({ event: 'helper-version-mismatch', ...m, reason: `the helper speaks protocol ${m.got}, this daemon expects ${m.expected}; run "sudo asight setup-helper"` }))
     redirector.on('helper-error', ({ reason }) => failure('helper', new Error(reason)))
     redirector.on('heartbeat-error', ({ reason }) => failure('heartbeat', new Error(`${reason}; once the last beat is 2 s old the kernel stops steering (connections go direct)`)))
+    redirector.on('exit', ({ pid }) => { // D38: an untrusted agent that exits ends its condition
+      const last = recordedUntrusted.get(pid)
+      if (last == null) return
+      recordedUntrusted.delete(pid)
+      note({ event: EVENT.agentExit, pid, code: last, reason: 'exited while untrusted' })
+    })
     redirector.on('flow-meta', ({ pid, dst }) => { // a watched but untrusted agent's connection went direct (D31: metadata only)
       const r = tracker.describe(pid)
       store.flow({ ts: new Date().toISOString(), flow_id: null, pid, agent: r ? r.agent : null, dst, decision: 'direct', reason: r ? `untrusted: ${r.reason}` : 'untracked' })
