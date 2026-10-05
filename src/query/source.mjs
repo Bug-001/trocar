@@ -65,7 +65,9 @@ const OUT = (status, reason = null, text = null, fidelity = null) => ({ status, 
 // Returns { size, ino, end, tail }: `end` = the offset just past the last NEWLINE-terminated line,
 // where a refresh resumes; `tail` = what the unterminated last line (a record still being written,
 // or a file without a final newline) did to the index, so a refresh can undo it and re-read it whole.
-async function indexFile(file, idx, from = 0) {
+// `log` (optional) collects what an attempt did that a scan cannot undo — a key it turned into a
+// duplicate, a bare id it turned AMBIGUOUS — plus a count of records it indexed (undoAttempt).
+async function indexFile(file, idx, from = 0, log = null) {
   const base = path.basename(file);
   const fd = await open(file, 'r');
   try {
@@ -98,6 +100,7 @@ async function indexFile(file, idx, from = 0) {
           // bare-id fallback: first writer wins, a second file poisons the entry to AMBIGUOUS
           const prevB = idx.byId.get(id), setB = prevB === undefined ? loc : AMBIGUOUS;
           idx.byId.set(id, setB);
+          if (log) { log.n++; if (prev !== undefined) log.q.push([qk, prev]); if (prevB !== undefined) log.b.push([id, prevB]); }
           return { kind: 'indexed', qk, id, prev, prevB, setB };
         } else {
           // parseable, but nothing to key on — indexable content silently dropped. Report it.
@@ -152,6 +155,22 @@ function undoTail(idx, base, t) {
   }
 }
 
+// Take back everything an attempt that FAILED part-way did to the index, exactly, without re-reading
+// anything: restore the keys it turned into duplicates / AMBIGUOUS (newest first), delete the entries
+// it added (this file, at or past `from`: a scan of the maps, no JSON parse), restore the counts.
+// A rebuild of the whole root did the same job at the cost of re-parsing every line.
+function undoAttempt(idx, file, from, log, counts) {
+  for (let i = log.q.length - 1; i >= 0; i--) idx.qual.set(log.q[i][0], log.q[i][1]);
+  for (let i = log.b.length - 1; i >= 0; i--) idx.byId.set(log.b[i][0], log.b[i][1]);
+  if (log.n) {
+    for (const [k, v] of idx.qual) if (!v.dup && v.file === file && v.offset >= from) idx.qual.delete(k);
+    for (const [id, v] of idx.byId) if (v !== AMBIGUOUS && v.file === file && v.offset >= from) idx.byId.delete(id);
+  }
+  const base = path.basename(file);
+  Object.assign(idx.scan, { corruptLines: counts.c, unidentifiedLines: counts.u });
+  if (counts.cb) idx.scan.corruptByFile[base] = counts.cb; else delete idx.scan.corruptByFile[base];
+}
+
 // Build resolve(text_ref) -> the block's exact byte slice (or null if unresolvable). Lean: holds a
 // byte-offset index + ≤ BODY_LRU cached req_body strings, never the whole corpus.
 // `source` may be one path or SEVERAL roots (D27: the new home plus the legacy one that still holds
@@ -195,9 +214,8 @@ export async function buildResolver(source, { retryMs = 30000 } = {}) {
   // A file that cannot be read is skipped, not fatal, at startup and on refresh: one unreadable
   // capture must not take down the root's index (or `asight serve`). It is noted in scan.skipped
   // (with its root, once per root + name + reason), which the board shows, and the note is dropped
-  // once the file indexes. A read that failed after the open may have indexed some lines, so the
-  // root is marked dirty and the next refresh rebuilds it rather than index them twice.
-  let dirty = false;
+  // once the file indexes or leaves the root. A read that failed after the open may have indexed
+  // some lines; undoAttempt() takes them back, so a retry never indexes a line twice.
   const TRANSIENT = new Set(['unreadable', 'vanished']);
   function note(root, name, reason, e) {
     if (!scan.skipped.some((x) => x.root === root && x.name === name && x.reason === reason)) scan.skipped.push({ root, name, reason, ...(e ? { error: (e && e.code) || String(e) } : {}) });
@@ -211,15 +229,23 @@ export async function buildResolver(source, { retryMs = 30000 } = {}) {
   const unchangedFailure = (f) => { const x = failedAt.get(f); return !!x && x.sig === statSig(f) && Date.now() - x.at < retryMs; };
   const indexSafe = async (f, from = 0) => {
     const sig = statSig(f); // before the read: a change that lands during it must not be absorbed
-    try { const mk = await indexFile(f, idx, from); failedAt.delete(f); unnote((x) => x.root === path.dirname(f) && x.name === path.basename(f)); return mk; }
+    const log = { n: 0, q: [], b: [] }, counts = { c: scan.corruptLines, u: scan.unidentifiedLines, cb: scan.corruptByFile[path.basename(f)] };
+    try { const mk = await indexFile(f, idx, from, log); failedAt.delete(f); unnote((x) => x.root === path.dirname(f) && x.name === path.basename(f)); return mk; }
     catch (e) {
-      if (!(e && e.syscall === 'open')) dirty = true;
+      undoAttempt(idx, f, from, log, counts);
       failedAt.set(f, { sig, e, at: Date.now() });
       note(path.dirname(f), path.basename(f), 'unreadable', e);
       return null;
     }
   };
   for (const f of [...files]) { const mk = await indexSafe(f); if (mk) marks.set(f, mk); else files.splice(files.indexOf(f), 1); }
+  // A file that left the root takes its failure (and its note) with it.
+  const fileRoot = isDir ? sourcePath : path.dirname(sourcePath);
+  const forgetUnlisted = (listed) => {
+    const names = new Set(listed.map((f) => path.basename(f)));
+    for (const f of [...failedAt.keys()]) if (!names.has(path.basename(f))) failedAt.delete(f);
+    unnote((x) => x.root === fileRoot && !names.has(x.name));
+  };
 
   const fds = new Map();       // file -> open fd (reused across resolves)
   const fdFor = (f) => { let fd = fds.get(f); if (fd === undefined) { fd = openSync(f, 'r'); fds.set(f, fd); } return fd; };
@@ -325,9 +351,12 @@ export async function buildResolver(source, { retryMs = 30000 } = {}) {
     for (const fd of fds.values()) try { closeSync(fd); } catch {}
     fds.clear();
     Object.assign(scan, { corruptLines: 0, corruptByFile: {}, unidentifiedLines: 0 });
-    dirty = false; unnote(() => true); // re-noted below if still failing
+    // Notes are not cleared up front: a reader polling during the rebuild must still see a failure
+    // that persists. A recovered file's note goes when it indexes; a gone file's, below.
     files.length = 0;
-    for (const f of await listFiles(null)) {
+    const listed = await listFiles(null);
+    forgetUnlisted(listed);
+    for (const f of listed) {
       if (unchangedFailure(f)) { note(path.dirname(f), path.basename(f), 'unreadable', failedAt.get(f).e); continue; }
       const mk = await indexSafe(f); if (mk) { files.push(f); marks.set(f, mk); }
     }
@@ -337,7 +366,7 @@ export async function buildResolver(source, { retryMs = 30000 } = {}) {
     try { now = await listFiles(null); } catch (e) { note(path.dirname(sourcePath), path.basename(sourcePath), 'unreadable', e); return false; }
     if (isDir) unnote((x) => x.root === path.dirname(sourcePath) && x.name === path.basename(sourcePath)); // the listing note; a file source has none
     unnote((x) => x.reason === 'vanished'); // a pass's own observation; the board's loader reports it live
-    if (dirty) { await rebuildAll(); bodyCache.clear(); resolve.size = idx.qual.size; return true; }
+    forgetUnlisted(now);
     let changed = false;
     for (const f of now) {
       if (unchangedFailure(f)) { note(path.dirname(f), path.basename(f), 'unreadable', failedAt.get(f).e); continue; } // tried again once it changes or retryMs passes

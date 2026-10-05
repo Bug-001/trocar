@@ -117,26 +117,112 @@ test('an unreadable new file is skipped and noted; it does not stop other files 
   } finally { for (const d of [r1, r2]) fs.rmSync(d, { recursive: true, force: true }); }
 });
 
-test('a file whose reads keep failing after open costs one rebuild, not one per refresh; healthy files still resolve', async (t) => {
+// Fault injection on fs/promises.open for one file name: `failAfter(n)` = the n-th read of that file
+// (0-based, counted per open) and every later one throws EIO; null = no fault. Restored after the test.
+async function faultyReads(t, name, failAfter) {
   const { createRequire, syncBuiltinESMExports } = await import('node:module');
   const fsp = createRequire(import.meta.url)('fs/promises'), realOpen = fsp.open, opens = {};
-  fsp.open = async (p, ...rest) => { // fault injection: bad.ndjson opens, then every read fails (EIO)
+  fsp.open = async (p, ...rest) => {
     const fh = await realOpen(p, ...rest), b = path.basename(String(p));
     opens[b] = (opens[b] || 0) + 1;
-    if (b === 'bad.ndjson') fh.read = async () => { const e = new Error('EIO: i/o error, read'); e.code = 'EIO'; e.syscall = 'read'; throw e; };
+    const k = failAfter();
+    if (b === name && k != null) {
+      const read = fh.read.bind(fh); let n = 0;
+      fh.read = async (...a) => { if (n++ >= k) throw Object.assign(new Error('EIO: i/o error, read'), { code: 'EIO', syscall: 'read' }); return read(...a); };
+    }
     return fh;
   };
   syncBuiltinESMExports();
   t.after(() => { fsp.open = realOpen; syncBuiltinESMExports(); });
+  return opens;
+}
+const big = (prefix, n) => { let out = ''; for (let i = 0; i < n; i++) out += rec(prefix + i, 'x'.repeat(600)); return out; }; // > 1 MiB: several reads
+
+test('a file whose reads keep failing after open costs no rebuild, across retry windows; healthy files still resolve', async (t) => {
+  const opens = await faultyReads(t, 'bad.ndjson', () => 0);
   const dir = tmp();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const g = rec('G', 'healthy');
   fs.writeFileSync(path.join(dir, 'good.ndjson'), g);
   fs.writeFileSync(path.join(dir, 'bad.ndjson'), rec('B', 'unreadable bytes'));
-  const r = await buildResolver(dir);
-  for (let i = 0; i < 4; i++) await r.refresh();
-  assert.equal(opens['good.ndjson'], 2, 'indexed at startup, then once in the one rebuild the failed read asked for');
+  const r = await buildResolver(dir, { retryMs: 30 });
+  for (let i = 0; i < 5; i++) { await r.refresh(); await new Promise((res) => setTimeout(res, 40)); } // each refresh past the window retries bad.ndjson
+  assert.equal(opens['good.ndjson'], 1, 'indexed once at startup, never re-read');
+  assert.ok(opens['bad.ndjson'] >= 4, 'the failing file is retried each window');
   assert.equal(r.detail('S/good.ndjson#G').text, bodyOf(g));
   assert.deepEqual(r.scan.skipped.filter((x) => x.reason === 'unreadable').map((x) => [x.root, x.name, x.error]), [[dir, 'bad.ndjson', 'EIO']]);
+  r.dispose();
+});
+
+test('a new file whose read fails part-way leaves the index exactly as before; once readable it indexes whole, once', async (t) => {
+  let fail = 1; // the second read of big.ndjson throws: the first ~1 MiB of records was already indexed
+  await faultyReads(t, 'big.ndjson', () => fail);
+  const dir = tmp();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'a.ndjson'), rec('A', 'a') + '{"torn\n');
+  const r = await buildResolver(dir, { retryMs: 0 });
+  const before = JSON.stringify([r.size, r.scan.corruptLines, r.scan.corruptByFile, r.scan.unidentifiedLines]);
+  fs.writeFileSync(path.join(dir, 'big.ndjson'), '{"also torn\n' + JSON.stringify({ no_id: 1 }) + '\n' + big('K', 2500)); // counted before the failing read
+  await r.refresh();
+  assert.equal(JSON.stringify([r.size, r.scan.corruptLines, r.scan.corruptByFile, r.scan.unidentifiedLines]), before, 'nothing of the failed attempt stays');
+  assert.equal(r.detail('S/big.ndjson#K0').status, 'absent');
+  fail = null;
+  await r.refresh();
+  assert.equal(r.size, 2501);
+  assert.equal(r.detail('S/big.ndjson#K0').status, 'ok', 'indexed once: no duplicate from the failed attempt');
+  assert.deepEqual([r.scan.corruptLines, r.scan.unidentifiedLines], [2, 1]);
+  r.dispose();
+});
+
+test('a grown file whose tail read fails part-way is restored exactly — a duplicate id in the tail does not poison the earlier record', async (t) => {
+  let fail = null;
+  await faultyReads(t, 'cap.ndjson', () => fail);
+  const dir = tmp();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const f = path.join(dir, 'cap.ndjson'), first = rec('D', 'the first D');
+  fs.writeFileSync(f, first);
+  const r = await buildResolver(dir, { retryMs: 0 });
+  fs.appendFileSync(f, rec('D', 'a second D, same id, written later') + big('T', 2500));
+  fail = 1;
+  await r.refresh();
+  assert.equal(r.detail('S/cap.ndjson#D').text, bodyOf(first), 'the earlier record is not left marked duplicate');
+  assert.equal(r.size, 1);
+  fail = null;
+  await r.refresh();
+  assert.throws(() => r.detail('S/cap.ndjson#D'), /ambiguous/, 'read whole, the duplicate is real and refused');
+  assert.equal(r.size, 2501);
+  r.dispose();
+});
+
+test('while a rebuild runs, a failure that persists stays noted at every tick (a polling reader never sees it vanish)', async (t) => {
+  await faultyReads(t, 'bad.ndjson', () => 0);
+  const dir = tmp();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'bad.ndjson'), rec('B', 'b'));
+  fs.writeFileSync(path.join(dir, 'big.ndjson'), big('K', 2500));
+  fs.writeFileSync(path.join(dir, 'small.ndjson'), rec('S', 's'));
+  const r = await buildResolver(dir);
+  const noted = () => r.scan.skipped.some((x) => x.name === 'bad.ndjson' && x.reason === 'unreadable');
+  assert.ok(noted());
+  fs.rmSync(path.join(dir, 'small.ndjson')); fs.writeFileSync(path.join(dir, 'small.ndjson'), rec('S', 'replaced')); // new inode → rebuild
+  let done = false, ticks = 0;
+  const p = r.refresh().then(() => { done = true; });
+  while (!done) { assert.ok(noted(), `tick ${ticks}: the note vanished mid-rebuild`); ticks++; await new Promise((res) => setImmediate(res)); }
+  await p;
+  assert.ok(noted() && ticks > 1);
+  r.dispose();
+});
+
+test('a failing file that leaves the root takes its note with it', async (t) => {
+  await faultyReads(t, 'gone.ndjson', () => 0);
+  const dir = tmp();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'a.ndjson'), rec('A', 'a'));
+  fs.writeFileSync(path.join(dir, 'gone.ndjson'), rec('G', 'g'));
+  const r = await buildResolver(dir);
+  assert.deepEqual(r.scan.skipped.map((x) => [x.name, x.reason]), [['gone.ndjson', 'unreadable']]);
+  fs.rmSync(path.join(dir, 'gone.ndjson'));
+  await r.refresh();
+  assert.deepEqual(r.scan.skipped, [], 'not reported as unreadable forever');
   r.dispose();
 });
