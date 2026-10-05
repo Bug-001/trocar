@@ -94,22 +94,27 @@ export async function uninstallCollector({ home = os.homedir(), env = process.en
   const report = { daemon: null, entries: [], removed: [], still_trusting: [], kept_captures: !purgeData, notes: [] }
   report.daemon = await (stop || (() => stopDaemon({ socketPath: runtime && path.join(runtime, 'collector.sock'), lockFile: path.join(dir, 'lock') })))()
   const m = readManifest(dir)
-  if (!m) { report.notes.push('nothing is installed for this user'); return report }
-  // trust entries, newest first (4.6 撤销顺序 step 1), then the append-semantics trust files (step 3)
-  for (const e of [...m.entries].reverse()) report.entries.push(undoEntry(e))
   const rm = (p) => { if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); report.removed.push(p) } }
-  for (const f of m.files.filter((x) => x.role === 'trust-file' || x.role === 'ca-cert')) rm(f.path)
-  // step 5: report, never restart — append-semantics entries are read at start, so these still trust asight
-  for (const f of await scan()) { const a = match(f).agent; if (a && m.entries.some((e) => e.harness === a)) report.still_trusting.push({ pid: f.pid, agent: a, until: 'restart' }) }
-  // the CA private key and the runtime state last, then the data the operator asked to drop
-  for (const f of m.files.filter((x) => x.role === 'ca-key')) rm(f.path)
-  for (const p of [path.join(dir, 'run'), path.join(dir, 'lock'), path.join(dir, 'state.json'), runtime]) if (p) rm(p)
+  if (!m) report.notes.push('nothing is installed for this user')
+  else {
+    // trust entries, newest first (4.6 撤销顺序 step 1), then the append-semantics trust files (step 3)
+    for (const e of [...m.entries].reverse()) report.entries.push(undoEntry(e))
+    for (const f of m.files.filter((x) => x.role === 'trust-file' || x.role === 'ca-cert')) rm(f.path)
+    // step 5: report, never restart — append-semantics entries are read at start, so these still trust asight
+    for (const f of await scan()) { const a = match(f).agent; if (a && m.entries.some((e) => e.harness === a)) report.still_trusting.push({ pid: f.pid, agent: a, until: 'restart' }) }
+    // the CA private key and the runtime state last
+    for (const f of m.files.filter((x) => x.role === 'ca-key')) rm(f.path)
+    for (const p of [path.join(dir, 'run'), path.join(dir, 'lock'), path.join(dir, 'state.json'), runtime]) if (p) rm(p)
+  }
+  // then the data the operator asked to drop — also after an earlier plain uninstall left the captures behind
   if (purgeData) {
     for (const n of listDir(dir)) if (/^capture-.*\.ndjson$/.test(n)) rm(path.join(dir, n))
     for (const sub of ['flows', 'audit', 'replays']) rm(path.join(dir, sub))
   }
-  removeEmptyDirs(m.dirs.filter((d) => d !== dir)) // e.g. ca/
-  fs.rmSync(manifestPath(dir), { force: true }) // the manifest goes last: a second run still finds what the first left
-  removeEmptyDirs(m.dirs)
+  if (m) {
+    removeEmptyDirs(m.dirs.filter((d) => d !== dir)) // e.g. ca/
+    fs.rmSync(manifestPath(dir), { force: true }) // the manifest goes last: a second run still finds what the first left
+    removeEmptyDirs(m.dirs)
+  } else if (purgeData) removeEmptyDirs([dir])
   return report
 }

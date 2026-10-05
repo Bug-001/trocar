@@ -103,6 +103,18 @@ test('uninstall: stops the daemon first, reports CC processes still trusting unt
   } finally { b.done() }
 })
 
+test('uninstall --purge-data after a plain uninstall still drops the captures it kept', async () => {
+  const b = box()
+  try {
+    await installCollector(base(b))
+    fs.writeFileSync(path.join(b.dir, 'capture-2026-10-06.ndjson'), '{}\n')
+    await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
+    assert.deepEqual(listAll(b.dir), ['capture-2026-10-06.ndjson'])
+    const r = await uninstallCollector({ home: b.home, env: {}, purgeData: true, stop: stopNone })
+    assert.deepEqual([r.notes, fs.existsSync(b.dir)], [['nothing is installed for this user'], false])
+  } finally { b.done() }
+})
+
 test('uninstall after a crashed install (intent written, file changed, never completed) still restores the user file', async () => {
   const b = box()
   try {
