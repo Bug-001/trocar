@@ -94,7 +94,7 @@ test('hermes: every route ssl_ca_cert must hold the CA; any ssl_verify false is 
   } finally { s.done() }
 })
 
-test('hermes: sticky active_profile picks the home; the checkout .env only fills; the managed .env wins last; a CLI is judged by when its .env value appeared, a gateway re-reads it', () => {
+test('hermes: sticky active_profile picks the home; the checkout .env only fills; the managed .env wins last; a CLI and a gateway are judged by when their .env value appeared (review 3 #3)', () => {
   const s = sandbox()
   try {
     const root = path.join(s.home, '.hermes', 'hermes-agent')
@@ -111,7 +111,7 @@ test('hermes: sticky active_profile picks the home; the checkout .env only fills
     assert.deepEqual([m.trust.trusted, m.trust.reason], [false, 'ca-not-in-file'])
     const early = Date.now() - 60000 // started before the .env held the value
     assert.equal(judge(hermes, ctxFor({ home: s.home, argv: cli(root, '-z', 'hi'), startedAt: early })).trust.reason, 'config-after-start')
-    assert.equal(judge(hermes, ctxFor({ home: s.home, argv: cli(root, 'gateway', 'run'), startedAt: early })).trust.trusted, true, 'the gateway re-reads its .env every turn')
+    assert.equal(judge(hermes, ctxFor({ home: s.home, argv: cli(root, 'gateway', 'run'), startedAt: early })).trust.reason, 'config-after-start', 'a gateway may multiplex (the default, settled at its boot): it never re-reads .env')
     assert.equal(judge(hermes, ctxFor({ home: s.home, argv: ['python3', '-m', 'tui_gateway.entry'], env: { HERMES_HOME: path.join(s.home, '.hermes', 'profiles', 'dev') } })).trust.trusted, true, 'the TUI child: the default checkout')
     const alt = path.join(s.home, 'src', 'hermes-agent'); s.put(path.join(alt, '.env'), `SSL_CERT_FILE=${foreign}\n`); s.put(path.join(alt, 'install-stamp.json'), MAIN_STAMP)
     assert.equal(judge(hermes, ctxFor({ home: s.home, argv: ['python3', '-m', 'tui_gateway.entry'], env: { HERMES_PYTHON_SRC_ROOT: alt, HERMES_HOME: path.join(s.home, '.hermes', 'profiles', 'dev') } })).trust.reason, 'ca-not-in-file', 'the TUI child finds its checkout in HERMES_PYTHON_SRC_ROOT')
@@ -152,6 +152,29 @@ test('hermes inject: a sentinel block with SSL_CERT_FILE=combined-hermes.pem ato
   } finally { s.done() }
 })
 
+test('hermes inject: the CA settings of .op.env and of the checkout .env, which the block puts out of effect, are merged too; a home .env asight creates is said to turn the checkout .env into a fill (review 3 #2)', () => {
+  const s = sandbox()
+  try {
+    const A = createCa({ commonName: 'in .op.env' }); const B = createCa({ commonName: 'in the checkout .env' }); const C = createCa({ commonName: 'in a TUI child\'s checkout' })
+    const opCa = s.put('op.pem', A.certPem); const coCa = s.put('co.pem', B.certPem); const altCa = s.put('alt.pem', C.certPem)
+    s.put('.hermes/hermes-agent/install-stamp.json', MAIN_STAMP)
+    s.put('.hermes/.op.env', `SSL_CERT_FILE=${opCa}\n`)
+    s.put('.hermes/hermes-agent/.env', `HERMES_CA_BUNDLE=${coCa}\nOPENROUTER_BASE_URL=https://relay.example.com\n`)
+    const alt = path.join(s.home, 'src', 'hermes-agent'); s.put(path.join(alt, '.env'), `SSL_CERT_FILE=${altCa}\n`)
+    s.put('.hermes/profiles/work/.env', 'X=1\n')
+    const p = planFor(s, {}, [{ HERMES_PYTHON_SRC_ROOT: alt }])
+    assert.deepEqual(p.files[0].sources, [opCa, coCa, altCa])
+    assert.deepEqual(fps(p.files[0].data), [fp(A), fp(B), fp(C), fp(CA)])
+    const flip = p.records.filter((r) => /as a fill instead of an override/.test(r.reason))
+    assert.equal(flip.length, 1)
+    assert.ok(flip[0].reason.startsWith(`${path.join(s.home, '.hermes/.env')} does not exist`) && flip[0].reason.includes(path.join(s.home, '.hermes/hermes-agent/.env')), 'only the home .env asight creates; the profile .env exists')
+    s.put('.hermes/.env', 'Y=1\n')
+    assert.ok(!planFor(s).records.some((r) => /as a fill instead of an override/.test(r.reason)), 'nothing flips when the home .env is there')
+    fs.rmSync(path.join(s.home, '.hermes/.env')); fs.rmSync(path.join(s.home, '.hermes/hermes-agent/.env'))
+    assert.ok(!planFor(s).records.some((r) => /as a fill instead of an override/.test(r.reason)), 'nor without a checkout .env')
+  } finally { s.done() }
+})
+
 test('hermes through install / uninstall: the user\'s SSL_CERT_FILE line is put out of effect and merged, then comes back byte for byte; the bundle goes (T11, S10)', async () => {
   const s = sandbox()
   try {
@@ -167,6 +190,15 @@ test('hermes through install / uninstall: the user\'s SSL_CERT_FILE line is put 
     const asightCa = fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'), 'utf8')
     assert.deepEqual(fps(fs.readFileSync(bundle, 'utf8')), [fp(OTHER), ...fps(asightCa)])
     assert.ok(!fs.readFileSync(path.join(dir, 'install-manifest.json'), 'utf8').includes('sk-secret'))
+    const root = path.join(s.home, '.hermes', 'hermes-agent')
+    const installed = { caCertPem: asightCa }
+    assert.equal(judge(hermes, ctxFor({ home: s.home, argv: cli(root, '-z', 'hi') }), installed).trust.trusted, true, 'a hermes started after install trusts the block')
+    assert.equal(judge(hermes, ctxFor({ home: s.home, argv: cli(root, 'gateway', 'run'), startedAt: Date.now() - 60000 }), installed).trust.reason, 'config-after-start', 'a gateway from before install is not trusted on the block (it may multiplex; review 3 #3)')
+    // the user adds the same key below asight's block (lab ③: the later line wins): that hermes is untrusted, said why
+    fs.appendFileSync(env, `SSL_CERT_FILE=${corp}\n`)
+    const below = judge(hermes, ctxFor({ home: s.home, argv: cli(root, '-z', 'hi') }), installed)
+    assert.deepEqual([below.trust.trusted, below.trust.reason, below.trust.var], [false, 'ca-not-in-file', 'SSL_CERT_FILE'], 'T12: a same-name line below the block hides it')
+    fs.writeFileSync(env, now)
     // a Hermes from before install that is still running may build a new TLS context: the bundle is kept for it
     const early = { os: 'linux', pid: 77, exe: PY, argv: cli(path.join(s.home, '.hermes', 'hermes-agent'), '-z', 'hi'), startedAt: 0, env: new Map() }
     const match = (f) => createRegistry([hermes]).match(f)

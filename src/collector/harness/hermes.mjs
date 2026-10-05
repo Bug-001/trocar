@@ -8,14 +8,16 @@
 // (`-I -B -c`) and probes (no bootstrap, or no -I) are not the agent. Long-lived: gateway / cron / dashboard / serve.
 // Env: the active home's .env (override; the root .env is not under a profile's), .op.env (fill, unless
 // OP_SERVICE_ACCOUNT_TOKEN), the checkout's .env (fill when the home .env exists, else override), the managed .env
-// ($HERMES_MANAGED_DIR, else /etc/hermes) last, override; all after exec. A gateway re-reads .env every turn (live);
-// the CLI only on /reload (judged at start).
+// ($HERMES_MANAGED_DIR, else /etc/hermes) last, override; all after exec. Every one is judged as read at start: the
+// CLI re-reads only on /reload, and a gateway every turn only when it does not multiplex — multiplex is the default,
+// settled at gateway boot, invisible from outside (4.6 Hermes row, review 3 #3).
 // Trust (Linux): main — SSL_CERT_FILE (the truststore context / httpx); a route's own ssl_ca_cert replaces it for that
 // route; ssl_verify: false turns it off. A release ≤ v2026.9.24 takes the first of HERMES_CA_BUNDLE / SSL_CERT_FILE /
 // REQUESTS_CA_BUNDLE / CURL_CA_BUNDLE; which build runs is read from the checkout's install-stamp.json (none: judged
 // as that release, the stricter). Injection (D37④): a sentinel block atop the home .env and every profile .env with
-// SSL_CERT_FILE (and HERMES_CA_BUNDLE for that release) = combined-hermes.pem; the block overrides the launch env, so
-// the CAs it covers (in those files, the install shell, running hermes) are merged into the bundle (4.6 合并包).
+// SSL_CERT_FILE (and HERMES_CA_BUNDLE for that release) = combined-hermes.pem; the block overrides the launch env and
+// puts the same keys of .op.env and the checkout .env out of effect, so the CAs it covers (in those files, the install
+// shell, running hermes) are merged into the bundle (4.6 合并包).
 import path from 'node:path'
 import { hostOf, expandHome, parseDotenv } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
@@ -74,13 +76,12 @@ function tlsKeys(ctx, home) {
 
 function layers(ctx) {
   const home = hermesHome(ctx)
-  const live = ctx.argv.includes('gateway')
-  const user = dotenvLayer(ctx, path.join(home, '.env'), { name: path.join(home, '.env'), live })
+  const user = dotenvLayer(ctx, path.join(home, '.env'), { name: path.join(home, '.env') })
   const out = [user]
-  if (!ctx.environ.get('OP_SERVICE_ACCOUNT_TOKEN')) out.push(dotenvLayer(ctx, path.join(home, '.op.env'), { name: path.join(home, '.op.env'), mode: 'fill', live }))
-  out.push(dotenvLayer(ctx, path.join(checkout(ctx), '.env'), { name: 'hermes checkout .env', mode: user ? 'fill' : 'override', live }))
+  if (!ctx.environ.get('OP_SERVICE_ACCOUNT_TOKEN')) out.push(dotenvLayer(ctx, path.join(home, '.op.env'), { name: path.join(home, '.op.env'), mode: 'fill' }))
+  out.push(dotenvLayer(ctx, path.join(checkout(ctx), '.env'), { name: 'hermes checkout .env', mode: user ? 'fill' : 'override' }))
   const managed = ctx.environ.get('HERMES_MANAGED_DIR') || MANAGED[ctx.os]
-  if (managed) out.push(dotenvLayer(ctx, path.join(managed, '.env'), { name: path.join(managed, '.env'), live }))
+  if (managed) out.push(dotenvLayer(ctx, path.join(managed, '.env'), { name: path.join(managed, '.env') }))
   out.push(tlsKeys(ctx, home))
   if (oldRelease(ctx.readText, checkout(ctx)) !== false) out.push({ name: `${checkout(ctx)}/install-stamp.json (release ≤ v2026.9.24, or no stamp)`, mode: 'override', vars: { [OLD_RELEASE]: '1' }, live: true })
   return out.filter(Boolean)
@@ -97,14 +98,23 @@ function inject(ctx) {
   const root = hermesRoot(ctx.env, ctx.home)
   if (!ctx.listDir(root).length) return { notes: [{ code: CODE.harnessNote, text: `${root} does not exist (Hermes is not installed for this user), so no trust entry is written; after installing Hermes, run asight collector uninstall and install again` }] }
   const profiles = path.join(root, 'profiles')
-  const files = [path.join(root, '.env'), ...ctx.listDir(profiles).sort().filter((n) => ctx.listDir(path.join(profiles, n)).length).map((n) => path.join(profiles, n, '.env'))]
+  const homes = [root, ...ctx.listDir(profiles).sort().filter((n) => ctx.listDir(path.join(profiles, n)).length).map((n) => path.join(profiles, n))]
+  const files = homes.map((h) => path.join(h, '.env'))
+  // the checkouts in use: the default, and the one a running hermes (its TUI children) or this shell names
+  const checkouts = [...new Set([path.join(root, 'hermes-agent'), ...[ctx.env, ...ctx.running].map((e) => e.get('HERMES_PYTHON_SRC_ROOT')).filter((v) => typeof v === 'string' && path.isAbsolute(v))])]
   const bundle = path.join(ctx.collectorDir, 'ca', 'combined-hermes.pem')
   const old = oldRelease(ctx.readText, path.join(root, 'hermes-agent')) === true
-  const seen = new Set() // CA files the block covers: the user's lines it puts out of effect, the launch env it overrides
+  // CA files the block covers: the same keys in each home's .env and .op.env and in the checkout .env (all out of effect
+  // once the block is in the home .env), and the launch env it overrides
+  const seen = new Set()
   const see = (v) => { if (typeof v === 'string' && v !== '' && !v.startsWith(ctx.collectorDir + path.sep)) seen.add(v) }
-  for (const f of files) for (const [k, v] of parseDotenv(ctx.readText(f) || '')) if (COVERED.includes(k)) see(v)
+  for (const f of [...homes.flatMap((h) => [path.join(h, '.env'), path.join(h, '.op.env')]), ...checkouts.map((c) => path.join(c, '.env'))]) for (const [k, v] of parseDotenv(ctx.readText(f) || '')) if (COVERED.includes(k)) see(v)
   for (const env of [ctx.env, ...ctx.running]) for (const k of COVERED) see(env.get(k))
   const notes = [...seen].filter((v) => !path.isAbsolute(v)).map((v) => ({ code: CODE.relativePath, text: `${v} is a relative CA path; its certificates are not carried over into ${path.basename(bundle)}` }))
+  // a home .env asight creates turns the checkout .env from override into fill for that home (D37⑤ observer effect)
+  const flipped = files.filter((f) => ctx.readText(f) == null)
+  const checkoutEnvs = checkouts.map((c) => path.join(c, '.env')).filter((f) => ctx.readText(f) != null)
+  if (flipped.length && checkoutEnvs.length) notes.push({ code: CODE.harnessNote, text: `${flipped.join(', ')} does not exist, so asight creates it for its block; Hermes then reads ${checkoutEnvs.join(', ')} as a fill instead of an override, so its keys no longer win over the environment Hermes is started with` })
   const managed = ctx.env.get('HERMES_MANAGED_DIR') || MANAGED[ctx.os]
   const managedVars = managed ? new Map(parseDotenv(ctx.readText(path.join(managed, '.env')) || '')) : new Map()
   for (const k of COVERED) if (managedVars.has(k)) notes.push({ code: CODE.harnessNote, text: `${path.join(managed, '.env')} sets ${k}; Hermes reads that file last, so it wins over asight's block and Hermes is not captured while it is there` })
