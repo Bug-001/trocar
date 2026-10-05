@@ -46,7 +46,7 @@ test('tracker: same program — no CA variable → observe verdict; CA variable 
   assert.deepEqual(redirector.calls, [['watch', 100, false], ['watch', 101, true]])
   const [a, b] = tracker.agents()
   assert.deepEqual([a.trusted, a.reason, b.trusted, b.reason, b.trustVar], [false, 'var-missing', true, 'ok', 'EXTRA_CA'])
-  assert.deepEqual(tracker.metaFor(101), { agent: 'alpha', exe: '/opt/alpha' })
+  assert.deepEqual(tracker.metaFor(101), { agent: 'alpha', exe: '/opt/alpha', parentPid: 1, parentAgent: null })
 })
 
 test('tracker: a process no descriptor matches is never watched (S3); re-exec into a non-agent unwatches', async () => {
@@ -132,4 +132,91 @@ test('tracker: a layer read only at start is judged against installedAt when asi
   assert.equal((await byInstall.onExec(facts(901, { startedAt: 3_000 }))).trusted, true, 'asight wrote this value before the process started; the later edit was something else')
   assert.deepEqual(seen, ['/h/cfg.json'])
   assert.equal((await byInstall.onExec(facts(902, { startedAt: null }))).reason, 'start-time-unknown')
+})
+
+// A plugin harness (D37④): trust only through the per-pid marker its plugin writes (4.6 「标记」).
+const plugged = { ...agent, name: 'beta', hosts: ['api.beta.test'], signatures: { linux: { match: [{ exe: /\/beta$/ }], longLived: [{ argv: [/^serve$/] }] } },
+  trust: { chain: [{ var: 'EXTRA_CA', semantic: 'append' }, { var: 'asight:marker', semantic: 'append' }], refine: (r) => (r.reason === 'var-missing' ? 'no-marker' : null) } }
+function markerRig(o = {}) {
+  const markerDir = fs.mkdtempSync(path.join(dir, 'run-trust-'))
+  const redirector = fakeRedirector()
+  let onName = null; const timers = []; let clock = 1_000_000
+  const tracker = createTracker({ redirector, registry: createRegistry([agent, plugged]), trust: createTrustChecker({ caCertPem: ca.certPem }), home: dir,
+    markerDir, caPem: PEM, watchDir: (d, cb) => { assert.equal(d, markerDir); onName = cb; return () => {} },
+    now: () => clock, setTimer: (fn, ms) => { timers.push({ fn, ms }); return { unref() {} } }, ...o })
+  tracker.start()
+  return { redirector, tracker, markerDir, timers, tick: (ms) => { clock += ms }, appear: async (pid, ticks) => { fs.writeFileSync(path.join(markerDir, String(pid)), `${ticks}\n`); onName(String(pid)); await settle() }, get clock() { return clock } }
+}
+
+test('tracker: a plugin marker that appears after exec re-judges that process; until then it is marker-pending; one of another start time is marker-stale (4.6 「标记」, T12)', async () => {
+  const r = markerRig()
+  r.redirector.emit('exec', facts(800, { exe: '/opt/beta', argv: ['beta'], startTicks: '9001', startedAt: r.clock })); await settle()
+  assert.deepEqual([r.tracker.describe(800).trusted, r.tracker.describe(800).reason], [false, 'marker-pending'])
+  assert.equal(r.timers.length, 1, 'the end of the grace is scheduled once')
+  await r.appear(800, 9000) // an earlier process with this pid
+  assert.deepEqual([r.tracker.describe(800).trusted, r.tracker.describe(800).reason], [false, 'marker-stale'])
+  await r.appear(800, 9001)
+  assert.deepEqual([r.tracker.describe(800).trusted, r.tracker.describe(800).trustVia, r.tracker.describe(800).trustVar], [true, 'plugin marker', 'asight:marker'])
+  assert.deepEqual(r.redirector.calls, [['watch', 800, false], ['watch', 800, false], ['watch', 800, true]])
+  r.redirector.emit('exec', facts(801, { exe: '/opt/alpha', startTicks: '1', startedAt: r.clock })); await settle()
+  fs.writeFileSync(path.join(r.markerDir, '801'), '1\n'); r.redirector.calls.length = 0; await r.appear(801, 1)
+  assert.deepEqual([r.tracker.describe(801).trusted, r.tracker.describe(801).reason], [false, 'var-missing'], 'a harness without a plugin entry never trusts a marker')
+  await r.appear(999, 5); await r.appear('junk.pem', 5)
+  assert.deepEqual(r.redirector.calls.filter((c) => c[1] !== 801), [], 'markers of unknown pids and stray names change nothing')
+  r.redirector.emit('exit', { pid: 800 }); await settle()
+  assert.ok(!fs.existsSync(path.join(r.markerDir, '800')), 'the marker of an exited pid is removed')
+})
+
+test('tracker: no marker by the end of the grace → the harness reason (no-marker), judged by the scheduled re-judge; a CA file that lost the asight CA is not trusted by its marker', async () => {
+  const r = markerRig()
+  r.redirector.emit('exec', facts(810, { exe: '/opt/beta', argv: ['beta'], startTicks: '7', startedAt: r.clock })); await settle()
+  assert.equal(r.tracker.describe(810).reason, 'marker-pending')
+  r.tick(10_001)
+  r.timers[0].fn(); await settle()
+  assert.deepEqual([r.tracker.describe(810).trusted, r.tracker.describe(810).reason], [false, 'no-marker'])
+  r.redirector.emit('exec', facts(811, { exe: '/opt/beta', argv: ['beta'], startTicks: '8', startedAt: r.clock - 60_000 })); await settle()
+  assert.equal(r.tracker.describe(811).reason, 'no-marker', 'a process found long after its start is not pending')
+  const other = createCa(); const foreign = path.join(dir, 'foreign.pem'); fs.writeFileSync(foreign, other.certPem)
+  const r2 = markerRig({ caPem: foreign })
+  r2.redirector.emit('exec', facts(812, { exe: '/opt/beta', argv: ['beta'], startTicks: '9', startedAt: r2.clock })); await settle()
+  await r2.appear(812, 9)
+  assert.deepEqual([r2.tracker.describe(812).trusted, r2.tracker.describe(812).reason], [false, 'ca-not-in-file'], 'trust is confirmed by fingerprint, never by the marker alone')
+})
+
+test('tracker: hosts a harness declares as not via the trust path are never decrypted, under all and operator hosts too (4.6 不经信任路径, T12)', async () => {
+  const gamma = { ...agent, name: 'gamma', signatures: { linux: { match: [{ exe: /\/gamma$/ }] } },
+    bypass: (ctx) => [{ host: 'models.alpha.test', reason: 'before-plugin' }, ...(ctx.env.get('ALPHA_WS') ? [{ host: 'api.alpha.test', reason: 'ws-path' }] : [])] }
+  const { redirector, tracker } = rig([gamma])
+  redirector.emit('exec', facts(600, { exe: '/opt/gamma', env: new Map([['EXTRA_CA', PEM]]) }))
+  redirector.emit('exec', facts(601, { exe: '/opt/gamma', env: new Map([['EXTRA_CA', PEM], ['ALPHA_WS', '1']]) })); await settle()
+  assert.equal(tracker.policy({ pid: 600 }, 'api.alpha.test'), true)
+  assert.equal(tracker.policy({ pid: 601 }, 'api.alpha.test'), false, 'the ws path shares the API host: passthrough for that process only')
+  tracker.setPolicy({ mode: 'all', extraHosts: ['models.alpha.test'] })
+  assert.equal(tracker.policy({ pid: 600 }, 'models.alpha.test'), false, 'all and operator hosts do not override it')
+  assert.equal(tracker.policy({ pid: 600 }, 'anything.example'), true)
+  assert.deepEqual(tracker.agents().find((x) => x.pid === 601).bypass, [{ host: 'models.alpha.test', reason: 'before-plugin' }, { host: 'api.alpha.test', reason: 'ws-path' }])
+})
+
+test('tracker: a long-lived process missing the variable is env-frozen; a config file that exists but cannot be read is reported, not taken for absent (D38)', async () => {
+  const r = markerRig()
+  r.redirector.emit('exec', facts(820, { exe: '/opt/beta', argv: ['beta', 'serve'], startTicks: '1', startedAt: r.clock - 60_000 })); await settle()
+  assert.equal(r.tracker.describe(820).reason, 'no-marker', 'a plugin harness says the marker, not env-frozen')
+  r.redirector.emit('exec', facts(821, { exe: '/opt/alpha', argv: ['alpha'] })); await settle()
+  const longLived = { ...agent, name: 'delta', signatures: { linux: { match: [{ exe: /\/delta$/ }], longLived: [{ argv: [/^serve$/] }] } },
+    layers: (ctx) => [ctx.readText('/locked/.env'), ctx.readText('/absent/.env')].filter(Boolean).map(() => null) }
+  const errs = []
+  const t = createTracker({ redirector: fakeRedirector(), registry: createRegistry([longLived]), trust: createTrustChecker({ caCertPem: ca.certPem }), home: dir,
+    readFile: (f) => { const e = new Error(f); e.code = f.startsWith('/locked') ? 'EACCES' : 'ENOENT'; throw e } })
+  const row = await t.onExec(facts(822, { exe: '/opt/delta', argv: ['delta', 'serve'] }))
+  assert.deepEqual([row.reason, row.readErrors], ['env-frozen', ['/locked/.env: EACCES']], errs.join())
+})
+
+test('tracker: rescan removes markers whose pid is gone', async () => {
+  const r = markerRig()
+  fs.writeFileSync(path.join(r.markerDir, '4242'), '1\n'); fs.writeFileSync(path.join(r.markerDir, 'notes.txt'), 'x')
+  r.redirector.live = [facts(830, { exe: '/opt/beta', argv: ['beta'], startTicks: '3', source: 'scan', startedAt: r.clock })]
+  fs.writeFileSync(path.join(r.markerDir, '830'), '3\n')
+  await r.tracker.rescan()
+  assert.deepEqual(fs.readdirSync(r.markerDir).sort(), ['830', 'notes.txt'])
+  assert.equal(r.tracker.describe(830).trusted, true)
 })

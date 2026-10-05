@@ -44,3 +44,45 @@ export function parseJsonc(text) {
   try { return { data: JSON.parse(out), errors: 0 } } catch { return { data: null, errors: 1 } }
 }
 
+
+// The Node.js release an executable is, read from the file without running it (4.6 lab ⑤, G24): a node binary embeds
+// its own download URL `…/download/release/vX.Y.Z/…` (process.release.sourceUrl). Streamed in 1 MiB chunks, cached per
+// file identity (dev, inode, size, mtime). null when the file is unreadable or not a Node release build.
+const NODE_RELEASE = Buffer.from('/download/release/v')
+const versionCache = new Map()
+export function nodeReleaseVersion(file, { fs: f = fs, chunk = 1 << 20 } = {}) {
+  let st
+  try { st = f.statSync(String(file).replace(/ \(deleted\)$/, '')) } catch { return null }
+  const key = `${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}`
+  if (versionCache.has(key)) return versionCache.get(key)
+  let found = null
+  let fd = null
+  try {
+    fd = f.openSync(String(file).replace(/ \(deleted\)$/, ''), 'r')
+    const buf = Buffer.alloc(chunk + 64)
+    let carry = 0
+    for (let pos = 0; pos < st.size && !found;) {
+      const n = f.readSync(fd, buf, carry, chunk, pos)
+      if (n <= 0) break
+      pos += n
+      const view = buf.subarray(0, carry + n)
+      const i = view.indexOf(NODE_RELEASE)
+      if (i >= 0) {
+        const m = /^(\d+)\.(\d+)\.(\d+)\//.exec(view.subarray(i + NODE_RELEASE.length, i + NODE_RELEASE.length + 24).toString('latin1'))
+        if (m) { found = `${m[1]}.${m[2]}.${m[3]}`; break }
+      }
+      carry = Math.min(64, view.length)
+      view.copy(buf, 0, view.length - carry) // keep a tail so a marker cut by the chunk edge is still found
+    }
+  } catch { found = null } finally { if (fd != null) try { f.closeSync(fd) } catch { /* ignore */ } }
+  versionCache.set(key, found)
+  return found
+}
+
+// a.b.c ≥ x.y.z
+export function versionAtLeast(v, min) {
+  if (!v) return false
+  const a = v.split('.').map(Number); const b = min.split('.').map(Number)
+  for (let i = 0; i < 3; i++) { if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0) }
+  return true
+}

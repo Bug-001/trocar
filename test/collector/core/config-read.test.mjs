@@ -26,3 +26,19 @@ test('config-read: JSONC strips comments and trailing commas but not inside stri
   assert.equal(data.s, '/* keep */')
   assert.deepEqual(parseJsonc('{ nope'), { data: null, errors: 1 })
 })
+
+test('config-read: the Node release of an executable is read from its embedded download URL, also across a chunk edge; never by running it', async () => {
+  const { nodeReleaseVersion, versionAtLeast } = await import('../../../src/collector/core/config-read.mjs')
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-nv-'))
+  try {
+    const url = Buffer.from('https://nodejs.org/download/release/v22.18.0/node-v22.18.0.tar.gz')
+    const bin = path.join(d, 'node'); fs.writeFileSync(bin, Buffer.concat([Buffer.alloc(100, 1), url, Buffer.alloc(50)]))
+    assert.equal(nodeReleaseVersion(bin), '22.18.0')
+    const edge = path.join(d, 'node-edge'); fs.writeFileSync(edge, Buffer.concat([Buffer.alloc(30, 2), url])) // the marker straddles 16-byte chunks
+    assert.equal(nodeReleaseVersion(edge, { chunk: 16 }), '22.18.0')
+    const other = path.join(d, 'bun'); fs.writeFileSync(other, 'not node')
+    assert.equal(nodeReleaseVersion(other), null)
+    assert.equal(nodeReleaseVersion(path.join(d, 'missing')), null)
+    assert.deepEqual([versionAtLeast('22.19.0', '22.19.0'), versionAtLeast('22.18.9', '22.19.0'), versionAtLeast('24.0.0', '22.19.0'), versionAtLeast(null, '1.0.0')], [true, false, true, false])
+  } finally { fs.rmSync(d, { recursive: true, force: true }) }
+})

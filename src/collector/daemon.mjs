@@ -20,7 +20,7 @@ import { createLeafIssuer } from './core/tls/leaf.mjs'
 import { createRecordStore } from './core/record/store.mjs'
 import { createEngine } from './core/engine/engine.mjs'
 import { appendEvent, recentFailures, createFailureRecorder } from './core/events.mjs'
-import { EVENT, trustReasonText } from './core/codes.mjs'
+import { EVENT, CODE, trustReasonText } from './core/codes.mjs'
 
 export { loadArch } // the CLI reaches arch only through this file (layering rule 5)
 
@@ -34,7 +34,7 @@ export async function loadParts({ arch = null, harnesses = null, env = process.e
   return { arch: A, os: A.os, harnesses: list, registry, scan: () => redirector.scan(), match: (f) => registry.match(f) }
 }
 
-export const collectorPaths = (dir = collectorHome(asightHome())) => ({ dir, caDir: path.join(dir, 'ca'), state: path.join(dir, 'state.json'), lock: path.join(dir, 'lock') })
+export const collectorPaths = (dir = collectorHome(asightHome())) => ({ dir, caDir: path.join(dir, 'ca'), state: path.join(dir, 'state.json'), lock: path.join(dir, 'lock'), markers: path.join(dir, 'run', 'trust') })
 const errText = (e) => String((e && e.message) || e)
 
 // upstreamCa: test seam only (the CLI never passes it). Upstreams are verified against Node's default store, so a
@@ -89,18 +89,21 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     const onVerdict = (row) => {
       if (row.watchError) failure('watch', new Error(`watching ${row.agent} pid ${row.pid} failed: ${row.watchError}`))
       if (row.configError) failure('harness', new Error(`${row.agent} pid ${row.pid}: reading its configuration failed (${row.configError}); judged on its known hosts only`))
+      for (const r of row.readErrors || []) failure('harness', Object.assign(new Error(`${row.agent} pid ${row.pid}: ${r} exists but cannot be read; judged as if it were absent`), { code: CODE.configUnreadable }), { pid: row.pid, agent: row.agent })
       const last = recordedUntrusted.get(row.pid)
       if (row.trusted) {
         if (last != null) { recordedUntrusted.delete(row.pid); note({ event: EVENT.agentTrusted, pid: row.pid, agent: row.agent, code: 'ok', reason: `trusted now (${row.trustVar} via ${row.trustVia})` }) }
         return
       }
-      if (last === row.reason) return // recorded once per pid and reason
+      if (last === row.reason || row.reason === 'marker-pending') return // once per pid and reason; a plugin has up to 10 s to report (4.6 「标记」)
       recordedUntrusted.set(row.pid, row.reason)
       const d = registry.get(row.agent)
       const text = (d && d.trust && d.trust.hints && d.trust.hints[row.reason]) || trustReasonText(row.reason) || row.reason
       note({ event: EVENT.agentUntrusted, pid: row.pid, agent: row.agent, code: row.reason, reason: text, via: row.trustVia ?? null })
     }
-    const tracker = createTracker({ redirector, registry, trust: createTrustChecker({ caCertPem: ca.certPem }), onVerdict,
+    // plugins (dsh, OpenCode) write their per-pid marker here; it exists while the daemon runs (0700, the operator's)
+    fs.mkdirSync(P.markers, { recursive: true, mode: 0o700 })
+    const tracker = createTracker({ redirector, registry, trust: createTrustChecker({ caCertPem: ca.certPem }), onVerdict, markerDir: P.markers, caPem: ca.paths.pem,
       installedAt: (l) => installedAt(manifest, l), // config-after-start is judged against when asight wrote the value
       onError: (e, at) => failure('tracker', Object.assign(new Error(`pid ${at.pid} (${at.phase}): ${errText(e)}${at.phase === 'judge' ? '; it is not watched, its connections go direct' : ''}`), { code: e && e.code }), at) })
     let helperDown = null

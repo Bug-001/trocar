@@ -420,3 +420,30 @@ test('daemon: a step that fails while stopping is recorded with its reason, and 
     assert.ok(!fs.existsSync(s.sock), 'and the control socket')
   } finally { p.done(); s.done() }
 })
+
+test('daemon: a plugin harness is marker-pending (not recorded) until its marker appears in run/trust, then trusted at once; a config file that cannot be read is a config-unreadable failure (4.6 「标记」, D38)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const locked = path.join(s.home, 'locked.env'); fs.writeFileSync(locked, 'X=1\n'); fs.chmodSync(locked, 0o000)
+  const plug = { name: 'plug-agent', runtime: 'node', hosts: ['api.plug.test'], signatures: { linux: { match: [{ exe: /\/plug-agent$/ }] } },
+    layers: (ctx) => { ctx.readText(locked); return [] },
+    trust: { chain: [{ var: 'NODE_EXTRA_CA_CERTS', semantic: 'append' }, { var: 'asight:marker', semantic: 'append' }], refine: (r) => (r.reason === 'var-missing' ? 'no-marker' : null) } }
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc, plug] })
+  try {
+    const markers = path.join(s.collector, 'run', 'trust')
+    assert.equal(fs.statSync(markers).mode & 0o777, 0o700, 'the marker dir exists while the daemon runs, the operator\'s only')
+    const ticks = nowTicks(p)
+    p.add(9191, { uid: UID, exe: '/opt/plug-agent', argv: ['plug-agent'], cwd: s.root, env: { HOME: s.home }, startTicks: ticks })
+    await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 9191, pid: 9191, comm: 'plug-agent', filename: '/opt/plug-agent', ts_ns: 1 })
+    const pending = await until(() => d.tracker.describe(9191))
+    assert.deepEqual([pending.trusted, pending.reason], [false, 'marker-pending'])
+    fs.writeFileSync(path.join(markers, '9191'), `${ticks}\n`) // what the plugin writes once it added the CA
+    const row = await until(() => { const r = d.tracker.describe(9191); return r && r.trusted ? r : null })
+    assert.equal(row.trustVia, 'plugin marker')
+    assert.equal((await clients[0].raw({ op: '__watched' })).watch['9191'], 1, 'decrypted from its next connection')
+    assert.ok(!flowsOf(s).some((f) => f.event === 'agent-untrusted' && f.pid === 9191), 'a pending plugin is not a failure')
+    const unreadable = flowsOf(s).find((f) => f.event === 'failure' && f.code === 'config-unreadable' && f.pid === 9191)
+    if (process.getuid() !== 0) assert.ok(unreadable && unreadable.reason.includes('locked.env'), 'the unreadable file is named, not taken for absent')
+  } finally { await d.stop(); fs.chmodSync(locked, 0o600); p.done(); s.done() }
+})

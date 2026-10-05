@@ -21,6 +21,20 @@ const PEM_RE = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g
 
 const FALSEY = /^(false|0|no|off)$/i
 
+// A plugin entry (D37④: dsh, OpenCode) never shows in environ. The plugin's only write is a per-pid marker,
+// <dir>/<pid>, holding the process's start time as the kernel reports it (Linux: field 22 of /proc/<pid>/stat),
+// written only when it really added the asight CA (4.6 「标记」). A marker whose start time differs belongs to an
+// earlier process with the same pid: ignored (`marker-stale`), so a reused pid is never decrypted on a dead process's
+// word (T7). The layer names the asight CA file under the pseudo-variable `asight:marker`, so trust is still confirmed
+// by fingerprint: a marker next to a CA file that lost the asight CA does not trust.
+export const MARKER_VAR = 'asight:marker'
+export function markerLayer({ dir, pid, startTicks, caPem, readText }) {
+  const text = readText(path.join(dir, String(pid)))
+  if (text == null) return null
+  const layer = { name: 'plugin marker', file: path.join(dir, String(pid)), mode: 'override', vars: { [MARKER_VAR]: caPem }, live: true }
+  return startTicks != null && text.trim() === String(startTicks) ? layer : { ...layer, ignored: 'marker-stale' }
+}
+
 // The CERTIFICATE PEM blocks of a file, nothing else (a user's CA file may hold a private key too: 4.6 「合并包」).
 export const certBlocks = (text) => String(text).match(PEM_RE) || []
 
@@ -106,7 +120,7 @@ export function createTrustChecker({ caCertPem, readFile = fs.readFileSync, stat
     return { trusted: false, reason, ...at(top, { file: topLook.file }), env }
   }
 
-  function checkOne(trust, environ, layers, cwd, startedAt, argv) {
+  function checkOne(trust, environ, layers, cwd, startedAt, argv, extra) {
     const spec = { ...trust, environ }
     // A layer read only at start counts if its value was there when the process started: `since` (when asight
     // installed that very value, from the install manifest) else the file's mtime. An unknown start time or an
@@ -120,16 +134,17 @@ export function createTrustChecker({ caCertPem, readFile = fs.readFileSync, stat
         if (evaluate(spec, [...active, l], cwd).trusted) { res.reason = l.ignored || (startedAt == null ? 'start-time-unknown' : 'config-after-start'); res.via = l.name; break }
       }
     }
-    if (!res.trusted && trust.refine) res.reason = trust.refine(res, res.env, { argv }) || res.reason
+    if (!res.trusted && trust.refine) res.reason = trust.refine(res, res.env, { argv, ...extra }) || res.reason
     return res
   }
 
-  function check(trust, { environ = new Map(), layers = [], cwd = '/', startedAt = null, argv = [] } = {}) {
-    let res = checkOne(trust, environ, layers, cwd, startedAt, argv)
+  // extra: what a harness's refine may also look at besides argv (e.g. the process's runtime version), lazily.
+  function check(trust, { environ = new Map(), layers = [], cwd = '/', startedAt = null, argv = [], extra = {} } = {}) {
+    let res = checkOne(trust, environ, layers, cwd, startedAt, argv, extra)
     if (res.trusted) {
       for (const v of trust.variants || []) {
         if (v.when && (res.env.get(v.when) || '') === '') continue
-        const r = checkOne({ ...v, refine: trust.refine }, environ, layers, cwd, startedAt, argv)
+        const r = checkOne({ ...v, refine: trust.refine }, environ, layers, cwd, startedAt, argv, extra)
         if (!r.trusted) { res = { ...r, variant: v.name }; break }
       }
     }

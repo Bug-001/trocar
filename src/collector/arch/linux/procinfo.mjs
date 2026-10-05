@@ -168,6 +168,16 @@ export function readStartTime(pid, { root = '/proc', hz = 100, now = Date.now } 
   return btime ? (Number(btime[1]) + ticks / hz) * 1000 : null
 }
 
+/** Process start in clock ticks since boot, as the kernel reports it (/proc/<pid>/stat field 22), as a string: the
+ *  value a trust plugin writes into its per-pid marker (4.6 「标记」) and the tracker compares verbatim. */
+export function readStartTicks(pid, { root = '/proc' } = {}) {
+  try {
+    const stat = fs.readFileSync(path.join(root, String(pid), 'stat'), 'utf8')
+    const v = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[19]
+    return /^\d+$/.test(v || '') ? v : null
+  } catch { return null }
+}
+
 /** OS-neutral ProcFacts (RFC 4.6 §身份与信任; contract in core/redirector.mjs). `env` is read on first access
  *  and memoised: most processes are rejected on exe/argv alone, and environ is the costly read. */
 export function readFacts(pid, { root = '/proc', source = 'exec' } = {}) {
@@ -175,7 +185,7 @@ export function readFacts(pid, { root = '/proc', source = 'exec' } = {}) {
   const exe = readExe(pid, { root })
   if (!st || exe == null) return null
   let env = null
-  const facts = { os: 'linux', pid, ppid: st.ppid, uid: st.uid, exe, argv: readArgv(pid, { root }), env: null, cwd: readCwd(pid, { root }), startedAt: readStartTime(pid, { root }), source }
+  const facts = { os: 'linux', pid, ppid: st.ppid, uid: st.uid, exe, argv: readArgv(pid, { root }), env: null, cwd: readCwd(pid, { root }), startedAt: readStartTime(pid, { root }), startTicks: readStartTicks(pid, { root }), source }
   Object.defineProperty(facts, 'env', { enumerable: true, get() { return env || (env = readEnviron(pid, { root })) } })
   return facts
 }
