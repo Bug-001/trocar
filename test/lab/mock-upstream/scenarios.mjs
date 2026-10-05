@@ -2,8 +2,9 @@
 // Every name here has a row in README.md's scenario table (a test keeps the two in sync).
 import { createHash } from 'node:crypto'
 
-// A scenario is data the dialects and the transport read: `status` makes it an HTTP error, `fault`
-// and `slowHeaders` break the response on the wire (transport.mjs).
+// A scenario is data the dialects and the transport read: `status` makes it an HTTP error, `extra`
+// adds deltas after the reply text, and `fault` / `slowHeaders` / `drip` / `splitUtf8` / `encoding`
+// / `framing` / `keepAlive` change how the bytes go on the wire (transport.mjs).
 export const SCENARIOS = {
   ok: {},
   thinking: { thinking: true },
@@ -19,6 +20,15 @@ export const SCENARIOS = {
   'stall-after-first': { fault: 'stall' },
   'slow-headers': { slowHeaders: true },
   'headers-then-reset': { fault: 'headers-reset' },
+  'long-stream': { extra: () => Array.from({ length: 200 }, (_, i) => ` w${i}`) },
+  'slow-drip': { drip: true },
+  'unicode-split': { extra: () => [' 你好🙂', ' 你好🙂'], splitUtf8: true },
+  'big-response': { extra: () => Array.from({ length: 128 }, (_, i) => `\n[block ${i}] `.padEnd(16384, 'abcdefghijklmnopqrstuvwxyz0123456789')) },
+  gzip: { encoding: 'gzip' },
+  br: { encoding: 'br' },
+  'content-length': { framing: 'length' },
+  'conn-close': { framing: 'close' },
+  keepalive: { keepAlive: true },
 }
 
 // What a relay in front of the provider (nginx here) answers when the provider is unreachable.
@@ -91,12 +101,13 @@ export function shellCall(names) {
 // summaries, compaction) carry the typed marker but no tools.
 export function plan(seen, raw, body, sc = {}) {
   const head = seen.kind === 'tool_result' ? 'mock-reply: tool-result-received ' : 'mock-reply: '
-  const text = `${head}${Array.from(seen.text || '').slice(0, 80).join('')} sha256:${sha256(raw).slice(0, 12)}`
+  const reply = `${head}${Array.from(seen.text || '').slice(0, 80).join('')} sha256:${sha256(raw).slice(0, 12)}`
+  const extra = sc.extra ? sc.extra() : [], text = reply + extra.join('')
   const thinking = sc.thinking ? `mock-thinking: the last user turn is ${(seen.text || '').length} chars long` : null
   const names = (Array.isArray(body.tools) ? body.tools : []).map((t) => t?.name || t?.function?.name).filter(Boolean)
   const tool = sc.tool && seen.kind !== 'tool_result' && names.length ? shellCall(names) : null
   return {
-    model: body.model || 'mock-model', text, parts: splitEvery(text, 12),
+    model: body.model || 'mock-model', text, parts: [...splitEvery(reply, 12), ...extra],
     thinking, thinkingParts: thinking && splitEvery(thinking, 12), tool, toolArgs: tool && JSON.stringify(tool.input),
     inputTokens: tokens(raw.length), outputTokens: tokens(text.length + (thinking || '').length),
   }

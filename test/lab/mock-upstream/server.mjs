@@ -143,10 +143,10 @@ function adminServer(state, logFile) {
   })
 }
 
-// delays: { stallMs } — how long stall-after-first / slow-headers hold (30 s like a hung provider;
-// tests shrink it). Also settable at runtime with POST /__mock/config.
+// delays: { stallMs, dripMs } — how long stall-after-first / slow-headers hold (30 s like a hung
+// provider; tests shrink it) and the gap between slow-drip deltas. Also POST /__mock/config.
 export async function startMockUpstream({ host = '127.0.0.1', port = 0, adminPort = 0, logDir = null, delays = {} } = {}) {
-  const state = { queue: [], log: [], cfg: { stallMs: 30000, ...delays } }
+  const state = { queue: [], log: [], cfg: { stallMs: 30000, dripMs: 250, ...delays } }
   const logFile = logDir ? path.join(logDir, 'log.ndjson') : null
   if (logFile) { fs.mkdirSync(logDir, { recursive: true }); fs.writeFileSync(logFile, '') }
   // With a logDir the file is the only copy: a long-lived lab process serving real agents would
