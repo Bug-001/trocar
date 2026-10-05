@@ -7,6 +7,7 @@
 // receives only canonical `analyzed` (invariant 3 / AC-3). Pure over its `records` input;
 // human-title / cwd enrichment is injected via `enrich(id)` so this module stays testable.
 import { assembleSession, sessionIdOf, headersOf, respOf } from './assemble.mjs';
+import { harnessOf as harnessOfRecord, LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
 
 // tolerate both envelope shapes: demo v0 `request_headers` + product D10 `req_headers` (Codex).
 const anyHeaders = (recs) => headersOf(recs.find((r) => r.request_headers || r.req_headers));
@@ -18,8 +19,8 @@ const isProbe = (r) => /count_tokens/.test(r.endpoint || '');
 const isOther = (r) => !r.is_llm_call && !isProbe(r);
 
 // ── grouping ────────────────────────────────────────────────────────────────
-// Records carrying x-claude-code-session-id belong to a session; the rest are the
-// session-less control plane (telemetry / config / account).
+// Records carrying their harness's session key (src/dissect/harnesses.mjs, RFC 3.4) belong to a
+// session; the rest are the session-less control plane (telemetry / config / account).
 export function groupSessions(records) {
   const g = new Map();
   for (const r of records) {
@@ -46,29 +47,21 @@ function entrypointOf(recs) {
   if (app === 'cli' || /cli|sdk-cli/.test(ua)) return 'cli';
   return null;
 }
-// harness + provider identity from the request UA — drives the board's agent chip via a TABLE
-// (not a hardcode), so onboarding Codex/DeepSeek is a new row here + a new server-side analyzer,
-// with the frontend chip table untouched (invariant 3 / AC-3).
-// A harness that can be pointed at ANY backend (OpenCode) MUST NOT have its provider inferred from
-// its name — we report the wire dialect we actually saw, or null. Never claim a provider unobserved.
+// D37 ①: harness = proc.agent, through the ONE table (src/dissect/harnesses.mjs) the ETL and sharder
+// also read. The UA is consulted only for legacy records without proc, and that answer is flagged
+// harness_inferred so the chip can say so. The first record WITH proc decides; else the first with headers.
+// provider = the board's PRICING key (gate G10): fixed for the pre-D37 harnesses, otherwise the wire
+// dialect actually observed, or null. A harness that can be pointed at ANY backend (OpenCode) MUST NOT
+// have its provider inferred from its name — never claim a provider unobserved.
 function wireProviderOf(recs) {
-  for (const r of recs || []) {
-    const ep = String((r && r.endpoint) || '').split('?')[0];
-    if (/(^|\/)(responses|chat\/completions)$/.test(ep)) return 'openai';
-    if (/(^|\/)messages$/.test(ep)) return 'anthropic';
-  }
+  for (const r of recs || []) { const p = wireProviderOfEndpoint(r && r.endpoint); if (p) return p; }
   return null;
 }
 function harnessOf(recs) {
-  const h = anyHeaders(recs);
-  const ua = String(h['user-agent'] || h['originator'] || '').toLowerCase();
-  if (/claude-cli|claude-code/.test(ua)) return { harness: 'claude-code', provider: 'anthropic' };
-  // before /codex/: OpenCode is provider-agnostic, so its provider comes from the wire (D3 amended
-  // 2026-07-18 — a 4th harness on the EXISTING OpenAI-Responses wire, zero new dissector).
-  if (/opencode/.test(ua)) return { harness: 'opencode', provider: wireProviderOf(recs) };
-  if (/codex/.test(ua)) return { harness: 'codex', provider: 'openai' };
-  if (/deepseek/.test(ua)) return { harness: 'deepseek-cli', provider: 'deepseek' };
-  return { harness: null, provider: null };
+  const list = recs || [];
+  const h = harnessOfRecord(list.find((x) => x && x.proc) || list.find((x) => x && (x.req_headers || x.request_headers)));
+  if (!h.id) return { harness: null, harness_inferred: false, provider: null };
+  return { harness: h.id, harness_inferred: h.inferred, provider: LEGACY_PROVIDER[h.id] ?? wireProviderOf(list) };
 }
 // a subagent turn carries its own x-claude-code-agent-id (differs from the main lane's absence)
 const hasSubagent = (recs) => recs.some((r) => String(headersOf(r)['x-claude-code-agent-id'] || '').trim());
@@ -86,6 +79,8 @@ function applyEnrich(base, enrich) {
     project_path: (info && info.cwd) || null,
     entrypoint: base.entrypoint ?? null,
     harness: base.harness ?? null,
+    // a meta.json written before D37 has no flag: that fold read only the UA, so its harness was inferred
+    harness_inferred: base.harness_inferred ?? (base.harness != null),
     provider: base.provider ?? null,
     title: (info && info.title) || null,
     calls: base.calls || 0,
@@ -100,7 +95,7 @@ function sessionMetaFor(id, recs, enrich) {
   return applyEnrich({
     session_id: id,
     entrypoint: entrypointOf(recs),
-    ...harnessOf(recs), // { harness, provider }
+    ...harnessOf(recs), // { harness, harness_inferred, provider }
     calls: llmRecs(recs).length,
     probes: probeRecs(recs).length,
     other: otherRecs(recs).length,

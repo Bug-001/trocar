@@ -11,6 +11,7 @@ import { reqIncompleteOf } from '../dissect/capture-labels.mjs'; // #21 request-
 import { blockSpans } from '../adapters/cc.mjs';
 import { slimBlock, compBuckets } from './blockmeta.mjs';
 import { mintRawRef, composeTextRef } from '../etl/orchestrator.mjs';
+import { sessionKeyOf } from '../dissect/harnesses.mjs';
 
 // D17④ 地面真相(RFC 3.3:65 · 独立字节护城河). The demo proxied prefix identity with the 32-bit
 // bounded content_hash SEQUENCE (collision-prone). Product MUST use a REAL full SHA-256 over the
@@ -63,10 +64,7 @@ function hydrateForBoard(r) {
   return out;
 }
 
-// session-id signals across harnesses: CC (x-claude-code-session-id / x-session-id) + Codex (session-id
-// / thread-id headers, = its prompt_cache_key). headersOf tolerates BOTH the demo v0 `request_headers`
-// and the product D10 `req_headers` envelope key, so a Codex D10 record groups into its session.
-const SIDH = ['x-claude-code-session-id', 'x-session-id', 'session-id', 'thread-id'];
+// headersOf tolerates BOTH the demo v0 `request_headers` and the product D10 `req_headers` envelope key.
 export const headersOf = (rec) => (rec && (rec.request_headers || rec.req_headers)) || {};
 // Envelope drift guard (R1, audit 2026-07-19). The product D10 envelope stores the response under
 // `resp` (src/capture/envelope.mjs); demo v0 used `response`. Readers MUST go through this helper —
@@ -75,10 +73,9 @@ export const headersOf = (rec) => (rec && (rec.request_headers || rec.req_header
 // while the pre-D10 test fixture kept them green. Mirrors headersOf: tolerate BOTH shapes forever,
 // because old captures on disk are still the user's data (invariant 2).
 export const respOf = (rec) => (rec && (rec.resp || rec.response)) || null;
+// Session key per harness (RFC 3.4 table, D37): read from the ONE table the ETL and sharder also use.
 export function sessionIdOf(rec) {
-  const h = headersOf(rec);
-  for (const k of SIDH) if (h[k]) return h[k];
-  return null;
+  return sessionKeyOf(rec).key;
 }
 export function recordsForSession(records, sessionId) {
   return records.filter((r) => sessionIdOf(r) === sessionId);

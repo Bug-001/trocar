@@ -22,7 +22,7 @@ test('the shipped sample loads and lands in exactly one session', () => {
   const { projects } = projectsView(records);
   const sessions = projects.flatMap((p) => p.sessions);
   assert.equal(sessions.length, 1, 'the demo should present one clean session, not a confusing set');
-  assert.equal(sessions[0].harness, 'claude-code');
+  assert.equal(sessions[0].harness, 'cc');
   assert.ok(sessions[0].calls >= 6, 'enough calls to make scrubbing meaningful');
 });
 

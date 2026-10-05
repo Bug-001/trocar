@@ -142,6 +142,9 @@ your machine — every path above still is. `asight desktop off` restores the co
   OpenCode get context replay, blocks, cache analysis and usage — their resource lanes render empty
   rather than guessing.
 - **DeepSeek is not supported** — no dissector yet.
+- **On captures without process identity the harness is a guess.** Sessions recorded by the MITM or
+  reverse proxy carry no `proc.agent`, so the board names their agent from the User-Agent and its chip
+  says so (「推断自 UA」). Sessions from the per-process collector are named by process, never by UA.
 - **DuckDB is a projection, not an analytics product.** Roughly a dozen canned queries, no query UI.
   Open the `.duckdb` file with any DuckDB client and write your own SQL.
 - **Non-verbatim data is labelled in place.** Raw NDJSON is the only source of truth; DuckDB is
