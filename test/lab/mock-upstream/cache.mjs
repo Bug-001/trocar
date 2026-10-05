@@ -12,10 +12,10 @@ const arr = (v) => (Array.isArray(v) ? v : [])
 
 // Who shares a cache: dialect, model and the credential, kept as a fingerprint only. Real providers
 // isolate by organization / workspace; the credential header stands in for that.
-function scopeOf(ctx, dialect, model) {
+function scopeOf(ctx, dialect, model, route = '') {
   const h = ctx.headers || {}
   const key = sha(String(h['x-api-key'] || h.authorization || '')).slice(0, 12)
-  return { dialect, model, key, seed: sha(JSON.stringify([dialect, model, key])) }
+  return { dialect, model, key, seed: sha(JSON.stringify([dialect, model, key, String(route ?? '')])) }
 }
 
 const live = (cache, h, now) => { const e = cache.entries.get(h); return e && e.expiresAt > now ? e : null }
@@ -80,6 +80,34 @@ export function anthropicUsage(ctx, body) {
   }
   const c1 = long - read, c5 = last - long
   return { input_tokens: total - last, cache_creation_input_tokens: c1 + c5, cache_read_input_tokens: read, cache_creation: { ephemeral_5m_input_tokens: c5, ephemeral_1h_input_tokens: c1 } }
+}
+
+// ── OpenAI Responses / Chat Completions and DeepSeek: automatic prefix caching ──
+// The prompt (tools, then Responses' instructions + input or Chat's messages) is cut into units of
+// 4 × unit bytes, and each unit's entry hashes the prefix up to its end; a hit is the run of leading
+// units earlier requests wrote. OpenAI: 128-token units, nothing reported under 1024, prompt_cache_key
+// as a hard partition, 5 min idle (24 h with prompt_cache_retention "24h"). DeepSeek: 64-token
+// units from the first, 1 h idle.
+export function prefixUsage(ctx, dialect, body) {
+  const cache = ctx.cache, model = String(body.model || 'mock-model'), deepseek = /deepseek/i.test(model)
+  const sc = scopeOf(ctx, dialect, model, deepseek ? '' : body.prompt_cache_key)
+  const input = typeof body.input === 'string' ? [{ role: 'user', content: body.input }] : arr(body.input)
+  const segs = [...arr(body.tools), ...(body.instructions == null ? [] : [body.instructions]), ...input, ...arr(body.messages)]
+  const buf = Buffer.from(segs.map((x) => JSON.stringify(x) ?? '').join(''))
+  const total = Math.max(1, Math.ceil(buf.length / 4))
+  const [unit, min, ttlMs] = deepseek ? [64, 64, HOUR] : [128, 1024, body.prompt_cache_retention === '24h' ? 24 * HOUR : 5 * MINUTE]
+  let hits = 0
+  if (cache?.enabled && total >= min) {
+    const now = cache.now(), size = unit * 4
+    prune(cache, now)
+    let h = sc.seed, missed = false
+    for (let n = 1; n * size <= buf.length; n++) {
+      h = sha(h, buf.subarray((n - 1) * size, n * size))
+      if (!missed && live(cache, h, now)) hits = n; else missed = true
+      put(cache, h, { dialect, model, key: sc.key, tokens: n * unit, ttlMs }, now) // refreshes a hit
+    }
+  }
+  return { total, cached: hits * unit >= min ? hits * unit : 0 }
 }
 
 // ── admin ──
