@@ -39,15 +39,18 @@ const minTokens = (model) => MIN_TOKENS.find(([re]) => re.test(model))?.[1] ?? 1
 // The prompt in the order the provider builds it (tools, system, messages), one block at a time,
 // cache_control dropped (a marker that moves must not change the prefix) and message blocks paired
 // with their role. A run of tool_use or of tool_result blocks in one message is one lookback position.
-function anthropicBlocks(body) {
+function anthropicSegs(body) {
   const out = []
   for (const t of arr(body.tools)) out.push({ seg: strip(t), cc: t?.cache_control })
   for (const b of blocksOf(body.system)) if (!BILLING.test(b?.text || '')) out.push({ seg: strip(b), cc: b?.cache_control })
   arr(body.messages).forEach((m, i) => {
     for (const b of blocksOf(m?.content)) out.push({ seg: [m?.role, strip(b)], cc: b?.cache_control, run: /^tool_(use|result)$/.test(b?.type) ? `${i}/${b.type}` : null })
   })
+  return out
+}
+function anthropicBlocks(body) {
   let h = '', bytes = 0, pos = 0, run = null
-  return out.map((b, i) => {
+  return anthropicSegs(body).map((b, i) => {
     const s = JSON.stringify(b.seg) ?? ''
     h = sha(h, s); bytes += Buffer.byteLength(s)
     if (!b.run || b.run !== run) pos++
@@ -61,6 +64,10 @@ function anthropicBlocks(body) {
 // 20 positions (itself first) for an entry an earlier request wrote; writes happen only at breakpoints.
 export function anthropicUsage(ctx, body) {
   const cache = ctx.cache, model = String(body.model || 'mock-model'), sc = scopeOf(ctx, 'anthropic', model)
+  if (/deepseek/i.test(model)) { // DeepSeek's Anthropic-compatible endpoint: cache_control ignored, automatic caching
+    const c = prefixUsage(ctx, 'anthropic', body)
+    return { input_tokens: c.total - c.cached, cache_creation_input_tokens: 0, cache_read_input_tokens: c.cached, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 } }
+  }
   const blocks = anthropicBlocks(body).map((b) => ({ ...b, h: sha(sc.seed, b.h) }))
   const total = Math.max(1, blocks.at(-1)?.tokens || 0)
   let read = 0, long = 0, last = 0
@@ -83,7 +90,8 @@ export function anthropicUsage(ctx, body) {
 }
 
 // ── OpenAI Responses / Chat Completions and DeepSeek: automatic prefix caching ──
-// The prompt (tools, then Responses' instructions + input or Chat's messages) is cut into units of
+// The prompt (tools, then Responses' instructions + input, Chat's messages, or for DeepSeek on the
+// Anthropic route the same segments as above) is cut into units of
 // 4 × unit bytes, and each unit's entry hashes the prefix up to its end; a hit is the run of leading
 // units earlier requests wrote. OpenAI: 128-token units, nothing reported under 1024, prompt_cache_key
 // as a hard partition, 5 min idle (24 h with prompt_cache_retention "24h"). DeepSeek: 64-token
@@ -92,7 +100,8 @@ export function prefixUsage(ctx, dialect, body) {
   const cache = ctx.cache, model = String(body.model || 'mock-model'), deepseek = /deepseek/i.test(model)
   const sc = scopeOf(ctx, dialect, model, deepseek ? '' : body.prompt_cache_key)
   const input = typeof body.input === 'string' ? [{ role: 'user', content: body.input }] : arr(body.input)
-  const segs = [...arr(body.tools), ...(body.instructions == null ? [] : [body.instructions]), ...input, ...arr(body.messages)]
+  const segs = dialect === 'anthropic' ? anthropicSegs(body).map((b) => b.seg)
+    : [...arr(body.tools), ...(body.instructions == null ? [] : [body.instructions]), ...input, ...arr(body.messages)]
   const buf = Buffer.from(segs.map((x) => JSON.stringify(x) ?? '').join(''))
   const total = Math.max(1, Math.ceil(buf.length / 4))
   const [unit, min, ttlMs] = deepseek ? [64, 64, HOUR] : [128, 1024, body.prompt_cache_retention === '24h' ? 24 * HOUR : 5 * MINUTE]
