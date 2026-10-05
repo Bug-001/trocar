@@ -29,8 +29,17 @@ test('trust plan: refuses login-environment files, forbidden keys, values outsid
   assert.throws(() => plan(() => ({ entries: [entry({ path: 'rel/settings.json' })] })), /absolute/)
 })
 
-test('trust plan: a replace-semantics entry may only point at a combined bundle', () => {
+test('trust plan: a replace-semantics entry may only point at its own harness\'s combined bundle', () => {
   assert.throws(() => plan(() => ({ entries: [entry({ semantic: 'replace' })] })), /combined bundle/)
   assert.equal(plan(() => ({ entries: [entry({ semantic: 'replace', value: `${DIR}/ca/combined-alpha.pem` })] })).entries.length, 1)
+  assert.throws(() => plan(() => ({ entries: [entry({ semantic: 'replace', value: `${DIR}/ca/combined-beta.pem` })] })), /combined-alpha\.pem — never .* another harness's bundle/)
+  // library-level replace variables are replace whatever the descriptor declares (the retired L-08 list)
+  for (const k of ['SSL_CERT_FILE', 'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE']) {
+    assert.throws(() => plan(() => ({ entries: [entry({ keys: ['env', k], semantic: 'append' })] })), /replaces the trust store/, k)
+    assert.equal(plan(() => ({ entries: [entry({ keys: ['env', k], semantic: 'append', value: `${DIR}/ca/combined-alpha.pem` })] })).entries.length, 1, k)
+  }
+  // a harness-specific replace variable named in the descriptor's own trust chain, whatever the entry says
+  const gamma = { name: 'gamma', trust: { chain: [{ var: 'GAMMA_CA_BUNDLE', semantic: 'replace' }] }, inject: () => ({ entries: [entry({ keys: ['env', 'GAMMA_CA_BUNDLE'], semantic: 'append' })] }) }
+  assert.throws(() => planTrust({ descriptors: [gamma], ctxFor: () => ctx, caCertPem: CA.certPem, collectorDir: DIR }), /GAMMA_CA_BUNDLE replaces the trust store/)
   assert.deepEqual(planTrust({ descriptors: [{ name: 'beta' }], ctxFor: () => ctx, caCertPem: CA.certPem, collectorDir: DIR }).paths, [])
 })

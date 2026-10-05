@@ -11,6 +11,10 @@ import { certBlocks } from './confirm.mjs'
 // Login-environment locations: a CA variable there makes every program of the user trust asight (vetoed, D37④).
 const LOGIN_ENV = [/\/\.config\/environment\.d\//, /\/\.(profile|bash_profile|bash_login|bashrc|zshrc|zshenv|zprofile|zlogin|pam_environment)$/, /\/\.config\/fish\//, /^\/etc\//]
 const NEVER_KEYS = new Set(['NODE_OPTIONS', 'SSL_CERT_DIR', 'NODE_TLS_REJECT_UNAUTHORIZED'])
+// Library-level variables that REPLACE the trust store (or the one CA file a client uses) whatever a descriptor
+// declares: pointed at an asight-only file they would break every other TLS peer of the process (0.1 §5, T10). The
+// descriptor's own trust chain adds its harness-specific ones (`semantic: 'replace'`). No harness names here.
+const REPLACE_KEYS = new Set(['SSL_CERT_FILE', 'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE'])
 const fingerprint = (pem) => { try { return new X509Certificate(pem).fingerprint256 } catch { return null } }
 
 export function planTrust({ descriptors, ctxFor, caCertPem, collectorDir }) {
@@ -29,7 +33,11 @@ export function planTrust({ descriptors, ctxFor, caCertPem, collectorDir }) {
       if (LOGIN_ENV.some((re) => re.test(e.path))) throw new Error(`${where}: a login-environment file is never a trust entry (D37④)`)
       if (NEVER_KEYS.has(e.keys[e.keys.length - 1])) throw new Error(`${where}: ${e.keys[e.keys.length - 1]} is never written (D37④)`)
       if (!under(e.value)) throw new Error(`${where}: the value must be a file under ${collectorDir} (it is how asight recognises its key)`)
-      if (e.semantic === 'replace' && !/\/combined-[a-z0-9-]+\.pem$/.test(e.value)) throw new Error(`${where}: a replace-semantics entry must point at a combined bundle, never an asight-only file`)
+      const key = e.keys[e.keys.length - 1]
+      const declared = ((d.trust && d.trust.chain) || []).some((c) => c.var === key && c.semantic === 'replace')
+      if ((e.semantic === 'replace' || REPLACE_KEYS.has(key) || declared) && path.basename(e.value) !== `combined-${d.name}.pem`) {
+        throw new Error(`${where}: ${key} replaces the trust store, so it may only point at this harness's own combined bundle combined-${d.name}.pem — never an asight-only file or another harness's bundle`)
+      }
       entries.push({ harness: d.name, ...e })
     }
     for (const f of out.files || []) {
