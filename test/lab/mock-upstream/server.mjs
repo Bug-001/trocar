@@ -10,8 +10,12 @@ import { parseRequest } from './http1.mjs'
 import { SCENARIOS, isScenario, pickScenario, errorFor, expandSteps } from './scenarios.mjs'
 import { NEAR_LIMIT_TOKENS, isTitleRequest, turnOf, acts, withUsageTotal } from './session.mjs'
 import { writeResponse, jsonReply } from './transport.mjs'
+import { createCache, cacheState, cacheAdmin, anthropicTokens } from './cache.mjs'
 import * as anthropic from './anthropic.mjs'
 import * as openai from './openai.mjs'
+
+// count_tokens: the cache model's estimate of the whole prompt; a body that is not JSON falls back to bytes / 4.
+const countTokens = (buf) => { try { return anthropicTokens(JSON.parse(buf)) } catch { return Math.max(1, Math.ceil(buf.length / 4)) } }
 
 const iso = () => new Date().toISOString()
 
@@ -47,8 +51,8 @@ async function dispatch(req, io, state) {
   if (!sc) res = dialect.errorReply(400, `mock-upstream: unknown scenario "${pick.name}"`)
   else if (sc.status) res = errorFor(sc, dialect)
   else if (!route) res = dialect.errorReply(404, `mock-upstream: no route for ${req.method} ${p}`)
-  else if (route.kind === 'model') res = route.dialect.reply(parseJson(req.body), req.body, sc)
-  else if (route.kind === 'count') res = jsonReply(200, { input_tokens: Math.max(1, Math.ceil(req.body.length / 4)) })
+  else if (route.kind === 'model') res = route.dialect.reply(parseJson(req.body), req.body, sc, { cache: state.cache, headers: req.headers })
+  else if (route.kind === 'count') res = jsonReply(200, { input_tokens: countTokens(req.body) })
   else if (route.kind === 'models') res = jsonReply(200, MODELS)
   else res = { status: 200, headers: {}, pieces: [] }
   const turn = turnOf(body) // a compaction request (quiet) reports a normal size, whatever chose near-limit
@@ -130,14 +134,15 @@ function adminServer(state, logFile) {
     const send = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)) }
     const route = `${req.method} ${req.url.split('?')[0]}`
     const body = parseJson(await readAll(req))
-    if (route === 'GET /__mock/state') return send(200, { queue: state.queue, config: state.cfg, scenarios: Object.keys(SCENARIOS) })
+    if (route === 'GET /__mock/state') return send(200, { queue: state.queue, config: state.cfg, scenarios: Object.keys(SCENARIOS), cache: cacheState(state.cache) })
+    if (route === 'POST /__mock/cache') return send(200, cacheAdmin(state.cache, body))
     if (route === 'POST /__mock/config') {
       for (const [k, v] of Object.entries(body)) if (Object.hasOwn(state.cfg, k) && Number.isFinite(v) && v >= 0) state.cfg[k] = v
       return send(200, state.cfg)
     }
     if (route === 'GET /__mock/log') return send(200, logFile ? readLog(logFile) : state.log)
     if (route === 'POST /__mock/reset') {
-      state.queue.length = 0; state.log.length = 0
+      state.queue.length = 0; state.log.length = 0; state.cache.entries.clear()
       if (logFile) fs.writeFileSync(logFile, '')
       return send(200, { ok: true })
     }
@@ -155,6 +160,7 @@ function adminServer(state, logFile) {
 // provider; tests shrink it) and the gap between slow-drip deltas. Also POST /__mock/config.
 export async function startMockUpstream({ tls: tlsOpts = null, host = '127.0.0.1', port = 0, adminPort = 0, logDir = null, delays = {} } = {}) {
   const state = { queue: [], log: [], cfg: { stallMs: 30000, dripMs: 250, ...delays } }
+  state.cache = createCache() // prompt-cache store and clock, per instance (cache.mjs)
   const logFile = logDir ? path.join(logDir, 'log.ndjson') : null
   if (logFile) { fs.mkdirSync(logDir, { recursive: true }); fs.writeFileSync(logFile, '') }
   state.cfg.nearLimitTokens ??= NEAR_LIMIT_TOKENS // what near-limit reports; POST /__mock/config changes it

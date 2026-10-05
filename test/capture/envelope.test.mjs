@@ -25,6 +25,13 @@ test('isLlmCall: /v1/messages is llm, count_tokens/telemetry are not', () => {
   assert.equal(isLlmCall('/v1/organizations/x/telemetry'), false)
 })
 
+test('isLlmCall: relay-prefixed and Gemini inference paths count, count_tokens does not', async () => {
+  const { isLlmCall } = await import('../../src/capture/envelope.mjs')
+  for (const p of ['/anthropic/v1/messages', '/api/anthropic/v1/messages?beta=true', '/api/paas/v4/chat/completions', '/codex/responses', '/v1beta/models/gemini-x:streamGenerateContent?alt=sse'])
+    assert.equal(isLlmCall(p), true, p)
+  for (const p of ['/v1/messages/count_tokens', '/v1/models', '/api/event_logging/v2/batch']) assert.equal(isLlmCall(p), false, p)
+})
+
 test('buildEnvelope emits EXACT canonical D10 field names', () => {
   const body = Buffer.from(JSON.stringify({ model: 'claude-x', system: 'you are', messages: [{ role: 'user', content: 'hi' }], tools: [{ name: 't', description: 'd', input_schema: { type: 'object' } }] }))
   const env = buildEnvelope({ ...baseArgs, reqBody: body, capture: 'reverse-proxy' })
