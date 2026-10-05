@@ -151,6 +151,9 @@ export function createRedirectorClient({
     child = spawn(resolvedBinary, spawnArgs, { stdio: ['pipe', 'pipe', 'inherit'], env })
     const rl = readline.createInterface({ input: child.stdout })
     rl.on('line', onLine)
+    // A helper that died between our check and the write makes stdin emit EPIPE. Without a listener that is an
+    // uncaught exception that takes the whole daemon down; it is the helper going down, reported as such.
+    child.stdin.on('error', (err) => fail(`loader stdin: ${err.code || err.message}`))
     child.on('exit', (code, signal) => {
       stopHeartbeat()
       fail(signal ? `loader killed by ${signal}` : `loader exited with code ${code}`)

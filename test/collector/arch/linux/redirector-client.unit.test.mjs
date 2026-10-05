@@ -26,7 +26,7 @@ function mock({ autoReply = true } = {}) {
   child.stdout = stdout
   child.kill = (sig) => { child.signalCode = sig || 'SIGTERM'; child.emit('exit', null, child.signalCode) }
   let spawnBin = null, spawnArgs = null
-  child.stdin = {
+  child.stdin = Object.assign(new EventEmitter(), {
     write(line, cb) {
       writes.push(line)
       if (autoReply) {
@@ -38,7 +38,7 @@ function mock({ autoReply = true } = {}) {
     },
     // The real loader exits on stdin EOF; simulate that so close() resolves.
     end() { setImmediate(() => { if (child.exitCode == null && child.signalCode == null) { child.exitCode = 0; child.emit('exit', 0, null) } }) },
-  }
+  })
   const spawn = (bin, args) => { spawnBin = bin; spawnArgs = args; return child }
   const pushLine = (obj) => stdout.write((typeof obj === 'string' ? obj : JSON.stringify(obj)) + '\n')
   return {
@@ -137,4 +137,13 @@ test('attach sends a heartbeat before the attach frame, so steering is live when
   const ops = m.frames().map((f) => f.op)
   assert.deepEqual(ops.slice(ops.indexOf('heartbeat')), ['heartbeat', 'attach'], 'a heartbeat, then attach, and nothing waits for the interval')
   await c.close()
+})
+
+test('a helper that dies under a write (stdin EPIPE) is reported down, never an uncaught exception', async () => {
+  const { m, c } = await started()
+  const down = once(c, 'down')
+  const pending = c.status() // in flight when the pipe breaks
+  m.child.stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))
+  assert.match((await down)[0].reason, /loader stdin: EPIPE/)
+  await assert.rejects(pending, /redirector loader down: loader stdin: EPIPE/)
 })
