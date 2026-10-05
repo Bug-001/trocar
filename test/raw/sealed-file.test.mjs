@@ -88,3 +88,51 @@ test('a duplicated (stream, id) is ambiguous, never resolved to one of them', ()
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('a damaged index tail or frame refuses instead of yielding bytes', () => {
+  const dir = tmp();
+  try {
+    const ls = lines(30);
+    const file = writeFile(dir, ls, { frameBytes: 8192 });
+    const good = fs.readFileSync(file);
+    const sf = openSealed(file); const tail = sf.indexOffset; const f1 = sf.frames[1]; sf.close();
+    const flip = (at) => { const b = Buffer.from(good); b[at] ^= 0x01; fs.writeFileSync(file, b); };
+    flip(tail + 5);                                    // tables byte → checksum
+    assert.throws(() => openSealed(file), /checksum/);
+    flip(good.length - 3);                             // trailer magic
+    assert.throws(() => openSealed(file), /not a sealed file|magic/);
+    flip(f1[0] + Math.floor(f1[1] / 2));               // inside frame 1
+    const bad = openSealed(file);
+    assert.throws(() => { for (let i = 0; i < ls.length; i++) bad.lineAt(i); }, /corrupt|sha256|brotli|Decompression|incorrect/i);
+    bad.close();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a chain longer than 16 steps is refused at open', () => {
+  const dir = tmp();
+  try {
+    const ls = lines(40);
+    const file = writeFile(dir, ls, { chainMax: 30 });  // a writer that breaks the MUST
+    assert.throws(() => openSealed(file), /chain/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('an index that is self-consistent but points at the wrong bytes fails the sha256 check', async () => {
+  const { readIndex, indexTailBytes, trailerBytes, R } = await import('../../src/raw/format.mjs');
+  const dir = tmp();
+  try {
+    const r = rng(4);
+    const ls = [0, 1, 2].map(() => Buffer.from(text(r, 2000) + '\n'));   // unrelated → keyframes
+    const file = writeFile(dir, ls);
+    const buf = fs.readFileSync(file);
+    const fd = fs.openSync(file, 'r');
+    const { tables, indexOffset } = readIndex(fs, fd, buf.length); fs.closeSync(fd);
+    assert.equal(tables.records[0][R.kind], 0);
+    tables.records[0][R.off] = tables.records[1][R.off];               // record 0 now names record 1's bytes
+    const tail = indexTailBytes(tables);                               // …with a valid checksum
+    fs.writeFileSync(file, Buffer.concat([buf.subarray(0, indexOffset), tail, trailerBytes(indexOffset, tail.length)]));
+    const sf = openSealed(file);
+    assert.throws(() => sf.lineAt(0), /sha256/);
+    assert.ok(sf.lineAt(2).equals(ls[2]));
+    sf.close();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
