@@ -172,6 +172,7 @@ export async function startMockUpstream({ tls: tlsOpts = null, host = '127.0.0.1
   const state = { queue: [], log: [], cfg: { stallMs: 30000, dripMs: 250, ...delays } }
   state.cache = createCache() // prompt-cache store and clock, per instance (cache.mjs)
   const logFile = logDir ? path.join(logDir, 'log.ndjson') : null
+  state.cfg.wsFragmentBytes ??= 0 // > 0: WebSocket messages longer than this go out in pieces, a Ping after the first (ws.mjs)
   state.cfg.wsPingMs ??= 0 // WebSocket ping interval, 0 = off (ws.mjs); POST /__mock/config sets it for new connections
   if (logFile) { fs.mkdirSync(logDir, { recursive: true }); fs.writeFileSync(logFile, '') }
   state.cfg.nearLimitTokens ??= NEAR_LIMIT_TOKENS // what near-limit reports; POST /__mock/config changes it
