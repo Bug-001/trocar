@@ -1,7 +1,7 @@
 // scenarios.mjs — the scenario catalog, how a request picks one, and the dialect-neutral reply plan.
 // Every name here has a row in README.md's scenario table (a test keeps the two in sync).
 import { createHash } from 'node:crypto'
-import { toolsOf, turnOf, acts } from './session.mjs'
+import { toolsOf, turnOf, acts, subagentCall } from './session.mjs'
 
 // A scenario is data the dialects and the transport read: `status` makes it an HTTP error, `extra`
 // adds deltas after the reply text, and `fault` / `slowHeaders` / `drip` / `splitUtf8` / `encoding`
@@ -10,6 +10,7 @@ export const SCENARIOS = {
   ok: {},
   thinking: { thinking: true },
   'tool-use': { tool: true },
+  subagent: { subagent: true },
   ...Object.fromEntries([400, 401, 403, 404, 408, 409, 413, 422, 500, 503, 504, 529].map((s) => [`http-${s}`, { status: s }])),
   'http-429': { status: 429, retryAfter: 1 },
   'http-429-long': { status: 429, retryAfter: 120 },
@@ -117,7 +118,7 @@ export function plan(seen, raw, body, sc = {}) {
   const extra = sc.extra ? sc.extra() : [], text = reply + extra.join('')
   const thinking = sc.thinking ? `mock-thinking: the last user turn is ${(seen.text || '').length} chars long` : null
   const tools = toolsOf(body), turn = turnOf(body), act = !turn.quiet && acts(turn, sc)
-  const tool = act && sc.tool && tools.length ? shellCall(tools.map((t) => t.name)) : null
+  const tool = !act ? null : sc.subagent ? subagentCall(tools) : sc.tool && tools.length ? shellCall(tools.map((t) => t.name)) : null
   return {
     model: body.model || 'mock-model', text, parts: [...splitEvery(reply, 12), ...extra],
     thinking, thinkingParts: thinking && splitEvery(thinking, 12), tool, toolArgs: tool && JSON.stringify(tool.input),
