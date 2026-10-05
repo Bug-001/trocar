@@ -54,15 +54,22 @@ test('while the original still exists, every reader uses it and ignores its seal
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('a different file at the original path is not mistaken for it: both are read, and it is reported', async () => {
+test('a different file at the original path is not mistaken for it; an in-place change is reported', async () => {
   const root = tmpDir();
   try {
     const f = shardOf(path.join(root, 'S-1', 'calls.ndjson'));
     await sealUnchecked(f, { split: false, deleteOriginal: true });
-    shardOf(f, 'S-1', 2);                                                     // `asight shard` appends a new calls.ndjson
-    const r = listSources([root]);
+    shardOf(f, 'S-1', 2);                                                     // `asight shard` writes a fresh calls.ndjson
+    let r = listSources([root]);
     assert.deepEqual(rel(root, r.files), ['S-1/calls.ndjson', 'S-1/calls.ndjson.0001.sealed']);
+    assert.equal(r.mismatched.length, 0, 'a new file is not a damaged original');
+    const g = shardOf(path.join(root, 'S-2', 'calls.ndjson'), 'S-2');
+    await sealUnchecked(g, { split: false, deleteOriginal: false });          // both copies kept…
+    fs.appendFileSync(g, '{"id":"later"}\n');                                // …then the original changed in place
+    r = listSources([root]);
+    assert.ok(r.files.some((x) => x.endsWith('S-2/calls.ndjson.0001.sealed')), 'the sealed copy must still be read');
     assert.equal(r.mismatched.length, 1);
+    assert.match(r.mismatched[0].why, /changed after it was sealed/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

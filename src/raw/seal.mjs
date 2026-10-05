@@ -20,6 +20,7 @@ import { openSealed, createFrameCache } from './reader.mjs';
 import { readIndex } from './format.mjs';
 import { closedState, closedMarkerPath, fsyncDir } from './closed.mjs';
 import { sessionKeyOfLine } from './session-key.mjs';
+import { appendJournal, defaultJournalPath } from './journal.mjs';
 
 export class SealRefused extends Error { constructor(m) { super(m); this.name = 'SealRefused'; this.code = 'SEAL_REFUSED'; } }
 
@@ -31,15 +32,34 @@ const CHUNK = 8 << 20;
 
 // The marker-gated entry: an active shard is never sealed (4.6 E6). The legacy entry for pre-D35
 // files without a marker is src/raw/legacy.mjs.
+// Every outcome — ok, refused, failed — is appended to the raw journal (journal.mjs; no silent failures).
 export async function sealShard(shard, opts = {}) {
   const fs = opts.fs || nodeFs;
-  const c = closedState(shard, { fs });
-  if (!c.closed) throw new SealRefused(`refusing to seal ${shard}: ${c.reason}. An active shard is never sealed (4.6 §日志体积预算).`);
+  let c;
+  try { c = closedState(shard, { fs }); } catch (e) { c = { closed: false, reason: e.message }; }
+  if (!c.closed) {
+    const reason = `${c.reason}. An active shard is never sealed (4.6 §日志体积预算).`;
+    appendJournal({ op: 'seal', outcome: 'refused', file: shard, reason }, { journal: opts.journal === undefined ? defaultJournalPath() : opts.journal });
+    throw new SealRefused(`refusing to seal ${shard}: ${reason}`);
+  }
   return sealUnchecked(shard, { split: true, deleteOriginal: true, ...opts });
 }
 
 // Only for callers that have established "closed" by other means (legacy.mjs). Not exported further.
-export async function sealUnchecked(shard, { fs = nodeFs, sessionsRoot, split = true, deleteOriginal = true,
+export async function sealUnchecked(shard, { journal = defaultJournalPath(), ...opts } = {}) {
+  try {
+    const res = await sealCore(shard, opts);
+    appendJournal({ op: 'seal', outcome: 'ok', file: shard, records: res.records, bytes: res.bytes, sha256: res.sha256,
+      sealedBytes: res.sealedBytes, deleted: res.deleted, outputs: res.outputs.map((o) => o.path) }, { journal });
+    return res;
+  } catch (e) {
+    appendJournal({ op: 'seal', outcome: e instanceof SealRefused ? 'refused' : 'failed', file: shard, reason: e.message,
+      originalKept: (opts.fs || nodeFs).existsSync(shard) }, { journal });
+    throw e;
+  }
+}
+
+async function sealCore(shard, { fs = nodeFs, sessionsRoot, split = true, deleteOriginal = true,
   frameBytes = FRAME_BYTES, onPhase = () => {} } = {}) {
   if (split && !sessionsRoot) throw new Error('sealUnchecked: sessionsRoot is required to split by session');
   const srcDir = path.dirname(shard), name = path.basename(shard);

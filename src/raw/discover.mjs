@@ -12,8 +12,8 @@
 //    rename and unlink, or a legacy seal that kept the original — a reader uses only ONE: the original,
 //    if this reader scans it and it is still the very file that was sealed (size, inode, mtime). The
 //    sealed copies are then "superseded" and skipped, so no record is read twice and none is lost. A
-//    different file at the original's path (rotated, rewritten) is not the source: both are read, and
-//    the mismatch is reported (invariant 4).
+//    different file at the original's path is not the source: both are read; if it is the same inode
+//    changed in place, that is reported (invariant 4).
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { readIndex } from './format.mjs';
@@ -92,7 +92,12 @@ export function resolveCoexistence(all, { fs = nodeFs } = {}) {
       if (!o) return null;
       let st; try { st = fs.statSync(o); } catch { return null; }
       const same = st.size === s.length && st.ino === s.ino && st.mtimeMs === s.mtimeMs;
-      if (!same) mismatched.push({ sealed: f, original: o, why: `the file at the original path is not the one that was sealed (size ${st.size} vs ${s.length}) — both are read` });
+      // Same inode but different size/mtime: the sealed original was changed in place afterwards —
+      // both are read (never lose a byte) and that is reported, duplicates possible. A different
+      // inode is simply another file at that path (e.g. `asight shard` writing a fresh calls.ndjson
+      // after the sealer deleted the old one): both are read, nothing to report. (ext4 may reuse a
+      // freed inode, which then shows up as a report — noise, never a loss.)
+      if (!same && st.ino === s.ino) mismatched.push({ sealed: f, original: o, why: `the original was changed after it was sealed (size ${st.size} vs ${s.length}) — both are read, records may appear twice` });
       return same ? o : null;
     });
     if (present.length && present.every(Boolean)) { drop.add(f); superseded.push({ sealed: f, original: present[0] }); }
