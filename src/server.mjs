@@ -18,7 +18,7 @@ import { openDb, DEFAULT_DB_PATH } from './db.mjs';
 import { listSessions, sessionCalls, sessionComposition, sessionResources, callContext,
   filesEverInContext, cacheHitDistribution, breakKindComparison, unmappedFields, forkTree } from './query/queries.mjs';
 import { buildResolver } from './query/source.mjs';
-import { isCaptureFile } from './paths.mjs';
+import { isCaptureFile, skipReason } from './paths.mjs';
 import { readRecords } from './etl/ingest.mjs';
 import { projectsView, projectsViewFromMetas, sessionView, controlView, forWire } from './view/board.mjs';
 import { sessionIdOf } from './view/assemble.mjs';
@@ -128,7 +128,7 @@ async function serveStatic(res, urlPath) {
 // the fix.
 export function sourceFiles(sourcePath) {
   const st = fssync.statSync(sourcePath); // throws if missing → caller resets sig
-  if (!st.isDirectory()) return { files: [sourcePath], sig: st.size + '.' + Math.round(st.mtimeMs) };
+  if (!st.isDirectory()) return { files: [sourcePath], skipped: [], sig: st.size + '.' + Math.round(st.mtimeMs) };
   // Flat *.ndjson in the root (one file per physical capture source, D20), PLUS the per-session
   // shards ETL writes at <root>/<session-id>/calls.ndjson.
   //
@@ -138,17 +138,43 @@ export function sourceFiles(sourcePath) {
   // subdirectory is also not an invitation to load whatever NDJSON is sitting in it — that is how a
   // stray export gets rendered as if it were captured traffic.
   const entries = fssync.readdirSync(sourcePath, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1));
-  const files = [];
+  const files = [], skipped = [];
+  // Everything not read is listed with its reason (4.4:83 — never folded into empty): the caller
+  // shows it, so a dangling link or a compressed capture cannot drop off the board without a word.
+  const skip = (e) => skipped.push({ root: sourcePath, name: e.name, ...skipReason(sourcePath, e) });
   for (const e of entries) {
     // a symlinked capture counts (paths.mjs isCaptureFile): isFile() alone left links off the board
     if (isCaptureFile(sourcePath, e)) { files.push(path.join(sourcePath, e.name)); continue; }
-    if (!e.isDirectory()) continue;
+    if (!e.isDirectory()) { skip(e); continue; }
     const shard = path.join(sourcePath, e.name, 'calls.ndjson');
-    try { if (fssync.statSync(shard).isFile()) files.push(shard); } catch { /* not a shard dir */ }
+    let isShard = false;
+    try { isShard = fssync.statSync(shard).isFile(); } catch { /* not a shard dir */ }
+    if (isShard) files.push(shard); else skip(e);
   }
   const sig = files.map((f) => { try { const s = fssync.statSync(f); return `${path.basename(f)}:${s.size}.${Math.round(s.mtimeMs)}`; } catch { return ''; } }).join('|') || '∅dir';
-  return { files, sig };
+  return { files, skipped, sig };
 }
+// Every root's capture files, each read once, plus everything NOT read and why (4.4:83). A
+// subdirectory that is itself one of the roots (~/.asight/collector under ~/.asight) is read as a
+// root, so it is not listed as skipped. Throws if a root cannot be listed (broken ≠ empty).
+export function scanRoots(roots) {
+  const parts = roots.map((r) => sourceFiles(r));
+  const rootSet = new Set(roots.map((r) => path.resolve(r)));
+  const skipped = parts.flatMap((p) => p.skipped)
+    .filter((x) => !(x.reason === 'directory' && rootSet.has(path.resolve(x.root, x.name))));
+  // One file, read once: a capture linked from one root to a file in another root (a symlink is a
+  // capture too, paths.mjs isCaptureFile) would otherwise be read twice and every call in it
+  // doubled. Keyed by real path; the first root to name a file keeps it, the other is listed.
+  const seen = new Map();
+  const files = parts.flatMap((p) => p.files).filter((f) => {
+    let k; try { k = fssync.realpathSync(f); } catch { k = f; }
+    if (!seen.has(k)) { seen.set(k, f); return true; }
+    skipped.push({ root: path.dirname(f), name: path.basename(f), reason: 'same-file', of: seen.get(k), attention: false });
+    return false;
+  });
+  return { files, skipped, sig: parts.map((p) => p.sig).join('#') };
+}
+
 // A source may be ONE path or SEVERAL roots. Several is what D27 needs: after the home moved to
 // ~/.asight the user's existing captures still sit under ~/.atrace/asight, and they must keep showing
 // up on the board — a rename that quietly stops listing three gigabytes of history would be an
@@ -173,16 +199,7 @@ function makeRecordLoader(source) {
     // existing comment already refuses to allow for a single source, and which multiplying the roots
     // would otherwise reintroduce through the back door.
     try {
-      const parts = roots.map((r) => sourceFiles(r));
-      // One file, read once: a capture linked from one root to a file in another root (a symlink is
-      // a capture too, paths.mjs isCaptureFile) would otherwise be read twice and every call in it
-      // doubled. Keyed by real path; the first root to name a file keeps it.
-      const seen = new Set();
-      files = parts.flatMap((p) => p.files).filter((f) => {
-        let k; try { k = fssync.realpathSync(f); } catch { k = f; }
-        return seen.has(k) ? false : (seen.add(k), true);
-      });
-      sig = parts.map((p) => p.sig).join('#');
+      ({ files, sig, skipped: load.skipped } = scanRoots(roots));
     } catch (e) {
       load.sig = '0';
       throw new Error(`capture source unreadable (${roots.join(', ')}): ${String((e && e.message) || e)}`);
@@ -207,22 +224,27 @@ function makeRecordLoader(source) {
     const nextMarks = new Map();
     for (const f of files) {
       let size = 0;
-      try { size = fssync.statSync(f).size; } catch { continue; } // vanished mid-refresh → skip this pass
+      try { size = fssync.statSync(f).size; } catch { // vanished mid-refresh → skip this pass, and say so
+        load.skipped.push({ root: path.dirname(f), name: path.basename(f), reason: 'vanished', attention: true }); continue;
+      }
       const prev = marks.get(f);
       let from = 0, keep = [];
       if (prev && size >= prev.size) { from = prev.size; keep = prev.records; }
       else if (prev) { resets.push({ file: f, was: prev.size, now: size, why: 'file shrank — rotated, truncated or replaced' }); }
       const fresh = from > 0 ? await readRecords(f, { normalize: false, startOffset: from }) : await readRecords(f, { normalize: false });
       const all = from > 0 ? keep.concat(fresh) : fresh;
-      nextMarks.set(f, { size, records: all });
+      // lines that held a record readRecords could not parse: counted per file and shown (invariant 4)
+      const corrupt = (from > 0 ? prev.corrupt || 0 : 0) + ((fresh.scan && fresh.scan.skippedLines) || 0);
+      nextMarks.set(f, { size, records: all, corrupt });
       for (const r of all) records.push(r);
     }
     marks = nextMarks;   // files no longer listed drop out, releasing their records
     load.resets = resets;
+    load.corrupt = Object.fromEntries([...marks].filter(([, m]) => m.corrupt).map(([f, m]) => [f, m.corrupt]));
     cache = { sig, records };
     return records;
   };
-  load.sig = null;
+  load.sig = null; load.skipped = []; load.resets = []; load.corrupt = {};
   return load;
 }
 
@@ -342,12 +364,39 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
     const dirs = shardDirsOf();
     if (!dirs.length) return null; // not a sharded source → caller falls back to the record path
     const metas = [];
+    metas.dirs = dirs; metas.noMeta = [];
     for (const d of dirs) {
       // A shard without meta.json (sharded before the archive layer, or a partial write) just doesn't
-      // list until re-sharded — a degrade, not a crash. Session-less _unassigned has no meta by design.
-      try { metas.push(JSON.parse(fssync.readFileSync(path.join(d, 'meta.json'), 'utf8'))); } catch { /* no meta yet */ }
+      // list until re-sharded — a degrade, not a crash, but it is reported (sourceHealth), not silent.
+      // Session-less _unassigned has no meta by design.
+      try { metas.push(JSON.parse(fssync.readFileSync(path.join(d, 'meta.json'), 'utf8'))); }
+      catch (e) { if (path.basename(d) !== '_unassigned') metas.noMeta.push({ dir: d, error: (e && e.code) || String(e) }); }
     }
     return metas;
+  };
+  // What the board did NOT read, and why (4.4:83 · invariant 4), sent with every session list so a
+  // skipped capture is on screen rather than only in a log. `attention` = it may hold capture bytes
+  // the board does not show. Shard mode lists meta.json only, so it says what that leaves out.
+  const sourceHealth = (metas) => {
+    const roots = (Array.isArray(sourcePath) ? sourcePath : [sourcePath]).filter(Boolean);
+    let skipped = [...(loadRecords.skipped || [])];
+    if (metas) {
+      let scan; try { scan = scanRoots(roots); } catch { scan = { files: [], skipped: [] }; } // the listing itself reports a broken root
+      const rootSet = new Set(roots.map((r) => path.resolve(r))), shardSet = new Set(metas.dirs.map((d) => path.resolve(d)));
+      skipped = scan.skipped.filter((x) => !(x.reason === 'directory' && shardSet.has(path.resolve(x.root, x.name))))
+        .concat(scan.files.filter((f) => rootSet.has(path.resolve(path.dirname(f))))
+          .map((f) => ({ root: path.dirname(f), name: path.basename(f), reason: 'flat-file-in-shard-mode', attention: true })))
+        .concat(metas.noMeta.map((x) => ({ root: path.dirname(x.dir), name: path.basename(x.dir), reason: 'no-meta', error: x.error, attention: true })));
+    }
+    const idx = (typeof resolve === 'function' && resolve.scan) || {};
+    // the block index's own refresh-time skips (a file it could not read, or that vanished)
+    for (const x of idx.skipped || []) if (x.reason === 'unreadable' || x.reason === 'vanished') skipped.push({ ...x, attention: true, reader: 'block-index' });
+    return {
+      skipped,
+      corrupt_lines: metas ? {} : { ...(loadRecords.corrupt || {}) }, // per file: lines holding a record that would not parse
+      resets: metas ? [] : loadRecords.resets || [],
+      unidentified_lines: idx.unidentifiedLines || 0, // records with no id: listed, but their blocks cannot open
+    };
   };
   const loadSessionRecords = async (id) => {
     const hit = shardDirsOf().find((d) => path.basename(d) === id);
@@ -409,8 +458,9 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         // Archive layer: on a sharded source, list from the precomputed metas — never load a record,
         // so a 7.4 GB / 24-session capture enumerates instantly instead of OOM-ing.
         const metas = loadSessionMetas();
-        if (metas) return sendJson(res, 200, projectsViewFromMetas(metas, { enrich }));
-        return sendJson(res, 200, projectsView(await loadRecords(), { enrich }));
+        if (metas) return sendJson(res, 200, { ...projectsViewFromMetas(metas, { enrich }), source: sourceHealth(metas) });
+        const view = projectsView(await loadRecords(), { enrich });
+        return sendJson(res, 200, { ...view, source: sourceHealth(null) });
       }
       if (p === '/api/session') {
         const id = url.searchParams.get('id');

@@ -13,7 +13,7 @@ import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { parseTextRef } from '../etl/orchestrator.mjs';
 import { normalizeRecord } from '../etl/ingest.mjs';
-import { isCaptureFile } from '../paths.mjs';
+import { isCaptureFile, skipReason } from '../paths.mjs';
 
 const NL = 0x0a;
 const BODY_LRU = 8; // req_body strings held at once — a call's blocks resolve off one cached body
@@ -59,7 +59,6 @@ function classifyFidelity(raw) {
 // difference matters most — could not tell missing from broken. They are distinct now, and the
 // plain resolve() stays non-throwing/string-or-null for back-compat.
 const OUT = (status, reason = null, text = null, fidelity = null) => ({ status, reason, text, fidelity });
-const COMPRESSED = new Set(['.gz', '.zst', '.bz2', '.xz', '.zip', '.br', '.lz4']);
 
 // Byte-scan a file line-by-line from byte `from`, recording each record's { offset, length } WITHOUT
 // retaining any body. Peak memory ≈ one chunk + one line + the index (O(records) small entries).
@@ -182,11 +181,7 @@ export async function buildResolver(source) {
       // it failed this root's whole index.
       if (isCaptureFile(sourcePath, ent)) { out.push(path.join(sourcePath, name)); continue; }
       if (!skipped) continue;
-      const reason = ent.isDirectory() ? 'directory'
-        : ent.isSymbolicLink() && name.endsWith('.ndjson') ? 'broken-symlink'
-        : COMPRESSED.has(path.extname(name).toLowerCase()) ? 'compressed'
-        : 'not-ndjson';
-      skipped.push({ name, reason });
+      skipped.push({ name, reason: skipReason(sourcePath, ent).reason }); // one classifier, paths.mjs
     }
     return out;
   };
@@ -305,11 +300,14 @@ export async function buildResolver(source) {
     try { return await indexFile(f, idx, from); }
     catch (e) {
       if (from > 0) dirty = true;
-      const name = path.basename(f);
-      if (!scan.skipped.some((x) => x.name === name && x.reason === 'unreadable')) scan.skipped.push({ name, reason: 'unreadable', error: (e && e.code) || String(e) });
+      note(path.basename(f), 'unreadable', e);
       return null;
     }
   };
+  // Every refresh-time skip lands in scan.skipped (once per name + reason), which the board shows.
+  function note(name, reason, e) {
+    if (!scan.skipped.some((x) => x.name === name && x.reason === reason)) scan.skipped.push({ name, reason, ...(e ? { error: (e && e.code) || String(e) } : {}) });
+  }
   const rebuildAll = async () => {
     idx.qual.clear(); idx.byId.clear(); marks.clear(); bodyCache.clear();
     for (const fd of fds.values()) try { closeSync(fd); } catch {}
@@ -321,11 +319,11 @@ export async function buildResolver(source) {
   };
   const doRefresh = async () => {
     let now;
-    try { now = await listFiles(null); } catch { return false; } // root unreadable: the loader reports it
+    try { now = await listFiles(null); } catch (e) { note(sourcePath, 'unreadable', e); return false; }
     if (dirty) { await rebuildAll(); bodyCache.clear(); resolve.size = idx.qual.size; return true; }
     let changed = false;
     for (const f of now) {
-      let st; try { st = statSync(f); } catch { continue; } // vanished between listing and stat
+      let st; try { st = statSync(f); } catch (e) { note(path.basename(f), 'vanished', e); continue; }
       const m = marks.get(f);
       if (!m) { const mk = await indexSafe(f); if (mk) { files.push(f); marks.set(f, mk); changed = true; } continue; }
       if (st.ino !== m.ino || st.size < m.size) { await rebuildAll(); changed = true; break; }
@@ -376,7 +374,8 @@ async function buildMultiResolver(roots) {
     bytesIndexed: parts.reduce((n, p) => n + ((p.scan && p.scan.bytesIndexed) || 0), 0),
     unreadableRoots: unreadable,
   });
-  resolve.scan = scanOf();
+  // live: a refresh that changed nothing can still have noted a skip
+  Object.defineProperty(resolve, 'scan', { get: scanOf, enumerable: true });
 
   // A MISS IS AN OBJECT, SO "TRUTHY" IS NOT "FOUND".
   //
@@ -405,8 +404,11 @@ async function buildMultiResolver(roots) {
   resolve.size = sizeOf();
   resolve.refresh = async () => {
     let changed = false;
-    for (const p of parts) { try { if (typeof p.refresh === 'function' && await p.refresh()) changed = true; } catch { /* this root's miss stands; later roots still refresh */ } }
-    if (changed) { resolve.size = sizeOf(); resolve.scan = scanOf(); }
+    for (const p of parts) {
+      try { if (typeof p.refresh === 'function' && await p.refresh()) changed = true; }
+      catch (e) { if (p.scan) p.scan.skipped.push({ name: '(refresh)', reason: 'unreadable', error: (e && e.code) || String(e) }); } // later roots still refresh
+    }
+    if (changed) resolve.size = sizeOf();
     return changed;
   };
 

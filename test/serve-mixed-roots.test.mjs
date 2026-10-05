@@ -29,8 +29,8 @@ async function board(t, roots) {
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => server.close());
   const port = server.address().port;
-  const metas = JSON.parse((await get(port, '/api/projects')).body).projects.flatMap((p) => p.sessions);
-  return { port, metas };
+  const pj = JSON.parse((await get(port, '/api/projects')).body);
+  return { port, metas: pj.projects.flatMap((p) => p.sessions), source: pj.source };
 }
 function homes(t) {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-mixed-'));
@@ -64,8 +64,10 @@ test('a capture linked from one root to a file in another root is read once, not
   const { home, legacy } = homes(t);
   fs.writeFileSync(path.join(legacy, 'codex-capture.ndjson'), JSON.stringify(env('k-1', 'LINKED')) + '\n');
   fs.symlinkSync(path.join(legacy, 'codex-capture.ndjson'), path.join(home, 'codex-capture.ndjson'));
-  const { port, metas } = await board(t, serveSource({ home, legacy, legacyExists: true }));
+  const { port, metas, source } = await board(t, serveSource({ home, legacy, legacyExists: true }));
   assert.deepEqual(metas.map((m) => [m.session_id, m.calls]), [['LINKED', 1]]);
+  assert.deepEqual(source.skipped.filter((x) => x.reason === 'same-file').map((x) => [x.name, x.of, x.attention]),
+    [['codex-capture.ndjson', path.join(home, 'codex-capture.ndjson'), false]], 'the second name is listed, not dropped silently');
   const v = JSON.parse((await get(port, '/api/session?id=LINKED')).body);
   assert.deepEqual(v.analyzed.steps.map((s) => s.id), ['k-1']);
 });

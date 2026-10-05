@@ -86,4 +86,22 @@ export function isCaptureFile(dir, ent) {
   try { return fs.statSync(path.join(dir, ent.name)).isFile(); } catch { return false; }
 }
 
+// Why an entry that is NOT a capture file was not read (4.4:83: a skipped or unknown file is
+// reported, never folded into empty). Same three readers. `attention` = it may hold capture bytes
+// the reader did not show (a dangling link, a compressed capture, a *.ndjson that is not a file);
+// the rest (a config file, the CA, a database, a subdirectory) is listed and counted but is not
+// capture data.
+const COMPRESSED = new Set(['.gz', '.zst', '.bz2', '.xz', '.zip', '.br', '.lz4']);
+export function skipReason(dir, ent) {
+  const name = ent.name, ndjson = name.endsWith('.ndjson');
+  let target = ent;
+  if (ent.isSymbolicLink()) {
+    try { target = fs.statSync(path.join(dir, name)); } catch { return { reason: 'broken-symlink', attention: ndjson }; }
+  }
+  if (target.isDirectory()) return { reason: 'directory', attention: ndjson };
+  if (COMPRESSED.has(path.extname(name).toLowerCase())) return { reason: 'compressed', attention: true };
+  if (ndjson) return { reason: 'not-a-file', attention: true }; // a fifo, socket or device named *.ndjson
+  return { reason: 'not-ndjson', attention: false };
+}
+
 function existsQuiet(p) { try { return fs.existsSync(p) } catch { return false } }

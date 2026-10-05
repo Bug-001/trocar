@@ -471,6 +471,7 @@
 
 <div id="rails"></div>
 <div id="truncbar" style="display:none"></div>
+<div id="srcbar" style="display:none"></div>
 
 <main>
   <div id="ctxnav"></div>
@@ -617,11 +618,30 @@ let pageInfo=null   // the server's `page` envelope for the loaded view: {cursor
 let pageSig=null    // which session `pageCur` was chosen for (re-park the window on a session switch)
 let pageReaimed=false // guard: the "window past what the server assembled" re-aim fires at most once
 
+// 4.4:83 · invariant 4: what the board did NOT read is said on screen (/api/projects `source`).
+// Only what may hold capture bytes raises the bar; the rest (config files, the CA, subdirectories)
+// is counted in it and listed in its tooltip.
+function renderSourceHealth(h){
+  const bar=document.getElementById('srcbar'); if(!bar)return
+  const sk=(h&&h.skipped)||[], warn=sk.filter(x=>x.attention), rest=sk.length-warn.length
+  const corrupt=Object.entries((h&&h.corrupt_lines)||{}), resets=(h&&h.resets)||[], unid=(h&&h.unidentified_lines)||0
+  const parts=[]
+  if(warn.length) parts.push(`${warn.length} capture file${warn.length!==1?'s':''} not read: `+warn.slice(0,4).map(x=>`<b>${esc(x.name)}</b> (${esc(x.reason)})`).join(', ')+(warn.length>4?` +${warn.length-4} more`:''))
+  if(corrupt.length) parts.push(`${corrupt.reduce((n,[,c])=>n+c,0)} unparseable line(s) in `+corrupt.slice(0,3).map(([f,c])=>`<b>${esc(f.split('/').pop())}</b> ×${c}`).join(', '))
+  if(resets.length) parts.push(`${resets.length} file(s) shrank and were re-read`)
+  if(unid) parts.push(`${unid} record(s) without an id (listed; their blocks cannot open)`)
+  if(!parts.length){ bar.style.display='none'; bar.innerHTML=''; bar.title=''; return }
+  bar.title=sk.map(x=>`${x.root}/${x.name} — ${x.reason}${x.of?' (same file as '+x.of+')':''}${x.error?' · '+x.error:''}`).concat(corrupt.map(([f,c])=>`${f} — ${c} unparseable line(s)`)).join('\n')
+  bar.innerHTML=`⚠ 源未全读 · not everything in the capture source is on this board: ${parts.join(' · ')}${rest?` · ${rest} other entr${rest!==1?'ies':'y'} ignored (not capture files; hover for the list)`:''} — the raw files on disk are untouched.`
+  bar.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #7a5b18;background:#241d0b;color:#e8c15a;border-radius:5px;font-size:11px;line-height:1.45'
+}
+
 async function poll(){
   try{
     const sel=document.getElementById('fileSel')
     const pj=await fetch('/api/projects').then(r=>r.json()).catch(()=>({projects:[]}))
     const projects=pj.projects||[]
+    renderSourceHealth(pj.source) // before any early return: "no sessions" next to "2 files not read" is the point
     projectsFlat=projects.flatMap(p=>p.sessions||[])
     const realP=projects.filter(p=>p.slug!=='_unresolved'), unres=projects.filter(p=>p.slug==='_unresolved')
     const optFor=s=>{

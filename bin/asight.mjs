@@ -60,11 +60,12 @@ async function main() {
       break;
     }
     case 'etl': {
-      const { etlFile } = await import(r('src', 'etl', 'cli.mjs'));
+      const { etlFile, reportSkips } = await import(r('src', 'etl', 'cli.mjs'));
       const file = positional();
       if (!file) die('usage: asight etl <ndjson|dir> [--db <path>] [--rebuild]');
       const out = await etlFile(file, { dbPath: flag('--db', undefined), rebuild: rest.includes('--rebuild') });
       console.log(`ETL: ${out.records} records from ${out.file} → ${out.dbPath}`, JSON.stringify(out.stats));
+      reportSkips(out);
       break;
     }
     case 'shard': {
