@@ -1,9 +1,15 @@
 // ws-frames.test.mjs — RFC 4.6 §传输与帧级记录 (D37), unit halves of W1 / W2 / W5: passive RFC 6455
-// framing of one direction, message reassembly with control frames in between.
+// framing of one direction, message reassembly with control frames in between, permessage-deflate.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import zlib from 'node:zlib'
+import { randomBytes } from 'node:crypto'
 import { createFrameParser, createMessageAssembler, OP } from '../../../src/collector/core/ws/frames.mjs'
+import { parseExtensions, createInflater } from '../../../src/collector/core/ws/deflate.mjs'
 import { encodeFrame } from '../../lab/ws-client.mjs'
+
+const SYNC = { finishFlush: zlib.constants.Z_SYNC_FLUSH }
+const strip = (z) => z.subarray(0, z.length - 4) // RFC 7692: drop the 00 00 ff ff tail
 
 function parseAll(bytes, split) {
   const p = createFrameParser(); const frames = []
@@ -65,4 +71,34 @@ test('assembler: fragments reassemble; ping / pong / close in between stay contr
   assert.equal(c.push({ opcode: OP.BINARY, fin: false, rsv1: true, payload: Buffer.alloc(1) }).compressed, true)
   assert.equal(c.push({ opcode: OP.TEXT, fin: true, payload: Buffer.alloc(0) }).type, 'error') // new message inside a fragmented one
   assert.match(createMessageAssembler({ maxMessage: 4 }).push({ opcode: OP.TEXT, fin: true, payload: Buffer.alloc(5) }).error, /exceeds 4/)
+})
+
+// An independent sender: ONE streaming deflateRaw context across messages (what a takeover peer runs).
+function streamingDeflater() {
+  const z = zlib.createDeflateRaw()
+  return (text) => new Promise((resolve) => {
+    const out = []; const take = (d) => out.push(d)
+    z.on('data', take).write(text)
+    z.flush(zlib.constants.Z_SYNC_FLUSH, () => setImmediate(() => { z.off('data', take); resolve(strip(Buffer.concat(out))) }))
+  })
+}
+
+test('deflate: parseExtensions reads the agreed parameters; context takeover (past 32 KiB) and no_context_takeover both inflate', async () => {
+  assert.deepEqual(parseExtensions('permessage-deflate; server_no_context_takeover; client_max_window_bits=10').deflate,
+    { serverNoContextTakeover: true, clientNoContextTakeover: false, serverMaxWindowBits: 15, clientMaxWindowBits: 10 })
+  assert.deepEqual(parseExtensions('permessage-deflate;client_no_context_takeover; server_max_window_bits="12"').deflate,
+    { serverNoContextTakeover: false, clientNoContextTakeover: true, serverMaxWindowBits: 12, clientMaxWindowBits: 15 })
+  assert.equal(parseExtensions('').deflate, null)
+  assert.deepEqual(parseExtensions('x-foo, permessage-deflate').other, ['x-foo'])
+  const big = randomBytes(24 << 10).toString('hex') // 48 KiB of history: the window is its LAST 32 KiB
+  const texts = ['lorem ipsum dolor '.repeat(40), `again ${'lorem ipsum dolor '.repeat(41)}`, big, `${big.slice(-3000)} end`]
+  const send = streamingDeflater()
+  const parts = []; for (const t of texts) parts.push(await send(t))
+  const inf = createInflater()
+  assert.deepEqual(parts.map((p) => inf.inflate(p).toString()), texts)
+  // the second message back-references the first: without the first's window it cannot be read
+  assert.throws(() => { if (createInflater().inflate(parts[1]).toString() !== texts[1]) throw new Error('wrong text') })
+  const fresh = createInflater({ noContextTakeover: true })
+  assert.deepEqual(texts.map((t) => fresh.inflate(strip(zlib.deflateRawSync(t, SYNC))).toString()), texts)
+  assert.throws(() => createInflater({ maxOutput: 100 }).inflate(strip(zlib.deflateRawSync('x'.repeat(1000), SYNC))))
 })
