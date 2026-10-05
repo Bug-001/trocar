@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { applyJsonKey, undoEntry, newManifest, readManifest, saveManifest, sha256, manifestPath, writeOwnedFile, sweepTemps } from '../../../src/collector/core/trust/journal.mjs'
+import { applyJsonKey, undoEntry, newManifest, readManifest, saveManifest, sha256, manifestPath, writeOwnedFile, sweepTemps, installedAt } from '../../../src/collector/core/trust/journal.mjs'
 
 const K = ['env', 'CA_FILE']
 function box() {
@@ -195,4 +195,15 @@ test('journal: undo never writes or deletes over a path that is a symbolic link 
     assert.equal(undoEntry(e2).result, 'restored')
     assert.deepEqual([fs.readFileSync(t, 'utf8'), fs.lstatSync(link).isSymbolicLink()], [USER, true])
   } finally { b.done() }
+})
+
+test('journal: installedAt finds when asight wrote the value a layer holds — by path or link target, only while the value is asight\'s (review 2 #5)', () => {
+  const m = { entries: [{ path: '/h/.claude/settings.json', real_path: '/dots/settings.json', keys: ['env', 'NODE_EXTRA_CA_CERTS'], value: '/h/.asight/collector/ca/asight-ca.pem', installed_at: '2026-10-06T01:00:00.000Z' }] }
+  const layer = (file, v) => ({ file, vars: { NODE_EXTRA_CA_CERTS: v, OTHER: 'x' } })
+  const at = Date.parse('2026-10-06T01:00:00.000Z')
+  assert.equal(installedAt(m, layer('/h/.claude/settings.json', '/h/.asight/collector/ca/asight-ca.pem')), at)
+  assert.equal(installedAt(m, layer('/dots/settings.json', '/h/.asight/collector/ca/asight-ca.pem')), at, 'read through the link target')
+  assert.equal(installedAt(m, layer('/h/.claude/settings.json', '/elsewhere/ca.pem')), null, 'the user changed the value: its age is the file\'s')
+  assert.equal(installedAt(m, layer('/h/project/.claude/settings.json', '/h/.asight/collector/ca/asight-ca.pem')), null, 'another file')
+  assert.equal(installedAt(null, layer('/h/.claude/settings.json', 'x')), null)
 })

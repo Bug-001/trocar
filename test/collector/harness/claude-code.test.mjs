@@ -42,6 +42,10 @@ test('claude-code: a settings CA written after the process started is config-aft
     const after = judge(cc, ctxFor({ home: s.home, startedAt: mtime - 60_000 }))
     assert.deepEqual([after.trust.trusted, after.trust.reason, after.trust.via.startsWith('user settings env')], [false, 'config-after-start', true])
     assert.equal(judge(cc, ctxFor({ home: s.home, startedAt: mtime + 1 })).trust.trusted, true, 'a process started after the edit is trusted')
+    const unknown = judge(cc, ctxFor({ home: s.home, startedAt: null })).trust
+    assert.deepEqual([unknown.trusted, unknown.reason], [false, 'start-time-unknown'], 'an unknown start time is not trusted (review 2 #5)')
+    assert.equal(judge(cc, ctxFor({ home: s.home })).layers[0].file, file, 'a layer names its file, so the daemon can match it to the install manifest')
+    assert.ok(cc.trust.hints['config-after-start'] && cc.trust.hints['start-time-unknown'], 'both say what to do: restart it')
   } finally { s.done() }
 })
 

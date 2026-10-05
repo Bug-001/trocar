@@ -72,6 +72,17 @@ test('trust: a non-live layer edited after the process started is not believed (
   assert.equal(checker.check(replacing, { environ: env({}), layers: [{ ...layer, live: true }], startedAt: 1_000 }).trusted, true)
 })
 
+test('trust: a non-live layer is judged by when its value appeared (`since`) before the file mtime; an unknown start time or age is stale (review 2 #5)', () => {
+  const layer = { name: 'settings env', mode: 'override', vars: { CERT_FILE: MERGED }, live: false, mtimeMs: 5_000 } // edited later for something else
+  assert.equal(checker.check(replacing, { environ: env({}), layers: [layer], startedAt: 3_000 }).trusted, false)
+  assert.equal(checker.check(replacing, { environ: env({}), layers: [{ ...layer, since: 2_000 }], startedAt: 3_000 }).trusted, true, 'the value was there before the process started')
+  assert.equal(checker.check(replacing, { environ: env({}), layers: [{ ...layer, since: 4_000 }], startedAt: 3_000 }).reason, 'config-after-start')
+  const unknown = checker.check(replacing, { environ: env({}), layers: [{ ...layer, since: 2_000 }], startedAt: null })
+  assert.deepEqual([unknown.trusted, unknown.reason], [false, 'start-time-unknown'], 'an unknown start time is never trusted by default')
+  assert.equal(checker.check(replacing, { environ: env({}), layers: [{ ...layer, mtimeMs: null }], startedAt: 3_000 }).trusted, false, 'an unknown age neither')
+  assert.equal(checker.check(replacing, { environ: env({}), layers: [{ ...layer, live: true }], startedAt: null }).trusted, true, 'a live layer does not depend on the start time')
+})
+
 test('trust: an ignored layer is left out and named when it would have granted trust', () => {
   const layer = { name: 'settings env', mode: 'override', vars: { EXTRA_CA: ONLY }, ignored: 'settings-ignored' }
   const r = checker.check(additive, { environ: env({}), layers: [layer] })

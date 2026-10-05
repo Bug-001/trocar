@@ -376,3 +376,24 @@ test('daemon: an error judging a process is a failure record carrying the pid; o
     assert.ok((await req(s.sock, 'GET', '/status')).failures.some((x) => x.where === 'tracker' && x.pid === 8282), 'status reports it')
   } finally { await d.stop(); p.done(); s.done() }
 })
+
+test('daemon: a CC started after install stays trusted when settings.json is later edited for something else; a CA value changed after it started is config-after-start, with the hint (review 2 #5)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const settings = path.join(s.home, '.claude', 'settings.json')
+  p.add(7171, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) }) // started after install
+  const edit = (fn) => { const j = JSON.parse(fs.readFileSync(settings, 'utf8')); fn(j); fs.writeFileSync(settings, JSON.stringify(j, null, 2)); const t = new Date(Date.now() + 120_000); fs.utimesSync(settings, t, t) }
+  edit((j) => { j.theme = 'dark' }) // after it started: the file's mtime is now past its start
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc] })
+  try {
+    const row = (await req(s.sock, 'POST', '/on', {})).agents.find((a) => a.pid === 7171)
+    assert.deepEqual([row.trusted, row.decrypt], [true, true], 'the CA asight wrote was there when it started')
+    // now the CA value itself changes after it started (to a copy that holds the asight CA too)
+    const copy = path.join(s.home, 'copy.pem')
+    edit((j) => { fs.copyFileSync(j.env.NODE_EXTRA_CA_CERTS, copy); j.env.NODE_EXTRA_CA_CERTS = copy })
+    await req(s.sock, 'POST', '/off'); const again = (await req(s.sock, 'POST', '/on', {})).agents.find((a) => a.pid === 7171)
+    assert.deepEqual([again.trusted, again.reason], [false, 'config-after-start'])
+    const rec = flowsOf(s).find((f) => f.event === 'agent-untrusted' && f.pid === 7171)
+    assert.match(rec.hint, /started before the CA was in its settings.*restart it to be captured/)
+  } finally { await d.stop(); p.done(); s.done() }
+})

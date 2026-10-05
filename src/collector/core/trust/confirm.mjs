@@ -108,12 +108,16 @@ export function createTrustChecker({ caCertPem, readFile = fs.readFileSync, stat
 
   function checkOne(trust, environ, layers, cwd, startedAt, argv) {
     const spec = { ...trust, environ }
-    const stale = (l) => l.live === false && l.mtimeMs != null && startedAt != null && l.mtimeMs > startedAt
+    // A layer read only at start counts if its value was there when the process started: `since` (when asight
+    // installed that very value, from the install manifest) else the file's mtime. An unknown start time or an
+    // unknown age counts as stale — never trusted by default (review 2 #5).
+    const since = (l) => l.since ?? l.mtimeMs ?? null
+    const stale = (l) => l.live === false && (startedAt == null || since(l) == null || since(l) > startedAt)
     const active = layers.filter((l) => !l.ignored && !stale(l))
     const res = evaluate(spec, active, cwd)
     if (!res.trusted && active.length !== layers.length) {
       for (const l of layers.filter((x) => !active.includes(x))) {
-        if (evaluate(spec, [...active, l], cwd).trusted) { res.reason = l.ignored || 'config-after-start'; res.via = l.name; break }
+        if (evaluate(spec, [...active, l], cwd).trusted) { res.reason = l.ignored || (startedAt == null ? 'start-time-unknown' : 'config-after-start'); res.via = l.name; break }
       }
     }
     if (!res.trusted && trust.refine) res.reason = trust.refine(res, res.env, { argv }) || res.reason

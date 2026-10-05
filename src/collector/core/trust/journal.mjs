@@ -113,6 +113,21 @@ export function applyJsonKey({ dir, manifest, harness, file, keys, value, now = 
   return entry
 }
 
+// When asight installed the value a config layer holds (ms), or null. A layer counts when an entry changed its file
+// (`path`, or the link target `real_path`) and the layer still holds that entry's value under its last key; the
+// tracker then judges config-after-start against this time, not the file's mtime, so an unrelated later edit of the
+// same file does not make a process that started after install look stale (review 2 #5).
+export function installedAt(manifest, layer) {
+  if (!manifest || !layer || !layer.file || !layer.vars) return null
+  for (const e of manifest.entries || []) {
+    if (e.path !== layer.file && e.real_path !== layer.file) continue
+    const key = Array.isArray(e.keys) ? e.keys[e.keys.length - 1] : null
+    const t = Date.parse(e.installed_at)
+    if (key != null && layer.vars[key] === e.value && Number.isFinite(t)) return t
+  }
+  return null
+}
+
 // Undo one entry by the 4.6 rules: untouched since install → byte-identical; already back → say so; edited since →
 // remove only asight's key (or put the user's prior value back), leave every other byte alone.
 // The file to undo, resolved again now. A path that is a symlink today is never written or deleted over: it must

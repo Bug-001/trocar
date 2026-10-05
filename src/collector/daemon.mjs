@@ -10,7 +10,7 @@ import { loadArch } from './arch/index.mjs'
 import { loadHarnesses } from './harness/index.mjs'
 import { createRegistry } from './core/registry.mjs'
 import { createTrustChecker } from './core/trust/confirm.mjs'
-import { readManifest } from './core/trust/journal.mjs'
+import { readManifest, installedAt } from './core/trust/journal.mjs'
 import { createTracker } from './core/tracker.mjs'
 import { createSwitch } from './core/switch.mjs'
 import { startControlServer, controlSocketPath } from './core/control.mjs'
@@ -90,6 +90,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       try { appendEvent(P.dir, { event: 'agent-untrusted', pid: row.pid, agent: row.agent, reason: row.reason, via: row.trustVia ?? null, ...(hint ? { hint } : {}) }) } catch (w) { log('events', w) }
     }
     const tracker = createTracker({ redirector, registry, trust: createTrustChecker({ caCertPem: ca.certPem }), onVerdict,
+      installedAt: (l) => installedAt(manifest, l), // config-after-start is judged against when asight wrote the value
       onError: (e, at) => failure('tracker', Object.assign(new Error(`pid ${at.pid} (${at.phase}): ${errText(e)}${at.phase === 'judge' ? '; it is not watched, its connections go direct' : ''}`), { code: e && e.code }), at) })
     let helperDown = null
     let sw = null

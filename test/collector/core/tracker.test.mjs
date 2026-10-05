@@ -121,3 +121,15 @@ test('tracker: an error judging a process reaches onError with its pid; it is le
   redirector.emit('exit', { pid: 803 }); await settle()
   assert.deepEqual(errors[3], [803, 'unwatch', 'the redirector helper is down'])
 })
+
+test('tracker: a layer read only at start is judged against installedAt when asight wrote its value, else its mtime (review 2 #5)', async () => {
+  const layered = { ...agent, layers: () => [{ name: 'cfg', file: '/h/cfg.json', mode: 'override', vars: { EXTRA_CA: PEM }, live: false, mtimeMs: 5_000 }] }
+  const seen = []
+  const make = (installedAt) => createTracker({ redirector: fakeRedirector(), registry: createRegistry([layered]), trust: createTrustChecker({ caCertPem: ca.certPem }), home: dir, installedAt })
+  const byMtime = make(undefined)
+  assert.deepEqual([(await byMtime.onExec(facts(900, { startedAt: 3_000 }))).trusted, byMtime.describe(900).reason], [false, 'config-after-start'])
+  const byInstall = make((l) => { seen.push(l.file); return 2_000 })
+  assert.equal((await byInstall.onExec(facts(901, { startedAt: 3_000 }))).trusted, true, 'asight wrote this value before the process started; the later edit was something else')
+  assert.deepEqual(seen, ['/h/cfg.json'])
+  assert.equal((await byInstall.onExec(facts(902, { startedAt: null }))).reason, 'start-time-unknown')
+})

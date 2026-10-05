@@ -59,15 +59,15 @@ function layers(ctx) {
     const name = `${label} (${file})`
     const mtimeMs = ctx.mtimeOf(file)
     const scopeOff = restricted ? 'settings-ignored-restricted' : (allowed && scope !== 'policy' && !allowed.has(scope)) ? 'settings-ignored-setting-sources' : null
-    if (scopeOff) { out.push({ name, mode: 'override', vars, live: false, mtimeMs, ignored: scopeOff }); continue }
+    if (scopeOff) { out.push({ name, file, mode: 'override', vars, live: false, mtimeMs, ignored: scopeOff }); continue }
     if (hostManaged) {
       const kept = {}; const dropped = {}
       for (const [k, v] of Object.entries(vars)) (HOST_MANAGED_DROPS.has(k) ? dropped : kept)[k] = v
-      out.push({ name, mode: 'override', vars: kept, live: false, mtimeMs })
-      if (Object.keys(dropped).length) out.push({ name, mode: 'override', vars: dropped, live: false, mtimeMs, ignored: 'settings-ignored-managed-by-host' })
+      out.push({ name, file, mode: 'override', vars: kept, live: false, mtimeMs })
+      if (Object.keys(dropped).length) out.push({ name, file, mode: 'override', vars: dropped, live: false, mtimeMs, ignored: 'settings-ignored-managed-by-host' })
       continue
     }
-    out.push({ name, mode: 'override', vars, live: false, mtimeMs })
+    out.push({ name, file, mode: 'override', vars, live: false, mtimeMs })
   }
   return out
 }
@@ -125,6 +125,8 @@ export default {
       'settings-ignored-managed-by-host': 'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST makes Claude Code ignore NODE_EXTRA_CA_CERTS from settings files',
       'settings-ignored-restricted': 'restricted mode ignores settings env',
       'settings-ignored-setting-sources': '--setting-sources excludes the scope that holds the CA',
+      'config-after-start': 'this Claude Code started before the CA was in its settings, and asight treats a running Claude Code as reading NODE_EXTRA_CA_CERTS only at start: restart it to be captured',
+      'start-time-unknown': 'the start time of this Claude Code could not be read, so it is not known whether it started after the CA was in its settings; restart it to be captured',
     },
   },
 }

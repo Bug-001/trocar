@@ -15,7 +15,9 @@ export function sandbox() {
 }
 
 // os defaults to 'none' so no machine-wide config dir (/etc/…) is read unless a test opts in (0.1 §3).
-export function ctxFor({ home, cwd = home, env = {}, argv = [], os: osName = 'none', startedAt = null }) {
+// startedAt defaults to a process started just after the sandbox was written (an unknown start time is judged
+// untrusted for a layer read only at start — review 2 #5); pass null to test exactly that.
+export function ctxFor({ home, cwd = home, env = {}, argv = [], os: osName = 'none', startedAt = Date.now() + 1000 }) {
   const environ = new Map(Object.entries(env))
   return {
     os: osName, environ, env: environ, home, cwd, argv, startedAt,

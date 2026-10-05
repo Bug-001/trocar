@@ -20,10 +20,12 @@ const mtimeOfFile = (f) => { try { return fs.statSync(f).mtimeMs } catch { retur
 const listDirNames = (d) => { try { return fs.readdirSync(d) } catch { return [] } }
 
 // onVerdict(row, prev) is told every agent verdict (prev: the row this pid had before, or null), so the daemon can
-// leave a durable record when one is untrusted or its watch failed (D38). onError(e, {pid, phase})
+// leave a durable record when one is untrusted or its watch failed (D38).
+// installedAt(layer) → ms | null says when asight installed the value a layer read only at start holds (the daemon
+// answers from the install manifest). onError(e, {pid, phase})
 // is told every error judging or (un)watching a process — that process stays unwatched (its connections go
 // direct) and the rest of the table carries on; nothing here is swallowed (review 2 #4).
-export function createTracker({ redirector, registry, trust, home = os.homedir(), readText = defaultReadText, mtimeOf = mtimeOfFile, listDir = listDirNames, now = () => Date.now(), onVerdict = () => {}, onError = () => {} }) {
+export function createTracker({ redirector, registry, trust, home = os.homedir(), readText = defaultReadText, mtimeOf = mtimeOfFile, listDir = listDirNames, now = () => Date.now(), onVerdict = () => {}, onError = () => {}, installedAt = () => null }) {
   const table = new Map() // pid → AgentRow (agents only)
   const subs = []
   let mode = 'auto'
@@ -49,6 +51,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     const ctx = { os: facts.os, environ, env: environ, home: environ.get('HOME') || home, cwd: facts.cwd || '/', argv: facts.argv || [], startedAt: facts.startedAt ?? null, readText, mtimeOf, listDir }
     const row = { pid: facts.pid, ppid: facts.ppid ?? null, agent: m.agent, exe: facts.exe ?? null, argv0: (facts.argv || [])[0] ?? null, source: facts.source, since: prev ? prev.since : now() }
     const layers = call(d.layers, ctx, row).filter(Boolean)
+    for (const l of layers) if (l.live === false) { const t = installedAt(l); if (t != null) l.since = t } // review 2 #5
     const t = trust.check(d.trust, { environ, layers, cwd: ctx.cwd, startedAt: ctx.startedAt, argv: ctx.argv })
     const live = { ...ctx, env: effectiveEnv(environ, layers.filter((l) => !l.ignored)).env }
     const hosts = [...new Set([...d.hosts, ...call(d.configHosts, live, row)].filter(Boolean).map((h) => String(h).toLowerCase()))]
