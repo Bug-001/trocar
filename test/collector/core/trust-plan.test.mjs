@@ -77,5 +77,6 @@ test('trust plan: owned files — in an agent\'s directory only with "asight" in
   const sh = { path: `${DIR}/bin/alpha`, role: 'shim', data: '#!/bin/sh\n' }
   assert.equal(plan(() => ({ owned: [sh] })).owned.length, 1)
   assert.throws(() => plan(() => ({ owned: [sh, sh] })), /one shim per command/)
+  assert.throws(() => plan(() => ({ owned: [sh, { ...P, path: `${DIR}/bin/asight-helper` }] })), /holds launch shims only/, 'the shim dir is first on PATH: nothing else of asight goes in it')
   assert.throws(() => plan(() => ({ owned: [{ ...P, role: 'daemon' }] })), /unknown owned-file role/)
 })

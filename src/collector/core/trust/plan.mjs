@@ -84,6 +84,7 @@ export function planTrust({ descriptors, ctxFor, caCertPem, collectorDir, roots 
       if (typeof o.data !== 'string') throw new Error(`${where}: an owned file needs its contents`)
       if (LOGIN_ENV.some((re) => re.test(o.path))) throw new Error(`${where}: a login-environment file is never a trust entry (D37④)`)
       if (o.role === 'shim' && path.dirname(o.path) !== path.join(collectorDir, 'bin')) throw new Error(`${where}: a launch shim lives in ${collectorDir}/bin, the shim directory, and nowhere else`)
+      if (o.role !== 'shim' && path.dirname(o.path) === path.join(collectorDir, 'bin')) throw new Error(`${where}: ${collectorDir}/bin is first on the user's PATH, so it holds launch shims only`)
       if (!under(o.path) && (!path.basename(o.path).includes('asight') || !o.data.includes(SENTINEL))) {
         throw new Error(`${where}: a file asight puts in an agent's directory has "asight" in its name and the sentinel comment in its text`)
       }
