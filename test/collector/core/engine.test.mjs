@@ -23,3 +23,15 @@ test('engine: lookup miss closes the socket; a known flow is spliced to its dest
   await engine.close(); echo.close()
   const s = engine.stats(); assert.equal(s.lookupMisses, 1); assert.equal(s.total, 2)
 })
+
+test('engine: a connection that closes before speaking is finalized, not leaked, and close() never hangs', async () => {
+  const up = net.createServer((sk) => sk.resume()); await new Promise((r) => up.listen(0, '127.0.0.1', r))
+  const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 1, agent: 'x', decrypt: false })
+  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(createCa())), store: { envelope() {}, flow() {} } })
+  const { port } = await engine.listen({})
+  await new Promise((resolve) => { const c = net.connect(port, '127.0.0.1', () => c.destroy()); c.on('close', resolve); c.on('error', () => {}) })
+  // close() must resolve promptly: the pre-decision flow was finalized (not left pending forever)
+  await Promise.race([engine.close(), new Promise((_, rej) => setTimeout(() => rej(new Error('engine.close() hung on a leaked flow')), 2000))])
+  up.close()
+  assert.equal(engine.stats().active, 0)
+})
