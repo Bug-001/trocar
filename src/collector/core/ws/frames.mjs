@@ -7,14 +7,18 @@ export const OP = { CONT: 0, TEXT: 1, BINARY: 2, CLOSE: 8, PING: 9, PONG: 10 }
 
 /**
  * createFrameParser({maxPayload}) → { push(chunk) → {frames, error} }
- * Frame = { fin, rsv1, rsv2, rsv3, opcode, masked, header, payload }
+ * Frame = { fin, rsv1, rsv2, rsv3, opcode, masked, header, payload, omitted? }
  *   header  = the frame's header bytes as on the wire (2–14 bytes, mask key included)
- *   payload = an unmasked copy of the payload
+ *   payload = an unmasked copy of the payload; null with omitted = its length once the data frame would
+ *             take its message past maxPayload (D37 W17): that frame and the rest of the message are
+ *             reported at their header and their payload bytes are dropped unbuffered, so frame sync
+ *             holds and later frames parse normally.
  * Chunks are kept as a list until a whole frame is there, so a large frame arriving in small TCP
  * chunks costs one copy, not one per chunk: this runs on the relay's event loop (§引擎 6).
  */
 export function createFrameParser({ maxPayload = 64 << 20 } = {}) {
   let parts = [], size = 0, need = 2 // pending chunks; bytes needed before the next frame can be cut
+  let skip = 0, msg = 0               // payload bytes still to drop; declared bytes of the current message
   let error = null
   const fail = (msg) => { error = msg; parts = []; return null }
   function next() {
@@ -26,28 +30,32 @@ export function createFrameParser({ maxPayload = 64 << 20 } = {}) {
     else if (len === 127) {
       if (buf.length < 10) { need = 10; return null }
       const n = buf.readBigUInt64BE(2)
-      len = n > BigInt(maxPayload) ? Infinity : Number(n); at = 10
+      if (n > BigInt(Number.MAX_SAFE_INTEGER)) return fail(`frame length ${n} is not representable`)
+      len = Number(n); at = 10
     }
     const opcode = b0 & 0x0f
     if ((opcode > 2 && opcode < 8) || opcode > 10) return fail(`reserved opcode ${opcode}`)
     if (opcode >= 8 && (!(b0 & 0x80) || len > 125)) return fail('control frame is fragmented or longer than 125 bytes')
-    if (len > maxPayload) return fail(`frame payload exceeds ${maxPayload} bytes`)
     const masked = (b1 & 0x80) !== 0
     const keyAt = at
     if (masked) at += 4
-    if (buf.length < at + len) { need = at + len; return null }
+    const base = opcode === 0 ? msg : 0, omit = opcode < 8 && base + len > maxPayload
+    if (buf.length < (omit ? at : at + len)) { need = omit ? at : at + len; return null }
     const header = Buffer.from(buf.subarray(0, at))
-    const payload = Buffer.from(buf.subarray(at, at + len))
-    if (masked) for (let i = 0; i < len; i++) payload[i] ^= buf[keyAt + (i & 3)]
-    size -= at + len; need = 2
-    parts = size ? [buf.subarray(at + len)] : []
-    return { fin: (b0 & 0x80) !== 0, rsv1: (b0 & 0x40) !== 0, rsv2: (b0 & 0x20) !== 0, rsv3: (b0 & 0x10) !== 0, opcode, masked, header, payload }
+    let payload = null
+    if (!omit) { payload = Buffer.from(buf.subarray(at, at + len)); if (masked) for (let i = 0; i < len; i++) payload[i] ^= buf[keyAt + (i & 3)] }
+    if (opcode < 8) msg = b0 & 0x80 ? 0 : base + len
+    const used = Math.min(buf.length, at + len)
+    skip = at + len - used; size -= used; need = 2
+    parts = size ? [buf.subarray(used)] : []
+    return { fin: (b0 & 0x80) !== 0, rsv1: (b0 & 0x40) !== 0, rsv2: (b0 & 0x20) !== 0, rsv3: (b0 & 0x10) !== 0, opcode, masked, header, payload, ...(omit ? { omitted: len } : {}) }
   }
   return {
     push(chunk) {
       const frames = []
       if (!error) {
-        parts.push(chunk); size += chunk.length
+        if (skip) { const n = Math.min(skip, chunk.length); skip -= n; chunk = chunk.subarray(n) }
+        if (chunk.length) { parts.push(chunk); size += chunk.length }
         for (let f; size >= need && (f = next());) frames.push(f)
       }
       return { frames, error }
@@ -56,15 +64,16 @@ export function createFrameParser({ maxPayload = 64 << 20 } = {}) {
 }
 
 /**
- * createMessageAssembler({maxMessage}) → { push(frame) → event }
+ * createMessageAssembler() → { push(frame) → event }
  *   {type:'control'}                              ping / pong / close: never joins a message
- *   {type:'data', start, done, opcode, compressed, offset, message?}
+ *   {type:'data', start, done, opcode, compressed, offset, message?, omitted_bytes?}
  *       start: first frame of a message · offset: where this frame's payload sits in the message ·
- *       done: last frame, with message = the reassembled (still compressed) payload
+ *       done: last frame, with message = the reassembled (still compressed) payload, or, when the parser
+ *       omitted any frame of it, message = null and omitted_bytes = its declared size (→ ws_truncated)
  *   {type:'error', error}
  * Control frames between the fragments of a message pass through as 'control' (RFC 6455 §5.4).
  */
-export function createMessageAssembler({ maxMessage = 64 << 20 } = {}) {
+export function createMessageAssembler() {
   let cur = null
   return {
     push(f) {
@@ -78,10 +87,10 @@ export function createMessageAssembler({ maxMessage = 64 << 20 } = {}) {
         start = true
       }
       const offset = cur.size
-      cur.parts.push(f.payload); cur.size += f.payload.length
-      if (cur.size > maxMessage) { cur = null; return { type: 'error', error: `message exceeds ${maxMessage} bytes` } }
+      if (f.payload) cur.parts.push(f.payload); else { cur.omitted = true; cur.parts = [] } // drop what came before
+      cur.size += f.payload ? f.payload.length : f.omitted
       const ev = { type: 'data', start, done: f.fin, opcode: cur.opcode, compressed: cur.compressed, offset }
-      if (f.fin) { ev.message = Buffer.concat(cur.parts); cur = null }
+      if (f.fin) { Object.assign(ev, cur.omitted ? { message: null, omitted_bytes: cur.size } : { message: Buffer.concat(cur.parts) }); cur = null }
       return ev
     },
   }

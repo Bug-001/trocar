@@ -37,7 +37,7 @@ export function parseExtensions(header) {
   return { deflate, other }
 }
 
-/** createInflater({noContextTakeover, maxOutput}) → { inflate(payload) → Buffer } (throws on corrupt data or past maxOutput). */
+/** createInflater({noContextTakeover, maxOutput}) → { inflate(payload) → Buffer, skip() } (inflate throws on corrupt data or past maxOutput). */
 export function createInflater({ noContextTakeover = false, maxOutput = 64 << 20 } = {}) {
   let dict = Buffer.alloc(0)
   return {
@@ -55,5 +55,8 @@ export function createInflater({ noContextTakeover = false, maxOutput = 64 << 20
       }
       return out
     },
+    // A compressed message whose payload was omitted (over the cap): with takeover the window is lost,
+    // so it is cleared like a failure; a later reference into it then fails. Without takeover: no effect.
+    skip() { dict = Buffer.alloc(0) },
   }
 }
