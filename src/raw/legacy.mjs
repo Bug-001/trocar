@@ -120,7 +120,11 @@ export async function defaultProcessList({ fs = nodeFs } = {}) {
     const out = [];
     for (const pid of fs.readdirSync('/proc')) {
       if (!/^\d+$/.test(pid)) continue;
-      try { out.push({ pid: Number(pid), cmd: fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' ') }); } catch {}
+      try {
+        const argv = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0');
+        if (argv[argv.length - 1] === '') argv.pop();
+        out.push({ pid: Number(pid), argv, cmd: argv.join(' ') });            // the exact argv
+      } catch {}
     }
     return out;
   }
@@ -128,7 +132,42 @@ export async function defaultProcessList({ fs = nodeFs } = {}) {
   if (r.error || r.status !== 0) throw new Error(`cannot list processes: ps failed (${r.error ? r.error.message : r.stderr})`);
   return r.stdout.split('\n').filter(Boolean).map((l) => { const m = /^\s*(\d+)\s+(.*)$/.exec(l); return m ? { pid: Number(m[1]), cmd: m[2] } : null; }).filter(Boolean);
 }
-export const shardWatchers = (procs) => procs.filter((p) => p.pid !== process.pid && /\basight(?:\.mjs)?\s+shard\b.*\s--watch\b/.test(p.cmd));
+// `asight shard --watch` among the processes, from argv (review 3 F9: a regex over the joined command
+// line matched any line containing the text — `vim asight shard --watch` — and missed `npx asight --
+// shard --watch`). The program is the first argument that is not a launcher (node, npx, npm exec…), an
+// option, an option's value or an env assignment; it must be asight itself; then, past an optional
+// `--`, the subcommand `shard` and the flag `--watch` before any `--`.
+const LAUNCHERS = new Set(['node', 'nodejs', 'bun', 'deno', 'npx', 'pnpx', 'npm', 'pnpm', 'yarn', 'exec', 'x', 'dlx', 'env', 'nohup', 'nice', 'time', 'caffeinate', 'sudo']);
+const ASIGHT = /^asight(?:\.m?js)?(?:@[^/]*)?$/;
+export function isShardWatch(argv) {
+  let i = 0;
+  for (; i < argv.length; i++) {
+    const a = argv[i], prev = argv[i - 1] || '';
+    if (LAUNCHERS.has(path.basename(a)) || a.startsWith('-') || /^[A-Za-z_][A-Za-z0-9_]*=/.test(a)) continue;
+    if (i > 0 && /^-/.test(prev) && prev !== '--' && !prev.includes('=') && !ASIGHT.test(path.basename(a))) continue;   // an option's value
+    break;
+  }
+  if (i >= argv.length || !ASIGHT.test(path.basename(argv[i]))) return false;
+  let rest = argv.slice(i + 1);
+  if (rest[0] === '--') rest = rest.slice(1);
+  if (rest[0] !== 'shard') return false;
+  const args = rest.slice(1), end = args.indexOf('--');
+  return (end < 0 ? args : args.slice(0, end)).includes('--watch');
+}
+// macOS `ps` joins argv with spaces, so a path with a space comes back in pieces: pieces of an absolute
+// path are put back together where the joined path exists (the longest that does).
+export function argvOfCommand(cmd, { fs = nodeFs } = {}) {
+  const t = String(cmd).split(' ').filter(Boolean), out = [];
+  for (let i = 0; i < t.length; i++) {
+    let j = i;
+    if (t[i].startsWith('/')) for (let k = i + 1; k < Math.min(t.length, i + 8); k++) if (fs.existsSync(t.slice(i, k + 1).join(' '))) j = k;
+    out.push(t.slice(i, j + 1).join(' '));
+    i = j;
+  }
+  return out;
+}
+export const shardWatchers = (procs) => procs.filter((p) => p.pid !== process.pid && /asight/.test(p.argv ? p.argv.join(' ') : p.cmd)
+  && isShardWatch(p.argv || argvOfCommand(p.cmd)));
 
 const sameStat = (a, b) => a.size === b.size && a.mtimeMs === b.mtimeMs && a.ino === b.ino;
 

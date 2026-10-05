@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { sealLegacy, defaultFdHolders, legacyTargets } from '../../src/raw/legacy.mjs';
+import { sealLegacy, defaultFdHolders, legacyTargets, shardWatchers, argvOfCommand } from '../../src/raw/legacy.mjs';
 import { sealShard, SealRefused } from '../../src/raw/seal.mjs';
 import { markClosed } from '../../src/raw/closed.mjs';
 import { readJournal } from '../../src/raw/journal.mjs';
@@ -83,4 +83,28 @@ test('the old root is refused under another letter case, and when the operator n
       assert.deepEqual(fs.readdirSync(old).filter((n) => n.endsWith('.sealed')).length, 1, 'a second copy was written into the old root');
     }
   } finally { fs.rmSync(path.join(os.homedir(), '.atrace'), { recursive: true, force: true }); }
+});
+
+// Review 3 F9: `asight shard --watch` was found by a regex over the joined command line — it matched
+// any command line containing the text, and missed `npx asight -- shard --watch`. argv is parsed now.
+test('F9: `shard --watch` is recognised from argv, not from text anywhere on the command line', () => {
+  const hit = (cmd) => shardWatchers([{ pid: 4242, cmd }]).length === 1;
+  for (const cmd of ['asight shard --watch', 'npx asight -- shard --watch', 'npm exec asight -- shard --watch', 'npx -y asight@latest shard --interval 5 --watch',
+    'node /opt/x/bin/asight.mjs shard --watch', 'node --max-old-space-size 4096 /opt/x/bin/asight.mjs shard --watch', '/usr/local/bin/node /u/node_modules/.bin/asight shard --watch --interval 5',
+    'nohup asight shard --watch']) assert.ok(hit(cmd), `missed: ${cmd}`);
+  for (const cmd of ['vim asight shard --watch', 'grep -r asight shard --watch', 'less /x/bin/asight.mjs shard --watch', 'asight shard', 'asight serve --watch',
+    'asight raw seal --legacy /x/shard --watch', 'node /x/not-asight.mjs shard --watch', 'asight shard -- --watch']) assert.ok(!hit(cmd), `false alarm: ${cmd}`);
+  // Linux gives the exact argv (NUL-separated /proc/<pid>/cmdline)
+  assert.equal(shardWatchers([{ pid: 1, argv: ['node', '/opt/my asight/bin/asight.mjs', 'shard', '--watch'] }]).length, 1);
+  assert.equal(shardWatchers([{ pid: 1, argv: ['vim', 'asight shard --watch'] }]).length, 0);
+});
+
+test('F9: on macOS a path with a space, split by `ps`, is put back together from what exists on disk', () => {
+  const root = tmpDir();
+  try {
+    const bin = path.join(root, 'my tools', 'bin', 'asight.mjs');
+    fs.mkdirSync(path.dirname(bin), { recursive: true }); fs.writeFileSync(bin, '');
+    assert.deepEqual(argvOfCommand(`node ${bin} shard --watch`), ['node', bin, 'shard', '--watch']);
+    assert.equal(shardWatchers([{ pid: 9, cmd: `node ${bin} shard --watch` }]).length, 1);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
