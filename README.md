@@ -172,6 +172,11 @@ asight raw export <session-id>                     # back to plain NDJSON in ~/.
 asight raw journal                                 # every refusal, failure and deletion, with its reason
 ```
 
+`asight raw seal <closed-shard>` files a shard's records by session under `~/.asight/sessions/<session>/`;
+`asight serve --source <the shard's directory>` reads them as part of that directory (a different
+`--sessions` must then be served too). The old root `~/.atrace/asight/` is never sealed — move it into
+`~/.asight` first.
+
 A capture file that is still being written is never sealed. Sealed and exported files hold the same
 plaintext and credentials as the capture and are created owner-only (0600); `asight doctor` checks them.
 
