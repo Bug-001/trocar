@@ -8,6 +8,7 @@ import tls from 'node:tls'
 import { classify, parseClientHello, parseHead } from './sniff.mjs'
 import { createExchangeTee } from './exchange.mjs'
 import { negKey } from './negcache.mjs'
+import { createUpstreamTrust } from '../tls/roots.mjs'
 
 export function handleFlow(client, meta, ctx) {
   const t0 = Date.now()
@@ -184,12 +185,13 @@ export function handleFlow(client, meta, ctx) {
   }
 
   function decrypt(buf, cSock, uSock, sni, host, isTunnel, key) {
-    const ca = [...tls.rootCertificates, ...(ctx.upstreamCa ? [].concat(ctx.upstreamCa) : [])]
+    // the OS store ∪ Node's roots ∪ NODE_EXTRA_CA_CERTS (+ upstreamCa), one context (tls/roots.mjs)
+    if (!ctx.upstreamTrust) ctx.upstreamTrust = createUpstreamTrust({ extra: ctx.upstreamCa })
     // rejectUnauthorized:false only so the two upstream failures can be told apart: an 'error' before
     // 'secureConnect' is a network / protocol failure (the client is closed); a 'secureConnect' that is
     // not `authorized` (Node still checks chain and hostname) is a certificate that did not verify
     // (stepAside). Nothing is ever written on an unverified connection (§引擎 5).
-    const upTls = tls.connect({ socket: uSock, servername: sni || undefined, ALPNProtocols: ['http/1.1'], ca, rejectUnauthorized: false })
+    const upTls = tls.connect({ socket: uSock, servername: sni || undefined, ALPNProtocols: ['http/1.1'], secureContext: ctx.upstreamTrust.secureContext, rejectUnauthorized: false })
     let clientTls = null
     upTls.on('error', (err) => {
       if (!clientTls) { try { cSock.destroy() } catch { /* ignore */ }; finish(isTunnel ? 'tunnel' : 'decrypt', { host, error: { type: err.code || 'upstream_tls_error', message: String((err && err.message) || err) } }) }

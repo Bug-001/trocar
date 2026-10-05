@@ -8,8 +8,11 @@
 import net from 'node:net'
 import { handleFlow } from './flow.mjs'
 import { createNegativeCache } from './negcache.mjs'
+import { createUpstreamTrust, systemRoots } from '../tls/roots.mjs'
 
-export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, policy = () => true, isRecording = () => true, describe = () => ({}), onError = () => {} }) {
+// upstreamCa: extra CAs the engine trusts upstream (test seam); systemCa: stands in for the OS store
+// (tests; undefined = read it). The upstream trust set is built once (RFC 4.6 §引擎 5, tls/roots.mjs).
+export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, describe = () => ({}), onError = () => {} }) {
   const counters = { active: 0, total: 0, decrypted: 0, spliced: 0, lookupMisses: 0, notCaptured: { h2: 0, httpsProxy: 0, upstreamCert: 0, negative: 0, leafError: 0 } }
   const servers = []
   const active = new Set()
@@ -25,6 +28,14 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
       if (typeof store.failure !== 'function') throw new Error(`capture failure not recorded (the store has no failure()): ${rec.reason}`)
       store.failure({ ts: new Date().toISOString(), ...rec })
     } catch (e) { onError(e) }
+  }
+  const upstreamTrust = createUpstreamTrust({
+    system: systemCa === undefined ? systemRoots() : { certs: [].concat(systemCa).map(String).filter((p) => p.includes('BEGIN CERTIFICATE')), sources: ['option:systemCa'], errors: [] },
+    extra: upstreamCa,
+  })
+  if (upstreamTrust.missingSystem) { // the engine still verifies against Node's roots; corporate CAs are missing
+    const error = `no OS trust store found${upstreamTrust.errors.length ? ` (${upstreamTrust.errors.join('; ')})` : ''}: upstreams signed by a system-only CA will step aside`
+    onError(new Error(error)); failure({ reason: 'system-roots-unavailable', error })
   }
 
   async function onConnection(socket) {
@@ -46,7 +57,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     }
     counters.active++
     const ctx = {
-      issuer, store, upstreamCa, policy, isRecording, negCache, counters, failure,
+      issuer, store, upstreamCa, upstreamTrust, policy, isRecording, negCache, counters, failure,
       connectUpstream: connectUpstream || defaultConnect,
       newFlowId: () => `flow_${String(++flowSeq).padStart(6, '0')}`,
     }
