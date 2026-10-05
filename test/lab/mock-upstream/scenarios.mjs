@@ -11,6 +11,7 @@ export const SCENARIOS = {
   thinking: { thinking: true },
   'tool-use': { tool: true },
   subagent: { subagent: true },
+  'near-limit': { tool: true, nearLimit: true }, // usage: session.mjs withUsageTotal
   ...Object.fromEntries([400, 401, 403, 404, 408, 409, 413, 422, 500, 503, 504, 529].map((s) => [`http-${s}`, { status: s }])),
   'http-429': { status: 429, retryAfter: 1 },
   'http-429-long': { status: 429, retryAfter: 120 },
@@ -121,7 +122,7 @@ export function plan(seen, raw, body, sc = {}) {
   const tool = !act ? null : sc.subagent ? subagentCall(tools) : sc.tool && tools.length ? shellCall(tools.map((t) => t.name)) : null
   return {
     model: body.model || 'mock-model', text, parts: [...splitEvery(reply, 12), ...extra],
-    thinking, thinkingParts: thinking && splitEvery(thinking, 12), tool, toolArgs: tool && JSON.stringify(tool.input),
+    thinking, thinkingParts: thinking && splitEvery(thinking, 12), tool, toolArgs: tool && JSON.stringify(tool.input), compaction: turn.compacting,
     inputTokens: tokens(raw.length), outputTokens: tokens(text.length + (thinking || '').length),
   }
 }

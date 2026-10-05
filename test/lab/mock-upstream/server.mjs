@@ -8,6 +8,7 @@ import tls from 'node:tls'
 import { once } from 'node:events'
 import { parseRequest } from './http1.mjs'
 import { SCENARIOS, isScenario, pickScenario, errorFor, expandSteps } from './scenarios.mjs'
+import { NEAR_LIMIT_TOKENS, turnOf, acts, withUsageTotal } from './session.mjs'
 import { writeResponse, jsonReply } from './transport.mjs'
 import * as anthropic from './anthropic.mjs'
 import * as openai from './openai.mjs'
@@ -36,6 +37,7 @@ const parseJson = (buf) => { try { const v = JSON.parse(buf.toString('utf8')); r
 async function dispatch(req, io, state) {
   const p = req.target.split('?')[0]
   const route = ROUTES.find((r) => r.re.test(p) && r.methods.includes(req.method))
+  const body = parseJson(req.body)
   const pick = pickScenario(req.headers, req.body, route?.kind === 'model', state.queue)
   const sc = isScenario(pick.name) ? { ...SCENARIOS[pick.name], via: pick } : null
   // errors on routes no dialect owns (models, unknown paths) take the shape the client speaks
@@ -48,6 +50,7 @@ async function dispatch(req, io, state) {
   else if (route.kind === 'count') res = jsonReply(200, { input_tokens: Math.max(1, Math.ceil(req.body.length / 4)) })
   else if (route.kind === 'models') res = jsonReply(200, MODELS)
   else res = { status: 200, headers: {}, pieces: [] }
+  if (sc?.nearLimit && route?.kind === 'model' && res.status === 200 && acts(turnOf(body), sc)) withUsageTotal(res, state.cfg.nearLimitTokens)
   res.headers['x-mock-scenario'] = pick.name
   const close = /close/i.test(req.headers.connection || '')
   return { scenario: pick.name, source: pick.source, complete: await writeResponse(io, res, { head: req.method === 'HEAD', close, sc: sc || {}, cfg: state.cfg }) }
@@ -152,6 +155,7 @@ export async function startMockUpstream({ tls: tlsOpts = null, host = '127.0.0.1
   const state = { queue: [], log: [], cfg: { stallMs: 30000, dripMs: 250, ...delays } }
   const logFile = logDir ? path.join(logDir, 'log.ndjson') : null
   if (logFile) { fs.mkdirSync(logDir, { recursive: true }); fs.writeFileSync(logFile, '') }
+  state.cfg.nearLimitTokens ??= NEAR_LIMIT_TOKENS // what near-limit reports; POST /__mock/config changes it
   // With a logDir the file is the only copy: a long-lived lab process serving real agents would
   // otherwise hold every request and response in memory.
   const record = (e) => { if (logFile) fs.appendFileSync(logFile, JSON.stringify(e) + '\n'); else state.log.push(e) }
