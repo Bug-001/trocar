@@ -179,7 +179,8 @@ function realish(fs, p) {                     // realpath of the longest existin
   let cur = path.resolve(p);
   const tail = [];
   for (;;) {
-    try { return path.join(fs.realpathSync(cur), ...tail); }
+    // .native returns the on-disk letter case (macOS is case-insensitive: ~/.ATRACE is ~/.atrace)
+    try { return path.join((fs.realpathSync.native || fs.realpathSync)(cur), ...tail); }
     catch { const up = path.dirname(cur); if (up === cur) return path.resolve(p); tail.unshift(path.basename(cur)); cur = up; }
   }
 }

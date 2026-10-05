@@ -61,3 +61,26 @@ test('fd probe: an lsof error is "cannot tell", never "nobody"', async () => {
 test('a quiet window that is not a non-negative number is refused, not read as zero', async () => {
   for (const quietMs of [NaN, -1000]) await assert.rejects(sealLegacy(os.homedir(), { ...NONE, quietMs, dryRun: true }), /quiet window/);
 });
+
+test('the old root is refused under another letter case, and when the operator names a parent of it', async () => {
+  const old = path.join(os.homedir(), '.atrace', 'asight'), journal = path.join(os.homedir(), 'j2.jsonl');
+  try {
+    // a verified copy already beside the original: the delete-only branch, never the sealer
+    const staging = tmpDir();
+    const f0 = writeShard(path.join(staging, 'claude-capture.ndjson'), [toLine(envelope({ id: 'a', body: '' }))]);
+    await sealLegacy(f0, { ...NONE, journal });
+    fs.mkdirSync(old, { recursive: true });
+    for (const n of fs.readdirSync(staging)) fs.copyFileSync(path.join(staging, n), path.join(old, n));
+    fs.rmSync(staging, { recursive: true, force: true });
+    const f = path.join(old, 'claude-capture.ndjson');
+    const res = await sealLegacy(path.join(os.homedir(), '.atrace'), { ...NONE, journal, deleteOriginal: true });
+    assert.ok(fs.existsSync(f), 'an original under the old root was deleted through its parent');
+    assert.deepEqual(res.deletedOnly, []);
+    assert.match(res.refused.find((r) => r.file === f).reason, /old root/);
+    const upper = path.join(os.homedir(), '.ATRACE', 'Asight');
+    if (fs.existsSync(upper)) {                                    // a case-insensitive file system (macOS default)
+      await assert.rejects(sealLegacy(upper, { ...NONE, journal }), /old root/);
+      assert.deepEqual(fs.readdirSync(old).filter((n) => n.endsWith('.sealed')).length, 1, 'a second copy was written into the old root');
+    }
+  } finally { fs.rmSync(path.join(os.homedir(), '.atrace'), { recursive: true, force: true }); }
+});

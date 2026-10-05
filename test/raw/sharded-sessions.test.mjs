@@ -46,6 +46,10 @@ test('sharded mode lists a session dir the sealer made, and counts sealed files 
       const bad = await get(port, '/api/projects');
       const e = (bad.source_errors || []).find((x) => x.file === victim);
       assert.ok(e && e.unreadableRecords > 0, 'a sealer-made session listed from a partial read is not labelled');
+      // a sealer-made dir whose ONLY file cannot be opened is not recognised as a session — still named
+      fs.writeFileSync(victim, 'damaged');
+      const gone = await get(port, '/api/projects');
+      assert.ok((gone.source_errors || []).some((x) => x.file === victim), 'an unopenable file in an unrecognised dir is not reported');
     } finally { server.close(); }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

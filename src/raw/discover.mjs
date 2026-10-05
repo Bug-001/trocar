@@ -95,7 +95,7 @@ function scanRoot(root, fs) {
       if (s.name === 'calls.ndjson') { files.push(q); took = true; continue; }
       if (!isSealedPath(s.name)) continue;
       const src = sealedSources(q, { fs });
-      const sameDir = src && src.every((x) => path.dirname(x.abs) === p);
+      const sameDir = src && src.every((x) => path.dirname(x.abs) === path.resolve(p));   // resolved: a relative root too
       if (!src || !sameDir || streamOfSealed(s.name) === 'calls.ndjson') { files.push(q); took = true; }
     }
     if (!took) skipped.push(dirSkip);

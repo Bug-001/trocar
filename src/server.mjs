@@ -461,7 +461,10 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
   // per-session files `asight raw seal` put here, continuing a shard that lived elsewhere (D35). NOT a
   // capture dir's own per-shard file (its source is in the same dir): that must not make
   // ~/.asight/collector look like a session dir and flip the whole board into sharded mode.
-  const continuationsIn = (dir) => sealedIn(dir).filter((f) => { const src = sealedSources(f); return !src || src.some((x) => path.dirname(x.abs) !== dir); });
+  // Compared resolved (a relative --source must not flip the board). An unreadable file is NOT taken as
+  // a continuation — whose it is cannot be told; it is reported where it lies (unreadableSealedInShards
+  // in sharded mode, the flat read otherwise), never allowed to switch the board's mode.
+  const continuationsIn = (dir) => sealedIn(dir).filter((f) => { const src = sealedSources(f); return !!src && src.some((x) => path.dirname(x.abs) !== path.resolve(dir)); });
   const shardInputs = (dir, names) => {
     const originals = names.map((n) => path.join(dir, n)).filter((f) => fssync.existsSync(f));
     return resolveCoexistence([...originals, ...sealedIn(dir)]);
@@ -470,19 +473,25 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
   // files of OTHER streams in a session dir are per-session files of a collector shard (D35): the
   // sealer writes no meta.json, so they are folded here — memoised by the files' size/mtime — and
   // merged, or a sealer-made session would never list and a shared one would list short (review F3).
+  // Memoised PER FILE (size/mtime/inode): a new segment costs only its own decode. The first list after
+  // a restart still decodes every such file once, synchronously — a known cost, see the impl note.
   const foreignMeta = new Map();
   const foreignOf = (d, errors) => {
     const files = sealedIn(d).filter((f) => !SESSION_STREAMS.some((st) => path.basename(f).startsWith(st + '.')));
     if (!files.length) return null;
-    const sig = files.map((f) => { try { const t = fssync.statSync(f); return `${f}:${t.size}:${t.mtimeMs}`; } catch { return f; } }).join('|');
-    let hit = foreignMeta.get(d);
-    if (!hit || hit.sig !== sig) {
-      const meta = emptyMeta(path.basename(d));
-      hit = { sig, meta, problem: foldSealed(meta, files) };
-      foreignMeta.set(d, hit);
+    let meta = null;
+    for (const f of files) {
+      let sig; try { const t = fssync.statSync(f); sig = `${t.size}:${t.mtimeMs}:${t.ino}`; } catch { continue; }
+      let hit = foreignMeta.get(f);
+      if (!hit || hit.sig !== sig) {
+        const m = emptyMeta(path.basename(d));
+        hit = { sig, meta: m, problem: foldSealed(m, [f]) };
+        foreignMeta.set(f, hit);
+      }
+      if (hit.problem) errors.push(hit.problem);
+      meta = mergeMeta(meta, hit.meta);
     }
-    if (hit.problem) errors.push(hit.problem);
-    return hit.meta;
+    return meta;
   };
   const loadSessionMetas = (errors = []) => {
     const dirs = shardDirsOf();
@@ -582,7 +591,12 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
 
   // The session list of a shard root comes from meta.json, without reading records — so check the
   // sealed files there can at least be opened, or a damaged one would be invisible until clicked.
-  const unreadableSealedInShards = () => shardDirsOf().flatMap((d) => [
+  // every immediate subdir of a root, not only the session dirs: a session dir whose only file is damaged
+  // is not recognised as one, and must still be named
+  const subdirsOfRoots = () => (Array.isArray(sourcePath) ? sourcePath : [sourcePath]).filter(Boolean).flatMap((root) => {
+    try { return fssync.readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => path.join(root, e.name)); } catch { return []; }
+  });
+  const unreadableSealedInShards = () => [...new Set([...shardDirsOf(), ...subdirsOfRoots()])].flatMap((d) => [
     ...sealedIn(d).filter((f) => !sealedSources(f)).map((f) => ({ file: f, reason: 'sealed file could not be opened (header, index tail or checksum damaged)', unreadableRecords: null })),
     // anything else there that looks like captured bytes and is not read (4.2 「读」: reported, not skipped)
     ...(() => { try { return fssync.readdirSync(d); } catch { return []; } })().filter((n) => !SESSION_STREAMS.includes(n) && unreadCapture(n))

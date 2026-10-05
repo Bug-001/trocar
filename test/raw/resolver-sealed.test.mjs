@@ -99,3 +99,22 @@ test('an unreadable sealed file is counted and named by the resolver, not silent
     r.dispose();
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+// A damaged per-session file under the sessions dir cannot be attributed to a source; the resolver must
+// still name it when a ref comes back absent (review 2, finding 2).
+test('a ref into an unreadable per-session file says which file could not be read', async () => {
+  const root = tmpDir();
+  try {
+    const { cap, ses, shards } = corpus(root);
+    markClosed(shards[0]); await sealShard(shards[0], { sessionsRoot: ses });
+    const victim = listFiles(path.join(ses, T))[0];
+    fs.writeFileSync(victim, 'damaged');
+    const r = await buildResolver(cap, { sessionsRoot: ses });
+    try {
+      const d = r.detail(`${T}/capture-2026-10-05.ndjson#treq_00000::0-5`);
+      assert.equal(d.status, 'absent');
+      assert.match(d.reason, new RegExp(path.basename(victim).replace(/\./g, '\\.')));
+      assert.ok(r.scan.unattributed.some((u) => u.file === victim));
+    } finally { r.dispose(); }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

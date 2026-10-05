@@ -68,6 +68,14 @@ function classifyFidelity(raw) {
 // difference matters most — could not tell missing from broken. They are distinct now, and the
 // plain resolve() stays non-throwing/string-or-null for back-compat.
 const OUT = (status, reason = null, text = null, fidelity = null) => ({ status, reason, text, fidelity });
+// A within-file duplicate keeps the source shards (sha256) of its sealed members, so
+// poisonSplitDuplicates can carry the collision to a copy of the same record id in another root. An
+// entry that an earlier cross-root pass poisoned counts as the record it was (`splitFrom`).
+const shardShaOf = (loc) => (loc && loc.sealed ? loc.sealed.shards[loc.sealed.records[loc.i][R.shard]].sha256 : null);
+const dupOf = (prev, loc) => {
+  const was = prev.splitFrom || prev;
+  return { dup: true, dupCount: (was.dupCount || 1) + 1, file: loc.file, shas: [...(was.dup ? was.shas || [] : [shardShaOf(was)]), shardShaOf(loc)].filter(Boolean) };
+};
 
 // Byte-scan a file line-by-line from byte `from`, recording each record's { offset, length } WITHOUT
 // retaining any body. Peak memory ≈ one chunk + one line + the index (O(records) small entries).
@@ -98,8 +106,7 @@ function lineIndexer(file, idx, from, log) {
         // "verbatim" true (invariant 2) and the loss visible (invariant 4).
         const qk = base + '#' + id;
         const prev = idx.qual.get(qk);
-        idx.qual.set(qk, prev === undefined ? loc
-          : { dup: true, dupCount: (prev.dupCount || 1) + 1, file });
+        idx.qual.set(qk, prev === undefined ? loc : dupOf(prev, loc));
         // bare-id fallback: first writer wins, a second file poisons the entry to AMBIGUOUS
         const prevB = idx.byId.get(id), setB = prevB === undefined ? loc : AMBIGUOUS;
         idx.byId.set(id, setB);
@@ -197,7 +204,7 @@ function indexSealed(file, idx, frameCache) {
     if (r[R.id] == null) { idx.scan.unidentifiedLines++; continue; }
     const id = String(r[R.id]), qk = sf.streams[r[R.stream]] + '#' + id, loc = { file, sealed: sf, i };
     const prev = idx.qual.get(qk);
-    idx.qual.set(qk, prev === undefined ? loc : { dup: true, dupCount: (prev.dupCount || 1) + 1, file });
+    idx.qual.set(qk, prev === undefined ? loc : dupOf(prev, loc));
     idx.byId.set(id, idx.byId.has(id) ? AMBIGUOUS : loc);
   }
   return mark;
@@ -245,21 +252,31 @@ class Stale extends Error {}
 // one (stream, id) in that shard were ambiguous before (one file); each root alone may now hold the id
 // once, and "first root that answers wins" would serve the other record's bytes. They come from one
 // source shard (name + sha256 in each sealed file's shard table), so poison them across every root:
-// "和封存前同名文件里撞 id 的行为一致" (4.2 「读」). Within one root the index already poisons them.
-function poisonSplitDuplicates(idxs) {
-  const where = new Map();           // shard sha256 \0 stream#id → [{ idx, qk, file }]
-  for (const idx of idxs) {
+// "和封存前同名文件里撞 id 的行为一致" (4.2 「读」). An id already ambiguous within one root still counts
+// against a copy of it in another root (a three-way duplicate).
+// Idempotent: under several roots each root re-indexes on its own (refresh), so a pass first takes
+// back what an earlier pass poisoned (`splitFrom`) and counts the collision from the index as it is now
+// — a root that did not re-index still holds the earlier poisoning, and a root that did holds none.
+function poisonSplitDuplicates(parts) {
+  for (const idx of parts) for (const [qk, loc] of idx.qual) if (loc.splitFrom) idx.qual.set(qk, loc.splitFrom);
+  const where = new Map();           // shard sha256 \0 stream#id → [{ idx, qk, file, shard, loc, already }]
+  const put = (k, h) => { if (!where.has(k)) where.set(k, []); where.get(k).push(h); };
+  for (const idx of parts) {
     for (const [qk, loc] of idx.qual) {
-      if (!loc.sealed) continue;     // an NDJSON line, or an entry already poisoned within its file
+      if (loc.dup) {                 // already ambiguous in its root: it still counts against the others
+        for (const sha of new Set(loc.shas || [])) put(sha + '\0' + qk, { idx, qk, file: loc.file, shard: loc.file, already: loc.dupCount });
+        continue;
+      }
+      if (!loc.sealed) continue;     // an NDJSON line
       const sh = loc.sealed.shards[loc.sealed.records[loc.i][R.shard]];
-      const k = sh.sha256 + '\0' + qk;
-      if (!where.has(k)) where.set(k, []);
-      where.get(k).push({ idx, qk, file: loc.file, shard: sh.name });
+      put(sh.sha256 + '\0' + qk, { idx, qk, file: loc.file, shard: sh.name, loc });
     }
   }
   for (const hits of where.values()) {
-    if (hits.length < 2) continue;
-    for (const h of hits) h.idx.qual.set(h.qk, { dup: true, dupCount: hits.length, file: h.shard, sealedInto: hits.map((x) => path.basename(x.file)) });
+    const n = hits.reduce((a, h) => a + (h.already || 1), 0);
+    if (n < 2) continue;
+    const name = (hits.find((h) => !h.already) || hits[0]).shard;
+    for (const h of hits) if (!h.already) h.idx.qual.set(h.qk, { dup: true, dupCount: n, file: name, sealedInto: hits.map((x) => path.basename(x.file)), splitFrom: h.loc });
   }
 }
 
@@ -287,11 +304,11 @@ export async function buildResolver(source, { retryMs = 30000, sessionsRoot = nu
   // reportable rather than silent. Which files are read, and the reasons for the rest, come from the
   // shared rule (src/raw/discover.mjs): the flat *.ndjson, one level down `<sid>/calls.ndjson`, and
   // sealed files standing where those streams would be read.
-  const scan = { files, skipped: [], corruptLines: 0, corruptByFile: {}, unidentifiedLines: 0, bytesIndexed: 0, unreadableSealed: [], superseded: [], mismatched: [] };
+  const scan = { files, skipped: [], corruptLines: 0, corruptByFile: {}, unidentifiedLines: 0, bytesIndexed: 0, unreadableSealed: [], superseded: [], mismatched: [], unattributed: [] };
   const isDir = statSync(sourcePath).isDirectory();
   const listFiles = (skipped) => {
     const ls = lister(sourcePath); // throws if the root cannot be listed (broken ≠ empty)
-    scan.superseded = ls.superseded || []; scan.mismatched = ls.mismatched || [];
+    scan.superseded = ls.superseded || []; scan.mismatched = ls.mismatched || []; scan.unattributed = ls.unattributed || [];
     if (skipped) skipped.push(...ls.skipped.map(({ name, reason }) => ({ name, reason })));
     return [...ls.files];
   };
@@ -389,7 +406,7 @@ export async function buildResolver(source, { retryMs = 30000, sessionsRoot = nu
 
   // Under several roots `unreadableSealed` is every root's list: a miss names all of them.
   const absentReason = (stream, recordId) => {
-    const bad = unreadableSealed ? unreadableSealed() : scan.unreadableSealed;
+    const bad = [...(unreadableSealed ? unreadableSealed() : scan.unreadableSealed), ...(scan.unattributed || [])];
     return `no record "${recordId}" in stream "${stream}" in this source` + (bad.length
       ? ` — note: ${bad.length} sealed file(s) here could not be read (${bad.map((b) => path.basename(b.file)).join(', ')}), so a record inside them cannot be found`
       : '');
@@ -554,7 +571,7 @@ async function buildMultiResolver(roots, { sessionsRoot, ...opts }) {
     if (!good.includes(root)) return listRoot(root, sessionsRoot); // throws this root's own error
     const ls = listSources(good, { sessionsRoot });
     shared.ls = ls;
-    return { ...ls.perRoot.find((p) => p.root === root), superseded: ls.superseded, mismatched: ls.mismatched };
+    return { ...ls.perRoot.find((p) => p.root === root), superseded: ls.superseded, mismatched: ls.mismatched, unattributed: ls.unattributed };
   };
   for (const r of roots) {
     // FAIL SOFT PER ROOT. A root can be absent, unreadable, or deleted between the caller's existence
@@ -596,6 +613,7 @@ async function buildMultiResolver(roots, { sessionsRoot, ...opts }) {
     bytesIndexed: parts.reduce((n, p) => n + ((p.scan && p.scan.bytesIndexed) || 0), 0),
     unreadableSealed: unreadableSealed(),
     superseded: (shared.ls && shared.ls.superseded) || [], mismatched: (shared.ls && shared.ls.mismatched) || [],
+    unattributed: (shared.ls && shared.ls.unattributed) || [],
     unreadableRoots: unreadable,
   });
   // live: a refresh that changed nothing can still have noted a skip

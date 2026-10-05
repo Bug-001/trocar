@@ -41,3 +41,50 @@ test('a duplicated id split across roots by sealing is still ambiguous, in eithe
     assert.match(await outcome([cap, ses], `${S}/capture-2026-10-06.ndjson#req_00001::0-12`), /^ok \{"messages":/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('an id three times in one shard (two without a session) stays ambiguous after the split, in both root orders', async () => {
+  const root = tmpDir();
+  try {
+    const cap = path.join(root, 'collector'), ses = path.join(root, 'sessions');
+    fs.mkdirSync(ses, { recursive: true });
+    const shard = writeShard(path.join(cap, 'capture-2026-10-05.ndjson'), [
+      toLine(envelope({ id: 'req_00001', body: '{"messages":["RUN 1"]}' })),
+      toLine(envelope({ id: 'req_00001', body: '{"messages":["RUN 2"]}' })),
+      toLine(envelope({ sid: S, id: 'req_00001', body: '{"messages":["THE SESSION RECORD"]}' })),
+    ]);
+    markClosed(shard);
+    await sealShard(shard, { sessionsRoot: ses });
+    const ref = `${S}/capture-2026-10-05.ndjson#req_00001::0-12`;
+    for (const roots of [[cap, ses], [ses, cap]]) assert.match(await outcome(roots, ref), /^throws .*ambiguous/, `roots ${roots.map((r) => path.basename(r))} picked one record`);
+    assert.match(await outcome(cap, ref), /^throws .*ambiguous/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+// Union of feat/read-cc-line (each root refreshes on its own, incrementally) with this branch (the
+// split poisoning across roots): when ONE root re-indexes, the other still holds the earlier
+// poisoning, and a pass that counted only un-poisoned entries saw the re-indexed copy alone and let
+// it answer. The pass takes the earlier poisoning back first, so it is the same after a refresh.
+test('a split duplicate stays ambiguous after one root re-indexes on refresh', async () => {
+  const root = tmpDir();
+  try {
+    const cap = path.join(root, 'collector'), ses = path.join(root, 'sessions');
+    fs.mkdirSync(ses, { recursive: true });
+    const shard = writeShard(path.join(cap, 'capture-2026-10-05.ndjson'), [
+      toLine(envelope({ id: 'req_00001', body: '{"messages":["ANOTHER RUN, NO SESSION HEADER"]}' })),
+      toLine(envelope({ sid: S, id: 'req_00001', body: '{"messages":["THE SESSION RECORD"]}' })),
+    ]);
+    markClosed(shard);
+    await sealShard(shard, { sessionsRoot: ses });
+    const extra = writeShard(path.join(cap, 'scratch.ndjson'), [toLine(envelope({ id: 'req_09999', body: '{"messages":["x"]}' }))]);
+    const ref = `${S}/capture-2026-10-05.ndjson#req_00001::0-20`;
+    const r = await buildResolver([cap, ses]);
+    try {
+      assert.throws(() => r.detail(ref), /ambiguous/, 'precondition: ambiguous');
+      fs.rmSync(extra);                       // collector/ re-indexes whole on the next refresh; sessions/ does not
+      assert.equal(await r.refresh(), true);
+      assert.throws(() => r.detail(ref), /ambiguous/, 'the re-indexed root answered with one of the records');
+      assert.equal(await r.refresh(), false);
+      assert.throws(() => r.detail(ref), /ambiguous.*occurs 2 times/, 'a repeated pass miscounted the collision');
+    } finally { r.dispose(); }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

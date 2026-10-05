@@ -44,6 +44,9 @@ test('E2 / E8 / E9 in the product layout: serve --source <collector dir> shows t
   try {
     const before = await board(cap, paths);
     assert.match(JSON.stringify(before['/api/projects']), new RegExp(A));
+    const sampled = (out) => (/(\d+) record\(s\) captured/.exec(out) || [])[1];
+    const doctorBefore = sampled(cli('doctor', '--source', cap).stdout);
+    assert.equal(doctorBefore, '6');
     markClosed(shard);
     const s = cli('raw', 'seal', shard);
     assert.equal(s.status, 0, s.stderr);
@@ -54,7 +57,9 @@ test('E2 / E8 / E9 in the product layout: serve --source <collector dir> shows t
     // E9: doctor over the same source sees the per-session sealed files (and every sealed file under
     // the default sessions dir) and hard-fails on a group-readable one
     const [per] = listFiles(path.join(os.homedir(), '.asight', 'sessions'));
-    assert.match(cli('doctor', '--source', cap).stdout, /owner-only/);
+    const okRun = cli('doctor', '--source', cap).stdout;
+    assert.match(okRun, /owner-only/);
+    assert.equal(sampled(okRun), doctorBefore, 'doctor examined fewer records after the seal (continuations not read)');
     fs.chmodSync(per, 0o644);
     const d = cli('doctor', '--source', cap);
     assert.equal(d.status, 1, d.stdout);

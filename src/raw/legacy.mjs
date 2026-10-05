@@ -114,7 +114,11 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
   if (!(Number.isFinite(quietMs) && quietMs >= 0)) throw new SealRefused(`the quiet window must be a non-negative number of seconds (got ${quietMs / 1000})`);
   const old = oldRootReason(target, { fs });
   if (old) throw refuseAll(old);
-  const { files, refused } = legacyTargets(target, { fs });
+  const { files: named, refused } = legacyTargets(target, { fs });
+  // a parent of the old root names files inside it: each of those is refused too (none is ever
+  // sealed or deleted there, D27①)
+  const files = [];
+  for (const f of named) { const why = oldRootReason(f, { fs }); if (why) refused.push({ file: f, reason: why }); else files.push(f); }
   // 1. the writer that appends to these files
   let procs;
   try { procs = await processList(); } catch (e) { throw refuseAll(`cannot tell whether \`asight shard --watch\` is running (${e.message})`); }

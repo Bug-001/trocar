@@ -129,7 +129,7 @@ test('the home layout: sealing a collector shard does not change what `asight se
     const shard = writeShard(path.join(home, 'collector', 'capture-2026-10-05.ndjson'), capture());
     const opts = { sessionsRoot: path.join(home, 'sessions') };
     let s = await serve(home, opts);
-    const before = capturesOnly(await get(s.port, '/api/projects'));   // the new sessions/ dir is not capture bytes
+    const before = capturesOnly(await get(s.port, '/api/projects')), ctlBefore = await get(s.port, '/api/control');   // the new sessions/ dir is not capture bytes
     s.server.close();
     markClosed(shard);
     await sealShard(shard, opts);
@@ -137,5 +137,17 @@ test('the home layout: sealing a collector shard does not change what `asight se
     s = await serve(home, opts);
     assert.deepEqual(capturesOnly(await get(s.port, '/api/projects')), before);
     s.server.close();
+    // the same through a RELATIVE --source (paths are compared resolved)
+    s = await serve(path.relative(process.cwd(), home), opts);
+    assert.deepEqual(capturesOnly(await get(s.port, '/api/projects')), before, 'a relative source flipped the board');
+    assert.deepEqual(await get(s.port, '/api/control'), ctlBefore, 'a relative source read collector/\'s own per-shard file');
+    s.server.close();
+    // a damaged per-shard file is reported where it is — it does not turn collector/ into a session
+    fs.writeFileSync(listFiles(path.join(home, 'collector'))[0], 'damaged');
+    s = await serve(home, opts);
+    const pj = await get(s.port, '/api/projects');
+    s.server.close();
+    assert.deepEqual(pj.projects, before.projects, 'a damaged file flipped the board into sharded mode');
+    assert.ok((pj.source_errors || []).some((e) => e.file.startsWith(path.join(home, 'collector'))), 'the damaged file is not reported');
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
