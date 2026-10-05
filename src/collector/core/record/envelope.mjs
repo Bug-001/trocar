@@ -1,6 +1,7 @@
 // envelope.mjs (collector) — build a transparent-capture D10 envelope on top of the single
 // authority src/capture/envelope.mjs::buildEnvelope (never duplicate it). RFC 4.6 §记录: the new
-// fields (host/scheme/dst/proc/flow_id/seq/req_head_raw/resp_head_raw) are appended AFTER req_body,
+// fields (host/scheme/dst/proc/flow_id/seq/req_head_raw/resp_head_raw, and req_truncated/
+// req_body_bytes only when the request body hit the cap) are appended AFTER req_body,
 // and raw request/response heads are preserved latin1-verbatim for byte-exact resend (invariant 2).
 import { buildEnvelope } from '../../../capture/envelope.mjs'
 import { shapeResponse } from './body.mjs'
@@ -66,5 +67,8 @@ export function buildTransparentEnvelope({ id, flow, seq, req, resp, error = nul
     seq,
     req_head_raw: req.head.raw.toString('latin1'),
     resp_head_raw: resp && resp.head && resp.head.raw ? resp.head.raw.toString('latin1') : null,
+    // A request body cut at the engine's cap is labelled in place (invariant 4), mirroring
+    // resp.truncated / resp.body_bytes; req_body is a string here, so the label sits at top level.
+    ...(req.truncated ? { req_truncated: true, req_body_bytes: req.body ? req.body.length : 0 } : {}),
   }
 }
