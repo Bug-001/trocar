@@ -459,3 +459,38 @@ test('uninstall step 2: a harness that re-reads its entry while running keeps th
     assert.deepEqual(r.still_trusting, [{ pid: 80, agent: 'rep', until: 'next-connection' }])
   } finally { b.done() }
 })
+
+test('install / uninstall: the autostart unit is listed, enabled, then stopped through systemd, disabled and removed with its dirs (S10)', async () => {
+  const b = box()
+  try {
+    const calls = []
+    const unitFile = path.join(b.home, '.config', 'systemd', 'user', 'asight-collector.service')
+    const unit = { path: unitFile, text: '[Unit]\n', enable: () => { calls.push('enable'); return { code: 0 } }, disable: () => { calls.push('disable'); return { code: 0 } }, stop: () => calls.push('stop'), removeWants: () => { calls.push('wants'); return [] } }
+    let listed = null
+    await installCollector(base(b, { unit, onPlan: (p) => { listed = p } }))
+    assert.equal(listed.unit, unitFile, 'listed before anything is written')
+    const m = readManifest(b.dir)
+    assert.deepEqual(m.files.filter((f) => f.role === 'unit').map((f) => f.path), [unitFile])
+    assert.equal(fs.statSync(unitFile).mode & 0o777, 0o644)
+    await uninstallCollector({ home: b.home, env: {}, unit, stop: async () => { calls.push('stopped'); return 'stopped' } })
+    assert.deepEqual(calls, ['enable', 'stopped', 'disable', 'wants'])
+    assert.ok(!fs.existsSync(path.join(b.home, '.config')), 'the unit and the directories asight created for it are gone')
+  } finally { b.done() }
+})
+
+test('install: a unit systemd refuses to enable is a recorded failure, the install still completes; stopDaemon stops a unit-managed daemon through systemd', async () => {
+  const b = box()
+  try {
+    const unit = { path: path.join(b.home, '.config', 'systemd', 'user', 'asight-collector.service'), text: '[Unit]\n', enable: () => ({ code: 1, err: 'Failed to connect to bus' }), disable: () => ({ code: 0 }), stop: () => {}, removeWants: () => [] }
+    const r = await installCollector(base(b, { unit }))
+    assert.ok(r.manifest.complete)
+    const { recentFailures } = await import('../../src/collector/core/events.mjs')
+    const f = recentFailures(b.dir).find((x) => x.code === 'unit-not-enabled')
+    assert.ok(f && /Failed to connect to bus/.test(f.reason) && /asight collector start/.test(f.reason), JSON.stringify(f))
+    // a daemon answering on its socket, managed by the unit: stopped through systemd, never killed by pid
+    const sock = path.join(b.home, 's.sock'); const lock = path.join(b.home, 'lock'); fs.writeFileSync(lock, JSON.stringify({ pid: 4242, helper_pid: 4243 }))
+    const seen = []; let up = true
+    const res = await stopDaemon({ socketPath: sock, lockFile: lock, request: async () => ({}), alive: () => up, kill: () => seen.push('kill'), stopUnit: () => { seen.push('unit-stop'); up = false } })
+    assert.deepEqual([res, seen], ['stopped', ['unit-stop']])
+  } finally { b.done() }
+})

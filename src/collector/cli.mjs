@@ -13,8 +13,8 @@ import { collectorHome } from '../paths.mjs'
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 export const USAGE = [
-  'usage: asight collector install            (per user, no sudo: CA + agent trust entries)',
-  '       asight collector start              (run the daemon in the foreground)',
+  'usage: asight collector install [--no-unit] (per user, no sudo: CA, agent trust entries, systemd --user unit)',
+  '       asight collector start               (run the daemon in the foreground; the unit runs exactly this)',
   '       asight collector on | off | status [--json]',
   '       asight collector uninstall [--purge-data]',
   '       sudo asight setup-helper [--binary <path>] [--remove]',
@@ -51,6 +51,7 @@ export function formatPlan(p) {
     ...p.files.map((f) => `  ${f.harness}: ${f.path} = ${f.sources.length ? `the certificates of ${f.sources.join(', ')} + ` : ''}the collector CA`),
     ...(p.owned || []).map((o) => `  ${o.harness}: ${o.path} (asight's ${o.role})`),
     ...p.entries.map((e) => `  ${e.harness}: ${e.path}${e.real_path ? ` → ${e.real_path}` : ''} ${e.what || `${e.keys.join('.')} = ${e.value}`}`),
+    ...(p.unit ? [`  autostart unit (systemd --user, enabled --now): ${p.unit}`] : []),
     ...(p.records ? [`  install notes (event log): ${p.records}/`] : []),
     ...(p.watch || []).map((w) => `  ${w.harness} itself may write ${w.path} (${w.why}); uninstall reports it, never deletes it`)].join('\n')
 }
@@ -58,6 +59,17 @@ export function formatPlan(p) {
 const waitForSignal = () => new Promise((resolve) => { process.once('SIGTERM', resolve); process.once('SIGINT', resolve) })
 const loadDaemon = () => import('./daemon.mjs')
 const loadInstall = () => import('./install.mjs')
+
+// The arch's autostart unit for this user, as install.mjs consumes it (null with --no-unit or on an OS without one).
+function unitOf(parts, home, script) {
+  const U = parts.arch && parts.arch.unit
+  if (!U) return null
+  return {
+    path: U.unitPath(home), text: U.unitText({ node: process.execPath, script }),
+    enable: () => U.systemctl(['enable', '--now', U.UNIT_NAME]), disable: () => U.systemctl(['disable', '--now', U.UNIT_NAME]),
+    stop: () => U.systemctl(['stop', U.UNIT_NAME]), removeWants: () => U.removeWantsLinks(home),
+  }
+}
 
 export async function runSetupHelper(argv, { arch = null, out = (s) => console.log(s), err = (s) => console.error(s), packageRoot = PACKAGE_ROOT } = {}) {
   try {
@@ -74,7 +86,7 @@ export async function runSetupHelper(argv, { arch = null, out = (s) => console.l
   } catch (e) { err(e.message); return 1 }
 }
 
-export async function runCollector(argv, { env = process.env, home = os.homedir(), out = (s) => console.log(s), err = (s) => console.error(s), request = controlRequest, daemon = null, install = null, waitForStop = waitForSignal } = {}) {
+export async function runCollector(argv, { env = process.env, home = os.homedir(), out = (s) => console.log(s), err = (s) => console.error(s), request = controlRequest, daemon = null, install = null, waitForStop = waitForSignal, script = process.argv[1] } = {}) {
   const [verb, ...rest] = argv
   const D = () => daemon || loadDaemon()
   const I = () => install || loadInstall()
@@ -91,12 +103,12 @@ export async function runCollector(argv, { env = process.env, home = os.homedir(
       const parts = await (await D()).loadParts({ env })
       const { installCollector, uninstallCollector } = await I()
       if (verb === 'install') {
-        const r = await installCollector({ home, env, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, osRootsFile: parts.osRootsFile, onPlan: (p) => out(formatPlan(p)) })
+        const r = await installCollector({ home, env, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, osRootsFile: parts.osRootsFile, unit: rest.includes('--no-unit') ? null : unitOf(parts, home, script), onPlan: (p) => out(formatPlan(p)) })
         if (r.already) { out('already installed'); return 0 }
         out([`installed for ${os.userInfo().username}: engine port ${r.manifest.engine_port}`, ...r.manifest.entries.filter((e) => e.prior_value).map((e) => `  ${e.harness}: ${e.path} ${e.keys ? `${e.keys.join('.')} was ${e.prior_value}` : `held ${Object.entries(e.prior_value).map(([k, v]) => `${k}=${v}`).join(', ')} (commented out; uninstall restores it)`}`), ...r.plan.notes.map((n) => `note: ${n}`)].join('\n'))
         return 0
       }
-      const r = await uninstallCollector({ home, env, purgeData: rest.includes('--purge-data'), scan: parts.scan, match: parts.match, harnesses: parts.harnesses, osRootsFile: parts.osRootsFile })
+      const r = await uninstallCollector({ home, env, purgeData: rest.includes('--purge-data'), scan: parts.scan, match: parts.match, harnesses: parts.harnesses, osRootsFile: parts.osRootsFile, unit: unitOf(parts, home, script) })
       out([`uninstalled (daemon: ${r.daemon}; ${r.kept_captures ? 'captures kept, --purge-data removes them' : 'captures removed'})`, ...r.entries.map((e) => `  ${e.harness}: ${e.path} ${e.result}`), ...(r.kept_bundles || []).map((k) => `  kept ${k.path} without the asight CA for pid ${k.pids.join(', ')}; run uninstall again once they exit`), ...r.still_trusting.map((p) => `  pid ${p.pid} (${p.agent}) trusts the asight CA ${UNTIL[p.until] || 'until it restarts'}`), ...(r.residue || []).map((p) => `  left in place: ${p}`), ...r.notes.map((n) => `note: ${n}`)].join('\n'))
       if (r.left) { err(`asight collector uninstall: ${r.left} item(s) could not be undone and stay in the install manifest; fix what is reported above, then run uninstall again`); return 1 }
       return 0
@@ -109,7 +121,7 @@ export async function runCollector(argv, { env = process.env, home = os.homedir(
   let r
   try { r = await request({ socketPath, method: verb === 'status' ? 'GET' : 'POST', path: `/${verb}`, body: verb === 'on' ? {} : undefined }) } catch (e) {
     if (e.code === 'ENOENT' || e.code === 'ECONNREFUSED') {
-      err('the collector daemon is not running: start it with "asight collector start"')
+      err('the collector daemon is not running: start it with "asight collector start" (or "systemctl --user start asight-collector")')
       const failures = recentFailures(collectorHome(path.join(home, '.asight'))) // read from disk: why it is not running, what failed last
       if (failures.length) out(formatFailures(failures))
       return 3

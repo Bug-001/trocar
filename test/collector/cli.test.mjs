@@ -31,18 +31,19 @@ test('cli: on/off/status go to the control socket; exit 1 when the kernel did no
 
 test('cli: install / uninstall hand the descriptors, OS and process table from daemon.loadParts to install.mjs', async () => {
   const seen = []
-  const parts = { os: 'linux', osRootsFile: '/os/roots.pem', harnesses: [{ name: 'h' }], scan: async () => [], match: () => ({ agent: null }) }
+  const U = { UNIT_NAME: 'asight-collector.service', unitPath: (h) => `${h}/.config/systemd/user/asight-collector.service`, unitText: ({ node, script }) => `ExecStart="${node}" "${script}" collector start`, systemctl: () => ({ code: 0 }), removeWantsLinks: () => [] }
+  const parts = { os: 'linux', osRootsFile: '/os/roots.pem', arch: { unit: U }, harnesses: [{ name: 'h' }], scan: async () => [], match: () => ({ agent: null }) }
   const daemon = { loadParts: async () => parts }
   const install = {
     installCollector: async (o) => {
-      seen.push(['install', o.osName, o.harnesses, o.scan === parts.scan, o.home, o.osRootsFile])
+      seen.push(['install', o.osName, o.harnesses, o.scan === parts.scan, o.home, o.osRootsFile, o.unit ? [o.unit.path, o.unit.text] : null])
       o.onPlan({ manifest: '/h/.asight/collector/install-manifest.json', ca: ['/h/.asight/collector/ca/ca.key', '/h/.asight/collector/ca/asight-ca.pem'], files: [{ harness: 'h', path: '/h/.asight/collector/ca/extra-h.pem', sources: ['/corp/ca.pem'] }], entries: [{ harness: 'h', path: '/h/s.json', real_path: '/dot/s.json', keys: ['env', 'K'], value: '/h/.asight/collector/ca/extra-h.pem' }] })
       seen.push(['written'])
       return { manifest: { engine_port: 4711, entries: [{ harness: 'h', path: '/h/s.json', keys: ['env', 'K'], value: '/h/.asight/collector/ca/extra-h.pem', prior_value: '/old.pem' }] }, plan: { notes: ['n'] } }
     },
-    uninstallCollector: async (o) => { seen.push(['uninstall', o.purgeData]); return { daemon: 'stopped', kept_captures: !o.purgeData, entries: [{ harness: 'h', path: '/h/s.json', result: 'restored' }], still_trusting: [{ pid: 7, agent: 'h' }], notes: [] } },
+    uninstallCollector: async (o) => { seen.push(['uninstall', o.purgeData, !!o.unit]); return { daemon: 'stopped', kept_captures: !o.purgeData, entries: [{ harness: 'h', path: '/h/s.json', result: 'restored' }], still_trusting: [{ pid: 7, agent: 'h' }], notes: [] } },
   }
-  let t = io(); assert.equal(await runCollector(['install'], { home: '/h', daemon, install, ...t }), 0)
+  let t = io(); assert.equal(await runCollector(['install'], { home: '/h', daemon, install, script: '/repo/bin/asight.mjs', ...t }), 0)
   assert.equal(t.o.length, 2, 'the file list, then the result')
   assert.match(t.o[0], /^asight collector install will write or change these files, and nothing else:/, 'the list comes first, before anything is written (4.6)')
   assert.match(t.o[0], /collector CA \(in no trust store\): \/h\/.asight\/collector\/ca\/ca.key, \/h\/.asight\/collector\/ca\/asight-ca.pem/)
@@ -52,7 +53,8 @@ test('cli: install / uninstall hand the descriptors, OS and process table from d
   assert.match(t.o[1], /^installed for .*: engine port 4711\n  h: \/h\/s.json env.K was \/old.pem\nnote: n$/)
   t = io(); assert.equal(await runCollector(['uninstall', '--purge-data'], { daemon, install, ...t }), 0)
   assert.match(t.o[0], /captures removed/); assert.match(t.o[0], /pid 7 \(h\) trusts the asight CA until it restarts/)
-  assert.deepEqual(seen, [['install', 'linux', parts.harnesses, true, '/h', '/os/roots.pem'], ['written'], ['uninstall', true]])
+  t = io(); assert.equal(await runCollector(['install', '--no-unit'], { home: '/h', daemon, install, ...t }), 0)
+  assert.deepEqual(seen, [['install', 'linux', parts.harnesses, true, '/h', '/os/roots.pem', ['/h/.config/systemd/user/asight-collector.service', `ExecStart="${process.execPath}" "/repo/bin/asight.mjs" collector start`]], ['written'], ['uninstall', true, true], ['install', 'linux', parts.harnesses, true, '/h', '/os/roots.pem', null], ['written']])
   t = io(); assert.equal(await runCollector(['install'], { daemon, install: { installCollector: async () => { throw new Error('boom') } }, ...t }), 1)
   // an item uninstall could not undo: exit 1, the manifest keeps it, the user is told to run uninstall again (D38)
   const leftOne = { uninstallCollector: async (o) => { seen.push(['uninstall-opts', o.harnesses === parts.harnesses, o.osRootsFile]); return { daemon: 'none', kept_captures: true, entries: [{ harness: 'h', path: '/h/s.json', result: 'left-unparsable' }], residue: ['/h/.config/h/node_modules'], kept_bundles: [{ path: '/h/ca/combined-h.pem', pids: [5, 6] }], still_trusting: [{ pid: 5, agent: 'h', until: 'next-connection' }], notes: [], left: 1 } } }

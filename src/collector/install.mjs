@@ -72,7 +72,8 @@ export function readRoots(osRootsFile, { nodeRoots = tls.rootCertificates } = {}
   return { node: [...nodeRoots], osText }
 }
 
-async function install(dir, { home, env = process.env, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), freePort = freeEnginePort, onPlan = () => {}, osRootsFile = null, roots = null }) {
+// unit: the arch's per-user autostart unit as { path, text, enable, disable, stop, removeWants } (null: none / --no-unit).
+async function install(dir, { home, env = process.env, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), freePort = freeEnginePort, onPlan = () => {}, osRootsFile = null, roots = null, unit = null }) {
   const prior = readManifest(dir)
   if (prior && prior.complete) return { already: true, manifest: prior, plan: null }
   if (prior && prior.pending_bundles) throw new Error(`an earlier uninstall kept combined bundles that running agents still use (${prior.files.filter((f) => f.role === 'bundle').map((f) => f.path).join(', ')}); run "asight collector uninstall" again once they exit`)
@@ -97,6 +98,7 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
     files: draft.files.map((f) => ({ harness: f.harness, path: f.path, sources: f.sources })),
     owned: draft.owned.map((o) => ({ harness: o.harness, path: o.path, role: o.role })),
     entries: draft.entries.map((e, i) => ({ harness: e.harness, path: e.path, ...(preview[i].real_path ? { real_path: preview[i].real_path } : {}), ...(e.kind === 'text' ? { what: describeEntry(e) } : { keys: e.keys, value: e.value }) })),
+    ...(unit ? { unit: unit.path } : {}),
     watch: draft.watch,
     notes: draft.notes,
     records: path.join(dir, 'flows'), // install notes are kept here as install-note events (D38)
@@ -110,6 +112,7 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
   const { certPem } = loadOrCreateCa({ dir: ca.dir })
   m.engine_port = await freePort()
   const plan = planTrust({ descriptors: harnesses, ctxFor, caCertPem: certPem, collectorDir: dir, roots: R })
+  if (unit && fs.existsSync(unit.path)) throw new Error(`${unit.path} already exists; asight will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`)
   if (JSON.stringify(plan.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${plan.paths.join(', ')}); only the CA was written; run "asight collector uninstall", then install again`)
   m.planned = plan.paths
   m.watched = plan.watch.map((w) => ({ ...w, existed_before: fs.existsSync(w.path) })) // before anything of the plan is written
@@ -122,9 +125,18 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
     if (e.kind === 'text') applyTextEntry({ dir, manifest: m, harness: e.harness, file: e.path, edit: e })
     else applyJsonKey({ dir, manifest: m, harness: e.harness, file: e.path, keys: e.keys, value: e.value })
   }
+  // the per-user autostart unit (arch: systemd --user on Linux), listed like every other file, then enabled --now; a
+  // refused enable is recorded (D38), the daemon can still be started by hand
+  let unitFailed = null
+  if (unit) {
+    writeOwnedFile({ dir, manifest: m, role: 'unit', file: unit.path, data: unit.text, mode: 0o644, exclusive: true })
+    const r = unit.enable()
+    if (r.code !== 0) unitFailed = `${unit.path} is written but "systemctl --user enable --now" failed (${r.err || `exit ${r.code}`}); start the daemon with "asight collector start", or enable the unit once systemd --user runs`
+  }
   m.complete = true
   saveManifest(dir, m)
   for (const r of plan.records) appendEvent(dir, { event: EVENT.installNote, where: 'install', ...r }) // D38: what install said, kept where status finds it
+  if (unitFailed) { plan.notes.push(unitFailed); appendEvent(dir, { event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed }) }
   return { already: false, manifest: m, plan }
 }
 
@@ -133,7 +145,7 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
 // names (XDG_RUNTIME_DIR unset, or logind removed /run/user/<uid>): a daemon that steers must never be orphaned.
 // A lock whose pid is dead is stale: never kill by it. A live pid that answers on no socket is not killed either
 // (it may be another program by now): uninstall stops with nothing removed and says what to do.
-export async function stopDaemon({ socketPath, lockFile, request = controlRequest, alive = pidAlive, kill = process.kill.bind(process), timeoutMs = 5000 }) {
+export async function stopDaemon({ socketPath, lockFile, request = controlRequest, alive = pidAlive, kill = process.kill.bind(process), stopUnit = null, timeoutMs = 5000 }) {
   let lock = null
   let unreadable = false // a lock cut short by a crash or power loss: whether a daemon runs is unknown
   try { lock = JSON.parse(fs.readFileSync(lockFile, 'utf8')) } catch (e) { if (e.code !== 'ENOENT') unreadable = true }
@@ -149,7 +161,8 @@ export async function stopDaemon({ socketPath, lockFile, request = controlReques
     return 'none'
   }
   if (!lock || !lock.pid) throw new Error('a collector daemon answers but left no lock file; stop it by hand, nothing was removed')
-  kill(lock.pid, 'SIGTERM')
+  if (stopUnit) stopUnit() // a unit-managed daemon is stopped through systemd, which then knows it is meant to be down
+  else kill(lock.pid, 'SIGTERM')
   const pids = [lock.pid, lock.helper_pid].filter(Boolean)
   for (const end = Date.now() + timeoutMs; pids.some(alive);) {
     if (Date.now() > end) throw new Error(`the collector daemon (pid ${pids.join(', ')}) is still running; nothing was removed`)
@@ -191,14 +204,15 @@ function bundleUsers(bundle, m, procs, match, byName) {
   return pids
 }
 
-async function uninstall(dir, { env = process.env, purgeData = false, scan = async () => [], match = () => ({ agent: null }), stop = null, harnesses = [], osRootsFile = null, roots = null }) {
+async function uninstall(dir, { env = process.env, purgeData = false, scan = async () => [], match = () => ({ agent: null }), stop = null, harnesses = [], osRootsFile = null, roots = null, unit = null }) {
   const runtime = env.XDG_RUNTIME_DIR ? path.join(env.XDG_RUNTIME_DIR, 'asight') : null
   const report = { daemon: null, entries: [], removed: [], residue: [], kept_bundles: [], still_trusting: [], kept_captures: !purgeData, notes: [], left: 0 }
   const byName = new Map(harnesses.map((d) => [d.name, d]))
   const failed = [] // failure events, written after any purge so they survive it
   const noted = [] // uninstall-note events (kept captures only: --purge-data asked for flows/ to go)
-  report.daemon = await (stop || (() => stopDaemon({ socketPath: runtime && path.join(runtime, 'collector.sock'), lockFile: path.join(dir, 'lock') })))()
   const m = readManifest(dir)
+  const unitFile = m && m.files.find((f) => f.role === 'unit')
+  report.daemon = await (stop || (() => stopDaemon({ socketPath: runtime && path.join(runtime, 'collector.sock'), lockFile: path.join(dir, 'lock'), stopUnit: unitFile && unit ? () => unit.stop() : null })))()
   const rm = (p) => { sweepTemps(p); if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); report.removed.push(p) } }
   const left = { entries: [], files: [], bundles: [] }
   if (!m) report.notes.push('nothing is installed for this user')
@@ -248,6 +262,12 @@ async function uninstall(dir, { env = process.env, purgeData = false, scan = asy
     // until: 'restart' (read at start: CC, Kimi shim, plugins), or what the descriptor says its harness re-reads
     const injected = new Set([...m.entries, ...m.files].map((x) => x.harness).filter(Boolean))
     for (const f of await scan()) { const a = match(f).agent; if (a && injected.has(a)) { const d = byName.get(a); report.still_trusting.push({ pid: f.pid, agent: a, until: (d && d.trust && d.trust.afterUninstall) || 'restart' }) } }
+    // the autostart unit (4.6 order: after the trust entries, before the CA key): disabled, removed, its wants/ links
+    if (unitFile) {
+      if (unit) { const r = unit.disable(); if (r && r.code !== 0) report.notes.push(`systemctl --user disable said: ${r.err || `exit ${r.code}`}; the unit file is removed all the same`) }
+      try { if (removeOwnedFile(unitFile).result === 'removed') report.removed.push(unitFile.path) } catch (err) { left.files.push(unitFile); failed.push({ code: CODE.entryNotUndone, path: unitFile.path, reason: `${unitFile.path} could not be removed: ${String((err && err.message) || err)}` }) }
+      if (unit) report.removed.push(...unit.removeWants())
+    }
     // the CA private key and the runtime state (with the trust markers) last
     for (const f of m.files.filter((x) => x.role === 'ca-key')) rm(f.path)
     for (const p of [path.join(dir, 'run'), path.join(dir, 'lock'), path.join(dir, 'state.json'), runtime]) if (p) rm(p)
