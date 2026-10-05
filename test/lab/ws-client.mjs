@@ -1,11 +1,16 @@
 // ws-client.mjs — a zero-dependency WebSocket client for the mock-upstream tests. It writes each frame
-// exactly as told (masked or not, fragmented) and reads the server's frames raw, so it checks the
-// server rather than sharing its code. node --test also loads this file as a test file; it only
-// exports functions, so that is a no-op.
+// exactly as told (masked or not, fragmented, compressed) and reads the server's frames raw, inflating
+// with its own streaming zlib state, so it checks the server rather than sharing its code. node --test
+// also loads this file as a test file; it only exports functions, so that is a no-op.
 import net from 'node:net'
 import tls from 'node:tls'
+import zlib from 'node:zlib'
 import { randomBytes } from 'node:crypto'
 import { once } from 'node:events'
+
+const TAIL = Buffer.from([0, 0, 0xff, 0xff])
+// write, sync-flush, take what came out: one streaming context across calls (context takeover)
+const pump = async (z, data) => { z.write(data); await new Promise((r) => z.flush(zlib.constants.Z_SYNC_FLUSH, r)); return z.read() || Buffer.alloc(0) }
 
 export function encodeFrame(opcode, payload, { fin = true, rsv1 = false, mask = true } = {}) {
   const p = Buffer.from(payload), n = p.length, key = randomBytes(4), ext = Buffer.alloc(n < 126 ? 0 : n < 65536 ? 2 : 8)
@@ -55,19 +60,22 @@ export async function wsConnect(port, { path = '/v1/responses', key = randomByte
   const head = await Promise.race([headDone, once(sock, 'close').then(() => '')])
   const [line, ...fields] = head.split('\r\n')
   const res = { status: Number(line.split(' ')[1]), head, wire, sock, state, headers: Object.fromEntries(fields.filter(Boolean).map((f) => [f.slice(0, f.indexOf(':')).toLowerCase(), f.slice(f.indexOf(':') + 1).trim()])) }
+  const ext = res.headers['sec-websocket-extensions'] || ''
+  const deflate = /permessage-deflate/.test(ext), noContext = /client_no_context_takeover/.test(ext), inflater = zlib.createInflateRaw(), deflater = zlib.createDeflateRaw()
   return Object.assign(res, {
     // next frame from the server; null once the connection is gone
     next: () => new Promise((resolve) => { waiters.push(() => resolve(frames.shift() ?? null)); wake() }),
     send: (opcode, payload, opts) => { const b = encodeFrame(opcode, payload, opts); sock.write(b); return b },
-    // a text message, cut into fragments
-    async sendText(text, { fragments = 1 } = {}) {
-      const p = Buffer.from(text)
+    // a text message: compressed with this client's own deflate state when negotiated, cut into fragments
+    async sendText(text, { fragments = 1, compress = deflate } = {}) {
+      let p = Buffer.from(text)
+      if (compress) { const z = noContext ? zlib.deflateRawSync(p, { finishFlush: zlib.constants.Z_SYNC_FLUSH }) : await pump(deflater, p); p = z.subarray(0, z.length - 4) }
       const size = Math.ceil(p.length / fragments), out = []
-      for (let i = 0; i < fragments; i++) out.push(encodeFrame(i ? 0 : 1, p.subarray(i * size, (i + 1) * size), { fin: i === fragments - 1 }))
+      for (let i = 0; i < fragments; i++) out.push(encodeFrame(i ? 0 : 1, p.subarray(i * size, (i + 1) * size), { fin: i === fragments - 1, rsv1: compress && !i }))
       sock.write(Buffer.concat(out))
       return out
     },
-    // the next whole data message: { opcode, text, frames }
+    // the next whole data message, inflated: { opcode, text, frames }
     async message() {
       const got = []
       for (let f; (f = await res.next());) {
@@ -75,7 +83,8 @@ export async function wsConnect(port, { path = '/v1/responses', key = randomByte
         got.push(f)
         if (!f.fin) continue
         const data = Buffer.concat(got.filter((g) => g.opcode < 8).map((g) => g.payload))
-        return { opcode: got.find((g) => g.opcode < 8).opcode, frames: got, text: data.toString('utf8') }
+        const comp = got.find((g) => g.opcode < 8).rsv1
+        return { opcode: got.find((g) => g.opcode < 8).opcode, frames: got, text: (comp ? await pump(inflater, Buffer.concat([data, TAIL])) : data).toString('utf8') }
       }
       return null
     },

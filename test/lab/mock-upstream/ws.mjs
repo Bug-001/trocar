@@ -1,19 +1,46 @@
 // ws.mjs — OpenAI Responses over WebSocket, as Codex speaks it (README "WebSocket"): the RFC 6455
 // handshake, framing and close handshake, and per message one `response.create` in, the very events
 // of the SSE answer out (one text message each). Every frame is logged with its exact wire bytes.
+// permessage-deflate (RFC 7692) compresses messages both ways; frames are logged still compressed.
 import { createHash, randomBytes } from 'node:crypto'
+import zlib from 'node:zlib'
 import { SCENARIOS, pickScenario, errorFor } from './scenarios.mjs'
 import { statusLine } from './transport.mjs'
 import * as openai from './openai.mjs'
 
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 export const acceptKey = (key) => createHash('sha1').update(key + GUID).digest('base64')
-const MAX_MESSAGE = 64 << 20
+const TAIL = Buffer.from([0, 0, 0xff, 0xff]), SYNC = { finishFlush: zlib.constants.Z_SYNC_FLUSH }
+const WINDOW = 32768, MAX_MESSAGE = 64 << 20
 const iso = () => new Date().toISOString()
 const tokens = (v) => String(v || '').toLowerCase().split(',').map((s) => s.trim())
+const tail = (dict, p) => { const b = Buffer.concat([dict, p]); return Buffer.from(b.subarray(Math.max(0, b.length - WINDOW))) }
 // RFC 6455 7.4: codes a peer may put on the wire (1005 / 1006 / 1015 are reserved for local use)
 const validCode = (c) => (c >= 1000 && c <= 1003) || (c >= 1007 && c <= 1014) || (c >= 3000 && c <= 4999)
 const utf8 = new TextDecoder('utf-8', { fatal: true })
+
+// RFC 7692: accept the first permessage-deflate offer this server can honour. The server keeps its
+// compression context unless the client asked for server_no_context_takeover; it never limits the
+// client's window. server_max_window_bits=8 is declined: zlib's raw deflate cannot do 8.
+export function negotiate(header) {
+  for (const offer of String(header || '').split(',')) {
+    const [name, ...params] = offer.split(';').map((s) => s.trim())
+    if (name !== 'permessage-deflate') continue
+    const p = {}
+    for (const kv of params) {
+      const [k, v] = kv.split('=').map((s) => s.trim().replace(/^"(.*)"$/, '$1'))
+      p[k] = Object.hasOwn(p, k) ? null : v ?? true // a repeated parameter declines the offer
+    }
+    const bits = (v) => /^(9|1[0-5])$/.test(v)
+    const ok = Object.entries(p).every(([k, v]) => ({ server_no_context_takeover: v === true, client_no_context_takeover: v === true,
+      server_max_window_bits: bits(v), client_max_window_bits: v === true || /^([89]|1[0-5])$/.test(v) })[k])
+    if (!ok) continue
+    const response = ['permessage-deflate', p.server_no_context_takeover && 'server_no_context_takeover',
+      p.client_no_context_takeover && 'client_no_context_takeover', p.server_max_window_bits && `server_max_window_bits=${p.server_max_window_bits}`]
+    return { serverNoTakeover: !!p.server_no_context_takeover, windowBits: Number(p.server_max_window_bits || 15), response: response.filter(Boolean).join('; ') }
+  }
+  return null
+}
 
 // The GET on a …/responses route: an error reply when it is not a valid upgrade, else what accept needs.
 export function handshake(req) {
@@ -22,11 +49,11 @@ export function handshake(req) {
   if (!tokens(h.upgrade).includes('websocket') || !tokens(h.connection).includes('upgrade')) return err(426, 'this route speaks WebSocket only', { upgrade: 'websocket' })
   if (h['sec-websocket-version'] !== '13') return err(426, 'unsupported Sec-WebSocket-Version', { 'sec-websocket-version': '13' })
   if (!/^[A-Za-z0-9+/]{21}[AQgw]==$/.test(h['sec-websocket-key'] || '')) return err(400, 'Sec-WebSocket-Key must be 16 bytes in base64')
-  return { key: h['sec-websocket-key'] }
+  return { key: h['sec-websocket-key'], deflate: negotiate(h['sec-websocket-extensions']) }
 }
 
 export function accept(io, up, scenario) {
-  const h = { upgrade: 'websocket', connection: 'Upgrade', 'sec-websocket-accept': acceptKey(up.key),
+  const h = { upgrade: 'websocket', connection: 'Upgrade', 'sec-websocket-accept': acceptKey(up.key), ...(up.deflate ? { 'sec-websocket-extensions': up.deflate.response } : {}),
     date: new Date().toUTCString(), server: 'asight-mock-upstream', 'x-request-id': `req_mock_${randomBytes(12).toString('hex')}`, 'x-mock-scenario': scenario }
   io.status = 101
   io.send(statusLine(101) + Object.entries(h).map(([k, v]) => `${k}: ${v}\r\n`).join('') + '\r\n')
@@ -55,8 +82,8 @@ const dataOf = (piece) => JSON.parse(piece.slice(piece.indexOf('\ndata: ') + 7))
 
 // Takes the connection over after the 101. Returns { feed, pending }: the server's data handler
 // feeds it every byte that follows, and pending() is the unparsed rest, logged as leftover.
-export function serve(conn, req, up, state, record) {
-  let buf = Buffer.alloc(0), msg = null, closeSent = false, chain = Promise.resolve()
+export function serve(conn, req, { deflate }, state, record) {
+  let buf = Buffer.alloc(0), msg = null, closeSent = false, chain = Promise.resolve(), inDict = Buffer.alloc(0), outDict = Buffer.alloc(0)
   const lanes = new Map() // stream_id ('' = default lane) -> its latest response, the only one a continuation may name
   const log = (dir, raw, f) => record({ type: 'ws_frame', ts: iso(), conn_id: conn.id, dir, opcode: f.opcode, fin: f.fin, rsv1: f.rsv1, len: f.len, raw_b64: raw.toString('base64') })
   const live = () => !conn.closed && !conn.ended
@@ -84,7 +111,13 @@ export function serve(conn, req, up, state, record) {
 
   function sendText(text) {
     if (!live() || closeSent) return false
-    write(frame(1, Buffer.from(text)))
+    let p = Buffer.from(text)
+    if (deflate) {
+      const z = zlib.deflateRawSync(p, { ...SYNC, windowBits: deflate.windowBits, ...(deflate.serverNoTakeover || !outDict.length ? {} : { dictionary: outDict }) })
+      if (!deflate.serverNoTakeover) outDict = tail(outDict, p)
+      p = z.subarray(0, z.length - TAIL.length) // RFC 7692 7.2.1: drop the sync flush's 00 00 ff ff
+    }
+    write(frame(1, p, !!deflate))
     return true
   }
 
@@ -145,7 +178,7 @@ export function serve(conn, req, up, state, record) {
   function onFrame(f) {
     const { opcode } = f
     if (!f.masked) return fail(1002, 'client frames must be masked')
-    if (f.rsv1 || f.rsv23) return fail(1002, 'reserved bit set')
+    if (f.rsv23 || (f.rsv1 && (!deflate || opcode === 0 || opcode >= 8))) return fail(1002, 'reserved bit set')
     if (![0, 1, 2, 8, 9, 10].includes(opcode)) return fail(1002, 'reserved opcode')
     if (opcode >= 8 && (!f.fin || f.payload.length > 125)) return fail(1002, 'control frames are short and unfragmented')
     if (opcode === 9) return closeSent || write(frame(10, f.payload))
@@ -159,13 +192,17 @@ export function serve(conn, req, up, state, record) {
     }
     if (closeSent) return // after our Close, data is discarded
     if ((opcode === 0) !== !!msg) return fail(1002, opcode ? 'new message inside a fragmented one' : 'continuation without a message')
-    if (opcode) msg = { opcode, parts: [], size: 0 }
+    if (opcode) msg = { opcode, compressed: f.rsv1, parts: [], size: 0 }
     msg.parts.push(f.payload)
     if ((msg.size += f.payload.length) > MAX_MESSAGE) return fail(1009, 'message too big')
     if (!f.fin) return
     const m = msg
     msg = null
-    const data = Buffer.concat(m.parts)
+    let data = Buffer.concat(m.parts)
+    if (m.compressed) {
+      try { data = zlib.inflateRawSync(Buffer.concat([data, TAIL]), { ...SYNC, maxOutputLength: MAX_MESSAGE, ...(inDict.length ? { dictionary: inDict } : {}) }) } catch { return fail(1007, 'cannot inflate the message') }
+      inDict = tail(inDict, data) // harmless when the client resets its context: nothing refers back
+    }
     if (m.opcode === 2) return fail(1003, 'the Responses socket takes text messages only')
     let text
     try { text = utf8.decode(data) } catch { return fail(1007, 'text message is not UTF-8') }
