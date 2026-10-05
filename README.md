@@ -121,7 +121,9 @@ loopback and enforces a Host/Origin allowlist, so a website you visit cannot rea
 
 ### The per-user process collector (Linux, preview)
 
-`asight collector` captures Claude Code by process instead of by proxy or base URL (RFC 4.6, D31): an
+`asight collector` captures agent CLIs by process instead of by proxy or base URL (RFC 4.6, D31) — Claude Code,
+OpenCode, DeepSeek `dsh`, Kimi Code, Hermes and Z-Code; Codex's entry is in, its end-to-end run waits for the
+WebSocket recorder. An
 eBPF helper steers only the connections of agent processes you run to a loopback engine, which decrypts
 only for agents that trust the collector CA. Everything else, including other users, goes direct.
 
@@ -130,21 +132,24 @@ only for agents that trust the collector CA. Everything else, including other us
 | capability helper (once per machine, `sudo`) | `/usr/local/libexec/asight/asight-redirector`, root 0755, file caps `cap_bpf,cap_net_admin,cap_perfmon` — no setuid, no account, no system unit | `sudo asight setup-helper --remove` |
 | collector CA (per user, in **no** trust store) | `~/.asight/collector/ca/` (key 0600) | `asight collector uninstall` |
 | Claude Code trust entry | `env.NODE_EXTRA_CA_CERTS` in `~/.claude/settings.json` → the collector CA, or → `~/.asight/collector/ca/extra-cc.pem` (your existing CA's certificates + the collector CA) when you already set one | uninstall removes only that key, or puts your value back |
+| the other agents' trust entries | OpenCode: plugin `~/.config/opencode/plugins/asight-ca.js`; dsh: plugin dir `~/.asight/collector/plugins/dsh/` + a sentinel row in its patch file; Kimi Code: launch shim `~/.asight/collector/bin/kimi` + one sentinel `PATH` line after the installer's in your shell rc; Hermes / Codex: a sentinel block atop their `.env` (`SSL_CERT_FILE` → `combined-<agent>.pem`); Z-Code: `network.caCertFile` in `~/.zcode/cli/config.json` → `combined-z-code.pem`. A combined bundle = Node + OS roots + the CAs that agent already used + the collector CA | uninstall takes out only asight's text or key, removes asight's files (a bundle a running agent still uses is kept, without the collector CA, until the next uninstall) |
+| autostart unit (per user) | `~/.config/systemd/user/asight-collector.service`, enabled `--now`; it carries the `NODE_EXTRA_CA_CERTS` of the shell you install from, for the daemon only | uninstall disables and removes it (`install --no-unit` skips it) |
 | install manifest | `~/.asight/collector/install-manifest.json` — every file and key it changed, never a copy of your file | removed last by uninstall |
 | captures | `~/.asight/collector/capture-<date>.ndjson`; `flows/` holds connection metadata and failure records | kept unless `uninstall --purge-data` (which deletes `flows/` too, then records there anything it could not undo) |
 
 ```sh
 sudo asight setup-helper      # once per machine (Linux)
-asight collector install      # per user, no sudo; lists every file it will change first; then restart Claude Code
-asight collector start        # the daemon, in the foreground (no autostart yet)
+asight collector install      # per user, no sudo; lists every file it will change first; starts the daemon (systemd --user); then restart your agents
+asight collector start        # the daemon in the foreground, if you installed with --no-unit
 asight collector on           # steer + record; `off` stops recording at once
 asight collector status       # each agent and why it is (not) captured, and the recent failures
 asight serve                  # the captures appear on the board
 ```
 
 A relay or proxy with a private CA keeps working: install carries the CA you already gave Claude Code
-into `extra-cc.pem`, and the daemon verifies upstreams with Node's store, so start it with the same
-`NODE_EXTRA_CA_CERTS` your shell has. asight does not count on a Claude Code process that was already
+into `extra-cc.pem` (the other agents' CAs into their bundles), and the daemon verifies upstreams with
+Node's store plus `NODE_EXTRA_CA_CERTS`: the autostart unit carries the value of the shell you install
+from; with `--no-unit`, start the daemon from a shell that has it. asight does not count on a Claude Code process that was already
 running at install picking up the new trust entry (not verified for every mode), so `status` reports it
 untrusted (`config-after-start`, with a hint to restart it) and its connections go direct, unrecorded,
 until you restart it.
