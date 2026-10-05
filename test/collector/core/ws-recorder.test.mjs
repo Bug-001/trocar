@@ -327,15 +327,22 @@ test('seq: the first call takes seqStart (the upgrade request\'s number), later 
   assert.deepEqual(t.out.map((e) => [e.req_body, e.seq]), [['a', 7], ['c', 9]])
 })
 
-test('D38: no silent failure — a failed write, an undecodable message and a stopped direction each leave a record with its reason at once; a stopped direction truncates the call it cuts', () => {
+test('no silent failure (proposed D38) — a failed write, an undecodable message and a stopped direction each leave a record with its reason at once; a stopped direction truncates the call it cuts', () => {
   const t = rig({ ext: 'permessage-deflate', write: (e, out, store) => { out.push(e); if (out.length > 1) return true; store.lastError = new Error('ENOSPC: no space left'); return false } })
   t.c(cli(1, ev('response.create'))); t.s(srv(1, ev('response.completed')))                                       // the store does not write it
   t.c(cli(1, ev('response.create'))); t.s(srv(1, Buffer.from([0xff, 0xff]), { rsv1: true })); t.s(srv(1, ev('response.completed')))
   t.c(cli(1, ev('response.create'))); t.s(srv(1, ev('response.output_text.delta'))); t.s(Buffer.from([0x83, 0]))
   assert.deepEqual(t.failures.map((f) => [f.reason, f.flow_id, f.transport, f.d, f.i, f.seq]), [['write-failed', 'f1', 'ws', undefined, undefined, 0], ['decode-failed', 'f1', 'ws', 's', 3, undefined], ['broken', 'f1', 'ws', 's', undefined, undefined]], 'written when they happen')
   assert.deepEqual([t.failures[0].error, typeof t.failures[1].error, t.failures[2].error], ['ENOSPC: no space left', 'string', 'reserved opcode 3'])
-  t.r.end(null)
-  assert.deepEqual([t.out.at(-1).ws_truncated, t.out.at(-1).partial_reasons, t.out[1].ws_truncated, t.r.summary().failures], [true, ['write-failed', 'decode-failed'], undefined, 3], 'the stopped direction lost bytes of the open call')
+  t.c(cli(1, ev('response.create'))); t.r.end(null)                                                                // a call opened after the stop
+  assert.deepEqual(t.out.map((e) => e.ws_truncated), [undefined, undefined, true, true], 'the stopped direction lost bytes of the open call and of every later one')
+  assert.deepEqual([t.out.at(-1).partial_reasons, t.r.summary().failures, t.failures[0].id, t.failures.every((f) => typeof f.ts === 'string')], [['write-failed', 'decode-failed'], 3, t.out[0].id, true])
+  const n = rig()                                                                                                       // RSV1 with no deflate agreed
+  n.c(cli(1, ev('response.create'))); n.s(srv(1, 'abc', { rsv1: true }))
+  assert.deepEqual(n.failures.map((f) => [f.reason, f.d, f.i]), [['decode-failed', 's', 1]])
+  const o = rig({ ext: 'permessage-deflate' }); o.on = false                                                              // off: no envelope, but the failure is recorded (it breaks the window)
+  o.c(cli(1, ev('response.create'))); o.s(srv(1, Buffer.from([0xff, 0xff]), { rsv1: true })); o.r.end(null)
+  assert.deepEqual([o.out.length, o.failures.map((f) => f.reason)], [0, ['decode-failed']])
   const x = rig({ write: () => { throw new Error('EIO: disk gone') } })
   x.c(cli(1, 'a')); x.s(srv(1, ev('response.completed')))
   assert.deepEqual(x.failures.map((f) => [f.reason, f.error]), [['write-failed', 'EIO: disk gone']])
@@ -371,4 +378,21 @@ test('C14 on a fragmented opener: begun on and finished off it is recorded with 
   assert.ok(rebuildWsWire(t.out[0], 'c').c.equals(Buffer.concat(t.wire.c)))
   t.c(cli(1, '{"type":"response.create",', { fin: false })); t.on = true; t.c(cli(0, '"x":2}')); t.s(srv(1, ev('response.completed')))
   assert.deepEqual([t.out.length, t.r.summary().calls], [1, 2])
+})
+
+test('switch details at call boundaries: frames between calls go with an off-begun next call; a push begun on follows an off-begun call; a drop marks the call open at that moment', () => {
+  const a = rig()
+  a.c(cli(1, ev('response.create'))); a.s(srv(1, ev('response.completed'))); a.c(cli(9, 'hb'))           // 0, 1, then a ping between calls (on)
+  a.on = false; a.c(cli(1, ev('response.create'))); a.s(srv(1, ev('response.completed')))               // 3, 4: begun off
+  a.on = true; a.c(cli(1, ev('response.create'))); a.s(srv(1, ev('response.completed'))); a.r.end(null) // 5, 6
+  assert.deepEqual(connection(a).ids, [0, 1, 5, 6], 'the ping rode with the off-begun call and was dropped with it')
+  const b = rig(), push = ev('rate_limits.updated')
+  b.s(srv(1, push.slice(0, 5), { fin: false })); b.on = false; b.c(cli(1, ev('response.create')))      // push begun on; then a call begun off
+  b.s(srv(0, push.slice(5))); b.s(srv(1, ev('response.completed')))                                    // the push completes inside it: dropped with it
+  b.on = true; b.c(cli(1, ev('response.create'))); b.s(srv(1, ev('response.completed'))); b.r.end(null)
+  assert.deepEqual(b.out.map((e) => [e.resp.messages, e.partial_reasons]), [[[ev('response.completed')], ['off-window']]])
+  const c = rig({ terminal: null })
+  c.c(cli(1, 'a')); c.on = false; c.s(srv(1, 'S-', { fin: false })); c.on = true                       // S begins off inside A
+  c.c(cli(1, 'b')); c.s(srv(0, 'end')); c.s(srv(1, 'B1')); c.c(cli(1, 'c')); c.r.end(null)            // S completes in B: dropped, B marked
+  assert.deepEqual(c.out.map((e) => [e.req_body, e.resp.messages, e.partial_reasons]), [['a', [], undefined], ['b', ['B1'], ['off-window']], ['c', [], ['off-window']]])
 })
