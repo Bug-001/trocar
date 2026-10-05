@@ -32,7 +32,7 @@ test('cli: install / uninstall hand the descriptors, OS and process table from d
   const install = {
     installCollector: async (o) => {
       seen.push(['install', o.osName, o.harnesses, o.scan === parts.scan, o.home])
-      o.onPlan({ ca: ['/h/.asight/collector/ca/ca.key', '/h/.asight/collector/ca/asight-ca.pem'], files: [{ harness: 'h', path: '/h/.asight/collector/ca/extra-h.pem', sources: ['/corp/ca.pem'] }], entries: [{ harness: 'h', path: '/h/s.json', keys: ['env', 'K'], value: '/h/.asight/collector/ca/extra-h.pem' }] })
+      o.onPlan({ manifest: '/h/.asight/collector/install-manifest.json', ca: ['/h/.asight/collector/ca/ca.key', '/h/.asight/collector/ca/asight-ca.pem'], files: [{ harness: 'h', path: '/h/.asight/collector/ca/extra-h.pem', sources: ['/corp/ca.pem'] }], entries: [{ harness: 'h', path: '/h/s.json', real_path: '/dot/s.json', keys: ['env', 'K'], value: '/h/.asight/collector/ca/extra-h.pem' }] })
       seen.push(['written'])
       return { manifest: { engine_port: 4711, entries: [{ harness: 'h', path: '/h/s.json', keys: ['env', 'K'], value: '/h/.asight/collector/ca/extra-h.pem', prior_value: '/old.pem' }] }, plan: { notes: ['n'] } }
     },
@@ -43,7 +43,8 @@ test('cli: install / uninstall hand the descriptors, OS and process table from d
   assert.match(t.o[0], /^asight collector install will write or change these files, and nothing else:/, 'the list comes first, before anything is written (4.6)')
   assert.match(t.o[0], /collector CA \(in no trust store\): \/h\/.asight\/collector\/ca\/ca.key, \/h\/.asight\/collector\/ca\/asight-ca.pem/)
   assert.match(t.o[0], /h: \/h\/.asight\/collector\/ca\/extra-h.pem = the certificates of \/corp\/ca.pem \+ the collector CA/, 'whose certificates the trust file carries (G8 merge path)')
-  assert.match(t.o[0], /h: \/h\/s.json env.K = \/h\/.asight\/collector\/ca\/extra-h.pem/)
+  assert.match(t.o[0], /h: \/h\/s.json → \/dot\/s.json env.K = \/h\/.asight\/collector\/ca\/extra-h.pem/, 'a link is shown with the file that actually changes')
+  assert.match(t.o[0], /install manifest: \/h\/.asight\/collector\/install-manifest.json/)
   assert.match(t.o[1], /^installed for .*: engine port 4711\n  h: \/h\/s.json env.K was \/old.pem\nnote: n$/)
   t = io(); assert.equal(await runCollector(['uninstall', '--purge-data'], { daemon, install, ...t }), 0)
   assert.match(t.o[0], /captures removed/); assert.match(t.o[0], /pid 7 \(h\) trusts the asight CA until it restarts/)

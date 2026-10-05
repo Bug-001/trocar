@@ -11,7 +11,7 @@ import path from 'node:path'
 import { collectorHome } from '../paths.mjs'
 import { loadOrCreateCa, caPaths } from './core/tls/ca-store.mjs'
 import { planTrust } from './core/trust/plan.mjs'
-import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, writeOwnedFile, undoEntry, removeEmptyDirs, manifestPath, sweepTemps } from './core/trust/journal.mjs'
+import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, writeOwnedFile, undoEntry, removeEmptyDirs, manifestPath, sweepTemps } from './core/trust/journal.mjs'
 import { controlRequest } from './core/control.mjs'
 import { readText } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
@@ -74,10 +74,13 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
     readText: (f) => readText(f), listDir, collectorDir: dir, caPem: ca.pem,
   })
   const draft = planTrust({ descriptors: harnesses, ctxFor, caCertPem: null, collectorDir: dir })
+  // every per-file refusal too (a dangling link, a file that is not JSON) — before onPlan, before any write
+  const preview = draft.entries.map((e) => previewJsonKey({ file: e.path, keys: e.keys, value: e.value }))
   onPlan({
+    manifest: manifestPath(dir),
     ca: [ca.key, ca.pem],
     files: draft.files.map((f) => ({ harness: f.harness, path: f.path, sources: f.sources })),
-    entries: draft.entries.map((e) => ({ harness: e.harness, path: e.path, keys: e.keys, value: e.value })),
+    entries: draft.entries.map((e, i) => ({ harness: e.harness, path: e.path, ...(preview[i].real_path ? { real_path: preview[i].real_path } : {}), keys: e.keys, value: e.value })),
     notes: draft.notes,
   })
 
@@ -106,7 +109,8 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
 // (it may be another program by now): uninstall stops with nothing removed and says what to do.
 export async function stopDaemon({ socketPath, lockFile, request = controlRequest, alive = pidAlive, kill = process.kill.bind(process), timeoutMs = 5000 }) {
   let lock = null
-  try { lock = JSON.parse(fs.readFileSync(lockFile, 'utf8')) } catch { /* no daemon ever ran */ }
+  let unreadable = false // a lock cut short by a crash or power loss: whether a daemon runs is unknown
+  try { lock = JSON.parse(fs.readFileSync(lockFile, 'utf8')) } catch (e) { if (e.code !== 'ENOENT') unreadable = true }
   let answered = false
   for (const sock of [...new Set([socketPath, lock && lock.socket].filter(Boolean))]) {
     try { await request({ socketPath: sock, method: 'GET', path: '/status', timeoutMs: 2000 }); answered = true; break } catch (e) {
@@ -114,6 +118,7 @@ export async function stopDaemon({ socketPath, lockFile, request = controlReques
     }
   }
   if (!answered) {
+    if (unreadable) throw new Error(`${lockFile} is unreadable, so whether a collector daemon still runs is unknown; stop any (pgrep -f "asight collector start"), delete ${lockFile}, then run uninstall again; nothing was removed`)
     if (lock && lock.pid && alive(lock.pid)) throw new Error(`a collector daemon may still be running (pid ${lock.pid} in ${lockFile}) but answers on no control socket; stop it (kill ${lock.pid}), or delete ${lockFile} if that pid is not an asight collector, then run uninstall again; nothing was removed`)
     return 'none'
   }

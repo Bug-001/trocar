@@ -40,9 +40,10 @@ export function formatFailures(list) {
 // Every file install will write or change, printed before it writes any (4.6).
 export function formatPlan(p) {
   return ['asight collector install will write or change these files, and nothing else:',
+    `  install manifest: ${p.manifest}`,
     `  collector CA (in no trust store): ${p.ca.join(', ')}`,
     ...p.files.map((f) => `  ${f.harness}: ${f.path} = ${f.sources.length ? `the certificates of ${f.sources.join(', ')} + ` : ''}the collector CA`),
-    ...p.entries.map((e) => `  ${e.harness}: ${e.path} ${e.keys.join('.')} = ${e.value}`)].join('\n')
+    ...p.entries.map((e) => `  ${e.harness}: ${e.path}${e.real_path ? ` → ${e.real_path}` : ''} ${e.keys.join('.')} = ${e.value}`)].join('\n')
 }
 
 const waitForSignal = () => new Promise((resolve) => { process.once('SIGTERM', resolve); process.once('SIGINT', resolve) })

@@ -191,13 +191,35 @@ test('a refused plan entry or a non-JSON settings file leaves every user file un
     assert.ok(!fs.existsSync(b.dir))
 
     fs.mkdirSync(path.join(b.home, '.claude')); fs.writeFileSync(settingsOf(b), '{"model": "x",, }')
-    await assert.rejects(installCollector(base(b)))
+    let listed = false
+    await assert.rejects(installCollector(base(b, { onPlan: () => { listed = true } })), /JSON/)
     assert.equal(fs.readFileSync(settingsOf(b), 'utf8'), '{"model": "x",, }', 'a file that is not JSON is never rewritten')
-    await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
-    assert.deepEqual([listAll(b.dir).filter((n) => !n.startsWith('flows')), fs.readFileSync(settingsOf(b), 'utf8')], [[], '{"model": "x",, }'], 'only the failure record is left (flows/ is data, kept like captures)')
-    const recs = fs.readdirSync(path.join(b.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(b.dir, 'flows', n), 'utf8').trim().split('\n').map((l) => JSON.parse(l)))
-    assert.deepEqual(recs.map((r) => [r.event, r.where]), [['failure', 'install']], 'the failed install step is recorded with its reason (D38)')
-    assert.match(recs[0].reason, /JSON/)
+    assert.deepEqual([listed, fs.existsSync(path.join(b.home, '.asight'))], [false, false], 'refused in the draft phase: no list, no manifest, no CA')
+    fs.writeFileSync(settingsOf(b), '{"model": "x"}')
+    assert.equal((await installCollector(base(b))).already, false, 'fixing the file and installing again just works')
+  } finally { b.done() }
+})
+
+test('a dangling settings link is refused before anything is written; a valid link is listed as link → target', async () => {
+  const b = box()
+  try {
+    fs.mkdirSync(path.join(b.home, '.claude')); fs.symlinkSync(path.join(b.home, 'dotfiles', 'settings.json'), settingsOf(b))
+    await assert.rejects(installCollector(base(b)), /symbolic link to a file that does not exist/)
+    assert.ok(!fs.existsSync(path.join(b.home, '.asight')), 'no manifest, no CA')
+    fs.mkdirSync(path.join(b.home, 'dotfiles')); fs.writeFileSync(path.join(b.home, 'dotfiles', 'settings.json'), '{}')
+    let listed = null
+    await installCollector(base(b, { onPlan: (p) => { listed = p } }))
+    assert.deepEqual(listed.entries.map((e) => [e.path, e.real_path]), [[settingsOf(b), fs.realpathSync(path.join(b.home, 'dotfiles', 'settings.json'))]])
+    assert.ok(fs.lstatSync(settingsOf(b)).isSymbolicLink())
+  } finally { b.done() }
+})
+
+test('an install step that fails after the manifest exists is recorded with its reason (D38)', async () => {
+  const b = box()
+  try {
+    await assert.rejects(installCollector(base(b, { freePort: async () => { throw new Error('no port free') } })), /no port free/)
+    const { recentFailures } = await import('../../src/collector/core/events.mjs')
+    assert.deepEqual(recentFailures(b.dir).map((f) => [f.event, f.where, f.reason]), [['failure', 'install', 'no port free']])
   } finally { b.done() }
 })
 
@@ -243,6 +265,8 @@ test('install lists every file it will write or change before writing any, and w
     const corp = createCa({ commonName: 'corp relay CA' })
     const corpFile = path.join(b.home, 'corp.pem'); fs.writeFileSync(corpFile, corp.certPem)
     let listed = null
+    const walk = (d, out = {}) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p, out); else out[p] = fs.readFileSync(p, 'latin1') } return out }
+    const before = walk(b.home)
     const r = await installCollector(base(b, { env: { HOME: b.home, NODE_EXTRA_CA_CERTS: corpFile }, onPlan: (p) => {
       assert.ok(!fs.existsSync(path.join(b.home, '.asight')) && !fs.existsSync(settingsOf(b)), 'called before anything is written')
       listed = p
@@ -251,9 +275,11 @@ test('install lists every file it will write or change before writing any, and w
     assert.deepEqual(listed.ca, [path.join(b.dir, 'ca', 'ca.key'), path.join(b.dir, 'ca', 'asight-ca.pem')])
     assert.deepEqual(listed.files, [{ harness: 'claude-code', path: extra, sources: [corpFile] }])
     assert.deepEqual(listed.entries, [{ harness: 'claude-code', path: settingsOf(b), keys: ['env', 'NODE_EXTRA_CA_CERTS'], value: extra }])
-    const m = r.manifest
-    assert.deepEqual([...m.files.map((f) => f.path)].sort(), [...listed.ca, ...listed.files.map((f) => f.path)].sort(), 'owned files written == listed')
-    assert.deepEqual(m.entries.map((e) => e.path), listed.entries.map((e) => e.path), 'user files changed == listed')
+    // a walk of the whole HOME before and after: every file added or changed is one the list named
+    const after = walk(b.home)
+    const touched = Object.keys(after).filter((f) => before[f] !== after[f]).sort()
+    assert.deepEqual(touched, [listed.manifest, ...listed.ca, ...listed.files.map((f) => f.path), ...listed.entries.map((e) => e.path)].sort(), 'written == listed, nothing else')
+    assert.ok(r.manifest.complete)
   } finally { b.done() }
 })
 
@@ -284,5 +310,15 @@ test('uninstall leaves a settings file that became a symbolic link alone and rec
     assert.ok(fs.lstatSync(settingsOf(b)).isSymbolicLink(), 'never replaced by a regular file')
     const { recentFailures } = await import('../../src/collector/core/events.mjs')
     assert.deepEqual(recentFailures(b.dir).map((f) => [f.where, /symbolic link/.test(f.reason)]), [['uninstall', true]], 'recorded after the purge, so it survives it')
+  } finally { b.done() }
+})
+
+test('stopDaemon: an unreadable lock with no daemon answering stops the uninstall, nothing removed', async () => {
+  const b = box()
+  try {
+    await installCollector(base(b))
+    fs.writeFileSync(path.join(b.dir, 'lock'), '') // cut short by a power loss
+    await assert.rejects(uninstallCollector({ home: b.home, env: {} }), /lock is unreadable, so whether a collector daemon still runs is unknown.*nothing was removed/)
+    assert.ok(fs.existsSync(path.join(b.dir, 'ca', 'ca.key')) && JSON.parse(fs.readFileSync(settingsOf(b), 'utf8')).env.NODE_EXTRA_CA_CERTS)
   } finally { b.done() }
 })

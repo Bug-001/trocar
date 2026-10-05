@@ -51,7 +51,7 @@ export function sweepTemps(file, fs = nodeFs) {
 
 // The file asight edits for `file`: itself, or the regular file a symlink resolves to (a dotfiles setup). The link
 // is never replaced by a regular file; a link to nothing, or to something that is not a regular file, is refused.
-function editTarget(file, fs) {
+export function editTarget(file, fs = nodeFs) {
   let st = null
   try { st = fs.lstatSync(file) } catch (e) { if (e.code !== 'ENOENT') throw e }
   if (!st || !st.isSymbolicLink()) return file
@@ -82,6 +82,16 @@ export function writeOwnedFile({ dir, manifest, harness = null, role, file, data
 
 // Set one string key in a JSON file the user owns (CC settings.json, Z-Code config.json). Returns the entry, or
 // null when the key already holds this value (nothing to change, nothing to undo).
+// What applyJsonKey would do, without writing: every refusal (a link to nothing or to a non-regular file, a file
+// that is not a JSON object, a non-object parent) is raised here, so install can run them all before it writes
+// anything. Returns the file that would change (`real_path` when `file` is a link) and whether it would change.
+export function previewJsonKey({ file, keys, value, fs = nodeFs }) {
+  const real = editTarget(file, fs)
+  const before = readOrNull(fs, real)
+  const res = setKey(before == null ? null : before.toString('utf8'), keys, value)
+  return { path: file, ...(real !== file ? { real_path: real } : {}), changes: res.prior !== value }
+}
+
 // A symlinked file is edited at its target; the entry records both (`path` the link, `real_path` the target).
 export function applyJsonKey({ dir, manifest, harness, file, keys, value, now = new Date(), fs = nodeFs }) {
   const real = editTarget(file, fs)
