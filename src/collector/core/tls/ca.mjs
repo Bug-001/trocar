@@ -1,7 +1,7 @@
 // ca.mjs — the collector's in-process root CA (RFC 4.6 §身份与信任): v3, ECDSA P-256,
 // BasicConstraints CA:TRUE critical, KeyUsage keyCertSign|cRLSign critical, Subject Key Identifier.
-// Minted with node:crypto, zero dependencies. The private key never leaves this process in Plan 1;
-// Plan 2's arch layer owns persistence (root-only /etc/asight/ca/ca.key).
+// Minted with node:crypto, zero dependencies. Persistence is core/tls/ca-store.mjs: the operator's
+// ~/.asight/collector/ca/ca.key, 0600 (D36 — the root-only /etc/asight location of D31⑦ is withdrawn).
 import crypto from 'node:crypto'
 import { name, ext, buildCertificate, certSubjectAndSki } from './cert.mjs'
 
