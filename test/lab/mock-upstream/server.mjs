@@ -162,6 +162,7 @@ function adminServer(state, logFile) {
 export async function startMockUpstream({ tls: tlsOpts = null, host = '127.0.0.1', port = 0, adminPort = 0, logDir = null, delays = {} } = {}) {
   const state = { queue: [], log: [], cfg: { stallMs: 30000, dripMs: 250, ...delays } }
   const logFile = logDir ? path.join(logDir, 'log.ndjson') : null
+  state.cfg.wsPingMs ??= 0 // WebSocket ping interval, 0 = off (ws.mjs); POST /__mock/config sets it for new connections
   if (logFile) { fs.mkdirSync(logDir, { recursive: true }); fs.writeFileSync(logFile, '') }
   // With a logDir the file is the only copy: a long-lived lab process serving real agents would
   // otherwise hold every request and response in memory.
