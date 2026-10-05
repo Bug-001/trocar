@@ -472,7 +472,6 @@
 <div id="rails"></div>
 <div id="truncbar" style="display:none"></div>
 <div id="srcbar" style="display:none"></div>
-<div id="srcerrbar" style="display:none"></div>
 
 <main>
   <div id="ctxnav"></div>
@@ -619,13 +618,23 @@ let pageInfo=null   // the server's `page` envelope for the loaded view: {cursor
 let pageSig=null    // which session `pageCur` was chosen for (re-park the window on a session switch)
 let pageReaimed=false // guard: the "window past what the server assembled" re-aim fires at most once
 
-// 4.4:83 · invariant 4: what the board did NOT read is said on screen (/api/projects `source`).
-// Only what may hold capture bytes raises the bar; the rest (config files, the CA, subdirectories)
-// is counted in it and listed in its tooltip.
-function renderSourceHealth(h){
+// 4.4:83 · invariant 4 · D38: what the board did not read, or read only in part, is said on screen —
+// in ONE bar (D38 R-7a: two branches' reports, `source` and `source_errors`, had two bars). It shows
+// /api/projects `source`: entries not read (`skipped`), lines that would not parse, and `errors` —
+// files read but not in full (a damaged sealed file, D35; a capture-looking file not read; an
+// original and its sealed copy that differ) — plus the `source.errors` of the session or control view
+// on screen (`more`). Only what may hold capture bytes raises the bar; the rest (config files, the CA,
+// subdirectories) is counted in it and listed in its tooltip. A file not read in full turns it red:
+// the view below is missing what it holds, never a smaller-but-healthy board.
+let projSource=null // last /api/projects `source`: the session and control views add their own errors
+// the errors of the view on screen, kept: a poll that skips the session fetch (nothing changed) still
+// shows them, instead of dropping back to the projects' own until the session changes
+let viewErrors={sel:null,list:[]}
+function renderSourceHealth(h,more){
   const bar=document.getElementById('srcbar'); if(!bar)return
   const sk=(h&&h.skipped)||[], warn=sk.filter(x=>x.attention), rest=sk.length-warn.length
   const corrupt=Object.entries((h&&h.corrupt_lines)||{}), resets=(h&&h.resets)||[], unid=(h&&h.unidentified_lines)||0
+  const byFile=new Map(); for(const e of [...((h&&h.errors)||[]),...(more||[])]) if(e&&e.file&&!byFile.has(e.file)) byFile.set(e.file,e)
   const parts=[]
   if(warn.length) parts.push(`${warn.length} capture file${warn.length!==1?'s':''} not read: `+warn.slice(0,4).map(x=>`<b>${esc(x.name)}</b> (${esc(x.reason)})`).join(', ')+(warn.length>4?` +${warn.length-4} more`:''))
   if(corrupt.length) parts.push(`${corrupt.reduce((n,[,c])=>n+c,0)} unparseable line(s) in `+corrupt.slice(0,3).map(([f,c])=>`<b>${esc(f.split('/').pop())}</b> ×${c}`).join(', '))
@@ -634,25 +643,17 @@ function renderSourceHealth(h){
   if(unid) parts.push(`${unid} record(s) without an id (listed; their blocks cannot open)`)
   // shard mode does not count bad lines in session shards yet: say so, never let silence read as "none"
   if(h&&h.corrupt_lines===null) parts.push('bad lines in session shards are not counted yet (shard mode)')
-  if(!parts.length){ bar.style.display='none'; bar.innerHTML=''; bar.title=''; return }
-  bar.title=sk.map(x=>`${x.root}/${x.name} — ${x.reason}${x.of?' (same file as '+x.of+')':''}${x.error?' · '+x.error:''}`).concat(corrupt.map(([f,c])=>`${f} — ${c} unparseable line(s)`)).join('\n')
+  if(!parts.length&&!byFile.size){ bar.style.display='none'; bar.innerHTML=''; bar.title=''; return }
+  const errTitle=[...byFile.values()].map(e=>`${e.file} — ${e.reason||''}`)
+  bar.title=sk.map(x=>`${x.root}/${x.name} — ${x.reason}${x.of?' (same file as '+x.of+')':''}${x.error?' · '+x.error:''}`).concat(corrupt.map(([f,c])=>`${f} — ${c} unparseable line(s)`)).concat(errTitle).join('\n')
   // "not measured" alone is not a loss: say what it is, without claiming something is missing
-  if(parts.length===1&&h.corrupt_lines===null){ bar.title=sk.map(x=>`${x.root}/${x.name} — ${x.reason}`).join('\n'); bar.innerHTML=`ⓘ 未计数 · ${parts[0]}: a shard line that does not parse is left out of its session without a count${rest?` · ${rest} other entr${rest!==1?'ies':'y'} not read (hover for the list)`:''}.`; bar.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #3d4a5c;background:#141b24;color:#9fb3c8;border-radius:5px;font-size:11px;line-height:1.45'; return }
-  bar.innerHTML=`⚠ 源未全读 · not everything in the capture source is on this board: ${parts.join(' · ')}${rest?` · ${rest} other entr${rest!==1?'ies':'y'} not read (files that are not *.ndjson, subdirectories; hover for the list)`:''} — the raw files on disk are untouched.`
-  bar.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #7a5b18;background:#241d0b;color:#e8c15a;border-radius:5px;font-size:11px;line-height:1.45'
-}
-
-// No silent failure (user requirement 2026-10-06): a capture file the server could not read in full —
-// typically a damaged sealed file (D35) — arrives as `source_errors`. The board still shows what it
-// could read, and says, right here, what it could not. Never rendered as a smaller-but-healthy board.
-let projSourceErrors=[] // last /api/projects source_errors: the control view adds its own to these
-function showSourceErrors(list){
-  const el=document.getElementById('srcerrbar'); if(!el) return
-  const byFile=new Map(); for(const e of list||[]) if(e&&e.file&&!byFile.has(e.file)) byFile.set(e.file,e)
-  if(!byFile.size){ el.style.display='none'; el.innerHTML=''; return }
-  el.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #7a2b18;background:#2a1210;color:#f08a6a;border-radius:5px;font-size:11px;line-height:1.45'
-  el.innerHTML=`⚠ 源文件读不全 · ${byFile.size} capture file(s) could not be read as-is — the view below is missing what they hold or shows both copies; the files stay on disk (check with <code>asight raw verify</code>):<br>`
+  if(!byFile.size&&parts.length===1&&h.corrupt_lines===null){ bar.title=sk.map(x=>`${x.root}/${x.name} — ${x.reason}`).join('\n'); bar.innerHTML=`ⓘ 未计数 · ${parts[0]}: a shard line that does not parse is left out of its session without a count${rest?` · ${rest} other entr${rest!==1?'ies':'y'} not read (hover for the list)`:''}.`; bar.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #3d4a5c;background:#141b24;color:#9fb3c8;border-radius:5px;font-size:11px;line-height:1.45'; return }
+  const notAll=parts.length?`⚠ 源未全读 · not everything in the capture source is on this board: ${parts.join(' · ')}${rest?` · ${rest} other entr${rest!==1?'ies':'y'} not read (files that are not *.ndjson, subdirectories; hover for the list)`:''} — the raw files on disk are untouched.`:''
+  if(!byFile.size){ bar.innerHTML=notAll; bar.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #7a5b18;background:#241d0b;color:#e8c15a;border-radius:5px;font-size:11px;line-height:1.45'; return }
+  bar.innerHTML=`⚠ 源文件读不全 · ${byFile.size} capture file(s) could not be read as-is — the view below is missing what they hold or shows both copies; the files stay on disk (check with <code>asight raw verify</code>):<br>`
     +[...byFile.values()].map(e=>`<b>${esc(String(e.file).split('/').pop())}</b> — ${e.kind==='coexist-mismatch'?'original and sealed copy differ, both shown':(e.unreadableRecords!=null?e.unreadableRecords+' record(s) unreadable':'unreadable')}: ${esc(String(e.reason||''))}`).join('<br>')
+    +(notAll?'<br>'+notAll:'')
+  bar.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #7a2b18;background:#2a1210;color:#f08a6a;border-radius:5px;font-size:11px;line-height:1.45'
 }
 
 async function poll(){
@@ -669,10 +670,9 @@ async function poll(){
       lastCheapSig=null; lastRenderSig=null; document.getElementById('dot').classList.remove('on')
       return
     }
-    projSourceErrors=pj.source_errors||[]
-    showSourceErrors(projSourceErrors)
     const projects=pj.projects||[]
-    renderSourceHealth(pj.source) // before any early return: "no sessions" next to "2 files not read" is the point
+    projSource=pj.source||null
+    renderSourceHealth(projSource,viewErrors.sel===curSel?viewErrors.list:null) // before any early return: "no sessions" next to "2 files not read" is the point
     projectsFlat=projects.flatMap(p=>p.sessions||[])
     const realP=projects.filter(p=>p.slug!=='_unresolved'), unres=projects.filter(p=>p.slug==='_unresolved')
     const optFor=s=>{
@@ -731,7 +731,8 @@ async function poll(){
       return
     }
     pageInfo=d.page||null
-    showSourceErrors([...(pj.source_errors||[]),...(d.source_errors||[])])
+    viewErrors={sel:curSel,list:(d.source&&d.source.errors)||[]}
+    renderSourceHealth(projSource,viewErrors.list) // this session's files it could not read in full
     // BUG 1 · self-correct. The server may assemble FEWER calls than /api/projects counted (a large
     // session is tail-bounded server-side BEFORE paging is applied — see the WIRING GAP note in the
     // audit). If our window landed entirely past what it actually assembled, every call would render
@@ -816,7 +817,8 @@ async function renderControlView(){
   hideSessionChrome(true)
   document.getElementById('dot').classList.toggle('on',document.getElementById('liveChk').checked)
   const list=await fetch('/api/control').then(r=>r.json()).catch(()=>({classes:[]}))
-  showSourceErrors([...projSourceErrors,...(list.source_errors||[])]) // control/ files it could not read in full
+  viewErrors={sel:'__control__',list:(list.source&&list.source.errors)||[]}
+  renderSourceHealth(projSource,viewErrors.list) // control/ files it could not read in full
   const sig=JSON.stringify(list.classes)
   const tl=document.getElementById('timeline')
   if(sig===controlSig && tl.dataset.mode==='control') return

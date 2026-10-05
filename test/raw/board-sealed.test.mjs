@@ -107,13 +107,13 @@ test('a sealed file the board cannot read is labelled in the response, and the r
     const s = await serve(cap, { sessionsRoot: ses });
     try {
       const pj = await get(s.port, '/api/projects');
-      assert.equal(pj.source_errors.length, 1);
-      assert.equal(pj.source_errors[0].file, victim);
-      assert.match(pj.source_errors[0].reason, /not a sealed file/);
+      assert.equal(pj.source.errors.length, 1);
+      assert.equal(pj.source.errors[0].file, victim);
+      assert.match(pj.source.errors[0].reason, /not a sealed file/);
       const ids = pj.projects.flatMap((p) => p.sessions.map((x) => x.session_id));
       assert.ok(ids.includes(A) && !ids.includes(B));
       const sa = await get(s.port, `/api/session?id=${A}`);
-      assert.equal(sa.source_errors.length, 1, 'every view built from an incomplete source says so');
+      assert.equal(sa.source.errors.length, 1, 'every view built from an incomplete source says so');
     } finally { s.server.close(); }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
@@ -148,6 +148,6 @@ test('the home layout: sealing a collector shard does not change what `asight se
     const pj = await get(s.port, '/api/projects');
     s.server.close();
     assert.deepEqual(pj.projects, before.projects, 'a damaged file flipped the board into sharded mode');
-    assert.ok((pj.source_errors || []).some((e) => e.file.startsWith(path.join(home, 'collector'))), 'the damaged file is not reported');
+    assert.ok(pj.source.errors.some((e) => e.file.startsWith(path.join(home, 'collector'))), 'the damaged file is not reported');
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

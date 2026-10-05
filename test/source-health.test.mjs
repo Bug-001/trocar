@@ -1,5 +1,5 @@
 // test/source-health.test.mjs — nothing on the read path is skipped without a word (4.4:83 ·
-// invariant 4 · the user's 2026-10-06 requirement that becomes D38). `/api/projects` carries
+// invariant 4 · the user's 2026-10-06 requirement, D38). `/api/projects` carries
 // `source`: every entry the board did not read with its reason, the lines that would not parse, and
 // in shard mode what the meta.json listing leaves out. `asight etl <dir>` returns and prints the same.
 import test from 'node:test';

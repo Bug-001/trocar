@@ -1,5 +1,5 @@
 // test/web/source-health.test.mjs — the board SAYS what it did not read (4.4:83 · invariant 4 · the
-// user's 2026-10-06 requirement that becomes D38). Drives the REAL module out of src/web/index.html
+// user's 2026-10-06 requirement, D38). Drives the REAL module out of src/web/index.html
 // under a DOM shim (as poll-recovery.test.mjs does) with a scripted /api/projects `source`.
 import test from 'node:test';
 import assert from 'node:assert/strict';

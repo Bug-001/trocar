@@ -39,17 +39,17 @@ test('sharded mode lists a session dir the sealer made, and counts sealed files 
       const pj = await get(port, '/api/projects');
       assert.deepEqual(listed(pj), { [A]: 3, [L]: 2 + 4 }, 'the list must match what opening each session shows');
       for (const [id, n] of [[A, 3], [L, 6]]) assert.equal((await get(port, `/api/session?id=${id}`)).records.length, n);
-      assert.equal(pj.source_errors, undefined);
+      assert.deepEqual(pj.source.errors, []);
       // a damaged frame (the index still opens): only the fold can tell the list is short
       const victim = listFiles(path.join(ses, A))[0], fd = fs.openSync(victim, 'r+');
       fs.writeSync(fd, Buffer.from([0xff, 0xff, 0xff, 0xff]), 0, 4, 20); fs.closeSync(fd);
       const bad = await get(port, '/api/projects');
-      const e = (bad.source_errors || []).find((x) => x.file === victim);
+      const e = bad.source.errors.find((x) => x.file === victim);
       assert.ok(e && e.unreadableRecords > 0, 'a sealer-made session listed from a partial read is not labelled');
       // a sealer-made dir whose ONLY file cannot be opened is not recognised as a session — still named
       fs.writeFileSync(victim, 'damaged');
       const gone = await get(port, '/api/projects');
-      assert.ok((gone.source_errors || []).some((x) => x.file === victim), 'an unopenable file in an unrecognised dir is not reported');
+      assert.ok(gone.source.errors.some((x) => x.file === victim), 'an unopenable file in an unrecognised dir is not reported');
     } finally { server.close(); }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

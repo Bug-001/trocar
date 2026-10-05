@@ -36,8 +36,8 @@ test('the board reports capture-looking files it does not read, and nothing else
     try {
       const pj = await get(s.port, '/api/projects');
       assert.deepEqual(ids(pj), [`${A}:2`]);
-      assert.deepEqual((pj.source_errors || []).map((e) => path.basename(e.file)).sort(), ['codex-capture.ndjson.zst', 'old-capture.sealed']);
-      assert.ok(pj.source_errors.every((e) => /not read/.test(e.reason)));
+      assert.deepEqual(pj.source.errors.map((e) => path.basename(e.file)).sort(), ['codex-capture.ndjson.zst', 'old-capture.sealed']);
+      assert.ok(pj.source.errors.every((e) => /not read/.test(e.reason)));
     } finally { s.server.close(); }
     assert.ok(fs.existsSync(f));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
@@ -52,7 +52,7 @@ test('sharded mode reports a capture-looking file in a session dir that it does 
     const s = await serve(ses);
     try {
       const pj = await get(s.port, '/api/projects');
-      assert.deepEqual((pj.source_errors || []).map((e) => path.basename(e.file)), ['calls.ndjson.premigrate']);
+      assert.deepEqual(pj.source.errors.map((e) => path.basename(e.file)), ['calls.ndjson.premigrate']);
     } finally { s.server.close(); }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
@@ -78,7 +78,7 @@ test('a poll racing the unlink of a sealed original re-lists and shows every rec
       fs.statSync = real;
       assert.equal(armed, false, 'precondition: the unlink fired inside the loader');
       assert.deepEqual(ids(racing), [`${A}:3`]);
-      assert.equal(racing.source_errors, undefined);
+      assert.deepEqual(racing.source.errors, []);
     } finally { fs.statSync = real; s.server.close(); }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

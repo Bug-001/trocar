@@ -144,7 +144,7 @@ export function sourceFiles(sourcePath, { sessionsRoot = null } = {}) {
   const r = listSources([sourcePath], { sessionsRoot }); // throws if missing → caller resets sig
   return { files: r.files, skipped: r.skipped.map((x) => ({ root: sourcePath, ...x })), sig: sigOf(r.files), superseded: r.superseded, mismatched: r.mismatched, unattributed: r.unattributed };
 }
-// What went wrong reading a set of files, as the board labels it (`source_errors`). A sealed file
+// What went wrong reading a set of files, as the board labels it (`source.errors`). A sealed file
 // that could not be read in full is COUNTED and named, never a silently shorter board (user
 // requirement 2026-10-06); the readable records of it still show.
 const coexistNotes = (mismatched) => mismatched.map((m) => ({ file: m.sealed, kind: 'coexist-mismatch', reason: m.why }));
@@ -273,7 +273,7 @@ function makeRecordLoader(source, { retryMs = 30000, sessionsRoot = null } = {})
       if (prev && size >= prev.size) { from = prev.size; keep = prev.records; problem = prev.problem; }
       else if (prev) { resets.push({ file: f, was: prev.size, now: size, why: 'file shrank — rotated, truncated or replaced' }); }
       // A sealed file never grows (D35): read whole, once, frame by frame; what it could not yield is
-      // counted and named (`source_errors`), its readable records still show.
+      // counted and named (`source.errors`), its readable records still show.
       const sealed = isSealedPath(f);
       // The watermark is the end of the last COMPLETE line, not the file size: a record caught
       // half-written used to be parsed torn (counted corrupt) and its remainder then dropped as a
@@ -602,7 +602,12 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
     ...(() => { try { return fssync.readdirSync(d); } catch { return []; } })().filter((n) => !SESSION_STREAMS.includes(n) && unreadCapture(n))
       .map((n) => ({ file: path.join(d, n), reason: unreadCapture(n), unreadableRecords: null })),
   ]);
-  const withErrors = (body, errors) => (errors && errors.length ? { ...body, source_errors: errors } : body);
+  // ONE read-health field, `source` (D38 R-7a: read-cc-line's report of what was not read and the
+  // sealer's files read but not in full used to travel as `source` and `source_errors`, two fields and
+  // two banners). /api/projects always carries it, with `errors` (files read, but not in full: a damaged
+  // sealed file, a capture-looking file not read, a coexistence mismatch) beside `skipped`; a session or
+  // control view carries `source.errors` when a file behind it could not be read in full.
+  const withErrors = (body, errors) => (errors && errors.length ? { ...body, source: { ...(body.source || {}), errors } } : body);
   const sessionMemo = createLru(8); // D21: assembled per-session views keyed by (id, source sig, strategy)
   const csrf = control ? randomBytes(18).toString('hex') : null; // D26: per-process CSRF token
 
@@ -632,10 +637,10 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         if (metas) {
           const seen = new Set(metaErrors.map((e) => e.file));
           const errors = [...metaErrors, ...unreadableSealedInShards().filter((e) => !seen.has(e.file))];
-          return sendJson(res, 200, withErrors({ ...projectsViewFromMetas(metas, { enrich }), source: await sourceHealth(metas) }, errors));
+          return sendJson(res, 200, { ...projectsViewFromMetas(metas, { enrich }), source: { ...(await sourceHealth(metas)), errors } });
         }
         const view = projectsView(await loadRecords(), { enrich });
-        return sendJson(res, 200, withErrors({ ...view, source: await sourceHealth(null) }, loadRecords.sourceErrors));
+        return sendJson(res, 200, { ...view, source: { ...(await sourceHealth(null)), errors: loadRecords.sourceErrors || [] } });
       }
       if (p === '/api/session') {
         const id = url.searchParams.get('id');
