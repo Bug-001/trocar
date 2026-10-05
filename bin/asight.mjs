@@ -6,6 +6,7 @@
 //   off     — revert steer (+ optional --remove-ca)
 //   verify  — assert the CA is in the user-level trust store (no machine trust)
 //   doctor  — onboard self-check: deps probe + 「测试」四问 (4.1:61 / 4.5:41,77)
+//   raw     — D35 sealed raw logs: seal (closed shards, or --legacy pre-D35 files) · verify · export · journal
 import path from 'node:path'
 import { asightHome, captureOut, mitmOut, serveSource } from '../src/paths.mjs';
 import { parseArgs } from '../src/cli-args.mjs';
@@ -274,6 +275,74 @@ async function main() {
         : 'CA not installed ✗ (run: asight on)');
       break;
     }
+    case 'raw': {
+      // D35 (RFC 4.2 §原始层封存). Every outcome that is not plain success is also written to the raw
+      // journal (~/.asight/raw/journal.jsonl) — `asight raw journal` shows it.
+      const sub = positional(0), target = positional(1);
+      const mod = (m) => import(r('src', 'raw', m));
+      const mb = (n) => (n / 1048576).toFixed(1) + ' MB';
+      const usage = 'usage: asight raw seal <closed-shard> [--sessions <dir>]\n'
+        + '       asight raw seal --legacy <file|dir> [--delete-original] [--quiet <seconds>]\n'
+        + '       asight raw verify <sealed|dir> [--against <original>]\n'
+        + '       asight raw export <session-id|file.sealed> [--sessions <dir>] [--out <file>]\n'
+        + '       asight raw journal [--tail <n>]';
+      if (sub === 'seal') {
+        if (!target) die(usage);
+        try {
+          if (rest.includes('--legacy')) {
+            const { sealLegacy } = await mod('legacy.mjs');
+            const deleteOriginal = rest.includes('--delete-original');
+            const q = flag('--quiet', undefined);
+            const res = await sealLegacy(path.resolve(target), { deleteOriginal, quietMs: q === undefined ? undefined : Number(q) * 1000,
+              onFile: (f) => console.log(`  ${f}`) });
+            const raw = res.sealed.reduce((a, x) => a + x.bytes, 0), sealed = res.sealed.reduce((a, x) => a + x.sealedBytes, 0);
+            console.log(`sealed ${res.sealed.length} file(s): ${mb(raw)} → ${mb(sealed)}${raw ? ` (${(sealed / raw * 100).toFixed(2)} %)` : ''}`);
+            if (res.deletedOnly.length) console.log(`deleted ${res.deletedOnly.length} original(s) after a byte-for-byte check against their sealed copy`);
+            for (const x of res.refused) console.error(`refused  ${x.file}: ${x.reason}`);
+            for (const x of res.failed) console.error(`FAILED   ${x.file}: ${x.reason} (original kept)`);
+            if (!deleteOriginal && res.sealed.length) console.log('originals KEPT — both copies now exist and readers use the originals. Check with `asight raw verify '
+              + target + '`, then run this again with --delete-original to delete each original after a byte-for-byte check.');
+            if (res.refused.length || res.failed.length) process.exitCode = 1;
+          } else {
+            const { sealShard } = await mod('seal.mjs');
+            const res = await sealShard(path.resolve(target), { sessionsRoot: path.resolve(flag('--sessions', path.join(asightHome(), 'sessions'))) });
+            console.log(`sealed ${res.records} records: ${mb(res.bytes)} → ${mb(res.sealedBytes)} in ${res.outputs.length} file(s); original deleted after verification`);
+            for (const o of res.outputs) console.log(`  ${o.path}${o.session ? '' : '  (no session key)'}`);
+          }
+        } catch (e) { console.error(e.message); process.exitCode = 1; }
+        break;
+      }
+      if (sub === 'verify') {
+        if (!target) die(usage);
+        const { runVerify } = await mod('verify.mjs');
+        const against = flag('--against', null);
+        const results = runVerify({ target: path.resolve(target), against: against && path.resolve(against) });
+        for (const x of results) console.log(`${x.ok ? 'ok    ' : 'FAILED'} ${x.mode === 'self' ? '(by itself) ' : ''}${x.sealed.join(', ')}${x.original ? ' vs ' + x.original : ''}${x.ok ? ` · ${x.records} records` : ' — ' + x.reason}`);
+        if (!results.length) console.error('no sealed files found');
+        if (!results.length || results.some((x) => !x.ok)) process.exitCode = 1;
+        break;
+      }
+      if (sub === 'export') {
+        if (!target) die(usage);
+        const { exportSealed, sessionSealedFiles, exportDir } = await mod('export.mjs');
+        const isFile = target.endsWith('.sealed');
+        const files = isFile ? [path.resolve(target)] : sessionSealedFiles(path.resolve(flag('--sessions', path.join(asightHome(), 'sessions'))), target);
+        const out = path.resolve(flag('--out', path.join(exportDir(), (isFile ? path.basename(target, '.sealed') : target) + '.ndjson')));
+        try { const res = exportSealed({ files, out }); console.log(`exported ${res.records} records (${mb(res.bytes)}) → ${res.out} (0600)`); }
+        catch (e) { console.error(e.message); process.exitCode = 1; }
+        break;
+      }
+      if (sub === 'journal') {
+        const { readJournal, defaultJournalPath } = await mod('journal.mjs');
+        const all = readJournal();
+        const n = Number(flag('--tail', 50));
+        console.log(`${defaultJournalPath()} · ${all.length} entries`);
+        for (const e of all.slice(-n)) console.log(JSON.stringify(e));
+        break;
+      }
+      die(usage);
+      break;
+    }
     case 'doctor': case 'test': {
       // onboard 自检:依赖探测 + 「测试」四问(4.1:61 / 4.5:41,77). Human reviews the four answers;
       // exit non-zero ONLY on a credential leak (the one non-negotiable security red line).
@@ -291,27 +360,38 @@ async function main() {
       let srcMeta = { exists: false, bytes: 0 }, records = [];
       const readErrors = [];
       let files = [];
+      // ④b covers every file that holds captured bytes: the sources, sealed copies superseded by an
+      // original that still exists, and the default export dir (D35 · 4.1 §凭据处置).
+      const extraPerm = [];
       for (const root of sources) {
         try {
           const part = (await import(r('src', 'server.mjs'))).sourceFiles(root);
           files.push(...part.files);
+          extraPerm.push(...part.superseded.map((x) => x.sealed));
         } catch (e) { readErrors.push(`${root}: ${e.message}`); }
       }
+      extraPerm.push(...(await import(r('src', 'raw', 'export.mjs'))).exportFiles());
       if (files.length) {
         let bytes = 0;
         for (const f of files) { try { bytes += fs.statSync(f).size; } catch {} }
         srcMeta = { exists: true, bytes, mtimeMs: Date.now() };
         for (const f of files) {
           if (records.length >= LIMIT) break;
-          try { for (const rec of await readRecords(f, { limit: LIMIT - records.length })) records.push(rec); }
-          catch (e) { readErrors.push(`${f}: ${e.message}`); }
+          try {
+            const got = await readRecords(f, { limit: LIMIT - records.length });
+            for (const rec of got) records.push(rec);
+            // a sealed file read only in part is a read error, and leaves a journal entry
+            const { sealedReadProblem, appendJournal } = await import(r('src', 'raw', 'journal.mjs'));
+            const p = sealedReadProblem(got.scan);
+            if (p) { readErrors.push(`${f}: ${p.unreadableRecords ?? 'all'} record(s) unreadable — ${p.reason}`); appendJournal({ op: 'read', reader: 'doctor', outcome: 'failed', ...p }); }
+          } catch (e) { readErrors.push(`${f}: ${e.message}`); }
         }
       }
       // A read failure MUST be visible: a silently-swallowed error is what let ③ pass vacuously.
       for (const e of readErrors) console.error('read error:', e);
       const source = sources.join(', ') || '(none)';
       const deps = st.checkDeps({ has });
-      const res = st.runSelfTest({ records, srcMeta, deps, files, verify: () => ob.verifyUserTrustOnly() });
+      const res = st.runSelfTest({ records, srcMeta, deps, files: [...files, ...extraPerm], verify: () => ob.verifyUserTrustOnly() });
       const mark = (b, warn) => (b ? '✓' : warn ? '⚠' : '✗');
       console.log('asight doctor — onboard 自检(依赖探测 + 「测试」四问)\n');
       console.log('deps:');
@@ -332,7 +412,7 @@ async function main() {
 
 usage:
   asight serve [--port 9800] [--db <path>] [--source <ndjson|dir>]
-  asight etl <ndjson|dir> [--db <path>] [--rebuild]
+  asight etl <ndjson|sealed|dir> [--db <path>] [--rebuild]
   asight capture [--port 8899] [--target https://api.anthropic.com] [--out <ndjson>] [--upstream <proxy>] [--raw-sse]
   asight mitm    [--port 9899] [--host api.anthropic.com] [--out <ndjson>] [--upstream <proxy>]   CC-Desktop MITM source (D10 tee)
   asight desktop {on|off|status} [--port 9899]  macOS-only: steer CC-Desktop's claude-code→anthropic into asight mitm (durable, reversible)
@@ -341,6 +421,11 @@ usage:
   asight uninstall                              one-step revert: remove CA + clear steer
   asight verify
   asight doctor [--source <ndjson>]             self-check: deps probe + 「测试」四问 (是否真在抓/抓得对/凭据没漏/没弱化全机 TLS)
+  asight raw seal <closed-shard> [--sessions <dir>]                     D35: seal a CLOSED shard (needs <shard>.closed), per session
+  asight raw seal --legacy <file|dir> [--delete-original] [--quiet <s>] seal pre-D35 files/trees nothing writes; keeps originals by default
+  asight raw verify <sealed|dir> [--against <original>]                 decode sealed copies, compare byte for byte with the original
+  asight raw export <session-id|file.sealed> [--out <file>]             sealed → plain NDJSON (0600, default ~/.asight/export/)
+  asight raw journal [--tail <n>]                                       the durable record of refusals, failures, deletions
   asight --version`);
   }
 }

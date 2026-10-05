@@ -13,6 +13,7 @@
 export const VALUED_FLAGS = new Set([
   '--binary', '--capture-target', '--db', '--file', '--host', '--interval', '--out',
   '--port', '--proxy', '--source', '--target', '--upstream',
+  '--sessions', '--quiet', '--against', '--tail',
 ]);
 
 export function parseArgs(rest, valued = VALUED_FLAGS) {

@@ -109,7 +109,8 @@ test('END TO END: doctor hard-fails on a world-readable capture (the red line\'s
     fs.chmodSync(path.join(dir, 'capture.ndjson'), 0o644);
     let status = 0, out = '';
     try {
-      out = execFileSync(process.execPath, [CLI, 'doctor', '--source', dir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      // a sandbox HOME: doctor also scans the default export dir (D35 · E9), never the real one
+      out = execFileSync(process.execPath, [CLI, 'doctor', '--source', dir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: dir } });
     } catch (e) { status = e.status; out = String(e.stdout || '') + String(e.stderr || ''); }
     assert.notEqual(status, 0,
       `doctor exited 0 on a world-readable capture holding live credentials.\n--- output ---\n${out}`);
@@ -117,7 +118,7 @@ test('END TO END: doctor hard-fails on a world-readable capture (the red line\'s
 
     // …and passes once the file is owner-only, credentials and all.
     fs.chmodSync(path.join(dir, 'capture.ndjson'), 0o600);
-    const ok = execFileSync(process.execPath, [CLI, 'doctor', '--source', dir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const ok = execFileSync(process.execPath, [CLI, 'doctor', '--source', dir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: dir } });
     assert.match(ok, /record\(s\) captured/, 'a 0600 capture must pass and report what it read');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

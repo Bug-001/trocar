@@ -11,6 +11,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { openSealed, createFrameCache } from './reader.mjs';
 import { isSealedPath, sealedSources } from './discover.mjs';
+import { appendJournal, defaultJournalPath } from './journal.mjs';
 
 export function verifyAgainst(sealedFiles, original, { fs = nodeFs } = {}) {
   const name = path.basename(original);
@@ -95,4 +96,14 @@ export function verifyTree(target, { fs = nodeFs } = {}) {
     if (orig && fs.existsSync(orig)) { if (!groups.has(orig)) groups.set(orig, []); groups.get(orig).push(f); } else alone.push(f);
   }
   return [...[...groups].map(([orig, files]) => verifyAgainst(files, orig, { fs })), ...alone.map((f) => verifySelf(f, { fs }))];
+}
+
+// The CLI's verify: every result, ok or not, is journalled (a failed check MUST leave a durable record).
+export function runVerify({ target, against = null, fs = nodeFs, journal = defaultJournalPath() }) {
+  const results = against ? [verifyAgainst([target], against, { fs })] : verifyTree(target, { fs });
+  for (const r of results) {
+    appendJournal({ op: 'verify', outcome: r.ok ? 'ok' : 'failed', mode: r.mode, sealed: r.sealed, original: r.original,
+      ...(r.ok ? { records: r.records } : { reason: r.reason }) }, { journal });
+  }
+  return results;
 }
