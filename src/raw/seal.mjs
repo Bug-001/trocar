@@ -12,6 +12,8 @@
 //
 // A crash or power cut at any point leaves the original (alone, or next to verified copies the
 // readers ignore while it exists — src/raw/discover.mjs). A failed verification keeps the original.
+// The original's size / mtime / inode are re-checked after the encode, after verification and once
+// more right before it is deleted or kept (lateChange): a byte written in between is in no copy.
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
@@ -107,12 +109,14 @@ async function sealCore(shard, { fs = nodeFs, sessionsRoot, split = true, delete
     }
     await onPhase('written');
 
-    const st1 = fs.statSync(shard);
-    if (st1.size !== st0.size || st1.mtimeMs !== st0.mtimeMs || st1.ino !== st0.ino) {
-      throw new SealRefused(`refusing to finish sealing ${shard}: it changed while being sealed (size ${st0.size} → ${st1.size})`);
-    }
+    // "Did it change?" is asked after the encode, after verification, and once more right before the
+    // original is deleted (or kept): a byte appended at any point in between is in no sealed copy.
+    const changed = () => { const s = fs.statSync(shard); return s.size !== st0.size || s.mtimeMs !== st0.mtimeMs || s.ino !== st0.ino ? s : null; };
+    let st1 = changed();
+    if (st1) throw new SealRefused(`refusing to finish sealing ${shard}: it changed while being sealed (size ${st0.size} → ${st1.size})`);
     verify(fs, [...outs.values()], { name, sum, length, lines: lineNo });
     await onPhase('verified');
+    if ((st1 = changed())) throw new SealRefused(`refusing to finish sealing ${shard}: it changed while being verified (size ${st0.size} → ${st1.size})`);
 
     // Copies left by an interrupted earlier run of the SAME source are superseded by this verified
     // set. Removing them first is safe: the original still holds every byte.
@@ -126,6 +130,7 @@ async function sealCore(shard, { fs = nodeFs, sessionsRoot, split = true, delete
     }
     for (const dir of new Set([...outs.values()].map((o) => o.dir))) fsyncDir(fs, dir);
     await onPhase('synced');
+    if ((st1 = changed())) lateChange(fs, shard, [...outs.values()], { sum, length, was: st0.size, now: st1.size });
     if (deleteOriginal) {
       fs.unlinkSync(shard);
       try { fs.unlinkSync(closedMarkerPath(shard)); } catch (e) { if (e.code !== 'ENOENT') throw e; }
@@ -144,6 +149,23 @@ async function sealCore(shard, { fs = nodeFs, sessionsRoot, split = true, delete
     if (!renamed && e && !(e instanceof SealRefused) && !/verif/i.test(e.message)) e.message = `seal aborted, original kept: ${e.message}`;
     throw e;
   } finally { releaseLock(fs, lock); }
+}
+
+// The original changed after its copies were verified (and renamed). If it only GREW — its first
+// `length` bytes still hash to what was sealed — every byte of the copies is still in the original:
+// remove them (a copy of an earlier version beside the grown file would double its first lines) and
+// refuse. If it was rewritten in place, the copies are the only place its earlier bytes still exist:
+// keep both, fail loudly; readers report the pair as a mismatch (discover.mjs) until an operator acts.
+function lateChange(fs, shard, outs, { sum, length, was, now }) {
+  const h = createHash('sha256'), buf = Buffer.allocUnsafe(CHUNK), fd = fs.openSync(shard, 'r');
+  try { for (let pos = 0; pos < length;) { const n = fs.readSync(fd, buf, 0, Math.min(CHUNK, length - pos), pos); if (!n) break; h.update(buf.subarray(0, n)); pos += n; } }
+  finally { fs.closeSync(fd); }
+  if (now >= length && h.digest('hex') === sum) {
+    for (const o of outs) fs.unlinkSync(o.final);
+    for (const dir of new Set(outs.map((o) => o.dir))) fsyncDir(fs, dir);
+    throw new SealRefused(`refusing to finish sealing ${shard}: it grew after verification (size ${was} → ${now}); its sealed copies were removed and the original is kept whole — seal it again once nothing writes it`);
+  }
+  throw new Error(`seal failed after rename: ${shard} was rewritten in place after verification — original kept, and the sealed copies ${outs.map((o) => path.basename(o.final)).join(', ')} hold its earlier bytes; compare with \`asight raw verify\` before removing either`);
 }
 
 // Every line of the shard as its own Buffer, "\n" included (CR stays part of the line); the last
@@ -169,6 +191,7 @@ function* readLines(fs, fd) {
 // Decode every record of every output (the reader checks each line's sha256 against the index, which
 // was computed from the source line), then rebuild the whole shard in line order and compare its
 // length and sha256 with what was read. Any gap, duplicate or mismatch throws.
+export { verify as verifySealedOutputs };
 function verify(fs, outs, { name, sum, length, lines }) {
   const cache = createFrameCache(8);
   const files = outs.map((o) => openSealed(o.tmp, { fs, frameCache: cache }));

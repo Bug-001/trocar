@@ -140,9 +140,14 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
   if (dryRun) return { target, dryRun: true, wouldSeal: ok, refused };
 
   const sealed = [], deletedOnly = [], failed = [];
+  // A file that changed since the quiet window is being written after all: refuse it, whatever step
+  // we are at. Asked before each file and again between its byte-for-byte check and the unlink.
+  const moved = (f) => { let now = null; try { now = fs.statSync(f); } catch {} return now && sameStat(before.get(f), now) ? null : 'changed after the quiet window — something is still writing it; nothing deleted'; };
   for (const f of ok) {
     onFile(f);
     try {
+      const m = moved(f);
+      if (m) { refused.push({ file: f, reason: m }); appendJournal({ op: 'seal-legacy', outcome: 'refused', file: f, reason: m }, { journal }); continue; }
       if (deleteOriginal) {
         const copies = sameStreamCopies(fs, f).map((c) => c.file);
         if (copies.length) {
@@ -154,6 +159,10 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
             refused.push({ file: f, reason });
             continue;
           }
+          // the copies' directory entries must be durable before the original's removal is (E5 order)
+          for (const dir of new Set(copies.map((c) => path.dirname(c)))) fsyncDir(fs, dir);
+          const late = moved(f);
+          if (late) { refused.push({ file: f, reason: late }); appendJournal({ op: 'delete-original', outcome: 'refused', file: f, reason: late }, { journal }); continue; }
           fs.unlinkSync(f);
           try { fs.unlinkSync(closedMarkerPath(f)); } catch {}
           fsyncDir(fs, path.dirname(f));
