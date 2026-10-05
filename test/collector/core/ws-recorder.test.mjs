@@ -216,6 +216,9 @@ test('W17 / C13: past the per-call cap later messages are {omitted_bytes} with n
   assert.deepEqual([b.resp.messages, b.ws_truncated, b.partial], [[{ omitted_bytes: 150 }, 'ok', done], true, undefined], 'a fresh budget per call')
   assert.deepEqual(b.ws_raw.map((f) => 'p' in f || 'm' in f), [true, false, true, false, true, true], 'the fragment before the cap loses its payload too')
   t.r.end(null); assert.ok(rebuildWsWire(b, 'c'))
+  const f = rig({ maxCallBytes: 100 })
+  f.c(cli(1, ev('response.create'))); f.s(srv(1, 'x'.repeat(60))); f.s(srv(1, 'y'.repeat(60))); f.s(srv(1, 'z'.repeat(30), { fin: false })); f.r.end({ type: 'ECONNRESET', message: 'reset' })
+  assert.deepEqual([f.out[0].error, f.out[0].ws_truncated, f.out[0].ws_raw.map((e) => 'p' in e || 'm' in e)], [true, true, [true, true, false, false]], 'past the cap, an unfinished message keeps no payload either')
   // the omitted message sits between history and a message that refers into it: never wrong text
   const big = `${randomBytes(2500).toString('hex')}${'C'.repeat(1500)}`, next = `${'C'.repeat(1500)}tail`
   for (const [ext, want] of [['permessage-deflate', 'decode-failed'], ['permessage-deflate; server_no_context_takeover', next]]) {
@@ -267,6 +270,11 @@ test('a call whose server messages no longer decode (takeover window lost, or th
   assert.deepEqual(t.out.map((e) => [JSON.parse(e.req_body).input, e.req_extra_messages, e.error, e.partial_reasons, e.resp.messages.every((m) => m.decode_error || m.omitted_bytes)]),
     [1, 2, 3].map((i) => [i, undefined, undefined, ['decode-failed'], true]))
   assert.deepEqual(t.out.flatMap((e) => e.ws_raw.map((f) => f.i)), [...Array(t.r.summary().frames).keys()], 'every frame once (the omitted one without payload)')
+  const o = rig({ maxCallBytes: 4000 }) // the terminal message itself past the cap: omitted, so it cannot be recognised
+  o.c(cli(1, ev('response.create', { input: 1 }))); o.s(srv(1, ev('response.completed', { output: 'x'.repeat(5000) })))
+  o.c(cli(1, ev('response.create', { input: 2 }))); assert.equal(o.out.length, 1, 'turn 1 is written when turn 2 starts')
+  o.s(srv(1, ev('response.completed'))); o.r.end(null)
+  assert.deepEqual(o.out.map((e) => [JSON.parse(e.req_body).input, e.req_extra_messages, e.ws_truncated]), [[1, undefined, true], [2, undefined, undefined]])
   const u = rig()
   u.c(cli(1, ev('response.create', { input: 1 }))); u.s(srv(1, ev('response.output_text.delta'))); u.s(Buffer.from([0x83, 0]))
   u.c(cli(1, ev('response.create', { input: 2 }))); u.c(cli(1, ev('response.create', { input: 3 }))); u.r.end(null)

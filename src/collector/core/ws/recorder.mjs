@@ -74,7 +74,7 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
   function entry(e, call) {
     const out = { i: e.i, d: e.d, h: e.header.toString('base64') }
     const h = e.msg
-    if (h && h.omit) return out
+    if (h && (h.omit || (!h.call && call && call.capped))) return out // in flight at the end of a call past the cap
     if (h && h.call === call && h.slice) out.m = [h.k, e.off]
     else if (e.payload) out.p = e.payload.toString('base64')
     return out
@@ -148,7 +148,7 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
       join(open, h)
     } else if (open && (h.rec || h.start === open)) {
       join(open, h)
-      if (value.decode_error) open.blind = true // its terminal message can no longer be recognised
+      if (value.decode_error || omitted) open.blind = true // this one might have been its terminal message
       else if (isTerminal && bytes && isTerminal(bytes)) { const call = open; open = null; close(call, idx, null) }
     } else if (open) drop(h) // begun off outside the call now open: not part of it, not recorded (C14)
     else { const push = newCall(h); join(push, h); close(push, idx, null) }
