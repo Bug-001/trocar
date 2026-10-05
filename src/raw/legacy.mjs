@@ -18,8 +18,8 @@ import nodeFs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { sealUnchecked, SealRefused, oldRootReason } from './seal.mjs';
-import { verifyAgainst } from './verify.mjs';
-import { sealedSources, isSealedPath } from './discover.mjs';
+import { verifyAgainst, copyRelation } from './verify.mjs';
+import { sealedSources, isSealedPath, streamOfSealed } from './discover.mjs';
 import { fsyncDir, closedMarkerPath } from './closed.mjs';
 import { appendJournal, defaultJournalPath } from './journal.mjs';
 
@@ -136,15 +136,19 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
   // 3. open file descriptors
   let holders;
   try { holders = await fdHolders(quiet, { fs }); } catch (e) { throw refuseAll(`cannot tell which processes hold these files open (${e.message})`); }
-  const ok = [];
+  const ok = [], copiesOf = new Map();
   for (const f of quiet) {
     const pids = holders.get(f);
     if (pids && pids.length) { refused.push({ file: f, reason: `held open by pid ${pids.join(', ')} — it may still be written` }); continue; }
-    // A sealed copy of an EARLIER version of this file (it grew since): sealing again would leave two
-    // copies of its first lines, and deleting would trust a copy that is not this file. Refuse.
-    const size = fs.statSync(f).size;
-    const stale = sameStreamCopies(fs, f).filter((c) => c.length !== size);
-    if (stale.length) { refused.push({ file: f, reason: `stale sealed copy ${stale.map((c) => path.basename(c.file)).join(', ')} of an earlier version of this file (recorded ${stale[0].length} bytes, it now has ${size}) — check it with \`asight raw verify\`, remove it, then seal again` }); continue; }
+    // A sealed copy of an EARLIER version of this file (it grew since; the copy's bytes are still its
+    // first bytes): sealing again would leave two copies of those lines, and deleting would trust a
+    // copy that is not all of this file. Refuse. A copy of ANOTHER file that stood at this path (the
+    // fresh calls.ndjson `asight shard --watch` writes after a deletion) is no reason to: it is the
+    // only copy of its records, left alone, and this file is sealed as the next segment (review 3 F3).
+    const copies = sameStreamCopies(fs, f);
+    copiesOf.set(f, copies);
+    const stale = copies.filter((c) => c.rel === 'earlier');
+    if (stale.length) { refused.push({ file: f, reason: `its sealed copy ${stale.map((c) => path.basename(c.file)).join(', ')} holds only its first ${stale[0].length} bytes (${stale[0].why}) — so the original still holds every byte of that copy. Check with \`asight raw verify\`, delete that copy, then seal again` }); continue; }
     ok.push(f);
   }
   for (const r of refused) appendJournal({ op: 'seal-legacy', outcome: 'refused', file: r.file, reason: r.reason }, { journal });
@@ -160,9 +164,9 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
       const m = moved(f);
       if (m) { refused.push({ file: f, reason: m }); appendJournal({ op: 'seal-legacy', outcome: 'refused', file: f, reason: m }, { journal }); continue; }
       if (deleteOriginal) {
-        const copies = sameStreamCopies(fs, f).map((c) => c.file);
+        const copies = copiesOf.get(f).filter((c) => c.rel === 'same').map((c) => c.file);
         if (copies.length) {
-          // every copy is of this very length (stale ones were refused above): prove it byte for byte
+          // copies of all of this file (by content, copyRelation): prove it byte for byte
           const v = verifyAgainst(copies, f, { fs });
           if (!v.ok) {
             const reason = `its sealed copy does not match it byte for byte (${v.reason}) — nothing deleted; check with \`asight raw verify\``;
@@ -181,6 +185,14 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
           deletedOnly.push({ file: f, copies });
           continue;
         }
+        // its only sealed copies are of another file that stood at this path: none holds this file's
+        // bytes, so there is nothing to check it against and its deletion is not safe yet
+        const others = copiesOf.get(f).filter((c) => c.rel === 'other');
+        if (others.length) {
+          const reason = `no sealed copy holds its current bytes — ${others.map((c) => path.basename(c.file)).join(', ')} ${others.length > 1 ? 'are copies' : 'is a copy'} of another file (${others[0].why}) and stays as it is. Seal this file first (without --delete-original), check with \`asight raw verify\`, then delete`;
+          refused.push({ file: f, reason }); appendJournal({ op: 'delete-original', outcome: 'refused', file: f, reason }, { journal });
+          continue;
+        }
       }
       // the sealer journals its own outcome, and replaces earlier copies of this exact source
       sealed.push(await sealUnchecked(f, { fs, split: false, deleteOriginal, journal, frameBytes }));
@@ -189,10 +201,11 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
   return { target, sealed, deletedOnly, refused, failed };
 }
 
-// Sealed segments of `f`'s stream beside it whose only source has `f`'s name: { file, length }.
+// Sealed segments of `f`'s stream beside it whose only source has `f`'s name, each with its relation to
+// the file now at that path (verify.mjs copyRelation): { file, length, rel: same|earlier|other, why }.
 function sameStreamCopies(fs, f) {
   const dir = path.dirname(f), name = path.basename(f);
-  return fs.readdirSync(dir).filter((n) => isSealedPath(n) && n.startsWith(name + '.')).map((n) => path.join(dir, n))
-    .map((p) => { const s = sealedSources(p, { fs }); return s && s.length === 1 && s[0].name === name ? { file: p, length: s[0].length } : null; })
+  return fs.readdirSync(dir).filter((n) => isSealedPath(n) && streamOfSealed(n) === name).map((n) => path.join(dir, n))
+    .map((p) => { const s = sealedSources(p, { fs }); return s && s.length === 1 && s[0].name === name ? { file: p, length: s[0].length, ...copyRelation(s[0], f, { fs }) } : null; })
     .filter(Boolean);
 }

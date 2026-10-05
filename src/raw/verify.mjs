@@ -13,7 +13,32 @@ import { openSealed, createFrameCache } from './reader.mjs';
 import { isSealedPath, sealedSources } from './discover.mjs';
 import { appendJournal, defaultJournalPath } from './journal.mjs';
 
-export function verifyAgainst(sealedFiles, original, { fs = nodeFs } = {}) {
+const CHUNK = 8 << 20;
+// Is the sealed copy of source shard `src` (an entry of a sealed file's source-shard table) a copy of
+// the file now at `file`? By content — a shard's identity is its bytes (4.2): the file's first
+// src.length bytes must hash to src.sha256. 'same' = all of it; 'earlier' = its first bytes (it grew
+// since); 'other' = another file now stands at that path, e.g. the fresh calls.ndjson `asight shard
+// --watch` writes after the sealed one's original was deleted (review 3 F3) — that copy is then the
+// only home of its records, and is checked by itself. The inode only spares the hash where it cannot
+// match, and an untouched file (same inode, size, mtime) is taken as 'same' here — every caller then
+// compares it byte for byte. A copied tree (new inode, same bytes) is 'same' too: sealing it again
+// would leave every record twice once the original is deleted.
+export function copyRelation(src, file, { fs = nodeFs } = {}) {
+  let st;
+  try { st = fs.statSync(file); } catch { return { rel: 'gone', why: `${file} no longer exists` }; }
+  if (st.size < src.length) return { rel: 'other', why: `the file now at ${file} has ${st.size} bytes, fewer than the ${src.length} that were sealed` };
+  if (st.size === src.length && st.ino === src.ino && (src.dev == null || st.dev === src.dev) && st.mtimeMs === src.mtimeMs) return { rel: 'same' };
+  const h = createHash('sha256'), buf = Buffer.allocUnsafe(Math.min(CHUNK, Math.max(1, src.length)));
+  const fd = fs.openSync(file, 'r');
+  try { for (let pos = 0; pos < src.length;) { const n = fs.readSync(fd, buf, 0, Math.min(buf.length, src.length - pos), pos); if (!n) break; h.update(buf.subarray(0, n)); pos += n; } }
+  finally { fs.closeSync(fd); }
+  if (h.digest('hex') !== src.sha256) return { rel: 'other', why: `the file now at ${file} does not begin with the ${src.length} bytes that were sealed (${st.ino === src.ino ? 'same inode, rewritten since' : 'another inode'})` };
+  return st.size === src.length ? { rel: 'same' } : { rel: 'earlier', why: `${file} grew from ${src.length} to ${st.size} bytes after it was sealed; its first ${src.length} bytes are still the sealed ones` };
+}
+
+// `prefix`: the copies may cover only the first bytes of a file that grew since (copyRelation
+// 'earlier'); the result then says `covers: 'prefix'`. Never a licence to delete the original.
+export function verifyAgainst(sealedFiles, original, { fs = nodeFs, prefix = false } = {}) {
   const name = path.basename(original);
   const cache = createFrameCache(8);
   const files = [];
@@ -21,10 +46,11 @@ export function verifyAgainst(sealedFiles, original, { fs = nodeFs } = {}) {
   try {
     const size = fs.statSync(original).size;
     for (const f of sealedFiles) files.push(openSealed(f, { fs, frameCache: cache }));
-    const shardIdx = files.map((sf) => sf.shards.findIndex((s) => s.name === name && s.length === size));
+    const shardIdx = files.map((sf) => sf.shards.findIndex((s) => s.name === name && (s.length === size || (prefix && s.length < size))));
     const bad = shardIdx.findIndex((k) => k < 0);
     if (bad >= 0) return fail(`${path.basename(sealedFiles[bad])} does not record ${name} of ${size} bytes (it records ${files[bad].shards.map((s) => `${s.name} of ${s.length}`).join(', ')}) — the original is longer, shorter or another file`);
     const shard = files[0].shards[shardIdx[0]];
+    if (files.some((sf, k) => sf.shards[shardIdx[k]].length !== shard.length)) return fail('the sealed copies record different lengths of the original');
     const its = files.map((sf, k) => (function* () { for (const x of sf.lines()) if (x.entry.shard === shardIdx[k]) yield x; })());
     const heads = its.map((it) => it.next());
     fd = fs.openSync(original, 'r');
@@ -44,9 +70,11 @@ export function verifyAgainst(sealedFiles, original, { fs = nodeFs } = {}) {
       heads[k] = its[k].next();
     }
     if (heads.some((h) => !h.done)) return fail(`the sealed copies hold lines beyond line ${n} that are not in sequence`);
-    if (n !== shard.lines || pos !== size) return fail(`the sealed copies cover ${n} lines / ${pos} bytes of ${name}, which has ${size} bytes (${shard.lines} lines recorded)`);
+    if (n !== shard.lines || pos !== shard.length) return fail(`the sealed copies cover ${n} lines / ${pos} bytes of ${name}, which has ${size} bytes (${shard.lines} lines / ${shard.length} bytes recorded)`);
     if (whole.digest('hex') !== shard.sha256) return fail(`${name} does not hash to the sha256 recorded at sealing`);
-    return { ok: true, original, sealed: sealedFiles, records: n, bytes: pos, mode: 'against-original' };
+    if (pos < size) return { ok: true, original, sealed: sealedFiles, records: n, bytes: pos, mode: 'against-original', covers: 'prefix',
+      note: `${name} grew to ${size} bytes after sealing: these copies hold its first ${pos} bytes, byte for byte; the rest is in no sealed copy` };
+    return { ok: true, original, sealed: sealedFiles, records: n, bytes: pos, mode: 'against-original', covers: 'whole' };
   } catch (e) {
     return fail(e.message);
   } finally {
@@ -89,13 +117,20 @@ export function verifyTree(target, { fs = nodeFs } = {}) {
     };
     walk(target, 0);
   } else sealed.push(target);
+  // grouped by (original, recorded length): copies of one version of a file are proven together
   const groups = new Map(), alone = [];
   for (const f of sealed) {
     const src = sealedSources(f, { fs });
-    const orig = src && src.length === 1 ? src[0].abs : null;
-    if (orig && fs.existsSync(orig)) { if (!groups.has(orig)) groups.set(orig, []); groups.get(orig).push(f); } else alone.push(f);
+    const one = src && src.length === 1 ? src[0] : null;
+    const rel = one ? copyRelation(one, one.abs, { fs }) : { rel: 'gone' };
+    if (rel.rel === 'same' || rel.rel === 'earlier') {
+      const k = `${one.abs}\0${one.length}`;
+      if (!groups.has(k)) groups.set(k, { orig: one.abs, prefix: rel.rel === 'earlier', files: [] });
+      groups.get(k).files.push(f);
+    } else alone.push({ f, note: rel.rel === 'other' ? `${rel.why}: another file than the one this was sealed from — checked by itself, and it is the only copy of its records` : null });
   }
-  return [...[...groups].map(([orig, files]) => verifyAgainst(files, orig, { fs })), ...alone.map((f) => verifySelf(f, { fs }))];
+  return [...[...groups.values()].map((g) => verifyAgainst(g.files, g.orig, { fs, prefix: g.prefix })),
+    ...alone.map(({ f, note }) => { const r = verifySelf(f, { fs }); return note ? { ...r, note } : r; })];
 }
 
 // The CLI's verify: every result, ok or not, is journalled (a failed check MUST leave a durable record).
@@ -103,7 +138,7 @@ export function runVerify({ target, against = null, fs = nodeFs, journal = defau
   const results = against ? [verifyAgainst([target], against, { fs })] : verifyTree(target, { fs });
   for (const r of results) {
     appendJournal({ op: 'verify', outcome: r.ok ? 'ok' : 'failed', mode: r.mode, sealed: r.sealed, original: r.original,
-      ...(r.ok ? { records: r.records } : { reason: r.reason }) }, { journal });
+      ...(r.ok ? { records: r.records } : { reason: r.reason }), ...(r.covers ? { covers: r.covers } : {}), ...(r.note ? { note: r.note } : {}) }, { journal });
   }
   return results;
 }

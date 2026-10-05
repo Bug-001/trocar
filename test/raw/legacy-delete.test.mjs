@@ -19,16 +19,30 @@ function sealedTree() {
   return { root, f, journal: path.join(root, 'j.jsonl') };
 }
 
-test('a same-length copy with different bytes is refused and journalled — nothing deleted', async () => {
+test('a copy that does not decode to the original byte for byte is refused and journalled — nothing deleted', async () => {
+  const { root, f, journal } = sealedTree();
+  try {
+    await sealLegacy(f, { ...NONE, journal });
+    const [copy] = listFiles(root);
+    const fd = fs.openSync(copy, 'r+'); fs.writeSync(fd, Buffer.from([0x5a]), 0, 1, 40); fs.closeSync(fd);   // a byte of its first frame
+    const res = await sealLegacy(f, { ...NONE, journal, deleteOriginal: true });
+    assert.deepEqual(res.deletedOnly, []);
+    assert.match(res.refused.find((r) => r.file === f).reason, /does not match it byte for byte/);
+    assert.ok(fs.existsSync(f));
+    assert.ok(readJournal({ journal }).some((e) => e.op === 'verify' && e.outcome === 'failed' && e.file === f));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('an original rewritten in place after sealing (same length) is not deleted: its copy holds other bytes', async () => {
   const { root, f, journal } = sealedTree();
   try {
     await sealLegacy(f, { ...NONE, journal });
     const fd = fs.openSync(f, 'r+'); fs.writeSync(fd, Buffer.from('Z'), 0, 1, 40); fs.closeSync(fd);   // same length, other bytes
     const res = await sealLegacy(f, { ...NONE, journal, deleteOriginal: true });
     assert.deepEqual(res.deletedOnly, []);
-    assert.match(res.refused.find((r) => r.file === f).reason, /does not match it byte for byte/);
+    assert.match(res.refused.find((r) => r.file === f).reason, /no sealed copy holds its current bytes/);
     assert.ok(fs.existsSync(f));
-    assert.ok(readJournal({ journal }).some((e) => e.op === 'verify' && e.outcome === 'failed' && e.file === f));
+    assert.ok(readJournal({ journal }).some((e) => e.outcome === 'refused' && e.file === f));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

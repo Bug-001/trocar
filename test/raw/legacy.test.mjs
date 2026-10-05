@@ -153,7 +153,7 @@ test('a stream that changed after it was sealed is refused, never sealed twice o
       const res = await sealLegacy(ses, { ...NONE, journal, deleteOriginal });
       const r = res.refused.find((x) => x.file === grown);
       assert.ok(r, `the grown stream was not refused (deleteOriginal=${deleteOriginal})`);
-      assert.match(r.reason, /stale sealed copy/);
+      assert.match(r.reason, /holds only its first \d+ bytes/);
       assert.ok(fs.existsSync(grown));
       assert.equal(listFiles(path.dirname(grown)).filter((f) => f.includes('calls.ndjson.')).length, 1, 'a second copy of the stream was written');
     }
