@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { asightHome, legacyHome, captureOut, mitmOut, serveSource, caDir } from '../src/paths.mjs';
 
-// D27 (spec/01-asight-rfc/00-overview.md, 2026-07-20): the product's on-disk home is ~/.asight/.
+// D27 (spec/01-asight-rfc/0.0-overview.md, 2026-07-20): the product's on-disk home is ~/.asight/.
 //
 // Everything else about this product already says "asight" — the CLI, every ASIGHT_* env var, the
 // LaunchAgent com.asight.monitor, the README title. Only the filesystem still said "atrace", the v0

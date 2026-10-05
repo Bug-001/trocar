@@ -162,5 +162,5 @@ asight mitm [--port 9899] [--host api.anthropic.com]
 asight desktop {on|off|status}        # macOS + Clash Verge
 ```
 
-Design authority: [`spec/01-asight-rfc/`](spec/01-asight-rfc/) (entry `00-overview.md`). This README is
+Design authority: [`spec/01-asight-rfc/`](spec/01-asight-rfc/) (entry `0.0-overview.md`). This README is
 the operator's quickstart, not the spec. `npm test` → 266 passing.

@@ -1,6 +1,6 @@
 // test/dissect/openai-detect-shape.test.mjs — D25: `detect()` MUST key on the WIRE SHAPE, not the UA.
 //
-// Audit 2026-07-19 (spec 00-overview D25 row, defect (a)): `detect()` matched /codex|openai/ against
+// Audit 2026-07-19 (spec 0.0-overview D25 row, defect (a)): `detect()` matched /codex|openai/ against
 // the User-Agent, with an endpoint fallback. That is unreliable in BOTH directions:
 //   · false negative — OpenCode's real UA is `opencode/1.17.12 (darwin …) ai-sdk/…`, which contains
 //     NO "openai". Only the endpoint fallback saved it; a non-standard path would have dropped it.
