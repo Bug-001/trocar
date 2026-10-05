@@ -5,6 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import zlib from 'node:zlib'
+import { randomBytes } from 'node:crypto'
 import { createWsRecorder, compileTerminal } from '../../../src/collector/core/ws/recorder.mjs'
 import { rebuildWsWire } from '../../../src/collector/core/ws/raw.mjs'
 import { encodeFrame } from '../../lab/ws-client.mjs'
@@ -159,5 +160,67 @@ test('W1 (recorder): deflate off, takeover both ways, client_ / server_no_contex
     assert.deepEqual(t.out.map((e) => [e.req_body, ...e.resp.messages]), sent.c.map((q, i) => [q, sent.s[i]]), String(ext))
     assert.ok(t.out.every((e) => e.ws_ext === ext && !e.partial && e.ws_raw.every((f) => (ext ? f.p : f.m))), `${ext}: compressed frames carry p, plain ones m`)
     assertWholeWire(t, String(ext))
+  }
+})
+
+test('W6 / C14: on→off→on, deflate takeover both ways: a call begun on is recorded whole across off, one begun off is not, inflate state survives, off frames are nowhere, the next call is partial', async () => {
+  const t = rig({ ext: 'permessage-deflate' })
+  const cz = deflater(true), sz = deflater(true), big = 'lorem ipsum dolor '.repeat(50)
+  const turn = async (i, extra = () => {}) => { t.c(cli(1, await cz(ev('response.create', { input: `${big}${i}` })), { rsv1: true })); await extra(); t.s(srv(1, await sz(ev('response.completed', { text: `${big}${i}` })), { rsv1: true })) }
+  await turn(1)
+  await turn(2, () => { t.on = false; t.s(srv(9, 'hb')) })        // begun on, ends off: recorded whole
+  t.c(cli(9, 'hb')); await turn(3)                                 // begun off: not recorded, nor the ping before it
+  t.on = true; await turn(4); t.on = false; t.c(cli(9, 'bye')); t.r.end(null)       // a frame that arrives off at the end
+  assert.deepEqual(t.out.map((e) => [e.seq, JSON.parse(e.req_body).input.slice(-1), JSON.parse(e.resp.messages.at(-1)).text.slice(-1)]), [[0, '1', '1'], [1, '2', '2'], [3, '4', '4']])
+  assert.deepEqual(t.out.map((e) => e.partial_reasons), [undefined, undefined, ['off-window']], 'only after the gap (W5: no partial without one)')
+  assert.deepEqual(t.out[1].ws_raw.map((f) => [f.i, f.d]), [[2, 'c'], [3, 's'], [4, 's']], 'the ping inside the on-begun call stays with it')
+  assert.deepEqual(connection(t).ids, [0, 1, 2, 3, 4, 8, 9], 'frames 5–7 arrived off: in no envelope and not in tail_raw')
+  const { tail_raw, ...sum } = t.r.summary()
+  assert.deepEqual([sum, tail_raw], [{ frames: 11, calls: 4, recorded: 3, partial: 1, dropped_frames: 4 }, undefined])
+  // no pattern: b begins off while the on call a is open (its frame waits); the call b opens is not recorded
+  const f = rig({ terminal: null })
+  f.c(cli(1, 'a')); f.s(srv(1, 'A1')); f.on = false; f.c(cli(1, 'b')); f.on = true; f.s(srv(1, 'B1')); f.c(cli(1, 'c')); f.s(srv(1, 'C1')); f.r.end(null)
+  assert.deepEqual(f.out.map((e) => [e.req_body, e.resp.messages, e.partial_reasons]), [['a', ['A1'], undefined], ['c', ['C1'], ['off-window']]])
+  assert.deepEqual(connection(f).ids, [0, 1, 4, 5], 'B1 arrived on, but belongs to the call begun off')
+})
+
+test('C8: after a failed write every later call is partial (write-failed); an undecodable message is {b64, decode_error} and marks its call and later ones; a broken direction too; a throwing store never reaches the relay', () => {
+  let n = 0
+  const t = rig({ ext: 'permessage-deflate', write: (e, out) => { out.push(e); return n++ !== 0 } })
+  const junk = Buffer.from([0xff, 0xff, 0xff])
+  t.c(cli(1, 'one')); t.s(srv(1, ev('response.completed')))                          // the store says: not written
+  t.c(cli(1, 'two')); t.s(srv(1, ev('response.completed')))
+  t.c(cli(1, 'three')); t.s(srv(1, junk, { rsv1: true })); t.s(srv(1, ev('response.completed')))
+  t.s(Buffer.from([0x83, 0x00])); t.c(cli(1, 'four')); t.r.end(null)               // reserved opcode: the server direction stops
+  assert.deepEqual(t.out.map((e) => e.partial_reasons), [undefined, ['write-failed'], ['write-failed', 'decode-failed'], ['write-failed', 'decode-failed']])
+  const bad = t.out[2].resp.messages[0]
+  assert.deepEqual([bad.b64, typeof bad.decode_error], [junk.toString('base64'), 'string'])
+  assert.equal(t.out[2].ws_raw[1].p, junk.toString('base64'), 'its frame keeps the wire payload')
+  assert.deepEqual([t.r.summary().recorded, t.r.summary().partial, t.r.summary().broken], [3, 3, { s: 'reserved opcode 3' }])
+  const x = rig({ write: () => { throw new Error('disk gone') } })
+  assert.doesNotThrow(() => { x.c(cli(1, 'a')); x.s(srv(1, ev('response.completed'))); x.r.end(null) })
+  assert.equal(x.r.summary().recorded, 0)
+})
+
+test('W17 / C13: past the per-call cap later messages are {omitted_bytes} with no frame payload (ws_truncated); one message past the cap is omitted and the next recorded; a takeover direction then fails to inflate, a no-takeover one does not', async () => {
+  const t = rig({ maxCallBytes: 100 })
+  const done = ev('response.completed')
+  t.c(cli(1, ev('response.create'))); t.s(srv(1, 'x'.repeat(60))); t.s(srv(1, 'y'.repeat(60))); t.s(srv(1, done))
+  assert.deepEqual([t.out[0].resp.messages, t.out[0].ws_truncated], [['x'.repeat(60), { omitted_bytes: 60 }, { omitted_bytes: done.length }], true], 'the terminal message still ends the call')
+  assert.deepEqual(t.out[0].ws_raw.map((f) => 'p' in f || 'm' in f), [true, true, false, false])
+  t.c(cli(1, ev('response.create'))); t.s(Buffer.concat([srv(1, 'a'.repeat(80), { fin: false }), srv(9, 'p'), srv(0, 'b'.repeat(70))])); t.s(srv(1, 'ok')); t.s(srv(1, done))
+  const b = t.out[1]
+  assert.deepEqual([b.resp.messages, b.ws_truncated, b.partial], [[{ omitted_bytes: 150 }, 'ok', done], true, undefined], 'a fresh budget per call')
+  assert.deepEqual(b.ws_raw.map((f) => 'p' in f || 'm' in f), [true, false, true, false, true, true], 'the fragment before the cap loses its payload too')
+  t.r.end(null); assert.ok(rebuildWsWire(b, 'c'))
+  // the omitted message sits between history and a message that refers into it: never wrong text
+  const big = `${randomBytes(2500).toString('hex')}${'C'.repeat(1500)}`, next = `${'C'.repeat(1500)}tail`
+  for (const [ext, want] of [['permessage-deflate', 'decode-failed'], ['permessage-deflate; server_no_context_takeover', next]]) {
+    const u = rig({ ext, maxCallBytes: 2000 }), sz = deflater(!/server_no/.test(ext))
+    u.c(cli(1, ev('response.create')))
+    for (const m of ['A'.repeat(1500), big, next, done]) u.s(srv(1, await sz(m), { rsv1: true }))
+    const [, m0, m1] = u.out[0].resp.messages
+    assert.equal(typeof m0.omitted_bytes, 'number')
+    assert.deepEqual([m1.decode_error ? 'decode-failed' : m1, u.out[0].partial_reasons], [want, want === 'decode-failed' ? ['decode-failed'] : undefined], ext)
   }
 })
