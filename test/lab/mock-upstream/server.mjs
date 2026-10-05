@@ -51,7 +51,8 @@ async function dispatch(req, io, state) {
   else if (route.kind === 'count') res = jsonReply(200, { input_tokens: Math.max(1, Math.ceil(req.body.length / 4)) })
   else if (route.kind === 'models') res = jsonReply(200, MODELS)
   else res = { status: 200, headers: {}, pieces: [] }
-  if (sc?.nearLimit && route?.kind === 'model' && res.status === 200 && acts(turnOf(body), sc)) withUsageTotal(res, state.cfg.nearLimitTokens)
+  const turn = turnOf(body) // a compaction request (quiet) reports a normal size, whatever chose near-limit
+  if (sc?.nearLimit && route?.kind === 'model' && res.status === 200 && !turn.quiet && acts(turn, sc)) withUsageTotal(res, state.cfg.nearLimitTokens)
   res.headers['x-mock-scenario'] = pick.name
   const close = /close/i.test(req.headers.connection || '')
   return { scenario: pick.name, source: pick.source, complete: await writeResponse(io, res, { head: req.method === 'HEAD', close, sc: sc || {}, cfg: state.cfg }) }
