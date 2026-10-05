@@ -132,3 +132,42 @@ export function countDirectConnections(pid, { root = '/proc', enginePort } = {})
   }
   return n
 }
+
+/** /proc/<pid>/status → { ppid, uid (real) }, or null. */
+export function readStatus(pid, { root = '/proc' } = {}) {
+  let text
+  try { text = fs.readFileSync(path.join(root, String(pid), 'status'), 'utf8') } catch { return null }
+  const ppid = /^PPid:\s*(\d+)/m.exec(text)
+  const uid = /^Uid:\s*(\d+)/m.exec(text)
+  return { ppid: ppid ? Number(ppid[1]) : null, uid: uid ? Number(uid[1]) : null }
+}
+
+/** readlink /proc/<pid>/cwd → absolute path, or null. */
+export function readCwd(pid, { root = '/proc' } = {}) {
+  try { return fs.readlinkSync(path.join(root, String(pid), 'cwd')) } catch { return null }
+}
+
+/** Process start as ms since the epoch: /proc/<pid>/stat field 22 (clock ticks since boot) + /proc/stat btime.
+ *  btime is whole seconds, so the result can be up to 1 s early; trust staleness checks tolerate that
+ *  (an early start only makes a just-edited file look "after start", which ends untrusted). */
+export function readStartTime(pid, { root = '/proc', hz = 100 } = {}) {
+  let stat, sys
+  try { stat = fs.readFileSync(path.join(root, String(pid), 'stat'), 'utf8'); sys = fs.readFileSync(path.join(root, 'stat'), 'utf8') } catch { return null }
+  const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/) // field 3 onward; comm may hold ')' or spaces
+  const ticks = Number(fields[19])
+  const btime = /^btime\s+(\d+)/m.exec(sys)
+  if (!Number.isFinite(ticks) || !btime) return null
+  return (Number(btime[1]) + ticks / hz) * 1000
+}
+
+/** OS-neutral ProcFacts (RFC 4.6 §身份与信任; contract in core/redirector.mjs). `env` is read on first access
+ *  and memoised: most processes are rejected on exe/argv alone, and environ is the costly read. */
+export function readFacts(pid, { root = '/proc', source = 'exec' } = {}) {
+  const st = readStatus(pid, { root })
+  const exe = readExe(pid, { root })
+  if (!st || exe == null) return null
+  let env = null
+  const facts = { os: 'linux', pid, ppid: st.ppid, uid: st.uid, exe, argv: readArgv(pid, { root }), env: null, cwd: readCwd(pid, { root }), startedAt: readStartTime(pid, { root }), source }
+  Object.defineProperty(facts, 'env', { enumerable: true, get() { return env || (env = readEnviron(pid, { root })) } })
+  return facts
+}

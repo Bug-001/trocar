@@ -25,6 +25,17 @@
 //   heartbeat(): void              — liveness the kernel gates redirection on (Plan 2).
 //   events: 'exec' | 'exit' | 'flow-meta' | 'down'  — process + redirector lifecycle (Plan 2).
 //
+// What the daemon (src/collector/daemon.mjs, Plan 3a) also needs from an arch adapter — the Linux one is
+// arch/linux/redirector.mjs; a later OS implements the same names:
+//   start() / close()              — spawn / stop the OS helper; close() leaves agent traffic direct.
+//   configure(enginePort)          — the port the kernel steers decrypt-verdict connections to.
+//   scan(): Promise<ProcFacts[]>   — this user's live processes (startup and every `on`).
+//   directCount(pid): number       — the process's connections still going direct (status only).
+//   helperInfo() → {pid, proto, build}; expectedProto — the helper protocol this build speaks.
+//   restart() / linger()           — respawn a dead helper; whether the OS keeps the daemon after logout (Plan 3a).
+//   'exec' carries ProcFacts = { os, pid, ppid, uid, exe, argv, env (Map, read lazily), cwd, startedAt,
+//   startTicks (Plan 3a), source:'exec'|'scan' } — OS-neutral; `os` picks the harness signature key.
+//
 // createStaticRedirector is the test/dev implementation: no kernel, metadata set by hand and
 // keyed by the client source port (the Linux redirector keys by source port too — sockops writes
 // the by_port entry before accept() returns).

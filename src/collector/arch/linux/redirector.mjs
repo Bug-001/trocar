@@ -1,0 +1,57 @@
+// redirector.mjs (arch/linux) — the Linux implementation of the Redirector contract in
+// core/redirector.mjs (RFC 4.6 §Linux 机制, §开关语义, §特权助手与按用户运行 D36). It wraps the capability
+// helper's client and adds what core needs and the client lacks:
+//   - exec events become OS-neutral ProcFacts read from /proc at once (argv must be taken at exec time:
+//     some agents rewrite their title later), only for this instance's uid (other users' processes are
+//     not ours, and their environ is unreadable anyway);
+//   - scan() lists this uid's live processes (startup and every `on`, §身份与信任);
+//   - directCount(pid): the agent's connections still going direct (§开关语义「为什么开了还没采到」).
+// No harness names, no policy: the daemon wires this to core.
+import { EventEmitter } from 'node:events'
+import { REDIRECTOR_PROTO } from './redirector-client.mjs'
+import { readFacts, listPids, readStatus, countDirectConnections } from './procinfo.mjs'
+
+export function createLinuxRedirector({ makeClient, procRoot = '/proc', uid = process.getuid() }) {
+  const ev = new EventEmitter()
+  let client = null
+  let enginePort = null
+
+  function wire(c) {
+    c.on('exec', ({ tgid }) => {
+      const f = readFacts(tgid, { root: procRoot, source: 'exec' })
+      if (f && f.uid === uid) ev.emit('exec', f)
+    })
+    c.on('exit', ({ tgid }) => ev.emit('exit', { pid: tgid }))
+    c.on('flow-meta', (m) => ev.emit('flow-meta', m))
+    c.on('down', (d) => { if (client === c) ev.emit('down', d) })
+    c.on('version-mismatch', (m) => ev.emit('version-mismatch', m))
+    c.on('loader-error', (m) => ev.emit('helper-error', m))
+  }
+  const need = () => { if (!client) throw new Error('redirector helper is not running'); return client }
+
+  return Object.assign(ev, {
+    async start() { client = makeClient(); wire(client); await client.start(); return client.loaderInfo },
+    async close() { const c = client; client = null; if (c) await c.close() },
+    configure(port) { enginePort = port; return need().configure(port) },
+    attach: () => need().attach(),
+    detach: () => need().detach(),
+    status: () => need().status(),
+    heartbeat: () => need().heartbeat(),
+    lookup: (peer) => (client ? client.lookup(peer) : Promise.resolve(null)),
+    watch: (pid, verdict) => need().watch(pid, verdict),
+    unwatch: (pid) => need().unwatch(pid),
+    async scan() {
+      const out = []
+      for (const pid of listPids({ root: procRoot })) {
+        const st = readStatus(pid, { root: procRoot })
+        if (!st || st.uid !== uid) continue
+        const f = readFacts(pid, { root: procRoot, source: 'scan' })
+        if (f) out.push(f)
+      }
+      return out
+    },
+    directCount: (pid) => countDirectConnections(pid, { root: procRoot, enginePort }),
+    helperInfo: () => (client ? client.loaderInfo : { pid: null, proto: null, build: null }),
+    expectedProto: REDIRECTOR_PROTO,
+  })
+}
