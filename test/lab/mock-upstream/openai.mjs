@@ -3,6 +3,7 @@
 import { randomBytes } from 'node:crypto'
 import { plan, splitEvery } from './scenarios.mjs'
 import { jsonReply } from './transport.mjs'
+import { prefixUsage } from './cache.mjs'
 
 const rid = (p) => `${p}${randomBytes(12).toString('hex')}`
 const now = () => Math.floor(Date.now() / 1000)
@@ -19,10 +20,11 @@ export const responses = {
     return { kind: 'text', text: textOf(input.findLast((i) => i.role === 'user')?.content) }
   },
 
-  reply(body, raw, sc) {
+  reply(body, raw, sc, ctx = {}) {
     const p = plan(responses.seen(body), raw, body, sc)
     const id = rid('resp_mock_'), created_at = now(), headers = { 'x-request-id': rid('req_mock_') }
-    const usage = { input_tokens: p.inputTokens, input_tokens_details: { cached_tokens: 0 }, output_tokens: p.outputTokens, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: p.inputTokens + p.outputTokens }
+    const c = prefixUsage(ctx, 'responses', body)
+    const usage = { input_tokens: c.total, input_tokens_details: { cached_tokens: c.cached }, output_tokens: p.outputTokens, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: c.total + p.outputTokens }
     const response = (status, output, u = null) => ({ id, object: 'response', created_at, status, model: p.model, output, usage: u, error: null, incomplete_details: null })
     const items = [p.thinking && reasoningItem(p), messageItem(p), p.tool && functionCallItem(p)].filter(Boolean)
     if (!body.stream) return jsonReply(200, response('completed', items.map((i) => i.done), usage), headers)
@@ -92,11 +94,12 @@ export const chat = {
     return { kind: 'text', text: textOf(msgs.findLast((m) => m.role === 'user')?.content) }
   },
 
-  reply(body, raw, sc) {
+  reply(body, raw, sc, ctx = {}) {
     const p = plan(chat.seen(body), raw, body, sc)
     const id = rid('chatcmpl-mock-'), created = now(), headers = { 'x-request-id': rid('req_mock_') }
     // prompt_cache_* is DeepSeek's spelling of cached_tokens; clients read whichever they know.
-    const usage = { prompt_tokens: p.inputTokens, completion_tokens: p.outputTokens, total_tokens: p.inputTokens + p.outputTokens, prompt_tokens_details: { cached_tokens: 0 }, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: p.inputTokens }
+    const c = prefixUsage(ctx, 'chat', body)
+    const usage = { prompt_tokens: c.total, completion_tokens: p.outputTokens, total_tokens: c.total + p.outputTokens, prompt_tokens_details: { cached_tokens: c.cached }, prompt_cache_hit_tokens: c.cached, prompt_cache_miss_tokens: c.total - c.cached }
     const base = { id, created, model: p.model, system_fingerprint: 'fp_mock' }
     const call = p.tool && { id: rid('call_mock_'), type: 'function', function: { name: p.tool.name, arguments: p.toolArgs } }
     const finish = call ? 'tool_calls' : 'stop'
