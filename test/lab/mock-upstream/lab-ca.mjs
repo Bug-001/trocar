@@ -62,7 +62,13 @@ export function makeLabCa(dir, { days = 397 } = {}) {
 }
 
 // node --test runs every .mjs under test/ as a test file; only act when run as a real command.
-if (!process.env.NODE_TEST_CONTEXT && process.argv[1] === fileURLToPath(import.meta.url)) {
+// import.meta.url is the realpath but argv[1] is as typed, so compare realpaths (symlinked checkouts,
+// macOS /tmp -> /private/tmp, shared folders).
+export const isCommand = (metaUrl) => {
+  if (process.env.NODE_TEST_CONTEXT || !process.argv[1]) return false
+  try { return fs.realpathSync(process.argv[1]) === fileURLToPath(metaUrl) } catch { return false }
+}
+if (isCommand(import.meta.url)) {
   if (!process.argv[2]) { console.error('usage: node lab-ca.mjs <out-dir>'); process.exit(2) }
   console.log(JSON.stringify(makeLabCa(process.argv[2]), null, 2))
 }

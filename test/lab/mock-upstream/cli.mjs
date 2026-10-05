@@ -4,8 +4,8 @@
 // Prints one JSON line {url, adminUrl, logDir} once both listeners are up; SIGINT/SIGTERM close it.
 import fs from 'node:fs'
 import { parseArgs } from 'node:util'
-import { fileURLToPath } from 'node:url'
 import { startMockUpstream } from './server.mjs'
+import { isCommand } from './lab-ca.mjs'
 
 export function parseCli(argv) {
   const { values: v } = parseArgs({
@@ -24,7 +24,7 @@ export function parseCli(argv) {
 }
 
 // node --test runs every .mjs under test/ as a test file; only start a server when run as a command.
-if (!process.env.NODE_TEST_CONTEXT && process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isCommand(import.meta.url)) {
   let opts
   try { opts = parseCli(process.argv.slice(2)) } catch (e) { console.error(`mock-upstream: ${e.message}`); process.exit(2) }
   const up = await startMockUpstream(opts)
