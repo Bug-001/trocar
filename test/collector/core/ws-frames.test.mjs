@@ -87,6 +87,8 @@ test('frames: a message past maxPayload keeps frame sync: payload skipped unbuff
     assert.deepEqual(frames.map((f) => f.header), all.map((b) => b.subarray(0, 6)), 'every header kept, mask key included')
     assert.deepEqual(done, [{ omitted_bytes: 40 }, 'ok', { omitted_bytes: 21 }, 'ok']) // the fragment before the cap is dropped too
   }
+  const atCap = [encodeFrame(OP.TEXT, 'x'.repeat(16)), encodeFrame(OP.TEXT, 'y'.repeat(8), { fin: false }), encodeFrame(OP.CONT, 'z'.repeat(8))]
+  assert.deepEqual(createFrameParser({ maxPayload: 16 }).push(Buffer.concat(atCap)).frames.map((f) => f.payload && f.payload.length), [16, 8, 8], 'exactly maxPayload is kept: the cap is "exceeds"')
   const [huge] = createFrameParser().push(Buffer.from([0x82, 0x7f, 0, 0, 1, 0, 0, 0, 0, 0])).frames // 1 TiB declared
   assert.deepEqual([huge.omitted, huge.payload], [2 ** 40, null], 'reported at its header, not after buffering')
 })
@@ -105,18 +107,21 @@ function streamingDeflater() {
 function decodeAll(wire, maxPayload, noContextTakeover) {
   const p = createFrameParser({ maxPayload }), a = createMessageAssembler(), inf = createInflater({ noContextTakeover }), out = []
   for (const e of p.push(wire).frames.map((f) => a.push(f)).filter((x) => x.done)) {
-    if (e.omitted_bytes != null) { if (e.compressed) inf.skip(); out.push('omitted'); continue }
+    if (e.omitted_bytes != null) { if (e.compressed) inf.skip(); out.push({ omitted: e.opcode, compressed: e.compressed }); continue }
     try { out.push(inf.inflate(e.message).toString()) } catch { out.push('decode-failed') }
   }
   return out
 }
 
-test('deflate: an omitted message breaks a takeover window (the next is decode-failed, never wrong text); without takeover the next inflates', async () => {
+test('deflate: an omitted message breaks a takeover window (the next is decode-failed, never wrong text), also when it crosses the cap on an RSV1=0 continuation; without takeover the next inflates', async () => {
   const texts = ['A'.repeat(1500), `${randomBytes(800).toString('hex')}${'C'.repeat(1500)}`, `${'C'.repeat(1500)}tail`]
   const send = streamingDeflater(); const take = []; for (const t of texts) take.push(await send(t))
   const wire = (zs) => Buffer.concat(zs.map((z) => encodeFrame(OP.TEXT, z, { rsv1: true })))
-  assert.deepEqual(decodeAll(wire(take), 500, false), [texts[0], 'omitted', 'decode-failed'])
-  assert.deepEqual(decodeAll(wire(texts.map((t) => strip(zlib.deflateRawSync(t, SYNC)))), 500, true), [texts[0], 'omitted', texts[2]])
+  const om = { omitted: OP.TEXT, compressed: true } // opcode / compressed of the message, i.e. of its FIRST frame
+  assert.deepEqual(decodeAll(wire(take), 500, false), [texts[0], om, 'decode-failed'])
+  const frag = Buffer.concat([wire([take[0]]), encodeFrame(OP.TEXT, take[1].subarray(0, 10), { rsv1: true, fin: false }), encodeFrame(OP.CONT, take[1].subarray(10)), wire([take[2]])])
+  assert.deepEqual(decodeAll(frag, 500, false), [texts[0], om, 'decode-failed'])
+  assert.deepEqual(decodeAll(wire(texts.map((t) => strip(zlib.deflateRawSync(t, SYNC)))), 500, true), [texts[0], om, texts[2]])
 })
 
 test('deflate: parseExtensions reads the agreed parameters; context takeover (past 32 KiB) and no_context_takeover both inflate', async () => {
