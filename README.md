@@ -78,7 +78,9 @@ session (the older `atrace` name was this project's v0 prototype).
 
 No ETL, no database, no build step — the board reads the NDJSON directly. With no `--source` it reads
 the capture directory every tap writes into, so **Claude Code, Codex and OpenCode sessions appear side
-by side on one board**. Pass `--source <file|dir>` to look somewhere else.
+by side on one board**. It also reads the per-user process collector's `~/.asight/collector/capture-*.ndjson`
+when that directory exists (its `flows/`, `audit/` and `replays/` are not envelopes and are not shown).
+Pass `--source <file|dir>` to look somewhere else.
 
 ## What you see
 
@@ -89,7 +91,8 @@ lifecycle** — which files entered context, when, via which tool *(Claude Code 
 
 Cost is a local, editable estimate in `~/.asight/pricing.json`; providers return usage, never dollars.
 
-Optional: `asight etl <capture.ndjson> --rebuild` loads a DuckDB projection
+Optional: `asight etl <capture.ndjson|dir> --rebuild` (a directory such as `~/.asight/collector`: its
+top-level `*.ndjson` in name order, subdirectories never read) loads a DuckDB projection
 (`sessions / calls / call_blocks / block_contents / usage / resource_events / cache_events`) for
 cross-session SQL. The board works fine without it.
 
@@ -155,7 +158,7 @@ your machine — every path above still is. `asight desktop off` restores the co
 ```sh
 asight capture [--port 8899] [--target <url>] [--out <ndjson>] [--upstream <proxy>] [--raw-sse]
 asight serve   [--port 9800] [--source <ndjson|dir>] [--db <path>] [--control]
-asight etl <ndjson> [--rebuild]
+asight etl <ndjson|dir> [--rebuild]
 asight on [--proxy <url>] | off [--remove-ca] | uninstall | verify | doctor
 asight monitor {on|off|status}
 asight mitm [--port 9899] [--host api.anthropic.com]

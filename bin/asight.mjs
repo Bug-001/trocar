@@ -62,7 +62,7 @@ async function main() {
     case 'etl': {
       const { etlFile } = await import(r('src', 'etl', 'cli.mjs'));
       const file = positional();
-      if (!file) die('usage: asight etl <ndjson> [--db <path>] [--rebuild]');
+      if (!file) die('usage: asight etl <ndjson|dir> [--db <path>] [--rebuild]');
       const out = await etlFile(file, { dbPath: flag('--db', undefined), rebuild: rest.includes('--rebuild') });
       console.log(`ETL: ${out.records} records from ${out.file} → ${out.dbPath}`, JSON.stringify(out.stats));
       break;
@@ -320,7 +320,7 @@ async function main() {
 
 usage:
   asight serve [--port 9800] [--db <path>] [--source <ndjson|dir>]
-  asight etl <ndjson> [--db <path>] [--rebuild]
+  asight etl <ndjson|dir> [--db <path>] [--rebuild]
   asight capture [--port 8899] [--target https://api.anthropic.com] [--out <ndjson>] [--upstream <proxy>] [--raw-sse]
   asight mitm    [--port 9899] [--host api.anthropic.com] [--out <ndjson>] [--upstream <proxy>]   CC-Desktop MITM source (D10 tee)
   asight desktop {on|off|status} [--port 9899]  macOS-only: steer CC-Desktop's claude-code→anthropic into asight mitm (durable, reversible)

@@ -34,6 +34,11 @@ export const legacyHome = () => path.join(os.homedir(), '.atrace', 'asight');
 export const captureOut = () => path.join(asightHome(), 'capture.ndjson');
 // MITM (Claude Desktop — the only source that must decrypt TLS)
 export const mitmOut = () => path.join(asightHome(), 'claude-capture.ndjson');
+// The per-user process collector (RFC 4.6 §记录) writes its envelopes to <here>/capture-<date>.ndjson.
+// Its subdirectories flows/ audit/ replays/ are NOT envelopes; the board never reads them because a
+// root's scan only descends into <sub>/calls.ndjson (server.mjs sourceFiles), and `asight etl <dir>`
+// does not descend at all. It needs a root of its own: the home's one-level scan never reaches it.
+export const collectorHome = (home = asightHome()) => path.join(home, 'collector');
 
 // Capture CA. NOT symmetric with the others: for every other path "not found" means an empty board,
 // but for the CA it means the code MINTS A SECOND ROOT and asks the user to trust it — while the
@@ -58,9 +63,12 @@ export function caDir({ home = asightHome(), legacyCa = path.join(os.homedir(), 
 // capture — every user who upgraded past D27 and has not captured since — the list named a directory
 // that is not there, buildResolver stat()ed it, and `asight serve` died at startup instead of serving
 // the sessions plainly sitting in the other root. Filter both.
-export function serveSource({ home = asightHome(), legacy = legacyHome(), legacyExists = null } = {}) {
+// 2026-10-06 (4.4:129): the collector directory is the third root, between the home and the legacy
+// one, and filtered the same way — a machine that has never run the collector lists no phantom root.
+export function serveSource({ home = asightHome(), legacy = legacyHome(), legacyExists = null, collector = collectorHome(home) } = {}) {
   const roots = [];
   if (existsQuiet(home)) roots.push(home);
+  if (existsQuiet(collector)) roots.push(collector);
   const hasLegacy = legacyExists == null ? existsQuiet(legacy) : legacyExists;
   if (hasLegacy) roots.push(legacy);
   return roots;
