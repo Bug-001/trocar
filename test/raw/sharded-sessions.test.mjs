@@ -60,7 +60,9 @@ test('`asight shard --rebuild-meta` counts sealed segments, and refuses to shrin
     const ses = path.join(root, 'sessions'), cap = path.join(root, 'claude-capture.ndjson');
     writeShard(cap, conversation(L, 4, { idPrefix: 'rl_' }).map((r) => toLine(r)));
     await shardOnce({ file: cap, outDir: ses });
-    await sealLegacy(ses, { fdHolders: async () => new Map(), processList: async () => [], sleep: async () => {}, deleteOriginal: true, journal: path.join(root, 'j.jsonl') });
+    const opts = { fdHolders: async () => new Map(), processList: async () => [], sleep: async () => {}, journal: path.join(root, 'j.jsonl') };
+    await sealLegacy(ses, opts);
+    await sealLegacy(ses, { ...opts, deleteOriginal: true });
     fs.appendFileSync(cap, Buffer.concat(conversation(L, 2, { idPrefix: 'rn_', start: 20 }).map((r) => toLine(r))));
     await shardOnce({ file: cap, outDir: ses });                       // a fresh calls.ndjson beside the sealed one
     const metaPath = path.join(ses, L, 'meta.json');

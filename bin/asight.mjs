@@ -295,7 +295,7 @@ async function main() {
         if (!target) die(usage);
         try {
           if (rest.includes('--legacy')) {
-            const { sealLegacy } = await mod('legacy.mjs');
+            const { sealLegacy, failureState } = await mod('legacy.mjs');
             const deleteOriginal = rest.includes('--delete-original');
             const q = flag('--quiet', undefined);
             const dryRun = rest.includes('--dry-run');
@@ -309,10 +309,13 @@ async function main() {
             if (kinds.length) console.log(`not a record stream (left as they are): ${kinds.map(([k, n]) => `${n} ${k}`).join(', ')}`);
             if (dryRun) {
               // nothing written: list what a real run would do, and why anything would be refused
-              for (const f of res.wouldSeal) console.log(`would ${deleteOriginal ? 'seal/verify + delete original' : 'seal (keep original)'}  ${f}  ${mb(fs.statSync(f).size)}`);
+              // which case each file is (review 3 F6): seal and keep, or check against its copy and delete
+              for (const x of res.plan) console.log(x.action === 'seal'
+                ? `would seal (keep original)  ${x.file}  ${mb(fs.statSync(x.file).size)}`
+                : `would check byte for byte against ${x.copies.map((c) => path.basename(c)).join(', ')}, then delete original  ${x.file}  ${mb(fs.statSync(x.file).size)}`);
               for (const x of res.refused) console.error(`would refuse ${x.file}: ${x.reason}`);
               for (const x of res.locks) console.log(`would remove ${x.file}: ${x.reason}`);
-              console.log(`dry run: ${res.wouldSeal.length} file(s) ready, ${res.refused.length} refused, ${res.skipped.length} skipped — nothing was written`);
+              console.log(`dry run: ${res.plan.length} file(s) ready${deleteOriginal ? ' to delete' : ''}, ${res.refused.length} refused, ${res.skipped.length} skipped — nothing was written`);
               if (res.refused.length) process.exitCode = 1;
               break;
             }
@@ -321,7 +324,7 @@ async function main() {
             if (res.deletedOnly.length) console.log(`deleted ${res.deletedOnly.length} original(s) after a byte-for-byte check against their sealed copy`);
             for (const x of res.locks) console.log(`${x.outcome === 'removed' ? 'removed ' : 'FAILED  '} ${x.file}: ${x.reason}`);
             for (const x of res.refused) console.error(`refused  ${x.file}: ${x.reason}`);
-            for (const x of res.failed) console.error(`FAILED   ${x.file}: ${x.reason} (original kept)`);
+            for (const x of res.failed) console.error(`FAILED   ${x.file}: ${x.reason} (${failureState(x)})`);
             if (!deleteOriginal && res.sealed.length) console.log('originals KEPT — both copies now exist and readers use the originals. Check with `asight raw verify '
               + target + '`, then run this again with --delete-original to delete each original after a byte-for-byte check.');
             if (res.refused.length || res.failed.length || res.locks.some((x) => x.outcome === 'failed')) process.exitCode = 1;

@@ -36,6 +36,10 @@ test('legacy tree: seal (originals kept) → verify → seal --delete-original �
     r = run(home, 'raw', 'verify', ses);
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.equal(r.stdout.split('\n').filter((l) => l.startsWith('ok')).length, originals.length);
+    r = run(home, 'raw', 'seal', '--legacy', ses, '--quiet', '0', '--delete-original', '--dry-run');   // which case each file is (F6)
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /would check byte for byte against calls\.ndjson\.0001\.sealed, then delete original .*calls\.ndjson/);
+    assert.match(r.stdout, new RegExp(`dry run: ${originals.length} file\\(s\\) ready to delete`));
     r = run(home, 'raw', 'seal', '--legacy', ses, '--quiet', '0', '--delete-original');
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, new RegExp(`deleted ${originals.length} original`));

@@ -165,7 +165,11 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
   // 3. open file descriptors
   let holders;
   try { holders = await fdHolders(quiet, { fs }); } catch (e) { throw refuseAll(`cannot tell which processes hold these files open (${e.message})`); }
-  const ok = [], copiesOf = new Map();
+  // The plan, per file: 'seal' (keeps the original), or — with --delete-original — 'delete' after a
+  // byte-for-byte check against the copy it already has. --delete-original never seals: a file
+  // without a verified copy of its own is refused, "seal first", so every deletion follows a seal the
+  // operator ran and checked (review 3 F6). The dry run lists which case each file is.
+  const plan = [];
   for (const f of quiet) {
     const pids = holders.get(f);
     if (pids && pids.length) { refused.push({ file: f, reason: `held open by pid ${pids.join(', ')} — it may still be written` }); continue; }
@@ -175,64 +179,79 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
     // fresh calls.ndjson `asight shard --watch` writes after a deletion) is no reason to: it is the
     // only copy of its records, left alone, and this file is sealed as the next segment (review 3 F3).
     const copies = sameStreamCopies(fs, f);
-    copiesOf.set(f, copies);
     const stale = copies.filter((c) => c.rel === 'earlier');
     if (stale.length) { refused.push({ file: f, reason: `its sealed copy ${stale.map((c) => path.basename(c.file)).join(', ')} holds only its first ${stale[0].length} bytes (${stale[0].why}) — so the original still holds every byte of that copy. Check with \`asight raw verify\`, delete that copy, then seal again` }); continue; }
-    ok.push(f);
+    const same = copies.filter((c) => c.rel === 'same').map((c) => c.file);
+    if (!deleteOriginal) { plan.push({ file: f, action: 'seal' }); continue; }
+    if (same.length) { plan.push({ file: f, action: 'delete', copies: same }); continue; }
+    const others = copies.filter((c) => c.rel === 'other');
+    refused.push({ file: f, reason: others.length
+      ? `no sealed copy holds its current bytes — ${others.map((c) => path.basename(c.file)).join(', ')} ${others.length > 1 ? 'are copies' : 'is a copy'} of another file (${others[0].why}) and stays as it is. Seal this file first (without --delete-original), check with \`asight raw verify\`, then delete`
+      : 'no sealed copy yet — --delete-original only deletes a file that already has one. Seal first (run without --delete-original), check with `asight raw verify`, then delete' });
   }
   for (const r of refused) appendJournal({ op: 'seal-legacy', outcome: 'refused', file: r.file, reason: r.reason }, { journal });
   for (const r of skipped) appendJournal({ op: 'seal-legacy', outcome: 'skipped', file: r.file, reason: r.reason }, { journal });
   if (Object.keys(known).length) appendJournal({ op: 'seal-legacy', outcome: 'skipped', target, reason: 'not a record stream', counts: known }, { journal });
   // locks of seals that died here (review 3 F10); never inside the old root
   const locks = dirs.filter((d) => !oldRootReason(d, { fs })).flatMap((d) => cleanDeadLocks(d, { fs, journal, dryRun }));
-  if (dryRun) return { target, dryRun: true, wouldSeal: ok, refused, locks, skipped, known };
+  if (dryRun) return { target, dryRun: true, plan, wouldSeal: plan.filter((x) => x.action === 'seal').map((x) => x.file), refused, locks, skipped, known };
 
   const sealed = [], deletedOnly = [], failed = [];
   // A file that changed since the quiet window is being written after all: refuse it, whatever step
   // we are at. Asked before each file and again between its byte-for-byte check and the unlink.
   const moved = (f) => { let now = null; try { now = fs.statSync(f); } catch {} return now && sameStat(before.get(f), now) ? null : 'changed after the quiet window — something is still writing it; nothing deleted'; };
-  for (const f of ok) {
+  for (const { file: f, action, copies } of plan) {
     onFile(f);
-    try {
-      const m = moved(f);
-      if (m) { refused.push({ file: f, reason: m }); appendJournal({ op: 'seal-legacy', outcome: 'refused', file: f, reason: m }, { journal }); continue; }
-      if (deleteOriginal) {
-        const copies = copiesOf.get(f).filter((c) => c.rel === 'same').map((c) => c.file);
-        if (copies.length) {
-          // copies of all of this file (by content, copyRelation): prove it byte for byte
-          const v = verifyAgainst(copies, f, { fs });
-          if (!v.ok) {
-            const reason = `its sealed copy does not match it byte for byte (${v.reason}) — nothing deleted; check with \`asight raw verify\``;
-            appendJournal({ op: 'verify', outcome: 'failed', file: f, sealed: copies, reason }, { journal });
-            refused.push({ file: f, reason });
-            continue;
-          }
-          // the copies' directory entries must be durable before the original's removal is (E5 order)
-          for (const dir of new Set(copies.map((c) => path.dirname(c)))) fsyncDir(fs, dir);
-          const late = moved(f);
-          if (late) { refused.push({ file: f, reason: late }); appendJournal({ op: 'delete-original', outcome: 'refused', file: f, reason: late }, { journal }); continue; }
-          fs.unlinkSync(f);
-          try { fs.unlinkSync(closedMarkerPath(f)); } catch {}
-          fsyncDir(fs, path.dirname(f));
-          appendJournal({ op: 'delete-original', outcome: 'ok', file: f, verified: 'byte-for-byte', against: copies, records: v.records, bytes: v.bytes }, { journal });
-          deletedOnly.push({ file: f, copies });
-          continue;
-        }
-        // its only sealed copies are of another file that stood at this path: none holds this file's
-        // bytes, so there is nothing to check it against and its deletion is not safe yet
-        const others = copiesOf.get(f).filter((c) => c.rel === 'other');
-        if (others.length) {
-          const reason = `no sealed copy holds its current bytes — ${others.map((c) => path.basename(c.file)).join(', ')} ${others.length > 1 ? 'are copies' : 'is a copy'} of another file (${others[0].why}) and stays as it is. Seal this file first (without --delete-original), check with \`asight raw verify\`, then delete`;
-          refused.push({ file: f, reason }); appendJournal({ op: 'delete-original', outcome: 'refused', file: f, reason }, { journal });
-          continue;
-        }
-      }
+    const m = moved(f);
+    if (m) { refused.push({ file: f, reason: m }); appendJournal({ op: 'seal-legacy', outcome: 'refused', file: f, reason: m }, { journal }); continue; }
+    if (action === 'seal') {
       // the sealer journals its own outcome, and replaces earlier copies of this exact source
-      sealed.push(await sealUnchecked(f, { fs, split: false, deleteOriginal, journal, frameBytes }));
-    } catch (e) { failed.push({ file: f, reason: e.message }); }
+      try { sealed.push(await sealUnchecked(f, { fs, split: false, deleteOriginal: false, journal, frameBytes })); }
+      catch (e) { failed.push({ file: f, reason: e.message, originalKept: fs.existsSync(f) }); }
+      continue;
+    }
+    const r = deleteVerified(fs, f, copies, { moved, journal });
+    if (r.deleted && !r.error) deletedOnly.push({ file: f, copies });
+    else if (r.refused) refused.push({ file: f, reason: r.refused });
+    else failed.push({ file: f, reason: r.error, originalKept: !r.deleted, ...(r.deleted ? { state: r.state } : {}) });
   }
   return { target, sealed, deletedOnly, refused, failed, locks, skipped, known };
 }
+
+// Delete `f` after proving `copies` (copies of all of it, by content) byte for byte, durably: the
+// copies' directories are fsync'd before the unlink, the original's after it (E5 order). Every outcome
+// is journalled, a failure with the true state of the original — before the unlink "kept", after it
+// "deleted, <the step that failed>" (review 3 F7). → { deleted, refused?, error?, state? }
+function deleteVerified(fs, f, copies, { moved, journal }) {
+  const v = verifyAgainst(copies, f, { fs });
+  if (!v.ok) {
+    const reason = `its sealed copy does not match it byte for byte (${v.reason}) — nothing deleted; check with \`asight raw verify\``;
+    appendJournal({ op: 'verify', outcome: 'failed', file: f, sealed: copies, reason }, { journal });
+    return { deleted: false, refused: reason };
+  }
+  let step = 'fsync of the sealed copy\'s directory';
+  try {
+    for (const dir of new Set(copies.map((c) => path.dirname(c)))) fsyncDir(fs, dir);
+    const late = moved(f);
+    if (late) { appendJournal({ op: 'delete-original', outcome: 'refused', file: f, reason: late }, { journal }); return { deleted: false, refused: late }; }
+    step = 'unlink';
+    fs.unlinkSync(f);
+    step = 'removing its close marker';
+    try { fs.unlinkSync(closedMarkerPath(f)); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    step = 'fsync of its directory';
+    fsyncDir(fs, path.dirname(f));
+  } catch (e) {
+    const deleted = !fs.existsSync(f);
+    const state = deleted ? `original deleted, ${step} failed${step.startsWith('fsync') ? ' — the deletion may not survive a power cut; the sealed copy is durable' : ''}` : 'original kept';
+    appendJournal({ op: 'delete-original', outcome: 'failed', file: f, against: copies, reason: `${step} failed: ${e.message}`, originalKept: !deleted, state }, { journal });
+    return { deleted, error: `${step} failed: ${e.message}`, state };
+  }
+  appendJournal({ op: 'delete-original', outcome: 'ok', file: f, verified: 'byte-for-byte', against: copies, records: v.records, bytes: v.bytes }, { journal });
+  return { deleted: true };
+}
+
+// How the CLI states a failed file: what happened to its original, never assumed (review 3 F7).
+export const failureState = (x) => (x.originalKept === false ? (x.state || 'original deleted') : 'original kept');
 
 // Sealed segments of `f`'s stream beside it whose only source has `f`'s name, each with its relation to
 // the file now at that path (verify.mjs copyRelation): { file, length, rel: same|earlier|other, why }.

@@ -120,6 +120,7 @@ test('asight shard leaves its watermark alone when its capture was sealed and de
     const out = path.join(root, 'sessions');
     await shardOnce({ file: cap, outDir: out });
     const before = readState(out)[cap];
+    await sealLegacy(cap, { ...NONE, journal: path.join(root, 'j.jsonl') });
     await sealLegacy(cap, { ...NONE, journal: path.join(root, 'j.jsonl'), deleteOriginal: true });
     const r = await shardOnce({ file: cap, outDir: out });
     assert.equal(r.missing, true);

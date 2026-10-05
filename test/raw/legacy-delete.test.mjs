@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { sealLegacy } from '../../src/raw/legacy.mjs';
+import { sealLegacy, failureState } from '../../src/raw/legacy.mjs';
 import { readJournal } from '../../src/raw/journal.mjs';
 import { tmpDir, conversation, toLine, writeShard, listFiles } from './helpers.mjs';
 
@@ -90,4 +90,55 @@ test('a file written after the quiet window (while earlier files were sealed) is
     assert.deepEqual(listFiles(root), []);
     assert.ok(readJournal({ journal }).some((e) => e.outcome === 'refused' && e.file === f));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+// Review 3 F6: --delete-original sealed and deleted, in one go, a file that had no sealed copy yet — a
+// deletion of a copy nobody had checked. It now only deletes files that already have a verified copy;
+// the rest are refused "seal first", and the dry run says which case each file is.
+test('F6: --delete-original on a file without a sealed copy refuses ("seal first") — nothing sealed, nothing deleted', async () => {
+  const { root, f, journal } = sealedTree();
+  try {
+    const g = writeShard(path.join(path.dirname(f), 'probes.ndjson'), conversation('aaaaaaaa-0000-4000-8000-00000000000a', 1).map((r) => toLine(r)));
+    await sealLegacy(f, { ...NONE, journal });                        // f has a copy, g has none
+    const dry = await sealLegacy(path.dirname(f), { ...NONE, journal, deleteOriginal: true, dryRun: true });
+    assert.deepEqual(dry.plan.map((x) => [path.basename(x.file), x.action]), [['calls.ndjson', 'delete']]);
+    assert.match(dry.refused.find((r) => r.file === g).reason, /no sealed copy yet.*seal first/i);
+    const res = await sealLegacy(path.dirname(f), { ...NONE, journal, deleteOriginal: true });
+    assert.deepEqual(res.deletedOnly.map((x) => x.file), [f]);
+    assert.deepEqual(res.sealed, [], 'a file was sealed by --delete-original');
+    assert.ok(fs.existsSync(g), 'a file without a checked copy was deleted');
+    assert.deepEqual(listFiles(path.dirname(g)).filter((x) => x.includes('probes')), []);
+    assert.ok(readJournal({ journal }).some((e) => e.outcome === 'refused' && e.file === g && /seal first/i.test(e.reason)));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+// Review 3 F7: a failure in the delete-only branch was neither journalled nor labelled truthfully —
+// the CLI always said "(original kept)", even when the unlink had happened and only the directory
+// fsync after it failed.
+test('F7: a delete step that fails is journalled with the true state of the original', async () => {
+  for (const [when, kept] of [['before', true], ['after', false]]) {
+    const { root, f, journal } = sealedTree();
+    try {
+      await sealLegacy(f, { ...NONE, journal });
+      const [copy] = listFiles(root);
+      const target = when === 'before' ? path.dirname(copy) : path.dirname(f);
+      let unlinked = false, opened = new Map();
+      const spy = { ...fs,
+        openSync: (p, ...a) => { const fd = fs.openSync(p, ...a); opened.set(fd, p); return fd; },
+        unlinkSync: (p) => { if (p === f) unlinked = true; return fs.unlinkSync(p); },
+        fsyncSync: (fd) => { if (opened.get(fd) === target && (when === 'before' || unlinked)) throw Object.assign(new Error('EIO: i/o error, fsync'), { code: 'EIO' }); return fs.fsyncSync(fd); },
+      };
+      const res = await sealLegacy(f, { ...NONE, journal, deleteOriginal: true, fs: spy });
+      const x = res.failed.find((e) => e.file === f);
+      assert.ok(x, `the failure (${when} the unlink) was not reported: ${JSON.stringify(res)}`);
+      assert.equal(x.originalKept, kept);
+      assert.equal(fs.existsSync(f), kept);
+      assert.equal(failureState(x), kept ? 'original kept' : x.state);
+      if (!kept) assert.match(x.state, /original deleted, fsync of its directory failed/);
+      const e = readJournal({ journal }).find((j) => j.op === 'delete-original' && j.outcome === 'failed' && j.file === f);
+      assert.ok(e, `the failure (${when} the unlink) left no journal entry`);
+      assert.equal(e.originalKept, kept);
+      assert.match(e.reason, /EIO/);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
 });
