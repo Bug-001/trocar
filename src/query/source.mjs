@@ -240,7 +240,7 @@ export async function buildResolver(source, { retryMs = 30000 } = {}) {
   };
   for (const f of [...files]) { const mk = await indexSafe(f); if (mk) marks.set(f, mk); else files.splice(files.indexOf(f), 1); }
   // A file that left the root takes its failure (and its note) with it.
-  const fileRoot = isDir ? sourcePath : path.dirname(sourcePath);
+  const fileRoot = path.dirname(isDir ? path.join(sourcePath, '_') : sourcePath); // as notes file it: `traces/` and `./traces` too
   const forgetUnlisted = (listed) => {
     const names = new Set(listed.map((f) => path.basename(f)));
     for (const f of [...failedAt.keys()]) if (!names.has(path.basename(f))) failedAt.delete(f);

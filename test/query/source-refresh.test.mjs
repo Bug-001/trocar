@@ -200,16 +200,17 @@ test('while a rebuild runs, a failure that persists stays noted at every tick (a
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.writeFileSync(path.join(dir, 'bad.ndjson'), rec('B', 'b'));
   fs.writeFileSync(path.join(dir, 'big.ndjson'), big('K', 2500));
-  fs.writeFileSync(path.join(dir, 'small.ndjson'), rec('S', 's'));
+  fs.writeFileSync(path.join(dir, 'small.ndjson'), rec('S', 'a longer first body'));
   const r = await buildResolver(dir);
   const noted = () => r.scan.skipped.some((x) => x.name === 'bad.ndjson' && x.reason === 'unreadable');
   assert.ok(noted());
-  fs.rmSync(path.join(dir, 'small.ndjson')); fs.writeFileSync(path.join(dir, 'small.ndjson'), rec('S', 'replaced')); // new inode → rebuild
+  fs.rmSync(path.join(dir, 'small.ndjson')); fs.writeFileSync(path.join(dir, 'small.ndjson'), rec('S', 'x')); // shorter → rebuild, whatever the inode
   let done = false, ticks = 0;
   const p = r.refresh().then(() => { done = true; });
   while (!done) { assert.ok(noted(), `tick ${ticks}: the note vanished mid-rebuild`); ticks++; await new Promise((res) => setImmediate(res)); }
   await p;
   assert.ok(noted() && ticks > 1);
+  assert.equal(r.detail('S/small.ndjson#S').text, bodyOf(rec('S', 'x')), 'the rebuild happened');
   r.dispose();
 });
 
@@ -219,10 +220,31 @@ test('a failing file that leaves the root takes its note with it', async (t) => 
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.writeFileSync(path.join(dir, 'a.ndjson'), rec('A', 'a'));
   fs.writeFileSync(path.join(dir, 'gone.ndjson'), rec('G', 'g'));
-  const r = await buildResolver(dir);
+  const r = await buildResolver(dir + '/'); // as `--source traces/` passes it
   assert.deepEqual(r.scan.skipped.map((x) => [x.name, x.reason]), [['gone.ndjson', 'unreadable']]);
   fs.rmSync(path.join(dir, 'gone.ndjson'));
   await r.refresh();
   assert.deepEqual(r.scan.skipped, [], 'not reported as unreadable forever');
+  r.dispose();
+});
+
+test('undo restores the index exactly: an id duplicated inside the failed attempt, a bare id, an id another file holds', async (t) => {
+  let fail = 1;
+  await faultyReads(t, 'big.ndjson', () => fail);
+  const dir = tmp();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const x = rec('X', 'in a');
+  fs.writeFileSync(path.join(dir, 'a.ndjson'), x);
+  const r = await buildResolver(dir, { retryMs: 0 });
+  fs.writeFileSync(path.join(dir, 'big.ndjson'), rec('Z', 'z1') + rec('Z', 'z2') + rec('Z', 'z3') + rec('X', 'in big') + big('K', 2500));
+  await r.refresh();
+  assert.equal(r.detail('S/big.ndjson#Z').status, 'absent', 'no stale duplicate left by the restore order');
+  assert.equal(r.detail('S/elsewhere#K0').status, 'absent', 'the bare id the attempt added is gone');
+  assert.equal(r.detail('S/elsewhere#X').text, bodyOf(x), 'the bare id another file holds is restored, not left AMBIGUOUS');
+  fail = null;
+  await r.refresh();
+  assert.throws(() => r.detail('S/big.ndjson#Z'), /3 times/, 'read whole: the triple duplicate is counted once, not inflated by the failed attempt');
+  assert.equal(r.detail('S/elsewhere#K0').status, 'ok', 'the bare id is not left AMBIGUOUS by the failed attempt');
+  assert.throws(() => r.detail('S/elsewhere#X'), /ambiguous/, 'now really in two files');
   r.dispose();
 });
