@@ -94,7 +94,7 @@ test('a missing helper (ENOENT) rejects start with a clear setup-helper message'
   const c = createRedirectorClient({ binary: '/usr/local/libexec/asight/asight-redirector', spawn: m.spawn, autoHeartbeatMs: 0 })
   const p = c.start()
   m.child.emit('error', Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }))
-  await assert.rejects(p, /setup-helper/)
+  await assert.rejects(p, /install it once per machine with "sudo asight setup-helper"/)
 })
 
 test('a protocol-version mismatch fails open: start still resolves, a warning fires, ops still work', async () => {
@@ -128,5 +128,13 @@ test('lookup carries the peer address family (v6 vs v4)', async () => {
   assert.equal(looks[0].port, 5000)
   assert.equal(looks[1].family, 4)
   assert.equal(looks[1].port, 5001)
+  await c.close()
+})
+
+test('attach sends a heartbeat before the attach frame, so steering is live when attach resolves', async () => {
+  const { m, c } = await started({ autoHeartbeatMs: 60000 }) // the periodic beat would come a minute later
+  await c.attach()
+  const ops = m.frames().map((f) => f.op)
+  assert.deepEqual(ops.slice(ops.indexOf('heartbeat')), ['heartbeat', 'attach'], 'a heartbeat, then attach, and nothing waits for the interval')
   await c.close()
 })

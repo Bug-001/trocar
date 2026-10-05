@@ -26,8 +26,8 @@
 //   watch(pid, verdict={decrypt,agent})/unwatch(pid) -> maintain the kernel watch set and the
 //     JS pid->label map. Refuses to watch this engine's own pid (the loader also refuses a tgid
 //     not owned by this uid).
-//   heartbeat() -> refresh the kernel freshness timestamp; the client also auto-heartbeats
-//     every autoHeartbeatMs while attached (set 0 to disable, e.g. in tests).
+//   heartbeat() -> refresh the kernel freshness timestamp; attach() sends one before attaching, and the
+//     client auto-heartbeats every autoHeartbeatMs while attached (set 0 to disable, e.g. in tests).
 //   EventEmitter: 'exec'({tgid,pid,comm,filename,tsNs}), 'exit'({tgid,tsNs}),
 //     'flow-meta'({pid,dst,tsNs}) for a watched no-decrypt flow, 'down'({reason}), 'ready'
 //     ({pid,proto,build}), 'version-mismatch'({got,expected}).
@@ -157,9 +157,7 @@ export function createRedirectorClient({
     })
     child.on('error', (err) => {
       if (err && err.code === 'ENOENT') {
-        // The `asight setup-helper` CLI is not built yet (D36 scope); today the helper is installed
-        // as root via src/collector/arch/linux/install.mjs setup-helper.
-        fail(`redirector helper not found at ${resolvedBinary}; install it as root via the collector setup-helper step (the "asight setup-helper" CLI is not built yet)`)
+        fail(`redirector helper not found at ${resolvedBinary}; install it once per machine with "sudo asight setup-helper"`)
       } else {
         fail('spawn error: ' + (err && err.message ? err.message : String(err)))
       }
@@ -171,7 +169,10 @@ export function createRedirectorClient({
     return send('config', { engine_port: enginePort | 0 })
   }
 
-  async function attach() { const r = await send('attach'); startHeartbeat(); return r }
+  // A heartbeat first: the kernel steers only while the heartbeat is fresh (asight.bpf.c heartbeat_fresh), and the
+  // first periodic one comes autoHeartbeatMs later, so without it every connection in that window after `on` went
+  // direct (on a test machine, a `claude -p` started right after `on` was never captured).
+  async function attach() { await heartbeat(); const r = await send('attach'); startHeartbeat(); return r }
   async function detach() { stopHeartbeat(); return send('detach') }
   async function heartbeat() { return send('heartbeat') }
   async function status() { return send('status') }
