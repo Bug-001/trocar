@@ -78,10 +78,10 @@ export function saveManifest(dir, m, fs = nodeFs) {
 // with the directories its write creates. `sources` names the user files a trust file carries certificates from
 // (paths, never contents), so the merge stays auditable. `exclusive`: a file already there is never written over
 // (an agent's plugin directory is the user's; asight only adds its own file to it).
-export function writeOwnedFile({ dir, manifest, harness = null, role, file, data, sources = null, mode = 0o600, exclusive = false, extra = {}, fs = nodeFs }) {
+export function writeOwnedFile({ dir, manifest, harness = null, role, file, data, sources = null, mode = 0o600, exclusive = false, extra = {}, now = new Date(), fs = nodeFs }) {
   if (exclusive && fs.existsSync(file)) throw new Error(`${file} already exists; asight will not write over it`)
   const created = missingDirs(path.dirname(file), fs)
-  manifest.files.push({ path: file, role, harness, sha256: sha256(Buffer.from(data)), mode, created_dirs: created, ...(sources ? { sources } : {}), ...extra })
+  manifest.files.push({ path: file, role, harness, sha256: sha256(Buffer.from(data)), mode, created_dirs: created, installed_at: now.toISOString(), ...(sources ? { sources } : {}), ...extra })
   saveManifest(dir, manifest, fs)
   for (const d of created) fs.mkdirSync(d, { mode: 0o700 })
   writeDurable(file, data, mode, fs)

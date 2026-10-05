@@ -211,3 +211,20 @@ test('hermes through install / uninstall: the user\'s SSL_CERT_FILE line is put 
     assert.ok(!fs.existsSync(bundle))
   } finally { s.done() }
 })
+
+test('hermes after uninstall: Linux main re-reads the bundle at its next handshake; a release build, one without a stamp, and macOS trust until restart (4.6 step 5, review 3 #6)', () => {
+  const s = sandbox()
+  try {
+    const au = hermes.trust.afterUninstall
+    const root = path.join(s.home, '.hermes', 'hermes-agent')
+    const f = (o = {}) => ({ os: 'linux', exe: PY, argv: cli(root, '-z', 'hi'), env: new Map(), ...o })
+    const ctx = { readText: (p) => { try { return fs.readFileSync(p, 'utf8') } catch { return null } }, home: s.home }
+    assert.equal(au(f(), ctx), 'restart', 'no install stamp: judged as a release')
+    s.put(path.join(root, 'install-stamp.json'), MAIN_STAMP)
+    assert.equal(au(f(), ctx), 'next-handshake')
+    assert.equal(au(f({ os: 'darwin' }), ctx), 'restart')
+    assert.equal(au(f({ argv: ['python3', '-m', 'tui_gateway.entry'] }), ctx), 'next-handshake', 'the TUI child: the default checkout under this home')
+    const alt = path.join(s.home, 'src', 'hermes-agent'); s.put(path.join(alt, 'install-stamp.json'), OLD_STAMP)
+    assert.equal(au(f({ argv: ['python3', '-m', 'tui_gateway.entry'], env: new Map([['HERMES_PYTHON_SRC_ROOT', alt]]) }), ctx), 'restart', 'its own checkout is a release')
+  } finally { s.done() }
+})

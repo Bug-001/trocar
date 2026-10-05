@@ -524,3 +524,31 @@ test('daemonEnv: the install shell\'s NODE_EXTRA_CA_CERTS goes to the unit when 
     assert.deepEqual(readEvents(b.dir).filter((e) => e.code === 'unit-env-not-carried').map((e) => e.event), ['install-note'])
   } finally { b.done() }
 })
+
+test('uninstall step 5: only a process that may have read the entry is reported — started after its harness was installed (an owned plugin file counts), or of a harness that re-reads it; the descriptor may say a process never did; each is kept as an uninstall-note (review 3 #6)', async () => {
+  const b = box()
+  try {
+    // plugin-only harness: its install time is its owned file's; a harness whose afterUninstall is a function of the process
+    const plug = { name: 'plug', runtime: 'node', signatures: { linux: { match: [{ exe: /\/plug$/ }] } }, hosts: [], trust: { chain: [{ var: 'X', semantic: 'append' }] },
+      inject: (ctx) => ({ owned: [{ path: path.join(ctx.home, '.plug', 'plugins', 'asight-ca.js'), role: 'plugin', data: '// asight collector: trust plugin\n', mode: 0o644 }] }) }
+    const picky = { ...repHarness(b.dir), name: 'picky', signatures: { linux: { match: [{ exe: /\/picky$/ }] } },
+      inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.picky', '.env'), vars: { SSL_CERT_FILE: path.join(b.dir, 'ca', 'combined-picky.pem') }, semantic: 'replace' }], files: [{ path: path.join(b.dir, 'ca', 'combined-picky.pem'), bundle: true, certsFrom: [] }] }),
+      trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }], afterUninstall: (f, ctx) => (f.env.get('VIA') === ctx.collectorDir ? 'next-connection' : null) } }
+    fs.writeFileSync(path.join(b.home, 'corp.pem'), createCa({ commonName: 'corp' }).certPem)
+    const t0 = Date.now()
+    await installCollector(base(b, { harnesses: [plug, picky], roots: { node: [], osText: '' } }))
+    const m = readManifest(b.dir)
+    assert.ok(Date.parse(m.files.find((f) => f.role === 'plugin').installed_at) >= t0, 'an owned file records when asight wrote it')
+    const procs = [
+      { pid: 1, exe: '/x/plug', startedAt: t0 - 60000, env: new Map() }, // before install: never loaded the plugin
+      { pid: 2, exe: '/x/plug', startedAt: Date.now() + 1000, env: new Map() },
+      { pid: 3, exe: '/x/picky', startedAt: Date.now() + 1000, env: new Map([['VIA', b.dir]]) },
+      { pid: 4, exe: '/x/picky', startedAt: Date.now() + 1000, env: new Map() }, // its descriptor: it never read the entry
+    ]
+    const match = (f) => ({ agent: /\/plug$/.test(f.exe) ? 'plug' : /\/picky$/.test(f.exe) ? 'picky' : null })
+    const r = await uninstallCollector({ home: b.home, env: { HOME: b.home }, stop: stopNone, scan: async () => procs, match, harnesses: [plug, picky], roots: { node: [], osText: '' } })
+    assert.deepEqual(r.still_trusting, [{ pid: 2, agent: 'plug', until: 'restart' }, { pid: 3, agent: 'picky', until: 'next-connection' }])
+    assert.deepEqual(readEvents(b.dir).filter((e) => e.code === 'still-trusting').map((e) => [e.event, e.harness, e.pid]), [['uninstall-note', 'plug', 2], ['uninstall-note', 'picky', 3]])
+    assert.match(readEvents(b.dir).find((e) => e.pid === 3).reason, /until its next new connection/)
+  } finally { b.done() }
+})

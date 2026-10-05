@@ -138,3 +138,12 @@ test('kimi-code through install / uninstall: the shim runs kimi with the CA file
     assert.ok(fs.existsSync(path.join(s.home, '.kimi-code/bin/kimi')), "the user's kimi is never touched")
   } finally { s.done() }
 })
+
+test('kimi after uninstall: only a kimi the shim started (its NODE_EXTRA_CA_CERTS is asight\'s file) is reported, until it restarts (4.6 step 5, review 3 #6)', () => {
+  const au = kimi.trust.afterUninstall
+  const dir = '/h/.asight/collector'
+  assert.equal(au({ env: new Map([['NODE_EXTRA_CA_CERTS', `${dir}/ca/extra-kimi.pem`]]) }, { collectorDir: dir }), 'restart')
+  assert.equal(au({ env: new Map([['NODE_EXTRA_CA_CERTS', '/corp/ca.pem']]) }, { collectorDir: dir }), null, 'its own CA: it never trusted asight')
+  assert.equal(au({ env: new Map() }, { collectorDir: dir }), null, 'by its absolute path: no shim, no asight CA')
+  assert.equal(au({ env: new Map([['NODE_EXTRA_CA_CERTS', '/h/.asight/collectorX/a.pem']]) }, { collectorDir: dir }), null)
+})

@@ -52,3 +52,6 @@ export const CODE = Object.freeze({
 })
 
 export const trustReasonText = (code) => TRUST_REASON[code] || null
+
+// How long a running agent keeps trusting asight after uninstall (4.6 撤销顺序第 5 步), by its descriptor's afterUninstall.
+export const UNTIL_TEXT = Object.freeze({ restart: 'until it restarts', 'next-connection': 'until its next new connection (it re-reads the bundle)', 'next-handshake': 'until its next TLS handshake (it re-reads the bundle)', 'session-end': 'until its current session ends' })

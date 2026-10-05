@@ -113,9 +113,11 @@ test('codex through install / uninstall: the user\'s SSL_CERT_FILE line is put o
     assert.match(fs.readFileSync(env, 'utf8'), new RegExp(`^# >>> asight collector >>>[^\\n]*\\nSSL_CERT_FILE=${bundle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n# <<< asight collector <<<\\nOPENAI_API_KEY=sk-secret\\n#asight-collector-off# export SSL_CERT_FILE=`))
     assert.deepEqual(fps(fs.readFileSync(bundle, 'utf8')), [fp(OTHER), ...fps(fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'), 'utf8'))])
     assert.ok(!fs.readFileSync(path.join(dir, 'install-manifest.json'), 'utf8').includes('sk-secret'))
-    const live = { os: 'linux', pid: 99, exe: DAEMON, argv: [DAEMON, 'app-server', '--managed-daemon'], env: new Map(), startedAt: 0 }
-    const r = await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none', harnesses: [codex], roots: { node: [], osText: '' }, scan: async () => [live], match: (f) => createRegistry([codex]).match(f) })
-    assert.deepEqual([r.entries.map((e) => e.result), r.kept_bundles.map((k) => k.pids), r.still_trusting.map((x) => x.until)], [['restored'], [[99]], ['next-connection']])
+    // the .env is applied once, at start: a codex from before install never named the bundle; one started after did
+    const old = { os: 'linux', pid: 98, exe: DAEMON, argv: [DAEMON, 'app-server', '--managed-daemon'], env: new Map(), startedAt: 0 }
+    const live = { os: 'linux', pid: 99, exe: DAEMON, argv: [DAEMON, 'app-server', '--managed-daemon'], env: new Map(), startedAt: Date.now() + 1000 }
+    const r = await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none', harnesses: [codex], roots: { node: [], osText: '' }, scan: async () => [old, live], match: (f) => createRegistry([codex]).match(f) })
+    assert.deepEqual([r.entries.map((e) => e.result), r.kept_bundles.map((k) => k.pids), r.still_trusting], [['restored'], [[99]], [{ pid: 99, agent: 'codex', until: 'next-connection' }]])
     assert.equal(fs.readFileSync(env, 'utf8'), before)
     assert.deepEqual((await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none', harnesses: [codex], roots: { node: [], osText: '' } })).kept_bundles, [])
     assert.ok(!fs.existsSync(bundle))

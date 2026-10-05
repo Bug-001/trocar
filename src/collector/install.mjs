@@ -13,7 +13,7 @@ import { collectorHome } from '../paths.mjs'
 import { loadOrCreateCa, caPaths } from './core/tls/ca-store.mjs'
 import { planTrust } from './core/trust/plan.mjs'
 import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, removeOwnedFile, undoEntry, removeEmptyDirs, manifestPath, sweepTemps, describeEntry } from './core/trust/journal.mjs'
-import { EVENT, CODE } from './core/codes.mjs'
+import { EVENT, CODE, UNTIL_TEXT } from './core/codes.mjs'
 import { rewriteBundles } from './core/trust/bundle.mjs'
 import { controlRequest } from './core/control.mjs'
 import { readText } from './core/config-read.mjs'
@@ -201,20 +201,26 @@ export async function uninstallCollector({ home = os.homedir(), ...opts } = {}) 
 const stepOf = (e) => (e.kind === 'text' && e.format !== 'dotenv-block' ? 4 : 1)
 const NOT_UNDONE = new Set(['left-unparsable', 'left-link', 'error'])
 
-// Uninstall step 2 (4.6): has a live process of this uid loaded this bundle? (a) it is the bundle's harness and started
-// after that harness's entry was installed — or the harness re-reads its entry while running (`trust.rereadsEntry`),
-// then alive is enough; (b) its environ names the bundle (a child that inherited it). Judged from the manifest and
+// May a live process of `harness` have read asight's entry for it (4.6 撤销顺序 step 2 (a), step 5)? It started after
+// that harness's earliest install time (its entries and the files asight owns for it), or the harness re-reads its
+// entry while running (`trust.rereadsEntry`: alive is enough), or its start time is unknown.
+function mayHaveRead(f, harness, m, byName) {
+  const d = byName.get(harness)
+  if (d && d.trust && d.trust.rereadsEntry) return true
+  const since = Math.min(...[...m.entries, ...m.files].filter((e) => e.harness === harness).map((e) => Date.parse(e.installed_at)).filter(Number.isFinite))
+  return f.startedAt == null || !Number.isFinite(since) || f.startedAt >= since
+}
+
+// Uninstall step 2 (4.6): has a live process of this uid loaded this bundle? (a) one of the bundle's harness that may
+// have read its entry; (b) its environ names the bundle (a child that inherited it). Judged from the manifest and
 // the process table only: the daemon is stopped and the entries are undone by now.
 function bundleUsers(bundle, m, procs, match, byName) {
-  const d = byName.get(bundle.harness)
-  const rereads = !!(d && d.trust && d.trust.rereadsEntry)
-  const since = Math.min(...m.entries.filter((e) => e.harness === bundle.harness).map((e) => Date.parse(e.installed_at)).filter(Number.isFinite))
   const pids = []
   for (const f of procs) {
     let env = null
     try { env = f.env } catch { /* gone, or not ours to read */ }
     const inherited = env && [...env.values()].some((v) => typeof v === 'string' && v.includes(bundle.path))
-    const own = match(f).agent === bundle.harness && (rereads || f.startedAt == null || !Number.isFinite(since) || f.startedAt >= since)
+    const own = match(f).agent === bundle.harness && mayHaveRead(f, bundle.harness, m, byName)
     if (own || inherited) pids.push(f.pid)
   }
   return pids
@@ -274,10 +280,19 @@ async function uninstall(dir, { env = process.env, purgeData = false, scan = asy
       report.residue.push(w.path)
       noted.push({ code: CODE.residue, harness: w.harness, path: w.path, reason: `${w.path} appeared after install (${w.why}); it may serve the user's own plugins too, so asight did not remove it` })
     }
-    // step 5: report, never restart — append-semantics entries are read at start, so these still trust asight
-    // until: 'restart' (read at start: CC, Kimi shim, plugins), or what the descriptor says its harness re-reads
+    // step 5: report, never restart — only a process that may have read the entry; until: 'restart' (read at start: CC,
+    // Kimi shim, plugins), or what the descriptor says of this process (a function of its facts; null: it never read
+    // asight's entry, e.g. a kimi not started through the shim); each one is kept as an uninstall-note (review 3 #6)
     const injected = new Set([...m.entries, ...m.files].map((x) => x.harness).filter(Boolean))
-    for (const f of await scan()) { const a = match(f).agent; if (a && injected.has(a)) { const d = byName.get(a); report.still_trusting.push({ pid: f.pid, agent: a, until: (d && d.trust && d.trust.afterUninstall) || 'restart' }) } }
+    for (const f of await scan()) {
+      const a = match(f).agent
+      if (!a || !injected.has(a) || !mayHaveRead(f, a, m, byName)) continue
+      const au = (byName.get(a) || {}).trust?.afterUninstall
+      const until = typeof au === 'function' ? au(f, { collectorDir: dir, readText, home: env.HOME || os.homedir() }) : (au || 'restart')
+      if (!until) continue
+      report.still_trusting.push({ pid: f.pid, agent: a, until })
+      noted.push({ code: CODE.stillTrusting, harness: a, pid: f.pid, reason: `pid ${f.pid} (${a}) may still trust the asight CA ${UNTIL_TEXT[until] || UNTIL_TEXT.restart}; asight restarts nothing` })
+    }
     // the autostart unit (4.6 order: after the trust entries, before the CA key): disabled, removed, its wants/ links
     if (unitFile) {
       if (unit) { const r = unit.disable(); if (r && r.code !== 0) report.notes.push(`systemctl --user disable said: ${r.err || `exit ${r.code}`}; the unit file is removed all the same`) }

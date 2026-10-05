@@ -79,7 +79,8 @@ export default {
   inject,
   trust: {
     chain: [{ var: 'CODEX_CA_CERTIFICATE', semantic: 'replace' }, { var: 'SSL_CERT_FILE', semantic: 'replace' }],
-    rereadsEntry: true, // the bundle is read again for every HTTP client and WebSocket connection
+    // $CODEX_HOME/.env is applied once, at start: a codex from before install never named the bundle (no rereadsEntry).
+    // One started after it reads the bundle again for every HTTP client and WebSocket connection:
     afterUninstall: 'next-connection',
     hints: { shadowed: 'a CODEX_CA_CERTIFICATE exported in the shell is picked before the $CODEX_HOME/.env SSL_CERT_FILE' },
   },

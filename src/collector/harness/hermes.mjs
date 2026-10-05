@@ -151,8 +151,15 @@ export default {
       { name: 'routes with their own ssl_ca_cert', when: 'hermes:ssl_ca_cert', chain: [{ var: 'hermes:ssl_ca_cert', semantic: 'replace', list: true }] },
     ],
     disable: ['hermes:ssl_verify'],
-    rereadsEntry: true, // Linux main re-reads SSL_CERT_FILE at each new TLS context: a live Hermes may load the bundle again
-    afterUninstall: 'next-handshake',
+    rereadsEntry: true, // the CLI on /reload and a gateway that does not multiplex read .env again while running
+    // uninstall step 5: Linux main reads the bundle again at each new TLS context; a release build (or one without a
+    // readable stamp) and macOS are not shown to, so they are reported as trusting until restart
+    afterUninstall: (f, { readText, home }) => {
+      if (f.os !== 'linux') return 'restart'
+      let environ = new Map()
+      try { environ = f.env || environ } catch { /* gone */ }
+      return oldRelease(readText, checkout({ argv: f.argv || [], environ, home: environ.get('HOME') || home })) !== false ? 'restart' : 'next-handshake'
+    },
     hints: {
       shadowed: 'HERMES_CA_BUNDLE names a bundle without the asight CA, and this Hermes may be a release build that reads it first',
       'replace-without-ca': 'a provider ssl_ca_cert in config.yaml names a bundle without the asight CA; that route trusts only that file',

@@ -8,6 +8,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { controlSocketPath, controlRequest } from './core/control.mjs'
 import { recentFailures } from './core/events.mjs'
+import { UNTIL_TEXT } from './core/codes.mjs'
 import { collectorHome } from '../paths.mjs'
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -34,8 +35,6 @@ export function formatStatus(s) {
   return lines.join('\n')
 }
 
-// How long a running agent keeps trusting asight after uninstall (4.6 撤销顺序第 5 步), by its descriptor's afterUninstall.
-const UNTIL = { restart: 'until it restarts', 'next-connection': 'until its next new connection (it re-reads the bundle)', 'next-handshake': 'until its next TLS handshake (it re-reads the bundle)', 'session-end': 'until its current session ends' }
 
 // Durable failure records (D38), newest last: what failed, where, and why.
 export function formatFailures(list) {
@@ -110,7 +109,7 @@ export async function runCollector(argv, { env = process.env, home = os.homedir(
         return 0
       }
       const r = await uninstallCollector({ home, env, purgeData: rest.includes('--purge-data'), scan: parts.scan, match: parts.match, harnesses: parts.harnesses, osRootsFile: parts.osRootsFile, unit: unitOf(parts, home, script) })
-      out([`uninstalled (daemon: ${r.daemon}; ${r.kept_captures ? 'captures kept, --purge-data removes them' : 'captures removed'})`, ...r.entries.map((e) => `  ${e.harness}: ${e.path} ${e.result}`), ...(r.kept_bundles || []).map((k) => `  kept ${k.path} without the asight CA for pid ${k.pids.join(', ')}; run uninstall again once they exit`), ...r.still_trusting.map((p) => `  pid ${p.pid} (${p.agent}) trusts the asight CA ${UNTIL[p.until] || 'until it restarts'}`), ...(r.residue || []).map((p) => `  left in place: ${p}`), ...r.notes.map((n) => `note: ${n}`)].join('\n'))
+      out([`uninstalled (daemon: ${r.daemon}; ${r.kept_captures ? 'captures kept, --purge-data removes them' : 'captures removed'})`, ...r.entries.map((e) => `  ${e.harness}: ${e.path} ${e.result}`), ...(r.kept_bundles || []).map((k) => `  kept ${k.path} without the asight CA for pid ${k.pids.join(', ')}; run uninstall again once they exit`), ...r.still_trusting.map((p) => `  pid ${p.pid} (${p.agent}) trusts the asight CA ${UNTIL_TEXT[p.until] || UNTIL_TEXT.restart}`), ...(r.residue || []).map((p) => `  left in place: ${p}`), ...r.notes.map((n) => `note: ${n}`)].join('\n'))
       if (r.left) { err(`asight collector uninstall: ${r.left} item(s) could not be undone and stay in the install manifest; fix what is reported above, then run uninstall again`); return 1 }
       return 0
     } catch (e) { err(`asight collector ${verb}: ${e.message}`); return 1 }

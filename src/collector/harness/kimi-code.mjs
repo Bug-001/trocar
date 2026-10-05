@@ -89,6 +89,8 @@ export default {
       if (NODE.test(exe || argv[0] || '')) return 'kimi-npm-no-shim'
       return collectorDir && readText(path.join(collectorDir, 'bin', 'kimi')) == null ? 'shim-not-on-path' : 'kimi-not-via-shim'
     },
+    // uninstall step 5: only a kimi the shim started (its NODE_EXTRA_CA_CERTS is asight's file) ever trusted asight
+    afterUninstall: (f, { collectorDir }) => { let v = null; try { v = f.env && f.env.get(CA_VAR) } catch { /* gone */ } return typeof v === 'string' && v.startsWith(collectorDir + path.sep) ? 'restart' : null },
     hints: {
       'kimi-not-via-shim': "this kimi did not start through asight's shim (started before install, by its absolute path, from a shell that did not read the rc PATH line, or by an IDE); start it as `kimi` from a new shell",
       'shim-not-on-path': "asight installed no launch shim for Kimi Code (see the install note: no ~/.kimi-code/bin/kimi, or no installer PATH line in a shell rc)",
