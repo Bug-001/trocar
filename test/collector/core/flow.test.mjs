@@ -353,3 +353,30 @@ test('a socket error on either side reaches flows/ with its side (D38)', async (
   await h.close()
   assert.deepEqual([h.flows[0].decision, h.flows[0].error?.type, h.flows[0].error?.side], ['decrypt', 'ECONNRESET', 'client'])
 })
+
+// RFC 4.6 §记录: bytes_up / bytes_down are the agent's own connection's wire bytes,
+// the same measure for every path. They used to count only what relay() forwarded: decrypted flows counted
+// plaintext, and bytes written before relay (a CONNECT prelude and the proxy's reply, the first chunk of a
+// client-first splice) were missing.
+test('flows/ bytes_up / bytes_down == the agent socket\'s own counters: decrypted, through a CONNECT prelude, and a client-first splice', async () => {
+  const viaTls = (port, prelude) => new Promise((resolve) => {
+    const raw = net.connect(port, '127.0.0.1', () => { if (prelude) raw.write(prelude); else go() })
+    raw.on('error', () => {})
+    const go = () => { const t = tls.connect({ socket: raw, servername: 'upstream.test', ca: asightCa.certPem }, () => t.write(REQ)); t.resume(); t.on('error', () => {}); t.on('close', () => resolve(raw)) }
+    if (prelude) raw.once('data', go)
+  })
+  const counted = (h) => [h.flows[0].bytes_up, h.flows[0].bytes_down]
+  const d = await harness({ upstream: httpsUpstream((s) => s.on('data', () => s.end(RESP))) })
+  const r1 = await viaTls(d.port); await d.close()
+  assert.deepEqual(counted(d), [r1.bytesWritten, r1.bytesRead], 'decrypted: TLS records, handshake and closing alerts included')
+  const origin = httpsUpstream((s) => s.on('data', () => s.end(RESP))); const originPort = await listen(origin)
+  const proxy = connectProxy(originPort, 'HTTP/1.1 200 Connection established\r\n\r\n')
+  const t = await harness({ upstream: proxy.server })
+  const r2 = await viaTls(t.port, 'CONNECT upstream.test:443 HTTP/1.1\r\nHost: upstream.test:443\r\n\r\n')
+  await within(proxy.closed(), 'proxy legs closed'); await t.close(); origin.close()
+  assert.equal(t.flows[0].decision, 'tunnel'); assert.deepEqual(counted(t), [r2.bytesWritten, r2.bytesRead], 'the CONNECT prelude and the proxy reply count')
+  const s = await harness({ upstream: net.createServer((u) => u.once('data', (x) => u.end(Buffer.concat([x, x])))) })
+  const r3 = await new Promise((resolve) => { const c = net.connect(s.port, '127.0.0.1', () => c.write('hello?')); c.resume(); c.on('close', () => resolve(c)) })
+  await s.close()
+  assert.equal(s.flows[0].decision, 'splice'); assert.deepEqual(counted(s), [6, 12]); assert.deepEqual(counted(s), [r3.bytesWritten, r3.bytesRead])
+})

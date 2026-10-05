@@ -35,11 +35,24 @@ export function handleFlow(client, meta, ctx) {
     // a WebSocket connection: the recorder's summary (frames, calls, tail_raw, failures, …; RFC 4.6 §记录)
     const ws = activeTee && activeTee.wsSummary && activeTee.wsSummary()
     if (ws) { rec.transport = 'ws'; rec.ws = ws }
-    // recording never breaks teardown, and a record that was not written is not silent (D38)
-    let ok = true, why = null
-    try { ok = ctx.store.flow(rec) !== false } catch (e) { ok = false; why = e }
-    if (!ok) ctx.failure({ reason: 'flow-write-failed', flow_id: rec.flow_id, error: msgOf(why || ctx.store.lastError || 'the store did not write the flow record') })
-    resolveFlow(rec)
+    // bytes_up / bytes_down = the agent's own connection's wire bytes (RFC 4.6 §记录): read off the
+    // accepted socket once it has closed, so proxy preludes, TLS records (and the closing alerts after
+    // the flow ended) count on every path. A client that never closes its half gets written after 2 s.
+    let written = false, cap = null
+    const write = () => {
+      if (written) return
+      written = true
+      if (cap) clearTimeout(cap)
+      rec.bytes_up = client.bytesRead; rec.bytes_down = client.bytesWritten
+      // recording never breaks teardown, and a record that was not written is not silent (D38)
+      let ok = true, why = null
+      try { ok = ctx.store.flow(rec) !== false } catch (e) { ok = false; why = e }
+      if (!ok) ctx.failure({ reason: 'flow-write-failed', flow_id: rec.flow_id, error: msgOf(why || ctx.store.lastError || 'the store did not write the flow record') })
+      resolveFlow(rec)
+    }
+    if (client.destroyed) return write()
+    client.once('close', write)
+    cap = setTimeout(write, 2000); if (cap.unref) cap.unref()
   }
   // An exception inside the engine's own handling (a bug, or daemon-supplied code such as the policy
   // throwing) costs this one flow, never the collector, and is recorded (RFC 4.6 §记录, D38): flows/
@@ -94,9 +107,9 @@ export function handleFlow(client, meta, ctx) {
     // the recording side copy never throws into the forwarding path: a recorder that throws stops
     // recording this connection (recorded, D38) and the bytes keep flowing
     const copy = (fn) => { if (!tee) return; try { fn(tee) } catch (e) { tee = null; activeTee = null; ctx.failure({ reason: 'engine-error', flow_id: rec.flow_id, error: `recording stopped: ${msgOf(e)}` }) } }
-    cSock.on('data', (d) => { rec.bytes_up += d.length; copy((t) => t.fromClient(d)); if (uSock.writable && !uSock.write(d)) cSock.pause() })
+    cSock.on('data', (d) => { copy((t) => t.fromClient(d)); if (uSock.writable && !uSock.write(d)) cSock.pause() })
     uSock.on('drain', () => cSock.resume())
-    uSock.on('data', (d) => { rec.bytes_down += d.length; copy((t) => t.fromUpstream(d)); if (cSock.writable && !cSock.write(d)) uSock.pause() })
+    uSock.on('data', (d) => { copy((t) => t.fromUpstream(d)); if (cSock.writable && !cSock.write(d)) uSock.pause() })
     cSock.on('drain', () => uSock.resume())
     // the first socket error of the flow, with its side, goes to flows/ (D38)
     const noteError = (e, side) => { if (e instanceof Error && !rec.error) rec.error = { type: e.code || 'error', message: msgOf(e), side } }
@@ -124,7 +137,7 @@ export function handleFlow(client, meta, ctx) {
       // upstream spoke first → splice (RFC 4.6 §引擎 2)
       setDecision('splice', isTunnel)
       if (chunks.length) uSock.write(Buffer.concat(chunks))
-      if (d && d.length) { rec.bytes_down += d.length; cSock.write(d) }
+      if (d && d.length) cSock.write(d)
       relay(cSock, uSock)
     })
     const cleanup = () => { cSock.removeListener('data', onClient); uSock.removeListener('data', onUpFirst) }
@@ -303,7 +316,6 @@ export function handleFlow(client, meta, ctx) {
         recordStore: ctx.store, isRecording: ctx.isRecording, wsTerminal: meta.wsTerminal ?? null,
       })
       activeTee.fromClient(buf)
-      rec.bytes_up += buf.length
       uSock.write(buf)
       relay(cSock, uSock)
     } else {
