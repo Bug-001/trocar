@@ -30,6 +30,27 @@ test('envelope: a response that never arrived is an error envelope', () => {
   assert.equal(env.error, true); assert.equal(env.resp.kind, 'error'); assert.equal(env.resp.error.type, 'ECONNRESET')
 })
 
+test('envelope: a request body cut at the cap is labelled req_truncated + req_body_bytes; an uncut one carries neither (invariant 4)', () => {
+  const mk = (target, body, truncated) => buildTransparentEnvelope({ id: 'r3', flow: FLOW, seq: 0, error: null,
+    req: { head: { ...head(`POST ${target} HTTP/1.1\r\n\r\n`), method: 'POST', target, headers: [] }, body: Buffer.from(body), truncated, tsStart: '2026-10-05T00:00:00.000Z' },
+    resp: { head: { ...head('HTTP/1.1 200 OK\r\n\r\n'), status: 200, headers: [] }, body: Buffer.alloc(0), truncated: false, tsStart: '2026-10-05T00:00:01.000Z', tsEnd: '2026-10-05T00:00:02.000Z' } })
+  const cut = mk('/v1/messages', '{"model":"m","mess', true)
+  assert.equal(cut.req_truncated, true); assert.equal(cut.req_body_bytes, 18)
+  assert.equal(cut.req_body, '{"model":"m","mess')   // the captured prefix is still stored as-is
+  const keys = Object.keys(cut)
+  for (const k of ['req_truncated', 'req_body_bytes']) assert.ok(keys.indexOf(k) > keys.indexOf('req_body'), k)
+  assert.equal(mk('/api/event_logging/batch', 'abcd', true).req_truncated, true)   // non-LLM {raw_chars} too
+  const whole = mk('/v1/messages', '{"model":"m"}', false)
+  for (const k of ['req_truncated', 'req_body_bytes', 'req_partial']) assert.equal(k in whole, false, k)
+})
+
+test('envelope: a request body that never finished carries req_partial:<reason> after req_body (invariant 4)', () => {
+  const env = buildTransparentEnvelope({ id: 'r4', flow: FLOW, seq: 0, resp: null, error: { type: 'ECONNRESET', message: 'reset' },
+    req: { head: { ...head('POST /v1/messages HTTP/1.1\r\n\r\n'), method: 'POST', target: '/v1/messages', headers: [] }, body: Buffer.from('{"mo'), truncated: false, partial: 'aborted', tsStart: '2026-10-05T00:00:00.000Z' } })
+  assert.equal(env.req_partial, 'aborted'); assert.equal(env.req_body, '{"mo'); assert.equal('req_truncated' in env, false)
+  const keys = Object.keys(env); assert.ok(keys.indexOf('req_partial') > keys.indexOf('req_body'))
+})
+
 test('store: 0600 files, 0700 dirs, streams split by kind, write errors never throw', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-store-'))
   const s = createRecordStore({ root })

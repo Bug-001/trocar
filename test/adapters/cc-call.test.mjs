@@ -64,3 +64,10 @@ test('B-env: a FULL D10 envelope inflates unmapped_count by ONLY a novel field (
   assert.equal(withNovel.unmapped_count, 1); // ONLY the novel field
   assert.deepEqual(withNovel.extra, { novel_probe: 42 });
 });
+
+test('collector body-incomplete labels survive into calls.extra, never consumed away (invariant 4)', () => {
+  const labels = { req_truncated: true, req_body_bytes: 4, req_partial: 'aborted' };
+  const c = parseCall(ccFullEnvelopeRecord(labels));
+  assert.deepEqual(c.extra, labels);
+  assert.equal(c.unmapped_count, 3);
+});
