@@ -55,13 +55,15 @@ export function shellCall(names) {
 // so a test (or a person watching an agent) can tell what actually reached the upstream.
 // `seen` = { kind: 'text' | 'tool_result', text } from the dialect's reading of the last user turn.
 // A tool result is always answered with text, never another call: the scenario marker that asked
-// for the call is still in the history, and answering it again would loop the agent forever.
+// for the call is still in the history, and answering it again would loop the agent forever. A
+// request that declares no tools gets text too, as from a real provider: agents' side calls (titles,
+// summaries, compaction) carry the typed marker but no tools.
 export function plan(seen, raw, body, sc = {}) {
   const head = seen.kind === 'tool_result' ? 'mock-reply: tool-result-received ' : 'mock-reply: '
   const text = `${head}${Array.from(seen.text || '').slice(0, 80).join('')} sha256:${sha256(raw).slice(0, 12)}`
   const thinking = sc.thinking ? `mock-thinking: the last user turn is ${(seen.text || '').length} chars long` : null
   const names = (Array.isArray(body.tools) ? body.tools : []).map((t) => t?.name || t?.function?.name).filter(Boolean)
-  const tool = sc.tool && seen.kind !== 'tool_result' ? shellCall(names) : null
+  const tool = sc.tool && seen.kind !== 'tool_result' && names.length ? shellCall(names) : null
   return {
     model: body.model || 'mock-model', text, parts: splitEvery(text, 12),
     thinking, thinkingParts: thinking && splitEvery(thinking, 12), tool, toolArgs: tool && JSON.stringify(tool.input),
