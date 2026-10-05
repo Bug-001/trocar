@@ -268,7 +268,7 @@ export async function buildResolver(source, { retryMs = 30000, lister = listRoot
   const listFiles = (skipped) => {
     const ls = lister(sourcePath); // throws if the root cannot be listed (broken ≠ empty)
     scan.superseded = ls.superseded || []; scan.mismatched = ls.mismatched || [];
-    if (skipped) skipped.push(...ls.skipped);
+    if (skipped) skipped.push(...ls.skipped.map(({ name, reason }) => ({ name, reason })));
     return [...ls.files];
   };
   files.push(...listFiles(scan.skipped));

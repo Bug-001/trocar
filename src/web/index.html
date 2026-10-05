@@ -472,6 +472,7 @@
 <div id="rails"></div>
 <div id="truncbar" style="display:none"></div>
 <div id="srcbar" style="display:none"></div>
+<div id="srcerrbar" style="display:none"></div>
 
 <main>
   <div id="ctxnav"></div>
@@ -641,6 +642,18 @@ function renderSourceHealth(h){
   bar.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #7a5b18;background:#241d0b;color:#e8c15a;border-radius:5px;font-size:11px;line-height:1.45'
 }
 
+// No silent failure (user requirement 2026-10-06): a capture file the server could not read in full —
+// typically a damaged sealed file (D35) — arrives as `source_errors`. The board still shows what it
+// could read, and says, right here, what it could not. Never rendered as a smaller-but-healthy board.
+function showSourceErrors(list){
+  const el=document.getElementById('srcerrbar'); if(!el) return
+  const byFile=new Map(); for(const e of list||[]) if(e&&e.file&&!byFile.has(e.file)) byFile.set(e.file,e)
+  if(!byFile.size){ el.style.display='none'; el.innerHTML=''; return }
+  el.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #7a2b18;background:#2a1210;color:#f08a6a;border-radius:5px;font-size:11px;line-height:1.45'
+  el.innerHTML=`⚠ 源文件读不全 · ${byFile.size} capture file(s) could not be read as-is — the view below is missing what they hold or shows both copies; the files stay on disk (check with <code>asight raw verify</code>):<br>`
+    +[...byFile.values()].map(e=>`<b>${esc(String(e.file).split('/').pop())}</b> — ${e.kind==='coexist-mismatch'?'original and sealed copy differ, both shown':(e.unreadableRecords!=null?e.unreadableRecords+' record(s) unreadable':'unreadable')}: ${esc(String(e.reason||''))}`).join('<br>')
+}
+
 async function poll(){
   try{
     const sel=document.getElementById('fileSel')
@@ -655,6 +668,7 @@ async function poll(){
       lastCheapSig=null; lastRenderSig=null; document.getElementById('dot').classList.remove('on')
       return
     }
+    showSourceErrors(pj.source_errors)
     const projects=pj.projects||[]
     renderSourceHealth(pj.source) // before any early return: "no sessions" next to "2 files not read" is the point
     projectsFlat=projects.flatMap(p=>p.sessions||[])
@@ -715,6 +729,7 @@ async function poll(){
       return
     }
     pageInfo=d.page||null
+    showSourceErrors([...(pj.source_errors||[]),...(d.source_errors||[])])
     // BUG 1 · self-correct. The server may assemble FEWER calls than /api/projects counted (a large
     // session is tail-bounded server-side BEFORE paging is applied — see the WIRING GAP note in the
     // audit). If our window landed entirely past what it actually assembled, every call would render

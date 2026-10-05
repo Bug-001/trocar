@@ -57,10 +57,11 @@ function scanRoot(root, fs) {
     // opened (src/paths.mjs isCaptureFile / skipReason, the classifier read-cc-line gave the readers).
     if (!e.isDirectory()) {
       if (isCaptureFile(root, e) || (isSealedPath(e.name) && fileLike(fs, root, e))) files.push(p);
-      else skipped.push({ name: e.name, reason: skipReason(root, e).reason });
+      else skipped.push({ name: e.name, ...skipReason(root, e) });   // reason + attention: may it hold capture bytes?
       continue;
     }
-    let sub; try { sub = fs.readdirSync(p, { withFileTypes: true }); } catch { skipped.push({ name: e.name, reason: 'directory' }); continue; }
+    const dirSkip = { name: e.name, reason: 'directory', attention: e.name.endsWith('.ndjson') };
+    let sub; try { sub = fs.readdirSync(p, { withFileTypes: true }); } catch { skipped.push(dirSkip); continue; }
     let took = false;
     for (const s of sub.sort((a, b) => (a.name < b.name ? -1 : 1))) {
       if (s.isDirectory()) continue;
@@ -71,15 +72,14 @@ function scanRoot(root, fs) {
       const sameDir = src && src.every((x) => path.dirname(x.abs) === p);
       if (!src || !sameDir || streamOfSealed(s.name) === 'calls.ndjson') { files.push(q); took = true; }
     }
-    if (!took) skipped.push({ name: e.name, reason: 'directory' });
+    if (!took) skipped.push(dirSkip);
   }
   return { files, skipped };
 }
 
-// roots → { files (to read, in a stable order), perRoot, skipped, superseded, mismatched, sig }.
-export function listSources(roots, { fs = nodeFs } = {}) {
-  const perRoot = roots.map((root) => ({ root, ...scanRoot(root, fs) }));
-  const all = perRoot.flatMap((r) => r.files);
+// Coexistence over an explicit list of files (a session dir, the control dir, or a whole scan): drop
+// sealed files superseded by an original that is IN THIS LIST and still the very file that was sealed.
+export function resolveCoexistence(all, { fs = nodeFs } = {}) {
   const originals = new Map();
   for (const f of all) if (!isSealedPath(f)) originals.set(path.resolve(f), f);
   const superseded = [], mismatched = [], drop = new Set();
@@ -92,11 +92,18 @@ export function listSources(roots, { fs = nodeFs } = {}) {
       if (!o) return null;
       let st; try { st = fs.statSync(o); } catch { return null; }
       const same = st.size === s.length && st.ino === s.ino && st.mtimeMs === s.mtimeMs;
-      if (!same) mismatched.push({ sealed: f, original: o, why: `the file at the original path is not the one that was sealed (size ${st.size} vs ${s.length})` });
+      if (!same) mismatched.push({ sealed: f, original: o, why: `the file at the original path is not the one that was sealed (size ${st.size} vs ${s.length}) — both are read` });
       return same ? o : null;
     });
     if (present.length && present.every(Boolean)) { drop.add(f); superseded.push({ sealed: f, original: present[0] }); }
   }
+  return { files: all.filter((f) => !drop.has(f)), superseded, mismatched, drop };
+}
+
+// roots → { files (to read, in a stable order), perRoot, skipped, superseded, mismatched, sig }.
+export function listSources(roots, { fs = nodeFs } = {}) {
+  const perRoot = roots.map((root) => ({ root, ...scanRoot(root, fs) }));
+  const { superseded, mismatched, drop } = resolveCoexistence(perRoot.flatMap((r) => r.files), { fs });
   for (const r of perRoot) r.files = r.files.filter((f) => !drop.has(f));
   const files = perRoot.flatMap((r) => r.files);
   const sig = files.map((f) => { try { const s = fs.statSync(f); return `${f}:${s.size}.${Math.round(s.mtimeMs)}`; } catch { return ''; } }).join('|') || '∅dir';

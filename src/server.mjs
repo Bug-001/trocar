@@ -18,7 +18,6 @@ import { openDb, DEFAULT_DB_PATH } from './db.mjs';
 import { listSessions, sessionCalls, sessionComposition, sessionResources, callContext,
   filesEverInContext, cacheHitDistribution, breakKindComparison, unmappedFields, forkTree } from './query/queries.mjs';
 import { buildResolver } from './query/source.mjs';
-import { isCaptureFile, skipReason } from './paths.mjs';
 import { readRecords } from './etl/ingest.mjs';
 import { projectsView, projectsViewFromMetas, sessionView, controlView, forWire } from './view/board.mjs';
 import { sessionIdOf } from './view/assemble.mjs';
@@ -26,6 +25,8 @@ import { createLru, memoKey } from './query/memo.mjs';
 import { loadPricing } from './view/pricing.mjs';
 import { randomBytes } from 'node:crypto';
 import { monitoringStatus, monitoringOn, monitoringOff } from './capture/control.mjs';
+import { listSources, resolveCoexistence, isSealedPath, sealedSources } from './raw/discover.mjs';
+import { sealedReadProblem } from './raw/journal.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = path.join(HERE, 'web'); // src/web — the reused demo board (self-contained index.html)
@@ -129,62 +130,61 @@ async function serveStatic(res, urlPath) {
 // size.mtime.ctime: ctime too, because a permission fix (chmod) changes nothing else, and a file that
 // could not be read must be retried — and its session views rebuilt — once it can be.
 const fileSig = (st) => `${st.size}.${Math.round(st.mtimeMs)}.${st.ctimeMs}`;
+// Flat *.ndjson in the root (one file per physical capture source, D20), PLUS the per-session
+// shards ETL writes at <root>/<session-id>/calls.ndjson, PLUS sealed files standing where those
+// streams would be read (D35). The descent is deliberately ONE level and limited to that one
+// filename: the original scan was flat precisely so that a source path anywhere near ~/.atrace
+// could not pull in the v0 demo's multi-GB per-project dumps, and a subdirectory is not an
+// invitation to load whatever NDJSON sits in it. The rule — which copy wins while an original and
+// its sealed copy coexist, and the reason for every entry NOT read (a dangling link, a compressed
+// capture; 4.4:83, never folded into empty) — lives in src/raw/discover.mjs, shared with the resolver.
+const sigOf = (files) => files.map((f) => { try { return `${f}:${fileSig(fssync.statSync(f))}`; } catch { return ''; } }).join('|') || '∅dir';
 export function sourceFiles(sourcePath) {
-  const st = fssync.statSync(sourcePath); // throws if missing → caller resets sig
-  if (!st.isDirectory()) return { files: [sourcePath], skipped: [], sig: fileSig(st) };
-  // Flat *.ndjson in the root (one file per physical capture source, D20), PLUS the per-session
-  // shards ETL writes at <root>/<session-id>/calls.ndjson.
-  //
-  // The descent is deliberately ONE level and deliberately limited to that single filename. The
-  // original scan was flat precisely so that a source path anywhere near ~/.atrace could not pull
-  // in the v0 demo's multi-GB per-project dumps; a general recursive walk would undo that. A
-  // subdirectory is also not an invitation to load whatever NDJSON is sitting in it — that is how a
-  // stray export gets rendered as if it were captured traffic.
-  const entries = fssync.readdirSync(sourcePath, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1));
-  const files = [], skipped = [];
-  // Everything not read is listed with its reason (4.4:83 — never folded into empty): the caller
-  // shows it, so a dangling link or a compressed capture cannot drop off the board without a word.
-  const skip = (e) => skipped.push({ root: sourcePath, name: e.name, ...skipReason(sourcePath, e) });
-  for (const e of entries) {
-    // a symlinked capture counts (paths.mjs isCaptureFile): isFile() alone left links off the board
-    if (isCaptureFile(sourcePath, e)) { files.push(path.join(sourcePath, e.name)); continue; }
-    if (!e.isDirectory()) { skip(e); continue; }
-    const shard = path.join(sourcePath, e.name, 'calls.ndjson');
-    let isShard = false;
-    try { isShard = fssync.statSync(shard).isFile(); } catch { /* not a shard dir */ }
-    if (isShard) files.push(shard); else skip(e);
-  }
-  const sig = files.map((f) => { try { return `${path.basename(f)}:${fileSig(fssync.statSync(f))}`; } catch { return ''; } }).join('|') || '∅dir';
-  return { files, skipped, sig };
+  const r = listSources([sourcePath]); // throws if missing → caller resets sig
+  return { files: r.files, skipped: r.skipped.map((x) => ({ root: sourcePath, ...x })), sig: sigOf(r.files), superseded: r.superseded, mismatched: r.mismatched };
 }
-// Every root's capture files, each read once, plus everything NOT read and why (4.4:83). A
-// subdirectory that is itself one of the roots (~/.asight/collector under ~/.asight) is read as a
-// root, so it is not listed as skipped. Throws if a root cannot be listed (broken ≠ empty), unless
-// `tolerant`: then that root is listed as `root-unreadable` and the others are still scanned.
+// What went wrong reading a set of files, as the board labels it (`source_errors`). A sealed file
+// that could not be read in full is COUNTED and named, never a silently shorter board (user
+// requirement 2026-10-06); the readable records of it still show.
+const coexistNotes = (mismatched) => mismatched.map((m) => ({ file: m.sealed, kind: 'coexist-mismatch', reason: m.why }));
+async function readAll(files, out, errors) {
+  for (const f of files) {
+    const recs = await readRecords(f, { normalize: false });
+    const problem = sealedReadProblem(recs.scan);
+    if (problem) errors.push(problem);
+    for (const r of recs) out.push(r);
+  }
+}
+// Every root's capture files, each read once, plus everything NOT read and why (4.4:83). ONE
+// coexistence decision across all roots (4.2 「并存期」: an original in the collector root, its copies
+// in the sessions root). A subdirectory that is itself one of the roots (~/.asight/collector under
+// ~/.asight) is read as a root, so it is not listed as skipped. Throws if a root cannot be listed
+// (broken ≠ empty), unless `tolerant`: then that root is listed as `root-unreadable` and the others
+// are still scanned.
 export function scanRoots(roots, { tolerant = false } = {}) {
-  const failed = [];
-  const parts = roots.map((r) => {
-    try { return sourceFiles(r); }
+  const failed = [], good = [];
+  for (const r of roots) {
+    try { listSources([r]); good.push(r); }
     catch (e) {
       if (!tolerant) throw e;
       failed.push({ root: path.dirname(r), name: path.basename(r), reason: 'root-unreadable', error: (e && e.code) || String(e), attention: true });
-      return { files: [], skipped: [], sig: '' };
     }
-  });
+  }
+  const ls = listSources(good);
   const rootSet = new Set(roots.map((r) => path.resolve(r)));
-  const skipped = failed.concat(parts.flatMap((p) => p.skipped)
+  const skipped = failed.concat(ls.perRoot.flatMap((p) => p.skipped.map((x) => ({ root: p.root, ...x })))
     .filter((x) => !(x.reason === 'directory' && rootSet.has(path.resolve(x.root, x.name)))));
   // One file, read once: a capture linked from one root to a file in another root (a symlink is a
   // capture too, paths.mjs isCaptureFile) would otherwise be read twice and every call in it
   // doubled. Keyed by real path; the first root to name a file keeps it, the other is listed.
   const seen = new Map();
-  const files = parts.flatMap((p) => p.files).filter((f) => {
+  const files = ls.files.filter((f) => {
     let k; try { k = fssync.realpathSync(f); } catch { k = f; }
     if (!seen.has(k)) { seen.set(k, f); return true; }
     skipped.push({ root: path.dirname(f), name: path.basename(f), reason: 'same-file', of: seen.get(k), attention: false });
     return false;
   });
-  return { files, skipped, sig: parts.map((p) => p.sig).join('#') };
+  return { files, skipped, sig: sigOf(files), superseded: ls.superseded, mismatched: ls.mismatched };
 }
 
 // The offset just past the last newline in [from, size) — `from` if there is none. Reading only that
@@ -209,13 +209,13 @@ function completeEnd(f, from, size) {
 // invariant-2 loss with no file deleted and no error raised.
 function makeRecordLoader(source, { retryMs = 30000 } = {}) {
   const roots = (Array.isArray(source) ? source : [source]).filter(Boolean);
-  let cache = { sig: null, records: [], passSkips: [], at: 0, loadSig: null };
+  let cache = { sig: null, records: [], passSkips: [], at: 0, loadSig: null, sourceErrors: [] };
   // per-file watermark: path -> { size, records } — the byte offset already consumed and what it
   // yielded, so a refresh parses only the tail.
   let marks = new Map();
   const load = async () => {
     if (!roots.length) { load.sig = '∅'; return []; }
-    let files = [], sig;
+    let files = [], sig, listed;
     // A source that cannot be STATTED under a live board (deleted, rotated away, its directory made
     // unreadable) used to be swallowed into an empty record set — the board then calmly renders "no
     // sessions captured yet" about a capture that is broken or still being written. Broken MUST NOT
@@ -227,7 +227,8 @@ function makeRecordLoader(source, { retryMs = 30000 } = {}) {
     // existing comment already refuses to allow for a single source, and which multiplying the roots
     // would otherwise reintroduce through the back door.
     try {
-      ({ files, sig, skipped: load.skipped } = scanRoots(roots));
+      listed = scanRoots(roots);   // one coexistence decision across ALL roots (4.2 「并存期」)
+      ({ files, sig, skipped: load.skipped } = listed);
     } catch (e) {
       load.sig = '0';
       throw new Error(`capture source unreadable (${roots.join(', ')}): ${String((e && e.message) || e)}`);
@@ -237,7 +238,7 @@ function makeRecordLoader(source, { retryMs = 30000 } = {}) {
     // error can clear with no stat change). Its load.sig is tagged, so session views built from it
     // are rebuilt once the failure clears.
     if (cache.sig === sig && !(cache.passSkips.length && Date.now() - cache.at >= retryMs)) {
-      load.sig = cache.loadSig; load.skipped.push(...cache.passSkips); return cache.records;
+      load.sig = cache.loadSig; load.skipped.push(...cache.passSkips); load.sourceErrors = cache.sourceErrors; return cache.records;
     }
 
     // INCREMENTAL: read only the bytes that arrived since last time (spec 4.2:49).
@@ -254,6 +255,7 @@ function makeRecordLoader(source, { retryMs = 30000 } = {}) {
     // `load.resets` rather than being handled silently (invariant 4).
     const records = [];
     const resets = [], pending = {};
+    const sourceErrors = coexistNotes(listed.mismatched);
     const nextMarks = new Map();
     const passSkips = [];
     for (const f of files) {
@@ -262,49 +264,60 @@ function makeRecordLoader(source, { retryMs = 30000 } = {}) {
         passSkips.push({ root: path.dirname(f), name: path.basename(f), reason: 'vanished', attention: true }); continue;
       }
       const prev = marks.get(f);
-      let from = 0, keep = [];
-      if (prev && size >= prev.size) { from = prev.size; keep = prev.records; }
+      let from = 0, keep = [], problem = null;
+      if (prev && size >= prev.size) { from = prev.size; keep = prev.records; problem = prev.problem; }
       else if (prev) { resets.push({ file: f, was: prev.size, now: size, why: 'file shrank — rotated, truncated or replaced' }); }
+      // A sealed file never grows (D35): read whole, once, frame by frame; what it could not yield is
+      // counted and named (`source_errors`), its readable records still show.
+      const sealed = isSealedPath(f);
       // The watermark is the end of the last COMPLETE line, not the file size: a record caught
       // half-written used to be parsed torn (counted corrupt) and its remainder then dropped as a
       // fragment on the next pass, so it never reached the board.
       let end, fresh, tail = [];
       try {
-        end = completeEnd(f, from, size);
-        fresh = await readRecords(f, { normalize: false, startOffset: from, endOffset: end });
-        // The bytes after the last newline are a record mid-write, a writer that stopped mid-line, or
-        // a complete last record with no trailing newline. Parsed provisionally: shown when it parses,
-        // never kept in the mark (the next pass reads it again from `end`), reported when it does not.
-        if (end < size) {
-          tail = await readRecords(f, { normalize: false, startOffset: end, endOffset: size });
-          if (!tail.length) pending[f] = size - end;
+        if (sealed) {
+          end = size;
+          fresh = from > 0 ? [] : await readRecords(f, { normalize: false });
+          if (!from) problem = sealedReadProblem(fresh.scan);
+        } else {
+          end = completeEnd(f, from, size);
+          fresh = await readRecords(f, { normalize: false, startOffset: from, endOffset: end });
+          // The bytes after the last newline are a record mid-write, a writer that stopped mid-line, or
+          // a complete last record with no trailing newline. Parsed provisionally: shown when it parses,
+          // never kept in the mark (the next pass reads it again from `end`), reported when it does not.
+          if (end < size) {
+            tail = await readRecords(f, { normalize: false, startOffset: end, endOffset: size });
+            if (!tail.length) pending[f] = size - end;
+          }
         }
       } catch (e) {
         // Unreadable (EACCES, EIO, or gone after the stat): reported, and what it already yielded is
         // kept. It is retried when its stat changes (the sig carries ctime, which a chmod changes);
         // until then the cached pass, and this report, are served without touching it again.
         passSkips.push({ root: path.dirname(f), name: path.basename(f), reason: 'unreadable', error: (e && e.code) || String(e), attention: true });
-        if (prev && from > 0) { nextMarks.set(f, prev); for (const r of prev.records) records.push(r); }
+        if (prev && from > 0) { nextMarks.set(f, prev); for (const r of prev.records) records.push(r); if (prev.problem) sourceErrors.push(prev.problem); }
         continue;
       }
+      if (problem) sourceErrors.push(problem);
       size = end;
       const all = from > 0 ? keep.concat(fresh) : fresh;
       // lines that held a record readRecords could not parse: counted per file and shown (invariant 4)
       const corrupt = (from > 0 ? prev.corrupt || 0 : 0) + ((fresh.scan && fresh.scan.skippedLines) || 0);
-      nextMarks.set(f, { size, records: all, corrupt });
+      nextMarks.set(f, { size, records: all, corrupt, problem });
       for (const r of all) records.push(r);
       for (const r of tail) records.push(r); // provisional: not in the mark
     }
     marks = nextMarks;   // files no longer listed drop out, releasing their records
     load.resets = resets; load.pending = pending;
     load.corrupt = Object.fromEntries([...marks].filter(([, m]) => m.corrupt).map(([f, m]) => [f, m.corrupt]));
+    load.sourceErrors = sourceErrors;
     const at = Date.now(), loadSig = passSkips.length ? `${sig}|unread@${at}` : sig;
-    cache = { sig, records, passSkips, at, loadSig };
+    cache = { sig, records, passSkips, at, loadSig, sourceErrors };
     load.sig = loadSig;
     load.skipped.push(...passSkips);
     return records;
   };
-  load.sig = null; load.skipped = []; load.resets = []; load.corrupt = {}; load.pending = {};
+  load.sig = null; load.skipped = []; load.resets = []; load.corrupt = {}; load.pending = {}; load.sourceErrors = [];
   return load;
 }
 
@@ -415,10 +428,19 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         // A session dir has meta.json (the archive-layer summary) or at least one stream file. Keying
         // on any stream — not just calls.ndjson — means a probes-only session still lists.
         if (fssync.existsSync(path.join(dir, 'meta.json'))
-          || SESSION_STREAMS.some((s) => fssync.existsSync(path.join(dir, s)))) dirs.push(dir);
+          || SESSION_STREAMS.some((s) => fssync.existsSync(path.join(dir, s)))
+          || sealedOfStreams(dir).length) dirs.push(dir);
       }
     }
     return dirs;
+  };
+  // A shard dir's inputs: its stream files and every sealed file in it (D35: legacy streams sealed in
+  // place, or per-session files of a collector shard), one copy per line (src/raw/discover.mjs).
+  const sealedIn = (dir) => { try { return fssync.readdirSync(dir).filter((n) => isSealedPath(n)).sort().map((n) => path.join(dir, n)); } catch { return []; } };
+  const sealedOfStreams = (dir) => sealedIn(dir).filter((f) => SESSION_STREAMS.some((st) => path.basename(f).startsWith(st + '.')));
+  const shardInputs = (dir, names) => {
+    const originals = names.map((n) => path.join(dir, n)).filter((f) => fssync.existsSync(f));
+    return resolveCoexistence([...originals, ...sealedIn(dir)]);
   };
   const loadSessionMetas = () => {
     const dirs = shardDirsOf();
@@ -480,33 +502,42 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
       // 4.2:39) resolves back to the right shard file. The board re-derives call/probe/other from
       // is_llm_call/endpoint, so concatenation order is immaterial (assembleSession sorts by ts).
       const out = [];
-      for (const s of SESSION_STREAMS) {
-        const f = path.join(hit, s);
-        if (fssync.existsSync(f)) out.push(...await readRecords(f, { normalize: false }));
-      }
+      const inputs = shardInputs(hit, SESSION_STREAMS);
+      out.sourceErrors = coexistNotes(inputs.mismatched);
+      await readAll(inputs.files, out, out.sourceErrors);
       return out;
     }
     // flat source, or an id that isn't its own shard → fall back to the whole corpus, filtered.
-    return (await loadRecords()).filter((r) => sessionIdOf(r) === id);
+    const out = (await loadRecords()).filter((r) => sessionIdOf(r) === id);
+    out.sourceErrors = loadRecords.sourceErrors || [];
+    return out;
   };
   // Session-less control-plane records now live in `control/*.ndjson` (4.2:51), NOT the top-level files
   // loadRecords reads. On a sharded source, read those; else fall back to filtering the flat corpus.
   const loadControlRecords = async () => {
     const roots = (Array.isArray(sourcePath) ? sourcePath : [sourcePath]).filter(Boolean);
     const out = [];
+    out.sourceErrors = [];
     let sharded = false;
     for (const root of roots) {
       const cdir = path.join(root, 'control');
       let ents; try { ents = fssync.readdirSync(cdir, { withFileTypes: true }); } catch { continue; }
       sharded = true;
-      for (const e of ents) {
-        if (e.isFile() && e.name.endsWith('.ndjson')) out.push(...await readRecords(path.join(cdir, e.name), { normalize: false }));
-      }
+      const inputs = shardInputs(cdir, ents.filter((e) => e.isFile() && e.name.endsWith('.ndjson')).map((e) => e.name));
+      out.sourceErrors.push(...coexistNotes(inputs.mismatched));
+      await readAll(inputs.files, out, out.sourceErrors);
     }
     if (sharded) return out;
-    return (await loadRecords()).filter((r) => !sessionIdOf(r)); // flat source: control = the session-less records
+    const flat = (await loadRecords()).filter((r) => !sessionIdOf(r)); // flat source: control = the session-less records
+    flat.sourceErrors = loadRecords.sourceErrors || [];
+    return flat;
   };
 
+  // The session list of a shard root comes from meta.json, without reading records — so check the
+  // sealed files there can at least be opened, or a damaged one would be invisible until clicked.
+  const unreadableSealedInShards = () => shardDirsOf().flatMap((d) => sealedIn(d))
+    .filter((f) => !sealedSources(f)).map((f) => ({ file: f, reason: 'sealed file could not be opened (header, index tail or checksum damaged)', unreadableRecords: null }));
+  const withErrors = (body, errors) => (errors && errors.length ? { ...body, source_errors: errors } : body);
   const sessionMemo = createLru(8); // D21: assembled per-session views keyed by (id, source sig, strategy)
   const csrf = control ? randomBytes(18).toString('hex') : null; // D26: per-process CSRF token
 
@@ -532,9 +563,9 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         // Archive layer: on a sharded source, list from the precomputed metas — never load a record,
         // so a 7.4 GB / 24-session capture enumerates instantly instead of OOM-ing.
         const metas = loadSessionMetas();
-        if (metas) return sendJson(res, 200, { ...projectsViewFromMetas(metas, { enrich }), source: await sourceHealth(metas) });
+        if (metas) return sendJson(res, 200, withErrors({ ...projectsViewFromMetas(metas, { enrich }), source: await sourceHealth(metas) }, unreadableSealedInShards()));
         const view = projectsView(await loadRecords(), { enrich });
-        return sendJson(res, 200, { ...view, source: await sourceHealth(null) });
+        return sendJson(res, 200, withErrors({ ...view, source: await sourceHealth(null) }, loadRecords.sourceErrors));
       }
       if (p === '/api/session') {
         const id = url.searchParams.get('id');
@@ -569,11 +600,12 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         // forWire, not the view itself: the memo holds the full assembled object (server-side
         // callers read `steps`), while the response carries only what the board reads — one copy
         // of each call instead of three.
-        return sendJson(res, 200, forWire(view));
+        return sendJson(res, 200, withErrors(forWire(view), records.sourceErrors));
       }
       if (p === '/api/control') {
         const cls = url.searchParams.get('class');
-        return sendJson(res, 200, controlView(await loadControlRecords(), cls));
+        const ctl = await loadControlRecords();
+        return sendJson(res, 200, withErrors(controlView(ctl, cls), ctl.sourceErrors));
       }
       if (p === '/api/pricing') { // D14: editable unit-price config (cost = usage × price, derived)
         const { pricing, source } = loadPricing();
