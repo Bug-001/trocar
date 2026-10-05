@@ -18,6 +18,16 @@ test('procinfo: status, cwd and start time come from /proc; a vanished pid is nu
   } finally { p.done() }
 })
 
+test('procinfo: with /proc/uptime the start time is placed on the wall clock to the tick, not on whole-second btime', () => {
+  const p = fakeProc()
+  try {
+    p.add(321, { exe: '/opt/alpha', startTicks: 250 }) // started 2.5 s after boot
+    fs.writeFileSync(path.join(p.root, 'uptime'), '100.37 400.00\n') // up for 100.37 s at `now`
+    const now = () => 1_800_000_000_000
+    assert.equal(readStartTime(321, { root: p.root, now }), 1_800_000_000_000 - (100.37 - 2.5) * 1000)
+  } finally { p.done() }
+})
+
 test('procinfo: readFacts builds OS-neutral facts; environ is read on first access only', () => {
   const p = fakeProc()
   try {

@@ -147,17 +147,25 @@ export function readCwd(pid, { root = '/proc' } = {}) {
   try { return fs.readlinkSync(path.join(root, String(pid), 'cwd')) } catch { return null }
 }
 
-/** Process start as ms since the epoch: /proc/<pid>/stat field 22 (clock ticks since boot) + /proc/stat btime.
- *  btime is whole seconds, so the result can be up to 1 s early; trust staleness checks tolerate that
- *  (an early start only makes a just-edited file look "after start", which ends untrusted). */
-export function readStartTime(pid, { root = '/proc', hz = 100 } = {}) {
-  let stat, sys
-  try { stat = fs.readFileSync(path.join(root, String(pid), 'stat'), 'utf8'); sys = fs.readFileSync(path.join(root, 'stat'), 'utf8') } catch { return null }
+/** Process start as ms since the epoch: /proc/<pid>/stat field 22 (clock ticks since boot), placed on the wall
+ *  clock through /proc/uptime read now (centiseconds, the same clock as file mtimes). /proc/stat btime is whole
+ *  seconds and drifts from the wall clock in a VM: on a Linux test machine it put a `claude` started 0.4 s after
+ *  `asight collector install` BEFORE the settings write, so a trusted process looked "config-after-start" (Plan 3a,
+ *  ). btime remains the fallback when /proc/uptime is unreadable. */
+export function readStartTime(pid, { root = '/proc', hz = 100, now = Date.now } = {}) {
+  let stat
+  try { stat = fs.readFileSync(path.join(root, String(pid), 'stat'), 'utf8') } catch { return null }
   const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/) // field 3 onward; comm may hold ')' or spaces
   const ticks = Number(fields[19])
+  if (!Number.isFinite(ticks)) return null
+  try {
+    const up = Number(fs.readFileSync(path.join(root, 'uptime'), 'utf8').split(/\s+/)[0])
+    if (Number.isFinite(up)) return now() - (up - ticks / hz) * 1000
+  } catch { /* no /proc/uptime: fall back to btime */ }
+  let sys
+  try { sys = fs.readFileSync(path.join(root, 'stat'), 'utf8') } catch { return null }
   const btime = /^btime\s+(\d+)/m.exec(sys)
-  if (!Number.isFinite(ticks) || !btime) return null
-  return (Number(btime[1]) + ticks / hz) * 1000
+  return btime ? (Number(btime[1]) + ticks / hz) * 1000 : null
 }
 
 /** OS-neutral ProcFacts (RFC 4.6 §身份与信任; contract in core/redirector.mjs). `env` is read on first access
