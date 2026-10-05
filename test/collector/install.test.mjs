@@ -271,3 +271,18 @@ test('freeEnginePort skips a port whose [::1] side is taken; a machine without I
   servers.length = 0
   await assert.rejects(freeEnginePort({ tries: 3, listen: fake(() => 'EADDRINUSE') }), /no port was free on both 127\.0\.0\.1 and \[::1\] in 3 tries/)
 })
+
+test('uninstall leaves a settings file that became a symbolic link alone and records it, even with --purge-data (D38)', async () => {
+  const b = box()
+  try {
+    fs.mkdirSync(path.join(b.home, '.claude')); fs.writeFileSync(settingsOf(b), '{"model":"x"}')
+    await installCollector(base(b))
+    const dot = path.join(b.home, 'dotfiles', 'settings.json'); fs.mkdirSync(path.dirname(dot)); fs.copyFileSync(settingsOf(b), dot)
+    fs.rmSync(settingsOf(b)); fs.symlinkSync(dot, settingsOf(b))
+    const r = await uninstallCollector({ home: b.home, env: {}, purgeData: true, stop: stopNone })
+    assert.deepEqual(r.entries.map((e) => e.result), ['left-link'])
+    assert.ok(fs.lstatSync(settingsOf(b)).isSymbolicLink(), 'never replaced by a regular file')
+    const { recentFailures } = await import('../../src/collector/core/events.mjs')
+    assert.deepEqual(recentFailures(b.dir).map((f) => [f.where, /symbolic link/.test(f.reason)]), [['uninstall', true]], 'recorded after the purge, so it survives it')
+  } finally { b.done() }
+})

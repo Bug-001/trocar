@@ -49,7 +49,9 @@ function refuseRoot(verb) {
 // otherwise (nothing installed, or refused as root) the command's own output is the only report.
 async function recorded(dir, where, fn) {
   try { return await fn() } catch (e) {
-    if (fs.existsSync(dir)) appendEvent(dir, { event: 'failure', where, reason: String((e && e.message) || e) })
+    try { if (fs.existsSync(dir)) appendEvent(dir, { event: 'failure', where, reason: String((e && e.message) || e) }) } catch (w) {
+      if (e && typeof e === 'object') e.message += ` (and recording this failure failed: ${String((w && w.message) || w)})` // never mask the original
+    }
     throw e
   }
 }
@@ -134,6 +136,7 @@ export async function uninstallCollector({ home = os.homedir(), ...opts } = {}) 
 async function uninstall(dir, { env = process.env, purgeData = false, scan = async () => [], match = () => ({ agent: null }), stop = null }) {
   const runtime = env.XDG_RUNTIME_DIR ? path.join(env.XDG_RUNTIME_DIR, 'asight') : null
   const report = { daemon: null, entries: [], removed: [], still_trusting: [], kept_captures: !purgeData, notes: [] }
+  const failed = []
   report.daemon = await (stop || (() => stopDaemon({ socketPath: runtime && path.join(runtime, 'collector.sock'), lockFile: path.join(dir, 'lock') })))()
   const m = readManifest(dir)
   const rm = (p) => { sweepTemps(p); if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); report.removed.push(p) } }
@@ -143,8 +146,9 @@ async function uninstall(dir, { env = process.env, purgeData = false, scan = asy
     for (const e of [...m.entries].reverse()) {
       const r = undoEntry(e)
       report.entries.push(r)
-      // asight's key may still be in a file it can no longer parse: the user has to look (D38)
-      if (r.result === 'left-unparsable') appendEvent(dir, { event: 'failure', where: 'uninstall', reason: `${e.path} is no longer valid JSON; asight's ${e.keys.join('.')} = ${e.value} may still be in it` })
+      // asight's key may still be in a file it could not undo: the user has to look (D38); written after any purge
+      if (r.result === 'left-unparsable') failed.push(`${e.path} is no longer valid JSON; asight's ${e.keys.join('.')} = ${e.value} may still be in it`)
+      if (r.result === 'left-link') failed.push(r.reason)
     }
     for (const f of m.files.filter((x) => x.role === 'trust-file' || x.role === 'ca-cert')) rm(f.path)
     // step 5: report, never restart — append-semantics entries are read at start, so these still trust asight
@@ -157,6 +161,9 @@ async function uninstall(dir, { env = process.env, purgeData = false, scan = asy
   if (purgeData) {
     for (const n of listDir(dir)) if (/^capture-.*\.ndjson$/.test(n)) rm(path.join(dir, n))
     for (const sub of ['flows', 'audit', 'replays']) rm(path.join(dir, sub))
+  }
+  for (const reason of failed) { // after the purge, so --purge-data never deletes what this run could not undo
+    try { appendEvent(dir, { event: 'failure', where: 'uninstall', reason }) } catch (w) { report.notes.push(`not recorded (${String((w && w.message) || w)}): ${reason}`) }
   }
   if (m) {
     removeEmptyDirs(m.dirs.filter((d) => d !== dir)) // e.g. ca/

@@ -105,10 +105,29 @@ export function applyJsonKey({ dir, manifest, harness, file, keys, value, now = 
 
 // Undo one entry by the 4.6 rules: untouched since install → byte-identical; already back → say so; edited since →
 // remove only asight's key (or put the user's prior value back), leave every other byte alone.
+// The file to undo, resolved again now. A path that is a symlink today is never written or deleted over: it must
+// still lead to the file asight changed (`real_path`, or the path itself when that was a regular file at install),
+// else uninstall leaves it alone and says where asight's key may still be (`left-link`).
+function undoTarget(entry, fs) {
+  const changed = entry.real_path || entry.path
+  let st = null
+  try { st = fs.lstatSync(entry.path) } catch (e) { if (e.code !== 'ENOENT') throw e }
+  if (!st || !st.isSymbolicLink()) {
+    if (!entry.real_path) return { file: entry.path }
+    return { refuse: `${entry.path} ${st ? 'is no longer a symbolic link' : 'is gone'}; asight changed ${changed} through it` }
+  }
+  let real = null
+  try { real = fs.realpathSync(entry.path) } catch { /* a link to nothing */ }
+  if (real !== changed) return { refuse: `${entry.path} is now a symbolic link to ${real || 'nothing'}, not to ${changed}, the file asight changed` }
+  return { file: real }
+}
+
 // A crash between the intent and the write leaves the directories it created and maybe a temp file: both go.
 export function undoEntry(entry, { fs = nodeFs } = {}) {
-  const file = entry.real_path || entry.path // a symlinked file was edited at its target
   const done = (result, extra = {}) => ({ path: entry.path, ...(entry.real_path ? { real_path: entry.real_path } : {}), harness: entry.harness, result, ...extra })
+  const target = undoTarget(entry, fs)
+  if (target.refuse) return done('left-link', { reason: `${target.refuse}; asight did not touch it, and its ${entry.keys.join('.')} = ${entry.value} may still be in ${entry.real_path || entry.path}` })
+  const file = target.file
   sweepTemps(file, fs)
   const cur = readOrNull(fs, file)
   if (entry.existed_before ? sha256(cur) === entry.pre_sha256 : cur == null) {

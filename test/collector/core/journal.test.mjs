@@ -112,6 +112,8 @@ test('journal: the intent is on disk before the user file changes; owned files a
     const userRename = at((o) => o[0] === 'rename' && o[2] === file)
     assert.ok(intentFsync >= 0 && intentFsync < intentRename && intentRename < userRename, `the manifest temp is fsynced and renamed before the user file: ${JSON.stringify(ops)}`)
     assert.ok(at((o) => o[0] === 'fsync' && o[1] === ops[userRename][1]) < userRename, 'the user file temp is fsynced before its rename')
+    const dirFsync = ops.findIndex((o, i) => i > intentRename && o[0] === 'fsync' && o[1] === b.dir)
+    assert.ok(dirFsync > intentRename && dirFsync < userRename, 'the manifest directory is fsynced (the rename is durable) before the user file is renamed')
     const own = path.join(b.dir, 'ca', 'extra.pem')
     const spy2 = { ...fs, renameSync: (from, to) => { if (to === own) assert.equal(readManifest(b.dir).files.length, 1); return fs.renameSync(from, to) } }
     writeOwnedFile({ dir: b.dir, manifest: m, role: 'trust-file', file: own, data: 'PEM\n', sources: ['/corp/ca.pem'], fs: spy2 })
@@ -165,5 +167,32 @@ test('journal: a crash between the intent and the write leaves no residue after 
     assert.equal(r.result, 'already-restored')
     assert.ok(!fs.existsSync(path.join(b.root, '.app')), 'the directories the intent created are gone, temp file included')
     assert.deepEqual(sweepTemps(file), [])
+  } finally { b.done() }
+})
+
+test('journal: undo never writes or deletes over a path that is a symbolic link now; a link that moved is refused (left-link)', () => {
+  const b = box()
+  try {
+    // installed on a regular file, which the user then turned into a dotfiles link
+    const file = path.join(b.root, '.app', 'settings.json'); fs.mkdirSync(path.dirname(file)); fs.writeFileSync(file, USER)
+    const e = applyJsonKey({ dir: b.dir, manifest: newManifest(), harness: 'h', file, keys: K, value: b.value })
+    const dot = path.join(b.root, 'dotfiles', 'settings.json'); fs.mkdirSync(path.dirname(dot)); fs.copyFileSync(file, dot)
+    fs.rmSync(file); fs.symlinkSync(dot, file)
+    const r = undoEntry(e)
+    assert.equal(r.result, 'left-link')
+    assert.match(r.reason, /is now a symbolic link to .*dotfiles\/settings\.json, not to .*\.app\/settings\.json, the file asight changed; asight did not touch it, and its env\.CA_FILE = .* may still be in /)
+    assert.ok(fs.lstatSync(file).isSymbolicLink(), 'the link is still a link')
+    assert.equal(JSON.parse(fs.readFileSync(dot, 'utf8')).env.CA_FILE, b.value, 'the target was not touched')
+    // installed through a link to T; the link now points elsewhere
+    const t = path.join(b.root, 'dotfiles', 't.json'); fs.writeFileSync(t, USER)
+    const u = path.join(b.root, 'dotfiles', 'u.json'); fs.writeFileSync(u, USER)
+    const link = path.join(b.root, '.b', 'settings.json'); fs.mkdirSync(path.dirname(link)); fs.symlinkSync(t, link)
+    const e2 = applyJsonKey({ dir: b.dir, manifest: newManifest(), harness: 'h', file: link, keys: K, value: b.value })
+    fs.rmSync(link); fs.symlinkSync(u, link)
+    assert.equal(undoEntry(e2).result, 'left-link')
+    assert.deepEqual([fs.readFileSync(u, 'utf8'), fs.lstatSync(link).isSymbolicLink()], [USER, true])
+    fs.rmSync(link); fs.symlinkSync(t, link) // pointed back: undone at the target, the link stays a link
+    assert.equal(undoEntry(e2).result, 'restored')
+    assert.deepEqual([fs.readFileSync(t, 'utf8'), fs.lstatSync(link).isSymbolicLink()], [USER, true])
   } finally { b.done() }
 })
