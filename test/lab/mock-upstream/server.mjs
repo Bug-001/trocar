@@ -46,14 +46,14 @@ async function dispatch(req, io, state) {
   if (!sc) res = dialect.errorReply(400, `mock-upstream: unknown scenario "${pick.name}"`)
   else if (sc.status) res = errorFor(sc, dialect)
   else if (!route) res = dialect.errorReply(404, `mock-upstream: no route for ${req.method} ${p}`)
+  else if (route.kind === 'model') res = route.dialect.reply(parseJson(req.body), req.body, sc)
+  else if (route.kind === 'count') res = jsonReply(200, { input_tokens: Math.max(1, Math.ceil(req.body.length / 4)) })
+  else if (route.kind === 'models') res = jsonReply(200, MODELS)
   else if (route.kind === 'ws') {
     const up = ws.handshake(req)
     if (up.res) res = up.res
     else return { scenario: pick.name, source: pick.source, complete: ws.accept(io, up, pick.name), upgrade: up }
   }
-  else if (route.kind === 'model') res = route.dialect.reply(parseJson(req.body), req.body, sc)
-  else if (route.kind === 'count') res = jsonReply(200, { input_tokens: Math.max(1, Math.ceil(req.body.length / 4)) })
-  else if (route.kind === 'models') res = jsonReply(200, MODELS)
   else res = { status: 200, headers: {}, pieces: [] }
   res.headers['x-mock-scenario'] = pick.name
   const close = /close/i.test(req.headers.connection || '')
