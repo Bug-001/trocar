@@ -104,13 +104,24 @@ function makeReader({ fs, fd, file, st, tables, indexOffset, frameCache }) {
   }
 
   // Sequential iteration in file order (= source line order). Memory: one frame + ≤ CANDIDATES lines.
-  function* lines() {
+  // With `onError(i, err, entry)`, a record that cannot be decoded is reported and skipped instead of
+  // ending the iteration — later frames are independent, so the rest still reads, and every loss is
+  // counted by the caller (no silent failure). Without it, the first error throws.
+  function* lines({ onError = null } = {}) {
     const win = new Map();
-    let f = -1, fb = null;
+    let f = -1, fb = null, fErr = null;
     for (let i = 0; i < records.length; i++) {
       const r = records[i];
-      if (r[R.frame] !== f) { f = r[R.frame]; fb = decodeFrame(f); }
-      const line = build(i, encOf(fb, r), (j) => win.get(j) || lineAt(j));
+      let line;
+      try {
+        if (r[R.frame] !== f) { f = r[R.frame]; fb = null; fErr = null; try { fb = decodeFrame(f); } catch (e) { fErr = e; } }
+        if (fErr) throw fErr;
+        line = build(i, encOf(fb, r), (j) => win.get(j) || lineAt(j));
+      } catch (e) {
+        if (!onError) throw e;
+        onError(i, e, entry(i));
+        continue;
+      }
       win.set(i, line); win.delete(i - CANDIDATES);
       yield { i, line, entry: entry(i) };
     }

@@ -115,7 +115,10 @@ async function quarantineRecord(conn, record, reason) {
 //           req_body = the verbatim captured STRING). Production streams NDJSON lines;
 //           the append-only prefix is RE-READ each run and skipped per session by the
 //           watermark (byte-offset fast-forward is an Extension, RFC 4.2 Risk).
-// opts    : { registry?, streamBasename?='capture.ndjson' (when a record has no _stream), harness?, provider? }
+// opts    : { registry?, streamBasename?='capture.ndjson' (when a record has no _stream), streamOf?, harness?, provider? }
+//           streamOf(record) → the stream the record was READ from, when the caller knows it per
+//           record: a sealed file holds lines of their ORIGINAL stream(s), never "the sealed file",
+//           and raw_ref MUST name that original stream (RFC 4.2:39, D35).
 export async function runEtl(records, connection, opts = {}) {
   const conn = connection;
   const {
@@ -218,9 +221,9 @@ export async function runEtl(records, connection, opts = {}) {
       }
 
       // 4.2:39 — <stream_file> is the file THIS record was read from (readRecords stamps a non-enumerable
-      // _stream). One run over a directory spans several files; one name for all would point every
-      // later file's blocks at the first file.
-      const rawRef = mintRawRef(sid, record._stream || streamBasename, record.id);
+      // _stream; for a sealed file, its ORIGINAL stream). One run over a directory spans several files;
+      // one name for all would point every later file's blocks at the first file.
+      const rawRef = mintRawRef(sid, (opts.streamOf && opts.streamOf(record)) || record._stream || streamBasename, record.id);
       const ts = record.ts ?? record.ts_request ?? null;
 
       // ── sessions (llm-with-session only; control is session-LESS) ──

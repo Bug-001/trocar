@@ -62,10 +62,11 @@ async function main() {
     case 'etl': {
       const { etlFile, reportSkips } = await import(r('src', 'etl', 'cli.mjs'));
       const file = positional();
-      if (!file) die('usage: asight etl <ndjson|dir> [--db <path>] [--rebuild]');
+      if (!file) die('usage: asight etl <ndjson|sealed|dir> [--db <path>] [--rebuild]');
       const out = await etlFile(file, { dbPath: flag('--db', undefined), rebuild: rest.includes('--rebuild') });
       console.log(`ETL: ${out.records} records from ${out.file} → ${out.dbPath}`, JSON.stringify(out.stats));
-      reportSkips(out);
+      reportSkips(out); // also the sealed files read only in part (journalled by etlFile)
+      if (out.sourceErrors.length) process.exitCode = 1;
       break;
     }
     case 'shard': {

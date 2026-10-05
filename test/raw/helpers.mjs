@@ -6,6 +6,10 @@ import { openSealed } from '../../src/raw/reader.mjs';
 
 export const tmpDir = (p = 'asight-seal-') => fs.mkdtempSync(path.join(os.tmpdir(), p));
 
+// Backstop: anything that falls back to a default under ~/.asight (the raw journal) lands in a sandbox,
+// never in the real home (tests never touch ~/.asight). Each test file runs in its own process.
+process.env.HOME = tmpDir('asight-home-');
+
 let clock = Date.parse('2026-10-05T10:00:00.000Z');
 export function envelope({ sid = null, sidHeader = 'x-claude-code-session-id', id, body, resp = { kind: 'sse', status: 200 }, endpoint = '/v1/messages', llm = true }) {
   const ts = new Date(clock += 1000).toISOString();
