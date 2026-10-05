@@ -24,6 +24,7 @@ function envBlock(ctx, file) {
   const text = ctx.readText(file)
   if (text == null) return null
   const { data } = parseJsonc(text)
+  if (data == null && ctx.unparsable) ctx.unparsable(file) // reported, judged as absent (D38)
   if (!data || !data.env || typeof data.env !== 'object') return null
   const vars = {}
   for (const [k, v] of Object.entries(data.env)) if (typeof v === 'string') vars[k] = v

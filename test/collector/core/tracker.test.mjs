@@ -268,3 +268,11 @@ test('tracker: a harness\'s refine can read its own files through the tracker\'s
   redirector.emit('exec', facts(901, { exe: '/opt/gamma', argv: ['gamma'] })); await settle()
   assert.equal(tracker.describe(901).reason, 'not-via-shim@/opt/gamma')
 })
+
+test('tracker: a harness reports a config file that does not parse; the row carries it for the daemon (D38, review 3 #9)', async () => {
+  const picky = { ...agent, name: 'eps', signatures: { linux: { match: [{ exe: /\/eps$/ }] } }, layers: (ctx) => { ctx.unparsable('/cfg/a.json'); ctx.unparsable('/cfg/a.json'); return [] } }
+  const { redirector, tracker } = rig([picky])
+  redirector.emit('exec', facts(850, { exe: '/opt/eps', argv: ['eps'] })); await settle()
+  assert.deepEqual(tracker.describe(850).parseErrors, ['/cfg/a.json'])
+  assert.deepEqual(tracker.agents()[0].parseErrors, ['/cfg/a.json'])
+})

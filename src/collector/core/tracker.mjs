@@ -74,9 +74,11 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     }
     const d = m.descriptor
     const environ = facts.env || new Map()
-    const row = { pid: facts.pid, ppid: facts.ppid ?? null, agent: m.agent, exe: facts.exe ?? null, argv0: (facts.argv || [])[0] ?? null, source: facts.source, since: prev ? prev.since : now(), readErrors: [] }
+    const row = { pid: facts.pid, ppid: facts.ppid ?? null, agent: m.agent, exe: facts.exe ?? null, argv0: (facts.argv || [])[0] ?? null, source: facts.source, since: prev ? prev.since : now(), readErrors: [], parseErrors: [] }
     const readText = (f) => { try { return readFile(f) } catch (e) { if (!ABSENT.has(e && e.code)) row.readErrors.push(`${f}: ${(e && e.code) || e}`); return null } }
-    const ctx = { os: facts.os, environ, env: environ, home: environ.get('HOME') || home, cwd: facts.cwd || '/', argv: facts.argv || [], startedAt: facts.startedAt ?? null, readText, mtimeOf, listDir }
+    // unparsable(file): a harness reports a config file it read that does not parse (judged as absent; D38, review 3 #9)
+    const unparsable = (f) => { if (!row.parseErrors.includes(f)) row.parseErrors.push(f) }
+    const ctx = { os: facts.os, environ, env: environ, home: environ.get('HOME') || home, cwd: facts.cwd || '/', argv: facts.argv || [], startedAt: facts.startedAt ?? null, readText, mtimeOf, listDir, unparsable }
     factsOf.set(facts.pid, facts)
     const layers = call(d.layers, ctx, row).filter(Boolean)
     for (const l of layers) if (l.live === false) { const t = installedAt(l); if (t != null) l.since = t } // review 2 #5
@@ -156,7 +158,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
       for (const pid of [...table.keys()]) if (!seen.has(pid) && !alive(pid)) forget(pid)
       if (markerDir) for (const n of listDir(markerDir)) if (/^\d+$/.test(n) && !seen.has(Number(n)) && !alive(Number(n))) { try { fs.rmSync(path.join(markerDir, n), { force: true }) } catch { /* void */ } }
     },
-    agents: () => [...table.values()].sort((a, b) => a.pid - b.pid).map((r) => ({ ...r, hosts: [...r.hosts], bypass: r.bypass.map((b) => ({ ...b })), readErrors: [...r.readErrors] })),
+    agents: () => [...table.values()].sort((a, b) => a.pid - b.pid).map((r) => ({ ...r, hosts: [...r.hosts], bypass: r.bypass.map((b) => ({ ...b })), readErrors: [...r.readErrors], parseErrors: [...r.parseErrors] })),
     describe: (pid) => (table.has(pid) ? { ...table.get(pid) } : null),
     metaFor(pid) { const r = table.get(pid); return r ? { agent: r.agent, exe: r.exe, parentPid: r.ppid, parentAgent: r.parentAgent } : null },
     setPolicy({ mode: m = 'auto', extraHosts = [] } = {}) { mode = m === 'all' ? 'all' : 'auto'; extra = new Set(extraHosts.map((h) => String(h).toLowerCase())) },

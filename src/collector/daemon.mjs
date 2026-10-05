@@ -94,6 +94,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       if (row.watchError) failure('watch', new Error(`watching ${row.agent} pid ${row.pid} failed: ${row.watchError}`))
       if (row.configError) failure('harness', new Error(`${row.agent} pid ${row.pid}: reading its configuration failed (${row.configError}); judged on its known hosts only`))
       for (const r of row.readErrors || []) failure('harness', Object.assign(new Error(`${row.agent} pid ${row.pid}: ${r} exists but cannot be read; judged as if it were absent`), { code: CODE.configUnreadable }), { pid: row.pid, agent: row.agent })
+      for (const f of row.parseErrors || []) failure('harness', Object.assign(new Error(`${row.agent} pid ${row.pid}: ${f} exists but does not parse; judged as if it were absent`), { code: CODE.configUnparsable }), { pid: row.pid, agent: row.agent })
       const last = recordedUntrusted.get(row.pid)
       if (row.trusted) {
         if (last != null) { recordedUntrusted.delete(row.pid); note({ event: EVENT.agentTrusted, pid: row.pid, agent: row.agent, code: 'ok', reason: `trusted now (${row.trustVar} via ${row.trustVia})` }) }

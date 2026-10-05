@@ -89,10 +89,11 @@ test('z-code: a user config written after start is not believed; relay hosts fro
     assert.deepEqual(cli.hosts.sort(), ['api.z.ai', 'relay.example.com'])
     assert.ok(cli.proxies.includes('https://envpx.example.com:3128'))
     const bypass = (argv, env = {}) => zcode.bypass({ ...ctxFor({ home: s.home, argv, env }), env: new Map(Object.entries(env)) })
-    assert.deepEqual(bypass([EXE, CJS, '-p', 'hi']), [{ host: 'zcode.z.ai', reason: 'not-via-trust-path' }], 'the CLI refreshes its built-in providers by plain fetch (lab ②)')
-    assert.deepEqual(bypass(['zcode-cli'], { ZCODE_BASE_URL: 'https://origin.example.com/' }), [{ host: 'origin.example.com', reason: 'not-via-trust-path' }])
-    assert.deepEqual(bypass(['zcode-cli'], { ZCODE_ENV: 'test' }), [{ host: 'zcode.chatglm.site', reason: 'not-via-trust-path' }])
-    assert.deepEqual(bypass([EXE, CJS, 'app-server', '--stdio']), [], 'the app-server does not refresh')
+    const cdn = { host: 'cdn-zcode.z.ai', reason: 'not-via-trust-path' } // marketplace / assets: ZCODE_AGENT_CA_CERT only (review 3 #5)
+    assert.deepEqual(bypass([EXE, CJS, '-p', 'hi']), [cdn, { host: 'zcode.z.ai', reason: 'not-via-trust-path' }], 'the CLI refreshes its built-in providers by plain fetch (acceptance ②)')
+    assert.deepEqual(bypass(['zcode-cli'], { ZCODE_BASE_URL: 'https://origin.example.com/' }), [cdn, { host: 'origin.example.com', reason: 'not-via-trust-path' }])
+    assert.deepEqual(bypass(['zcode-cli'], { ZCODE_ENV: 'test' }), [cdn, { host: 'zcode.chatglm.site', reason: 'not-via-trust-path' }])
+    assert.deepEqual(bypass([EXE, CJS, 'app-server', '--stdio']), [cdn], 'the app-server does not refresh; its marketplace fetches still skip caCertFile')
   } finally { s.done() }
 })
 
@@ -143,5 +144,26 @@ test('z-code through install / uninstall: the user\'s caCertFile is replaced and
     assert.equal(fs.readFileSync(cfg, 'utf8'), before)
     assert.deepEqual((await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none', harnesses: [zcode], roots: { node: [], osText: '' } })).kept_bundles, [])
     assert.ok(!fs.existsSync(bundle))
+  } finally { s.done() }
+})
+
+test('z-code and claude-code: a JSON config that exists but does not parse is reported through the tracker, judged as absent (D38, review 3 #9)', async () => {
+  const { default: cc } = await import('../../../src/collector/harness/claude-code.mjs')
+  const s = sandbox()
+  try {
+    const bad = s.put('.zcode/cli/config.json', '{ "network": { "caCertFile": ')
+    const seen = []
+    const r = judge(zcode, ctxFor({ home: s.home, argv: [EXE, CJS, '-p', 'hi'], unparsable: (f) => seen.push(f) }))
+    assert.deepEqual([r.trust.trusted, seen.includes(bad)], [false, true])
+    s.put('.zcode/cli/config.json', '{ "network": {} }')
+    const ok = []; judge(zcode, ctxFor({ home: s.home, argv: [EXE, CJS, '-p', 'hi'], unparsable: (f) => ok.push(f) }))
+    assert.deepEqual(ok, [], 'a Z-Code file that parses is not reported')
+    const settings = s.put('.claude/settings.json', '{ "env": { "NODE_EXTRA_CA_CERTS": "/x" ')
+    const seen2 = []
+    judge(cc, ctxFor({ home: s.home, unparsable: (f) => seen2.push(f) }))
+    assert.deepEqual(seen2, [settings])
+    s.put('.claude/settings.json', '{ "env": {} }')
+    const seen3 = []; judge(cc, ctxFor({ home: s.home, unparsable: (f) => seen3.push(f) }))
+    assert.deepEqual(seen3, [], 'a file that parses is not reported')
   } finally { s.done() }
 })

@@ -27,6 +27,7 @@ const CJS = /\/glm\/zcode\.cjs$/
 const AS_NODE = { ELECTRON_RUN_AS_NODE: '1' }
 const TITLE = /^zcode-cli$/
 // the model fetch follows only ZCODE_HTTP_PROXY / network.httpProxy (HTTP(S)_PROXY is web-fetch only)
+const CDN_HOST = 'cdn-zcode.z.ai'
 const PROXY_SOURCES = [
   ['ZCODE_HTTP_PROXY', 'env:ZCODE_HTTP_PROXY'],
   ['zcode:project:httpProxy', 'config:project zcode.json / .zcode/config.json network.httpProxy'],
@@ -35,7 +36,10 @@ const PROXY_SOURCES = [
 
 function jsonAt(ctx, file) {
   const text = file ? ctx.readText(file) : null
-  return text == null ? null : parseJsonc(text).data
+  if (text == null) return null
+  const { data } = parseJsonc(text)
+  if (data == null && ctx.unparsable) ctx.unparsable(file) // reported, judged as absent (D38)
+  return data
 }
 const desktopSettings = (env, home) => path.join(env.get('ZCODE_DESKTOP_HOME_DIR') || home, '.zcode', 'v2', 'setting.json')
 
@@ -138,7 +142,10 @@ export default {
   hosts: ['api.z.ai', 'open.bigmodel.cn', 'zcode.z.ai', 'api.moonshot.cn', 'api.minimaxi.com', 'api.deepseek.com', 'dashscope.aliyuncs.com', 'dashscope-intl.aliyuncs.com', 'api.xiaomimimo.com', 'api.openai.com', 'api.anthropic.com', 'api.x.ai', 'openrouter.ai', 'opencode.ai'],
   layers,
   configHosts,
-  bypass: (ctx) => (ctx.argv.some((a) => /^(app|agent)-server$/.test(a)) ? [] : [{ host: originHost(ctx.env), reason: 'not-via-trust-path' }]),
+  // 不经信任路径: the CDN's plugin marketplace and assets trust ZCODE_AGENT_CA_CERT only, never caCertFile (every process);
+  // the CLI's provider refresh reaches its origin by plain fetch. Another CDN address the origin returns is not known
+  // beforehand: under `all` it is decrypted, that refresh fails once, then the (pid, host) negative cache (review 3 #5).
+  bypass: (ctx) => [{ host: CDN_HOST, reason: 'not-via-trust-path' }, ...(ctx.argv.some((a) => /^(app|agent)-server$/.test(a)) ? [] : [{ host: originHost(ctx.env), reason: 'not-via-trust-path' }])],
   proxies: (ctx) => PROXY_SOURCES.filter(([k]) => (ctx.env.get(k) || '') !== '').map(([k, source]) => ({ url: ctx.env.get(k), source })),
   inject,
   trust: {

@@ -427,7 +427,7 @@ test('daemon: a plugin harness is marker-pending (not recorded) until its marker
   await install(s)
   const locked = path.join(s.home, 'locked.env'); fs.writeFileSync(locked, 'X=1\n'); fs.chmodSync(locked, 0o000)
   const plug = { name: 'plug-agent', runtime: 'node', hosts: ['api.plug.test'], signatures: { linux: { match: [{ exe: /\/plug-agent$/ }] } },
-    layers: (ctx) => { ctx.readText(locked); return [] }, bypass: () => [{ host: 'early.plug.test', reason: 'before-plugin' }],
+    layers: (ctx) => { ctx.readText(locked); ctx.unparsable(path.join(s.home, 'broken.json')); return [] }, bypass: () => [{ host: 'early.plug.test', reason: 'before-plugin' }],
     trust: { chain: [{ var: 'NODE_EXTRA_CA_CERTS', semantic: 'append' }, { var: 'asight:marker', semantic: 'append' }], refine: (r) => (r.reason === 'var-missing' ? 'no-marker' : null) } }
   const { arch, clients } = fakeArch(p)
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc, plug] })
@@ -450,6 +450,8 @@ test('daemon: a plugin harness is marker-pending (not recorded) until its marker
     assert.ok(!flowsOf(s).some((f) => f.event === 'agent-untrusted' && f.pid === 9191), 'a pending plugin is not a failure')
     const unreadable = flowsOf(s).find((f) => f.event === 'failure' && f.code === 'config-unreadable' && f.pid === 9191)
     if (process.getuid() !== 0) assert.ok(unreadable && unreadable.reason.includes('locked.env'), 'the unreadable file is named, not taken for absent')
+    const unparsable = flowsOf(s).find((f) => f.event === 'failure' && f.code === 'config-unparsable' && f.pid === 9191)
+    assert.ok(unparsable && unparsable.reason.includes('broken.json exists but does not parse'), 'a config file that does not parse is named too (review 3 #9)')
   } finally { await d.stop(); fs.chmodSync(locked, 0o600); p.done(); s.done() }
 })
 
