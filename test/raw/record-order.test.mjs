@@ -60,7 +60,7 @@ test('F2: a flat root reads a stream\'s older sealed segment before the fresh fi
     const cap = writeShard(path.join(root, 'src', 'codex-capture.ndjson'), [toLine(envelope({ id: 'old', body: '' }))]);
     await sealLegacy(cap, { ...NONE, journal: path.join(root, 'j.jsonl') });
     await sealLegacy(cap, { ...NONE, journal: path.join(root, 'j.jsonl'), deleteOriginal: true });
-    writeShard(cap, [toLine(envelope({ id: 'new', body: '' }))]);
+    writeShard(cap, [toLine(envelope({ id: 'new-and-longer', body: '' }))]);   // not the old size: not a copy of it (F4)
     assert.deepEqual(listSources([path.dirname(cap)]).files.map((f) => path.basename(f)), ['codex-capture.ndjson.0001.sealed', 'codex-capture.ndjson']);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

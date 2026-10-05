@@ -13,7 +13,8 @@
 //    if this reader scans it and it is still the very file that was sealed (size, inode, mtime). The
 //    sealed copies are then "superseded" and skipped, so no record is read twice and none is lost. A
 //    different file at the original's path is not the source: both are read; if it is the same inode
-//    changed in place, that is reported (invariant 4).
+//    changed in place, that is reported (invariant 4). A copied tree (new inode, same size and mtime)
+//    is still the source; same size with another mtime is read twice and reported (review 3 F4).
 // 3. Continuations (review 2026-10-06 F2). The marker-gated sealer files a shard's records by session
 //    under <sessionsRoot>/<key>/ (`asight raw seal`'s default --sessions, ~/.asight/sessions — 0.2
 //    状态表 「封存文件」). Those files continue a shard that lived in some directory, so a reader that
@@ -137,14 +138,24 @@ export function resolveCoexistence(all, { fs = nodeFs } = {}) {
       const o = originals.get(s.abs);
       if (!o) return null;
       let st; try { st = fs.statSync(o); } catch { return null; }
-      const same = st.size === s.length && st.ino === s.ino && st.mtimeMs === s.mtimeMs;
       // Same inode but different size/mtime: the sealed original was changed in place afterwards —
-      // both are read (never lose a byte) and that is reported, duplicates possible. A different
-      // inode is simply another file at that path (e.g. `asight shard` writing a fresh calls.ndjson
-      // after the sealer deleted the old one): both are read, nothing to report. (ext4 may reuse a
+      // both are read (never lose a byte) and that is reported, duplicates possible. (ext4 may reuse a
       // freed inode, which then shows up as a report — noise, never a loss.)
-      if (!same && st.ino === s.ino) mismatched.push({ sealed: f, original: o, why: `the original was changed after it was sealed (size ${st.size} vs ${s.length}) — both are read, records may appear twice` });
-      return same ? o : null;
+      if (st.ino === s.ino) {
+        if (st.size === s.length && st.mtimeMs === s.mtimeMs) return o;
+        mismatched.push({ sealed: f, original: o, why: `the original was changed after it was sealed (size ${st.size} vs ${s.length}) — both are read, records may appear twice` });
+        return null;
+      }
+      // Another inode. Of another size it is another file (`asight shard` writing a fresh calls.ndjson
+      // after the sealer deleted the old one): both are read, nothing to report. Of the same size and
+      // mtime (within the 1 s some copy tools keep) it is this file copied or restored with its tree —
+      // a backup, `cp -a`, another disk — and is used alone, or every record would be read twice
+      // (review 3 F4). Same size, other mtime: cannot tell without reading it — both are read, and
+      // that is reported.
+      if (st.size !== s.length) return null;
+      if (Math.abs(st.mtimeMs - s.mtimeMs) < 1000) return o;
+      mismatched.push({ sealed: f, original: o, why: `the file at the original's path is another inode of the same size (${st.size} bytes) with another mtime — a copy that did not keep times? Both are read, records may appear twice; \`asight raw verify\` tells whether it holds the sealed bytes` });
+      return null;
     });
     if (present.length && present.every(Boolean)) { drop.add(f); superseded.push({ sealed: f, original: present[0] }); }
   }
