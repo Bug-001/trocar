@@ -22,12 +22,13 @@ function upgrade({ ext, offer, target = '/v1/responses' }) {
     resp: { head: head(raw('HTTP/1.1 101 Switching Protocols', respH), { status: 101, headers: respH }) },
   }
 }
-function rig({ ext = null, offer, terminal = TERMINAL, target, write, maxCallBytes } = {}) {
+function rig({ ext = null, offer, terminal = TERMINAL, target, write, maxCallBytes, split = Infinity } = {}) {
   const out = []; let on = true; let n = 0
   const r = createWsRecorder({ flow: FLOW, upgrade: upgrade({ ext, offer, target }), seqStart: 0, genId: () => `id${n++}`, isRecording: () => on, terminal, maxCallBytes,
     recordStore: { envelope: (e) => (write ? write(e, out) : (out.push(e), true)) } })
   const wire = { c: [], s: [] }
-  return { r, out, wire, c: (b) => { wire.c.push(b); r.fromClient(b) }, s: (b) => { wire.s.push(b); r.fromUpstream(b) }, set on(v) { on = v } }
+  const feed = (fn, b) => { for (let i = 0; i < b.length; i += split) fn(b.subarray(i, i + split)) }
+  return { r, out, wire, c: (b) => { wire.c.push(b); feed(r.fromClient, b) }, s: (b) => { wire.s.push(b); feed(r.fromUpstream, b) }, set on(v) { on = v } }
 }
 const ev = (type, extra = {}) => JSON.stringify({ type, ...extra })
 const srv = (op, payload, opts) => encodeFrame(op, payload, { mask: false, ...opts })
@@ -72,8 +73,9 @@ test('W10 / W13 / W2 / W3: a terminal message writes its call at once (a generat
   t.r.end(null); assertWholeWire(t)
 })
 
-test('W14: a server message with no call open is its own envelope (req_body null); frames between calls ride with the next envelope; trailing frames go to tail_raw; the upgrade is no envelope', () => {
-  const t = rig()
+test('W14: a server message with no call open is its own envelope (req_body null); frames between calls ride with the next envelope; trailing frames go to tail_raw; the upgrade is no envelope; any chunking', () => {
+  for (const split of [Infinity, 1, 5]) {
+  const t = rig({ split })
   t.s(srv(1, ev('rate_limits.updated')))
   assert.deepEqual(t.out.map((e) => [e.req_body, e.resp.messages]), [[null, [ev('rate_limits.updated')]]], 'written at once, alone')
   t.c(cli(9, 'hb')); t.s(srv(10, 'hb'))
@@ -86,18 +88,19 @@ test('W14: a server message with no call open is its own envelope (req_body null
   assert.deepEqual(t.r.summary().tail_raw.map((f) => [f.i, f.d, !!f.p]), [[5, 'c', true], [6, 'c', true], [7, 's', true]])
   for (const e of t.out) { assert.match(e.req_head_raw, /^GET \/v1\/responses HTTP\/1.1\r\n/); assert.match(e.resp_head_raw, /^HTTP\/1.1 101 /) }
   assert.deepEqual(t.r.summary(), { frames: 8, calls: 2, recorded: 2, partial: 0, dropped_frames: 0, tail_raw: t.r.summary().tail_raw })
-  assertWholeWire(t)
+  assertWholeWire(t, `split ${split}`)
+  }
 })
 
 test('no terminal pattern for this path: a call runs to the next client message, the last one to the end of the connection; a reset ends it as an error', () => {
   const t = rig({ terminal: [{ pathSuffix: '/other', patterns: ['.'] }] })
   t.c(cli(1, 'a')); t.s(srv(1, 'A1')); t.s(srv(1, ev('response.completed')))
   assert.equal(t.out.length, 0, 'the fallback waits for the next client message')
-  t.c(cli(1, 'b', { fin: false })); t.s(srv(1, 'A3')); t.c(cli(0, 'b2'))
-  assert.deepEqual(t.out.map((e) => [e.req_body, e.resp.messages, e.ws_frames]), [['a', ['A1', ev('response.completed'), 'A3'], [0, 2]]], 'cut at the next client message\'s first frame')
+  t.c(cli(1, 'b', { fin: false })); t.s(srv(1, 'A3')); t.s(srv(9, 'pg')); t.c(cli(0, 'b2'))
+  assert.deepEqual(t.out.map((e) => [e.req_body, e.resp.messages, e.ws_raw.map((f) => f.i)]), [['a', ['A1', ev('response.completed'), 'A3'], [0, 1, 2, 4]]], 'A3 completed in this call: its frame goes with it, b\'s first frame waits for b')
   t.s(srv(1, 'B1')); t.r.end(null)
   assert.deepEqual(t.out.map((e) => [e.req_body, e.error]), [['a', undefined], ['bb2', undefined]], 'a clean close ends the last call normally')
-  assert.equal(t.out[1].ws_raw.find((f) => f.i === 4).p !== undefined, true, 'A3 rides here, its message is in the previous envelope')
+  assert.deepEqual(t.out[1].ws_raw.map((f) => [f.i, f.m]), [[3, [0, 0]], [5, undefined], [6, [0, 1]], [7, [0, 0]]], 'the ping after b began is b\'s')
   assertWholeWire(t)
   const u = rig({ terminal: null }); u.c(cli(1, 'a')); u.s(srv(1, 'A1')); u.r.end({ type: 'ECONNRESET', message: 'reset' })
   assert.deepEqual([u.out[0].error, u.out[0].resp.partial.messages], [true, ['A1']])
@@ -114,12 +117,12 @@ test('compileTerminal: first entry whose pathSuffix matches (query stripped); he
 test('W15 / T2: a call cut before its terminal message is error:true with resp.partial and keeps its frames; a binary opener is req_body null + req_body_b64; other non-text messages are {b64}', () => {
   const t = rig()
   t.c(cli(2, Buffer.from([0, 1, 2]))); t.s(srv(1, ev('response.output_text.delta'))); t.s(srv(2, Buffer.from([9, 9])))
-  t.s(srv(1, Buffer.from([0xc3, 0x28]))); t.s(srv(8, Buffer.from([3, 233])))
+  t.s(srv(1, Buffer.from([0xc3, 0x28]))); t.s(srv(1, 'cut mid-', { fin: false })); t.s(srv(8, Buffer.from([3, 233])))
   t.r.end({ type: 'ECONNRESET', message: 'reset' })
   const [e] = t.out
   assert.deepEqual([e.error, e.req_body, e.req_body_b64, e.resp.kind, e.resp.error], [true, null, 'AAEC', 'error', { type: 'ECONNRESET', message: 'reset' }])
   assert.deepEqual(e.resp.partial, { kind: 'ws', messages: [ev('response.output_text.delta'), { b64: 'CQk=' }, { b64: 'wyg=' }] }, 'invalid UTF-8 text is kept as bytes')
-  assert.equal(t.r.summary().tail_raw, undefined, 'the cut call keeps its frames, close included')
+  assert.equal(t.r.summary().tail_raw, undefined, 'the cut call keeps its frames: the unfinished message and the close too')
   assert.ok(e.ws_raw[0].m && e.ws_raw[2].m, 'binary frames slice their stored bytes')
   assertWholeWire(t)
   const q = rig(); q.c(cli(1, ev('response.create'))); q.r.end(null)
@@ -148,7 +151,7 @@ function deflater(takeover) {
 test('W1 (recorder): deflate off, takeover both ways, client_ / server_no_context_takeover; parameters from the 101, not the offer: messages verbatim, the wire rebuilds', async () => {
   const offer = 'permessage-deflate; client_no_context_takeover; server_no_context_takeover; client_max_window_bits'
   for (const ext of [null, 'permessage-deflate', 'permessage-deflate; client_no_context_takeover', 'permessage-deflate; server_no_context_takeover']) {
-    const t = rig({ ext, offer })
+    const t = rig({ ext, offer, split: ext ? 7 : Infinity })
     const cz = deflater(!/client_no/.test(ext)), sz = deflater(!/server_no/.test(ext))
     const sent = { c: [], s: [] }
     for (let i = 0; i < 3; i++) {
@@ -170,13 +173,13 @@ test('W6 / C14: on→off→on, deflate takeover both ways: a call begun on is re
   await turn(1)
   await turn(2, () => { t.on = false; t.s(srv(9, 'hb')) })        // begun on, ends off: recorded whole
   t.c(cli(9, 'hb')); await turn(3)                                 // begun off: not recorded, nor the ping before it
-  t.on = true; await turn(4); t.on = false; t.c(cli(9, 'bye')); t.r.end(null)       // a frame that arrives off at the end
+  t.on = true; await turn(4); t.on = false; t.c(cli(9, 'bye')); t.c(cli(1, 'SECRET', { fin: false })); t.r.end(null) // arrive off at the end
   assert.deepEqual(t.out.map((e) => [e.seq, JSON.parse(e.req_body).input.slice(-1), JSON.parse(e.resp.messages.at(-1)).text.slice(-1)]), [[0, '1', '1'], [1, '2', '2'], [3, '4', '4']])
   assert.deepEqual(t.out.map((e) => e.partial_reasons), [undefined, undefined, ['off-window']], 'only after the gap (W5: no partial without one)')
   assert.deepEqual(t.out[1].ws_raw.map((f) => [f.i, f.d]), [[2, 'c'], [3, 's'], [4, 's']], 'the ping inside the on-begun call stays with it')
   assert.deepEqual(connection(t).ids, [0, 1, 2, 3, 4, 8, 9], 'frames 5–7 arrived off: in no envelope and not in tail_raw')
   const { tail_raw, ...sum } = t.r.summary()
-  assert.deepEqual([sum, tail_raw], [{ frames: 11, calls: 4, recorded: 3, partial: 1, dropped_frames: 4 }, undefined])
+  assert.deepEqual([sum, tail_raw], [{ frames: 12, calls: 4, recorded: 3, partial: 1, dropped_frames: 5 }, undefined])
   // no pattern: b begins off while the on call a is open (its frame waits); the call b opens is not recorded
   const f = rig({ terminal: null })
   f.c(cli(1, 'a')); f.s(srv(1, 'A1')); f.on = false; f.c(cli(1, 'b')); f.on = true; f.s(srv(1, 'B1')); f.c(cli(1, 'c')); f.s(srv(1, 'C1')); f.r.end(null)
@@ -223,4 +226,49 @@ test('W17 / C13: past the per-call cap later messages are {omitted_bytes} with n
     assert.equal(typeof m0.omitted_bytes, 'number')
     assert.deepEqual([m1.decode_error ? 'decode-failed' : m1, u.out[0].partial_reasons], [want, want === 'decode-failed' ? ['decode-failed'] : undefined], ext)
   }
+})
+
+test('W6 / C14 across a cut: a message in flight goes with its own call — off content never lands in a recorded envelope, an on call never loses its own frames', () => {
+  const secret = (t) => !/U0VDUkVU|SECRET/.test(JSON.stringify(t.out)) // 'SECRET' in base64 or as text
+  // a client message begun off while an on call is open, still in flight at that call's terminal message
+  const a = rig()
+  a.c(cli(1, ev('response.create'))); a.on = false; a.c(cli(1, 'SECRET', { fin: false })); a.s(srv(1, ev('response.completed')))
+  a.c(cli(0, '-tail')); a.s(srv(1, ev('response.completed'))); a.r.end(null)
+  assert.deepEqual([a.out.map((e) => e.ws_raw.map((f) => f.i)), secret(a), a.r.summary().tail_raw], [[[0, 2]], true, undefined])
+  // a server push begun off completes after an on call opened: it does not join that call
+  const b = rig()
+  b.on = false; b.s(srv(1, 'SECRET', { fin: false })); b.on = true
+  b.c(cli(1, ev('response.create'))); b.s(srv(0, '-push')); b.s(srv(1, ev('response.completed'))); b.r.end(null)
+  assert.deepEqual([b.out.map((e) => [e.resp.messages, e.partial_reasons]), secret(b)], [[[[ev('response.completed')], ['off-window']]], true])
+  // an opener begun on, in flight when the call begun off reaches its terminal message: recorded whole
+  const c = rig()
+  c.on = false; c.c(cli(1, ev('response.create', { input: 'off' }))); c.on = true
+  c.c(cli(1, '{"type":"response.create",', { fin: false })); c.s(srv(1, ev('response.completed')))
+  c.c(cli(0, '"input":"on"}')); c.s(srv(1, ev('response.completed'))); c.r.end(null)
+  const [B] = c.out
+  assert.deepEqual([c.out.length, B.req_body, B.ws_raw.map((f) => f.i), B.partial_reasons], [1, '{"type":"response.create","input":"on"}', [1, 3, 4], ['off-window']])
+  assert.ok(rebuildWsWire(B, 'c').c.equals(Buffer.concat(c.wire.c.slice(1))), 'its own bytes are whole')
+  // no pattern: a server message begun on in call A completes after the next client message (begun off) started
+  const d = rig({ terminal: null })
+  d.c(cli(1, 'a')); d.s(srv(1, 'S1-', { fin: false })); d.on = false; d.c(cli(1, 'b', { fin: false })); d.s(srv(0, 'S2')); d.c(cli(0, 'b2')); d.r.end(null)
+  assert.deepEqual(d.out.map((e) => [e.resp.messages, e.ws_raw.map((f) => f.i), e.partial]), [[['S1-S2'], [0, 1, 3], undefined]])
+  assert.ok(rebuildWsWire(d.out[0], 's').s.equals(Buffer.concat(d.wire.s)))
+})
+
+test('a call whose server messages no longer decode (takeover window lost, or the direction stopped) cannot see its terminal message: it ends at the next client message instead of swallowing later turns', async () => {
+  const t = rig({ ext: 'permessage-deflate', maxCallBytes: 4000 }), sz = deflater(true)
+  for (const i of [1, 2, 3]) {
+    t.c(cli(1, ev('response.create', { input: i })))
+    if (i === 1) t.s(srv(1, await sz(ev('response.output_text.delta', { delta: randomBytes(8000).toString('hex') })), { rsv1: true }))
+    for (const m of [ev('response.output_text.delta', { delta: `d${i}` }), ev('response.completed', { i })]) t.s(srv(1, await sz(m), { rsv1: true }))
+  }
+  assert.equal(t.out.length, 2, 'each turn is written when the next one starts')
+  t.r.end(null)
+  assert.deepEqual(t.out.map((e) => [JSON.parse(e.req_body).input, e.req_extra_messages, e.error, e.partial_reasons, e.resp.messages.every((m) => m.decode_error || m.omitted_bytes)]),
+    [1, 2, 3].map((i) => [i, undefined, undefined, ['decode-failed'], true]))
+  assert.deepEqual(t.out.flatMap((e) => e.ws_raw.map((f) => f.i)), [...Array(t.r.summary().frames).keys()], 'every frame once (the omitted one without payload)')
+  const u = rig()
+  u.c(cli(1, ev('response.create', { input: 1 }))); u.s(srv(1, ev('response.output_text.delta'))); u.s(Buffer.from([0x83, 0]))
+  u.c(cli(1, ev('response.create', { input: 2 }))); u.c(cli(1, ev('response.create', { input: 3 }))); u.r.end(null)
+  assert.deepEqual(u.out.map((e) => [JSON.parse(e.req_body).input, e.req_extra_messages, e.error]), [[1, undefined, undefined], [2, undefined, undefined], [3, undefined, undefined]])
 })

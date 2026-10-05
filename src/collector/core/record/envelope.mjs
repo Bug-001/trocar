@@ -79,7 +79,7 @@ export function buildTransparentEnvelope({ id, flow, seq, req, resp, error = nul
 /**
  * buildWsEnvelope({id, flow, seq, upgrade, call, wsRaw, error}) → the envelope of ONE logical WebSocket
  * call (RFC 4.6 §传输与帧级记录, D37). The upgrade is not an envelope of its own: every call carries the
- * upgrade request's headers (req_headers / req_head_raw: the sharder reads Codex's session-id there)
+ * upgrade request's headers (req_headers / req_head_raw: the sharder reads a session key there)
  * and the upstream's 101 head (resp_head_raw).
  *   upgrade = {req:{head}, resp:{head}}   the heads as the exchange tee holds them
  *   call    = {client:[v], server:[v], tsStart, tsRespStart, tsEnd, partial:[reason], truncated}

@@ -5,17 +5,20 @@
 //   A call = one client data message + the server messages after it, up to the terminal message the
 //   harness declared as DATA (RegExp sources on the message head, D20: no provider code here). While
 //   it is open, further client data messages join it (req_extra_messages). With no pattern for this
-//   path a call runs to the next client data message or the end of the connection. A server message
+//   path — or once the call's server messages no longer decode, so its terminal message cannot be
+//   seen — a call runs to the next client data message or the end of the connection. A server message
 //   that arrives with no call open is a call of its own (req_body:null), written at once.
-// Frames are numbered across both directions. Each frame lands in exactly one place, in number order:
-// a call takes every waiting frame below its cut (frames between calls ride with the next call), and
-// what is left at the end is the summary's tail_raw. So the envelopes' ws_raw plus tail_raw rebuild
+// Frames are numbered across both directions and each lands in exactly one place: a data frame goes
+// with its message's call (a message in flight at a cut waits for its own call), a control frame with
+// the call that closes past it (frames between calls ride with the next call), and what is left at the
+// end is the summary's tail_raw. Sorted by frame number, the envelopes' ws_raw plus tail_raw rebuild
 // the connection verbatim (raw.mjs::rebuildWsWire). Recording never throws into the forwarding path.
-//   Switch (C14): a call is recorded or not by the switch at its first frame; frames that arrive off
-// and belong to no recorded call are dropped, but every message is still inflated (state only in
-// memory). partial (C8): after a gap (off-window, write-failed, decode-failed) every later call of the
-// connection is marked; the collector cannot tell which ones depend on what is missing. Cap (C13): a
-// call keeps at most maxCallBytes of message payload, later messages are {omitted_bytes}.
+//   Switch (C14): a call is recorded or not by the switch at its first frame; a message begun off
+// joins a recorded call only if it began inside it, and frames that arrive off and belong to no
+// recorded call are dropped; every message is still inflated (state only in memory). partial (C8):
+// after a gap (off-window, write-failed, decode-failed) every later call of the connection is marked;
+// the collector cannot tell which ones depend on what is missing. Cap (C13): a call keeps at most
+// maxCallBytes of message payload, later messages are {omitted_bytes}.
 import { createFrameParser, createMessageAssembler, OP } from './frames.mjs'
 import { parseExtensions, createInflater } from './deflate.mjs'
 import { messageBytes } from './raw.mjs'
@@ -58,7 +61,7 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
   const dirs = { c: side(!!deflate && deflate.clientNoContextTakeover), s: side(!!deflate && deflate.serverNoContextTakeover) }
   const stats = { frames: 0, calls: 0, recorded: 0, partial: 0, dropped_frames: 0 }
   const lost = new Set() // why later calls are partial (REASONS)
-  let kept = []    // frames waiting for an envelope: {i, d, header, payload, msg, off}
+  let kept = []    // frames waiting for an envelope: {i, d, header, payload, msg, off}, in number order
   let open = null  // the call being collected
   let tail = []
   let idx = 0
@@ -77,16 +80,17 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
     return out
   }
 
-  function openCall(h) {
-    open = { record: h.rec, client: [], server: [], tsStart: h.ts, tsRespStart: null, seq: seq++, bytes: 0, capped: false, truncated: false }
+  function newCall(h) {
     stats.calls++
+    return { record: h.rec, client: [], server: [], tsStart: h.ts, tsRespStart: null, seq: seq++, bytes: 0, capped: false, truncated: false, blind: false }
   }
 
-  // Close the open call with every waiting frame numbered below `cut`.
-  function close(cut, error) {
-    const call = open; open = null
-    const take = kept.filter((e) => e.i < cut)
-    kept = kept.filter((e) => e.i >= cut)
+  // Write `call` (or drop it, begun off) with its messages' frames and the control frames below `cut`;
+  // at the end of the connection (last) also the frames of messages still in flight.
+  function close(call, cut, error, last = false) {
+    const mine = (e) => (e.msg ? e.msg.call === call || (last && !e.msg.call) : e.i < cut)
+    const take = kept.filter(mine)
+    kept = kept.filter((e) => !mine(e))
     if (!call.record) { stats.dropped_frames += take.length; lost.add('off-window'); return } // the frames ride with it
     const partial = REASONS.filter((r) => lost.has(r))
     const env = buildWsEnvelope({
@@ -108,7 +112,7 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
     else if (!h.meta && (call.capped || call.bytes + h.wire > maxCallBytes)) {
       call.capped = call.truncated = true; h.omit = true; h.value = { omitted_bytes: h.wire }
     } else if (!h.meta) call.bytes += h.wire
-    if (h.omit) for (const e of kept) if (e.msg === h) e.payload = null
+    if (h.omit || h.slice) for (const e of h.frames) e.payload = null // not retained, or m-sliced from the message
     list.push(h.value)
     if (h.d === 's' && !call.tsRespStart) call.tsRespStart = h.ts
   }
@@ -137,17 +141,24 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
     h.value = h.meta ? { raw_chars: bytes ? bytes.length : h.wire, verbatim: false } : value
     h.slice = !h.meta && !h.compressed && messageBytes(value) !== null
     if (h.d === 'c') {
-      if (!(open && isTerminal)) {
-        if (open) close(h.first, null)
-        openCall(h)
+      if (!open || !isTerminal || open.blind || dirs.s.broken) {
+        if (open) close(open, h.first, null)
+        open = newCall(h)
       }
       join(open, h)
-    } else if (open) {
+    } else if (open && (h.rec || h.start === open)) {
       join(open, h)
-      if (isTerminal && bytes && isTerminal(bytes)) close(idx, null)
-    } else {
-      openCall(h); join(open, h); close(idx, null)
-    }
+      if (value.decode_error) open.blind = true // its terminal message can no longer be recognised
+      else if (isTerminal && bytes && isTerminal(bytes)) { const call = open; open = null; close(call, idx, null) }
+    } else if (open) drop(h) // begun off outside the call now open: not part of it, not recorded (C14)
+    else { const push = newCall(h); join(push, h); close(push, idx, null) }
+  }
+
+  function drop(h) {
+    const mine = new Set(h.frames)
+    kept = kept.filter((e) => !mine.has(e))
+    stats.dropped_frames += mine.size
+    lost.add('off-window')
   }
 
   function onFrame(d, f) {
@@ -157,13 +168,20 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
     const ev = D.asm.push(f)
     let h = null
     if (ev.type === 'data') {
-      if (ev.start) D.msg = { d, first: i, ts: iso(), rec: isRecording(), compressed: ev.compressed, wire: 0, meta: d === 'c' && !keepClient }
+      if (ev.start) {
+        const rec = isRecording()
+        // kept while it may still be recorded: begun on, or begun inside a recorded call
+        const meta = d === 'c' && !keepClient // its frames never keep a payload, in whichever envelope they land
+        D.msg = { d, first: i, ts: iso(), rec, start: open, keep: rec || !!(open && open.record), compressed: ev.compressed, wire: 0, meta, omit: meta, frames: [] }
+      }
       h = D.msg
       h.wire += f.payload ? f.payload.length : f.omitted
-      if (h.meta) h.omit = true // its frames never keep a payload, in whichever envelope they land
     }
-    if ((open && open.record) || (h ? h.rec : isRecording())) kept.push({ i, d, header: f.header, payload: h && h.omit ? null : f.payload, msg: h, off: ev.offset || 0 })
-    else { stats.dropped_frames++; if (h) lost.add('off-window') }
+    if (h ? h.keep : (open && open.record) || isRecording()) {
+      const e = { i, d, header: f.header, payload: h && h.omit ? null : f.payload, msg: h, off: ev.offset || 0 }
+      kept.push(e)
+      if (h) h.frames.push(e)
+    } else { stats.dropped_frames++; if (h) lost.add('off-window') }
     if (ev.type === 'error') broke(D, ev.error)
     else if (ev.type === 'data' && ev.done) { D.msg = null; complete(D, h, ev) }
   }
@@ -184,7 +202,7 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
     if (ended) return
     ended = true
     try {
-      if (open) close(Infinity, error || (isTerminal ? CLOSED : null))
+      if (open) { const call = open; open = null; close(call, Infinity, error || (isTerminal && !call.blind && !dirs.s.broken ? CLOSED : null), true) }
       tail = kept.map((e) => entry(e, null))
       kept = []
     } catch { /* never into the relay */ }
