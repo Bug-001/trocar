@@ -32,6 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { readRecords } from '../../src/etl/ingest.mjs';
 import { sessionView, forWire } from '../../src/view/board.mjs';
 import { buildResolver } from '../../src/query/source.mjs';
+import { fixtureGate } from '../helpers/fixture.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
@@ -269,7 +270,7 @@ function buildGateModule(payloadJson) {
   return `globalThis.__RG_PAYLOAD__ = ${payloadJson};\nglobalThis.__RG_FAILS__ = [];\n${moduleJs}\n${harness}`;
 }
 
-test('render gate: reused demo board renders every panel from the frozen canonical WIRE payload', async () => {
+test('render gate: reused demo board renders every panel from the frozen canonical WIRE payload', fixtureGate(), async () => {
   installShim();
   const records = await readRecords(FIXTURE, { normalize: false });
   const view = sessionView(records, MAIN, { enrich: null }); // hermetic: no ~/.claude dependency
@@ -292,7 +293,7 @@ test('render gate: reused demo board renders every panel from the frozen canonic
 // 4.2:55 「表里不留全文(存 text_ref)……强制『看全文=回源』」 + 1.4:35 「点开惰性填正文」. These are
 // the assertions that go red if `slimRec` / `slimBlock` are reverted — without them "the board still
 // renders" would be satisfied by shipping 142.8 MB again.
-test('wire contract: /api/session ships no request bodies, and no block is left both bodyless and locator-less', async () => {
+test('wire contract: /api/session ships no request bodies, and no block is left both bodyless and locator-less', fixtureGate(), async () => {
   const records = await readRecords(FIXTURE, { normalize: false });
   const payload = forWire(sessionView(records, MAIN, { enrich: null }));
   const calls = payload.analyzed.steps || payload.analyzed.lanes.flatMap((l) => l.calls);
@@ -342,7 +343,7 @@ test('wire contract: /api/session ships no request bodies, and no block is left 
 //   (b) resolved — over a D10-shaped capture (`req_body` = the verbatim bytes) derived from that
 //       same session, written to tmp. That file is then the source of truth for its own resolver,
 //       so「定位源记录 → slice(start,end)」 must reproduce its system/messages/tools nodes exactly.
-test('AC-1: the baked window is byte-verbatim against the raw capture — inlined AND resolved-by-text_ref', async () => {
+test('AC-1: the baked window is byte-verbatim against the raw capture — inlined AND resolved-by-text_ref', fixtureGate(), async () => {
   const records = await readRecords(FIXTURE, { normalize: false });
   const view = sessionView(records, MAIN, { enrich: null });
   const srcOf = (id) => records.find((r) => r.id === id);

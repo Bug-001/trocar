@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readRecords } from '../../src/etl/ingest.mjs';
 import { sessionView, pageView, forWire, groupSessions } from '../../src/view/board.mjs';
+import { fixtureGate, hasFixture } from '../helpers/fixture.mjs';
 
 // THE TIMELINE SHOWS THE WHOLE SESSION. LAZY BELONGS ON BODIES, NOT ON BARS.
 //
@@ -55,19 +56,21 @@ async function loadModule() {
   return globalThis.__CB__;
 }
 
-const records = await readRecords(FIXTURE, { normalize: false });
-const SID = [...groupSessions(records).entries()].sort((a, b) => b[1].length - a[1].length)[0][0];
+// Loaded only when present: the fixture tests below are fixtureGate()d, and the last two (honest
+// "unknown" rendering, its wording) read only index.html, so they must still run without the capture.
+const records = hasFixture() ? await readRecords(FIXTURE, { normalize: false }) : null;
+const SID = records && [...groupSessions(records).entries()].sort((a, b) => b[1].length - a[1].length)[0][0];
 // The EXACT payload the browser receives for a windowed request.
-const wire = forWire(pageView(sessionView(records, SID), { cursor: 0, limit: 5 }));
-const steps = wire.analyzed.steps;
+const wire = records && forWire(pageView(sessionView(records, SID), { cursor: 0, limit: 5 }));
+const steps = wire && wire.analyzed.steps;
 
-test('precondition: most of this session is outside the window', () => {
+test('precondition: most of this session is outside the window', fixtureGate(), () => {
   assert.ok(steps.length >= 20, `only ${steps.length} calls`);
   assert.ok(steps.filter((c) => c.paged_out).length >= 15,
     'not enough out-of-window calls to demonstrate the bug');
 });
 
-test('NOT ONE bar renders as "unknown" — the whole session has its composition', async () => {
+test('NOT ONE bar renders as "unknown" — the whole session has its composition', fixtureGate(), async () => {
   const M = await loadModule();
   const hatched = steps.filter((c) => M.barSegs(c, 40).includes('ct-unloaded')).map((c) => c.gi);
   assert.deepEqual(hatched, [],
@@ -76,7 +79,7 @@ test('NOT ONE bar renders as "unknown" — the whole session has its composition
     + 'reported bug — the server analysed every one of these calls, and withheld nine integers.');
 });
 
-test('…and each bar is multi-segment, not one solid colour', async () => {
+test('…and each bar is multi-segment, not one solid colour', fixtureGate(), async () => {
   const M = await loadModule();
   const thin = [];
   for (const c of steps) {
@@ -88,7 +91,7 @@ test('…and each bar is multi-segment, not one solid colour', async () => {
     + 'colour" failure: the composition arrived but every bucket but one weighed zero.');
 });
 
-test('an out-of-window bar matches what the in-window one would draw', async () => {
+test('an out-of-window bar matches what the in-window one would draw', fixtureGate(), async () => {
   // Anti-偷换概念: the bars must not merely be COLOURED, they must be coloured CORRECTLY. Compare a
   // paged-out call's rendered segments against the same call rendered from its own blocks unpaged.
   const M = await loadModule();

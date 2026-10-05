@@ -6,6 +6,7 @@ import { once } from 'node:events';
 import { readRecords } from '../../src/etl/ingest.mjs';
 import { sessionView, pageView } from '../../src/view/board.mjs';
 import { createServer } from '../../src/server.mjs';
+import { fixtureGate, hasFixture } from '../helpers/fixture.mjs';
 
 // RFC 4.4:88② / 3.5 游标契约 (D25 轻路) — /api/session returns only the VIEW PAGE. Cursor unit = the
 // global call index `gi`; the body-bearing payload (rec request meta / flat blocks / norm.text) rides
@@ -37,11 +38,12 @@ const laneRefs = (v) => (v.analyzed.lanes || [])
 
 let RECORDS, FULL;
 test.before(async () => {
+  if (!hasFixture()) return; // every test in this file is fixtureGate()d
   RECORDS = await readRecords(FIXTURE, { normalize: false });
   FULL = sessionView(RECORDS, MAIN, { enrich: null });
 });
 
-test('no paging params → full send (no page field, every call keeps its bodies)', () => {
+test('no paging params → full send (no page field, every call keeps its bodies)', fixtureGate(), () => {
   assert.equal(FULL.page, undefined, 'full send carries no page metadata');
   const calls = allCalls(FULL);
   // 35, not 33: analyze() no longer silently drops the session's non-200 calls (req_00002/502,
@@ -65,7 +67,7 @@ test('no paging params → full send (no page field, every call keeps its bodies
 // The lanes are what the board renders (buildLanes). Post-refactor they name their calls by gi, so
 // the payload is only renderable if every reference resolves into `steps` — a dangling reference is
 // an empty timeline, which is exactly the failure mode paging exists to prevent.
-test('full send: every lane reference resolves to a call in steps, and covers the session exactly', () => {
+test('full send: every lane reference resolves to a call in steps, and covers the session exactly', fixtureGate(), () => {
   const byGi = new Map(allCalls(FULL).map((c) => [c.gi, c]));
   const refs = laneRefs(FULL);
   assert.equal(refs.length, 35, 'lanes name every call exactly once');
@@ -73,7 +75,7 @@ test('full send: every lane reference resolves to a call in steps, and covers th
   for (const gi of refs) assert.ok(byGi.get(gi), `lane reference gi=${gi} resolves to a call object`);
 });
 
-test('pageView window [0,5): only in-window calls keep bodies; page metadata correct', () => {
+test('pageView window [0,5): only in-window calls keep bodies; page metadata correct', fixtureGate(), () => {
   const v = pageView(FULL, { cursor: 0, limit: 5 });
   assert.deepEqual(v.page, { cursor: 0, limit: 5, total: 35, returned: 5, baseline: null, nextCursor: 5, hasMore: true });
   for (const c of allCalls(v)) {
@@ -94,7 +96,7 @@ test('pageView window [0,5): only in-window calls keep bodies; page metadata cor
   }
 });
 
-test('paged-out calls keep the cheap meta the timeline needs (ctx/usage/gi/cacheBreak/model)', () => {
+test('paged-out calls keep the cheap meta the timeline needs (ctx/usage/gi/cacheBreak/model)', fixtureGate(), () => {
   const v = pageView(FULL, { cursor: 0, limit: 1 });
   const out = allCalls(v).filter((c) => c.paged_out);
   assert.ok(out.length >= 30);
@@ -109,7 +111,7 @@ test('paged-out calls keep the cheap meta the timeline needs (ctx/usage/gi/cache
 
 // Paging must not break the lane→call reference: the overview strip renders the WHOLE session from
 // the lanes, so a paged response still has to name all 35 calls, in-window or not.
-test('a paged view still names every call from its lanes', () => {
+test('a paged view still names every call from its lanes', fixtureGate(), () => {
   const v = pageView(FULL, { cursor: 10, limit: 5 });
   const byGi = new Map(allCalls(v).map((c) => [c.gi, c]));
   const refs = laneRefs(v);
@@ -121,7 +123,7 @@ test('a paged view still names every call from its lanes', () => {
 // first call on the page; without it the board can say nothing about what changed at every page
 // boundary, which is a hole in the answer at a place the user did not choose. `returned` counts bodies
 // actually shipped, and `baseline` names the extra one so the +1 is explicit on the wire.
-test('window in the middle [10,15): ships the window plus its diff baseline', () => {
+test('window in the middle [10,15): ships the window plus its diff baseline', fixtureGate(), () => {
   const v = pageView(FULL, { cursor: 10, limit: 5 });
   assert.deepEqual(v.page,
     { cursor: 10, limit: 5, total: 35, returned: 6, baseline: 9, nextCursor: 15, hasMore: true });
@@ -129,20 +131,20 @@ test('window in the middle [10,15): ships the window plus its diff baseline', ()
   assert.deepEqual(heavy, [9, 10, 11, 12, 13, 14], 'call #9 rides along solely as the diff baseline');
 });
 
-test('last page [30,40): clamps to end, nextCursor null, hasMore false', () => {
+test('last page [30,40): clamps to end, nextCursor null, hasMore false', fixtureGate(), () => {
   const v = pageView(FULL, { cursor: 30, limit: 10 });
   assert.deepEqual(v.page,
     { cursor: 30, limit: 10, total: 35, returned: 6, baseline: 29, nextCursor: null, hasMore: false });
 });
 
-test('cursor past the end → empty window, hasMore false (no throw)', () => {
+test('cursor past the end → empty window, hasMore false (no throw)', fixtureGate(), () => {
   const v = pageView(FULL, { cursor: 100, limit: 5 });
   assert.equal(v.page.returned, 0);
   assert.equal(v.page.hasMore, false);
   assert.ok(allCalls(v).every((c) => c.paged_out), 'everything is paged out past the end');
 });
 
-test('pageView is non-mutating — the source full view still holds every call body', () => {
+test('pageView is non-mutating — the source full view still holds every call body', fixtureGate(), () => {
   const before = allCalls(FULL).map((c) => (c.flat || []).length);
   const recBefore = allCalls(FULL).map((c) => c.rec.request.context_chars);
   pageView(FULL, { cursor: 0, limit: 1 });
@@ -161,12 +163,13 @@ const get = (port, p) => new Promise((resolve, reject) => {
 });
 let srv, port;
 test.before(async () => {
+  if (!hasFixture()) return;
   const made = await createServer({ dbPath: '/nonexistent-db-xyz', sourcePath: FIXTURE });
   srv = made.server; srv.listen(0, '127.0.0.1'); await once(srv, 'listening'); port = srv.address().port;
 });
 test.after(() => srv?.close());
 
-test('HTTP /api/session?cursor&limit → paged payload with page metadata', async () => {
+test('HTTP /api/session?cursor&limit → paged payload with page metadata', fixtureGate(), async () => {
   const r = await get(port, `/api/session?id=${MAIN}&cursor=0&limit=3`);
   assert.equal(r.status, 200);
   const d = JSON.parse(r.body);
@@ -177,7 +180,7 @@ test('HTTP /api/session?cursor&limit → paged payload with page metadata', asyn
 // The wire payload has to be RENDERABLE, not merely present: the board resolves each lane's gi
 // against `analyzed.steps` (buildLanes). Asserting only `d.analyzed.lanes` truthy — as this test used
 // to — passes on a payload whose lanes resolve to nothing and whose timeline is empty.
-test('HTTP full send: the payload re-hydrates — lane gi refs resolve against analyzed.steps', async () => {
+test('HTTP full send: the payload re-hydrates — lane gi refs resolve against analyzed.steps', fixtureGate(), async () => {
   const r = await get(port, `/api/session?id=${MAIN}`);
   assert.equal(r.status, 200);
   const d = JSON.parse(r.body);
@@ -196,7 +199,7 @@ test('HTTP full send: the payload re-hydrates — lane gi refs resolve against a
 // has to be a PROJECTION. If it rewrites the memoized object in place, the first request is correct
 // and every one after it gets lanes whose gi refs were already replaced — the board then renders an
 // empty timeline for a session it had just shown, and only on a reload.
-test('HTTP full send is repeatable — the wire transform does not consume the memoized view', async () => {
+test('HTTP full send is repeatable — the wire transform does not consume the memoized view', fixtureGate(), async () => {
   const first = JSON.parse((await get(port, `/api/session?id=${MAIN}`)).body);
   const second = JSON.parse((await get(port, `/api/session?id=${MAIN}`)).body);
   assert.deepEqual(laneRefs(second), laneRefs(first), 'the second request gets the same lane refs');
@@ -204,7 +207,7 @@ test('HTTP full send is repeatable — the wire transform does not consume the m
   for (const gi of laneRefs(second)) assert.ok(byGi.get(gi), `gi=${gi} still resolves on a re-fetch`);
 });
 
-test('HTTP paged send: the whole session is still on the timeline, only the window carries bodies', async () => {
+test('HTTP paged send: the whole session is still on the timeline, only the window carries bodies', fixtureGate(), async () => {
   const r = await get(port, `/api/session?id=${MAIN}&cursor=10&limit=5`);
   assert.equal(r.status, 200);
   const d = JSON.parse(r.body);
@@ -217,7 +220,7 @@ test('HTTP paged send: the whole session is still on the timeline, only the wind
   assert.deepEqual(heavy, [9, 10, 11, 12, 13, 14], 'window + diff baseline, and nothing else');
 });
 
-test('HTTP malformed paging params → 400 (never a silent mis-window)', async () => {
+test('HTTP malformed paging params → 400 (never a silent mis-window)', fixtureGate(), async () => {
   for (const q of ['cursor=-1', 'cursor=abc', 'cursor=1.5', 'limit=0', 'limit=99999', 'limit=x']) {
     const r = await get(port, `/api/session?id=${MAIN}&${q}`);
     assert.equal(r.status, 400, `${q} → 400`);

@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { parseCall } from '../../src/adapters/cc.mjs';
 import { readRecords } from '../../src/etl/ingest.mjs';
+import { fixtureGate } from '../helpers/fixture.mjs';
 
 const FIXTURE = path.resolve('test/fixtures/cc-session-real.ndjson');
 
 // RFC 3.1:44 — canonical ∪ extra MUST cover the original object's keys, PER LAYER. The envelope
 // pass treats req_body as consumed-whole, so unmapped provider REQUEST fields must be caught by a
 // req_body-level diff and nested under extra.req_body (+ counted).
-test('parseCall: unmapped req_body provider fields surface in extra.req_body (real trace)', async () => {
+test('parseCall: unmapped req_body provider fields surface in extra.req_body (real trace)', fixtureGate(), async () => {
   const recs = await readRecords(FIXTURE); // normalized (req_body = string)
   const r = recs.find((x) => x.is_llm_call);
   const c = parseCall(r);
@@ -22,7 +23,7 @@ test('parseCall: unmapped req_body provider fields surface in extra.req_body (re
   for (const k of ['req_body.model', 'req_body.system', 'req_body.messages', 'req_body.tools', 'req_body.metadata']) assert.ok(!(k in c.extra), `${k} is mapped, not in extra`);
 });
 
-test('parseCall: a NOVEL req_body field lands in extra.req_body and bumps the count', async () => {
+test('parseCall: a NOVEL req_body field lands in extra.req_body and bumps the count', fixtureGate(), async () => {
   const recs = await readRecords(FIXTURE);
   const r = recs.find((x) => x.is_llm_call);
   const body = JSON.parse(r.req_body);
