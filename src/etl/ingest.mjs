@@ -53,7 +53,7 @@ const EXCERPT = 160;
 // (rotation, restore, a new capture reusing the name); see src/server.mjs::makeRecordLoader. This
 // function's own contract is narrower and defensive: start where told, and never emit a record from
 // a partial line — an offset landing mid-record must drop that fragment rather than half-parse it.
-export async function readRecords(filePath, { normalize = true, limit = Infinity, onSkip = null, startOffset = 0 } = {}) {
+export async function readRecords(filePath, { normalize = true, limit = Infinity, onSkip = null, startOffset = 0, endOffset = Infinity } = {}) {
   const out = [];
   // skipped: one entry per line that carried a record we could NOT recover. blankLines are tracked
   // separately and are NOT a loss (whitespace carries no record) — conflating them would cry wolf.
@@ -66,7 +66,11 @@ export async function readRecords(filePath, { normalize = true, limit = Infinity
     try { size = (await import('node:fs')).statSync(filePath).size; } catch { return out; }
     if (start >= size) return out;
   }
-  const rl = createInterface({ input: createReadStream(filePath, { encoding: 'utf8', start }), crlfDelay: Infinity });
+  // endOffset (exclusive): a live reader stops at the end of the last complete line, so a record the
+  // writer is still writing is read whole on the next pass instead of torn now (server.mjs).
+  const end = Number.isFinite(endOffset) ? { end: endOffset - 1 } : {};
+  if (Number.isFinite(endOffset) && endOffset <= start) { Object.defineProperty(out, 'scan', { value: scan, enumerable: false, configurable: true }); return out; }
+  const rl = createInterface({ input: createReadStream(filePath, { encoding: 'utf8', start, ...end }), crlfDelay: Infinity });
   let lineNo = 0;
   for await (const line of rl) {
     lineNo++;

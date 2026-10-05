@@ -629,6 +629,7 @@ function renderSourceHealth(h){
   if(warn.length) parts.push(`${warn.length} capture file${warn.length!==1?'s':''} not read: `+warn.slice(0,4).map(x=>`<b>${esc(x.name)}</b> (${esc(x.reason)})`).join(', ')+(warn.length>4?` +${warn.length-4} more`:''))
   if(corrupt.length) parts.push(`${corrupt.reduce((n,[,c])=>n+c,0)} unparseable line(s) in `+corrupt.slice(0,3).map(([f,c])=>`<b>${esc(f.split('/').pop())}</b> ×${c}`).join(', '))
   if(resets.length) parts.push(`${resets.length} file(s) shrank and were re-read`)
+  const pend=Object.keys((h&&h.tail_pending)||{}); if(pend.length) parts.push(`${pend.length} file(s) end in a line not finished yet (shown once written): `+pend.slice(0,3).map(f=>`<b>${esc(f.split('/').pop())}</b>`).join(', '))
   if(unid) parts.push(`${unid} record(s) without an id (listed; their blocks cannot open)`)
   if(!parts.length){ bar.style.display='none'; bar.innerHTML=''; bar.title=''; return }
   bar.title=sk.map(x=>`${x.root}/${x.name} — ${x.reason}${x.of?' (same file as '+x.of+')':''}${x.error?' · '+x.error:''}`).concat(corrupt.map(([f,c])=>`${f} — ${c} unparseable line(s)`)).join('\n')

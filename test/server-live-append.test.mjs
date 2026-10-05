@@ -73,3 +73,27 @@ test('the SQL replay (/api/call/:id/context) also refreshes: a call ETL\'d from 
     assert.ok(late.req_body.includes(b.text));
   }
 });
+
+test('a record the board catches half-written is listed once the writer finishes it — never lost, never counted corrupt', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-live-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const col = collectorHome(home); fs.mkdirSync(col);
+  const f = path.join(col, 'capture-2026-10-06.ndjson');
+  const line = (e) => JSON.stringify(e) + '\n';
+  const a = line(env('req_z-00001', '2026-10-06T12:00:00.000Z', 'whole')), b = line(env('req_z-00002', '2026-10-06T12:00:05.000Z', 'written in two pieces'));
+  fs.writeFileSync(f, a + b.slice(0, 40)); // the board polls while the writer is mid-line
+  const { server } = await createServer({ dbPath: path.join(home, 'none.duckdb'), sourcePath: serveSource({ home, legacyExists: false }) });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => server.close());
+  const port = server.address().port;
+  const calls = async () => JSON.parse((await get(port, '/api/projects')).body);
+  let pj = await calls();
+  assert.deepEqual(pj.projects.flatMap((p) => p.sessions).map((s) => s.calls), [1]);
+  assert.deepEqual([pj.source.corrupt_lines, pj.source.tail_pending], [{}, { [f]: 40 }], 'the unfinished line is reported as pending, not as corrupt');
+  fs.appendFileSync(f, b.slice(40));
+  pj = await calls();
+  assert.deepEqual(pj.projects.flatMap((p) => p.sessions).map((s) => s.calls), [2], 'the finished record is listed');
+  assert.deepEqual([pj.source.corrupt_lines, pj.source.tail_pending], [{}, {}]);
+  const view = JSON.parse((await get(port, '/api/session?id=LIVE')).body);
+  assert.deepEqual(view.analyzed.steps.map((s) => s.id), ['req_z-00001', 'req_z-00002']);
+});

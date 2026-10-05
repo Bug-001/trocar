@@ -175,6 +175,22 @@ export function scanRoots(roots) {
   return { files, skipped, sig: parts.map((p) => p.sig).join('#') };
 }
 
+// The offset just past the last newline in [from, size) — `from` if there is none. Reading only that
+// far leaves a line the writer has not finished for the next pass (it is reported, not parsed torn).
+function completeEnd(f, from, size) {
+  if (size <= from) return from;
+  const fd = fssync.openSync(f, 'r'), buf = Buffer.allocUnsafe(65536);
+  try {
+    for (let hi = size; hi > from;) {
+      const lo = Math.max(from, hi - buf.length), n = fssync.readSync(fd, buf, 0, hi - lo, lo);
+      const i = buf.subarray(0, n).lastIndexOf(10);
+      if (i >= 0) return lo + i + 1;
+      hi = lo;
+    }
+    return from;
+  } finally { fssync.closeSync(fd); }
+}
+
 // A source may be ONE path or SEVERAL roots. Several is what D27 needs: after the home moved to
 // ~/.asight the user's existing captures still sit under ~/.atrace/asight, and they must keep showing
 // up on the board — a rename that quietly stops listing three gigabytes of history would be an
@@ -220,7 +236,7 @@ function makeRecordLoader(source) {
     // empty session. So a file that SHRANK is re-read from zero, and the fact is recorded on
     // `load.resets` rather than being handled silently (invariant 4).
     const records = [];
-    const resets = [];
+    const resets = [], pending = {};
     const nextMarks = new Map();
     for (const f of files) {
       let size = 0;
@@ -231,7 +247,14 @@ function makeRecordLoader(source) {
       let from = 0, keep = [];
       if (prev && size >= prev.size) { from = prev.size; keep = prev.records; }
       else if (prev) { resets.push({ file: f, was: prev.size, now: size, why: 'file shrank — rotated, truncated or replaced' }); }
-      const fresh = from > 0 ? await readRecords(f, { normalize: false, startOffset: from }) : await readRecords(f, { normalize: false });
+      // The watermark is the end of the last COMPLETE line, not the file size: a record caught
+      // half-written used to be parsed torn (counted corrupt) and its remainder then dropped as a
+      // fragment on the next pass, so it never reached the board. Now it waits, reported as pending.
+      let end;
+      try { end = completeEnd(f, from, size); } catch { end = from; }
+      if (end < size) pending[f] = size - end;
+      const fresh = await readRecords(f, { normalize: false, startOffset: from, endOffset: end });
+      size = end;
       const all = from > 0 ? keep.concat(fresh) : fresh;
       // lines that held a record readRecords could not parse: counted per file and shown (invariant 4)
       const corrupt = (from > 0 ? prev.corrupt || 0 : 0) + ((fresh.scan && fresh.scan.skippedLines) || 0);
@@ -239,12 +262,12 @@ function makeRecordLoader(source) {
       for (const r of all) records.push(r);
     }
     marks = nextMarks;   // files no longer listed drop out, releasing their records
-    load.resets = resets;
+    load.resets = resets; load.pending = pending;
     load.corrupt = Object.fromEntries([...marks].filter(([, m]) => m.corrupt).map(([f, m]) => [f, m.corrupt]));
     cache = { sig, records };
     return records;
   };
-  load.sig = null; load.skipped = []; load.resets = []; load.corrupt = {};
+  load.sig = null; load.skipped = []; load.resets = []; load.corrupt = {}; load.pending = {};
   return load;
 }
 
@@ -395,6 +418,7 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
       skipped,
       corrupt_lines: metas ? {} : { ...(loadRecords.corrupt || {}) }, // per file: lines holding a record that would not parse
       resets: metas ? [] : loadRecords.resets || [],
+      tail_pending: metas ? {} : { ...(loadRecords.pending || {}) }, // per file: bytes of a last line not finished yet
       unidentified_lines: idx.unidentifiedLines || 0, // records with no id: listed, but their blocks cannot open
     };
   };

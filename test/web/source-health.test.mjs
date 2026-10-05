@@ -46,10 +46,11 @@ test('an empty board over a source with a dangling link and torn lines says so, 
       { root: '/h', name: 'old.ndjson.gz', reason: 'compressed', attention: true },
       { root: '/h', name: 'config.json', reason: 'not-ndjson', attention: false },
     ],
-    corrupt_lines: { '/h/claude-capture.ndjson': 2 }, resets: [], unidentified_lines: 0,
+    corrupt_lines: { '/h/claude-capture.ndjson': 2 }, resets: [], unidentified_lines: 0, tail_pending: { '/h/c/capture-2026-10-06.ndjson': 40 },
   });
   for (const s of ['2 capture files not read', '<b>dangling.ndjson</b> (broken-symlink)', '<b>old.ndjson.gz</b> (compressed)',
-    '2 unparseable line(s) in <b>claude-capture.ndjson</b> ×2', '1 other entry ignored']) assert.ok(bar.innerHTML.includes(s), `${s} in ${bar.innerHTML}`);
+    '2 unparseable line(s) in <b>claude-capture.ndjson</b> ×2', '1 other entry ignored',
+    '1 file(s) end in a line not finished yet (shown once written): <b>capture-2026-10-06.ndjson</b>']) assert.ok(bar.innerHTML.includes(s), `${s} in ${bar.innerHTML}`);
   assert.match(bar.title, /\/h\/config\.json — not-ndjson/);
   assert.match(bar.empty, /No sessions captured yet/, 'the empty state still renders beside the bar');
   assert.notEqual(bar.style.cssText || '', '');
