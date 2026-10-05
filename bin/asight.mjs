@@ -338,12 +338,12 @@ async function main() {
       }
       if (sub === 'export') {
         if (!target) die(usage);
-        const { exportSealed, sessionSealedFiles, exportDir } = await mod('export.mjs');
-        const isFile = target.endsWith('.sealed');
-        const files = isFile ? [path.resolve(target)] : sessionSealedFiles(path.resolve(flag('--sessions', path.join(asightHome(), 'sessions'))), target);
-        const out = path.resolve(flag('--out', path.join(exportDir(), (isFile ? path.basename(target, '.sealed') : target) + '.ndjson')));
-        try { const res = exportSealed({ files, out }); console.log(`exported ${res.records} records (${mb(res.bytes)}) → ${res.out} (0600)`); }
-        catch (e) { console.error(e.message); process.exitCode = 1; }
+        const { runExport } = await mod('export.mjs');
+        const out = flag('--out', undefined);
+        try {
+          const res = runExport({ target, sessionsRoot: path.resolve(flag('--sessions', path.join(asightHome(), 'sessions'))), out: out && path.resolve(out) });
+          console.log(`exported ${res.records} records (${mb(res.bytes)}) → ${res.out} (0600)`);
+        } catch (e) { console.error(e.message); process.exitCode = 1; }
         break;
       }
       if (sub === 'journal') {

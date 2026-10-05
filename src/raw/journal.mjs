@@ -12,9 +12,11 @@ import { asightHome } from '../paths.mjs';
 export const defaultJournalPath = () => path.join(asightHome(), 'raw', 'journal.jsonl');
 
 // journal: a path, or null to disable (only for callers that report through another durable channel).
-// Never throws: a journal that cannot be written must not mask the failure being journalled — the
-// caller gets `false` and says so.
-export function appendJournal(entry, { journal = defaultJournalPath(), fs = nodeFs } = {}) {
+// Never throws: a journal that cannot be written must not mask the failure being journalled. It
+// returns `false` AND says so on stderr, with the entry itself — the record that could not be made
+// durable is at least in front of the operator, never lost in silence (review F10).
+const warnStderr = (m) => { try { process.stderr.write(m + '\n'); } catch {} };
+export function appendJournal(entry, { journal = defaultJournalPath(), fs = nodeFs, warn = warnStderr } = {}) {
   if (journal == null) return false;
   try {
     fs.mkdirSync(path.dirname(journal), { recursive: true, mode: 0o700 });
@@ -24,7 +26,10 @@ export function appendJournal(entry, { journal = defaultJournalPath(), fs = node
       fs.fsyncSync(fd);
     } finally { fs.closeSync(fd); }
     return true;
-  } catch { return false; }
+  } catch (e) {
+    warn(`asight: could not write the raw journal ${journal} (${e.message}) — this outcome is recorded nowhere else: ${JSON.stringify(entry)}`);
+    return false;
+  }
 }
 
 export function readJournal({ journal = defaultJournalPath(), fs = nodeFs } = {}) {

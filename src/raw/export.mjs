@@ -13,6 +13,20 @@ import { appendJournal, defaultJournalPath } from './journal.mjs';
 
 export const exportDir = () => path.join(asightHome(), 'export');
 
+// `asight raw export <session-id|file.sealed>`: resolve, export, and journal ANY failure — a missing
+// session dir or an existing output file included (review F15).
+export function runExport({ target, sessionsRoot, out, fs = nodeFs, journal = defaultJournalPath() }) {
+  const isFile = target.endsWith('.sealed');
+  const dest = out || path.join(exportDir(), (isFile ? path.basename(target, '.sealed') : target) + '.ndjson');
+  let files;
+  try { files = isFile ? [path.resolve(target)] : sessionSealedFiles(sessionsRoot, target); }
+  catch (e) {
+    appendJournal({ op: 'export', outcome: 'failed', target, out: dest, reason: e.message }, { journal, fs });
+    throw new Error(`export failed, nothing written: ${e.message}`);
+  }
+  return exportSealed({ files, out: dest, fs, journal });
+}
+
 // The sealed files of one session dir, in segment order.
 export function sessionSealedFiles(sessionsRoot, session) {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(session)) throw new Error(`not a session id: ${session}`);
@@ -26,9 +40,18 @@ export function exportFiles(dir = exportDir(), { fs = nodeFs } = {}) {
 }
 
 export function exportSealed({ files, out, fs = nodeFs, journal = defaultJournalPath() }) {
-  if (!files.length) throw new Error('nothing to export: no sealed files');
-  fs.mkdirSync(path.dirname(out), { recursive: true, mode: 0o700 });
-  const fd = fs.openSync(out, 'wx', 0o600);
+  let fd;
+  try {
+    if (!files.length) throw new Error('nothing to export: no sealed files');
+    fs.mkdirSync(path.dirname(out), { recursive: true, mode: 0o700 });
+    // our own default dir is owner-only even if it existed before with looser bits (E9); a directory
+    // the operator chose with --out stays as they made it
+    if (path.resolve(path.dirname(out)) === path.resolve(exportDir())) fs.chmodSync(exportDir(), 0o700);
+    fd = fs.openSync(out, 'wx', 0o600);
+  } catch (e) {
+    appendJournal({ op: 'export', outcome: 'failed', sealed: files, out, reason: e.message }, { journal, fs });
+    throw new Error(`export failed, nothing written: ${e.message}`);
+  }
   let records = 0, bytes = 0;
   try {
     for (const f of files) {
