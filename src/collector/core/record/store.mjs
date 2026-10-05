@@ -22,17 +22,21 @@ export function createRecordStore({ root, onError = () => {} }) {
     return fd
   }
 
+  // true once the line is written; false (counted, reported) when it is not. The WebSocket recorder
+  // marks the calls after a lost envelope partial (RFC 4.6 §传输与帧级记录, write-failed).
   function write(resolve, rec) {
     try {
       fs.writeSync(fdFor(resolve(dateOf(rec))), JSON.stringify(rec) + '\n')
+      return true
     } catch (e) {
       errors++
       onError(e)
+      return false
     }
   }
 
   return {
-    envelope(env) { write((d) => path.join(root, `capture-${d}.ndjson`), env) },
+    envelope(env) { return write((d) => path.join(root, `capture-${d}.ndjson`), env) },
     flow(rec) { write((d) => path.join(root, 'flows', `${d}.ndjson`), rec) },
     audit(rec) { write((d) => path.join(root, 'audit', `${d}.ndjson`), rec) },
     replay(env) { write((d) => path.join(root, 'replays', `${d}.ndjson`), env) },
