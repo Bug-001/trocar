@@ -156,12 +156,21 @@ export function sourceFiles(sourcePath) {
 }
 // Every root's capture files, each read once, plus everything NOT read and why (4.4:83). A
 // subdirectory that is itself one of the roots (~/.asight/collector under ~/.asight) is read as a
-// root, so it is not listed as skipped. Throws if a root cannot be listed (broken ≠ empty).
-export function scanRoots(roots) {
-  const parts = roots.map((r) => sourceFiles(r));
+// root, so it is not listed as skipped. Throws if a root cannot be listed (broken ≠ empty), unless
+// `tolerant`: then that root is listed as `root-unreadable` and the others are still scanned.
+export function scanRoots(roots, { tolerant = false } = {}) {
+  const failed = [];
+  const parts = roots.map((r) => {
+    try { return sourceFiles(r); }
+    catch (e) {
+      if (!tolerant) throw e;
+      failed.push({ root: path.dirname(r), name: path.basename(r), reason: 'root-unreadable', error: (e && e.code) || String(e), attention: true });
+      return { files: [], skipped: [], sig: '' };
+    }
+  });
   const rootSet = new Set(roots.map((r) => path.resolve(r)));
-  const skipped = parts.flatMap((p) => p.skipped)
-    .filter((x) => !(x.reason === 'directory' && rootSet.has(path.resolve(x.root, x.name))));
+  const skipped = failed.concat(parts.flatMap((p) => p.skipped)
+    .filter((x) => !(x.reason === 'directory' && rootSet.has(path.resolve(x.root, x.name)))));
   // One file, read once: a capture linked from one root to a file in another root (a symlink is a
   // capture too, paths.mjs isCaptureFile) would otherwise be read twice and every call in it
   // doubled. Keyed by real path; the first root to name a file keeps it, the other is listed.
@@ -238,6 +247,7 @@ function makeRecordLoader(source) {
     const records = [];
     const resets = [], pending = {};
     const nextMarks = new Map();
+    let failed = false;
     for (const f of files) {
       let size = 0;
       try { size = fssync.statSync(f).size; } catch { // vanished mid-refresh → skip this pass, and say so
@@ -249,22 +259,38 @@ function makeRecordLoader(source) {
       else if (prev) { resets.push({ file: f, was: prev.size, now: size, why: 'file shrank — rotated, truncated or replaced' }); }
       // The watermark is the end of the last COMPLETE line, not the file size: a record caught
       // half-written used to be parsed torn (counted corrupt) and its remainder then dropped as a
-      // fragment on the next pass, so it never reached the board. Now it waits, reported as pending.
-      let end;
-      try { end = completeEnd(f, from, size); } catch { end = from; }
-      if (end < size) pending[f] = size - end;
-      const fresh = await readRecords(f, { normalize: false, startOffset: from, endOffset: end });
+      // fragment on the next pass, so it never reached the board.
+      let end, fresh, tail = [];
+      try {
+        end = completeEnd(f, from, size);
+        fresh = await readRecords(f, { normalize: false, startOffset: from, endOffset: end });
+        // The bytes after the last newline are a record mid-write, a writer that stopped mid-line, or
+        // a complete last record with no trailing newline. Parsed provisionally: shown when it parses,
+        // never kept in the mark (the next pass reads it again from `end`), reported when it does not.
+        if (end < size) {
+          tail = await readRecords(f, { normalize: false, startOffset: end, endOffset: size });
+          if (!tail.length) pending[f] = size - end;
+        }
+      } catch (e) {
+        // Unreadable (EACCES, or gone after the stat): reported, what it already yielded is kept, and
+        // the pass is not memoized, so the file is retried even if its size and mtime never change.
+        load.skipped.push({ root: path.dirname(f), name: path.basename(f), reason: 'unreadable', error: (e && e.code) || String(e), attention: true });
+        failed = true;
+        if (prev && from > 0) { nextMarks.set(f, prev); for (const r of prev.records) records.push(r); }
+        continue;
+      }
       size = end;
       const all = from > 0 ? keep.concat(fresh) : fresh;
       // lines that held a record readRecords could not parse: counted per file and shown (invariant 4)
       const corrupt = (from > 0 ? prev.corrupt || 0 : 0) + ((fresh.scan && fresh.scan.skippedLines) || 0);
       nextMarks.set(f, { size, records: all, corrupt });
       for (const r of all) records.push(r);
+      for (const r of tail) records.push(r); // provisional: not in the mark
     }
     marks = nextMarks;   // files no longer listed drop out, releasing their records
     load.resets = resets; load.pending = pending;
     load.corrupt = Object.fromEntries([...marks].filter(([, m]) => m.corrupt).map(([f, m]) => [f, m.corrupt]));
-    cache = { sig, records };
+    cache = { sig: failed ? null : sig, records };
     return records;
   };
   load.sig = null; load.skipped = []; load.resets = []; load.corrupt = {}; load.pending = {};
@@ -400,27 +426,38 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
   // What the board did NOT read, and why (4.4:83 · invariant 4), sent with every session list so a
   // skipped capture is on screen rather than only in a log. `attention` = it may hold capture bytes
   // the board does not show. Shard mode lists meta.json only, so it says what that leaves out.
-  const sourceHealth = (metas) => {
+  const sourceHealth = async (metas) => {
     const roots = (Array.isArray(sourcePath) ? sourcePath : [sourcePath]).filter(Boolean);
     let skipped = [...(loadRecords.skipped || [])];
     if (metas) {
-      let scan; try { scan = scanRoots(roots); } catch { scan = { files: [], skipped: [] }; } // the listing itself reports a broken root
+      const scan = scanRoots(roots, { tolerant: true }); // a root shard mode cannot list is reported, the rest still are
       const rootSet = new Set(roots.map((r) => path.resolve(r))), shardSet = new Set(metas.dirs.map((d) => path.resolve(d)));
       skipped = scan.skipped.filter((x) => !(x.reason === 'directory' && shardSet.has(path.resolve(x.root, x.name))))
         .concat(scan.files.filter((f) => rootSet.has(path.resolve(path.dirname(f))))
           .map((f) => ({ root: path.dirname(f), name: path.basename(f), reason: 'flat-file-in-shard-mode', attention: true })))
         .concat(metas.noMeta.map((x) => ({ root: path.dirname(x.dir), name: path.basename(x.dir), reason: 'no-meta', error: x.error, attention: true })));
     }
-    const idx = (typeof resolve === 'function' && resolve.scan) || {};
-    // the block index's own refresh-time skips (a file it could not read, or that vanished)
+    let idx = (typeof resolve === 'function' && resolve.scan) || {};
+    // A file the block index could not read is retried before it is reported again, so a fixed
+    // permission clears from the board without waiting for a block to miss. Free when nothing failed.
+    if ((idx.skipped || []).some((x) => x.reason === 'unreadable' || x.reason === 'vanished') && typeof resolve.refresh === 'function') {
+      try { await resolve.refresh(); } catch (e) { skipped.push({ root: '', name: '(block index)', reason: 'refresh-failed', error: (e && e.code) || String(e), attention: true }); }
+      idx = resolve.scan || {};
+    }
+    // the block index's own skips (a file it could not read, or that vanished)
     for (const x of idx.skipped || []) if (x.reason === 'unreadable' || x.reason === 'vanished') skipped.push({ ...x, attention: true, reader: 'block-index' });
     // a root whose block index could not be built at all: its sessions list, but no block opens
-    for (const u of idx.unreadableRoots || []) skipped.push({ root: u.root, name: path.basename(u.root), reason: 'block-index-failed', error: u.reason, attention: true, reader: 'block-index' });
+    for (const u of idx.unreadableRoots || []) skipped.push({ root: path.dirname(u.root), name: path.basename(u.root), reason: 'block-index-failed', error: u.reason, attention: true, reader: 'block-index' });
+    // the loader and the block index can both see one failure: list it once
+    const seen = new Set();
+    skipped = skipped.filter((x) => { const k = path.resolve(x.root || '', x.name) + '|' + x.reason; return seen.has(k) ? false : (seen.add(k), true); });
+    // Shard mode reads shard streams per session, on demand, and does not count their bad lines yet:
+    // null = not measured, never {} (which would claim "none").
     return {
       skipped,
-      corrupt_lines: metas ? {} : { ...(loadRecords.corrupt || {}) }, // per file: lines holding a record that would not parse
-      resets: metas ? [] : loadRecords.resets || [],
-      tail_pending: metas ? {} : { ...(loadRecords.pending || {}) }, // per file: bytes of a last line not finished yet
+      corrupt_lines: metas ? null : { ...(loadRecords.corrupt || {}) }, // per file: lines holding a record that would not parse
+      resets: metas ? null : loadRecords.resets || [],
+      tail_pending: metas ? null : { ...(loadRecords.pending || {}) }, // per file: bytes of an incomplete last line
       unidentified_lines: idx.unidentifiedLines || 0, // records with no id: listed, but their blocks cannot open
     };
   };
@@ -484,9 +521,9 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         // Archive layer: on a sharded source, list from the precomputed metas — never load a record,
         // so a 7.4 GB / 24-session capture enumerates instantly instead of OOM-ing.
         const metas = loadSessionMetas();
-        if (metas) return sendJson(res, 200, { ...projectsViewFromMetas(metas, { enrich }), source: sourceHealth(metas) });
+        if (metas) return sendJson(res, 200, { ...projectsViewFromMetas(metas, { enrich }), source: await sourceHealth(metas) });
         const view = projectsView(await loadRecords(), { enrich });
-        return sendJson(res, 200, { ...view, source: sourceHealth(null) });
+        return sendJson(res, 200, { ...view, source: await sourceHealth(null) });
       }
       if (p === '/api/session') {
         const id = url.searchParams.get('id');

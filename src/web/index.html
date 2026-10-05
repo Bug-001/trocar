@@ -629,11 +629,12 @@ function renderSourceHealth(h){
   if(warn.length) parts.push(`${warn.length} capture file${warn.length!==1?'s':''} not read: `+warn.slice(0,4).map(x=>`<b>${esc(x.name)}</b> (${esc(x.reason)})`).join(', ')+(warn.length>4?` +${warn.length-4} more`:''))
   if(corrupt.length) parts.push(`${corrupt.reduce((n,[,c])=>n+c,0)} unparseable line(s) in `+corrupt.slice(0,3).map(([f,c])=>`<b>${esc(f.split('/').pop())}</b> ×${c}`).join(', '))
   if(resets.length) parts.push(`${resets.length} file(s) shrank and were re-read`)
-  const pend=Object.keys((h&&h.tail_pending)||{}); if(pend.length) parts.push(`${pend.length} file(s) end in a line not finished yet (shown once written): `+pend.slice(0,3).map(f=>`<b>${esc(f.split('/').pop())}</b>`).join(', '))
+  const pend=Object.keys((h&&h.tail_pending)||{}); if(pend.length) parts.push(`${pend.length} file(s) end in an incomplete line (a write in progress, or a writer that stopped mid-line): `+pend.slice(0,3).map(f=>`<b>${esc(f.split('/').pop())}</b>`).join(', '))
   if(unid) parts.push(`${unid} record(s) without an id (listed; their blocks cannot open)`)
+  if(h&&h.corrupt_lines===null&&parts.length) parts.push('bad lines in session shards are not counted yet')
   if(!parts.length){ bar.style.display='none'; bar.innerHTML=''; bar.title=''; return }
   bar.title=sk.map(x=>`${x.root}/${x.name} — ${x.reason}${x.of?' (same file as '+x.of+')':''}${x.error?' · '+x.error:''}`).concat(corrupt.map(([f,c])=>`${f} — ${c} unparseable line(s)`)).join('\n')
-  bar.innerHTML=`⚠ 源未全读 · not everything in the capture source is on this board: ${parts.join(' · ')}${rest?` · ${rest} other entr${rest!==1?'ies':'y'} ignored (not capture files; hover for the list)`:''} — the raw files on disk are untouched.`
+  bar.innerHTML=`⚠ 源未全读 · not everything in the capture source is on this board: ${parts.join(' · ')}${rest?` · ${rest} other entr${rest!==1?'ies':'y'} not read (files that are not *.ndjson, subdirectories; hover for the list)`:''} — the raw files on disk are untouched.`
   bar.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #7a5b18;background:#241d0b;color:#e8c15a;border-radius:5px;font-size:11px;line-height:1.45'
 }
 

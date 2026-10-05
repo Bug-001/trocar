@@ -69,12 +69,15 @@ async function main() {
 }
 
 // Printed by both entry points (this file and `asight etl`): a capture-like entry that was not read,
-// or a line that would not parse, goes to stderr; the rest is one counted line.
+// or a line that would not parse, goes to stderr; subdirectories and other files are counted and named.
 export function reportSkips(out, log = console.error) {
   const warn = out.skipped.filter((x) => x.attention), rest = out.skipped.length - warn.length;
   for (const x of warn) log(`ETL: not read: ${x.name} (${x.reason})`);
   for (const [f, n] of Object.entries(out.corrupt_lines)) log(`ETL: ${n} unparseable line(s) not ingested: ${f}`);
-  if (rest) log(`ETL: ${rest} other entr${rest !== 1 ? 'ies' : 'y'} ignored (not capture files): ${out.skipped.filter((x) => !x.attention).map((x) => x.name).join(', ')}`);
+  const dirs = out.skipped.filter((x) => !x.attention && x.reason === 'directory').map((x) => x.name);
+  const files = out.skipped.filter((x) => !x.attention && x.reason !== 'directory').map((x) => x.name);
+  if (dirs.length) log(`ETL: ${dirs.length} subdirector${dirs.length !== 1 ? 'ies' : 'y'} not descended (only top-level *.ndjson is read): ${dirs.join(', ')}`);
+  if (files.length) log(`ETL: ${files.length} other file${files.length !== 1 ? 's' : ''} not read (not *.ndjson): ${files.join(', ')}`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) main();

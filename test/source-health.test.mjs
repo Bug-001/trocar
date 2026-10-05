@@ -78,20 +78,37 @@ test('`asight etl <dir>` returns and prints what it did not read and the lines i
   assert.deepEqual(lines, [
     'ETL: not read: dangling.ndjson (broken-symlink)', 'ETL: not read: old.ndjson.gz (compressed)',
     `ETL: 1 unparseable line(s) not ingested: ${path.join(home, 'claude-capture.ndjson')}`,
-    'ETL: 2 other entries ignored (not capture files): collector, config.json',
+    'ETL: 1 subdirectory not descended (only top-level *.ndjson is read): collector',
+    'ETL: 1 other file not read (not *.ndjson): config.json',
   ]);
 });
 
-test('a root whose block index could not be built is reported, even after its files become readable to the listing', { skip: process.getuid?.() === 0 && 'root reads anything' }, async (t) => {
-  const r1 = tmp(t), r2 = tmp(t), locked = path.join(r2, 'b.ndjson');
+test('a root whose block index could not be built is reported, even after it becomes readable to the listing', { skip: process.getuid?.() === 0 && 'root reads anything' }, async (t) => {
+  const r1 = tmp(t), r2 = tmp(t);
   fs.writeFileSync(path.join(r1, 'a.ndjson'), env('a-1', 'A'));
-  fs.writeFileSync(locked, env('b-1', 'B'), { mode: 0o000 });
-  const { server } = await createServer({ dbPath: '/nonexistent-db', sourcePath: [r1, r2] }); // r2's index fails at startup
+  fs.writeFileSync(path.join(r2, 'b.ndjson'), env('b-1', 'B'));
+  fs.chmodSync(r2, 0o000); // the whole root cannot be listed at startup: its index is never built
+  t.after(() => { try { fs.chmodSync(r2, 0o700); } catch { /* already restored and removed */ } });
+  const { server } = await createServer({ dbPath: '/nonexistent-db', sourcePath: [r1, r2] });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => server.close());
-  fs.chmodSync(locked, 0o600);
+  fs.chmodSync(r2, 0o700);
   const pj = await get(server.address().port, '/api/projects');
   assert.deepEqual(pj.projects.flatMap((p) => p.sessions).map((s) => s.session_id).sort(), ['A', 'B']);
   const hit = pj.source.skipped.find((x) => x.reason === 'block-index-failed');
-  assert.deepEqual(hit && [hit.root, hit.attention], [r2, true], JSON.stringify(pj.source.skipped));
+  assert.deepEqual(hit && [path.join(hit.root, hit.name), hit.attention], [r2, true], JSON.stringify(pj.source.skipped));
+});
+
+test('shard mode: a root that cannot be listed is reported, and the other roots\' reports survive', { skip: process.getuid?.() === 0 && 'root reads anything' }, async (t) => {
+  const r1 = tmp(t), r2 = tmp(t);
+  fs.mkdirSync(path.join(r1, 'S1')); fs.writeFileSync(path.join(r1, 'S1', 'calls.ndjson'), env('s-1', 'S1'));
+  fs.writeFileSync(path.join(r1, 'S1', 'meta.json'), JSON.stringify({ session_id: 'S1', project_slug: '_unresolved', calls: 1 }));
+  fs.writeFileSync(path.join(r1, 'x.ndjson.gz'), 'x');
+  const { server } = await createServer({ dbPath: '/nonexistent-db', sourcePath: [r1, r2] });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => server.close());
+  fs.rmSync(r2, { recursive: true, force: true }); // gone after startup
+  const pj = await get(server.address().port, '/api/projects');
+  assert.deepEqual(byName(pj.source.skipped), { 'x.ndjson.gz': ['compressed', true], [path.basename(r2)]: ['root-unreadable', true] });
+  assert.equal(pj.source.corrupt_lines, null, 'shard streams are not measured: null, never {} ("none")');
 });

@@ -105,7 +105,14 @@ test('an unreadable new file is skipped and noted; it does not stop other files 
     fs.appendFileSync(path.join(r2, 'b.ndjson'), late);
     assert.equal(await r.refresh(), true);
     assert.equal(r.detail('S/b.ndjson#B2').text, bodyOf(late));
-    assert.ok(r.scan.skipped.some((x) => x.name === 'locked.ndjson' && x.reason === 'unreadable'), JSON.stringify(r.scan.skipped));
+    assert.deepEqual(r.scan.skipped.filter((x) => x.reason === 'unreadable').map((x) => [x.root, x.name]), [[r1, 'locked.ndjson']]);
+    const before = r.scan.bytesIndexed;
+    await r.refresh(); // still unreadable: noted once, and an open failure indexed nothing, so no rebuild
+    assert.deepEqual([r.scan.skipped.filter((x) => x.reason === 'unreadable').length, r.scan.bytesIndexed], [1, before]);
+    fs.chmodSync(path.join(r1, 'locked.ndjson'), 0o600);
+    assert.equal(await r.refresh(), true);
+    assert.equal(r.detail('S/locked.ndjson#L').status, 'ok');
+    assert.deepEqual(r.scan.skipped.filter((x) => x.reason === 'unreadable'), [], 'the note clears once the file indexes');
     r.dispose();
   } finally { for (const d of [r1, r2]) fs.rmSync(d, { recursive: true, force: true }); }
 });

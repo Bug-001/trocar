@@ -191,7 +191,27 @@ export async function buildResolver(source) {
   // byId: "<recordId>" -> loc | AMBIGUOUS                            (back-compat fallback only)
   const idx = { qual: new Map(), byId: new Map(), scan };
   const marks = new Map();     // file -> { size, ino, end, tail } as of its last indexing
-  for (const f of files) marks.set(f, await indexFile(f, idx));
+
+  // A file that cannot be read is skipped, not fatal, at startup and on refresh: one unreadable
+  // capture must not take down the root's index (or `asight serve`). It is noted in scan.skipped
+  // (with its root, once per root + name + reason), which the board shows, and the note is dropped
+  // once the file indexes. A read that failed after the open may have indexed some lines, so the
+  // root is marked dirty and the next refresh rebuilds it rather than index them twice.
+  let dirty = false;
+  const TRANSIENT = new Set(['unreadable', 'vanished']);
+  function note(root, name, reason, e) {
+    if (!scan.skipped.some((x) => x.root === root && x.name === name && x.reason === reason)) scan.skipped.push({ root, name, reason, ...(e ? { error: (e && e.code) || String(e) } : {}) });
+  }
+  const unnote = (pred) => { for (let i = scan.skipped.length - 1; i >= 0; i--) if (TRANSIENT.has(scan.skipped[i].reason) && pred(scan.skipped[i])) scan.skipped.splice(i, 1); };
+  const indexSafe = async (f, from = 0) => {
+    try { const mk = await indexFile(f, idx, from); unnote((x) => x.name === path.basename(f)); return mk; }
+    catch (e) {
+      if (!(e && e.syscall === 'open')) dirty = true;
+      note(sourcePath, path.basename(f), 'unreadable', e);
+      return null;
+    }
+  };
+  for (const f of [...files]) { const mk = await indexSafe(f); if (mk) marks.set(f, mk); else files.splice(files.indexOf(f), 1); }
 
   const fds = new Map();       // file -> open fd (reused across resolves)
   const fdFor = (f) => { let fd = fds.get(f); if (fd === undefined) { fd = openSync(f, 'r'); fds.set(f, fd); } return fd; };
@@ -291,39 +311,25 @@ export async function buildResolver(source) {
   // (only the new tail is read, so the cost is the new bytes, not the corpus); a file that shrank
   // or was replaced (inode changed) is not append-only, so the whole index is rebuilt. Concurrent
   // callers share one in-flight refresh. Resolves to true when the index changed.
-  let inflight = null, dirty = false;
-  // A file that cannot be read during a refresh is skipped this round, not fatal: one unreadable
-  // capture must not freeze the index for every other file (or every later root). It is noted once
-  // in scan.skipped. A read that failed part-way may have indexed some lines, so the next refresh
-  // rebuilds the root rather than index them twice.
-  const indexSafe = async (f, from = 0) => {
-    try { return await indexFile(f, idx, from); }
-    catch (e) {
-      if (from > 0) dirty = true;
-      note(path.basename(f), 'unreadable', e);
-      return null;
-    }
-  };
-  // Every refresh-time skip lands in scan.skipped (once per name + reason), which the board shows.
-  function note(name, reason, e) {
-    if (!scan.skipped.some((x) => x.name === name && x.reason === reason)) scan.skipped.push({ name, reason, ...(e ? { error: (e && e.code) || String(e) } : {}) });
-  }
+  let inflight = null;
   const rebuildAll = async () => {
     idx.qual.clear(); idx.byId.clear(); marks.clear(); bodyCache.clear();
     for (const fd of fds.values()) try { closeSync(fd); } catch {}
     fds.clear();
     Object.assign(scan, { corruptLines: 0, corruptByFile: {}, unidentifiedLines: 0 });
-    dirty = false;
+    dirty = false; unnote(() => true); // re-noted below if still failing
     files.length = 0;
     for (const f of await listFiles(null)) { const mk = await indexSafe(f); if (mk) { files.push(f); marks.set(f, mk); } }
   };
   const doRefresh = async () => {
     let now;
-    try { now = await listFiles(null); } catch (e) { note(sourcePath, 'unreadable', e); return false; }
+    try { now = await listFiles(null); } catch (e) { note(path.dirname(sourcePath), path.basename(sourcePath), 'unreadable', e); return false; }
+    unnote((x) => x.root === path.dirname(sourcePath) && x.name === path.basename(sourcePath));
+    unnote((x) => x.reason === 'vanished'); // a pass's own observation; the board's loader reports it live
     if (dirty) { await rebuildAll(); bodyCache.clear(); resolve.size = idx.qual.size; return true; }
     let changed = false;
     for (const f of now) {
-      let st; try { st = statSync(f); } catch (e) { note(path.basename(f), 'vanished', e); continue; }
+      let st; try { st = statSync(f); } catch (e) { note(sourcePath, path.basename(f), 'vanished', e); continue; }
       const m = marks.get(f);
       if (!m) { const mk = await indexSafe(f); if (mk) { files.push(f); marks.set(f, mk); changed = true; } continue; }
       if (st.ino !== m.ino || st.size < m.size) { await rebuildAll(); changed = true; break; }
@@ -354,7 +360,7 @@ async function buildMultiResolver(roots) {
     // root, never the whole board: throwing here takes down `asight serve` at startup and the user
     // sees a crash where they should see the sessions that ARE readable (invariant 2 — a capture on
     // disk stays readable). What is dropped is recorded so `scan` can report it rather than hide it.
-    try { parts.push(await buildResolver(r)); }
+    try { parts.push(Object.assign(await buildResolver(r), { rootPath: r })); }
     catch (e) { unreadable.push({ root: r, reason: (e && e.message) || String(e) }); }
   }
   const resolve = (...args) => {
@@ -406,7 +412,10 @@ async function buildMultiResolver(roots) {
     let changed = false;
     for (const p of parts) {
       try { if (typeof p.refresh === 'function' && await p.refresh()) changed = true; }
-      catch (e) { if (p.scan) p.scan.skipped.push({ name: '(refresh)', reason: 'unreadable', error: (e && e.code) || String(e) }); } // later roots still refresh
+      catch (e) { // later roots still refresh; this one is noted once
+        const sk = p.scan && p.scan.skipped, root = path.dirname(p.rootPath), name = path.basename(p.rootPath);
+        if (sk && !sk.some((x) => x.root === root && x.name === name && x.reason === 'unreadable')) sk.push({ root, name, reason: 'unreadable', error: (e && e.code) || String(e) });
+      }
     }
     if (changed) resolve.size = sizeOf();
     return changed;

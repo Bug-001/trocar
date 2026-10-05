@@ -97,3 +97,59 @@ test('a record the board catches half-written is listed once the writer finishes
   const view = JSON.parse((await get(port, '/api/session?id=LIVE')).body);
   assert.deepEqual(view.analyzed.steps.map((s) => s.id), ['req_z-00001', 'req_z-00002']);
 });
+
+test('a complete last record with no trailing newline is listed; a torn last line is reported, not counted corrupt', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-live-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const f = path.join(home, 'claude-capture.ndjson'), g = path.join(home, 'codex-capture.ndjson');
+  const j = (id, ts, text) => JSON.stringify(env(id, ts, text));
+  fs.writeFileSync(f, j('n-1', '2026-10-06T13:00:00.000Z', 'one') + '\n' + j('n-2', '2026-10-06T13:00:01.000Z', 'two, no newline after me'));
+  fs.writeFileSync(g, j('t-1', '2026-10-06T13:00:02.000Z', 'three') + '\n' + j('t-2', '2026-10-06T13:00:03.000Z', 'torn').slice(0, 50));
+  const { server } = await createServer({ dbPath: path.join(home, 'none.duckdb'), sourcePath: home });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => server.close());
+  const port = server.address().port;
+  const pj = JSON.parse((await get(port, '/api/projects')).body);
+  assert.deepEqual(pj.projects.flatMap((p) => p.sessions).map((s) => s.calls), [3]);
+  assert.deepEqual([pj.source.corrupt_lines, pj.source.tail_pending], [{}, { [g]: 50 }]);
+  fs.appendFileSync(f, '\n' + j('n-3', '2026-10-06T13:00:04.000Z', 'four') + '\n'); // the newline arrives later: no duplicate
+  const view = JSON.parse((await get(port, '/api/session?id=LIVE')).body);
+  assert.deepEqual(view.analyzed.steps.map((s) => s.id), ['n-1', 'n-2', 't-1', 'n-3']);
+});
+
+test('an unreadable capture file is reported and retried, not shown as pending and not remembered as read', { skip: process.getuid?.() === 0 && 'root reads anything' }, async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-live-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const locked = path.join(home, 'b.ndjson');
+  fs.writeFileSync(path.join(home, 'a.ndjson'), JSON.stringify(env('u-1', '2026-10-06T14:00:00.000Z', 'readable')) + '\n');
+  fs.writeFileSync(locked, JSON.stringify({ ...env('u-2', '2026-10-06T14:00:01.000Z', 'locked'), req_headers: { 'x-claude-code-session-id': 'LOCKED' } }) + '\n', { mode: 0o000 });
+  const { server } = await createServer({ dbPath: path.join(home, 'none.duckdb'), sourcePath: [home] });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => server.close());
+  const port = server.address().port;
+  let pj = JSON.parse((await get(port, '/api/projects')).body);
+  assert.deepEqual(pj.projects.flatMap((p) => p.sessions).map((s) => s.session_id), ['LIVE']);
+  assert.deepEqual(pj.source.skipped.filter((x) => x.attention).map((x) => [x.name, x.reason]), [['b.ndjson', 'unreadable']]);
+  assert.deepEqual(pj.source.tail_pending, {});
+  fs.chmodSync(locked, 0o600); // size and mtime unchanged: only a retry can see it
+  pj = JSON.parse((await get(port, '/api/projects')).body);
+  assert.deepEqual(pj.projects.flatMap((p) => p.sessions).map((s) => s.session_id).sort(), ['LIVE', 'LOCKED']);
+  assert.deepEqual(pj.source.skipped.filter((x) => x.attention), []);
+});
+
+test('a capture file that turns unreadable while the board runs keeps what it showed and is reported', { skip: process.getuid?.() === 0 && 'root reads anything' }, async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-live-'));
+  const f = path.join(home, 'a.ndjson');
+  t.after(() => { try { fs.chmodSync(f, 0o600); } catch {} fs.rmSync(home, { recursive: true, force: true }); });
+  fs.writeFileSync(f, JSON.stringify(env('v-1', '2026-10-06T15:00:00.000Z', 'read before')) + '\n');
+  const { server } = await createServer({ dbPath: path.join(home, 'none.duckdb'), sourcePath: home });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => server.close());
+  const port = server.address().port;
+  await get(port, '/api/projects'); // the board has read v-1
+  fs.appendFileSync(f, JSON.stringify(env('v-2', '2026-10-06T15:00:01.000Z', 'after')) + '\n');
+  fs.chmodSync(f, 0o000);
+  const pj = JSON.parse((await get(port, '/api/projects')).body);
+  assert.deepEqual(pj.projects.flatMap((p) => p.sessions).map((s) => s.calls), [1], 'what was read stays listed');
+  assert.deepEqual(pj.source.skipped.filter((x) => x.attention).map((x) => [x.name, x.reason]), [['a.ndjson', 'unreadable']]);
+});
