@@ -28,6 +28,14 @@ export function formatStatus(s) {
   return lines.join('\n')
 }
 
+// Every file install will write or change, printed before it writes any (4.6).
+export function formatPlan(p) {
+  return ['asight collector install will write or change these files, and nothing else:',
+    `  collector CA (in no trust store): ${p.ca.join(', ')}`,
+    ...p.files.map((f) => `  ${f.harness}: ${f.path} = ${f.sources.length ? `the certificates of ${f.sources.join(', ')} + ` : ''}the collector CA`),
+    ...p.entries.map((e) => `  ${e.harness}: ${e.path} ${e.keys.join('.')} = ${e.value}`)].join('\n')
+}
+
 const waitForSignal = () => new Promise((resolve) => { process.once('SIGTERM', resolve); process.once('SIGINT', resolve) })
 const loadDaemon = () => import('./daemon.mjs')
 const loadInstall = () => import('./install.mjs')
@@ -64,9 +72,9 @@ export async function runCollector(argv, { env = process.env, home = os.homedir(
       const parts = await (await D()).loadParts({ env })
       const { installCollector, uninstallCollector } = await I()
       if (verb === 'install') {
-        const r = await installCollector({ home, env, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match })
+        const r = await installCollector({ home, env, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, onPlan: (p) => out(formatPlan(p)) })
         if (r.already) { out('already installed'); return 0 }
-        out([`installed for ${os.userInfo().username}: collector CA (in no trust store), engine port ${r.manifest.engine_port}`, ...r.manifest.entries.map((e) => `  ${e.harness}: ${e.path} ${e.keys.join('.')} = ${e.value}${e.prior_value ? ` (was ${e.prior_value})` : ''}`), ...(r.manifest.files || []).filter((f) => f.sources && f.sources.length).map((f) => `  ${f.harness}: ${f.path} = the certificates of ${f.sources.join(', ')} + the collector CA`), ...r.plan.notes.map((n) => `note: ${n}`)].join('\n'))
+        out([`installed for ${os.userInfo().username}: engine port ${r.manifest.engine_port}`, ...r.manifest.entries.filter((e) => e.prior_value).map((e) => `  ${e.harness}: ${e.path} ${e.keys.join('.')} was ${e.prior_value}`), ...r.plan.notes.map((n) => `note: ${n}`)].join('\n'))
         return 0
       }
       const r = await uninstallCollector({ home, env, purgeData: rest.includes('--purge-data'), scan: parts.scan, match: parts.match })

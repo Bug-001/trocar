@@ -8,7 +8,7 @@ import path from 'node:path'
 import { X509Certificate } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { startControlServer } from '../../src/collector/core/control.mjs'
-import { installCollector, uninstallCollector, stopDaemon } from '../../src/collector/install.mjs'
+import { installCollector, uninstallCollector, stopDaemon, freeEnginePort } from '../../src/collector/install.mjs'
 import { readManifest } from '../../src/collector/core/trust/journal.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
 import cc from '../../src/collector/harness/claude-code.mjs'
@@ -185,6 +185,7 @@ test('a refused plan entry or a non-JSON settings file leaves every user file un
     const loginEnv = { name: 'login-env', inject: () => ({ entries: [{ kind: 'json-key', path: bashrc, keys: ['env', 'NODE_EXTRA_CA_CERTS'], value: path.join(b.dir, 'ca', 'asight-ca.pem'), semantic: 'append' }] }) }
     await assert.rejects(installCollector(base(b, { harnesses: [cc, loginEnv] })), /login-environment/)
     assert.ok(!fs.existsSync(settingsOf(b)), "CC's entry, planned first, was not written: the whole plan is checked before any file changes")
+    assert.ok(!fs.existsSync(path.join(b.home, '.asight')), 'a refused plan writes nothing at all, not even the manifest or the CA')
     assert.equal(fs.readFileSync(bashrc, 'utf8'), 'export X=1\n')
     await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
     assert.ok(!fs.existsSync(b.dir))
@@ -210,4 +211,39 @@ test('install → uninstall → install → uninstall stays clean and never remo
     }
     assert.deepEqual(keep.map((f) => fs.readFileSync(f, 'utf8')), ['legacy', 'legacy'], 'the legacy CA and v0 captures under ~/.asight are untouched')
   } finally { b.done() }
+})
+
+test('install lists every file it will write or change before writing any, and writes exactly those (4.6)', async () => {
+  const b = box()
+  try {
+    const corp = createCa({ commonName: 'corp relay CA' })
+    const corpFile = path.join(b.home, 'corp.pem'); fs.writeFileSync(corpFile, corp.certPem)
+    let listed = null
+    const r = await installCollector(base(b, { env: { HOME: b.home, NODE_EXTRA_CA_CERTS: corpFile }, onPlan: (p) => {
+      assert.ok(!fs.existsSync(path.join(b.home, '.asight')) && !fs.existsSync(settingsOf(b)), 'called before anything is written')
+      listed = p
+    } }))
+    const extra = path.join(b.dir, 'ca', 'extra-cc.pem')
+    assert.deepEqual(listed.ca, [path.join(b.dir, 'ca', 'ca.key'), path.join(b.dir, 'ca', 'asight-ca.pem')])
+    assert.deepEqual(listed.files, [{ harness: 'claude-code', path: extra, sources: [corpFile] }])
+    assert.deepEqual(listed.entries, [{ harness: 'claude-code', path: settingsOf(b), keys: ['env', 'NODE_EXTRA_CA_CERTS'], value: extra }])
+    const m = r.manifest
+    assert.deepEqual([...m.files.map((f) => f.path)].sort(), [...listed.ca, ...listed.files.map((f) => f.path)].sort(), 'owned files written == listed')
+    assert.deepEqual(m.entries.map((e) => e.path), listed.entries.map((e) => e.path), 'user files changed == listed')
+  } finally { b.done() }
+})
+
+test('freeEnginePort skips a port whose [::1] side is taken; a machine without IPv6 keeps the 127.0.0.1 port', async () => {
+  const servers = []
+  const fake = (taken) => async (port, host) => {
+    if (host === '::1' && taken(port)) throw Object.assign(new Error('in use'), { code: taken(port) })
+    const s = { port: port || 40000 + servers.length, closed: false, address() { return { port: this.port } }, close(cb) { this.closed = true; cb() } }
+    servers.push(s); return s
+  }
+  assert.equal(await freeEnginePort({ listen: fake((p) => (p === 40000 ? 'EADDRINUSE' : null)) }), 40001)
+  assert.ok(servers.every((s) => s.closed), 'every probe socket is closed')
+  servers.length = 0
+  assert.equal(await freeEnginePort({ listen: fake(() => 'EADDRNOTAVAIL') }), 40000, 'no IPv6 on this machine: the v4 port is kept')
+  servers.length = 0
+  await assert.rejects(freeEnginePort({ tries: 3, listen: fake(() => 'EADDRINUSE') }), /no port was free on both 127\.0\.0\.1 and \[::1\] in 3 tries/)
 })

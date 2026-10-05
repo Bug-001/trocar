@@ -30,15 +30,24 @@ test('cli: install / uninstall hand the descriptors, OS and process table from d
   const parts = { os: 'linux', harnesses: [{ name: 'h' }], scan: async () => [], match: () => ({ agent: null }) }
   const daemon = { loadParts: async () => parts }
   const install = {
-    installCollector: async (o) => { seen.push(['install', o.osName, o.harnesses, o.scan === parts.scan, o.home]); return { manifest: { engine_port: 4711, entries: [{ harness: 'h', path: '/h/s.json', keys: ['env', 'K'], value: '/h/.asight/collector/ca/extra-h.pem', prior_value: null }], files: [{ path: '/h/.asight/collector/ca/ca.key', role: 'ca-key' }, { harness: 'h', path: '/h/.asight/collector/ca/extra-h.pem', role: 'trust-file', sources: ['/corp/ca.pem'] }] }, plan: { notes: ['n'] } } },
+    installCollector: async (o) => {
+      seen.push(['install', o.osName, o.harnesses, o.scan === parts.scan, o.home])
+      o.onPlan({ ca: ['/h/.asight/collector/ca/ca.key', '/h/.asight/collector/ca/asight-ca.pem'], files: [{ harness: 'h', path: '/h/.asight/collector/ca/extra-h.pem', sources: ['/corp/ca.pem'] }], entries: [{ harness: 'h', path: '/h/s.json', keys: ['env', 'K'], value: '/h/.asight/collector/ca/extra-h.pem' }] })
+      seen.push(['written'])
+      return { manifest: { engine_port: 4711, entries: [{ harness: 'h', path: '/h/s.json', keys: ['env', 'K'], value: '/h/.asight/collector/ca/extra-h.pem', prior_value: '/old.pem' }] }, plan: { notes: ['n'] } }
+    },
     uninstallCollector: async (o) => { seen.push(['uninstall', o.purgeData]); return { daemon: 'stopped', kept_captures: !o.purgeData, entries: [{ harness: 'h', path: '/h/s.json', result: 'restored' }], still_trusting: [{ pid: 7, agent: 'h' }], notes: [] } },
   }
   let t = io(); assert.equal(await runCollector(['install'], { home: '/h', daemon, install, ...t }), 0)
-  assert.match(t.o[0], /h: \/h\/s.json env.K = /); assert.match(t.o[0], /note: n/)
-  assert.match(t.o[0], /h: \/h\/.asight\/collector\/ca\/extra-h.pem = the certificates of \/corp\/ca.pem \+ the collector CA/, 'install says whose certificates the trust file carries (G8 merge path)')
+  assert.equal(t.o.length, 2, 'the file list, then the result')
+  assert.match(t.o[0], /^asight collector install will write or change these files, and nothing else:/, 'the list comes first, before anything is written (4.6)')
+  assert.match(t.o[0], /collector CA \(in no trust store\): \/h\/.asight\/collector\/ca\/ca.key, \/h\/.asight\/collector\/ca\/asight-ca.pem/)
+  assert.match(t.o[0], /h: \/h\/.asight\/collector\/ca\/extra-h.pem = the certificates of \/corp\/ca.pem \+ the collector CA/, 'whose certificates the trust file carries (G8 merge path)')
+  assert.match(t.o[0], /h: \/h\/s.json env.K = \/h\/.asight\/collector\/ca\/extra-h.pem/)
+  assert.match(t.o[1], /^installed for .*: engine port 4711\n  h: \/h\/s.json env.K was \/old.pem\nnote: n$/)
   t = io(); assert.equal(await runCollector(['uninstall', '--purge-data'], { daemon, install, ...t }), 0)
   assert.match(t.o[0], /captures removed/); assert.match(t.o[0], /pid 7 \(h\) trusts the asight CA until it restarts/)
-  assert.deepEqual(seen, [['install', 'linux', parts.harnesses, true, '/h'], ['uninstall', true]])
+  assert.deepEqual(seen, [['install', 'linux', parts.harnesses, true, '/h'], ['written'], ['uninstall', true]])
   t = io(); assert.equal(await runCollector(['install'], { daemon, install: { installCollector: async () => { throw new Error('boom') } }, ...t }), 1)
 })
 

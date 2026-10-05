@@ -20,44 +20,60 @@ const pidAlive = (pid) => { try { process.kill(pid, 0); return true } catch (e) 
 const listDir = (d) => { try { return fs.readdirSync(d) } catch { return [] } }
 
 // An engine port that is free on both loopback families now (4.6 OPEN「按实例分配」, gate G3): recorded in the
-// manifest, the daemon listens there on every start.
-export function freeEnginePort() {
-  const bind = (port, host) => new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', reject); s.listen(port, host, () => resolve(s)) })
-  return (async () => {
-    const v4 = await bind(0, '127.0.0.1')
+// manifest, the daemon listens there on every start. A port whose [::1] side is taken is skipped (the daemon would
+// refuse to attach there, M8); a machine without IPv6 keeps the 127.0.0.1 port.
+const bindOnce = (port, host) => new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', reject); s.listen(port, host, () => resolve(s)) })
+const closeServer = (s) => new Promise((r) => s.close(r))
+export async function freeEnginePort({ tries = 20, listen = bindOnce } = {}) {
+  for (let i = 0; i < tries; i++) {
+    const v4 = await listen(0, '127.0.0.1')
     const { port } = v4.address()
-    const v6 = await bind(port, '::1').catch(() => null)
-    await Promise.all([v4, v6].filter(Boolean).map((s) => new Promise((r) => s.close(r))))
+    let v6 = null
+    try { v6 = await listen(port, '::1') } catch (e) { if (e.code === 'EADDRINUSE') { await closeServer(v4); continue } }
+    await Promise.all([v4, v6].filter(Boolean).map(closeServer))
     return port
-  })()
+  }
+  throw new Error(`no port was free on both 127.0.0.1 and [::1] in ${tries} tries`)
 }
 
 function refuseRoot(verb) {
   if (typeof process.getuid === 'function' && process.getuid() === 0) throw new Error(`asight collector ${verb}: run it as the user whose agents you capture, not as root (D36)`)
 }
 
-export async function installCollector({ home = os.homedir(), env = process.env, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), freePort = freeEnginePort } = {}) {
+// onPlan(list) is called once with every file install will write or change, BEFORE anything is written (4.6, user
+// 2026-10-06: 安装 MUST 先列出要改的每个文件,再动手). A first plan without the CA's certificate has the same paths
+// (the certificate only fills the trust files' contents) and runs every refusal first, so a refused plan writes
+// nothing at all, not even the manifest.
+export async function installCollector({ home = os.homedir(), env = process.env, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), freePort = freeEnginePort, onPlan = () => {} } = {}) {
   refuseRoot('install')
   const dir = collectorHome(path.join(home, '.asight')) // collectorHome takes the asight home
   const prior = readManifest(dir)
   if (prior && prior.complete) return { already: true, manifest: prior, plan: null }
   if (prior) throw new Error(`an earlier install did not finish (${manifestPath(dir)}); run "asight collector uninstall" first`)
-  const m = newManifest()
-  m.dirs = missingDirs(dir)
   const ca = caPaths(path.join(dir, 'ca'))
-  m.dirs.push(...missingDirs(ca.dir).filter((d) => !m.dirs.includes(d)))
-  m.files.push({ path: ca.key, role: 'ca-key' }, { path: ca.pem, role: 'ca-cert' })
-  saveManifest(dir, m) // creates dir 0700; the CA is listed before it is minted
-  const { certPem } = loadOrCreateCa({ dir: ca.dir })
-  m.engine_port = await freePort()
-
   const facts = await scan()
   const envMap = new Map(Object.entries(env).filter(([, v]) => typeof v === 'string'))
   const ctxFor = (d) => ({
     os: osName, home, env: envMap, running: facts.filter((f) => match(f).agent === d.name).map((f) => f.env || new Map()),
     readText: (f) => readText(f), listDir, collectorDir: dir, caPem: ca.pem,
   })
+  const draft = planTrust({ descriptors: harnesses, ctxFor, caCertPem: null, collectorDir: dir })
+  onPlan({
+    ca: [ca.key, ca.pem],
+    files: draft.files.map((f) => ({ harness: f.harness, path: f.path, sources: f.sources })),
+    entries: draft.entries.map((e) => ({ harness: e.harness, path: e.path, keys: e.keys, value: e.value })),
+    notes: draft.notes,
+  })
+
+  const m = newManifest()
+  m.dirs = missingDirs(dir)
+  m.dirs.push(...missingDirs(ca.dir).filter((d) => !m.dirs.includes(d)))
+  m.files.push({ path: ca.key, role: 'ca-key' }, { path: ca.pem, role: 'ca-cert' })
+  saveManifest(dir, m) // creates dir 0700; the CA is listed before it is minted
+  const { certPem } = loadOrCreateCa({ dir: ca.dir })
+  m.engine_port = await freePort()
   const plan = planTrust({ descriptors: harnesses, ctxFor, caCertPem: certPem, collectorDir: dir })
+  if (JSON.stringify(plan.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${plan.paths.join(', ')}); only the CA was written; run "asight collector uninstall", then install again`)
   m.planned = plan.paths
   saveManifest(dir, m)
   for (const f of plan.files) writeOwnedFile({ dir, manifest: m, harness: f.harness, role: 'trust-file', file: f.path, data: f.data, sources: f.sources })
