@@ -13,6 +13,7 @@ import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { parseTextRef } from '../etl/orchestrator.mjs';
 import { normalizeRecord } from '../etl/ingest.mjs';
+import { isCaptureFile } from '../paths.mjs';
 
 const NL = 0x0a;
 const BODY_LRU = 8; // req_body strings held at once — a call's blocks resolve off one cached body
@@ -176,11 +177,13 @@ export async function buildResolver(source) {
       // NOT `ent.isFile()`: readdir(withFileTypes) does not follow symlinks, so isFile() is FALSE
       // for a symlinked capture — and a capture reached through a symlink is still a capture. Using
       // isFile() here silently dropped a whole harness from the unified board (the live source dir
-      // holds codex-capture.ndjson as a symlink) and mislabelled it "not-ndjson". Exclude only what
-      // we can positively identify as a directory.
-      if (!ent.isDirectory() && name.endsWith('.ndjson')) { out.push(path.join(sourcePath, name)); continue; }
+      // holds codex-capture.ndjson as a symlink) and mislabelled it "not-ndjson". One rule for the
+      // three readers (paths.mjs isCaptureFile); a link to nothing is reported, not opened — opening
+      // it failed this root's whole index.
+      if (isCaptureFile(sourcePath, ent)) { out.push(path.join(sourcePath, name)); continue; }
       if (!skipped) continue;
       const reason = ent.isDirectory() ? 'directory'
+        : ent.isSymbolicLink() && name.endsWith('.ndjson') ? 'broken-symlink'
         : COMPRESSED.has(path.extname(name).toLowerCase()) ? 'compressed'
         : 'not-ndjson';
       skipped.push({ name, reason });

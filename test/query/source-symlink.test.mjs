@@ -78,3 +78,14 @@ test('directories are still skipped, and still reported as directories', async (
     src.dispose?.();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('a symlink that points nowhere is reported as broken-symlink and does not sink the other captures', async () => {
+  const { root, dir } = fixture();
+  try {
+    symlinkSync(path.join(root, 'outside', 'gone.ndjson'), path.join(dir, 'dangling.ndjson'));
+    const src = await buildResolver(dir); // opening the link used to throw and fail this whole root
+    assert.match(src('S/linked-capture.ndjson#req_linked'), /m-linked/);
+    assert.deepEqual(src.scan.skipped, [{ name: 'dangling.ndjson', reason: 'broken-symlink' }]);
+    src.dispose?.();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

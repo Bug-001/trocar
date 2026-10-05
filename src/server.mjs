@@ -18,6 +18,7 @@ import { openDb, DEFAULT_DB_PATH } from './db.mjs';
 import { listSessions, sessionCalls, sessionComposition, sessionResources, callContext,
   filesEverInContext, cacheHitDistribution, breakKindComparison, unmappedFields, forkTree } from './query/queries.mjs';
 import { buildResolver } from './query/source.mjs';
+import { isCaptureFile } from './paths.mjs';
 import { readRecords } from './etl/ingest.mjs';
 import { projectsView, projectsViewFromMetas, sessionView, controlView, forWire } from './view/board.mjs';
 import { sessionIdOf } from './view/assemble.mjs';
@@ -139,7 +140,8 @@ export function sourceFiles(sourcePath) {
   const entries = fssync.readdirSync(sourcePath, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1));
   const files = [];
   for (const e of entries) {
-    if (e.isFile() && e.name.endsWith('.ndjson')) { files.push(path.join(sourcePath, e.name)); continue; }
+    // a symlinked capture counts (paths.mjs isCaptureFile): isFile() alone left links off the board
+    if (isCaptureFile(sourcePath, e)) { files.push(path.join(sourcePath, e.name)); continue; }
     if (!e.isDirectory()) continue;
     const shard = path.join(sourcePath, e.name, 'calls.ndjson');
     try { if (fssync.statSync(shard).isFile()) files.push(shard); } catch { /* not a shard dir */ }

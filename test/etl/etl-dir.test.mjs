@@ -49,6 +49,7 @@ test('a symlinked capture file in the directory is read like any other', async (
   try {
     fs.writeFileSync(path.join(elsewhere, 'real.ndjson'), line('l1', 'L', '2026-10-04T00:00:00Z', 'linked') + '\n');
     fs.symlinkSync(path.join(elsewhere, 'real.ndjson'), path.join(dir, 'codex-capture.ndjson'));
+    fs.symlinkSync(path.join(elsewhere, 'gone.ndjson'), path.join(dir, 'dangling.ndjson')); // points nowhere: not a capture
     fs.writeFileSync(path.join(dir, 'capture-2026-10-05.ndjson'), line('a1', 'S', '2026-10-05T00:00:00Z', 'one') + '\n');
     const out = await etlFile(dir, { dbPath: path.join(elsewhere, 'x.duckdb') });
     assert.deepEqual(out.files.map((f) => path.basename(f)), ['capture-2026-10-05.ndjson', 'codex-capture.ndjson']);

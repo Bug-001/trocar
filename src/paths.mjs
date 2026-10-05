@@ -74,4 +74,16 @@ export function serveSource({ home = asightHome(), legacy = legacyHome(), legacy
   return roots;
 }
 
+// What counts as a capture file at the top of a source directory: a `*.ndjson` that is a regular
+// file or a symlink to one (~/.asight/codex-capture.ndjson is a link into the legacy home). ONE rule
+// for the board loader, the block resolver and `asight etl <dir>`: they used to disagree (isFile()
+// in two of them dropped links silently), so the board listed what the resolver could not open.
+// A link that points nowhere, or at a directory, is not a capture file.
+export function isCaptureFile(dir, ent) {
+  if (!ent.name.endsWith('.ndjson')) return false;
+  if (ent.isFile()) return true;
+  if (!ent.isSymbolicLink()) return false;
+  try { return fs.statSync(path.join(dir, ent.name)).isFile(); } catch { return false; }
+}
+
 function existsQuiet(p) { try { return fs.existsSync(p) } catch { return false } }

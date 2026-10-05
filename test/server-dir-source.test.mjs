@@ -47,3 +47,25 @@ test('dir source: appending to one file busts the mtime-memo sig (live poll sees
     assert.match((await get(port, '/api/projects')).body, /sess-C/, 'append is picked up on the next poll');
   } finally { server.close(); }
 });
+
+test('dir source: a symlinked capture file is read like any other (its sessions list and its blocks open)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-dir-'));
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-real-'));
+  fs.writeFileSync(path.join(dir, 'claude-capture.ndjson'), JSON.stringify(sess('sess-A')) + '\n');
+  fs.writeFileSync(path.join(elsewhere, 'codex-capture.ndjson'), JSON.stringify(sess('sess-L')) + '\n');
+  fs.symlinkSync(path.join(elsewhere, 'codex-capture.ndjson'), path.join(dir, 'codex-capture.ndjson'));
+  fs.symlinkSync(path.join(elsewhere, 'gone.ndjson'), path.join(dir, 'dangling.ndjson')); // points nowhere: not a capture
+  const { server, port } = await serveDir(dir);
+  try {
+    const ids = JSON.parse((await get(port, '/api/projects')).body).projects.flatMap((p) => p.sessions.map((s) => s.session_id)).sort();
+    assert.deepEqual(ids, ['sess-A', 'sess-L']);
+    const view = JSON.parse((await get(port, '/api/session?id=sess-L')).body);
+    const ref = view.analyzed.steps[0].flat.find((b) => b.text_ref).text_ref;
+    assert.equal(JSON.parse((await get(port, '/api/block?ref=' + encodeURIComponent(ref))).body).status, 'ok');
+  } finally {
+    server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(elsewhere, { recursive: true, force: true });
+  }
+});
+

@@ -9,17 +9,18 @@ import { openDb, DEFAULT_DB_PATH } from '../db.mjs';
 import { applyDDL } from '../model/schema.mjs';
 import { runEtl, rebuild } from './orchestrator.mjs';
 import { readRecords } from './ingest.mjs';
+import { isCaptureFile } from '../paths.mjs';
 
 // A directory source = its TOP-LEVEL *.ndjson in name order (capture-<date> sorts by date), as the
 // board reads a root (4.4:129). Subdirectories (the collector's flows/ audit/ replays/) are never read.
-// `!isDirectory()`, not `isFile()`: a symlinked capture is still a capture (the resolver reads it too,
-// src/query/source.mjs); isFile() is false for a symlink and would drop it without a word.
+// A symlinked capture is still a capture: the same rule as the board and the resolver
+// (src/paths.mjs isCaptureFile); isFile() alone is false for a symlink and drops it without a word.
 // The files stream into ONE runEtl, so a session spanning two days keeps one watermark, and every
 // record carries the basename of the file it came from (readRecords stamps _stream; 4.2:39).
 function sourceList(source) {
   if (!fs.statSync(source).isDirectory()) return [source];
   return fs.readdirSync(source, { withFileTypes: true })
-    .filter((e) => !e.isDirectory() && e.name.endsWith('.ndjson'))
+    .filter((e) => isCaptureFile(source, e))
     .map((e) => path.join(source, e.name))
     .sort();
 }
