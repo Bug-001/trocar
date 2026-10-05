@@ -54,7 +54,7 @@ test('envelope: a request body that never finished carries req_partial:<reason> 
 
 test('store: 0600 files, 0700 dirs, streams split by kind, write errors never throw', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-store-'))
-  const s = createRecordStore({ root })
+  const s = createRecordStore({ root, now: () => new Date('2026-10-05T01:00:00.000Z') })
   s.envelope({ ts: '2026-10-05T01:00:00.000Z', id: 'a' }); s.flow({ ts: '2026-10-05T01:00:00.000Z', flow_id: 'f' })
   s.audit({ ts: '2026-10-05T01:00:00.000Z' }); s.replay({ ts: '2026-10-05T01:00:00.000Z', id: 'b' }); s.failure({ ts: '2026-10-05T01:00:00.000Z', reason: 'write-failed' })
   assert.equal(fs.statSync(path.join(root, 'capture-2026-10-05.ndjson')).mode & 0o777, 0o600)
@@ -108,3 +108,20 @@ test('ws envelope: no opener → req_body null; a binary opener → req_body nul
   const none = buildWsEnvelope({ id: 'w7', flow: FLOW, seq: 0, upgrade: { ...WS_UP, resp: { head: { ...head('HTTP/1.1 101 x\r\n\r\n'), status: 101, headers: [] } } }, wsRaw: RAW, call: wsCall({ client: ['x'] }) })
   assert.equal(none.ws_ext, null)
 })
+
+// RFC 4.6 §记录 / 4.2:49: the daily file is chosen when the line is WRITTEN. A call that starts before
+// midnight and ends after it must not be appended to the previous day's file once the new day's file
+// exists — the ETL's per-session watermark would skip it.
+test('store: an envelope whose request started before midnight but is written after it lands in the new day file', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-store-'))
+  let clock = '2026-10-05T23:59:01.000Z'
+  const s = createRecordStore({ root, now: () => new Date(clock) })
+  s.envelope({ ts: '2026-10-05T23:59:00.000Z', id: 'a1' })
+  clock = '2026-10-06T00:00:20.000Z'
+  s.envelope({ ts: '2026-10-05T23:59:50.000Z', id: 'a2' }) // started 10 s before midnight
+  s.close()
+  const ids = (f) => fs.readFileSync(path.join(root, f), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+  assert.deepEqual(ids('capture-2026-10-05.ndjson').map((r) => r.id), ['a1'])
+  assert.deepEqual(ids('capture-2026-10-06.ndjson'), [{ ts: '2026-10-05T23:59:50.000Z', id: 'a2' }], 'rec.ts is kept as captured')
+})
+

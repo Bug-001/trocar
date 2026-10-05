@@ -6,12 +6,18 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-export function createRecordStore({ root, onError = () => {} }) {
+export function createRecordStore({ root, onError = () => {}, now = () => new Date() }) {
   const fds = new Map() // filePath → open fd
   let errors = 0
   let lastError = null // the reason of the last failed write, for the caller's failure record (RFC 4.6 §记录 采集失败不静默)
 
-  const dateOf = (rec) => String(rec && rec.ts ? rec.ts : new Date().toISOString()).slice(0, 10) // YYYY-MM-DD (UTC)
+  // The daily file is the UTC date at WRITE time, not rec.ts (the request start, which stays in the
+  // record). An envelope is written when its exchange ends, so a call that starts before midnight and
+  // ends after it goes into the new day's file. Dating by rec.ts appended it to the previous day's file
+  // after the next day's file already held later calls of the same session, and the ETL's
+  // per-session record-count watermark (RFC 4.2:49) then skipped it. Dated by write time, an earlier
+  // file is never appended to after a later one exists. `now` is injectable for tests only.
+  const today = () => now().toISOString().slice(0, 10) // YYYY-MM-DD (UTC)
 
   function fdFor(filePath) {
     let fd = fds.get(filePath)
@@ -27,7 +33,7 @@ export function createRecordStore({ root, onError = () => {} }) {
   // marks the calls after a lost envelope partial (RFC 4.6 §传输与帧级记录, write-failed).
   function write(resolve, rec) {
     try {
-      fs.writeSync(fdFor(resolve(dateOf(rec))), JSON.stringify(rec) + '\n')
+      fs.writeSync(fdFor(resolve(today())), JSON.stringify(rec) + '\n')
       return true
     } catch (e) {
       errors++
