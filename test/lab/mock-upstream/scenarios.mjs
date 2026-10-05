@@ -9,6 +9,8 @@ export const SCENARIOS = {
 }
 
 const MARKER = /\[\[mock:([a-z0-9-]+)\]\]/g
+// own keys only: `n in SCENARIOS` would also accept "constructor", "toString", "__proto__"
+export const isScenario = (n) => typeof n === 'string' && Object.hasOwn(SCENARIOS, n)
 
 // header > body marker > script queue > default. The header applies to any request (it is explicit
 // test intent); markers and the script only steer model calls, so count_tokens / models / hello
@@ -17,7 +19,7 @@ const MARKER = /\[\[mock:([a-z0-9-]+)\]\]/g
 export function pickScenario(headers, body, isModel, queue) {
   if (headers['x-mock-scenario']) return { name: headers['x-mock-scenario'], source: 'header' }
   if (isModel) {
-    const marks = [...body.toString('latin1').matchAll(MARKER)].map((m) => m[1]).filter((n) => n in SCENARIOS)
+    const marks = [...body.toString('latin1').matchAll(MARKER)].map((m) => m[1]).filter(isScenario)
     if (marks.length) return { name: marks.at(-1), source: 'marker' }
     if (queue.length) return { name: queue.shift(), source: 'script' }
   }

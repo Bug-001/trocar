@@ -6,7 +6,7 @@ import net from 'node:net'
 import path from 'node:path'
 import { once } from 'node:events'
 import { parseRequest } from './http1.mjs'
-import { SCENARIOS, pickScenario } from './scenarios.mjs'
+import { SCENARIOS, isScenario, pickScenario } from './scenarios.mjs'
 import { writeResponse, jsonReply } from './transport.mjs'
 import * as anthropic from './anthropic.mjs'
 
@@ -33,7 +33,7 @@ async function dispatch(req, io, state) {
   const p = req.target.split('?')[0]
   const route = ROUTES.find((r) => r.re.test(p) && r.methods.includes(req.method))
   const pick = pickScenario(req.headers, req.body, route?.kind === 'model', state.queue)
-  const sc = SCENARIOS[pick.name]
+  const sc = isScenario(pick.name) ? SCENARIOS[pick.name] : null
   const dialect = route?.dialect || anthropic
   let res
   if (!sc) res = dialect.errorReply(400, `mock-upstream: unknown scenario "${pick.name}"`)
@@ -126,7 +126,7 @@ function adminServer(state, logFile) {
     }
     if (route === 'POST /__mock/script') {
       const steps = Array.isArray(body.steps) ? body.steps : null
-      const bad = steps ? steps.filter((s) => !(s in SCENARIOS)) : ['steps must be an array']
+      const bad = steps ? steps.filter((s) => !isScenario(s)) : ['steps must be an array']
       if (bad.length) return send(400, { error: `unknown scenario(s): ${bad.join(', ')}` })
       state.queue.splice(0, Infinity, ...steps)
       return send(200, { queue: state.queue })
