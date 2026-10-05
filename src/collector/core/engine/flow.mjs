@@ -28,6 +28,9 @@ export function handleFlow(client, meta, ctx) {
     if (decision && !rec.decision) rec.decision = decision
     Object.assign(rec, extra)
     rec.duration_ms = Date.now() - t0
+    // a WebSocket connection: the recorder's summary (frames, calls, tail_raw, failures, …; RFC 4.6 §记录)
+    const ws = activeTee && activeTee.wsSummary && activeTee.wsSummary()
+    if (ws) { rec.transport = 'ws'; rec.ws = ws }
     try { ctx.store.flow(rec) } catch { /* recording never breaks teardown */ }
     resolveFlow(rec)
   }
@@ -74,8 +77,9 @@ export function handleFlow(client, meta, ctx) {
     uSock.on('drain', () => cSock.resume())
     uSock.on('data', (d) => { rec.bytes_down += d.length; if (tee) tee.fromUpstream(d); if (cSock.writable && !cSock.write(d)) uSock.pause() })
     cSock.on('drain', () => uSock.resume())
-    const clientGone = () => { if (tee) tee.clientEnded(); teardown(); try { if (!uSock.destroyed) uSock.destroy() } catch { /* ignore */ }; try { if (!upstream.destroyed) upstream.destroy() } catch { /* ignore */ } }
-    const upstreamGone = () => { if (tee) tee.upstreamEnded(); teardown(); try { if (cSock.writable) cSock.end() } catch { /* ignore */ } } // let the client drain, then it closes
+    // 'error' passes the Error, 'end' nothing, 'close' a boolean: a reset reaches the ws recorder as an error
+    const clientGone = (e) => { if (tee) tee.clientEnded(e instanceof Error ? e : null); teardown(); try { if (!uSock.destroyed) uSock.destroy() } catch { /* ignore */ }; try { if (!upstream.destroyed) upstream.destroy() } catch { /* ignore */ } }
+    const upstreamGone = (e) => { if (tee) tee.upstreamEnded(e instanceof Error ? e : null); teardown(); try { if (cSock.writable) cSock.end() } catch { /* ignore */ } } // let the client drain, then it closes
     cSock.on('end', clientGone); cSock.on('error', clientGone); cSock.on('close', clientGone)
     uSock.on('end', upstreamGone); uSock.on('error', upstreamGone); uSock.on('close', upstreamGone)
   }
@@ -168,7 +172,7 @@ export function handleFlow(client, meta, ctx) {
       clientTls.once('close', () => { if (!handshook) { ctx.negCache.set(negKey, Date.now()); rec.reason = 'client-rejected-leaf' } })
       activeTee = createExchangeTee({
         flow: { id: rec.flow_id, host, scheme: 'https', dst: meta.dst, proc: { pid: meta.pid, exe: meta.exe ?? null, agent: meta.agent } },
-        recordStore: ctx.store, isRecording: ctx.isRecording,
+        recordStore: ctx.store, isRecording: ctx.isRecording, wsTerminal: meta.wsTerminal ?? null,
       })
       relay(clientTls, upTls)
     })
@@ -226,7 +230,7 @@ export function handleFlow(client, meta, ctx) {
       setDecision('decrypt', isTunnel)
       activeTee = createExchangeTee({
         flow: { id: rec.flow_id, host, scheme: 'http', dst: meta.dst, proc: { pid: meta.pid, exe: meta.exe ?? null, agent: meta.agent } },
-        recordStore: ctx.store, isRecording: ctx.isRecording,
+        recordStore: ctx.store, isRecording: ctx.isRecording, wsTerminal: meta.wsTerminal ?? null,
       })
       activeTee.fromClient(buf)
       rec.bytes_up += buf.length
