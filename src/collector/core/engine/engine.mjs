@@ -15,6 +15,11 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
 
   async function onConnection(socket) {
     counters.total++
+    // The accepted socket is ours from here. Until handleFlow attaches its own listeners (after the
+    // lookup), a client reset would be an uncaughtException that takes the collector down (RFC 4.6
+    // fail-open). handleFlow then sees the socket already destroyed and finalizes the flow.
+    const duringLookup = () => {}
+    socket.on('error', duringLookup)
     let meta = null
     try { meta = await redirector.lookup({ address: socket.remoteAddress, port: socket.remotePort }) }
     catch (e) { onError(e) }
@@ -30,6 +35,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
       else if (rec && rec.decision === 'splice') counters.spliced++
     }).catch((e) => onError(e)).finally(() => { active.delete(done); counters.active-- })
     active.add(done)
+    socket.removeListener('error', duringLookup) // handleFlow's own listener has taken over
   }
 
   function listen({ port = 0, hosts = ['127.0.0.1'] } = {}) {

@@ -249,7 +249,7 @@ export function handleFlow(client, meta, ctx) {
   if (firstByteTimer.unref) firstByteTimer.unref()
 
   // Catch a client that was already gone before our listeners attached (accept/lookup raced the close).
-  if (client.destroyed) queueMicrotask(() => preTeardown())
+  if (client.destroyed) queueMicrotask(() => preTeardown(client.errored ? { type: client.errored.code || 'client_error', message: String(client.errored.message || client.errored) } : undefined))
 
   return flowDone
 }
