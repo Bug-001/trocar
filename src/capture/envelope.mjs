@@ -18,12 +18,17 @@ export const HOP_BY_HOP = new Set([
 // Recognizes the v1 harnesses' inference endpoints: Anthropic Messages, OpenAI Responses (Codex, e.g.
 // /codex/responses through the capture tee), OpenAI/DeepSeek Chat Completions. Capture stays a thin tee
 // — this is endpoint recognition, NOT provider parsing (that lives in the 3.1 adapter / D25 dissector).
+// Suffix-based so relay/中转站 prefixes count too (RFC 4.6 §记录: `/anthropic/v1/messages` is still
+// an inference request). Strip the query, then match the inference endpoints of the v1 harnesses by
+// path suffix: Anthropic Messages (excluding count_tokens), OpenAI Responses (Codex), OpenAI/DeepSeek
+// Chat Completions, and Gemini's :generateContent / :streamGenerateContent.
 export function isLlmCall(endpoint) {
   const e = String(endpoint || '').split('?')[0]
   if (e.includes('count_tokens')) return false
-  if (e.startsWith('/v1/messages')) return true      // Anthropic Messages
-  if (/(^|\/)responses$/.test(e)) return true         // OpenAI Responses (Codex) — /responses, /v1/responses, /codex/responses
-  if (/(^|\/)chat\/completions$/.test(e)) return true // OpenAI / DeepSeek Chat Completions
+  if (e.endsWith('/v1/messages')) return true          // Anthropic Messages (incl. relay prefixes)
+  if (e.endsWith('/responses')) return true            // OpenAI Responses (Codex)
+  if (e.endsWith('/chat/completions')) return true     // OpenAI / DeepSeek Chat Completions
+  if (e.includes(':streamGenerateContent') || e.includes(':generateContent')) return true // Gemini
   return false
 }
 
