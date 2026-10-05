@@ -285,8 +285,10 @@ function poisonSplitDuplicates(parts) {
 // another (4.2 「并存期」: every reader makes the same choice).
 // `sessionsRoot`: where `asight raw seal` files a shard's records by session; sealed files there that
 // continue a shard of a served root are read with that root (src/raw/discover.mjs, rule 3).
-const listRoot = (root, sessionsRoot = null) => {
-  const ls = listSources([root], { sessionsRoot });
+// `exclude`: files to treat as absent — only `asight raw compare`, to resolve as it will once the
+// originals with a sealed copy are deleted (review 3 F1).
+const listRoot = (root, sessionsRoot = null, exclude = null) => {
+  const ls = listSources([root], { sessionsRoot, exclude });
   return { ...ls.perRoot[0], superseded: ls.superseded, mismatched: ls.mismatched, unattributed: ls.unattributed };
 };
 
@@ -295,9 +297,9 @@ const listRoot = (root, sessionsRoot = null) => {
 // `source` may be one path or SEVERAL roots (D27: the new home plus the legacy one that still holds
 // the user's captures). Scanning only the first would make raw-byte refs from the other root
 // unresolvable — the block viewer would report "record not found" for bytes that are on disk.
-export async function buildResolver(source, { retryMs = 30000, sessionsRoot = null, lister = (root) => listRoot(root, sessionsRoot), frameCache = createFrameCache(8), unreadableSealed = null, onIndexChange = null } = {}) {
+export async function buildResolver(source, { retryMs = 30000, sessionsRoot = null, exclude = null, lister = (root) => listRoot(root, sessionsRoot, exclude), frameCache = createFrameCache(8), unreadableSealed = null, onIndexChange = null } = {}) {
   const roots = (Array.isArray(source) ? source : [source]).filter(Boolean);
-  if (roots.length > 1) return buildMultiResolver(roots, { retryMs, sessionsRoot });
+  if (roots.length > 1) return buildMultiResolver(roots, { retryMs, sessionsRoot, exclude });
   const sourcePath = roots[0];
   const files = [];
   // scan (audit 2026-07-19): what is not read is recorded with its reason, so the omission is
@@ -579,7 +581,7 @@ export async function buildResolver(source, { retryMs = 30000, sessionsRoot = nu
 // among collisions — a ref that is ambiguous within a root still throws from that root's resolver.
 // Which files each root reads is ONE listing across all of them (src/raw/discover.mjs), so an
 // original in one root and its sealed copy in another are never both read.
-async function buildMultiResolver(roots, { sessionsRoot, ...opts }) {
+async function buildMultiResolver(roots, { sessionsRoot, exclude, ...opts }) {
   const parts = [];
   const unreadable = [];
   // the roots a listing can include: one that cannot be listed is left out of it (and fails alone)
@@ -592,8 +594,8 @@ async function buildMultiResolver(roots, { sessionsRoot, ...opts }) {
   const poison = () => poisonSplitDuplicates(parts.map((p) => p.index));
   const lister = (root) => {
     const good = listable();
-    if (!good.includes(root)) return listRoot(root, sessionsRoot); // throws this root's own error
-    const ls = listSources(good, { sessionsRoot });
+    if (!good.includes(root)) return listRoot(root, sessionsRoot, exclude); // throws this root's own error
+    const ls = listSources(good, { sessionsRoot, exclude });
     shared.ls = ls;
     return { ...ls.perRoot.find((p) => p.root === root), superseded: ls.superseded, mismatched: ls.mismatched, unattributed: ls.unattributed };
   };

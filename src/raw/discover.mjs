@@ -213,8 +213,10 @@ export function sealedUnder(dir, { fs = nodeFs } = {}) {
 }
 
 // roots → { files (to read, in a stable order), perRoot, skipped, superseded, mismatched, unattributed, sig }.
-export function listSources(roots, { fs = nodeFs, sessionsRoot = null } = {}) {
+// `exclude`: paths to treat as absent (`asight raw compare` reads the state after deletion this way).
+export function listSources(roots, { fs = nodeFs, sessionsRoot = null, exclude = null } = {}) {
   const perRoot = roots.map((root) => ({ root, ...scanRoot(root, fs) }));
+  if (exclude) for (const r of perRoot) r.files = r.files.filter((f) => !exclude.has(f));
   const unattributed = sessionsRoot ? addContinuations(perRoot, sessionsRoot, fs) : [];
   const { superseded, mismatched, drop } = resolveCoexistence(perRoot.flatMap((r) => r.files), { fs });
   for (const r of perRoot) r.files = r.files.filter((f) => !drop.has(f));
