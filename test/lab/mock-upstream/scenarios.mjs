@@ -1,6 +1,7 @@
 // scenarios.mjs — the scenario catalog, how a request picks one, and the dialect-neutral reply plan.
 // Every name here has a row in README.md's scenario table (a test keeps the two in sync).
 import { createHash } from 'node:crypto'
+import { toolsOf, turnOf, acts, subagentCall, isTitleRequest, titleText } from './session.mjs'
 
 // A scenario is data the dialects and the transport read: `status` makes it an HTTP error, `extra`
 // adds deltas after the reply text, and `fault` / `slowHeaders` / `drip` / `splitUtf8` / `encoding`
@@ -9,6 +10,8 @@ export const SCENARIOS = {
   ok: {},
   thinking: { thinking: true },
   'tool-use': { tool: true },
+  subagent: { subagent: true },
+  'near-limit': { tool: true, nearLimit: true }, // usage: session.mjs withUsageTotal
   ...Object.fromEntries([400, 401, 403, 404, 408, 409, 413, 422, 500, 503, 504, 529].map((s) => [`http-${s}`, { status: s }])),
   'http-429': { status: 429, retryAfter: 1 },
   'http-429-long': { status: 429, retryAfter: 120 },
@@ -51,7 +54,7 @@ export function errorFor(sc, dialect) {
   return res
 }
 
-const MARKER = /\[\[mock:([a-z0-9-]+)\]\]/g
+const MARKER = /\[\[mock:([a-z0-9-]+)(?:\*([1-9]\d{0,2}))?\]\]/g // `*N`: N tool rounds per user turn
 // own keys only: `n in SCENARIOS` would also accept "constructor", "toString", "__proto__"
 export const isScenario = (n) => typeof n === 'string' && Object.hasOwn(SCENARIOS, n)
 
@@ -62,11 +65,22 @@ export const isScenario = (n) => typeof n === 'string' && Object.hasOwn(SCENARIO
 export function pickScenario(headers, body, isModel, queue) {
   if (headers['x-mock-scenario']) return { name: headers['x-mock-scenario'], source: 'header' }
   if (isModel) {
-    const marks = [...body.toString('latin1').matchAll(MARKER)].map((m) => m[1]).filter(isScenario)
-    if (marks.length) return { name: marks.at(-1), source: 'marker' }
+    const mark = [...body.toString('latin1').matchAll(MARKER)].filter((m) => isScenario(m[1])).at(-1)
+    if (mark) return { name: mark[1], source: 'marker', repeat: Number(mark[2] || 1) }
     if (queue.length) return { name: queue.shift(), source: 'script' }
   }
   return { name: 'ok', source: 'default' }
+}
+
+// Script steps: "name" or "name*N" (N copies, 1..999). Returns the expanded queue and the bad steps.
+export function expandSteps(steps) {
+  const out = [], bad = []
+  for (const s of steps) {
+    const m = typeof s === 'string' && /^([a-z0-9-]+)(?:\*([1-9]\d{0,2}))?$/.exec(s)
+    if (m && isScenario(m[1])) out.push(...Array(Number(m[2] || 1)).fill(m[1]))
+    else bad.push(s)
+  }
+  return { out, bad }
 }
 
 export const sha256 = (buf) => createHash('sha256').update(buf).digest('hex')
@@ -95,20 +109,21 @@ export function shellCall(names) {
 // What the model "says", before any dialect shapes it. The text is a pure function of the request,
 // so a test (or a person watching an agent) can tell what actually reached the upstream.
 // `seen` = { kind: 'text' | 'tool_result', text } from the dialect's reading of the last user turn.
-// A tool result is always answered with text, never another call: the scenario marker that asked
-// for the call is still in the history, and answering it again would loop the agent forever. A
-// request that declares no tools gets text too, as from a real provider: agents' side calls (titles,
-// summaries, compaction) carry the typed marker but no tools.
+// A call is made only while the scenario acts (session.mjs `acts`): the marker that asked for it is
+// still in the history, so past its N rounds a tool result is answered with text, or the agent would
+// loop forever. A request that declares no tools gets text too, as from a real provider: agents' side
+// calls (summaries, compaction) carry the typed marker but no tools. A title call gets a short title.
 export function plan(seen, raw, body, sc = {}) {
   const head = seen.kind === 'tool_result' ? 'mock-reply: tool-result-received ' : 'mock-reply: '
-  const reply = `${head}${Array.from(seen.text || '').slice(0, 80).join('')} sha256:${sha256(raw).slice(0, 12)}`
+  const reply = isTitleRequest(body) ? titleText(body, sha256(raw).slice(0, 12))
+    : `${head}${Array.from(seen.text || '').slice(0, 80).join('')} sha256:${sha256(raw).slice(0, 12)}`
   const extra = sc.extra ? sc.extra() : [], text = reply + extra.join('')
   const thinking = sc.thinking ? `mock-thinking: the last user turn is ${(seen.text || '').length} chars long` : null
-  const names = (Array.isArray(body.tools) ? body.tools : []).map((t) => t?.name || t?.function?.name).filter(Boolean)
-  const tool = sc.tool && seen.kind !== 'tool_result' && names.length ? shellCall(names) : null
+  const tools = toolsOf(body), turn = turnOf(body), act = !turn.quiet && acts(turn, sc)
+  const tool = !act ? null : sc.subagent ? subagentCall(tools) : sc.tool && tools.length ? shellCall(tools.map((t) => t.name)) : null
   return {
     model: body.model || 'mock-model', text, parts: [...splitEvery(reply, 12), ...extra],
-    thinking, thinkingParts: thinking && splitEvery(thinking, 12), tool, toolArgs: tool && JSON.stringify(tool.input),
+    thinking, thinkingParts: thinking && splitEvery(thinking, 12), tool, toolArgs: tool && JSON.stringify(tool.input), compaction: turn.compacting,
     inputTokens: tokens(raw.length), outputTokens: tokens(text.length + (thinking || '').length),
   }
 }

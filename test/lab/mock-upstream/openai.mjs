@@ -26,7 +26,8 @@ export const responses = {
     const c = prefixUsage(ctx, 'responses', body)
     const usage = { input_tokens: c.total, input_tokens_details: { cached_tokens: c.cached }, output_tokens: p.outputTokens, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: c.total + p.outputTokens }
     const response = (status, output, u = null) => ({ id, object: 'response', created_at, status, model: p.model, output, usage: u, error: null, incomplete_details: null })
-    const items = [p.thinking && reasoningItem(p), messageItem(p), p.tool && functionCallItem(p)].filter(Boolean)
+    // Codex's remote compaction ends its input with a compaction_trigger and wants one compaction item back
+    const items = p.compaction ? [compactionItem(p)] : [p.thinking && reasoningItem(p), messageItem(p), p.tool && functionCallItem(p)].filter(Boolean)
     if (!body.stream) return jsonReply(200, response('completed', items.map((i) => i.done), usage), headers)
 
     let seq = 0
@@ -73,6 +74,12 @@ function reasoningItem(p) {
       ['response.reasoning_summary_part.done', { ...at, summary_index: 0, part: part(p.thinking) }],
     ],
   }
+}
+
+// encrypted_content is opaque to the client; here it is just the reply text, base64.
+function compactionItem(p) {
+  const done = { id: rid('cmp_mock_'), type: 'compaction', encrypted_content: Buffer.from(p.text).toString('base64') }
+  return { done, added: done, inner: () => [] }
 }
 
 function functionCallItem(p) {
