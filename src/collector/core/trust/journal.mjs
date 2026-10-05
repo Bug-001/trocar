@@ -176,16 +176,19 @@ export const describeEntry = (e) => (e.kind === 'text'
   : `${e.keys.join('.')} = ${e.value}`)
 
 // When asight installed the value a config layer holds (ms), or null. A layer counts when an entry changed its file
-// (`path`, or the link target `real_path`) and the layer still holds that entry's value under its last key; the
-// tracker then judges config-after-start against this time, not the file's mtime, so an unrelated later edit of the
-// same file does not make a process that started after install look stale (review 2 #5).
+// (`path`, or the link target `real_path`) and the layer still holds that entry's value under its last key, or every
+// variable of its dotenv block; the tracker then judges config-after-start against this time, not the file's mtime,
+// so an unrelated later edit of the same file (Hermes rewrites its .env when it tidies it) does not make a process
+// that started after install look stale (review 2 #5).
 export function installedAt(manifest, layer) {
   if (!manifest || !layer || !layer.file || !layer.vars) return null
   for (const e of manifest.entries || []) {
     if (e.path !== layer.file && e.real_path !== layer.file) continue
-    const key = Array.isArray(e.keys) ? e.keys[e.keys.length - 1] : null
     const t = Date.parse(e.installed_at)
-    if (key != null && layer.vars[key] === e.value && Number.isFinite(t)) return t
+    if (!Number.isFinite(t)) continue
+    if (e.vars) { if (Object.entries(e.vars).every(([k, v]) => layer.vars[k] === v)) return t; continue } // a dotenv block
+    const key = Array.isArray(e.keys) ? e.keys[e.keys.length - 1] : null
+    if (key != null && layer.vars[key] === e.value) return t
   }
   return null
 }

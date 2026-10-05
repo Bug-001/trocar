@@ -206,4 +206,10 @@ test('journal: installedAt finds when asight wrote the value a layer holds — b
   assert.equal(installedAt(m, layer('/h/.claude/settings.json', '/elsewhere/ca.pem')), null, 'the user changed the value: its age is the file\'s')
   assert.equal(installedAt(m, layer('/h/project/.claude/settings.json', '/h/.asight/collector/ca/asight-ca.pem')), null, 'another file')
   assert.equal(installedAt(null, layer('/h/.claude/settings.json', 'x')), null)
+  // a dotenv block (Hermes, Codex): every variable of the block still holds asight's value
+  const B = '/h/.asight/collector/ca/combined-hermes.pem'
+  const mb = { entries: [{ kind: 'text', format: 'dotenv-block', path: '/h/.hermes/.env', vars: { SSL_CERT_FILE: B, HERMES_CA_BUNDLE: B }, installed_at: '2026-10-06T01:00:00.000Z' }] }
+  assert.equal(installedAt(mb, { file: '/h/.hermes/.env', vars: { SSL_CERT_FILE: B, HERMES_CA_BUNDLE: B, OPENAI_API_KEY: 'k' } }), at)
+  assert.equal(installedAt(mb, { file: '/h/.hermes/.env', vars: { SSL_CERT_FILE: '/etc/ssl/certs/ca-certificates.crt', HERMES_CA_BUNDLE: B } }), null, 'a same-name line below the block won')
+  assert.equal(installedAt({ entries: [{ kind: 'text', format: 'line', path: '/h/.bashrc', line: 'x', installed_at: '2026-10-06T01:00:00.000Z' }] }, { file: '/h/.bashrc', vars: { A: '1' } }), null, 'a line entry sets no variable')
 })
