@@ -55,6 +55,10 @@ export function handleFlow(client, meta, ctx) {
   upstream.on('close', () => preTeardown())
   client.on('close', () => preTeardown())
   client.on('end', () => preTeardown())
+  // The client socket is ours from accept: an error on it (a reset before we have decided, a write
+  // to a client that already left) MUST be handled here, or it is an uncaughtException that takes
+  // the whole collector down (RFC 4.6 fail-open). relay() and the TLS wrap own it after the decision.
+  client.on('error', (err) => preTeardown({ type: err.code || 'client_error', message: String((err && err.message) || err) }))
 
   // Passive bidirectional relay; forwards received bytes untouched and (optionally) tees a copy.
   // The upstream's FIN half-closes the client gracefully (the client drains the response, then

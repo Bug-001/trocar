@@ -9,14 +9,14 @@ const upCa = createCa({ commonName: 'upstream test CA' }); const upIssuer = crea
 const asightCa = createCa(); const issuer = createLeafIssuer(loadCa(asightCa))
 const listen = (srv) => new Promise((r) => srv.listen(0, '127.0.0.1', () => r(srv.address().port)))
 
-async function harness({ meta = {}, policy = () => true, upstream }) {
+async function harness({ meta = {}, policy = () => true, upstream, onAccept = () => {} }) {
   const upPort = await listen(upstream)
   const envelopes = [], flows = []
   const ctx = { issuer, upstreamCa: upCa.certPem, policy, isRecording: () => true, negCache: new Map(), newFlowId: () => 'f' + flows.length,
     store: { envelope: (e) => envelopes.push(e), flow: (f) => flows.push(f) },
     connectUpstream: (dst) => net.connect(dst.port, dst.address) }
   const done = []
-  const engine = net.createServer((c) => done.push(handleFlow(c, { dst: { address: '127.0.0.1', port: upPort, family: 4 }, pid: 1, agent: 't', decrypt: true, ...meta }, ctx)))
+  const engine = net.createServer((c) => { done.push(handleFlow(c, { dst: { address: '127.0.0.1', port: upPort, family: 4 }, pid: 1, agent: 't', decrypt: true, ...meta }, ctx)); onAccept(c) })
   const port = await listen(engine)
   // Resolves once every flow accepted so far has finalized (handleFlow's promise). Assert on flows
   // or envelopes only after this: the client can see the response end (the forwarded TLS
@@ -52,6 +52,14 @@ function connectProxy(originPort, reply, { onOriginLeg = () => {} } = {}) {
 // Hold a socket's write-side shutdown open for `ms` after end(), as a loaded event loop does. Bytes
 // that arrive meanwhile land after end() but before 'finish' — the window the flake needed.
 const holdShutdown = (sock, ms) => { const final = sock._final; sock._final = (cb) => setTimeout(() => final.call(sock, cb), ms) }
+// The first flight of a real client handshake (SNI upstream.test, ALPN http/1.1), captured raw.
+async function clientHello() {
+  const srv = net.createServer(); const port = await listen(srv)
+  const got = new Promise((r) => srv.once('connection', (s) => s.once('data', (d) => { r(d); s.destroy() })))
+  tls.connect({ port, host: '127.0.0.1', servername: 'upstream.test', ALPNProtocols: ['http/1.1'] }).on('error', () => {})
+  const hello = await got; srv.close(); return hello
+}
+const once = (emitter, event) => new Promise((r) => emitter.once(event, r))
 const REQ = 'POST /v1/messages HTTP/1.1\r\nHost: upstream.test\r\nContent-Length: 13\r\nConnection: close\r\n\r\n{"model":"m"}'
 const RESP = 'HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nX-Odd-Case: KeepMe\r\nContent-Length: 9\r\nConnection: close\r\n\r\n{"ok":1} '.slice(0, -1)
 
@@ -147,4 +155,30 @@ test('client abort mid-flight tears down the upstream socket (acceptance T3)', a
   await new Promise((r) => setTimeout(r, 150))
   await h.close()
   assert.ok(upClosedAt > 0 && upClosedAt - t < 120, `upstream closed ${upClosedAt - t}ms after client abort`)
+})
+
+test('client reset before a routing decision is caught: flow finalized with the error, upstream dropped (T3)', { timeout: 10000 }, async () => {
+  const hello = await clientHello()
+  // [when, first bytes the client sends, what shows the engine is inside that window]
+  const cases = [
+    ['before its first byte', null, 'accepted'],
+    ['mid-ClientHello', hello.subarray(0, 20), 'engine-read'],
+    ['mid-CONNECT head', Buffer.from('CONNECT x.test:443 HTTP/1.1\r\n'), 'engine-read'],
+    ['during the upstream TLS handshake', hello, 'upstream-read'], // upstream never answers the engine's ClientHello
+  ]
+  for (const [when, first, ready] of cases) {
+    let upSock = null, upClosed = null, engineRead = null
+    const upstream = net.createServer((s) => { upSock = s; upClosed = once(s, 'close'); s.on('error', () => {}); s.on('data', () => {}) })
+    const upAccepted = once(upstream, 'connection')
+    const h = await harness({ upstream, onAccept: (c) => { engineRead = once(c, 'data') } })
+    const c = net.connect(h.port, '127.0.0.1', () => { if (first) c.write(first) }); c.on('error', () => {})
+    await upAccepted // the engine has accepted the client and dialled the upstream: no decision yet
+    if (ready === 'engine-read') await engineRead
+    if (ready === 'upstream-read') await once(upSock, 'data')
+    c.resetAndDestroy()
+    await h.close()
+    await upClosed
+    assert.equal(h.flows.length, 1, when); assert.equal(h.flows[0].decision, 'error', when)
+    assert.equal(h.flows[0].error?.type, 'ECONNRESET', when)
+  }
 })
