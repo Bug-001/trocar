@@ -25,6 +25,28 @@ const request = (port, ca, raw, opts = {}) => new Promise((resolve, reject) => {
   let got = Buffer.alloc(0); c.on('data', (d) => (got = Buffer.concat([got, d])))
   c.on('end', () => resolve({ got: got.toString('latin1'), cert: new X509Certificate(c.getPeerX509Certificate().raw) })); c.on('error', reject)
 })
+// Stand-in for the VPN/Clash hop an agent's CONNECT goes through. Like a real TCP relay it passes a
+// FIN on as a FIN (allowHalfOpen) instead of closing its own write side: after the origin's FIN the
+// engine still sends its TLS close_notify (its reply to the origin's) up the tunnel, and an
+// auto-ended leg would turn that write into an EPIPE. An error on either leg tears the other down.
+// closed() resolves once every leg has fully closed, so a test can end only after the hop is quiet.
+function connectProxy(originPort, reply, { onOriginLeg = () => {} } = {}) {
+  const legs = []
+  const closed = (s) => new Promise((r) => s.once('close', r))
+  const server = net.createServer({ allowHalfOpen: true }, (c) => {
+    let o = null
+    legs.push(closed(c)); c.on('error', () => o?.destroy())
+    c.once('data', () => {
+      o = net.connect({ port: originPort, host: '127.0.0.1', allowHalfOpen: true }, () => { c.write(reply); c.pipe(o); o.pipe(c) })
+      legs.push(closed(o)); o.on('error', () => c.destroy())
+      onOriginLeg(o)
+    })
+  })
+  return { server, closed: () => Promise.all(legs) }
+}
+// Hold a socket's write-side shutdown open for `ms` after end(), as a loaded event loop does. Bytes
+// that arrive meanwhile land after end() but before 'finish' — the window the flake needed.
+const holdShutdown = (sock, ms) => { const final = sock._final; sock._final = (cb) => setTimeout(() => final.call(sock, cb), ms) }
 const REQ = 'POST /v1/messages HTTP/1.1\r\nHost: upstream.test\r\nContent-Length: 13\r\nConnection: close\r\n\r\n{"model":"m"}'
 const RESP = 'HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nX-Odd-Case: KeepMe\r\nContent-Length: 9\r\nConnection: close\r\n\r\n{"ok":1} '.slice(0, -1)
 
@@ -69,10 +91,10 @@ test('CONNECT tunnel: the proxy reply is relayed verbatim, then the inner TLS is
   const origin = httpsUpstream((s) => s.on('data', () => s.end(RESP)))
   const originPort = await listen(origin)
   const proxyReply = 'HTTP/1.1 200 Connection established\r\nProxy-Agent: test-vpn/1.0\r\n\r\n'
-  const proxy = net.createServer((c) => c.once('data', () => {
-    const o = net.connect(originPort, '127.0.0.1', () => { c.write(proxyReply); c.pipe(o); o.pipe(c) })
-  }))
-  const h = await harness({ upstream: proxy })
+  // The origin leg's shutdown completes late, so the engine's close_notify always crosses the
+  // origin's FIN at the hop (the ordering that used to flake under load) instead of only sometimes.
+  const proxy = connectProxy(originPort, proxyReply, { onOriginLeg: (o) => holdShutdown(o, 100) })
+  const h = await harness({ upstream: proxy.server })
   const result = await new Promise((resolve, reject) => {
     const raw = net.connect(h.port, '127.0.0.1', () => raw.write('CONNECT upstream.test:443 HTTP/1.1\r\nHost: upstream.test:443\r\n\r\n'))
     raw.once('data', (d) => {
@@ -81,6 +103,7 @@ test('CONNECT tunnel: the proxy reply is relayed verbatim, then the inner TLS is
       let b = ''; t.on('data', (x) => (b += x.toString('latin1'))); t.on('end', () => resolve({ reply, b })); t.on('error', reject)
     })
   })
+  await proxy.closed()
   h.close(); origin.close()
   assert.equal(result.reply, proxyReply); assert.equal(result.b, RESP)
   assert.equal(h.flows[0].decision, 'tunnel'); assert.equal(h.envelopes[0].host, 'upstream.test')
