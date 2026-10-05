@@ -26,6 +26,7 @@ const { port } = server.address();
 const FULL = await get(port, '/api/session?project=P&id=S&cursor=0&limit=60');   // what poll() asks for
 const PAGED = await get(port, '/api/session?project=P&id=S&cursor=3&limit=1');   // calls #1–#2 paged out
 server.close();
+test.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
 // steps in capture order: 0 complete · 1 capped (unparsed) · 2 early413 (unparsed) · 3 early401 (parsed)
 async function at(session, i) {
@@ -54,16 +55,24 @@ test('a parsed call with a label shows the badge above its context; a complete c
   assert.match(v.ctx, /^<div class="rpk"><span class="pobadge"[^>]*>请求体不完整/, 'the badge is the first thing in the window');
   assert.match(v.ctx, /cwmeta/, 'the parsed blocks still render below it');
   assert.match(v.ctx, /bytes stored \(not the whole request\)/);
+  assert.match(v.ctx, /the stored part of the request/);
+  assert.doesNotMatch(v.ctx, /the exact input to the model/, 'a 401 before the body was sent: the model got none of it');
   assert.doesNotMatch(v.ctx, /bytes on the wire/, 'a partial body is not "the bytes on the wire"');
   assert.match(v.raw, /bytes stored/);
   v = await at(FULL, 0);
   assert.doesNotMatch(v.ctx + v.raw, /请求体不完整|请求体已截断|bytes stored/);
   assert.match(v.ctx, /bytes on the wire/);
+  assert.match(v.ctx, /the exact input to the model/);
 });
 
-test('a paged-out labelled call still says why in the raw panel', async () => {
+test('a paged-out labelled call still says why, in the raw panel and the window', async () => {
   assert.equal(PAGED.analyzed.steps[1].paged_out, true, 'precondition: call #1 arrived without its body');
-  const v = await at(PAGED, 1);
+  let v = await at(PAGED, 1);
   assert.match(v.raw, /正文未随本页下发/);
   assert.match(v.raw, /请求体已截断/);
+  assert.match(v.ctx, /^<div class="rpk"><span class="pobadge"[^>]*>请求体已截断/, 'the paged-out window says it too, first');
+  assert.match(v.raw + v.ctx, /what was stored of it/);
+  assert.doesNotMatch(v.raw + v.ctx, /— it is intact|<\/b>: it is intact/, 'only the stored prefix is on disk, not "it"');
+  v = await at(PAGED, 0);
+  assert.doesNotMatch(v.raw + v.ctx, /请求体|what was stored of it/, 'an unlabelled paged-out call keeps the old text');
 });

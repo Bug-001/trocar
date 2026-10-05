@@ -1583,7 +1583,7 @@ function renderResourceView(el){
   const x=document.getElementById('rpx'); if(x)x.onclick=()=>{ viewPin=null; renderRawPanel() }
 }
 // #21 · 不变式4 · 4.6 「不完整的标注,各说一件事」: the capture stored only part of this request body. Say which
-// thing happened where the call is shown: 已截断 = cut at the capture cap; 不完整 = never finished uploading.
+// thing happened where the call is shown: 已截断 = cut at the capture cap; 不完整 = not received whole.
 // Wording is baked server-side (call.reqIncomplete); this only picks the tag from its two booleans.
 function reqBadge(c){
   const q=c&&c.reqIncomplete; if(!q) return ''
@@ -1606,7 +1606,7 @@ function renderRawPanel(){
   // (cheap meta) and stay truthful.
   if(call.paged_out){
     el.innerHTML=`<div class="rphd">🩻 raw · call #${playhead+1}</div>`+
-      `<div class="rpk">${esc(String(rq.model||'').replace('claude-',''))} · <span class="pobadge" title="this call's verbatim body was not shipped on this page — it is intact in the raw trace (不变式4)">正文未随本页下发 · body not on this page</span></div>`+
+      `<div class="rpk">${esc(String(rq.model||'').replace('claude-',''))} · <span class="pobadge" title="this call's verbatim body was not shipped on this page — ${call.reqIncomplete?'what was stored of it':'it'} is intact in the raw trace (不变式4)">正文未随本页下发 · body not on this page</span></div>`+
       `<div class="rpk">usage · read <b>${kf(read)}</b> · new-cache <b>${kf(create)}</b> · fresh <b>${kf(fresh)}</b> · out <b>${kf(out)}</b></div>`+
       `<div class="rpk rpcost">${costLine}</div>`+reqBadge(call)
     return }
@@ -1627,12 +1627,12 @@ function renderContextWindow(){
   // no content, which is the single worst outcome for a tool whose value is "what you see IS the wire".
   if(call.paged_out){ curFlat=[]
     const lo=(pageCur|0)+1, hi=(pageCur|0)+PAGE_LIMIT, tot=(pageInfo&&pageInfo.total)||null
-    win.innerHTML=`<div class="pagedout">`+
+    win.innerHTML=reqBadge(call)+`<div class="pagedout">`+
       `<div class="pohd">⏸ 正文未随本页下发 · body not loaded on this page</div>`+
       `<div class="pobody">Call <b>#${playhead+1}</b> of ${anchor.calls.length} sits outside the loaded window `+
       `(calls <b>#${lo}</b>–<b>#${Math.min(hi,tot||hi)}</b>${tot?` of ${tot}`:''}). Its ctx / usage / cache figures above and `+
       `on the timeline are <b>real</b> — only the verbatim request body was left off this page to keep the `+
-      `response shippable. <b>Not lost</b>: it is intact in the raw NDJSON (不变式4 · 未下发 ≠ 丢失).</div>`+
+      `response shippable. <b>Not lost</b>: ${call.reqIncomplete?'what was stored of it (only part of the request — see above)':'it'} is intact in the raw NDJSON (不变式4 · 未下发 ≠ 丢失).</div>`+
       `<div><button class="pobtn" id="loadpage">⤓ 载入这一页 · load this window</button></div>`+
     `</div>`
     const lb=document.getElementById('loadpage'); if(lb) lb.onclick=()=>ensurePage(call,true)
@@ -1667,7 +1667,7 @@ function renderContextWindow(){
   const removed=refFlat?refFlat.filter(b=>!b.volatile&&!curKeys.has(b.key)):[]
   let html=reqBadge(call)+`<div class="cwmeta">`+
     `<div class="cwtitle">context @ call <b>#${playhead+1}</b>/${anchor.calls.length} · ${esc(model)} · ${fmtTime(call.ts)}</div>`+
-    `<div class="cwsub">the exact input to the model, in assembly order <b>tools → system → messages</b> · ${kf(flat.length)} blocks · ${kf(rq.context_chars)} ${call.reqIncomplete?'bytes stored (not the whole request)':'bytes on the wire'}</div>`+
+    `<div class="cwsub">${call.reqIncomplete?'the stored part of the request':'the exact input to the model'}, in assembly order <b>tools → system → messages</b> · ${kf(flat.length)} blocks · ${kf(rq.context_chars)} ${call.reqIncomplete?'bytes stored (not the whole request)':'bytes on the wire'}</div>`+
     `<div class="cwcache">⚡ KV cache this call: <b class="chit">${hitPct}%</b> reused · <b>${kf(read)}</b> tok read · <b>${kf(create)}</b> newly cached · <b>${kf(fresh)}</b> fresh${brk.firstCall?(read?' · first captured call — reuse is from a warm cross-session cache prefix (tools+system)':' · first call, nothing to reuse'):''}</div>`+
     taxSummary(tax)+growthLine(tax,prevTax,brk,!!(prevCall&&prevCall.paged_out))+diffControl(refIdx,removed.length)+
   `</div>`+removedSection(removed,refIdx)
