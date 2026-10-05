@@ -116,6 +116,9 @@ const ENVELOPE_CONSUMED = new Set([
   // intervention fields reserved by RFC 5.1 (D33, implemented later) — consumed now so a transparent
   // envelope never surfaces them as unmapped.
   'origin', 'client_req_body', 'client_resp', 'intervention', 'resend_of',
+  // NOT listed on purpose: req_truncated / req_body_bytes / req_partial (RFC 4.6 §记录). calls has no
+  // column for them, so consuming them here would drop the invariant-4 label from the DuckDB row;
+  // left unmapped, they land in calls.extra (and count, on the rare incomplete call).
 ]);
 
 // req_body keys this adapter maps to canonical columns / blocks / identity. The remainder (real
