@@ -39,7 +39,12 @@ function sandbox() {
   return { home, la, bin };
 }
 
-test('`asight uninstall` deletes BOTH capture-agent plists (product path, not just the unit)', () => {
+// LaunchAgents only exist on macOS. On Linux `removeCaptureAgents` is a deliberate no-op (no
+// launchd), so the plists this test plants would survive and the test would report a false orphan.
+// The non-darwin no-op itself is covered in capture-agents.test.mjs on every OS.
+const darwinOnly = { skip: process.platform !== 'darwin' && 'capture LaunchAgents are macOS-only (launchd)' };
+
+test('`asight uninstall` deletes BOTH capture-agent plists (product path, not just the unit)', darwinOnly, () => {
   const { home, la, bin } = sandbox();
   try {
     assert.ok(fs.existsSync(path.join(la, 'com.asight.mitm.plist')), 'precondition: mitm agent present');

@@ -107,3 +107,11 @@ test('remove is safe when nothing is installed', () => {
   const r = removeCaptureAgents({ autostart: a });
   assert.equal(r.ok, true, 'removing absent agents must not throw');
 });
+
+test('off macOS, remove is a reserved no-op that touches nothing (there is no launchd to clean)', () => {
+  const a = fakeAutostart();
+  a.platform = 'linux';
+  const r = removeCaptureAgents({ autostart: a });
+  assert.deepEqual(r, { ok: true, removed: false, reserved: true });
+  assert.deepEqual(a._calls, [], 'remove must not call the installer at all off macOS');
+});
