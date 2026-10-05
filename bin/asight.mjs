@@ -289,7 +289,7 @@ async function main() {
       const usage = 'usage: asight raw seal <closed-shard> [--sessions <dir>]\n'
         + '       asight raw seal --legacy <file|dir> [--dry-run] [--delete-original] [--quiet <seconds>]\n'
         + '       asight raw verify <sealed|dir> [--against <original>]\n'
-        + '       asight raw export <session-id|file.sealed> [--sessions <dir>] [--out <file>]\n'
+        + '       asight raw export <session-id|file.sealed> [--sessions <dir>] [--out <dir|file>]\n'
         + '       asight raw journal [--tail <n>]';
       if (sub === 'seal') {
         if (!target) die(usage);
@@ -353,7 +353,8 @@ async function main() {
         const out = flag('--out', undefined);
         try {
           const res = runExport({ target, sessionsRoot: path.resolve(flag('--sessions', path.join(asightHome(), 'sessions'))), out: out && path.resolve(out) });
-          console.log(`exported ${res.records} records (${mb(res.bytes)}) → ${res.out} (0600)`);
+          console.log(`exported ${res.records} records (${mb(res.bytes)}) → ${res.out}${res.outputs.length > 1 || res.out !== res.outputs[0].file ? `/ (${res.outputs.length} file(s), one per segment, 0600)` : ' (0600)'}`);
+          for (const o of res.outputs) if (o.file !== res.out) console.log(`  ${o.file} · ${o.records} records`);
         } catch (e) { console.error(e.message); process.exitCode = 1; }
         break;
       }
@@ -451,7 +452,7 @@ usage:
   asight raw seal <closed-shard> [--sessions <dir>]                     D35: seal a CLOSED shard (needs <shard>.closed), per session
   asight raw seal --legacy <file|dir> [--dry-run] [--delete-original] [--quiet <s>]  seal pre-D35 files/trees nothing writes; keeps originals by default
   asight raw verify <sealed|dir> [--against <original>]                 decode sealed copies, compare byte for byte with the original
-  asight raw export <session-id|file.sealed> [--out <file>]             sealed → plain NDJSON (0600, default ~/.asight/export/)
+  asight raw export <session-id|file.sealed> [--out <dir|file>]         sealed → plain NDJSON, one file per segment (0600, default ~/.asight/export/<session>/)
   asight raw journal [--tail <n>]                                       the durable record of refusals, failures, deletions
   asight --version`);
   }

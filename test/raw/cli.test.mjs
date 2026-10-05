@@ -24,7 +24,7 @@ test('legacy tree: seal (originals kept) → verify → seal --delete-original �
     const a = conversation(SID, 4, { idPrefix: 'ca_' });
     await shardOnce({ file: writeShard(path.join(home, 'cap.ndjson'), [a[0], envelope({ id: 't1', body: { raw_chars: 1, verbatim: false }, endpoint: '/api/event_logging/batch', llm: false }), a[1], a[2], a[3]].map((r) => toLine(r))), outDir: ses });
     const originals = listFiles(ses, /\.ndjson$/);
-    const sessionBytes = Buffer.concat(listFiles(path.join(ses, SID), /\.ndjson$/).map((f) => fs.readFileSync(f)));
+    const streamBytes = new Map(listFiles(path.join(ses, SID), /\.ndjson$/).map((f) => [path.basename(f), fs.readFileSync(f)]));
     let r = run(home, 'raw', 'seal', '--legacy', ses, '--quiet', '0', '--dry-run');
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, new RegExp(`dry run: ${originals.length} file\\(s\\) ready, 0 refused`));
@@ -47,9 +47,14 @@ test('legacy tree: seal (originals kept) → verify → seal --delete-original �
     assert.equal(run(home, 'raw', 'verify', ses).status, 0);
     r = run(home, 'raw', 'export', SID);
     assert.equal(r.status, 0, r.stderr);
-    const out = path.join(home, '.asight', 'export', `${SID}.ndjson`);
-    assert.ok(fs.readFileSync(out).equals(sessionBytes), 'export is not the session\'s original bytes');
-    assert.equal(fs.statSync(out).mode & 0o777, 0o600);
+    const out = path.join(home, '.asight', 'export', SID);           // one file per segment (review 3 F8)
+    assert.deepEqual(fs.readdirSync(out).sort(), [...streamBytes.keys()].map((n) => `${n}.0001.ndjson`).sort());
+    for (const [n, bytes] of streamBytes) {
+      const f = path.join(out, `${n}.0001.ndjson`);
+      assert.ok(fs.readFileSync(f).equals(bytes), `export of ${n} is not its original bytes`);
+      assert.equal(fs.statSync(f).mode & 0o777, 0o600);
+    }
+    assert.equal(fs.statSync(out).mode & 0o777, 0o700);
     assert.equal(fs.statSync(path.dirname(out)).mode & 0o777, 0o700);
     assert.notEqual(run(home, 'raw', 'export', SID).status, 0, 'an export must never overwrite an existing file');
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
