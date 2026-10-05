@@ -85,7 +85,7 @@ async function main() {
         const res = await resplitShards(outDir);
         console.log(`shard: resplit ${res.done} sessions (${res.skipped} already split, ${res.failed} failed) in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
         const mr = await rebuildMeta(outDir);
-        console.log(`shard: rebuilt meta for ${mr.sessions} sessions (${mr.records} records)`);
+        console.log(`shard: rebuilt meta for ${mr.sessions} sessions (${mr.records} records${mr.malformed ? `, ${mr.malformed} malformed line(s) not counted` : ''})`);
         for (const e of mr.errors) console.error(`shard: meta.json of ${e.session} left as it was — ${e.file} could not be read in full: ${e.reason}`);
         if (mr.errors.length) process.exitCode = 1;
         break;
@@ -94,7 +94,7 @@ async function main() {
         // Backfill/repair per-session meta.json (the archive layer) by streaming each existing shard.
         const t0 = Date.now();
         const res = await rebuildMeta(outDir);
-        console.log(`shard: rebuilt meta for ${res.sessions} sessions (${res.records} records) in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+        console.log(`shard: rebuilt meta for ${res.sessions} sessions (${res.records} records${res.malformed ? `, ${res.malformed} malformed line(s) not counted` : ''}) in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
         for (const e of res.errors) console.error(`shard: meta.json of ${e.session} left as it was — ${e.file} could not be read in full: ${e.reason}`);
         if (res.errors.length) process.exitCode = 1;
         break;

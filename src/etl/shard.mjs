@@ -15,7 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { emptyMeta, foldRecord, mergeMeta, foldSealed } from './session-meta.mjs';
+import { emptyMeta, foldRecord, mergeMeta } from './session-meta.mjs';
 import { resolveCoexistence, isSealedPath, streamOfSealed } from '../raw/discover.mjs';
 
 const NL = 0x0a;
@@ -150,46 +150,45 @@ function headFingerprint(file, len) {
 // cannot be read in full leaves that session's meta.json untouched and is returned in `errors` —
 // never a smaller count written over a correct one. Per-session files of a collector shard (other
 // stream names) are not `asight shard`'s records and stay out; the board adds them when it lists.
+// NDJSON and sealed inputs go through ONE line source (ingest.mjs forEachLine) and one fold, so the
+// count is the same before and after sealing: `records` = records folded into meta, `malformed` =
+// non-blank lines that are not JSON, counted apart (review 3 F11 — the NDJSON path counted them as
+// records, the sealed path did not).
 export async function rebuildMeta(outDir) {
-  const { createInterface } = await import('node:readline');
-  let sessions = 0, records = 0;
+  const { forEachLine } = await import('./ingest.mjs');
+  let sessions = 0, records = 0, malformed = 0;
   const errors = [];
   let entries = [];
-  try { entries = fs.readdirSync(outDir, { withFileTypes: true }); } catch { return { sessions: 0, records: 0, errors }; }
+  try { entries = fs.readdirSync(outDir, { withFileTypes: true }); } catch { return { sessions: 0, records: 0, malformed: 0, errors }; }
   for (const e of entries) {
     // control/ is session-less (no meta); skip it. Everything else is a session dir.
     if (!e.isDirectory() || e.name === CONTROL_DIR) continue;
     const meta = emptyMeta(e.name);
-    let seen = false;
+    let seen = false, bad = null, mal = 0;
     const dir = path.join(outDir, e.name), names = Object.values(STREAM_FILE);
     let inputs = names.map((n) => path.join(dir, n)).filter((f) => fs.existsSync(f));
     try { inputs = resolveCoexistence([...inputs, ...fs.readdirSync(dir).filter((n) => isSealedPath(n) && names.includes(streamOfSealed(n))).sort().map((n) => path.join(dir, n))]).files; } catch { continue; }
-    const sealed = inputs.filter(isSealedPath);
-    if (sealed.length) {
-      const before = meta.calls + meta.probes + meta.other;
-      const bad = foldSealed(meta, sealed);
-      if (bad) { errors.push({ session: e.name, ...bad }); continue; }
-      records += meta.calls + meta.probes + meta.other - before;
-      seen = true;
-    }
     // Fold ALL of a session's streams (calls/probes/other) so meta.calls/probes/other match the split
     // — reading only calls.ndjson would undercount probes and other, which the board lists.
-    for (const shard of inputs.filter((f) => !isSealedPath(f))) {
-      let size = 0;
-      try { size = fs.statSync(shard).size; } catch { continue; }
-      if (!size) continue;
+    for (const f of inputs) {
+      if (!isSealedPath(f)) { let size = 0; try { size = fs.statSync(f).size; } catch { continue; } if (!size) continue; }
       seen = true;
-      const rl = createInterface({ input: fs.createReadStream(shard, { encoding: 'utf8' }), crlfDelay: Infinity });
-      for await (const line of rl) {
-        if (!line) continue;
-        records++;
-        try { foldRecord(meta, JSON.parse(line)); } catch { /* malformed line — skip its contribution */ }
-      }
+      const rep = await forEachLine(f, (line) => {
+        const t = line.trim();
+        if (!t) return true;
+        let v; try { v = JSON.parse(t); } catch { mal++; return true; }
+        foldRecord(meta, v);
+        return true;
+      });
+      if (rep.sealedError || rep.unreadableRecords) { bad = { file: f, reason: rep.sealedError || rep.unreadable[0].reason, unreadableRecords: rep.sealedError ? null : rep.unreadableRecords }; break; }
     }
+    if (bad) { errors.push({ session: e.name, ...bad }); continue; }
     if (!seen) continue;
+    records += meta.calls + meta.probes + meta.other;
+    malformed += mal;
     try { fs.writeFileSync(path.join(outDir, e.name, 'meta.json'), JSON.stringify(meta), { mode: 0o600 }); sessions++; } catch { /* best-effort */ }
   }
-  return { sessions, records, errors };
+  return { sessions, records, malformed, errors };
 }
 
 // Sum bytes of every *.ndjson file under `dir` (one level of nesting: dir/*.ndjson + dir/*/*.ndjson).

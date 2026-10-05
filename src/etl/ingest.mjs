@@ -7,7 +7,7 @@
 // FIDELITY (invariant 4): v0-converted records carry capture:'v0-converted' — req_body is
 // RE-SERIALIZED, not the original wire bytes (demo stored parsed JSON), so AC-1 holds
 // against this converted source, NOT against the lost original wire. UI/README MUST label it.
-import { createReadStream } from 'node:fs';
+import { createReadStream, statSync } from 'node:fs';
 import { basename } from 'node:path';
 import { createInterface } from 'node:readline';
 import { isSealedPath } from '../raw/discover.mjs';
@@ -61,21 +61,6 @@ export async function readRecords(filePath, { normalize = true, limit = Infinity
   // separately and are NOT a loss (whitespace carries no record) — conflating them would cry wolf.
   const sealed = isSealedPath(filePath);
   const scan = { file: filePath, parsedLines: 0, blankLines: 0, skippedLines: 0, skipped: [], startOffset, ...(sealed ? { sealed: true } : {}) };
-  const start = Number(startOffset) > 0 ? Number(startOffset) : 0;
-  if (start > 0) {
-    // Past EOF is an EMPTY read, not an error: it is the normal steady state (nothing new since the
-    // last poll) and also what a stale watermark on a shrunken file looks like.
-    let size = 0;
-    try { size = (await import('node:fs')).statSync(filePath).size; } catch { return out; }
-    if (start >= size) return out;
-    // A sealed file never grows (D35); a byte offset inside it addresses no line boundary.
-    if (sealed) throw new Error(`${filePath}: a sealed file is read whole — startOffset ${start} lies inside it`);
-  }
-  // endOffset (exclusive): a live reader stops at the end of the last complete line, so a record the
-  // writer is still writing is read whole on the next pass instead of torn now (server.mjs). A plain
-  // file only: a sealed file never grows and is read whole (D35).
-  const end = !sealed && Number.isFinite(endOffset) ? { end: endOffset - 1 } : {};
-  if (!sealed && Number.isFinite(endOffset) && endOffset <= start) { Object.defineProperty(out, 'scan', { value: scan, enumerable: false, configurable: true }); return out; }
   let lineNo = 0;
   // One line (readline's view of it: no "\n", CRLF folded) → a record, a blank, or a reported skip.
   // Returns false once `limit` is reached.
@@ -109,32 +94,54 @@ export async function readRecords(filePath, { normalize = true, limit = Infinity
     out.push(rec);
     return out.length < limit; // bounded read (e.g. the self-test samples a head)
   };
-  if (sealed) {
-    // Frame by frame, never the whole file in memory (4.6 §日志体积预算). Each record is one source
-    // line; split it the way readline splits a file so both paths see the same lines. A file or a
-    // record that cannot be decoded is COUNTED and described on `scan` — never a silently short read
-    // (user requirement 2026-10-06; callers label it: the ETL journals it, the board reports it).
-    let sf = null;
-    try { sf = openSealed(filePath); } catch (e) { scan.sealedError = e.message; }
-    if (sf) {
-      scan.unreadableRecords = 0; scan.unreadable = [];
-      const onError = (i, e, ent) => {
-        scan.unreadableRecords++;
-        if (scan.unreadable.length < 20) scan.unreadable.push({ record: i, lineNo: ent.lineNo, id: ent.id, stream: ent.stream, reason: e.message });
-      };
-      try {
-        outer: for (const { line, entry } of sf.lines({ onError })) {
-          for (const piece of readlinePieces(line, entry.newline)) if (!take(piece, entry.stream)) break outer;
-        }
-      } finally { sf.close(); }
-    }
-  } else {
-    const rl = createInterface({ input: createReadStream(filePath, { encoding: 'utf8', start, ...end }), crlfDelay: Infinity });
-    const stream = basename(filePath);
-    for await (const line of rl) if (!take(line, stream)) { rl.close(); break; }
-  }
+  Object.assign(scan, await forEachLine(filePath, take, { startOffset, endOffset }));
   Object.defineProperty(out, 'scan', { value: scan, enumerable: false, configurable: true });
   return out;
+}
+
+// Every line of a capture file as readline sees it — an NDJSON stream, or a sealed file decoded frame
+// by frame (never whole in memory, 4.6 §日志体积预算) and cut the same way — with the stream it came
+// from (for a sealed file, each record's ORIGINAL stream). The one line source of readRecords (board,
+// ETL, doctor), `asight shard --rebuild-meta` and `asight raw compare`, so they count the same lines
+// (review 3 F11, F1). `onLine(text, stream)` returns false to stop. Returns what a sealed read could
+// not do — { sealedError } or { unreadableRecords, unreadable } — counted, never a silently short read
+// (user requirement 2026-10-06; callers label it: the ETL journals it, the board reports it).
+export async function forEachLine(filePath, onLine, { startOffset = 0, endOffset = Infinity } = {}) {
+  const sealed = isSealedPath(filePath);
+  const start = Number(startOffset) > 0 ? Number(startOffset) : 0;
+  if (start > 0) {
+    // Past EOF is an EMPTY read, not an error: it is the normal steady state (nothing new since the
+    // last poll) and also what a stale watermark on a shrunken file looks like.
+    let size = 0;
+    try { size = statSync(filePath).size; } catch { return {}; }
+    if (start >= size) return {};
+    // A sealed file never grows (D35); a byte offset inside it addresses no line boundary.
+    if (sealed) throw new Error(`${filePath}: a sealed file is read whole — startOffset ${start} lies inside it`);
+  }
+  if (!sealed) {
+    // endOffset (exclusive): a live reader stops at the end of the last complete line, so a record the
+    // writer is still writing is read whole on the next pass instead of torn now (server.mjs). A plain
+    // file only: a sealed file never grows and is read whole (D35).
+    if (Number.isFinite(endOffset) && endOffset <= start) return {};
+    const end = Number.isFinite(endOffset) ? { end: endOffset - 1 } : {};
+    const rl = createInterface({ input: createReadStream(filePath, { encoding: 'utf8', start, ...end }), crlfDelay: Infinity });
+    const stream = basename(filePath);
+    for await (const line of rl) if (onLine(line, stream) === false) { rl.close(); break; }
+    return {};
+  }
+  let sf;
+  try { sf = openSealed(filePath); } catch (e) { return { sealedError: e.message }; }
+  const rep = { unreadableRecords: 0, unreadable: [] };
+  const onError = (i, e, ent) => {
+    rep.unreadableRecords++;
+    if (rep.unreadable.length < 20) rep.unreadable.push({ record: i, lineNo: ent.lineNo, id: ent.id, stream: ent.stream, reason: e.message });
+  };
+  try {
+    outer: for (const { line, entry } of sf.lines({ onError })) {
+      for (const piece of readlinePieces(line, entry.newline)) if (onLine(piece, entry.stream) === false) break outer;
+    }
+  } finally { sf.close(); }
+  return rep;
 }
 
 // readline (crlfDelay: Infinity) breaks lines at "\n", "\r\n" and a lone "\r", and drops a "\r" at

@@ -77,3 +77,22 @@ test('`asight shard --rebuild-meta` counts sealed segments, and refuses to shrin
     assert.match(r2.errors[0].reason, /sealed|not a sealed file|checksum/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+// Review 3 F11: rebuild-meta counted a malformed line as a record when it read NDJSON, and not when it
+// read the same line from a sealed segment — the reported count changed on sealing.
+test('F11: rebuild-meta counts the same records, and the same malformed lines, before and after sealing', async () => {
+  const root = tmpDir();
+  try {
+    const ses = path.join(root, 'sessions'), dir = path.join(ses, L);
+    writeShard(path.join(dir, 'calls.ndjson'), [...conversation(L, 3, { idPrefix: 'mf_' }).map((r) => toLine(r)), Buffer.from('{"broken\n'), Buffer.from('   \n'), Buffer.from('a\rb\n')]);
+    const before = await rebuildMeta(ses);
+    const opts = { fdHolders: async () => new Map(), processList: async () => [], sleep: async () => {}, journal: path.join(root, 'j.jsonl') };
+    await sealLegacy(ses, opts);
+    await sealLegacy(ses, { ...opts, deleteOriginal: true });
+    assert.equal(fs.existsSync(path.join(dir, 'calls.ndjson')), false, 'precondition: only the sealed segment is left');
+    const after = await rebuildMeta(ses);
+    assert.equal(before.records, 3);
+    assert.equal(before.malformed, 3, 'the malformed lines are not counted apart');
+    assert.deepEqual({ records: after.records, malformed: after.malformed }, { records: before.records, malformed: before.malformed });
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
