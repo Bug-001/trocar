@@ -25,7 +25,7 @@ import { createLru, memoKey } from './query/memo.mjs';
 import { loadPricing } from './view/pricing.mjs';
 import { randomBytes } from 'node:crypto';
 import { monitoringStatus, monitoringOn, monitoringOff } from './capture/control.mjs';
-import { listSources, resolveCoexistence, isSealedPath, sealedSources } from './raw/discover.mjs';
+import { listSources, resolveCoexistence, isSealedPath, sealedSources, unreadCapture } from './raw/discover.mjs';
 import { sealedReadProblem } from './raw/journal.mjs';
 import { emptyMeta, mergeMeta, foldSealed } from './etl/session-meta.mjs';
 
@@ -214,7 +214,7 @@ function makeRecordLoader(source, { retryMs = 30000, sessionsRoot = null } = {})
   // per-file watermark: path -> { size, records } — the byte offset already consumed and what it
   // yielded, so a refresh parses only the tail.
   let marks = new Map();
-  const load = async () => {
+  const load = async (relisted = false) => {
     if (!roots.length) { load.sig = '∅'; return []; }
     let files = [], sig, listed;
     // A source that cannot be STATTED under a live board (deleted, rotated away, its directory made
@@ -256,13 +256,17 @@ function makeRecordLoader(source, { retryMs = 30000, sessionsRoot = null } = {})
     // `load.resets` rather than being handled silently (invariant 4).
     const records = [];
     const resets = [], pending = {};
-    const sourceErrors = [...coexistNotes(listed.mismatched), ...listed.unattributed];
+    const sourceErrors = [...coexistNotes(listed.mismatched), ...listed.unattributed,
+      ...listed.skipped.filter((x) => x.report).map((x) => ({ file: x.file, reason: x.report, unreadableRecords: null }))];
     const nextMarks = new Map();
     const passSkips = [];
+    const vanished = [];
     for (const f of files) {
       let size = 0;
-      try { size = fssync.statSync(f).size; } catch { // vanished mid-refresh → skip this pass, and say so
-        passSkips.push({ root: path.dirname(f), name: path.basename(f), reason: 'vanished', attention: true }); continue;
+      // Gone (ENOENT) is re-listed once below; any other stat failure is reported, and the rest is read.
+      try { size = fssync.statSync(f).size; } catch (e) {
+        if (e && e.code === 'ENOENT') { vanished.push(f); continue; }
+        passSkips.push({ root: path.dirname(f), name: path.basename(f), reason: 'unreadable', error: (e && e.code) || String(e), attention: true }); continue;
       }
       const prev = marks.get(f);
       let from = 0, keep = [], problem = null;
@@ -292,9 +296,10 @@ function makeRecordLoader(source, { retryMs = 30000, sessionsRoot = null } = {})
           }
         }
       } catch (e) {
-        // Unreadable (EACCES, EIO, or gone after the stat): reported, and what it already yielded is
-        // kept. It is retried when its stat changes (the sig carries ctime, which a chmod changes);
-        // until then the cached pass, and this report, are served without touching it again.
+        if (e && e.code === 'ENOENT') { vanished.push(f); continue; } // gone after the stat: re-listed once below
+        // Unreadable (EACCES, EIO): reported, and what it already yielded is kept. It is retried when
+        // its stat changes (the sig carries ctime, which a chmod changes); until then the cached pass,
+        // and this report, are served without touching it again.
         passSkips.push({ root: path.dirname(f), name: path.basename(f), reason: 'unreadable', error: (e && e.code) || String(e), attention: true });
         if (prev && from > 0) { nextMarks.set(f, prev); for (const r of prev.records) records.push(r); if (prev.problem) sourceErrors.push(prev.problem); }
         continue;
@@ -307,6 +312,17 @@ function makeRecordLoader(source, { retryMs = 30000, sessionsRoot = null } = {})
       nextMarks.set(f, { size, records: all, corrupt, problem });
       for (const r of all) records.push(r);
       for (const r of tail) records.push(r); // provisional: not in the mark
+    }
+    // A listed file gone before it was read: the sealer deleted a verified original whose sealed
+    // copies THIS listing set aside as superseded, or it rotated away. Re-list once — the copies are
+    // then read — instead of a board short by that file (4.6 E8). A second vanish is reported.
+    if (vanished.length) {
+      if (!relisted) return load(true);
+      for (const f of vanished) {
+        // also a pass skip, so this pass is retried (retryMs) like any other failure
+        passSkips.push({ root: path.dirname(f), name: path.basename(f), reason: 'vanished', attention: true });
+        sourceErrors.push({ file: f, reason: 'vanished while being read, twice in a row — its records are missing from this view; reload', unreadableRecords: null });
+      }
     }
     marks = nextMarks;   // files no longer listed drop out, releasing their records
     load.resets = resets; load.pending = pending;
@@ -566,8 +582,12 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
 
   // The session list of a shard root comes from meta.json, without reading records — so check the
   // sealed files there can at least be opened, or a damaged one would be invisible until clicked.
-  const unreadableSealedInShards = () => shardDirsOf().flatMap((d) => sealedIn(d))
-    .filter((f) => !sealedSources(f)).map((f) => ({ file: f, reason: 'sealed file could not be opened (header, index tail or checksum damaged)', unreadableRecords: null }));
+  const unreadableSealedInShards = () => shardDirsOf().flatMap((d) => [
+    ...sealedIn(d).filter((f) => !sealedSources(f)).map((f) => ({ file: f, reason: 'sealed file could not be opened (header, index tail or checksum damaged)', unreadableRecords: null })),
+    // anything else there that looks like captured bytes and is not read (4.2 「读」: reported, not skipped)
+    ...(() => { try { return fssync.readdirSync(d); } catch { return []; } })().filter((n) => !SESSION_STREAMS.includes(n) && unreadCapture(n))
+      .map((n) => ({ file: path.join(d, n), reason: unreadCapture(n), unreadableRecords: null })),
+  ]);
   const withErrors = (body, errors) => (errors && errors.length ? { ...body, source_errors: errors } : body);
   const sessionMemo = createLru(8); // D21: assembled per-session views keyed by (id, source sig, strategy)
   const csrf = control ? randomBytes(18).toString('hex') : null; // D26: per-process CSRF token

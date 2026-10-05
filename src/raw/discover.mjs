@@ -30,6 +30,18 @@ export const SEALED_EXT = '.sealed';
 const SEG = /^(.+)\.\d{4,}\.sealed$/;
 export const isSealedPath = (p) => SEG.test(path.basename(p));
 export const streamOfSealed = (name) => { const m = SEG.exec(path.basename(name)); return m ? m[1] : null; };
+// A file that looks like captured bytes (a stream, a sealed file, a compressed capture) — what a reader
+// that does NOT read it must report (4.2 「读」: skipped or unrecognised files are reported, never folded
+// into empty). Not the sealer's own sidecars (close marker, lock, dot-temps), not anything else.
+const COMPRESSED = /\.(gz|zst|bz2|xz|zip|br|lz4)$/i;
+export function unreadCapture(name) {
+  const n = path.basename(name);
+  if (n.startsWith('.') || /\.(closed|sealing)$/.test(n)) return null;
+  if (COMPRESSED.test(n) && /ndjson|capture|calls|probes|other/i.test(n)) return 'a compressed capture — not read; decompress it, or seal it, to have it shown';
+  if (n.endsWith('.sealed') && !isSealedPath(n)) return 'a sealed file without a segment number — not read; give it its <stream>.<NNNN>.sealed name';
+  if (/\.ndjson\./.test(n) && !isSealedPath(n)) return 'a capture stream under another name — not read';
+  return null;
+}
 
 // The source-shard table of a sealed file, cached by (size, mtime, inode). null if unreadable — the
 // file then stays in the list, so the reader that opens it fails loudly instead of skipping it.
@@ -66,7 +78,12 @@ function scanRoot(root, fs) {
     // opened (src/paths.mjs isCaptureFile / skipReason, the classifier read-cc-line gave the readers).
     if (!e.isDirectory()) {
       if (isCaptureFile(root, e) || (isSealedPath(e.name) && fileLike(fs, root, e))) files.push(p);
-      else skipped.push({ name: e.name, ...skipReason(root, e) });   // reason + attention: may it hold capture bytes?
+      else {
+        // reason + attention (may it hold capture bytes?), and a `report` when the name looks like a
+        // capture the readers must name (unreadCapture)
+        const why = unreadCapture(e.name);
+        skipped.push({ name: e.name, file: p, ...skipReason(root, e), ...(why ? { report: why } : {}) });
+      }
       continue;
     }
     const dirSkip = { name: e.name, reason: 'directory', attention: e.name.endsWith('.ndjson') };

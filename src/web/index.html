@@ -645,6 +645,7 @@ function renderSourceHealth(h){
 // No silent failure (user requirement 2026-10-06): a capture file the server could not read in full —
 // typically a damaged sealed file (D35) — arrives as `source_errors`. The board still shows what it
 // could read, and says, right here, what it could not. Never rendered as a smaller-but-healthy board.
+let projSourceErrors=[] // last /api/projects source_errors: the control view adds its own to these
 function showSourceErrors(list){
   const el=document.getElementById('srcerrbar'); if(!el) return
   const byFile=new Map(); for(const e of list||[]) if(e&&e.file&&!byFile.has(e.file)) byFile.set(e.file,e)
@@ -668,7 +669,8 @@ async function poll(){
       lastCheapSig=null; lastRenderSig=null; document.getElementById('dot').classList.remove('on')
       return
     }
-    showSourceErrors(pj.source_errors)
+    projSourceErrors=pj.source_errors||[]
+    showSourceErrors(projSourceErrors)
     const projects=pj.projects||[]
     renderSourceHealth(pj.source) // before any early return: "no sessions" next to "2 files not read" is the point
     projectsFlat=projects.flatMap(p=>p.sessions||[])
@@ -814,6 +816,7 @@ async function renderControlView(){
   hideSessionChrome(true)
   document.getElementById('dot').classList.toggle('on',document.getElementById('liveChk').checked)
   const list=await fetch('/api/control').then(r=>r.json()).catch(()=>({classes:[]}))
+  showSourceErrors([...projSourceErrors,...(list.source_errors||[])]) // control/ files it could not read in full
   const sig=JSON.stringify(list.classes)
   const tl=document.getElementById('timeline')
   if(sig===controlSig && tl.dataset.mode==='control') return

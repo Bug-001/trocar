@@ -20,7 +20,7 @@ function El() {
   return el;
 }
 let seq = 0;
-async function boot(projects) {
+async function boot(projects, { control = {}, extra = '' } = {}) {
   const store = {};
   const getEl = (id) => store[id] || (store[id] = El());
   globalThis.document = { getElementById: getEl, querySelector() { return null }, querySelectorAll() { return [] }, addEventListener() {}, body: El(), documentElement: El(), createElement() { return El() } };
@@ -30,10 +30,10 @@ async function boot(projects) {
   globalThis.setInterval = () => 0; globalThis.clearInterval = () => {}; globalThis.setTimeout = () => 0;
   globalThis.requestAnimationFrame = () => 0;
   globalThis.console = { ...console, error() {} };
-  globalThis.fetch = (url) => Promise.resolve({ ok: true, json: () => Promise.resolve(String(url).startsWith('/api/projects') ? projects : {}) });
+  globalThis.fetch = (url) => Promise.resolve({ ok: true, json: () => Promise.resolve(String(url).startsWith('/api/projects') ? projects : String(url).startsWith('/api/control') ? control : {}) });
   const html = fs.readFileSync(INDEX, 'utf8');
   const js = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].pop()[1];
-  await import(`data:text/javascript;base64,${Buffer.from(js + `\n;globalThis.__M__={poll};\n//#${++seq}`).toString('base64')}`);
+  await import(`data:text/javascript;base64,${Buffer.from(js + `\n;globalThis.__M__={poll${extra}};\n//#${++seq}`).toString('base64')}`);
   await new Promise((r) => setImmediate(r));
   return { M: globalThis.__M__, getEl };
 }
@@ -52,4 +52,16 @@ test('no banner when nothing failed', async () => {
   const { M, getEl } = await boot({ projects: [SESSION] });
   await M.poll();
   assert.equal(getEl('srcerrbar').innerHTML, '');
+});
+
+// /api/control carries its own source_errors (a damaged sealed file in control/, which the sharded
+// session list never reads). The control view must show them too (review F15).
+test('the control view shows what control/ could not read', async () => {
+  const { M, getEl } = await boot({ projects: [SESSION] }, {
+    control: { classes: [{ class: 'telemetry', count: 1 }], source_errors: [{ file: '/h/.asight/sessions/control/telemetry.ndjson.0001.sealed', reason: 'frame 0 corrupt', unreadableRecords: 3 }] },
+    extra: ",pick:(v)=>{curSel=v}" });
+  M.pick('__control__');
+  await M.poll();
+  assert.match(getEl('srcerrbar').innerHTML, /telemetry\.ndjson\.0001\.sealed/);
+  assert.match(getEl('srcerrbar').innerHTML, /3 record\(s\) unreadable/);
 });
