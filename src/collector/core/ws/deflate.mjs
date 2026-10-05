@@ -5,6 +5,8 @@
 // which is exactly the window a persistent inflateRaw stream holds (zero dependencies, D32③). Doing it
 // per message also survives a sender that ends a message with a final block, which would wedge one
 // long-lived stream. A receiver's 32 KiB window covers any smaller *_max_window_bits the peer agreed.
+// A message that fails to inflate clears the window: a later reference into it then fails too, instead
+// of silently decoding against stale history (invariants 2 / 4).
 import zlib from 'node:zlib'
 
 const TAIL = Buffer.from([0x00, 0x00, 0xff, 0xff]) // RFC 7692 §7.2.2: re-append the stripped sync-flush tail
@@ -40,10 +42,13 @@ export function createInflater({ noContextTakeover = false, maxOutput = 64 << 20
   let dict = Buffer.alloc(0)
   return {
     inflate(payload) {
-      const out = zlib.inflateRawSync(Buffer.concat([payload, TAIL]), {
-        finishFlush: zlib.constants.Z_SYNC_FLUSH, windowBits: 15, maxOutputLength: maxOutput,
-        ...(dict.length ? { dictionary: dict } : {}),
-      })
+      let out
+      try {
+        out = zlib.inflateRawSync(Buffer.concat([payload, TAIL]), {
+          finishFlush: zlib.constants.Z_SYNC_FLUSH, windowBits: 15, maxOutputLength: maxOutput,
+          ...(dict.length ? { dictionary: dict } : {}),
+        })
+      } catch (e) { dict = Buffer.alloc(0); throw e }
       if (!noContextTakeover) {
         const all = dict.length ? Buffer.concat([dict, out]) : out
         dict = Buffer.from(all.subarray(Math.max(0, all.length - WINDOW)))

@@ -1,7 +1,7 @@
 // frames.mjs — passive RFC 6455 framing for ONE direction of a WebSocket (RFC 4.6 §传输与帧级记录,
-// D37). It parses a COPY of bytes the engine has already forwarded: it never re-frames and never
-// changes a byte. A protocol violation stops this direction and is reported, never thrown — the
-// peers fail the connection themselves; the relay carries on regardless.
+// D37). It reads the chunks the engine forwards (the tee sees each one just before it is written): it
+// never re-frames and never changes a byte; payloads are unmasked into copies. A protocol violation
+// stops this direction and is reported, never thrown: the peers fail the connection themselves.
 
 export const OP = { CONT: 0, TEXT: 1, BINARY: 2, CLOSE: 8, PING: 9, PONG: 10 }
 

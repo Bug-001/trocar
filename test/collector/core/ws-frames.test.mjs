@@ -66,10 +66,12 @@ test('assembler: fragments reassemble; ping / pong / close in between stay contr
   assert.deepEqual(ev.map((e) => e.type), ['data', 'control', 'data', 'control', 'data', 'control'])
   assert.deepEqual(ev.filter((e) => e.type === 'data').map((e) => [e.start, e.done, e.offset]), [[true, false, 0], [false, false, 2], [false, true, 4]])
   assert.equal(ev[4].message.toString(), 'hello')
+  assert.equal(ev[4].opcode, OP.TEXT) // message-level fields come from the first frame
   assert.equal(a.push({ opcode: OP.CONT, fin: true, payload: Buffer.alloc(0) }).type, 'error')
   const c = createMessageAssembler()
   assert.equal(c.push({ opcode: OP.BINARY, fin: false, rsv1: true, payload: Buffer.alloc(1) }).compressed, true)
   assert.equal(c.push({ opcode: OP.TEXT, fin: true, payload: Buffer.alloc(0) }).type, 'error') // new message inside a fragmented one
+  assert.deepEqual((({ done, opcode, compressed }) => [done, opcode, compressed])(c.push({ opcode: OP.CONT, fin: true, rsv1: false, payload: Buffer.alloc(1) })), [true, OP.BINARY, true]) // RSV1 only on the first frame
   assert.match(createMessageAssembler({ maxMessage: 4 }).push({ opcode: OP.TEXT, fin: true, payload: Buffer.alloc(5) }).error, /exceeds 4/)
 })
 
@@ -91,7 +93,7 @@ test('deflate: parseExtensions reads the agreed parameters; context takeover (pa
   assert.equal(parseExtensions('').deflate, null)
   assert.deepEqual(parseExtensions('x-foo, permessage-deflate').other, ['x-foo'])
   const big = randomBytes(24 << 10).toString('hex') // 48 KiB of history: the window is its LAST 32 KiB
-  const texts = ['lorem ipsum dolor '.repeat(40), `again ${'lorem ipsum dolor '.repeat(41)}`, big, `${big.slice(-3000)} end`]
+  const texts = ['lorem ipsum dolor '.repeat(40), `again ${'lorem ipsum dolor '.repeat(41)}`, big, 'short', `${big.slice(-3000)} end`]
   const send = streamingDeflater()
   const parts = []; for (const t of texts) parts.push(await send(t))
   const inf = createInflater()
@@ -101,4 +103,7 @@ test('deflate: parseExtensions reads the agreed parameters; context takeover (pa
   const fresh = createInflater({ noContextTakeover: true })
   assert.deepEqual(texts.map((t) => fresh.inflate(strip(zlib.deflateRawSync(t, SYNC))).toString()), texts)
   assert.throws(() => createInflater({ maxOutput: 100 }).inflate(strip(zlib.deflateRawSync('x'.repeat(1000), SYNC))))
+  // a message that failed (here: past maxOutput) leaves no stale window: the next one that refers into it throws, never wrong text
+  const send2 = streamingDeflater(), lossy = createInflater({ maxOutput: 2000 }), q = [];  for (const t of ['A'.repeat(1500), 'C'.repeat(3000), `${'C'.repeat(1500)}tail`]) q.push(await send2(t))
+  assert.equal(lossy.inflate(q[0]).toString(), 'A'.repeat(1500)); assert.throws(() => lossy.inflate(q[1])); assert.throws(() => lossy.inflate(q[2]))
 })
