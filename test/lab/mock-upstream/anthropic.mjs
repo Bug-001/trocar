@@ -3,6 +3,7 @@
 import { randomBytes } from 'node:crypto'
 import { plan, splitEvery } from './scenarios.mjs'
 import { jsonReply } from './transport.mjs'
+import { anthropicUsage } from './cache.mjs'
 
 const rid = (p) => `${p}${randomBytes(12).toString('hex')}`
 
@@ -16,10 +17,10 @@ export function seen(body) {
   return { kind: 'text', text: blocks.findLast((b) => b.type === 'text')?.text || '' }
 }
 
-export function reply(body, raw, sc) {
+export function reply(body, raw, sc, ctx = {}) {
   const p = plan(seen(body), raw, body, sc)
   const id = rid('msg_mock_'), headers = { 'request-id': rid('req_mock_') }
-  const usage = { input_tokens: p.inputTokens, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: p.outputTokens }
+  const usage = { ...anthropicUsage(ctx, body), output_tokens: p.outputTokens }
   const blocks = [{ start: { type: 'text', text: '' }, deltas: p.parts.map((text) => ({ type: 'text_delta', text })), final: { type: 'text', text: p.text } }]
   if (p.thinking) {
     const signature = `mock-sig-${id.slice(-12)}`
@@ -43,7 +44,8 @@ export function reply(body, raw, sc) {
     for (const delta of b.deltas) pieces.push(ev('content_block_delta', { index, delta }))
     pieces.push(ev('content_block_stop', { index }))
   })
-  pieces.push(ev('message_delta', { delta: { stop_reason: message.stop_reason, stop_sequence: null }, usage }), ev('message_stop', {}))
+  const { cache_creation, ...deltaUsage } = usage // MessageDeltaUsage: cumulative counts, no ttl breakdown
+  pieces.push(ev('message_delta', { delta: { stop_reason: message.stop_reason, stop_sequence: null }, usage: deltaUsage }), ev('message_stop', {}))
   return {
     status: 200, pieces, firstDelta: pieces.findIndex((s) => s.startsWith('event: content_block_delta')),
     failEvent: () => ev('error', { error: { type: 'overloaded_error', message: 'Overloaded' } }), // what the API sends mid-stream
