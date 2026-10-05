@@ -152,4 +152,12 @@ test('a capture file that turns unreadable while the board runs keeps what it sh
   const pj = JSON.parse((await get(port, '/api/projects')).body);
   assert.deepEqual(pj.projects.flatMap((p) => p.sessions).map((s) => s.calls), [1], 'what was read stays listed');
   assert.deepEqual(pj.source.skipped.filter((x) => x.attention).map((x) => [x.name, x.reason]), [['a.ndjson', 'unreadable']]);
+  const page = async () => JSON.parse((await get(port, '/api/session?id=LIVE&cursor=0&limit=60')).body).analyzed.steps.map((s) => s.id);
+  assert.deepEqual(await page(), ['v-1']);
+  const again = JSON.parse((await get(port, '/api/projects')).body); // served from cache: still reported
+  assert.deepEqual(again.source.skipped.filter((x) => x.attention).map((x) => x.name), ['a.ndjson']);
+  fs.chmodSync(f, 0o600); // recovers: size and mtime unchanged
+  const ok = JSON.parse((await get(port, '/api/projects')).body);
+  assert.deepEqual([ok.projects.flatMap((p) => p.sessions).map((s) => s.calls), ok.source.skipped.filter((x) => x.attention)], [[2], []]);
+  assert.deepEqual(await page(), ['v-1', 'v-2'], 'the session view is rebuilt, not served from before the recovery');
 });

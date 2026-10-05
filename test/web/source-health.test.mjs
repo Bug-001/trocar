@@ -69,3 +69,8 @@ test('a listing the server failed (500 {error}) is shown as a failure, never as 
   assert.match(bar.empty, /Could not list the sessions/);
   assert.doesNotMatch(bar.empty, /No sessions captured yet/);
 });
+
+test('shard mode, where bad shard lines are not counted, says so even when nothing else is wrong', async () => {
+  const bar = await boardWith({ skipped: [], corrupt_lines: null, resets: null, tail_pending: null, unidentified_lines: 0 });
+  assert.match(bar.innerHTML, /bad lines in session shards are not counted yet \(shard mode\)/);
+});

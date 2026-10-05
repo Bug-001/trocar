@@ -116,3 +116,27 @@ test('an unreadable new file is skipped and noted; it does not stop other files 
     r.dispose();
   } finally { for (const d of [r1, r2]) fs.rmSync(d, { recursive: true, force: true }); }
 });
+
+test('a file whose reads keep failing after open costs one rebuild, not one per refresh; healthy files still resolve', async (t) => {
+  const { createRequire, syncBuiltinESMExports } = await import('node:module');
+  const fsp = createRequire(import.meta.url)('fs/promises'), realOpen = fsp.open, opens = {};
+  fsp.open = async (p, ...rest) => { // fault injection: bad.ndjson opens, then every read fails (EIO)
+    const fh = await realOpen(p, ...rest), b = path.basename(String(p));
+    opens[b] = (opens[b] || 0) + 1;
+    if (b === 'bad.ndjson') fh.read = async () => { const e = new Error('EIO: i/o error, read'); e.code = 'EIO'; e.syscall = 'read'; throw e; };
+    return fh;
+  };
+  syncBuiltinESMExports();
+  t.after(() => { fsp.open = realOpen; syncBuiltinESMExports(); });
+  const dir = tmp();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const g = rec('G', 'healthy');
+  fs.writeFileSync(path.join(dir, 'good.ndjson'), g);
+  fs.writeFileSync(path.join(dir, 'bad.ndjson'), rec('B', 'unreadable bytes'));
+  const r = await buildResolver(dir);
+  for (let i = 0; i < 4; i++) await r.refresh();
+  assert.equal(opens['good.ndjson'], 2, 'indexed at startup, then once in the one rebuild the failed read asked for');
+  assert.equal(r.detail('S/good.ndjson#G').text, bodyOf(g));
+  assert.deepEqual(r.scan.skipped.filter((x) => x.reason === 'unreadable').map((x) => [x.root, x.name, x.error]), [[dir, 'bad.ndjson', 'EIO']]);
+  r.dispose();
+});

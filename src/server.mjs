@@ -126,9 +126,12 @@ async function serveStatic(res, urlPath) {
 // of roots serveSource() has returned since D27 — so on a default install it examined ZERO records
 // and still printed 「✓ 凭据没漏」. Two resolvers for one concept is how that drift happened; one is
 // the fix.
+// size.mtime.ctime: ctime too, because a permission fix (chmod) changes nothing else, and a file that
+// could not be read must be retried — and its session views rebuilt — once it can be.
+const fileSig = (st) => `${st.size}.${Math.round(st.mtimeMs)}.${Math.round(st.ctimeMs)}`;
 export function sourceFiles(sourcePath) {
   const st = fssync.statSync(sourcePath); // throws if missing → caller resets sig
-  if (!st.isDirectory()) return { files: [sourcePath], skipped: [], sig: st.size + '.' + Math.round(st.mtimeMs) };
+  if (!st.isDirectory()) return { files: [sourcePath], skipped: [], sig: fileSig(st) };
   // Flat *.ndjson in the root (one file per physical capture source, D20), PLUS the per-session
   // shards ETL writes at <root>/<session-id>/calls.ndjson.
   //
@@ -151,7 +154,7 @@ export function sourceFiles(sourcePath) {
     try { isShard = fssync.statSync(shard).isFile(); } catch { /* not a shard dir */ }
     if (isShard) files.push(shard); else skip(e);
   }
-  const sig = files.map((f) => { try { const s = fssync.statSync(f); return `${path.basename(f)}:${s.size}.${Math.round(s.mtimeMs)}`; } catch { return ''; } }).join('|') || '∅dir';
+  const sig = files.map((f) => { try { return `${path.basename(f)}:${fileSig(fssync.statSync(f))}`; } catch { return ''; } }).join('|') || '∅dir';
   return { files, skipped, sig };
 }
 // Every root's capture files, each read once, plus everything NOT read and why (4.4:83). A
@@ -206,7 +209,7 @@ function completeEnd(f, from, size) {
 // invariant-2 loss with no file deleted and no error raised.
 function makeRecordLoader(source) {
   const roots = (Array.isArray(source) ? source : [source]).filter(Boolean);
-  let cache = { sig: null, records: [] };
+  let cache = { sig: null, records: [], passSkips: [] };
   // per-file watermark: path -> { size, records } — the byte offset already consumed and what it
   // yielded, so a refresh parses only the tail.
   let marks = new Map();
@@ -230,7 +233,8 @@ function makeRecordLoader(source) {
       throw new Error(`capture source unreadable (${roots.join(', ')}): ${String((e && e.message) || e)}`);
     }
     load.sig = sig;
-    if (cache.sig === sig) return cache.records;
+    // what the last pass could not read stays reported for as long as its result is served
+    if (cache.sig === sig) { load.skipped.push(...cache.passSkips); return cache.records; }
 
     // INCREMENTAL: read only the bytes that arrived since last time (spec 4.2:49).
     //
@@ -247,11 +251,11 @@ function makeRecordLoader(source) {
     const records = [];
     const resets = [], pending = {};
     const nextMarks = new Map();
-    let failed = false;
+    const passSkips = [];
     for (const f of files) {
       let size = 0;
       try { size = fssync.statSync(f).size; } catch { // vanished mid-refresh → skip this pass, and say so
-        load.skipped.push({ root: path.dirname(f), name: path.basename(f), reason: 'vanished', attention: true }); continue;
+        passSkips.push({ root: path.dirname(f), name: path.basename(f), reason: 'vanished', attention: true }); continue;
       }
       const prev = marks.get(f);
       let from = 0, keep = [];
@@ -272,10 +276,10 @@ function makeRecordLoader(source) {
           if (!tail.length) pending[f] = size - end;
         }
       } catch (e) {
-        // Unreadable (EACCES, or gone after the stat): reported, what it already yielded is kept, and
-        // the pass is not memoized, so the file is retried even if its size and mtime never change.
-        load.skipped.push({ root: path.dirname(f), name: path.basename(f), reason: 'unreadable', error: (e && e.code) || String(e), attention: true });
-        failed = true;
+        // Unreadable (EACCES, EIO, or gone after the stat): reported, and what it already yielded is
+        // kept. It is retried when its stat changes (the sig carries ctime, which a chmod changes);
+        // until then the cached pass, and this report, are served without touching it again.
+        passSkips.push({ root: path.dirname(f), name: path.basename(f), reason: 'unreadable', error: (e && e.code) || String(e), attention: true });
         if (prev && from > 0) { nextMarks.set(f, prev); for (const r of prev.records) records.push(r); }
         continue;
       }
@@ -290,7 +294,8 @@ function makeRecordLoader(source) {
     marks = nextMarks;   // files no longer listed drop out, releasing their records
     load.resets = resets; load.pending = pending;
     load.corrupt = Object.fromEntries([...marks].filter(([, m]) => m.corrupt).map(([f, m]) => [f, m.corrupt]));
-    cache = { sig: failed ? null : sig, records };
+    cache = { sig, records, passSkips };
+    load.skipped.push(...passSkips);
     return records;
   };
   load.sig = null; load.skipped = []; load.resets = []; load.corrupt = {}; load.pending = {};

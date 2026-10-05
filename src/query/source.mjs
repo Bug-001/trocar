@@ -203,11 +203,17 @@ export async function buildResolver(source) {
     if (!scan.skipped.some((x) => x.root === root && x.name === name && x.reason === reason)) scan.skipped.push({ root, name, reason, ...(e ? { error: (e && e.code) || String(e) } : {}) });
   }
   const unnote = (pred) => { for (let i = scan.skipped.length - 1; i >= 0; i--) if (TRANSIENT.has(scan.skipped[i].reason) && pred(scan.skipped[i])) scan.skipped.splice(i, 1); };
+  // A failed file is retried only when its stat changes (ino, size, mtime, ctime: a chmod changes
+  // ctime). Retrying on every refresh turned a recurring read error into a full rebuild per poll.
+  const failedAt = new Map(); // file -> { sig, e } of its last failed read
+  const statSig = (f) => { try { const st = statSync(f); return `${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`; } catch { return 'gone'; } };
+  const unchangedFailure = (f) => { const x = failedAt.get(f); return !!x && x.sig === statSig(f); };
   const indexSafe = async (f, from = 0) => {
-    try { const mk = await indexFile(f, idx, from); unnote((x) => x.name === path.basename(f)); return mk; }
+    try { const mk = await indexFile(f, idx, from); failedAt.delete(f); unnote((x) => x.root === path.dirname(f) && x.name === path.basename(f)); return mk; }
     catch (e) {
       if (!(e && e.syscall === 'open')) dirty = true;
-      note(sourcePath, path.basename(f), 'unreadable', e);
+      failedAt.set(f, { sig: statSig(f), e });
+      note(path.dirname(f), path.basename(f), 'unreadable', e);
       return null;
     }
   };
@@ -319,7 +325,10 @@ export async function buildResolver(source) {
     Object.assign(scan, { corruptLines: 0, corruptByFile: {}, unidentifiedLines: 0 });
     dirty = false; unnote(() => true); // re-noted below if still failing
     files.length = 0;
-    for (const f of await listFiles(null)) { const mk = await indexSafe(f); if (mk) { files.push(f); marks.set(f, mk); } }
+    for (const f of await listFiles(null)) {
+      if (unchangedFailure(f)) { note(path.dirname(f), path.basename(f), 'unreadable', failedAt.get(f).e); continue; }
+      const mk = await indexSafe(f); if (mk) { files.push(f); marks.set(f, mk); }
+    }
   };
   const doRefresh = async () => {
     let now;
@@ -329,7 +338,8 @@ export async function buildResolver(source) {
     if (dirty) { await rebuildAll(); bodyCache.clear(); resolve.size = idx.qual.size; return true; }
     let changed = false;
     for (const f of now) {
-      let st; try { st = statSync(f); } catch (e) { note(sourcePath, path.basename(f), 'vanished', e); continue; }
+      if (unchangedFailure(f)) continue; // still noted; tried again once it changes
+      let st; try { st = statSync(f); } catch (e) { note(path.dirname(f), path.basename(f), 'vanished', e); continue; }
       const m = marks.get(f);
       if (!m) { const mk = await indexSafe(f); if (mk) { files.push(f); marks.set(f, mk); changed = true; } continue; }
       if (st.ino !== m.ino || st.size < m.size) { await rebuildAll(); changed = true; break; }

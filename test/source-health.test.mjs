@@ -112,3 +112,11 @@ test('shard mode: a root that cannot be listed is reported, and the other roots\
   assert.deepEqual(byName(pj.source.skipped), { 'x.ndjson.gz': ['compressed', true], [path.basename(r2)]: ['root-unreadable', true] });
   assert.equal(pj.source.corrupt_lines, null, 'shard streams are not measured: null, never {} ("none")');
 });
+
+test('a single-file source that cannot be read is listed once, under its own directory', { skip: process.getuid?.() === 0 && 'root reads anything' }, async (t) => {
+  const dir = tmp(t), f = path.join(dir, 'cap.ndjson');
+  fs.writeFileSync(f, env('c-1', 'C'), { mode: 0o000 });
+  t.after(() => { try { fs.chmodSync(f, 0o600); } catch {} });
+  const pj = await projects(t, f);
+  assert.deepEqual(pj.source.skipped.filter((x) => x.attention).map((x) => [x.root, x.name, x.reason]), [[dir, 'cap.ndjson', 'unreadable']]);
+});
