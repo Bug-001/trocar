@@ -1,7 +1,5 @@
-// server.mjs — scripted mock LLM upstream for the collector test lab (see README.md next to this file).
-// Agents and test clients talk to it instead of a real provider. It answers with request-derived
-// content, can be steered into any status or stream fault, and logs the exact bytes of every request
-// and response so a test can prove the collector in between is byte-transparent.
+// server.mjs — scripted mock LLM upstream for the collector test lab (README.md). It logs the exact
+// bytes of every request and response, so a test can prove the collector in between is transparent.
 import fs from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
@@ -52,7 +50,9 @@ function serveConn(conn, record) {
     }))
   })
   async function pump() {
-    while (!busy && !conn.closed) {
+    // once a reply ended the connection, pipelined requests behind it are never served: their bytes
+    // stay in buf and are logged as leftover, not as requests that got an answer
+    while (!busy && !conn.closed && !conn.ended) {
       let req
       try { req = parseRequest(buf) } catch { sock.destroy(); return }
       if (!req) return
@@ -94,6 +94,8 @@ async function handle(conn, req, raw, seq, record) {
   })
 }
 
+const readLog = (f) => fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+
 async function readAll(req) { const c = []; for await (const d of req) c.push(d); return Buffer.concat(c) }
 
 function adminServer(state, logFile) {
@@ -101,7 +103,7 @@ function adminServer(state, logFile) {
     const send = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)) }
     const route = `${req.method} ${req.url.split('?')[0]}`
     await readAll(req)
-    if (route === 'GET /__mock/log') return send(200, state.log)
+    if (route === 'GET /__mock/log') return send(200, logFile ? readLog(logFile) : state.log)
     if (route === 'POST /__mock/reset') {
       state.log.length = 0
       if (logFile) fs.writeFileSync(logFile, '')
@@ -115,7 +117,9 @@ export async function startMockUpstream({ host = '127.0.0.1', port = 0, adminPor
   const state = { log: [] }
   const logFile = logDir ? path.join(logDir, 'log.ndjson') : null
   if (logFile) { fs.mkdirSync(logDir, { recursive: true }); fs.writeFileSync(logFile, '') }
-  const record = (e) => { state.log.push(e); if (logFile) fs.appendFileSync(logFile, JSON.stringify(e) + '\n') }
+  // With a logDir the file is the only copy: a long-lived lab process serving real agents would
+  // otherwise hold every request and response in memory.
+  const record = (e) => { if (logFile) fs.appendFileSync(logFile, JSON.stringify(e) + '\n'); else state.log.push(e) }
 
   const raws = new Set()
   let nextId = 0

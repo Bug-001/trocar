@@ -1,13 +1,9 @@
-// http1.mjs — the mock upstream's own HTTP/1.1 request framing.
-//
-// Why not node:http: the byte log must hold, per request, exactly the bytes the client wrote, and on
-// a keep-alive connection node:http neither says where one request ends and the next begins nor lets
-// a reply stop mid-chunk, split a character across writes, or end in a TCP RST. Owning the socket
-// gives both: reads are sliced at request boundaries here, and every write goes through one send().
+// http1.mjs — own HTTP/1.1 request framing. Why not node:http: the byte log needs each request's exact
+// bytes, and on a keep-alive connection node:http neither says where one request ends and the next
+// begins nor lets a reply stop mid-chunk, split a character across writes, or end in an RST.
 
-// Parse one request off the front of buf. null = need more bytes. `size` is how many bytes the request
-// occupies on the wire (head + framed body, chunk framing included), so buf.subarray(0, size) is its
-// raw form and the rest belongs to the next request.
+// Parse one request off the front of buf; null = need more bytes. buf.subarray(0, size) is its raw
+// form on the wire (chunk framing included); the rest belongs to the next request.
 export function parseRequest(buf) {
   const headEnd = buf.indexOf('\r\n\r\n')
   if (headEnd < 0) return null
@@ -22,7 +18,11 @@ export function parseRequest(buf) {
   }
   const pos = headEnd + 4
   if (/chunked/i.test(headers['transfer-encoding'] || '')) return parseChunked(buf, pos, { method, target, headers })
-  const len = Number(headers['content-length'] || 0)
+  // Repeated Content-Length lines arrive merged as "7, 7": legal only when all agree. Anything else
+  // is malformed framing, and must throw rather than become NaN (a NaN size never consumes a byte).
+  const cl = (headers['content-length'] ?? '0').split(',').map((v) => v.trim())
+  if (!cl.every((v) => /^\d+$/.test(v) && v === cl[0])) throw new Error('mock-upstream: bad content-length')
+  const len = Number(cl[0])
   if (buf.length < pos + len) return null
   return { method, target, headers, body: buf.subarray(pos, pos + len), size: pos + len }
 }

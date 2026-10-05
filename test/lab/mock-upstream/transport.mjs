@@ -1,6 +1,5 @@
-// transport.mjs — puts a reply on the socket. A reply is { status, headers, pieces }: pieces are the
-// body in the order and granularity it should be written (one SSE event each), and every byte goes
-// through io.send so the byte log sees exactly what left the server.
+// transport.mjs — puts a reply { status, headers, pieces } on the socket, one piece (SSE event) per
+// write, every byte through io.send so the byte log sees exactly what left the server.
 import { STATUS_CODES } from 'node:http'
 
 const REASON = { 529: 'Overloaded' } // not in node's table; Anthropic's overload status
