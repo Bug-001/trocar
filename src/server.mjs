@@ -27,6 +27,7 @@ import { randomBytes } from 'node:crypto';
 import { monitoringStatus, monitoringOn, monitoringOff } from './capture/control.mjs';
 import { listSources, resolveCoexistence, isSealedPath, sealedSources } from './raw/discover.mjs';
 import { sealedReadProblem } from './raw/journal.mjs';
+import { emptyMeta, mergeMeta, foldSealed } from './etl/session-meta.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = path.join(HERE, 'web'); // src/web — the reused demo board (self-contained index.html)
@@ -432,7 +433,7 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         // on any stream — not just calls.ndjson — means a probes-only session still lists.
         if (fssync.existsSync(path.join(dir, 'meta.json'))
           || SESSION_STREAMS.some((s) => fssync.existsSync(path.join(dir, s)))
-          || sealedOfStreams(dir).length) dirs.push(dir);
+          || sealedOfStreams(dir).length || continuationsIn(dir).length) dirs.push(dir);
       }
     }
     return dirs;
@@ -441,11 +442,33 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
   // place, or per-session files of a collector shard), one copy per line (src/raw/discover.mjs).
   const sealedIn = (dir) => { try { return fssync.readdirSync(dir).filter((n) => isSealedPath(n)).sort().map((n) => path.join(dir, n)); } catch { return []; } };
   const sealedOfStreams = (dir) => sealedIn(dir).filter((f) => SESSION_STREAMS.some((st) => path.basename(f).startsWith(st + '.')));
+  // per-session files `asight raw seal` put here, continuing a shard that lived elsewhere (D35). NOT a
+  // capture dir's own per-shard file (its source is in the same dir): that must not make
+  // ~/.asight/collector look like a session dir and flip the whole board into sharded mode.
+  const continuationsIn = (dir) => sealedIn(dir).filter((f) => { const src = sealedSources(f); return !src || src.some((x) => path.dirname(x.abs) !== dir); });
   const shardInputs = (dir, names) => {
     const originals = names.map((n) => path.join(dir, n)).filter((f) => fssync.existsSync(f));
     return resolveCoexistence([...originals, ...sealedIn(dir)]);
   };
-  const loadSessionMetas = () => {
+  // meta.json covers `asight shard`'s streams (calls/probes/other, or their sealed segments). Sealed
+  // files of OTHER streams in a session dir are per-session files of a collector shard (D35): the
+  // sealer writes no meta.json, so they are folded here — memoised by the files' size/mtime — and
+  // merged, or a sealer-made session would never list and a shared one would list short (review F3).
+  const foreignMeta = new Map();
+  const foreignOf = (d, errors) => {
+    const files = sealedIn(d).filter((f) => !SESSION_STREAMS.some((st) => path.basename(f).startsWith(st + '.')));
+    if (!files.length) return null;
+    const sig = files.map((f) => { try { const t = fssync.statSync(f); return `${f}:${t.size}:${t.mtimeMs}`; } catch { return f; } }).join('|');
+    let hit = foreignMeta.get(d);
+    if (!hit || hit.sig !== sig) {
+      const meta = emptyMeta(path.basename(d));
+      hit = { sig, meta, problem: foldSealed(meta, files) };
+      foreignMeta.set(d, hit);
+    }
+    if (hit.problem) errors.push(hit.problem);
+    return hit.meta;
+  };
+  const loadSessionMetas = (errors = []) => {
     const dirs = shardDirsOf();
     if (!dirs.length) return null; // not a sharded source → caller falls back to the record path
     const metas = [];
@@ -453,9 +476,14 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
     for (const d of dirs) {
       // A shard without meta.json (sharded before the archive layer, or a partial write) just doesn't
       // list until re-sharded — a degrade, not a crash, but it is reported (sourceHealth), not silent.
-      // That includes a legacy session-less _unassigned dir: it has no meta and nothing lists it.
-      try { metas.push(JSON.parse(fssync.readFileSync(path.join(d, 'meta.json'), 'utf8'))); }
-      catch (e) { metas.noMeta.push({ dir: d, error: (e && e.code) || String(e) }); }
+      // That includes a legacy session-less _unassigned dir: it has no meta and nothing lists it. A dir
+      // the sealer made (per-session files, no meta.json) lists from its folded meta and is not reported.
+      let meta = null, noMetaError = null;
+      try { meta = JSON.parse(fssync.readFileSync(path.join(d, 'meta.json'), 'utf8')); }
+      catch (e) { noMetaError = (e && e.code) || String(e); }
+      const extra = foreignOf(d, errors);
+      if (extra) meta = mergeMeta(meta, extra);
+      if (meta) metas.push(meta); else metas.noMeta.push({ dir: d, error: noMetaError });
     }
     return metas;
   };
@@ -565,8 +593,13 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
       if (p === '/api/projects') {
         // Archive layer: on a sharded source, list from the precomputed metas — never load a record,
         // so a 7.4 GB / 24-session capture enumerates instantly instead of OOM-ing.
-        const metas = loadSessionMetas();
-        if (metas) return sendJson(res, 200, withErrors({ ...projectsViewFromMetas(metas, { enrich }), source: await sourceHealth(metas) }, unreadableSealedInShards()));
+        const metaErrors = [];
+        const metas = loadSessionMetas(metaErrors);
+        if (metas) {
+          const seen = new Set(metaErrors.map((e) => e.file));
+          const errors = [...metaErrors, ...unreadableSealedInShards().filter((e) => !seen.has(e.file))];
+          return sendJson(res, 200, withErrors({ ...projectsViewFromMetas(metas, { enrich }), source: await sourceHealth(metas) }, errors));
+        }
         const view = projectsView(await loadRecords(), { enrich });
         return sendJson(res, 200, withErrors({ ...view, source: await sourceHealth(null) }, loadRecords.sourceErrors));
       }

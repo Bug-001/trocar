@@ -27,9 +27,9 @@ async function serve(sourcePath, opts = {}) {
 // that cannot hold capture bytes (`attention: false` — the sealer's own temp files, marker and lock, a
 // session dir it is still writing) come and go while the sealer works and are left out of the
 // comparison. Everything that may hold capture bytes is still compared.
+const capturesOnly = (projects) => { if (projects.source) projects.source.skipped = projects.source.skipped.filter((x) => x.attention); return projects; };
 async function board(port) {
-  const projects = await get(port, '/api/projects');
-  if (projects.source) projects.source.skipped = projects.source.skipped.filter((x) => x.attention);
+  const projects = capturesOnly(await get(port, '/api/projects'));
   const ids = projects.projects.flatMap((p) => p.sessions.map((s) => s.session_id)).sort();
   const sessions = {};
   for (const id of ids) sessions[id] = await get(port, `/api/session?id=${encodeURIComponent(id)}`);
@@ -65,9 +65,11 @@ test('E8: a legacy `asight shard` root looks the same to the board after every s
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-// Two ways to serve it: the collector dir alone with the sessions dir `asight raw seal` files into
-// (what `asight serve --source <collector>` does — bin passes sessionsRoot), and both as roots.
-for (const layout of ['--source <collector dir>', 'two roots [collector, sessions]']) test(`E8: a collector shard read flat (${layout}) — the board is the same before, during and after sealing`, async () => {
+// Served the way `asight serve --source <collector>` serves it: the collector dir as the root, plus the
+// sessions dir `asight raw seal` files into (bin passes sessionsRoot). Serving the sessions dir as a
+// SECOND ROOT (no CLI flag produces that) is not a layout: the board picks one mode for all roots,
+// and session dirs appearing in a served root switch it to sharded mode mid-seal.
+for (const layout of ['--source <collector dir>']) test(`E8: a collector shard read flat (${layout}) — the board is the same before, during and after sealing`, async () => {
   const root = tmpDir();
   try {
     const cap = path.join(root, 'collector'), ses = path.join(root, 'sessions');
@@ -102,7 +104,7 @@ test('a sealed file the board cannot read is labelled in the response, and the r
     await sealShard(shard, { sessionsRoot: ses });
     const victim = listFiles(path.join(ses, B))[0];
     fs.writeFileSync(victim, 'damaged');
-    const s = await serve([cap, ses]);
+    const s = await serve(cap, { sessionsRoot: ses });
     try {
       const pj = await get(s.port, '/api/projects');
       assert.equal(pj.source_errors.length, 1);
@@ -114,4 +116,26 @@ test('a sealed file the board cannot read is labelled in the response, and the r
       assert.equal(sa.source_errors.length, 1, 'every view built from an incomplete source says so');
     } finally { s.server.close(); }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+// The default `asight serve` root is ~/.asight itself: flat captures at the top, collector/ and
+// sessions/ below. Sealing a collector shard leaves its per-shard file in collector/ — that dir must
+// not start to look like a session dir, or the whole board flips into sharded mode and lists
+// "collector" as a session instead of what it listed before.
+test('the home layout: sealing a collector shard does not change what `asight serve` (root ~/.asight) lists', async () => {
+  const home = tmpDir();
+  try {
+    writeShard(path.join(home, 'claude-capture.ndjson'), conversation(B, 2, { idPrefix: 'rl_' }).map((r) => toLine(r)));
+    const shard = writeShard(path.join(home, 'collector', 'capture-2026-10-05.ndjson'), capture());
+    const opts = { sessionsRoot: path.join(home, 'sessions') };
+    let s = await serve(home, opts);
+    const before = capturesOnly(await get(s.port, '/api/projects'));   // the new sessions/ dir is not capture bytes
+    s.server.close();
+    markClosed(shard);
+    await sealShard(shard, opts);
+    assert.ok(listFiles(path.join(home, 'collector')).length, 'precondition: a per-shard sealed file stays in collector/');
+    s = await serve(home, opts);
+    assert.deepEqual(capturesOnly(await get(s.port, '/api/projects')), before);
+    s.server.close();
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

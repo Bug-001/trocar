@@ -14,6 +14,7 @@
 
 import { headersOf } from '../view/assemble.mjs';
 import { harnessOf, LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
+import { openSealed } from '../raw/reader.mjs';
 
 const isProbe = (r) => /count_tokens/.test((r && r.endpoint) || '');
 
@@ -78,4 +79,24 @@ export function mergeMeta(a, b) {
     wire_provider: a.wire_provider || b.wire_provider || null,
     provider: null, // settle() derives it
   });
+}
+
+// Fold the records of sealed files (D35) into `meta`, one frame at a time. Returns null, or the first
+// file that could not be read in full — { file, reason, unreadableRecords } — so a caller never takes a
+// partial fold for the whole session (no silent shrink).
+export function foldSealed(meta, files) {
+  for (const f of files) {
+    let sf;
+    try { sf = openSealed(f); } catch (e) { return { file: f, reason: e.message, unreadableRecords: null }; }
+    let bad = 0, first = null;
+    try {
+      for (const { line } of sf.lines({ onError: (i, e) => { bad++; first = first || e.message; } })) {
+        const text = line.toString('utf8').trim();
+        if (!text) continue;
+        try { foldRecord(meta, JSON.parse(text)); } catch { /* malformed line — no contribution, as in the NDJSON fold */ }
+      }
+    } finally { sf.close(); }
+    if (bad) return { file: f, reason: first, unreadableRecords: bad };
+  }
+  return null;
 }

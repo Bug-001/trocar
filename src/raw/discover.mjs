@@ -40,15 +40,17 @@ export function sealedSources(file, { fs = nodeFs } = {}) {
   const k = `${st.size}:${st.mtimeMs}:${st.ino}`;
   const hit = tableCache.get(file);
   if (hit && hit.k === k) return hit.v;
-  let v = null, fd;
+  let v = null, err = null, fd;
   try {
     fd = fs.openSync(file, 'r');
     const { tables } = readIndex(fs, fd, st.size, path.basename(file));
     v = tables.shards.map((s) => ({ ...s, abs: path.resolve(path.dirname(file), s.path || s.name) }));
-  } catch { v = null; } finally { if (fd != null) try { fs.closeSync(fd); } catch {} }
-  tableCache.set(file, { k, v });
+  } catch (e) { v = null; err = e.message; } finally { if (fd != null) try { fs.closeSync(fd); } catch {} }
+  tableCache.set(file, { k, v, err });
   return v;
 }
+// Why sealedSources(file) last returned null (for a report), or null.
+export const sealedSourcesError = (file) => (tableCache.get(file) || {}).err || null;
 
 // a regular file, or a symlink to one
 const fileLike = (fs, dir, e) => e.isFile() || (e.isSymbolicLink() && (() => { try { return fs.statSync(path.join(dir, e.name)).isFile(); } catch { return false; } })());
@@ -130,7 +132,7 @@ function addContinuations(perRoot, sessionsRoot, fs) {
       if (!isSealedPath(n) || have.has(path.resolve(q))) continue;
       const src = sealedSources(q, { fs });
       // unreadable: whose continuation it is cannot be told — say so rather than drop it silently
-      if (!src) { unattributed.push({ file: q, reason: 'sealed file under the sessions directory could not be opened, so it is unknown whether its records belong to this source' }); continue; }
+      if (!src) { unattributed.push({ file: q, reason: `${sealedSourcesError(q) || 'unreadable'} — a sealed file under the sessions directory that could not be opened, so it is unknown whether its records belong to this source`, unreadableRecords: null }); continue; }
       const k = src.length === 1 ? want.get(realDir(fs, path.dirname(src[0].abs))) : undefined;
       if (k !== undefined) perRoot[k].files.push(q);
     }

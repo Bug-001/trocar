@@ -15,7 +15,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { emptyMeta, foldRecord, mergeMeta } from './session-meta.mjs';
+import { emptyMeta, foldRecord, mergeMeta, foldSealed } from './session-meta.mjs';
+import { resolveCoexistence, isSealedPath, streamOfSealed } from '../raw/discover.mjs';
 
 const NL = 0x0a;
 const SID_KEY = /"x-claude-code-session-id"\s*:\s*"([^"]+)"/i;
@@ -144,20 +145,36 @@ function headFingerprint(file, len) {
  * backfill shards written before the archive layer; going forward `shardOnce` keeps meta fresh
  * incrementally, so this is a one-time / repair operation.
  */
+// D35: a stream may also exist as sealed segments (sealed in place, original deleted, maybe a fresh
+// file beside it). They are folded too, one copy per line (discover.mjs coexistence); a segment that
+// cannot be read in full leaves that session's meta.json untouched and is returned in `errors` —
+// never a smaller count written over a correct one. Per-session files of a collector shard (other
+// stream names) are not `asight shard`'s records and stay out; the board adds them when it lists.
 export async function rebuildMeta(outDir) {
   const { createInterface } = await import('node:readline');
   let sessions = 0, records = 0;
+  const errors = [];
   let entries = [];
-  try { entries = fs.readdirSync(outDir, { withFileTypes: true }); } catch { return { sessions: 0, records: 0 }; }
+  try { entries = fs.readdirSync(outDir, { withFileTypes: true }); } catch { return { sessions: 0, records: 0, errors }; }
   for (const e of entries) {
     // control/ is session-less (no meta); skip it. Everything else is a session dir.
     if (!e.isDirectory() || e.name === CONTROL_DIR) continue;
     const meta = emptyMeta(e.name);
     let seen = false;
+    const dir = path.join(outDir, e.name), names = Object.values(STREAM_FILE);
+    let inputs = names.map((n) => path.join(dir, n)).filter((f) => fs.existsSync(f));
+    try { inputs = resolveCoexistence([...inputs, ...fs.readdirSync(dir).filter((n) => isSealedPath(n) && names.includes(streamOfSealed(n))).sort().map((n) => path.join(dir, n))]).files; } catch { continue; }
+    const sealed = inputs.filter(isSealedPath);
+    if (sealed.length) {
+      const before = meta.calls + meta.probes + meta.other;
+      const bad = foldSealed(meta, sealed);
+      if (bad) { errors.push({ session: e.name, ...bad }); continue; }
+      records += meta.calls + meta.probes + meta.other - before;
+      seen = true;
+    }
     // Fold ALL of a session's streams (calls/probes/other) so meta.calls/probes/other match the split
     // — reading only calls.ndjson would undercount probes and other, which the board lists.
-    for (const stream of Object.values(STREAM_FILE)) {
-      const shard = path.join(outDir, e.name, stream);
+    for (const shard of inputs.filter((f) => !isSealedPath(f))) {
       let size = 0;
       try { size = fs.statSync(shard).size; } catch { continue; }
       if (!size) continue;
@@ -172,7 +189,7 @@ export async function rebuildMeta(outDir) {
     if (!seen) continue;
     try { fs.writeFileSync(path.join(outDir, e.name, 'meta.json'), JSON.stringify(meta), { mode: 0o600 }); sessions++; } catch { /* best-effort */ }
   }
-  return { sessions, records };
+  return { sessions, records, errors };
 }
 
 // Sum bytes of every *.ndjson file under `dir` (one level of nesting: dir/*.ndjson + dir/*/*.ndjson).
