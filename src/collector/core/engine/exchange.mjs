@@ -49,7 +49,7 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
     onBody(b) { if (curReq) append(curReq, b) },
     onEnd() { curReq = null },
     onUpgrade() {},
-    onError() {},
+    onError() { if (curReq) { curReq.partial = 'framer-error'; curReq = null } },  // body never completes
   })
 
   const respFramer = createFramer('response', {
@@ -71,13 +71,17 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
     return { head: resp.head, body: Buffer.concat(resp.chunks), truncated: resp.truncated, tsStart: resp.tsStart, tsEnd: new Date().toISOString(), ...(aborted ? { aborted: true } : {}) }
   }
 
-  function emit(ex, respPart, error) {
+  // `why` names what ended the exchange if its request body is still arriving (invariant 4: the
+  // envelope then holds only a prefix, labelled req_partial). Later bytes of that body are dropped.
+  function emit(ex, respPart, error, why) {
     if (ex.emitted) return
     ex.emitted = true
+    const partial = ex.req.partial || (ex.req === curReq ? why : null)
+    if (ex.req === curReq) curReq = null
     if (!ex.record) return
     recordStore.envelope(buildTransparentEnvelope({
       id: ex.id, flow, seq: ex.seq,
-      req: { head: ex.req.head, body: Buffer.concat(ex.req.chunks), truncated: ex.req.truncated, tsStart: ex.req.tsStart },
+      req: { head: ex.req.head, body: Buffer.concat(ex.req.chunks), truncated: ex.req.truncated, partial, tsStart: ex.req.tsStart },
       resp: respPart,
       error: error || null,
     }))
@@ -87,7 +91,7 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
   function finalize(resp, error) {
     const ex = pending.shift()
     if (!ex) return
-    emit(ex, respPartOf(resp, false), error)
+    emit(ex, respPartOf(resp, false), error, 'early-response')
   }
 
   function abort(error) {
@@ -97,7 +101,7 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
     let first = true
     while (pending.length) {
       const ex = pending.shift()
-      emit(ex, first && partial ? respPartOf(partial, true) : null, error)
+      emit(ex, first && partial ? respPartOf(partial, true) : null, error, 'aborted')
       first = false
     }
   }

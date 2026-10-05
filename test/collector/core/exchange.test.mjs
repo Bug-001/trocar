@@ -15,6 +15,7 @@ test('keep-alive: three exchanges, split across arbitrary chunks, three envelope
     t.fromUpstream(Buffer.from(resp.slice(0, 10))); t.fromUpstream(Buffer.from(resp.slice(10)))
   }
   assert.deepEqual(out.map((e) => [e.seq, e.req_body, e.resp.body.n]), [[0, '{0', 0], [1, '{1', 1], [2, '{2', 2]])
+  for (const k of ['req_truncated', 'req_body_bytes', 'req_partial']) assert.ok(out.every((e) => !(k in e)), k)
 })
 
 test('recording switch is sampled at request start: in-flight exchange is still recorded after off', () => {
@@ -34,7 +35,34 @@ test('a request body past maxBodyBytes reaches the envelope labelled req_truncat
   t.fromUpstream(Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'))
   t.fromClient(Buffer.from('POST /v1/messages HTTP/1.1\r\nContent-Length: 3\r\n\r\nabc'))
   t.fromUpstream(Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'))
-  assert.deepEqual(out.map((e) => [e.req_body, e.req_truncated, e.req_body_bytes]), [['0123', true, 4], ['abc', undefined, undefined]])
+  assert.deepEqual(out.map((e) => [e.req_body, e.req_truncated, e.req_body_bytes, e.req_partial]), [['0123', true, 4, undefined], ['abc', undefined, undefined, undefined]])
+})
+
+test('early final response (413 mid-upload): prefix body labelled req_partial:early-response; the next request is recorded clean', () => {
+  const { out, store } = sink()
+  const t = createExchangeTee({ flow: FLOW, recordStore: store })
+  t.fromClient(Buffer.from('POST /v1/messages HTTP/1.1\r\nContent-Length: 20\r\n\r\n{"model":"m",'))
+  t.fromUpstream(Buffer.from('HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\n\r\n'))
+  t.fromClient(Buffer.from('"n":123}GET /next HTTP/1.1\r\n\r\n'))
+  t.fromUpstream(Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'))
+  assert.deepEqual(out.map((e) => [e.endpoint, e.resp.status, e.req_body, e.req_partial]), [['/v1/messages', 413, '{"model":"m",', 'early-response'], ['/next', 200, { raw_chars: 0, verbatim: false }, undefined]])
+  assert.equal('req_truncated' in out[0], false)
+})
+
+test('abort mid-upload: error envelope with the prefix body labelled req_partial:aborted', () => {
+  const { out, store } = sink()
+  const t = createExchangeTee({ flow: FLOW, recordStore: store })
+  t.fromClient(Buffer.from('POST /v1/messages HTTP/1.1\r\nContent-Length: 10\r\n\r\n01234'))
+  t.abort({ type: 'ECONNRESET', message: 'client reset' })
+  assert.deepEqual(out.map((e) => [e.error, e.req_body, e.req_partial]), [[true, '01234', 'aborted']])
+})
+
+test('request framing error mid-body (bad chunk terminator): prefix body labelled req_partial:framer-error', () => {
+  const { out, store } = sink()
+  const t = createExchangeTee({ flow: FLOW, recordStore: store })
+  t.fromClient(Buffer.from('POST /v1/messages HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nabcdeXX'))
+  t.fromUpstream(Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'))
+  assert.deepEqual(out.map((e) => [e.resp.status, e.req_body, e.req_partial]), [[200, 'abcde', 'framer-error']])
 })
 
 test('abort mid-response emits an error envelope carrying the partial body', () => {

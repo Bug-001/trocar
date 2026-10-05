@@ -41,7 +41,14 @@ test('envelope: a request body cut at the cap is labelled req_truncated + req_bo
   for (const k of ['req_truncated', 'req_body_bytes']) assert.ok(keys.indexOf(k) > keys.indexOf('req_body'), k)
   assert.equal(mk('/api/event_logging/batch', 'abcd', true).req_truncated, true)   // non-LLM {raw_chars} too
   const whole = mk('/v1/messages', '{"model":"m"}', false)
-  assert.equal('req_truncated' in whole, false); assert.equal('req_body_bytes' in whole, false)
+  for (const k of ['req_truncated', 'req_body_bytes', 'req_partial']) assert.equal(k in whole, false, k)
+})
+
+test('envelope: a request body that never finished carries req_partial:<reason> after req_body (invariant 4)', () => {
+  const env = buildTransparentEnvelope({ id: 'r4', flow: FLOW, seq: 0, resp: null, error: { type: 'ECONNRESET', message: 'reset' },
+    req: { head: { ...head('POST /v1/messages HTTP/1.1\r\n\r\n'), method: 'POST', target: '/v1/messages', headers: [] }, body: Buffer.from('{"mo'), truncated: false, partial: 'aborted', tsStart: '2026-10-05T00:00:00.000Z' } })
+  assert.equal(env.req_partial, 'aborted'); assert.equal(env.req_body, '{"mo'); assert.equal('req_truncated' in env, false)
+  const keys = Object.keys(env); assert.ok(keys.indexOf('req_partial') > keys.indexOf('req_body'))
 })
 
 test('store: 0600 files, 0700 dirs, streams split by kind, write errors never throw', () => {
