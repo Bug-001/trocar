@@ -51,7 +51,7 @@ export async function sealShard(shard, opts = {}) {
 // Only for callers that have established "closed" by other means (legacy.mjs). Not exported further.
 export async function sealUnchecked(shard, { journal = defaultJournalPath(), ...opts } = {}) {
   try {
-    const res = await sealCore(shard, opts);
+    const res = await sealCore(shard, { ...opts, journal });
     appendJournal({ op: 'seal', outcome: 'ok', file: shard, records: res.records, bytes: res.bytes, sha256: res.sha256,
       sealedBytes: res.sealedBytes, deleted: res.deleted, outputs: res.outputs.map((o) => o.path) }, { journal });
     return res;
@@ -63,12 +63,13 @@ export async function sealUnchecked(shard, { journal = defaultJournalPath(), ...
 }
 
 async function sealCore(shard, { fs = nodeFs, sessionsRoot, split = true, deleteOriginal = true,
-  frameBytes = FRAME_BYTES, onPhase = () => {}, ringBudget = createRingBudget() } = {}) {
+  frameBytes = FRAME_BYTES, onPhase = () => {}, ringBudget = createRingBudget(), journal = null } = {}) {
   if (split && !sessionsRoot) throw new Error('sealUnchecked: sessionsRoot is required to split by session');
   const old = oldRootReason(shard, { fs }) || (split && oldRootReason(sessionsRoot, { fs }));
   if (old) throw new SealRefused(`refusing to seal ${shard}: ${old}`);
   const srcDir = path.dirname(shard), name = path.basename(shard);
-  const lock = acquireLock(fs, shard);
+  cleanDeadLocks(srcDir, { fs, journal });
+  const lock = acquireLock(fs, shard, journal);
   const outs = new Map();            // key ('' = per-shard) → { dir, tmp, fd, writer }
   const budget = ringBudget;          // predecessor rings of all outputs share one memory cap
   let renamed = false;
@@ -127,8 +128,7 @@ async function sealCore(shard, { fs = nodeFs, sessionsRoot, split = true, delete
     const ours = new Set([...outs.values()].map((o) => o.tmp));
     for (const o of outs.values()) { removeEarlierCopies(fs, o.dir, name, { sum, length }); cleanStaleTemps(fs, o.dir, name, ours); }
     for (const o of outs.values()) {
-      o.final = path.join(o.dir, nextSegmentName(fs, o.dir, name));
-      fs.renameSync(o.tmp, o.final);
+      o.final = publish(fs, o.dir, name, o.tmp);
       renamed = true;
       await onPhase('renamed');
     }
@@ -243,11 +243,34 @@ function verify(fs, outs, { name, sum, length, lines }) {
 }
 
 const segRe = (name) => new RegExp('^' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\.(\\d{4,})\\' + SEALED_EXT + '$');
-function nextSegmentName(fs, dir, name) {
+const segName = (name, n) => `${name}.${String(n).padStart(4, '0')}${SEALED_EXT}`;
+function nextSegmentNumber(fs, dir, name) {
   const re = segRe(name);
   let max = 0;
   for (const f of fs.readdirSync(dir)) { const m = re.exec(f); if (m) max = Math.max(max, Number(m[1])); }
-  return `${name}.${String(max + 1).padStart(4, '0')}${SEALED_EXT}`;
+  return max + 1;
+}
+// Give the verified temp its segment name. Two sealers can file into one directory (two shards of one
+// name from two capture dirs, into one session dir); a rename onto the number the listing found free
+// would REPLACE a copy another sealer published in between — and that sealer then deletes its
+// original. link() refuses an existing name, so the number is claimed exclusively and the next one
+// tried; then the temp name goes (review 3 F12). Without hard links (EPERM / ENOTSUP / ENOSYS, some
+// filesystems), the name is claimed with an exclusive create and the temp renamed onto that claim.
+function publish(fs, dir, name, tmp) {
+  for (let n = nextSegmentNumber(fs, dir, name), tries = 0; tries < 10000; n++, tries++) {
+    const fin = path.join(dir, segName(name, n));
+    try { fs.linkSync(tmp, fin); }
+    catch (e) {
+      if (e.code === 'EEXIST') continue;
+      if (!['EPERM', 'ENOTSUP', 'ENOSYS', 'EOPNOTSUPP'].includes(e.code)) throw e;
+      try { fs.closeSync(fs.openSync(fin, 'wx', 0o600)); } catch (c) { if (c.code === 'EEXIST') continue; throw c; }
+      fs.renameSync(tmp, fin);
+      return fin;
+    }
+    fs.unlinkSync(tmp);
+    return fin;
+  }
+  throw new Error(`no free segment name for ${name} in ${dir}`);
 }
 
 function removeEarlierCopies(fs, dir, name, { sum, length }) {
@@ -269,23 +292,56 @@ function removeEarlierCopies(fs, dir, name, { sum, length }) {
   if (removed) fsyncDir(fs, dir);
 }
 
-// One sealer per shard at a time. A lock left by a dead process (kill -9) is taken over.
-function acquireLock(fs, shard) {
-  const p = shard + '.sealing';
+// One sealer per shard at a time. A lock left by a dead process (kill -9) is taken over, and that is
+// journalled. A lock with no pid in it yet is only taken as dead once it is a few seconds old: its
+// sealer may be between creating it and writing its pid.
+const LOCK_EXT = '.sealing';
+function lockHolder(fs, p) {
+  let pid = NaN, age = Infinity;
+  try { pid = Number(fs.readFileSync(p, 'utf8')); age = Date.now() - fs.statSync(p).mtimeMs; } catch (e) { if (e.code === 'ENOENT') return null; throw e; }
+  let alive = false;
+  if (pid > 0) { try { process.kill(pid, 0); alive = true; } catch (k) { alive = k.code === 'EPERM'; } }
+  else alive = age < 5000;
+  return { pid: pid > 0 ? pid : null, alive };
+}
+function acquireLock(fs, shard, journal) {
+  const p = shard + LOCK_EXT;
   for (let tries = 0; tries < 2; tries++) {
     try { const fd = fs.openSync(p, 'wx', 0o600); fs.writeSync(fd, String(process.pid)); fs.closeSync(fd); return p; }
     catch (e) {
       if (e.code !== 'EEXIST') throw e;
-      const pid = Number(fs.readFileSync(p, 'utf8'));
-      let alive = false;
-      try { if (pid > 0) { process.kill(pid, 0); alive = true; } } catch (k) { alive = k.code === 'EPERM'; }
-      if (alive && pid !== process.pid) throw new SealRefused(`refusing to seal ${shard}: another sealer (pid ${pid}) holds ${path.basename(p)}`);
+      const h = lockHolder(fs, p);
+      if (!h) continue;
+      if (h.alive && h.pid !== process.pid) throw new SealRefused(`refusing to seal ${shard}: another sealer (pid ${h.pid ?? 'starting'}) holds ${path.basename(p)}`);
       fs.unlinkSync(p);
+      appendJournal({ op: 'lock', outcome: 'taken-over', file: p, pid: h.pid, reason: `the lock of an interrupted seal of this shard (pid ${h.pid ?? 'unknown'} is not running); sealing it again` }, { journal, fs });
     }
   }
   throw new SealRefused(`refusing to seal ${shard}: could not take ${path.basename(p)}`);
 }
 function releaseLock(fs, p) { try { fs.unlinkSync(p); } catch {} }
+
+// Locks whose sealer died: a kill -9 after the original's unlink leaves `<shard>.sealing` beside a
+// shard that is gone, and nothing would ever take it over (it names no file anyone seals again).
+// Removed at the next seal in that directory — `sealCore` for its shard's dir, the legacy entry for
+// every dir it seals — and journalled (review 3 F10). A live lock is in use and left alone.
+export function cleanDeadLocks(dir, { fs = nodeFs, journal = null, dryRun = false } = {}) {
+  let names; try { names = fs.readdirSync(dir); } catch { return []; }
+  const out = [];
+  for (const n of names.filter((x) => x.endsWith(LOCK_EXT)).sort()) {
+    const p = path.join(dir, n), shard = p.slice(0, -LOCK_EXT.length);
+    let h; try { h = lockHolder(fs, p); } catch { continue; }
+    if (!h || h.alive) continue;
+    const entry = { op: 'lock', outcome: dryRun ? 'would-remove' : 'removed', file: p, pid: h.pid,
+      reason: `the lock of an interrupted seal (pid ${h.pid ?? 'unknown'} is not running); its shard ${fs.existsSync(shard) ? 'is still there and will be sealed again' : 'is gone (that seal had already deleted it)'}` };
+    if (!dryRun) {
+      try { fs.unlinkSync(p); } catch (e) { if (e.code === 'ENOENT') continue; Object.assign(entry, { outcome: 'failed', reason: `${entry.reason} — could not remove it (${e.message})` }); }
+      appendJournal(entry, { journal, fs });
+    }
+    out.push(entry);
+  }
+  return out;
+}
 // Temps a killed run left in a target dir. We hold the shard's lock, so any temp of this shard that
 // is not one of ours is dead weight (a temp is never a reader's input: no .sealed / .ndjson suffix).
 function cleanStaleTemps(fs, dir, name, ours) {

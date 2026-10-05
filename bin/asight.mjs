@@ -305,6 +305,7 @@ async function main() {
               // nothing written: list what a real run would do, and why anything would be refused
               for (const f of res.wouldSeal) console.log(`would ${deleteOriginal ? 'seal/verify + delete original' : 'seal (keep original)'}  ${f}  ${mb(fs.statSync(f).size)}`);
               for (const x of res.refused) console.error(`would refuse ${x.file}: ${x.reason}`);
+              for (const x of res.locks) console.log(`would remove ${x.file}: ${x.reason}`);
               console.log(`dry run: ${res.wouldSeal.length} file(s) ready, ${res.refused.length} refused — nothing was written`);
               if (res.refused.length) process.exitCode = 1;
               break;
@@ -312,11 +313,12 @@ async function main() {
             const raw = res.sealed.reduce((a, x) => a + x.bytes, 0), sealed = res.sealed.reduce((a, x) => a + x.sealedBytes, 0);
             console.log(`sealed ${res.sealed.length} file(s): ${mb(raw)} → ${mb(sealed)}${raw ? ` (${(sealed / raw * 100).toFixed(2)} %)` : ''}`);
             if (res.deletedOnly.length) console.log(`deleted ${res.deletedOnly.length} original(s) after a byte-for-byte check against their sealed copy`);
+            for (const x of res.locks) console.log(`${x.outcome === 'removed' ? 'removed ' : 'FAILED  '} ${x.file}: ${x.reason}`);
             for (const x of res.refused) console.error(`refused  ${x.file}: ${x.reason}`);
             for (const x of res.failed) console.error(`FAILED   ${x.file}: ${x.reason} (original kept)`);
             if (!deleteOriginal && res.sealed.length) console.log('originals KEPT — both copies now exist and readers use the originals. Check with `asight raw verify '
               + target + '`, then run this again with --delete-original to delete each original after a byte-for-byte check.');
-            if (res.refused.length || res.failed.length) process.exitCode = 1;
+            if (res.refused.length || res.failed.length || res.locks.some((x) => x.outcome === 'failed')) process.exitCode = 1;
           } else {
             const { sealShard } = await mod('seal.mjs');
             const res = await sealShard(path.resolve(target), { sessionsRoot: path.resolve(flag('--sessions', path.join(asightHome(), 'sessions'))) });

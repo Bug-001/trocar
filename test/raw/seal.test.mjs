@@ -85,6 +85,7 @@ test('E9: temp and sealed files are 0600 from the moment they exist; new session
 });
 
 // E5 (4.6), the part kill -9 cannot see: file fsync → rename → target dir fsync → unlink → source dir fsync.
+// The "rename" is link to the segment name + unlink of the temp name (review 3 F12: claims the name).
 test('E5: the seal order is fsync, rename, fsync target dirs, then unlink and fsync the source dir', async () => {
   const { root, shard, sessionsRoot } = setup();
   try {
@@ -93,6 +94,7 @@ test('E5: the seal order is fsync, rename, fsync target dirs, then unlink and fs
       openSync: (p, ...a) => { const fd = fs.openSync(p, ...a); paths.set(fd, p); if (/\.tmp$/.test(p)) log.push(['open', p, a[0], a[1]]); return fd; },
       fsyncSync: (fd) => { log.push(['fsync', paths.get(fd)]); return fs.fsyncSync(fd); },
       renameSync: (a, b) => { log.push(['rename', a, b]); return fs.renameSync(a, b); },
+      linkSync: (a, b) => { log.push(['rename', a, b]); return fs.linkSync(a, b); },
       unlinkSync: (p) => { log.push(['unlink', p]); return fs.unlinkSync(p); },
     };
     await sealShard(shard, { sessionsRoot, fs: spy });
@@ -105,6 +107,8 @@ test('E5: the seal order is fsync, rename, fsync target dirs, then unlink and fs
       assert.deepEqual(log.find((e) => e[0] === 'open' && e[1] === tmp).slice(2), ['wx', 0o600], 'temp not created 0600 exclusively at open');
       const dirSync = at((e) => e[0] === 'fsync' && e[1] === path.dirname(fin));
       assert.ok(dirSync > at((e) => e[0] === 'rename' && e[2] === fin), `${path.dirname(fin)} not fsync'd after the rename`);
+      const tmpGone = at((e) => e[0] === 'unlink' && e[1] === tmp);
+      assert.ok(fs.existsSync(tmp) === false && (tmpGone < 0 || tmpGone < dirSync), `the temp name ${tmp} was not removed before its dir was fsync'd`);
       assert.ok(dirSync < at((e) => e[0] === 'unlink' && e[1] === shard), 'original unlinked before a target dir was fsync\'d');
     }
     assert.ok(at((e) => e[0] === 'unlink' && e[1] === shard) < log.findLastIndex((e) => e[0] === 'fsync' && e[1] === path.dirname(shard)), 'source dir not fsync\'d after the unlink');

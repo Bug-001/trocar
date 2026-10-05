@@ -17,7 +17,7 @@
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { sealUnchecked, SealRefused, oldRootReason } from './seal.mjs';
+import { sealUnchecked, SealRefused, oldRootReason, cleanDeadLocks } from './seal.mjs';
 import { verifyAgainst, copyRelation } from './verify.mjs';
 import { sealedSources, isSealedPath, streamOfSealed } from './discover.mjs';
 import { fsyncDir, closedMarkerPath } from './closed.mjs';
@@ -28,7 +28,7 @@ export const DEFAULT_QUIET_MS = 10000;
 // The legacy streams under `target`: the file itself, or every *.ndjson in the directory and in its
 // immediate subdirectories. Symlinks are refused, never followed.
 export function legacyTargets(target, { fs = nodeFs } = {}) {
-  const files = [], refused = [];
+  const files = [], refused = [], dirs = [];
   const consider = (p) => {
     const st = fs.lstatSync(p);
     if (st.isSymbolicLink()) refused.push({ file: p, reason: 'symlink — seal the file it points at, by its own path (unlinking a link would not remove the original)' });
@@ -38,19 +38,21 @@ export function legacyTargets(target, { fs = nodeFs } = {}) {
   if (!st.isDirectory()) {
     if (!target.endsWith('.ndjson')) refused.push({ file: target, reason: 'not an NDJSON capture stream (*.ndjson)' });
     else consider(target);
-    return { files, refused };
+    return { files, refused, dirs: [path.dirname(target)] };
   }
+  dirs.push(target);
   for (const e of fs.readdirSync(target, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
     const p = path.join(target, e.name);
     if (e.name.endsWith('.ndjson') && !e.isDirectory()) consider(p);
     else if (e.isSymbolicLink() && !e.name.endsWith('.ndjson')) refused.push({ file: p, reason: 'symlinked directory — not followed; seal what it points at by its own path' });
     else if (e.isDirectory()) {
+      dirs.push(p);
       for (const s of fs.readdirSync(p, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
         if (s.name.endsWith('.ndjson') && !s.isDirectory()) consider(path.join(p, s.name));
       }
     }
   }
-  return { files, refused };
+  return { files, refused, dirs };
 }
 
 // ── probes (injected in tests; the defaults only ever look at the files they are given) ───────────
@@ -114,7 +116,7 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
   if (!(Number.isFinite(quietMs) && quietMs >= 0)) throw new SealRefused(`the quiet window must be a non-negative number of seconds (got ${quietMs / 1000})`);
   const old = oldRootReason(target, { fs });
   if (old) throw refuseAll(old);
-  const { files: named, refused } = legacyTargets(target, { fs });
+  const { files: named, refused, dirs } = legacyTargets(target, { fs });
   // a parent of the old root names files inside it: each of those is refused too (none is ever
   // sealed or deleted there, D27①)
   const files = [];
@@ -152,7 +154,9 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
     ok.push(f);
   }
   for (const r of refused) appendJournal({ op: 'seal-legacy', outcome: 'refused', file: r.file, reason: r.reason }, { journal });
-  if (dryRun) return { target, dryRun: true, wouldSeal: ok, refused };
+  // locks of seals that died here (review 3 F10); never inside the old root
+  const locks = dirs.filter((d) => !oldRootReason(d, { fs })).flatMap((d) => cleanDeadLocks(d, { fs, journal, dryRun }));
+  if (dryRun) return { target, dryRun: true, wouldSeal: ok, refused, locks };
 
   const sealed = [], deletedOnly = [], failed = [];
   // A file that changed since the quiet window is being written after all: refuse it, whatever step
@@ -198,7 +202,7 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
       sealed.push(await sealUnchecked(f, { fs, split: false, deleteOriginal, journal, frameBytes }));
     } catch (e) { failed.push({ file: f, reason: e.message }); }
   }
-  return { target, sealed, deletedOnly, refused, failed };
+  return { target, sealed, deletedOnly, refused, failed, locks };
 }
 
 // Sealed segments of `f`'s stream beside it whose only source has `f`'s name, each with its relation to
