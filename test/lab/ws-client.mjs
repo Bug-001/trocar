@@ -9,8 +9,13 @@ import { randomBytes } from 'node:crypto'
 import { once } from 'node:events'
 
 const TAIL = Buffer.from([0, 0, 0xff, 0xff])
-// write, sync-flush, take what came out: one streaming context across calls (context takeover)
-const pump = async (z, data) => { z.write(data); await new Promise((r) => z.flush(zlib.constants.Z_SYNC_FLUSH, r)); return z.read() || Buffer.alloc(0) }
+// write, sync-flush, collect all that came out: one streaming context across calls (context takeover).
+// Collected from 'data' events: a single read() stalls once the output passes the highWaterMark.
+const pump = (z, data) => new Promise((resolve, reject) => {
+  const out = [], take = (d) => out.push(d)
+  z.on('data', take).once('error', reject).write(data)
+  z.flush(zlib.constants.Z_SYNC_FLUSH, () => setImmediate(() => { z.off('data', take).off('error', reject); resolve(Buffer.concat(out)) }))
+})
 
 export function encodeFrame(opcode, payload, { fin = true, rsv1 = false, mask = true } = {}) {
   const p = Buffer.from(payload), n = p.length, key = randomBytes(4), ext = Buffer.alloc(n < 126 ? 0 : n < 65536 ? 2 : 8)
@@ -61,7 +66,8 @@ export async function wsConnect(port, { path = '/v1/responses', key = randomByte
   const [line, ...fields] = head.split('\r\n')
   const res = { status: Number(line.split(' ')[1]), head, wire, sock, state, headers: Object.fromEntries(fields.filter(Boolean).map((f) => [f.slice(0, f.indexOf(':')).toLowerCase(), f.slice(f.indexOf(':') + 1).trim()])) }
   const ext = res.headers['sec-websocket-extensions'] || ''
-  const deflate = /permessage-deflate/.test(ext), noContext = /client_no_context_takeover/.test(ext), inflater = zlib.createInflateRaw(), deflater = zlib.createDeflateRaw()
+  const deflate = /permessage-deflate/.test(ext), noContext = /client_no_context_takeover/.test(ext), deflater = zlib.createDeflateRaw()
+  const inflater = zlib.createInflateRaw({ windowBits: Number(/server_max_window_bits=(\d+)/.exec(ext)?.[1] || 15) }) // the window the server agreed to
   return Object.assign(res, {
     // next frame from the server; null once the connection is gone
     next: () => new Promise((resolve) => { waiters.push(() => resolve(frames.shift() ?? null)); wake() }),
