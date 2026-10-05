@@ -2,6 +2,7 @@
 // handshake, framing and close handshake, and per message one `response.create` in, the very events
 // of the SSE answer out (one text message each). Every frame is logged with its exact wire bytes.
 import { createHash, randomBytes } from 'node:crypto'
+import { SCENARIOS, pickScenario, errorFor } from './scenarios.mjs'
 import { statusLine } from './transport.mjs'
 import * as openai from './openai.mjs'
 
@@ -56,6 +57,7 @@ const dataOf = (piece) => JSON.parse(piece.slice(piece.indexOf('\ndata: ') + 7))
 // feeds it every byte that follows, and pending() is the unparsed rest, logged as leftover.
 export function serve(conn, req, up, state, record) {
   let buf = Buffer.alloc(0), msg = null, closeSent = false, chain = Promise.resolve()
+  const lanes = new Map() // stream_id ('' = default lane) -> its latest response, the only one a continuation may name
   const log = (dir, raw, f) => record({ type: 'ws_frame', ts: iso(), conn_id: conn.id, dir, opcode: f.opcode, fin: f.fin, rsv1: f.rsv1, len: f.len, raw_b64: raw.toString('base64') })
   const live = () => !conn.closed && !conn.ended
   const write = (b) => { conn.bytesOut += b.length; conn.sock.write(b) }
@@ -64,6 +66,12 @@ export function serve(conn, req, up, state, record) {
     log('out', raw, { opcode, fin: true, rsv1, len: payload.length })
     return raw
   }
+  const sleep = (ms) => new Promise((resolve) => {
+    if (!live()) return resolve(false)
+    const wake = () => { clearTimeout(t); conn.wakers.delete(wake); resolve(false) }
+    const t = setTimeout(() => { conn.wakers.delete(wake); resolve(live()) }, ms)
+    conn.wakers.add(wake)
+  })
   const end = () => { if (live()) { conn.ended = true; conn.sock.end() } }
   const close = (code, reason = '') => {
     if (closeSent || !live()) return
@@ -80,7 +88,8 @@ export function serve(conn, req, up, state, record) {
     return true
   }
 
-  // One response.create: the events the same body gets over SSE, one text message each.
+  // One response.create: the scenario picks itself as on HTTP (handshake header, marker, script);
+  // a continuation sees the cached input and output of the response it names, prepended.
   async function respond(text) {
     let body = null
     try { body = JSON.parse(text) } catch { /* answered below */ }
@@ -89,10 +98,49 @@ export function serve(conn, req, up, state, record) {
     const lane = typeof body?.stream_id === 'string' ? body.stream_id : ''
     const event = (e) => sendText(JSON.stringify(lane ? { ...e, stream_id: lane } : e))
     const error = (status, e) => event({ type: 'error', status, error: { type: 'invalid_request_error', param: null, ...e } })
-    record(entry)
-    if (body?.type !== 'response.create') return error(400, { code: 'unknown_event', message: 'mock-upstream: expected a JSON response.create message' })
-    for (const e of openai.responses.reply({ ...body, stream: true }, Buffer.from(text), {}).pieces.map(dataOf)) if (!event(e)) return
+    if (body?.type !== 'response.create') { record(entry); return error(400, { code: 'unknown_event', message: 'mock-upstream: expected a JSON response.create message' }) }
+    const warmup = body.generate === false // connection setup, not inference: no marker, no script step
+    let input = typeof body.input === 'string' ? [{ role: 'user', content: body.input }] : Array.isArray(body.input) ? body.input : []
+    const prevId = body.previous_response_id, prev = prevId && [...lanes.values()].find((r) => r.id === prevId)
+    if (prevId && !prev) {
+      record({ ...entry, previous_response_id: prevId, error: 'previous_response_not_found' })
+      return error(400, { code: 'previous_response_not_found', param: 'previous_response_id', message: `Previous response with id '${prevId}' not found.` })
+    }
+    if (prev) input = [...prev.input, ...prev.output, ...input]
+    // markers are looked for in the whole logical request, as on HTTP: after Codex's warmup the turn's
+    // own message carries no new input at all, and the typed marker sits in the cached part
+    const full = { ...body, input, stream: true }
+    const pick = pickScenario(req.headers, Buffer.from(JSON.stringify(full)), !warmup, state.queue), sc = SCENARIOS[pick.name] || {}
+    record({ ...entry, scenario: pick.name, source: pick.source, ...(prevId ? { previous_response_id: prevId } : {}) })
+    if (sc.status) {
+      const r = errorFor(sc, openai.responses), { 'content-type': _, ...headers } = r.headers
+      let e
+      try { e = JSON.parse(r.pieces[0]).error } catch { e = { type: 'server_error', code: null, message: String(r.pieces[0]), param: null } }
+      return event({ type: 'error', status: r.status, error: e, headers })
+    }
+    const res = openai.responses.reply(full, Buffer.from(text), sc)
+    let events = res.pieces.map(dataOf)
+    if (warmup) {
+      events = events.filter((e) => /^response\.(created|in_progress|completed)$/.test(e.type)).map((e, sequence_number) => ({ ...e, sequence_number }))
+      const done = events.at(-1).response
+      Object.assign(done, { output: [], usage: { ...done.usage, output_tokens: 0, total_tokens: done.usage.input_tokens } })
+    }
+    for (const e of events) if (e.response) e.response.previous_response_id = prevId ?? null
+    const first = res.firstDelta, cut = Math.min(first + 2, events.length - 1)
+    if (sc.fault === 'error-event') events = [...events.slice(0, first + 2), dataOf(res.failEvent(first + 2))]
+    if (sc.slowHeaders && !(await sleep(state.cfg.stallMs))) return
+    if (sc.fault === 'headers-reset') return resetSoon()
+    for (const [i, e] of events.entries()) {
+      if (i === cut && sc.fault === 'reset') return resetSoon()
+      if (i === cut && sc.fault === 'fin') return end() // TCP FIN, no Close frame: an abnormal closure (1006)
+      if (i === first + 1 && sc.fault === 'stall' && !(await sleep(state.cfg.stallMs))) return
+      if (i > 0 && sc.drip && !(await sleep(state.cfg.dripMs))) return
+      if (!event(e)) return
+    }
+    const done = events.at(-1)
+    if (done.type === 'response.completed') lanes.set(lane, { id: done.response.id, input, output: done.response.output })
   }
+  const resetSoon = async () => { if (await sleep(25)) { conn.ended = true; conn.raw.resetAndDestroy() } }
 
   function onFrame(f) {
     const { opcode } = f
