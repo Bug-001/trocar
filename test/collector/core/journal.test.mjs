@@ -212,4 +212,9 @@ test('journal: installedAt finds when asight wrote the value a layer holds — b
   assert.equal(installedAt(mb, { file: '/h/.hermes/.env', vars: { SSL_CERT_FILE: B, HERMES_CA_BUNDLE: B, OPENAI_API_KEY: 'k' } }), at)
   assert.equal(installedAt(mb, { file: '/h/.hermes/.env', vars: { SSL_CERT_FILE: '/etc/ssl/certs/ca-certificates.crt', HERMES_CA_BUNDLE: B } }), null, 'a same-name line below the block won')
   assert.equal(installedAt({ entries: [{ kind: 'text', format: 'line', path: '/h/.bashrc', line: 'x', installed_at: '2026-10-06T01:00:00.000Z' }] }, { file: '/h/.bashrc', vars: { A: '1' } }), null, 'a line entry sets no variable')
+  // a descriptor may name the key's value under its own pseudo-variable (Z-Code: zcode:user:caCertFile)
+  const Z = '/h/.asight/collector/ca/combined-z-code.pem'
+  const mz = { entries: [{ kind: 'json-key', path: '/h/.zcode/cli/config.json', keys: ['network', 'caCertFile'], value: Z, installed_at: '2026-10-06T01:00:00.000Z' }] }
+  assert.equal(installedAt(mz, { file: '/h/.zcode/cli/config.json', vars: { 'zcode:user:caCertFile': Z } }), at)
+  assert.equal(installedAt(mz, { file: '/h/.zcode/cli/config.json', vars: { 'zcode:user:caCertFile': '/corp.pem' } }), null)
 })
