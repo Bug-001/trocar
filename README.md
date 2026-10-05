@@ -131,21 +131,28 @@ only for agents that trust the collector CA. Everything else, including other us
 | collector CA (per user, in **no** trust store) | `~/.asight/collector/ca/` (key 0600) | `asight collector uninstall` |
 | Claude Code trust entry | `env.NODE_EXTRA_CA_CERTS` in `~/.claude/settings.json` → the collector CA, or → `~/.asight/collector/ca/extra-cc.pem` (your existing CA's certificates + the collector CA) when you already set one | uninstall removes only that key, or puts your value back |
 | install manifest | `~/.asight/collector/install-manifest.json` — every file and key it changed, never a copy of your file | removed last by uninstall |
-| captures | `~/.asight/collector/capture-<date>.ndjson`; `flows/` holds connection metadata | kept unless `uninstall --purge-data` |
+| captures | `~/.asight/collector/capture-<date>.ndjson`; `flows/` holds connection metadata and failure records | kept unless `uninstall --purge-data` (which deletes `flows/` too, then records there anything it could not undo) |
 
 ```sh
 sudo asight setup-helper      # once per machine (Linux)
-asight collector install      # per user, no sudo; restart Claude Code so it reads the new trust entry
+asight collector install      # per user, no sudo; lists every file it will change first; then restart Claude Code
 asight collector start        # the daemon, in the foreground (no autostart yet)
-asight collector on           # steer + record; `off` stops recording at once; `status` shows each agent and why
+asight collector on           # steer + record; `off` stops recording at once
+asight collector status       # each agent and why it is (not) captured, and the recent failures
 asight serve                  # the captures appear on the board
 ```
 
 A relay or proxy with a private CA keeps working: install carries the CA you already gave Claude Code
 into `extra-cc.pem`, and the daemon verifies upstreams with Node's store, so start it with the same
-`NODE_EXTRA_CA_CERTS` your shell has. A Claude Code process started before install reads its CA list
-only at startup, so it never trusts the collector CA: `status` reports it untrusted
-(`config-after-start`) and its connections go direct, unrecorded, until you restart it.
+`NODE_EXTRA_CA_CERTS` your shell has. asight does not count on a Claude Code process that was already
+running at install picking up the new trust entry (not verified for every mode), so `status` reports it
+untrusted (`config-after-start`, with a hint to restart it) and its connections go direct, unrecorded,
+until you restart it.
+
+Capture failures are never silent: a refused or failed install step, a file uninstall could not undo, a
+helper or engine error, a failed heartbeat or attach, an envelope that could not be written, an agent
+judged untrusted — each leaves a line with its reason in `~/.asight/collector/flows/`, and
+`asight collector status` prints the recent ones, also when the daemon is not running.
 
 ## Claude Desktop — the one environment-dependent case
 

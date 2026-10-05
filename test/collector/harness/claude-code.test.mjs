@@ -25,7 +25,7 @@ test('claude-code: settings env applies over the launch env; project/managed sco
     s.put('.claude/settings.json', JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: pem, ANTHROPIC_BASE_URL: 'https://relay.example.com/anthropic' } }))
     const a = judge(cc, ctxFor({ home: s.home, env: { NODE_EXTRA_CA_CERTS: foreign } }))
     assert.deepEqual([a.trust.trusted, a.trust.via.startsWith('user settings env')], [true, true])
-    assert.ok(a.layers.every((l) => l.live === false), 'Node/Bun read NODE_EXTRA_CA_CERTS once: a settings layer is never live')
+    assert.ok(a.layers.every((l) => l.live === false), 'policy (4.6 CC row, OPEN ④): a settings layer is never live')
     assert.ok(a.hosts.includes('relay.example.com'))
     const proj = path.join(s.home, 'repo'); s.put('repo/.claude/settings.json', JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: foreign } }))
     const b = judge(cc, ctxFor({ home: s.home, cwd: proj }))
