@@ -101,7 +101,8 @@ const sameStat = (a, b) => a.size === b.size && a.mtimeMs === b.mtimeMs && a.ino
 
 export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, quietMs = DEFAULT_QUIET_MS,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)), fdHolders = defaultFdHolders, processList = defaultProcessList,
-  journal = defaultJournalPath(), frameBytes, onFile = () => {} } = {}) {
+  journal = defaultJournalPath(), frameBytes, onFile = () => {}, dryRun = false } = {}) {
+  if (dryRun) journal = null;                          // a dry run changes nothing, so it records nothing
   const refuseAll = (reason) => {
     appendJournal({ op: 'seal-legacy', outcome: 'refused', target, reason }, { journal });
     return new SealRefused(`refusing to seal ${target}: ${reason}`);
@@ -127,28 +128,38 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
   const ok = [];
   for (const f of quiet) {
     const pids = holders.get(f);
-    if (pids && pids.length) refused.push({ file: f, reason: `held open by pid ${pids.join(', ')} — it may still be written` });
-    else ok.push(f);
+    if (pids && pids.length) { refused.push({ file: f, reason: `held open by pid ${pids.join(', ')} — it may still be written` }); continue; }
+    // A sealed copy of an EARLIER version of this file (it grew since): sealing again would leave two
+    // copies of its first lines, and deleting would trust a copy that is not this file. Refuse.
+    const size = fs.statSync(f).size;
+    const stale = sameStreamCopies(fs, f).filter((c) => c.length !== size);
+    if (stale.length) { refused.push({ file: f, reason: `stale sealed copy ${stale.map((c) => path.basename(c.file)).join(', ')} of an earlier version of this file (recorded ${stale[0].length} bytes, it now has ${size}) — check it with \`asight raw verify\`, remove it, then seal again` }); continue; }
+    ok.push(f);
   }
   for (const r of refused) appendJournal({ op: 'seal-legacy', outcome: 'refused', file: r.file, reason: r.reason }, { journal });
+  if (dryRun) return { target, dryRun: true, wouldSeal: ok, refused };
 
   const sealed = [], deletedOnly = [], failed = [];
   for (const f of ok) {
     onFile(f);
     try {
       if (deleteOriginal) {
-        const copies = existingCopies(fs, f);
+        const copies = sameStreamCopies(fs, f).map((c) => c.file);
         if (copies.length) {
+          // every copy is of this very length (stale ones were refused above): prove it byte for byte
           const v = verifyAgainst(copies, f, { fs });
-          if (v.ok) {
-            fs.unlinkSync(f);
-            try { fs.unlinkSync(closedMarkerPath(f)); } catch {}
-            fsyncDir(fs, path.dirname(f));
-            appendJournal({ op: 'delete-original', outcome: 'ok', file: f, verified: 'byte-for-byte', against: copies, records: v.records, bytes: v.bytes }, { journal });
-            deletedOnly.push({ file: f, copies });
+          if (!v.ok) {
+            const reason = `its sealed copy does not match it byte for byte (${v.reason}) — nothing deleted; check with \`asight raw verify\``;
+            appendJournal({ op: 'verify', outcome: 'failed', file: f, sealed: copies, reason }, { journal });
+            refused.push({ file: f, reason });
             continue;
           }
-          appendJournal({ op: 'verify', outcome: 'failed', file: f, sealed: copies, reason: v.reason }, { journal });
+          fs.unlinkSync(f);
+          try { fs.unlinkSync(closedMarkerPath(f)); } catch {}
+          fsyncDir(fs, path.dirname(f));
+          appendJournal({ op: 'delete-original', outcome: 'ok', file: f, verified: 'byte-for-byte', against: copies, records: v.records, bytes: v.bytes }, { journal });
+          deletedOnly.push({ file: f, copies });
+          continue;
         }
       }
       // the sealer journals its own outcome, and replaces earlier copies of this exact source
@@ -158,10 +169,10 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
   return { target, sealed, deletedOnly, refused, failed };
 }
 
-// Sealed files beside `f` whose only source is `f` as it is now (name + length) — candidates for the
-// byte-for-byte check before a delete-only pass.
-function existingCopies(fs, f) {
-  const dir = path.dirname(f), name = path.basename(f), size = fs.statSync(f).size;
+// Sealed segments of `f`'s stream beside it whose only source has `f`'s name: { file, length }.
+function sameStreamCopies(fs, f) {
+  const dir = path.dirname(f), name = path.basename(f);
   return fs.readdirSync(dir).filter((n) => isSealedPath(n) && n.startsWith(name + '.')).map((n) => path.join(dir, n))
-    .filter((p) => { const s = sealedSources(p, { fs }); return s && s.length === 1 && s[0].name === name && s[0].length === size; });
+    .map((p) => { const s = sealedSources(p, { fs }); return s && s.length === 1 && s[0].name === name ? { file: p, length: s[0].length } : null; })
+    .filter(Boolean);
 }

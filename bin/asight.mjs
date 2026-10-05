@@ -282,7 +282,7 @@ async function main() {
       const mod = (m) => import(r('src', 'raw', m));
       const mb = (n) => (n / 1048576).toFixed(1) + ' MB';
       const usage = 'usage: asight raw seal <closed-shard> [--sessions <dir>]\n'
-        + '       asight raw seal --legacy <file|dir> [--delete-original] [--quiet <seconds>]\n'
+        + '       asight raw seal --legacy <file|dir> [--dry-run] [--delete-original] [--quiet <seconds>]\n'
         + '       asight raw verify <sealed|dir> [--against <original>]\n'
         + '       asight raw export <session-id|file.sealed> [--sessions <dir>] [--out <file>]\n'
         + '       asight raw journal [--tail <n>]';
@@ -293,8 +293,17 @@ async function main() {
             const { sealLegacy } = await mod('legacy.mjs');
             const deleteOriginal = rest.includes('--delete-original');
             const q = flag('--quiet', undefined);
-            const res = await sealLegacy(path.resolve(target), { deleteOriginal, quietMs: q === undefined ? undefined : Number(q) * 1000,
+            const dryRun = rest.includes('--dry-run');
+            const res = await sealLegacy(path.resolve(target), { deleteOriginal, dryRun, quietMs: q === undefined ? undefined : Number(q) * 1000,
               onFile: (f) => console.log(`  ${f}`) });
+            if (dryRun) {
+              // nothing written: list what a real run would do, and why anything would be refused
+              for (const f of res.wouldSeal) console.log(`would ${deleteOriginal ? 'seal/verify + delete original' : 'seal (keep original)'}  ${f}  ${mb(fs.statSync(f).size)}`);
+              for (const x of res.refused) console.error(`would refuse ${x.file}: ${x.reason}`);
+              console.log(`dry run: ${res.wouldSeal.length} file(s) ready, ${res.refused.length} refused — nothing was written`);
+              if (res.refused.length) process.exitCode = 1;
+              break;
+            }
             const raw = res.sealed.reduce((a, x) => a + x.bytes, 0), sealed = res.sealed.reduce((a, x) => a + x.sealedBytes, 0);
             console.log(`sealed ${res.sealed.length} file(s): ${mb(raw)} → ${mb(sealed)}${raw ? ` (${(sealed / raw * 100).toFixed(2)} %)` : ''}`);
             if (res.deletedOnly.length) console.log(`deleted ${res.deletedOnly.length} original(s) after a byte-for-byte check against their sealed copy`);
@@ -422,7 +431,7 @@ usage:
   asight verify
   asight doctor [--source <ndjson>]             self-check: deps probe + 「测试」四问 (是否真在抓/抓得对/凭据没漏/没弱化全机 TLS)
   asight raw seal <closed-shard> [--sessions <dir>]                     D35: seal a CLOSED shard (needs <shard>.closed), per session
-  asight raw seal --legacy <file|dir> [--delete-original] [--quiet <s>] seal pre-D35 files/trees nothing writes; keeps originals by default
+  asight raw seal --legacy <file|dir> [--dry-run] [--delete-original] [--quiet <s>]  seal pre-D35 files/trees nothing writes; keeps originals by default
   asight raw verify <sealed|dir> [--against <original>]                 decode sealed copies, compare byte for byte with the original
   asight raw export <session-id|file.sealed> [--out <file>]             sealed → plain NDJSON (0600, default ~/.asight/export/)
   asight raw journal [--tail <n>]                                       the durable record of refusals, failures, deletions

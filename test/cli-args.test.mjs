@@ -69,7 +69,7 @@ test('every flag the CLI reads with a value is declared', () => {
     '--host', '--proxy', '--upstream', '--capture-target', '--sessions', '--quiet', '--against', '--tail']) {
     assert.ok(VALUED_FLAGS.has(f), `${f} takes a value but is not declared`);
   }
-  for (const b of ['--watch', '--rebuild', '--control', '--raw-sse', '--remove-ca', '--no-autostart', '--legacy', '--delete-original']) {
+  for (const b of ['--watch', '--rebuild', '--control', '--raw-sse', '--remove-ca', '--no-autostart', '--legacy', '--delete-original', '--dry-run']) {
     assert.ok(!VALUED_FLAGS.has(b), `${b} is a boolean switch but is declared as valued`);
   }
 });

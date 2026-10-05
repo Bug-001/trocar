@@ -25,7 +25,11 @@ test('legacy tree: seal (originals kept) → verify → seal --delete-original �
     await shardOnce({ file: writeShard(path.join(home, 'cap.ndjson'), [a[0], envelope({ id: 't1', body: { raw_chars: 1, verbatim: false }, endpoint: '/api/event_logging/batch', llm: false }), a[1], a[2], a[3]].map((r) => toLine(r))), outDir: ses });
     const originals = listFiles(ses, /\.ndjson$/);
     const sessionBytes = Buffer.concat(listFiles(path.join(ses, SID), /\.ndjson$/).map((f) => fs.readFileSync(f)));
-    let r = run(home, 'raw', 'seal', '--legacy', ses, '--quiet', '0');
+    let r = run(home, 'raw', 'seal', '--legacy', ses, '--quiet', '0', '--dry-run');
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, new RegExp(`dry run: ${originals.length} file\\(s\\) ready, 0 refused`));
+    assert.deepEqual(listFiles(ses), [], 'a dry run wrote a sealed file');
+    r = run(home, 'raw', 'seal', '--legacy', ses, '--quiet', '0');
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /originals KEPT/);
     assert.deepEqual(listFiles(ses, /\.ndjson$/), originals);

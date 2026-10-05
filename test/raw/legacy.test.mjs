@@ -127,3 +127,35 @@ test('asight shard leaves its watermark alone when its capture was sealed and de
     assert.deepEqual(readState(out)[cap], before, 'the watermark was reset — the next capture would be re-read from 0');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('--dry-run runs every check and reports the plan, but writes nothing', async () => {
+  const root = tmpDir();
+  try {
+    const ses = await tree(root), journal = path.join(root, 'j.jsonl');
+    const held = legacyTargets(ses).files[0];
+    const res = await sealLegacy(ses, { ...NONE, journal, dryRun: true, fdHolders: async () => new Map([[held, [9]]]) });
+    assert.equal(res.dryRun, true);
+    assert.deepEqual(res.refused.map((r) => r.file), [held]);
+    assert.equal(res.wouldSeal.length, legacyTargets(ses).files.length - 1);
+    assert.deepEqual(listFiles(ses), []);
+    assert.equal(fs.existsSync(journal), false, 'a dry run journals nothing — nothing happened');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a stream that changed after it was sealed is refused, never sealed twice or deleted', async () => {
+  const root = tmpDir();
+  try {
+    const ses = await tree(root), journal = path.join(root, 'j.jsonl');
+    await sealLegacy(ses, { ...NONE, journal });
+    const grown = listFiles(ses, /calls\.ndjson$/)[0];
+    fs.appendFileSync(grown, toLine(envelope({ sid: 'aaaaaaaa-3333-4333-8333-33333333333a', id: 'late', body: '' })));
+    for (const deleteOriginal of [false, true]) {
+      const res = await sealLegacy(ses, { ...NONE, journal, deleteOriginal });
+      const r = res.refused.find((x) => x.file === grown);
+      assert.ok(r, `the grown stream was not refused (deleteOriginal=${deleteOriginal})`);
+      assert.match(r.reason, /stale sealed copy/);
+      assert.ok(fs.existsSync(grown));
+      assert.equal(listFiles(path.dirname(grown)).filter((f) => f.includes('calls.ndjson.')).length, 1, 'a second copy of the stream was written');
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
