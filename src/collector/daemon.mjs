@@ -168,12 +168,15 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
 
     async function stop() {
       failure.flush() // folded counts are written, not lost
-      await control.close()
+      // every step runs; one that fails is recorded with its reason, never thrown past the rest (D38)
+      const step = async (where, fn) => { try { await fn() } catch (e) { failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: e && e.code })) } }
+      await step('control', () => control.close())
       tracker.stop()
-      await redirector.close() // the helper exits; its unpinned links vanish; new connections go direct
-      await Promise.race([engine.close(), new Promise((r) => setTimeout(r, 2000).unref())])
-      store.close()
+      await step('helper', () => redirector.close()) // the helper exits; its unpinned links vanish; new connections go direct
+      await step('engine', () => Promise.race([engine.close(), new Promise((r) => setTimeout(r, 2000).unref())]))
+      await step('record', () => store.close())
       fs.rmSync(P.lock, { force: true })
+      failure.flush()
     }
     return { port, socketPath: sock, paths: P, stop, status, tracker, engine, redirector, switch: sw }
   } catch (e) {

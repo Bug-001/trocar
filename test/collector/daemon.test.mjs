@@ -397,3 +397,18 @@ test('daemon: a CC started after install stays trusted when settings.json is lat
     assert.match(rec.hint, /started before the CA was in its settings.*restart it to be captured/)
   } finally { await d.stop(); p.done(); s.done() }
 })
+
+test('daemon: a step that fails while stopping is recorded with its reason, and stop still finishes (D38)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc] })
+  try {
+    const realClose = d.redirector.close.bind(d.redirector)
+    d.redirector.close = async () => { await realClose(); throw new Error('the helper did not exit in time') }
+    await d.stop()
+    const f = flowsOf(s).find((x) => x.event === 'failure' && x.where === 'helper')
+    assert.match(f && f.reason, /^while stopping: the helper did not exit in time$/)
+    assert.ok(!fs.existsSync(path.join(s.collector, 'lock')), 'the later steps ran: the lock is gone')
+    assert.ok(!fs.existsSync(s.sock), 'and the control socket')
+  } finally { p.done(); s.done() }
+})
