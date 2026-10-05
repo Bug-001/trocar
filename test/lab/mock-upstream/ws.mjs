@@ -151,19 +151,19 @@ export function serve(conn, req, { deflate }, state, record) {
       try { e = JSON.parse(r.pieces[0]).error } catch { e = { type: 'server_error', code: null, message: String(r.pieces[0]), param: null } }
       return event({ type: 'error', status: r.status, error: e, headers })
     }
-    const res = openai.responses.reply(full, Buffer.from(text), sc)
+    // the cache sees the logical request, as if it had been sent in full over HTTP: the warmup fills it
+    const res = openai.responses.reply(full, Buffer.from(text), sc, { cache: state.cache, headers: req.headers })
     let events = res.pieces.map(dataOf)
     if (warmup) {
       events = events.filter((e) => /^response\.(created|in_progress|completed)$/.test(e.type)).map((e, sequence_number) => ({ ...e, sequence_number }))
       events.at(-1).response.output = []
     }
     if (sc.fault === 'error-event') events = [...events.slice(0, res.firstDelta + 2), dataOf(res.failEvent(res.firstDelta + 2))]
-    // usage counts the logical request, cached part included, as the API bills it and about as the
-    // request sent in full over HTTP reports it; the reply text's sha256 stays the received message's
-    const inputTokens = Math.max(1, Math.ceil(Buffer.byteLength(JSON.stringify(full)) / 4))
+    // usage is the cache model's for the logical request (cached part included), exactly what the same
+    // request sent in full over HTTP reports; the reply text's sha256 stays the received message's
     for (const { response: r } of events) {
       if (r) r.previous_response_id = prevId ?? null
-      if (r?.usage) Object.assign(r.usage, { input_tokens: inputTokens, ...(warmup && { output_tokens: 0 }) }).total_tokens = inputTokens + r.usage.output_tokens
+      if (r?.usage && warmup) Object.assign(r.usage, { output_tokens: 0, total_tokens: r.usage.input_tokens })
     }
     const first = res.firstDelta, cut = Math.min(first + 2, events.length - 1)
     if (sc.slowHeaders && !(await sleep(state.cfg.stallMs))) return
