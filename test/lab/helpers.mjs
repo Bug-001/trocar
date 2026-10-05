@@ -9,11 +9,11 @@ export const sha12 = (s) => createHash('sha256').update(s).digest('hex').slice(0
 
 // One request through node's own HTTP client, which doubles as a check that our framing is sound.
 // Resolves with the decoded body and the body chunks as the client saw them.
-export function request(base, path, body, { method = body == null ? 'GET' : 'POST', headers = {}, agent, ca } = {}) {
+export function request(base, path, body, { method = body == null ? 'GET' : 'POST', headers = {}, agent, ca, servername } = {}) {
   const u = new URL(path, base)
   const mod = u.protocol === 'https:' ? https : http
   return new Promise((resolve, reject) => {
-    const req = mod.request(u, { method, agent, ca, headers: { 'content-type': 'application/json', ...headers } }, (res) => {
+    const req = mod.request(u, { method, agent, ca, servername, headers: { 'content-type': 'application/json', ...headers } }, (res) => {
       const chunks = []
       res.on('data', (c) => chunks.push(c))
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks), chunks, reused: req.reusedSocket }))

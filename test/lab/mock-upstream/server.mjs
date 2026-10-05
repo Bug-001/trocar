@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
 import path from 'node:path'
+import tls from 'node:tls'
 import { once } from 'node:events'
 import { parseRequest } from './http1.mjs'
 import { SCENARIOS, isScenario, pickScenario, errorFor } from './scenarios.mjs'
@@ -58,13 +59,16 @@ function serveConn(conn, state, record) {
   const { sock } = conn
   sock.on('data', (d) => { conn.bytesIn += d.length; buf = Buffer.concat([buf, d]); pump() })
   sock.on('error', (e) => { conn.error = e.code || e.message })
+  sock.on('secure', () => { conn.secured = true })
   sock.on('close', () => {
     conn.closed = true
     for (const wake of conn.wakers) wake()
     // after any in-flight request entry, which is recorded once its sleeper wakes
     setImmediate(() => record({
       type: 'conn', ts: iso(), conn_id: conn.id, tls: conn.tls, requests: seq, bytes_in: conn.bytesIn, bytes_out: conn.bytesOut,
-      ...(buf.length ? { leftover_in_b64: buf.toString('base64') } : {}), ...(conn.error ? { error: conn.error } : {}),
+      ...(buf.length ? { leftover_in_b64: buf.toString('base64') } : {}),
+      // a client that rejects our cert usually just hangs up (TLS 1.3), so say the handshake never finished
+      ...(conn.error || (conn.tls && !conn.secured) ? { error: conn.error || 'tls handshake not completed' } : {}),
     }))
   })
   async function pump() {
@@ -99,8 +103,8 @@ async function handle(conn, req, raw, seq, state, record) {
       const t = setTimeout(() => { conn.wakers.delete(wake); resolve(!conn.closed) }, ms)
       conn.wakers.add(wake)
     }),
-    end() { conn.ended = true; conn.sock.end() }, // FIN
-    reset() { conn.ended = true; conn.raw.resetAndDestroy() }, // RST
+    end() { conn.ended = true; conn.sock.end() }, // FIN (after close_notify on TLS)
+    reset() { conn.ended = true; conn.raw.resetAndDestroy() }, // RST on the TCP socket, under any TLS
   }
   let meta
   try { meta = await dispatch(req, io, state) } catch (e) { meta = { error: String(e?.stack || e), complete: false }; conn.raw.destroy() }
@@ -145,7 +149,7 @@ function adminServer(state, logFile) {
 
 // delays: { stallMs, dripMs } — how long stall-after-first / slow-headers hold (30 s like a hung
 // provider; tests shrink it) and the gap between slow-drip deltas. Also POST /__mock/config.
-export async function startMockUpstream({ host = '127.0.0.1', port = 0, adminPort = 0, logDir = null, delays = {} } = {}) {
+export async function startMockUpstream({ tls: tlsOpts = null, host = '127.0.0.1', port = 0, adminPort = 0, logDir = null, delays = {} } = {}) {
   const state = { queue: [], log: [], cfg: { stallMs: 30000, dripMs: 250, ...delays } }
   const logFile = logDir ? path.join(logDir, 'log.ndjson') : null
   if (logFile) { fs.mkdirSync(logDir, { recursive: true }); fs.writeFileSync(logFile, '') }
@@ -153,11 +157,15 @@ export async function startMockUpstream({ host = '127.0.0.1', port = 0, adminPor
   // otherwise hold every request and response in memory.
   const record = (e) => { if (logFile) fs.appendFileSync(logFile, JSON.stringify(e) + '\n'); else state.log.push(e) }
 
+  // TLS is layered by hand over the plain net socket, so a fault can still RST the TCP connection
+  // underneath; ALPN offers http/1.1 only, so h2-capable clients fall back.
+  const secureContext = tlsOpts && tls.createSecureContext({ key: tlsOpts.key, cert: tlsOpts.cert })
   const raws = new Set()
   let nextId = 0
   const server = net.createServer((raw) => {
     raws.add(raw); raw.on('close', () => raws.delete(raw)); raw.setNoDelay(true)
-    serveConn({ id: ++nextId, raw, sock: raw, tls: false, bytesIn: 0, bytesOut: 0, closed: false, ended: false, wakers: new Set() }, state, record)
+    const sock = secureContext ? new tls.TLSSocket(raw, { isServer: true, secureContext, ALPNProtocols: ['http/1.1'] }) : raw
+    serveConn({ id: ++nextId, raw, sock, tls: !!secureContext, bytesIn: 0, bytesOut: 0, closed: false, ended: false, wakers: new Set() }, state, record)
   })
   const admin = adminServer(state, logFile)
   server.listen(port, host); admin.listen(adminPort, '127.0.0.1')
@@ -165,7 +173,7 @@ export async function startMockUpstream({ host = '127.0.0.1', port = 0, adminPor
   const actual = server.address().port
   const h = host.includes(':') ? `[${host}]` : host
   return {
-    url: `http://${h}:${actual}`, port: actual,
+    url: `${secureContext ? 'https' : 'http'}://${h}:${actual}`, port: actual,
     adminUrl: `http://127.0.0.1:${admin.address().port}`, state,
     async close() {
       for (const s of raws) s.destroy()
