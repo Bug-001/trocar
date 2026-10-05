@@ -492,7 +492,12 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         // A malformed or ambiguous ref must come back as a stated failure, never as empty text: the
         // board renders this into a body, and a silent blank reads as "the model saw nothing here"
         // (invariant 4).
-        try { out = resolve.detail(ref); }
+        // A miss may be a record captured after the index was built (a live source): bring the index
+        // up to date — only new bytes are read — and ask once more. Hits never pay for this.
+        try {
+          out = resolve.detail(ref);
+          if (out && out.status === 'absent' && typeof resolve.refresh === 'function' && await resolve.refresh()) out = resolve.detail(ref);
+        }
         catch (e) { return sendJson(res, 409, { error: `ref is ambiguous or the source is corrupt: ${(e && e.message) || e}` }); }
         if (!out) return sendJson(res, 404, { error: 'ref not found in any capture root', ref });
         if (out.status !== 'ok') {
@@ -510,7 +515,11 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
       if ((m = p.match(/^\/api\/call\/([^/]+)\/context$/))) {
         if (!db) return noDb(res);
         const id = decodeURIComponent(m[1]);
-        const blocks = await callContext(db.connection, id, resolve);
+        let blocks = await callContext(db.connection, id, resolve);
+        // the store may have been built from records captured after this server indexed its sources
+        if (blocks.some((b) => b.source_status === 'absent') && typeof resolve.refresh === 'function' && await resolve.refresh()) {
+          blocks = await callContext(db.connection, id, resolve);
+        }
         if (!blocks.length) return notFound(res, 'call not found');
         return sendJson(res, 200, { call_id: id, blocks, source_resolved: resolve.size ? true : false });
       }

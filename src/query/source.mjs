@@ -60,18 +60,22 @@ function classifyFidelity(raw) {
 const OUT = (status, reason = null, text = null, fidelity = null) => ({ status, reason, text, fidelity });
 const COMPRESSED = new Set(['.gz', '.zst', '.bz2', '.xz', '.zip', '.br', '.lz4']);
 
-// Byte-scan a file line-by-line, recording each record's { offset, length } WITHOUT retaining any
-// body. Peak memory ≈ one chunk + one line + the index (O(records) small entries).
-async function indexFile(file, idx) {
+// Byte-scan a file line-by-line from byte `from`, recording each record's { offset, length } WITHOUT
+// retaining any body. Peak memory ≈ one chunk + one line + the index (O(records) small entries).
+// Returns { size, ino, end, tail }: `end` = the offset just past the last NEWLINE-terminated line,
+// where a refresh resumes; `tail` = what the unterminated last line (a record still being written,
+// or a file without a final newline) did to the index, so a refresh can undo it and re-read it whole.
+async function indexFile(file, idx, from = 0) {
   const base = path.basename(file);
   const fd = await open(file, 'r');
   try {
-    const size = (await fd.stat()).size;
+    const st = await fd.stat();
+    const size = st.size;
     const CHUNK = 1 << 20;
     const buf = Buffer.allocUnsafe(CHUNK);
-    let filePos = 0, lineStart = 0, pending = Buffer.alloc(0);
+    let filePos = from, lineStart = from, pending = Buffer.alloc(0);
     const record = (lineBuf) => {
-      if (!lineBuf.length) return;
+      if (!lineBuf.length) return null;
       // key by String(id): parseTextRef always yields recordId as a string, so coerce to match
       // regardless of whether the harness minted numeric or string record ids.
       try {
@@ -92,10 +96,13 @@ async function indexFile(file, idx) {
           idx.qual.set(qk, prev === undefined ? loc
             : { dup: true, dupCount: (prev.dupCount || 1) + 1, file });
           // bare-id fallback: first writer wins, a second file poisons the entry to AMBIGUOUS
-          idx.byId.set(id, idx.byId.has(id) ? AMBIGUOUS : loc);
+          const prevB = idx.byId.get(id), setB = prevB === undefined ? loc : AMBIGUOUS;
+          idx.byId.set(id, setB);
+          return { kind: 'indexed', qk, id, prev, prevB, setB };
         } else {
           // parseable, but nothing to key on — indexable content silently dropped. Report it.
           idx.scan.unidentifiedLines++;
+          return { kind: 'unidentified' };
         }
       } catch {
         // A corrupt NDJSON line can never be indexed, so it can never surface per-record: the
@@ -103,6 +110,7 @@ async function indexFile(file, idx) {
         // reportable at scan level (invariant 4 — never let a loss be invisible).
         idx.scan.corruptLines++;
         idx.scan.corruptByFile[base] = (idx.scan.corruptByFile[base] || 0) + 1;
+        return { kind: 'corrupt' };
       }
     };
     while (filePos < size) {
@@ -121,8 +129,27 @@ async function indexFile(file, idx) {
       if (segStart < bytesRead) pending = pending.length ? Buffer.concat([pending, buf.subarray(segStart, bytesRead)]) : Buffer.from(buf.subarray(segStart, bytesRead));
       filePos += bytesRead;
     }
-    record(pending); // trailing line without a newline
+    const end = lineStart;
+    const tail = record(pending); // trailing line without a newline (null when the file ends in one)
+    idx.scan.bytesIndexed = (idx.scan.bytesIndexed || 0) + (filePos - from);
+    return { size, ino: st.ino, end, tail };
   } finally { await fd.close(); }
+}
+
+// Take back what an unterminated last line did to the index, before a refresh re-reads it in full
+// (it may have been half a record then, or have since grown). Only the qualified key is exactly
+// restorable — no other file writes `<this file>#<id>`; a bare-id entry is restored only if nothing
+// changed it since, otherwise it stays AMBIGUOUS (refuse rather than guess).
+function undoTail(idx, base, t) {
+  if (!t) return;
+  if (t.kind === 'corrupt') {
+    idx.scan.corruptLines--;
+    if (!--idx.scan.corruptByFile[base]) delete idx.scan.corruptByFile[base];
+  } else if (t.kind === 'unidentified') idx.scan.unidentifiedLines--;
+  else {
+    if (t.prev === undefined) idx.qual.delete(t.qk); else idx.qual.set(t.qk, t.prev);
+    if (idx.byId.get(t.id) === t.setB) { if (t.prevB === undefined) idx.byId.delete(t.id); else idx.byId.set(t.id, t.prevB); }
+  }
 }
 
 // Build resolve(text_ref) -> the block's exact byte slice (or null if unresolvable). Lean: holds a
@@ -139,8 +166,11 @@ export async function buildResolver(source) {
   // or compressed capture is simply INVISIBLE — the "source" shrinks and nobody is told. Keep
   // the same (conservative) selection, but record every entry we declined and why, so the
   // omission is reportable rather than silent.
-  const scan = { files, skipped: [], corruptLines: 0, corruptByFile: {}, unidentifiedLines: 0 };
-  if (statSync(sourcePath).isDirectory()) {
+  const scan = { files, skipped: [], corruptLines: 0, corruptByFile: {}, unidentifiedLines: 0, bytesIndexed: 0 };
+  const isDir = statSync(sourcePath).isDirectory();
+  const listFiles = async (skipped) => {
+    if (!isDir) return [sourcePath];
+    const out = [];
     for (const ent of await readdir(sourcePath, { withFileTypes: true })) {
       const name = ent.name;
       // NOT `ent.isFile()`: readdir(withFileTypes) does not follow symlinks, so isFile() is FALSE
@@ -148,18 +178,22 @@ export async function buildResolver(source) {
       // isFile() here silently dropped a whole harness from the unified board (the live source dir
       // holds codex-capture.ndjson as a symlink) and mislabelled it "not-ndjson". Exclude only what
       // we can positively identify as a directory.
-      if (!ent.isDirectory() && name.endsWith('.ndjson')) { files.push(path.join(sourcePath, name)); continue; }
+      if (!ent.isDirectory() && name.endsWith('.ndjson')) { out.push(path.join(sourcePath, name)); continue; }
+      if (!skipped) continue;
       const reason = ent.isDirectory() ? 'directory'
         : COMPRESSED.has(path.extname(name).toLowerCase()) ? 'compressed'
         : 'not-ndjson';
-      scan.skipped.push({ name, reason });
+      skipped.push({ name, reason });
     }
-  } else files.push(sourcePath);
+    return out;
+  };
+  files.push(...await listFiles(scan.skipped));
 
   // qual: "<streamBasename>#<recordId>" -> { file, offset, length }  (the authoritative key)
   // byId: "<recordId>" -> loc | AMBIGUOUS                            (back-compat fallback only)
   const idx = { qual: new Map(), byId: new Map(), scan };
-  for (const f of files) await indexFile(f, idx);
+  const marks = new Map();     // file -> { size, ino, end, tail } as of its last indexing
+  for (const f of files) marks.set(f, await indexFile(f, idx));
 
   const fds = new Map();       // file -> open fd (reused across resolves)
   const fdFor = (f) => { let fd = fds.get(f); if (fd === undefined) { fd = openSync(f, 'r'); fds.set(f, fd); } return fd; };
@@ -246,6 +280,41 @@ export async function buildResolver(source) {
   resolve.scan = scan;
   resolve.size = idx.qual.size;
   resolve.dispose = () => { for (const fd of fds.values()) try { closeSync(fd); } catch {} fds.clear(); bodyCache.clear(); };
+
+  // LIVE SOURCES (4.4 #10). The index used to be built once, at startup, so under a running
+  // collector a call captured after `asight serve` started was listed by the board but its blocks
+  // came back `absent` — bytes on disk reported missing. refresh() brings the index up to date:
+  // new files are indexed whole; a grown file is indexed from where the last complete line ended
+  // (only the new tail is read, so the cost is the new bytes, not the corpus); a file that shrank
+  // or was replaced (inode changed) is not append-only, so the whole index is rebuilt. Concurrent
+  // callers share one in-flight refresh. Resolves to true when the index changed.
+  let inflight = null;
+  const rebuildAll = async () => {
+    idx.qual.clear(); idx.byId.clear(); marks.clear(); bodyCache.clear();
+    for (const fd of fds.values()) try { closeSync(fd); } catch {}
+    fds.clear();
+    Object.assign(scan, { corruptLines: 0, corruptByFile: {}, unidentifiedLines: 0 });
+    files.length = 0; files.push(...await listFiles(null));
+    for (const f of files) marks.set(f, await indexFile(f, idx));
+  };
+  const doRefresh = async () => {
+    let now;
+    try { now = await listFiles(null); } catch { return false; } // root unreadable: the loader reports it
+    let changed = false;
+    for (const f of now) {
+      let st; try { st = statSync(f); } catch { continue; } // vanished between listing and stat
+      const m = marks.get(f);
+      if (!m) { files.push(f); marks.set(f, await indexFile(f, idx)); changed = true; continue; }
+      if (st.ino !== m.ino || st.size < m.size) { await rebuildAll(); changed = true; break; }
+      if (st.size === m.size) continue;
+      undoTail(idx, path.basename(f), m.tail);
+      marks.set(f, await indexFile(f, idx, m.end));
+      changed = true;
+    }
+    if (changed) { bodyCache.clear(); resolve.size = idx.qual.size; }
+    return changed;
+  };
+  resolve.refresh = () => inflight || (inflight = doRefresh().finally(() => { inflight = null; }));
   return resolve;
 }
 
@@ -274,14 +343,16 @@ async function buildMultiResolver(roots) {
     if (lastErr) throw lastErr;   // an ambiguity/corruption report must not be swallowed by a miss
     return null;
   };
-  resolve.scan = {
+  const scanOf = () => ({
     files: parts.flatMap((p) => (p.scan && p.scan.files) || []),
     skipped: parts.flatMap((p) => (p.scan && p.scan.skipped) || []),
     corruptLines: parts.reduce((n, p) => n + ((p.scan && p.scan.corruptLines) || 0), 0),
     corruptByFile: Object.assign({}, ...parts.map((p) => (p.scan && p.scan.corruptByFile) || {})),
     unidentifiedLines: parts.reduce((n, p) => n + ((p.scan && p.scan.unidentifiedLines) || 0), 0),
+    bytesIndexed: parts.reduce((n, p) => n + ((p.scan && p.scan.bytesIndexed) || 0), 0),
     unreadableRoots: unreadable,
-  };
+  });
+  resolve.scan = scanOf();
 
   // A MISS IS AN OBJECT, SO "TRUTHY" IS NOT "FOUND".
   //
@@ -306,7 +377,14 @@ async function buildMultiResolver(roots) {
   // The server reports `source_resolved` as `resolve.size ? true : false` (RFC 4.4:98). With no size
   // the post-D27 DEFAULT configuration announced its capture source was unreadable while serving from
   // it. Sum the roots: the resolved corpus really is all of them.
-  resolve.size = parts.reduce((n, p) => n + (typeof p.size === 'number' ? p.size : 0), 0);
+  const sizeOf = () => parts.reduce((n, p) => n + (typeof p.size === 'number' ? p.size : 0), 0);
+  resolve.size = sizeOf();
+  resolve.refresh = async () => {
+    let changed = false;
+    for (const p of parts) if (typeof p.refresh === 'function' && await p.refresh()) changed = true;
+    if (changed) { resolve.size = sizeOf(); resolve.scan = scanOf(); }
+    return changed;
+  };
 
   // …and teardown. The old loop forwarded 'close', but a resolver's teardown is `dispose`, so no root
   // was ever closed and every indexed file's fd leaked for the life of the process. Idempotent and
