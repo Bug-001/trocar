@@ -32,6 +32,9 @@ test('nodeRoots: without the API, Node\'s bundled roots plus this process\'s NOD
   const errors = []
   assert.equal(nodeRoots({ api: null, env: { NODE_EXTRA_CA_CERTS: '/gone.pem' }, read: () => { throw new Error('ENOENT: gone') }, errors }).length, tls.rootCertificates.length)
   assert.deepEqual(errors, ['NODE_EXTRA_CA_CERTS /gone.pem: ENOENT: gone'], 'an unreadable NODE_EXTRA_CA_CERTS is reported')
+  const errors22 = [] // Node ≥ 22.15: getCACertificates('default') already holds what it could read; the failure is still ours to report
+  assert.equal(nodeRoots({ api: (t) => (t === 'default' ? ['d'] : []), env: { NODE_EXTRA_CA_CERTS: '/gone.pem' }, read: () => { throw new Error('ENOENT: gone') }, errors: errors22 }).join(), 'd')
+  assert.deepEqual(errors22, ['NODE_EXTRA_CA_CERTS /gone.pem: ENOENT: gone'], 'reported on the API path too (fresh-context review)')
   const roots = nodeRoots({ api: null, env: { NODE_EXTRA_CA_CERTS: '/x.pem' }, read: (f) => (f === '/x.pem' ? x.certPem : '') })
   assert.equal(roots.length, tls.rootCertificates.length + 1); assert.equal(roots.at(-1), x.certPem.replace(/\r\n/g, '\n').trim())
   assert.equal(nodeRoots({ api: (t) => (t === 'default' ? ['d'] : []) }).join(), 'd')

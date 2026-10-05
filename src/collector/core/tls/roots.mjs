@@ -40,9 +40,11 @@ export function systemRoots({ api = tls.getCACertificates, files = SYSTEM_BUNDLE
 /** nodeRoots({api, env, read, errors}) → PEM[]: Node's bundled roots plus NODE_EXTRA_CA_CERTS of this
  *  process; a read failure is pushed to `errors`. */
 export function nodeRoots({ api = tls.getCACertificates, env = process.env, read = readText, errors = [] } = {}) {
-  if (typeof api === 'function') { try { return api('default') } catch { /* fall back to the pieces */ } }
+  // read on both paths: with the API, Node already merged what it could and only warned on stderr, so an
+  // unreadable file would otherwise go unrecorded (D38)
   let extra = []
   if (env.NODE_EXTRA_CA_CERTS) { try { extra = pems(read(env.NODE_EXTRA_CA_CERTS)) } catch (e) { errors.push(`NODE_EXTRA_CA_CERTS ${env.NODE_EXTRA_CA_CERTS}: ${msg(e)}`) } }
+  if (typeof api === 'function') { try { return api('default') } catch { /* fall back to the pieces */ } }
   return [...tls.rootCertificates, ...extra]
 }
 
