@@ -154,6 +154,26 @@ helper or engine error, a failed heartbeat or attach, an envelope that could not
 judged untrusted — each leaves a line with its reason in `~/.asight/collector/flows/`, and
 `asight collector status` prints the recent ones, also when the daemon is not running.
 
+## Shrinking the raw logs — sealed files (D35)
+
+Raw captures grow with the square of a conversation (every call re-sends the whole history), so they
+dwarf the agent's own logs. A **closed** capture file can be *sealed*: re-encoded losslessly into a
+`<stream>.<NNNN>.sealed` file (per-record byte deltas + brotli frames + an index) that is typically a
+few percent of the original. Every reader — the board, `asight etl`, the "view verbatim bytes" panel —
+reads sealed files directly and shows exactly the same records; the original is deleted only after
+every record and the whole file are proven to decode back byte for byte.
+
+```sh
+asight raw seal --legacy ~/.asight/sessions        # pre-2026-10 files: refuses while anything writes them; keeps originals
+asight raw verify ~/.asight/sessions               # decode every sealed copy, compare byte for byte with its original
+asight raw seal --legacy ~/.asight/sessions --delete-original   # deletes each original only after that check
+asight raw export <session-id>                     # back to plain NDJSON in ~/.asight/export/ (0600)
+asight raw journal                                 # every refusal, failure and deletion, with its reason
+```
+
+A capture file that is still being written is never sealed. Sealed and exported files hold the same
+plaintext and credentials as the capture and are created owner-only (0600); `asight doctor` checks them.
+
 ## Claude Desktop — the one environment-dependent case
 
 Desktop force-overwrites its base URL and ignores `settings.json`, so it cannot be steered by config.
@@ -199,8 +219,10 @@ your machine — every path above still is. `asight desktop off` restores the co
 ```sh
 asight capture [--port 8899] [--target <url>] [--out <ndjson>] [--upstream <proxy>] [--raw-sse]
 asight serve   [--port 9800] [--source <ndjson|dir>] [--db <path>] [--control]
-asight etl <ndjson|dir> [--rebuild]
+asight etl <ndjson|sealed|dir> [--rebuild]
 asight on [--proxy <url>] | off [--remove-ca] | uninstall | verify | doctor
+asight raw seal <closed-shard> | seal --legacy <file|dir> [--delete-original]
+asight raw verify <sealed|dir> [--against <original>] | export <session|file.sealed> | journal
 asight monitor {on|off|status}
 asight mitm [--port 9899] [--host api.anthropic.com]
 asight desktop {on|off|status}        # macOS + Clash Verge
