@@ -190,12 +190,12 @@ const anchorOf = (line) => { const i = line.indexOf(BODY_KEY); return i < 0 ? 0 
 // Encoder heuristic (SHOULD, 4.2): among the last CANDIDATES records, the one whose bytes share the
 // longest common prefix with this one (measured from the body), never one already CHAIN_MAX deep.
 // Ring entries: { idx, depth, line }. Ties go to the newest. Returns null when nothing is eligible.
-export function pickPredecessor(ring, line) {
+export function pickPredecessor(ring, line, chainMax = CHAIN_MAX) {
   const anchor = anchorOf(line);
   let best = null, bestLen = -1;
   for (let r = ring.length - 1; r >= 0 && r >= ring.length - CANDIDATES; r--) {
     const c = ring[r];
-    if (c.depth >= CHAIN_MAX) continue;
+    if (c.depth >= chainMax) continue;
     if (c.anchor === undefined) c.anchor = anchorOf(c.line);
     const ca = anchor && c.anchor ? c.anchor : 0, la = anchor && c.anchor ? anchor : 0;
     if (bestLen > 0) {                                  // cheap reject: must match the best prefix first

@@ -1,0 +1,90 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createSealWriter } from '../../src/raw/writer.mjs';
+import { openSealed, createFrameCache, AMBIGUOUS } from '../../src/raw/reader.mjs';
+
+// The sealed container (4.2 §原始层封存 「分帧」「文件布局」「读」): header · brotli frames · index tail
+// · fixed trailer. These tests write lines through the real writer and read them back through the
+// real reader; the bytes MUST come back identical, and a damaged file MUST refuse to open or read.
+
+const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'asight-sealfile-'));
+function rng(seed) { let s = seed >>> 0; return () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 2 ** 32); }
+const text = (r, n) => { let s = ''; for (let i = 0; i < n; i++) s += 'abcdefghij klmn'[Math.floor(r() * 15)]; return s; };
+
+// A growing conversation, like the real streams: each request re-sends the history plus a turn.
+function lines(n, seed = 1) {
+  const r = rng(seed); const out = []; let hist = '';
+  for (let i = 0; i < n; i++) {
+    hist += text(r, 300);
+    out.push(Buffer.from(JSON.stringify({ ts: `2026-10-06T00:00:${String(i % 60).padStart(2, '0')}Z`, req_headers: { a: 'b' }, req_body: JSON.stringify({ messages: [hist] }), resp: { t: text(r, 50) }, id: `req_${i}` }) + '\n'));
+  }
+  return out;
+}
+
+function writeFile(dir, ls, opts = {}, metaOf = (i) => ({ id: `req_${i}`, stream: 'calls.ndjson', shard: 0, lineNo: i })) {
+  const file = path.join(dir, 'calls.ndjson.0001.sealed');
+  const fd = fs.openSync(file, 'wx', 0o600);
+  const w = createSealWriter({ fd, ...opts });
+  ls.forEach((l, i) => w.add(l, metaOf(i)));
+  w.finish([{ name: 'calls.ndjson', sha256: '00'.repeat(32), length: 0, lines: ls.length }]);
+  fs.closeSync(fd);
+  return file;
+}
+
+test('every record reads back byte-identical, by random access and sequentially', () => {
+  const dir = tmp();
+  try {
+    const ls = lines(120);
+    const file = writeFile(dir, ls, { frameBytes: 16 * 1024 });
+    const sf = openSealed(file);
+    assert.equal(sf.count, ls.length);
+    assert.ok(sf.frames.length > 3, 'a small frame size must produce several frames');
+    assert.ok(sf.deltas > ls.length / 2, `only ${sf.deltas} of ${ls.length} records were deltas`);
+    for (const i of [119, 0, 57, 3, 118, 60]) assert.ok(sf.lineAt(i).equals(ls[i]), `record ${i} differs`);
+    let n = 0;
+    for (const { i, line } of sf.lines()) { assert.ok(line.equals(ls[i]), `sequential record ${i} differs`); n++; }
+    assert.equal(n, ls.length);
+    sf.close();
+    assert.equal(fs.statSync(file).size < ls.reduce((a, b) => a + b.length, 0) / 4, true, 'sealed file is not smaller than raw');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('frames are cut at record boundaries; a record larger than a frame sits alone', () => {
+  const dir = tmp();
+  try {
+    const r = rng(9);
+    const ls = [Buffer.from(text(r, 3000) + '\n'), Buffer.from(text(r, 70000) + '\n'), Buffer.from(text(r, 3000) + '\n')];
+    const sf = openSealed(writeFile(dir, ls, { frameBytes: 8192 }));
+    const big = sf.entry(1);
+    assert.equal(sf.records.filter((_, i) => sf.entry(i).frame === big.frame).length, 1, 'the oversized record shares its frame');
+    for (let i = 0; i < ls.length; i++) assert.ok(sf.lineAt(i).equals(ls[i]));
+    sf.close();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the frame LRU stays within its bound under random reads', () => {
+  const dir = tmp();
+  try {
+    const ls = lines(80);
+    const cache = createFrameCache(2);
+    const sf = openSealed(writeFile(dir, ls, { frameBytes: 8192 }), { frameCache: cache });
+    for (let k = 0; k < 200; k++) { const i = (k * 37) % ls.length; assert.ok(sf.lineAt(i).equals(ls[i])); assert.ok(cache.size <= 2); }
+    sf.close();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a duplicated (stream, id) is ambiguous, never resolved to one of them', () => {
+  const dir = tmp();
+  try {
+    const ls = lines(4);
+    const sf = openSealed(writeFile(dir, ls, {}, (i) => ({ id: i < 2 ? 'req_dup' : `req_${i}`, stream: 'calls.ndjson', shard: 0, lineNo: i })));
+    assert.equal(sf.find('calls.ndjson', 'req_dup'), AMBIGUOUS);
+    assert.equal(sf.find('calls.ndjson', 'req_3'), 3);
+    assert.equal(sf.find('other.ndjson', 'req_3'), -1);
+    sf.close();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
