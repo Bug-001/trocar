@@ -157,9 +157,9 @@ function undoTail(idx, base, t) {
 // `source` may be one path or SEVERAL roots (D27: the new home plus the legacy one that still holds
 // the user's captures). Scanning only the first would make raw-byte refs from the other root
 // unresolvable — the block viewer would report "record not found" for bytes that are on disk.
-export async function buildResolver(source) {
+export async function buildResolver(source, { retryMs = 30000 } = {}) {
   const roots = (Array.isArray(source) ? source : [source]).filter(Boolean);
-  if (roots.length > 1) return buildMultiResolver(roots);
+  if (roots.length > 1) return buildMultiResolver(roots, { retryMs });
   const sourcePath = roots[0];
   const files = [];
   // scan (audit 2026-07-19): the directory walk is non-recursive and .ndjson-only, so a nested
@@ -203,16 +203,18 @@ export async function buildResolver(source) {
     if (!scan.skipped.some((x) => x.root === root && x.name === name && x.reason === reason)) scan.skipped.push({ root, name, reason, ...(e ? { error: (e && e.code) || String(e) } : {}) });
   }
   const unnote = (pred) => { for (let i = scan.skipped.length - 1; i >= 0; i--) if (TRANSIENT.has(scan.skipped[i].reason) && pred(scan.skipped[i])) scan.skipped.splice(i, 1); };
-  // A failed file is retried only when its stat changes (ino, size, mtime, ctime: a chmod changes
-  // ctime). Retrying on every refresh turned a recurring read error into a full rebuild per poll.
-  const failedAt = new Map(); // file -> { sig, e } of its last failed read
+  // A failed file is retried when its stat changes (ino, size, mtime, ctime: a chmod changes ctime)
+  // or `retryMs` after its last attempt (an error can clear with no stat change: a one-off EIO, a
+  // remount). Retrying on every refresh turned a recurring read error into a full rebuild per poll.
+  const failedAt = new Map(); // file -> { sig, e, at } of its last failed read
   const statSig = (f) => { try { const st = statSync(f); return `${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`; } catch { return 'gone'; } };
-  const unchangedFailure = (f) => { const x = failedAt.get(f); return !!x && x.sig === statSig(f); };
+  const unchangedFailure = (f) => { const x = failedAt.get(f); return !!x && x.sig === statSig(f) && Date.now() - x.at < retryMs; };
   const indexSafe = async (f, from = 0) => {
+    const sig = statSig(f); // before the read: a change that lands during it must not be absorbed
     try { const mk = await indexFile(f, idx, from); failedAt.delete(f); unnote((x) => x.root === path.dirname(f) && x.name === path.basename(f)); return mk; }
     catch (e) {
       if (!(e && e.syscall === 'open')) dirty = true;
-      failedAt.set(f, { sig: statSig(f), e });
+      failedAt.set(f, { sig, e, at: Date.now() });
       note(path.dirname(f), path.basename(f), 'unreadable', e);
       return null;
     }
@@ -333,12 +335,12 @@ export async function buildResolver(source) {
   const doRefresh = async () => {
     let now;
     try { now = await listFiles(null); } catch (e) { note(path.dirname(sourcePath), path.basename(sourcePath), 'unreadable', e); return false; }
-    unnote((x) => x.root === path.dirname(sourcePath) && x.name === path.basename(sourcePath));
+    if (isDir) unnote((x) => x.root === path.dirname(sourcePath) && x.name === path.basename(sourcePath)); // the listing note; a file source has none
     unnote((x) => x.reason === 'vanished'); // a pass's own observation; the board's loader reports it live
     if (dirty) { await rebuildAll(); bodyCache.clear(); resolve.size = idx.qual.size; return true; }
     let changed = false;
     for (const f of now) {
-      if (unchangedFailure(f)) continue; // still noted; tried again once it changes
+      if (unchangedFailure(f)) { note(path.dirname(f), path.basename(f), 'unreadable', failedAt.get(f).e); continue; } // tried again once it changes or retryMs passes
       let st; try { st = statSync(f); } catch (e) { note(path.dirname(f), path.basename(f), 'vanished', e); continue; }
       const m = marks.get(f);
       if (!m) { const mk = await indexSafe(f); if (mk) { files.push(f); marks.set(f, mk); changed = true; } continue; }
@@ -360,7 +362,7 @@ export async function buildResolver(source) {
 // Several roots: index each independently and try them in order. Order matters only for a bare-id
 // fallback, and the qualified key (`<file>#<id>`) is unaffected, so this cannot invent a winner
 // among collisions — a ref that is ambiguous within a root still throws from that root's resolver.
-async function buildMultiResolver(roots) {
+async function buildMultiResolver(roots, opts) {
   const parts = [];
   const unreadable = [];
   for (const r of roots) {
@@ -370,7 +372,7 @@ async function buildMultiResolver(roots) {
     // root, never the whole board: throwing here takes down `asight serve` at startup and the user
     // sees a crash where they should see the sessions that ARE readable (invariant 2 — a capture on
     // disk stays readable). What is dropped is recorded so `scan` can report it rather than hide it.
-    try { parts.push(Object.assign(await buildResolver(r), { rootPath: r })); }
+    try { parts.push(Object.assign(await buildResolver(r, opts), { rootPath: r })); }
     catch (e) { unreadable.push({ root: r, reason: (e && e.message) || String(e) }); }
   }
   const resolve = (...args) => {

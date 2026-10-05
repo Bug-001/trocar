@@ -128,7 +128,7 @@ async function serveStatic(res, urlPath) {
 // the fix.
 // size.mtime.ctime: ctime too, because a permission fix (chmod) changes nothing else, and a file that
 // could not be read must be retried — and its session views rebuilt — once it can be.
-const fileSig = (st) => `${st.size}.${Math.round(st.mtimeMs)}.${Math.round(st.ctimeMs)}`;
+const fileSig = (st) => `${st.size}.${Math.round(st.mtimeMs)}.${st.ctimeMs}`;
 export function sourceFiles(sourcePath) {
   const st = fssync.statSync(sourcePath); // throws if missing → caller resets sig
   if (!st.isDirectory()) return { files: [sourcePath], skipped: [], sig: fileSig(st) };
@@ -207,9 +207,9 @@ function completeEnd(f, from, size) {
 // ~/.asight the user's existing captures still sit under ~/.atrace/asight, and they must keep showing
 // up on the board — a rename that quietly stops listing three gigabytes of history would be an
 // invariant-2 loss with no file deleted and no error raised.
-function makeRecordLoader(source) {
+function makeRecordLoader(source, { retryMs = 30000 } = {}) {
   const roots = (Array.isArray(source) ? source : [source]).filter(Boolean);
-  let cache = { sig: null, records: [], passSkips: [] };
+  let cache = { sig: null, records: [], passSkips: [], at: 0, loadSig: null };
   // per-file watermark: path -> { size, records } — the byte offset already consumed and what it
   // yielded, so a refresh parses only the tail.
   let marks = new Map();
@@ -232,9 +232,13 @@ function makeRecordLoader(source) {
       load.sig = '0';
       throw new Error(`capture source unreadable (${roots.join(', ')}): ${String((e && e.message) || e)}`);
     }
-    load.sig = sig;
-    // what the last pass could not read stays reported for as long as its result is served
-    if (cache.sig === sig) { load.skipped.push(...cache.passSkips); return cache.records; }
+    // What the last pass could not read stays reported for as long as its result is served. A pass
+    // with failures is retried when the source's stat changes (the sig) or `retryMs` after it ran (an
+    // error can clear with no stat change). Its load.sig is tagged, so session views built from it
+    // are rebuilt once the failure clears.
+    if (cache.sig === sig && !(cache.passSkips.length && Date.now() - cache.at >= retryMs)) {
+      load.sig = cache.loadSig; load.skipped.push(...cache.passSkips); return cache.records;
+    }
 
     // INCREMENTAL: read only the bytes that arrived since last time (spec 4.2:49).
     //
@@ -294,7 +298,9 @@ function makeRecordLoader(source) {
     marks = nextMarks;   // files no longer listed drop out, releasing their records
     load.resets = resets; load.pending = pending;
     load.corrupt = Object.fromEntries([...marks].filter(([, m]) => m.corrupt).map(([f, m]) => [f, m.corrupt]));
-    cache = { sig, records, passSkips };
+    const at = Date.now(), loadSig = passSkips.length ? `${sig}|unread@${at}` : sig;
+    cache = { sig, records, passSkips, at, loadSig };
+    load.sig = loadSig;
     load.skipped.push(...passSkips);
     return records;
   };
@@ -370,7 +376,7 @@ async function handleControl(req, res, { p, csrf, captureTarget, proxyUrl, deps 
 
 export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null, enrich = enrichClaude,
   control = false, captureTarget = process.env.ASIGHT_CAPTURE_TARGET || 'https://api.anthropic.com',
-  proxyUrl = process.env.ASIGHT_PROXY_URL || 'http://127.0.0.1:8899', controlDeps = {} } = {}) {
+  proxyUrl = process.env.ASIGHT_PROXY_URL || 'http://127.0.0.1:8899', controlDeps = {}, readRetryMs = 30000 } = {}) {
   // The SQL family is OPTIONAL — a board with no DuckDB store is a normal, fully-working state.
   // But "the store was never built" and "the store is BROKEN" are different truths, and collapsing
   // them (a bare catch → db=null → 404 "no analytics db") made every corruption, permission problem
@@ -386,8 +392,8 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
   // 503, not 404: the store is a dependency that IS configured and IS failing — a retryable outage,
   // not an absence. Carries the underlying reason so the board's {error} banner names the real cause.
   const noDb = (res) => (dbError ? sendJson(res, 503, { error: dbError }) : notFound(res, 'no analytics db'));
-  const resolve = (Array.isArray(sourcePath) ? sourcePath.length : sourcePath) ? await buildResolver(sourcePath) : () => null;
-  const loadRecords = makeRecordLoader(sourcePath);
+  const resolve = (Array.isArray(sourcePath) ? sourcePath.length : sourcePath) ? await buildResolver(sourcePath, { retryMs: readRetryMs }) : () => null;
+  const loadRecords = makeRecordLoader(sourcePath, { retryMs: readRetryMs });
 
   // ── ARCHIVE LAYER (per-session shards + precomputed meta) ────────────────────
   // The reason `asight serve` could open a single session but never the whole capture: /api/projects

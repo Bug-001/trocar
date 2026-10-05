@@ -120,3 +120,53 @@ test('a single-file source that cannot be read is listed once, under its own dir
   const pj = await projects(t, f);
   assert.deepEqual(pj.source.skipped.filter((x) => x.attention).map((x) => [x.root, x.name, x.reason]), [[dir, 'cap.ndjson', 'unreadable']]);
 });
+
+// Fault injection: `fs/promises.open` (the block index) and `fs.openSync` (the loader's line-end scan)
+// throw for one file name while `failing()` says so. Restored after the test.
+async function injectFaults(t, name, failing) {
+  const { createRequire, syncBuiltinESMExports } = await import('node:module');
+  const req = createRequire(import.meta.url), fsp = req('fs/promises'), fsc = req('fs');
+  const realOpen = fsp.open, realOpenSync = fsc.openSync, eio = () => Object.assign(new Error('EIO: i/o error, read'), { code: 'EIO', syscall: 'read' });
+  fsp.open = async (p, ...rest) => { const fh = await realOpen(p, ...rest); if (path.basename(String(p)) === name && failing('index')) fh.read = async () => { throw eio(); }; return fh; };
+  fsc.openSync = (p, ...rest) => { if (path.basename(String(p)) === name && failing('loader')) throw eio(); return realOpenSync(p, ...rest); };
+  syncBuiltinESMExports();
+  t.after(() => { fsp.open = realOpen; fsc.openSync = realOpenSync; syncBuiltinESMExports(); });
+}
+
+test('a single-file source whose block index keeps failing stays reported on every poll', async (t) => {
+  const dir = tmp(t), f = path.join(dir, 'cap.ndjson');
+  fs.writeFileSync(f, env('c-1', 'C'));
+  await injectFaults(t, 'cap.ndjson', (who) => who === 'index');
+  const { server } = await createServer({ dbPath: '/nonexistent-db', sourcePath: f });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => server.close());
+  for (let i = 0; i < 3; i++) {
+    const pj = await get(server.address().port, '/api/projects');
+    assert.deepEqual(pj.source.skipped.filter((x) => x.attention).map((x) => [x.name, x.reason, x.error]), [['cap.ndjson', 'unreadable', 'EIO']], `poll ${i}`);
+  }
+});
+
+test('a read error that clears with no stat change is retried after the retry window: sessions, views and the bar recover', async (t) => {
+  const dir = tmp(t);
+  fs.writeFileSync(path.join(dir, 'a.ndjson'), env('a-1', 'A'));
+  fs.writeFileSync(path.join(dir, 'b.ndjson'), env('b-1', 'A')); // the same session's next call, in the failing file
+  let broken = true;
+  await injectFaults(t, 'b.ndjson', () => broken);
+  const { server } = await createServer({ dbPath: '/nonexistent-db', sourcePath: dir, readRetryMs: 150 });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => server.close());
+  const port = server.address().port;
+  const calls = async () => (await get(port, '/api/projects')).projects.flatMap((p) => p.sessions).map((s) => s.calls);
+  const steps = async () => (await get(port, '/api/session?id=A&cursor=0&limit=60')).analyzed.steps;
+  assert.deepEqual(await calls(), [1]);
+  assert.deepEqual((await steps()).map((x) => x.id), ['a-1'], 'a view is built (and memoized) while b.ndjson fails');
+  broken = false; // the disk recovers; nothing about the file changes
+  assert.deepEqual(await calls(), [1], 'inside the window the failed pass is served, not retried');
+  await new Promise((r) => setTimeout(r, 200));
+  assert.deepEqual(await calls(), [2]);
+  assert.deepEqual((await get(port, '/api/projects')).source.skipped.filter((x) => x.attention), []);
+  const view = await steps();
+  assert.deepEqual(view.map((x) => x.id), ['a-1', 'b-1'], 'the memoized view is rebuilt, not served from the failed pass');
+  const b = await get(port, '/api/block?ref=' + encodeURIComponent(view[1].flat[0].text_ref));
+  assert.equal(b.status, 'ok', 'the block index retried too');
+});
