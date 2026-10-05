@@ -1,5 +1,5 @@
 // _common.mjs — small readers shared by harness descriptors. Harness data only; no engine, no OS code.
-import { hostOf } from '../core/config-read.mjs'
+import { hostOf, parseDotenv } from '../core/config-read.mjs'
 
 export const envValues = (env, keys) => keys.map((k) => env.get(k)).filter((v) => typeof v === 'string' && v !== '')
 export const envHosts = (env, keys) => envValues(env, keys).map(hostOf).filter(Boolean)
@@ -15,3 +15,27 @@ export function argAfter(argv, flags) {
   }
   return null
 }
+
+// A dotenv file as an env layer: `drop` filters keys the agent refuses from that file; mode 'fill' (the agent sets
+// only variables its environment does not have) or 'override'.
+export function dotenvLayer(ctx, file, { name, mode = 'override', live = false, drop = null } = {}) {
+  const text = ctx.readText(file)
+  if (text == null) return null
+  const vars = {}
+  for (const [k, v] of parseDotenv(text)) if (!drop || !drop(k)) vars[k] = v
+  return { name, file, mode, vars, live, mtimeMs: ctx.mtimeOf(file) }
+}
+
+// Hosts of every string under a key matching keyRe anywhere in a parsed config (provider lists, maps).
+export function urlHostsDeep(value, keyRe, out = []) {
+  if (Array.isArray(value)) { for (const v of value) urlHostsDeep(v, keyRe, out); return out }
+  if (value && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value)) {
+      if (typeof v === 'string' && keyRe.test(k)) { const h = hostOf(v); if (h) out.push(h) } else urlHostsDeep(v, keyRe, out)
+    }
+  }
+  return out
+}
+
+// Whether a variable is set to a true-ish value ('1', 'true', 'yes', 'on').
+export const truthy = (v) => /^(1|true|yes|on)$/i.test(String(v || '').trim())

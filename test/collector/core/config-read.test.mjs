@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { readText, hostOf, expandHome, parseJsonc, dig } from '../../../src/collector/core/config-read.mjs'
+import { readText, hostOf, expandHome, parseDotenv, parseJsonc, dig } from '../../../src/collector/core/config-read.mjs'
 
 test('config-read: hostOf takes URLs, bare hosts, IPv6 literals; junk is null', () => {
   assert.equal(hostOf('https://API.Example.com:8443/v1'), 'api.example.com')
@@ -17,6 +17,11 @@ test('config-read: readText returns null for a missing file instead of throwing'
   assert.equal(readText(path.join(os.tmpdir(), 'asight-nope-' + process.pid)), null)
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-cr-')); fs.writeFileSync(path.join(d, 'a'), 'x')
   try { assert.equal(readText(path.join(d, 'a')), 'x'); assert.equal(expandHome('~/a', d), path.join(d, 'a')) } finally { fs.rmSync(d, { recursive: true }) }
+})
+
+test('config-read: dotenv handles export, quotes, comments; later keys win', () => {
+  const m = parseDotenv('# c\nexport A=1\nB="two # not comment"\nC=\'3\'\nD=4 # trailing\nA=5\nbad line\nE="a\\nb"\r\n')
+  assert.deepEqual(Object.fromEntries(m), { A: '5', B: 'two # not comment', C: '3', D: '4', E: 'a\nb' })
 })
 
 test('config-read: JSONC strips comments and trailing commas but not inside strings', () => {

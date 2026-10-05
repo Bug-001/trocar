@@ -28,6 +28,25 @@ export function dig(obj, dotted) {
   return cur
 }
 
+// ── dotenv (Node util.parseEnv / python-dotenv subset): KEY=VALUE, `export `, quotes, # comments; later wins ──
+export function parseDotenv(text) {
+  const out = new Map()
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line || line.startsWith('#')) continue
+    const m = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_.]*)\s*=\s*(.*)$/.exec(line)
+    if (!m) continue
+    let v = m[2]
+    const dq = /^"((?:[^"\\]|\\.)*)"/.exec(v)
+    const sq = /^'([^']*)'/.exec(v)
+    if (dq) v = dq[1].replace(/\\(.)/g, (_, c) => (c === 'n' ? '\n' : c))
+    else if (sq) v = sq[1]
+    else v = v.replace(/\s+#.*$/, '').trim()
+    out.set(m[1], v)
+  }
+  return out
+}
+
 // ── JSONC: strip // and /* */ comments and trailing commas outside strings, then JSON.parse ──
 export function parseJsonc(text) {
   const s = String(text || '')
