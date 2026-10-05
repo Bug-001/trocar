@@ -359,3 +359,20 @@ test('daemon: a harness whose configuration reader throws is recorded with the r
     assert.match(f && f.reason, /claude-code pid 8181: reading its configuration failed \(settings\.json: unexpected token\); judged on its known hosts only/)
   } finally { await d.stop(); p.done(); s.done() }
 })
+
+test('daemon: an error judging a process is a failure record carrying the pid; on still attaches for the rest (D38, review 2 #4)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  const thrower = { ...cc, trust: { ...cc.trust, refine: () => { throw new Error('refine blew up') } } }
+  await install(s)
+  const other = path.join(s.root, 'other-home'); fs.mkdirSync(other) // no settings there: untrusted, so refine runs
+  p.add(8282, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: other }, startTicks: nowTicks(p) })
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [thrower] })
+  try {
+    const on = await req(s.sock, 'POST', '/on', {})
+    assert.equal(on.actual, 'on', 'one bad process never blocks on')
+    const f = flowsOf(s).find((x) => x.event === 'failure' && x.where === 'tracker')
+    assert.deepEqual([f && f.pid, f && f.phase], [8282, 'judge'])
+    assert.match(f.reason, /pid 8282 \(judge\): refine blew up; it is not watched, its connections go direct/)
+    assert.ok((await req(s.sock, 'GET', '/status')).failures.some((x) => x.where === 'tracker' && x.pid === 8282), 'status reports it')
+  } finally { await d.stop(); p.done(); s.done() }
+})

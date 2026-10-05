@@ -89,7 +89,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       const hint = d && d.trust && d.trust.hints ? d.trust.hints[row.reason] : null
       try { appendEvent(P.dir, { event: 'agent-untrusted', pid: row.pid, agent: row.agent, reason: row.reason, via: row.trustVia ?? null, ...(hint ? { hint } : {}) }) } catch (w) { log('events', w) }
     }
-    const tracker = createTracker({ redirector, registry, trust: createTrustChecker({ caCertPem: ca.certPem }), onVerdict })
+    const tracker = createTracker({ redirector, registry, trust: createTrustChecker({ caCertPem: ca.certPem }), onVerdict,
+      onError: (e, at) => failure('tracker', Object.assign(new Error(`pid ${at.pid} (${at.phase}): ${errText(e)}${at.phase === 'judge' ? '; it is not watched, its connections go direct' : ''}`), { code: e && e.code }), at) })
     let helperDown = null
     let sw = null
 

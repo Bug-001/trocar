@@ -166,3 +166,21 @@ test('beats further apart than the kernel freshness window (a stalled event loop
   assert.match((await got)[0].reason, /^no heartbeat for \d+ ms \(the kernel stops steering after 2000 ms\); connections in that window went direct$/)
   clearTimeout(keepAlive); await c.close()
 })
+
+test('a line from the helper that is not JSON, or an event this client does not know, is reported (loader-error), never dropped (D38)', async () => {
+  const { m, c } = await started()
+  const seen = []; c.on('loader-error', (e) => seen.push(e.reason))
+  m.pushLine('{"ev":"exec","tgid":12') // torn
+  m.pushLine({ ev: 'quota', n: 1 })
+  m.pushLine({ id: 999, ok: true }) // a reply nobody waits for is not an event
+  await c.status() // a round trip: every line above has been read
+  assert.deepEqual(seen, ['unparsable line from the helper, ignored: {"ev":"exec","tgid":12', 'unknown helper event "quota", ignored (a helper newer than this daemon?)'])
+  await c.close()
+})
+
+test('lookup rejects when the helper cannot be asked — a transport error is never read as a miss (D38)', async () => {
+  const { m, c } = await started({ lookupWaitMs: 0, mock: { reply: (msg) => (msg.op === 'lookup' ? { id: msg.id, ok: false, error: 'by_port map read failed' } : replyFor(msg)) } })
+  await assert.rejects(c.lookup({ address: '127.0.0.1', port: 5002 }), /by_port map read failed/)
+  m.child.kill()
+  await assert.rejects(c.lookup({ address: '127.0.0.1', port: 5003 }))
+})

@@ -152,3 +152,17 @@ test('engine: a lookup miss and a listener error after listen reach onError, nev
     assert.deepEqual(failures.map((f) => [f.reason, f.peer.address]), [['lookup-miss', '127.0.0.1']])
   } finally { net.createServer = orig; if (engine) await engine.close() }
 })
+
+// Union (feat/collector-v1): the daemon's onError AND ws-recorder's failure() record, both under the same code.
+test('engine: a lookup the helper cannot answer is its own failure (not a miss), and the connection is closed (D38)', { timeout: 10_000 }, async () => {
+  const errors = [], failures = []
+  const engine = createEngine({ redirector: { lookup: async () => { throw new Error('redirector loader is not running') } }, issuer: createLeafIssuer(loadCa(createCa())), store: { envelope() {}, flow() {}, failure: (f) => failures.push(f) }, onError: (e) => errors.push(e) })
+  try {
+    const { port } = await engine.listen({})
+    await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('close', r); c.on('error', () => {}) })
+    assert.deepEqual(errors.map((e) => e.code), ['lookup-error'], 'one record, not also a lookup-miss')
+    assert.match(errors[0].message, /looking up the original destination of 127\.0\.0\.1:\d+ failed \(redirector loader is not running\); the steered connection was closed/)
+    assert.equal(engine.stats().lookupMisses, 0)
+    assert.deepEqual(failures.map((f) => [f.reason, f.peer.address, f.error]), [['lookup-error', '127.0.0.1', 'redirector loader is not running']])
+  } finally { await engine.close() }
+})

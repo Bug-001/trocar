@@ -51,14 +51,20 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     const duringLookup = () => {}
     socket.on('error', duringLookup)
     const peer = { address: socket.remoteAddress, port: socket.remotePort }
-    let meta = null, lookupError = null
+    let meta = null
     try { meta = await redirector.lookup(peer) }
-    catch (e) { lookupError = e; onError(e) }
+    catch (e) { // the helper could not be asked: not a miss, its own record (D38) — in failures/ and to the daemon
+      const code = (e && e.code) || 'lookup-error', error = String((e && e.message) || e)
+      socket.destroy()
+      failure({ reason: code, peer, error })
+      onError(Object.assign(new Error(`looking up the original destination of ${peer.address}:${peer.port} failed (${error}); the steered connection was closed`), { code }))
+      return
+    }
     // RFC 4.6 §引擎 1: no envelope, no flows/ — but the connection is closed, so it is not silent (D38)
     // ...and the daemon hears it too (onError, code 'lookup-miss'), so its own flows/ record and status see it
     if (!meta) {
       counters.lookupMisses++
-      failure({ reason: 'lookup-miss', peer, ...(lookupError ? { error: String(lookupError.message || lookupError) } : {}) })
+      failure({ reason: 'lookup-miss', peer })
       socket.destroy()
       onError(Object.assign(new Error(`no original destination for ${peer.address}:${peer.port}; the steered connection was closed`), { code: 'lookup-miss' }))
       return

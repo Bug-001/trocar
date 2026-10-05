@@ -20,7 +20,7 @@
 //     The only method the engine calls. Joins the kernel's by_port row (original dst, pid,
 //     decrypt verdict) with the JS-side pid->agent label recorded at watch(). The peer's address
 //     family is sent along so a v4 and a v6 connection sharing a source port are never mis-joined.
-//     Waits up to lookupWaitMs for a missing row to appear, then resolves null.
+//     Waits up to lookupWaitMs for a missing row to appear, then resolves null; rejects if the helper cannot be asked.
 //   attach()/detach()/status() -> toggle/read the three cgroup links; status is derived from
 //     the kernel (bpf_link info), never from a cached flag.
 //   watch(pid, verdict={decrypt,agent})/unwatch(pid) -> maintain the kernel watch set and the
@@ -87,7 +87,7 @@ export function createRedirectorClient({
     line = line.trim()
     if (!line) return
     let msg
-    try { msg = JSON.parse(line) } catch { return }
+    try { msg = JSON.parse(line) } catch { emitter.emit('loader-error', { reason: `unparsable line from the helper, ignored: ${line.slice(0, 200)}` }); return }
     if (msg.id != null && pending.has(msg.id)) {
       const { resolve, reject } = pending.get(msg.id)
       pending.delete(msg.id)
@@ -123,6 +123,7 @@ export function createRedirectorClient({
         fail(msg.reason || 'loader reported down')
         return
       default:
+        if (msg.ev != null) emitter.emit('loader-error', { reason: `unknown helper event ${JSON.stringify(msg.ev)}, ignored (a helper newer than this daemon?)` })
         return
     }
   }
@@ -206,7 +207,7 @@ export function createRedirectorClient({
     const deadline = Date.now() + lookupWaitMs
     for (;;) {
       let r
-      try { r = await send('lookup', { port, family }) } catch { return null }
+      r = await send('lookup', { port, family }) // a transport error is thrown, never read as a miss (D38)
       if (r.found) {
         const label = r.pid != null ? labels.get(r.pid) : null
         return { dst: r.dst, pid: r.pid ?? null, agent: label ? label.agent : null, decrypt: !!r.decrypt }

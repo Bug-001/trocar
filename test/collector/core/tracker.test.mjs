@@ -32,9 +32,10 @@ function fakeRedirector() {
 const facts = (pid, o = {}) => ({ os: 'linux', pid, ppid: 1, uid: 1000, exe: '/opt/alpha', argv: ['alpha'], env: new Map(), cwd: '/', source: 'exec', startedAt: 0, ...o })
 function rig(descriptors = [agent]) {
   const redirector = fakeRedirector()
-  const tracker = createTracker({ redirector, registry: createRegistry(descriptors), trust: createTrustChecker({ caCertPem: ca.certPem }), home: dir })
+  const errors = []
+  const tracker = createTracker({ redirector, registry: createRegistry(descriptors), trust: createTrustChecker({ caCertPem: ca.certPem }), home: dir, onError: (e, at) => errors.push([at.pid, at.phase, e.message]) })
   tracker.start()
-  return { redirector, tracker }
+  return { redirector, tracker, errors }
 }
 const settle = () => new Promise((r) => setImmediate(r))
 
@@ -96,4 +97,27 @@ test('tracker: a descriptor callback that throws degrades to known hosts, never 
   redirector.emit('exec', facts(700, { env: new Map([['EXTRA_CA', PEM]]) })); await settle()
   assert.deepEqual(tracker.describe(700).hosts, ['api.alpha.test', '.alpha-cdn.test'])
   assert.equal(tracker.describe(700).configError, 'bad config')
+})
+
+test('tracker: an error judging a process reaches onError with its pid; it is left unwatched and the rest carries on (D38, review 2 #4)', async () => {
+  const thrower = { ...agent, trust: { ...agent.trust, refine: () => { throw new Error('refine blew up') } } } // runs only for an untrusted verdict
+  const { redirector, tracker, errors } = rig([thrower])
+  const withCa = { env: new Map([['EXTRA_CA', PEM]]) }
+  redirector.emit('exec', facts(800)); await settle()
+  assert.deepEqual(errors, [[800, 'judge', 'refine blew up']])
+  assert.equal(tracker.describe(800), null)
+  assert.ok(!redirector.watched.has(800), 'never watched')
+  // a trusted pid re-execs into a judgement that throws: its earlier verdict must not outlive it
+  redirector.emit('exec', facts(801, withCa)); await settle()
+  assert.equal(redirector.watched.get(801).decrypt, true)
+  redirector.emit('exec', facts(801)); await settle()
+  assert.deepEqual([tracker.describe(801), redirector.watched.has(801), errors[1]], [null, false, [801, 'judge', 'refine blew up']])
+  // rescan: one process that throws never blocks the others (or `on`)
+  redirector.live = [facts(802, { source: 'scan' }), facts(803, { source: 'scan', ...withCa })]
+  await tracker.rescan()
+  assert.deepEqual([tracker.agents().map((a) => a.pid), errors[2]], [[803], [802, 'judge', 'refine blew up']])
+  // an unwatch the helper refuses is reported too, not dropped
+  redirector.unwatch = async () => { throw new Error('the redirector helper is down') }
+  redirector.emit('exit', { pid: 803 }); await settle()
+  assert.deepEqual(errors[3], [803, 'unwatch', 'the redirector helper is down'])
 })

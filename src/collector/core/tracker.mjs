@@ -20,18 +20,28 @@ const mtimeOfFile = (f) => { try { return fs.statSync(f).mtimeMs } catch { retur
 const listDirNames = (d) => { try { return fs.readdirSync(d) } catch { return [] } }
 
 // onVerdict(row, prev) is told every agent verdict (prev: the row this pid had before, or null), so the daemon can
-// leave a durable record when one is untrusted or its watch failed (D38).
-export function createTracker({ redirector, registry, trust, home = os.homedir(), readText = defaultReadText, mtimeOf = mtimeOfFile, listDir = listDirNames, now = () => Date.now(), onVerdict = () => {} }) {
+// leave a durable record when one is untrusted or its watch failed (D38). onError(e, {pid, phase})
+// is told every error judging or (un)watching a process — that process stays unwatched (its connections go
+// direct) and the rest of the table carries on; nothing here is swallowed (review 2 #4).
+export function createTracker({ redirector, registry, trust, home = os.homedir(), readText = defaultReadText, mtimeOf = mtimeOfFile, listDir = listDirNames, now = () => Date.now(), onVerdict = () => {}, onError = () => {} }) {
   const table = new Map() // pid → AgentRow (agents only)
   const subs = []
   let mode = 'auto'
   let extra = new Set()
 
   async function onExec(facts) {
-    const m = registry.match(facts)
     const prev = table.get(facts.pid)
+    try { return await judge(facts, prev) } catch (e) {
+      // judging threw (harness code): an earlier verdict for this pid must not outlive it — unwatch, then report
+      if (prev && table.get(facts.pid) === prev) { table.delete(facts.pid); try { await redirector.unwatch(facts.pid) } catch (w) { onError(w, { pid: facts.pid, phase: 'unwatch' }) } }
+      throw e
+    }
+  }
+
+  async function judge(facts, prev) {
+    const m = registry.match(facts)
     if (!m.agent) {
-      if (prev) { table.delete(facts.pid); try { await redirector.unwatch(facts.pid) } catch { /* helper gone: nothing to undo */ } }
+      if (prev) { table.delete(facts.pid); try { await redirector.unwatch(facts.pid) } catch (e) { onError(e, { pid: facts.pid, phase: 'unwatch' }) } }
       return null
     }
     const d = m.descriptor
@@ -51,7 +61,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
 
   async function onExit({ pid }) {
     if (!table.delete(pid)) return
-    try { await redirector.unwatch(pid) } catch { /* the kernel already dropped it on exit */ }
+    try { await redirector.unwatch(pid) } catch (e) { onError(e, { pid, phase: 'unwatch' }) }
   }
 
   // Decrypt policy (4.6 §解密策略): `auto` = the harness's known API hosts ∪ the base_url / relay hosts its readers
@@ -68,8 +78,8 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
 
   return {
     start() {
-      const onE = (f) => { onExec(f).catch(() => {}) }
-      const onX = (e) => { onExit(e).catch(() => {}) }
+      const onE = (f) => { onExec(f).catch((e) => onError(e, { pid: f.pid, phase: 'judge' })) }
+      const onX = (x) => { onExit(x).catch((e) => onError(e, { pid: x.pid, phase: 'exit' })) }
       redirector.on('exec', onE); redirector.on('exit', onX)
       subs.push(['exec', onE], ['exit', onX])
     },
@@ -78,7 +88,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     async rescan() {
       const live = await redirector.scan()
       const seen = new Set()
-      for (const f of live) { seen.add(f.pid); await onExec(f) }
+      for (const f of live) { seen.add(f.pid); try { await onExec(f) } catch (e) { onError(e, { pid: f.pid, phase: 'judge' }) } } // one bad process never blocks on
       for (const pid of [...table.keys()]) if (!seen.has(pid)) table.delete(pid) // exits missed while the helper was down
     },
     agents: () => [...table.values()].sort((a, b) => a.pid - b.pid).map((r) => ({ ...r, hosts: [...r.hosts] })),
