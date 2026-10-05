@@ -30,7 +30,10 @@ test('install: CA under ~/.asight/collector/ca, CC settings key → asight-ca.pe
     assert.equal(JSON.parse(fs.readFileSync(settingsOf(b), 'utf8')).env.NODE_EXTRA_CA_CERTS, path.join(b.dir, 'ca', 'asight-ca.pem'))
     assert.ok(new X509Certificate(fs.readFileSync(path.join(b.dir, 'ca', 'asight-ca.pem'))).ca)
     assert.ok(r.plan.notes.some((n) => /exported only in a shell/.test(n)))
+    const snap = () => [fs.readFileSync(settingsOf(b)), fs.readFileSync(path.join(b.dir, 'install-manifest.json'))]
+    const first = snap()
     assert.equal((await installCollector(base(b))).already, true, 'install twice is a no-op')
+    assert.deepEqual(snap(), first, 'a second install rewrites neither the settings file nor the manifest, so the first record stands')
   } finally { b.done() }
 })
 
@@ -139,5 +142,39 @@ test('stopDaemon: a lock nobody answers for is stale and never killed by; an ans
     let alive = true
     const r = await stopDaemon({ socketPath: path.join(b.home, 's.sock'), lockFile, request: async () => ({}), kill: (pid, sig) => { killed.push([pid, sig]); alive = false }, alive: () => alive })
     assert.deepEqual([r, killed], ['stopped', [[4242, 'SIGTERM']]])
+  } finally { b.done() }
+})
+
+test('a refused plan entry or a non-JSON settings file leaves every user file untouched; uninstall clears what was started', async () => {
+  const b = box()
+  try {
+    const bashrc = path.join(b.home, '.bashrc'); fs.writeFileSync(bashrc, 'export X=1\n')
+    const loginEnv = { name: 'login-env', inject: () => ({ entries: [{ kind: 'json-key', path: bashrc, keys: ['env', 'NODE_EXTRA_CA_CERTS'], value: path.join(b.dir, 'ca', 'asight-ca.pem'), semantic: 'append' }] }) }
+    await assert.rejects(installCollector(base(b, { harnesses: [cc, loginEnv] })), /login-environment/)
+    assert.ok(!fs.existsSync(settingsOf(b)), "CC's entry, planned first, was not written: the whole plan is checked before any file changes")
+    assert.equal(fs.readFileSync(bashrc, 'utf8'), 'export X=1\n')
+    await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
+    assert.ok(!fs.existsSync(b.dir))
+
+    fs.mkdirSync(path.join(b.home, '.claude')); fs.writeFileSync(settingsOf(b), '{"model": "x",, }')
+    await assert.rejects(installCollector(base(b)))
+    assert.equal(fs.readFileSync(settingsOf(b), 'utf8'), '{"model": "x",, }', 'a file that is not JSON is never rewritten')
+    await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
+    assert.deepEqual([fs.existsSync(b.dir), fs.readFileSync(settingsOf(b), 'utf8')], [false, '{"model": "x",, }'])
+  } finally { b.done() }
+})
+
+test('install → uninstall → install → uninstall stays clean and never removes anything else under ~/.asight', async () => {
+  const b = box()
+  try {
+    const keep = [path.join(b.home, '.asight', 'ca', 'asight-ca.pem'), path.join(b.home, '.asight', 'calls.ndjson')]
+    for (const f of keep) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, 'legacy') }
+    for (let i = 0; i < 2; i++) {
+      await installCollector(base(b))
+      assert.ok(readManifest(b.dir).complete, `round ${i}: installed`)
+      await uninstallCollector({ home: b.home, env: {}, purgeData: true, stop: stopNone })
+      assert.ok(!fs.existsSync(b.dir) && !fs.existsSync(settingsOf(b)), `round ${i}: nothing of the install is left`)
+    }
+    assert.deepEqual(keep.map((f) => fs.readFileSync(f, 'utf8')), ['legacy', 'legacy'], 'the legacy CA and v0 captures under ~/.asight are untouched')
   } finally { b.done() }
 })
