@@ -1,0 +1,106 @@
+# asight · RFC 01 — 工程规则
+
+> **这是什么**:写码、写测试、提交、评审时**不允许什么**,以及每条规则靠什么兜底。PR 或设计有争议,先查这里。
+> **前置**:[00-overview](00-overview.md) 决策表。架构、数据结构与管线 → [02](02-architecture-overview.md)。
+
+等级:**必拒** > **需 RFC** > **SHOULD**。每条必拒都标了守卫:`test` = 违反会让某条测试变红;`审查` = 没有自动守卫,靠 §6 清单在收尾时逐条过。
+
+---
+
+## 0. 总纲
+
+1. **数据结构先于代码**。说不清改动读写的是 [02 §2](02-architecture-overview.md) 里哪个结构,就还没想清楚。
+2. **原始字节是唯一源真相**。DuckDB、分片、看板载荷、缓存都能从 NDJSON 重建,反过来不行。(不变式 2)
+3. **只观测**。不发起请求、不改包、不冒用被测程序的 token。(不变式 1)
+4. **provider 知识只在 dissector / adapter 里**。共享层和前端不写 provider 分支;加 harness = 加一个 dissector。(不变式 3 · D25)
+5. **不知道就显示不知道**。不拿全零 usage、默认归给 CC、空态冒充「还没采集」这类合理值顶替未知。(不变式 4)
+6. **碰用户机器的动作必须用户级、对称可逆**,撤销时只撤自己写的部分。(采集安全 · D22 · D28)
+7. **零依赖基线**:运行时只依赖 `@duckdb/node-api`;后端用 `node:http`,前端是单文件 HTML,不打包。(D18)
+8. **spec 先于实现**:同一 PR 里先改 spec 再改代码。
+
+## 1. 命名
+
+| 项 | 规则 | 例 |
+|---|---|---|
+| 源文件 | kebab-case `.mjs` | `reverse-proxy.mjs` |
+| 测试 | `test/<模块>/<主题>.test.mjs`,用例标题写成一句行为描述 | `test/view/provider-unknown.test.mjs` |
+| 落盘 / 线上字段(信封、DuckDB 列) | snake_case | `req_body` `content_hash` |
+| 进程内对象 / 看板载荷 | camelCase;usage 只用中立名 `read / create / fresh / out` | `cacheBreak` |
+| HTTP 路径 | 只读数据面 `/api/*`;opt-in 控制面 `/control/*` | `/api/session` |
+| 环境变量 | `ASIGHT_*` | `ASIGHT_PORT` |
+
+**冻结的遗留名**(v0 原型叫 atrace;改名 = 契约变更,需 RFC):旧采集根 `~/.atrace/asight/`(永久可读)· 旧 CA 目录 `~/.atrace/ca` · `CA_CN` · Clash 代理名 `atrace-mitm` 与哨兵行 · `ATRACE_UPSTREAM_PROXY` · demo 的 `com.atrace.serve` · 夹具里的 atrace 字样。对仓库跑 `sed s/atrace/asight/` = **必拒** · test `test/web/branding.test.mjs`。
+
+## 2. 代码与依赖
+
+- Node ≥ 20,ESM,纯 JS(无 TypeScript、无转译),内置模块写 `node:` 前缀。
+- 仓库没有 formatter / linter,各文件分号与引号风格不一:**跟随所在文件**,不做全仓格式化。SHOULD。
+- 注释写「为什么」和踩过的坑(参考 `src/paths.mjs` 顶部)。改动推翻了注释里的理由,同步改注释。SHOULD。
+- 新增运行时依赖 = 改 D18 → **需 RFC**。Playwright 不进 `package.json`,真浏览器测试靠 `ASIGHT_PLAYWRIGHT` 显式开启。
+- `package.json` 保持 `private`;npm 名 `asight` 已被他人占用(D23),发布前必须先改名。
+- **依赖方向**(下层不 import 上层;前端只走 HTTP):
+  - `src/capture/` 只依赖 node 内置和 `src/paths.mjs`;
+  - `src/dissect/` 是叶子,不 import 任何 src 模块,这样看板和 ETL 才能共用;
+  - `adapters / cache / identity / model` → `etl` → `query` → `server.mjs` → `bin/asight.mjs`;`view` 用 `dissect`;
+  - `src/web/index.html` 不 import 任何 src 模块。
+  守卫:审查。
+- **现存偏离**(已知债,新代码不要加深):`view/analyze.mjs ↔ view/assemble.mjs` 互相 import;`view ↔ etl` 目录级环(`assemble → etl/orchestrator`,`etl/session-meta → view/assemble`);`view/assemble.mjs` 里的 `providerOf()` / `assembleOpenai()` 是共享层里的 provider 分支(D25 已记)。
+
+## 3. 测试
+
+- 入口 `npm test`。主线要求 0 失败;等待实现的红灯测试必须逐条登记,没登记的红灯就是回归。
+- **测试必须能变红**。读到零条记录也打勾的检查等于没检查(`asight doctor` 曾经如此)。新断言 SHOULD 先拿坏输入确认它会红。
+- **不碰真实机器**:信任库操作走注入的 runner;涉及 HOME 的用例在 `mkdtemp` 沙箱里跑;Clash 用 `ASIGHT_MIHOMO_SOCK` 指向假 socket。**必拒** · test `test/capture/trust-store.test.mjs`、`test/capture/desktop-cli.test.mjs`。
+- **夹具是已采原始字节**:`test/fixtures/*.ndjson` 不许手改;要新形状就加夹具,或用 `samples/gen-demo-capture.mjs` 生成。**必拒** · 审查。
+- **渲染测试要覆盖产品 D10 信封**,不能只喂 v0 夹具。2026-07-20 审计里「GUI 没接上后端」那一类缺陷,根因就是渲染测试只跑旧夹具。test `test/view/envelope-drift.test.mjs`。
+- 实现 spec 覆盖的行为时,把该单元「验收」清单逐条变成待办:落断言 / 指认已有测试 / `N/A + 理由`,三选一。
+
+## 4. 提交与评审
+
+- 功能分支上自治开发;**只在合入 `main` 时请人确认**。每完成一个可独立验证的积木就 commit,失败回退到上一个绿点。
+- 提交信息:`<type>(<scope>)[!]: <摘要>` + 正文(为什么、证据)。type 常用 feat / fix / docs / test / spec;`!` 表示破坏性;涉及决策时在摘要里点名 `D<n>`。
+- 改 [02 §2](02-architecture-overview.md) 列出的任何数据结构(信封字段、DuckDB 列、block 词表、看板载荷字段)都是 structural 变更,必须走硬规则 A 的 grep-spec 自对照,不能当 minor 跳过。
+- 收尾派全新上下文的 subagent 按 §6 审查。做事的 agent 不给自己打分。
+
+## 5. 拒绝模式
+
+下面每条都曾经「看起来合理」,并在本仓被否决过。
+
+| ❌ 不要 | 出处 | 等级 · 守卫 |
+|---|---|---|
+| 让派生层回写或覆盖原始 NDJSON | 不变式 2 | 必拒 · 审查 |
+| 搬运原始记录时先 parse 再序列化(分片、迁移、导出) | `src/etl/shard.mjs` 头注释 | 必拒 · test `test/etl/shard.test.mjs` |
+| 在采集端改写字节,包括脱敏 | [4.1](4.1-capture-sources.md) §凭据处置 | 必拒 · test `test/capture/verbatim-headers.test.mjs` |
+| 在采集端按 session 分流或解析 provider | D20 | 必拒 · 审查 |
+| `content_hash` 先做键规范化或只取前缀 | D19 | 必拒 · test `test/adapters/content-hash.test.mjs` |
+| 前端出现 provider 原生字段名或 provider 分支 | 不变式 3 · D18 | 需 RFC · test `test/web/dashboard-render.mjs`、`test/server.test.mjs` |
+| 在浏览器里跑 `analyze()` | D18a · D24 | 需 RFC · 审查 |
+| 把 response / turn / tool 语义建模进共享 schema | D25 | 需 RFC · 审查 |
+| 不认识的 provider / harness 回落成某个已知身份 | D25 | 必拒 · test `test/view/provider-unknown.test.mjs` |
+| 用合理值顶替未知(全零 usage、加载失败显示成空态) | 不变式 4 | 必拒 · 审查 |
+| 只绑 loopback 就省掉 Host / Origin 校验 | D26 | 必拒 · test `test/server-rebind.test.mjs` |
+| 在只读数据面上加写操作 | D26 · [4.4](4.4-server.md) | 需 RFC · test `test/server-control.test.mjs` |
+| 全机信任 CA、改系统代理、解密非目标 host | 采集安全 · D22 | 必拒 · test `test/capture/trust-store.test.mjs`、`test/capture/mitm.test.mjs` |
+| `desktop off` 用整文件快照回滚 | D28 | 必拒 · test `test/capture/desktop-steer.test.mjs` |
+| 迁移采集文件用 `cp` + `rm`(应同设备 `rename`) | D27 | 必拒 · 审查 |
+| 用嵌入式 DSL(Lua / QuickJS)写 dissector | D25 | 需 RFC · 审查 |
+| 重新引入跨 session 成对 compare | D17③ 已撤 | 需 RFC · 审查 |
+| 执行 v0 的 `atrace-uninstall`;未经同意重启 Desktop 或在跑的采集 | 采集安全 | 必拒 · 审查 |
+
+## 6. 收尾审查清单
+
+没有自动守卫的规则都落在这里。收尾时逐条给「过 / 不过 / N/A」(编号稳定,别处按号引用):
+
+1. 观测模式里有没有发起请求、改包、冒用 token 的路径。
+2. 采集端有没有加 session 或 provider 逻辑。
+3. 读取失败有没有被折叠成空结果;未知有没有被合理值顶替。
+4. 碰用户机器的动作是否用户级、对称可逆、只撤自己写的部分。
+5. 有没有加深 §2 列出的依赖偏离。
+6. 改了数据结构有没有走 grep-spec;注释、实现笔记、spec 有没有同 PR 更新。
+7. 该单元「验收」清单是否逐条有着落。
+
+每个缺口再判一次:**偷懒 / 偷换概念 / 缺接线 / 过度设计**。
+
+## 7. 本文新立的约定
+
+以下几条是本文从现有做法里归纳出来的,此前没写进决策表,都只是 SHOULD:格式跟随所在文件(§2)· 注释写为什么(§2)· 测试标题写成行为句(§1)· §6 清单的固定条目。被否决的直接删掉。

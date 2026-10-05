@@ -1,0 +1,141 @@
+# asight · RFC 02 — 架构总览
+
+> **这是什么**:asight 的代码长什么样——核心数据结构、关键管线、进程与端口、每份状态归谁,以及采集、后端分析、前端呈现三层各自怎么做。这里只给边界和指路,细节在各单元。
+> **前置**:[01 工程规则](01-engineering-rules.md)、[00-overview](00-overview.md) 决策表。
+> **权威分工**:字段级定义的权威仍在各单元(信封 = [4.1](4.1-capture-sources.md),block = [3.1](3.1-adapter-contract.md),表 = [3.2](3.2-normalized-model.md),cache = [3.3](3.3-cache-model.md),端点 = [4.4](4.4-server.md))。本文与单元冲突时以单元为准,同一 PR 修本文。
+
+---
+
+## 0. 架构铁律
+
+1. **单机、单用户、所有端口只绑 `127.0.0.1`**。
+2. **四层单向**:采集 → 原始 NDJSON → 服务端分析 → 浏览器呈现。下游不回写上游;采集不知道 session;前端不解析 provider 字节。
+3. **两条读路径**(D24):看板逐 call 回放 = 服务端直接读源 NDJSON;跨 session 聚合 = DuckDB 上的具名 SQL。DuckDB 是可选的,看板不依赖它。
+4. **数据面只读**;写操作只走 `asight serve --control` 才打开的控制面(D26)。
+
+## 1. 总图
+
+```
+  被测 agent(不改它)
+  Claude Code CLI ── settings.json 的 HTTPS_PROXY ──┐
+  Claude Desktop ─── Clash 定向规则(仅 macOS)──────┤
+  Codex / OpenCode ─ provider 配置里的 base_url ─────┤
+                                                    ▼
+                  asight capture :8899(反代 tee)/ asight mitm :9899(选择性解密)
+                        │ 原样转发 ──────────────────────────► 真实 API
+                        │ 旁路副本 → 原始信封,逐行追加
+                        ▼
+              ~/.asight/*.ndjson      ← 唯一源真相
+                │                          │
+                │                          └─► asight etl(可选)→ db/asight.duckdb
+                ▼                                                     │
+        asight serve :9800                                            │
+        读 NDJSON → dissector → 看板装配 ◄──── 具名 SQL(跨 session)───┘
+                │ JSON(只读数据面)
+                ▼
+        浏览器:src/web/index.html
+```
+
+## 2. 核心数据结构
+
+| 结构 | 一句话 | 在哪 | 谁产 → 谁用 |
+|---|---|---|---|
+| 原始信封 | 一次上游交互一行 | `~/.asight/*.ndjson` | 采集源 → 分片 / serve / etl |
+| block | 上下文里的一块;唯一跨 provider 的统一单元(D25) | 内存 | dissector → 看板装配 / ETL |
+| 归一化表 | DuckDB 投影,可从 NDJSON 重建 | `db/asight.duckdb` | etl → query |
+| cache 分叉记录 | 这一步从哪块开始和上一步不同、为什么 | 看板载荷 / `cache_events` 表 | analyze / cache-events → 看板 / SQL |
+| 看板载荷 | 一个 session 的回放视图 | HTTP JSON | view → index.html |
+
+**2.1 原始信封**(`src/capture/envelope.mjs::buildEnvelope`)
+- `ts` `method` `endpoint`;`req_headers` 逐字,含凭据,所以文件是 0600。
+- `req_body`:LLM 调用存原始 UTF-8 **字符串**,不 parse(下游要按字节切块、算哈希);非 LLM 调用只存 `{raw_chars, verbatim:false}`。
+- `resp`:`{status, kind:'json', body}`;流式是 `kind:'sse'` 的重建体(重建,不是原始帧);上游失败是 `kind:'error'`,并带 `error:true`。
+- 观测元数据 `id` `ts_request` `ts_response_start` `ts_response_end` `duration_ms`;派生标签 `is_llm_call`(只认端点 `/v1/messages`、`…/responses`、`…/chat/completions`)、`capture`(`reverse-proxy` / `mitm`)、`auth_mode`。
+- 只追加、不按 session 分文件(D20);读取端永远兼容 v0 旧字段名 `request_headers / request / response`。
+
+**2.2 block** — `{section, role, kind, content_hash, faithfulness, volatile, cache_control, resource_ref, text_ref}`
+- `section` 按装配序 tools → system → messages;Codex 的 `instructions` 归 system,`input[]` 归 messages。
+- `faithfulness` ∈ verbatim / opaque(只有签名或密文)/ summarized(compaction 摘要)/ metadata / omitted / truncated。非 verbatim 在 UI 上必须有标。
+- `content_hash` = 块逐字字节的 SHA-256(D19),既是去重主键,也是 cache 分叉信号。
+- `volatile` = 每次都变的块(CC 的 `x-anthropic-billing-header`),不算 cache break 的责任。
+
+**2.3 归一化表**(DDL:`src/model/ddl.sql`)
+`sessions`(会话与血缘)· `calls`(`class` = llm / control,`lane` = main / subagent / monitor / aux / probe)· `block_contents`(按 `content_hash` 去重)· `call_blocks`(每个 call 的有序块索引)· `usage`(`input_uncached / cache_read / cache_write / output / reasoning`;`cache_write` 为 NULL 表示该 provider 没有写缓存概念,不能填 0)· `resource_events` · `cache_events`。每张表都有 `extra JSON`,收未映射的原生字段,永不丢。
+
+**2.4 cache 分叉记录**
+- `cause` ∈ append / volatile-nonce-only / compaction / tool-array-reorder / json-key-reorder / content-changed,附 `attribution`(谁的锅)与 `fixHint`。
+- 地面真相(拿 usage 对账):`read>0` 正常;`read=0, write>0` = TTL 重建;`read=0, write=0` 而前缀逐字相同 = provider 矛盾。
+
+**2.5 看板载荷**(`/api/session`)
+- `meta` + 若干 lane;每个 call 带中立 usage `{read, create, fresh, out}`、`comp`(9 段字节构成,每个 call 都带,时间轴才能画全)、`cacheBreak`、`prefixSha256`。
+- `flat` 只有块的元数据和 `text_ref`,**不带正文**;展开时再经 `/api/block?ref=` 回源取。窗口外的 call `flat=[]` 并标 `paged_out`。
+- 长 session 按 `cursor / limit` 分页;被截掉的部分在 `truncated` 里写明。
+
+## 3. 关键管线
+
+- **P1 采集**:agent → 采集点 → 本地采集源 → 原样转发真实 API。字节先回给客户端,再在旁路副本上解压、重建 SSE、`buildEnvelope`,追加一行。上游失败也写一条 `error:true`,失败的一步不会从时间轴上消失。
+- **P2 看板回放**(默认路径):`asight serve` 读采集目录(`~/.asight/` + 旧根 `~/.atrace/asight/`,以及 `asight shard` 产出的 `~/.asight/sessions/` 分片)→ 按 session 分组 → `assembleSession` 选 dissector → `analyze()` 切 lane / turn、抽资源 → 逐 call 算 cache 分叉、前缀 SHA-256、中立 usage、`comp` → `sessionView` 开窗 → JSON。
+- **P3 ETL**(可选):`asight etl <ndjson>` → 兼容旧形状地读记录 → adapter 的 `detect / parseSession / parseCall / parseBlocks / parseResources` → 写表(块内容 insert-if-absent)→ 推导 `cache_events`。可 `--rebuild`。
+- **P4 布置与撤销**:`asight on / off`、`monitor on / off`、`desktop on / off` → 生成 CA、装进用户级信任库、写 steer、装用户 LaunchAgent。每一步都有对称的撤销,而且只撤自己写的部分。
+
+## 4. 进程与接入
+
+| 进程 | 监听 | 做什么 | 默认写到 |
+|---|---|---|---|
+| `asight capture` | `127.0.0.1:8899` | HTTP 反代 tee,零解密,转发到 `--target` | `~/.asight/capture.ndjson` |
+| `asight mitm` | `127.0.0.1:9899` | CONNECT 代理;只对目标 host(默认 `api.anthropic.com`)做 TLS 终止,其余盲隧道;出口走上游代理(默认 `127.0.0.1:7897`) | `~/.asight/claude-capture.ndjson` |
+| `asight serve` | `127.0.0.1:9800` | 看板与 API;校验 Host / Origin;加 `--control` 才开 `/control/*`(另有 CSRF) | — |
+
+- **Codex / OpenCode**:把 provider 的 base_url 指向 `:8899`;OpenAI 线格式要加 `--raw-sse`。
+- **Claude Code CLI**:`asight on` / `monitor on` 往 `~/.claude/settings.json` 写 `HTTPS_PROXY`。⚠ 默认指向 `:8899` 反代,而反代不处理 CONNECT(缺陷账本待修),要让它指向 MITM 才能抓到。
+- **Claude Desktop**(仅 macOS + Clash Verge):它会强制覆写 base_url,只能靠 Clash 规则把 `claude-code → api.anthropic.com` 引进 MITM。`asight desktop on` 同时装常驻 MITM(`com.asight.mitm`)和设置 `NODE_EXTRA_CA_CERTS` 的 `com.asight.env`。
+
+## 5. 状态归属(每份状态只有一个写者)
+
+| 状态 | 写者 | 位置 | 撤销 / 重建 |
+|---|---|---|---|
+| 采集流 | 采集源 | `~/.asight/*.ndjson`(旧根只读) | 永不改写 |
+| 分片 | `asight shard` | `~/.asight/sessions/` | 可从采集流重建 |
+| DuckDB | `asight etl` | 仓库内 `db/asight.duckdb`(gitignored) | `--rebuild` |
+| 采集 CA | onboard | `~/.asight/ca`(若已有旧 `~/.atrace/ca` 则原地沿用) | `off --remove-ca` |
+| 用户级信任 | `TrustStoreInstaller` | macOS login keychain / Linux `~/.pki/nssdb` | 对称移除 |
+| CC-CLI steer | onboard | `~/.claude/settings.json` 的 `env` | `off` 还原 |
+| Desktop steer | `desktop-steer.mjs` | Clash Verge 全局 Script 的哨兵块 | `desktop off` 只剥哨兵块(D28) |
+| 自启 | autostart / capture-agents | `~/Library/LaunchAgents/com.asight.{monitor,mitm,env}.plist` | `off` / `uninstall` |
+| 单价表 | 用户手改 | `~/.atrace/pricing.json`(`ASIGHT_PRICING` 可改) | — |
+| 派生缓存 | serve 进程内 LRU | 内存 | 进程退出即丢 |
+| 折叠态等偏好 | 浏览器 | localStorage | 可丢 |
+
+serve 还会只读 `~/.claude/projects/` 下 Claude Code 自己的会话记录,用来补项目名等元数据。
+
+## 6. 三层怎么做
+
+### 6.1 采集(`src/capture/`)
+- 已建两个采集源:`reverse-proxy.mjs`(反代 tee)和 `mitm.mjs`(选择性解密);`relay-tee.mjs` 还是占位。两者共用 `sse-reconstruct.mjs` 与 `envelope.mjs`,所以产出同一种信封。
+- 透明契约:客户端收到的字节先写回,记录发生在副本上;记录出错不影响被测程序。
+- onboard:`onboard.mjs` 生成 CA,`trust-store.mjs` 按平台装进用户级信任库(darwin / linux,Windows 预留);`desktop-steer.mjs` 管 Clash;`autostart.mjs` / `capture-agents.mjs` 管 LaunchAgent。
+- 自检:`asight verify`(CA 只在用户级)和 `asight doctor`(是否在抓、抓得对不对、凭据文件权限、全机 TLS 是否完好)。
+- 详见 [4.1](4.1-capture-sources.md)、[4.5](4.5-distribution.md)。
+
+### 6.2 后端分析(`src/dissect` `src/view` · `src/etl` `src/adapters` `src/cache` `src/identity` `src/query` · `src/server.mjs`)
+- **dissector**(`dissect/cc.mjs`、`dissect/openai.mjs`):把一家 provider 的原始请求拆成 block,看板和 ETL 共用(D25)。DeepSeek 还没有。
+- **看板装配**(`view/`):`analyze.mjs` 切 lane / turn、抽资源、算 cache 分叉与地面真相;`assemble.mjs` 选 dissector、烤中立 usage 与前缀哈希;`board.mjs` 出项目列表、session 视图、分页和控制面列表。
+- **DuckDB 投影**(`etl/`、`adapters/`、`cache/`、`identity/`):目前只注册了 CC adapter,Codex 记录进不了表(缺陷账本待修)。
+- **查询与回源**(`query/`):`queries.mjs` 是十来个具名 SQL;`source.mjs` 用 `text_ref` / `raw_ref` 回 NDJSON 取逐字正文;`memo.mjs` 是进程内 LRU。
+- **服务**(`server.mjs`):`node:http`,只读 `/api/*` + opt-in `/control/*`,同时托管前端。
+- 详见 [3.1](3.1-adapter-contract.md)–[3.5](3.5-query-layer.md)、[4.2](4.2-storage-etl.md)–[4.4](4.4-server.md)。
+
+### 6.3 前端呈现(`src/web/index.html`)
+- 一个自包含 HTML,没有构建步骤。轮询 `/api/projects`;选中 session 后按窗口取 `/api/session`;展开块时取 `/api/block`。
+- 界面:外壳与顶栏([1.2](1.2-shell-layout.md))· 时间轴、轨道与概览 brush([1.3](1.3-timeline-tracks.md) / [2.1](2.1-track-widget.md))· 中央看板与上下文回放([1.4](1.4-central-board.md) / [2.3](2.3-context-window.md))· call-turn 卡([2.2](2.2-call-turn-card.md))· 资源管理器([2.4](2.4-resource-explorer.md))· 左栏 outline([2.5](2.5-outline-nav.md))· 原始数据面板与控制面侧栏([2.6](2.6-detail-panel.md))· 状态与审美([1.5](1.5-states-aesthetics.md))。
+- 只读服务端给的中立字段,不认识 provider;非逐字的块按 `faithfulness` 打标。
+- 渲染闸:`test/web/dashboard-render.mjs` 在无浏览器的 DOM shim 里跑整页。
+
+## 7. 已知架构债
+
+影响架构边界的几条:
+- 共享层里还有 provider 分支(`view/assemble.mjs`,D25)。
+- `view` 与 `etl` 互相 import(见 [01 §2](01-engineering-rules.md))。
+- CC-CLI 的默认 steer 指向不处理 CONNECT 的反代(§4)。
+- ETL 只认 CC。
+- 单价表默认路径仍在 `~/.atrace/`,而 README 写的是 `~/.asight/`。
