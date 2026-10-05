@@ -41,6 +41,8 @@ import net from 'node:net'
 /** @typedef {{dst:Dst,pid:number|null,agent:string|null,decrypt:boolean}} FlowMeta */
 
 /** Line-protocol version. Must equal ASIGHT_PROTO in redirector.c. */
+// asight.h ASIGHT_HEARTBEAT_STALE_NS: past this age the kernel stops rewriting connects.
+export const HEARTBEAT_STALE_MS = 2000
 export const REDIRECTOR_PROTO = 1
 
 /** Where the setup-helper step installs the capped loader (the `asight setup-helper` CLI is not built
@@ -137,8 +139,15 @@ export function createRedirectorClient({
 
   function startHeartbeat() {
     if (autoHeartbeatMs > 0 && !hbTimer) {
-      // a failed beat lets the kernel's freshness lapse (steering stops, fail-open): never silent (D38)
-      hbTimer = setInterval(() => { heartbeat().catch((e) => { if (!down) emitter.emit('heartbeat-error', { reason: String((e && e.message) || e) }) }) }, autoHeartbeatMs)
+      // A failed beat, or beats more than the kernel's 2 s freshness apart (a stalled event loop), let steering lapse
+      // (fail-open: those connections went direct). Never silent (D38).
+      let lastOk = Date.now()
+      hbTimer = setInterval(() => {
+        heartbeat().then(() => {
+          const gap = Date.now() - lastOk; lastOk = Date.now()
+          if (gap > HEARTBEAT_STALE_MS) emitter.emit('heartbeat-error', { reason: `no heartbeat for ${gap} ms (the kernel stops steering after ${HEARTBEAT_STALE_MS} ms); connections in that window went direct` })
+        }, (e) => { if (!down) emitter.emit('heartbeat-error', { reason: String((e && e.message) || e) }) })
+      }, autoHeartbeatMs)
       if (hbTimer.unref) hbTimer.unref()
     }
   }

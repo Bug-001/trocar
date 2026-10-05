@@ -87,6 +87,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     redirector = A.createRedirector({ env })
     const onVerdict = (row, prev) => {
       if (row.watchError) failure('watch', new Error(`watching ${row.agent} pid ${row.pid} failed: ${row.watchError}`))
+      if (row.configError) failure('harness', new Error(`${row.agent} pid ${row.pid}: reading its configuration failed (${row.configError}); judged on its known hosts only`))
       if (row.trusted || (prev && !prev.trusted && prev.reason === row.reason)) return // recorded once per pid and reason
       const d = registry.get(row.agent)
       const hint = d && d.trust && d.trust.hints ? d.trust.hints[row.reason] : null

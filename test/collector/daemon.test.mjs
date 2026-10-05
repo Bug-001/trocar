@@ -303,3 +303,16 @@ test('daemon: an envelope that cannot be written is a durable failure record, no
     c.destroy()
   } finally { await d.stop(); up.close(); p.done(); s.done() }
 })
+
+test('daemon: a harness whose configuration reader throws is recorded with the reason (D38)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  const broken = { ...cc, layers: () => { throw new Error('settings.json: unexpected token') } }
+  await install(s)
+  p.add(8181, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) })
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [broken] })
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    const f = flowsOf(s).find((x) => x.event === 'failure' && x.where === 'harness')
+    assert.match(f && f.reason, /claude-code pid 8181: reading its configuration failed \(settings\.json: unexpected token\); judged on its known hosts only/)
+  } finally { await d.stop(); p.done(); s.done() }
+})
