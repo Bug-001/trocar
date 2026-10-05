@@ -51,6 +51,12 @@ export function composeTextRef(rawRef, span) {
 }
 export function parseTextRef(textRef) {
   const i = textRef.lastIndexOf('::');
+  // No `::span` suffix is legitimate (a raw ref addresses the whole record). Guard it: with i === -1
+  // the old `slice(0, i)` was `slice(0, -1)`, which silently CHOPPED THE LAST CHARACTER off the ref —
+  // so `req_plain` looked up as `req_plai` and the resolver reported the record "absent" rather than
+  // reporting a malformed ref. A silently wrong answer from the source-truth resolver is the worst
+  // failure mode this module can have.
+  if (i < 0) return { rawRef: textRef, start: null, end: null, recordId: textRef.slice(textRef.lastIndexOf('#') + 1) };
   const rawRef = textRef.slice(0, i);
   const [start, end] = textRef.slice(i + 2).split('-').map(Number);
   return { rawRef, start, end, recordId: rawRef.slice(rawRef.lastIndexOf('#') + 1) };
@@ -344,7 +350,23 @@ export async function runEtl(records, connection, opts = {}) {
 // block_contents holds NO fulltext — only the pointer — so this proves the projection is
 // reconstructable byte-for-byte from the source (AC-1 diff=0). `resolveSource(text_ref)`
 // may be sync or async and returns the verbatim block bytes for a stored text_ref.
+//
+// FIDELITY PASSTHROUGH (audit 2026-07-19 · invariant 4 保真边界写明) — NOT every resolvable body
+// is wire bytes. `resolveSource.detail(ref)` (src/query/source.mjs) classifies each one:
+//   · 'verbatim'     — D10 capture: req_body IS the string that went over the wire.
+//   · 'reserialized' — demo v0 capture: the request was stored PARSED, so the body is rebuilt
+//                      with JSON.stringify; whitespace, key order and number formatting may all
+//                      differ from the wire. A reconstruction, NOT the wire bytes.
+// This function is the read path the "回源 verbatim bytes" panel renders, so dropping the marker
+// made a reconstruction indistinguishable from the source truth. Carry it (plus status/reason for
+// unresolvable blocks) as `source_fidelity` / `source_status` / `source_reason` so consumers can
+// LABEL it. Deliberately NOT named `faithfulness` — that column is the ADAPTER's per-block
+// fidelity (metadata-only tool schemas etc.); this is the SOURCE-bytes fidelity. Both matter.
+// `resolveSource` may be a plain string-or-null function with no `.detail` (existing call sites,
+// tests): those keep working and CLAIM NO fidelity (status 'unknown', fidelity null) — silence is
+// the honest answer when the resolver cannot tell us.
 export async function rebuildContext(connection, callId, resolveSource) {
+  const detail = typeof resolveSource?.detail === 'function' ? resolveSource.detail : null;
   const rows = (
     await connection.runAndReadAll(
       'SELECT cb.seq AS seq, bc.section AS section, bc.role AS role, bc.kind AS kind, ' +
@@ -356,13 +378,19 @@ export async function rebuildContext(connection, callId, resolveSource) {
   ).getRowObjects();
   const out = [];
   for (const r of rows) {
+    const got = detail
+      ? await detail(r.text_ref)
+      : { status: 'unknown', reason: 'resolver does not report source fidelity', text: await resolveSource(r.text_ref), fidelity: null };
     out.push({
       seq: Number(r.seq),
       section: r.section,
       role: r.role,
       kind: r.kind,
       faithfulness: r.faithfulness,
-      text: await resolveSource(r.text_ref),
+      text: got.text ?? null,
+      source_status: got.status,          // ok | absent | corrupt | no-body | no-ref | unknown
+      source_reason: got.reason ?? null,  // why, when it is not 'ok'
+      source_fidelity: got.fidelity ?? null, // 'verbatim' | 'reserialized' | null (unclaimed)
     });
   }
   return out;

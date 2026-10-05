@@ -3,6 +3,10 @@ node_modules/
 *.log
 # captured LLM traffic — keep local, never redistribute
 **/*.ndjson
+# ...except the SYNTHETIC demo capture: entirely fabricated (no real prompts, files or credentials),
+# committed so `git clone` shows a working board instead of an empty one. Regenerate:
+#   node samples/gen-demo-capture.mjs
+!samples/demo-session.ndjson
 
 # brainstorming visual-companion mockups — local scratch
 .superpowers/

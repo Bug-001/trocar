@@ -6,6 +6,7 @@
 // become factory params + closure; the sink is injected onEnvelope (no hard-wired writeTrace);
 // the inline record literal is replaced by buildEnvelope; no per-session routing (D20).
 import http from 'node:http'
+import { randomBytes } from 'node:crypto'
 import https from 'node:https'
 import net from 'node:net'
 import tls from 'node:tls'
@@ -37,13 +38,21 @@ function makeConnectTunnel(targetHost, targetPort, proxyUrl) {
   }
 }
 
+// RUN-SCOPED ID PREFIX. `seq` restarts at 0 with the process, but the OUTPUT FILE does not — every
+// restart appends to it — so a bare ordinal re-issues req_00001 on the second run. Measured on the
+// author's live capture: 165 duplicated ids. The id is what a text_ref resolves through, so a
+// duplicate makes "these are that block's verbatim bytes" ambiguous, and the reader must refuse the
+// ref (invariant 2) — the blocks become unviewable. A short run tag, minted once per writer, is
+// enough: unique per run, still ordinal and readable inside it (req_k3f9a1-00007).
+const runTag = () => Date.now().toString(36).slice(-4) + randomBytes(2).toString('hex');
 export function createReverseProxy({ target, upstreamProxy = '', keepRawSse = false, onEnvelope }) {
   const TARGET = target instanceof URL ? target : new URL(target)
   const useProxy = Boolean(upstreamProxy) && TARGET.protocol === 'https:'
   let seq = 0
+  const run = runTag()
 
   return http.createServer((req, res) => {
-    const id = `req_${String(++seq).padStart(5, '0')}`
+    const id = `req_${run}-${String(++seq).padStart(5, '0')}`
     const tsRequest = isoStamp()
     const t0 = process.hrtime.bigint()
     const chunks = []

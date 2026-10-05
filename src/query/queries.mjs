@@ -33,7 +33,8 @@ export async function sessionCalls(conn, sessionId) {
             c.stop_reason, c.error, c.duration_ms, c.compaction, c.request_bytes,
             u.input_uncached, u.cache_read, u.cache_write, u.output, u.reasoning, u.total_input,
             ce.break_kind, ce.hit_ratio, ce.divergence_cause, ce.divergence_byte_offset,
-            ce.structural_divergence_seq, ce.ground_truth_flag, ce.declared_breakpoints
+            ce.structural_divergence_seq, ce.ground_truth_flag, ce.declared_breakpoints,
+            ce.prefix_sha256 -- D17④ byte-SHA ground-truth moat (was omitted; the real reuse-prefix hash, not the structural proxy)
      FROM calls c
      LEFT JOIN usage u ON u.call_id = c.call_id
      LEFT JOIN cache_events ce ON ce.call_id = c.call_id
@@ -71,4 +72,82 @@ export async function sessionResources(conn, sessionId) {
 // `resolve(text_ref) -> string|null` slices the byte span out of the source NDJSON.
 export async function callContext(conn, callId, resolve) {
   return rebuildContext(conn, callId, resolve);
+}
+
+// ── cross-session analysis (3.5 signature ② · 看懂 cache / 上下文工程 across sessions) ─────────
+// The whole-corpus SQL DuckDB is uniquely good at — impossible over per-session NDJSON scans.
+// All canonical vocabulary (invariant 3): break_kind / cache_read / hit_ratio, never *_input_tokens.
+
+// "which files ever entered context, across all sessions" (resource kind='file').
+export async function filesEverInContext(conn) {
+  return q(conn,
+    `SELECT label, count(DISTINCT session_id) AS sessions, count(*) AS events,
+            sum(CASE WHEN event = 'enter' THEN 1 ELSE 0 END) AS opened,
+            sum(CASE WHEN event = 'seen' THEN 1 ELSE 0 END) AS seen
+     FROM resource_events WHERE kind = 'file'
+     GROUP BY label ORDER BY sessions DESC, events DESC, label`);
+}
+// per (provider,harness) cache-hit distribution — the KV-cache efficiency profile across sessions.
+export async function cacheHitDistribution(conn) {
+  return q(conn,
+    `SELECT COALESCE(s.provider, '?') AS provider, COALESCE(s.harness, '?') AS harness,
+            count(*) AS calls, avg(ce.hit_ratio) AS avg_hit_ratio,
+            sum(CASE WHEN ce.hit_ratio >= 0.7 THEN 1 ELSE 0 END) AS hi,
+            sum(CASE WHEN ce.hit_ratio >= 0.3 AND ce.hit_ratio < 0.7 THEN 1 ELSE 0 END) AS mid,
+            sum(CASE WHEN ce.hit_ratio < 0.3 THEN 1 ELSE 0 END) AS lo
+     FROM cache_events ce JOIN calls c ON c.call_id = ce.call_id
+     LEFT JOIN sessions s ON s.session_id = c.session_id
+     GROUP BY ALL ORDER BY calls DESC`);
+}
+// three-provider break_kind comparison (3.5 验收: "三家 break_kind 对比") — how each provider's
+// cache breaks distribute; the signature "can express all three cache designs" evidence.
+export async function breakKindComparison(conn) {
+  return q(conn,
+    `SELECT COALESCE(s.provider, '?') AS provider, ce.break_kind, count(*) AS n
+     FROM cache_events ce JOIN calls c ON c.call_id = ce.call_id
+     LEFT JOIN sessions s ON s.session_id = c.session_id
+     GROUP BY ALL ORDER BY provider, n DESC`);
+}
+// 未映射告警面 (D7 self-evolution / 保真兜底): provider keys still unmapped, most-common first.
+export async function unmappedFields(conn) {
+  return q(conn, `SELECT provider, harness, path, n FROM unmapped_fields ORDER BY n DESC LIMIT 200`);
+}
+
+// recursive fork/parent lineage → nested tree rooted at a session (3.5 fork 树 / 3.4 血缘).
+export async function forkTree(conn, rootId) {
+  const rows = await q(conn,
+    `SELECT session_id, parent_session_id, fork_of_session_id, title, forked_at_seq, native_id_confidence,
+            CAST(started_at AS VARCHAR) AS started_at
+     FROM sessions`);
+  const byParent = new Map();
+  for (const r of rows) {
+    const p = r.parent_session_id || r.fork_of_session_id || null;
+    if (!byParent.has(p)) byParent.set(p, []);
+    byParent.get(p).push(r);
+  }
+  const seen = new Set();
+  const build = (id) => {
+    if (seen.has(id)) return null; // cycle guard
+    seen.add(id);
+    const node = rows.find((r) => r.session_id === id) || { session_id: id };
+    return { ...node, children: (byParent.get(id) || []).map((c) => build(c.session_id)).filter(Boolean) };
+  };
+  return build(rootId);
+}
+
+// resource explorer (2.4): fold flat events into per-resource lifecycle — resident segments
+// (enter → evict, or open-ended when still resident) + a loads/seen list — so the frontend renders
+// the folded result instead of re-folding (3.5 query set row '资源管理器').
+export async function resourceLifecycle(conn, sessionId) {
+  const rows = await sessionResources(conn, sessionId); // [{resource_id,kind,label,events:[{seq,event,via,range}]}]
+  return rows.map((r) => {
+    const segments = [], loads = []; let open = null;
+    for (const e of r.events) {
+      if (e.event === 'enter' || e.event === 'open') { if (!open) open = { enter: e.seq, via: e.via }; }
+      else if (e.event === 'evict' || e.event === 'close') { if (open) { open.evict = e.seq; segments.push(open); open = null; } }
+      else loads.push({ seq: e.seq, event: e.event, via: e.via }); // seen / load / read …
+    }
+    if (open) segments.push(open); // still resident at session end (no evict observed)
+    return { resource_id: r.resource_id, kind: r.kind, label: r.label, segments, loads };
+  });
 }

@@ -18,6 +18,11 @@ import {
   controlKindFor,
   controlKind,
 } from '../identity/session-identity.mjs';
+// D25: the CC block model (assembly-order walk, volatile rule, resource linking, kind, faithfulness,
+// bash-read parsing) lives in ONE dissector, shared with the board (analyze.linearContext). parseBlocks
+// below is the ETL PROJECTION of that dissector's spine — adds the D19 verbatim byte spans + text_ref.
+import { dissectBlocks, resourceRef, blockKind, faithfulness, parseBashReads } from '../dissect/cc.mjs';
+export { parseBashReads }; // re-exported for back-compat (was defined here before the D25 extraction)
 
 // ── req_body access ────────────────────────────────────────────────────────────
 // D10: req_body is the VERBATIM captured request bytes (a string). parseBlocks hashes
@@ -107,6 +112,17 @@ const ENVELOPE_CONSUMED = new Set([
   'error',
 ]);
 
+// req_body keys this adapter maps to canonical columns / blocks / identity. The remainder (real
+// provider request fields — max_tokens / temperature / top_p / top_k / tool_choice / thinking /
+// stop_sequences …) are UNMAPPED and MUST surface in calls.extra.req_body + unmapped_count (RFC
+// 3.1:44 — canonical ∪ extra == all keys, per layer; D7 auto-evolution signal). The envelope-level
+// collectExtra treats req_body as consumed-whole, so without this pass those fields silently vanish.
+const REQ_BODY_CONSUMED = new Set([
+  'model', 'stream', 'system', 'tools', 'messages', 'metadata',
+  // demo-capture derived summaries (not provider wire fields; consumed so they don't inflate count)
+  'system_chars', 'tool_count', 'message_count', 'context_chars',
+]);
+
 function stopReasonOf(resp = {}) {
   if (resp.kind === 'json' && resp.body && typeof resp.body === 'object') return resp.body.stop_reason ?? null;
   return resp.stop_reason ?? null;
@@ -118,7 +134,14 @@ export function parseCall(record) {
   const resp = record?.resp || {};
   const cls = classOf(norm); // 'llm' | 'control' (3.4)
   const isLlm = cls === 'llm';
-  const { extra, unmapped_count } = collectExtra(record, ENVELOPE_CONSUMED);
+  const env = collectExtra(record, ENVELOPE_CONSUMED);
+  // ALSO diff req_body's inner keys — unmapped provider request fields flatten in with a `req_body.`
+  // prefix (keeps the contract invariant unmapped_count == |extra keys|, and gives the D7
+  // unmapped_fields view a precise path like `req_body.max_tokens` rather than an opaque `req_body`).
+  const body = req && typeof req === 'object' ? collectExtra(req, REQ_BODY_CONSUMED) : { extra: {}, unmapped_count: 0 };
+  const extra = { ...env.extra };
+  for (const [k, v] of Object.entries(body.extra)) extra['req_body.' + k] = v;
+  const unmapped_count = env.unmapped_count + body.unmapped_count;
   return {
     class: cls,
     control_kind: controlKindFor(norm), // NULL for llm; config|account|registry|telemetry|other for control
@@ -149,47 +172,8 @@ const MSG_BLOCK_CONSUMED = [
   'content', 'tool_use_id', 'is_error', 'source', 'cache_control',
 ];
 
-// faithfulness (invariant 4): opaque = CC replays only a signature /
-// ciphertext, not the reasoning plaintext.
-function faithfulnessOf(b) {
-  if (!b || typeof b !== 'object') return 'verbatim';
-  if (b.type === 'redacted_thinking') return 'opaque'; // encrypted reasoning, no plaintext on the wire
-  // A thinking block whose text is empty but that carries a signature: CC replays the
-  // signature, not the reasoning text → opaque (labeled in place).
-  if (b.type === 'thinking' && !(b.thinking && String(b.thinking).length) && b.signature) return 'opaque';
-  return 'verbatim'; // tools (D15), system, text, tool_use, tool_result, image, thinking-with-text
-}
-
-function kindOf(b) {
-  if (!b || typeof b !== 'object') return 'text';
-  const t = b.type || 'text';
-  return t === 'redacted_thinking' ? 'thinking' : t;
-}
-
-// link a message block to a resource ledger id (ports demo msgResKey; labels MUST match
-// parseResources' addRes keys so ETL can join them).
-function resourceRefOf(b) {
-  if (!b || typeof b !== 'object') return null;
-  if (b.type === 'text' && typeof b.text === 'string') {
-    const sk = b.text.match(/^Base directory for this skill: (\S+)/);
-    if (sk) return 'skill::' + sk[1].split('/').pop();
-    if (/<system-reminder>/.test(b.text)) {
-      if (/CLAUDE\.md/i.test(b.text)) return 'scaffold::CLAUDE.md';
-      if (/\bMEMORY\.md\b|auto-memory|persists across conversations/i.test(b.text)) return 'scaffold::memory (MEMORY.md)';
-    }
-    return null;
-  }
-  if (b.type !== 'tool_use') return null;
-  const p = b.input?.file_path || b.input?.path || b.input?.notebook_path;
-  if (p) return 'file::' + p;
-  if (b.name === 'Bash' && b.input?.command) {
-    const rd = parseBashReads(b.input.command);
-    if (rd.length) return 'file::' + rd[0].path;
-  }
-  if (b.name === 'Skill') return 'skill::' + (b.input?.skill || b.input?.command || '');
-  if ((b.name || '').startsWith('mcp__')) return 'mcp::' + (String(b.name).split('__')[1] || '');
-  return null;
-}
+// faithfulness (invariant 4 · opaque signature-only reasoning), block kind, and resource linking now
+// come from the shared CC dissector (src/dissect/cc.mjs, imported above) — one source for board + ETL.
 
 // One 3.2 block_contents + call_blocks row. content_hash / text / text_ref ALL derive
 // from the verbatim byte span (node); everything else from the parsed structure.
@@ -204,13 +188,13 @@ function mkBlock({ section, role, parsed, node, src, seq, volatile = false, reso
   return {
     section,
     role,
-    kind: kindOf(parsed),
+    kind: blockKind(parsed),
     content_hash, // D19: sha-256 over the VERBATIM wire span, not a re-serialization
     text, // verbatim byte slice of req_body
     text_ref: span, // [start,end) byte span into req_body — the AC-1 回源 locator
     chars: text.length,
     preview: text.slice(0, 200),
-    faithfulness: faithfulnessOf(parsed),
+    faithfulness: faithfulness(parsed),
     cache_control: (parsed && typeof parsed === 'object' && parsed.cache_control) || null,
     volatile: !!volatile,
     resource_ref,
@@ -223,105 +207,87 @@ export function parseBlocks(record) {
   const src = reqSource(record); // verbatim string (source of truth)
   let req;
   try {
-    req = JSON.parse(src); // (a) structure
+    req = JSON.parse(src); // (a) structure — walked by the shared dissector
   } catch {
     req = {};
   }
   let root = null;
   try {
-    root = scanJson(src); // (b) byte spans
+    root = scanJson(src); // (b) byte spans — the ETL-only overlay (the board needs no spans)
   } catch {
     root = null;
   }
   const props = root && root.kind === 'object' ? root.props : new Map();
-  const out = [];
-  let seq = 0;
-
-  // ── tools (assembly order #1) — D15 verbatim ──
   const toolsNode = props.get('tools');
-  const tools = Array.isArray(req.tools) ? req.tools : [];
-  for (let i = 0; i < tools.length; i++) {
-    const node = toolsNode && toolsNode.kind === 'array' ? toolsNode.items[i] : null;
-    out.push(mkBlock({ section: 'tools', role: 'tool', parsed: tools[i], node, src, seq: seq++ }));
-  }
-
-  // ── system (assembly order #2) — a string OR an array of blocks ──
   const sysNode = props.get('system');
-  const sys = req.system;
-  if (typeof sys === 'string') {
-    out.push(
-      mkBlock({
-        section: 'system',
-        role: 'system',
-        parsed: sys,
-        node: sysNode,
-        src,
-        seq: seq++,
-        volatile: /^x-anthropic-billing-header/.test(sys),
-      }),
-    );
-  } else if (Array.isArray(sys)) {
-    for (let i = 0; i < sys.length; i++) {
-      const b = sys[i];
-      const node = sysNode && sysNode.kind === 'array' ? sysNode.items[i] : null;
-      out.push(
-        mkBlock({
-          section: 'system',
-          role: 'system',
-          parsed: b,
-          node,
-          src,
-          seq: seq++,
-          // the billing-header block carries a per-request nonce (cch=…) that changes every call
-          // yet is cache-EXCLUDED by the provider — flag volatile so cache-break analysis skips it.
-          volatile: /^x-anthropic-billing-header/.test((b && b.text) || ''),
-        }),
-      );
-    }
-  }
-
-  // ── messages (assembly order #3) — flatten each message.content[] sub-block ──
   const msgsNode = props.get('messages');
-  const messages = Array.isArray(req.messages) ? req.messages : [];
-  for (let mi = 0; mi < messages.length; mi++) {
-    const m = messages[mi];
-    const mNode = msgsNode && msgsNode.kind === 'array' ? msgsNode.items[mi] : null;
-    const contentNode = mNode && mNode.kind === 'object' ? mNode.props.get('content') : null;
-    const rawContent = m.content;
-    if (Array.isArray(rawContent)) {
-      for (let bi = 0; bi < rawContent.length; bi++) {
-        const b = rawContent[bi];
-        const node = contentNode && contentNode.kind === 'array' ? contentNode.items[bi] : null;
-        const { extra } = b && typeof b === 'object' ? collectExtra(b, MSG_BLOCK_CONSUMED) : { extra: {} };
-        out.push(
-          mkBlock({
-            section: 'messages',
-            role: m.role,
-            parsed: b,
-            node,
-            src,
-            seq: seq++,
-            resource_ref: resourceRefOf(b),
-            extra,
-          }),
-        );
-      }
-    } else {
-      // content is a string → a single text block; its span is the content STRING value node.
-      const node = contentNode && contentNode.kind === 'string' ? contentNode : null;
-      out.push(
-        mkBlock({
-          section: 'messages',
-          role: m.role,
-          parsed: { type: 'text', text: rawContent },
-          node,
-          src,
-          seq: seq++,
-        }),
-      );
+
+  // Resolve the VERBATIM byte node for a dissector spine entry — scanJson indexed the SAME positions
+  // the dissector walked (tools[i] / system[i] / messages[mi].content[bi]), so text_ref + the D19
+  // content_hash stay byte-exact against req_body.
+  const nodeFor = (e) => {
+    if (e.section === 'tools') return toolsNode && toolsNode.kind === 'array' ? toolsNode.items[e.path.i] : null;
+    if (e.section === 'system') {
+      if (e.path.str) return sysNode; // system is a bare string → its own value node
+      return sysNode && sysNode.kind === 'array' ? sysNode.items[e.path.i] : null;
     }
+    const mNode = msgsNode && msgsNode.kind === 'array' ? msgsNode.items[e.path.mi] : null;
+    const contentNode = mNode && mNode.kind === 'object' ? mNode.props.get('content') : null;
+    if (e.path.arrayContent) return contentNode && contentNode.kind === 'array' ? contentNode.items[e.path.bi] : null;
+    return contentNode && contentNode.kind === 'string' ? contentNode : null; // string content → the content string node
+  };
+
+  const out = [];
+  for (const e of dissectBlocks(req)) {
+    let extra = {};
+    let resource_ref = null;
+    // resource_ref + extra are ETL fidelity fields carried ONLY for array-content message blocks
+    // (matches the pre-D25 parser exactly — tools/system/string-content messages stay null/{}).
+    if (e.section === 'messages' && e.path.arrayContent) {
+      const b = e.parsed;
+      if (b && typeof b === 'object') ({ extra } = collectExtra(b, MSG_BLOCK_CONSUMED));
+      resource_ref = e.resourceRef || null;
+    }
+    out.push(mkBlock({ section: e.section, role: e.role, parsed: e.parsed, node: nodeFor(e), src, seq: e.seq, volatile: e.volatile, resource_ref, extra }));
   }
   return out;
+}
+
+// SPANS ONLY — the same walk as parseBlocks, stopping before the expensive part.
+//
+// The board needs each block's byte span so it can mint a text_ref and ship a LOCATOR instead of the
+// body (RFC 4.2:55 「看全文=回源」). It does NOT need what mkBlock does next: slicing the verbatim
+// text out of req_body and sha-256'ing it. Calling parseBlocks for spans would materialise every
+// block's text — the exact allocation the locator exists to avoid — so this returns the spans and
+// nothing else. Same spine, same nodeFor, so span[i] belongs to the same block as
+// linearContext()[i]; test/dissect/cc.test.mjs pins that the two projections stay block-for-block
+// aligned, which is what makes indexing by position sound.
+//
+// A null entry is a block whose bytes could not be located (malformed source). It stays null rather
+// than being filled with a guess: the row then says its body is unresolvable instead of showing
+// someone else's bytes (invariant 2/4).
+export function blockSpans(record) {
+  const src = reqSource(record);
+  let req;
+  try { req = JSON.parse(src) } catch { req = {} }
+  let root = null;
+  try { root = scanJson(src) } catch { root = null }
+  const props = root && root.kind === 'object' ? root.props : new Map();
+  const toolsNode = props.get('tools');
+  const sysNode = props.get('system');
+  const msgsNode = props.get('messages');
+  const nodeFor = (e) => {
+    if (e.section === 'tools') return toolsNode && toolsNode.kind === 'array' ? toolsNode.items[e.path.i] : null;
+    if (e.section === 'system') {
+      if (e.path.str) return sysNode;
+      return sysNode && sysNode.kind === 'array' ? sysNode.items[e.path.i] : null;
+    }
+    const mNode = msgsNode && msgsNode.kind === 'array' ? msgsNode.items[e.path.mi] : null;
+    const contentNode = mNode && mNode.kind === 'object' ? mNode.props.get('content') : null;
+    if (e.path.arrayContent) return contentNode && contentNode.kind === 'array' ? contentNode.items[e.path.bi] : null;
+    return contentNode && contentNode.kind === 'string' ? contentNode : null;
+  };
+  return dissectBlocks(req).map((e) => { const n = nodeFor(e); return n ? spanOf(n) : null });
 }
 
 // ── parseSession — delegates to 3.4 identity.parseSessionCC, adds the cwd column ──
@@ -385,36 +351,8 @@ function rangeOf(name, input = {}) {
   return null;
 }
 
-const BASH_READ = /^(cat|bat|head|tail|tac|nl|less|more|xxd|od|strings)$/;
-export function parseBashReads(command) {
-  if (!command || typeof command !== 'string') return [];
-  const out = [];
-  for (const seg of command.split(/\||&&|;|\n/)) {
-    if (/>/.test(seg)) continue; // an output redirect → writing, not reading into context
-    const toks = seg.match(/"[^"]*"|'[^']*'|\S+/g);
-    if (!toks || !toks.length) continue;
-    const cmd = toks[0].replace(/^['"]|['"]$/g, '').split('/').pop();
-    const isSed = cmd === 'sed';
-    if (!BASH_READ.test(cmd) && !isSed) continue;
-    let range = 'full file';
-    if (isSed) {
-      const sm = seg.match(/-n\s*['"]?(\d+),(\d+)\s*p/);
-      if (sm) range = `L${sm[1]}–${sm[2]}`;
-      else continue;
-    } else {
-      const hn = seg.match(/-n?\s*(\d+)\b/);
-      if (cmd === 'head' && hn) range = `L1–${hn[1]}`;
-      else if (cmd === 'tail' && hn) range = `tail ${hn[1]}`;
-    }
-    for (const t0 of toks.slice(1)) {
-      const t = t0.replace(/^['"]|['"]$/g, '');
-      if (t.startsWith('-') || /^[|&;<>]/.test(t) || /^https?:/i.test(t)) continue;
-      if (!/[./]/.test(t) || /[*?{}]/.test(t)) continue; // needs a dot or slash; skip globs
-      out.push({ path: t, range });
-    }
-  }
-  return out;
-}
+// parseBashReads (bash read-target parsing) now lives in the shared CC dissector (imported +
+// re-exported above); extractResources below uses it to promote cat/head/… dumps into the ledger.
 
 function extractResources(messages, step, out) {
   for (const m of messages) {
@@ -476,8 +414,16 @@ const KNOWN_FILE = new Set([
   'Procfile', 'Rakefile', 'Gemfile', 'Vagrantfile', 'Jenkinsfile', '.gitignore', '.dockerignore',
   '.editorconfig', '.npmrc', '.env',
 ]);
+// SEGMENT/DEPTH BOUNDS ARE LOAD-BEARING, not tidiness. With plain `+` quantifiers this pattern
+// backtracks quadratically over any long run of word characters — a minified bundle, a base64 blob, a
+// lockfile dump in a tool_result. Profiling one render: 25.4 of 25.5 seconds inside this regex, and the
+// board is single-threaded, so one such block hangs every session's poll, not just its own. `{1,64}`
+// per segment and `{1,16}` segments deep cap the backtracking to a constant per start offset, making
+// the scan linear in the text. The cost is that a path segment longer than 64 chars, or nested deeper
+// than 16, is not recognised as "seen" — both are far outside real repo paths, and this lane is a
+// convenience index, never a fidelity claim.
 const PATH_RE = new RegExp(
-  '(?:[\\w.@\\-]+/)+[\\w.@\\-]+\\.\\w{1,8}|\\b[\\w.@\\-]+\\.(?:' +
+  '(?:[\\w.@\\-]{1,64}/){1,16}[\\w.@\\-]{1,64}\\.\\w{1,8}|\\b[\\w.@\\-]{1,64}\\.(?:' +
     KNOWN_EXT +
     ')\\b|\\b(?:Makefile|GNUmakefile|Dockerfile|Containerfile|Procfile|Rakefile|Gemfile|Vagrantfile|Jenkinsfile)\\b|(?:^|[\\s"\'(])(\\.(?:gitignore|dockerignore|editorconfig|npmrc|env))\\b',
   'gi',

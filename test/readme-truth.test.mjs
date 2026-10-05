@@ -1,0 +1,77 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync, existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// The stated bar for this README is that it must not TRAP a user: every command it tells someone to
+// run has to exist, and every file it points at has to be there. That is not a style question — the
+// audit found the README promising `npx asight` (the package is private and the npm name is taken),
+// documenting 5 of 11 CLI verbs, and drifting between `asight on` and `asight monitor on`. A reader
+// who types what they are told and gets "command not found" has been trapped by the docs.
+//
+// These assertions are mechanical on purpose: they hold whoever edits the README to reality.
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.join(HERE, '..');
+const readme = readFileSync(path.join(ROOT, 'README.md'), 'utf8');
+const cli = readFileSync(path.join(ROOT, 'bin', 'asight.mjs'), 'utf8');
+const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+
+const implementedVerbs = new Set([...cli.matchAll(/case '([a-z-]+)'/g)].map((m) => m[1]));
+
+// Only text the reader would actually TYPE counts as an instruction: fenced code blocks and inline
+// `code` spans. Prose like "asight sits on the wire" is not a command, and the README's own
+// disclaimer that `npx asight` does not exist must not read as a promise that it does.
+const fenced = [...readme.matchAll(/```[a-z]*\n([\s\S]*?)```/g)].map((m) => m[1]).join('\n');
+const inlineCode = [...readme.matchAll(/`([^`\n]+)`/g)].map((m) => m[1]).join('\n');
+const commandText = fenced + '\n' + inlineCode;
+
+test('every `asight <verb>` the README tells you to run actually exists', () => {
+  // `[ \t]+`, not `\s+`: the spans are newline-joined, and `\s` would match across the join —
+  // "…01-asight" + "\n" + "spec/…" would read as the command `asight spec`.
+  const documented = new Set([...commandText.matchAll(/\basight[ \t]+([a-z-]+)/g)].map((m) => m[1]));
+  const missing = [...documented].filter((v) => !implementedVerbs.has(v));
+  assert.deepEqual(missing, [],
+    `README documents commands that do not exist: ${missing.join(', ')}. `
+    + `bin/asight.mjs implements: ${[...implementedVerbs].sort().join(', ')}`);
+});
+
+test('every `npm run <script>` the README mentions exists in package.json', () => {
+  const used = [...readme.matchAll(/npm run ([a-z:-]+)/g)].map((m) => m[1]);
+  for (const s of used) {
+    assert.ok(pkg.scripts?.[s], `README says "npm run ${s}" but package.json has no such script`);
+  }
+});
+
+test('every repo file the README links to exists', () => {
+  // markdown links + bare image paths, relative only
+  const refs = [...readme.matchAll(/\]\((?!https?:)([^)#]+)\)/g)].map((m) => m[1].trim());
+  for (const r of refs) {
+    const p = path.join(ROOT, r.replace(/^\.\//, ''));
+    assert.ok(existsSync(p), `README links to ${r}, which does not exist`);
+  }
+});
+
+test('the README does not promise a distribution channel that does not exist', () => {
+  // package.json is private with no LICENSE, so `npx asight` cannot work for anyone
+  if (pkg.private === true || !existsSync(path.join(ROOT, 'LICENSE'))) {
+    // fenced blocks only: a disclaimer in prose is honest, an instruction in a code block is a trap
+    assert.doesNotMatch(fenced, /npx\s+asight/,
+      'the package is private and/or unlicensed, so `npx asight` would fail for every reader — '
+      + 'either ship the package and a LICENSE, or do not promise it');
+  }
+});
+
+test('the README states the harnesses that actually have a dissector', () => {
+  const dissectors = ['cc', 'openai'];         // src/dissect/*.mjs
+  for (const d of dissectors) {
+    assert.ok(existsSync(path.join(ROOT, 'src', 'dissect', `${d}.mjs`)), `dissect/${d}.mjs missing`);
+  }
+  // DeepSeek is named in the spec as a v1 goal but has no dissector — the README must not imply
+  // it works today.
+  const claimsDeepSeek = /DeepSeek[- ]CLI/.test(readme)
+    && !/DeepSeek is not supported|no dissector|not yet/i.test(readme);
+  assert.equal(claimsDeepSeek, false,
+    'README lists DeepSeek-CLI as supported, but src/dissect/ has no DeepSeek dissector');
+});

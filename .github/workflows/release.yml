@@ -1,0 +1,56 @@
+# Release automation (RFC 4.5:52,54 / D23). Tag `v*` → test on both onboard OSes → npm publish
+# (with provenance) → GitHub Release carrying the `npm pack` tarball (a direct-download copy for
+# users who'd rather not go through the npm registry).
+#
+# PREREQUISITES (deliberate gates — publishing is outward-facing and irreversible):
+#   1. Remove `"private": true` from package.json and set a real `"version"` (e.g. matching the tag).
+#   2. Add an `NPM_TOKEN` repository secret (an npm automation token with publish rights).
+#   3. Repo must be public for `--provenance` (id-token attestation) to succeed.
+# Until (1)+(2) are in place the publish step fails safely; the test matrix still runs on every tag.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the GitHub Release
+      id-token: write   # npm provenance attestation
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      # platform-independent npm package (duckdb ships its own prebuilts; none enter our tarball)
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: pack tarball for the Release
+        run: npm pack --pack-destination dist
+      - name: GitHub Release + tarball
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/*.tgz --title "${{ github.ref_name }}" --generate-notes

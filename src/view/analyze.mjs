@@ -11,6 +11,18 @@
 // (count_tokens probes are a 5th lane, added by the UI from probes.ndjson.)
 //
 // Pure: analyze(records) -> { streams, steps, stats, lanes }. No I/O.
+//
+// D25: the CC block model (assembly-order walk, volatile rule, resource linking, system labels,
+// bash-read parsing) lives in ONE dissector — src/dissect/cc.mjs — shared with the ETL adapter.
+// linearContext (below) is now just the board's PROJECTION of that dissector's canonical spine.
+import { dissectBlocks, sysLabel, parseBashReads } from '../dissect/cc.mjs'
+// Envelope drift guard (R1): the D10 envelope stores the response under `resp`, demo v0 under
+// `response`. Reading `.response` directly is the bug class that silently killed every HTTP status
+// on real captures — so go through the shared helper, never the raw key. (assemble.mjs imports
+// analyze.mjs too; the cycle is safe because respOf is only CALLED at runtime, after both modules
+// have finished evaluating. test/view/analyze-admission.test.mjs pins both module load orders.)
+import { respOf } from './assemble.mjs'
+export { sysLabel } // re-exported for back-compat (was defined here before the D25 extraction)
 
 const FILE_OPS = new Set(['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
 const DIR_OPS = new Set(['Glob', 'Grep', 'LS'])
@@ -45,7 +57,7 @@ function auxSubkind(r, userText) {
 // response.{usage,text,tool_calls}) and non-streaming JSON (raw body in response.body).
 // Without this, JSON responses (all the security-monitor calls) read as ctx=0 / no text.
 export function normResp(r) {
-  const rs = r.response || {}
+  const rs = respOf(r) || {}
   if (rs.kind === 'json' && rs.body && typeof rs.body === 'object') {
     const c = Array.isArray(rs.body.content) ? rs.body.content : []
     return {
@@ -101,32 +113,8 @@ function rangeOf(name, input = {}) {
   return null
 }
 
-// A file whose content is dumped by a Bash command (cat/head/tail/sed -n …) IS resident
-// in context just like a Read — so it belongs in the "Opened" tier, not "Only seen".
-// Parse read-like commands out of a bash string (conservative: miss rather than mislabel).
-const BASH_READ = /^(cat|bat|head|tail|tac|nl|less|more|xxd|od|strings)$/
-function parseBashReads(command) {
-  if (!command || typeof command !== 'string') return []
-  const out = []
-  for (const seg of command.split(/\||&&|;|\n/)) {
-    if (/>/.test(seg)) continue // an output redirect → writing, not reading into context
-    const toks = seg.match(/"[^"]*"|'[^']*'|\S+/g)
-    if (!toks || !toks.length) continue
-    const cmd = toks[0].replace(/^['"]|['"]$/g, '').split('/').pop()
-    const isSed = cmd === 'sed'
-    if (!BASH_READ.test(cmd) && !isSed) continue
-    let range = 'full file'
-    if (isSed) { const sm = seg.match(/-n\s*['"]?(\d+),(\d+)\s*p/); if (sm) range = `L${sm[1]}–${sm[2]}`; else continue }
-    else { const hn = seg.match(/-n?\s*(\d+)\b/); if (cmd === 'head' && hn) range = `L1–${hn[1]}`; else if (cmd === 'tail' && hn) range = `tail ${hn[1]}` }
-    for (const t0 of toks.slice(1)) {
-      const t = t0.replace(/^['"]|['"]$/g, '')
-      if (t.startsWith('-') || /^[|&;<>]/.test(t) || /^https?:/i.test(t)) continue
-      if (!/[./]/.test(t) || /[*?{}]/.test(t)) continue // needs a dot or slash; skip globs
-      out.push({ path: t, range })
-    }
-  }
-  return out
-}
+// parseBashReads (bash read-target parsing) now lives in the shared CC dissector (src/dissect/cc.mjs,
+// imported above) — a file dumped by cat/head/sed -n … IS resident in context like a Read.
 
 // Detect resources introduced by a set of (new) messages.
 function extractResources(messages, step, out) {
@@ -197,7 +185,15 @@ const KNOWN_EXT = 'mjs|js|ts|tsx|jsx|cjs|json|jsonl|ndjson|html|htm|css|scss|les
 const KNOWN_EXT_SET = new Set(KNOWN_EXT.split('|'))
 // well-known extensionless files (PATH_RE requires a dot, so match these as whole tokens)
 const KNOWN_FILE = new Set(['Makefile', 'GNUmakefile', 'Dockerfile', 'Containerfile', 'LICENSE', 'COPYING', 'README', 'CHANGELOG', 'Procfile', 'Rakefile', 'Gemfile', 'Vagrantfile', 'Jenkinsfile', '.gitignore', '.dockerignore', '.editorconfig', '.npmrc', '.env'])
-const PATH_RE = new RegExp('(?:[\\w.@\\-]+/)+[\\w.@\\-]+\\.\\w{1,8}|\\b[\\w.@\\-]+\\.(?:' + KNOWN_EXT + ')\\b|\\b(?:Makefile|GNUmakefile|Dockerfile|Containerfile|Procfile|Rakefile|Gemfile|Vagrantfile|Jenkinsfile)\\b|(?:^|[\\s"\'(])(\\.(?:gitignore|dockerignore|editorconfig|npmrc|env))\\b', 'gi')
+// SEGMENT/DEPTH BOUNDS ARE LOAD-BEARING, not tidiness. With plain `+` quantifiers this pattern
+// backtracks quadratically over any long run of word characters — a minified bundle, a base64 blob, a
+// lockfile dump in a tool_result. Profiling one render: 25.4 of 25.5 seconds inside this regex, and the
+// board is single-threaded, so one such block hangs every session's poll, not just its own. `{1,64}`
+// per segment and `{1,16}` segments deep cap the backtracking to a constant per start offset, making
+// the scan linear in the text. The cost is that a path segment longer than 64 chars, or nested deeper
+// than 16, is not recognised as "seen" — both are far outside real repo paths, and this lane is a
+// convenience index, never a fidelity claim.
+const PATH_RE = new RegExp('(?:[\\w.@\\-]{1,64}/){1,16}[\\w.@\\-]{1,64}\\.\\w{1,8}|\\b[\\w.@\\-]{1,64}\\.(?:' + KNOWN_EXT + ')\\b|\\b(?:Makefile|GNUmakefile|Dockerfile|Containerfile|Procfile|Rakefile|Gemfile|Vagrantfile|Jenkinsfile)\\b|(?:^|[\\s"\'(])(\\.(?:gitignore|dockerignore|editorconfig|npmrc|env))\\b', 'gi')
 const CODE_STEM = /^(process|console|import|module|exports|window|document|globalThis|self|Math|JSON|Object|Array|res|req|err|ctx|response|resp|reply|result|body|payload|data|obj|item|row|self)$/i
 const TECH_STEM = /^(node|vue|next|nuxt|react|angular|svelte|d3|three|express|jquery|ember|backbone|preact|solid|remix|astro|webpack|rollup|vite)$/i
 // Precision filter: reject version strings (HTTP/1.1), code identifiers (process.env, response.json())
@@ -296,10 +292,37 @@ const LANE_META = {
 const LANE_ORDER = { main: 0, subagent: 1, monitor: 2, notify: 3, titlegen: 4, quota: 5, aux: 6 }
 const AUX_KINDS = new Set(['aux', 'notify', 'titlegen', 'quota'])
 
+// ── admission (audit 2026-07-19 · invariant 4) ──────────────────────────────────────────
+// EVERY captured LLM call is admitted, whatever its HTTP status. The old filter demanded a
+// parsed 200, which made the spec's `status≠200 → 红柱` unreachable BY CONSTRUCTION (the call
+// never reached the timeline) while the board's errStats() counted the same failures straight
+// off the raw records — the stats bar printed "401×1 502×1" over a timeline with no such bars.
+// Silently dropping a call the user genuinely captured is exactly what invariant 4 forbids.
+//
+// A record whose req_body never parsed (truncated / corrupt capture — hydrateForBoard leaves it
+// without a `.request`) is admitted as a SENTINEL: it has no renderable context, so it gets an
+// empty request stub plus `unparsed:true`, and the view shows an explicit "unrenderable" call
+// rather than a hole in the numbering. Marked, never invented.
+const isUnparsed = (r) => !(r.request && Array.isArray(r.request.messages))
+// A call is "failed" if it carries an error key, a non-200 status, or is an unparsed sentinel.
+// (Status-less records — an in-flight capture with no response yet — are NOT failures.)
+function failedCall(r) {
+  if (r.error) return true
+  if (r._unparsed || isUnparsed(r)) return true // `_unparsed` = already stubbed by admission
+  const st = respOf(r)?.status
+  return st != null && st !== 200
+}
+
 export function analyze(records) {
-  const llm = records.filter(
-    (r) => r.is_llm_call && r.request && Array.isArray(r.request.messages) && (r.response?.status === 200 || !r.response || r.error),
-  )
+  // Admit on `is_llm_call` alone. Non-LLM records stay out (they carry only a response body by
+  // design — 保真边界, not a loss). Sentinels get an empty request stub so the downstream walkers
+  // never dereference a missing `.request`; `rec` here is already a view-side hydrated clone, so
+  // stubbing does not touch the raw NDJSON source truth (invariant 2).
+  const llm = records.filter((r) => r && r.is_llm_call).map((r) => (
+    isUnparsed(r)
+      ? { ...r, request: { messages: [], tools: [], system: [], message_count: 0, tool_count: 0 }, _unparsed: true }
+      : r
+  ))
   llm.sort((a, b) => String(a.ts_request).localeCompare(String(b.ts_request)) || String(a.id).localeCompare(String(b.id)))
 
   // ── segment into streams/lanes by lineage + role marker ─────────────────────
@@ -318,7 +341,14 @@ export function analyze(records) {
     // a burst of failed haiku retries (tools≥1) during a network drop pollutes the conversation lane.
     const small = /haiku/i.test(r.request.model || '')
     let stream
-    if (isMonitor(r)) {
+    if (r._unparsed) {
+      // An unparsed sentinel has no system text / message count to classify on. Every lane guess
+      // would be a fabrication; route it to `main` — the lane the user is actually watching — so the
+      // gap is VISIBLE. The alternative (0 msgs / 0 tools → the aux heuristic) would file a broken
+      // conversation turn under "quota / keep-alive", asserting a lane we do not know (invariant 4).
+      if (!mainStream) mainStream = mkStream('main')
+      stream = mainStream
+    } else if (isMonitor(r)) {
       stream = monitorStream || (monitorStream = mkStream('monitor'))
     } else if (msgCount <= 2 && !sub && (tools === 0 || small)) {
       const sk = auxSubkind(r, userTextOf(r))
@@ -333,11 +363,23 @@ export function analyze(records) {
     }
     stream._lastMsg = msgCount
     prevKind = stream.kind
+    const rs = respOf(r) || {}
+    const status = rs.status ?? null
+    const failed = failedCall(r)
     const step = { gi: stepList.length, id: r.id, streamId: stream.id, rec: r, norm: normResp(r),
-      msgCount, tools, ctx: ctxTokens(r), status: r.response?.status ?? null,
+      msgCount, tools, ctx: ctxTokens(r), status,
       ts: r.ts_request, compaction: false,
-      error: !!r.error || (r.response?.status || 0) >= 500,
-      errMsg: r.response?.error?.message || ((r.response?.status || 0) >= 500 ? `HTTP ${r.response.status}` : null) }
+      unparsed: !!r._unparsed,
+      // `error` now covers EVERY non-200 (was: only 5xx — so a 401/429 rendered as a normal call).
+      error: failed,
+      errMsg: r._unparsed ? 'unrenderable: req_body could not be parsed (truncated / corrupt capture)'
+        : (rs.error?.message || (status != null && status !== 200 ? `HTTP ${status}` : (r.error ? String(r.error.message || r.error) : null))),
+      // Cache-prefix chaining (audit 2026-07-19). A call that FAILED did not establish a new cache
+      // prefix at the provider — a 401/429/502 never got far enough to write one — so the next call's
+      // prefix diff must be taken against the last SUCCESSFUL call, not against the failure. This flag
+      // makes that skip EXPLICIT and inspectable; the call still APPEARS on the timeline (that was the
+      // whole bug). Consumers that chain `prevFlat` MUST advance it only when chainsPrefix is true.
+      chainsPrefix: !failed }
     stream.calls.push(step)
     stepList.push(step)
   }
@@ -373,6 +415,14 @@ export function analyze(records) {
     let prevCount = 0, prevCtx = 0
     for (let k = 0; k < s.calls.length; k++) {
       const step = s.calls[k]
+      // Unparsed sentinel: no context to diff. Emit the visible error marker and leave prevCount /
+      // prevCtx anchored to the last RENDERABLE call — its empty stub would otherwise read as a
+      // message-count collapse and fabricate a compaction event out of a capture defect.
+      if (step.unparsed) {
+        step.dCtx = 0
+        s.events.push({ type: 'error', step: step.gi, streamId: s.id, msg: step.errMsg, unparsed: true })
+        continue
+      }
       step.dCtx = step.ctx - prevCtx
       prevCtx = step.ctx
       const msgs = step.rec.request.messages
@@ -392,6 +442,15 @@ export function analyze(records) {
       let newMsgs
       if (bigDrop || (drop && hasPreamble)) {
         step.compaction = true
+        // 保真边界 (invariant 4 · spec 1.5:37 / 3.4:16,21): CC emits NO explicit compaction marker —
+        // this verdict is INFERRED from observed shape, never confirmed by the harness. Carry that in
+        // the data so a consumer can render "≈ inferred" instead of asserting it; spec 3.4:21 pins the
+        // level at medium. `basis` names WHICH evidence fired: CC's own "continued from a previous
+        // conversation" preamble (the stronger signal, and the harness's own words) vs. a bare
+        // message-count collapse (a number going down — the weaker guess).
+        step.compactionInferred = true
+        step.compactionConfidence = 'medium'
+        step.compactionBasis = hasPreamble ? 'preamble+msg-count-drop' : 'msg-count-drop'
         step.evictedFrom = prevCount
         step.evictedTo = msgs.length
         for (const res of resMap.values()) {
@@ -405,7 +464,10 @@ export function analyze(records) {
         newMsgs = msgs.slice(prevCount)
       }
       if (step.compaction)
-        s.events.push({ type: 'compaction', step: step.gi, streamId: s.id, from: step.evictedFrom, to: step.evictedTo })
+        s.events.push({ type: 'compaction', step: step.gi, streamId: s.id, from: step.evictedFrom, to: step.evictedTo,
+          // the event travels to the UI on its own — it MUST carry the inference marker with it,
+          // otherwise the timeline re-asserts as fact what the step knows is a guess (invariant 4).
+          inferred: true, confidence: step.compactionConfidence, basis: step.compactionBasis })
       if (isSummarize) {
         step.summarizing = true
         s.events.push({ type: 'summarize', step: step.gi, streamId: s.id, out: step.norm.usage?.output_tokens })
@@ -455,6 +517,34 @@ export function analyze(records) {
       s.spawnArg = best.arg
       s.spawnStep = best.step
       best.childStreamId = s.id
+    }
+  }
+
+  // ── events keep their SHAPE, not a second copy of the session's text ─────────
+  //
+  // userEvents() / observationEvents() above build each event around the FULL user message or the
+  // FULL tool_result. That text is the heaviest thing in a session and it is already carried, once,
+  // as blocks — so every event was a verbatim second copy, uncapped and with no locator. Measured on
+  // a 40-call fixture it was 7.8 MB of a 10.1 MB response; and because events are not indexed by the
+  // page window, paging did not shrink them at all (a 10-wide window came out 1.04× a 5-wide one).
+  //
+  // Nothing reads that text after this point. Inside analyze() the only event field consulted later
+  // is `input.prompt`, for subagent spawn-linking above — which is why this runs AFTER that loop.
+  // The board renders one event kind (`grep -n '\.events' src/web/index.html` → :1739, filtered to
+  // compaction / summarize) and those carry no `text` at all.
+  //
+  // Invariant 4: the body is not silently emptied. `preview` + `chars` are what the collapsed row
+  // shows anyway, and `text_omitted` states in place that the full text lives on this step's blocks —
+  // an event is derived from them and owns no byte span of its own, so there is no honest locator to
+  // mint here.
+  for (const s of streams) {
+    for (const e of s.events) {
+      if (typeof e.text !== 'string') continue
+      const full = e.text
+      delete e.text
+      e.preview = full.replace(/\s+/g, ' ').trim().slice(0, 200)
+      e.chars = full.length
+      e.text_omitted = 'derived event — full text is not shipped here; read it from this step\'s blocks'
     }
   }
 
@@ -515,99 +605,93 @@ function blkHashText(b) {
 // hash a bounded prefix — plenty to distinguish blocks, and O(1) per block regardless of size
 const blkKey = (prefix, b) => prefix + hash(blkHashText(b).slice(0, 4096))
 
-// short structural label for a system block (Claude Code stacks several)
-export function sysLabel(text) {
-  const t = text || ''
-  // structural blocks first, anchored on their opening line — so a big prompt block that merely
-  // EMBEDS a <system-reminder> (Claude Code appends CLAUDE.md / memory into the system prompt) is
-  // named by its dominant content, not by the reminder buried inside it.
-  if (/^x-anthropic-billing-header/.test(t)) return 'billing header'
-  if (/^You are (Claude Code|a Claude agent)/.test(t)) return 'identity'
-  if (/^\s*You are an interactive agent/.test(t)) return 'agent instructions'
-  // a block that is ITSELF just a reminder (starts with the tag)
-  if (/^\s*<system-reminder>/.test(t)) {
-    if (/CLAUDE\.md/i.test(t)) return 'CLAUDE.md'
-    if (/\bMEMORY\.md\b|auto-memory|persists across conversations/i.test(t)) return 'memory'
-    return 'system-reminder'
-  }
-  // otherwise a system-prompt block; note if it carries embedded CLAUDE.md / memory context
-  const carries = []
-  if (/CLAUDE\.md/i.test(t)) carries.push('CLAUDE.md')
-  if (/\bMEMORY\.md\b|auto-memory|persists across conversations/i.test(t)) carries.push('memory')
-  return 'system prompt' + (carries.length ? ' +' + carries.join(' +') : '')
+// Flatten a captured request into ordered block descriptors — the board's PROJECTION of the shared
+// CC dissector's canonical spine (src/dissect/cc.mjs · D25). Each descriptor carries a stable content
+// `key` (for prefix-diffing vs the previous call), its `cache_control` if Claude Code set one, and
+// enough metadata for the view to render + link it to the resource ledger. sysLabel / resourceRef /
+// the volatile rule now come from the dissector, so board & ETL never drift.
+// A tool_result's own truncation notice, QUOTED from the harness — never inferred. Claude Code /
+// Desktop write their cut in the block text itself (observed verbatim on the wire as
+// "[truncated to 3000 chars]"). We surface only that literal: length is NOT evidence of truncation
+// (invariant 4 — a marker we invented would be exactly the "plausible but wrong" failure), and a
+// display clip is a different thing entirely (spec 2.3:46).
+const TRUNC_NOTE = /\[truncated[^\]\n]{0,80}\]/g
+function truncNote(text) {
+  const m = String(text || '').match(TRUNC_NOTE)
+  return m ? m[m.length - 1] : null
 }
 
-// Flatten a captured request into ordered block descriptors. Each carries a stable content `key`
-// (for prefix-diffing against the previous call), its `cache_control` if Claude Code set one, and
-// enough metadata for the view to render + link it to the resource ledger.
 export function linearContext(request) {
   const flat = []
-  for (const [i, t] of (request?.tools || []).entries()) {
-    const mcp = /^mcp__/.test(t.name || '')
-    // D15: capture now stores tools VERBATIM (full description + input_schema). Derive the display
-    // metadata here (summarization moved up to the adapter, RFC 4.1 §验收#3). Back-compat: old v0
-    // traces only have description_chars / input_schema_props — fall back to those, and mark the
-    // block non-verbatim so the UI keeps the honest "metadata only" faithfulness badge for them.
-    const hasSchema = t.input_schema !== undefined && t.input_schema !== null
-    const hasDesc = typeof t.description === 'string'
-    const verbatim = hasSchema || hasDesc
-    const props = hasSchema ? (t.input_schema?.properties ? Object.keys(t.input_schema.properties) : []) : (t.input_schema_props || [])
-    const descChars = hasDesc ? t.description.length : (t.description_chars || 0)
-    flat.push({
-      sec: 'tools', kind: 'tool', role: 'tool', name: t.name || '', ttype: t.type || '',
-      props, descChars, cc: t.cache_control || null, mcp,
-      verbatim, desc: hasDesc ? t.description : undefined, schema: hasSchema ? t.input_schema : undefined,
-      resKey: mcp ? 'mcp::' + (String(t.name).split('__')[1] || '') : '',
-      key: 'T:' + (t.name || i) + ':' + descChars + ':' + props.length,
-    })
+  // ── resource ↔ RESULT linking (audit 2026-07-19) ────────────────────────────────────────
+  // The 📂 resource explorer promises "the bytes that entered the context". The dissector keys a
+  // file resource to its `tool_use` (that is where the path is), but a tool_use carries only the
+  // ARGUMENTS the model sent — the file's bytes live in the sibling `tool_result`. The board's
+  // resolver prefers a non-tool_use block with the same resKey and falls back to the tool_use, so
+  // with nothing else carrying the key it previewed the request JSON as if it were the file.
+  // Mirror the file resKey onto its sibling result here, and mark BOTH ends' role, so the request
+  // JSON is never silently passed off as content. Scoped to `file::` on purpose: skill/mcp/scaffold
+  // resources already resolve to their own verbatim body block, and stealing that is a regression.
+  const spine = dissectBlocks(request)
+  const fileKeyByUseId = new Map()  // tool_use_id → 'file::<path>'
+  const answered = new Set()        // tool_use_ids that have a result IN THIS request
+  for (const e of spine) {
+    const b = e.parsed
+    if (!b || typeof b !== 'object') continue
+    if (b.type === 'tool_use' && b.id && String(e.resourceRef || '').startsWith('file::')) fileKeyByUseId.set(b.id, e.resourceRef)
+    else if (b.type === 'tool_result' && b.tool_use_id) answered.add(b.tool_use_id)
   }
-  for (const [i, b] of (request?.system || []).entries()) {
-    const text = b?.text || ''
-    // the billing-header block carries a per-request nonce (cch=…, cc_prev_req=…) so its bytes change
-    // every call — yet cache-hit stays ~100%, i.e. Anthropic excludes this billing signal from the
-    // cache key. Flag it volatile so the cache-break marker doesn't falsely trip on it.
-    const volatile = /^x-anthropic-billing-header/.test(text)
-    flat.push({ sec: 'system', kind: 'system', role: 'system', si: i, label: sysLabel(text), text, chars: text.length, volatile, cc: b?.cache_control || null, key: blkKey('S:', { type: 'text', text }) })
-  }
-  for (const [mi, m] of (request?.messages || []).entries()) {
-    const content = Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }]
-    for (const [bi, b] of content.entries()) {
-      const type = typeof b === 'string' ? 'text' : (b?.type || 'text')
+  for (const e of spine) {
+    if (e.section === 'tools') {
+      const t = e.parsed
+      const mcp = /^mcp__/.test(t.name || '')
+      // D15: capture stores tools VERBATIM (full description + input_schema). Derive display metadata
+      // here. Back-compat: old v0 traces only have description_chars / input_schema_props — fall back
+      // and mark the block non-verbatim so the UI keeps the honest "metadata only" badge for them.
+      const hasSchema = t.input_schema !== undefined && t.input_schema !== null
+      const hasDesc = typeof t.description === 'string'
+      const verbatim = hasSchema || hasDesc
+      const props = hasSchema ? (t.input_schema?.properties ? Object.keys(t.input_schema.properties) : []) : (t.input_schema_props || [])
+      const descChars = hasDesc ? t.description.length : (t.description_chars || 0)
       flat.push({
-        sec: 'messages', kind: type, role: m.role, mi, bi, block: b,
+        sec: 'tools', kind: 'tool', role: 'tool', name: t.name || '', ttype: t.type || '',
+        props, descChars, cc: t.cache_control || null, mcp,
+        verbatim, desc: hasDesc ? t.description : undefined, schema: hasSchema ? t.input_schema : undefined,
+        resKey: mcp ? 'mcp::' + (String(t.name).split('__')[1] || '') : '',
+        key: 'T:' + (t.name || e.path.i) + ':' + descChars + ':' + props.length,
+      })
+    } else if (e.section === 'system') {
+      const b = e.parsed, text = b?.text || ''
+      flat.push({ sec: 'system', kind: 'system', role: 'system', si: e.path.i, label: sysLabel(text), text, chars: text.length, volatile: e.volatile, cc: b?.cache_control || null, key: blkKey('S:', { type: 'text', text }) })
+    } else {
+      const b = e.parsed, type = typeof b === 'string' ? 'text' : (b?.type || 'text')
+      const d = {
+        sec: 'messages', kind: type, role: e.role, mi: e.path.mi, bi: e.path.bi, block: b,
         toolName: type === 'tool_use' || type === 'server_tool_use' ? (b.name || '') : '',
         cc: (b && b.cache_control) || null,
-        resKey: msgResKey(b), key: blkKey('M:' + m.role + ':' + type + ':', b),
-      })
+        resKey: e.resourceRef, key: blkKey('M:' + e.role + ':' + type + ':', b),
+      }
+      // `key` above is UNCHANGED — the cache-prefix chain diffs on it, so the linking below only
+      // ever ADDS descriptive fields.
+      if (type === 'tool_use' && d.resKey && d.resKey.startsWith('file::')) {
+        d.resRole = 'request'
+        // No sibling result in THIS request: the call that ISSUED the tool_use gets its result in
+        // the NEXT one. The honest render is "result not in this call's context yet" — showing the
+        // arguments as though they were the file is the bug this flag exists to prevent.
+        d.resPending = !answered.has(b.id)
+      } else if (type === 'tool_result' && b && b.tool_use_id && fileKeyByUseId.has(b.tool_use_id)) {
+        d.resKey = fileKeyByUseId.get(b.tool_use_id)
+        d.resRole = 'result'
+        // An error result IS what entered the context — link it, but flag it so the panel says
+        // "the tool failed" instead of presenting the error text as the file's contents.
+        if (b.is_error) d.resError = true
+        const tn = truncNote(textOfResult(b))
+        if (tn) d.resTruncNote = tn
+      }
+      flat.push(d)
     }
   }
   return flat
-}
-// link a message block back to a ledger resource (file / skill / mcp), matching addRes() keys
-function msgResKey(b) {
-  if (!b || typeof b !== 'object') return ''
-  // the resident SKILL.md body block → link it to its skill resource so the card can reveal the
-  // verbatim body (basename of the "Base directory" path === skill name === addRes label above)
-  if (b.type === 'text' && typeof b.text === 'string') {
-    const sk = b.text.match(/^Base directory for this skill: (\S+)/)
-    if (sk) return 'skill::' + sk[1].split('/').pop()
-    // scaffold (auto-loaded context) → link the verbatim system-reminder block to its ledger
-    // resource so "loaded context" can reveal it (labels MUST match extractResources' addRes above)
-    if (/<system-reminder>/.test(b.text)) {
-      if (/CLAUDE\.md/i.test(b.text)) return 'scaffold::CLAUDE.md'
-      if (/\bMEMORY\.md\b|auto-memory|persists across conversations/i.test(b.text)) return 'scaffold::memory (MEMORY.md)'
-    }
-    return ''
-  }
-  if (b.type !== 'tool_use') return ''
-  const p = b.input?.file_path || b.input?.path || b.input?.notebook_path
-  if (p) return 'file::' + p
-  // a Bash read (cat/head/…) makes its first dumped file resident — key the block to it so the
-  // "files opened" nav item can reveal this Bash block (mirrors extractResources' Bash branch)
-  if (b.name === 'Bash' && b.input?.command) { const rd = parseBashReads(b.input.command); if (rd.length) return 'file::' + rd[0].path }
-  if (b.name === 'Skill') return 'skill::' + (b.input?.skill || b.input?.command || '')
-  if ((b.name || '').startsWith('mcp__')) return 'mcp::' + (String(b.name).split('__')[1] || '')
-  return ''
 }
 
 // ── D17① prefix-divergence localization (RFC 3.3 前缀分叉定位 + 分叉成因分类) ──
@@ -618,8 +702,9 @@ function canonJSON(v) {
   if (v && typeof v === 'object') { const o = {}; for (const k of Object.keys(v).sort()) o[k] = canonJSON(v[k]); return o }
   return v
 }
-// a flat block's canonical text — for byte-level divergence localization within the first diverging block.
-function flatBlockText(b) {
+// a flat block's canonical text — for byte-level divergence localization within the first diverging block,
+// and the verbatim byte source for the D17④ prefix SHA-256 (exported; used by the server-side assembler).
+export function flatBlockText(b) {
   if (b.sec === 'tools') return 'T:' + (b.name || '') + '\u0001' + (b.desc != null ? b.desc : '') + '\u0001' + (b.schema !== undefined ? JSON.stringify(b.schema) : '')
   if (b.sec === 'system') return b.text || ''
   return blkHashText(b.block)
