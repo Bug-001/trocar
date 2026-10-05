@@ -39,6 +39,8 @@ function sandbox() {
 const req = (sock, method, p, body) => controlRequest({ socketPath: sock, method, path: p, body })
 async function until(fn, ms = 3000) { const end = Date.now() + ms; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 20)) } }
 const install = (s) => installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [cc], freePort: async () => 0 })
+// /proc start time of a process started now (fake-proc counts ticks of 1/100 s from its btime).
+const nowTicks = (p) => Math.ceil((Date.now() / 1000 - p.btime) * 100)
 const flowsOf = (s) => { const d = path.join(s.collector, 'flows'); return fs.existsSync(d) ? fs.readdirSync(d).flatMap((n) => fs.readFileSync(path.join(d, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))) : [] }
 
 // A keep-alive TLS relay for relay.asight.test with its own private CA. A daemon process would trust it for the
@@ -84,7 +86,7 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
     const on = await req(s.sock, 'POST', '/on', {})
     assert.deepEqual([on.desired, on.actual, on.recording], ['on', 'on', true])
 
-    p.add(4242, { uid: UID, exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: s.home, env: { HOME: s.home } })
+    p.add(4242, { uid: UID, exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
     await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 4242, pid: 4242, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
     const row = await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 4242 && a.trusted))
     assert.deepEqual([row.agent, row.reason, row.trust_var, row.trust_via.startsWith('user settings env'), row.hosts.includes('relay.asight.test'), row.direct], ['claude-code', 'ok', 'NODE_EXTRA_CA_CERTS', true, true, 0])
@@ -142,7 +144,7 @@ test('daemon: the same program without the CA is only observed; its direct conne
   const { arch, clients } = fakeArch(p)
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home } })
   try {
-    p.add(5151, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home } })
+    p.add(5151, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) })
     await req(s.sock, 'POST', '/on', {})
     const row = (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 5151) // picked up by the rescan in `on`
     assert.deepEqual([row.agent, row.trusted, row.reason, row.decrypt, row.source], ['claude-code', false, 'var-missing', false, 'scan'])
@@ -231,4 +233,18 @@ test('daemon: a control request that arrives while the daemon is still wiring wa
     const st = await early
     assert.deepEqual([st.desired, typeof st.engine.port, st.helper.ok], ['off', 'number', true])
   } finally { release(); await (await starting).stop(); p.done(); s.done() }
+})
+
+test('daemon: a Claude Code started before install is config-after-start — untrusted, observed only, never decrypted (coordinator 2026-10-06)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  p.add(6161, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) - 6000 }) // a minute ago
+  await install(s)
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] })
+  try {
+    const on = await req(s.sock, 'POST', '/on', {})
+    const row = on.agents.find((a) => a.pid === 6161)
+    assert.deepEqual([row.agent, row.trusted, row.reason, row.decrypt, row.trust_via.startsWith('user settings env')], ['claude-code', false, 'config-after-start', false, true])
+    assert.equal((await clients[0].raw({ op: '__watched' })).watch['6161'], 0, 'the kernel only observes it: its connections go direct')
+  } finally { await d.stop(); p.done(); s.done() }
 })

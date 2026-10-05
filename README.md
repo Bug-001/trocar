@@ -143,8 +143,9 @@ asight serve                  # the captures appear on the board
 
 A relay or proxy with a private CA keeps working: install carries the CA you already gave Claude Code
 into `extra-cc.pem`, and the daemon verifies upstreams with Node's store, so start it with the same
-`NODE_EXTRA_CA_CERTS` your shell has. Claude Code processes started before install keep their old
-trust until they restart; `status` reports them as untrusted and their connections go direct.
+`NODE_EXTRA_CA_CERTS` your shell has. A Claude Code process started before install reads its CA list
+only at startup, so it never trusts the collector CA: `status` reports it untrusted
+(`config-after-start`) and its connections go direct, unrecorded, until you restart it.
 
 ## Claude Desktop — the one environment-dependent case
 

@@ -1,6 +1,7 @@
 // test/collector/harness/claude-code.test.mjs — R1 (signature), T12 (CC settings layers), T10 (CC injection plan).
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import path from 'node:path'
 import cc from '../../../src/collector/harness/claude-code.mjs'
 import { sandbox, ctxFor, facts, judge, matchOf, CA, OTHER } from './_ctx.mjs'
@@ -17,18 +18,30 @@ test('claude-code: the versioned binary (also "(deleted)" after an update) and b
   assert.equal(matchOf([cc], facts({ exe: '/usr/bin/node', argv: ['node', '/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js'] })).agent, null)
 })
 
-test('claude-code: settings env applies over the launch env and is live; project/managed scopes override user (T12)', () => {
+test('claude-code: settings env applies over the launch env; project/managed scopes override user (T12)', () => {
   const s = sandbox()
   try {
     const pem = s.put('ca/asight.pem', CA.certPem); const foreign = s.put('ca/other.pem', OTHER.certPem)
     s.put('.claude/settings.json', JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: pem, ANTHROPIC_BASE_URL: 'https://relay.example.com/anthropic' } }))
     const a = judge(cc, ctxFor({ home: s.home, env: { NODE_EXTRA_CA_CERTS: foreign } }))
     assert.deepEqual([a.trust.trusted, a.trust.via.startsWith('user settings env')], [true, true])
-    assert.ok(a.layers.every((l) => l.live === true))
+    assert.ok(a.layers.every((l) => l.live === false), 'Node/Bun read NODE_EXTRA_CA_CERTS once: a settings layer is never live')
     assert.ok(a.hosts.includes('relay.example.com'))
     const proj = path.join(s.home, 'repo'); s.put('repo/.claude/settings.json', JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: foreign } }))
     const b = judge(cc, ctxFor({ home: s.home, cwd: proj }))
     assert.deepEqual([b.trust.trusted, b.trust.reason], [false, 'ca-not-in-file'])
+  } finally { s.done() }
+})
+
+test('claude-code: a settings CA written after the process started is config-after-start, never trusted (coordinator 2026-10-06)', () => {
+  const s = sandbox()
+  try {
+    const pem = s.put('ca/asight.pem', CA.certPem)
+    const file = s.put('.claude/settings.json', JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: pem } }))
+    const mtime = fs.statSync(file).mtimeMs
+    const after = judge(cc, ctxFor({ home: s.home, startedAt: mtime - 60_000 }))
+    assert.deepEqual([after.trust.trusted, after.trust.reason, after.trust.via.startsWith('user settings env')], [false, 'config-after-start', true])
+    assert.equal(judge(cc, ctxFor({ home: s.home, startedAt: mtime + 1 })).trust.trusted, true, 'a process started after the edit is trusted')
   } finally { s.done() }
 })
 

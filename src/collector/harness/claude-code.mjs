@@ -2,8 +2,10 @@
 // (installed package; summarised in the RFC table and its lab checks).
 // Trust: Bun build, NODE_EXTRA_CA_CERTS is additive; CC applies the `env` blocks of ~/.claude.json and
 // every enabled settings scope OVER the launch env (Object.assign(process.env, …)) after exec, so they
-// never show in /proc/<pid>/environ and must be read here. Adding/changing the value is live in a
-// running CC; removal is not. Under CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST CC drops settings-sourced
+// never show in /proc/<pid>/environ and must be read here. CC re-applies those blocks while it runs, but Node
+// and Bun read NODE_EXTRA_CA_CERTS once, when the TLS root store is built, so a CA written into settings after
+// the process started is not believed: the layers are not live (config-after-start → untrusted → direct;
+// coordinator 2026-10-06, until the 4.6 lab check ④ shows otherwise). Under CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST CC drops settings-sourced
 // CA/proxy keys (desktop entrypoints exempt — lab check L-CC-1); --restricted / CLAUDE_CODE_RESTRICTED
 // and --setting-sources without a scope drop that scope. Same-exe helpers run with argv0 rg / apply-seccomp.
 // Injection (4.6 信任入口表, D37④): one key, env.NODE_EXTRA_CA_CERTS in ~/.claude/settings.json (or
@@ -57,15 +59,15 @@ function layers(ctx) {
     const name = `${label} (${file})`
     const mtimeMs = ctx.mtimeOf(file)
     const scopeOff = restricted ? 'settings-ignored-restricted' : (allowed && scope !== 'policy' && !allowed.has(scope)) ? 'settings-ignored-setting-sources' : null
-    if (scopeOff) { out.push({ name, mode: 'override', vars, live: true, mtimeMs, ignored: scopeOff }); continue }
+    if (scopeOff) { out.push({ name, mode: 'override', vars, live: false, mtimeMs, ignored: scopeOff }); continue }
     if (hostManaged) {
       const kept = {}; const dropped = {}
       for (const [k, v] of Object.entries(vars)) (HOST_MANAGED_DROPS.has(k) ? dropped : kept)[k] = v
-      out.push({ name, mode: 'override', vars: kept, live: true, mtimeMs })
-      if (Object.keys(dropped).length) out.push({ name, mode: 'override', vars: dropped, live: true, mtimeMs, ignored: 'settings-ignored-managed-by-host' })
+      out.push({ name, mode: 'override', vars: kept, live: false, mtimeMs })
+      if (Object.keys(dropped).length) out.push({ name, mode: 'override', vars: dropped, live: false, mtimeMs, ignored: 'settings-ignored-managed-by-host' })
       continue
     }
-    out.push({ name, mode: 'override', vars, live: true, mtimeMs })
+    out.push({ name, mode: 'override', vars, live: false, mtimeMs })
   }
   return out
 }

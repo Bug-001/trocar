@@ -71,6 +71,7 @@ rl.on('line', (line) => {
       return reply()
     }
     case '__emit': { const { op: _o, id: _i, ...ev } = msg; out(ev); return reply() }
+    case '__watched': return reply({ watch: Object.fromEntries(state.watch) }) // tgid → decrypt (1) or observe (0)
     default: return fail('unknown op: ' + op)
   }
 })
