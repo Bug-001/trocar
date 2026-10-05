@@ -6,12 +6,16 @@ import net from 'node:net'
 import path from 'node:path'
 import { once } from 'node:events'
 import { parseRequest } from './http1.mjs'
+import { SCENARIOS, pickScenario } from './scenarios.mjs'
 import { writeResponse, jsonReply } from './transport.mjs'
+import * as anthropic from './anthropic.mjs'
 
 const iso = () => new Date().toISOString()
 
 // Matched on the path suffix so relay prefixes (/anthropic/v1/messages, …) route the same.
 const ROUTES = [
+  { re: /\/v1\/messages\/count_tokens$/, methods: ['POST'], kind: 'count', dialect: anthropic },
+  { re: /\/v1\/messages$/, methods: ['POST'], kind: 'model', dialect: anthropic },
   { re: /^\/api\/hello$/, methods: ['HEAD', 'GET'], kind: 'hello' },
   { re: /\/models$/, methods: ['GET'], kind: 'models' },
 ]
@@ -23,19 +27,29 @@ const MODELS = {
   data: MODEL_IDS.map((id) => ({ type: 'model', object: 'model', id, display_name: id, created_at: '2025-01-01T00:00:00Z', created: 1735689600, owned_by: 'asight-mock' })),
 }
 
-async function dispatch(req, io) {
+const parseJson = (buf) => { try { const v = JSON.parse(buf.toString('utf8')); return v && typeof v === 'object' ? v : {} } catch { return {} } }
+
+async function dispatch(req, io, state) {
   const p = req.target.split('?')[0]
   const route = ROUTES.find((r) => r.re.test(p) && r.methods.includes(req.method))
+  const pick = pickScenario(req.headers, req.body, route?.kind === 'model', state.queue)
+  const sc = SCENARIOS[pick.name]
+  const dialect = route?.dialect || anthropic
   let res
-  if (!route) res = jsonReply(404, { type: 'error', error: { type: 'not_found_error', message: `mock-upstream: no route for ${req.method} ${p}` } })
+  if (!sc) res = dialect.errorReply(400, `mock-upstream: unknown scenario "${pick.name}"`)
+  else if (sc.status) res = dialect.errorReply(sc.status)
+  else if (!route) res = dialect.errorReply(404, `mock-upstream: no route for ${req.method} ${p}`)
+  else if (route.kind === 'model') res = route.dialect.reply(parseJson(req.body), req.body, sc)
+  else if (route.kind === 'count') res = jsonReply(200, { input_tokens: Math.max(1, Math.ceil(req.body.length / 4)) })
   else if (route.kind === 'models') res = jsonReply(200, MODELS)
   else res = { status: 200, headers: {}, pieces: [] }
+  res.headers['x-mock-scenario'] = pick.name
   const close = /close/i.test(req.headers.connection || '')
-  return { complete: await writeResponse(io, res, { head: req.method === 'HEAD', close }) }
+  return { scenario: pick.name, source: pick.source, complete: await writeResponse(io, res, { head: req.method === 'HEAD', close }) }
 }
 
 // Requests on one connection are served strictly in order; bytes that arrive meanwhile wait in buf.
-function serveConn(conn, record) {
+function serveConn(conn, state, record) {
   let buf = Buffer.alloc(0), busy = false, seq = 0
   const { sock } = conn
   sock.on('data', (d) => { conn.bytesIn += d.length; buf = Buffer.concat([buf, d]); pump() })
@@ -59,13 +73,13 @@ function serveConn(conn, record) {
       const raw = buf.subarray(0, req.size)
       buf = buf.subarray(req.size)
       busy = true
-      await handle(conn, req, raw, ++seq, record)
+      await handle(conn, req, raw, ++seq, state, record)
       busy = false
     }
   }
 }
 
-async function handle(conn, req, raw, seq, record) {
+async function handle(conn, req, raw, seq, state, record) {
   const out = [], ts = iso()
   const io = {
     status: null,
@@ -85,7 +99,7 @@ async function handle(conn, req, raw, seq, record) {
     reset() { conn.ended = true; conn.raw.resetAndDestroy() }, // RST
   }
   let meta
-  try { meta = await dispatch(req, io) } catch (e) { meta = { error: String(e?.stack || e), complete: false }; conn.raw.destroy() }
+  try { meta = await dispatch(req, io, state) } catch (e) { meta = { error: String(e?.stack || e), complete: false }; conn.raw.destroy() }
   const { complete, ...rest } = meta
   record({
     type: 'request', ts, conn_id: conn.id, seq, ...rest, method: req.method, path: req.target, status: io.status,
@@ -102,19 +116,27 @@ function adminServer(state, logFile) {
   return http.createServer(async (req, res) => {
     const send = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)) }
     const route = `${req.method} ${req.url.split('?')[0]}`
-    await readAll(req)
+    const body = parseJson(await readAll(req))
+    if (route === 'GET /__mock/state') return send(200, { queue: state.queue, scenarios: Object.keys(SCENARIOS) })
     if (route === 'GET /__mock/log') return send(200, logFile ? readLog(logFile) : state.log)
     if (route === 'POST /__mock/reset') {
-      state.log.length = 0
+      state.queue.length = 0; state.log.length = 0
       if (logFile) fs.writeFileSync(logFile, '')
       return send(200, { ok: true })
+    }
+    if (route === 'POST /__mock/script') {
+      const steps = Array.isArray(body.steps) ? body.steps : null
+      const bad = steps ? steps.filter((s) => !(s in SCENARIOS)) : ['steps must be an array']
+      if (bad.length) return send(400, { error: `unknown scenario(s): ${bad.join(', ')}` })
+      state.queue.splice(0, Infinity, ...steps)
+      return send(200, { queue: state.queue })
     }
     send(404, { error: `no admin route ${route}` })
   })
 }
 
 export async function startMockUpstream({ host = '127.0.0.1', port = 0, adminPort = 0, logDir = null } = {}) {
-  const state = { log: [] }
+  const state = { queue: [], log: [] }
   const logFile = logDir ? path.join(logDir, 'log.ndjson') : null
   if (logFile) { fs.mkdirSync(logDir, { recursive: true }); fs.writeFileSync(logFile, '') }
   // With a logDir the file is the only copy: a long-lived lab process serving real agents would
@@ -125,7 +147,7 @@ export async function startMockUpstream({ host = '127.0.0.1', port = 0, adminPor
   let nextId = 0
   const server = net.createServer((raw) => {
     raws.add(raw); raw.on('close', () => raws.delete(raw)); raw.setNoDelay(true)
-    serveConn({ id: ++nextId, raw, sock: raw, tls: false, bytesIn: 0, bytesOut: 0, closed: false, ended: false, wakers: new Set() }, record)
+    serveConn({ id: ++nextId, raw, sock: raw, tls: false, bytesIn: 0, bytesOut: 0, closed: false, ended: false, wakers: new Set() }, state, record)
   })
   const admin = adminServer(state, logFile)
   server.listen(port, host); admin.listen(adminPort, '127.0.0.1')
