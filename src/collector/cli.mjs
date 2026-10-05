@@ -60,7 +60,7 @@ export async function runSetupHelper(argv, { arch = null, out = (s) => console.l
     }
     const i = argv.indexOf('--binary')
     const r = A.install.setupHelper({ binarySrc: i >= 0 ? argv[i + 1] : path.join(packageRoot, 'src', 'collector', 'arch', 'linux', 'asight-redirector') })
-    out(`installed ${r.bin} (${r.getcap})`)
+    out(`installed ${r.bin} (${r.getcap})${r.swept && r.swept.length ? `\nremoved ${r.swept.length} copy(ies) an interrupted setup-helper had staged: ${r.swept.join(', ')}` : ''}`)
     return 0
   } catch (e) { err(e.message); return 1 }
 }

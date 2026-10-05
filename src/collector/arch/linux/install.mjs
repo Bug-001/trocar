@@ -56,6 +56,17 @@ function mountOptions(p) {
 }
 
 // ---- root helper (once per machine) --------------------------------------------------------
+
+// A setup-helper killed between its copy and its rename leaves the staged copy behind — possibly already capped.
+// Only setup-helper ever writes these names, so the next setup-helper and setup-helper --remove delete them and say so.
+const STAGED = /^\.asight-redirector\.new\.\d+$/
+export function sweepStaged(dir, keep = null) {
+  let names
+  try { names = fs.readdirSync(dir) } catch (e) { if (e.code === 'ENOENT') return []; throw e }
+  const gone = names.filter((n) => STAGED.test(n) && n !== keep)
+  for (const n of gone) fs.rmSync(path.join(dir, n), { force: true })
+  return gone
+}
 export function setupHelper(opts = {}) {
   requireRoot()
   const cfg = { ...DEFAULTS, ...opts }
@@ -76,6 +87,7 @@ export function setupHelper(opts = {}) {
   // the live path. rename(2) swaps the inode, so a loader currently executing the old helper keeps
   // running (no ETXTBSY) and the path is never visible without its caps (D36 review #6).
   const tmp = path.join(cfg.helperDir, `.asight-redirector.new.${process.pid}`)
+  const swept = sweepStaged(cfg.helperDir, path.basename(tmp))
   const srcSha = sha(src)
   try {
     fs.copyFileSync(src, tmp)
@@ -101,7 +113,7 @@ export function setupHelper(opts = {}) {
     try { fs.rmSync(tmp, { force: true }) } catch {}
     throw e
   }
-  return { ok: true, bin: cfg.helperBin, caps: 'cap_net_admin,cap_perfmon,cap_bpf=ep', getcap: run('getcap', [cfg.helperBin]).out }
+  return { ok: true, bin: cfg.helperBin, caps: 'cap_net_admin,cap_perfmon,cap_bpf=ep', getcap: run('getcap', [cfg.helperBin]).out, swept }
 }
 
 export function uninstallHelper(opts = {}) {
@@ -113,8 +125,12 @@ export function uninstallHelper(opts = {}) {
   const warnings = []
   if (running.code === 0 && running.out) warnings.push('a redirector is still running; it will keep working until it exits')
   fs.rmSync(cfg.helperBin, { force: true })
-  try { fs.rmdirSync(cfg.helperDir) } catch { /* non-empty or already gone */ }
-  return { ok: true, removed: true, warnings }
+  const swept = sweepStaged(cfg.helperDir)
+  if (swept.length) warnings.push(`removed ${swept.length} copy(ies) an interrupted setup-helper had staged: ${swept.join(', ')}`)
+  try { fs.rmdirSync(cfg.helperDir) } catch (e) { // gone already is fine; anything else is said, never swallowed
+    if (e.code !== 'ENOENT') warnings.push(`${cfg.helperDir} was left in place (${e.code}): ${(() => { try { return fs.readdirSync(cfg.helperDir).join(', ') } catch { return '?' } })()}`)
+  }
+  return { ok: true, removed: true, warnings, swept }
 }
 
 // Minimal CLI for the lab driver (the product command is `asight setup-helper`).

@@ -60,6 +60,12 @@ test('cli: setup-helper installs or removes through arch; a failure is exit 1', 
   assert.deepEqual(done, ['/tmp/h'])
   t = io(); assert.equal(await runSetupHelper([], { arch: { install: { setupHelper: () => { throw new Error('must run as root') } } }, ...t }), 1)
   assert.deepEqual(t.e, ['must run as root'])
+  // a staged copy an interrupted setup-helper left is removed and said, by both directions (D38)
+  const swept = { install: { DEFAULTS: arch.install.DEFAULTS, setupHelper: () => ({ bin: '/b', getcap: 'caps', swept: ['.asight-redirector.new.67915'] }), uninstallHelper: () => ({ warnings: ['removed 1 copy(ies) an interrupted setup-helper had staged: .asight-redirector.new.67915'] }) } }
+  t = io(); await runSetupHelper([], { arch: swept, ...t })
+  assert.match(t.o.join('\n'), /removed 1 copy\(ies\) an interrupted setup-helper had staged: \.asight-redirector\.new\.67915/)
+  t = io(); await runSetupHelper(['--remove'], { arch: swept, ...t })
+  assert.match(t.o.join('\n'), /warning: removed 1 copy\(ies\)/)
 })
 
 test('cli: the real bin dispatches `collector` (usage → 2) and `collector status` without a runtime dir (→ 2)', () => {
