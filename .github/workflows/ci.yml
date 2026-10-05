@@ -3,9 +3,11 @@
 # resolves its prebuilt per-runner via `npm ci`; nothing platform-specific enters our package.
 name: ci
 
+# push runs only on main; a PR branch is tested once, by pull_request. Triggering both on every
+# PR commit ran each job twice, and macOS minutes bill at 10x on a private repo.
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
     branches: ['**']
 
