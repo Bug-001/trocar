@@ -196,7 +196,8 @@ test('daemon: a helper death is degraded and on reports why; a protocol mismatch
   try {
     const on = await req(s.sock, 'POST', '/on', {})
     assert.deepEqual([on.actual, on.helper.ok], ['off', false])
-    assert.ok(flowsOf(s).some((f) => f.event === 'attach-failed' && /protocol 2/.test(f.error)))
+    assert.ok(flowsOf(s).some((f) => f.event === 'attach-failed' && /protocol 2/.test(f.reason)), 'every failure record carries reason (D38)')
+    assert.ok(flowsOf(s).some((f) => f.event === 'helper-version-mismatch' && /speaks protocol 2, this daemon expects 1; run "sudo asight setup-helper"/.test(f.reason)))
   } finally { await d2.stop(); p.done(); s.done() }
 })
 
@@ -263,6 +264,7 @@ test('daemon: failures it owns leave a durable record with a reason, also when i
   const { arch, clients } = fakeArch(p)
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] })
   const fails = (where) => flowsOf(s).filter((f) => f.event === 'failure' && f.where === where)
+  let stopped = false
   try {
     assert.match(fails('daemon')[0].reason, /previous daemon \(pid 999999\) ended without a clean stop/)
     // engine: a connection steered to it whose original destination is unknown is closed — recorded, folded within 10 s
@@ -276,7 +278,48 @@ test('daemon: failures it owns leave a durable record with a reason, also when i
     assert.match(fails('heartbeat')[0].reason, /timed out; once the last beat is 2 s old the kernel stops steering/)
     const st = await req(s.sock, 'GET', '/status')
     assert.deepEqual(['daemon', 'engine', 'helper', 'heartbeat'].map((w) => st.failures.some((f) => f.where === w)), [true, true, true, true], 'status reports them')
+    await d.stop(); stopped = true
+    assert.deepEqual(fails('engine').map((f) => [f.code || null, f.suppressed || 0, !!f.folded]), [['lookup-miss', 0, false], ['lookup-miss', 1, true]], 'the folded second miss is written at stop, not lost')
+  } finally { if (!stopped) await d.stop(); p.done(); s.done() }
+})
+
+test('daemon: an unreadable lock, an unreadable state file and a control request that fails are each recorded (D38)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  fs.writeFileSync(path.join(s.collector, 'lock'), '{"pid": 12') // torn by a power loss
+  fs.mkdirSync(path.join(s.collector, 'state.json')) // neither readable nor writable as a file
+  const { arch } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] })
+  const fails = (where) => flowsOf(s).filter((f) => f.event === 'failure' && f.where === where)
+  try {
+    assert.match(fails('daemon')[0].reason, /unreadable lock .*ended without a clean stop/)
+    assert.match(fails('state')[0].reason, /state\.json is unreadable .*reads as off/)
+    await assert.rejects(req(s.sock, 'POST', '/on', {}), /^Error: 500: /)
+    const c = fails('control')
+    assert.deepEqual([c.length, c[0].route], [1, 'on'])
+    assert.ok(c[0].reason.length > 0)
+    assert.ok((await req(s.sock, 'GET', '/status')).failures.some((f) => f.where === 'control'), 'status reports it')
   } finally { await d.stop(); p.done(); s.done() }
+})
+
+test('daemon: [::1] at the engine port held by another process is recorded with its code, and on refuses to attach (M8, D38)', async (t) => {
+  const squat = net.createServer()
+  try { await new Promise((r, j) => { squat.once('error', j); squat.listen(0, '::1', r) }) } catch { t.skip('no IPv6 loopback here'); return }
+  const s = sandbox(); const p = fakeProc()
+  const port = squat.address().port
+  try {
+    await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [cc], freePort: async () => port })
+    const { arch } = fakeArch(p)
+    const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] })
+    try {
+      const f = flowsOf(s).filter((r) => r.event === 'failure' && r.where === 'engine')
+      assert.deepEqual([f.length, f[0].code], [1, 'EADDRINUSE'])
+      assert.match(f[0].reason, new RegExp(`\\[::1\\]:${port} unavailable: .*on will refuse to attach \\(M8\\)`))
+      const on = await req(s.sock, 'POST', '/on', {})
+      assert.equal(on.actual, 'off')
+      assert.ok(flowsOf(s).some((r) => r.event === 'attach-failed' && /held by another process; refusing to attach/.test(r.reason)))
+    } finally { await d.stop() }
+  } finally { squat.close(); p.done(); s.done() }
 })
 
 test('daemon: an envelope that cannot be written is a durable failure record, not a stderr line (D38)', async () => {

@@ -35,3 +35,33 @@ export function recentFailures(dir, { limit = 10, files = 2, maxBytes = 1 << 20,
   }
   return out.slice(-limit)
 }
+
+const errText = (e) => String((e && e.message) || e)
+
+// The daemon's failure recorder: record(where, error, extra) writes one failure line per place and error code per
+// window; repeats inside the window are counted, and the count is written when the window closes (an unref'd
+// timer) or at flush() (the daemon's stop) — never lost (4.6 §记录). Every record carries `reason`.
+export function createFailureRecorder(dir, { log = () => {}, windowMs = 10_000, setTimer = setTimeout, clearTimer = clearTimeout, append = appendEvent } = {}) {
+  const open = new Map() // where + code → { suppressed, last, timer }
+  const write = (rec) => { try { append(dir, rec) } catch (w) { log('events', w) } } // then stderr is all that is left
+  function close(key) {
+    const w = open.get(key)
+    if (!w) return
+    open.delete(key)
+    clearTimer(w.timer)
+    if (w.suppressed) write({ ...w.last, suppressed: w.suppressed, folded: true })
+  }
+  function record(where, e, extra = {}) {
+    log(where, e)
+    const code = (e && e.code) || ''
+    const key = `${where}\u0000${code}`
+    const rec = { event: 'failure', where, ...(code ? { code } : {}), reason: errText(e), ...extra }
+    const w = open.get(key)
+    if (w) { w.suppressed++; w.last = rec; return }
+    write(rec)
+    const timer = setTimer(() => close(key), windowMs)
+    if (timer && timer.unref) timer.unref()
+    open.set(key, { suppressed: 0, last: rec, timer })
+  }
+  return Object.assign(record, { flush() { for (const k of [...open.keys()]) close(k) } })
+}

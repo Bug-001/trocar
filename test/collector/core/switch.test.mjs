@@ -88,7 +88,23 @@ test('switch: a failing attach is reported, never thrown; desired stays on', asy
   assert.equal(events[0].event, 'attach-failed')
 })
 
-test('switch: an unreadable state file means desired=off, not a crash', () => {
-  const f = tmpState(); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, '{ nope')
-  assert.equal(readState(f).desired, 'off')
+test('switch: an unreadable state file means desired=off, not a crash — and it is reported, a missing one is not (D38)', () => {
+  const f = tmpState(); fs.mkdirSync(path.dirname(f), { recursive: true })
+  const seen = []
+  assert.equal(readState(f, (e) => seen.push(e)).desired, 'off')
+  assert.equal(seen.length, 0, 'no file yet: the first start, nothing to report')
+  fs.writeFileSync(f, '{ nope')
+  assert.equal(readState(f, (e) => seen.push(e)).desired, 'off')
+  assert.equal(seen.length, 1)
+  const events = []
+  createSwitch({ redirector: fakeRedirector(), stateFile: f, onEvent: (e) => events.push(e) })
+  assert.equal(events[0].event, 'failure')
+  assert.match(events[0].reason, /is unreadable \(.*JSON.*\); the desired state reads as off/)
+})
+
+test('switch: a state file that cannot be written fails the request and leaves no temp file behind', async () => {
+  const f = tmpState(); fs.mkdirSync(f, { recursive: true }) // a directory where the file belongs
+  const sw = createSwitch({ redirector: fakeRedirector(), stateFile: f, onEvent: () => {} })
+  await assert.rejects(sw.on())
+  assert.deepEqual(fs.readdirSync(path.dirname(f)).filter((n) => n.includes('.tmp-')), [])
 })

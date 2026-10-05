@@ -10,7 +10,8 @@ import path from 'node:path'
 
 const DEFAULT_STATE = { version: 1, desired: 'off', policy: 'auto', extra_hosts: [] }
 
-export function readState(file) {
+// An unreadable state file (not a missing one) is reported through onError and read as the default `off`.
+export function readState(file, onError = () => {}) {
   try {
     const s = JSON.parse(fs.readFileSync(file, 'utf8'))
     return {
@@ -20,21 +21,26 @@ export function readState(file) {
       extra_hosts: Array.isArray(s.extra_hosts) ? s.extra_hosts.filter((h) => typeof h === 'string') : [],
       updated_at: s.updated_at || null,
     }
-  } catch { return { ...DEFAULT_STATE } }
+  } catch (e) {
+    if (e.code !== 'ENOENT') onError(e)
+    return { ...DEFAULT_STATE }
+  }
 }
 
 export function writeState(file, state) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   const tmp = `${file}.tmp-${process.pid}`
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 })
-  fs.chmodSync(tmp, 0o600)
-  fs.renameSync(tmp, file)
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 })
+    fs.chmodSync(tmp, 0o600)
+    fs.renameSync(tmp, file)
+  } catch (e) { fs.rmSync(tmp, { force: true }); throw e }
 }
 
 const sameHosts = (a, b) => a.length === b.length && a.every((h, i) => h === b[i])
 
 export function createSwitch({ redirector, stateFile, ensureReady = async () => {}, onEvent = () => {} }) {
-  let state = readState(stateFile)
+  let state = readState(stateFile, (e) => onEvent({ event: 'failure', where: 'state', code: e.code, reason: `${stateFile} is unreadable (${String(e.message || e)}); the desired state reads as off until on/off rewrites it` }))
   let recording = false
   let degraded = null
   let actualCache = null
