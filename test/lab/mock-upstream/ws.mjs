@@ -64,7 +64,7 @@ function parseFrame(buf) {
   if (buf.length < 2) return null
   let len = buf[1] & 0x7f, at = 2
   if (len === 126) { if (buf.length < 4) return null; len = buf.readUInt16BE(2); at = 4 }
-  if (len === 127) { if (buf.length < 10) return null; const n = buf.readBigUInt64BE(2); if (n > BigInt(MAX_MESSAGE)) return { tooBig: true }; len = Number(n); at = 10 }
+  else if (len === 127) { if (buf.length < 10) return null; const n = buf.readBigUInt64BE(2); if (n > BigInt(MAX_MESSAGE)) return { tooBig: true }; len = Number(n); at = 10 }
   const masked = !!(buf[1] & 0x80), key = at
   if (masked) at += 4
   if (buf.length < at + len) return null
