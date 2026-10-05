@@ -155,12 +155,17 @@ export function serve(conn, req, { deflate }, state, record) {
     let events = res.pieces.map(dataOf)
     if (warmup) {
       events = events.filter((e) => /^response\.(created|in_progress|completed)$/.test(e.type)).map((e, sequence_number) => ({ ...e, sequence_number }))
-      const done = events.at(-1).response
-      Object.assign(done, { output: [], usage: { ...done.usage, output_tokens: 0, total_tokens: done.usage.input_tokens } })
+      events.at(-1).response.output = []
     }
-    for (const e of events) if (e.response) e.response.previous_response_id = prevId ?? null
+    if (sc.fault === 'error-event') events = [...events.slice(0, res.firstDelta + 2), dataOf(res.failEvent(res.firstDelta + 2))]
+    // usage counts the logical request, cached part included, as the API bills it and about as the
+    // request sent in full over HTTP reports it; the reply text's sha256 stays the received message's
+    const inputTokens = Math.max(1, Math.ceil(Buffer.byteLength(JSON.stringify(full)) / 4))
+    for (const { response: r } of events) {
+      if (r) r.previous_response_id = prevId ?? null
+      if (r?.usage) Object.assign(r.usage, { input_tokens: inputTokens, ...(warmup && { output_tokens: 0 }) }).total_tokens = inputTokens + r.usage.output_tokens
+    }
     const first = res.firstDelta, cut = Math.min(first + 2, events.length - 1)
-    if (sc.fault === 'error-event') events = [...events.slice(0, first + 2), dataOf(res.failEvent(first + 2))]
     if (sc.slowHeaders && !(await sleep(state.cfg.stallMs))) return
     if (sc.fault === 'headers-reset') return resetSoon()
     for (const [i, e] of events.entries()) {
