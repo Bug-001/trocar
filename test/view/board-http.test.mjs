@@ -6,6 +6,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { once } from 'node:events';
 import { createServer } from '../../src/server.mjs';
+import { fixtureGate, hasFixture } from '../helpers/fixture.mjs';
 
 const FIXTURE = path.resolve('test/fixtures/cc-session-real.ndjson');
 const MAIN = '3e03c998-f70d-4843-8639-40f2d8b2cdc7';
@@ -16,6 +17,7 @@ const get = (port, p) => new Promise((resolve, reject) => {
 
 let srv, port, srcPath;
 test.before(async () => {
+  if (!hasFixture()) return; // every test below is fixtureGate()d — no source to copy or serve
   // a WRITABLE copy of the source so the concurrent-append test can grow it
   srcPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'asight-boardhttp-')), 'src.ndjson');
   fs.copyFileSync(FIXTURE, srcPath);
@@ -24,7 +26,7 @@ test.before(async () => {
 });
 test.after(() => srv?.close());
 
-test('BOARD /api/projects + /api/session: canonical, baked neutral usage, one copy per call, no-store', async () => {
+test('BOARD /api/projects + /api/session: canonical, baked neutral usage, one copy per call, no-store', fixtureGate(), async () => {
   const pj = JSON.parse((await get(port, '/api/projects')).body);
   assert.ok(pj.projects.length >= 1);
   const s = await get(port, `/api/session?id=${MAIN}`);
@@ -95,14 +97,14 @@ test('BOARD /api/projects + /api/session: canonical, baked neutral usage, one co
   }
 });
 
-test('D14 /api/pricing: editable config served (defaults present)', async () => {
+test('D14 /api/pricing: editable config served (defaults present)', fixtureGate(), async () => {
   const r = await get(port, '/api/pricing');
   assert.equal(r.status, 200);
   const d = JSON.parse(r.body);
   assert.ok(d.editable === true && d.pricing && Array.isArray(d.pricing.opus) && d.pricing.opus.length === 4);
 });
 
-test('4.4 §验收#5 — concurrent poll during ETL append reads a self-consistent snapshot', async () => {
+test('4.4 §验收#5 — concurrent poll during ETL append reads a self-consistent snapshot', fixtureGate(), async () => {
   // simulate ETL appending: a COMPLETE record then a HALF-written line (no newline), racing a poll.
   const complete = JSON.stringify({ id: 'req_appended', ts_request: '2026-07-16T00:00:00Z', is_llm_call: false, endpoint: '/x', request_headers: {}, response: { status: 200 } }) + '\n';
   const halfLine = '{"id":"req_partial","request":{"model":"claude-';

@@ -15,6 +15,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { analyze } from '../../src/view/analyze.mjs';
+import { fixtureGate } from '../helpers/fixture.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.join(HERE, '..', 'fixtures', 'cc-session-real.ndjson');
@@ -22,7 +23,7 @@ const fixtureRecords = () => readFileSync(FIXTURE, 'utf8').split('\n').filter(Bo
 
 const compactionEvents = (A) => A.streams.flatMap((s) => s.events).filter((e) => e.type === 'compaction');
 
-test('real fixture: the compaction STEP is marked inferred (confidence medium), not asserted as fact', () => {
+test('real fixture: the compaction STEP is marked inferred (confidence medium), not asserted as fact', fixtureGate(), () => {
   const A = analyze(fixtureRecords());
   const steps = A.steps.filter((s) => s.compaction);
   assert.equal(steps.length, 1, 'fixture precondition: exactly one inferred compaction (55 → 4 msgs)');
@@ -37,7 +38,7 @@ test('real fixture: the compaction STEP is marked inferred (confidence medium), 
   assert.ok(st.compactionBasis, 'the basis of the inference must be stated, not implied');
 });
 
-test('real fixture: the compaction EVENT carries the same inference marker', () => {
+test('real fixture: the compaction EVENT carries the same inference marker', fixtureGate(), () => {
   const evs = compactionEvents(analyze(fixtureRecords()));
   assert.equal(evs.length, 1);
   const e = evs[0];

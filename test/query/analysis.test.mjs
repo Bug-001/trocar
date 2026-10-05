@@ -13,7 +13,7 @@ import {
   forkTree, resourceLifecycle, listSessions,
 } from '../../src/query/queries.mjs';
 import { runNamed, NAMED_QUERIES } from '../../src/query/index.mjs';
-import { fixtureGate } from '../helpers/fixture.mjs';
+import { fixtureGate, hasFixture } from '../helpers/fixture.mjs';
 
 const FIXTURE = path.resolve('test/fixtures/cc-session-real.ndjson');
 const get = (port, p) => new Promise((resolve, reject) => {
@@ -23,6 +23,7 @@ const get = (port, p) => new Promise((resolve, reject) => {
 
 let dbPath, db, srv, port;
 test.before(async () => {
+  if (!hasFixture()) return; // every test below is fixtureGate()d; ETL-ing a missing file only fails the hook
   dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'asight-analysis-')), 'a.duckdb');
   await etlFile(FIXTURE, { dbPath, rebuild: true });
   db = await openDb(dbPath, { readOnly: true });

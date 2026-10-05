@@ -7,6 +7,7 @@ import path from 'node:path';
 import { once } from 'node:events';
 import { etlFile } from '../src/etl/cli.mjs';
 import { createServer } from '../src/server.mjs';
+import { fixtureGate, hasFixture } from './helpers/fixture.mjs';
 
 const FIXTURE = path.resolve('test/fixtures/cc-session-real.ndjson');
 
@@ -21,6 +22,7 @@ function get(port, p) {
 
 let store, srv, port;
 test.before(async () => {
+  if (!hasFixture()) return; // every test below is fixtureGate()d — nothing to ETL, nothing to serve
   store = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'asight-srv-')), 'asight.duckdb');
   await etlFile(FIXTURE, { dbPath: store, rebuild: true });
   const made = await createServer({ dbPath: store, sourcePath: FIXTURE });
@@ -30,7 +32,7 @@ test.before(async () => {
 });
 test.after(() => { srv?.close(); });
 
-test('GET /api/sessions: canonical rows, no provider-native leak, no-store', async () => {
+test('GET /api/sessions: canonical rows, no provider-native leak, no-store', fixtureGate(), async () => {
   const r = await get(port, '/api/sessions');
   assert.equal(r.status, 200);
   assert.equal(r.headers['cache-control'], 'no-store');
@@ -41,7 +43,7 @@ test('GET /api/sessions: canonical rows, no provider-native leak, no-store', asy
   assert.ok(!r.body.includes('cache_creation_input_tokens'));
 });
 
-test('GET /api/session/:id: calls carry CANONICAL usage + cache_events columns', async () => {
+test('GET /api/session/:id: calls carry CANONICAL usage + cache_events columns', fixtureGate(), async () => {
   const sessions = JSON.parse((await get(port, '/api/sessions')).body).sort((a, b) => b.call_count - a.call_count);
   const sid = sessions[0].session_id;
   const r = await get(port, `/api/session/${encodeURIComponent(sid)}`);
@@ -54,7 +56,7 @@ test('GET /api/session/:id: calls carry CANONICAL usage + cache_events columns',
   assert.ok(!r.body.includes('cache_read_input_tokens'));
 });
 
-test('AC-1 over HTTP: /api/call/:id/context blocks are byte-verbatim from source', async () => {
+test('AC-1 over HTTP: /api/call/:id/context blocks are byte-verbatim from source', fixtureGate(), async () => {
   const sessions = JSON.parse((await get(port, '/api/sessions')).body).sort((a, b) => b.call_count - a.call_count);
   const calls = JSON.parse((await get(port, `/api/session/${encodeURIComponent(sessions[0].session_id)}`)).body).calls;
   let ctx = null;
@@ -68,17 +70,17 @@ test('AC-1 over HTTP: /api/call/:id/context blocks are byte-verbatim from source
   assert.equal(ctx.source_resolved, true);
 });
 
-test('security: path traversal rejected + 404 unknown api + 404 missing session', async () => {
+test('security: path traversal rejected + 404 unknown api + 404 missing session', fixtureGate(), async () => {
   assert.equal((await get(port, '/..%2f..%2fpackage.json')).status, 404);
   assert.equal((await get(port, '/api/nope')).status, 404);
   assert.equal((await get(port, '/api/session/does-not-exist')).status, 404);
 });
 
-test('binds loopback only (127.0.0.1)', () => {
+test('binds loopback only (127.0.0.1)', fixtureGate(), () => {
   assert.equal(srv.address().address, '127.0.0.1');
 });
 
-test('read-only: store file mtime unchanged across request cycles', async () => {
+test('read-only: store file mtime unchanged across request cycles', fixtureGate(), async () => {
   const m0 = fs.statSync(store).mtimeMs;
   await get(port, '/api/sessions');
   await get(port, '/api/sessions');
