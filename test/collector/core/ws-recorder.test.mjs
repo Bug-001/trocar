@@ -49,9 +49,9 @@ function assertWholeWire(t, label = '') {
   assert.ok(w.c.equals(Buffer.concat(t.wire.c)) && w.s.equals(Buffer.concat(t.wire.s)), `${label} envelopes + tail_raw rebuild the wire`)
 }
 
-test('W10 / W13 / W2: a terminal message writes its call at once; a client message during the open call is req_extra_messages; response.incomplete and response.failed end calls', () => {
+test('W10 / W13 / W2 / W3: a terminal message writes its call at once (a generate:false prewarm is a call of its own, verbatim); a client message during the open call is req_extra_messages; response.incomplete and response.failed end calls', () => {
   const t = rig()
-  const create = ev('response.create', { input: 'hi' })
+  const create = ev('response.create', { generate: false, input: 'hi' })
   t.c(Buffer.concat([cli(1, create.slice(0, 10), { fin: false }), cli(9, 'ping!'), cli(0, create.slice(10))]))
   t.s(srv(10, 'ping!')); t.s(srv(1, ev('response.created')))
   assert.equal(t.out.length, 0, 'nothing before the terminal message')
