@@ -25,11 +25,13 @@ const hostIs = (k, h) => k === h || (k.startsWith('.') && h.endsWith(k))
 const mtimeOfFile = (f) => { try { return fs.statSync(f).mtimeMs } catch { return null } }
 const listDirNames = (d) => { try { return fs.readdirSync(d) } catch { return [] } }
 const ABSENT = new Set(['ENOENT', 'ENOTDIR', 'EISDIR'])
-function watchDirNames(dir, onName) {
-  const w = fs.watch(dir, (_ev, name) => onName(name == null ? null : String(name)))
-  w.on('error', () => {}) // a vanished dir only stops re-judgement on appearance; a rescan still judges by reading it
+export function watchDirNames(dir, onName, onWatchError = () => {}, watch = fs.watch) {
+  const w = watch(dir, (_ev, name) => onName(name == null ? null : String(name)))
+  w.on('error', onWatchError) // re-judgement on appearance stops; a rescan still reads the markers — and it is reported
   return () => w.close()
 }
+// A pid that still exists (EPERM: it exists, it is someone else's). OS-neutral: Node's signal 0.
+const pidAlive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return !!e && e.code === 'EPERM' } }
 export const usesMarker = (d) => !!(d && d.trust && d.trust.chain.some((e) => e.var === MARKER_VAR))
 
 // onVerdict(row, prev) is told every agent verdict (prev: the row this pid had before, or null), so the daemon can
@@ -39,9 +41,10 @@ export const usesMarker = (d) => !!(d && d.trust && d.trust.chain.some((e) => e.
 // is told every error judging or (un)watching a process — that process stays unwatched (its connections go
 // direct) and the rest of the table carries on; nothing here is swallowed (review 2 #4).
 // markerDir / caPem: where plugins write their per-pid marker and the asight CA file a marker vouches for (null: no
-// plugin harness is judged trusted). watchDir(dir, onName) → close; setTimer for the marker-pending deadline.
+// plugin harness is judged trusted). watchDir(dir, onName, onWatchError) → close; setTimer for the marker-pending
+// deadline. alive(pid): whether a pid a rescan did not list still exists (it may have started after the scan).
 // readFile: how config files are read; an error other than "absent" is kept on the row (readErrors) for the daemon.
-export function createTracker({ redirector, registry, trust, home = os.homedir(), readFile = (f) => fs.readFileSync(f, 'utf8'), mtimeOf = mtimeOfFile, listDir = listDirNames, now = () => Date.now(), onVerdict = () => {}, onError = () => {}, installedAt = () => null, markerDir = null, caPem = null, watchDir = watchDirNames, markerGraceMs = 10_000, setTimer = setTimeout, runtimeVersion = nodeReleaseVersion, collectorDir = null }) {
+export function createTracker({ redirector, registry, trust, home = os.homedir(), readFile = (f) => fs.readFileSync(f, 'utf8'), mtimeOf = mtimeOfFile, listDir = listDirNames, now = () => Date.now(), onVerdict = () => {}, onError = () => {}, installedAt = () => null, markerDir = null, caPem = null, watchDir = watchDirNames, markerGraceMs = 10_000, setTimer = setTimeout, runtimeVersion = nodeReleaseVersion, collectorDir = null, alive = pidAlive }) {
   const table = new Map() // pid → AgentRow (agents only)
   const factsOf = new Map() // pid → the ProcFacts it was judged on (re-judged when its marker appears or its grace ends)
   const pending = new Map() // pid → timer that re-judges a marker-pending process at the end of its grace
@@ -138,7 +141,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
           subs.push(watchDir(markerDir, (name) => { // a marker appeared (or changed): re-judge that process now
             const f = /^\d+$/.test(name || '') ? factsOf.get(Number(name)) : null
             if (f) onExec(f).catch((e) => onError(e, { pid: f.pid, phase: 'judge' }))
-          }))
+          }, (e) => onError(e, { pid: null, phase: 'marker-watch' }))) // D38: a dead watcher is recorded (review 3 #7)
         } catch (e) { onError(e, { pid: null, phase: 'marker-watch' }) } // judged again on every rescan; reported
       }
     },
@@ -148,8 +151,10 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
       const live = await redirector.scan()
       const seen = new Set()
       for (const f of live) { seen.add(f.pid); try { await onExec(f) } catch (e) { onError(e, { pid: f.pid, phase: 'judge' }) } } // one bad process never blocks on
-      for (const pid of [...table.keys()]) if (!seen.has(pid)) forget(pid) // exits missed while the helper was down
-      if (markerDir) for (const n of listDir(markerDir)) if (/^\d+$/.test(n) && !seen.has(Number(n))) { try { fs.rmSync(path.join(markerDir, n), { force: true }) } catch { /* void */ } }
+      // exits missed while the helper was down; a pid the scan did not list but that lives started after the scan (its
+      // exec event judged it, its plugin may have written its marker already): kept (review 3 #7)
+      for (const pid of [...table.keys()]) if (!seen.has(pid) && !alive(pid)) forget(pid)
+      if (markerDir) for (const n of listDir(markerDir)) if (/^\d+$/.test(n) && !seen.has(Number(n)) && !alive(Number(n))) { try { fs.rmSync(path.join(markerDir, n), { force: true }) } catch { /* void */ } }
     },
     agents: () => [...table.values()].sort((a, b) => a.pid - b.pid).map((r) => ({ ...r, hosts: [...r.hosts], bypass: r.bypass.map((b) => ({ ...b })), readErrors: [...r.readErrors] })),
     describe: (pid) => (table.has(pid) ? { ...table.get(pid) } : null),

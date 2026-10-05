@@ -8,7 +8,7 @@ import { EventEmitter } from 'node:events'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createRegistry } from '../../../src/collector/core/registry.mjs'
 import { createTrustChecker } from '../../../src/collector/core/trust/confirm.mjs'
-import { createTracker } from '../../../src/collector/core/tracker.mjs'
+import { createTracker, watchDirNames } from '../../../src/collector/core/tracker.mjs'
 
 const ca = createCa()
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-trk-'))
@@ -30,10 +30,10 @@ function fakeRedirector() {
   return r
 }
 const facts = (pid, o = {}) => ({ os: 'linux', pid, ppid: 1, uid: 1000, exe: '/opt/alpha', argv: ['alpha'], env: new Map(), cwd: '/', source: 'exec', startedAt: 0, ...o })
-function rig(descriptors = [agent]) {
+function rig(descriptors = [agent], o = {}) {
   const redirector = fakeRedirector()
   const errors = []
-  const tracker = createTracker({ redirector, registry: createRegistry(descriptors), trust: createTrustChecker({ caCertPem: ca.certPem }), home: dir, onError: (e, at) => errors.push([at.pid, at.phase, e.message]) })
+  const tracker = createTracker({ redirector, registry: createRegistry(descriptors), trust: createTrustChecker({ caCertPem: ca.certPem }), home: dir, onError: (e, at) => errors.push([at.pid, at.phase, e.message]), alive: () => false, ...o })
   tracker.start()
   return { redirector, tracker, errors }
 }
@@ -142,7 +142,7 @@ function markerRig(o = {}) {
   const redirector = fakeRedirector()
   let onName = null; const timers = []; let clock = 1_000_000
   const tracker = createTracker({ redirector, registry: createRegistry([agent, plugged]), trust: createTrustChecker({ caCertPem: ca.certPem }), home: dir,
-    markerDir, caPem: PEM, watchDir: (d, cb) => { assert.equal(d, markerDir); onName = cb; return () => {} },
+    markerDir, caPem: PEM, watchDir: (d, cb) => { assert.equal(d, markerDir); onName = cb; return () => {} }, alive: () => false,
     now: () => clock, setTimer: (fn, ms) => { timers.push({ fn, ms }); return { unref() {} } }, ...o })
   tracker.start()
   return { redirector, tracker, markerDir, timers, tick: (ms) => { clock += ms }, appear: async (pid, ticks) => { fs.writeFileSync(path.join(markerDir, String(pid)), `${ticks}\n`); onName(String(pid)); await settle() }, get clock() { return clock } }
@@ -219,6 +219,40 @@ test('tracker: rescan removes markers whose pid is gone', async () => {
   await r.tracker.rescan()
   assert.deepEqual(fs.readdirSync(r.markerDir).sort(), ['830', 'notes.txt'])
   assert.equal(r.tracker.describe(830).trusted, true)
+})
+
+test('tracker: a pid the rescan did not list but that lives (it started after the scan) keeps its row and its marker; a dead one loses both (review 3 #7)', async () => {
+  const living = new Set([840])
+  const r = markerRig({ alive: (pid) => living.has(pid) })
+  r.redirector.emit('exec', facts(840, { exe: '/opt/beta', argv: ['beta'], startTicks: '5', startedAt: r.clock })); await settle()
+  await r.appear(840, 5)
+  r.redirector.emit('exec', facts(841, { exe: '/opt/beta', argv: ['beta'], startTicks: '6', startedAt: r.clock })); await settle()
+  await r.appear(841, 6)
+  r.redirector.live = [] // the scan was taken before 840 and 841 started; 841 has exited since, its exit event missed
+  await r.tracker.rescan()
+  assert.deepEqual([r.tracker.describe(840) && r.tracker.describe(840).trusted, r.tracker.describe(841)], [true, null])
+  assert.deepEqual(fs.readdirSync(r.markerDir), ['840'])
+})
+
+test('tracker: a marker-directory watcher that fails is reported, never swallowed (D38, review 3 #7)', () => {
+  const markerDir = fs.mkdtempSync(path.join(dir, 'run-trust-'))
+  const errors = []
+  let fail = null
+  const t = createTracker({ redirector: fakeRedirector(), registry: createRegistry([agent, plugged]), trust: createTrustChecker({ caCertPem: ca.certPem }), home: dir, markerDir, caPem: PEM,
+    watchDir: (d, cb, onWatchError) => { fail = onWatchError; return () => {} }, onError: (e, at) => errors.push([at.pid, at.phase, e.message]) })
+  t.start()
+  fail(Object.assign(new Error('watch EMFILE'), { code: 'EMFILE' }))
+  assert.deepEqual(errors, [[null, 'marker-watch', 'watch EMFILE']])
+  t.stop()
+})
+
+test('tracker: the default marker watcher hands its error event on', async () => {
+  const { EventEmitter } = await import('node:events')
+  const w = Object.assign(new EventEmitter(), { close() {} })
+  const got = []
+  watchDirNames('/x', () => {}, (e) => got.push(e.message), () => w)
+  w.emit('error', new Error('ENOSPC'))
+  assert.deepEqual(got, ['ENOSPC'])
 })
 
 test('tracker: a harness\'s refine can read its own files through the tracker\'s reader and knows the collector dir and the exe (a launch shim lives there)', async () => {
