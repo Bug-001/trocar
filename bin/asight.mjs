@@ -301,12 +301,18 @@ async function main() {
             const dryRun = rest.includes('--dry-run');
             const res = await sealLegacy(path.resolve(target), { deleteOriginal, dryRun, quietMs: q === undefined ? undefined : Number(q) * 1000,
               onFile: (f) => console.log(`  ${f}`) });
+            // what is not sealed is said, never passed over (review 3 F5): each odd file with its reason,
+            // the known markers as a count
+            const pre = dryRun ? 'would skip' : 'skipped ';
+            for (const x of res.skipped) console.log(`${pre} ${x.file}: ${x.reason}`);
+            const kinds = Object.entries(res.known).sort(([a], [b]) => (a < b ? -1 : 1));
+            if (kinds.length) console.log(`not a record stream (left as they are): ${kinds.map(([k, n]) => `${n} ${k}`).join(', ')}`);
             if (dryRun) {
               // nothing written: list what a real run would do, and why anything would be refused
               for (const f of res.wouldSeal) console.log(`would ${deleteOriginal ? 'seal/verify + delete original' : 'seal (keep original)'}  ${f}  ${mb(fs.statSync(f).size)}`);
               for (const x of res.refused) console.error(`would refuse ${x.file}: ${x.reason}`);
               for (const x of res.locks) console.log(`would remove ${x.file}: ${x.reason}`);
-              console.log(`dry run: ${res.wouldSeal.length} file(s) ready, ${res.refused.length} refused — nothing was written`);
+              console.log(`dry run: ${res.wouldSeal.length} file(s) ready, ${res.refused.length} refused, ${res.skipped.length} skipped — nothing was written`);
               if (res.refused.length) process.exitCode = 1;
               break;
             }

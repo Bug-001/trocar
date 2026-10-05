@@ -26,33 +26,60 @@ import { appendJournal, defaultJournalPath } from './journal.mjs';
 export const DEFAULT_QUIET_MS = 10000;
 
 // The legacy streams under `target`: the file itself, or every *.ndjson in the directory and in its
-// immediate subdirectories. Symlinks are refused, never followed.
+// immediate subdirectories. Symlinks are refused, never followed. Everything else found there is NOT
+// passed over in silence (review 3 F5, D38): what the entry knows to be no record stream is counted by
+// kind (`known`); anything else — a `*.premigrate`, a `.resplit-tmp/`, a directory deeper down, a stray
+// name — is listed in `skipped` with its reason.
+const KNOWN = [
+  [(n) => n === 'meta.json' || n === '.shard-state.json' || n === '.split-v2', (n) => n],
+  [(n) => isSealedPath(n), () => 'sealed segment'],
+  [(n) => n.endsWith('.closed'), () => 'close marker'],
+  [(n) => n.endsWith('.sealing'), () => 'seal lock'],        // dead ones: cleanDeadLocks reports them
+];
+function whySkipped(name, isDir, fs, p) {
+  if (isDir) {
+    let n = '?'; try { n = fs.readdirSync(p).length; } catch {}
+    const what = name === '.resplit-tmp' ? 'a leftover of an interrupted `asight shard --resplit`' : 'a directory two levels down';
+    return `${what} — not descended into, nothing in it is sealed (${n} entr${n === 1 ? 'y' : 'ies'})`;
+  }
+  if (name.endsWith('.premigrate')) return 'the pre-split original an interrupted `asight shard --resplit` kept — not a stream any reader reads, so it is not sealed; finish or undo the resplit first';
+  if (/^\..+\.\d+-[0-9a-f]{8}\.tmp$/.test(name)) return 'a temp of an interrupted seal — removed when its stream is sealed again';
+  return 'not a record stream this entry seals (only *.ndjson) — left as it is';
+}
 export function legacyTargets(target, { fs = nodeFs } = {}) {
-  const files = [], refused = [], dirs = [];
+  const files = [], refused = [], dirs = [], skipped = [], known = {};
   const consider = (p) => {
     const st = fs.lstatSync(p);
     if (st.isSymbolicLink()) refused.push({ file: p, reason: 'symlink — seal the file it points at, by its own path (unlinking a link would not remove the original)' });
     else if (st.isFile()) files.push(p);
+    else skipped.push({ file: p, reason: 'named like a stream but not a regular file — not sealed' });
+  };
+  const other = (e, p, deep) => {
+    const k = !e.isDirectory() && KNOWN.find(([is]) => is(e.name));
+    if (k) { const kind = k[1](e.name); known[kind] = (known[kind] || 0) + 1; return; }
+    skipped.push({ file: p, reason: e.isSymbolicLink() ? 'a symlink — not followed' : whySkipped(e.name, e.isDirectory() && deep, fs, p) });
   };
   const st = fs.lstatSync(target);
   if (!st.isDirectory()) {
     if (!target.endsWith('.ndjson')) refused.push({ file: target, reason: 'not an NDJSON capture stream (*.ndjson)' });
     else consider(target);
-    return { files, refused, dirs: [path.dirname(target)] };
+    return { files, refused, dirs: [path.dirname(target)], skipped, known };
   }
   dirs.push(target);
   for (const e of fs.readdirSync(target, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
     const p = path.join(target, e.name);
     if (e.name.endsWith('.ndjson') && !e.isDirectory()) consider(p);
-    else if (e.isSymbolicLink() && !e.name.endsWith('.ndjson')) refused.push({ file: p, reason: 'symlinked directory — not followed; seal what it points at by its own path' });
+    else if (e.isSymbolicLink()) refused.push({ file: p, reason: 'symlinked directory — not followed; seal what it points at by its own path' });
     else if (e.isDirectory()) {
       dirs.push(p);
       for (const s of fs.readdirSync(p, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
-        if (s.name.endsWith('.ndjson') && !s.isDirectory()) consider(path.join(p, s.name));
+        const q = path.join(p, s.name);
+        if (s.name.endsWith('.ndjson') && !s.isDirectory()) consider(q);
+        else other(s, q, true);
       }
-    }
+    } else other(e, p, false);
   }
-  return { files, refused, dirs };
+  return { files, refused, dirs, skipped, known };
 }
 
 // ── probes (injected in tests; the defaults only ever look at the files they are given) ───────────
@@ -116,7 +143,7 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
   if (!(Number.isFinite(quietMs) && quietMs >= 0)) throw new SealRefused(`the quiet window must be a non-negative number of seconds (got ${quietMs / 1000})`);
   const old = oldRootReason(target, { fs });
   if (old) throw refuseAll(old);
-  const { files: named, refused, dirs } = legacyTargets(target, { fs });
+  const { files: named, refused, dirs, skipped, known } = legacyTargets(target, { fs });
   // a parent of the old root names files inside it: each of those is refused too (none is ever
   // sealed or deleted there, D27①)
   const files = [];
@@ -154,9 +181,11 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
     ok.push(f);
   }
   for (const r of refused) appendJournal({ op: 'seal-legacy', outcome: 'refused', file: r.file, reason: r.reason }, { journal });
+  for (const r of skipped) appendJournal({ op: 'seal-legacy', outcome: 'skipped', file: r.file, reason: r.reason }, { journal });
+  if (Object.keys(known).length) appendJournal({ op: 'seal-legacy', outcome: 'skipped', target, reason: 'not a record stream', counts: known }, { journal });
   // locks of seals that died here (review 3 F10); never inside the old root
   const locks = dirs.filter((d) => !oldRootReason(d, { fs })).flatMap((d) => cleanDeadLocks(d, { fs, journal, dryRun }));
-  if (dryRun) return { target, dryRun: true, wouldSeal: ok, refused, locks };
+  if (dryRun) return { target, dryRun: true, wouldSeal: ok, refused, locks, skipped, known };
 
   const sealed = [], deletedOnly = [], failed = [];
   // A file that changed since the quiet window is being written after all: refuse it, whatever step
@@ -202,7 +231,7 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
       sealed.push(await sealUnchecked(f, { fs, split: false, deleteOriginal, journal, frameBytes }));
     } catch (e) { failed.push({ file: f, reason: e.message }); }
   }
-  return { target, sealed, deletedOnly, refused, failed, locks };
+  return { target, sealed, deletedOnly, refused, failed, locks, skipped, known };
 }
 
 // Sealed segments of `f`'s stream beside it whose only source has `f`'s name, each with its relation to
