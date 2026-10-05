@@ -39,15 +39,31 @@
 
 /**
  * In-memory Redirector for tests and local dev.
+ *
+ * lookup races accept: a client's source port can be registered (set) a tick after the engine
+ * accepts and calls lookup — exactly as the Linux redirector's sockops entry is written before
+ * accept returns. So, with no default and no entry yet, lookup polls briefly (up to waitMs) for the
+ * port to appear before giving up; a configured defaultMeta is returned immediately (no wait).
+ *
  * @param {FlowMeta|null} [defaultMeta] fallback returned when a peer's port has no override.
  * @returns {{ lookup: (peer: {address: string, port: number}) => Promise<FlowMeta|null>, set: (port: number, meta: FlowMeta) => void, lookups: number }}
  */
-export function createStaticRedirector(defaultMeta = null) {
+export function createStaticRedirector(defaultMeta = null, { waitMs = 200, pollMs = 5 } = {}) {
   const byPort = new Map()
   const r = {
     lookups: 0,
     set(port, meta) { byPort.set(port, meta) },
-    async lookup({ port }) { r.lookups++; return byPort.get(port) ?? defaultMeta ?? null },
+    async lookup({ port }) {
+      r.lookups++
+      if (byPort.has(port)) return byPort.get(port)
+      if (defaultMeta) return defaultMeta
+      const deadline = Date.now() + waitMs
+      while (Date.now() < deadline) {
+        await new Promise((res) => setTimeout(res, pollMs))
+        if (byPort.has(port)) return byPort.get(port)
+      }
+      return defaultMeta ?? null
+    },
   }
   return r
 }
