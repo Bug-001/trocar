@@ -16,10 +16,10 @@ const within = (p, what, ms = 5000) => {
   return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error(`${what}: not within ${ms}ms`)), ms) })]).finally(() => clearTimeout(t))
 }
 
-async function harness({ meta = {}, policy = () => true, upstream, onAccept = () => {} }) {
+async function harness({ meta = {}, policy = () => true, upstream, onAccept = () => {}, leafIssuer = issuer }) {
   const upPort = await listen(upstream)
   const envelopes = [], flows = [], failures = []
-  const ctx = { issuer, upstreamCa: upCa.certPem, policy, isRecording: () => true, negCache: createNegativeCache(), newFlowId: () => 'f' + flows.length,
+  const ctx = { issuer: leafIssuer, upstreamCa: upCa.certPem, policy, isRecording: () => true, negCache: createNegativeCache(), newFlowId: () => 'f' + flows.length,
     counters: { notCaptured: { h2: 0, httpsProxy: 0, upstreamCert: 0, negative: 0, leafError: 0 } }, failure: (r) => failures.push(r),
     // Snapshot each record when it is written, as the real store does (it serializes at call time):
     // a field the engine sets on the record afterwards never reaches flows/ on disk.
@@ -319,4 +319,37 @@ test('client reset before a routing decision is caught: flow finalized with the 
     assert.equal(h.flows.length, 1, when); assert.equal(h.flows[0].decision, 'error', when)
     assert.equal(h.flows[0].error?.type, 'ECONNRESET', when)
   }
+})
+
+// D38: a capture failure is never silent — and an internal error costs one flow, never
+// the collector (fail-open). RFC 4.6 §引擎 5 / §记录「采集失败不静默」.
+test('a leaf the engine cannot issue steps aside like an unverifiable upstream: the client reaches the real upstream; flows/ and failures/ say leaf-error; nothing negative (D38)', async () => {
+  const h = await harness({ upstream: httpsUpstream((s) => s.on('data', () => s.end(RESP))), leafIssuer: { secureContextFor() { throw new Error('cannot sign a leaf') } } })
+  const r = await request(h.port, upCa.certPem, REQ)
+  await h.close()
+  assert.match(r.cert.issuer, /upstream test CA/); assert.equal(r.got, RESP)
+  assert.deepEqual([h.flows[0].decision, h.flows[0].not_captured, h.flows[0].reason], ['splice', 'leaf-error', 'cannot sign a leaf'])
+  assert.deepEqual(h.failures.map((f) => [f.reason, f.flow_id, f.host, f.error]), [['leaf-error', h.flows[0].flow_id, 'upstream.test', 'cannot sign a leaf']])
+  assert.equal(h.ctx.negCache.list().length, 0, 'asight\'s own fault, not a property of the host'); assert.equal(h.ctx.counters.notCaptured.leafError, 1)
+})
+
+test('an internal error while routing (here the daemon\'s policy throws) ends that one flow with a record, not the collector (D38)', async () => {
+  const h = await harness({ policy: () => { throw new Error('policy bug') }, upstream: httpsUpstream((s) => s.on('data', () => s.end(RESP))) })
+  const r = await talk(h.port, upCa.certPem)
+  await h.close()
+  assert.equal(r, 'closed')
+  assert.deepEqual([h.flows[0].decision, h.flows[0].error.type, h.flows[0].error.message], ['error', 'engine_error', 'policy bug'])
+  assert.deepEqual(h.failures.map((f) => [f.reason, f.flow_id, f.error]), [['engine-error', h.flows[0].flow_id, 'policy bug']])
+})
+
+test('a socket error on either side reaches flows/ with its side (D38)', async () => {
+  let gotReq
+  const seen = new Promise((r) => { gotReq = r })
+  const h = await harness({ upstream: httpsUpstream((s) => { s.on('error', () => {}); s.on('data', () => gotReq()) }) })
+  const raw = net.connect(h.port, '127.0.0.1'); raw.on('error', () => {})
+  const c = tls.connect({ socket: raw, servername: 'upstream.test', ca: asightCa.certPem }, () => c.write(REQ)); c.on('error', () => {})
+  await within(seen, 'request reached the upstream')
+  raw.resetAndDestroy()
+  await h.close()
+  assert.deepEqual([h.flows[0].decision, h.flows[0].error?.type, h.flows[0].error?.side], ['decrypt', 'ECONNRESET', 'client'])
 })

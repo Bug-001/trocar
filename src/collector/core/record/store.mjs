@@ -39,7 +39,7 @@ export function createRecordStore({ root, onError = () => {} }) {
 
   return {
     envelope(env) { return write((d) => path.join(root, `capture-${d}.ndjson`), env) },
-    flow(rec) { write((d) => path.join(root, 'flows', `${d}.ndjson`), rec) },
+    flow(rec) { return write((d) => path.join(root, 'flows', `${d}.ndjson`), rec) }, // false = not written (D38: the engine records that)
     audit(rec) { write((d) => path.join(root, 'audit', `${d}.ndjson`), rec) },
     replay(env) { write((d) => path.join(root, 'replays', `${d}.ndjson`), env) },
     failure(rec) { return write((d) => path.join(root, 'failures', `${d}.ndjson`), rec) }, // capture failures, never silent (RFC 4.6 §记录)

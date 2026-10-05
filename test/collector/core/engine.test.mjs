@@ -10,10 +10,14 @@ import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
 test('engine: lookup miss closes the socket; a known flow is spliced to its destination; stats count both', async () => {
   const echo = net.createServer((s) => s.pipe(s)); await new Promise((r) => echo.listen(0, '127.0.0.1', r))
   const redirector = createStaticRedirector()
-  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(createCa())), store: { envelope() {}, flow() {} } })
+  const failures = []
+  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(createCa())), store: { envelope() {}, flow() {}, failure: (f) => failures.push(f) } })
   const { port } = await engine.listen({})
-  const miss = await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('close', () => r(true)); c.on('error', () => {}) })
+  let missPort = 0
+  const miss = await new Promise((r) => { const c = net.connect(port, '127.0.0.1', () => { missPort = c.localPort }); c.on('close', () => r(true)); c.on('error', () => {}) })
   assert.equal(miss, true)
+  // the agent's connection was closed: not silent (D38) — failures/ names the peer
+  assert.deepEqual(failures.map((f) => [f.reason, f.peer.port, typeof f.ts]), [['lookup-miss', missPort, 'string']])
   redirector.set = redirector.set // static redirector keyed by client port: register on connect
   const echoed = await new Promise((resolve) => {
     const c = net.connect(port, '127.0.0.1')
@@ -99,4 +103,33 @@ test('engine: two consecutive rejections on one host splice that host only; anot
   assert.deepEqual(by('api.deepseek.com'), [['decrypt', null], ['decrypt', null], ['splice', 'negative-cache'], ['decrypt', null]])
   assert.deepEqual(by('chat.deepseek.com'), [['decrypt', null]])
   assert.deepEqual(engine.stats().notCaptured, { h2: 0, httpsProxy: 0, upstreamCert: 0, negative: 1, leafError: 0 })
+})
+
+// D38: asight's own failures are recorded and cost the agent one connection at most, never the collector.
+test('engine: connectUpstream throwing (e.g. a bad destination port) is an engine-error record, the socket is closed, the engine lives on (D38)', async () => {
+  const failures = [], errors = []
+  const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: 1, family: 4 }, pid: 1, agent: 'x', decrypt: false })
+  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(createCa())), connectUpstream: () => { throw new RangeError('bad port') },
+    store: { envelope() {}, flow() {}, failure: (f) => failures.push(f) }, onError: (e) => errors.push(e.message) })
+  const { port } = await engine.listen({})
+  for (let i = 0; i < 2; i++) await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('close', r); c.on('error', () => {}) })
+  await engine.close()
+  assert.deepEqual(failures.map((f) => [f.reason, f.pid, f.error]), [['engine-error', 1, 'bad port'], ['engine-error', 1, 'bad port']])
+  assert.deepEqual(errors, ['bad port', 'bad port']); assert.equal(engine.stats().active, 0)
+})
+
+test('engine: a flows/ record that cannot be written is a flow-write-failed failure record (D38)', async () => {
+  const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path')
+  const { createRecordStore } = await import('../../../src/collector/core/record/store.mjs')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-flowfail-'))
+  fs.writeFileSync(path.join(root, 'flows'), '') // a file where the flows/ directory should be
+  const store = createRecordStore({ root })
+  const up = net.createServer((sk) => sk.end()); await new Promise((r) => up.listen(0, '127.0.0.1', r))
+  const engine = createEngine({ redirector: createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 2, agent: 'x', decrypt: false }), issuer: createLeafIssuer(loadCa(createCa())), store })
+  const { port } = await engine.listen({})
+  await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('close', r); c.on('error', () => {}); c.resume() })
+  await engine.close(); up.close(); store.close()
+  const lines = fs.readdirSync(path.join(root, 'failures')).flatMap((f) => fs.readFileSync(path.join(root, 'failures', f), 'utf8').trim().split('\n').map((l) => JSON.parse(l)))
+  fs.rmSync(root, { recursive: true, force: true })
+  assert.deepEqual(lines.map((l) => [l.reason, l.flow_id, /flows/.test(l.error)]), [['flow-write-failed', 'flow_000001', true]])
 })

@@ -45,10 +45,12 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     // fail-open). handleFlow then sees the socket already destroyed and finalizes the flow.
     const duringLookup = () => {}
     socket.on('error', duringLookup)
-    let meta = null
-    try { meta = await redirector.lookup({ address: socket.remoteAddress, port: socket.remotePort }) }
-    catch (e) { onError(e) }
-    if (!meta) { counters.lookupMisses++; socket.destroy(); return }
+    const peer = { address: socket.remoteAddress, port: socket.remotePort }
+    let meta = null, lookupError = null
+    try { meta = await redirector.lookup(peer) }
+    catch (e) { lookupError = e; onError(e) }
+    // RFC 4.6 §引擎 1: no envelope, no flows/ — but the connection is closed, so it is not silent (D38)
+    if (!meta) { counters.lookupMisses++; failure({ reason: 'lookup-miss', peer, ...(lookupError ? { error: String(lookupError.message || lookupError) } : {}) }); socket.destroy(); return }
     // FlowExtras from the daemon. A throw must not cost the agent its connection: the flow goes on with
     // none (fail-open: no WS patterns → fallback cut), and the throw is recorded (D38).
     try { meta = { ...meta, ...(describe(meta) || {}) } } catch (e) {
@@ -61,7 +63,12 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
       connectUpstream: connectUpstream || defaultConnect,
       newFlowId: () => `flow_${String(++flowSeq).padStart(6, '0')}`,
     }
-    const done = handleFlow(socket, meta, ctx).then((rec) => {
+    let started
+    try { started = handleFlow(socket, meta, ctx) } catch (e) { // a synchronous throw (e.g. net.connect on a bad port): this connection only
+      onError(e); failure({ reason: 'engine-error', pid: meta.pid ?? null, agent: meta.agent ?? null, dst: meta.dst, error: String((e && e.message) || e) })
+      socket.destroy(); counters.active--; return
+    }
+    const done = started.then((rec) => {
       if (rec && rec.decision === 'decrypt') counters.decrypted++
       else if (rec && rec.decision === 'splice') counters.spliced++
     }).catch((e) => onError(e)).finally(() => { active.delete(done); counters.active-- })

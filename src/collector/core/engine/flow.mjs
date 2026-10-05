@@ -10,6 +10,8 @@ import { createExchangeTee } from './exchange.mjs'
 import { negKey } from './negcache.mjs'
 import { createUpstreamTrust } from '../tls/roots.mjs'
 
+const msgOf = (e) => String((e && e.message) || e)
+
 export function handleFlow(client, meta, ctx) {
   const t0 = Date.now()
   const rec = {
@@ -33,9 +35,23 @@ export function handleFlow(client, meta, ctx) {
     // a WebSocket connection: the recorder's summary (frames, calls, tail_raw, failures, …; RFC 4.6 §记录)
     const ws = activeTee && activeTee.wsSummary && activeTee.wsSummary()
     if (ws) { rec.transport = 'ws'; rec.ws = ws }
-    try { ctx.store.flow(rec) } catch { /* recording never breaks teardown */ }
+    // recording never breaks teardown, and a record that was not written is not silent (D38)
+    let ok = true, why = null
+    try { ok = ctx.store.flow(rec) !== false } catch (e) { ok = false; why = e }
+    if (!ok) ctx.failure({ reason: 'flow-write-failed', flow_id: rec.flow_id, error: msgOf(why || ctx.store.lastError || 'the store did not write the flow record') })
     resolveFlow(rec)
   }
+  // An exception inside the engine's own handling (a bug, or daemon-supplied code such as the policy
+  // throwing) costs this one flow, never the collector, and is recorded (RFC 4.6 §记录, D38): flows/
+  // error + failures/ engine-error, both sockets closed. Every event handler that routes is guarded.
+  function internalError(e) {
+    ctx.failure({ reason: 'engine-error', flow_id: rec.flow_id, error: msgOf(e) })
+    handedOff = true
+    try { client.destroy() } catch { /* ignore */ }
+    try { upstream.destroy() } catch { /* ignore */ }
+    finish('error', { error: { type: 'engine_error', message: msgOf(e), side: 'engine' } })
+  }
+  const guard = (fn) => (...a) => { try { return fn(...a) } catch (e) { internalError(e) } }
   function teardown() {
     if (activeTee) { try { activeTee.abort({ type: 'ECONNRESET', message: 'flow closed' }) } catch { /* ignore */ } }
     finish()
@@ -74,14 +90,19 @@ export function handleFlow(client, meta, ctx) {
   function relay(cSock, uSock) {
     handedOff = true // relay now owns teardown; the pre-decision handlers go quiet
     if (firstByteTimer) { clearTimeout(firstByteTimer); firstByteTimer = null }
-    const tee = activeTee
-    cSock.on('data', (d) => { rec.bytes_up += d.length; if (tee) tee.fromClient(d); if (uSock.writable && !uSock.write(d)) cSock.pause() })
+    let tee = activeTee
+    // the recording side copy never throws into the forwarding path: a recorder that throws stops
+    // recording this connection (recorded, D38) and the bytes keep flowing
+    const copy = (fn) => { if (!tee) return; try { fn(tee) } catch (e) { tee = null; activeTee = null; ctx.failure({ reason: 'engine-error', flow_id: rec.flow_id, error: `recording stopped: ${msgOf(e)}` }) } }
+    cSock.on('data', (d) => { rec.bytes_up += d.length; copy((t) => t.fromClient(d)); if (uSock.writable && !uSock.write(d)) cSock.pause() })
     uSock.on('drain', () => cSock.resume())
-    uSock.on('data', (d) => { rec.bytes_down += d.length; if (tee) tee.fromUpstream(d); if (cSock.writable && !cSock.write(d)) uSock.pause() })
+    uSock.on('data', (d) => { rec.bytes_down += d.length; copy((t) => t.fromUpstream(d)); if (cSock.writable && !cSock.write(d)) uSock.pause() })
     cSock.on('drain', () => uSock.resume())
+    // the first socket error of the flow, with its side, goes to flows/ (D38)
+    const noteError = (e, side) => { if (e instanceof Error && !rec.error) rec.error = { type: e.code || 'error', message: msgOf(e), side } }
     // 'error' passes the Error, 'end' nothing, 'close' a boolean: a reset reaches the ws recorder as an error
-    const clientGone = (e) => { if (tee) tee.clientEnded(e instanceof Error ? e : null); teardown(); try { if (!uSock.destroyed) uSock.destroy() } catch { /* ignore */ }; try { if (!upstream.destroyed) upstream.destroy() } catch { /* ignore */ } }
-    const upstreamGone = (e) => { if (tee) tee.upstreamEnded(e instanceof Error ? e : null); teardown(); try { if (cSock.writable) cSock.end() } catch { /* ignore */ } } // let the client drain, then it closes
+    const clientGone = (e) => { noteError(e, 'client'); copy((t) => t.clientEnded(e instanceof Error ? e : null)); teardown(); try { if (!uSock.destroyed) uSock.destroy() } catch { /* ignore */ }; try { if (!upstream.destroyed) upstream.destroy() } catch { /* ignore */ } }
+    const upstreamGone = (e) => { noteError(e, 'upstream'); copy((t) => t.upstreamEnded(e instanceof Error ? e : null)); teardown(); try { if (cSock.writable) cSock.end() } catch { /* ignore */ } } // let the client drain, then it closes
     cSock.on('end', clientGone); cSock.on('error', clientGone); cSock.on('close', clientGone)
     uSock.on('end', upstreamGone); uSock.on('error', upstreamGone); uSock.on('close', upstreamGone)
   }
@@ -90,13 +111,13 @@ export function handleFlow(client, meta, ctx) {
   function route(cSock, uSock, preBuf, hostDefault, isTunnel) {
     const chunks = preBuf && preBuf.length ? [preBuf] : []
     let decided = false
-    const onClient = (d) => {
+    const onClient = guard((d) => {
       if (decided) return
       chunks.push(d)
       if (classify(Buffer.concat(chunks)) === 'need-more') return
       decide()
-    }
-    const onUpFirst = (d) => {
+    })
+    const onUpFirst = guard((d) => {
       if (decided) return
       decided = true
       cleanup()
@@ -105,7 +126,7 @@ export function handleFlow(client, meta, ctx) {
       if (chunks.length) uSock.write(Buffer.concat(chunks))
       if (d && d.length) { rec.bytes_down += d.length; cSock.write(d) }
       relay(cSock, uSock)
-    }
+    })
     const cleanup = () => { cSock.removeListener('data', onClient); uSock.removeListener('data', onUpFirst) }
     function decide() {
       decided = true
@@ -130,13 +151,13 @@ export function handleFlow(client, meta, ctx) {
   // ── TLS: wait for the whole ClientHello, then decide decrypt vs splice ─────────────────────────
   function handleTls(initial, cSock, uSock, hostDefault, isTunnel) {
     const chunks = [initial]
-    const onData = (d) => {
+    const onData = guard((d) => {
       chunks.push(d)
       const ch = parseClientHello(Buffer.concat(chunks))
       if (!ch.complete) return
       cSock.removeListener('data', onData); cSock.pause()
       decideTls(ch, Buffer.concat(chunks), cSock, uSock, hostDefault, isTunnel)
-    }
+    })
     const ch0 = parseClientHello(initial)
     if (ch0.complete) { cSock.pause(); decideTls(ch0, initial, cSock, uSock, hostDefault, isTunnel) }
     else cSock.on('data', onData)
@@ -167,16 +188,17 @@ export function handleFlow(client, meta, ctx) {
   // tunnel there is no fresh connection to open without re-sending the client's proxy prelude (its
   // credentials) on our own initiative (invariant 1 / D30), so that one flow is closed; (pid, host) is
   // negative at once either way, so later flows (the client's retry) splice without trying.
-  function stepAside(upTls, buf, cSock, host, isTunnel, key) {
-    const why = String(upTls.authorizationError || 'upstream certificate not verified')
+  //   A leaf we cannot issue (cause 'leaf-error', an internal error) steps aside the same way, but is
+  // not negative-cached (asight's fault, not the host's) and is written to failures/ (D38).
+  function stepAside(upTls, buf, cSock, host, isTunnel, key, cause, why) {
     handedOff = true                                    // the original upstream closes under us; we own teardown
     try { upTls.destroy() } catch { /* ignore */ }
-    ctx.negCache.mark(key, { cause: 'upstream-cert', meta, host })
-    ctx.counters.notCaptured.upstreamCert++
-    rec.not_captured = 'upstream-cert'; rec.reason = why
+    if (cause === 'upstream-cert') { ctx.negCache.mark(key, { cause, meta, host }); ctx.counters.notCaptured.upstreamCert++ }
+    else { ctx.counters.notCaptured.leafError++; ctx.failure({ reason: 'leaf-error', flow_id: rec.flow_id, host, error: why }) }
+    rec.not_captured = cause; rec.reason = why
     if (isTunnel) {
       try { cSock.destroy() } catch { /* ignore */ }
-      return finish('tunnel', { host, error: { type: 'upstream_cert', message: why } })
+      return finish('tunnel', { host, error: { type: cause.replace('-', '_'), message: why } })
     }
     setDecision('splice', false)
     const fresh = ctx.connectUpstream(meta.dst)
@@ -196,11 +218,13 @@ export function handleFlow(client, meta, ctx) {
     upTls.on('error', (err) => {
       if (!clientTls) { try { cSock.destroy() } catch { /* ignore */ }; finish(isTunnel ? 'tunnel' : 'decrypt', { host, error: { type: err.code || 'upstream_tls_error', message: String((err && err.message) || err) } }) }
     })
-    upTls.on('secureConnect', () => {
-      if (!upTls.authorized) return stepAside(upTls, buf, cSock, host, isTunnel, key)
+    upTls.on('secureConnect', guard(() => {
+      if (!upTls.authorized) return stepAside(upTls, buf, cSock, host, isTunnel, key, 'upstream-cert', String(upTls.authorizationError || 'upstream certificate not verified'))
+      let leaf
+      try { leaf = ctx.issuer.secureContextFor(host) } catch (e) { return stepAside(upTls, buf, cSock, host, isTunnel, key, 'leaf-error', msgOf(e)) }
       setDecision('decrypt', isTunnel)
       cSock.unshift(buf)                                    // replay the ClientHello to our TLS server
-      clientTls = new tls.TLSSocket(cSock, { isServer: true, secureContext: ctx.issuer.secureContextFor(host), ALPNProtocols: ['http/1.1'] })
+      clientTls = new tls.TLSSocket(cSock, { isServer: true, secureContext: leaf, ALPNProtocols: ['http/1.1'] })
       // Rejection (§引擎 5, D37): the client closes or resets without one byte of application data, alert
       // or not, Finished or not — Node sends no alert, and under TLS 1.2 our side of the handshake
       // completes before the client checks our leaf and hangs up. Judged on whichever of error / end /
@@ -221,19 +245,19 @@ export function handleFlow(client, meta, ctx) {
         recordStore: ctx.store, isRecording: ctx.isRecording, wsTerminal: meta.wsTerminal ?? null,
       })
       relay(clientTls, upTls)
-    })
+    }))
   }
 
   // ── CONNECT: relay the proxy exchange verbatim, then route the tunnelled bytes ─────────────────
   function handleConnect(initial, cSock, uSock) {
     const chunks = [initial]
-    const onData = (d) => {
+    const onData = guard((d) => {
       chunks.push(d)
       const h = parseHead(Buffer.concat(chunks))
       if (!h) return
       cSock.removeListener('data', onData)
       afterConnectHead(h, Buffer.concat(chunks), cSock, uSock)
-    }
+    })
     const h0 = parseHead(initial)
     if (h0) afterConnectHead(h0, initial, cSock, uSock)
     else cSock.on('data', onData)
@@ -245,7 +269,7 @@ export function handleFlow(client, meta, ctx) {
     const innerPre = buf.subarray(h.headLength)               // usually empty (client waits for 2xx)
     uSock.write(buf.subarray(0, h.headLength))                // forward the CONNECT head verbatim
     const upChunks = []
-    const onUp = (d) => {
+    const onUp = guard((d) => {
       upChunks.push(d)
       const ph = parseHead(Buffer.concat(upChunks))
       if (!ph) return
@@ -262,7 +286,7 @@ export function handleFlow(client, meta, ctx) {
         if (after.length) cSock.write(after)
         relay(cSock, uSock)
       }
-    }
+    })
     uSock.on('data', onUp)
   }
 
