@@ -47,6 +47,43 @@ export function parseDotenv(text) {
   return out
 }
 
+// ── TOML subset (Codex config.toml): [table] / [a."b.c"] headers, bare / quoted / dotted keys, string / number / bool
+// values. Arrays, inline tables, multi-line strings and [[array-of-tables]] are not read (counted in `errors`): no
+// reader needs them, and a key under an unread header must not land in the table before it.
+function splitKey(s) {
+  const parts = []
+  for (const m of s.matchAll(/\s*("(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_-]+)\s*(?:\.|$)/g)) parts.push(m[1].replace(/^["']|["']$/g, ''))
+  return parts
+}
+function tomlScalar(v) {
+  const s = v.trim()
+  let m
+  if ((m = /^"((?:[^"\\]|\\.)*)"\s*(#.*)?$/.exec(s))) return m[1].replace(/\\(.)/g, (_, c) => (c === 'n' ? '\n' : c))
+  if ((m = /^'([^']*)'\s*(#.*)?$/.exec(s))) return m[1]
+  if ((m = /^(true|false)\s*(#.*)?$/.exec(s))) return m[1] === 'true'
+  if ((m = /^([+-]?\d[\d_]*(\.\d+)?)\s*(#.*)?$/.exec(s))) return Number(m[1].replace(/_/g, ''))
+  return undefined
+}
+export function parseTomlLite(text) {
+  const root = {}
+  let cur = root
+  let errors = 0
+  const descend = (base, keys) => { let o = base; for (const k of keys) o = o[k] = (o[k] && typeof o[k] === 'object') ? o[k] : {}; return o }
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line || line.startsWith('#')) continue
+    if (line.startsWith('[[')) { errors++; cur = {}; continue } // array-of-tables: its keys are dropped
+    const h = /^\[([^\]]+)\]\s*(#.*)?$/.exec(line)
+    if (h) { cur = descend(root, splitKey(h[1])); continue }
+    const kv = /^((?:"(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_.-]+|\s)+?)\s*=\s*(.+)$/.exec(line)
+    const v = kv ? tomlScalar(kv[2]) : undefined
+    if (v === undefined) { errors++; continue }
+    const keys = splitKey(kv[1])
+    descend(cur, keys.slice(0, -1))[keys[keys.length - 1]] = v
+  }
+  return { data: root, errors }
+}
+
 // ── JSONC: strip // and /* */ comments and trailing commas outside strings, then JSON.parse ──
 export function parseJsonc(text) {
   const s = String(text || '')

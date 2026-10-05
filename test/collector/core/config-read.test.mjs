@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { readText, hostOf, expandHome, parseDotenv, parseJsonc, dig } from '../../../src/collector/core/config-read.mjs'
+import { readText, hostOf, expandHome, parseDotenv, parseTomlLite, parseJsonc, dig } from '../../../src/collector/core/config-read.mjs'
 
 test('config-read: hostOf takes URLs, bare hosts, IPv6 literals; junk is null', () => {
   assert.equal(hostOf('https://API.Example.com:8443/v1'), 'api.example.com')
@@ -22,6 +22,30 @@ test('config-read: readText returns null for a missing file instead of throwing'
 test('config-read: dotenv handles export, quotes, comments; later keys win', () => {
   const m = parseDotenv('# c\nexport A=1\nB="two # not comment"\nC=\'3\'\nD=4 # trailing\nA=5\nbad line\nE="a\\nb"\r\n')
   assert.deepEqual(Object.fromEntries(m), { A: '5', B: 'two # not comment', C: '3', D: '4', E: 'a\nb' })
+})
+
+test('config-read: TOML subset reads tables, dotted keys, strings; skips what it cannot read', () => {
+  const { data, errors } = parseTomlLite([
+    'openai_base_url = "https://relay.example.com/v1" # c',
+    "model_provider = 'mock'",
+    'profiles.fast.model = "m"',
+    '[model_providers.mock]',
+    'base_url = "http://127.0.0.1:9/v1"',
+    'wire_api = "responses"',
+    '[model_providers."a.b"]',
+    'base_url = "https://ab.example.com"',
+    'list = ["x", "y"]',
+    '[[mcp_servers]]',
+    'url = "https://ignored.example.com"',
+  ].join('\n'))
+  assert.equal(data.openai_base_url, 'https://relay.example.com/v1')
+  assert.equal(data.model_provider, 'mock')
+  assert.equal(dig(data, 'model_providers.mock.base_url'), 'http://127.0.0.1:9/v1')
+  assert.equal(data.model_providers['a.b'].base_url, 'https://ab.example.com')
+  assert.equal(dig(data, 'profiles.fast.model'), 'm')
+  assert.equal(data.url, undefined)
+  assert.equal(data.model_providers['a.b'].url, undefined, 'a key under an unread [[header]] never lands in the table before it')
+  assert.equal(errors, 2) // the array value and the [[array-of-tables]] header
 })
 
 test('config-read: JSONC strips comments and trailing commas but not inside strings', () => {
