@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
-import { buildTransparentEnvelope } from '../../../src/collector/core/record/envelope.mjs'
+import { buildTransparentEnvelope, buildWsEnvelope } from '../../../src/collector/core/record/envelope.mjs'
 import { createRecordStore } from '../../../src/collector/core/record/store.mjs'
 
 const FLOW = { id: 'f1', host: 'relay.test', scheme: 'https', dst: { address: '10.0.0.9', port: 443 }, proc: { pid: 9, exe: '/usr/bin/claude', agent: 'claude-code' } }
@@ -66,4 +66,42 @@ test('store: 0600 files, 0700 dirs, streams split by kind, write errors never th
   const ok = createRecordStore({ root })
   assert.equal(ok.envelope({ ts: '2026-10-05T01:00:00.000Z', id: 'c' }), true, 'a written line says so')
   ok.close()
+})
+
+// RFC 4.6 §传输与帧级记录 (D37): one envelope per logical WebSocket call, the upgrade's heads on each.
+const WS_UP = {
+  req: { head: { ...head('GET /v1/responses HTTP/1.1\r\nSession-Id: s-1\r\n\r\n'), method: 'GET', target: '/v1/responses', headers: [['Session-Id', 's-1']] } },
+  resp: { head: { ...head('HTTP/1.1 101 Switching Protocols\r\nSec-WebSocket-Extensions: permessage-deflate\r\n\r\n'), status: 101, headers: [['Sec-WebSocket-Extensions', 'permessage-deflate']] } },
+}
+const wsCall = (x) => ({ client: [], server: [], tsStart: '2026-10-05T00:00:00.000Z', tsRespStart: '2026-10-05T00:00:01.000Z', tsEnd: '2026-10-05T00:00:03.000Z', partial: [], truncated: false, ...x })
+const RAW = [{ i: 4, d: 'c', h: 'gYI=', p: 'aGk=' }, { i: 9, d: 's', h: 'gQI=', p: 'b2s=' }]
+
+test('ws envelope: upgrade heads verbatim, opener text in req_body, new fields after req_body, transport ws', () => {
+  const env = buildWsEnvelope({ id: 'w1', flow: FLOW, seq: 3, upgrade: WS_UP, wsRaw: RAW, call: wsCall({ client: ['{"type":"response.create"}', 'more'], server: ['a', { b64: 'AAE=' }] }) })
+  const keys = Object.keys(env)
+  for (const k of ['host', 'flow_id', 'seq', 'req_head_raw', 'resp_head_raw', 'transport', 'ws_frames', 'ws_ext', 'ws_raw', 'req_extra_messages']) assert.ok(keys.indexOf(k) > keys.indexOf('req_body'), k)
+  assert.equal(env.req_body, '{"type":"response.create"}'); assert.deepEqual(env.req_extra_messages, ['more']); assert.equal(env.is_llm_call, true)
+  assert.deepEqual(env.resp, { kind: 'ws', messages: ['a', { b64: 'AAE=' }] }); assert.equal(env.error, undefined)
+  assert.deepEqual([env.transport, env.ws_frames, env.ws_ext, env.seq, env.flow_id, env.method], ['ws', [4, 9], 'permessage-deflate', 3, 'f1', 'GET'])
+  assert.equal(env.req_headers['session-id'], 's-1'); assert.equal(env.req_head_raw, WS_UP.req.head.raw.toString('latin1')); assert.match(env.resp_head_raw, /^HTTP\/1.1 101/)
+  assert.equal(env.duration_ms, 2000); assert.equal(env.ts, '2026-10-05T00:00:00.000Z')
+  for (const k of ['partial', 'partial_reasons', 'ws_truncated', 'req_body_b64']) assert.equal(k in env, false, k)
+})
+
+test('ws envelope: no opener → req_body null; a binary opener → req_body null + req_body_b64; non-LLM opener is metadata; cut → error with resp.partial; labels', () => {
+  const push = buildWsEnvelope({ id: 'w2', flow: FLOW, seq: 0, upgrade: WS_UP, wsRaw: RAW, call: wsCall({ server: ['hello'] }) })
+  assert.equal(push.req_body, null); assert.equal('req_extra_messages' in push, false)
+  const bin = buildWsEnvelope({ id: 'w3', flow: FLOW, seq: 0, upgrade: WS_UP, wsRaw: [], call: wsCall({ client: [{ b64: 'AAE=' }, { b64: 'Ag==' }], tsRespStart: null }) })
+  assert.deepEqual([bin.req_body, bin.req_body_b64, bin.req_extra_messages, bin.ws_frames, bin.duration_ms], [null, 'AAE=', [{ b64: 'Ag==' }], null, null])
+  assert.equal('req_content_encoding' in bin, false)
+  const lost = buildWsEnvelope({ id: 'w4', flow: FLOW, seq: 0, upgrade: WS_UP, wsRaw: RAW, call: wsCall({ client: [{ omitted_bytes: 9 }], truncated: true, partial: ['off-window', 'decode-failed'] }) })
+  assert.deepEqual([lost.req_body, 'req_body_b64' in lost, lost.ws_truncated, lost.partial, lost.partial_reasons], [null, false, true, true, ['off-window', 'decode-failed']])
+  const ctl = { ...WS_UP, req: { head: { ...WS_UP.req.head, target: '/realtime/control' } } }
+  const meta = buildWsEnvelope({ id: 'w5', flow: FLOW, seq: 0, upgrade: ctl, wsRaw: RAW, call: wsCall({ client: [{ raw_chars: 2, verbatim: false }] }) })
+  assert.deepEqual([meta.req_body, meta.is_llm_call], [{ raw_chars: 2, verbatim: false }, false])
+  const cut = buildWsEnvelope({ id: 'w6', flow: FLOW, seq: 0, upgrade: WS_UP, wsRaw: RAW, call: wsCall({ client: ['go'], server: ['part'] }), error: { type: 'ECONNRESET', message: 'reset' } })
+  assert.equal(cut.error, true)
+  assert.deepEqual(cut.resp, { status: null, kind: 'error', error: { type: 'ECONNRESET', message: 'reset' }, partial: { kind: 'ws', messages: ['part'] } })
+  const none = buildWsEnvelope({ id: 'w7', flow: FLOW, seq: 0, upgrade: { ...WS_UP, resp: { head: { ...head('HTTP/1.1 101 x\r\n\r\n'), status: 101, headers: [] } } }, wsRaw: RAW, call: wsCall({ client: ['x'] }) })
+  assert.equal(none.ws_ext, null)
 })

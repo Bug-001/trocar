@@ -75,3 +75,49 @@ export function buildTransparentEnvelope({ id, flow, seq, req, resp, error = nul
     ...(req.partial ? { req_partial: req.partial } : {}),
   }
 }
+
+/**
+ * buildWsEnvelope({id, flow, seq, upgrade, call, wsRaw, error}) → the envelope of ONE logical WebSocket
+ * call (RFC 4.6 §传输与帧级记录, D37). The upgrade is not an envelope of its own: every call carries the
+ * upgrade request's headers (req_headers / req_head_raw: the sharder reads Codex's session-id there)
+ * and the upstream's 101 head (resp_head_raw).
+ *   upgrade = {req:{head}, resp:{head}}   the heads as the exchange tee holds them
+ *   call    = {client:[v], server:[v], tsStart, tsRespStart, tsEnd, partial:[reason], truncated}
+ *     v = a message as stored: its text, {b64}, {b64, decode_error}, {omitted_bytes}, or, for a non-LLM
+ *     endpoint's client message, {raw_chars, verbatim:false}. client[0] opened the call; none = a server
+ *     message that arrived with no call open.
+ *   wsRaw   = the call's ws_raw entries in frame order (core/ws/raw.mjs)
+ *   error   = null | {type, message}: the connection ended the call before its terminal message; the
+ *             server messages then sit under resp.partial, the shape of an interrupted HTTP response
+ * Only the opener's TEXT is req_body; a non-text opener is req_body:null + req_body_b64 (its decoded
+ * bytes, no req_content_encoding); one past the cap or not decodable is req_body:null, labelled by
+ * ws_truncated / partial_reasons and by its frames in ws_raw.
+ */
+export function buildWsEnvelope({ id, flow, seq, upgrade, call, wsRaw, error = null }) {
+  const [opener = null, ...extra] = call.client
+  const messages = { kind: 'ws', messages: call.server }
+  const env = buildEnvelope({
+    id, tsRequest: call.tsStart, tsRespStart: call.tsRespStart, tsRespEnd: call.tsEnd,
+    durationMs: call.tsRespStart ? Date.parse(call.tsEnd) - Date.parse(call.tsRespStart) : null,
+    method: upgrade.req.head.method, endpoint: upgrade.req.head.target, reqBody: null,
+    reqHeaders: lowerHeaders(upgrade.req.head.headers),
+    resp: error ? { status: null, kind: 'error', error: { type: error.type, message: error.message }, partial: messages } : messages,
+    capture: 'transparent', error: !!error,
+  })
+  env.req_body = typeof opener === 'string' || (opener && opener.verbatim === false) ? opener : null // keeps its key position
+  const ext = (upgrade.resp.head.headers || []).filter(([k]) => k.toLowerCase() === 'sec-websocket-extensions').map(([, v]) => v)
+  return {
+    ...env,
+    host: flow.host, scheme: flow.scheme, dst: flow.dst, proc: flow.proc, flow_id: flow.id, seq,
+    req_head_raw: upgrade.req.head.raw.toString('latin1'),
+    resp_head_raw: upgrade.resp.head.raw.toString('latin1'),
+    ...(opener && typeof opener.b64 === 'string' && !opener.decode_error ? { req_body_b64: opener.b64 } : {}),
+    transport: 'ws',
+    ws_frames: wsRaw.length ? [wsRaw[0].i, wsRaw[wsRaw.length - 1].i] : null,
+    ws_ext: ext.length ? ext.join(', ') : null,
+    ws_raw: wsRaw,
+    ...(extra.length ? { req_extra_messages: extra } : {}),
+    ...(call.partial.length ? { partial: true, partial_reasons: call.partial } : {}),
+    ...(call.truncated ? { ws_truncated: true } : {}),
+  }
+}
