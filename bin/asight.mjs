@@ -223,6 +223,16 @@ async function main() {
       }
       break;
     }
+    case 'collector': { // per-user transparent collector (RFC 4.6, D36): install / start / on / off / status / uninstall
+      const { runCollector } = await import(r('src', 'collector', 'cli.mjs'));
+      process.exitCode = await runCollector(rest);
+      break;
+    }
+    case 'setup-helper': { // machine-wide, once, with sudo: the capability helper (RFC 4.6 §特权助手, D36)
+      const { runSetupHelper } = await import(r('src', 'collector', 'cli.mjs'));
+      process.exitCode = await runSetupHelper(rest);
+      break;
+    }
     case 'uninstall': {
       // one-step revert (4.5 §C): drop CA from the user trust store + clear the CC-CLI steer + tear
       // down the Desktop Clash steer AND the two capture agents (durable mitm + NODE_EXTRA_CA_CERTS

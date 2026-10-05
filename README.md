@@ -119,6 +119,33 @@ agent read, all tool output, and any secret you pasted into a chat land on disk 
 `~/.asight/**` as sensitive; on a shared machine, `chmod -R go-rwx ~/.asight`. The dashboard binds
 loopback and enforces a Host/Origin allowlist, so a website you visit cannot reach it.
 
+### The per-user process collector (Linux, preview)
+
+`asight collector` captures Claude Code by process instead of by proxy or base URL (RFC 4.6, D31): an
+eBPF helper steers only the connections of agent processes you run to a loopback engine, which decrypts
+only for agents that trust the collector CA. Everything else, including other users, goes direct.
+
+| what | where | undo |
+|---|---|---|
+| capability helper (once per machine, `sudo`) | `/usr/local/libexec/asight/asight-redirector`, root 0755, file caps `cap_bpf,cap_net_admin,cap_perfmon` — no setuid, no account, no system unit | `sudo asight setup-helper --remove` |
+| collector CA (per user, in **no** trust store) | `~/.asight/collector/ca/` (key 0600) | `asight collector uninstall` |
+| Claude Code trust entry | `env.NODE_EXTRA_CA_CERTS` in `~/.claude/settings.json` → the collector CA, or → `~/.asight/collector/ca/extra-cc.pem` (your existing CA's certificates + the collector CA) when you already set one | uninstall removes only that key, or puts your value back |
+| install manifest | `~/.asight/collector/install-manifest.json` — every file and key it changed, never a copy of your file | removed last by uninstall |
+| captures | `~/.asight/collector/capture-<date>.ndjson`; `flows/` holds connection metadata | kept unless `uninstall --purge-data` |
+
+```sh
+sudo asight setup-helper      # once per machine (Linux)
+asight collector install      # per user, no sudo; restart Claude Code so it reads the new trust entry
+asight collector start        # the daemon, in the foreground (no autostart yet)
+asight collector on           # steer + record; `off` stops recording at once; `status` shows each agent and why
+asight serve                  # the captures appear on the board
+```
+
+A relay or proxy with a private CA keeps working: install carries the CA you already gave Claude Code
+into `extra-cc.pem`, and the daemon verifies upstreams with Node's store, so start it with the same
+`NODE_EXTRA_CA_CERTS` your shell has. Claude Code processes started before install keep their old
+trust until they restart; `status` reports them as untrusted and their connections go direct.
+
 ## Claude Desktop — the one environment-dependent case
 
 Desktop force-overwrites its base URL and ignores `settings.json`, so it cannot be steered by config.
@@ -169,6 +196,8 @@ asight on [--proxy <url>] | off [--remove-ca] | uninstall | verify | doctor
 asight monitor {on|off|status}
 asight mitm [--port 9899] [--host api.anthropic.com]
 asight desktop {on|off|status}        # macOS + Clash Verge
+sudo asight setup-helper [--binary <path>] [--remove]   # Linux, once per machine
+asight collector install | start | on | off | status [--json] | uninstall [--purge-data]
 ```
 
 Design authority: [`spec/01-asight-rfc/`](spec/01-asight-rfc/) (entry `0.0-overview.md`). This README is

@@ -11,7 +11,7 @@
 // same shape and mean opposite things — so the set is declared.
 
 export const VALUED_FLAGS = new Set([
-  '--capture-target', '--db', '--file', '--host', '--interval', '--out',
+  '--binary', '--capture-target', '--db', '--file', '--host', '--interval', '--out',
   '--port', '--proxy', '--source', '--target', '--upstream',
 ]);
 
