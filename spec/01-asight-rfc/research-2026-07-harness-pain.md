@@ -25,6 +25,6 @@
 - **方向(→ D17)**:**领跑 OBSERVE**——逐字透明捕获喂 **cache 前缀分叉定位视图** + 逐步上下文增长/schema-税归因。证据一边倒:ubiquitous、high-severity、被现有工具服务最差的痛(排名 1-5)全是**诊断/观测**痛;cache 簇独占 ~7/33、共享一个「provider 报计数从不报原因」的根,无人触碰。**确认(非推翻)既有 D2**(行为回放骨 + cache 叠加)。
 - **二次序**:read-only **debugger-interface**(能力 A · query/MCP/SDK,让 agent 自动点名断裂)= 紧随其后的下游单元(薄层,在同一 trace 上),**先于 self-evolution、远先于 active-intervention**。
 - **self-evolution 降级**:排名 ~10,真但「common」非头部楔子;harness-maintenance 痛反而更**支持 observe**(那些 bug 回 200、过类型检查,恰在别人操作的那层不可见)。作**后续单元**,非本轮 lead。
-- **active-intervention(「agent 界 burpsuite」)确认保留**:证据最弱——真空白但需求 niche(反事实 debugger + red-team),且是唯一被 OBSERVE-only 不变式(D16)挡住的。**别让炫点领跑**;留独立下游 build-RFC + 消费者授权门(承 [5.1](5.1-active-mode-reserved.md))。
+- **active-intervention(「agent 界 burpsuite」)确认保留**:证据最弱——真空白但需求 niche(反事实 debugger + red-team),且是唯一被 OBSERVE-only 不变式(D16)挡住的。**别让炫点领跑**;留独立下游 build-RFC + 消费者授权门(承 [5.1](5.1-intervention.md))。
 
 > 覆盖缺口(诚实标):context-engineering 一路研究失败未回,"为何 agent 忘/循环/重读"欠采样(上下文增长/compaction 痛经 perf 路覆盖了部分)。需要时可补跑该路。
