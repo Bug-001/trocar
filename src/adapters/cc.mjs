@@ -110,6 +110,12 @@ const ENVELOPE_CONSUMED = new Set([
   'is_llm_call', 'capture', 'auth_mode',
   // interruption marker (D10: 中断也写 error:true 信封)
   'error',
+  // transparent-capture fields appended after req_body (RFC 4.6 §记录 / D32): the process-collector
+  // envelope carries these, so list them here or they would inflate unmapped_count on every call.
+  'host', 'scheme', 'dst', 'proc', 'flow_id', 'seq', 'req_head_raw', 'resp_head_raw',
+  // intervention fields reserved by RFC 5.1 (D33, implemented later) — consumed now so a transparent
+  // envelope never surfaces them as unmapped.
+  'origin', 'client_req_body', 'client_resp', 'intervention', 'resend_of',
 ]);
 
 // req_body keys this adapter maps to canonical columns / blocks / identity. The remainder (real
