@@ -64,6 +64,14 @@ export function subagentCall(tools) {
   return { name: t.name, input }
 }
 
+// Title side calls carry no tools: Claude Code asks for JSON {"title"} (output_config), OpenCode has a
+// "title generator" agent. They get a short title, as JSON when the request wants JSON.
+const systemText = (b) => [b.system, b.instructions, ...(Array.isArray(b.messages) ? b.messages.filter((m) => m?.role === 'system' || m?.role === 'developer').map((m) => m.content) : [])]
+  .map((s) => (typeof s === 'string' ? s : Array.isArray(s) ? s.map((x) => x?.text || '').join('\n') : '')).join('\n')
+const schemaOf = (b) => (b.output_config?.format || b.output_format || b.text?.format || b.response_format?.json_schema || b.response_format)?.schema
+export const isTitleRequest = (b) => !toolsOf(b).length && (schemaOf(b)?.properties?.title != null || /title generator|"title" field/i.test(systemText(b)))
+export const titleText = (b, id) => (schemaOf(b) || /\bJSON\b/.test(systemText(b)) ? JSON.stringify({ title: `mock title ${id}` }) : `mock title ${id}`)
+
 // near-limit: grow the input side of every usage block in a reply by the same amount, so the last one
 // totals `total` (input + cache + output) whatever the dialect computed, and message_start agrees
 // with message_delta.

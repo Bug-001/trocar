@@ -1,7 +1,7 @@
 // scenarios.mjs — the scenario catalog, how a request picks one, and the dialect-neutral reply plan.
 // Every name here has a row in README.md's scenario table (a test keeps the two in sync).
 import { createHash } from 'node:crypto'
-import { toolsOf, turnOf, acts, subagentCall } from './session.mjs'
+import { toolsOf, turnOf, acts, subagentCall, isTitleRequest, titleText } from './session.mjs'
 
 // A scenario is data the dialects and the transport read: `status` makes it an HTTP error, `extra`
 // adds deltas after the reply text, and `fault` / `slowHeaders` / `drip` / `splitUtf8` / `encoding`
@@ -112,10 +112,11 @@ export function shellCall(names) {
 // A call is made only while the scenario acts (session.mjs `acts`): the marker that asked for it is
 // still in the history, so past its N rounds a tool result is answered with text, or the agent would
 // loop forever. A request that declares no tools gets text too, as from a real provider: agents' side
-// calls (titles, summaries, compaction) carry the typed marker but no tools.
+// calls (summaries, compaction) carry the typed marker but no tools. A title call gets a short title.
 export function plan(seen, raw, body, sc = {}) {
   const head = seen.kind === 'tool_result' ? 'mock-reply: tool-result-received ' : 'mock-reply: '
-  const reply = `${head}${Array.from(seen.text || '').slice(0, 80).join('')} sha256:${sha256(raw).slice(0, 12)}`
+  const reply = isTitleRequest(body) ? titleText(body, sha256(raw).slice(0, 12))
+    : `${head}${Array.from(seen.text || '').slice(0, 80).join('')} sha256:${sha256(raw).slice(0, 12)}`
   const extra = sc.extra ? sc.extra() : [], text = reply + extra.join('')
   const thinking = sc.thinking ? `mock-thinking: the last user turn is ${(seen.text || '').length} chars long` : null
   const tools = toolsOf(body), turn = turnOf(body), act = !turn.quiet && acts(turn, sc)

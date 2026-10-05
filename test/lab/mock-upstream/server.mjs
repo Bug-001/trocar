@@ -8,7 +8,7 @@ import tls from 'node:tls'
 import { once } from 'node:events'
 import { parseRequest } from './http1.mjs'
 import { SCENARIOS, isScenario, pickScenario, errorFor, expandSteps } from './scenarios.mjs'
-import { NEAR_LIMIT_TOKENS, turnOf, acts, withUsageTotal } from './session.mjs'
+import { NEAR_LIMIT_TOKENS, isTitleRequest, turnOf, acts, withUsageTotal } from './session.mjs'
 import { writeResponse, jsonReply } from './transport.mjs'
 import * as anthropic from './anthropic.mjs'
 import * as openai from './openai.mjs'
@@ -37,8 +37,9 @@ const parseJson = (buf) => { try { const v = JSON.parse(buf.toString('utf8')); r
 async function dispatch(req, io, state) {
   const p = req.target.split('?')[0]
   const route = ROUTES.find((r) => r.re.test(p) && r.methods.includes(req.method))
+  // a title side call is auxiliary, like count_tokens: neither a marker nor a scripted step steers it
   const body = parseJson(req.body)
-  const pick = pickScenario(req.headers, req.body, route?.kind === 'model', state.queue)
+  const pick = pickScenario(req.headers, req.body, route?.kind === 'model' && !isTitleRequest(body), state.queue)
   const sc = isScenario(pick.name) ? { ...SCENARIOS[pick.name], via: pick } : null
   // errors on routes no dialect owns (models, unknown paths) take the shape the client speaks
   const dialect = route?.dialect || (req.headers['anthropic-version'] ? anthropic : openai.chat)
