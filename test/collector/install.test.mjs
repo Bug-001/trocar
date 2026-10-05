@@ -6,6 +6,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { X509Certificate } from 'node:crypto'
+import { spawn } from 'node:child_process'
+import { startControlServer } from '../../src/collector/core/control.mjs'
 import { installCollector, uninstallCollector, stopDaemon } from '../../src/collector/install.mjs'
 import { readManifest } from '../../src/collector/core/trust/journal.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
@@ -140,21 +142,40 @@ test('install and uninstall refuse to run as root (D36)', async () => {
   } finally { process.getuid = real; b.done() }
 })
 
-test('stopDaemon: a lock nobody answers for is stale and never killed by; an answering daemon without a lock stops the uninstall', async () => {
+test('stopDaemon: a stale lock is never killed by; a live pid that answers nowhere stops the uninstall; the lock\'s socket is tried when the runtime one is missing', async () => {
   const b = box()
   try {
-    const lockFile = path.join(b.home, 'lock'); fs.writeFileSync(lockFile, JSON.stringify({ pid: 4242 }))
+    const lockFile = path.join(b.home, 'lock'); const lockSock = path.join(b.home, 'from-lock.sock')
+    fs.writeFileSync(lockFile, JSON.stringify({ pid: 4242, helper_pid: 4243, socket: lockSock }))
     const killed = []
     const kill = (pid, sig) => killed.push([pid, sig])
     const refused = async () => { throw Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }) }
-    assert.equal(await stopDaemon({ socketPath: path.join(b.home, 's.sock'), lockFile, request: refused, kill }), 'none')
+    assert.equal(await stopDaemon({ socketPath: path.join(b.home, 's.sock'), lockFile, request: refused, kill, alive: () => false }), 'none')
     assert.deepEqual(killed, [], 'a stale lock is never killed by')
+    await assert.rejects(stopDaemon({ socketPath: null, lockFile, request: refused, kill, alive: (pid) => pid === 4242 }), /may still be running \(pid 4242.*nothing was removed/)
+    assert.deepEqual(killed, [], 'a live pid that answers on no socket is not killed either')
     await assert.rejects(stopDaemon({ socketPath: path.join(b.home, 's.sock'), lockFile: path.join(b.home, 'none'), request: async () => ({}), kill }), /left no lock file/)
     assert.deepEqual(killed, [])
-    let alive = true
-    const r = await stopDaemon({ socketPath: path.join(b.home, 's.sock'), lockFile, request: async () => ({}), kill: (pid, sig) => { killed.push([pid, sig]); alive = false }, alive: () => alive })
-    assert.deepEqual([r, killed], ['stopped', [[4242, 'SIGTERM']]])
+    // XDG_RUNTIME_DIR unset (socketPath null): the daemon is found through the socket its lock names, and stopped
+    let alive = true; const asked = []
+    const r = await stopDaemon({ socketPath: null, lockFile, request: async (q) => { asked.push(q.socketPath); if (q.socketPath !== lockSock) throw Object.assign(new Error('x'), { code: 'ENOENT' }); return {} }, kill: (pid, sig) => { killed.push([pid, sig]); alive = false }, alive: () => alive })
+    assert.deepEqual([r, killed, asked], ['stopped', [[4242, 'SIGTERM']], [lockSock]])
   } finally { b.done() }
+})
+
+test('uninstall with no runtime dir set finds the daemon through its lock, stops it, then removes (S10)', async () => {
+  const b = box()
+  const daemon = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }) // stands in for `asight collector start`
+  const sock = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'as-u-')), 'c.sock')
+  const control = await startControlServer({ socketPath: sock, routes: { 'GET /status': async () => ({ desired: 'on' }) } })
+  try {
+    await installCollector(base(b))
+    fs.writeFileSync(path.join(b.dir, 'lock'), JSON.stringify({ pid: daemon.pid, socket: sock }))
+    const exited = new Promise((r) => daemon.once('exit', (code, sig) => r(sig)))
+    const r = await uninstallCollector({ home: b.home, env: {} }) // the product default stop, no XDG_RUNTIME_DIR
+    assert.deepEqual([r.daemon, await exited], ['stopped', 'SIGTERM'])
+    assert.ok(!fs.existsSync(path.join(b.dir, 'lock')) && !fs.existsSync(settingsOf(b)))
+  } finally { daemon.kill('SIGKILL'); await control.close(); b.done() }
 })
 
 test('a refused plan entry or a non-JSON settings file leaves every user file untouched; uninstall clears what was started', async () => {

@@ -68,14 +68,22 @@ export async function installCollector({ home = os.homedir(), env = process.env,
 }
 
 // 4.6 §安装清单与卸载 step 1: stop this user's daemon and wait until it AND its helper are gone (the helper's
-// links are unpinned and go with it). A lock nobody answers for is stale: never kill by it.
+// links are unpinned and go with it). The daemon is looked for at the runtime socket and at the socket its lock
+// names (XDG_RUNTIME_DIR unset, or logind removed /run/user/<uid>): a daemon that steers must never be orphaned.
+// A lock whose pid is dead is stale: never kill by it. A live pid that answers on no socket is not killed either
+// (it may be another program by now): uninstall stops with nothing removed and says what to do.
 export async function stopDaemon({ socketPath, lockFile, request = controlRequest, alive = pidAlive, kill = process.kill.bind(process), timeoutMs = 5000 }) {
   let lock = null
   try { lock = JSON.parse(fs.readFileSync(lockFile, 'utf8')) } catch { /* no daemon ever ran */ }
-  if (!socketPath) return 'none'
-  try { await request({ socketPath, method: 'GET', path: '/status', timeoutMs: 2000 }) } catch (e) {
-    if (e.code === 'ENOENT' || e.code === 'ECONNREFUSED') return 'none'
-    throw e
+  let answered = false
+  for (const sock of [...new Set([socketPath, lock && lock.socket].filter(Boolean))]) {
+    try { await request({ socketPath: sock, method: 'GET', path: '/status', timeoutMs: 2000 }); answered = true; break } catch (e) {
+      if (e.code !== 'ENOENT' && e.code !== 'ECONNREFUSED') throw e
+    }
+  }
+  if (!answered) {
+    if (lock && lock.pid && alive(lock.pid)) throw new Error(`a collector daemon may still be running (pid ${lock.pid} in ${lockFile}) but answers on no control socket; stop it (kill ${lock.pid}), or delete ${lockFile} if that pid is not an asight collector, then run uninstall again; nothing was removed`)
+    return 'none'
   }
   if (!lock || !lock.pid) throw new Error('a collector daemon answers but left no lock file; stop it by hand, nothing was removed')
   kill(lock.pid, 'SIGTERM')
