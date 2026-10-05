@@ -41,7 +41,7 @@ export const usesMarker = (d) => !!(d && d.trust && d.trust.chain.some((e) => e.
 // markerDir / caPem: where plugins write their per-pid marker and the asight CA file a marker vouches for (null: no
 // plugin harness is judged trusted). watchDir(dir, onName) → close; setTimer for the marker-pending deadline.
 // readFile: how config files are read; an error other than "absent" is kept on the row (readErrors) for the daemon.
-export function createTracker({ redirector, registry, trust, home = os.homedir(), readFile = (f) => fs.readFileSync(f, 'utf8'), mtimeOf = mtimeOfFile, listDir = listDirNames, now = () => Date.now(), onVerdict = () => {}, onError = () => {}, installedAt = () => null, markerDir = null, caPem = null, watchDir = watchDirNames, markerGraceMs = 10_000, setTimer = setTimeout, runtimeVersion = nodeReleaseVersion }) {
+export function createTracker({ redirector, registry, trust, home = os.homedir(), readFile = (f) => fs.readFileSync(f, 'utf8'), mtimeOf = mtimeOfFile, listDir = listDirNames, now = () => Date.now(), onVerdict = () => {}, onError = () => {}, installedAt = () => null, markerDir = null, caPem = null, watchDir = watchDirNames, markerGraceMs = 10_000, setTimer = setTimeout, runtimeVersion = nodeReleaseVersion, collectorDir = null }) {
   const table = new Map() // pid → AgentRow (agents only)
   const factsOf = new Map() // pid → the ProcFacts it was judged on (re-judged when its marker appears or its grace ends)
   const pending = new Map() // pid → timer that re-judges a marker-pending process at the end of its grace
@@ -79,7 +79,9 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     for (const l of layers) if (l.live === false) { const t = installedAt(l); if (t != null) l.since = t } // review 2 #5
     const marker = usesMarker(d) && markerDir && caPem ? markerLayer({ dir: markerDir, pid: facts.pid, startTicks: facts.startTicks ?? null, caPem, readText }) : null
     if (marker) layers.push(marker)
-    let t = trust.check(d.trust, { environ, layers, cwd: ctx.cwd, startedAt: ctx.startedAt, argv: ctx.argv, extra: { runtimeVersion: () => runtimeVersion(facts.exe) } })
+    // what a harness's refine may look at besides argv and env: the exe's runtime release (lazily), its own files
+    // (through the same reader, so an unreadable one is reported) and asight's collector dir (a launch shim lives there)
+    let t = trust.check(d.trust, { environ, layers, cwd: ctx.cwd, startedAt: ctx.startedAt, argv: ctx.argv, extra: { runtimeVersion: () => runtimeVersion(facts.exe), readText, collectorDir, exe: facts.exe ?? null } })
     if (!t.trusted && t.reason === 'var-missing' && registry.isLongLived(d, facts)) t = { ...t, reason: 'env-frozen' }
     // a plugin reports after exec: until its marker appears, at most markerGraceMs from start, the process is pending
     const t0 = facts.startedAt ?? row.since

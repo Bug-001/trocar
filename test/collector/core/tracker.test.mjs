@@ -220,3 +220,17 @@ test('tracker: rescan removes markers whose pid is gone', async () => {
   assert.deepEqual(fs.readdirSync(r.markerDir).sort(), ['830', 'notes.txt'])
   assert.equal(r.tracker.describe(830).trusted, true)
 })
+
+test('tracker: a harness\'s refine can read its own files through the tracker\'s reader and knows the collector dir and the exe (a launch shim lives there)', async () => {
+  const shimmed = { ...agent, name: 'gamma', signatures: { linux: { match: [{ exe: /\/gamma$/ }] } },
+    trust: { chain: [{ var: 'EXTRA_CA', semantic: 'append' }], refine: (r, env, { readText, collectorDir, exe }) => (r.reason !== 'var-missing' ? null : `${readText(path.join(collectorDir, 'bin', 'gamma')) == null ? 'no-shim' : 'not-via-shim'}@${exe}`) } }
+  const cdir = fs.mkdtempSync(path.join(dir, 'collector-'))
+  const redirector = fakeRedirector()
+  const tracker = createTracker({ redirector, registry: createRegistry([shimmed]), trust: createTrustChecker({ caCertPem: ca.certPem }), home: dir, collectorDir: cdir })
+  tracker.start()
+  redirector.emit('exec', facts(900, { exe: '/opt/gamma', argv: ['gamma'] })); await settle()
+  assert.equal(tracker.describe(900).reason, 'no-shim@/opt/gamma')
+  fs.mkdirSync(path.join(cdir, 'bin')); fs.writeFileSync(path.join(cdir, 'bin', 'gamma'), '#!/bin/sh\n')
+  redirector.emit('exec', facts(901, { exe: '/opt/gamma', argv: ['gamma'] })); await settle()
+  assert.equal(tracker.describe(901).reason, 'not-via-shim@/opt/gamma')
+})

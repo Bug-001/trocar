@@ -116,7 +116,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     const bundleTimer = setInterval(refreshBundles, 24 * 3600 * 1000); bundleTimer.unref()
     // plugins (dsh, OpenCode) write their per-pid marker here; it exists while the daemon runs (0700, the operator's)
     fs.mkdirSync(P.markers, { recursive: true, mode: 0o700 })
-    const tracker = createTracker({ redirector, registry, trust: createTrustChecker({ caCertPem: ca.certPem }), onVerdict, markerDir: P.markers, caPem: ca.paths.pem,
+    const tracker = createTracker({ redirector, registry, trust: createTrustChecker({ caCertPem: ca.certPem }), onVerdict, markerDir: P.markers, caPem: ca.paths.pem, collectorDir: P.dir,
       installedAt: (l) => installedAt(manifest, l), // config-after-start is judged against when asight wrote the value
       onError: (e, at) => failure('tracker', Object.assign(new Error(`pid ${at.pid} (${at.phase}): ${errText(e)}${at.phase === 'judge' ? '; it is not watched, its connections go direct' : ''}`), { code: e && e.code }), at) })
     let helperDown = null

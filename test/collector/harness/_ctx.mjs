@@ -37,11 +37,11 @@ export function plantMarker(dir, pid, ticks) { fs.mkdirSync(dir, { recursive: tr
 
 // What the tracker computes for one process: trust result + the env its readers see. With markerDir + caPem the
 // plugin marker layer is added as the tracker adds it; runtimeVersion is what the tracker reads from the exe.
-export function judge(descriptor, ctx, { markerDir = null, caPem = null, runtimeVersion = null } = {}) {
+export function judge(descriptor, ctx, { markerDir = null, caPem = null, runtimeVersion = null, collectorDir = path.join(ctx.home, '.asight', 'collector'), exe = null } = {}) {
   const layers = (descriptor.layers ? descriptor.layers(ctx) : []).filter(Boolean)
   const marker = markerDir && caPem ? markerLayer({ dir: markerDir, pid: ctx.pid, startTicks: ctx.startTicks, caPem, readText: (f) => readText(f) }) : null
   if (marker) layers.push(marker)
-  const trust = createTrustChecker({ caCertPem: CA.certPem }).check(descriptor.trust, { environ: ctx.environ, layers, cwd: ctx.cwd, startedAt: ctx.startedAt, argv: ctx.argv, extra: { runtimeVersion: () => runtimeVersion } })
+  const trust = createTrustChecker({ caCertPem: CA.certPem }).check(descriptor.trust, { environ: ctx.environ, layers, cwd: ctx.cwd, startedAt: ctx.startedAt, argv: ctx.argv, extra: { runtimeVersion: () => runtimeVersion, readText: ctx.readText, collectorDir, exe } })
   const live = { ...ctx, env: effectiveEnv(ctx.environ, layers.filter((l) => !l.ignored)).env }
   const proxyEntries = descriptor.proxies ? descriptor.proxies(live) : []
   return { trust, layers, hosts: descriptor.configHosts ? descriptor.configHosts(live) : [], proxies: proxyEntries.map((p) => p.url), proxyEntries }
