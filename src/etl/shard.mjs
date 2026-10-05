@@ -14,6 +14,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { emptyMeta, foldRecord, mergeMeta } from './session-meta.mjs';
 
 const NL = 0x0a;
@@ -119,6 +120,23 @@ class ShardWriter {
 }
 
 const STATE_FILE = '.shard-state.json';
+// How much of the start of a capture to fingerprint. Small enough to re-read on every run, large
+// enough to span the first envelope (timestamp + run-tagged id), which is what tells two files apart.
+const HEAD_BYTES = 4096;
+
+// sha256 of the first `len` bytes of `file`, or null when there is nothing to fingerprint (len 0)
+// or the file cannot be read. Returning null on failure is deliberate and safe: it compares unequal
+// to a stored fingerprint, so an unreadable file is treated as changed and re-read from zero.
+function headFingerprint(file, len) {
+  if (!len) return null;
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const buf = Buffer.alloc(len);
+    const n = fs.readSync(fd, buf, 0, len, 0);
+    return createHash('sha256').update(buf.subarray(0, n)).digest('hex').slice(0, 32);
+  } catch { return null; } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
 
 /**
  * Rebuild meta.json for every already-written shard under `outDir`, by STREAMING each
@@ -270,8 +288,15 @@ function writeState(outDir, state) {
  *
  * The watermark is only valid while the file is the SAME file. Size alone cannot tell appending
  * from rotation — a fresh capture at the same path that has already grown past the old watermark
- * looks identical to an append, and resuming would skip every record of it. So identity (inode) is
- * tracked too, and a break falls back to a full re-read and is REPORTED (invariant 4).
+ * looks identical to an append, and resuming would skip every record of it. So identity is tracked
+ * too, and a break falls back to a full re-read and is REPORTED (invariant 4).
+ *
+ * Identity is TWO signals, because the inode alone is not enough. Linux filesystems (ext4, tmpfs)
+ * hand a freed inode number straight back, so `rm` + recreate at the same path yields the SAME
+ * inode and a replaced file looks untouched; APFS never does this, which is why only CI on Linux
+ * caught it. The second signal is a fingerprint of the first bytes already consumed: an append-only
+ * capture never changes them, a replaced or rewritten one almost certainly does (every envelope
+ * opens with a timestamp and a run-tagged id).
  */
 export async function shardOnce({ file, outDir, ...opts } = {}) {
   const state = readState(outDir);
@@ -286,12 +311,23 @@ export async function shardOnce({ file, outDir, ...opts } = {}) {
   // reason is derived, not assumed.
   const newInode = Boolean(prev) && prev.ino !== st.ino;
   const shrank = Boolean(prev) && !newInode && st.size < prev.offset;
-  const rotated = newInode || shrank;
-  const reason = newInode ? 'replaced (new inode)' : shrank ? 'truncated (same inode)' : null;
+  // Same inode and not smaller, yet the bytes we already consumed are no longer there: the file was
+  // rewritten, or replaced and handed the same inode. A watermark saved before this fingerprint
+  // existed has no `head`, so it cannot be checked and keeps the old behaviour.
+  const headChanged = Boolean(prev) && !newInode && !shrank && Boolean(prev.head)
+    && headFingerprint(file, prev.headLen) !== prev.head;
+  const rotated = newInode || shrank || headChanged;
+  const reason = newInode ? 'replaced (new inode)'
+    : shrank ? 'truncated (same inode)'
+    : headChanged ? 'replaced (same inode reused, first bytes differ)' : null;
   const from = rotated || !prev ? 0 : prev.offset;
 
   const r = await shardStream({ file, outDir, fromOffset: from, ...opts });
-  state[file] = { ino: st.ino, offset: r.offset, size: st.size, at: new Date().toISOString() };
+  const headLen = Math.min(HEAD_BYTES, r.offset);
+  state[file] = {
+    ino: st.ino, offset: r.offset, size: st.size, at: new Date().toISOString(),
+    ...(headLen > 0 ? { head: headFingerprint(file, headLen), headLen } : {}),
+  };
   writeState(outDir, state);
   return { ...r, rotated, reason, resumedFrom: from };
 }

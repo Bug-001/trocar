@@ -76,6 +76,48 @@ test('a REPLACED file that is already larger than the watermark is still detecte
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('a file REWRITTEN IN PLACE (same inode) past the watermark is detected by its content', async () => {
+  // The case inode tracking cannot see, and the reason this test exists. On Linux ext4/tmpfs a
+  // freed inode number is handed straight back, so `rm` + recreate at the same path yields the SAME
+  // inode — the replaced-file test below passed on macOS (APFS never reuses one) and failed on CI.
+  // Writing over the file in place reproduces it deterministically on any OS: same inode, larger
+  // than the watermark, different content. Only the bytes at the start of the file can tell.
+  const { dir, src, out } = mk();
+  try {
+    fs.writeFileSync(src, Array.from({ length: 3 }, (_, i) => line('old' + i)).join('\n') + '\n');
+    const r1 = await shardOnce({ file: src, outDir: out });
+    assert.equal(r1.records, 3, 'precondition');
+    const inoBefore = fs.statSync(src).ino;
+
+    fs.writeFileSync(src, Array.from({ length: 6 }, (_, i) => line('new' + i)).join('\n') + '\n');   // 'w' truncates, keeps the inode
+    assert.equal(fs.statSync(src).ino, inoBefore, 'precondition: the inode did NOT change');
+    assert.ok(fs.statSync(src).size > r1.offset, 'precondition: the rewrite is LARGER than the watermark');
+
+    const r2 = await shardOnce({ file: src, outDir: out });
+    assert.equal(r2.records, 6,
+      'the watermark survived a rewrite that kept the inode — the first 3 records of the new capture '
+      + 'were skipped and the board would show a partial session with no error');
+    assert.ok(r2.rotated, 'the rewrite must be REPORTED, not silently absorbed (invariant 4)');
+    assert.match(r2.reason, /same inode/, 'the cause is a rewrite of the SAME inode, and must be named as such');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('appending to a file never trips the content check, however many times it grows', async () => {
+  // The guard against over-correcting: a fingerprint of the file's start must stay stable under pure
+  // appends, or every normal run would be reported as a rotation and re-read from zero.
+  const { dir, src, out } = mk();
+  try {
+    fs.writeFileSync(src, line('a0') + '\n');
+    await shardOnce({ file: src, outDir: out });
+    for (let i = 1; i <= 60; i++) {   // grows far past the fingerprinted prefix
+      fs.appendFileSync(src, line('a' + i) + '\n');
+      const r = await shardOnce({ file: src, outDir: out });
+      assert.equal(r.rotated, false, `append #${i} was misreported as a rotation (${r.reason})`);
+      assert.equal(r.records, 1, `append #${i} must read exactly the one new record`);
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('a TRUNCATED file re-shards from zero', async () => {
   const { dir, src, out } = mk();
   try {
