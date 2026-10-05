@@ -391,9 +391,9 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
     for (const d of dirs) {
       // A shard without meta.json (sharded before the archive layer, or a partial write) just doesn't
       // list until re-sharded — a degrade, not a crash, but it is reported (sourceHealth), not silent.
-      // Session-less _unassigned has no meta by design.
+      // That includes a legacy session-less _unassigned dir: it has no meta and nothing lists it.
       try { metas.push(JSON.parse(fssync.readFileSync(path.join(d, 'meta.json'), 'utf8'))); }
-      catch (e) { if (path.basename(d) !== '_unassigned') metas.noMeta.push({ dir: d, error: (e && e.code) || String(e) }); }
+      catch (e) { metas.noMeta.push({ dir: d, error: (e && e.code) || String(e) }); }
     }
     return metas;
   };
@@ -414,6 +414,8 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
     const idx = (typeof resolve === 'function' && resolve.scan) || {};
     // the block index's own refresh-time skips (a file it could not read, or that vanished)
     for (const x of idx.skipped || []) if (x.reason === 'unreadable' || x.reason === 'vanished') skipped.push({ ...x, attention: true, reader: 'block-index' });
+    // a root whose block index could not be built at all: its sessions list, but no block opens
+    for (const u of idx.unreadableRoots || []) skipped.push({ root: u.root, name: path.basename(u.root), reason: 'block-index-failed', error: u.reason, attention: true, reader: 'block-index' });
     return {
       skipped,
       corrupt_lines: metas ? {} : { ...(loadRecords.corrupt || {}) }, // per file: lines holding a record that would not parse

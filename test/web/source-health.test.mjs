@@ -20,7 +20,7 @@ function El() {
   return el;
 }
 let seq = 0;
-async function boardWith(source, projects = []) {
+async function boardWith(source, projects = [], reply = null) {
   const store = {};
   const getEl = (id) => store[id] || (store[id] = El());
   globalThis.document = { getElementById: getEl, querySelector() { return null }, querySelectorAll() { return [] }, addEventListener() {}, body: El(), documentElement: El(), createElement() { return El() } };
@@ -30,7 +30,8 @@ async function boardWith(source, projects = []) {
   globalThis.setInterval = () => 0; globalThis.clearInterval = () => {}; globalThis.setTimeout = () => 0;
   globalThis.requestAnimationFrame = () => 0;
   globalThis.console = { ...console, error() {} };
-  globalThis.fetch = (url) => Promise.resolve({ ok: true, json: () => Promise.resolve(String(url).startsWith('/api/projects') ? { projects, source } : {}) });
+  globalThis.fetch = (url) => Promise.resolve(String(url).startsWith('/api/projects') && reply ? reply
+    : { ok: true, json: () => Promise.resolve(String(url).startsWith('/api/projects') ? { projects, source } : {}) });
   const html = fs.readFileSync(INDEX, 'utf8');
   const js = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].at(-1)[1];
   await import(`data:text/javascript;base64,${Buffer.from(js + `\n;globalThis.__H__={poll};\n//# health-${++seq}\n`).toString('base64')}`);
@@ -60,4 +61,11 @@ test('a source whose only unread entries are not capture files raises no bar', a
   const bar = await boardWith({ skipped: [{ root: '/h', name: 'config.json', reason: 'not-ndjson', attention: false }], corrupt_lines: {}, resets: [], unidentified_lines: 0 });
   assert.equal(bar.innerHTML, '');
   assert.equal(bar.style.display, 'none');
+});
+
+test('a listing the server failed (500 {error}) is shown as a failure, never as "No sessions captured yet"', async () => {
+  const bar = await boardWith(null, [], { ok: false, status: 500, json: () => Promise.resolve({ error: 'capture source unreadable (/h): EACCES' }) });
+  assert.match(bar.innerHTML, /could not list the sessions: <b>capture source unreadable \(\/h\): EACCES<\/b>/);
+  assert.match(bar.empty, /Could not list the sessions/);
+  assert.doesNotMatch(bar.empty, /No sessions captured yet/);
 });

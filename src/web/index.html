@@ -640,7 +640,17 @@ function renderSourceHealth(h){
 async function poll(){
   try{
     const sel=document.getElementById('fileSel')
-    const pj=await fetch('/api/projects').then(r=>r.json()).catch(()=>({projects:[]}))
+    // A failed listing is NOT an empty one (invariant 4): the server answers 500 {error} when a capture
+    // source cannot be read, and swallowing it here rendered "No sessions captured yet".
+    const pj=await fetch('/api/projects').then(r=>r.json().catch(()=>({})).then(j=>r.ok===false||(j.error&&!j.projects)?{error:j.error||('HTTP '+r.status)}:j)).catch(e=>({error:String(e&&e.message||e)}))
+    if(pj.error){
+      const bar=document.getElementById('srcbar')
+      if(bar){ bar.title=''; bar.innerHTML=`⚠ 无法列出会话 · could not list the sessions: <b>${esc(pj.error)}</b> — the capture files on disk are untouched; fix the source or restart the server.`
+        bar.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #7a2b18;background:#2a1210;color:#f08a6a;border-radius:5px;font-size:11px;line-height:1.45' }
+      renderEmpty('Could not list the sessions — see the banner above.')
+      lastCheapSig=null; lastRenderSig=null; document.getElementById('dot').classList.remove('on')
+      return
+    }
     const projects=pj.projects||[]
     renderSourceHealth(pj.source) // before any early return: "no sessions" next to "2 files not read" is the point
     projectsFlat=projects.flatMap(p=>p.sessions||[])

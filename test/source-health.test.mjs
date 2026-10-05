@@ -58,10 +58,11 @@ test('shard mode says what the meta.json listing leaves out: flat captures besid
   fs.writeFileSync(path.join(root, 'S1', 'meta.json'), JSON.stringify({ session_id: 'S1', project_slug: '_unresolved', calls: 1 }));
   fs.mkdirSync(path.join(root, 'S2')); fs.writeFileSync(path.join(root, 'S2', 'calls.ndjson'), env('s-2', 'S2'));
   fs.writeFileSync(path.join(root, 'claude-capture.ndjson'), env('f-1', 'FLAT'));
+  fs.mkdirSync(path.join(root, '_unassigned')); fs.writeFileSync(path.join(root, '_unassigned', 'calls.ndjson'), env('u-1', 'U'));
   const pj = await projects(t, root);
   assert.deepEqual(pj.projects.flatMap((p) => p.sessions).map((s) => s.session_id), ['S1']);
   assert.deepEqual(byName(pj.source.skipped), {
-    'claude-capture.ndjson': ['flat-file-in-shard-mode', true], S2: ['no-meta', true],
+    'claude-capture.ndjson': ['flat-file-in-shard-mode', true], S2: ['no-meta', true], _unassigned: ['no-meta', true],
   });
 });
 
@@ -79,4 +80,18 @@ test('`asight etl <dir>` returns and prints what it did not read and the lines i
     `ETL: 1 unparseable line(s) not ingested: ${path.join(home, 'claude-capture.ndjson')}`,
     'ETL: 2 other entries ignored (not capture files): collector, config.json',
   ]);
+});
+
+test('a root whose block index could not be built is reported, even after its files become readable to the listing', { skip: process.getuid?.() === 0 && 'root reads anything' }, async (t) => {
+  const r1 = tmp(t), r2 = tmp(t), locked = path.join(r2, 'b.ndjson');
+  fs.writeFileSync(path.join(r1, 'a.ndjson'), env('a-1', 'A'));
+  fs.writeFileSync(locked, env('b-1', 'B'), { mode: 0o000 });
+  const { server } = await createServer({ dbPath: '/nonexistent-db', sourcePath: [r1, r2] }); // r2's index fails at startup
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => server.close());
+  fs.chmodSync(locked, 0o600);
+  const pj = await get(server.address().port, '/api/projects');
+  assert.deepEqual(pj.projects.flatMap((p) => p.sessions).map((s) => s.session_id).sort(), ['A', 'B']);
+  const hit = pj.source.skipped.find((x) => x.reason === 'block-index-failed');
+  assert.deepEqual(hit && [hit.root, hit.attention], [r2, true], JSON.stringify(pj.source.skipped));
 });
