@@ -86,6 +86,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     // recorded so gets `agent-trusted` once it is trusted and `agent-exit` when it exits, so the condition can clear.
     const recordedUntrusted = new Map() // pid → the reason code last recorded
     const note = (rec) => { try { appendEvent(P.dir, rec) } catch (w) { log('events', w) } }
+    // the descriptor's own words for a reason, else the generic text (core/codes.mjs), else the code itself
+    const hintFor = (agent, reason) => { const d = registry.get(agent); return (d && d.trust && d.trust.hints && d.trust.hints[reason]) || trustReasonText(reason) || reason }
     const onVerdict = (row) => {
       if (row.watchError) failure('watch', new Error(`watching ${row.agent} pid ${row.pid} failed: ${row.watchError}`))
       if (row.configError) failure('harness', new Error(`${row.agent} pid ${row.pid}: reading its configuration failed (${row.configError}); judged on its known hosts only`))
@@ -97,9 +99,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       }
       if (last === row.reason || row.reason === 'marker-pending') return // once per pid and reason; a plugin has up to 10 s to report (4.6 「标记」)
       recordedUntrusted.set(row.pid, row.reason)
-      const d = registry.get(row.agent)
-      const text = (d && d.trust && d.trust.hints && d.trust.hints[row.reason]) || trustReasonText(row.reason) || row.reason
-      note({ event: EVENT.agentUntrusted, pid: row.pid, agent: row.agent, code: row.reason, reason: text, via: row.trustVia ?? null })
+      note({ event: EVENT.agentUntrusted, pid: row.pid, agent: row.agent, code: row.reason, reason: hintFor(row.agent, row.reason), via: row.trustVia ?? null })
     }
     // plugins (dsh, OpenCode) write their per-pid marker here; it exists while the daemon runs (0700, the operator's)
     fs.mkdirSync(P.markers, { recursive: true, mode: 0o700 })
@@ -169,7 +169,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     await sw.restore()
 
     async function status() {
-      const agents = tracker.agents().map((r) => ({ pid: r.pid, agent: r.agent, exe: r.exe, trusted: r.trusted, reason: r.reason, trust_var: r.trustVar, trust_via: r.trustVia, decrypt: r.decrypt, hosts: r.hosts, source: r.source, direct: redirector.directCount(r.pid) }))
+      // every running-but-untrusted agent says why and what to do (4.6 §确认信任, R4); hosts it never decrypts say why too
+      const agents = tracker.agents().map((r) => ({ pid: r.pid, agent: r.agent, exe: r.exe, trusted: r.trusted, reason: r.reason, ...(r.trusted ? {} : { hint: hintFor(r.agent, r.reason) }), trust_var: r.trustVar, trust_via: r.trustVia, decrypt: r.decrypt, hosts: r.hosts, not_via_trust_path: r.bypass, parent_agent: r.parentAgent ?? null, source: r.source, direct: redirector.directCount(r.pid) }))
       const { pid, proto, build } = redirector.helperInfo()
       return {
         ...(await sw.report()),

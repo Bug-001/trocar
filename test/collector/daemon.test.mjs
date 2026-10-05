@@ -148,6 +148,7 @@ test('daemon: the same program without the CA is only observed; its direct conne
     await req(s.sock, 'POST', '/on', {})
     const row = (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 5151) // picked up by the rescan in `on`
     assert.deepEqual([row.agent, row.trusted, row.reason, row.decrypt, row.source], ['claude-code', false, 'var-missing', false, 'scan'])
+    assert.equal(row.hint, 'no asight trust entry is in effect for this process', 'status says why in words (R4)')
     await clients[0].raw({ op: '__emit', ev: 'flow', pid: 5151, dst: { address: '160.79.104.10', port: 443, family: 4 }, ts_ns: 5 })
     const f = await until(() => flowsOf(s).find((x) => x.decision === 'direct'))
     assert.deepEqual([f.pid, f.agent, f.reason], [5151, 'claude-code', 'untrusted: var-missing'])
@@ -426,7 +427,7 @@ test('daemon: a plugin harness is marker-pending (not recorded) until its marker
   await install(s)
   const locked = path.join(s.home, 'locked.env'); fs.writeFileSync(locked, 'X=1\n'); fs.chmodSync(locked, 0o000)
   const plug = { name: 'plug-agent', runtime: 'node', hosts: ['api.plug.test'], signatures: { linux: { match: [{ exe: /\/plug-agent$/ }] } },
-    layers: (ctx) => { ctx.readText(locked); return [] },
+    layers: (ctx) => { ctx.readText(locked); return [] }, bypass: () => [{ host: 'early.plug.test', reason: 'before-plugin' }],
     trust: { chain: [{ var: 'NODE_EXTRA_CA_CERTS', semantic: 'append' }, { var: 'asight:marker', semantic: 'append' }], refine: (r) => (r.reason === 'var-missing' ? 'no-marker' : null) } }
   const { arch, clients } = fakeArch(p)
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc, plug] })
@@ -438,9 +439,13 @@ test('daemon: a plugin harness is marker-pending (not recorded) until its marker
     await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 9191, pid: 9191, comm: 'plug-agent', filename: '/opt/plug-agent', ts_ns: 1 })
     const pending = await until(() => d.tracker.describe(9191))
     assert.deepEqual([pending.trusted, pending.reason], [false, 'marker-pending'])
+    const view = (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 9191)
+    assert.match(view.hint, /waiting for the trust plugin/, 'status says what it waits for')
     fs.writeFileSync(path.join(markers, '9191'), `${ticks}\n`) // what the plugin writes once it added the CA
     const row = await until(() => { const r = d.tracker.describe(9191); return r && r.trusted ? r : null })
     assert.equal(row.trustVia, 'plugin marker')
+    const trusted = (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 9191)
+    assert.deepEqual([trusted.hint, trusted.not_via_trust_path], [undefined, [{ host: 'early.plug.test', reason: 'before-plugin' }]], 'hosts it never decrypts are listed with why (4.6 不经信任路径)')
     assert.equal((await clients[0].raw({ op: '__watched' })).watch['9191'], 1, 'decrypted from its next connection')
     assert.ok(!flowsOf(s).some((f) => f.event === 'agent-untrusted' && f.pid === 9191), 'a pending plugin is not a failure')
     const unreadable = flowsOf(s).find((f) => f.event === 'failure' && f.code === 'config-unreadable' && f.pid === 9191)
