@@ -84,7 +84,7 @@ const dataOf = (piece) => JSON.parse(piece.slice(piece.indexOf('\ndata: ') + 7))
 // feeds it every byte that follows, and pending() is the unparsed rest, logged as leftover.
 export function serve(conn, req, { deflate }, state, record) {
   let buf = Buffer.alloc(0), msg = null, closeSent = false, chain = Promise.resolve(), inDict = Buffer.alloc(0), outDict = Buffer.alloc(0)
-  const lanes = new Map() // stream_id ('' = default lane) -> its latest response, the only one a continuation may name
+  let latest = null // the last completed response: the only one a continuation may name
   const log = (dir, raw, f) => record({ type: 'ws_frame', ts: iso(), conn_id: conn.id, dir, opcode: f.opcode, fin: f.fin, rsv1: f.rsv1, len: f.len, raw_b64: raw.toString('base64') })
   const live = () => !conn.closed && !conn.ended
   const write = (b) => { conn.bytesOut += b.length; conn.sock.write(b) }
@@ -128,13 +128,12 @@ export function serve(conn, req, { deflate }, state, record) {
     try { body = JSON.parse(text) } catch { /* answered below */ }
     const entry = { type: 'ws_message', ts: iso(), conn_id: conn.id, dir: 'in', text }
     if (body?.type === 'response.interrupt') return record(entry) // our replies end on their own
-    const lane = typeof body?.stream_id === 'string' ? body.stream_id : ''
-    const event = (e) => sendText(JSON.stringify(lane ? { ...e, stream_id: lane } : e))
+    const event = (e) => sendText(JSON.stringify(e))
     const error = (status, e) => event({ type: 'error', status, error: { type: 'invalid_request_error', param: null, ...e } })
     if (body?.type !== 'response.create') { record(entry); return error(400, { code: 'unknown_event', message: 'mock-upstream: expected a JSON response.create message' }) }
-    const warmup = body.generate === false // connection setup, not inference: no marker, no script step
+    const warmup = body.generate === false // connection setup, not inference: no scenario, no script step
     let input = typeof body.input === 'string' ? [{ role: 'user', content: body.input }] : Array.isArray(body.input) ? body.input : []
-    const prevId = body.previous_response_id, prev = prevId && [...lanes.values()].find((r) => r.id === prevId)
+    const prevId = body.previous_response_id, prev = prevId && latest?.id === prevId ? latest : null
     if (prevId && !prev) {
       record({ ...entry, previous_response_id: prevId, error: 'previous_response_not_found' })
       return error(400, { code: 'previous_response_not_found', param: 'previous_response_id', message: `Previous response with id '${prevId}' not found.` })
@@ -143,7 +142,8 @@ export function serve(conn, req, { deflate }, state, record) {
     // markers are looked for in the whole logical request, as on HTTP: after Codex's warmup the turn's
     // own message carries no new input at all, and the typed marker sits in the cached part
     const full = { ...body, input, stream: true }
-    const pick = pickScenario(req.headers, Buffer.from(JSON.stringify(full)), !warmup, state.queue), sc = SCENARIOS[pick.name] || {}
+    // a warmup has no deltas for a fault to follow: it is answered like ok, header scenario or not
+    const pick = warmup ? { name: 'ok', source: 'warmup' } : pickScenario(req.headers, Buffer.from(JSON.stringify(full)), true, state.queue), sc = SCENARIOS[pick.name] || {}
     record({ ...entry, scenario: pick.name, source: pick.source, ...(prevId ? { previous_response_id: prevId } : {}) })
     if (sc.status) {
       const r = errorFor(sc, openai.responses), { 'content-type': _, ...headers } = r.headers
@@ -171,7 +171,7 @@ export function serve(conn, req, { deflate }, state, record) {
       if (!event(e)) return
     }
     const done = events.at(-1)
-    if (done.type === 'response.completed') lanes.set(lane, { id: done.response.id, input, output: done.response.output })
+    if (done.type === 'response.completed') latest = { id: done.response.id, input, output: done.response.output }
   }
   const resetSoon = async () => { if (await sleep(25)) { conn.ended = true; conn.raw.resetAndDestroy() } }
 
