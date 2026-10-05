@@ -1,0 +1,5 @@
+# Generated build artifacts (Makefile outputs) — never committed.
+bpf/vmlinux.h
+bpf/*.o
+redirector/*.skel.h
+asight-redirector
