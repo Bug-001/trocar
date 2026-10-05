@@ -1,7 +1,7 @@
 // anthropic.mjs — Anthropic Messages dialect: read the last user turn, answer as JSON or as the SSE
 // event sequence the official SDKs parse (message_start … message_stop).
 import { randomBytes } from 'node:crypto'
-import { plan } from './scenarios.mjs'
+import { plan, splitEvery } from './scenarios.mjs'
 import { jsonReply } from './transport.mjs'
 
 const rid = (p) => `${p}${randomBytes(12).toString('hex')}`
@@ -16,12 +16,23 @@ export function seen(body) {
   return { kind: 'text', text: blocks.findLast((b) => b.type === 'text')?.text || '' }
 }
 
-export function reply(body, raw) {
-  const p = plan(seen(body), raw, body.model)
+export function reply(body, raw, sc) {
+  const p = plan(seen(body), raw, body, sc)
   const id = rid('msg_mock_'), headers = { 'request-id': rid('req_mock_') }
   const usage = { input_tokens: p.inputTokens, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: p.outputTokens }
   const blocks = [{ start: { type: 'text', text: '' }, deltas: p.parts.map((text) => ({ type: 'text_delta', text })), final: { type: 'text', text: p.text } }]
-  const message = { id, type: 'message', role: 'assistant', model: p.model, content: blocks.map((b) => b.final), stop_reason: 'end_turn', stop_sequence: null, usage }
+  if (p.thinking) {
+    const signature = `mock-sig-${id.slice(-12)}`
+    blocks.unshift({
+      start: { type: 'thinking', thinking: '', signature: '' }, final: { type: 'thinking', thinking: p.thinking, signature },
+      deltas: [...p.thinkingParts.map((thinking) => ({ type: 'thinking_delta', thinking })), { type: 'signature_delta', signature }],
+    })
+  }
+  if (p.tool) {
+    const tu = { type: 'tool_use', id: rid('toolu_mock_'), name: p.tool.name }
+    blocks.push({ start: { ...tu, input: {} }, final: { ...tu, input: p.tool.input }, deltas: splitEvery(p.toolArgs, 16).map((partial_json) => ({ type: 'input_json_delta', partial_json })) })
+  }
+  const message = { id, type: 'message', role: 'assistant', model: p.model, content: blocks.map((b) => b.final), stop_reason: p.tool ? 'tool_use' : 'end_turn', stop_sequence: null, usage }
   if (!body.stream) return jsonReply(200, message, headers)
 
   const ev = (type, data) => `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`
