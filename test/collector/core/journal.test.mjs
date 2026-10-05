@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { applyJsonKey, undoEntry, newManifest, readManifest, saveManifest, sha256, manifestPath, writeOwnedFile } from '../../../src/collector/core/trust/journal.mjs'
+import { applyJsonKey, undoEntry, newManifest, readManifest, saveManifest, sha256, manifestPath, writeOwnedFile, sweepTemps } from '../../../src/collector/core/trust/journal.mjs'
 
 const K = ['env', 'CA_FILE']
 function box() {
@@ -97,13 +97,73 @@ test('journal: the intent is on disk before the user file changes; owned files a
   try {
     const file = path.join(b.root, 'settings.json'); fs.writeFileSync(file, '{}')
     const m = newManifest(); saveManifest(b.dir, m)
-    const spy = { ...fs, renameSync: (from, to) => { if (to === file) assert.equal(readManifest(b.dir).entries.length, 1, 'intent written first'); return fs.renameSync(from, to) } }
+    // T11: the intent is fsynced before the user's file is renamed into place — record the order of syscalls
+    const ops = []; const fdPath = new Map()
+    const spy = {
+      ...fs,
+      openSync: (p, ...a) => { const fd = fs.openSync(p, ...a); fdPath.set(fd, p); return fd },
+      fsyncSync: (fd) => { ops.push(['fsync', fdPath.get(fd)]); return fs.fsyncSync(fd) },
+      renameSync: (from, to) => { ops.push(['rename', from, to]); if (to === file) assert.equal(readManifest(b.dir).entries.length, 1, 'intent written first'); return fs.renameSync(from, to) },
+    }
     applyJsonKey({ dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value, fs: spy })
+    const at = (pred) => ops.findIndex(pred)
+    const intentRename = at((o) => o[0] === 'rename' && o[2] === manifestPath(b.dir))
+    const intentFsync = at((o) => o[0] === 'fsync' && o[1] === ops[intentRename][1])
+    const userRename = at((o) => o[0] === 'rename' && o[2] === file)
+    assert.ok(intentFsync >= 0 && intentFsync < intentRename && intentRename < userRename, `the manifest temp is fsynced and renamed before the user file: ${JSON.stringify(ops)}`)
+    assert.ok(at((o) => o[0] === 'fsync' && o[1] === ops[userRename][1]) < userRename, 'the user file temp is fsynced before its rename')
     const own = path.join(b.dir, 'ca', 'extra.pem')
     const spy2 = { ...fs, renameSync: (from, to) => { if (to === own) assert.equal(readManifest(b.dir).files.length, 1); return fs.renameSync(from, to) } }
     writeOwnedFile({ dir: b.dir, manifest: m, role: 'trust-file', file: own, data: 'PEM\n', sources: ['/corp/ca.pem'], fs: spy2 })
     assert.equal(fs.statSync(own).mode & 0o777, 0o600)
     assert.deepEqual(readManifest(b.dir).files[0].sources, ['/corp/ca.pem'], 'the merged user files are named (paths only)')
     assert.equal(applyJsonKey({ dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value }), null, 'already ours: nothing new to journal')
+  } finally { b.done() }
+})
+
+test('journal: a file asight created that the user then edited is kept with only asight\'s key gone (reverted-not-identical)', () => {
+  const b = box()
+  try {
+    const file = path.join(b.root, '.app', 'settings.json')
+    const e = applyJsonKey({ dir: b.dir, manifest: newManifest(), harness: 'h', file, keys: K, value: b.value })
+    assert.equal(e.existed_before, false)
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8')); doc.model = 'mine'; fs.writeFileSync(file, JSON.stringify(doc, null, 2))
+    const r = undoEntry(e)
+    assert.deepEqual([r.result, r.deleted], ['reverted-not-identical', undefined])
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { model: 'mine' }, "the user's key stays, asight's key and the env object it created go")
+  } finally { b.done() }
+})
+
+test('journal: a symlinked settings file is edited at its target; the link stays a link; undo restores the target byte for byte', () => {
+  const b = box()
+  try {
+    const target = path.join(b.root, 'dotfiles', 'claude-settings.json'); fs.mkdirSync(path.dirname(target)); fs.writeFileSync(target, USER, { mode: 0o640 })
+    const link = path.join(b.root, '.app', 'settings.json'); fs.mkdirSync(path.dirname(link)); fs.symlinkSync(target, link)
+    const e = applyJsonKey({ dir: b.dir, manifest: newManifest(), harness: 'h', file: link, keys: K, value: b.value })
+    assert.deepEqual([e.path, e.real_path, e.existed_before, e.mode], [link, fs.realpathSync(target), true, 0o640])
+    assert.ok(fs.lstatSync(link).isSymbolicLink(), 'still a link')
+    assert.equal(JSON.parse(fs.readFileSync(target, 'utf8')).env.CA_FILE, b.value, 'the key is in the target')
+    const r = undoEntry(e)
+    assert.deepEqual([r.result, r.path, r.real_path], ['restored', link, fs.realpathSync(target)])
+    assert.equal(fs.readFileSync(target, 'utf8'), USER)
+    assert.ok(fs.lstatSync(link).isSymbolicLink())
+    const dangling = path.join(b.root, '.other', 'settings.json'); fs.mkdirSync(path.dirname(dangling)); fs.symlinkSync(path.join(b.root, 'nowhere.json'), dangling)
+    const m = newManifest()
+    assert.throws(() => applyJsonKey({ dir: b.dir, manifest: m, harness: 'h', file: dangling, keys: K, value: b.value }), /symbolic link to a file that does not exist/)
+    assert.deepEqual([m.entries.length, fs.lstatSync(dangling).isSymbolicLink(), fs.existsSync(path.join(b.root, 'nowhere.json'))], [0, true, false], 'nothing journaled, link untouched, nothing created')
+  } finally { b.done() }
+})
+
+test('journal: a crash between the intent and the write leaves no residue after undo (created dirs, temp files)', () => {
+  const b = box()
+  try {
+    const file = path.join(b.root, '.app', 'sub', 'settings.json')
+    const e = applyJsonKey({ dir: b.dir, manifest: newManifest(), harness: 'h', file, keys: K, value: b.value })
+    fs.rmSync(file) // as if the crash came after mkdir but before the rename …
+    fs.writeFileSync(`${file}.asight-tmp-4242`, '{"half":') // … with the temp file written
+    const r = undoEntry({ ...e, post_sha256: null })
+    assert.equal(r.result, 'already-restored')
+    assert.ok(!fs.existsSync(path.join(b.root, '.app')), 'the directories the intent created are gone, temp file included')
+    assert.deepEqual(sweepTemps(file), [])
   } finally { b.done() }
 })

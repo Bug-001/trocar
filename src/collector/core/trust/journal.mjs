@@ -21,8 +21,9 @@ function readOrNull(fs, file) { try { return fs.readFileSync(file) } catch (e) {
 function syncDir(fs, dir) { try { const fd = fs.openSync(dir, 'r'); try { fs.fsyncSync(fd) } finally { fs.closeSync(fd) } } catch { /* a filesystem that refuses dir fsync */ } }
 
 // Atomic and durable: temp file in the same directory, fsync, rename over, fsync the directory.
+const TMP_MARK = '.asight-tmp-'
 export function writeDurable(file, data, mode, fs = nodeFs) {
-  const tmp = `${file}.asight-tmp-${process.pid}`
+  const tmp = `${file}${TMP_MARK}${process.pid}`
   const fd = fs.openSync(tmp, 'w', mode)
   try { fs.writeSync(fd, data); fs.fchmodSync(fd, mode); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
   fs.renameSync(tmp, file)
@@ -37,6 +38,27 @@ export function missingDirs(dir, fs = nodeFs) {
 }
 export function removeEmptyDirs(dirs, fs = nodeFs) {
   for (const d of [...(dirs || [])].reverse()) { try { fs.rmdirSync(d) } catch { /* not empty, or gone */ } }
+}
+// Temp files a crashed write left next to `file` (4.6「不留残余」): <file>.asight-tmp-<pid>, and the CA store's <file>.tmp-<pid>.
+export function sweepTemps(file, fs = nodeFs) {
+  const base = path.basename(file)
+  let names = []
+  try { names = fs.readdirSync(path.dirname(file)) } catch { return [] }
+  const gone = names.filter((n) => n.startsWith(base + TMP_MARK) || n.startsWith(base + '.tmp-')).map((n) => path.join(path.dirname(file), n))
+  for (const f of gone) fs.rmSync(f, { force: true })
+  return gone
+}
+
+// The file asight edits for `file`: itself, or the regular file a symlink resolves to (a dotfiles setup). The link
+// is never replaced by a regular file; a link to nothing, or to something that is not a regular file, is refused.
+function editTarget(file, fs) {
+  let st = null
+  try { st = fs.lstatSync(file) } catch (e) { if (e.code !== 'ENOENT') throw e }
+  if (!st || !st.isSymbolicLink()) return file
+  let real
+  try { real = fs.realpathSync(file) } catch { throw new Error(`${file} is a symbolic link to a file that does not exist; asight will not create a file through it or replace the link. Fix or remove the link, then install again`) }
+  if (!fs.statSync(real).isFile()) throw new Error(`${file} links to ${real}, which is not a regular file; asight will not change it`)
+  return real
 }
 
 export const newManifest = (now = new Date()) => ({ version: 1, created_at: now.toISOString(), complete: false, engine_port: null, planned: [], dirs: [], files: [], entries: [] })
@@ -60,20 +82,22 @@ export function writeOwnedFile({ dir, manifest, harness = null, role, file, data
 
 // Set one string key in a JSON file the user owns (CC settings.json, Z-Code config.json). Returns the entry, or
 // null when the key already holds this value (nothing to change, nothing to undo).
+// A symlinked file is edited at its target; the entry records both (`path` the link, `real_path` the target).
 export function applyJsonKey({ dir, manifest, harness, file, keys, value, now = new Date(), fs = nodeFs }) {
-  const before = readOrNull(fs, file)
+  const real = editTarget(file, fs)
+  const before = readOrNull(fs, real)
   const res = setKey(before == null ? null : before.toString('utf8'), keys, value) // parse-checked before any write
   if (res.prior === value) return null
   const entry = {
-    harness, path: file, keys, value,
-    existed_before: before != null, mode: before != null ? fs.statSync(file).mode & 0o777 : 0o600,
+    harness, path: file, ...(real !== file ? { real_path: real } : {}), keys, value,
+    existed_before: before != null, mode: before != null ? fs.statSync(real).mode & 0o777 : 0o600,
     pre_sha256: sha256(before), post_sha256: null, ops: res.ops, prior_value: res.prior,
     existing_depth: res.existingDepth, created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(),
   }
   manifest.entries.push(entry)
   saveManifest(dir, manifest, fs) // the intent is durable before the user's file changes
   for (const d of entry.created_dirs) fs.mkdirSync(d, { mode: 0o700 })
-  writeDurable(file, res.text, entry.mode, fs)
+  writeDurable(real, res.text, entry.mode, fs)
   entry.post_sha256 = sha256(Buffer.from(res.text))
   saveManifest(dir, manifest, fs)
   return entry
@@ -81,11 +105,16 @@ export function applyJsonKey({ dir, manifest, harness, file, keys, value, now = 
 
 // Undo one entry by the 4.6 rules: untouched since install → byte-identical; already back → say so; edited since →
 // remove only asight's key (or put the user's prior value back), leave every other byte alone.
+// A crash between the intent and the write leaves the directories it created and maybe a temp file: both go.
 export function undoEntry(entry, { fs = nodeFs } = {}) {
-  const file = entry.path
-  const done = (result, extra = {}) => ({ path: file, harness: entry.harness, result, ...extra })
+  const file = entry.real_path || entry.path // a symlinked file was edited at its target
+  const done = (result, extra = {}) => ({ path: entry.path, ...(entry.real_path ? { real_path: entry.real_path } : {}), harness: entry.harness, result, ...extra })
+  sweepTemps(file, fs)
   const cur = readOrNull(fs, file)
-  if (entry.existed_before ? sha256(cur) === entry.pre_sha256 : cur == null) return done('already-restored')
+  if (entry.existed_before ? sha256(cur) === entry.pre_sha256 : cur == null) {
+    if (!entry.existed_before) removeEmptyDirs(entry.created_dirs, fs)
+    return done('already-restored')
+  }
   if (cur == null) return done('missing') // the user deleted a file that existed before: nothing of asight's left
   const text = cur.toString('utf8')
   const asInstalled = entry.post_sha256 == null || sha256(cur) === entry.post_sha256 // intent-only: test by reversing

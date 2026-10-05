@@ -11,7 +11,7 @@ import path from 'node:path'
 import { collectorHome } from '../paths.mjs'
 import { loadOrCreateCa, caPaths } from './core/tls/ca-store.mjs'
 import { planTrust } from './core/trust/plan.mjs'
-import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, writeOwnedFile, undoEntry, removeEmptyDirs, manifestPath } from './core/trust/journal.mjs'
+import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, writeOwnedFile, undoEntry, removeEmptyDirs, manifestPath, sweepTemps } from './core/trust/journal.mjs'
 import { controlRequest } from './core/control.mjs'
 import { readText } from './core/config-read.mjs'
 
@@ -102,7 +102,7 @@ export async function uninstallCollector({ home = os.homedir(), env = process.en
   const report = { daemon: null, entries: [], removed: [], still_trusting: [], kept_captures: !purgeData, notes: [] }
   report.daemon = await (stop || (() => stopDaemon({ socketPath: runtime && path.join(runtime, 'collector.sock'), lockFile: path.join(dir, 'lock') })))()
   const m = readManifest(dir)
-  const rm = (p) => { if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); report.removed.push(p) } }
+  const rm = (p) => { sweepTemps(p); if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); report.removed.push(p) } }
   if (!m) report.notes.push('nothing is installed for this user')
   else {
     // trust entries, newest first (4.6 撤销顺序 step 1), then the append-semantics trust files (step 3)
@@ -122,6 +122,7 @@ export async function uninstallCollector({ home = os.homedir(), env = process.en
   if (m) {
     removeEmptyDirs(m.dirs.filter((d) => d !== dir)) // e.g. ca/
     fs.rmSync(manifestPath(dir), { force: true }) // the manifest goes last: a second run still finds what the first left
+    sweepTemps(manifestPath(dir))
     removeEmptyDirs(m.dirs)
   } else if (purgeData) removeEmptyDirs([dir])
   return report
