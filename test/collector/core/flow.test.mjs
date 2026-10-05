@@ -4,6 +4,7 @@ import net from 'node:net'; import tls from 'node:tls'; import { X509Certificate
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
 import { handleFlow } from '../../../src/collector/core/engine/flow.mjs'
+import { createNegativeCache } from '../../../src/collector/core/engine/negcache.mjs'
 
 const upCa = createCa({ commonName: 'upstream test CA' }); const upIssuer = createLeafIssuer(loadCa(upCa))
 const asightCa = createCa(); const issuer = createLeafIssuer(loadCa(asightCa))
@@ -17,8 +18,9 @@ const within = (p, what, ms = 5000) => {
 
 async function harness({ meta = {}, policy = () => true, upstream, onAccept = () => {} }) {
   const upPort = await listen(upstream)
-  const envelopes = [], flows = []
-  const ctx = { issuer, upstreamCa: upCa.certPem, policy, isRecording: () => true, negCache: new Map(), newFlowId: () => 'f' + flows.length,
+  const envelopes = [], flows = [], failures = []
+  const ctx = { issuer, upstreamCa: upCa.certPem, policy, isRecording: () => true, negCache: createNegativeCache(), newFlowId: () => 'f' + flows.length,
+    counters: { notCaptured: { h2: 0, httpsProxy: 0, upstreamCert: 0, negative: 0, leafError: 0 } }, failure: (r) => failures.push(r),
     // Snapshot each record when it is written, as the real store does (it serializes at call time):
     // a field the engine sets on the record afterwards never reaches flows/ on disk.
     store: { envelope: (e) => envelopes.push(structuredClone(e)), flow: (f) => flows.push(structuredClone(f)) },
@@ -30,7 +32,7 @@ async function harness({ meta = {}, policy = () => true, upstream, onAccept = ()
   // or envelopes only after this: the client can see the response end (the forwarded TLS
   // close_notify) before the engine has handled the upstream FIN that finalizes the flow.
   const settled = () => Promise.all(done)
-  return { port, envelopes, flows, settled, close: async () => { await within(settled(), 'every flow finalized'); engine.close(); upstream.close() } }
+  return { port, envelopes, flows, failures, ctx, settled, close: async () => { await within(settled(), 'every flow finalized'); engine.close(); upstream.close() } }
 }
 const httpsUpstream = (handler) => tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)), ALPNProtocols: ['http/1.1'] }, handler)
 const request = (port, ca, raw, opts = {}) => new Promise((resolve, reject) => {
@@ -89,11 +91,21 @@ test('splice: a process not marked decrypt sees the upstream certificate and not
   assert.match(r.cert.issuer, /upstream test CA/); assert.equal(h.envelopes.length, 0); assert.equal(h.flows[0].decision, 'splice')
 })
 
-test('splice: ALPN offering only h2 is never decrypted', async () => {
-  const h = await harness({ upstream: tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)), ALPNProtocols: ['h2'] }, (s) => s.end('x')) })
+const h2Upstream = () => tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)), ALPNProtocols: ['h2'] }, (s) => s.end('x'))
+
+test('splice: ALPN offering only h2 is never decrypted, and flows/ says not captured · h2 (T8)', async () => {
+  const h = await harness({ upstream: h2Upstream() })
   const r = await request(h.port, upCa.certPem, 'x', { ALPNProtocols: ['h2'] })
   await h.close()
   assert.match(r.cert.issuer, /upstream test CA/); assert.equal(h.flows[0].decision, 'splice')
+  assert.deepEqual([h.flows[0].not_captured, h.flows[0].reason], ['h2', 'alpn-h2-only']); assert.equal(h.ctx.counters.notCaptured.h2, 1)
+})
+
+test('an h2-only offer to a host the policy would not decrypt anyway is an ordinary splice, not "not captured"', async () => {
+  const h = await harness({ policy: () => false, upstream: h2Upstream() })
+  await request(h.port, upCa.certPem, 'x', { ALPNProtocols: ['h2'] })
+  await h.close()
+  assert.equal(h.flows[0].decision, 'splice'); assert.equal(h.flows[0].not_captured, undefined); assert.equal(h.ctx.counters.notCaptured.h2, 0)
 })
 
 test('upstream reset mid-response: client gets exactly the bytes upstream sent, then a reset; error envelope written', async () => {
@@ -141,15 +153,131 @@ test('CONNECT refused by the proxy: the client receives the proxy refusal verbat
   assert.equal(got, refusal)
 })
 
-test('client rejects the leaf (does not trust asight CA): negative-cached, next connection spliced', async () => {
+// RFC 4.6 §引擎 5 (D37) · W9: a Node client that does not trust the asight CA sends no alert. Under
+// TLS 1.3 we only see a reset; under TLS 1.2 the handshake completes on our side and the client hangs up
+// with zero application data. Both count; two in a row make (pid, host) negative, and the reason is on
+// each record when it is written (the harness store snapshots, like the real one).
+for (const maxVersion of ['TLSv1.2', 'TLSv1.3']) {
+  test(`client rejects the leaf (${maxVersion}, no alert): two consecutive rejections → negative, then spliced (W9)`, async () => {
+    const h = await harness({ upstream: httpsUpstream((s) => s.on('data', () => s.end(RESP))) })
+    const untrusting = () => request(h.port, upCa.certPem, REQ, { maxVersion }).then(() => 'ok', () => 'rejected')
+    assert.equal(await untrusting(), 'rejected'); await within(h.settled(), 'first flow finalized')
+    assert.equal(h.flows[0].reason, 'client-rejected-leaf')
+    assert.equal(h.ctx.negCache.list().length, 0, 'one rejection is not enough (pooled sockets close unused too)')
+    assert.equal(await untrusting(), 'rejected'); await within(h.settled(), 'second flow finalized')
+    assert.deepEqual(h.ctx.negCache.list().map((e) => [e.pid, e.host, e.cause, e.rejections]), [[1, 'upstream.test', 'client-rejected-leaf', 2]])
+    const r = await request(h.port, upCa.certPem, REQ, { maxVersion })
+    await h.close()
+    assert.match(r.cert.issuer, /upstream test CA/)
+    assert.deepEqual(h.flows.map((f) => [f.decision, f.not_captured ?? null, f.reason ?? null]),
+      [['decrypt', null, 'client-rejected-leaf'], ['decrypt', null, 'client-rejected-leaf'], ['splice', 'negative-cache', 'client-rejected-leaf']])
+    assert.equal(h.ctx.counters.notCaptured.negative, 1)
+  })
+}
+
+test('a connection that carries data resets the count: rejected, accepted, rejected is not negative (W9)', async () => {
   const h = await harness({ upstream: httpsUpstream((s) => s.on('data', () => s.end(RESP))) })
+  await request(h.port, upCa.certPem, REQ).catch(() => {}); await within(h.settled(), 'first flow')
+  await request(h.port, asightCa.certPem, REQ); await within(h.settled(), 'second flow')
   await request(h.port, upCa.certPem, REQ).catch(() => {})
-  await within(h.settled(), 'first flow finalized') // the rejection is recorded and negative-cached before that
-  assert.equal(h.flows[0].reason, 'client-rejected-leaf')
-  const r = await request(h.port, upCa.certPem, REQ)
   await h.close()
-  assert.match(r.cert.issuer, /upstream test CA/)
-  assert.equal(h.flows[0].reason, 'client-rejected-leaf'); assert.equal(h.flows.at(-1).decision, 'splice')
+  assert.equal(h.ctx.negCache.list().length, 0)
+  assert.deepEqual(h.flows.map((f) => f.reason ?? null), ['client-rejected-leaf', null, 'client-rejected-leaf'])
+})
+
+// A recording TCP tap: every accepted connection is piped to 127.0.0.1:target(); conns[i] = {c, s} with
+// the chunks each way, so a test can compare the bytes on both sides of the engine. closed() resolves
+// once every connection so far has closed on both legs.
+function tap(target) {
+  const conns = [], legs = []
+  const closed = (s) => new Promise((r) => s.once('close', r))
+  const srv = net.createServer((a) => {
+    const l = { c: [], s: [] }; conns.push(l)
+    const b = net.connect(target(), '127.0.0.1')
+    legs.push(closed(a), closed(b))
+    a.on('data', (d) => { l.c.push(d); b.write(d) }); b.on('data', (d) => { l.s.push(d); a.write(d) })
+    a.on('end', () => b.end()); b.on('end', () => a.end()); a.on('error', () => b.destroy()); b.on('error', () => a.destroy())
+    a.on('close', () => b.destroy()); b.on('close', () => a.destroy())
+  })
+  return { srv, conns, closed: () => Promise.all(legs) }
+}
+
+// RFC 4.6 §引擎 5 · W12 (D37): the upstream's certificate does not verify for the engine (a private CA
+// the engine does not trust), but the client trusts it. The engine steps aside: a fresh connection, the
+// ClientHello replayed verbatim, then a splice — the client's own handshake succeeds end to end.
+const privCa = createCa({ commonName: 'private relay CA' }); const privIssuer = createLeafIssuer(loadCa(privCa))
+const privOrigin = () => tls.createServer({ SNICallback: (s, cb) => cb(null, privIssuer.secureContextFor(s)), ALPNProtocols: ['http/1.1'] }, (s) => {
+  let seen = ''; s.on('data', (d) => { seen += d.toString('latin1'); if (seen.endsWith('}')) { seen = ''; s.write(RESP) } }); s.on('error', () => {})
+})
+const talk = (port, ca) => new Promise((resolve) => {
+  let issuer = null; let got = ''
+  const c = tls.connect({ port, host: '127.0.0.1', servername: 'upstream.test', ca, ALPNProtocols: ['http/1.1'] }, () => { issuer = c.getPeerX509Certificate().issuer; c.write(REQ) })
+  c.on('data', (d) => { got += d.toString('latin1'); if (got.length >= RESP.length) c.end() })
+  c.on('error', () => {}); c.on('close', () => resolve(issuer ? { issuer, got } : 'closed'))
+})
+
+test('upstream certificate does not verify: fresh connection, ClientHello replayed, the client handshakes with the real upstream; bytes identical (W12)', async () => {
+  const origin = privOrigin(); const originPort = await listen(origin)
+  const up = tap(() => originPort)                         // the original destination, recorded
+  const h = await harness({ upstream: up.srv })            // the engine trusts the system roots + upCa only
+  const front = tap(() => h.port); const frontPort = await listen(front.srv)
+  const r = await talk(frontPort, privCa.certPem)
+  await within(h.settled(), 'first flow finalized'); await within(up.closed(), 'upstream legs closed')
+  assert.equal(r.got, RESP); assert.match(r.issuer, /private relay CA/)
+  assert.equal(up.conns.length, 2, 'our dropped handshake, then the client\'s own')
+  const sent = Buffer.concat(front.conns[0].c)
+  assert.ok(!Buffer.concat(up.conns[0].c).includes(sent.subarray(11, 43)), 'none of the client\'s bytes (its ClientHello random) went on the unverified connection')
+  assert.ok(sent.equals(Buffer.concat(up.conns[1].c)), 'client → upstream bytes identical')
+  // upstream → client: identical up to the client's FIN; the upstream's close_notify answering that FIN
+  // finds the client gone (relay tears the upstream down on client end, T3), so at most that one
+  // trailing TLS record is not delivered
+  const back = Buffer.concat(up.conns[1].s), got = Buffer.concat(front.conns[0].s), tail = back.subarray(got.length)
+  assert.ok(back.subarray(0, got.length).equals(got), 'upstream → client bytes identical')
+  assert.ok(tail.length === 0 || tail.length === 5 + tail.readUInt16BE(3), 'nothing missing but the closing record')
+  assert.equal(h.envelopes.length, 0)
+  assert.deepEqual([h.flows[0].decision, h.flows[0].not_captured], ['splice', 'upstream-cert']); assert.match(h.flows[0].reason, /CERT|SIGNATURE|ISSUER/)
+  assert.deepEqual(h.ctx.negCache.list().map((e) => [e.host, e.cause]), [['upstream.test', 'upstream-cert']])
+  // the next flow to that host splices at once: one upstream connection, no handshake of ours
+  const r2 = await talk(frontPort, privCa.certPem)
+  await h.close(); front.srv.close(); origin.close()
+  assert.equal(r2.got, RESP); assert.equal(up.conns.length, 3)
+  assert.deepEqual([h.flows[1].decision, h.flows[1].not_captured, h.flows[1].reason], ['splice', 'negative-cache', 'upstream-cert'])
+  assert.deepEqual([h.ctx.counters.notCaptured.upstreamCert, h.ctx.counters.notCaptured.negative], [1, 1])
+})
+
+test('a network failure during our upstream handshake still closes the client: no retry, nothing negative (W12)', async () => {
+  let conns = 0
+  const h = await harness({ upstream: net.createServer((s) => { conns++; s.on('error', () => {}); s.on('data', () => s.destroy()) }) })
+  const r = await talk(h.port, upCa.certPem)
+  await h.close()
+  assert.equal(r, 'closed'); assert.equal(conns, 1)
+  assert.equal(h.ctx.negCache.list().length, 0); assert.equal(h.flows[0].not_captured, undefined); assert.ok(h.flows[0].error)
+})
+
+test('inside a CONNECT tunnel an unverifiable upstream closes that one flow (no prelude replay); the retry is spliced (W12, invariant 1)', async () => {
+  const origin = privOrigin(); const originPort = await listen(origin)
+  let proxied = 0
+  const proxy = net.createServer((c) => c.once('data', () => {
+    proxied++
+    const o = net.connect(originPort, '127.0.0.1', () => { c.write('HTTP/1.1 200 OK\r\n\r\n'); c.pipe(o); o.pipe(c) })
+    o.on('error', () => c.destroy()); c.on('error', () => o.destroy()); c.on('close', () => o.destroy())
+  }))
+  const h = await harness({ upstream: proxy })
+  const viaConnect = () => new Promise((resolve) => {
+    const raw = net.connect(h.port, '127.0.0.1', () => raw.write('CONNECT upstream.test:443 HTTP/1.1\r\nProxy-Authorization: Basic dTpw\r\n\r\n'))
+    raw.on('error', () => {}); raw.on('close', () => resolve('closed'))
+    raw.once('data', () => {
+      let got = ''
+      const t = tls.connect({ socket: raw, servername: 'upstream.test', ca: privCa.certPem }, () => t.write(REQ))
+      t.on('data', (x) => { got += x.toString('latin1'); if (got.length >= RESP.length) { resolve(got); t.end() } }); t.on('error', () => {})
+    })
+  })
+  assert.equal(await viaConnect(), 'closed'); await within(h.settled(), 'first flow finalized')
+  assert.equal(await viaConnect(), RESP)
+  await h.close(); origin.close()
+  assert.equal(proxied, 2, 'the engine never re-sent a CONNECT prelude (with the agent\'s proxy credentials)')
+  assert.deepEqual(h.flows.map((f) => [f.decision, f.not_captured]), [['tunnel', 'upstream-cert'], ['tunnel', 'negative-cache']])
+  assert.equal(h.flows[0].error.type, 'upstream_cert')
 })
 
 test('client abort mid-flight tears down the upstream socket (acceptance T3)', async () => {

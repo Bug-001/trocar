@@ -7,6 +7,7 @@ import net from 'node:net'
 import tls from 'node:tls'
 import { classify, parseClientHello, parseHead } from './sniff.mjs'
 import { createExchangeTee } from './exchange.mjs'
+import { negKey } from './negcache.mjs'
 
 export function handleFlow(client, meta, ctx) {
   const t0 = Date.now()
@@ -145,35 +146,74 @@ export function handleFlow(client, meta, ctx) {
     const alpn = ch.malformed ? null : ch.alpn
     const host = sni ?? hostDefault ?? meta.dst.address
     rec.host = host
-    const negKey = `${meta.pid}|${host}`
-    const canDecrypt = meta.decrypt && !ch.malformed && (alpn === null || alpn.includes('http/1.1')) &&
-      ctx.policy(meta, sni ?? meta.dst.address) && !ctx.negCache.has(negKey)
-    if (canDecrypt) decrypt(buf, cSock, uSock, sni, host, isTunnel, negKey)
-    else { setDecision('splice', isTunnel); cSock.unshift(buf); cSock.resume(); relay(cSock, uSock) }
+    const key = negKey(meta, host)
+    const h1 = alpn === null || alpn.includes('http/1.1')
+    const neg = ctx.negCache.get(key)
+    const target = meta.decrypt && !ch.malformed && ctx.policy(meta, sni ?? meta.dst.address)
+    if (target && h1 && !neg) return decrypt(buf, cSock, uSock, sni, host, isTunnel, key)
+    // A host we would decrypt but do not: say why in flows/ (invariant 4) — the negative cache (RFC 4.6
+    // §引擎 5) or an only-h2 offer (§传输与帧级记录 · T8). Spliced either way; the redirector is never told.
+    if (target && neg) { rec.not_captured = 'negative-cache'; rec.reason = neg.cause; ctx.counters.notCaptured.negative++ }
+    else if (target && alpn.includes('h2')) { rec.not_captured = 'h2'; rec.reason = 'alpn-h2-only'; ctx.counters.notCaptured.h2++ }
+    setDecision('splice', isTunnel); cSock.unshift(buf); cSock.resume(); relay(cSock, uSock)
   }
 
-  function decrypt(buf, cSock, uSock, sni, host, isTunnel, negKey) {
+  // The upstream's certificate did not verify (private CA, expired, wrong name; RFC 4.6 §引擎 5, D37).
+  // We do not stand in for it, and the agent must not lose its connection either: drop our handshake
+  // (nothing of the client's was written on it), open a fresh connection to the original destination,
+  // replay the client's buffered bytes (its ClientHello) verbatim and splice — the client then runs its
+  // own handshake with the real upstream and judges the certificate itself. Inside a CONNECT / SOCKS
+  // tunnel there is no fresh connection to open without re-sending the client's proxy prelude (its
+  // credentials) on our own initiative (invariant 1 / D30), so that one flow is closed; (pid, host) is
+  // negative at once either way, so later flows (the client's retry) splice without trying.
+  function stepAside(upTls, buf, cSock, host, isTunnel, key) {
+    const why = String(upTls.authorizationError || 'upstream certificate not verified')
+    handedOff = true                                    // the original upstream closes under us; we own teardown
+    try { upTls.destroy() } catch { /* ignore */ }
+    ctx.negCache.mark(key, { cause: 'upstream-cert', meta, host })
+    ctx.counters.notCaptured.upstreamCert++
+    rec.not_captured = 'upstream-cert'; rec.reason = why
+    if (isTunnel) {
+      try { cSock.destroy() } catch { /* ignore */ }
+      return finish('tunnel', { host, error: { type: 'upstream_cert', message: why } })
+    }
+    setDecision('splice', false)
+    const fresh = ctx.connectUpstream(meta.dst)
+    fresh.write(buf)                                    // the ClientHello, byte for byte
+    cSock.resume(); relay(cSock, fresh)
+  }
+
+  function decrypt(buf, cSock, uSock, sni, host, isTunnel, key) {
     const ca = [...tls.rootCertificates, ...(ctx.upstreamCa ? [].concat(ctx.upstreamCa) : [])]
-    const upTls = tls.connect({ socket: uSock, servername: sni || undefined, ALPNProtocols: ['http/1.1'], ca })
+    // rejectUnauthorized:false only so the two upstream failures can be told apart: an 'error' before
+    // 'secureConnect' is a network / protocol failure (the client is closed); a 'secureConnect' that is
+    // not `authorized` (Node still checks chain and hostname) is a certificate that did not verify
+    // (stepAside). Nothing is ever written on an unverified connection (§引擎 5).
+    const upTls = tls.connect({ socket: uSock, servername: sni || undefined, ALPNProtocols: ['http/1.1'], ca, rejectUnauthorized: false })
     let clientTls = null
     upTls.on('error', (err) => {
       if (!clientTls) { try { cSock.destroy() } catch { /* ignore */ }; finish(isTunnel ? 'tunnel' : 'decrypt', { host, error: { type: err.code || 'upstream_tls_error', message: String((err && err.message) || err) } }) }
     })
     upTls.on('secureConnect', () => {
+      if (!upTls.authorized) return stepAside(upTls, buf, cSock, host, isTunnel, key)
       setDecision('decrypt', isTunnel)
       cSock.unshift(buf)                                    // replay the ClientHello to our TLS server
       clientTls = new tls.TLSSocket(cSock, { isServer: true, secureContext: ctx.issuer.secureContextFor(host), ALPNProtocols: ['http/1.1'] })
-      // A client that does not trust the asight CA aborts our leaf's handshake: our server-side
-      // TLSSocket never fires 'secure' (the peer sends unknown_ca/bad_certificate, or — e.g.
-      // SELF_SIGNED_CERT_IN_CHAIN on Node/LibreSSL — just closes). Negative-cache (pid,host) so the
-      // engine stops trying to decrypt that process and splices from here on (RFC 4.6 §引擎 5).
-      // Recorded on whichever of error/end/close comes first, by listeners added BEFORE relay()'s: the
-      // emitter runs them in order, so the reason is on the record before relay's teardown writes it
-      // (the store serializes at call time; a reason set afterwards never reaches flows/).
-      let handshook = false, rejected = false
-      clientTls.once('secure', () => { handshook = true })
-      const goneBeforeHandshake = () => { if (handshook || rejected) return; rejected = true; ctx.negCache.set(negKey, Date.now()); rec.reason = 'client-rejected-leaf' }
-      clientTls.on('error', goneBeforeHandshake); clientTls.on('end', goneBeforeHandshake); clientTls.on('close', goneBeforeHandshake)
+      // Rejection (§引擎 5, D37): the client closes or resets without one byte of application data, alert
+      // or not, Finished or not — Node sends no alert, and under TLS 1.2 our side of the handshake
+      // completes before the client checks our leaf and hangs up. Judged on whichever of error / end /
+      // close comes first, by listeners added BEFORE relay()'s: the reason is on the record before relay's
+      // teardown writes it (the store serializes at call time). A connection that carried data resets
+      // the (pid, host) count.
+      let appData = false, judged = false
+      clientTls.once('data', () => { appData = true })
+      const judge = () => {
+        if (judged) return
+        judged = true
+        if (!appData) rec.reason = 'client-rejected-leaf'
+        ctx.negCache.observe(key, { rejected: !appData, meta, host })
+      }
+      clientTls.on('error', judge); clientTls.on('end', judge); clientTls.on('close', judge)
       activeTee = createExchangeTee({
         flow: { id: rec.flow_id, host, scheme: 'https', dst: meta.dst, proc: { pid: meta.pid, exe: meta.exe ?? null, agent: meta.agent } },
         recordStore: ctx.store, isRecording: ctx.isRecording, wsTerminal: meta.wsTerminal ?? null,

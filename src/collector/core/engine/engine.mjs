@@ -7,12 +7,15 @@
 // harness; it only reads that data.
 import net from 'node:net'
 import { handleFlow } from './flow.mjs'
+import { createNegativeCache } from './negcache.mjs'
 
 export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, policy = () => true, isRecording = () => true, describe = () => ({}), onError = () => {} }) {
-  const counters = { active: 0, total: 0, decrypted: 0, spliced: 0, lookupMisses: 0 }
+  const counters = { active: 0, total: 0, decrypted: 0, spliced: 0, lookupMisses: 0, notCaptured: { h2: 0, httpsProxy: 0, upstreamCert: 0, negative: 0, leafError: 0 } }
   const servers = []
   const active = new Set()
-  const negCache = new Map()
+  // (pid, host) pairs the engine no longer tries to decrypt (RFC 4.6 §引擎 5). A hit is spliced and
+  // labelled in flows/; the redirector is never told (the kernel can only stop a whole process).
+  const negCache = createNegativeCache()
   let flowSeq = 0
   const defaultConnect = (dst) => net.connect(dst.port, dst.address)
   // A capture failure is never silent (D38): written to failures/ when it happens. A
@@ -43,7 +46,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     }
     counters.active++
     const ctx = {
-      issuer, store, upstreamCa, policy, isRecording, negCache,
+      issuer, store, upstreamCa, policy, isRecording, negCache, counters, failure,
       connectUpstream: connectUpstream || defaultConnect,
       newFlowId: () => `flow_${String(++flowSeq).padStart(6, '0')}`,
     }
@@ -79,8 +82,9 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
 
   function stats() {
     const storeErrors = store && typeof store.errors === 'number' ? store.errors : 0
-    return { active: counters.active, total: counters.total, decrypted: counters.decrypted, spliced: counters.spliced, lookupMisses: counters.lookupMisses, storeErrors }
+    return { active: counters.active, total: counters.total, decrypted: counters.decrypted, spliced: counters.spliced, lookupMisses: counters.lookupMisses, storeErrors, notCaptured: { ...counters.notCaptured } }
   }
 
-  return { listen, close, stats }
+  // negatives() is for status only; forgetPid(pid) is called by the daemon when that process exits.
+  return { listen, close, stats, negatives: () => negCache.list(), forgetPid: (pid) => negCache.forgetPid(pid) }
 }
