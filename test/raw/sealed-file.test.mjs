@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createSealWriter } from '../../src/raw/writer.mjs';
+import { createSealWriter, createRingBudget } from '../../src/raw/writer.mjs';
 import { openSealed, createFrameCache, AMBIGUOUS } from '../../src/raw/reader.mjs';
 
 // The sealed container (4.2 §原始层封存 「分帧」「文件布局」「读」): header · brotli frames · index tail
@@ -135,4 +135,29 @@ test('an index that is self-consistent but points at the wrong bytes fails the s
     assert.ok(sf.lineAt(2).equals(ls[2]));
     sf.close();
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// One shard split across many sessions feeds one writer per session. Their predecessor rings share a
+// memory budget (review F15): the total stays under it, and every output still decodes exactly.
+test('writers of one seal share a ring budget; the cap costs compression, never bytes', () => {
+  const root = tmp();
+  try {
+    const budget = createRingBudget(1 << 20);
+    const ws = [0, 1, 2].map((k) => { const file = path.join(root, `o${k}.sealed`), fd = fs.openSync(file, 'wx', 0o600); return { file, fd, w: createSealWriter({ fd, budget }), lines: [] }; });
+    let peak = 0;
+    for (let i = 0; i < 30; i++) {
+      const o = ws[i % 3];
+      const line = Buffer.from(JSON.stringify({ id: `r${i}`, req_body: 'x'.repeat(150000) + i }) + '\n');
+      o.w.add(line, { id: `r${i}`, stream: 's.ndjson', lineNo: i }); o.lines.push(line);
+      peak = Math.max(peak, budget.total);
+      assert.equal(budget.total, ws.reduce((n, x) => n + x.w.ringBytes, 0));
+    }
+    assert.ok(peak <= budget.max, `rings held ${peak} bytes over a ${budget.max} budget`);
+    for (const o of ws) {
+      o.w.finish([{ name: 's.ndjson', sha256: '', length: 0, lines: 0 }]); fs.closeSync(o.fd);
+      const sf = openSealed(o.file);
+      assert.deepEqual([...sf.lines()].map((x) => x.line.toString()), o.lines.map(String));
+      sf.close();
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

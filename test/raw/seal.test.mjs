@@ -7,6 +7,7 @@ import { sealShard, SealRefused } from '../../src/raw/seal.mjs';
 import { markClosed, closedMarkerPath } from '../../src/raw/closed.mjs';
 import { openSealed } from '../../src/raw/reader.mjs';
 import { tmpDir, e1Lines, writeShard, listFiles, decodeAll } from './helpers.mjs';
+import { createRingBudget } from '../../src/raw/writer.mjs';
 
 const sha = (b) => createHash('sha256').update(b).digest('hex');
 const S1 = '11111111-aaaa-4aaa-8aaa-111111111111', S2 = '22222222-bbbb-4bbb-8bbb-222222222222';
@@ -141,5 +142,15 @@ test('an empty closed shard becomes one empty sealed file', async () => {
     const files = listFiles(root);
     assert.equal(files.length, 1);
     const sf = openSealed(files[0]); assert.equal(sf.count, 0); assert.equal(sf.shards[0].length, 0); sf.close();
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('every output of one seal draws on the same ring budget (memory bound with many sessions)', async () => {
+  const { root, shard, sessionsRoot } = setup();
+  try {
+    const ringBudget = createRingBudget(64 << 10);
+    const res = await sealShard(shard, { sessionsRoot, ringBudget });
+    assert.equal(ringBudget.rings.length, res.outputs.length, 'an output encoded outside the shared budget');
+    assert.ok(ringBudget.total <= ringBudget.max);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

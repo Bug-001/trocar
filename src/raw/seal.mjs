@@ -17,7 +17,7 @@
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
-import { createSealWriter, FRAME_BYTES } from './writer.mjs';
+import { createSealWriter, createRingBudget, FRAME_BYTES } from './writer.mjs';
 import { openSealed, createFrameCache } from './reader.mjs';
 import { readIndex } from './format.mjs';
 import { closedState, closedMarkerPath, fsyncDir } from './closed.mjs';
@@ -63,13 +63,14 @@ export async function sealUnchecked(shard, { journal = defaultJournalPath(), ...
 }
 
 async function sealCore(shard, { fs = nodeFs, sessionsRoot, split = true, deleteOriginal = true,
-  frameBytes = FRAME_BYTES, onPhase = () => {} } = {}) {
+  frameBytes = FRAME_BYTES, onPhase = () => {}, ringBudget = createRingBudget() } = {}) {
   if (split && !sessionsRoot) throw new Error('sealUnchecked: sessionsRoot is required to split by session');
   const old = oldRootReason(shard, { fs }) || (split && oldRootReason(sessionsRoot, { fs }));
   if (old) throw new SealRefused(`refusing to seal ${shard}: ${old}`);
   const srcDir = path.dirname(shard), name = path.basename(shard);
   const lock = acquireLock(fs, shard);
   const outs = new Map();            // key ('' = per-shard) → { dir, tmp, fd, writer }
+  const budget = ringBudget;          // predecessor rings of all outputs share one memory cap
   let renamed = false;
   try {
     const st0 = fs.statSync(shard);
@@ -81,7 +82,7 @@ async function sealCore(shard, { fs = nodeFs, sessionsRoot, split = true, delete
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
       const tmp = path.join(dir, `.${name}.${process.pid}-${randomBytes(4).toString('hex')}.tmp`);
       const fd = fs.openSync(tmp, 'wx', 0o600);
-      o = { key, dir, tmp, fd, writer: createSealWriter({ fd, fs, frameBytes }) };
+      o = { key, dir, tmp, fd, writer: createSealWriter({ fd, fs, frameBytes, budget }) };
       outs.set(key, o);
       return o;
     };

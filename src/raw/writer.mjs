@@ -11,16 +11,24 @@ import { headerBytes, indexTailBytes, trailerBytes, FLAG_NL, FLAG_UNPARSEABLE } 
 
 export const FRAME_BYTES = 4 << 20;   // ~4 MiB of encoded bytes per frame (D35 ④)
 const RING_BYTES = 128 << 20;         // cap on predecessor lines kept for matching (memory bound)
+// One shard split by session feeds one writer per session, each with its own ring: without a shared
+// cap, memory grows with the number of sessions (review F15). All writers of one seal share this
+// budget; past it, the largest ring gives up its oldest line. That only costs compression — a ring
+// is a pool of predecessor CANDIDATES, never needed to decode.
+export const RING_TOTAL = 512 << 20;
+export const createRingBudget = (max = RING_TOTAL) => ({ max, total: 0, rings: [] });
 const BROTLI = { [zlib.constants.BROTLI_PARAM_QUALITY]: 9, [zlib.constants.BROTLI_PARAM_LGWIN]: 24 };
 
-export function createSealWriter({ fd, fs = nodeFs, frameBytes = FRAME_BYTES, chainMax = CHAIN_MAX } = {}) {
+export function createSealWriter({ fd, fs = nodeFs, frameBytes = FRAME_BYTES, chainMax = CHAIN_MAX, budget = null } = {}) {
   let pos = 0;
   const write = (buf) => { let off = 0; while (off < buf.length) off += fs.writeSync(fd, buf, off, buf.length - off, pos + off); pos += buf.length; };
   write(headerBytes());
 
   const frames = [], records = [], streams = [], streamIdx = new Map();
   let parts = [], partLen = 0, deltas = 0, rawBytes = 0;
-  const ring = []; let ringBytes = 0;
+  const ring = [], me = { ring, bytes: 0 };
+  if (budget) budget.rings.push(me);
+  const drop = (r) => { const n = r.ring.shift().line.length; r.bytes -= n; if (budget) budget.total -= n; };
 
   const flush = () => {
     if (!partLen) return;
@@ -53,8 +61,14 @@ export function createSealWriter({ fd, fs = nodeFs, frameBytes = FRAME_BYTES, ch
     records.push([id == null ? null : String(id), s, frames.length, off, enc.length, line.length, kind, back, sha, flags, shard, lineNo]);
     rawBytes += line.length;
     if (partLen >= frameBytes) flush();
-    ring.push({ idx, depth, line }); ringBytes += line.length;
-    while (ring.length > CANDIDATES || (ring.length > 1 && ringBytes > RING_BYTES)) ringBytes -= ring.shift().line.length;
+    ring.push({ idx, depth, line }); me.bytes += line.length; if (budget) budget.total += line.length;
+    while (ring.length > CANDIDATES || (ring.length > 1 && me.bytes > RING_BYTES)) drop(me);
+    while (budget && budget.total > budget.max) {
+      let big = null;
+      for (const r of budget.rings) if (r.ring.length > 1 && (!big || r.bytes > big.bytes)) big = r;
+      if (!big) break;                    // every ring is down to its newest line
+      drop(big);
+    }
     return idx;
   }
 
@@ -68,5 +82,5 @@ export function createSealWriter({ fd, fs = nodeFs, frameBytes = FRAME_BYTES, ch
     return { bytes: pos, records: records.length, frames: frames.length, deltas, rawBytes };
   }
 
-  return { add, finish, get count() { return records.length; } };
+  return { add, finish, get count() { return records.length; }, get ringBytes() { return me.bytes; } };
 }
