@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { analyze } from '../../src/view/analyze.mjs';
+import { fixtureGate } from '../helpers/fixture.mjs';
 
 // ── BUG 1 (audit 2026-07-19) — analyze() silently DROPPED every non-200 call ──────────
 // The admission filter only let through a parsed 200 (or a record carrying an `error` key),
@@ -26,7 +27,7 @@ function fixtureRecords() {
   return readFileSync(FIXTURE, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
 }
 
-test('BUG1: every captured LLM call reaches the timeline — none silently dropped', () => {
+test('BUG1: every captured LLM call reaches the timeline — none silently dropped', fixtureGate(), () => {
   const records = fixtureRecords();
   const eligible = records.filter((r) => r.is_llm_call && r.request && Array.isArray(r.request.messages));
   const { steps } = analyze(records);
@@ -39,7 +40,7 @@ test('BUG1: every captured LLM call reaches the timeline — none silently dropp
     assert.ok(ids.has(id), `${id} (non-200) must be present in the timeline`);
 });
 
-test('BUG1: non-200 calls carry their status so the view can render them red', () => {
+test('BUG1: non-200 calls carry their status so the view can render them red', fixtureGate(), () => {
   const { steps } = analyze(fixtureRecords());
   const byId = new Map(steps.map((s) => [s.id, s]));
   for (const [id, status] of [['req_00002', 502], ['req_00003', 401], ['req_00034', 429], ['req_00035', 429]]) {
@@ -53,7 +54,7 @@ test('BUG1: non-200 calls carry their status so the view can render them red', (
   assert.deepEqual(seen, [200, 401, 429, 502], 'timeline statuses must match the captured statuses');
 });
 
-test('BUG1: a failed call is marked as NOT establishing a cache prefix', () => {
+test('BUG1: a failed call is marked as NOT establishing a cache prefix', fixtureGate(), () => {
   const { steps } = analyze(fixtureRecords());
   for (const s of steps) {
     assert.equal(typeof s.chainsPrefix, 'boolean', `step ${s.id} must declare chainsPrefix`);
@@ -83,7 +84,7 @@ test('BUG1: an unparseable req_body becomes a VISIBLE sentinel, not a silent dro
   assert.equal(sentinel.chainsPrefix, false, 'an unparsed call cannot establish a cache prefix');
 });
 
-test('BUG1: admitting failures does not corrupt derived token stats', () => {
+test('BUG1: admitting failures does not corrupt derived token stats', fixtureGate(), () => {
   const records = fixtureRecords();
   const { stats, steps } = analyze(records);
   assert.equal(stats.calls, steps.length, 'stats.calls counts every admitted call');

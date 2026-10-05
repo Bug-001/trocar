@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { readRecords } from '../../src/etl/ingest.mjs';
 import { sessionView, pageView } from '../../src/view/board.mjs';
 import { compBuckets } from '../../src/view/blockmeta.mjs';
+import { fixtureGate, hasFixture } from '../helpers/fixture.mjs';
 
 // A CALL'S COMPOSITION IS NINE INTEGERS. IT SHIPS FOR EVERY CALL, ALWAYS.
 //
@@ -29,21 +30,23 @@ const ROOT = path.resolve(HERE, '..', '..');
 const FIXTURE = path.join(ROOT, 'test', 'fixtures', 'cc-session-real.ndjson');
 const KEYS = ['tools', 'system', 'user', 'assistant', 'thinking', 'tool_use', 'tool_result', 'image', 'other'];
 
-const records = await readRecords(FIXTURE, { normalize: false });
+// Loaded only when present: the fixture tests below are fixtureGate()d, and the synthetic Codex test
+// must still load and run on a clone that does not have the private capture.
+const records = hasFixture() ? await readRecords(FIXTURE, { normalize: false }) : null;
 // The fixture's one session id, taken from the data rather than hardcoded.
 const { groupSessions } = await import('../../src/view/board.mjs');
-const SID = [...groupSessions(records).entries()].sort((a, b) => b[1].length - a[1].length)[0][0];
+const SID = records && [...groupSessions(records).entries()].sort((a, b) => b[1].length - a[1].length)[0][0];
 
 const full = () => sessionView(records, SID);
 const paged = (cursor, limit) => pageView(sessionView(records, SID), { cursor, limit });
 
-test('precondition: the fixture is long enough that paging really excludes calls', () => {
+test('precondition: the fixture is long enough that paging really excludes calls', fixtureGate(), () => {
   const steps = paged(0, 5).analyzed.steps;
   assert.ok(steps.length >= 20, `fixture has only ${steps.length} calls — too short to test paging`);
   assert.ok(steps.some((c) => c.paged_out), 'no call fell outside the window; this file would prove nothing');
 });
 
-test('EVERY call carries a complete comp, in or out of the window', () => {
+test('EVERY call carries a complete comp, in or out of the window', fixtureGate(), () => {
   const steps = paged(0, 5).analyzed.steps;
   const missing = steps.filter((c) => !c.comp).map((c) => c.gi);
   assert.deepEqual(missing, [],
@@ -57,7 +60,7 @@ test('EVERY call carries a complete comp, in or out of the window', () => {
   }
 });
 
-test('an out-of-window comp EQUALS what its own blocks would compute', () => {
+test('an out-of-window comp EQUALS what its own blocks would compute', fixtureGate(), () => {
   // The anti-偷换概念 assertion. Asserting only that the field exists is satisfied by `{}` or by nine
   // zeros; either would draw a blank bar while claiming the composition is known.
   const unpaged = full().analyzed.steps;
@@ -81,7 +84,7 @@ test('an out-of-window comp EQUALS what its own blocks would compute', () => {
   assert.ok(checked >= 10, `only ${checked} out-of-window calls compared`);
 });
 
-test('a comp is never all-zero for a call that had blocks', () => {
+test('a comp is never all-zero for a call that had blocks', fixtureGate(), () => {
   // Nine zeros satisfies "all nine keys present" and still paints a blank bar.
   const steps = paged(0, 5).analyzed.steps;
   const dead = steps.filter((c) => KEYS.reduce((n, k) => n + (c.comp[k] || 0), 0) === 0).map((c) => c.gi);
@@ -141,7 +144,7 @@ test('a Codex/OpenAI session ships comp for every call too', () => {
     + 'the same cross-provider vocabulary as Anthropic\'s, or the bar renders one flat colour.');
 });
 
-test('comp survives slimCall — it must not be lost to a future whitelist', () => {
+test('comp survives slimCall — it must not be lost to a future whitelist', fixtureGate(), () => {
   // slimCall keeps `comp` today only because it destructures {rec, flat, norm, _comp} and lets the
   // rest through. That is incidental, not intentional, and the next person to add a keep-list would
   // silently delete the timeline again.
