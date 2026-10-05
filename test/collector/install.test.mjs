@@ -478,7 +478,7 @@ test('install / uninstall: the autostart unit is listed, enabled, then stopped t
   } finally { b.done() }
 })
 
-test('install: a unit systemd refuses to enable is a recorded failure, the install still completes; stopDaemon stops a unit-managed daemon through systemd', async () => {
+test('install: a unit systemd refuses to enable is a recorded failure, the install still completes; stopDaemon stops a unit-managed daemon through systemd, a hand-started one by pid', async () => {
   const b = box()
   try {
     const unit = { path: path.join(b.home, '.config', 'systemd', 'user', 'asight-collector.service'), text: '[Unit]\n', enable: () => ({ code: 1, err: 'Failed to connect to bus' }), disable: () => ({ code: 0 }), stop: () => {}, removeWants: () => [] }
@@ -492,5 +492,10 @@ test('install: a unit systemd refuses to enable is a recorded failure, the insta
     const seen = []; let up = true
     const res = await stopDaemon({ socketPath: sock, lockFile: lock, request: async () => ({}), alive: () => up, kill: () => seen.push('kill'), stopUnit: () => { seen.push('unit-stop'); up = false } })
     assert.deepEqual([res, seen], ['stopped', ['unit-stop']])
+    // the unit is installed but this daemon was started by hand (the unit could not be enabled): systemd
+    // stops nothing, so it is stopped by pid
+    const seen2 = []; let up2 = true
+    const res2 = await stopDaemon({ socketPath: sock, lockFile: lock, request: async () => ({}), alive: () => up2, kill: (pid, sig) => { seen2.push(`kill ${pid} ${sig}`); up2 = false }, stopUnit: () => seen2.push('unit-stop') })
+    assert.deepEqual([res2, seen2], ['stopped', ['unit-stop', 'kill 4242 SIGTERM']])
   } finally { b.done() }
 })

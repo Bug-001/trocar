@@ -162,7 +162,7 @@ export async function stopDaemon({ socketPath, lockFile, request = controlReques
   }
   if (!lock || !lock.pid) throw new Error('a collector daemon answers but left no lock file; stop it by hand, nothing was removed')
   if (stopUnit) stopUnit() // a unit-managed daemon is stopped through systemd, which then knows it is meant to be down
-  else kill(lock.pid, 'SIGTERM')
+  if (alive(lock.pid)) kill(lock.pid, 'SIGTERM') // no unit, or this daemon was started by hand (`asight collector start`)
   const pids = [lock.pid, lock.helper_pid].filter(Boolean)
   for (const end = Date.now() + timeoutMs; pids.some(alive);) {
     if (Date.now() > end) throw new Error(`the collector daemon (pid ${pids.join(', ')}) is still running; nothing was removed`)
