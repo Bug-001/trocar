@@ -28,7 +28,7 @@ export const responses = {
     if (!body.stream) return jsonReply(200, response('completed', items.map((i) => i.done), usage), headers)
 
     let seq = 0
-    const ev = ([type, data]) => `event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: seq++, ...data })}\n\n`
+    const ev = ([type, data], n = seq++) => `event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: n, ...data })}\n\n`
     const pieces = [ev(['response.created', { response: response('in_progress', []) }]), ev(['response.in_progress', { response: response('in_progress', []) }])]
     items.forEach((it, output_index) => {
       pieces.push(ev(['response.output_item.added', { output_index, item: it.added }]))
@@ -36,7 +36,11 @@ export const responses = {
       pieces.push(ev(['response.output_item.done', { output_index, item: it.done }]))
     })
     pieces.push(ev(['response.completed', { response: response('completed', items.map((i) => i.done), usage) }]))
-    return { status: 200, headers: { ...SSE, ...headers }, pieces, firstDelta: pieces.findIndex((s) => /^event: response\.[a-z_.]+\.delta\n/.test(s)) }
+    const failed = { ...response('failed', []), error: { code: 'server_error', message: 'mock-upstream: scripted stream failure' } }
+    return {
+      status: 200, headers: { ...SSE, ...headers }, pieces, firstDelta: pieces.findIndex((s) => /^event: response\.[a-z_.]+\.delta\n/.test(s)),
+      failEvent: (n) => ev(['response.failed', { response: failed }], n), // n = events already sent, so sequence numbers stay gapless
+    }
   },
 }
 
@@ -110,7 +114,9 @@ export const chat = {
     pieces.push(chunk({}, finish))
     if (body.stream_options?.include_usage) pieces.push(`data: ${JSON.stringify({ ...base, object: 'chat.completion.chunk', choices: [], usage })}\n\n`)
     pieces.push('data: [DONE]\n\n')
-    return { status: 200, headers: { ...SSE, ...headers }, pieces, firstDelta: 1 }
+    // Chat has no error event type; providers send an error object as a data line and stop.
+    const failEvent = () => `data: ${JSON.stringify({ error: { message: 'Overloaded', type: 'server_error', param: null, code: 'overloaded' } })}\n\n`
+    return { status: 200, headers: { ...SSE, ...headers }, pieces, firstDelta: 1, failEvent }
   },
 }
 

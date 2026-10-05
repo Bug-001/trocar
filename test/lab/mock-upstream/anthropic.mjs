@@ -46,6 +46,7 @@ export function reply(body, raw, sc) {
   pieces.push(ev('message_delta', { delta: { stop_reason: message.stop_reason, stop_sequence: null }, usage }), ev('message_stop', {}))
   return {
     status: 200, pieces, firstDelta: pieces.findIndex((s) => s.startsWith('event: content_block_delta')),
+    failEvent: () => ev('error', { error: { type: 'overloaded_error', message: 'Overloaded' } }), // what the API sends mid-stream
     headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', ...headers },
   }
 }

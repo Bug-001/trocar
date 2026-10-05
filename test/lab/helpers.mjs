@@ -2,6 +2,7 @@
 // file (it lives under test/); it only exports functions, so that is a no-op.
 import http from 'node:http'
 import https from 'node:https'
+import net from 'node:net'
 import { createHash } from 'node:crypto'
 
 export const sha12 = (s) => createHash('sha256').update(s).digest('hex').slice(0, 12)
@@ -36,6 +37,23 @@ export function parseSse(text) {
     return ev
   })
 }
+
+// A raw TCP exchange, for faults node's HTTP client would blur together (RST vs FIN both surface
+// there as "aborted"). Resolves on close with what arrived, when, and how the connection ended.
+export function rawExchange(port, wire, { closeAfter } = {}) {
+  return new Promise((resolve) => {
+    const t0 = Date.now(), chunks = []
+    let error = null, ended = false
+    const sock = net.connect(port, '127.0.0.1', () => sock.write(wire))
+    sock.on('data', (d) => { chunks.push({ ms: Date.now() - t0, d }); if (closeAfter?.(Buffer.concat(chunks.map((c) => c.d)))) sock.destroy() })
+    sock.on('error', (e) => { error = e.code })
+    sock.on('end', () => { ended = true })
+    sock.on('close', () => resolve({ data: Buffer.concat(chunks.map((c) => c.d)), chunks, error, ended }))
+  })
+}
+
+export const httpPost = (path, body, headers = {}) =>
+  `POST ${path} HTTP/1.1\r\nHost: relay.asight.test\r\nContent-Type: application/json\r\n${Object.entries(headers).map(([k, v]) => `${k}: ${v}\r\n`).join('')}Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
 
 export async function waitFor(fn, ms = 2000) {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 10))) {

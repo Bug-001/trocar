@@ -6,7 +6,7 @@ import net from 'node:net'
 import path from 'node:path'
 import { once } from 'node:events'
 import { parseRequest } from './http1.mjs'
-import { SCENARIOS, isScenario, pickScenario } from './scenarios.mjs'
+import { SCENARIOS, isScenario, pickScenario, errorFor } from './scenarios.mjs'
 import { writeResponse, jsonReply } from './transport.mjs'
 import * as anthropic from './anthropic.mjs'
 import * as openai from './openai.mjs'
@@ -41,7 +41,7 @@ async function dispatch(req, io, state) {
   const dialect = route?.dialect || (req.headers['anthropic-version'] ? anthropic : openai.chat)
   let res
   if (!sc) res = dialect.errorReply(400, `mock-upstream: unknown scenario "${pick.name}"`)
-  else if (sc.status) res = dialect.errorReply(sc.status)
+  else if (sc.status) res = errorFor(sc, dialect)
   else if (!route) res = dialect.errorReply(404, `mock-upstream: no route for ${req.method} ${p}`)
   else if (route.kind === 'model') res = route.dialect.reply(parseJson(req.body), req.body, sc)
   else if (route.kind === 'count') res = jsonReply(200, { input_tokens: Math.max(1, Math.ceil(req.body.length / 4)) })
@@ -49,7 +49,7 @@ async function dispatch(req, io, state) {
   else res = { status: 200, headers: {}, pieces: [] }
   res.headers['x-mock-scenario'] = pick.name
   const close = /close/i.test(req.headers.connection || '')
-  return { scenario: pick.name, source: pick.source, complete: await writeResponse(io, res, { head: req.method === 'HEAD', close }) }
+  return { scenario: pick.name, source: pick.source, complete: await writeResponse(io, res, { head: req.method === 'HEAD', close, sc: sc || {}, cfg: state.cfg }) }
 }
 
 // Requests on one connection are served strictly in order; bytes that arrive meanwhile wait in buf.
@@ -121,7 +121,11 @@ function adminServer(state, logFile) {
     const send = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)) }
     const route = `${req.method} ${req.url.split('?')[0]}`
     const body = parseJson(await readAll(req))
-    if (route === 'GET /__mock/state') return send(200, { queue: state.queue, scenarios: Object.keys(SCENARIOS) })
+    if (route === 'GET /__mock/state') return send(200, { queue: state.queue, config: state.cfg, scenarios: Object.keys(SCENARIOS) })
+    if (route === 'POST /__mock/config') {
+      for (const [k, v] of Object.entries(body)) if (Object.hasOwn(state.cfg, k) && Number.isFinite(v) && v >= 0) state.cfg[k] = v
+      return send(200, state.cfg)
+    }
     if (route === 'GET /__mock/log') return send(200, logFile ? readLog(logFile) : state.log)
     if (route === 'POST /__mock/reset') {
       state.queue.length = 0; state.log.length = 0
@@ -139,8 +143,10 @@ function adminServer(state, logFile) {
   })
 }
 
-export async function startMockUpstream({ host = '127.0.0.1', port = 0, adminPort = 0, logDir = null } = {}) {
-  const state = { queue: [], log: [] }
+// delays: { stallMs } — how long stall-after-first / slow-headers hold (30 s like a hung provider;
+// tests shrink it). Also settable at runtime with POST /__mock/config.
+export async function startMockUpstream({ host = '127.0.0.1', port = 0, adminPort = 0, logDir = null, delays = {} } = {}) {
+  const state = { queue: [], log: [], cfg: { stallMs: 30000, ...delays } }
   const logFile = logDir ? path.join(logDir, 'log.ndjson') : null
   if (logFile) { fs.mkdirSync(logDir, { recursive: true }); fs.writeFileSync(logFile, '') }
   // With a logDir the file is the only copy: a long-lived lab process serving real agents would

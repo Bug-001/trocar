@@ -2,12 +2,43 @@
 // Every name here has a row in README.md's scenario table (a test keeps the two in sync).
 import { createHash } from 'node:crypto'
 
-// A scenario is data the dialects and the transport read: `status` makes it an HTTP error.
+// A scenario is data the dialects and the transport read: `status` makes it an HTTP error, `fault`
+// and `slowHeaders` break the response on the wire (transport.mjs).
 export const SCENARIOS = {
   ok: {},
   thinking: { thinking: true },
   'tool-use': { tool: true },
-  'http-529': { status: 529 },
+  ...Object.fromEntries([400, 401, 403, 404, 408, 409, 413, 422, 500, 503, 504, 529].map((s) => [`http-${s}`, { status: s }])),
+  'http-429': { status: 429, retryAfter: 1 },
+  'http-429-long': { status: 429, retryAfter: 120 },
+  'http-502-html': { status: 502, html: true },
+  'no-retry': { status: 500, headers: { 'x-should-retry': 'false' } }, // both SDKs obey it over the status
+  'sse-error-event': { fault: 'error-event' },
+  'mid-stream-reset': { fault: 'reset' },
+  'mid-stream-fin': { fault: 'fin' },
+  'stall-after-first': { fault: 'stall' },
+  'slow-headers': { slowHeaders: true },
+  'headers-then-reset': { fault: 'headers-reset' },
+}
+
+// What a relay in front of the provider (nginx here) answers when the provider is unreachable.
+const NGINX_502 = '<html>\n<head><title>502 Bad Gateway</title></head>\n<body>\n<center><h1>502 Bad Gateway</h1></center>\n<hr><center>nginx</center>\n</body>\n</html>\n'
+
+export function errorFor(sc, dialect) {
+  if (sc.html) return { status: sc.status, headers: { 'content-type': 'text/html' }, pieces: [NGINX_502] }
+  const res = dialect.errorReply(sc.status)
+  if (sc.retryAfter) {
+    const s = sc.retryAfter, at = new Date(Date.now() + s * 1000).toISOString()
+    Object.assign(res.headers, { 'retry-after': String(s) })
+    for (const [k, limit] of [['requests', 50], ['tokens', 40000]]) {
+      Object.assign(res.headers, {
+        [`anthropic-ratelimit-${k}-limit`]: String(limit), [`anthropic-ratelimit-${k}-remaining`]: '0', [`anthropic-ratelimit-${k}-reset`]: at,
+        [`x-ratelimit-limit-${k}`]: String(limit), [`x-ratelimit-remaining-${k}`]: '0', [`x-ratelimit-reset-${k}`]: `${s}s`,
+      })
+    }
+  }
+  Object.assign(res.headers, sc.headers)
+  return res
 }
 
 const MARKER = /\[\[mock:([a-z0-9-]+)\]\]/g
