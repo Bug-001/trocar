@@ -185,6 +185,21 @@ test('a connection that carries data resets the count: rejected, accepted, rejec
   assert.deepEqual(h.flows.map((f) => f.reason ?? null), ['client-rejected-leaf', null, 'client-rejected-leaf'])
 })
 
+// The rule is about the CLIENT closing (RFC 4.6 §引擎 5: 客户端…随后关闭或 RST). A trusting client's idle
+// connection (a preconnect) that the upstream closes, or that the engine itself tears down, says nothing
+// about the leaf: no strike, no reason. (Fresh-context review finding: it used to count.)
+test('a trusting client\'s idle connection closed by the UPSTREAM is no rejection: no reason, no strike, still decrypted (W9)', async () => {
+  const h = await harness({ upstream: httpsUpstream((s) => setTimeout(() => s.end(), 30)) })
+  const idle = () => new Promise((resolve) => {
+    const c = tls.connect({ port: h.port, host: '127.0.0.1', servername: 'upstream.test', ca: asightCa.certPem }, () => { c.issuer = c.getPeerX509Certificate().issuer })
+    c.on('error', () => {}); c.on('close', () => resolve(c.issuer))
+  })
+  for (let i = 0; i < 3; i++) { assert.match(await idle(), /asight collector CA/, `connection ${i + 1} decrypted`); await within(h.settled(), `flow ${i + 1}`) }
+  await h.close()
+  assert.deepEqual(h.flows.map((f) => [f.decision, f.reason ?? null]), [['decrypt', null], ['decrypt', null], ['decrypt', null]])
+  assert.equal(h.ctx.negCache.strikes('1|upstream.test'), 0); assert.equal(h.ctx.negCache.list().length, 0)
+})
+
 // A recording TCP tap: every accepted connection is piped to 127.0.0.1:target(); conns[i] = {c, s} with
 // the chunks each way, so a test can compare the bytes on both sides of the engine. closed() resolves
 // once every connection so far has closed on both legs.

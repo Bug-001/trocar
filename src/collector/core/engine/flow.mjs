@@ -24,6 +24,7 @@ export function handleFlow(client, meta, ctx) {
   let activeTee = null
   let finished = false
   let handedOff = false     // true once a routing decision hands the sockets to relay()
+  let selfClosed = false    // the engine tore this flow down itself (internalError)
   let firstByteTimer = null
   function finish(decision, extra = {}) {
     if (finished) return
@@ -59,7 +60,7 @@ export function handleFlow(client, meta, ctx) {
   // error + failures/ engine-error, both sockets closed. Every event handler that routes is guarded.
   function internalError(e) {
     ctx.failure({ reason: 'engine-error', flow_id: rec.flow_id, error: msgOf(e) })
-    handedOff = true
+    handedOff = true; selfClosed = true
     try { client.destroy() } catch { /* ignore */ }
     try { upstream.destroy() } catch { /* ignore */ }
     finish('error', { error: { type: 'engine_error', message: msgOf(e), side: 'engine' } })
@@ -243,14 +244,19 @@ export function handleFlow(client, meta, ctx) {
       // completes before the client checks our leaf and hangs up. Judged on whichever of error / end /
       // close comes first, by listeners added BEFORE relay()'s: the reason is on the record before relay's
       // teardown writes it (the store serializes at call time). A connection that carried data resets
-      // the (pid, host) count.
-      let appData = false, judged = false
+      // the (pid, host) count. The rule is about the CLIENT going: an idle connection the upstream closed
+      // first (a preconnect timing out), or one the engine tore down, says nothing about our leaf.
+      let appData = false, judged = false, notClient = false
       clientTls.once('data', () => { appData = true })
+      const otherSide = () => { if (!judged) notClient = true }
+      upTls.on('end', otherSide); upTls.on('error', otherSide); upTls.on('close', otherSide)
       const judge = () => {
         if (judged) return
         judged = true
-        if (!appData) rec.reason = 'client-rejected-leaf'
-        ctx.negCache.observe(key, { rejected: !appData, meta, host })
+        if (appData) return ctx.negCache.observe(key, { rejected: false, meta, host })
+        if (notClient || selfClosed) return
+        rec.reason = 'client-rejected-leaf'
+        ctx.negCache.observe(key, { rejected: true, meta, host })
       }
       clientTls.on('error', judge); clientTls.on('end', judge); clientTls.on('close', judge)
       activeTee = createExchangeTee({
