@@ -4,7 +4,8 @@ export async function loadArch(platform = process.platform) {
   if (platform === 'linux') {
     const [{ createLinuxRedirector }, { createRedirectorClient }, install] = await Promise.all([import('./linux/redirector.mjs'), import('./linux/redirector-client.mjs'), import('./linux/install.mjs')])
     // install: the machine-wide helper (setupHelper / uninstallHelper); the per-user install is src/collector/install.mjs
-    return { os: 'linux', install, createRedirector: ({ env = process.env } = {}) => createLinuxRedirector({ makeClient: () => createRedirectorClient({ env }) }) }
+    // osRootsFile: the OS trust bundle a combined bundle starts from (4.6 「合并包」; Debian / Ubuntu layout)
+    return { os: 'linux', install, osRootsFile: '/etc/ssl/certs/ca-certificates.crt', createRedirector: ({ env = process.env } = {}) => createLinuxRedirector({ makeClient: () => createRedirectorClient({ env }) }) }
   }
   throw new Error(`asight collector: ${platform} is not supported yet (Linux first; RFC 4.6 §结构)`)
 }

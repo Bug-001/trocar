@@ -67,6 +67,7 @@ test('adapter: configure/attach reach the helper; a helper death is reported as 
 
 test('arch: only Linux is wired; another platform is a clear error', async () => {
   assert.equal((await loadArch('linux')).os, 'linux')
+  assert.equal((await loadArch('linux')).osRootsFile, '/etc/ssl/certs/ca-certificates.crt', 'the OS bundle combined bundles start from (4.6 合并包)')
   await assert.rejects(loadArch('darwin'), /darwin is not supported yet/)
 })
 

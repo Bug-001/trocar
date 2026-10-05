@@ -5,12 +5,14 @@
 // connections, never broken ones. It never mints the CA: `asight collector install` does, inside the manifest.
 import fs from 'node:fs'
 import path from 'node:path'
+import tls from 'node:tls'
 import { asightHome, collectorHome } from '../paths.mjs'
 import { loadArch } from './arch/index.mjs'
 import { loadHarnesses } from './harness/index.mjs'
 import { createRegistry } from './core/registry.mjs'
 import { createTrustChecker } from './core/trust/confirm.mjs'
 import { readManifest, installedAt } from './core/trust/journal.mjs'
+import { rewriteBundles } from './core/trust/bundle.mjs'
 import { createTracker } from './core/tracker.mjs'
 import { createSwitch } from './core/switch.mjs'
 import { startControlServer, controlSocketPath } from './core/control.mjs'
@@ -31,7 +33,7 @@ export async function loadParts({ arch = null, harnesses = null, env = process.e
   const list = harnesses || (await loadHarnesses())
   const registry = createRegistry(list)
   const redirector = A.createRedirector({ env })
-  return { arch: A, os: A.os, harnesses: list, registry, scan: () => redirector.scan(), match: (f) => registry.match(f) }
+  return { arch: A, os: A.os, osRootsFile: A.osRootsFile || null, harnesses: list, registry, scan: () => redirector.scan(), match: (f) => registry.match(f) }
 }
 
 export const collectorPaths = (dir = collectorHome(asightHome())) => ({ dir, caDir: path.join(dir, 'ca'), state: path.join(dir, 'state.json'), lock: path.join(dir, 'lock'), markers: path.join(dir, 'run', 'trust') })
@@ -101,6 +103,17 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       recordedUntrusted.set(row.pid, row.reason)
       note({ event: EVENT.agentUntrusted, pid: row.pid, agent: row.agent, code: row.reason, reason: hintFor(row.agent, row.reason), via: row.trustVia ?? null })
     }
+    // combined bundles follow the roots: rebuilt (atomically) at start and once a day when the roots changed (4.6 「合并包」)
+    const refreshBundles = () => {
+      try {
+        let osText = ''
+        if (A.osRootsFile) { try { osText = fs.readFileSync(A.osRootsFile, 'utf8') } catch (e) { if (e.code !== 'ENOENT') throw e } }
+        const done = rewriteBundles({ dir: P.dir, manifest, nodeRoots: tls.rootCertificates, osRootsText: osText, caPem: ca.certPem })
+        if (done.length) note({ event: 'bundles-rebuilt', code: 'roots-changed', reason: `the trusted roots changed; rebuilt ${done.join(', ')}` })
+      } catch (e) { failure('bundle', Object.assign(new Error(`rebuilding the combined bundles failed: ${errText(e)}; they keep their previous roots`), { code: e && e.code })) }
+    }
+    refreshBundles()
+    const bundleTimer = setInterval(refreshBundles, 24 * 3600 * 1000); bundleTimer.unref()
     // plugins (dsh, OpenCode) write their per-pid marker here; it exists while the daemon runs (0700, the operator's)
     fs.mkdirSync(P.markers, { recursive: true, mode: 0o700 })
     const tracker = createTracker({ redirector, registry, trust: createTrustChecker({ caCertPem: ca.certPem }), onVerdict, markerDir: P.markers, caPem: ca.paths.pem,
@@ -192,6 +205,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       // every step runs; one that fails is recorded with its reason, never thrown past the rest (D38)
       const step = async (where, fn) => { try { await fn() } catch (e) { failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: e && e.code })) } }
       await step('control', () => control.close())
+      clearInterval(bundleTimer)
       tracker.stop()
       await step('helper', () => redirector.close()) // the helper exits; its unpinned links vanish; new connections go direct
       await step('engine', () => Promise.race([engine.close(), new Promise((r) => setTimeout(r, 2000).unref())]))

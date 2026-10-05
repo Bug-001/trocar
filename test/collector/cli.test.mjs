@@ -31,11 +31,11 @@ test('cli: on/off/status go to the control socket; exit 1 when the kernel did no
 
 test('cli: install / uninstall hand the descriptors, OS and process table from daemon.loadParts to install.mjs', async () => {
   const seen = []
-  const parts = { os: 'linux', harnesses: [{ name: 'h' }], scan: async () => [], match: () => ({ agent: null }) }
+  const parts = { os: 'linux', osRootsFile: '/os/roots.pem', harnesses: [{ name: 'h' }], scan: async () => [], match: () => ({ agent: null }) }
   const daemon = { loadParts: async () => parts }
   const install = {
     installCollector: async (o) => {
-      seen.push(['install', o.osName, o.harnesses, o.scan === parts.scan, o.home])
+      seen.push(['install', o.osName, o.harnesses, o.scan === parts.scan, o.home, o.osRootsFile])
       o.onPlan({ manifest: '/h/.asight/collector/install-manifest.json', ca: ['/h/.asight/collector/ca/ca.key', '/h/.asight/collector/ca/asight-ca.pem'], files: [{ harness: 'h', path: '/h/.asight/collector/ca/extra-h.pem', sources: ['/corp/ca.pem'] }], entries: [{ harness: 'h', path: '/h/s.json', real_path: '/dot/s.json', keys: ['env', 'K'], value: '/h/.asight/collector/ca/extra-h.pem' }] })
       seen.push(['written'])
       return { manifest: { engine_port: 4711, entries: [{ harness: 'h', path: '/h/s.json', keys: ['env', 'K'], value: '/h/.asight/collector/ca/extra-h.pem', prior_value: '/old.pem' }] }, plan: { notes: ['n'] } }
@@ -52,12 +52,15 @@ test('cli: install / uninstall hand the descriptors, OS and process table from d
   assert.match(t.o[1], /^installed for .*: engine port 4711\n  h: \/h\/s.json env.K was \/old.pem\nnote: n$/)
   t = io(); assert.equal(await runCollector(['uninstall', '--purge-data'], { daemon, install, ...t }), 0)
   assert.match(t.o[0], /captures removed/); assert.match(t.o[0], /pid 7 \(h\) trusts the asight CA until it restarts/)
-  assert.deepEqual(seen, [['install', 'linux', parts.harnesses, true, '/h'], ['written'], ['uninstall', true]])
+  assert.deepEqual(seen, [['install', 'linux', parts.harnesses, true, '/h', '/os/roots.pem'], ['written'], ['uninstall', true]])
   t = io(); assert.equal(await runCollector(['install'], { daemon, install: { installCollector: async () => { throw new Error('boom') } }, ...t }), 1)
   // an item uninstall could not undo: exit 1, the manifest keeps it, the user is told to run uninstall again (D38)
-  const leftOne = { uninstallCollector: async () => ({ daemon: 'none', kept_captures: true, entries: [{ harness: 'h', path: '/h/s.json', result: 'left-unparsable' }], residue: ['/h/.config/h/node_modules'], still_trusting: [], notes: [], left: 1 }) }
+  const leftOne = { uninstallCollector: async (o) => { seen.push(['uninstall-opts', o.harnesses === parts.harnesses, o.osRootsFile]); return { daemon: 'none', kept_captures: true, entries: [{ harness: 'h', path: '/h/s.json', result: 'left-unparsable' }], residue: ['/h/.config/h/node_modules'], kept_bundles: [{ path: '/h/ca/combined-h.pem', pids: [5, 6] }], still_trusting: [{ pid: 5, agent: 'h', until: 'next-connection' }], notes: [], left: 1 } } }
   t = io(); assert.equal(await runCollector(['uninstall'], { daemon, install: leftOne, ...t }), 1)
+  assert.deepEqual(seen.at(-1), ['uninstall-opts', true, '/os/roots.pem'], 'the descriptors and the OS roots reach uninstall step 2')
   assert.match(t.o[0], /left in place: \/h\/.config\/h\/node_modules/)
+  assert.match(t.o[0], /kept \/h\/ca\/combined-h\.pem without the asight CA for pid 5, 6; run uninstall again once they exit/)
+  assert.match(t.o[0], /pid 5 \(h\) trusts the asight CA until its next new connection/)
   assert.match(t.e[0], /1 item\(s\) could not be undone and stay in the install manifest; .* run uninstall again/)
   // the plan shows a text entry by what it adds, an owned file by its role, the event log, and what the agent may write
   const plan2 = { installCollector: async (o) => { o.onPlan({ manifest: '/m', ca: ['/k', '/c'], files: [], owned: [{ harness: 'd', path: '/h/.asight/collector/plugins/d/index.js', role: 'plugin' }], entries: [{ harness: 'd', path: '/h/.d/patch.yml', what: 'line "- insert: x"' }], records: '/h/.asight/collector/flows', watch: [{ harness: 'o', path: '/h/.config/o/node_modules', why: 'npm install' }] }); return { already: true } } }

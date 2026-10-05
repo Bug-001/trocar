@@ -452,3 +452,29 @@ test('daemon: a plugin harness is marker-pending (not recorded) until its marker
     if (process.getuid() !== 0) assert.ok(unreadable && unreadable.reason.includes('locked.env'), 'the unreadable file is named, not taken for absent')
   } finally { await d.stop(); fs.chmodSync(locked, 0o600); p.done(); s.done() }
 })
+
+test('daemon: combined bundles follow the roots — rebuilt at start when the OS roots changed since install, recorded; unchanged roots leave them (4.6 「合并包」, T14)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  const { createCa } = await import('../../src/collector/core/tls/ca.mjs')
+  const tls = await import('node:tls')
+  const osRoots = path.join(s.root, 'os-roots.pem'); fs.writeFileSync(osRoots, '')
+  const corp = createCa({ commonName: 'corp' }); fs.writeFileSync(path.join(s.home, 'corp.pem'), corp.certPem)
+  const dir = s.collector
+  const rep = { name: 'rep', runtime: 'rust', hosts: [], signatures: { linux: { match: [{ exe: /\/rep$/ }] } }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
+    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }] }) }
+  await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, osRootsFile: osRoots })
+  const bundle = path.join(dir, 'ca', 'combined-rep.pem')
+  const before = fs.readFileSync(bundle, 'utf8')
+  const { arch } = fakeArch(p)
+  let d = await startDaemon({ dir, socketPath: s.sock, arch: { ...arch, osRootsFile: osRoots }, harnesses: [rep] })
+  await d.stop()
+  assert.equal(fs.readFileSync(bundle, 'utf8'), before, 'same roots: the bundle is left as it is')
+  const newRoot = createCa({ commonName: 'a new OS root' }); fs.writeFileSync(osRoots, newRoot.certPem) // the distro updated its roots
+  d = await startDaemon({ dir, socketPath: s.sock, arch: { ...fakeArch(p).arch, osRootsFile: osRoots }, harnesses: [rep] })
+  try {
+    const now = fs.readFileSync(bundle, 'utf8')
+    for (const c of [newRoot.certPem, corp.certPem, fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'), 'utf8')]) assert.ok(now.includes(c.trim()), 'the new root, the user\'s CA and the asight CA')
+    assert.ok(now.includes(tls.rootCertificates[0].trim()), 'Node\'s roots stay first')
+    assert.ok(flowsOf(s).some((f) => f.event === 'bundles-rebuilt' && f.code === 'roots-changed' && f.reason.includes('combined-rep.pem')), 'the rebuild is recorded')
+  } finally { await d.stop(); p.done(); s.done() }
+})
