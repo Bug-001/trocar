@@ -12,3 +12,11 @@ test('static redirector: per-port override wins over the default, unknown peers 
   assert.equal(await createStaticRedirector().lookup({ address: '127.0.0.1', port: 1 }), null)
   assert.equal(r.lookups, 2)
 })
+
+test('static redirector: lookup waits for a late-registered port, else null (accept race)', async () => {
+  const r = createStaticRedirector(null, { waitMs: 200, pollMs: 5 })
+  const pending = r.lookup({ address: '127.0.0.1', port: 51000 })
+  setTimeout(() => r.set(51000, { ...META, pid: 9 }), 20) // registered a tick after lookup, like sockops
+  assert.equal((await pending).pid, 9)
+  assert.equal(await r.lookup({ address: '127.0.0.1', port: 52000 }), null) // never registered → null after the wait
+})

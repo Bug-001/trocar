@@ -17,12 +17,14 @@ export function handleFlow(client, meta, ctx) {
   let resolveFlow
   const flowDone = new Promise((res) => { resolveFlow = res })
 
-  let phase = 'connecting'
   let activeTee = null
   let finished = false
+  let handedOff = false     // true once a routing decision hands the sockets to relay()
+  let firstByteTimer = null
   function finish(decision, extra = {}) {
     if (finished) return
     finished = true
+    if (firstByteTimer) { clearTimeout(firstByteTimer); firstByteTimer = null }
     if (decision && !rec.decision) rec.decision = decision
     Object.assign(rec, extra)
     rec.duration_ms = Date.now() - t0
@@ -38,10 +40,25 @@ export function handleFlow(client, meta, ctx) {
     else if (!rec.decision || rec.decision === null) rec.decision = inner
   }
 
+  // Before any routing decision, a side closing/erroring/ending (or nobody ever speaking, or the
+  // upstream connect failing) must still finalize the flow and drop the peer — otherwise the flow
+  // promise never resolves and engine.close() hangs on it. Disarmed once relay() owns teardown.
+  function preTeardown(errObj) {
+    if (handedOff || finished) return
+    finish('error', errObj ? { error: errObj } : {})
+    try { if (!client.destroyed) client.destroy() } catch { /* ignore */ }
+    try { if (!upstream.destroyed) upstream.destroy() } catch { /* ignore */ }
+  }
+
   const upstream = ctx.connectUpstream(meta.dst)
-  upstream.once('error', (err) => {
-    if (phase === 'connecting') { try { client.destroy() } catch { /* ignore */ }; finish('error', { error: { type: err.code || 'upstream_error', message: String((err && err.message) || err) } }) }
-  })
+  upstream.once('error', (err) => preTeardown({ type: err.code || 'upstream_error', message: String((err && err.message) || err) }))
+  upstream.on('close', () => preTeardown())
+  client.on('close', () => preTeardown())
+  client.on('end', () => preTeardown())
+  // The client socket is ours from accept: an error on it (a reset before we have decided, a write
+  // to a client that already left) MUST be handled here, or it is an uncaughtException that takes
+  // the whole collector down (RFC 4.6 fail-open). relay() and the TLS wrap own it after the decision.
+  client.on('error', (err) => preTeardown({ type: err.code || 'client_error', message: String((err && err.message) || err) }))
 
   // Passive bidirectional relay; forwards received bytes untouched and (optionally) tees a copy.
   // The upstream's FIN half-closes the client gracefully (the client drains the response, then
@@ -50,6 +67,8 @@ export function handleFlow(client, meta, ctx) {
   // down the upstream). We destroy the TLS socket directly rather than end()-then-destroy, because a
   // destroy that follows a graceful end() does not RST the underlying connection.
   function relay(cSock, uSock) {
+    handedOff = true // relay now owns teardown; the pre-decision handlers go quiet
+    if (firstByteTimer) { clearTimeout(firstByteTimer); firstByteTimer = null }
     const tee = activeTee
     cSock.on('data', (d) => { rec.bytes_up += d.length; if (tee) tee.fromClient(d); if (uSock.writable && !uSock.write(d)) cSock.pause() })
     uSock.on('drain', () => cSock.resume())
@@ -222,12 +241,15 @@ export function handleFlow(client, meta, ctx) {
 
   // Kick off once the upstream TCP is usable. connectUpstream returns a connecting socket; we can
   // write/route as soon as a side speaks — route() buffers client bytes until a decision.
-  phase = 'routed'
   route(client, upstream, Buffer.alloc(0), null, false)
 
-  // First-byte safety valve: if nobody speaks, splice (never hang). unref so it can't hold the loop.
-  const timer = setTimeout(() => {}, ctx.firstByteTimeoutMs ?? 5000)
-  if (timer.unref) timer.unref()
+  // First-byte safety valve: if neither side ever speaks, finalize and drop the connection rather
+  // than leak it. unref so a pending timer can't hold the event loop open.
+  firstByteTimer = setTimeout(() => preTeardown({ type: 'first_byte_timeout', message: 'no bytes before timeout' }), ctx.firstByteTimeoutMs ?? 5000)
+  if (firstByteTimer.unref) firstByteTimer.unref()
+
+  // Catch a client that was already gone before our listeners attached (accept/lookup raced the close).
+  if (client.destroyed) queueMicrotask(() => preTeardown(client.errored ? { type: client.errored.code || 'client_error', message: String(client.errored.message || client.errored) } : undefined))
 
   return flowDone
 }
