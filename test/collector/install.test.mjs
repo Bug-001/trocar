@@ -62,8 +62,9 @@ test('install: an existing user CA in settings becomes extra-cc.pem (certificate
     assert.equal(fs.readFileSync(settingsOf(b), 'utf8'), before)
     assert.deepEqual(listAll(b.dir).filter((x) => !x.startsWith('flows/')), ['capture-2026-10-06.ndjson'], 'only the captures and the event log remain')
     const events = fs.readdirSync(path.join(b.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(b.dir, 'flows', n), 'utf8').trim().split('\n').map((l) => JSON.parse(l)))
-    assert.deepEqual(events.map((e) => [e.event, e.where, e.code, e.harness]), [['install-note', 'install', 'harness-note', 'claude-code']], 'what install said is kept where status finds it (D38)')
-    assert.match(events[0].reason, /exported only in a shell asight did not see/)
+    assert.deepEqual(events.map((e) => [e.event, e.where, e.code, e.harness]), [['install-note', 'install', 'cert-not-merged', 'claude-code'], ['install-note', 'install', 'harness-note', 'claude-code']], 'what install said is kept where status finds it (D38)')
+    assert.match(events[0].reason, /corp\.pem: a PRIVATE KEY block is not a CERTIFICATE PEM block, so it is not merged into extra-cc\.pem/, 'the left-out block is named by type and file, never its content (T14)')
+    assert.match(events[1].reason, /exported only in a shell asight did not see/)
     assert.equal(fs.readFileSync(corpFile, 'utf8').includes('PRIVATE KEY'), true, 'the user CA file is untouched')
   } finally { b.done() }
 })
@@ -398,5 +399,63 @@ test('an entry uninstall cannot undo stays in the manifest; install refuses unti
     assert.deepEqual([again.left, again.entries.map((e) => e.result)], [0, ['restored']])
     assert.equal(fs.readFileSync(settingsOf(b), 'utf8'), '{"model":"x"}')
     assert.equal(readManifest(b.dir), null)
+  } finally { b.done() }
+})
+
+// A synthetic replace-semantics harness: a dotenv block naming its combined bundle (Codex / Hermes shape).
+const repHarness = (dir, extra = {}) => ({
+  name: 'rep', runtime: 'rust', signatures: { linux: { match: [{ exe: /\/rep$/ }] } }, hosts: [], trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }], ...extra },
+  inject: (ctx) => ({
+    entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep', '.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }],
+    files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }],
+  }),
+})
+
+test('uninstall step 2: a combined bundle a live process may have loaded is kept without the asight CA and reported; the next uninstall removes it (S10 b, T11)', async () => {
+  const b = box()
+  try {
+    const corp = createCa({ commonName: 'corp relay CA' }); const root = createCa({ commonName: 'a root' })
+    fs.writeFileSync(path.join(b.home, 'corp.pem'), corp.certPem)
+    fs.mkdirSync(path.join(b.home, '.rep')); fs.writeFileSync(path.join(b.home, '.rep', '.env'), 'KEY=sk-secret\n')
+    const roots = { node: [root.certPem], osText: '' }
+    await installCollector(base(b, { harnesses: [repHarness(b.dir)], roots }))
+    const bundle = path.join(b.dir, 'ca', 'combined-rep.pem')
+    const fps = () => fs.readFileSync(bundle, 'utf8').split(/(?=-----BEGIN CERTIFICATE-----)/).map((c) => new X509Certificate(c).fingerprint256)
+    const asightFp = new X509Certificate(fs.readFileSync(path.join(b.dir, 'ca', 'asight-ca.pem'))).fingerprint256
+    assert.deepEqual(fps(), [new X509Certificate(root.certPem).fingerprint256, new X509Certificate(corp.certPem).fingerprint256, asightFp])
+    assert.match(fs.readFileSync(path.join(b.home, '.rep', '.env'), 'utf8'), new RegExp(`^# >>> asight collector >>>.*\\nSSL_CERT_FILE=${bundle}\\n`))
+    const installedAt = Date.parse(readManifest(b.dir).entries[0].installed_at)
+    // pid 70 is rep, started after install; pid 71 is any child whose environ names the bundle; pid 72 is rep from before install
+    const procs = [
+      { pid: 70, exe: '/x/rep', startedAt: installedAt + 1000, env: new Map() },
+      { pid: 71, exe: '/bin/git', startedAt: installedAt + 2000, env: new Map([['SSL_CERT_FILE', bundle]]) },
+      { pid: 72, exe: '/x/rep', startedAt: installedAt - 60000, env: new Map() },
+    ]
+    const match = (f) => ({ agent: /\/rep$/.test(f.exe) ? 'rep' : null })
+    const r = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, scan: async () => procs, match, harnesses: [repHarness(b.dir)], roots })
+    assert.deepEqual(r.kept_bundles, [{ path: bundle, harness: 'rep', pids: [70, 71] }], 'started after install, or inherited it; not the one from before')
+    assert.deepEqual(fps(), [new X509Certificate(root.certPem).fingerprint256, new X509Certificate(corp.certPem).fingerprint256], 'the same bundle without the asight CA')
+    assert.equal(fs.readFileSync(path.join(b.home, '.rep', '.env'), 'utf8'), 'KEY=sk-secret\n', 'step 1 ran: the entry is out')
+    assert.deepEqual(fs.readdirSync(path.join(b.dir, 'ca')), ['combined-rep.pem'], 'the CA dir holds only the kept bundle')
+    assert.equal(r.left, 0, 'kept for a live process is not a failure')
+    assert.ok(readManifest(b.dir).pending_bundles)
+    await assert.rejects(installCollector(base(b, { harnesses: [repHarness(b.dir)], roots })), /kept combined bundles that running agents still use/)
+    const again = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, scan: async () => [], match, harnesses: [repHarness(b.dir)], roots })
+    assert.deepEqual(again.kept_bundles, [])
+    assert.ok(!fs.existsSync(path.join(b.dir, 'ca')) && readManifest(b.dir) == null, 'the bundle, the CA dir and the manifest are gone')
+  } finally { b.done() }
+})
+
+test('uninstall step 2: a harness that re-reads its entry while running keeps the bundle for any live process of it; step 5 says until when each still trusts', async () => {
+  const b = box()
+  try {
+    fs.writeFileSync(path.join(b.home, 'corp.pem'), createCa({ commonName: 'corp' }).certPem)
+    const h = repHarness(b.dir, { rereadsEntry: true, afterUninstall: 'next-connection' })
+    await installCollector(base(b, { harnesses: [h], roots: { node: [], osText: '' } }))
+    const old = [{ pid: 80, exe: '/x/rep', startedAt: 1, env: new Map() }]
+    const match = (f) => ({ agent: 'rep' })
+    const r = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, scan: async () => old, match, harnesses: [h], roots: { node: [], osText: '' } })
+    assert.deepEqual(r.kept_bundles.map((k) => k.pids), [[80]], 'it may have re-read the entry after install')
+    assert.deepEqual(r.still_trusting, [{ pid: 80, agent: 'rep', until: 'next-connection' }])
   } finally { b.done() }
 })

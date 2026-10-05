@@ -6,6 +6,7 @@
 // manifest lists, keeps captures unless purgeData, and is safe to run twice or after a crashed install.
 import fs from 'node:fs'
 import net from 'node:net'
+import tls from 'node:tls'
 import os from 'node:os'
 import path from 'node:path'
 import { collectorHome } from '../paths.mjs'
@@ -13,6 +14,7 @@ import { loadOrCreateCa, caPaths } from './core/tls/ca-store.mjs'
 import { planTrust } from './core/trust/plan.mjs'
 import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, removeOwnedFile, undoEntry, removeEmptyDirs, manifestPath, sweepTemps, describeEntry } from './core/trust/journal.mjs'
 import { EVENT, CODE } from './core/codes.mjs'
+import { rewriteBundles } from './core/trust/bundle.mjs'
 import { controlRequest } from './core/control.mjs'
 import { readText } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
@@ -63,9 +65,17 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
   return recorded(dir, 'install', () => install(dir, { home, ...opts }))
 }
 
-async function install(dir, { home, env = process.env, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), freePort = freeEnginePort, onPlan = () => {} }) {
+// The roots a combined bundle starts from (4.6 「合并包」): Node's own, and the OS bundle the arch names.
+export function readRoots(osRootsFile, { nodeRoots = tls.rootCertificates } = {}) {
+  let osText = ''
+  if (osRootsFile) { try { osText = fs.readFileSync(osRootsFile, 'utf8') } catch (e) { if (e.code !== 'ENOENT') throw e } }
+  return { node: [...nodeRoots], osText }
+}
+
+async function install(dir, { home, env = process.env, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), freePort = freeEnginePort, onPlan = () => {}, osRootsFile = null, roots = null }) {
   const prior = readManifest(dir)
   if (prior && prior.complete) return { already: true, manifest: prior, plan: null }
+  if (prior && prior.pending_bundles) throw new Error(`an earlier uninstall kept combined bundles that running agents still use (${prior.files.filter((f) => f.role === 'bundle').map((f) => f.path).join(', ')}); run "asight collector uninstall" again once they exit`)
   if (prior && prior.uninstall_left) throw new Error(`an earlier uninstall left entries it could not undo (${manifestPath(dir)}); fix what it reported, then run "asight collector uninstall" again`)
   if (prior) throw new Error(`an earlier install did not finish (${manifestPath(dir)}); run "asight collector uninstall" first`)
   const ca = caPaths(path.join(dir, 'ca'))
@@ -73,9 +83,10 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
   const envMap = new Map(Object.entries(env).filter(([, v]) => typeof v === 'string'))
   const ctxFor = (d) => ({
     os: osName, home, env: envMap, running: facts.filter((f) => match(f).agent === d.name).map((f) => f.env || new Map()),
-    readText: (f) => readText(f), listDir, collectorDir: dir, caPem: ca.pem,
+    readText: (f) => readText(f), readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir, collectorDir: dir, caPem: ca.pem,
   })
-  const draft = planTrust({ descriptors: harnesses, ctxFor, caCertPem: null, collectorDir: dir })
+  const R = roots || readRoots(osRootsFile)
+  const draft = planTrust({ descriptors: harnesses, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
   // every per-file refusal too (a dangling link, a file that is not JSON, a patch file that is not a list, a plugin
   // file already there) — before onPlan, before any write
   const preview = draft.entries.map((e) => (e.kind === 'text' ? previewTextEntry({ file: e.path, edit: e }) : previewJsonKey({ file: e.path, keys: e.keys, value: e.value })))
@@ -98,13 +109,13 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
   saveManifest(dir, m) // creates dir 0700; the CA is listed before it is minted
   const { certPem } = loadOrCreateCa({ dir: ca.dir })
   m.engine_port = await freePort()
-  const plan = planTrust({ descriptors: harnesses, ctxFor, caCertPem: certPem, collectorDir: dir })
+  const plan = planTrust({ descriptors: harnesses, ctxFor, caCertPem: certPem, collectorDir: dir, roots: R })
   if (JSON.stringify(plan.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${plan.paths.join(', ')}); only the CA was written; run "asight collector uninstall", then install again`)
   m.planned = plan.paths
   m.watched = plan.watch.map((w) => ({ ...w, existed_before: fs.existsSync(w.path) })) // before anything of the plan is written
   saveManifest(dir, m)
   fs.mkdirSync(path.join(dir, 'run', 'trust'), { recursive: true, mode: 0o700 }) // plugins write their marker here, daemon up or not
-  for (const f of plan.files) writeOwnedFile({ dir, manifest: m, harness: f.harness, role: 'trust-file', file: f.path, data: f.data, sources: f.sources })
+  for (const f of plan.files) writeOwnedFile({ dir, manifest: m, harness: f.harness, role: f.role, file: f.path, data: f.data, sources: f.sources, extra: f.role === 'bundle' ? { user_fps: f.user_fps, roots_fp: f.roots_fp } : {} })
   // a plugin or shim exists before the entry that loads it (a dsh patch row naming a missing file only warns, still)
   for (const o of plan.owned) writeOwnedFile({ dir, manifest: m, harness: o.harness, role: o.role, file: o.path, data: o.data, mode: o.mode, exclusive: true })
   for (const e of plan.entries) {
@@ -161,15 +172,35 @@ export async function uninstallCollector({ home = os.homedir(), ...opts } = {}) 
 const stepOf = (e) => (e.kind === 'text' && e.format !== 'dotenv-block' ? 4 : 1)
 const NOT_UNDONE = new Set(['left-unparsable', 'left-link', 'error'])
 
-async function uninstall(dir, { env = process.env, purgeData = false, scan = async () => [], match = () => ({ agent: null }), stop = null }) {
+// Uninstall step 2 (4.6): has a live process of this uid loaded this bundle? (a) it is the bundle's harness and started
+// after that harness's entry was installed — or the harness re-reads its entry while running (`trust.rereadsEntry`),
+// then alive is enough; (b) its environ names the bundle (a child that inherited it). Judged from the manifest and
+// the process table only: the daemon is stopped and the entries are undone by now.
+function bundleUsers(bundle, m, procs, match, byName) {
+  const d = byName.get(bundle.harness)
+  const rereads = !!(d && d.trust && d.trust.rereadsEntry)
+  const since = Math.min(...m.entries.filter((e) => e.harness === bundle.harness).map((e) => Date.parse(e.installed_at)).filter(Number.isFinite))
+  const pids = []
+  for (const f of procs) {
+    let env = null
+    try { env = f.env } catch { /* gone, or not ours to read */ }
+    const inherited = env && [...env.values()].some((v) => typeof v === 'string' && v.includes(bundle.path))
+    const own = match(f).agent === bundle.harness && (rereads || f.startedAt == null || !Number.isFinite(since) || f.startedAt >= since)
+    if (own || inherited) pids.push(f.pid)
+  }
+  return pids
+}
+
+async function uninstall(dir, { env = process.env, purgeData = false, scan = async () => [], match = () => ({ agent: null }), stop = null, harnesses = [], osRootsFile = null, roots = null }) {
   const runtime = env.XDG_RUNTIME_DIR ? path.join(env.XDG_RUNTIME_DIR, 'asight') : null
-  const report = { daemon: null, entries: [], removed: [], residue: [], still_trusting: [], kept_captures: !purgeData, notes: [], left: 0 }
+  const report = { daemon: null, entries: [], removed: [], residue: [], kept_bundles: [], still_trusting: [], kept_captures: !purgeData, notes: [], left: 0 }
+  const byName = new Map(harnesses.map((d) => [d.name, d]))
   const failed = [] // failure events, written after any purge so they survive it
   const noted = [] // uninstall-note events (kept captures only: --purge-data asked for flows/ to go)
   report.daemon = await (stop || (() => stopDaemon({ socketPath: runtime && path.join(runtime, 'collector.sock'), lockFile: path.join(dir, 'lock') })))()
   const m = readManifest(dir)
   const rm = (p) => { sweepTemps(p); if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); report.removed.push(p) } }
-  const left = { entries: [], files: [] }
+  const left = { entries: [], files: [], bundles: [] }
   if (!m) report.notes.push('nothing is installed for this user')
   else {
     const undo = (e) => {
@@ -184,6 +215,18 @@ async function uninstall(dir, { env = process.env, purgeData = false, scan = asy
       if (r.result === 'reverted-not-identical') noted.push({ code: CODE.notIdentical, harness: e.harness, path: e.path, reason: `${e.path} was edited after install: only asight's ${describeEntry(e)} was taken out${r.deleted ? ' and the file, holding nothing else, removed' : ''}; the rest is as the user left it` })
     }
     for (const e of [...m.entries].reverse()) if (stepOf(e) === 1) undo(e)
+    // step 2: every combined bundle becomes the same file without the asight CA, so a process still holding it keeps
+    // reaching its own relay; one a live process may have loaded stays (reported), the next uninstall judges again
+    const bundles = m.files.filter((x) => x.role === 'bundle')
+    const procs = bundles.length ? await scan() : []
+    if (bundles.length) { const R = roots || readRoots(osRootsFile); rewriteBundles({ dir, manifest: m, nodeRoots: R.node, osRootsText: R.osText, withCa: false }) }
+    for (const b of bundles) {
+      const pids = bundleUsers(b, m, procs, match, byName)
+      if (!pids.length) { rm(b.path); continue }
+      left.bundles.push(b)
+      report.kept_bundles.push({ path: b.path, harness: b.harness, pids })
+      noted.push({ code: CODE.bundleKept, harness: b.harness, path: b.path, reason: `${b.path} is kept, without the asight CA, for running processes that may have loaded it (pid ${pids.join(', ')}); run uninstall again once they exit` })
+    }
     for (const f of m.files.filter((x) => x.role === 'trust-file' || x.role === 'ca-cert')) rm(f.path)
     for (const e of [...m.entries].reverse()) if (stepOf(e) === 4) undo(e)
     for (const f of [...m.files].reverse().filter((x) => x.role === 'plugin' || x.role === 'shim')) {
@@ -202,8 +245,9 @@ async function uninstall(dir, { env = process.env, purgeData = false, scan = asy
       noted.push({ code: CODE.residue, harness: w.harness, path: w.path, reason: `${w.path} appeared after install (${w.why}); it may serve the user's own plugins too, so asight did not remove it` })
     }
     // step 5: report, never restart — append-semantics entries are read at start, so these still trust asight
+    // until: 'restart' (read at start: CC, Kimi shim, plugins), or what the descriptor says its harness re-reads
     const injected = new Set([...m.entries, ...m.files].map((x) => x.harness).filter(Boolean))
-    for (const f of await scan()) { const a = match(f).agent; if (a && injected.has(a)) report.still_trusting.push({ pid: f.pid, agent: a, until: 'restart' }) }
+    for (const f of await scan()) { const a = match(f).agent; if (a && injected.has(a)) { const d = byName.get(a); report.still_trusting.push({ pid: f.pid, agent: a, until: (d && d.trust && d.trust.afterUninstall) || 'restart' }) } }
     // the CA private key and the runtime state (with the trust markers) last
     for (const f of m.files.filter((x) => x.role === 'ca-key')) rm(f.path)
     for (const p of [path.join(dir, 'run'), path.join(dir, 'lock'), path.join(dir, 'state.json'), runtime]) if (p) rm(p)
@@ -222,8 +266,8 @@ async function uninstall(dir, { env = process.env, purgeData = false, scan = asy
   }
   if (m) {
     report.left = left.entries.length + left.files.length
-    if (report.left) { // keep exactly what is left; the next uninstall finds it (4.6: the manifest goes last)
-      saveManifest(dir, { ...m, complete: false, uninstall_left: true, planned: [], watched: [], entries: left.entries, files: left.files })
+    if (report.left || left.bundles.length) { // keep exactly what is left; the next uninstall finds it (4.6: the manifest goes last)
+      saveManifest(dir, { ...m, complete: false, ...(report.left ? { uninstall_left: true } : {}), ...(left.bundles.length ? { pending_bundles: true } : {}), planned: [], watched: [], entries: left.entries, files: [...left.files, ...left.bundles] })
       return report
     }
     removeEmptyDirs(m.dirs.filter((d) => d !== dir)) // e.g. ca/

@@ -19,7 +19,8 @@ test('trust plan: entries and trust files are listed before anything is written;
   assert.ok(!p.files[0].data.includes('PRIVATE KEY'), 'never a private key')
   assert.equal(p.files[0].data.match(/BEGIN CERTIFICATE/g).length, 2, 'user CA once (deduplicated by fingerprint) + the asight CA')
   assert.deepEqual(p.files[0].sources, ['/corp/ca.pem', '/corp/dup.pem'], 'the readable user files it carries certificates from')
-  assert.deepEqual(p.notes, ['alpha: /corp/gone.pem is unreadable; its certificates are not carried over', 'alpha: n'])
+  assert.deepEqual(p.notes, ['alpha: /corp/ca.pem: a PRIVATE KEY block is not a CERTIFICATE PEM block, so it is not merged into extra-alpha.pem (only certificates are carried over)', 'alpha: /corp/gone.pem is unreadable; its certificates are not carried over', 'alpha: n'])
+  assert.deepEqual(p.records.map((r) => r.code), ['cert-not-merged', 'source-unreadable', 'harness-note'], 'each note carries its code (D38)')
 })
 
 test('trust plan: refuses login-environment files, forbidden keys, values outside the collector dir, relative paths', () => {
@@ -29,14 +30,17 @@ test('trust plan: refuses login-environment files, forbidden keys, values outsid
   assert.throws(() => plan(() => ({ entries: [entry({ path: 'rel/settings.json' })] })), /absolute/)
 })
 
-test('trust plan: a replace-semantics entry may only point at its own harness\'s combined bundle', () => {
+const BUNDLE = { path: `${DIR}/ca/combined-alpha.pem`, bundle: true }
+test('trust plan: a replace-semantics entry may only point at its own harness\'s combined bundle, declared as one', () => {
   assert.throws(() => plan(() => ({ entries: [entry({ semantic: 'replace' })] })), /combined bundle/)
-  assert.equal(plan(() => ({ entries: [entry({ semantic: 'replace', value: `${DIR}/ca/combined-alpha.pem` })] })).entries.length, 1)
+  assert.equal(plan(() => ({ entries: [entry({ semantic: 'replace', value: `${DIR}/ca/combined-alpha.pem` })], files: [BUNDLE] })).entries.length, 1)
+  assert.throws(() => plan(() => ({ entries: [entry({ semantic: 'replace', value: `${DIR}/ca/combined-alpha.pem` })] })), /does not declare as its combined bundle/)
+  assert.throws(() => plan(() => ({ files: [{ path: `${DIR}/ca/bundle.pem`, bundle: true }] })), /a combined bundle is named combined-alpha\.pem/)
   assert.throws(() => plan(() => ({ entries: [entry({ semantic: 'replace', value: `${DIR}/ca/combined-beta.pem` })] })), /combined-alpha\.pem — never .* another harness's bundle/)
   // library-level replace variables are replace whatever the descriptor declares (the retired L-08 list)
   for (const k of ['SSL_CERT_FILE', 'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE']) {
     assert.throws(() => plan(() => ({ entries: [entry({ keys: ['env', k], semantic: 'append' })] })), /replaces the trust store/, k)
-    assert.equal(plan(() => ({ entries: [entry({ keys: ['env', k], semantic: 'append', value: `${DIR}/ca/combined-alpha.pem` })] })).entries.length, 1, k)
+    assert.equal(plan(() => ({ entries: [entry({ keys: ['env', k], semantic: 'append', value: `${DIR}/ca/combined-alpha.pem` })], files: [BUNDLE] })).entries.length, 1, k)
   }
   // a harness-specific replace variable named in the descriptor's own trust chain, whatever the entry says
   const gamma = { name: 'gamma', trust: { chain: [{ var: 'GAMMA_CA_BUNDLE', semantic: 'replace' }] }, inject: () => ({ entries: [entry({ keys: ['env', 'GAMMA_CA_BUNDLE'], semantic: 'append' })] }) }
@@ -47,10 +51,10 @@ test('trust plan: a replace-semantics entry may only point at its own harness\'s
 test('trust plan: text entries — a dotenv block passes the same checks as a key; a login-environment file only ever gets the shim PATH line', async () => {
   const { lineComment } = await import('../../../src/collector/core/trust/text-edit.mjs')
   const block = (vars, o = {}) => ({ kind: 'text', format: 'dotenv-block', path: '/h/.alpha/.env', vars, semantic: 'replace', ...o })
-  assert.equal(plan(() => ({ entries: [block({ SSL_CERT_FILE: `${DIR}/ca/combined-alpha.pem` })] })).entries[0].format, 'dotenv-block')
+  assert.equal(plan(() => ({ entries: [block({ SSL_CERT_FILE: `${DIR}/ca/combined-alpha.pem` })], files: [BUNDLE] })).entries[0].format, 'dotenv-block')
   assert.throws(() => plan(() => ({ entries: [block({ SSL_CERT_FILE: `${DIR}/ca/asight-ca.pem` })] })), /SSL_CERT_FILE replaces the trust store/)
   assert.throws(() => plan(() => ({ entries: [block({ NODE_OPTIONS: `${DIR}/x` })] })), /NODE_OPTIONS is never written/)
-  assert.throws(() => plan(() => ({ entries: [block({ SSL_CERT_FILE: `${DIR}/ca/combined-alpha.pem` }, { path: '/h/.zshenv' })] })), /login-environment/)
+  assert.throws(() => plan(() => ({ entries: [block({ SSL_CERT_FILE: `${DIR}/ca/combined-alpha.pem` }, { path: '/h/.zshenv' })], files: [BUNDLE] })), /login-environment/)
   const shim = `export PATH="${DIR}/bin:$PATH" ${lineComment('alpha shim')}`
   const rc = (o) => ({ kind: 'text', format: 'line', path: '/h/.bashrc', line: shim, after: 'alpha/bin', ...o })
   assert.deepEqual(plan(() => ({ entries: [rc()] })).paths, ['/h/.bashrc'])
