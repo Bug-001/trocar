@@ -11,7 +11,8 @@ import path from 'node:path'
 import { collectorHome } from '../paths.mjs'
 import { loadOrCreateCa, caPaths } from './core/tls/ca-store.mjs'
 import { planTrust } from './core/trust/plan.mjs'
-import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, writeOwnedFile, undoEntry, removeEmptyDirs, manifestPath, sweepTemps } from './core/trust/journal.mjs'
+import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, removeOwnedFile, undoEntry, removeEmptyDirs, manifestPath, sweepTemps, describeEntry } from './core/trust/journal.mjs'
+import { EVENT, CODE } from './core/codes.mjs'
 import { controlRequest } from './core/control.mjs'
 import { readText } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
@@ -65,6 +66,7 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
 async function install(dir, { home, env = process.env, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), freePort = freeEnginePort, onPlan = () => {} }) {
   const prior = readManifest(dir)
   if (prior && prior.complete) return { already: true, manifest: prior, plan: null }
+  if (prior && prior.uninstall_left) throw new Error(`an earlier uninstall left entries it could not undo (${manifestPath(dir)}); fix what it reported, then run "asight collector uninstall" again`)
   if (prior) throw new Error(`an earlier install did not finish (${manifestPath(dir)}); run "asight collector uninstall" first`)
   const ca = caPaths(path.join(dir, 'ca'))
   const facts = await scan()
@@ -74,14 +76,19 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
     readText: (f) => readText(f), listDir, collectorDir: dir, caPem: ca.pem,
   })
   const draft = planTrust({ descriptors: harnesses, ctxFor, caCertPem: null, collectorDir: dir })
-  // every per-file refusal too (a dangling link, a file that is not JSON) — before onPlan, before any write
-  const preview = draft.entries.map((e) => previewJsonKey({ file: e.path, keys: e.keys, value: e.value }))
+  // every per-file refusal too (a dangling link, a file that is not JSON, a patch file that is not a list, a plugin
+  // file already there) — before onPlan, before any write
+  const preview = draft.entries.map((e) => (e.kind === 'text' ? previewTextEntry({ file: e.path, edit: e }) : previewJsonKey({ file: e.path, keys: e.keys, value: e.value })))
+  for (const o of draft.owned) if (fs.existsSync(o.path)) throw new Error(`${o.harness}: ${o.path} already exists; asight will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`)
   onPlan({
     manifest: manifestPath(dir),
     ca: [ca.key, ca.pem],
     files: draft.files.map((f) => ({ harness: f.harness, path: f.path, sources: f.sources })),
-    entries: draft.entries.map((e, i) => ({ harness: e.harness, path: e.path, ...(preview[i].real_path ? { real_path: preview[i].real_path } : {}), keys: e.keys, value: e.value })),
+    owned: draft.owned.map((o) => ({ harness: o.harness, path: o.path, role: o.role })),
+    entries: draft.entries.map((e, i) => ({ harness: e.harness, path: e.path, ...(preview[i].real_path ? { real_path: preview[i].real_path } : {}), ...(e.kind === 'text' ? { what: describeEntry(e) } : { keys: e.keys, value: e.value }) })),
+    watch: draft.watch,
     notes: draft.notes,
+    records: path.join(dir, 'flows'), // install notes are kept here as install-note events (D38)
   })
 
   const m = newManifest()
@@ -94,11 +101,19 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
   const plan = planTrust({ descriptors: harnesses, ctxFor, caCertPem: certPem, collectorDir: dir })
   if (JSON.stringify(plan.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${plan.paths.join(', ')}); only the CA was written; run "asight collector uninstall", then install again`)
   m.planned = plan.paths
+  m.watched = plan.watch.map((w) => ({ ...w, existed_before: fs.existsSync(w.path) })) // before anything of the plan is written
   saveManifest(dir, m)
+  fs.mkdirSync(path.join(dir, 'run', 'trust'), { recursive: true, mode: 0o700 }) // plugins write their marker here, daemon up or not
   for (const f of plan.files) writeOwnedFile({ dir, manifest: m, harness: f.harness, role: 'trust-file', file: f.path, data: f.data, sources: f.sources })
-  for (const e of plan.entries) applyJsonKey({ dir, manifest: m, harness: e.harness, file: e.path, keys: e.keys, value: e.value })
+  // a plugin or shim exists before the entry that loads it (a dsh patch row naming a missing file only warns, still)
+  for (const o of plan.owned) writeOwnedFile({ dir, manifest: m, harness: o.harness, role: o.role, file: o.path, data: o.data, mode: o.mode, exclusive: true })
+  for (const e of plan.entries) {
+    if (e.kind === 'text') applyTextEntry({ dir, manifest: m, harness: e.harness, file: e.path, edit: e })
+    else applyJsonKey({ dir, manifest: m, harness: e.harness, file: e.path, keys: e.keys, value: e.value })
+  }
   m.complete = true
   saveManifest(dir, m)
+  for (const r of plan.records) appendEvent(dir, { event: EVENT.installNote, where: 'install', ...r }) // D38: what install said, kept where status finds it
   return { already: false, manifest: m, plan }
 }
 
@@ -138,39 +153,79 @@ export async function uninstallCollector({ home = os.homedir(), ...opts } = {}) 
   return recorded(dir, 'uninstall', () => uninstall(dir, { home, ...opts }))
 }
 
+// 4.6 撤销顺序: (1) the config entries (JSON keys, dotenv blocks) → (2) combined bundles → (3) asight-ca.pem and the
+// append trust files → (4) launch shims, rc lines, dsh patch rows, plugins (each loading line before the file it
+// loads); files an agent wrote because of asight's plugin are reported, never deleted → (5) report running agents,
+// restart none. The manifest goes only when everything it lists is undone: an entry uninstall could not undo stays
+// in it (D38: recorded, and `asight collector uninstall` exits non-zero) so the next run finds it again.
+const stepOf = (e) => (e.kind === 'text' && e.format !== 'dotenv-block' ? 4 : 1)
+const NOT_UNDONE = new Set(['left-unparsable', 'left-link', 'error'])
+
 async function uninstall(dir, { env = process.env, purgeData = false, scan = async () => [], match = () => ({ agent: null }), stop = null }) {
   const runtime = env.XDG_RUNTIME_DIR ? path.join(env.XDG_RUNTIME_DIR, 'asight') : null
-  const report = { daemon: null, entries: [], removed: [], still_trusting: [], kept_captures: !purgeData, notes: [] }
-  const failed = []
+  const report = { daemon: null, entries: [], removed: [], residue: [], still_trusting: [], kept_captures: !purgeData, notes: [], left: 0 }
+  const failed = [] // failure events, written after any purge so they survive it
+  const noted = [] // uninstall-note events (kept captures only: --purge-data asked for flows/ to go)
   report.daemon = await (stop || (() => stopDaemon({ socketPath: runtime && path.join(runtime, 'collector.sock'), lockFile: path.join(dir, 'lock') })))()
   const m = readManifest(dir)
   const rm = (p) => { sweepTemps(p); if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); report.removed.push(p) } }
+  const left = { entries: [], files: [] }
   if (!m) report.notes.push('nothing is installed for this user')
   else {
-    // trust entries, newest first (4.6 撤销顺序 step 1), then the append-semantics trust files (step 3)
-    for (const e of [...m.entries].reverse()) {
-      const r = undoEntry(e)
+    const undo = (e) => {
+      let r
+      try { r = undoEntry(e) } catch (err) { r = { path: e.path, harness: e.harness, result: 'error', reason: String((err && err.message) || err) } }
       report.entries.push(r)
-      // asight's key may still be in a file it could not undo: the user has to look (D38); written after any purge
-      if (r.result === 'left-unparsable') failed.push(`${e.path} is no longer valid JSON; asight's ${e.keys.join('.')} = ${e.value} may still be in it`)
-      if (r.result === 'left-link') failed.push(r.reason)
+      if (NOT_UNDONE.has(r.result)) {
+        left.entries.push(e)
+        const why = r.result === 'left-unparsable' ? `${e.path} is no longer valid JSON; asight's ${describeEntry(e)} may still be in it` : r.reason
+        failed.push({ code: CODE.entryNotUndone, harness: e.harness, path: e.path, reason: why })
+      }
+      if (r.result === 'reverted-not-identical') noted.push({ code: CODE.notIdentical, harness: e.harness, path: e.path, reason: `${e.path} was edited after install: only asight's ${describeEntry(e)} was taken out${r.deleted ? ' and the file, holding nothing else, removed' : ''}; the rest is as the user left it` })
     }
+    for (const e of [...m.entries].reverse()) if (stepOf(e) === 1) undo(e)
     for (const f of m.files.filter((x) => x.role === 'trust-file' || x.role === 'ca-cert')) rm(f.path)
+    for (const e of [...m.entries].reverse()) if (stepOf(e) === 4) undo(e)
+    for (const f of [...m.files].reverse().filter((x) => x.role === 'plugin' || x.role === 'shim')) {
+      try {
+        const r = removeOwnedFile(f)
+        if (r.result === 'removed') report.removed.push(f.path)
+        if (r.changed) noted.push({ code: CODE.harnessNote, harness: f.harness, path: f.path, reason: `${f.path}, asight's ${f.role}, had been changed since install; it was removed all the same` })
+      } catch (err) {
+        left.files.push(f)
+        failed.push({ code: CODE.entryNotUndone, harness: f.harness, path: f.path, reason: `${f.path}, asight's ${f.role}, could not be removed: ${String((err && err.message) || err)}` })
+      }
+    }
+    for (const w of m.watched || []) {
+      if (w.existed_before || !fs.existsSync(w.path)) continue
+      report.residue.push(w.path)
+      noted.push({ code: CODE.residue, harness: w.harness, path: w.path, reason: `${w.path} appeared after install (${w.why}); it may serve the user's own plugins too, so asight did not remove it` })
+    }
     // step 5: report, never restart — append-semantics entries are read at start, so these still trust asight
-    for (const f of await scan()) { const a = match(f).agent; if (a && m.entries.some((e) => e.harness === a)) report.still_trusting.push({ pid: f.pid, agent: a, until: 'restart' }) }
-    // the CA private key and the runtime state last
+    const injected = new Set([...m.entries, ...m.files].map((x) => x.harness).filter(Boolean))
+    for (const f of await scan()) { const a = match(f).agent; if (a && injected.has(a)) report.still_trusting.push({ pid: f.pid, agent: a, until: 'restart' }) }
+    // the CA private key and the runtime state (with the trust markers) last
     for (const f of m.files.filter((x) => x.role === 'ca-key')) rm(f.path)
     for (const p of [path.join(dir, 'run'), path.join(dir, 'lock'), path.join(dir, 'state.json'), runtime]) if (p) rm(p)
+  }
+  for (const n of noted) {
+    report.notes.push(n.reason)
+    if (!purgeData) { try { appendEvent(dir, { event: EVENT.uninstallNote, where: 'uninstall', ...n }) } catch (w) { report.notes.push(`not recorded (${String((w && w.message) || w)}): ${n.reason}`) } }
   }
   // then the data the operator asked to drop — also after an earlier plain uninstall left the captures behind
   if (purgeData) {
     for (const n of listDir(dir)) if (/^capture-.*\.ndjson$/.test(n)) rm(path.join(dir, n))
     for (const sub of ['flows', 'audit', 'replays']) rm(path.join(dir, sub))
   }
-  for (const reason of failed) { // after the purge, so --purge-data never deletes what this run could not undo
-    try { appendEvent(dir, { event: 'failure', where: 'uninstall', reason }) } catch (w) { report.notes.push(`not recorded (${String((w && w.message) || w)}): ${reason}`) }
+  for (const f of failed) { // after the purge, so --purge-data never deletes what this run could not undo
+    try { appendEvent(dir, { event: EVENT.failure, where: 'uninstall', ...f }) } catch (w) { report.notes.push(`not recorded (${String((w && w.message) || w)}): ${f.reason}`) }
   }
   if (m) {
+    report.left = left.entries.length + left.files.length
+    if (report.left) { // keep exactly what is left; the next uninstall finds it (4.6: the manifest goes last)
+      saveManifest(dir, { ...m, complete: false, uninstall_left: true, planned: [], watched: [], entries: left.entries, files: left.files })
+      return report
+    }
     removeEmptyDirs(m.dirs.filter((d) => d !== dir)) // e.g. ca/
     fs.rmSync(manifestPath(dir), { force: true }) // the manifest goes last: a second run still finds what the first left
     sweepTemps(manifestPath(dir))

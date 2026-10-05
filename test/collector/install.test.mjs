@@ -60,7 +60,10 @@ test('install: an existing user CA in settings becomes extra-cc.pem (certificate
     const r = await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
     assert.deepEqual(r.entries.map((e) => e.result), ['restored'])
     assert.equal(fs.readFileSync(settingsOf(b), 'utf8'), before)
-    assert.deepEqual(listAll(b.dir), ['capture-2026-10-06.ndjson'], 'only the captures remain')
+    assert.deepEqual(listAll(b.dir).filter((x) => !x.startsWith('flows/')), ['capture-2026-10-06.ndjson'], 'only the captures and the event log remain')
+    const events = fs.readdirSync(path.join(b.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(b.dir, 'flows', n), 'utf8').trim().split('\n').map((l) => JSON.parse(l)))
+    assert.deepEqual(events.map((e) => [e.event, e.where, e.code, e.harness]), [['install-note', 'install', 'harness-note', 'claude-code']], 'what install said is kept where status finds it (D38)')
+    assert.match(events[0].reason, /exported only in a shell asight did not see/)
     assert.equal(fs.readFileSync(corpFile, 'utf8').includes('PRIVATE KEY'), true, 'the user CA file is untouched')
   } finally { b.done() }
 })
@@ -92,7 +95,7 @@ test('uninstall: stops the daemon first, reports CC processes still trusting unt
     const running = [{ pid: 4242, exe: '/x/claude/versions/2.1.289', argv: ['claude'], env: new Map() }]
     const match = (f) => ({ agent: f.pid === 4242 ? 'claude-code' : null })
     await installCollector(base(b, { scan: async () => running, match }))
-    fs.writeFileSync(path.join(b.dir, 'capture-2026-10-06.ndjson'), '{}\n'); fs.mkdirSync(path.join(b.dir, 'flows')); fs.writeFileSync(path.join(b.dir, 'flows', 'x.ndjson'), '{}\n')
+    fs.writeFileSync(path.join(b.dir, 'capture-2026-10-06.ndjson'), '{}\n'); fs.mkdirSync(path.join(b.dir, 'flows'), { recursive: true }); fs.writeFileSync(path.join(b.dir, 'flows', 'x.ndjson'), '{}\n')
     fs.writeFileSync(path.join(b.dir, 'lock'), '{}'); fs.writeFileSync(path.join(b.dir, 'state.json'), '{}')
     const order = []
     const r = await uninstallCollector({ home: b.home, env: {}, purgeData: true, scan: async () => running, match, stop: async () => { order.push(fs.existsSync(path.join(b.dir, 'ca', 'ca.key')) ? 'stop-before-ca-removal' : 'late'); return 'stopped' } })
@@ -111,7 +114,7 @@ test('uninstall --purge-data after a plain uninstall still drops the captures it
     await installCollector(base(b))
     fs.writeFileSync(path.join(b.dir, 'capture-2026-10-06.ndjson'), '{}\n')
     await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
-    assert.deepEqual(listAll(b.dir), ['capture-2026-10-06.ndjson'])
+    assert.deepEqual(listAll(b.dir).filter((x) => !x.startsWith('flows/')), ['capture-2026-10-06.ndjson'])
     const r = await uninstallCollector({ home: b.home, env: {}, purgeData: true, stop: stopNone })
     assert.deepEqual([r.notes, fs.existsSync(b.dir)], [['nothing is installed for this user'], false])
   } finally { b.done() }
@@ -278,7 +281,9 @@ test('install lists every file it will write or change before writing any, and w
     // a walk of the whole HOME before and after: every file added or changed is one the list named
     const after = walk(b.home)
     const touched = Object.keys(after).filter((f) => before[f] !== after[f]).sort()
-    assert.deepEqual(touched, [listed.manifest, ...listed.ca, ...listed.files.map((f) => f.path), ...listed.entries.map((e) => e.path)].sort(), 'written == listed, nothing else')
+    const log = touched.filter((f) => f.startsWith(listed.records + path.sep))
+    assert.equal(log.length, 1, 'install notes go to the event log the list names')
+    assert.deepEqual(touched.filter((f) => !log.includes(f)), [listed.manifest, ...listed.ca, ...listed.files.map((f) => f.path), ...listed.entries.map((e) => e.path)].sort(), 'written == listed, nothing else')
     assert.ok(r.manifest.complete)
   } finally { b.done() }
 })
@@ -320,5 +325,78 @@ test('stopDaemon: an unreadable lock with no daemon answering stops the uninstal
     fs.writeFileSync(path.join(b.dir, 'lock'), '') // cut short by a power loss
     await assert.rejects(uninstallCollector({ home: b.home, env: {} }), /lock is unreadable, so whether a collector daemon still runs is unknown.*nothing was removed/)
     assert.ok(fs.existsSync(path.join(b.dir, 'ca', 'ca.key')) && JSON.parse(fs.readFileSync(settingsOf(b), 'utf8')).env.NODE_EXTRA_CA_CERTS)
+  } finally { b.done() }
+})
+
+// A synthetic plugin-style harness (no real agent): a plugin file in the agent's own directory, a row in a YAML list
+// that loads asight's plugin directory, a JSON key, and a path the agent may write because of the plugin.
+async function plugHarness(b) {
+  const { lineComment } = await import('../../src/collector/core/trust/text-edit.mjs')
+  const dir = path.join(b.home, '.asight', 'collector')
+  return {
+    name: 'plug', runtime: 'node', signatures: { linux: { match: [{ exe: /plug$/ }] } }, hosts: [], trust: { chain: [{ var: 'asight:marker', semantic: 'append' }] },
+    inject: (ctx) => ({
+      owned: [
+        { path: path.join(ctx.home, '.config', 'plug', 'plugins', 'asight-ca.js'), role: 'plugin', data: '// asight collector: trust plugin\n', mode: 0o644 },
+        { path: path.join(dir, 'plugins', 'plug', 'index.js'), role: 'plugin', data: 'export {}\n', mode: 0o644 },
+      ],
+      entries: [
+        { kind: 'json-key', path: path.join(ctx.home, '.plug', 'settings.json'), keys: ['ca'], value: ctx.caPem, semantic: 'append' },
+        { kind: 'text', format: 'yaml-list', path: path.join(ctx.home, '.plug', 'patch.yml'), line: `- insert: [{ name: ${JSON.stringify(path.join(dir, 'plugins', 'plug', 'index.js'))} }] ${lineComment('plug trust plugin')}` },
+      ],
+      watch: [{ path: path.join(ctx.home, '.config', 'plug', 'node_modules'), why: 'plug installs its plugin SDK on first run' }],
+      notes: [{ code: 'harness-note', text: 'plug fetches its plugin SDK once' }],
+    }),
+  }
+}
+
+test('install / uninstall of plugin-style entries: plugins and the patch row in, undone in the 4.6 order; what the agent wrote is reported, not removed', async () => {
+  const b = box()
+  try {
+    const h = await plugHarness(b)
+    const patch = path.join(b.home, '.plug', 'patch.yml'); fs.mkdirSync(path.dirname(patch)); fs.writeFileSync(patch, '- set: {a: 1}\n')
+    let listed = null
+    await installCollector(base(b, { harnesses: [h], onPlan: (p) => { listed = p } }))
+    const plugin = path.join(b.home, '.config', 'plug', 'plugins', 'asight-ca.js')
+    assert.deepEqual(listed.owned.map((o) => [o.path, o.role]), [[plugin, 'plugin'], [path.join(b.dir, 'plugins', 'plug', 'index.js'), 'plugin']])
+    assert.equal(fs.statSync(plugin).mode & 0o777, 0o644)
+    assert.ok(fs.statSync(path.join(b.dir, 'run', 'trust')).isDirectory(), 'the marker dir exists before any daemon runs')
+    assert.match(fs.readFileSync(patch, 'utf8'), /^- set: \{a: 1\}\n- insert: \[\{ name: ".*index\.js" \}\] # asight collector: plug trust plugin/)
+    const m = readManifest(b.dir)
+    assert.deepEqual(m.watched.map((w) => [w.harness, w.existed_before]), [['plug', false]])
+    fs.mkdirSync(path.join(b.home, '.config', 'plug', 'node_modules', 'sdk'), { recursive: true }) // the agent's first run
+    fs.appendFileSync(patch, '- insert: [{ name: mine }]\n') // and the user's own row
+    const r = await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
+    assert.deepEqual(r.entries.map((e) => [path.basename(e.path), e.result]), [['settings.json', 'restored'], ['patch.yml', 'reverted-not-identical']], 'config keys (step 1) before patch rows (step 4)')
+    const order = r.removed.map((p) => path.basename(p))
+    assert.ok(order.indexOf('asight-ca.pem') < order.indexOf('index.js') && order.indexOf('index.js') < order.indexOf('asight-ca.js'), `step 3 (CA file) before step 4 (row before the files it loads): ${order}`)
+    assert.equal(fs.readFileSync(patch, 'utf8'), '- set: {a: 1}\n- insert: [{ name: mine }]\n')
+    assert.ok(!fs.existsSync(plugin) && !fs.existsSync(path.join(b.dir, 'plugins')), 'the plugin file and asight\'s plugin dir are gone')
+    assert.deepEqual(r.residue, [path.join(b.home, '.config', 'plug', 'node_modules')])
+    assert.ok(fs.existsSync(path.join(b.home, '.config', 'plug', 'node_modules', 'sdk')), 'never deleted')
+    const events = fs.readdirSync(path.join(b.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(b.dir, 'flows', n), 'utf8').trim().split('\n').map((l) => JSON.parse(l)))
+    assert.deepEqual(events.map((e) => [e.event, e.code]), [['install-note', 'harness-note'], ['uninstall-note', 'reverted-not-identical'], ['uninstall-note', 'residue-not-removed']])
+    assert.equal(readManifest(b.dir), null)
+  } finally { b.done() }
+})
+
+test('an entry uninstall cannot undo stays in the manifest; install refuses until a later uninstall clears it (4.6: the manifest goes last)', async () => {
+  const b = box()
+  try {
+    fs.mkdirSync(path.join(b.home, '.claude')); fs.writeFileSync(settingsOf(b), '{"model":"x"}')
+    await installCollector(base(b))
+    const good = fs.readFileSync(settingsOf(b), 'utf8')
+    fs.writeFileSync(settingsOf(b), good + ' trailing garbage')
+    const r = await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
+    assert.deepEqual([r.left, r.entries.map((e) => e.result)], [1, ['left-unparsable']])
+    const kept = readManifest(b.dir)
+    assert.deepEqual([kept.uninstall_left, kept.entries.map((e) => e.path), kept.files], [true, [settingsOf(b)], []])
+    assert.ok(!fs.existsSync(path.join(b.dir, 'ca', 'ca.key')), 'the CA private key goes all the same')
+    await assert.rejects(installCollector(base(b)), /an earlier uninstall left entries it could not undo/)
+    fs.writeFileSync(settingsOf(b), good) // the user repairs the file
+    const again = await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
+    assert.deepEqual([again.left, again.entries.map((e) => e.result)], [0, ['restored']])
+    assert.equal(fs.readFileSync(settingsOf(b), 'utf8'), '{"model":"x"}')
+    assert.equal(readManifest(b.dir), null)
   } finally { b.done() }
 })

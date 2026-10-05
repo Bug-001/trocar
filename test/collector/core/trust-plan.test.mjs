@@ -43,3 +43,35 @@ test('trust plan: a replace-semantics entry may only point at its own harness\'s
   assert.throws(() => planTrust({ descriptors: [gamma], ctxFor: () => ctx, caCertPem: CA.certPem, collectorDir: DIR }), /GAMMA_CA_BUNDLE replaces the trust store/)
   assert.deepEqual(planTrust({ descriptors: [{ name: 'beta' }], ctxFor: () => ctx, caCertPem: CA.certPem, collectorDir: DIR }).paths, [])
 })
+
+test('trust plan: text entries — a dotenv block passes the same checks as a key; a login-environment file only ever gets the shim PATH line', async () => {
+  const { lineComment } = await import('../../../src/collector/core/trust/text-edit.mjs')
+  const block = (vars, o = {}) => ({ kind: 'text', format: 'dotenv-block', path: '/h/.alpha/.env', vars, semantic: 'replace', ...o })
+  assert.equal(plan(() => ({ entries: [block({ SSL_CERT_FILE: `${DIR}/ca/combined-alpha.pem` })] })).entries[0].format, 'dotenv-block')
+  assert.throws(() => plan(() => ({ entries: [block({ SSL_CERT_FILE: `${DIR}/ca/asight-ca.pem` })] })), /SSL_CERT_FILE replaces the trust store/)
+  assert.throws(() => plan(() => ({ entries: [block({ NODE_OPTIONS: `${DIR}/x` })] })), /NODE_OPTIONS is never written/)
+  assert.throws(() => plan(() => ({ entries: [block({ SSL_CERT_FILE: `${DIR}/ca/combined-alpha.pem` }, { path: '/h/.zshenv' })] })), /login-environment/)
+  const shim = `export PATH="${DIR}/bin:$PATH" ${lineComment('alpha shim')}`
+  const rc = (o) => ({ kind: 'text', format: 'line', path: '/h/.bashrc', line: shim, after: 'alpha/bin', ...o })
+  assert.deepEqual(plan(() => ({ entries: [rc()] })).paths, ['/h/.bashrc'])
+  assert.throws(() => plan(() => ({ entries: [rc({ after: undefined })] })), /only ever gets the launch-shim PATH line/, 'not placed after the installer\'s line')
+  assert.throws(() => plan(() => ({ entries: [rc({ line: `export PATH="/opt/bin:$PATH" ${lineComment('x')}` })] })), /only ever gets the launch-shim PATH line/)
+  assert.throws(() => plan(() => ({ entries: [rc({ line: `export NODE_EXTRA_CA_CERTS=${DIR}/ca/asight-ca.pem ${lineComment('x')}` })] })), /never sets a CA variable/)
+  assert.throws(() => plan(() => ({ entries: [rc({ path: '/h/.alpha/patch.yml', format: 'yaml-list', line: '- insert: [x]' })] })), /carries the sentinel/)
+  assert.throws(() => plan(() => ({ entries: [{ kind: 'text', format: 'ini', path: '/h/a.ini' }] })), /unknown entry kind text \/ format ini/)
+})
+
+test('trust plan: owned files — in an agent\'s directory only with "asight" in the name and the sentinel inside; shims only in <collector>/bin, one per name; watch and notes are carried', () => {
+  const P = { path: '/h/.config/alpha/plugins/asight-ca.js', role: 'plugin', data: '// asight collector: trust plugin\n' }
+  const p = plan(() => ({ owned: [P, { path: `${DIR}/plugins/alpha/package.json`, role: 'plugin', data: '{"type":"module"}\n' }], watch: [{ path: '/h/.config/alpha/node_modules', why: 'npm install' }], notes: [{ code: 'harness-note', text: 'first run fetches a package' }, 'plain'] }))
+  assert.deepEqual(p.paths, [P.path, `${DIR}/plugins/alpha/package.json`], 'owned files are listed before anything is written')
+  assert.deepEqual([p.owned[0].harness, p.owned[0].mode, p.watch], ['alpha', 0o600, [{ harness: 'alpha', path: '/h/.config/alpha/node_modules', why: 'npm install' }]])
+  assert.deepEqual(p.records, [{ harness: 'alpha', code: 'harness-note', reason: 'first run fetches a package' }, { harness: 'alpha', code: 'harness-note', reason: 'plain' }])
+  assert.throws(() => plan(() => ({ owned: [{ ...P, path: '/h/.config/alpha/plugins/ca.js' }] })), /has "asight" in its name and the sentinel/)
+  assert.throws(() => plan(() => ({ owned: [{ ...P, data: '// trust plugin\n' }] })), /has "asight" in its name and the sentinel/)
+  assert.throws(() => plan(() => ({ owned: [{ ...P, path: '/h/.local/bin/alpha', role: 'shim' }] })), /lives in .*\/bin, the shim directory/)
+  const sh = { path: `${DIR}/bin/alpha`, role: 'shim', data: '#!/bin/sh\n' }
+  assert.equal(plan(() => ({ owned: [sh] })).owned.length, 1)
+  assert.throws(() => plan(() => ({ owned: [sh, sh] })), /one shim per command/)
+  assert.throws(() => plan(() => ({ owned: [{ ...P, role: 'daemon' }] })), /unknown owned-file role/)
+})

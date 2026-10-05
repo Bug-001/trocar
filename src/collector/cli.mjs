@@ -43,7 +43,10 @@ export function formatPlan(p) {
     `  install manifest: ${p.manifest}`,
     `  collector CA (in no trust store): ${p.ca.join(', ')}`,
     ...p.files.map((f) => `  ${f.harness}: ${f.path} = ${f.sources.length ? `the certificates of ${f.sources.join(', ')} + ` : ''}the collector CA`),
-    ...p.entries.map((e) => `  ${e.harness}: ${e.path}${e.real_path ? ` → ${e.real_path}` : ''} ${e.keys.join('.')} = ${e.value}`)].join('\n')
+    ...(p.owned || []).map((o) => `  ${o.harness}: ${o.path} (asight's ${o.role})`),
+    ...p.entries.map((e) => `  ${e.harness}: ${e.path}${e.real_path ? ` → ${e.real_path}` : ''} ${e.what || `${e.keys.join('.')} = ${e.value}`}`),
+    ...(p.records ? [`  install notes (event log): ${p.records}/`] : []),
+    ...(p.watch || []).map((w) => `  ${w.harness} itself may write ${w.path} (${w.why}); uninstall reports it, never deletes it`)].join('\n')
 }
 
 const waitForSignal = () => new Promise((resolve) => { process.once('SIGTERM', resolve); process.once('SIGINT', resolve) })
@@ -84,11 +87,12 @@ export async function runCollector(argv, { env = process.env, home = os.homedir(
       if (verb === 'install') {
         const r = await installCollector({ home, env, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, onPlan: (p) => out(formatPlan(p)) })
         if (r.already) { out('already installed'); return 0 }
-        out([`installed for ${os.userInfo().username}: engine port ${r.manifest.engine_port}`, ...r.manifest.entries.filter((e) => e.prior_value).map((e) => `  ${e.harness}: ${e.path} ${e.keys.join('.')} was ${e.prior_value}`), ...r.plan.notes.map((n) => `note: ${n}`)].join('\n'))
+        out([`installed for ${os.userInfo().username}: engine port ${r.manifest.engine_port}`, ...r.manifest.entries.filter((e) => e.prior_value).map((e) => `  ${e.harness}: ${e.path} ${e.keys ? `${e.keys.join('.')} was ${e.prior_value}` : `held ${Object.entries(e.prior_value).map(([k, v]) => `${k}=${v}`).join(', ')} (commented out; uninstall restores it)`}`), ...r.plan.notes.map((n) => `note: ${n}`)].join('\n'))
         return 0
       }
       const r = await uninstallCollector({ home, env, purgeData: rest.includes('--purge-data'), scan: parts.scan, match: parts.match })
-      out([`uninstalled (daemon: ${r.daemon}; ${r.kept_captures ? 'captures kept, --purge-data removes them' : 'captures removed'})`, ...r.entries.map((e) => `  ${e.harness}: ${e.path} ${e.result}`), ...r.still_trusting.map((p) => `  pid ${p.pid} (${p.agent}) trusts the asight CA until it restarts`), ...r.notes.map((n) => `note: ${n}`)].join('\n'))
+      out([`uninstalled (daemon: ${r.daemon}; ${r.kept_captures ? 'captures kept, --purge-data removes them' : 'captures removed'})`, ...r.entries.map((e) => `  ${e.harness}: ${e.path} ${e.result}`), ...r.still_trusting.map((p) => `  pid ${p.pid} (${p.agent}) trusts the asight CA until it restarts`), ...(r.residue || []).map((p) => `  left in place: ${p}`), ...r.notes.map((n) => `note: ${n}`)].join('\n'))
+      if (r.left) { err(`asight collector uninstall: ${r.left} item(s) could not be undone and stay in the install manifest; fix what is reported above, then run uninstall again`); return 1 }
       return 0
     } catch (e) { err(`asight collector ${verb}: ${e.message}`); return 1 }
   }

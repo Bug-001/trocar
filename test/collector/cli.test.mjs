@@ -50,6 +50,15 @@ test('cli: install / uninstall hand the descriptors, OS and process table from d
   assert.match(t.o[0], /captures removed/); assert.match(t.o[0], /pid 7 \(h\) trusts the asight CA until it restarts/)
   assert.deepEqual(seen, [['install', 'linux', parts.harnesses, true, '/h'], ['written'], ['uninstall', true]])
   t = io(); assert.equal(await runCollector(['install'], { daemon, install: { installCollector: async () => { throw new Error('boom') } }, ...t }), 1)
+  // an item uninstall could not undo: exit 1, the manifest keeps it, the user is told to run uninstall again (D38)
+  const leftOne = { uninstallCollector: async () => ({ daemon: 'none', kept_captures: true, entries: [{ harness: 'h', path: '/h/s.json', result: 'left-unparsable' }], residue: ['/h/.config/h/node_modules'], still_trusting: [], notes: [], left: 1 }) }
+  t = io(); assert.equal(await runCollector(['uninstall'], { daemon, install: leftOne, ...t }), 1)
+  assert.match(t.o[0], /left in place: \/h\/.config\/h\/node_modules/)
+  assert.match(t.e[0], /1 item\(s\) could not be undone and stay in the install manifest; .* run uninstall again/)
+  // the plan shows a text entry by what it adds, an owned file by its role, the event log, and what the agent may write
+  const plan2 = { installCollector: async (o) => { o.onPlan({ manifest: '/m', ca: ['/k', '/c'], files: [], owned: [{ harness: 'd', path: '/h/.asight/collector/plugins/d/index.js', role: 'plugin' }], entries: [{ harness: 'd', path: '/h/.d/patch.yml', what: 'line "- insert: x"' }], records: '/h/.asight/collector/flows', watch: [{ harness: 'o', path: '/h/.config/o/node_modules', why: 'npm install' }] }); return { already: true } } }
+  t = io(); assert.equal(await runCollector(['install'], { daemon, install: plan2, ...t }), 0)
+  assert.match(t.o[0], /d: \/h\/.asight\/collector\/plugins\/d\/index.js \(asight's plugin\)\n  d: \/h\/.d\/patch.yml line "- insert: x"\n  install notes \(event log\): \/h\/.asight\/collector\/flows\/\n  o itself may write \/h\/.config\/o\/node_modules \(npm install\); uninstall reports it, never deletes it$/)
 })
 
 test('cli: setup-helper installs or removes through arch; a failure is exit 1', async () => {
