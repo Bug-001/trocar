@@ -9,6 +9,7 @@ import { parseRequest } from './http1.mjs'
 import { SCENARIOS, isScenario, pickScenario } from './scenarios.mjs'
 import { writeResponse, jsonReply } from './transport.mjs'
 import * as anthropic from './anthropic.mjs'
+import * as openai from './openai.mjs'
 
 const iso = () => new Date().toISOString()
 
@@ -16,7 +17,9 @@ const iso = () => new Date().toISOString()
 const ROUTES = [
   { re: /\/v1\/messages\/count_tokens$/, methods: ['POST'], kind: 'count', dialect: anthropic },
   { re: /\/v1\/messages$/, methods: ['POST'], kind: 'model', dialect: anthropic },
-  { re: /^\/api\/hello$/, methods: ['HEAD', 'GET'], kind: 'hello' },
+  { re: /\/responses$/, methods: ['POST'], kind: 'model', dialect: openai.responses }, // also Codex's /codex/responses
+  { re: /\/chat\/completions$/, methods: ['POST'], kind: 'model', dialect: openai.chat },
+  { re: /^\/api\/hello$/, methods: ['HEAD', 'GET'], kind: 'hello', dialect: anthropic },
   { re: /\/models$/, methods: ['GET'], kind: 'models' },
 ]
 
@@ -34,7 +37,8 @@ async function dispatch(req, io, state) {
   const route = ROUTES.find((r) => r.re.test(p) && r.methods.includes(req.method))
   const pick = pickScenario(req.headers, req.body, route?.kind === 'model', state.queue)
   const sc = isScenario(pick.name) ? SCENARIOS[pick.name] : null
-  const dialect = route?.dialect || anthropic
+  // errors on routes no dialect owns (models, unknown paths) take the shape the client speaks
+  const dialect = route?.dialect || (req.headers['anthropic-version'] ? anthropic : openai.chat)
   let res
   if (!sc) res = dialect.errorReply(400, `mock-upstream: unknown scenario "${pick.name}"`)
   else if (sc.status) res = dialect.errorReply(sc.status)
