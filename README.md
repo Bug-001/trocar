@@ -92,7 +92,8 @@ lifecycle** — which files entered context, when, via which tool *(Claude Code 
 Cost is a local, editable estimate in `~/.asight/pricing.json`; providers return usage, never dollars.
 
 Optional: `asight etl <capture.ndjson|dir> --rebuild` (a directory such as `~/.asight/collector`: its
-top-level `*.ndjson` in name order, subdirectories never read) loads a DuckDB projection
+top-level `*.ndjson` in name order, subdirectories never read; an incremental run refuses and asks
+for `--rebuild` if an earlier file grew after a later one was loaded) loads a DuckDB projection
 (`sessions / calls / call_blocks / block_contents / usage / resource_events / cache_events`) for
 cross-session SQL. The board works fine without it.
 

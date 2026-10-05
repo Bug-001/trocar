@@ -180,6 +180,25 @@ export async function runEtl(records, connection, opts = {}) {
       const idx = (seen.get(key) ?? -1) + 1;
       seen.set(key, idx);
 
+      // A SHIFTED HISTORY (4.2:49-50). The watermark counts records per key across the whole stream,
+      // which is valid only if nothing was inserted BEFORE the consumed position since the last run:
+      // true for one append-only file and for the collector's daily files (dated at write time,
+      // 4.6 §记录), not when an earlier file of a directory grows after a later one was ingested.
+      // So the record now at the last consumed position must be the call stored there; if it is not,
+      // an incremental run would skip a record without a word. Refuse — --rebuild is always exact.
+      // (No row at that seq = a duplicate id that was never written there; nothing to compare.)
+      if (idx === (await consumedOf(key)) - 1) {
+        const at = (await conn.runAndReadAll(
+          sid == null ? 'SELECT call_id FROM calls WHERE session_id IS NULL AND seq = $1'
+            : 'SELECT call_id FROM calls WHERE session_id = $1 AND seq = $2',
+          sid == null ? [idx] : [sid, idx])).getRowObjects()[0];
+        if (at && String(at.call_id) !== String(record.id)) {
+          throw new Error(`incremental ETL refused: the source changed under the watermark for ${sid == null ? 'session-less records' : 'session ' + sid} ` +
+            `(position ${idx} now holds ${record.id}${record._stream ? ' from ' + record._stream : ''}, the store holds ${at.call_id}) — ` +
+            'an earlier source file grew after a later one was ingested. Re-run with --rebuild.');
+        }
+      }
+
       const norm = decodeBody(record);
       corpus.push(norm); // full corpus (incl. skipped) → deterministic cross-batch lineage
 

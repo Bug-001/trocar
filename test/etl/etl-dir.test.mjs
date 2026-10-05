@@ -89,3 +89,31 @@ test('a call that starts before midnight and ends after it: incremental == full'
     fs.rmSync(dbs, { recursive: true, force: true });
   }
 });
+
+// 4.2:50 when the precondition does NOT hold: a directory whose earlier file grows after a later one
+// was ingested (e.g. `asight etl ~/.asight`, where several captures grow at once). Session-less
+// records share one watermark key across files, so the new record shifts the history under the
+// watermark. The run must refuse rather than skip it silently; --rebuild recomputes it exactly.
+test('an earlier file growing after a later one was ingested: incremental refuses instead of skipping', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-col-'));
+  const dbs = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-db-'));
+  const ctl = (id) => JSON.stringify({ ts: '2026-10-06T00:00:00Z', endpoint: '/api/event_logging/batch', method: 'POST',
+    req_headers: { 'user-agent': 'claude-cli/2.1.0' }, req_body: '{}', resp: { status: 200, kind: 'json', body: {} },
+    id, ts_request: '2026-10-06T00:00:00Z', is_llm_call: false }) + '\n';
+  try {
+    fs.writeFileSync(path.join(dir, 'claude-capture.ndjson'), ctl('c1'));
+    fs.writeFileSync(path.join(dir, 'codex-capture.ndjson'), ctl('d1'));
+    const inc = path.join(dbs, 'inc.duckdb');
+    await etlFile(dir, { dbPath: inc });
+    fs.appendFileSync(path.join(dir, 'claude-capture.ndjson'), ctl('c2'));
+    await assert.rejects(etlFile(dir, { dbPath: inc }), /source changed under the watermark for session-less records.*--rebuild/);
+    assert.deepEqual((await dumpOf(inc)).calls.map((c) => c.call_id), ['c1', 'd1'], 'the refused run wrote nothing');
+    await etlFile(dir, { dbPath: inc, rebuild: true });
+    await etlFile(dir, { dbPath: path.join(dbs, 'full.duckdb') });
+    assert.deepEqual((await dumpOf(inc)).calls.map((c) => `${c.call_id}@${c.seq}`), ['c1@0', 'c2@1', 'd1@2']);
+    assert.deepEqual(await dumpOf(inc), await dumpOf(path.join(dbs, 'full.duckdb')));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dbs, { recursive: true, force: true });
+  }
+});
