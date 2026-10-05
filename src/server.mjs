@@ -174,7 +174,14 @@ function makeRecordLoader(source) {
     // would otherwise reintroduce through the back door.
     try {
       const parts = roots.map((r) => sourceFiles(r));
-      files = parts.flatMap((p) => p.files);
+      // One file, read once: a capture linked from one root to a file in another root (a symlink is
+      // a capture too, paths.mjs isCaptureFile) would otherwise be read twice and every call in it
+      // doubled. Keyed by real path; the first root to name a file keeps it.
+      const seen = new Set();
+      files = parts.flatMap((p) => p.files).filter((f) => {
+        let k; try { k = fssync.realpathSync(f); } catch { k = f; }
+        return seen.has(k) ? false : (seen.add(k), true);
+      });
       sig = parts.map((p) => p.sig).join('#');
     } catch (e) {
       load.sig = '0';
