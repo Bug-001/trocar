@@ -164,12 +164,14 @@ reads sealed files directly and shows exactly the same records; the original is 
 every record and the whole file are proven to decode back byte for byte.
 
 ```sh
-asight raw seal --legacy ~/.asight/sessions --dry-run   # every check, nothing written: what would be sealed or refused, and why
+asight raw seal --legacy ~/.asight/sessions --dry-run   # every check, nothing written: what would be sealed, refused or skipped, and why
 asight raw seal --legacy ~/.asight/sessions        # pre-2026-10 files: refuses while anything writes them; keeps originals
 asight raw verify ~/.asight/sessions               # decode every sealed copy, compare byte for byte with its original
-asight raw seal --legacy ~/.asight/sessions --delete-original   # deletes each original only after that check
-asight raw export <session-id>                     # back to plain NDJSON in ~/.asight/export/ (0600)
-asight raw journal                                 # every refusal, failure and deletion, with its reason
+asight raw compare ~/.asight/sessions              # per session: what the board, ETL and resolver read now vs. from the sealed copies alone
+asight raw seal --legacy ~/.asight/sessions --delete-original --dry-run   # which originals would be deleted, which refused
+asight raw seal --legacy ~/.asight/sessions --delete-original   # deletes only originals that already have a sealed copy, after a byte-for-byte check
+asight raw export <session-id>                     # back to plain NDJSON: ~/.asight/export/<session>/, one file per segment (0600)
+asight raw journal                                 # every refusal, skip, failure and deletion, with its reason
 ```
 
 `asight raw seal <closed-shard>` files a shard's records by session under `~/.asight/sessions/<session>/`;
@@ -228,7 +230,7 @@ asight serve   [--port 9800] [--source <ndjson|dir>] [--db <path>] [--control]
 asight etl <ndjson|sealed|dir> [--rebuild]
 asight on [--proxy <url>] | off [--remove-ca] | uninstall | verify | doctor
 asight raw seal <closed-shard> | seal --legacy <file|dir> [--dry-run] [--delete-original]
-asight raw verify <sealed|dir> [--against <original>] | export <session|file.sealed> | journal
+asight raw verify <sealed|dir> [--against <original>] | compare <dir> | export <session|file.sealed> | journal
 asight monitor {on|off|status}
 asight mitm [--port 9899] [--host api.anthropic.com]
 asight desktop {on|off|status}        # macOS + Clash Verge
