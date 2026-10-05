@@ -125,3 +125,20 @@ test('store: an envelope whose request started before midnight but is written af
   assert.deepEqual(ids('capture-2026-10-06.ndjson'), [{ ts: '2026-10-05T23:59:50.000Z', id: 'a2' }], 'rec.ts is kept as captured')
 })
 
+test('store: crossing midnight closes the previous day\'s files, so a long-running daemon does not leak one fd set per day', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-store-'))
+  let clock = '2026-10-05T23:59:01.000Z'
+  const s = createRecordStore({ root, now: () => new Date(clock) })
+  s.envelope({ id: 'a1' }); s.flow({ flow_id: 'f1' }); s.audit({ event: 'on' })
+  assert.equal(s.openFiles, 3)
+  clock = '2026-10-06T00:00:01.000Z'
+  s.envelope({ id: 'a2' })
+  assert.equal(s.openFiles, 1, 'only the new day\'s capture file is open')
+  s.flow({ flow_id: 'f2' })
+  s.close()
+  assert.equal(s.openFiles, 0)
+  assert.equal(s.errors, 0)
+  const lines = (f) => fs.readFileSync(path.join(root, f), 'utf8').trim().split('\n').length
+  assert.deepEqual([lines('capture-2026-10-05.ndjson'), lines('capture-2026-10-06.ndjson'), lines('flows/2026-10-05.ndjson'), lines('flows/2026-10-06.ndjson')], [1, 1, 1, 1])
+  fs.rmSync(root, { recursive: true, force: true })
+})

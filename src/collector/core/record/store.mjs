@@ -7,9 +7,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 export function createRecordStore({ root, onError = () => {}, now = () => new Date() }) {
-  const fds = new Map() // filePath → open fd
-  let errors = 0
+  const fds = new Map() // filePath → open fd (only the current day's files)
+  let errors = 0, openDay = null
   let lastError = null // the reason of the last failed write, for the caller's failure record (RFC 4.6 §记录 采集失败不静默)
+  const closeAll = () => { for (const fd of fds.values()) { try { fs.closeSync(fd) } catch { /* already closed */ } } fds.clear() }
 
   // The daily file is the UTC date at WRITE time, not rec.ts (the request start, which stays in the
   // record). An envelope is written when its exchange ends, so a call that starts before midnight and
@@ -33,7 +34,11 @@ export function createRecordStore({ root, onError = () => {}, now = () => new Da
   // marks the calls after a lost envelope partial (RFC 4.6 §传输与帧级记录, write-failed).
   function write(resolve, rec) {
     try {
-      fs.writeSync(fdFor(resolve(today())), JSON.stringify(rec) + '\n')
+      const d = today()
+      // A new day: the previous day's files get no more lines, so their fds are closed. A daemon that
+      // runs for months holds one day's files open, not one set per day it has run.
+      if (d !== openDay) { closeAll(); openDay = d }
+      fs.writeSync(fdFor(resolve(d)), JSON.stringify(rec) + '\n')
       return true
     } catch (e) {
       errors++
@@ -51,6 +56,7 @@ export function createRecordStore({ root, onError = () => {}, now = () => new Da
     failure(rec) { return write((d) => path.join(root, 'failures', `${d}.ndjson`), rec) }, // capture failures, never silent (RFC 4.6 §记录)
     get lastError() { return lastError },
     get errors() { return errors },
-    close() { for (const fd of fds.values()) { try { fs.closeSync(fd) } catch { /* already closed */ } } fds.clear() },
+    get openFiles() { return fds.size },
+    close() { closeAll(); openDay = null },
   }
 }

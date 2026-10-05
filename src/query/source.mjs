@@ -8,7 +8,7 @@
 // body), then on resolve we seek+read only the ONE needed record's line and slice it. A tiny
 // req_body LRU makes rendering a call's many blocks read that call's line once, not per block.
 import { open } from 'node:fs/promises';
-import { statSync, openSync, readSync, closeSync } from 'node:fs';
+import { statSync, openSync, readSync, closeSync, existsSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { parseTextRef } from '../etl/orchestrator.mjs';
@@ -216,6 +216,11 @@ export async function buildResolver(source) {
       );
     }
     if (q) return { key: stream + '#' + recordId, loc: q };
+    // The ref names a capture file in this root that the index has not read yet (created since it
+    // was built). The bare-id fallback below could answer with ANOTHER file's record of the same id,
+    // labelled ok; report a miss instead, so the caller refreshes and the qualified key decides.
+    if (isDir && path.basename(stream) === stream && !files.some((f) => path.basename(f) === stream)
+      && existsSync(path.join(sourcePath, stream))) return null;
     const e = idx.byId.get(recordId);
     if (e === undefined) return null;                 // genuinely absent → null (callers expect it)
     if (e === AMBIGUOUS) {                            // present in several files, ref doesn't say which
@@ -291,27 +296,43 @@ export async function buildResolver(source) {
   // (only the new tail is read, so the cost is the new bytes, not the corpus); a file that shrank
   // or was replaced (inode changed) is not append-only, so the whole index is rebuilt. Concurrent
   // callers share one in-flight refresh. Resolves to true when the index changed.
-  let inflight = null;
+  let inflight = null, dirty = false;
+  // A file that cannot be read during a refresh is skipped this round, not fatal: one unreadable
+  // capture must not freeze the index for every other file (or every later root). It is noted once
+  // in scan.skipped. A read that failed part-way may have indexed some lines, so the next refresh
+  // rebuilds the root rather than index them twice.
+  const indexSafe = async (f, from = 0) => {
+    try { return await indexFile(f, idx, from); }
+    catch (e) {
+      if (from > 0) dirty = true;
+      const name = path.basename(f);
+      if (!scan.skipped.some((x) => x.name === name && x.reason === 'unreadable')) scan.skipped.push({ name, reason: 'unreadable', error: (e && e.code) || String(e) });
+      return null;
+    }
+  };
   const rebuildAll = async () => {
     idx.qual.clear(); idx.byId.clear(); marks.clear(); bodyCache.clear();
     for (const fd of fds.values()) try { closeSync(fd); } catch {}
     fds.clear();
     Object.assign(scan, { corruptLines: 0, corruptByFile: {}, unidentifiedLines: 0 });
-    files.length = 0; files.push(...await listFiles(null));
-    for (const f of files) marks.set(f, await indexFile(f, idx));
+    dirty = false;
+    files.length = 0;
+    for (const f of await listFiles(null)) { const mk = await indexSafe(f); if (mk) { files.push(f); marks.set(f, mk); } }
   };
   const doRefresh = async () => {
     let now;
     try { now = await listFiles(null); } catch { return false; } // root unreadable: the loader reports it
+    if (dirty) { await rebuildAll(); bodyCache.clear(); resolve.size = idx.qual.size; return true; }
     let changed = false;
     for (const f of now) {
       let st; try { st = statSync(f); } catch { continue; } // vanished between listing and stat
       const m = marks.get(f);
-      if (!m) { files.push(f); marks.set(f, await indexFile(f, idx)); changed = true; continue; }
+      if (!m) { const mk = await indexSafe(f); if (mk) { files.push(f); marks.set(f, mk); changed = true; } continue; }
       if (st.ino !== m.ino || st.size < m.size) { await rebuildAll(); changed = true; break; }
       if (st.size === m.size) continue;
       undoTail(idx, path.basename(f), m.tail);
-      marks.set(f, await indexFile(f, idx, m.end));
+      const mk = await indexSafe(f, m.end);
+      marks.set(f, mk || { ...m, tail: null }); // tail already taken back: never undo it twice
       changed = true;
     }
     if (changed) { bodyCache.clear(); resolve.size = idx.qual.size; }
@@ -384,7 +405,7 @@ async function buildMultiResolver(roots) {
   resolve.size = sizeOf();
   resolve.refresh = async () => {
     let changed = false;
-    for (const p of parts) if (typeof p.refresh === 'function' && await p.refresh()) changed = true;
+    for (const p of parts) { try { if (typeof p.refresh === 'function' && await p.refresh()) changed = true; } catch { /* this root's miss stands; later roots still refresh */ } }
     if (changed) { resolve.size = sizeOf(); resolve.scan = scanOf(); }
     return changed;
   };

@@ -64,3 +64,48 @@ test('a source file replaced by a shorter one is re-indexed from scratch, never 
     r.dispose();
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('a source file replaced by a LONGER one is re-indexed too (the inode changed), never read at stale offsets', async () => {
+  const dir = tmp();
+  try {
+    const f = path.join(dir, 'capture-1.ndjson'), c = rec('C', 'the replacement, which is longer than everything it replaced');
+    fs.writeFileSync(f, rec('A', 'a') + rec('B', 'b'));
+    const r = await buildResolver(dir);
+    fs.rmSync(f); fs.writeFileSync(f, c + rec('D', 'and one more record after it'));
+    assert.equal(await r.refresh(), true);
+    assert.equal(r.detail('S/capture-1.ndjson#C').text, bodyOf(c));
+    assert.equal(r.detail('S/capture-1.ndjson#A').status, 'absent');
+    assert.equal(r.size, 2);
+    r.dispose();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a ref naming a capture file created after the index was built misses (so the caller refreshes), never takes another file\'s bytes', async () => {
+  const dir = tmp();
+  try {
+    fs.writeFileSync(path.join(dir, 'capture-1.ndjson'), rec('X', 'in the first file'));
+    const r = await buildResolver(dir);
+    const late = rec('X', 'in the second file'); // same id, a different file
+    fs.writeFileSync(path.join(dir, 'capture-2.ndjson'), late);
+    assert.equal(r.detail('S/capture-2.ndjson#X').status, 'absent');
+    await r.refresh();
+    assert.equal(r.detail('S/capture-2.ndjson#X').text, bodyOf(late));
+    r.dispose();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('an unreadable new file is skipped and noted; it does not stop other files or later roots from refreshing', { skip: process.getuid?.() === 0 && 'root reads anything' }, async () => {
+  const r1 = tmp(), r2 = tmp();
+  try {
+    fs.writeFileSync(path.join(r1, 'a.ndjson'), rec('A', 'a'));
+    fs.writeFileSync(path.join(r2, 'b.ndjson'), rec('B', 'b'));
+    const r = await buildResolver([r1, r2]);
+    fs.writeFileSync(path.join(r1, 'locked.ndjson'), rec('L', 'unreadable'), { mode: 0o000 });
+    const late = rec('B2', 'appended in the later root');
+    fs.appendFileSync(path.join(r2, 'b.ndjson'), late);
+    assert.equal(await r.refresh(), true);
+    assert.equal(r.detail('S/b.ndjson#B2').text, bodyOf(late));
+    assert.ok(r.scan.skipped.some((x) => x.name === 'locked.ndjson' && x.reason === 'unreadable'), JSON.stringify(r.scan.skipped));
+    r.dispose();
+  } finally { for (const d of [r1, r2]) fs.rmSync(d, { recursive: true, force: true }); }
+});
