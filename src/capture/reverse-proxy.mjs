@@ -76,12 +76,16 @@ export function createReverseProxy({ target, upstreamProxy = '', keepRawSse = fa
       const upstream = client.request(options, (up) => {
         const tsRespStart = isoStamp()
         teeResponse(up, res, { keepRawSse, where: 'proxy', onEvent }, (resp, aborted) => {
+          if (settled) return // one envelope per request
           settled = true
           onEnvelope(buildEnvelope({ id, tsRequest, tsRespStart, durationMs: dur(), method: req.method, endpoint: req.url, reqBody: bodyBuf, reqHeaders: req.headers, capture: 'reverse-proxy', resp, error: aborted }))
         })
       })
 
       upstream.on('error', (err) => {
+        // the response is under way (a reset mid-stream): teeResponse ends the client's response and writes the one
+        // error:true envelope when `up` closes; nothing may be appended to the stream the client already has
+        if (res.headersSent) { res.destroy(); return }
         if (!settled) {
           settled = true
           onEnvelope(buildEnvelope({ id, tsRequest, tsRespStart: null, durationMs: dur(), method: req.method, endpoint: req.url, reqBody: bodyBuf, reqHeaders: req.headers, capture: 'reverse-proxy', error: true, resp: { status: null, kind: 'error', error: { type: err.code || 'upstream_error', message: String((err && err.message) || err) } } }))

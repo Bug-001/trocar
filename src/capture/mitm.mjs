@@ -89,11 +89,17 @@ export function createMitmProxy({ targetHost, leaf, upstreamProxy, connectUpstre
       const upreq = https.request({ host: targetHost, port: 443, method: req.method, path: req.url, headers: fwd, createConnection: connect }, (up) => {
         const tsRespStart = isoStamp()
         teeResponse(up, res, { keepRawSse, where: 'mitm', onEvent }, (resp, aborted) => {
+          if (settled) return // one envelope per request
           settled = true
           onEnvelope(buildEnvelope({ id, tsRequest, tsRespStart, durationMs: dur(), method: req.method, endpoint: req.url, reqBody: bodyBuf, reqHeaders: req.headers, capture: 'mitm', resp, error: aborted }))
         })
       })
-      upreq.on('error', (err) => { emitError(err); if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: { type: 'atrace_mitm_upstream_error', message: err.message } })) })
+      upreq.on('error', (err) => {
+        // the response is under way (a reset mid-stream): teeResponse ends the agent's response and writes the one
+        // error:true envelope when `up` closes; nothing may be appended to what the agent already has
+        if (res.headersSent) { res.destroy(); return }
+        emitError(err); res.writeHead(502, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: { type: 'atrace_mitm_upstream_error', message: err.message } }))
+      })
       if (bodyBuf.length) upreq.write(bodyBuf)
       upreq.end()
     })

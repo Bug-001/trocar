@@ -42,18 +42,26 @@ async function proxied(handler, opts = {}) {
 }
 const allInSet = (events) => { for (const e of events) assert.deepEqual(checkRecord({ ts: 't', ...e }), [], JSON.stringify(e)) }
 
-test('L-2: an upstream that closes mid-response → error:true envelope with what arrived, the client\'s response ended (not hanging), an upstream-aborted event', async () => {
-  const p = await proxied((req, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write('event: message_start\ndata: {"type":"message_start","message":{"id":"m1","model":"x"}}\n\n'); setTimeout(() => res.socket.destroy(), 20) })
-  try {
-    const r = await p.send()
-    assert.ok(['error', 'aborted'].includes(r.ended), `the client sees the response cut — not complete, not hanging (${r.ended})`)
-    await p.until(() => p.envelopes.length)
-    const env = p.envelopes[0]
-    assert.deepEqual([env.error, env.resp.kind, env.resp.error.type, env.resp.partial.message.id], [true, 'error', 'upstream_aborted', 'm1'])
-    assert.deepEqual(p.events.map((e) => [e.where, e.code]), [['proxy', 'upstream-aborted']])
-    allInSet(p.events)
-  } finally { p.close() }
-})
+// cut = how the upstream ends mid-response: a FIN (destroy) or a reset (RST → ECONNRESET on the proxy's request too,
+// which once wrote a second envelope with the same id and appended an error JSON to the client's stream)
+const cutSocket = (sock, cut) => { const raw = sock._parent || sock; if (cut === 'reset') (raw.resetAndDestroy ? raw : sock).resetAndDestroy(); else sock.destroy() }
+for (const cut of ['fin', 'reset']) {
+  test(`L-2 (${cut}): an upstream that closes mid-response → one error:true envelope with what arrived, the client's response ended (not hanging, nothing appended), an upstream-aborted event`, async () => {
+    const p = await proxied((req, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write('event: message_start\ndata: {"type":"message_start","message":{"id":"m1","model":"x"}}\n\n'); setTimeout(() => cutSocket(res.socket, cut), 20) })
+    try {
+      const r = await p.send()
+      assert.ok(['error', 'aborted'].includes(r.ended), `the client sees the response cut — not complete, not hanging (${r.ended})`)
+      assert.ok(!String(r.body || '').includes('"error"'), 'no error JSON appended to the event stream')
+      await p.until(() => p.envelopes.length)
+      await new Promise((ok) => setTimeout(ok, 100)) // a second envelope would come by now
+      assert.equal(p.envelopes.length, 1, 'one envelope per request')
+      const env = p.envelopes[0]
+      assert.deepEqual([env.error, env.resp.kind, env.resp.error.type, env.resp.partial.message.id], [true, 'error', 'upstream_aborted', 'm1'])
+      assert.deepEqual(p.events.map((e) => [e.where, e.code]), [['proxy', 'upstream-aborted']])
+      allInSet(p.events)
+    } finally { p.close() }
+  })
+}
 
 test('L-3: a compressed SSE stream that cannot be decompressed → the envelope still comes, with encoding_error and the wire bytes; a decode-failed event', async () => {
   const garbage = Buffer.from('this is not gzip at all, but says it is')
@@ -143,11 +151,11 @@ test('L-1: an agent that refuses the capture\'s leaf (does not trust the CA) —
   } finally { px2.close(); refuse.close() }
 })
 
-test('L-2 on the MITM too (4.1 #6): an upstream cut mid-stream → error:true envelope (capture:mitm) with what arrived, the agent\'s connection ended, a mitm/upstream-aborted event', async () => {
+for (const cut of ['fin', 'reset']) test(`L-2 on the MITM too (4.1 #6, ${cut}): an upstream cut mid-stream → one error:true envelope (capture:mitm) with what arrived, the agent's connection ended, a mitm/upstream-aborted event`, async () => {
   const ca = createCa({ commonName: 'asight legacy test CA' })
   const leafCtx = createLeafIssuer(loadCa(ca)).issue('api.anthropic.com')
   const api = https.createServer({ key: leafCtx.keyPem, cert: leafCtx.certPem }, (req, res) => {
-    req.resume(); req.on('end', () => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write('event: message_start\ndata: {"type":"message_start","message":{"id":"m2","model":"x"}}\n\n'); setTimeout(() => res.socket.destroy(), 20) })
+    req.resume(); req.on('end', () => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write('event: message_start\ndata: {"type":"message_start","message":{"id":"m2","model":"x"}}\n\n'); setTimeout(() => cutSocket(res.socket, cut), 20) })
   })
   const apiPort = await listen(api)
   const envelopes = [], events = []
@@ -165,7 +173,10 @@ test('L-2 on the MITM too (4.1 #6): an upstream cut mid-stream → error:true en
     })
     assert.notEqual(got, 'hung', 'the agent\'s connection is ended, not left hanging')
     assert.ok(!/\r\n0\r\n\r\n$/.test(got), 'and not ended as a complete chunked response')
+    assert.ok(!got.includes('"error"'), 'no error JSON appended to the event stream')
     for (let i = 0; i < 200 && !envelopes.length; i++) await new Promise((r) => setTimeout(r, 10))
+    await new Promise((ok) => setTimeout(ok, 100)) // a second envelope would come by now
+    assert.equal(envelopes.length, 1, 'one envelope per request')
     const env = envelopes[0]
     assert.deepEqual([env.capture, env.error, env.resp.kind, env.resp.error.type, env.resp.partial.message.id], ['mitm', true, 'error', 'upstream_aborted', 'm2'])
     assert.deepEqual(events.map((e) => [e.where, e.code]), [['mitm', 'upstream-aborted']])
