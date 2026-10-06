@@ -276,7 +276,7 @@ test('daemon: failures it owns leave a durable record with a reason, also when i
   const fails = (where) => flowsOf(s).filter((f) => f.event === 'failure' && f.where === where)
   let stopped = false
   try {
-    assert.match(fails('daemon')[0].reason, /previous daemon \(pid 999999\) ended without a clean stop/)
+    assert.match(fails('daemon')[0].reason, /previous daemon \(pid 999999\) ended without a clean stop.*connections then in flight through its engine were cut \(how many is not known\)/)
     // engine: a connection steered to it whose original destination is unknown is closed — recorded, folded within 10 s
     for (let i = 0; i < 2; i++) { const c = net.connect(d.port, '127.0.0.1'); await once(c, 'close') }
     await until(() => fails('engine').length === 1)
@@ -302,7 +302,7 @@ test('daemon: an unreadable lock, an unreadable state file and a control request
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] })
   const fails = (where) => flowsOf(s).filter((f) => f.event === 'failure' && f.where === where)
   try {
-    assert.match(fails('daemon')[0].reason, /unreadable lock .*ended without a clean stop/)
+    assert.match(fails('daemon')[0].reason, /unreadable lock .*ended without a clean stop, and connections then in flight through its engine were cut \(how many is not known\)/)
     assert.match(fails('state')[0].reason, /state\.json is unreadable .*reads as off/)
     await assert.rejects(req(s.sock, 'POST', '/on', {}), /^Error: 500: /)
     const c = fails('control')

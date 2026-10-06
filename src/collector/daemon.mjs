@@ -77,8 +77,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     let stale = null
     let unreadable = false
     try { stale = JSON.parse(fs.readFileSync(P.lock, 'utf8')) } catch (e) { if (e.code !== 'ENOENT') unreadable = true } // ENOENT: the last daemon stopped cleanly
-    if (stale && stale.pid) failure('daemon', new Error(`the previous daemon (pid ${stale.pid}) ended without a clean stop (crash, kill -9 or power loss); its helper and links went with it`))
-    else if (unreadable) failure('daemon', new Error('the previous daemon left an unreadable lock (crash or power loss): it ended without a clean stop'))
+    if (stale && stale.pid) failure('daemon', new Error(`the previous daemon (pid ${stale.pid}) ended without a clean stop (crash, kill -9 or power loss); its helper and links went with it, and connections then in flight through its engine were cut (how many is not known)`))
+    else if (unreadable) failure('daemon', new Error('the previous daemon left an unreadable lock (crash or power loss): it ended without a clean stop, and connections then in flight through its engine were cut (how many is not known)'))
     // switch / helper events: their own descriptor (events.mjs), and every failure among them carries `reason`
     const event = (e) => { try { appendEvent(P.dir, { ...e, ...(e.error != null && e.reason == null ? { reason: String(e.error) } : {}) }) } catch (w) { log('events', w) } }
 

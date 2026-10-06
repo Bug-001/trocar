@@ -5,10 +5,10 @@
 // environment is frozen from the first TUI. The same binary is re-run as arg0 helpers (codex-linux-sandbox, apply_patch,
 // codex-execve-wrapper), with --codex-run-as-* argv1, and as the updater (`app-server daemon pid-update-loop`): none of
 // them call the model.
-// Trust: rustls; Codex picks CODEX_CA_CERTIFICATE, else SSL_CERT_FILE, and that bundle is the store it verifies with —
-// both are `replace` entries, as 4.6 says. Lab ① found that Codex trusts the CAs of both together (a shell
-// CODEX_CA_CERTIFICATE does not hide SSL_CERT_FILE); until the user decides, a shell CODEX_CA_CERTIFICATE without the
-// asight CA is still judged to shadow the entry (not decrypted, the client unaffected). $CODEX_HOME/.env is applied after exec (invisible in environ), once per start, over the
+// Trust (lab ①, codex-cli 0.160.0, HTTP and WebSocket alike): the store Codex verifies with is SSL_CERT_FILE's bundle
+// (the system roots when unset) plus CODEX_CA_CERTIFICATE's CA — both count, neither hides the other (the source reading
+// that CODEX_CA_CERTIFICATE replaces it was overruled by the measurement). For the
+// resolver both are `append`; SSL_CERT_FILE still replaces the system roots, so asight points it at a combined bundle. $CODEX_HOME/.env is applied after exec (invisible in environ), once per start, over the
 // launch env, and drops every CODEX_* key. The bundle's contents are read again for every HTTP client and WebSocket
 // connection. Relay hosts: openai_base_url / chatgpt_base_url / model_providers.*.base_url from the system, user and
 // profile config.toml (project layers cannot set them); OPENAI_BASE_URL is not read for inference.
@@ -61,7 +61,6 @@ function inject(ctx) {
   for (const h of present) see(parseDotenv(ctx.readText(path.join(h, '.env')) || '').get('SSL_CERT_FILE'))
   for (const env of [ctx.env, ...ctx.running]) see(env.get('SSL_CERT_FILE'))
   notes.push(...[...seen].filter((v) => !path.isAbsolute(v)).map((v) => ({ code: CODE.relativePath, text: `${v} is a relative CA path; its certificates are not carried over into ${path.basename(bundle)}` })))
-  if (ctx.env.has('CODEX_CA_CERTIFICATE')) notes.push({ code: CODE.harnessNote, text: `CODEX_CA_CERTIFICATE is set in this shell; Codex picks it before SSL_CERT_FILE, so a codex started with it is not captured unless that file holds the asight CA` })
   return {
     entries: present.map((h) => ({ kind: 'text', format: 'dotenv-block', path: path.join(h, '.env'), vars: { SSL_CERT_FILE: bundle }, semantic: 'replace' })),
     files: [{ path: bundle, bundle: true, certsFrom: [...seen].filter((v) => path.isAbsolute(v)) }],
@@ -89,11 +88,10 @@ export default {
   proxies: (ctx) => envProxies(ctx.env, ['HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'HTTP_PROXY', 'http_proxy']),
   inject,
   trust: {
-    chain: [{ var: 'CODEX_CA_CERTIFICATE', semantic: 'replace' }, { var: 'SSL_CERT_FILE', semantic: 'replace' }],
+    chain: [{ var: 'SSL_CERT_FILE', semantic: 'append' }, { var: 'CODEX_CA_CERTIFICATE', semantic: 'append' }], // both count (lab ①)
     // $CODEX_HOME/.env is applied once, at start: a codex from before install never named the bundle (no rereadsEntry).
     // One started after it reads the bundle again for every HTTP client and WebSocket connection:
     afterUninstall: 'next-connection',
-    hints: { shadowed: 'a CODEX_CA_CERTIFICATE exported in the shell is picked before the $CODEX_HOME/.env SSL_CERT_FILE' },
   },
   // One logical WebSocket call ends at one of these server messages (RFC 4.6 §传输与帧级记录). Data only: the daemon
   // hands it to the engine per connection (describe → tracker.extrasFor, plan 3c WsTerminal shape).

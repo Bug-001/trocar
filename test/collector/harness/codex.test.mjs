@@ -1,7 +1,7 @@
 // test/collector/harness/codex.test.mjs — the Codex descriptor (RFC 4.6 §身份与信任 Codex rows, D37④): R1 (the native
 // binary and the managed app-server daemon; the Node launcher, arg0 helpers and the updater are not the agent), T12
-// ($CODEX_HOME/.env believed only when it held the value at start, CODEX_* keys dropped, a shell CODEX_CA_CERTIFICATE
-// shadows it), relay hosts from config.toml, the Responses terminal messages as data, T10 / T14 the sentinel block in
+// ($CODEX_HOME/.env believed only when it held the value at start, CODEX_* keys dropped, SSL_CERT_FILE and a shell
+// CODEX_CA_CERTIFICATE both count — acceptance ①), relay hosts from config.toml, the Responses terminal messages as data, T10 / T14 the sentinel block in
 // every Codex home's .env with combined-codex.pem, T11 install → uninstall.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -42,21 +42,24 @@ test('codex: $CODEX_HOME/.env SSL_CERT_FILE is believed only when it was there a
     assert.ok(ok.proxies.includes('https://proxy.example.com:8443'))
     assert.deepEqual([judge(codex, ctxFor({ home: s.home, startedAt: 1 })).trust.reason], ['config-after-start'])
     s.put('alt/.env', `SSL_CERT_FILE=${s.put('ca/other.pem', OTHER.certPem)}\n`)
-    assert.equal(judge(codex, ctxFor({ home: s.home, env: { CODEX_HOME: path.join(s.home, 'alt') } })).trust.reason, 'replace-without-ca')
+    assert.equal(judge(codex, ctxFor({ home: s.home, env: { CODEX_HOME: path.join(s.home, 'alt') } })).trust.reason, 'ca-not-in-file')
   } finally { s.done() }
 })
 
-test('codex: a shell CODEX_CA_CERTIFICATE is picked before SSL_CERT_FILE — without the CA it shadows the .env entry (T12)', () => {
+test('codex: SSL_CERT_FILE and a shell CODEX_CA_CERTIFICATE both count — one without the CA never hides the other (T12, acceptance ①: Codex trusts both)', () => {
   const s = sandbox()
   try {
     const only = s.put('ca/asight.pem', CA.certPem); const foreign = s.put('ca/other.pem', OTHER.certPem)
     const merged = s.put('ca/merged.pem', OTHER.certPem + CA.certPem)
-    assert.equal(judge(codex, ctxFor({ home: s.home, env: { SSL_CERT_FILE: foreign, CODEX_CA_CERTIFICATE: only } })).trust.trusted, true)
-    assert.equal(judge(codex, ctxFor({ home: s.home, env: { SSL_CERT_FILE: foreign } })).trust.reason, 'replace-without-ca')
+    const at = (env) => judge(codex, ctxFor({ home: s.home, env, startedAt: Date.now() + 60_000 })).trust
+    assert.deepEqual([at({ SSL_CERT_FILE: foreign, CODEX_CA_CERTIFICATE: only }).trusted, at({ SSL_CERT_FILE: foreign, CODEX_CA_CERTIFICATE: only }).var], [true, 'CODEX_CA_CERTIFICATE'])
+    assert.deepEqual([at({ SSL_CERT_FILE: foreign }).trusted, at({ SSL_CERT_FILE: foreign }).reason], [false, 'ca-not-in-file'])
     s.put('.codex/.env', `SSL_CERT_FILE=${merged}\n`)
-    const r = judge(codex, ctxFor({ home: s.home, env: { CODEX_CA_CERTIFICATE: foreign } }))
-    assert.deepEqual([r.trust.trusted, r.trust.reason, r.trust.var], [false, 'shadowed', 'CODEX_CA_CERTIFICATE'])
-    assert.ok(codex.trust.hints.shadowed)
+    const r = at({ CODEX_CA_CERTIFICATE: foreign })
+    assert.deepEqual([r.trusted, r.reason, r.var, r.via], [true, 'ok', 'SSL_CERT_FILE', '$CODEX_HOME/.env'], 'the shell CODEX_CA_CERTIFICATE adds a CA, it does not hide the .env bundle')
+    s.put('.codex/.env', `SSL_CERT_FILE=${foreign}\n`)
+    assert.deepEqual([at({ CODEX_CA_CERTIFICATE: foreign }).trusted, at({ CODEX_CA_CERTIFICATE: foreign }).reason], [false, 'ca-not-in-file'], 'neither holds it: untrusted')
+    assert.equal((codex.trust.hints || {}).shadowed, undefined, 'no shadowing to explain')
   } finally { s.done() }
 })
 
@@ -80,7 +83,7 @@ const planFor = (s, env = {}, running = []) => {
   return planTrust({ descriptors: [codex], ctxFor: () => ({ os: 'none', home: s.home, env: new Map(Object.entries(env)), running: running.map((e) => new Map(Object.entries(e))), collectorDir: dir, caPem: path.join(dir, 'ca', 'asight-ca.pem'), readText: (f) => { try { return fs.readFileSync(f, 'utf8') } catch { return null } }, readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } } }), caCertPem: CA.certPem, collectorDir: dir, roots: { node: [], osText: '' } })
 }
 
-test('codex inject: a block with SSL_CERT_FILE=combined-codex.pem atop the .env of every Codex home in use; the bundle carries the SSL_CERT_FILE CAs it overrides; a shell CODEX_CA_CERTIFICATE is named (T10, T14)', () => {
+test('codex inject: a block with SSL_CERT_FILE=combined-codex.pem atop the .env of every Codex home in use; the bundle carries the SSL_CERT_FILE CAs it overrides; a shell CODEX_CA_CERTIFICATE needs no note (T10, T14)', () => {
   const s = sandbox()
   try {
     const none = planFor(s)
@@ -96,7 +99,7 @@ test('codex inject: a block with SSL_CERT_FILE=combined-codex.pem atop the .env 
     assert.deepEqual([p.files[0].path, p.files[0].role, p.files[0].sources], [bundle, 'bundle', [corp, shell]], 'the .env line it puts out of effect, the install shell; never asight\'s own bundle')
     assert.deepEqual(fps(p.files[0].data), [fp(OTHER), fp(SHELL), fp(CA)])
     assert.ok(p.records.some((r) => /gone/.test(r.reason)), 'a CODEX_HOME that does not exist is named')
-    assert.ok(p.records.some((r) => /^CODEX_CA_CERTIFICATE is set in this shell/.test(r.reason)), 'the shadowing shell variable is named')
+    assert.ok(!p.records.some((r) => /CODEX_CA_CERTIFICATE/.test(r.reason)), 'it adds to the store, it does not keep a codex from being captured: no note')
     assert.ok(!p.records.some((r) => r.code === 'source-unreadable'))
   } finally { s.done() }
 })
@@ -148,6 +151,6 @@ test('codex: a same-name SSL_CERT_FILE line the user adds below asight\'s block 
     assert.equal(judge(codex, ctxFor({ home: s.home, argv: ['codex'] }), installed).trust.trusted, true)
     fs.appendFileSync(env, `SSL_CERT_FILE=${corp}\n`)
     const r = judge(codex, ctxFor({ home: s.home, argv: ['codex'] }), installed)
-    assert.deepEqual([r.trust.trusted, r.trust.reason, r.trust.var], [false, 'replace-without-ca', 'SSL_CERT_FILE'])
+    assert.deepEqual([r.trust.trusted, r.trust.reason, r.trust.var], [false, 'ca-not-in-file', 'SSL_CERT_FILE'])
   } finally { s.done() }
 })
