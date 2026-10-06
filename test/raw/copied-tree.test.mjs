@@ -45,7 +45,7 @@ test('F4: a copied tree that kept mtimes is read once, and its originals can be 
     assert.equal(listSources([copy]).superseded.length, 1, 'the sealed calls copy was not recognised as the copied original\'s');
     const v = await view(copy);
     assert.deepEqual(v.records.map((r) => r.id), want, 'records read twice from a copied tree');
-    assert.equal(v.source_errors, undefined);
+    assert.equal((v.source || {}).errors, undefined);
     const del = await sealLegacy(copy, { ...NONE, journal: path.join(root, 'j.jsonl'), deleteOriginal: true });
     assert.deepEqual(del.refused, []);
     assert.deepEqual(listFiles(copy, /\.ndjson$/), []);
@@ -64,6 +64,6 @@ test('F4: a copy that kept only the size is reported as a possible duplicate, ne
     const ls = listSources([copy]);
     assert.ok(ls.mismatched.some((m) => /same size/.test(m.why)), JSON.stringify(ls.mismatched));
     const v = await view(copy);
-    assert.ok((v.source_errors || []).some((e) => e.kind === 'coexist-mismatch' && /twice/.test(e.reason)), 'a possible double read is not labelled');
+    assert.ok(((v.source || {}).errors || []).some((e) => e.kind === 'coexist-mismatch' && /twice/.test(e.reason)), 'a possible double read is not labelled');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

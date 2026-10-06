@@ -38,7 +38,7 @@ test('S-3: a directory a reader cannot open is "unreadable" and reported — not
     assert.equal(sk.reason, 'unreadable');
     assert.equal(sk.error, 'EACCES');
     assert.match(sk.report, /could not be read/);
-    // the sharded board too: a session dir it cannot open is named in source_errors
+    // the sharded board too: a session dir it cannot open is named in source.errors
     const ses = path.join(root, 'sessions');
     await shardOnce({ file: writeShard(path.join(root, 'cap.ndjson'), conversation(S, 1).map((r) => toLine(r))), outDir: ses });
     const sdir = path.join(ses, '99999999-0000-4000-8000-000000000099');
@@ -50,7 +50,7 @@ test('S-3: a directory a reader cannot open is "unreadable" and reported — not
       try {
         const pj = await get(server.address().port, '/api/projects');
         const want = src === flat ? locked : sdir;
-        assert.ok((pj.source_errors || []).some((e) => e.file === want && /could not be read/.test(e.reason)), `${want} not reported: ${JSON.stringify(pj.source_errors)}`);
+        assert.ok(((pj.source || {}).errors || []).some((e) => e.file === want && /could not be read/.test(e.reason)), `${want} not reported: ${JSON.stringify((pj.source || {}).errors)}`);
       } finally { server.close(); }
     }
   } finally { unlock(); fs.rmSync(root, { recursive: true, force: true }); }
