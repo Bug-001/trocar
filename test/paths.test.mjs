@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { captureOut, mitmOut, serveSource, asightHome, collectorHome } from '../src/paths.mjs';
+import { captureOut, mitmOut, serveSource, asightHome, collectorHome, caDir } from '../src/paths.mjs';
+import * as off from '../src/off/paths.mjs';
+import { collectorPaths } from '../src/collector/daemon.mjs';
 
 // FIRST-RUN DEAD END (audit 2026-07-19). The capture writers and the board reader defaulted to
 // DIFFERENT paths: `asight capture` → ~/.atrace/capture.ndjson, `asight mitm` →
@@ -76,4 +78,35 @@ test('the collector directory is a default board root when it exists (4.6 §记�
     const legacy = path.join(home, 'legacy-root');
     assert.deepEqual(serveSource({ home, legacy, legacyExists: true }), [home, collectorHome(home), legacy], 'order: home, collector, legacy');
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+// 1.6 / 0.1 §2: src/off may import nothing outside itself, so it carries its own copy of the few paths it needs. Two copies can drift
+// apart silently (the undo side then looks for the CA, the state file or the backups where the install side never put them), so this
+// test is what makes them one fact: every path src/off/paths.mjs answers for a HOME is the one the rest of the code derives.
+test('src/off/paths.mjs answers the same paths as src/paths.mjs and the daemon for any HOME (D27 included)', () => {
+  const h = existingHome();
+  try {
+    assert.equal(off.asightHome(), asightHome(), 'the default HOME is the process HOME, as in src/paths.mjs');
+    const a = path.join(h, '.asight');
+    assert.equal(off.asightHome(h), a);
+    assert.equal(off.collectorDir(h), collectorHome(a));
+    assert.equal(off.stateFile(h), collectorPaths(collectorHome(a)).state, 'the daemon reads the state file the undo side writes');
+    assert.equal(off.backupDir(h), path.join(a, 'backup'));
+    assert.equal(off.standalonePath(h), path.join(a, 'bin', 'asight-off'));
+    assert.equal(off.legacyManifestPath(h), path.join(a, 'legacy-manifest.json'));
+    assert.equal(off.opLockFile(h), path.join(a, 'collector', 'op.lock'), '1.6 R12');
+    // oldCaDir == caDir() in all four shapes: neither CA directory, only the new one, only the D27 legacy one, both
+    const fresh = path.join(a, 'ca'); const legacy = path.join(h, '.atrace', 'ca');
+    const agree = (why, want) => {
+      assert.equal(off.oldCaDir(h), caDir({ home: a, legacyCa: legacy }), `${why}: both copies agree`);
+      assert.equal(off.oldCaDir(h), want, why);
+    };
+    agree('no CA anywhere: the new home', fresh);
+    fs.mkdirSync(legacy, { recursive: true });
+    agree('only ~/.atrace/ca: the legacy CA is THE CA (D27: the keychain root is named, not placed)', legacy);
+    fs.mkdirSync(fresh, { recursive: true });
+    agree('both: the new home wins', fresh);
+    fs.rmSync(legacy, { recursive: true });
+    agree('only the new home', fresh);
+  } finally { fs.rmSync(h, { recursive: true, force: true }); }
 });

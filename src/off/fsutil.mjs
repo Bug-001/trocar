@@ -13,7 +13,7 @@ export const sha256 = (data) => (data == null ? null : crypto.createHash('sha256
 export function readOrNull(fs, file) { try { return fs.readFileSync(file) } catch (e) { if (e.code === 'ENOENT') return null; throw e } }
 
 /** fsync a directory so a rename or a created file in it is durable; a filesystem that refuses it is not an error. */
-export function syncDir(fs, dir) { try { const fd = fs.openSync(dir, 'r'); try { fs.fsyncSync(fd) } finally { fs.closeSync(fd) } } catch { /* a filesystem that refuses dir fsync */ } }
+export function fsyncDir(fs, dir) { try { const fd = fs.openSync(dir, 'r'); try { fs.fsyncSync(fd) } finally { fs.closeSync(fd) } } catch { /* a filesystem that refuses dir fsync */ } }
 
 // Atomic and durable: temp file in the same directory, fsync, rename over, fsync the directory.
 export const TMP_MARK = '.asight-tmp-'
@@ -22,7 +22,7 @@ export function writeDurable(file, data, mode, fs = nodeFs) {
   const fd = fs.openSync(tmp, 'w', mode)
   try { fs.writeSync(fd, data); fs.fchmodSync(fd, mode); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
   fs.renameSync(tmp, file)
-  syncDir(fs, path.dirname(file))
+  fsyncDir(fs, path.dirname(file))
 }
 
 // The directories that do not exist yet on the way to `dir`, outermost first.
