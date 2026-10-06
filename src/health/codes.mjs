@@ -59,8 +59,15 @@ export const CODES_BY_PART = Object.freeze({
 })
 export const CODES = Object.freeze([...new Set(Object.values(CODES_BY_PART).flat())])
 
+// What `asight off` writes (RFC 1.6 R1 / R2 / R3, D39⑦). A block of its own, below CODES and apart from the lists above, so that
+// the lists other branches append to (D40: WHERE, STATE_EVENTS, CODES_BY_PART) stay edit-free here; `sets` below adds them.
+// src/off/names.mjs holds the same names (src/off may import nothing outside itself); test/health/codes.test.mjs holds the two equal.
+export const OFF_WHERE = Object.freeze(['off'])
+export const OFF_EVENTS = Object.freeze(['off-note']) // a state change (the last one of a run carries kind:'result'), not a failure
+export const OFF_CODES = Object.freeze(['backup-failed', 'backup-kept', 'undone-by-marker'])
+
 const ERRNO = /^(E[A-Z0-9_]+|Z_[A-Z_]+)$/ // Node's own error codes (errno, ERR_*, zlib's Z_*), written as they are
-const sets = { nc: new Set([...NOT_CAPTURED_FAILURE, ...NOT_CAPTURED_EXPECTED]), ncFail: new Set(NOT_CAPTURED_FAILURE), fail: new Set(FAILURE_EVENTS), event: new Set([...FAILURE_EVENTS, ...STATE_EVENTS]), where: new Set(WHERE), code: new Set(CODES) }
+const sets = { nc: new Set([...NOT_CAPTURED_FAILURE, ...NOT_CAPTURED_EXPECTED]), ncFail: new Set(NOT_CAPTURED_FAILURE), fail: new Set(FAILURE_EVENTS), event: new Set([...FAILURE_EVENTS, ...STATE_EVENTS, ...OFF_EVENTS]), where: new Set([...WHERE, ...OFF_WHERE]), code: new Set([...CODES, ...OFF_CODES]) }
 
 export const isCode = (c) => sets.code.has(c) || ERRNO.test(String(c))
 

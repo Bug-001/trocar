@@ -8,7 +8,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { NOT_CAPTURED_FAILURE, NOT_CAPTURED_EXPECTED, FAILURE_EVENTS, STATE_EVENTS, WHERE, CODES, TRUST_REASONS, isFailure, isCode, notCapturedClass, checkRecord } from '../../src/health/codes.mjs'
+import { NOT_CAPTURED_FAILURE, NOT_CAPTURED_EXPECTED, FAILURE_EVENTS, STATE_EVENTS, WHERE, CODES, TRUST_REASONS, OFF_WHERE, OFF_EVENTS, OFF_CODES, isFailure, isCode, notCapturedClass, checkRecord } from '../../src/health/codes.mjs'
+import { WHERE_OFF, EVENT_OFF_NOTE, CODE_OFF } from '../../src/off/names.mjs'
 import { EVENT, CODE, TRUST_REASON } from '../../src/collector/core/codes.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 
@@ -103,4 +104,32 @@ test('D38 the collector name maps and every harness trust reason are in the clos
   for (const h of await loadHarnesses()) for (const r of Object.keys((h.trust && h.trust.hints) || {})) if (!TRUST_REASONS.includes(r)) unlisted.push(`${h.name}: ${r}`)
   assert.deepEqual(unlisted, [], 'a harness defines a trust reason that src/health/codes.mjs TRUST_REASONS does not list')
   for (const r of TRUST_REASONS) assert.ok(isCode(r), r)
+})
+
+// D39⑦ (RFC 1.6 §涉及源文件与接口「闭集」): the names `asight off` writes. src/off may import nothing outside itself (0.1 §2), so
+// it keeps its own copy (src/off/names.mjs); this is what keeps the two copies the same list.
+test('D39 the off names (where off, event off-note, codes backup-failed / backup-kept / undone-by-marker) are in the closed sets', () => {
+  assert.deepEqual(checkRecord({ event: 'off-note', where: 'off', code: 'backup-kept', reason: 'x' }), [])
+  assert.deepEqual(checkRecord({ event: 'off-note', where: 'off', code: 'undone-by-marker', reason: 'x' }), [])
+  assert.deepEqual(checkRecord({ event: 'failure', where: 'off', code: 'backup-failed', reason: 'could not write the backup' }), [])
+  assert.deepEqual(checkRecord({ event: 'off-note', where: 'off', kind: 'result', outcome: 'done' }), [])
+  for (const c of OFF_CODES) { assert.ok(isCode(c), c); assert.deepEqual(checkRecord({ event: 'off-note', where: 'off', code: c }), [], c) }
+  assert.deepEqual(OFF_CODES, ['backup-failed', 'backup-kept', 'undone-by-marker'])
+  assert.deepEqual(OFF_WHERE, ['off']); assert.deepEqual(OFF_EVENTS, ['off-note'])
+  // the sets still reject a name next to them (the check can fail)
+  assert.deepEqual(checkRecord({ event: 'off-notes', where: 'offf', code: 'backup-lost' }), ['event "off-notes"', 'where "offf"', 'code "backup-lost"'])
+})
+
+test('D39 an off-note is a state change, not a failure: the indicator turns on a failure event only', () => {
+  assert.equal(isFailure({ event: 'off-note', where: 'off', code: 'backup-kept', reason: 'x' }), false)
+  assert.equal(isFailure({ event: 'failure', where: 'off', code: 'backup-failed', reason: 'x' }), true)
+  assert.ok(!FAILURE_EVENTS.includes('off-note') && !STATE_EVENTS.includes('off-note'), 'kept out of the D40-edited lists: its own block (OFF_EVENTS)')
+})
+
+test('D39 src/off/names.mjs is the same list as the closed set (src/off cannot import src/health)', () => {
+  assert.deepEqual([WHERE_OFF], OFF_WHERE)
+  assert.deepEqual([EVENT_OFF_NOTE], OFF_EVENTS)
+  assert.deepEqual(Object.values(CODE_OFF), OFF_CODES)
+  assert.deepEqual(Object.keys(CODE_OFF), ['backupFailed', 'backupKept', 'undoneByMarker'])
+  assert.ok(Object.isFrozen(CODE_OFF))
 })
