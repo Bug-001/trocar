@@ -7,10 +7,16 @@
 // through the readers' own functions, in-process, and fails when it compared nothing.
 //
 // For each group — a session dir, a control class, a stream flat in the root:
-//   before = what the readers read now: the board's input list for the dir (discover.dirInputs — one
-//            copy per line, in record order; ETL reads the same files one by one);
-//   after  = the same list with every original that has a sealed copy treated as deleted (`exclude`),
-//            i.e. what they will read after `asight raw seal --legacy --delete-original`.
+//   deletable = the originals `asight raw seal --legacy --delete-original` would delete — decided by
+//            the deleter's OWN test (legacy.mjs sameStreamCopies: a sealed copy whose content is all
+//            of the file), not by the readers' stat rule. They differ after a `touch` or in a tree
+//            copied without its times, and a deletion nobody compared is what this tool exists to
+//            prevent (review 3, second pass on F1);
+//   before = the board's input list for the dir (discover.dirInputs — one copy per line, in record
+//            order; ETL reads the same files one by one) with those originals' copies set aside: the
+//            readers over the originals;
+//   after  = the same list with those originals set aside instead: the readers over their copies,
+//            i.e. what they will read after the deletion.
 // Both sides are read with ingest.forEachLine — readRecords' own line source, for NDJSON and sealed
 // files alike — one record at a time, and compared record by record: stream, id, ts and the sha256 of
 // the line. Then the resolver (source.buildResolver, built once over the root as it is and once with
@@ -23,6 +29,7 @@ import { dirInputs, isSealedPath, streamOfSealed } from '../raw/discover.mjs';
 import { forEachLine } from '../etl/ingest.mjs';
 import { buildResolver } from './source.mjs';
 import { appendJournal, defaultJournalPath } from '../raw/journal.mjs';
+import { sameStreamCopies } from '../raw/legacy.mjs';
 
 const SESSION_STREAMS = ['calls.ndjson', 'probes.ndjson', 'other.ndjson'];   // src/server.mjs, the board's order
 const CONTROL = 'control';
@@ -100,14 +107,19 @@ function outcome(resolve, ref) {
 export async function compareTree(root, { fs = nodeFs, onGroup = () => {}, resolverOf = buildResolver } = {}) {
   const groups = groupsOf(root, fs).map((g) => {
     if (g.kind === 'unreadable') return { ...g, status: 'diff', diff: { what: `directory unreadable: ${g.error}` } };
-    const before = inputs(g, fs);
-    const deletable = [...new Set(before.superseded.map((x) => x.original))];
     const present = g.originals.map((n) => path.join(g.dir, n)).filter((f) => (!g.stream || streamOf(f) === g.stream) && fs.existsSync(f));
-    return { ...g, before, deletable, uncovered: present.filter((f) => !deletable.includes(f)), notes: before.mismatched.map((m) => `${path.basename(m.sealed)}: ${m.why}`) };
+    const deletable = [], copies = [];
+    for (const f of present) {
+      const same = sameStreamCopies(fs, f).filter((c) => c.rel === 'same').map((c) => c.file);
+      if (same.length) { deletable.push(f); copies.push(...same); }
+    }
+    // what the readers do NOW, for the notes: a pair they read twice (a touched original) is said
+    const now = inputs(g, fs);
+    return { ...g, deletable, copies, uncovered: present.filter((f) => !deletable.includes(f)), notes: now.mismatched.map((m) => `now: ${path.basename(m.sealed)}: ${m.why}`) };
   });
-  const all = new Set(groups.flatMap((g) => g.deletable || []));
+  const all = new Set(groups.flatMap((g) => g.deletable || [])), copies = new Set(groups.flatMap((g) => g.copies || []));
   let rb = null, ra = null;
-  if (all.size) { rb = await resolverOf(root); ra = await resolverOf(root, { exclude: all }); }
+  if (all.size) { rb = await resolverOf(root, { exclude: copies }); ra = await resolverOf(root, { exclude: all }); }
   const out = [];
   let compared = 0;
   try {
@@ -116,7 +128,7 @@ export async function compareTree(root, { fs = nodeFs, onGroup = () => {}, resol
       if (!r.status) {
         if (!r.deletable.length) r.status = r.uncovered.length ? 'not-covered' : 'sealed-only';
         else {
-          const b = await readSide(g.before.files);
+          const b = await readSide(inputs(g, fs, new Set(g.copies)).files);
           const a = await readSide(inputs(g, fs, new Set(r.deletable)).files);
           r.records = b.recs.length;
           r.diff = firstDifference(b, a);
@@ -144,11 +156,13 @@ export async function compareTree(root, { fs = nodeFs, onGroup = () => {}, resol
 export async function runCompare({ root, fs = nodeFs, journal = defaultJournalPath(), onGroup }) {
   const res = await compareTree(root, { fs, onGroup });
   for (const g of res.groups) {
+    if (g.uncovered.length) appendJournal({ op: 'compare', outcome: 'not-covered', root, group: g.group, files: g.uncovered, reason: 'no sealed copy holds these files\' bytes — not compared; --delete-original refuses them' }, { journal });
     if (g.status === 'diff') appendJournal({ op: 'compare', outcome: 'diff', root, group: g.group, reason: g.diff.what, ...(g.diff.at != null ? { at: g.diff.at, before: g.diff.before, after: g.diff.after } : {}) }, { journal });
     for (const n of g.notes) appendJournal({ op: 'compare', outcome: 'note', root, group: g.group, reason: n }, { journal });
   }
   const count = (s) => res.groups.filter((g) => g.status === s).length;
   appendJournal({ op: 'compare', outcome: res.ok ? 'ok' : 'failed', root, compared: res.compared, groups: res.groups.length, same: count('same'), diff: count('diff'),
-    notCovered: count('not-covered'), ...(res.compared ? {} : { reason: 'nothing compared: no original here has a sealed copy' }) }, { journal });
+    notCovered: count('not-covered'), deletable: res.groups.reduce((n, g) => n + g.deletable.length, 0),
+    ...(res.compared ? {} : { reason: 'nothing compared: no original here has a sealed copy' }) }, { journal });
   return res;
 }

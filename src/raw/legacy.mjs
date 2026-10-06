@@ -294,7 +294,9 @@ export const failureState = (x) => (x.originalKept === false ? (x.state || 'orig
 
 // Sealed segments of `f`'s stream beside it whose only source has `f`'s name, each with its relation to
 // the file now at that path (verify.mjs copyRelation): { file, length, rel: same|earlier|other, why }.
-function sameStreamCopies(fs, f) {
+// The deleter's test: `--delete-original` deletes `f` only against its `same` copies — and `asight raw
+// compare` takes its "would be deleted" set from this very function (review 3, second pass on F1).
+export function sameStreamCopies(fs, f) {
   const dir = path.dirname(f), name = path.basename(f);
   return fs.readdirSync(dir).filter((n) => isSealedPath(n) && streamOfSealed(n) === name).map((n) => path.join(dir, n))
     .map((p) => { const s = sealedSources(p, { fs }); return s && s.length === 1 && s[0].name === name ? { file: p, length: s[0].length, ...copyRelation(s[0], f, { fs }) } : null; })

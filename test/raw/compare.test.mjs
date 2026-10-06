@@ -110,10 +110,63 @@ test('F1: a resolver that answers one id differently after the deletion is a DIF
   try {
     const ses = await tree(root);
     await sealLegacy(ses, { ...NONE, journal: path.join(root, 'j.jsonl') });
-    const resolverOf = async (r, o = {}) => ({ detail: (ref) => ({ status: o.exclude && ref.endsWith('#ca_00002') ? 'absent' : 'ok', text: 'x' }), dispose() {} });
+    // the "after deletion" resolver is the one built with the ORIGINALS set aside
+    const resolverOf = async (r, o = {}) => { const after = [...(o.exclude || [])].some((f) => f.endsWith('.ndjson'));
+      return { detail: (ref) => ({ status: after && ref.endsWith('#ca_00002') ? 'absent' : 'ok', text: 'x' }), dispose() {} }; };
     const res = await compareTree(ses, { resolverOf });
     const a = res.groups.find((g) => g.group === A);
     assert.equal(a.status, 'diff');
     assert.match(a.diff.what, /resolver answers .*ca_00002.*now ok, after deletion absent/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+// Second review of F1 (偷换概念): compare decided "would be deleted" by the readers' stat rule, the
+// deleter by content. After a `touch`, or in a tree copied without times, the dry run deletes files
+// compare called "not covered" — deletions nobody compared. compare now takes the deleter's own test
+// (legacy.mjs sameStreamCopies, relation `same`): every file the dry run would delete is compared.
+async function planned(ses) {
+  const dry = await sealLegacy(ses, { ...NONE, journal: null, deleteOriginal: true, dryRun: true });
+  return dry.plan.filter((x) => x.action === 'delete').map((x) => x.file).sort();
+}
+for (const [label, mangle] of [
+  ['a touched original (same bytes, new mtime)', (ses) => { const t = new Date(Date.now() + 5000); fs.utimesSync(path.join(ses, A, 'probes.ndjson'), t, t); return ses; }],
+  ['a tree copied without its times (cp -R)', (ses, root) => {
+    const copy = path.join(root, 'copy'); fs.cpSync(ses, copy, { recursive: true });
+    const t = new Date(Date.now() + 5000);
+    for (const f of listFiles(copy, /\.ndjson$/)) fs.utimesSync(f, t, t);
+    return copy;
+  }],
+]) {
+  test(`F1: every original the dry run would delete is compared — ${label}`, async () => {
+    const root = tmpDir();
+    try {
+      const ses0 = await tree(root);
+      await sealLegacy(ses0, { ...NONE, journal: path.join(root, 'j.jsonl') });
+      const ses = mangle(ses0, root);
+      const plan = await planned(ses);
+      assert.ok(plan.length >= 1, 'precondition: the dry run would delete something');
+      const res = await compareTree(ses);
+      const covered = res.groups.flatMap((g) => g.deletable).sort();
+      const uncovered = res.groups.flatMap((g) => g.uncovered);
+      assert.deepEqual(plan.filter((f) => uncovered.includes(f)), [], 'a file the dry run would delete is "not covered" in compare');
+      assert.deepEqual(plan.filter((f) => !covered.includes(f)), [], 'a file the dry run would delete was not compared');
+      assert.equal(res.ok, true, JSON.stringify(res.groups.filter((g) => g.status !== 'same')));
+      assert.equal(res.compared, 10);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+test('F1: `raw compare --list` names every compared and every not-covered original (for the cross-check with the dry run)', async () => {
+  const root = tmpDir();
+  try {
+    const home = path.join(root, 'home'), ses = await tree(path.join(home, '.asight'));
+    await sealLegacy(path.join(ses, A), { ...NONE, journal: null });                      // A sealed, B and control not
+    const r = spawnSync(process.execPath, [CLI, 'raw', 'compare', ses, '--list'], { encoding: 'utf8', env: { ...process.env, HOME: home, ASIGHT_SOURCE: '' } });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const lines = (tag) => r.stdout.split('\n').filter((l) => l.startsWith(tag + ' ')).map((l) => l.slice(tag.length).trim()).sort();
+    assert.deepEqual(lines('compared-original'), listFiles(path.join(ses, A), /\.ndjson$/));
+    assert.deepEqual(lines('not-covered'), [...listFiles(path.join(ses, B), /\.ndjson$/), ...listFiles(path.join(ses, 'control'), /\.ndjson$/)].sort());
+    const j = readJournal({ journal: path.join(home, '.asight', 'raw', 'journal.jsonl') }).filter((e) => e.op === 'compare' && e.outcome === 'not-covered');
+    assert.deepEqual(j.flatMap((e) => e.files).sort(), lines('not-covered'), 'the not-covered files are not journalled by name');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

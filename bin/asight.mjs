@@ -289,7 +289,7 @@ async function main() {
       const usage = 'usage: asight raw seal <closed-shard> [--sessions <dir>]\n'
         + '       asight raw seal --legacy <file|dir> [--dry-run] [--delete-original] [--quiet <seconds>]\n'
         + '       asight raw verify <sealed|dir> [--against <original>]\n'
-        + '       asight raw compare <dir>\n'
+        + '       asight raw compare <dir> [--list]\n'
         + '       asight raw export <session-id|file.sealed> [--sessions <dir>] [--out <dir|file>]\n'
         + '       asight raw journal [--tail <n>]';
       if (sub === 'seal') {
@@ -362,7 +362,13 @@ async function main() {
           for (const n of g.notes) console.log(`  note: ${n}`);
         } });
         const n = (s) => res.groups.filter((g) => g.status === s).length;
-        console.log(`compared ${res.compared} records in ${n('same') + n('diff')} groups (${res.groups.filter((g) => g.kind === 'session' && g.status !== 'not-covered' && g.status !== 'sealed-only').length} sessions): ${n('diff')} differ, ${n('not-covered')} not covered, ${n('sealed-only')} sealed only · ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+        // --list: one line per original, for the cross-check against `seal --legacy --delete-original --dry-run`
+        if (rest.includes('--list')) for (const g of res.groups) {
+          if (g.status === 'same' || g.status === 'diff') for (const f of g.deletable) console.log(`compared-original ${f}`);
+          for (const f of g.uncovered) console.log(`not-covered ${f}`);
+        }
+        const del = res.groups.reduce((a, g) => a + g.deletable.length, 0);
+        console.log(`compared ${res.compared} records in ${n('same') + n('diff')} groups (${res.groups.filter((g) => g.kind === 'session' && g.status !== 'not-covered' && g.status !== 'sealed-only').length} sessions): ${n('diff')} differ, ${n('not-covered')} not covered, ${n('sealed-only')} sealed only · ${del} original(s) --delete-original would delete, all of them compared · ${((Date.now() - t0) / 1000).toFixed(1)} s`);
         if (!res.compared) console.error('nothing compared: no original here has a sealed copy — seal first (`asight raw seal --legacy <dir>`)');
         if (!res.ok) process.exitCode = 1;
         break;
@@ -472,7 +478,7 @@ usage:
   asight raw seal <closed-shard> [--sessions <dir>]                     D35: seal a CLOSED shard (needs <shard>.closed), per session
   asight raw seal --legacy <file|dir> [--dry-run] [--delete-original] [--quiet <s>]  seal pre-D35 files/trees nothing writes; keeps originals by default
   asight raw verify <sealed|dir> [--against <original>]                 decode sealed copies, compare byte for byte with the original
-  asight raw compare <dir>                                              readers' output over the originals vs the sealed copies alone, per session (before deleting)
+  asight raw compare <dir> [--list]                                     readers' output over the originals vs the sealed copies alone, per session (before deleting)
   asight raw export <session-id|file.sealed> [--out <dir|file>]         sealed → plain NDJSON, one file per segment (0600, default ~/.asight/export/<session>/)
   asight raw journal [--tail <n>]                                       the durable record of refusals, failures, deletions
   asight --version`);
