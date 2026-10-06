@@ -1737,8 +1737,9 @@ function renderResourceView(el){
 // Wording is baked server-side (call.reqIncomplete); this only picks the tag from its two booleans.
 // D38 a WebSocket call's labels ride in the same badge row — 不完整 (earlier messages missing: context),
 // 已截断 (past the cap), 未解码 (could not be decompressed), 非逐字 (a non-LLM endpoint: size only).
+// 4.1 落地细节 (10): the response body's labels (call.respIncomplete) ride in the same row.
 function reqBadge(c){
-  const q=c&&c.reqIncomplete, w=c&&c.wsIncomplete
+  const q=c&&c.reqIncomplete, w=c&&c.wsIncomplete, r=c&&c.respIncomplete
   let out=''
   if(q){
     const tag=[q.truncated?'请求体已截断 · request body truncated':'',q.partial?'请求体不完整 · request body incomplete':''].filter(Boolean).join(' · ')||'请求体不完整 · request body incomplete'
@@ -1747,6 +1748,10 @@ function reqBadge(c){
   if(w){
     const tag=[w.partial?'不完整 · context incomplete':'',w.truncated?'已截断 · truncated':'',w.undecoded?'未解码 · not decoded':'',w.nonVerbatim?'非逐字 · non-verbatim':''].filter(Boolean).join(' · ')
     out+=`<div class="rpk"><span class="pobadge" title="${esc(w.text)}">${tag}</span> ${esc(w.text)}</div>`
+  }
+  if(r){
+    const tag=[r.undecoded?'响应未解码 · response not decoded':'',r.binary?'响应非文本 · response not text':'',r.notJson?'响应不是 JSON · response not JSON':'',r.empty?'响应为空 · empty response':'',r.unparsed?'响应不完整 · response incomplete':'',r.truncated?'响应已截断 · response truncated':''].filter(Boolean).join(' · ')
+    out+=`<div class="rpk"><span class="pobadge" title="${esc(r.text)}">${tag}</span> ${esc(r.text)}</div>`
   }
   return out
 }
@@ -1801,7 +1806,7 @@ function renderContextWindow(){
   // every earlier block as removed, which reads as "the model saw nothing". Say what happened instead
   // (errMsg is baked server-side; it carries the capture's own label when the collector set one).
   if(call.unparsed){ curFlat=[]
-    win.innerHTML=(call.wsIncomplete?reqBadge({wsIncomplete:call.wsIncomplete}):'')+`<div class="pagedout"><div class="pohd">⚠ 无法呈现 · nothing to render for this call</div>`+
+    win.innerHTML=(call.wsIncomplete||call.respIncomplete?reqBadge({wsIncomplete:call.wsIncomplete,respIncomplete:call.respIncomplete}):'')+`<div class="pagedout"><div class="pohd">⚠ 无法呈现 · nothing to render for this call</div>`+
       `<div class="pobody">${esc(call.errMsg||'the request body could not be parsed')}. `+
       (call.reqIncomplete?'The raw record holds only the bytes that were stored; the rest was never captured.':'The raw record is on disk unchanged (不变式4).')+`</div></div>`
     return }

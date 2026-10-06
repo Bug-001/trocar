@@ -16,7 +16,7 @@
 // bash-read parsing) lives in ONE dissector — src/dissect/cc.mjs — shared with the ETL adapter.
 // linearContext (below) is now just the board's PROJECTION of that dissector's canonical spine.
 import { dissectBlocks, sysLabel, parseBashReads } from '../dissect/cc.mjs'
-import { reqIncompleteOf, wsIncompleteOf } from '../dissect/capture-labels.mjs'
+import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf } from '../dissect/capture-labels.mjs'
 // Envelope drift guard (R1): the D10 envelope stores the response under `resp`, demo v0 under
 // `response`. Reading `.response` directly is the bug class that silently killed every HTTP status
 // on real captures — so go through the shared helper, never the raw key. (assemble.mjs imports
@@ -375,6 +375,7 @@ export function analyze(records) {
       unparsed: !!r._unparsed,
       reqIncomplete,
       wsIncomplete: wsIncompleteOf(r), // D38 a WebSocket call's labels (4.6 各说一件事)
+      respIncomplete: respIncompleteOf(r), // a response body not decoded / not JSON / empty / partly parsed / cut
       // `error` now covers EVERY non-200 (was: only 5xx — so a 401/429 rendered as a normal call).
       error: failed,
       // A labelled body says exactly what happened. The old wording stays for captures with no label

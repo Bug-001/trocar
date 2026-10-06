@@ -70,3 +70,30 @@ export function wsIncompleteOf(rec) {
   if (nonVerbatim) parts.push(`${nonVerbatim} client message(s) of a non-LLM endpoint stored as their size only (non-verbatim)`);
   return { partial, partialReasons, truncated, omitted, undecoded, nonVerbatim, ...(openerUndecoded ? { requestUndecoded: true } : {}), text: `WebSocket call: ${parts.join('; ')}` };
 }
+
+// The response body's labels (RFC 4.1 落地细节 (10), 4.6 §记录 体不完整; D38): the old capture and the
+// collector shape the response the same way, and a call whose body was not decoded, not JSON, empty, partly parsed or
+// cut must not look like a normal call with an empty answer (invariant 4). An interrupted call: what arrived
+// (`resp.partial`). → null when there is nothing to say; else the flags and one sentence.
+export function respIncompleteOf(rec) {
+  const resp = rec && rec.resp;
+  if (!resp || typeof resp !== 'object' || rec.transport === 'ws') return null; // a WebSocket call: wsIncompleteOf
+  const body = resp.kind === 'error' && resp.partial && typeof resp.partial === 'object' ? resp.partial : resp;
+  const undecoded = !!body.encoding_error;
+  const binary = !undecoded && body.kind === 'text' && body.raw_b64 != null;
+  const notJson = !undecoded && !binary && body.kind === 'text';
+  const empty = body.kind === 'empty';
+  const unparsed = typeof body.unparsed_events === 'number' && body.unparsed_events > 0 ? body.unparsed_events : 0;
+  const truncated = body.truncated === true;
+  const n = body.body_bytes;
+  const bodyBytes = truncated && typeof n === 'number' && Number.isFinite(n) ? n : null;
+  const parts = [];
+  if (undecoded) parts.push(`the body could not be decompressed (${String(body.encoding_error)}): its wire bytes are kept (raw_b64), its text is not`);
+  if (binary) parts.push('the body is not UTF-8 text: its bytes are kept (raw_b64), nothing was read from it');
+  if (notJson) parts.push('the body is not JSON (kept verbatim as text): no answer or usage was read from it');
+  if (empty) parts.push('there was no body');
+  if (unparsed) parts.push(`${unparsed} SSE event(s) whose data is not JSON were left out of the reconstruction: the answer shown may be incomplete`);
+  if (truncated) parts.push(`the body was cut at the capture cap: ${bodyBytes != null ? `only the first ${bodyBytes} bytes are stored` : 'only a prefix is stored'}`);
+  if (!parts.length) return null;
+  return { undecoded, binary, notJson, empty, unparsed, truncated, bodyBytes, text: `response: ${parts.join('; ')}` };
+}
