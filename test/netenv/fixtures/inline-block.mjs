@@ -53,19 +53,22 @@ export function vergeLikeConfig({ ports, secret, token = TOKEN, unifiedDelay = t
 }
 
 /**
- * Shape 2 (own-forwarder-like): a form listener with `rule: in-<g>` sub-rules; its own port is the re-entry point. On Windows the agent is told from the
- * forwarder's own re-entry connection by its image path; here by the listener user (the stand-in listener demands users: `agent` and `re`).
+ * Shape 2 (own-forwarder-like): a form listener with `rule: in-<g>` sub-rules; its own port is the re-entry point. Product: the agent is told from the forwarder's own
+ * re-entry connection by its image path (`identify: 'process'`, find-process-mode always, no listener users: the Windows spike). The Mac contract test cannot match a process
+ * path, so there (`identify: 'user'`, the default) the stand-in listener demands users: `agent` and `re`.
  */
-export function forwarderLikeConfig({ ports, secret, token = TOKEN, unifiedDelay = true, interval = 30 }) {
-  const b = inlineBlock({ route: 'of', enginePort: ports.engine, token, reenter: { port: ports.form, auth: { username: 're', password: 'rp' } }, interval })
+export function forwarderLikeConfig({ ports, secret, token = TOKEN, unifiedDelay = true, interval = 30, identify = 'user', regex = 'asight-test-client\\.exe', dir = 'asight' }) {
+  const byUser = identify === 'user'
+  const b = inlineBlock({ route: 'of', enginePort: ports.engine, token, reenter: { port: ports.form, auth: byUser ? { username: 're', password: 'rp' } : undefined }, dir, interval })
   return {
     config: {
       ...base({ controller: ports.controller, secret, unifiedDelay }),
-      listeners: [{ name: `form-${G}`, type: 'mixed', port: ports.form, listen: '127.0.0.1', rule: `in-${G}`, users: [{ username: 'agent', password: 'ap' }, { username: 're', password: 'rp' }] }],
+      ...(byUser ? {} : { 'find-process-mode': 'always' }),
+      listeners: [{ name: `form-${G}`, type: 'mixed', port: ports.form, listen: '127.0.0.1', rule: `in-${G}`, ...(byUser ? { users: [{ username: 'agent', password: 'ap' }, { username: 're', password: 'rp' }] } : {}) }],
       proxies: [...b.proxies, { name: `asight-up-${G}`, type: 'direct' }], 'proxy-groups': b.groups, 'rule-providers': b.providers,
       'sub-rules': { [`in-${G}`]: [b.rules[0], b.rules[1], `MATCH,asight-up-${G}`] },
       rules: ['MATCH,DIRECT'],
     },
-    routeFile: b.routeFile, route: `./asight/route-${G}.txt`, onLines: ['IN-USER,agent'],
+    routeFile: b.routeFile, route: `./${dir}/route-${G}.txt`, onLines: byUser ? ['IN-USER,agent'] : [`PROCESS-PATH-REGEX,${regex}`],
   }
 }
