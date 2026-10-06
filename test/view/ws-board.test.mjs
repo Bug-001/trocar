@@ -83,6 +83,13 @@ test('W7: every call\'s stitched blocks resolve, through refs into earlier recor
     return v.analyzed.steps.map((s) => s.wire.contextState);
   };
   assert.deepEqual(check(sessionView(records, 'CX')), ['complete', 'reconstructed', 'reconstructed']);
+  { // 3.1:37: the inherited history counted twice (the OpenCode failure mode) goes red
+    const call = sessionView(records, 'CX').analyzed.steps[2];
+    const index = contexts.contexts.findIndex((c) => c.text === ws.find((r) => r.id === call.id).req_body);
+    const msgs = call.flat.filter((b) => b.sec === 'messages');
+    const twice = { ...call, flat: [...call.flat.filter((b) => b.sec !== 'messages'), ...msgs.slice(0, -1), ...msgs] };
+    assert.ok(verifyWsCall({ call: twice, resolve, contexts, index }).problems.some((p) => /duplicated or added|shown twice/.test(p)), 'a doubly-stitched context');
+  }
   const last = sessionView(records, 'CX').analyzed.steps[2];
   const inherited = last.flat.filter((b) => /^resp\.messages\.\d+$/.test(parseTextRef(b.text_ref).field || ''));
   assert.ok(inherited.length > 0 && inherited.every((b) => parseTextRef(b.text_ref).recordId === ws[1].id),

@@ -44,7 +44,7 @@ test('Chat envelope from the mock: AC-1 diff=0, AC-2 usage (DeepSeek-style split
   const mockBody = JSON.parse(findHttpExchange(await readMockLog(up), records[0].req_body).request.body.toString('utf8'));
   const problems = [];
   const values = rebuilt.map((b) => JSON.parse(b.text));
-  assert.equal(walkUnits(unitsOf('openai-chat', mockBody), values, problems), 5); // tools[0], sys, q1, a1, q2 part
+  assert.equal(walkUnits(unitsOf('openai-chat', mockBody), values, problems), 6); // tools[0], sys, q1, a1's reasoning_content, a1, q2 part
   assert.deepEqual(problems, []);
   const think = rebuilt.find((b) => b.kind === 'thinking');
   assert.deepEqual([think && think.text, think && think.faithfulness], ['"thought about q1"', 'verbatim'], 'reasoning_content is a verbatim thinking block');
