@@ -94,3 +94,19 @@ test('probe detail says the request body is not retained (3.2:134); a server lan
   assert.match(getEl('detail').innerHTML, /a warm-up request: not a conversation turn/);
   assert.doesNotMatch(getEl('detail').innerHTML, /token-count probe/);
 });
+
+test('a partial call\'s badge says which earlier record is missing (server-baked contextMissing)', async () => {
+  const v = await render(session(call({ ...W, transport: 'ws', contextState: 'partial', contextMissing: 'response resp_9 (named by previous_response_id) is not in this capture' })));
+  assert.match(v.raw, /title="response resp_9 \(named by previous_response_id\) is not in this capture — what is shown is NOT the full context/);
+  assert.doesNotMatch((await render(session(call({ ...W, contextState: 'partial' })))).raw, / — what is shown/, 'no missing note, no prefix');
+});
+
+test('client messages sent while the call was open are listed on it and open from the raw record (3.1:37)', async () => {
+  const xs = [{ key: 'req_extra_messages[0]', chars: 29, ref: 'S/c.ndjson#r1::req_extra_messages.0::0-29' },
+    { key: 'req_extra_messages[1]', chars: null, ref: null, note: 'stored as base64 bytes ({b64}), not as text' }];
+  const v = await render(session(call(W, { extraMessages: xs })));
+  assert.match(v.raw, /later client messages in this call/);
+  assert.match(v.raw, /data-nbk="S\/c\.ndjson#r1::req_extra_messages\.0::0-29"[^>]*>req_extra_messages\[0\]<\/code> 29c/);
+  assert.match(v.raw, /<code>req_extra_messages\[1\]<\/code> stored as base64 bytes/, 'one that is not text says what is stored');
+  assert.doesNotMatch((await render(session(call(W)))).raw, /later client messages/);
+});

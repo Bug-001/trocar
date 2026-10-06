@@ -106,6 +106,13 @@ What the board cannot vouch for, it labels on the call (raw panel and the top of
   mix wire formats; each call is read by its own.
 - Request keys that are not context blocks are listed one by one, each opening its verbatim bytes.
   A token-count probe keeps only its size, and its detail says so.
+- **Codex over WebSocket** (its default transport): each turn sends only its new input, so the board
+  rebuilds the context the model saw from the earlier calls on the same connection, following
+  `previous_response_id`. Every block still opens its verbatim bytes, also when they sit in an earlier
+  call's reply. Such a call is badged 跨记录拼接; if an earlier call it builds on was not captured, it is
+  badged 不完整 and says which one, and no cache claim is made over it. A warm-up (`generate:false`) sits
+  in the probe lane, not on the turn axis; messages the agent sent while a call was open (an interrupt)
+  are listed on that call.
 
 Optional: `asight etl <capture.ndjson|dir> --rebuild` (a directory such as `~/.asight/collector`: its
 top-level `*.ndjson` in name order, subdirectories never read; an incremental run refuses and asks

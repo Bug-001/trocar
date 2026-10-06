@@ -1775,7 +1775,8 @@ function wireBadges(c){
   const w=c&&c.wire; if(!w) return ''
   let h=''
   // a request stored incomplete already has its own, exact badge (reqBadge): do not say it twice
-  const cs=CTX_LABEL[w.contextState]; if(cs&&!(w.contextState==='partial'&&c.reqIncomplete)) h+=`<span class="pobadge" title="${esc(cs[1])}">${esc(cs[0])}</span> `
+  // contextMissing (server-baked) says WHICH earlier record a partial context lacks
+  const cs=CTX_LABEL[w.contextState]; if(cs&&!(w.contextState==='partial'&&c.reqIncomplete)) h+=`<span class="pobadge" title="${esc((w.contextMissing?w.contextMissing+' — ':'')+cs[1])}">${esc(cs[0])}</span> `
   for(const e of (w.observerEffect||[])) h+=`<span class="pobadge" title="${esc(e.what)} — caused by asight's ${esc(e.cause)}">观测者效应 · capture changed client behaviour: ${esc(e.what)}</span> `
   if(w.transport==='ws') h+=`<span class="metabadge">WebSocket</span> `
   if(w.format&&w.vendor==null) h+=`<span class="metabadge" title="cache labels are per vendor (the upstream host); this host is not a known vendor, so none are claimed">厂商缓存语义未知 · vendor cache semantics unknown</span> `
@@ -1783,11 +1784,13 @@ function wireBadges(c){
   return h
 }
 const wireLine=c=>{ const b=wireBadges(c); return b?`<div class="rpk">${b}</div>`:'' }
-// 4.6 R2: request keys that are not context blocks, one by one, each fetched from the raw record on click
+// 4.6 R2: request keys that are not context blocks, one by one, each fetched from the raw record on click;
+// 3.1:37: the call's later client messages (call.extraMessages) the same way — never silently dropped
 function nonBlockList(c){
-  const ks=(c&&c.nonBlockKeys)||[]; if(!ks.length) return ''
-  return `<div class="rpk" title="request keys that are not context blocks — verbatim in the raw record">keys · `+
-    ks.map(k=>k.ref?`<code class="nbk" data-nbk="${esc(k.ref)}" style="cursor:pointer">${esc(k.key)}</code> ${kf(k.chars)}c`:`<code>${esc(k.key)}</code> ${kf(k.chars)}c`).join(' · ')+`<div class="nbkbody"></div></div>`
+  const ks=(c&&c.nonBlockKeys)||[], xs=(c&&c.extraMessages)||[]
+  const item=k=>k.ref?`<code class="nbk" data-nbk="${esc(k.ref)}" style="cursor:pointer">${esc(k.key)}</code> ${kf(k.chars)}c`:`<code>${esc(k.key)}</code> ${k.chars!=null?kf(k.chars)+'c':esc(k.note||'not stored as text')}`
+  return (ks.length?`<div class="rpk" title="request keys that are not context blocks — verbatim in the raw record">keys · `+ks.map(item).join(' · ')+`<div class="nbkbody"></div></div>`:'')+
+    (xs.length?`<div class="rpk" title="client messages sent while this call was open — part of the call, not of the context; verbatim in the raw record">later client messages in this call · `+xs.map(item).join(' · ')+`<div class="nbkbody"></div></div>`:'')
 }
 function renderRawPanel(){
   const el=document.getElementById('rawpanel'); if(!el) return
