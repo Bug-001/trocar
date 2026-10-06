@@ -47,7 +47,7 @@ test('early final response (413 mid-upload): prefix body labelled req_partial:ea
   t.fromUpstream(Buffer.from('HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\n\r\n'))
   t.fromClient(Buffer.from('"n":123}GET /next HTTP/1.1\r\n\r\n'))
   t.fromUpstream(Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'))
-  assert.deepEqual(out.map((e) => [e.endpoint, e.resp.status, e.req_body, e.req_partial]), [['/v1/messages', 413, '{"model":"m",', 'early-response'], ['/next', 200, { raw_chars: 0, verbatim: false }, undefined]])
+  assert.deepEqual(out.map((e) => [e.endpoint, e.resp.status, e.req_body, e.req_partial]), [['/v1/messages', 413, '{"model":"m",', 'early-response'], ['/next', 200, '', undefined]])
   assert.equal('req_truncated' in out[0], false)
   assert.equal(out[1].method, 'GET'); assert.equal(out[1].req_head_raw, 'GET /next HTTP/1.1\r\n\r\n')
 })
@@ -119,7 +119,7 @@ test('WebSocket 101: no HTTP envelope for the upgrade; frames after it (even in 
   t.fromClient(cframe('ping'))
   t.fromUpstream(sframe('done'))
   assert.deepEqual(out.map((e) => [e.seq, e.transport, e.req_body, e.resp.messages ?? e.resp.status]),
-    [[0, undefined, { raw_chars: 0, verbatim: false }, 200], [1, 'ws', 'early', ['done']], [2, 'ws', 'ping', ['done']]], 'the first call takes the upgrade\'s seq: no gap, no duplicate')
+    [[0, undefined, '', 200], [1, 'ws', 'early', ['done']], [2, 'ws', 'ping', ['done']]], 'the first call takes the upgrade\'s seq: no gap, no duplicate')
   assert.equal(out[2].req_head_raw, UPGRADE); assert.equal(out[2].resp_head_raw, SWITCH)
   assert.equal(t.wsSummary().calls, 2)
   t.upstreamEnded(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }))

@@ -28,6 +28,9 @@ export const ENVELOPE_CONSUMED = new Set([
   'origin', 'client_req_body', 'client_resp', 'intervention', 'resend_of',
   // D37 / WebSocket structure the read side interprets (gate G7)
   'transport', 'ws_frames', 'ws_ext', 'ws_raw', 'body_retention', 'req_body_b64', 'req_content_encoding',
+  // D40: every envelope says which traffic class it is and how many body bytes went over the wire (the projection's
+  // calls.traffic_class / request_bytes / response_bytes, 3.2 #5; the raw envelope keeps them either way)
+  'traffic_class', 'body_wire_bytes',
   // NOT listed on purpose: req_truncated / req_body_bytes / req_partial (#21) and partial / partial_reasons /
   // ws_truncated / req_encoding_error. They say a record is incomplete and calls has no column for them, so
   // consuming them would drop the invariant-4 label from the DuckDB row; unmapped, they land in calls.extra.

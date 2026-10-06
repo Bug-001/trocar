@@ -2,29 +2,12 @@
 // VERBATIM (the full decoded text in `raw`, so event: / id: / comment lines survive — invariant 2)
 // alongside the Anthropic reconstruction; JSON is parsed; other text is UTF-8 or raw_b64. Decoding
 // failures and truncation are labeled in place (invariant 4), never silently dropped.
-import zlib from 'node:zlib'
 import { makeSseReconstructor } from '../../../capture/sse-reconstruct.mjs'
+import { decodeContent } from '../../../capture/request-body.mjs'
 
-/** Decode Content-Encoding (comma-separated codings applied right to left). {buf, decoded, error?}. */
-export function decodeContent(buf, encoding) {
-  const codings = String(encoding || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
-  let cur = buf
-  for (let i = codings.length - 1; i >= 0; i--) {
-    const c = codings[i]
-    try {
-      if (c === 'br') cur = zlib.brotliDecompressSync(cur)
-      else if (c === 'gzip' || c === 'x-gzip') cur = zlib.gunzipSync(cur)
-      else if (c === 'deflate') cur = zlib.inflateSync(cur)
-      else if (c === 'zstd') {
-        if (typeof zlib.zstdDecompressSync === 'function') cur = zlib.zstdDecompressSync(cur)
-        else return { buf, decoded: false, error: 'zstd unsupported' }
-      } else if (c === 'identity') { /* no-op */ } else return { buf, decoded: false, error: `unknown encoding: ${c}` }
-    } catch (e) {
-      return { buf, decoded: false, error: String((e && e.message) || e) }
-    }
-  }
-  return { buf: cur, decoded: true }
-}
+// decodeContent moved to src/capture/request-body.mjs when the request-body rule became one rule for every call (D40);
+// re-exported here because the response side below still uses it.
+export { decodeContent }
 
 function tryUtf8(buf) {
   try { return new TextDecoder('utf-8', { fatal: true }).decode(buf) } catch { return null }
