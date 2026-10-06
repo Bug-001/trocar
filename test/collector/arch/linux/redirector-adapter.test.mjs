@@ -44,7 +44,11 @@ test('adapter: scan lists only this uid\'s processes; directCount reads the OS',
   try {
     p.add(600, { uid: 1000 }); p.add(601, { uid: 1000 }); p.add(602, { uid: 33 })
     assert.deepEqual((await r.scan()).map((f) => [f.pid, f.source]).sort(), [[600, 'scan'], [601, 'scan']])
-    assert.equal(r.directCount(600), 0)
+    assert.deepEqual(r.directCount(600), { count: 0, error: null })
+    const fs = await import('node:fs'), path = await import('node:path')
+    fs.mkdirSync(path.join(p.root, '601', 'fd')); fs.chmodSync(path.join(p.root, '601', 'fd'), 0)
+    assert.deepEqual(r.directCount(601), { count: null, error: 'EACCES' }, 'unknown with the errno, never 0 (D-17)')
+    fs.chmodSync(path.join(p.root, '601', 'fd'), 0o700)
   } finally { p.done() }
 })
 
@@ -95,4 +99,21 @@ test('adapter: linger() is true with the logind marker, false without, null when
     assert.equal(r({ userName: () => 'u' }).linger(), true)
     assert.equal(r({ lingerDir: path.join(dir, 'u', 'x'), userName: () => 'u' }).linger(), null, 'ENOTDIR: unknown, not "off"')
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+// D-30: an exec of this user's process whose exe cannot be read is a facts-error, not a dropped event.
+test('adapter: a process of this uid whose exe is unreadable is a facts-error with the errno; one that is gone is not', async () => {
+  const fs = await import('node:fs'), path = await import('node:path')
+  const p = fakeProc(); const { r, clients } = rig(p)
+  try {
+    p.add(700, { uid: 1000 }); fs.rmSync(path.join(p.root, '700', 'exe')); fs.mkdirSync(path.join(p.root, '700', 'exe')) // readlink: EINVAL, not "gone"
+    await r.start()
+    const errs = [], execs = []
+    r.on('facts-error', (x) => errs.push(x)); r.on('exec', (f) => execs.push(f.pid))
+    await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 700, pid: 700, comm: 'sudo', filename: '/usr/bin/sudo' })
+    await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 799, pid: 799, comm: 'gone', filename: '/bin/true' }) // exited already
+    await new Promise((res) => setTimeout(res, 50))
+    assert.deepEqual(execs, [])
+    assert.deepEqual(errs.map((x) => [x.pid, x.code, /\/proc\/700\/exe of sudo is unreadable/.test(x.reason)]), [[700, 'EINVAL', true]])
+  } finally { await r.close(); p.done() }
 })

@@ -18,7 +18,11 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   const active = new Set()
   // (pid, host) pairs the engine no longer tries to decrypt (RFC 4.6 §引擎 5). A hit is spliced and
   // labelled in flows/; the redirector is never told (the kernel can only stop a whole process).
-  const negCache = createNegativeCache()
+  // Every write into it is a failure event (D-12, 4.6 §记录 负缓存写入): from then on this (pid, host) is spliced, not
+  // captured, until the process exits (the daemon calls forgetPid and records the clearing).
+  const neg = createNegativeCache()
+  const negWritten = (made, key, o) => { if (made) { const e = neg.get(key); failure({ code: 'negative-cache', pid: e.pid ?? null, agent: e.agent, host: e.host, cause: e.cause, reason: `${e.host} is no longer decrypted for pid ${e.pid} (${e.cause}${e.rejections > 1 ? `, ${e.rejections} times in a row` : ''}); its connections there are passed through until it exits` }) } return made }
+  const negCache = { ...neg, observe: (key, o) => negWritten(neg.observe(key, o), key, o), mark: (key, o) => negWritten(neg.mark(key, o), key, o) }
   let flowSeq = 0
   const defaultConnect = (dst) => net.connect(dst.port, dst.address)
   // A capture failure is never silent (D38, 4.6 §记录): one shaped record {event:'failure', where:'engine', code,
@@ -131,5 +135,5 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   }
 
   // negatives() is for status only; forgetPid(pid) is called by the daemon when that process exits.
-  return { listen, close, stats, negatives: () => negCache.list(), forgetPid: (pid) => negCache.forgetPid(pid) }
+  return { listen, close, stats, negatives: () => neg.list(), forgetPid: (pid) => neg.forgetPid(pid) }
 }

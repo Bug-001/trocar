@@ -110,6 +110,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     else if (unreadable) failure('daemon', coded(new Error('the previous daemon left an unreadable lock (crash or power loss): it ended without a clean stop, and connections then in flight through its engine were cut (how many is not known)'), 'unclean-stop'))
     // switch / helper events: their own descriptor (events.mjs, a lost line becomes a log-gap), and every failure
     // among them carries `reason`
+    let engine = null // created after the tracker; the tracker's onGone reaches it at call time
     const event = (e) => failure.write({ ...e, ...(e.error != null && e.reason == null ? { reason: String(e.error) } : {}) })
 
     const { registry, arch: A } = await loadParts({ arch, harnesses, env })
@@ -120,14 +121,15 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     const note = (rec) => failure.write(rec)
     // the descriptor's own words for a reason, else the generic text (core/codes.mjs), else the code itself
     const hintFor = (agent, reason) => { const d = registry.get(agent); return (d && d.trust && d.trust.hints && d.trust.hints[reason]) || trustReasonText(reason) || reason }
-    const onVerdict = (row) => {
+    const onVerdict = (row, prev) => {
       if (row.watchError) failure('watch', coded(new Error(`watching ${row.agent} pid ${row.pid} failed: ${row.watchError}`), 'watch-failed'))
       if (row.configError) failure('harness', coded(new Error(`${row.agent} pid ${row.pid}: reading its configuration failed (${row.configError}); judged on its known hosts only`), 'config-error'))
       for (const r of row.readErrors || []) failure('harness', Object.assign(new Error(`${row.agent} pid ${row.pid}: ${r} exists but cannot be read; judged as if it were absent`), { code: CODE.configUnreadable }), { pid: row.pid, agent: row.agent })
       for (const f of row.parseErrors || []) failure('harness', Object.assign(new Error(`${row.agent} pid ${row.pid}: ${f} exists but does not parse; judged as if it were absent`), { code: CODE.configUnparsable }), { pid: row.pid, agent: row.agent })
       const last = recordedUntrusted.get(row.pid)
-      if (row.trusted) {
-        if (last != null) { recordedUntrusted.delete(row.pid); note({ event: EVENT.agentTrusted, pid: row.pid, agent: row.agent, code: 'ok', reason: `trusted now (${row.trustVar} via ${row.trustVia})` }) }
+      if (row.trusted) { // agent-trusted when a pid becomes trusted (first verdict, or after untrusted): conditions it clears (D-24)
+        recordedUntrusted.delete(row.pid)
+        if (!(prev && prev.trusted)) note({ event: EVENT.agentTrusted, pid: row.pid, agent: row.agent, code: 'ok', reason: `trusted now (${row.trustVar} via ${row.trustVia})`, via: row.trustVia ?? null })
         return
       }
       if (last === row.reason || row.reason === 'marker-pending') return // once per pid and reason; a plugin has up to 10 s to report (4.6 「标记」)
@@ -149,11 +151,18 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     fs.mkdirSync(P.markers, { recursive: true, mode: 0o700 })
     const tracker = createTracker({ redirector, registry, trust: createTrustChecker({ caCertPem: ca.certPem }), onVerdict, markerDir: P.markers, caPem: ca.paths.pem, collectorDir: P.dir,
       installedAt: (l) => installedAt(manifest, l), // config-after-start is judged against when asight wrote the value
+      onGone: (row, via) => { // D-24, D-12: the agent and every condition it held are gone; so are its negative-cache entries
+        const last = recordedUntrusted.get(row.pid); recordedUntrusted.delete(row.pid) // the reason it was recorded untrusted for ends here
+        failure.write({ event: EVENT.agentExit, pid: row.pid, agent: row.agent, via, ...(last != null ? { code: last, reason: 'exited while untrusted' } : {}) })
+        const dropped = engine ? engine.forgetPid(row.pid) : 0
+        if (dropped) failure.write({ event: 'negative-cache-cleared', pid: row.pid, dropped })
+      },
+      onUnmatched: (a) => failure('tracker', coded(new Error(`pid ${a.pid} (${a.exe}) matches ${a.candidates.join(' and ')}: claimed by two harness descriptors, so it is judged as neither and never watched; its connections go direct`), 'ambiguous'), { pid: a.pid, candidates: a.candidates }),
       onError: (e, at) => failure('tracker', Object.assign(new Error(`pid ${at.pid} (${at.phase}): ${errText(e)}${at.phase === 'judge' ? '; it is not watched, its connections go direct' : ''}`), { code: (e && e.code) || (at.phase === 'judge' ? 'judge-error' : 'unwatch-error') }), at) })
     let helperDown = null
     let sw = null
 
-    const engine = createEngine({
+    engine = createEngine({
       redirector: {
         async lookup(peer) { // the kernel knows {dst, pid, decrypt}; the tracker adds what the envelope's proc carries
           const m = await redirector.lookup(peer)
@@ -182,7 +191,9 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       throw e
     })
     let v6Held = null // the helper steers IPv6 agent connections to [::1]:port: never attach while someone else holds it (M8)
+    let v6Error = null // any [::1] failure: status never reports [::1] as listening then (D-10)
     try { await engine.listen({ port, hosts: ['::1'] }) } catch (e) {
+      v6Error = `[::1]:${port}: ${errText(e)}`
       if (e.code === 'EADDRINUSE') v6Held = `[::1]:${port} is held by another process`
       failure('engine', Object.assign(new Error(`[::1]:${port} unavailable: ${errText(e)}; ${v6Held ? 'on will refuse to attach (M8)' : 'IPv6 agent connections go direct'}`), { code: e.code }))
     }
@@ -198,16 +209,11 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     redirector.on('version-mismatch', (m) => event({ event: 'helper-version-mismatch', ...m, reason: `the helper speaks protocol ${m.got}, this daemon expects ${m.expected}; run "sudo asight setup-helper"` }))
     redirector.on('helper-error', ({ reason, code }) => failure('helper', coded(Object.assign(new Error(reason), { code }), 'helper-error')))
     redirector.on('heartbeat-error', ({ reason, code }) => failure('heartbeat', coded(Object.assign(new Error(`${reason}; once the last beat is 2 s old the kernel stops steering (connections go direct)`), { code }), 'heartbeat-failed')))
-    redirector.on('exit', ({ pid }) => { // D38: an untrusted agent that exits ends its condition
-      const last = recordedUntrusted.get(pid)
-      if (last == null) return
-      recordedUntrusted.delete(pid)
-      note({ event: EVENT.agentExit, pid, code: last, reason: 'exited while untrusted' })
-    })
     redirector.on('flow-meta', ({ pid, dst }) => { // a watched but untrusted agent's connection went direct (D31: metadata only)
       const r = tracker.describe(pid)
-      store.flow({ ts: new Date().toISOString(), flow_id: null, pid, agent: r ? r.agent : null, dst, decision: 'direct', reason: r ? `untrusted: ${r.reason}` : 'untracked' })
+      store.flow({ ts: new Date().toISOString(), flow_id: null, pid, agent: r ? r.agent : null, dst, decision: 'direct', not_captured: r ? 'untrusted' : 'untracked', reason: r ? `untrusted: ${r.reason}` : 'untracked' }) // D-11
     })
+    redirector.on('facts-error', ({ pid, code, reason }) => failure('tracker', Object.assign(new Error(reason), { code: 'exe-unreadable' }), { pid, errno: code || null })) // D-30
 
     sw = createSwitch({ redirector, stateFile: P.state, ensureReady, onEvent: event })
     await redirector.start()
@@ -231,11 +237,16 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
 
     async function status() {
       // every running-but-untrusted agent says why and what to do (4.6 §确认信任, R4); hosts it never decrypts say why too
-      const agents = tracker.agents().map((r) => ({ pid: r.pid, agent: r.agent, exe: r.exe, trusted: r.trusted, reason: r.reason, ...(r.trusted ? {} : { hint: hintFor(r.agent, r.reason) }), trust_var: r.trustVar, trust_via: r.trustVia, decrypt: r.decrypt, hosts: r.hosts, not_via_trust_path: r.bypass, parent_agent: r.parentAgent ?? null, source: r.source, direct: redirector.directCount(r.pid) }))
+      const agents = tracker.agents().map((r) => {
+        const d = redirector.directCount(r.pid) // {count, error}: unknown is said, never 0 (D-17)
+        return { pid: r.pid, agent: r.agent, exe: r.exe, trusted: r.trusted, reason: r.reason, ...(r.trusted ? {} : { hint: hintFor(r.agent, r.reason) }), trust_var: r.trustVar, trust_via: r.trustVia, decrypt: r.decrypt, hosts: r.hosts, not_via_trust_path: r.bypass, parent_agent: r.parentAgent ?? null, source: r.source, direct: d.count, ...(d.error ? { direct_error: d.error } : {}) }
+      })
       const { pid, proto, build } = redirector.helperInfo()
       return {
         ...(await sw.report()),
-        engine: { port, v6: v6Held ? null : port, v6_error: v6Held, ...engine.stats() },
+        engine: { port, v6: v6Error ? null : port, v6_error: v6Error, ...engine.stats() },
+        negatives: engine.negatives(), // (pid, host) pairs no longer decrypted until the process exits (D-12)
+        unmatched: tracker.unmatched(), // processes two descriptors claim (D-19)
         helper: { pid, proto, build, expected_proto: redirector.expectedProto, ok: proto === redirector.expectedProto, down: helperDown },
         agents, running_untrusted: agents.filter((a) => !a.trusted).length,
         ...failuresOnDisk(P.dir),

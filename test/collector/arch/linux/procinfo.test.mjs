@@ -77,6 +77,6 @@ test('missing pid yields null/0/[]', () => {
   assert.equal(readExe(99999, { root }), null)
   assert.deepEqual(readArgv(99999, { root }), [])
   assert.equal(readComm(99999, { root }), null)
-  assert.equal(readEnviron(99999, { root }).size, 0)
+  assert.equal(readEnviron(99999, { root }), null, 'an unreadable environment is not an empty one (D-20)')
   assert.equal(countDirectConnections(99999, { root, enginePort: 8443 }), 0)
 })

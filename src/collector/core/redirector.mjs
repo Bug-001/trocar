@@ -32,7 +32,9 @@
 //   start() / close()              — spawn / stop the OS helper; close() leaves agent traffic direct.
 //   configure(enginePort)          — the port the kernel steers decrypt-verdict connections to.
 //   scan(): Promise<ProcFacts[]>   — this user's live processes (startup and every `on`).
-//   directCount(pid): number       — the process's connections still going direct (status only).
+//   directCount(pid): {count, error} — the process's connections still going direct (status only); count null +
+//                                    the errno when it cannot be told (never 0, D-17).
+//   'facts-error' {pid, code, reason} — a process of this user that could not be read, so never judged (D-30).
 //   helperInfo() → {pid, proto, build}; expectedProto — the helper protocol this build speaks.
 //   restart() / linger()           — respawn a dead helper; whether the OS keeps the daemon after logout (Plan 3a).
 //   'exec' carries ProcFacts = { os, pid, ppid, uid, exe, argv, env (Map, read lazily), cwd, startedAt,

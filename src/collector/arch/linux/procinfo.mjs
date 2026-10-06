@@ -5,15 +5,20 @@
 // hooks cannot read the executable path (no bpf_probe_read_user there; comm is 15 chars and
 // spoofable — research finding b/cross-cutting). Every reader takes an injectable `root`
 // (default '/proc') so tests point at a synthetic tree, and every reader tolerates a vanished
-// or unreadable process (ESRCH/EACCES) by returning null/0/[] rather than throwing — a process
-// can exit between the exec event and the read. Node built-ins only (D18).
+// process by returning null/0/[] rather than throwing — a process can exit between the exec event
+// and the read. A read that fails for another reason (EACCES, hidepid) is never passed off as an
+// empty answer (D38): readExe / readEnviron hand the error to `onError`, readEnviron returns null
+// (not an empty environment), and directConnections says "unknown" with the errno instead of 0.
+// Node built-ins only (D18).
 
 import fs from 'node:fs'
 import path from 'node:path'
 
-/** readlink /proc/<pid>/exe → absolute path, or null. */
-export function readExe(pid, { root = '/proc' } = {}) {
-  try { return fs.readlinkSync(path.join(root, String(pid), 'exe')) } catch { return null }
+const GONE = new Set(['ENOENT', 'ESRCH']) // the process exited: nothing to report
+
+/** readlink /proc/<pid>/exe → absolute path, or null (onError(e) is told why). */
+export function readExe(pid, { root = '/proc', onError = () => {} } = {}) {
+  try { return fs.readlinkSync(path.join(root, String(pid), 'exe')) } catch (e) { onError(e); return null }
 }
 
 /** /proc/<pid>/cmdline → argv (NUL-delimited, trailing NUL trimmed), or []. */
@@ -26,11 +31,12 @@ export function readArgv(pid, { root = '/proc' } = {}) {
   return parts
 }
 
-/** /proc/<pid>/environ → Map<name,value> (NUL-delimited, split on first '='), or empty Map. */
-export function readEnviron(pid, { root = '/proc' } = {}) {
+/** /proc/<pid>/environ → Map<name,value> (NUL-delimited, split on first '='), or null when it cannot be read (onError(e)
+ *  is told why): an unreadable environment is not an empty one (D-20). */
+export function readEnviron(pid, { root = '/proc', onError = () => {} } = {}) {
   const m = new Map()
   let buf
-  try { buf = fs.readFileSync(path.join(root, String(pid), 'environ'), 'utf8') } catch { return m }
+  try { buf = fs.readFileSync(path.join(root, String(pid), 'environ'), 'utf8') } catch (e) { onError(e); return null }
   for (const entry of buf.split('\0')) {
     if (!entry) continue
     const i = entry.indexOf('=')
@@ -102,7 +108,7 @@ function parseNetTcp(root) {
 
 function socketInodesOf(pid, root) {
   let fds
-  try { fds = fs.readdirSync(path.join(root, String(pid), 'fd')) } catch { return [] }
+  try { fds = fs.readdirSync(path.join(root, String(pid), 'fd')) } catch (e) { if (GONE.has(e.code)) return []; throw e }
   const inodes = []
   for (const fd of fds) {
     let target
@@ -113,10 +119,16 @@ function socketInodesOf(pid, root) {
   return inodes
 }
 
+/** directConnections(pid) → {count, error}: count = null with the errno when /proc/<pid>/fd cannot be read (EACCES,
+ *  hidepid) — "unknown", never 0, which would read as "everything captured" (D-17). */
+export function directConnections(pid, opts = {}) {
+  try { return { count: countDirectConnections(pid, opts), error: null } } catch (e) { return { count: null, error: e.code || String(e.message || e) } }
+}
+
 /**
  * Count the pid's ESTABLISHED TCP connections whose peer is NOT the local engine
  * (127.0.0.1/::1 : enginePort) — i.e. connections still going direct, therefore not captured.
- * Returns 0 if the process is gone or has no such sockets.
+ * Returns 0 if the process is gone or has no such sockets; throws when its fd table cannot be read.
  */
 export function countDirectConnections(pid, { root = '/proc', enginePort } = {}) {
   const inodes = socketInodesOf(pid, root)
@@ -179,13 +191,19 @@ export function readStartTicks(pid, { root = '/proc' } = {}) {
 }
 
 /** OS-neutral ProcFacts (RFC 4.6 §身份与信任; contract in core/redirector.mjs). `env` is read on first access
- *  and memoised: most processes are rejected on exe/argv alone, and environ is the costly read. */
-export function readFacts(pid, { root = '/proc', source = 'exec' } = {}) {
+ *  and memoised: most processes are rejected on exe/argv alone, and environ is the costly read. `env` is null when
+ *  the environment cannot be read, and `envError` then says why (D-20). A live process whose exe cannot be read
+ *  (EACCES: not dumpable, hidepid) is reported to onExeError({pid, uid, code, message}) before it is dropped (D-30). */
+export function readFacts(pid, { root = '/proc', source = 'exec', onExeError = () => {} } = {}) {
   const st = readStatus(pid, { root })
-  const exe = readExe(pid, { root })
+  let exeErr = null
+  const exe = readExe(pid, { root, onError: (e) => { exeErr = e } })
+  if (st && exe == null && exeErr && !GONE.has(exeErr.code)) onExeError({ pid, uid: st.uid, code: exeErr.code || null, message: String(exeErr.message || exeErr) })
   if (!st || exe == null) return null
-  let env = null
+  let env, envError = null
   const facts = { os: 'linux', pid, ppid: st.ppid, uid: st.uid, exe, argv: readArgv(pid, { root }), env: null, cwd: readCwd(pid, { root }), startedAt: readStartTime(pid, { root }), startTicks: readStartTicks(pid, { root }), source }
-  Object.defineProperty(facts, 'env', { enumerable: true, get() { return env || (env = readEnviron(pid, { root })) } })
+  const getEnv = () => (env !== undefined ? env : (env = readEnviron(pid, { root, onError: (e) => { envError = e.code || String(e.message || e) } })))
+  Object.defineProperty(facts, 'env', { enumerable: true, get: getEnv })
+  Object.defineProperty(facts, 'envError', { enumerable: false, get() { getEnv(); return envError } })
   return facts
 }

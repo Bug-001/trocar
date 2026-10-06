@@ -163,7 +163,10 @@ test('daemon: the same program without the CA is only observed; its direct conne
     assert.equal(row.hint, 'no asight trust entry is in effect for this process', 'status says why in words (R4)')
     await clients[0].raw({ op: '__emit', ev: 'flow', pid: 5151, dst: { address: '160.79.104.10', port: 443, family: 4 }, ts_ns: 5 })
     const f = await until(() => flowsOf(s).find((x) => x.decision === 'direct'))
-    assert.deepEqual([f.pid, f.agent, f.reason], [5151, 'claude-code', 'untrusted: var-missing'])
+    assert.deepEqual([f.pid, f.agent, f.reason, f.not_captured], [5151, 'claude-code', 'untrusted: var-missing', 'untrusted'], 'the closed code too (D-11)')
+    await clients[0].raw({ op: '__emit', ev: 'flow', pid: 5252, dst: { address: '160.79.104.10', port: 443, family: 4 }, ts_ns: 6 }) // a pid the table does not have
+    const u = await until(() => flowsOf(s).find((x) => x.decision === 'direct' && x.pid === 5252))
+    assert.equal(u.not_captured, 'untracked')
   } finally { await d.stop(); p.done(); s.done() }
 })
 
@@ -334,6 +337,7 @@ test('daemon: [::1] at the engine port held by another process is recorded with 
       assert.match(f[0].reason, new RegExp(`\\[::1\\]:${port} unavailable: .*on will refuse to attach \\(M8\\)`))
       const on = await req(s.sock, 'POST', '/on', {})
       assert.equal(on.actual, 'off')
+      assert.deepEqual([on.engine.v6, typeof on.engine.v6_error], [null, 'string'], 'status never says [::1] listens')
       assert.ok(flowsOf(s).some((r) => r.event === 'attach-failed' && /held by another process; refusing to attach/.test(r.reason)))
     } finally { await d.stop() }
   } finally { squat.close(); p.done(); s.done() }
@@ -624,4 +628,57 @@ test('daemon: started as root it refuses (root-refused), and the record it leave
     assert.ok(chowned.every(([, u, g]) => u === uid && g === gid))
     assert.equal(fs.existsSync(path.join(s.collector, 'lock')), false, 'nothing else written')
   } finally { s.done() }
+})
+
+// D-24 / D-12 / D-19: an agent's exit is on disk and drops what it held (its negative-cache entries, said); a pid
+// that becomes trusted is on disk; a process two descriptors claim is a failure record and listed by status.
+test('daemon: agent-trusted, agent-exit (also found by a rescan) and negative-cache-cleared; an ambiguous process is recorded and listed (D-24, D-12, D-19)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const twin = { ...cc, name: 'claude-twin' } // claims the same processes as claude-code
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home } })
+  try {
+    p.add(6262, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) })
+    await req(s.sock, 'POST', '/on', {})
+    await until(() => flowsOf(s).some((f) => f.event === 'agent-trusted' && f.pid === 6262))
+    const forgot = []; const realForget = d.engine.forgetPid
+    d.engine.forgetPid = (pid) => { forgot.push(pid); realForget(pid); return 2 } // as if two hosts of it were negative-cached
+    await clients[0].raw({ op: '__emit', ev: 'exit', tgid: 6262, ts_ns: 7 })
+    const exit = await until(() => flowsOf(s).find((f) => f.event === 'agent-exit' && f.pid === 6262))
+    assert.deepEqual([exit.agent, exit.via], ['claude-code', 'exit'])
+    assert.deepEqual(forgot, [6262], 'the engine forgets the exited pid (a reused pid inherits nothing)')
+    assert.deepEqual(flowsOf(s).filter((f) => f.event === 'negative-cache-cleared').map((f) => [f.pid, f.dropped]), [[6262, 2]])
+    fs.rmSync(path.join(p.root, '6262'), { recursive: true })
+    p.add(6363, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) })
+    await req(s.sock, 'POST', '/off'); await req(s.sock, 'POST', '/on', {}) // the rescan behind `on` picks it up
+    fs.rmSync(path.join(p.root, '6363'), { recursive: true }) // exits while no exit event reaches us
+    await req(s.sock, 'POST', '/off'); await req(s.sock, 'POST', '/on', {})
+    assert.ok(flowsOf(s).some((f) => f.event === 'agent-exit' && f.pid === 6363 && f.via === 'rescan'), 'an exit found by a rescan is recorded too')
+  } finally { await d.stop() }
+  p.add(6464, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) })
+  const d2 = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc, twin], env: { ...process.env, HOME: s.home } }) // restores `on`: its rescan sees 6464
+  try {
+    const st = await req(s.sock, 'GET', '/status')
+    assert.deepEqual(st.unmatched.map((u) => [u.pid, u.candidates]), [[6464, ['claude-code', 'claude-twin']]])
+    const f = flowsOf(s).filter((x) => x.where === 'tracker' && x.code === 'ambiguous')
+    assert.deepEqual(f.map((x) => [x.pid, x.candidates]), [[6464, ['claude-code', 'claude-twin']]], 'once per pid')
+    await req(s.sock, 'POST', '/off'); await req(s.sock, 'POST', '/on', {})
+    assert.equal(flowsOf(s).filter((x) => x.code === 'ambiguous').length, 1, 'not again on the next rescan')
+  } finally { await d2.stop(); p.done(); s.done() }
+})
+
+// D-10: any [::1] failure, not only EADDRINUSE, is recorded and makes status say IPv6 is not listening.
+test('daemon: [::1] that cannot be bound for another reason (no IPv6) is recorded with its errno, and status never reports it listening (D-10)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const realListen = net.Server.prototype.listen
+  net.Server.prototype.listen = function (...a) { if (a[1] === '::1') { process.nextTick(() => this.emit('error', Object.assign(new Error('listen EADDRNOTAVAIL: address not available ::1'), { code: 'EADDRNOTAVAIL' }))); return this } return realListen.apply(this, a) }
+  let d
+  try { d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc] }) } finally { net.Server.prototype.listen = realListen }
+  try {
+    const st = await req(s.sock, 'GET', '/status')
+    assert.deepEqual([st.engine.v6, /EADDRNOTAVAIL/.test(st.engine.v6_error)], [null, true])
+    assert.deepEqual(flowsOf(s).filter((f) => f.where === 'engine').map((f) => f.code), ['EADDRNOTAVAIL'])
+  } finally { await d.stop(); p.done(); s.done() }
 })

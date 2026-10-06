@@ -81,8 +81,8 @@ test('engine: two consecutive rejections on one host splice that host only; anot
   await new Promise((r) => up.listen(0, '127.0.0.1', r))
   const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 5, agent: 'dsh', decrypt: true })
   const told = []; for (const m of ['watch', 'unwatch', 'detach']) redirector[m] = async (...a) => { told.push([m, ...a]) }
-  const asightCa = createCa(); const flows = []
-  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: upCa.certPem, store: { envelope() {}, flow: (f) => flows.push(f) }, onFailure() {} })
+  const asightCa = createCa(); const flows = [], fails = []
+  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: upCa.certPem, store: { envelope() {}, flow: (f) => flows.push(f) }, onFailure: (f) => fails.push(f) })
   const { port } = await engine.listen({})
   const hello = (servername, ca) => new Promise((resolve) => {
     const c = tls.connect({ port, host: '127.0.0.1', servername, ca }, () => { const issuer = c.getPeerX509Certificate().issuer; c.on('end', () => resolve(issuer)); c.resume(); c.write('x') })
@@ -92,6 +92,7 @@ test('engine: two consecutive rejections on one host splice that host only; anot
   assert.equal(await hello('api.deepseek.com', upCa.certPem), 'rejected'); await settled(1)
   assert.equal(await hello('api.deepseek.com', upCa.certPem), 'rejected'); await settled(2)
   assert.deepEqual(engine.negatives().map((e) => [e.pid, e.agent, e.host, e.cause, e.rejections]), [[5, 'dsh', 'api.deepseek.com', 'client-rejected-leaf', 2]])
+  assert.deepEqual(fails.map((f) => [f.where, f.code, f.pid, f.host, f.cause]), [['engine', 'negative-cache', 5, 'api.deepseek.com', 'client-rejected-leaf']], 'the write is a failure event, once (D-12)')
   assert.match(await hello('api.deepseek.com', upCa.certPem), /upstream test CA/, 'the rejected host is spliced')
   assert.match(await hello('chat.deepseek.com', asightCa.certPem), /asight collector CA/, 'another host of the same pid is still decrypted')
   // the process exits: the daemon calls forgetPid, so a reused pid starts clean

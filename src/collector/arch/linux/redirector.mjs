@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { REDIRECTOR_PROTO } from './redirector-client.mjs'
-import { readFacts, listPids, readStatus, countDirectConnections } from './procinfo.mjs'
+import { readFacts, listPids, readStatus, directConnections } from './procinfo.mjs'
 
 export function createLinuxRedirector({ makeClient, procRoot = '/proc', uid = process.getuid(), lingerDir = '/var/lib/systemd/linger', userName = () => os.userInfo().username }) {
   const ev = new EventEmitter()
@@ -20,8 +20,8 @@ export function createLinuxRedirector({ makeClient, procRoot = '/proc', uid = pr
   let enginePort = null
 
   function wire(c) {
-    c.on('exec', ({ tgid }) => {
-      const f = readFacts(tgid, { root: procRoot, source: 'exec' })
+    c.on('exec', ({ tgid, comm }) => {
+      const f = readFacts(tgid, { root: procRoot, source: 'exec', onExeError: (x) => factsError(x, comm) })
       if (f && f.uid === uid) ev.emit('exec', f)
     })
     c.on('exit', ({ tgid }) => ev.emit('exit', { pid: tgid }))
@@ -32,6 +32,8 @@ export function createLinuxRedirector({ makeClient, procRoot = '/proc', uid = pr
     c.on('heartbeat-error', (m) => ev.emit('heartbeat-error', m))
   }
   const need = () => { if (!client) throw new Error('redirector helper is not running'); return client }
+  // a process of this uid whose exe cannot be read is never judged: say so (D-30) instead of dropping its exec
+  const factsError = (x, comm) => { if (x.uid === uid) ev.emit('facts-error', { pid: x.pid, code: x.code, reason: `/proc/${x.pid}/exe of ${comm || 'a process'} is unreadable (${x.message}); it is never judged, its connections go direct` }) }
 
   return Object.assign(ev, {
     async start() { client = makeClient(); wire(client); await client.start(); return client.loaderInfo },
@@ -41,7 +43,7 @@ export function createLinuxRedirector({ makeClient, procRoot = '/proc', uid = pr
     detach: () => need().detach(),
     status: () => need().status(),
     heartbeat: () => need().heartbeat(),
-    lookup: (peer) => (client ? client.lookup(peer) : Promise.resolve(null)),
+    lookup: (peer) => (client ? client.lookup(peer) : Promise.reject(Object.assign(new Error('redirector helper is not running'), { code: 'loader-down' }))), // never a miss (D-13)
     watch: (pid, verdict) => need().watch(pid, verdict),
     unwatch: (pid) => need().unwatch(pid),
     async scan() {
@@ -49,12 +51,12 @@ export function createLinuxRedirector({ makeClient, procRoot = '/proc', uid = pr
       for (const pid of listPids({ root: procRoot })) {
         const st = readStatus(pid, { root: procRoot })
         if (!st || st.uid !== uid) continue
-        const f = readFacts(pid, { root: procRoot, source: 'scan' })
+        const f = readFacts(pid, { root: procRoot, source: 'scan', onExeError: (x) => factsError(x, null) })
         if (f) out.push(f)
       }
       return out
     },
-    directCount: (pid) => countDirectConnections(pid, { root: procRoot, enginePort }),
+    directCount: (pid) => directConnections(pid, { root: procRoot, enginePort }), // {count, error}: unknown is never 0 (D-17)
     helperInfo: () => (client ? client.loaderInfo : { pid: null, proto: null, build: null }),
     // Whether logind keeps this user's daemon after the last logout (4.6 OPEN 登出后): true / false, null = unknown.
     linger() { try { fs.statSync(path.join(lingerDir, userName())); return true } catch (e) { return e && e.code === 'ENOENT' ? false : null } },

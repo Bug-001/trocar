@@ -44,3 +44,14 @@ test('procinfo: readFacts builds OS-neutral facts; environ is read on first acce
     assert.equal(readFacts(4242, { root: p.root, source: 'scan' }), null)
   } finally { p.done() }
 })
+
+// D-20: an environment that cannot be read is null with the reason, never an empty one a trust check would accept.
+test('procinfo: readFacts env is null with envError when environ is unreadable', () => {
+  const p = fakeProc()
+  try {
+    p.add(43, { env: { A: '1' } })
+    fs.chmodSync(path.join(p.root, '43', 'environ'), 0)
+    const f = readFacts(43, { root: p.root })
+    assert.deepEqual([f.env, f.envError], [null, 'EACCES'])
+  } finally { p.done() }
+})

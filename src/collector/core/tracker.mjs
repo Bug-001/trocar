@@ -53,12 +53,17 @@ export const usesMarker = (d) => !!(d && d.trust && d.trust.chain.some((e) => e.
 // answers from the install manifest). onError(e, {pid, phase})
 // is told every error judging or (un)watching a process — that process stays unwatched (its connections go
 // direct) and the rest of the table carries on; nothing here is swallowed (review 2 #4).
+// onGone(row, via) is told every agent that leaves the table — its exit event ('exit') or found gone by a rescan
+// ('rescan') — so the daemon records agent-exit and drops the conditions it held (D-24). onUnmatched({pid, exe,
+// candidates}) is told once per pid that two descriptors both claim: never folded into either, never watched,
+// and never silent (D-19); unmatched() lists them for status.
 // markerDir / caPem: where plugins write their per-pid marker and the asight CA file a marker vouches for (null: no
 // plugin harness is judged trusted). watchDir(dir, onName, onWatchError) → close; setTimer for the marker-pending
 // deadline. alive(pid): whether a pid a rescan did not list still exists (it may have started after the scan).
 // readFile: how config files are read; an error other than "absent" is kept on the row (readErrors) for the daemon.
-export function createTracker({ redirector, registry, trust, home = os.homedir(), readFile = (f) => fs.readFileSync(f, 'utf8'), mtimeOf = mtimeOfFile, listDir = listDirNames, now = () => Date.now(), onVerdict = () => {}, onError = () => {}, installedAt = () => null, markerDir = null, caPem = null, watchDir = watchDirNames, markerGraceMs = 10_000, setTimer = setTimeout, runtimeVersion = nodeReleaseVersion, collectorDir = null, alive = pidAlive }) {
+export function createTracker({ redirector, registry, trust, home = os.homedir(), readFile = (f) => fs.readFileSync(f, 'utf8'), mtimeOf = mtimeOfFile, listDir = listDirNames, now = () => Date.now(), onVerdict = () => {}, onError = () => {}, installedAt = () => null, onGone = () => {}, onUnmatched = () => {}, markerDir = null, caPem = null, watchDir = watchDirNames, markerGraceMs = 10_000, setTimer = setTimeout, runtimeVersion = nodeReleaseVersion, collectorDir = null, alive = pidAlive }) {
   const table = new Map() // pid → AgentRow (agents only)
+  const ambiguous = new Map() // pid → {pid, exe, candidates}
   const factsOf = new Map() // pid → the ProcFacts it was judged on (re-judged when its marker appears or its grace ends)
   const pending = new Map() // pid → timer that re-judges a marker-pending process at the end of its grace
   const subs = []
@@ -84,9 +89,12 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     const m = registry.match(facts)
     if (!m.agent) {
       if (prev) { forget(facts.pid); try { await redirector.unwatch(facts.pid) } catch (e) { onError(e, { pid: facts.pid, phase: 'unwatch' }) } }
+      if (m.reason === 'ambiguous' && !ambiguous.has(facts.pid)) { const a = { pid: facts.pid, exe: facts.exe ?? null, candidates: m.candidates || [] }; ambiguous.set(facts.pid, a); onUnmatched(a) }
       return null
     }
+    ambiguous.delete(facts.pid)
     const d = m.descriptor
+    const envUnreadable = facts.env === null // the launch environment could not be read (D-20): never judged trusted on a guess
     const environ = facts.env || new Map()
     const row = { pid: facts.pid, ppid: facts.ppid ?? null, agent: m.agent, exe: facts.exe ?? null, argv0: (facts.argv || [])[0] ?? null, source: facts.source, since: prev ? prev.since : now(), judged: ++judgedSeq, readErrors: [], parseErrors: [] }
     const readText = (f) => { try { return readFile(f) } catch (e) { if (!ABSENT.has(e && e.code)) row.readErrors.push(`${f}: ${(e && e.code) || e}`); return null } }
@@ -100,7 +108,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     if (marker) layers.push(marker)
     // what a harness's refine may look at besides argv and env: the exe's runtime release (lazily), its own files
     // (through the same reader, so an unreadable one is reported) and asight's collector dir (a launch shim lives there)
-    let t = trust.check(d.trust, { environ, layers, cwd: ctx.cwd, startedAt: ctx.startedAt, argv: ctx.argv, extra: { runtimeVersion: () => runtimeVersion(facts.exe), readText, collectorDir, exe: facts.exe ?? null } })
+    let t = envUnreadable ? { trusted: false, reason: 'environ-unreadable', var: null, via: facts.envError ?? null } : trust.check(d.trust, { environ, layers, cwd: ctx.cwd, startedAt: ctx.startedAt, argv: ctx.argv, extra: { runtimeVersion: () => runtimeVersion(facts.exe), readText, collectorDir, exe: facts.exe ?? null } })
     if (!t.trusted && t.reason === 'var-missing' && registry.isLongLived(d, facts)) t = { ...t, reason: 'env-frozen' }
     // a plugin reports after exec: until its marker appears, at most markerGraceMs from start, the process is pending
     const t0 = facts.startedAt ?? row.since
@@ -130,10 +138,12 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
   }
 
   async function onExit({ pid }) {
+    ambiguous.delete(pid)
     const was = table.get(pid)
     forget(pid)
     if (markerDir) { try { fs.rmSync(path.join(markerDir, String(pid)), { force: true }) } catch { /* the marker of a dead pid is void anyway */ } }
     if (!was) return
+    onGone(was, 'exit')
     try { await redirector.unwatch(pid) } catch (e) { onError(e, { pid, phase: 'unwatch' }) }
   }
 
@@ -175,10 +185,12 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
       // exits missed while the helper was down: a row the scan did not list goes, unless an exec event judged it after
       // this rescan began (it started after the scan; review 3 #7). Not "the pid lives": another user's process may
       // reuse it, and its exit would never reach us (review 4 #8). A marker goes only once its pid is gone.
-      for (const pid of [...table.keys()]) if (!seen.has(pid) && !(table.get(pid).judged > begun)) forget(pid)
+      for (const [pid, row] of [...table]) if (!seen.has(pid) && !(row.judged > begun)) { forget(pid); onGone(row, 'rescan') }
+      for (const pid of [...ambiguous.keys()]) if (!seen.has(pid)) ambiguous.delete(pid)
       if (markerDir) for (const n of listDir(markerDir)) if (/^\d+$/.test(n) && !seen.has(Number(n)) && !alive(Number(n))) { try { fs.rmSync(path.join(markerDir, n), { force: true }) } catch { /* void */ } }
     },
     agents: () => [...table.values()].sort((a, b) => a.pid - b.pid).map((r) => ({ ...r, hosts: [...r.hosts], bypass: r.bypass.map((b) => ({ ...b })), proxies: r.proxies.map((p) => ({ ...p })), readErrors: [...r.readErrors], parseErrors: [...r.parseErrors] })),
+    unmatched: () => [...ambiguous.values()].sort((a, b) => a.pid - b.pid),
     describe: (pid) => (table.has(pid) ? { ...table.get(pid) } : null),
     // FlowExtras for the engine's describe (plan 3c §2): the harness's WebSocket terminators and this process's own proxies
     extrasFor(pid) { const r = pid == null ? null : table.get(pid); return r ? { wsTerminal: r.wsTerminal, proxies: r.proxies.map((p) => ({ ...p })) } : {} },

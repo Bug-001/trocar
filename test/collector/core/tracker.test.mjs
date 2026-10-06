@@ -305,3 +305,13 @@ test('tracker: a harness reports a config file that does not parse; the row carr
   assert.deepEqual(tracker.describe(850).parseErrors, ['/cfg/a.json'])
   assert.deepEqual(tracker.agents()[0].parseErrors, ['/cfg/a.json'])
 })
+
+// D-20: an environment that cannot be read is never judged on a guess: untrusted, with the reason and the errno.
+test('tracker: an unreadable environment is untrusted as environ-unreadable, never var-missing and never trusted', async () => {
+  const { redirector, tracker } = rig()
+  const f = facts(300, { env: null }); Object.defineProperty(f, 'envError', { value: 'EACCES' })
+  redirector.emit('exec', f); await settle()
+  const [a] = tracker.agents()
+  assert.deepEqual([a.trusted, a.reason, a.trustVia, a.decrypt], [false, 'environ-unreadable', 'EACCES', false])
+  assert.deepEqual(redirector.calls, [['watch', 300, false]], 'observed only: its connections are metadata')
+})
