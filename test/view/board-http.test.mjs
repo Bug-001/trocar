@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { once } from 'node:events';
 import { createServer } from '../../src/server.mjs';
 import { fixtureGate, hasFixture } from '../helpers/fixture.mjs';
+import { tmpDir } from '../helpers/tmp.mjs';
 
 const FIXTURE = path.resolve('test/fixtures/cc-session-real.ndjson');
 const MAIN = '3e03c998-f70d-4843-8639-40f2d8b2cdc7';
@@ -19,7 +19,7 @@ let srv, port, srcPath;
 test.before(async () => {
   if (!hasFixture()) return; // every test below is fixtureGate()d — no source to copy or serve
   // a WRITABLE copy of the source so the concurrent-append test can grow it
-  srcPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'asight-boardhttp-')), 'src.ndjson');
+  srcPath = path.join(tmpDir('asight-boardhttp-'), 'src.ndjson');
   fs.copyFileSync(FIXTURE, srcPath);
   const made = await createServer({ dbPath: '/nonexistent-db-xyz', sourcePath: srcPath });
   srv = made.server; srv.listen(0, '127.0.0.1'); await once(srv, 'listening'); port = srv.address().port;
