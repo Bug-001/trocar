@@ -40,7 +40,7 @@ export function writeState(file, state) {
 const sameHosts = (a, b) => a.length === b.length && a.every((h, i) => h === b[i])
 
 export function createSwitch({ redirector, stateFile, ensureReady = async () => {}, onEvent = () => {} }) {
-  let state = readState(stateFile, (e) => onEvent({ event: 'failure', where: 'state', code: e.code, reason: `${stateFile} is unreadable (${String(e.message || e)}); the desired state reads as off until on/off rewrites it` }))
+  let state = readState(stateFile, (e) => onEvent({ event: 'failure', where: 'state', code: e.code || 'state-unparsable', reason: `${stateFile} is unreadable (${String(e.message || e)}); the desired state reads as off until on/off rewrites it` }))
   let recording = false
   let degraded = null
   let actualCache = null
@@ -86,7 +86,12 @@ export function createSwitch({ redirector, stateFile, ensureReady = async () => 
 
   async function off() {
     recording = false
-    const changed = persist({ ...state, desired: 'off' })
+    let changed
+    // D-8: the desired state that cannot be written never keeps the kernel steering — record it and detach anyway
+    try { changed = persist({ ...state, desired: 'off' }) } catch (e) {
+      changed = true
+      onEvent({ event: 'failure', where: 'state', code: (e && e.code) || 'record-error', reason: `${stateFile} could not be written (${String((e && e.message) || e)}); detaching anyway, but the next start restores the old desired state` })
+    }
     if (!changed && (degraded || (await actual()).actual === 'off')) return report({ noop: true })
     if (!degraded) {
       try { await redirector.detach() } catch (e) { onEvent({ event: 'detach-failed', error: String((e && e.message) || e) }) }

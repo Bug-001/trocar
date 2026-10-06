@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createSwitch, readState } from '../../../src/collector/core/switch.mjs'
+import { checkRecord } from '../../../src/health/codes.mjs'
 
 // A kernel stand-in: attach/detach flip links; status reads them back (like the helper's bpf_link info).
 function fakeRedirector({ failAttach = false } = {}) {
@@ -100,6 +101,25 @@ test('switch: an unreadable state file means desired=off, not a crash — and it
   createSwitch({ redirector: fakeRedirector(), stateFile: f, onEvent: (e) => events.push(e) })
   assert.equal(events[0].event, 'failure')
   assert.match(events[0].reason, /is unreadable \(.*JSON.*\); the desired state reads as off/)
+  assert.deepEqual([events[0].where, events[0].code], ['state', 'state-unparsable'], 'a parse error has no errno: it still carries a code (the fold key)')
+  assert.deepEqual(checkRecord(events[0]), [])
+})
+
+test('switch: off detaches even when the desired state cannot be written, and records why (D-8, D38)', async () => {
+  const f = tmpState(); const r = fakeRedirector(); const events = []
+  const sw = createSwitch({ redirector: r, stateFile: f, onEvent: (e) => events.push(e) })
+  await sw.on()
+  fs.chmodSync(path.dirname(f), 0o500) // the temp file cannot be created next to it
+  try {
+    const s = await sw.off()
+    assert.ok(r.calls.includes('detach'), 'the kernel stops steering although the state file still says on')
+    assert.deepEqual([s.desired, s.actual, s.recording], ['off', 'off', false])
+    const fail = events.find((e) => e.event === 'failure')
+    assert.deepEqual([fail.where, fail.code], ['state', 'EACCES'])
+    assert.match(fail.reason, /could not be written .*detaching anyway, but the next start restores the old desired state/)
+    assert.deepEqual(checkRecord(fail), [])
+    assert.equal(readState(f).desired, 'on', 'the file is what the next start reads — and the record says so')
+  } finally { fs.chmodSync(path.dirname(f), 0o700) }
 })
 
 test('switch: a state file that cannot be written fails the request and leaves no temp file behind', async () => {
