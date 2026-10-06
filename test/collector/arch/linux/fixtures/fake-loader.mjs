@@ -21,6 +21,7 @@ const state = {
   links: [], // [{name,id,prog_id}]
   drops: { 'no-config': 0, 'hb-stale': 0, 'no-listener': 0, 'orig-write': 0, 'byport-write': 0, 'ringbuf-full': 0 }, // protocol 2
 }
+const oplog = [] // the state-changing ops in the order they arrived (`__oplog`): a test asserts what the daemon did and in which order
 const portKey = (port, family) => `${port}/${family || 4}`
 const CGROUP_LINKS = [
   { name: 'connect4', id: 101, prog_id: 201 },
@@ -42,6 +43,8 @@ rl.on('line', (line) => {
   let msg
   try { msg = JSON.parse(line) } catch { return }
   const { id, op } = msg
+  if (op === 'attach' || op === 'detach' || op === 'heartbeat') oplog.push(op)
+  else if (op === 'watch' || op === 'unwatch') oplog.push(`${op} ${msg.tgid}`)
   const reply = (extra) => { if (id != null) out({ id, ok: true, ...extra }) }
   const fail = (error) => { if (id != null) out({ id, ok: false, error }) }
   switch (op) {
@@ -74,6 +77,8 @@ rl.on('line', (line) => {
     case '__emit': { const { op: _o, id: _i, ...ev } = msg; out(ev); return reply() }
     case '__drops': for (const [k, n] of Object.entries(msg.counts || {})) state.drops[k] = (state.drops[k] || 0) + n; return reply() // the kernel let connections go
     case '__yank': state.attached = false; state.links = []; return reply() // someone else detached this instance's links
+    case '__oplog': return reply({ log: [...oplog] }) // attach / detach / heartbeat / watch <tgid> / unwatch <tgid> / mark <name>
+    case '__mark': oplog.push(`mark ${msg.name || ''}`); return reply() // a point in the log: what comes after it came after the caller's last step
     case '__watched': return reply({ watch: Object.fromEntries(state.watch) }) // tgid → decrypt (1) or observe (0)
     default: return fail('unknown op: ' + op)
   }

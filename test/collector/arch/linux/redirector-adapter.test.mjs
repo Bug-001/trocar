@@ -10,10 +10,10 @@ import { loadArch } from '../../../../src/collector/arch/index.mjs'
 import { fakeProc } from './fixtures/fake-proc.mjs'
 
 const FAKE = fileURLToPath(new URL('./fixtures/fake-loader.mjs', import.meta.url))
-function rig(p) {
+function rig(p, { autoHeartbeatMs = 0 } = {}) {
   const clients = []
   const makeClient = () => {
-    const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, ASIGHT_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 })
+    const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, ASIGHT_FAKE_LOADER: '1' }, autoHeartbeatMs })
     clients.push(c)
     return c
   }
@@ -137,4 +137,24 @@ test('adapter: a process of this uid whose exe is unreadable is a facts-error wi
     assert.deepEqual(execs, [])
     assert.deepEqual(errs.map((x) => [x.pid, x.code, /\/proc\/700\/exe of sudo is unreadable/.test(x.reason)]), [[700, 'EINVAL', true]])
   } finally { await r.close(); p.done() }
+})
+
+test('adapter: setBeatGate reaches the client it will make, and the one already running (the daemon sets it before start; a test may after)', async () => {
+  const p = fakeProc(); const { r, clients } = rig(p, { autoHeartbeatMs: 10 })
+  const beats = async () => (await clients[0].raw({ op: '__oplog' })).log.filter((o) => o === 'heartbeat').length
+  const keepAlive = setTimeout(() => {}, 5000)
+  try {
+    let open = false
+    r.setBeatGate(async () => open)
+    await r.start(); await r.configure(1); await r.attach()
+    await new Promise((res) => setTimeout(res, 80))
+    assert.equal(await beats(), 1, 'the gate set before start is in force: only attach\'s own beat')
+    open = true
+    await new Promise((res) => setTimeout(res, 80))
+    assert.ok(await beats() > 2)
+    r.setBeatGate(() => false) // swapped on the running client
+    await new Promise((res) => setTimeout(res, 30)); const stopped = await beats()
+    await new Promise((res) => setTimeout(res, 80))
+    assert.equal(await beats(), stopped)
+  } finally { clearTimeout(keepAlive); await r.close(); p.done() }
 })

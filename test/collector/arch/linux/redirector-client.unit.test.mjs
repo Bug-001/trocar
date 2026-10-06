@@ -256,3 +256,55 @@ test('a helper that exits carries the exit name and its last stderr lines into d
   } finally { process.stderr.write = realWrite }
   await p
 })
+
+// ── the heartbeat gate (4.6 §开关语义, 1.6 §1.5): before each periodic beat the daemon re-reads state.json, and a stalled loop must
+// not beat again until it has ───────────────────────────────────────────────────────────────────────────────────────────────────────
+const beatsOf = (m) => m.frames().filter((f) => f.op === 'heartbeat').length
+const until = async (fn, ms = 2000) => { const end = Date.now() + ms; while (!fn()) { if (Date.now() > end) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 5)) } }
+const pause = (ms) => new Promise((r) => setTimeout(r, ms))
+
+test('the beat gate: every periodic beat first awaits the gate; false sends none; attach and an explicit heartbeat are not gated', async () => {
+  let open = false; let asked = 0
+  const { m, c } = await started({ autoHeartbeatMs: 10, beforeBeat: async () => { asked++; return open } })
+  const keepAlive = setTimeout(() => {}, 5000)
+  await c.attach() // its own beat: the request that follows the operator's `on`
+  assert.deepEqual([beatsOf(m), asked], [1, 0])
+  await until(() => asked >= 3)
+  assert.equal(beatsOf(m), 1, 'the gate said no each time: not one periodic beat')
+  await c.heartbeat()
+  assert.equal(beatsOf(m), 2, 'an explicit heartbeat is the caller\'s business, not gated')
+  open = true
+  await until(() => beatsOf(m) >= 4)
+  clearTimeout(keepAlive); await c.close()
+})
+
+test('the beat gate is not asked again while it is still answering, and no beat goes out until it has said yes', async () => {
+  let asked = 0; let answer
+  const { m, c } = await started({ autoHeartbeatMs: 10, beforeBeat: () => { asked++; return new Promise((r) => { answer = r }) } })
+  const keepAlive = setTimeout(() => {}, 5000)
+  await c.attach()
+  await pause(80)
+  assert.deepEqual([asked, beatsOf(m)], [1, 1], 'one question in flight, ticks that fall inside it are skipped, no beat meanwhile')
+  answer(true)
+  await until(() => beatsOf(m) === 2)
+  clearTimeout(keepAlive); await c.close()
+})
+
+test('setBeatGate swaps the gate while running; null removes it; a gate that throws is a heartbeat-error and no beat, and it is asked again next tick', async () => {
+  const { m, c } = await started({ autoHeartbeatMs: 10 })
+  const keepAlive = setTimeout(() => {}, 5000)
+  await c.attach()
+  await until(() => beatsOf(m) >= 3) // no gate: beats as before
+  c.setBeatGate(() => false)
+  await pause(30); const stopped = beatsOf(m)
+  await pause(80)
+  assert.equal(beatsOf(m), stopped, 'a closed gate: the beats stop')
+  const errs = []; c.on('heartbeat-error', (e) => errs.push(e))
+  let n = 0; c.setBeatGate(() => { n++; throw new Error('state.json is a directory') })
+  await until(() => n >= 2)
+  assert.equal(beatsOf(m), stopped, 'a gate that cannot answer sends nothing: the steering lapses (fail open) rather than holding on')
+  assert.deepEqual([errs[0].code, /beat gate.*state\.json is a directory/.test(errs[0].reason)], ['heartbeat-failed', true])
+  c.setBeatGate(null)
+  await until(() => beatsOf(m) > stopped)
+  clearTimeout(keepAlive); await c.close()
+})

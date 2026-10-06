@@ -5,7 +5,8 @@
 //     some agents rewrite their title later), only for this instance's uid (other users' processes are
 //     not ours, and their environ is unreadable anyway);
 //   - scan() lists this uid's live processes (startup and every `on`, §身份与信任);
-//   - directCount(pid): the agent's connections still going direct (§开关语义「为什么开了还没采到」).
+//   - directCount(pid): the agent's connections still going direct (§开关语义「为什么开了还没采到」);
+//   - setBeatGate(fn): the gate every automatic heartbeat asks first (the daemon re-reads state.json there), kept across the client being made.
 // No harness names, no policy: the daemon wires this to core.
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
@@ -18,6 +19,7 @@ export function createLinuxRedirector({ makeClient, procRoot = '/proc', uid = pr
   const ev = new EventEmitter()
   let client = null
   let enginePort = null
+  let gate = null
 
   function wire(c) {
     c.on('exec', ({ tgid, comm }) => {
@@ -45,7 +47,8 @@ export function createLinuxRedirector({ makeClient, procRoot = '/proc', uid = pr
   }
 
   return Object.assign(ev, {
-    async start() { client = makeClient(); wire(client); await client.start(); return client.loaderInfo },
+    async start() { client = makeClient(); wire(client); if (gate && client.setBeatGate) client.setBeatGate(gate); await client.start(); return client.loaderInfo },
+    setBeatGate(fn) { gate = typeof fn === 'function' ? fn : null; if (client && client.setBeatGate) client.setBeatGate(gate) },
     async close() { const c = client; client = null; if (c) await c.close() },
     configure(port) { enginePort = port; return need().configure(port) },
     attach: () => need().attach(),
