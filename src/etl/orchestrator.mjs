@@ -343,13 +343,14 @@ export async function runEtl(records, connection, opts = {}) {
 
       // ── calls (every claimed record; compaction is a cross-call inference) ──
       // 3.4 (compactionVerdict, the board's rule too): a harness hint first (header, high; a text marker only on
-      // its rising edge, medium), else the message-count drop (medium). A lane's first call has no predecessor:
-      // compaction_from stays NULL. Never a fork (sessions.fork_of is not touched).
+      // its rising edge, medium), else a SHARP message-count drop (medium; CC's own preamble lets a smaller one
+      // count). A lane's first call has no predecessor: compaction_from stays NULL. Never a fork (sessions.fork_of
+      // is not touched).
       let comp = { compaction: false, compaction_from: null, compaction_to: null };
       // msgCount null = the adapter does not know this call's context (its request was not stored): no verdict
       if (isLlm && laneKey && msgCount != null) {
         const prev = prevMsgCount.has(laneKey) ? { msgCount: prevMsgCount.get(laneKey), marker: !!prevMarker.get(laneKey) } : null;
-        comp = compactionVerdict(prev, { hint: !!call.compaction_hint, marker: !!call.compaction_marker, msgCount });
+        comp = compactionVerdict(prev, { hint: !!call.compaction_hint, marker: !!call.compaction_marker, msgCount, preamble: !!call.compaction_preamble });
       }
       await conn.run(
         'INSERT INTO calls (call_id,session_id,seq,ts,endpoint,model,stream,class,control_kind,' +

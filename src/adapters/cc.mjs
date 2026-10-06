@@ -21,6 +21,7 @@ import {
   classOf,
   controlKindFor,
   controlKind,
+  hasCompactionPreamble,
 } from '../identity/session-identity.mjs';
 // D25: the CC block model (assembly-order walk, volatile rule, resource linking, kind, faithfulness,
 // bash-read parsing) lives in ONE dissector, shared with the board (analyze.linearContext). parseBlocks
@@ -140,10 +141,12 @@ export function parseCall(record) {
     wire_format: record?.is_llm_call === true ? 'anthropic' : null,
     context_state: record?.is_llm_call === true ? contextStateOf(record) : null,
     // 3.4 compaction: a harness hint (header, high) or a text marker (medium; the ETL takes its rising
-    // edge). compaction/compaction_from/to themselves are cross-call, decided by the ETL (markCompaction
-    // falls back to the message-count drop when neither is present).
+    // edge). compaction/compaction_from/to themselves are cross-call, decided by the ETL (compactionVerdict falls
+    // back to a SHARP message-count drop when neither is present; CC's own "continued from a previous conversation"
+    // preamble lets a smaller drop count, the board reads the same preamble: hasCompactionPreamble).
     compaction_hint: hintsOf(record).compaction === true,
     compaction_marker: hintsOf(record).compactionMarker === true,
+    compaction_preamble: hasCompactionPreamble(req && req.messages),
   };
 }
 

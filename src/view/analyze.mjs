@@ -18,7 +18,7 @@
 import { dissectBlocks, sysLabel, parseBashReads } from '../dissect/cc.mjs'
 import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf } from '../dissect/capture-labels.mjs'
 import { hintsOf } from '../dissect/harnesses.mjs'
-import { compactionVerdict } from '../identity/session-identity.mjs'
+import { compactionVerdict, hasCompactionPreamble } from '../identity/session-identity.mjs'
 // Envelope drift guard (R1): the D10 envelope stores the response under `resp`, demo v0 under
 // `response`. Reading `.response` directly is the bug class that silently killed every HTTP status
 // on real captures — so go through the shared helper, never the raw key. (assemble.mjs imports
@@ -282,16 +282,6 @@ function userEvents(newMessages, step, streamId) {
   return ev
 }
 
-// The board's message-count drop rule for compaction (the last step of the shared verdict, compactionVerdict): a
-// big collapse, or any drop that carries Claude Code's own "continued from a previous conversation" preamble. A
-// small drop alone is not enough here — on a real CC session the main lane goes 58 → 55 (no compaction) before the
-// real 55 → 4. The ETL's rule (markCompaction: any drop) differs; that divergence is the user's call (3.4 「骤降」).
-export function boardCompactionDrop(from, to, cur = {}) {
-  const drop = to < from
-  const bigDrop = drop && to < from - 5 && to < from * 0.7
-  return bigDrop || (drop && cur.preamble) ? { compaction: true, compaction_from: from, compaction_to: to }
-    : { compaction: false, compaction_from: null, compaction_to: null }
-}
 // What a compaction verdict says about itself on the board (1.5:38 / 1.5:79: the UI tells confirmed from inferred).
 // A harness header hint is the harness's own word (high, not inferred); a text marker and a count drop are inferred
 // (medium, 3.4). `preamble` only refines the wording of a drop.
@@ -491,10 +481,10 @@ export function analyze(records, opts = {}) {
       }
 
       const drop = msgs.length < prevCount
-      const hasPreamble = msgs.slice(0, 4).some((m) => /continued from a previous conversation/i.test(textOfMessage(m)))
+      const hasPreamble = hasCompactionPreamble(msgs)
       const isSummarize = /^\s*<analysis>/.test(step.norm.text || '')
       // 3.4, the ETL's verdict (compactionVerdict): a harness header hint first (x-cc-compaction-request, dsh's compact
-      // header), a text marker on its rising edge, then the board's drop rule.
+      // header), a text marker on its rising edge, then a sharp drop — the same shared rule the ETL runs.
       // 保真边界 (invariant 4 · spec 1.5:37 / 3.4:16,21): a drop or a marker is INFERRED from observed shape, never
       // confirmed by the harness, and says so (medium, `compactionInferred`); a header hint is the harness's own word.
       // `basis` names WHICH evidence fired: CC's own "continued from a previous conversation" preamble (the stronger
@@ -504,7 +494,7 @@ export function analyze(records, opts = {}) {
       // 3.4: a request stored in part (the collector's req_* labels, the ETL's context_state 'partial') shows what arrived,
       // not the context the model saw: its message count is no observation, so no verdict and no new baseline
       const verdict = step.reqIncomplete ? { compaction: false }
-        : compactionVerdict(prevInfo, { hint: h.compaction === true, marker, msgCount: msgs.length, preamble: hasPreamble }, boardCompactionDrop)
+        : compactionVerdict(prevInfo, { hint: h.compaction === true, marker, msgCount: msgs.length, preamble: hasPreamble })
       if (!step.reqIncomplete) prevInfo = { msgCount: msgs.length, marker }
       let newMsgs
       if (verdict.compaction) {

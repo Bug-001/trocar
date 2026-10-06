@@ -5,7 +5,7 @@
 // provider parsing in the browser → invariant 3 / AC-3 intact (adding a provider = a new
 // server-side analyzer, frontend unchanged).
 import { createHash } from 'node:crypto';
-import { analyze, linearContext, cacheBreak, normResp, flatBlockText, unparsedErrMsg, boardCompactionDrop, compactionMeta } from './analyze.mjs';
+import { analyze, linearContext, cacheBreak, normResp, flatBlockText, unparsedErrMsg, compactionMeta } from './analyze.mjs';
 import { compactionVerdict } from '../identity/session-identity.mjs';
 import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf, captureLabelsOf } from '../dissect/capture-labels.mjs'; // #21 request-body labels, D38 WebSocket labels, response labels; captureLabelsOf: the per-call wire.labels (4.6 §记录)
 import { blockSpans } from '../adapters/cc.mjs';
@@ -202,13 +202,13 @@ function assembleFlatLane(records, d, opts = {}) {
     const st = (respOf(r) || {}).status;
     const failed = unparsed || !!(d.failed && d.failed(norm, r));
     const wire = wireOf(r, d.id, ctx, norm);
-    // 3.4 compaction, the ETL's verdict (compactionVerdict) with the board's drop rule: a harness hint (Codex
+    // 3.4 compaction, the ETL's verdict (compactionVerdict, the one shared rule): a harness hint (Codex
     // request_kind=compaction, a compact header), a text marker on its rising edge (Hermes), then a big drop.
     // The count is the dissector's own (the ETL's), so compaction_from / _to match DuckDB.
     const h = hintsOf(r);
     const msgN = d.messageCount ? d.messageCount(req) : (req.message_count || 0);
     const comp = noContext() ? { compaction: false } : compactionMeta(compactionVerdict(prevInfoOf.get(laneKind) || null,
-      { hint: h.compaction === true, marker: h.compactionMarker === true, msgCount: msgN }, boardCompactionDrop));
+      { hint: h.compaction === true, marker: h.compactionMarker === true, msgCount: msgN }));
     if (!noContext()) prevInfoOf.set(laneKind, { msgCount: msgN, marker: h.compactionMarker === true });
     const brk = cacheBreak(prevFlat, flat, { compaction: comp.compaction });
     // 3.2:124 on the board too: what is shown of a partial / server-edited context is not what the model saw,

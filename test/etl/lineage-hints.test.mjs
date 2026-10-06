@@ -15,17 +15,21 @@ const anth = ({ id, agent, headers, n = 1, body = {}, pid = 1, sec }) => ({
 });
 const D = (sid, extra = {}) => ({ 'x-deepseek-harness-session-id': sid, ...extra });
 
-test('compaction lands in calls.compaction from a header hint and from a message-count drop', async () => {
+test('compaction lands in calls.compaction from a header hint and from a sharp message-count drop, not from a small one', async () => {
   const conn = await freshConn();
   await runEtl([
     anth({ id: 'a1', agent: 'dsh', headers: D('S'), n: 3, sec: 1 }),
     anth({ id: 'a2', agent: 'dsh', headers: D('S', { 'x-deepseek-harness-compact': '1' }), n: 5, sec: 2 }), // header, no drop
-    anth({ id: 'a3', agent: 'dsh', headers: D('S'), n: 2, sec: 3 }),                                       // drop 5 → 2, no header
+    anth({ id: 'a3', agent: 'dsh', headers: D('S'), n: 12, sec: 3 }),
+    anth({ id: 'a4', agent: 'dsh', headers: D('S'), n: 2, sec: 4 }),                                        // sharp drop 12 → 2, no header
+    anth({ id: 'a5', agent: 'dsh', headers: D('S'), n: 14, sec: 5 }),
+    anth({ id: 'a6', agent: 'dsh', headers: D('S'), n: 12, sec: 6 }),                                       // 14 → 12: a drop, but no compaction (3.4 「骤降」)
   ], conn);
   const r = await rows(conn, 'SELECT call_id, compaction, compaction_from, compaction_to FROM calls ORDER BY call_id');
-  assert.deepEqual(r.map((x) => [x.call_id, x.compaction]), [['a1', false], ['a2', true], ['a3', true]]);
+  assert.deepEqual(r.map((x) => [x.call_id, x.compaction]), [['a1', false], ['a2', true], ['a3', false], ['a4', true], ['a5', false], ['a6', false]]);
   assert.deepEqual([r[1].compaction_from, r[1].compaction_to], [3, 5], 'a hinted compaction says from → to as well');
-  assert.deepEqual([r[2].compaction_from, r[2].compaction_to], [5, 2]);
+  assert.deepEqual([r[3].compaction_from, r[3].compaction_to], [12, 2]);
+  assert.deepEqual([r[5].compaction_from, r[5].compaction_to], [null, null], 'no verdict: no from / to');
 });
 
 test('a text compaction marker counts on its rising edge only (it stays in the history afterwards)', async () => {
@@ -73,7 +77,7 @@ test('a new synthesized session that still carries an old marker is no compactio
 
 test('a compaction never sets sessions.fork_of_session_id', async () => {
   const conn = await freshConn();
-  await runEtl([anth({ id: 'a1', agent: 'dsh', headers: D('S'), n: 6, sec: 1 }), anth({ id: 'a2', agent: 'dsh', headers: D('S'), n: 2, sec: 2 })], conn);
+  await runEtl([anth({ id: 'a1', agent: 'dsh', headers: D('S'), n: 10, sec: 1 }), anth({ id: 'a2', agent: 'dsh', headers: D('S'), n: 2, sec: 2 })], conn);
   assert.equal((await rows(conn, "SELECT compaction FROM calls WHERE call_id='a2'"))[0].compaction, true, 'precondition: a compaction happened');
   assert.equal((await rows(conn, "SELECT fork_of_session_id FROM sessions WHERE session_id='S'"))[0].fork_of_session_id, null);
 });
