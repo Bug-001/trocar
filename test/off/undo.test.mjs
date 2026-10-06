@@ -140,3 +140,82 @@ test('residue and changed plugins are reported, not deleted: a path the agent wr
   assert.deepEqual([r.changed, r.removed.includes(plugin), fs.existsSync(plugin)], [[{ harness: 'plug', path: plugin, role: 'plugin' }], true, false])
   assert.deepEqual(r.manifest.watched, [], 'reported once: the harness has nothing left')
 })
+
+test('bundle: a process of the harness that started after install, one that re-reads its entry, or a child whose environ names it keeps the bundle without the asight CA; one from before install does not; the next run removes it', async () => {
+  const s = await setup((b) => [repH(b, 'aa'), repH(b, 'bb', { rereadsEntry: true })])
+  const installedAt = Date.parse(readManifest(s.b.dir).entries[0].installed_at)
+  const table = [proc(70, '/x/aa', { startedAt: installedAt + 1000 }), proc(71, '/bin/git', { startedAt: installedAt + 2000, env: { SSL_CERT_FILE: s.b.ca('combined-aa.pem') } }), proc(72, '/x/aa', { startedAt: installedAt - 60000 }), proc(73, '/x/bb', { startedAt: 1 }), proc(74, '/x/aa', { startedAt: null })]
+  const asightFp = certBlocks(fs.readFileSync(s.b.ca('asight-ca.pem'), 'utf8'))[0].fp
+  const r = await s.run({ procs: async () => table })
+  assert.deepEqual(r.kept_bundles, [{ path: s.b.ca('combined-aa.pem'), harness: 'aa', pids: [70, 71, 74] }, { path: s.b.ca('combined-bb.pem'), harness: 'bb', pids: [73] }], 'started after install, inherited it, or start time unknown; bb re-reads, so even the one from before counts; pid 72 predates install')
+  const without = composeBundle({ nodeRoots: roots.node, osRootsText: '', userCerts: [CORP.certPem], caPem: null }).data
+  assert.equal(fs.readFileSync(s.b.ca('combined-aa.pem'), 'utf8'), without, 'the same bundle, without the asight CA, byte for byte what composing it without gives')
+  assert.ok(!fpsOf(s.b.ca('combined-bb.pem')).includes(asightFp))
+  assert.deepEqual([r.left, r.manifest.files.filter((f) => f.role === 'bundle').map((f) => [path.basename(f.path), f.without_ca])], [[], [['combined-aa.pem', true], ['combined-bb.pem', true]]], 'kept: still in the manifest')
+  const again = await s.run({ manifest: r.manifest, procs: async () => [proc(72, '/x/aa', { startedAt: installedAt - 60000 })] })
+  assert.deepEqual([again.kept_bundles, again.removed.map((p) => path.basename(p)).sort(), fs.readdirSync(s.b.ca('.')).sort()], [[], ['combined-aa.pem', 'combined-bb.pem'], ['asight-ca.pem', 'ca.key']], 'nobody holds them now (or never could)')
+})
+
+test('bundle gone while a live process may use it: rebuilt without the CA from Node\'s roots and the recorded user CAs (said), a lost source named; nobody uses it: nothing is made; no roots given: an item left', async () => {
+  const s = await setup((b) => [repH(b, 'aa'), repH(b, 'bb')])
+  const live = [proc(70, '/x/aa'), proc(71, '/x/bb')]
+  fs.rmSync(s.b.ca('combined-aa.pem')); fs.rmSync(s.b.ca('combined-bb.pem')); fs.rmSync(path.join(s.b.home, 'corp.pem'))
+  const r = await s.run({ ids: ['aa'], procs: async () => live })
+  const aa = s.b.ca('combined-aa.pem')
+  assert.deepEqual(r.kept_bundles.map((k) => [k.harness, k.pids, k.rebuilt, k.lost_fps?.length, k.unread?.map((u) => u.errno)]), [['aa', [70], true, 1, ['ENOENT']]], 'rebuilt, and the user CA that could not be carried over is named with its errno')
+  assert.deepEqual(fpsOf(aa), certBlocks(ROOT.certPem).map((c) => c.fp), 'Node roots only: the user CA source is gone, and the asight CA is not in it')
+  assert.ok(!fs.existsSync(s.b.ca('combined-bb.pem')), 'bb was not asked about (ids)')
+  const none = await s.run({ ids: ['bb'], procs: async () => [] })
+  assert.deepEqual([none.kept_bundles, none.left, fs.existsSync(s.b.ca('combined-bb.pem'))], [[], [], false], 'nobody uses a missing bundle: it is just dropped')
+  const t = await setup((b) => [repH(b, 'aa')]); fs.rmSync(t.b.ca('combined-aa.pem'))
+  const noRoots = await t.run({ procs: async () => [proc(70, '/x/aa')], roots: null })
+  assert.deepEqual([noRoots.left.map((l) => l.result), noRoots.kept_bundles.map((k) => [k.pids, k.error]), fs.existsSync(t.b.ca('combined-aa.pem'))], [['error'], [[[70], 'no-roots']], false])
+})
+
+test('bundle that cannot be read: with a live process it still holds the CA (an item left, kept as it is); nobody holds it: removed whatever it is', async () => {
+  const s = await setup((b) => [repH(b, 'aa'), repH(b, 'bb')])
+  for (const n of ['combined-aa.pem', 'combined-bb.pem']) { fs.rmSync(s.b.ca(n)); fs.mkdirSync(s.b.ca(n)) } // EISDIR
+  const r = await s.run({ procs: async () => [proc(70, '/x/aa')] })
+  assert.deepEqual(r.kept_bundles, [{ path: s.b.ca('combined-aa.pem'), harness: 'aa', pids: [70], holds_ca: true, error: 'EISDIR' }])
+  assert.deepEqual(r.left.map((l) => [l.path, l.harness, l.result]), [[s.b.ca('combined-aa.pem'), 'aa', 'error']])
+  assert.match(r.left[0].reason, /still holds the asight CA.*EISDIR.*pid 70/)
+  assert.ok(!fs.existsSync(s.b.ca('combined-bb.pem')), 'the one nobody holds is gone')
+})
+
+test('extra trust file: only a process whose environ names it keeps it (stripped); it is not judged by harness; a gone one is dropped', async () => {
+  const s = await setup((b) => [jsonH(b)])
+  const extra = s.b.ca('extra-jj.pem')
+  const r = await s.run({ procs: async () => [proc(70, '/x/jj', { startedAt: 1 }), proc(71, '/bin/node', { env: { NODE_EXTRA_CA_CERTS: extra } })] })
+  assert.deepEqual(r.kept_bundles, [{ path: extra, harness: 'jj', pids: [71] }], 'the jj process itself is not a holder of an extra file')
+  assert.deepEqual(fpsOf(extra), [certBlocks(CORP.certPem)[0].fp], 'the user\'s CA stays, the asight CA is out')
+  const gone = await s.run({ manifest: r.manifest, procs: async () => [proc(71, '/bin/node', { env: { NODE_EXTRA_CA_CERTS: extra } })] })
+  assert.deepEqual([gone.kept_bundles.length, fs.existsSync(extra)], [1, true], 'still held: kept again, stripped already')
+  fs.rmSync(extra)
+  const dropped = await s.run({ manifest: gone.manifest, procs: async () => [proc(71, '/bin/node', { env: { NODE_EXTRA_CA_CERTS: extra } })] })
+  assert.deepEqual([dropped.kept_bundles, dropped.left, dropped.manifest.files.filter((f) => f.role === 'trust-file')], [[], [], []])
+})
+
+test('a process table that cannot be read is not "nobody is alive": the bundle is kept without the CA and unjudged, an item left; so is a harness with no liveness record', async () => {
+  const s = await setup((b) => [repH(b, 'aa')])
+  const r = await s.run({ procs: async () => { throw new Error('ps: boom') } })
+  assert.deepEqual(r.kept_bundles, [{ path: s.b.ca('combined-aa.pem'), harness: 'aa', pids: [], unjudged: true, error: 'ps: boom' }])
+  assert.deepEqual([r.left.map((l) => l.result), r.procs_error, fpsOf(s.b.ca('combined-aa.pem')).length], [['error'], 'ps: boom', 2], 'kept, with Node\'s root and the user CA, not the asight CA')
+  const t = await setup((b) => [repH(b, 'aa')])
+  const m = readManifest(t.b.dir); delete m.liveness.aa // a manifest written before the snapshot existed
+  const old = await t.run({ manifest: m })
+  assert.deepEqual([old.kept_bundles.map((k) => [k.unjudged, /no liveness record for aa/.test(k.error)]), old.left.length], [[[true, true]], 1])
+})
+
+test('step 5: only a process that may have read the entry is reported, with until from the snapshot; untilEnviron limits it to a process whose environ names a file of asight\'s', async () => {
+  const s = await setup((b) => [repH(b, 'aa', { afterUninstall: 'next-connection' }), { ...repH(b, 'bb', { afterUninstall: 'restart', untilEnviron: 'SSL_CERT_FILE' }) }, jsonH(b)])
+  const t0 = Date.parse(readManifest(s.b.dir).entries[0].installed_at)
+  const r = await s.run({ ids: ['aa', 'bb', 'jj'], procs: async () => [
+    proc(1, '/x/aa', { startedAt: t0 - 60000 }), proc(2, '/x/aa', { startedAt: t0 + 1000 }), // before install: it never named the bundle
+    proc(3, '/x/bb', { startedAt: t0 + 1000 }), proc(4, '/x/bb', { startedAt: t0 + 1000, env: { SSL_CERT_FILE: s.b.ca('combined-bb.pem') } }), proc(5, '/x/bb', { startedAt: t0 + 1000, env: { SSL_CERT_FILE: '/corp/own.pem' } }),
+    proc(6, '/x/jj', { startedAt: 1 }), // jj re-reads its entry: alive is enough, until the default
+    proc(7, '/usr/bin/vim'),
+  ] })
+  assert.deepEqual(r.still_trusting, [{ pid: 2, harness: 'aa', until: 'next-connection' }, { pid: 4, harness: 'bb', until: 'restart' }, { pid: 6, harness: 'jj', until: 'restart' }])
+  const only = await setup((b) => [repH(b, 'aa'), repH(b, 'bb')])
+  assert.deepEqual((await only.run({ ids: ['aa'], procs: async () => [proc(1, '/x/bb')] })).still_trusting, [], 'a process of a harness that was not undone is not reported')
+})
