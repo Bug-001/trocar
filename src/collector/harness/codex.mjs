@@ -1,12 +1,14 @@
 // codex.mjs — Codex (RFC 4.6 §身份与信任 tables, D37). Facts: Codex 0.160.0 source and binary (summarised in the RFC
-// tables; the research). Its capture waits for the WebSocket recorder.
+// tables; the plan's research), checked end to end in lab ①.
 // Process: a static Rust binary; the interactive TUI's model calls come from a detached
 // `codex app-server … --managed-daemon` under $CODEX_HOME/packages/app-server-daemon/releases/<v>/bin/codex, whose
 // environment is frozen from the first TUI. The same binary is re-run as arg0 helpers (codex-linux-sandbox, apply_patch,
 // codex-execve-wrapper), with --codex-run-as-* argv1, and as the updater (`app-server daemon pid-update-loop`): none of
 // them call the model.
 // Trust: rustls; Codex picks CODEX_CA_CERTIFICATE, else SSL_CERT_FILE, and that bundle is the store it verifies with —
-// both are `replace` entries. $CODEX_HOME/.env is applied after exec (invisible in environ), once per start, over the
+// both are `replace` entries, as 4.6 says. Lab ① found that Codex trusts the CAs of both together (a shell
+// CODEX_CA_CERTIFICATE does not hide SSL_CERT_FILE); until the user decides, a shell CODEX_CA_CERTIFICATE without the
+// asight CA is still judged to shadow the entry (not decrypted, the client unaffected). $CODEX_HOME/.env is applied after exec (invisible in environ), once per start, over the
 // launch env, and drops every CODEX_* key. The bundle's contents are read again for every HTTP client and WebSocket
 // connection. Relay hosts: openai_base_url / chatgpt_base_url / model_providers.*.base_url from the system, user and
 // profile config.toml (project layers cannot set them); OPENAI_BASE_URL is not read for inference.
