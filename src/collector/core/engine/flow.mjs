@@ -9,8 +9,11 @@ import { classify, parseClientHello, parseHead } from './sniff.mjs'
 import { createExchangeTee } from './exchange.mjs'
 import { negKey } from './negcache.mjs'
 import { createUpstreamTrust } from '../tls/roots.mjs'
+import { socksHandshake } from './socks.mjs'
 
 const msgOf = (e) => String((e && e.message) || e)
+// host of a CONNECT authority or a SOCKS target: "[::1]:443" → "::1", "a.test:443" → "a.test"
+const hostOf = (authority) => (authority.startsWith('[') ? authority.slice(1, Math.max(1, authority.indexOf(']'))) : authority.split(':')[0])
 const closedBefore = (side) => ({ type: 'closed_before_decision', message: `the ${side} closed before a routing decision`, side })
 
 export function handleFlow(client, meta, ctx) {
@@ -191,8 +194,9 @@ export function handleFlow(client, meta, ctx) {
   function dispatch(cls, buf, cSock, uSock, hostDefault, isTunnel) {
     if (cls === 'tls') return handleTls(buf, cSock, uSock, hostDefault, isTunnel)
     if (cls === 'connect' && !isTunnel) return handleConnect(buf, cSock, uSock)
+    if (cls === 'socks' && !isTunnel) return handleSocks(buf, cSock, uSock)
     if (cls === 'http') return handleHttp(buf, cSock, uSock, hostDefault, isTunnel)
-    // unknown (or a nested CONNECT) → splice verbatim
+    // unknown (or a nested CONNECT / SOCKS prelude) → splice verbatim
     setDecision('splice', isTunnel); notCaptured('unknown-protocol', `first-byte 0x${buf.subarray(0, 1).toString('hex')}`)
     if (buf.length) uSock.write(buf)
     relay(cSock, uSock)
@@ -326,8 +330,13 @@ export function handleFlow(client, meta, ctx) {
 
   function afterConnectHead(h, buf, cSock, uSock) {
     const authority = (h.startLine.split(' ')[1] || '')
-    const connectHost = authority.split(':')[0]
-    const innerPre = buf.subarray(h.headLength)               // usually empty (client waits for 2xx)
+    const connectHost = hostOf(authority)
+    // client bytes after the CONNECT head (usually none: the client waits for the 2xx). An eager client's
+    // next bytes (its ClientHello) are held here until the proxy has answered — a flowing socket with no
+    // 'data' listener would drop them.
+    const early = [buf.subarray(h.headLength)]
+    const hold = (d) => { early.push(d) }
+    cSock.on('data', hold)
     uSock.write(buf.subarray(0, h.headLength))                // forward the CONNECT head verbatim
     waitFor('proxy-reply', connectHost)
     const upChunks = []
@@ -336,20 +345,69 @@ export function handleFlow(client, meta, ctx) {
       const ph = parseHead(Buffer.concat(upChunks))
       if (!ph) return
       uSock.removeListener('data', onUp); waitDone()
+      cSock.removeListener('data', hold)
+      const innerPre = Buffer.concat(early)
       const all = Buffer.concat(upChunks)
       cSock.write(all.subarray(0, ph.headLength))             // relay the proxy reply head verbatim
       const after = all.subarray(ph.headLength)
       const status = parseInt(ph.startLine.split(' ')[1], 10)
+      // the prelude both ways, verbatim (Proxy-Authorization is a credential: flows/ is 0600, RFC 4.1)
+      rec.prelude = { kind: 'connect', target: authority, client_b64: buf.subarray(0, h.headLength).toString('base64'), proxy_b64: all.subarray(0, ph.headLength).toString('base64') }
       if (status >= 200 && status < 300) {
         if (after.length) cSock.write(after)
         route(cSock, uSock, innerPre, connectHost, true)      // decrypt/splice the tunnelled TLS
       } else {
         rec.decision = 'tunnel'; notCaptured('proxy-refused', `proxy-status-${status}`); rec.host = connectHost
         if (after.length) cSock.write(after)
+        if (innerPre.length) uSock.write(innerPre)            // whatever the client sent on, verbatim
         relay(cSock, uSock)
       }
     })
     uSock.on('data', onUp)
+  }
+
+  // ── SOCKS4 / 4a / 5: relay the prelude verbatim, then route the tunnelled bytes (§引擎 3, D37) ──
+  // Each side's bytes are held until a whole prelude message has arrived, then forwarded unchanged and in
+  // order; the proxy's answer — success or refusal — is the only answer the client gets (RFC 4.6 §记录 代理前导).
+  function handleSocks(initial, cSock, uSock) {
+    const side = (sock, pre) => {
+      let buf = pre, want = null
+      const pump = () => {
+        if (!want) return
+        const r = want.parser(buf)
+        if (!r) return
+        const w = want; want = null
+        if (r.invalid) return w.resolve(r)
+        const raw = buf.subarray(0, r.length); buf = buf.subarray(r.length)
+        w.resolve({ ...r, raw })
+      }
+      const onData = guard((d) => { buf = Buffer.concat([buf, d]); pump() })
+      sock.on('data', onData)
+      return {
+        take: (parser) => new Promise((resolve) => { want = { parser, resolve }; pump() }),
+        rest: () => { sock.removeListener('data', onData); const b = buf; buf = Buffer.alloc(0); return b },
+      }
+    }
+    const c = side(cSock, initial), u = side(uSock, Buffer.alloc(0))
+    const seen = { c: [], s: [] }
+    socksHandshake({
+      client: c.take,
+      proxy: (parser) => { waitFor('proxy-reply', null); return u.take(parser).then((r) => { waitDone(); return r }) },
+      toProxy: (b) => { seen.c.push(b); uSock.write(b) },
+      toClient: (b) => { seen.s.push(b); cSock.write(b) },
+    }, initial[0]).then(guard((r) => {
+      if (finished) return
+      // what was forwarded, both ways, verbatim; RFC 1929 username/password are a proxy credential → 0600 (RFC 4.1)
+      if (seen.c.length) rec.prelude = { kind: r.kind ?? (initial[0] === 4 ? 'socks4' : 'socks5'), target: r.host != null ? `${r.host}:${r.port}` : null, client_b64: Buffer.concat(seen.c).toString('base64'), proxy_b64: Buffer.concat(seen.s).toString('base64') }
+      const cRest = c.rest(), uRest = u.rest()
+      const host = r.host != null ? hostOf(`${r.host}:${r.port}`) : null
+      if (r.ok) { if (uRest.length) cSock.write(uRest); return route(cSock, uSock, cRest, host, true) }
+      rec.decision = 'tunnel'; rec.host = host
+      notCaptured(r.opaque ? 'unknown-protocol' : 'proxy-refused', r.reason)
+      if (cRest.length) uSock.write(cRest)
+      if (uRest.length) cSock.write(uRest)
+      relay(cSock, uSock)
+    }), internalError)
   }
 
   // ── plain HTTP (scheme http) ───────────────────────────────────────────────────────────────────
