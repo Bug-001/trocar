@@ -48,8 +48,9 @@ export function parseDotenv(text) {
 }
 
 // ── TOML subset (Codex config.toml): [table] / [a."b.c"] headers, bare / quoted / dotted keys, string / number / bool
-// values. Arrays, inline tables, multi-line strings and [[array-of-tables]] are not read (counted in `errors`): no
-// reader needs them, and a key under an unread header must not land in the table before it.
+// values, inline tables. Arrays and multi-line strings are skipped (no reader needs them; their lines are never taken
+// for keys). [[array-of-tables]] and lines it cannot read count in `errors` (a key under an unread header must not land
+// in the table before it): a reader reports such a file, since a relay host set there stays unknown (review 4 #4).
 function splitKey(s) {
   const parts = []
   for (const m of s.matchAll(/\s*("(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_-]+)\s*(?:\.|$)/g)) parts.push(m[1].replace(/^["']|["']$/g, ''))
@@ -64,22 +65,92 @@ function tomlScalar(v) {
   if ((m = /^([+-]?\d[\d_]*(\.\d+)?)\s*(#.*)?$/.exec(s))) return Number(m[1].replace(/_/g, ''))
   return undefined
 }
+// Index just past the string that starts at s[i] (basic, literal or their triple-quoted forms); -1 while it is open.
+function stringEnd(s, i) {
+  const c = s[i]
+  const q = s.startsWith(c.repeat(3), i) ? c.repeat(3) : c
+  for (let j = i + q.length; j < s.length; j++) {
+    if (s.startsWith(q, j)) return j + q.length
+    if (c === '"' && s[j] === '\\') j++
+  }
+  return -1
+}
+// Index just past the bracket that closes s[0] ('[' or '{'), skipping strings and comments; -1 while it is still open.
+function closeOf(s) {
+  let depth = 0
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]
+    if (c === '"' || c === "'") { const e = stringEnd(s, i); if (e < 0) return -1; i = e - 1 } else if (c === '#') { const e = s.indexOf('\n', i); if (e < 0) return -1; i = e } else if (c === '[' || c === '{') depth++
+    else if (c === ']' || c === '}') { if (--depth === 0) return i + 1 }
+  }
+  return -1
+}
+const SKIP = Symbol('skipped')
+// The parts of an inline table's body between top-level commas; null when a string or bracket in it does not close.
+function topLevelParts(body) {
+  const parts = []
+  let from = 0
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i]
+    let e = null
+    if (c === '"' || c === "'") e = stringEnd(body, i)
+    else if (c === '[' || c === '{') { const k = closeOf(body.slice(i)); e = k < 0 ? -1 : i + k }
+    if (e != null) { if (e < 0) return null; i = e - 1; continue }
+    if (c === ',') { parts.push(body.slice(from, i)); from = i + 1 }
+  }
+  parts.push(body.slice(from))
+  return parts
+}
+const KEY = /^((?:"(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_.-]+|\s)+?)\s*=\s*([\s\S]*)$/
+const descendInto = (base, keys) => { let o = base; for (const k of keys) o = o[k] = (o[k] && typeof o[k] === 'object') ? o[k] : {}; return o }
+// A complete value: an inline table (object), an array or a multi-line string (SKIP), a scalar, or undefined.
+function tomlValue(s) {
+  const v = s.trim()
+  if (v.startsWith('"""') || v.startsWith("'''")) return SKIP
+  if (v.startsWith('[') || v.startsWith('{')) {
+    const e = closeOf(v)
+    if (e < 0 || !/^\s*(#.*)?$/.test(v.slice(e))) return undefined
+    if (v[0] === '[') return SKIP
+    const out = {}
+    for (const part of topLevelParts(v.slice(1, e - 1)) || [null]) {
+      if (part == null) return undefined
+      if (!part.trim()) continue
+      const kv = KEY.exec(part.trim())
+      const val = kv ? tomlValue(kv[2]) : undefined
+      if (val === undefined) return undefined
+      if (val === SKIP) continue
+      const keys = splitKey(kv[1])
+      descendInto(out, keys.slice(0, -1))[keys[keys.length - 1]] = val
+    }
+    return out
+  }
+  return tomlScalar(v)
+}
 export function parseTomlLite(text) {
   const root = {}
   let cur = root
   let errors = 0
-  const descend = (base, keys) => { let o = base; for (const k of keys) o = o[k] = (o[k] && typeof o[k] === 'object') ? o[k] : {}; return o }
-  for (const raw of String(text || '').split(/\r?\n/)) {
-    const line = raw.trim()
+  const lines = String(text || '').split(/\r?\n/)
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim()
     if (!line || line.startsWith('#')) continue
     if (line.startsWith('[[')) { errors++; cur = {}; continue } // array-of-tables: its keys are dropped
     const h = /^\[([^\]]+)\]\s*(#.*)?$/.exec(line)
-    if (h) { cur = descend(root, splitKey(h[1])); continue }
-    const kv = /^((?:"(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_.-]+|\s)+?)\s*=\s*(.+)$/.exec(line)
-    const v = kv ? tomlScalar(kv[2]) : undefined
+    if (h) { cur = descendInto(root, splitKey(h[1])); continue }
+    const kv = KEY.exec(line)
+    if (!kv) { errors++; continue }
+    let raw = kv[2]
+    const t = raw.trim()
+    // a value that goes on over the next lines: an array or inline table until its bracket closes, a multi-line string
+    // until its closing quotes
+    const ml = t.startsWith('"""') ? '"""' : t.startsWith("'''") ? "'''" : null
+    if (ml) { if (t.indexOf(ml, 3) < 0) { while (i + 1 < lines.length && !lines[++i].includes(ml)); } continue }
+    if (t.startsWith('[') || t.startsWith('{')) while (closeOf(raw.trim()) < 0 && i + 1 < lines.length) raw += '\n' + lines[++i]
+    const v = tomlValue(raw)
     if (v === undefined) { errors++; continue }
+    if (v === SKIP) continue
     const keys = splitKey(kv[1])
-    descend(cur, keys.slice(0, -1))[keys[keys.length - 1]] = v
+    descendInto(cur, keys.slice(0, -1))[keys[keys.length - 1]] = v
   }
   return { data: root, errors }
 }

@@ -99,3 +99,13 @@ test('opencode through install / uninstall: the plugin goes in and out with the 
     assert.deepEqual(r.residue, [path.join(s.home, '.config', 'opencode', 'node_modules')])
   } finally { s.done() }
 })
+
+test('opencode: a config file that does not parse is reported; OPENCODE_CONFIG_CONTENT is not a file (D38, review 4 #4)', () => {
+  const s = sandbox()
+  try {
+    const bad = s.put('.config/opencode/opencode.json', '{ "provider": { ')
+    const seen = []
+    judge(oc, ctxFor({ home: s.home, argv: ["/home/u/.opencode/bin/opencode", "run", "hi"], env: { OPENCODE_CONFIG_CONTENT: '{ broken' }, unparsable: (f) => seen.push(f) }))
+    assert.deepEqual(seen, [bad])
+  } finally { s.done() }
+})

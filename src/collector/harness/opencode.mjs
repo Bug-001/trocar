@@ -28,7 +28,9 @@ function configDocs(ctx) {
     MANAGED[ctx.os],
   ].filter(Boolean)
   const sub = (s) => s.replace(/\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, k) => ctx.env.get(k) || '')
-  return [...files.map((f) => ctx.readText(f)), ctx.environ.get('OPENCODE_CONFIG_CONTENT')].filter((t) => typeof t === 'string').map((t) => parseJsonc(sub(t)).data).filter(Boolean)
+  // a config file that does not parse is reported (D38): relay hosts in it stay off the list
+  const parse = (t, file) => { const { data } = parseJsonc(sub(t)); if (data == null && file && ctx.unparsable) ctx.unparsable(file); return data }
+  return [...files.map((f) => [ctx.readText(f), f]), [ctx.environ.get('OPENCODE_CONFIG_CONTENT'), null]].filter(([t]) => typeof t === 'string').map(([t, f]) => parse(t, f)).filter(Boolean)
 }
 const providerHosts = (docs, only = null) => docs.flatMap((d) => (d.provider && typeof d.provider === 'object' ? urlHostsDeep(only ? d.provider[only] : d.provider, /^(baseURL|api)$/) : []))
 

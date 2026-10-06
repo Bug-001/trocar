@@ -20,15 +20,24 @@ import { envProxies, argAfter, dotenvLayer } from './_common.mjs'
 
 const SYSTEM_CONFIG = { linux: '/etc/codex/config.toml', darwin: '/etc/codex/config.toml' }
 const codexHome = (env, home) => expandHome(env.get('CODEX_HOME') || '', home) || path.join(home, '.codex')
-const tomlAt = (ctx, file) => { const t = file ? ctx.readText(file) : null; return t == null ? null : parseTomlLite(t).data }
+// A config.toml asight cannot fully read is reported (D38): a relay host set in the unread part stays off the list.
+function tomlAt(ctx, file) {
+  const t = file ? ctx.readText(file) : null
+  if (t == null) return null
+  const { data, errors } = parseTomlLite(t)
+  if (errors && ctx.unparsable) ctx.unparsable(file)
+  return data
+}
 
 function configHosts(ctx) {
   const home = codexHome(ctx.environ, ctx.home)
   const user = tomlAt(ctx, path.join(home, 'config.toml'))
   const profile = argAfter(ctx.argv, ['--profile', '-p']) || (user && typeof user.profile === 'string' ? user.profile : null)
   const docs = [tomlAt(ctx, SYSTEM_CONFIG[ctx.os]), user, profile ? tomlAt(ctx, path.join(home, `${profile}.config.toml`)) : null].filter(Boolean)
+  // the selected profile as a file and as the [profiles.<name>] table (both forms exist; 4.6 OPEN 配置格式与层叠)
+  const tables = [...docs, ...(profile ? docs.map((d) => d.profiles && d.profiles[profile]).filter((t) => t && typeof t === 'object') : [])]
   const urls = []
-  for (const d of docs) {
+  for (const d of tables) {
     urls.push(d.openai_base_url, d.chatgpt_base_url)
     for (const p of Object.values(d.model_providers || {})) urls.push(dig(p, 'base_url'))
   }

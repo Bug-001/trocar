@@ -45,7 +45,37 @@ test('config-read: TOML subset reads tables, dotted keys, strings; skips what it
   assert.equal(dig(data, 'profiles.fast.model'), 'm')
   assert.equal(data.url, undefined)
   assert.equal(data.model_providers['a.b'].url, undefined, 'a key under an unread [[header]] never lands in the table before it')
-  assert.equal(errors, 2) // the array value and the [[array-of-tables]] header
+  assert.equal(errors, 1) // the [[array-of-tables]] header; an array value is skipped, not an error
+})
+
+test('config-read: TOML inline tables are read; arrays and multi-line strings over several lines are skipped and never taken for keys; what it cannot read is counted (review 4 #4)', () => {
+  const { data, errors } = parseTomlLite([
+    'model_providers = { relay = { base_url = "https://inline.example.com/v1", name = "R, x" }, b = { base_url = \'https://b.example.com\' } }',
+    'notify = ["a", "b,c"]',
+    'args = [',
+    '  "x",',
+    '  "y]", # a comment with ] in it',
+    ']',
+    'instructions = """',
+    'openai_base_url = "https://fake.example.com"',
+    '"""',
+    "lit = '''one line'''",
+    'after = "still read"',
+    '[t]',
+    'env = { A = "1", list = [1, 2], nested = { k = true } } # trailing comment',
+    'not a key value line',
+    'junk = { a = "1" } trailing',
+    'bad = { a = "unclosed }', // unclosed: it runs to the end of the file, which is then not fully read
+  ].join('\n'))
+  assert.equal(dig(data, 'model_providers.relay.base_url'), 'https://inline.example.com/v1')
+  assert.equal(dig(data, 'model_providers.relay.name'), 'R, x', 'a comma inside a string does not split the table')
+  assert.equal(dig(data, 'model_providers.b.base_url'), 'https://b.example.com')
+  assert.equal(data.openai_base_url, undefined, 'a line inside a multi-line string is not a key')
+  assert.equal(data.after, 'still read', 'reading goes on after a multi-line array and string')
+  assert.deepEqual(data.t.env, { A: '1', nested: { k: true } })
+  assert.equal(data.t.bad, undefined)
+  assert.equal(data.t.junk, undefined, 'text after the closing brace: not read')
+  assert.equal(errors, 3, 'the line that is not key = value, the one with text after its table, the unclosed table')
 })
 
 test('config-read: JSONC strips comments and trailing commas but not inside strings', () => {

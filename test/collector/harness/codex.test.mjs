@@ -123,3 +123,31 @@ test('codex through install / uninstall: the user\'s SSL_CERT_FILE line is put o
     assert.ok(!fs.existsSync(bundle))
   } finally { s.done() }
 })
+
+test('codex: a provider in an inline table and a [profiles.<name>] table name relay hosts; a config.toml asight cannot fully read is reported (D38, review 4 #4 #6)', () => {
+  const s = sandbox()
+  try {
+    const cfg = s.put('.codex/config.toml', 'profile = "work"\nmodel_providers = { relay = { base_url = "https://inline.example.com/v1" } }\n[profiles.work]\nopenai_base_url = "https://work.example.com/v1"\n[profiles.home]\nopenai_base_url = "https://home.example.com/v1"\n')
+    const seen = []
+    const r = judge(codex, ctxFor({ home: s.home, argv: ['codex'], unparsable: (f) => seen.push(f) }))
+    assert.deepEqual(r.hosts.sort(), ['inline.example.com', 'work.example.com'], 'the selected profile only')
+    assert.deepEqual(seen, [], 'a file it reads in full is not reported')
+    s.put('.codex/config.toml', 'openai_base_url = "https://relay.example.com/v1"\n[[skills]]\nopenai_base_url = "https://hidden.example.com"\n')
+    const r2 = judge(codex, ctxFor({ home: s.home, argv: ['codex'], unparsable: (f) => seen.push(f) }))
+    assert.deepEqual([r2.hosts, seen], [['relay.example.com'], [cfg]])
+  } finally { s.done() }
+})
+
+test('codex: a same-name SSL_CERT_FILE line the user adds below asight\'s block wins (last wins, as the resolver reads it): that codex is untrusted (T12, review 4 #5)', async () => {
+  const s = sandbox()
+  try {
+    const corp = s.put('corp.pem', OTHER.certPem)
+    const env = s.put('.codex/.env', 'OPENAI_API_KEY=sk-secret\n')
+    await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [codex], freePort: async () => 47018, roots: { node: [], osText: '' } })
+    const installed = { caCertPem: fs.readFileSync(path.join(s.home, '.asight', 'collector', 'ca', 'asight-ca.pem'), 'utf8') }
+    assert.equal(judge(codex, ctxFor({ home: s.home, argv: ['codex'] }), installed).trust.trusted, true)
+    fs.appendFileSync(env, `SSL_CERT_FILE=${corp}\n`)
+    const r = judge(codex, ctxFor({ home: s.home, argv: ['codex'] }), installed)
+    assert.deepEqual([r.trust.trusted, r.trust.reason, r.trust.var], [false, 'replace-without-ca', 'SSL_CERT_FILE'])
+  } finally { s.done() }
+})
