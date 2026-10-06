@@ -156,6 +156,29 @@ test('journal: a symlinked settings file is edited at its target; the link stays
   } finally { b.done() }
 })
 
+test('journal: installed through a link that is now a regular file, gone, or a link elsewhere — undo refuses (left-link), touches nothing, and says where the key may still be', () => {
+  const b = box()
+  try {
+    const target = path.join(b.root, 'dotfiles', 'claude-settings.json'); fs.mkdirSync(path.dirname(target)); fs.writeFileSync(target, USER)
+    const link = path.join(b.root, '.app', 'settings.json'); fs.mkdirSync(path.dirname(link)); fs.symlinkSync(target, link)
+    const e = applyJsonKey({ dir: b.dir, manifest: newManifest(), harness: 'h', file: link, keys: K, value: b.value })
+    const withKey = fs.readFileSync(target, 'utf8')
+    fs.rmSync(link); fs.writeFileSync(link, '{"mine":1}') // now a regular file
+    let r = undoEntry(e)
+    assert.equal(r.result, 'left-link')
+    assert.match(r.reason, new RegExp(`${link.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} is no longer a symbolic link; asight changed .*claude-settings\\.json through it; asight did not touch it, and its env\\.CA_FILE = .* may still be in .*claude-settings\\.json`))
+    assert.deepEqual([fs.readFileSync(link, 'utf8'), fs.readFileSync(target, 'utf8')], ['{"mine":1}', withKey], 'neither the new file nor the old target is touched')
+    fs.rmSync(link) // gone
+    r = undoEntry(e)
+    assert.deepEqual([r.result, /is gone; asight changed/.test(r.reason)], ['left-link', true])
+    assert.equal(fs.readFileSync(target, 'utf8'), withKey)
+    const other = path.join(b.root, 'dotfiles', 'other.json'); fs.writeFileSync(other, '{}'); fs.symlinkSync(other, link) // a link elsewhere
+    r = undoEntry(e)
+    assert.deepEqual([r.result, /is now a symbolic link to .*other\.json, not to .*claude-settings\.json/.test(r.reason)], ['left-link', true])
+    assert.deepEqual([fs.readFileSync(other, 'utf8'), fs.readFileSync(target, 'utf8')], ['{}', withKey])
+  } finally { b.done() }
+})
+
 test('journal: a crash between the intent and the write leaves no residue after undo (created dirs, temp files)', () => {
   const b = box()
   try {

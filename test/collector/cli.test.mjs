@@ -118,17 +118,23 @@ test('cli: install / uninstall hand the descriptors, OS and process table from d
   assert.deepEqual(seen, [['install', 'linux', parts.harnesses, true, '/h', '/os/roots.pem', ['/h/.config/systemd/user/asight-collector.service', ['/h/.config/systemd/user/default.target.wants/asight-collector.service'], `{"NODE_EXTRA_CA_CERTS":"/corp/ca.pem"} ExecStart="${process.execPath}" "/repo/bin/asight.mjs" collector start`]], ['written'], ['uninstall', true, true], ['install', 'linux', parts.harnesses, true, '/h', '/os/roots.pem', null], ['written']])
   t = io(); assert.equal(await runCollector(['install'], { daemon, install: { installCollector: async () => { throw new Error('boom') } }, ...t }), 1)
   // an item uninstall could not undo: exit 1, the manifest keeps it, the user is told to run uninstall again (D38)
-  const leftOne = { uninstallCollector: async (o) => { seen.push(['uninstall-opts', o.harnesses === parts.harnesses, o.osRootsFile]); return { daemon: 'none', kept_captures: true, entries: [{ harness: 'h', path: '/h/s.json', result: 'left-unparsable' }], residue: ['/h/.config/h/node_modules'], kept_bundles: [{ path: '/h/ca/combined-h.pem', pids: [5, 6] }], still_trusting: [{ pid: 5, agent: 'h', until: 'next-connection' }], notes: [], left: 1 } } }
+  const leftOne = { uninstallCollector: async (o) => { seen.push(['uninstall-opts', o.harnesses === parts.harnesses, o.osRootsFile]); return { daemon: 'none', kept_captures: true, entries: [{ harness: 'h', path: '/h/s.json', result: 'left-unparsable' }], residue: ['/h/.config/h/node_modules'], kept_bundles: [{ path: '/h/ca/combined-h.pem', pids: [5, 6] }], still_trusting: [{ pid: 5, agent: 'h', until: 'next-connection' }], notes: [], left: [{ path: '/h/s.json', harness: 'h', result: 'left-unparsable' }] } } }
   t = io(); assert.equal(await runCollector(['uninstall'], { daemon, install: leftOne, ...t }), 1)
   assert.deepEqual(seen.at(-1), ['uninstall-opts', true, '/os/roots.pem'], 'the descriptors and the OS roots reach uninstall step 2')
   assert.match(t.o[0], /left in place: \/h\/.config\/h\/node_modules/)
   assert.match(t.o[0], /kept \/h\/ca\/combined-h\.pem without the asight CA for pid 5, 6; run uninstall again once they exit/)
   assert.match(t.o[0], /pid 5 \(h\) trusts the asight CA until its next new connection/)
-  assert.match(t.e[0], /1 item\(s\) could not be undone and stay in the install manifest; .* run uninstall again/)
+  assert.match(t.e[0], /1 item\(s\) could not be undone \(\/h\/s\.json: left-unparsable\); the install manifest is kept — fix them, then run uninstall again/)
   // the plan shows a text entry by what it adds, an owned file by its role, the event log, and what the agent may write
   const plan2 = { installCollector: async (o) => { o.onPlan({ manifest: '/m', ca: ['/k', '/c'], files: [], owned: [{ harness: 'd', path: '/h/.asight/collector/plugins/d/index.js', role: 'plugin' }], entries: [{ harness: 'd', path: '/h/.d/patch.yml', what: 'line "- insert: x"' }], records: '/h/.asight/collector/flows', watch: [{ harness: 'o', path: '/h/.config/o/node_modules', why: 'npm install' }] }); return { already: true } } }
   t = io(); assert.equal(await runCollector(['install'], { daemon, install: plan2, ...t }), 0)
   assert.match(t.o[0], /d: \/h\/.asight\/collector\/plugins\/d\/index.js \(asight's plugin\)\n  d: \/h\/.d\/patch.yml line "- insert: x"\n  install notes \(event log\): \/h\/.asight\/collector\/flows\/\n  o itself may write \/h\/.config\/o\/node_modules \(npm install\); uninstall reports it, never deletes it$/)
+
+  // D-18: something left that could not be undone — exit 1, and says the manifest is kept
+  const partial = { uninstallCollector: async () => ({ daemon: 'none', kept_captures: true, entries: [{ harness: 'h', path: '/h/s.json', result: 'left-link' }], still_trusting: [], notes: [], left: [{ path: '/h/s.json', harness: 'h', result: 'left-link' }] }) }
+  t = io(); assert.equal(await runCollector(['uninstall'], { daemon, install: partial, ...t }), 1)
+  assert.match(t.o[0], /^uninstalled, except/)
+  assert.match(t.e[0], /1 item\(s\) could not be undone \(\/h\/s\.json: left-link\); the install manifest is kept — fix them, then run uninstall again/)
 })
 
 test('cli: setup-helper installs or removes through arch; a failure is exit 1', async () => {

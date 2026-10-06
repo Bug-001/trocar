@@ -150,8 +150,9 @@ export async function runCollector(argv, { env = process.env, home = os.homedir(
         return 0
       }
       const r = await uninstallCollector({ home, env, purgeData: rest.includes('--purge-data'), scan: parts.scan, match: parts.match, harnesses: parts.harnesses, osRootsFile: parts.osRootsFile, unit: unitOf(parts, home, script) })
-      out([`uninstalled (daemon: ${r.daemon}; ${r.kept_captures ? 'captures kept, --purge-data removes them' : 'captures removed'})`, ...r.entries.map((e) => `  ${e.harness}: ${e.path} ${e.result}`), ...(r.kept_bundles || []).map((k) => `  kept ${k.path} without the asight CA for pid ${k.pids.join(', ')}; run uninstall again once they exit`), ...r.still_trusting.map((p) => `  pid ${p.pid} (${p.agent}) trusts the asight CA ${UNTIL_TEXT[p.until] || UNTIL_TEXT.restart}`), ...(r.residue || []).map((p) => `  left in place: ${p}`), ...r.notes.map((n) => `note: ${n}`)].join('\n'))
-      if (r.left) { err(`asight collector uninstall: ${r.left} item(s) could not be undone and stay in the install manifest; fix what is reported above, then run uninstall again`); return 1 }
+      const left = r.left || []
+      out([`${left.length ? 'uninstalled, except' : 'uninstalled'} (daemon: ${r.daemon}; ${r.kept_captures ? 'captures kept, --purge-data removes them' : 'captures removed'})`, ...r.entries.map((e) => `  ${e.harness}: ${e.path} ${e.result}`), ...(r.kept_bundles || []).map((k) => `  kept ${k.path} without the asight CA for pid ${k.pids.join(', ')}; run uninstall again once they exit`), ...r.still_trusting.map((p) => `  pid ${p.pid} (${p.agent}) trusts the asight CA ${UNTIL_TEXT[p.until] || UNTIL_TEXT.restart}`), ...(r.residue || []).map((p) => `  left in place: ${p}`), ...r.notes.map((n) => `note: ${n}`)].join('\n'))
+      if (left.length) { err(`asight collector uninstall: ${left.length} item(s) could not be undone (${left.map((l) => `${l.path}: ${l.result}`).join('; ')}); the install manifest is kept — fix them, then run uninstall again`); return 1 }
       return 0
     } catch (e) { err(`asight collector ${verb}: ${e.message}`); return 1 }
   }

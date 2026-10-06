@@ -97,7 +97,7 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
     return { already: true, manifest: prior, plan: null }
   }
   if (prior && prior.pending_bundles) throw new Error(`an earlier uninstall kept combined bundles that running agents still use (${prior.files.filter((f) => f.role === 'bundle').map((f) => f.path).join(', ')}); run "asight collector uninstall" again once they exit`)
-  if (prior && prior.uninstall_left) throw new Error(`an earlier uninstall left entries it could not undo (${manifestPath(dir)}); fix what it reported, then run "asight collector uninstall" again`)
+  if (prior && prior.uninstall_left) throw new Error(`an earlier uninstall could not undo ${prior.uninstall_left.length} item(s) (${prior.uninstall_left.map((l) => l.path).join(', ')}); fix them, run "asight collector uninstall" again, then install`)
   if (prior) throw new Error(`an earlier install did not finish (${manifestPath(dir)}); run "asight collector uninstall" first`)
   const ca = caPaths(path.join(dir, 'ca'))
   const facts = await scan()
@@ -211,6 +211,14 @@ export async function uninstallCollector({ home = os.homedir(), ...opts } = {}) 
 const stepOf = (e) => (e.kind === 'text' && e.format !== 'dotenv-block' ? 4 : 1)
 const NOT_UNDONE = new Set(['left-unparsable', 'left-link', 'error'])
 
+// what each undo result other than a plain restore means for the user (4.6 撤销结果)
+const UNDO_NOTE = {
+  'already-restored': 'already back as it was before install: nothing to undo',
+  'reverted-not-identical': 'asight\'s key was removed, but the file is not byte for byte what it was before install (it was edited since)',
+  missing: 'the file is gone: nothing of asight\'s is left in it',
+  'left-user-value': 'the key now holds a value the user set: left as it is',
+}
+
 // May a live process of `harness` have read asight's entry for it (4.6 撤销顺序 step 2 (a), step 5)? It started after
 // that harness's earliest install time (its entries and the files asight owns for it), or the harness re-reads its
 // entry while running (`trust.rereadsEntry`: alive is enough), or its start time is unknown.
@@ -238,7 +246,7 @@ function bundleUsers(bundle, m, procs, match, byName) {
 
 async function uninstall(dir, { env = process.env, purgeData = false, scan = async () => [], match = () => ({ agent: null }), stop = null, harnesses = [], osRootsFile = null, roots = null, unit = null }) {
   const runtime = env.XDG_RUNTIME_DIR ? path.join(env.XDG_RUNTIME_DIR, 'asight') : null
-  const report = { daemon: null, entries: [], removed: [], residue: [], kept_bundles: [], still_trusting: [], kept_captures: !purgeData, notes: [], left: 0 }
+  const report = { daemon: null, entries: [], removed: [], residue: [], kept_bundles: [], still_trusting: [], kept_captures: !purgeData, notes: [], left: [] } // left: what could not be undone, {path, harness, result} each (D-18)
   const byName = new Map(harnesses.map((d) => [d.name, d]))
   const failed = [] // failure events, written after any purge so they survive it
   const noted = [] // uninstall-note events (kept captures only: --purge-data asked for flows/ to go)
@@ -255,10 +263,11 @@ async function uninstall(dir, { env = process.env, purgeData = false, scan = asy
       report.entries.push(r)
       if (NOT_UNDONE.has(r.result)) {
         left.entries.push(e)
+        report.left.push({ path: e.path, harness: e.harness, result: r.result })
         const why = r.result === 'left-unparsable' ? `${e.path} is no longer valid JSON; asight's ${describeEntry(e)} may still be in it` : r.reason
-        failed.push({ code: CODE.entryNotUndone, harness: e.harness, path: e.path, reason: why })
-      }
-      if (r.result === 'reverted-not-identical') noted.push({ code: CODE.notIdentical, harness: e.harness, path: e.path, reason: `${e.path} was edited after install: only asight's ${describeEntry(e)} was taken out${r.deleted ? ' and the file, holding nothing else, removed' : ''}; the rest is as the user left it` })
+        failed.push({ code: r.result === 'error' ? CODE.entryNotUndone : r.result, harness: e.harness, path: e.path, reason: why }) // left-unparsable / left-link are D38 codes
+      } else if (r.result === 'reverted-not-identical') noted.push({ code: CODE.notIdentical, harness: e.harness, path: e.path, reason: `${e.path} was edited after install: only asight's ${describeEntry(e)} was taken out${r.deleted ? ' and the file, holding nothing else, removed' : ''}; the file is not byte for byte what it was before install, the rest is as the user left it` })
+      else if (r.result !== 'restored') noted.push({ code: r.result, harness: e.harness, path: e.path, reason: UNDO_NOTE[r.result] || r.result }) // already-restored, missing, left-user-value
     }
     for (const e of [...m.entries].reverse()) if (stepOf(e) === 1) undo(e)
     // step 2: every combined bundle becomes the same file without the asight CA, so a process still holding it keeps
@@ -281,7 +290,7 @@ async function uninstall(dir, { env = process.env, purgeData = false, scan = asy
         if (r.result === 'removed') report.removed.push(f.path)
         if (r.changed) noted.push({ code: CODE.harnessNote, harness: f.harness, path: f.path, reason: `${f.path}, asight's ${f.role}, had been changed since install; it was removed all the same` })
       } catch (err) {
-        left.files.push(f)
+        left.files.push(f); report.left.push({ path: f.path, harness: f.harness, result: 'error' })
         failed.push({ code: CODE.entryNotUndone, harness: f.harness, path: f.path, reason: `${f.path}, asight's ${f.role}, could not be removed: ${String((err && err.message) || err)}` })
       }
     }
@@ -306,29 +315,29 @@ async function uninstall(dir, { env = process.env, purgeData = false, scan = asy
     // the autostart unit (4.6 order: after the trust entries, before the CA key): disabled, removed, its wants/ links
     if (unitFile) {
       if (unit) { const r = unit.disable(); if (r && r.code !== 0) failed.push({ code: CODE.unitNotDisabled, path: unitFile.path, reason: `systemctl --user disable failed (${r.err || `exit ${r.code}`}); the unit file is removed all the same, run "systemctl --user daemon-reload" once systemd --user runs` }) }
-      try { if (removeOwnedFile(unitFile).result === 'removed') report.removed.push(unitFile.path) } catch (err) { left.files.push(unitFile); failed.push({ code: CODE.entryNotUndone, path: unitFile.path, reason: `${unitFile.path} could not be removed: ${String((err && err.message) || err)}` }) }
+      try { if (removeOwnedFile(unitFile).result === 'removed') report.removed.push(unitFile.path) } catch (err) { left.files.push(unitFile); report.left.push({ path: unitFile.path, harness: unitFile.harness || null, result: 'error' }); failed.push({ code: CODE.entryNotUndone, path: unitFile.path, reason: `${unitFile.path} could not be removed: ${String((err && err.message) || err)}` }) }
       if (unit) report.removed.push(...unit.removeWants((p, err) => failed.push({ code: CODE.unitNotDisabled, path: p, reason: `${p}, the autostart link, could not be removed: ${String((err && err.message) || err)}` })))
     }
     // the CA private key and the runtime state (with the trust markers) last
     for (const f of m.files.filter((x) => x.role === 'ca-key')) rm(f.path)
     for (const p of [path.join(dir, 'run'), path.join(dir, 'lock'), path.join(dir, 'state.json'), runtime]) if (p) rm(p)
   }
-  for (const n of noted) {
-    report.notes.push(n.reason)
-    if (!purgeData) { try { appendEvent(dir, { event: EVENT.uninstallNote, where: 'uninstall', ...n }) } catch (w) { report.notes.push(`not recorded (${String((w && w.message) || w)}): ${n.reason}`) } }
-  }
+  for (const n of noted) report.notes.push(n.reason) // the command prints every one of them
   // then the data the operator asked to drop — also after an earlier plain uninstall left the captures behind
   if (purgeData) {
     for (const n of listDir(dir)) if (/^capture-.*\.ndjson$/.test(n)) rm(path.join(dir, n))
     for (const sub of ['flows', 'audit', 'replays']) rm(path.join(dir, sub))
   }
-  for (const f of failed) { // after the purge, so --purge-data never deletes what this run could not undo
-    try { appendEvent(dir, { event: EVENT.failure, where: 'uninstall', ...f }) } catch (w) { report.notes.push(`not recorded (${String((w && w.message) || w)}): ${f.reason}`) }
-  }
+  // after the purge, so --purge-data never deletes what this run could not undo; a line that cannot be written is
+  // said in the command's output (and so on stderr's caller), never dropped, and never stops the uninstall
+  const put = (rec) => { try { appendEvent(dir, rec) } catch (w) { report.notes.push(`not recorded (${String((w && w.message) || w)}): ${rec.reason}`) } }
+  for (const f of failed) put({ event: EVENT.failure, where: 'uninstall', ...f })
+  // notes too — except after --purge-data that left nothing: the operator asked for an empty collector directory, and the
+  // command's output has every one of them (4.6 安装 / 卸载不静默)
+  if (m && !(purgeData && !report.left.length)) for (const n of noted) put({ event: EVENT.uninstallNote, where: 'uninstall', kind: n.code, ...n })
   if (m) {
-    report.left = left.entries.length + left.files.length
-    if (report.left || left.bundles.length) { // keep exactly what is left; the next uninstall finds it (4.6: the manifest goes last)
-      saveManifest(dir, { ...m, complete: false, ...(report.left ? { uninstall_left: true } : {}), ...(left.bundles.length ? { pending_bundles: true } : {}), planned: [], watched: [], entries: left.entries, files: [...left.files, ...left.bundles] })
+    if (report.left.length || left.bundles.length) { // keep exactly what is left; the next uninstall finds it (4.6: the manifest goes last)
+      saveManifest(dir, { ...m, complete: false, ...(report.left.length ? { uninstall_left: report.left, uninstalled_at: new Date().toISOString() } : {}), ...(left.bundles.length ? { pending_bundles: true } : {}), planned: [], watched: [], entries: left.entries, files: [...left.files, ...left.bundles] })
       return report
     }
     removeEmptyDirs(m.dirs.filter((d) => d !== dir)) // e.g. ca/

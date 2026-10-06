@@ -609,3 +609,61 @@ test('install: installed but with an unusable CA is not "already installed" — 
     await assert.rejects(installCollector(base(b)), /installed, but its CA is unusable \(cert: .*run "asight collector uninstall", then "asight collector install"/)
   } finally { b.done() }
 })
+
+test('uninstall that cannot undo an entry keeps the manifest with only what is left, still removes the CA, and install refuses until a second uninstall clears it (D-18)', async () => {
+  const b = box()
+  try {
+    fs.mkdirSync(path.join(b.home, '.claude')); fs.writeFileSync(settingsOf(b), '{"model":"x"}')
+    await installCollector(base(b))
+    const installed = fs.readFileSync(settingsOf(b), 'utf8')
+    const dot = path.join(b.home, 'dotfiles', 'settings.json'); fs.mkdirSync(path.dirname(dot)); fs.copyFileSync(settingsOf(b), dot)
+    fs.rmSync(settingsOf(b)); fs.symlinkSync(dot, settingsOf(b)) // became a link: asight will not write through it
+    const r = await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
+    assert.deepEqual(r.left, [{ path: settingsOf(b), harness: 'claude-code', result: 'left-link' }])
+    const m = readManifest(b.dir)
+    assert.deepEqual([m.complete, m.entries.map((e) => [e.path, e.keys.join('.')]), m.files, m.uninstall_left.map((l) => l.result), typeof m.uninstalled_at],
+      [false, [[settingsOf(b), 'env.NODE_EXTRA_CA_CERTS']], [], ['left-link'], 'string'], 'the manifest stays, listing only what is left')
+    assert.deepEqual([fs.existsSync(path.join(b.dir, 'ca', 'asight-ca.pem')), fs.existsSync(path.join(b.dir, 'ca', 'ca.key'))], [false, false], 'the CA files go all the same (an append-semantics agent only warns about a missing file)')
+    await assert.rejects(installCollector(base(b)), /an earlier uninstall could not undo 1 item\(s\) \(.*settings\.json\); fix them, run "asight collector uninstall" again, then install/)
+    fs.rmSync(settingsOf(b)); fs.writeFileSync(settingsOf(b), installed) // the user puts a regular file back
+    const again = await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
+    assert.deepEqual([again.left, again.entries.map((e) => e.result)], [[], ['restored']])
+    assert.equal(readManifest(b.dir), null, 'nothing left: the manifest goes')
+    assert.equal(fs.readFileSync(settingsOf(b), 'utf8'), '{"model":"x"}')
+    assert.equal((await installCollector(base(b))).already, false, 'and install works again')
+  } finally { b.done() }
+})
+
+test('uninstall writes an uninstall-note for every result but a plain restore and for every pid still trusting; a note that cannot be written is in its output, and the uninstall still finishes (D-18, 4.6 安装 / 卸载不静默)', async () => {
+  const b = box()
+  try {
+    fs.mkdirSync(path.join(b.home, '.claude')); fs.writeFileSync(settingsOf(b), '{"model":"x"}')
+    const running = [{ pid: 4242, exe: '/x/claude/versions/2.1.289', argv: ['claude'], env: new Map() }]
+    const match = (f) => ({ agent: f.pid === 4242 ? 'claude-code' : null })
+    await installCollector(base(b, { scan: async () => running, match }))
+    const doc = JSON.parse(fs.readFileSync(settingsOf(b), 'utf8')); doc.theme = 'dark'; fs.writeFileSync(settingsOf(b), JSON.stringify(doc)) // edited since
+    const r = await uninstallCollector({ home: b.home, env: {}, scan: async () => running, match, stop: stopNone })
+    assert.deepEqual(r.entries.map((e) => e.result), ['reverted-not-identical'])
+    const { readRecentFailures } = await import('../../src/collector/core/events.mjs')
+    const lines = fs.readdirSync(path.join(b.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(b.dir, 'flows', n), 'utf8').trim().split('\n').map((l) => JSON.parse(l)))
+    assert.deepEqual(lines.map((l) => [l.event, l.kind, l.path ?? l.pid]), [['uninstall-note', 'reverted-not-identical', settingsOf(b)], ['uninstall-note', 'still-trusting', 4242]])
+    assert.match(lines[0].reason, /not byte for byte what it was before install/)
+    assert.deepEqual(readRecentFailures(b.dir).list, [], 'notes are not failures')
+    assert.equal(readManifest(b.dir), null)
+
+    await installCollector(base(b, { scan: async () => running, match }))
+    fs.rmSync(path.join(b.dir, 'flows'), { recursive: true }); fs.writeFileSync(path.join(b.dir, 'flows'), 'not a directory')
+    const r2 = await uninstallCollector({ home: b.home, env: {}, scan: async () => running, match, stop: stopNone })
+    assert.ok(r2.notes.some((n) => /^not recorded \(.+\): pid 4242 \(claude-code\) trusts the asight CA until it restarts$/.test(n)), JSON.stringify(r2.notes))
+    assert.equal(readManifest(b.dir), null, 'a note that cannot be written never stops the uninstall')
+  } finally { b.done() }
+})
+
+test('install: a failure that cannot be recorded keeps its own message and says the record failed (D38 fallback)', async () => {
+  const b = box()
+  try {
+    fs.mkdirSync(b.dir, { recursive: true }); fs.writeFileSync(path.join(b.dir, 'flows'), 'not a directory')
+    fs.mkdirSync(path.join(b.home, '.claude')); fs.writeFileSync(settingsOf(b), '{"model": "x",, }')
+    await assert.rejects(installCollector(base(b)), (e) => /JSON/.test(e.message) && /\(and recording this failure failed: .+\)$/.test(e.message))
+  } finally { b.done() }
+})
