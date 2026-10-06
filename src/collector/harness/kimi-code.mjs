@@ -16,7 +16,7 @@
 import path from 'node:path'
 import { hostOf, expandHome } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
-import { lineComment } from '../core/trust/text-edit.mjs'
+import { lineComment } from '../../off/text-edit.mjs'
 import { envValues, envProxies } from './_common.mjs'
 import { renderShim } from './_plugins.mjs'
 

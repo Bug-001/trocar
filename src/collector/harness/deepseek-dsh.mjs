@@ -15,7 +15,7 @@
 import path from 'node:path'
 import { hostOf, expandHome, versionAtLeast } from '../core/config-read.mjs'
 import { MARKER_VAR } from '../core/trust/confirm.mjs'
-import { lineComment } from '../core/trust/text-edit.mjs'
+import { lineComment } from '../../off/text-edit.mjs'
 import { envValues, envProxies, argAfter, dotenvLayer } from './_common.mjs'
 import { renderPlugin, ANONYMOUS_MODULE_MANIFEST } from './_plugins.mjs'
 

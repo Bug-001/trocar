@@ -1,9 +1,9 @@
-// test/collector/core/text-edit.test.mjs — the sentinel block and sentinel line asight writes into comment-capable
+// test/off/text-edit.test.mjs — the sentinel block and sentinel line asight writes into comment-capable
 // files (RFC 4.6 §身份与信任「标记与安装」「同名键」, §安装清单与卸载「撤一个文件的规则」; T10 / T11 text parts).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { applyOps, reverseOps } from '../../../src/collector/core/trust/json-text.mjs'
-import { dotenvBlock, insertLine, removeAsightText, onlySkeleton, BLOCK_BEGIN, BLOCK_END, OFF_PREFIX, SENTINEL, lineComment } from '../../../src/collector/core/trust/text-edit.mjs'
+import { applyOps, reverseOps } from '../../src/off/json-text.mjs'
+import { dotenvBlock, insertLine, removeAsightText, onlySkeleton, BLOCK_BEGIN, BLOCK_END, OFF_PREFIX, SENTINEL, lineComment } from '../../src/off/text-edit.mjs'
 
 const B = '/h/.asight/collector/ca/combined-x.pem'
 

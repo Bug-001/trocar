@@ -6,7 +6,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { applyTextEntry, previewTextEntry, undoEntry, newManifest, readManifest, sha256, manifestPath, writeOwnedFile, removeOwnedFile, describeEntry } from '../../../src/collector/core/trust/journal.mjs'
-import { lineComment, OFF_PREFIX } from '../../../src/collector/core/trust/text-edit.mjs'
+import { lineComment, OFF_PREFIX } from '../../../src/off/text-edit.mjs'
 
 function box() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-jt-'))

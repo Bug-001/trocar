@@ -359,7 +359,7 @@ test('stopDaemon: an unreadable lock with no daemon answering stops the uninstal
 // A synthetic plugin-style harness (no real agent): a plugin file in the agent's own directory, a row in a YAML list
 // that loads asight's plugin directory, a JSON key, and a path the agent may write because of the plugin.
 async function plugHarness(b) {
-  const { lineComment } = await import('../../src/collector/core/trust/text-edit.mjs')
+  const { lineComment } = await import('../../src/off/text-edit.mjs')
   const dir = path.join(b.home, '.asight', 'collector')
   return {
     name: 'plug', runtime: 'node', signatures: { linux: { match: [{ exe: /plug$/ }] } }, hosts: [], trust: { chain: [{ var: 'asight:marker', semantic: 'append' }] },
