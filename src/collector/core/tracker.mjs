@@ -12,6 +12,9 @@
 // `agent-untrusted` is written for it; its row is kept, `off: true`, so status can say so and a later `on` finds it again. reconcile()
 // brings the table to the enabled set after a harness was turned off (unwatch its rows, onOff(row) so the daemon ends what it recorded);
 // turning one ON is done by the rescan behind an `on` request, never here. Without setEnabled every harness is enabled (no switch wired).
+// A pid whose unwatch the helper did not answer stays in stuck() — the kernel may still steer it — until a later reconcile gets the answer
+// (the daemon asks again before every heartbeat and at its 5 s check, and sends no heartbeat while any is stuck). With the helper itself
+// gone (reconcile({kernelGone})) there is nothing to ask: its links and watch table died with it, so every stuck pid is moot.
 // Descriptor callbacks are harness code: any throw degrades that agent to its known hosts and is
 // shown in agents(), it never breaks the table. A config file that exists but cannot be read is reported (D38).
 import fs from 'node:fs'
@@ -192,17 +195,22 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     return row
   }
   // A row that was judged, now off: its marker deadline goes, the table says off, the kernel stops watching it, the daemon is told.
-  async function takeOff(prev, row = offRow({ ...prev, reported: true })) {
+  async function takeOff(prev, row = offRow({ ...prev, reported: true }), { moot = false } = {}) {
     const t = pending.get(prev.pid); if (t) { clearTimeout(t); pending.delete(prev.pid) }
     table.set(prev.pid, row)
     let ok = true
-    try { await redirector.unwatch(prev.pid); stuck.delete(prev.pid) } catch (e) { ok = false; stuck.add(prev.pid); onError(e, { pid: prev.pid, phase: 'unwatch' }) }
+    if (moot) stuck.delete(prev.pid) // the helper is gone: no table holds this pid any more
+    else try { await redirector.unwatch(prev.pid); stuck.delete(prev.pid) } catch (e) { ok = false; stuck.add(prev.pid); onError(e, { pid: prev.pid, phase: 'unwatch' }) }
     onOff(prev)
     return ok
   }
-  async function askAgain(pid) {
+  async function askAgain(pid, moot = false) {
+    if (moot) { stuck.delete(pid); return true }
     try { await redirector.unwatch(pid); stuck.delete(pid); return true } catch (e) { onError(e, { pid, phase: 'unwatch' }); return false }
   }
+  // one reconcile at a time: the daemon's beat gate, its 5 s check and an `off` request may all ask, and two of them must not both
+  // unwatch the same stuck pid (a second failure record, a second onOff)
+  let queue = Promise.resolve()
 
   // Decrypt policy (4.6 §解密策略): `auto` = the harness's known API hosts ∪ the base_url / relay hosts its readers
   // found in this process's env and config files ∪ hosts the operator added; `all` = every TLS host of a trusted
@@ -278,16 +286,24 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     // Rows of a harness that is no longer enabled go off: unwatched (the kernel stops rewriting and reporting them), then onOff(row).
     // → {unwatched: [pid], failed: [pid]}: the pids the kernel dropped, and those it could not be asked to (each is also onError's). A pid whose
     // unwatch failed before is asked again here, so a repeated `off` is what makes it true: nothing it names may still be steered.
-    async reconcile() {
-      const unwatched = [], failed = []
-      const todo = new Set(stuck)
-      for (const [pid, row] of table) if (!row.off && !isOn(row.agent)) todo.add(pid)
-      for (const pid of [...todo].sort((a, b) => a - b)) {
-        const row = table.get(pid)
-        if (row && !row.off && isOn(row.agent)) { stuck.delete(pid); continue } // judged again since: its watch is a new one
-        ;((row && !row.off ? await takeOff(row) : await askAgain(pid)) ? unwatched : failed).push(pid)
+    // kernelGone: the helper is dead, so its links and watch table are too — nothing is asked, every pid counts as dropped, none stays stuck.
+    reconcile({ kernelGone = false } = {}) {
+      const run = async () => {
+        const unwatched = [], failed = []
+        const todo = new Set(stuck)
+        for (const [pid, row] of table) if (!row.off && !isOn(row.agent)) todo.add(pid)
+        for (const pid of [...todo].sort((a, b) => a - b)) {
+          const row = table.get(pid)
+          if (row && !row.off && isOn(row.agent)) { stuck.delete(pid); continue } // judged again since: its watch is a new one
+          ;((row && !row.off ? await takeOff(row, undefined, { moot: kernelGone }) : await askAgain(pid, kernelGone)) ? unwatched : failed).push(pid)
+        }
+        return { unwatched, failed }
       }
-      return { unwatched, failed }
+      const next = queue.then(run, run)
+      queue = next.catch(() => {})
+      return next
     },
+    // the pids whose unwatch is still unanswered: the kernel may steer them although their harness is off
+    stuckPids: () => [...stuck].sort((a, b) => a - b),
   }
 }

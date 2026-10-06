@@ -429,6 +429,52 @@ test('tracker: a pid whose unwatch failed is not asked about again once it has e
   assert.equal(redirector.calls.filter((c) => c[0] === 'unwatch').length, before + 1)
 })
 
+test('tracker: stuckPids lists the pids whose unwatch is unanswered until a reconcile gets the answer, or the pid exits (the daemon sends no heartbeat while it is not empty)', async () => {
+  const { redirector, tracker } = rig([agent])
+  redirector.emit('exec', facts(750)); redirector.emit('exec', facts(751)); await settle()
+  assert.deepEqual(tracker.stuckPids(), [])
+  let broken = true
+  redirector.unwatch = async (pid) => { if (broken) throw new Error('helper said no'); redirector.calls.push(['unwatch', pid]) }
+  tracker.setEnabled(new Set()); await tracker.reconcile()
+  assert.deepEqual(tracker.stuckPids(), [750, 751])
+  redirector.emit('exit', { pid: 751 }); await settle()
+  assert.deepEqual(tracker.stuckPids(), [750], 'an exited pid is not the kernel\'s to steer')
+  broken = false; await tracker.reconcile()
+  assert.deepEqual(tracker.stuckPids(), [])
+})
+
+test('tracker: reconcile({kernelGone}) asks nothing of a dead helper — every pid counts as taken out, onOff is told, none stays stuck, no error is reported', async () => {
+  const offs = []
+  const { redirector, tracker, errors } = rig([agent], { onOff: (row) => offs.push(row.pid) })
+  redirector.emit('exec', facts(760)); redirector.emit('exec', facts(761)); await settle()
+  redirector.unwatch = async (pid) => { redirector.calls.push(['unwatch', pid]); throw new Error('redirector helper is not running') }
+  tracker.setEnabled(new Set()); await tracker.reconcile() // while the helper still lived: both stuck
+  assert.deepEqual(tracker.stuckPids(), [760, 761]); errors.length = 0; redirector.calls.length = 0
+  redirector.emit('exec', facts(762)); await settle() // judged off at once: nothing to ask either
+  assert.deepEqual(await tracker.reconcile({ kernelGone: true }), { unwatched: [760, 761], failed: [] })
+  assert.deepEqual([tracker.stuckPids(), errors, redirector.calls.filter((c) => c[0] === 'unwatch')], [[], [], []])
+  assert.deepEqual(tracker.agents().map((a) => [a.pid, !!a.off]), [[760, true], [761, true], [762, true]])
+  // a row still on when the helper is gone goes off the same way, told once
+  const b = rig([agent], { onOff: (row) => offs.push(row.pid) })
+  b.redirector.emit('exec', facts(770)); await settle()
+  b.redirector.unwatch = async () => { throw new Error('redirector helper is not running') }
+  b.tracker.setEnabled(new Set())
+  assert.deepEqual(await b.tracker.reconcile({ kernelGone: true }), { unwatched: [770], failed: [] })
+  assert.deepEqual([offs.filter((x) => x === 770), b.errors], [[770], []])
+})
+
+test('tracker: two reconciles at once do not both unwatch the same stuck pid (the beat gate, the check and an off request may all ask)', async () => {
+  const { redirector, tracker } = rig([agent])
+  redirector.emit('exec', facts(780)); await settle()
+  let broken = true
+  redirector.unwatch = async (pid) => { await new Promise((r) => setImmediate(r)); if (broken) throw new Error('no'); redirector.calls.push(['unwatch', pid]) }
+  tracker.setEnabled(new Set()); await tracker.reconcile()
+  broken = false
+  const [a, b] = await Promise.all([tracker.reconcile(), tracker.reconcile()])
+  assert.deepEqual([a, b], [{ unwatched: [780], failed: [] }, { unwatched: [], failed: [] }])
+  assert.deepEqual(redirector.calls.filter((c) => c[0] === 'unwatch'), [['unwatch', 780]], 'asked once')
+})
+
 test('tracker: a marker-pending process of a harness turned off stays off — at the end of its grace and when its marker appears', async () => {
   const r = markerRig()
   r.redirector.emit('exec', facts(740, { exe: '/opt/beta', argv: ['beta'], startTicks: '9001', startedAt: r.clock })); await settle()
