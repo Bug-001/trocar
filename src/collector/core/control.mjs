@@ -8,10 +8,8 @@ import http from 'node:http'
 import net from 'node:net'
 import path from 'node:path'
 
-export function controlSocketPath({ env = process.env } = {}) {
-  if (!env.XDG_RUNTIME_DIR) throw new Error('XDG_RUNTIME_DIR is not set; the collector control socket lives in $XDG_RUNTIME_DIR/asight (RFC 4.6 §控制面)')
-  return path.join(env.XDG_RUNTIME_DIR, 'asight', 'collector.sock')
-}
+// The client side (controlSocketPath, controlRequest) is src/off/control-client.mjs: `asight off` asks the daemon without this directory (1.6 R3).
+export { controlSocketPath, controlRequest } from '../../off/control-client.mjs'
 
 function probe(socketPath) {
   return new Promise((resolve) => {
@@ -51,23 +49,4 @@ export async function startControlServer({ socketPath, routes, maxBody = 64 * 10
   return {
     close: () => new Promise((resolve) => { server.close(() => { fs.rmSync(socketPath, { force: true }); resolve() }); server.closeAllConnections?.() }),
   }
-}
-
-export function controlRequest({ socketPath, method = 'GET', path: p = '/status', body = null, timeoutMs = 10000 }) {
-  return new Promise((resolve, reject) => {
-    const payload = body == null ? null : JSON.stringify(body)
-    const req = http.request({ socketPath, method, path: p, headers: payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {} }, (res) => {
-      const chunks = []
-      res.on('data', (c) => chunks.push(c))
-      res.on('end', () => {
-        let obj = null
-        try { obj = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { obj = { error: 'non-JSON reply' } }
-        if (res.statusCode >= 200 && res.statusCode < 300) resolve(obj)
-        else reject(Object.assign(new Error(`${res.statusCode}: ${obj && obj.error}`), { status: res.statusCode }))
-      })
-    })
-    req.setTimeout(timeoutMs, () => req.destroy(Object.assign(new Error('control request timed out'), { code: 'ETIMEDOUT' })))
-    req.on('error', reject)
-    req.end(payload ?? undefined)
-  })
 }
