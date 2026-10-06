@@ -101,8 +101,12 @@ test('wsIncompleteOf: each label the recorder writes, one thing each; complete a
   const none = wsIncompleteOf({ ...E.openerUndecoded, ws_raw: E.openerUndecoded.ws_raw.filter((f) => f.d !== 'c') })
   assert.ok(!none.requestUndecoded, 'no client data frame in ws_raw: no request message to have failed')
   const m = wsIncompleteOf(E.meta[0])
-  assert.ok(m && m.nonVerbatim >= 1, 'a non-LLM endpoint: non-verbatim')
-  assert.match(m.text, /non-LLM endpoint stored as their size only/)
+  assert.ok(m && m.nonVerbatim >= 1, 'a call set to the log level: its messages are non-verbatim')
+  // D40: the label says WHY there is only a size — the operator's setting, not a property of the endpoint
+  assert.match(m.text, /client message\(s\) stored as their size only — 只记日志 · 用户设置 [a-z]+ · /)
+  // …and a record from before D40 (no body_retention) says it predates the change, as the 2.6 / 4.1 label
+  const legacy = wsIncompleteOf({ ...E.meta[0], body_retention: undefined })
+  assert.match(legacy.text, /non-LLM endpoint stored as their size only \(non-verbatim\) — 本条采于 D40 之前,只存了长度/)
 })
 
 test('the board: /api/session carries the labels and where the call is shown it says 不完整 / 已截断 / 未解码 — none renders as complete (F5); a WebSocket call on a wire nobody registered is counted, not rendered', async () => {

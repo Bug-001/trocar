@@ -6,8 +6,9 @@
 // harnesses.mjs, then the third-party table below that every harness shares, then `other`. The capture core holds no
 // harness name and no host pattern (D20, 0.1 §5); the wiring (bin/asight.mjs for the old MITM and reverse proxy,
 // src/collector/daemon.mjs for the engine) builds one classifier with makeClassifier() and hands it to createRetention().
-// Leaf module (0.1 §2): imports only ./harnesses.mjs.
+// Leaf module (0.1 §2): imports only ./harnesses.mjs and ./vendors.mjs.
 import { HARNESSES, harnessOf } from './harnesses.mjs';
+import { hostOf } from './vendors.mjs';
 
 export const TRAFFIC_CLASS_IDS = Object.freeze(['llm', 'token-count', 'session-sync', 'telemetry', 'files', 'account', 'other']);
 
@@ -68,4 +69,21 @@ export function makeClassifier({ endpointClass = () => null, rows = HARNESSES, o
     if (h && shared.some((t) => t(h))) return 'telemetry';
     return 'other';
   };
+}
+
+// ── the read side: the class of a RECORD (the ETL's calls.traffic_class, the board's labels) ────────────────────────
+// A D40 envelope says its own class (`traffic_class`, written by the capture that sampled the level); a record from before
+// D40 does not, and gets it here by the SAME table the capture used: the endpoint (llm — `is_llm_call` is the capture's
+// own endpoint test, kept on every envelope — and token-count), then the harness row's patterns, then the shared
+// third-party table, then other. A record without `proc` is told by its UA (harnessOf, flagged inferred elsewhere); a
+// harness the table does not know only reaches the shared table.
+let tableClassify = null;
+/** trafficClassOf(rec) → one of TRAFFIC_CLASS_IDS. Never throws; an envelope's own valid `traffic_class` wins. */
+export function trafficClassOf(rec) {
+  if (!rec || typeof rec !== 'object') return 'other';
+  if (TRAFFIC_CLASS_IDS.includes(rec.traffic_class)) return rec.traffic_class;
+  if (rec.is_llm_call === true) return 'llm';
+  if (pathOf(rec.endpoint).includes('count_tokens')) return 'token-count';
+  tableClassify ||= makeClassifier(); // no endpoint rule: the two endpoint classes were told just above
+  try { return tableClassify({ harness: harnessOf(rec).id || 'unknown', host: hostOf(rec), endpoint: rec.endpoint }); } catch { return 'other'; }
 }

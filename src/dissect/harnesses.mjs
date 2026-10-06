@@ -108,13 +108,20 @@ export function headerOf(rec, name) {
   return null;
 }
 
+// D40: a request that is not an inference call keeps its body too, up to 64 MiB (a Files upload, an update package). The
+// readers parse a body only to read a session key out of it (identity, lineage) — never worth it for a record that is not
+// an inference call and whose body is this big; an inference body of any size is parsed as before. One rule for every
+// reader (this function, the ETL, the envelope adapter).
+export const NON_INFERENCE_PARSE_CAP = 1024 * 1024;
+export const parseableBody = (rec, text) => !!rec && typeof text === 'string' && (rec.is_llm_call === true || text.length <= NON_INFERENCE_PARSE_CAP);
+
 const PARSED = new WeakMap();
 export function bodyOf(rec) {
   if (!rec || typeof rec !== 'object') return null;
   if (rec.request && typeof rec.request === 'object') return rec.request; // demo v0 shape
   const b = rec.req_body;
   if (b && typeof b === 'object') return b.verbatim === false ? null : b; // {raw_chars, verbatim:false} has no body
-  if (typeof b !== 'string' || !b) return null;
+  if (typeof b !== 'string' || !b || !parseableBody(rec, b)) return null;
   if (!PARSED.has(rec)) {
     let v = null;
     try { v = JSON.parse(b); } catch { v = null; }

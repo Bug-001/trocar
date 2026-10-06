@@ -9,6 +9,8 @@
 // These are NOT the top-level `partial` (a connection's earlier messages are missing — context, not bytes).
 // Envelope fields only, no wire knowledge, so the board and the ETL can both use it. Leaf module.
 import { requestEncodingOf } from './request-body.mjs';
+import { harnessOf } from './harnesses.mjs';
+import { trafficClassOf } from './traffic.mjs';
 const PARTIAL = {
   'early-response': 'never finished uploading: the upstream answered (e.g. 413 / 401) before it was fully sent',
   aborted: 'never finished uploading: the connection was aborted mid-body',
@@ -68,7 +70,13 @@ export function wsIncompleteOf(rec) {
   if (partial) parts.push(`earlier messages on this connection are missing (${partialReasons.join(', ') || 'reason not recorded'}): the context this call relied on is incomplete${openerUndecoded ? '' : ', its own bytes are whole'}`);
   if (truncated) parts.push(`${omitted || 'some'} message(s) past the capture cap kept only their size: this call's bytes are not all stored`);
   if (undecoded) parts.push(`${undecoded} message(s) could not be decompressed${openerUndecoded ? ', the request message among them' : ''}: their raw bytes are kept, their text is not`);
-  if (nonVerbatim) parts.push(`${nonVerbatim} client message(s) of a non-LLM endpoint stored as their size only (non-verbatim)`);
+  // D40: why a message has only its size — the operator's `log` setting (the call says so), or a record from before D40
+  if (nonVerbatim) {
+    const why = retentionLabelOf(rec);
+    parts.push(rec.body_retention === 'log' && why
+      ? `${nonVerbatim} client message(s) stored as their size only — ${why.label}`
+      : `${nonVerbatim} client message(s) of a non-LLM endpoint stored as their size only (non-verbatim) — ${LEGACY_META_TEXT}`);
+  }
   return { partial, partialReasons, truncated, omitted, undecoded, nonVerbatim, ...(openerUndecoded ? { requestUndecoded: true } : {}), text: `WebSocket call: ${parts.join('; ')}` };
 }
 
@@ -141,5 +149,39 @@ export function captureLabelsOf(rec) {
     out.push({ id: 'req-undecoded', label: '压缩请求体未解码 · compressed request not decoded',
       text: `the request body is stored compressed (${rec.req_content_encoding || 'unknown encoding'}) and could not be decoded: ${rec._reqBodyDecodeError || rec.req_encoding_error || 'the reader did not try'}` });
   }
+  const keep = retentionLabelOf(rec);
+  if (keep) out.push({ id: `retention-${keep.retention}`, label: keep.label, text: keep.text });
   return out;
+}
+
+// ── D40: what was kept of a call's bodies (RFC 4.1 §统一原始信封 D40 字段行, 2.6 §保真边界 1, 3.2 §D40) ──────────────────────
+// Three states, told from the record alone: `full` — the bodies are there under the one verbatim rule (D40's default, and every
+// inference call ever captured); `log` — the operator set this harness × class to 「只记日志」: the envelope says
+// body_retention:'log' and its bodies are {raw_chars, verbatim:false}; `legacy-meta` — a non-LLM record from BEFORE D40,
+// whose request body is {raw_chars, verbatim:false} and which carries no body_retention (the shape alone identifies it: the
+// bytes were never kept and cannot be recovered). Nothing reads either of the last two as an empty body or a complete one.
+export const LEGACY_META_TEXT = '本条采于 D40 之前,只存了长度';
+export const isLogOnly = (rec) => !!rec && typeof rec === 'object' && rec.body_retention === 'log';
+export function bodyRetentionOf(rec) {
+  if (isLogOnly(rec)) return 'log';
+  const b = rec && rec.req_body;
+  if (rec && rec.is_llm_call !== true && b && typeof b === 'object' && b.verbatim === false && Number.isFinite(b.raw_chars)) return 'legacy-meta';
+  return 'full';
+}
+// → null for a call whose bodies are all there, else {retention, label, text, harness?, class?}. The label of a `log` call names
+// the setting that applied: the collector's records carry proc (the harness the level was looked up under), the old capture
+// paths have none and applied the `cc` row (RFC 4.6 §记录).
+export function retentionLabelOf(rec) {
+  const retention = bodyRetentionOf(rec);
+  if (retention === 'legacy-meta') {
+    return { retention, label: LEGACY_META_TEXT,
+      text: `${LEGACY_META_TEXT}: the request body was stored as its length only, so what was sent cannot be shown (telemetry above all: only the number of events accepted was visible, never what was reported)` };
+  }
+  if (retention === 'log') {
+    const harness = rec.proc ? (harnessOf(rec).id || 'unknown') : 'cc';
+    const cls = trafficClassOf(rec);
+    const label = `只记日志 · 用户设置 ${harness} · ${cls}`;
+    return { retention, harness, class: cls, label, text: `${label}: the headers and sizes are kept, the request and reply bodies are not (they were not stored, so none is shown — this is not an empty body)` };
+  }
+  return null;
 }
