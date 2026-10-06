@@ -573,3 +573,13 @@ test('install: an autostart unit file already there is refused before anything i
     assert.equal(r.left, 0, 'nothing of the manifest is left')
   } finally { b.done() }
 })
+
+test('uninstall step 5: a Claude Code from before install is reported too — it uses a settings value added while it runs (acceptance ④, review 4 #2)', async () => {
+  const b = box()
+  try {
+    await installCollector(base(b))
+    const early = [{ pid: 4343, exe: '/x/claude/versions/2.1.289', argv: ['claude'], startedAt: 1, env: new Map() }]
+    const r = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, scan: async () => early, match: () => ({ agent: 'claude-code' }), harnesses: [cc] })
+    assert.deepEqual(r.still_trusting, [{ pid: 4343, agent: 'claude-code', until: 'restart' }])
+  } finally { b.done() }
+})

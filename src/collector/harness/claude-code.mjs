@@ -123,6 +123,9 @@ export default {
   configHosts: (ctx) => envHosts(ctx.env, BASE_URL_KEYS),
   trust: {
     chain: [{ var: 'NODE_EXTRA_CA_CERTS', semantic: 'append' }],
+    // uninstall step 5 only (the tracker still judges a running CC at start): a CC from before install uses a value
+    // added to its settings on new connections (lab ④), so after uninstall it may still trust asight until it restarts
+    rereadsEntry: true,
     hints: {
       'settings-ignored-managed-by-host': 'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST makes Claude Code ignore NODE_EXTRA_CA_CERTS from settings files',
       'settings-ignored-restricted': 'restricted mode ignores settings env',
