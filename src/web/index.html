@@ -475,6 +475,7 @@
 
 <div id="rails"></div>
 <div id="truncbar" style="display:none"></div>
+<div id="unknownbar" style="display:none"></div>
 <div id="srcbar" style="display:none"></div>
 
 <main>
@@ -768,6 +769,11 @@ async function poll(){
     if(sig===lastRenderSig){ document.getElementById('dot').classList.toggle('on',document.getElementById('liveChk').checked); return }
     lastRenderSig=sig
     A=d.analyzed||{lanes:[],calls:[]} // server-side analyze() output, per-call fields pre-baked
+    // 3.1:58 · 不变式4 — traffic no dissector recognizes is counted and named, never drawn as something else.
+    { const ub=document.getElementById('unknownbar'), u=A&&A.unknown
+      if(ub){ if(u){ ub.innerHTML=`⚠ 未识别 · unrecognized traffic — <b>${u.records}</b> record${u.records===1?'':'s'}${u.partial?' in this session':''} match no dissector and are NOT rendered (${esc((u.endpoints||[]).join(', '))}). ${esc(u.reason||'')}`
+          ub.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #7a3b3b;background:#241010;color:#e89a9a;border-radius:5px;font-size:11px;line-height:1.45'
+        } else { ub.style.display='none'; ub.innerHTML='' } } }
     lanes=buildLanes(A,probes)
     anchor=lanes.find(l=>l.kind==='main')||lanes[0]||null
     if(!anchor){ render(); return }
@@ -810,7 +816,7 @@ function hideSessionChrome(hide){ document.getElementById('saw').style.display=h
 // byte counts. Mirror of respOf()/headersOf() on the server (src/view/assemble.mjs).
 const rsp=r=>(r&&(r.resp||r.response))||{}
 const rhdr=r=>(r&&(r.req_headers||r.request_headers))||{}
-const rbytes=r=>(r&&r.request&&r.request.raw_chars)??(typeof (r&&r.req_body)==='string'?r.req_body.length:null)
+const rbytes=r=>(r&&r.request&&r.request.raw_chars)??(r&&r.req_body&&typeof r.req_body==='object'?r.req_body.raw_chars:null)??(typeof (r&&r.req_body)==='string'?r.req_body.length:null)
 
 // ── control-plane view: the session-LESS traffic, categorized ────────────────
 const CTRL_META={
@@ -841,7 +847,7 @@ async function renderControlView(){
   document.getElementById('sessMeta').textContent='session-less traffic'
   document.getElementById('stats').innerHTML=`<span><b>${total}</b> calls</span><span><b>${got.length}</b> categories</span>`
   const cls=got.slice().sort((a,b)=>(CTRL_ORDER.indexOf(a.class)+99)%99 - (CTRL_ORDER.indexOf(b.class)+99)%99)
-  let html=`<div class="ctrlhdr">⚙ <b>Control-plane traffic</b> — the session-less calls Claude Code makes around your conversations (no <code>x-claude-code-session-id</code>). Captured but kept out of the conversation picker. Click any call for its request + response.</div>`
+  let html=`<div class="ctrlhdr">⚙ <b>Control-plane traffic</b> — the session-less calls agents make around your conversations (no session key from the harness table). Captured but kept out of the conversation picker. Click any call for its request + response.</div>`
   for(const c of cls){
     const m=CTRL_META[c.class]||{ic:'•',what:''}
     const recent=c.records.slice(-80).reverse()
@@ -880,7 +886,9 @@ function openControlDetail(cls,i){
   det.className='open'
   det.innerHTML=`<div class="dclose" id="dclose">✕ close</div>`+
     `<h3>${esc(r.method||'')} ${esc((r.endpoint||'').split('?')[0])} · ${resp.status??'?'}</h3>`+
-    `<div class="din">${fmtTime(r.ts_request)} · UA <b>${esc(hdr['user-agent']||'?')}</b> · request ${kf(rbytes(r))} bytes (request body isn't decoded for non-LLM calls; the response is)</div>`+
+    `<div class="din">${fmtTime(r.ts_request)} · UA <b>${esc(hdr['user-agent']||'?')}</b> · request ${kf(rbytes(r))} bytes`+
+      // 4.6 W16 read half · 4.1 保真边界: a non-LLM body (HTTP or WebSocket) is stored as its length only
+      (r.req_body&&typeof r.req_body==='object'&&r.req_body.verbatim===false?` <span class="pobadge" title="non-inference request bodies are stored as their length only (4.1 保真边界)">非逐字 · length only</span>`:' (request body not decoded for non-LLM calls; the response is)')+`</div>`+
     `<div class="din" style="color:var(--dim)">response body:</div>`+
     collapse('<pre>'+esc(bodyStr)+'</pre>',bodyStr.length,'ctrl:'+cls+':'+i)
 }
@@ -1453,8 +1461,10 @@ function openDetail(lane,i){
   if(lane.kind==='probe'){
     const k=Math.max(1,turnsReviewed(c.ts))
     const turn=anchor.calls[Math.min(anchor.calls.length-1,k-1)], rq=turn?.rec?.request||{}
-    title=`👁 count_tokens measurement · ${fmtTime(c.ts)}`
-    body=`<div class="din">A probe that sends the <b>entire</b> context to be counted (verbatim) and gets back only its size. A ruler, not a turn — no model output, not billed.</div>`+
+    title=`👁 ${esc(lane.label||'probe')} · ${fmtTime(c.ts)}`
+    // a server lane says what it is (lane.note); the count_tokens rail is a ruler whose body is not kept
+    body=(lane.note?`<div class="din">${esc(lane.note)}</div>`
+      :`<div class="din">A token-count probe: the agent sends a copy of the context to be measured and gets back only its size. A ruler, not a turn — no model output, not billed. asight keeps only the size: the probe's request body is <b>not retained</b> (it is almost a copy of the next request; 3.2 / D34).</div>`)+
       `<div class="din">measured <b>${kf(c.ctx)}</b> tokens</div>`+
       `<div class="din">payload ≈ the context around ${callRef(k)}: <b>${kf(rq.message_count)}</b> messages · system <b>${kf(rq.system_chars)}</b> chars · <b>${kf(rq.tool_count)}</b> tools · ${kf(rq.context_chars)} bytes on the wire.</div>`
   } else if(lane.kind==='monitor'){
@@ -1756,6 +1766,29 @@ function reqBadge(c){
   }
   return out
 }
+// Canonical wire badges (server-baked call.wire, 3.2:133 · 不变式4). Generic vocabulary only: no wire names
+// here (test/web/no-wire-knowledge.test.mjs). G9: shown in the raw panel and atop the context window.
+const CTX_LABEL={reconstructed:['跨记录拼接 · stitched across records','context reassembled from earlier records of this connection; every block is still verbatim'],
+  partial:['不完整 · partial context','what is shown is NOT the full context the model saw: a record this call depends on is missing, or the request body was stored incomplete'],
+  server_edited:['服务端删改 · server-edited context','the response reports the server edited the context: the request bytes are not exactly what the model saw']}
+function wireBadges(c){
+  const w=c&&c.wire; if(!w) return ''
+  let h=''
+  // a request stored incomplete already has its own, exact badge (reqBadge): do not say it twice
+  const cs=CTX_LABEL[w.contextState]; if(cs&&!(w.contextState==='partial'&&c.reqIncomplete)) h+=`<span class="pobadge" title="${esc(cs[1])}">${esc(cs[0])}</span> `
+  for(const e of (w.observerEffect||[])) h+=`<span class="pobadge" title="${esc(e.what)} — caused by asight's ${esc(e.cause)}">观测者效应 · capture changed client behaviour: ${esc(e.what)}</span> `
+  if(w.transport==='ws') h+=`<span class="metabadge">WebSocket</span> `
+  if(w.format&&w.vendor==null) h+=`<span class="metabadge" title="cache labels are per vendor (the upstream host); this host is not a known vendor, so none are claimed">厂商缓存语义未知 · vendor cache semantics unknown</span> `
+  for(const l of (w.labels||[])) h+=`<span class="pobadge" title="${esc(l.text)}">${esc(l.label)}</span> `
+  return h
+}
+const wireLine=c=>{ const b=wireBadges(c); return b?`<div class="rpk">${b}</div>`:'' }
+// 4.6 R2: request keys that are not context blocks, one by one, each fetched from the raw record on click
+function nonBlockList(c){
+  const ks=(c&&c.nonBlockKeys)||[]; if(!ks.length) return ''
+  return `<div class="rpk" title="request keys that are not context blocks — verbatim in the raw record">keys · `+
+    ks.map(k=>k.ref?`<code class="nbk" data-nbk="${esc(k.ref)}" style="cursor:pointer">${esc(k.key)}</code> ${kf(k.chars)}c`:`<code>${esc(k.key)}</code> ${kf(k.chars)}c`).join(' · ')+`<div class="nbkbody"></div></div>`
+}
 function renderRawPanel(){
   const el=document.getElementById('rawpanel'); if(!el) return
   if(viewPin) return renderResourceView(el)
@@ -1771,16 +1804,17 @@ function renderRawPanel(){
   // never kf(undefined) → "?", which reads as "the capture didn't have it". usage/cost DID arrive
   // (cheap meta) and stay truthful.
   if(call.paged_out){
-    el.innerHTML=`<div class="rphd">🩻 raw · call #${playhead+1}</div>`+
+    el.innerHTML=`<div class="rphd">🩻 raw · call #${playhead+1}</div>`+wireLine(call)+
       `<div class="rpk">${esc(String(rq.model||'').replace('claude-',''))} · <span class="pobadge" title="this call's verbatim body was not shipped on this page — ${call.reqIncomplete?'what was stored of it':'it'} is intact in the raw trace (不变式4)">正文未随本页下发 · body not on this page</span></div>`+
       `<div class="rpk">usage · read <b>${kf(read)}</b> · new-cache <b>${kf(create)}</b> · fresh <b>${kf(fresh)}</b> · out <b>${kf(out)}</b></div>`+
       `<div class="rpk rpcost">${costLine}</div>`+reqBadge(call)
     return }
-  el.innerHTML=`<div class="rphd">🩻 raw · call #${playhead+1}</div>`+
+  el.innerHTML=`<div class="rphd">🩻 raw · call #${playhead+1}</div>`+wireLine(call)+
     `<div class="rpk">${esc(String(rq.model||'').replace('claude-',''))} · ${kf(rq.context_chars)} ${call.reqIncomplete?'bytes stored (not the whole request)':'bytes wire'}</div>`+
     `<div class="rpk">msgs <b>${kf(rq.message_count)}</b> · tools <b>${kf(rq.tool_count)}</b> · system <b>${kf(rq.system_chars)}</b>c</div>`+
     `<div class="rpk">usage · read <b>${kf(read)}</b> · new-cache <b>${kf(create)}</b> · fresh <b>${kf(fresh)}</b> · out <b>${kf(out)}</b></div>`+
-    `<div class="rpk rpcost">${costLine}</div>`+reqBadge(call)
+    `<div class="rpk rpcost">${costLine}</div>`+reqBadge(call)+nonBlockList(call)
+  el.onclick=e=>{ const t=e.target&&e.target.closest&&e.target.closest('[data-nbk]'); if(t){ const bc=t.parentElement.querySelector('.nbkbody'); if(bc) fetchBody({text_ref:t.dataset.nbk},bc) } }
 }
 function renderContextWindow(){
   renderRawPanel()
@@ -1831,7 +1865,7 @@ function renderContextWindow(){
   const refKeys=refFlat?new Set(refFlat.map(b=>b.key)):null // ◆new marks vs the diff reference
   const curKeys=new Set(flat.map(b=>b.key))
   const removed=refFlat?refFlat.filter(b=>!b.volatile&&!curKeys.has(b.key)):[]
-  let html=reqBadge(call)+`<div class="cwmeta">`+
+  let html=reqBadge(call)+wireLine(call)+`<div class="cwmeta">`+
     `<div class="cwtitle">context @ call <b>#${playhead+1}</b>/${anchor.calls.length} · ${esc(model)} · ${fmtTime(call.ts)}</div>`+
     `<div class="cwsub">${call.reqIncomplete?'the stored part of the request':'the exact input to the model'}, in assembly order <b>tools → system → messages</b> · ${kf(flat.length)} blocks · ${kf(rq.context_chars)} ${call.reqIncomplete?'bytes stored (not the whole request)':'bytes on the wire'}</div>`+
     `<div class="cwcache">⚡ KV cache this call: <b class="chit">${hitPct}%</b> reused · <b>${kf(read)}</b> tok read · <b>${kf(create)}</b> newly cached · <b>${kf(fresh)}</b> fresh${brk.firstCall?(read?' · first captured call — reuse is from a warm cross-session cache prefix (tools+system)':' · first call, nothing to reuse'):''}</div>`+

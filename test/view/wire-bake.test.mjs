@@ -73,3 +73,15 @@ test('a Chat request stored cut is still a Chat call that says why, not unrecogn
   assert.equal(A.steps.length, 1);
   assert.deepEqual([A.steps[0].wire.format, A.steps[0].wire.contextState, A.steps[0].reqIncomplete.truncated], ['openai-chat', 'partial', true]);
 });
+
+test('a harness-marked warm-up sits in a probe lane that says what it is (the page shows lane.note)', () => {
+  const x = (id, sec, kind) => stream({ id, ts_request: `2026-10-06T00:00:0${sec}Z`, is_llm_call: true, endpoint: '/backend-api/codex/responses',
+    host: 'chatgpt.com', proc: { pid: 2, exe: '/x/codex', agent: 'codex' },
+    req_headers: { 'session-id': 'X', ...(kind ? { 'x-codex-turn-metadata': JSON.stringify({ request_kind: kind }) } : {}) },
+    req_body: '{"model":"gpt-5","input":[]}', resp: { status: 200, kind: 'sse', raw_sse: [] } });
+  const A = assembleSession([x('x1', 1, 'prewarm'), x('x2', 2)]);
+  const probe = A.lanes.find((l) => l.kind === 'probe');
+  assert.deepEqual(probe.calls.map((c) => c.id), ['x1']);
+  assert.match(probe.note, /not a conversation turn/);
+  assert.deepEqual(A.lanes.find((l) => l.kind === 'main').calls.map((c) => c.id), ['x2']);
+});

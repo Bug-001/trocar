@@ -91,6 +91,22 @@ lifecycle** — which files entered context, when, via which tool *(Claude Code 
 
 Cost is a local, editable estimate in `~/.asight/pricing.json`; providers return usage, never dollars.
 
+What the board cannot vouch for, it labels on the call (raw panel and the top of the context window):
+- **不完整 · partial context**: what is shown is not the whole context the model saw (an earlier record is
+  missing, or the request body was stored incomplete — then the request's own label says exactly how).
+- **跨记录拼接 · stitched across records**: the context was reassembled from earlier records of the same
+  connection; every block is still verbatim.
+- **服务端删改 · server-edited context**: the response says the server edited the context it was sent.
+- **观测者效应 · capture changed client behaviour**: what asight's trust injection changes in that agent
+  (e.g. request gzip off, a different TLS stack); legacy captures carry none.
+- **厂商缓存语义未知**: the upstream host is not a known vendor, so no cache labels are claimed for it.
+- **已截断 / 不完整 / 回复未解码 / 压缩请求体未解码**: which bytes of this record are missing or were not decoded.
+- **未识别 · unrecognized traffic** (a banner): records no dissector reads are counted and named, never
+  drawn as something else — also when only some records of a session are unrecognized. One session may
+  mix wire formats; each call is read by its own.
+- Request keys that are not context blocks are listed one by one, each opening its verbatim bytes.
+  A token-count probe keeps only its size, and its detail says so.
+
 Optional: `asight etl <capture.ndjson|dir> --rebuild` (a directory such as `~/.asight/collector`: its
 top-level `*.ndjson` in name order, subdirectories never read; an incremental run refuses and asks
 for `--rebuild` if an earlier file grew after a later one was loaded) loads a DuckDB projection

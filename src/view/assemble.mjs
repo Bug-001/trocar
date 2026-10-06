@@ -136,7 +136,8 @@ const FLAT_LANES = {
   main: { kind: 'main', icon: '💬', label: 'conversation' },
   subagent: { kind: 'subagent', icon: '🧬', label: 'subagent' },
   aux: { kind: 'aux', icon: '⚙', label: 'other util' },
-  probe: { kind: 'probe', icon: '👁', label: 'warm-up / probe requests' },
+  probe: { kind: 'probe', icon: '👁', label: 'warm-up / probe requests',
+    note: 'A request the harness itself marks as a warm-up or probe (its request-kind hint): it primes the cache and is not a conversation turn. Its body is kept verbatim like any call.' },
 };
 // analyze()'s step order (ts_request, then id), exactly: every assembler uses it, so a session's global
 // step index is one sort whichever wires it mixes.
