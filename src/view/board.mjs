@@ -10,7 +10,7 @@ import { assembleSession, sessionIdOf, headersOf, respOf } from './assemble.mjs'
 import { harnessOf as harnessOfRecord, LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
 import { stampSynthKeys } from '../dissect/synth-key.mjs';
 import { isLogOnly, bodyRetentionOf, retentionLabelOf } from '../dissect/capture-labels.mjs';
-import { controlRecordWire } from './control-wire.mjs';
+import { controlRecordWire, CONTROL_DETAIL_RECORDS } from './control-wire.mjs';
 
 // tolerate both envelope shapes: demo v0 `request_headers` + product D10 `req_headers` (Codex).
 const anyHeaders = (recs) => headersOf(recs.find((r) => r.request_headers || r.req_headers));
@@ -354,10 +354,15 @@ function controlClass(r) {
   if (/statsig|telemetry|event|metric|flag/.test(e)) return 'telemetry';
   return 'control';
 }
-export function controlView(records, cls) {
+export function controlView(records, cls, { detail = CONTROL_DETAIL_RECORDS } = {}) {
   const ctrl = controlRecords(records);
-  // D40: the records go out reshaped for the detail panel (bodies as stored, clipped for display, labelled; the heavy fields stay in the source)
-  if (cls) return { class: cls, records: ctrl.filter((r) => controlClass(r) === cls).map(controlRecordWire) };
+  // D40: the records go out reshaped for the detail panel (bodies as stored, clipped for display, labelled; the heavy fields stay in the source).
+  // Only the newest `detail` of a class carry their bodies (the page lists and opens that many); older ones go slim, so the answer is bounded.
+  if (cls) {
+    const list = ctrl.filter((r) => controlClass(r) === cls);
+    const slimBefore = Math.max(0, list.length - detail);
+    return { class: cls, total: list.length, detail_limit: detail, records: list.map((r, i) => controlRecordWire(r, { detail: i >= slimBefore })) };
+  }
   const counts = new Map();
   for (const r of ctrl) { const c = controlClass(r); counts.set(c, (counts.get(c) || 0) + 1); }
   return { classes: [...counts.entries()].map(([c, n]) => ({ class: c, count: n })) };

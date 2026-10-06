@@ -304,6 +304,19 @@ test('H4 — a request cut at the cap or never finished is shown as a prefix: �
   assert.match(html, /⟨逐字 · /)
 })
 
+test('F1 — an older call that /api/control sent slim says what was left out and where it is; it does not say 「no body in the record」', async () => {
+  const slimRec = controlRecordWire(full({ id: 'old1', reqBody: 'z'.repeat(5000), wire: [5000, 12] }), { detail: false })
+  const t = await load({ report: await payload() })
+  t.M.setCD({ other: [slimRec] })
+  t.M.openControlDetail('other', 0)
+  const html = t.getEl('detail').innerHTML
+  assert.match(html, /未随本视图下发 · not shipped to this view/)
+  assert.match(html, /req_body/)
+  assert.match(html, /intact in the source record <b>old1<\/b>; this is an older call: its request and reply bodies are not shown here/)
+  assert.doesNotMatch(html, /no body in the record|request body: \(empty\)/)
+  assert.doesNotMatch(html, /zzzzzzzzzz/, 'and the body is not there')
+})
+
 test('L1 — a pre-D40 GET with no body shows an empty body, not 「只存了长度 … this is not an empty body」', async () => {
   const html = await detail({ ...preD40({ id: 'g', rawChars: 0 }), method: 'GET' })
   assert.match(html, /request body: \(empty\)/)

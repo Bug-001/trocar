@@ -860,7 +860,7 @@ async function renderControlView(){
   if(sig===controlSig && tl.dataset.mode==='control') return
   capHSig=null
   controlSig=sig
-  const got=await Promise.all((list.classes||[]).map(c=>fetch('/api/control?class='+encodeURIComponent(c.class)).then(r=>r.json()).then(d=>({class:c.class,records:d.records||[]})).catch(()=>({class:c.class,records:[]}))))
+  const got=await Promise.all((list.classes||[]).map(c=>fetch('/api/control?class='+encodeURIComponent(c.class)).then(r=>r.json()).then(d=>({class:c.class,records:d.records||[],limit:d.detail_limit||80})).catch(()=>({class:c.class,records:[],limit:80}))))
   controlData={}; got.forEach(c=>controlData[c.class]=c.records)
   const total=got.reduce((a,c)=>a+c.records.length,0)
   document.getElementById('agentChip').textContent='⚙ control-plane'
@@ -872,12 +872,13 @@ async function renderControlView(){
   let html=`<div class="ctrlhdr">⚙ <b>Control-plane traffic</b> — the session-less calls agents make around your conversations (no session key from the harness table). Captured but kept out of the conversation picker. Click any call for its request + response.</div>`
   for(const c of cls){
     const m=CTRL_META[c.class]||{ic:'•',what:''}
-    const recent=c.records.slice(-80).reverse()
+    const lim=c.limit||80 // the server sends bodies for this many of the newest; older records are slim (ctl.omitted)
+    const recent=c.records.slice(-lim).reverse()
     const rows=recent.map((r)=>{
       const gi=c.records.indexOf(r), st=rsp(r).status
       return `<div class="ctrlrow" data-cls="${esc(c.class)}" data-i="${gi}"><span class="tm">${fmtTime(r.ts_request)}</span><span class="m">${esc(r.method||'')}</span><span class="ep">${esc((r.endpoint||'').split('?')[0])}</span><span class="st ${st>=400?'err':''}">${st??'?'}</span></div>`
     }).join('')
-    const more=c.records.length>80?`<div class="ctrlrow" style="cursor:default;color:var(--dimmer)">… ${c.records.length-80} older not shown</div>`:''
+    const more=c.records.length>lim?`<div class="ctrlrow" style="cursor:default;color:var(--dimmer)">… ${c.records.length-lim} older not shown</div>`:''
     html+=`<details class="ctrlsec" ${c.class==='control'?'open':''}><summary>${m.ic} <b>${esc(c.class)}</b> <span class="cc">${c.records.length}</span><span class="cwhat">${esc(m.what)}</span></summary>${rows}${more}</details>`
   }
   tl.dataset.mode='control'; tl.innerHTML=html
@@ -929,10 +930,15 @@ function ctlBodyHtml(v,title,key){
 function ctlLabelsHtml(c){
   return ((c&&c.labels)||[]).map(l=>`<div class="rpk"><span class="pobadge" title="${esc(l.text||'')}">${esc(l.label)}</span> ${esc(l.text||'')}</div>`).join('')
 }
+// what the server left out of this record to keep the answer small (ctl.omitted): said in place, with where it is (invariant 4)
+function ctlOmittedHtml(c,r){
+  const o=(c&&c.omitted)||[]
+  return o.length?`<div class="rpk"><span class="pobadge">未随本视图下发 · not shipped to this view</span> ${esc(o.join(', '))} — intact in the source record${r&&r.id?' <b>'+esc(r.id)+'</b>':''}${c.detail===false?'; this is an older call: its request and reply bodies are not shown here':''}.</div>`:''
+}
 function openControlDetail(cls,i){
   const r=(controlData[cls]||[])[i]; if(!r)return
   const det=document.getElementById('detail'), resp=rsp(r), hdr=rhdr(r), c=r.ctl||{}
-  const key='ctrl:'+cls+':'+i
+  const key='ctrl:'+cls+':'+i, slim=c.detail===false // a slim record carries no bodies: the omitted line says so, not "no body in the record"
   // the request: from ctl when the server reshaped it, else the raw fields (a record without ctl)
   const req=c.req||(typeof r.req_body==='string'?{kind:'text',text:r.req_body,bytes:r.req_body.length}:(r.req_body&&typeof r.req_body==='object'&&r.req_body.verbatim===false?{kind:'length-only',bytes:r.req_body.raw_chars}:null))
   // the reply: a small JSON body stays in resp.body (shown pretty-printed, as stored); anything else is in ctl.resp
@@ -944,9 +950,8 @@ function openControlDetail(cls,i){
   det.innerHTML=`<div class="dclose" id="dclose">✕ close</div>`+
     `<h3>${esc(r.method||'')} ${esc((r.endpoint||'').split('?')[0])} · ${resp.status??'?'}</h3>`+
     `<div class="din">${fmtTime(r.ts_request)} · UA <b>${esc(hdr['user-agent']||'?')}</b> · request ${kf(sent)} bytes</div>`+
-    hostLine+ctlLabelsHtml(c)+
-    (req?ctlBodyHtml(req,'request body',key+':req'):'')+
-    ctlBodyHtml(rv,'response body'+(rv.kind==='json'?' (JSON, as stored)':''),key)
+    hostLine+ctlLabelsHtml(c)+ctlOmittedHtml(c,r)+
+    (slim?'':(req?ctlBodyHtml(req,'request body',key+':req'):'')+ctlBodyHtml(rv,'response body'+(rv.kind==='json'?' (JSON, as stored)':''),key))
 }
 
 // ── D38 采集健康 (2.6 §C session-less group · 1.5): the ctrlmode grid over /api/capture-health — the timeline lists

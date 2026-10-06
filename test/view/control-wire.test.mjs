@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import http from 'node:http'
 import { once } from 'node:events'
-import { controlRecordWire, BODY_SHOW_CHARS, HEX_SHOW_BYTES, hexDump } from '../../src/view/control-wire.mjs'
+import { controlRecordWire, BODY_SHOW_CHARS, HEX_SHOW_BYTES, CONTROL_DETAIL_RECORDS, hexDump } from '../../src/view/control-wire.mjs'
 import { controlView, sessionView, projectsView, projectsViewFromMetas } from '../../src/view/board.mjs'
 import { emptyMeta, foldRecord } from '../../src/etl/session-meta.mjs'
 import { createServer } from '../../src/server.mjs'
@@ -161,6 +161,55 @@ test('controlView hands each record out reshaped, grouped as before; a session-k
   assert.deepEqual(controlView(recs).classes.map((c) => c.class), ['telemetry'])
 })
 
+// ── review (F1 / H3): /api/control?class= is bounded ───────────────────────────────────────────────────────────────────────
+// It used to ship EVERY session-less record with its body (up to 1 MiB each): 20,000 records of 3 KB bodies measured 91 MiB for one class, and
+// ~100k made JSON.stringify throw (a 500, the page's empty view). The page lists and opens only the newest 80 per class.
+const iso = (i) => new Date(Date.UTC(2026, 9, 6, 10, 0, 0) + i * 1000).toISOString()
+test('F1 — only the newest 80 records of a class carry their bodies; every older one is slim, says what it left behind, and the answer stays bounded', () => {
+  const N = 5000, BODY = 3000
+  const recs = Array.from({ length: N }, (_, i) => full({ id: `t${i}`, at: iso(i), reqBody: `${i}:` + 'b'.repeat(BODY), wire: [BODY + 8, 12] }))
+  const v = controlView(recs, 'telemetry')
+  assert.deepEqual([v.records.length, v.total, v.detail_limit, CONTROL_DETAIL_RECORDS], [N, N, 80, 80], 'every record is still listed (the page counts them); the page lists 80')
+  const withBody = v.records.filter((r) => r.ctl.req && r.ctl.req.text)
+  assert.deepEqual(withBody.map((r) => r.id), recs.slice(-80).map((r) => r.id), 'the newest 80, in order')
+  const old = v.records[0]
+  assert.deepEqual([old.ctl.detail, old.ctl.req, old.ctl.resp, old.req_body, old.req_body_b64, old.ctl.omitted], [false, undefined, undefined, undefined, undefined, ['req_body']])
+  assert.deepEqual([old.ctl.retention, old.ctl.traffic_class, old.ctl.wire_bytes, old.ctl.host], ['full', 'telemetry', { req: BODY + 8, resp: 12 }, 'api.anthropic.com'], 'what the list and the labels read is still there')
+  assert.deepEqual(old.resp.body, { accepted_count: 1 }, 'a small reply body stays: the feature-flag ledger reads it over the whole class')
+  const size = JSON.stringify(v).length
+  assert.ok(size < 80 * (BODY + 6000) + N * 2500, `bounded (${size} bytes for ${N} records of ${BODY}-byte bodies)`)
+  assert.ok(size < (N * BODY) / 2, 'and far under what shipping every body would be')
+  // the labels survive the slimming: a pre-D40 / log / cut record says so even when it is old
+  const mix = [preD40({ id: 'o1', at: iso(0) }), logged({ id: 'l1', at: iso(1) }), ...Array.from({ length: 100 }, (_, i) => full({ id: `n${i}`, at: iso(2 + i) }))]
+  const m = controlView(mix, 'telemetry').records
+  assert.deepEqual([m[0].id, m[0].ctl.detail, m[0].ctl.labels.map((l) => l.id)], ['o1', false, ['retention-legacy-meta']])
+  assert.deepEqual([m[1].id, m[1].ctl.labels.map((l) => l.id)], ['l1', ['retention-log']])
+})
+
+test('F1 — a slim record leaves every body behind, whatever its shape: WebSocket client messages and frames, an SSE / binary / big JSON reply, an interrupted reply', () => {
+  const ws = { ...full({ id: 'w', reqBody: '{"type":"a"}', wire: [12, 40] }), transport: 'ws', ws_raw: [{ d: 'c', h: 'gQ==', p: 'AAAA' }], req_extra_messages: ['{"type":"b"}'], resp: { status: 101, kind: 'ws', messages: ['x'.repeat(5000)] } }
+  const sse = full({ id: 's', resp: { status: 200, kind: 'sse', raw: 'data: 1\n\n'.repeat(500), text: '', tool_calls: [] } })
+  const bin = full({ id: 'bn', resp: { status: 200, kind: 'text', raw_b64: Buffer.alloc(3000, 1).toString('base64') } })
+  const bigJson = full({ id: 'bj', resp: { status: 200, kind: 'json', body: { x: 'y'.repeat(BODY_SHOW_CHARS + 10) } } })
+  const interrupted = full({ id: 'it', resp: { status: 200, kind: 'error', error: { type: 'upstream_aborted' }, partial: { status: 200, kind: 'sse', raw: 'data: partial\n\n', body: { k: 'v' }, messages: ['m'] } } })
+  const got = Object.fromEntries([ws, sse, bin, bigJson, interrupted].map((r) => [r.id, controlRecordWire(r, { detail: false })]))
+  assert.deepEqual(got.w.ctl.omitted, ['req_body', 'ws_raw', 'req_extra_messages', 'resp.messages'])
+  assert.deepEqual([got.w.ws_raw, got.w.req_extra_messages, got.w.resp.messages], [undefined, undefined, undefined])
+  assert.deepEqual(got.s.ctl.omitted, ['req_body', 'resp.raw']); assert.equal(got.s.resp.raw, undefined)
+  assert.deepEqual(got.bn.ctl.omitted, ['req_body', 'resp.raw_b64'])
+  assert.deepEqual(got.bj.ctl.omitted, ['req_body', 'resp.body'], 'a reply body over the display cap is not shipped twice')
+  assert.deepEqual(got.it.resp.partial, { status: 200, kind: 'sse' }, 'an interrupted reply keeps no bodies either')
+  for (const r of Object.values(got)) assert.ok(JSON.stringify(r).length < 16 * 1024, r.id)
+})
+
+test('F1 — a detail record names the WebSocket client messages it does not ship; the page can say so', () => {
+  const ws = { ...full({ id: 'w', reqBody: '{"type":"a"}', wire: [12, 40] }), transport: 'ws', req_extra_messages: ['{"type":"b"}'], resp: { status: 101, kind: 'ws', messages: ['{"type":"p"}'] } }
+  const w = controlRecordWire(ws)
+  assert.equal(w.req_extra_messages, undefined)
+  assert.deepEqual(w.ctl.omitted, ['req_extra_messages'])
+  assert.equal(w.ctl.req.text, '{"type":"a"}', 'the first message is shown')
+})
+
 // ── K7, board half: an inference call at the log level ─────────────────────────────────────────────────────────────────
 test('K7 — a session with calls kept as a log line only: counted and labelled, not drawn, not "no calls"; the calls beside it render as before', () => {
   const recs = [inference({ id: 'a1', at: 1 }), inference({ id: 'a2', at: 2, retention: 'log' }), inference({ id: 'a3', at: 3, text: 'three' })]
@@ -229,5 +278,21 @@ test('/api/control over a source holding a 20 MiB binary upload, a 3 MiB text bo
     assert.equal(by.up.ctl.req.kind, 'binary'); assert.equal(by.up.ctl.req.bytes, bin.length)
     assert.ok(by.tx.ctl.req.clipped); assert.equal(by.tx.ctl.req.chars, 3 * 1024 * 1024)
     assert.equal(by.old.ctl.labels[0].label, '本条采于 D40 之前,只存了长度')
+  } finally { server.close() }
+})
+
+test('F1 — over the real route: 150 session-less records of one class come back listed in full, 80 of them with bodies, and the answer is bounded', async () => {
+  const dir = tmpDir('asight-ctl-bound-')
+  const recs = Array.from({ length: 150 }, (_, i) => full({ id: `b${i}`, at: iso(i), endpoint: '/api/event_logging/v2/batch', reqBody: `${i}:` + 'q'.repeat(20000), wire: [20010, 9], headers: { 'user-agent': 'claude-cli/2', host: 'api.anthropic.com' } }))
+  const file = path.join(dir, 'capture-2026-10-06.ndjson')
+  fs.writeFileSync(file, recs.map(line).join(''))
+  const { server } = await createServer({ dbPath: '/nonexistent-db', sourcePath: file })
+  server.listen(0, '127.0.0.1'); await once(server, 'listening')
+  try {
+    const r = await get(server.address().port, '/api/control?class=telemetry')
+    assert.equal(r.status, 200)
+    assert.deepEqual([r.json.records.length, r.json.total, r.json.detail_limit], [150, 150, 80])
+    assert.equal(r.json.records.filter((x) => x.ctl.req && x.ctl.req.text).length, 80)
+    assert.ok(r.body.length < 80 * 21000 + 150 * 3000, `bounded: ${r.body.length} bytes (every body would be ${150 * 20010})`)
   } finally { server.close() }
 })

@@ -13,6 +13,11 @@
 //                        (not for a reverse-proxy record: there `host` is the upstream and the Host header is the client's address to the proxy, always different)
 //   ctl.req / ctl.resp .truncated / .incomplete / .stored_bytes   a body cut at the capture cap, or a request that never finished: the stored bytes are only part of it
 // A small JSON reply stays in `resp.body` (the feature-flag ledger reads it there); a body over the cap leaves `resp.body` and is in ctl.resp.text.
+// BOUNDED (review 2026-10-07): the page lists the newest CONTROL_DETAIL_RECORDS of a class and opens only those, so only those travel with their
+// bodies. Every older record goes SLIM (`detail:false`): the same raw fields minus every body (req_body, req_body_b64, ws_raw, req_extra_messages,
+// resp.raw / raw_b64 / messages, a resp.body over BODY_SHOW_CHARS), `ctl` without req / resp, and `ctl.omitted` naming what was left behind (it is
+// intact in the source record). A small `resp.body` stays: the feature-flag ledger reads it over all of a class. 20,000 records of 3 KB bodies were
+// a 91 MiB answer for one class; at ~100k V8's string limit made it a 500 and the page an empty view.
 // Envelope fields only — no provider knowledge, no host or endpoint literal (invariant 3). Pure over the record.
 import { captureLabelsOf, bodyRetentionOf, reqIncompleteOf, isLogOnly } from '../dissect/capture-labels.mjs';
 import { requestEncodingOf } from '../dissect/request-body.mjs';
@@ -21,6 +26,7 @@ import { headerOf } from '../dissect/harnesses.mjs';
 
 export const BODY_SHOW_CHARS = 1 << 20; // the most of one body's text a record carries to the browser
 export const HEX_SHOW_BYTES = 4096;     // the most of a binary body shown as hex
+export const CONTROL_DETAIL_RECORDS = 80; // how many of a class's newest records /api/control sends with their bodies (the page lists and opens 80)
 
 const finite = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
 const b64Bytes = (s) => { const n = s.length; return Math.max(0, Math.floor((n * 3) / 4) - (s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0)); };
@@ -103,11 +109,25 @@ function respView(rec) {
   return bodyOf(r);
 }
 
+const jsonLen = (v) => { try { return JSON.stringify(v).length; } catch { return Infinity; } };
+// a response with the bodies left behind: raw / raw_b64 always (they are in ctl.resp when shown), body / messages when shown or too big or slim
+function slimResp(r, { detail, shown, omitted, prefix }) {
+  const { raw, raw_b64, ...out } = r;
+  if (!detail) { if (raw !== undefined) omitted.push(`${prefix}raw`); if (raw_b64 !== undefined) omitted.push(`${prefix}raw_b64`); }
+  if (shown) { delete out.body; delete out.messages; } // shown in ctl.resp instead
+  else if (!detail) {
+    if (out.messages !== undefined) { delete out.messages; omitted.push(`${prefix}messages`); }
+    if (out.body !== undefined && jsonLen(out.body) > BODY_SHOW_CHARS) { delete out.body; omitted.push(`${prefix}body`); }
+  }
+  return out;
+}
+
 /**
- * controlRecordWire(rec) → the record as /api/control ships it: the raw fields the list and the flag ledger read, the heavy ones left behind,
- * and `ctl`. Never throws: a record this cannot read is returned as it is with `ctl.error`, so one odd record cannot blank the panel.
+ * controlRecordWire(rec, {detail}) → the record as /api/control ships it: the raw fields the list and the flag ledger read, the heavy ones left behind,
+ * and `ctl`. `detail:false` is the slim form (see the header). Never throws: a record this cannot read is returned as it is with `ctl.error`, so one
+ * odd record cannot blank the panel.
  */
-export function controlRecordWire(rec) {
+export function controlRecordWire(rec, { detail = true } = {}) {
   try {
     const hostHeader = headerOf(rec, 'host');
     const norm = (h) => (h ? String(h).toLowerCase().replace(/:\d+$/, '') : null);
@@ -120,18 +140,22 @@ export function controlRecordWire(rec) {
       // a reverse-proxy record's `host` is the upstream and its Host header the client's address to the proxy: they differ by construction (4.1), not as a signal
       hostDiffers: !!(rec.capture !== 'reverse-proxy' && typeof rec.host === 'string' && hostHeader && norm(rec.host) !== norm(hostHeader)),
       wire_bytes: rec.body_wire_bytes && typeof rec.body_wire_bytes === 'object' ? { req: finite(rec.body_wire_bytes.req), resp: finite(rec.body_wire_bytes.resp) } : null,
-      req: reqView(rec), resp: respView(rec),
+      ...(detail ? { req: reqView(rec), resp: respView(rec) } : { detail: false }),
     };
-    const { req_body, req_body_b64, ws_raw, ...rest } = rec;
+    const { req_body, req_body_b64, ws_raw, req_extra_messages, ...rest } = rec;
+    const omitted = [];
+    if (!detail) { if (req_body !== undefined) omitted.push('req_body'); if (req_body_b64 !== undefined) omitted.push('req_body_b64'); }
+    if (ws_raw !== undefined) omitted.push('ws_raw');
+    if (req_extra_messages !== undefined) omitted.push('req_extra_messages'); // a WebSocket call's later client messages: bodies too
     const r = rec.resp || rec.response;
     const out = { ...rest };
-    if (ws_raw !== undefined) ctl.omitted = ['ws_raw'];
     if (r && typeof r === 'object') {
-      const { raw, raw_b64, ...slim } = r;
-      if (ctl.resp.text !== undefined || ctl.resp.hex !== undefined || ctl.resp.kind === 'ws') { delete slim.body; delete slim.messages; }
-      if (slim.partial && typeof slim.partial === 'object') { const { raw: _a, raw_b64: _b, body: _c, messages: _d, ...p } = slim.partial; slim.partial = p; }
+      const shown = detail && (ctl.resp.text !== undefined || ctl.resp.hex !== undefined || ctl.resp.kind === 'ws');
+      const slim = slimResp(r, { detail, shown, omitted, prefix: 'resp.' });
+      if (slim.partial && typeof slim.partial === 'object') slim.partial = (({ raw: _a, raw_b64: _b, body: _c, messages: _d, ...p }) => p)(slim.partial);
       out[rec.resp ? 'resp' : 'response'] = slim;
     }
+    if (omitted.length) ctl.omitted = omitted;
     out.ctl = ctl;
     return out;
   } catch (e) {
