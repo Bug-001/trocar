@@ -958,7 +958,9 @@ function capHealthLedger(c,l){
     html+=`<h2><span class="gi" style="background:var(--amber)"></span>last install / uninstall</h2>`
     html+=notes.map(n=>item(n,`${n.event} · ${n.kind||''}`,fmtWhen(n.ts),n.reason)).join('')
   }
-  if(l.present&&l.state!=='none') html+=`<h2><span class="gi" style="background:var(--purple)"></span>old capture</h2>`+item(l,l.state,l.last_start?'started '+fmtWhen(l.last_start.ts):'',l.capture?`${l.capture.file} written ${fmtWhen(l.capture.mtime)}, no events file`:(l.error||''))
+  if(l.present&&l.state!=='none') html+=`<h2><span class="gi" style="background:var(--purple)"></span>old capture</h2>`+((l.sources||[]).length
+    ? l.sources.map(x=>item(x,`${x.source==='proxy'?'reverse proxy':'MITM'} · ${x.state==='gone'?'gone without a clean stop':x.state}`,x.last_start&&x.last_start.pid!=null?'pid '+x.last_start.pid:'',[x.last_start&&`started ${fmtWhen(x.last_start.ts)}`,x.last_stop&&`stopped ${fmtWhen(x.last_stop.ts)}${x.last_stop.signal?' by '+x.last_stop.signal:''}`].filter(Boolean).join(' · '))).join('')
+    : item(l,l.state,l.last_start?'started '+fmtWhen(l.last_start.ts):'',l.capture?`${l.capture.file} written ${fmtWhen(l.capture.mtime)}, no events file`:(l.error||'')))
   return html
 }
 function openCapHealthDetail(i){
@@ -2272,12 +2274,13 @@ function capHealthView(h,{okAt,err,now}){
   if(err&&okAt==null) return {cls:'warn',text:`? 未刷新 · 截至 —`}
   if(!h) return {cls:'dim',text:'? 采集健康 · 读取中'}
   if(h.unreadable) return {cls:'warn',text:`? 健康读不出:${h.unreadable}`}
-  const s=h.summary||{}, legacy=s.part==='legacy', tail=s.read_errors?' · 读不全':''
+  const s=h.summary||{}, legacy=s.part==='legacy', tail=s.read_errors?' · 读不全':'', oldName=s.source==='proxy'?'旧反代':'旧 MITM'
   const t={
-    ok:()=>({cls:'ok',text:legacy?`✓ 旧 MITM · 最后启动于 ${fmtWhen(s.since)}`:`✓ 采集中 · 自 ${fmtWhen(s.since)} 起`}),
+    ok:()=>({cls:'ok',text:legacy?`✓ ${oldName} · 最后启动于 ${fmtWhen(s.since)}`:`✓ 采集中 · 自 ${fmtWhen(s.since)} 起`}),
     failing:()=>({cls:'bad',text:`⚠ ${s.n}`}),
     off:()=>({cls:'dim',text:`○ 采集关 · 自 ${fmtWhen(s.since)} 起`}),
-    'not-running':()=>({cls:'bad',text:`✗ ${legacy?'旧 MITM':'采集器'}没在跑 · 最后记录于 ${fmtWhen(s.since)}${s.signal?` · 因 ${s.signal}`:''}`}),
+    'not-running':()=>({cls:'bad',text:`✗ ${legacy?oldName:'采集器'}没在跑 · 最后记录于 ${fmtWhen(s.since)}${s.signal?` · 因 ${s.signal}`:''}`}),
+    stopped:()=>({cls:'dim',text:`○ 旧采集停了 · 自 ${fmtWhen(s.since)} 起`}),
     'not-responding':()=>({cls:'bad',text:`✗ 采集器没响应 · 最后心跳 ${fmtWhen(s.since)}`}),
     unknown:()=>({cls:'warn',text:`? ${legacy?'旧采集':'采集器'}状态不明 · ${s.reason||''}`}),
     'no-events':()=>({cls:'warn',text:'? 旧采集 · 没有事件记录(重启后才有)'}),

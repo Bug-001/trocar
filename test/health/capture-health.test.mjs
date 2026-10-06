@@ -128,8 +128,32 @@ test('the old capture: running / failing / stopped; no events but a fresh captur
     assert.deepEqual([b.health().summary.state, b.health().summary.part], ['failing', 'legacy'])
     b.flows([{ ts: at(H / 2), event: 'failure', where: 'engine', code: 'lookup-miss', reason: 'r' }])
     assert.equal(b.health().summary.n, 2, 'both failing: the counts add up')
-    ev([{ ts: at(3 * H), event: 'mitm-start', pid: 99 }, { ts: at(2 * H), event: 'mitm-stop', pid: 99 }])
-    assert.equal(b.health().summary.state, 'not-running', 'a stopped old MITM is worse than a failing collector')
+    ev([{ ts: at(3 * H), event: 'mitm-start', pid: 99 }])
+    assert.deepEqual([b.health({ alive: (p) => p !== 99 }).summary.state, b.health({ alive: (p) => p !== 99 }).summary.part], ['not-running', 'legacy'], 'an old MITM gone without a clean stop is worse than a failing collector')
+    ev([{ ts: at(3 * H), event: 'mitm-start', pid: 99 }, { ts: at(2 * H), event: 'mitm-stop', pid: 99, signal: 'SIGTERM' }])
+    assert.deepEqual([b.health().summary.state, b.health().summary.part], ['failing', 'collector'], 'one stopped cleanly is not: the collector\'s failure shows')
+  } finally { b.done() }
+})
+
+test('the old capture per source (RFC 4.1 落地细节 (3)): MITM and reverse proxy each by their last start / stop; a clean stop is ○ below ✓', () => {
+  const b = home()
+  try {
+    const ev = (recs) => { fs.mkdirSync(path.join(b.h, 'logs'), { recursive: true }); fs.writeFileSync(path.join(b.h, 'logs', 'mitm-events.ndjson'), recs.map((r) => JSON.stringify(r) + '\n').join('')) }
+    const mitmStopped = [{ ts: at(5 * H), event: 'mitm-start', source: 'mitm', pid: 7 }, { ts: at(4 * H), event: 'mitm-stop', source: 'mitm', pid: 7, signal: 'SIGTERM' }]
+    ev(mitmStopped)
+    let r = b.health()
+    assert.deepEqual([r.summary.state, r.summary.since, r.summary.signal, r.legacy.state], ['stopped', at(4 * H), 'SIGTERM', 'stopped'])
+    ev([...mitmStopped, { ts: at(2 * H), event: 'mitm-start', source: 'proxy', pid: 8, port: 8899 }])
+    r = b.health()
+    assert.deepEqual([r.summary.state, r.summary.source, r.summary.since], ['ok', 'proxy', at(2 * H)], 'the reverse proxy runs: ✓ 旧反代')
+    assert.deepEqual(r.legacy.sources.map((x) => [x.source, x.state]), [['mitm', 'stopped'], ['proxy', 'running']])
+    r = b.health({ alive: (pid) => pid !== 8 })
+    assert.deepEqual([r.summary.state, r.summary.source, r.summary.reason], ['not-running', 'proxy', 'pid 8 is gone without a clean stop'])
+    ev([{ ts: at(2 * H), event: 'mitm-start', pid: 9 }]) // a line without source is the MITM's
+    assert.equal(b.health().legacy.sources[0].source, 'mitm')
+    installed(b); b.lock(); b.state('on', at(H)); b.flows([{ ts: at(H), event: 'daemon-start', pid: 4242 }])
+    ev(mitmStopped)
+    assert.deepEqual([b.health().summary.state, b.health().summary.part], ['ok', 'collector'], 'a running collector hides a cleanly stopped old capture')
     fs.rmSync(path.join(b.h, 'logs', 'mitm-events.ndjson')); fs.mkdirSync(path.join(b.h, 'logs', 'mitm-events.ndjson'))
     assert.ok(b.health().read.errors.some((e) => /mitm-events/.test(e.file)))
   } finally { b.done() }

@@ -123,7 +123,7 @@ const KEEP = ['ts', 'event', 'where', 'code', 'reason', 'suppressed', 'folded', 
   'flow_id', 'seq', 'd', 'i', 'pattern', 'candidates', 'cause', 'via', 'hint', 'which', 'file', 'harness', 'path', 'kind',
   'type', 'index', 'desired', 'actual', 'links', 'counts', 'from', 'to', 'lost', 'exit', 'stderr', 'signal', 'failed',
   'version', 'foreground', 'linger', 'upstream_ca', 'dropped', 'errno', 'route', 'phase', 'decision', 'inner',
-  'not_captured', 'write_failed', 'transport', 'port', 'out', 'servername', 'op', 'outcome', 'records', 'originalKept', 'reader', 'target']
+  'not_captured', 'write_failed', 'transport', 'port', 'out', 'servername', 'op', 'outcome', 'records', 'originalKept', 'reader', 'target', 'source', 'id']
 const CLIP = 1000
 const clip = (v) => (typeof v === 'string' && v.length > CLIP ? `${v.slice(0, CLIP)}… (${v.length} chars)` : v)
 /** A record cut down to metadata: listed fields only, long strings clipped and said so, `error` as {type, message, side}. */

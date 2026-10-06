@@ -64,7 +64,7 @@ export function lockState({ file, now = Date.now(), alive = pidAlive, identity =
 const errText = (e) => String((e && e.message) || e)
 const DAEMON = { none: 'not-running', stale: 'not-running', unresponsive: 'not-responding', running: 'running', unknown: 'unknown' }
 // how bad each state is (1.5: `?` unreadable > ✗ > ⚠ > `?` unknown > ○ > ✓ > –); the top bar shows the worst part
-export const RANK = { unreadable: 8, 'not-running': 7, 'not-responding': 7, failing: 6, unknown: 5, 'no-events': 5, off: 4, ok: 3, residue: 2, 'not-installed': 1 }
+export const RANK = { unreadable: 8, 'not-running': 7, 'not-responding': 7, failing: 6, unknown: 5, 'no-events': 5, off: 4, ok: 3, residue: 2, stopped: 2, 'not-installed': 1 }
 const latest = (...ts) => ts.filter(Boolean).sort().at(-1) || null
 
 function readJson(file, fs) {
@@ -182,14 +182,25 @@ function legacyHealth({ home, now, fs, alive, read }) {
   }
   read.files.push(file); read.unparsable += t.unparsable
   if (t.truncated) read.truncated = true
-  let start = null, stop = null
-  for (const r of t.recs) { if (r.event === 'mitm-start') { start = pick(r); stop = null } else if (r.event === 'mitm-stop') stop = pick(r) }
+  // per `source` (mitm / proxy; RFC 4.1 落地细节 (3)): the last start and stop of each — running (pid alive), gone (no
+  // stop, pid dead: ✗) or stopped cleanly (○, ranked below ✓ so a running collector hides it)
+  const by = new Map()
+  for (const r of t.recs) {
+    if (r.event !== 'mitm-start' && r.event !== 'mitm-stop') continue
+    const k = r.source || 'mitm', s = by.get(k) || { source: k, last_start: null, last_stop: null }
+    if (r.event === 'mitm-start') { s.last_start = pick(r); s.last_stop = null } else s.last_stop = pick(r)
+    by.set(k, s)
+  }
+  const sources = [...by.values()].map((s) => ({ ...s, state: s.last_start && !s.last_stop ? (s.last_start.pid == null || alive(s.last_start.pid) ? 'running' : 'gone') : 'stopped' }))
   const failures = groupsOf(t.recs.filter(isFailure), now)
-  const running = start && !stop && (start.pid == null || alive(start.pid))
   const last = t.recs.length ? t.recs[t.recs.length - 1].ts : null
-  const l = { present: true, state: running ? 'running' : 'not-running', last_start: start, last_stop: stop, last_record_at: last, failures }
-  l.summary = !running ? { state: 'not-running', since: (stop && stop.ts) || last, n: failures.length, ...(start && !stop ? { reason: `pid ${start.pid} is gone without a clean stop` } : {}) }
-    : failures.length ? { state: 'failing', n: failures.length } : { state: 'ok', since: start.ts }
+  const gone = sources.find((s) => s.state === 'gone'), running = sources.find((s) => s.state === 'running')
+  const lead = gone || running || sources.at(-1) || {}
+  const l = { present: true, state: gone ? 'not-running' : running ? 'running' : 'stopped', sources, last_start: lead.last_start || null, last_stop: lead.last_stop || null, last_record_at: last, failures }
+  l.summary = gone ? { state: 'not-running', since: last, source: gone.source, n: failures.length, reason: `pid ${gone.last_start.pid} is gone without a clean stop` }
+    : failures.length ? { state: 'failing', n: failures.length }
+    : running ? { state: 'ok', since: running.last_start.ts, source: running.source }
+    : { state: 'stopped', since: (lead.last_stop && lead.last_stop.ts) || last, ...(lead.last_stop && lead.last_stop.signal ? { signal: lead.last_stop.signal } : {}) }
   return l
 }
 

@@ -76,7 +76,7 @@ export function formatHealth(h, { daemonLine = true } = {}) {
   if (exp.length) lines.push(`not captured by design (last 24 h): ${exp.map(([k, n]) => `${k} ${n}`).join(', ')}`)
   if (h.legacy && h.legacy.present) {
     const l = h.legacy
-    lines.push(`old capture (MITM / reverse proxy): ${l.state === 'running' ? `running since ${l.last_start.ts}` : l.state === 'no-events' ? `wrote ${l.capture.file} at ${l.capture.mtime}, no events file` : l.state === 'unknown' ? `unknown — ${l.error}` : `not running${l.last_stop ? ` (stopped at ${l.last_stop.ts})` : ''}`}`)
+    lines.push(`old capture (MITM / reverse proxy): ${l.state === 'running' ? `running since ${l.last_start.ts}` : l.state === 'no-events' ? `wrote ${l.capture.file} at ${l.capture.mtime}, no events file` : l.state === 'unknown' ? `unknown — ${l.error}` : l.state === 'stopped' ? `stopped${l.last_stop ? ` at ${l.last_stop.ts}${l.last_stop.signal ? ` (${l.last_stop.signal})` : ''}` : ''}` : `NOT running — ${l.summary.reason || 'gone without a clean stop'} (last record ${l.last_record_at})`}`)
     for (const g of l.failures || []) lines.push(groupLine(g))
   }
   for (const p of (h.raw && h.raw.problems) || []) lines.push(`raw layer: ${p.op} ${p.outcome} ${p.file || p.target || ''}: ${p.reason || ''}`)

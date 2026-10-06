@@ -142,12 +142,17 @@ async function main() {
       // SSE the reconstructor doesn't yet parse (it's Anthropic-shaped) — e.g. OpenAI Responses (Codex):
       // without it the reconstructed resp is empty and the events are LOST (invariant 2 · source truth).
       const keepRawSse = rest.includes('--raw-sse') || process.env.ASIGHT_RAW_SSE === '1';
+      // D38 (RFC 4.1 过渡期): a write that fails never crashes the proxy; failures and start / stop are lines in
+      // ~/.asight/logs/mitm-events.ndjson (src/capture/legacy-run.mjs, events.mjs)
+      const { createCaptureSink, legacyLifecycle } = await import(r('src', 'capture', 'legacy-run.mjs'));
+      const { appendLegacyEvent, failureOf } = await import(r('src', 'capture', 'events.mjs'));
       fs.mkdirSync(path.dirname(out), { recursive: true });
-      const sink = fs.createWriteStream(out, { flags: 'a' });
+      const sink = createCaptureSink(out);
+      const life = legacyLifecycle({ source: 'proxy', port, out });
       let n = 0;
-      const server = createReverseProxy({ target, upstreamProxy, keepRawSse, onEnvelope: (env) => { sink.write(JSON.stringify(env) + '\n'); if (++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
-      server.on('error', (e) => { console.error('capture error:', e.message); if (e.code === 'EADDRINUSE') process.exit(1); });
-      server.listen(port, '127.0.0.1', () => console.log(`asight capture (reverse-proxy tee) → ${target}\n  listening http://127.0.0.1:${port}  → ${out}\n  point the harness at it: HTTPS_PROXY / base_url → http://127.0.0.1:${port} (or run: asight on)`));
+      const server = createReverseProxy({ target, upstreamProxy, keepRawSse, onEvent: (e) => appendLegacyEvent(e), onEnvelope: (env) => { if (sink.write(env) && ++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
+      server.on('error', (e) => { appendLegacyEvent(failureOf('proxy', e, 'start-failed')); if (e.code === 'EADDRINUSE') process.exit(1); });
+      server.listen(port, '127.0.0.1', () => { life.started(server.address().port); console.log(`asight capture (reverse-proxy tee) → ${target}\n  listening http://127.0.0.1:${port}  → ${out}\n  point the harness at it: HTTPS_PROXY / base_url → http://127.0.0.1:${port} (or run: asight on)`); });
       break;
     }
     case 'mitm': {
@@ -171,12 +176,16 @@ async function main() {
       const ca = generateCa({ hosts: [targetHost], caDir: caDir() }); // leaf must cover the host we terminate
       const leaf = { key: fs.readFileSync(ca.leafKey), cert: fs.readFileSync(ca.leafCrt) };
       const keepRawSse = rest.includes('--raw-sse') || process.env.ASIGHT_RAW_SSE === '1';
+      // D38 (RFC 4.1 过渡期): refused leaves, cut upstreams, failed writes, start / stop → mitm-events.ndjson
+      const { createCaptureSink, legacyLifecycle } = await import(r('src', 'capture', 'legacy-run.mjs'));
+      const { appendLegacyEvent, failureOf } = await import(r('src', 'capture', 'events.mjs'));
       fs.mkdirSync(path.dirname(out), { recursive: true });
-      const sink = fs.createWriteStream(out, { flags: 'a' });
+      const sink = createCaptureSink(out);
+      const life = legacyLifecycle({ source: 'mitm', port, out });
       let n = 0;
-      const server = createMitmProxy({ targetHost, leaf, upstreamProxy, keepRawSse, onEnvelope: (env) => { sink.write(JSON.stringify(env) + '\n'); if (++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
-      server.on('error', (e) => { console.error('mitm error:', e.message); if (e.code === 'EADDRINUSE') process.exit(1); });
-      server.listen(port, '127.0.0.1', () => console.log(`asight mitm (CONNECT · TLS-terminate ${targetHost}, blind-tunnel rest) → ${out}\n  listening http://127.0.0.1:${port}  · upstream ${upstreamProxy}\n  steer CC-Desktop here via a Clash rule (4.1) — run: asight desktop on --port ${port}`));
+      const server = createMitmProxy({ targetHost, leaf, upstreamProxy, keepRawSse, onEvent: (e) => appendLegacyEvent(e), log: (m) => console.error(m), onEnvelope: (env) => { if (sink.write(env) && ++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
+      server.on('error', (e) => { appendLegacyEvent(failureOf('mitm', e, 'start-failed')); if (e.code === 'EADDRINUSE') process.exit(1); });
+      server.listen(port, '127.0.0.1', () => { life.started(server.address().port); console.log(`asight mitm (CONNECT · TLS-terminate ${targetHost}, blind-tunnel rest) → ${out}\n  listening http://127.0.0.1:${port}  · upstream ${upstreamProxy}\n  steer CC-Desktop here via a Clash rule (4.1) — run: asight desktop on --port ${port}`); });
       break;
     }
     case 'desktop': {
