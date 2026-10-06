@@ -1783,6 +1783,8 @@ function wireBadges(c){
   if(w.transport==='ws') h+=`<span class="metabadge">WebSocket</span> `
   if(w.format&&w.vendor==null) h+=`<span class="metabadge" title="cache labels are per vendor (the upstream host); this host is not a known vendor, so none are claimed">厂商缓存语义未知 · vendor cache semantics unknown</span> `
   for(const l of (w.labels||[])) h+=`<span class="pobadge" title="${esc(l.text)}">${esc(l.label)}</span> `
+  // 4.6 §记录 / invariant 4: sent compressed, shown decompressed — the exact text, not the exact wire bytes
+  if(w.reqEncoding) h+=`<span class="metabadge" title="the request body went over the wire compressed (content-encoding: ${esc(w.reqEncoding)}); its text here is after decompression, and its sizes are of that text">请求体已解压 · request decompressed (${esc(w.reqEncoding)})</span> `
   return h
 }
 const wireLine=c=>{ const b=wireBadges(c); return b?`<div class="rpk">${b}</div>`:'' }
@@ -1823,7 +1825,7 @@ function renderRawPanel(){
       `<div class="rpk rpcost">${costLine}</div>`+reqBadge(call)
     return }
   el.innerHTML=`<div class="rphd">🩻 raw · call #${playhead+1}</div>`+wireLine(call)+
-    `<div class="rpk">${esc(String(rq.model||'').replace('claude-',''))} · ${kf(rq.context_chars)} ${call.reqIncomplete?'bytes stored (not the whole request)':'bytes wire'}</div>`+
+    `<div class="rpk">${esc(String(rq.model||'').replace('claude-',''))} · ${kf(rq.context_chars)} ${call.reqIncomplete?'bytes stored (not the whole request)':call.wire&&call.wire.reqEncoding?'chars after decompression':'bytes wire'}</div>`+
     `<div class="rpk">msgs <b>${kf(rq.message_count)}</b> · tools <b>${kf(rq.tool_count)}</b> · system <b>${kf(rq.system_chars)}</b>c</div>`+
     `<div class="rpk">usage · read <b>${kf(read)}</b> · new-cache <b>${kf(create)}</b> · fresh <b>${kf(fresh)}</b> · out <b>${kf(out)}</b></div>`+
     `<div class="rpk rpcost">${costLine}</div>`+reqBadge(call)+nonBlockList(call)+replyList(call)

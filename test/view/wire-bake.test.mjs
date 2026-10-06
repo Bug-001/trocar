@@ -48,9 +48,11 @@ test('incompleteness labels: each is baked on the call; only an incomplete reque
   assert.deepEqual(undecoded.labels.map((l) => l.id), ['resp-undecoded']);
   const ws = wireOfRec({ ws_truncated: true });
   assert.deepEqual([ws.contextState, ws.labels.map((l) => l.id)], ['complete', ['ws-truncated']]);
-  const enc = wireOfRec({ req_encoding_error: 'zstd unsupported', req_content_encoding: 'zstd' });
+  // 3.1: labelled only when no text is left — the reader could not decode req_body_b64 either
+  const enc = wireOfRec({ req_body: null, req_body_b64: 'AAAA', req_content_encoding: 'x-unknown', req_encoding_error: 'unknown encoding' });
   assert.deepEqual([enc.contextState, enc.labels.map((l) => l.id)], ['complete', ['req-undecoded']]);
-  assert.match(enc.labels[0].text, /\(zstd\)/);
+  assert.match(enc.labels[0].text, /\(x-unknown\)/);
+  assert.deepEqual(wireOfRec({ req_encoding_error: 'zstd unsupported', req_content_encoding: 'zstd' }).labels, [], 'a body that is text was decoded: no label');
   assert.equal(wireOfRec({ req_partial: 'aborted' }).contextState, 'partial', 'G17: the stored request is not the whole context');
   assert.equal(wireOfRec({}).labels.length, 0);
 });

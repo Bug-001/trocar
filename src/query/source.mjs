@@ -20,6 +20,7 @@ import { statSync, openSync, readSync, closeSync, fstatSync, existsSync } from '
 import path from 'node:path';
 import { parseTextRef, TEXT_REF_FIELD, fieldTextOf } from '../etl/orchestrator.mjs';
 import { normalizeRecord } from '../etl/ingest.mjs';
+import { expandRequestBody, requestEncodingOf } from '../dissect/request-body.mjs';
 import { listSources, isSealedPath } from '../raw/discover.mjs';
 import { openSealed, createFrameCache } from '../raw/reader.mjs';
 import { R, FLAG_NL, FLAG_UNPARSEABLE } from '../raw/format.mjs';
@@ -55,7 +56,8 @@ const streamOfRawRef = (rawRef) => rawRef.slice(rawRef.indexOf('/') + 1, rawRef.
 // exactly the promise this tool exists to keep. So classify, and let every consumer label it.
 // This is a CLASSIFIER only: it mirrors normalizeRecord's branches, it never rewrites anything.
 function classifyFidelity(raw) {
-  if (typeof raw.req_body === 'string') return 'verbatim';   // D10: the captured wire string
+  // D10: the captured wire string — or, when the wire carried it compressed, its exact decompressed text (4.6 §记录)
+  if (typeof raw.req_body === 'string') return requestEncodingOf(raw) ? 'decoded' : 'verbatim';
   if (raw.request === undefined) return null;                // not an llm record — no body at all
   if (raw.request === null) return 'reserialized';           // '' stand-in, synthesized not captured
   if (typeof raw.request === 'string') return 'verbatim';    // v0 stored raw text → passed through
@@ -438,7 +440,7 @@ export async function buildResolver(source, { retryMs = 30000, sessionsRoot = nu
       readSync(fdFor(loc.file), buf, 0, loc.length, loc.offset);
     }
     if (!out) try {
-      const raw = JSON.parse(buf.toString('utf8'));
+      const raw = expandRequestBody(JSON.parse(buf.toString('utf8'))); // the same decoded text the loaders read
       if (field) {
         const f = fieldTextOf(raw, field); // the stored decoded text IS the verbatim record (4.6 §记录)
         out = f.text != null ? OUT('ok', null, f.text, 'verbatim') : OUT('no-body', `record "${recordId}" ${f.missing}`);

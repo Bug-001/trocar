@@ -8,6 +8,7 @@
 //     on disk is what arrived before that.
 // These are NOT the top-level `partial` (a connection's earlier messages are missing — context, not bytes).
 // Envelope fields only, no wire knowledge, so the board and the ETL can both use it. Leaf module.
+import { requestEncodingOf } from './request-body.mjs';
 const PARTIAL = {
   'early-response': 'never finished uploading: the upstream answered (e.g. 413 / 401) before it was fully sent',
   aborted: 'never finished uploading: the connection was aborted mid-body',
@@ -123,7 +124,11 @@ export function captureLabelsOf(rec) {
     text: `the reply could not be decoded (${r.encoding_error}); its bytes are kept as base64 in the record, so no reply text is shown` });
   if (rec.ws_truncated === true) out.push({ id: 'ws-truncated', label: '已截断 · call over the size cap',
     text: 'messages past the per-call cap are stored as {omitted_bytes}; their bytes are not in the record' });
-  if (rec.req_encoding_error) out.push({ id: 'req-undecoded', label: '压缩请求体未解码 · compressed request not decoded',
-    text: `the request body is stored compressed (${rec.req_content_encoding || 'unknown encoding'}) and was not decoded: ${rec.req_encoding_error}` });
+  // 3.1 / 3.2:132: the reader decodes req_body_b64 first (request-body.mjs, at load); labelled only when no text is
+  // left — the reader could not decode it either, or the collector said it did not and kept no bytes to try
+  if (typeof rec.req_body !== 'string' && (rec.req_encoding_error || (typeof rec.req_body_b64 === 'string' && requestEncodingOf(rec)))) {
+    out.push({ id: 'req-undecoded', label: '压缩请求体未解码 · compressed request not decoded',
+      text: `the request body is stored compressed (${rec.req_content_encoding || 'unknown encoding'}) and could not be decoded: ${rec._reqBodyDecodeError || rec.req_encoding_error || 'the reader did not try'}` });
+  }
   return out;
 }

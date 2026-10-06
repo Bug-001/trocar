@@ -63,6 +63,16 @@ test('capture labels render on the call (已截断 / 压缩请求体未解码), 
   }
 });
 
+test('a request sent compressed says it is shown decompressed, and its size is not called wire bytes (4.6 §记录)', async () => {
+  const v = await render(session(call({ ...W, reqEncoding: 'zstd' })));
+  assert.match(v.raw, /请求体已解压 · request decompressed \(zstd\)/);
+  assert.match(v.raw, /10 chars after decompression/);
+  assert.doesNotMatch(v.raw, /bytes wire/);
+  const plain = await render(session(call(W)));
+  assert.doesNotMatch(plain.raw, /请求体已解压/);
+  assert.match(plain.raw, /bytes wire/);
+});
+
 test('a non-LLM body stored as its length says 非逐字 in the control detail (4.6 W16 read half)', async () => {
   const rec = { id: 'c1', ts_request: '2026-10-06T00:00:00Z', method: 'GET', endpoint: '/v1/realtime', transport: 'ws', is_llm_call: false,
     req_headers: { 'user-agent': 'x' }, req_body: { raw_chars: 321, verbatim: false }, resp: { kind: 'ws', messages: [] } };

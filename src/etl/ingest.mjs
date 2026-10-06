@@ -12,6 +12,7 @@ import { basename } from 'node:path';
 import { createInterface } from 'node:readline';
 import { isSealedPath } from '../raw/discover.mjs';
 import { openSealed } from '../raw/reader.mjs';
+import { expandRequestBody } from '../dissect/request-body.mjs';
 
 // True D10 record → passthrough. Demo v0 record → convert. Anything else → passthrough.
 export function normalizeRecord(raw) {
@@ -81,7 +82,8 @@ export async function readRecords(filePath, { normalize = true, limit = Infinity
       return true;
     }
     scan.parsedLines++;
-    const rec = normalize ? normalizeRecord(raw) : raw;
+    // a request body the collector left compressed is decoded here, once, for every reader (4.6 §记录, 3.2:132)
+    const rec = normalize ? normalizeRecord(expandRequestBody(raw)) : expandRequestBody(raw);
     // Which FILE these bytes came from. A text_ref is `<session>/<stream>#<id>::<start>-<end>`
     // (RFC 4.2:40) and the stream basename is the half that disambiguates: record ids are only
     // unique within a capture file. The record itself never carries it — only the reader knows —

@@ -101,6 +101,9 @@ What the board cannot vouch for, it labels on the call (raw panel and the top of
   (e.g. request gzip off, a different TLS stack); legacy captures carry none.
 - **厂商缓存语义未知**: the upstream host is not a known vendor, so no cache labels are claimed for it.
 - **已截断 / 不完整 / 回复未解码 / 压缩请求体未解码**: which bytes of this record are missing or were not decoded.
+  A request the agent sent compressed is decoded by asight when it reads it and shown with **请求体已解压 ·
+  request decompressed**; its blocks open as 「解码后逐字」 (the exact text after decompression, not the wire
+  bytes). 「压缩请求体未解码」 then means asight could not decode it either (e.g. zstd on a Node without zstd).
 - **未识别 · unrecognized traffic** (a banner): records no dissector reads are counted and named, never
   drawn as something else — also when only some records of a session are unrecognized. One session may
   mix wire formats; each call is read by its own.

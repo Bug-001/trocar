@@ -14,6 +14,7 @@ import { mintRawRef, composeTextRef, fieldTextOf, TEXT_REF_FIELD } from '../etl/
 import { sessionKeyOf, hintsOf, observerEffectsOf } from '../dissect/harnesses.mjs';
 import { wireFormatOf, boardDissectorFor, contextStateOf, blockKeysOf } from '../dissect/registry.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
+import { requestEncodingOf } from '../dissect/request-body.mjs';
 
 // D17④ 地面真相(RFC 3.3:65 · 独立字节护城河). The demo proxied prefix identity with the 32-bit
 // bounded content_hash SEQUENCE (collision-prone). Product MUST use a REAL full SHA-256 over the
@@ -303,9 +304,11 @@ function wireOf(rec, format, ctx = null, norm = null) {
   const unread = norm && norm.unread;
   if (unread) labels.push({ id: 'reply-unread', label: `回复部分未读 · ${unread} reply message${unread > 1 ? 's' : ''} not read`,
     text: `${unread} server message${unread > 1 ? 's' : ''} of this call are not JSON text (binary, past the size cap, or not decodable); the reply shown is read from the others` });
+  // a request sent compressed and shown decompressed says so (4.6 §记录, invariant 4): exact text, not the wire bytes
+  const enc = rec && typeof rec.req_body === 'string' ? requestEncodingOf(rec) : null;
   return { format, vendor: vendorOf(rec), transport: rec && rec.transport === 'ws' ? 'ws' : 'http',
     contextState: ctx ? ctx.contextState : contextStateOf(rec), ...(ctx && ctx.contextState === 'partial' && ctx.missing ? { contextMissing: ctx.missing } : {}),
-    observerEffect: observerEffectsOf(rec), labels };
+    observerEffect: observerEffectsOf(rec), labels, ...(enc ? { reqEncoding: enc } : {}) };
 }
 // 3.1:37: client messages that arrived while the call was open (req_extra_messages, e.g. an interrupt) belong to
 // the call and MUST be visible — listed one by one with a locator to their verbatim text (4.2:40 字段段), or with
