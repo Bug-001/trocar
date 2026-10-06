@@ -128,3 +128,23 @@ test('a fast upstream writes no upstream-slow event', async () => {
   await h.close(); await sleep(20)
   assert.deepEqual(h.failures, [])
 })
+
+// The flows/ row of a DECRYPTED connection: envelopes the store did not write (write_failed) and a 101 after
+// which nothing is framed (upgrade-not-followed) are said on the row itself (RFC 4.6 §记录, D38 T-13 / T-15).
+test('a decrypted row counts envelopes the store did not write; a non-WebSocket 101 marks it upgrade-not-followed', async () => {
+  const up = tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)), ALPNProtocols: ['http/1.1'] }, (s) => {
+    s.on('error', () => {}); let n = 0
+    s.on('data', (d) => { if (/Upgrade: h2c/.test(d)) s.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: h2c\r\nConnection: Upgrade\r\n\r\nPRI-bytes'); else if (++n) s.write('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok') })
+  })
+  const h = await rig(up, { store: { envelope: () => false, flow: (f) => { h.flows.push(structuredClone(f)); return true } } })
+  await new Promise((resolve) => {
+    const c = tls.connect({ port: h.port, host: '127.0.0.1', servername: 'upstream.test', ca: asightCa.certPem, ALPNProtocols: ['http/1.1'] }, () => c.write('GET /a HTTP/1.1\r\nHost: upstream.test\r\n\r\n'))
+    let got = ''
+    c.on('data', (d) => { got += d; if (got.endsWith('ok')) { got = ''; c.write('GET /b HTTP/1.1\r\nHost: upstream.test\r\nUpgrade: h2c\r\nConnection: Upgrade\r\n\r\n') } else if (got.includes('PRI-bytes')) c.end() })
+    c.on('error', () => {}); c.on('close', resolve)
+  })
+  await h.close()
+  const [r] = h.flows
+  assert.deepEqual([r.decision, r.write_failed, r.not_captured, r.reason], ['decrypt', 2, 'upgrade-not-followed', '101 h2c'])
+  assertCriterion(h.flows)
+})

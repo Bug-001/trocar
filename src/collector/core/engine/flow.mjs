@@ -61,6 +61,10 @@ export function handleFlow(client, meta, ctx) {
     // a WebSocket connection: the recorder's summary (frames, calls, tail_raw, failures, …; RFC 4.6 §记录)
     const ws = activeTee && activeTee.wsSummary && activeTee.wsSummary()
     if (ws) { rec.transport = 'ws'; rec.ws = ws }
+    // envelopes the store did not write, and a decrypted connection whose later bytes were not framed (D38)
+    const notes = activeTee && activeTee.rowNotes ? activeTee.rowNotes() : {}
+    if (notes.writeFailed) rec.write_failed = notes.writeFailed
+    if (notes.notFollowed && !rec.not_captured) notCaptured('upgrade-not-followed', notes.notFollowed)
     // bytes_up / bytes_down = the agent's own connection's wire bytes (RFC 4.6 §记录): read off the
     // accepted socket once it has closed, so proxy preludes, TLS records (and the closing alerts after
     // the flow ended) count on every path. A client that never closes its half gets written after 2 s.

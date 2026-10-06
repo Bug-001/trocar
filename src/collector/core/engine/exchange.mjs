@@ -20,7 +20,10 @@ const isWsUpgrade = (req, resp) => resp.head.status === 101 && tokens(req.head.h
 const errOf = (e) => (e ? { type: e.code || e.type || 'error', message: String(e.message || e) } : null)
 
 /** createExchangeTee({flow, recordStore, isRecording, maxBodyBytes, newId, wsTerminal, onFailure})
- *   → {fromClient, fromUpstream, clientEnded(err?), upstreamEnded(err?), abort(error), wsSummary(), stats}
+ *   → {fromClient, fromUpstream, clientEnded(err?), upstreamEnded(err?), abort(error), wsSummary(), rowNotes(), stats}
+ * rowNotes() = what flows/ must say about this connection (RFC 4.6 §记录, D38): {writeFailed} = envelopes the
+ * store did not write (HTTP and WebSocket), {notFollowed} = the reply after which nothing more was framed
+ * (a non-WebSocket 101, a CONNECT 2xx).
  * wsTerminal = FlowExtras.wsTerminal (harness data, Plan 3c §2); wsSummary() = the ws recorder's summary
  * for flows/ once the connection switched to WebSocket, else null. onFailure({code, reason, …}) takes the
  * capture failures (RFC 4.6 §记录, D38) — the engine's failure(), which writes them to flows/; the
@@ -37,6 +40,15 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
   let curResp = null   // response body currently accumulating
   let stopped = false
   let ws = null        // after a WebSocket 101: the frame recorder that owns both directions
+  let writeFailed = 0  // envelopes the store did not write (false or a throw): counted on the flows/ row
+  let notFollowed = null
+  let unpaired = false // one unpaired-response event per connection
+  // the WebSocket recorder writes through this, so its lost envelopes are counted on the row too
+  const counted = {
+    envelope(env) { let ok; try { ok = recordStore.envelope(env) } catch (e) { writeFailed++; throw e } if (ok === false) writeFailed++; return ok },
+    failure: (r) => recordStore.failure(r),
+    get lastError() { return recordStore.lastError },
+  }
 
   // Accumulate a body with a hard cap; past maxBodyBytes stop and mark truncated (invariant 4).
   function append(target, chunk) {
@@ -86,11 +98,14 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
     onUpgrade({ rest } = {}) {
       const ex = pending[0]
       const early = reqFramer.takeRest() // client bytes held behind the upgrade request: the new protocol's
-      if (!(curResp && ex && isWsUpgrade(ex.req, curResp))) { finalize(curResp, null); curResp = null; stopped = true; return } // other 101 / CONNECT 2xx: head only
+      if (!(curResp && ex && isWsUpgrade(ex.req, curResp))) { // other 101 / CONNECT 2xx: head only, then nothing is framed
+        notFollowed = curResp && curResp.head.status === 101 ? `101 ${tokens(curResp.head.headers, 'upgrade').join(',') || '-'}` : `CONNECT ${curResp ? curResp.head.status : '-'}`
+        finalize(curResp, null); curResp = null; stopped = true; return
+      }
       // RFC 4.6 §引擎 6: after a WebSocket 101 the raw bytes keep flowing; the side copy goes to ws/. The
       // upgrade is no envelope of its own: its seq is the first call's (RFC 4.6 §记录).
       pending.shift()
-      ws = createWsRecorder({ flow, upgrade: { req: ex.req, resp: curResp }, seqStart: ex.seq, genId, recordStore, isRecording, terminal: wsTerminal, onFailure })
+      ws = createWsRecorder({ flow, upgrade: { req: ex.req, resp: curResp }, seqStart: ex.seq, genId, recordStore: counted, isRecording, terminal: wsTerminal, onFailure })
       curResp = null
       if (early.length) ws.fromClient(early) // frames sent before the 101 arrived (RFC 6455 says wait; some don't)
       if (rest && rest.length) ws.fromUpstream(rest)
@@ -112,18 +127,29 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
     const partial = ex.req.partial || (ex.req === curReq ? why : null)
     if (ex.req === curReq) curReq = null
     if (!ex.record) return
-    recordStore.envelope(buildTransparentEnvelope({
-      id: ex.id, flow, seq: ex.seq,
-      req: { head: ex.req.head, body: Buffer.concat(ex.req.chunks), truncated: ex.req.truncated, partial, tsStart: ex.req.tsStart },
-      resp: respPart,
-      error: error || null,
-    }))
+    // building the envelope runs inside the framer's push(): an exception here is asight's own (engine-error),
+    // not a framing error, and must not stop the framing of the rest of the connection (D38)
+    let env
+    try {
+      env = buildTransparentEnvelope({
+        id: ex.id, flow, seq: ex.seq,
+        req: { head: ex.req.head, body: Buffer.concat(ex.req.chunks), truncated: ex.req.truncated, partial, tsStart: ex.req.tsStart },
+        resp: respPart,
+        error: error || null,
+      })
+    } catch (e) { onFailure({ reason: 'engine-error', flow_id: flow.id, seq: ex.seq, error: `recording failed: ${String((e && e.message) || e)}` }); return }
+    let ok = true
+    try { ok = recordStore.envelope(env) !== false } catch { ok = false } // the store counts and reports its own failures
+    if (!ok) { writeFailed++; return }
     stats.recorded++
   }
 
   function finalize(resp, error) {
     const ex = pending.shift()
-    if (!ex) return
+    if (!ex) { // a response no request of ours asked for (e.g. after the request framer failed): not silent (D38)
+      if (!unpaired) { unpaired = true; onFailure({ reason: 'unpaired-response', flow_id: flow.id, status: resp && resp.head ? resp.head.status : null }) }
+      return
+    }
     emit(ex, respPartOf(resp, false), error, 'early-response')
     if (ex.upgradeReq) reqFramer.release() // upgrade refused (e.g. 426): what followed is HTTP again
   }
@@ -148,6 +174,7 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
     upstreamEnded(err) { if (ws) ws.end(errOf(err)); else if (!stopped) respFramer.end() },
     abort,
     wsSummary: () => (ws ? ws.summary() : null),
+    rowNotes: () => ({ ...(writeFailed ? { writeFailed } : {}), ...(notFollowed ? { notFollowed } : {}) }),
     stats,
   }
 }
