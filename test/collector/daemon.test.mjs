@@ -26,6 +26,7 @@ import { wsConnect } from '../lab/ws-client.mjs'
 import { createServer } from '../../src/server.mjs'
 import { serveSource } from '../../src/paths.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
+import { checkRecord } from '../../src/health/codes.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
 const UID = process.getuid()
@@ -46,7 +47,13 @@ async function until(fn, ms = 3000) { const end = Date.now() + ms; for (;;) { co
 const install = (s) => installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [cc], freePort: async () => 0 })
 // /proc start time of a process started now (fake-proc counts ticks of 1/100 s from its btime).
 const nowTicks = (p) => Math.ceil((Date.now() / 1000 - p.btime) * 100)
-const flowsOf = (s) => { const d = path.join(s.collector, 'flows'); return fs.existsSync(d) ? fs.readdirSync(d).flatMap((n) => fs.readFileSync(path.join(d, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))) : [] }
+// Every flows/ line any daemon test produced is checked against the D38 closed sets (src/health/codes.mjs).
+const flowsOf = (s) => {
+  const d = path.join(s.collector, 'flows')
+  const lines = fs.existsSync(d) ? fs.readdirSync(d).filter((n) => fs.statSync(path.join(d, n)).isFile()).flatMap((n) => fs.readFileSync(path.join(d, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))) : []
+  for (const l of lines) assert.deepEqual(checkRecord(l), [], `outside the closed sets: ${JSON.stringify(l)}`)
+  return lines
+}
 
 // A keep-alive TLS relay for relay.asight.test with its own private CA. A daemon process would trust it for the
 // upstream side through NODE_EXTRA_CA_CERTS (gate G8, test/collector/core/upstream-trust.test.mjs); in-process the
@@ -538,4 +545,27 @@ test('daemon: describe hands the engine the harness WebSocket terminators and th
     assert.match(f.reason, /describing pid 5151 \(codex\) for 127\.0\.0\.1:\d+ failed: extras exploded/)
     assert.deepEqual([f.pid, f.agent, f.dst && f.dst.port], [5151, 'codex', mock.port], 'pid, agent and destination as fields')
   } finally { if (c) c.sock.destroy(); await d.stop(); await mock.close(); p.done(); s.done() }
+})
+
+// D-1: an event line the daemon cannot write goes to stderr and into status; the first line written afterwards is a
+// log-gap with the count, so the gap is on disk too.
+test('daemon: an event line that cannot be written is on stderr and in status; once it can, a log-gap comes first (D-1)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const { arch } = fakeArch(p)
+  const logs = []
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], log: (w, e) => logs.push([w, String(e && e.message)]) })
+  try {
+    const day = path.join(s.collector, 'flows', `${new Date().toISOString().slice(0, 10)}.ndjson`)
+    fs.mkdirSync(path.dirname(day), { recursive: true }); fs.rmSync(day, { force: true }); fs.mkdirSync(day) // every append fails (EISDIR)
+    d.redirector.emit('heartbeat-error', { code: 'heartbeat-failed', reason: 'timed out' })
+    const st = await req(s.sock, 'GET', '/status')
+    assert.equal(st.events.lost, 1, 'status reports the lost line')
+    assert.match(st.failures_read.errors[0], /EISDIR/, 'and that the day file cannot be read')
+    assert.ok(logs.some(([w, m]) => w === 'events' && /EISDIR/.test(m)), 'stderr has it')
+    fs.rmdirSync(day)
+    d.redirector.emit('helper-error', { reason: 'ringbuf poll failed' })
+    await until(() => flowsOf(s).length >= 2)
+    assert.deepEqual(flowsOf(s).slice(-2).map((l) => (l.event === 'log-gap' ? ['log-gap', l.lost] : [l.where, l.code])), [['log-gap', 1], ['helper', 'helper-error']])
+  } finally { await d.stop(); p.done(); s.done() }
 })

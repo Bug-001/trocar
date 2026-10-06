@@ -52,7 +52,7 @@ function refuseRoot(verb) {
 // otherwise (nothing installed, or refused as root) the command's own output is the only report.
 async function recorded(dir, where, fn) {
   try { return await fn() } catch (e) {
-    try { if (fs.existsSync(dir)) appendEvent(dir, { event: 'failure', where, reason: String((e && e.message) || e) }) } catch (w) {
+    try { if (fs.existsSync(dir)) appendEvent(dir, { event: 'failure', where, code: (e && e.code) || `${where}-error`, reason: String((e && e.message) || e) }) } catch (w) {
       if (e && typeof e === 'object') e.message += ` (and recording this failure failed: ${String((w && w.message) || w)})` // never mask the original
     }
     throw e

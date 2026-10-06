@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { appendEvent, recentFailures, createFailureRecorder } from '../../../src/collector/core/events.mjs'
+import { appendEvent, recentFailures, readRecentFailures, createFailureRecorder } from '../../../src/collector/core/events.mjs'
 
 function box() { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-ev-')); return { dir, done: () => fs.rmSync(dir, { recursive: true, force: true }) } }
 
@@ -37,5 +37,51 @@ test('failure recorder: one line per place AND error code per window; the folded
     rec.flush() // the daemon stops: nothing folded is lost
     assert.deepEqual(lines().slice(-2).map((l) => [l.reason, l.suppressed]), [['miss 4', undefined], ['miss 5', 1]])
     assert.ok(lines().every((l) => typeof l.reason === 'string' && l.event === 'failure'), 'every record carries reason')
+  } finally { b.done() }
+})
+
+// D-1: a line that cannot be written is never silent — stderr each time, a count status reports, and once writing
+// works again the first line on disk is a log-gap with the window and the count.
+test('failure recorder: lines it cannot write go to stderr and the lost count; the next written line is a log-gap (D-1)', () => {
+  const b = box()
+  const logged = []
+  let broken = 2
+  const append = (dir, rec) => { if (broken > 0) { broken--; throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }) } appendEvent(dir, rec) }
+  const t = ['2026-10-06T01:00:00.000Z', '2026-10-06T01:00:05.000Z', '2026-10-06T01:00:09.000Z']
+  const rec = createFailureRecorder(b.dir, { append, log: (w, e) => logged.push([w, e.code]), setTimer: () => ({}), clearTimer: () => {}, now: () => new Date(t.shift() || '2026-10-06T01:00:10.000Z') })
+  try {
+    rec.write({ event: 'switch', desired: 'on', actual: 'on' })
+    rec('helper', Object.assign(new Error('ringbuf poll failed'), { code: 'helper-error' }))
+    assert.deepEqual(rec.health(), { lost: 2, losing_since: '2026-10-06T01:00:00.000Z', lost_now: 2, last_error: 'ENOSPC: no space left on device' })
+    assert.deepEqual(logged.filter(([w]) => w === 'events').map(([, c]) => c), ['ENOSPC', 'ENOSPC'], 'stderr has each')
+    rec.write({ event: 'switch', desired: 'off', actual: 'off' })
+    const lines = fs.readFileSync(path.join(b.dir, 'flows', fs.readdirSync(path.join(b.dir, 'flows'))[0]), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+    assert.deepEqual(lines.map((l) => [l.event, l.lost ?? null, l.from ?? null, l.to ?? null]), [['log-gap', 2, '2026-10-06T01:00:00.000Z', '2026-10-06T01:00:09.000Z'], ['switch', null, null, null]])
+    assert.match(lines[0].reason, /2 event line\(s\) could not be written \(ENOSPC/)
+    assert.deepEqual(rec.health(), { lost: 2 }, 'the gap is closed; the total stays for status')
+    assert.equal(recentFailures(b.dir)[0].event, 'log-gap', 'a log-gap is a failure status lists')
+  } finally { b.done() }
+})
+
+// D-2: only a missing flows/ is "nothing recorded"; an unreadable directory or file is an error, a tail read says so.
+test('readRecentFailures: an unreadable flows/ or day file is an error, never "no failures"; a partial read is truncated (D-2)', () => {
+  const b = box()
+  try {
+    assert.deepEqual(readRecentFailures(b.dir), { list: [], errors: [], truncated: false }, 'no flows/ yet: nothing recorded')
+    fs.writeFileSync(path.join(b.dir, 'flows'), 'not a directory')
+    const r = readRecentFailures(b.dir)
+    assert.deepEqual([r.list, r.errors.length, /ENOTDIR/.test(r.errors[0])], [[], 1, true])
+    fs.rmSync(path.join(b.dir, 'flows'))
+    appendEvent(b.dir, { event: 'failure', where: 'engine', code: 'lookup-miss', reason: 'r1' }, { now: new Date('2026-10-06T01:00:00Z') })
+    fs.mkdirSync(path.join(b.dir, 'flows', '2026-10-07.ndjson')) // a day "file" that cannot be read
+    const r2 = readRecentFailures(b.dir)
+    assert.deepEqual(r2.list.map((f) => f.reason), ['r1'], 'the readable day is still read')
+    assert.equal(r2.errors.length, 1); assert.match(r2.errors[0], /2026-10-07\.ndjson: EISDIR/)
+    for (let i = 0; i < 30; i++) appendEvent(b.dir, { event: 'failure', where: 'engine', code: 'lookup-miss', reason: `n${i}` }, { now: new Date('2026-10-06T02:00:00Z') })
+    const r3 = readRecentFailures(b.dir, { limit: 5 })
+    assert.deepEqual([r3.list.length, r3.list.at(-1).reason, r3.truncated], [5, 'n29', true])
+    const r4 = readRecentFailures(b.dir, { maxBytes: 300 })
+    assert.equal(r4.truncated, true, 'only the tail of the day file was read')
+    assert.ok(r4.list.length >= 1 && r4.list.every((f) => f.where === 'engine'))
   } finally { b.done() }
 })

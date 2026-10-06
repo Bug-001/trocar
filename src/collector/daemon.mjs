@@ -21,7 +21,7 @@ import { loadCa } from './core/tls/ca.mjs'
 import { createLeafIssuer } from './core/tls/leaf.mjs'
 import { createRecordStore } from './core/record/store.mjs'
 import { createEngine } from './core/engine/engine.mjs'
-import { appendEvent, recentFailures, createFailureRecorder } from './core/events.mjs'
+import { appendEvent, readRecentFailures, createFailureRecorder } from './core/events.mjs'
 import { EVENT, CODE, trustReasonText } from './core/codes.mjs'
 
 export { loadArch } // the CLI reaches arch only through this file (layering rule 5)
@@ -38,6 +38,8 @@ export async function loadParts({ arch = null, harnesses = null, env = process.e
 
 export const collectorPaths = (dir = collectorHome(asightHome())) => ({ dir, caDir: path.join(dir, 'ca'), state: path.join(dir, 'state.json'), lock: path.join(dir, 'lock'), markers: path.join(dir, 'run', 'trust') })
 const errText = (e) => String((e && e.message) || e)
+// Every failure record carries a code (asight's name from src/health/codes.mjs, or the errno): the fold key (D-3).
+const coded = (e, code) => Object.assign(new Error(errText(e)), { code: (e && e.code) || code })
 
 // upstreamCa: test seam only (the CLI never passes it). Upstreams are verified against Node's default store, so a
 // relay with a private CA is trusted through NODE_EXTRA_CA_CERTS in the daemon's own environment (gate G8).
@@ -49,50 +51,58 @@ export async function startDaemon(opts = {}) {
   const log = opts.log || (() => {})
   try { return await runDaemon({ ...opts, dir, log }) } catch (e) {
     // the refusal is recorded where status finds it — unless nothing is installed here (no directory to write into)
-    if (fs.existsSync(dir)) { try { appendEvent(dir, { event: 'failure', where: 'start', reason: errText(e) }) } catch (w) { log('events', w) } }
+    if (fs.existsSync(dir)) { try { appendEvent(dir, { event: 'failure', where: 'start', code: (e && e.code) || 'start-failed', reason: errText(e) }) } catch (w) { log('events', w) } }
     throw e
   }
+}
+
+// The recent failure records for status, with what could not be read (D-2: an unreadable flows/ is never "none").
+export function failuresOnDisk(dir) {
+  const r = readRecentFailures(dir)
+  return { failures: r.list, ...(r.errors.length || r.truncated ? { failures_read: { errors: r.errors, truncated: r.truncated } } : {}) }
 }
 
 async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log }) {
   const P = collectorPaths(dir)
   const failure = createFailureRecorder(P.dir, { log })
-  const manifest = readManifest(P.dir)
+  let manifest
+  try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "asight collector uninstall", then install again`), { code: 'manifest-unreadable' }) }
   const ca = manifest && manifest.complete ? readCa({ dir: P.caDir }) : null
-  if (!ca) throw new Error('the collector is not installed for this user: run "asight collector install" first')
+  if (!ca) throw Object.assign(new Error('the collector is not installed for this user: run "asight collector install" first'), { code: 'not-installed' })
   const sock = socketPath || controlSocketPath({ env })
   let markReady
   const ready = new Promise((r) => { markReady = r })
   const impl = {} // filled once wiring is done; requests that arrive earlier wait for it
   const gate = (name) => async (q) => {
     await ready
-    try { return await impl[name](q) } catch (e) { failure('control', e, { route: name }); throw e } // a 500 is a failure too
+    try { return await impl[name](q) } catch (e) { failure('control', coded(e, 'control-error'), { route: name }); throw e } // a 500 is a failure too
   }
   const control = await startControlServer({ socketPath: sock, routes: { 'GET /status': gate('status'), 'POST /on': gate('on'), 'POST /off': gate('off') } }) // throws if another daemon answers
 
   let redirector = null
   try {
     const issuer = createLeafIssuer(loadCa(ca))
-    const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', e) })
+    const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error')) })
     let stale = null
     let unreadable = false
     try { stale = JSON.parse(fs.readFileSync(P.lock, 'utf8')) } catch (e) { if (e.code !== 'ENOENT') unreadable = true } // ENOENT: the last daemon stopped cleanly
-    if (stale && stale.pid) failure('daemon', new Error(`the previous daemon (pid ${stale.pid}) ended without a clean stop (crash, kill -9 or power loss); its helper and links went with it, and connections then in flight through its engine were cut (how many is not known)`))
-    else if (unreadable) failure('daemon', new Error('the previous daemon left an unreadable lock (crash or power loss): it ended without a clean stop, and connections then in flight through its engine were cut (how many is not known)'))
-    // switch / helper events: their own descriptor (events.mjs), and every failure among them carries `reason`
-    const event = (e) => { try { appendEvent(P.dir, { ...e, ...(e.error != null && e.reason == null ? { reason: String(e.error) } : {}) }) } catch (w) { log('events', w) } }
+    if (stale && stale.pid) failure('daemon', coded(new Error(`the previous daemon (pid ${stale.pid}) ended without a clean stop (crash, kill -9 or power loss); its helper and links went with it, and connections then in flight through its engine were cut (how many is not known)`), 'unclean-stop'))
+    else if (unreadable) failure('daemon', coded(new Error('the previous daemon left an unreadable lock (crash or power loss): it ended without a clean stop, and connections then in flight through its engine were cut (how many is not known)'), 'unclean-stop'))
+    // switch / helper events: their own descriptor (events.mjs, a lost line becomes a log-gap), and every failure
+    // among them carries `reason`
+    const event = (e) => failure.write({ ...e, ...(e.error != null && e.reason == null ? { reason: String(e.error) } : {}) })
 
     const { registry, arch: A } = await loadParts({ arch, harnesses, env })
     redirector = A.createRedirector({ env })
     // D38: one `agent-untrusted` per pid and reason (code = the resolver's reason, reason = what to do about it); a pid
     // recorded so gets `agent-trusted` once it is trusted and `agent-exit` when it exits, so the condition can clear.
     const recordedUntrusted = new Map() // pid → the reason code last recorded
-    const note = (rec) => { try { appendEvent(P.dir, rec) } catch (w) { log('events', w) } }
+    const note = (rec) => failure.write(rec)
     // the descriptor's own words for a reason, else the generic text (core/codes.mjs), else the code itself
     const hintFor = (agent, reason) => { const d = registry.get(agent); return (d && d.trust && d.trust.hints && d.trust.hints[reason]) || trustReasonText(reason) || reason }
     const onVerdict = (row) => {
-      if (row.watchError) failure('watch', new Error(`watching ${row.agent} pid ${row.pid} failed: ${row.watchError}`))
-      if (row.configError) failure('harness', new Error(`${row.agent} pid ${row.pid}: reading its configuration failed (${row.configError}); judged on its known hosts only`))
+      if (row.watchError) failure('watch', coded(new Error(`watching ${row.agent} pid ${row.pid} failed: ${row.watchError}`), 'watch-failed'))
+      if (row.configError) failure('harness', coded(new Error(`${row.agent} pid ${row.pid}: reading its configuration failed (${row.configError}); judged on its known hosts only`), 'config-error'))
       for (const r of row.readErrors || []) failure('harness', Object.assign(new Error(`${row.agent} pid ${row.pid}: ${r} exists but cannot be read; judged as if it were absent`), { code: CODE.configUnreadable }), { pid: row.pid, agent: row.agent })
       for (const f of row.parseErrors || []) failure('harness', Object.assign(new Error(`${row.agent} pid ${row.pid}: ${f} exists but does not parse; judged as if it were absent`), { code: CODE.configUnparsable }), { pid: row.pid, agent: row.agent })
       const last = recordedUntrusted.get(row.pid)
@@ -119,7 +129,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     fs.mkdirSync(P.markers, { recursive: true, mode: 0o700 })
     const tracker = createTracker({ redirector, registry, trust: createTrustChecker({ caCertPem: ca.certPem }), onVerdict, markerDir: P.markers, caPem: ca.paths.pem, collectorDir: P.dir,
       installedAt: (l) => installedAt(manifest, l), // config-after-start is judged against when asight wrote the value
-      onError: (e, at) => failure('tracker', Object.assign(new Error(`pid ${at.pid} (${at.phase}): ${errText(e)}${at.phase === 'judge' ? '; it is not watched, its connections go direct' : ''}`), { code: e && e.code }), at) })
+      onError: (e, at) => failure('tracker', Object.assign(new Error(`pid ${at.pid} (${at.phase}): ${errText(e)}${at.phase === 'judge' ? '; it is not watched, its connections go direct' : ''}`), { code: (e && e.code) || (at.phase === 'judge' ? 'judge-error' : 'unwatch-error') }), at) })
     let helperDown = null
     let sw = null
 
@@ -148,7 +158,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     const { port } = await engine.listen({ port: want, hosts: ['127.0.0.1'] }).catch((e) => {
       // G3: the port chosen at install is squatted. Nothing is steered (the helper is not spawned yet), so the agents'
       // connections stay direct; say so, and how to get a new port.
-      if (e.code === 'EADDRINUSE') throw new Error(`the engine port 127.0.0.1:${want} recorded at install is held by another process; nothing is steered, agent connections go direct. Free the port, or run "asight collector uninstall" and "asight collector install" to pick a new one`)
+      if (e.code === 'EADDRINUSE') throw Object.assign(new Error(`the engine port 127.0.0.1:${want} recorded at install is held by another process; nothing is steered, agent connections go direct. Free the port, or run "asight collector uninstall" and "asight collector install" to pick a new one`), { code: 'EADDRINUSE' })
       throw e
     })
     let v6Held = null // the helper steers IPv6 agent connections to [::1]:port: never attach while someone else holds it (M8)
@@ -166,8 +176,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     }
     redirector.on('down', ({ reason }) => { helperDown = reason; sw.markDown(reason); event({ event: 'helper-down', reason }) })
     redirector.on('version-mismatch', (m) => event({ event: 'helper-version-mismatch', ...m, reason: `the helper speaks protocol ${m.got}, this daemon expects ${m.expected}; run "sudo asight setup-helper"` }))
-    redirector.on('helper-error', ({ reason }) => failure('helper', new Error(reason)))
-    redirector.on('heartbeat-error', ({ reason }) => failure('heartbeat', new Error(`${reason}; once the last beat is 2 s old the kernel stops steering (connections go direct)`)))
+    redirector.on('helper-error', ({ reason, code }) => failure('helper', coded(Object.assign(new Error(reason), { code }), 'helper-error')))
+    redirector.on('heartbeat-error', ({ reason, code }) => failure('heartbeat', coded(Object.assign(new Error(`${reason}; once the last beat is 2 s old the kernel stops steering (connections go direct)`), { code }), 'heartbeat-failed')))
     redirector.on('exit', ({ pid }) => { // D38: an untrusted agent that exits ends its condition
       const last = recordedUntrusted.get(pid)
       if (last == null) return
@@ -199,7 +209,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         engine: { port, v6: v6Held ? null : port, v6_error: v6Held, ...engine.stats() },
         helper: { pid, proto, build, expected_proto: redirector.expectedProto, ok: proto === redirector.expectedProto, down: helperDown },
         agents, running_untrusted: agents.filter((a) => !a.trusted).length,
-        failures: recentFailures(P.dir),
+        ...failuresOnDisk(P.dir),
+        events: failure.health(), // event lines lost (D-1): stderr had each, the next written line is a log-gap
       }
     }
     Object.assign(impl, {
@@ -212,7 +223,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     async function stop() {
       failure.flush() // folded counts are written, not lost
       // every step runs; one that fails is recorded with its reason, never thrown past the rest (D38)
-      const step = async (where, fn) => { try { await fn() } catch (e) { failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: e && e.code })) } }
+      const step = async (where, fn) => { try { await fn() } catch (e) { failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: (e && e.code) || 'stop-failed' })) } }
       await step('control', () => control.close())
       clearInterval(bundleTimer)
       tracker.stop()

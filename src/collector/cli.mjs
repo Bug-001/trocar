@@ -7,7 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { controlSocketPath, controlRequest } from './core/control.mjs'
-import { recentFailures } from './core/events.mjs'
+import { readRecentFailures } from './core/events.mjs'
 import { UNTIL_TEXT } from './core/codes.mjs'
 import { collectorHome } from '../paths.mjs'
 
@@ -32,6 +32,8 @@ export function formatStatus(s) {
     if (a.trusted && a.not_via_trust_path && a.not_via_trust_path.length) lines.push(`    not captured (not via the trust path): ${a.not_via_trust_path.map((b) => `${b.host} (${b.reason})`).join(', ')}`)
   }
   if (s.failures && s.failures.length) lines.push(formatFailures(s.failures))
+  if (s.failures_read) lines.push(...formatReadProblems(s.failures_read))
+  if (s.events && s.events.lost) lines.push(`event log: ${s.events.lost} line(s) could not be written${s.events.losing_since ? ` (failing since ${s.events.losing_since}: ${s.events.last_error})` : '; the gap is recorded as log-gap'}`)
   return lines.join('\n')
 }
 
@@ -41,6 +43,9 @@ export function formatFailures(list) {
   const one = (f) => `  ${f.ts} ${f.event || `flow ${f.flow_id}`}${f.where ? ` (${f.where})` : ''}${f.pid != null ? ` pid ${f.pid}` : ''}${f.agent ? ` ${f.agent}` : ''}: ${f.code && f.code !== f.reason ? `${f.code} — ` : ''}${f.reason || f.error?.message || f.error || f.not_captured || ''}${f.suppressed ? ` (+${f.suppressed} more)` : ''}${f.hint ? ` — ${f.hint}` : ''}`
   return [`recent failures (${list.length}):`, ...list.map(one)].join('\n')
 }
+
+// What could not be read of flows/ (D-2): an unreadable directory or file is never shown as "no failures".
+export const formatReadProblems = (r) => [...(r.errors || []).map((e) => `failure records unreadable: ${e}`), ...(r.truncated ? ['(older failure records left out: only the most recent are shown)'] : [])]
 
 // Every file install will write or change, printed before it writes any (4.6).
 export function formatPlan(p) {
@@ -115,18 +120,23 @@ export async function runCollector(argv, { env = process.env, home = os.homedir(
     } catch (e) { err(`asight collector ${verb}: ${e.message}`); return 1 }
   }
   if (!['on', 'off', 'status'].includes(verb)) { err(USAGE); return 2 }
+  // No daemon answered — not running, no runtime dir, or stuck: what is on disk says why and what failed last (D-2)
+  const fromDisk = () => {
+    const r = readRecentFailures(collectorHome(path.join(home, '.asight')))
+    if (r.list.length) out(formatFailures(r.list))
+    for (const l of formatReadProblems(r)) out(l)
+  }
   let socketPath
-  try { socketPath = controlSocketPath({ env }) } catch (e) { err(e.message); return 2 }
+  try { socketPath = controlSocketPath({ env }) } catch (e) { err(e.message); fromDisk(); return 2 }
   const json = rest.includes('--json')
   let r
   try { r = await request({ socketPath, method: verb === 'status' ? 'GET' : 'POST', path: `/${verb}`, body: verb === 'on' ? {} : undefined }) } catch (e) {
     if (e.code === 'ENOENT' || e.code === 'ECONNREFUSED') {
       err('the collector daemon is not running: start it with "asight collector start" (or "systemctl --user start asight-collector")')
-      const failures = recentFailures(collectorHome(path.join(home, '.asight'))) // read from disk: why it is not running, what failed last
-      if (failures.length) out(formatFailures(failures))
+      fromDisk()
       return 3
     }
-    err(e.message); return 1
+    err(`the collector daemon did not answer: ${e.message}`); fromDisk(); return 1
   }
   out(json ? JSON.stringify(r, null, 2) : formatStatus(r))
   return verb === 'status' || r.actual === verb ? 0 : 1

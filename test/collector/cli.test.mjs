@@ -1,8 +1,11 @@
 // test/collector/cli.test.mjs — `asight collector` verbs over injected daemon / install modules, and the real bin.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { appendEvent } from '../../src/collector/core/events.mjs'
 import { fileURLToPath } from 'node:url'
 import { runCollector, runSetupHelper, formatStatus } from '../../src/collector/cli.mjs'
 
@@ -24,9 +27,30 @@ test('cli: on/off/status go to the control socket; exit 1 when the kernel did no
   assert.match(t.o[0], /2 decrypted/); assert.match(t.o[0], /untrusted: var-missing · 2 direct/)
   assert.match(t.o[0], /  12 opencode \(started by claude-code\) decrypt \(asight:marker via plugin marker\) · 0 direct\n    not captured \(not via the trust path\): models\.dev \(before-plugin\)/)
   assert.match(t.o[0], /  13 deepseek-dsh untrusted: dsh-node-too-old — this dsh runs on a Node older than 22\.19\.0 · 1 direct/)
-  t = io(); assert.equal(await runCollector(['status'], { env, request: async () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }) }, ...t }), 3)
-  t = io(); assert.equal(await runCollector(['status'], { env: {}, request, ...t }), 2)
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-cli-')) // never the operator's own ~/.asight
+  t = io(); assert.equal(await runCollector(['status'], { env, home, request: async () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }) }, ...t }), 3)
+  t = io(); assert.equal(await runCollector(['status'], { env: {}, home, request, ...t }), 2)
+  fs.rmSync(home, { recursive: true, force: true })
   t = io(); assert.equal(await runCollector(['bogus'], { env, request, ...t }), 2)
+})
+
+// D-2: whenever no daemon answers — none running, no runtime dir, or one that does not reply — status still reads
+// flows/ from disk, and an unreadable flows/ is said instead of looking like "no failures".
+test('cli: with no daemon answering (not running, no runtime dir, stuck) status reads the failure records from disk; an unreadable flows/ is said (D-2)', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-cli-'))
+  const dir = path.join(home, '.asight', 'collector')
+  try {
+    appendEvent(dir, { event: 'failure', where: 'start', code: 'EADDRINUSE', reason: 'the engine port is held by another process' })
+    const env = { XDG_RUNTIME_DIR: '/run/user/1000' }
+    let t = io(); assert.equal(await runCollector(['status'], { env: {}, home, ...t }), 2)
+    assert.match(t.e.join('\n'), /XDG_RUNTIME_DIR/); assert.match(t.o.join('\n'), /failure \(start\): the engine port is held by another process/)
+    t = io(); assert.equal(await runCollector(['status'], { env, home, request: async () => { throw Object.assign(new Error('timed out after 2000 ms'), { code: 'ETIMEDOUT' }) }, ...t }), 1)
+    assert.match(t.e.join('\n'), /did not answer: timed out/); assert.match(t.o.join('\n'), /failure \(start\)/)
+    fs.rmSync(path.join(dir, 'flows'), { recursive: true }); fs.writeFileSync(path.join(dir, 'flows'), 'x')
+    t = io(); assert.equal(await runCollector(['status'], { env, home, request: async () => { throw Object.assign(new Error('x'), { code: 'ECONNREFUSED' }) }, ...t }), 3)
+    assert.match(t.o.join('\n'), /failure records unreadable: .*flows: ENOTDIR/)
+    assert.match(formatStatus({ ...STATUS, failures: [], failures_read: { errors: ['/f: EACCES'], truncated: true }, events: { lost: 2 } }), /failure records unreadable: \/f: EACCES\n\(older failure records left out[^\n]*\nevent log: 2 line\(s\) could not be written/)
+  } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })
 
 test('cli: install / uninstall hand the descriptors, OS and process table from daemon.loadParts to install.mjs', async () => {
@@ -89,7 +113,8 @@ test('cli: setup-helper installs or removes through arch; a failure is exit 1', 
 })
 
 test('cli: the real bin dispatches `collector` (usage → 2) and `collector status` without a runtime dir (→ 2)', () => {
-  const env = { ...process.env }; delete env.XDG_RUNTIME_DIR
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-cli-bin-'))
+  const env = { ...process.env, HOME: home }; delete env.XDG_RUNTIME_DIR // status reads flows/ from disk: never the operator's own
   assert.equal(spawnSync(process.execPath, [BIN, 'collector', 'nope'], { env, encoding: 'utf8' }).status, 2)
   const r = spawnSync(process.execPath, [BIN, 'collector', 'status'], { env, encoding: 'utf8' })
   assert.equal(r.status, 2); assert.match(r.stderr, /XDG_RUNTIME_DIR is not set/)
@@ -97,4 +122,5 @@ test('cli: the real bin dispatches `collector` (usage → 2) and `collector stat
   const withFailures = formatStatus({ ...STATUS, failures: [{ ts: 'T1', event: 'agent-untrusted', pid: 11, agent: 'claude-code', code: 'config-after-start', reason: 'restart it' }, { ts: 'T2', event: 'failure', where: 'engine', reason: 'no original destination', suppressed: 3 }] })
   assert.match(withFailures, /recent failures \(2\):\n  T1 agent-untrusted pid 11 claude-code: config-after-start — restart it\n  T2 failure \(engine\): no original destination \(\+3 more\)$/, 'status prints the durable failure records (D38)')
   assert.ok(path.isAbsolute(BIN))
+  fs.rmSync(home, { recursive: true, force: true })
 })

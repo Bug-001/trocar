@@ -153,7 +153,7 @@ test('a failed periodic heartbeat is reported (heartbeat-error), never swallowed
   const got = once(c, 'heartbeat-error')
   const keepAlive = setTimeout(() => {}, 5000) // the client's beat timer is unref'd
   await c.attach() // its own first beat succeeds; the periodic ones fail
-  assert.deepEqual((await got)[0], { reason: 'config map write failed' })
+  assert.deepEqual((await got)[0], { code: 'heartbeat-failed', reason: 'config map write failed' })
   clearTimeout(keepAlive); await c.close()
 })
 
@@ -164,6 +164,7 @@ test('beats further apart than the kernel freshness window (a stalled event loop
   await c.attach()
   const until = Date.now() + 2100; while (Date.now() < until) { /* block the event loop past 2 s */ }
   assert.match((await got)[0].reason, /^no heartbeat for \d+ ms \(the kernel stops steering after 2000 ms\); connections in that window went direct$/)
+  assert.equal((await got)[0].code, 'heartbeat-gap')
   clearTimeout(keepAlive); await c.close()
 })
 

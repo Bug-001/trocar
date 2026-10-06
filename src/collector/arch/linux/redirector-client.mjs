@@ -146,8 +146,8 @@ export function createRedirectorClient({
       hbTimer = setInterval(() => {
         heartbeat().then(() => {
           const gap = Date.now() - lastOk; lastOk = Date.now()
-          if (gap > HEARTBEAT_STALE_MS) emitter.emit('heartbeat-error', { reason: `no heartbeat for ${gap} ms (the kernel stops steering after ${HEARTBEAT_STALE_MS} ms); connections in that window went direct` })
-        }, (e) => { if (!down) emitter.emit('heartbeat-error', { reason: String((e && e.message) || e) }) })
+          if (gap > HEARTBEAT_STALE_MS) emitter.emit('heartbeat-error', { code: 'heartbeat-gap', reason: `no heartbeat for ${gap} ms (the kernel stops steering after ${HEARTBEAT_STALE_MS} ms); connections in that window went direct` })
+        }, (e) => { if (!down) emitter.emit('heartbeat-error', { code: 'heartbeat-failed', reason: String((e && e.message) || e) }) })
       }, autoHeartbeatMs)
       if (hbTimer.unref) hbTimer.unref()
     }

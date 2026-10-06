@@ -66,7 +66,7 @@ test('D38 checkRecord: names outside the set, a failure without a reason; errno 
   assert.deepEqual(checkRecord({ event: 'failure', where: 'engine', code: 'lookup-miss', reason: 'r' }), [])
   assert.deepEqual(checkRecord({ event: 'failure', where: 'record', code: 'ENOSPC', reason: 'r' }), [])
   assert.deepEqual(checkRecord({ event: 'failure', where: 'engine', code: 'ERR_SSL_WRONG_VERSION_NUMBER', reason: 'r' }), [])
-  assert.deepEqual(checkRecord({ event: 'failure', where: 'engine' }), ['failure without a reason'])
+  assert.deepEqual(checkRecord({ event: 'failure', where: 'engine' }), ['failure without a reason', 'failure without where and code'])
   assert.deepEqual(checkRecord({ event: 'boom', where: 'mars', code: 'nope', reason: 'r' }), ['event "boom"', 'where "mars"', 'code "nope"'])
   assert.deepEqual(checkRecord({ flow_id: 'f', not_captured: 'shrug' }), ['not_captured "shrug"'])
   assert.ok(CODES.includes('lookup-miss') && CODES.includes('ca-invalid'))
