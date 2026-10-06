@@ -231,10 +231,14 @@ function ndjsonBytes(dir) {
  * either the intact original or the complete new set, never a half-written session (invariant 2).
  *
  * Idempotent: a dir already carrying `probes.ndjson`/`other.ndjson` or the `.split-v2` marker is skipped.
+ * A dir that cannot be migrated is left exactly as it was and named in `failures` with a closed reason (D38):
+ * bytes-not-conserved | keyed-elsewhere (under the table's keys, 3.4:21, some line belongs to another session;
+ * moving it would touch that session's files, so nothing moves) | error:<code>.
  */
 export async function resplitShards(outDir) {
   let entries = [];
-  try { entries = fs.readdirSync(outDir, { withFileTypes: true }); } catch { return { done: 0, skipped: 0, failed: 0 }; }
+  const failures = [];
+  try { entries = fs.readdirSync(outDir, { withFileTypes: true }); } catch { return { done: 0, skipped: 0, failed: 0, failures }; }
   let done = 0, skipped = 0, failed = 0;
   for (const e of entries) {
     if (!e.isDirectory() || SESSIONLESS_DIRS.has(e.name)) continue;
@@ -255,6 +259,17 @@ export async function resplitShards(outDir) {
       const after = ndjsonBytes(tmp);
       if (after !== before) { // byte-conservation guard: refuse to swap if a single byte went missing
         failed++;
+        failures.push({ dir: e.name, reason: 'bytes-not-conserved' });
+        fs.rmSync(tmp, { recursive: true, force: true });
+        continue;
+      }
+      // Only this dir's own streams and the session-less buckets are moved below; a line the table now keys to
+      // ANOTHER session would be deleted with tmp. Refuse before touching anything (invariant 2).
+      const elsewhere = fs.readdirSync(tmp, { withFileTypes: true })
+        .filter((x) => x.isDirectory() && x.name !== safeName(e.name) && x.name !== e.name && !SESSIONLESS_DIRS.has(x.name)).map((x) => x.name);
+      if (elsewhere.length) {
+        failed++;
+        failures.push({ dir: e.name, reason: 'keyed-elsewhere', sessions: elsewhere.sort() });
         fs.rmSync(tmp, { recursive: true, force: true });
         continue;
       }
@@ -269,15 +284,16 @@ export async function resplitShards(outDir) {
       // direct resplit leaves the archive layer consistent without a separate rebuildMeta pass.
       const pmeta = path.join(produced, 'meta.json');
       if (fs.existsSync(pmeta)) fs.renameSync(pmeta, path.join(sdir, 'meta.json'));
-      // Fold any stray control lines up into the shared control/ bucket (append, byte-exact).
-      const tmpControl = path.join(tmp, CONTROL_DIR);
-      if (fs.existsSync(tmpControl)) {
-        const dstControl = path.join(outDir, CONTROL_DIR);
-        fs.mkdirSync(dstControl, { recursive: true, mode: 0o700 });
-        for (const f of fs.readdirSync(tmpControl)) {
+      // Fold stray session-less lines up into the shared control/ and _unkeyed/ buckets (append, byte-exact).
+      for (const bucket of SESSIONLESS_DIRS) {
+        const tmpBucket = path.join(tmp, bucket);
+        if (!fs.existsSync(tmpBucket)) continue;
+        const dstBucket = path.join(outDir, bucket);
+        fs.mkdirSync(dstBucket, { recursive: true, mode: 0o700 });
+        for (const f of fs.readdirSync(tmpBucket)) {
           if (!f.endsWith('.ndjson')) continue;
-          const buf = fs.readFileSync(path.join(tmpControl, f));
-          const fd = fs.openSync(path.join(dstControl, f), 'a', 0o600);
+          const buf = fs.readFileSync(path.join(tmpBucket, f));
+          const fd = fs.openSync(path.join(dstBucket, f), 'a', 0o600);
           try { fs.writeSync(fd, buf); } finally { fs.closeSync(fd); }
         }
       }
@@ -285,14 +301,15 @@ export async function resplitShards(outDir) {
       fs.rmSync(tmp, { recursive: true, force: true });
       fs.rmSync(calls + '.premigrate', { force: true }); // new set is fully in place; drop the backup
       done++;
-    } catch {
+    } catch (err) {
       // Roll forward-safe: if the original was backed up but the swap failed, restore it.
       fs.rmSync(tmp, { recursive: true, force: true });
       if (!fs.existsSync(calls) && fs.existsSync(calls + '.premigrate')) fs.renameSync(calls + '.premigrate', calls);
       failed++;
+      failures.push({ dir: e.name, reason: `error:${(err && err.code) || 'unknown'}` });
     }
   }
-  return { done, skipped, failed };
+  return { done, skipped, failed, failures };
 }
 
 /**

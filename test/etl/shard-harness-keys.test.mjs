@@ -89,3 +89,36 @@ test('_unkeyed is not a session: rebuildMeta writes no meta.json for it, resplit
   assert.deepEqual(linesIn(path.join(out, UNKEYED_DIR, 'calls.ndjson')), before);
   assert.equal(fs.existsSync(path.join(out, UNKEYED_DIR, '.split-v2')), false);
 });
+
+// A pre-split shard dir (one mixed calls.ndjson) is source truth: resplit re-runs the sharder over it, and under the
+// table's keys a line may now belong to another session or to _unkeyed/. None may be lost (invariant 2).
+function legacyDir(t, name, lines) {
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-rsp-')); t.after(() => fs.rmSync(out, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(out, name));
+  fs.writeFileSync(path.join(out, name, 'calls.ndjson'), lines.join('\n') + '\n');
+  return out;
+}
+const L = (o) => JSON.stringify({ ts_request: '2026-07-20T00:00:00Z', req_body: '{}', ...o });
+
+test('resplit: header-less inference in a legacy dir moves to _unkeyed/, byte-exact', async (t) => {
+  const lines = [L({ id: 'nk', endpoint: '/v1/messages', req_headers: {}, is_llm_call: true }),
+    L({ id: 'tl', endpoint: '/api/event_logging/batch', req_headers: {}, is_llm_call: false })];
+  const out = legacyDir(t, '_unassigned', lines);
+  const r = await resplitShards(out);
+  assert.deepEqual([r.done, r.failed], [1, 0]);
+  assert.deepEqual(linesIn(path.join(out, UNKEYED_DIR, 'calls.ndjson')), [lines[0]]);
+  assert.deepEqual(allLines(out).sort(), lines.slice().sort(), 'every line, once');
+});
+
+test('resplit: a line that now keys to another session is never deleted — the dir is left as it was, and why is said', async (t) => {
+  const lines = [L({ id: 'cx', endpoint: '/v1/responses', req_headers: { 'session-id': 'CODEX1' }, is_llm_call: true }),
+    L({ id: 'tl', endpoint: '/api/event_logging/batch', req_headers: {}, is_llm_call: false })];
+  const out = legacyDir(t, '_unassigned', lines);
+  const before = fs.readFileSync(path.join(out, '_unassigned', 'calls.ndjson'));
+  const r = await resplitShards(out);
+  assert.deepEqual([r.done, r.failed], [0, 1]);
+  assert.deepEqual(r.failures, [{ dir: '_unassigned', reason: 'keyed-elsewhere', sessions: ['CODEX1'] }]);
+  assert.ok(fs.readFileSync(path.join(out, '_unassigned', 'calls.ndjson')).equals(before), 'the original is untouched');
+  assert.deepEqual(fs.readdirSync(out).sort(), ['_unassigned'], 'nothing half-moved, no temp dir left');
+  assert.deepEqual(fs.readdirSync(path.join(out, '_unassigned')), ['calls.ndjson']);
+});
