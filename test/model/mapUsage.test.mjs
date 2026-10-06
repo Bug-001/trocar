@@ -86,3 +86,22 @@ test('Chat usage: the board (canonUsageChat) and the ETL (mapUsage) read the sam
     assert.deepEqual([b.read, b.fresh, b.out], [e.cache_read, e.input_uncached, e.output], JSON.stringify(u));
   }
 });
+
+// F3 : on the Responses wire `input_uncached` = total − cache read − cache write, the Anthropic
+// canonical meaning (uncached + read + write = total). The ETL (mapUsage) and the board (canonUsage) read it alike.
+test('Responses usage: the board (canonUsage) and the ETL (mapUsage) read the same split, a relay-reported write counted out of "fresh" on both', async () => {
+  const { canonUsage } = await import('../../src/dissect/openai.mjs');
+  const shapes = [
+    { input_tokens: 1000, output_tokens: 40, input_tokens_details: { cached_tokens: 768 } },                              // OpenAI: no write counter
+    { input_tokens: 1000, output_tokens: 40, input_tokens_details: { cached_tokens: 700, cache_write_tokens: 200 } },     // a relay that reports writes
+    { input_tokens: 1000, output_tokens: 40, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 250 } },       // write only
+    { input_tokens: 10, output_tokens: 1, input_tokens_details: { cached_tokens: 6, cache_write_tokens: 6 } },            // over-reported: clamped at 0, both sides
+    { input_tokens: 500, output_tokens: 3 },                                                                              // no details
+  ];
+  for (const u of shapes) {
+    const b = canonUsage(u), e = mapUsage('openai-responses', u);
+    assert.deepEqual([b.read, b.create, b.fresh, b.out], [e.cache_read, e.cache_write ?? 0, e.input_uncached, e.output], JSON.stringify(u));
+  }
+  const w = canonUsage(shapes[1]);
+  assert.equal(w.fresh + w.read + w.create, 1000, 'uncached + read + write = total');
+});

@@ -360,14 +360,16 @@ export function reqCountsFor(shape, req) {
 }
 
 // ── usage: OpenAI Responses usage → the board's NEUTRAL canonical {read, create, fresh, out} ─────
-// OpenAI input_tokens is TOTAL input (incl cached); cached_tokens is the portion served from cache.
+// OpenAI input_tokens is TOTAL input (incl cached); cached_tokens is the portion served from cache. `fresh` is what is
+// neither read nor written: total − read − write, the ETL's input_uncached (3.2 table, F3) and the
+// Anthropic meaning (uncached + read + write = total). Same clamp at 0 as src/model/schema.mjs::mapResponses.
 export function canonUsage(usage = {}) {
   const u = usage || {};
   const d = u.input_tokens_details || {};
   const read = d.cached_tokens || 0;
   const create = d.cache_write_tokens || 0;
   const input = u.input_tokens || 0;
-  return { read, create, fresh: Math.max(0, input - read), out: u.output_tokens || 0 };
+  return { read, create, fresh: Math.max(0, input - read - create), out: u.output_tokens || 0 };
 }
 
 // ── normalize the SSE response → { model, usage, text, tool_calls, stop_reason } from resp.raw_sse.
