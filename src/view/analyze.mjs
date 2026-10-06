@@ -501,8 +501,11 @@ export function analyze(records, opts = {}) {
       // drop signal) vs. a bare message-count collapse (a number going down — the weaker guess).
       const h = hintsOf(step.rec)
       const marker = h.compactionMarker === true
-      const verdict = compactionVerdict(prevInfo, { hint: h.compaction === true, marker, msgCount: msgs.length, preamble: hasPreamble }, boardCompactionDrop)
-      prevInfo = { msgCount: msgs.length, marker }
+      // 3.4: a request stored in part (the collector's req_* labels, the ETL's context_state 'partial') shows what arrived,
+      // not the context the model saw: its message count is no observation, so no verdict and no new baseline
+      const verdict = step.reqIncomplete ? { compaction: false }
+        : compactionVerdict(prevInfo, { hint: h.compaction === true, marker, msgCount: msgs.length, preamble: hasPreamble }, boardCompactionDrop)
+      if (!step.reqIncomplete) prevInfo = { msgCount: msgs.length, marker }
       let newMsgs
       if (verdict.compaction) {
         Object.assign(step, compactionMeta(verdict, hasPreamble))

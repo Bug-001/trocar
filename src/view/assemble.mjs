@@ -174,7 +174,10 @@ function assembleFlatLane(records, d, opts = {}) {
     // a call the dissector knows ran but whose request was not stored (ctx.unrenderable says why): no context to
     // show either, but no failure — its reply and usage are real
     const unstored = ctx && ctx.unrenderable ? String(ctx.unrenderable) : null;
-    const noContext = () => unparsed || !!unstored;
+    // 3.4: a call whose context is unknown (no stored request, a body that did not parse, a partial context — the ETL's
+    // context_state, a continuation with no predecessor in the capture included) has no observed message count: it
+    // gets no compaction verdict and is not the lane's baseline for the next call
+    const noContext = () => unparsed || !!unstored || wire.contextState === 'partial';
     if (ctx) req = ctx.req;
     else {
       try { req = JSON.parse(r.req_body); } catch { req = null; }

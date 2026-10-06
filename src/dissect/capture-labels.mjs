@@ -105,7 +105,18 @@ export function respIncompleteOf(rec) {
 // 3.2:52 names missing predecessors / unrecoverable server-inherited parts only; this one function is the
 // whole default, so a different answer from the user is a one-line change. → 'partial' | null.
 export function contextStateOfRequest(rec) {
-  return reqIncompleteOf(rec) ? 'partial' : null;
+  return reqIncompleteOf(rec) || bodyUnparsedOf(rec) ? 'partial' : null;
+}
+
+// A request body that is stored as text and does not parse to an object (a legacy capture or a corrupt one: with no
+// req_truncated / req_partial label, truncation and corruption cannot be told apart) has no context to read, so no
+// message count either (3.4: no compaction verdict from an unobserved count). The same test as the board's own
+// "unparsed" (assemble.mjs, analyze.mjs::isUnparsed) so the two sides cannot disagree. null / absent body: no body
+// at all (a WebSocket call whose request was not stored, a v0 envelope), not this case.
+export function bodyUnparsedOf(rec) {
+  const b = rec && rec.req_body;
+  if (typeof b !== 'string') return false;
+  try { const v = JSON.parse(b); return !(v && typeof v === 'object'); } catch { return true; }
 }
 
 // The other incompleteness labels (4.6 §记录 「不完整的标注,各说一件事」), one per thing that happened, from

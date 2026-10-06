@@ -295,8 +295,12 @@ export async function runEtl(records, connection, opts = {}) {
 
       const laneKey = sid == null ? null : sid + '\x00' + call.lane;
       const curBlocks = adapter.parseBlocks(record, st);
-      // an adapter may count messages itself (a chained wire's record carries only a delta)
-      const msgCount = typeof adapter.messageCount === 'function' ? adapter.messageCount(record, st) : messageCount(norm);
+      // an adapter may count messages itself (a chained wire's record carries only a delta). A call whose context is
+      // not known has no observed count (3.4: a partial context — a continuation with no predecessor in the capture,
+      // a request that was not stored or stored in part, a body that did not parse): null = no compaction verdict
+      // from it and it is not the lane's baseline for the next call, the rule the board follows too.
+      const counted = typeof adapter.messageCount === 'function' ? adapter.messageCount(record, st) : messageCount(norm);
+      const msgCount = call.context_state === 'partial' ? null : counted;
 
       // ── watermark skip: already consumed for this session. Still advance predecessor
       //    state (so the first NEW in-lane call gets the correct N-1), but write nothing.
