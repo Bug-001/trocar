@@ -755,3 +755,17 @@ test('install: a failure that cannot be recorded keeps its own message and says 
     assert.ok(r.plan.notes.some((n) => /^not recorded \(.+\): claude-code: a NODE_EXTRA_CA_CERTS exported only in a shell/.test(n)), JSON.stringify(r.plan.notes))
   } finally { b.done() }
 })
+
+// ---- D39③ / 1.6 R3 (Task 3): a manifest this build cannot read ---------------------------------------------------------------
+test('a manifest of a version this build does not read stops install and uninstall before anything is touched (R3)', async () => {
+  const b = box()
+  try {
+    fs.mkdirSync(path.join(b.home, '.claude')); fs.writeFileSync(settingsOf(b), '{"model":"x"}\n')
+    fs.mkdirSync(b.dir, { recursive: true }); fs.writeFileSync(path.join(b.dir, 'install-manifest.json'), JSON.stringify({ version: 3, complete: true, entries: [{ path: settingsOf(b), kind: 'something-new' }], files: [] }))
+    const snap = () => [fs.readFileSync(settingsOf(b)), fs.readFileSync(path.join(b.dir, 'install-manifest.json'))]
+    const first = snap()
+    await assert.rejects(installCollector(base(b)), /version 3/)
+    await assert.rejects(uninstallCollector({ home: b.home, env: {}, stop: async () => { throw new Error('the daemon must not be stopped for a manifest this build cannot read') } }), /version 3/)
+    assert.deepEqual(snap(), first)
+  } finally { b.done() }
+})

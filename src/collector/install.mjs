@@ -42,6 +42,12 @@ export async function freeEnginePort({ tries = 20, listen = bindOnce } = {}) {
   throw new Error(`no port was free on both 127.0.0.1 and [::1] in ${tries} tries`)
 }
 
+// 1.6 R3: a manifest of a version this build does not read is never acted on — "already installed", or entries undone by guessing what its
+// fields mean. Plain Error: the caller records it as install-error / uninstall-error.
+function refuseUnsupported(dir, m) {
+  if (m && m.unsupported) throw new Error(`the install manifest ${manifestPath(dir)} is version ${JSON.stringify(m.version)}, which this build does not read (it reads 1 and 2); nothing was changed. Use the asight that wrote it, or run "asight off", which leaves what it does not know`)
+}
+
 function refuseRoot(verb) {
   if (typeof process.getuid === 'function' && process.getuid() === 0) throw new Error(`asight collector ${verb}: run it as the user whose agents you capture, not as root (D36)`)
 }
@@ -99,6 +105,7 @@ export function daemonEnv(env, dir) {
 // --no-unit); links = what enabling it creates.
 async function install(dir, { home, env = process.env, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), freePort = freeEnginePort, onPlan = () => {}, osRootsFile = null, roots = null, unit = null, run = null }) {
   const prior = readManifest(dir)
+  refuseUnsupported(dir, prior)
   if (prior && prior.complete) {
     // installed — but "already installed" only when its CA is usable (D-4): a CA that cannot be read or used is said
     const c = readCa({ dir: path.join(dir, 'ca') })
@@ -271,6 +278,7 @@ async function uninstall(dir, { env = process.env, purgeData = false, scan = asy
   const failed = [] // failure events, written after any purge so they survive it
   const noted = [] // uninstall-note events (kept captures only: --purge-data asked for flows/ to go)
   const m = readManifest(dir)
+  refuseUnsupported(dir, m) // before the daemon is stopped or anything is undone
   const unitFile = m && m.files.find((f) => f.role === 'unit')
   report.daemon = await (stop || (() => stopDaemon({ socketPath: runtime && path.join(runtime, 'collector.sock'), lockFile: path.join(dir, 'lock'), stopUnit: unitFile && unit ? () => unit.stop() : null })))()
   const rm = (p) => { sweepTemps(p); if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); report.removed.push(p) } }

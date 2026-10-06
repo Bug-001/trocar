@@ -8,7 +8,7 @@
 import nodeFs from 'node:fs'
 import crypto, { X509Certificate } from 'node:crypto'
 import { writeDurable, sha256 } from '../../../off/fsutil.mjs'
-import { saveManifest } from './journal.mjs'
+import { saveManifest } from '../../../off/manifest.mjs'
 
 const BLOCK = /-----BEGIN ([A-Z0-9 ]+)-----[\s\S]*?-----END \1-----/g
 // Every PEM block of a file, in order, from its BEGIN line: a block whose END line does not come before the next BEGIN (a

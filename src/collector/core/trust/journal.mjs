@@ -17,22 +17,11 @@ import path from 'node:path'
 import { setKey } from '../../../off/json-text.mjs'
 import { dotenvBlock, insertLine, BLOCK_BEGIN } from '../../../off/text-edit.mjs'
 import { sha256, readOrNull, writeDurable, missingDirs, editTarget } from '../../../off/fsutil.mjs'
+import { saveManifest, undoByHand } from '../../../off/manifest.mjs'
 
 export { sha256, writeDurable, sweepTemps, missingDirs, removeEmptyDirs, editTarget } from '../../../off/fsutil.mjs'
 export { undoEntry, removeOwnedFile, describeEntry } from '../../../off/journal.mjs'
-
-export const MANIFEST = 'install-manifest.json'
-export const manifestPath = (dir) => path.join(dir, MANIFEST)
-
-export const newManifest = (now = new Date()) => ({ version: 1, created_at: now.toISOString(), complete: false, engine_port: null, planned: [], dirs: [], files: [], entries: [] })
-export function readManifest(dir, fs = nodeFs) {
-  const b = readOrNull(fs, manifestPath(dir))
-  return b == null ? null : JSON.parse(b.toString('utf8'))
-}
-export function saveManifest(dir, m, fs = nodeFs) {
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
-  writeDurable(manifestPath(dir), JSON.stringify(m, null, 2) + '\n', 0o600, fs)
-}
+export { MANIFEST, manifestPath, newManifest, readManifest, saveManifest } from '../../../off/manifest.mjs'
 
 // A file asight owns (a trust file of certificate blocks, a trust plugin, a launch shim): listed before it is written,
 // with the directories its write creates. `sources` names the user files a trust file carries certificates from
@@ -41,7 +30,9 @@ export function saveManifest(dir, m, fs = nodeFs) {
 export function writeOwnedFile({ dir, manifest, harness = null, role, file, data, sources = null, mode = 0o600, exclusive = false, extra = {}, now = new Date(), fs = nodeFs }) {
   if (exclusive && fs.existsSync(file)) throw new Error(`${file} already exists; asight will not write over it`)
   const created = missingDirs(path.dirname(file), fs)
-  manifest.files.push({ path: file, role, harness, sha256: sha256(Buffer.from(data)), mode, created_dirs: created, installed_at: now.toISOString(), ...(sources ? { sources } : {}), ...extra })
+  const item = { kind: 'owned-file', path: file, role, harness, sha256: sha256(Buffer.from(data)), mode, created_dirs: created, installed_at: now.toISOString(), ...(sources ? { sources } : {}), ...extra }
+  item.undo_by_hand = undoByHand(item)
+  manifest.files.push(item)
   saveManifest(dir, manifest, fs)
   for (const d of created) fs.mkdirSync(d, { mode: 0o700 })
   writeDurable(file, data, mode, fs)
@@ -64,11 +55,12 @@ export function applyJsonKey({ dir, manifest, harness, file, keys, value, now = 
   const res = setKey(before == null ? null : before.toString('utf8'), keys, value) // parse-checked before any write
   if (res.prior === value) return null
   const entry = {
-    harness, path: file, ...(real !== file ? { real_path: real } : {}), keys, value,
+    kind: 'json-key', harness, path: file, ...(real !== file ? { real_path: real } : {}), keys, value,
     existed_before: before != null, mode: before != null ? fs.statSync(real).mode & 0o777 : 0o600,
     pre_sha256: sha256(before), post_sha256: null, ops: res.ops, prior_value: res.prior,
     existing_depth: res.existingDepth, created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(),
   }
+  entry.undo_by_hand = undoByHand(entry)
   manifest.entries.push(entry)
   saveManifest(dir, manifest, fs) // the intent is durable before the user's file changes
   for (const d of entry.created_dirs) fs.mkdirSync(d, { mode: 0o700 })
@@ -108,6 +100,7 @@ export function applyTextEntry({ dir, manifest, harness, file, edit, now = new D
     pre_sha256: sha256(before), post_sha256: null, ops: res.ops, prior_value: res.prior,
     created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(),
   }
+  entry.undo_by_hand = undoByHand(entry)
   manifest.entries.push(entry)
   saveManifest(dir, manifest, fs) // the intent is durable before the user's file changes
   for (const d of entry.created_dirs) fs.mkdirSync(d, { mode: 0o700 })
