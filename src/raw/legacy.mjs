@@ -17,7 +17,7 @@
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { sealUnchecked, SealRefused, oldRootReason, cleanDeadLocks, acquireLock, releaseLock, realish } from './seal.mjs';
+import { sealUnchecked, SealRefused, oldRootReason, cleanDeadLocks, cleanEmptyClaims, acquireLock, releaseLock, realish } from './seal.mjs';
 import { asightHome } from '../paths.mjs';
 import { verifyAgainst, copyRelation } from './verify.mjs';
 import { sealedSources, sealedSourcesError, isSealedPath, streamOfSealed } from './discover.mjs';
@@ -297,19 +297,26 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
   // byte-for-byte check against the copy it already has. --delete-original never seals: a file
   // without a verified copy of its own is refused, "seal first", so every deletion follows a seal the
   // operator ran and checked (review 3 F6). The dry run lists which case each file is.
-  const plan = [];
+  const plan = [], claims = [];
   for (const f of quiet) {
     const pids = holders.get(f);
     if (pids && pids.length) { refused.push({ file: f, reason: `held open by pid ${pids.join(', ')} — it may still be written` }); continue; }
-    const p = planFile(fs, f, { deleteOriginal });
+    // empty segments an interrupted seal claimed: removed first (listed in a dry run), so that they do
+    // not stand in for an unreadable copy of this file (review 3 confirm, row 7)
+    const c = cleanEmptyClaims(fs, path.dirname(f), path.basename(f), journal, { dryRun });
+    claims.push(...c);
+    const p = planFile(fs, f, { deleteOriginal, ignore: new Set(c.filter((x) => x.outcome !== 'failed').map((x) => x.file)) });
     if (p.refused) refused.push({ file: f, reason: p.refused }); else plan.push({ file: f, ...p });
   }
   for (const r of refused) appendJournal({ op: 'seal-legacy', outcome: 'refused', file: r.file, reason: r.reason }, { journal });
   for (const r of skipped) appendJournal({ op: 'seal-legacy', outcome: 'skipped', file: r.file, reason: r.reason }, { journal });
   if (Object.keys(known).length) appendJournal({ op: 'seal-legacy', outcome: 'skipped', target, reason: 'not a record stream', counts: known }, { journal });
   // locks of seals that died here (review 3 F10); never inside the old root
-  const locks = dirs.filter((d) => !oldRootReason(d, { fs })).flatMap((d) => cleanDeadLocks(d, { fs, journal, dryRun }));
-  if (dryRun) return { target, dryRun: true, plan, wouldSeal: plan.filter((x) => x.action === 'seal').map((x) => x.file), refused, locks, skipped, known };
+  // what this run does with each shard, for the dead-lock message (never "sealed again" for a file it deletes)
+  const fates = new Map([...plan.map((x) => [x.file, x.action === 'seal' ? 'is still there and is sealed again'
+    : 'is still there — it is checked byte for byte against its sealed copy, then deleted']), ...refused.map((x) => [x.file, 'is still there and is refused (see its own reason)'])]);
+  const locks = dirs.filter((d) => !oldRootReason(d, { fs })).flatMap((d) => cleanDeadLocks(d, { fs, journal, dryRun, fate: (s) => fates.get(s) || 'is still there' }));
+  if (dryRun) return { target, dryRun: true, plan, wouldSeal: plan.filter((x) => x.action === 'seal').map((x) => x.file), refused, locks, claims, skipped, known };
 
   const sealed = [], deletedOnly = [], failed = [];
   // No deletion without a durable record of it (review 3 confirm, row 3): a journal that cannot be
@@ -338,25 +345,26 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
     else if (r.refused) refused.push({ file: f, reason: r.refused });
     else failed.push({ file: f, reason: r.error, originalKept: !r.deleted, ...(r.deleted ? { state: r.state } : {}) });
   }
-  return { target, sealed, deletedOnly, refused, failed, locks, skipped, known };
+  return { target, sealed, deletedOnly, refused, failed, locks, claims, skipped, known };
 }
 
 // What the legacy entry does with one file nothing writes or holds, by its sealed copies beside it —
 // the deleter's own test, which `asight raw compare` asks too, so that what compare calls "would be
 // deleted" is exactly what --delete-original deletes (review 3 confirm, row 1).
 // → { action: 'seal' } | { action: 'delete', copies } | { refused: reason }
-export function planFile(fs, f, { deleteOriginal = false } = {}) {
+// `ignore`: segments to pass over — empty claims the run removes first (row 7).
+export function planFile(fs, f, { deleteOriginal = false, ignore = null } = {}) {
   // an original that cannot be read can be neither checked nor sealed (review 3 confirm, row 4)
-  try { fs.accessSync(f, nodeFs.constants.R_OK); return planCopies(fs, f, { deleteOriginal }); }
+  try { fs.accessSync(f, nodeFs.constants.R_OK); return planCopies(fs, f, { deleteOriginal, ignore }); }
   catch (e) { return { refused: `could not be read (${e.code || e.message}) — nothing sealed or deleted`, unreadable: true }; }
 }
-function planCopies(fs, f, { deleteOriginal }) {
+function planCopies(fs, f, { deleteOriginal, ignore }) {
   // A sealed copy of an EARLIER version of this file (it grew since; the copy's bytes are still its
   // first bytes): sealing again would leave two copies of those lines, and deleting would trust a
   // copy that is not all of this file. Refuse. A copy of ANOTHER file that stood at this path (the
   // fresh calls.ndjson `asight shard --watch` writes after a deletion) is no reason to: it is the
   // only copy of its records, left alone, and this file is sealed as the next segment (review 3 F3).
-  const copies = sameStreamCopies(fs, f);
+  const copies = sameStreamCopies(fs, f).filter((c) => !ignore || !ignore.has(c.file));
   // a segment of this stream that cannot be read may be this file's copy, or not: that cannot be
   // told, so neither a seal nor a delete goes on beside it — named, never "no sealed copy yet"
   // (review 3 confirm, row 5)
@@ -433,7 +441,11 @@ export function sameStreamCopies(fs, f) {
   return fs.readdirSync(dir).filter((n) => isSealedPath(n) && streamOfSealed(n) === name).map((n) => path.join(dir, n))
     .map((p) => {
       const s = sealedSources(p, { fs });
-      if (!s) return { file: p, rel: 'unreadable', why: sealedSourcesError(p) || 'its index could not be read' };
+      if (!s) {
+        // an empty one the run did not remove first is younger than a minute: a seal may be filling it
+        let empty = false; try { empty = fs.statSync(p).size === 0; } catch {}
+        return { file: p, rel: 'unreadable', why: empty ? 'empty — a segment name a seal claimed less than a minute ago and may still be filling; run again in a minute (an older empty one is removed first)' : sealedSourcesError(p) || 'its index could not be read' };
+      }
       return s.length === 1 && s[0].name === name ? { file: p, length: s[0].length, ...copyRelation(s[0], f, { fs }) } : null;
     })
     .filter(Boolean);

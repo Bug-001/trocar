@@ -209,3 +209,52 @@ test('row 6: an original rewritten in place between its byte-for-byte check and 
     assert.match(res.refused.find((r) => r.file === f).reason, /changed after the quiet window/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+// ── row 7: an empty claimed segment does not block the delete-only path ─────────────────────────────
+test('row 7: an old empty claim beside a sealed original is removed (journalled) by the delete run, said by its dry run, set aside by compare; a young one refuses by name', async () => {
+  const { compareTree } = await import('../../src/query/raw-compare.mjs');
+  const { root, f, journal } = sealedTree();
+  try {
+    await sealLegacy(f, { ...NONE, journal });
+    const claim = f + '.0002.sealed', young = f + '.0003.sealed';
+    fs.writeFileSync(claim, ''); const t = new Date(Date.now() - 120000); fs.utimesSync(claim, t, t);
+    // the dry run: it would remove the claim, and delete the original against 0001
+    const dry = await sealLegacy(f, { ...NONE, journal: null, deleteOriginal: true, dryRun: true });
+    assert.deepEqual(dry.plan.map((x) => [x.file, x.action]), [[f, 'delete']], JSON.stringify(dry.refused));
+    assert.deepEqual(dry.claims.map((x) => [x.file, x.outcome]), [[claim, 'would-remove']]);
+    assert.ok(fs.existsSync(claim), 'the dry run removed the claim');
+    const home = path.join(root, 'home');
+    const out = spawnSync(process.execPath, [CLI, 'raw', 'seal', '--legacy', f, '--delete-original', '--quiet', '0', '--dry-run'], { encoding: 'utf8', env: { ...process.env, HOME: home, ASIGHT_SOURCE: '' } });
+    assert.equal(out.status, 0, out.stdout + out.stderr);
+    assert.ok(out.stdout.includes(`would remove ${claim}: an empty segment`), out.stdout);
+    // compare: the claim holds no records and is removed first — not a difference
+    const cmp = await compareTree(path.join(root, 'sessions'));
+    assert.equal(cmp.ok, true, JSON.stringify(cmp.groups.filter((g) => g.status !== 'same')));
+    assert.ok(cmp.groups.some((g) => g.notes.some((n) => n.includes(path.basename(claim)))), 'compare does not say it set the claim aside');
+    // a young claim (a seal may still be filling it) refuses the file, by name
+    fs.writeFileSync(young, '');
+    let res = await sealLegacy(f, { ...NONE, journal, deleteOriginal: true });
+    assert.match(res.refused.find((r) => r.file === f).reason, /calls\.ndjson\.0003\.sealed could not be read \(empty/);
+    assert.ok(fs.existsSync(f));
+    fs.rmSync(young);
+    // the real run
+    res = await sealLegacy(f, { ...NONE, journal, deleteOriginal: true });
+    assert.deepEqual(res.deletedOnly.map((x) => x.file), [f], JSON.stringify(res.refused));
+    assert.ok(!fs.existsSync(claim), 'the claim is still there');
+    assert.ok(readJournal({ journal }).some((e) => e.outcome === 'claim-removed' && e.file === claim));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('row 7 (cosmetic): a dead lock beside an original the run deletes does not say it "will be sealed again"', async () => {
+  const { root, f, journal } = sealedTree();
+  try {
+    await sealLegacy(f, { ...NONE, journal });
+    fs.writeFileSync(f + '.sealing', String(spawnSync(process.execPath, ['-e', '']).pid));
+    const res = await sealLegacy(f, { ...NONE, journal, deleteOriginal: true });
+    assert.equal(res.deletedOnly.length, 1);
+    const lock = res.locks.find((x) => x.file === f + '.sealing');
+    assert.ok(lock, 'the dead lock is not reported');
+    assert.doesNotMatch(lock.reason, /sealed again/);
+    assert.match(lock.reason, /checked byte for byte .* then deleted/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

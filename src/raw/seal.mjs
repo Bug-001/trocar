@@ -327,7 +327,8 @@ export function releaseLock(fs, p) { try { fs.unlinkSync(p); } catch {} }
 // shard that is gone, and nothing would ever take it over (it names no file anyone seals again).
 // Removed at the next seal in that directory — `sealCore` for its shard's dir, the legacy entry for
 // every dir it seals — and journalled (review 3 F10). A live lock is in use and left alone.
-export function cleanDeadLocks(dir, { fs = nodeFs, journal = null, dryRun = false } = {}) {
+// `fate(shard)`: what this run does with a shard that is still there (the legacy entry knows its plan).
+export function cleanDeadLocks(dir, { fs = nodeFs, journal = null, dryRun = false, fate = () => 'is still there' } = {}) {
   let names; try { names = fs.readdirSync(dir); } catch { return []; }
   const out = [];
   for (const n of names.filter((x) => x.endsWith(LOCK_EXT)).sort()) {
@@ -335,7 +336,7 @@ export function cleanDeadLocks(dir, { fs = nodeFs, journal = null, dryRun = fals
     let h; try { h = lockHolder(fs, p); } catch { continue; }
     if (!h || h.alive) continue;
     const entry = { op: 'lock', outcome: dryRun ? 'would-remove' : 'removed', file: p, pid: h.pid,
-      reason: `the lock of an interrupted seal (pid ${h.pid ?? 'unknown'} is not running); its shard ${fs.existsSync(shard) ? 'is still there and will be sealed again' : 'is gone (that seal had already deleted it)'}` };
+      reason: `the lock of an interrupted seal (pid ${h.pid ?? 'unknown'} is not running); its shard ${fs.existsSync(shard) ? fate(shard) : 'is gone (that seal had already deleted it)'}` };
     if (!dryRun) {
       try { fs.unlinkSync(p); } catch (e) { if (e.code === 'ENOENT') continue; Object.assign(entry, { outcome: 'failed', reason: `${entry.reason} — could not remove it (${e.message})` }); }
       appendJournal(entry, { journal, fs });
@@ -361,16 +362,28 @@ function cleanStaleTemps(fs, dir, name, ours, journal) {
 // An EMPTY segment of this stream is a name claimed (no-hard-link fallback in publish) by a seal that
 // died before its rename: no records, but every reader would report it forever. Removed once it is a
 // minute old — a claim is filled microseconds after it is made — and journalled (second review, low).
-function cleanEmptyClaims(fs, dir, name, journal) {
-  const re = segRe(name);
-  for (const f of fs.readdirSync(dir)) {
+// Empty segments of `name` in `dir` a seal claimed and never filled, a minute old or more (a younger
+// one may be in use). Removed and journalled; with dryRun only listed. Also run by the legacy entry
+// before it plans, so that the delete-only path is not blocked by one (review 3 confirm, row 7).
+// → [{ file, outcome: removed|would-remove|failed, reason }]
+export function cleanEmptyClaims(fs, dir, name, journal, { dryRun = false } = {}) {
+  const re = segRe(name), out = [];
+  let names; try { names = fs.readdirSync(dir); } catch { return out; }
+  for (const f of names) {
     if (!re.test(f)) continue;
     const p = path.join(dir, f);
     let st; try { st = fs.statSync(p); } catch { continue; }
     if (st.size !== 0 || Date.now() - st.mtimeMs < 60000) continue;
-    try { fs.unlinkSync(p); appendJournal({ op: 'seal', outcome: 'claim-removed', file: p, reason: 'an empty segment name an interrupted seal claimed and never filled (no records)' }, { journal, fs }); }
-    catch (e) { if (e.code !== 'ENOENT') appendJournal({ op: 'seal', outcome: 'note', file: p, reason: `an empty claimed segment could not be removed (${e.message})` }, { journal, fs }); }
+    const reason = 'an empty segment name an interrupted seal claimed and never filled (no records)';
+    if (dryRun) { out.push({ file: p, outcome: 'would-remove', reason }); continue; }
+    try { fs.unlinkSync(p); appendJournal({ op: 'seal', outcome: 'claim-removed', file: p, reason }, { journal, fs }); out.push({ file: p, outcome: 'removed', reason }); }
+    catch (e) {
+      if (e.code === 'ENOENT') continue;
+      appendJournal({ op: 'seal', outcome: 'note', file: p, reason: `an empty claimed segment could not be removed (${e.message})` }, { journal, fs });
+      out.push({ file: p, outcome: 'failed', reason: `${reason} — could not be removed (${e.message})` });
+    }
   }
+  return out;
 }
 function pidAlive(pid) {
   if (!(pid > 0)) return false;

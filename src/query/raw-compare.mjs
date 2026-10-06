@@ -34,7 +34,7 @@ import { forEachLine } from '../etl/ingest.mjs';
 import { buildResolver } from './source.mjs';
 import { appendJournal, defaultJournalPath } from '../raw/journal.mjs';
 import { legacyTargets, planFile } from '../raw/legacy.mjs';
-import { oldRootReason } from '../raw/seal.mjs';
+import { oldRootReason, cleanEmptyClaims } from '../raw/seal.mjs';
 
 const SESSION_STREAMS = ['calls.ndjson', 'probes.ndjson', 'other.ndjson'];   // src/server.mjs, the board's order
 const CONTROL = 'control';
@@ -113,7 +113,10 @@ export async function compareTree(root, { fs = nodeFs, onGroup = () => {}, resol
   if (!fs.statSync(root).isDirectory()) throw new Error(`asight raw compare takes a directory (${root} is not one)`);
   const t = legacyTargets(root, { fs });
   const candidates = t.files.filter((f) => !oldRootReason(f, { fs }));
-  const plans = new Map(candidates.map((f) => [f, planFile(fs, f, { deleteOriginal: true })]));
+  // empty claims the delete run removes before it plans (row 7): no records, set aside on both sides
+  const claims = candidates.flatMap((f) => cleanEmptyClaims(fs, path.dirname(f), path.basename(f), null, { dryRun: true }));
+  const ignore = new Set(claims.map((c) => c.file));
+  const plans = new Map(candidates.map((f) => [f, planFile(fs, f, { deleteOriginal: true, ignore })]));
   const willDelete = candidates.filter((f) => plans.get(f).action === 'delete');
   // a directory the walk could not read: its originals cannot be compared — a difference, by name (row 4)
   const unreadableDirs = t.refused.filter((r) => r.unreadable).map((r) => ({ group: path.relative(root, r.file) || '.', kind: 'unreadable', dir: r.file, error: r.reason }));
@@ -122,12 +125,14 @@ export async function compareTree(root, { fs = nodeFs, onGroup = () => {}, resol
     const mine = g.originals.map((n) => path.join(g.dir, n)).filter((f) => plans.has(f) && (!g.stream || streamOf(f) === g.stream));
     const deletable = mine.filter((f) => plans.get(f).action === 'delete');
     // what the readers do NOW, for the notes: a pair they read twice (a touched original) is said
-    const now = inputs(g, fs);
+    const now = inputs(g, fs, ignore);
+    const claimNotes = claims.filter((c) => path.dirname(c.file) === g.dir && (!g.stream || streamOf(c.file) === g.stream))
+      .map((c) => `${path.basename(c.file)}: ${c.reason} — --delete-original removes it first; not read on either side`);
     // an original that cannot be read: what the readers show now cannot be known — a difference (row 4)
     const bad = mine.filter((f) => plans.get(f).unreadable);
     if (bad.length) return { ...g, deletable: [], uncovered: mine, why: Object.fromEntries(mine.map((f) => [f, plans.get(f).refused || 'not compared: another original of this group could not be read'])), status: 'diff', diff: { what: `unreadable — ${bad.map((f) => `${f} ${plans.get(f).refused}`).join('; ')}` } };
     return { ...g, deletable, copies: deletable.flatMap((f) => plans.get(f).copies), uncovered: mine.filter((f) => !deletable.includes(f)),
-      why: Object.fromEntries(mine.filter((f) => !deletable.includes(f)).map((f) => [f, plans.get(f).refused])), notes: now.mismatched.map((m) => `now: ${path.basename(m.sealed)}: ${m.why}`) };
+      why: Object.fromEntries(mine.filter((f) => !deletable.includes(f)).map((f) => [f, plans.get(f).refused])), notes: [...claimNotes, ...now.mismatched.map((m) => `now: ${path.basename(m.sealed)}: ${m.why}`)] };
   });
   // a file --delete-original would delete that no group compares: never passed over (row 1)
   const placed = new Set(groups.flatMap((g) => g.deletable || []));
@@ -136,7 +141,7 @@ export async function compareTree(root, { fs = nodeFs, onGroup = () => {}, resol
     diff: { what: `${orphans.length} original(s) --delete-original would delete are in no compared group: ${orphans.join(', ')}` } });
   const all = new Set(groups.flatMap((g) => g.deletable || [])), copies = new Set(groups.flatMap((g) => g.copies || []));
   let rb = null, ra = null;
-  if (all.size) { rb = await resolverOf(root, { exclude: copies }); ra = await resolverOf(root, { exclude: all }); }
+  if (all.size) { rb = await resolverOf(root, { exclude: new Set([...copies, ...ignore]) }); ra = await resolverOf(root, { exclude: new Set([...all, ...ignore]) }); }
   const out = [];
   let compared = 0;
   try {
@@ -146,8 +151,8 @@ export async function compareTree(root, { fs = nodeFs, onGroup = () => {}, resol
       if (!r.status) {
         if (!r.deletable.length) r.status = r.uncovered.length ? 'not-covered' : 'sealed-only';
         else {
-          const b = await readSide(inputs(g, fs, new Set(g.copies)).files);
-          const a = await readSide(inputs(g, fs, new Set(r.deletable)).files);
+          const b = await readSide(inputs(g, fs, new Set([...g.copies, ...ignore])).files);
+          const a = await readSide(inputs(g, fs, new Set([...r.deletable, ...ignore])).files);
           r.records = b.recs.length;
           r.diff = firstDifference(b, a);
           if (!r.diff) {
