@@ -8,7 +8,8 @@
 
 export const HOST = 'api.anthropic.com'
 const UA = { 'user-agent': 'claude-cli/2.1.0 (external, cli)', host: HOST }
-const T = (s) => `2026-10-06T10:00:${String(s).padStart(2, '0')}.000Z`
+// `at` is seconds into 2026-10-06T10:00, or a full ISO time
+const T = (s) => (typeof s === 'string' ? s : `2026-10-06T10:00:${String(s).padStart(2, '0')}.000Z`)
 
 // a transparent-collector record carries proc; the old capture paths do not
 export const PROC = { pid: 4242, exe: '/usr/local/bin/claude', agent: 'claude-code' }
@@ -45,3 +46,6 @@ export const inference = ({ id, at = 1, sid = 'S-d40', text = 'hello', wire = nu
 
 // one NDJSON line of a record, the way the writers append it
 export const line = (rec) => JSON.stringify(rec) + '\n'
+
+// stamp the size of the record's line the way the reader does (a non-enumerable _bytes), for records fed to the ETL as objects
+export const sized = (rec, n) => Object.defineProperty(rec, '_bytes', { value: n, enumerable: false, configurable: true })
