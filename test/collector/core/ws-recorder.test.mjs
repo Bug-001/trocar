@@ -23,12 +23,12 @@ function upgrade({ ext, offer, target = '/v1/responses' }) {
   }
 }
 function rig({ ext = null, offer, terminal = TERMINAL, target, write, maxCallBytes, split = Infinity, seqStart = 0 } = {}) {
-  const out = [], failures = []; let on = true; let n = 0
+  const out = [], failures = [], turns = { n: 0 }; let on = true; let n = 0
   const store = { envelope: (e) => (write ? write(e, out, store) : (out.push(e), true)), lastError: null }
-  const r = createWsRecorder({ flow: FLOW, upgrade: upgrade({ ext, offer, target }), seqStart, genId: () => `id${n++}`, isRecording: () => on, terminal, maxCallBytes, recordStore: store, onFailure: (f) => failures.push(f) })
+  const r = createWsRecorder({ flow: FLOW, upgrade: upgrade({ ext, offer, target }), seqStart, genId: () => `id${n++}`, isRecording: () => on, terminal, maxCallBytes, recordStore: store, onFailure: (f) => failures.push(f), onTurnEnd: () => { turns.n++ } })
   const wire = { c: [], s: [] }
   const feed = (fn, b) => { for (let i = 0; i < b.length; i += split) fn(b.subarray(i, i + split)) }
-  return { r, out, failures, wire, c: (b) => { wire.c.push(b); feed(r.fromClient, b) }, s: (b) => { wire.s.push(b); feed(r.fromUpstream, b) }, set on(v) { on = v } }
+  return { r, out, failures, wire, turns, c: (b) => { wire.c.push(b); feed(r.fromClient, b) }, s: (b) => { wire.s.push(b); feed(r.fromUpstream, b) }, set on(v) { on = v } }
 }
 const ev = (type, extra = {}) => JSON.stringify({ type, ...extra })
 const srv = (op, payload, opts) => encodeFrame(op, payload, { mask: false, ...opts })
@@ -187,6 +187,50 @@ test('W6 / C14: on→off→on, deflate takeover both ways: a call begun on is re
   f.c(cli(1, 'a')); f.s(srv(1, 'A1')); f.on = false; f.c(cli(1, 'b')); f.on = true; f.s(srv(1, 'B1')); f.c(cli(1, 'c')); f.s(srv(1, 'C1')); f.r.end(null)
   assert.deepEqual(f.out.map((e) => [e.req_body, e.resp.messages, e.partial_reasons]), [['a', ['A1'], undefined], ['c', ['C1'], ['off-window']]])
   assert.deepEqual(connection(f).ids, [0, 1, 4, 5], 'B1 arrived on, but belongs to the call begun off')
+})
+
+// the drain gate's view of the connection (1.6 §1.3, engine/drain.mjs): idle = nothing to wait for, open = a call whose terminal message is awaited,
+// blind = no terminal message can be seen here, so `off` does not close it
+test('state(): idle with no call, open while a call (or a message of it) is in flight, idle again at its terminal message — which fires onTurnEnd once, and a call cut by the end of the connection does not', () => {
+  const t = rig()
+  assert.deepEqual([t.r.state(), t.turns.n], ['idle', 0])
+  t.c(cli(1, ev('response.create').slice(0, 8), { fin: false })) // a client message begun, not finished
+  assert.equal(t.r.state(), 'open', 'a message in flight is not idle')
+  t.c(cli(0, ev('response.create').slice(8)))
+  assert.equal(t.r.state(), 'open', 'the call is open')
+  t.s(srv(1, ev('response.created')))
+  assert.deepEqual([t.r.state(), t.turns.n], ['open', 0])
+  t.s(srv(1, ev('response.completed')))
+  assert.deepEqual([t.r.state(), t.turns.n], ['idle', 1], 'the terminal message closes the call and the turn is announced once')
+  t.s(srv(1, ev('rate_limits.updated'))) // a server message with no call open is a call of its own, written at once: not a turn that ended
+  assert.deepEqual([t.r.state(), t.turns.n, t.out.length], ['idle', 1, 2], 'written alone, and no turn end is announced for it')
+  t.c(cli(1, ev('response.create'))); assert.equal(t.r.state(), 'open')
+  t.r.end(null)
+  assert.deepEqual([t.r.state(), t.turns.n], ['idle', 1], 'a call the connection closed under is no turn end; the connection is over')
+})
+
+test('state(): blind when the harness declared no terminal message, when either direction is no longer followed (a reserved opcode), or when the open call may have lost its terminal message (an undecodable or omitted server message)', () => {
+  const none = rig({ terminal: null }); none.c(cli(1, 'a'))
+  assert.equal(none.r.state(), 'blind', 'no terminal pattern for this path: nothing says where a turn ends')
+  const idleNone = rig({ terminal: null })
+  assert.equal(idleNone.r.state(), 'blind', 'even with no call open: it cannot be told that none will start')
+
+  const c = rig(); c.c(cli(1, ev('response.create'))); assert.equal(c.r.state(), 'open')
+  c.c(Buffer.from([0x83, 0x80, 0, 0, 0, 0])) // a masked client frame with a reserved opcode: the client direction stops
+  assert.deepEqual([c.r.summary().broken, c.r.state()], [{ c: 'reserved opcode 3' }, 'blind'], 'a client direction that is not followed')
+
+  const s = rig(); s.c(cli(1, ev('response.create'))); s.s(Buffer.from([0x83, 0x00]))
+  assert.deepEqual([s.r.summary().broken, s.r.state()], [{ s: 'reserved opcode 3' }, 'blind'], 'a server direction that is not followed')
+  const idleBroken = rig(); idleBroken.s(Buffer.from([0x83, 0x00]))
+  assert.equal(idleBroken.r.state(), 'blind', 'also with no call open: it cannot be seen that none starts')
+
+  const d = rig({ ext: 'permessage-deflate' }); d.c(cli(1, ev('response.create')))
+  d.s(srv(1, Buffer.from([0xff, 0xff, 0xff]), { rsv1: true })) // does not inflate: this might have been the terminal message
+  assert.deepEqual([d.failures.map((f) => f.code), d.r.state(), d.turns.n], [['decode-failed'], 'blind', 0], 'an undecodable message of the open call')
+
+  const o = rig({ maxCallBytes: 100 }); o.c(cli(1, ev('response.create')))
+  o.s(srv(1, 'x'.repeat(150))) // one message past the cap: omitted, so its text is not seen
+  assert.deepEqual([o.r.state(), o.turns.n], ['blind', 0], 'an omitted message of the open call')
 })
 
 test('W-2: an exception in the recorder itself is recorder-error, not broken; that direction stops being followed and the relay never sees it', () => {

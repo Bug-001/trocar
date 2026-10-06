@@ -216,6 +216,59 @@ test('a non-WebSocket 101 or a CONNECT 2xx: nothing after it is framed, and the 
   }
 })
 
+// the drain gate's reading of the connection (1.6 §1.3, engine/drain.mjs)
+test('boundary(): idle only with nothing in flight (a half-sent head and a half-read response count); headPending while the oldest request has had no byte of its response; seq is that request\'s', () => {
+  const { store } = sink()
+  const t = createExchangeTee({ flow: FLOW, recordStore: store })
+  const is = (idle, headPending, seq) => assert.deepEqual(t.boundary(), { idle, headPending, seq, blind: false })
+  is(true, false, null)
+  t.fromClient(Buffer.from('POST /v1/messages HTTP/1.1\r\nContent-Le')); is(false, false, null) // a request head begun
+  t.fromClient(Buffer.from('ngth: 2\r\n\r\n{')); is(false, true, 0)                                  // its body is arriving
+  t.fromClient(Buffer.from('}')); is(false, true, 0)                                               // asked in full, nothing answered
+  t.fromClient(Buffer.from('GET /next HTTP/1.1\r\n\r\n')); is(false, true, 0)                        // a second one pipelined: still the oldest that counts
+  t.fromUpstream(Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nab')); is(false, false, 0)  // a byte of the response: the head is out
+  t.fromUpstream(Buffer.from('cd')); is(false, true, 1)                                            // response 0 is whole; request 1 waits for its head
+  t.fromUpstream(Buffer.from('HTTP/1.1 100 Continue\r\n\r\n')); is(false, true, 1)              // an interim head is whole: the final one is still to come, and can carry the line
+  t.fromUpstream(Buffer.from('HTTP/1.1 200 OK\r\nContent-Le')); is(false, false, 1)                // a byte of the final head: it is out
+  t.fromUpstream(Buffer.from('ngth: 0\r\n\r\n')); is(true, false, null)
+})
+
+test('boundary(): blind once framing stopped — a request or a response that cannot be framed, a non-WebSocket 101 — and, after a WebSocket 101, as the recorder says (a declared terminal message: idle / open; none: blind)', () => {
+  const quiet = () => ({ flow: FLOW, recordStore: sink().store, onFailure: () => {} })
+  const a = createExchangeTee(quiet())
+  a.fromClient(Buffer.from('POST /a HTTP/1.1\r\nContent-Length: abc\r\n\r\n'))
+  assert.equal(a.boundary().blind, true, 'a request the framer cannot frame')
+  const b = createExchangeTee(quiet())
+  b.fromClient(Buffer.from('GET /b HTTP/1.1\r\n\r\n')); b.fromUpstream(Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: abc\r\n\r\n'))
+  assert.equal(b.boundary().blind, true, 'a response the framer cannot frame')
+  const c = createExchangeTee(quiet())
+  c.fromClient(Buffer.from('CONNECT inner.test:443 HTTP/1.1\r\n\r\n')); c.fromUpstream(Buffer.from('HTTP/1.1 200 Connection established\r\n\r\n'))
+  assert.equal(c.boundary().blind, true, 'a CONNECT tunnel: nothing after it is framed')
+  const upgrade = (wsTerminal) => {
+    const t = createExchangeTee({ ...quiet(), wsTerminal })
+    t.fromClient(Buffer.from('GET /v1/responses HTTP/1.1\r\nHost: h.test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n'))
+    t.fromUpstream(Buffer.from('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n'))
+    return t
+  }
+  assert.deepEqual(upgrade([{ pathSuffix: '/responses', patterns: ['^done'] }]).boundary(), { idle: true, headPending: false, seq: null, blind: false })
+  assert.deepEqual(upgrade(null).boundary(), { idle: false, headPending: false, seq: null, blind: true }, 'no terminal message declared')
+})
+
+test('markAdded(): the envelope of that exchange carries asight_added after every other key; the row note carries it whether or not the exchange is recorded (invariant 4, 1.6 §1.3)', () => {
+  const { out, store } = sink(); let on = true
+  const t = createExchangeTee({ flow: FLOW, recordStore: store, isRecording: () => on })
+  assert.deepEqual(t.rowNotes(), {})
+  t.fromClient(Buffer.from('GET /a HTTP/1.1\r\n\r\n')); on = false
+  t.fromClient(Buffer.from('GET /b HTTP/1.1\r\n\r\n')) // begun off: not recorded
+  t.markAdded(0, 'connection-close'); t.fromUpstream(Buffer.from(OK0))
+  t.markAdded(1, 'connection-close'); t.fromUpstream(Buffer.from(OK0))
+  assert.equal(out.length, 1)
+  assert.deepEqual([out[0].asight_added, Object.keys(out[0]).at(-1)], [['connection-close'], 'asight_added'])
+  assert.deepEqual(t.rowNotes().asightAdded, [{ seq: 0, what: 'connection-close' }, { seq: 1, what: 'connection-close' }], 'the unrecorded one is on the row only')
+  t.fromClient(Buffer.from('GET /c HTTP/1.1\r\n\r\n')); t.fromUpstream(Buffer.from(OK0))
+  assert.equal(out.length, 1, 'nothing recorded after off')
+})
+
 test('a gzip request body is recorded decoded, its wire bytes kept; the bytes the tee saw are untouched (RFC 4.6 请求体压缩, T16)', async () => {
   const zlib = (await import('node:zlib')).default
   const { out, store } = sink()
