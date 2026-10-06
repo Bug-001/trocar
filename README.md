@@ -243,7 +243,9 @@ your machine — every path above still is. `asight desktop off` restores the co
 - **Resource lifecycle is Claude Code only.** It is built on Claude Code's tool vocabulary. Codex and
   OpenCode get context replay, blocks, cache analysis and usage — their resource lanes render empty
   rather than guessing.
-- **DeepSeek is not supported** — no dissector yet.
+- **DeepSeek's cache semantics on its Anthropic endpoint are not settled.** `dsh` (that endpoint) and
+  DeepSeek's Chat Completions API are read like any other wire, but calls to the Anthropic endpoint show
+  「厂商缓存语义未知」 until a real capture settles them (3.3 OPEN).
 - **On captures without process identity the harness is a guess.** Sessions recorded by the MITM or
   reverse proxy carry no `proc.agent`, so the board names their agent from the User-Agent and its chip
   says so (「推断自 UA」). Sessions from the per-process collector are named by process, never by UA.
