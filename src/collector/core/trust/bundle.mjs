@@ -71,17 +71,37 @@ export function userCertsIn(text, userFps) {
 // Rebuild every bundle the manifest lists whose roots changed (`withCa`), or every one without the asight CA
 // (uninstall step 2, `withCa: false`). Atomic per file (temp + rename); the manifest records the new roots / sha.
 // Returns the paths rewritten.
-export function rewriteBundles({ dir, manifest, nodeRoots, osRootsText, caPem = null, withCa = true, force = false, fs = nodeFs }) {
+//   A bundle that is missing or cannot be read (deleted by the user, EACCES) is rebuilt the same way, from the user CA
+//   files the install recorded as its `sources` (a source that is gone is simply not carried over): an agent whose entry
+//   points at it has no network without it (4.6 「合并包」, D38 F1(d)). Only with the asight CA: at uninstall a bundle that
+//   is already gone has nothing to rewrite.
+//   `report` ({rebuilt: [{path, harness, why}], failed: [{path, harness, error}]}) makes the caller see each bundle's own
+//   fate: a bundle whose rebuild throws is listed in `failed` (its old file is untouched: the write is temp + rename) and
+//   the others still go on. Without `report` the first failure throws, as uninstall wants.
+export function rewriteBundles({ dir, manifest, nodeRoots, osRootsText, caPem = null, withCa = true, force = false, fs = nodeFs, report = null }) {
   const done = []
   const rootsFp = rootsFingerprint(nodeRoots, osRootsText)
   for (const f of manifest.files.filter((x) => x.role === 'bundle')) {
-    if (withCa && !force && f.roots_fp === rootsFp) continue
-    let cur
-    try { cur = fs.readFileSync(f.path, 'utf8') } catch (e) { if (e.code === 'ENOENT') continue; throw e }
-    const b = composeBundle({ nodeRoots, osRootsText, userCerts: userCertsIn(cur, f.user_fps), caPem: withCa ? caPem : null })
-    writeDurable(f.path, b.data, 0o600, fs)
-    Object.assign(f, { roots_fp: b.roots_fp, sha256: sha256(Buffer.from(b.data)), ...(withCa ? {} : { without_ca: true }) })
-    done.push(f.path)
+    try {
+      let cur = null, gone = null
+      try { cur = fs.readFileSync(f.path, 'utf8') } catch (e) { gone = e.code || String(e.message || e) }
+      if (cur != null && withCa && !force && f.roots_fp === rootsFp) continue
+      if (cur == null && !withCa) continue
+      let userCerts
+      if (cur != null) userCerts = userCertsIn(cur, f.user_fps)
+      else {
+        userCerts = []
+        for (const src of f.sources || []) { try { userCerts.push(...certsOf(src, fs.readFileSync(src)).certs) } catch { /* the user's file moved or went: not carried over */ } }
+      }
+      const b = composeBundle({ nodeRoots, osRootsText, userCerts, caPem: withCa ? caPem : null })
+      writeDurable(f.path, b.data, 0o600, fs)
+      Object.assign(f, { roots_fp: b.roots_fp, sha256: sha256(Buffer.from(b.data)), ...(cur == null ? { user_fps: b.user_fps } : {}), ...(withCa ? {} : { without_ca: true }) })
+      done.push(f.path)
+      if (report) report.rebuilt.push({ path: f.path, harness: f.harness ?? null, why: cur == null ? gone : 'roots-changed' })
+    } catch (e) {
+      if (!report) throw e
+      report.failed.push({ path: f.path, harness: f.harness ?? null, error: e })
+    }
   }
   if (done.length) saveManifest(dir, manifest, fs)
   return done

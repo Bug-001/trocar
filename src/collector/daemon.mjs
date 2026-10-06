@@ -171,14 +171,25 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       recordedUntrusted.set(row.pid, row.reason)
       note({ event: EVENT.agentUntrusted, pid: row.pid, agent: row.agent, code: row.reason, reason: hintFor(row.agent, row.reason), via: row.trustVia ?? null, ...(row.cause ? { cause: row.cause } : {}) })
     }
-    // combined bundles follow the roots: rebuilt (atomically) at start and once a day when the roots changed (4.6 「合并包」)
+    // combined bundles follow the roots: rebuilt (atomically) at start and once a day when the roots changed, and a bundle that
+    // went missing or unreadable is rebuilt at the same time (4.6 「合并包」, D38 F1(d)): one event per bundle that says which
+    // harness, which file and why; a rebuild that fails leaves the old file, is a failure of its own (harness + file), and the
+    // resolver already judges that harness untrusted while the bundle lacks the asight CA
     const refreshBundles = () => {
+      const report = { rebuilt: [], failed: [] }
       try {
         let osText = ''
         if (A.osRootsFile) { try { osText = fs.readFileSync(A.osRootsFile, 'utf8') } catch (e) { if (e.code !== 'ENOENT') throw e } }
-        const done = rewriteBundles({ dir: P.dir, manifest, nodeRoots: tls.rootCertificates, osRootsText: osText, caPem: ca.certPem })
-        if (done.length) note({ event: 'bundles-rebuilt', code: 'roots-changed', reason: `the trusted roots changed; rebuilt ${done.join(', ')}` })
+        rewriteBundles({ dir: P.dir, manifest, nodeRoots: tls.rootCertificates, osRootsText: osText, caPem: ca.certPem, report })
       } catch (e) { failure('bundle', Object.assign(new Error(`rebuilding the combined bundles failed: ${errText(e)}; they keep their previous roots`), { code: e && e.code })) }
+      const changed = report.rebuilt.filter((r) => r.why === 'roots-changed').map((r) => r.path)
+      if (changed.length) note({ event: 'bundles-rebuilt', code: 'roots-changed', reason: `the trusted roots changed; rebuilt ${changed.join(', ')}` })
+      for (const r of report.rebuilt.filter((x) => x.why !== 'roots-changed')) {
+        note({ event: 'bundles-rebuilt', code: 'missing', harness: r.harness, file: r.path, errno: r.why, reason: `${r.path} (the combined bundle of ${r.harness}) was ${r.why === 'ENOENT' ? 'missing' : `unreadable (${r.why})`}; rebuilt` })
+      }
+      for (const r of report.failed) {
+        failure('bundle', Object.assign(new Error(`rebuilding ${r.path} (the combined bundle of ${r.harness}) failed: ${errText(r.error)}; it keeps its previous content, and ${r.harness} may not trust asight until it is rebuilt`), { code: r.error && r.error.code }), { harness: r.harness, file: r.path })
+      }
     }
     refreshBundles()
     const bundleTimer = setInterval(refreshBundles, 24 * 3600 * 1000); bundleTimer.unref()

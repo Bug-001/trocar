@@ -46,7 +46,7 @@ export const CODES_BY_PART = Object.freeze({
   // a harness's configuration or files, read or written (the Claude Code settings layers have their own codes, above)
   harness: ['config-unreadable', 'config-unparsable', 'harness-note', 'shim-not-on-path', 'cert-not-merged', 'source-unreadable', 'relative-path', 'unit-env-not-carried'],
   trust: [...TRUST_REASONS],
-  bundle: ['roots-changed'],
+  bundle: ['roots-changed', 'missing'],
   note: ['ok'], // the code of an agent-trusted line
   helper: ['helper-error', 'heartbeat-failed', 'heartbeat-gap', 'loader-down', 'loader-timeout'],
   engine: ['lookup-miss', 'describe-error', 'engine-error', 'leaf-error', 'flow-write-failed', 'system-roots-unavailable', 'trust-store-error', 'upstream-ca-unreadable', 'framer-error', 'negative-cache', 'upstream-slow', 'unpaired-response'],

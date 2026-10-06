@@ -63,6 +63,47 @@ test('T14: roots that changed rebuild each bundle atomically (temp + rename) wit
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
+test('T14 / D38 F1(d): a bundle that is missing or unreadable is rebuilt from the recorded user CA files; one that cannot be written is reported, its old file untouched, the other bundles still rebuilt', { skip: process.getuid && process.getuid() === 0 ? 'root ignores file modes' : false }, () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-b-'))
+  try {
+    const dir = path.join(root, 'collector'); const ca = path.join(dir, 'ca'); fs.mkdirSync(ca, { recursive: true })
+    const corp = path.join(root, 'corp.pem'); fs.writeFileSync(corp, `${KEY}\n${CORP.certPem}\n`)
+    const m = newManifest()
+    const put = (h, src) => {
+      const b = composeBundle({ nodeRoots: [R1.certPem], osRootsText: '', userCerts: src ? [CORP.certPem] : [], caPem: ASIGHT.certPem })
+      const f = path.join(ca, `combined-${h}.pem`); fs.writeFileSync(f, b.data)
+      m.files.push({ path: f, role: 'bundle', harness: h, user_fps: b.user_fps, roots_fp: b.roots_fp, ...(src ? { sources: [src] } : {}) })
+      return f
+    }
+    const a = put('alpha', corp); const z = put('zeta', null); const y = put('yota', null)
+    const args = { dir, manifest: m, nodeRoots: [R1.certPem], osRootsText: '', caPem: ASIGHT.certPem }
+    // a deleted bundle and an unreadable one come back with their harness's user CA (from its source file) and the asight CA
+    fs.rmSync(a); fs.chmodSync(z, 0o000)
+    const report = { rebuilt: [], failed: [] }
+    assert.deepEqual(rewriteBundles({ ...args, report }), [a, z].sort(), 'same roots, yet the two that cannot be read are rebuilt')
+    assert.deepEqual(report.rebuilt.map((r) => [r.harness, r.why]).sort(), [['alpha', 'ENOENT'], ['zeta', 'EACCES']])
+    assert.deepEqual(fps(fs.readFileSync(a, 'utf8')), [fp(R1), fp(CORP), fp(ASIGHT)], 'alpha: its own user CA, from the recorded source, never the private key in that file')
+    assert.ok(!fs.readFileSync(a, 'utf8').includes('PRIVATE KEY'))
+    assert.deepEqual(fps(fs.readFileSync(z, 'utf8')), [fp(R1), fp(ASIGHT)], 'zeta had no user CA')
+    assert.deepEqual(m.files[0].user_fps, [fp(CORP)], 'the manifest follows the rebuild')
+    // at uninstall (withCa:false) a bundle that is already gone has nothing to rewrite
+    fs.rmSync(y)
+    assert.deepEqual(rewriteBundles({ ...args, withCa: false }).includes(y), false)
+    assert.ok(!fs.existsSync(y), 'uninstall never recreates a bundle')
+    // a rebuild that cannot write: reported with the bundle, the old file as it was, the rest still done
+    fs.chmodSync(ca, 0o555)
+    try {
+      const before = fs.readFileSync(z, 'utf8')
+      fs.chmodSync(z, 0o600) // readable, stale: its roots changed
+      const r2 = { rebuilt: [], failed: [] }
+      rewriteBundles({ ...args, nodeRoots: [R1.certPem, R2.certPem], report: r2 })
+      assert.deepEqual([r2.failed.map((f) => [f.harness, f.error.code]).sort(), r2.rebuilt], [[['alpha', 'EACCES'], ['yota', 'EACCES'], ['zeta', 'EACCES']], []], 'every bundle that could not be written is listed, none silently skipped')
+      assert.equal(fs.readFileSync(z, 'utf8'), before, 'the old file is untouched')
+      assert.throws(() => rewriteBundles({ ...args, nodeRoots: [R1.certPem, R2.certPem] }), /EACCES/, 'without a report the first failure throws, as uninstall wants')
+    } finally { fs.chmodSync(ca, 0o700) }
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
 test('T14 through the plan: each harness\'s bundle carries only its own CAs; a private key in a user file reaches nothing under the collector dir', () => {
   const DIR = '/h/.asight/collector'
   const files = { '/a/ca.pem': `${KEY}\n${CORP.certPem}`, '/b/ca.pem': OTHER.certPem }
