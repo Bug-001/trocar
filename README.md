@@ -123,7 +123,8 @@ What the board cannot vouch for, it labels on the call (raw panel and the top of
 
 Optional: `asight etl <capture.ndjson|dir> --rebuild` (a directory such as `~/.asight/collector`: its
 top-level `*.ndjson` in name order, subdirectories never read; an incremental run refuses and asks
-for `--rebuild` if an earlier file grew after a later one was loaded) loads a DuckDB projection
+for `--rebuild` if an earlier file grew after a later one was loaded, or if the store was written by an
+older version of asight) loads a DuckDB projection
 (`sessions / calls / call_blocks / block_contents / usage / resource_events / cache_events`) for
 cross-session SQL. The board works fine without it.
 

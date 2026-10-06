@@ -42,3 +42,16 @@ export async function setConsumed(conn, key, n, lastTs = null) {
 export async function resetWatermark(conn) {
   await conn.run('DELETE FROM etl_watermark');
 }
+
+// The projection version a store was written by (4.2:51 增量 == 全量). Derived metadata like the watermark, in a
+// one-row-per-key table; a store with no row was written before versions were stored.
+export async function ensureMetaTable(conn) {
+  await conn.run('CREATE TABLE IF NOT EXISTS etl_meta (key VARCHAR PRIMARY KEY, value VARCHAR)');
+}
+export async function getProjectionVersion(conn) {
+  const rows = (await conn.runAndReadAll("SELECT value FROM etl_meta WHERE key = 'projection_version'")).getRowObjects();
+  return rows.length ? Number(rows[0].value) : null;
+}
+export async function setProjectionVersion(conn, v) {
+  await conn.run("INSERT INTO etl_meta VALUES ('projection_version', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [String(v)]);
+}

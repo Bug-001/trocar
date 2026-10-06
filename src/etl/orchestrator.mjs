@@ -46,6 +46,9 @@ import {
   setConsumed,
   resetWatermark,
   CONTROL_KEY,
+  ensureMetaTable,
+  getProjectionVersion,
+  setProjectionVersion,
 } from './watermark.mjs';
 
 // ── 回源 pointers (raw_ref / text_ref) — the AC-1 technical payoff (RFC 4.2:37) ──────
@@ -153,6 +156,15 @@ async function quarantineRecord(conn, record, reason) {
 //           streamOf(record) → the stream the record was READ from, when the caller knows it per
 //           record: a sealed file holds lines of their ORIGINAL stream(s), never "the sealed file",
 //           and raw_ref MUST name that original stream (RFC 4.2:39, D35).
+// The projection's version (4.2:51: incremental MUST equal a full rebuild, bit for bit). Bump it whenever the same
+// source would project to different rows — a new column, a changed mapping or inference. A store written by another
+// version cannot be extended incrementally: its old rows would keep the old rules while the new rows follow the new
+// ones, with no warning. So runEtl refuses and asks for --rebuild (which is always exact).
+//   (none stored) = before D37 · 2 = D37 columns and the feat/read-seven closeout fixes (2026-10-06: cache_write NULL
+//   per vendor, compaction_from NULL on a lane's first call, req_extra_messages in calls.extra, WebSocket calls whose
+//   request was not stored are ingested)
+export const PROJECTION_VERSION = 2;
+
 export async function runEtl(records, connection, opts = {}) {
   const conn = connection;
   const {
@@ -162,6 +174,17 @@ export async function runEtl(records, connection, opts = {}) {
 
   await ensureWatermarkTable(conn);
   await ensureQuarantineTable(conn);
+  await ensureMetaTable(conn);
+  const storedVersion = await getProjectionVersion(conn);
+  if (storedVersion !== PROJECTION_VERSION) {
+    const held = Number((await conn.runAndReadAll('SELECT (SELECT count(*) FROM calls) + (SELECT count(*) FROM etl_watermark) AS n')).getRowObjects()[0].n);
+    if (held > 0) {
+      throw new Error(`incremental ETL refused: this store was written by ${storedVersion == null ? 'an older projection (before D37, no version stored)' : `projection version ${storedVersion}`}, ` +
+        `and this code writes version ${PROJECTION_VERSION}. Extending it would leave the rows already there as the old rules made them, ` +
+        'so the result would differ from a full rebuild (4.2:51). Re-run with --rebuild.');
+    }
+    await setProjectionVersion(conn, PROJECTION_VERSION); // an empty store takes this version
+  }
 
   const stats = { ingested: 0, skipped: 0, quarantined: 0 };
 
