@@ -15,7 +15,13 @@ const B = (path, confidence = 'medium') => ({ from: 'body', name: path.join('.')
 // identified by proc (legacy captures, unknown agents), so upgrading never regroups an old capture.
 export const LEGACY_SESSION_KEYS = [H('x-claude-code-session-id'), H('x-session-id', 'medium'), H('session-id', 'medium'), H('thread-id', 'medium')];
 
-const ROW = { ua: null, parentKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [] };
+// `traffic` (D40, RFC 4.6 §记录「保存级别」): which of the non-model traffic classes (session-sync · telemetry · files ·
+// account) a call is, told by host + path — DATA, not code (D20, 0.1 §5: the capture core parses no provider). Each entry
+// {host, path?, class}: `host` exact or `*.suffix`, any case; `path` a regex source tested on the path without its
+// querystring; the first entry that matches wins. Nothing matches → the shared third-party table (src/dissect/traffic.mjs),
+// then `other`. A harness with no entries is not a loss: its calls are `other`, kept in full (4.1 Edge cases).
+const ROW = { ua: null, parentKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [] };
+const T = (host, cls, pathSource) => ({ host, class: cls, ...(pathSource ? { path: pathSource } : {}) });
 const effect = (id, cause, what) => ({ id, captures: ['transparent'], cause, what });
 
 export const HARNESSES = Object.freeze([
@@ -24,7 +30,19 @@ export const HARNESSES = Object.freeze([
     lane: [{ header: 'x-claude-code-agent-id', lane: 'subagent' }],
     compaction: [{ header: 'x-cc-compaction-request' }],
     observerEffects: [effect('cc-gzip-off', 'NODE_EXTRA_CA_CERTS in settings env',
-      'request-body gzip (flag-driven) is off because a custom CA is set')] },
+      'request-body gzip (flag-driven) is off because a custom CA is set')],
+    // the endpoints measured on the live capture (2026-10-07): remote-session sync, telemetry, uploads,
+    // account calls. The order matters: the upload before the broader /api/oauth/ account rule.
+    traffic: [
+      T('api.anthropic.com', 'session-sync', '^/v1/code/sessions(/|$)'),
+      T('api.anthropic.com', 'telemetry', '^/api/event_logging/'),
+      T('api.anthropic.com', 'files', '^/api/oauth/file_upload'),
+      T('api.anthropic.com', 'files', '^/v1/files'),
+      T('api.anthropic.com', 'account', '^/api/oauth/'),
+      T('api.anthropic.com', 'account', '^/api/web/domain_info'),
+      T('claude.ai', 'account'),
+      T('downloads.claude.ai', 'files'),
+    ] },
   { ...ROW, id: 'codex', agents: ['codex'], ua: /codex/,
     sessionKeys: [H('session-id'), H('thread-id')], // over WebSocket these come from the upgrade request (4.6)
     parentKeys: [H('x-codex-parent-thread-id')],    // a THREAD id; resolved through aliases later (gate G4)
