@@ -473,6 +473,57 @@ test('uninstall step 2: a combined bundle a live process may have loaded is kept
   } finally { b.done() }
 })
 
+// RV-2 (review, bf8740e): "kept, without the asight CA" is a claim about the file. A bundle that cannot be read at step 2
+// (here: a directory where the file was, EISDIR — works for root too; EACCES is the same branch) was not rewritten, so the
+// claim was false and uninstall said "uninstalled" over a live process's trust root. It is an item that could not be undone:
+// the pid that may hold it, a failure event with the errno, an outcome of 'left', the manifest kept, and the next uninstall
+// (once the user fixed the file) finishes. A bundle nobody holds is removed whatever its state.
+test('uninstall step 2: a bundle a live process may hold that cannot be read is an item left (failure, outcome left, manifest kept), not "kept without the asight CA"; one nobody holds is removed', async () => {
+  const b = box()
+  try {
+    const corp = createCa({ commonName: 'corp relay CA' }); const root = createCa({ commonName: 'a root' })
+    fs.writeFileSync(path.join(b.home, 'corp.pem'), corp.certPem)
+    fs.mkdirSync(path.join(b.home, '.rep')); fs.writeFileSync(path.join(b.home, '.rep', '.env'), 'KEY=sk-secret\n')
+    const roots = { node: [root.certPem], osText: '' }
+    const h = repHarness(b.dir)
+    await installCollector(base(b, { harnesses: [h], roots }))
+    const bundle = path.join(b.dir, 'ca', 'combined-rep.pem')
+    const original = fs.readFileSync(bundle)
+    const installedAt = Date.parse(readManifest(b.dir).entries[0].installed_at)
+    const live = [{ pid: 70, exe: '/x/rep', startedAt: installedAt + 1000, env: new Map() }]
+    const match = (f) => ({ agent: /\/rep$/.test(f.exe) ? 'rep' : null })
+    fs.rmSync(bundle); fs.mkdirSync(bundle) // cannot be read
+    const r = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, scan: async () => live, match, harnesses: [h], roots })
+    assert.deepEqual(r.left, [{ path: bundle, harness: 'rep', result: 'error' }], 'an item that could not be undone')
+    assert.deepEqual(r.kept_bundles, [{ path: bundle, harness: 'rep', pids: [70], holds_ca: true, error: 'EISDIR' }], 'kept — and says it still holds the asight CA, and why')
+    assert.ok(!r.notes.some((n) => /without the asight CA/.test(n)), `no note claims it was rewritten: ${r.notes.join(' | ')}`)
+    const ev = readEvents(b.dir)
+    const fail = ev.find((e) => e.event === 'failure' && e.where === 'uninstall' && e.path === bundle)
+    assert.deepEqual([fail.code, fail.harness], ['entry-not-undone', 'rep'], 'a failure event with the harness and the file')
+    assert.ok(/still holds the asight CA/.test(fail.reason) && /EISDIR/.test(fail.reason) && fail.reason.includes('pid 70'), `the reason says what is true: ${fail.reason}`)
+    assert.ok(!ev.some((e) => e.kind === 'bundle-kept'), 'not recorded as a kept-without-CA bundle')
+    assert.deepEqual(ev.filter((e) => e.kind === 'result').at(-1).outcome, 'left', 'the result line is not "uninstalled"')
+    assert.deepEqual(readManifest(b.dir).uninstall_left, [{ path: bundle, harness: 'rep', result: 'error' }], 'the manifest is kept with what is left')
+    // the user fixes the file; the next uninstall rewrites it, nobody holds it any more, and everything goes
+    fs.rmSync(bundle, { recursive: true }); fs.writeFileSync(bundle, original)
+    const again = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, scan: async () => [], match, harnesses: [h], roots })
+    assert.deepEqual([again.left, again.kept_bundles], [[], []])
+    assert.ok(!fs.existsSync(path.join(b.dir, 'ca')) && readManifest(b.dir) == null, 'the bundle, the CA dir and the manifest are gone')
+  } finally { b.done() }
+  // nobody holds it: removing the unreadable bundle undoes it, so there is nothing left
+  const c = box()
+  try {
+    fs.writeFileSync(path.join(c.home, 'corp.pem'), createCa({ commonName: 'corp' }).certPem)
+    fs.mkdirSync(path.join(c.home, '.rep')); fs.writeFileSync(path.join(c.home, '.rep', '.env'), 'KEY=x\n')
+    const roots = { node: [], osText: '' }
+    await installCollector(base(c, { harnesses: [repHarness(c.dir)], roots }))
+    const bundle = path.join(c.dir, 'ca', 'combined-rep.pem')
+    fs.rmSync(bundle); fs.mkdirSync(bundle)
+    const r = await uninstallCollector({ home: c.home, env: {}, stop: stopNone, scan: async () => [], harnesses: [repHarness(c.dir)], roots })
+    assert.deepEqual([r.left, r.kept_bundles, fs.existsSync(bundle), readManifest(c.dir)], [[], [], false, null])
+  } finally { c.done() }
+})
+
 test('uninstall step 2: a harness that re-reads its entry while running keeps the bundle for any live process of it; step 5 says until when each still trusts', async () => {
   const b = box()
   try {

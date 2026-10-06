@@ -294,13 +294,22 @@ async function uninstall(dir, { env = process.env, purgeData = false, scan = asy
     // reaching its own relay; one a live process may have loaded stays (reported), the next uninstall judges again
     const bundles = m.files.filter((x) => x.role === 'bundle')
     const procs = bundles.length ? await scan() : []
-    if (bundles.length) { const R = roots || readRoots(osRootsFile); rewriteBundles({ dir, manifest: m, nodeRoots: R.node, osRootsText: R.osText, withCa: false }) }
+    // a bundle that is there but cannot be read (or written) was NOT rewritten: it still holds the asight CA, so when a live
+    // process may have loaded it that is an item that could not be undone — a failure, exit non-zero, the manifest kept —
+    // never "kept, without the asight CA" (D38; 4.6 安装 / 卸载不静默). One nobody holds is removed all the same.
+    const rewrite = { rebuilt: [], failed: [] }
+    if (bundles.length) { const R = roots || readRoots(osRootsFile); rewriteBundles({ dir, manifest: m, nodeRoots: R.node, osRootsText: R.osText, withCa: false, report: rewrite }) }
+    const notRewritten = new Map(rewrite.failed.map((x) => [x.path, x.error]))
     for (const b of bundles) {
       const pids = bundleUsers(b, m, procs, match, byName)
       if (!pids.length) { rm(b.path); continue }
       left.bundles.push(b)
-      report.kept_bundles.push({ path: b.path, harness: b.harness, pids })
-      noted.push({ code: CODE.bundleKept, harness: b.harness, path: b.path, reason: `${b.path} is kept, without the asight CA, for running processes that may have loaded it (pid ${pids.join(', ')}); run uninstall again once they exit` })
+      const why = notRewritten.has(b.path) ? String((notRewritten.get(b.path) && (notRewritten.get(b.path).code || notRewritten.get(b.path).message)) || notRewritten.get(b.path)) : null
+      report.kept_bundles.push({ path: b.path, harness: b.harness, pids, ...(why ? { holds_ca: true, error: why } : {}) })
+      if (why) {
+        report.left.push({ path: b.path, harness: b.harness, result: 'error' })
+        failed.push({ code: CODE.entryNotUndone, harness: b.harness, path: b.path, reason: `${b.path} still holds the asight CA: it could not be rewritten without it (${why}), and a running process may have loaded it (pid ${pids.join(', ')}); it is kept as it is — fix the file, then run uninstall again` })
+      } else noted.push({ code: CODE.bundleKept, harness: b.harness, path: b.path, reason: `${b.path} is kept, without the asight CA, for running processes that may have loaded it (pid ${pids.join(', ')}); run uninstall again once they exit` })
     }
     for (const f of m.files.filter((x) => x.role === 'trust-file' || x.role === 'ca-cert')) rm(f.path)
     for (const e of [...m.entries].reverse()) if (stepOf(e) === 4) undo(e)

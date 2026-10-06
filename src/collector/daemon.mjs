@@ -174,9 +174,12 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     // combined bundles follow the roots: rebuilt (atomically) at start and once a day when the roots changed, and a bundle that
     // went missing or unreadable is rebuilt at the same time (4.6 「合并包」, D38 F1(d)): one event per bundle that says which
     // harness, which file and why; a rebuild that fails leaves the old file, is a failure of its own (harness + file), and the
-    // resolver already judges that harness untrusted while the bundle lacks the asight CA
+    // resolver already judges that harness untrusted while the bundle lacks the asight CA. A bundle rebuilt without a user CA
+    // it held at install (its source file moved or went) is a failure of its own, one line per bundle that names the harness,
+    // the file, the lost fingerprints and each unreadable source with its errno: an agent that replaces its roots with the
+    // bundle can no longer reach a relay signed by that CA, and nothing else would say so (D38 ②, 4.6 「合并包」)
     const refreshBundles = () => {
-      const report = { rebuilt: [], failed: [] }
+      const report = { rebuilt: [], failed: [], lost: [] }
       try {
         let osText = ''
         if (A.osRootsFile) { try { osText = fs.readFileSync(A.osRootsFile, 'utf8') } catch (e) { if (e.code !== 'ENOENT') throw e } }
@@ -186,6 +189,11 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       if (changed.length) note({ event: 'bundles-rebuilt', code: 'roots-changed', reason: `the trusted roots changed; rebuilt ${changed.join(', ')}` })
       for (const r of report.rebuilt.filter((x) => x.why !== 'roots-changed')) {
         note({ event: 'bundles-rebuilt', code: 'missing', harness: r.harness, file: r.path, errno: r.why, reason: `${r.path} (the combined bundle of ${r.harness}) was ${r.why === 'ENOENT' ? 'missing' : `unreadable (${r.why})`}; rebuilt` })
+      }
+      for (const l of report.lost) { // written whole, not folded by (where, code): each bundle's loss is its own record
+        const n = l.fps.length
+        failure.write({ event: 'failure', where: 'bundle', code: l.sources.length ? 'source-unreadable' : 'cert-not-merged', harness: l.harness, file: l.path, errno: l.sources.length ? l.sources[0].errno : null, lost_fps: l.fps, sources: l.sources,
+          reason: `${l.path} (the combined bundle of ${l.harness}) was rebuilt without ${n} user CA${n === 1 ? '' : 's'} it held at install (${l.fps.join(', ')}): ${l.sources.length ? l.sources.map((s) => `${s.file} could not be read (${s.errno})`).join('; ') : 'the files it was built from no longer hold them'}; ${l.harness} may not reach a relay that signs with ${n === 1 ? 'it' : 'them'}` })
       }
       for (const r of report.failed) {
         failure('bundle', Object.assign(new Error(`rebuilding ${r.path} (the combined bundle of ${r.harness}) failed: ${errText(r.error)}; it keeps its previous content, and ${r.harness} may not trust asight until it is rebuilt`), { code: r.error && r.error.code }), { harness: r.harness, file: r.path })

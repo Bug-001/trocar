@@ -104,6 +104,74 @@ test('T14 / D38 F1(d): a bundle that is missing or unreadable is rebuilt from th
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
+// RV-2 (review): at uninstall (withCa:false) "gone" is ENOENT and only ENOENT. A bundle that is there but cannot be read
+// (EACCES, EIO, EISDIR, …) still holds the asight CA: skipping it let uninstall say "uninstalled" over a live process's trust
+// root. It is a failure of its own — reported with the bundle and the errno, the file untouched, the others still rewritten —
+// and without a report the first one throws. An injected fs, so it holds for root too.
+test('T14 / D38 (RV-2): uninstall step 2 skips a bundle that is gone (ENOENT), and only that: one that cannot be read is a failure, its file untouched, the rest rewritten', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-b-'))
+  try {
+    const dir = path.join(root, 'collector'); const ca = path.join(dir, 'ca'); fs.mkdirSync(ca, { recursive: true })
+    const m = newManifest()
+    const put = (h) => {
+      const b = composeBundle({ nodeRoots: [R1.certPem], osRootsText: '', userCerts: [CORP.certPem], caPem: ASIGHT.certPem })
+      const f = path.join(ca, `combined-${h}.pem`); fs.writeFileSync(f, b.data)
+      m.files.push({ path: f, role: 'bundle', harness: h, user_fps: b.user_fps, roots_fp: b.roots_fp })
+      return f
+    }
+    const a = put('alpha'); const z = put('zeta'); const y = put('yota')
+    fs.rmSync(y)
+    const before = fs.readFileSync(z, 'utf8')
+    const readsAs = (code) => ({ ...fs, readFileSync: (p, ...r) => { if (p === z) throw Object.assign(new Error(`${code}: cannot read`), { code }); return fs.readFileSync(p, ...r) } })
+    const args = { dir, manifest: m, nodeRoots: [R1.certPem], osRootsText: '', caPem: ASIGHT.certPem, withCa: false }
+    for (const code of ['EACCES', 'EIO', 'EISDIR']) {
+      const report = { rebuilt: [], failed: [] }
+      assert.deepEqual(rewriteBundles({ ...args, report, fs: readsAs(code) }), [a], `${code}: only the readable one is rewritten`)
+      assert.deepEqual(report.failed.map((f) => [f.harness, f.path, f.error.code]), [['zeta', z, code]], `${code}: the unreadable one is listed with its errno, not skipped`)
+      assert.match(report.failed[0].error.message, /not rewritten without the asight CA/)
+      assert.equal(fs.readFileSync(z, 'utf8'), before, 'its file is untouched: it still holds the asight CA, and the caller must say so')
+      assert.ok(fps(fs.readFileSync(z, 'utf8')).includes(fp(ASIGHT)))
+      assert.ok(!fs.existsSync(y), 'a bundle that is already gone is still not recreated')
+    }
+    assert.deepEqual(fps(fs.readFileSync(a, 'utf8')), [fp(R1), fp(CORP)], 'alpha: the same bundle without the asight CA')
+    assert.throws(() => rewriteBundles({ ...args, fs: readsAs('EACCES') }), (e) => e.code === 'EACCES' && /not rewritten without the asight CA/.test(e.message), 'without a report it throws, as it did before the rebuild feature')
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+// RV-3 (review): a bundle that went missing is rebuilt from the user CA files the install recorded; a file that moved leaves
+// its CA out of the rebuilt bundle. That is right for Node, the OS and asight, but an agent that REPLACES its roots with the
+// bundle can no longer reach a relay signed by that CA, and the manifest's user_fps fell from 1 to 0 with nothing said. The
+// report now carries each bundle's lost fingerprints, and each unreadable source with its errno (the daemon records it).
+test('T14 / D38 (RV-3): a bundle rebuilt without a user CA it held reports the lost fingerprints and each unreadable source; nothing is reported when nothing was lost', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-b-'))
+  try {
+    const dir = path.join(root, 'collector'); const ca = path.join(dir, 'ca'); fs.mkdirSync(ca, { recursive: true })
+    const m = newManifest()
+    const put = (h, src, certs) => {
+      const b = composeBundle({ nodeRoots: [R1.certPem], osRootsText: '', userCerts: certs, caPem: ASIGHT.certPem })
+      const f = path.join(ca, `combined-${h}.pem`); fs.writeFileSync(f, b.data)
+      m.files.push({ path: f, role: 'bundle', harness: h, user_fps: b.user_fps, roots_fp: b.roots_fp, ...(src ? { sources: [src] } : {}) })
+      return f
+    }
+    const srcs = {}; for (const h of ['moved', 'kept', 'edited', 'none']) srcs[h] = path.join(root, `${h}.pem`)
+    fs.writeFileSync(srcs.kept, CORP.certPem); fs.writeFileSync(srcs.edited, `${OTHER.certPem}\n`) // 'edited': the file is there, the CA is not in it any more
+    const files = { moved: put('moved', srcs.moved, [CORP.certPem]), kept: put('kept', srcs.kept, [CORP.certPem]), edited: put('edited', srcs.edited, [CORP.certPem]), none: put('none', srcs.none, []) }
+    for (const f of Object.values(files)) fs.rmSync(f) // every bundle deleted
+    const report = { rebuilt: [], failed: [] }
+    rewriteBundles({ dir, manifest: m, nodeRoots: [R1.certPem], osRootsText: '', caPem: ASIGHT.certPem, report })
+    assert.deepEqual(report.rebuilt.map((r) => r.harness).sort(), ['edited', 'kept', 'moved', 'none'])
+    assert.deepEqual(report.lost.map((l) => [l.harness, l.path, l.fps, l.sources]).sort((p, q) => p[0].localeCompare(q[0])), [
+      ['edited', files.edited, [fp(CORP)], []], // readable, but the certificate is gone from it: no unreadable source to blame
+      ['moved', files.moved, [fp(CORP)], [{ file: srcs.moved, errno: 'ENOENT' }]],
+    ], 'moved: named with the errno of its source; kept and none: nothing lost, nothing said')
+    assert.deepEqual(fps(fs.readFileSync(files.moved, 'utf8')), [fp(R1), fp(ASIGHT)], 'the bundle is still right for Node, the OS and asight')
+    assert.deepEqual(m.files.find((f) => f.harness === 'moved').user_fps, [], 'the manifest follows the rebuild (which is why the report is the only record of the loss)')
+    // no report, no `lost`: a caller that does not ask for one is not handed a field to ignore
+    fs.rmSync(files.kept)
+    assert.doesNotThrow(() => rewriteBundles({ dir, manifest: m, nodeRoots: [R1.certPem], osRootsText: '', caPem: ASIGHT.certPem }))
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
 test('T14 through the plan: each harness\'s bundle carries only its own CAs; a private key in a user file reaches nothing under the collector dir', () => {
   const DIR = '/h/.asight/collector'
   const files = { '/a/ca.pem': `${KEY}\n${CORP.certPem}`, '/b/ca.pem': OTHER.certPem }

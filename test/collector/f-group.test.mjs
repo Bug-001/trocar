@@ -518,6 +518,46 @@ test('F1(d) an entry\'s combined bundle deleted → the daemon rebuilds it and r
   } finally { p.done(); s.done() }
 })
 
+// F1(d) / RV-3 (review): a bundle that went missing is rebuilt from the user CA files recorded at install. A file that moved
+// leaves its CA out of the rebuilt bundle, which an agent that REPLACES its roots (Codex) cannot reach its relay without: the
+// daemon says so, once per bundle, as a failure that names the harness, the file, the lost fingerprint and the source with its
+// errno (D38 ②: a silent partial is not allowed), and the endpoint lists it. A rebuild that lost nothing says nothing of the kind.
+test('F1(d) a bundle rebuilt without a user CA it held (its source file moved) is a failure naming the harness, the file, the lost CA and the source errno; the endpoint lists it; nothing lost, nothing said', async () => {
+  const s = sandbox()
+  const osRoots = path.join(s.root, 'os-roots.pem'); fs.writeFileSync(osRoots, '')
+  const corpCa = createCa({ commonName: 'corp relay CA' })
+  const corp = path.join(s.home, 'corp.pem'); fs.writeFileSync(corp, corpCa.certPem)
+  fs.mkdirSync(path.join(s.home, '.codex')); fs.writeFileSync(path.join(s.home, '.codex', 'config.toml'), 'model = "gpt-test-1"\n')
+  fs.writeFileSync(path.join(s.home, '.codex', '.env'), `SSL_CERT_FILE=${corp}\n`)
+  const p = fakeProc()
+  try {
+    await install(s, { harnesses: [codex], osRootsFile: osRoots })
+    const bundle = path.join(s.collector, 'ca', 'combined-codex.pem')
+    const corpFp = new X509Certificate(corpCa.certPem).fingerprint256
+    const fpsOf = () => (fs.readFileSync(bundle, 'utf8').match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || []).map((c) => new X509Certificate(c).fingerprint256)
+    assert.ok(fpsOf().includes(corpFp), 'installed with the user CA in the bundle')
+    const start = () => startDaemon({ dir: s.collector, socketPath: s.sock, arch: { ...fakeArch(p).arch, osRootsFile: osRoots }, harnesses: [codex], env: { ...process.env, HOME: s.home } })
+    // (1) the bundle is deleted but its source is still there: rebuilt with the CA, no loss recorded
+    fs.rmSync(bundle)
+    let d = await start(); await d.stop()
+    assert.ok(fpsOf().includes(corpFp), 'rebuilt from the source, the CA is back')
+    assert.deepEqual(flowsOf(s).filter((f) => f.event === 'failure' && f.where === 'bundle'), [], 'nothing was lost: nothing is said')
+    // (2) the bundle is deleted and the source moved: rebuilt without the CA, and that is recorded
+    fs.rmSync(bundle); fs.renameSync(corp, path.join(s.home, 'corp-moved.pem'))
+    d = await start()
+    try {
+      const lost = await until(() => flowsOf(s).find((f) => f.event === 'failure' && f.where === 'bundle'))
+      assert.deepEqual([lost.code, lost.harness, lost.file, lost.errno, lost.lost_fps, lost.sources], ['source-unreadable', 'codex', bundle, 'ENOENT', [corpFp], [{ file: corp, errno: 'ENOENT' }]])
+      assert.match(lost.reason, /rebuilt without 1 user CA it held at install/)
+      assert.ok(lost.reason.includes(corp) && lost.reason.includes('ENOENT'), 'the reason names the source and its errno')
+      assert.ok(!fpsOf().includes(corpFp), 'the rebuilt bundle really lacks it: this is what the event reports')
+      const h = await endpoint(s)
+      assert.deepEqual(h.collector.failures.filter((x) => x.key.startsWith('bundle/')).map((x) => [x.last.harness, x.last.file]), [['codex', bundle]], 'the endpoint lists the harness and the bundle')
+      assert.equal(h.summary.state, 'failing')
+    } finally { await d.stop() }
+  } finally { p.done(); s.done() }
+})
+
 // F5 says these labels "不让顶栏变 ⚠", while 4.6 §记录 lists the WebSocket recorder's write-failed /
 // decode-failed / broken / recorder-error as failure events and 1.5 turns every failure ⚠ — today a flows/ holding only
 // ws/decode-failed is ⚠ 1 (src/health/codes.mjs FAILURE_EVENTS). Which rule wins is the user's call; until then this is

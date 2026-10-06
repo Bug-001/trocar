@@ -75,9 +75,16 @@ export function userCertsIn(text, userFps) {
 //   files the install recorded as its `sources` (a source that is gone is simply not carried over): an agent whose entry
 //   points at it has no network without it (4.6 「合并包」, D38 F1(d)). Only with the asight CA: at uninstall a bundle that
 //   is already gone has nothing to rewrite.
-//   `report` ({rebuilt: [{path, harness, why}], failed: [{path, harness, error}]}) makes the caller see each bundle's own
-//   fate: a bundle whose rebuild throws is listed in `failed` (its old file is untouched: the write is temp + rename) and
-//   the others still go on. Without `report` the first failure throws, as uninstall wants.
+//   At uninstall (`withCa: false`) a bundle that is not there (ENOENT) has nothing to rewrite, but one that is there and cannot
+//   be read still holds the asight CA: that is a failure of its own (EACCES, EIO, a directory), never a skip (D38, 4.6
+//   「撤销顺序」第 2 步: not silent).
+//   `report` ({rebuilt: [{path, harness, why}], failed: [{path, harness, error}], lost: [{path, harness, fps, sources}]}) makes
+//   the caller see each bundle's own fate: a bundle whose rebuild throws is listed in `failed` (its old file is untouched: the
+//   write is temp + rename) and the others still go on. Without `report` the first failure throws.
+//   `lost`: a bundle rebuilt from its recorded sources that no longer holds a user CA it held at install (its `user_fps`): the
+//   source file moved or went (`sources`, each with the errno) or no longer has that certificate. The rebuilt bundle is
+//   still right for Node, the OS and asight, but an agent that REPLACES its roots with it can no longer reach a relay that
+//   signs with the lost CA (D38: a silent partial is what 4.6 「合并包」 forbids).
 export function rewriteBundles({ dir, manifest, nodeRoots, osRootsText, caPem = null, withCa = true, force = false, fs = nodeFs, report = null }) {
   const done = []
   const rootsFp = rootsFingerprint(nodeRoots, osRootsText)
@@ -86,18 +93,24 @@ export function rewriteBundles({ dir, manifest, nodeRoots, osRootsText, caPem = 
       let cur = null, gone = null
       try { cur = fs.readFileSync(f.path, 'utf8') } catch (e) { gone = e.code || String(e.message || e) }
       if (cur != null && withCa && !force && f.roots_fp === rootsFp) continue
-      if (cur == null && !withCa) continue
+      if (cur == null && !withCa) {
+        if (gone === 'ENOENT') continue // already gone: nothing to rewrite, and uninstall never recreates a bundle
+        throw Object.assign(new Error(`${f.path} cannot be read (${gone}), so it was not rewritten without the asight CA`), { code: gone })
+      }
       let userCerts
+      const unread = []
       if (cur != null) userCerts = userCertsIn(cur, f.user_fps)
       else {
         userCerts = []
-        for (const src of f.sources || []) { try { userCerts.push(...certsOf(src, fs.readFileSync(src)).certs) } catch { /* the user's file moved or went: not carried over */ } }
+        for (const src of f.sources || []) { try { userCerts.push(...certsOf(src, fs.readFileSync(src)).certs) } catch (e) { unread.push({ file: src, errno: e.code || String(e.message || e) }) } } // the user's file moved or went: not carried over, and said
       }
       const b = composeBundle({ nodeRoots, osRootsText, userCerts, caPem: withCa ? caPem : null })
+      const lost = cur == null && report ? (f.user_fps || []).filter((x) => !b.user_fps.includes(x)) : []
       writeDurable(f.path, b.data, 0o600, fs)
       Object.assign(f, { roots_fp: b.roots_fp, sha256: sha256(Buffer.from(b.data)), ...(cur == null ? { user_fps: b.user_fps } : {}), ...(withCa ? {} : { without_ca: true }) })
       done.push(f.path)
       if (report) report.rebuilt.push({ path: f.path, harness: f.harness ?? null, why: cur == null ? gone : 'roots-changed' })
+      if (lost.length) (report.lost ||= []).push({ path: f.path, harness: f.harness ?? null, fps: lost, sources: unread })
     } catch (e) {
       if (!report) throw e
       report.failed.push({ path: f.path, harness: f.harness ?? null, error: e })
