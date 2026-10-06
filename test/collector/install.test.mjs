@@ -130,14 +130,17 @@ test('uninstall --purge-data after a plain uninstall still drops the captures it
   } finally { b.done() }
 })
 
-test('uninstall after a crashed install (intent written, file changed, never completed) still restores the user file', async () => {
+test('a crashed install (intent written, file changed, never completed) is finished by the next install (1.6 R9), and uninstall of it still restores the user file', async () => {
   const b = box()
   try {
     fs.mkdirSync(path.join(b.home, '.claude')); fs.writeFileSync(settingsOf(b), '{"model":"x"}')
     await installCollector(base(b))
-    const m = readManifest(b.dir); m.complete = false; m.entries[0].post_sha256 = null
-    fs.writeFileSync(path.join(b.dir, 'install-manifest.json'), JSON.stringify(m))
-    await assert.rejects(installCollector(base(b)), /did not finish/)
+    const forge = () => { const m = readManifest(b.dir); m.complete = false; m.entries[0].post_sha256 = null; fs.writeFileSync(path.join(b.dir, 'install-manifest.json'), JSON.stringify(m)) }
+    forge()
+    const settled = fs.readFileSync(settingsOf(b), 'utf8')
+    assert.equal((await installCollector(base(b))).already, false, 'an earlier install that did not finish no longer refuses: it is resumed')
+    assert.deepEqual([readManifest(b.dir).complete, readManifest(b.dir).entries[0].post_sha256 != null, fs.readFileSync(settingsOf(b), 'utf8')], [true, true, settled], 'the file had been written: only its record is finished')
+    forge()
     const r = await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
     assert.deepEqual(r.entries.map((e) => e.result), ['restored'])
     assert.equal(fs.readFileSync(settingsOf(b), 'utf8'), '{"model":"x"}')

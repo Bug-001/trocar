@@ -14,9 +14,9 @@ import { loadOrCreateCa, caPaths, readCa } from './core/tls/ca-store.mjs'
 import { checkCa } from './core/tls/ca.mjs'
 import { planTrust } from './core/trust/plan.mjs'
 import { livenessOf } from './core/registry.mjs'
-import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, removeOwnedFile, removeEmptyDirs, manifestPath, sweepTemps, describeEntry } from './core/trust/journal.mjs'
+import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, removeOwnedFile, removeEmptyDirs, manifestPath, sweepTemps, describeEntry, judgeEntry, judgeOwned, sha256 } from './core/trust/journal.mjs'
 import { EVENT, CODE, UNTIL_TEXT } from './core/codes.mjs'
-import { controlRequest } from './core/control.mjs'
+import { controlRequest, controlSocketPath } from './core/control.mjs'
 import { readText, readTextOrError } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
 import { lockState, procIdentity } from '../health/read.mjs'
@@ -25,6 +25,8 @@ import { dropBackup } from '../off/backup.mjs'
 import { undoHarnesses } from '../off/undo.mjs'
 import { undoByHand } from '../off/manifest.mjs'
 import { backupDir } from '../off/paths.mjs'
+import { readStateFile, emptyState, setDesired, writeStateAtomic } from '../off/state.mjs'
+import { newReceipt } from '../off/schema.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const listDir = (d) => { try { return fs.readdirSync(d) } catch { return [] } }
@@ -52,8 +54,8 @@ function refuseUnsupported(dir, m) {
   if (m && m.unsupported) throw new Error(`the install manifest ${manifestPath(dir)} is version ${JSON.stringify(m.version)}, which this build does not read (it reads 1 and 2); nothing was changed. Use the asight that wrote it, or run "asight off", which leaves what it does not know`)
 }
 
-function refuseRoot(verb) {
-  if (typeof process.getuid === 'function' && process.getuid() === 0) throw new Error(`asight collector ${verb}: run it as the user whose agents you capture, not as root (D36)`)
+function refuseRoot(verb, getuid = processUid) {
+  if (getuid() === 0) throw new Error(`asight ${verb === 'on' ? verb : `collector ${verb}`}: run it as the user whose agents you capture, not as root (D36); 用你自己的账号跑`)
 }
 
 // onPlan(list) is called once with every file install will write or change, BEFORE anything is written (4.6, user
@@ -81,12 +83,6 @@ async function recorded(dir, where, fn) {
   }
 }
 
-export async function installCollector({ home = os.homedir(), ...opts } = {}) {
-  refuseRoot('install')
-  const dir = collectorHome(path.join(home, '.asight')) // collectorHome takes the asight home
-  return recorded(dir, 'install', (run) => install(dir, { home, ...opts, run }))
-}
-
 // The roots a combined bundle starts from (4.6 「合并包」): Node's own, and the OS bundle the arch names.
 export function readRoots(osRootsFile, { nodeRoots = tls.rootCertificates } = {}) {
   let osText = ''
@@ -105,21 +101,53 @@ export function daemonEnv(env, dir) {
   return { env: { NODE_EXTRA_CA_CERTS: v }, note: null }
 }
 
-// unit: the arch's per-user autostart unit as { path, links, text(env), enable, disable, stop, removeWants } (null: none /
-// --no-unit); links = what enabling it creates.
-async function install(dir, { home, env = process.env, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), freePort = freeEnginePort, onPlan = () => {}, osRootsFile = null, roots = null, unit = null, run = null }) {
-  const prior = readManifest(dir)
+// ── `asight on` (RFC 1.6 §1.6, R6, R9, R12; D39) ────────────────────────────────────────────────────────────────────────────────────────
+// `on` is the install: the first one writes the CA, the combined bundles, the entries and the unit; every later one finds what is there and writes
+// only what is not. Per planned item the manifest and the disk say which (journal.mjs judgeEntry / judgeOwned): written (new), intact (never
+// rewritten — its `installed_at`, inode and mtime stay, or the agents already captured would be judged config-after-start and stop being
+// captured), resumed (an intent a crash left), or changed by the user since (reported, left). The order is R9's: what an entry points at (the
+// CA, the bundles, plugins, the shim) before the entry, the entries, the unit, and the links last — by the daemon, on `POST /on`.
+//   planOn      reads: the plan to print and to judge by (no write, no confirmation)
+//   turnOn      the command: plan → confirm → desired state first → write → unit → daemon → receipt
+//   installCollector   the install half alone, as the harness and lab tests set an agent up (no state.json, no daemon, no confirmation)
+
+const nodeFs = fs
+const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
+const act = (a) => a !== 'skip-intact' && a !== 'skip-user-changed'
+const shortLine = (l) => String(l).split(' # ')[0].trim()
+const RESTART_REASONS = new Set(['config-after-start', 'env-frozen', 'start-time-unknown', 'no-marker', 'kimi-not-via-shim']) // 「重启后才会被采集」(1.6 §1.1)
+const DAEMON_CMD = 'asight collector start' // 1.6 §2 renames it `asight daemon`; the autostart unit's ExecStart is this command until then
+
+/** What the receipt says an entry did, in one phrase — the same words in the dry run (from the preview) and in the real run (from the entry). */
+export function changeText(e, prior = null) {
+  if (e.kind === 'text') {
+    if (e.vars) return `顶部加 asight 哨兵块(${Object.keys(e.vars).join(', ')})${prior ? `;注释掉你原有的 ${Object.keys(prior).join(', ')}` : ''}`
+    return `加一行(${shortLine(e.line)})`
+  }
+  return prior != null ? `改 ${(e.keys || []).join('.')}(原值 ${prior})` : `加 ${(e.keys || []).join('.')}`
+}
+
+// An error that is not a failure of asight: an `off` asked for while this `on` ran (R12: off wins), or a step that has to stop the run.
+const stop = (message) => Object.assign(new Error(message), { stopsRun: true })
+
+/** What `on` would do, read from the disk and the manifest, written nowhere. Refusals come first, so a refused plan writes nothing at all (not even the
+ *  manifest): a file that is not JSON, a dangling link, a plugin file already there, a manifest this build cannot read, a CA that cannot be used.
+ *  → { first, newPaths, steps, targets, skipped, restart, changed, created, unchanged, manifest, ca, files, owned, entries, unit?, watch, notes,
+ *      records, events, _ } — the first fields are what is printed and receipted (`files` / `owned` / `entries` / `unit` only what would be written);
+ *  `_` is what the writing needs (the manifest as read, the draft, the roots). `ids`: the harness code ids named, or null for every one found. */
+export async function planOn({ home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), osRootsFile = null, roots = null, unit = null, fs = nodeFs, now = () => new Date() } = {}) {
+  const dir = collectorHome(path.join(home, '.asight'))
+  const prior = readManifest(dir, fs)
   refuseUnsupported(dir, prior)
   if (prior && prior.complete) {
-    // installed — but "already installed" only when its CA is usable (D-4): a CA that cannot be read or used is said
-    const c = readCa({ dir: path.join(dir, 'ca') })
+    // installed — but only usable when its CA is (D-4): a CA that cannot be read or used is said, with how to start over
+    const c = readCa({ dir: path.join(dir, 'ca'), fs })
     const st = c.error ? { ok: false, which: c.which, reason: c.error } : checkCa(c)
     if (!st.ok) throw Object.assign(new Error(`the collector is installed, but its CA is unusable (${st.which}: ${st.reason}); run "asight collector uninstall", then "asight collector install"`), { code: 'ca-invalid' })
-    return { already: true, manifest: prior, plan: null }
   }
   if (prior && prior.pending_bundles) throw new Error(`an earlier uninstall kept combined bundles that running agents still use (${prior.files.filter((f) => f.role === 'bundle' || f.role === 'trust-file').map((f) => f.path).join(', ')}); run "asight collector uninstall" again once they exit`)
   if (prior && prior.uninstall_left) throw new Error(`an earlier uninstall could not undo ${prior.uninstall_left.length} item(s) (${prior.uninstall_left.map((l) => l.path).join(', ')}); fix them, run "asight collector uninstall" again, then install`)
-  if (prior) throw new Error(`an earlier install did not finish (${manifestPath(dir)}); run "asight collector uninstall" first`)
+  const descs = ids ? harnesses.filter((d) => ids.includes(d.name)) : harnesses
   const ca = caPaths(path.join(dir, 'ca'))
   const facts = await scan()
   const envMap = new Map(Object.entries(env).filter(([, v]) => typeof v === 'string'))
@@ -128,75 +156,188 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
     readText: (f) => readText(f), readTextOrError: (f) => readTextOrError(f), readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir, collectorDir: dir, caPem: ca.pem,
   })
   const R = roots || readRoots(osRootsFile)
-  const draft = planTrust({ descriptors: harnesses, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
-  // every per-file refusal too (a dangling link, a file that is not JSON, a patch file that is not a list, a plugin
-  // file already there) — before onPlan, before any write
+  const draft = planTrust({ descriptors: descs, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
   const daemon = unit ? daemonEnv(env, dir) : null
   if (daemon && daemon.note) draft.notes.push(daemon.note)
-  const preview = draft.entries.map((e) => (e.kind === 'text' ? previewTextEntry({ file: e.path, edit: e }) : previewJsonKey({ file: e.path, keys: e.keys, value: e.value })))
-  for (const o of draft.owned) if (fs.existsSync(o.path)) throw new Error(`${o.harness}: ${o.path} already exists; asight will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`)
-  if (unit && fs.existsSync(unit.path)) throw new Error(`${unit.path} already exists; asight will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`) // before anything is written (review 4 #7)
-  onPlan({
+
+  // per item: written, intact, resumed, or changed by the user since (R9)
+  const steps = []
+  const entryJ = draft.entries.map((e) => {
+    const j = judgeEntry({ manifest: prior, planned: e, fs })
+    steps.push({ harness: e.harness, path: e.path, kind: 'entry', action: j.action, ...(j.why ? { why: j.why } : {}) })
+    return j
+  })
+  // every per-file refusal too, for what is to be written (a dangling link, a file that is not JSON, a patch file that is not a list) — before onPlan, before any write
+  const preview = draft.entries.map((e, i) => (entryJ[i].action !== 'write' ? null : e.kind === 'text' ? previewTextEntry({ file: e.path, edit: e, fs }) : previewJsonKey({ file: e.path, keys: e.keys, value: e.value, fs })))
+  const fileJ = draft.files.map((f) => {
+    const j = judgeOwned({ manifest: prior, file: f.path, fs })
+    steps.push({ harness: f.harness, path: f.path, kind: f.role, action: j.action, ...(j.why ? { why: j.why } : {}) })
+    return j
+  })
+  const ownedJ = draft.owned.map((o) => {
+    const j = judgeOwned({ manifest: prior, file: o.path, fs })
+    if (j.action === 'write' && fs.existsSync(o.path)) throw new Error(`${o.harness}: ${o.path} already exists; asight will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`)
+    steps.push({ harness: o.harness, path: o.path, kind: o.role, action: j.action, ...(j.why ? { why: j.why } : {}) })
+    return j
+  })
+  const unitJ = unit ? judgeOwned({ manifest: prior, file: unit.path, planned: sha256(Buffer.from(unit.text(daemon.env))), fs }) : null
+  if (unitJ && unitJ.action === 'write' && fs.existsSync(unit.path)) throw new Error(`${unit.path} already exists; asight will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`) // before anything is written (review 4 #7)
+  if (unitJ) steps.push({ harness: null, path: unit.path, kind: 'unit', action: unitJ.action, ...(unitJ.why ? { why: unitJ.why } : {}) })
+
+  // who is on, and who has nothing to do here (no entry, no file, not installed before): said, with the descriptor's own reason
+  const installed = new Set([...((prior && prior.entries) || []), ...((prior && prior.files) || [])].map((x) => x.harness).filter(Boolean))
+  const withItems = new Set([...draft.entries, ...draft.files, ...draft.owned].map((x) => x.harness))
+  const targets = descs.map((d) => d.name).filter((n) => withItems.has(n) || installed.has(n))
+  const reasonOf = (name) => draft.records.filter((r) => r.harness === name).map((r) => r.reason.replace(`${name}: `, '')).join('; ') || `no ${name} configuration was found on this machine: nothing to change for it`
+  const skipped = [
+    ...descs.map((d) => d.name).filter((n) => !targets.includes(n)).map((n) => ({ what: n, reason: reasonOf(n) })),
+    ...steps.filter((s) => s.action === 'skip-user-changed').map((s) => ({ what: s.path, reason: `${s.why}; run "asight off", then "asight on", to write it again` })),
+  ]
+  // what is written, and what the user has not yet confirmed (1.6 §1.6: the paths beyond the manifest's `confirmed_paths`; an installed one counts as confirmed)
+  const known = new Set([...((prior && prior.confirmed_paths) || []), ...((prior && prior.entries) || []).map((x) => x.path), ...((prior && prior.files) || []).filter((x) => x.role !== 'ca-key' && x.role !== 'ca-cert').map((x) => x.path)])
+  const first = known.size === 0
+  const newPaths = steps.filter((s) => act(s.action) && s.kind !== 'unit' && !known.has(s.path)).map((s) => s.path)
+  const writing = steps.some((s) => act(s.action))
+  const touched = new Set(steps.filter((s) => act(s.action) && s.harness).map((s) => s.harness))
+  const restart = facts.map((f) => ({ f, agent: match(f).agent })).filter((x) => x.agent && touched.has(x.agent)).map((x) => ({ harness: x.agent, pid: x.f.pid })) // what is running now was started before its entry
+  const entryRow = (e, i) => ({ harness: e.harness, path: e.path, ...(preview[i] && preview[i].real_path ? { real_path: preview[i].real_path } : entryJ[i].entry && entryJ[i].entry.real_path ? { real_path: entryJ[i].entry.real_path } : {}), ...(e.kind === 'text' ? { what: describeEntry(e) } : { keys: e.keys, value: e.value }) })
+  const day = now().toISOString().slice(0, 10)
+  return {
+    first, newPaths, steps, targets, skipped, restart, writing,
+    changed: draft.entries.map((e, i) => ({ e, j: entryJ[i], i })).filter((x) => act(x.j.action)).map((x) => ({ path: x.e.path, change: changeText(x.e, x.j.entry ? x.j.entry.prior_value : preview[x.i].prior), backup: null })),
+    created: [...(prior ? [] : [manifestPath(dir)]), ...(fs.existsSync(ca.key) && fs.existsSync(ca.pem) ? [] : [ca.key, ca.pem]), ...steps.filter((s) => act(s.action) && s.kind !== 'entry').map((s) => s.path)],
+    unchanged: steps.filter((s) => s.action === 'skip-intact').map((s) => s.path),
+    // what onPlan prints (formatPlan): the files this run would write or change
     manifest: manifestPath(dir),
     ca: [ca.key, ca.pem],
-    files: draft.files.map((f) => ({ harness: f.harness, path: f.path, sources: f.sources })),
-    owned: draft.owned.map((o) => ({ harness: o.harness, path: o.path, role: o.role })),
-    entries: draft.entries.map((e, i) => ({ harness: e.harness, path: e.path, ...(preview[i].real_path ? { real_path: preview[i].real_path } : {}), ...(e.kind === 'text' ? { what: describeEntry(e) } : { keys: e.keys, value: e.value }) })),
-    ...(unit ? { unit: { path: unit.path, env: daemon.env, links: unit.links || [] } } : {}),
+    files: draft.files.filter((f, i) => act(fileJ[i].action)).map((f) => ({ harness: f.harness, path: f.path, sources: f.sources })),
+    owned: draft.owned.filter((o, i) => act(ownedJ[i].action)).map((o) => ({ harness: o.harness, path: o.path, role: o.role })),
+    entries: draft.entries.map((e, i) => [e, i]).filter(([, i]) => act(entryJ[i].action)).map(([e, i]) => entryRow(e, i)),
+    ...(unit && act(unitJ.action) ? { unit: { path: unit.path, env: daemon.env, links: unit.links || [] } } : {}),
     watch: draft.watch,
     notes: draft.notes,
     records: path.join(dir, 'flows'), // install notes are kept here as install-note events (D38)
-    events: path.join(dir, 'flows', `${new Date().toISOString().slice(0, 10)}.ndjson`), // install-note lines are appended here (D-28)
-  })
+    events: path.join(dir, 'flows', `${day}.ndjson`), // install-note lines are appended here (D-28)
+    _: { dir, prior, ca, descs, ctxFor, R, daemon, draft, unit },
+  }
+}
 
-  const m = newManifest()
-  m.dirs = missingDirs(dir)
-  m.dirs.push(...missingDirs(ca.dir).filter((d) => !m.dirs.includes(d)))
+// The manifest the writing starts from: the one on disk, or — the first time — a new one that lists the directories asight is about to create and
+// the CA files before the CA is minted, and is saved at once (so a crash before the first user file leaves a manifest `uninstall` can use).
+function openManifest({ dir, plan, now, fs }) {
+  const { prior, ca } = plan._
+  if (prior) return prior
+  const m = newManifest(now())
+  m.dirs = missingDirs(dir, fs)
+  m.dirs.push(...missingDirs(ca.dir, fs).filter((d) => !m.dirs.includes(d)))
   m.files.push({ path: ca.key, role: 'ca-key' }, { path: ca.pem, role: 'ca-cert' })
-  saveManifest(dir, m) // creates dir 0700; the CA is listed before it is minted
-  const { certPem } = loadOrCreateCa({ dir: ca.dir })
-  m.engine_port = await freePort()
-  const plan = planTrust({ descriptors: harnesses, ctxFor, caCertPem: certPem, collectorDir: dir, roots: R })
-  if (daemon && daemon.note) { plan.notes.push(daemon.note); plan.records.push({ code: CODE.unitEnvNotCarried, reason: daemon.note }) }
-  if (JSON.stringify(plan.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${plan.paths.join(', ')}); only the CA was written; run "asight collector uninstall", then install again`)
-  m.planned = plan.paths
-  // what `off` needs to judge, from this manifest alone, which live process may hold what asight wrote for a harness (4.6 撤销顺序): written before
-  // any user file changes, like the rest of the plan, and only for a harness this install changed something for
-  const touched = new Set([...plan.entries, ...plan.files, ...plan.owned].map((x) => x.harness))
-  m.liveness = Object.fromEntries(harnesses.filter((d) => touched.has(d.name)).map((d) => [d.name, livenessOf(d, osName)]))
-  m.watched = plan.watch.map((w) => ({ ...w, existed_before: fs.existsSync(w.path) })) // before anything of the plan is written
-  saveManifest(dir, m)
+  saveManifest(dir, m, fs)
+  return m
+}
+
+// Every write of an `on`, in R9's order. `guard()` runs before each one (R12: it throws when an `off` asked for one of the harnesses in the meantime).
+// The manifest is saved only when it changed, so a second `on` on a complete install rewrites nothing. → { manifest, final, written }.
+async function writeInstall(args) {
+  const written = { entries: [], files: [], owned: [], unit: null, caCreated: false, intact: [], userChanged: [] }
+  try { return await writeInstallSteps(args, written) } catch (e) { if (e && e.stopsRun) e.written = written; throw e } // what was done before the stop is said
+}
+async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePort, now, fs, guard = () => {}, confirmed = false }, written) {
+  const { ca, descs, ctxFor, R, daemon, draft, unit } = plan._
+  const body = () => JSON.stringify({ ...m, upgraded_from: undefined })
+  let saved = body()
+  const save = () => { if (body() !== saved) { saveManifest(dir, m, fs); saved = body() } }
+  guard()
+  const caThere = fs.existsSync(ca.key) && fs.existsSync(ca.pem)
+  const { certPem } = loadOrCreateCa({ dir: ca.dir, fs })
+  written.caCreated = !caThere
+  if (m.engine_port == null) m.engine_port = await freePort()
+  const final = planTrust({ descriptors: descs, ctxFor, caCertPem: certPem, collectorDir: dir, roots: R })
+  if (daemon && daemon.note) { final.notes.push(daemon.note); final.records.push({ code: CODE.unitEnvNotCarried, reason: daemon.note }) }
+  if (JSON.stringify(final.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${final.paths.join(', ')}); only the CA was written; run "asight collector uninstall", then install again`)
+  m.planned = final.paths
+  // what `off` needs to judge, from this manifest alone, which live process may hold what asight wrote for a harness (4.6 撤销顺序): written before any user
+  // file changes. Only what is missing is added — a manifest an older asight wrote has none for its harnesses, and `on` is how it gets them (4.6 「判活快照」)
+  const named = new Set([...m.entries, ...m.files].map((x) => x.harness).filter(Boolean))
+  const touched = new Set([...final.entries, ...final.files, ...final.owned].map((x) => x.harness))
+  for (const d of harnesses) if ((touched.has(d.name) || named.has(d.name)) && !m.liveness[d.name]) m.liveness[d.name] = livenessOf(d, osName)
+  const seen = new Set((m.watched || []).map((w) => w.path)) // `existed_before` was recorded when asight first came: a path an agent wrote since is not "there before"
+  m.watched = [...(m.watched || []), ...final.watch.filter((w) => !seen.has(w.path)).map((w) => ({ ...w, existed_before: fs.existsSync(w.path) }))]
+  save()
   fs.mkdirSync(path.join(dir, 'run', 'trust'), { recursive: true, mode: 0o700 }) // plugins write their marker here, daemon up or not
-  for (const f of plan.files) writeOwnedFile({ dir, manifest: m, harness: f.harness, role: f.role, file: f.path, data: f.data, sources: f.sources, extra: f.role === 'bundle' ? { user_fps: f.user_fps, roots_fp: f.roots_fp } : {} })
+  for (const f of final.files) {
+    if (judgeOwned({ manifest: m, file: f.path, fs }).action === 'skip-intact') { written.intact.push(f.path); continue }
+    guard()
+    writeOwnedFile({ dir, manifest: m, harness: f.harness, role: f.role, file: f.path, data: f.data, sources: f.sources, extra: f.role === 'bundle' ? { user_fps: f.user_fps, roots_fp: f.roots_fp } : {}, now: now(), fs })
+    written.files.push(f.path)
+  }
   // a plugin or shim exists before the entry that loads it (a dsh patch row naming a missing file only warns, still)
-  for (const o of plan.owned) writeOwnedFile({ dir, manifest: m, harness: o.harness, role: o.role, file: o.path, data: o.data, mode: o.mode, exclusive: true })
-  for (const e of plan.entries) {
-    if (e.kind === 'text') applyTextEntry({ dir, manifest: m, harness: e.harness, file: e.path, edit: e, home }) // a backup of the file first (1.6 R2): no backup, no change
-    else applyJsonKey({ dir, manifest: m, harness: e.harness, file: e.path, keys: e.keys, value: e.value, home })
+  for (const o of final.owned) {
+    const j = judgeOwned({ manifest: m, file: o.path, fs })
+    if (j.action === 'skip-intact') { written.intact.push(o.path); continue }
+    guard()
+    writeOwnedFile({ dir, manifest: m, harness: o.harness, role: o.role, file: o.path, data: o.data, mode: o.mode, exclusive: j.action === 'write', now: now(), fs })
+    written.owned.push(o.path)
   }
-  // the per-user autostart unit (arch: systemd --user on Linux), listed like every other file, then enabled --now; a
-  // refused enable is recorded (D38), the daemon can still be started by hand
-  // The manifest is complete before the unit starts the daemon, which refuses an incomplete one (review 3 #8).
-  if (unit) writeOwnedFile({ dir, manifest: m, role: 'unit', file: unit.path, data: unit.text(daemon.env), mode: 0o644, exclusive: true })
-  m.complete = true
-  saveManifest(dir, m)
-  let unitFailed = null
+  for (const e of final.entries) {
+    const j = judgeEntry({ manifest: m, planned: e, fs })
+    if (j.action === 'skip-intact') { written.intact.push(e.path); continue }
+    if (j.action === 'skip-user-changed') { written.userChanged.push({ path: e.path, why: j.why }); continue }
+    guard()
+    const entry = e.kind === 'text'
+      ? applyTextEntry({ dir, manifest: m, harness: e.harness, file: e.path, edit: e, home, now: now(), fs }) // a backup of the file first (1.6 R2): no backup, no change
+      : applyJsonKey({ dir, manifest: m, harness: e.harness, file: e.path, keys: e.keys, value: e.value, home, now: now(), fs })
+    if (entry) written.entries.push(entry)
+  }
+  // the per-user autostart unit (arch: systemd --user on Linux), listed like every other file. The manifest is complete before the unit starts the
+  // daemon, which refuses an incomplete one (review 3 #8).
   if (unit) {
-    const r = unit.enable()
-    if (r.code !== 0) unitFailed = `${unit.path} is written but "systemctl --user enable --now" failed (${r.err || `exit ${r.code}`}); start the daemon with "asight collector start", or enable the unit once systemd --user runs`
+    const text = unit.text(daemon.env)
+    const j = judgeOwned({ manifest: m, file: unit.path, planned: sha256(Buffer.from(text)), fs })
+    if (j.action !== 'skip-intact') { guard(); writeOwnedFile({ dir, manifest: m, role: 'unit', file: unit.path, data: text, mode: 0o644, exclusive: j.action === 'write', now: now(), fs }); written.unit = j.action }
   }
-  // 4.6 安装 / 卸载不静默 (D-28): everything the command prints is also an install-note in flows/, for the board, where
-  // status finds it; a line that cannot be written is added to the printed notes, never dropped, and never fails the install
-  const put = (rec) => { try { appendEvent(dir, { ...rec, run }) } catch (w) { plan.notes.push(`not recorded (${String((w && w.message) || w)}): ${rec.reason}`) } }
-  for (const e of m.entries.filter((x) => x.prior_value)) {
+  m.complete = true
+  if (confirmed) m.confirmed_paths = [...new Set([...(m.confirmed_paths || []), ...final.paths, ...(unit ? [unit.path] : [])])] // what the operator was shown and said yes to (1.6 §1.6)
+  save()
+  return { manifest: m, final, written }
+}
+
+// 4.6 安装 / 卸载不静默 (D-28): everything the command prints is also an install-note in flows/, for the board, where status finds it; a line that cannot
+// be written is added to the printed notes, never dropped, and never fails the run. → the `put` the caller writes more with.
+function noteRun({ dir, run, final, written, notes, fs }) {
+  const put = (rec) => { try { appendEvent(dir, { ...rec, run }, { fs }) } catch (w) { notes.push(`not recorded (${String((w && w.message) || w)}): ${rec.reason}`) } }
+  for (const e of written.entries.filter((x) => x.prior_value)) {
     const prior = e.keys ? `${e.path} ${e.keys.join('.')} was ${e.prior_value}; it now points at ${e.value}` : `${e.path} held ${Object.entries(e.prior_value).map(([k, v]) => `${k}=${v}`).join(', ')}; asight commented it out (uninstall restores it)`
     put({ event: EVENT.installNote, where: 'install', kind: 'prior-value', harness: e.harness, path: e.path, reason: prior })
   }
-  for (const r of plan.records) put({ event: EVENT.installNote, where: 'install', kind: 'note', ...r })
-  if (unitFailed) { plan.notes.push(unitFailed); put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed }) }
-  const counts = { entries: m.entries.length, files: m.files.filter((f) => f.role === 'trust-file').length, notes: plan.notes.length }
-  put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome: 'installed', counts, reason: `installed: ${counts.entries} trust entr${counts.entries === 1 ? 'y' : 'ies'} and ${counts.files} trust file(s) written, ${counts.notes} note(s)` })
-  return { already: false, manifest: m, plan }
+  for (const r of final.records) put({ event: EVENT.installNote, where: 'install', kind: 'note', ...r })
+  return put
+}
+
+// The legacy shape of the install half: what the harness tests, the test rigs and `collector install` (before `on`) call. Never a confirmation, never state.json
+// or a daemon; `already` says every item was in place (no onPlan, nothing written, no event). A unit is enabled with `unit.enable()` (enable --now).
+export async function installCollector({ home = os.homedir(), ...opts } = {}) {
+  refuseRoot('install')
+  const dir = collectorHome(path.join(home, '.asight'))
+  return recorded(dir, 'install', async (run) => {
+    const fs = opts.fs || nodeFs
+    const now = opts.now || (() => new Date())
+    const plan = await planOn({ home, ...opts })
+    if (plan._.prior && plan._.prior.complete && !plan.writing) return { already: true, manifest: plan._.prior, plan: null }
+    const onPlan = opts.onPlan || (() => {})
+    onPlan(plan)
+    const m = openManifest({ dir, plan, now, fs })
+    const { manifest, final, written } = await writeInstall({ dir, home, plan, m, osName: opts.osName, harnesses: opts.harnesses, freePort: opts.freePort || freeEnginePort, now, fs })
+    let unitFailed = null
+    if (opts.unit) {
+      const r = opts.unit.enable()
+      if (r.code !== 0) unitFailed = `${opts.unit.path} is written but "systemctl --user enable --now" failed (${r.err || `exit ${r.code}`}); start the daemon with "asight collector start", or enable the unit once systemd --user runs`
+    }
+    const put = noteRun({ dir, run, final, written, notes: final.notes, fs })
+    if (unitFailed) { final.notes.push(unitFailed); put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed }) }
+    const counts = { entries: manifest.entries.length, files: manifest.files.filter((f) => f.role === 'trust-file').length, notes: final.notes.length }
+    put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome: 'installed', counts, reason: `installed: ${counts.entries} trust entr${counts.entries === 1 ? 'y' : 'ies'} and ${counts.files} trust file(s) written, ${counts.notes} note(s)` })
+    return { already: false, manifest, plan: final }
+  })
 }
 
 // 4.6 §安装清单与卸载 step 1: stop this user's daemon and wait until it AND its helper are gone (the helper's
