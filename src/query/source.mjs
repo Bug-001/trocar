@@ -18,7 +18,7 @@
 import { open } from 'node:fs/promises';
 import { statSync, openSync, readSync, closeSync, fstatSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import { parseTextRef } from '../etl/orchestrator.mjs';
+import { parseTextRef, TEXT_REF_FIELD } from '../etl/orchestrator.mjs';
 import { normalizeRecord } from '../etl/ingest.mjs';
 import { listSources, isSealedPath } from '../raw/discover.mjs';
 import { openSealed, createFrameCache } from '../raw/reader.mjs';
@@ -68,6 +68,32 @@ function classifyFidelity(raw) {
 // difference matters most — could not tell missing from broken. They are distinct now, and the
 // plain resolve() stays non-throwing/string-or-null for back-compat.
 const OUT = (status, reason = null, text = null, fidelity = null) => ({ status, reason, text, fidelity });
+
+// ── the field a text_ref names (RFC 4.2:40 字段段, gate G1) ─────────────────────────────────────
+// No field = req_body (through normalizeRecord, as always). resp.raw = the decoded reply text the collector
+// stored (SSE or text); resp.messages.<j> = a WebSocket envelope's j-th server message; req_extra_messages.<k>
+// = a later client message of the same call. An error envelope keeps what arrived under resp.partial, with
+// the same numbering (ws_raw's m slices count it the same way). The stored decoded text IS the verbatim
+// record (4.6 §记录), so its fidelity is 'verbatim', like req_body. → { text } | { missing: why }.
+const STORED_AS = (v) => (v && typeof v === 'object'
+  ? (typeof v.b64 === 'string' ? `base64 bytes ({b64}${v.decode_error ? ', not decodable' : ''})`
+    : v.omitted_bytes != null ? `{omitted_bytes: ${v.omitted_bytes}} — over the per-call cap, bytes not kept`
+      : v.verbatim === false ? 'its length only ({raw_chars}) — not verbatim' : 'a non-text value')
+  : `${v === undefined ? 'nothing' : typeof v}`);
+function fieldText(raw, field) {
+  const resp = raw.resp || raw.response || {};
+  const part = resp.kind === 'error' && resp.partial && typeof resp.partial === 'object' ? resp.partial : resp;
+  let v;
+  if (field === 'resp.raw') v = part.raw;
+  else {
+    const [, list, j] = /^(resp\.messages|req_extra_messages)\.(\d+)$/.exec(field);
+    const arr = list === 'resp.messages' ? (part.kind === 'ws' ? part.messages : null) : raw.req_extra_messages;
+    if (!Array.isArray(arr) || Number(j) >= arr.length) return { missing: `has no ${field}` };
+    v = arr[Number(j)];
+  }
+  if (typeof v === 'string') return { text: v };
+  return { missing: v === undefined ? `has no ${field}` : `stores ${field} as ${STORED_AS(v)}, not as text` };
+}
 // A within-file duplicate keeps the source shards (sha256) of its sealed members, so
 // poisonSplitDuplicates can carry the collision to a copy of the same record id in another root. An
 // entry that an earlier cross-root pass poisoned counts as the record it was (`splitFrom`).
@@ -416,11 +442,13 @@ export async function buildResolver(source, { retryMs = 30000, sessionsRoot = nu
   };
 
   // → an OUTCOME, never a bare string: { status, reason, text, fidelity }. `text` is the whole
-  // record body; the caller slices it. Statuses: ok | absent | corrupt | no-body.
-  const bodyOf = (stream, recordId) => {
+  // record body (or the named field); the caller slices it. Statuses: ok | absent | corrupt | no-body (detail adds bad-field).
+  // `field` (4.2:40): null = req_body, else one TEXT_REF_FIELD; each field of a record has its own cache slot.
+  const bodyOf = (stream, recordId, field = null) => {
     const hit = locate(stream, recordId);             // may throw on ambiguity — deliberately loud
     if (!hit) return OUT('absent', absentReason(stream, recordId));
-    if (bodyCache.has(hit.key)) return bodyCache.get(hit.key);
+    const ck = field ? hit.key + '\n' + field : hit.key;
+    if (bodyCache.has(ck)) return bodyCache.get(ck);
     const { loc } = hit;
     let buf, out = null;
     if (loc.sealed) {
@@ -436,12 +464,17 @@ export async function buildResolver(source, { retryMs = 30000, sessionsRoot = nu
     }
     if (!out) try {
       const raw = JSON.parse(buf.toString('utf8'));
-      const body = normalizeRecord(raw).req_body;
-      out = typeof body === 'string'
-        ? OUT('ok', null, body, classifyFidelity(raw))
-        // present and readable, but it carries no request body — a real answer ("there are no
-        // bytes"), categorically different from "the record is missing" or "the bytes are damaged".
-        : OUT('no-body', `record "${recordId}" has no request body (neither req_body nor a v0 request)`);
+      if (field) {
+        const f = fieldText(raw, field);
+        out = f.text != null ? OUT('ok', null, f.text, 'verbatim') : OUT('no-body', `record "${recordId}" ${f.missing}`);
+      } else {
+        const body = normalizeRecord(raw).req_body;
+        out = typeof body === 'string'
+          ? OUT('ok', null, body, classifyFidelity(raw))
+          // present and readable, but it carries no request body — a real answer ("there are no
+          // bytes"), categorically different from "the record is missing" or "the bytes are damaged".
+          : OUT('no-body', `record "${recordId}" has no request body (neither req_body nor a v0 request)`);
+      }
     } catch (e) {
       // The line was parseable when we indexed it and is not now: the source bytes under this
       // record are DAMAGED (truncated / rewritten / partially flushed). Surface it — reporting
@@ -452,7 +485,7 @@ export async function buildResolver(source, { retryMs = 30000, sessionsRoot = nu
         `parsed back from the source (${e.message}) — the bytes changed since indexing or are damaged`);
     }
     // cache on the QUALIFIED key — a bare-id cache key reintroduced the very collision above
-    bodyCache.set(hit.key, out);
+    bodyCache.set(ck, out);
     if (bodyCache.size > BODY_LRU) bodyCache.delete(bodyCache.keys().next().value);
     return out;
   };
@@ -462,8 +495,9 @@ export async function buildResolver(source, { retryMs = 30000, sessionsRoot = nu
   // several roots the multi-root resolver catches Stale itself, so every root re-lists together.
   const detailOnce = (textRef) => {
     if (!textRef) return OUT('no-ref', 'block has no text_ref — nothing points at the source');
-    const { rawRef, recordId, start, end } = parseTextRef(textRef);
-    const got = bodyOf(streamOfRawRef(rawRef), recordId);
+    const { rawRef, recordId, field, start, end } = parseTextRef(textRef);
+    if (field != null && !TEXT_REF_FIELD.test(field)) return OUT('bad-field', `"${field}" is not a text_ref field (RFC 4.2:40: resp.raw | resp.messages.<j> | req_extra_messages.<k>)`);
+    const got = bodyOf(streamOfRawRef(rawRef), recordId, field);
     // A ref with NO byte span addresses the WHOLE record body. `slice(null, null)` returns '', which
     // would hand back empty bytes under an "ok" status — a silently wrong answer from the source-truth
     // resolver. Only slice when a real span was supplied.

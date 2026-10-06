@@ -21,6 +21,7 @@ import { buildResolver } from './query/source.mjs';
 import { readRecords } from './etl/ingest.mjs';
 import { projectsView, projectsViewFromMetas, sessionView, controlView, forWire } from './view/board.mjs';
 import { sessionIdOf } from './view/assemble.mjs';
+import { TEXT_REF_FIELD } from './etl/orchestrator.mjs';
 import { createLru, memoKey } from './query/memo.mjs';
 import { loadPricing } from './view/pricing.mjs';
 import { randomBytes } from 'node:crypto';
@@ -741,8 +742,11 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         // malformed ref would quietly return SOME record's bytes rather than an error. Bytes served
         // under the wrong identity are an invariant-2 problem even when they are real bytes, so a ref
         // that is not the documented form (RFC 4.2:40) is rejected rather than best-guessed.
-        if (!/^[^/]+\/[^/#]+#[^:]+::\d+-\d+$/.test(ref)) {
-          return sendJson(res, 400, { error: 'malformed ref — expected <session>/<stream>#<recordId>::<start>-<end>', ref });
+        // An optional field segment names another field of the record (4.2:40 字段段, gate G1); only the
+        // fields TEXT_REF_FIELD admits pass, so a ref can never reach an arbitrary key of the envelope.
+        const shape = /^[^/]+\/[^/#]+#[^:]+(?:::([^:]+))?::\d+-\d+$/.exec(ref);
+        if (!shape || (shape[1] !== undefined && !TEXT_REF_FIELD.test(shape[1]))) {
+          return sendJson(res, 400, { error: 'malformed ref — expected <session>/<stream>#<recordId>[::<field>]::<start>-<end>, field ∈ resp.raw | resp.messages.<j> | req_extra_messages.<k>', ref });
         }
         if (typeof resolve.detail !== 'function') {
           return sendJson(res, 503, { error: 'no capture source configured — nothing to resolve against' });

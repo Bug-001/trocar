@@ -46,11 +46,19 @@ import {
 // spanOf(node)); ETL mints raw_ref and composes the persisted text_ref = raw_ref + span.
 //   raw_ref  = "<session_id>/<stream>#<record.id>"        → one source record
 //   text_ref = "<raw_ref>::<start>-<end>"                 → a block's bytes in req_body
+//            | "<raw_ref>::<field>::<start>-<end>"        → bytes of another field of the record (4.2:40
+//              字段段, gate G1): a WebSocket call's stitched blocks live in an EARLIER record's
+//              resp.messages[j] (D37 ②); R2 compares the reply (resp.raw); 3.1:37 shows req_extra_messages.
+// TEXT_REF_FIELD is the one definition of the field segment (the resolver and /api/block both use it).
+// req_body is the default and never written out, so every ref minted before the segment is unchanged.
+export const TEXT_REF_FIELD = /^(resp\.raw|resp\.messages\.\d+|req_extra_messages\.\d+)$/;
 export function mintRawRef(sessionId, streamBasename, recordId) {
   return `${sessionId ?? '_control'}/${streamBasename}#${recordId}`;
 }
-export function composeTextRef(rawRef, span) {
-  return `${rawRef}::${span[0]}-${span[1]}`;
+export function composeTextRef(rawRef, span, field = null) {
+  if (field == null || field === 'req_body') return `${rawRef}::${span[0]}-${span[1]}`;
+  if (!TEXT_REF_FIELD.test(field)) throw new Error(`composeTextRef: "${field}" is not a text_ref field (4.2:40)`);
+  return `${rawRef}::${field}::${span[0]}-${span[1]}`;
 }
 export function parseTextRef(textRef) {
   const i = textRef.lastIndexOf('::');
@@ -59,10 +67,14 @@ export function parseTextRef(textRef) {
   // so `req_plain` looked up as `req_plai` and the resolver reported the record "absent" rather than
   // reporting a malformed ref. A silently wrong answer from the source-truth resolver is the worst
   // failure mode this module can have.
-  if (i < 0) return { rawRef: textRef, start: null, end: null, recordId: textRef.slice(textRef.lastIndexOf('#') + 1) };
-  const rawRef = textRef.slice(0, i);
+  if (i < 0) return { rawRef: textRef, field: null, start: null, end: null, recordId: textRef.slice(textRef.lastIndexOf('#') + 1) };
+  const head = textRef.slice(0, i);
   const [start, end] = textRef.slice(i + 2).split('-').map(Number);
-  return { rawRef, start, end, recordId: rawRef.slice(rawRef.lastIndexOf('#') + 1) };
+  // A field segment sits between the record id and the span. Record ids never contain "::" (the
+  // /api/block grammar refuses them), so the first "::" after the last "#" starts it.
+  const j = head.indexOf('::', head.lastIndexOf('#') + 1);
+  const rawRef = j >= 0 ? head.slice(0, j) : head;
+  return { rawRef, field: j >= 0 ? head.slice(j + 2) : null, start, end, recordId: rawRef.slice(rawRef.lastIndexOf('#') + 1) };
 }
 
 // ── envelope helpers (D10, provider-neutral — NOT provider parse branches) ───────────
