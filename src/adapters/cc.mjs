@@ -10,6 +10,8 @@
 //   • model/schema.mjs (3.2) → mapUsage('cc', rawUsage)  (canonical usage mapping)
 import { contentHash, scanJson, hashSpan, spanOf } from './content-hash.mjs';
 import { collectExtra } from './contract.mjs';
+import { ENVELOPE_CONSUMED } from './envelope.mjs';
+import { wireFormatOf } from '../dissect/registry.mjs';
 import { mapUsage } from '../model/schema.mjs';
 import {
   parseSessionCC,
@@ -57,27 +59,12 @@ function withParsedBody(record) {
   return { ...record, req_body: reqObj(record) };
 }
 
-function systemText(req) {
-  const s = req?.system;
-  if (typeof s === 'string') return s;
-  if (Array.isArray(s)) {
-    return s.map((b) => (b && typeof b === 'object' ? b.text || '' : String(b || ''))).join('\n');
-  }
-  return '';
-}
-
-// ── detect (RFC 3.1 / 3.4 online-stable signals) ────────────────────────────────
-// The session header is the strongest signal; the claude UA covers control-plane
-// calls (no session header, not /v1/messages) so they still get claimed & classified;
-// system-prompt markers catch header-less CC records.
+// ── detect (RFC 3.1:23 / D37 ①) ──────────────────────────────────────────────────
+// This adapter claims Anthropic-WIRE INFERENCE only, decided by the shared wire registry (endpoint and
+// body shape). Control-plane and count_tokens records go to the envelope adapter (./envelope.mjs); a
+// harness's UA or session header no longer decides the wire.
 export function detect(record) {
-  const h = record?.req_headers || {};
-  if (h['x-claude-code-session-id'] || h['X-Claude-Code-Session-Id']) return true;
-  const ua = String(h['user-agent'] || h['User-Agent'] || '');
-  if (/claude-cli|claude-code|claude-desktop/i.test(ua)) return true;
-  return /cc_is_subagent=|cc_entrypoint=|you are a security monitor|You are Claude Code/i.test(
-    systemText(reqObj(record)),
-  );
+  return record?.is_llm_call === true && wireFormatOf(record) === 'anthropic';
 }
 
 // ── usage (承 demo normResp; mapping delegated to 3.2 schema.mapUsage) ──────────
@@ -98,29 +85,10 @@ export const ccLane = (record) => lane(withParsedBody(record));
 export { controlKind as ccControlKind };
 
 // ── parseCall (class / control_kind / lane / usage / error / unmapped_count) ─────
-// Every D10 envelope field this adapter recognizes. collectExtra diffs the record's
-// actual keys against this set; the remainder -> calls.extra + unmapped_count (RFC 3.1
-// unmapped invariant, D7 auto-evolution signal). B-env fix: this MUST include ALL D10
-// observ-meta (ts_response_start/end, capture, auth_mode, …) or a real full envelope
-// would falsely inflate unmapped_count on every call.
-const ENVELOPE_CONSUMED = new Set([
-  // core (4.1 § 统一原始信封)
-  'ts', 'endpoint', 'method', 'req_headers', 'req_body', 'resp',
-  // observ-meta (D10)
-  'id', 'ts_request', 'ts_response_start', 'ts_response_end', 'duration_ms',
-  'is_llm_call', 'capture', 'auth_mode',
-  // interruption marker (D10: 中断也写 error:true 信封)
-  'error',
-  // transparent-capture fields appended after req_body (RFC 4.6 §记录 / D32): the process-collector
-  // envelope carries these, so list them here or they would inflate unmapped_count on every call.
-  'host', 'scheme', 'dst', 'proc', 'flow_id', 'seq', 'req_head_raw', 'resp_head_raw',
-  // intervention fields reserved by RFC 5.1 (D33, implemented later) — consumed now so a transparent
-  // envelope never surfaces them as unmapped.
-  'origin', 'client_req_body', 'client_resp', 'intervention', 'resend_of',
-  // NOT listed on purpose: req_truncated / req_body_bytes / req_partial (RFC 4.6 §记录). calls has no
-  // column for them, so consuming them here would drop the invariant-4 label from the DuckDB row;
-  // left unmapped, they land in calls.extra (and count, on the rare incomplete call).
-]);
+// Every envelope field the read side recognizes is ENVELOPE_CONSUMED (./envelope.mjs, shared by every
+// adapter). collectExtra diffs the record's actual keys against it; the remainder -> calls.extra +
+// unmapped_count (RFC 3.1 unmapped invariant, D7 auto-evolution signal). The #21 req_* labels are left
+// unconsumed on purpose, so they reach calls.extra.
 
 // req_body keys this adapter maps to canonical columns / blocks / identity. The remainder (real
 // provider request fields — max_tokens / temperature / top_p / top_k / tool_choice / thinking /

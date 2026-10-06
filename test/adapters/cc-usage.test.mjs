@@ -4,18 +4,18 @@ import { detect, ccUsage } from '../../src/adapters/cc.mjs';
 import { mapUsage } from '../../src/model/schema.mjs'; // canonical mapping lives in 3.2, imported (not reimplemented in cc.mjs)
 import { ccLlmRecord, ccControlRecord, nonCcRecord } from '../fixtures/cc-record.mjs';
 
-test('detect claims CC llm + control records, rejects non-CC', () => {
-  assert.equal(detect(ccLlmRecord()), true); // x-claude-code-session-id header
-  assert.equal(detect(ccControlRecord()), true); // claude-cli UA on the control plane
-  assert.equal(detect(nonCcRecord()), false); // python-requests UA, no CC marker
+test('detect claims Anthropic-wire inference only; control and non-Anthropic records are not CC adapter work', () => {
+  assert.equal(detect(ccLlmRecord()), true); // /v1/messages, is_llm_call
+  assert.equal(detect(ccControlRecord()), false); // the control plane belongs to the envelope adapter (src/adapters/envelope.mjs)
+  assert.equal(detect(nonCcRecord()), false); // /v1/chat/completions is the OpenAI Chat wire
 });
 
-test('detect also claims a header-less CC record via a system-prompt marker', () => {
-  const headerless = ccLlmRecord({
-    env: { req_headers: { 'user-agent': 'some-proxy/1.0' } },
-    req: { system: [{ type: 'text', text: 'cc_is_subagent=true' }] },
-  });
+test('detect claims a header-less, UA-less Anthropic record by its endpoint (never by UA, 3.1:23)', () => {
+  const headerless = ccLlmRecord({ env: { req_headers: { 'user-agent': 'some-proxy/1.0' } } });
   assert.equal(detect(headerless), true);
+  assert.equal(detect({ ...headerless, endpoint: '/v1/messages/count_tokens', is_llm_call: false }), false);
+  const chat = { ...ccLlmRecord(), endpoint: '/v1/chat/completions', req_body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'x' }] }) };
+  assert.equal(detect(chat), false, 'a Claude UA + session header on Chat bytes is not the Anthropic wire');
 });
 
 test('ccUsage reads SSE terminal usage and JSON body usage', () => {

@@ -20,6 +20,7 @@
 import { createHash } from 'node:crypto';
 import { createRegistry } from '../adapters/contract.mjs';
 import { ccAdapter } from '../adapters/cc.mjs';
+import { envelopeAdapter, quarantineReason } from '../adapters/envelope.mjs';
 import { deriveCacheEvents } from '../cache/cache-events.mjs';
 import { harnessOf, observerEffectsOf } from '../dissect/harnesses.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
@@ -90,10 +91,11 @@ function requestBytes(record) {
 }
 const jsonOrNull = (v) => (v == null ? null : JSON.stringify(v));
 
-// The default single-adapter registry (Phase-1 = CC only). Fresh per run so no
-// cross-run quarantine/conflict state leaks between invocations.
+// The default registry: the Anthropic-wire inference adapter + the generic envelope adapter for every
+// non-inference record (control plane, probes, side uploads) of any harness. Inference on a wire with no
+// adapter yet is quarantined with its reason. Fresh per run so no cross-run state leaks.
 function defaultRegistry() {
-  return createRegistry().register(ccAdapter);
+  return createRegistry().register(ccAdapter).register(envelopeAdapter);
 }
 
 async function ensureQuarantineTable(conn) {
@@ -172,7 +174,7 @@ export async function runEtl(records, connection, opts = {}) {
     for await (const record of records) {
       const claim = registry.dispatch(record);
       if (claim.status !== 'claimed') {
-        await quarantineRecord(conn, record, 'no-adapter-detect');
+        await quarantineRecord(conn, record, quarantineReason(record));
         stats.quarantined++;
         continue;
       }
