@@ -142,3 +142,33 @@ test('L-1: an agent that refuses the capture\'s leaf (does not trust the CA) —
     assert.deepEqual(blindEvents, [], 'outside the target: no event line')
   } finally { px2.close(); refuse.close() }
 })
+
+test('L-2 on the MITM too (4.1 #6): an upstream cut mid-stream → error:true envelope (capture:mitm) with what arrived, the agent\'s connection ended, a mitm/upstream-aborted event', async () => {
+  const ca = createCa({ commonName: 'asight legacy test CA' })
+  const leafCtx = createLeafIssuer(loadCa(ca)).issue('api.anthropic.com')
+  const api = https.createServer({ key: leafCtx.keyPem, cert: leafCtx.certPem }, (req, res) => {
+    req.resume(); req.on('end', () => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write('event: message_start\ndata: {"type":"message_start","message":{"id":"m2","model":"x"}}\n\n'); setTimeout(() => res.socket.destroy(), 20) })
+  })
+  const apiPort = await listen(api)
+  const envelopes = [], events = []
+  const px = createMitmProxy({ targetHost: 'api.anthropic.com', leaf: { key: leafCtx.keyPem, cert: leafCtx.certPem }, onEnvelope: (e) => envelopes.push(e), onEvent: (e) => events.push(e),
+    connectUpstream: (_o, cb) => { const s = tls.connect({ host: '127.0.0.1', port: apiPort, servername: 'api.anthropic.com', ca: ca.certPem }, () => cb(null, s)); s.on('error', cb) }, blindTunnel: () => {} })
+  const port = await listen(px)
+  try {
+    const got = await new Promise((resolve) => {
+      setTimeout(() => resolve('hung'), 3000).unref()
+      const sock = net.connect(port, '127.0.0.1', () => sock.write('CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n'))
+      sock.once('data', () => {
+        const t = tls.connect({ socket: sock, servername: 'api.anthropic.com', ca: ca.certPem }, () => t.write('POST /v1/messages HTTP/1.1\r\nHost: api.anthropic.com\r\ncontent-type: application/json\r\ncontent-length: 2\r\n\r\n{}'))
+        let b = ''; t.on('data', (d) => { b += d }); t.on('close', () => resolve(b)); t.on('error', () => {})
+      })
+    })
+    assert.notEqual(got, 'hung', 'the agent\'s connection is ended, not left hanging')
+    assert.ok(!/\r\n0\r\n\r\n$/.test(got), 'and not ended as a complete chunked response')
+    for (let i = 0; i < 200 && !envelopes.length; i++) await new Promise((r) => setTimeout(r, 10))
+    const env = envelopes[0]
+    assert.deepEqual([env.capture, env.error, env.resp.kind, env.resp.error.type, env.resp.partial.message.id], ['mitm', true, 'error', 'upstream_aborted', 'm2'])
+    assert.deepEqual(events.map((e) => [e.where, e.code]), [['mitm', 'upstream-aborted']])
+    allInSet(events)
+  } finally { px.close(); api.close() }
+})
