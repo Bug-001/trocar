@@ -365,7 +365,7 @@ export function handleFlow(client, meta, ctx) {
   const startTee = (host, scheme) => {
     activeTee = createExchangeTee({
       flow: { id: rec.flow_id, host, scheme, dst: meta.dst, proc: { pid: meta.pid, exe: meta.exe ?? null, agent: meta.agent } },
-      recordStore: ctx.store, isRecording: ctx.isRecording, wsTerminal: meta.wsTerminal ?? null, onFailure: ctx.failure,
+      recordStore: ctx.store, isRecording: () => ctx.isRecording(meta), wsTerminal: meta.wsTerminal ?? null, onFailure: ctx.failure,
     })
     return activeTee
   }

@@ -241,7 +241,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       },
       issuer, store, upstreamCa,
       policy: (meta, host) => tracker.policy(meta, host),
-      isRecording: () => sw.isRecording(), // sampled per request (4.6 §开关): a request after off is never recorded
+      isRecording: (meta) => sw.isRecording(meta && meta.agent), // sampled per request, per harness (4.6 §开关): a request after off is never recorded
       onFailure: (rec) => failure.event(rec), // the engine's and the WebSocket recorder's failures: flows/, folded
       onError: (e) => log('engine', e), // stderr only: every one of them is also a record through onFailure
     })
@@ -284,7 +284,9 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       if (candidates.length) failure('tracker', Object.assign(new Error(`${reason}; its command line fits ${candidates.join(' and ')}`), { code: 'exe-unreadable' }), { pid, errno: code || null, candidates })
     })
 
-    sw = createSwitch({ redirector, stateFile: P.state, ensureReady, onEvent: event })
+    // the harnesses `on` / `off` with no names mean, and v1 state is carried to: every one this daemon knows, and any the install manifest names
+    const installed = () => [...new Set([...registry.names(), ...[...(manifest.entries || []), ...(manifest.files || [])].map((e) => e.harness).filter(Boolean)])]
+    sw = createSwitch({ redirector, stateFile: P.state, installed, ensureReady, onEvent: event })
     await redirector.start()
     await redirector.configure(port)
     // the lock (4.6 §控制面, D-25): pid + start time + boot id, so a reused pid or a reboot is never "running"; its
@@ -300,7 +302,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: typeof redirector.linger === 'function' ? redirector.linger() : null })
     tracker.start()
     await tracker.rescan()
-    const applyPolicy = () => { const st = sw.state(); tracker.setPolicy({ mode: st.policy, extraHosts: st.extra_hosts }) }
+    const applyPolicy = () => { const st = sw.state(); tracker.setPolicy({ byHarness: Object.fromEntries(Object.entries(st.harnesses).map(([id, h]) => [id, { mode: h.policy, extraHosts: h.extra_hosts }])) }) }
     applyPolicy()
     await sw.restore()
 
@@ -370,7 +372,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     Object.assign(impl, {
       status,
       on: async ({ body }) => { const r = await sw.on(body || {}); applyPolicy(); return { ...(await status()), ...(r.noop ? { noop: true } : {}) } },
-      off: async () => { const r = await sw.off(); return { ...(await status()), ...(r.noop ? { noop: true } : {}) } },
+      off: async ({ body }) => { const r = await sw.off({ harnesses: (body && body.harnesses) || null }); return { ...(await status()), ...(r.noop ? { noop: true } : {}) } },
     })
     markReady()
 
