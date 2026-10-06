@@ -59,7 +59,8 @@ export const reviveSignature = (json) => walk(typeof json === 'string' ? JSON.pa
 
 // the facts as the patterns read them: `env` may be the lazy read of a process (a function), or a Map, or null when it cannot be read
 function patternView(facts) {
-  if (typeof facts.env !== 'function') return facts
+  const d = Object.getOwnPropertyDescriptor(facts, 'env')
+  if (!d || d.get || typeof d.value !== 'function') return facts // none, a Map / null, or the daemon's own lazy getter (reading `facts.env` here would force it)
   const view = Object.create(facts)
   let env
   Object.defineProperty(view, 'env', { get() { if (env === undefined) { try { env = facts.env() } catch { env = null } } return env } })

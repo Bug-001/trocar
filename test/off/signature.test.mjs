@@ -60,3 +60,18 @@ test('two harnesses that both claim a process claim none of it, and a harness wi
   assert.equal(matchHarness({}, proc('/bin/x')), null)
   assert.equal(matchHarness(undefined, proc('/bin/x')), null)
 })
+
+test('the environment is read only when a pattern asks for it: a lazy env (a function, or the daemon\'s getter) of a process that exe / argv already rule out is never read', () => {
+  let reads = 0
+  const lazy = (exe, argv) => ({ exe, argv, env: () => { reads++; return new Map() } })
+  const getter = (exe, argv) => { const f = { exe, argv }; Object.defineProperty(f, 'env', { enumerable: true, get() { reads++; return new Map() } }); return f }
+  const l = live(['claude-code', 'codex', 'opencode'])
+  for (const make of [lazy, getter]) {
+    reads = 0
+    assert.equal(matchHarness(l, make('/usr/bin/bash', ['bash'])), null)
+    assert.equal(matchHarness(l, make('/home/u/.local/bin/codex', ['codex'])), 'codex')
+    assert.equal(reads, 0, 'neither judgement needed the environment')
+    assert.equal(matchHarness(l, make('/home/u/.opencode/bin/opencode', ['opencode'])), 'opencode')
+    assert.equal(reads, 1, 'OpenCode\'s exclude names BUN_BE_BUN: read once, and kept for the other patterns')
+  }
+})
