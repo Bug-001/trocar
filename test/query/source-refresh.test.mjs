@@ -80,6 +80,48 @@ test('a source file replaced by a LONGER one is re-indexed too (the inode change
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+// The test above relies on the replacement getting a new inode. Linux ext4 reuses a deleted file's inode at once, so
+// there it took the append path and read the new file at the old file's offsets. Simulated here on any filesystem: a
+// truncating rewrite keeps the inode by definition (O_TRUNC), so only the bytes can tell the two files apart.
+test('a source file rewritten in place (same inode) is re-indexed, longer or the same size, never read at stale offsets', async () => {
+  for (const [label, replacement] of [
+    ['longer', rec('C', 'the replacement, which is longer than everything it replaced') + rec('D', 'and one more record after it')],
+    ['same size', rec('E', 'x') + rec('F', 'y')],
+  ]) {
+    const dir = tmp();
+    try {
+      const f = path.join(dir, 'capture-1.ndjson');
+      fs.writeFileSync(f, rec('A', 'x') + rec('B', 'y'));
+      const r = await buildResolver(dir);
+      const ino = fs.statSync(f).ino;
+      fs.writeFileSync(f, replacement); // truncate + write: the same inode
+      assert.equal(fs.statSync(f).ino, ino, 'precondition: the inode did not change');
+      if (label === 'same size') { const t = new Date(Date.now() + 5000); fs.utimesSync(f, t, t); } // a coarse mtime clock could hide it
+      assert.equal(await r.refresh(), true, label);
+      const [first] = replacement.split('\n');
+      const id = JSON.parse(first).id;
+      assert.equal(r.detail(`S/capture-1.ndjson#${id}`).text, bodyOf(first + '\n'), `${label}: the new record's own bytes`);
+      assert.equal(r.detail('S/capture-1.ndjson#A').status, 'absent', `${label}: the old record is gone`);
+      assert.equal(r.size, 2, label);
+      r.dispose();
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
+test('a plain append still reads only the new bytes (the replacement check does not re-read the file)', async () => {
+  const dir = tmp();
+  try {
+    const f = path.join(dir, 'capture-1.ndjson'), a = rec('A', 'first'), b = rec('B', 'appended');
+    fs.writeFileSync(f, a);
+    const r = await buildResolver(dir);
+    fs.appendFileSync(f, b);
+    assert.equal(await r.refresh(), true);
+    assert.equal(r.scan.bytesIndexed, Buffer.byteLength(a + b));
+    assert.equal(r.detail('S/capture-1.ndjson#A').text, bodyOf(a));
+    r.dispose();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('a ref naming a capture file created after the index was built misses (so the caller refreshes), never takes another file\'s bytes', async () => {
   const dir = tmp();
   try {

@@ -152,6 +152,27 @@ function lineIndexer(file, idx, from, log) {
   };
 }
 const CHUNK = 1 << 20;
+// WHICH FILE an index mark describes, beyond its inode. A refresh treats a same-inode file that grew as an append and
+// reads on from `end`. But an inode is no identity: Linux ext4 hands a deleted file's inode straight to the next file,
+// and a truncating rewrite (O_TRUNC) keeps it — the new file was then read at the old file's offsets. In an
+// append-only file the bytes before `end` never change, so the first and the last FP bytes before `end` are kept with
+// the mark (plus mtime / ctime, to catch a same-size rewrite) and compared before any resume.
+const FP = 4096;
+const fpRanges = (end) => [[0, Math.min(FP, end)], [Math.max(0, end - FP), end]];
+const fpOfReads = (end, read) => fpRanges(end).map(([a, b]) => read(a, b));
+function readRangeSync(fd, a, b) { const out = Buffer.alloc(b - a); let n = 0; while (n < out.length) { const r = readSync(fd, out, n, out.length - n, a + n); if (!r) break; n += r; } return out.subarray(0, n); }
+async function readRange(fd, a, b) { const out = Buffer.alloc(b - a); let n = 0; while (n < out.length) { const { bytesRead } = await fd.read(out, n, out.length - n, a + n); if (!bytesRead) break; n += bytesRead; } return out.subarray(0, n); }
+const withIdentity = (mark, st, fp) => Object.assign(mark, { mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, fp });
+// → true when `file` still holds, before m.end, the bytes it held when `m` was made (an append), false when they differ
+// or cannot be read (then the caller rebuilds: the safe answer).
+function sameFileAs(file, m) {
+  if (!m.fp) return true; // a mark without a fingerprint (sealed): its own rule applies
+  let fd;
+  try {
+    fd = openSync(file, 'r');
+    return fpOfReads(m.end, (a, b) => readRangeSync(fd, a, b)).every((buf, i) => buf.equals(m.fp[i]));
+  } catch { return false; } finally { if (fd !== undefined) try { closeSync(fd); } catch {} }
+}
 async function indexFile(file, idx, from = 0, log = null) {
   const fd = await open(file, 'r');
   try {
@@ -164,7 +185,10 @@ async function indexFile(file, idx, from = 0, log = null) {
       li.feed(buf, bytesRead);
       filePos += bytesRead;
     }
-    return li.finish(st, filePos);
+    const mark = li.finish(st, filePos);
+    const fp = [];
+    for (const [a, b] of fpRanges(mark.end)) fp.push(await readRange(fd, a, b));
+    return withIdentity(mark, st, fp);
   } finally { await fd.close(); }
 }
 // The same scan, synchronous: only for the in-place re-index when an indexed file disappears under a
@@ -181,7 +205,8 @@ function indexFileSync(file, idx, from = 0, log = null) {
       li.feed(buf, bytesRead);
       filePos += bytesRead;
     }
-    return li.finish(st, filePos);
+    const mark = li.finish(st, filePos);
+    return withIdentity(mark, st, fpOfReads(mark.end, (a, b) => readRangeSync(fd, a, b)));
   } finally { closeSync(fd); }
 }
 
@@ -573,7 +598,11 @@ export async function buildResolver(source, { retryMs = 30000, sessionsRoot = nu
       const m = marks.get(f);
       if (!m) { const mk = await indexSafe(f); if (mk) { files.push(f); marks.set(f, mk); changed = true; if (onIndexChange) onIndexChange(); } continue; } // a new copy: poisoned before any await
       if (st.ino !== m.ino || st.size < m.size || (m.sealed && st.size !== m.size)) { await rebuildAll(); changed = true; break; } // a sealed file never grows
-      if (st.size === m.size) continue;
+      // the same inode is no proof of the same file (ext4 reuses inodes; O_TRUNC keeps one): a file that changed in
+      // any way is resumed only if its bytes before the last indexed line's end are still the ones indexed
+      const touched = st.size !== m.size || st.mtimeMs !== m.mtimeMs || st.ctimeMs !== m.ctimeMs;
+      if (!m.sealed && touched && !sameFileAs(f, m)) { await rebuildAll(); changed = true; break; }
+      if (st.size === m.size) { if (touched) marks.set(f, { ...m, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs }); continue; } // touched, same bytes
       undoTail(idx, path.basename(f), m.tail);
       const mk = await indexSafe(f, m.end);
       marks.set(f, mk || { ...m, tail: null }); // tail already taken back: never undo it twice
