@@ -58,6 +58,13 @@ export const HARNESSES = Object.freeze([
       'HTTP client switched from undici to node:https: a new Agent per request, no ALPN (inferred, lab check pending)')] },
 ]);
 
+// Ordered union of every header session key the table declares, then the legacy ones. Only for raw lines that
+// do not parse (src/etl/shard.mjs), where the harness is unknown: the per-row lookup is always preferred.
+export const HEADER_SESSION_KEYS = Object.freeze([...new Set([
+  ...HARNESSES.flatMap((h) => h.sessionKeys.filter((k) => k.from === 'header').map((k) => k.name.toLowerCase())),
+  ...LEGACY_SESSION_KEYS.map((k) => k.name.toLowerCase()),
+])]);
+
 // Legacy-only row: the pre-D37 DeepSeek CLI. Reachable by UA inference only, never by proc.agent.
 const LEGACY_DEEPSEEK_CLI = { id: 'deepseek-cli', ua: /deepseek/, legacy: true };
 const byId = (id) => HARNESSES.find((h) => h.id === id);
@@ -115,13 +122,16 @@ export function harnessOf(rec) {
   return { id: null, row: null, inferred: false, agent: null };
 }
 
-export function sessionKeyOf(rec) {
+// headersOnly: only the row's header keys are candidates — the sharder's rule (3.4:21, D35: it never reads a
+// body key). The legacy keys are all headers already.
+export function sessionKeyOf(rec, { headersOnly = false } = {}) {
   const NONE = { key: null, confidence: null, source: null, name: null, aliases: [] };
   if (!rec) return NONE;
   const { row } = harnessOf(rec);
   let hit = null;
   const aliases = [];
   for (const k of row ? row.sessionKeys : []) {
+    if (headersOnly && k.from !== 'header') continue;
     const v = valueOf(rec, k);
     if (v == null) continue;
     if (!hit) hit = { key: v, confidence: k.confidence, source: k.from, name: k.name };

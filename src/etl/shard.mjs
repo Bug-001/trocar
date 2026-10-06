@@ -9,8 +9,10 @@
 // The hard constraint is invariant 2: the source NDJSON is the ONE source of truth. So this module
 // COPIES RAW LINE BYTES. It never JSON.parses a record and re-serialises it — that would silently
 // renormalise number formatting, key order and unicode escapes, and every "verbatim" claim
-// downstream would become a lie. Session identity is read by a bounded scan of the header region,
-// which is also why `sessionIdOfLine` works on the raw string instead of a parsed object.
+// downstream would become a lie. The record is parsed only to READ it (class, session key, meta): the
+// session key is its harness's HEADER key from the one table (src/dissect/harnesses.mjs, 3.4:21 — the
+// sharder never reads a body key). A line that does not parse is keyed by a bounded scan of its header
+// region (`sessionIdOfLine`), which works on the raw string.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -18,14 +20,21 @@ import { createHash } from 'node:crypto';
 import { emptyMeta, foldRecord, mergeMeta } from './session-meta.mjs';
 import { resolveCoexistence, isSealedPath, streamOfSealed } from '../raw/discover.mjs';
 import { appendJournal, defaultJournalPath } from '../raw/journal.mjs';
+import { sessionKeyOf, HEADER_SESSION_KEYS } from '../dissect/harnesses.mjs';
 
 const NL = 0x0a;
-const SID_KEY = /"x-claude-code-session-id"\s*:\s*"([^"]+)"/i;
+const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const SID_KEYS_RE = new RegExp(`"(${HEADER_SESSION_KEYS.map(esc).join('|')})"\\s*:\\s*"([^"]+)"`, 'gi');
 
 // Records with no session header still belong to the corpus — dropping them would be an
 // invariant-2 violation dressed up as tidying. Session-LESS traffic is the control plane; it lands
 // under `control/<class>.ndjson`, bucketed by endpoint (4.2:51 · demo sessions.mjs controlClass).
 export const CONTROL_DIR = 'control';
+// Header-less INFERENCE (Kimi's body key, Hermes's synthesized key — 3.4:21) is session traffic whose key the
+// sharder may not read (headers only). It MUST NOT land in control/: it goes here, byte-copied, and the board
+// groups it by its read-side key (gate G12). Not a session dir: no meta.json.
+export const UNKEYED_DIR = '_unkeyed';
+const SESSIONLESS_DIRS = new Set([CONTROL_DIR, UNKEYED_DIR]);
 
 // Which per-session stream a record belongs to (4.2:51 · demo sessions.mjs classOf). The split keeps
 // the board's calls timeline clean: `calls.ndjson` = real inference (the ReAct spine, feeds every
@@ -68,8 +77,12 @@ export function sessionIdOfLine(line) {
   // a generous cap so a malformed record degrades to "unassigned" rather than scanning a 200 KB body.
   let end = line.indexOf('"req_body"', i);
   if (end < 0) end = Math.min(line.length, i + 65536);
-  const m = SID_KEY.exec(line.slice(i + k.length, end));
-  return m ? m[1] : null;
+  // Any header session key of the table: the harness is unknown here (the line did not parse), so the table's
+  // order decides between two keys — the parsed path uses the record's own harness row instead.
+  const found = new Map();
+  for (const m of line.slice(i + k.length, end).matchAll(SID_KEYS_RE)) if (!found.has(m[1].toLowerCase())) found.set(m[1].toLowerCase(), m[2]);
+  for (const name of HEADER_SESSION_KEYS) if (found.has(name)) return found.get(name);
+  return null;
 }
 
 // A session id that survives sanitisation but is still an unusable directory name ('' / '.' / '..').
@@ -78,10 +91,11 @@ export function sessionIdOfLine(line) {
 const UNSAFE_SID = '_badsid';
 
 // A session id reaches the filesystem as a directory name. It comes from a header, i.e. from the
-// wire, so it is untrusted: `../` or a NUL would escape the shard root.
+// wire, so it is untrusted: `../` or a NUL would escape the shard root. A value naming a reserved
+// session-less dir (`control`, `_unkeyed`) would mix a session into it: parked too.
 function safeName(sid) {
   const s = String(sid).replace(/[^A-Za-z0-9._-]/g, '_');
-  return !s || s === '.' || s === '..' ? UNSAFE_SID : s.slice(0, 128);
+  return !s || s === '.' || s === '..' || SESSIONLESS_DIRS.has(s) ? UNSAFE_SID : s.slice(0, 128);
 }
 
 class ShardWriter {
@@ -162,8 +176,8 @@ export async function rebuildMeta(outDir, { journal = defaultJournalPath() } = {
   let entries = [];
   try { entries = fs.readdirSync(outDir, { withFileTypes: true }); } catch { return { sessions: 0, records: 0, malformed: 0, errors }; }
   for (const e of entries) {
-    // control/ is session-less (no meta); skip it. Everything else is a session dir.
-    if (!e.isDirectory() || e.name === CONTROL_DIR) continue;
+    // control/ and _unkeyed/ are session-less (no meta); skip them. Everything else is a session dir.
+    if (!e.isDirectory() || SESSIONLESS_DIRS.has(e.name)) continue;
     const meta = emptyMeta(e.name);
     let seen = false, bad = null, mal = 0;
     const dir = path.join(outDir, e.name), names = Object.values(STREAM_FILE);
@@ -223,7 +237,7 @@ export async function resplitShards(outDir) {
   try { entries = fs.readdirSync(outDir, { withFileTypes: true }); } catch { return { done: 0, skipped: 0, failed: 0 }; }
   let done = 0, skipped = 0, failed = 0;
   for (const e of entries) {
-    if (!e.isDirectory() || e.name === CONTROL_DIR) continue;
+    if (!e.isDirectory() || SESSIONLESS_DIRS.has(e.name)) continue;
     const sdir = path.join(outDir, e.name);
     const calls = path.join(sdir, 'calls.ndjson');
     if (!fs.existsSync(calls)) { skipped++; continue; }
@@ -359,7 +373,7 @@ export async function shardOnce({ file, outDir, ...opts } = {}) {
  * @param {number}  chunkSize   read buffer
  * @param {number}  flushBytes  per-session write buffer
  * @param {Function} onProgress called with {records, bytes} periodically
- * @returns {{records, bytes, offset, sessions, unassigned, partial}}
+ * @returns {{records, bytes, offset, sessions, unassigned, unkeyed, partial}}
  */
 export async function shardStream({
   file, outDir, fromOffset = 0, chunkSize = 1024 * 1024,
@@ -373,7 +387,7 @@ export async function shardStream({
   // copy; the shard bytes stay verbatim, the meta is a derived projection.
   const metas = new Map();
   const out = {
-    records: 0, bytes: 0, offset: start, sessions: counts, unassigned: 0, partial: false,
+    records: 0, bytes: 0, offset: start, sessions: counts, unassigned: 0, unkeyed: 0, partial: false,
   };
   if (start >= size) return out;
 
@@ -396,13 +410,15 @@ export async function shardStream({
       const lineWithNl = buf.subarray(from, nl + 1);
       from = nl + 1;
       if (lineWithNl.length > 1) {
-        const sid = sessionIdOfLine(lineWithNl.subarray(0, Math.min(lineWithNl.length, 8192)).toString('utf8'));
-        // Parse the record ONCE, for classification (classOf/controlClass need is_llm_call + endpoint)
-        // and the meta fold. The RAW bytes are still what gets written — this parse never touches the
-        // shard content, so invariant 2 holds. A partial/malformed line fails to parse (rec=null); its
-        // bytes are still kept, it just can't be classified beyond its session id.
+        // Parse the record ONCE, for its session key, classification (classOf/controlClass need is_llm_call +
+        // endpoint) and the meta fold. The RAW bytes are still what gets written — this parse never touches
+        // the shard content, so invariant 2 holds. A partial/malformed line fails to parse (rec=null); its
+        // bytes are still kept, keyed by the header scan, and it can't be classified beyond that.
         let rec = null;
         try { rec = JSON.parse(lineWithNl.subarray(0, lineWithNl.length - 1).toString('utf8')); } catch { /* keep bytes, skip derivation */ }
+        if (rec && typeof rec !== 'object') rec = null;
+        const sid = rec ? sessionKeyOf(rec, { headersOnly: true }).key
+          : sessionIdOfLine(lineWithNl.subarray(0, Math.min(lineWithNl.length, 8192)).toString('utf8'));
         let relPath, name;
         if (sid) {
           name = safeName(sid);
@@ -417,6 +433,11 @@ export async function shardStream({
             if (!meta) { meta = emptyMeta(sid); metas.set(name, meta); }
             foldRecord(meta, rec);
           }
+        } else if (rec && rec.is_llm_call === true) {
+          // Inference whose key is not a header (3.4:21): never control/ (gate G12)
+          out.unkeyed++;
+          name = UNKEYED_DIR;
+          relPath = UNKEYED_DIR + '/' + STREAM_FILE.call;
         } else {
           // Session-less control plane: bucket by endpoint (demo controlClass). No per-session meta —
           // control traffic never appears in the board's session list (4.2:51 "不进 3.2 会话表").

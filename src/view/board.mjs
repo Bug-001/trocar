@@ -129,6 +129,9 @@ function groupIntoProjects(sessions) {
   return { projects };
 }
 
+// Session metas straight from records (the sharder's `_unkeyed/`: keys that are not headers, 3.4:21).
+export const sessionMetasOf = (records) => [...groupSessions(records)].map(([id, recs]) => sessionMetaFor(id, recs));
+
 // ── /api/projects ─────────────────────────────────────────────────────────────
 export function projectsView(records, { enrich } = {}) {
   return groupIntoProjects([...groupSessions(records)].map(([id, recs]) => sessionMetaFor(id, recs, enrich)));

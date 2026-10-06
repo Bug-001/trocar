@@ -19,7 +19,7 @@ import { listSessions, sessionCalls, sessionComposition, sessionResources, callC
   filesEverInContext, cacheHitDistribution, breakKindComparison, unmappedFields, forkTree } from './query/queries.mjs';
 import { buildResolver } from './query/source.mjs';
 import { readRecords } from './etl/ingest.mjs';
-import { projectsView, projectsViewFromMetas, sessionView, controlView, forWire } from './view/board.mjs';
+import { projectsView, projectsViewFromMetas, sessionView, controlView, forWire, groupSessions, controlRecords, sessionMetasOf } from './view/board.mjs';
 import { sessionIdOf } from './view/assemble.mjs';
 import { stampSynthKeys } from './dissect/synth-key.mjs';
 import { TEXT_REF_FIELD } from './etl/orchestrator.mjs';
@@ -447,6 +447,29 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
   // A session's records now live SPLIT across calls/probes/other.ndjson (the demo's classOf layout,
   // 4.2:51). `control/` holds session-less traffic and is NOT a session dir.
   const SESSION_STREAMS = ['calls.ndjson', 'probes.ndjson', 'other.ndjson'];
+  // `_unkeyed/` (src/etl/shard.mjs UNKEYED_DIR — the server stays out of ETL imports, 4.4:34) holds inference
+  // whose session key is not a header (3.4:21, gate G12): Kimi's body key, Hermes's synthesized key. Not a
+  // session dir: its records are grouped by their read-side key, listed and opened by it; keyless ones are
+  // control. Read once per change of its files (it is every such call of the corpus).
+  const UNKEYED = '_unkeyed';
+  let unkeyedMemo = { sig: null, records: [], errors: [] };
+  const loadUnkeyed = async () => {
+    const files = [], errors = [];
+    for (const root of (Array.isArray(sourcePath) ? sourcePath : [sourcePath]).filter(Boolean)) {
+      const dir = path.join(root, UNKEYED);
+      if (!fssync.existsSync(dir)) continue;
+      const inputs = shardInputs(dir, ['calls.ndjson']);
+      errors.push(...coexistNotes(inputs.mismatched));
+      files.push(...inputs.files);
+    }
+    const sig = files.map((f) => { try { const t = fssync.statSync(f); return `${f}:${t.size}:${t.mtimeMs}:${t.ino}`; } catch { return f + ':gone'; } }).join('|');
+    if (sig !== unkeyedMemo.sig) {
+      const records = [];
+      await readAll(files, records, errors);
+      unkeyedMemo = { sig, records, errors };
+    }
+    return unkeyedMemo;
+  };
   const shardDirsOf = () => {
     const roots = (Array.isArray(sourcePath) ? sourcePath : [sourcePath]).filter(Boolean);
     const dirs = [];
@@ -454,7 +477,7 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
       let st; try { st = fssync.statSync(root); } catch { continue; }
       if (!st.isDirectory()) continue;
       for (const e of fssync.readdirSync(root, { withFileTypes: true })) {
-        if (!e.isDirectory() || e.name === 'control') continue; // control/ is session-less
+        if (!e.isDirectory() || e.name === 'control' || e.name === UNKEYED) continue; // session-less: control/, _unkeyed/
         const dir = path.join(root, e.name);
         // A session dir has meta.json (the archive-layer summary) or at least one stream file. Keying
         // on any stream — not just calls.ndjson — means a probes-only session still lists.
@@ -503,11 +526,13 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
     }
     return meta;
   };
-  const loadSessionMetas = (errors = []) => {
+  const loadSessionMetas = async (errors = []) => {
     const dirs = shardDirsOf();
-    if (!dirs.length) return null; // not a sharded source → caller falls back to the record path
+    const unk = await loadUnkeyed();
+    if (!dirs.length && !unk.records.length) return null; // not a sharded source → caller falls back to the record path
     const metas = [];
     metas.dirs = dirs; metas.noMeta = [];
+    errors.push(...unk.errors);
     for (const d of dirs) {
       // A shard without meta.json (sharded before the archive layer, or a partial write) just doesn't
       // list until re-sharded — a degrade, not a crash, but it is reported (sourceHealth), not silent.
@@ -520,6 +545,7 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
       if (extra) meta = mergeMeta(meta, extra);
       if (meta) metas.push(meta); else metas.noMeta.push({ dir: d, error: noMetaError });
     }
+    metas.push(...sessionMetasOf(unk.records)); // keys that are not headers (3.4:21): grouped from the records themselves
     return metas;
   };
   // What the board did NOT read, and why (4.4:83 · invariant 4), sent with every session list so a
@@ -573,6 +599,10 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
       await readAll(inputs.files, out, out.sourceErrors);
       return out;
     }
+    // a session keyed outside the headers lives in _unkeyed/ (3.4:21)
+    const unk = await loadUnkeyed();
+    const g = groupSessions(unk.records).get(id);
+    if (g) { const out = [...g]; out.sourceErrors = unk.errors; return out; }
     // flat source, or an id that isn't its own shard → fall back to the whole corpus, filtered.
     const out = stampSynthKeys(await loadRecords()).filter((r) => sessionIdOf(r) === id); // synthesized keys first (3.4 合成键)
     out.sourceErrors = loadRecords.sourceErrors || [];
@@ -594,6 +624,9 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
       out.sourceErrors.push(...coexistNotes(inputs.mismatched));
       await readAll(inputs.files, out, out.sourceErrors);
     }
+    // keyless inference in _unkeyed/: control until a key exists (no body key, no synthesized one)
+    const unk = await loadUnkeyed();
+    if (unk.records.length) { sharded = true; out.push(...controlRecords(unk.records)); out.sourceErrors.push(...unk.errors); }
     if (sharded) return out;
     // flat source: control = the session-less records. (A keyless Hermes / Kimi call is passed on too: controlView
     // stamps synthesized keys over it and keeps it out; only keyless records move a synthesized-key assigner.)
@@ -648,7 +681,7 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         // Archive layer: on a sharded source, list from the precomputed metas — never load a record,
         // so a 7.4 GB / 24-session capture enumerates instantly instead of OOM-ing.
         const metaErrors = [];
-        const metas = loadSessionMetas(metaErrors);
+        const metas = await loadSessionMetas(metaErrors);
         if (metas) {
           const seen = new Set(metaErrors.map((e) => e.file));
           const errors = [...metaErrors, ...unreadableSealedInShards().filter((e) => !seen.has(e.file))];

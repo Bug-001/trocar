@@ -120,6 +120,7 @@ async function main() {
             `shard: +${res.records} records (${(res.bytes / 1e6).toFixed(1)} MB) from offset `
             + `${res.resumedFrom} → ${res.offset} in ${secs}s`
             + (res.unassigned ? `, ${res.unassigned} without a session header` : '')
+            + (res.unkeyed ? `, ${res.unkeyed} inference calls keyed outside the headers (→ _unkeyed/)` : '')
             + (res.partial ? ', trailing partial record left for next run' : ''),
           );
         }
