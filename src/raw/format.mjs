@@ -63,6 +63,8 @@ const readAt = (fs, fd, pos, len) => {
 
 // Read and check the header, trailer and index tail. Throws (never guesses) on anything off.
 export function readIndex(fs, fd, size, name = 'sealed file') {
+  // an empty one is a segment name a seal claimed (no hard links: claim, then rename) and never filled
+  if (size === 0) throw new Error(`${name}: empty — a segment name an interrupted seal claimed and never filled; it holds no records, and the next seal of this stream in this directory removes it`);
   if (size < HEADER_LEN + TRAILER_LEN + 32) throw new Error(`${name}: not a sealed file (only ${size} bytes)`);
   const tr = readAt(fs, fd, size - TRAILER_LEN, TRAILER_LEN);
   if (!tr.subarray(16).equals(END_MAGIC)) throw new Error(`${name}: not a sealed file (trailer magic)`);

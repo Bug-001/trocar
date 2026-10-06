@@ -17,6 +17,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { emptyMeta, foldRecord, mergeMeta } from './session-meta.mjs';
 import { resolveCoexistence, isSealedPath, streamOfSealed } from '../raw/discover.mjs';
+import { appendJournal, defaultJournalPath } from '../raw/journal.mjs';
 
 const NL = 0x0a;
 const SID_KEY = /"x-claude-code-session-id"\s*:\s*"([^"]+)"/i;
@@ -154,7 +155,7 @@ function headFingerprint(file, len) {
 // count is the same before and after sealing: `records` = records folded into meta, `malformed` =
 // non-blank lines that are not JSON, counted apart (review 3 F11 — the NDJSON path counted them as
 // records, the sealed path did not).
-export async function rebuildMeta(outDir) {
+export async function rebuildMeta(outDir, { journal = defaultJournalPath() } = {}) {
   const { forEachLine } = await import('./ingest.mjs');
   let sessions = 0, records = 0, malformed = 0;
   const errors = [];
@@ -182,7 +183,8 @@ export async function rebuildMeta(outDir) {
       });
       if (rep.sealedError || rep.unreadableRecords) { bad = { file: f, reason: rep.sealedError || rep.unreadable[0].reason, unreadableRecords: rep.sealedError ? null : rep.unreadableRecords }; break; }
     }
-    if (bad) { errors.push({ session: e.name, ...bad }); continue; }
+    // D38: a read failure is journalled, not only printed (second review, low)
+    if (bad) { errors.push({ session: e.name, ...bad }); appendJournal({ op: 'read', reader: 'rebuild-meta', outcome: 'failed', session: e.name, ...bad, metaKept: true }, { journal }); continue; }
     if (!seen) continue;
     records += meta.calls + meta.probes + meta.other;
     malformed += mal;

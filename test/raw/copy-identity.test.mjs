@@ -92,3 +92,19 @@ test('F3: a file that GREW after sealing is still refused (its copy holds its fi
     assert.match(w.note, /another file/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('`raw verify` says "prefix" for a copy of a file that grew, not a plain ok (second review, low)', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'bin', 'asight.mjs');
+  const home = tmpDir();
+  try {
+    const f = writeShard(path.join(home, 'sessions', S, 'calls.ndjson'), conversation(S, 2).map((r) => toLine(r)));
+    await sealLegacy(f, { ...NONE, journal: null });
+    fs.appendFileSync(f, toLine(envelope({ sid: S, id: 'late', body: '' })));
+    const r = spawnSync(process.execPath, [CLI, 'raw', 'verify', path.dirname(f)], { encoding: 'utf8', env: { ...process.env, HOME: home, ASIGHT_SOURCE: '' } });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /^ok \(prefix\) .*calls\.ndjson\.0001\.sealed/m);
+    assert.match(r.stdout, /grew to \d+ bytes after sealing/);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});

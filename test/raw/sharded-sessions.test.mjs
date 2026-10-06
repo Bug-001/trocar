@@ -9,6 +9,7 @@ import { shardOnce, rebuildMeta } from '../../src/etl/shard.mjs';
 import { sealShard } from '../../src/raw/seal.mjs';
 import { sealLegacy } from '../../src/raw/legacy.mjs';
 import { markClosed } from '../../src/raw/closed.mjs';
+import { readJournal } from '../../src/raw/journal.mjs';
 import { tmpDir, conversation, toLine, writeShard, listFiles } from './helpers.mjs';
 
 // `asight serve --source ~/.asight/sessions` (sharded mode) lists sessions from each dir's meta.json.
@@ -71,10 +72,14 @@ test('`asight shard --rebuild-meta` counts sealed segments, and refuses to shrin
     assert.equal(JSON.parse(fs.readFileSync(metaPath, 'utf8')).calls, 6, 'rebuild-meta dropped the sealed records from the count');
     assert.deepEqual(r.errors, []);
     fs.writeFileSync(listFiles(path.join(ses, L))[0], 'damaged');
-    const r2 = await rebuildMeta(ses);
+    const journal = path.join(root, 'rm.jsonl');
+    const r2 = await rebuildMeta(ses, { journal });
     assert.equal(JSON.parse(fs.readFileSync(metaPath, 'utf8')).calls, 6, 'meta was overwritten from a partial read');
     assert.equal(r2.errors.length, 1);
     assert.match(r2.errors[0].reason, /sealed|not a sealed file|checksum/);
+    // D38: the read failure is journalled, not only printed (second review, low)
+    const j = readJournal({ journal }).find((e) => e.op === 'read' && e.reader === 'rebuild-meta');
+    assert.ok(j && j.outcome === 'failed' && j.file === r2.errors[0].file && j.reason, 'rebuild-meta\'s read failure left no journal entry');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

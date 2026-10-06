@@ -126,7 +126,7 @@ async function sealCore(shard, { fs = nodeFs, sessionsRoot, split = true, delete
     // Copies left by an interrupted earlier run of the SAME source are superseded by this verified
     // set. Removing them first is safe: the original still holds every byte.
     const ours = new Set([...outs.values()].map((o) => o.tmp));
-    for (const o of outs.values()) { removeEarlierCopies(fs, o.dir, name, { sum, length }); cleanStaleTemps(fs, o.dir, name, ours, journal); }
+    for (const o of outs.values()) { removeEarlierCopies(fs, o.dir, name, { sum, length }); cleanStaleTemps(fs, o.dir, name, ours, journal); cleanEmptyClaims(fs, o.dir, name, journal); }
     for (const o of outs.values()) {
       o.final = publish(fs, o.dir, name, o.tmp);
       renamed = true;
@@ -264,7 +264,7 @@ function publish(fs, dir, name, tmp) {
       if (e.code === 'EEXIST') continue;
       if (!['EPERM', 'ENOTSUP', 'ENOSYS', 'EOPNOTSUPP'].includes(e.code)) throw e;
       try { fs.closeSync(fs.openSync(fin, 'wx', 0o600)); } catch (c) { if (c.code === 'EEXIST') continue; throw c; }
-      fs.renameSync(tmp, fin);
+      try { fs.renameSync(tmp, fin); } catch (r) { try { fs.unlinkSync(fin); } catch {} throw r; }   // never leave our claim empty
       return fin;
     }
     fs.unlinkSync(tmp);
@@ -352,6 +352,20 @@ function cleanStaleTemps(fs, dir, name, ours, journal) {
     if (!m || ours.has(p) || pidAlive(Number(m[1]))) continue;
     try { fs.unlinkSync(p); appendJournal({ op: 'seal', outcome: 'temp-removed', file: p, reason: `the temp of an interrupted seal (pid ${m[1]} is not running)` }, { journal, fs }); }
     catch (e) { if (e.code !== 'ENOENT') appendJournal({ op: 'seal', outcome: 'note', file: p, reason: `a dead seal's temp could not be removed (${e.message})` }, { journal, fs }); }
+  }
+}
+// An EMPTY segment of this stream is a name claimed (no-hard-link fallback in publish) by a seal that
+// died before its rename: no records, but every reader would report it forever. Removed once it is a
+// minute old — a claim is filled microseconds after it is made — and journalled (second review, low).
+function cleanEmptyClaims(fs, dir, name, journal) {
+  const re = segRe(name);
+  for (const f of fs.readdirSync(dir)) {
+    if (!re.test(f)) continue;
+    const p = path.join(dir, f);
+    let st; try { st = fs.statSync(p); } catch { continue; }
+    if (st.size !== 0 || Date.now() - st.mtimeMs < 60000) continue;
+    try { fs.unlinkSync(p); appendJournal({ op: 'seal', outcome: 'claim-removed', file: p, reason: 'an empty segment name an interrupted seal claimed and never filled (no records)' }, { journal, fs }); }
+    catch (e) { if (e.code !== 'ENOENT') appendJournal({ op: 'seal', outcome: 'note', file: p, reason: `an empty claimed segment could not be removed (${e.message})` }, { journal, fs }); }
   }
 }
 function pidAlive(pid) {

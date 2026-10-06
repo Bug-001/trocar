@@ -131,3 +131,33 @@ test('F12: two sealers filing same-named shards into one session dir at once bot
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   }
 });
+
+// Second review, low: without hard links `publish` claims the name with an empty file and renames onto
+// it. A crash in between leaves an empty `<stream>.NNNN.sealed`. Readers say what it is (no records,
+// a claim never filled), the next seal of that stream in that dir removes it once it is a minute old
+// and journals it; a failed rename removes its own claim at once.
+test('an empty segment left by an interrupted claim: named by readers, removed (and journalled) by the next seal', async () => {
+  const { listSources } = await import('../../src/raw/discover.mjs');
+  const { readRecords } = await import('../../src/etl/ingest.mjs');
+  const root = tmpDir();
+  try {
+    const dir = path.join(root, 'sessions', S), journal = path.join(root, 'j.jsonl');
+    const f = writeShard(path.join(dir, 'calls.ndjson'), conversation(S, 2).map((r) => toLine(r)));
+    const NONE = { fdHolders: async () => new Map(), processList: async () => [], sleep: async () => {} };
+    // the fallback path itself: link not supported → claim + rename; a rename that fails drops its claim
+    const noLink = { ...fs, linkSync: () => { throw Object.assign(new Error('EPERM: operation not permitted, link'), { code: 'EPERM' }); },
+      renameSync: (a, b) => { if (/\.sealed$/.test(b)) throw Object.assign(new Error('EIO: rename'), { code: 'EIO' }); return fs.renameSync(a, b); } };
+    await sealLegacy(f, { ...NONE, journal, fs: noLink });
+    assert.deepEqual(listFiles(dir), [], 'a failed rename left its empty claim behind');
+    const old = path.join(dir, 'calls.ndjson.0007.sealed'), young = path.join(dir, 'calls.ndjson.0008.sealed');
+    fs.writeFileSync(old, ''); fs.writeFileSync(young, '');
+    const t = new Date(Date.now() - 120000); fs.utimesSync(old, t, t);
+    const recs = await readRecords(old);
+    assert.match(recs.scan.sealedError, /empty — a segment name an interrupted seal claimed/);
+    assert.ok(listSources([path.join(root, 'sessions')]).files.includes(old), 'the empty claim is not listed (and so not reported)');
+    await sealLegacy(f, { ...NONE, journal });
+    assert.equal(fs.existsSync(old), false, 'the old empty claim survived the next seal');
+    assert.ok(fs.existsSync(young), 'a claim that may still be in use was removed');
+    assert.ok(readJournal({ journal }).some((e) => e.outcome === 'claim-removed' && e.file === old));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

@@ -343,7 +343,11 @@ async function main() {
         const { runVerify } = await mod('verify.mjs');
         const against = flag('--against', null);
         const results = runVerify({ target: path.resolve(target), against: against && path.resolve(against) });
-        for (const x of results) console.log(`${x.ok ? 'ok    ' : 'FAILED'} ${x.mode === 'self' ? '(by itself) ' : ''}${x.sealed.join(', ')}${x.original ? ' vs ' + x.original : ''}${x.ok ? ` · ${x.records} records` : ' — ' + x.reason}`);
+        // a copy of only the first bytes of a file that grew says so ("prefix"), never a plain ok
+        for (const x of results) {
+          console.log(`${x.ok ? (x.covers === 'prefix' ? 'ok (prefix)' : 'ok    ') : 'FAILED'} ${x.mode === 'self' ? '(by itself) ' : ''}${x.sealed.join(', ')}${x.original ? ' vs ' + x.original : ''}${x.ok ? ` · ${x.records} records` : ' — ' + x.reason}`);
+          if (x.note) console.log(`       note: ${x.note}`);
+        }
         if (!results.length) console.error('no sealed files found');
         if (!results.length || results.some((x) => !x.ok)) process.exitCode = 1;
         break;
