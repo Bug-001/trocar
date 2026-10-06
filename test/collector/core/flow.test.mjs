@@ -63,10 +63,10 @@ function connectProxy(originPort, reply, { onOriginLeg = () => {} } = {}) {
 // that arrive meanwhile land after end() but before 'finish' — the window the flake needed.
 const holdShutdown = (sock, ms) => { const final = sock._final; sock._final = (cb) => setTimeout(() => final.call(sock, cb), ms) }
 // The first flight of a real client handshake (SNI upstream.test, ALPN http/1.1), captured raw.
-async function clientHello() {
+async function clientHello(opts = {}) {
   const srv = net.createServer(); const port = await listen(srv)
   const got = new Promise((r) => srv.once('connection', (s) => s.once('data', (d) => { r(d); s.destroy() })))
-  tls.connect({ port, host: '127.0.0.1', servername: 'upstream.test', ALPNProtocols: ['http/1.1'] }).on('error', () => {})
+  tls.connect({ port, host: '127.0.0.1', servername: 'upstream.test', ALPNProtocols: ['http/1.1'], ...opts }).on('error', () => {})
   const hello = await got; srv.close(); return hello
 }
 const once = (emitter, event) => new Promise((r) => emitter.once(event, r))
@@ -174,9 +174,33 @@ for (const maxVersion of ['TLSv1.2', 'TLSv1.3']) {
     assert.match(r.cert.issuer, /upstream test CA/)
     assert.deepEqual(h.flows.map((f) => [f.decision, f.not_captured ?? null, f.reason ?? null]),
       [['decrypt', 'client-rejected-leaf', 'client-rejected-leaf'], ['decrypt', 'client-rejected-leaf', 'client-rejected-leaf'], ['splice', 'negative-cache', 'client-rejected-leaf']])
+    // every rejection row says how the client went (D38 F1b): a Node client sends no alert, so the engine sees a
+    // close with no error (or a reset); its own certificate-check code never reaches the engine (RFC 4.6 §记录)
+    for (const f of h.flows.slice(0, 2)) {
+      assert.equal(f.error && f.error.side, 'client', JSON.stringify(f.error))
+      assert.ok(['closed_without_app_data', 'ECONNRESET'].includes(f.error.type), JSON.stringify(f.error))
+      assert.equal(typeof f.error.message, 'string')
+    }
     assert.equal(h.ctx.counters.notCaptured.negative, 1)
   })
 }
+
+// A client that does send an alert when it rejects our leaf (OpenSSL, rustls; Node does not): under TLS 1.2 the
+// server's flight is in the clear, so the client answers it with a plaintext fatal unknown_ca alert. The rejection row's
+// error carries what that alert told the engine (D38 F1b, RFC 4.6 §记录).
+test('a client that rejects the leaf with a TLS alert: the row\'s error carries the alert as the engine saw it (D38 F1b)', async () => {
+  const h = await harness({ upstream: httpsUpstream((s) => s.on('data', () => s.end(RESP))) })
+  const hello = await clientHello({ maxVersion: 'TLSv1.2' })
+  const raw = net.connect(h.port, '127.0.0.1'); raw.on('error', () => {})
+  await once(raw, 'connect'); raw.write(hello)
+  await within(once(raw, 'data'), 'the engine\'s server flight')
+  raw.end(Buffer.from([0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x30])) // alert: fatal, unknown_ca (48)
+  await within(h.settled(), 'flow finalized'); raw.destroy()
+  await h.close()
+  const [f] = h.flows
+  assert.deepEqual([f.decision, f.not_captured, f.reason, f.error.side], ['decrypt', 'client-rejected-leaf', 'client-rejected-leaf', 'client'])
+  assert.match(f.error.type, /ALERT_UNKNOWN_CA/, JSON.stringify(f.error))
+})
 
 test('a connection that carries data resets the count: rejected, accepted, rejected is not negative (W9)', async () => {
   const h = await harness({ upstream: httpsUpstream((s) => s.on('data', () => s.end(RESP))) })

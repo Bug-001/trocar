@@ -332,12 +332,17 @@ export function handleFlow(client, meta, ctx) {
       clientTls.once('data', () => { appData = true })
       const otherSide = () => { if (!judged) notClient = true }
       upTls.on('end', otherSide); upTls.on('error', otherSide); upTls.on('close', otherSide)
-      const judge = () => {
+      const judge = (e) => {
         if (judged) return
         judged = true
         if (appData) return ctx.negCache.observe(key, { rejected: false, meta, host })
         if (notClient || selfClosed) return
         notCaptured('client-rejected-leaf', 'client-rejected-leaf')
+        // how the client went, as far as the engine can see (RFC 4.6 §记录): its TLS alert, a reset, or a close
+        // with no error (a Node client checks our leaf after the handshake and sends no alert). Its own
+        // certificate-check code never reaches us.
+        if (!rec.error) rec.error = e instanceof Error ? { type: e.code || 'error', message: msgOf(e), side: 'client' }
+          : { type: 'closed_without_app_data', message: 'the client closed after the TLS handshake without sending application data', side: 'client' }
         ctx.negCache.observe(key, { rejected: true, meta, host })
       }
       clientTls.on('error', judge); clientTls.on('end', judge); clientTls.on('close', judge)
