@@ -279,8 +279,7 @@ export async function runEtl(records, connection, opts = {}) {
       if (idx < (await consumedOf(key))) {
         if (laneKey && isLlm) {
           prevBlocks.set(laneKey, curBlocks);
-          prevMsgCount.set(laneKey, msgCount);
-          prevMarker.set(laneKey, !!call.compaction_marker);
+          if (msgCount != null) { prevMsgCount.set(laneKey, msgCount); prevMarker.set(laneKey, !!call.compaction_marker); }
         }
         stats.skipped++;
         continue;
@@ -319,7 +318,8 @@ export async function runEtl(records, connection, opts = {}) {
       // its rising edge, medium), else the message-count drop (medium). A lane's first call has no predecessor:
       // compaction_from stays NULL. Never a fork (sessions.fork_of is not touched).
       let comp = { compaction: false, compaction_from: null, compaction_to: null };
-      if (isLlm && laneKey) {
+      // msgCount null = the adapter does not know this call's context (its request was not stored): no verdict
+      if (isLlm && laneKey && msgCount != null) {
         const prev = prevMsgCount.has(laneKey) ? { msgCount: prevMsgCount.get(laneKey), marker: !!prevMarker.get(laneKey) } : null;
         comp = compactionVerdict(prev, { hint: !!call.compaction_hint, marker: !!call.compaction_marker, msgCount });
       }
@@ -413,11 +413,10 @@ export async function runEtl(records, connection, opts = {}) {
         resSeq.set(sid, rs);
       }
 
-      // advance predecessor state AFTER this call is written
+      // advance predecessor state AFTER this call is written (a call of unknown context leaves the count chain alone)
       if (laneKey && isLlm) {
         prevBlocks.set(laneKey, curBlocks);
-        prevMsgCount.set(laneKey, msgCount);
-        prevMarker.set(laneKey, !!call.compaction_marker);
+        if (msgCount != null) { prevMsgCount.set(laneKey, msgCount); prevMarker.set(laneKey, !!call.compaction_marker); }
       }
       touched.add(key);
       stats.ingested++;

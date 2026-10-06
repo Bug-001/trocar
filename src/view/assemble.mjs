@@ -171,6 +171,10 @@ function assembleFlatLane(records, d, opts = {}) {
     local++;
     let req;
     let unparsed = false; // a request body that does not parse has no context to show: say so (invariant 4, D38)
+    // a call the dissector knows ran but whose request was not stored (ctx.unrenderable says why): no context to
+    // show either, but no failure — its reply and usage are real
+    const unstored = ctx && ctx.unrenderable ? String(ctx.unrenderable) : null;
+    const noContext = () => unparsed || !!unstored;
     if (ctx) req = ctx.req;
     else {
       try { req = JSON.parse(r.req_body); } catch { req = null; }
@@ -200,9 +204,9 @@ function assembleFlatLane(records, d, opts = {}) {
     // The count is the dissector's own (the ETL's), so compaction_from / _to match DuckDB.
     const h = hintsOf(r);
     const msgN = d.messageCount ? d.messageCount(req) : (req.message_count || 0);
-    const comp = unparsed ? { compaction: false } : compactionMeta(compactionVerdict(prevInfoOf.get(laneKind) || null,
+    const comp = noContext() ? { compaction: false } : compactionMeta(compactionVerdict(prevInfoOf.get(laneKind) || null,
       { hint: h.compaction === true, marker: h.compactionMarker === true, msgCount: msgN }, boardCompactionDrop));
-    if (!unparsed) prevInfoOf.set(laneKind, { msgCount: msgN, marker: h.compactionMarker === true });
+    if (!noContext()) prevInfoOf.set(laneKind, { msgCount: msgN, marker: h.compactionMarker === true });
     const brk = cacheBreak(prevFlat, flat, { compaction: comp.compaction });
     // 3.2:124 on the board too: what is shown of a partial / server-edited context is not what the model saw,
     // so no byte-identity claim and no ground truth is made over it
@@ -223,7 +227,7 @@ function assembleFlatLane(records, d, opts = {}) {
       ts: r.ts_request || r.ts || '', status: (r.resp && r.resp.status) || null,
       ...comp, error: !!r.error || failed, reqIncomplete: reqIncompleteOf(r), wsIncomplete: wsIncompleteOf(r), respIncomplete: respIncompleteOf(r),
       // the same sentinel the multi-lane path makes of a body that did not parse: the page shows why, not an empty window
-      ...(unparsed ? { unparsed: true, errMsg: unparsedErrMsg(reqIncompleteOf(r)) } : null),
+      ...(unparsed ? { unparsed: true, errMsg: unparsedErrMsg(reqIncompleteOf(r)) } : unstored ? { unparsed: true, errMsg: `unrenderable: ${unstored}` } : null),
       wire, nonBlockKeys: kept ? nonBlockKeysOf(r, d.id) : [], ...extraMessagesOf(r), respRefs: respRefsOf(r),
       // shipped as metadata + a text_ref per block, never the body (4.2:55); a cross-record context locates each
       // block in the record and field its bytes came from; out of the window: no blocks
@@ -232,7 +236,8 @@ function assembleFlatLane(records, d, opts = {}) {
       comp: compBuckets(flat),
       usage, cacheBreak: brk, gt: brk.gt, prefixSha256: curPfx,
     });
-    // A call that failed never established a cache prefix, so it MUST NOT become the next baseline.
+    // A call that failed never established a cache prefix, so it MUST NOT become the next baseline. A call whose request
+    // was not stored does (with no blocks, as in the ETL): the next call then has no known prefix to compare with.
     if (!(r.error || failed || (st != null && st !== 200))) prevFlatOf.set(laneKind, flat);
   }
   const kinds = Object.keys(FLAT_LANES).filter((k) => calls.some((c) => c.streamId === k));

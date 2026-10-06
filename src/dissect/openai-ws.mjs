@@ -39,12 +39,32 @@ function terminalOf(rec) {
   return null;
 }
 
+// 4.6 §传输与帧级记录: a call whose first client message the collector did not store — over the per-call size cap
+// (the framer omitted it: ws_truncated) or it could not be decompressed (partial_reasons has decode-failed) — has
+// req_body:null and no req_body_b64. It is told apart from an envelope with no client message (a server push) by a
+// client DATA frame in its ws_raw (opcode 0 / 1 / 2 in the frame header; control frames ride with any envelope).
+// → why its request is not stored, as text, or null.
+const hasClientDataFrame = (rec) => (Array.isArray(rec.ws_raw) ? rec.ws_raw : []).some((f) => {
+  if (!f || f.d !== 'c' || typeof f.h !== 'string') return false;
+  const h = Buffer.from(f.h, 'base64');
+  return h.length > 0 && (h[0] & 0x0f) <= 2;
+});
+export function unstoredRequestOf(rec) {
+  if (!rec || rec.transport !== 'ws' || rec.req_body != null || typeof rec.req_body_b64 === 'string' || !hasClientDataFrame(rec)) return null;
+  const why = [];
+  if (rec.ws_truncated === true) why.push('it was over the per-call size cap (ws_truncated: its frames keep only their headers)');
+  if (Array.isArray(rec.partial_reasons) && rec.partial_reasons.includes('decode-failed')) why.push('it could not be decompressed (partial_reasons: decode-failed; its compressed frames are kept in ws_raw)');
+  return why.length ? `the request message of this call was not stored: ${why.join(', or ')}` : null;
+}
+
 // 'handshake' = a legacy 101 envelope (main-era collector; gate G6) · 'warmup' = generate:false (W3: in the chain,
-// not a turn) · 'call' = a response.create · 'other' = anything else on the socket (a non-create client message,
-// a server message with no call open, a binary or unreadable opener) — counted by the board, never a call.
+// not a turn) · 'call' = a response.create · 'unstored' = a call whose request message was not stored (above): it
+// ran, its reply and usage are here, its context is not · 'other' = anything else on the socket (a non-create client
+// message, a server message with no call open, a binary or unreadable opener) — counted by the board, never a call.
 export function roleOf(rec) {
   if (isWsHandshake(rec)) return 'handshake';
   if (!rec || rec.transport !== 'ws') return 'other';
+  if (unstoredRequestOf(rec)) return 'unstored';
   const b = bodyOf(rec);
   if (!b || b.type !== 'response.create') return 'other';
   return b.generate === false ? 'warmup' : 'call';
@@ -73,10 +93,23 @@ export function createChain() {
     plan(rec) {
       if (plans.has(rec)) return plans.get(rec);
       const role = roleOf(rec);
-      if (role !== 'call' && role !== 'warmup') return null;
+      if (role !== 'call' && role !== 'warmup' && role !== 'unstored') return null;
       const k = connOf(rec);
       let heads = conns.get(k);
       if (!heads) conns.set(k, (heads = new Map()));
+      if (role === 'unstored') {
+        // no input is known, so no context: partial, and a continuation of its response is partial too
+        const why = unstoredRequestOf(rec);
+        const t = terminalOf(rec);
+        const done = t && t.e.type === 'response.completed' && t.e.response && typeof t.e.response.id === 'string' ? t : null;
+        const plan = { role, prevId: null, responseId: done ? done.e.response.id : null, contextState: 'partial', missing: why, unstored: why, segments: [] };
+        plans.set(rec, plan);
+        if (done) {
+          const output = Array.isArray(done.e.response.output) ? done.e.response.output : [];
+          heads.set(plan.responseId, { plan, outputSegs: output.map((item, i) => ({ rec, field: `resp.messages.${done.j}`, path: ['response', 'output', i], item })) });
+        }
+        return plan;
+      }
       const b = bodyOf(rec);
       const prevId = typeof b.previous_response_id === 'string' && b.previous_response_id ? b.previous_response_id : null;
       let segments = ownSegments(rec, b), contextState = 'complete', missing = null;
@@ -113,7 +146,7 @@ export function chainPlan(records) {
   const conns = new Map();
   for (const r of records || []) {
     const role = roleOf(r);
-    if (role !== 'call' && role !== 'warmup') continue;
+    if (role !== 'call' && role !== 'warmup' && role !== 'unstored') continue;
     const k = connOf(r);
     if (!conns.has(k)) conns.set(k, []);
     conns.get(k).push(r);
@@ -160,9 +193,10 @@ export const RESPONSES_WS = Object.freeze({
   prepare: (records) => chainPlan(records),
   contextOf: (rec, plans) => {
     const p = plans && plans.get(rec);
-    return p ? { req: stitchedRequest(rec, p), contextState: p.contextState, missing: p.missing, locate: (b) => locate(b, rec, p) } : null;
+    return p ? { req: stitchedRequest(rec, p), contextState: p.contextState, missing: p.missing, locate: (b) => locate(b, rec, p),
+      ...(p.unstored ? { unrenderable: p.unstored } : {}) } : null;
   },
-  admits: (rec) => { const r = roleOf(rec); return r === 'call' || r === 'warmup'; },
+  admits: (rec) => { const r = roleOf(rec); return r === 'call' || r === 'warmup' || r === 'unstored'; },
   laneOf: (rec) => (roleOf(rec) === 'warmup' ? 'probe' : null), // W3: a warmup is lane probe, not a turn
   boardFlat: (req) => boardFlat(req),
   normResp: (rec) => normRespWs(rec),

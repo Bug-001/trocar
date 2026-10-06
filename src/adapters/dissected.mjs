@@ -56,7 +56,8 @@ export function dissectorAdapter(d, { name = d.id, priority = 50 } = {}) {
       const extra = { ...env.extra };
       for (const [k, v] of Object.entries(body.extra)) extra['req_body.' + k] = v;
       // a partial context says what is missing, on the row (3.2:52, invariant 4)
-      if (plan && plan.contextState === 'partial' && plan.missing) extra.missing_predecessor = plan.missing;
+      if (plan && plan.unstored) extra.request_not_stored = plan.unstored; // its own request message (4.6 §传输与帧级记录)
+      else if (plan && plan.contextState === 'partial' && plan.missing) extra.missing_predecessor = plan.missing;
       const r = record.resp || {};
       const h = hintsOf(record);
       const failed = !!(d.failed && d.failed(resp, record));
@@ -106,6 +107,7 @@ export function dissectorAdapter(d, { name = d.id, priority = 50 } = {}) {
     // (input:[] right after a warmup), so the count is the STITCHED context's length.
     messageCount(record, state) {
       const plan = planOf(record, state);
+      if (plan && plan.unstored) return null; // unknown: no compaction verdict, and the lane keeps its predecessor
       if (plan) return plan.segments.length;
       return d.messageCount ? d.messageCount(parse(record.req_body)) : 0;
     },
