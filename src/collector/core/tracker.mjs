@@ -46,6 +46,8 @@ export function watchDirNames(dir, onName, onWatchError = () => {}, watch = fs.w
 // A pid that still exists (EPERM: it exists, it is someone else's). OS-neutral: Node's signal 0.
 const pidAlive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return !!e && e.code === 'EPERM' } }
 export const usesMarker = (d) => !!(d && d.trust && d.trust.chain.some((e) => e.var === MARKER_VAR))
+// what a trust file is now: a rewrite (new inode), an edit (size, mtime) or its removal changes it (D-26)
+const statKeyOf = (f) => { try { const st = fs.statSync(f); return `${st.ino}:${st.size}:${st.mtimeMs}` } catch (e) { return `gone:${(e && e.code) || 'error'}` } }
 
 // onVerdict(row, prev) is told every agent verdict (prev: the row this pid had before, or null), so the daemon can
 // leave a durable record when one is untrusted or its watch failed (D38).
@@ -61,7 +63,9 @@ export const usesMarker = (d) => !!(d && d.trust && d.trust.chain.some((e) => e.
 // plugin harness is judged trusted). watchDir(dir, onName, onWatchError) → close; setTimer for the marker-pending
 // deadline. alive(pid): whether a pid a rescan did not list still exists (it may have started after the scan).
 // readFile: how config files are read; an error other than "absent" is kept on the row (readErrors) for the daemon.
-export function createTracker({ redirector, registry, trust, home = os.homedir(), readFile = (f) => fs.readFileSync(f, 'utf8'), mtimeOf = mtimeOfFile, listDir = listDirNames, now = () => Date.now(), onVerdict = () => {}, onError = () => {}, installedAt = () => null, onGone = () => {}, onUnmatched = () => {}, markerDir = null, caPem = null, watchDir = watchDirNames, markerGraceMs = 10_000, setTimer = setTimeout, runtimeVersion = nodeReleaseVersion, collectorDir = null, alive = pidAlive }) {
+// recheck() (the daemon's 5 s check, D-26) judges again every trusted agent whose trust file changed since it was
+// judged; the row then carries cause 'entry-changed'. It only ever takes trust away: an untrusted row is never rechecked.
+export function createTracker({ redirector, registry, trust, home = os.homedir(), readFile = (f) => fs.readFileSync(f, 'utf8'), mtimeOf = mtimeOfFile, listDir = listDirNames, statKey = statKeyOf, now = () => Date.now(), onVerdict = () => {}, onError = () => {}, installedAt = () => null, onGone = () => {}, onUnmatched = () => {}, markerDir = null, caPem = null, watchDir = watchDirNames, markerGraceMs = 10_000, setTimer = setTimeout, runtimeVersion = nodeReleaseVersion, collectorDir = null, alive = pidAlive }) {
   const table = new Map() // pid → AgentRow (agents only)
   const ambiguous = new Map() // pid → {pid, exe, candidates}
   const factsOf = new Map() // pid → the ProcFacts it was judged on (re-judged when its marker appears or its grace ends)
@@ -71,9 +75,9 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
   let mode = 'auto'
   let extra = new Set()
 
-  async function onExec(facts) {
+  async function onExec(facts, cause = null) {
     const prev = table.get(facts.pid)
-    try { return await judge(facts, prev) } catch (e) {
+    try { return await judge(facts, prev, cause) } catch (e) {
       // judging threw (harness code): an earlier verdict for this pid must not outlive it — unwatch, then report
       if (prev && table.get(facts.pid) === prev) { forget(facts.pid); try { await redirector.unwatch(facts.pid) } catch (w) { onError(w, { pid: facts.pid, phase: 'unwatch' }) } }
       throw e
@@ -85,7 +89,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     const t = pending.get(pid); if (t) { clearTimeout(t); pending.delete(pid) }
   }
 
-  async function judge(facts, prev) {
+  async function judge(facts, prev, cause = null) {
     const m = registry.match(facts)
     if (!m.agent) {
       if (prev) { forget(facts.pid); try { await redirector.unwatch(facts.pid) } catch (e) { onError(e, { pid: facts.pid, phase: 'unwatch' }) } }
@@ -130,7 +134,9 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     // (they still use the default roots). The harness declares them as data; never decrypted, under `all` too.
     const bypass = call(d.bypass, live, row).filter((b) => b && b.host).map((b) => ({ host: String(b.host).toLowerCase(), reason: String(b.reason || 'not-via-trust-path') }))
     const parent = row.ppid != null ? table.get(row.ppid) : null
-    Object.assign(row, { trusted: t.trusted, reason: t.reason, trustVar: t.var, trustVia: t.via, decrypt: t.trusted, hosts, bypass, proxies, wsTerminal: d.wsTerminal || null, parentAgent: parent ? parent.agent : null })
+    Object.assign(row, { trusted: t.trusted, reason: t.reason, trustVar: t.var, trustVia: t.via, decrypt: t.trusted, hosts, bypass, proxies, wsTerminal: d.wsTerminal || null, parentAgent: parent ? parent.agent : null, ...(cause ? { cause } : {}) })
+    const trustFile = t.trusted && t.file ? t.file : null
+    Object.defineProperties(row, { trustFile: { value: trustFile }, trustKey: { value: trustFile ? statKey(trustFile) : null } }) // not listed in agents()
     table.set(facts.pid, row)
     try { await redirector.watch(facts.pid, { decrypt: row.decrypt, agent: row.agent }) } catch (e) { row.watchError = String((e && e.message) || e) }
     onVerdict(row, prev || null)
@@ -188,6 +194,12 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
       for (const [pid, row] of [...table]) if (!seen.has(pid) && !(row.judged > begun)) { forget(pid); onGone(row, 'rescan') }
       for (const pid of [...ambiguous.keys()]) if (!seen.has(pid)) ambiguous.delete(pid)
       if (markerDir) for (const n of listDir(markerDir)) if (/^\d+$/.test(n) && !seen.has(Number(n)) && !alive(Number(n))) { try { fs.rmSync(path.join(markerDir, n), { force: true }) } catch { /* void */ } }
+    },
+    async recheck() {
+      for (const [pid, row] of [...table]) {
+        if (!row.trustFile || statKey(row.trustFile) === row.trustKey) continue
+        try { await onExec(factsOf.get(pid), 'entry-changed') } catch (e) { onError(e, { pid, phase: 'judge' }) }
+      }
     },
     agents: () => [...table.values()].sort((a, b) => a.pid - b.pid).map((r) => ({ ...r, hosts: [...r.hosts], bypass: r.bypass.map((b) => ({ ...b })), proxies: r.proxies.map((p) => ({ ...p })), readErrors: [...r.readErrors], parseErrors: [...r.parseErrors] })),
     unmatched: () => [...ambiguous.values()].sort((a, b) => a.pid - b.pid),

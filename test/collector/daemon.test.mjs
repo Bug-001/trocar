@@ -717,3 +717,84 @@ test('daemon: an unusable CA is recorded as ca-invalid with which part and file,
     assert.equal((await req(s.sock, 'GET', '/status')).ca.which, 'cert', 'the daily check found it')
   } finally { await d.stop(); p.done(); s.done() }
 })
+
+test('daemon: every check (5 s), with nobody running status — links lost behind its back are one state-mismatch, their return a switch event; an on in flight is never a mismatch (D-26, F3(f))', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const { arch: base, clients } = fakeArch(p)
+  const arch = { ...base, createRedirector: (o) => { const r = base.createRedirector(o); const attach = r.attach; r.attach = async () => { await new Promise((ok) => setTimeout(ok, 200)); return attach() }; return r } } // a slow kernel
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], checkMs: 20 })
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    await new Promise((r) => setTimeout(r, 100))
+    assert.deepEqual(flowsOf(s).filter((f) => f.code === 'state-mismatch'), [], 'desired on while the attach is still running is not a disagreement')
+    await clients[0].raw({ op: '__yank' })
+    const mm = await until(() => flowsOf(s).find((f) => f.code === 'state-mismatch'))
+    assert.deepEqual([mm.event, mm.where, mm.desired, mm.actual, mm.links], ['failure', 'switch', 'on', 'off', []])
+    assert.match(mm.reason, /capture is on but the kernel has not got this instance's links: nothing is steered/)
+    await new Promise((r) => setTimeout(r, 100))
+    assert.equal(flowsOf(s).filter((f) => f.code === 'state-mismatch').length, 1, 'once per disagreement, not once per check')
+    const switches = () => flowsOf(s).filter((f) => f.event === 'switch')
+    const n = switches().length
+    await clients[0].raw({ op: 'attach' }) // the kernel has the links again
+    const back = await until(() => switches().length > n && switches().at(-1))
+    assert.deepEqual([back.desired, back.actual], ['on', 'on'])
+    assert.match(back.reason, /matches the desired state again/)
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+test('daemon: kernel drop counters become kernel-drops with the increments by reason — folded, never counted twice, the rest written at stop; status shows the counters (D-26, D-16, F3(f))', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], checkMs: 20, foldMs: 400 })
+  let stopped = false
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    const drops = () => flowsOf(s).filter((f) => f.code === 'kernel-drops')
+    await new Promise((r) => setTimeout(r, 60))
+    assert.deepEqual(drops(), [], 'all counters zero: nothing')
+    await clients[0].raw({ op: '__drops', counts: { 'no-listener': 3 } })
+    const k1 = await until(() => drops()[0])
+    assert.deepEqual([k1.event, k1.where, k1.counts], ['failure', 'kernel', { 'no-listener': 3 }])
+    assert.match(k1.reason, /let 3 connection\(s\) or event\(s\) go uncaptured .*no-listener 3.*went direct/)
+    await clients[0].raw({ op: '__drops', counts: { 'no-listener': 2, 'hb-stale': 1 } })
+    await new Promise((r) => setTimeout(r, 120))
+    assert.equal(drops().length, 1, 'inside the fold window: one line')
+    const k2 = await until(() => drops()[1])
+    assert.deepEqual(k2.counts, { 'no-listener': 2, 'hb-stale': 1 }, 'the increments since the last line')
+    assert.deepEqual((await req(s.sock, 'GET', '/status')).drops, { 'no-config': 0, 'hb-stale': 1, 'no-listener': 5, 'orig-write': 0, 'byport-write': 0, 'ringbuf-full': 0 })
+    await clients[0].raw({ op: '__drops', counts: { 'orig-write': 1 } })
+    await d.stop(); stopped = true
+    assert.deepEqual(drops().map((k) => k.counts), [{ 'no-listener': 3 }, { 'no-listener': 2, 'hb-stale': 1 }, { 'orig-write': 1 }], 'the last increment is written at stop, not lost')
+  } finally { if (!stopped) await d.stop(); p.done(); s.done() }
+})
+
+test('daemon: a trusted agent whose trust file changed is judged again by the check — the same CA keeps it trusted; the file gone makes it agent-untrusted with cause entry-changed, observed only; trust never comes back by a recheck (D-26)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], checkMs: 20 })
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    p.add(9191, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
+    await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 9191, pid: 9191, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
+    await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 9191 && a.trusted))
+    const file = path.join(s.collector, 'ca', 'asight-ca.pem')
+    const untrusted = () => flowsOf(s).filter((f) => f.event === 'agent-untrusted' && f.pid === 9191)
+    fs.writeFileSync(path.join(s.collector, 'ca', 'x.tmp'), fs.readFileSync(file)); fs.renameSync(path.join(s.collector, 'ca', 'x.tmp'), file) // rewritten, same CA
+    await new Promise((r) => setTimeout(r, 120))
+    assert.deepEqual(untrusted(), [], 'judged again, still trusted: nothing to record')
+    assert.equal((await clients[0].raw({ op: '__watched' })).watch['9191'], 1)
+    fs.renameSync(file, path.join(s.collector, 'ca', 'asight-ca.pem.bak'))
+    const u = await until(() => untrusted()[0])
+    assert.deepEqual([u.cause, u.reason, u.agent], ['entry-changed', 'file-unreadable', 'claude-code'])
+    assert.equal((await clients[0].raw({ op: '__watched' })).watch['9191'], 0, 'the kernel only observes it from now on')
+    const good = fs.readFileSync(path.join(s.collector, 'ca', 'asight-ca.pem.bak'))
+    fs.writeFileSync(file, good) // back again: a process that found it missing does not trust it now, so trust never comes back by a recheck
+    await new Promise((r) => setTimeout(r, 120))
+    assert.equal(untrusted().length, 1)
+    assert.ok(!flowsOf(s).some((f) => f.event === 'agent-trusted' && f.pid === 9191 && f.ts > u.ts), 'never trusted again by a recheck')
+    assert.equal((await clients[0].raw({ op: '__watched' })).watch['9191'], 0)
+  } finally { await d.stop(); p.done(); s.done() }
+})

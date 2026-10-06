@@ -19,6 +19,7 @@ const state = {
   watch: new Map(), // tgid -> decrypt(0|1)
   byPort: new Map(), // `${port}/${family}` -> { dst, pid, decrypt }
   links: [], // [{name,id,prog_id}]
+  drops: { 'no-config': 0, 'hb-stale': 0, 'no-listener': 0, 'orig-write': 0, 'byport-write': 0, 'ringbuf-full': 0 }, // protocol 2
 }
 const portKey = (port, family) => `${port}/${family || 4}`
 const CGROUP_LINKS = [
@@ -53,7 +54,7 @@ rl.on('line', (line) => {
     case 'unwatch': state.watch.delete(msg.tgid); return reply()
     case 'status': {
       const hbAgeMs = state.hbNs ? Math.round((nowNs() - state.hbNs) / 1e6) : -1
-      return reply({ attached: state.attached, engine_port: state.enginePort, hb_age_ms: hbAgeMs, links: state.links })
+      return reply({ attached: state.attached, engine_port: state.enginePort, hb_age_ms: hbAgeMs, links: state.links, ...(PROTO >= 2 ? { drops: state.drops } : {}) })
     }
     case 'lookup': {
       const k = portKey(msg.port, msg.family)
@@ -71,6 +72,8 @@ rl.on('line', (line) => {
       return reply()
     }
     case '__emit': { const { op: _o, id: _i, ...ev } = msg; out(ev); return reply() }
+    case '__drops': for (const [k, n] of Object.entries(msg.counts || {})) state.drops[k] = (state.drops[k] || 0) + n; return reply() // the kernel let connections go
+    case '__yank': state.attached = false; state.links = []; return reply() // someone else detached this instance's links
     case '__watched': return reply({ watch: Object.fromEntries(state.watch) }) // tgid → decrypt (1) or observe (0)
     default: return fail('unknown op: ' + op)
   }

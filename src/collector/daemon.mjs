@@ -82,7 +82,7 @@ export function failuresOnDisk(dir) {
   return { failures: r.list, ...(r.errors.length || r.truncated ? { failures_read: { errors: r.errors, truncated: r.truncated } } : {}) }
 }
 
-async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = procIdentity, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3 }) {
+async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = procIdentity, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000 }) {
   const P = collectorPaths(dir)
   const failure = createFailureRecorder(P.dir, { log })
   let manifest
@@ -143,7 +143,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       }
       if (last === row.reason || row.reason === 'marker-pending') return // once per pid and reason; a plugin has up to 10 s to report (4.6 「标记」)
       recordedUntrusted.set(row.pid, row.reason)
-      note({ event: EVENT.agentUntrusted, pid: row.pid, agent: row.agent, code: row.reason, reason: hintFor(row.agent, row.reason), via: row.trustVia ?? null })
+      note({ event: EVENT.agentUntrusted, pid: row.pid, agent: row.agent, code: row.reason, reason: hintFor(row.agent, row.reason), via: row.trustVia ?? null, ...(row.cause ? { cause: row.cause } : {}) })
     }
     // combined bundles follow the roots: rebuilt (atomically) at start and once a day when the roots changed (4.6 「合并包」)
     const refreshBundles = () => {
@@ -247,6 +247,47 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     applyPolicy()
     await sw.restore()
 
+    // The 5 s check (D-26, 4.6 §开关语义): nobody has to run status for these to reach flows/ —
+    //   desired vs the kernel's actual state: state-mismatch once per disagreement, a switch event when it clears
+    //   (a dead helper is already helper-down; an on / off in flight is skipped);
+    //   the kernel's drop counters (protocol 2): kernel-drops with the increments since the last such line, at most
+    //   one line per foldMs, the rest written at stop;
+    //   the file each trusted agent trusts through: changed → judged again (only ever takes trust away).
+    let mismatch = null
+    let dropsBase = {}
+    let dropsAt = -Infinity
+    let lastDrops = null
+    const dropsSince = (d) => Object.fromEntries(Object.entries(d).map(([k, v]) => [k, v >= (dropsBase[k] || 0) ? v - (dropsBase[k] || 0) : v]).filter(([, n]) => n > 0))
+    function noteDrops({ force = false } = {}) {
+      if (!lastDrops) return
+      const counts = dropsSince(lastDrops)
+      const total = Object.values(counts).reduce((a, b) => a + b, 0)
+      if (!total || (!force && Date.now() - dropsAt < foldMs)) return
+      failure.write({ event: 'failure', where: 'kernel', code: 'kernel-drops', counts,
+        reason: `the kernel let ${total} connection(s) or event(s) go uncaptured since the last report (${Object.entries(counts).map(([k, n]) => `${k} ${n}`).join(', ')}); those connections went direct` })
+      dropsBase = { ...lastDrops }; dropsAt = Date.now()
+    }
+    async function check() {
+      if (sw.busy()) return
+      const r = await sw.report()
+      if (sw.busy()) return // an on / off began while the kernel was read
+      if (r.actual === 'unknown') failure('switch', coded(new Error(`the kernel state could not be read (${r.error}); desired is ${r.desired}`), r.error_code || 'helper-error'))
+      else if (!r.degraded && r.actual !== r.desired) {
+        if (!mismatch || mismatch.desired !== r.desired || mismatch.actual !== r.actual) {
+          mismatch = { desired: r.desired, actual: r.actual }
+          failure.write({ event: 'failure', where: 'switch', code: 'state-mismatch', desired: r.desired, actual: r.actual, links: r.links.map((l) => l.name),
+            reason: r.desired === 'on' ? 'capture is on but the kernel has not got this instance\'s links: nothing is steered, agent connections go direct; run "asight collector on" again' : 'capture is off but the kernel still has this instance\'s links' })
+        }
+      } else if (!r.degraded && mismatch) {
+        mismatch = null
+        failure.write({ event: 'switch', desired: r.desired, actual: r.actual, reason: 'the kernel state matches the desired state again' })
+      }
+      if (r.drops && typeof r.drops === 'object') { lastDrops = r.drops; noteDrops() }
+      await tracker.recheck()
+    }
+    const checkTimer = setInterval(() => { check().catch((e) => failure('daemon', coded(e, 'check-error'))) }, checkMs)
+    checkTimer.unref()
+
     async function status() {
       // every running-but-untrusted agent says why and what to do (4.6 §确认信任, R4); hosts it never decrypts say why too
       const agents = tracker.agents().map((r) => {
@@ -276,7 +317,9 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     // stop({signal}) — signal: what stopped it (SIGTERM, SIGINT, SIGHUP = the terminal closed or the user logged out,
     // SIGQUIT), else `reason`. Returns {failed: [where…]}: a step that failed makes `collector start` exit non-zero.
     async function stop({ signal = null, reason = null } = {}) {
-      clearInterval(lockTimer); clearInterval(caTimer)
+      clearInterval(lockTimer); clearInterval(caTimer); clearInterval(checkTimer)
+      if (!helperDown) { try { const s = await redirector.status(); if (s && s.drops) lastDrops = s.drops } catch { /* the helper is going: what was last read is written */ } }
+      noteDrops({ force: true }) // drops not yet reported are written, not lost
       failure.flush() // folded counts are written, not lost
       const failed = []
       // every step runs; one that fails is recorded with its reason, never thrown past the rest (D38)

@@ -44,15 +44,16 @@ export function createSwitch({ redirector, stateFile, ensureReady = async () => 
   let recording = false
   let degraded = null
   let actualCache = null
+  let inFlight = 0 // on / off running: desired and actual legitimately differ until it returns (the 5 s check waits)
 
   async function actual() {
     if (degraded) return { actual: 'off', links: [], hb_age_ms: null } // a dead helper's links died with it (never pinned)
     try {
       const s = await redirector.status()
-      return { actual: s.attached ? 'on' : 'off', links: s.links || [], hb_age_ms: s.hb_age_ms ?? null }
+      return { actual: s.attached ? 'on' : 'off', links: s.links || [], hb_age_ms: s.hb_age_ms ?? null, drops: s.drops ?? null } // drops: protocol 2 (D-16)
     } catch (e) {
       if (degraded) return { actual: 'off', links: [], hb_age_ms: null } // the helper died while we asked
-      return { actual: 'unknown', links: [], hb_age_ms: null, error: String((e && e.message) || e) }
+      return { actual: 'unknown', links: [], hb_age_ms: null, error: String((e && e.message) || e), ...(e && e.code ? { error_code: e.code } : {}) }
     }
   }
 
@@ -102,9 +103,11 @@ export function createSwitch({ redirector, stateFile, ensureReady = async () => 
   }
 
   async function restore() { return state.desired === 'on' ? on() : off() }
+  const counted = (fn) => async (...a) => { inFlight++; try { return await fn(...a) } finally { inFlight-- } }
 
   return {
-    restore, on, off, report,
+    restore: counted(restore), on: counted(on), off: counted(off), report,
+    busy: () => inFlight > 0,
     isRecording: () => recording,
     markDown(reason) { degraded = { reason: String(reason) } },
     clearDown() { degraded = null },
