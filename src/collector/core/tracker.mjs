@@ -113,10 +113,11 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
       }
     }
     const live = { ...ctx, env: effectiveEnv(environ, layers.filter((l) => !l.ignored)).env }
+    // its own proxies go to the engine as FlowExtras, never into the host policy: whether to end an https:// proxy's
+    // outer TLS is the engine's proxy path to decide from them (own:true, host and port; 4.6 §引擎 3, plan 3c-7) — as a
+    // plain decrypt host the CONNECT inside would be recorded and the call in it spliced unlabelled (review 5 #1)
     const proxies = call(d.proxies, live, row).map((p) => toProxyEntry(typeof p === 'string' ? { url: p, source: 'harness' } : p || {})).filter(Boolean)
-    // its own https:// proxy is in auto like a base_url host: the engine may end the outer TLS (4.6 §引擎 3)
-    const proxyHosts = proxies.filter((p) => p.scheme === 'https').map((p) => p.host)
-    const hosts = [...new Set([...d.hosts, ...call(d.configHosts, live, row), ...proxyHosts].filter(Boolean).map((h) => String(h).toLowerCase()))]
+    const hosts = [...new Set([...d.hosts, ...call(d.configHosts, live, row)].filter(Boolean).map((h) => String(h).toLowerCase()))]
     // 不经信任路径 (4.6 §身份与信任, D37④): connections of a trusted process that do not take the injected trust path
     // (they still use the default roots). The harness declares them as data; never decrypted, under `all` too.
     const bypass = call(d.bypass, live, row).filter((b) => b && b.host).map((b) => ({ host: String(b.host).toLowerCase(), reason: String(b.reason || 'not-via-trust-path') }))

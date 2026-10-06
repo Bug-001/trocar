@@ -214,8 +214,8 @@ test('tracker: extrasFor hands the engine this process\'s own proxies and the ha
   })
   assert.deepEqual(tracker.extrasFor(551), { wsTerminal: null, proxies: [] }, 'a harness that declares no proxy reader hands none over')
   assert.deepEqual([tracker.extrasFor(null), tracker.extrasFor(9999)], [{}, {}])
-  // the process's own https proxy is part of auto, like a base_url host (4.6 §引擎 3); its plain-http proxy is not
-  assert.deepEqual(['proxy.example.com', 'plain-proxy.example.com'].map((h) => tracker.policy({ pid: 550 }, h)), [true, false])
+  // its proxies are not decrypt hosts: the engine's proxy path decides from FlowExtras (4.6 §引擎 3, plan 3c-7)
+  assert.deepEqual(['proxy.example.com', 'plain-proxy.example.com'].map((h) => tracker.policy({ pid: 550 }, h)), [false, false])
   assert.deepEqual(toProxyEntry({ url: 'socks5h://[::1]:1080', source: 's' }), { scheme: 'socks5h', host: '::1', port: 1080, own: true, source: 's' })
   assert.deepEqual([toProxyEntry({ url: 'socks://127.0.0.1', source: 's' }).scheme, toProxyEntry({ url: 'https://h', source: 's' }).port], ['socks5', 443])
   assert.deepEqual([toProxyEntry({ url: 'ftp://x', source: 's' }), toProxyEntry({ url: 'http://', source: 's' })], [null, null])

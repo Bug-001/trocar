@@ -131,9 +131,13 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
           return m && x ? { ...m, ...x, agent: m.agent ?? x.agent } : m
         },
       },
-      // FlowExtras (plan 3c §2): the harness's WebSocket terminators and this process's own proxies; a throw is the
-      // engine's describe-error record, the connection goes on without them
-      describe: (meta) => tracker.extrasFor(meta && meta.pid),
+      // FlowExtras (plan 3c §2): the harness's WebSocket terminators and this process's own proxies. A throw: the
+      // connection goes on without them, the engine records it, and flows/ gets it under its code (4.6 §记录)
+      describe: (meta) => {
+        try { return tracker.extrasFor(meta && meta.pid) } catch (e) {
+          throw Object.assign(new Error(`describing pid ${meta && meta.pid} (${meta && meta.agent}) for ${meta && meta.dst ? `${meta.dst.address}:${meta.dst.port}` : '?'} failed: ${errText(e)}; the connection goes on without WebSocket terminators or proxies`), { code: CODE.describeError })
+        }
+      },
       issuer, store, upstreamCa,
       policy: (meta, host) => tracker.policy(meta, host),
       isRecording: () => sw.isRecording(), // sampled per request (4.6 §开关): a request after off is never recorded

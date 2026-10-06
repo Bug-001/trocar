@@ -503,7 +503,7 @@ test('daemon: describe hands the engine the harness WebSocket terminators and th
     p.add(5151, { uid: UID, exe: CODEX_EXE, argv: ['codex', 'exec', 'hi'], cwd: s.home, env: { HOME: s.home, HTTPS_PROXY: 'https://u:pw@Proxy.Lab.test:8443' }, startTicks: nowTicks(p) })
     await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 5151, pid: 5151, comm: 'codex', filename: CODEX_EXE, ts_ns: 1 })
     const row = await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 5151 && a.trusted))
-    assert.deepEqual([row.agent, row.trust_var, row.hosts.includes('proxy.lab.test')], ['codex', 'SSL_CERT_FILE', true])
+    assert.deepEqual([row.agent, row.trust_var, row.hosts.includes('proxy.lab.test')], ['codex', 'SSL_CERT_FILE', false], 'its proxy reaches the engine as FlowExtras, not as a decrypt host')
     assert.deepEqual(d.tracker.extrasFor(5151), { wsTerminal: codex.wsTerminal, proxies: [{ scheme: 'https', host: 'proxy.lab.test', port: 8443, own: true, source: 'env:HTTPS_PROXY' }] })
 
     const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
@@ -519,5 +519,22 @@ test('daemon: describe hands the engine the harness WebSocket terminators and th
     const [e] = await until(() => { const l = capture().filter((x) => x.transport === 'ws'); return l.length && l }, 1500)
     assert.ok(!c.state.closed, 'cut at the terminal message, not at the close')
     assert.deepEqual([e.req_body, e.resp.messages.map((m) => JSON.parse(m)), e.proc.pid, e.proc.agent], [msg, evs, 5151, 'codex'])
+
+    // describe throws: the connection goes on without extras — the call is cut only at the close — and flows/ has the
+    // failure under its code (4.6 §记录, describe-error)
+    d.tracker.extrasFor = () => { throw new Error('extras exploded') }
+    const raw2 = net.connect(d.port, '127.0.0.1'); await once(raw2, 'connect')
+    await clients[0].raw({ op: '__inject_port', port: raw2.localPort, family: 4, dst: { address: '127.0.0.1', port: mock.port, family: 4 }, pid: 5151, decrypt: 1 })
+    const c2 = await wsConnect(0, { tls: { socket: raw2, servername: 'api.openai.com', ca: bundle } })
+    assert.equal(c2.status, 101, 'the connection goes on')
+    const msg2 = msg.replace('asight-ws-describe', 'asight-ws-no-extras')
+    await c2.sendText(msg2)
+    assert.equal((await c2.events()).at(-1).type, 'response.completed')
+    await new Promise((r) => setTimeout(r, 400))
+    assert.ok(!capture().some((x) => x.req_body === msg2), 'no terminators: not cut at response.completed')
+    c2.sock.destroy()
+    await until(() => capture().some((x) => x.req_body === msg2), 1500)
+    const f = await until(() => flowsOf(s).find((r) => r.event === 'failure' && r.where === 'engine' && r.code === 'describe-error'))
+    assert.match(f.reason, /describing pid 5151 \(codex\) for 127\.0\.0\.1:\d+ failed: extras exploded/)
   } finally { if (c) c.sock.destroy(); await d.stop(); await mock.close(); p.done(); s.done() }
 })

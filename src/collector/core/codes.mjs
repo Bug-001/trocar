@@ -50,6 +50,7 @@ export const CODE = Object.freeze({
   unitNotEnabled: 'unit-not-enabled', // the autostart unit is written but the OS service manager refused to enable it
   unitNotDisabled: 'unit-not-disabled', // uninstall: systemd refused to disable the unit, or its wants link could not be removed
   unitEnvNotCarried: 'unit-env-not-carried', // the install shell's NODE_EXTRA_CA_CERTS could not be given to the autostart unit
+  describeError: 'describe-error', // the daemon could not describe a process to the engine (the engine's own record has the same name)
 })
 
 export const trustReasonText = (code) => TRUST_REASON[code] || null
