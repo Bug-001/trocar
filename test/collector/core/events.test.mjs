@@ -6,6 +6,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { appendEvent, recentFailures, createFailureRecorder } from '../../../src/collector/core/events.mjs'
+import { readFlows, foldFlows } from '../../../src/health/flows.mjs'
 
 function box() { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-ev-')); return { dir, done: () => fs.rmSync(dir, { recursive: true, force: true }) } }
 
@@ -84,4 +85,25 @@ test('the failure recorder never goes back a day when the clock does (4.6 §记�
   clock = '2026-10-07T00:00:00.000Z'
   rec.write({ event: 'switch' })
   assert.deepEqual(calls, ['2026-10-06', '2026-10-06', '2026-10-07'])
+})
+
+// D1-1 (4.6 §事件与码): a negative-cache write is a condition per (pid, host). Folding it by where + code kept only the
+// first and the last pair of a window: the ones between were on neither the disk nor the board.
+test('failure recorder: negative-cache writes are never folded — every (pid, host) inside one window is its own line and its own condition (D1-1)', () => {
+  const b = box()
+  const rec = createFailureRecorder(b.dir, { setTimer: () => ({}), clearTimer: () => {} })
+  try {
+    rec.write({ event: 'daemon-start', pid: 1 })
+    const pairs = [[42, 'a.example'], [42, 'b.example'], [42, 'c.example'], [43, 'a.example']]
+    for (const [pid, host] of pairs) rec.event({ where: 'engine', code: 'negative-cache', pid, host, cause: 'client-rejected-leaf', reason: `${host} no longer decrypted for pid ${pid}` })
+    rec('engine', Object.assign(new Error('miss 1'), { code: 'lookup-miss' })); rec('engine', Object.assign(new Error('miss 2'), { code: 'lookup-miss' })) // other codes still fold
+    rec.flush()
+    const lines = fs.readFileSync(path.join(b.dir, 'flows', fs.readdirSync(path.join(b.dir, 'flows'))[0]), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+    const neg = lines.filter((l) => l.code === 'negative-cache')
+    assert.deepEqual(neg.map((l) => [l.pid, l.host, l.suppressed ?? 0, !!l.folded]), pairs.map(([p, h]) => [p, h, 0, false]), 'one unfolded line per pair')
+    assert.deepEqual(lines.filter((l) => l.code === 'lookup-miss').map((l) => l.suppressed ?? 0), [0, 1], 'lookup-miss is still folded per window')
+    const f = foldFlows(readFlows({ dir: b.dir }).records)
+    assert.deepEqual(f.conditions.filter((c) => c.kind === 'negative-cache').map((c) => [c.pid, c.host]), pairs, 'the board lists every (pid, host)')
+    assert.equal(f.groups.find((g) => g.key === 'engine/negative-cache').count, 4, 'counted once each')
+  } finally { b.done() }
 })

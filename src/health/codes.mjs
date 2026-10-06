@@ -14,6 +14,11 @@ export const NOT_CAPTURED_EXPECTED = Object.freeze(['policy', 'not-trust-path', 
 export const FAILURE_EVENTS = Object.freeze(['failure', 'agent-untrusted', 'helper-down', 'helper-version-mismatch', 'attach-failed', 'detach-failed', 'log-gap'])
 export const STATE_EVENTS = Object.freeze(['switch', 'daemon-start', 'daemon-stop', 'agent-exit', 'agent-trusted', 'negative-cache-cleared', 'install-note', 'uninstall-note', 'mitm-start', 'mitm-stop'])
 
+/** Failure codes the failure recorder never folds by where + code: the reader folds each of them into a condition per
+ *  (pid, host), so a folded line would make the pairs folded into it vanish (4.6 §事件与码, D1-1). Bounded: a (pid,
+ *  host) is written at most once in the process's life. */
+export const UNFOLDED_CODES = Object.freeze(['negative-cache'])
+
 /** The part of asight a record comes from. */
 export const WHERE = Object.freeze(['start', 'daemon', 'control', 'record', 'events', 'watch', 'harness', 'tracker', 'engine', 'ws', 'helper', 'heartbeat', 'state', 'switch', 'kernel', 'ca', 'install', 'uninstall',
   // the old capture (RFC 4.1 过渡期, ~/.asight/logs/mitm-events.ndjson; deleted with it)

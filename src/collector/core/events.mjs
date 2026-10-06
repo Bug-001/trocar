@@ -5,7 +5,7 @@
 // the board read them back through src/health/ (captureHealth), also when no daemon is running.
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { isFailure } from '../../health/codes.mjs'
+import { isFailure, UNFOLDED_CODES } from '../../health/codes.mjs'
 import { readFlows } from '../../health/flows.mjs'
 
 // The closed sets and the failure / expected split live in src/health/codes.mjs (D38: writers and readers share them).
@@ -29,8 +29,9 @@ const errText = (e) => String((e && e.message) || e)
 // timer) or at flush() (the daemon's stop) — never lost (4.6 §记录). Every record carries `reason` and `code`
 // (asight's name or the errno: the fold key, D-3).
 // record.event(rec) takes a failure already shaped {where, code, reason, …} — the engine's and the WebSocket
-// recorder's (they go to flows/ like every other failure, folded the same way) — and does not log it: the
-// engine tells stderr itself, through its onError. record.write(rec) writes any other event line unfolded.
+// recorder's (they go to flows/ like every other failure, folded the same way, except the codes in
+// UNFOLDED_CODES: a negative-cache write is a condition per (pid, host), one line each, D1-1) — and does not log
+// it: the engine tells stderr itself, through its onError. record.write(rec) writes any other event line unfolded.
 // When a line cannot be written (D-1): stderr gets it, health() counts it for status, and the next line that can be
 // written is preceded by one `log-gap` {from, to, lost, error}, so the gap itself is on disk.
 export function createFailureRecorder(dir, { log = () => {}, windowMs = 10_000, setTimer = setTimeout, clearTimer = clearTimeout, append = appendEvent, now = () => new Date() } = {}) {
@@ -61,8 +62,10 @@ export function createFailureRecorder(dir, { log = () => {}, windowMs = 10_000, 
     clearTimer(w.timer)
     if (w.suppressed) write({ ...w.last, suppressed: w.suppressed, folded: true })
   }
+  const unfolded = new Set(UNFOLDED_CODES)
   function event(shaped) {
     const rec = { event: 'failure', ...shaped }
+    if (unfolded.has(rec.code)) { write(rec); return }
     const key = `${rec.where}\u0000${rec.code || ''}`
     const w = open.get(key)
     if (w) { w.suppressed++; w.last = rec; return }
