@@ -1785,7 +1785,9 @@ function wireBadges(c){
   // wire. Older payloads without the flag fall back to "no known vendor".
   const cacheUnknown=w.cacheSemanticsKnown!=null?w.cacheSemanticsKnown===false:w.vendor==null
   if(w.format&&cacheUnknown) h+=`<span class="metabadge" title="cache labels are per vendor (the upstream host); this vendor's cache semantics are not established for this wire, so none are claimed — a cache_control mark on a block is shown as sent, not as what this vendor does with it">厂商缓存语义未知 · vendor cache semantics unknown</span> `
-  for(const l of (w.labels||[])) h+=`<span class="pobadge" title="${esc(l.text)}">${esc(l.label)}</span> `
+  // a fact the call's own exact badge (reqBadge: reqIncomplete / wsIncomplete / respIncomplete) already says is not said again
+  const said=new Set([c.respIncomplete&&c.respIncomplete.truncated&&'resp-truncated', c.respIncomplete&&c.respIncomplete.undecoded&&'resp-undecoded', c.wsIncomplete&&c.wsIncomplete.truncated&&'ws-truncated'].filter(Boolean))
+  for(const l of (w.labels||[])) if(!said.has(l.id)) h+=`<span class="pobadge" title="${esc(l.text)}">${esc(l.label)}</span> `
   // 4.6 §记录 / invariant 4: sent compressed, shown decompressed — the exact text, not the exact wire bytes
   if(w.reqEncoding) h+=`<span class="metabadge" title="the request body went over the wire compressed (content-encoding: ${esc(w.reqEncoding)}); its text here is after decompression, and its sizes are of that text">请求体已解压 · request decompressed (${esc(w.reqEncoding)})</span> `
   return h

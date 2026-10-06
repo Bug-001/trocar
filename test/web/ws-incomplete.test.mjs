@@ -104,7 +104,7 @@ test('wsIncompleteOf: each label the recorder writes, one thing each; complete a
   assert.match(m.text, /non-LLM endpoint stored as their size only/)
 })
 
-test('the board: /api/session carries the labels and where the call is shown it says 不完整 / 已截断 / 未解码 — none renders as complete; both assemblers (F5)', async () => {
+test('the board: /api/session carries the labels and where the call is shown it says 不完整 / 已截断 / 未解码 — none renders as complete (F5); a WebSocket call on a wire nobody registered is counted, not rendered', async () => {
   assert.ok(SESSION && SESSION.analyzed, 'precondition: the server assembled the WebSocket session')
   const byId = new Map(SESSION.analyzed.steps.map((s) => [s.id, s]))
   for (const [k, re] of [['undecoded', /未解码/], ['partial', /不完整/], ['truncated', /已截断/], ['openerUndecoded', /未解码/]]) {
@@ -119,7 +119,11 @@ test('the board: /api/session carries the labels and where the call is shown it 
   }
   const complete = byId.get(E.complete.id)
   assert.equal(complete.wsIncomplete, null, 'a complete call carries no label')
+  // The wire registry (D37 ①, src/dissect/registry.mjs) reads a WebSocket call only on the Responses endpoint: an
+  // Anthropic-shaped body on /v1/messages over WebSocket is no registered wire. The multi-lane assembler (which would
+  // carry wsIncomplete too) is never handed it; the board counts it as unrecognized and renders nothing under another
+  // wire's vocabulary (3.1:58) — it is neither shown as a complete call nor dropped without a word.
   assert.ok(CC_SESSION && CC_SESSION.analyzed, 'precondition: the Anthropic-shaped WebSocket session')
-  const cc = CC_SESSION.analyzed.steps.find((x) => x.id === E.ccPartial.id)
-  assert.deepEqual(cc && cc.wsIncomplete && cc.wsIncomplete.partialReasons, ['decode-failed'], 'the other assembler carries it too')
+  assert.equal(CC_SESSION.analyzed.steps.length, 0, 'no step is rendered for a wire nobody registered')
+  assert.deepEqual([CC_SESSION.analyzed.unknown.records, CC_SESSION.analyzed.unknown.endpoints], [2, ['/v1/messages']], 'both calls are counted as unrecognized, with their endpoint')
 })
