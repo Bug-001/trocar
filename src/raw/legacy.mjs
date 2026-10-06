@@ -60,20 +60,29 @@ export function legacyTargets(target, { fs = nodeFs } = {}) {
     if (k) { const kind = k[1](e.name); known[kind] = (known[kind] || 0) + 1; return; }
     skipped.push({ file: p, reason: e.isSymbolicLink() ? 'a symlink — not followed' : whySkipped(e.name, e.isDirectory() && deep, fs, p) });
   };
-  const st = fs.lstatSync(target);
+  // a directory (or the target) that cannot be read is a refusal naming it, never a stack trace
+  // (review 3 confirm, row 4); `unreadable` marks it for `asight raw compare`
+  const unreadable = (p, e) => refused.push({ file: p, unreadable: true, reason: `could not be read (${e.code || e.message}) — nothing in it is sealed or deleted` });
+  const list = (d) => { try { return fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1)); } catch (e) { unreadable(d, e); return null; } };
+  let st;
+  try { st = fs.lstatSync(target); } catch (e) { unreadable(target, e); return { files, refused, dirs, skipped, known }; }
   if (!st.isDirectory()) {
     if (!target.endsWith('.ndjson')) refused.push({ file: target, reason: 'not an NDJSON capture stream (*.ndjson)' });
     else consider(target);
     return { files, refused, dirs: [path.dirname(target)], skipped, known };
   }
+  const top = list(target);
+  if (!top) return { files, refused, dirs, skipped, known };
   dirs.push(target);
-  for (const e of fs.readdirSync(target, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+  for (const e of top) {
     const p = path.join(target, e.name);
     if (e.name.endsWith('.ndjson') && !e.isDirectory()) consider(p);
     else if (e.isSymbolicLink()) refused.push({ file: p, reason: 'symlinked directory — not followed; seal what it points at by its own path' });
     else if (e.isDirectory()) {
+      const sub = list(p);
+      if (!sub) continue;
       dirs.push(p);
-      for (const s of fs.readdirSync(p, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+      for (const s of sub) {
         const q = path.join(p, s.name);
         if (s.name.endsWith('.ndjson') && !s.isDirectory()) consider(q);
         else other(s, q, true);
@@ -260,7 +269,8 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
   const o = otherSealers(procs, { target, fs });
   if (o.length) throw refuseAll(`another \`asight raw seal\` is running (pid ${o.map((p) => p.pid).join(', ')}) — run one sealer at a time; nothing sealed or deleted`);
   // 2. quiet window
-  const before = new Map(files.map((f) => [f, fs.statSync(f)]));
+  const before = new Map();
+  for (const f of files.splice(0)) { try { before.set(f, fs.statSync(f)); files.push(f); } catch (e) { refused.push({ file: f, reason: `could not be read (${e.code || e.message}) — nothing sealed or deleted` }); } }
   await sleep(quietMs);
   const quiet = [];
   for (const f of files) {
@@ -324,6 +334,11 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
 // deleted" is exactly what --delete-original deletes (review 3 confirm, row 1).
 // → { action: 'seal' } | { action: 'delete', copies } | { refused: reason }
 export function planFile(fs, f, { deleteOriginal = false } = {}) {
+  // an original that cannot be read can be neither checked nor sealed (review 3 confirm, row 4)
+  try { fs.accessSync(f, nodeFs.constants.R_OK); return planCopies(fs, f, { deleteOriginal }); }
+  catch (e) { return { refused: `could not be read (${e.code || e.message}) — nothing sealed or deleted`, unreadable: true }; }
+}
+function planCopies(fs, f, { deleteOriginal }) {
   // A sealed copy of an EARLIER version of this file (it grew since; the copy's bytes are still its
   // first bytes): sealing again would leave two copies of those lines, and deleting would trust a
   // copy that is not all of this file. Refuse. A copy of ANOTHER file that stood at this path (the

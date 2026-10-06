@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { sealLegacy, otherSealers } from '../../src/raw/legacy.mjs';
 import { readJournal } from '../../src/raw/journal.mjs';
 import { tmpDir, conversation, toLine, writeShard } from './helpers.mjs';
@@ -119,3 +120,38 @@ test('row 3: each original\'s "deleting" entry is durable before its unlink; a j
     assert.equal(n, 2, 'the run went on after the journal broke');
   } finally { try { fs.chmodSync(journal, 0o600); } catch {} fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+// ── row 4: an unreadable directory or original is a journalled refusal naming it, never a stack trace ──
+const CLI = path.join(path.dirname(new URL(import.meta.url).pathname), '..', '..', 'bin', 'asight.mjs');
+const SID_B = 'bbbbbbbb-0000-4000-8000-00000000000b';
+function cliTree() {
+  const root = tmpDir(), home = path.join(root, 'home'), ses = path.join(home, '.asight', 'sessions');
+  for (const sid of [SID, SID_B]) writeShard(path.join(ses, sid, 'calls.ndjson'), conversation(sid, 2).map((r) => toLine(r)));
+  const run = (...args) => spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', env: { ...process.env, HOME: home, ASIGHT_SOURCE: '' } });
+  return { root, home, ses, run, journal: path.join(home, '.asight', 'raw', 'journal.jsonl') };
+}
+const noTrace = (r) => assert.doesNotMatch(r.stderr, /\n\s+at .*\(.*:\d+:\d+\)/, `a stack trace:\n${r.stderr}`);
+
+for (const what of ['a session directory', 'an original']) {
+  test(`row 4: ${what} that cannot be read — seal --legacy (dry and real), verify and compare name it, journal it, exit 1, no stack trace; nothing of it deleted`, async () => {
+    const { root, ses, run, journal } = cliTree();
+    const bad = what === 'an original' ? path.join(ses, SID_B, 'calls.ndjson') : path.join(ses, SID_B);
+    try {
+      await sealLegacy(ses, { ...NONE, journal: path.join(root, 'j.jsonl') });
+      fs.chmodSync(bad, 0);
+      for (const args of [['raw', 'seal', '--legacy', ses, '--delete-original', '--quiet', '0', '--dry-run'], ['raw', 'seal', '--legacy', ses, '--delete-original', '--quiet', '0'],
+        ['raw', 'verify', ses], ['raw', 'compare', ses]]) {
+        const r = run(...args);
+        noTrace(r);
+        assert.equal(r.status, 1, `${args.join(' ')}: exit ${r.status}\n${r.stdout}${r.stderr}`);
+        assert.ok((r.stdout + r.stderr).includes(bad), `${args.join(' ')} does not name ${bad}:\n${r.stdout}${r.stderr}`);
+      }
+      fs.chmodSync(bad, 0o700);
+      assert.ok(fs.existsSync(path.join(ses, SID_B, 'calls.ndjson')), 'the unreadable one was deleted');
+      const j = readJournal({ journal });
+      assert.ok(j.some((e) => e.op === 'seal-legacy' && e.outcome === 'refused' && e.file === bad && /nothing .*deleted/.test(e.reason)), 'seal --legacy: no journalled refusal naming it');
+      assert.ok(j.some((e) => e.op === 'verify' && e.outcome === 'failed' && JSON.stringify(e).includes(bad)), 'verify: no journalled failure naming it');
+      assert.ok(j.some((e) => e.op === 'compare' && e.outcome === 'diff' && JSON.stringify(e).includes(bad)), 'compare: no journalled difference naming it');
+    } finally { try { fs.chmodSync(bad, 0o700); } catch {} fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}

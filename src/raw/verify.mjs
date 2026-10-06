@@ -107,10 +107,16 @@ export function verifySelf(file, { fs = nodeFs } = {}) {
 // Every sealed file under `target` (a sealed file, or a directory and its immediate subdirectories),
 // grouped by the original it was sealed from: against that original while it exists, else by itself.
 export function verifyTree(target, { fs = nodeFs } = {}) {
-  const sealed = [];
-  if (fs.statSync(target).isDirectory()) {
+  const sealed = [], failed = [];
+  // what cannot be read is a failure naming it, never a stack trace (review 3 confirm, row 4)
+  const unreadable = (p, e, what) => failed.push({ ok: false, sealed: [], original: p, mode: 'unreadable', reason: `${what} could not be read (${e.code || e.message}) — not verified; nothing deleted` });
+  let st;
+  try { st = fs.statSync(target); } catch (e) { unreadable(target, e, target); return failed; }
+  if (st.isDirectory()) {
     const walk = (d, depth) => {
-      for (const e of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+      let ents;
+      try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { unreadable(d, e, `the directory ${d}`); return; }
+      for (const e of ents.sort((a, b) => (a.name < b.name ? -1 : 1))) {
         const p = path.join(d, e.name);
         if (e.isDirectory()) { if (depth === 0) walk(p, 1); } else if (isSealedPath(e.name)) sealed.push(p);
       }
@@ -122,7 +128,9 @@ export function verifyTree(target, { fs = nodeFs } = {}) {
   for (const f of sealed) {
     const src = sealedSources(f, { fs });
     const one = src && src.length === 1 ? src[0] : null;
-    const rel = one ? copyRelation(one, one.abs, { fs }) : { rel: 'gone' };
+    let rel;
+    try { rel = one ? copyRelation(one, one.abs, { fs }) : { rel: 'gone' }; }
+    catch (e) { unreadable(one.abs, e, `${one.abs}, the original ${path.basename(f)} was sealed from,`); continue; }
     if (rel.rel === 'same' || rel.rel === 'earlier') {
       const k = `${one.abs}\0${one.length}`;
       if (!groups.has(k)) groups.set(k, { orig: one.abs, prefix: rel.rel === 'earlier', files: [] });
@@ -130,7 +138,7 @@ export function verifyTree(target, { fs = nodeFs } = {}) {
     } else alone.push({ f, note: rel.rel === 'other' ? `${rel.why}: another file than the one this was sealed from — checked by itself, and it is the only copy of its records` : null });
   }
   return [...[...groups.values()].map((g) => verifyAgainst(g.files, g.orig, { fs, prefix: g.prefix })),
-    ...alone.map(({ f, note }) => { const r = verifySelf(f, { fs }); return note ? { ...r, note } : r; })];
+    ...alone.map(({ f, note }) => { const r = verifySelf(f, { fs }); return note ? { ...r, note } : r; }), ...failed];
 }
 
 // The CLI's verify: every result, ok or not, is journalled (a failed check MUST leave a durable record).

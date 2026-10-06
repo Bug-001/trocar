@@ -343,9 +343,11 @@ async function main() {
         if (!target) die(usage);
         const { runVerify } = await mod('verify.mjs');
         const against = flag('--against', null);
-        const results = runVerify({ target: path.resolve(target), against: against && path.resolve(against) });
+        let results;
+        try { results = runVerify({ target: path.resolve(target), against: against && path.resolve(against) }); } catch (e) { console.error(`verify failed: ${e.message}`); process.exitCode = 1; break; }
         // a copy of only the first bytes of a file that grew says so ("prefix"), never a plain ok
         for (const x of results) {
+          if (x.mode === 'unreadable') { console.log(`FAILED (unreadable) ${x.original} — ${x.reason}`); continue; }
           console.log(`${x.ok ? (x.covers === 'prefix' ? 'ok (prefix)' : 'ok    ') : 'FAILED'} ${x.mode === 'self' ? '(by itself) ' : ''}${x.sealed.join(', ')}${x.original ? ' vs ' + x.original : ''}${x.ok ? ` · ${x.records} records` : ' — ' + x.reason}`);
           if (x.note) console.log(`       note: ${x.note}`);
         }
@@ -360,13 +362,14 @@ async function main() {
         if (!target) die(usage);
         const { runCompare } = await import(r('src', 'query', 'raw-compare.mjs'));
         const t0 = Date.now();
-        const res = await runCompare({ root: path.resolve(target), onGroup: (g) => {
+        let res;
+        try { res = await runCompare({ root: path.resolve(target), onGroup: (g) => {
           if (g.status === 'same') console.log(`same        ${g.group} · ${g.records} records, ${g.resolver.checked} ids resolved alike${g.uncovered.length ? ` · not covered (no sealed copy, would not be deleted): ${g.uncovered.map((f) => path.basename(f)).join(', ')}` : ''}`);
           else if (g.status === 'diff') console.log(`DIFF        ${g.group} · ${g.diff.at != null ? `record ${g.diff.at}: ${g.diff.what} — now ${g.diff.before}, after deletion ${g.diff.after}` : g.diff.what}`);
           else if (g.status === 'not-covered') console.log(`not covered ${g.group} · no original here has a sealed copy: ${g.uncovered.map((f) => path.basename(f)).join(', ')} (not compared, would not be deleted)`);
           if (g.notCompared) for (const f of g.notCompared) console.log(`  NOT COMPARED, yet --delete-original would delete it: ${f}`);
           for (const n of g.notes) console.log(`  note: ${n}`);
-        } });
+        } }); } catch (e) { console.error(`compare failed: ${e.message} — nothing compared`); process.exitCode = 1; break; }
         const n = (s) => res.groups.filter((g) => g.status === s).length;
         // --list: one line per original, for the cross-check against `seal --legacy --delete-original --dry-run`
         if (rest.includes('--list')) for (const g of res.groups) {

@@ -70,7 +70,8 @@ function inputs(g, fs, exclude = null) {
 async function readSide(files) {
   const recs = [], stats = { blank: 0, malformed: 0, problems: [] };
   for (const f of files) {
-    const rep = await forEachLine(f, (text, stream) => {
+    let rep;
+    try { rep = await forEachLine(f, (text, stream) => {
       const t = text.trim();
       if (!t) { stats.blank++; return true; }
       let id = null, ts = null, bad = false;
@@ -78,7 +79,7 @@ async function readSide(files) {
       catch { bad = true; stats.malformed++; }
       recs.push({ stream, id, ts, h: sha(text), bad });
       return true;
-    });
+    }); } catch (e) { stats.problems.push(`${f} could not be read: ${e.code || e.message}`); continue; }
     if (rep.sealedError) stats.problems.push(`${path.basename(f)} could not be opened: ${rep.sealedError}`);
     if (rep.unreadableRecords) stats.problems.push(`${path.basename(f)}: ${rep.unreadableRecords} record(s) unreadable (${rep.unreadable[0].reason})`);
   }
@@ -114,12 +115,17 @@ export async function compareTree(root, { fs = nodeFs, onGroup = () => {}, resol
   const candidates = t.files.filter((f) => !oldRootReason(f, { fs }));
   const plans = new Map(candidates.map((f) => [f, planFile(fs, f, { deleteOriginal: true })]));
   const willDelete = candidates.filter((f) => plans.get(f).action === 'delete');
-  const groups = groupsHook(groupsOf(root, fs, candidates, t.dirs)).map((g) => {
-    if (g.kind === 'unreadable') return { ...g, status: 'diff', diff: { what: `directory unreadable: ${g.error}` } };
+  // a directory the walk could not read: its originals cannot be compared — a difference, by name (row 4)
+  const unreadableDirs = t.refused.filter((r) => r.unreadable).map((r) => ({ group: path.relative(root, r.file) || '.', kind: 'unreadable', dir: r.file, error: r.reason }));
+  const groups = groupsHook([...groupsOf(root, fs, candidates, t.dirs), ...unreadableDirs]).map((g) => {
+    if (g.kind === 'unreadable') return { ...g, status: 'diff', diff: { what: `directory unreadable: ${g.dir} ${g.error}` } };
     const mine = g.originals.map((n) => path.join(g.dir, n)).filter((f) => plans.has(f) && (!g.stream || streamOf(f) === g.stream));
     const deletable = mine.filter((f) => plans.get(f).action === 'delete');
     // what the readers do NOW, for the notes: a pair they read twice (a touched original) is said
     const now = inputs(g, fs);
+    // an original that cannot be read: what the readers show now cannot be known — a difference (row 4)
+    const bad = mine.filter((f) => plans.get(f).unreadable);
+    if (bad.length) return { ...g, deletable: [], uncovered: mine, why: Object.fromEntries(mine.map((f) => [f, plans.get(f).refused || 'not compared: another original of this group could not be read'])), status: 'diff', diff: { what: `unreadable — ${bad.map((f) => `${f} ${plans.get(f).refused}`).join('; ')}` } };
     return { ...g, deletable, copies: deletable.flatMap((f) => plans.get(f).copies), uncovered: mine.filter((f) => !deletable.includes(f)),
       why: Object.fromEntries(mine.filter((f) => !deletable.includes(f)).map((f) => [f, plans.get(f).refused])), notes: now.mismatched.map((m) => `now: ${path.basename(m.sealed)}: ${m.why}`) };
   });
@@ -166,7 +172,11 @@ export async function compareTree(root, { fs = nodeFs, onGroup = () => {}, resol
 
 // The CLI's compare: every difference, and the run itself, leave a durable record (D38).
 export async function runCompare({ root, fs = nodeFs, journal = defaultJournalPath(), onGroup }) {
-  const res = await compareTree(root, { fs, onGroup });
+  let res;
+  try { res = await compareTree(root, { fs, onGroup }); } catch (e) {
+    appendJournal({ op: 'compare', outcome: 'failed', root, reason: `${e.message} — nothing compared` }, { journal });
+    throw e;
+  }
   for (const g of res.groups) {
     if (g.uncovered.length) appendJournal({ op: 'compare', outcome: 'not-covered', root, group: g.group, files: g.uncovered, reasons: g.uncovered.map((f) => g.why[f]), reason: 'no sealed copy of these files passes the deleter\'s test — not compared; --delete-original refuses them' }, { journal });
     if (g.notCompared) appendJournal({ op: 'compare', outcome: 'not-compared', root, files: g.notCompared, reason: g.diff.what }, { journal });
