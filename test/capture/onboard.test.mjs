@@ -151,7 +151,8 @@ test('installCa dispatches to the per-OS installer via injected runner (no real 
 
 test('verifyUserTrustOnly maps installer status; uninstall dispatches', () => {
   assert.equal(verifyUserTrustOnly({ platform: 'darwin', installerOpts: { run: () => ({ status: 0 }) } }), true)
-  assert.equal(verifyUserTrustOnly({ platform: 'darwin', installerOpts: { run: () => ({ status: 1 }) } }), false)
+  assert.equal(verifyUserTrustOnly({ platform: 'darwin', installerOpts: { run: () => ({ status: 44 }) } }), false) // errSecItemNotFound
+  assert.throws(() => verifyUserTrustOnly({ platform: 'darwin', installerOpts: { run: () => ({ status: 1, stderr: 'boom' }) } }), /could not be checked: boom/)
   const rec = recorder()
   uninstallCa({ platform: 'linux', installerOpts: { run: rec.run, nssdb: '/tmp/nss' } })
   assert.ok(rec.calls[0].args.includes('-D'))

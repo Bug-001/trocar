@@ -305,7 +305,8 @@ async function main() {
       console.log('CA:', out.ca.caCrt, out.ca.existed ? '(already existed)' : '(generated)');
       console.log('trust install:', out.install.ok ? 'OK — user-level, NO machine-wide trust' : 'FAILED', JSON.stringify(out.install.result));
       console.log('CC-CLI steer: HTTPS_PROXY →', out.steer.HTTPS_PROXY, '(run a CC-CLI session to capture in byte-exact D10)');
-      console.log('verify:', ob.verifyUserTrustOnly() ? 'CA present in user trust store ✓' : 'not found ✗');
+      let v; try { v = ob.verifyUserTrustOnly() ? 'CA present in user trust store ✓' : 'not found ✗'; } catch (e) { v = `? ${e.message}`; } // not checkable is said
+      console.log('verify:', v);
       break;
     }
     case 'off': {
@@ -316,7 +317,8 @@ async function main() {
     }
     case 'verify': {
       const ob = await import(r('src', 'capture', 'onboard.mjs'));
-      console.log(ob.verifyUserTrustOnly()
+      let v; try { v = ob.verifyUserTrustOnly(); } catch (e) { console.log(`CA trust ? ${e.message}`); process.exitCode = 1; break; } // never "not installed" for "could not check"
+      console.log(v
         ? 'CA present in user-level trust store, no machine-wide trust ✓'
         : 'CA not installed ✗ (run: asight on)');
       break;

@@ -15,20 +15,35 @@ export const CA_CN = 'atrace local MITM CA'
 // NSS nickname the CA is registered under (Linux).
 export const CA_NICKNAME = 'asight-ca'
 
-// Default runner: run a command, capture status/stdout/stderr, NEVER throw on nonzero exit
-// (so verify's "cert absent" = status!=0 is data, not an exception).
-function defaultRun(file, args) {
+// Default runner: run a command, capture status/stdout/stderr, NEVER throw on nonzero exit (a nonzero exit is data
+// for the caller). A command that could not be run at all (ENOENT: not on PATH) has status null and its `error` code.
+export function defaultRun(file, args) {
   try {
     const stdout = execFileSync(file, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
     return { status: 0, stdout, stderr: '' }
   } catch (e) {
     return {
-      status: e.status ?? 1,
+      status: e.status ?? null,
+      ...(e.status == null && e.code ? { error: e.code } : {}),
       stdout: e.stdout?.toString?.() ?? '',
-      stderr: e.stderr?.toString?.() ?? String((e && e.message) || e),
+      stderr: e.stderr?.toString?.() || String((e && e.message) || e),
     }
   }
 }
+
+// verify → true (found), false (the store's own "not found" answer), or a throw (it could not be checked: the tool
+// is missing, the keychain or NSS db cannot be read …) — the caller says "?" with the reason, never "not trusted"
+// (RFC 4.1 落地细节 (6), D38).
+function verdict(r, notFound, what) {
+  if (r && r.status === 0) return true
+  if (r && notFound(r)) return false
+  const why = String((r && (r.stderr || r.error)) || `exit status ${r && r.status}`).trim()
+  throw Object.assign(new Error(`${what} could not be checked: ${why}`), { code: (r && r.error) || 'verify-failed' })
+}
+// `security find-certificate` exits 44 (errSecItemNotFound's CLI status) when the certificate is not in the keychain
+const DARWIN_NOT_FOUND = (r) => r.status === 44 || /could not be found in the keychain/i.test(String(r.stderr || ''))
+// `certutil -L -n <nick>` says "Could not find cert" when the nickname is not in the db
+const LINUX_NOT_FOUND = (r) => /could not find cert/i.test(`${r.stderr || ''}${r.stdout || ''}`)
 
 // ── macOS: login keychain, import-only (`security add-certificates`). ──
 // Claude Code reads keychain certs directly — zero trust-settings still works. MUST NOT
@@ -45,7 +60,7 @@ export function darwinInstaller({ run = defaultRun, keychain } = {}) {
     uninstall() { const a = uninstallArgv(); return run(a.file, a.args) },
     // present in the LOGIN keychain (user-level). Machine-trust absence is by construction:
     // no code path here ever calls add-trusted-cert.
-    verifyUserTrustOnly() { const a = verifyArgv(); return run(a.file, a.args).status === 0 },
+    verifyUserTrustOnly() { const a = verifyArgv(); return verdict(run(a.file, a.args), DARWIN_NOT_FOUND, `the CA in ${kc}`) },
   }
 }
 
@@ -62,7 +77,7 @@ export function linuxInstaller({ run = defaultRun, nssdb } = {}) {
     installArgv, verifyArgv, uninstallArgv,
     install(caPath) { const a = installArgv(caPath); return run(a.file, a.args) },
     uninstall() { const a = uninstallArgv(); return run(a.file, a.args) },
-    verifyUserTrustOnly() { const a = verifyArgv(); return run(a.file, a.args).status === 0 },
+    verifyUserTrustOnly() { const a = verifyArgv(); return verdict(run(a.file, a.args), LINUX_NOT_FOUND, `the CA in ${D}`) },
   }
 }
 
