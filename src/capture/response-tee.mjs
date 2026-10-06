@@ -8,7 +8,7 @@
 //     plus a `decode-failed` event (before, the envelope never came: the decoder's 'end' never fired);
 //   - a body that is not JSON (a proxy's HTML error page) or cannot be decompressed (L-4): its bytes are kept —
 //     `raw` (UTF-8 text) or `raw_b64` (+ `encoding_error`), as the collector does (core/record/body.mjs) — instead
-//     of being replaced by a character count.
+//     of being replaced by a character count; one that cannot be decompressed is a `decode-failed` event too.
 import zlib from 'node:zlib'
 import { makeSseReconstructor } from './sse-reconstruct.mjs'
 import { failureOf } from './events.mjs'
@@ -20,13 +20,14 @@ export function decodeBodyChecked(buf, enc = '') {
     if (enc.includes('br')) return { buf: zlib.brotliDecompressSync(buf) }
     if (enc.includes('gzip')) return { buf: zlib.gunzipSync(buf) }
     if (enc.includes('deflate')) return { buf: zlib.inflateSync(buf) }
-  } catch (e) { return { buf, error: String((e && e.message) || e) } }
+  } catch (e) { return { buf, error: String((e && e.message) || e), ...(e && typeof e.code === 'string' ? { code: e.code } : {}) } }
   return { buf }
 }
-export function bodyResp(status, wire, enc) {
+// onDecodeError({error, code}) is told when the body cannot be decompressed (the caller writes the event line, L-4)
+export function bodyResp(status, wire, enc, onDecodeError = null) {
   if (!wire.length) return { status, kind: 'empty' }
   const dec = decodeBodyChecked(wire, enc)
-  if (dec.error) return { status, kind: 'text', encoding_error: dec.error, raw_b64: wire.toString('base64') }
+  if (dec.error) { if (onDecodeError) onDecodeError(dec); return { status, kind: 'text', encoding_error: dec.error, raw_b64: wire.toString('base64') } }
   try { return { status, kind: 'json', body: JSON.parse(dec.buf.toString('utf8')) } } catch { /* not JSON: keep its bytes */ }
   const t = utf8(dec.buf)
   return t !== null ? { status, kind: 'text', raw: t } : { status, kind: 'text', raw_b64: dec.buf.toString('base64') }
@@ -56,7 +57,10 @@ export function teeResponse(up, res, { keepRawSse = false, where, onEvent = () =
     if (isSse) {
       resp = { status: up.statusCode, kind: 'sse', ...recon.finish() }
       if (decodeError) { resp.encoding_error = String(decodeError.message); resp.raw_b64 = Buffer.concat(wire).toString('base64') }
-    } else resp = bodyResp(up.statusCode, Buffer.concat(wire), enc)
+    } else {
+      // a body that cannot be decompressed is a decode-failed line too, like the SSE one (4.1: 响应解压失败 MUST 各留一行)
+      resp = bodyResp(up.statusCode, Buffer.concat(wire), enc, (dec) => onEvent(failureOf(where, { code: dec.code, message: dec.error }, 'decode-failed', { reason: `the response body (content-encoding ${enc}) could not be decompressed: ${dec.error}; its wire bytes are kept (raw_b64)` })))
+    }
     resp.request_id = up.headers['request-id'] || up.headers['x-request-id'] || null
     if (!aborted) return done(resp, false)
     done({ status: up.statusCode, kind: 'error', error: { type: 'upstream_aborted', message: 'the upstream closed the response before it was complete' }, partial: resp }, true)

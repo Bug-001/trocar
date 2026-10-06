@@ -91,9 +91,17 @@ test('L-4: a body that is not JSON keeps its text; one that cannot be decompress
     await p.send(); await p.until(() => p.envelopes.length)
     const r = p.envelopes[0].resp
     assert.ok(r.encoding_error && Buffer.from(r.raw_b64, 'base64').equals(bad))
+    assert.deepEqual(p.events.map((e) => [e.where, e.code]), [['proxy', 'Z_BUF_ERROR']], 'one decode-failed line with Node\'s own code, like the SSE one (4.1)')
+    assert.match(p.events[0].reason, /could not be decompressed: .*wire bytes are kept/)
+    allInSet(p.events)
+  } finally { p.close() }
+  p = await proxied((req, res) => { res.writeHead(200, { 'content-type': 'application/json', 'content-encoding': 'gzip' }); res.end(Buffer.from('this is not gzip')) })
+  try {
+    await p.send(); await p.until(() => p.events.length)
+    assert.deepEqual(p.events.map((e) => [e.where, e.code]), [['proxy', 'Z_DATA_ERROR']], 'gzip too')
   } finally { p.close() }
   p = await proxied((req, res) => { res.writeHead(200, { 'content-type': 'application/json', 'content-encoding': 'gzip' }); res.end(zlib.gzipSync('{"ok":1}')) })
-  try { await p.send(); await p.until(() => p.envelopes.length); assert.deepEqual(p.envelopes[0].resp.body, { ok: 1 }, 'a good body is unchanged') } finally { p.close() }
+  try { await p.send(); await p.until(() => p.envelopes.length); assert.deepEqual(p.envelopes[0].resp.body, { ok: 1 }, 'a good body is unchanged'); assert.deepEqual(p.events, [], 'and no event') } finally { p.close() }
 })
 
 test('L-5: an SSE data: line that is not JSON is counted, and kept with --raw-sse', () => {
