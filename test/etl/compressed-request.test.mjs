@@ -38,8 +38,9 @@ test('a compressed request rebuilds through the ETL and the resolver as decoded 
   assert.ok(rebuilt.length >= 2);
   for (const b of rebuilt) assert.deepEqual([b.source_status, b.source_fidelity], ['ok', 'decoded']);
   assert.ok(rebuilt.every((b) => BODY.includes(b.text)));
-  const c = (await conn.runAndReadAll("SELECT context_state, extra FROM calls WHERE call_id='c1'")).getRowObjects()[0];
+  const c = (await conn.runAndReadAll("SELECT context_state, extra, request_bytes FROM calls WHERE call_id='c1'")).getRowObjects()[0];
   assert.equal(c.context_state, 'complete', '3.1: compression never changes context_state');
+  assert.equal(c.request_bytes, Buffer.from(env.req_body_b64, 'base64').length, '3.2:47 request_bytes = the body\'s bytes on the wire, not its decoded size');
   const extra = JSON.parse(c.extra);
   assert.equal(extra.req_encoding_error, 'not decoded at capture', 'the collector-side fact stays with the row');
   assert.equal('req_content_encoding' in extra, false, 'the encoding is structure the reader consumed');

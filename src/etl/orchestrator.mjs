@@ -29,6 +29,7 @@ import { harnessOf, observerEffectsOf } from '../dissect/harnesses.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
 import { TEXT_REF_FIELD, fieldTextOf } from '../dissect/record-fields.mjs';
 import { createSynthKeys, SYNTH_RULE } from '../dissect/synth-key.mjs';
+import { requestEncodingOf } from '../dissect/request-body.mjs';
 
 export { TEXT_REF_FIELD, fieldTextOf };
 import {
@@ -101,6 +102,9 @@ function decodeBody(record) {
   return { ...record, req_body: {} };
 }
 function requestBytes(record) {
+  // 3.2:47 counts the body's bytes ON THE WIRE: for a body sent compressed, req_body is its decoded text
+  // (4.6 §记录), and the wire bytes are req_body_b64
+  if (typeof record?.req_body_b64 === 'string' && requestEncodingOf(record)) return Buffer.from(record.req_body_b64, 'base64').length;
   const b = record?.req_body;
   // a metadata-only body ({raw_chars, verbatim:false}, 4.1:161) reports the captured size, not the size
   // of the metadata object
