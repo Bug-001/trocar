@@ -576,7 +576,7 @@ function md(s){
 const CHIP={'cc':{ic:'🟠',name:'Claude Code'},'claude-code':{ic:'🟠',name:'Claude Code'},'codex':{ic:'🟢',name:'Codex'},'opencode':{ic:'🟣',name:'OpenCode'},'kimi':{ic:'🌙',name:'Kimi Code'},'dsh':{ic:'🐋',name:'DeepSeek dsh'},'hermes':{ic:'⚕',name:'Hermes'},'zcode':{ic:'🔷',name:'Z-Code'},'deepseek-cli':{ic:'🔵',name:'DeepSeek CLI'}}
 // unknown harness MUST NOT borrow Claude's 🟠 — that would silently pass foreign bytes off as CC
 // (invariant 4). Render an explicit unlabeled state instead.
-const chipFor=m=>{ const h=(m&&CHIP[m.harness])||{ic:'⬜',name:(m&&m.harness)||'unidentified agent'};const ep=m&&m.entrypoint==='desktop'?' · Desktop':m&&m.entrypoint==='cli'?' · CLI':''; const inf=m&&m.harness_inferred?' · 推断自 UA':''; return `${h.ic} ${h.name}${ep}${inf}` }
+const chipFor=m=>{ const h=(m&&CHIP[m.harness])||{ic:'⬜',name:(m&&m.harness)||'unidentified agent'};const ep=m&&m.entrypoint==='desktop'?' · Desktop':m&&m.entrypoint==='cli'?' · CLI':''; const inf=m&&m.harness_inferred?' · 推断自 UA':''; const syn=m&&m.session_synthesized?' · 按推测归组 (system prompt + time)':''; return `${h.ic} ${h.name}${ep}${inf}${syn}` }
 let A=null, raw=[], probes={count:0,series:[]}, meta=null
 let projectsFlat=[] // all sessions across projects (for same-name / fork detection in the top bar)
 let lanes=[], anchor=null, anchorTs=[], playhead=0, follow=true, lastScrolled=-1, curSel=null

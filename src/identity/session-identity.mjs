@@ -75,9 +75,17 @@ export function controlKindFor(record) {
 
 // --- Task 3: lane classification (main/subagent/probe; monitor/aux reserved) ----------------
 
+// The system prompt's text. The Anthropic wire allows `system` as a string or as an array of text blocks;
+// mapping over a string threw and aborted the whole ETL run.
+function systemText(record) {
+  const sys = record.req_body?.system
+  if (typeof sys === 'string') return sys
+  return Array.isArray(sys) ? sys.map((b) => b?.text || '').join('') : ''
+}
+
 // Subagent marker in the CC system prompt (ported from demo isSub; request.system → req_body.system).
 export function isSubagent(record) {
-  const sys = (record.req_body?.system || []).map((b) => b?.text || '').join('')
+  const sys = systemText(record)
   return /cc_is_subagent=true/.test(sys)
 }
 
@@ -85,7 +93,7 @@ export function isSubagent(record) {
 // guardrail — system prompt "You are a security monitor for autonomous AI coding agents…",
 // a distinct always-on lane, ~1 per 2 turns, non-streaming JSON, tools=0).
 export function isMonitor(record) {
-  const sys = (record.req_body?.system || []).map((b) => b?.text || '').join('')
+  const sys = systemText(record)
   return /you are a security monitor/i.test(sys)
 }
 
@@ -118,7 +126,7 @@ export function entrypoint(record) {
   const ua = String(h['user-agent'] || '')
   if (/claude-desktop/i.test(ua)) return 'desktop'
   if (h['x-app']) return String(h['x-app'])
-  const sys = (record.req_body?.system || []).map((b) => b?.text || '').join('')
+  const sys = systemText(record)
   const m = sys.match(/cc_entrypoint=([^;]+)/)
   return m ? m[1] : '?'
 }

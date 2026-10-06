@@ -21,6 +21,7 @@ import { buildResolver } from './query/source.mjs';
 import { readRecords } from './etl/ingest.mjs';
 import { projectsView, projectsViewFromMetas, sessionView, controlView, forWire } from './view/board.mjs';
 import { sessionIdOf } from './view/assemble.mjs';
+import { stampSynthKeys } from './dissect/synth-key.mjs';
 import { TEXT_REF_FIELD } from './etl/orchestrator.mjs';
 import { createLru, memoKey } from './query/memo.mjs';
 import { loadPricing } from './view/pricing.mjs';
@@ -573,7 +574,7 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
       return out;
     }
     // flat source, or an id that isn't its own shard → fall back to the whole corpus, filtered.
-    const out = (await loadRecords()).filter((r) => sessionIdOf(r) === id);
+    const out = stampSynthKeys(await loadRecords()).filter((r) => sessionIdOf(r) === id); // synthesized keys first (3.4 合成键)
     out.sourceErrors = loadRecords.sourceErrors || [];
     return out;
   };
@@ -594,7 +595,9 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
       await readAll(inputs.files, out, out.sourceErrors);
     }
     if (sharded) return out;
-    const flat = (await loadRecords()).filter((r) => !sessionIdOf(r)); // flat source: control = the session-less records
+    // flat source: control = the session-less records. (A keyless Hermes / Kimi call is passed on too: controlView
+    // stamps synthesized keys over it and keeps it out; only keyless records move a synthesized-key assigner.)
+    const flat = (await loadRecords()).filter((r) => !sessionIdOf(r));
     flat.sourceErrors = loadRecords.sourceErrors || [];
     return flat;
   };

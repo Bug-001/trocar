@@ -28,6 +28,7 @@ import { deriveCacheEvents } from '../cache/cache-events.mjs';
 import { harnessOf, observerEffectsOf } from '../dissect/harnesses.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
 import { TEXT_REF_FIELD, fieldTextOf } from '../dissect/record-fields.mjs';
+import { createSynthKeys, SYNTH_RULE } from '../dissect/synth-key.mjs';
 
 export { TEXT_REF_FIELD, fieldTextOf };
 import {
@@ -203,6 +204,9 @@ export async function runEtl(records, connection, opts = {}) {
     if (!adapterState.has(a)) adapterState.set(a, a.begin());
     return adapterState.get(a);
   };
+  // 3.4 合成键 (gate G11): one assigner per run, fed every record in file order (skipped ones too), so a keyless
+  // Hermes / Kimi call gets the same key on every run — and the same key the board gives it.
+  const synth = createSynthKeys();
   // the stream a record was READ from (4.2:39; for a sealed file, its original stream, D35)
   const streamOf = (r) => (opts.streamOf && opts.streamOf(r)) || r._stream || streamBasename;
 
@@ -226,7 +230,8 @@ export async function runEtl(records, connection, opts = {}) {
       const call = adapter.parseCall(record, st);
       const isLlm = call.class === 'llm';
       const sess = isLlm ? adapter.parseSession(record) : null;
-      const sid = isLlm ? (sess.native_id ?? null) : null; // control -> NULL session_id
+      const synthKey = isLlm && sess.native_id == null ? synth.keyOf(record) : null;
+      const sid = isLlm ? (sess.native_id ?? synthKey ?? null) : null; // control -> NULL session_id
       const key = sid == null ? CONTROL_KEY : sid;
       if (sid != null) {
         for (const a of sess.aliases || []) if (!aliasToSid.has(a)) aliasToSid.set(a, sid);
@@ -296,7 +301,8 @@ export async function runEtl(records, connection, opts = {}) {
             sid, ident.id, null, sess.native_id ?? null, null,
             sess.fork_of ?? null, sess.forked_at ?? null, sess.title ?? null, sess.cwd ?? null,
             sess.entrypoint ?? null, ts, ts, sess.native_id_confidence ?? null,
-            JSON.stringify({ ...(sess.extra ?? {}), ...(ident.inferred ? { harness_inferred: true } : {}) }),
+            JSON.stringify({ ...(sess.extra ?? {}), ...(ident.inferred ? { harness_inferred: true } : {}),
+              ...(synthKey ? { session_key: 'synthesized', synth_rule: SYNTH_RULE } : {}) }), // native_id stays NULL, confidence low
           ],
         );
       }

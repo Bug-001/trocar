@@ -38,7 +38,8 @@ export const HARNESSES = Object.freeze([
     observerEffects: [effect('opencode-plugin', 'asight trust plugin',
       'asight code runs inside the agent process; the first run adds one npm registry fetch of @opencode-ai/plugin')] },
   { ...ROW, id: 'kimi', agents: ['kimi', 'kimi-code'],
-    sessionKeys: [B(['prompt_cache_key']), B(['metadata', 'user_id'])] },
+    sessionKeys: [B(['prompt_cache_key']), B(['metadata', 'user_id'])],
+    synth: true }, // without a body key → a synthesized key (src/dissect/synth-key.mjs, gate G11)
   { ...ROW, id: 'dsh', agents: ['dsh', 'deepseek-dsh'],
     sessionKeys: [H('x-deepseek-harness-session-id')],
     parentKeys: [B(['dsh_session_log', 'session', 'parentSession'], 'high')],
@@ -46,7 +47,8 @@ export const HARNESSES = Object.freeze([
     compaction: [{ header: 'x-deepseek-harness-compact', equals: '1' }],
     observerEffects: [effect('dsh-plugin', 'asight trust plugin', 'asight code runs inside the agent process')] },
   { ...ROW, id: 'hermes', agents: ['hermes'],
-    sessionKeys: [B(['session_id']), B(['prompt_cache_key'])], // custom endpoints carry neither (synthesized later)
+    sessionKeys: [B(['session_id']), B(['prompt_cache_key'])], // custom endpoints carry neither → synthesized
+    synth: true, // (src/dissect/synth-key.mjs, gate G11)
     // a text marker (medium). Hermes is Python, so the em dash may arrive JSON-escaped.
     compaction: [{ marker: /\[CONTEXT COMPACTION (?:—|\\u2014) REFERENCE ONLY\]/ }] },
   { ...ROW, id: 'zcode', agents: ['zcode', 'z-code'],

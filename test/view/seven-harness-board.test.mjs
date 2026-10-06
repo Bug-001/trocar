@@ -108,12 +108,15 @@ for (const [id, agent, , , , body, , want] of HARNESSES) {
   });
 }
 
-test('hermes on a custom endpoint (no session key) is not dropped: it is visible in the control view', async () => {
-  const ctl = await get('/api/control');
-  const n = ctl.classes.reduce((a, c) => a + c.count, 0);
-  assert.equal(n, 1, 'the key-less Hermes inference call is still shown somewhere, never silently dropped');
-});
-
-test('hermes on a custom endpoint is listed as its own session', { todo: 'needs the synthesized session key (3.4 合成键): plan Task 20, gate G11 — not in this lane' }, () => {
+test('hermes on a custom endpoint is listed as its own session, grouped by a synthesized key (3.4 合成键, gate G11)', async () => {
   assert.equal(LISTED.size, HARNESSES.length + 1);
+  const synth = [...LISTED.values()].filter((s) => /^synth-hermes-/.test(s.session_id));
+  assert.equal(synth.length, 1, 'the key-less call has a synthesized session');
+  assert.deepEqual([synth[0].harness, synth[0].session_synthesized, synth[0].calls], ['hermes', true, 1]);
+  assert.ok([...LISTED.values()].filter((s) => s !== synth[0]).every((s) => s.session_synthesized === false), 'a real key is never called a guess');
+  const v = await get(`/api/session?id=${encodeURIComponent(synth[0].session_id)}`);
+  assert.equal(v.analyzed.steps.length, 1);
+  assert.ok(v.analyzed.steps[0].flat.length >= 2, 'it renders like any Chat call');
+  const ctl = await get('/api/control');
+  assert.equal(ctl.classes.reduce((a, c) => a + c.count, 0), 0, 'so it is no longer control traffic');
 });

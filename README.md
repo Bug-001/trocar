@@ -246,6 +246,9 @@ your machine — every path above still is. `asight desktop off` restores the co
 - **DeepSeek's cache semantics on its Anthropic endpoint are not settled.** `dsh` (that endpoint) and
   DeepSeek's Chat Completions API are read like any other wire, but calls to the Anthropic endpoint show
   「厂商缓存语义未知」 until a real capture settles them (3.3 OPEN).
+- **Some sessions are grouped by guess.** Hermes on a custom endpoint, and Kimi without a body key, send
+  no session id at all; their calls are grouped by the system prompt and a 30-minute gap (never by process
+  or connection), and the chip says 「按推测归组」. The rule is provisional until checked on a real capture.
 - **On captures without process identity the harness is a guess.** Sessions recorded by the MITM or
   reverse proxy carry no `proc.agent`, so the board names their agent from the User-Agent and its chip
   says so (「推断自 UA」). Sessions from the per-process collector are named by process, never by UA.

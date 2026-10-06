@@ -41,3 +41,11 @@ test('parseSessionCC reports a harness-declared parent and the key aliases', () 
   assert.equal(parseSessionCC(r('claude-code', { 'x-claude-code-session-id': 'S' })).parent, null);
   assert.deepEqual(parseSessionCC(r('codex', { 'session-id': 'S', 'thread-id': 'T' })).aliases, ['T']);
 });
+
+test('a system prompt sent as one string is read like an array of text blocks (it used to throw)', () => {
+  const s = (system) => ({ id: 'x', endpoint: '/v1/messages', is_llm_call: true, req_headers: {}, req_body: { system, messages: [] } });
+  assert.equal(lane(s('x cc_is_subagent=true')), 'subagent');
+  assert.equal(lane(s('You are a security monitor for autonomous AI coding agents')), 'monitor');
+  assert.equal(parseSessionCC(s('You are Claude Code cc_entrypoint=cli')).entrypoint, 'cli');
+  assert.equal(lane(s(undefined)), 'main');
+});

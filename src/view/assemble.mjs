@@ -75,9 +75,10 @@ export const headersOf = (rec) => (rec && (rec.request_headers || rec.req_header
 // while the pre-D10 test fixture kept them green. Mirrors headersOf: tolerate BOTH shapes forever,
 // because old captures on disk are still the user's data (invariant 2).
 export const respOf = (rec) => (rec && (rec.resp || rec.response)) || null;
-// Session key per harness (RFC 3.4 table, D37): read from the ONE table the ETL and sharder also use.
+// Session key per harness (RFC 3.4 table, D37): read from the ONE table the ETL and sharder also use; else the
+// synthesized key board.groupSessions stamped on a keyless Hermes / Kimi call (3.4 合成键, gate G11).
 export function sessionIdOf(rec) {
-  return sessionKeyOf(rec).key;
+  return sessionKeyOf(rec).key ?? (rec && rec._synthKey) ?? null;
 }
 export function recordsForSession(records, sessionId) {
   return records.filter((r) => sessionIdOf(r) === sessionId);

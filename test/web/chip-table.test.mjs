@@ -23,3 +23,8 @@ test('a UA-inferred harness says so on the chip (D37 ①: 「推断自 UA」)', 
   assert.match(chipFor({ harness: 'cc', harness_inferred: true }), /推断自 UA/);
   assert.doesNotMatch(chipFor({ harness: 'cc', harness_inferred: false }), /推断/);
 });
+
+test('a synthesized session says it is grouped by guess (3.4 confidence low)', () => {
+  assert.match(chipFor({ harness: 'hermes', session_synthesized: true }), /按推测归组/);
+  assert.doesNotMatch(chipFor({ harness: 'hermes', session_synthesized: false }), /推测/);
+});

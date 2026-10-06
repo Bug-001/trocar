@@ -8,6 +8,7 @@
 // human-title / cwd enrichment is injected via `enrich(id)` so this module stays testable.
 import { assembleSession, sessionIdOf, headersOf, respOf } from './assemble.mjs';
 import { harnessOf as harnessOfRecord, LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
+import { stampSynthKeys } from '../dissect/synth-key.mjs';
 
 // tolerate both envelope shapes: demo v0 `request_headers` + product D10 `req_headers` (Codex).
 const anyHeaders = (recs) => headersOf(recs.find((r) => r.request_headers || r.req_headers));
@@ -21,7 +22,10 @@ const isOther = (r) => !r.is_llm_call && !isProbe(r);
 // ── grouping ────────────────────────────────────────────────────────────────
 // Records carrying their harness's session key (src/dissect/harnesses.mjs, RFC 3.4) belong to a
 // session; the rest are the session-less control plane (telemetry / config / account).
+// A keyless Hermes / Kimi inference call gets a synthesized key first (3.4 合成键, gate G11), stamped over the
+// whole input in its order — the order the ETL reads the files in, so both readers name it the same.
 export function groupSessions(records) {
+  stampSynthKeys(records);
   const g = new Map();
   for (const r of records) {
     const id = sessionIdOf(r);
@@ -31,7 +35,7 @@ export function groupSessions(records) {
   }
   return g;
 }
-export const controlRecords = (records) => records.filter((r) => !sessionIdOf(r));
+export const controlRecords = (records) => stampSynthKeys(records).filter((r) => !sessionIdOf(r));
 
 // ── per-session derived meta (cheap; no analyze) ──────────────────────────────
 const llmRecs = (recs) => recs.filter((r) => r.is_llm_call);
@@ -81,6 +85,8 @@ function applyEnrich(base, enrich) {
     harness: base.harness ?? null,
     // a meta.json written before D37 has no flag: that fold read only the UA, so its harness was inferred
     harness_inferred: base.harness_inferred ?? (base.harness != null),
+    // grouped by a synthesized key (3.4: confidence low) — the chip says so
+    session_synthesized: !!base.session_synthesized,
     provider: base.provider ?? null,
     title: (info && info.title) || null,
     calls: base.calls || 0,
@@ -101,6 +107,7 @@ function sessionMetaFor(id, recs, enrich) {
     other: otherRecs(recs).length,
     has_subagent: hasSubagent(recs),
     last_ts: lastTs(recs),
+    session_synthesized: recs.some((r) => !!r._synthKey),
   }, enrich);
 }
 
