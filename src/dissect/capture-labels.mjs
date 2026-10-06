@@ -97,3 +97,12 @@ export function respIncompleteOf(rec) {
   if (!parts.length) return null;
   return { undecoded, binary, notJson, empty, unparsed, truncated, bodyBytes, text: `response: ${parts.join('; ')}` };
 }
+
+// Gate G17 (default this read side is written against): a request
+// body stored only in part (#21 labels above) is NOT the full context the model saw, so the call is
+// context_state 'partial' — its cache facts are then NULL (3.2:124), and the labels still say why.
+// 3.2:52 names missing predecessors / unrecoverable server-inherited parts only; this one function is the
+// whole default, so a different answer from the user is a one-line change. → 'partial' | null.
+export function contextStateOfRequest(rec) {
+  return reqIncompleteOf(rec) ? 'partial' : null;
+}

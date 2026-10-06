@@ -21,6 +21,8 @@ import { createHash } from 'node:crypto';
 import { createRegistry } from '../adapters/contract.mjs';
 import { ccAdapter } from '../adapters/cc.mjs';
 import { deriveCacheEvents } from '../cache/cache-events.mjs';
+import { harnessOf, observerEffectsOf } from '../dissect/harnesses.mjs';
+import { vendorOf } from '../dissect/vendors.mjs';
 import {
   buildParentIndex,
   resolveParent,
@@ -80,6 +82,9 @@ function decodeBody(record) {
 }
 function requestBytes(record) {
   const b = record?.req_body;
+  // a metadata-only body ({raw_chars, verbatim:false}, 4.1:161) reports the captured size, not the size
+  // of the metadata object
+  if (b && typeof b === 'object' && b.verbatim === false && Number.isFinite(b.raw_chars)) return b.raw_chars;
   const s = typeof b === 'string' ? b : b == null ? '' : JSON.stringify(b);
   return Buffer.byteLength(s, 'utf8');
 }
@@ -115,7 +120,7 @@ async function quarantineRecord(conn, record, reason) {
 //           req_body = the verbatim captured STRING). Production streams NDJSON lines;
 //           the append-only prefix is RE-READ each run and skipped per session by the
 //           watermark (byte-offset fast-forward is an Extension, RFC 4.2 Risk).
-// opts    : { registry?, streamBasename?='capture.ndjson' (when a record has no _stream), streamOf?, harness?, provider? }
+// opts    : { registry?, streamBasename?='capture.ndjson' (when a record has no _stream), streamOf? }
 //           streamOf(record) → the stream the record was READ from, when the caller knows it per
 //           record: a sealed file holds lines of their ORIGINAL stream(s), never "the sealed file",
 //           and raw_ref MUST name that original stream (RFC 4.2:39, D35).
@@ -172,8 +177,11 @@ export async function runEtl(records, connection, opts = {}) {
         continue;
       }
       const adapter = claim.adapter;
-      const harness = adapter.harness ?? opts.harness ?? 'cc';
-      const provider = adapter.provider ?? opts.provider ?? 'anthropic';
+      // D37 (3.2:28): sessions.harness = the proc identity through the harness table, never the adapter's
+      // wire; a legacy record without proc is UA-inferred and says so (sessions.extra.harness_inferred).
+      const ident = harnessOf(record);
+      // D37 (3.2:50): the vendor comes from the envelope host; cache labels are keyed by it (3.3:89).
+      const vendor = vendorOf(record);
 
       const call = adapter.parseCall(record);
       const isLlm = call.class === 'llm';
@@ -234,12 +242,14 @@ export async function runEtl(records, connection, opts = {}) {
             'native_id_confidence,extra) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ' +
             'ON CONFLICT (session_id) DO UPDATE SET ' +
             'started_at = LEAST(sessions.started_at, excluded.started_at), ' +
-            'ended_at = GREATEST(sessions.ended_at, excluded.ended_at)',
+            'ended_at = GREATEST(sessions.ended_at, excluded.ended_at), ' +
+            'harness = COALESCE(sessions.harness, excluded.harness)',
           [
-            sid, harness, provider, sess.native_id ?? null, sess.parent ?? null,
+            // provider is the main-lane wire SUMMARY (3.2:29), written after the loop from calls
+            sid, ident.id, null, sess.native_id ?? null, sess.parent ?? null,
             sess.fork_of ?? null, sess.forked_at ?? null, sess.title ?? null, sess.cwd ?? null,
             sess.entrypoint ?? null, ts, ts, sess.native_id_confidence ?? null,
-            JSON.stringify(sess.extra ?? {}),
+            JSON.stringify({ ...(sess.extra ?? {}), ...(ident.inferred ? { harness_inferred: true } : {}) }),
           ],
         );
       }
@@ -250,8 +260,8 @@ export async function runEtl(records, connection, opts = {}) {
       await conn.run(
         'INSERT INTO calls (call_id,session_id,seq,ts,endpoint,model,stream,class,control_kind,' +
           'lane,request_bytes,raw_ref,stop_reason,duration_ms,error,compaction,compaction_from,' +
-          'compaction_to,unmapped_count,extra) VALUES ' +
-          '($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) ' +
+          'compaction_to,unmapped_count,extra,wire_format,vendor,transport,context_state,observer_effect) VALUES ' +
+          '($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25) ' +
           'ON CONFLICT (call_id) DO NOTHING',
         [
           record.id, sid, idx, ts, call.endpoint || null, call.model ?? null, !!call.stream,
@@ -259,11 +269,15 @@ export async function runEtl(records, connection, opts = {}) {
           call.stop_reason ?? null, call.duration_ms ?? null, call.error ? 'true' : null,
           comp.compaction, comp.compaction_from, comp.compaction_to, call.unmapped_count ?? 0,
           JSON.stringify(call.extra ?? {}),
+          // D37 (3.2:49-53); an envelope without `transport` is HTTP (3.2:132)
+          call.wire_format ?? null, vendor, record.transport === 'ws' ? 'ws' : 'http',
+          call.context_state ?? null, jsonOrNull(observerEffectsOf(record)),
         ],
       );
 
-      // ── usage (llm only; cache_write NULL MUST NOT be coerced to 0) ──
-      if (isLlm) {
+      // ── usage (llm only; cache_write NULL MUST NOT be coerced to 0). An adapter returns usage:null when
+      //    the wire reported none (e.g. a probe): then no usage and no cache_events row, never a fake zero.
+      if (isLlm && call.usage) {
         const u = call.usage || {};
         await conn.run(
           'INSERT INTO usage (call_id,input_uncached,cache_read,cache_write,output,reasoning,' +
@@ -295,13 +309,13 @@ export async function runEtl(records, connection, opts = {}) {
       }
 
       // ── cache_events (llm only; D17 forensics via 3.3 deriveCacheEvents) ──
-      if (isLlm) {
+      if (isLlm && call.usage) {
         const u = call.usage || {};
         const ev = deriveCacheEvents(
           prevBlocks.get(laneKey) ?? null,
           curBlocks,
           { cache_read: u.cache_read, cache_write: u.cache_write, total_input: u.total_input },
-          { compaction: comp.compaction, call_id: record.id, provider },
+          { compaction: comp.compaction, call_id: record.id, vendor, wireFormat: call.wire_format ?? null, contextState: call.context_state ?? null },
         );
         await conn.run(
           'INSERT INTO cache_events (call_id,break_kind,hit_ratio,declared_breakpoints,' +
@@ -338,6 +352,15 @@ export async function runEtl(records, connection, opts = {}) {
       touched.add(key);
       stats.ingested++;
     }
+
+    // ── sessions.provider = SUMMARY (3.2:29): the main lane's wire format, 'mixed' when it mixes.
+    //    Recomputed from the calls table, so incremental == full by construction.
+    await conn.run(
+      'UPDATE sessions SET provider = t.p FROM (' +
+        "SELECT session_id, CASE WHEN count(DISTINCT wire_format) = 1 THEN min(wire_format) ELSE 'mixed' END AS p " +
+        "FROM calls WHERE class = 'llm' AND lane = 'main' AND wire_format IS NOT NULL AND session_id IS NOT NULL " +
+        'GROUP BY session_id) AS t WHERE sessions.session_id = t.session_id',
+    );
 
     // ── lineage pass (RFC 3.4 认亲): parent_session_id via first-user-msg ↔ parent
     //    Task/Agent prompt. Runs over the FULL run corpus so batching can't change the

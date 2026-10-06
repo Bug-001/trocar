@@ -21,7 +21,8 @@ import {
 // D25: the CC block model (assembly-order walk, volatile rule, resource linking, kind, faithfulness,
 // bash-read parsing) lives in ONE dissector, shared with the board (analyze.linearContext). parseBlocks
 // below is the ETL PROJECTION of that dissector's spine — adds the D19 verbatim byte spans + text_ref.
-import { dissectBlocks, resourceRef, blockKind, faithfulness, parseBashReads } from '../dissect/cc.mjs';
+import { dissectBlocks, resourceRef, blockKind, faithfulness, parseBashReads, serverEdited } from '../dissect/cc.mjs';
+import { contextStateOfRequest } from '../dissect/capture-labels.mjs';
 export { parseBashReads }; // re-exported for back-compat (was defined here before the D25 extraction)
 
 // ── req_body access ────────────────────────────────────────────────────────────
@@ -164,6 +165,11 @@ export function parseCall(record) {
     error: !!record?.error || resp.kind === 'error' || (resp.status || 0) >= 500,
     unmapped_count,
     extra,
+    // D37 (3.2:49/52): this adapter speaks the Anthropic Messages wire. Only an inference call has a
+    // context to judge; control / probe rows leave both NULL. An incomplete stored request is 'partial'
+    // (gate G17, contextStateOfRequest); its req_* labels stay in calls.extra, unconsumed, saying why.
+    wire_format: record?.is_llm_call === true ? 'anthropic' : null,
+    context_state: record?.is_llm_call === true ? (contextStateOfRequest(record) ?? (serverEdited(record) ? 'server_edited' : 'complete')) : null,
     // compaction/compaction_from/to are a cross-call (message_count-drop) inference decided
     // by ETL/3.4 (markCompaction), NOT a single-record parse — left unset here on purpose.
   };

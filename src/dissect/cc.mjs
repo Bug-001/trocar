@@ -172,3 +172,16 @@ export function dissectBlocks(req) {
   }
   return spine;
 }
+
+// 3.2:52 context_state 'server_edited': the RESPONSE reports that the server edited the context it was
+// given (Anthropic context management, `context_management.applied_edits`), so the request bytes are not
+// exactly what the model saw. Read from a JSON body or any streamed event carrying it. The wire shape is
+// still to be confirmed against a real capture; until then a response without the field reads 'complete'.
+export function serverEdited(rec) {
+  const resp = (rec && (rec.resp || rec.response)) || {};
+  const hit = (o) => !!(o && typeof o === 'object' && o.context_management
+    && Array.isArray(o.context_management.applied_edits) && o.context_management.applied_edits.length > 0);
+  if (resp.body && typeof resp.body === 'object' && hit(resp.body)) return true;
+  for (const e of Array.isArray(resp.raw_sse) ? resp.raw_sse : []) if (hit(e) || hit(e && e.message) || hit(e && e.delta)) return true;
+  return false;
+}

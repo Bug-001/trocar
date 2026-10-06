@@ -42,8 +42,20 @@ CREATE TABLE IF NOT EXISTS calls (
   compaction_from INT,
   compaction_to INT,
   unmapped_count INT,
-  extra JSON
+  extra JSON,
+  wire_format TEXT,         -- D37 (3.2:49) anthropic | openai-responses | openai-chat, per call
+  vendor TEXT,              -- D37 (3.2:50) from the envelope host; unknown = NULL
+  transport TEXT,           -- D37 (3.2:51) http | ws
+  context_state TEXT,       -- D37 (3.2:52) complete | reconstructed | partial | server_edited
+  observer_effect JSON      -- D37 (3.2:53) what capture changed in the client; NULL = none known
 );
+-- D37 migration for a store created before these columns existed. Placed BEFORE the views, and a no-op
+-- on a fresh store (IF NOT EXISTS). New columns come last on both, so column order matches.
+ALTER TABLE calls ADD COLUMN IF NOT EXISTS wire_format TEXT;
+ALTER TABLE calls ADD COLUMN IF NOT EXISTS vendor TEXT;
+ALTER TABLE calls ADD COLUMN IF NOT EXISTS transport TEXT;
+ALTER TABLE calls ADD COLUMN IF NOT EXISTS context_state TEXT;
+ALTER TABLE calls ADD COLUMN IF NOT EXISTS observer_effect JSON;
 
 -- Deduped context block content (same bytes across calls stored once).
 CREATE TABLE IF NOT EXISTS block_contents (
