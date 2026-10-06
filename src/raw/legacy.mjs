@@ -225,8 +225,19 @@ function sealerTrees(argv, sessionsRoot) {
 // Other `asight raw seal` processes working in `target`'s tree — or where it cannot be told (review 3
 // confirm, row 2): two runs over one tree would each check and delete, or seal what the other
 // deletes. One on another tree is left alone (every shard has its own lock besides).
-const isAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
-export function otherSealers(procs, { target = null, sessionsRoot = path.join(asightHome(), 'sessions'), fs = nodeFs, homeOf = defaultHomeOf, alive = isAlive } = {}) {
+// Running: kill(pid, 0) answers yes for a zombie too — a process that has exited and was not reaped
+// yet, whose `ps -E` shows `<defunct>` and no HOME. That one is not running (a test file's sealer
+// exiting while this run looked made the run refuse now and then).
+export function isRunning(pid, { fs = nodeFs, platform = process.platform, run = spawnSync } = {}) {
+  try { process.kill(pid, 0); } catch (e) { if (e.code !== 'EPERM') return false; }
+  try {
+    if (platform === 'linux') { const st = fs.readFileSync(`/proc/${pid}/stat`, 'utf8'); return st.slice(st.lastIndexOf(')') + 2)[0] !== 'Z'; }
+    const r = run('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' });
+    const stat = String(r.stdout || '').trim();
+    return r.status === 0 && stat !== '' && !stat.startsWith('Z');
+  } catch { return true; }                                   // cannot tell: running (refuse rather than miss)
+}
+export function otherSealers(procs, { target = null, sessionsRoot = path.join(asightHome(), 'sessions'), fs = nodeFs, homeOf = defaultHomeOf, alive = isRunning } = {}) {
   const mine = selfAndAncestors(procs);
   const real = (p) => realish(fs, p), within = (a, b) => a === b || a.startsWith(b.endsWith(path.sep) ? b : b + path.sep);
   const t = target && real(target);

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { sealLegacy, otherSealers } from '../../src/raw/legacy.mjs';
+import { sealLegacy, otherSealers, isRunning } from '../../src/raw/legacy.mjs';
 import { readJournal } from '../../src/raw/journal.mjs';
 import { tmpDir, conversation, toLine, writeShard } from './helpers.mjs';
 
@@ -76,6 +76,13 @@ test('row 2: the run refuses while another `asight raw seal` works in its tree (
     const homeHere = path.join(root, 'home'); fs.mkdirSync(path.join(homeHere, '.asight', 'sessions'), { recursive: true });
     assert.deepEqual(otherSealers([closedHere], { target: path.join(homeHere, '.asight', 'sessions'), homeOf: () => homeHere }).map((p) => p.pid), [424247]);
     assert.deepEqual(otherSealers([{ pid: 9, argv: ['vim', 'asight', 'raw', 'seal'] }, { pid: 10, argv: ['node', '/x/bin/asight.mjs', 'raw', 'verify', ses] }], { target: f }), [], 'not a sealer');
+    // a sealer that exited and is not reaped yet (a zombie: kill(pid, 0) still succeeds) is not running
+    const { spawn } = await import('node:child_process');
+    const z = spawn(process.execPath, ['-e', '0']);
+    for (const t = Date.now(); Date.now() - t < 1500 && /^\s*[^Z\s]/.test(spawnSync('ps', ['-o', 'stat=', '-p', String(z.pid)], { encoding: 'utf8' }).stdout || 'Z');) { /* block: no reaping */ }
+    assert.doesNotThrow(() => process.kill(z.pid, 0), 'precondition: kill(pid, 0) succeeds on the zombie');
+    assert.equal(isRunning(z.pid), false, 'a zombie counts as running');
+    assert.equal(isRunning(process.pid), true);
     const res = await sealLegacy(f, { ...NONE, journal, deleteOriginal: true, processList: async () => [me, npx, elsewhere] });
     assert.equal(res.deletedOnly.length, 1);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
