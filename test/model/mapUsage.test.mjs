@@ -60,3 +60,18 @@ test('openai-chat: DeepSeek hit/miss wins over cached_tokens; cache_write NULL',
   assert.deepEqual(oa.extra, { total_tokens: 505, prompt_tokens_details: { audio_tokens: 0 } }, 'unmapped keys survive in extra');
   assert.equal(mapUsage('openai-chat', { prompt_tokens: 9, cached_tokens: 4 }).cache_read, 4, 'Kimi names it at the top level');
 });
+
+test('Chat usage: the board (canonUsageChat) and the ETL (mapUsage) read the same cache split, zeros included', async () => {
+  const { canonUsageChat } = await import('../../src/dissect/openai.mjs');
+  const shapes = [
+    { prompt_tokens: 100, completion_tokens: 3, prompt_cache_hit_tokens: 60, prompt_cache_miss_tokens: 40 }, // DeepSeek
+    { prompt_tokens: 100, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 60 } },              // OpenAI
+    { prompt_tokens: 100, completion_tokens: 3, cached_tokens: 60 },                                          // Kimi, top level
+    { prompt_tokens: 100, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 0 }, cached_tokens: 60 },
+    { prompt_tokens: 100, completion_tokens: 3 },
+  ];
+  for (const u of shapes) {
+    const b = canonUsageChat(u), e = mapUsage('openai-chat', u);
+    assert.deepEqual([b.read, b.fresh, b.out], [e.cache_read, e.input_uncached, e.output], JSON.stringify(u));
+  }
+});

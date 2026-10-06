@@ -298,7 +298,8 @@ export function canonUsageChat(usage = {}) {
   const u = usage || {};
   const d = u.prompt_tokens_details || {};
   const input = u.prompt_tokens || 0;
-  const read = u.prompt_cache_hit_tokens != null ? u.prompt_cache_hit_tokens : (d.cached_tokens || u.cached_tokens || 0);
+  // `??`, not `||`: a reported 0 is a fact (the same reading as mapChat)
+  const read = u.prompt_cache_hit_tokens != null ? u.prompt_cache_hit_tokens : (d.cached_tokens ?? u.cached_tokens ?? 0);
   const fresh = u.prompt_cache_miss_tokens != null ? u.prompt_cache_miss_tokens : Math.max(0, input - read);
   return { read, create: 0, fresh, out: u.completion_tokens || 0 };
 }
