@@ -85,7 +85,7 @@ export function offenders(files, read = (f) => fs.readFileSync(f, 'utf8')) {
 }
 
 test('K1 guard: src/collector/core/** and the capture files that apply the retention hold no harness name and no class pattern (D20, 0.1 §5)', () => {
-  const capture = ['envelope.mjs', 'request-body.mjs', 'retention.mjs', 'response-tee.mjs', 'mitm.mjs', 'reverse-proxy.mjs'].map((n) => path.join(REPO, 'src', 'capture', n))
+  const capture = ['envelope.mjs', 'request-body.mjs', 'retention.mjs', 'keep.mjs', 'response-tee.mjs', 'mitm.mjs', 'reverse-proxy.mjs'].map((n) => path.join(REPO, 'src', 'capture', n))
   const files = [...walk(path.join(REPO, 'src', 'collector', 'core')), ...capture]
   assert.ok(files.length > 30, 'the scan sees the tree')
   assert.deepEqual(offenders(files), [])

@@ -6,6 +6,7 @@
 //   off     — revert steer (+ optional --remove-ca)
 //   verify  — assert the CA is in the user-level trust store (no machine trust)
 //   doctor  — onboard self-check: deps probe + 「测试」四问 (4.1:61 / 4.5:41,77)
+//   keep    — D40 what is kept of each call, per harness × traffic class: show / set (src/capture/keep.mjs)
 //   raw     — D35 sealed raw logs: seal (closed shards, or --legacy pre-D35 files) · verify · compare · export · journal
 import path from 'node:path'
 import { asightHome, captureOut, mitmOut, serveSource } from '../src/paths.mjs';
@@ -287,6 +288,12 @@ async function main() {
       }
       break;
     }
+    case 'keep': { // D40 (RFC 4.6 §记录「保存级别」): what is kept of each call, per harness × traffic class — show and set; no daemon needed
+      const { runKeep } = await import(r('src', 'capture', 'keep.mjs'));
+      const { retentionHarnessIds } = await import(r('src', 'dissect', 'traffic.mjs'));
+      process.exitCode = runKeep(rest, { harnesses: retentionHarnessIds() });
+      break;
+    }
     case 'collector': { // per-user transparent collector (RFC 4.6, D36): install / start / on / off / status / uninstall
       const { runCollector } = await import(r('src', 'collector', 'cli.mjs'));
       process.exitCode = await runCollector(rest);
@@ -559,6 +566,7 @@ usage:
   asight desktop {on|off|status} [--port 9899]  macOS-only: steer CC-Desktop's claude-code→anthropic into asight mitm (durable, reversible)
   asight on   [--proxy http://127.0.0.1:8899]   generate CA + install (user-level) + steer CC-CLI
   asight off  [--remove-ca]
+  asight keep [<harness|all> <class|all> <full|log>]   what is kept of each call, per harness × traffic class: show, or set (no daemon needed)
   asight uninstall                              one-step revert: remove CA + clear steer
   asight verify
   asight doctor [--source <ndjson>]             self-check: deps probe + 「测试」四问 (是否真在抓/抓得对/凭据没漏/没弱化全机 TLS)
