@@ -11,6 +11,7 @@ import { randomBytes } from 'node:crypto'
 import { createFramer, asksUpgrade } from '../http1/framer.mjs'
 import { buildTransparentEnvelope } from '../record/envelope.mjs'
 import { createWsRecorder } from '../ws/recorder.mjs'
+import { sampleRetention } from '../../../capture/retention.mjs'
 
 const defaultRunTag = () => Date.now().toString(36).slice(-4) + randomBytes(2).toString('hex')
 
@@ -19,7 +20,7 @@ const isWsUpgrade = (req, resp) => resp.head.status === 101 && tokens(req.head.h
 // a socket error as the ws recorder records it; 'end' / 'close' (no Error) are a clean end
 const errOf = (e) => (e ? { type: e.code || e.type || 'error', message: String(e.message || e) } : null)
 
-/** createExchangeTee({flow, recordStore, isRecording, maxBodyBytes, newId, wsTerminal, onFailure})
+/** createExchangeTee({flow, recordStore, isRecording, maxBodyBytes, newId, wsTerminal, retention, onFailure})
  *   → {fromClient, fromUpstream, clientEnded(err?), upstreamEnded(err?), abort(error), wsSummary(), rowNotes(), stats}
  * rowNotes() = what flows/ must say about this connection (RFC 4.6 §记录, D38): {writeFailed} = envelopes the
  * store did not write (HTTP and WebSocket), {notFollowed} = the reply after which nothing more was framed
@@ -28,9 +29,20 @@ const errOf = (e) => (e ? { type: e.code || e.type || 'error', message: String(e
  * wsTerminal = FlowExtras.wsTerminal (harness data, Plan 3c §2); wsSummary() = the ws recorder's summary
  * for flows/ once the connection switched to WebSocket, else null. onFailure({code, reason, …}) takes the
  * capture failures (RFC 4.6 §记录, D38) — the engine's failure(), which writes them to flows/; the
- * WebSocket recorder gets the same sink. A framing error stops recording the rest of the connection. */
+ * WebSocket recorder gets the same sink. A framing error stops recording the rest of the connection.
+ * retention(proc, host, method, path) → {class, level} (D40, RFC 4.6 §记录「保存级别」): the daemon's callback, asked once
+ * per request when its head arrives — the same instant as isRecording() — and once per WebSocket call at its first frame.
+ * At `log` the bodies are not buffered, only counted; either way the full wire length of each body is counted past the cap
+ * (body_wire_bytes). No callback: every call is `full`, its class told by the endpoint alone. */
 export const noFailureSink = (r) => { throw Object.assign(new Error(`capture failure with nowhere to be recorded: ${r.code}: ${r.reason}`), { code: r.code }) } // a wiring fault: loud, never dropped
-export function createExchangeTee({ flow, recordStore, isRecording = () => true, maxBodyBytes = 64 << 20, newId, wsTerminal = null, onFailure = noFailureSink }) {
+export function createExchangeTee({ flow, recordStore, isRecording = () => true, maxBodyBytes = 64 << 20, newId, wsTerminal = null, retention = null, onFailure = noFailureSink }) {
+  // the retention callback as the old capture's sampler wants it: one query object; a throw or a nonsense answer is `full`
+  // (never throws into the framer: a bad flow object is asight's own bug, reported where the envelope is built, not here)
+  const sample = (method, target) => {
+    let host = null
+    try { host = flow.host } catch { /* the envelope build reports it */ }
+    return sampleRetention(retention ? (q) => retention(flow.proc, q.host, q.method, q.endpoint) : null, { host, method, endpoint: target })
+  }
   const stats = { exchanges: 0, recorded: 0 }
   const run = defaultRunTag()
   let idSeq = 0
@@ -51,9 +63,11 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
     get lastError() { return recordStore.lastError },
   }
 
-  // Accumulate a body with a hard cap; past maxBodyBytes stop and mark truncated (invariant 4).
+  // Accumulate a body with a hard cap; past maxBodyBytes stop and mark truncated (invariant 4). `wire` counts every byte,
+  // kept or not (body_wire_bytes); a body at the `log` level (keep:false) is only counted.
   function append(target, chunk) {
-    if (target.truncated) return
+    target.wire += chunk.length
+    if (!target.keep || target.truncated) return
     const room = maxBodyBytes - target.bytes
     if (chunk.length > room) {
       if (room > 0) { target.chunks.push(Buffer.from(chunk.subarray(0, room))); target.bytes += room }
@@ -65,11 +79,13 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
 
   const reqFramer = createFramer('request', {
     onHead(h) {
+      const rt = sample(h.method, h.target)
       const ex = {
         seq: stats.exchanges++,
         id: genId(),
         record: isRecording(),             // sampled at request start (RFC 4.6 §开关)
-        req: { head: { raw: h.raw, startLine: h.startLine, headers: h.headers, method: h.method, target: h.target }, chunks: [], bytes: 0, truncated: false, tsStart: new Date().toISOString() },
+        rt,                                // so is the retention level and class (D40)
+        req: { head: { raw: h.raw, startLine: h.startLine, headers: h.headers, method: h.method, target: h.target }, chunks: [], bytes: 0, wire: 0, keep: rt.level !== 'log', truncated: false, tsStart: new Date().toISOString() },
         emitted: false,
         upgradeReq: asksUpgrade(h.headers), // the request framer holds what follows it (release / takeRest)
       }
@@ -89,7 +105,9 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
 
   const respFramer = createFramer('response', {
     onHead(h) {
-      curResp = { head: { raw: h.raw, status: h.status, headers: h.headers }, chunks: [], bytes: 0, truncated: false, tsStart: new Date().toISOString() }
+      // the response belongs to the oldest unanswered request (responses are ordered): its level is that request's
+      const owner = pending[0]
+      curResp = { head: { raw: h.raw, status: h.status, headers: h.headers }, chunks: [], bytes: 0, wire: 0, keep: !owner || owner.rt.level !== 'log', truncated: false, tsStart: new Date().toISOString() }
     },
     onBody(b) { if (curResp) append(curResp, b) },
     onEnd(e) {
@@ -107,7 +125,7 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
       // RFC 4.6 §引擎 6: after a WebSocket 101 the raw bytes keep flowing; the side copy goes to ws/. The
       // upgrade is no envelope of its own: its seq is the first call's (RFC 4.6 §记录).
       pending.shift()
-      ws = createWsRecorder({ flow, upgrade: { req: ex.req, resp: curResp }, seqStart: ex.seq, genId, recordStore: counted, isRecording, terminal: wsTerminal, onFailure })
+      ws = createWsRecorder({ flow, upgrade: { req: ex.req, resp: curResp }, seqStart: ex.seq, genId, recordStore: counted, isRecording, terminal: wsTerminal, retention: sample, onFailure })
       curResp = null
       if (early.length) ws.fromClient(early) // frames sent before the 101 arrived (RFC 6455 says wait; some don't)
       if (rest && rest.length) ws.fromUpstream(rest)
@@ -118,7 +136,7 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
 
   function respPartOf(resp, aborted) {
     if (!resp) return null
-    return { head: resp.head, body: Buffer.concat(resp.chunks), truncated: resp.truncated, tsStart: resp.tsStart, tsEnd: new Date().toISOString(), ...(aborted ? { aborted: true } : {}) }
+    return { head: resp.head, body: Buffer.concat(resp.chunks), truncated: resp.truncated, wire: resp.wire, tsStart: resp.tsStart, tsEnd: new Date().toISOString(), ...(aborted ? { aborted: true } : {}) }
   }
 
   // `why` names what ended the exchange if its request body is still arriving (invariant 4: the
@@ -135,9 +153,10 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
     try {
       env = buildTransparentEnvelope({
         id: ex.id, flow, seq: ex.seq,
-        req: { head: ex.req.head, body: Buffer.concat(ex.req.chunks), truncated: ex.req.truncated, partial, tsStart: ex.req.tsStart },
+        req: { head: ex.req.head, body: Buffer.concat(ex.req.chunks), truncated: ex.req.truncated, wire: ex.req.wire, partial, tsStart: ex.req.tsStart },
         resp: respPart,
         error: error || null,
+        class: ex.rt.class, level: ex.rt.level,
       })
     } catch (e) { onFailure({ code: 'engine-error', flow_id: flow.id, seq: ex.seq, reason: `recording failed: ${String((e && e.message) || e)}` }); return }
     let ok = true

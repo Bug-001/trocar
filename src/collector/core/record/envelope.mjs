@@ -86,10 +86,11 @@ export function buildTransparentEnvelope({ id, flow, seq, req, resp, error = nul
  * upgrade request's headers (req_headers / req_head_raw: the sharder reads a session key there)
  * and the upstream's 101 head (resp_head_raw).
  *   upgrade = {req:{head}, resp:{head}}   the heads as the exchange tee holds them
- *   call    = {client:[v], server:[v], tsStart, tsRespStart, tsEnd, partial:[reason], truncated}
- *     v = a message as stored: its text, {b64}, {b64, decode_error}, {omitted_bytes}, or, for a non-LLM
- *     endpoint's client message, {raw_chars, verbatim:false}. client[0] opened the call; none = a server
- *     message that arrived with no call open.
+ *   call    = {client:[v], server:[v], tsStart, tsRespStart, tsEnd, partial:[reason], truncated, class, level, wire:{req,resp}}
+ *     v = a message as stored: its text, {b64}, {b64, decode_error}, {omitted_bytes}, or — at the `log` level (D40) and in
+ *     records written before it — {raw_chars, verbatim:false}. client[0] opened the call; none = a server message that
+ *     arrived with no call open. class / level = the call's traffic class and retention level, sampled at its first frame;
+ *     wire = every payload byte the call carried in each direction, kept or not (body_wire_bytes).
  *   wsRaw   = the call's ws_raw entries in frame order (core/ws/raw.mjs)
  *   error   = null | {type, message}: the connection ended the call before its terminal message; the
  *             server messages then sit under resp.partial, the shape of an interrupted HTTP response
@@ -105,6 +106,8 @@ export function buildWsEnvelope({ id, flow, seq, upgrade, call, wsRaw, error = n
     durationMs: call.tsRespStart ? Date.parse(call.tsEnd) - Date.parse(call.tsRespStart) : null,
     method: upgrade.req.head.method, endpoint: upgrade.req.head.target, reqBody: null,
     reqHeaders: lowerHeaders(upgrade.req.head.headers),
+    host: flow.host, trafficClass: call.class || null, retention: call.level || 'full',
+    reqWireBytes: call.wire ? call.wire.req : 0, respWireBytes: call.wire ? call.wire.resp : 0,
     resp: error ? { status: null, kind: 'error', error: { type: error.type, message: error.message }, partial: messages } : messages,
     capture: 'transparent', error: !!error,
   })
@@ -112,7 +115,7 @@ export function buildWsEnvelope({ id, flow, seq, upgrade, call, wsRaw, error = n
   const ext = (upgrade.resp.head.headers || []).filter(([k]) => k.toLowerCase() === 'sec-websocket-extensions').map(([, v]) => v)
   return {
     ...env,
-    host: flow.host, scheme: flow.scheme, dst: flow.dst, proc: flow.proc, flow_id: flow.id, seq,
+    scheme: flow.scheme, dst: flow.dst, proc: flow.proc, flow_id: flow.id, seq,
     req_head_raw: upgrade.req.head.raw.toString('latin1'),
     resp_head_raw: upgrade.resp.head.raw.toString('latin1'),
     ...(opener && typeof opener.b64 === 'string' && !opener.decode_error ? { req_body_b64: opener.b64 } : {}),
