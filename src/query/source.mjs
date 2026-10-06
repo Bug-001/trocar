@@ -18,7 +18,7 @@
 import { open } from 'node:fs/promises';
 import { statSync, openSync, readSync, closeSync, fstatSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import { parseTextRef, TEXT_REF_FIELD } from '../etl/orchestrator.mjs';
+import { parseTextRef, TEXT_REF_FIELD, fieldTextOf } from '../etl/orchestrator.mjs';
 import { normalizeRecord } from '../etl/ingest.mjs';
 import { listSources, isSealedPath } from '../raw/discover.mjs';
 import { openSealed, createFrameCache } from '../raw/reader.mjs';
@@ -69,31 +69,6 @@ function classifyFidelity(raw) {
 // plain resolve() stays non-throwing/string-or-null for back-compat.
 const OUT = (status, reason = null, text = null, fidelity = null) => ({ status, reason, text, fidelity });
 
-// ── the field a text_ref names (RFC 4.2:40 字段段, gate G1) ─────────────────────────────────────
-// No field = req_body (through normalizeRecord, as always). resp.raw = the decoded reply text the collector
-// stored (SSE or text); resp.messages.<j> = a WebSocket envelope's j-th server message; req_extra_messages.<k>
-// = a later client message of the same call. An error envelope keeps what arrived under resp.partial, with
-// the same numbering (ws_raw's m slices count it the same way). The stored decoded text IS the verbatim
-// record (4.6 §记录), so its fidelity is 'verbatim', like req_body. → { text } | { missing: why }.
-const STORED_AS = (v) => (v && typeof v === 'object'
-  ? (typeof v.b64 === 'string' ? `base64 bytes ({b64}${v.decode_error ? ', not decodable' : ''})`
-    : v.omitted_bytes != null ? `{omitted_bytes: ${v.omitted_bytes}} — over the per-call cap, bytes not kept`
-      : v.verbatim === false ? 'its length only ({raw_chars}) — not verbatim' : 'a non-text value')
-  : `${v === undefined ? 'nothing' : typeof v}`);
-function fieldText(raw, field) {
-  const resp = raw.resp || raw.response || {};
-  const part = resp.kind === 'error' && resp.partial && typeof resp.partial === 'object' ? resp.partial : resp;
-  let v;
-  if (field === 'resp.raw') v = part.raw;
-  else {
-    const [, list, j] = /^(resp\.messages|req_extra_messages)\.(\d+)$/.exec(field);
-    const arr = list === 'resp.messages' ? (part.kind === 'ws' ? part.messages : null) : raw.req_extra_messages;
-    if (!Array.isArray(arr) || Number(j) >= arr.length) return { missing: `has no ${field}` };
-    v = arr[Number(j)];
-  }
-  if (typeof v === 'string') return { text: v };
-  return { missing: v === undefined ? `has no ${field}` : `stores ${field} as ${STORED_AS(v)}, not as text` };
-}
 // A within-file duplicate keeps the source shards (sha256) of its sealed members, so
 // poisonSplitDuplicates can carry the collision to a copy of the same record id in another root. An
 // entry that an earlier cross-root pass poisoned counts as the record it was (`splitFrom`).
@@ -465,7 +440,7 @@ export async function buildResolver(source, { retryMs = 30000, sessionsRoot = nu
     if (!out) try {
       const raw = JSON.parse(buf.toString('utf8'));
       if (field) {
-        const f = fieldText(raw, field);
+        const f = fieldTextOf(raw, field); // the stored decoded text IS the verbatim record (4.6 §记录)
         out = f.text != null ? OUT('ok', null, f.text, 'verbatim') : OUT('no-body', `record "${recordId}" ${f.missing}`);
       } else {
         const body = normalizeRecord(raw).req_body;
