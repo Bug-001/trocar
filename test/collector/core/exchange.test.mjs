@@ -273,6 +273,28 @@ test('D40 · K2: body_wire_bytes is the full length past the 64 MiB cap, at the 
   assert.deepEqual([e.resp.truncated, e.resp.body_bytes], [true, 8])
 })
 
+// review (F11): the envelope is the same whether or not the bytes were held, so the assertions above cannot tell a log-level exchange that buffers a
+// 64 MiB body from one that does not — and not buffering is the point of the level (4.6 §日志体积预算: a download must not sit in memory). Setting the
+// `keep` flag true left all of them green. What is held is what gets concatenated into the envelope: the spy counts those bytes.
+test('F11 — at the log level a body is never held: only the heads are concatenated; at full the same traffic concatenates both bodies', () => {
+  const MiB = 1 << 20, chunk = Buffer.alloc(MiB, 0x61), orig = Buffer.concat
+  const concatenated = (level) => {
+    const { store, out } = sink()
+    const t = createExchangeTee({ flow: FLOW, recordStore: store, retention: () => ({ class: 'files', level }) })
+    let total = 0
+    Buffer.concat = (list, len) => { for (const b of list) total += b.length; return orig.call(Buffer, list, len) }
+    try {
+      t.fromClient(Buffer.from(`POST /upload HTTP/1.1\r\nContent-Length: ${4 * MiB}\r\n\r\n`)); for (let i = 0; i < 4; i++) t.fromClient(chunk)
+      t.fromUpstream(Buffer.from(`HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: ${4 * MiB}\r\n\r\n`)); for (let i = 0; i < 4; i++) t.fromUpstream(chunk)
+    } finally { Buffer.concat = orig }
+    assert.equal(out.length, 1)
+    assert.deepEqual(out[0].body_wire_bytes, { req: 4 * MiB, resp: 4 * MiB }, 'counted either way')
+    return total
+  }
+  assert.ok(concatenated('log') < 64 * 1024, 'log: nothing of either body was held')
+  assert.ok(concatenated('full') >= 8 * MiB, 'full: both bodies were held (so the spy sees what it is meant to see)')
+})
+
 test('D40: the level is the one sampled when the request STARTED — a change in the middle of the body does not reach it; the next request takes the new one', () => {
   const { out, store } = sink(); let level = 'log'
   const t = createExchangeTee({ flow: FLOW, recordStore: store, retention: () => ({ class: 'telemetry', level }) })
