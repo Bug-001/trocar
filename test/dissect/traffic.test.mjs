@@ -40,6 +40,18 @@ test('host patterns are exact or *.suffix, any case; paths ignore the querystrin
   assert.deepEqual([c({ harness: 'x', host: 'h.test', endpoint: '/up/1' }), c({ harness: 'x', host: 'h.test', endpoint: '/down' })], ['files', 'account'])
 })
 
+// review M44: removing the querystring strip from `pathOf` kept every test green — the case above is passed by an anchored pattern either way.
+// The strip matters in both directions: a `$`-anchored pattern must still match a path that has a querystring, and a querystring that merely
+// CONTAINS the pattern must not make a path match.
+test('the querystring is not part of the path, in both directions: a $-anchored pattern matches /path?q, and /other?next=/path does not', () => {
+  assert.equal(classify({ harness: 'cc', host: 'api.anthropic.com', endpoint: '/v1/code/sessions?limit=1' }), 'session-sync', 'cc\'s ^/v1/code/sessions(/|$) on a listing with a querystring')
+  assert.equal(classify({ harness: 'cc', host: 'api.anthropic.com', endpoint: '/v1/code/sessions' }), 'session-sync')
+  const c = makeClassifier({ endpointClass, rows: [{ id: 'x', traffic: [{ host: 'h.test', class: 'files', path: '/up' }, { host: 'h.test', class: 'account', path: '^/acct$' }] }] })
+  assert.equal(c({ harness: 'x', host: 'h.test', endpoint: '/x?next=/up' }), 'other', 'the pattern is in the querystring only: not this call\'s path')
+  assert.equal(c({ harness: 'x', host: 'h.test', endpoint: '/acct?id=7' }), 'account', 'an end-anchored pattern sees the path, not the querystring')
+  assert.equal(c({ harness: 'x', host: 'h.test', endpoint: '/up/1?x=1' }), 'files')
+})
+
 test('a pattern that does not compile, or names a class a pattern may not, is skipped and reported — never an exception on a call', () => {
   const bad = []
   const rows = [{ id: 'x', traffic: [{ host: 'a.test', class: 'files', path: '(' }, { host: 'a.test', class: 'llm' }, { class: 'files' }, { host: 'a.test', class: 'telemetry' }] }]
