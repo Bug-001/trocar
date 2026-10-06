@@ -361,11 +361,12 @@ export function canonUsage(usage = {}) {
 // ── normalize the SSE response → { model, usage, text, tool_calls, stop_reason } from resp.raw_sse.
 // The reverse-proxy's reconstruction is Anthropic-shaped (empty for OpenAI), so we read raw_sse (kept
 // via `asight capture --raw-sse`). This is the OpenAI dissector rebuilding blocks from raw events.
-export function normResp(rec) {
-  const resp = (rec && rec.resp) || (rec && rec.response) || {};
-  const events = Array.isArray(resp.raw_sse) ? resp.raw_sse : [];
+// normEvents is the event-list half, shared with the WebSocket dissector (openai-ws.mjs), whose events
+// arrive as one server message each. A terminal response.completed / .incomplete / .failed carries the
+// output and usage; an `error` event with no terminal response is stop_reason 'error'.
+export function normEvents(events) {
   let completed = null;
-  for (const e of events) if (e && (e.type === 'response.completed' || e.type === 'response.incomplete')) completed = e.response || completed;
+  for (const e of events || []) if (e && /^response\.(completed|incomplete|failed)$/.test(e.type)) completed = e.response || completed;
   const usage = (completed && completed.usage) || {};
   const output = Array.isArray(completed && completed.output) ? completed.output : [];
   let text = '';
@@ -375,8 +376,14 @@ export function normResp(rec) {
     if (o.type === 'function_call') toolCalls.push({ id: o.call_id, name: o.name, input: safeJson(o.arguments) });
   }
   // fallback: if no response.completed (interrupted), stitch text from output_text.delta events
-  if (!completed) for (const e of events) if (e && e.type === 'response.output_text.delta') text += e.delta || '';
-  return { model: (completed && completed.model) || null, id: (completed && completed.id) || null, stop_reason: (completed && completed.status) || null, usage, canonUsage: canonUsage(usage), text, thinking: undefined, tool_calls: toolCalls };
+  if (!completed) for (const e of events || []) if (e && e.type === 'response.output_text.delta') text += e.delta || '';
+  const errored = !completed && (events || []).some((e) => e && e.type === 'error');
+  return { model: (completed && completed.model) || null, id: (completed && completed.id) || null,
+    stop_reason: (completed && completed.status) || (errored ? 'error' : null), usage, canonUsage: canonUsage(usage), text, thinking: undefined, tool_calls: toolCalls };
+}
+export function normResp(rec) {
+  const resp = (rec && rec.resp) || (rec && rec.response) || {};
+  return normEvents(Array.isArray(resp.raw_sse) ? resp.raw_sse : []);
 }
 
 // context-size proxy for the timeline bar (real: total input tokens from usage). Responses names it
