@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { once } from 'node:events';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { createServer } from '../src/server.mjs';
 import { ccLlmRecord } from './fixtures/cc-record.mjs';
+import { tmpDir } from './helpers/tmp.mjs';
 
 // SECURITY (anti DNS-rebind) — the DATA plane must be gated exactly like the control plane.
 // Loopback binding alone does NOT protect it: a page on any site can resolve its own hostname to
@@ -22,7 +22,7 @@ const req = (port, p, headers = {}) => new Promise((resolve, reject) => {
 });
 
 async function serve() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-rebind-'));
+  const dir = tmpDir('asight-rebind-');
   fs.writeFileSync(path.join(dir, 'cap.ndjson'),
     JSON.stringify(ccLlmRecord({ env: { req_headers: { 'x-claude-code-session-id': 'sess-secret' } } })) + '\n');
   const { server } = await createServer({ dbPath: '/nonexistent-db', sourcePath: dir });

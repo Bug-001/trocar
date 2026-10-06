@@ -28,6 +28,7 @@ import { createServer } from '../../src/server.mjs'
 import { serveSource } from '../../src/paths.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
+import { tmpDir } from '../helpers/tmp.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
 const UID = process.getuid()
@@ -39,7 +40,7 @@ function fakeArch(p, extraEnv = {}) {
   return { clients, arch: { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: UID }) } }
 }
 function sandbox() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'as-d-')) // short: unix socket paths are length-limited
+  const root = tmpDir('as-d-') // short: unix socket paths are length-limited
   const home = path.join(root, 'home'); fs.mkdirSync(home)
   return { root, home, collector: path.join(home, '.asight', 'collector'), sock: path.join(root, 'run', 'c.sock'), done: () => fs.rmSync(root, { recursive: true, force: true }) }
 }

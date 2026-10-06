@@ -2,12 +2,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { appendEvent } from '../../src/collector/core/events.mjs'
 import { fileURLToPath } from 'node:url'
 import { runCollector, runSetupHelper, formatStatus } from '../../src/collector/cli.mjs'
+import { tmpDir } from '../helpers/tmp.mjs'
 
 const BIN = fileURLToPath(new URL('../../bin/asight.mjs', import.meta.url))
 const io = () => { const o = []; const e = []; return { o, e, out: (s) => o.push(s), err: (s) => e.push(s) } }
@@ -31,7 +31,7 @@ test('cli: on/off/status go to the control socket; exit 1 when the kernel did no
   assert.match(t.o[0], /  14 claude-code decrypt .*\n    not captured \(transport the engine cannot reach\): af-unix \(ANTHROPIC_UNIX_SOCKET\), quic \(BUN_OPTIONS\)/, 'the agent line lists them (B-4b)')
   assert.match(t.o[0], /not judged: 3 process\(es\) of yours whose executable cannot be read and whose command line fits no harness .*: 20 sshd \(EACCES\), 21 \(sd-pam\) \(EACCES\), …/, 'said, not silent (B-1)')
   assert.match(t.o[0], /  13 deepseek-dsh untrusted: dsh-node-too-old — this dsh runs on a Node older than 22\.19\.0 · 1 direct/)
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-cli-')) // never the operator's own ~/.asight
+  const home = tmpDir('asight-cli-') // never the operator's own ~/.asight
   t = io(); assert.equal(await runCollector(['status'], { env, home, request: async () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }) }, ...t }), 3)
   t = io(); assert.equal(await runCollector(['status'], { env: {}, home, request, ...t }), 2)
   fs.rmSync(home, { recursive: true, force: true })
@@ -41,7 +41,7 @@ test('cli: on/off/status go to the control socket; exit 1 when the kernel did no
 // D-2: whenever no daemon answers — none running, no runtime dir, or one that does not reply — status still reads
 // flows/ from disk, and an unreadable flows/ is said instead of looking like "no failures".
 test('cli: with no daemon answering (not running, no runtime dir, stuck) status reads the failure records from disk; an unreadable flows/ is said (D-2)', async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-cli-'))
+  const home = tmpDir('asight-cli-')
   const dir = path.join(home, '.asight', 'collector')
   try {
     appendEvent(dir, { event: 'failure', where: 'start', code: 'EADDRINUSE', reason: 'the engine port is held by another process' })
@@ -71,7 +71,7 @@ test('cli: with no daemon answering (not running, no runtime dir, stuck) status 
 // with a failed step exits 1; an uncaught exception is one `crash` record, then exit 70.
 test('cli: start stops on SIGHUP like SIGTERM, passes the signal to stop, exits 1 when a stop step failed, and records a crash (D-5, D-27)', async () => {
   const { EventEmitter } = await import('node:events')
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-cli-start-'))
+  const home = tmpDir('asight-cli-start-')
   try {
     const stops = []
     let failed = []
@@ -162,7 +162,7 @@ test('cli: setup-helper installs or removes through arch; a failure is exit 1', 
 })
 
 test('cli: the real bin dispatches `collector` (usage → 2) and `collector status` without a runtime dir (→ 2)', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-cli-bin-'))
+  const home = tmpDir('asight-cli-bin-')
   const env = { ...process.env, HOME: home }; delete env.XDG_RUNTIME_DIR // status reads flows/ from disk: never the operator's own
   assert.equal(spawnSync(process.execPath, [BIN, 'collector', 'nope'], { env, encoding: 'utf8' }).status, 2)
   const r = spawnSync(process.execPath, [BIN, 'collector', 'status'], { env, encoding: 'utf8' })

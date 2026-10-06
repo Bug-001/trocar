@@ -2,10 +2,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { createSwitch, readState } from '../../../src/collector/core/switch.mjs'
 import { checkRecord } from '../../../src/health/codes.mjs'
+import { tmpDir } from '../../helpers/tmp.mjs'
 
 // A kernel stand-in: attach/detach flip links; status reads them back (like the helper's bpf_link info).
 function fakeRedirector({ failAttach = false } = {}) {
@@ -19,7 +19,7 @@ function fakeRedirector({ failAttach = false } = {}) {
     yank() { links = [] }, // the kernel lost the links behind our back
   }
 }
-const tmpState = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'asight-sw-')), 'collector', 'state.json')
+const tmpState = () => path.join(tmpDir('asight-sw-'), 'collector', 'state.json')
 
 test('switch: on attaches, records, persists desired=on 0600; status is read from the kernel', async () => {
   const stateFile = tmpState(); const r = fakeRedirector()

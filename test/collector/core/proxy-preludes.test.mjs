@@ -16,6 +16,7 @@ import { createEngine } from '../../../src/collector/core/engine/engine.mjs'
 import { createStaticRedirector } from '../../../src/collector/core/redirector.mjs'
 import { createRecordStore } from '../../../src/collector/core/record/store.mjs'
 import { within, onceWithin as once } from '../../helpers/bounded.mjs'
+import { tmpDir } from '../../helpers/tmp.mjs'
 
 const T = { timeout: 20000 }
 const asightCa = createCa()
@@ -30,7 +31,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 // The engine steers every accepted connection to `dst()` (the mock proxy, or a stand-in in front of it).
 async function lab(t, proxyOpts, { proxies = () => [], trustLab = true, dst = null, policy = () => true, decrypt = true, timing = {} } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-proxy-'))
+  const dir = tmpDir('asight-proxy-')
   const labCa = makeLabCa(path.join(dir, 'ca'))
   const tlsOpts = { key: fs.readFileSync(labCa.key), cert: fs.readFileSync(labCa.cert) }
   const mock = await startMockUpstream({ tls: tlsOpts })

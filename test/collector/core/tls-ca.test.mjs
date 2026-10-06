@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { readTlv, int } from '../../../src/collector/core/tls/der.mjs'
+import { tmpDir } from '../../helpers/tmp.mjs'
 
 test('DER: integers are minimal and positive', () => {
   assert.deepEqual(int(0n), Buffer.from([0x02, 0x01, 0x00]))
@@ -21,7 +22,7 @@ test('createCa: a v3 CA that node parses and openssl verifies against itself', (
   assert.equal(x.verify(x.publicKey), true)
   const ca = loadCa({ keyPem, certPem })
   assert.equal(ca.ski.length, 20)
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-ca-'))
+  const dir = tmpDir('asight-ca-')
   fs.writeFileSync(path.join(dir, 'ca.pem'), certPem)
   const text = execFileSync('openssl', ['x509', '-in', path.join(dir, 'ca.pem'), '-noout', '-text']).toString()
   assert.match(text, /CA:TRUE/)

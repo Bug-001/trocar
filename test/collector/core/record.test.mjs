@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 import { buildTransparentEnvelope, buildWsEnvelope } from '../../../src/collector/core/record/envelope.mjs'
 import { createRecordStore } from '../../../src/collector/core/record/store.mjs'
+import { tmpDir } from '../../helpers/tmp.mjs'
 
 const FLOW = { id: 'f1', host: 'relay.test', scheme: 'https', dst: { address: '10.0.0.9', port: 443 }, proc: { pid: 9, exe: '/usr/bin/claude', agent: 'claude-code' } }
 const head = (s) => ({ raw: Buffer.from(s, 'latin1'), startLine: s.split('\r\n')[0] })
@@ -53,7 +54,7 @@ test('envelope: a request body that never finished carries req_partial:<reason> 
 })
 
 test('store: 0600 files, 0700 dirs, streams split by kind, write errors never throw', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-store-'))
+  const root = tmpDir('asight-store-')
   const s = createRecordStore({ root, now: () => new Date('2026-10-05T01:00:00.000Z') })
   s.envelope({ ts: '2026-10-05T01:00:00.000Z', id: 'a' }); s.flow({ ts: '2026-10-05T01:00:00.000Z', flow_id: 'f' })
   s.audit({ ts: '2026-10-05T01:00:00.000Z' }); s.replay({ ts: '2026-10-05T01:00:00.000Z', id: 'b' })
@@ -113,7 +114,7 @@ test('ws envelope: no opener → req_body null; a binary opener → req_body nul
 // midnight and ends after it must not be appended to the previous day's file once the new day's file
 // exists — the ETL's per-session watermark would skip it.
 test('store: an envelope whose request started before midnight but is written after it lands in the new day file', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-store-'))
+  const root = tmpDir('asight-store-')
   let clock = '2026-10-05T23:59:01.000Z'
   const s = createRecordStore({ root, now: () => new Date(clock) })
   s.envelope({ ts: '2026-10-05T23:59:00.000Z', id: 'a1' })
@@ -126,7 +127,7 @@ test('store: an envelope whose request started before midnight but is written af
 })
 
 test('store: crossing midnight closes the previous day\'s files, so a long-running daemon does not leak one fd set per day', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-store-'))
+  const root = tmpDir('asight-store-')
   let clock = '2026-10-05T23:59:01.000Z'
   const s = createRecordStore({ root, now: () => new Date(clock) })
   s.envelope({ id: 'a1' }); s.flow({ flow_id: 'f1' }); s.audit({ event: 'on' })
@@ -148,7 +149,7 @@ test('store: crossing midnight closes the previous day\'s files, so a long-runni
 test('store: at rollover the previous day\'s capture / audit / replays files get the close marker, flows/ does not; the sealer accepts them', async () => {
   const { closedState } = await import('../../../src/raw/closed.mjs')
   const { sealShard } = await import('../../../src/raw/seal.mjs')
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-store-'))
+  const root = tmpDir('asight-store-')
   try {
     let clock = '2026-10-05T23:59:01.000Z'
     const s = createRecordStore({ root, now: () => new Date(clock), onError: (e) => { throw e } })
@@ -169,7 +170,7 @@ test('store: at rollover the previous day\'s capture / audit / replays files get
 // D's files closed when it is created, so they can be sealed — flows/ and today's files are never marked.
 test('store: created on a later day, it marks the earlier days\' capture / audit / replays files closed (4.6 §记录)', async () => {
   const { closedState } = await import('../../../src/raw/closed.mjs')
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-store-'))
+  const root = tmpDir('asight-store-')
   try {
     const a = createRecordStore({ root, now: () => new Date('2026-10-05T22:00:00.000Z'), onError: (e) => { throw e } })
     a.envelope({ id: 'd1' }); a.flow({ flow_id: 'f1' }); a.audit({ event: 'on' }); a.replay({ id: 'r1' })
@@ -186,7 +187,7 @@ test('store: created on a later day, it marks the earlier days\' capture / audit
 })
 
 test('store: a clock set back keeps writing the latest day\'s file, never appends to an earlier (maybe sealed) one (F3(i))', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-store-'))
+  const root = tmpDir('asight-store-')
   try {
     let clock = '2026-10-06T00:00:30.000Z'
     const s = createRecordStore({ root, now: () => new Date(clock), onError: (e) => { throw e } })
@@ -203,7 +204,7 @@ test('store: a clock set back keeps writing the latest day\'s file, never append
 // D38 a file renamed or deleted while open is reopened before the next write and reported (file-replaced) — no
 // line goes into an orphan inode.
 test('store: a capture file renamed or deleted while open is reopened, and that is a file-replaced failure', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-store-'))
+  const root = tmpDir('asight-store-')
   try {
     const errs = []
     const s = createRecordStore({ root, now: () => new Date('2026-10-06T01:00:00.000Z'), onError: (e) => errs.push(e) })

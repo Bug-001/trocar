@@ -1,15 +1,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import {
   readExe, readArgv, readEnviron, readComm, listPids, countDirectConnections, directConnections,
 } from '../../../../src/collector/arch/linux/procinfo.mjs'
+import { tmpDir } from '../../../helpers/tmp.mjs'
 
 // Build a synthetic /proc tree in a tmp dir so these run everywhere with no root.
 function makeProc() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-proc-'))
+  const root = tmpDir('asight-proc-')
   const mk = (pid, { exe, cmdline, environ, comm, fds = [] }) => {
     const d = path.join(root, String(pid))
     fs.mkdirSync(path.join(d, 'fd'), { recursive: true })

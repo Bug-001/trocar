@@ -3,12 +3,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import net from 'node:net'
-import os from 'node:os'
 import path from 'node:path'
 import { controlSocketPath, startControlServer, controlRequest } from '../../../src/collector/core/control.mjs'
+import { tmpDir } from '../../helpers/tmp.mjs'
 
 // Unix socket paths are limited to ~104 bytes: keep the temp dir short.
-const runDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'as-'))
+const runDir = () => tmpDir('as-')
 
 test('control: the socket path lives under XDG_RUNTIME_DIR; unset is a clear error (G13)', () => {
   assert.equal(controlSocketPath({ env: { XDG_RUNTIME_DIR: '/run/user/1000' } }), '/run/user/1000/asight/collector.sock')

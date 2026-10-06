@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
 import http from 'node:http';
 import { createServer } from '../src/server.mjs';
+import { tmpDir } from './helpers/tmp.mjs';
 
 // `asight serve` WITH NO ARGUMENTS SERVED AN EMPTY BOARD.
 //
@@ -72,7 +72,7 @@ test('the CLI resolves a default source instead of passing null', async () => {
 test('a board over MULTIPLE roots lists the sessions of every root', async () => {
   // D27: the new home plus the legacy one. A user upgrading has history in one and new capture in
   // the other, and must see both — the loader fails soft, so a missed root is invisible.
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-roots-'));
+  const base = tmpDir('asight-roots-');
   const a = path.join(base, 'new'), b = path.join(base, 'legacy');
   fs.mkdirSync(a); fs.mkdirSync(b);
   fs.writeFileSync(path.join(a, 'claude-capture.ndjson'), REC('n1', 'sess-new') + '\n');
@@ -87,7 +87,7 @@ test('a board over MULTIPLE roots lists the sessions of every root', async () =>
 });
 
 test('an unreadable root is REPORTED, not silently reduced to fewer sessions', async () => {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-roots-'));
+  const base = tmpDir('asight-roots-');
   const a = path.join(base, 'new');
   fs.mkdirSync(a);
   fs.writeFileSync(path.join(a, 'c.ndjson'), REC('n1', 'sess-new') + '\n');
@@ -101,7 +101,7 @@ test('an unreadable root is REPORTED, not silently reduced to fewer sessions', a
 });
 
 test('a single string source still works exactly as before (back-compat)', async () => {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-roots-'));
+  const base = tmpDir('asight-roots-');
   fs.writeFileSync(path.join(base, 'c.ndjson'), REC('n1', 'sess-one') + '\n');
   const { sessions } = await boardOver(path.join(base, 'c.ndjson'));
   assert.deepEqual(sessions.map((s) => s.session_id), ['sess-one']);

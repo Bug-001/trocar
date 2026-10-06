@@ -5,13 +5,14 @@ import { execFileSync } from 'node:child_process'
 import { X509Certificate } from 'node:crypto'
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
+import { tmpDir } from '../../helpers/tmp.mjs'
 
 const raw = createCa()
 const issuer = createLeafIssuer(loadCa(raw))
 
 test('leaf: strict openssl verify against the CA, 199-day validity, SAN matches', () => {
   const { certPem } = issuer.issue('relay.example.test')
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-leaf-'))
+  const dir = tmpDir('asight-leaf-')
   fs.writeFileSync(path.join(dir, 'ca.pem'), raw.certPem); fs.writeFileSync(path.join(dir, 'leaf.pem'), certPem)
   const out = execFileSync('openssl', ['verify', '-x509_strict', '-CAfile', path.join(dir, 'ca.pem'), path.join(dir, 'leaf.pem')]).toString()
   assert.match(out, /OK/)

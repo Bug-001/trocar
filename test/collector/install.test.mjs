@@ -3,7 +3,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { X509Certificate } from 'node:crypto'
 import { spawn } from 'node:child_process'
@@ -12,9 +11,10 @@ import { installCollector, uninstallCollector, stopDaemon, freeEnginePort, daemo
 import { readManifest } from '../../src/collector/core/trust/journal.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
 import cc from '../../src/collector/harness/claude-code.mjs'
+import { tmpDir } from '../helpers/tmp.mjs'
 
 function box() {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-inst-'))
+  const home = tmpDir('asight-inst-')
   return { home, dir: path.join(home, '.asight', 'collector'), done: () => fs.rmSync(home, { recursive: true, force: true }) }
 }
 const base = (b, o = {}) => ({ home: b.home, env: { HOME: b.home }, osName: 'none', harnesses: [cc], freePort: async () => 47011, ...o })
@@ -178,7 +178,7 @@ test('stopDaemon: a stale lock is never killed by; a live pid that answers nowhe
 test('uninstall with no runtime dir set finds the daemon through its lock, stops it, then removes (S10)', async () => {
   const b = box()
   const daemon = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }) // stands in for `asight collector start`
-  const sock = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'as-u-')), 'c.sock')
+  const sock = path.join(tmpDir('as-u-'), 'c.sock')
   const control = await startControlServer({ socketPath: sock, routes: { 'GET /status': async () => ({ desired: 'on' }) } })
   try {
     await installCollector(base(b))
