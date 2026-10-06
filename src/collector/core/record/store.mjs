@@ -5,7 +5,7 @@
 // write is wrapped, failures are counted and reported via onError, never rethrown.
 import fs from 'node:fs'
 import path from 'node:path'
-import { markClosed } from '../../../raw/closed.mjs'
+import { markClosed, closedMarkerPath } from '../../../raw/closed.mjs'
 
 // D35 close marker at rollover: files only this store writes. flows/ also has the event writer (events.mjs, its own
 // descriptor), so this store cannot declare it closed (whether flows/ is sealed at all is a 4.6 OPEN).
@@ -26,6 +26,25 @@ export function createRecordStore({ root, onError = () => {}, now = () => new Da
     for (const f of files.filter(SEALABLE)) { try { markClosed(f) } catch (e) { report(Object.assign(new Error(`${f}: the close marker could not be written (${e.message}); the sealer will refuse this file`), { code: e.code }), f) } }
   }
   const report = (e, file) => { errors++; lastError = e; if (file && e && typeof e === 'object' && !e.file) e.file = file; onError(e) }
+  // When the store is created (the daemon starts): an earlier day's capture / audit / replays file still without its
+  // marker was left by a daemon that stopped before midnight and never rolled over — nobody holds it now (one daemon
+  // per user), so it is fsync'd and marked closed here, else it could never be sealed (4.6 §记录).
+  function closeEarlierDays(day) {
+    const DAY_FILE = /^(?:capture-)?(\d{4}-\d{2}-\d{2})\.ndjson$/
+    for (const [dir, prefix] of [[root, 'capture-'], [path.join(root, 'audit'), ''], [path.join(root, 'replays'), '']]) {
+      let names
+      try { names = fs.readdirSync(dir) } catch (e) { if (e.code !== 'ENOENT' && e.code !== 'ENOTDIR') report(e, dir); continue }
+      for (const n of names) {
+        const m = DAY_FILE.exec(n)
+        if (!m || !n.startsWith(prefix) || m[1] >= day) continue
+        const f = path.join(dir, n)
+        if (fs.existsSync(closedMarkerPath(f))) continue
+        try { const fd = fs.openSync(f, 'r'); try { fs.fsyncSync(fd) } finally { fs.closeSync(fd) } markClosed(f) } catch (e) {
+          report(Object.assign(new Error(`${f}: the close marker could not be written (${e.message}); the sealer will refuse this file`), { code: e.code }), f)
+        }
+      }
+    }
+  }
 
   // The daily file is the UTC date at WRITE time, not rec.ts (the request start, which stays in the
   // record). An envelope is written when its exchange ends, so a call that starts before midnight and
@@ -34,6 +53,7 @@ export function createRecordStore({ root, onError = () => {}, now = () => new Da
   // per-session record-count watermark (RFC 4.2:49) then skipped it. Dated by write time, an earlier
   // file is never appended to after a later one exists. `now` is injectable for tests only.
   const today = () => now().toISOString().slice(0, 10) // YYYY-MM-DD (UTC)
+  closeEarlierDays(today())
 
   // a file renamed or deleted while open is reopened before the next write (never written into an orphan inode),
   // and that is a failure record (`file-replaced`).

@@ -165,6 +165,26 @@ test('store: at rollover the previous day\'s capture / audit / replays files get
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
+// 4.6 §记录: a daemon that stopped on day D and starts on D+1 never rolls over in-process; the store marks
+// D's files closed when it is created, so they can be sealed — flows/ and today's files are never marked.
+test('store: created on a later day, it marks the earlier days\' capture / audit / replays files closed (4.6 §记录)', async () => {
+  const { closedState } = await import('../../../src/raw/closed.mjs')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-store-'))
+  try {
+    const a = createRecordStore({ root, now: () => new Date('2026-10-05T22:00:00.000Z'), onError: (e) => { throw e } })
+    a.envelope({ id: 'd1' }); a.flow({ flow_id: 'f1' }); a.audit({ event: 'on' }); a.replay({ id: 'r1' })
+    a.close() // the daemon stops on day D: no rollover, no marker
+    assert.equal(closedState(path.join(root, 'capture-2026-10-05.ndjson')).closed, false, 'precondition: not marked by stop')
+    fs.writeFileSync(path.join(root, 'capture-2026-10-06.ndjson'), '') // a file of the new day already there
+    const b = createRecordStore({ root, now: () => new Date('2026-10-06T08:00:00.000Z'), onError: (e) => { throw e } })
+    for (const f of ['capture-2026-10-05.ndjson', 'audit/2026-10-05.ndjson', 'replays/2026-10-05.ndjson']) assert.equal(closedState(path.join(root, f)).closed, true, f)
+    assert.equal(fs.existsSync(path.join(root, 'flows', '2026-10-05.ndjson.closed')), false, 'flows/ is not this store\'s to close')
+    assert.equal(fs.existsSync(path.join(root, 'capture-2026-10-06.ndjson.closed')), false, 'today is never marked')
+    createRecordStore({ root, now: () => new Date('2026-10-06T09:00:00.000Z'), onError: (e) => { throw e } }).close() // idempotent
+    b.envelope({ id: 'd2' }); b.close()
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
 test('store: a clock set back keeps writing the latest day\'s file, never appends to an earlier (maybe sealed) one (F3(i))', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-store-'))
   try {
