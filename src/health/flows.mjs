@@ -201,6 +201,7 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
     else if (r.event === 'failure' && r.code === 'state-mismatch') mismatch = { kind: 'state-mismatch', ...pick(r), since: r.ts }
     else if (r.event === 'failure' && r.code === 'negative-cache') neg.set(`${r.pid}\u0000${r.host}`, { kind: 'negative-cache', ...pick(r), since: r.ts })
     else if (r.event === 'failure' && r.code === 'ca-invalid') ca = { kind: 'ca-invalid', ...pick(r), since: r.ts }
+    else if (r.event === 'ca-ok') ca = null // the daemon found the CA usable again and rebuilt what it signs with (D1-2)
   }
   out.conditions = [...[ca, degraded, version, mismatch].filter(Boolean), ...untrusted.values(), ...neg.values()].map((c) => ({ ...c, failure: true }))
   // the last 24 h: failure groups, expected counts, per agent

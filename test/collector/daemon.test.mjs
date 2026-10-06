@@ -4,6 +4,7 @@
 // off stops recording; the same program without the CA is only observed; desired state survives a restart.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
@@ -718,6 +719,46 @@ test('daemon: an unusable CA is recorded as ca-invalid with which part and file,
     await until(() => flowsOf(s).filter((f) => f.code === 'ca-invalid').length > before)
     assert.equal((await req(s.sock, 'GET', '/status')).ca.which, 'cert', 'the daily check found it')
   } finally { await d.stop(); p.done(); s.done() }
+})
+
+// D1-2 (4.6 §身份与信任「CA」): a CA unusable at start that a later check finds usable is rebuilt and said (ca-ok):
+// the condition clears, `on` attaches, and the engine signs with it — not with the start-time stub, which would make
+// every decrypted connection step aside as leaf-error while status says the CA is fine.
+test('daemon: a CA that becomes usable again is rebuilt — ca-ok clears the condition, on attaches, and a trusted agent is decrypted with it (D1-2)', async () => {
+  const s = sandbox(); const p = fakeProc(); const up = await relay()
+  const relayCa = path.join(s.home, 'relay-ca.pem'); fs.writeFileSync(relayCa, up.ca.certPem)
+  fs.mkdirSync(path.join(s.home, '.claude'))
+  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }, null, 2))
+  await install(s)
+  const caDir = path.join(s.collector, 'ca')
+  const goodKey = fs.readFileSync(path.join(caDir, 'ca.key'), 'utf8')
+  fs.writeFileSync(path.join(caDir, 'ca.key'), createCa().keyPem) // another CA's key: not a pair
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home }, upstreamCa: up.ca.certPem, caCheckMs: 40 })
+  try {
+    assert.equal((await req(s.sock, 'POST', '/on', {})).actual, 'off', 'unusable at start: never hooked')
+    fs.writeFileSync(path.join(caDir, 'ca.key'), goodKey, { mode: 0o600 }) // the key is put back
+    const ok = await until(() => flowsOf(s).find((f) => f.event === 'ca-ok'))
+    assert.equal(ok.file, path.join(caDir, 'asight-ca.pem'))
+    const st = await req(s.sock, 'GET', '/status')
+    assert.equal(st.ca.ok, true)
+    assert.deepEqual(st.health.collector.conditions.filter((c) => c.kind === 'ca-invalid'), [], 'the board no longer says CA unusable')
+    assert.deepEqual((await req(s.sock, 'POST', '/on', {})).actual, 'on')
+
+    p.add(4343, { uid: UID, exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
+    await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 4343, pid: 4343, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
+    await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 4343 && a.trusted))
+    const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
+    await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4343, decrypt: 1 })
+    const extraCc = fs.readFileSync(path.join(caDir, 'extra-cc.pem'), 'utf8') // relay CA + asight CA
+    const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: extraCc }); await once(c, 'secureConnect')
+    const asightCa = new crypto.X509Certificate(fs.readFileSync(path.join(caDir, 'asight-ca.pem')))
+    assert.ok(new crypto.X509Certificate(c.getPeerCertificate().raw).checkIssued(asightCa), 'the leaf is signed by the asight CA: decrypted, not stepped aside')
+    c.end(); await once(c, 'close')
+    const row = await until(() => flowsOf(s).find((f) => f.pid === 4343 && f.event == null && f.flow_id))
+    assert.deepEqual([row.decision, row.not_captured ?? null], ['decrypt', null])
+    assert.ok(!flowsOf(s).some((f) => f.code === 'leaf-error'), 'no leaf-error')
+  } finally { await d.stop(); up.close(); p.done(); s.done() }
 })
 
 test('daemon: every check (5 s), with nobody running status — links lost behind its back are one state-mismatch, their return a switch event; an on in flight is never a mismatch (D-26, F3(f))', async () => {

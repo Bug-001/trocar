@@ -116,8 +116,27 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     let caState = { ...judgeCa(ca), checked_at: new Date().toISOString() }
     const caFailure = (st) => failure('ca', Object.assign(new Error(`the collector CA is unusable (${st.which}: ${st.reason}); nothing is steered, agent connections go direct`), { code: 'ca-invalid' }), { which: st.which, file: st.file, ...(st.errno ? { errno: st.errno } : {}) })
     if (!caState.ok) caFailure(caState)
-    const issuer = caState.ok ? createLeafIssuer(loadCa(ca)) : { secureContextFor() { throw new Error(`the collector CA is unusable (${caState.which})`) }, issue() { throw new Error('the collector CA is unusable') } }
-    const caTimer = setInterval(() => { caState = { ...judgeCa(readCa({ dir: P.caDir })), checked_at: new Date().toISOString() }; if (!caState.ok) caFailure(caState) }, caCheckMs)
+    // The issuer and the trust check are built from the CA judged usable; the engine and the tracker reach them through
+    // `issuer` / `trust` below, so a CA that becomes usable later (the key put back) is used from then on (D1-2).
+    const unusable = (st) => ({ secureContextFor() { throw new Error(`the collector CA is unusable (${st.which})`) }, issue() { throw new Error('the collector CA is unusable') } })
+    // with no usable CA certificate nothing can be confirmed to trust it: every agent is untrusted (and never hooked anyway)
+    const trustFor = (c) => { try { return createTrustChecker({ caCertPem: c.certPem }) } catch { return { check: () => ({ trusted: false, reason: 'ca-unusable', var: null, via: null }) } } }
+    let built = { issuer: caState.ok ? createLeafIssuer(loadCa(ca)) : unusable(caState), trust: trustFor(ca) }
+    const issuer = { secureContextFor: (host) => built.issuer.secureContextFor(host), issue: (host) => built.issuer.issue(host) }
+    const trust = { check: (...a) => built.trust.check(...a) }
+    const caTimer = setInterval(() => {
+      const c = readCa({ dir: P.caDir })
+      const was = caState.ok
+      caState = { ...judgeCa(c), checked_at: new Date().toISOString() }
+      if (!caState.ok) { caFailure(caState); return }
+      if (was) return
+      // unusable → usable: rebuild from the CA just read, then say so — the condition clears and `on` may attach
+      try { built = { issuer: createLeafIssuer(loadCa(c)), trust: trustFor(c) } } catch (e) {
+        caState = { ok: false, which: 'pair', file: caState.file, reason: errText(e), checked_at: caState.checked_at }
+        caFailure(caState); return
+      }
+      failure.write({ event: 'ca-ok', file: caState.file, reason: 'the collector CA is usable again: leaves are signed with it and agents are judged against it from now on' })
+    }, caCheckMs)
     caTimer.unref()
     const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error'), e && e.file ? { file: e.file } : {}) })
     // switch / helper events: their own descriptor (events.mjs, a lost line becomes a log-gap), and every failure
@@ -165,8 +184,6 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     const bundleTimer = setInterval(refreshBundles, 24 * 3600 * 1000); bundleTimer.unref()
     // plugins (dsh, OpenCode) write their per-pid marker here; it exists while the daemon runs (0700, the operator's)
     fs.mkdirSync(P.markers, { recursive: true, mode: 0o700 })
-    // with no usable CA certificate nothing can be confirmed to trust it: every agent is untrusted (and never hooked anyway)
-    const trust = (() => { try { return createTrustChecker({ caCertPem: ca.certPem }) } catch { return { check: () => ({ trusted: false, reason: 'ca-unusable', var: null, via: null }) } } })()
     const tracker = createTracker({ redirector, registry, trust, onVerdict, markerDir: P.markers, caPem: ca.paths.pem, collectorDir: P.dir,
       installedAt: (l) => installedAt(manifest, l), // config-after-start is judged against when asight wrote the value
       onGone: (row, via) => { // D-24, D-12: the agent and every condition it held are gone; so are its negative-cache entries
