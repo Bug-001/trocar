@@ -9,13 +9,21 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { execTool } from '../../src/off/exec.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { takeRefusals } from '../helpers/no-real-os.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const stub = (dir, name, body) => fs.writeFileSync(path.join(dir, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 })
+/** `call` throws ESANDBOX, and the refusal is in the preload's ledger once (a test process that ends with an unacknowledged one exits 1). */
+function refused(call, tool, why) {
+  assert.throws(call, { code: 'ESANDBOX' }, why)
+  const got = takeRefusals()
+  assert.equal(got.length, 1, `${why || tool}: one refusal recorded`)
+  assert.equal(got[0].tool, tool); assert.ok(got[0].command.startsWith(tool), got[0].command)
+}
 
 test('execTool: under npm test a real OS tool is refused, a PATH stub in the temp dir runs, an injected runner never spawns', () => {
   assert.equal(process.env.ASIGHT_TEST_SANDBOX, '1', 'the preload is on: run with --require ./test/helpers/no-real-os.cjs (npm test does)')
-  assert.throws(() => execTool('launchctl', ['list'], { env: { ...process.env, PATH: '/bin:/usr/bin' } }), { code: 'ESANDBOX' })
+  refused(() => execTool('launchctl', ['list'], { env: { ...process.env, PATH: '/bin:/usr/bin' } }), 'launchctl')
   const bin = tmpDir('asight-exec-'); fs.writeFileSync(path.join(bin, 'launchctl'), '#!/bin/sh\necho stub "$@"\n', { mode: 0o755 })
   assert.match(execTool('launchctl', ['list'], { env: { ...process.env, PATH: bin } }).out, /^stub list/)
   const seen = []
@@ -26,25 +34,26 @@ test('execTool: under npm test a real OS tool is refused, a PATH stub in the tem
 test('execTool: the refusal is for every OS tool the spec names, on any PATH, and it says why', () => {
   for (const tool of ['launchctl', 'systemctl', 'security', 'certutil', 'loginctl']) {
     assert.throws(() => execTool(tool, ['x']), (e) => e.code === 'ESANDBOX' && /npm test/.test(e.message) && e.message.includes(tool), tool)
+    assert.deepEqual(takeRefusals().map((r) => r.tool), [tool])
   }
 })
 
 test('execTool: an absolute path to a real binary is refused too (not only a PATH lookup)', () => {
   for (const real of ['/bin/sh', '/usr/bin/security', '/bin/launchctl', process.execPath]) {
-    assert.throws(() => execTool(real, ['-c', 'true'], { env: { ...process.env } }), { code: 'ESANDBOX' }, real)
+    refused(() => execTool(real, ['-c', 'true'], { env: { ...process.env } }), real, real)
   }
 })
 
 test('execTool: a stub that is a symlink to a real binary is refused (the check follows the link)', () => {
   const bin = tmpDir('asight-exec-'); fs.symlinkSync('/bin/sh', path.join(bin, 'launchctl'))
-  assert.throws(() => execTool('launchctl', ['-c', 'true'], { env: { ...process.env, PATH: bin } }), { code: 'ESANDBOX' })
+  refused(() => execTool('launchctl', ['-c', 'true'], { env: { ...process.env, PATH: bin } }), 'launchctl')
 })
 
 test('execTool: a stub outside the temp dir is refused (a script in the repo or in $HOME is not a sandbox)', () => {
   const home = fs.mkdtempSync(path.join(REPO, 'test', 'off', 'asight-notmp-')) // not under os.tmpdir()
   try {
     stub(home, 'systemctl', 'echo ran')
-    assert.throws(() => execTool('systemctl', [], { env: { ...process.env, PATH: home } }), { code: 'ESANDBOX' })
+    refused(() => execTool('systemctl', [], { env: { ...process.env, PATH: home } }), 'systemctl')
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })
 
@@ -62,12 +71,12 @@ console.log(JSON.stringify([tryIt()]))`
 })
 
 test('execTool: the sandbox flag of the process is honoured even when the caller passes an env of its own without it', () => {
-  assert.throws(() => execTool('launchctl', ['list'], { env: { PATH: '/bin:/usr/bin' } }), { code: 'ESANDBOX' })
-  assert.throws(() => execTool('launchctl', ['list'], { env: {} }), { code: 'ESANDBOX' })
+  refused(() => execTool('launchctl', ['list'], { env: { PATH: '/bin:/usr/bin' } }), 'launchctl')
+  refused(() => execTool('launchctl', ['list'], { env: {} }), 'launchctl')
 })
 
 test('execTool: a tool that is nowhere on PATH is refused the same way (not an ENOENT that a caller might treat as "not installed")', () => {
-  assert.throws(() => execTool('no-such-tool-xyz', [], { env: { ...process.env, PATH: tmpDir('asight-exec-') } }), { code: 'ESANDBOX' })
+  refused(() => execTool('no-such-tool-xyz', [], { env: { ...process.env, PATH: tmpDir('asight-exec-') } }), 'no-such-tool-xyz')
 })
 
 test('execTool: a stub gets the arguments, its stdin, and its exit code, stdout and stderr come back trimmed', () => {
@@ -108,4 +117,39 @@ test('execTool: the guard is on under npm test because package.json loads the pr
   const pkg = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8'))
   assert.match(pkg.scripts.test, /--require \.\/test\/helpers\/no-real-os\.cjs/)
   assert.ok(fs.existsSync(path.join(REPO, 'test/helpers/no-real-os.cjs')))
+})
+
+test('execTool: a refusal that a caller swallows stays in the preload\'s ledger, with the command (the process exits 1 unless the test takes it: no-real-os.test.mjs)', () => {
+  let swallowed = false
+  try { execTool('security', ['find-certificate', '-a']) } catch { swallowed = true } // what a "the tool failed, carry on" caller does
+  assert.ok(swallowed)
+  assert.deepEqual(takeRefusals().map((r) => r.command), ['security find-certificate -a'])
+  assert.deepEqual(takeRefusals(), [], 'taking them empties the ledger')
+})
+
+// 0.1 §3: the preload wraps node:child_process, so a direct spawn is refused at run time; this is the cheaper half that names the file.
+// src/off, src/cli and src/netenv run OS tools through execTool and nothing else, so a test can inject a runner into every call.
+const CHILD_PROCESS_ALLOWED = ['src/off/exec.mjs']
+const CHILD_PROCESS_IMPORT = /(?:\bfrom|\bimport\s*\(|\brequire\s*\()\s*['"](?:node:)?child_process['"]/
+const walk = (d) => (fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : /\.(mjs|cjs|js)$/.test(e.name) ? [path.join(d, e.name)] : [])) : [])
+function childProcessUsers(root) {
+  return ['src/off', 'src/cli', 'src/netenv'].flatMap((dir) => walk(path.join(root, dir)))
+    .filter((f) => CHILD_PROCESS_IMPORT.test(fs.readFileSync(f, 'utf8')))
+    .map((f) => path.relative(root, f).split(path.sep).join('/'))
+    .filter((rel) => !CHILD_PROCESS_ALLOWED.includes(rel))
+}
+
+test('0.1 §3 src/off, src/cli and src/netenv reach node:child_process only through src/off/exec.mjs (the scan sees exec.mjs, and fails on a planted file)', () => {
+  assert.ok(CHILD_PROCESS_IMPORT.test(fs.readFileSync(path.join(REPO, 'src/off/exec.mjs'), 'utf8')), 'the one allowed file still imports it (else the scan proves nothing)')
+  assert.deepEqual(childProcessUsers(REPO), [])
+  const root = tmpDir('asight-cpscan-')
+  for (const [rel, src] of [
+    ['src/off/a.mjs', "import { spawnSync } from 'node:child_process'\n"],
+    ['src/cli/b.mjs', "const cp = await import('node:child_process')\n"],
+    ['src/netenv/c.mjs', "const { execFileSync } = require('child_process')\n"],
+    ['src/cli/d.mjs', "import cp from \"child_process\"\n"],
+    ['src/cli/ok.mjs', "// runs tools through child_process? no: execTool\nimport { execTool } from '../off/exec.mjs'\n"],
+    ['src/off/exec.mjs', "import { spawnSync } from 'node:child_process'\n"],
+  ]) { fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true }); fs.writeFileSync(path.join(root, rel), src) }
+  assert.deepEqual(childProcessUsers(root).sort(), ['src/cli/b.mjs', 'src/cli/d.mjs', 'src/netenv/c.mjs', 'src/off/a.mjs'])
 })
