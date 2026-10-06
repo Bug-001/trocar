@@ -67,7 +67,7 @@ function unitOf(parts, home, script) {
   return {
     path: U.unitPath(home), links: [U.wantsLink(home)], text: (env) => U.unitText({ node: process.execPath, script, env }),
     enable: () => U.systemctl(['enable', '--now', U.UNIT_NAME]), disable: () => U.systemctl(['disable', '--now', U.UNIT_NAME]),
-    stop: () => U.systemctl(['stop', U.UNIT_NAME]), removeWants: () => U.removeWantsLinks(home),
+    stop: () => U.systemctl(['stop', U.UNIT_NAME]), removeWants: (onError) => U.removeWantsLinks(home, { onError }),
   }
 }
 

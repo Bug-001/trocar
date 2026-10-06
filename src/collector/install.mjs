@@ -106,6 +106,7 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
   if (daemon && daemon.note) draft.notes.push(daemon.note)
   const preview = draft.entries.map((e) => (e.kind === 'text' ? previewTextEntry({ file: e.path, edit: e }) : previewJsonKey({ file: e.path, keys: e.keys, value: e.value })))
   for (const o of draft.owned) if (fs.existsSync(o.path)) throw new Error(`${o.harness}: ${o.path} already exists; asight will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`)
+  if (unit && fs.existsSync(unit.path)) throw new Error(`${unit.path} already exists; asight will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`) // before anything is written (review 4 #7)
   onPlan({
     manifest: manifestPath(dir),
     ca: [ca.key, ca.pem],
@@ -127,7 +128,6 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
   m.engine_port = await freePort()
   const plan = planTrust({ descriptors: harnesses, ctxFor, caCertPem: certPem, collectorDir: dir, roots: R })
   if (daemon && daemon.note) { plan.notes.push(daemon.note); plan.records.push({ code: CODE.unitEnvNotCarried, reason: daemon.note }) }
-  if (unit && fs.existsSync(unit.path)) throw new Error(`${unit.path} already exists; asight will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`)
   if (JSON.stringify(plan.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${plan.paths.join(', ')}); only the CA was written; run "asight collector uninstall", then install again`)
   m.planned = plan.paths
   m.watched = plan.watch.map((w) => ({ ...w, existed_before: fs.existsSync(w.path) })) // before anything of the plan is written
@@ -295,9 +295,9 @@ async function uninstall(dir, { env = process.env, purgeData = false, scan = asy
     }
     // the autostart unit (4.6 order: after the trust entries, before the CA key): disabled, removed, its wants/ links
     if (unitFile) {
-      if (unit) { const r = unit.disable(); if (r && r.code !== 0) report.notes.push(`systemctl --user disable said: ${r.err || `exit ${r.code}`}; the unit file is removed all the same`) }
+      if (unit) { const r = unit.disable(); if (r && r.code !== 0) failed.push({ code: CODE.unitNotDisabled, path: unitFile.path, reason: `systemctl --user disable failed (${r.err || `exit ${r.code}`}); the unit file is removed all the same, run "systemctl --user daemon-reload" once systemd --user runs` }) }
       try { if (removeOwnedFile(unitFile).result === 'removed') report.removed.push(unitFile.path) } catch (err) { left.files.push(unitFile); failed.push({ code: CODE.entryNotUndone, path: unitFile.path, reason: `${unitFile.path} could not be removed: ${String((err && err.message) || err)}` }) }
-      if (unit) report.removed.push(...unit.removeWants())
+      if (unit) report.removed.push(...unit.removeWants((p, err) => failed.push({ code: CODE.unitNotDisabled, path: p, reason: `${p}, the autostart link, could not be removed: ${String((err && err.message) || err)}` })))
     }
     // the CA private key and the runtime state (with the trust markers) last
     for (const f of m.files.filter((x) => x.role === 'ca-key')) rm(f.path)

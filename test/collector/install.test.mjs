@@ -552,3 +552,24 @@ test('uninstall step 5: only a process that may have read the entry is reported 
     assert.match(readEvents(b.dir).find((e) => e.pid === 3).reason, /until its next new connection/)
   } finally { b.done() }
 })
+
+test('install: an autostart unit file already there is refused before anything is written (review 4 #7); uninstall records a disable systemd refused and a link it could not remove (D38, review 4 #9)', async () => {
+  const b = box()
+  try {
+    const unitFile = path.join(b.home, '.config', 'systemd', 'user', 'asight-collector.service')
+    fs.mkdirSync(path.dirname(unitFile), { recursive: true }); fs.writeFileSync(unitFile, '[Service]\nExecStart=/usr/bin/false\n')
+    let listed = false
+    const unit = { path: unitFile, links: [], text: () => '[Unit]\n', enable: () => ({ code: 0 }), disable: () => ({ code: 1, err: 'Failed to connect to bus' }), stop: () => {}, removeWants: (onError) => { onError('/l/asight-collector.service', new Error('EACCES')); return [] } }
+    await assert.rejects(installCollector(base(b, { unit, onPlan: () => { listed = true } })), /asight-collector\.service already exists/)
+    assert.deepEqual([listed, fs.existsSync(b.dir)], [false, false], 'refused before the plan is printed and before the CA or the manifest exist')
+    fs.rmSync(unitFile)
+    await installCollector(base(b, { unit }))
+    const r = await uninstallCollector({ home: b.home, env: {}, unit, stop: stopNone })
+    assert.ok(!fs.existsSync(unitFile), 'removed all the same')
+    const rec = readEvents(b.dir).filter((e) => e.code === 'unit-not-disabled')
+    assert.deepEqual(rec.map((e) => e.event), ['failure', 'failure'])
+    assert.match(rec[0].reason, /systemctl --user disable failed \(Failed to connect to bus\)/)
+    assert.match(rec[1].reason, /\/l\/asight-collector\.service, the autostart link, could not be removed: EACCES/)
+    assert.equal(r.left, 0, 'nothing of the manifest is left')
+  } finally { b.done() }
+})

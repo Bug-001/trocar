@@ -29,6 +29,13 @@ test('unit: wants/ symlinks left behind are removed; systemctl runs as --user an
     fs.symlinkSync(unitPath(home), path.join(wants, UNIT_NAME))
     assert.deepEqual(removeWantsLinks(home), [path.join(wants, UNIT_NAME)])
     assert.ok(!fs.existsSync(wants), 'the wants dir it emptied goes too')
+    if (process.getuid() !== 0) { // a link in a dir the user cannot write: reported, never swallowed (review 4 #9)
+      fs.mkdirSync(wants); fs.symlinkSync(unitPath(home), path.join(wants, UNIT_NAME)); fs.chmodSync(wants, 0o555)
+      const errs = []
+      assert.deepEqual(removeWantsLinks(home, { onError: (p, e) => errs.push([p, e.code]) }), [])
+      fs.chmodSync(wants, 0o755)
+      assert.deepEqual(errs, [[path.join(wants, UNIT_NAME), 'EACCES']])
+    }
     const seen = []
     systemctl(['enable', '--now', UNIT_NAME], { run: (cmd, args) => { seen.push([cmd, ...args]); return { status: 0 } } })
     assert.deepEqual(seen, [['systemctl', '--user', 'enable', '--now', UNIT_NAME]])

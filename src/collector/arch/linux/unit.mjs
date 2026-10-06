@@ -31,13 +31,18 @@ export function systemctl(args, { run = spawnSync } = {}) {
 }
 
 // The wants/ symlinks `enable` created; `disable` removes them, this catches the ones left when systemd --user was down.
-export function removeWantsLinks(home) {
+// onError(path, err): a link that is there but cannot be removed (D38: the caller records it).
+export function removeWantsLinks(home, { onError = () => {} } = {}) {
   const dir = path.dirname(unitPath(home))
   const gone = []
   for (const d of (() => { try { return fs.readdirSync(dir) } catch { return [] } })()) {
     if (!d.endsWith('.wants')) continue
     const link = path.join(dir, d, UNIT_NAME)
-    try { if (fs.lstatSync(link).isSymbolicLink()) { fs.rmSync(link); gone.push(link); try { fs.rmdirSync(path.join(dir, d)) } catch { /* not empty */ } } } catch { /* absent */ }
+    let st = null
+    try { st = fs.lstatSync(link) } catch { continue } // absent
+    if (!st.isSymbolicLink()) continue
+    try { fs.rmSync(link); gone.push(link) } catch (e) { onError(link, e); continue }
+    try { fs.rmdirSync(path.join(dir, d)) } catch { /* not empty: other units' links */ }
   }
   return gone
 }
