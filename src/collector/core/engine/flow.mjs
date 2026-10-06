@@ -32,6 +32,7 @@ export function handleFlow(client, meta, ctx) {
   let handedOff = false     // true once a routing decision hands the sockets to relay()
   let relaying = false      // relay() owns teardown (armPre's handlers on a decrypted pair go quiet)
   let tunnelAsked = false   // the client sent CONNECT inside a TLS connection we terminated (an https:// proxy)
+  const connectPrelude = { c: [], s: [] } // every CONNECT round trip on this connection, for the prelude record
   let selfClosed = false    // the engine tore this flow down itself (internalError)
   let upstream = null       // the TCP connection to the original destination
   let firstByteTimer = null
@@ -168,7 +169,8 @@ export function handleFlow(client, meta, ctx) {
   }
 
   // ── first-speaker race + client sniff ─────────────────────────────────────────────────────────
-  function route(cSock, uSock, preBuf, hostDefault, isTunnel) {
+  // upPre: upstream bytes that arrived in the same chunk as a proxy's success reply (RFC 4.6 §记录 代理前导)
+  function route(cSock, uSock, preBuf, hostDefault, isTunnel, upPre = null) {
     const chunks = preBuf && preBuf.length ? [preBuf] : []
     let decided = false
     const onClient = guard((d) => {
@@ -197,6 +199,9 @@ export function handleFlow(client, meta, ctx) {
     }
     cSock.on('data', onClient)
     uSock.on('data', onUpFirst)
+    // the client has not spoken yet: those upstream bytes mean the upstream spoke first; otherwise they go
+    // on to the client as they would have
+    if (upPre && upPre.length) { if (!chunks.length) return onUpFirst(upPre); cSock.write(upPre) }
     if (chunks.length && classify(Buffer.concat(chunks)) !== 'need-more') decide()
   }
 
@@ -442,19 +447,56 @@ export function handleFlow(client, meta, ctx) {
       cSock.write(all.subarray(0, ph.headLength))             // relay the proxy reply head verbatim
       const after = all.subarray(ph.headLength)
       const status = parseInt(ph.startLine.split(' ')[1], 10)
-      // the prelude both ways, verbatim (Proxy-Authorization is a credential: flows/ is 0600, RFC 4.1)
-      rec.prelude = { kind: 'connect', target: authority, client_b64: buf.subarray(0, h.headLength).toString('base64'), proxy_b64: all.subarray(0, ph.headLength).toString('base64') }
+      // the prelude both ways, verbatim (Proxy-Authorization is a credential: flows/ is 0600, RFC 4.1); every
+      // round trip on this connection (a CONNECT retried after a 407), each direction in order
+      connectPrelude.c.push(buf.subarray(0, h.headLength)); connectPrelude.s.push(all.subarray(0, ph.headLength))
+      rec.prelude = { kind: 'connect', target: authority, client_b64: Buffer.concat(connectPrelude.c).toString('base64'), proxy_b64: Buffer.concat(connectPrelude.s).toString('base64') }
       if (status >= 200 && status < 300) {
-        if (after.length) cSock.write(after)
-        route(cSock, uSock, innerPre, connectHost, true)      // decrypt/splice the tunnelled TLS
+        route(cSock, uSock, innerPre, connectHost, true, after) // decrypt/splice the tunnelled TLS
       } else {
         rec.decision = 'tunnel'; notCaptured('proxy-refused', `proxy-status-${status}`); rec.host = connectHost
         if (after.length) cSock.write(after)
-        if (innerPre.length) uSock.write(innerPre)            // whatever the client sent on, verbatim
-        relay(cSock, uSock)
+        afterRefusal(cSock, uSock, innerPre)
       }
     })
     uSock.on('data', onUp)
+  }
+
+  // After a refused CONNECT the client may try again on the same connection (407, then CONNECT with
+  // Proxy-Authorization to a keep-alive proxy): the refusal's body keeps flowing to the client while the
+  // client's next bytes are read — another CONNECT head is followed like the first (RFC 4.6 §记录 代理前导);
+  // anything else is spliced on, the row staying proxy-refused. A side going here ends the flow as relay()
+  // would: the client's close drops the proxy, the proxy's close lets the client drain the refusal.
+  function afterRefusal(cSock, uSock, pre) {
+    handedOff = true; relaying = true                    // these handlers own teardown until the next decision
+    const cChunks = pre.length ? [pre] : []
+    let done = false
+    const onUp = guard((d) => { if (cSock.writable) cSock.write(d) })
+    const onC = guard((d) => { cChunks.push(d); check() })
+    const gone = (side) => guard((e) => {
+      if (done || finished) return
+      stop()
+      if (e instanceof Error && !rec.error) rec.error = { type: e.code || 'error', message: msgOf(e), side }
+      teardown()
+      if (side === 'client') { try { uSock.destroy() } catch { /* ignore */ }; try { upstream.destroy() } catch { /* ignore */ } } else { try { if (cSock.writable) cSock.end() } catch { /* ignore */ } }
+    })
+    const handlers = [[cSock, 'data', onC], [uSock, 'data', onUp]]
+    for (const ev of ['end', 'close', 'error']) handlers.push([cSock, ev, gone('client')], [uSock, ev, gone('upstream')])
+    const stop = () => { done = true; for (const [s, ev, fn] of handlers) s.removeListener(ev, fn) }
+    for (const [s, ev, fn] of handlers) s.on(ev, fn)
+    function check() {
+      if (done || !cChunks.length) return
+      const buf = Buffer.concat(cChunks), cls = classify(buf)
+      if (cls === 'need-more') return
+      if (cls === 'connect') {
+        const h = parseHead(buf); if (!h) return
+        stop(); delete rec.not_captured; rec.reason = null
+        relaying = false; if (cSock === client) handedOff = false // a pre-decision state again (preTeardown / armPre watch it)
+        return afterConnectHead(h, buf, cSock, uSock)
+      }
+      stop(); uSock.write(buf); relay(cSock, uSock)
+    }
+    check()
   }
 
   // ── SOCKS4 / 4a / 5: relay the prelude verbatim, then route the tunnelled bytes (§引擎 3, D37) ──
@@ -504,7 +546,7 @@ export function handleFlow(client, meta, ctx) {
       if (seen.c.length) rec.prelude = { kind: r.kind ?? (initial[0] === 4 ? 'socks4' : 'socks5'), target: r.host != null ? `${r.host.includes(':') ? `[${r.host}]` : r.host}:${r.port}` : null, client_b64: Buffer.concat(seen.c).toString('base64'), proxy_b64: Buffer.concat(seen.s).toString('base64') }
       const cRest = c.rest(), uRest = u.rest()
       const host = r.host ?? null
-      if (r.ok) { if (uRest.length) cSock.write(uRest); return route(cSock, uSock, cRest, host, true) }
+      if (r.ok) return route(cSock, uSock, cRest, host, true, uRest)
       rec.decision = 'tunnel'; rec.host = host
       notCaptured(r.opaque ? 'unknown-protocol' : 'proxy-refused', r.reason)
       if (cRest.length) uSock.write(cRest)

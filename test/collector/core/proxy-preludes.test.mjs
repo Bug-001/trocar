@@ -394,3 +394,77 @@ test('review B · a first byte that only looks like SOCKS (0x05, then a partial 
   assert.equal(answer.toString(), 'pong'); assert.equal(Buffer.concat(seen).toString('hex'), '05090102', 'the held bytes, verbatim')
   assert.deepEqual([L.flows[0].not_captured, /incomplete/.test(L.flows[0].reason)], ['unknown-protocol', true])
 })
+
+// review B #7: upstream bytes in the same chunk as the proxy's 200 — the upstream spoke first in the tunnel
+test('review B · bytes the upstream sends with the proxy\'s 200 make the tunnel upstream-first; relayed verbatim', T, async (t) => {
+  const L = await lab(t, { kind: 'connect' }, { dst: async () => { const s = net.createServer((c) => { c.on('error', () => {}); c.once('data', () => { c.write('HTTP/1.1 200 OK\r\n\r\nSSH-2.0-banner\r\n'); c.on('data', () => {}) }) }); await new Promise((r) => s.listen(0, '127.0.0.1', r)); t.after(() => s.close()); return s.address().port } })
+  const raw = net.connect(L.port, '127.0.0.1'); await once(raw, 'connect'); raw.on('error', () => {})
+  raw.write('CONNECT host.test:22 HTTP/1.1\r\n\r\n')
+  let got = ''; raw.on('data', (d) => { got += d })
+  for (let i = 0; i < 200 && !got.includes('banner\r\n'); i++) await sleep(5)
+  raw.destroy(); await L.settled(1)
+  assert.equal(got, 'HTTP/1.1 200 OK\r\n\r\nSSH-2.0-banner\r\n')
+  assert.deepEqual([L.flows[0].decision, L.flows[0].inner, L.flows[0].not_captured], ['tunnel', 'splice', 'upstream-first'])
+})
+
+// review B #8: a keep-alive proxy answers 407; the client retries with credentials on the same connection
+async function authProxy(t, mockPort, { closeAfterRefusal = false } = {}) {
+  const s = net.createServer((c) => {
+    c.on('error', () => {})
+    let buf = ''
+    const onData = (d) => {
+      buf += d.toString('latin1'); const i = buf.indexOf('\r\n\r\n'); if (i < 0) return
+      const head = buf.slice(0, i + 4); buf = buf.slice(i + 4)
+      if (!/Proxy-Authorization: Basic /i.test(head)) {
+        c.write('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="lab"\r\nContent-Length: 5\r\n\r\n')
+        setTimeout(() => { c.write('nope!'); if (closeAfterRefusal) c.end() }, 20)
+        return
+      }
+      c.removeListener('data', onData); c.write('HTTP/1.1 200 Connection established\r\n\r\n')
+      const up = net.connect(mockPort, '127.0.0.1'); up.on('error', () => c.destroy()); c.on('close', () => up.destroy())
+      c.pipe(up); up.pipe(c)
+    }
+    c.on('data', onData)
+  })
+  await new Promise((r) => s.listen(0, '127.0.0.1', r)); t.after(() => s.close())
+  return s.address().port
+}
+const H1 = `CONNECT ${HOST}:443 HTTP/1.1\r\nHost: ${HOST}:443\r\n\r\n`
+const H2 = `CONNECT ${HOST}:443 HTTP/1.1\r\nHost: ${HOST}:443\r\nProxy-Authorization: Basic dTpw\r\n\r\n`
+const R407 = 'HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="lab"\r\nContent-Length: 5\r\n\r\n'
+
+test('review B · CONNECT refused with 407, retried with credentials on the same connection: the retry is followed and the call decrypted', T, async (t) => {
+  const L = await lab(t, { kind: 'connect' }, { dst: (_, mockPort) => authProxy(t, mockPort) })
+  const raw = net.connect(L.port, '127.0.0.1'); await once(raw, 'connect')
+  let got = ''; const onD = (d) => { got += d.toString('latin1') }; raw.on('data', onD)
+  raw.write(H1)
+  for (let i = 0; i < 200 && !got.endsWith('nope!'); i++) await sleep(5)
+  assert.equal(got, R407 + 'nope!', 'the refusal and its body, verbatim')
+  got = ''; raw.write(H2)
+  for (let i = 0; i < 200 && !got.endsWith('\r\n\r\n'); i++) await sleep(5)
+  raw.removeListener('data', onD)
+  assert.equal(got, 'HTTP/1.1 200 Connection established\r\n\r\n')
+  const resp = await exchange(raw); await L.settled(1)
+  const entry = L.mock.state.log.find((e) => e.type === 'request')
+  assert.ok(resp.equals(b64(entry.resp_raw_b64))); assert.equal(L.envelopes.length, 1)
+  const f = L.flows[0]
+  assert.deepEqual([f.decision, f.inner, f.not_captured, f.reason], ['tunnel', 'decrypt', undefined, null])
+  assert.equal(b64(f.prelude.client_b64).toString('latin1'), H1 + H2)
+  assert.equal(b64(f.prelude.proxy_b64).toString('latin1'), R407 + 'HTTP/1.1 200 Connection established\r\n\r\n')
+})
+
+test('review B · after a 407 the client gives up: proxy-refused, no error; the proxy closing lets the client read the whole refusal', T, async (t) => {
+  const L = await lab(t, { kind: 'connect' }, { dst: (_, mockPort) => authProxy(t, mockPort) })
+  const raw = net.connect(L.port, '127.0.0.1'); await once(raw, 'connect'); raw.on('error', () => {})
+  let got = ''; raw.on('data', (d) => { got += d.toString('latin1') })
+  raw.write(H1)
+  for (let i = 0; i < 200 && !got.endsWith('nope!'); i++) await sleep(5)
+  raw.end(); await L.settled(1)
+  assert.deepEqual([L.flows[0].decision, L.flows[0].not_captured, L.flows[0].reason, L.flows[0].error], ['tunnel', 'proxy-refused', 'proxy-status-407', undefined])
+  const M = await lab(t, { kind: 'connect' }, { dst: (_, mockPort) => authProxy(t, mockPort, { closeAfterRefusal: true }) })
+  const c = net.connect(M.port, '127.0.0.1'); await once(c, 'connect'); c.on('error', () => {})
+  let got2 = ''; c.on('data', (d) => { got2 += d.toString('latin1') }); c.write(H1)
+  await once(c, 'end'); c.destroy(); await M.settled(1)
+  assert.equal(got2, R407 + 'nope!', 'the body was drained, not cut')
+  assert.deepEqual([M.flows[0].not_captured, M.flows[0].error], ['proxy-refused', undefined])
+})
