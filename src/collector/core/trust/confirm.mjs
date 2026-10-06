@@ -59,6 +59,14 @@ export function effectiveEnv(environ, layers = []) {
   return { env, origin }
 }
 
+// non-empty subsets, smallest first (so the first failing one names a single culprit when there is one)
+function subsetsOf(xs, cap = 6) {
+  if (xs.length > cap) return [...xs.map((x) => [x]), xs]
+  const out = []
+  for (let m = 1; m < 1 << xs.length; m++) out.push(xs.filter((_, i) => m & (1 << i)))
+  return out.sort((a, b) => a.length - b.length)
+}
+
 export function createTrustChecker({ caCertPem, readFile = fs.readFileSync, stat = fs.statSync }) {
   const caFingerprint = new X509Certificate(caCertPem).fingerprint256
   const cache = new Map() // absolute path → { key, fps }; the key changes when the file does
@@ -132,6 +140,16 @@ export function createTrustChecker({ caCertPem, readFile = fs.readFileSync, stat
     if (!res.trusted && active.length !== layers.length) {
       for (const l of layers.filter((x) => !active.includes(x))) {
         if (evaluate(spec, [...active, l], cwd).trusted) { res.reason = l.ignored || (startedAt == null ? 'start-time-unknown' : 'config-after-start'); res.via = l.name; break }
+      }
+    }
+    // A stale layer may still be in effect (it was there at start after all, or the agent re-applied it): it may only
+    // take trust away. Trusted stands only if every way of putting the stale layers back is trusted too (4.6 CC row;
+    // all subsets up to 6 stale layers, else each one alone and all together). Layer order is kept (precedence).
+    if (res.trusted) {
+      const staleOnes = layers.filter((l) => !l.ignored && stale(l))
+      for (const sub of subsetsOf(staleOnes)) {
+        const r = evaluate(spec, layers.filter((l) => active.includes(l) || sub.includes(l)), cwd)
+        if (!r.trusted) { Object.assign(res, r, { reason: startedAt == null ? 'start-time-unknown' : 'config-after-start', via: sub[0].name }); break }
       }
     }
     if (!res.trusted && trust.refine) res.reason = trust.refine(res, res.env, { argv, ...extra }) || res.reason

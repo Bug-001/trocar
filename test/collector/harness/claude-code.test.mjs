@@ -49,6 +49,20 @@ test('claude-code: a settings CA written after the process started is config-aft
   } finally { s.done() }
 })
 
+test('claude-code: launched with NODE_EXTRA_CA_CERTS = the asight CA but a user settings file naming another CA — untrusted when the start time is unknown or the file changed after start (post-integration 1)', () => {
+  const s = sandbox()
+  try {
+    const pem = s.put('ca/asight.pem', CA.certPem); const foreign = s.put('ca/other.pem', OTHER.certPem)
+    const file = s.put('.claude/settings.json', JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: foreign } }))
+    const mtime = fs.statSync(file).mtimeMs
+    const unknown = judge(cc, ctxFor({ home: s.home, env: { NODE_EXTRA_CA_CERTS: pem }, startedAt: null })).trust
+    assert.deepEqual([unknown.trusted, unknown.reason, unknown.via.startsWith('user settings env')], [false, 'start-time-unknown', true])
+    const after = judge(cc, ctxFor({ home: s.home, env: { NODE_EXTRA_CA_CERTS: pem }, startedAt: mtime - 60_000 })).trust
+    assert.deepEqual([after.trusted, after.reason], [false, 'config-after-start'])
+    assert.equal(judge(cc, ctxFor({ home: s.home, env: { NODE_EXTRA_CA_CERTS: pem }, startedAt: mtime + 1 })).trust.trusted, false, 'there at start: settings win, other CA')
+  } finally { s.done() }
+})
+
 test('claude-code: host-managed, --restricted and --setting-sources without user drop the settings CA (T12)', () => {
   const s = sandbox()
   try {

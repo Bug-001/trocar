@@ -83,6 +83,31 @@ test('trust: a non-live layer is judged by when its value appeared (`since`) bef
   assert.equal(checker.check(replacing, { environ: env({}), layers: [{ ...layer, live: true }], startedAt: null }).trusted, true, 'a live layer does not depend on the start time')
 })
 
+test('trust: a stale layer only ever takes trust away — trusted through environ, but a start-only layer naming another CA makes it untrusted (post-integration 1, 4.6 CC row)', () => {
+  const launch = env({ EXTRA_CA: ONLY }) // the launch environment trusts the asight CA
+  const settings = { name: 'user settings env', mode: 'override', vars: { EXTRA_CA: FOREIGN }, live: false, mtimeMs: 5_000 }
+  assert.equal(checker.check(additive, { environ: launch, layers: [] }).trusted, true, 'without the layer: trusted')
+  const unknown = checker.check(additive, { environ: launch, layers: [settings], startedAt: null })
+  assert.deepEqual([unknown.trusted, unknown.reason, unknown.via], [false, 'start-time-unknown', 'user settings env'], 'had it been there at start, the agent would use the other CA')
+  const after = checker.check(additive, { environ: launch, layers: [settings], startedAt: 3_000 })
+  assert.deepEqual([after.trusted, after.reason, after.via], [false, 'config-after-start', 'user settings env'], 'edited after start: it may be in effect')
+  assert.equal(checker.check(additive, { environ: launch, layers: [settings], startedAt: 6_000 }).trusted, false, 'there before start: in effect, other CA')
+  const harmless = { ...settings, vars: { EXTRA_CA: MERGED } } // a stale layer that also holds the CA takes nothing away
+  assert.equal(checker.check(additive, { environ: launch, layers: [harmless], startedAt: null }).trusted, true)
+  const unrelated = { ...settings, vars: { OTHER_VAR: 'x' } }
+  assert.equal(checker.check(additive, { environ: launch, layers: [unrelated], startedAt: 3_000 }).trusted, true, 'a stale layer that does not touch the CA variable changes nothing')
+  // two stale layers that are harmless alone but not together are found (every subset is tried)
+  const both = env({ TOP_BUNDLE: MERGED, CERT_FILE: MERGED })
+  const a = { name: 'a', mode: 'override', vars: { CERT_FILE: FOREIGN }, live: false, mtimeMs: 5_000 } // alone: TOP_BUNDLE still wins
+  const b = { name: 'b', mode: 'override', vars: { TOP_BUNDLE: '' }, live: false, mtimeMs: 5_000 } // alone: CERT_FILE (MERGED) takes over
+  for (const one of [a, b]) assert.equal(checker.check(replacing, { environ: both, layers: [one] }).trusted, true, `${one.name} alone is not stale-judged here and trusted`)
+  const r = checker.check(replacing, { environ: both, layers: [a, b], startedAt: 3_000 })
+  assert.deepEqual([r.trusted, r.reason, r.via], [false, 'config-after-start', 'a'], 'together: TOP_BUNDLE empty, CERT_FILE foreign')
+  const c = { name: 'c', mode: 'override', vars: { TOP_BUNDLE: MERGED }, live: false, mtimeMs: 5_000 } // puts TOP_BUNDLE back: all three together are fine
+  const r3 = checker.check(replacing, { environ: both, layers: [a, b, c], startedAt: 3_000 })
+  assert.deepEqual([r3.trusted, r3.via], [false, 'a'], 'only the pair {a, b} fails — singles and the whole set alone would miss it')
+})
+
 test('trust: an ignored layer is left out and named when it would have granted trust', () => {
   const layer = { name: 'settings env', mode: 'override', vars: { EXTRA_CA: ONLY }, ignored: 'settings-ignored' }
   const r = checker.check(additive, { environ: env({}), layers: [layer] })
