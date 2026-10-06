@@ -80,7 +80,7 @@ export function buildEnvelope({
   const wireReq = reqWireBytes != null ? reqWireBytes : reqBody ? reqBody.length : 0
   let req_body, extra = {}
   if (logged) req_body = { raw_chars: wireReq, verbatim: false }
-  else ({ req_body, extra } = shapeRequestBody({ headers: reqHeaders, body: reqBody, incomplete: !!(reqTruncated || reqPartial) }))
+  else ({ req_body, extra } = shapeRequestBody({ headers: reqHeaders, body: reqBody, incomplete: !!(reqTruncated || reqPartial), llm }))
   return {
     // core
     ts: tsRequest, endpoint, method,

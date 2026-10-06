@@ -215,3 +215,25 @@ test('HOP_BY_HOP contains the relay-managed headers', () => {
     assert.ok(HOP_BY_HOP.has(h))
   }
 })
+
+// review (H2): the decoded copy of a compressed request body is bounded for a call that is not inference — 204 KB of gzip used to become
+// a 200 MiB req_body (and an escape-heavy one pushed the NDJSON line past V8's string limit: the call was not captured at all). The wire
+// bytes are the verbatim record either way; over the limit they stay as stored and the call says so.
+test('a compressed body that decodes past 1 MiB on a call that is not inference keeps its wire bytes and says so; inference keeps its higher limit', async () => {
+  const zlib = (await import('node:zlib')).default
+  const { NON_INFERENCE_MAX_DECODED_BYTES } = await import('../../src/capture/request-body.mjs')
+  const bomb = zlib.gzipSync(Buffer.alloc(3 * 1024 * 1024, 0x61)) // 3 MiB of 'a' in ~3 KB
+  assert.ok(bomb.length < 10 * 1024, 'a small body on the wire')
+  const nonLlm = buildEnvelope({ ...baseArgs, endpoint: '/api/event_logging/v2/batch', reqHeaders: { 'content-encoding': 'gzip' }, reqBody: bomb, capture: 'mitm' })
+  assert.deepEqual([nonLlm.req_body, nonLlm.req_body_b64, nonLlm.req_content_encoding, nonLlm.body_wire_bytes.req], [null, bomb.toString('base64'), 'gzip', bomb.length])
+  assert.match(nonLlm.req_encoding_error, new RegExp(`over the ${NON_INFERENCE_MAX_DECODED_BYTES}-byte capture limit for a call that is not inference`))
+  assert.ok(JSON.stringify(nonLlm).length < 50 * 1024, 'the record stays small')
+  // the same shape is labelled for the reader and the board (invariant 4): not an empty or a verbatim-text body
+  const { captureLabelsOf } = await import('../../src/dissect/capture-labels.mjs')
+  assert.deepEqual(captureLabelsOf(nonLlm).map((l) => l.id), ['req-undecoded'])
+  // under the limit a non-inference body is decoded as before; an inference body of the same size decodes (its limit is 256 MiB)
+  const small = zlib.gzipSync(Buffer.alloc(512 * 1024, 0x62))
+  assert.equal(buildEnvelope({ ...baseArgs, endpoint: '/api/event_logging/v2/batch', reqHeaders: { 'content-encoding': 'gzip' }, reqBody: small, capture: 'mitm' }).req_body.length, 512 * 1024)
+  const llm = buildEnvelope({ ...baseArgs, endpoint: '/v1/messages', reqHeaders: { 'content-encoding': 'gzip' }, reqBody: bomb, capture: 'mitm' })
+  assert.deepEqual([llm.req_body.length, 'req_encoding_error' in llm], [3 * 1024 * 1024, false])
+})

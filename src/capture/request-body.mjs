@@ -19,6 +19,11 @@ import zlib from 'node:zlib'
 // A body that decompresses past this is not expanded: it is kept as wire bytes and labelled (a decompression bomb, or an
 // upload that is not text). The reader has the same limit (dissect/request-body.mjs).
 export const MAX_DECODED_BYTES = 256 * 1024 * 1024
+// A call that is not inference is decoded only up to this much (D40: any host of any agent can send a compressed body; the board
+// shows no more than 1 MiB of one). 204 KB of gzip became a 200 MiB req_body, and escape-heavy content pushed the NDJSON line past
+// V8's string limit — the whole call was then not captured. Over it the wire bytes are kept (req_body_b64) and the call says so
+// (req_encoding_error), the way a body that does not decode does. The reader has the same number.
+export const NON_INFERENCE_MAX_DECODED_BYTES = 1024 * 1024
 
 const STRICT = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }) // a BOM stays: bytes, not text
 /** The text of `buf` when it is valid UTF-8, else null. Never a lossy decode. */
@@ -40,7 +45,7 @@ export function decodeContent(buf, encoding, { maxBytes } = {}) {
         else return { buf, decoded: false, error: 'zstd unsupported' }
       } else if (c === 'identity') { /* no-op */ } else return { buf, decoded: false, error: `unknown encoding: ${c}` }
     } catch (e) {
-      return { buf, decoded: false, error: String((e && e.message) || e) }
+      return { buf, decoded: false, error: String((e && e.message) || e), ...(e && typeof e.code === 'string' ? { code: e.code } : {}) }
     }
   }
   return { buf: cur, decoded: true }
@@ -54,13 +59,14 @@ function headerOf(headers, name) {
 }
 
 /**
- * shapeRequestBody({headers, body, incomplete}) → {req_body, extra}
+ * shapeRequestBody({headers, body, incomplete, llm}) → {req_body, extra}
  *   headers    the request headers as an object (any case)
+ *   llm        the call is inference (default): a compressed body is decoded up to MAX_DECODED_BYTES, else up to NON_INFERENCE_MAX_DECODED_BYTES
  *   body       the captured Buffer: the whole body, or — when `incomplete` — the prefix that was kept
  *   incomplete the body was cut at the cap or never finished
  * `extra` holds the fields that follow req_body, in their order: req_body_b64, req_content_encoding, req_encoding_error.
  */
-export function shapeRequestBody({ headers, body, incomplete = false }) {
+export function shapeRequestBody({ headers, body, incomplete = false, llm = true }) {
   if (!body || !body.length) return { req_body: '', extra: {} }
   const enc = headerOf(headers, 'content-encoding')
   const codings = String(enc == null ? '' : Array.isArray(enc) ? enc.join(',') : enc).split(',').map((c) => c.trim().toLowerCase()).filter(Boolean)
@@ -71,8 +77,12 @@ export function shapeRequestBody({ headers, body, incomplete = false }) {
   const wire = { req_body_b64: body.toString('base64'), req_content_encoding: Array.isArray(enc) ? enc.join(', ') : enc }
   if (incomplete) return { req_body: null, extra: wire }
   if (codings.includes('zstd')) return { req_body: null, extra: { ...wire, req_encoding_error: 'zstd request body not decoded at capture; decode req_body_b64' } }
-  const dec = decodeContent(body, wire.req_content_encoding, { maxBytes: MAX_DECODED_BYTES })
-  if (!dec.decoded) return { req_body: null, extra: { ...wire, req_encoding_error: dec.error } }
+  const maxBytes = llm ? MAX_DECODED_BYTES : NON_INFERENCE_MAX_DECODED_BYTES
+  const dec = decodeContent(body, wire.req_content_encoding, { maxBytes })
+  if (!dec.decoded) {
+    const over = dec.code === 'ERR_BUFFER_TOO_LARGE' || /larger than|output length/i.test(dec.error || '')
+    return { req_body: null, extra: { ...wire, req_encoding_error: over ? `decoded body over the ${maxBytes}-byte capture limit${llm ? '' : ' for a call that is not inference'}; the wire bytes are in req_body_b64` : dec.error } }
+  }
   const text = utf8Strict(dec.buf)
   if (text === null) return { req_body: null, extra: { ...wire, req_encoding_error: 'decoded body is not UTF-8' } }
   return { req_body: text, extra: wire }
