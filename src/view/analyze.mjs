@@ -327,6 +327,8 @@ export function analyze(records, opts = {}) {
     const out = isUnparsed(r)
       ? { ...r, request: { messages: [], tools: [], system: [], message_count: 0, tool_count: 0 }, _unparsed: true }
       : r
+    // the stub keeps the non-enumerable source-stream stamp a spread drops: its reply still needs a locator
+    if (out !== r && r._stream) Object.defineProperty(out, '_stream', { value: r._stream, enumerable: false, configurable: true })
     const g = opts.giOf ? opts.giOf(r) : undefined
     if (g != null) giGiven.set(out, g)
     return out

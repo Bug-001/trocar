@@ -110,3 +110,21 @@ test('client messages sent while the call was open are listed on it and open fro
   assert.match(v.raw, /<code>req_extra_messages\[1\]<\/code> stored as base64 bytes/, 'one that is not text says what is stored');
   assert.doesNotMatch((await render(session(call(W)))).raw, /later client messages/);
 });
+
+test('the reply is listed with one locator per piece; a piece without one says why (R2)', async () => {
+  const v = await render(session(call(W, { respRefs: [{ label: 'stream', ref: 'S/c.ndjson#r1::resp.raw::0-90', chars: 90 },
+    { label: 'body', ref: null, chars: null, why: 'a JSON reply is stored parsed by the collector' }] })));
+  assert.match(v.raw, /reply · /);
+  assert.match(v.raw, /data-nbk="S\/c\.ndjson#r1::resp\.raw::0-90"/);
+  assert.match(v.raw, /stored parsed by the collector/);
+  const none = await render(session(call(W)));
+  assert.doesNotMatch(none.raw, /reply · /, 'an older payload without respRefs lists nothing rather than a guess');
+});
+
+test('decoded bytes get their own badge, distinct from verbatim and from re-serialized', async () => {
+  const { M } = await loadIndex(session(call(W)), ['resolvedBody']);
+  assert.match(M.resolvedBody({ status: 'ok', text: 'x', fidelity: 'decoded' }, {}), /解码后逐字/);
+  assert.doesNotMatch(M.resolvedBody({ status: 'ok', text: 'x', fidelity: 'decoded' }, {}), /not byte-verbatim/);
+  assert.match(M.resolvedBody({ status: 'ok', text: 'x', fidelity: 'verbatim' }, {}), /逐字回源/);
+  assert.match(M.resolvedBody({ status: 'ok', text: 'x', fidelity: 'reserialized' }, {}), /not byte-verbatim/);
+});

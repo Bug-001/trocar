@@ -202,7 +202,7 @@ function assembleFlatLane(records, d, opts = {}) {
       tools: Array.isArray(req.tools) ? req.tools.length : 0,
       ts: r.ts_request || r.ts || '', status: (r.resp && r.resp.status) || null,
       compaction: false, error: !!r.error || failed, reqIncomplete: reqIncompleteOf(r), wsIncomplete: wsIncompleteOf(r), respIncomplete: respIncompleteOf(r),
-      wire, nonBlockKeys: kept ? nonBlockKeysOf(r, d.id) : [], ...extraMessagesOf(r),
+      wire, nonBlockKeys: kept ? nonBlockKeysOf(r, d.id) : [], ...extraMessagesOf(r), respRefs: respRefsOf(r),
       // shipped as metadata + a text_ref per block, never the body (4.2:55); a cross-record context locates each
       // block in the record and field its bytes came from; out of the window: no blocks
       flat: kept ? (ctx ? withLocatedRefs(flat, ctx.locate, scans) : withPathRefs(flat, r)) : [], ...(kept ? null : { paged_out: true }),
@@ -351,6 +351,34 @@ export function withLocatedRefs(flat, locateFn, scans = new Map()) {
     return slimBlock(b, composeTextRef(base, span, loc.field));
   });
 }
+// 4.6 R2 「回复 == mock 发出的 SSE 事件 / WebSocket 消息」 · gate G1: where the verbatim reply sits in the
+// raw record, as field-qualified refs (4.2:40), in reply order — resp.raw for an HTTP reply (the decoded SSE / text the
+// collector stored; on an error envelope, what arrived before the failure), one resp.messages.<j> per WebSocket server
+// message. Joining an HTTP call's resolved pieces gives the whole decoded reply. A piece that cannot be addressed is
+// listed with why (invariant 4), never dropped. Envelope fields only (record-fields.mjs): no wire knowledge.
+// → [{ label, ref: string|null, chars: number|null, why? }]
+function respRefsOf(rec) {
+  const r = respOf(rec);
+  if (!r) return [{ label: 'reply', ref: null, chars: null, why: 'no response is recorded for this call' }];
+  const part = r.kind === 'error' && r.partial && typeof r.partial === 'object' ? r.partial : r;
+  const cut = part !== r ? ' (what arrived before the exchange failed)' : '';
+  const base = rawRefOf(rec);
+  const one = (label, field) => {
+    const f = fieldTextOf(rec, field);
+    if (f.text == null) return { label, ref: null, chars: null, why: f.missing.replace(/^stores \S+ as /, 'stored as ') };
+    return base ? { label, ref: composeTextRef(base, [0, f.text.length], field), chars: f.text.length }
+      : { label, ref: null, chars: f.text.length, why: 'the record carries no id or stream to address' };
+  };
+  if (part.kind === 'ws' && Array.isArray(part.messages)) return part.messages.map((_, j) => one(`message ${j + 1}${cut}`, `resp.messages.${j}`));
+  if (typeof part.raw === 'string') return [one((part.kind === 'sse' ? 'stream' : 'body') + cut, 'resp.raw')];
+  if (part.body !== undefined) return [{ label: 'body', ref: null, chars: null, why: 'a JSON reply is stored parsed by the collector, so it has no byte-verbatim text to point at (gate G16)' }];
+  if (typeof part.raw_b64 === 'string') {
+    return [{ label: 'body', ref: null, chars: null, why: part.encoding_error ? `could not be decoded (${part.encoding_error}); kept as base64 in the record` : 'not UTF-8 text; kept as base64 in the record' }];
+  }
+  if (part.kind === 'empty') return [{ label: 'body', ref: null, chars: 0, why: 'the reply had no body' }];
+  return [{ label: 'reply', ref: null, chars: null, why: r.kind === 'error' ? 'no reply bytes arrived before the exchange failed' : 'no reply text is stored in this record' }];
+}
+
 // 4.6 R2 「不成块的顶层键逐个列出」: every top-level request key that is not a block section, each with a
 // locator to its verbatim value (null when the record cannot be addressed).
 function nonBlockKeysOf(rec, format) {
@@ -436,6 +464,7 @@ function assembleAnalyzed(records, opts = {}) {
     for (const call of lane.calls || []) {
       if (!call.rec || !call.rec.request) { call.flat = []; call.cacheBreak = null; call.gt = null; call.wire = null; continue; }
       call.wire = wireOf(call.rec, 'anthropic'); // cheap meta: rides on out-of-window calls too
+      call.respRefs = respRefsOf(call.rec); // locators only (a few dozen bytes each), never the reply body
       const flat = linearContext(call.rec.request);
       // Tag per-block faithfulness SERVER-SIDE (reads provider block shape here, not in the browser →
       // invariant 3). opaque = encrypted/redacted reasoning replayed as signature-only, no plaintext on

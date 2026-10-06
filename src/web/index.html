@@ -1606,6 +1606,8 @@ function resolvedBody(got,b){
   // resolver's fidelity classification exists to prevent.
   const badge=got.fidelity==='verbatim'
     ? `<div class="cbsrc" title="resolved by 「定位源记录 → slice(start,end)」 over the raw NDJSON — the bytes the model received (AC-1)">✓ 逐字回源 · verbatim from capture</div>`
+    : got.fidelity==='decoded'
+      ? `<div class="cbsrc" title="the wire carried these bytes compressed; this is the exact text after decompression, not the exact wire bytes">↺ 解码后逐字 · verbatim after decompression</div>`
     : got.fidelity
       ? `<div class="cbsrc" title="these bytes were re-serialized on the way into the capture, so they are NOT a byte-verbatim record of the wire">⚠ ${esc(got.fidelity)} — not byte-verbatim</div>`
       : ''
@@ -1792,6 +1794,14 @@ function nonBlockList(c){
   return (ks.length?`<div class="rpk" title="request keys that are not context blocks — verbatim in the raw record">keys · `+ks.map(item).join(' · ')+`<div class="nbkbody"></div></div>`:'')+
     (xs.length?`<div class="rpk" title="client messages sent while this call was open — part of the call, not of the context; verbatim in the raw record">later client messages in this call · `+xs.map(item).join(' · ')+`<div class="nbkbody"></div></div>`:'')
 }
+// 4.6 R2: the reply as captured (call.respRefs, server-baked): one locator per piece, fetched from the raw record on
+// click; a piece with no locator says why in place (invariant 4)
+function replyList(c){
+  const rs=(c&&c.respRefs)||[]; if(!rs.length) return ''
+  return `<div class="rpk" title="the reply as captured — each piece resolves to its bytes in the raw record">reply · `+
+    rs.map(x=>x.ref?`<code class="nbk" data-nbk="${esc(x.ref)}" style="cursor:pointer">${esc(x.label)}</code> ${kf(x.chars)}c`
+      :`<code title="${esc(x.why||'')}">${esc(x.label)}</code> <span class="metabadge">${esc(x.why||'not addressable')}</span>`).join(' · ')+`<div class="nbkbody"></div></div>`
+}
 function renderRawPanel(){
   const el=document.getElementById('rawpanel'); if(!el) return
   if(viewPin) return renderResourceView(el)
@@ -1816,7 +1826,7 @@ function renderRawPanel(){
     `<div class="rpk">${esc(String(rq.model||'').replace('claude-',''))} · ${kf(rq.context_chars)} ${call.reqIncomplete?'bytes stored (not the whole request)':'bytes wire'}</div>`+
     `<div class="rpk">msgs <b>${kf(rq.message_count)}</b> · tools <b>${kf(rq.tool_count)}</b> · system <b>${kf(rq.system_chars)}</b>c</div>`+
     `<div class="rpk">usage · read <b>${kf(read)}</b> · new-cache <b>${kf(create)}</b> · fresh <b>${kf(fresh)}</b> · out <b>${kf(out)}</b></div>`+
-    `<div class="rpk rpcost">${costLine}</div>`+reqBadge(call)+nonBlockList(call)
+    `<div class="rpk rpcost">${costLine}</div>`+reqBadge(call)+nonBlockList(call)+replyList(call)
   el.onclick=e=>{ const t=e.target&&e.target.closest&&e.target.closest('[data-nbk]'); if(t){ const bc=t.parentElement.querySelector('.nbkbody'); if(bc) fetchBody({text_ref:t.dataset.nbk},bc) } }
 }
 function renderContextWindow(){

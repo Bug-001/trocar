@@ -106,6 +106,10 @@ What the board cannot vouch for, it labels on the call (raw panel and the top of
   mix wire formats; each call is read by its own.
 - Request keys that are not context blocks are listed one by one, each opening its verbatim bytes.
   A token-count probe keeps only its size, and its detail says so.
+- **The reply as captured** is listed in the raw panel with a locator per piece — the whole decoded
+  stream of an HTTP call, each server message of a WebSocket call — each opening its verbatim bytes. A
+  piece that cannot be opened says why (a JSON reply the collector stored parsed, a message kept as
+  base64 or past the size cap, no reply at all).
 - **Codex over WebSocket** (its default transport): each turn sends only its new input, so the board
   rebuilds the context the model saw from the earlier calls on the same connection, following
   `previous_response_id`. Every block still opens its verbatim bytes, also when they sit in an earlier

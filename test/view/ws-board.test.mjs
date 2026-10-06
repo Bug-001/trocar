@@ -77,6 +77,7 @@ test('W7: every call\'s stitched blocks resolve, through refs into earlier recor
       const res = verifyWsCall({ call, resolve, contexts, index });
       assert.deepEqual(res.problems, [], call.id);
       assert.ok(res.checked.units >= 3 && res.checked.nonBlockKeys.includes('type'), `${call.id}: units and keys were checked`);
+      assert.equal(res.checked.reply, 'board', `${call.id}: every server message is checked through the board's refs`);
       assert.equal(call.wire.transport, 'ws');
     }
     return v.analyzed.steps.map((s) => s.wire.contextState);
@@ -164,7 +165,7 @@ test('end to end through `asight serve`: the session lists under codex, and ever
   const contexts = expectedWsContexts(wsMessagesOf(log, conn, ws[0].ws_ext));
   // the resolver the checker uses is the HTTP endpoint itself
   const blocks = new Map();
-  for (const call of s.analyzed.steps) for (const b of [...call.flat, ...call.nonBlockKeys, ...(call.extraMessages || [])]) if (b.text_ref || b.ref) blocks.set(b.text_ref || b.ref, null);
+  for (const call of s.analyzed.steps) for (const b of [...call.flat, ...call.nonBlockKeys, ...(call.extraMessages || []), ...(call.respRefs || [])]) if (b.text_ref || b.ref) blocks.set(b.text_ref || b.ref, null);
   for (const ref of blocks.keys()) {
     const r = await get('/api/block?ref=' + encodeURIComponent(ref));
     assert.equal(r.status, 200, `${ref}: ${JSON.stringify(r.body)}`);
