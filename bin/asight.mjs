@@ -516,6 +516,18 @@ async function main() {
       console.log(`  ${mark(res.q3.ok)} ③ 凭据没漏     — ${res.q3.note}`);
       console.log(`  ${mark(res.q4.ok, true)} ④ 没弱化全机 TLS — ${res.q4.note}`);
       console.log(`  ${mark(res.q4b.ok)} ④b 采集文件仅属主可读 — ${res.q4b.note}`);
+      // The process collector (4.6 §确认信任: status / doctor MUST report every running-but-untrusted agent with its reason; §合并包:
+      // install and doctor MUST report every CA block not carried into a bundle, its type and its file): the same text as
+      // `asight collector status` (the live daemon when it answers, else what is on disk), then the notes of the last install.
+      // It only reads; it never changes the exit code (review B-7).
+      {
+        const { runCollector, formatInstallNotes } = await import(r('src', 'collector', 'cli.mjs'));
+        const { captureHealth } = await import(r('src', 'health', 'read.mjs'));
+        const indent = (s) => String(s).split('\n').map((l) => `  ${l}`).join('\n');
+        console.log('\n按进程采集器(collector, 4.6):');
+        try { await runCollector(['status'], { out: (s) => console.log(indent(s)), err: (s) => console.log(indent(s)) }); } catch (e) { console.log(indent(`collector status could not be read: ${e.message}`)); }
+        try { for (const l of formatInstallNotes(captureHealth({ home: asightHome() }))) console.log(indent(l)); } catch (e) { console.log(indent(`the last install's notes could not be read: ${e.message}`)); }
+      }
       if (res.hardFail) { console.error('\n✗ credential leak detected — the redact firewall MUST be fixed before capturing further.'); process.exit(1); }
       console.log('\n✓ 采集文件仅属主可读;凭据逐字存储 = 设计如此。(①②③④ 供你核对 — 见上方说明)');
       break;

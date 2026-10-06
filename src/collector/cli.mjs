@@ -89,6 +89,18 @@ export function formatHealth(h, { daemonLine = true } = {}) {
   return lines
 }
 
+// What the last install noted (its install-note events: what it could not do or chose not to), for `asight doctor`: 4.6 「合并包」
+// says doctor MUST report every CA block that was not carried into a bundle, with its type and its file — those are
+// `skipped-block` notes, and their reason names both. Nothing installed and no notes: nothing to say. (review B-7)
+export function formatInstallNotes(h) {
+  const c = h && h.collector
+  const all = (c && c.install && c.install.install) || []
+  if (!c || (c.installed === false && !all.length)) return []
+  const notes = all.filter((n) => n.kind !== 'result')
+  if (!notes.length) return ['the last install left no notes']
+  return [`notes of the last install (${notes.length}):`, ...notes.map((n) => `  [${n.code || n.kind || 'note'}] ${n.reason}`)]
+}
+
 // Every file install will write or change, printed before it writes any (4.6).
 export function formatPlan(p) {
   return ['asight collector install will write or change these files, and nothing else:',
