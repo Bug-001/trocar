@@ -7,15 +7,16 @@
 // whatever of that is still in flight. The runner counts only the events it received, so a file that ran 13 tests reports 5 or
 // 8 of them, "0 fail" for the part it saw. Node 20 does not wait for the output at all (its whole `npm test` reported 1903 to
 // 1924 tests where 1936 ran, and `journal.test.mjs` 6 of 13); Node 22 waits for the destination to close, which narrows the
-// window and does not shut it (300 chatty tests in one file reported 294 to 299 on 8 of 25 runs). The same happens to the
-// runner's own summary lines when its stdout is a pipe (CI's `| tee`).
+// window and does not shut it (300 chatty tests in one file reported 294 to 299 on 8 of 25 runs). Only the test files' processes
+// are affected, the ones that talk to the runner through a socket; the runner's own stdout is not.
 //
 // The fix is to do what the runner should: when the RUNNER calls `process.exit()`, let the event loop run until nothing has
 // reached stdout for a few turns (the reporter pipeline hands its last events over in a handful of turns) and then until the
 // writes already queued on stdout / stderr have completed, and only then exit. Code that is not the runner (a fixture that
 // calls `process.exit(0)` because its env var is unset, and expects execution to stop there) gets the real, immediate exit.
 //
-// Load it with the CLI flag, never NODE_OPTIONS: the tests spawn node processes of their own, and those would inherit it.
+// Load it with the CLI flag `--import` (it runs in each test file's process; the runner's own process loads only `--require`
+// preloads, see leak-guard.cjs), never NODE_OPTIONS: the tests spawn node processes of their own, and those would inherit it.
 // Guard: test/helpers/flush-exit.test.mjs; CI also compares the Node 20 and Node 22 test counts (.github/workflows/ci.yml).
 
 const QUIET_TURNS = 25 // consecutive event-loop turns with no new stdout bytes. The last bytes were seen 3 to 8 turns after the exit call.
