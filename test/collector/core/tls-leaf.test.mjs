@@ -37,3 +37,18 @@ test('leaf: a TLS client that trusts ONLY the CA completes a handshake for any S
   server.close()
   assert.deepEqual(got, { d: 'hi', ok: true })
 })
+
+// RFC 4.6 §身份与信任 (D38 T-7): a daemon that runs past a cached leaf's notAfter must not hand it out (the
+// client would reject it and be recorded as "does not trust asight"). Re-signed within 7 days of notAfter.
+test('leaf: a cached leaf is re-signed before it expires; the context follows it', () => {
+  let t = Date.parse('2026-01-01T00:00:00Z')
+  const iss = createLeafIssuer(loadCa(raw), { now: () => new Date(t) })
+  const first = iss.issue('long.test'); const ctx1 = iss.secureContextFor('long.test')
+  t += 191 * 86400e3                                   // 8 days of validity left: still served from the cache
+  assert.equal(iss.issue('long.test').certPem, first.certPem); assert.equal(iss.secureContextFor('long.test'), ctx1)
+  t += 2 * 86400e3                                     // 6 days left: re-signed
+  const ctx2 = iss.secureContextFor('long.test'); const second = iss.issue('long.test')
+  assert.notEqual(second.certPem, first.certPem); assert.notEqual(ctx2, ctx1)
+  assert.ok(Date.parse(new X509Certificate(second.certPem).validTo) > t + 190 * 86400e3, 'the new leaf runs from now')
+  assert.equal(iss.size, 1, 'replaced, not added')
+})

@@ -166,6 +166,9 @@ for (const maxVersion of ['TLSv1.2', 'TLSv1.3']) {
     assert.equal(h.ctx.negCache.list().length, 0, 'one rejection is not enough (pooled sockets close unused too)')
     assert.equal(await untrusting(), 'rejected'); await within(h.settled(), 'second flow finalized')
     assert.deepEqual(h.ctx.negCache.list().map((e) => [e.pid, e.host, e.cause, e.rejections]), [[1, 'upstream.test', 'client-rejected-leaf', 2]])
+    // the negative-cache write is an event of its own, but the engine's negCache wrapper writes it (engine.test, once);
+    // the flow must not write it a second time
+    assert.deepEqual(h.failures, [], 'flow.mjs itself writes no negative-cache event (D-12: the engine owns it)')
     const r = await request(h.port, upCa.certPem, REQ, { maxVersion })
     await h.close()
     assert.match(r.cert.issuer, /upstream test CA/)
@@ -252,6 +255,7 @@ test('upstream certificate does not verify: fresh connection, ClientHello replay
   assert.equal(h.envelopes.length, 0)
   assert.deepEqual([h.flows[0].decision, h.flows[0].not_captured], ['splice', 'upstream-cert']); assert.match(h.flows[0].reason, /CERT|SIGNATURE|ISSUER/)
   assert.deepEqual(h.ctx.negCache.list().map((e) => [e.host, e.cause]), [['upstream.test', 'upstream-cert']])
+  assert.deepEqual(h.failures, [], 'the upstream-cert step-aside writes no failure of its own here: the engine\'s negCache wrapper does (engine.test / tls-roots)')
   // the next flow to that host splices at once: one upstream connection, no handshake of ours
   const r2 = await talk(frontPort, privCa.certPem)
   await h.close(); front.srv.close(); origin.close()
