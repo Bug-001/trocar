@@ -56,6 +56,8 @@ E.truncated = connection(store, { flow: 'f3', maxCallBytes: 64 }, (r) => {
   r.fromUpstream(srv(1, ev('response.completed')))
 })[0]
 E.meta = connection(store, { flow: 'f4', target: '/v1/realtime-status' }, (r) => { r.fromClient(cli(1, ev('status.get'))); r.fromClient(cli(1, ev('status.get'))) })
+// the call's own opener cannot be decompressed (RSV1 with no deflate agreed): req_body null, no req_body_b64
+E.openerUndecoded = connection(store, { flow: 'f6' }, (r) => { r.fromClient(cli(1, 'not deflated', { rsv1: true })); r.fromUpstream(srv(1, ev('response.completed'))) })[0]
 // an Anthropic-shaped body on a WebSocket: the board assembles it on the other path (src/view/analyze.mjs)
 const CC = JSON.stringify({ model: 'claude-x', max_tokens: 8, system: [{ type: 'text', text: 's' }], tools: [{ name: 'Read', description: 'd', input_schema: { type: 'object' } }], messages: [{ role: 'user', content: 'q' }, { role: 'assistant', content: 'a' }, { role: 'user', content: 'q2' }] })
 E.ccPartial = connection(store, { flow: 'f5', target: '/v1/messages', session: [['X-Claude-Code-Session-Id', 'ws-cc-1']] }, (r) => {
@@ -89,6 +91,14 @@ test('wsIncompleteOf: each label the recorder writes, one thing each; complete a
   assert.match(p.text, /context this call relied on is incomplete, its own bytes are whole/)
   const t = wsIncompleteOf(E.truncated)
   assert.deepEqual([t.truncated, t.omitted >= 1, t.partial], [true, true, false])
+  // 4.6 §传输 信封: the opener itself undecoded — counted, and its bytes are never said to be whole
+  assert.deepEqual([E.openerUndecoded.req_body, E.openerUndecoded.req_body_b64, E.openerUndecoded.partial_reasons], [null, undefined, ['decode-failed']], 'precondition: the envelope 4.6 describes')
+  const o = wsIncompleteOf(E.openerUndecoded)
+  assert.deepEqual([o.undecoded, o.requestUndecoded], [1, true])
+  assert.doesNotMatch(o.text, /its own bytes are whole/)
+  assert.match(o.text, /could not be decompressed, the request message among them/)
+  const none = wsIncompleteOf({ ...E.openerUndecoded, ws_raw: E.openerUndecoded.ws_raw.filter((f) => f.d !== 'c') })
+  assert.ok(!none.requestUndecoded, 'no client data frame in ws_raw: no request message to have failed')
   const m = wsIncompleteOf(E.meta[0])
   assert.ok(m && m.nonVerbatim >= 1, 'a non-LLM endpoint: non-verbatim')
   assert.match(m.text, /non-LLM endpoint stored as their size only/)
@@ -97,7 +107,7 @@ test('wsIncompleteOf: each label the recorder writes, one thing each; complete a
 test('the board: /api/session carries the labels and where the call is shown it says 不完整 / 已截断 / 未解码 — none renders as complete; both assemblers (F5)', async () => {
   assert.ok(SESSION && SESSION.analyzed, 'precondition: the server assembled the WebSocket session')
   const byId = new Map(SESSION.analyzed.steps.map((s) => [s.id, s]))
-  for (const [k, re] of [['undecoded', /未解码/], ['partial', /不完整/], ['truncated', /已截断/]]) {
+  for (const [k, re] of [['undecoded', /未解码/], ['partial', /不完整/], ['truncated', /已截断/], ['openerUndecoded', /未解码/]]) {
     const step = byId.get(E[k].id)
     assert.ok(step && step.wsIncomplete, `${k}: the step carries wsIncomplete over HTTP`)
     const t = await loadIndex(SESSION, ['poll', 'setPlayhead', 'anchor'])

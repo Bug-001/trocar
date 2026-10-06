@@ -166,7 +166,10 @@ function assembleOpenai(records, opts = {}) {
   let prevFlat = null, gi = 0;
   for (const r of llm) {
     const shape = shapeOf(r);
-    let req; try { req = JSON.parse(r.req_body); } catch { req = (r.request && typeof r.request === 'object') ? r.request : {}; }
+    let req; try { req = JSON.parse(r.req_body); } catch { req = null; }
+    // req_body null (a WebSocket call whose request message is undecoded, or a server push: 4.6 §传输) parses to null,
+    // which used to throw below and take the whole session's /api/session down: such a call has no request
+    if (!req || typeof req !== 'object') req = (r.request && typeof r.request === 'object') ? r.request : {};
     r.request = req; // so the board's callComp / cost read the parsed request
     // derived counts the board header + raw card read (parallel to hydrateForBoard for CC)
     Object.assign(req, openai.reqCountsFor(shape, req));
