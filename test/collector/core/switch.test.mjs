@@ -231,7 +231,7 @@ test('switch: off hands the harnesses it turned off to the reconcile hook before
   const all = await sw.off()
   assert.deepEqual([order.slice(1), all.unwatched, all.desired, all.actual], [['reconcile claude-code', 'detach'], [4242], 'off', 'off'])
   const again = await sw.off()
-  assert.deepEqual([again.noop, order.length], [true, 3], 'nothing left to turn off: no detach; the hook is only for what turned off')
+  assert.deepEqual([again.noop, order.slice(3)], [true, ['reconcile ']], 'nothing left to turn off: no detach, but the hook runs for an `off` request — repeating it confirms (and retries) the table')
 })
 
 test('switch: a harness that is not known is still recorded as asked, and on / off of a named harness leaves the others as they were', async () => {

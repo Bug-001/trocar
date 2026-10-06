@@ -39,6 +39,7 @@ export async function loadParts({ arch = null, harnesses = null, env = process.e
 
 export const collectorPaths = (dir = collectorHome(asightHome())) => ({ dir, caDir: path.join(dir, 'ca'), state: path.join(dir, 'state.json'), lock: path.join(dir, 'lock'), markers: path.join(dir, 'run', 'trust') })
 const errText = (e) => String((e && e.message) || e)
+const OFF_HINT = 'capture is switched off for this harness (its desired state is off); it is not judged, not watched and not counted as untrusted'
 const VERSION = (() => { try { return JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version } catch { return null } })() // null: said as unknown in daemon-start
 // Every failure record carries a code (asight's name from src/health/codes.mjs, or the errno): the fold key (D-3).
 const coded = (e, code) => Object.assign(new Error(errText(e)), { code: (e && e.code) || code })
@@ -219,6 +220,12 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         const dropped = engine ? engine.forgetPid(row.pid) : 0
         if (dropped) failure.write({ event: 'negative-cache-cleared', pid: row.pid, dropped })
       },
+      onOff: (row) => { // the harness was turned off while this agent ran: what was recorded about it ends (an untrusted pid is not "running untrusted" once it is not a capture target)
+        const last = recordedUntrusted.get(row.pid); recordedUntrusted.delete(row.pid)
+        if (last != null) failure.write({ event: EVENT.agentExit, pid: row.pid, agent: row.agent, via: 'off', code: last, reason: 'the harness was turned off while it was untrusted' })
+        const dropped = engine ? engine.forgetPid(row.pid) : 0
+        if (dropped) failure.write({ event: 'negative-cache-cleared', pid: row.pid, dropped })
+      },
       onUnmatched: (a) => failure('tracker', coded(new Error(`pid ${a.pid} (${a.exe}) matches ${a.candidates.join(' and ')}: claimed by two harness descriptors, so it is judged as neither and never watched; its connections go direct`), 'ambiguous'), { pid: a.pid, candidates: a.candidates }),
       onError: (e, at) => failure('tracker', Object.assign(new Error(`pid ${at.pid} (${at.phase}): ${errText(e)}${at.phase === 'judge' ? '; it is not watched, its connections go direct' : ''}`), { code: (e && e.code) || (at.phase === 'judge' ? 'judge-error' : 'unwatch-error') }), at) })
     let helperDown = null
@@ -261,6 +268,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     }
 
     async function ensureReady() {
+      syncTracker() // which harnesses are on, and their policy, before the live processes are judged
       if (!caState.ok) throw new Error(`the collector CA is unusable (${caState.which}: ${caState.reason}); not attaching, agent connections go direct`)
       if (helperDown) throw new Error(`the redirector helper is down (${helperDown}); restart the collector`)
       if (v6Held) throw new Error(`${v6Held}; refusing to attach so no IPv6 connection is steered to it (M8)`)
@@ -286,7 +294,14 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
 
     // the harnesses `on` / `off` with no names mean, and v1 state is carried to: every one this daemon knows, and any the install manifest names
     const installed = () => [...new Set([...registry.names(), ...[...(manifest.entries || []), ...(manifest.files || [])].map((e) => e.harness).filter(Boolean)])]
-    sw = createSwitch({ redirector, stateFile: P.state, installed, ensureReady, onEvent: event })
+    // desired state → the tracker: which harnesses are enabled, and each one's decrypt policy
+    const syncTracker = () => { const st = sw.state(); tracker.setEnabled(sw.enabled()); tracker.setPolicy({ byHarness: Object.fromEntries(Object.entries(st.harnesses).map(([id, h]) => [id, { mode: h.policy, extraHosts: h.extra_hosts }])) }) }
+    // the switch calls this when harnesses go off, before the links come off: their processes leave the kernel watch table first
+    sw = createSwitch({ redirector, stateFile: P.state, installed, ensureReady, onEvent: event, reconcile: async () => { syncTracker(); return tracker.reconcile() } })
+    const reload = async () => { const r = await sw.reloadIfChanged(); if (r.changed) syncTracker(); return r } // the file may only take capture away (switch.mjs)
+    // before EVERY heartbeat (4.6 §开关语义): re-read state.json and bring the watch table to it; the beat goes out only while some harness is on. A
+    // loop that was stalled past the kernel's window therefore resumes only after what the operator turned off in the meantime is off.
+    redirector.setBeatGate(async () => { await reload(); return sw.anyOn() })
     await redirector.start()
     await redirector.configure(port)
     // the lock (4.6 §控制面, D-25): pid + start time + boot id, so a reused pid or a reboot is never "running"; its
@@ -300,10 +315,9 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     // NODE_EXTRA_CA_CERTS (W-4: relays with a private CA rely on it), linger = whether logout ends this daemon
     failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: VERSION, foreground: !!foreground,
       upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: typeof redirector.linger === 'function' ? redirector.linger() : null })
+    syncTracker() // before the first rescan: a harness that is off at start is never judged
     tracker.start()
     await tracker.rescan()
-    const applyPolicy = () => { const st = sw.state(); tracker.setPolicy({ byHarness: Object.fromEntries(Object.entries(st.harnesses).map(([id, h]) => [id, { mode: h.policy, extraHosts: h.extra_hosts }])) }) }
-    applyPolicy()
     await sw.restore()
 
     // The 5 s check (D-26, 4.6 §开关语义): nobody has to run status for these to reach flows/ —
@@ -328,6 +342,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     }
     async function check() {
       if (sw.busy()) return
+      await reload() // without a heartbeat running (nothing attached) this is what notices that the file turned something off
+      if (sw.busy()) return
       const r = await sw.report()
       if (sw.busy()) return // an on / off began while the kernel was read
       if (r.actual === 'unknown') failure('switch', coded(new Error(`the kernel state could not be read (${r.error}); desired is ${r.desired}`), r.error_code || 'helper-error'))
@@ -350,6 +366,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     async function status() {
       // every running-but-untrusted agent says why and what to do (4.6 §确认信任, R4); hosts it never decrypts say why too
       const agents = tracker.agents().map((r) => {
+        // a harness that is off: not judged, not watched, not counted as untrusted (1.6 §1.5)
+        if (r.off) return { pid: r.pid, agent: r.agent, exe: r.exe, trusted: false, off: true, reason: 'off', hint: OFF_HINT, trust_var: null, trust_via: null, decrypt: false, hosts: [], not_via_trust_path: [], unreachable: [], parent_pid: r.ppid ?? null, parent_agent: r.parentAgent ?? null, source: r.source }
         const d = redirector.directCount(r.pid) // {count, error}: unknown is said, never 0 (D-17)
         return { pid: r.pid, agent: r.agent, exe: r.exe, trusted: r.trusted, reason: r.reason, ...(r.trusted ? {} : { hint: hintFor(r.agent, r.reason) }), trust_var: r.trustVar, trust_via: r.trustVia, decrypt: r.decrypt, hosts: r.hosts, not_via_trust_path: r.bypass, unreachable: r.unreachable ?? [], parent_pid: r.ppid ?? null, parent_agent: r.parentAgent ?? null, source: r.source, direct: d.count, ...(d.error ? { direct_error: d.error } : {}) }
       })
@@ -363,7 +381,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         ca: caState, // {ok, not_after} or {ok:false, which, file, reason}: "CA unusable", never "not installed" (D-4)
         unmatched: tracker.unmatched(), // processes two descriptors claim (D-19)
         helper: { pid, proto, build, expected_proto: redirector.expectedProto, ok: proto === redirector.expectedProto, down: helperDown, unparsable_lines: unparsable, timeouts },
-        agents, running_untrusted: agents.filter((a) => !a.trusted).length,
+        agents, running_untrusted: agents.filter((a) => !a.trusted && !a.off).length,
         unjudged: { count: unjudged.length, sample: unjudged.slice(0, 10).map((u) => ({ pid: u.pid, comm: u.comm, errno: u.errno })) },
         health: healthOnDisk(P.dir),
         events: failure.health(), // event lines lost (D-1): stderr had each, the next written line is a log-gap
@@ -371,8 +389,14 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     }
     Object.assign(impl, {
       status,
-      on: async ({ body }) => { const r = await sw.on(body || {}); applyPolicy(); return { ...(await status()), ...(r.noop ? { noop: true } : {}) } },
-      off: async ({ body }) => { const r = await sw.off({ harnesses: (body && body.harnesses) || null }); return { ...(await status()), ...(r.noop ? { noop: true } : {}) } },
+      on: async ({ body }) => { const r = await sw.on(body || {}); syncTracker(); return { ...(await status()), ...(r.noop ? { noop: true } : {}) } },
+      // → {…status, unwatched: [pid], confirmed}: the pids taken out of the kernel watch table, and whether the kernel confirms the state asked for (every
+      // unwatch answered; with no harness left on, the links gone). `now` / `exit` are accepted and ignored until the drain (1.6 §1.3) is wired.
+      off: async ({ body }) => {
+        const r = await sw.off({ harnesses: (body && body.harnesses) || null })
+        const st = await status()
+        return { ...st, ...(r.noop ? { noop: true } : {}), unwatched: r.unwatched, confirmed: r.unwatch_failed.length === 0 && (sw.anyOn() || st.actual === 'off') }
+      },
     })
     markReady()
 

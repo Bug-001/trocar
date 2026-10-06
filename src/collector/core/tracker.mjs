@@ -64,8 +64,9 @@ const statKeyOf = (f) => { try { const st = fs.statSync(f); return `${st.ino}:${
 // direct) and the rest of the table carries on; nothing here is swallowed (review 2 #4).
 // onGone(row, via) is told every agent that leaves the table — its exit event ('exit'), found gone by a rescan
 // ('rescan'), exec'd into a program no descriptor matches ('exec'), or dropped because judging it again threw
-// ('judge-error') — so the daemon records agent-exit and drops the conditions it held (D-24, review D1-4); a row that is off (below) is not
-// told: it was ended by onOff(row), told with the row as it was judged. onUnmatched({pid, exe,
+// ('judge-error') — so the daemon records agent-exit and drops the conditions it held (D-24, review D1-4); a row that is off (below)
+// is told only if it was judged while its harness was on (`reported`): what was recorded about it was ended by onOff(row), told with the row as it
+// was judged, and its exit is still an exit; one that was off since it started was never reported and leaves unreported. onUnmatched({pid, exe,
 // candidates}) is told once per pid that two descriptors both claim: never folded into either, never watched,
 // and never silent (D-19); unmatched() lists them for status.
 // markerDir / caPem: where plugins write their per-pid marker and the asight CA file a marker vouches for (null: no
@@ -86,7 +87,8 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
   const perHarness = new Map() // harness id → {mode, extra}: the policy of that harness; one with no entry uses the default above
   let enabled = null // null: every harness; else the Set of harness ids whose desired state is on
   const isOn = (agent) => enabled === null || enabled.has(agent)
-  const gone = (row, via) => { if (!row.off) onGone(row, via) } // an off row was ended by onOff when it went off
+  const stuck = new Set() // pids whose unwatch failed: the kernel may still steer them, so every reconcile asks again until it is answered
+  const gone = (row, via) => { if (!row.off || row.reported) onGone(row, via) } // a row never reported leaves unreported
 
   async function onExec(facts, cause = null) {
     const prev = table.get(facts.pid)
@@ -98,7 +100,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
   }
 
   function forget(pid) {
-    table.delete(pid); factsOf.delete(pid)
+    table.delete(pid); factsOf.delete(pid); stuck.delete(pid)
     const t = pending.get(pid); if (t) { clearTimeout(t); pending.delete(pid) }
   }
 
@@ -162,6 +164,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     table.set(facts.pid, row)
     try { await redirector.watch(facts.pid, { decrypt: row.decrypt, agent: row.agent }) } catch (e) { row.watchError = String((e && e.message) || e) }
     if (!isOn(row.agent) && table.get(facts.pid) !== row) return row // turned off while the watch was on its way: reconcile has unwatched it, and nothing is said about it
+    stuck.delete(facts.pid) // watched afresh: any unwatch that failed earlier is moot
     onVerdict(row, prev || null)
     return row
   }
@@ -178,24 +181,27 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
   }
 
   // A process of a harness that is not on: a row that says so and nothing else. Never judged, never watched.
-  const offRow = (b) => ({ pid: b.pid, ppid: b.ppid ?? null, agent: b.agent, exe: b.exe ?? null, argv0: b.argv0 ?? null, source: b.source, since: b.since, judged: ++judgedSeq, readErrors: [], parseErrors: [], off: true,
+  const offRow = (b) => ({ pid: b.pid, ppid: b.ppid ?? null, agent: b.agent, exe: b.exe ?? null, argv0: b.argv0 ?? null, source: b.source, since: b.since, judged: ++judgedSeq, readErrors: [], parseErrors: [], off: true, reported: !!b.reported,
     trusted: false, reason: 'off', trustVar: null, trustVia: null, decrypt: false, hosts: [], bypass: [], unreachable: [], proxies: [], wsTerminal: null, parentAgent: b.parentAgent ?? null })
   async function park(facts, agent, prev) {
     factsOf.set(facts.pid, facts) // a later `on` re-judges it from these
     const parent = facts.ppid != null ? table.get(facts.ppid) : null
-    const row = offRow({ pid: facts.pid, ppid: facts.ppid, agent, exe: facts.exe, argv0: (facts.argv || [])[0], source: facts.source, since: prev ? prev.since : now(), parentAgent: parent ? parent.agent : null })
+    const row = offRow({ pid: facts.pid, ppid: facts.ppid, agent, exe: facts.exe, argv0: (facts.argv || [])[0], source: facts.source, since: prev ? prev.since : now(), parentAgent: parent ? parent.agent : null, reported: prev ? !!(prev.reported || !prev.off) : false })
     if (prev && !prev.off) { await takeOff(prev, row); return row } // it was watched an instant ago: the same as reconcile does
     table.set(facts.pid, row)
     return row
   }
   // A row that was judged, now off: its marker deadline goes, the table says off, the kernel stops watching it, the daemon is told.
-  async function takeOff(prev, row = offRow(prev)) {
+  async function takeOff(prev, row = offRow({ ...prev, reported: true })) {
     const t = pending.get(prev.pid); if (t) { clearTimeout(t); pending.delete(prev.pid) }
     table.set(prev.pid, row)
     let ok = true
-    try { await redirector.unwatch(prev.pid) } catch (e) { ok = false; onError(e, { pid: prev.pid, phase: 'unwatch' }) }
+    try { await redirector.unwatch(prev.pid); stuck.delete(prev.pid) } catch (e) { ok = false; stuck.add(prev.pid); onError(e, { pid: prev.pid, phase: 'unwatch' }) }
     onOff(prev)
     return ok
+  }
+  async function askAgain(pid) {
+    try { await redirector.unwatch(pid); stuck.delete(pid); return true } catch (e) { onError(e, { pid, phase: 'unwatch' }); return false }
   }
 
   // Decrypt policy (4.6 §解密策略): `auto` = the harness's known API hosts ∪ the base_url / relay hosts its readers
@@ -270,13 +276,16 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     // ids: the harnesses whose desired state is on (a Set or an array); null: every harness
     setEnabled(ids) { enabled = ids == null ? null : new Set(ids) },
     // Rows of a harness that is no longer enabled go off: unwatched (the kernel stops rewriting and reporting them), then onOff(row).
-    // → {unwatched: [pid], failed: [pid]}: the pids the kernel dropped, and those it could not be asked to (each is also onError's).
+    // → {unwatched: [pid], failed: [pid]}: the pids the kernel dropped, and those it could not be asked to (each is also onError's). A pid whose
+    // unwatch failed before is asked again here, so a repeated `off` is what makes it true: nothing it names may still be steered.
     async reconcile() {
       const unwatched = [], failed = []
-      for (const pid of [...table.keys()].sort((a, b) => a - b)) {
+      const todo = new Set(stuck)
+      for (const [pid, row] of table) if (!row.off && !isOn(row.agent)) todo.add(pid)
+      for (const pid of [...todo].sort((a, b) => a - b)) {
         const row = table.get(pid)
-        if (!row || row.off || isOn(row.agent)) continue
-        ;(await takeOff(row)) ? unwatched.push(pid) : failed.push(pid)
+        if (row && !row.off && isOn(row.agent)) { stuck.delete(pid); continue } // judged again since: its watch is a new one
+        ;((row && !row.off ? await takeOff(row) : await askAgain(pid)) ? unwatched : failed).push(pid)
       }
       return { unwatched, failed }
     },

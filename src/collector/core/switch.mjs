@@ -79,8 +79,9 @@ export function createSwitch({ redirector, stateFile, installed = () => [], ensu
 
   // The hook that brings the kernel watch table to the state just reached (the daemon: tracker.reconcile). Runs while the links still
   // stand; what it returns ({unwatched, failed}) is handed back to the caller. A hook that throws never stops the links coming off.
-  async function runReconcile(turnedOff) {
-    if (!reconcile || !turnedOff.length) return {}
+  // A reload calls it only when it took something away; an `off` request always does, so that repeating it confirms (and retries) the table.
+  async function runReconcile(turnedOff, { always = false } = {}) {
+    if (!reconcile || (!always && !turnedOff.length)) return {}
     try { return (await reconcile({ turnedOff: [...turnedOff] })) || {} } catch (e) {
       onEvent({ event: 'failure', where: 'switch', code: (e && e.code) || 'unwatch-error', reason: `the processes of ${turnedOff.join(', ')} could not be taken out of the kernel watch table (${String((e && e.message) || e)}); the links come off anyway if none is left on` })
       return { failed: [null] }
@@ -158,7 +159,7 @@ export function createSwitch({ redirector, stateFile, installed = () => [], ensu
     for (const id of ids) recording.delete(id)
     const changed = turned.length > 0
     if (changed || dirty) commit(setDesired(state, turned, 'off', new Date()), { tolerate: true }) // D-8: the state that cannot be written never keeps the kernel steering
-    const hooked = await runReconcile(turned)
+    const hooked = await runReconcile(turned, { always: true })
     const extra = { unwatched: hooked.unwatched || [], unwatch_failed: hooked.failed || [] }
     if (!changed && (anyOn() || degraded || (await actual()).actual === 'off')) return report({ noop: true, ...extra })
     await detachIfNoneOn()
