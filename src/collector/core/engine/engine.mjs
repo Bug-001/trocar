@@ -12,7 +12,8 @@ import { createUpstreamTrust, systemRoots } from '../tls/roots.mjs'
 
 // upstreamCa: extra CAs the engine trusts upstream (test seam); systemCa: stands in for the OS store
 // (tests; undefined = read it): PEM text / array, or a systemRoots()-shaped {certs, errors}. The upstream trust set is built once (RFC 4.6 §引擎 5, tls/roots.mjs).
-export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, describe = () => ({}), onError = () => {}, onFailure = null }) {
+// timing (tests): {firstByteTimeoutMs, upstreamSlowMs, preludeStallMs} — the engine's waits, 5 s each by default.
+export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, describe = () => ({}), onError = () => {}, onFailure = null, timing = {} }) {
   const counters = { active: 0, total: 0, decrypted: 0, spliced: 0, lookupMisses: 0, notCaptured: { h2: 0, httpsProxy: 0, upstreamCert: 0, negative: 0, leafError: 0 } }
   const servers = []
   const active = new Set()
@@ -86,7 +87,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     }
     counters.active++
     const ctx = {
-      issuer, store, upstreamCa, upstreamTrust, policy, isRecording, negCache, counters, failure,
+      ...timing, issuer, store, upstreamCa, upstreamTrust, policy, isRecording, negCache, counters, failure,
       connectUpstream: connectUpstream || defaultConnect,
       newFlowId: () => `flow_${String(++flowSeq).padStart(6, '0')}`,
     }

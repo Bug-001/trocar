@@ -461,12 +461,23 @@ export function handleFlow(client, meta, ctx) {
   // Each side's bytes are held until a whole prelude message has arrived, then forwarded unchanged and in
   // order; the proxy's answer — success or refusal — is the only answer the client gets (RFC 4.6 §记录 代理前导).
   function handleSocks(initial, cSock, uSock) {
+    // A message that stays incomplete (a protocol whose first byte merely looks like SOCKS, waiting for its
+    // peer) must not be held forever: after preludeStallMs with no new byte it counts as not followed, and the
+    // caller passes what was held through verbatim (RFC 4.6 §记录 代理前导).
+    const stallMs = ctx.preludeStallMs ?? 5000
     const side = (sock, pre) => {
-      let buf = pre, want = null
+      let buf = pre, want = null, stall = null
+      const arm = () => {
+        if (stall) { clearTimeout(stall); stall = null }
+        if (!want || !buf.length) return
+        stall = setTimeout(() => { stall = null; const w = want; want = null; if (w) w.resolve({ invalid: `incomplete message, no new byte for ${stallMs} ms` }) }, stallMs)
+        if (stall.unref) stall.unref()
+      }
       const pump = () => {
-        if (!want) return
+        if (!want) return arm()
         const r = want.parser(buf)
-        if (!r) return
+        if (!r) return arm()
+        if (stall) { clearTimeout(stall); stall = null }
         const w = want; want = null
         if (r.invalid) return w.resolve(r)
         const raw = buf.subarray(0, r.length); buf = buf.subarray(r.length)
@@ -481,17 +492,18 @@ export function handleFlow(client, meta, ctx) {
     }
     const c = side(cSock, initial), u = side(uSock, Buffer.alloc(0))
     const seen = { c: [], s: [] }
+    let target = meta.dst.address // the host the proxy is asked for, once the request has been read
     socksHandshake({
-      client: c.take,
-      proxy: (parser) => { waitFor('proxy-reply', null); return u.take(parser).then((r) => { waitDone(); return r }) },
+      client: (parser) => c.take(parser).then((r) => { if (r && r.host) target = r.host; return r }),
+      proxy: (parser) => { waitFor('proxy-reply', target); return u.take(parser).then((r) => { waitDone(); return r }) },
       toProxy: (b) => { seen.c.push(b); uSock.write(b) },
       toClient: (b) => { seen.s.push(b); cSock.write(b) },
     }, initial[0]).then(guard((r) => {
       if (finished) return
       // what was forwarded, both ways, verbatim; RFC 1929 username/password are a proxy credential → 0600 (RFC 4.1)
-      if (seen.c.length) rec.prelude = { kind: r.kind ?? (initial[0] === 4 ? 'socks4' : 'socks5'), target: r.host != null ? `${r.host}:${r.port}` : null, client_b64: Buffer.concat(seen.c).toString('base64'), proxy_b64: Buffer.concat(seen.s).toString('base64') }
+      if (seen.c.length) rec.prelude = { kind: r.kind ?? (initial[0] === 4 ? 'socks4' : 'socks5'), target: r.host != null ? `${r.host.includes(':') ? `[${r.host}]` : r.host}:${r.port}` : null, client_b64: Buffer.concat(seen.c).toString('base64'), proxy_b64: Buffer.concat(seen.s).toString('base64') }
       const cRest = c.rest(), uRest = u.rest()
-      const host = r.host != null ? hostOf(`${r.host}:${r.port}`) : null
+      const host = r.host ?? null
       if (r.ok) { if (uRest.length) cSock.write(uRest); return route(cSock, uSock, cRest, host, true) }
       rec.decision = 'tunnel'; rec.host = host
       notCaptured(r.opaque ? 'unknown-protocol' : 'proxy-refused', r.reason)

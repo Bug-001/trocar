@@ -12,13 +12,16 @@ function cstr(buf, at) { // NUL-terminated string starting at `at` → {s, end} 
   return { s: buf.subarray(at, nul).toString('latin1'), end: nul + 1 }
 }
 
+// 16 bytes → the compressed IPv6 text (no brackets), the form CONNECT authorities and socket addresses use
+const v6 = (b) => new URL(`http://[${Array.from({ length: 8 }, (_, i) => b.readUInt16BE(2 * i).toString(16)).join(':')}]`).hostname.slice(1, -1)
+
 function addr(buf, at) { // SOCKS5 ATYP + address + port → {host, port, end} | null | {invalid}
   if (buf.length < at + 1) return null
   const atyp = buf[at]
   let host, end
   if (atyp === 1) { if (buf.length < at + 7) return null; host = [...buf.subarray(at + 1, at + 5)].join('.'); end = at + 5 }
   else if (atyp === 3) { if (buf.length < at + 2) return null; const n = buf[at + 1]; if (buf.length < at + 2 + n + 2) return null; host = buf.subarray(at + 2, at + 2 + n).toString('latin1'); end = at + 2 + n }
-  else if (atyp === 4) { if (buf.length < at + 19) return null; host = `[${Array.from({ length: 8 }, (_, i) => buf.readUInt16BE(at + 1 + 2 * i).toString(16)).join(':')}]`; end = at + 17 }
+  else if (atyp === 4) { if (buf.length < at + 19) return null; host = v6(buf.subarray(at + 1, at + 17)); end = at + 17 }
   else return { invalid: `bad ATYP ${atyp}` }
   return { host, port: buf.readUInt16BE(end), end: end + 2 }
 }
@@ -66,6 +69,7 @@ export function socks5Auth(buf) {
 /** RFC 1929 status: VER=1 STATUS(0 = success). */
 export function socks5AuthStatus(buf) {
   if (buf.length < 2) return null
+  if (buf[0] !== 1) return { invalid: 'bad RFC 1929 status version' }
   return { length: 2, ok: buf[1] === 0 }
 }
 /** SOCKS5 request / reply: VER=5 CMD|REP RSV ATYP ADDR PORT. */
@@ -107,7 +111,7 @@ export async function socksHandshake(io, first) {
   if (m.method === 2) {
     const a = await io.client(socks5Auth); if (a.invalid) return opaque(`socks5: ${a.invalid}`, { kind: 'socks5' })
     io.toProxy(a.raw)
-    const s = await io.proxy(socks5AuthStatus)
+    const s = await io.proxy(socks5AuthStatus); if (s.invalid) return opaque(`socks5: ${s.invalid}`, { kind: 'socks5' })
     io.toClient(s.raw)
     if (!s.ok) return { ok: false, kind: 'socks5', reason: 'socks5-auth-failed' }
   } else if (m.method !== 0) return opaque(`socks5: method ${m.method} not followed`, { kind: 'socks5' })

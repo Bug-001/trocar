@@ -25,7 +25,7 @@ const b64 = (s) => Buffer.from(s, 'base64')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 // The engine steers every accepted connection to `dst()` (the mock proxy, or a stand-in in front of it).
-async function lab(t, proxyOpts, { proxies = () => [], trustLab = true, dst = null, policy = () => true, decrypt = true } = {}) {
+async function lab(t, proxyOpts, { proxies = () => [], trustLab = true, dst = null, policy = () => true, decrypt = true, timing = {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-proxy-'))
   const labCa = makeLabCa(path.join(dir, 'ca'))
   const tlsOpts = { key: fs.readFileSync(labCa.key), cert: fs.readFileSync(labCa.cert) }
@@ -33,12 +33,12 @@ async function lab(t, proxyOpts, { proxies = () => [], trustLab = true, dst = nu
   const proxy = await startMockProxy({ target: { port: mock.port }, ...proxyOpts, ...(proxyOpts.tls ? { tls: tlsOpts } : {}) })
   const store = createRecordStore({ root: path.join(dir, 'rec') })
   const envelopes = [], flows = [], failures = []
-  const port0 = dst ? await dst(proxy.port) : proxy.port
+  const port0 = dst ? await dst(proxy.port, mock.port) : proxy.port
   const engine = createEngine({
     redirector: createStaticRedirector({ dst: { address: '127.0.0.1', port: port0, family: 4 }, pid: 21, agent: 'kimi', decrypt }), policy,
     issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: trustLab ? fs.readFileSync(labCa.caCert) : undefined,
     store: { envelope: (e) => { envelopes.push(e); return store.envelope(e) }, flow: (f) => { flows.push(structuredClone(f)); return store.flow(f) }, failure: (f) => { failures.push(f); return store.failure(f) } },
-    describe: () => ({ proxies: proxies(proxy.port) }),
+    describe: () => ({ proxies: proxies(proxy.port) }), timing,
   })
   const { port } = await engine.listen({})
   t.after(async () => { await engine.close(); await proxy.close(); await mock.close(); store.close(); fs.rmSync(dir, { recursive: true, force: true }) })
@@ -280,4 +280,117 @@ test('an own https:// proxy: the client goes after CONNECT 200 without starting 
   if (!L.flows.length) { outer.destroy(); L.proxy.close(); assert.fail('the flow never finished') }
   const f = L.flows[0]
   assert.deepEqual([f.decision, f.not_captured, f.error.type, f.error.side, f.via_proxy.terminated], ['tunnel', 'error', 'closed_before_decision', 'client', true])
+})
+
+
+// ── review B: eager SOCKS clients through the engine, mid-prelude closes, refusals and BIND end to end, IPv6,
+// a stalled partial message ───────────────────────────────────────────────────────────────────────────────────
+// A SOCKS5 stand-in that answers each message 40 ms late and notes whether bytes of the NEXT message had
+// already reached it before it answered (they must not: the engine holds them until the proxy has answered).
+async function strictSocks5(t, mockPort) {
+  const log = { early: false, got: [] }
+  const s = net.createServer((c) => {
+    c.on('error', () => {})
+    let buf = Buffer.alloc(0), stage = 0, busy = false
+    const want = () => (stage === 0 ? (buf.length >= 2 ? 2 + buf[1] : Infinity) : stage === 1 ? (buf.length >= 5 ? 7 + buf[4] : Infinity) : Infinity)
+    const step = () => {
+      if (busy || stage > 1) return
+      const n = want(); if (buf.length < n) return
+      if (buf.length > n) log.early = true
+      log.got.push(buf.subarray(0, n)); buf = buf.subarray(n); busy = true
+      setTimeout(() => {
+        busy = false
+        if (stage === 0) { c.write(Buffer.from([5, 0])); stage = 1; return step() }
+        stage = 2; c.write(Buffer.from([5, 0, 0, 1, 0, 0, 0, 0, 0, 0]))
+        const up = net.connect(mockPort, '127.0.0.1'); up.on('error', () => c.destroy()); c.on('close', () => up.destroy())
+        if (buf.length) up.write(buf)
+        c.removeAllListeners('data'); c.pipe(up); up.pipe(c)
+      }, 40)
+    }
+    c.on('data', (d) => { if (stage > 1) return; buf = Buffer.concat([buf, d]); step() })
+  })
+  await new Promise((r) => s.listen(0, '127.0.0.1', r)); t.after(() => s.close())
+  return { port: s.address().port, log }
+}
+const greeting = Buffer.from([5, 1, 0])
+const request = Buffer.concat([Buffer.from([5, 1, 0, 3, HOST.length]), Buffer.from(HOST), Buffer.from([1, 187])])
+
+test('review B · an eager SOCKS5 client (greeting + request in one write): each message reaches the proxy only after the previous answer; decrypted', T, async (t) => {
+  let sp
+  const L = await lab(t, { kind: 'socks5' }, { dst: async (_, mockPort) => { sp = await strictSocks5(t, mockPort); return sp.port } })
+  const raw = net.connect(L.port, '127.0.0.1'); await once(raw, 'connect')
+  raw.write(Buffer.concat([greeting, request]))
+  let got = Buffer.alloc(0); const onD = (d) => { got = Buffer.concat([got, d]) }; raw.on('data', onD)
+  for (let i = 0; i < 300 && got.length < 12; i++) await sleep(5)
+  raw.removeListener('data', onD)
+  assert.ok(got.equals(Buffer.from([5, 0, 5, 0, 0, 1, 0, 0, 0, 0, 0, 0])), 'both answers, verbatim, in order')
+  const resp = await exchange(raw); await L.settled(1)
+  assert.equal(sp.log.early, false, 'the request was held until the proxy had answered the greeting')
+  assert.deepEqual(sp.log.got.map((b) => b.toString('hex')), [greeting.toString('hex'), request.toString('hex')])
+  assert.ok(resp.length > 0); assert.equal(L.envelopes.length, 1)
+  assert.ok(b64(L.flows[0].prelude.client_b64).equals(Buffer.concat([greeting, request])))
+})
+
+test('review B · a SOCKS5 request and the ClientHello in one write: the ClientHello goes on into the tunnel and is decrypted', T, async (t) => {
+  const L = await lab(t, { kind: 'socks5' })
+  const raw = net.connect(L.port, '127.0.0.1'); await once(raw, 'connect')
+  raw.write(greeting); await once(raw, 'data') // [5, 0]
+  let first = true, head = Buffer.alloc(0), passed = false
+  const d = new Duplex({ read() {}, write(chunk, enc, cb) { if (first) { first = false; raw.write(Buffer.concat([request, chunk]), cb) } else raw.write(chunk, cb) }, final(cb) { raw.end(); cb() } })
+  raw.on('data', (x) => { if (passed) return d.push(x); head = Buffer.concat([head, x]); if (head.length < 10) return; passed = true; if (head.length > 10) d.push(head.subarray(10)) })
+  raw.on('end', () => d.push(null)); raw.on('error', (e) => d.destroy(e))
+  const resp = await Promise.race([exchange(d), sleep(5000).then(() => { raw.destroy(); throw new Error('no tunnelled exchange') })])
+  await L.settled(1)
+  const entry = L.mock.state.log.find((e) => e.type === 'request')
+  assert.ok(resp.equals(b64(entry.resp_raw_b64))); assert.equal(L.envelopes.length, 1)
+  assert.deepEqual([L.flows[0].decision, L.flows[0].inner], ['tunnel', 'decrypt'])
+})
+
+for (const who of ['client', 'proxy']) {
+  test(`review B · the ${who} goes after the SOCKS5 greeting: one error row, no prelude`, T, async (t) => {
+    const L = await lab(t, { kind: 'socks5' }, { dst: async () => { const s = net.createServer((c) => { c.on('error', () => {}); c.once('data', () => { c.write(Buffer.from([5, 0])); if (who === 'proxy') setTimeout(() => c.destroy(), 30) }) }); await new Promise((r) => s.listen(0, '127.0.0.1', r)); t.after(() => s.close()); return s.address().port } })
+    const raw = net.connect(L.port, '127.0.0.1'); await once(raw, 'connect'); raw.on('error', () => {})
+    raw.write(greeting); await once(raw, 'data')
+    if (who === 'client') raw.end(); else await once(raw, 'close')
+    await L.settled(1); raw.destroy()
+    assert.equal(L.flows.length, 1)
+    assert.deepEqual([L.flows[0].decision, L.flows[0].not_captured, L.flows[0].prelude], ['error', 'error', undefined])
+  })
+}
+
+test('review B · SOCKS5 with no acceptable method, and a BIND request, through the engine', T, async (t) => {
+  const L = await lab(t, { kind: 'socks5', auth: { username: 'u', password: 'p' } }) // wants method 2; the client offers only 0
+  const s = await socks(L.port, { version: 5 }); s.sock.destroy(); await L.settled(1)
+  assert.ok(Buffer.concat(s.got).equals(Buffer.from([5, 0xff])))
+  assert.deepEqual([L.flows[0].not_captured, L.flows[0].reason], ['proxy-refused', 'socks5-no-acceptable-method'])
+  const M = await lab(t, { kind: 'socks5' })
+  const raw = net.connect(M.port, '127.0.0.1'); await once(raw, 'connect'); raw.on('error', () => {})
+  raw.write(greeting); await once(raw, 'data')
+  raw.write(Buffer.from([5, 2, 0, 1, 127, 0, 0, 1, 1, 187])) // BIND
+  await sleep(50); raw.destroy(); await M.settled(1)
+  assert.deepEqual([M.flows[0].decision, M.flows[0].not_captured, M.flows[0].reason], ['tunnel', 'unknown-protocol', 'socks5: not CONNECT'])
+  assert.equal(b64(M.proxy.log[0].in_b64).subarray(3).toString('hex'), '05020001' + '7f000001' + '01bb', 'the BIND request reached the proxy verbatim')
+})
+
+test('review B · IPv6 targets: SOCKS5 ATYP 4 and a CONNECT authority are recorded in the same compressed form', T, async (t) => {
+  const L = await lab(t, { kind: 'socks5', refuse: true })
+  const raw = net.connect(L.port, '127.0.0.1'); await once(raw, 'connect'); raw.on('error', () => {})
+  raw.write(greeting); await once(raw, 'data')
+  raw.write(Buffer.from([5, 1, 0, 4, ...Array(15).fill(0), 1, 1, 187])); await once(raw, 'data'); raw.destroy(); await L.settled(1)
+  assert.deepEqual([L.flows[0].prelude.target, L.flows[0].host], ['[::1]:443', '::1'])
+  const C = await lab(t, { kind: 'connect', refuse: true })
+  const c = net.connect(C.port, '127.0.0.1'); await once(c, 'connect'); c.on('error', () => {})
+  c.write('CONNECT [::1]:443 HTTP/1.1\r\n\r\n'); await once(c, 'data'); c.destroy(); await C.settled(1)
+  assert.deepEqual([C.flows[0].prelude.target, C.flows[0].host], ['[::1]:443', '::1'])
+})
+
+test('review B · a first byte that only looks like SOCKS (0x05, then a partial "greeting" and silence) is passed through after the stall, not held', T, async (t) => {
+  const seen = []
+  const L = await lab(t, { kind: 'socks5' }, { timing: { preludeStallMs: 100 }, dst: async () => { const s = net.createServer((c) => { c.on('error', () => {}); c.on('data', (d) => { seen.push(d); c.write('pong') }) }); await new Promise((r) => s.listen(0, '127.0.0.1', r)); t.after(() => s.close()); return s.address().port } })
+  const raw = net.connect(L.port, '127.0.0.1'); await once(raw, 'connect'); raw.on('error', () => {})
+  raw.write(Buffer.from([5, 9, 1, 2])) // claims 9 methods, sends 2, then waits for its peer
+  const [answer] = await Promise.race([once(raw, 'data'), sleep(3000).then(() => { raw.destroy(); throw new Error('held forever') })])
+  raw.destroy(); await L.settled(1)
+  assert.equal(answer.toString(), 'pong'); assert.equal(Buffer.concat(seen).toString('hex'), '05090102', 'the held bytes, verbatim')
+  assert.deepEqual([L.flows[0].not_captured, /incomplete/.test(L.flows[0].reason)], ['unknown-protocol', true])
 })
