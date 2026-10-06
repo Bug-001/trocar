@@ -85,6 +85,8 @@ export const HEADER_SESSION_KEYS = Object.freeze([...new Set([
 
 // Legacy-only row: the pre-D37 DeepSeek CLI. Reachable by UA inference only, never by proc.agent.
 const LEGACY_DEEPSEEK_CLI = { id: 'deepseek-cli', ua: /deepseek/, legacy: true };
+// the ids harnessOf can return that are in no table row: a retention row must exist for each (src/dissect/traffic.mjs::retentionHarnessIds)
+export const LEGACY_HARNESS_IDS = Object.freeze([LEGACY_DEEPSEEK_CLI.id]);
 const byId = (id) => HARNESSES.find((h) => h.id === id);
 const UA_ORDER = [byId('cc'), byId('opencode'), byId('codex'), LEGACY_DEEPSEEK_CLI]; // opencode before codex, as before D37
 const BY_AGENT = new Map(HARNESSES.flatMap((h) => h.agents.map((a) => [a, h])));

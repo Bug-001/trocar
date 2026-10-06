@@ -64,7 +64,7 @@ const runTag = () => Date.now().toString(36).slice(-4) + randomBytes(2).toString
 // and blind tunnels that fail (outside the capture target) are only counted (`server.legacyStats`) and logged (L-10).
 // D40: the decrypt scope is unchanged (targetHost only); what changes is what an envelope keeps — every body verbatim up to
 // maxBodyBytes (64 MiB; the forwarded bytes are never capped), `host` = the CONNECT target, traffic_class, body_wire_bytes,
-// and `retention` ({host, method, endpoint}) → {class, level}, sampled when a request starts: at `log` the bodies are
+// and `retention` ({host, method, endpoint, headers}) → {class, level}, sampled when a request starts: at `log` the bodies are
 // counted, not kept (src/capture/retention.mjs). The running process picks this up only when the operator restarts it.
 export function createMitmProxy({ targetHost, leaf, upstreamProxy, connectUpstream, blindTunnel, keepRawSse = false, onEnvelope, onEvent = () => {}, log = () => {}, retention = null, maxBodyBytes = MAX_BODY_BYTES }) {
   const connect = connectUpstream || makeUpstreamConnector({ upstreamProxy, targetHost })
@@ -79,7 +79,7 @@ export function createMitmProxy({ targetHost, leaf, upstreamProxy, connectUpstre
     const tsRequest = isoStamp()
     const t0 = process.hrtime.bigint()
     const dur = () => Math.round(Number(process.hrtime.bigint() - t0) / 1e6)
-    const rt = sampleRetention(retention, { host: targetHost, method: req.method, endpoint: req.url }) // at request start (D40)
+    const rt = sampleRetention(retention, { host: targetHost, method: req.method, endpoint: req.url, headers: req.headers }) // at request start (D40)
     const chunks = []
     req.on('data', (c) => chunks.push(c))
     req.on('end', () => {

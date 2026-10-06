@@ -7,7 +7,7 @@
 // harness name and no host pattern (D20, 0.1 §5); the wiring (bin/asight.mjs for the old MITM and reverse proxy,
 // src/collector/daemon.mjs for the engine) builds one classifier with makeClassifier() and hands it to createRetention().
 // Leaf module (0.1 §2): imports only ./harnesses.mjs and ./vendors.mjs.
-import { HARNESSES, harnessOf } from './harnesses.mjs';
+import { HARNESSES, LEGACY_HARNESS_IDS, harnessOf } from './harnesses.mjs';
 import { hostOf } from './vendors.mjs';
 
 export const TRAFFIC_CLASS_IDS = Object.freeze(['llm', 'token-count', 'session-sync', 'telemetry', 'files', 'account', 'other']);
@@ -31,8 +31,13 @@ const pathOf = (endpoint) => String(endpoint || '').split('?')[0];
 
 /** The harness id for a collector `proc.agent` (either spelling), 'unknown' when the table does not know it. */
 export function harnessIdOfAgent(agent) { return harnessOf({ proc: { agent: typeof agent === 'string' ? agent : null } }).id || 'unknown'; }
-/** Every harness id the settings may name: the table's rows plus 'unknown' (an agent no row claims). */
-export function retentionHarnessIds(rows = HARNESSES) { return [...rows.map((h) => h.id), 'unknown']; }
+/** The harness id of a request seen with NO process identity (the old reverse proxy and MITM), by its headers — the read side's own UA inference
+ *  (harnessOf, what the ETL files the call under), 'unknown' when no UA names one. The setting that applies to a call is the one its row in the
+ *  sizes table is filed under. */
+export function harnessIdOfHeaders(headers) { return harnessOf({ req_headers: headers && typeof headers === 'object' ? headers : {} }).id || 'unknown'; }
+/** Every harness id the settings may name: the table's rows, the legacy ids a UA can still infer (deepseek-cli: no row, an old capture's name),
+ *  and 'unknown' (an agent or a UA no row claims). Every id harnessOf can return is in it, so no row the board lists is one setRetention rejects. */
+export function retentionHarnessIds(rows = HARNESSES) { return [...rows.map((h) => h.id), ...LEGACY_HARNESS_IDS.filter((id) => !rows.some((h) => h.id === id)), 'unknown']; }
 
 /** compileTraffic(rows, onInvalid) → Map harnessId → [{test(host, path), class}]. An entry whose class is not one of the
  *  four data classes or whose path regex does not compile is skipped and handed to onInvalid({harness, entry, reason}). */

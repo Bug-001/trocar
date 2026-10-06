@@ -174,8 +174,8 @@ export function bodyRetentionOf(rec) {
   return 'full';
 }
 // → null for a call whose bodies are all there, else {retention, label, text, harness?, class?}. The label of a `log` call names
-// the setting that applied: the collector's records carry proc (the harness the level was looked up under), the old capture
-// paths have none and applied the `cc` row (RFC 4.6 §记录).
+// the setting that applied: the collector's records carry proc (the harness the level was looked up under); the old capture
+// paths have none and told the harness by the UA, the way harnessOf does here (RFC 4.6 §记录).
 export function retentionLabelOf(rec) {
   const retention = bodyRetentionOf(rec);
   if (retention === 'legacy-meta') {
@@ -183,7 +183,7 @@ export function retentionLabelOf(rec) {
       text: `${LEGACY_META_TEXT}: the request body was stored as its length only, so what was sent cannot be shown (telemetry above all: only the number of events accepted was visible, never what was reported)` };
   }
   if (retention === 'log') {
-    const harness = rec.proc ? (harnessOf(rec).id || 'unknown') : 'cc';
+    const harness = harnessOf(rec).id || 'unknown'; // proc.agent, or — an old capture has none — the UA, as the old capture itself told them apart
     const cls = trafficClassOf(rec);
     const label = `只记日志 · 用户设置 ${harness} · ${cls}`;
     return { retention, harness, class: cls, label, text: `${label}: the headers and sizes are kept, the request and reply bodies are not (they were not stored, so none is shown — this is not an empty body)` };

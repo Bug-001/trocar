@@ -34,7 +34,7 @@ test('`asight capture` applies retention.json as the cc row: bad file → full +
   let err = ''; p.stderr.on('data', (d) => { err += d })
   const send = (body) => new Promise((resolve, reject) => {
     const port = events(home).find((x) => x.event === 'mitm-start').port
-    const r = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/v1/messages', headers: { 'content-type': 'application/json', 'x-api-key': 'sk-k' } }, (res) => { res.resume(); res.on('end', resolve) }); r.on('error', reject); r.end(body)
+    const r = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/v1/messages', headers: { 'content-type': 'application/json', 'x-api-key': 'sk-k', 'user-agent': 'claude-cli/2.1.0 (external, cli)' } }, (res) => { res.resume(); res.on('end', resolve) }); r.on('error', reject); r.end(body)
   })
   try {
     assert.ok(await until(() => events(home).some((x) => x.event === 'mitm-start')), `started (stderr: ${err})`)
@@ -60,7 +60,7 @@ test('`asight capture` applies retention.json as the cc row: bad file → full +
 
 // ── review (F10): the old capture's wiring, callable: what it does with a traffic pattern that cannot be used, a bad file, and the `cc` row ───────
 // It was a function inside bin/asight.mjs; replacing its `onInvalid` with `() => {}` left every test green (D38: a config error is never silent).
-test('buildLegacyRetention: a traffic pattern that cannot be used is a failure line (where retention, code pattern-invalid) naming the harness and the entry; a bad file is forwarded; the cc row decides', () => {
+test('buildLegacyRetention: a traffic pattern that cannot be used is a failure line (where retention, code pattern-invalid) naming the harness and the entry; a bad file is forwarded; the harness the UA names decides (the cc row here)', () => {
   const dir = tmpDir('asight-legwire-'), file = path.join(dir, 'retention.json')
   const events = []
   const rows = [{ id: 'cc', traffic: [{ host: 'api.anthropic.com', class: 'telemetry', path: '(' /* does not compile */ }, { host: 'api.anthropic.com', class: 'files', path: '^/up' }] }]
@@ -72,12 +72,13 @@ test('buildLegacyRetention: a traffic pattern that cannot be used is a failure l
   assert.deepEqual(checkRecord(inv[0]), [], 'a record the health reader accepts')
   // the good pattern still classifies, and the setting of the cc row is what applies to the old capture
   fs.writeFileSync(file, JSON.stringify({ version: 1, levels: { cc: { files: 'log' }, codex: { telemetry: 'log' } } }))
-  assert.deepEqual(decide({ host: 'api.anthropic.com', method: 'POST', endpoint: '/up/x' }), { harness: 'cc', class: 'files', level: 'log' })
-  assert.equal(decide({ host: 'api.anthropic.com', method: 'POST', endpoint: '/other' }).level, 'full', 'codex\'s setting is not the old capture\'s')
+  const CC = { 'user-agent': 'claude-cli/2.1.0 (external, cli)' }
+  assert.deepEqual(decide({ host: 'api.anthropic.com', method: 'POST', endpoint: '/up/x', headers: CC }), { harness: 'cc', class: 'files', level: 'log' })
+  assert.equal(decide({ host: 'api.anthropic.com', method: 'POST', endpoint: '/other', headers: CC }).level, 'full', 'codex\'s setting is not a Claude Code call\'s')
   // a file that cannot be parsed: every call is full, and the problem is forwarded to onEvent (not swallowed)
   fs.writeFileSync(file, '{ torn'); const later = new Date(Date.now() + 5000); fs.utimesSync(file, later, later)
   const wire = buildLegacyRetention({ file, rows, onEvent: (e) => events.push(e) })
-  assert.equal(wire({ host: 'api.anthropic.com', method: 'POST', endpoint: '/up/x' }).level, 'full')
+  assert.equal(wire({ host: 'api.anthropic.com', method: 'POST', endpoint: '/up/x', headers: CC }).level, 'full')
   assert.ok(events.some((e) => e.code === 'retention-unparsable' && e.where === 'retention'), 'the unparsable file is a line')
 })
 
@@ -98,7 +99,7 @@ test('`asight mitm` applies retention.json: a telemetry call is kept in full by 
     const ca = fs.readFileSync(path.join(home, '.asight', 'ca', 'atrace-ca.crt'))
     const sock = net.connect(port, '127.0.0.1', () => sock.write('CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n'))
     sock.once('data', () => {
-      const t = tls.connect({ socket: sock, servername: 'api.anthropic.com', ca }, () => t.write(`POST /api/event_logging/v2/batch HTTP/1.1\r\nHost: api.anthropic.com\r\nContent-Type: application/json\r\nContent-Length: ${BODY.length}\r\nConnection: close\r\n\r\n${BODY}`))
+      const t = tls.connect({ socket: sock, servername: 'api.anthropic.com', ca }, () => t.write(`POST /api/event_logging/v2/batch HTTP/1.1\r\nHost: api.anthropic.com\r\nUser-Agent: claude-cli/2.1.0 (external, cli)\r\nContent-Type: application/json\r\nContent-Length: ${BODY.length}\r\nConnection: close\r\n\r\n${BODY}`))
       let got = ''; t.on('data', (c) => { got += c }); t.on('end', () => resolve(got)); t.on('error', reject)
     })
     sock.on('error', reject)

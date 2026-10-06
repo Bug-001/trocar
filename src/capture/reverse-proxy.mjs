@@ -47,7 +47,7 @@ function makeConnectTunnel(targetHost, targetPort, proxyUrl) {
 const runTag = () => Date.now().toString(36).slice(-4) + randomBytes(2).toString('hex');
 // onEvent (D38, RFC 4.1 过渡期): an upstream that closes mid-response, an SSE stream that cannot be decompressed
 // (response-tee.mjs) — the CLI appends them to ~/.asight/logs/mitm-events.ndjson.
-// retention (D40): ({host, method, endpoint}) → {class, level}, sampled when a request starts (src/capture/retention.mjs);
+// retention (D40): ({host, method, endpoint, headers}) → {class, level}, sampled when a request starts (src/capture/retention.mjs);
 // without one every call is `full`. maxBodyBytes: the storage cap per body, 64 MiB; the forwarded bytes are never capped.
 export function createReverseProxy({ target, upstreamProxy = '', keepRawSse = false, onEnvelope, onEvent = () => {}, retention = null, maxBodyBytes = MAX_BODY_BYTES }) {
   const TARGET = target instanceof URL ? target : new URL(target)
@@ -59,7 +59,7 @@ export function createReverseProxy({ target, upstreamProxy = '', keepRawSse = fa
     const id = `req_${run}-${String(++seq).padStart(5, '0')}`
     const tsRequest = isoStamp()
     const t0 = process.hrtime.bigint()
-    const rt = sampleRetention(retention, { host: TARGET.hostname, method: req.method, endpoint: req.url }) // at request start (D40)
+    const rt = sampleRetention(retention, { host: TARGET.hostname, method: req.method, endpoint: req.url, headers: req.headers }) // at request start (D40)
     const chunks = []
     req.on('data', (c) => chunks.push(c))
     req.on('end', () => {

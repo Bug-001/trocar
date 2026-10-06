@@ -175,6 +175,25 @@ test('4.4 #16 — control ON: a valid request changes exactly one cell, writes 0
   assert.deepEqual([sha(b.dbPath), st(b.dbPath)], dbBefore, 'and so is the derived store')
 })
 
+test('4.4 #16 — every row the report lists is a row POST /control/retention accepts: the UA-inferred deepseek-cli (no table row) included (D40 audit)', async () => {
+  const b = await sandbox()
+  // a record from an old capture whose UA names the legacy DeepSeek CLI: the ETL files it under `deepseek-cli`, so the board lists that row
+  const rec = sized(full({ id: 'ds1', at: '2026-10-07T07:00:00.000Z', proc: null, headers: { 'user-agent': 'deepseek-cli/0.9', host: 'api.deepseek.com' }, extra: { capture: 'mitm' } }), 400)
+  const dbPath = path.join(b.home, 'ds.duckdb'), db = await openDb(dbPath)
+  try { await applyDDL(db.connection); await runEtl([rec], db.connection) } finally { await db.close() }
+  const { server, port } = await serve({ dbPath, healthHome: b.home, control: true })
+  try {
+    const csrf = await tokenOf(port)
+    const rep = (await call(port, 'GET', '/api/retention')).json
+    assert.ok(rep.harnesses.includes('deepseek-cli'), 'the board lists the row')
+    assert.ok(rep.known_harnesses.includes('deepseek-cli'), 'and it is one the settings know')
+    for (const h of rep.harnesses) {
+      const r = await post(port, csrf, { harness: h, class: 'telemetry', level: 'log' })
+      assert.equal(r.status, 200, `${h}: a listed row is a settable one (it was 400 unknown harness for deepseek-cli)`)
+    }
+  } finally { server.close() }
+})
+
 test('4.4 #16 — a settings file that cannot be read is not overwritten: 409 with the reason, nothing changed', async () => {
   const b = await sandbox()
   const file = path.join(b.home, 'retention.json')
