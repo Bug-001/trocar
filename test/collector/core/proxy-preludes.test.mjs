@@ -287,7 +287,7 @@ test('an own https:// proxy: the client goes after CONNECT 200 without starting 
 // a stalled partial message ───────────────────────────────────────────────────────────────────────────────────
 // A SOCKS5 stand-in that answers each message 40 ms late and notes whether bytes of the NEXT message had
 // already reached it before it answered (they must not: the engine holds them until the proxy has answered).
-async function strictSocks5(t, mockPort) {
+async function strictSocks5(t, mockPort, delay = 40) {
   const log = { early: false, got: [] }
   const s = net.createServer((c) => {
     c.on('error', () => {})
@@ -305,9 +305,9 @@ async function strictSocks5(t, mockPort) {
         const up = net.connect(mockPort, '127.0.0.1'); up.on('error', () => c.destroy()); c.on('close', () => up.destroy())
         if (buf.length) up.write(buf)
         c.removeAllListeners('data'); c.pipe(up); up.pipe(c)
-      }, 40)
+      }, delay)
     }
-    c.on('data', (d) => { if (stage > 1) return; buf = Buffer.concat([buf, d]); step() })
+    c.on('data', (d) => { if (stage > 1) return; if (busy) log.early = true; buf = Buffer.concat([buf, d]); step() }) // bytes while an answer is pending came early
   })
   await new Promise((r) => s.listen(0, '127.0.0.1', r)); t.after(() => s.close())
   return { port: s.address().port, log }
@@ -393,6 +393,75 @@ test('review B · a first byte that only looks like SOCKS (0x05, then a partial 
   raw.destroy(); await L.settled(1)
   assert.equal(answer.toString(), 'pong'); assert.equal(Buffer.concat(seen).toString('hex'), '05090102', 'the held bytes, verbatim')
   assert.deepEqual([L.flows[0].not_captured, /incomplete/.test(L.flows[0].reason)], ['unknown-protocol', true])
+})
+
+// review TR-2: a whole message that only looks like SOCKS. Its first bytes parse as a complete SOCKS5 greeting
+// (05 01 00) or SOCKS4 request (04 01 … NUL at byte 8), so they are forwarded and the engine waits for a proxy answer —
+// but the peer is a client-first server waiting for the rest of the message, which the engine held: both sides waited
+// forever. The engine must not hold bytes for either side (RFC 4.6 §记录 代理前导).
+async function waitingServer(t, need) {
+  const got = []
+  const s = net.createServer((c) => { c.on('error', () => {}); let n = 0; c.on('data', (d) => { got.push(d); n += d.length; if (n >= need) c.write('REPLY') }) })
+  await new Promise((r) => s.listen(0, '127.0.0.1', r)); t.after(() => s.close())
+  return { port: s.address().port, got }
+}
+const mongoLike = Buffer.alloc(261, 0x41); mongoLike.writeUInt32LE(261, 0) // 05 01 00 00 …: reads as greeting {1 method: 0}
+const socks4Like = Buffer.alloc(260, 0); socks4Like.writeUInt32LE(260, 0); socks4Like.fill(0x41, 16) // 04 01 00 00 … NUL at 8
+for (const [name, msg, kind] of [['SOCKS5 greeting', mongoLike, 'socks5'], ['SOCKS4 request', socks4Like, 'socks4']]) {
+  test(`review TR-2 · a client-first message whose head parses as a whole ${name}: the held rest reaches the server after the stall, the reply reaches the client`, T, async (t) => {
+    let srv
+    const L = await lab(t, { kind: 'socks5' }, { timing: { preludeStallMs: 100 }, dst: async () => { srv = await waitingServer(t, msg.length); return srv.port } })
+    const raw = net.connect(L.port, '127.0.0.1'); await once(raw, 'connect'); raw.on('error', () => {})
+    raw.write(msg)
+    const [answer] = await Promise.race([once(raw, 'data'), sleep(3000).then(() => { raw.destroy(); throw new Error('held forever') })])
+    raw.destroy(); await L.settled(1)
+    assert.equal(answer.toString(), 'REPLY')
+    assert.ok(Buffer.concat(srv.got).equals(msg), 'the server got the whole message, verbatim, in order')
+    const f = L.flows[0]
+    assert.deepEqual([f.decision, f.not_captured, f.prelude.kind], ['tunnel', 'unknown-protocol', kind])
+    assert.match(f.reason, new RegExp(`^${kind}: incomplete exchange, the proxy sent nothing for 100 ms while \\d+ bytes were held$`))
+  })
+}
+
+test('review TR-2 · bytes the client keeps sending while the proxy is silent do not restart the clock: the held bytes go after the stall', T, async (t) => {
+  let srv
+  const L = await lab(t, { kind: 'socks5' }, { timing: { preludeStallMs: 100 }, dst: async () => { srv = await waitingServer(t, 4); return srv.port } })
+  const raw = net.connect(L.port, '127.0.0.1'); await once(raw, 'connect'); raw.on('error', () => {})
+  raw.write(Buffer.from([5, 1, 0]))
+  const drip = setInterval(() => raw.write(Buffer.from([0x41])), 20) // the client keeps talking; the "proxy" never answers
+  t.after(() => clearInterval(drip))
+  const [answer] = await Promise.race([once(raw, 'data'), sleep(1000).then(() => { clearInterval(drip); raw.destroy(); throw new Error('the client\'s own bytes kept the rest held') })])
+  clearInterval(drip); raw.destroy(); await L.settled(1)
+  assert.equal(answer.toString(), 'REPLY')
+  assert.equal(Buffer.concat(srv.got).subarray(0, 4).toString('hex'), '05010041')
+  assert.match(L.flows[0].reason, /^socks5: incomplete exchange/)
+})
+
+test('review TR-2 · an eager SOCKS5 client meets a proxy that answers only after the stall: both messages reach it verbatim and in order, the tunnel is spliced, nothing is lost', T, async (t) => {
+  let sp
+  const L = await lab(t, { kind: 'socks5' }, { timing: { preludeStallMs: 100 }, dst: async (_, mockPort) => { sp = await strictSocks5(t, mockPort, 300); return sp.port } })
+  const raw = net.connect(L.port, '127.0.0.1'); await once(raw, 'connect')
+  raw.write(Buffer.concat([greeting, request]))
+  let got = Buffer.alloc(0); const onD = (d) => { got = Buffer.concat([got, d]) }; raw.on('data', onD)
+  for (let i = 0; i < 400 && got.length < 12; i++) await sleep(5)
+  raw.removeListener('data', onD)
+  assert.ok(got.equals(Buffer.from([5, 0, 5, 0, 0, 1, 0, 0, 0, 0, 0, 0])), 'both answers, verbatim, in order')
+  const resp = await exchange(raw, fs.readFileSync(L.labCa.caCert)); await L.settled(1) // the client talks to the real upstream
+  assert.equal(sp.log.early, true, 'the request was let go after the stall, not held for the proxy')
+  assert.deepEqual(sp.log.got.map((b) => b.toString('hex')), [greeting.toString('hex'), request.toString('hex')])
+  const entry = L.mock.state.log.find((e) => e.type === 'request')
+  assert.ok(resp.equals(b64(entry.resp_raw_b64))); assert.equal(L.envelopes.length, 0)
+  assert.deepEqual([L.flows[0].decision, L.flows[0].not_captured], ['tunnel', 'unknown-protocol'])
+  assert.equal(L.flows[0].reason, `socks5: incomplete exchange, the proxy sent nothing for 100 ms while ${request.length} bytes were held`)
+})
+
+test('review TR-2 · a SOCKS5 proxy that answers each message only after the stall, with nothing held, is still followed: no limit on the wait', T, async (t) => {
+  const L = await lab(t, { kind: 'socks5' }, { timing: { preludeStallMs: 100 }, dst: async (_, mockPort) => (await strictSocks5(t, mockPort, 300)).port })
+  const s = await socks(L.port, { version: 5 })
+  assert.equal(s.ok, true)
+  const resp = await exchange(s.sock); await L.settled(1)
+  assert.ok(resp.length > 0); assert.equal(L.envelopes.length, 1)
+  assert.deepEqual([L.flows[0].decision, L.flows[0].inner, L.flows[0].not_captured], ['tunnel', 'decrypt', undefined])
 })
 
 // review B #7: upstream bytes in the same chunk as the proxy's 200 — the upstream spoke first in the tunnel

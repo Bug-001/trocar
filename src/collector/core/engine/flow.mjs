@@ -505,36 +505,55 @@ export function handleFlow(client, meta, ctx) {
   // Each side's bytes are held until a whole prelude message has arrived, then forwarded unchanged and in
   // order; the proxy's answer — success or refusal — is the only answer the client gets (RFC 4.6 §记录 代理前导).
   function handleSocks(initial, cSock, uSock) {
-    // A message that stays incomplete (a protocol whose first byte merely looks like SOCKS, waiting for its
-    // peer) must not be held forever: after preludeStallMs with no new byte it counts as not followed, and the
-    // caller passes what was held through verbatim (RFC 4.6 §记录 代理前导).
+    // The engine never holds bytes for either side (RFC 4.6 §记录 代理前导): while it waits for one side's next
+    // message and bytes it has not forwarded are held — a partial message on that side (a protocol whose first
+    // byte merely looks like SOCKS, waiting for its peer), or anything on the other side (a whole message that
+    // only looked like SOCKS, its peer waiting for the rest; an eager client meeting a silent proxy) — the side
+    // waited on gets preludeStallMs to send a new byte. Then the wait resolves as not followed and the caller
+    // passes everything held through, both ways. Bytes from the other side do not restart the clock. With
+    // nothing held the wait has no limit (a slow proxy: upstream-slow only).
     const stallMs = ctx.preludeStallMs ?? 5000
-    const side = (sock, pre) => {
-      let buf = pre, want = null, stall = null
-      const arm = () => {
-        if (stall) { clearTimeout(stall); stall = null }
-        if (!want || !buf.length) return
-        stall = setTimeout(() => { stall = null; const w = want; want = null; if (w) w.resolve({ invalid: `incomplete message, no new byte for ${stallMs} ms` }) }, stallMs)
-        if (stall.unref) stall.unref()
-      }
-      const pump = () => {
-        if (!want) return arm()
+    const sides = []
+    let stall = null
+    const unstall = () => { if (stall) { clearTimeout(stall); stall = null } }
+    const valve = (restart) => {
+      const w = sides.find((s) => s.waiting())
+      if (!w || !sides.some((s) => s.held())) return unstall()
+      if (stall && !restart) return
+      unstall()
+      stall = setTimeout(() => { stall = null; w.giveUp() }, stallMs)
+      if (stall.unref) stall.unref()
+    }
+    const side = (sock, pre, name) => {
+      let buf = pre, want = null
+      const pump = (restart) => {
+        if (!want) return valve(false)
         const r = want.parser(buf)
-        if (!r) return arm()
-        if (stall) { clearTimeout(stall); stall = null }
-        const w = want; want = null
+        if (!r) return valve(restart)
+        const w = want; want = null; unstall()
         if (r.invalid) return w.resolve(r)
         const raw = buf.subarray(0, r.length); buf = buf.subarray(r.length)
         w.resolve({ ...r, raw })
       }
-      const onData = guard((d) => { buf = Buffer.concat([buf, d]); pump() })
+      const onData = guard((d) => { buf = Buffer.concat([buf, d]); pump(true) })
       sock.on('data', onData)
-      return {
-        take: (parser) => new Promise((resolve) => { want = { parser, resolve }; pump() }),
+      const s = {
+        waiting: () => want !== null,
+        held: () => buf.length,
+        giveUp() {
+          const w = want; want = null
+          if (!w) return
+          const other = sides.find((o) => o !== s)
+          w.resolve({ invalid: buf.length ? `incomplete message, no new byte for ${stallMs} ms`
+            : `incomplete exchange, the ${name} sent nothing for ${stallMs} ms while ${other.held()} bytes were held` })
+        },
+        take: (parser) => new Promise((resolve) => { want = { parser, resolve }; pump(true) }),
         rest: () => { sock.removeListener('data', onData); const b = buf; buf = Buffer.alloc(0); return b },
       }
+      sides.push(s)
+      return s
     }
-    const c = side(cSock, initial), u = side(uSock, Buffer.alloc(0))
+    const c = side(cSock, initial, 'client'), u = side(uSock, Buffer.alloc(0), 'proxy')
     const seen = { c: [], s: [] }
     let target = meta.dst.address // the host the proxy is asked for, once the request has been read
     socksHandshake({
