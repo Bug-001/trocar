@@ -23,9 +23,13 @@ import { ccAdapter } from '../adapters/cc.mjs';
 import { envelopeAdapter, quarantineReason } from '../adapters/envelope.mjs';
 import { dissectorAdapter } from '../adapters/dissected.mjs';
 import { RESPONSES } from '../dissect/openai.mjs';
+import { RESPONSES_WS } from '../dissect/openai-ws.mjs';
 import { deriveCacheEvents } from '../cache/cache-events.mjs';
 import { harnessOf, observerEffectsOf } from '../dissect/harnesses.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
+import { TEXT_REF_FIELD, fieldTextOf } from '../dissect/record-fields.mjs';
+
+export { TEXT_REF_FIELD, fieldTextOf };
 import {
   buildParentIndex,
   resolveParent,
@@ -52,35 +56,8 @@ import {
 //            | "<raw_ref>::<field>::<start>-<end>"        → bytes of another field of the record (4.2:40
 //              字段段, gate G1): a WebSocket call's stitched blocks live in an EARLIER record's
 //              resp.messages[j] (D37 ②); R2 compares the reply (resp.raw); 3.1:37 shows req_extra_messages.
-// TEXT_REF_FIELD is the one definition of the field segment (the resolver and /api/block both use it).
-// req_body is the default and never written out, so every ref minted before the segment is unchanged.
-export const TEXT_REF_FIELD = /^(resp\.raw|resp\.messages\.\d+|req_extra_messages\.\d+)$/;
-// The text a field segment addresses in a record (one definition: the resolver and the board's locators
-// both read it). resp.raw = the decoded reply text the collector stored (SSE or text); resp.messages.<j> = a
-// WebSocket envelope's j-th server message; req_extra_messages.<k> = a later client message of the same call.
-// An error envelope keeps what arrived under resp.partial, with the same numbering (ws_raw's m slices count it
-// the same way). → { text } | { missing: why } — a non-text value is never stringified into "bytes".
-const STORED_AS = (v) => (v && typeof v === 'object'
-  ? (typeof v.b64 === 'string' ? `base64 bytes ({b64}${v.decode_error ? ', not decodable' : ''})`
-    : v.omitted_bytes != null ? `{omitted_bytes: ${v.omitted_bytes}} — over the per-call cap, bytes not kept`
-      : v.verbatim === false ? 'its length only ({raw_chars}) — not verbatim' : 'a non-text value')
-  : `${v === undefined ? 'nothing' : typeof v}`);
-export function fieldTextOf(rec, field) {
-  const m = TEXT_REF_FIELD.exec(String(field || ''));
-  if (!m) return { missing: `has no text_ref field "${field}"` };
-  const resp = (rec && (rec.resp || rec.response)) || {};
-  const part = resp.kind === 'error' && resp.partial && typeof resp.partial === 'object' ? resp.partial : resp;
-  let v;
-  if (field === 'resp.raw') v = part.raw;
-  else {
-    const [, list, j] = /^(resp\.messages|req_extra_messages)\.(\d+)$/.exec(field);
-    const arr = list === 'resp.messages' ? (part.kind === 'ws' ? part.messages : null) : rec && rec.req_extra_messages;
-    if (!Array.isArray(arr) || Number(j) >= arr.length) return { missing: `has no ${field}` };
-    v = arr[Number(j)];
-  }
-  if (typeof v === 'string') return { text: v };
-  return { missing: v === undefined ? `has no ${field}` : `stores ${field} as ${STORED_AS(v)}, not as text` };
-}
+// TEXT_REF_FIELD / fieldTextOf (the field segment's grammar and text) live in src/dissect/record-fields.mjs,
+// re-exported here for the readers that import them from this module.
 export function mintRawRef(sessionId, streamBasename, recordId) {
   return `${sessionId ?? '_control'}/${streamBasename}#${recordId}`;
 }
@@ -138,7 +115,8 @@ const jsonOrNull = (v) => (v == null ? null : JSON.stringify(v));
 // quarantined with its reason. Fresh per run so no cross-run state leaks.
 function defaultRegistry() {
   return createRegistry().register(ccAdapter).register(envelopeAdapter)
-    .register(dissectorAdapter(RESPONSES, { name: 'openai-responses' }));
+    .register(dissectorAdapter(RESPONSES, { name: 'openai-responses' }))
+    .register(dissectorAdapter(RESPONSES_WS, { name: 'openai-responses-ws' }));
 }
 
 async function ensureQuarantineTable(conn) {
@@ -215,6 +193,17 @@ export async function runEtl(records, connection, opts = {}) {
   const parentHint = new Map(); // session_id -> the raw parent id a harness declared (first seen wins)
   const seen = new Map(); // watermark key -> running per-session record index
   const corpus = []; // decoded claimed records (this run) for the lineage pass
+  // adapter -> its per-run state (adapter.begin()), created on first use and kept for the whole run, so a
+  // cross-record reader (the WebSocket previous_response_id chain, D37 ②) sees every record in file order —
+  // watermark-skipped ones included — and incremental == full.
+  const adapterState = new Map();
+  const stateOf = (a) => {
+    if (typeof a.begin !== 'function') return undefined;
+    if (!adapterState.has(a)) adapterState.set(a, a.begin());
+    return adapterState.get(a);
+  };
+  // the stream a record was READ from (4.2:39; for a sealed file, its original stream, D35)
+  const streamOf = (r) => (opts.streamOf && opts.streamOf(r)) || r._stream || streamBasename;
 
   await conn.run('BEGIN');
   try {
@@ -226,13 +215,14 @@ export async function runEtl(records, connection, opts = {}) {
         continue;
       }
       const adapter = claim.adapter;
+      const st = stateOf(adapter);
       // D37 (3.2:28): sessions.harness = the proc identity through the harness table, never the adapter's
       // wire; a legacy record without proc is UA-inferred and says so (sessions.extra.harness_inferred).
       const ident = harnessOf(record);
       // D37 (3.2:50): the vendor comes from the envelope host; cache labels are keyed by it (3.3:89).
       const vendor = vendorOf(record);
 
-      const call = adapter.parseCall(record);
+      const call = adapter.parseCall(record, st);
       const isLlm = call.class === 'llm';
       const sess = isLlm ? adapter.parseSession(record) : null;
       const sid = isLlm ? (sess.native_id ?? null) : null; // control -> NULL session_id
@@ -267,9 +257,9 @@ export async function runEtl(records, connection, opts = {}) {
       corpus.push(norm); // full corpus (incl. skipped) → deterministic cross-batch lineage
 
       const laneKey = sid == null ? null : sid + '\x00' + call.lane;
-      const curBlocks = adapter.parseBlocks(record);
+      const curBlocks = adapter.parseBlocks(record, st);
       // an adapter may count messages itself (a chained wire's record carries only a delta)
-      const msgCount = typeof adapter.messageCount === 'function' ? adapter.messageCount(record) : messageCount(norm);
+      const msgCount = typeof adapter.messageCount === 'function' ? adapter.messageCount(record, st) : messageCount(norm);
 
       // ── watermark skip: already consumed for this session. Still advance predecessor
       //    state (so the first NEW in-lane call gets the correct N-1), but write nothing.
@@ -286,7 +276,7 @@ export async function runEtl(records, connection, opts = {}) {
       // 4.2:39 — <stream_file> is the file THIS record was read from (readRecords stamps a non-enumerable
       // _stream; for a sealed file, its ORIGINAL stream). One run over a directory spans several files;
       // one name for all would point every later file's blocks at the first file.
-      const rawRef = mintRawRef(sid, (opts.streamOf && opts.streamOf(record)) || record._stream || streamBasename, record.id);
+      const rawRef = mintRawRef(sid, streamOf(record), record.id);
       const ts = record.ts ?? record.ts_request ?? null;
 
       // ── sessions (llm-with-session only; control is session-LESS) ──
@@ -355,7 +345,10 @@ export async function runEtl(records, connection, opts = {}) {
 
       // ── block_contents (dedup by content_hash, INSERT-IF-ABSENT) + call_blocks map ──
       for (const blk of curBlocks) {
-        const textRef = Array.isArray(blk.text_ref) ? composeTextRef(rawRef, blk.text_ref) : null;
+        // A block whose bytes live in another record (an earlier WebSocket call) or another field (that call's
+        // resp.messages.<j>) points THERE (4.2:40), never at this record: the ref is always to verbatim bytes.
+        const srcRaw = blk.source ? mintRawRef(blk.source.sessionId ?? sid, blk.source.stream || streamBasename, blk.source.recordId) : rawRef;
+        const textRef = Array.isArray(blk.text_ref) ? composeTextRef(srcRaw, blk.text_ref, blk.source ? blk.source.field : null) : null;
         await conn.run(
           'INSERT INTO block_contents (content_hash,section,role,kind,chars,preview,text_ref,' +
             'faithfulness,extra) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (content_hash) DO NOTHING',

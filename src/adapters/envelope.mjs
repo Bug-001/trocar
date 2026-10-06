@@ -6,7 +6,7 @@
 // session-attributed traffic, NULL for control.
 import { collectExtra } from './contract.mjs';
 import { classOf, controlKind, nativeId } from '../identity/session-identity.mjs';
-import { isProbeEndpoint, unsupportedOf, wireFormatOf } from '../dissect/registry.mjs';
+import { isProbeEndpoint, unsupportedOf, wireFormatOf, boardDissectorFor } from '../dissect/registry.mjs';
 
 // Every envelope key the read side understands (4.1 D10, 4.6 §记录, the D33 intervention reserve, D37 and
 // the WebSocket recorder's fields, gate G7). Shared by every adapter, so none reports these as unmapped.
@@ -68,10 +68,15 @@ export const envelopeAdapter = {
 };
 
 // Why a record had no adapter. Persisted with the quarantined record and counted, never dropped (3.1:58).
+// Closed set: unsupported-wire-format:<name> | ws-handshake | not-a-call:<wire> | no-adapter:<wire> | no-adapter-detect.
 export function quarantineReason(record) {
   const u = unsupportedOf(record);
   if (u) return `unsupported-wire-format:${u}`;
   const wf = wireFormatOf(record);
   if (wf === 'ws-handshake') return 'ws-handshake';
+  // a record of a known wire its dissector reads as no call (e.g. a server message pushed with no call open,
+  // or a client message that is no response.create, on a WebSocket)
+  const d = boardDissectorFor(record);
+  if (d && d.admits && !d.admits(record)) return `not-a-call:${wf}`;
   return wf ? `no-adapter:${wf}` : 'no-adapter-detect';
 }

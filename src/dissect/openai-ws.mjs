@@ -13,7 +13,7 @@
 // bytes carry its whole input (3.1:60). The bytes are untouched: every stitched block is located in the record
 // and field it came from (locate), so it resolves verbatim through a field-qualified text_ref (4.2:40, gate G1).
 // Leaf module.
-import { boardFlat, reqCountsFor, ctxTokens, normEvents } from './openai.mjs';
+import { boardFlat, reqCountsFor, ctxTokens, normEvents, faithfulness } from './openai.mjs';
 import { isWsHandshake } from './ws-handshake.mjs'; // not ./registry.mjs: the registry imports THIS module
 import { headerOf } from './harnesses.mjs';
 
@@ -61,22 +61,22 @@ function ownSegments(rec, b) {
   return (Array.isArray(b.input) ? b.input : []).map((item, i) => ({ rec, field: 'req_body', path: ['input', i], item }));
 }
 
-// → Map<rec, Plan>. Plan = { role, prevId, responseId, contextState, missing, segments }; segments, in assembly
-// order, are the call's whole stitched input: { rec, field, path, item, whole? }.
-export function chainPlan(records) {
-  const plans = new Map();
-  const conns = new Map();
-  for (const r of records || []) {
-    const role = roleOf(r);
-    if (role !== 'call' && role !== 'warmup') continue;
-    const k = connOf(r);
-    if (!conns.has(k)) conns.set(k, []);
-    conns.get(k).push(r);
-  }
-  for (const recs of conns.values()) {
-    recs.sort(order);
-    const heads = new Map(); // response id → { plan, outputSegs }: only a response.completed can be continued
-    for (const rec of recs) {
+// The chain, one record at a time (the ETL reads a stream; 4.2 incremental). plan(rec) → Plan | null (not a
+// call). Plan = { role, prevId, responseId, contextState, missing, segments }; segments, in assembly order, are the
+// call's whole stitched input: { rec, field, path, item, whole? }. A connection's records MUST arrive in seq order:
+// file order gives that, since the collector writes a call's envelope when its terminal message arrives and one
+// connection carries one response at a time (a continuation read before its predecessor reads as partial).
+export function createChain() {
+  const conns = new Map(); // connOf → (response id → { plan, outputSegs }): only a response.completed can be continued
+  const plans = new WeakMap();
+  return {
+    plan(rec) {
+      if (plans.has(rec)) return plans.get(rec);
+      const role = roleOf(rec);
+      if (role !== 'call' && role !== 'warmup') return null;
+      const k = connOf(rec);
+      let heads = conns.get(k);
+      if (!heads) conns.set(k, (heads = new Map()));
       const b = bodyOf(rec);
       const prevId = typeof b.previous_response_id === 'string' && b.previous_response_id ? b.previous_response_id : null;
       let segments = ownSegments(rec, b), contextState = 'complete', missing = null;
@@ -97,14 +97,30 @@ export function chainPlan(records) {
       }
       const t = terminalOf(rec);
       const done = t && t.e.type === 'response.completed' && t.e.response && typeof t.e.response.id === 'string' ? t : null;
-      const plan = { role: roleOf(rec), prevId, responseId: done ? done.e.response.id : null, contextState, missing, segments };
+      const plan = { role, prevId, responseId: done ? done.e.response.id : null, contextState, missing, segments };
       plans.set(rec, plan);
       if (done) {
         const output = Array.isArray(done.e.response.output) ? done.e.response.output : [];
-        heads.set(plan.responseId, { plan, outputSegs: output.map((item, k) => ({ rec, field: `resp.messages.${done.j}`, path: ['response', 'output', k], item })) });
+        heads.set(plan.responseId, { plan, outputSegs: output.map((item, i) => ({ rec, field: `resp.messages.${done.j}`, path: ['response', 'output', i], item })) });
       }
-    }
+      return plan;
+    },
+  };
+}
+
+// The board's batch form: every connection's records in seq order, through one chain. → Map<rec, Plan>.
+export function chainPlan(records) {
+  const conns = new Map();
+  for (const r of records || []) {
+    const role = roleOf(r);
+    if (role !== 'call' && role !== 'warmup') continue;
+    const k = connOf(r);
+    if (!conns.has(k)) conns.set(k, []);
+    conns.get(k).push(r);
   }
+  const chain = createChain();
+  const plans = new Map();
+  for (const recs of conns.values()) for (const r of recs.sort(order)) plans.set(r, chain.plan(r));
   return plans;
 }
 
@@ -137,6 +153,10 @@ export function normRespWs(rec) {
 // wire with a cross-record context provides.
 export const RESPONSES_WS = Object.freeze({
   id: 'openai-responses-ws', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'],
+  // the ETL adapter generated from this object (src/adapters/dissected.mjs) threads one chain through a run
+  createChain, stitchedRequest, locate, roleOf,
+  consumedBody: ['type', 'model', 'stream', 'instructions', 'tools', 'input', 'previous_response_id', 'generate'],
+  faithfulnessOf: (b) => faithfulness(b && b.block),
   prepare: (records) => chainPlan(records),
   contextOf: (rec, plans) => {
     const p = plans && plans.get(rec);
