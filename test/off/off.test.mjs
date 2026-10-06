@@ -53,24 +53,27 @@ test('V15: seven harnesses have an entry after install, and off undoes each by 4
     proc(4242, '/home/u/.local/bin/codex', ['codex']),
     proc(4343, '/opt/ZCode/zcode', ['/opt/ZCode/zcode', '/opt/ZCode/resources/glm/zcode.cjs', 'app-server', '--stdio'], { startedAt: 0, env: { ELECTRON_RUN_AS_NODE: '1' } }),
     proc(4444, '/usr/bin/node', ['node', '/x/tool.js'], { env: { NODE_EXTRA_CA_CERTS: s.ca('extra-cc.pem') } }),
+    proc(4545, '/home/u/.kimi-code/bin/kimi', ['kimi-code'], { env: { NODE_EXTRA_CA_CERTS: s.ca('extra-kimi.pem') } }), // started through asight's shim
+    proc(4546, '/home/u/.kimi-code/bin/kimi', ['kimi-code']), // by its absolute path: it never read asight's file
   ]
   const r = await s.run({ procs: async () => live })
   assert.deepEqual(r.left, [])
   assert.deepEqual(snapshot(s.home, ['.asight']), s.before, 'every user file byte for byte as before — the files asight created are gone')
   assert.deepEqual(new Set(dirsOf(s.home, ['.asight'])), s.beforeDirs, 'and so are the directories it made (.config/opencode/plugins, …)')
   const kept = Object.fromEntries(r.kept_bundles.map((k) => [path.basename(k.path), k]))
-  assert.deepEqual(Object.keys(kept).sort(), ['combined-codex.pem', 'combined-z-code.pem', 'extra-cc.pem'])
+  assert.deepEqual(Object.keys(kept).sort(), ['combined-codex.pem', 'combined-z-code.pem', 'extra-cc.pem', 'extra-kimi.pem'], 'every file a live process holds; combined-hermes.pem is the one nobody does')
   const asightFp = certBlocks(fs.readFileSync(s.ca('asight-ca.pem'), 'utf8'))[0].fp
   const fps = (n) => certBlocks(fs.readFileSync(s.ca(n), 'utf8')).map((c) => c.fp)
   assert.deepEqual([kept['combined-codex.pem'].pids, fps('combined-codex.pem').includes(asightFp), fps('combined-codex.pem').length > 0], [[4242], false, true], 'kept for the codex that may have loaded it, the same file without the asight CA')
   assert.deepEqual([kept['combined-z-code.pem'].pids, kept['combined-z-code.pem'].rebuilt, fps('combined-z-code.pem').includes(asightFp), fps('combined-z-code.pem').includes(certBlocks(USER_CA.certPem)[0].fp)], [[4343], true, false, true], 'gone while a rereading Z-Code runs: rebuilt without the CA, with the user CA from the recorded source')
   assert.deepEqual([kept['extra-cc.pem'].pids, fps('extra-cc.pem').includes(asightFp), fps('extra-cc.pem').includes(certBlocks(USER_CA.certPem)[0].fp)], [[4444], false, true], 'a child inherited extra-cc.pem: kept without the asight CA, the user CA stays')
-  for (const gone of ['combined-hermes.pem', 'extra-kimi.pem']) assert.ok(!fs.existsSync(s.ca(gone)), `${gone}: nobody holds it, so it is removed`)
+  assert.ok(!fs.existsSync(s.ca('combined-hermes.pem')), 'nobody holds combined-hermes.pem, so it is removed')
+  assert.deepEqual([kept['extra-kimi.pem'].pids, fps('extra-kimi.pem').includes(asightFp)], [[4545], false], 'a kimi the shim started holds extra-kimi.pem')
   for (const p of [plugin, path.join(s.dir, 'bin'), path.join(s.dir, 'plugins')]) assert.ok(!fs.existsSync(p), `${p} is gone`)
   assert.ok(!/asight collector/.test(fs.readFileSync(path.join(s.home, '.bashrc'), 'utf8')) && !fs.readFileSync(path.join(s.home, '.dsh', 'cordis.patch.yml'), 'utf8').includes('asight'))
   assert.deepEqual(r.results.map((x) => x.result).filter((x) => x !== 'restored'), [], 'every entry came back byte for byte')
   assert.ok(fs.existsSync(s.ca('asight-ca.pem')) && fs.existsSync(s.ca('ca.key')), 'off keeps the CA')
-  assert.deepEqual(r.still_trusting.map((x) => [x.pid, x.harness, x.until]).sort(), [[4242, 'codex', 'next-connection'], [4343, 'z-code', 'session-end']])
+  assert.deepEqual(r.still_trusting.map((x) => [x.pid, x.harness, x.until]).sort(), [[4242, 'codex', 'next-connection'], [4343, 'z-code', 'session-end'], [4545, 'kimi-code', 'restart']], 'a kimi by its absolute path (4546) never trusted asight: not reported')
 })
 
 test('V25: off codex undoes ~/.codex/.env and its bundle and nothing else — asight-ca.pem, every other entry and bundle byte for byte; a live codex keeps combined-codex.pem, without the CA', async () => {

@@ -14,6 +14,7 @@ import { planTrust } from '../../../src/collector/core/trust/plan.mjs'
 import { installCollector, uninstallCollector } from '../../../src/collector/install.mjs'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 import { sandbox, ctxFor, facts, judge, matchOf, CA, OTHER } from './_ctx.mjs'
+import { onNone } from '../../helpers/signature-os.mjs'
 
 const PY = '/home/u/.hermes/tools/python-3.14.7+20260901-linux-arm64/bin/python3.14'
 const boot = (root, entry = "from hermes_cli.main import main\nsys.exit(main())") => `import os, re, sys\nos.environ.pop('PYTHONHOME', None)\nsys.path.insert(0, '${root}')\nimport hermes_bootstrap\n${entry}\n`
@@ -182,7 +183,7 @@ test('hermes through install / uninstall: the user\'s SSL_CERT_FILE line is put 
     const before = `OPENAI_API_KEY=sk-secret\nSSL_CERT_FILE=${corp}\n`
     const env = s.put('.hermes/.env', before)
     s.put('.hermes/hermes-agent/install-stamp.json', MAIN_STAMP)
-    await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [hermes], freePort: async () => 47015, roots: { node: [], osText: '' } })
+    await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [onNone(hermes)], freePort: async () => 47015, roots: { node: [], osText: '' } })
     const dir = path.join(s.home, '.asight', 'collector')
     const bundle = path.join(dir, 'ca', 'combined-hermes.pem')
     const now = fs.readFileSync(env, 'utf8')
@@ -201,11 +202,12 @@ test('hermes through install / uninstall: the user\'s SSL_CERT_FILE line is put 
     fs.writeFileSync(env, now)
     // a Hermes from before install that is still running may build a new TLS context: the bundle is kept for it
     const early = { os: 'linux', pid: 77, exe: PY, argv: cli(path.join(s.home, '.hermes', 'hermes-agent'), '-z', 'hi'), startedAt: 0, env: new Map() }
-    const match = (f) => createRegistry([hermes]).match(f)
-    const r = await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none', harnesses: [hermes], roots: { node: [], osText: '' }, scan: async () => [early], match })
-    assert.deepEqual([r.kept_bundles.map((k) => k.pids), r.still_trusting.map((x) => x.until)], [[[77]], ['next-handshake']])
+    // the manifest snapshot cannot hold a function of the process, so a Hermes is reported as trusting until it restarts, the conservative answer (4.6 step 5,
+    // 1.6 R3: `off` has no descriptor); the descriptor's own afterUninstall below still tells main from release
+    const r = await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none', roots: { node: [], osText: '' }, scan: async () => [early] })
+    assert.deepEqual([r.kept_bundles.map((k) => k.pids), r.still_trusting.map((x) => x.until)], [[[77]], ['restart']])
     assert.deepEqual(fps(fs.readFileSync(bundle, 'utf8')), [fp(OTHER)], 'kept without the asight CA')
-    assert.deepEqual((await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none', harnesses: [hermes], roots: { node: [], osText: '' } })).kept_bundles, [])
+    assert.deepEqual((await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none', roots: { node: [], osText: '' } })).kept_bundles, [])
     assert.deepEqual(r.entries.map((e) => e.result), ['restored'])
     assert.equal(fs.readFileSync(env, 'utf8'), before)
     assert.ok(!fs.existsSync(bundle))

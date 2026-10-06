@@ -50,7 +50,7 @@ const without = (list, item) => { const i = list.indexOf(item); if (i >= 0) list
 const mayHaveRead = (p, l, since) => !!(l && l.rereads) || p.startedAt == null || since == null || p.startedAt >= since
 
 export async function undoHarnesses({ dir, home, manifest, ids = null, procs = async () => [], roots = null, now = new Date(), dropCa = false, fs = nodeFs }) {
-  if (manifest.unsupported) throw Object.assign(new Error(`the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read; nothing was changed`), { code: 'manifest-unsupported' })
+  if (manifest.unsupported) throw new Error(`the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read; nothing was changed`)
   const inScope = (h) => typeof h === 'string' && (ids == null || ids.includes(h))
   const liveness = manifest.liveness && typeof manifest.liveness === 'object' ? manifest.liveness : (manifest.liveness = {})
   if (!Array.isArray(manifest.kept_backups)) manifest.kept_backups = []
@@ -71,7 +71,7 @@ export async function undoHarnesses({ dir, home, manifest, ids = null, procs = a
   const undoOne = (e) => {
     let r
     try { r = undoEntry(e, { fs }) } catch (err) { r = { path: e.path, harness: e.harness, result: 'error', reason: String((err && err.message) || err) } }
-    const row = { ...r, backup: e.backup ?? null }
+    const row = { ...r, backup: e.backup ?? null, what: describeEntry(e) } // `what`: what asight put there (the key and value, the block, the line), for a message
     out.results.push(row)
     if (UNDO_LEFT.has(r.result)) { // stays in the manifest, with its backup: the only copy of what the user had
       out.left.push({ path: e.path, harness: e.harness, result: r.result, reason: r.result === 'left-unparsable' ? `${e.path} is no longer valid JSON; asight's ${describeEntry(e)} may still be in it` : r.reason })
@@ -119,7 +119,7 @@ export async function undoHarnesses({ dir, home, manifest, ids = null, procs = a
     }
     const rebuild = (f, keep) => { // gone while a live process may use it: an agent whose entry named it has no network without it (4.6 撤销顺序 第 2 步)
       try {
-        if (!roots) throw Object.assign(new Error('no trusted roots were given to rebuild it from'), { code: 'no-roots' })
+        if (!roots) throw new Error('no trusted roots were given to rebuild it from')
         const userCerts = [], unread = []
         for (const src of f.sources || []) { try { userCerts.push(...certsOf(src, fs.readFileSync(src)).certs) } catch (e) { unread.push({ file: src, errno: errText(e) }) } } // moved or gone: not carried over, and said
         const c = composeBundle({ nodeRoots: roots.node, osRootsText: roots.osText, userCerts, caPem: null })

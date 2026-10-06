@@ -139,16 +139,7 @@ test('kimi-code through install / uninstall: the shim runs kimi with the CA file
   } finally { s.done() }
 })
 
-test('kimi after uninstall: only a kimi the shim started (its NODE_EXTRA_CA_CERTS is asight\'s file) is reported, until it restarts (4.6 step 5, review 3 #6)', () => {
-  const au = kimi.trust.afterUninstall
-  const dir = '/h/.asight/collector'
-  assert.equal(au({ env: new Map([['NODE_EXTRA_CA_CERTS', `${dir}/ca/extra-kimi.pem`]]) }, { collectorDir: dir }), 'restart')
-  assert.equal(au({ env: new Map([['NODE_EXTRA_CA_CERTS', '/corp/ca.pem']]) }, { collectorDir: dir }), null, 'its own CA: it never trusted asight')
-  assert.equal(au({ env: new Map() }, { collectorDir: dir }), null, 'by its absolute path: no shim, no asight CA')
-  assert.equal(au({ env: new Map([['NODE_EXTRA_CA_CERTS', '/h/.asight/collectorX/a.pem']]) }, { collectorDir: dir }), null)
-})
-
-test('kimi after uninstall, as data: untilEnviron names the variable the shim sets, so the install manifest\'s liveness snapshot carries "only a kimi whose NODE_EXTRA_CA_CERTS is asight\'s file" without the descriptor (4.6 step 5, 1.6 R3)', async () => {
+test('kimi after uninstall, as data: untilEnviron names the variable the shim sets, so the manifest liveness snapshot carries "only a kimi started through the shim is reported, until it restarts" without the descriptor (4.6 step 5, 1.6 R3; test/off/off.test.mjs runs it)', async () => {
   const { livenessOf } = await import('../../../src/collector/core/registry.mjs')
   assert.equal(kimi.trust.untilEnviron, kimi.trust.chain[0].var)
   assert.deepEqual(livenessOf(kimi, 'linux').until_environ, 'NODE_EXTRA_CA_CERTS')

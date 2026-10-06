@@ -14,6 +14,7 @@ import { planTrust } from '../../../src/collector/core/trust/plan.mjs'
 import { installCollector, uninstallCollector } from '../../../src/collector/install.mjs'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 import { sandbox, ctxFor, facts, judge, matchOf, CA, OTHER } from './_ctx.mjs'
+import { onNone } from '../../helpers/signature-os.mjs'
 
 const EXE = '/opt/ZCode/zcode'
 const CJS = '/opt/ZCode/resources/glm/zcode.cjs'
@@ -132,17 +133,16 @@ test('z-code through install / uninstall: the user\'s caCertFile is replaced and
     const corp = s.put('corp.pem', OTHER.certPem)
     const before = JSON.stringify({ model: 'lab/m', network: { caCertFile: corp, timeout: 30 } }, null, 2) + '\n'
     const cfg = s.put('.zcode/cli/config.json', before)
-    await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [zcode], freePort: async () => 47016, roots: { node: [], osText: '' } })
+    await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [onNone(zcode)], freePort: async () => 47016, roots: { node: [], osText: '' } })
     const dir = path.join(s.home, '.asight', 'collector')
     const bundle = path.join(dir, 'ca', 'combined-z-code.pem')
     assert.deepEqual(JSON.parse(fs.readFileSync(cfg, 'utf8')), { model: 'lab/m', network: { caCertFile: bundle, timeout: 30 } })
     assert.deepEqual(fps(fs.readFileSync(bundle, 'utf8')), [fp(OTHER), ...fps(fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'), 'utf8'))])
     const live = { os: 'linux', pid: 88, exe: EXE, argv: [EXE, CJS, 'app-server', '--stdio'], env: AS_NODE, startedAt: 0 }
-    const match = (f) => createRegistry([zcode]).match(f)
-    const r = await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none', harnesses: [zcode], roots: { node: [], osText: '' }, scan: async () => [live], match })
+    const r = await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none', roots: { node: [], osText: '' }, scan: async () => [live] })
     assert.deepEqual([r.entries.map((e) => e.result), r.kept_bundles.map((k) => k.pids), r.still_trusting.map((x) => x.until)], [['restored'], [[88]], ['session-end']])
     assert.equal(fs.readFileSync(cfg, 'utf8'), before)
-    assert.deepEqual((await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none', harnesses: [zcode], roots: { node: [], osText: '' } })).kept_bundles, [])
+    assert.deepEqual((await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none', roots: { node: [], osText: '' } })).kept_bundles, [])
     assert.ok(!fs.existsSync(bundle))
   } finally { s.done() }
 })
