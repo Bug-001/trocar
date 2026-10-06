@@ -428,9 +428,11 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       if (unknown.length) throw Object.assign(new Error(`unknown harness: ${unknown.join(', ')} (known: ${[...known].sort().join(', ')})`), { status: 400 })
       return h
     }
+    let exitAsked = 0 // the pending `off {exit}` requests (see exitWhenDrained); /on cancels them
     Object.assign(impl, {
       status,
-      on: async ({ body }) => { const r = await sw.on({ ...(body && typeof body === 'object' ? body : {}), harnesses: namesOf(body) }); syncTracker(); return { ...(await status()), ...(r.noop ? { noop: true } : {}) } },
+      // capture on again cancels a pending `off {exit}` (exitWhenDrained): the daemon that was going away is the one now serving it
+      on: async ({ body }) => { const r = await sw.on({ ...(body && typeof body === 'object' ? body : {}), harnesses: namesOf(body) }); exitAsked++; syncTracker(); return { ...(await status()), ...(r.noop ? { noop: true } : {}) } },
       // → {…status, unwatched: [pid], confirmed, relayed: {closing, waiting, cut}, pid}: the pids taken out of the kernel watch table, and whether the kernel
       // confirms the state asked for (every unwatch answered; with no harness left on, the links gone). With the helper dead its table is gone with it: every pid
       // counts as taken out and `confirmed` does not wait on an unwatch nobody can answer. After the switch the engine closes the connections of those harnesses
@@ -460,10 +462,15 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     // `off` with no names (1.6 §1.4 5): when no connection is left in the engine — or at once on `now` (a second wait is cut at 500 ms: whatever
     // the engine still holds then goes with the process) — the daemon stops itself like for SIGTERM, with reason 'off'. A little later than
     // the reply, so the reply is written before the control socket closes.
+    // The exit is a request that can be withdrawn while it waits (T05 review): a splice can outlive `off` by minutes, and an operator who runs `on`
+    // meanwhile talks to this daemon (`on` starts one only when none is running). `exitAsked` counts the requests; /on and a newer /off {exit} both
+    // bump it, so only the latest request may stop the daemon, and never while some harness is on — an exit would leave state.json saying on with
+    // nothing attached and, being a clean exit, no supervisor to restart it.
     function exitWhenDrained(now) {
+      const mine = ++exitAsked
       const left = engine.drained({ agents: null })
       const ready = now ? Promise.race([left, new Promise((r) => setTimeout(r, 500))]) : left
-      ready.then(() => new Promise((r) => setTimeout(r, 50))).then(() => stop({ reason: 'off' })).catch((e) => failure('daemon', coded(e, 'stop-failed')))
+      ready.then(() => new Promise((r) => setTimeout(r, 50))).then(() => { if (mine === exitAsked && !sw.anyOn()) return stop({ reason: 'off' }) }).catch((e) => failure('daemon', coded(e, 'stop-failed')))
     }
     async function doStop({ signal = null, reason = null } = {}) {
       clearInterval(lockTimer); clearInterval(caTimer); clearInterval(checkTimer)

@@ -68,6 +68,8 @@ async function relay() {
   const ca = createCa({ commonName: 'lab relay CA' })
   const issuer = createLeafIssuer(loadCa(ca))
   const got = []
+  const held = [] // replies withheld while `hold` is set (a response that is slow): release() sends them in order
+  const state = { hold: false }
   const srv = tls.createServer({ SNICallback: (n, cb) => cb(null, issuer.secureContextFor(n)) }, (s) => {
     let buf = Buffer.alloc(0)
     s.on('data', (d) => {
@@ -78,12 +80,13 @@ async function relay() {
         const len = Number(/content-length: (\d+)/i.exec(buf.subarray(0, end).toString('latin1'))[1])
         if (buf.length < end + 4 + len) return
         got.push(buf.subarray(0, end + 4 + len)); buf = buf.subarray(end + 4 + len)
-        s.write(`HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: ${REPLY.length}\r\n\r\n${REPLY}`)
+        const reply = () => { if (s.writable) s.write(`HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: ${REPLY.length}\r\n\r\n${REPLY}`) }
+        if (state.hold) held.push(reply); else reply()
       }
     })
   })
   await new Promise((r) => srv.listen(0, '127.0.0.1', r))
-  return { ca, got, port: srv.address().port, close: () => srv.close() }
+  return { ca, got, port: srv.address().port, hold: () => { state.hold = true }, release: () => { state.hold = false; while (held.length) held.shift()() }, close: () => srv.close() }
 }
 
 test('daemon: CC trusted through the installed settings key is decrypted and recorded verbatim; the board serves it from its default source; off stops recording (S2/S1/T7 unit)', async () => {
@@ -113,12 +116,15 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
     const extraCc = fs.readFileSync(path.join(s.collector, 'ca', 'extra-cc.pem'), 'utf8') // what CC now trusts: relay CA + asight CA
     const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: extraCc }); await once(c, 'secureConnect')
     const sid = '6a1b7c2d-0000-4000-8000-000000000001'
-    const send = (text) => new Promise((resolve) => {
+    const post = (text) => {
       const body = JSON.stringify({ model: 'claude-x', max_tokens: 16, system: [{ type: 'text', text: 'You are a test.' }], messages: [{ role: 'user', content: [{ type: 'text', text }] }] })
+      return `POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test:${up.port}\r\nanthropic-version: 2023-06-01\r\nx-claude-code-session-id: ${sid}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
+    }
+    const send = (text) => new Promise((resolve) => {
       let reply = ''
       const onData = (x) => { reply += x; if (reply.endsWith(REPLY)) { c.off('data', onData); resolve(reply) } }
       c.on('data', onData)
-      c.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test:${up.port}\r\nanthropic-version: 2023-06-01\r\nx-claude-code-session-id: ${sid}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`)
+      c.write(post(text))
     })
     assert.match(await send('asight-e2e-1'), /^HTTP\/1\.1 200 OK/)
     const capture = await until(() => fs.readdirSync(s.collector).find((n) => /^capture-.*\.ndjson$/.test(n)))
@@ -145,11 +151,23 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
       assert.equal(blk.text, relayBody.slice(Number(from), Number(to)), `${b.key}: board bytes == relay bytes`)
     }
 
+    // 4.6 §开关「已有连接」: a request that started before off is recorded, one that starts after it is not, through the daemon's own isRecording wiring
+    // (sw.isRecording(meta.agent)). The connection is kept busy across off — the relay is slow — so the next request is pipelined on it after off.
+    let seen = ''; c.on('data', (x) => { seen += x })
+    up.hold()
+    c.write(post('asight-in-flight'))
+    await until(() => up.got.length === 2)
     const off = await req(s.sock, 'POST', '/off')
-    // 1.6 §1.3 / 4.6 §开关「已有连接」: a connection through the engine with nothing in flight is closed at once, so the agent's next request goes direct
-    assert.deepEqual([off.relayed, off.pid], [{ closing: 0, waiting: 0, cut: 0 }, process.pid])
-    if (!c.destroyed) await once(c, 'close') // it may already be gone: closed while the reply was on its way
-    assert.ok(!fs.readFileSync(path.join(s.collector, capture), 'utf8').includes('asight-after-off'))
+    assert.deepEqual([off.relayed, off.pid], [{ closing: 1, waiting: 0, cut: 0 }, process.pid], 'busy: it closes at the response boundary, not at once')
+    c.write(post('asight-after-off')) // started after off
+    await until(() => up.got.length === 3) // still the agent's own request: forwarded untouched, just not recorded
+    up.release()
+    await once(c, 'close') // the engine closes it once the responses are out
+    assert.equal(seen.split(REPLY).length - 1, 2, 'both replies reached the client in full before the close')
+    await until(() => fs.readFileSync(path.join(s.collector, capture), 'utf8').includes('asight-in-flight'))
+    const after = fs.readFileSync(path.join(s.collector, capture), 'utf8')
+    assert.ok(!after.includes('asight-after-off'), 'a request that starts after off is never recorded')
+    assert.equal(after.trim().split('\n').length, 2, 'the first call and the one that was in flight when off came')
     await until(() => flowsOf(s).some((f) => f.decision === 'decrypt' && f.agent === 'claude-code' && f.pid === 4242))
   } finally { if (server) server.close(); await d.stop(); up.close(); p.done(); s.done() }
 })
@@ -1285,6 +1303,42 @@ test('daemon: POST /off {exit:true} with a spliced connection open: the reply sa
     assert.equal(fs.existsSync(path.join(s.collector, 'lock')), false)
     const spliced = flows().find((f) => f.decision === 'splice')
     assert.deepEqual([spliced.error, spliced.agent], [undefined, 'claude-code'])
+  })
+})
+
+test('daemon: /on after POST /off {exit:true} while a splice is still open cancels the pending exit — the daemon stays up and attached when the splice closes, and a later /off {exit:true} stops it (1.6 §1.4 5, T05 review)', async () => {
+  await withSplice(async ({ s, d, raw, flows }) => {
+    const off = await req(s.sock, 'POST', '/off', { exit: true })
+    assert.deepEqual(off.relayed, { closing: 0, waiting: 1, cut: 0 })
+    const on = await req(s.sock, 'POST', '/on', {})
+    assert.deepEqual([on.desired, on.actual], ['on', 'on'])
+    let stopped = false; d.exited.then(() => { stopped = true })
+    raw.destroy() // the splice closes by itself: nothing is left in the engine, but the operator turned capture on again
+    await new Promise((r) => setTimeout(r, 500))
+    assert.equal(stopped, false, 'the daemon did not exit although capture is on')
+    const st = await req(s.sock, 'GET', '/status')
+    assert.deepEqual([st.desired, st.actual], ['on', 'on'], 'still attached')
+    assert.equal(fs.existsSync(path.join(s.collector, 'lock')), true)
+    assert.equal(flows().some((f) => f.event === 'daemon-stop'), false)
+    // the exit is re-armed by a later /off {exit:true}, not left cancelled for good
+    const off2 = await req(s.sock, 'POST', '/off', { exit: true })
+    assert.deepEqual(off2.relayed, { closing: 0, waiting: 0, cut: 0 })
+    await d.exited
+    assert.equal(flows().find((f) => f.event === 'daemon-stop').reason, 'off')
+  })
+})
+
+test('daemon: a withdrawn exit is not revived — /off {exit:true}, /on, then a plain /off (no exit) while the splice is still open: when the splice closes the daemon stays up, off (1.6 §1.4 5, T05 review)', async () => {
+  await withSplice(async ({ s, d, raw }) => {
+    await req(s.sock, 'POST', '/off', { exit: true })
+    await req(s.sock, 'POST', '/on', {})
+    const off = await req(s.sock, 'POST', '/off', { harnesses: ['claude-code'] }) // asks nothing of the daemon's life
+    assert.equal(off.desired, 'off')
+    let stopped = false; d.exited.then(() => { stopped = true })
+    raw.destroy()
+    await new Promise((r) => setTimeout(r, 500))
+    assert.equal(stopped, false, 'the exit that /on withdrew did not come back')
+    assert.equal((await req(s.sock, 'GET', '/status')).desired, 'off')
   })
 })
 
