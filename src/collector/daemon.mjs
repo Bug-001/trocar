@@ -268,7 +268,13 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       const r = tracker.describe(pid)
       store.flow({ ts: new Date().toISOString(), flow_id: null, pid, agent: r ? r.agent : null, ...(r && r.ppid != null ? { parent_pid: r.ppid } : {}), ...(r && r.parentAgent ? { parent_agent: r.parentAgent } : {}), dst, decision: 'direct', not_captured: r ? 'untrusted' : 'untracked', reason: r ? `untrusted: ${r.reason}` : 'untracked' }) // D-11
     })
-    redirector.on('facts-error', ({ pid, code, reason }) => failure('tracker', Object.assign(new Error(reason), { code: 'exe-unreadable' }), { pid, errno: code || null })) // D-30
+    // D-30, 4.6 exe-unreadable (review B-1): a process whose exe cannot be read is a failure only when its readable command
+    // line could be an agent's (a descriptor's argv conditions fit it); the rest — sshd's session processes, (sd-pam), anything
+    // not dumpable — is normal on every machine and is counted in status as `unjudged`, never ⚠
+    redirector.on('facts-error', ({ os: fos, pid, code, comm, argv, reason }) => {
+      const candidates = registry.couldMatch({ os: fos || A.os, exe: null, env: null, argv: argv || [], comm })
+      if (candidates.length) failure('tracker', Object.assign(new Error(`${reason}; its command line fits ${candidates.join(' and ')}`), { code: 'exe-unreadable' }), { pid, errno: code || null, candidates })
+    })
 
     sw = createSwitch({ redirector, stateFile: P.state, ensureReady, onEvent: event })
     await redirector.start()
@@ -338,6 +344,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         return { pid: r.pid, agent: r.agent, exe: r.exe, trusted: r.trusted, reason: r.reason, ...(r.trusted ? {} : { hint: hintFor(r.agent, r.reason) }), trust_var: r.trustVar, trust_via: r.trustVia, decrypt: r.decrypt, hosts: r.hosts, not_via_trust_path: r.bypass, parent_pid: r.ppid ?? null, parent_agent: r.parentAgent ?? null, source: r.source, direct: d.count, ...(d.error ? { direct_error: d.error } : {}) }
       })
       const { pid, proto, build, unparsable = 0, timeouts = 0 } = redirector.helperInfo()
+      // processes of this user whose exe cannot be read and whose command line fits no harness: seen, not judged (4.6 exe-unreadable)
+      const unjudged = (typeof redirector.unreadable === 'function' ? redirector.unreadable() : []).filter((u) => !registry.couldMatch({ os: A.os, exe: null, env: null, argv: u.argv, comm: u.comm }).length)
       return {
         ...(await sw.report()),
         engine: { port, v6: v6Error ? null : port, v6_error: v6Error, ...engine.stats() },
@@ -346,6 +354,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         unmatched: tracker.unmatched(), // processes two descriptors claim (D-19)
         helper: { pid, proto, build, expected_proto: redirector.expectedProto, ok: proto === redirector.expectedProto, down: helperDown, unparsable_lines: unparsable, timeouts },
         agents, running_untrusted: agents.filter((a) => !a.trusted).length,
+        unjudged: { count: unjudged.length, sample: unjudged.slice(0, 10).map((u) => ({ pid: u.pid, comm: u.comm, errno: u.errno })) },
         health: healthOnDisk(P.dir),
         events: failure.health(), // event lines lost (D-1): stderr had each, the next written line is a log-gap
       }

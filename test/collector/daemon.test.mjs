@@ -195,6 +195,35 @@ test('daemon: an agent started by another agent is recorded with parent_pid and 
   } finally { await d.stop(); p.done(); s.done() }
 })
 
+// Review B-1 (4.6 exe-unreadable): on a stock machine, processes of the user's uid that are not dumpable (sshd's session
+// processes, (sd-pam), the daemon's own helper) cannot have their exe read. That is normal, so it is no failure and no ⚠: it
+// is a count in status (`unjudged`) with samples. A process whose readable command line fits a harness's argv conditions could
+// be an agent nobody can judge: that one is the failure, naming the candidates.
+test('daemon: a process whose exe cannot be read is a failure only if its command line could be an agent\'s; the rest is counted in status as unjudged, never ⚠ (B-1)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const gamma = { ...cc, name: 'gamma', signatures: { linux: { match: [{ exe: /\/node$/, 'argv.1': /\/gamma\.js$/ }] } } }
+  const unreadableExe = (pid, argv, comm) => { p.add(pid, { uid: UID, exe: '/x/y', argv, comm }); fs.rmSync(path.join(p.root, String(pid), 'exe')); fs.mkdirSync(path.join(p.root, String(pid), 'exe')) }
+  unreadableExe(6001, ['sshd: u@notty'], 'sshd'); unreadableExe(6002, ['(sd-pam)'], '(sd-pam)')
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc, gamma], env: { ...process.env, HOME: s.home } })
+  try {
+    await req(s.sock, 'POST', '/on', {}) // the rescan reads every process of this uid
+    let st = await req(s.sock, 'GET', '/status')
+    assert.deepEqual([st.unjudged.count, st.unjudged.sample.map((u) => [u.pid, u.comm, u.errno]).sort()], [2, [[6001, 'sshd', 'EINVAL'], [6002, '(sd-pam)', 'EINVAL']]], 'counted, with samples')
+    assert.deepEqual(flowsOf(s).filter((f) => f.code === 'exe-unreadable'), [], 'no failure record')
+    assert.deepEqual(statusFailures(st).filter((f) => f.code === 'exe-unreadable'), [], 'nothing for the top bar')
+    unreadableExe(6003, ['/usr/bin/node', '/opt/gamma.js'], 'node') // a command line gamma's argv condition fits
+    await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 6003, pid: 6003, comm: 'node', filename: '/usr/bin/node', ts_ns: 1 })
+    const f = await until(() => flowsOf(s).find((x) => x.code === 'exe-unreadable'))
+    assert.deepEqual([f.event, f.where, f.pid, f.errno, f.candidates], ['failure', 'tracker', 6003, 'EINVAL', ['gamma']])
+    assert.match(f.reason, /unreadable \(.*\); it is never judged.*its command line fits gamma/)
+    st = await req(s.sock, 'GET', '/status')
+    assert.equal(st.unjudged.count, 2, 'the candidate is the failure, not part of the count')
+    assert.equal(statusFailures(st).filter((x) => x.code === 'exe-unreadable').length, 1)
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
 test('daemon: refuses to start uninstalled; desired state survives a restart; on/off idempotent (S6, S9 unit)', async () => {
   const s = sandbox(); const p = fakeProc()
   try {

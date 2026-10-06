@@ -11,11 +11,26 @@ test('procinfo: status, cwd and start time come from /proc; a vanished pid is nu
   const p = fakeProc()
   try {
     p.add(321, { ppid: 7, uid: 1000, exe: '/opt/alpha', argv: ['alpha', 'run'], cwd: '/work', startTicks: 250 })
-    assert.deepEqual(readStatus(321, { root: p.root }), { ppid: 7, uid: 1000 })
+    assert.deepEqual(readStatus(321, { root: p.root }), { ppid: 7, uid: 1000, name: 'alpha' }, 'name = comm: readable when the exe is not')
     assert.equal(readCwd(321, { root: p.root }), '/work')
     assert.equal(readStartTime(321, { root: p.root }), (p.btime + 2.5) * 1000)
     assert.equal(readStartTicks(321, { root: p.root }), '250', 'field 22 verbatim: the value a trust plugin writes into its marker (4.6 「标记」)')
     for (const fn of [readStatus, readCwd, readStartTime, readStartTicks]) assert.equal(fn(999, { root: p.root }), null)
+  } finally { p.done() }
+})
+
+// Review B-1: a process whose exe cannot be read is reported with what still can be (comm, the command line), so the daemon can
+// tell one that could be an agent from one that merely is not dumpable.
+test('procinfo: readFacts tells onExeError the errno, comm and the command line of a process whose exe cannot be read; a vanished one says nothing', () => {
+  const p = fakeProc()
+  try {
+    p.add(44, { uid: 1000, exe: '/usr/lib/openssh/sshd-session', argv: ['sshd: u@notty'], comm: 'sshd' })
+    fs.rmSync(path.join(p.root, '44', 'exe')); fs.mkdirSync(path.join(p.root, '44', 'exe')) // readlink: EINVAL, as for a process that is not dumpable (EACCES)
+    const told = []
+    assert.equal(readFacts(44, { root: p.root, onExeError: (x) => told.push(x) }), null)
+    assert.deepEqual(told.map((x) => [x.pid, x.uid, x.code, x.comm, x.argv]), [[44, 1000, 'EINVAL', 'sshd', ['sshd: u@notty']]])
+    assert.equal(readFacts(404, { root: p.root, onExeError: (x) => told.push(x) }), null)
+    assert.equal(told.length, 1)
   } finally { p.done() }
 })
 

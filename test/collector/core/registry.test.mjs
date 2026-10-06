@@ -24,6 +24,23 @@ test('registry: matches by exe on the facts OS and names the agent', () => {
   assert.equal(m.agent, 'alpha'); assert.equal(m.reason, 'match'); assert.equal(m.descriptor, alpha)
 })
 
+// Review B-1 (4.6 exe-unreadable): which descriptors COULD claim a process whose exe cannot be read. Only a pattern with a
+// condition on a readable fact (argv, comm) names a harness; a harness known by its exe alone proves nothing.
+test('registry: couldMatch judges an unreadable-exe process on its readable facts only — a pattern of exe alone names nobody, an argv condition that holds does, an exclusion still excludes', () => {
+  const gamma = { name: 'gamma', runtime: 'node', hosts: [], trust,
+    signatures: { linux: { match: [{ exe: /\/node$/, 'argv.1': /\/gamma\.js$/ }, { exe: /\/node$/, 'argv.1': /^-/, 'argv.2': /\/gamma\.js$/ }], exclude: [{ argv: [/^__plugin$/] }] } } }
+  const r = createRegistry([alpha, beta, gamma])
+  const could = (argv) => r.couldMatch(facts({ exe: null, env: null, argv }))
+  assert.deepEqual(could(['/usr/bin/node', '/opt/gamma.js']), ['gamma'], 'argv.1 fits; the exe (unknown) is not tested')
+  assert.deepEqual(could(['node', '--x', '/opt/gamma.js']), ['gamma'], 'the second pattern')
+  assert.deepEqual(could(['/usr/bin/node', '/opt/gamma.js', '__plugin']), [], 'an exclusion that holds on the readable facts excludes it')
+  assert.deepEqual(could(['sshd: u@notty']), [], 'a session process fits nothing')
+  assert.deepEqual(could(['/home/u/.local/share/alpha/versions/2.1.0']), [], 'alpha is known by its exe alone (and an excluded argv0 pattern with no match): the command line proves nothing, so it is not named')
+  assert.deepEqual(could(['/opt/electron', '/opt/beta.cjs']), ['beta'], 'beta: argv holds, exe and env unknown')
+  assert.deepEqual(r.couldMatch({ os: 'darwin', exe: null, argv: ['/usr/bin/node', '/opt/gamma.js'] }), [], 'no signature for that OS')
+  assert.deepEqual(could([]), [], 'no readable command line: nothing to judge on')
+})
+
 test('registry: an exclusion beats a match (same exe, helper argv0)', () => {
   const m = createRegistry([alpha]).match(facts({ exe: '/x/alpha/versions/2.1.0', argv: ['/tmp/rg', '--files'] }))
   assert.deepEqual([m.agent, m.reason], [null, 'excluded'])

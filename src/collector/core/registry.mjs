@@ -90,7 +90,33 @@ export function createRegistry(descriptors) {
     return { agent: null, descriptor: null, reason: excluded ? 'excluded' : 'no-match' }
   }
 
+  // Which descriptors COULD claim a process whose exe (and env) cannot be read, judged on what is readable (review B-1, 4.6
+  // `exe-unreadable`): a match pattern counts when it has at least one constraint on a readable fact, every readable
+  // constraint holds, and no exclude pattern holds on the readable facts; constraints on an unreadable fact are not tested. A
+  // pattern made only of unreadable facts (a harness known by its exe alone) proves nothing, so it names no harness: the
+  // process lands in the caller's "unjudged" count instead of being called a candidate. → [descriptor names]
+  const UNREADABLE = new Set(['exe', 'env'])
+  const readable = (pattern, facts) => {
+    let known = 0
+    for (const [p, want] of Object.entries(pattern)) {
+      if (UNREADABLE.has(p.split('.')[0])) continue
+      if (!holds(want, factAt(facts, p))) return false
+      known++
+    }
+    return known > 0
+  }
+  function couldMatch(facts) {
+    const out = []
+    for (const d of byName.values()) {
+      const sig = d.signatures[facts.os]
+      if (!sig || !(sig.match || []).some((p) => readable(p, facts))) continue
+      if ((sig.exclude || []).some((p) => readable(p, facts))) continue
+      out.push(d.name)
+    }
+    return out
+  }
+
   const isLongLived = (d, facts) => anyOf(d.signatures[facts.os] && d.signatures[facts.os].longLived, facts)
 
-  return { match, isLongLived, get: (name) => byName.get(name) || null, names: () => [...byName.keys()] }
+  return { match, couldMatch, isLongLived, get: (name) => byName.get(name) || null, names: () => [...byName.keys()] }
 }

@@ -24,7 +24,7 @@ export function createLinuxRedirector({ makeClient, procRoot = '/proc', uid = pr
       const f = readFacts(tgid, { root: procRoot, source: 'exec', onExeError: (x) => factsError(x, comm) })
       if (f && f.uid === uid) ev.emit('exec', f)
     })
-    c.on('exit', ({ tgid }) => ev.emit('exit', { pid: tgid }))
+    c.on('exit', ({ tgid }) => { unreadable.delete(tgid); ev.emit('exit', { pid: tgid }) })
     c.on('flow-meta', (m) => ev.emit('flow-meta', m))
     c.on('down', (d) => { if (client === c) ev.emit('down', d) })
     c.on('version-mismatch', (m) => ev.emit('version-mismatch', m))
@@ -32,8 +32,17 @@ export function createLinuxRedirector({ makeClient, procRoot = '/proc', uid = pr
     c.on('heartbeat-error', (m) => ev.emit('heartbeat-error', m))
   }
   const need = () => { if (!client) throw new Error('redirector helper is not running'); return client }
-  // a process of this uid whose exe cannot be read is never judged: say so (D-30) instead of dropping its exec
-  const factsError = (x, comm) => { if (x.uid === uid) ev.emit('facts-error', { pid: x.pid, code: x.code, reason: `/proc/${x.pid}/exe of ${comm || 'a process'} is unreadable (${x.message}); it is never judged, its connections go direct` }) }
+  // a process of this uid whose exe cannot be read is never judged: say so (D-30) instead of dropping its exec. The event
+  // carries what is still readable (comm, the command line) so the daemon can tell a process that could be an agent from one
+  // that is merely not dumpable (4.6 exe-unreadable); the helper's own pid is ours, never a finding. unreadable() lists the
+  // ones seen since the last scan that are still there: what status counts as "unjudged" (review B-1)
+  const unreadable = new Map()
+  const factsError = (x, comm) => {
+    if (x.uid !== uid || (client && client.loaderInfo && x.pid === client.loaderInfo.pid)) return
+    const name = comm || x.comm || null
+    unreadable.set(x.pid, { pid: x.pid, comm: name, errno: x.code || null, argv: x.argv || [] })
+    ev.emit('facts-error', { os: 'linux', pid: x.pid, code: x.code, comm: name, argv: x.argv || [], reason: `/proc/${x.pid}/exe of ${name || 'a process'} is unreadable (${x.message}); it is never judged, its connections go direct` })
+  }
 
   return Object.assign(ev, {
     async start() { client = makeClient(); wire(client); await client.start(); return client.loaderInfo },
@@ -46,8 +55,10 @@ export function createLinuxRedirector({ makeClient, procRoot = '/proc', uid = pr
     lookup: (peer) => (client ? client.lookup(peer) : Promise.reject(Object.assign(new Error('redirector helper is not running'), { code: 'loader-down' }))), // never a miss (D-13)
     watch: (pid, verdict) => need().watch(pid, verdict),
     unwatch: (pid) => need().unwatch(pid),
+    unreadable: () => [...unreadable.values()],
     async scan() {
       const out = []
+      unreadable.clear() // this scan names every one that is there now
       for (const pid of listPids({ root: procRoot })) {
         const st = readStatus(pid, { root: procRoot })
         if (!st || st.uid !== uid) continue

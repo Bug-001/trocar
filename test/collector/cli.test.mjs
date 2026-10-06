@@ -14,7 +14,8 @@ const io = () => { const o = []; const e = []; return { o, e, out: (s) => o.push
 const STATUS = { desired: 'on', actual: 'on', recording: true, degraded: null, engine: { port: 4711, v6: 4711, decrypted: 2, spliced: 1 }, helper: { pid: 9, proto: 1, ok: true }, running_untrusted: 1,
   agents: [{ pid: 10, agent: 'claude-code', trusted: true, trust_var: 'NODE_EXTRA_CA_CERTS', trust_via: 'user settings env', direct: 0 }, { pid: 11, agent: 'claude-code', trusted: false, reason: 'var-missing', direct: 2 },
     { pid: 12, agent: 'opencode', parent_agent: 'claude-code', trusted: true, trust_var: 'asight:marker', trust_via: 'plugin marker', not_via_trust_path: [{ host: 'models.dev', reason: 'before-plugin' }], direct: 0 },
-    { pid: 13, agent: 'deepseek-dsh', trusted: false, reason: 'dsh-node-too-old', hint: 'this dsh runs on a Node older than 22.19.0', direct: 1 }] }
+    { pid: 13, agent: 'deepseek-dsh', trusted: false, reason: 'dsh-node-too-old', hint: 'this dsh runs on a Node older than 22.19.0', direct: 1 }],
+  unjudged: { count: 3, sample: [{ pid: 20, comm: 'sshd', errno: 'EACCES' }, { pid: 21, comm: '(sd-pam)', errno: 'EACCES' }] } }
 
 test('cli: on/off/status go to the control socket; exit 1 when the kernel did not reach the asked state; 3 with no daemon; 2 without XDG_RUNTIME_DIR', async () => {
   const calls = []
@@ -26,6 +27,7 @@ test('cli: on/off/status go to the control socket; exit 1 when the kernel did no
   assert.deepEqual(calls, [['POST', '/on', '/run/user/1000/asight/collector.sock'], ['POST', '/off', '/run/user/1000/asight/collector.sock'], ['GET', '/status', '/run/user/1000/asight/collector.sock']])
   assert.match(t.o[0], /2 decrypted/); assert.match(t.o[0], /untrusted: var-missing · 2 direct/)
   assert.match(t.o[0], /  12 opencode \(started by claude-code\) decrypt \(asight:marker via plugin marker\) · 0 direct\n    not captured \(not via the trust path\): models\.dev \(before-plugin\)/)
+  assert.match(t.o[0], /not judged: 3 process\(es\) of yours whose executable cannot be read and whose command line fits no harness .*: 20 sshd \(EACCES\), 21 \(sd-pam\) \(EACCES\), …/, 'said, not silent (B-1)')
   assert.match(t.o[0], /  13 deepseek-dsh untrusted: dsh-node-too-old — this dsh runs on a Node older than 22\.19\.0 · 1 direct/)
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-cli-')) // never the operator's own ~/.asight
   t = io(); assert.equal(await runCollector(['status'], { env, home, request: async () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }) }, ...t }), 3)

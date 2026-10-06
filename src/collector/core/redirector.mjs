@@ -34,7 +34,9 @@
 //   scan(): Promise<ProcFacts[]>   — this user's live processes (startup and every `on`).
 //   directCount(pid): {count, error} — the process's connections still going direct (status only); count null +
 //                                    the errno when it cannot be told (never 0, D-17).
-//   'facts-error' {pid, code, reason} — a process of this user that could not be read, so never judged (D-30).
+//   'facts-error' {os, pid, code, comm, argv, reason} — a process of this user whose exe could not be read, so never judged
+//                                    (D-30); comm and argv are what is still readable, for "could this be an agent".
+//   unreadable(): [{pid, comm, errno, argv}] — those of this user still there since the last scan (not the helper's own).
 //   helperInfo() → {pid, proto, build}; expectedProto — the helper protocol this build speaks.
 //   restart() / linger()           — respawn a dead helper; whether the OS keeps the daemon after logout (Plan 3a).
 //   'exec' carries ProcFacts = { os, pid, ppid, uid, exe, argv, env (Map, read lazily), cwd, startedAt,

@@ -101,6 +101,27 @@ test('adapter: linger() is true with the logind marker, false without, null when
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
+// Review B-1 (4.6 exe-unreadable): the facts-error carries what is still readable; the helper's own pid is ours, never a
+// finding; unreadable() lists what a scan saw (a pid that exited, or that a later scan no longer finds, is gone from it).
+test('adapter: facts-error carries comm and the command line; the helper\'s own pid is not reported; unreadable() follows exits and scans', async () => {
+  const fs = await import('node:fs'), path = await import('node:path')
+  const p = fakeProc(); const { r, clients } = rig(p)
+  const unreadableExe = (pid, argv, comm) => { p.add(pid, { uid: 1000, exe: '/x/y', argv, comm }); fs.rmSync(path.join(p.root, String(pid), 'exe')); fs.mkdirSync(path.join(p.root, String(pid), 'exe')) }
+  try {
+    await r.start()
+    const helper = clients[0].loaderInfo.pid
+    unreadableExe(710, ['sshd: u@notty'], 'sshd'); unreadableExe(711, ['(sd-pam)'], '(sd-pam)'); unreadableExe(helper, ['asight-redirector', '--parent-pid', '1'], 'asight-redirect')
+    const errs = []; r.on('facts-error', (x) => errs.push(x))
+    assert.deepEqual(await r.scan(), [], 'nothing readable')
+    assert.deepEqual(errs.map((x) => [x.os, x.pid, x.comm, x.argv]).sort((a, b) => a[1] - b[1]), [['linux', 710, 'sshd', ['sshd: u@notty']], ['linux', 711, '(sd-pam)', ['(sd-pam)']]], 'the helper is not among them')
+    assert.deepEqual(r.unreadable().map((u) => [u.pid, u.comm, u.errno]).sort(), [[710, 'sshd', 'EINVAL'], [711, '(sd-pam)', 'EINVAL']])
+    await clients[0].raw({ op: '__emit', ev: 'exit', tgid: 710, ts_ns: 3 }); await new Promise((res) => setTimeout(res, 50))
+    assert.deepEqual(r.unreadable().map((u) => u.pid), [711], 'an exit takes it out')
+    for (const g of ['710', '711']) fs.rmSync(path.join(p.root, g), { recursive: true }); await r.scan()
+    assert.deepEqual(r.unreadable(), [], 'a scan names the ones that are there now')
+  } finally { await r.close(); p.done() }
+})
+
 // D-30: an exec of this user's process whose exe cannot be read is a facts-error, not a dropped event.
 test('adapter: a process of this uid whose exe is unreadable is a facts-error with the errno; one that is gone is not', async () => {
   const fs = await import('node:fs'), path = await import('node:path')

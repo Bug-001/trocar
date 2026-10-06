@@ -35,6 +35,7 @@ export function formatStatus(s) {
   }
   for (const n of s.negatives || []) lines.push(`  not captured (negative cache): pid ${n.pid} ${n.host} — ${n.cause}`)
   for (const u of s.unmatched || []) lines.push(`  unmatched: pid ${u.pid} ${u.exe} is claimed by ${u.candidates.join(' and ')}; never watched`)
+  if (s.unjudged && s.unjudged.count) lines.push(`not judged: ${s.unjudged.count} process(es) of yours whose executable cannot be read and whose command line fits no harness (not dumpable, e.g. session helpers): ${s.unjudged.sample.map((u) => `${u.pid} ${u.comm || '?'} (${u.errno || '?'})`).join(', ')}${s.unjudged.count > s.unjudged.sample.length ? ', …' : ''}`)
   if (s.health) lines.push(...(s.health.error ? [s.health.error] : formatHealth(s.health, { daemonLine: false })))
   if (s.events && s.events.lost) lines.push(`event log: ${s.events.lost} line(s) could not be written${s.events.losing_since ? ` (failing since ${s.events.losing_since}: ${s.events.last_error})` : '; the gap is recorded as log-gap'}`)
   return lines.join('\n')

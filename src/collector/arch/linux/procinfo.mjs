@@ -150,13 +150,14 @@ export function countDirectConnections(pid, { root = '/proc', enginePort } = {})
   return n
 }
 
-/** /proc/<pid>/status → { ppid, uid (real) }, or null. */
+/** /proc/<pid>/status → { ppid, uid (real), name (comm) }, or null. */
 export function readStatus(pid, { root = '/proc' } = {}) {
   let text
   try { text = fs.readFileSync(path.join(root, String(pid), 'status'), 'utf8') } catch { return null }
   const ppid = /^PPid:\s*(\d+)/m.exec(text)
   const uid = /^Uid:\s*(\d+)/m.exec(text)
-  return { ppid: ppid ? Number(ppid[1]) : null, uid: uid ? Number(uid[1]) : null }
+  const name = /^Name:\s*(.*)$/m.exec(text)
+  return { ppid: ppid ? Number(ppid[1]) : null, uid: uid ? Number(uid[1]) : null, name: name ? name[1] : null }
 }
 
 /** readlink /proc/<pid>/cwd → absolute path, or null. */
@@ -203,7 +204,9 @@ export function readFacts(pid, { root = '/proc', source = 'exec', onExeError = (
   const st = readStatus(pid, { root })
   let exeErr = null
   const exe = readExe(pid, { root, onError: (e) => { exeErr = e } })
-  if (st && exe == null && exeErr && !GONE.has(exeErr.code)) onExeError({ pid, uid: st.uid, code: exeErr.code || null, message: String(exeErr.message || exeErr) })
+  // comm and the command line are readable when the exe is not (a process that is not dumpable): they are what the daemon
+  // judges "could this be an agent" on (4.6 exe-unreadable, review B-1)
+  if (st && exe == null && exeErr && !GONE.has(exeErr.code)) onExeError({ pid, uid: st.uid, code: exeErr.code || null, message: String(exeErr.message || exeErr), comm: st.name, argv: readArgv(pid, { root }) })
   if (!st || exe == null) return null
   let env, envError = null
   const facts = { os: 'linux', pid, ppid: st.ppid, uid: st.uid, exe, argv: readArgv(pid, { root }), env: null, cwd: readCwd(pid, { root }), startedAt: readStartTime(pid, { root }), startTicks: readStartTicks(pid, { root }), source }
