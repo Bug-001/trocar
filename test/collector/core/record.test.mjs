@@ -253,3 +253,23 @@ test('compressed request bodies: wire bytes verbatim in req_body_b64; gzip decod
   assert.equal(mk('/v1/messages', null, Buffer.from(json)).req_body_b64, undefined, 'an uncompressed body has no wire fields')
   assert.equal('transport' in g, false, 'still an HTTP envelope (T16)')
 })
+
+// review D: req_encoding_error = "the bytes are complete, only not decoded" (§记录); an incomplete compressed body
+// is labelled by req_truncated / req_partial alone; a decoded body that is not UTF-8 is not stored as lossy text
+test('compressed request bodies: cut or unfinished bodies are not decoded; non-UTF-8 decoded bytes stay undecoded; deflate / br decoded; empty gzip body', async () => {
+  const zlib = (await import('node:zlib')).default
+  const json = '{"model":"m","messages":[{"role":"user","content":"ok"}]}'
+  const mk = (enc, body, extra = {}) => buildTransparentEnvelope({ id: 'c', flow: FLOW, seq: 0, resp: null, error: null,
+    req: { head: { ...head('POST /v1/messages HTTP/1.1\r\n\r\n'), method: 'POST', target: '/v1/messages', headers: enc ? [['Content-Encoding', enc]] : [] }, body, truncated: false, tsStart: '2026-10-05T00:00:00.000Z', ...extra } })
+  const gz = zlib.gzipSync(json), cut = gz.subarray(0, 20)
+  const t = mk('gzip', cut, { truncated: true })
+  assert.deepEqual([t.req_body, t.req_body_b64, t.req_content_encoding, 'req_encoding_error' in t, t.req_truncated, t.req_body_bytes], [null, cut.toString('base64'), 'gzip', false, true, 20])
+  const p = mk('gzip', gz, { partial: 'aborted' }) // even a body that would decode: it never finished
+  assert.deepEqual([p.req_body, p.req_body_b64, 'req_encoding_error' in p, p.req_partial], [null, gz.toString('base64'), false, 'aborted'])
+  const notUtf8 = mk('gzip', zlib.gzipSync(Buffer.from([0x7b, 0xff, 0xfe, 0x7d])))
+  assert.deepEqual([notUtf8.req_body, notUtf8.req_encoding_error], [null, 'decoded body is not UTF-8'])
+  assert.equal(mk('deflate', zlib.deflateSync(json)).req_body, json)
+  assert.equal(mk('br', zlib.brotliCompressSync(json)).req_body, json)
+  const empty = mk('gzip', Buffer.alloc(0))
+  assert.deepEqual([empty.req_body, 'req_body_b64' in empty, 'req_encoding_error' in empty], ['', false, false])
+})

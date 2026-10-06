@@ -21,15 +21,21 @@ function lowerHeaders(pairs) {
 // The wire bytes stay verbatim (req_body_b64 + req_content_encoding); req_body is the decoded text. zstd is
 // never decoded at capture: the reader decodes req_body_b64, so a capture does not depend on which Node
 // recorded it; req_body is then null and req_encoding_error says so (invariant 4). LLM calls only: a
-// non-LLM body stays {raw_chars} metadata (RFC 4.1). → null, or {text: Buffer|null, wire: {...}}
-function compressedRequest(reqHeaders, body) {
+// non-LLM body stays {raw_chars} metadata (RFC 4.1). req_encoding_error means "the bytes are complete, only
+// not decoded" (§记录): a body cut at the cap or never finished is not decoded at all — its req_truncated /
+// req_partial says why — and decoded bytes that are not UTF-8 are not stored as lossy text.
+// → null, or {text: Buffer|null, wire: {...}}
+function compressedRequest(reqHeaders, body, incomplete) {
   const enc = reqHeaders['content-encoding']
   const codings = String(enc || '').split(',').map((c) => c.trim().toLowerCase()).filter(Boolean)
   if (!body || !body.length || codings.every((c) => c === 'identity')) return null
   const wire = { req_body_b64: body.toString('base64'), req_content_encoding: enc }
+  if (incomplete) return { text: null, wire }
   if (codings.includes('zstd')) return { text: null, wire: { ...wire, req_encoding_error: 'zstd request body not decoded at capture; decode req_body_b64' } }
   const dec = decodeContent(body, enc)
-  return dec.decoded ? { text: dec.buf, wire } : { text: null, wire: { ...wire, req_encoding_error: dec.error } }
+  if (!dec.decoded) return { text: null, wire: { ...wire, req_encoding_error: dec.error } }
+  try { new TextDecoder('utf-8', { fatal: true }).decode(dec.buf) } catch { return { text: null, wire: { ...wire, req_encoding_error: 'decoded body is not UTF-8' } } }
+  return { text: dec.buf, wire }
 }
 
 /**
@@ -43,7 +49,7 @@ function compressedRequest(reqHeaders, body) {
  */
 export function buildTransparentEnvelope({ id, flow, seq, req, resp, error = null }) {
   const reqHeaders = lowerHeaders(req.head.headers)
-  const comp = isLlmCall(req.head.target) ? compressedRequest(reqHeaders, req.body) : null
+  const comp = isLlmCall(req.head.target) ? compressedRequest(reqHeaders, req.body, !!(req.truncated || req.partial)) : null
   const haveResp = !!resp && !resp.aborted && !error
   const durationMs = resp && resp.tsStart && resp.tsEnd ? Date.parse(resp.tsEnd) - Date.parse(resp.tsStart) : null
 
