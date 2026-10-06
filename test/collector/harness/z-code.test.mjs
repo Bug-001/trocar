@@ -120,7 +120,7 @@ test('z-code inject: network.caCertFile in ~/.zcode/cli/config.json = combined-z
     const codes = p.records.map((r) => r.code)
     assert.deepEqual(codes.filter((c) => c !== 'harness-note'), ['relative-path'], 'nothing unreadable: asight\'s own bundle is not a source')
     assert.ok(p.records.some((r) => r.code === 'harness-note' && r.reason.includes('httpProxyCaCertPath') && r.reason.includes(desk)), 'the desktop setting that wins is named')
-    assert.ok(p.records.some((r) => r.code === 'harness-note' && /^ZCODE_AGENT_CA_CERT is set in this shell/.test(r.reason)), 'a ZCODE_AGENT_CA_CERT in the install shell is named')
+    assert.ok(p.records.some((r) => r.code === 'harness-note' && /^(?:z-code: )?ZCODE_AGENT_CA_CERT is set in this shell/.test(r.reason)), 'a ZCODE_AGENT_CA_CERT in the install shell is named')
     fs.rmSync(path.join(s.home, '.zcode', 'cli'), { recursive: true })
     assert.equal(planFor(s).entries[0].path, path.join(s.home, '.zcode/cli/config.json'), 'the CLI config is created when only the desktop has run')
   } finally { s.done() }

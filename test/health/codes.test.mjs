@@ -8,7 +8,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { NOT_CAPTURED_FAILURE, NOT_CAPTURED_EXPECTED, FAILURE_EVENTS, STATE_EVENTS, WHERE, CODES, isFailure, isCode, notCapturedClass, checkRecord } from '../../src/health/codes.mjs'
+import { NOT_CAPTURED_FAILURE, NOT_CAPTURED_EXPECTED, FAILURE_EVENTS, STATE_EVENTS, WHERE, CODES, TRUST_REASONS, isFailure, isCode, notCapturedClass, checkRecord } from '../../src/health/codes.mjs'
+import { EVENT, CODE, TRUST_REASON } from '../../src/collector/core/codes.mjs'
+import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : /\.mjs$/.test(e.name) ? [path.join(d, e.name)] : []))
@@ -28,6 +30,9 @@ function literals(root) {
     grab(/\bcode:\s*'([^']+)'/g, 'code')
     grab(/\bnot_captured(?:\s*=\s*|:\s*)'([^']+)'/g, 'not_captured')
     grab(/\bfailure\(\s*'([^']+)'/g, 'where')
+    // a name written through the collector's name maps (src/collector/core/codes.mjs): `EVENT.agentTrusted`, `CODE.residue`
+    for (const m of src.matchAll(/\bEVENT\.(\w+)/g)) out.push({ kind: 'event', name: EVENT[m[1]] ?? `EVENT.${m[1]} (not in the map)`, file: rel })
+    for (const m of src.matchAll(/\bCODE\.(\w+)/g)) out.push({ kind: 'code', name: CODE[m[1]] ?? `CODE.${m[1]} (not in the map)`, file: rel })
     if (rel.endsWith(path.join('ws', 'recorder.mjs'))) grab(/\bfail\(\s*'([^']+)'/g, 'code')
   }
   return out
@@ -84,4 +89,17 @@ test('0.1 §2 src/health imports only node built-ins, src/paths.mjs and src/raw/
       assert.ok(to === 'src/paths.mjs' || to.startsWith('src/raw/') || to.startsWith('src/health/'), `${path.relative(REPO, f)} imports ${to}`)
     }
   }
+})
+
+// The harness lane's name maps (src/collector/core/codes.mjs) hold no name that is not in the closed set, and a trust
+// reason a descriptor defines (its `trust.hints` keys) is one of TRUST_REASONS (core names no harness: they are listed in
+// the closed set once, and this test is what keeps the list whole).
+test('D38 the collector name maps and every harness trust reason are in the closed set', async () => {
+  for (const [k, v] of Object.entries(EVENT)) assert.ok([...FAILURE_EVENTS, ...STATE_EVENTS].includes(v), `EVENT.${k} = ${v}`)
+  for (const [k, v] of Object.entries(CODE)) assert.ok(isCode(v), `CODE.${k} = ${v}`)
+  for (const r of Object.keys(TRUST_REASON)) assert.ok(TRUST_REASONS.includes(r), `core trust reason ${r}`)
+  const unlisted = []
+  for (const h of await loadHarnesses()) for (const r of Object.keys((h.trust && h.trust.hints) || {})) if (!TRUST_REASONS.includes(r)) unlisted.push(`${h.name}: ${r}`)
+  assert.deepEqual(unlisted, [], 'a harness defines a trust reason that src/health/codes.mjs TRUST_REASONS does not list')
+  for (const r of TRUST_REASONS) assert.ok(isCode(r), r)
 })

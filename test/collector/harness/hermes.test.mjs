@@ -167,7 +167,7 @@ test('hermes inject: the CA settings of .op.env and of the checkout .env, which 
     assert.deepEqual(fps(p.files[0].data), [fp(A), fp(B), fp(C), fp(CA)])
     const flip = p.records.filter((r) => /as a fill instead of an override/.test(r.reason))
     assert.equal(flip.length, 1)
-    assert.ok(flip[0].reason.startsWith(`${path.join(s.home, '.hermes/.env')} does not exist`) && flip[0].reason.includes(path.join(s.home, '.hermes/hermes-agent/.env')), 'only the home .env asight creates; the profile .env exists')
+    assert.ok(flip[0].reason.replace(/^hermes: /, '').startsWith(`${path.join(s.home, '.hermes/.env')} does not exist`) && flip[0].reason.includes(path.join(s.home, '.hermes/hermes-agent/.env')), 'only the home .env asight creates; the profile .env exists')
     s.put('.hermes/.env', 'Y=1\n')
     assert.ok(!planFor(s).records.some((r) => /as a fill instead of an override/.test(r.reason)), 'nothing flips when the home .env is there')
     fs.rmSync(path.join(s.home, '.hermes/.env')); fs.rmSync(path.join(s.home, '.hermes/hermes-agent/.env'))

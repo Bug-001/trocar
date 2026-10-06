@@ -1,9 +1,10 @@
-// codes.mjs — the event names and asight-named codes the collector writes into flows/ (D38: a capture failure is
-// never silent; coordinator 2026-10-06: every failure goes to ~/.asight/collector/flows/, events are
-// `{ts, event, where?, code?, reason, …}`, written by core/events.mjs appendEvent). One place on this branch, so the
-// set moves as one piece into src/health/codes.mjs at integration. `code` is machine-readable and closed; a Node errno
-// goes into `code` as it is; free text only into `reason`. Trust reasons a single harness defines (its descriptor's
-// `trust.hints` keys) are that harness's codes and live in its file: core names no harness (4.6 §结构).
+// codes.mjs — the collector's own names for the event kinds and asight-named codes it writes into flows/ (D38: a capture
+// failure is never silent; every failure goes to ~/.asight/collector/flows/, events are `{ts, event, where?, code?, reason,
+// …}`, written by core/events.mjs appendEvent). The closed sets themselves are src/health/codes.mjs (writers and readers
+// take their names from there); EVENT and CODE below are the harness-side handles on names of those sets, and
+// test/health/codes.test.mjs fails when one is not in them. `code` is machine-readable and closed; a Node errno goes into
+// `code` as it is; free text only into `reason`. Trust reasons a single harness defines (its descriptor's `trust.hints`
+// keys) are that harness's codes and live in its file; src/health/codes.mjs TRUST_REASONS lists them once.
 
 // Event kinds.
 export const EVENT = Object.freeze({

@@ -96,7 +96,7 @@ test('F1 CA and trust: (a) an untrusted agent is a condition until it exits, the
     await req(s.sock, 'POST', '/on', {})
     // (a)
     let h = await endpoint(s)
-    assert.deepEqual(cond(h, 'untrusted').map((c) => [c.pid, c.reason]), [[6161, 'config-after-start']], '(a) the endpoint lists the pid as a current condition')
+    assert.deepEqual(cond(h, 'untrusted').map((c) => [c.pid, c.code]), [[6161, 'config-after-start']], '(a) the endpoint lists the pid as a current condition')
     await clients[0].raw({ op: '__emit', ev: 'exit', tgid: 6161, ts_ns: 5 })
     await until(() => flowsOf(s).some((f) => f.event === 'agent-exit' && f.pid === 6161))
     h = await endpoint(s)

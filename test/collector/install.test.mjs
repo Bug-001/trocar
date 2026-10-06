@@ -69,7 +69,7 @@ test('install: an existing user CA in settings becomes extra-cc.pem (certificate
     assert.deepEqual(r.entries.map((e) => e.result), ['restored'])
     assert.equal(fs.readFileSync(settingsOf(b), 'utf8'), before)
     assert.deepEqual(listAll(b.dir), ['capture-2026-10-06.ndjson', 'flows/', `flows/${day}`], 'only the captures and the records remain')
-    const events = fs.readdirSync(path.join(b.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(b.dir, 'flows', n), 'utf8').trim().split('\n').map((l) => JSON.parse(l)))
+    const events = fs.readdirSync(path.join(b.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(b.dir, 'flows', n), 'utf8').trim().split('\n').map((l) => JSON.parse(l))).filter((e) => e.kind !== 'result') // the result line is its own check (D1-5)
     assert.deepEqual(events.map((e) => [e.event, e.where, e.code, e.harness]), [['install-note', 'install', undefined, 'claude-code'], ['install-note', 'install', 'cert-not-merged', 'claude-code'], ['install-note', 'install', 'harness-note', 'claude-code']], 'what install said is kept where status finds it (D38)')
     assert.match(events[1].reason, /corp\.pem: block 1 \(PRIVATE KEY\) is not carried over: a private key is never copied/, 'the left-out block is named by type and file, never its content (T14)')
     assert.match(events[2].reason, /exported only in a shell asight did not see/)
@@ -402,7 +402,7 @@ test('install / uninstall of plugin-style entries: plugins and the patch row in,
     assert.ok(!fs.existsSync(plugin) && !fs.existsSync(path.join(b.dir, 'plugins')), 'the plugin file and asight\'s plugin dir are gone')
     assert.deepEqual(r.residue, [path.join(b.home, '.config', 'plug', 'node_modules')])
     assert.ok(fs.existsSync(path.join(b.home, '.config', 'plug', 'node_modules', 'sdk')), 'never deleted')
-    const events = fs.readdirSync(path.join(b.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(b.dir, 'flows', n), 'utf8').trim().split('\n').map((l) => JSON.parse(l)))
+    const events = fs.readdirSync(path.join(b.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(b.dir, 'flows', n), 'utf8').trim().split('\n').map((l) => JSON.parse(l))).filter((e) => e.kind !== 'result') // the result line is its own check (D1-5)
     assert.deepEqual(events.map((e) => [e.event, e.code]), [['install-note', 'harness-note'], ['uninstall-note', 'reverted-not-identical'], ['uninstall-note', 'residue-not-removed']])
     assert.equal(readManifest(b.dir), null)
   } finally { b.done() }
