@@ -78,3 +78,14 @@ test('text-edit: what counts as only asight\'s skeleton — blank for every form
   assert.equal(onlySkeleton('# a comment\n\n', 'yaml-list'), true, 'dsh will not start on a patch file with no list in it')
   assert.equal(onlySkeleton('- set: {}\n', 'yaml-list'), false)
 })
+
+// D39③ / task 3: the text asight put into users' files before this build must stay recognisable (the sentinel is how an install the
+// manifest has lost, or a standalone asight-off, finds its own block and line — 1.6 R3). Pinned as literals: a test that imports the
+// constants would follow a changed constant and stay green.
+test('text-edit: the sentinel text written into users\' files is exactly what earlier builds wrote', () => {
+  assert.equal(SENTINEL, 'asight collector')
+  assert.equal(BLOCK_BEGIN, '# >>> asight collector >>> written by `asight collector install`; `asight collector uninstall` removes this block')
+  assert.equal(BLOCK_END, '# <<< asight collector <<<')
+  assert.equal(OFF_PREFIX, '#asight-collector-off# ')
+  assert.equal(lineComment('Kimi shim'), '# asight collector: Kimi shim (`asight collector uninstall` removes this line)')
+})
