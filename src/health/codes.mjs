@@ -12,7 +12,7 @@ export const NOT_CAPTURED_EXPECTED = Object.freeze(['policy', 'not-trust-path', 
 
 /** Event lines that are failures. Every other event is a state change the reader folds conditions with. */
 export const FAILURE_EVENTS = Object.freeze(['failure', 'agent-untrusted', 'helper-down', 'helper-version-mismatch', 'attach-failed', 'detach-failed', 'log-gap'])
-export const STATE_EVENTS = Object.freeze(['switch', 'daemon-start', 'daemon-stop', 'agent-exit', 'agent-trusted', 'negative-cache-cleared', 'bundles-rebuilt', 'agent-transport', 'ca-ok', 'install-note', 'uninstall-note', 'mitm-start', 'mitm-stop'])
+export const STATE_EVENTS = Object.freeze(['switch', 'daemon-start', 'daemon-stop', 'agent-exit', 'agent-trusted', 'negative-cache-cleared', 'bundles-rebuilt', 'agent-transport', 'ca-ok', 'install-note', 'uninstall-note', 'mitm-start', 'mitm-stop', 'retention-ok', 'retention-set'])
 
 /** Failure codes the failure recorder never folds by where + code: the reader folds each of them into a condition per
  *  (pid, host), so a folded line would make the pairs folded into it vanish (4.6 §事件与码, D1-1). Bounded: a (pid,
@@ -22,7 +22,9 @@ export const UNFOLDED_CODES = Object.freeze(['negative-cache'])
 /** The part of asight a record comes from. */
 export const WHERE = Object.freeze(['start', 'daemon', 'control', 'record', 'events', 'watch', 'harness', 'tracker', 'engine', 'ws', 'helper', 'heartbeat', 'state', 'switch', 'kernel', 'ca', 'bundle', 'install', 'uninstall',
   // the old capture (RFC 4.1 过渡期, ~/.asight/logs/mitm-events.ndjson; deleted with it)
-  'mitm', 'proxy', 'sink', 'autostart', 'steer', 'shard'])
+  'mitm', 'proxy', 'sink', 'autostart', 'steer', 'shard',
+  // the retention settings (D40, RFC 4.6 §记录「保存级别」): read by the collector's engine and by the old MITM / reverse proxy
+  'retention'])
 
 /** The reasons a running agent is not (yet) trusted — the `code` of `agent-untrusted`, and of the `agent-exit` that ends
  *  it. Generic ones come from the resolver (core/trust/confirm.mjs, core/tracker.mjs); the rest are a harness's own
@@ -51,6 +53,9 @@ export const CODES_BY_PART = Object.freeze({
   helper: ['helper-error', 'heartbeat-failed', 'heartbeat-gap', 'loader-down', 'loader-timeout'],
   engine: ['lookup-miss', 'describe-error', 'engine-error', 'leaf-error', 'flow-write-failed', 'system-roots-unavailable', 'trust-store-error', 'upstream-ca-unreadable', 'framer-error', 'negative-cache', 'upstream-slow', 'unpaired-response'],
   ws: ['write-failed', 'decode-failed', 'broken', 'recorder-error', 'pattern-invalid'],
+  // retention.json cannot be read / parsed / holds a cell that is neither full nor log (the call is kept in full), or the
+  // classifier threw; a traffic pattern that does not compile is `pattern-invalid` (above), also under where 'retention'
+  retention: ['retention-unparsable', 'retention-unreadable', 'classify-failed', 'pattern-invalid'],
   switch: ['state-mismatch', 'state-unparsable'],
   kernel: ['kernel-drops'],
   ca: ['ca-invalid'],

@@ -39,6 +39,11 @@ export const mitmOut = () => path.join(asightHome(), 'claude-capture.ndjson');
 // root's scan only descends into <sub>/calls.ndjson (server.mjs sourceFiles), and `asight etl <dir>`
 // does not descend at all. It needs a root of its own: the home's one-level scan never reaches it.
 export const collectorHome = (home = asightHome()) => path.join(home, 'collector');
+// D40 (RFC 4.6 §记录「保存级别」): what to keep of each call, per harness × traffic class — one per-user file read by BOTH
+// capture paths (src/capture/retention.mjs) — and the log of every change to it. Not in the collector's state.json: the
+// old MITM reads it too, and state.json is the collector's own.
+export const retentionFile = (home = asightHome()) => path.join(home, 'retention.json');
+export const retentionLog = (home = asightHome()) => path.join(home, 'logs', 'retention.ndjson');
 
 // Capture CA. NOT symmetric with the others: for every other path "not found" means an empty board,
 // but for the CA it means the code MINTS A SECOND ROOT and asks the user to trust it — while the
