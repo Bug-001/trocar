@@ -17,7 +17,8 @@
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { sealUnchecked, SealRefused, oldRootReason, cleanDeadLocks } from './seal.mjs';
+import { sealUnchecked, SealRefused, oldRootReason, cleanDeadLocks, acquireLock, releaseLock, realish } from './seal.mjs';
+import { asightHome } from '../paths.mjs';
 import { verifyAgainst, copyRelation } from './verify.mjs';
 import { sealedSources, isSealedPath, streamOfSealed } from './discover.mjs';
 import { fsyncDir, closedMarkerPath } from './closed.mjs';
@@ -123,14 +124,15 @@ export async function defaultProcessList({ fs = nodeFs } = {}) {
       try {
         const argv = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0');
         if (argv[argv.length - 1] === '') argv.pop();
-        out.push({ pid: Number(pid), argv, cmd: argv.join(' ') });            // the exact argv
+        let ppid = null; try { const st = fs.readFileSync(`/proc/${pid}/stat`, 'utf8'); ppid = Number(st.slice(st.lastIndexOf(')') + 2).split(' ')[1]); } catch {}
+        out.push({ pid: Number(pid), ppid, argv, cmd: argv.join(' ') });      // the exact argv
       } catch {}
     }
     return out;
   }
-  const r = spawnSync('ps', ['-axww', '-o', 'pid=,command='], { encoding: 'utf8', maxBuffer: 64 << 20 });
+  const r = spawnSync('ps', ['-axww', '-o', 'pid=,ppid=,command='], { encoding: 'utf8', maxBuffer: 64 << 20 });
   if (r.error || r.status !== 0) throw new Error(`cannot list processes: ps failed (${r.error ? r.error.message : r.stderr})`);
-  return r.stdout.split('\n').filter(Boolean).map((l) => { const m = /^\s*(\d+)\s+(.*)$/.exec(l); return m ? { pid: Number(m[1]), cmd: m[2] } : null; }).filter(Boolean);
+  return r.stdout.split('\n').filter(Boolean).map((l) => { const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(l); return m ? { pid: Number(m[1]), ppid: Number(m[2]), cmd: m[3] } : null; }).filter(Boolean);
 }
 // `asight shard --watch` among the processes, from argv (review 3 F9: a regex over the joined command
 // line matched any line containing the text — `vim asight shard --watch` — and missed `npx asight --
@@ -139,7 +141,8 @@ export async function defaultProcessList({ fs = nodeFs } = {}) {
 // `--`, the subcommand `shard` and the flag `--watch` before any `--`.
 const LAUNCHERS = new Set(['node', 'nodejs', 'bun', 'deno', 'npx', 'pnpx', 'npm', 'pnpm', 'yarn', 'exec', 'x', 'dlx', 'env', 'nohup', 'nice', 'time', 'caffeinate', 'sudo']);
 const ASIGHT = /^asight(?:\.m?js)?(?:@[^/]*)?$/;
-export function isShardWatch(argv) {
+// → the arguments after the program and an optional `--` when the program is asight, else null
+function asightArgs(argv) {
   let i = 0;
   for (; i < argv.length; i++) {
     const a = argv[i], prev = argv[i - 1] || '';
@@ -147,12 +150,20 @@ export function isShardWatch(argv) {
     if (i > 0 && /^-/.test(prev) && prev !== '--' && !prev.includes('=') && !ASIGHT.test(path.basename(a))) continue;   // an option's value
     break;
   }
-  if (i >= argv.length || !ASIGHT.test(path.basename(argv[i]))) return false;
-  let rest = argv.slice(i + 1);
-  if (rest[0] === '--') rest = rest.slice(1);
-  if (rest[0] !== 'shard') return false;
+  if (i >= argv.length || !ASIGHT.test(path.basename(argv[i]))) return null;
+  const rest = argv.slice(i + 1);
+  return rest[0] === '--' ? rest.slice(1) : rest;
+}
+export function isShardWatch(argv) {
+  const rest = asightArgs(argv);
+  if (!rest || rest[0] !== 'shard') return false;
   const args = rest.slice(1), end = args.indexOf('--');
   return (end < 0 ? args : args.slice(0, end)).includes('--watch');
+}
+// `asight raw seal …`, either entry (review 3 confirm, row 2)
+export function isRawSeal(argv) {
+  const rest = asightArgs(argv);
+  return !!rest && rest[0] === 'raw' && rest[1] === 'seal';
 }
 // macOS `ps` joins argv with spaces, so a path with a space comes back in pieces: pieces of an absolute
 // path are put back together where the joined path exists (the longest that does).
@@ -166,8 +177,46 @@ export function argvOfCommand(cmd, { fs = nodeFs } = {}) {
   }
   return out;
 }
-export const shardWatchers = (procs) => procs.filter((p) => p.pid !== process.pid && /asight/.test(p.argv ? p.argv.join(' ') : p.cmd)
-  && isShardWatch(p.argv || argvOfCommand(p.cmd)));
+const argvOf = (p) => (/asight/.test(p.argv ? p.argv.join(' ') : p.cmd) ? p.argv || argvOfCommand(p.cmd) : null);
+export const shardWatchers = (procs) => procs.filter((p) => p.pid !== process.pid && argvOf(p) && isShardWatch(argvOf(p)));
+// This process and the ones that started it (`npx asight raw seal` runs under an `npm exec asight raw
+// seal` parent): never "another sealer". Walked by ppid where the process list has it.
+function selfAndAncestors(procs) {
+  const ppid = new Map(procs.filter((p) => p.ppid != null).map((p) => [p.pid, p.ppid]));
+  const out = new Set();
+  for (let p = process.pid; p > 1 && !out.has(p); p = p === process.pid ? process.ppid : ppid.get(p)) out.add(p);
+  return out;
+}
+// The trees another `asight raw seal` writes in: its target, and for the closed-shard entry the
+// sessions root it files into (its --sessions, else the default). Null when they cannot be told (a
+// relative path: its cwd is unknown).
+function sealerTrees(argv, sessionsRoot) {
+  const rest = asightArgs(argv).slice(2), out = [];
+  let legacy = false, sessions = null;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === '--legacy') legacy = true;
+    else if (a === '--sessions') sessions = rest[++i];
+    else if (a === '--quiet') i++;
+    else if (!a.startsWith('-')) out.push(a);
+  }
+  if (!legacy) out.push(sessions || sessionsRoot);
+  return out.length && out.every((p) => p && path.isAbsolute(p)) ? out : null;
+}
+// Other `asight raw seal` processes working in `target`'s tree — or where it cannot be told (review 3
+// confirm, row 2): two runs over one tree would each check and delete, or seal what the other
+// deletes. One on another tree is left alone (every shard has its own lock besides).
+export function otherSealers(procs, { target = null, sessionsRoot = path.join(asightHome(), 'sessions'), fs = nodeFs } = {}) {
+  const mine = selfAndAncestors(procs);
+  const real = (p) => realish(fs, p), within = (a, b) => a === b || a.startsWith(b.endsWith(path.sep) ? b : b + path.sep);
+  const t = target && real(target);
+  return procs.filter((p) => {
+    if (mine.has(p.pid) || !argvOf(p) || !isRawSeal(argvOf(p))) return false;
+    if (!t) return true;
+    const trees = sealerTrees(argvOf(p), sessionsRoot);
+    return !trees || trees.map(real).some((x) => within(t, x) || within(x, t));
+  });
+}
 
 const sameStat = (a, b) => a.size === b.size && a.mtimeMs === b.mtimeMs && a.ino === b.ino;
 
@@ -192,6 +241,9 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
   try { procs = await processList(); } catch (e) { throw refuseAll(`cannot tell whether \`asight shard --watch\` is running (${e.message})`); }
   const w = shardWatchers(procs);
   if (w.length) throw refuseAll(`\`asight shard --watch\` is running (pid ${w.map((p) => p.pid).join(', ')}) and appends to these files — stop it first`);
+  // another sealer: two runs over one tree would each check and delete, or seal what the other deletes
+  const o = otherSealers(procs, { target, fs });
+  if (o.length) throw refuseAll(`another \`asight raw seal\` is running (pid ${o.map((p) => p.pid).join(', ')}) — run one sealer at a time; nothing sealed or deleted`);
   // 2. quiet window
   const before = new Map(files.map((f) => [f, fs.statSync(f)]));
   await sleep(quietMs);
@@ -271,6 +323,17 @@ export function planFile(fs, f, { deleteOriginal = false } = {}) {
 // is journalled, a failure with the true state of the original — before the unlink "kept", after it
 // "deleted, <the step that failed>" (review 3 F7). → { deleted, refused?, error?, state? }
 function deleteVerified(fs, f, copies, { moved, journal }) {
+  // the shard's seal lock, from the check through the unlink: no sealer touches this file meanwhile
+  // (review 3 confirm, row 2). One a live sealer holds refuses the file, its lock left alone.
+  let lock;
+  try { lock = acquireLock(fs, f, journal); } catch (e) {
+    const reason = `${String(e.message).replace(/^refusing to seal [^:]*: /, '')} — nothing deleted`;
+    appendJournal({ op: 'delete-original', outcome: 'refused', file: f, reason }, { journal });
+    return { deleted: false, refused: reason };
+  }
+  try { return deleteLocked(fs, f, copies, { moved, journal }); } finally { releaseLock(fs, lock); }
+}
+function deleteLocked(fs, f, copies, { moved, journal }) {
   const v = verifyAgainst(copies, f, { fs });
   if (!v.ok) {
     const reason = `its sealed copy does not match it byte for byte (${v.reason}) — nothing deleted; check with \`asight raw verify\``;

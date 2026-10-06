@@ -176,7 +176,7 @@ function lateChange(fs, shard, outs, { sum, length, was, now }) {
 // 4.2 OPEN 「旧根」(recommended default): the old root ~/.atrace/asight/ is never written — D27① keeps
 // it readable as it is. Its files are sealed only after the operator moves them into ~/.asight
 // (D27③, a same-device rename). Compared by real path, so a symlink into it is caught too.
-function realish(fs, p) {                     // realpath of the longest existing prefix, plus the rest
+export function realish(fs, p) {                     // realpath of the longest existing prefix, plus the rest
   let cur = path.resolve(p);
   const tail = [];
   for (;;) {
@@ -306,7 +306,7 @@ function lockHolder(fs, p) {
   const alive = pid > 0 ? pidAlive(pid) : age < 5000;
   return { pid: pid > 0 ? pid : null, alive };
 }
-function acquireLock(fs, shard, journal) {
+export function acquireLock(fs, shard, journal) {
   const p = shard + LOCK_EXT;
   for (let tries = 0; tries < 2; tries++) {
     try { const fd = fs.openSync(p, 'wx', 0o600); fs.writeSync(fd, String(process.pid)); fs.closeSync(fd); return p; }
@@ -321,7 +321,7 @@ function acquireLock(fs, shard, journal) {
   }
   throw new SealRefused(`refusing to seal ${shard}: could not take ${path.basename(p)}`);
 }
-function releaseLock(fs, p) { try { fs.unlinkSync(p); } catch {} }
+export function releaseLock(fs, p) { try { fs.unlinkSync(p); } catch {} }
 
 // Locks whose sealer died: a kill -9 after the original's unlink leaves `<shard>.sealing` beside a
 // shard that is gone, and nothing would ever take it over (it names no file anyone seals again).
