@@ -148,3 +148,22 @@ test('a decrypted row counts envelopes the store did not write; a non-WebSocket 
   assert.deepEqual([r.decision, r.write_failed, r.not_captured, r.reason], ['decrypt', 2, 'upgrade-not-followed', '101 h2c'])
   assertCriterion(h.flows)
 })
+
+// Review finding (stage A): with the first-byte valve gone, a client that gives up (FIN) while the engine
+// waits on a silent upstream's TLS handshake must still end the flow — a paused socket never reports 'end'.
+test('a client that gives up while the upstream never answers our TLS handshake ends the flow: one error row, nothing hangs', async () => {
+  const hello = await new Promise((resolve) => {
+    const srv = net.createServer((s) => s.once('data', (d) => { resolve(d); s.destroy(); srv.close() }))
+    srv.listen(0, '127.0.0.1', () => tls.connect({ port: srv.address().port, host: '127.0.0.1', servername: 'upstream.test', ALPNProtocols: ['http/1.1'] }).on('error', () => {}))
+  })
+  const h = await rig(net.createServer((s) => { s.on('error', () => {}); s.resume() }), { firstByteTimeoutMs: 50, upstreamSlowMs: 10000 }) // accepts, never answers
+  // a TLS client that times out says close_notify, then FIN: those alert bytes sit in a paused socket's buffer,
+  // and a paused socket with buffered bytes never emits 'end'
+  const c = net.connect(h.port, '127.0.0.1', () => { c.write(hello); setTimeout(() => c.end(Buffer.from([0x15, 0x03, 0x03, 0x00, 0x02, 0x01, 0x00])), 150) })
+  c.on('error', () => {})
+  try {
+    for (let i = 0; h.flows.length === 0; i++) { if (i > 300) throw new Error('the flow never finished: the client FIN went unseen'); await sleep(10) }
+  } finally { c.destroy() }
+  await h.close()
+  assert.deepEqual([h.flows.length, h.flows[0].decision, h.flows[0].not_captured, h.flows[0].error.type, h.flows[0].error.side], [1, 'error', 'error', 'closed_before_decision', 'client'])
+})

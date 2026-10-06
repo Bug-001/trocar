@@ -18,9 +18,11 @@ test('events: failures go to flows/<date>.ndjson (0600), never a top-level *.ndj
     appendEvent(b.dir, { flow_id: 'f1', reason: 'client-rejected-leaf' }, { now: new Date('2026-10-06T01:00:02Z') })
     appendEvent(b.dir, { flow_id: 'f2', decision: 'splice', not_captured: 'policy' }, { now: new Date('2026-10-06T01:00:03Z') }) // expected, not a failure (D38)
     appendEvent(b.dir, { flow_id: 'f3', decision: 'splice', not_captured: 'negative-cache' }, { now: new Date('2026-10-06T01:00:04Z') })
+    appendEvent(b.dir, { flow_id: 'f4', decision: 'error', not_captured: 'error', error: { type: 'closed_before_decision', side: 'client' } }, { now: new Date('2026-10-06T01:00:05Z') }) // a preconnect that closed: expected
+    appendEvent(b.dir, { flow_id: 'f5', decision: 'decrypt', error: { type: 'ECONNRESET', side: 'upstream' }, reason: 'reset mid-response' }, { now: new Date('2026-10-06T01:00:06Z') }) // a connection error alone is not a failure either (test/health/codes.test.mjs: the closed sets decide)
     assert.deepEqual(fs.readdirSync(b.dir), ['flows'], 'nothing the board would read as an envelope')
     assert.equal(fs.statSync(path.join(b.dir, 'flows', '2026-10-06.ndjson')).mode & 0o777, 0o600)
-    assert.deepEqual(recentFailures(b.dir).map((f) => f.where || f.reason || f.not_captured), ['x', 'client-rejected-leaf', 'negative-cache'], 'failures only, not the switch event nor an expected not_captured row')
+    assert.deepEqual(recentFailures(b.dir).map((f) => f.where || f.reason || f.not_captured), ['x', 'client-rejected-leaf', 'negative-cache'], 'failures only: not the switch event, not an expected not_captured row even with an error, not a decrypted row with only a socket error')
   } finally { b.done() }
 })
 

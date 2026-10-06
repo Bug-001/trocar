@@ -273,17 +273,25 @@ export function handleFlow(client, meta, ctx) {
     const upTls = tls.connect({ socket: uSock, servername: sni || undefined, ALPNProtocols: ['http/1.1'], secureContext: ctx.upstreamTrust.secureContext, rejectUnauthorized: false })
     let clientTls = null
     waitFor('tls', host)
+    // While we wait for the upstream, the client socket keeps flowing into `held`: a paused socket never
+    // reports the client's FIN, and a client that gave up on a silent upstream would leave this flow (and
+    // engine.close()) hanging forever. Its 'end' / 'close' reach preTeardown like any pre-decision close.
+    const held = []
+    const hold = (d) => { held.push(d) }
+    cSock.on('data', hold); cSock.resume()
+    const takeHeld = () => { cSock.removeListener('data', hold); cSock.pause(); return held.length ? Buffer.concat([buf, ...held]) : buf }
     upTls.on('error', (err) => {
       waitDone()
       if (!clientTls) { try { cSock.destroy() } catch { /* ignore */ }; finish(isTunnel ? 'tunnel' : 'decrypt', { host, not_captured: 'error', error: { type: err.code || 'upstream_tls_error', message: msgOf(err), side: 'upstream' } }) }
     })
     upTls.on('secureConnect', guard(() => {
       waitDone()
-      if (!upTls.authorized) return stepAside(upTls, buf, cSock, host, isTunnel, key, 'upstream-cert', String(upTls.authorizationError || 'upstream certificate not verified'))
+      const all = takeHeld()                                // the ClientHello and anything the client sent after it
+      if (!upTls.authorized) return stepAside(upTls, all, cSock, host, isTunnel, key, 'upstream-cert', String(upTls.authorizationError || 'upstream certificate not verified'))
       let leaf
-      try { leaf = ctx.issuer.secureContextFor(host) } catch (e) { return stepAside(upTls, buf, cSock, host, isTunnel, key, 'leaf-error', msgOf(e)) }
+      try { leaf = ctx.issuer.secureContextFor(host) } catch (e) { return stepAside(upTls, all, cSock, host, isTunnel, key, 'leaf-error', msgOf(e)) }
       setDecision('decrypt', isTunnel)
-      cSock.unshift(buf)                                    // replay the ClientHello to our TLS server
+      cSock.unshift(all)                                    // replay the ClientHello to our TLS server
       clientTls = new tls.TLSSocket(cSock, { isServer: true, secureContext: leaf, ALPNProtocols: ['http/1.1'] })
       // Rejection (§引擎 5, D37): the client closes or resets without one byte of application data, alert
       // or not, Finished or not — Node sends no alert, and under TLS 1.2 our side of the handshake

@@ -29,6 +29,7 @@ function literals(root) {
     grab(/\bwhere:\s*'([^']+)'/g, 'where')
     grab(/\bcode:\s*'([^']+)'/g, 'code')
     grab(/\bnot_captured(?:\s*=\s*|:\s*)'([^']+)'/g, 'not_captured')
+    grab(/\bnotCaptured\(\s*'([^']+)'/g, 'not_captured') // the engine flow's helper: notCaptured('h2', reason)
     grab(/\bfailure\(\s*'([^']+)'/g, 'where')
     // a name written through the collector's name maps (src/collector/core/codes.mjs): `EVENT.agentTrusted`, `CODE.residue`
     for (const m of src.matchAll(/\bEVENT\.(\w+)/g)) out.push({ kind: 'event', name: EVENT[m[1]] ?? `EVENT.${m[1]} (not in the map)`, file: rel })
@@ -52,9 +53,9 @@ test('D38 the scan fails on a name outside the set (planted tree)', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-codes-'))
   try {
     fs.mkdirSync(path.join(root, 'src', 'collector', 'core', 'ws'), { recursive: true })
-    fs.writeFileSync(path.join(root, 'src', 'collector', 'a.mjs'), "w({ event: 'agent-wandered', where: 'nowhere', code: 'oops-code' }); failure('elsewhere', e); r.not_captured = 'shrug'\n")
+    fs.writeFileSync(path.join(root, 'src', 'collector', 'a.mjs'), "w({ event: 'agent-wandered', where: 'nowhere', code: 'oops-code' }); failure('elsewhere', e); r.not_captured = 'shrug'; notCaptured('hmm', why)\n")
     fs.writeFileSync(path.join(root, 'src', 'collector', 'core', 'ws', 'recorder.mjs'), "fail('made-up', e)\n")
-    assert.deepEqual(outside(literals(root)).map((l) => `${l.kind} ${l.name}`).sort(), ['code made-up', 'code oops-code', 'event agent-wandered', 'not_captured shrug', 'where elsewhere', 'where nowhere'])
+    assert.deepEqual(outside(literals(root)).map((l) => `${l.kind} ${l.name}`).sort(), ['code made-up', 'code oops-code', 'event agent-wandered', 'not_captured hmm', 'not_captured shrug', 'where elsewhere', 'where nowhere'])
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
