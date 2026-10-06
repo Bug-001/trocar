@@ -15,7 +15,7 @@
 //   • adapters/cc.mjs        → ccAdapter (parseSession/parseCall/parseBlocks/parseResources)
 //   • cache/cache-events.mjs → deriveCacheEvents (D17 cache forensics, 3.3)
 //   • identity/session-identity.mjs → buildParentIndex/resolveParent (lineage),
-//                                     markCompaction, messageCount, isSubagent (3.4)
+//                                     compactionVerdict, messageCount, isSubagent (3.4)
 //   • etl/watermark.mjs      → session_id-keyed incremental checkpoints
 import { createHash } from 'node:crypto';
 import { createRegistry } from '../adapters/contract.mjs';
@@ -35,7 +35,7 @@ export { TEXT_REF_FIELD, fieldTextOf };
 import {
   buildParentIndex,
   resolveParent,
-  markCompaction,
+  compactionVerdict,
   messageCount,
   isSubagent,
   nativeId,
@@ -315,14 +315,13 @@ export async function runEtl(records, connection, opts = {}) {
       }
 
       // ── calls (every claimed record; compaction is a cross-call inference) ──
-      // 3.4: a harness hint first (header, high; a text marker only on its rising edge, medium), else the
-      // message-count drop (medium). Never a fork (sessions.fork_of is not touched).
+      // 3.4 (compactionVerdict, the board's rule too): a harness hint first (header, high; a text marker only on
+      // its rising edge, medium), else the message-count drop (medium). A lane's first call has no predecessor:
+      // compaction_from stays NULL. Never a fork (sessions.fork_of is not touched).
       let comp = { compaction: false, compaction_from: null, compaction_to: null };
       if (isLlm && laneKey) {
-        const prevN = prevMsgCount.get(laneKey) ?? 0;
-        comp = call.compaction_hint || (call.compaction_marker && !prevMarker.get(laneKey))
-          ? { compaction: true, compaction_from: prevN, compaction_to: msgCount }
-          : markCompaction(prevN, msgCount);
+        const prev = prevMsgCount.has(laneKey) ? { msgCount: prevMsgCount.get(laneKey), marker: !!prevMarker.get(laneKey) } : null;
+        comp = compactionVerdict(prev, { hint: !!call.compaction_hint, marker: !!call.compaction_marker, msgCount });
       }
       await conn.run(
         'INSERT INTO calls (call_id,session_id,seq,ts,endpoint,model,stream,class,control_kind,' +

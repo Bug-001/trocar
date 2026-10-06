@@ -38,6 +38,39 @@ test('a text compaction marker counts on its rising edge only (it stays in the h
   assert.deepEqual(r.map((x) => [x.call_id, x.compaction]), [['h1', false], ['h2', true], ['h3', false]]);
 });
 
+test('a lane\'s first call: a text marker is no rising edge, and a hinted compaction has no invented compaction_from', async () => {
+  const conn = await freshConn();
+  const M = '[CONTEXT COMPACTION — REFERENCE ONLY] summary';
+  // the capture starts after Hermes compacted: its first call already carries the marker in its history
+  const H = (id, sec, n) => ({ ...anth({ id, agent: 'hermes', headers: {}, n, sec, body: { session_id: 'HS' } }),
+    req_body: JSON.stringify({ model: 'm', session_id: 'HS', messages: [{ role: 'user', content: M }, ...msgs(n - 1)] }) });
+  await runEtl([H('h1', 1, 3), H('h2', 2, 4), anth({ id: 'd1', agent: 'dsh', headers: D('S', { 'x-deepseek-harness-compact': '1' }), n: 3, sec: 3 })], conn);
+  const r = await rows(conn, 'SELECT call_id, compaction, compaction_from, compaction_to FROM calls ORDER BY call_id');
+  assert.deepEqual(r.map((x) => [x.call_id, x.compaction, x.compaction_from, x.compaction_to]),
+    [['d1', true, null, 3], ['h1', false, null, null], ['h2', false, null, null]],
+    'd1: the header still says compaction, but there is no predecessor to have come from; h1: no edge without a predecessor');
+});
+
+test('a new synthesized session that still carries an old marker is no compaction (gate G11 gap)', async () => {
+  const conn = await freshConn();
+  const M = '[CONTEXT COMPACTION — REFERENCE ONLY] summary of earlier work';
+  // keyless Hermes (custom endpoint, no body key): synthesized key; a pause over 30 minutes starts a new session
+  const h = (id, ts, ms) => ({ id, ts_request: ts, endpoint: '/v1/chat/completions', method: 'POST', is_llm_call: true, capture: 'transparent',
+    host: 'llm.example.internal', proc: { pid: 1, exe: '/x/hermes', agent: 'hermes' }, req_headers: {},
+    req_body: JSON.stringify({ model: 'm', messages: [{ role: 'system', content: 'You are Hermes.' }, ...ms.map((t) => ({ role: 'user', content: t }))] }),
+    resp: { kind: 'sse', status: 200, raw_sse: [] } });
+  await runEtl([
+    h('h1', '2026-10-06T00:00:00Z', ['a', 'b', 'c', 'd']),
+    h('h2', '2026-10-06T00:01:00Z', [M, 'e']),               // the marker rises: a compaction
+    h('h3', '2026-10-06T00:02:00Z', [M, 'e', 'f']),
+    h('h4', '2026-10-06T00:40:00Z', [M, 'e', 'f', 'g']),     // a new synthesized session; nothing was compacted here
+  ], conn);
+  const r = await rows(conn, 'SELECT call_id, session_id, compaction, compaction_from FROM calls ORDER BY call_id');
+  assert.notEqual(r[3].session_id, r[2].session_id, 'precondition: h4 starts a new synthesized session');
+  assert.deepEqual(r.map((x) => [x.call_id, x.compaction, x.compaction_from]),
+    [['h1', false, null], ['h2', true, 5], ['h3', false, null], ['h4', false, null]]);
+});
+
 test('a compaction never sets sessions.fork_of_session_id', async () => {
   const conn = await freshConn();
   await runEtl([anth({ id: 'a1', agent: 'dsh', headers: D('S'), n: 6, sec: 1 }), anth({ id: 'a2', agent: 'dsh', headers: D('S'), n: 2, sec: 2 })], conn);
