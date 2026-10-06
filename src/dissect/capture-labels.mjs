@@ -141,5 +141,9 @@ export function captureLabelsOf(rec) {
     out.push({ id: 'req-undecoded', label: '压缩请求体未解码 · compressed request not decoded',
       text: `the request body is stored compressed (${rec.req_content_encoding || 'unknown encoding'}) and could not be decoded: ${rec._reqBodyDecodeError || rec.req_encoding_error || 'the reader did not try'}` });
   }
+  // 1.6 §1.3 / 4.6 §记录: asight put a line into the response head the client got (`off` landed before the head was forwarded): the call says
+  // so in place (invariant 4) — the stored head and body are the upstream's own, the client's head had this one line more
+  if (Array.isArray(rec.asight_added) && rec.asight_added.includes('connection-close')) out.push({ id: 'asight-added', label: 'asight 加的 · Connection: close',
+    text: 'asight added the hop-by-hop header Connection: close to this response when capture was turned off; the response body is byte for byte what the upstream sent, and resp_head_raw is the upstream head' });
   return out;
 }
