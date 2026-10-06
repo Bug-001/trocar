@@ -14,6 +14,7 @@ import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 import { createRegistry } from '../../../src/collector/core/registry.mjs'
 import { createTrustChecker } from '../../../src/collector/core/trust/confirm.mjs'
 import { createTracker } from '../../../src/collector/core/tracker.mjs'
+import { within } from '../../helpers/bounded.mjs'
 
 const upCa = createCa({ commonName: 'upstream test CA' }); const upIssuer = createLeafIssuer(loadCa(upCa))
 const asightCa = createCa(); const issuer = createLeafIssuer(loadCa(asightCa))
@@ -32,7 +33,9 @@ async function rig(upstream, { meta = {}, ...over } = {}) {
     connectUpstream: (dst) => net.connect(dst.port, dst.address), ...over }
   const engine = net.createServer((c) => done.push(handleFlow(c, { dst: { address: '127.0.0.1', port: upPort, family: 4 }, pid: 1, agent: 't', decrypt: true, ...meta }, ctx)))
   const port = await listen(engine)
-  return { port, flows, failures, settled: () => Promise.all(done), close: async () => { await Promise.all(done); engine.close(); upstream.close() } }
+  // bounded (test/helpers/bounded.mjs): a flow that never finalizes is a failure that says so, not a test that never ends
+  const finalized = (what) => within(Promise.all(done), 10_000, what)
+  return { port, flows, failures, settled: () => finalized('every flow written'), close: async () => { await finalized('every flow finalized'); engine.close(); upstream.close() } }
 }
 const tlsUp = (alpn = ['http/1.1']) => tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)), ALPNProtocols: alpn }, (s) => { s.on('error', () => {}); s.on('data', () => s.end(RESP)) })
 const sink = () => net.createServer((s) => { s.on('error', () => {}); s.resume(); s.on('end', () => s.end()) })

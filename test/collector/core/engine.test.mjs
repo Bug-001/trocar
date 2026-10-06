@@ -6,8 +6,13 @@ import { createEngine } from '../../../src/collector/core/engine/engine.mjs'
 import { createStaticRedirector } from '../../../src/collector/core/redirector.mjs'
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
+import { closeWithin } from '../../helpers/bounded.mjs'
 
-test('engine: lookup miss closes the socket; a known flow is spliced to its destination; stats count both', async () => {
+// A wait that never ends parks the file under --test-force-exit: every test has a deadline, and engine.close() (which waits for
+// every flow still open and never destroys one) a bound that says what it waited for (test/helpers/bounded.mjs).
+const T = { timeout: 20_000 }
+
+test('engine: lookup miss closes the socket; a known flow is spliced to its destination; stats count both', T, async () => {
   const echo = net.createServer((s) => s.pipe(s)); await new Promise((r) => echo.listen(0, '127.0.0.1', r))
   const redirector = createStaticRedirector()
   const failures = []
@@ -25,11 +30,11 @@ test('engine: lookup miss closes the socket; a known flow is spliced to its dest
     c.on('data', (d) => { resolve(d.toString()); c.end() })
   })
   assert.equal(echoed, 'ping')
-  await engine.close(); echo.close()
+  await closeWithin(engine); echo.close()
   const s = engine.stats(); assert.equal(s.lookupMisses, 1); assert.equal(s.total, 2)
 })
 
-test('engine: a connection that closes before speaking is finalized, not leaked, and close() never hangs', async () => {
+test('engine: a connection that closes before speaking is finalized, not leaked, and close() never hangs', T, async () => {
   const up = net.createServer((sk) => sk.resume()); await new Promise((r) => up.listen(0, '127.0.0.1', r))
   const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 1, agent: 'x', decrypt: false })
   const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(createCa())), store: { envelope() {}, flow() {} } })
@@ -41,7 +46,7 @@ test('engine: a connection that closes before speaking is finalized, not leaked,
   assert.equal(engine.stats().active, 0)
 })
 
-test('engine: a client that resets while its redirector lookup is pending does not crash the engine; the flow is finalized', async () => {
+test('engine: a client that resets while its redirector lookup is pending does not crash the engine; the flow is finalized', T, async () => {
   const up = net.createServer((sk) => { sk.on('error', () => {}); sk.resume() }); await new Promise((r) => up.listen(0, '127.0.0.1', r))
   const meta = { dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 1, agent: 'x', decrypt: false }
   let lookupStarted, release
@@ -75,7 +80,7 @@ test('engine: a client that resets while its redirector lookup is pending does n
 // RFC 4.6 §引擎 5 · W9 (D37): the negative cache is per (pid, host) and only ever means "splice this host".
 // The kernel can only stop steering a whole process, so the engine never tells the redirector: the hosts
 // the same process does trust keep being decrypted. forgetPid (the process exited) clears the pid.
-test('engine: two consecutive rejections on one host splice that host only; another host of the same pid is still decrypted; the redirector is never told; forgetPid clears the pid (§引擎 5 · W9)', async () => {
+test('engine: two consecutive rejections on one host splice that host only; another host of the same pid is still decrypted; the redirector is never told; forgetPid clears the pid (§引擎 5 · W9)', T, async () => {
   const upCa = createCa({ commonName: 'upstream test CA' }); const upIssuer = createLeafIssuer(loadCa(upCa))
   const up = tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)) }, (s) => { s.on('error', () => {}); s.on('data', () => s.end('x')) })
   await new Promise((r) => up.listen(0, '127.0.0.1', r))
@@ -98,7 +103,7 @@ test('engine: two consecutive rejections on one host splice that host only; anot
   // the process exits: the daemon calls forgetPid, so a reused pid starts clean
   assert.equal(engine.forgetPid(5), 1); assert.deepEqual(engine.negatives(), [])
   assert.match(await hello('api.deepseek.com', asightCa.certPem), /asight collector CA/, 'decrypted again after forgetPid')
-  await engine.close(); up.close()
+  await closeWithin(engine); up.close()
   assert.deepEqual(told, [], 'kernel steering is never touched')
   const by = (h) => flows.filter((f) => f.host === h).map((f) => [f.decision, f.not_captured ?? null])
   assert.deepEqual(by('api.deepseek.com'), [['decrypt', 'client-rejected-leaf'], ['decrypt', 'client-rejected-leaf'], ['splice', 'negative-cache'], ['decrypt', null]])
@@ -107,20 +112,20 @@ test('engine: two consecutive rejections on one host splice that host only; anot
 })
 
 // D38: asight's own failures are recorded and cost the agent one connection at most, never the collector.
-test('engine: connectUpstream throwing (e.g. a bad destination port) is an engine-error record, the socket is closed, the engine lives on (D38)', async () => {
+test('engine: connectUpstream throwing (e.g. a bad destination port) is an engine-error record, the socket is closed, the engine lives on (D38)', T, async () => {
   const failures = [], errors = [], flows = []
   const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: 1, family: 4 }, pid: 1, agent: 'x', decrypt: false })
   const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(createCa())), connectUpstream: () => { throw new RangeError('bad port') },
     store: { envelope() {}, flow: (f) => flows.push(f) }, onFailure: (f) => failures.push(f), onError: (e) => errors.push(e.message) })
   const { port } = await engine.listen({})
   for (let i = 0; i < 2; i++) await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('close', r); c.on('error', () => {}) })
-  await engine.close()
+  await closeWithin(engine)
   assert.deepEqual(failures.map((f) => [f.code, f.flow_id, f.reason]), [['engine-error', 'flow_000001', 'bad port'], ['engine-error', 'flow_000002', 'bad port']])
   assert.deepEqual(flows.map((f) => [f.flow_id, f.decision, f.error.type, f.error.side]), [['flow_000001', 'error', 'engine_error', 'engine'], ['flow_000002', 'error', 'engine_error', 'engine']])
   assert.equal(engine.stats().active, 0)
 })
 
-test('engine: a flows/ record that cannot be written is a flow-write-failed failure record (D38)', async () => {
+test('engine: a flows/ record that cannot be written is a flow-write-failed failure record (D38)', T, async () => {
   const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path')
   const { createRecordStore } = await import('../../../src/collector/core/record/store.mjs')
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-flowfail-'))
@@ -132,7 +137,7 @@ test('engine: a flows/ record that cannot be written is a flow-write-failed fail
   const engine = createEngine({ redirector: createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 2, agent: 'x', decrypt: false }), issuer: createLeafIssuer(loadCa(createCa())), store, onFailure: (f) => failures.push(f) })
   const { port } = await engine.listen({})
   await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('close', r); c.on('error', () => {}); c.resume() })
-  await engine.close(); up.close(); store.close()
+  await closeWithin(engine); up.close(); store.close()
   fs.rmSync(root, { recursive: true, force: true })
   assert.deepEqual(failures.map((l) => [l.where, l.code, l.flow_id, /EISDIR|illegal operation/.test(l.reason)]), [['engine', 'flow-write-failed', 'flow_000001', true]])
 })
@@ -140,7 +145,7 @@ test('engine: a flows/ record that cannot be written is a flow-write-failed fail
 // Cross-guard: both halves of the merge survive — the failure record for a lookup miss (ws-recorder's side) AND
 // the listener 'error' handler after listen (the daemon's side), each a failure record and an onError, never an
 // uncaught exception. Dropping either half of a future conflict resolution turns this red.
-test('engine: a lookup miss and a listener error after listen are failure records and reach onError, never an uncaught exception (D38)', async () => {
+test('engine: a lookup miss and a listener error after listen are failure records and reach onError, never an uncaught exception (D38)', T, async () => {
   const errors = [], failures = []
   const made = []; const orig = net.createServer
   net.createServer = (...a) => { const s = orig(...a); made.push(s); return s }
@@ -154,7 +159,7 @@ test('engine: a lookup miss and a listener error after listen are failure record
     assert.match(errors[0].message, /no original destination for 127\.0\.0\.1:\d+; the steered connection was closed/)
     assert.deepEqual(failures.map((f) => [f.where, f.code, f.peer ? f.peer.address : null]), [['engine', 'lookup-miss', '127.0.0.1'], ['engine', 'EMFILE', null]])
     assert.match(failures[1].reason, /the engine's listener on 127\.0\.0\.1: accept EMFILE/)
-  } finally { net.createServer = orig; if (engine) await engine.close() }
+  } finally { net.createServer = orig; if (engine) await closeWithin(engine) }
 })
 
 // The daemon's onError AND the failure record, under the same code: loader-down / loader-timeout, never lookup-miss.
@@ -172,7 +177,7 @@ test('engine: a lookup the helper cannot answer is its own failure (not a miss),
     fail = Object.assign(new Error('no answer from the helper in 2000 ms'), { code: 'loader-timeout' })
     await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('close', r); c.on('error', () => {}) })
     assert.deepEqual(failures.map((f) => f.code), ['loader-down', 'loader-timeout'])
-  } finally { await engine.close() }
+  } finally { await closeWithin(engine) }
 })
 
 test('engine: a lookup that timed out is loader-timeout; the helper\'s own errno stays in the error text (D38)', { timeout: 10_000 }, async () => {
@@ -181,7 +186,7 @@ test('engine: a lookup that timed out is loader-timeout; the helper\'s own errno
     const engine = createEngine({ redirector: { lookup: async () => { throw e } }, issuer: createLeafIssuer(loadCa(createCa())), store: { envelope() {}, flow() {} }, onFailure: (f) => failures.push(f) })
     const { port } = await engine.listen({})
     await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('close', r); c.on('error', () => {}) })
-    await engine.close()
+    await closeWithin(engine)
   }
   assert.deepEqual(failures.map((f) => [f.code, /\(([^)]*)\); the steered/.exec(f.reason)[1]]), [['loader-timeout', 'no answer in 2000 ms'], ['loader-down', 'EPIPE: write EPIPE']])
 })

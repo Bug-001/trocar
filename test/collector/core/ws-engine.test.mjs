@@ -16,6 +16,7 @@ import { rebuildWsWire } from '../../../src/collector/core/ws/raw.mjs'
 import { createRecordStore } from '../../../src/collector/core/record/store.mjs'
 import { createFailureRecorder, recentFailures } from '../../../src/collector/core/events.mjs'
 import { request } from '../../lab/helpers.mjs'
+import { closeWithin } from '../../helpers/bounded.mjs'
 
 const T = { timeout: 20000 }
 const TERMINAL = [{ pathSuffix: '/responses', patterns: ['^\\{"type":"(response\\.(completed|failed|incomplete)|error)"'] }]
@@ -41,7 +42,11 @@ async function lab(t, { terminal = TERMINAL, recording, delays, describe } = {})
   const { port } = await engine.listen({})
   const clients = []
   // close our clients first: engine.close() waits for in-flight flows (RFC 4.6 §开关), it never kills them
-  t.after(async () => { for (const c of clients) c.sock.destroy(); await engine.close(); await mock.close(); store.close(); fs.rmSync(dir, { recursive: true, force: true }) })
+  t.after(async () => {
+    for (const c of clients) c.sock.destroy()
+    try { await mock.close(); await closeWithin(engine) } // a hook has no test-level deadline: engine.close() is bounded, or one flow left open parks the file
+    finally { store.close(); fs.rmSync(dir, { recursive: true, force: true }) }
+  })
   const connect = async (opts = {}) => { const c = await wsConnect(port, { tls: { servername: 'api.openai.com', ca: asightCa.certPem }, ...opts }); clients.push(c); return c }
   const read = (sub) => { const d = path.join(dir, 'rec', sub); return fs.existsSync(d) ? fs.readdirSync(d).filter((f) => f.endsWith('.ndjson')).flatMap((f) => fs.readFileSync(path.join(d, f), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))) : [] }
   return { mock, engine, envelopes, errors, connect, log: () => mock.state.log, port, onDisk: () => read(''), flows: () => read('flows').filter((r) => r.event == null), failures: () => read('flows').filter((r) => r.event === 'failure'), dir }

@@ -27,3 +27,14 @@ export function within(promise, ms, what, onTimeout) {
 export function onceWithin(emitter, name, ms = 5000) {
   return within(once(emitter, name), ms, `waiting for '${name}'`, () => { if (typeof emitter.destroy === 'function') emitter.destroy() })
 }
+
+/**
+ * closeWithin(closable, ms = 5000, what?) → `closable.close()`, or a rejection that says what it was waiting for.
+ * `engine.close()` waits for every flow still in flight and never destroys one (4.6 §开关): a test that failed with a
+ * client socket still open parks on it for ever, and when the close is in an `after` hook (a test-level `timeout` does
+ * not cover a hook) the whole file with it. In a hook, close what the flows run to (the mock upstream, a stand-in
+ * proxy) first, so their sockets go and the flows end; the bound is for what is left.
+ */
+export function closeWithin(closable, ms = 5000, what = 'engine.close() (a flow or a client socket is still open)') {
+  return within(Promise.resolve().then(() => closable.close()), ms, what)
+}

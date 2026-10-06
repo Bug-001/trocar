@@ -3,7 +3,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import net from 'node:net'
-import { within, onceWithin } from './bounded.mjs'
+import { within, onceWithin, closeWithin } from './bounded.mjs'
+import { createEngine } from '../../src/collector/core/engine/engine.mjs'
+import { createStaticRedirector } from '../../src/collector/core/redirector.mjs'
+import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
+import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
 
 test('within: the value of a promise that settles in time, and its own rejection, pass through', async () => {
   assert.equal(await within(Promise.resolve(7), 1000, 'x'), 7)
@@ -31,4 +35,20 @@ test('onceWithin: an event that never comes destroys the socket it was waited on
   const [d] = await onceWithin(c, 'data'); assert.equal(String(d), 'pong')
   await assert.rejects(onceWithin(c, 'end', 50), /^Error: waiting for 'end': no answer within 50 ms$/)
   assert.equal(c.destroyed, true, 'the socket the wait was on is destroyed, so nothing holds an engine flow open for it')
+})
+
+test('closeWithin: an engine with a flow still open fails the close and says what it waited on; once the flow ends the close goes through', { timeout: 20_000 }, async (t) => {
+  const up = net.createServer((s) => { s.on('error', () => {}); s.resume() }) // neither answers nor hangs up: the flow stays in flight
+  await new Promise((r) => up.listen(0, '127.0.0.1', r)); t.after(() => up.close())
+  const engine = createEngine({ redirector: createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 1, agent: 'x', decrypt: false }),
+    issuer: createLeafIssuer(loadCa(createCa())), store: { envelope() {}, flow() {} } })
+  const { port } = await engine.listen({})
+  const c = net.connect(port, '127.0.0.1'); c.on('error', () => {}); await onceWithin(c, 'connect'); c.write('ping')
+  await new Promise((r) => setTimeout(r, 100))
+  await assert.rejects(closeWithin(engine, 150), /^Error: engine\.close\(\) \(a flow or a client socket is still open\): no answer within 150 ms$/)
+  c.destroy() // the client lets go: the flow ends, and the close that was parked on it is no longer needed
+  await closeWithin(engine, 5000)
+  assert.equal(engine.stats().active, 0)
+  await assert.rejects(closeWithin({ close: () => new Promise(() => {}) }, 20, 'a stand-in that never closes'), /^Error: a stand-in that never closes: no answer within 20 ms$/)
+  await assert.rejects(closeWithin({ close: () => { throw new Error('its own') } }, 1000), /^Error: its own$/, 'a close that throws is its own rejection')
 })

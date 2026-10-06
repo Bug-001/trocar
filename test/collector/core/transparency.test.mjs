@@ -15,6 +15,7 @@ import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
 import { createEngine } from '../../../src/collector/core/engine/engine.mjs'
 import { createStaticRedirector } from '../../../src/collector/core/redirector.mjs'
+import { within, closeWithin } from '../../helpers/bounded.mjs'
 
 const HOST = 'api.anthropic.com'
 const SCENARIOS = ['ok', 'long-stream', 'unicode-split', 'gzip', 'content-length', 'conn-close', 'http-429', 'http-502-html', 'mid-stream-reset', 'mid-stream-fin']
@@ -22,7 +23,9 @@ const FAULTS = new Set(['mid-stream-reset', 'mid-stream-fin']) // only these tru
 const b64 = (s) => Buffer.from(s, 'base64').toString('latin1')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-test('byte transparency across mock scenarios', async (t) => {
+// Every wait here is bounded (test/helpers/bounded.mjs): the client's close, the engine's close, and the test itself, so a
+// failure is a failure and not a file that never finishes under --test-force-exit.
+test('byte transparency across mock scenarios', { timeout: 60_000 }, async (t) => {
   const caDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mock-ca-'))
   const lab = makeLabCa(caDir)
   const mock = await startMockUpstream({ tls: { key: fs.readFileSync(lab.key), cert: fs.readFileSync(lab.cert) }, delays: { stallMs: 200, dripMs: 5 } })
@@ -31,17 +34,22 @@ test('byte transparency across mock scenarios', async (t) => {
   const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: mock.port, family: 4 }, pid: 1, agent: 'claude-code', decrypt: true })
   const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: fs.readFileSync(lab.caCert), store: { envelope: (e) => envelopes.push(e), flow() {} } })
   const { port } = await engine.listen({})
-  t.after(async () => { await engine.close(); await mock.close(); fs.rmSync(caDir, { recursive: true, force: true }) })
+  // The mock goes first: its sockets go, so every flow still open ends (engine.close() waits for them, never destroys one).
+  t.after(async () => {
+    try { await mock.close(); await closeWithin(engine) }
+    finally { fs.rmSync(caDir, { recursive: true, force: true }) }
+  })
 
   for (const name of SCENARIOS) {
     envelopes.length = 0
     const body = JSON.stringify({ model: 'claude-sonnet-4-5', stream: true, messages: [{ role: 'user', content: `hi [[mock:${name}]]` }] })
     const reqRaw = `POST /v1/messages HTTP/1.1\r\nHost: ${HOST}\r\nContent-Type: application/json\r\nAnthropic-Version: 2023-06-01\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`
-    const got = await new Promise((resolve) => {
-      const c = tls.connect({ port, host: '127.0.0.1', servername: HOST, ca: asightCa.certPem, ALPNProtocols: ['http/1.1'] }, () => c.write(reqRaw))
+    let c
+    const got = await within(new Promise((resolve) => {
+      c = tls.connect({ port, host: '127.0.0.1', servername: HOST, ca: asightCa.certPem, ALPNProtocols: ['http/1.1'] }, () => c.write(reqRaw))
       let b = Buffer.alloc(0); c.on('data', (d) => { b = Buffer.concat([b, d]) })
       c.on('close', () => resolve(b)); c.on('error', () => {})
-    })
+    }), 15_000, `${name}: the client never saw its connection close`, () => c.destroy())
     // wait for the envelope (faults emit it on teardown, just after the client's close)
     for (let i = 0; i < 100 && envelopes.length === 0; i++) await sleep(5)
     const entry = mock.state.log.filter((e) => e.type === 'request' && e.scenario === name).at(-1)

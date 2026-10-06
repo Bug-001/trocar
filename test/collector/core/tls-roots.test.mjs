@@ -11,6 +11,7 @@ import { createEngine } from '../../../src/collector/core/engine/engine.mjs'
 import { createStaticRedirector } from '../../../src/collector/core/redirector.mjs'
 import { createRecordStore } from '../../../src/collector/core/record/store.mjs'
 import { createFailureRecorder } from '../../../src/collector/core/events.mjs'
+import { within, closeWithin } from '../../helpers/bounded.mjs'
 
 const a = createCa({ commonName: 'system store CA' }), b = createCa({ commonName: 'bundle file CA' }), x = createCa({ commonName: 'extra CA' })
 
@@ -49,7 +50,7 @@ test('createUpstreamTrust: one context over the union; no OS roots at all is fla
 
 // The cross-OS review's case: a corporate / TLS-inspection CA that only the OS store trusts. The engine
 // must accept an upstream it signed; an upstream signed by a CA nobody trusts steps aside, durably recorded.
-test('engine: an upstream signed by a CA only the (injected) system store holds is decrypted; an unknown CA steps aside with flows/ on disk; no system roots at all is a failure record', async (t) => {
+test('engine: an upstream signed by a CA only the (injected) system store holds is decrypted; an unknown CA steps aside with flows/ on disk; no system roots at all is a failure record', { timeout: 60_000 }, async (t) => {
   const corp = createCa({ commonName: 'corporate inspection CA' }), stranger = createCa({ commonName: 'unknown CA' }), asightCa = createCa()
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-roots-'))
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
@@ -61,11 +62,12 @@ test('engine: an upstream signed by a CA only the (injected) system store holds 
     const engine = createEngine({ redirector: createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 3, agent: 'cc', decrypt: true }),
       issuer: createLeafIssuer(loadCa(asightCa)), store, systemCa, onFailure: createFailureRecorder(root).event, onError: (e) => errors.push(e.message) })
     const { port } = await engine.listen({})
-    const issuer = await new Promise((resolve) => {
-      const c = tls.connect({ port, host: '127.0.0.1', servername: 'api.anthropic.com', ca: clientCa }, () => { const i = c.getPeerX509Certificate().issuer; c.on('end', () => resolve(i)); c.resume(); c.write('ping') })
+    let c
+    const issuer = await within(new Promise((resolve) => {
+      c = tls.connect({ port, host: '127.0.0.1', servername: 'api.anthropic.com', ca: clientCa }, () => { const i = c.getPeerX509Certificate().issuer; c.on('end', () => resolve(i)); c.resume(); c.write('ping') })
       c.on('error', (e) => resolve(e.code))
-    })
-    await engine.close(); up.close(); store.close()
+    }), 10_000, 'the client never finished its handshake and exchange', () => c.destroy())
+    try { await closeWithin(engine) } finally { up.close(); store.close() } // bounded: engine.close() waits for every flow still open and never destroys one
     const read = (sub) => { const d = path.join(root, sub); return fs.existsSync(d) ? fs.readdirSync(d).flatMap((f) => fs.readFileSync(path.join(d, f), 'utf8').trim().split('\n').map((l) => JSON.parse(l))) : [] }
     return { issuer, flows: read('flows').filter((r) => r.event == null), failures: read('flows').filter((r) => r.event === 'failure'), errors, stats: engine.stats() }
   }
