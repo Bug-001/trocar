@@ -3,9 +3,11 @@
 // with real TLS clients, install / uninstall, the sealer), then asserts what F asks of every item: (i) a durable record
 // on disk with a closed reason code; (ii) GET /api/capture-health — over HTTP, from a real `asight serve` server —
 // shows the same reason; and for the daemon side (iii) `asight collector status` lists it with no daemon running.
-//   Where an F item is checked elsewhere, the test that does is named in place (F5, F8, F9). What waits on another
-// lane's code (the engine's connection-row codes, C2 T-1 / T-2 / T-4 / T-13 / T-15) is a `todo` test: it runs, and
-// turns into a plain test when that lands. [VM] items are listed at the end; they are not run here.
+//   Where an F item is checked elsewhere, the test that does is named in place (F5, F8, F9). What still waits is a `todo`
+// test (one left: F5's WebSocket fidelity labels vs the top bar, an unresolved spec conflict): it runs,
+// and turns into a plain test when decided. The engine's connection-row codes (C2 T-1 / T-2 / T-4 / T-11..T-15) and the
+// combined-bundle check (D-21) landed with the merge of the lanes, so F1(b), F1(d), F2 (table), F4 and F5 (HTTP) are
+// plain tests. [VM] items are listed at the end; they are not run here.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -13,6 +15,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import tls from 'node:tls'
+import { X509Certificate } from 'node:crypto'
 import http from 'node:http'
 import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
@@ -25,6 +28,7 @@ import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
 import { createRedirectorClient } from '../../src/collector/arch/linux/redirector-client.mjs'
 import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector.mjs'
 import cc from '../../src/collector/harness/claude-code.mjs'
+import codex from '../../src/collector/harness/codex.mjs'
 import { createServer } from '../../src/server.mjs'
 import { sealShard, sealUnchecked } from '../../src/raw/seal.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
@@ -74,13 +78,41 @@ const keys = (h) => (h.collector.failures || []).map((g) => g.key)
 const cond = (h, kind) => (h.collector.conditions || []).filter((c) => c.kind === kind)
 
 // A TLS relay with its own private CA, standing in for the agent's upstream (as daemon.test.mjs does)
-async function relay() {
+async function relay({ reply = 'HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n', got = null } = {}) {
   const ca = createCa({ commonName: 'f-group relay CA' })
   const issuer = createLeafIssuer(loadCa(ca))
-  const srv = tls.createServer({ SNICallback: (n, cb) => cb(null, issuer.secureContextFor(n)) }, (s) => { s.on('error', () => {}); s.on('data', () => s.end('HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n')) })
+  const srv = tls.createServer({ SNICallback: (n, cb) => cb(null, issuer.secureContextFor(n)) }, (s) => { s.on('error', () => {}); s.on('data', (d) => { if (got) got.push(d); s.end(reply) }) })
   await new Promise((r) => srv.listen(0, '127.0.0.1', r))
   return { ca, port: srv.address().port, close: () => srv.close() }
 }
+
+// A trusted Claude Code agent (pid 7171) behind a real daemon, with a private-CA relay as its upstream; `inject(dst)` makes
+// the fake helper steer one more client connection to the engine and returns the client's raw socket. What a test then
+// does with that socket is the failure it wants (a refused leaf, a hang-up, garbage, a broken reply …).
+async function scene({ reply, got = null, daemon = {} } = {}) {
+  const s = sandbox(); const p = fakeProc(); const up = await relay({ reply, got })
+  const relayCa = path.join(s.home, 'relay-ca.pem'); fs.writeFileSync(relayCa, up.ca.certPem)
+  fs.mkdirSync(path.join(s.home, '.claude'))
+  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }))
+  await install(s)
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], upstreamCa: up.ca.certPem, ...daemon })
+  await req(s.sock, 'POST', '/on', {})
+  p.add(7171, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
+  await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 7171, pid: 7171, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
+  await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 7171 && a.trusted))
+  const inject = async (dst = { address: '127.0.0.1', port: up.port, family: 4 }) => {
+    const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
+    await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst, pid: 7171, decrypt: 1 })
+    return raw
+  }
+  const rows = () => flowsOf(s).filter((f) => f.event == null && f.flow_id) // the connection rows
+  const extraCc = path.join(s.collector, 'ca', 'extra-cc.pem') // what the agent trusts: the relay CA + asight's
+  let stopped = false
+  const stop = async () => { if (!stopped) { stopped = true; await d.stop() } }
+  return { s, p, up, d, inject, rows, extraCc, stop, done: async () => { await stop(); up.close(); p.done(); s.done() } }
+}
+const POST = (body, extra = '') => `POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test\r\ncontent-type: application/json\r\n${extra}content-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
 
 test('F1 CA and trust: (a) an untrusted agent is a condition until it exits, the event stays; (b) a leaf refused under TLS 1.3 and 1.2 → rows, a negative cache → a condition that a restart clears; (c) an unusable CA → "CA 不可用", never "not installed"; (e) a user CA block not carried over → the last install lists it', async () => {
   const s = sandbox(); const p = fakeProc(); const up = await relay()
@@ -153,10 +185,25 @@ test('F1 CA and trust: (a) an untrusted agent is a condition until it exits, the
   p.done(); s.done()
 })
 
-test('F1(b) the refused-leaf connection row carries not_captured:\'client-rejected-leaf\' (4.6 §记录 判据)', { todo: 'C2 T-4 (engine, another lane): the row has reason only' }, () => {
-  // the row the engine writes today (src/collector/core/engine/flow.mjs, judge()): reason set, not_captured not
-  const row = { decision: 'decrypt', reason: 'client-rejected-leaf' }
-  assert.equal(row.not_captured, 'client-rejected-leaf')
+test('F1(b) the refused-leaf connection row carries not_captured:\'client-rejected-leaf\' and the client\'s side of it (4.6 §记录 判据), counted by the endpoint', async () => {
+  const S = await scene()
+  try {
+    for (const v of ['TLSv1.3', 'TLSv1.2']) {
+      const raw = await S.inject()
+      await new Promise((resolve) => { // the system store only: the client refuses the leaf
+        const c = tls.connect({ socket: raw, servername: 'relay.asight.test', minVersion: v, maxVersion: v })
+        c.on('error', () => { raw.destroy(); resolve() }); c.on('secureConnect', () => assert.fail('the client should refuse the leaf'))
+      })
+    }
+    const rows = await until(() => { const r = S.rows(); return r.length >= 2 && r })
+    for (const r of rows) {
+      assert.deepEqual([r.decision, r.not_captured, r.error && r.error.side], ['decrypt', 'client-rejected-leaf', 'client'], JSON.stringify(r))
+      assert.deepEqual(checkRecord(r), [])
+    }
+    const h = await endpoint(S.s)
+    assert.equal(h.collector.failures.find((g) => g.key === 'flow:client-rejected-leaf').count, 2)
+    assert.equal(h.summary.state, 'failing')
+  } finally { await S.done() }
 })
 
 test('F2 not captured: a direct connection of an untrusted agent is a failure-class row, a lookup miss a failure event; both counted by the endpoint; a process the daemon does not know is untracked', async () => {
@@ -178,8 +225,36 @@ test('F2 not captured: a direct connection of an untrusted agent is a failure-cl
   } finally { await d.stop(); p.done(); s.done() }
 })
 
-test('F2 table-driven: every connection-row code of §记录 (the expected class too), and no non-decrypt row without not_captured', { todo: 'C2 T-1 / T-2 / T-15 (engine, another lane): policy, not-trust-path, malformed-hello, https-proxy, proxy-refused, upstream-first, unknown-protocol, upgrade-not-followed, error are not written yet' }, () => {
-  assert.fail('waits on the engine writing the expected-class codes')
+// The engine half is test/collector/core/not-captured.test.mjs (19 paths, one row each, with the engine alone). This is the
+// product path: the same kinds of connection through the daemon, and what the endpoint makes of the rows — a failure-class
+// code is listed and turns the bar ⚠, an expected-class code is only counted.
+test('F2 table-driven: every connection row the bytes missed carries a closed not_captured; failure-class ones are listed and ⚠, expected-class ones only counted', async () => {
+  const S = await scene()
+  const sink = net.createServer((c) => { c.on('error', () => {}); c.resume(); c.on('end', () => c.end()) })
+  const banner = net.createServer((c) => { c.on('error', () => {}); c.end('SSH-2.0-banner\r\n') })
+  await Promise.all([sink, banner].map((x) => new Promise((r) => x.listen(0, '127.0.0.1', r))))
+  const at = (x) => ({ address: '127.0.0.1', port: x.address().port, family: 4 })
+  const tlsHello = (raw, o) => new Promise((resolve) => { const c = tls.connect({ socket: raw, rejectUnauthorized: false, ...o }); c.on('error', () => {}); c.on('secureConnect', () => { c.end(); resolve() }); c.on('close', resolve) })
+  // [name, drive(raw), expected not_captured]
+  const table = [
+    ['a host outside the decrypt policy', (raw) => tlsHello(raw, { servername: 'other.example.test' }), 'policy'],
+    ['only h2 offered', (raw) => tlsHello(raw, { servername: 'relay.asight.test', ALPNProtocols: ['h2'] }), 'h2'],
+    ['a ClientHello that does not parse', (raw) => { raw.write(Buffer.from([0x16, 3, 1, 0, 4, 2, 0, 0, 0])); return new Promise((r) => setTimeout(() => { raw.end(); r() }, 80)) }, 'malformed-hello', sink],
+    ['an unknown first byte', (raw) => { raw.write('SSH-2.0-client\r\n'); return new Promise((r) => setTimeout(() => { raw.end(); r() }, 80)) }, 'unknown-protocol', sink],
+    ['the upstream speaks first', (raw) => new Promise((r) => { raw.on('data', () => {}); raw.on('close', r); setTimeout(() => { raw.destroy(); r() }, 300) }), 'upstream-first', banner],
+    ['closed before a routing decision', (raw) => { raw.end(); return new Promise((r) => raw.on('close', r)) }, 'error', sink],
+  ]
+  try {
+    for (const [name, drive, , dstServer] of table) { const raw = await S.inject(dstServer ? at(dstServer) : undefined); raw.on('error', () => {}); await drive(raw); await until(() => S.rows().length >= table.findIndex((t) => t[0] === name) + 1, 4000).catch(() => { throw new Error(`no connection row for: ${name}`) }) }
+    const rows = S.rows()
+    assert.deepEqual(rows.map((r) => r.not_captured), table.map((t) => t[2]), 'one row per connection, in order, each with its closed code')
+    for (const r of rows) { assert.notEqual(r.decision, 'decrypt'); assert.deepEqual(checkRecord(r), [], r.not_captured) } // no non-decrypt row without a code
+    const h = await endpoint(S.s)
+    assert.deepEqual(['flow:h2', 'flow:malformed-hello'].map((k) => keys(h).includes(k)), [true, true], `failure-class codes are listed: ${keys(h)}`)
+    assert.deepEqual(['flow:policy', 'flow:unknown-protocol', 'flow:upstream-first', 'flow:error'].filter((k) => keys(h).includes(k)), [], 'expected-class codes are not failures')
+    assert.deepEqual(h.collector.expected, { policy: 1, 'unknown-protocol': 1, 'upstream-first': 1, error: 1 }, 'they are counted, by code')
+    assert.equal(h.summary.state, 'failing', 'the failure-class rows turn the bar')
+  } finally { sink.close(); banner.close(); await S.done() }
 })
 
 test('F3 parts: off, a helper death (degraded), a SIGHUP stop and its clean restart, a protocol mismatch, a start refused (port held) — each on disk, at the endpoint and in an offline status', async () => {
@@ -268,7 +343,23 @@ test('F4 write failures: an event line that cannot be written is on stderr and i
   // flows/ itself unreadable → 503, never empty: test/server-capture-health.test.mjs "unreadable flows/ → 503 …"
 })
 
-test('F4 the connection row of a flow whose envelope could not be written carries write_failed', { todo: 'C2 T-13 (engine, another lane)' }, () => { assert.fail('waits on C2 T-13') })
+test('F4 the connection row of a flow whose envelope could not be written carries write_failed, and the agent still gets its reply', async () => {
+  const S = await scene({ reply: 'HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok' })
+  try {
+    fs.mkdirSync(path.join(S.s.collector, `capture-${new Date().toISOString().slice(0, 10)}.ndjson`)) // the day's capture file cannot be opened
+    const raw = await S.inject()
+    const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: fs.readFileSync(S.extraCc) }); await once(c, 'secureConnect')
+    let got = ''; c.on('data', (x) => { got += x })
+    c.write(POST('{"model":"claude-x","messages":[]}'))
+    await until(() => got.endsWith('ok')); assert.match(got, /^HTTP\/1\.1 200 OK/, 'fail-open: the reply came although nothing could be written')
+    c.destroy()
+    const row = await until(() => S.rows()[0])
+    assert.deepEqual([row.decision, row.write_failed], ['decrypt', 1], 'the row counts the envelope it lost')
+    assert.ok(flowsOf(S.s).some((f) => f.event === 'failure' && f.where === 'record'), 'and the write failure itself is a record')
+    const h = await endpoint(S.s)
+    assert.equal(h.summary.state, 'failing')
+  } finally { await S.done() }
+})
 
 test('F6 install / uninstall: an entry uninstall cannot undo → exit-worthy `left`, the manifest kept, a failure event; the endpoint and an offline status say 未安装 · 残留 N 项, not "not installed"', async () => {
   const s = sandbox()
@@ -314,10 +405,118 @@ test('F7 sealing and reading: a seal refused on an unclosed shard is a journal l
   } finally { fs.chmodSync(journal, 0o600); s.done() }
 })
 
-test('F5 decoding and truncation of HTTP/1 calls: response framing error, unpaired response, compressed request body', { todo: 'C2 T-11 / T-12 / T-14 (engine, another lane); the WebSocket labels are test/web/ws-incomplete.test.mjs' }, () => { assert.fail('waits on C2') })
+// What the engine's own half asserts piece by piece is test/collector/core/exchange.test.mjs (T-11 / T-12 / T-14) and
+// not-captured.test.mjs; these are the same three things through the product path: a daemon, a real TLS client and a real
+// upstream, then the row, the event, the envelope on disk and the endpoint.
+const captureOf = (s) => fs.readdirSync(s.collector).filter((n) => /^capture-.*\.ndjson$/.test(n) && fs.statSync(path.join(s.collector, n)).isFile())
+  .flatMap((n) => fs.readFileSync(path.join(s.collector, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)))
+async function talk(S, bytes, { until: ok = () => true } = {}) {
+  const raw = await S.inject()
+  const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: fs.readFileSync(S.extraCc) }); await once(c, 'secureConnect')
+  let got = Buffer.alloc(0); c.on('data', (x) => { got = Buffer.concat([got, x]) }); c.on('error', () => {})
+  c.write(bytes)
+  await until(() => ok(got)); return { c, got: () => got }
+}
+test('F5 decoding and truncation of HTTP/1 calls: a response that cannot be framed, a response with no request to pair with, a compressed request body', { timeout: 30000 }, async () => {
+  const zlib = (await import('node:zlib')).default
+  // (1) the upstream's response cannot be framed: the row says so, one failure event, the open call is an error envelope
+  let S = await scene({ reply: 'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nZZ\r\nmore' })
+  try {
+    const t = await talk(S, POST('{"model":"claude-x","messages":[]}'), { until: (g) => g.length > 0 }); t.c.destroy()
+    const row = await until(() => S.rows()[0])
+    assert.deepEqual([row.decision, row.framer_error && row.framer_error.side], ['decrypt', 'response'], 'the row: framing stopped on the response side')
+    const ev = await until(() => flowsOf(S.s).find((f) => f.event === 'failure' && f.code === 'framer-error'))
+    assert.deepEqual([ev.where, ev.side, ev.flow_id], ['engine', 'response', row.flow_id])
+    const env = captureOf(S.s)
+    assert.deepEqual(env.map((e) => [e.error, e.resp && e.resp.error && e.resp.error.type]), [[true, 'framer_error']], 'the call is written, as an error that says why')
+    assert.ok(keys(await endpoint(S.s)).includes('engine/framer-error'))
+  } finally { await S.done() }
+  // (2) a request that stops being framed, then responses: the first pairs with the broken request, the rest have no request
+  const ok0 = 'HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n'
+  S = await scene({ reply: ok0 + 'HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n' + ok0 })
+  try {
+    const t = await talk(S, 'POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test\r\ntransfer-encoding: chunked\r\n\r\n2\r\n{}XX', { until: (g) => g.length > 40 }); t.c.destroy()
+    const row = await until(() => S.rows()[0])
+    assert.equal(row.framer_error && row.framer_error.side, 'request')
+    await until(() => flowsOf(S.s).some((f) => f.code === 'unpaired-response'))
+    await S.stop() // the recorder folds repeats inside a window and writes the folded count on stop: if the engine wrote one per response, a folded line would show up
+    const un = flowsOf(S.s).filter((f) => f.code === 'unpaired-response')
+    assert.deepEqual(un.map((f) => [f.status, f.folded ?? null, f.suppressed ?? null]), [[404, null, null]], 'once per connection, not once per response')
+    assert.deepEqual(captureOf(S.s).map((e) => e.req_partial), ['framer-error'], 'the unpaired responses are no envelopes')
+    const ks = keys(await endpoint(S.s))
+    assert.ok(['engine/framer-error', 'engine/unpaired-response'].every((k) => ks.includes(k)), `listed by the endpoint: ${ks}`)
+  } finally { await S.done() }
+  // (3) a compressed request body: the wire bytes verbatim, the text only where it could be decoded, never invented
+  S = await scene({ reply: ok0 })
+  try {
+    const json = '{"model":"claude-x","messages":[{"role":"user","content":"压缩 ok"}]}'
+    const gz = zlib.gzipSync(json), zst = Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 1, 2, 3, 4]) // a zstd frame header and junk: never decoded at capture
+    for (const [enc, body] of [['gzip', gz], ['zstd', zst]]) {
+      const raw = await S.inject()
+      const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: fs.readFileSync(S.extraCc) }); await once(c, 'secureConnect'); c.on('error', () => {})
+      let got = ''; c.on('data', (x) => { got += x })
+      c.write(Buffer.concat([Buffer.from(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test\r\ncontent-encoding: ${enc}\r\ncontent-length: ${body.length}\r\n\r\n`), body]))
+      await until(() => got.length > 0); c.destroy()
+    }
+    const [g, z] = await until(() => { const e = captureOf(S.s); return e.length >= 2 && e })
+    assert.deepEqual([g.req_body, g.req_content_encoding, Buffer.from(g.req_body_b64, 'base64').equals(gz)], [json, 'gzip', true], 'gzip: decoded text, and the wire bytes under it')
+    assert.deepEqual([z.req_body, z.req_content_encoding, Buffer.from(z.req_body_b64, 'base64').equals(zst)], [null, 'zstd', true], 'zstd: no text, the wire bytes kept')
+    assert.match(z.req_encoding_error, /zstd/)
+  } finally { await S.done() }
+})
 
-// F1(d) has its runnable check waiting, not silently missing (4.6 F: one check per F item).
-test('F1(d) an entry\'s combined bundle deleted → the daemon rebuilds it and records it; a rebuild that fails (read-only dir) leaves the old file, a failure event, and the endpoint lists the harness and path', { todo: 'C1 D-21: the per-harness combined bundle (combined-<harness>.pem) and its daily check are not built yet (no bundle module under src/collector/core/trust/)' }, () => { assert.fail('waits on C1 D-21') })
+// F1(d) (4.6 「合并包」, D38 D-21): the daemon checks every entry's combined bundle at start and daily. A bundle that went
+// missing is rebuilt, with one event that names the harness, the file and the errno; a rebuild that fails leaves the old
+// file, is a failure of its own that the endpoint lists with the harness and the path, and the resolver (which looks for
+// the asight CA in the file the entry names) keeps that agent untrusted meanwhile. The daily timer calls the same function
+// as the start, so the start is what is driven here.
+test('F1(d) an entry\'s combined bundle deleted → the daemon rebuilds it and records it; a rebuild that fails (read-only dir) leaves the old file, a failure event, and the endpoint lists the harness and path', { skip: process.getuid && process.getuid() === 0 ? 'root ignores directory modes' : false }, async () => {
+  const s = sandbox(); const p = fakeProc()
+  const osRoots = path.join(s.root, 'os-roots.pem'); fs.writeFileSync(osRoots, '')
+  fs.mkdirSync(path.join(s.home, '.codex')); fs.writeFileSync(path.join(s.home, '.codex', 'config.toml'), 'model = "gpt-test-1"\n')
+  const CODEX_EXE = '/home/u/.local/bin/codex'
+  await install(s, { harnesses: [codex], osRootsFile: osRoots })
+  const ca = path.join(s.collector, 'ca'); const bundle = path.join(ca, 'combined-codex.pem')
+  const caFp = new X509Certificate(fs.readFileSync(path.join(ca, 'asight-ca.pem'))).fingerprint256
+  const hasCa = () => (fs.readFileSync(bundle, 'utf8').match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || []).some((c) => new X509Certificate(c).fingerprint256 === caFp)
+  let FA
+  const start = (osRootsFile = osRoots) => { FA = fakeArch(p); return startDaemon({ dir: s.collector, socketPath: s.sock, arch: { ...FA.arch, osRootsFile }, harnesses: [codex], env: { ...process.env, HOME: s.home } }) }
+  let d
+  try {
+    // (1) deleted → rebuilt, and one event says which harness, which file, why
+    fs.rmSync(bundle)
+    d = await start(); await d.stop()
+    assert.ok(hasCa(), 'the bundle is back, with the asight CA')
+    const ev = flowsOf(s).filter((f) => f.event === 'bundles-rebuilt' && f.code === 'missing')
+    assert.deepEqual(ev.map((f) => [f.harness, f.file, f.errno]), [['codex', bundle, 'ENOENT']])
+    // (2) a root changed, but the directory cannot be written: the old file stays as it is, a failure names harness and path
+    const before = fs.readFileSync(bundle, 'utf8')
+    fs.writeFileSync(osRoots, createCa({ commonName: 'a root the distro added' }).certPem)
+    fs.chmodSync(ca, 0o555)
+    try {
+      d = await start()
+      const fail = await until(() => flowsOf(s).find((f) => f.event === 'failure' && f.where === 'bundle'))
+      assert.deepEqual([fail.harness, fail.file, typeof fail.code], ['codex', bundle, 'string'])
+      assert.equal(fs.readFileSync(bundle, 'utf8'), before, 'the old file is untouched')
+      const h = await endpoint(s)
+      const g = h.collector.failures.find((x) => x.key.startsWith('bundle/'))
+      assert.deepEqual([g.last.harness, g.last.file], ['codex', bundle], 'the endpoint lists the harness and the path')
+      assert.equal(h.summary.state, 'failing')
+      await d.stop()
+      // (3) the bundle gone and not rebuildable: an agent whose entry names it is untrusted, with a reason — not "fine"
+      fs.chmodSync(ca, 0o700); fs.rmSync(bundle); fs.chmodSync(ca, 0o555)
+      d = await start()
+      await req(s.sock, 'POST', '/on', {})
+      p.add(5151, { uid: UID, exe: CODEX_EXE, argv: ['codex', 'exec', 'hi'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
+      await FA.clients[0].raw({ op: '__emit', ev: 'exec', tgid: 5151, pid: 5151, comm: 'codex', filename: CODEX_EXE, ts_ns: 1 })
+      const a = await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((x) => x.pid === 5151))
+      assert.ok(!fs.existsSync(bundle), 'nothing could be written')
+      assert.deepEqual([a.trusted, typeof a.reason], [false, 'string'], `untrusted while its bundle is gone: ${JSON.stringify(a)}`)
+      assert.ok((await endpoint(s)).collector.conditions.some((c) => c.kind === 'untrusted' && c.pid === 5151), 'and the endpoint lists the pid')
+      await d.stop()
+    } finally { fs.chmodSync(ca, 0o700) }
+  } finally { p.done(); s.done() }
+})
 
 // F5 says these labels "不让顶栏变 ⚠", while 4.6 §记录 lists the WebSocket recorder's write-failed /
 // decode-failed / broken / recorder-error as failure events and 1.5 turns every failure ⚠ — today a flows/ holding only
