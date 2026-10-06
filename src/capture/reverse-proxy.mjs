@@ -10,8 +10,9 @@ import { randomBytes } from 'node:crypto'
 import https from 'node:https'
 import net from 'node:net'
 import tls from 'node:tls'
-import { buildEnvelope, isoStamp, HOP_BY_HOP } from './envelope.mjs'
+import { buildEnvelope, isLlmCall, isoStamp, HOP_BY_HOP, MAX_BODY_BYTES } from './envelope.mjs'
 import { teeResponse } from './response-tee.mjs'
+import { sampleRetention, storedRequest } from './retention.mjs'
 
 // CONNECT tunnel through an egress proxy for https upstreams (ported from proxy.mjs L81-116).
 function makeConnectTunnel(targetHost, targetPort, proxyUrl) {
@@ -46,7 +47,9 @@ function makeConnectTunnel(targetHost, targetPort, proxyUrl) {
 const runTag = () => Date.now().toString(36).slice(-4) + randomBytes(2).toString('hex');
 // onEvent (D38, RFC 4.1 过渡期): an upstream that closes mid-response, an SSE stream that cannot be decompressed
 // (response-tee.mjs) — the CLI appends them to ~/.asight/logs/mitm-events.ndjson.
-export function createReverseProxy({ target, upstreamProxy = '', keepRawSse = false, onEnvelope, onEvent = () => {} }) {
+// retention (D40): ({host, method, endpoint}) → {class, level}, sampled when a request starts (src/capture/retention.mjs);
+// without one every call is `full`. maxBodyBytes: the storage cap per body, 64 MiB; the forwarded bytes are never capped.
+export function createReverseProxy({ target, upstreamProxy = '', keepRawSse = false, onEnvelope, onEvent = () => {}, retention = null, maxBodyBytes = MAX_BODY_BYTES }) {
   const TARGET = target instanceof URL ? target : new URL(target)
   const useProxy = Boolean(upstreamProxy) && TARGET.protocol === 'https:'
   let seq = 0
@@ -56,10 +59,12 @@ export function createReverseProxy({ target, upstreamProxy = '', keepRawSse = fa
     const id = `req_${run}-${String(++seq).padStart(5, '0')}`
     const tsRequest = isoStamp()
     const t0 = process.hrtime.bigint()
+    const rt = sampleRetention(retention, { host: TARGET.hostname, method: req.method, endpoint: req.url }) // at request start (D40)
     const chunks = []
     req.on('data', (c) => chunks.push(c))
     req.on('end', () => {
       const bodyBuf = Buffer.concat(chunks)
+      const d40 = (respWireBytes) => ({ ...storedRequest(bodyBuf, rt.level, maxBodyBytes), host: TARGET.hostname, trafficClass: rt.class, retention: rt.level, respWireBytes })
       const fwd = {}
       for (const [k, v] of Object.entries(req.headers)) { if (HOP_BY_HOP.has(k.toLowerCase())) continue; fwd[k] = v }
       fwd['host'] = TARGET.host
@@ -75,10 +80,10 @@ export function createReverseProxy({ target, upstreamProxy = '', keepRawSse = fa
 
       const upstream = client.request(options, (up) => {
         const tsRespStart = isoStamp()
-        teeResponse(up, res, { keepRawSse, where: 'proxy', onEvent }, (resp, aborted) => {
+        teeResponse(up, res, { keepRawSse, rawSse: !isLlmCall(req.url), level: rt.level, maxBodyBytes, where: 'proxy', onEvent }, (resp, aborted, respWire) => {
           if (settled) return // one envelope per request
           settled = true
-          onEnvelope(buildEnvelope({ id, tsRequest, tsRespStart, durationMs: dur(), method: req.method, endpoint: req.url, reqBody: bodyBuf, reqHeaders: req.headers, capture: 'reverse-proxy', resp, error: aborted }))
+          onEnvelope(buildEnvelope({ id, tsRequest, tsRespStart, durationMs: dur(), method: req.method, endpoint: req.url, ...d40(respWire), reqHeaders: req.headers, capture: 'reverse-proxy', resp, error: aborted }))
         })
       })
 
@@ -88,7 +93,7 @@ export function createReverseProxy({ target, upstreamProxy = '', keepRawSse = fa
         if (res.headersSent) { res.destroy(); return }
         if (!settled) {
           settled = true
-          onEnvelope(buildEnvelope({ id, tsRequest, tsRespStart: null, durationMs: dur(), method: req.method, endpoint: req.url, reqBody: bodyBuf, reqHeaders: req.headers, capture: 'reverse-proxy', error: true, resp: { status: null, kind: 'error', error: { type: err.code || 'upstream_error', message: String((err && err.message) || err) } } }))
+          onEnvelope(buildEnvelope({ id, tsRequest, tsRespStart: null, durationMs: dur(), method: req.method, endpoint: req.url, ...d40(null), reqHeaders: req.headers, capture: 'reverse-proxy', error: true, resp: { status: null, kind: 'error', error: { type: err.code || 'upstream_error', message: String((err && err.message) || err) } } }))
         }
         if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ error: { type: 'atrace_upstream_error', message: err.message } }))

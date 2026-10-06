@@ -9,11 +9,18 @@
 //   - a body that is not JSON (a proxy's HTML error page) or cannot be decompressed (L-4): its bytes are kept —
 //     `raw` (UTF-8 text) or `raw_b64` (+ `encoding_error`), as the collector does (core/record/body.mjs) — instead
 //     of being replaced by a character count; one that cannot be decompressed is a `decode-failed` event too.
+//   - D40 (RFC 4.1 §统一原始信封 `resp`): a non-LLM SSE response also keeps its decoded text in `raw` (the reconstructor is
+//     Anthropic-shaped and rebuilds nothing from another stream); every body is stored up to `maxBodyBytes` (64 MiB, the
+//     collector's cap) — past it only the prefix is kept, `truncated` + `body_bytes` say so, and the full wire length is
+//     counted anyway (done()'s third argument, body_wire_bytes); at the `log` level no body is kept, only counted.
 import zlib from 'node:zlib'
 import { makeSseReconstructor } from './sse-reconstruct.mjs'
 import { failureOf } from './events.mjs'
+import { logResponse, MAX_BODY_BYTES } from './envelope.mjs'
+import { utf8Strict } from './request-body.mjs'
 
-const utf8 = (buf) => { const s = buf.toString('utf8'); return Buffer.from(s, 'utf8').equals(buf) ? s : null }
+export { MAX_BODY_BYTES }
+const utf8 = (buf) => utf8Strict(buf)
 // {buf} decoded per content-encoding, or {buf (the wire bytes), error}
 export function decodeBodyChecked(buf, enc = '') {
   try {
@@ -33,42 +40,65 @@ export function bodyResp(status, wire, enc, onDecodeError = null) {
   return t !== null ? { status, kind: 'text', raw: t } : { status, kind: 'text', raw_b64: dec.buf.toString('base64') }
 }
 
-// done(resp, aborted) is called exactly once; onEvent(rec) gets the failure records.
-export function teeResponse(up, res, { keepRawSse = false, where, onEvent = () => {} }, done) {
+// done(resp, aborted, wireBytes) is called exactly once; onEvent(rec) gets the failure records.
+//   level      'full' | 'log' — the retention level of this call (log: nothing is buffered, the bytes are only counted)
+//   rawSse     keep the decoded SSE text in `resp.raw` (set for a non-LLM stream: the reconstructor would rebuild nothing)
+//   maxBodyBytes  the storage cap per body; what is past it is counted, not kept
+export function teeResponse(up, res, { keepRawSse = false, rawSse = false, level = 'full', maxBodyBytes = MAX_BODY_BYTES, where, onEvent = () => {} }, done) {
   res.writeHead(up.statusCode || 502, up.headers)
+  const logged = level === 'log'
   const isSse = String(up.headers['content-type'] || '').includes('text/event-stream')
   const enc = String(up.headers['content-encoding'] || '').toLowerCase()
-  const recon = isSse ? makeSseReconstructor(keepRawSse) : null
-  const wire = [] // non-SSE: the body; compressed SSE: the wire bytes, for an encoding_error
-  let decoder = null, decodeError = null, finished = false
-  if (isSse && enc) {
+  const recon = isSse && !logged ? makeSseReconstructor(keepRawSse) : null
+  const wire = [] // non-SSE: the body; compressed SSE: the wire bytes, for an encoding_error — both only up to the cap
+  const rawParts = [] // a non-LLM SSE stream's decoded text, up to the cap
+  let wireBytes = 0, kept = 0, rawBytes = 0, decoder = null, decodeError = null, finished = false
+  const cut = { wire: false, raw: false } // which stored copy hit the cap
+  const keep = (list, chunk, held, which) => { // append up to the cap; the first byte past it marks that copy cut
+    const room = maxBodyBytes - held
+    if (room <= 0) { cut[which] = true; return held }
+    if (chunk.length > room) { list.push(chunk.subarray(0, room)); cut[which] = true; return held + room }
+    list.push(chunk); return held + chunk.length
+  }
+  const feedSse = (d) => { recon.push(d); if (rawSse) rawBytes = keep(rawParts, d, rawBytes, 'raw') }
+  if (isSse && enc && !logged) {
     if (enc.includes('br')) decoder = zlib.createBrotliDecompress()
     else if (enc.includes('gzip')) decoder = zlib.createGunzip()
     else if (enc.includes('deflate')) decoder = zlib.createInflate()
     if (decoder) {
-      decoder.on('data', (d) => recon.push(d))
+      decoder.on('data', feedSse)
       decoder.on('error', (e) => { decodeError = e; onEvent(failureOf(where, e, 'decode-failed', { reason: `the SSE response (content-encoding ${enc}) could not be decompressed: ${e.message}; its wire bytes are kept (raw_b64)` })) })
     }
   }
   const finish = (aborted) => {
     if (finished) return
     finished = true
+    const requestId = up.headers['request-id'] || up.headers['x-request-id'] || null
     let resp
-    if (isSse) {
+    if (logged) {
+      resp = logResponse({ status: up.statusCode, headers: up.headers, wireBytes, requestId })
+    } else if (isSse) {
       resp = { status: up.statusCode, kind: 'sse', ...recon.finish() }
+      if (rawSse && !decodeError) { const b = Buffer.concat(rawParts); const t = utf8(b); if (t !== null) resp.raw = t; else resp.raw_b64 = b.toString('base64') }
       if (decodeError) { resp.encoding_error = String(decodeError.message); resp.raw_b64 = Buffer.concat(wire).toString('base64') }
     } else {
-      // a body that cannot be decompressed is a decode-failed line too, like the SSE one (4.1: 响应解压失败 MUST 各留一行)
-      resp = bodyResp(up.statusCode, Buffer.concat(wire), enc, (dec) => onEvent(failureOf(where, { code: dec.code, message: dec.error }, 'decode-failed', { reason: `the response body (content-encoding ${enc}) could not be decompressed: ${dec.error}; its wire bytes are kept (raw_b64)` })))
+      // a body that cannot be decompressed is a decode-failed line too, like the SSE one (4.1: 响应解压失败 MUST 各留一行);
+      // a body cut at the cap cannot be decompressed because it was cut: labelled truncated, not a decode failure
+      resp = bodyResp(up.statusCode, Buffer.concat(wire), enc, cut.wire ? null : (dec) => onEvent(failureOf(where, { code: dec.code, message: dec.error }, 'decode-failed', { reason: `the response body (content-encoding ${enc}) could not be decompressed: ${dec.error}; its wire bytes are kept (raw_b64)` })))
     }
-    resp.request_id = up.headers['request-id'] || up.headers['x-request-id'] || null
-    if (!aborted) return done(resp, false)
-    done({ status: up.statusCode, kind: 'error', error: { type: 'upstream_aborted', message: 'the upstream closed the response before it was complete' }, partial: resp }, true)
+    if (!logged) {
+      resp.request_id = requestId
+      if (isSse ? rawSse && cut.raw : cut.wire) { resp.truncated = true; resp.body_bytes = isSse ? rawBytes : kept }
+    }
+    if (!aborted) return done(resp, false, wireBytes)
+    done({ status: up.statusCode, kind: 'error', error: { type: 'upstream_aborted', message: 'the upstream closed the response before it was complete' }, partial: resp }, true, wireBytes)
   }
   up.on('data', (chunk) => {
     res.write(chunk)
-    if (!isSse) wire.push(chunk)
-    else if (decoder) { wire.push(chunk); if (!decodeError) decoder.write(chunk) } else recon.push(chunk)
+    wireBytes += chunk.length
+    if (logged) return
+    if (!isSse) kept = keep(wire, chunk, kept, 'wire')
+    else if (decoder) { kept = keep(wire, chunk, kept, 'wire'); if (!decodeError) decoder.write(chunk) } else feedSse(chunk)
   })
   up.on('end', () => {
     res.end()

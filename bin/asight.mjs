@@ -24,6 +24,20 @@ const flag = args.flag;
 const positional = args.positional;
 const r = (...p) => path.join(ROOT, ...p);
 
+// D40 (RFC 4.6 §记录「保存级别」): the retention settings the OLD capture applies — the reverse proxy and the MITM have no
+// process identity, so every call is the `cc` row (RFC 4.6: the old MITM's steer only lets claude-code in). Read from
+// ~/.asight/retention.json, re-checked once a second; a problem with it is a line in mitm-events.ndjson and the call is kept in full.
+// The classifier is built here, not in src/capture/, which names no harness and holds no host pattern (D20, 0.1 §5).
+async function legacyRetention() {
+  const { createRetention, retentionFile } = await import(r('src', 'capture', 'retention.mjs'));
+  const { endpointClass } = await import(r('src', 'capture', 'envelope.mjs'));
+  const { makeClassifier } = await import(r('src', 'dissect', 'traffic.mjs'));
+  const { appendLegacyEvent } = await import(r('src', 'capture', 'events.mjs'));
+  const classify = makeClassifier({ endpointClass, onInvalid: (b) => appendLegacyEvent({ event: 'failure', where: 'retention', code: 'pattern-invalid', reason: `a traffic pattern of ${b.harness} is skipped (${b.reason}): ${JSON.stringify(b.entry)}` }) });
+  const keep = createRetention({ file: retentionFile(), classify, onFailure: (e) => appendLegacyEvent(e), onOk: (e) => appendLegacyEvent(e) });
+  return ({ host, method, endpoint }) => keep.decide({ harness: 'cc', host, method, endpoint });
+}
+
 async function main() {
   if (cmd === '--version' || cmd === '-v' || cmd === 'version') {
     console.log(JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version);
@@ -164,7 +178,8 @@ async function main() {
       const sink = createCaptureSink(out);
       const life = legacyLifecycle({ source: 'proxy', port, out });
       let n = 0;
-      const server = createReverseProxy({ target, upstreamProxy, keepRawSse, onEvent: (e) => appendLegacyEvent(e), onEnvelope: (env) => { if (sink.write(env) && ++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
+      const retention = await legacyRetention();
+      const server = createReverseProxy({ target, upstreamProxy, keepRawSse, retention, onEvent: (e) => appendLegacyEvent(e), onEnvelope: (env) => { if (sink.write(env) && ++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
       server.on('error', (e) => { appendLegacyEvent(failureOf('proxy', e, 'start-failed')); if (e.code === 'EADDRINUSE') process.exit(1); });
       server.listen(port, '127.0.0.1', () => { life.started(server.address().port); console.log(`asight capture (reverse-proxy tee) → ${target}\n  listening http://127.0.0.1:${port}  → ${out}\n  point the harness at it: HTTPS_PROXY / base_url → http://127.0.0.1:${port} (or run: asight on)`); });
       break;
@@ -197,7 +212,8 @@ async function main() {
       const sink = createCaptureSink(out);
       const life = legacyLifecycle({ source: 'mitm', port, out });
       let n = 0;
-      const server = createMitmProxy({ targetHost, leaf, upstreamProxy, keepRawSse, onEvent: (e) => appendLegacyEvent(e), log: (m) => console.error(m), onEnvelope: (env) => { if (sink.write(env) && ++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
+      const retention = await legacyRetention();
+      const server = createMitmProxy({ targetHost, leaf, upstreamProxy, keepRawSse, retention, onEvent: (e) => appendLegacyEvent(e), log: (m) => console.error(m), onEnvelope: (env) => { if (sink.write(env) && ++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
       server.on('error', (e) => { appendLegacyEvent(failureOf('mitm', e, 'start-failed')); if (e.code === 'EADDRINUSE') process.exit(1); });
       // D38 L-12: the Desktop steer this MITM serves is checked at start and every 60 s; losing it is a line
       if (process.platform === 'darwin') {

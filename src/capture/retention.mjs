@@ -19,7 +19,7 @@
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { retentionFile, retentionLog } from '../paths.mjs'
-import { TRAFFIC_CLASSES, RETENTION_LEVELS, endpointClass } from './envelope.mjs'
+import { TRAFFIC_CLASSES, RETENTION_LEVELS, MAX_BODY_BYTES, endpointClass } from './envelope.mjs'
 
 export { TRAFFIC_CLASSES, RETENTION_LEVELS, retentionFile, retentionLog }
 export const RETENTION_VERSION = 1
@@ -107,6 +107,21 @@ export function createRetention({ file = retentionFile(), classify = null, onFai
     /** what is in force now: {levels, problems, file} — the board's and the CLI's view of it */
     current() { refresh(); return { levels, problems: lastProblems, file } },
   }
+}
+
+// The old capture paths (reverse proxy, MITM) sample a call's level when its request starts. `retention` is injected by the
+// CLI (bin/asight.mjs): ({host, method, endpoint}) → {class, level}. Without one — or when it throws — every call is kept in
+// full and told by its endpoint alone: a settings problem must never cost a call its bytes.
+export function sampleRetention(retention, q) {
+  const fallback = () => ({ class: endpointClass(q.endpoint) || 'other', level: 'full' })
+  if (typeof retention !== 'function') return fallback()
+  try { const r = retention(q); return { class: TRAFFIC_CLASSES.includes(r && r.class) ? r.class : 'other', level: r && r.level === 'log' ? 'log' : 'full' } } catch { return fallback() }
+}
+// What the old paths store of a request they hold whole (they buffer it to forward it): at `log` nothing, else the first
+// `cap` bytes — with the label and the exact wire length when it is longer.
+export function storedRequest(body, level, cap = MAX_BODY_BYTES) {
+  const cut = level !== 'log' && body.length > cap
+  return { reqBody: level === 'log' ? null : cut ? body.subarray(0, cap) : body, reqWireBytes: body.length, reqTruncated: cut }
 }
 
 export class RetentionArgError extends Error {

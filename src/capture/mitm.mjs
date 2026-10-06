@@ -9,8 +9,9 @@ import { randomBytes } from 'node:crypto'
 import https from 'node:https'
 import net from 'node:net'
 import tls from 'node:tls'
-import { buildEnvelope, isoStamp, HOP_BY_HOP } from './envelope.mjs'
+import { buildEnvelope, isLlmCall, isoStamp, HOP_BY_HOP, MAX_BODY_BYTES } from './envelope.mjs'
 import { teeResponse } from './response-tee.mjs'
+import { sampleRetention, storedRequest } from './retention.mjs'
 
 // default: open a TLS connection to the real api tunneled through the upstream CONNECT proxy.
 export function makeUpstreamConnector({ upstreamProxy, targetHost }) {
@@ -61,7 +62,11 @@ const runTag = () => Date.now().toString(36).slice(-4) + randomBytes(2).toString
 // (it does not trust this CA — L-1), every upstream that closes mid-response and every SSE stream that cannot be
 // decompressed (response-tee.mjs); the CLI appends them to ~/.asight/logs/mitm-events.ndjson. Client-socket errors
 // and blind tunnels that fail (outside the capture target) are only counted (`server.legacyStats`) and logged (L-10).
-export function createMitmProxy({ targetHost, leaf, upstreamProxy, connectUpstream, blindTunnel, keepRawSse = false, onEnvelope, onEvent = () => {}, log = () => {} }) {
+// D40: the decrypt scope is unchanged (targetHost only); what changes is what an envelope keeps — every body verbatim up to
+// maxBodyBytes (64 MiB; the forwarded bytes are never capped), `host` = the CONNECT target, traffic_class, body_wire_bytes,
+// and `retention` ({host, method, endpoint}) → {class, level}, sampled when a request starts: at `log` the bodies are
+// counted, not kept (src/capture/retention.mjs). The running process picks this up only when the operator restarts it.
+export function createMitmProxy({ targetHost, leaf, upstreamProxy, connectUpstream, blindTunnel, keepRawSse = false, onEnvelope, onEvent = () => {}, log = () => {}, retention = null, maxBodyBytes = MAX_BODY_BYTES }) {
   const connect = connectUpstream || makeUpstreamConnector({ upstreamProxy, targetHost })
   const stats = { clientErrors: 0, tunnelFailures: 0 }
   const blind = blindTunnel || makeBlindTunnel({ upstreamProxy, onFail: (why) => { stats.tunnelFailures++; log(`asight mitm: blind tunnel failed (${why}); ${stats.tunnelFailures} so far`) } })
@@ -74,24 +79,26 @@ export function createMitmProxy({ targetHost, leaf, upstreamProxy, connectUpstre
     const tsRequest = isoStamp()
     const t0 = process.hrtime.bigint()
     const dur = () => Math.round(Number(process.hrtime.bigint() - t0) / 1e6)
+    const rt = sampleRetention(retention, { host: targetHost, method: req.method, endpoint: req.url }) // at request start (D40)
     const chunks = []
     req.on('data', (c) => chunks.push(c))
     req.on('end', () => {
       const bodyBuf = Buffer.concat(chunks)
+      const d40 = (respWireBytes) => ({ ...storedRequest(bodyBuf, rt.level, maxBodyBytes), host: targetHost, trafficClass: rt.class, retention: rt.level, respWireBytes })
       const fwd = {}
       for (const [k, v] of Object.entries(req.headers)) { if (HOP_BY_HOP.has(k.toLowerCase())) continue; fwd[k] = v }
       fwd['host'] = targetHost
       let settled = false
       const emitError = (err) => {
         if (settled) return; settled = true
-        onEnvelope(buildEnvelope({ id, tsRequest, tsRespStart: null, durationMs: dur(), method: req.method, endpoint: req.url, reqBody: bodyBuf, reqHeaders: req.headers, capture: 'mitm', error: true, resp: { status: null, kind: 'error', error: { type: err.code || 'upstream_error', message: String((err && err.message) || err) } } }))
+        onEnvelope(buildEnvelope({ id, tsRequest, tsRespStart: null, durationMs: dur(), method: req.method, endpoint: req.url, ...d40(null), reqHeaders: req.headers, capture: 'mitm', error: true, resp: { status: null, kind: 'error', error: { type: err.code || 'upstream_error', message: String((err && err.message) || err) } } }))
       }
       const upreq = https.request({ host: targetHost, port: 443, method: req.method, path: req.url, headers: fwd, createConnection: connect }, (up) => {
         const tsRespStart = isoStamp()
-        teeResponse(up, res, { keepRawSse, where: 'mitm', onEvent }, (resp, aborted) => {
+        teeResponse(up, res, { keepRawSse, rawSse: !isLlmCall(req.url), level: rt.level, maxBodyBytes, where: 'mitm', onEvent }, (resp, aborted, respWire) => {
           if (settled) return // one envelope per request
           settled = true
-          onEnvelope(buildEnvelope({ id, tsRequest, tsRespStart, durationMs: dur(), method: req.method, endpoint: req.url, reqBody: bodyBuf, reqHeaders: req.headers, capture: 'mitm', resp, error: aborted }))
+          onEnvelope(buildEnvelope({ id, tsRequest, tsRespStart, durationMs: dur(), method: req.method, endpoint: req.url, ...d40(respWire), reqHeaders: req.headers, capture: 'mitm', resp, error: aborted }))
         })
       })
       upreq.on('error', (err) => {

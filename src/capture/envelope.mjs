@@ -38,6 +38,9 @@ export function isLlmCall(endpoint) {
 // wiring injects — capture code names no harness and holds no host pattern (D20, 0.1 §5).
 export const TRAFFIC_CLASSES = Object.freeze(['llm', 'token-count', 'session-sync', 'telemetry', 'files', 'account', 'other'])
 export const RETENTION_LEVELS = Object.freeze(['full', 'log'])
+// The most of one body (either direction) an envelope stores — the collector's engine and both old capture paths. What is
+// past it is counted (body_wire_bytes) but not kept, and the envelope says so (req_truncated / resp.truncated).
+export const MAX_BODY_BYTES = 64 << 20
 /** 'llm' | 'token-count' | null — what the endpoint says by itself. */
 export function endpointClass(endpoint) {
   if (isLlmCall(endpoint)) return 'llm'
