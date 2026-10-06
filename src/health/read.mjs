@@ -116,6 +116,21 @@ function notesOf(dir, fold, m, fs, read) {
   }
 }
 
+// The switch as state.json says it (RFC 1.6 §1.5, src/off/state.mjs): version 2 is per harness — `desired` is 'on' when every harness is on,
+// 'off' when none is, 'mixed' otherwise (no harness recorded: off); `since` is the newest per-harness `updated_at` ("capture off since T").
+// Version 1 (before D39, or a file with no version) is one `desired` for everything. A version this build does not know is an error, never "off".
+// Read here and not through src/off/state.mjs: src/health depends on node built-ins, src/paths.mjs and src/raw/ only (0.1 §2).
+function switchOf(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return { error: 'is not a JSON object' }
+  if (v.version === 2) {
+    const hs = Object.entries(v.harnesses && typeof v.harnesses === 'object' ? v.harnesses : {}).map(([id, h]) => [id, { desired: h && h.desired === 'on' ? 'on' : 'off', updated_at: h && typeof h.updated_at === 'string' ? h.updated_at : null }])
+    const on = hs.filter(([, h]) => h.desired === 'on').length
+    return { desired: hs.length && on === hs.length ? 'on' : on ? 'mixed' : 'off', since: latest(...hs.map(([, h]) => h.updated_at)) || (typeof v.updated_at === 'string' ? v.updated_at : null), harnesses: Object.fromEntries(hs) }
+  }
+  if (v.version !== undefined && v.version !== 1) return { error: `is version ${JSON.stringify(v.version)}; this build reads versions 1 and 2` }
+  return { desired: v.desired === 'on' ? 'on' : 'off', since: v.updated_at || null }
+}
+
 function collectorHealth({ dir, now, fs, alive, identity, maxBytes, read }) {
   try { fs.statSync(dir) } catch (e) {
     if (e.code === 'ENOENT') return { present: false, installed: false, residue: [], summary: { state: 'not-installed' } }
@@ -142,9 +157,12 @@ function collectorHealth({ dir, now, fs, alive, identity, maxBytes, read }) {
   if (flows.truncated) read.truncated = true
   const fold = foldFlows(flows.records, { now })
   Object.assign(daemon, { last_record_at: fold.last_ts, last_start: fold.last_start, last_stop: fold.last_stop })
-  const st = readJson(path.join(dir, 'state.json'), fs)
-  if (st.error) read.errors.push({ file: path.join(dir, 'state.json'), error: st.error })
-  const sw = st.value ? { desired: st.value.desired === 'on' ? 'on' : 'off', since: st.value.updated_at || null } : st.missing ? { desired: 'off', since: null } : { desired: null, since: null, error: st.error }
+  const stateFile = path.join(dir, 'state.json')
+  const st = readJson(stateFile, fs)
+  const sw0 = st.value ? switchOf(st.value) : st.missing ? { desired: 'off', since: null, harnesses: {} } : { error: st.error }
+  const swError = sw0.error ? (st.error || `${stateFile} ${sw0.error}`) : null
+  if (swError) read.errors.push({ file: stateFile, error: swError })
+  const sw = swError ? { desired: null, since: null, error: swError } : sw0
   const c = {
     present: true, installed, residue, ...(man.error ? { manifest_error: man.error } : {}), daemon, switch: sw,
     // partial: no daemon-start in what was read AND the read stopped at its limit — the start may be beyond it; a
