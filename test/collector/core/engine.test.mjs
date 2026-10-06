@@ -101,7 +101,7 @@ test('engine: two consecutive rejections on one host splice that host only; anot
   await engine.close(); up.close()
   assert.deepEqual(told, [], 'kernel steering is never touched')
   const by = (h) => flows.filter((f) => f.host === h).map((f) => [f.decision, f.not_captured ?? null])
-  assert.deepEqual(by('api.deepseek.com'), [['decrypt', null], ['decrypt', null], ['splice', 'negative-cache'], ['decrypt', null]])
+  assert.deepEqual(by('api.deepseek.com'), [['decrypt', 'client-rejected-leaf'], ['decrypt', 'client-rejected-leaf'], ['splice', 'negative-cache'], ['decrypt', null]])
   assert.deepEqual(by('chat.deepseek.com'), [['decrypt', null]])
   assert.deepEqual(engine.stats().notCaptured, { h2: 0, httpsProxy: 0, upstreamCert: 0, negative: 1, leafError: 0 })
 })

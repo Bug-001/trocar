@@ -11,6 +11,7 @@ import { negKey } from './negcache.mjs'
 import { createUpstreamTrust } from '../tls/roots.mjs'
 
 const msgOf = (e) => String((e && e.message) || e)
+const closedBefore = (side) => ({ type: 'closed_before_decision', message: `the ${side} closed before a routing decision`, side })
 
 export function handleFlow(client, meta, ctx) {
   const t0 = Date.now()
@@ -27,12 +28,35 @@ export function handleFlow(client, meta, ctx) {
   let selfClosed = false    // the engine tore this flow down itself (internalError)
   let upstream = null       // the TCP connection to the original destination
   let firstByteTimer = null
+  let slowTimer = null      // the upstream-slow watch while the engine waits on the upstream (RFC 4.6 §记录)
+  // Waiting on the upstream (our TLS handshake to it, a proxy's reply) has no time limit: cutting the
+  // agent because its upstream or proxy is slow would break it (D31). Past `upstreamSlowMs` (5 s) the
+  // wait is recorded once as an upstream-slow event (D38), and the connection goes on.
+  function waitFor(phase, host) {
+    waitDone()
+    const ms = ctx.upstreamSlowMs ?? 5000, t0w = Date.now()
+    slowTimer = setTimeout(() => { slowTimer = null; ctx.failure({ reason: 'upstream-slow', flow_id: rec.flow_id, host, phase, waited_ms: Date.now() - t0w }) }, ms)
+    if (slowTimer.unref) slowTimer.unref()
+  }
+  function waitDone() { if (slowTimer) { clearTimeout(slowTimer); slowTimer = null } }
+  // the row's not_captured code (closed set, codes.mjs) and why (RFC 4.6 §记录 连接行怎么落码)
+  function notCaptured(code, reason) { rec.not_captured = code; if (reason != null) rec.reason = reason }
+  // policy(meta, host): true = decrypt; {not_captured:'not-trust-path', reason} = the daemon's own expected
+  // code; anything else = outside the decrypt policy. → null (decrypt) or [code, reason]
+  function skipOf(host) {
+    if (!meta.decrypt) return ['untrusted', null]
+    const v = ctx.policy(meta, host)
+    if (v && typeof v === 'object') return v.not_captured === 'not-trust-path' ? ['not-trust-path', v.reason ?? null] : ['policy', v.reason ?? null]
+    return v ? null : ['policy', null]
+  }
   function finish(decision, extra = {}) {
     if (finished) return
     finished = true
     if (firstByteTimer) { clearTimeout(firstByteTimer); firstByteTimer = null }
+    waitDone()
     if (decision && !rec.decision) rec.decision = decision
     Object.assign(rec, extra)
+    if (rec.decision === 'error' && !rec.not_captured) rec.not_captured = 'error' // D38: every row the bytes missed has a code
     rec.duration_ms = Date.now() - t0
     // a WebSocket connection: the recorder's summary (frames, calls, tail_raw, failures, …; RFC 4.6 §记录)
     const ws = activeTee && activeTee.wsSummary && activeTee.wsSummary()
@@ -73,9 +97,11 @@ export function handleFlow(client, meta, ctx) {
     if (activeTee) { try { activeTee.abort(why) } catch (e) { ctx.failure({ code: 'engine-error', flow_id: rec.flow_id, reason: `recording stopped: ${msgOf(e)}` }) } }
     finish()
   }
+  // inside a tunnel the row says decision:'tunnel' and what happened to the tunnelled bytes in `inner`;
+  // reason / not_captured stay free for the why (RFC 4.6 §记录)
   function setDecision(inner, isTunnel) {
-    if (isTunnel) { rec.decision = 'tunnel'; if (!rec.reason) rec.reason = inner }
-    else if (!rec.decision || rec.decision === null) rec.decision = inner
+    if (isTunnel) { rec.decision = 'tunnel'; rec.inner = inner }
+    else if (!rec.decision) rec.decision = inner
   }
 
   // Before any routing decision, a side closing/erroring/ending (or nobody ever speaking, or the
@@ -91,9 +117,9 @@ export function handleFlow(client, meta, ctx) {
   // a synchronous throw (e.g. net.connect on a bad port) ends this flow with a record (D38)
   try { upstream = ctx.connectUpstream(meta.dst) } catch (e) { internalError(e); return flowDone }
   upstream.once('error', (err) => preTeardown({ type: err.code || 'upstream_error', message: msgOf(err), side: 'upstream' }))
-  upstream.on('close', () => preTeardown())
-  client.on('close', () => preTeardown())
-  client.on('end', () => preTeardown())
+  upstream.on('close', () => preTeardown(closedBefore('upstream')))
+  client.on('close', () => preTeardown(closedBefore('client')))
+  client.on('end', () => preTeardown(closedBefore('client')))
   // The client socket is ours from accept: an error on it (a reset before we have decided, a write
   // to a client that already left) MUST be handled here, or it is an uncaughtException that takes
   // the whole collector down (RFC 4.6 fail-open). relay() and the TLS wrap own it after the decision.
@@ -140,7 +166,7 @@ export function handleFlow(client, meta, ctx) {
       decided = true
       cleanup()
       // upstream spoke first → splice (RFC 4.6 §引擎 2)
-      setDecision('splice', isTunnel)
+      setDecision('splice', isTunnel); notCaptured('upstream-first')
       if (chunks.length) uSock.write(Buffer.concat(chunks))
       if (d && d.length) cSock.write(d)
       relay(cSock, uSock)
@@ -149,6 +175,8 @@ export function handleFlow(client, meta, ctx) {
     function decide() {
       decided = true
       cleanup()
+      // the client has spoken: the first-byte valve is done; any wait from here on is on the upstream
+      if (firstByteTimer) { clearTimeout(firstByteTimer); firstByteTimer = null }
       dispatch(classify(Buffer.concat(chunks)), Buffer.concat(chunks), cSock, uSock, hostDefault, isTunnel)
     }
     cSock.on('data', onClient)
@@ -161,7 +189,7 @@ export function handleFlow(client, meta, ctx) {
     if (cls === 'connect' && !isTunnel) return handleConnect(buf, cSock, uSock)
     if (cls === 'http') return handleHttp(buf, cSock, uSock, hostDefault, isTunnel)
     // unknown (or a nested CONNECT) → splice verbatim
-    setDecision('splice', isTunnel)
+    setDecision('splice', isTunnel); notCaptured('unknown-protocol', `first-byte 0x${buf.subarray(0, 1).toString('hex')}`)
     if (buf.length) uSock.write(buf)
     relay(cSock, uSock)
   }
@@ -189,12 +217,15 @@ export function handleFlow(client, meta, ctx) {
     const key = negKey(meta, host)
     const h1 = alpn === null || alpn.includes('http/1.1')
     const neg = ctx.negCache.get(key)
-    const target = meta.decrypt && !ch.malformed && ctx.policy(meta, sni ?? meta.dst.address)
-    if (target && h1 && !neg) return decrypt(buf, cSock, uSock, sni, host, isTunnel, key)
-    // A host we would decrypt but do not: say why in flows/ (invariant 4) — the negative cache (RFC 4.6
-    // §引擎 5) or an only-h2 offer (§传输与帧级记录 · T8). Spliced either way; the redirector is never told.
-    if (target && neg) { rec.not_captured = 'negative-cache'; rec.reason = neg.cause; ctx.counters.notCaptured.negative++ }
-    else if (target && alpn.includes('h2')) { rec.not_captured = 'h2'; rec.reason = 'alpn-h2-only'; ctx.counters.notCaptured.h2++ }
+    const skip = !meta.decrypt ? ['untrusted', null] : ch.malformed ? ['malformed-hello', null] : skipOf(sni ?? meta.dst.address)
+    if (!skip && h1 && !neg) return decrypt(buf, cSock, uSock, sni, host, isTunnel, key)
+    // Every splice says why in flows/ (invariant 4, D38): untrusted / malformed / outside the policy, or a
+    // host we would decrypt but do not — the negative cache (RFC 4.6 §引擎 5) or an offer without
+    // http/1.1 (h2 only: T8). Spliced either way; the redirector is never told.
+    if (skip) notCaptured(...skip)
+    else if (neg) { notCaptured('negative-cache', neg.cause); ctx.counters.notCaptured.negative++ }
+    else if (alpn.includes('h2')) { notCaptured('h2', 'alpn-h2-only'); ctx.counters.notCaptured.h2++ }
+    else notCaptured('unknown-protocol', `alpn ${alpn.join(',')}`)
     setDecision('splice', isTunnel); cSock.unshift(buf); cSock.resume(); relay(cSock, uSock)
   }
 
@@ -233,10 +264,13 @@ export function handleFlow(client, meta, ctx) {
     // (stepAside). Nothing is ever written on an unverified connection (§引擎 5).
     const upTls = tls.connect({ socket: uSock, servername: sni || undefined, ALPNProtocols: ['http/1.1'], secureContext: ctx.upstreamTrust.secureContext, rejectUnauthorized: false })
     let clientTls = null
+    waitFor('tls', host)
     upTls.on('error', (err) => {
-      if (!clientTls) { try { cSock.destroy() } catch { /* ignore */ }; finish(isTunnel ? 'tunnel' : 'decrypt', { host, error: { type: err.code || 'upstream_tls_error', message: msgOf(err), side: 'upstream' } }) }
+      waitDone()
+      if (!clientTls) { try { cSock.destroy() } catch { /* ignore */ }; finish(isTunnel ? 'tunnel' : 'decrypt', { host, not_captured: 'error', error: { type: err.code || 'upstream_tls_error', message: msgOf(err), side: 'upstream' } }) }
     })
     upTls.on('secureConnect', guard(() => {
+      waitDone()
       if (!upTls.authorized) return stepAside(upTls, buf, cSock, host, isTunnel, key, 'upstream-cert', String(upTls.authorizationError || 'upstream certificate not verified'))
       let leaf
       try { leaf = ctx.issuer.secureContextFor(host) } catch (e) { return stepAside(upTls, buf, cSock, host, isTunnel, key, 'leaf-error', msgOf(e)) }
@@ -259,7 +293,7 @@ export function handleFlow(client, meta, ctx) {
         judged = true
         if (appData) return ctx.negCache.observe(key, { rejected: false, meta, host })
         if (notClient || selfClosed) return
-        rec.reason = 'client-rejected-leaf'
+        notCaptured('client-rejected-leaf', 'client-rejected-leaf')
         ctx.negCache.observe(key, { rejected: true, meta, host })
       }
       clientTls.on('error', judge); clientTls.on('end', judge); clientTls.on('close', judge)
@@ -291,12 +325,13 @@ export function handleFlow(client, meta, ctx) {
     const connectHost = authority.split(':')[0]
     const innerPre = buf.subarray(h.headLength)               // usually empty (client waits for 2xx)
     uSock.write(buf.subarray(0, h.headLength))                // forward the CONNECT head verbatim
+    waitFor('proxy-reply', connectHost)
     const upChunks = []
     const onUp = guard((d) => {
       upChunks.push(d)
       const ph = parseHead(Buffer.concat(upChunks))
       if (!ph) return
-      uSock.removeListener('data', onUp)
+      uSock.removeListener('data', onUp); waitDone()
       const all = Buffer.concat(upChunks)
       cSock.write(all.subarray(0, ph.headLength))             // relay the proxy reply head verbatim
       const after = all.subarray(ph.headLength)
@@ -305,7 +340,7 @@ export function handleFlow(client, meta, ctx) {
         if (after.length) cSock.write(after)
         route(cSock, uSock, innerPre, connectHost, true)      // decrypt/splice the tunnelled TLS
       } else {
-        setDecision('tunnel'); rec.reason = `proxy-status-${status}`; rec.host = connectHost
+        rec.decision = 'tunnel'; notCaptured('proxy-refused', `proxy-status-${status}`); rec.host = connectHost
         if (after.length) cSock.write(after)
         relay(cSock, uSock)
       }
@@ -319,7 +354,8 @@ export function handleFlow(client, meta, ctx) {
     let host = hostDefault ?? meta.dst.address
     if (h) for (const [k, v] of h.headers) if (k.toLowerCase() === 'host') host = v.split(':')[0]
     rec.host = host
-    if (meta.decrypt && ctx.policy(meta, host)) {
+    const skip = skipOf(host)
+    if (!skip) {
       setDecision('decrypt', isTunnel)
       activeTee = createExchangeTee({
         flow: { id: rec.flow_id, host, scheme: 'http', dst: meta.dst, proc: { pid: meta.pid, exe: meta.exe ?? null, agent: meta.agent } },
@@ -329,7 +365,7 @@ export function handleFlow(client, meta, ctx) {
       uSock.write(buf)
       relay(cSock, uSock)
     } else {
-      setDecision('splice', isTunnel)
+      setDecision('splice', isTunnel); notCaptured(...skip)
       if (buf.length) uSock.write(buf)
       relay(cSock, uSock)
     }
@@ -345,7 +381,7 @@ export function handleFlow(client, meta, ctx) {
   if (firstByteTimer.unref) firstByteTimer.unref()
 
   // Catch a client that was already gone before our listeners attached (accept/lookup raced the close).
-  if (client.destroyed) queueMicrotask(() => preTeardown(client.errored ? { type: client.errored.code || 'client_error', message: msgOf(client.errored), side: 'client' } : undefined))
+  if (client.destroyed) queueMicrotask(() => preTeardown(client.errored ? { type: client.errored.code || 'client_error', message: msgOf(client.errored), side: 'client' } : closedBefore('client')))
 
   return flowDone
 }

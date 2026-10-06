@@ -101,11 +101,11 @@ test('splice: ALPN offering only h2 is never decrypted, and flows/ says not capt
   assert.deepEqual([h.flows[0].not_captured, h.flows[0].reason], ['h2', 'alpn-h2-only']); assert.equal(h.ctx.counters.notCaptured.h2, 1)
 })
 
-test('an h2-only offer to a host the policy would not decrypt anyway is an ordinary splice, not "not captured"', async () => {
+test('an h2-only offer to a host the policy would not decrypt anyway is labelled policy (expected), not h2 (D38)', async () => {
   const h = await harness({ policy: () => false, upstream: h2Upstream() })
   await request(h.port, upCa.certPem, 'x', { ALPNProtocols: ['h2'] })
   await h.close()
-  assert.equal(h.flows[0].decision, 'splice'); assert.equal(h.flows[0].not_captured, undefined); assert.equal(h.ctx.counters.notCaptured.h2, 0)
+  assert.equal(h.flows[0].decision, 'splice'); assert.equal(h.flows[0].not_captured, 'policy'); assert.equal(h.ctx.counters.notCaptured.h2, 0)
 })
 
 test('upstream reset mid-response: client gets exactly the bytes upstream sent, then a reset; error envelope written', async () => {
@@ -170,7 +170,7 @@ for (const maxVersion of ['TLSv1.2', 'TLSv1.3']) {
     await h.close()
     assert.match(r.cert.issuer, /upstream test CA/)
     assert.deepEqual(h.flows.map((f) => [f.decision, f.not_captured ?? null, f.reason ?? null]),
-      [['decrypt', null, 'client-rejected-leaf'], ['decrypt', null, 'client-rejected-leaf'], ['splice', 'negative-cache', 'client-rejected-leaf']])
+      [['decrypt', 'client-rejected-leaf', 'client-rejected-leaf'], ['decrypt', 'client-rejected-leaf', 'client-rejected-leaf'], ['splice', 'negative-cache', 'client-rejected-leaf']])
     assert.equal(h.ctx.counters.notCaptured.negative, 1)
   })
 }
@@ -266,7 +266,7 @@ test('a network failure during our upstream handshake still closes the client: n
   const r = await talk(h.port, upCa.certPem)
   await h.close()
   assert.equal(r, 'closed'); assert.equal(conns, 1)
-  assert.equal(h.ctx.negCache.list().length, 0); assert.equal(h.flows[0].not_captured, undefined)
+  assert.equal(h.ctx.negCache.list().length, 0); assert.equal(h.flows[0].not_captured, 'error', 'a network failure, not upstream-cert (D38)')
   assert.equal(h.flows[0].error.side, 'upstream', 'our upstream handshake failed: the upstream side (D38)')
 })
 

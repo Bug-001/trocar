@@ -16,9 +16,11 @@ test('events: failures go to flows/<date>.ndjson (0600), never a top-level *.ndj
     appendEvent(b.dir, { event: 'failure', where: 'x', reason: 'r1' }, { now: new Date('2026-10-06T01:00:00Z') })
     appendEvent(b.dir, { event: 'switch', desired: 'on' }, { now: new Date('2026-10-06T01:00:01Z') })
     appendEvent(b.dir, { flow_id: 'f1', reason: 'client-rejected-leaf' }, { now: new Date('2026-10-06T01:00:02Z') })
+    appendEvent(b.dir, { flow_id: 'f2', decision: 'splice', not_captured: 'policy' }, { now: new Date('2026-10-06T01:00:03Z') }) // expected, not a failure (D38)
+    appendEvent(b.dir, { flow_id: 'f3', decision: 'splice', not_captured: 'negative-cache' }, { now: new Date('2026-10-06T01:00:04Z') })
     assert.deepEqual(fs.readdirSync(b.dir), ['flows'], 'nothing the board would read as an envelope')
     assert.equal(fs.statSync(path.join(b.dir, 'flows', '2026-10-06.ndjson')).mode & 0o777, 0o600)
-    assert.deepEqual(recentFailures(b.dir).map((f) => f.where || f.reason), ['x', 'client-rejected-leaf'], 'failures only, not the switch event')
+    assert.deepEqual(recentFailures(b.dir).map((f) => f.where || f.reason || f.not_captured), ['x', 'client-rejected-leaf', 'negative-cache'], 'failures only, not the switch event nor an expected not_captured row')
   } finally { b.done() }
 })
 

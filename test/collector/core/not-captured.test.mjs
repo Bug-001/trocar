@@ -1,0 +1,130 @@
+// not-captured.test.mjs — RFC 4.6 §记录 (D38) · acceptance F2 (engine half): every connection row whose
+// bytes did not go into an envelope carries a not_captured code from the closed set, one row per
+// connection, with the expected code per path (连接行怎么落码). Also T-5: the 5 s first-byte valve ends
+// at the first byte — a slow upstream TLS handshake or proxy reply is recorded (upstream-slow), never cut.
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import net from 'node:net'; import tls from 'node:tls'
+import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
+import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
+import { handleFlow } from '../../../src/collector/core/engine/flow.mjs'
+import { createNegativeCache } from '../../../src/collector/core/engine/negcache.mjs'
+import { NOT_CAPTURED, isNotCapturedCode } from '../../../src/collector/core/engine/codes.mjs'
+
+const upCa = createCa({ commonName: 'upstream test CA' }); const upIssuer = createLeafIssuer(loadCa(upCa))
+const asightCa = createCa(); const issuer = createLeafIssuer(loadCa(asightCa))
+const listen = (srv) => new Promise((r) => srv.listen(0, '127.0.0.1', () => r(srv.address().port)))
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const REQ = 'POST /v1/messages HTTP/1.1\r\nHost: upstream.test\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}'
+const RESP = 'HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok'
+
+// One engine in front of `upstream`; ctx overrides (policy, timers) per case. settled() = every flow written.
+async function rig(upstream, { meta = {}, ...over } = {}) {
+  const upPort = await listen(upstream)
+  const flows = [], failures = [], done = []
+  const ctx = { issuer, upstreamCa: upCa.certPem, policy: () => true, isRecording: () => true, negCache: createNegativeCache(), newFlowId: () => 'f' + done.length,
+    counters: { notCaptured: { h2: 0, httpsProxy: 0, upstreamCert: 0, negative: 0, leafError: 0 } }, failure: (r) => failures.push(r),
+    store: { envelope: () => true, flow: (f) => { flows.push(structuredClone(f)); return true } },
+    connectUpstream: (dst) => net.connect(dst.port, dst.address), ...over }
+  const engine = net.createServer((c) => done.push(handleFlow(c, { dst: { address: '127.0.0.1', port: upPort, family: 4 }, pid: 1, agent: 't', decrypt: true, ...meta }, ctx)))
+  const port = await listen(engine)
+  return { port, flows, failures, settled: () => Promise.all(done), close: async () => { await Promise.all(done); engine.close(); upstream.close() } }
+}
+const tlsUp = (alpn = ['http/1.1']) => tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)), ALPNProtocols: alpn }, (s) => { s.on('error', () => {}); s.on('data', () => s.end(RESP)) })
+const sink = () => net.createServer((s) => { s.on('error', () => {}); s.resume(); s.on('end', () => s.end()) })
+const tlsTalk = (port, opts = {}) => new Promise((resolve) => {
+  const c = tls.connect({ port, host: '127.0.0.1', servername: 'upstream.test', ca: [upCa.certPem, asightCa.certPem], ALPNProtocols: ['http/1.1'], ...opts }, () => c.write(REQ))
+  let got = ''; c.on('data', (d) => { got += d }); c.on('error', () => {}); c.on('close', () => resolve(got))
+})
+const rawTalk = (port, bytes, { end = true } = {}) => new Promise((resolve) => {
+  const c = net.connect(port, '127.0.0.1', () => { if (bytes) c.write(bytes); if (end) setTimeout(() => c.end(), 50) })
+  let got = Buffer.alloc(0); c.on('data', (d) => { got = Buffer.concat([got, d]) }); c.on('error', () => {}); c.on('close', () => resolve(got))
+})
+
+// The §记录 criterion, as the board's scan will apply it: a row the bytes missed has a closed code.
+function assertCriterion(rows) {
+  for (const r of rows) {
+    const captured = r.decision === 'decrypt' || (r.decision === 'tunnel' && r.inner === 'decrypt')
+    if (!captured || r.reason === 'client-rejected-leaf') assert.ok(isNotCapturedCode(r.not_captured), `row ${JSON.stringify(r)} needs a closed not_captured`)
+    if (r.not_captured != null) assert.ok(isNotCapturedCode(r.not_captured), `${r.not_captured} is not in the closed set`)
+  }
+}
+
+const cases = [
+  ['untrusted (TLS)', () => tlsUp(), { meta: { decrypt: false } }, (p) => tlsTalk(p), ['splice', 'untrusted']],
+  ['untrusted (plain HTTP)', () => sink(), { meta: { decrypt: false } }, (p) => rawTalk(p, REQ), ['splice', 'untrusted']],
+  ['malformed ClientHello', () => sink(), {}, (p) => rawTalk(p, Buffer.from([0x16, 3, 1, 0, 4, 2, 0, 0, 0])), ['splice', 'malformed-hello']],
+  ['outside the decrypt policy (TLS)', () => tlsUp(), { policy: () => false }, (p) => tlsTalk(p), ['splice', 'policy']],
+  ['outside the decrypt policy (plain HTTP)', () => sink(), { policy: () => false }, (p) => rawTalk(p, REQ), ['splice', 'policy']],
+  ['the daemon says not-trust-path', () => tlsUp(), { policy: () => ({ not_captured: 'not-trust-path', reason: 'declared' }) }, (p) => tlsTalk(p), ['splice', 'not-trust-path', 'declared']],
+  ['an unknown code from the policy is just policy', () => tlsUp(), { policy: () => ({ not_captured: 'made-up' }) }, (p) => tlsTalk(p), ['splice', 'policy']],
+  ['only h2', () => tlsUp(['h2']), {}, (p) => tlsTalk(p, { ALPNProtocols: ['h2'] }), ['splice', 'h2', 'alpn-h2-only']],
+  ['an ALPN offer with neither h2 nor http/1.1', () => tlsUp(['x-other']), {}, (p) => tlsTalk(p, { ALPNProtocols: ['x-other'] }), ['splice', 'unknown-protocol', 'alpn x-other']],
+  ['the upstream speaks first', () => net.createServer((s) => { s.on('error', () => {}); s.end('SSH-2.0-banner\r\n') }), {}, (p) => rawTalk(p, null, { end: false }), ['splice', 'upstream-first']],
+  ['an unknown first byte', () => sink(), {}, (p) => rawTalk(p, 'SSH-2.0-client\r\n'), ['splice', 'unknown-protocol', 'first-byte 0x53']],
+  ['CONNECT refused by the proxy', () => net.createServer((c) => c.once('data', () => c.end('HTTP/1.1 407 Proxy Authentication Required\r\n\r\n'))), {}, (p) => rawTalk(p, 'CONNECT x.test:443 HTTP/1.1\r\n\r\n', { end: false }), ['tunnel', 'proxy-refused', 'proxy-status-407']],
+  ['closed before a routing decision', () => sink(), {}, (p) => rawTalk(p, null), ['error', 'error'], (r) => assert.deepEqual([r.error.type, r.error.side], ['closed_before_decision', 'client'])],
+  ['nobody speaks: first-byte timeout', () => sink(), { firstByteTimeoutMs: 50 }, (p) => rawTalk(p, null, { end: false }), ['error', 'error'], (r) => assert.equal(r.error.type, 'first_byte_timeout')],
+]
+for (const [name, up, opts, drive, [decision, code, reason], more] of cases) {
+  test(`not_captured: ${name} → ${code} (D38 · F2)`, async () => {
+    const h = await rig(up(), opts)
+    await drive(h.port); await h.close()
+    assert.equal(h.flows.length, 1, 'exactly one connection row')
+    const [r] = h.flows
+    assert.deepEqual([r.decision, r.not_captured], [decision, code]); if (reason) assert.equal(r.reason, reason)
+    assert.equal(NOT_CAPTURED.failure.includes(code) || NOT_CAPTURED.expected.includes(code), true)
+    if (more) more(r)
+    assertCriterion(h.flows)
+  })
+}
+
+test('a CONNECT tunnel row: decision tunnel, the tunnelled decision in inner, reason left for the why (D38)', async () => {
+  const origin = tlsUp(); const originPort = await listen(origin)
+  const proxy = () => net.createServer((c) => c.once('data', () => { const o = net.connect(originPort, '127.0.0.1', () => { c.write('HTTP/1.1 200 OK\r\n\r\n'); c.pipe(o); o.pipe(c) }); o.on('error', () => c.destroy()); c.on('error', () => o.destroy()) }))
+  for (const [policy, inner, code] of [[() => true, 'decrypt', undefined], [() => false, 'splice', 'policy']]) {
+    const h = await rig(proxy(), { policy })
+    await new Promise((resolve) => {
+      const raw = net.connect(h.port, '127.0.0.1', () => raw.write('CONNECT upstream.test:443 HTTP/1.1\r\n\r\n'))
+      raw.once('data', () => { const t = tls.connect({ socket: raw, servername: 'upstream.test', ca: [upCa.certPem, asightCa.certPem] }, () => t.write(REQ)); t.on('error', () => {}); t.on('close', resolve); t.resume() })
+      raw.on('error', () => {})
+    })
+    await h.close()
+    assert.deepEqual([h.flows[0].decision, h.flows[0].inner, h.flows[0].not_captured, h.flows[0].reason], ['tunnel', inner, code, null], 'reason no longer carries the inner decision')
+    assertCriterion(h.flows)
+  }
+  origin.close()
+})
+
+// T-5 (AGENT-BREAK before): the first-byte valve used to keep running through our upstream TLS handshake
+// and the proxy's CONNECT reply, so a slow upstream cut the agent with first_byte_timeout.
+test('a slow upstream TLS handshake is waited for, not cut: the agent gets its reply; upstream-slow is recorded (D38 T-5)', async () => {
+  const origin = tlsUp(); const originPort = await listen(origin)
+  // a hop that holds the origin's first flight (its ServerHello) for 300 ms
+  const slow = net.createServer((c) => { const o = net.connect(originPort, '127.0.0.1'); let first = true
+    o.on('data', (d) => { if (first) { first = false; o.pause(); setTimeout(() => { c.write(d); o.resume() }, 300) } else c.write(d) })
+    c.on('data', (d) => o.write(d)); c.on('end', () => o.end()); o.on('end', () => c.end()); c.on('error', () => o.destroy()); o.on('error', () => c.destroy()) })
+  const h = await rig(slow, { firstByteTimeoutMs: 50, upstreamSlowMs: 100 })
+  const got = await tlsTalk(h.port)
+  await h.close(); origin.close()
+  assert.equal(got, RESP, 'the agent was not cut while the engine waited on its upstream')
+  assert.deepEqual([h.flows[0].decision, h.flows[0].error], ['decrypt', undefined])
+  assert.deepEqual(h.failures.map((f) => [f.reason, f.flow_id, f.phase, f.host, f.waited_ms >= 100]), [['upstream-slow', h.flows[0].flow_id, 'tls', 'upstream.test', true]])
+})
+
+test('a slow proxy reply to CONNECT is waited for, not cut; relayed verbatim when it comes (D38 T-5)', async () => {
+  const reply = 'HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n'
+  const h = await rig(net.createServer((c) => c.once('data', () => setTimeout(() => c.end(reply), 300))), { firstByteTimeoutMs: 50, upstreamSlowMs: 100 })
+  const got = await rawTalk(h.port, 'CONNECT x.test:443 HTTP/1.1\r\n\r\n', { end: false })
+  await h.close()
+  assert.equal(got.toString(), reply)
+  assert.deepEqual([h.flows[0].decision, h.flows[0].not_captured], ['tunnel', 'proxy-refused'])
+  assert.deepEqual(h.failures.map((f) => [f.reason, f.phase]), [['upstream-slow', 'proxy-reply']])
+})
+
+test('a fast upstream writes no upstream-slow event', async () => {
+  const h = await rig(tlsUp(), { upstreamSlowMs: 2000 })
+  assert.equal(await tlsTalk(h.port), RESP)
+  await h.close(); await sleep(20)
+  assert.deepEqual(h.failures, [])
+})
