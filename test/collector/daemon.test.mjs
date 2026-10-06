@@ -365,9 +365,12 @@ test('daemon: an envelope that cannot be written is a durable failure record, no
     await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 7171, decrypt: 1 })
     const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: fs.readFileSync(path.join(s.collector, 'ca', 'extra-cc.pem')) }); await once(c, 'secureConnect')
     const body = JSON.stringify({ model: 'claude-x', max_tokens: 1, messages: [{ role: 'user', content: 'x' }] })
+    let reply = ''; c.on('data', (x) => { reply += x })
     c.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test\r\ncontent-type: application/json\r\ncontent-length: ${body.length}\r\n\r\n${body}`)
     await until(() => flowsOf(s).some((f) => f.event === 'failure' && f.where === 'record'))
     assert.match(flowsOf(s).find((f) => f.where === 'record').reason, /EISDIR/)
+    await until(() => reply.endsWith(REPLY))
+    assert.match(reply, /^HTTP\/1\.1 200 OK/, 'fail-open (D31, F4): the agent got the reply although its envelope could not be written')
     c.destroy()
   } finally { await d.stop(); up.close(); p.done(); s.done() }
 })

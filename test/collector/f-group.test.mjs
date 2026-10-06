@@ -329,6 +329,8 @@ test('F5 fidelity labels (WebSocket recorder events in flows/) do not turn the t
 //   F5 (WebSocket): test/web/ws-incomplete.test.mjs — partial / ws_truncated / undecoded / non-verbatim reach /api/session
 //       and render as 不完整 / 已截断 / 未解码 / 非逐字, through both assemblers. Whether the recorder's flows/ events turn
 //       the top bar ⚠ is the todo above (no test covered it). Response-body labels: test/web/resp-incomplete.test.mjs.
+//   F4 (the capture file itself unwritable on the daemon's path): test/collector/daemon.test.mjs "an envelope that cannot be
+//       written is a durable failure record" — record/EISDIR in flows/, and the agent still gets its reply.
 //   F8: test/capture/legacy-failures.test.mjs, legacy-run.test.mjs, legacy-ops.test.mjs (4.1 #6b); "old MITM only is not
 //       「未安装」": test/health/capture-health.test.mjs "the old capture: …".
 //   F9: test/server-capture-health.test.mjs (503, installed:false, metadata only, Host / Origin) and
