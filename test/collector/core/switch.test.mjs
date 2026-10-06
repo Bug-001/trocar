@@ -21,7 +21,7 @@ function fakeRedirector({ failAttach = false } = {}) {
   }
 }
 const tmpState = () => path.join(tmpDir('asight-sw-'), 'collector', 'state.json')
-const IN = () => ['claude-code', 'codex'] // the harnesses this switch knows (the daemon: its registry)
+const IN = () => ['claude-code', 'codex'] // the installed harnesses (the daemon: the ones its install manifest names)
 const pick = (o, keys) => Object.fromEntries(keys.map((k) => [k, o[k]]))
 const mk = (redirector, stateFile, extra = {}) => createSwitch({ redirector, stateFile, installed: IN, ...extra })
 const desiredIn = (f) => Object.fromEntries(Object.entries(readState(f, () => {}, { installed: IN() }).harnesses).map(([id, h]) => [id, h.desired]))

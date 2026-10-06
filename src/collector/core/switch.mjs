@@ -116,7 +116,7 @@ export function createSwitch({ redirector, stateFile, installed = () => [], ensu
   }
   const reloadIfChanged = () => (reloading = reloading.then(counted(reload), counted(reload))) // one at a time: the heartbeat gate and a request may both ask
 
-  // `on` of the named harnesses (none named: every one this switch knows). The request that follows the CLI's write is what attaches.
+  // `on` of the named harnesses (none named: every installed one, `installed()`). The request that follows the CLI's write is what attaches.
   function planOn(ids, o) {
     const flip = ids.filter((id) => desiredOf(id) !== 'on')
     const next = setDesired(state, flip, 'on', new Date())

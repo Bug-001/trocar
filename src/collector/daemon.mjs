@@ -97,7 +97,10 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
   const impl = {} // filled once wiring is done; requests that arrive earlier wait for it
   const gate = (name) => async (q) => {
     await ready
-    try { return await impl[name](q) } catch (e) { failure('control', coded(e, 'control-error'), { route: name }); throw e } // a 500 is a failure too
+    try { return await impl[name](q) } catch (e) {
+      if (!(e && e.status >= 400 && e.status < 500)) failure('control', coded(e, 'control-error'), { route: name }) // a 500 is a failure too; a 4xx is the caller's mistake
+      throw e
+    }
   }
   const control = await startControlServer({ socketPath: sock, routes: { 'GET /status': gate('status'), 'POST /on': gate('on'), 'POST /off': gate('off') } }) // throws if another daemon answers
 
@@ -292,16 +295,24 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       if (candidates.length) failure('tracker', Object.assign(new Error(`${reason}; its command line fits ${candidates.join(' and ')}`), { code: 'exe-unreadable' }), { pid, errno: code || null, candidates })
     })
 
-    // the harnesses `on` / `off` with no names mean, and v1 state is carried to: every one this daemon knows, and any the install manifest names
-    const installed = () => [...new Set([...registry.names(), ...[...(manifest.entries || []), ...(manifest.files || [])].map((e) => e.harness).filter(Boolean)])]
+    // the harnesses `on` with no names means, and a version 1 state.json is carried to (1.6 §1.5, V28): the installed ones — those the install
+    // manifest names, because asight wrote an entry or a file for them. One it never installed is no capture target: not judged, no agent-untrusted
+    const installed = () => [...new Set([...(manifest.entries || []), ...(manifest.files || [])].map((e) => e.harness).filter(Boolean))]
     // desired state → the tracker: which harnesses are enabled, and each one's decrypt policy
     const syncTracker = () => { const st = sw.state(); tracker.setEnabled(sw.enabled()); tracker.setPolicy({ byHarness: Object.fromEntries(Object.entries(st.harnesses).map(([id, h]) => [id, { mode: h.policy, extraHosts: h.extra_hosts }])) }) }
+    // bring the kernel watch table to the enabled set. With the helper dead there is no table to bring: its links and watch table died with it,
+    // so nothing is asked of it (no unwatch failure to record) and every pid counts as taken out
+    const reconcileTable = () => { syncTracker(); return tracker.reconcile({ kernelGone: !!helperDown }) }
     // the switch calls this when harnesses go off, before the links come off: their processes leave the kernel watch table first
-    sw = createSwitch({ redirector, stateFile: P.state, installed, ensureReady, onEvent: event, reconcile: async () => { syncTracker(); return tracker.reconcile() } })
+    sw = createSwitch({ redirector, stateFile: P.state, installed, ensureReady, onEvent: event, reconcile: reconcileTable })
     const reload = async () => { const r = await sw.reloadIfChanged(); if (r.changed) syncTracker(); return r } // the file may only take capture away (switch.mjs)
-    // before EVERY heartbeat (4.6 §开关语义): re-read state.json and bring the watch table to it; the beat goes out only while some harness is on. A
-    // loop that was stalled past the kernel's window therefore resumes only after what the operator turned off in the meantime is off.
-    redirector.setBeatGate(async () => { await reload(); return sw.anyOn() })
+    // An unwatch the helper did not answer leaves a pid the kernel may still steer although its harness is off. It is asked again here — before every
+    // beat and at the 5 s check — until it is answered; true = the table is clean.
+    const settle = async () => { if (tracker.stuckPids().length) await reconcileTable(); return tracker.stuckPids().length === 0 }
+    // before EVERY heartbeat (4.6 §开关语义): re-read state.json and bring the watch table to it; the beat goes out only while some harness is on AND no
+    // unwatch is unanswered (no beat: the steering lapses and agents go direct, fail open). A loop that was stalled past the kernel's window therefore
+    // resumes only after what the operator turned off in the meantime is off. A reload that just took something away has run the reconcile itself.
+    redirector.setBeatGate(async () => { const r = await reload(); const clean = r.turnedOff.length ? tracker.stuckPids().length === 0 : await settle(); return clean && sw.anyOn() })
     await redirector.start()
     await redirector.configure(port)
     // the lock (4.6 §控制面, D-25): pid + start time + boot id, so a reused pid or a reboot is never "running"; its
@@ -342,7 +353,9 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     }
     async function check() {
       if (sw.busy()) return
-      await reload() // without a heartbeat running (nothing attached) this is what notices that the file turned something off
+      const reloaded = await reload() // without a heartbeat running (nothing attached) this is what notices that the file turned something off
+      if (sw.busy()) return
+      if (!reloaded.turnedOff.length) await settle() // ... and what asks again for an unwatch that was not answered, when no beat gate does
       if (sw.busy()) return
       const r = await sw.report()
       if (sw.busy()) return // an on / off began while the kernel was read
@@ -387,13 +400,27 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         events: failure.health(), // event lines lost (D-1): stderr had each, the next written line is a log-gap
       }
     }
+    // The names a request carries (1.6 §1.5): absent / null = every harness; otherwise a non-empty array of strings, each a harness this daemon has
+    // a descriptor for (an `off` may also name one the state file holds). Anything else is a 400 that names the problem and changes nothing: a
+    // string would otherwise spread into one name per character, a typo would be written to state.json as a harness that is on, and an empty
+    // array would read as "all".
+    const namesOf = (body, { allowState = false } = {}) => {
+      const h = body && typeof body === 'object' ? body.harnesses : undefined
+      if (h == null) return null
+      if (!Array.isArray(h) || h.length === 0 || h.some((x) => typeof x !== 'string' || !x)) throw Object.assign(new Error('"harnesses" must be a non-empty array of harness names (leave it out for all of them)'), { status: 400 })
+      const known = new Set([...registry.names(), ...installed(), ...(allowState ? Object.keys(sw.state().harnesses) : [])])
+      const unknown = h.filter((x) => !known.has(x))
+      if (unknown.length) throw Object.assign(new Error(`unknown harness: ${unknown.join(', ')} (known: ${[...known].sort().join(', ')})`), { status: 400 })
+      return h
+    }
     Object.assign(impl, {
       status,
-      on: async ({ body }) => { const r = await sw.on(body || {}); syncTracker(); return { ...(await status()), ...(r.noop ? { noop: true } : {}) } },
+      on: async ({ body }) => { const r = await sw.on({ ...(body && typeof body === 'object' ? body : {}), harnesses: namesOf(body) }); syncTracker(); return { ...(await status()), ...(r.noop ? { noop: true } : {}) } },
       // → {…status, unwatched: [pid], confirmed}: the pids taken out of the kernel watch table, and whether the kernel confirms the state asked for (every
-      // unwatch answered; with no harness left on, the links gone). `now` / `exit` are accepted and ignored until the drain (1.6 §1.3) is wired.
+      // unwatch answered; with no harness left on, the links gone). With the helper dead its table is gone with it: every pid counts as taken out and
+      // `confirmed` does not wait on an unwatch nobody can answer. `now` / `exit` are accepted and ignored until the drain (1.6 §1.3) is wired.
       off: async ({ body }) => {
-        const r = await sw.off({ harnesses: (body && body.harnesses) || null })
+        const r = await sw.off({ harnesses: namesOf(body, { allowState: true }) })
         const st = await status()
         return { ...st, ...(r.noop ? { noop: true } : {}), unwatched: r.unwatched, confirmed: r.unwatch_failed.length === 0 && (sw.anyOn() || st.actual === 'off') }
       },
