@@ -156,8 +156,14 @@ until you restart it.
 
 Capture failures are never silent: a refused or failed install step, a file uninstall could not undo, a
 helper or engine error, a failed heartbeat or attach, an envelope that could not be written, an agent
-judged untrusted — each leaves a line with its reason in `~/.asight/collector/flows/`, and
-`asight collector status` prints the recent ones, also when the daemon is not running.
+judged untrusted, an unusable CA, connections the kernel let go direct, links lost behind the daemon's
+back — each leaves a line with its reason and a closed code in `~/.asight/collector/flows/`, and
+`asight collector status` prints the recent ones, also when the daemon is not running (it then judges
+the daemon from its lock: not running, or stuck). One exception: an install refused before it wrote
+anything (nothing installed yet, or run as root) has no collector directory to write into, so the
+command's output is its only report. Uninstall that cannot undo something exits 1 and keeps the install
+manifest for the next run. After upgrading, run `sudo asight setup-helper` again: the helper protocol is
+now 2.
 
 ## Shrinking the raw logs — sealed files (D35)
 
