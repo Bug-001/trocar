@@ -68,7 +68,9 @@ export function handleFlow(client, meta, ctx) {
     waitDone()
     if (decision && !rec.decision) rec.decision = decision
     Object.assign(rec, extra)
-    if (rec.decision === 'error' && !rec.not_captured) rec.not_captured = 'error' // D38: every row the bytes missed has a code
+    // D38: every row the bytes missed has a code — an error row, and a tunnel whose inner bytes were never decided
+    // (a side went while a CONNECT retried after a refusal waited for the proxy's answer)
+    if ((rec.decision === 'error' || (rec.decision === 'tunnel' && !rec.inner)) && !rec.not_captured) rec.not_captured = 'error'
     rec.duration_ms = Date.now() - t0
     // a WebSocket connection: the recorder's summary (frames, calls, tail_raw, failures, …; RFC 4.6 §记录)
     const ws = activeTee && activeTee.wsSummary && activeTee.wsSummary()

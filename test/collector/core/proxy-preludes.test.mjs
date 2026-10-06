@@ -408,7 +408,7 @@ test('review B · bytes the upstream sends with the proxy\'s 200 make the tunnel
 })
 
 // review B #8: a keep-alive proxy answers 407; the client retries with credentials on the same connection
-async function authProxy(t, mockPort, { closeAfterRefusal = false } = {}) {
+async function authProxy(t, mockPort, { closeAfterRefusal = false, silentOnRetry = false } = {}) {
   const s = net.createServer((c) => {
     c.on('error', () => {})
     let buf = ''
@@ -420,6 +420,7 @@ async function authProxy(t, mockPort, { closeAfterRefusal = false } = {}) {
         setTimeout(() => { c.write('nope!'); if (closeAfterRefusal) c.end() }, 20)
         return
       }
+      if (silentOnRetry) return
       c.removeListener('data', onData); c.write('HTTP/1.1 200 Connection established\r\n\r\n')
       const up = net.connect(mockPort, '127.0.0.1'); up.on('error', () => c.destroy()); c.on('close', () => up.destroy())
       c.pipe(up); up.pipe(c)
@@ -467,4 +468,50 @@ test('review B · after a 407 the client gives up: proxy-refused, no error; the 
   await once(c, 'end'); c.destroy(); await M.settled(1)
   assert.equal(got2, R407 + 'nope!', 'the body was drained, not cut')
   assert.deepEqual([M.flows[0].not_captured, M.flows[0].error], ['proxy-refused', undefined])
+})
+
+// review C #2: the retried CONNECT is still waiting for the proxy when the client goes — the row is coded (D38)
+test('review C · CONNECT retried after a 407, the client goes before the proxy answers: the row says not captured · error', T, async (t) => {
+  const L = await lab(t, { kind: 'connect' }, { dst: (_, mockPort) => authProxy(t, mockPort, { silentOnRetry: true }) })
+  const raw = net.connect(L.port, '127.0.0.1'); await once(raw, 'connect'); raw.on('error', () => {})
+  let got = ''; raw.on('data', (d) => { got += d.toString('latin1') })
+  raw.write(H1)
+  for (let i = 0; i < 200 && !got.endsWith('nope!'); i++) await sleep(5)
+  raw.write(H2); await sleep(50); raw.end(); await L.settled(1)
+  assert.equal(L.flows.length, 1)
+  const f = L.flows[0]
+  assert.deepEqual([f.decision, f.inner, f.not_captured, f.error?.type, f.error?.side], ['tunnel', undefined, 'error', 'closed_before_decision', 'client'])
+  assert.equal(b64(f.prelude.client_b64).toString('latin1'), H1, 'the prelude holds the round trips that completed')
+})
+
+// review C #3: the https:// proxy table against the policy — a listed proxy that is not the process's own is
+// terminated when the policy covers its host; an own proxy keeps an h2-only offer and a daemon code
+test('review C · a listed https:// proxy that is not the process\'s own, under `all`: terminated (the policy covers it), via_proxy keeps its source', T, async (t) => {
+  const L = await lab(t, { kind: 'connect', tls: true }, { proxies: table(false), policy: () => true })
+  const r = await httpsProxyClient(L.port, asightCa.certPem); await L.settled(1)
+  assert.match(r.issuer, /asight collector CA/)
+  const entry = L.mock.state.log.find((e) => e.type === 'request'); assert.ok(r.resp.equals(b64(entry.resp_raw_b64)))
+  const f = L.flows.at(-1)
+  assert.deepEqual([f.decision, f.inner, f.not_captured], ['tunnel', 'decrypt', undefined])
+  assert.deepEqual(f.via_proxy, { scheme: 'https', host: PROXY_HOST, port: L.proxy.port, source: 'env:HTTPS_PROXY', terminated: true })
+  assert.equal(L.engine.stats().notCaptured.httpsProxy, 0)
+})
+
+test('review C · an own https:// proxy offered only h2: spliced, not captured · h2 (the own-proxy rule does not lift it)', T, async (t) => {
+  const L = await lab(t, { kind: 'connect', tls: true }, { proxies: table(true), policy: onlyApi })
+  const outer = tls.connect({ port: L.port, host: '127.0.0.1', servername: PROXY_HOST, ca: fs.readFileSync(L.labCa.caCert), ALPNProtocols: ['h2'] })
+  outer.on('error', () => {})
+  await once(outer, 'secureConnect')
+  assert.match(outer.getPeerX509Certificate().issuer, /lab/i, 'the client reached the proxy itself')
+  outer.end(); await L.settled(1)
+  const f = L.flows[0]
+  assert.deepEqual([f.decision, f.not_captured, f.reason, f.via_proxy.terminated], ['splice', 'h2', 'alpn-h2-only', false])
+})
+
+test('review C · an own https:// proxy of a process the daemon says is not on the trust path: spliced, not-trust-path is kept', T, async (t) => {
+  const L = await lab(t, { kind: 'connect', tls: true }, { proxies: table(true), policy: () => ({ not_captured: 'not-trust-path', reason: 'no NODE_EXTRA_CA_CERTS' }) })
+  const r = await httpsProxyClient(L.port, fs.readFileSync(L.labCa.caCert)); await L.settled(1)
+  assert.match(r.issuer, /lab/i); assert.equal(L.envelopes.length, 0)
+  const f = L.flows[0]
+  assert.deepEqual([f.decision, f.not_captured, f.reason, f.via_proxy.terminated], ['splice', 'not-trust-path', 'no NODE_EXTRA_CA_CERTS', false])
 })
