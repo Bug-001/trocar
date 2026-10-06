@@ -62,7 +62,8 @@ export function installCaptureAgents({
     programArguments: ['/bin/launchctl', 'setenv', ENV_VAR, caPath],
     keepAlive: false,
   });
-  return { ok: true, mitm, env };
+  // D38 L-7: either agent not loaded → not ok, with each loadError (the caller prints and records them)
+  return { ok: mitm.ok !== false && env.ok !== false, mitm, env };
 }
 
 export function removeCaptureAgents({ autostart = getAutostartInstaller() } = {}) {

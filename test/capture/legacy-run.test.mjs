@@ -124,3 +124,32 @@ test('`asight mitm`: an agent that refuses the leaf is a line in <HOME>/.asight/
     assert.deepEqual([h.summary.state, h.summary.part], ['failing', 'legacy'])
   } finally { p.kill('SIGKILL'); await once(p, 'exit').catch(() => {}); fs.rmSync(home, { recursive: true, force: true }) }
 })
+
+test('L-13: `asight shard --watch` writes a failing round once per distinct error, and keeps watching', async () => {
+  const home = tmp()
+  const cap = path.join(home, 'cap.ndjson'); fs.writeFileSync(cap, '{"id":"a"}\n')
+  const outDir = path.join(home, 'sessions'); fs.writeFileSync(outDir, 'a file where the shard folder should be')
+  const { p, err } = run(home, ['shard', '--watch', '--interval', '0.05', '--file', cap, '--out', outDir])
+  try {
+    assert.ok(await until(() => readEvents(home).some((e) => e.where === 'shard')), `a shard line (stderr: ${err()})`)
+    await new Promise((r) => setTimeout(r, 400)) // several more failing rounds
+    const lines = readEvents(home).filter((e) => e.where === 'shard')
+    assert.equal(lines.length, 1, 'the same error again is not re-written')
+    assert.match(lines[0].reason, /do not reach .*sessions until it succeeds/)
+    assert.deepEqual(checkRecord(lines[0]), [])
+    assert.equal(p.exitCode, null, 'still watching')
+    const h = captureHealth({ home: path.join(home, '.asight') })
+    assert.deepEqual([h.summary.state, h.legacy.failures.length], ['failing', 1])
+  } finally { p.kill('SIGKILL'); fs.rmSync(home, { recursive: true, force: true }) }
+})
+
+test('L-12 wired: `asight mitm` on macOS checks the Desktop steer at start — a Script.js it cannot read is a steer-unreadable line', { skip: process.platform !== 'darwin' && 'the steer is a macOS mechanism' }, async () => {
+  const home = tmp()
+  fs.mkdirSync(path.join(home, 'Library', 'Application Support', 'io.github.clash-verge-rev.clash-verge-rev', 'profiles', 'Script.js'), { recursive: true }) // a directory: EISDIR
+  const { p, err } = run(home, ['mitm', '--port', '0', '--upstream', 'http://127.0.0.1:9', '--out', path.join(home, 'cap.ndjson')])
+  try {
+    assert.ok(await until(() => readEvents(home).some((e) => e.where === 'steer'), 60000), `a steer line (stderr: ${err()})`)
+    const s = readEvents(home).find((e) => e.where === 'steer')
+    assert.deepEqual([s.code, /EISDIR/.test(s.reason)], ['steer-unreadable', true])
+  } finally { p.kill('SIGKILL'); await once(p, 'exit').catch(() => {}); fs.rmSync(home, { recursive: true, force: true }) }
+})

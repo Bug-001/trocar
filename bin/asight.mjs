@@ -56,7 +56,13 @@ async function main() {
       const ctl = await import(r('src', 'capture', 'control.mjs'));
       const sub = positional() || 'status';
       const opts = { proxyUrl: flag('--proxy', undefined), captureTarget: flag('--capture-target', undefined) };
-      if (sub === 'on') { const out = ctl.monitoringOn({ ...opts, withAutostart: !rest.includes('--no-autostart') }); console.log('monitoring ON:', JSON.stringify(out.status, null, 2)); console.log('CA:', out.onboard.install.ok ? 'user-level trust OK' : 'FAILED', '· autostart:', out.autostart ? (out.autostart.ok ? out.autostart.plistPath : out.autostart.reason) : 'skipped'); }
+      if (sub === 'on') {
+        const { appendLegacyEvent } = await import(r('src', 'capture', 'events.mjs'));
+        const out = ctl.monitoringOn({ ...opts, withAutostart: !rest.includes('--no-autostart'), onEvent: (e) => appendLegacyEvent(e) });
+        console.log('monitoring ON:', JSON.stringify(out.status, null, 2));
+        console.log('CA:', out.onboard.install.ok ? 'user-level trust OK' : 'FAILED', '· autostart:', out.autostart ? (out.autostart.ok ? out.autostart.plistPath : `⚠ ${out.autostart.loadError || out.autostart.reason}`) : 'skipped');
+        if (!out.ok) process.exitCode = 1;
+      }
       else if (sub === 'off') { const out = ctl.monitoringOff({ ...opts, removeCa: rest.includes('--remove-ca') }); console.log('monitoring OFF:', JSON.stringify(out.status, null, 2)); }
       else { console.log(JSON.stringify(ctl.monitoringStatus(opts), null, 2)); }
       break;
@@ -120,15 +126,21 @@ async function main() {
         return res;
       };
 
-      await run();
-      if (watch) {
-        console.log(`shard: watching ${file} → ${outDir} every ${every / 1000}s`);
-        for (;;) {
-          await new Promise((res2) => setTimeout(res2, every));
-          try { await run(); } catch (e) { console.error(`shard: ${e.message}`); }
+      if (!watch) { await run(); break; }
+      // D38 L-13: a round that fails is a line in ~/.asight/logs/mitm-events.ndjson (the board's 采集健康 shows it),
+      // once per distinct error — the same one again is not re-written until a round succeeds
+      const { appendLegacyEvent, failureOf } = await import(r('src', 'capture', 'events.mjs'));
+      console.log(`shard: watching ${file} → ${outDir} every ${every / 1000}s`);
+      let lastErr = null;
+      for (;;) {
+        try { await run(); lastErr = null; } catch (e) {
+          const key = `${e && e.code}|${e && e.message}`;
+          if (key !== lastErr) appendLegacyEvent(failureOf('shard', e, 'shard-failed', { file, reason: `asight shard --watch failed (${(e && e.message) || e}): new sessions in ${file} do not reach ${outDir} until it succeeds` }));
+          else console.error(`shard: ${(e && e.message) || e}`);
+          lastErr = key;
         }
+        await new Promise((res2) => setTimeout(res2, every));
       }
-      break;
     }
     case 'capture': {
       // base_url tee (RFC 4.1 采集源#1): transparent reverse-proxy → append D10 envelopes to a
@@ -185,6 +197,14 @@ async function main() {
       let n = 0;
       const server = createMitmProxy({ targetHost, leaf, upstreamProxy, keepRawSse, onEvent: (e) => appendLegacyEvent(e), log: (m) => console.error(m), onEnvelope: (env) => { if (sink.write(env) && ++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
       server.on('error', (e) => { appendLegacyEvent(failureOf('mitm', e, 'start-failed')); if (e.code === 'EADDRINUSE') process.exit(1); });
+      // D38 L-12: the Desktop steer this MITM serves is checked at start and every 60 s; losing it is a line
+      if (process.platform === 'darwin') {
+        const { getDesktopSteer } = await import(r('src', 'capture', 'desktop-steer.mjs'));
+        const { createSteerWatch } = await import(r('src', 'capture', 'steer-watch.mjs'));
+        const steer = getDesktopSteer();
+        const check = createSteerWatch({ status: () => steer.status() });
+        check(); setInterval(check, 60000).unref();
+      }
       server.listen(port, '127.0.0.1', () => { life.started(server.address().port); console.log(`asight mitm (CONNECT · TLS-terminate ${targetHost}, blind-tunnel rest) → ${out}\n  listening http://127.0.0.1:${port}  · upstream ${upstreamProxy}\n  steer CC-Desktop here via a Clash rule (4.1) — run: asight desktop on --port ${port}`); });
       break;
     }
@@ -219,6 +239,16 @@ async function main() {
         console.log('  mihomo reload:', out.reload.status === 204 || out.reload.status === 200 ? `OK (${out.status.mihomoSock || 'socket'})` : `status ${out.reload.status}${out.reload.error ? ' ' + out.reload.error : ''}`);
         if (agents.reserved) console.log('  capture agents:', agents.reason);
         else console.log(`  capture agents: mitm(${MITM_LABEL}) + CA-trust primer(${ENV_LABEL}) installed → ${agents.mitm.plistPath}, ${agents.env.plistPath}`);
+        // D38 L-7: an agent that did not load is said and recorded — the MITM is not running, whatever the plist says
+        if (!agents.reserved && !agents.ok) {
+          const { appendLegacyEvent } = await import(r('src', 'capture', 'events.mjs'));
+          for (const [label, a] of [[MITM_LABEL, agents.mitm], [ENV_LABEL, agents.env]]) {
+            if (!a.loadError) continue;
+            console.log(`  ⚠ ${label} did NOT load: ${a.loadError}`);
+            appendLegacyEvent({ event: 'failure', where: 'autostart', code: 'autostart-load-failed', file: a.plistPath, reason: `${label}: ${a.loadError}` });
+          }
+          process.exitCode = 1;
+        }
         // the immediate step failed → say why and how to apply it by hand (D29), never just a status code
         if (!out.ok) console.log('  ⚠ route NOT live now:', out.reason);
         else console.log('  route live in mihomo:', out.status.live === true ? 'yes ✓' : out.status.live === false ? 'NO' : 'unknown');
@@ -257,12 +287,14 @@ async function main() {
       const ob = await import(r('src', 'capture', 'onboard.mjs'));
       const { removeCaptureAgents } = await import(r('src', 'capture', 'capture-agents.mjs'));
       ob.atraceOff({ removeCa: true });
-      let steer = null;
-      try { const { getDesktopSteer } = await import(r('src', 'capture', 'desktop-steer.mjs')); steer = await getDesktopSteer().off(); } catch { /* non-mac / no verge */ }
+      // D38 L-11: a steer that could not be reverted is printed and recorded, never "n/a" (steer-watch.mjs)
+      const { getDesktopSteer } = await import(r('src', 'capture', 'desktop-steer.mjs'));
+      const { uninstallSteer } = await import(r('src', 'capture', 'steer-watch.mjs'));
+      const steerLine = await uninstallSteer({ getSteer: getDesktopSteer });
       const agents = removeCaptureAgents();
       console.log('asight uninstalled:');
       console.log('  · CA removed from the user-level trust store + CC-CLI settings.json steer cleared');
-      console.log('  · Desktop Clash steer:', steer && !steer.reserved ? (steer.ok ? 'removed' : `⚠ NOT fully removed — ${steer.reason}`) : 'n/a');
+      console.log('  · Desktop Clash steer:', steerLine);
       console.log('  · capture agents:', agents.reserved ? 'n/a' : 'removed (com.asight.mitm + com.asight.env)');
       console.log('  · data/db left intact. NOTE: NODE_EXTRA_CA_CERTS in the live login session persists until logout (run: launchctl unsetenv NODE_EXTRA_CA_CERTS).');
       break;

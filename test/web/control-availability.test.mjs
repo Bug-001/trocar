@@ -40,7 +40,7 @@ function El() {
   return el;
 }
 
-function harness({ controlOk }) {
+function harness({ controlOk, monitoring = { active: true, forwardingTarget: 'https://api.anthropic.com' } }) {
   const store = {};
   const getEl = (id) => store[id] || (store[id] = El());
   globalThis.document = {
@@ -63,7 +63,7 @@ function harness({ controlOk }) {
     hits.push(u);
     if (u.startsWith('/control/status')) {
       return controlOk
-        ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ csrf: 'x', monitoring: { active: true, forwardingTarget: 'https://api.anthropic.com' } }) })
+        ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ csrf: 'x', monitoring }) })
         : Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ error: 'not found' }) });
     }
     if (u.startsWith('/api/projects')) return Promise.resolve({ ok: true, json: () => Promise.resolve(PROJECTS) });
@@ -117,4 +117,24 @@ test('a server WITH --control still renders the working toggle (no regression)',
   assert.notEqual(el.style.display, 'none', 'the control pill must be visible when control is enabled');
   assert.match(el.innerHTML, /id="monBtn"/, 'the monitoring toggle disappeared when control IS available');
   assert.match(el.innerHTML, /api\.anthropic\.com/, 'the forwarding target stopped rendering');
+});
+
+// D38 L-9 (RFC 4.1 落地细节 (6)): "not trusted" and "could not check" are both shown — before, both were the badge's absence
+test('the CA badge says ✓, ✗ or ? with the reason; NODE_EXTRA_CA_CERTS not pointing at the asight CA is shown', async () => {
+  const cases = [
+    [{ caTrusted: true }, /CA✓/, /CA ✗|CA \?/],
+    [{ caTrusted: false }, /CA ✗/, /CA✓/],
+    [{ caTrusted: null, caError: 'security exited 51' }, /CA \? security exited 51/, /CA✓|CA ✗/],
+    [{ caTrusted: true, nodeExtraCaCerts: { value: null, expected: '/h/.asight/ca/atrace-ca.crt', matches: false } }, /NODE_EXTRA_CA_CERTS ✗/, /NODE_EXTRA_CA_CERTS \?/],
+    [{ caTrusted: true, nodeExtraCaCerts: { value: null, expected: '/e', matches: null, error: 'launchctl: not permitted' } }, /NODE_EXTRA_CA_CERTS \?/, /NODE_EXTRA_CA_CERTS ✗/],
+    [{ caTrusted: true, nodeExtraCaCerts: { value: '/e', expected: '/e', matches: true } }, /CA✓/, /NODE_EXTRA_CA_CERTS/],
+    [{ caTrusted: true, steerError: '/u/.claude/settings.json: SyntaxError' }, /steer \? 读不出/, /CA ✗/],
+  ];
+  for (const [m, yes, no] of cases) {
+    const h = harness({ controlOk: true, monitoring: { active: true, forwardingTarget: 'x', ...m } });
+    await loadModule();
+    const html = h.getEl('monctl').innerHTML;
+    assert.match(html, yes, JSON.stringify(m));
+    assert.doesNotMatch(html, no, JSON.stringify(m));
+  }
 });

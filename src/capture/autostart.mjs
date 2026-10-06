@@ -12,6 +12,7 @@ import { writeFileSync, existsSync, unlinkSync, mkdirSync } from 'node:fs';
 export const MONITOR_LABEL = 'com.asight.monitor'; // distinct from the demo's com.atrace.serve
 
 function defaultRun(file, args) { execFileSync(file, args, { stdio: ['ignore', 'ignore', 'pipe'] }); return { status: 0 }; }
+const errText = (e) => String((e && e.stderr && String(e.stderr).trim()) || (e && e.message) || e);
 const realFs = { writeFileSync, existsSync, unlinkSync, mkdirSync };
 
 function xmlEscape(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -42,8 +43,12 @@ ${keepAliveXml}${workingDirectory ? `  <key>WorkingDirectory</key><string>${xmlE
       fs.mkdirSync(path.dirname(p), { recursive: true });
       fs.writeFileSync(p, buildPlist({ label, programArguments, workingDirectory, logPath, keepAlive }));
       try { run('launchctl', ['unload', p]); } catch { /* not loaded yet */ }
-      try { run('launchctl', ['load', p]); } catch { /* plist is written; load best-effort */ }
-      return { ok: true, plistPath: p };
+      // D38 L-7: a load that fails is said, never `{ok:true}` with nothing running; `launchctl load` can also exit 0
+      // without loading, so the label is looked up afterwards (RFC 4.1 落地细节 (5)).
+      let loadError = null;
+      try { run('launchctl', ['load', p]); } catch (e) { loadError = `launchctl load ${p} failed: ${errText(e)}`; }
+      if (!loadError) { try { run('launchctl', ['list', label]); } catch (e) { loadError = `launchctl load ${p} returned, but ${label} is not loaded (launchctl list: ${errText(e)})`; } }
+      return loadError ? { ok: false, plistPath: p, loadError } : { ok: true, plistPath: p };
     },
     remove({ label = MONITOR_LABEL } = {}) {
       const p = plistPath(label);

@@ -25,6 +25,7 @@ import { createLru, memoKey } from './query/memo.mjs';
 import { loadPricing } from './view/pricing.mjs';
 import { randomBytes } from 'node:crypto';
 import { monitoringStatus, monitoringOn, monitoringOff } from './capture/control.mjs';
+import { appendLegacyEvent } from './capture/events.mjs';
 import { listSources, dirInputs, isSealedPath, sealedSources, unreadCapture } from './raw/discover.mjs';
 import { sealedReadProblem } from './raw/journal.mjs';
 import { emptyMeta, mergeMeta, foldSealed } from './etl/session-meta.mjs';
@@ -391,7 +392,9 @@ function enrichClaude(id) {
 async function handleControl(req, res, { p, csrf, captureTarget, proxyUrl, deps }) {
   if (!hostOk(req)) return sendJson(res, 403, { error: 'forbidden: non-loopback Host (anti DNS-rebind)' });
   if (!originOk(req)) return sendJson(res, 403, { error: 'forbidden: cross-origin request' });
-  const base = { captureTarget, proxyUrl, ...deps }; // deps (onboard/autostart) injectable for tests
+  // deps (onboard/autostart) injectable for tests; with the real ones, a boot item that does not load is a line in
+  // ~/.asight/logs/mitm-events.ndjson (D38 L-7) — injected ones record nowhere unless the test says so
+  const base = { captureTarget, proxyUrl, ...(deps && deps.autostart ? {} : { onEvent: appendLegacyEvent }), ...deps };
   if (p === '/control/status' && req.method === 'GET') {
     return sendJson(res, 200, { csrf, monitoring: monitoringStatus(base) });
   }
