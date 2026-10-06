@@ -13,6 +13,7 @@ import fsp from 'node:fs/promises';
 import { retentionFile, retentionLog, readRetentionFile, TRAFFIC_CLASSES } from '../capture/retention.mjs';
 import { retentionHarnessIds } from '../dissect/traffic.mjs';
 import { asightHome } from '../paths.mjs';
+import { openDb } from '../db.mjs';
 import { retentionSizes, SIZE_WINDOWS, SIZE_COLUMNS } from './queries.mjs';
 import { diskUsage, sealStats } from './disk.mjs';
 
@@ -117,4 +118,18 @@ export async function retentionReport({ home = asightHome(), conn = null, dbErro
     seal, disk: diskOut, db: dbPath ? await statDb(dbPath, fs) : null,
     note: '改动只影响之后开始的调用;已存的数据不删 · a change reaches the calls that start after it; what is already stored is never deleted or rewritten',
   };
+}
+
+/**
+ * retentionReportFromStore({dbPath, ...opts}) → the report, with the store at `dbPath` opened read-only for the sizes and closed again
+ * (`asight keep` has no server holding one). A store that does not exist is "no store" (run asight etl); one that is there and cannot be
+ * opened is said to be unreadable — the same two answers the server gives (src/server.mjs createServer).
+ */
+export async function retentionReportFromStore({ dbPath, ...opts } = {}) {
+  let db = null, dbError = null;
+  try { db = await openDb(dbPath, { readOnly: true }); } catch (e) {
+    const msg = String((e && e.message) || e);
+    if (!/database does not exist/i.test(msg)) dbError = `analytics store unreadable (${dbPath}): ${msg}`;
+  }
+  try { return await retentionReport({ ...opts, conn: db ? db.connection : null, dbError, dbPath }); } finally { if (db) await db.close(); }
 }

@@ -289,9 +289,22 @@ async function main() {
       break;
     }
     case 'keep': { // D40 (RFC 4.6 §记录「保存级别」): what is kept of each call, per harness × traffic class — show and set; no daemon needed
-      const { runKeep } = await import(r('src', 'capture', 'keep.mjs'));
+      const { runKeep, formatKeepSizes } = await import(r('src', 'capture', 'keep.mjs'));
       const { retentionHarnessIds } = await import(r('src', 'dissect', 'traffic.mjs'));
-      process.exitCode = runKeep(rest, { harnesses: retentionHarnessIds() });
+      // `--db <path>` names the analytics store the sizes are read from (default: the one `asight serve` opens), `--json` prints the report
+      // the board's /api/retention serves — both are the show mode's; the three words (harness class level) are the set mode's
+      const showing = args.positionals.length === 0 && !rest.includes('--help') && !rest.includes('-h');
+      const asJson = showing && rest.includes('--json');
+      const report = async () => {
+        const { retentionReportFromStore } = await import(r('src', 'query', 'retention.mjs'));
+        const { DEFAULT_DB_PATH } = await import(r('src', 'db.mjs'));
+        return retentionReportFromStore({ dbPath: flag('--db', process.env.ASIGHT_DB || DEFAULT_DB_PATH) });
+      };
+      if (!asJson) process.exitCode = runKeep([...args.positionals, ...(rest.includes('--help') || rest.includes('-h') ? ['--help'] : [])], { harnesses: retentionHarnessIds() });
+      if (showing && !process.exitCode) {
+        try { const rep = await report(); console.log(asJson ? JSON.stringify(rep, null, 2) : formatKeepSizes(rep).join('\n')); }
+        catch (e) { console.error(`asight keep: the sizes could not be read (${(e && e.message) || e})`); process.exitCode = 1; }
+      }
       break;
     }
     case 'collector': { // per-user transparent collector (RFC 4.6, D36): install / start / on / off / status / uninstall
@@ -566,7 +579,7 @@ usage:
   asight desktop {on|off|status} [--port 9899]  macOS-only: steer CC-Desktop's claude-code→anthropic into asight mitm (durable, reversible)
   asight on   [--proxy http://127.0.0.1:8899]   generate CA + install (user-level) + steer CC-CLI
   asight off  [--remove-ca]
-  asight keep [<harness|all> <class|all> <full|log>]   what is kept of each call, per harness × traffic class: show, or set (no daemon needed)
+  asight keep [<harness|all> <class|all> <full|log>]   what is kept of each call, per harness × traffic class: show it with the sizes (--db <store>, --json), or set it (no daemon needed)
   asight uninstall                              one-step revert: remove CA + clear steer
   asight verify
   asight doctor [--source <ndjson>]             self-check: deps probe + 「测试」四问 (是否真在抓/抓得对/凭据没漏/没弱化全机 TLS)
