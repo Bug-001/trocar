@@ -11,7 +11,9 @@ import cc from '../../../src/collector/harness/claude-code.mjs'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 
 const ROOT = createCa({ commonName: 'on-ctx root' })
-export const ROOTS = { node: [ROOT.certPem], osText: '' }
+const OS_ROOT = createCa({ commonName: 'on-ctx os root' })
+/** The roots a combined bundle starts from (4.6 「合并包」): one of Node's own and one the OS bundle holds, so a test can tell that a bundle has both. */
+export const ROOTS = { node: [ROOT.certPem], osText: OS_ROOT.certPem }
 
 /** A terminal: `tty` says whether stdin and stdout are one; `answers` are typed, one per question asked (the prompt ends with `[y/N] `). */
 export function fakeIo({ tty = false, answers = [] } = {}) {

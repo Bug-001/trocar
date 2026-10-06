@@ -202,14 +202,20 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   const restart = facts.map((f) => ({ f, agent: match(f).agent })).filter((x) => x.agent && touched.has(x.agent)).map((x) => ({ harness: x.agent, pid: x.f.pid })) // what is running now was started before its entry
   const entryRow = (e, i) => ({ harness: e.harness, path: e.path, ...(preview[i] && preview[i].real_path ? { real_path: preview[i].real_path } : entryJ[i].entry && entryJ[i].entry.real_path ? { real_path: entryJ[i].entry.real_path } : {}), ...(e.kind === 'text' ? { what: describeEntry(e) } : { keys: e.keys, value: e.value }) })
   const day = now().toISOString().slice(0, 10)
+  const caNew = !(fs.existsSync(ca.key) && fs.existsSync(ca.pem))
+  const runDir = path.join(dir, 'run', 'trust')
   return {
-    first, newPaths, steps, targets, skipped, restart, writing,
+    first, newPaths, steps, targets, skipped, restart, writing, installed: [...installed],
     changed: draft.entries.map((e, i) => ({ e, j: entryJ[i], i })).filter((x) => act(x.j.action)).map((x) => ({ path: x.e.path, change: changeText(x.e, x.j.entry ? x.j.entry.prior_value : preview[x.i].prior), backup: null })),
-    created: [...(prior ? [] : [manifestPath(dir)]), ...(fs.existsSync(ca.key) && fs.existsSync(ca.pem) ? [] : [ca.key, ca.pem]), ...steps.filter((s) => act(s.action) && s.kind !== 'entry').map((s) => s.path)],
+    created: [...(prior ? [] : [manifestPath(dir)]), ...(caNew ? [ca.key, ca.pem] : []), ...steps.filter((s) => act(s.action) && s.kind !== 'entry').map((s) => s.path)],
     unchanged: steps.filter((s) => s.action === 'skip-intact').map((s) => s.path),
-    // what onPlan prints (formatPlan): the files this run would write or change
-    manifest: manifestPath(dir),
-    ca: [ca.key, ca.pem],
+    // what onPlan prints (formatPlan): every file this run would write or change, and nothing it would leave alone — the manifest only when it is
+    // written (the first on, or an on that writes something), the CA only when it is not there yet, the runtime directory only when it is made, the backup
+    // directory when a user file is to be changed (R2); turnOn adds `state` (state.json, when it writes it)
+    manifest: !prior || writing ? manifestPath(dir) : null,
+    ca: caNew ? [ca.key, ca.pem] : [],
+    run: fs.existsSync(runDir) || !writing ? null : runDir,
+    backups: draft.entries.some((e, i) => act(entryJ[i].action)) ? backupDir(home) : null,
     files: draft.files.filter((f, i) => act(fileJ[i].action)).map((f) => ({ harness: f.harness, path: f.path, sources: f.sources })),
     owned: draft.owned.filter((o, i) => act(ownedJ[i].action)).map((o) => ({ harness: o.harness, path: o.path, role: o.role })),
     entries: draft.entries.map((e, i) => [e, i]).filter(([, i]) => act(entryJ[i].action)).map(([e, i]) => entryRow(e, i)),
@@ -362,15 +368,20 @@ export async function turnOn(opts = {}) {
   const lingerNow = () => { try { const v = linger ? linger() : undefined; return v === true || v === false ? { linger: v } : { linger: 'unknown', linger_reason: linger ? 'the linger state could not be read (/var/lib/systemd/linger)' : 'nothing reads it here' } } catch (e) { return { linger: 'unknown', linger_reason: String((e && e.message) || e) } } }
   return recorded(dir, 'install', async (run) => {
     const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, osRootsFile, roots, unit, fs, now })
-    const stateRead = (() => { try { return { ...readStateFile(stateF, { fs, installed: plan.targets }), error: null } } catch (e) { return { state: emptyState(), from: null, error: e } } })()
+    // A version 1 file (what `collector on|off` wrote before D39) is read for the harnesses installed before and the ones this run turns on, the same set
+    // the guard below reads it for — and is written back as version 2 here, before the first guard: the guard must never see a file the daemon's reader
+    // and this one read differently (1.6 §1.5, R12)
+    const known = [...new Set([...plan.installed, ...plan.targets])]
+    const readState = () => readStateFile(stateF, { fs, installed: known, now: now() })
+    const stateRead = (() => { try { return { ...readState(), error: null } } catch (e) { return { state: emptyState(), from: null, error: e } } })()
     const need = plan.targets.filter((id) => !(stateRead.state.harnesses[id] && stateRead.state.harnesses[id].desired === 'on'))
-    const stateNew = need.length > 0 && !fs.existsSync(stateF)
-    const r = { ...fresh(), ...lingerNow(), harnesses: plan.targets, changed: plan.changed, created: [...plan.created, ...(stateNew ? [stateF] : [])], skipped: [...plan.skipped], restart: plan.restart, unchanged: plan.unchanged, notes: [...plan.notes] }
+    const stateWrite = need.length > 0 || stateRead.from === 1 // an unreadable file is `need` too: every target is not on
+    const r = { ...fresh(), ...lingerNow(), harnesses: plan.targets, changed: plan.changed, created: [...plan.created, ...(stateWrite ? [stateF] : [])], skipped: [...plan.skipped], restart: plan.restart, unchanged: plan.unchanged, notes: [...plan.notes] }
     if (stateRead.error) r.notes.push(`${stateF} could not be read (${String(stateRead.error.message || stateRead.error)}); it is written again`)
     if (!plan.targets.length) return { receipt: { ...r, ok: false, changed: [], created: [], notes: [...r.notes, 'no agent asight can capture was found: nothing was changed. Install one, then run asight on again'] }, manifest: plan._.prior, plan, exit: 1 }
     const named = !!ids && plan.skipped.some((s) => ids.includes(s.what)) // a harness asked for by name that has nothing to install: not done
     if (dryRun) return { receipt: { ...r, dry_run: true, ok: !named }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
-    if (plan.writing || need.length > 0) onPlan(plan)
+    if (plan.writing || stateWrite) onPlan({ ...plan, state: stateWrite ? stateF : null })
     if (plan.first || plan.newPaths.length) {
       const verdict = confirm ? await confirm(plan) : null
       if (verdict == null) return { receipt: { ...r, ok: false, planned: true, needs_yes: true, notes: [...r.notes, '不在终端里,没有 --yes:只打印了计划,什么都没改。看过计划之后加 --yes 再跑一次'] }, manifest: plan._.prior, plan, exit: 2 }
@@ -381,9 +392,10 @@ export async function turnOn(opts = {}) {
     const m = openManifest({ dir, plan, now, fs })
     // the desired state goes first (R9, R12): an `off` that lands meanwhile writes the same file, and every write below reads it again
     if (need.length) writeStateAtomic(stateF, setDesired(stateRead.state, need, 'on', now()), { fs })
+    else if (stateWrite) writeStateAtomic(stateF, stateRead.state, { fs }) // version 1 → 2, nothing turned on: "on since" stays where it was
     const guard = () => {
       let st
-      try { st = readStateFile(stateF, { fs }).state } catch (e) { throw stop(`${stateF} cannot be read (${String((e && e.message) || e)}), so it is not known whether an off was asked; stopped (1.6 R12)`) }
+      try { st = readState().state } catch (e) { throw stop(`${stateF} cannot be read (${String((e && e.message) || e)}), so it is not known whether an off was asked; stopped (1.6 R12)`) }
       const off = plan.targets.filter((id) => !(st.harnesses[id] && st.harnesses[id].desired === 'on'))
       if (off.length) throw stop(`${off.join(', ')} was turned off while this on ran (${stateF}); stopped, the off wins (1.6 R12). What was written is a resumable install: asight on finishes it`)
     }
@@ -399,7 +411,7 @@ export async function turnOn(opts = {}) {
     const receipt = {
       ...r,
       changed: (written ? written.entries : []).map((e) => ({ path: e.path, change: changeText(e, e.prior_value), backup: e.backup ?? null })),
-      created: [...(plan._.prior ? [] : [manifestPath(dir)]), ...(stateNew ? [stateF] : []), ...(written && written.caCreated ? plan._.ca ? [plan._.ca.key, plan._.ca.pem] : [] : []), ...(written ? [...written.files, ...written.owned, ...(written.unit && unit ? [unit.path] : [])] : [])],
+      created: [...(plan._.prior ? [] : [manifestPath(dir)]), ...(stateWrite ? [stateF] : []), ...(written && written.caCreated ? plan._.ca ? [plan._.ca.key, plan._.ca.pem] : [] : []), ...(written ? [...written.files, ...written.owned, ...(written.unit && unit ? [unit.path] : [])] : [])],
       unchanged: written ? written.intact : [],
     }
     const finish = (outcome, reason) => {

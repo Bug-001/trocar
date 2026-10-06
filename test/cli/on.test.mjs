@@ -17,7 +17,9 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { sevenHomes } from '../off/fixtures/seven-homes.mjs'
 import { snapshot, fakeSystem, recordingExec, fakeDaemon, ROOTS } from './fixtures/on-ctx.mjs'
 
-const NAMES = ['claude-code', 'codex', 'opencode', 'deepseek-dsh'] // a JSON key, a dotenv block that names a combined bundle, a plugin file, a YAML row and a plugin directory
+// a JSON key; the three that replace the system roots and so name a combined bundle (codex and hermes by a dotenv block, z-code by a JSON key); a plugin
+// directory and a YAML row
+const NAMES = ['claude-code', 'codex', 'hermes', 'z-code', 'opencode', 'deepseek-dsh']
 const descs = (await loadHarnesses()).filter((d) => NAMES.includes(d.name))
 const SOCK = '/x/collector.sock'
 
@@ -34,17 +36,30 @@ function sandbox() {
 const asightOnly = (rel) => rel.startsWith('.asight') || rel.startsWith(path.join('.config', 'systemd'))
 const userView = (home) => Object.fromEntries(Object.entries(snapshot(home)).filter(([rel]) => !asightOnly(rel)))
 
-// every dotenv block / settings key of an entry asight wrote that names a combined bundle must name one that exists and holds the roots (R9)
+// every entry asight wrote that names a combined bundle (the replace-semantics ones: Codex's and Hermes's dotenv block, Z-Code's network.caCertFile) must name
+// one that exists and holds the Node roots and the OS roots (R9, V21); read from the user's files as they are at that moment, the manifest may not be saved yet
+const bundleNamedIn = {
+  codex: (home) => dotenvBundle(path.join(home, '.codex', '.env')),
+  hermes: (home) => dotenvBundle(path.join(home, '.hermes', '.env')),
+  'z-code': (home) => { try { const v = JSON.parse(fs.readFileSync(path.join(home, '.zcode', 'cli', 'config.json'), 'utf8')).network; return v && v.caCertFile ? v.caCertFile : null } catch { return null } },
+}
+function dotenvBundle(file) {
+  let text; try { text = fs.readFileSync(file, 'utf8') } catch { return null }
+  if (!text.includes('# >>> asight collector')) return null // not written yet
+  const m = /^SSL_CERT_FILE=(.+)$/m.exec(text.split('# <<<')[0]) // inside asight's block (the block is at the top)
+  return m ? m[1].trim() : null
+}
 function bundlesAreValid(s) {
-  const env = path.join(s.home, '.codex', '.env')
-  if (!fs.existsSync(env)) return []
-  const m = /^SSL_CERT_FILE=(.+)$/m.exec(fs.readFileSync(env, 'utf8').split('# <<<')[0]) // inside asight's block (the block is at the top)
-  if (!m || !fs.readFileSync(env, 'utf8').includes('# >>> asight collector')) return []
-  const bundle = m[1].trim()
-  assert.ok(fs.existsSync(bundle), `the entry names ${bundle}, which does not exist`)
-  const roots = certBlocks(fs.readFileSync(bundle, 'utf8')).map((b) => b.fp)
-  for (const r of ROOTS.node) assert.ok(roots.includes(certBlocks(r)[0].fp), 'the bundle holds the Node roots')
-  return [bundle]
+  const found = []
+  for (const [id, named] of Object.entries(bundleNamedIn)) {
+    const bundle = named(s.home)
+    if (!bundle || !bundle.startsWith(s.dir)) continue // not written yet, or the user's own
+    assert.ok(fs.existsSync(bundle), `${id}: the entry names ${bundle}, which does not exist`)
+    const held = certBlocks(fs.readFileSync(bundle, 'utf8')).map((b) => b.fp)
+    for (const r of [...ROOTS.node, ROOTS.osText]) for (const b of certBlocks(r)) assert.ok(held.includes(b.fp), `${id}: the bundle holds the ${r === ROOTS.osText ? 'OS' : 'Node'} roots`)
+    found.push(bundle)
+  }
+  return found
 }
 const entryStats = (s) => readManifest(s.dir).entries.map((e) => ({ path: e.path, installed_at: e.installed_at, ino: fs.statSync(e.real_path || e.path).ino, mtimeMs: fs.statSync(e.real_path || e.path).mtimeMs }))
 
@@ -68,7 +83,7 @@ test('R9: a crash at every one of the writes of a first on is finished by the ne
     assert.equal(m.complete, true, `complete after resuming write ${k}`)
     assert.deepEqual([...new Set([...m.entries, ...m.files].map((x) => x.harness).filter(Boolean))].sort(), [...NAMES].sort(), `every harness has an entry or a file after resuming write ${k}`)
     assert.equal(m.entries.every((e) => e.post_sha256 != null), true, 'every entry is finished')
-    assert.equal(bundlesAreValid(s).length, 1, 'codex\'s entry points at a bundle that holds the roots')
+    assert.equal(bundlesAreValid(s).length, 3, 'codex\'s, hermes\'s and z-code\'s entries point at a bundle that holds both kinds of roots')
     // idempotent: a third on writes nothing
     const stat = entryStats(s); const manifestBytes = fs.readFileSync(path.join(s.dir, 'install-manifest.json'), 'utf8'); const state = fs.readFileSync(path.join(s.dir, 'state.json'), 'utf8')
     const again = await s.run()
@@ -150,7 +165,7 @@ test('R9: on after off writes the entries again with a new installed_at; a bundl
   assert.equal(m.files.find((f) => f.path === bundle).without_ca, undefined, 'the mark is gone')
   assert.ok(certBlocks(fs.readFileSync(bundle, 'utf8')).some((b) => b.fp === caFp), 'the CA is back in the bundle')
   assert.ok(m.entries.find((e) => e.harness === 'codex').installed_at > was, 'a new installed_at: processes started since are judged against it')
-  assert.equal(bundlesAreValid(s).length, 1)
+  assert.equal(bundlesAreValid(s).length, 3)
 })
 
 test('R9: a manifest an older asight wrote has no liveness for some harness: on adds it, only the missing, and leaves the ones that are there', async () => {
@@ -201,6 +216,30 @@ test('R12: on reads state.json before each write and stops, exit 1, when it says
   const flows = fs.readdirSync(path.join(s.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(s.dir, 'flows', n), 'utf8').trim().split('\n').map((l) => JSON.parse(l)))
   assert.ok(flows.some((f) => f.event === 'failure' && /turned off while this on ran/.test(f.reason)), 'the stop is recorded (D38)')
   assert.equal(flows.at(-1).kind, 'result')
+})
+
+test('R12: a state.json a version 1 collector wrote (desired on or off) is read for the installed harnesses and written as version 2 by on, which then goes through; the guard reads it the same way (the upgrade path)', async () => {
+  const stamp = '2026-10-01T00:00:00.000Z'
+  for (const desired of ['on', 'off']) for (const ids of [null, ['codex']]) {
+    const s = sandbox()
+    assert.equal((await s.run()).exit, 0)
+    const stateFile = path.join(s.dir, 'state.json')
+    fs.writeFileSync(stateFile, JSON.stringify({ version: 1, desired, policy: 'auto', extra_hosts: [], updated_at: stamp })) // what `collector on|off` wrote before D39
+    const plans = []
+    const r = await s.run({ ids, onPlan: (p) => plans.push(p) })
+    const what = `v1 desired ${desired}, ${ids ? 'named codex' : 'every harness'}`
+    if (desired === 'on') assert.deepEqual([plans.length, plans[0].state, plans[0].manifest, plans[0].ca, plans[0].entries], [1, stateFile, null, [], []], `${what}: the plan names the state file, the only thing written`)
+    assert.equal(r.exit, 0, `${what}: ${JSON.stringify(r.receipt.notes)}`)
+    assert.doesNotMatch(r.receipt.notes.join('\n'), /turned off while this on ran/, what)
+    assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).version, 2, `${what}: written as version 2`)
+    const { state } = readStateFile(stateFile)
+    for (const id of ids || NAMES) assert.equal(state.harnesses[id].desired, 'on', `${what}: ${id}`)
+    if (ids) for (const id of NAMES) assert.ok(state.harnesses[id], `${what}: ${id}, installed before, keeps its entry in the new file`)
+    if (desired === 'on') for (const id of NAMES) assert.equal(state.harnesses[id].updated_at, stamp, `${what}: nothing was turned on, so "on since" does not move`)
+    assert.ok(r.receipt.created.includes(stateFile), `${what}: the file that was written is in the receipt`)
+    const again = await s.run({ ids })
+    assert.deepEqual([again.exit, again.receipt.created], [0, []], `${what}: the next on has nothing left to do`)
+  }
 })
 
 test('on: with no daemon answering and no unit (--no-unit) it writes everything, exits 0 and says how to start the daemon; with a unit it starts one (--no-autostart: start only, never enable)', async () => {

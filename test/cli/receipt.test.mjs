@@ -9,8 +9,11 @@ import { runOnCli } from '../../src/cli/on.mjs'
 import { formatOnReceipt, formatPlan } from '../../src/cli/receipt.mjs'
 import { validateReceipt, newReceipt } from '../../src/cli/schema.mjs'
 import { readStateFile } from '../../src/off/state.mjs'
+import { readManifest } from '../../src/off/manifest.mjs'
+import cc from '../../src/collector/harness/claude-code.mjs'
+import codex from '../../src/collector/harness/codex.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { fakeIo, onCtx, snapshot, changedFiles, seedClaude, fakeSystem } from './fixtures/on-ctx.mjs'
+import { fakeIo, onCtx, snapshot, changedFiles, seedClaude, fakeSystem, fakeDaemon } from './fixtures/on-ctx.mjs'
 
 const settingsOf = (home) => path.join(home, '.claude', 'settings.json')
 
@@ -20,6 +23,7 @@ test('V7: a first on outside a terminal without --yes prints the plan, writes no
   assert.equal(await runOnCli([], onCtx(home, io)), 2)
   assert.match(io.text(), /~\/\.claude\/settings\.json/, 'the plan names the file it would change, as the user knows the path')
   assert.match(io.text(), /--yes/, 'and says how to go on')
+  for (const [re, what] of [[/install manifest: ~\/\.asight\/collector\/install-manifest\.json/, 'the manifest'], [/state file[^\n]*: ~\/\.asight\/collector\/state\.json/, 'state.json, which on creates'], [/collector CA[^\n]*ca\.key/, 'the CA'], [/runtime directory[^\n]*~\/\.asight\/collector\/run\/trust\//, 'the runtime directory'], [/backups[^\n]*~\/\.asight\/backup\//, 'the backups of the files it changes (R2)']]) assert.match(io.text(), re, `the plan lists ${what}`)
   assert.deepEqual(snapshot(home), before, 'exit 2: not one byte written, no directory made')
 
   const dry = fakeIo({ tty: false })
@@ -60,6 +64,42 @@ test('V7: a terminal asks once, only the first time; "n" writes nothing and exit
   assert.equal(again.asked.length, 0, 'nothing new to change: no question')
 })
 
+test('V7: a later on that would change files beyond the confirmed ones lists only the new ones and asks again — no terminal, no --yes: exit 2 and nothing written; a terminal asks once; --yes writes and confirms them, so the next on asks nothing (1.6 §1.6, R6)', async () => {
+  const home = tmpDir('asight-v7n-'); seedClaude(home)
+  const dir = path.join(home, '.asight', 'collector')
+  const sys = fakeSystem()
+  const ctx = (io) => onCtx(home, io, { harnesses: [cc, codex], exec: sys.exec, daemon: sys.daemon })
+  assert.equal(await runOnCli(['--yes'], ctx(fakeIo())), 0, 'claude-code alone is installed first')
+  const before = readManifest(dir)
+  assert.equal(before.entries.some((e) => e.harness === 'codex'), false)
+  const codexEnv = path.join(home, '.codex', '.env')
+  fs.mkdirSync(path.dirname(codexEnv)); fs.writeFileSync(codexEnv, 'OPENAI_API_KEY=sk-test\n') // Codex is installed since
+
+  const snap = snapshot(home)
+  const quiet = fakeIo({ tty: false })
+  assert.equal(await runOnCli([], ctx(quiet)), 2, 'a file nobody confirmed yet, and nobody to ask')
+  assert.match(quiet.text(), /~\/\.codex\/\.env/, 'the plan names what is new')
+  assert.match(quiet.text(), /install manifest: [^\n]*\n[^\n]*state file/, 'and the manifest and the state file, which this on writes again (codex turns on)')
+  assert.doesNotMatch(quiet.text(), /settings\.json|collector CA \(in no trust store\)|runtime directory/, 'and nothing of what was confirmed, or is there already and is not written again')
+  assert.match(quiet.text(), /--yes/)
+  assert.deepEqual(snapshot(home), snap, 'exit 2: not one byte written')
+
+  const no = fakeIo({ tty: true, answers: ['n'] })
+  assert.equal(await runOnCli([], ctx(no)), 1)
+  assert.equal(no.asked.length, 1)
+  assert.deepEqual(snapshot(home), snap, 'declined: nothing written')
+
+  const yes = fakeIo({ tty: true, answers: ['y'] })
+  assert.equal(await runOnCli([], ctx(yes)), 0)
+  assert.equal(yes.asked.length, 1, 'asked exactly once')
+  const m = readManifest(dir)
+  assert.ok(m.confirmed_paths.includes(codexEnv), 'what was just shown and confirmed is recorded')
+  assert.ok(m.confirmed_paths.some((p) => p === settingsOf(home)), 'and what was confirmed before is still there')
+  const done = fakeIo({ tty: true, answers: [] })
+  assert.equal(await runOnCli([], ctx(done)), 0)
+  assert.equal(done.asked.length, 0, 'now nothing is new: no question')
+})
+
 test('V7: --json keeps stdout for the one JSON; the plan of a terminal run goes to stderr', async () => {
   const home = tmpDir('asight-v7j-'); seedClaude(home)
   const io = fakeIo({ tty: false })
@@ -93,6 +133,19 @@ test('on: refused as root (R7), with the helper missing it writes nothing and sa
   io = fakeIo(); const bare = onCtx(home, io); bare.platform = 'win32'; delete bare.deps.legacyOn
   assert.equal(await runOnCli([], bare), 1); assert.match(io.text(), /win32|本平台/)
   assert.deepEqual(snapshot(home), before)
+})
+
+test('on --no-unit with no daemon answering: everything is written and it exits 0, but the text says nothing is captured yet and how to start the daemon — never "已打开采集"', async () => {
+  const home = tmpDir('asight-on-idle-'); seedClaude(home)
+  const io = fakeIo()
+  assert.equal(await runOnCli(['--yes', '--no-unit'], onCtx(home, io, { daemon: fakeDaemon({ up: false }) })), 0)
+  assert.match(io.stdoutText(), /^asight 已写好入口与期望态,但守护进程没在跑/m)
+  assert.doesNotMatch(io.stdoutText(), /已打开采集/)
+  assert.match(io.stdoutText(), /守护进程: 没在跑,什么都没有被采集/)
+  assert.match(io.stdoutText(), /asight collector start/, 'and how to start it')
+  const j = fakeIo()
+  assert.equal(await runOnCli(['--no-unit', '--json'], onCtx(home, j, { daemon: fakeDaemon({ up: false }) })), 0)
+  assert.equal(j.json().daemon.state, 'not-running', '--json says the same, as a field')
 })
 
 test('receipt: every file the receipt lists is a file the run wrote, and every file the run wrote is listed (the on side of V3)', async () => {
@@ -134,6 +187,12 @@ test('formatOnReceipt: past and future tense, the four commands, the restart lis
   assert.match(formatOnReceipt({ ...r, linger: 'unknown', linger_reason: 'EACCES' }, { home }), /登出后停采[^\n]*不知道[^\n]*EACCES/)
   assert.doesNotMatch(formatOnReceipt({ ...r, linger: 'unknown', linger_reason: 'EACCES' }, { home }), /已开/)
   assert.match(formatOnReceipt({ ...r, ok: false, notes: ['守护进程没有应答'] }, { home }), /没有做完[\s\S]*守护进程没有应答/)
+  // --no-unit with nothing answering: done, exit 0, but nothing is captured: the header and the daemon line say so, never 已打开采集
+  const idle = formatOnReceipt({ ...r, ok: true, daemon: { state: 'not-running', started: false }, unit: null }, { home })
+  assert.match(idle, /^asight 已写好入口与期望态,但守护进程没在跑[^\n]*什么都不会被采集/)
+  assert.doesNotMatch(idle, /已打开采集/)
+  assert.match(idle, /守护进程: 没在跑,什么都没有被采集/)
+  assert.match(formatOnReceipt({ ...r, ok: true, daemon: { state: 'running', pid: 77, started: true } }, { home }), /^asight 已打开采集[\s\S]*守护进程: 在跑\(pid 77\),这次拉起的/, 'a daemon that runs: as before')
 })
 
 test('formatPlan: every file the first on will write is listed before any is written — the CA, the trust file and whose certificates it carries, a link by the file that really changes, an owned file by its role, a text entry by what it adds, the unit and its env, the event log, what the agent may write itself', () => {
@@ -144,8 +203,15 @@ test('formatPlan: every file the first on will write is listed before any is wri
     entries: [{ harness: 'h', path: '/h/s.json', real_path: '/dot/s.json', keys: ['env', 'K'], value: '/h/.asight/collector/ca/extra-h.pem' }, { harness: 'd', path: '/h/.d/patch.yml', what: 'line "- insert: x"' }],
     owned: [{ harness: 'd', path: '/h/.asight/collector/plugins/d/index.js', role: 'plugin' }],
     records: '/h/.asight/collector/flows', watch: [{ harness: 'o', path: '/h/.config/o/node_modules', why: 'npm install' }],
+    state: '/h/.asight/collector/state.json', run: '/h/.asight/collector/run/trust', backups: '/h/.asight/backup',
   }
   const text = formatPlan(plan, { home: '/h', autostart: true })
+  assert.match(text, /state file \(which agents are on\): ~\/\.asight\/collector\/state\.json/, 'the file `on` writes first')
+  assert.match(text, /runtime directory[^\n]*: ~\/\.asight\/collector\/run\/trust\//)
+  assert.match(text, /backups[^\n]*: ~\/\.asight\/backup\/\n/, 'where the copies of the changed files go')
+  const quietPlan = formatPlan({ ...plan, manifest: null, ca: [], run: null, backups: null, files: [], owned: [], entries: [], unit: null, watch: [], first: false }, { home: '/h' })
+  assert.doesNotMatch(quietPlan, /install manifest|collector CA|runtime directory|backups/, 'what is not written is not listed')
+  assert.match(quietPlan, /state file/, 'an on that only writes the state file says so')
   assert.match(text, /collector CA \(in no trust store\): ~\/\.asight\/collector\/ca\/ca\.key, ~\/\.asight\/collector\/ca\/asight-ca\.pem/)
   assert.match(text, /h: ~\/\.asight\/collector\/ca\/extra-h\.pem = the certificates of \/corp\/ca\.pem \+ the collector CA/, 'whose certificates the trust file carries (G8 merge path)')
   assert.match(text, /h: ~\/s\.json → \/dot\/s\.json env\.K = ~\/\.asight\/collector\/ca\/extra-h\.pem/, 'a link is shown with the file that actually changes')
