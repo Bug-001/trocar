@@ -56,8 +56,9 @@ const statKeyOf = (f) => { try { const st = fs.statSync(f); return `${st.ino}:${
 // answers from the install manifest). onError(e, {pid, phase})
 // is told every error judging or (un)watching a process — that process stays unwatched (its connections go
 // direct) and the rest of the table carries on; nothing here is swallowed (review 2 #4).
-// onGone(row, via) is told every agent that leaves the table — its exit event ('exit') or found gone by a rescan
-// ('rescan') — so the daemon records agent-exit and drops the conditions it held (D-24). onUnmatched({pid, exe,
+// onGone(row, via) is told every agent that leaves the table — its exit event ('exit'), found gone by a rescan
+// ('rescan'), exec'd into a program no descriptor matches ('exec'), or dropped because judging it again threw
+// ('judge-error') — so the daemon records agent-exit and drops the conditions it held (D-24, review D1-4). onUnmatched({pid, exe,
 // candidates}) is told once per pid that two descriptors both claim: never folded into either, never watched,
 // and never silent (D-19); unmatched() lists them for status.
 // markerDir / caPem: where plugins write their per-pid marker and the asight CA file a marker vouches for (null: no
@@ -80,7 +81,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     const prev = table.get(facts.pid)
     try { return await judge(facts, prev, cause) } catch (e) {
       // judging threw (harness code): an earlier verdict for this pid must not outlive it — unwatch, then report
-      if (prev && table.get(facts.pid) === prev) { forget(facts.pid); try { await redirector.unwatch(facts.pid) } catch (w) { onError(w, { pid: facts.pid, phase: 'unwatch' }) } }
+      if (prev && table.get(facts.pid) === prev) { forget(facts.pid); onGone(prev, 'judge-error'); try { await redirector.unwatch(facts.pid) } catch (w) { onError(w, { pid: facts.pid, phase: 'unwatch' }) } }
       throw e
     }
   }
@@ -93,7 +94,9 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
   async function judge(facts, prev, cause = null) {
     const m = registry.match(facts)
     if (!m.agent) {
-      if (prev) { forget(facts.pid); try { await redirector.unwatch(facts.pid) } catch (e) { onError(e, { pid: facts.pid, phase: 'unwatch' }) } }
+      // an agent that exec'd into a program no descriptor matches has left the table as surely as one that exited:
+      // the daemon records agent-exit and drops its conditions and negative-cache entries (D-24, review D1-4)
+      if (prev) { forget(facts.pid); onGone(prev, 'exec'); try { await redirector.unwatch(facts.pid) } catch (e) { onError(e, { pid: facts.pid, phase: 'unwatch' }) } }
       if (m.reason === 'ambiguous' && !ambiguous.has(facts.pid)) { const a = { pid: facts.pid, exe: facts.exe ?? null, candidates: m.candidates || [] }; ambiguous.set(facts.pid, a); onUnmatched(a) }
       return null
     }

@@ -59,6 +59,24 @@ test('tracker: a process no descriptor matches is never watched (S3); re-exec in
   assert.equal(tracker.agents().length, 0)
 })
 
+// D-24 / review D1-4: an agent pid that leaves the table without exiting — it exec'd into a non-agent, or judging it
+// again threw — is told to onGone like an exit, so the daemon writes agent-exit and forgets its negative-cache entries.
+test('tracker: an agent that execs into a non-agent, or whose re-judging throws, leaves through onGone (D1-4)', async () => {
+  const thrower = { ...agent, name: 'beta', signatures: { linux: { match: [{ exe: /\/beta$/ }] } }, trust: { ...agent.trust, refine: () => { throw new Error('refine blew up') } } }
+  const redirector = fakeRedirector()
+  const gone = []
+  const tracker = createTracker({ redirector, registry: createRegistry([agent, thrower]), trust: createTrustChecker({ caCertPem: ca.certPem }), home: dir, onGone: (row, via) => gone.push([row.pid, row.agent, via]) })
+  tracker.start()
+  redirector.emit('exec', facts(77)); await settle() // untrusted alpha
+  redirector.emit('exec', facts(77, { exe: '/usr/bin/bash', argv: ['bash'] })); await settle()
+  assert.deepEqual([tracker.agents().length, gone], [0, [[77, 'alpha', 'exec']]])
+  redirector.emit('exec', facts(78, { exe: '/opt/beta', env: new Map([['EXTRA_CA', PEM]]) })); await settle() // trusted: refine never runs
+  redirector.emit('exec', facts(78, { exe: '/opt/beta' })); await settle() // untrusted now: refine throws
+  assert.deepEqual([tracker.describe(78), gone.at(-1)], [null, [78, 'beta', 'judge-error']])
+  redirector.emit('exec', facts(79, { exe: '/usr/bin/curl', argv: ['curl'] })); await settle() // never an agent: nothing leaves
+  assert.equal(gone.length, 2)
+})
+
 test('tracker: judgement is by the process itself — a non-agent child of an agent is not watched', async () => {
   const { redirector } = rig()
   redirector.emit('exec', facts(400, { env: new Map([['EXTRA_CA', PEM]]) })); await settle()

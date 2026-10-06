@@ -659,6 +659,15 @@ test('daemon: agent-trusted, agent-exit (also found by a rescan) and negative-ca
     fs.rmSync(path.join(p.root, '6363'), { recursive: true }) // exits while no exit event reaches us
     await req(s.sock, 'POST', '/off'); await req(s.sock, 'POST', '/on', {})
     assert.ok(flowsOf(s).some((f) => f.event === 'agent-exit' && f.pid === 6363 && f.via === 'rescan'), 'an exit found by a rescan is recorded too')
+    // D1-4: an agent that execs into a program no descriptor matches leaves the same way (agent-exit, forgetPid)
+    p.add(6565, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) })
+    await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 6565, pid: 6565, comm: 'claude', filename: CC_EXE, ts_ns: 8 })
+    await until(() => flowsOf(s).some((f) => f.event === 'agent-trusted' && f.pid === 6565))
+    fs.rmSync(path.join(p.root, '6565'), { recursive: true })
+    p.add(6565, { uid: UID, exe: '/usr/bin/bash', argv: ['bash'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) })
+    await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 6565, pid: 6565, comm: 'bash', filename: '/usr/bin/bash', ts_ns: 9 })
+    const away = await until(() => flowsOf(s).find((f) => f.event === 'agent-exit' && f.pid === 6565))
+    assert.deepEqual([away.agent, away.via, forgot.includes(6565)], ['claude-code', 'exec', true], 'exec\'d away: recorded, and its negative-cache entries forgotten')
   } finally { await d.stop() }
   p.add(6464, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) })
   const d2 = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc, twin], env: { ...process.env, HOME: s.home } }) // restores `on`: its rescan sees 6464
