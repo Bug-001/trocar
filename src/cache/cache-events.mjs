@@ -24,10 +24,12 @@
 //   NEVER to compute content_hash (that stays byte-exact — see src/adapters/content-hash.mjs).
 import { createHash } from 'node:crypto';
 
-// ── Tier-2 provider capability + write-billing labels (RFC 3.3 L82 跨 provider cache 保真标签) ──
-// This is the static provider-capability table. It owns cache_write_billing (how a provider bills the
-// cache WRITE side) — the load-bearing label that stops a cross-provider overlay from summing three
-// providers' non-comparable numbers (RFC 3.3 L87: `none`/`excluded` MUST NOT render as 0).
+// ── Tier-2 vendor capability + write-billing labels (RFC 3.3 L82 跨 provider cache 保真标签) ──
+// This is the static capability table. It owns cache_write_billing (how a vendor bills the cache WRITE
+// side) — the load-bearing label that stops a cross-vendor overlay from summing non-comparable numbers
+// (RFC 3.3 L87: `none`/`excluded` MUST NOT render as 0). D37 (3.3:89): it is keyed by the VENDOR (the
+// upstream host, src/dissect/vendors.mjs), not by the wire format — dsh speaks the Anthropic wire to
+// DeepSeek. `cc` is the pre-D37 alias of `anthropic`, kept for old callers.
 const PROVIDER_CACHE = {
   anthropic: { break_kind: 'explicit-breakpoint', cache_write_billing: 'charged' },
   cc: { break_kind: 'explicit-breakpoint', cache_write_billing: 'charged' },
@@ -35,9 +37,22 @@ const PROVIDER_CACHE = {
   deepseek: { break_kind: 'automatic-disk', cache_write_billing: 'none' },
   bedrock: { break_kind: null, cache_write_billing: 'excluded' },
 };
-export function breakKindFor(provider) {
-  return PROVIDER_CACHE[provider] || { break_kind: null, cache_write_billing: 'none' };
+// 3.3:89 OPEN (its recommended default, not a decision made here): a vendor row established on ONE wire
+// only is not vouched for on another. DeepSeek's row comes from its Chat Completions API; DeepSeek through
+// its Anthropic endpoint (dsh) is listed in the OPEN as unproven, so until a real capture settles it the
+// labels are NULL + 「厂商缓存语义未知」. Deleting the row here is the whole change once it is verified.
+const VERIFIED_WIRES = { deepseek: ['openai-chat'] };
+const UNKNOWN_LABELS = Object.freeze({ break_kind: null, cache_write_billing: null });
+// → the labels, or NULL/NULL when the vendor's cache semantics are unknown (unknown vendor, or a wire its
+// row was not established on). MUST NOT borrow another vendor's semantics (3.3:89). `wireFormat` null =
+// a pre-D37 caller that did not say: the vendor row applies as before.
+export function breakKindFor(vendor, wireFormat = null) {
+  const row = PROVIDER_CACHE[vendor];
+  if (!row) return UNKNOWN_LABELS;
+  const only = VERIFIED_WIRES[vendor];
+  return only && wireFormat != null && !only.includes(wireFormat) ? UNKNOWN_LABELS : row;
 }
+const semanticsKnown = (vendor, wireFormat) => breakKindFor(vendor, wireFormat) !== UNKNOWN_LABELS;
 
 // ── Tier-1 numeric truth: hit_ratio = cache_read / total_input (RFC 3.3 L12) ──
 // null when the denominator is 0/unknown (guard div0). Phase-1 = Anthropic, whose denominator IS
@@ -219,9 +234,18 @@ export function breakKind(curBlocks, structural) {
 //     curBlocks  : BlockRow[]         (this call, ordered tools→system→messages by seq)
 //     usage      : { cache_read, cache_write (number|null — NOT coerced to 0), total_input }
 //     opts       : { compaction?:bool (calls.compaction, authoritative), causeOverride?:string,
-//                    call_id?:string (3.2 PK), provider?:string (default 'anthropic') }
+//                    call_id?:string (3.2 PK), vendor?:string|null (D37; `provider` = pre-D37 alias,
+//                    default 'anthropic'), wireFormat?:string|null, contextState?:string|null }
 export function deriveCacheEvents(prevBlocks, curBlocks, usage = {}, opts = {}) {
-  const { compaction = false, causeOverride, call_id = null, provider = 'anthropic' } = opts;
+  const { compaction = false, causeOverride, call_id = null } = opts;
+  // D37 (3.3:89): labels by VENDOR. `provider` is the pre-D37 alias, read only when `vendor` is absent.
+  const vendor = 'vendor' in opts ? opts.vendor : (opts.provider ?? 'anthropic');
+  // Declared breakpoints are a WIRE fact (cache_control markers on the Anthropic wire), not a vendor fact.
+  const wireFormat = opts.wireFormat ?? (vendor === 'anthropic' || vendor === 'cc' ? 'anthropic' : null);
+  // 3.2:124: a partial or server-edited context has no byte prefix we can vouch for → NULL prefix + flag.
+  // 'reconstructed' (stitched, every predecessor present) stays authoritative.
+  const contextState = opts.contextState ?? null;
+  const blind = contextState === 'partial' || contextState === 'server_edited';
   const div = divergence(prevBlocks, curBlocks);
   const { cause, byteOffset, byteContext } = classifyCause({
     prevBlocks: prevBlocks || [],
@@ -230,7 +254,7 @@ export function deriveCacheEvents(prevBlocks, curBlocks, usage = {}, opts = {}) 
     raw: div.raw,
     meta: { compaction, causeOverride },
   });
-  const { break_kind, cache_write_billing } = breakKindFor(provider);
+  const { break_kind, cache_write_billing } = breakKindFor(vendor, opts.wireFormat ?? null);
   const firstCall = div.firstCall;
   return {
     call_id,
@@ -241,7 +265,7 @@ export function deriveCacheEvents(prevBlocks, curBlocks, usage = {}, opts = {}) 
     // so downstream switching on break_kind never sees an out-of-enum value.
     break_kind,
     hit_ratio: hitRatio(usage),
-    declared_breakpoints: declaredBreakpoints(provider, curBlocks),
+    declared_breakpoints: declaredBreakpoints(wireFormat === 'anthropic' ? 'anthropic' : null, curBlocks),
     structural_divergence_seq: div.structural,
     raw_divergence_seq: div.raw,
     // whole-new-block / first call ⇒ NULL byte offset (RFC L36); else the first differing byte.
@@ -249,9 +273,9 @@ export function deriveCacheEvents(prevBlocks, curBlocks, usage = {}, opts = {}) 
     // No 'first-call' enum value exists in the RFC taxonomy (RFC L44-55); the first in-lane call has
     // no prefix to diverge from → catch-all 'unknown' with extra.first_call=true (not an invented code).
     divergence_cause: firstCall ? 'unknown' : cause,
-    prefix_sha256: prefixSha256(curBlocks, div.structural),
+    prefix_sha256: blind ? null : prefixSha256(curBlocks, div.structural),
     cache_write_billing,
-    ground_truth_flag: groundTruthFlag(div.structural, firstCall, usage.cache_read || 0, usage.cache_write),
+    ground_truth_flag: blind ? null : groundTruthFlag(div.structural, firstCall, usage.cache_read || 0, usage.cache_write),
     extra: {
       structural_estimate: true, // invariant 4: all seq/offset/cause here are structural estimates
       raw_before_structural: div.raw < div.structural,
@@ -260,6 +284,10 @@ export function deriveCacheEvents(prevBlocks, curBlocks, usage = {}, opts = {}) 
       // per-call prefix mechanism (diagnostic refinement, NOT the enum break_kind):
       // whole-recompute (no reusable prefix) | explicit-breakpoint (cache_control in prefix) | automatic-prefix
       prefix_mechanism: breakKind(curBlocks, div.structural),
+      // rendered 「厂商缓存语义未知」: the two labels above are NULL because nothing vouches for them (3.3:89)
+      vendor_cache_semantics: semanticsKnown(vendor, opts.wireFormat ?? null) ? undefined : 'unknown',
+      // why prefix_sha256 / ground_truth_flag are NULL on a non-complete context (3.2:124)
+      context_state: contextState && contextState !== 'complete' ? contextState : undefined,
     },
   };
 }
