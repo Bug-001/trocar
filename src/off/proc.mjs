@@ -103,30 +103,30 @@ function procsOfLinux({ uid, root }) {
     const st = readStatus(pid, { root })
     if (!st || (uid != null && st.uid !== uid)) continue // gone since the listing, or another user's
     let env
-    out.push({ pid, uid: st.uid, startedAt: readStartTime(pid, { root }), exe: readExe(pid, { root }), argv: readArgv(pid, { root }), env: () => (env !== undefined ? env : (env = readEnviron(pid, { root }))) })
+    out.push({ pid, ppid: st.ppid, uid: st.uid, startedAt: readStartTime(pid, { root }), exe: readExe(pid, { root }), argv: readArgv(pid, { root }), env: () => (env !== undefined ? env : (env = readEnviron(pid, { root }))) })
   }
   return out
 }
 
-// `ps -Axo pid=,uid=,lstart=,command=`: lstart is five words ("Wed Oct  7 04:27:00 2026", local time), the command line joined by spaces — its
+// `ps -Axo pid=,ppid=,uid=,lstart=,command=`: lstart is five words ("Wed Oct  7 04:27:00 2026", local time), the command line joined by spaces — its
 // argument boundaries are lost, so argv is that line split on whitespace (a path with a space in it splits), and the environment of another
 // process cannot be read here at all (null: unknown).
-const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s+(\S.*)$/
+const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s+(\S.*)$/
 function procsOfPs({ uid, exec }) {
-  const r = execTool('ps', ['-Axo', 'pid=,uid=,lstart=,command='], { run: exec })
+  const r = execTool('ps', ['-Axo', 'pid=,ppid=,uid=,lstart=,command='], { run: exec })
   if (r.code !== 0) throw new Error(`ps failed (${r.code === null ? r.err : `exit ${r.code}: ${r.err}`}), so which agents are alive is not known`)
   const out = []
   for (const line of r.out.split('\n')) {
     const m = PS_ROW.exec(line)
-    if (!m || (uid != null && Number(m[2]) !== uid)) continue
-    const argv = m[4].trim().split(/\s+/)
-    const at = new Date(m[3].replace(/\s+/g, ' ')).getTime()
-    out.push({ pid: Number(m[1]), uid: Number(m[2]), startedAt: Number.isFinite(at) ? at : null, exe: argv[0], argv, env: () => null })
+    if (!m || (uid != null && Number(m[3]) !== uid)) continue
+    const argv = m[5].trim().split(/\s+/)
+    const at = new Date(m[4].replace(/\s+/g, ' ')).getTime()
+    out.push({ pid: Number(m[1]), ppid: Number(m[2]), uid: Number(m[3]), startedAt: Number.isFinite(at) ? at : null, exe: argv[0], argv, env: () => null })
   }
   return out
 }
 
-/** The live processes of one user: `[{ pid, uid, startedAt: ms | null, exe, argv, env: () => Map | null }]` — `env` is read when asked for.
+/** The live processes of one user: `[{ pid, ppid, uid, startedAt: ms | null, exe, argv, env: () => Map | null }]` — `env` is read when asked for.
  *  `uid` null lists everyone's. Linux reads `root` (/proc); macOS runs `ps` through `exec` (a spawnSync-like runner a test injects; execTool
  *  refuses a real one under npm test). Another platform, or a table that cannot be read, rejects. */
 export async function listProcs({ uid = typeof process.getuid === 'function' ? process.getuid() : null, root = '/proc', platform = process.platform, exec = null } = {}) {

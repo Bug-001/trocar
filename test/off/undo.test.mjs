@@ -22,7 +22,7 @@ const box = () => { const home = tmpDir('asight-undo-'); return { home, dir: pat
 const sha = (f) => (fs.existsSync(f) ? crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex') : null)
 const fpsOf = (f) => certBlocks(fs.readFileSync(f, 'utf8')).map((c) => c.fp)
 const write = (b, rel, text) => { const f = path.join(b.home, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text); return f }
-const proc = (pid, exe, { startedAt = Date.now() + 5000, env = {}, argv = [exe] } = {}) => ({ pid, exe, argv, startedAt, env: () => new Map(Object.entries(env)) })
+const proc = (pid, exe, { startedAt = Date.now() + 5000, env = {}, argv = [exe], ppid = 1 } = {}) => ({ pid, ppid, exe, argv, startedAt, env: () => (env === null ? null : new Map(Object.entries(env))) }) // env null: cannot be read
 
 // a replace-semantics harness (Codex / Hermes shape): a dotenv block naming its own combined bundle
 const repH = (b, name, extra = {}) => ({
@@ -203,6 +203,37 @@ test('extra trust file: only a process whose environ names it keeps it (stripped
   fs.rmSync(extra)
   const dropped = await s.run({ manifest: gone.manifest, procs: async () => [proc(71, '/bin/node', { env: { NODE_EXTRA_CA_CERTS: extra } })] })
   assert.deepEqual([dropped.kept_bundles, dropped.left, dropped.manifest.files.filter((f) => f.role === 'trust-file')], [[], [], []])
+})
+
+test('an extra trust file whose holder\'s environment cannot be read: a process of the harness, or one started by it, with an unreadable environ makes it "not known" (kept without the CA, an item left); an unreadable one that is nothing of the harness\'s does not (D-20)', async () => {
+  const s = await setup((b) => [jsonH(b)])
+  const extra = s.b.ca('extra-jj.pem')
+  const t0 = Date.parse(readManifest(s.b.dir).entries[0].installed_at)
+  const jj = proc(70, '/x/jj', { startedAt: 1 })
+  const helper = proc(90, '/usr/libexec/asight-helper', { env: null }) // non-dumpable, started by init: nothing of jj's
+  const asightFp = certBlocks(fs.readFileSync(s.b.ca('asight-ca.pem'), 'utf8'))[0].fp
+  const gone = await s.run({ procs: async () => [jj, helper] })
+  assert.deepEqual([gone.kept_bundles, gone.left, fs.existsSync(extra)], [[], [], false], 'an unreadable environ that descends from no jj process is not a holder: removed as ever')
+  // a child of jj, and a grandchild of it, whose environ cannot be read; one that started before the file existed cannot hold it
+  const t = await setup((b) => [jsonH(b)])
+  const tExtra = t.b.ca('extra-jj.pem'), at = Date.parse(readManifest(t.b.dir).entries[0].installed_at)
+  const child = proc(71, '/bin/sh', { ppid: 70, startedAt: at + 1000, env: null }), grand = proc(72, '/usr/bin/node', { ppid: 71, startedAt: at + 2000, env: null })
+  const older = proc(73, '/bin/old', { ppid: 70, startedAt: at - 60000, env: null })
+  const one = await t.run({ procs: async () => [jj, helper, older] })
+  assert.deepEqual([one.kept_bundles, one.left, fs.existsSync(tExtra)], [[], [], false], 'started before the install: it cannot have inherited a path that was not there')
+  const u = await setup((b) => [jsonH(b)])
+  const r = await u.run({ procs: async () => [jj, child, grand, helper] })
+  const kept = u.b.ca('extra-jj.pem')
+  assert.deepEqual(r.kept_bundles.map((k) => [k.path, k.harness, k.pids, k.unjudged, /pid 71, 72, a running jj process or one started by it, cannot be read/.test(k.error)]), [[kept, 'jj', [], true, true]], 'pid 71 and its child 72 are named; the helper is not')
+  assert.deepEqual([r.left.map((l) => [l.path, l.result]), fs.existsSync(kept), fpsOf(kept).includes(asightFp), fpsOf(kept).length], [[[kept, 'error']], true, false, 1], 'kept without the asight CA, with the user\'s')
+  assert.match(r.left[0].reason, /kept, without the asight CA, because whether a running process holds it is not known \(the environment of pid 71, 72/)
+  // they go: the next run removes it
+  const next = await u.run({ manifest: r.manifest, procs: async () => [jj, helper] })
+  assert.deepEqual([next.kept_bundles, next.left, fs.existsSync(kept)], [[], [], false])
+  // a holder that can be read decides on its own: the unreadable ones add nothing
+  const w = await setup((b) => [jsonH(b)])
+  const known = await w.run({ procs: async () => [proc(74, '/bin/node', { env: { NODE_EXTRA_CA_CERTS: w.b.ca('extra-jj.pem') } }), child] })
+  assert.deepEqual(known.kept_bundles, [{ path: w.b.ca('extra-jj.pem'), harness: 'jj', pids: [74] }])
 })
 
 test('a process table that cannot be read is not "nobody is alive": the bundle is kept without the CA and unjudged, an item left; so is a harness with no liveness record', async () => {

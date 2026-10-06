@@ -106,15 +106,28 @@ export async function undoHarnesses({ dir, home, manifest, ids = null, procs = a
       const file = (manifest.files.find((f) => f.role === 'ca-cert') || {}).path || path.join(dir, 'ca', 'asight-ca.pem')
       try { const b = certBlocks(fs.readFileSync(file, 'utf8')); return b.length ? { fp: b[0].fp, error: null } : { fp: null, error: `${file} holds no certificate` } } catch (e) { return { fp: null, error: errText(e) } }
     })()
+    // An environment that cannot be read is not an empty one (proc.mjs): for an extra file, which only an environment names, a process whose environ is
+    // unreadable and that is a live process of the harness or descends from one (so it may have inherited the path) is "not known". Not every unreadable
+    // one: the capability helper and gpg-agent are non-dumpable on every machine, and nothing of the harness's.
+    const unknownEnv = (harness) => {
+      const byPid = new Map(t.list.map((p) => [p.pid, p])), from = since.get(harness)
+      return t.list.filter((p) => {
+        if (processEnv(p) || (p.startedAt != null && from != null && p.startedAt < from)) return false // readable, or older than the file: it cannot hold it
+        for (let a = p, seen = new Set(); a && !seen.has(a.pid) && seen.size < 64; a = byPid.get(a.ppid)) { seen.add(a.pid); if (matchHarness(liveness, a) === harness) return true }
+        return false
+      }).map((p) => p.pid)
+    }
     // who may hold this file: a process of its harness that may have read the entry (bundles only — an extra file is named by an environment
-    // variable, never by an entry that re-reads), or any whose environ names it (a child that inherited it). null: cannot be told.
+    // variable, never by an entry that re-reads), or any whose environ names it (a child that inherited it). `why`: cannot be told.
     const holders = (f, byHarness) => {
       if (t.error) return { why: t.error }
       if (byHarness && !liveness[f.harness]) return { why: `the install manifest has no liveness record for ${f.harness} (written by an older asight; "asight on" adds it, then run this again)` }
-      return { pids: t.list.filter((p) => {
+      const pids = t.list.filter((p) => {
         const env = processEnv(p)
         return (byHarness && matchHarness(liveness, p) === f.harness && mayHaveRead(p, liveness[f.harness], since.get(f.harness))) || (!!env && [...env.values()].some((v) => typeof v === 'string' && v.includes(f.path)))
-      }).map((p) => p.pid) }
+      }).map((p) => p.pid)
+      const unknown = byHarness || pids.length ? [] : unknownEnv(f.harness)
+      return unknown.length ? { why: `the environment of pid ${unknown.join(', ')}, a running ${f.harness} process or one started by it, cannot be read, so whether it holds this file is not known` } : { pids }
     }
     // `f` kept, without the asight CA: stripped in place (atomic). { ok } done (or already so); { holds } it still holds the CA — it cannot be
     // rewritten, or the CA cannot be named; { gone } it cannot be read, with the errno

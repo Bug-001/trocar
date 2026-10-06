@@ -16,13 +16,14 @@ test('listProcs on a /proc tree: this uid\'s processes with pid, start time, exe
   const p = fakeProc()
   try {
     p.add(100, { uid: 1000, exe: '/home/u/.local/bin/codex', argv: ['codex', 'app-server'], env: { CODEX_HOME: '/h/.codex' }, startTicks: 250 })
-    p.add(101, { uid: 1000, exe: '/usr/bin/bash', argv: ['bash'] }) // no environ file: cannot be read
+    p.add(101, { uid: 1000, ppid: 100, exe: '/usr/bin/bash', argv: ['bash'] }) // no environ file: cannot be read
     p.add(102, { uid: 2000, exe: '/usr/bin/other', argv: ['other'] })
     fs.writeFileSync(path.join(p.root, 'version'), 'x'); fs.mkdirSync(path.join(p.root, 'self'))
     const got = await listProcs({ uid: 1000, root: p.root, platform: 'linux' })
     assert.deepEqual(got.map((f) => f.pid).sort(), [100, 101])
     const codex = got.find((f) => f.pid === 100)
     assert.deepEqual([codex.exe, codex.argv, codex.startedAt, codex.uid], ['/home/u/.local/bin/codex', ['codex', 'app-server'], (p.btime + 2.5) * 1000, 1000])
+    assert.deepEqual(got.map((f) => [f.pid, f.ppid]).sort(), [[100, 1], [101, 100]], 'who started it: a child that inherited an environment is told by its ancestors')
     assert.equal(typeof codex.env, 'function', 'the environment is read when asked for, not for every process of the machine')
     assert.deepEqual([...codex.env()], [['CODEX_HOME', '/h/.codex']])
     assert.equal(got.find((f) => f.pid === 101).env(), null, 'an environment that cannot be read is null, not an empty one')
@@ -35,12 +36,13 @@ test('listProcs fails loudly when the table cannot be read, and on a platform it
   await assert.rejects(listProcs({ uid: 1000, platform: 'win32' }), /win32/)
 })
 
-test('listProcs on macOS reads `ps` through the injected runner: pid, uid, start time and the command line; its environment is unknown', async () => {
-  const ps = ['  501   501 Wed Oct  7 04:27:00 2026 /Applications/Claude.app/Contents/MacOS/claude --flag x', '  777   0 Tue Oct  6 01:02:03 2026 /usr/sbin/mDNSResponder', '  502   501 Wed Oct  7 05:00:00 2026 /usr/local/bin/codex app-server', ''].join('\n')
+test('listProcs on macOS reads `ps` through the injected runner: pid, parent, uid, start time and the command line; its environment is unknown', async () => {
+  const ps = ['  501     1   501 Wed Oct  7 04:27:00 2026 /Applications/Claude.app/Contents/MacOS/claude --flag x', '  777     1     0 Tue Oct  6 01:02:03 2026 /usr/sbin/mDNSResponder', '  502   501   501 Wed Oct  7 05:00:00 2026 /usr/local/bin/codex app-server', ''].join('\n')
   const calls = []
   const exec = (file, args) => { calls.push([file, ...args]); return { status: 0, stdout: ps, stderr: '' } }
   const got = await listProcs({ uid: 501, platform: 'darwin', exec })
-  assert.deepEqual(calls, [['ps', '-Axo', 'pid=,uid=,lstart=,command=']])
+  assert.deepEqual(calls, [['ps', '-Axo', 'pid=,ppid=,uid=,lstart=,command=']])
+  assert.deepEqual(got.map((f) => [f.pid, f.ppid, f.uid]), [[501, 1, 501], [502, 501, 501]])
   assert.deepEqual(got.map((f) => [f.pid, f.exe, f.argv]), [[501, '/Applications/Claude.app/Contents/MacOS/claude', ['/Applications/Claude.app/Contents/MacOS/claude', '--flag', 'x']], [502, '/usr/local/bin/codex', ['/usr/local/bin/codex', 'app-server']]])
   assert.equal(got[0].startedAt, new Date(2026, 9, 7, 4, 27, 0).getTime(), 'lstart is local time')
   assert.equal(got[0].env(), null)
