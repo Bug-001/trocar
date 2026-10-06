@@ -73,3 +73,15 @@ test('recentFailures reads through the health reader: no flows/ is nothing yet, 
     assert.throws(() => recentFailures(b.dir), /ENOTDIR|not a directory/)
   } finally { b.done() }
 })
+
+test('the failure recorder never goes back a day when the clock does (4.6 §记录)', () => {
+  const calls = []
+  let clock = '2026-10-06T00:00:10.000Z'
+  const rec = createFailureRecorder('/d', { append: (dir, r, o) => calls.push(o && o.day), now: () => new Date(clock), setTimer: () => null, clearTimer: () => {} })
+  rec.write({ event: 'switch' })
+  clock = '2026-10-05T23:50:00.000Z'
+  rec.write({ event: 'switch' })
+  clock = '2026-10-07T00:00:00.000Z'
+  rec.write({ event: 'switch' })
+  assert.deepEqual(calls, ['2026-10-06', '2026-10-06', '2026-10-07'])
+})

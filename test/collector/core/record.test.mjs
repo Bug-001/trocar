@@ -142,3 +142,63 @@ test('store: crossing midnight closes the previous day\'s files, so a long-runni
   assert.deepEqual([lines('capture-2026-10-05.ndjson'), lines('capture-2026-10-06.ndjson'), lines('flows/2026-10-05.ndjson'), lines('flows/2026-10-06.ndjson')], [1, 1, 1, 1])
   fs.rmSync(root, { recursive: true, force: true })
 })
+
+// D38 (RFC 4.6 §记录 / §日志体积预算「已关闭」, D35): at rollover the previous day's files only this store writes are
+// fsync'd, closed and marked closed — the sealer then takes them; flows/ has a second writer and is not marked.
+test('store: at rollover the previous day\'s capture / audit / replays files get the close marker, flows/ does not; the sealer accepts them', async () => {
+  const { closedState } = await import('../../../src/raw/closed.mjs')
+  const { sealShard } = await import('../../../src/raw/seal.mjs')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-store-'))
+  try {
+    let clock = '2026-10-05T23:59:01.000Z'
+    const s = createRecordStore({ root, now: () => new Date(clock), onError: (e) => { throw e } })
+    s.envelope({ id: 'a1' }); s.flow({ flow_id: 'f1' }); s.audit({ event: 'on' }); s.replay({ id: 'r1' })
+    assert.equal(closedState(path.join(root, 'capture-2026-10-05.ndjson')).closed, false, 'the current day is never marked')
+    clock = '2026-10-06T00:00:01.000Z'
+    s.envelope({ id: 'a2' })
+    for (const f of ['capture-2026-10-05.ndjson', 'audit/2026-10-05.ndjson', 'replays/2026-10-05.ndjson']) assert.equal(closedState(path.join(root, f)).closed, true, f)
+    assert.equal(fs.existsSync(path.join(root, 'flows', '2026-10-05.ndjson.closed')), false, 'flows/ also has the event writer: not this store\'s to close')
+    assert.equal(closedState(path.join(root, 'capture-2026-10-06.ndjson')).closed, false)
+    const r = await sealShard(path.join(root, 'capture-2026-10-05.ndjson'), { sessionsRoot: path.join(root, 'sessions'), journal: null })
+    assert.equal(r.records, 1, 'the marked day is sealable')
+    s.close()
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+test('store: a clock set back keeps writing the latest day\'s file, never appends to an earlier (maybe sealed) one (F3(i))', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-store-'))
+  try {
+    let clock = '2026-10-06T00:00:30.000Z'
+    const s = createRecordStore({ root, now: () => new Date(clock), onError: (e) => { throw e } })
+    s.envelope({ id: 'b1' })
+    clock = '2026-10-05T23:00:00.000Z' // an hour back
+    s.envelope({ id: 'b2' }); s.flow({ flow_id: 'f' })
+    s.close()
+    assert.deepEqual(fs.readdirSync(root).filter((n) => n.endsWith('.ndjson')), ['capture-2026-10-06.ndjson'])
+    assert.equal(fs.readFileSync(path.join(root, 'capture-2026-10-06.ndjson'), 'utf8').trim().split('\n').length, 2)
+    assert.deepEqual(fs.readdirSync(path.join(root, 'flows')), ['2026-10-06.ndjson'])
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+// D38 a file renamed or deleted while open is reopened before the next write and reported (file-replaced) — no
+// line goes into an orphan inode.
+test('store: a capture file renamed or deleted while open is reopened, and that is a file-replaced failure', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-store-'))
+  try {
+    const errs = []
+    const s = createRecordStore({ root, now: () => new Date('2026-10-06T01:00:00.000Z'), onError: (e) => errs.push(e) })
+    const f = path.join(root, 'capture-2026-10-06.ndjson')
+    s.envelope({ id: 'c1' })
+    fs.renameSync(f, path.join(root, 'moved.ndjson'))
+    assert.equal(s.envelope({ id: 'c2' }), true, 'written, to the path')
+    assert.deepEqual(fs.readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l).id), ['c2'])
+    assert.deepEqual(fs.readFileSync(path.join(root, 'moved.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l).id), ['c1'], 'nothing more into the moved file')
+    fs.rmSync(f)
+    s.envelope({ id: 'c3' })
+    assert.deepEqual(fs.readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l).id), ['c3'])
+    assert.deepEqual(errs.map((e) => [e.code, e.file]), [['file-replaced', f], ['file-replaced', f]])
+    s.envelope({ id: 'c4' })
+    assert.equal(errs.length, 2, 'an unchanged file is not reported')
+    s.close()
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})

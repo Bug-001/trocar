@@ -11,8 +11,9 @@ import { readFlows } from '../../health/flows.mjs'
 // The closed sets and the failure / expected split live in src/health/codes.mjs (D38: writers and readers share them).
 export { isFailure }
 
-export function appendEvent(dir, rec, { now = new Date(), fs = nodeFs } = {}) {
-  const file = path.join(dir, 'flows', `${now.toISOString().slice(0, 10)}.ndjson`)
+// `day` (YYYY-MM-DD): the file to write, when the caller keeps a day that never goes back (the daemon's recorder)
+export function appendEvent(dir, rec, { now = new Date(), day = null, fs = nodeFs } = {}) {
+  const file = path.join(dir, 'flows', `${day || now.toISOString().slice(0, 10)}.ndjson`)
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   fs.appendFileSync(file, JSON.stringify({ ts: now.toISOString(), ...rec }) + '\n', { mode: 0o600 })
 }
@@ -36,15 +37,19 @@ export function createFailureRecorder(dir, { log = () => {}, windowMs = 10_000, 
   const open = new Map() // where + code → { suppressed, last, timer }
   let gap = null // { from, lost, error } while lines are being lost
   let lostTotal = 0
+  let lastDay = null // the day file never goes back when the clock does (4.6 §记录)
   const write = (rec) => {
+    const t = now().toISOString()
+    const d = t.slice(0, 10)
+    if (!lastDay || d > lastDay) lastDay = d
     try {
       if (gap) {
-        append(dir, { event: 'log-gap', from: gap.from, to: now().toISOString(), lost: gap.lost, error: gap.error, reason: `${gap.lost} event line(s) could not be written (${gap.error})` })
+        append(dir, { event: 'log-gap', from: gap.from, to: t, lost: gap.lost, error: gap.error, reason: `${gap.lost} event line(s) could not be written (${gap.error})` }, { day: lastDay })
         gap = null
       }
-      append(dir, rec)
+      append(dir, rec, { day: lastDay })
     } catch (w) {
-      if (!gap) gap = { from: now().toISOString(), lost: 0, error: null }
+      if (!gap) gap = { from: t, lost: 0, error: null }
       gap.lost++; lostTotal++; gap.error = errText(w)
       log('events', w) // stderr is all that is left until a write succeeds
     }

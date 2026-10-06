@@ -112,7 +112,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     const issuer = caState.ok ? createLeafIssuer(loadCa(ca)) : { secureContextFor() { throw new Error(`the collector CA is unusable (${caState.which})`) }, issue() { throw new Error('the collector CA is unusable') } }
     const caTimer = setInterval(() => { caState = { ...judgeCa(readCa({ dir: P.caDir })), checked_at: new Date().toISOString() }; if (!caState.ok) caFailure(caState) }, caCheckMs)
     caTimer.unref()
-    const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error')) })
+    const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error'), e && e.file ? { file: e.file } : {}) })
     let stale = null
     let unreadable = false
     try { stale = JSON.parse(fs.readFileSync(P.lock, 'utf8')) } catch (e) { if (e.code !== 'ENOENT') unreadable = true } // ENOENT: the last daemon stopped cleanly
