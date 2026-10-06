@@ -20,6 +20,8 @@ import { controlRequest } from './core/control.mjs'
 import { readText, readTextOrError } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
 import { lockState, procIdentity } from '../health/read.mjs'
+import { dropBackup } from '../off/backup.mjs'
+import { backupDir } from '../off/paths.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const pidAlive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' } }
@@ -163,8 +165,8 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
   // a plugin or shim exists before the entry that loads it (a dsh patch row naming a missing file only warns, still)
   for (const o of plan.owned) writeOwnedFile({ dir, manifest: m, harness: o.harness, role: o.role, file: o.path, data: o.data, mode: o.mode, exclusive: true })
   for (const e of plan.entries) {
-    if (e.kind === 'text') applyTextEntry({ dir, manifest: m, harness: e.harness, file: e.path, edit: e })
-    else applyJsonKey({ dir, manifest: m, harness: e.harness, file: e.path, keys: e.keys, value: e.value })
+    if (e.kind === 'text') applyTextEntry({ dir, manifest: m, harness: e.harness, file: e.path, edit: e, home }) // a backup of the file first (1.6 R2): no backup, no change
+    else applyJsonKey({ dir, manifest: m, harness: e.harness, file: e.path, keys: e.keys, value: e.value, home })
   }
   // the per-user autostart unit (arch: systemd --user on Linux), listed like every other file, then enabled --now; a
   // refused enable is recorded (D38), the daemon can still be started by hand
@@ -271,9 +273,9 @@ function bundleUsers(bundle, m, procs, match, byName) {
   return pids
 }
 
-async function uninstall(dir, { env = process.env, purgeData = false, scan = async () => [], match = () => ({ agent: null }), stop = null, harnesses = [], osRootsFile = null, roots = null, unit = null, run = null }) {
+async function uninstall(dir, { home = path.dirname(path.dirname(dir)), env = process.env, purgeData = false, scan = async () => [], match = () => ({ agent: null }), stop = null, harnesses = [], osRootsFile = null, roots = null, unit = null, run = null }) {
   const runtime = env.XDG_RUNTIME_DIR ? path.join(env.XDG_RUNTIME_DIR, 'asight') : null
-  const report = { daemon: null, entries: [], removed: [], residue: [], kept_bundles: [], still_trusting: [], kept_captures: !purgeData, notes: [], left: [] } // left: what could not be undone, {path, harness, result} each (D-18)
+  const report = { daemon: null, entries: [], removed: [], residue: [], kept_bundles: [], still_trusting: [], kept_captures: !purgeData, notes: [], left: [], dropped_backups: [] } // left: what could not be undone, {path, harness, result} each (D-18)
   const byName = new Map(harnesses.map((d) => [d.name, d]))
   const failed = [] // failure events, written after any purge so they survive it
   const noted = [] // uninstall-note events (kept captures only: --purge-data asked for flows/ to go)
@@ -283,12 +285,19 @@ async function uninstall(dir, { env = process.env, purgeData = false, scan = asy
   report.daemon = await (stop || (() => stopDaemon({ socketPath: runtime && path.join(runtime, 'collector.sock'), lockFile: path.join(dir, 'lock'), stopUnit: unitFile && unit ? () => unit.stop() : null })))()
   const rm = (p) => { sweepTemps(p); if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); report.removed.push(p) } }
   const left = { entries: [], files: [], bundles: [] }
+  // Until `asight off` owns the backups (Task 4: kept when the user edited the file since, listed in the receipt), uninstall leaves none
+  // behind: the entry is undone, so its copy goes; a copy that cannot be removed is said, never dropped silently.
+  const dropEntryBackup = (e) => {
+    if (!e.backup) return
+    try { if (dropBackup(e.backup)) report.dropped_backups.push(e.backup) } catch (err) { noted.push({ code: CODE.residue, harness: e.harness, path: e.backup, reason: `${e.backup}, the backup of ${e.path}, could not be removed (${String((err && err.message) || err)}); remove it by hand` }) }
+  }
   if (!m) report.notes.push('nothing is installed for this user')
   else {
     const undo = (e) => {
       let r
       try { r = undoEntry(e) } catch (err) { r = { path: e.path, harness: e.harness, result: 'error', reason: String((err && err.message) || err) } }
       report.entries.push(r)
+      if (!NOT_UNDONE.has(r.result)) dropEntryBackup(e) // 1.6 R2: an entry that is out gives up its backup; one that could not be undone keeps it (the only copy of what the user had)
       if (NOT_UNDONE.has(r.result)) {
         left.entries.push(e)
         report.left.push({ path: e.path, harness: e.harness, result: r.result })
@@ -321,6 +330,7 @@ async function uninstall(dir, { env = process.env, purgeData = false, scan = asy
     }
     for (const f of m.files.filter((x) => x.role === 'trust-file' || x.role === 'ca-cert')) rm(f.path)
     for (const e of [...m.entries].reverse()) if (stepOf(e) === 4) undo(e)
+    removeEmptyDirs([backupDir(home)]) // the last backup is gone (rmdir leaves a directory that still holds one)
     for (const f of [...m.files].reverse().filter((x) => x.role === 'plugin' || x.role === 'shim')) {
       try {
         const r = removeOwnedFile(f)

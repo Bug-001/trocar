@@ -756,7 +756,72 @@ test('install: a failure that cannot be recorded keeps its own message and says 
   } finally { b.done() }
 })
 
-// ---- D39③ / 1.6 R3 (Task 3): a manifest this build cannot read ---------------------------------------------------------------
+// ---- D39③ / 1.6 R2 R3 (Task 3): backups before every user-file change, manifest version 2 --------------------------------------
+const backupsIn = (b) => (fs.existsSync(path.join(b.home, '.asight', 'backup')) ? fs.readdirSync(path.join(b.home, '.asight', 'backup')).sort().map((n) => path.join(b.home, '.asight', 'backup', n)) : [])
+
+test('install writes manifest version 2: every item has kind and undo_by_hand, and an existing settings file is backed up (0700/0600) before it changes (R2, R3)', async () => {
+  const b = box()
+  try {
+    fs.mkdirSync(path.join(b.home, '.claude')); const before = '{\n  "model": "x",\n  "env": {\n    "ANTHROPIC_API_KEY": "sk-ant-secret"\n  }\n}\n'
+    fs.writeFileSync(settingsOf(b), before, { mode: 0o640 })
+    await installCollector(base(b))
+    const m = JSON.parse(fs.readFileSync(path.join(b.dir, 'install-manifest.json'), 'utf8')) // the file itself: readManifest would fill in what is missing
+    assert.deepEqual([m.version, m.confirmed_paths, m.kept_backups, m.liveness], [2, [], [], {}])
+    for (const it of [...m.entries, ...m.files]) { assert.ok(it.kind && it.undo_by_hand && it.undo_by_hand.length > 10, JSON.stringify(it)) }
+    assert.deepEqual(m.files.map((f) => f.kind), ['owned-file', 'owned-file'], 'the CA files install pushes with a role only get their kind when saved')
+    const e = m.entries[0]
+    assert.deepEqual(backupsIn(b), [e.backup])
+    assert.equal(fs.readFileSync(e.backup, 'utf8'), before, 'the backup is the settings file as it was before install')
+    assert.equal(fs.statSync(e.backup).mode & 0o777, 0o600); assert.equal(fs.statSync(path.dirname(e.backup)).mode & 0o777, 0o700)
+    assert.ok(!fs.readFileSync(path.join(b.dir, 'install-manifest.json'), 'utf8').includes('sk-ant-secret'))
+  } finally { b.done() }
+})
+
+test('install with no settings file creates one without a backup: entry.backup null, no ~/.asight/backup (R2: asight\'s own files are not backed up)', async () => {
+  const b = box()
+  try {
+    await installCollector(base(b))
+    assert.equal(readManifest(b.dir).entries[0].backup, null)
+    assert.deepEqual(backupsIn(b), [])
+  } finally { b.done() }
+})
+
+test('install whose backup cannot be written changes no user file and records failure backup-failed (R2, D38)', async () => {
+  const b = box()
+  try {
+    fs.mkdirSync(path.join(b.home, '.claude')); const before = '{"model": "x"}\n'; fs.writeFileSync(settingsOf(b), before)
+    fs.mkdirSync(path.join(b.home, '.asight'), { recursive: true }); fs.writeFileSync(path.join(b.home, '.asight', 'backup'), 'a file where the backup directory goes')
+    await assert.rejects(installCollector(base(b)), (e) => e.code === 'backup-failed' && e.message.includes(settingsOf(b)))
+    assert.equal(fs.readFileSync(settingsOf(b), 'utf8'), before, 'byte for byte')
+    const f = readEvents(b.dir).filter((e) => e.event === 'failure')
+    assert.deepEqual(f.map((e) => [e.where, e.code]), [['install', 'backup-failed']])
+    assert.ok(f[0].reason.includes(settingsOf(b)))
+    assert.equal(readEvents(b.dir).at(-1).outcome, 'failed')
+  } finally { b.done() }
+})
+
+test('uninstall removes the backup of every entry it undid (zero residue until `off` owns the backups), and keeps the one of an entry it could not undo', async () => {
+  const b = box()
+  try {
+    fs.mkdirSync(path.join(b.home, '.claude')); const before = '{\n  "model": "x"\n}\n'; fs.writeFileSync(settingsOf(b), before)
+    await installCollector(base(b))
+    assert.equal(backupsIn(b).length, 1)
+    const r = await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
+    assert.equal(fs.readFileSync(settingsOf(b), 'utf8'), before)
+    assert.deepEqual(backupsIn(b), [], 'the verified restore drops its backup')
+    assert.ok(!fs.existsSync(path.join(b.home, '.asight', 'backup')), 'and the empty directory goes with it')
+    assert.deepEqual(r.dropped_backups.length, 1)
+    // an entry that cannot be undone (the file is no longer JSON) keeps its backup, and the kept manifest still names it
+    await installCollector(base(b))
+    const kept = readManifest(b.dir).entries[0].backup
+    fs.writeFileSync(settingsOf(b), 'not json any more')
+    const r2 = await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
+    assert.equal(r2.left.length, 1)
+    assert.deepEqual(backupsIn(b), [kept], 'the backup of the original is the only copy of what the user had')
+    assert.equal(readManifest(b.dir).entries[0].backup, kept)
+  } finally { b.done() }
+})
+
 test('a manifest of a version this build does not read stops install and uninstall before anything is touched (R3)', async () => {
   const b = box()
   try {

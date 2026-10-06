@@ -63,13 +63,13 @@ test('R3: the manifest written by the journal is version 2 and every item, entri
   writeOwnedFile({ dir, manifest: m, harness: 'codex', role: 'bundle', file: path.join(dir, 'ca', 'combined-codex.pem'), data: 'PEM\n', now: T })
   m.files.push({ path: path.join(dir, 'ca', 'ca.key'), role: 'ca-key' }) // what install.mjs pushes for the CA, with nothing else
   saveManifest(dir, m)
-  const back = readManifest(dir)
-  assert.equal(JSON.parse(fs.readFileSync(manifestPath(dir), 'utf8')).version, 2)
-  assert.ok(!('upgraded_from' in JSON.parse(fs.readFileSync(manifestPath(dir), 'utf8'))), 'a read-time fact is not saved')
+  const back = JSON.parse(fs.readFileSync(manifestPath(dir), 'utf8')) // the file itself: readManifest would fill in what is missing
+  assert.equal(back.version, 2)
+  assert.ok(!('upgraded_from' in back), 'a read-time fact is not saved')
   assert.deepEqual(back.entries.map((e) => e.kind), ['json-key', 'text', 'text'])
   assert.equal(back.files.length, 2)
   for (const it of [...back.entries, ...back.files]) { assert.ok(KNOWN_KINDS.includes(it.kind), `${it.path}: ${it.kind}`); assert.ok(it.undo_by_hand.length > 10, it.path) }
-  assert.deepEqual(unknownItems(back), [])
+  assert.deepEqual(unknownItems(readManifest(dir)), [])
   assert.equal(fs.statSync(manifestPath(dir)).mode & 0o777, 0o600)
 })
 

@@ -9,7 +9,9 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { writeBackup, dropBackup, backupsOf, orphanBackups, backupName } from '../../src/off/backup.mjs'
 import { backupDir } from '../../src/off/paths.mjs'
-import { newManifest } from '../../src/off/manifest.mjs'
+import { newManifest, readManifest, manifestPath } from '../../src/off/manifest.mjs'
+import { applyJsonKey, applyTextEntry } from '../../src/collector/core/trust/journal.mjs'
+import { sha256 } from '../../src/off/fsutil.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex')
@@ -21,6 +23,9 @@ function box() {
 }
 const put = (file, text, m = 0o644) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text, { mode: m }); return file }
 const T = new Date('2026-10-07T01:02:03.004Z')
+const K = ['env', 'NODE_EXTRA_CA_CERTS']
+const USER_JSON = '{\n  "env": {\n    "API_KEY": "sk-secret-123"\n  }\n}\n'
+const BLOCK = { format: 'dotenv-block', vars: { SSL_CERT_FILE: '/h/.asight/collector/ca/combined-codex.pem' } }
 
 test('R2: one backup per change, 0700/0600, named by path hash + UTC time, never overwritten', () => {
   const { home } = box(); const f = put(path.join(home, '.codex', '.env'), 'OPENAI_API_KEY=sk-1\n')
@@ -92,6 +97,107 @@ test('R2: the backup is durable before it is reported (file and directory are fs
   assert.ok(ops.some((o) => o[0] === 'fsync' && o[1] === backupDir(home)), 'the directory is fsynced, so the name survives a crash')
 })
 
+test('R2: a backup that cannot be written leaves the user file byte for byte and says backup-failed (text and JSON entries)', () => {
+  for (const kind of ['text', 'json']) {
+    const { home, dir } = box()
+    const f = kind === 'text' ? put(path.join(home, '.codex', '.env'), 'OPENAI_API_KEY=sk-1\nFOO=bar\n', 0o640) : put(path.join(home, '.claude', 'settings.json'), USER_JSON, 0o640)
+    const before = fs.readFileSync(f); const st = fs.statSync(f)
+    put(backupDir(home), 'this is a file where the backup directory should be') // mkdir fails: EEXIST / ENOTDIR
+    const m = newManifest()
+    const run = () => (kind === 'text'
+      ? applyTextEntry({ home, dir, manifest: m, harness: 'codex', file: f, edit: BLOCK })
+      : applyJsonKey({ home, dir, manifest: m, harness: 'claude-code', file: f, keys: K, value: '/h/.asight/collector/ca/asight-ca.pem' }))
+    assert.throws(run, (e) => e.code === 'backup-failed' && e.message.includes(f) && /not (changed|touched)/.test(e.message), kind)
+    assert.deepEqual(fs.readFileSync(f), before, `${kind}: the user file is byte for byte`)
+    assert.equal(fs.statSync(f).mtimeMs, st.mtimeMs, `${kind}: and was not even rewritten`)
+    assert.equal(mode(f), 0o640)
+    assert.deepEqual(m.entries, [], `${kind}: no entry was recorded for a change that did not happen`)
+    assert.equal(readManifest(dir), null, `${kind}: not even the intent was saved`)
+    assert.deepEqual(fs.readdirSync(path.dirname(f)).filter((n) => n.includes('.asight-tmp-')), [], `${kind}: no temp file left`)
+  }
+})
+
+test('R2: a write that fails half-way (disk full) removes the partial backup, leaves the user file, and is backup-failed', () => {
+  const { home, dir } = box(); const f = put(path.join(home, '.claude', 'settings.json'), USER_JSON)
+  const before = fs.readFileSync(f)
+  let spyOn = true; const fdPath = new Map()
+  const spy = {
+    ...fs,
+    openSync: (p, ...a) => { const fd = fs.openSync(p, ...a); fdPath.set(fd, p); return fd },
+    writeSync: (fd, ...a) => { if (spyOn && String(fdPath.get(fd)).startsWith(backupDir(home) + path.sep)) throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' }); return fs.writeSync(fd, ...a) },
+  }
+  assert.throws(() => applyJsonKey({ home, dir, manifest: newManifest(), harness: 'claude-code', file: f, keys: K, value: '/x.pem', fs: spy }), (e) => e.code === 'backup-failed' && /ENOSPC|no space/.test(e.message))
+  spyOn = false
+  assert.deepEqual(fs.readFileSync(f), before)
+  assert.deepEqual(fs.existsSync(backupDir(home)) ? fs.readdirSync(backupDir(home)) : [], [], 'no half-written backup is left to be mistaken for a good one')
+})
+
+test('R2: an entry of an existing file carries its backup (the bytes before the change), kind, undo_by_hand and pre_sha256; the manifest holds no contents', () => {
+  const { home, dir } = box(); const f = put(path.join(home, '.claude', 'settings.json'), USER_JSON, 0o640)
+  const e = applyJsonKey({ home, dir, manifest: newManifest(), harness: 'claude-code', file: f, keys: K, value: '/h/.asight/collector/ca/asight-ca.pem', now: T })
+  assert.equal(e.kind, 'json-key')
+  assert.equal(e.backup, path.join(backupDir(home), backupName(f, T)))
+  assert.equal(fs.readFileSync(e.backup, 'utf8'), USER_JSON, 'the backup is the file as it was before the change')
+  assert.equal(sha256(fs.readFileSync(e.backup)), e.pre_sha256)
+  assert.equal(mode(e.backup), 0o600)
+  assert.match(e.undo_by_hand, /settings\.json/); assert.ok(e.undo_by_hand.length > 10)
+  const saved = fs.readFileSync(manifestPath(dir), 'utf8')
+  assert.ok(!saved.includes('sk-secret-123'), 'the manifest names the backup; it does not hold the file')
+  assert.equal(readManifest(dir).entries[0].backup, e.backup)
+
+  const env = put(path.join(home, '.codex', '.env'), 'OPENAI_API_KEY=sk-1\n')
+  const t = applyTextEntry({ home, dir, manifest: newManifest(), harness: 'codex', file: env, edit: BLOCK, now: T })
+  assert.equal(t.kind, 'text')
+  assert.equal(fs.readFileSync(t.backup, 'utf8'), 'OPENAI_API_KEY=sk-1\n')
+  assert.equal(sha256(fs.readFileSync(t.backup)), t.pre_sha256)
+  assert.ok(!fs.readFileSync(manifestPath(dir), 'utf8').includes('sk-1'))
+})
+
+test('R2: a file asight creates is not backed up: backup null, existed_before false, and no backup directory appears', () => {
+  const { home, dir } = box()
+  const e = applyJsonKey({ home, dir, manifest: newManifest(), harness: 'claude-code', file: path.join(home, '.claude', 'settings.json'), keys: K, value: '/x.pem', now: T })
+  assert.deepEqual([e.existed_before, e.backup], [false, null])
+  assert.ok(e.undo_by_hand.length > 10, 'still one sentence on how to take it out by hand')
+  const t = applyTextEntry({ home, dir, manifest: newManifest(), harness: 'codex', file: path.join(home, '.codex', '.env'), edit: BLOCK, now: T })
+  assert.deepEqual([t.existed_before, t.backup], [false, null])
+  assert.ok(!fs.existsSync(backupDir(home)))
+})
+
+test('R2: a change that changes nothing (the key already holds asight\'s value) writes no backup', () => {
+  const { home, dir } = box(); const f = put(path.join(home, 's.json'), '{"env":{"NODE_EXTRA_CA_CERTS":"/x.pem"}}')
+  assert.equal(applyJsonKey({ home, dir, manifest: newManifest(), harness: 'h', file: f, keys: K, value: '/x.pem' }), null)
+  assert.ok(!fs.existsSync(backupDir(home)))
+})
+
+test('R2: a refused change (not a JSON object, a dangling link) writes no backup and no manifest', () => {
+  const { home, dir } = box(); const f = put(path.join(home, 's.json'), 'not json at all')
+  assert.throws(() => applyJsonKey({ home, dir, manifest: newManifest(), harness: 'h', file: f, keys: K, value: '/x.pem' }))
+  const link = path.join(home, 'dangling'); fs.symlinkSync(path.join(home, 'nowhere'), link)
+  assert.throws(() => applyTextEntry({ home, dir, manifest: newManifest(), harness: 'h', file: link, edit: BLOCK }), /symbolic link to a file that does not exist/)
+  assert.ok(!fs.existsSync(backupDir(home)) && readManifest(dir) === null)
+})
+
+test('R2: each change is its own backup: the second one keeps the first, and the first still holds the original bytes', () => {
+  const { home, dir } = box(); const f = put(path.join(home, 's.json'), USER_JSON)
+  const e1 = applyJsonKey({ home, dir, manifest: newManifest(), harness: 'h', file: f, keys: K, value: '/one.pem', now: T })
+  const after1 = fs.readFileSync(f, 'utf8')
+  const e2 = applyJsonKey({ home, dir, manifest: newManifest(), harness: 'h', file: f, keys: K, value: '/two.pem', now: T })
+  assert.notEqual(e1.backup, e2.backup)
+  assert.equal(fs.readFileSync(e1.backup, 'utf8'), USER_JSON)
+  assert.equal(fs.readFileSync(e2.backup, 'utf8'), after1, 'the second backup is the file as the first change left it')
+  assert.equal(backupsOf({ home, file: f }).length, 2)
+})
+
+test('R2: a symlinked file is backed up under the path the user knows (the link), holding the target\'s bytes', () => {
+  const { home, dir } = box(); const target = put(path.join(home, 'dotfiles', 'settings.json'), USER_JSON)
+  const link = path.join(home, '.claude', 'settings.json'); fs.mkdirSync(path.dirname(link)); fs.symlinkSync(target, link)
+  const e = applyJsonKey({ home, dir, manifest: newManifest(), harness: 'h', file: link, keys: K, value: '/x.pem', now: T })
+  assert.equal(e.real_path, fs.realpathSync(target))
+  assert.deepEqual(backupsOf({ home, file: link }), [e.backup])
+  assert.deepEqual(backupsOf({ home, file: target }), [], 'keyed by the entry\'s path, as the manifest and the receipt name it')
+  assert.equal(fs.readFileSync(e.backup, 'utf8'), USER_JSON)
+})
+
 test('dropBackup removes one backup and says so; a second call is false; it only ever removes what writeBackup makes', () => {
   const { home } = box(); const f = put(path.join(home, 'a'), 'a')
   const p = writeBackup({ home, file: f, data: Buffer.from('a'), now: T })
@@ -126,4 +232,3 @@ test('orphanBackups: every backup no manifest entry or kept_backups row names â€
   assert.deepEqual(orphanBackups({ home, manifest: null }).sort(), [bf, bg, bh].sort(), 'no manifest: nothing says what they belong to')
   assert.deepEqual(orphanBackups({ home: box().home, manifest: m }), [], 'no backup directory, no orphans')
 })
-

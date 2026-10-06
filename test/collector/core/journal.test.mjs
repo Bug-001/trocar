@@ -19,7 +19,7 @@ test('journal: install then undo is byte-identical; the manifest records the 4.6
   try {
     const file = path.join(b.root, '.app', 'settings.json'); fs.mkdirSync(path.dirname(file)); fs.writeFileSync(file, USER, { mode: 0o640 })
     const m = newManifest()
-    const e = applyJsonKey({ dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value })
+    const e = applyJsonKey({ home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value })
     assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).env.CA_FILE, b.value)
     assert.equal(fs.statSync(file).mode & 0o777, 0o640)
     const saved = readManifest(b.dir).entries[0]
@@ -37,7 +37,7 @@ test('journal: a file (and directory) that did not exist is created, then remove
   const b = box()
   try {
     const file = path.join(b.root, '.app', 'settings.json')
-    const e = applyJsonKey({ dir: b.dir, manifest: newManifest(), harness: 'h', file, keys: K, value: b.value })
+    const e = applyJsonKey({ home: b.root, dir: b.dir, manifest: newManifest(), harness: 'h', file, keys: K, value: b.value })
     assert.deepEqual([e.existed_before, e.created_dirs], [false, [path.join(b.root, '.app')]])
     assert.equal(undoEntry(e).result, 'restored')
     assert.ok(!fs.existsSync(path.join(b.root, '.app')))
@@ -48,7 +48,7 @@ test('journal: edited after install → only asight\'s key goes, the user\'s pri
   const b = box()
   try {
     const file = path.join(b.root, 'settings.json'); fs.writeFileSync(file, '{"env":{"CA_FILE":"/etc/corp.pem","B":"2"}}')
-    const e = applyJsonKey({ dir: b.dir, manifest: newManifest(), harness: 'h', file, keys: K, value: b.value })
+    const e = applyJsonKey({ home: b.root, dir: b.dir, manifest: newManifest(), harness: 'h', file, keys: K, value: b.value })
     assert.equal(e.prior_value, '/etc/corp.pem')
     fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('"B":"2"', '"B":"2","C":"user added"'))
     assert.equal(undoEntry(e).result, 'reverted-not-identical')
@@ -60,7 +60,7 @@ test('journal: edited after install with no prior value → the key and the pare
   const b = box()
   try {
     const file = path.join(b.root, 'settings.json'); fs.writeFileSync(file, '{\n  "model": "x"\n}')
-    const e = applyJsonKey({ dir: b.dir, manifest: newManifest(), harness: 'h', file, keys: K, value: b.value })
+    const e = applyJsonKey({ home: b.root, dir: b.dir, manifest: newManifest(), harness: 'h', file, keys: K, value: b.value })
     fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('"model": "x"', '"model": "y"'))
     assert.equal(undoEntry(e).result, 'reverted-not-identical')
     assert.equal(fs.readFileSync(file, 'utf8'), '{\n  "model": "y"\n}')
@@ -71,7 +71,7 @@ test('journal: the user changed asight\'s value → left alone; unparsable → l
   const b = box()
   try {
     const file = path.join(b.root, 'settings.json'); fs.writeFileSync(file, '{}')
-    const e = applyJsonKey({ dir: b.dir, manifest: newManifest(), harness: 'h', file, keys: K, value: b.value })
+    const e = applyJsonKey({ home: b.root, dir: b.dir, manifest: newManifest(), harness: 'h', file, keys: K, value: b.value })
     fs.writeFileSync(file, '{"env":{"CA_FILE":"/mine.pem"}}')
     assert.equal(undoEntry(e).result, 'left-user-value')
     fs.writeFileSync(file, '{ broken')
@@ -84,7 +84,7 @@ test('journal: a crash after the intent (no post_sha256) is still undone; a cras
   const b = box()
   try {
     const file = path.join(b.root, 'settings.json'); fs.writeFileSync(file, USER)
-    const e = applyJsonKey({ dir: b.dir, manifest: newManifest(), harness: 'h', file, keys: K, value: b.value })
+    const e = applyJsonKey({ home: b.root, dir: b.dir, manifest: newManifest(), harness: 'h', file, keys: K, value: b.value })
     const intentOnly = { ...e, post_sha256: null }
     assert.equal(undoEntry(intentOnly).result, 'restored')
     assert.equal(fs.readFileSync(file, 'utf8'), USER)
@@ -105,7 +105,7 @@ test('journal: the intent is on disk before the user file changes; owned files a
       fsyncSync: (fd) => { ops.push(['fsync', fdPath.get(fd)]); return fs.fsyncSync(fd) },
       renameSync: (from, to) => { ops.push(['rename', from, to]); if (to === file) assert.equal(readManifest(b.dir).entries.length, 1, 'intent written first'); return fs.renameSync(from, to) },
     }
-    applyJsonKey({ dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value, fs: spy })
+    applyJsonKey({ home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value, fs: spy })
     const at = (pred) => ops.findIndex(pred)
     const intentRename = at((o) => o[0] === 'rename' && o[2] === manifestPath(b.dir))
     const intentFsync = at((o) => o[0] === 'fsync' && o[1] === ops[intentRename][1])
@@ -119,7 +119,7 @@ test('journal: the intent is on disk before the user file changes; owned files a
     writeOwnedFile({ dir: b.dir, manifest: m, role: 'trust-file', file: own, data: 'PEM\n', sources: ['/corp/ca.pem'], fs: spy2 })
     assert.equal(fs.statSync(own).mode & 0o777, 0o600)
     assert.deepEqual(readManifest(b.dir).files[0].sources, ['/corp/ca.pem'], 'the merged user files are named (paths only)')
-    assert.equal(applyJsonKey({ dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value }), null, 'already ours: nothing new to journal')
+    assert.equal(applyJsonKey({ home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value }), null, 'already ours: nothing new to journal')
   } finally { b.done() }
 })
 
@@ -127,7 +127,7 @@ test('journal: a file asight created that the user then edited is kept with only
   const b = box()
   try {
     const file = path.join(b.root, '.app', 'settings.json')
-    const e = applyJsonKey({ dir: b.dir, manifest: newManifest(), harness: 'h', file, keys: K, value: b.value })
+    const e = applyJsonKey({ home: b.root, dir: b.dir, manifest: newManifest(), harness: 'h', file, keys: K, value: b.value })
     assert.equal(e.existed_before, false)
     const doc = JSON.parse(fs.readFileSync(file, 'utf8')); doc.model = 'mine'; fs.writeFileSync(file, JSON.stringify(doc, null, 2))
     const r = undoEntry(e)
@@ -141,7 +141,7 @@ test('journal: a symlinked settings file is edited at its target; the link stays
   try {
     const target = path.join(b.root, 'dotfiles', 'claude-settings.json'); fs.mkdirSync(path.dirname(target)); fs.writeFileSync(target, USER, { mode: 0o640 })
     const link = path.join(b.root, '.app', 'settings.json'); fs.mkdirSync(path.dirname(link)); fs.symlinkSync(target, link)
-    const e = applyJsonKey({ dir: b.dir, manifest: newManifest(), harness: 'h', file: link, keys: K, value: b.value })
+    const e = applyJsonKey({ home: b.root, dir: b.dir, manifest: newManifest(), harness: 'h', file: link, keys: K, value: b.value })
     assert.deepEqual([e.path, e.real_path, e.existed_before, e.mode], [link, fs.realpathSync(target), true, 0o640])
     assert.ok(fs.lstatSync(link).isSymbolicLink(), 'still a link')
     assert.equal(JSON.parse(fs.readFileSync(target, 'utf8')).env.CA_FILE, b.value, 'the key is in the target')
@@ -151,7 +151,7 @@ test('journal: a symlinked settings file is edited at its target; the link stays
     assert.ok(fs.lstatSync(link).isSymbolicLink())
     const dangling = path.join(b.root, '.other', 'settings.json'); fs.mkdirSync(path.dirname(dangling)); fs.symlinkSync(path.join(b.root, 'nowhere.json'), dangling)
     const m = newManifest()
-    assert.throws(() => applyJsonKey({ dir: b.dir, manifest: m, harness: 'h', file: dangling, keys: K, value: b.value }), /symbolic link to a file that does not exist/)
+    assert.throws(() => applyJsonKey({ home: b.root, dir: b.dir, manifest: m, harness: 'h', file: dangling, keys: K, value: b.value }), /symbolic link to a file that does not exist/)
     assert.deepEqual([m.entries.length, fs.lstatSync(dangling).isSymbolicLink(), fs.existsSync(path.join(b.root, 'nowhere.json'))], [0, true, false], 'nothing journaled, link untouched, nothing created')
   } finally { b.done() }
 })
@@ -161,7 +161,7 @@ test('journal: installed through a link that is now a regular file, gone, or a l
   try {
     const target = path.join(b.root, 'dotfiles', 'claude-settings.json'); fs.mkdirSync(path.dirname(target)); fs.writeFileSync(target, USER)
     const link = path.join(b.root, '.app', 'settings.json'); fs.mkdirSync(path.dirname(link)); fs.symlinkSync(target, link)
-    const e = applyJsonKey({ dir: b.dir, manifest: newManifest(), harness: 'h', file: link, keys: K, value: b.value })
+    const e = applyJsonKey({ home: b.root, dir: b.dir, manifest: newManifest(), harness: 'h', file: link, keys: K, value: b.value })
     const withKey = fs.readFileSync(target, 'utf8')
     fs.rmSync(link); fs.writeFileSync(link, '{"mine":1}') // now a regular file
     let r = undoEntry(e)
@@ -183,7 +183,7 @@ test('journal: a crash between the intent and the write leaves no residue after 
   const b = box()
   try {
     const file = path.join(b.root, '.app', 'sub', 'settings.json')
-    const e = applyJsonKey({ dir: b.dir, manifest: newManifest(), harness: 'h', file, keys: K, value: b.value })
+    const e = applyJsonKey({ home: b.root, dir: b.dir, manifest: newManifest(), harness: 'h', file, keys: K, value: b.value })
     fs.rmSync(file) // as if the crash came after mkdir but before the rename …
     fs.writeFileSync(`${file}.asight-tmp-4242`, '{"half":') // … with the temp file written
     const r = undoEntry({ ...e, post_sha256: null })
@@ -198,7 +198,7 @@ test('journal: undo never writes or deletes over a path that is a symbolic link 
   try {
     // installed on a regular file, which the user then turned into a dotfiles link
     const file = path.join(b.root, '.app', 'settings.json'); fs.mkdirSync(path.dirname(file)); fs.writeFileSync(file, USER)
-    const e = applyJsonKey({ dir: b.dir, manifest: newManifest(), harness: 'h', file, keys: K, value: b.value })
+    const e = applyJsonKey({ home: b.root, dir: b.dir, manifest: newManifest(), harness: 'h', file, keys: K, value: b.value })
     const dot = path.join(b.root, 'dotfiles', 'settings.json'); fs.mkdirSync(path.dirname(dot)); fs.copyFileSync(file, dot)
     fs.rmSync(file); fs.symlinkSync(dot, file)
     const r = undoEntry(e)
@@ -210,7 +210,7 @@ test('journal: undo never writes or deletes over a path that is a symbolic link 
     const t = path.join(b.root, 'dotfiles', 't.json'); fs.writeFileSync(t, USER)
     const u = path.join(b.root, 'dotfiles', 'u.json'); fs.writeFileSync(u, USER)
     const link = path.join(b.root, '.b', 'settings.json'); fs.mkdirSync(path.dirname(link)); fs.symlinkSync(t, link)
-    const e2 = applyJsonKey({ dir: b.dir, manifest: newManifest(), harness: 'h', file: link, keys: K, value: b.value })
+    const e2 = applyJsonKey({ home: b.root, dir: b.dir, manifest: newManifest(), harness: 'h', file: link, keys: K, value: b.value })
     fs.rmSync(link); fs.symlinkSync(u, link)
     assert.equal(undoEntry(e2).result, 'left-link')
     assert.deepEqual([fs.readFileSync(u, 'utf8'), fs.lstatSync(link).isSymbolicLink()], [USER, true])

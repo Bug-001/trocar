@@ -2,12 +2,13 @@
 // 「信任入口的日志与撤销」, acceptance T11). One JSON file, ~/.asight/collector/install-manifest.json (0600):
 //   dirs     directories asight created (removed at the end of uninstall if empty)
 //   files    files asight owns (CA, extra trust files) — deleted on uninstall
-//   entries  every user file asight changed: {path, existed_before, mode, pre_sha256, post_sha256, ops,
-//            prior_value, installed_at, created_dirs} + per kind: `json-key` (no kind on older manifests) {keys,
-//            value, existing_depth}; `text` {format, vars | line} (text-edit.mjs: a dotenv block, a shell-rc line,
-//            a YAML list row). ops are splices {offset, removed, inserted}; `removed` is only ever the value asight
-//            replaced (a path, or a YAML `[]`, never a secret). The user's file is NEVER copied here (Codex /
-//            Hermes .env files hold API keys).
+//   entries  every user file asight changed: {kind, harness, path, existed_before, mode, pre_sha256, post_sha256, backup,
+//            undo_by_hand, ops, prior_value, installed_at, created_dirs} + per kind: `json-key` (no kind on version 1
+//            manifests) {keys, value, existing_depth}; `text` {format, vars | line} (text-edit.mjs: a dotenv block, a
+//            shell-rc line, a YAML list row). ops are splices {offset, removed, inserted}; `removed` is only ever the value
+//            asight replaced (a path, or a YAML `[]`, never a secret). The user's file is NEVER copied INTO the manifest
+//            (Codex / Hermes .env files hold API keys): the copy made before the change is a file in ~/.asight/backup/
+//            (src/off/backup.mjs, 1.6 R2) and `backup` only names it.
 // Write-ahead: the intent (no post_sha256) is fsynced before the user's file is touched, so an install that
 // crashed half-way is still found and undone. No whole-file snapshot rollback, ever (D28).
 // The undo half (undoEntry, removeOwnedFile, describeEntry) and the file primitives moved to src/off/ (D39⑤, 0.1 §2: `asight off`
@@ -18,10 +19,24 @@ import { setKey } from '../../../off/json-text.mjs'
 import { dotenvBlock, insertLine, BLOCK_BEGIN } from '../../../off/text-edit.mjs'
 import { sha256, readOrNull, writeDurable, missingDirs, editTarget } from '../../../off/fsutil.mjs'
 import { saveManifest, undoByHand } from '../../../off/manifest.mjs'
+import { writeBackup } from '../../../off/backup.mjs'
+import { backupDir } from '../../../off/paths.mjs'
+import { CODE_OFF } from '../../../off/names.mjs'
 
 export { sha256, writeDurable, sweepTemps, missingDirs, removeEmptyDirs, editTarget } from '../../../off/fsutil.mjs'
 export { undoEntry, removeOwnedFile, describeEntry } from '../../../off/journal.mjs'
 export { MANIFEST, manifestPath, newManifest, readManifest, saveManifest } from '../../../off/manifest.mjs'
+
+// 1.6 R2: a user's file is saved to ~/.asight/backup/ before the first byte of it changes; no backup, no change. `before` null = asight
+// creates the file: nothing to save (existed_before:false, backup:null). The throw is `backup-failed`, raised before the manifest or the
+// file is touched.
+function backupFirst({ home, file, before, now, fs }) {
+  if (before == null) return null
+  try { return writeBackup({ home, file, data: before, now, fs }) } catch (e) {
+    throw Object.assign(new Error(`${file} was not changed: asight saves a copy of a file before it changes it (1.6 R2) and the copy could not be written to ${backupDir(home)} (${e.code ? `${e.code}: ` : ''}${(e && e.message) || e}); make that directory writable, then install again`), { code: CODE_OFF.backupFailed, path: file, errno: e && e.code })
+  }
+}
+const needHome = (what, home) => { if (!home) throw new TypeError(`${what}: home is required (backups go to <home>/.asight/backup, 1.6 R2)`) }
 
 // A file asight owns (a trust file of certificate blocks, a trust plugin, a launch shim): listed before it is written,
 // with the directories its write creates. `sources` names the user files a trust file carries certificates from
@@ -49,15 +64,17 @@ export function previewJsonKey({ file, keys, value, fs = nodeFs }) {
 }
 
 // A symlinked file is edited at its target; the entry records both (`path` the link, `real_path` the target).
-export function applyJsonKey({ dir, manifest, harness, file, keys, value, now = new Date(), fs = nodeFs }) {
+export function applyJsonKey({ dir, manifest, harness, file, keys, value, home, now = new Date(), fs = nodeFs }) {
+  needHome('applyJsonKey', home)
   const real = editTarget(file, fs)
   const before = readOrNull(fs, real)
   const res = setKey(before == null ? null : before.toString('utf8'), keys, value) // parse-checked before any write
   if (res.prior === value) return null
+  const backup = backupFirst({ home, file, before, now, fs }) // keyed by the path the user knows (the link, for a symlinked file), holding the target's bytes
   const entry = {
     kind: 'json-key', harness, path: file, ...(real !== file ? { real_path: real } : {}), keys, value,
     existed_before: before != null, mode: before != null ? fs.statSync(real).mode & 0o777 : 0o600,
-    pre_sha256: sha256(before), post_sha256: null, ops: res.ops, prior_value: res.prior,
+    pre_sha256: sha256(before), post_sha256: null, backup, ops: res.ops, prior_value: res.prior,
     existing_depth: res.existingDepth, created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(),
   }
   entry.undo_by_hand = undoByHand(entry)
@@ -89,15 +106,17 @@ export function previewTextEntry({ file, edit, fs = nodeFs }) {
   editText(file, before == null ? null : before.toString('utf8'), edit)
   return { path: file, ...(real !== file ? { real_path: real } : {}), changes: true }
 }
-export function applyTextEntry({ dir, manifest, harness, file, edit, now = new Date(), fs = nodeFs }) {
+export function applyTextEntry({ dir, manifest, harness, file, edit, home, now = new Date(), fs = nodeFs }) {
+  needHome('applyTextEntry', home)
   const real = editTarget(file, fs)
   const before = readOrNull(fs, real)
   const res = editText(file, before == null ? null : before.toString('utf8'), edit)
+  const backup = backupFirst({ home, file, before, now, fs })
   const entry = {
     kind: 'text', harness, path: file, ...(real !== file ? { real_path: real } : {}), format: edit.format,
     ...(edit.vars ? { vars: edit.vars } : { line: edit.line }),
     existed_before: before != null, mode: before != null ? fs.statSync(real).mode & 0o777 : (edit.mode || 0o600),
-    pre_sha256: sha256(before), post_sha256: null, ops: res.ops, prior_value: res.prior,
+    pre_sha256: sha256(before), post_sha256: null, backup, ops: res.ops, prior_value: res.prior,
     created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(),
   }
   entry.undo_by_hand = undoByHand(entry)
