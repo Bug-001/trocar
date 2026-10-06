@@ -1,10 +1,11 @@
 // test/raw/helpers.mjs — synthetic shards for the D35 sealer tests (no real capture is ever read).
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { openSealed } from '../../src/raw/reader.mjs';
+import { tmpDir as removedAtExit } from '../helpers/tmp.mjs';
 
-export const tmpDir = (p = 'asight-seal-') => fs.mkdtempSync(path.join(os.tmpdir(), p));
+// Gone when the test process ends, pass or fail (test/helpers/tmp.mjs). Every raw test and the HOME sandbox below use it.
+export const tmpDir = (p = 'asight-seal-') => removedAtExit(p);
 
 // Backstop: anything that falls back to a default under ~/.asight (the raw journal) lands in a sandbox,
 // never in the real home (tests never touch ~/.asight). Each test file runs in its own process.

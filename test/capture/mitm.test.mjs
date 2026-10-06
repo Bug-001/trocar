@@ -4,18 +4,18 @@ import net from 'node:net'
 import tls from 'node:tls'
 import https from 'node:https'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { once } from 'node:events'
 import { createMitmProxy } from '../../src/capture/mitm.mjs'
+import { tmpDir } from '../helpers/tmp.mjs'
 
 // Ephemeral CA + leaf for api.anthropic.com (the atrace-mkca recipe; import-only, throwaway dir).
 // This is the offline reproduction of the CA maker: it NEVER touches the login keychain
 // and NEVER sets a system trust flag (RFC 4.1 line 53 / §采集安全#3). The §验收5 "CA 无系统信任"
 // keychain assertion is deferred to src/capture/onboard.mjs (macOS-host-specific sub-unit).
 function makeCerts() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-ca-'))
+  const dir = tmpDir('asight-ca-')
   const P = (f) => path.join(dir, f)
   execFileSync('openssl', ['genrsa', '-out', P('ca.key'), '2048'], { stdio: 'ignore' })
   execFileSync('openssl', ['req', '-x509', '-new', '-nodes', '-key', P('ca.key'), '-sha256', '-days', '3', '-subj', '/CN=asight test CA', '-out', P('ca.crt')], { stdio: 'ignore' })

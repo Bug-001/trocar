@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { qNoLeak, runSelfTest } from '../../src/capture/selftest.mjs';
+import { tmpDir } from '../helpers/tmp.mjs';
 
 // THE ONE SECURITY RED LINE MUST BE ABLE TO GO RED.
 //
@@ -48,7 +48,7 @@ function leakySource() {
   return leakyRoot();
 }
 function leakyRoot() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-leak-'));
+  const dir = tmpDir('asight-leak-');
   const rec = {
     id: 'req_1', is_llm_call: true, endpoint: 'https://api.anthropic.com/v1/messages',
     ts_request: '2026-01-01T00:00:00.000Z',
@@ -130,7 +130,7 @@ test('END TO END: a bare doctor on a CLEAN multi-root capture examines records a
   // defence-in-depth, but it masks WHICH defect is present. So pin the other direction: on a healthy
   // multi-root capture, doctor must actually READ something and exit 0. A doctor that cannot resolve
   // an array source reads zero records, hard-fails, and fails this test.
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-home-ok-'));
+  const home = tmpDir('asight-home-ok-');
   try {
     const newHome = path.join(home, '.asight');
     const legacy = path.join(home, '.atrace', 'asight');
@@ -175,7 +175,7 @@ test('END TO END: a BARE `asight doctor` reads the D27 multi-root default', () =
   // of them. An earlier version of this test passed `--source a --source b`, which does NOT
   // reproduce it — `flag()` returns a single value, so that path never built an array and the test
   // stayed green with the fix reverted. Found by mutation.
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-home-'));
+  const home = tmpDir('asight-home-');
   try {
     const newHome = path.join(home, '.asight');
     const legacy = path.join(home, '.atrace', 'asight');

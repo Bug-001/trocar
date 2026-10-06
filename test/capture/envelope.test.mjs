@@ -1,10 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { buildEnvelope, isoStamp, isLlmCall, HOP_BY_HOP, createEnvelopeWriter } from '../../src/capture/envelope.mjs'
 import { ccAdapter } from '../../src/adapters/cc.mjs'
+import { tmpDir } from '../helpers/tmp.mjs'
 
 const baseArgs = {
   id: 'req_00001',
@@ -108,7 +108,7 @@ test('envelope PARITY: same interaction via two sources differs ONLY in capture'
 })
 
 test('createEnvelopeWriter appends one flat NDJSON line per envelope (D20, no per-session split)', () => {
-  const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'asight-w-')), 'trace.ndjson')
+  const f = path.join(tmpDir('asight-w-'), 'trace.ndjson')
   const w = createEnvelopeWriter(f)
   w.write(buildEnvelope({ ...baseArgs, reqBody: Buffer.from('{}'), capture: 'mitm' }))
   w.write(buildEnvelope({ ...baseArgs, id: 'req_00002', reqBody: Buffer.from('{}'), capture: 'mitm' }))

@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { monitoringStatus, monitoringOn, monitoringOff } from '../../src/capture/control.mjs';
+import { tmpDir } from '../helpers/tmp.mjs';
 
 // D26 — the monitoring on/off/status logic maps DIRECTLY onto the onboard commands + user-level
 // autostart. All side effects are injected so this never installs a real CA or LaunchAgent.
@@ -23,7 +23,7 @@ function fakes() {
   return { log, onboard, autostart };
 }
 function tmpSettings(env) {
-  const p = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'asight-ctl-')), 'settings.json');
+  const p = path.join(tmpDir('asight-ctl-'), 'settings.json');
   fs.writeFileSync(p, JSON.stringify(env ? { env } : {}));
   return p;
 }

@@ -2,7 +2,6 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import tls from 'node:tls'
 import {
@@ -10,12 +9,13 @@ import {
   writeCliSteer, clearCliSteer, atraceOn, atraceOff,
 } from '../../src/capture/onboard.mjs'
 import { CA_CN } from '../../src/capture/trust-store.mjs'
+import { tmpDir } from '../helpers/tmp.mjs'
 
 // D22 landed: onboard is now a REAL cross-platform (macOS + Linux) CA-trust installer.
 // Trust-store mutation is always injected here, so no test ever touches the real keychain /
 // NSS db (必拒 采集安全#3). CA generation runs real OpenSSL into throwaway tmp dirs.
 
-function tmp(prefix) { return fs.mkdtempSync(path.join(os.tmpdir(), prefix)) }
+function tmp(prefix) { return tmpDir(prefix) }
 // Every steer call MUST inject stashPath — the default lives under the real ~/.atrace (B2).
 function steerPaths() {
   const dir = tmp('asight-settings-')
@@ -336,7 +336,7 @@ const keychainRun = ({ certPresent }) => (file, args) => {
 }
 
 test('atraceOn proceeds when the installer fails BECAUSE the CA is already trusted', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-dup-ca-'))
+  const dir = tmpDir('asight-dup-ca-')
   const settingsPath = path.join(dir, 'settings.json')
   try {
     atraceOn({
@@ -351,7 +351,7 @@ test('atraceOn proceeds when the installer fails BECAUSE the CA is already trust
 })
 
 test('atraceOn still aborts when the CA is genuinely NOT trusted', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-no-ca-'))
+  const dir = tmpDir('asight-no-ca-')
   const settingsPath = path.join(dir, 'settings.json')
   try {
     assert.throws(() => atraceOn({

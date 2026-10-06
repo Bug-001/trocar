@@ -6,13 +6,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { getAutostartInstaller } from '../../src/capture/autostart.mjs'
 import { installCaptureAgents } from '../../src/capture/capture-agents.mjs'
 import { monitoringOn, monitoringStatus } from '../../src/capture/control.mjs'
 import { createSteerWatch, uninstallSteer } from '../../src/capture/steer-watch.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
+import { tmpDir } from '../helpers/tmp.mjs'
 
 const inSet = (recs) => { for (const r of recs) assert.deepEqual(checkRecord({ ts: 't', ...r }), [], JSON.stringify(r)) }
 const fakeFs = () => { const files = new Map(); return { files, writeFileSync: (p, c) => files.set(p, c), existsSync: (p) => files.has(p), unlinkSync: (p) => files.delete(p), mkdirSync() {} } }
@@ -29,7 +29,7 @@ test('L-7: launchctl load that throws, or a label not listed after load → {ok:
   // monitoringOn: not ok, and one line through the caller's onEvent
   const events = []
   const onboard = { atraceOn: () => ({ install: { ok: true } }), verifyUserTrustOnly: () => true }
-  const settings = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'asight-lops-')), 'settings.json')
+  const settings = path.join(tmpDir('asight-lops-'), 'settings.json')
   const out = monitoringOn({ onboard, autostart: getAutostartInstaller('darwin', { home: '/Users/x', run: launchctl('load'), fs: fakeFs() }), settingsPath: settings, onEvent: (e) => events.push(e), getenv: null, asightBin: '/a' })
   assert.equal(out.ok, false)
   assert.deepEqual(events.map((e) => [e.where, e.code]), [['autostart', 'autostart-load-failed']])
@@ -40,7 +40,7 @@ test('L-7: launchctl load that throws, or a label not listed after load → {ok:
 })
 
 test('L-8: CA trust is true / false / null + why; NODE_EXTRA_CA_CERTS is reported against the asight CA path; an unparsable settings.json is said', () => {
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-lops-'))
+  const d = tmpDir('asight-lops-')
   try {
     const settings = path.join(d, 'settings.json'); fs.writeFileSync(settings, '{}')
     const autostart = { platform: 'darwin', status: () => ({ installed: false }) }

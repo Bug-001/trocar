@@ -9,12 +9,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { runEtl, rebuildContext } from '../../src/etl/orchestrator.mjs';
 import { readRecords } from '../../src/etl/ingest.mjs';
 import { buildResolver } from '../../src/query/source.mjs';
 import { freshConn } from './helpers.mjs';
+import { tmpDir } from '../helpers/tmp.mjs';
 
 const SID = 'sess-FID';
 const HDRS = { 'x-claude-code-session-id': SID, 'user-agent': 'claude-cli/1.0' };
@@ -49,7 +49,7 @@ const v0 = {
 };
 
 function tmpCapture(records) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-fid-'));
+  const dir = tmpDir('asight-fid-');
   const file = path.join(dir, STREAM);
   fs.writeFileSync(file, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
   return file;
