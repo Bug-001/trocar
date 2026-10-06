@@ -164,14 +164,17 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
   // Decrypt policy (4.6 §解密策略): `auto` = the harness's known API hosts ∪ the base_url / relay hosts its readers
   // found in this process's env and config files ∪ hosts the operator added; `all` = every TLS host of a trusted
   // process. Never for an untrusted or unknown process, never for a host the harness declares not via the trust path.
-  // Those two get the code their connection row carries (RFC 4.6 §记录, D38): `untracked` for a pid the kernel steers
-  // but the table does not hold (exited, dropped by a rescan), `untrusted` with the resolver's reason.
+  // Those get the code their connection row carries (RFC 4.6 §记录, D38): `not-trust-path` with the harness's own reason
+  // for a host it declares not via the trust path, `untracked` for a pid the kernel steers but the table does not hold
+  // (exited, dropped by a rescan), `untrusted` with the resolver's reason (review B-3: the first used to be a bare false,
+  // which the engine wrote as `policy`).
   function policy(meta, host) {
     const row = meta && table.get(meta.pid)
     if (!row) return { not_captured: 'untracked' }
     if (!row.decrypt) return { not_captured: 'untrusted', reason: row.reason ?? null }
     const h = String(host || '').toLowerCase()
-    if (row.bypass.some((b) => hostIs(b.host, h))) return false
+    const declared = row.bypass.find((b) => hostIs(b.host, h))
+    if (declared) return { not_captured: 'not-trust-path', reason: declared.reason }
     if (mode === 'all') return true
     if (extra.has(h)) return true
     return row.hosts.some((k) => hostIs(k, h))

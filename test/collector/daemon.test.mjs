@@ -173,6 +173,28 @@ test('daemon: the same program without the CA is only observed; its direct conne
   } finally { await d.stop(); p.done(); s.done() }
 })
 
+// Review B-4(a) (4.6 子进程与嵌套 agent): "嵌套关系记在 flows/ 的 parent_pid / parent_agent 里" — the engine's rows and the
+// metadata row of a connection that went direct carry them, and status lists them with the agent.
+test('daemon: an agent started by another agent is recorded with parent_pid and parent_agent in flows/ and status (B-4a)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await installCollector({ home: path.join(s.root, 'other-home'), env: {}, osName: 'none', harnesses: [], freePort: async () => 0 })
+  fs.cpSync(path.join(s.root, 'other-home', '.asight'), path.join(s.home, '.asight'), { recursive: true })
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home } })
+  try {
+    p.add(5100, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) })
+    p.add(5101, { ppid: 5100, uid: UID, exe: CC_EXE, argv: ['claude', '-p'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) })
+    await req(s.sock, 'POST', '/on', {})
+    const agents = (await req(s.sock, 'GET', '/status')).agents
+    assert.deepEqual(['5100', '5101'].map((id) => { const a = agents.find((x) => x.pid === Number(id)); return [a.parent_pid, a.parent_agent] }), [[1, null], [5100, 'claude-code']])
+    for (const pid of [5100, 5101]) await clients[0].raw({ op: '__emit', ev: 'flow', pid, dst: { address: '160.79.104.10', port: 443, family: 4 }, ts_ns: pid })
+    const rows = await until(() => { const r = flowsOf(s).filter((x) => x.decision === 'direct'); return r.length === 2 && r })
+    const by = Object.fromEntries(rows.map((r) => [r.pid, r]))
+    assert.deepEqual([by[5100].parent_pid, 'parent_agent' in by[5100]], [1, false], 'an agent nobody launched an agent for: no parent_agent')
+    assert.deepEqual([by[5101].parent_pid, by[5101].parent_agent], [5100, 'claude-code'], 'the nested one says who started it')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
 test('daemon: refuses to start uninstalled; desired state survives a restart; on/off idempotent (S6, S9 unit)', async () => {
   const s = sandbox(); const p = fakeProc()
   try {

@@ -10,6 +10,10 @@ import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
 import { handleFlow } from '../../../src/collector/core/engine/flow.mjs'
 import { createNegativeCache } from '../../../src/collector/core/engine/negcache.mjs'
 import { NOT_CAPTURED, ENGINE_EVENTS, isNotCapturedCode } from '../../../src/collector/core/engine/codes.mjs'
+import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'; import { EventEmitter } from 'node:events'
+import { createRegistry } from '../../../src/collector/core/registry.mjs'
+import { createTrustChecker } from '../../../src/collector/core/trust/confirm.mjs'
+import { createTracker } from '../../../src/collector/core/tracker.mjs'
 
 const upCa = createCa({ commonName: 'upstream test CA' }); const upIssuer = createLeafIssuer(loadCa(upCa))
 const asightCa = createCa(); const issuer = createLeafIssuer(loadCa(asightCa))
@@ -85,6 +89,45 @@ for (const [name, up, opts, drive, [decision, code, reason], more] of cases) {
     assertCriterion(h.flows); assertEvents(h.failures)
   })
 }
+
+// Review B-4(a) (4.6 子进程与嵌套 agent): who started this agent is on every connection row of it, so the board can mark a
+// nested agent; a process nobody launched an agent for has no parent_agent (not null noise), and no engine meta, no field.
+test('a connection row carries parent_pid and parent_agent of the process that started its agent (B-4a)', async () => {
+  const rows = []
+  for (const meta of [{ parentPid: 4100, parentAgent: 'claude-code' }, { parentPid: 1, parentAgent: null }, {}]) {
+    const h = await rig(tlsUp(), { meta, policy: () => false })
+    await tlsTalk(h.port); await h.close()
+    rows.push(h.flows[0])
+  }
+  assert.deepEqual(rows.map((r) => [r.parent_pid ?? null, r.parent_agent ?? null, 'parent_agent' in r]), [[4100, 'claude-code', true], [1, null, false], [null, null, false]])
+})
+
+// Review B-3 (缺接线): the tracker said "false" for a host a harness declares not via the trust path, and the engine wrote
+// `policy` — while every test of the engine stubbed the object form and every test of the tracker asserted the bare false, so
+// both halves were green and the code 4.6 §记录 names was never produced. This one runs the daemon's own wiring: the real
+// tracker's policy() as the engine's policy, one row per host of ONE trusted process.
+test('not_captured: a host the harness declares not via the trust path is not-trust-path with the harness\'s reason; the same process\'s other host outside the policy is policy (tracker → engine, B-3)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-nc-')); const pem = path.join(dir, 'asight.pem'); fs.writeFileSync(pem, asightCa.certPem)
+  try {
+    const redirector = Object.assign(new EventEmitter(), { watch: async () => {}, unwatch: async () => {}, scan: async () => [] })
+    const gamma = { name: 'gamma', runtime: 'node', hosts: ['api.gamma.test'], signatures: { linux: { match: [{ exe: /\/gamma$/ }] } }, trust: { chain: [{ var: 'EXTRA_CA', semantic: 'append' }] },
+      bypass: () => [{ host: 'upstream.test', reason: 'ws-path' }] }
+    const tracker = createTracker({ redirector, registry: createRegistry([gamma]), trust: createTrustChecker({ caCertPem: asightCa.certPem }), home: dir, onError: (e) => { throw e }, alive: () => false })
+    tracker.start()
+    redirector.emit('exec', { os: 'linux', pid: 7, ppid: 1, uid: 1000, exe: '/opt/gamma', argv: ['gamma'], env: new Map([['EXTRA_CA', pem]]), cwd: '/', source: 'exec', startedAt: 0 })
+    await sleep(20)
+    assert.equal(tracker.describe(7).trusted, true, 'a trusted process')
+    const rows = []
+    for (const servername of ['upstream.test', 'other.test']) {
+      const h = await rig(tlsUp(), { meta: { pid: 7, agent: 'gamma' }, policy: (m, host) => tracker.policy(m, host) })
+      await tlsTalk(h.port, { servername }); await h.close()
+      rows.push(...h.flows); assertCriterion(h.flows)
+    }
+    assert.deepEqual(rows.map((r) => [r.decision, r.not_captured, r.reason ?? null]), [['splice', 'not-trust-path', 'ws-path'], ['splice', 'policy', null]])
+    assert.equal(NOT_CAPTURED.expected.includes('not-trust-path'), true, 'an expected code: counted and listed, never ⚠')
+    tracker.stop()
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
 
 test('a CONNECT tunnel row: decision tunnel, the tunnelled decision in inner, reason left for the why (D38)', async () => {
   const origin = tlsUp(); const originPort = await listen(origin)

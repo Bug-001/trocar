@@ -30,6 +30,9 @@ export function handleFlow(client, meta, ctx) {
   const t0 = Date.now()
   const rec = {
     ts: new Date().toISOString(), flow_id: ctx.newFlowId(), pid: meta.pid, agent: meta.agent,
+    // who started this agent (4.6 子进程与嵌套 agent): the board marks a nested agent by parent_agent; parent_pid is whatever
+    // started it, an agent or not (review B-4(a))
+    ...(meta.parentPid != null ? { parent_pid: meta.parentPid } : {}), ...(meta.parentAgent ? { parent_agent: meta.parentAgent } : {}),
     dst: meta.dst, host: null, decision: null, reason: null, bytes_up: 0, bytes_down: 0, duration_ms: 0,
   }
   let resolveFlow

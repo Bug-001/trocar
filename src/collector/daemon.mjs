@@ -266,7 +266,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     redirector.on('heartbeat-error', ({ reason, code }) => failure('heartbeat', coded(Object.assign(new Error(`${reason}; once the last beat is 2 s old the kernel stops steering (connections go direct)`), { code }), 'heartbeat-failed')))
     redirector.on('flow-meta', ({ pid, dst }) => { // a watched but untrusted agent's connection went direct (D31: metadata only)
       const r = tracker.describe(pid)
-      store.flow({ ts: new Date().toISOString(), flow_id: null, pid, agent: r ? r.agent : null, dst, decision: 'direct', not_captured: r ? 'untrusted' : 'untracked', reason: r ? `untrusted: ${r.reason}` : 'untracked' }) // D-11
+      store.flow({ ts: new Date().toISOString(), flow_id: null, pid, agent: r ? r.agent : null, ...(r && r.ppid != null ? { parent_pid: r.ppid } : {}), ...(r && r.parentAgent ? { parent_agent: r.parentAgent } : {}), dst, decision: 'direct', not_captured: r ? 'untrusted' : 'untracked', reason: r ? `untrusted: ${r.reason}` : 'untracked' }) // D-11
     })
     redirector.on('facts-error', ({ pid, code, reason }) => failure('tracker', Object.assign(new Error(reason), { code: 'exe-unreadable' }), { pid, errno: code || null })) // D-30
 
@@ -335,7 +335,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       // every running-but-untrusted agent says why and what to do (4.6 §确认信任, R4); hosts it never decrypts say why too
       const agents = tracker.agents().map((r) => {
         const d = redirector.directCount(r.pid) // {count, error}: unknown is said, never 0 (D-17)
-        return { pid: r.pid, agent: r.agent, exe: r.exe, trusted: r.trusted, reason: r.reason, ...(r.trusted ? {} : { hint: hintFor(r.agent, r.reason) }), trust_var: r.trustVar, trust_via: r.trustVia, decrypt: r.decrypt, hosts: r.hosts, not_via_trust_path: r.bypass, parent_agent: r.parentAgent ?? null, source: r.source, direct: d.count, ...(d.error ? { direct_error: d.error } : {}) }
+        return { pid: r.pid, agent: r.agent, exe: r.exe, trusted: r.trusted, reason: r.reason, ...(r.trusted ? {} : { hint: hintFor(r.agent, r.reason) }), trust_var: r.trustVar, trust_via: r.trustVia, decrypt: r.decrypt, hosts: r.hosts, not_via_trust_path: r.bypass, parent_pid: r.ppid ?? null, parent_agent: r.parentAgent ?? null, source: r.source, direct: d.count, ...(d.error ? { direct_error: d.error } : {}) }
       })
       const { pid, proto, build, unparsable = 0, timeouts = 0 } = redirector.helperInfo()
       return {
