@@ -31,3 +31,33 @@ export function reqIncompleteOf(rec) {
   if (partial) parts.push(PARTIAL[partial] || `not received whole (req_partial: ${partial})`);
   return { truncated, storedBytes, partial, text: `request body ${parts.join('; ')} — the stored bytes are only part of the request` };
 }
+
+// WebSocket envelopes (RFC 4.6 §传输与帧级记录, D37; D38): their labels, each saying one thing (4.6 「各说一件事」):
+//   partial + partial_reasons     earlier messages on this connection are missing — context, not this call's bytes
+//   ws_truncated / {omitted_bytes} messages past the capture cap kept only their size — this call's bytes are not all here
+//   {b64, decode_error}           a message that could not be decompressed: its raw bytes are kept, its text is not
+//   {raw_chars, verbatim:false}   a non-LLM endpoint's client message: only its size (non-verbatim)
+// → null for an HTTP envelope or a complete, verbatim WebSocket call; else the counts and one sentence.
+export function wsIncompleteOf(rec) {
+  if (!rec || rec.transport !== 'ws') return null;
+  const resp = rec.resp || {};
+  const msgs = [rec.req_body, ...(Array.isArray(rec.req_extra_messages) ? rec.req_extra_messages : []),
+    ...((resp.messages || (resp.partial && resp.partial.messages)) || [])];
+  let omitted = 0, undecoded = 0, nonVerbatim = 0;
+  for (const m of msgs) {
+    if (!m || typeof m !== 'object') continue;
+    if (m.omitted_bytes != null) omitted++;
+    if (m.decode_error) undecoded++;
+    if (m.verbatim === false) nonVerbatim++;
+  }
+  const partial = rec.partial === true;
+  const partialReasons = Array.isArray(rec.partial_reasons) ? rec.partial_reasons.map(String) : [];
+  const truncated = rec.ws_truncated === true || omitted > 0;
+  if (!partial && !truncated && !undecoded && !nonVerbatim) return null;
+  const parts = [];
+  if (partial) parts.push(`earlier messages on this connection are missing (${partialReasons.join(', ') || 'reason not recorded'}): the context this call relied on is incomplete, its own bytes are whole`);
+  if (truncated) parts.push(`${omitted || 'some'} message(s) past the capture cap kept only their size: this call's bytes are not all stored`);
+  if (undecoded) parts.push(`${undecoded} message(s) could not be decompressed: their raw bytes are kept, their text is not`);
+  if (nonVerbatim) parts.push(`${nonVerbatim} client message(s) of a non-LLM endpoint stored as their size only (non-verbatim)`);
+  return { partial, partialReasons, truncated, omitted, undecoded, nonVerbatim, text: `WebSocket call: ${parts.join('; ')}` };
+}

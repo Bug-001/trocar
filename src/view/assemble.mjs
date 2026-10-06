@@ -7,7 +7,7 @@
 import { createHash } from 'node:crypto';
 import { analyze, linearContext, cacheBreak, normResp, flatBlockText } from './analyze.mjs';
 import * as openai from '../dissect/openai.mjs'; // D25 · Phase 4: the OpenAI/Codex dissector
-import { reqIncompleteOf } from '../dissect/capture-labels.mjs'; // #21 request-body labels
+import { reqIncompleteOf, wsIncompleteOf } from '../dissect/capture-labels.mjs'; // #21 request-body labels, D38 WebSocket labels
 import { blockSpans } from '../adapters/cc.mjs';
 import { slimBlock, compBuckets } from './blockmeta.mjs';
 import { mintRawRef, composeTextRef } from '../etl/orchestrator.mjs';
@@ -189,7 +189,7 @@ function assembleOpenai(records, opts = {}) {
       msgCount: req.message_count || 0,
       tools: Array.isArray(req.tools) ? req.tools.length : 0,
       ts: r.ts_request || r.ts || '', status: (r.resp && r.resp.status) || null,
-      compaction: false, error: !!r.error, reqIncomplete: reqIncompleteOf(r),
+      compaction: false, error: !!r.error, reqIncomplete: reqIncompleteOf(r), wsIncomplete: wsIncompleteOf(r),
       flat: kept ? flat : [], ...(kept ? null : { paged_out: true }),
       // Tier A, same as the CC path: computed from `flat` BEFORE the retention window drops it, so a
       // Codex session's timeline is as complete as a Claude Code one. Omitting it here is the same
