@@ -106,3 +106,24 @@ export function respIncompleteOf(rec) {
 export function contextStateOfRequest(rec) {
   return reqIncompleteOf(rec) ? 'partial' : null;
 }
+
+// The other incompleteness labels (4.6 §记录 「不完整的标注,各说一件事」), one per thing that happened, from
+// envelope fields only. None of them changes context_state (3.1): they say which BYTES of this record are
+// not all there, or not decoded; the request-body labels above stay with reqIncompleteOf, so nothing is
+// shown twice. → [{ id, label, text }]
+export function captureLabelsOf(rec) {
+  const out = [];
+  if (!rec) return out;
+  const r = rec.resp || rec.response || {};
+  if (r.truncated === true) out.push({ id: 'resp-truncated', label: '已截断 · reply cut at the cap',
+    text: `the reply was cut at the capture cap: only its first ${Number(r.body_bytes) || 0} bytes are stored` });
+  if (r.kind === 'error' && r.partial) out.push({ id: 'resp-partial', label: '不完整 · reply never finished',
+    text: 'the response stopped before it finished; what arrived is kept under resp.partial' });
+  if (r.encoding_error) out.push({ id: 'resp-undecoded', label: '回复未解码 · reply not decoded',
+    text: `the reply could not be decoded (${r.encoding_error}); its bytes are kept as base64 in the record, so no reply text is shown` });
+  if (rec.ws_truncated === true) out.push({ id: 'ws-truncated', label: '已截断 · call over the size cap',
+    text: 'messages past the per-call cap are stored as {omitted_bytes}; their bytes are not in the record' });
+  if (rec.req_encoding_error) out.push({ id: 'req-undecoded', label: '压缩请求体未解码 · compressed request not decoded',
+    text: `the request body is stored compressed (${rec.req_content_encoding || 'unknown encoding'}) and was not decoded: ${rec.req_encoding_error}` });
+  return out;
+}

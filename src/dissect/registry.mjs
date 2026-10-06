@@ -2,7 +2,8 @@
 // recorded per call; never from the UA or the harness). The board (src/view/assemble.mjs) and the ETL
 // adapters both dispatch through this, so the two readers cannot disagree about what a record is.
 // Leaf module.
-import { detect as anthropicShape } from './cc.mjs';
+import { detect as anthropicShape, serverEdited, CC_SECTIONS } from './cc.mjs';
+import { contextStateOfRequest } from './capture-labels.mjs';
 import { wireShape, RESPONSES, CHAT } from './openai.mjs';
 import { isWsHandshake } from './ws-handshake.mjs';
 
@@ -48,4 +49,20 @@ export function wireFormatOf(rec) {
 const BOARD = { 'openai-responses': RESPONSES, 'openai-chat': CHAT };
 export function boardDissectorFor(rec) {
   return BOARD[wireFormatOf(rec)] || null;
+}
+
+// The request's top-level keys that become context blocks, per wire format; every other top-level key is a
+// non-block key the board lists one by one (4.6 R2 「不成块的顶层键逐个列出」).
+const ANTHROPIC_BLOCK_KEYS = Object.freeze(CC_SECTIONS.map((x) => x.id));
+export function blockKeysOf(format) {
+  if (format === 'anthropic') return ANTHROPIC_BLOCK_KEYS;
+  return (BOARD[format] && BOARD[format].blockKeys) || [];
+}
+
+// 3.2:52 context_state of an HTTP-wire call: 'partial' when the stored request is incomplete (gate G17,
+// capture-labels.mjs), 'server_edited' when an Anthropic response reports context edits, else 'complete'.
+// (A WebSocket call's state comes from its previous_response_id chain instead.) The ETL's Anthropic
+// adapter and the board both read it here.
+export function contextStateOf(rec) {
+  return contextStateOfRequest(rec) ?? (wireFormatOf(rec) === 'anthropic' && serverEdited(rec) ? 'server_edited' : 'complete');
 }

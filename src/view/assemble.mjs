@@ -6,13 +6,14 @@
 // server-side analyzer, frontend unchanged).
 import { createHash } from 'node:crypto';
 import { analyze, linearContext, cacheBreak, normResp, flatBlockText } from './analyze.mjs';
-import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf } from '../dissect/capture-labels.mjs'; // #21 request-body labels, D38 WebSocket labels, response labels
+import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf, captureLabelsOf } from '../dissect/capture-labels.mjs'; // #21 request-body labels, D38 WebSocket labels, response labels; captureLabelsOf: the per-call wire.labels (4.6 §记录)
 import { blockSpans } from '../adapters/cc.mjs';
 import { scanJson, spanAt } from '../adapters/content-hash.mjs';
 import { slimBlock, compBuckets } from './blockmeta.mjs';
 import { mintRawRef, composeTextRef } from '../etl/orchestrator.mjs';
-import { sessionKeyOf, hintsOf } from '../dissect/harnesses.mjs';
-import { wireFormatOf, boardDissectorFor } from '../dissect/registry.mjs';
+import { sessionKeyOf, hintsOf, observerEffectsOf } from '../dissect/harnesses.mjs';
+import { wireFormatOf, boardDissectorFor, contextStateOf, blockKeysOf } from '../dissect/registry.mjs';
+import { vendorOf } from '../dissect/vendors.mjs';
 
 // D17④ 地面真相(RFC 3.3:65 · 独立字节护城河). The demo proxied prefix identity with the 32-bit
 // bounded content_hash SEQUENCE (collision-prone). Product MUST use a REAL full SHA-256 over the
@@ -180,6 +181,7 @@ function assembleFlatLane(records, d, opts = {}) {
       tools: Array.isArray(req.tools) ? req.tools.length : 0,
       ts: r.ts_request || r.ts || '', status: (r.resp && r.resp.status) || null,
       compaction: false, error: !!r.error, reqIncomplete: reqIncompleteOf(r), wsIncomplete: wsIncompleteOf(r), respIncomplete: respIncompleteOf(r),
+      wire: wireOf(r, d.id), nonBlockKeys: kept ? nonBlockKeysOf(r, d.id) : [],
       // shipped as metadata + a text_ref per block, never the body (4.2:55); out of the window: no blocks
       flat: kept ? withPathRefs(flat, r) : [], ...(kept ? null : { paged_out: true }),
       // Tier A, same as the multi-lane path: computed from `flat` BEFORE the retention window drops it.
@@ -269,6 +271,28 @@ function withPathRefs(flat, rec) {
   });
 }
 
+// Canonical wire facts per call (3.2:131-133), baked HERE so the page only reads them (invariant 3):
+// format, vendor (null = cache semantics unknown), transport, context state, observer effects and the
+// incompleteness labels (4.6 §记录 「不完整的标注」 — shown on the call, never dropped). Cheap: no body parse.
+function wireOf(rec, format) {
+  return { format, vendor: vendorOf(rec), transport: rec && rec.transport === 'ws' ? 'ws' : 'http',
+    contextState: contextStateOf(rec), observerEffect: observerEffectsOf(rec), labels: captureLabelsOf(rec) };
+}
+// 4.6 R2 「不成块的顶层键逐个列出」: every top-level request key that is not a block section, each with a
+// locator to its verbatim value (null when the record cannot be addressed).
+function nonBlockKeysOf(rec, format) {
+  if (!rec || typeof rec.req_body !== 'string') return [];
+  let root = null;
+  try { root = scanJson(rec.req_body); } catch { return []; }
+  if (!root || root.kind !== 'object') return [];
+  const keep = blockKeysOf(format);
+  const id = rec.id != null ? String(rec.id) : null;
+  const base = id && rec._stream ? mintRawRef(sessionIdOf(rec), rec._stream, id) : null;
+  const out = [];
+  for (const [key, node] of root.props) if (!keep.includes(key)) out.push({ key, chars: node.end - node.start, ref: base ? composeTextRef(base, [node.start, node.end]) : null });
+  return out;
+}
+
 // `opts.keepFlat(gi)` — RETENTION WINDOW. The cache-break chain is inherently sequential: call N's
 // diff needs call N-1's flat blocks, so every call must be assembled. But only the calls the browser
 // is actually about to render need to KEEP their blocks. When a window is supplied, an out-of-window
@@ -337,7 +361,8 @@ function assembleAnalyzed(records, opts = {}) {
   for (const lane of A.lanes || []) {
     let prevFlat = null;
     for (const call of lane.calls || []) {
-      if (!call.rec || !call.rec.request) { call.flat = []; call.cacheBreak = null; call.gt = null; continue; }
+      if (!call.rec || !call.rec.request) { call.flat = []; call.cacheBreak = null; call.gt = null; call.wire = null; continue; }
+      call.wire = wireOf(call.rec, 'anthropic'); // cheap meta: rides on out-of-window calls too
       const flat = linearContext(call.rec.request);
       // Tag per-block faithfulness SERVER-SIDE (reads provider block shape here, not in the browser →
       // invariant 3). opaque = encrypted/redacted reasoning replayed as signature-only, no plaintext on
@@ -388,12 +413,13 @@ function assembleAnalyzed(records, opts = {}) {
       call.comp = compBuckets(flat);
       // Blocks kept only inside the retention window; `prevFlat` above still holds the real array, so
       // the NEXT call's diff is computed against the true baseline, not against an emptied one.
-      if (opts.keepFlat && !opts.keepFlat(call.gi)) { call.flat = []; call.paged_out = true; continue; }
+      if (opts.keepFlat && !opts.keepFlat(call.gi)) { call.flat = []; call.nonBlockKeys = []; call.paged_out = true; continue; }
       // SHIP METADATA + A LOCATOR, NEVER THE BODY (RFC 4.2:55 「看全文=回源」 · 1.4:35 「点开惰性填正文」).
       // Everything above this line needed the real text — the diff chain, the prefix sha-256, the
       // byte weights — and all of it has now been computed. What leaves the process is the collapsed
       // row plus a text_ref, and the body is fetched from the raw capture when a row is opened.
       call.flat = withRefs(flat, call.rec);
+      call.nonBlockKeys = nonBlockKeysOf(call.rec, 'anthropic');
       call.rec = slimRec(call.rec);
     }
   }

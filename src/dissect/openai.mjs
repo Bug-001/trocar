@@ -80,6 +80,9 @@ export function wireShape(rec) {
   if (looksAnthropic(rec, body)) return null;                 // never claim Anthropic wire
   if (Array.isArray(body && body.input)) return 'responses';  // shape first
   if (/(^|\/)responses$/.test(epPath(rec))) return 'responses'; // corroboration (also covers an unparseable body)
+  // an unparseable body on the Chat path (e.g. a request the collector stored cut, #21): the path is all there
+  // is, and the call must still be shown with its reason rather than as unrecognized traffic
+  if (body == null && /(^|\/)chat\/completions$/.test(epPath(rec))) return 'chat';
   if (looksChat(rec, body)) return 'chat';
   return null;
 }
