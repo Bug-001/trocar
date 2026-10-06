@@ -89,7 +89,7 @@ export function respIncompleteOf(rec) {
   if (!resp || typeof resp !== 'object' || rec.transport === 'ws') return null; // a WebSocket call: wsIncompleteOf
   const body = resp.kind === 'error' && resp.partial && typeof resp.partial === 'object' ? resp.partial : resp;
   const undecoded = !!body.encoding_error;
-  const binary = !undecoded && body.kind === 'text' && body.raw_b64 != null;
+  const binary = !undecoded && (body.kind === 'text' || body.kind === 'sse') && body.raw_b64 != null; // an SSE stream that is not UTF-8 keeps its bytes too
   const notJson = !undecoded && !binary && body.kind === 'text';
   const empty = body.kind === 'empty';
   const unparsed = typeof body.unparsed_events === 'number' && body.unparsed_events > 0 ? body.unparsed_events : 0;

@@ -35,8 +35,9 @@ export function bodyResp(status, wire, enc, onDecodeError = null) {
   if (!wire.length) return { status, kind: 'empty' }
   const dec = decodeBodyChecked(wire, enc)
   if (dec.error) { if (onDecodeError) onDecodeError(dec); return { status, kind: 'text', encoding_error: dec.error, raw_b64: wire.toString('base64') } }
-  try { return { status, kind: 'json', body: JSON.parse(dec.buf.toString('utf8')) } } catch { /* not JSON: keep its bytes */ }
+  // JSON is read only from valid UTF-8: bytes that are not would parse with U+FFFD in their place (a lossy body, invariant 2)
   const t = utf8(dec.buf)
+  if (t !== null) { try { return { status, kind: 'json', body: JSON.parse(t) } } catch { /* not JSON: keep its bytes */ } }
   return t !== null ? { status, kind: 'text', raw: t } : { status, kind: 'text', raw_b64: dec.buf.toString('base64') }
 }
 
