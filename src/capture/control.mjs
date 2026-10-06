@@ -15,7 +15,6 @@ import { getAutostartInstaller, MONITOR_LABEL } from './autostart.mjs';
 const HOME = os.homedir();
 const DEFAULT_SETTINGS = path.join(HOME, '.claude', 'settings.json');
 const DEFAULT_CAPTURE_OUT = path.join(HOME, '.atrace', 'capture.ndjson');
-const safe = (fn, dflt) => { try { return fn(); } catch { return dflt; } };
 const defaultAsightBin = () => fileURLToPath(new URL('../../bin/asight.mjs', import.meta.url));
 function safePort(url) { try { return new URL(url).port || '8899'; } catch { return '8899'; } }
 // D38 L-8 (RFC 4.1 落地细节 (6)): what node-based agents (CC-CLI, Desktop) actually trust is NODE_EXTRA_CA_CERTS in
@@ -42,7 +41,8 @@ export function monitoringStatus({
   // D38 L-8: true / false / null (could not be checked) + why — an error is no longer folded into "not trusted"
   let caTrusted = null, caError = null;
   try { caTrusted = !!onboard.verifyUserTrustOnly(); } catch (e) { caError = String((e && e.message) || e); }
-  const auto = safe(() => autostart.status({ label: MONITOR_LABEL }), { installed: false });
+  // D38: a status that cannot be read is said (autostartError), not folded into "not installed"
+  let auto; try { auto = autostart.status({ label: MONITOR_LABEL }); } catch (e) { auto = { installed: null, error: String((e && e.message) || e) }; }
   return {
     active: !!steerProxy || caTrusted === true, // monitoring is arranged when the harness is steered and/or the CA is trusted
     caTrusted,
@@ -52,7 +52,8 @@ export function monitoringStatus({
     ...(steer.error ? { steerError: steer.error } : {}),
     forwardingTarget: captureTarget,      // the real upstream the proxy forwards to (the endpoint being observed)
     proxyUrl,
-    autostart: !!auto.installed,
+    autostart: auto.installed === null ? null : !!auto.installed,
+    ...(auto.error ? { autostartError: auto.error } : {}),
     autostartReserved: !!auto.reserved,
     platform: autostart.platform || process.platform,
   };

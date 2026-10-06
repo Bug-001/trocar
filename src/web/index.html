@@ -2232,7 +2232,7 @@ function renderMon(el,d){
   el.innerHTML=`<span class="mondot ${on?'on':''}" title="透明监测 ${on?'开启中':'已关闭'}"></span>`
     +`<button class="monbtn" id="monBtn">监测 ${on?'ON':'OFF'}</button>`
     +`<span class="monwhere" title="透明监测把被测流量转发到的真实上游端点">→ ${esc(m.forwardingTarget||'—')}</span>`
-    +(m.autostart?`<span class="monbadge" title="已加入用户级开机自启(非全机)">开机自启</span>`:'')
+    +(m.autostart?`<span class="monbadge" title="已加入用户级开机自启(非全机)">开机自启</span>`:m.autostartError?`<span class="monbadge" style="color:var(--amber)" title="${esc(m.autostartError)}">开机自启 ?</span>`:'')
     +(m.caTrusted===true?`<span class="monbadge" title="采集 CA 已装入用户级信任库(非全机弱化 TLS)">CA✓</span>`
       :m.caTrusted===false?`<span class="monbadge" style="color:var(--red)" title="采集 CA 不在用户级信任库里 · the capture CA is not in the user trust store">CA ✗</span>`
       :m.caTrusted===null?`<span class="monbadge" style="color:var(--amber)" title="CA 信任态查不出 · could not check the CA trust">CA ? ${esc(m.caError||'')}</span>`:'')

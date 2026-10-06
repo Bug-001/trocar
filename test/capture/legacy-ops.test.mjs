@@ -59,6 +59,8 @@ test('L-8: CA trust is true / false / null + why; NODE_EXTRA_CA_CERTS is reporte
     assert.match(st(() => true, null).steerError, /settings\.json: .*JSON/)
     fs.rmSync(settings)
     assert.equal(st(() => true, null).steerError, undefined, 'no settings.json is not an error')
+    const broken = monitoringStatus({ onboard: { verifyUserTrustOnly: () => true }, autostart: { platform: 'darwin', status: () => { throw new Error('EACCES: LaunchAgents') } }, settingsPath: settings, getenv: null })
+    assert.deepEqual([broken.autostart, broken.autostartError], [null, 'EACCES: LaunchAgents'], 'an autostart status that cannot be read is not "not installed"')
   } finally { fs.rmSync(d, { recursive: true, force: true }) }
 })
 

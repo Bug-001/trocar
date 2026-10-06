@@ -129,6 +129,7 @@ test('the CA badge says ✓, ✗ or ? with the reason; NODE_EXTRA_CA_CERTS not p
     [{ caTrusted: true, nodeExtraCaCerts: { value: null, expected: '/e', matches: null, error: 'launchctl: not permitted' } }, /NODE_EXTRA_CA_CERTS \?/, /NODE_EXTRA_CA_CERTS ✗/],
     [{ caTrusted: true, nodeExtraCaCerts: { value: '/e', expected: '/e', matches: true } }, /CA✓/, /NODE_EXTRA_CA_CERTS/],
     [{ caTrusted: true, steerError: '/u/.claude/settings.json: SyntaxError' }, /steer \? 读不出/, /CA ✗/],
+    [{ caTrusted: true, autostart: null, autostartError: 'EACCES' }, /开机自启 \?/, /CA ✗/],
   ];
   for (const [m, yes, no] of cases) {
     const h = harness({ controlOk: true, monitoring: { active: true, forwardingTarget: 'x', ...m } });
