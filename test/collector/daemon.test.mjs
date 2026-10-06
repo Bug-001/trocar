@@ -195,6 +195,29 @@ test('daemon: an agent started by another agent is recorded with parent_pid and 
   } finally { await d.stop(); p.done(); s.done() }
 })
 
+// Review B-4(b) (4.6 agent-transport): QUIC and AF_UNIX never reach the engine, so no connection row can say so: the daemon
+// writes one state event per (pid, transport) — once, however often the process is judged again — and status lists them.
+test('daemon: an agent started with ANTHROPIC_UNIX_SOCKET or the HTTP3 flag is an agent-transport event once per transport and a line in status; the event is no failure (B-4b)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await installCollector({ home: path.join(s.root, 'other-home'), env: {}, osName: 'none', harnesses: [], freePort: async () => 0 })
+  fs.cpSync(path.join(s.root, 'other-home', '.asight'), path.join(s.home, '.asight'), { recursive: true })
+  const { arch } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home } })
+  try {
+    p.add(5300, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home, ANTHROPIC_UNIX_SOCKET: '/run/ant.sock', BUN_FEATURE_FLAG_EXPERIMENTAL_HTTP3_CLIENT: '1' }, startTicks: nowTicks(p) })
+    p.add(5301, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) })
+    await req(s.sock, 'POST', '/on', {})
+    await req(s.sock, 'POST', '/off', {}); await req(s.sock, 'POST', '/on', {}) // every on judges the live processes again
+    const st = await req(s.sock, 'GET', '/status')
+    assert.deepEqual(st.agents.find((a) => a.pid === 5300).unreachable.map((u) => [u.transport, u.var]), [['af-unix', 'ANTHROPIC_UNIX_SOCKET'], ['quic', 'BUN_FEATURE_FLAG_EXPERIMENTAL_HTTP3_CLIENT']])
+    assert.deepEqual(st.agents.find((a) => a.pid === 5301).unreachable, [])
+    const ev = flowsOf(s).filter((f) => f.event === 'agent-transport')
+    assert.deepEqual(ev.map((f) => [f.pid, f.agent, f.transport, f.var]), [[5300, 'claude-code', 'af-unix', 'ANTHROPIC_UNIX_SOCKET'], [5300, 'claude-code', 'quic', 'BUN_FEATURE_FLAG_EXPERIMENTAL_HTTP3_CLIENT']], 'once per (pid, transport), none for the plain agent')
+    assert.ok(ev.every((f) => typeof f.reason === 'string' && f.reason.length > 0))
+    assert.deepEqual(statusFailures(st).filter((f) => f.event === 'agent-transport' || f.code === 'agent-transport'), [], 'a state event, never a failure (⚠)')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
 // Review B-1 (4.6 exe-unreadable): on a stock machine, processes of the user's uid that are not dumpable (sshd's session
 // processes, (sd-pam), the daemon's own helper) cannot have their exe read. That is normal, so it is no failure and no ⚠: it
 // is a count in status (`unjudged`) with samples. A process whose readable command line fits a harness's argv conditions could

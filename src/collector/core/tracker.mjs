@@ -14,6 +14,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { nodeReleaseVersion } from './config-read.mjs'
 import { effectiveEnv, markerLayer, MARKER_VAR } from './trust/confirm.mjs'
+import { unreachableTransports } from './transports.mjs'
 
 const PROXY_SCHEMES = { 'http:': ['http', 80], 'https:': ['https', 443], 'socks:': ['socks5', 1080], 'socks4:': ['socks4', 1080], 'socks4a:': ['socks4a', 1080], 'socks5:': ['socks5', 1080], 'socks5h:': ['socks5h', 1080] }
 
@@ -140,7 +141,9 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     // (they still use the default roots). The harness declares them as data; never decrypted, under `all` too.
     const bypass = call(d.bypass, live, row).filter((b) => b && b.host).map((b) => ({ host: String(b.host).toLowerCase(), reason: String(b.reason || 'not-via-trust-path') }))
     const parent = row.ppid != null ? table.get(row.ppid) : null
-    Object.assign(row, { trusted: t.trusted, reason: t.reason, trustVar: t.var, trustVia: t.via, decrypt: t.trusted, hosts, bypass, proxies, wsTerminal: d.wsTerminal || null, parentAgent: parent ? parent.agent : null, ...(cause ? { cause } : {}) })
+    // transports its own environment says it will use that never reach the engine (QUIC, AF_UNIX): 4.6 agent-transport
+    const unreachable = envUnreadable ? [] : unreachableTransports(environ)
+    Object.assign(row, { trusted: t.trusted, reason: t.reason, trustVar: t.var, trustVia: t.via, decrypt: t.trusted, hosts, bypass, unreachable, proxies, wsTerminal: d.wsTerminal || null, parentAgent: parent ? parent.agent : null, ...(cause ? { cause } : {}) })
     const broken = layers.filter((l) => l.broken).map((l) => ({ name: l.name, file: l.file ?? null, code: l.ignored, error: l.error ?? null }))
     if (broken.length) row.brokenLayers = broken // a config file there but unreadable / unparsable (D-9): the daemon records each
     const trustFile = t.trusted && t.file ? t.file : null
@@ -215,7 +218,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
         try { await onExec(factsOf.get(pid), 'entry-changed') } catch (e) { onError(e, { pid, phase: 'judge' }) }
       }
     },
-    agents: () => [...table.values()].sort((a, b) => a.pid - b.pid).map((r) => ({ ...r, hosts: [...r.hosts], bypass: r.bypass.map((b) => ({ ...b })), proxies: r.proxies.map((p) => ({ ...p })), readErrors: [...r.readErrors], parseErrors: [...r.parseErrors] })),
+    agents: () => [...table.values()].sort((a, b) => a.pid - b.pid).map((r) => ({ ...r, hosts: [...r.hosts], bypass: r.bypass.map((b) => ({ ...b })), unreachable: (r.unreachable || []).map((u) => ({ ...u })), proxies: r.proxies.map((p) => ({ ...p })), readErrors: [...r.readErrors], parseErrors: [...r.parseErrors] })),
     unmatched: () => [...ambiguous.values()].sort((a, b) => a.pid - b.pid),
     describe: (pid) => (table.has(pid) ? { ...table.get(pid) } : null),
     // FlowExtras for the engine's describe (plan 3c §2): the harness's WebSocket terminators and this process's own proxies

@@ -49,6 +49,17 @@ test('tracker: same program — no CA variable → observe verdict; CA variable 
   assert.deepEqual(tracker.metaFor(101), { agent: 'alpha', exe: '/opt/alpha', parentPid: 1, parentAgent: null })
 })
 
+// Review B-4(b) (4.6 agent-transport): the row carries the transports its own environment says it will use that never reach the
+// engine, so the daemon can write the event and status can list them; an environment that could not be read says nothing.
+test('tracker: an agent whose environment asks for AF_UNIX or QUIC carries them as `unreachable`; one that does not, or whose environment cannot be read, carries none (B-4b)', async () => {
+  const { redirector, tracker } = rig()
+  redirector.emit('exec', facts(120, { env: new Map([['EXTRA_CA', PEM], ['ANTHROPIC_UNIX_SOCKET', '/run/a.sock'], ['BUN_FEATURE_FLAG_EXPERIMENTAL_HTTP3_CLIENT', '1']]) }))
+  redirector.emit('exec', facts(121, { env: new Map([['EXTRA_CA', PEM]]) }))
+  redirector.emit('exec', facts(122, { env: null })); await settle()
+  const by = Object.fromEntries(tracker.agents().map((a) => [a.pid, a.unreachable.map((u) => u.transport)]))
+  assert.deepEqual(by, { 120: ['af-unix', 'quic'], 121: [], 122: [] })
+})
+
 test('tracker: a process no descriptor matches is never watched (S3); re-exec into a non-agent unwatches', async () => {
   const { redirector, tracker } = rig()
   redirector.emit('exec', facts(200, { exe: '/usr/bin/curl', argv: ['curl'] })); await settle()

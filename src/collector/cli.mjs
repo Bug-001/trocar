@@ -31,6 +31,7 @@ export function formatStatus(s) {
   lines.push(agents.length ? `agents (${agents.length}, ${s.running_untrusted} running but untrusted):` : 'agents: none running')
   for (const a of agents) {
     lines.push(`  ${a.pid} ${a.agent}${a.parent_agent ? ` (started by ${a.parent_agent})` : ''} ${a.trusted ? `decrypt (${a.trust_var} via ${a.trust_via})` : `untrusted: ${a.reason}${a.hint && a.hint !== a.reason ? ` — ${a.hint}` : ''}`} · ${a.direct ?? `? (${a.direct_error || 'unknown'})`} direct`)
+    if (a.unreachable && a.unreachable.length) lines.push(`    not captured (transport the engine cannot reach): ${a.unreachable.map((u) => `${u.transport} (${u.var})`).join(', ')}`)
     if (a.trusted && a.not_via_trust_path && a.not_via_trust_path.length) lines.push(`    not captured (not via the trust path): ${a.not_via_trust_path.map((b) => `${b.host} (${b.reason})`).join(', ')}`)
   }
   for (const n of s.negatives || []) lines.push(`  not captured (negative cache): pid ${n.pid} ${n.host} — ${n.cause}`)

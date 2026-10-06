@@ -152,7 +152,14 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     const note = (rec) => failure.write(rec)
     // the descriptor's own words for a reason, else the generic text (core/codes.mjs), else the code itself
     const hintFor = (agent, reason) => { const d = registry.get(agent); return (d && d.trust && d.trust.hints && d.trust.hints[reason]) || trustReasonText(reason) || reason }
+    const transportNoted = new Map() // pid → the transports already written for it: one agent-transport line per (pid, transport)
     const onVerdict = (row, prev) => {
+      for (const u of row.unreachable || []) { // 4.6 agent-transport: QUIC / AF_UNIX never reach the engine, so no connection row says so (review B-4(b))
+        const done = transportNoted.get(row.pid) || transportNoted.set(row.pid, new Set()).get(row.pid)
+        if (done.has(u.transport)) continue
+        done.add(u.transport)
+        note({ event: 'agent-transport', pid: row.pid, agent: row.agent, transport: u.transport, var: u.var, reason: u.reason })
+      }
       if (row.watchError) failure('watch', coded(new Error(`watching ${row.agent} pid ${row.pid} failed: ${row.watchError}`), 'watch-failed'))
       if (row.configError) failure('harness', coded(new Error(`${row.agent} pid ${row.pid}: reading its configuration failed (${row.configError}); judged on its known hosts only`), 'config-error'))
       for (const r of row.readErrors || []) failure('harness', Object.assign(new Error(`${row.agent} pid ${row.pid}: ${r} exists but cannot be read; judged as if it were absent`), { code: CODE.configUnreadable }), { pid: row.pid, agent: row.agent })
@@ -207,6 +214,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       installedAt: (l) => installedAt(manifest, l), // config-after-start is judged against when asight wrote the value
       onGone: (row, via) => { // D-24, D-12: the agent and every condition it held are gone; so are its negative-cache entries
         const last = recordedUntrusted.get(row.pid); recordedUntrusted.delete(row.pid) // the reason it was recorded untrusted for ends here
+        transportNoted.delete(row.pid)
         failure.write({ event: EVENT.agentExit, pid: row.pid, agent: row.agent, via, ...(last != null ? { code: last, reason: 'exited while untrusted' } : {}) })
         const dropped = engine ? engine.forgetPid(row.pid) : 0
         if (dropped) failure.write({ event: 'negative-cache-cleared', pid: row.pid, dropped })
@@ -341,7 +349,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       // every running-but-untrusted agent says why and what to do (4.6 §确认信任, R4); hosts it never decrypts say why too
       const agents = tracker.agents().map((r) => {
         const d = redirector.directCount(r.pid) // {count, error}: unknown is said, never 0 (D-17)
-        return { pid: r.pid, agent: r.agent, exe: r.exe, trusted: r.trusted, reason: r.reason, ...(r.trusted ? {} : { hint: hintFor(r.agent, r.reason) }), trust_var: r.trustVar, trust_via: r.trustVia, decrypt: r.decrypt, hosts: r.hosts, not_via_trust_path: r.bypass, parent_pid: r.ppid ?? null, parent_agent: r.parentAgent ?? null, source: r.source, direct: d.count, ...(d.error ? { direct_error: d.error } : {}) }
+        return { pid: r.pid, agent: r.agent, exe: r.exe, trusted: r.trusted, reason: r.reason, ...(r.trusted ? {} : { hint: hintFor(r.agent, r.reason) }), trust_var: r.trustVar, trust_via: r.trustVia, decrypt: r.decrypt, hosts: r.hosts, not_via_trust_path: r.bypass, unreachable: r.unreachable ?? [], parent_pid: r.ppid ?? null, parent_agent: r.parentAgent ?? null, source: r.source, direct: d.count, ...(d.error ? { direct_error: d.error } : {}) }
       })
       const { pid, proto, build, unparsable = 0, timeouts = 0 } = redirector.helperInfo()
       // processes of this user whose exe cannot be read and whose command line fits no harness: seen, not judged (4.6 exe-unreadable)
