@@ -258,3 +258,28 @@ test('row 7 (cosmetic): a dead lock beside an original the run deletes does not 
     assert.match(lock.reason, /checked byte for byte .* then deleted/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+// Found rehearsing the runbook (real-run-v2.md) on a scratch HOME: step 1 says "would remove" an old
+// empty claim, step 4 removes it — but `raw verify` in step 2 printed it FAILED, and the runbook STOPs
+// on FAILED. An empty segment holds no records and is never anyone's copy (planFile ignores or
+// refuses it): verify says `empty`, journals a note, and does not fail for it.
+test('row 7: `raw verify` reports an empty claimed segment as `empty` (a note), not FAILED — a damaged one still fails', async () => {
+  const { root, f, journal } = sealedTree();
+  try {
+    await sealLegacy(f, { ...NONE, journal });
+    const claim = f + '.0002.sealed';
+    fs.writeFileSync(claim, '');
+    const home = path.join(root, 'home');
+    const run = () => spawnSync(process.execPath, [CLI, 'raw', 'verify', path.join(root, 'sessions')], { encoding: 'utf8', env: { ...process.env, HOME: home, ASIGHT_SOURCE: '' } });
+    let r = run();
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, new RegExp(`^empty\\s+${claim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} — .*holds no records`, 'm'));
+    assert.doesNotMatch(r.stdout, /FAILED/);
+    const j = readJournal({ journal: path.join(home, '.asight', 'raw', 'journal.jsonl') });
+    assert.ok(j.some((e) => e.op === 'verify' && e.outcome === 'note' && e.mode === 'empty' && e.sealed.includes(claim)));
+    fs.writeFileSync(claim, 'x');                                   // not empty, not a sealed file: a failure as before
+    r = run();
+    assert.equal(r.status, 1);
+    assert.match(r.stdout, /FAILED .*0002\.sealed/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

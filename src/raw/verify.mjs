@@ -125,7 +125,14 @@ export function verifyTree(target, { fs = nodeFs } = {}) {
   } else sealed.push(target);
   // grouped by (original, recorded length): copies of one version of a file are proven together
   const groups = new Map(), alone = [];
+  const empty = [];
   for (const f of sealed) {
+    // an empty segment a seal claimed and never filled holds no records and is nobody's copy (the
+    // legacy entry ignores or refuses it): said, not a failure (review 3 confirm, row 7 — the runbook
+    // stops on FAILED, yet its step 1 rightly plans to remove it)
+    let size = null; try { size = fs.statSync(f).size; } catch {}
+    if (size === 0) { empty.push({ ok: true, mode: 'empty', sealed: [f], original: null, records: 0,
+      note: 'an empty segment name an interrupted seal claimed and never filled; it holds no records. The next seal of this stream, or --delete-original, removes it once it is a minute old' }); continue; }
     const src = sealedSources(f, { fs });
     const one = src && src.length === 1 ? src[0] : null;
     let rel;
@@ -138,14 +145,14 @@ export function verifyTree(target, { fs = nodeFs } = {}) {
     } else alone.push({ f, note: rel.rel === 'other' ? `${rel.why}: another file than the one this was sealed from — checked by itself, and it is the only copy of its records` : null });
   }
   return [...[...groups.values()].map((g) => verifyAgainst(g.files, g.orig, { fs, prefix: g.prefix })),
-    ...alone.map(({ f, note }) => { const r = verifySelf(f, { fs }); return note ? { ...r, note } : r; }), ...failed];
+    ...alone.map(({ f, note }) => { const r = verifySelf(f, { fs }); return note ? { ...r, note } : r; }), ...empty, ...failed];
 }
 
 // The CLI's verify: every result, ok or not, is journalled (a failed check MUST leave a durable record).
 export function runVerify({ target, against = null, fs = nodeFs, journal = defaultJournalPath() }) {
   const results = against ? [verifyAgainst([target], against, { fs })] : verifyTree(target, { fs });
   for (const r of results) {
-    appendJournal({ op: 'verify', outcome: r.ok ? 'ok' : 'failed', mode: r.mode, sealed: r.sealed, original: r.original,
+    appendJournal({ op: 'verify', outcome: r.mode === 'empty' ? 'note' : r.ok ? 'ok' : 'failed', mode: r.mode, sealed: r.sealed, original: r.original,
       ...(r.ok ? { records: r.records } : { reason: r.reason }), ...(r.covers ? { covers: r.covers } : {}), ...(r.note ? { note: r.note } : {}) }, { journal });
   }
   return results;
