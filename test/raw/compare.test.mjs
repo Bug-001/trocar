@@ -170,3 +170,55 @@ test('F1: `raw compare --list` names every compared and every not-covered origin
     assert.deepEqual(j.flatMap((e) => e.files).sort(), lines('not-covered'), 'the not-covered files are not journalled by name');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+// Review 3 confirm, row 1: compare grouped the tree its own way (a session dir read for calls, probes,
+// other only), so an extra stream in a session dir, or a stream in a directory that is no session, was
+// deleted by --delete-original and compared by nobody; a symlinked original was "compared" although
+// the deleter refuses it. compare now takes its candidates from the legacy entry's own walk
+// (legacyTargets) and the deleter's own per-file test (planFile): the two sets are equal.
+test('row 1: compare compares exactly the originals the dry run would delete — an extra stream, a dir that is no session, a symlink', async () => {
+  const root = tmpDir();
+  try {
+    const ses = await tree(root);
+    const recs = (p) => [0, 1].map((i) => toLine(envelope({ sid: A, id: `${p}_${i}`, body: '{}', endpoint: '/v1/models', llm: false })));
+    const extra = writeShard(path.join(ses, A, 'extra.ndjson'), recs('xa')), misc = writeShard(path.join(ses, 'misc', 'x.ndjson'), recs('xm'));
+    await sealLegacy(ses, { ...NONE, journal: path.join(root, 'j.jsonl') });
+    // B's calls.ndjson becomes a symlink to a byte-identical copy: the deleter refuses symlinks
+    const link = path.join(ses, B, 'calls.ndjson'), real = path.join(root, 'elsewhere.ndjson');
+    fs.copyFileSync(link, real); fs.rmSync(link); fs.symlinkSync(real, link);
+    const plan = await planned(ses);
+    for (const f of [extra, misc]) assert.ok(plan.includes(f), `precondition: the dry run would delete ${f}`);
+    assert.ok(!plan.includes(link), 'precondition: the dry run refuses the symlink');
+    const res = await compareTree(ses);
+    const compared = res.groups.filter((g) => g.status === 'same' || g.status === 'diff').flatMap((g) => g.deletable).sort();
+    assert.deepEqual(compared, plan, 'compare did not compare exactly what the dry run would delete');
+    assert.equal(res.ok, true, JSON.stringify(res.groups.filter((g) => g.status !== 'same' && g.status !== 'not-covered')));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('row 1: an original --delete-original would delete that no group compared fails the compare, by name', async () => {
+  const root = tmpDir();
+  try {
+    const ses = await tree(root);
+    await sealLegacy(ses, { ...NONE, journal: path.join(root, 'j.jsonl') });
+    const res = await compareTree(ses, { groupsHook: (gs) => gs.filter((g) => g.group !== B) });   // a grouping that misses B
+    assert.equal(res.ok, false, 'a deletion nobody compared passed');
+    const o = res.groups.find((g) => g.kind === 'not-compared');
+    assert.ok(o, 'the uncompared deletions are not reported');
+    assert.equal(o.status, 'diff');
+    assert.deepEqual(o.notCompared.slice().sort(), listFiles(path.join(ses, B), /\.ndjson$/));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('row 1 (cosmetic): the summary counts not-covered ORIGINALS, also in a group that mixes covered and uncovered ones', async () => {
+  const root = tmpDir();
+  try {
+    const home = path.join(root, 'home'), ses = await tree(path.join(home, '.asight'));
+    await sealLegacy(path.join(ses, A, 'calls.ndjson'), { ...NONE, journal: null });         // A mixes; B and control not sealed
+    const r = spawnSync(process.execPath, [CLI, 'raw', 'compare', ses, '--list'], { encoding: 'utf8', env: { ...process.env, HOME: home, ASIGHT_SOURCE: '' } });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const n = r.stdout.split('\n').filter((l) => l.startsWith('not-covered ')).length;
+    assert.ok(n >= 3, 'precondition: several originals not covered');
+    assert.match(r.stdout, new RegExp(`: 0 differ, ${n} original\\(s\\) not covered,`));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

@@ -212,21 +212,8 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
   for (const f of quiet) {
     const pids = holders.get(f);
     if (pids && pids.length) { refused.push({ file: f, reason: `held open by pid ${pids.join(', ')} — it may still be written` }); continue; }
-    // A sealed copy of an EARLIER version of this file (it grew since; the copy's bytes are still its
-    // first bytes): sealing again would leave two copies of those lines, and deleting would trust a
-    // copy that is not all of this file. Refuse. A copy of ANOTHER file that stood at this path (the
-    // fresh calls.ndjson `asight shard --watch` writes after a deletion) is no reason to: it is the
-    // only copy of its records, left alone, and this file is sealed as the next segment (review 3 F3).
-    const copies = sameStreamCopies(fs, f);
-    const stale = copies.filter((c) => c.rel === 'earlier');
-    if (stale.length) { refused.push({ file: f, reason: `its sealed copy ${stale.map((c) => path.basename(c.file)).join(', ')} holds only its first ${stale[0].length} bytes (${stale[0].why}) — so the original still holds every byte of that copy. Check with \`asight raw verify\`, delete that copy, then seal again` }); continue; }
-    const same = copies.filter((c) => c.rel === 'same').map((c) => c.file);
-    if (!deleteOriginal) { plan.push({ file: f, action: 'seal' }); continue; }
-    if (same.length) { plan.push({ file: f, action: 'delete', copies: same }); continue; }
-    const others = copies.filter((c) => c.rel === 'other');
-    refused.push({ file: f, reason: others.length
-      ? `no sealed copy holds its current bytes — ${others.map((c) => path.basename(c.file)).join(', ')} ${others.length > 1 ? 'are copies' : 'is a copy'} of another file (${others[0].why}) and stays as it is. Seal this file first (without --delete-original), check with \`asight raw verify\`, then delete`
-      : 'no sealed copy yet — --delete-original only deletes a file that already has one. Seal first (run without --delete-original), check with `asight raw verify`, then delete' });
+    const p = planFile(fs, f, { deleteOriginal });
+    if (p.refused) refused.push({ file: f, reason: p.refused }); else plan.push({ file: f, ...p });
   }
   for (const r of refused) appendJournal({ op: 'seal-legacy', outcome: 'refused', file: r.file, reason: r.reason }, { journal });
   for (const r of skipped) appendJournal({ op: 'seal-legacy', outcome: 'skipped', file: r.file, reason: r.reason }, { journal });
@@ -255,6 +242,28 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
     else failed.push({ file: f, reason: r.error, originalKept: !r.deleted, ...(r.deleted ? { state: r.state } : {}) });
   }
   return { target, sealed, deletedOnly, refused, failed, locks, skipped, known };
+}
+
+// What the legacy entry does with one file nothing writes or holds, by its sealed copies beside it —
+// the deleter's own test, which `asight raw compare` asks too, so that what compare calls "would be
+// deleted" is exactly what --delete-original deletes (review 3 confirm, row 1).
+// → { action: 'seal' } | { action: 'delete', copies } | { refused: reason }
+export function planFile(fs, f, { deleteOriginal = false } = {}) {
+  // A sealed copy of an EARLIER version of this file (it grew since; the copy's bytes are still its
+  // first bytes): sealing again would leave two copies of those lines, and deleting would trust a
+  // copy that is not all of this file. Refuse. A copy of ANOTHER file that stood at this path (the
+  // fresh calls.ndjson `asight shard --watch` writes after a deletion) is no reason to: it is the
+  // only copy of its records, left alone, and this file is sealed as the next segment (review 3 F3).
+  const copies = sameStreamCopies(fs, f);
+  const stale = copies.filter((c) => c.rel === 'earlier');
+  if (stale.length) return { refused: `its sealed copy ${stale.map((c) => path.basename(c.file)).join(', ')} holds only its first ${stale[0].length} bytes (${stale[0].why}) — so the original still holds every byte of that copy. Check with \`asight raw verify\`, delete that copy, then seal again` };
+  const same = copies.filter((c) => c.rel === 'same').map((c) => c.file);
+  if (!deleteOriginal) return { action: 'seal' };
+  if (same.length) return { action: 'delete', copies: same };
+  const others = copies.filter((c) => c.rel === 'other');
+  return { refused: others.length
+    ? `no sealed copy holds its current bytes — ${others.map((c) => path.basename(c.file)).join(', ')} ${others.length > 1 ? 'are copies' : 'is a copy'} of another file (${others[0].why}) and stays as it is. Seal this file first (without --delete-original), check with \`asight raw verify\`, then delete`
+    : 'no sealed copy yet — --delete-original only deletes a file that already has one. Seal first (run without --delete-original), check with `asight raw verify`, then delete' };
 }
 
 // Delete `f` after proving `copies` (copies of all of it, by content) byte for byte, durably: the

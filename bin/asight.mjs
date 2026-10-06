@@ -364,6 +364,7 @@ async function main() {
           if (g.status === 'same') console.log(`same        ${g.group} · ${g.records} records, ${g.resolver.checked} ids resolved alike${g.uncovered.length ? ` · not covered (no sealed copy, would not be deleted): ${g.uncovered.map((f) => path.basename(f)).join(', ')}` : ''}`);
           else if (g.status === 'diff') console.log(`DIFF        ${g.group} · ${g.diff.at != null ? `record ${g.diff.at}: ${g.diff.what} — now ${g.diff.before}, after deletion ${g.diff.after}` : g.diff.what}`);
           else if (g.status === 'not-covered') console.log(`not covered ${g.group} · no original here has a sealed copy: ${g.uncovered.map((f) => path.basename(f)).join(', ')} (not compared, would not be deleted)`);
+          if (g.notCompared) for (const f of g.notCompared) console.log(`  NOT COMPARED, yet --delete-original would delete it: ${f}`);
           for (const n of g.notes) console.log(`  note: ${n}`);
         } });
         const n = (s) => res.groups.filter((g) => g.status === s).length;
@@ -371,9 +372,12 @@ async function main() {
         if (rest.includes('--list')) for (const g of res.groups) {
           if (g.status === 'same' || g.status === 'diff') for (const f of g.deletable) console.log(`compared-original ${f}`);
           for (const f of g.uncovered) console.log(`not-covered ${f}`);
+          for (const f of g.notCompared || []) console.log(`not-compared ${f}`);
         }
-        const del = res.groups.reduce((a, g) => a + g.deletable.length, 0);
-        console.log(`compared ${res.compared} records in ${n('same') + n('diff')} groups (${res.groups.filter((g) => g.kind === 'session' && g.status !== 'not-covered' && g.status !== 'sealed-only').length} sessions): ${n('diff')} differ, ${n('not-covered')} not covered, ${n('sealed-only')} sealed only · ${del} original(s) --delete-original would delete, all of them compared · ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+        // counted per original, not per group: a group can mix covered and uncovered originals
+        const del = res.groups.reduce((a, g) => a + g.deletable.length, 0), lost = res.groups.reduce((a, g) => a + (g.notCompared || []).length, 0);
+        const unc = res.groups.reduce((a, g) => a + g.uncovered.length, 0);
+        console.log(`compared ${res.compared} records in ${res.groups.filter((g) => g.kind !== 'not-compared' && (g.status === 'same' || g.status === 'diff')).length} groups (${res.groups.filter((g) => g.kind === 'session' && g.status !== 'not-covered' && g.status !== 'sealed-only').length} sessions): ${n('diff')} differ, ${unc} original(s) not covered, ${n('sealed-only')} sealed only · ${del + lost} original(s) --delete-original would delete, ${lost ? `${lost} of them NOT compared` : 'all of them compared'} · ${((Date.now() - t0) / 1000).toFixed(1)} s`);
         if (!res.compared) console.error('nothing compared: no original here has a sealed copy — seal first (`asight raw seal --legacy <dir>`)');
         if (!res.ok) process.exitCode = 1;
         break;
