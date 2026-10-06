@@ -27,6 +27,14 @@ export function systemTextOf(body) {
 // 2026-10-06T00:00:00.000Z → 20261006T000000Z: no '/', '#' or ':', so the key is safe inside a raw_ref.
 const stampOf = (ms) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
 
+// The board re-stamps the whole corpus on every request (each poll): hash a record's system text once.
+const HASHES = new WeakMap();
+const hashOf = (rec) => {
+  let h = HASHES.get(rec);
+  if (h === undefined) { h = createHash('sha256').update(systemTextOf(bodyOf(rec)), 'utf8').digest('hex'); HASHES.set(rec, h); }
+  return h;
+};
+
 export function createSynthKeys({ gapMs = SYNTH_GAP_MS } = {}) {
   const open = new Map(); // `${harness}\0${hash}` → { key, lastMs }
   return {
@@ -36,7 +44,7 @@ export function createSynthKeys({ gapMs = SYNTH_GAP_MS } = {}) {
       if (!h.row || h.row.synth !== true) return null;
       const ms = Date.parse(rec.ts_request || rec.ts || '');
       if (!Number.isFinite(ms)) return null; // no time, no window: the call stays keyless (and is shown as such)
-      const hash = createHash('sha256').update(systemTextOf(bodyOf(rec)), 'utf8').digest('hex');
+      const hash = hashOf(rec);
       const g = h.id + '\0' + hash;
       const cur = open.get(g);
       if (cur && Math.abs(ms - cur.lastMs) <= gapMs) { cur.lastMs = Math.max(cur.lastMs, ms); return cur.key; }

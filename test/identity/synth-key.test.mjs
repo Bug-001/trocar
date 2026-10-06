@@ -140,3 +140,16 @@ test('`asight serve` opens a synthesized session on the first request, before an
   const ctl = await get('/api/control');
   assert.deepEqual(ctl.body.classes, [], 'a synthesized session is not control traffic');
 });
+
+test('a call the ETL quarantines still moves the window, as it does on the board: both readers name the same sessions', async () => {
+  // t=0 and t=50 are 50 minutes apart; the t=25 call between them is on a wire the ETL has no adapter for
+  const gemini = { ...hermes('g', 25, 'TASK-Q'), endpoint: '/v1beta/models/x:generateContent' };
+  const recs = [hermes('a', 0, 'TASK-Q'), gemini, hermes('b', 50, 'TASK-Q')];
+  const board = [...groupSessions(recs.map((r) => ({ ...r })))].map(([id, rs]) => [id, rs.map((r) => r.id).filter((x) => x !== 'g')]);
+  assert.equal(board.length, 1, 'precondition: the board sees one session (25 + 25 minutes)');
+  const conn = await freshConn();
+  const stats = await runEtl(recs, conn);
+  assert.equal(stats.quarantined, 1);
+  const etl = await rows(conn, 'SELECT session_id, list(call_id ORDER BY call_id) AS ids FROM calls GROUP BY session_id ORDER BY 1');
+  assert.deepEqual(etl.map((r) => [r.session_id, [...r.ids.items]]), board);
+});

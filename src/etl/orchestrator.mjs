@@ -204,8 +204,8 @@ export async function runEtl(records, connection, opts = {}) {
     if (!adapterState.has(a)) adapterState.set(a, a.begin());
     return adapterState.get(a);
   };
-  // 3.4 合成键 (gate G11): one assigner per run, fed every record in file order (skipped ones too), so a keyless
-  // Hermes / Kimi call gets the same key on every run — and the same key the board gives it.
+  // 3.4 合成键 (gate G11): one assigner per run, fed every record in file order (watermark-skipped and quarantined
+  // ones too), so a keyless Hermes / Kimi call gets the same key on every run — and the same key the board gives it.
   const synth = createSynthKeys();
   // the stream a record was READ from (4.2:39; for a sealed file, its original stream, D35)
   const streamOf = (r) => (opts.streamOf && opts.streamOf(r)) || r._stream || streamBasename;
@@ -213,6 +213,9 @@ export async function runEtl(records, connection, opts = {}) {
   await conn.run('BEGIN');
   try {
     for await (const record of records) {
+      // every keyless inference record moves the synthesized-key window, the ones quarantined below included —
+      // the board stamps them too, so both readers draw the same windows (3.4 合成键, gate G11)
+      const synthOf = synth.keyOf(record);
       const claim = registry.dispatch(record);
       if (claim.status !== 'claimed') {
         await quarantineRecord(conn, record, quarantineReason(record));
@@ -230,7 +233,7 @@ export async function runEtl(records, connection, opts = {}) {
       const call = adapter.parseCall(record, st);
       const isLlm = call.class === 'llm';
       const sess = isLlm ? adapter.parseSession(record) : null;
-      const synthKey = isLlm && sess.native_id == null ? synth.keyOf(record) : null;
+      const synthKey = isLlm && sess.native_id == null ? synthOf : null;
       const sid = isLlm ? (sess.native_id ?? synthKey ?? null) : null; // control -> NULL session_id
       const key = sid == null ? CONTROL_KEY : sid;
       if (sid != null) {
