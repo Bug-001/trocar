@@ -599,6 +599,8 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
     try { return fssync.readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => path.join(root, e.name)); } catch { return []; }
   });
   const unreadableSealedInShards = () => [...new Set([...shardDirsOf(), ...subdirsOfRoots()])].flatMap((d) => [
+    // a session directory that cannot be read lists nothing — said, not passed over (D38 S-3)
+    ...(() => { try { fssync.readdirSync(d); return []; } catch (e) { return [{ file: d, reason: `a directory that could not be read (${e.code}) — its sessions are not listed`, unreadableRecords: null }]; } })(),
     ...sealedIn(d).filter((f) => !sealedSources(f)).map((f) => ({ file: f, reason: 'sealed file could not be opened (header, index tail or checksum damaged)', unreadableRecords: null })),
     // anything else there that looks like captured bytes and is not read (4.2 「读」: reported, not skipped)
     ...(() => { try { return fssync.readdirSync(d); } catch { return []; } })().filter((n) => !SESSION_STREAMS.includes(n) && unreadCapture(n))

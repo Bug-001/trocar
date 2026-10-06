@@ -333,6 +333,7 @@ async function main() {
             const { sealShard } = await mod('seal.mjs');
             const res = await sealShard(path.resolve(target), { sessionsRoot: path.resolve(flag('--sessions', path.join(asightHome(), 'sessions'))) });
             console.log(`sealed ${res.records} records: ${mb(res.bytes)} → ${mb(res.sealedBytes)} in ${res.outputs.length} file(s); original deleted after verification`);
+            if (res.unsafeKeys) console.log(`  ${res.unsafeKeys} line(s) carried a session key that is not a safe directory name — filed in the per-shard file`);
             for (const o of res.outputs) console.log(`  ${o.path}${o.session ? '' : '  (no session key)'}`);
           }
         } catch (e) { console.error(e.message); process.exitCode = 1; }
@@ -390,7 +391,8 @@ async function main() {
       }
       if (sub === 'journal') {
         const { readJournal, defaultJournalPath } = await mod('journal.mjs');
-        const all = readJournal();
+        let all;
+        try { all = readJournal(); } catch (e) { console.error(`cannot read the raw journal ${defaultJournalPath()}: ${e.message}`); process.exitCode = 1; break; }
         const n = Number(flag('--tail', 50));
         console.log(`${defaultJournalPath()} · ${all.length} entries`);
         for (const e of all.slice(-n)) console.log(JSON.stringify(e));

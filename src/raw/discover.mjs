@@ -107,7 +107,9 @@ function scanRoot(root, fs) {
       continue;
     }
     const dirSkip = { name: e.name, reason: 'directory', attention: e.name.endsWith('.ndjson') };
-    let sub; try { sub = fs.readdirSync(p, { withFileTypes: true }); } catch { skipped.push(dirSkip); continue; }
+    // a directory that cannot be read is NOT a harmless non-capture directory (D38 S-3): reported
+    let sub; try { sub = fs.readdirSync(p, { withFileTypes: true }); }
+    catch (err) { skipped.push({ name: e.name, file: p, reason: 'unreadable', error: err.code, attention: true, report: `a directory that could not be read (${err.code}) — nothing in it is read` }); continue; }
     const took = [];
     for (const s of sub.sort((a, b) => (a.name < b.name ? -1 : 1))) {
       if (s.isDirectory()) continue;
@@ -181,12 +183,15 @@ function addContinuations(perRoot, sessionsRoot, fs) {
   const want = new Map();
   perRoot.forEach((r, k) => { try { if (fs.statSync(r.root).isDirectory()) want.set(fs.realpathSync(r.root), k); } catch {} });
   if (!want.size) return unattributed;
-  let ents; try { ents = fs.readdirSync(sessionsRoot, { withFileTypes: true }); } catch { return unattributed; }
+  let ents;
+  try { ents = fs.readdirSync(sessionsRoot, { withFileTypes: true }); }
+  catch (err) { if (err.code !== 'ENOENT') unattributed.push({ file: sessionsRoot, reason: `the sessions directory could not be read (${err.code}) — sealed continuations of this source in it are not read`, unreadableRecords: null }); return unattributed; }
   const have = new Set(perRoot.flatMap((r) => [...r.flat, ...r.below].map((f) => path.resolve(f))));
   for (const e of ents.sort((a, b) => (a.name < b.name ? -1 : 1))) {
     if (!e.isDirectory()) continue;
     const dir = path.join(sessionsRoot, e.name);
-    let names; try { names = fs.readdirSync(dir).sort(); } catch { continue; }
+    let names; try { names = fs.readdirSync(dir).sort(); }
+    catch (err) { unattributed.push({ file: dir, reason: `a session directory that could not be read (${err.code}) — sealed continuations in it are not read`, unreadableRecords: null }); continue; }
     for (const n of names) {
       const q = path.join(dir, n);
       if (!isSealedPath(n) || have.has(path.resolve(q))) continue;

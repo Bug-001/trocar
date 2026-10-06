@@ -53,7 +53,8 @@ export async function sealUnchecked(shard, { journal = defaultJournalPath(), ...
   try {
     const res = await sealCore(shard, { ...opts, journal });
     appendJournal({ op: 'seal', outcome: 'ok', file: shard, records: res.records, bytes: res.bytes, sha256: res.sha256,
-      sealedBytes: res.sealedBytes, deleted: res.deleted, outputs: res.outputs.map((o) => o.path) }, { journal });
+      sealedBytes: res.sealedBytes, deleted: res.deleted, outputs: res.outputs.map((o) => o.path),
+      ...(res.unsafeKeys ? { unsafeKeys: res.unsafeKeys, note: `${res.unsafeKeys} line(s) carried a session key that is not a safe directory name — filed in the per-shard file` } : {}) }, { journal });
     return res;
   } catch (e) {
     appendJournal({ op: 'seal', outcome: e instanceof SealRefused ? 'refused' : 'failed', file: shard, reason: e.message,
@@ -90,7 +91,7 @@ async function sealCore(shard, { fs = nodeFs, sessionsRoot, split = true, delete
 
     // Pass 1: read the shard once, hash it whole, route and encode every line.
     const whole = createHash('sha256');
-    let lineNo = 0, length = 0;
+    let lineNo = 0, length = 0, unsafeKeys = 0;
     const fd = fs.openSync(shard, 'r');
     try {
       for (const line of readLines(fs, fd)) {
@@ -100,7 +101,7 @@ async function sealCore(shard, { fs = nodeFs, sessionsRoot, split = true, delete
         try { const v = JSON.parse(line.toString('utf8', 0, line.length - (nl ? 1 : 0))).id; id = v == null ? null : String(v); }
         catch { unparseable = true; }
         let key = split && !unparseable ? sessionKeyOfLine(line) : null;
-        if (key != null && !SAFE_KEY.test(key)) key = null;
+        if (key != null && !SAFE_KEY.test(key)) { key = null; unsafeKeys++; }   // counted, not silent (D38 S-5)
         outFor(key || '').writer.add(line, { id, stream: name, shard: 0, lineNo, unparseable });
         lineNo++;
       }
@@ -126,7 +127,7 @@ async function sealCore(shard, { fs = nodeFs, sessionsRoot, split = true, delete
     // Copies left by an interrupted earlier run of the SAME source are superseded by this verified
     // set. Removing them first is safe: the original still holds every byte.
     const ours = new Set([...outs.values()].map((o) => o.tmp));
-    for (const o of outs.values()) { removeEarlierCopies(fs, o.dir, name, { sum, length }); cleanStaleTemps(fs, o.dir, name, ours, journal); cleanEmptyClaims(fs, o.dir, name, journal); }
+    for (const o of outs.values()) { removeEarlierCopies(fs, o.dir, name, { sum, length }, journal); cleanStaleTemps(fs, o.dir, name, ours, journal); cleanEmptyClaims(fs, o.dir, name, journal); }
     for (const o of outs.values()) {
       o.final = publish(fs, o.dir, name, o.tmp);
       renamed = true;
@@ -142,7 +143,7 @@ async function sealCore(shard, { fs = nodeFs, sessionsRoot, split = true, delete
       await onPhase('deleted');
     }
     const outputs = [...outs.values()].map((o) => ({ path: o.final, session: o.key || null, records: o.stats.records, bytes: o.stats.bytes }));
-    return { shard, records: lineNo, bytes: length, sha256: sum, outputs, sealedBytes: outputs.reduce((a, o) => a + o.bytes, 0), deleted: deleteOriginal };
+    return { shard, records: lineNo, bytes: length, sha256: sum, outputs, sealedBytes: outputs.reduce((a, o) => a + o.bytes, 0), deleted: deleteOriginal, unsafeKeys };
   } catch (e) {
     // Before any rename nothing is visible yet: drop the temps. After a rename the verified copies
     // stay (the original is still there, readers use only one of them, a re-run supersedes them).
@@ -273,7 +274,7 @@ function publish(fs, dir, name, tmp) {
   throw new Error(`no free segment name for ${name} in ${dir}`);
 }
 
-function removeEarlierCopies(fs, dir, name, { sum, length }) {
+function removeEarlierCopies(fs, dir, name, { sum, length }, journal) {
   const re = segRe(name);
   let removed = false;
   for (const f of fs.readdirSync(dir)) {
@@ -286,7 +287,10 @@ function removeEarlierCopies(fs, dir, name, { sum, length }) {
       if (tables.shards.length === 1 && tables.shards[0].name === name && tables.shards[0].sha256 === sum && tables.shards[0].length === length) {
         fs.closeSync(fd); fd = null; fs.unlinkSync(p); removed = true;
       }
-    } catch { /* not ours, or unreadable: leave it, the readers report it */ }
+    } catch (e) {
+      // unreadable: left as it is, and recorded here too, not only by the readers (D38 S-4)
+      appendJournal({ op: 'seal', outcome: 'note', file: p, reason: `a sealed segment of this stream could not be opened (${e.message}) — left as it is` }, { journal, fs });
+    }
     finally { if (fd != null) try { fs.closeSync(fd); } catch {} }
   }
   if (removed) fsyncDir(fs, dir);
