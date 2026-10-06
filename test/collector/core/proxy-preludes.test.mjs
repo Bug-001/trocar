@@ -409,10 +409,21 @@ test('review B · a first byte that only looks like SOCKS (0x05, then a partial 
 // forever. The engine must not hold bytes for either side (RFC 4.6 §记录 代理前导).
 async function waitingServer(t, need) {
   const got = []
-  const s = net.createServer((c) => { c.on('error', () => {}); let n = 0; c.on('data', (d) => { got.push(d); n += d.length; if (n >= need) c.write('REPLY') }) })
+  // It answers ONCE, when `need` bytes are in. It used to answer on every data event after that, and a client that keeps
+  // sending (the drip test) then read 'REPLYREPLY' whenever two replies reached it in one read: a flake of the rig, not of
+  // the engine (the test below the rig pins it).
+  const s = net.createServer((c) => { c.on('error', () => {}); let n = 0, replied = false; c.on('data', (d) => { got.push(d); n += d.length; if (n >= need && !replied) { replied = true; c.write('REPLY') } }) })
   await new Promise((r) => s.listen(0, '127.0.0.1', r)); t.after(() => s.close())
   return { port: s.address().port, got }
 }
+test('test rig · the waiting server answers once, however much its client sends after the answer (the TR-2 flake: REPLYREPLY)', T, async (t) => {
+  const srv = await waitingServer(t, 4)
+  const c = net.connect(srv.port, '127.0.0.1'); await once(c, 'connect')
+  let got = ''; c.on('data', (d) => { got += d })
+  for (let i = 0; i < 12; i++) { c.write('A'); await sleep(10) } // the drip, long past the 4 bytes it needs
+  await sleep(50); c.destroy()
+  assert.equal(got, 'REPLY')
+})
 const mongoLike = Buffer.alloc(261, 0x41); mongoLike.writeUInt32LE(261, 0) // 05 01 00 00 …: reads as greeting {1 method: 0}
 const socks4Like = Buffer.alloc(260, 0); socks4Like.writeUInt32LE(260, 0); socks4Like.fill(0x41, 16) // 04 01 00 00 … NUL at 8
 for (const [name, msg, kind] of [['SOCKS5 greeting', mongoLike, 'socks5'], ['SOCKS4 request', socks4Like, 'socks4']]) {
