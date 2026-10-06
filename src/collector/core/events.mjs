@@ -5,19 +5,16 @@
 // back for `asight collector status`, also when no daemon is running.
 import nodeFs from 'node:fs'
 import path from 'node:path'
+import { isFailure } from '../../health/codes.mjs'
 
-// Event kinds that are failures (the daemon's, the switch's, the tracker's, install's).
-export const FAILURE_EVENTS = new Set(['failure', 'helper-down', 'helper-version-mismatch', 'attach-failed', 'detach-failed', 'agent-untrusted'])
+// The closed sets and the failure / expected split live in src/health/codes.mjs (D38: writers and readers share them).
+export { isFailure }
 
 export function appendEvent(dir, rec, { now = new Date(), fs = nodeFs } = {}) {
   const file = path.join(dir, 'flows', `${now.toISOString().slice(0, 10)}.ndjson`)
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   fs.appendFileSync(file, JSON.stringify({ ts: now.toISOString(), ...rec }) + '\n', { mode: 0o600 })
 }
-
-// A failure event, or a flow the engine could not capture: the client rejected the leaf (it does not trust the
-// asight CA), the upstream failed, or a not_captured label.
-export const isFailure = (r) => !!r && (FAILURE_EVENTS.has(r.event) || (r.flow_id != null && (r.reason === 'client-rejected-leaf' || r.error != null || r.not_captured != null)))
 
 export function recentFailures(dir, { limit = 10, files = 2, maxBytes = 1 << 20, fs = nodeFs } = {}) {
   const d = path.join(dir, 'flows')
