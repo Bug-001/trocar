@@ -108,7 +108,14 @@ What the board cannot vouch for, it labels on the call (raw panel and the top of
   drawn as something else — also when only some records of a session are unrecognized. One session may
   mix wire formats; each call is read by its own.
 - Request keys that are not context blocks are listed one by one, each opening its verbatim bytes.
-  A token-count probe keeps only its size, and its detail says so.
+  A token-count probe's request body is kept verbatim like any other (D40; `asight keep` can turn that into a log
+  line), and its detail says which: kept, log only (**只记日志**), or captured before D40 and kept as a length
+  only (**本条采于 D40 之前,只存了长度**).
+- **保存什么 · what is kept** (the session picker's last group): the `asight keep` table on the board — per harness
+  and traffic class the level, the calls, the bytes on the wire and the bytes stored over 24 h / 7 d / all, so you
+  can see which class costs what before you change it. Each number says where it comes from (the analytics store as
+  of the last `asight etl`, the disk total live, once-sealed sizes as an **估计**). The switches work only under
+  `asight serve --control`; without it the page shows the `asight keep` command to run.
 - **The reply as captured** is listed in the raw panel with a locator per piece — the whole decoded
   stream of an HTTP call, each server message of a WebSocket call — each opening its verbatim bytes. A
   piece that cannot be opened says why (a JSON reply the collector stored parsed, a message kept as
@@ -293,7 +300,7 @@ asight mitm [--port 9899] [--host api.anthropic.com]
 asight desktop {on|off|status}        # macOS + Clash Verge
 sudo asight setup-helper [--binary <path>] [--remove]   # Linux, once per machine
 asight collector install | start | on | off | status [--json] | uninstall [--purge-data]
-asight keep [<harness|all> <class|all> <full|log>]   # what is kept of each call: show / set (no daemon needed)
+asight keep [<harness|all> <class|all> <full|log>]   # what is kept of each call: set, or show the levels and sizes (no daemon needed)
 ```
 
 Design authority: [`spec/01-asight-rfc/`](spec/01-asight-rfc/) (entry `0.0-overview.md`). This README is
