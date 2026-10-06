@@ -51,7 +51,7 @@ export function handleFlow(client, meta, ctx) {
   function waitFor(phase, host) {
     waitDone()
     const ms = ctx.upstreamSlowMs ?? 5000, t0w = Date.now()
-    slowTimer = setTimeout(() => { slowTimer = null; ctx.failure({ reason: 'upstream-slow', flow_id: rec.flow_id, host, phase, waited_ms: Math.max(ms, Date.now() - t0w) }) }, ms) // a timer can fire a ms early
+    slowTimer = setTimeout(() => { slowTimer = null; ctx.failure({ code: 'upstream-slow', flow_id: rec.flow_id, host, phase, waited_ms: Math.max(ms, Date.now() - t0w), reason: `${host} has not answered the ${phase === 'proxy-reply' ? 'proxy request' : 'TLS handshake'} for ${Math.max(ms, Date.now() - t0w)} ms; still waiting` }) }, ms) // a timer can fire a ms early
     if (slowTimer.unref) slowTimer.unref()
   }
   function waitDone() { if (slowTimer) { clearTimeout(slowTimer); slowTimer = null } }
@@ -63,7 +63,7 @@ export function handleFlow(client, meta, ctx) {
   function skipOf(host) {
     let v = null
     if (meta.decrypt) v = ctx.policy(meta, host) // a throw is this flow's engine-error (guard)
-    else try { v = ctx.policy(meta, host) } catch (e) { ctx.failure({ reason: 'engine-error', flow_id: rec.flow_id, error: `policy threw: ${msgOf(e)}` }) }
+    else try { v = ctx.policy(meta, host) } catch (e) { ctx.failure({ code: 'engine-error', flow_id: rec.flow_id, reason: `policy threw: ${msgOf(e)}` }) }
     const own = v && typeof v === 'object' && DAEMON_CODES.includes(v.not_captured) ? [v.not_captured, v.reason ?? null] : null
     if (!meta.decrypt) return own && own[0] !== 'not-trust-path' ? own : ['untrusted', null]
     if (own) return own

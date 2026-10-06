@@ -160,38 +160,39 @@ test('a framing error on either side calls onFailure once with its side; open ex
 })
 
 // ── D38 (RFC 4.6 §记录): what the connection's flows/ row and the engine's events must say ──────────────
-const failSink = () => { const out = [], failures = []; return { out, failures, store: { envelope: (e) => out.push(e), failure: (f) => failures.push(f) } } }
+const failSink = () => { const out = [], failures = []; return { out, failures, store: { envelope: (e) => out.push(e) }, onFailure: (f) => failures.push(f) } }
 const OK0 = 'HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'
 
 test('an exception while building an envelope is engine-error, not a framing error; the next exchange is still framed (D38 T-11)', () => {
-  const { out, failures, store } = failSink()
+  const { out, failures, store, onFailure } = failSink()
   const flow = { ...FLOW, get host() { throw new Error('boom') } }
-  const t = createExchangeTee({ flow, recordStore: store })
+  const t = createExchangeTee({ flow, recordStore: store, onFailure })
   for (let i = 0; i < 2; i++) { t.fromClient(Buffer.from(`GET /${i} HTTP/1.1\r\n\r\n`)); t.fromUpstream(Buffer.from(OK0)) }
   assert.equal(out.length, 0)
-  assert.deepEqual(failures.map((f) => [f.reason, f.flow_id, f.seq, /recording failed: boom/.test(f.error)]), [['engine-error', 'f', 0, true], ['engine-error', 'f', 1, true]])
+  assert.deepEqual(failures.map((f) => [f.code, f.flow_id, f.seq, /recording failed: boom/.test(f.reason)]), [['engine-error', 'f', 0, true], ['engine-error', 'f', 1, true]])
 })
 
 test('a response with no request to pair with is one unpaired-response event per connection, not dropped silently (D38 T-12)', () => {
-  const { out, failures, store } = failSink()
-  const t = createExchangeTee({ flow: FLOW, recordStore: store })
+  const { out, failures, store, onFailure } = failSink()
+  const t = createExchangeTee({ flow: FLOW, recordStore: store, onFailure })
   t.fromClient(Buffer.from('POST /v1/messages HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}XX')) // bad chunk terminator: the request framer stops
   for (let i = 0; i < 3; i++) t.fromUpstream(Buffer.from(i === 1 ? 'HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n' : OK0))
   assert.deepEqual(out.map((e) => e.req_partial), ['framer-error'], 'the first response pairs with the broken request')
   assert.deepEqual(t.rowNotes(), { framerError: { side: 'request', message: 'bad chunk terminator' } }, 'the row says framing stopped (D38 review A)')
-  assert.deepEqual(failures.map((f) => [f.reason, f.side ?? f.status]), [['framer-error', 'request'], ['unpaired-response', 404]])
+  assert.deepEqual(failures.map((f) => [f.code, f.side ?? f.status]), [['framer-error', 'request'], ['unpaired-response', 404]])
 })
 
 test('envelopes the store did not write are counted for the flows/ row (false or a throw); written ones are not (D38 T-13)', () => {
   let n = 0
-  const store = { envelope: () => { n++; if (n === 1) return false; if (n === 2) throw new Error('EIO'); return true }, failure() {} }
+  const store = { envelope: () => { n++; if (n === 1) return false; if (n === 2) throw new Error('EIO'); return true } }
   const t = createExchangeTee({ flow: FLOW, recordStore: store })
   for (let i = 0; i < 3; i++) { t.fromClient(Buffer.from(`GET /${i} HTTP/1.1\r\n\r\n`)); t.fromUpstream(Buffer.from(OK0)) }
   assert.deepEqual([t.rowNotes(), t.stats.recorded], [{ writeFailed: 2 }, 1])
 })
 
 test('after a WebSocket 101 the recorder\'s lost envelopes are counted on the row too (D38 T-13)', () => {
-  const t = createExchangeTee({ flow: FLOW, recordStore: { envelope: () => false, failure() {} } })
+  const failures = []
+  const t = createExchangeTee({ flow: FLOW, recordStore: { envelope: () => false }, onFailure: (f) => failures.push(f) })
   t.fromClient(Buffer.from('GET /v1/responses HTTP/1.1\r\nHost: h.test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n'))
   t.fromUpstream(Buffer.from('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n'))
   const mask = Buffer.from([1, 2, 3, 4]), text = Buffer.from('{"a":1}')
@@ -199,6 +200,7 @@ test('after a WebSocket 101 the recorder\'s lost envelopes are counted on the ro
   t.fromUpstream(Buffer.concat([Buffer.from([0x81, 2]), Buffer.from('ok')]))
   t.clientEnded(null) // the connection ends: the open call is written (and lost)
   assert.equal(t.rowNotes().writeFailed, 1)
+  assert.deepEqual(failures.map((f) => [f.where, f.code, f.flow_id]), [['ws', 'write-failed', 'f']], 'and the ws recorder says it as a failure event, through the same sink')
 })
 
 test('a non-WebSocket 101 or a CONNECT 2xx: nothing after it is framed, and the row will say so (D38 T-15)', () => {

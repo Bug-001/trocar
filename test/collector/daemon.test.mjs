@@ -766,6 +766,9 @@ test('daemon: a CA that becomes usable again is rebuilt — ca-ok clears the con
     const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: extraCc }); await once(c, 'secureConnect')
     const asightCa = new crypto.X509Certificate(fs.readFileSync(path.join(caDir, 'asight-ca.pem')))
     assert.ok(new crypto.X509Certificate(c.getPeerCertificate().raw).checkIssued(asightCa), 'the leaf is signed by the asight CA: decrypted, not stepped aside')
+    // a call goes through (a client that hung up right after the handshake would be, by the engine's rule, one that
+    // refused the leaf: not_captured client-rejected-leaf — the merged rows now say so, they used to carry reason only)
+    c.write('POST /v1/messages HTTP/1.1\r\nHost: relay.asight.test\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}'); await once(c, 'data')
     c.end(); await once(c, 'close')
     const row = await until(() => flowsOf(s).find((f) => f.pid === 4343 && f.event == null && f.flow_id))
     assert.deepEqual([row.decision, row.not_captured ?? null], ['decrypt', null])

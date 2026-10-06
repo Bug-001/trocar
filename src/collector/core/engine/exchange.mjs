@@ -48,7 +48,6 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
   // the WebSocket recorder writes through this, so its lost envelopes are counted on the row too
   const counted = {
     envelope(env) { let ok; try { ok = recordStore.envelope(env) } catch (e) { writeFailed++; throw e } if (ok === false) writeFailed++; return ok },
-    failure: (r) => recordStore.failure(r),
     get lastError() { return recordStore.lastError },
   }
 
@@ -140,7 +139,7 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
         resp: respPart,
         error: error || null,
       })
-    } catch (e) { onFailure({ reason: 'engine-error', flow_id: flow.id, seq: ex.seq, error: `recording failed: ${String((e && e.message) || e)}` }); return }
+    } catch (e) { onFailure({ code: 'engine-error', flow_id: flow.id, seq: ex.seq, reason: `recording failed: ${String((e && e.message) || e)}` }); return }
     let ok = true
     try { ok = recordStore.envelope(env) !== false } catch { ok = false } // the store counts and reports its own failures
     if (!ok) { writeFailed++; return }
@@ -150,7 +149,7 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
   function finalize(resp, error) {
     const ex = pending.shift()
     if (!ex) { // a response no request of ours asked for (e.g. after the request framer failed): not silent (D38)
-      if (!unpaired) { unpaired = true; onFailure({ reason: 'unpaired-response', flow_id: flow.id, status: resp && resp.head ? resp.head.status : null }) }
+      if (!unpaired) { unpaired = true; onFailure({ code: 'unpaired-response', flow_id: flow.id, status: resp && resp.head ? resp.head.status : null, reason: `a ${resp && resp.head ? resp.head.status : '?'} response arrived with no request to pair with; it is not recorded` }) }
       return
     }
     emit(ex, respPartOf(resp, false), error, 'early-response')

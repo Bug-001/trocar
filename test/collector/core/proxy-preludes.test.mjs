@@ -37,7 +37,8 @@ async function lab(t, proxyOpts, { proxies = () => [], trustLab = true, dst = nu
   const engine = createEngine({
     redirector: createStaticRedirector({ dst: { address: '127.0.0.1', port: port0, family: 4 }, pid: 21, agent: 'kimi', decrypt }), policy,
     issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: trustLab ? fs.readFileSync(labCa.caCert) : undefined,
-    store: { envelope: (e) => { envelopes.push(e); return store.envelope(e) }, flow: (f) => { flows.push(structuredClone(f)); return store.flow(f) }, failure: (f) => { failures.push(f); return store.failure(f) } },
+    store: { envelope: (e) => { envelopes.push(e); return store.envelope(e) }, flow: (f) => { flows.push(structuredClone(f)); return store.flow(f) } },
+    onFailure: (f) => failures.push(f), // the engine's failure sink (D38; the daemon writes these to flows/)
     describe: () => ({ proxies: proxies(proxy.port) }), timing,
   })
   const { port } = await engine.listen({})
@@ -266,7 +267,7 @@ test('W12 an own https:// proxy whose certificate the engine cannot verify: the 
   assert.deepEqual(L.proxy.log.map((e) => e.conn), [1, 2], 'one CONNECT per client connection: the prelude reached the proxy once each')
   const nc = L.engine.stats().notCaptured
   assert.deepEqual([nc.upstreamCert, nc.negative, nc.httpsProxy], [1, 1, 0])
-  assert.deepEqual(L.failures.map((f) => [f.reason, f.host, f.cause]), [['negative-cache-add', PROXY_HOST, 'upstream-cert']])
+  assert.deepEqual(L.failures.map((f) => [f.code, f.host, f.cause]), [['negative-cache', PROXY_HOST, 'upstream-cert']], 'the negative-cache write: the closed-set code, once')
 })
 
 test('an own https:// proxy: the client goes after CONNECT 200 without starting the inner TLS — the row is written, nothing hangs', T, async (t) => {

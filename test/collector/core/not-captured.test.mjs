@@ -42,7 +42,7 @@ const rawTalk = (port, bytes, { end = true } = {}) => new Promise((resolve) => {
 })
 
 // Every engine failure record carries a code from the closed event set (RFC 4.6 §记录 事件行, D38).
-const assertEvents = (fs) => { for (const f of fs) assert.ok(ENGINE_EVENTS.includes(f.reason), `${f.reason} is not an engine event code`) }
+const assertEvents = (fs) => { for (const f of fs) assert.ok(ENGINE_EVENTS.includes(f.code) && typeof f.reason === 'string', `${f.code} is not an engine event code, or has no reason`) }
 
 // The §记录 criterion, as the board's scan will apply it: a row the bytes missed has a closed code.
 function assertCriterion(rows) {
@@ -64,7 +64,7 @@ const cases = [
   ['the daemon no longer holds the pid (untracked)', () => tlsUp(), { policy: () => ({ not_captured: 'untracked' }) }, (p) => tlsTalk(p), ['splice', 'untracked']],
   ['an untrusted process: the resolver\'s reason from the daemon', () => tlsUp(), { meta: { decrypt: false }, policy: () => ({ not_captured: 'untrusted', reason: 'settings shadowed' }) }, (p) => tlsTalk(p), ['splice', 'untrusted', 'settings shadowed']],
   ['an untrusted process the daemon no longer holds', () => sink(), { meta: { decrypt: false }, policy: () => ({ not_captured: 'untracked' }) }, (p) => rawTalk(p, REQ), ['splice', 'untracked']],
-  ['an untrusted process whose policy() throws: still untrusted, the throw recorded', () => tlsUp(), { meta: { decrypt: false }, policy: () => { throw new Error('boom') } }, (p) => tlsTalk(p), ['splice', 'untrusted'], (r, h) => assert.deepEqual(h.failures.map((f) => [f.reason, f.flow_id, /policy threw: boom/.test(f.error)]), [['engine-error', r.flow_id, true]])],
+  ['an untrusted process whose policy() throws: still untrusted, the throw recorded', () => tlsUp(), { meta: { decrypt: false }, policy: () => { throw new Error('boom') } }, (p) => tlsTalk(p), ['splice', 'untrusted'], (r, h) => assert.deepEqual(h.failures.map((f) => [f.code, f.flow_id, /policy threw: boom/.test(f.reason)]), [['engine-error', r.flow_id, true]])],
   ['only h2', () => tlsUp(['h2']), {}, (p) => tlsTalk(p, { ALPNProtocols: ['h2'] }), ['splice', 'h2', 'alpn-h2-only']],
   ['an ALPN offer with neither h2 nor http/1.1', () => tlsUp(['x-other']), {}, (p) => tlsTalk(p, { ALPNProtocols: ['x-other'] }), ['splice', 'unknown-protocol', 'alpn x-other']],
   ['the upstream speaks first', () => net.createServer((s) => { s.on('error', () => {}); s.end('SSH-2.0-banner\r\n') }), {}, (p) => rawTalk(p, null, { end: false }), ['splice', 'upstream-first']],
@@ -116,7 +116,7 @@ test('a slow upstream TLS handshake is waited for, not cut: the agent gets its r
   await h.close(); origin.close()
   assert.equal(got, RESP, 'the agent was not cut while the engine waited on its upstream')
   assert.deepEqual([h.flows[0].decision, h.flows[0].error], ['decrypt', undefined])
-  assert.deepEqual(h.failures.map((f) => [f.reason, f.flow_id, f.phase, f.host, f.waited_ms >= 100]), [['upstream-slow', h.flows[0].flow_id, 'tls', 'upstream.test', true]]); assertEvents(h.failures)
+  assert.deepEqual(h.failures.map((f) => [f.code, f.flow_id, f.phase, f.host, f.waited_ms >= 100]), [['upstream-slow', h.flows[0].flow_id, 'tls', 'upstream.test', true]]); assertEvents(h.failures)
 })
 
 test('a slow proxy reply to CONNECT is waited for, not cut; relayed verbatim when it comes (D38 T-5)', async () => {
@@ -126,7 +126,7 @@ test('a slow proxy reply to CONNECT is waited for, not cut; relayed verbatim whe
   await h.close()
   assert.equal(got.toString(), reply)
   assert.deepEqual([h.flows[0].decision, h.flows[0].not_captured], ['tunnel', 'proxy-refused'])
-  assert.deepEqual(h.failures.map((f) => [f.reason, f.phase]), [['upstream-slow', 'proxy-reply']])
+  assert.deepEqual(h.failures.map((f) => [f.code, f.phase]), [['upstream-slow', 'proxy-reply']])
 })
 
 test('a fast upstream writes no upstream-slow event', async () => {
@@ -182,5 +182,5 @@ test('a decrypted row whose response could not be framed says framer_error (the 
   assert.equal(await tlsTalk(h.port), bad, 'the bytes still reach the agent verbatim')
   await h.close()
   assert.deepEqual([h.flows[0].decision, h.flows[0].framer_error], ['decrypt', { side: 'response', message: 'bad content-length' }])
-  assert.deepEqual(h.failures.map((f) => [f.reason, f.side]), [['framer-error', 'response']]); assertEvents(h.failures)
+  assert.deepEqual(h.failures.map((f) => [f.code, f.side]), [['framer-error', 'response']]); assertEvents(h.failures)
 })
