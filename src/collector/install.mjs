@@ -20,11 +20,11 @@ import { controlRequest } from './core/control.mjs'
 import { readText, readTextOrError } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
 import { lockState, procIdentity } from '../health/read.mjs'
+import { pidAlive } from '../off/proc.mjs'
 import { dropBackup } from '../off/backup.mjs'
 import { backupDir } from '../off/paths.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-const pidAlive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' } }
 const listDir = (d) => { try { return fs.readdirSync(d) } catch { return [] } }
 
 // An engine port that is free on both loopback families now (4.6 OPEN「按实例分配」, gate G3): recorded in the

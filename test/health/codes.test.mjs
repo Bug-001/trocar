@@ -1,7 +1,7 @@
 // test/health/codes.test.mjs — the D38 closed sets (RFC 4.6 §记录「失败不静默」, src/health/codes.mjs): every name a
 // collector writer puts in `event` / `where` / `code` / `not_captured` is in the set (a static scan of src/collector,
 // proven able to fail on a planted file); the failure / expected split; checkRecord; and the 0.1 §2 dependency rule
-// for src/health (node built-ins, src/paths.mjs, src/raw/ only).
+// for src/health (node built-ins, src/paths.mjs, src/raw/ and src/off/proc.mjs only).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -90,14 +90,14 @@ test('D38 checkRecord: names outside the set, a failure without a reason; errno 
   assert.ok(CODES.includes('lookup-miss') && CODES.includes('ca-invalid'))
 })
 
-test('0.1 §2 src/health imports only node built-ins, src/paths.mjs and src/raw/', () => {
+test('0.1 §2 src/health imports only node built-ins, src/paths.mjs, src/raw/ and src/off/proc.mjs', () => {
   const dir = path.join(REPO, 'src', 'health')
   for (const f of walk(dir)) {
     for (const m of fs.readFileSync(f, 'utf8').matchAll(/\bfrom\s*'([^']+)'|\bimport\s*\(\s*'([^']+)'\s*\)/g)) {
       const spec = m[1] || m[2]
       if (spec.startsWith('node:')) continue
       const to = path.relative(REPO, path.resolve(path.dirname(f), spec)).split(path.sep).join('/')
-      assert.ok(to === 'src/paths.mjs' || to.startsWith('src/raw/') || to.startsWith('src/health/'), `${path.relative(REPO, f)} imports ${to}`)
+      assert.ok(to === 'src/paths.mjs' || to === 'src/off/proc.mjs' || to.startsWith('src/raw/') || to.startsWith('src/health/'), `${path.relative(REPO, f)} imports ${to}`)
     }
   }
 })

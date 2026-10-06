@@ -7,30 +7,17 @@
 //   captureHealth() is what GET /api/capture-health answers and `asight collector status` prints when no daemon
 // answers (RFC 4.4, 4.6 §记录「看得到」): from disk only — flows/ (src/health/flows.mjs), the lock, the install manifest,
 // state.json, the raw journal and the old capture's events file — never through the daemon's socket.
-// Node built-ins, src/paths.mjs and src/raw/ only (0.1 §2).
+// Node built-ins, src/paths.mjs, src/raw/ and src/off/proc.mjs (a process's identity and liveness: the one reader `off` uses too) only (0.1 §2).
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { asightHome } from '../paths.mjs'
+import { procIdentity, pidAlive } from '../off/proc.mjs'
 import { readFlows, readDay, foldFlows, pick, groupKey, lastRun, WINDOW_MS, HealthUnreadable } from './flows.mjs'
 import { isFailure } from './codes.mjs'
 
-export { HealthUnreadable }
+export { HealthUnreadable, procIdentity }
 
 export const LOCK_FRESH_MS = 5000
-
-/** {start_time, boot_id} of a live process (strings), each null when it cannot be read (no /proc, gone, EACCES). */
-export function procIdentity(pid, { root = '/proc', fs = nodeFs } = {}) {
-  let start_time = null, boot_id = null
-  try {
-    const stat = fs.readFileSync(path.join(root, String(pid), 'stat'), 'utf8')
-    const f = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/) // field 3 onward: comm may hold ')' or spaces
-    if (/^\d+$/.test(f[19] || '')) start_time = f[19]
-  } catch { /* gone or no /proc: start_time stays null, and the judge below says so */ }
-  try { boot_id = fs.readFileSync(path.join(root, 'sys', 'kernel', 'random', 'boot_id'), 'utf8').trim() || null } catch { /* no /proc */ }
-  return { start_time, boot_id }
-}
-
-const pidAlive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' } }
 
 /**
  * lockState({file}) → {state, …}:
