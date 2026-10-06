@@ -2462,7 +2462,7 @@ function renderRetentionView(){
   if(sig===retSig&&tl.dataset.mode==='retention'){ pollRetention(); return }
   retSig=sig
   const R=retH, sz=R.sizes, T=R.totals, win=retWin
-  document.getElementById('sessMeta').textContent=sz?`sizes as of ${sz.as_of||'(empty store)'} · the last asight etl`:'sizes: 需要先跑 asight etl'
+  document.getElementById('sessMeta').textContent=sz?`sizes: newest call in the store ${sz.as_of||'(empty store)'}`:'sizes: 需要先跑 asight etl'
   const rowsOf=(h,c)=>sz?sz.rows.filter(r=>r.harness===h&&r.class===c&&r.retention!=='legacy-meta'):[]
   const need='<div class="need">需要先跑 asight etl</div>'
   const cmd=(h,c,to)=>`asight keep ${h} ${c} ${to}`
@@ -2511,7 +2511,7 @@ function renderRetentionView(){
   // the ledger: where each number comes from, the disk, what changed lately
   const D=R.disk||{}, g=D.groups||{}, S=R.seal||{}
   let L=`<div class="curmeta">⚙ 保存什么 · where the numbers come from</div>`
-  L+=sz?`<div style="color:var(--dim);font-size:10px;margin-bottom:6px">按类数字截至 ${esc(sz.as_of||'—')}(上次 <code>asight etl</code>)· as of the last ETL, not live · windows end ${esc(fmtWhen(sz.windows_end))}</div>`:`<div style="color:var(--amber);font-size:10px;margin-bottom:6px">${esc(R.sizes_reason||'需要先跑 asight etl')}</div>`
+  L+=sz?`<div style="color:var(--dim);font-size:10px;margin-bottom:6px">按类数字截至库里最新一条调用 ${esc(sz.as_of||'—')}(不是 <code>asight etl</code> 跑的时刻;之后的调用要再跑一次才计入)· newest call in the store, not live · windows end ${esc(fmtWhen(sz.windows_end))}</div>`:`<div style="color:var(--amber);font-size:10px;margin-bottom:6px">${esc(R.sizes_reason||'需要先跑 asight etl')}</div>`
   L+=`<h2><span class="gi" style="background:var(--accent)"></span><span style="text-transform:none">~/.asight</span> 盘上占用 <span class="ct">${fmtB(D.total_bytes)}</span></h2><div style="color:var(--dim);font-size:10px">lstat file sizes, live · ${D.files??0} files</div>`
   for(const [k,l] of [['captures','采集文件 · captures'],['sealed','封存文件 · sealed'],['sessions','sessions/ 分片副本 · shard copies'],['duckdb','DuckDB'],['logs','日志 · logs'],['other','其他 · other']]) L+=`<div class="res"><div class="top"><span class="nm">${esc(l)}</span><span class="via">${fmtB(g[k]&&g[k].bytes)}</span></div></div>`
   if((D.unreadable||[]).length) L+=`<div style="color:var(--amber);font-size:10px">⚠ ${D.unreadable.length} path(s) could not be read, so the total is a floor: ${esc(D.unreadable.slice(0,3).map(u=>u.path).join(', '))}</div>`

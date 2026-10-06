@@ -769,8 +769,8 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         catch (e) { if (e instanceof HealthUnreadable) return sendJson(res, 503, { error: `capture health could not be read: ${e.message}` }); throw e; }
       }
       // D40 (RFC 4.4 端点表, 2.6 §D): what is kept of each call per harness × class, what each class takes, what ~/.asight takes. Read
-      // only, metadata only (no record bytes): the settings file, the change log's tail, the projection's sizes (as of the last
-      // `asight etl`; sizes:null + the reason when there is no store — never 0) and lstat sizes of the files under the home.
+      // only, metadata only (no record bytes): the settings file, the change log's tail, the projection's sizes (up to the newest
+      // call in the store, which is as far as the last `asight etl` got; sizes:null + the reason when there is no store — never 0) and lstat sizes of the files under the home.
       if (p === '/api/retention') {
         return sendJson(res, 200, await retentionReport({ home: healthHome || asightHome(), conn: db ? db.connection : null, dbError, dbPath, control }));
       }

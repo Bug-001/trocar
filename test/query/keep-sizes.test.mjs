@@ -59,7 +59,7 @@ test('`asight keep` (no arguments): the level table, then the sizes per window; 
   const p = k.run('--db', k.dbPath)
   assert.equal(p.status, 0, p.stderr)
   assert.match(p.stdout, /what is kept of each call/)
-  assert.match(p.stdout, /sizes · from the analytics store as of .* \(the last asight etl\) — not live/)
+  assert.match(p.stdout, /sizes · from the analytics store, newest call in it .* — not live \(a call after the last asight etl is not counted\)/)
   assert.match(p.stdout, /last 24 h[\s\S]*cc · telemetry\s+full\s+1\s+1\.0 KiB\s+1\.5 KiB/, 'the 24 h block: one call, 1000 + 50 = 1050 B on the wire, 1500 B stored')
   assert.match(p.stdout, /cc · telemetry\s+log\s+1\s+8\.8 KiB/, 'a log call: its wire bytes (9021) are counted, the body is not stored')
   assert.match(p.stdout, /before D40 \(length only\)\s+1\s+321 B \+ 响应未记录 ×1/, 'a pre-D40 record: the length it kept, and its response size is 未记录, not 0')

@@ -157,8 +157,8 @@ export async function resourceLifecycle(conn, sessionId) {
 // What each (harness, traffic class, body_retention) holds, over the last 24 h, the last 7 d and everything: the number of
 // calls, the body bytes that went over the wire (request; response — with the calls whose response size was never recorded
 // counted apart, never added as 0), and the bytes stored (`record_bytes`, one NDJSON line each: the size before sealing;
-// calls whose stored size is unknown are counted apart too). `as_of` is the newest `ts` the projection holds — the numbers are
-// as of the last `asight etl`, never live. Every number comes from `calls` and nothing else: no source file is read.
+// calls whose stored size is unknown are counted apart too). `as_of` is the newest `ts` the projection holds (NOT the moment the ETL ran) — the numbers
+// stop at the last call the last `asight etl` read, never live. Every number comes from `calls` and nothing else: no source file is read.
 export const SIZE_WINDOWS = Object.freeze([['24h', 24 * 3600e3], ['7d', 7 * 24 * 3600e3], ['all', null]]);
 const RETENTION_ORDER = ['full', 'log', 'legacy-meta'];
 export const SIZE_COLUMNS = ['calls', 'request_bytes', 'response_bytes', 'response_unrecorded', 'stored_bytes', 'stored_unrecorded'];

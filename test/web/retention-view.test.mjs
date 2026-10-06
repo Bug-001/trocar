@@ -144,15 +144,16 @@ test('2.6 #7 — an empty or missing store shows 「需要先跑 asight etl」 i
   assert.match(cellOf(html, 'cc', 'telemetry'), /class="lvl log"/)
 })
 
-test('2.6 #7 — every number says where it comes from: the per-class ones are 「as of the last asight etl」, the disk total is live, once-sealed sizes are 估计', async () => {
+test('2.6 #7 — every number says where it comes from: the per-class ones are 「as of the newest call in the store」, the disk total is live, once-sealed sizes are 估计', async () => {
   const rep = await payload({ ratio: 0.25 })
   const t = await shown({ report: rep })
   const html = t.tl(), led = t.led()
   assert.match(text(cellOf(html, 'cc', 'llm')), /封存后 ≈1\.4 KiB 估计/, '5600 stored × 0.25')
   assert.match(html, /估计/)
   assert.match(html, /one global number, so only an <b>估计<\/b> for any one class/)
-  assert.match(led, /按类数字截至 2026-10-07 11:00:00（?\(?上次|截至 2026-10-07 11:00:00/)
-  assert.match(led, /as of the last ETL, not live/)
+  assert.match(led, /按类数字截至库里最新一条调用 2026-10-07 11:00:00/)
+  assert.match(led, /newest call in the store, not live/)
+  assert.doesNotMatch(led, /as of the last ETL/, 'as_of is the newest call\'s ts, not when the ETL ran')
   assert.match(text(led), /~\/\.asight 盘上占用/)
   assert.match(led, /lstat file sizes, live/)
   assert.match(led, /封存比 · seal ratio 0\.250 over 2 sealed file\(s\) — 估计 only/)

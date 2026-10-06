@@ -50,7 +50,7 @@ export function formatKeepSizes(report) {
   if (!s) {
     out.push(`sizes: ${report.sizes_reason || '需要先跑 asight etl'}`);
   } else {
-    out.push(`sizes · from the analytics store as of ${s.as_of || '(it is empty)'} (the last asight etl) — not live; windows end ${s.windows_end}`);
+    out.push(`sizes · from the analytics store, newest call in it ${s.as_of || '(it is empty)'} — not live (a call after the last asight etl is not counted); windows end ${s.windows_end}`);
     for (const [win, label] of Object.entries(WINDOW_NAMES)) {
       const rows = s.rows.filter((r) => r.windows[win].calls > 0);
       out.push('', `  ${label}`);
