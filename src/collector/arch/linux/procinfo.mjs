@@ -83,12 +83,15 @@ function hexIpToStr(hex) {
   return null
 }
 
-// Map socket inode -> {remAddr, remPort, state} for ESTABLISHED rows across tcp + tcp6.
+// Map socket inode -> {remAddr, remPort, state} for ESTABLISHED rows across tcp + tcp6. A table that is absent is
+// skipped (tcp6 is not there with IPv6 off); one that is there but unreadable (EACCES under an LSM policy) throws, and
+// so does having neither: the count is then unknown with the errno, never 0 (4.6 §开关语义, D-17, review D1-3).
 function parseNetTcp(root) {
   const byInode = new Map()
+  let read = 0
   for (const file of ['tcp', 'tcp6']) {
     let text
-    try { text = fs.readFileSync(path.join(root, 'net', file), 'utf8') } catch { continue }
+    try { text = fs.readFileSync(path.join(root, 'net', file), 'utf8'); read++ } catch (e) { if (e.code === 'ENOENT') continue; throw e }
     const lines = text.split('\n')
     for (let i = 1; i < lines.length; i++) {
       const cols = lines[i].trim().split(/\s+/)
@@ -103,6 +106,7 @@ function parseNetTcp(root) {
       byInode.set(inode, { remAddr, remPort, state: st })
     }
   }
+  if (!read) throw Object.assign(new Error(`neither ${path.join(root, 'net', 'tcp')} nor tcp6 exists`), { code: 'ENOENT' })
   return byInode
 }
 
@@ -128,7 +132,8 @@ export function directConnections(pid, opts = {}) {
 /**
  * Count the pid's ESTABLISHED TCP connections whose peer is NOT the local engine
  * (127.0.0.1/::1 : enginePort) — i.e. connections still going direct, therefore not captured.
- * Returns 0 if the process is gone or has no such sockets; throws when its fd table cannot be read.
+ * Returns 0 if the process is gone or has no such sockets; throws when its fd table, or a /proc/net/tcp* table that
+ * is there, cannot be read.
  */
 export function countDirectConnections(pid, { root = '/proc', enginePort } = {}) {
   const inodes = socketInodesOf(pid, root)
