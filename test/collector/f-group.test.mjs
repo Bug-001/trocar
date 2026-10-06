@@ -327,4 +327,5 @@ test('F5 decoding and truncation of HTTP/1 calls: response framing error, unpair
 //   F3(c), F3(i): test/collector/arch/linux/redirector-client.unit.test.mjs (heartbeat gap, monotonic timing),
 //       test/collector/core/events.test.mjs (the day never goes back), test/health/capture-health.test.mjs (not
 //       responding by the lock's age, pid / boot_id mismatch → not running).
-//       (D-16) and the lab suites; they skip without the lab.
+//   [test-machine] F3(a) kill -9 of the helper, F3(b) kill -9 of the daemon; F3(f) kernel
+//       drops (D-16). They skip without a test machine.
