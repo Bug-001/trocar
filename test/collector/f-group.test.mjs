@@ -316,10 +316,19 @@ test('F7 sealing and reading: a seal refused on an unclosed shard is a journal l
 
 test('F5 decoding and truncation of HTTP/1 calls: response framing error, unpaired response, compressed request body', { todo: 'C2 T-11 / T-12 / T-14 (engine, another lane); the WebSocket labels are test/web/ws-incomplete.test.mjs' }, () => { assert.fail('waits on C2') })
 
+// F1(d) has its runnable check waiting, not silently missing (4.6 F: one check per F item).
+test('F1(d) an entry\'s combined bundle deleted → the daemon rebuilds it and records it; a rebuild that fails (read-only dir) leaves the old file, a failure event, and the endpoint lists the harness and path', { todo: 'C1 D-21: the per-harness combined bundle (combined-<harness>.pem) and its daily check are not built yet (no bundle module under src/collector/core/trust/)' }, () => { assert.fail('waits on C1 D-21') })
+
+// F5 says these labels "不让顶栏变 ⚠", while 4.6 §记录 lists the WebSocket recorder's write-failed /
+// decode-failed / broken / recorder-error as failure events and 1.5 turns every failure ⚠ — today a flows/ holding only
+// ws/decode-failed is ⚠ 1 (src/health/codes.mjs FAILURE_EVENTS). Which rule wins is the user's call; until then this is
+// a todo, not a pointer to a test that never had a WebSocket event in it.
+test('F5 fidelity labels (WebSocket recorder events in flows/) do not turn the top bar ⚠', { todo: 'spec conflict, unresolved: 4.6 F5 vs 4.6 §记录 (WS recorder codes are failure events) and 1.5 (failures are ⚠)' }, () => { assert.fail('waits on a spec decision') })
+
 // Elsewhere:
 //   F5 (WebSocket): test/web/ws-incomplete.test.mjs — partial / ws_truncated / undecoded / non-verbatim reach /api/session
-//       and render as 不完整 / 已截断 / 未解码 / 非逐字, through both assemblers; labels never turn the top bar ⚠
-//       (test/web/cap-health.test.mjs "#caphealth: every … state").
+//       and render as 不完整 / 已截断 / 未解码 / 非逐字, through both assemblers. Whether the recorder's flows/ events turn
+//       the top bar ⚠ is the todo above (no test covered it). Response-body labels: test/web/resp-incomplete.test.mjs.
 //   F8: test/capture/legacy-failures.test.mjs, legacy-run.test.mjs, legacy-ops.test.mjs (4.1 #6b); "old MITM only is not
 //       「未安装」": test/health/capture-health.test.mjs "the old capture: …".
 //   F9: test/server-capture-health.test.mjs (503, installed:false, metadata only, Host / Origin) and
