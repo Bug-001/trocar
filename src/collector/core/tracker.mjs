@@ -7,6 +7,11 @@
 // A plugin harness's trust shows only as a per-pid marker file (4.6 「标记」): one appearing after exec re-judges that
 // process, and until it appears (at most `markerGraceMs` from the process start) the process is `marker-pending`.
 // Hosts a harness declares as not via the trust path are never decrypted, under `all` too (4.6 不经信任路径).
+// Per harness (1.6 §1.5, D39②): setEnabled(ids) names the harnesses whose desired state is on. A process of any other harness is not an
+// agent to capture: it is never judged, never watched (the kernel neither rewrites nor reports it) and never told to onVerdict, so no
+// `agent-untrusted` is written for it; its row is kept, `off: true`, so status can say so and a later `on` finds it again. reconcile()
+// brings the table to the enabled set after a harness was turned off (unwatch its rows, onOff(row) so the daemon ends what it recorded);
+// turning one ON is done by the rescan behind an `on` request, never here. Without setEnabled every harness is enabled (no switch wired).
 // Descriptor callbacks are harness code: any throw degrades that agent to its known hosts and is
 // shown in agents(), it never breaks the table. A config file that exists but cannot be read is reported (D38).
 import fs from 'node:fs'
@@ -59,7 +64,8 @@ const statKeyOf = (f) => { try { const st = fs.statSync(f); return `${st.ino}:${
 // direct) and the rest of the table carries on; nothing here is swallowed (review 2 #4).
 // onGone(row, via) is told every agent that leaves the table — its exit event ('exit'), found gone by a rescan
 // ('rescan'), exec'd into a program no descriptor matches ('exec'), or dropped because judging it again threw
-// ('judge-error') — so the daemon records agent-exit and drops the conditions it held (D-24, review D1-4). onUnmatched({pid, exe,
+// ('judge-error') — so the daemon records agent-exit and drops the conditions it held (D-24, review D1-4); a row that is off (below) is not
+// told: it was ended by onOff(row), told with the row as it was judged. onUnmatched({pid, exe,
 // candidates}) is told once per pid that two descriptors both claim: never folded into either, never watched,
 // and never silent (D-19); unmatched() lists them for status.
 // markerDir / caPem: where plugins write their per-pid marker and the asight CA file a marker vouches for (null: no
@@ -68,7 +74,7 @@ const statKeyOf = (f) => { try { const st = fs.statSync(f); return `${st.ino}:${
 // readFile: how config files are read; an error other than "absent" is kept on the row (readErrors) for the daemon.
 // recheck() (the daemon's 5 s check, D-26) judges again every trusted agent whose trust file changed since it was
 // judged; the row then carries cause 'entry-changed'. It only ever takes trust away: an untrusted row is never rechecked.
-export function createTracker({ redirector, registry, trust, home = os.homedir(), readFile = (f) => fs.readFileSync(f, 'utf8'), mtimeOf = mtimeOfFile, listDir = listDirNames, statKey = statKeyOf, now = () => Date.now(), onVerdict = () => {}, onError = () => {}, installedAt = () => null, onGone = () => {}, onUnmatched = () => {}, markerDir = null, caPem = null, watchDir = watchDirNames, markerGraceMs = 10_000, setTimer = setTimeout, runtimeVersion = nodeReleaseVersion, collectorDir = null, alive = pidAlive }) {
+export function createTracker({ redirector, registry, trust, home = os.homedir(), readFile = (f) => fs.readFileSync(f, 'utf8'), mtimeOf = mtimeOfFile, listDir = listDirNames, statKey = statKeyOf, now = () => Date.now(), onVerdict = () => {}, onError = () => {}, installedAt = () => null, onGone = () => {}, onOff = () => {}, onUnmatched = () => {}, markerDir = null, caPem = null, watchDir = watchDirNames, markerGraceMs = 10_000, setTimer = setTimeout, runtimeVersion = nodeReleaseVersion, collectorDir = null, alive = pidAlive }) {
   const table = new Map() // pid → AgentRow (agents only)
   const ambiguous = new Map() // pid → {pid, exe, candidates}
   const factsOf = new Map() // pid → the ProcFacts it was judged on (re-judged when its marker appears or its grace ends)
@@ -77,12 +83,16 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
   let judgedSeq = 0 // every verdict is numbered: a rescan knows which rows were judged after it began
   let mode = 'auto'
   let extra = new Set()
+  const perHarness = new Map() // harness id → {mode, extra}: the policy of that harness; one with no entry uses the default above
+  let enabled = null // null: every harness; else the Set of harness ids whose desired state is on
+  const isOn = (agent) => enabled === null || enabled.has(agent)
+  const gone = (row, via) => { if (!row.off) onGone(row, via) } // an off row was ended by onOff when it went off
 
   async function onExec(facts, cause = null) {
     const prev = table.get(facts.pid)
     try { return await judge(facts, prev, cause) } catch (e) {
       // judging threw (harness code): an earlier verdict for this pid must not outlive it — unwatch, then report
-      if (prev && table.get(facts.pid) === prev) { forget(facts.pid); onGone(prev, 'judge-error'); try { await redirector.unwatch(facts.pid) } catch (w) { onError(w, { pid: facts.pid, phase: 'unwatch' }) } }
+      if (prev && table.get(facts.pid) === prev) { forget(facts.pid); gone(prev, 'judge-error'); if (!prev.off) try { await redirector.unwatch(facts.pid) } catch (w) { onError(w, { pid: facts.pid, phase: 'unwatch' }) } }
       throw e
     }
   }
@@ -97,11 +107,12 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     if (!m.agent) {
       // an agent that exec'd into a program no descriptor matches has left the table as surely as one that exited:
       // the daemon records agent-exit and drops its conditions and negative-cache entries (D-24, review D1-4)
-      if (prev) { forget(facts.pid); onGone(prev, 'exec'); try { await redirector.unwatch(facts.pid) } catch (e) { onError(e, { pid: facts.pid, phase: 'unwatch' }) } }
+      if (prev) { forget(facts.pid); gone(prev, 'exec'); if (!prev.off) try { await redirector.unwatch(facts.pid) } catch (e) { onError(e, { pid: facts.pid, phase: 'unwatch' }) } }
       if (m.reason === 'ambiguous' && !ambiguous.has(facts.pid)) { const a = { pid: facts.pid, exe: facts.exe ?? null, candidates: m.candidates || [] }; ambiguous.set(facts.pid, a); onUnmatched(a) }
       return null
     }
     ambiguous.delete(facts.pid)
+    if (!isOn(m.agent)) return park(facts, m.agent, prev)
     const d = m.descriptor
     const envUnreadable = facts.env === null // the launch environment could not be read (D-20): never judged trusted on a guess
     const environ = facts.env || new Map()
@@ -150,6 +161,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     Object.defineProperties(row, { trustFile: { value: trustFile }, trustKey: { value: trustFile ? statKey(trustFile) : null } }) // not listed in agents()
     table.set(facts.pid, row)
     try { await redirector.watch(facts.pid, { decrypt: row.decrypt, agent: row.agent }) } catch (e) { row.watchError = String((e && e.message) || e) }
+    if (!isOn(row.agent) && table.get(facts.pid) !== row) return row // turned off while the watch was on its way: reconcile has unwatched it, and nothing is said about it
     onVerdict(row, prev || null)
     return row
   }
@@ -160,8 +172,30 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     forget(pid)
     if (markerDir) { try { fs.rmSync(path.join(markerDir, String(pid)), { force: true }) } catch { /* the marker of a dead pid is void anyway */ } }
     if (!was) return
-    onGone(was, 'exit')
+    gone(was, 'exit')
+    if (was.off) return // never watched: the kernel dropped nothing for it
     try { await redirector.unwatch(pid) } catch (e) { onError(e, { pid, phase: 'unwatch' }) }
+  }
+
+  // A process of a harness that is not on: a row that says so and nothing else. Never judged, never watched.
+  const offRow = (b) => ({ pid: b.pid, ppid: b.ppid ?? null, agent: b.agent, exe: b.exe ?? null, argv0: b.argv0 ?? null, source: b.source, since: b.since, judged: ++judgedSeq, readErrors: [], parseErrors: [], off: true,
+    trusted: false, reason: 'off', trustVar: null, trustVia: null, decrypt: false, hosts: [], bypass: [], unreachable: [], proxies: [], wsTerminal: null, parentAgent: b.parentAgent ?? null })
+  async function park(facts, agent, prev) {
+    factsOf.set(facts.pid, facts) // a later `on` re-judges it from these
+    const parent = facts.ppid != null ? table.get(facts.ppid) : null
+    const row = offRow({ pid: facts.pid, ppid: facts.ppid, agent, exe: facts.exe, argv0: (facts.argv || [])[0], source: facts.source, since: prev ? prev.since : now(), parentAgent: parent ? parent.agent : null })
+    if (prev && !prev.off) { await takeOff(prev, row); return row } // it was watched an instant ago: the same as reconcile does
+    table.set(facts.pid, row)
+    return row
+  }
+  // A row that was judged, now off: its marker deadline goes, the table says off, the kernel stops watching it, the daemon is told.
+  async function takeOff(prev, row = offRow(prev)) {
+    const t = pending.get(prev.pid); if (t) { clearTimeout(t); pending.delete(prev.pid) }
+    table.set(prev.pid, row)
+    let ok = true
+    try { await redirector.unwatch(prev.pid) } catch (e) { ok = false; onError(e, { pid: prev.pid, phase: 'unwatch' }) }
+    onOff(prev)
+    return ok
   }
 
   // Decrypt policy (4.6 §解密策略): `auto` = the harness's known API hosts ∪ the base_url / relay hosts its readers
@@ -174,12 +208,14 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
   function policy(meta, host) {
     const row = meta && table.get(meta.pid)
     if (!row) return { not_captured: 'untracked' }
+    if (row.off) return false // a connection that raced in before the kernel stopped steering it: spliced as policy (expected), not a failure
     if (!row.decrypt) return { not_captured: 'untrusted', reason: row.reason ?? null }
     const h = String(host || '').toLowerCase()
     const declared = row.bypass.find((b) => hostIs(b.host, h))
     if (declared) return { not_captured: 'not-trust-path', reason: declared.reason }
-    if (mode === 'all') return true
-    if (extra.has(h)) return true
+    const pol = perHarness.get(row.agent) || { mode, extra }
+    if (pol.mode === 'all') return true
+    if (pol.extra.has(h)) return true
     return row.hosts.some((k) => hostIs(k, h))
   }
 
@@ -208,7 +244,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
       // exits missed while the helper was down: a row the scan did not list goes, unless an exec event judged it after
       // this rescan began (it started after the scan; review 3 #7). Not "the pid lives": another user's process may
       // reuse it, and its exit would never reach us (review 4 #8). A marker goes only once its pid is gone.
-      for (const [pid, row] of [...table]) if (!seen.has(pid) && !(row.judged > begun)) { forget(pid); onGone(row, 'rescan') }
+      for (const [pid, row] of [...table]) if (!seen.has(pid) && !(row.judged > begun)) { forget(pid); gone(row, 'rescan') }
       for (const pid of [...ambiguous.keys()]) if (!seen.has(pid)) ambiguous.delete(pid)
       if (markerDir) for (const n of listDir(markerDir)) if (/^\d+$/.test(n) && !seen.has(Number(n)) && !alive(Number(n))) { try { fs.rmSync(path.join(markerDir, n), { force: true }) } catch { /* void */ } }
     },
@@ -224,6 +260,25 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     // FlowExtras for the engine's describe (plan 3c §2): the harness's WebSocket terminators and this process's own proxies
     extrasFor(pid) { const r = pid == null ? null : table.get(pid); return r ? { wsTerminal: r.wsTerminal, proxies: r.proxies.map((p) => ({ ...p })) } : {} },
     metaFor(pid) { const r = table.get(pid); return r ? { agent: r.agent, exe: r.exe, parentPid: r.ppid, parentAgent: r.parentAgent } : null },
-    setPolicy({ mode: m = 'auto', extraHosts = [] } = {}) { mode = m === 'all' ? 'all' : 'auto'; extra = new Set(extraHosts.map((h) => String(h).toLowerCase())) },
+    // setPolicy({mode, extraHosts}) is the default every harness uses; byHarness = {<id>: {mode, extraHosts}} gives one its own (1.6 §1.5)
+    setPolicy({ mode: m = 'auto', extraHosts = [], byHarness = null } = {}) {
+      const hosts = (l) => new Set((l || []).map((h) => String(h).toLowerCase()))
+      mode = m === 'all' ? 'all' : 'auto'; extra = hosts(extraHosts)
+      perHarness.clear()
+      for (const [id, p] of Object.entries(byHarness || {})) perHarness.set(id, { mode: p && p.mode === 'all' ? 'all' : 'auto', extra: hosts(p && p.extraHosts) })
+    },
+    // ids: the harnesses whose desired state is on (a Set or an array); null: every harness
+    setEnabled(ids) { enabled = ids == null ? null : new Set(ids) },
+    // Rows of a harness that is no longer enabled go off: unwatched (the kernel stops rewriting and reporting them), then onOff(row).
+    // → {unwatched: [pid], failed: [pid]}: the pids the kernel dropped, and those it could not be asked to (each is also onError's).
+    async reconcile() {
+      const unwatched = [], failed = []
+      for (const pid of [...table.keys()].sort((a, b) => a - b)) {
+        const row = table.get(pid)
+        if (!row || row.off || isOn(row.agent)) continue
+        ;(await takeOff(row)) ? unwatched.push(pid) : failed.push(pid)
+      }
+      return { unwatched, failed }
+    },
   }
 }
