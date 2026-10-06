@@ -189,6 +189,14 @@ test('W6 / C14: on→off→on, deflate takeover both ways: a call begun on is re
   assert.deepEqual(connection(f).ids, [0, 1, 4, 5], 'B1 arrived on, but belongs to the call begun off')
 })
 
+test('W-2: an exception in the recorder itself is recorder-error, not broken; that direction stops being followed and the relay never sees it', () => {
+  const failures = []
+  const r = createWsRecorder({ flow: FLOW, upgrade: upgrade({}), genId: () => 'id', isRecording: () => { throw new Error('switch sampler threw') }, terminal: TERMINAL, recordStore: { envelope: () => true }, onFailure: (f) => failures.push(f) })
+  assert.doesNotThrow(() => { r.fromUpstream(srv(1, ev('response.created'))); r.fromUpstream(srv(1, ev('response.completed'))); r.end(null) })
+  assert.deepEqual(failures.map((f) => [f.where, f.code, f.d, f.reason]), [['ws', 'recorder-error', 's', 'switch sampler threw']], 'once: the direction is not followed after it')
+  assert.deepEqual(r.summary().broken, { s: 'switch sampler threw' })
+})
+
 test('C8: after a failed write every later call is partial (write-failed); an undecodable message is {b64, decode_error} and marks its call and later ones; a broken direction too; a throwing store never reaches the relay', () => {
   let n = 0
   const t = rig({ ext: 'permessage-deflate', write: (e, out) => { out.push(e); return n++ !== 0 } })

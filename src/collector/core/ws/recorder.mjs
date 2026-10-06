@@ -200,7 +200,9 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
     else if (ev.type === 'data' && ev.done) { D.msg = null; complete(D, h, ev) }
   }
 
-  function broke(D, why) { D.broken = why; lost.add('decode-failed'); fail('broken', why, { d: D.name }) } // this direction is not followed any more
+  // this direction is not followed any more: the wire data broke it (broken), or asight's own code threw while
+  // following it (recorder-error, W-2) — the two are told apart so a bug in asight never reads as bad data
+  function broke(D, why, code = 'broken') { D.broken = why; lost.add('decode-failed'); fail(code, why, { d: D.name }) }
 
   function feed(d, chunk) {
     const D = dirs[d]
@@ -209,7 +211,7 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
       const { frames, error } = D.parser.push(chunk)
       for (const f of frames) { onFrame(d, f); if (D.broken) break }
       if (error && !D.broken) broke(D, error)
-    } catch (e) { broke(D, String((e && e.message) || e)) }
+    } catch (e) { broke(D, String((e && e.message) || e), 'recorder-error') }
   }
 
   function finish(error) {
