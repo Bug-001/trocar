@@ -1,14 +1,16 @@
 // test/health/codes.test.mjs — the D38 closed sets (RFC 4.6 §记录「失败不静默」, src/health/codes.mjs): every name a
 // collector writer puts in `event` / `where` / `code` / `not_captured` is in the set (a static scan of src/collector,
 // proven able to fail on a planted file); the failure / expected split; checkRecord; and the 0.1 §2 dependency rule
-// for src/health (node built-ins, src/paths.mjs, src/raw/ only).
+// for src/health (node built-ins, src/paths.mjs, src/raw/ only). The Windows collector's names (RFC 4.8 §12, W38): ROUTE_*,
+// the NET_* names it shares with 4.7 / 1.6, CAPTURE_KINDS.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { NOT_CAPTURED_FAILURE, NOT_CAPTURED_EXPECTED, FAILURE_EVENTS, STATE_EVENTS, CODES, TRUST_REASONS, OFF_WHERE, OFF_EVENTS, OFF_CODES, isFailure, isCode, isEvent, isWhere, notCapturedClass, checkRecord } from '../../src/health/codes.mjs'
+import * as closedSets from '../../src/health/codes.mjs'
+import { NOT_CAPTURED_FAILURE, NOT_CAPTURED_EXPECTED, FAILURE_EVENTS, STATE_EVENTS, CODES, TRUST_REASONS, OFF_WHERE, OFF_EVENTS, OFF_CODES, ROUTE_WHERE, ROUTE_EVENTS, ROUTE_CODES, ROUTE_FAILURE_CODES, ROUTE_TRUST_REASONS, ROUTE_STATUS_REASONS, NET_WHERE, NET_CODES, NET_FAILURE_CODES, CAPTURE_KINDS, isFailure, isCode, isEvent, isWhere, notCapturedClass, checkRecord } from '../../src/health/codes.mjs'
 import { WHERE_OFF, EVENT_OFF_NOTE, CODE_OFF } from '../../src/off/names.mjs'
 import { EVENT, CODE, TRUST_REASON } from '../../src/collector/core/codes.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
@@ -20,8 +22,9 @@ const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e
 // `fail` for parse errors); `failure('…')` is the daemon's failure recorder (its first argument is `where`).
 function literals(root) {
   const out = []
-  // src/capture: the old capture's event writers (RFC 4.1 过渡期, D38) use the same names; src/off and src/cli (RFC 1.6, D39⑦) write `off`'s
-  const more = ['capture', 'off', 'cli'].flatMap((d) => (fs.existsSync(path.join(root, 'src', d)) ? walk(path.join(root, 'src', d)) : []))
+  // src/capture: the old capture's event writers (RFC 4.1 过渡期, D38) use the same names; src/off and src/cli (RFC 1.6, D39⑦) write `off`'s;
+  // src/netenv (RFC 4.7, 4.8 §12) writes the drift and routing failures of the VPN / forwarder side
+  const more = ['capture', 'off', 'cli', 'netenv'].flatMap((d) => (fs.existsSync(path.join(root, 'src', d)) ? walk(path.join(root, 'src', d)) : []))
   for (const f of [...walk(path.join(root, 'src', 'collector')), ...more]) {
     const src = fs.readFileSync(f, 'utf8')
     const rel = path.relative(root, f)
@@ -62,10 +65,11 @@ test('D38 the scan fails on a name outside the set (planted tree)', () => {
     fs.mkdirSync(path.join(root, 'src', 'collector', 'core', 'ws'), { recursive: true })
     fs.writeFileSync(path.join(root, 'src', 'collector', 'a.mjs'), "w({ event: 'agent-wandered', where: 'nowhere', code: 'oops-code' }); failure('elsewhere', e); r.not_captured = 'shrug'; notCaptured('hmm', why)\n")
     fs.writeFileSync(path.join(root, 'src', 'collector', 'core', 'ws', 'recorder.mjs'), "fail('made-up', e)\n")
-    fs.mkdirSync(path.join(root, 'src', 'off')); fs.mkdirSync(path.join(root, 'src', 'cli'))
+    fs.mkdirSync(path.join(root, 'src', 'off')); fs.mkdirSync(path.join(root, 'src', 'cli')); fs.mkdirSync(path.join(root, 'src', 'netenv'))
     fs.writeFileSync(path.join(root, 'src', 'off', 'b.mjs'), "w({ event: 'off-notes', where: 'offf', code: 'backup-lost' }); w({ event: 'off-note', where: 'off', code: 'backup-kept' }); x = CODE_OFF.backupLost; y = CODE_OFF.backupKept\n")
     fs.writeFileSync(path.join(root, 'src', 'cli', 'c.mjs'), "w({ event: 'failure', where: 'cli', code: 'cli-broke' })\n")
-    assert.deepEqual(outside(literals(root)).map((l) => `${l.kind} ${l.name}`).sort(), ['code CODE_OFF.backupLost (not in the map)', 'code backup-lost', 'code cli-broke', 'code made-up', 'code oops-code', 'event agent-wandered', 'event off-notes', 'not_captured hmm', 'not_captured shrug', 'where cli', 'where elsewhere', 'where nowhere', 'where offf'].sort())
+    fs.writeFileSync(path.join(root, 'src', 'netenv', 'd.mjs'), "w({ event: 'failure', where: 'netenvv', code: 'vpn-block-lost' }); w({ event: 'failure', where: 'netenv', code: 'route-loop' }); w({ event: 'route-applied', where: 'routing', code: 'ingress-unknown' })\n")
+    assert.deepEqual(outside(literals(root)).map((l) => `${l.kind} ${l.name}`).sort(), ['code CODE_OFF.backupLost (not in the map)', 'code backup-lost', 'code cli-broke', 'code made-up', 'code oops-code', 'code vpn-block-lost', 'event agent-wandered', 'event off-notes', 'not_captured hmm', 'not_captured shrug', 'where cli', 'where elsewhere', 'where netenvv', 'where nowhere', 'where offf'].sort())
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
@@ -110,9 +114,9 @@ test('D38 the collector name maps and every harness trust reason are in the clos
   for (const [k, v] of Object.entries(CODE)) assert.ok(isCode(v), `CODE.${k} = ${v}`)
   for (const r of Object.keys(TRUST_REASON)) assert.ok(TRUST_REASONS.includes(r), `core trust reason ${r}`)
   const unlisted = []
-  for (const h of await loadHarnesses()) for (const r of Object.keys((h.trust && h.trust.hints) || {})) if (!TRUST_REASONS.includes(r)) unlisted.push(`${h.name}: ${r}`)
-  assert.deepEqual(unlisted, [], 'a harness defines a trust reason that src/health/codes.mjs TRUST_REASONS does not list')
-  for (const r of TRUST_REASONS) assert.ok(isCode(r), r)
+  for (const h of await loadHarnesses()) for (const r of Object.keys((h.trust && h.trust.hints) || {})) if (!TRUST_REASONS.includes(r) && !ROUTE_TRUST_REASONS.includes(r)) unlisted.push(`${h.name}: ${r}`)
+  assert.deepEqual(unlisted, [], 'a harness defines a trust reason that src/health/codes.mjs TRUST_REASONS (or the Windows ROUTE_TRUST_REASONS) does not list')
+  for (const r of [...TRUST_REASONS, ...ROUTE_TRUST_REASONS]) assert.ok(isCode(r), r)
 })
 
 // D39⑦ (RFC 1.6 §涉及源文件与接口「闭集」): the names `asight off` writes. src/off may import nothing outside itself (0.1 §2), so
@@ -141,4 +145,101 @@ test('D39 src/off/names.mjs is the same list as the closed set (src/off cannot i
   assert.deepEqual(Object.values(CODE_OFF), OFF_CODES)
   assert.deepEqual(Object.keys(CODE_OFF), ['backupFailed', 'backupKept', 'undoneByMarker'])
   assert.ok(Object.isFrozen(CODE_OFF))
+})
+
+// ---- D42 (RFC 4.8 §12, W38): the names the Windows collector writes --------------------------------------------------------
+// The table below is the spec's §12 table written out by hand (code, where, class), not read back from the module, so a name
+// added, dropped or moved in codes.mjs and not in the RFC turns this red.
+const SPEC_12_FAILURES = [
+  ['ingress-auth-failed', 'ingress'], ['ingress-unknown', 'ingress'], ['engine-port-taken', 'ingress'],
+  ['fallback-active', 'routing'], ['reenter-auth', 'routing'],
+  ['forwarder-start-failed', 'forwarder'], ['forwarder-restart', 'forwarder'], ['forwarder-digest-mismatch', 'forwarder'], ['forwarder-binary-missing', 'forwarder'], ['forwarder-download-failed', 'forwarder'],
+  ['socktable-unavailable', 'helper'], ['helper-start-failed', 'helper'],
+  ['task-register-failed', 'install'], ['elevated-token', 'start'],
+] // every row of the §12 table is the class 失败
+// the names §12 says it does not define again: 1.6 §9.7 (`NET_*`) and 4.7 §5 (`vpn-block-*`) own them
+const SHARED_WITH_NET = ['forwarder-down', 'egress-differs', 'route-loop', 'clash-mode-bypass', 'find-process-off', 'vpn-block-missing', 'vpn-block-changed', 'vpn-block-not-live', 'vpn-block-unverifiable']
+const CODES_SRC = fs.readFileSync(path.join(REPO, 'src', 'health', 'codes.mjs'), 'utf8')
+const quotedCount = (name) => CODES_SRC.split(`'${name}'`).length - 1
+
+test('W38 every §12 code is a code, and a failure event naming it with its where passes checkRecord and counts as a failure', () => {
+  assert.deepEqual([...ROUTE_CODES].sort(), SPEC_12_FAILURES.map(([c]) => c).sort(), 'ROUTE_CODES is the §12 table, no more and no less')
+  assert.deepEqual([...ROUTE_FAILURE_CODES].sort(), [...ROUTE_CODES].sort(), 'every §12 row is the failure class')
+  for (const [code, where] of SPEC_12_FAILURES) {
+    assert.ok(isCode(code), code)
+    assert.ok(isWhere(where), where)
+    const rec = { event: 'failure', where, code, reason: 'why' }
+    assert.deepEqual(checkRecord(rec), [], `${where}/${code}`)
+    assert.equal(isFailure(rec), true, code)
+  }
+  // the case the plan names
+  assert.deepEqual(checkRecord({ event: 'failure', where: 'ingress', code: 'ingress-auth-failed', reason: 'token mismatch' }), [])
+  // Windows codes sit beside the Linux ones, not inside the lists D40 edits
+  for (const c of ROUTE_CODES) assert.ok(!CODES.includes(c), `${c} is defined once: ROUTE_CODES, not also CODES`)
+})
+
+test('W38 the where / state events / trust reasons / status reasons / capture kinds are the §12 lists', () => {
+  assert.deepEqual(ROUTE_WHERE, ['routing', 'forwarder', 'ingress'])
+  assert.deepEqual(ROUTE_EVENTS, ['route-applied', 'forwarder-start', 'forwarder-stop', 'forwarder-draining'])
+  assert.deepEqual(ROUTE_TRUST_REASONS, ['pid-unresolved-mixed', 'smart-app-control'])
+  assert.deepEqual(ROUTE_STATUS_REASONS, ['form-unsupported', 'not-identifiable', 'forwarder-pending', 'fallback-active', 'form-path-unknown'])
+  assert.deepEqual(CAPTURE_KINDS, ['transparent', 'vpn-block', 'own-forwarder'], 'the envelope `capture` closed set (4.8 §5.6, 4.1 信封表)')
+  for (const l of [ROUTE_WHERE, ROUTE_EVENTS, ROUTE_CODES, ROUTE_FAILURE_CODES, ROUTE_TRUST_REASONS, ROUTE_STATUS_REASONS, CAPTURE_KINDS, NET_WHERE, NET_CODES, NET_FAILURE_CODES]) assert.ok(Object.isFrozen(l))
+  for (const w of ROUTE_WHERE) assert.ok(isWhere(w), w)
+  for (const r of ROUTE_TRUST_REASONS) {
+    assert.ok(isCode(r), r)
+    assert.ok(!CODES.includes(r) && !TRUST_REASONS.includes(r), `${r} stays in ROUTE_TRUST_REASONS, the block of its own`)
+    assert.deepEqual(checkRecord({ event: 'agent-untrusted', where: 'tracker', code: r, reason: 'why' }), [], r)
+  }
+})
+
+test('W38 the route events are state changes: they pass checkRecord with their fields and never turn the indicator', () => {
+  const recs = [
+    { event: 'route-applied', where: 'routing', group: 'g1', route: 'vpn-block', strategy: 'select+provider', verified: true },
+    { event: 'forwarder-start', where: 'forwarder', pid: 4242 },
+    { event: 'forwarder-stop', where: 'forwarder', pid: 4242 },
+    { event: 'forwarder-draining', where: 'forwarder', pids: [11, 12] },
+  ]
+  assert.deepEqual(recs.map((r) => r.event), ROUTE_EVENTS)
+  for (const r of recs) {
+    assert.ok(isEvent(r.event), r.event)
+    assert.deepEqual(checkRecord(r), [], r.event)
+    assert.equal(isFailure(r), false, r.event)
+    assert.ok(!FAILURE_EVENTS.includes(r.event) && !STATE_EVENTS.includes(r.event), `${r.event}: in ROUTE_EVENTS, not in the lists D40 edits`)
+  }
+})
+
+test('W38 the names shared with 1.6 §9.7 and 4.7 §5 are defined once: one block, one literal in the file, no copy in the Windows block', () => {
+  for (const name of SHARED_WITH_NET) {
+    assert.equal(quotedCount(name), 1, `'${name}' is written once in src/health/codes.mjs`)
+    assert.ok(NET_CODES.includes(name), `${name} in NET_CODES`)
+    assert.ok(!ROUTE_CODES.includes(name) && !CODES.includes(name), `${name} is not also defined by ROUTE_CODES or CODES`)
+    assert.ok(isCode(name), name)
+  }
+  // 4.7 §5 also names the rule-file and service-copy cases; they live in the same block
+  for (const name of ['vpn-rule-file-missing', 'vpn-service-copy']) { assert.equal(quotedCount(name), 1, name); assert.ok(isCode(name) && NET_CODES.includes(name), name) }
+  const all = [...ROUTE_CODES, ...NET_CODES, ...ROUTE_TRUST_REASONS]
+  assert.deepEqual(all.filter((n, i) => all.indexOf(n) !== i), [], 'no name is in two of the blocks')
+  assert.deepEqual(NET_WHERE, ['netenv'], '4.7 §5:都写 where:\'netenv\'')
+  assert.ok(isWhere('netenv'))
+})
+
+test('W38 the 4.7 §5 / 1.6 §9.7 drift codes: the failure class writes a failure event, the notice class (egress-differs, vpn-service-copy) never does', () => {
+  assert.deepEqual(NET_CODES.filter((c) => !NET_FAILURE_CODES.includes(c)).sort(), ['egress-differs', 'vpn-service-copy'], '提示 class: status / doctor only')
+  assert.deepEqual([...NET_FAILURE_CODES].sort(), ['clash-mode-bypass', 'find-process-off', 'forwarder-down', 'route-loop', 'vpn-block-changed', 'vpn-block-missing', 'vpn-block-not-live', 'vpn-block-unverifiable', 'vpn-rule-file-missing'])
+  for (const code of NET_FAILURE_CODES) assert.deepEqual(checkRecord({ event: 'failure', where: 'netenv', code, reason: 'why' }), [], code)
+})
+
+test('W38 the sets still reject a name beside the Windows ones (the check can fail)', () => {
+  assert.deepEqual(checkRecord({ event: 'route-apply', where: 'route', reason: 'x' }), ['event "route-apply"', 'where "route"'])
+  assert.deepEqual(checkRecord({ event: 'failure', where: 'ingres', code: 'ingress-auth-fail', reason: 'x' }), ['where "ingres"', 'code "ingress-auth-fail"'])
+  assert.deepEqual(checkRecord({ event: 'failure', where: 'forwarder', code: 'forwarder-restarted', reason: 'x' }), ['code "forwarder-restarted"'])
+  assert.deepEqual(checkRecord({ event: 'failure', where: 'netenv', code: 'vpn-block-lost', reason: 'x' }), ['code "vpn-block-lost"'])
+})
+
+// The status reason set (1.6 §2) is CLI plan task 9's; until it lands here there is nothing to hold the Windows reasons against.
+// The moment it does, this goes from skipped to a check: its list must take the Windows reasons and trust reasons in.
+test('W38 seam: STATUS_REASONS, once it exists, includes the Windows status reasons and trust reasons', (t) => {
+  if (!Array.isArray(closedSets.STATUS_REASONS)) return t.skip('STATUS_REASONS is not on this branch yet (CLI plan task 9): spread ROUTE_STATUS_REASONS and ROUTE_TRUST_REASONS into it when it lands')
+  for (const r of [...ROUTE_STATUS_REASONS, ...ROUTE_TRUST_REASONS, 'find-process-off']) assert.ok(closedSets.STATUS_REASONS.includes(r), r)
 })

@@ -66,8 +66,48 @@ export const OFF_WHERE = Object.freeze(['off'])
 export const OFF_EVENTS = Object.freeze(['off-note']) // a state change (the last one of a run carries kind:'result'), not a failure
 export const OFF_CODES = Object.freeze(['backup-failed', 'backup-kept', 'undone-by-marker'])
 
+// What the Windows collector writes (RFC 4.8 §12, D42) and the names it shares with the VPN adapter (4.7 §5, D41) and the CLI (1.6 §9.7).
+// Blocks of their own, below OFF_*, for the reason OFF_* is: D40 edits WHERE / STATE_EVENTS / CODES_BY_PART, and the lists that
+// another branch appends to stay edit-free here; `sets` below adds the blocks. test/health/codes.test.mjs holds each against the
+// RFC's table written out by hand (W38).
+export const ROUTE_WHERE = Object.freeze(['routing', 'forwarder', 'ingress']) // the choice and effect of a routing · asight's own mihomo · the engine's proxy ingress
+export const ROUTE_EVENTS = Object.freeze(['route-applied', 'forwarder-start', 'forwarder-stop', 'forwarder-draining']) // state changes, not failures
+/** `code` of a failure event, by the `where` the §12 table gives it. Every row of the table is the class 失败, so the next list is this one. */
+export const ROUTE_CODES = Object.freeze([
+  'ingress-auth-failed', 'ingress-unknown', 'engine-port-taken', // ingress
+  'fallback-active', 'reenter-auth', // routing
+  'forwarder-start-failed', 'forwarder-restart', 'forwarder-digest-mismatch', 'forwarder-binary-missing', 'forwarder-download-failed', // forwarder
+  'socktable-unavailable', 'helper-start-failed', // helper
+  'task-register-failed', // install: `on` still succeeds, through the HKCU Run fallback (4.8 §7)
+  'elevated-token', // start
+])
+/** The codes of ROUTE_CODES a writer puts on a `failure` event. Today that is all of them; a later notice-class code goes into ROUTE_CODES only. */
+export const ROUTE_FAILURE_CODES = Object.freeze([...ROUTE_CODES])
+/** Reasons a running agent is not trusted that the Windows collector adds (4.8 §5.4, §6.3): the `code` of `agent-untrusted`, as TRUST_REASONS' are.
+ *  Listed apart from TRUST_REASONS (a list D40's neighbours read); test/health/codes.test.mjs counts both when it checks a harness's own. */
+export const ROUTE_TRUST_REASONS = Object.freeze(['pid-unresolved-mixed', 'smart-app-control'])
+/** What `status` says when a form is not captured, that the Windows collector adds (4.8 §2.3, §12). The status reason set itself is the CLI's
+ *  (1.6 §2); its list takes these in. `fallback-active` is also a ROUTE_CODES code: the same name, the failure event and the status reason. */
+export const ROUTE_STATUS_REASONS = Object.freeze(['form-unsupported', 'not-identifiable', 'forwarder-pending', 'fallback-active', 'form-path-unknown'])
+/** The envelope's `capture`: how the call reached the engine (4.1 信封表, 4.8 §5.6). Linux is always the first. */
+export const CAPTURE_KINDS = Object.freeze(['transparent', 'vpn-block', 'own-forwarder'])
+
+// The netenv names that 4.7 §5 and 1.6 §9.7 both own: defined here once, by the first branch to land (their RFC texts say so). Whoever merges
+// the CLI plan's task 13 (`NET_WHERE` · `NET_EVENTS` · `NET_CODES` · `NET_FAILURE_CODES`) takes this block as the start of its own: the same
+// names, `netenv-change` and the other 1.6 §9.7 codes added to them, nothing defined twice (W38 counts the literals).
+export const NET_WHERE = Object.freeze(['netenv'])
+/** The class 失败: written as a `failure` event (4.7 §5 and 1.6 §9.7 give each its class). */
+export const NET_FAILURE_CODES = Object.freeze([
+  'vpn-block-missing', 'vpn-block-changed', 'vpn-block-not-live', 'vpn-block-unverifiable', 'vpn-rule-file-missing', // 4.7 §5, drift of the VPN block
+  'clash-mode-bypass', 'find-process-off', 'route-loop', // 4.7 §5; the first and the last are 1.6 §9.7's too
+  'forwarder-down', // 1.6 §9.7
+])
+const NET_NOTICE_CODES = ['vpn-service-copy', 'egress-differs'] // the class 提示, 4.7 §5 and 1.6 §9.7: `status` and `doctor` only, never a failure event
+export const NET_CODES = Object.freeze([...NET_FAILURE_CODES, ...NET_NOTICE_CODES])
+
 const ERRNO = /^(E[A-Z0-9_]+|Z_[A-Z_]+)$/ // Node's own error codes (errno, ERR_*, zlib's Z_*), written as they are
-const sets = { nc: new Set([...NOT_CAPTURED_FAILURE, ...NOT_CAPTURED_EXPECTED]), ncFail: new Set(NOT_CAPTURED_FAILURE), fail: new Set(FAILURE_EVENTS), event: new Set([...FAILURE_EVENTS, ...STATE_EVENTS, ...OFF_EVENTS]), where: new Set([...WHERE, ...OFF_WHERE]), code: new Set([...CODES, ...OFF_CODES]) }
+const sets = { nc: new Set([...NOT_CAPTURED_FAILURE, ...NOT_CAPTURED_EXPECTED]), ncFail: new Set(NOT_CAPTURED_FAILURE), fail: new Set(FAILURE_EVENTS), event: new Set([...FAILURE_EVENTS, ...STATE_EVENTS, ...OFF_EVENTS, ...ROUTE_EVENTS]), where: new Set([...WHERE, ...OFF_WHERE, ...ROUTE_WHERE, ...NET_WHERE]),
+  code: new Set([...CODES, ...OFF_CODES, ...ROUTE_CODES, ...ROUTE_TRUST_REASONS, ...NET_CODES]) }
 
 export const isCode = (c) => sets.code.has(c) || ERRNO.test(String(c))
 export const isEvent = (e) => sets.event.has(e) // the sets checkRecord() judges by, for the static scans (test/health/codes.test.mjs): one rule, not two
