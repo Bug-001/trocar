@@ -86,7 +86,7 @@ export function healthOnDisk(dir) {
   try { return captureHealth({ home: path.dirname(dir) }) } catch (e) { return { error: `capture health could not be read: ${errText(e)}` } }
 }
 
-async function runDaemon({ dir, retentionPath = null, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = procIdentity, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000 }) {
+async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = procIdentity, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000 }) {
   const P = collectorPaths(dir)
   const failure = createFailureRecorder(P.dir, { log })
   let manifest
@@ -147,7 +147,7 @@ async function runDaemon({ dir, retentionPath = null, env = process.env, arch = 
     // (src/dissect), handed in as a function: the core names no harness (D20, 0.1 §5).
     const keep = createRetention({
       file: retentionPath || retentionFile(path.dirname(P.dir)),
-      classify: makeClassifier({ endpointClass, onInvalid: (b) => failure.event({ where: 'retention', code: 'pattern-invalid', reason: `a traffic pattern of ${b.harness} is skipped (${b.reason}): ${JSON.stringify(b.entry)}` }) }),
+      classify: makeClassifier({ endpointClass, rows: trafficRows, onInvalid: (b) => failure.event({ where: 'retention', code: 'pattern-invalid', reason: `a traffic pattern of ${b.harness} is skipped (${b.reason}): ${JSON.stringify(b.entry)}` }) }),
       onFailure: (rec) => failure.event(rec),
       onOk: (rec) => failure.write(rec),
     })

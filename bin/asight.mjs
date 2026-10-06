@@ -25,18 +25,11 @@ const flag = args.flag;
 const positional = args.positional;
 const r = (...p) => path.join(ROOT, ...p);
 
-// D40 (RFC 4.6 §记录「保存级别」): the retention settings the OLD capture applies — the reverse proxy and the MITM have no
-// process identity, so every call is the `cc` row (RFC 4.6: the old MITM's steer only lets claude-code in). Read from
-// ~/.asight/retention.json, re-checked once a second; a problem with it is a line in mitm-events.ndjson and the call is kept in full.
-// The classifier is built here, not in src/capture/, which names no harness and holds no host pattern (D20, 0.1 §5).
+// D40 (RFC 4.6 §记录「保存级别」): the retention settings the OLD capture applies — the reverse proxy and the MITM. The wiring is
+// src/legacy-retention.mjs (it joins src/capture/ to the read-side table's classifier, which src/capture/ may not import).
 async function legacyRetention() {
-  const { createRetention, retentionFile } = await import(r('src', 'capture', 'retention.mjs'));
-  const { endpointClass } = await import(r('src', 'capture', 'envelope.mjs'));
-  const { makeClassifier } = await import(r('src', 'dissect', 'traffic.mjs'));
-  const { appendLegacyEvent } = await import(r('src', 'capture', 'events.mjs'));
-  const classify = makeClassifier({ endpointClass, onInvalid: (b) => appendLegacyEvent({ event: 'failure', where: 'retention', code: 'pattern-invalid', reason: `a traffic pattern of ${b.harness} is skipped (${b.reason}): ${JSON.stringify(b.entry)}` }) });
-  const keep = createRetention({ file: retentionFile(), classify, onFailure: (e) => appendLegacyEvent(e), onOk: (e) => appendLegacyEvent(e) });
-  return ({ host, method, endpoint }) => keep.decide({ harness: 'cc', host, method, endpoint });
+  const { buildLegacyRetention } = await import(r('src', 'legacy-retention.mjs'));
+  return buildLegacyRetention();
 }
 
 async function main() {

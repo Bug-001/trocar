@@ -8,11 +8,15 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
+import net from 'node:net'
+import tls from 'node:tls'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
 import { captureHealth } from '../../src/health/read.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
+import { buildLegacyRetention } from '../../src/legacy-retention.mjs'
+import { tmpDir } from '../helpers/tmp.mjs'
 
 const BIN = fileURLToPath(new URL('../../bin/asight.mjs', import.meta.url))
 const events = (home) => { try { return fs.readFileSync(path.join(home, '.asight', 'logs', 'mitm-events.ndjson'), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) } catch { return [] } }
@@ -52,4 +56,65 @@ test('`asight capture` applies retention.json as the cc row: bad file → full +
     assert.ok(events(home).some((x) => x.event === 'retention-ok'), 'it reads cleanly again')
     p.kill('SIGTERM'); await once(p, 'exit')
   } finally { p.kill('SIGKILL'); up.close(); fs.rmSync(home, { recursive: true, force: true }) }
+})
+
+// ── review (F10): the old capture's wiring, callable: what it does with a traffic pattern that cannot be used, a bad file, and the `cc` row ───────
+// It was a function inside bin/asight.mjs; replacing its `onInvalid` with `() => {}` left every test green (D38: a config error is never silent).
+test('buildLegacyRetention: a traffic pattern that cannot be used is a failure line (where retention, code pattern-invalid) naming the harness and the entry; a bad file is forwarded; the cc row decides', () => {
+  const dir = tmpDir('asight-legwire-'), file = path.join(dir, 'retention.json')
+  const events = []
+  const rows = [{ id: 'cc', traffic: [{ host: 'api.anthropic.com', class: 'telemetry', path: '(' /* does not compile */ }, { host: 'api.anthropic.com', class: 'files', path: '^/up' }] }]
+  const decide = buildLegacyRetention({ file, rows, onEvent: (e) => events.push(e) })
+  const inv = events.filter((e) => e.code === 'pattern-invalid')
+  assert.equal(inv.length, 1, 'one line for the one bad pattern, at build')
+  assert.deepEqual([inv[0].event, inv[0].where], ['failure', 'retention'])
+  assert.match(inv[0].reason, /a traffic pattern of cc is skipped \(.*\): .*"path":"\("/)
+  assert.deepEqual(checkRecord(inv[0]), [], 'a record the health reader accepts')
+  // the good pattern still classifies, and the setting of the cc row is what applies to the old capture
+  fs.writeFileSync(file, JSON.stringify({ version: 1, levels: { cc: { files: 'log' }, codex: { telemetry: 'log' } } }))
+  assert.deepEqual(decide({ host: 'api.anthropic.com', method: 'POST', endpoint: '/up/x' }), { harness: 'cc', class: 'files', level: 'log' })
+  assert.equal(decide({ host: 'api.anthropic.com', method: 'POST', endpoint: '/other' }).level, 'full', 'codex\'s setting is not the old capture\'s')
+  // a file that cannot be parsed: every call is full, and the problem is forwarded to onEvent (not swallowed)
+  fs.writeFileSync(file, '{ torn'); const later = new Date(Date.now() + 5000); fs.utimesSync(file, later, later)
+  const wire = buildLegacyRetention({ file, rows, onEvent: (e) => events.push(e) })
+  assert.equal(wire({ host: 'api.anthropic.com', method: 'POST', endpoint: '/up/x' }).level, 'full')
+  assert.ok(events.some((e) => e.code === 'retention-unparsable' && e.where === 'retention'), 'the unparsable file is a line')
+})
+
+// ── review (F4): the process com.asight.mitm runs — `asight mitm` — hands the retention to createMitmProxy ──────────────────────────────────────
+// Only `asight capture` (the reverse proxy) was run by a test; deleting `retention,` from the createMitmProxy call in bin/asight.mjs left all of
+// test/capture green, i.e. the very path on the user's Mac was unguarded. A client that trusts the CA the process made drives it; the upstream is a
+// refused port, so the call ends as an error envelope — which still carries host, traffic_class and body_retention.
+test('`asight mitm` applies retention.json: a telemetry call is kept in full by default, then as a log line (body_retention:log, host, class) after cc · telemetry is set to log', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-legmitm-'))
+  const file = path.join(home, '.asight', 'retention.json'); fs.mkdirSync(path.dirname(file), { recursive: true })
+  const out = path.join(home, 'cap.ndjson')
+  const e = { ...process.env, HOME: home }; for (const k of ['HTTPS_PROXY', 'https_proxy', 'ASIGHT_SOURCE', 'ASIGHT_CAPTURE_PORT', 'ASIGHT_MITM_PORT', 'ATRACE_UPSTREAM_PROXY']) delete e[k]
+  const p = spawn(process.execPath, [BIN, 'mitm', '--port', '0', '--upstream', 'http://127.0.0.1:9', '--out', out], { env: e, stdio: ['ignore', 'pipe', 'pipe'] })
+  let err = ''; p.stderr.on('data', (d) => { err += d })
+  const BODY = '{"events":[{"name":"tengu_start"}]}'
+  const send = () => new Promise((resolve, reject) => {
+    const port = events(home).find((x) => x.event === 'mitm-start').port
+    const ca = fs.readFileSync(path.join(home, '.asight', 'ca', 'atrace-ca.crt'))
+    const sock = net.connect(port, '127.0.0.1', () => sock.write('CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n'))
+    sock.once('data', () => {
+      const t = tls.connect({ socket: sock, servername: 'api.anthropic.com', ca }, () => t.write(`POST /api/event_logging/v2/batch HTTP/1.1\r\nHost: api.anthropic.com\r\nContent-Type: application/json\r\nContent-Length: ${BODY.length}\r\nConnection: close\r\n\r\n${BODY}`))
+      let got = ''; t.on('data', (c) => { got += c }); t.on('end', () => resolve(got)); t.on('error', reject)
+    })
+    sock.on('error', reject)
+  })
+  try {
+    assert.ok(await until(() => events(home).some((x) => x.event === 'mitm-start'), 90000), `started (stderr: ${err})`)
+    assert.match(await send(), /^HTTP\/1\.1 502 /, 'the upstream is a refused port: the agent gets the 502, the call is an error envelope')
+    assert.ok(await until(() => captured(out).length >= 1))
+    const first = captured(out)[0]
+    assert.deepEqual([first.host, first.traffic_class, first.req_body, 'body_retention' in first, first.error], ['api.anthropic.com', 'telemetry', BODY, false, true], 'default: kept in full')
+    fs.writeFileSync(file, JSON.stringify({ version: 1, levels: { cc: { telemetry: 'log' } } }))
+    await new Promise((r) => setTimeout(r, 1200)) // the file is re-checked once a second
+    await send()
+    assert.ok(await until(() => captured(out).length >= 2))
+    const second = captured(out)[1]
+    assert.deepEqual([second.host, second.traffic_class, second.body_retention, second.req_body, second.body_wire_bytes.req], ['api.anthropic.com', 'telemetry', 'log', { raw_chars: BODY.length, verbatim: false }, BODY.length])
+    p.kill('SIGTERM'); await once(p, 'exit')
+  } finally { p.kill('SIGKILL'); fs.rmSync(home, { recursive: true, force: true }) }
 })

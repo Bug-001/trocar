@@ -36,7 +36,7 @@ const flowsOf = (dir) => { const d = path.join(dir, 'flows'); return fs.existsSy
 const capturesOf = (dir) => fs.readdirSync(dir).filter((n) => /^capture-.*\.ndjson$/.test(n)).flatMap((n) => ndjson(path.join(dir, n)))
 const b64 = (s) => Buffer.from(s, 'base64')
 
-async function scene({ state = null } = {}) {
+async function scene({ state = null, trafficRows = undefined } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'as-rd-')) // short: unix socket paths are length-limited
   const home = path.join(root, 'home'); fs.mkdirSync(home)
   const dir = path.join(home, '.asight', 'collector'), sock = path.join(root, 'run', 'c.sock')
@@ -48,7 +48,7 @@ async function scene({ state = null } = {}) {
   if (state) fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify(state))
   const clients = []
   const arch = { os: 'linux', createRedirector: () => createLinuxRedirector({ procRoot: p.root, uid: UID, makeClient: () => { const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, ASIGHT_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 }); clients.push(c); return c } }) }
-  const d = await startDaemon({ dir, socketPath: sock, arch, harnesses: [cc], env: { ...process.env, HOME: home }, upstreamCa: fs.readFileSync(labCa.caCert, 'utf8') })
+  const d = await startDaemon({ dir, socketPath: sock, arch, harnesses: [cc], trafficRows, env: { ...process.env, HOME: home }, upstreamCa: fs.readFileSync(labCa.caCert, 'utf8') })
   await req(sock, 'POST', '/on', {})
   p.add(4343, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: home, env: { HOME: home }, startTicks: nowTicks(p) })
   await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 4343, pid: 4343, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
@@ -151,5 +151,24 @@ test('K2 / K3 at the daemon: retention.json is read per call, hot (≤ 1 s); `cc
     await s.call({ ...batch(5), path: T })
     await until(() => flowsOf(s.dir).find((f) => f.event === 'retention-ok'))
     assert.equal(captureHealth({ home: path.join(s.home, '.asight') }).collector.conditions.some((c) => c.kind === 'retention'), false)
+  } finally { await s.done() }
+})
+
+// review (F10): D38 — a config error of asight's own is never silent. A traffic pattern of the read-side table that cannot be used is skipped, and
+// that is a `pattern-invalid` failure line in flows/ (the top bar goes ⚠); replacing `onInvalid` with a no-op in the daemon left every test green.
+test('F10 — a traffic pattern that cannot be used is a pattern-invalid failure in flows/ (the health reader shows it); the daemon runs on and the usable patterns still classify', async () => {
+  const rows = [{ id: 'cc', traffic: [{ host: OTHER, class: 'telemetry', path: '(' /* does not compile */ }, { host: OTHER, class: 'files', path: '^/up' }] }]
+  const s = await scene({ trafficRows: rows })
+  try {
+    const inv = flowsOf(s.dir).filter((e) => e.where === 'retention' && e.code === 'pattern-invalid')
+    assert.equal(inv.length, 1, 'one line for the one bad pattern')
+    assert.equal(inv[0].event, 'failure')
+    assert.match(inv[0].reason, /a traffic pattern of cc is skipped \(.*\): .*"path":"\("/)
+    assert.equal(captureHealth({ home: path.join(s.home, '.asight') }).summary.state, 'failing', 'the top bar says so')
+    // the daemon runs on: a call to the host is captured, classified by the pattern that does compile
+    const r = await s.call({ path: '/up/x.bin', body: 'abc' })
+    assert.equal(r.ok, true)
+    await until(() => capturesOf(s.dir).some((e) => e.endpoint === '/up/x.bin'))
+    assert.equal(capturesOf(s.dir).find((e) => e.endpoint === '/up/x.bin').traffic_class, 'files')
   } finally { await s.done() }
 })
