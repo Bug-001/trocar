@@ -75,3 +75,21 @@ test('a shard root whose only sessions are in _unkeyed is still read in shard mo
   assert.deepEqual(list.projects.flatMap((p) => p.sessions.map((s) => s.session_id)), ['K1']);
   assert.ok(list.source.skipped.some((x) => x.name === 'capture-old.ndjson' && x.reason === 'flat-file-in-shard-mode'), 'shard mode says what it did not read');
 });
+
+test('an open session follows its shard as it grows: a session dir and an _unkeyed group (no stale memo)', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-unk-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const src = path.join(dir, 'capture-2026-10-06.ndjson');
+  fs.writeFileSync(src, [rec('d1', 'dsh', { 'x-deepseek-harness-session-id': 'D1' }, {}, 1), rec('k1', 'kimi-code', {}, { metadata: { user_id: 'K1' } }, 2)]
+    .map((r) => JSON.stringify(r)).join('\n') + '\n');
+  const out = path.join(dir, 'sessions');
+  await shardStream({ file: src, outDir: out });
+  const { server } = await createServer({ dbPath: '/nonexistent-db', sourcePath: [out], enrich: () => null });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => server.close());
+  const port = server.address().port;
+  const steps = async (id) => JSON.parse((await get(port, '/api/session?id=' + id)).body).analyzed.steps.length;
+  assert.deepEqual([await steps('D1'), await steps('K1')], [1, 1]);
+  fs.appendFileSync(path.join(out, 'D1', 'calls.ndjson'), JSON.stringify(rec('d2', 'dsh', { 'x-deepseek-harness-session-id': 'D1' }, {}, 3)) + '\n');
+  fs.appendFileSync(path.join(out, '_unkeyed', 'calls.ndjson'), JSON.stringify(rec('k2', 'kimi-code', {}, { metadata: { user_id: 'K1' } }, 4)) + '\n');
+  assert.deepEqual([await steps('D1'), await steps('K1')], [2, 2], 'the live poll sees the new calls');
+});

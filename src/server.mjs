@@ -596,13 +596,15 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
       const out = [];
       const inputs = shardInputs(hit, SESSION_STREAMS);
       out.sourceErrors = coexistNotes(inputs.mismatched);
+      // what the session view is memoised under: these files' stat, so a growing shard is re-read (D21)
+      out.sig = 'shard:' + sigOf(inputs.files);
       await readAll(inputs.files, out, out.sourceErrors);
       return out;
     }
     // a session keyed outside the headers lives in _unkeyed/ (3.4:21)
     const unk = await loadUnkeyed();
     const g = groupSessions(unk.records).get(id);
-    if (g) { const out = [...g]; out.sourceErrors = unk.errors; return out; }
+    if (g) { const out = [...g]; out.sourceErrors = unk.errors; out.sig = 'unkeyed:' + unk.sig; return out; }
     // flat source, or an id that isn't its own shard → fall back to the whole corpus, filtered.
     const out = stampSynthKeys(await loadRecords()).filter((r) => sessionIdOf(r) === id); // synthesized keys first (3.4 合成键)
     out.sourceErrors = loadRecords.sourceErrors || [];
@@ -713,7 +715,8 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         //             LIES that the session has no calls.
         // Memo key carries the window: each entry is bounded, and a full view can no longer be served
         // as if it were a page (or the reverse).
-        const key = memoKey(id, loadRecords.sig) + (page ? `|p${page.cursor}:${page.limit}` : '|full');
+        // the source signature of what was read: a shard's own files in shard mode (loadRecords never runs there)
+        const key = memoKey(id, records.sig ?? loadRecords.sig) + (page ? `|p${page.cursor}:${page.limit}` : '|full');
         let view = sessionMemo.get(key);
         if (view === undefined) {
           view = sessionView(records, id, { enrich, page, maxBytes: page ? null : SESSION_BYTE_BUDGET });
