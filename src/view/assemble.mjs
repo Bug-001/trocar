@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import { analyze, linearContext, cacheBreak, normResp, flatBlockText } from './analyze.mjs';
 import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf } from '../dissect/capture-labels.mjs'; // #21 request-body labels, D38 WebSocket labels, response labels
 import { blockSpans } from '../adapters/cc.mjs';
+import { scanJson, spanAt } from '../adapters/content-hash.mjs';
 import { slimBlock, compBuckets } from './blockmeta.mjs';
 import { mintRawRef, composeTextRef } from '../etl/orchestrator.mjs';
 import { sessionKeyOf } from '../dissect/harnesses.mjs';
@@ -151,13 +152,14 @@ function assembleFlatLane(records, d, opts = {}) {
     brk.gtReal = true;
     const kept = !opts.keepFlat || opts.keepFlat(gi); // see assembleSession: retention window
     calls.push({
-      gi: gi++, id: r.id, streamId: 'main', rec: r, norm, wireFormat: d.id,
+      gi: gi++, id: r.id, streamId: 'main', rec: kept ? slimRec(r) : { id: r.id, request: { model: req.model } }, norm, wireFormat: d.id,
       ctx: d.ctxTokens(norm),
       msgCount: req.message_count || 0,
       tools: Array.isArray(req.tools) ? req.tools.length : 0,
       ts: r.ts_request || r.ts || '', status: (r.resp && r.resp.status) || null,
       compaction: false, error: !!r.error, reqIncomplete: reqIncompleteOf(r), wsIncomplete: wsIncompleteOf(r), respIncomplete: respIncompleteOf(r),
-      flat: kept ? flat : [], ...(kept ? null : { paged_out: true }),
+      // shipped as metadata + a text_ref per block, never the body (4.2:55); out of the window: no blocks
+      flat: kept ? withPathRefs(flat, r) : [], ...(kept ? null : { paged_out: true }),
       // Tier A, same as the multi-lane path: computed from `flat` BEFORE the retention window drops it.
       comp: compBuckets(flat),
       usage, cacheBreak: brk, gt: brk.gt, prefixSha256: curPfx,
@@ -226,6 +228,21 @@ function withRefs(flat, rec) {
   return flat.map((b, i) => {
     const span = spans && spans[i];
     return slimBlock(b, base && span ? composeTextRef(base, span) : null);
+  });
+}
+
+// Locators for dissectors that describe each block by a JSON `path` into req_body (the flat-lane wires).
+// Same ref grammar as withRefs, so one resolver serves both paths and AC-1 holds for both. A block whose
+// path is absent from the bytes, or a record that cannot be addressed, is shipped inline and labelled
+// unaddressable by slimBlock (invariant 4).
+function withPathRefs(flat, rec) {
+  let root = null;
+  try { root = typeof rec.req_body === 'string' ? scanJson(rec.req_body) : null; } catch { root = null; }
+  const id = rec && rec.id != null ? String(rec.id) : null;
+  const base = id && rec._stream ? mintRawRef(sessionIdOf(rec), rec._stream, id) : null;
+  return flat.map((b) => {
+    const span = base && root && Array.isArray(b.path) ? spanAt(root, b.path) : null;
+    return slimBlock(b, span ? composeTextRef(base, span) : null);
   });
 }
 

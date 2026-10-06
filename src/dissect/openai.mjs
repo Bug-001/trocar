@@ -132,30 +132,33 @@ function summaryText(item) {
   if (Array.isArray(s)) return s.map((x) => (x && (x.text || x.summary_text)) || '').join('');
   return typeof s === 'string' ? s : '';
 }
-// returns [{ role, block }] — one per rendered block (a message may fan out to several content blocks)
+// returns [{ role, block, sub }] — one per rendered block (a message may fan out to several content blocks).
+// `sub` = the JSON path of the block's bytes WITHIN the item (the board's text_ref locator, 4.2:40).
 export function itemToBlocks(item) {
-  if (!item || typeof item !== 'object') return [{ role: 'user', block: { type: 'text', text: String(item ?? '') } }];
+  if (!item || typeof item !== 'object') return [{ role: 'user', block: { type: 'text', text: String(item ?? '') }, sub: [] }];
   const t = item.type;
   if (t === 'message' || item.content) {
     const role = item.role || 'user';
-    const content = Array.isArray(item.content) ? item.content : [{ type: 'input_text', text: String(item.content ?? '') }];
-    return content.map((c) => {
-      if (!c || typeof c !== 'object') return { role, block: { type: 'text', text: String(c ?? '') } };
-      if (c.type === 'input_text' || c.type === 'output_text' || c.type === 'text') return { role, block: { type: 'text', text: c.text || '' } };
-      if (c.type === 'input_image' || c.type === 'image') return { role, block: { type: 'image', source: { media_type: c.image_url || c.detail || 'image' } } };
-      if (c.type === 'refusal') return { role, block: { type: 'text', text: c.refusal || '' } };
-      return { role, block: { type: 'text', text: JSON.stringify(c) } };
+    const arr = Array.isArray(item.content);
+    const content = arr ? item.content : [{ type: 'input_text', text: String(item.content ?? '') }];
+    return content.map((c, ci) => {
+      const sub = arr ? ['content', ci] : ['content'];
+      if (!c || typeof c !== 'object') return { role, block: { type: 'text', text: String(c ?? '') }, sub };
+      if (c.type === 'input_text' || c.type === 'output_text' || c.type === 'text') return { role, block: { type: 'text', text: c.text || '' }, sub };
+      if (c.type === 'input_image' || c.type === 'image') return { role, block: { type: 'image', source: { media_type: c.image_url || c.detail || 'image' } }, sub };
+      if (c.type === 'refusal') return { role, block: { type: 'text', text: c.refusal || '' }, sub };
+      return { role, block: { type: 'text', text: JSON.stringify(c) }, sub };
     });
   }
-  if (t === 'function_call') return [{ role: 'assistant', block: { type: 'tool_use', name: item.name || '', id: item.call_id || item.id || '', input: safeJson(item.arguments) } }];
+  if (t === 'function_call') return [{ role: 'assistant', block: { type: 'tool_use', name: item.name || '', id: item.call_id || item.id || '', input: safeJson(item.arguments) }, sub: [] }];
   if (t === 'function_call_output') {
     const out = item.output;
     const content = typeof out === 'string' ? out : (out && out.content) || JSON.stringify(out ?? '');
-    return [{ role: 'tool', block: { type: 'tool_result', tool_use_id: item.call_id || '', content } }];
+    return [{ role: 'tool', block: { type: 'tool_result', tool_use_id: item.call_id || '', content }, sub: [] }];
   }
-  if (t === 'reasoning') return [{ role: 'assistant', block: { type: 'thinking', thinking: summaryText(item), signature: item.encrypted_content ? 'encrypted' : '' } }];
+  if (t === 'reasoning') return [{ role: 'assistant', block: { type: 'thinking', thinking: summaryText(item), signature: item.encrypted_content ? 'encrypted' : '' }, sub: [] }];
   // fallback (item_reference / unknown): render verbatim JSON, marked non-standard.
-  return [{ role: (item.role || 'assistant'), block: { type: 'text', text: JSON.stringify(item) } }];
+  return [{ role: (item.role || 'assistant'), block: { type: 'text', text: JSON.stringify(item) }, sub: [] }];
 }
 
 // ── board projection: raw Responses request → flat block descriptors (same vocab as CC linearContext).
@@ -174,18 +177,22 @@ export function boardFlat(req) {
       sec: 'tools', kind: 'tool', role: 'tool', name, ttype: t.type || 'function',
       props, descChars: desc.length, cc: null, mcp, verbatim: true,
       desc, schema, resKey: mcp ? 'mcp::' + (name.split(/[._]/)[1] || name) : '',
-      key: 'T:' + name + ':' + desc.length + ':' + props.length,
+      key: 'T:' + name + ':' + desc.length + ':' + props.length, path: ['tools', i],
     });
   });
   const instr = typeof (req && req.instructions) === 'string' ? req.instructions : (req && req.instructions != null ? JSON.stringify(req.instructions) : '');
-  if (instr) flat.push({ sec: 'system', kind: 'system', role: 'system', si: 0, label: sysLabel(instr), text: instr, chars: instr.length, volatile: false, cc: null, key: okey('S:', { type: 'text', text: instr }) });
+  if (instr) flat.push({ sec: 'system', kind: 'system', role: 'system', si: 0, label: sysLabel(instr), text: instr, chars: instr.length, volatile: false, cc: null, key: okey('S:', { type: 'text', text: instr }), path: ['instructions'] });
+  if (typeof (req && req.input) === 'string') { // the Responses API accepts a bare string input: one user block
+    const block = { type: 'text', text: req.input };
+    flat.push({ sec: 'messages', kind: 'text', role: 'user', mi: 0, bi: 0, block, toolName: '', cc: null, resKey: '', key: okey('M:user:text:', block), path: ['input'] });
+  }
   const input = Array.isArray(req && req.input) ? req.input : [];
   let mi = 0;
   for (const item of input) {
     let bi = 0;
-    for (const { role, block } of itemToBlocks(item)) {
+    for (const { role, block, sub } of itemToBlocks(item)) {
       const type = block.type;
-      const d = { sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), key: okey('M:' + role + ':' + type + ':', block) };
+      const d = { sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), key: okey('M:' + role + ':' + type + ':', block), path: ['input', mi, ...sub] };
       if (type === 'thinking') d.faithfulness = faithfulness(block);
       flat.push(d);
       bi++;
@@ -208,30 +215,32 @@ const chatText = (content) => {
   if (Array.isArray(content)) return content.map((c) => (c && typeof c === 'object' ? (c.text || '') : String(c ?? ''))).join('');
   return content == null ? '' : JSON.stringify(content);
 };
-// one chat message → [{role, block}] (a message may fan out: assistant text + several tool_calls)
+// one chat message → [{role, block, sub}] (a message may fan out: assistant text + several tool_calls).
+// `sub` = the JSON path of the block's bytes within the message (the board's text_ref locator).
 export function chatMessageToBlocks(m) {
-  if (!m || typeof m !== 'object') return [{ role: 'user', block: { type: 'text', text: String(m ?? '') } }];
+  if (!m || typeof m !== 'object') return [{ role: 'user', block: { type: 'text', text: String(m ?? '') }, sub: [] }];
   const role = m.role || 'user';
-  if (role === 'tool') return [{ role: 'tool', block: { type: 'tool_result', tool_use_id: m.tool_call_id || '', content: chatText(m.content) } }];
+  if (role === 'tool') return [{ role: 'tool', block: { type: 'tool_result', tool_use_id: m.tool_call_id || '', content: chatText(m.content) }, sub: ['content'] }];
   const out = [];
   if (Array.isArray(m.content)) {
-    for (const c of m.content) {
-      if (!c || typeof c !== 'object') { out.push({ role, block: { type: 'text', text: String(c ?? '') } }); continue; }
+    m.content.forEach((c, ci) => {
+      const sub = ['content', ci];
+      if (!c || typeof c !== 'object') { out.push({ role, block: { type: 'text', text: String(c ?? '') }, sub }); return; }
       if (c.type === 'image_url' || c.type === 'input_image' || c.type === 'image') {
-        const u = c.image_url; out.push({ role, block: { type: 'image', source: { media_type: (u && (u.url || u.detail)) || 'image' } } });
-      } else if (c.type === 'refusal') out.push({ role, block: { type: 'text', text: c.refusal || '' } });
-      else out.push({ role, block: { type: 'text', text: c.text != null ? c.text : JSON.stringify(c) } });
-    }
+        const u = c.image_url; out.push({ role, block: { type: 'image', source: { media_type: (u && (u.url || u.detail)) || 'image' } }, sub });
+      } else if (c.type === 'refusal') out.push({ role, block: { type: 'text', text: c.refusal || '' }, sub });
+      else out.push({ role, block: { type: 'text', text: c.text != null ? c.text : JSON.stringify(c) }, sub });
+    });
   } else if (typeof m.content === 'string' && m.content.length) {
-    out.push({ role, block: { type: 'text', text: m.content } });
+    out.push({ role, block: { type: 'text', text: m.content }, sub: ['content'] });
   }
-  for (const tc of Array.isArray(m.tool_calls) ? m.tool_calls : []) {
+  (Array.isArray(m.tool_calls) ? m.tool_calls : []).forEach((tc, k) => {
     const f = (tc && tc.function) || {};
-    out.push({ role: 'assistant', block: { type: 'tool_use', name: f.name || '', id: (tc && tc.id) || '', input: safeJson(f.arguments) } });
-  }
+    out.push({ role: 'assistant', block: { type: 'tool_use', name: f.name || '', id: (tc && tc.id) || '', input: safeJson(f.arguments) }, sub: ['tool_calls', k] });
+  });
   // a genuinely empty message (e.g. {role:'assistant', content:null} with no tool_calls) still gets a
   // block, so the block count never silently under-reports what was on the wire.
-  if (!out.length) out.push({ role, block: { type: 'text', text: '' } });
+  if (!out.length) out.push({ role, block: { type: 'text', text: '' }, sub: [] });
   return out;
 }
 export function boardFlatChat(req) {
@@ -248,7 +257,7 @@ export function boardFlatChat(req) {
       sec: 'tools', kind: 'tool', role: 'tool', name, ttype: (t && t.type) || 'function',
       props, descChars: desc.length, cc: null, mcp, verbatim: true,
       desc, schema, resKey: mcp ? 'mcp::' + (name.split(/[._]/)[1] || name) : '',
-      key: 'T:' + name + ':' + desc.length + ':' + props.length,
+      key: 'T:' + name + ':' + desc.length + ':' + props.length, path: ['tools', i],
     });
   });
   const msgs = Array.isArray(req && req.messages) ? req.messages : [];
@@ -258,14 +267,14 @@ export function boardFlatChat(req) {
   while (lead < msgs.length && msgs[lead] && (msgs[lead].role === 'system' || msgs[lead].role === 'developer')) lead++;
   for (let i = 0; i < lead; i++) {
     const text = chatText(msgs[i].content);
-    flat.push({ sec: 'system', kind: 'system', role: 'system', si: i, label: sysLabel(text), text, chars: text.length, volatile: false, cc: null, key: okey('S:', { type: 'text', text }) });
+    flat.push({ sec: 'system', kind: 'system', role: 'system', si: i, label: sysLabel(text), text, chars: text.length, volatile: false, cc: null, key: okey('S:', { type: 'text', text }), path: ['messages', i, 'content'] });
   }
   let mi = 0;
   for (let i = lead; i < msgs.length; i++) {
     let bi = 0;
-    for (const { role, block } of chatMessageToBlocks(msgs[i])) {
+    for (const { role, block, sub } of chatMessageToBlocks(msgs[i])) {
       const type = block.type;
-      flat.push({ sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), key: okey('M:' + role + ':' + type + ':', block) });
+      flat.push({ sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), key: okey('M:' + role + ':' + type + ':', block), path: ['messages', i, ...sub] });
       bi++;
     }
     mi++;
