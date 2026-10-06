@@ -213,3 +213,16 @@ test('a non-WebSocket 101 or a CONNECT 2xx: nothing after it is framed, and the 
     assert.equal(out.length, 1, 'the head exchange only'); assert.deepEqual(t.rowNotes(), { notFollowed: why })
   }
 })
+
+test('a gzip request body is recorded decoded, its wire bytes kept; the bytes the tee saw are untouched (RFC 4.6 请求体压缩, T16)', async () => {
+  const zlib = (await import('node:zlib')).default
+  const { out, store } = sink()
+  const t = createExchangeTee({ flow: FLOW, recordStore: store })
+  const gz = zlib.gzipSync('{"model":"m"}')
+  const wire = Buffer.concat([Buffer.from(`POST /v1/messages HTTP/1.1\r\nContent-Encoding: gzip\r\nContent-Length: ${gz.length}\r\n\r\n`), gz])
+  const copy = Buffer.from(wire)
+  t.fromClient(wire)
+  t.fromUpstream(Buffer.from('HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}'))
+  assert.equal(out[0].req_body, '{"model":"m"}'); assert.equal(out[0].req_body_b64, gz.toString('base64')); assert.equal(out[0].req_content_encoding, 'gzip')
+  assert.ok(wire.equals(copy), 'recording never rewrites the forwarded bytes')
+})

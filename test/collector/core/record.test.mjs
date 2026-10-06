@@ -222,3 +222,34 @@ test('store: a capture file renamed or deleted while open is reopened, and that 
     s.close()
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
+
+// RFC 4.6 §传输与帧级记录「请求体压缩」/ §记录 · acceptance T16 (D38 T-14): a compressed request body used to be
+// read as UTF-8 and stored as U+FFFD noise that looked verbatim.
+test('compressed request bodies: wire bytes verbatim in req_body_b64; gzip decoded; zstd never decoded at capture; non-LLM stays metadata', async () => {
+  const zlib = (await import('node:zlib')).default
+  const json = '{"model":"m","messages":[{"role":"user","content":"压缩 ok"}]}'
+  const mk = (target, enc, body) => buildTransparentEnvelope({ id: 'c', flow: FLOW, seq: 0, resp: null, error: null,
+    req: { head: { ...head(`POST ${target} HTTP/1.1\r\n\r\n`), method: 'POST', target, headers: enc ? [['Content-Encoding', enc]] : [] }, body, truncated: false, tsStart: '2026-10-05T00:00:00.000Z' } })
+  const gz = zlib.gzipSync(json)
+  const g = mk('/v1/messages', 'gzip', gz)
+  assert.equal(g.req_body, json); assert.equal(g.req_body_b64, gz.toString('base64')); assert.equal(g.req_content_encoding, 'gzip'); assert.equal(g.req_encoding_error, undefined)
+  const keys = Object.keys(g); assert.ok(keys.indexOf('req_body_b64') > keys.indexOf('req_body') && keys.indexOf('req_body') > keys.indexOf('req_headers'))
+  // zstd: stored, never decoded here — even on a Node that could (the decoder is spied on)
+  const real = zlib.zstdDecompressSync; let calls = 0
+  zlib.zstdDecompressSync = (...a) => { calls++; return real ? real(...a) : Buffer.alloc(0) }
+  try {
+    const zb = typeof zlib.zstdCompressSync === 'function' ? zlib.zstdCompressSync(json) : Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 1, 2, 3])
+    const z = mk('/backend-api/codex/responses', 'zstd', zb)
+    assert.equal(z.req_body, null); assert.equal(z.req_body_b64, zb.toString('base64')); assert.equal(z.req_content_encoding, 'zstd'); assert.match(z.req_encoding_error, /zstd/)
+    assert.equal(mk('/v1/messages', 'gzip, zstd', zb).req_body, null)
+    assert.equal(calls, 0, 'no zstd decoder was called at capture')
+  } finally { zlib.zstdDecompressSync = real }
+  const bad = mk('/v1/messages', 'gzip', Buffer.from('not gzip'))
+  assert.equal(bad.req_body, null); assert.ok(bad.req_encoding_error); assert.equal(bad.req_body_b64, Buffer.from('not gzip').toString('base64'))
+  const nonLlm = mk('/api/event_logging/batch', 'gzip', gz)
+  assert.deepEqual(nonLlm.req_body, { raw_chars: gz.length, verbatim: false }); assert.equal(nonLlm.req_body_b64, undefined); assert.equal(nonLlm.req_content_encoding, undefined)
+  const plain = mk('/v1/messages', 'identity', Buffer.from(json))
+  assert.equal(plain.req_body, json); assert.equal(plain.req_body_b64, undefined)
+  assert.equal(mk('/v1/messages', null, Buffer.from(json)).req_body_b64, undefined, 'an uncompressed body has no wire fields')
+  assert.equal('transport' in g, false, 'still an HTTP envelope (T16)')
+})

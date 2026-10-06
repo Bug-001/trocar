@@ -3,8 +3,8 @@
 // fields (host/scheme/dst/proc/flow_id/seq/req_head_raw/resp_head_raw, plus req_truncated/
 // req_body_bytes/req_partial only when the request body is incomplete) are appended AFTER req_body,
 // and raw request/response heads are preserved latin1-verbatim for byte-exact resend (invariant 2).
-import { buildEnvelope } from '../../../capture/envelope.mjs'
-import { shapeResponse } from './body.mjs'
+import { buildEnvelope, isLlmCall } from '../../../capture/envelope.mjs'
+import { shapeResponse, decodeContent } from './body.mjs'
 
 // Lowercase header names and join repeats with ', ' — the same shape Node's http gives.
 function lowerHeaders(pairs) {
@@ -14,6 +14,22 @@ function lowerHeaders(pairs) {
     o[lk] = o[lk] === undefined ? v : o[lk] + ', ' + v
   }
   return o
+}
+
+// A request body the client compressed (Claude Code gzip when CLAUDE_CODE_GZIP_REQUEST_BODIES forces it;
+// Codex zstd on the ChatGPT-login HTTP path) — RFC 4.6 §传输与帧级记录「请求体压缩」, §记录, acceptance T16.
+// The wire bytes stay verbatim (req_body_b64 + req_content_encoding); req_body is the decoded text. zstd is
+// never decoded at capture: the reader decodes req_body_b64, so a capture does not depend on which Node
+// recorded it; req_body is then null and req_encoding_error says so (invariant 4). LLM calls only: a
+// non-LLM body stays {raw_chars} metadata (RFC 4.1). → null, or {text: Buffer|null, wire: {...}}
+function compressedRequest(reqHeaders, body) {
+  const enc = reqHeaders['content-encoding']
+  const codings = String(enc || '').split(',').map((c) => c.trim().toLowerCase()).filter(Boolean)
+  if (!body || !body.length || codings.every((c) => c === 'identity')) return null
+  const wire = { req_body_b64: body.toString('base64'), req_content_encoding: enc }
+  if (codings.includes('zstd')) return { text: null, wire: { ...wire, req_encoding_error: 'zstd request body not decoded at capture; decode req_body_b64' } }
+  const dec = decodeContent(body, enc)
+  return dec.decoded ? { text: dec.buf, wire } : { text: null, wire: { ...wire, req_encoding_error: dec.error } }
 }
 
 /**
@@ -27,6 +43,7 @@ function lowerHeaders(pairs) {
  */
 export function buildTransparentEnvelope({ id, flow, seq, req, resp, error = null }) {
   const reqHeaders = lowerHeaders(req.head.headers)
+  const comp = isLlmCall(req.head.target) ? compressedRequest(reqHeaders, req.body) : null
   const haveResp = !!resp && !resp.aborted && !error
   const durationMs = resp && resp.tsStart && resp.tsEnd ? Date.parse(resp.tsEnd) - Date.parse(resp.tsStart) : null
 
@@ -49,7 +66,7 @@ export function buildTransparentEnvelope({ id, flow, seq, req, resp, error = nul
     durationMs,
     method: req.head.method,
     endpoint: req.head.target,
-    reqBody: req.body,
+    reqBody: comp ? comp.text : req.body,
     reqHeaders,
     resp: shaped,
     capture: 'transparent',
@@ -58,8 +75,10 @@ export function buildTransparentEnvelope({ id, flow, seq, req, resp, error = nul
 
   // Append the transparent-capture fields AFTER everything buildEnvelope produced (key order matters:
   // the sharder scans the first "req_headers":{ … to "req_body").
+  if (comp && comp.text === null) env.req_body = null // undecoded: buildEnvelope would say '' (an empty body); the bytes are in req_body_b64
   return {
     ...env,
+    ...(comp ? comp.wire : {}),
     host: flow.host,
     scheme: flow.scheme,
     dst: flow.dst,
