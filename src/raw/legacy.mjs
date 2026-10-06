@@ -187,9 +187,19 @@ function selfAndAncestors(procs) {
   for (let p = process.pid; p > 1 && !out.has(p); p = p === process.pid ? process.ppid : ppid.get(p)) out.add(p);
   return out;
 }
+// The HOME of another process (its default sessions root is under it): /proc/<pid>/environ on Linux,
+// `ps -E` on macOS (the environment follows the command; the last HOME= is the environment's). Null
+// when it cannot be read — the caller then assumes this process's own.
+export function defaultHomeOf(pid, { fs = nodeFs, platform = process.platform, run = spawnSync } = {}) {
+  try {
+    if (platform === 'linux') { const h = fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').find((e) => e.startsWith('HOME=')); return h ? h.slice(5) : null; }
+    if (platform === 'darwin') { const r = run('ps', ['-E', '-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }); const m = [...String(r.stdout || '').matchAll(/ HOME=(\S+)/g)].at(-1); return m ? m[1] : null; }
+  } catch {}
+  return null;
+}
 // The trees another `asight raw seal` writes in: its target, and for the closed-shard entry the
-// sessions root it files into (its --sessions, else the default). Null when they cannot be told (a
-// relative path: its cwd is unknown).
+// sessions root it files into (its --sessions, else the default under its HOME). Null when they
+// cannot be told (a relative path: its cwd is unknown).
 function sealerTrees(argv, sessionsRoot) {
   const rest = asightArgs(argv).slice(2), out = [];
   let legacy = false, sessions = null;
@@ -206,14 +216,15 @@ function sealerTrees(argv, sessionsRoot) {
 // Other `asight raw seal` processes working in `target`'s tree — or where it cannot be told (review 3
 // confirm, row 2): two runs over one tree would each check and delete, or seal what the other
 // deletes. One on another tree is left alone (every shard has its own lock besides).
-export function otherSealers(procs, { target = null, sessionsRoot = path.join(asightHome(), 'sessions'), fs = nodeFs } = {}) {
+export function otherSealers(procs, { target = null, sessionsRoot = path.join(asightHome(), 'sessions'), fs = nodeFs, homeOf = defaultHomeOf } = {}) {
   const mine = selfAndAncestors(procs);
   const real = (p) => realish(fs, p), within = (a, b) => a === b || a.startsWith(b.endsWith(path.sep) ? b : b + path.sep);
   const t = target && real(target);
   return procs.filter((p) => {
     if (mine.has(p.pid) || !argvOf(p) || !isRawSeal(argvOf(p))) return false;
     if (!t) return true;
-    const trees = sealerTrees(argvOf(p), sessionsRoot);
+    const home = homeOf(p.pid);
+    const trees = sealerTrees(argvOf(p), home ? path.join(home, '.asight', 'sessions') : sessionsRoot);
     return !trees || trees.map(real).some((x) => within(t, x) || within(x, t));
   });
 }

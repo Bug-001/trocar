@@ -69,7 +69,10 @@ test('row 2: the run refuses while another `asight raw seal` works in its tree (
     const elsewhere = { pid: 424246, ppid: 1, argv: ['node', '/x/bin/asight.mjs', 'raw', 'seal', '--legacy', path.join(path.dirname(root), 'not-this-tree')] };
     const closedHere = { pid: 424247, ppid: 1, argv: ['node', '/x/bin/asight.mjs', 'raw', 'seal', '/elsewhere/cap.ndjson'] };   // files into the default sessions root
     assert.deepEqual(otherSealers([me, npx, elsewhere], { target: f }), []);
-    assert.deepEqual(otherSealers([me, npx, closedHere], { target: f, sessionsRoot: ses }).map((p) => p.pid), [424247]);
+    assert.deepEqual(otherSealers([me, npx, closedHere], { target: f, sessionsRoot: ses, homeOf: () => null }).map((p) => p.pid), [424247], 'its HOME unknown: this one\'s');
+    assert.deepEqual(otherSealers([me, npx, closedHere], { target: f, homeOf: () => path.dirname(path.dirname(ses)) }).map((p) => p.pid), [], 'its default sessions root is under ITS home');
+    const homeHere = path.join(root, 'home'); fs.mkdirSync(path.join(homeHere, '.asight', 'sessions'), { recursive: true });
+    assert.deepEqual(otherSealers([closedHere], { target: path.join(homeHere, '.asight', 'sessions'), homeOf: () => homeHere }).map((p) => p.pid), [424247]);
     assert.deepEqual(otherSealers([{ pid: 9, argv: ['vim', 'asight', 'raw', 'seal'] }, { pid: 10, argv: ['node', '/x/bin/asight.mjs', 'raw', 'verify', ses] }], { target: f }), [], 'not a sealer');
     const res = await sealLegacy(f, { ...NONE, journal, deleteOriginal: true, processList: async () => [me, npx, elsewhere] });
     assert.equal(res.deletedOnly.length, 1);
