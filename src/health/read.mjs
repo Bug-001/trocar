@@ -130,16 +130,19 @@ function collectorHealth({ dir, now, fs, alive, identity, maxBytes, read }) {
   const residue = !m || m.complete ? [] : Array.isArray(m.uninstall_left) && m.uninstall_left.length
     ? m.uninstall_left.map((l) => ({ path: l.path, harness: l.harness ?? null, result: l.result }))
     : [...(m.entries || []).map((e) => ({ path: e.path, harness: e.harness ?? null, result: 'install did not finish' })), ...(m.files || []).map((f) => ({ path: f.path, harness: f.harness ?? null, result: 'install did not finish' }))]
-  const flows = readFlows({ dir, now, fs, maxBytes }) // an unreadable flows/ throws: 503
-  read.files.push(...flows.files); read.errors.push(...flows.errors); read.unparsable += flows.unparsable
-  if (flows.truncated) read.truncated = true
-  const fold = foldFlows(flows.records, { now })
   const ls = lockState({ file: path.join(dir, 'lock'), now, alive, identity, fs })
   const daemon = {
     state: DAEMON[ls.state], ...(ls.lock ? { pid: ls.lock.pid } : {}), ...(ls.why ? { why: ls.why } : {}), ...(ls.error ? { error: ls.error } : {}),
     ...(ls.age_ms != null ? { lock_refreshed_at: new Date(now - ls.age_ms).toISOString() } : {}), ...(ls.verified === false ? { verified: false } : {}),
-    unclean: ls.state === 'stale', last_record_at: fold.last_ts, last_start: fold.last_start, last_stop: fold.last_stop,
+    unclean: ls.state === 'stale',
   }
+  let flows
+  // an unreadable flows/ throws (the endpoint's 503); what could be read rides along for `collector status`
+  try { flows = readFlows({ dir, now, fs, maxBytes }) } catch (e) { e.collector = { present: true, installed, residue, daemon }; throw e }
+  read.files.push(...flows.files); read.errors.push(...flows.errors); read.unparsable += flows.unparsable
+  if (flows.truncated) read.truncated = true
+  const fold = foldFlows(flows.records, { now })
+  Object.assign(daemon, { last_record_at: fold.last_ts, last_start: fold.last_start, last_stop: fold.last_stop })
   const st = readJson(path.join(dir, 'state.json'), fs)
   if (st.error) read.errors.push({ file: path.join(dir, 'state.json'), error: st.error })
   const sw = st.value ? { desired: st.value.desired === 'on' ? 'on' : 'off', since: st.value.updated_at || null } : st.missing ? { desired: 'off', since: null } : { desired: null, since: null, error: st.error }

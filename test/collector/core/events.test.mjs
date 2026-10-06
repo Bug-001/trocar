@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { appendEvent, recentFailures, readRecentFailures, createFailureRecorder } from '../../../src/collector/core/events.mjs'
+import { appendEvent, recentFailures, createFailureRecorder } from '../../../src/collector/core/events.mjs'
 
 function box() { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-ev-')); return { dir, done: () => fs.rmSync(dir, { recursive: true, force: true }) } }
 
@@ -63,25 +63,13 @@ test('failure recorder: lines it cannot write go to stderr and the lost count; t
   } finally { b.done() }
 })
 
-// D-2: only a missing flows/ is "nothing recorded"; an unreadable directory or file is an error, a tail read says so.
-test('readRecentFailures: an unreadable flows/ or day file is an error, never "no failures"; a partial read is truncated (D-2)', () => {
+// D-2: only a missing flows/ is "nothing recorded"; an unreadable directory throws, never "no failures" (the reader is
+// src/health/flows.mjs, tested in full in test/health/flows.test.mjs).
+test('recentFailures reads through the health reader: no flows/ is nothing yet, an unreadable flows/ throws (D-2)', () => {
   const b = box()
   try {
-    assert.deepEqual(readRecentFailures(b.dir), { list: [], errors: [], truncated: false, last_ts: null }, 'no flows/ yet: nothing recorded')
+    assert.deepEqual(recentFailures(b.dir), [], 'no flows/ yet: nothing recorded')
     fs.writeFileSync(path.join(b.dir, 'flows'), 'not a directory')
-    const r = readRecentFailures(b.dir)
-    assert.deepEqual([r.list, r.errors.length, /ENOTDIR/.test(r.errors[0])], [[], 1, true])
-    fs.rmSync(path.join(b.dir, 'flows'))
-    appendEvent(b.dir, { event: 'failure', where: 'engine', code: 'lookup-miss', reason: 'r1' }, { now: new Date('2026-10-06T01:00:00Z') })
-    fs.mkdirSync(path.join(b.dir, 'flows', '2026-10-07.ndjson')) // a day "file" that cannot be read
-    const r2 = readRecentFailures(b.dir)
-    assert.deepEqual(r2.list.map((f) => f.reason), ['r1'], 'the readable day is still read')
-    assert.equal(r2.errors.length, 1); assert.match(r2.errors[0], /2026-10-07\.ndjson: EISDIR/)
-    for (let i = 0; i < 30; i++) appendEvent(b.dir, { event: 'failure', where: 'engine', code: 'lookup-miss', reason: `n${i}` }, { now: new Date('2026-10-06T02:00:00Z') })
-    const r3 = readRecentFailures(b.dir, { limit: 5 })
-    assert.deepEqual([r3.list.length, r3.list.at(-1).reason, r3.truncated], [5, 'n29', true])
-    const r4 = readRecentFailures(b.dir, { maxBytes: 300 })
-    assert.equal(r4.truncated, true, 'only the tail of the day file was read')
-    assert.ok(r4.list.length >= 1 && r4.list.every((f) => f.where === 'engine'))
+    assert.throws(() => recentFailures(b.dir), /ENOTDIR|not a directory/)
   } finally { b.done() }
 })

@@ -23,7 +23,7 @@ import { createRecordStore } from './core/record/store.mjs'
 import { createEngine } from './core/engine/engine.mjs'
 import { appendEvent, readRecentFailures, createFailureRecorder } from './core/events.mjs'
 import { EVENT, CODE, trustReasonText } from './core/codes.mjs'
-import { procIdentity } from '../health/read.mjs'
+import { procIdentity, captureHealth } from '../health/read.mjs'
 
 export { loadArch } // the CLI reaches arch only through this file (layering rule 5)
 
@@ -76,10 +76,11 @@ function ownedLikeDir(dir, chown) {
   for (const n of fs.readdirSync(flows)) chown(path.join(flows, n), uid, gid)
 }
 
-// The recent failure records for status, with what could not be read (D-2: an unreadable flows/ is never "none").
-export function failuresOnDisk(dir) {
-  const r = readRecentFailures(dir)
-  return { failures: r.list, ...(r.errors.length || r.truncated ? { failures_read: { errors: r.errors, truncated: r.truncated } } : {}) }
+// What status reports beside the live state: capture health read from disk by the reader the board uses
+// (src/health/read.mjs, D38) — failures by kind, current conditions, what could not be read (D-2: never "none").
+// `dir` is <asight home>/collector.
+export function healthOnDisk(dir) {
+  try { return captureHealth({ home: path.dirname(dir) }) } catch (e) { return { error: `capture health could not be read: ${errText(e)}` } }
 }
 
 async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = procIdentity, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000 }) {
@@ -307,7 +308,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         unmatched: tracker.unmatched(), // processes two descriptors claim (D-19)
         helper: { pid, proto, build, expected_proto: redirector.expectedProto, ok: proto === redirector.expectedProto, down: helperDown, unparsable_lines: unparsable, timeouts },
         agents, running_untrusted: agents.filter((a) => !a.trusted).length,
-        ...failuresOnDisk(P.dir),
+        health: healthOnDisk(P.dir),
         events: failure.health(), // event lines lost (D-1): stderr had each, the next written line is a log-gap
       }
     }

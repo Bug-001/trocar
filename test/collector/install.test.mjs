@@ -252,8 +252,8 @@ test('uninstall records a file it could not undo because it is no longer JSON (D
     const code = await runCollector(['status'], { home: b.home, env: { XDG_RUNTIME_DIR: path.join(b.home, 'run') }, out: (x) => out.push(x), err: (x) => err.push(x) })
     assert.equal(code, 3)
     assert.match(err[0], /daemon is not running/)
-    assert.match(out[0], /^collector daemon: not running/, 'the lock says so first (D-25)')
-    assert.match(out[1], /^recent failures \(1\):\n  \S+ failure \(uninstall\): .*no longer valid JSON/, 'read from disk, with no daemon')
+    assert.match(out[0], /^collector: not installed — an uninstall left 1 item\(s\): .*settings\.json \(left-unparsable\)/, 'the residue is said first (D-18), never plain "not installed"')
+    assert.match(out.join('\n'), /capture health: – not installed · 1 item\(s\) left behind\nrecent failures \(1 kind\(s\), last 24 h\):\n  \S+ failure \(uninstall\/left-unparsable\): .*no longer valid JSON/, 'read from disk, with no daemon')
   } finally { b.done() }
 })
 
@@ -652,11 +652,11 @@ test('uninstall writes an uninstall-note for every result but a plain restore an
     const doc = JSON.parse(fs.readFileSync(settingsOf(b), 'utf8')); doc.theme = 'dark'; fs.writeFileSync(settingsOf(b), JSON.stringify(doc)) // edited since
     const r = await uninstallCollector({ home: b.home, env: {}, scan: async () => running, match, stop: stopNone })
     assert.deepEqual(r.entries.map((e) => e.result), ['reverted-not-identical'])
-    const { readRecentFailures } = await import('../../src/collector/core/events.mjs')
+    const { recentFailures } = await import('../../src/collector/core/events.mjs')
     const lines = fs.readdirSync(path.join(b.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(b.dir, 'flows', n), 'utf8').trim().split('\n').map((l) => JSON.parse(l))).filter((l) => l.event !== 'install-note')
     assert.deepEqual(lines.map((l) => [l.event, l.kind, l.path ?? l.pid]), [['uninstall-note', 'reverted-not-identical', settingsOf(b)], ['uninstall-note', 'still-trusting', 4242]])
     assert.match(lines[0].reason, /not byte for byte what it was before install/)
-    assert.deepEqual(readRecentFailures(b.dir).list, [], 'notes are not failures')
+    assert.deepEqual(recentFailures(b.dir), [], 'notes are not failures')
     assert.equal(readManifest(b.dir), null)
 
     await installCollector(base(b, { scan: async () => running, match }))

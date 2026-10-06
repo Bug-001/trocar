@@ -43,6 +43,8 @@ function sandbox() {
   return { root, home, collector: path.join(home, '.asight', 'collector'), sock: path.join(root, 'run', 'c.sock'), done: () => fs.rmSync(root, { recursive: true, force: true }) }
 }
 const req = (sock, method, p, body) => controlRequest({ socketPath: sock, method, path: p, body })
+// status reports capture health read by the board's reader (src/health): the last record of each failure kind
+const statusFailures = (st) => st.health.collector.failures.map((g) => g.last)
 async function until(fn, ms = 3000) { const end = Date.now() + ms; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 20)) } }
 const install = (s) => installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [cc], freePort: async () => 0 })
 // /proc start time of a process started now (fake-proc counts ticks of 1/100 s from its btime).
@@ -205,7 +207,7 @@ test('daemon: a helper death is degraded and on reports why; a protocol mismatch
     assert.deepEqual([on.desired, on.actual], ['on', 'off'])
     assert.ok(flowsOf(s).some((f) => f.event === 'attach-failed' && /helper is down/.test(f.error)))
     assert.deepEqual(flowsOf(s).filter((f) => f.event === 'helper-down').map((f) => f.exit), ['SIGKILL'], 'helper-down names how it ended (D-14)')
-    const failures = (await req(s.sock, 'GET', '/status')).failures.map((f) => f.event)
+    const failures = statusFailures(await req(s.sock, 'GET', '/status')).map((f) => f.event)
     assert.ok(failures.includes('helper-down') && failures.includes('attach-failed'), `status reports both (D38): ${failures}`)
   } finally { await d.stop() }
   const mis = fakeArch(p, { ASIGHT_FAKE_PROTO: '3' })
@@ -271,7 +273,7 @@ test('daemon: a Claude Code started before install is config-after-start — unt
     const recs = flowsOf(s).filter((f) => f.event === 'agent-untrusted')
     assert.deepEqual(recs.map((f) => [f.pid, f.agent, f.code, f.via.startsWith('user settings env')]), [[6161, 'claude-code', 'config-after-start', true]], 'a durable record with the reason code, once per pid and reason (D38)')
     assert.match(recs[0].reason, /restart it to be captured/, 'reason is the text that says what to do; the code is machine-readable (D38 event shape)')
-    assert.ok((await req(s.sock, 'GET', '/status')).failures.some((f) => f.event === 'agent-untrusted' && f.pid === 6161), 'status shows it')
+    assert.ok(statusFailures(await req(s.sock, 'GET', '/status')).some((f) => f.event === 'agent-untrusted' && f.pid === 6161), 'status shows it')
     await clients[0].raw({ op: '__emit', ev: 'exit', tgid: 6161, ts_ns: 9 })
     const exit = await until(() => flowsOf(s).find((f) => f.event === 'agent-exit' && f.pid === 6161))
     assert.equal(exit.code, 'config-after-start', 'its exit ends the condition, and says which one (D38)')
@@ -298,7 +300,7 @@ test('daemon: failures it owns leave a durable record with a reason, also when i
     await until(() => fails('helper').length && fails('heartbeat').length)
     assert.match(fails('heartbeat')[0].reason, /timed out; once the last beat is 2 s old the kernel stops steering/)
     const st = await req(s.sock, 'GET', '/status')
-    assert.deepEqual(['daemon', 'engine', 'helper', 'heartbeat'].map((w) => st.failures.some((f) => f.where === w)), [true, true, true, true], 'status reports them')
+    assert.deepEqual(['daemon', 'engine', 'helper', 'heartbeat'].map((w) => statusFailures(st).some((f) => f.where === w)), [true, true, true, true], 'status reports them')
     await d.stop(); stopped = true
     assert.deepEqual(fails('engine').map((f) => [f.code || null, f.suppressed || 0, !!f.folded]), [['lookup-miss', 0, false], ['lookup-miss', 1, true]], 'the folded second miss is written at stop, not lost')
   } finally { if (!stopped) await d.stop(); p.done(); s.done() }
@@ -319,7 +321,7 @@ test('daemon: an unreadable lock, an unreadable state file and a control request
     const c = fails('control')
     assert.deepEqual([c.length, c[0].route], [1, 'on'])
     assert.ok(c[0].reason.length > 0)
-    assert.ok((await req(s.sock, 'GET', '/status')).failures.some((f) => f.where === 'control'), 'status reports it')
+    assert.ok(statusFailures(await req(s.sock, 'GET', '/status')).some((f) => f.where === 'control'), 'status reports it')
   } finally { await d.stop(); p.done(); s.done() }
 })
 
@@ -395,7 +397,7 @@ test('daemon: an error judging a process is a failure record carrying the pid; o
     const f = flowsOf(s).find((x) => x.event === 'failure' && x.where === 'tracker')
     assert.deepEqual([f && f.pid, f && f.phase], [8282, 'judge'])
     assert.match(f.reason, /pid 8282 \(judge\): refine blew up; it is not watched, its connections go direct/)
-    assert.ok((await req(s.sock, 'GET', '/status')).failures.some((x) => x.where === 'tracker' && x.pid === 8282), 'status reports it')
+    assert.ok(statusFailures(await req(s.sock, 'GET', '/status')).some((x) => x.where === 'tracker' && x.pid === 8282), 'status reports it')
   } finally { await d.stop(); p.done(); s.done() }
 })
 
@@ -568,7 +570,7 @@ test('daemon: an event line that cannot be written is on stderr and in status; o
     d.redirector.emit('heartbeat-error', { code: 'heartbeat-failed', reason: 'timed out' })
     const st = await req(s.sock, 'GET', '/status')
     assert.equal(st.events.lost, 1, 'status reports the lost line')
-    assert.match(st.failures_read.errors[0], /EISDIR/, 'and that the day file cannot be read')
+    assert.match(st.health.read.errors[0].error, /EISDIR/, 'and that the day file cannot be read')
     assert.ok(logs.some(([w, m]) => w === 'events' && /EISDIR/.test(m)), 'stderr has it')
     fs.rmdirSync(day)
     d.redirector.emit('helper-error', { reason: 'ringbuf poll failed' })

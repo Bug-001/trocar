@@ -8,9 +8,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { controlSocketPath, controlRequest } from './core/control.mjs'
-import { readRecentFailures, appendEvent } from './core/events.mjs'
+import { appendEvent } from './core/events.mjs'
 import { UNTIL_TEXT } from './core/codes.mjs'
-import { lockState } from '../health/read.mjs'
+import { captureHealth } from '../health/read.mjs'
 import { collectorHome } from '../paths.mjs'
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -35,31 +35,55 @@ export function formatStatus(s) {
   }
   for (const n of s.negatives || []) lines.push(`  not captured (negative cache): pid ${n.pid} ${n.host} — ${n.cause}`)
   for (const u of s.unmatched || []) lines.push(`  unmatched: pid ${u.pid} ${u.exe} is claimed by ${u.candidates.join(' and ')}; never watched`)
-  if (s.failures && s.failures.length) lines.push(formatFailures(s.failures))
-  if (s.failures_read) lines.push(...formatReadProblems(s.failures_read))
+  if (s.health) lines.push(...(s.health.error ? [s.health.error] : formatHealth(s.health, { daemonLine: false })))
   if (s.events && s.events.lost) lines.push(`event log: ${s.events.lost} line(s) could not be written${s.events.losing_since ? ` (failing since ${s.events.losing_since}: ${s.events.last_error})` : '; the gap is recorded as log-gap'}`)
   return lines.join('\n')
 }
 
-
-// Durable failure records (D38), newest last: what failed, where, and why.
-export function formatFailures(list) {
-  const one = (f) => `  ${f.ts} ${f.event || `flow ${f.flow_id}`}${f.where ? ` (${f.where})` : ''}${f.pid != null ? ` pid ${f.pid}` : ''}${f.agent ? ` ${f.agent}` : ''}: ${f.event === 'agent-untrusted' && f.code && f.code !== f.reason ? `${f.code} — ` : ''}${f.reason || f.error?.message || f.error || f.not_captured || ''}${f.suppressed ? ` (+${f.suppressed} more)` : ''}${f.hint ? ` — ${f.hint}` : ''}`
-  return [`recent failures (${list.length}):`, ...list.map(one)].join('\n')
+// Capture health (D38; src/health/read.mjs captureHealth — the reader GET /api/capture-health uses too, RFC 4.6
+// §记录「看得到」): the daemon judged from its lock alone (D-25), what still holds, the failures of the last 24 h by
+// kind, what was not captured by design, the old capture and the raw layer; a file that could not be read is said,
+// never shown as "no failures" (D-2).
+const SUMMARY = {
+  ok: (x) => `✓ capturing since ${x.since}`, off: (x) => `○ capture off since ${x.since}`, failing: (x) => `⚠ ${x.n} failure(s) — see below`,
+  'not-running': (x) => `✗ not running · last record at ${x.since}${x.signal ? ` · stopped by ${x.signal}` : ''}${x.reason ? ` · ${x.reason}` : ''}`,
+  'not-responding': (x) => `✗ not responding · lock last refreshed at ${x.since}`, unknown: (x) => `? state unknown · ${x.reason}`,
+  'no-events': (x) => `? the old capture wrote at ${x.since} but has no events file (an old process; restart it to have them)`,
+  residue: (x) => `– not installed · ${x.n} item(s) left behind`, 'not-installed': () => '– not installed',
 }
-
-// Whether the daemon runs, judged from its lock alone (4.6 §控制面, D-25) — for when its socket does not answer.
-export function formatLock(ls, lastTs) {
-  const at = lastTs ? ` · last record at ${lastTs}` : ''
-  if (ls.state === 'none') return `collector daemon: not running (it stopped cleanly, or never started)${at}`
-  if (ls.state === 'stale') return `collector daemon: not running — its last run ended without a clean stop (${ls.why})${at}`
-  if (ls.state === 'unresponsive') return `collector daemon: not responding — pid ${ls.lock.pid} has not refreshed its lock for ${Math.round(ls.age_ms / 1000)} s${at}`
-  if (ls.state === 'running') return `collector daemon: pid ${ls.lock.pid} holds a fresh lock but its control socket did not answer${at}`
-  return `collector daemon: state unknown — ${ls.error}${at}`
+const ago = (h, iso) => Math.round((Date.parse(h.generated_at) - Date.parse(iso)) / 1000)
+function daemonText(h) {
+  const c = h.collector, d = c.daemon
+  if (c.installed === null) return `collector: whether it is installed is unknown — ${c.manifest_error}`
+  if (!c.installed) return c.residue && c.residue.length ? `collector: not installed — an uninstall left ${c.residue.length} item(s): ${c.residue.map((r) => `${r.path} (${r.result})`).join(', ')}` : 'collector: not installed'
+  const at = d.last_record_at ? ` · last record at ${d.last_record_at}` : ''
+  if (d.state === 'running') return `collector daemon: pid ${d.pid} holds a fresh lock but its control socket did not answer${at}`
+  if (d.state === 'not-responding') return `collector daemon: not responding — pid ${d.pid} has not refreshed its lock for ${ago(h, d.lock_refreshed_at)} s${at}`
+  if (d.state === 'unknown') return `collector daemon: state unknown — ${d.error}${at}`
+  if (d.unclean) return `collector daemon: not running — its last run ended without a clean stop (${d.why})${at}`
+  if (d.last_stop) return `collector daemon: not running — stopped${d.last_stop.signal ? ` by ${d.last_stop.signal}` : ''} at ${d.last_stop.ts}${at}`
+  return `collector daemon: not running (it stopped cleanly, or never started)${at}`
 }
-
-// What could not be read of flows/ (D-2): an unreadable directory or file is never shown as "no failures".
-export const formatReadProblems = (r) => [...(r.errors || []).map((e) => `failure records unreadable: ${e}`), ...(r.truncated ? ['(older failure records left out: only the most recent are shown)'] : [])]
+const groupLine = (g) => `  ${g.last_ts} ${g.last.event === 'failure' ? `failure (${g.last.where}/${g.last.code})` : g.last.event || `flow ${g.last.flow_id} not captured: ${g.last.not_captured || g.last.reason}`}${g.last.pid != null ? ` pid ${g.last.pid}` : ''}${g.last.agent ? ` ${g.last.agent}` : ''}: ${g.last.event === 'agent-untrusted' && g.last.code && g.last.code !== g.last.reason ? `${g.last.code} — ` : ''}${g.last.reason || (g.last.error && g.last.error.message) || ''}${g.count > 1 ? ` (×${g.count} in 24 h)` : ''}${g.last.hint ? ` — ${g.last.hint}` : ''}`
+const condLine = (c) => `  now: ${c.kind}${c.pid != null ? ` pid ${c.pid}` : ''}${c.agent ? ` ${c.agent}` : ''}${c.host ? ` ${c.host}` : ''} since ${c.since}: ${c.reason || ''}`
+export function formatHealth(h, { daemonLine = true } = {}) {
+  const c = h.collector, lines = []
+  if (daemonLine) lines.push(daemonText(h))
+  lines.push(`capture health: ${(SUMMARY[h.summary.state] || ((x) => x.state))(h.summary)}${h.summary.part && h.summary.part !== 'collector' ? ` (${h.summary.part === 'legacy' ? 'the old capture' : 'the raw layer'})` : ''}${h.summary.read_errors ? ' · 读不全: some files could not be read (below)' : ''}`)
+  if (c.conditions && c.conditions.length) lines.push(c.conditions_as_of ? `conditions as of ${c.conditions_as_of} (the daemon is not running):` : 'conditions now:', ...c.conditions.map(condLine))
+  if (c.failures && c.failures.length) lines.push(`recent failures (${c.failures.length} kind(s), last 24 h):`, ...c.failures.map(groupLine))
+  const exp = Object.entries(c.expected || {})
+  if (exp.length) lines.push(`not captured by design (last 24 h): ${exp.map(([k, n]) => `${k} ${n}`).join(', ')}`)
+  if (h.legacy && h.legacy.present) {
+    const l = h.legacy
+    lines.push(`old capture (MITM / reverse proxy): ${l.state === 'running' ? `running since ${l.last_start.ts}` : l.state === 'no-events' ? `wrote ${l.capture.file} at ${l.capture.mtime}, no events file` : l.state === 'unknown' ? `unknown — ${l.error}` : `not running${l.last_stop ? ` (stopped at ${l.last_stop.ts})` : ''}`}`)
+    for (const g of l.failures || []) lines.push(groupLine(g))
+  }
+  for (const p of (h.raw && h.raw.problems) || []) lines.push(`raw layer: ${p.op} ${p.outcome} ${p.file || p.target || ''}: ${p.reason || ''}`)
+  for (const e of h.read.errors) lines.push(`could not read ${e.file}: ${e.error}`)
+  if (h.read.truncated) lines.push('(older records were left out: only the most recent part of flows/ was read)')
+  return lines
+}
 
 // Every file install will write or change, printed before it writes any (4.6).
 export function formatPlan(p) {
@@ -157,13 +181,16 @@ export async function runCollector(argv, { env = process.env, home = os.homedir(
     } catch (e) { err(`asight collector ${verb}: ${e.message}`); return 1 }
   }
   if (!['on', 'off', 'status'].includes(verb)) { err(USAGE); return 2 }
-  // No daemon answered — not running, no runtime dir, or stuck: what is on disk says why and what failed last (D-2)
+  // No daemon answered — not running, no runtime dir, or stuck: what is on disk says why and what failed last (D-2),
+  // read by the board's own reader (src/health/read.mjs)
   const fromDisk = () => {
-    const dir = collectorHome(path.join(home, '.asight'))
-    const r = readRecentFailures(dir)
-    out(formatLock(lockState({ file: path.join(dir, 'lock') }), r.last_ts))
-    if (r.list.length) out(formatFailures(r.list))
-    for (const l of formatReadProblems(r)) out(l)
+    let h
+    try { h = captureHealth({ home: path.join(home, '.asight') }) } catch (e) {
+      if (e.collector) out(daemonText({ collector: e.collector, generated_at: new Date().toISOString() })) // the lock is still read
+      out(`capture health could not be read: ${e.message}`)
+      return
+    }
+    for (const l of formatHealth(h)) out(l)
   }
   let socketPath
   try { socketPath = controlSocketPath({ env }) } catch (e) { err(e.message); fromDisk(); return 2 }

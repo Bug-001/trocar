@@ -41,14 +41,15 @@ test('cli: with no daemon answering (not running, no runtime dir, stuck) status 
   const dir = path.join(home, '.asight', 'collector')
   try {
     appendEvent(dir, { event: 'failure', where: 'start', code: 'EADDRINUSE', reason: 'the engine port is held by another process' })
+    fs.writeFileSync(path.join(dir, 'install-manifest.json'), JSON.stringify({ version: 1, complete: true, entries: [], files: [] })) // installed
     const env = { XDG_RUNTIME_DIR: '/run/user/1000' }
     let t = io(); assert.equal(await runCollector(['status'], { env: {}, home, ...t }), 2)
-    assert.match(t.e.join('\n'), /XDG_RUNTIME_DIR/); assert.match(t.o.join('\n'), /failure \(start\): the engine port is held by another process/)
+    assert.match(t.e.join('\n'), /XDG_RUNTIME_DIR/); assert.match(t.o.join('\n'), /failure \(start\/EADDRINUSE\): the engine port is held by another process/)
     t = io(); assert.equal(await runCollector(['status'], { env, home, request: async () => { throw Object.assign(new Error('timed out after 2000 ms'), { code: 'ETIMEDOUT' }) }, ...t }), 1)
-    assert.match(t.e.join('\n'), /did not answer: timed out/); assert.match(t.o.join('\n'), /failure \(start\)/)
+    assert.match(t.e.join('\n'), /did not answer: timed out/); assert.match(t.o.join('\n'), /failure \(start\/EADDRINUSE\)/)
     fs.rmSync(path.join(dir, 'flows'), { recursive: true }); fs.writeFileSync(path.join(dir, 'flows'), 'x')
     t = io(); assert.equal(await runCollector(['status'], { env, home, request: async () => { throw Object.assign(new Error('x'), { code: 'ECONNREFUSED' }) }, ...t }), 3)
-    assert.match(t.o.join('\n'), /failure records unreadable: .*flows: ENOTDIR/)
+    assert.match(t.o.join('\n'), /capture health could not be read: .*flows: ENOTDIR/)
     assert.match(t.o[0], /collector daemon: not running \(it stopped cleanly, or never started\)/, 'no lock')
     fs.writeFileSync(path.join(dir, 'lock'), JSON.stringify({ pid: 2 ** 22 + 7, start_time: '1', boot_id: 'b', socket: '/x' })) // a pid nothing runs as
     t = io(); await runCollector(['status'], { env, home, request: async () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }) }, ...t })
@@ -56,7 +57,9 @@ test('cli: with no daemon answering (not running, no runtime dir, stuck) status 
     fs.writeFileSync(path.join(dir, 'lock'), JSON.stringify({ pid: process.pid, socket: '/x' })); const old = new Date(Date.now() - 30_000); fs.utimesSync(path.join(dir, 'lock'), old, old)
     t = io(); await runCollector(['status'], { env, home, request: async () => { throw Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }) }, ...t })
     assert.match(t.o[0], /collector daemon: not responding — pid \d+ has not refreshed its lock for 3\d s/, 'a stuck daemon')
-    assert.match(formatStatus({ ...STATUS, failures: [], failures_read: { errors: ['/f: EACCES'], truncated: true }, events: { lost: 2 } }), /failure records unreadable: \/f: EACCES\n\(older failure records left out[^\n]*\nevent log: 2 line\(s\) could not be written/)
+    const health = { generated_at: 'T', summary: { state: 'ok', since: 'T0', read_errors: 1 }, collector: { installed: true, daemon: { state: 'running' }, conditions: [], failures: [], expected: { policy: 3 } }, legacy: { present: false }, raw: { problems: [] }, read: { errors: [{ file: '/f', error: 'EACCES' }], truncated: true } }
+    assert.match(formatStatus({ ...STATUS, health, events: { lost: 2 } }), /capture health: ✓ capturing since T0 · 读不全[^\n]*\nnot captured by design \(last 24 h\): policy 3\ncould not read \/f: EACCES\n\(older records were left out[^\n]*\nevent log: 2 line\(s\) could not be written/)
+    assert.match(formatStatus({ ...STATUS, health: { error: 'capture health could not be read: /x/flows: EACCES' } }), /capture health could not be read: \/x\/flows: EACCES/)
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })
 
@@ -160,8 +163,10 @@ test('cli: the real bin dispatches `collector` (usage → 2) and `collector stat
   const r = spawnSync(process.execPath, [BIN, 'collector', 'status'], { env, encoding: 'utf8' })
   assert.equal(r.status, 2); assert.match(r.stderr, /XDG_RUNTIME_DIR is not set/)
   assert.ok(formatStatus({ ...STATUS, agents: [] }).includes('agents: none running'))
-  const withFailures = formatStatus({ ...STATUS, failures: [{ ts: 'T1', event: 'agent-untrusted', pid: 11, agent: 'claude-code', code: 'config-after-start', reason: 'restart it' }, { ts: 'T2', event: 'failure', where: 'engine', reason: 'no original destination', suppressed: 3 }] })
-  assert.match(withFailures, /recent failures \(2\):\n  T1 agent-untrusted pid 11 claude-code: config-after-start — restart it\n  T2 failure \(engine\): no original destination \(\+3 more\)$/, 'status prints the durable failure records (D38)')
+  const groups = [{ key: 'agent-untrusted:config-after-start', count: 1, last_ts: 'T1', last: { ts: 'T1', event: 'agent-untrusted', pid: 11, agent: 'claude-code', code: 'config-after-start', reason: 'restart it' } },
+    { key: 'engine/lookup-miss', count: 4, last_ts: 'T2', last: { ts: 'T2', event: 'failure', where: 'engine', code: 'lookup-miss', reason: 'no original destination', suppressed: 3 } }]
+  const health = { generated_at: 'T3', summary: { state: 'failing', n: 3 }, collector: { installed: true, daemon: { state: 'running' }, conditions: [{ kind: 'untrusted', pid: 11, agent: 'claude-code', since: 'T1', reason: 'config-after-start' }], failures: groups, expected: {} }, legacy: { present: false }, raw: { problems: [] }, read: { errors: [], truncated: false } }
+  assert.match(formatStatus({ ...STATUS, health }), /capture health: ⚠ 3 failure\(s\)[^\n]*\nconditions now:\n  now: untrusted pid 11 claude-code since T1: config-after-start\nrecent failures \(2 kind\(s\), last 24 h\):\n  T1 agent-untrusted pid 11 claude-code: config-after-start — restart it\n  T2 failure \(engine\/lookup-miss\): no original destination \(×4 in 24 h\)$/, 'status prints the durable failure records by kind (D38)')
   assert.ok(path.isAbsolute(BIN))
   fs.rmSync(home, { recursive: true, force: true })
 })

@@ -1,11 +1,12 @@
 // events.mjs — durable failure records (D38: a capture failure is never silent).
 // Every failure the collector owns becomes one JSON line `{ts, event, reason, …}` in <collector>/flows/<UTC date>.ndjson
 // (RFC 4.6 §记录: the board never reads flows/, so these are never mistaken for envelopes). appendEvent writes with its
-// own descriptor, so a record store whose files broke can still report that it broke. recentFailures reads them
-// back for `asight collector status`, also when no daemon is running.
+// own descriptor, so a record store whose files broke can still report that it broke. `asight collector status` and
+// the board read them back through src/health/ (captureHealth), also when no daemon is running.
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { isFailure } from '../../health/codes.mjs'
+import { readFlows } from '../../health/flows.mjs'
 
 // The closed sets and the failure / expected split live in src/health/codes.mjs (D38: writers and readers share them).
 export { isFailure }
@@ -16,44 +17,9 @@ export function appendEvent(dir, rec, { now = new Date(), fs = nodeFs } = {}) {
   fs.appendFileSync(file, JSON.stringify({ ts: now.toISOString(), ...rec }) + '\n', { mode: 0o600 })
 }
 
-// The failure records of the last `files` day files, newest last (at most `limit`), for `asight collector status`
-// — also when no daemon runs. Only a missing flows/ means "nothing recorded yet": any other error reading the
-// directory or one of its files is returned in `errors` and printed, never read as "no failures" (D38, 4.6 §记录,
-// 0.1 §0 #5). Each file is read from its last `maxBytes` only; `truncated` says when a file's head or older
-// failures past `limit` were left out.
-export function readRecentFailures(dir, { limit = 10, files = 2, maxBytes = 1 << 20, fs = nodeFs } = {}) {
-  const d = path.join(dir, 'flows')
-  const out = { list: [], errors: [], truncated: false, last_ts: null } // last_ts: the newest line of any kind ("last record at")
-  let names
-  try { names = fs.readdirSync(d).filter((n) => /^\d{4}-\d{2}-\d{2}\.ndjson$/.test(n)).sort().slice(-files) } catch (e) {
-    if (e.code !== 'ENOENT') out.errors.push(`${d}: ${errText(e)}`)
-    return out
-  }
-  for (const n of names) {
-    const file = path.join(d, n)
-    let text
-    try {
-      const fd = fs.openSync(file, 'r')
-      try {
-        const size = fs.fstatSync(fd).size
-        const len = Math.min(size, maxBytes)
-        const buf = Buffer.alloc(len)
-        fs.readSync(fd, buf, 0, len, size - len)
-        if (size > len) out.truncated = true
-        text = buf.toString('utf8')
-      } finally { fs.closeSync(fd) }
-    } catch (e) { out.errors.push(`${file}: ${errText(e)}`); continue }
-    for (const line of text.split('\n')) {
-      let r = null
-      try { r = JSON.parse(line) } catch { continue } // the first line of a tail may be cut
-      if (r && typeof r.ts === 'string') out.last_ts = r.ts
-      if (isFailure(r)) out.list.push(r)
-    }
-  }
-  if (out.list.length > limit) { out.truncated = true; out.list = out.list.slice(-limit) }
-  return out
-}
-export const recentFailures = (dir, opts) => readRecentFailures(dir, opts).list
+// The failure records in flows/, read the way `asight collector status` and the board read them (src/health/flows.mjs:
+// sealed day files too; an unreadable flows/ throws, never "no failures"), oldest first.
+export const recentFailures = (dir) => readFlows({ dir }).records.filter(isFailure)
 
 const errText = (e) => String((e && e.message) || e)
 

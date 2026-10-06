@@ -151,7 +151,7 @@ const isRow = (r) => r.event == null
 export function groupKey(r) {
   if (isRow(r)) return `flow:${r.not_captured || r.reason}`
   if (r.event === 'failure') return `${r.where}/${r.code}`
-  return r.event === 'agent-untrusted' ? `agent-untrusted:${r.reason}` : `${r.event}${r.where ? `/${r.where}` : ''}`
+  return r.event === 'agent-untrusted' ? `agent-untrusted:${r.code ?? r.reason}` : `${r.event}${r.where ? `/${r.where}` : ''}`
 }
 const weight = (r) => 1 + (typeof r.suppressed === 'number' ? r.suppressed : 0)
 
