@@ -13,7 +13,10 @@
 //   - a file that cannot be read or parsed means EVERYTHING is `full` (keeping too much loses nothing; keeping too
 //     little does), and that is a failure event (the top bar goes ⚠); `retention-ok` says it is readable again;
 //   - ONE write path: setRetention() (the CLI and the board both call it) — atomic, 0600, and one change-log line per
-//     cell, ~/.asight/logs/retention.ndjson {ts, event:'retention-set', harness, class, from, to, source}.
+//     cell, ~/.asight/logs/retention.ndjson {ts, event:'retention-set', harness, class, from, to, source};
+//   - every change is an event, a hand edit too: setRetention bumps a `rev` counter in
+//     the file, a hand edit does not, so a reader that sees the levels change with the same `rev` knows nobody logged it, and writes the
+//     same line with source:'file' (and the file's signature, so the daemon and the old capture do not each write it).
 // It knows no harness and holds no host pattern (D20, 0.1 §5): the classifier is injected by the wiring (bin / daemon),
 // which reads the table in src/dissect/harnesses.mjs. Leaf-ish: node built-ins, src/paths.mjs, ./envelope.mjs.
 import nodeFs from 'node:fs'
@@ -38,7 +41,7 @@ const errText = (e) => String((e && e.message) || e)
 export function readRetentionFile(file, { fs = nodeFs } = {}) {
   let st
   try { st = fs.statSync(file) } catch (e) {
-    if (e && e.code === 'ENOENT') return { levels: {}, problems: [], missing: true, sig: null }
+    if (e && e.code === 'ENOENT') return { levels: {}, problems: [], missing: true, sig: null, rev: null }
     return { levels: {}, problems: [{ code: (e && e.code) || 'retention-unreadable', reason: `${file} cannot be read (${errText(e)}); every call is kept in full until it can` }], missing: false, sig: null }
   }
   const sig = `${st.ino}:${st.size}:${st.mtimeMs}`
@@ -50,6 +53,7 @@ export function readRetentionFile(file, { fs = nodeFs } = {}) {
   if (!doc || typeof doc !== 'object' || Array.isArray(doc) || (doc.levels != null && (typeof doc.levels !== 'object' || Array.isArray(doc.levels)))) {
     return { levels: {}, problems: [{ code: 'retention-unparsable', reason: `${file} is not a retention settings document ({"version":1,"levels":{…}}); every call is kept in full until it is` }], missing: false, sig }
   }
+  const rev = Number.isInteger(doc.rev) ? doc.rev : null // bumped by setRetention only: a hand edit leaves it, which is how an unlogged change is told
   const levels = {}, problems = []
   for (const [h, row] of Object.entries(doc.levels || {})) {
     if (!row || typeof row !== 'object' || Array.isArray(row)) { problems.push({ code: 'retention-unparsable', cell: h, reason: `${file}: the entry for ${JSON.stringify(h)} is not an object; its calls are kept in full` }); continue }
@@ -58,19 +62,56 @@ export function readRetentionFile(file, { fs = nodeFs } = {}) {
       else problems.push({ code: 'retention-unparsable', cell: `${h} · ${c}`, reason: `${file}: ${JSON.stringify(h)} · ${JSON.stringify(c)} is ${JSON.stringify(v)}, neither "full" nor "log"; that cell is kept in full` })
     }
   }
-  return { levels, problems, missing: false, sig }
+  return { levels, problems, missing: false, sig, rev }
+}
+
+const CHANGE_LOG_TAIL = 64 * 1024
+/** diffLevels(prev, next) → [{harness, class, from, to}], sorted; a cell that is not set reads `full`. */
+export function diffLevels(prev, next) {
+  const out = []
+  for (const h of [...new Set([...Object.keys(prev || {}), ...Object.keys(next || {})])].sort()) {
+    for (const c of [...new Set([...Object.keys((prev || {})[h] || {}), ...Object.keys((next || {})[h] || {})])].sort()) {
+      const from = (prev && prev[h] && prev[h][c]) || 'full', to = (next && next[h] && next[h][c]) || 'full'
+      if (from !== to) out.push({ harness: h, class: c, from, to })
+    }
+  }
+  return out
+}
+// One `retention-set` line per change in the change log; the shared appender of setRetention (source cli | board) and of a reader that saw a hand
+// edit (source file, with the file's signature). A line already there for the same (cell, from, to, file_sig) is not written again — the daemon and the
+// old capture both read the file, and each would otherwise log the same edit. → null, or the reason the log could not be written.
+function appendChanges({ logFile, changes, source, ts, sig = null, fs = nodeFs }) {
+  try {
+    fs.mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 })
+    let seen = new Set()
+    if (sig != null) {
+      try {
+        const st = fs.statSync(logFile), n = Math.min(st.size, CHANGE_LOG_TAIL), buf = Buffer.alloc(n), fd0 = fs.openSync(logFile, 'r')
+        try { fs.readSync(fd0, buf, 0, n, st.size - n) } finally { fs.closeSync(fd0) }
+        for (const l of buf.toString('utf8').split('\n')) { try { const r = JSON.parse(l); if (r && r.event === 'retention-set' && r.file_sig === sig) seen.add(`${r.harness}\u0000${r.class}\u0000${r.from}\u0000${r.to}`) } catch { /* a torn first line of the tail, or not a change */ } }
+      } catch { /* no log yet */ }
+    }
+    const fresh = changes.filter((c) => !seen.has(`${c.harness}\u0000${c.class}\u0000${c.from}\u0000${c.to}`))
+    if (!fresh.length) return null
+    const fd = fs.openSync(logFile, 'a', 0o600)
+    try { fs.fchmodSync(fd, 0o600) } catch { /* best effort */ }
+    try { for (const c of fresh) fs.writeSync(fd, JSON.stringify({ ts, event: 'retention-set', ...c, source, ...(sig != null ? { file_sig: sig } : {}) }) + '\n') } finally { fs.closeSync(fd) }
+    return null
+  } catch (e) { return errText(e) }
 }
 
 /**
- * createRetention({file, classify, onFailure, onOk, now, recheckMs, fs}) → {decide, current, refresh}
+ * createRetention({file, logFile, classify, onFailure, onOk, now, recheckMs, fs}) → {decide, current, refresh}
+ *   logFile  where a hand edit of `file` is logged (default <dir of file>/logs/retention.ndjson — the same place setRetention writes)
  *   classify({harness, host, method, endpoint}) → a traffic class; injected (see the header). Without one a call is told
  *            by its endpoint alone: llm, token-count, else other.
  *   onFailure(rec) takes {event:'failure', where:'retention', code, reason} — once per distinct problem, not per call
  *   onOk(rec)      takes {event:'retention-ok', where:'retention', reason} when the file reads cleanly again
  *   decide({harness, host, method, endpoint}) → {harness, class, level}; the level is the cell's, `full` when unset
  */
-export function createRetention({ file = retentionFile(), classify = null, onFailure = () => {}, onOk = () => {}, now = Date.now, recheckMs = 1000, fs = nodeFs } = {}) {
+export function createRetention({ file = retentionFile(), logFile = path.join(path.dirname(file), 'logs', 'retention.ndjson'), classify = null, onFailure = () => {}, onOk = () => {}, now = Date.now, recheckMs = 1000, fs = nodeFs } = {}) {
   let levels = {}, sig, problemsKey = null, checkedAt = -Infinity, lastProblems = [], loaded = false
+  let baseline = null // {levels, rev} of the last read that held no whole-file problem: what a change is measured against
   const emit = (fn, rec) => { try { fn({ where: 'retention', ...rec }) } catch { /* a recorder that throws must not stop a call from being captured */ } }
 
   function refresh(force = false) {
@@ -83,6 +124,17 @@ export function createRetention({ file = retentionFile(), classify = null, onFai
     const r = readRetentionFile(file, { fs })
     loaded = true
     levels = r.levels; sig = r.sig; lastProblems = r.problems
+    // A change nobody logged: the levels differ from the last clean read while `rev` did not move (setRetention bumps it and logs its own
+    // changes). A file that could not be read or parsed is not a "change of levels" (every call is full meanwhile, said by its own failure
+    // event), so the baseline waits for the next clean read. The first read is the baseline: edits made while nothing was running are not seen.
+    if (r.problems.every((p) => p.cell)) {
+      if (baseline && baseline.rev === r.rev) {
+        const changes = diffLevels(baseline.levels, r.levels)
+        const why = changes.length ? appendChanges({ logFile, changes, source: 'file', ts: new Date(t).toISOString(), sig: r.sig, fs }) : null
+        if (why) emit(onFailure, { event: 'failure', code: 'retention-log-failed', reason: `${file} was edited by hand (${changes.map((c) => `${c.harness} · ${c.class} ${c.from} → ${c.to}`).join(', ')}) and the change applies, but its line in ${logFile} could not be written (${why})` })
+      }
+      baseline = { levels: r.levels, rev: r.rev }
+    }
     const key = r.problems.map((p) => `${p.code}\u0000${p.cell || ''}\u0000${p.reason}`).join('\u0001') || null
     if (key === problemsKey) return
     if (key == null) emit(onOk, { event: 'retention-ok', reason: `${file} reads cleanly again; the levels in it apply from the next call` })
@@ -162,6 +214,7 @@ export function setRetention({ file = retentionFile(), logFile = retentionLog(),
   if (!changed.length) return { changed, logError: null }
   const t = now()
   doc.version = RETENTION_VERSION; doc.updated_at = t.toISOString()
+  doc.rev = (Number.isInteger(doc.rev) ? doc.rev : 0) + 1 // readers tell this write (logged below) from a hand edit by it
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   const tmp = `${file}.tmp-${process.pid}`
   try {
@@ -169,12 +222,6 @@ export function setRetention({ file = retentionFile(), logFile = retentionLog(),
     fs.chmodSync(tmp, 0o600)
     fs.renameSync(tmp, file)
   } catch (e) { try { fs.rmSync(tmp, { force: true }) } catch { /* nothing to clean */ } throw e }
-  let logError = null
-  try {
-    fs.mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 })
-    const fd = fs.openSync(logFile, 'a', 0o600)
-    try { fs.fchmodSync(fd, 0o600) } catch { /* best effort */ }
-    try { for (const c of changed) fs.writeSync(fd, JSON.stringify({ ts: t.toISOString(), event: 'retention-set', ...c, source }) + '\n') } finally { fs.closeSync(fd) }
-  } catch (e) { logError = errText(e) } // the change is made; its record is not — the caller says so
+  const logError = appendChanges({ logFile, changes: changed, source, ts: t.toISOString(), fs }) // the change is made; its record may not be — the caller says so
   return { changed, logError }
 }

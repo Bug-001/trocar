@@ -54,8 +54,9 @@ export const CODES_BY_PART = Object.freeze({
   engine: ['lookup-miss', 'describe-error', 'engine-error', 'leaf-error', 'flow-write-failed', 'system-roots-unavailable', 'trust-store-error', 'upstream-ca-unreadable', 'framer-error', 'negative-cache', 'upstream-slow', 'unpaired-response'],
   ws: ['write-failed', 'decode-failed', 'broken', 'recorder-error', 'pattern-invalid'],
   // retention.json cannot be read / parsed / holds a cell that is neither full nor log (the call is kept in full), or the
-  // classifier threw; a traffic pattern that does not compile is `pattern-invalid` (above), also under where 'retention'
-  retention: ['retention-unparsable', 'retention-unreadable', 'classify-failed', 'pattern-invalid'],
+  // classifier threw; a traffic pattern that does not compile is `pattern-invalid` (above), also under where 'retention'; a hand edit whose line in
+  // the change log could not be written is `retention-log-failed` (the edit applies; the record of it is missing)
+  retention: ['retention-unparsable', 'retention-unreadable', 'classify-failed', 'pattern-invalid', 'retention-log-failed'],
   switch: ['state-mismatch', 'state-unparsable'],
   kernel: ['kernel-drops'],
   ca: ['ca-invalid'],

@@ -22,7 +22,7 @@ test('fold: a retention failure is a condition until retention-ok; pattern-inval
   const f2 = foldFlows([start, bad, { ts: at(100), event: 'retention-ok', where: 'retention', reason: 'reads cleanly again' }], { now: NOW })
   assert.deepEqual(f2.conditions, [], 'retention-ok clears it')
   assert.equal(f2.groups.length, 1, 'the failure itself stays in the last 24 h, like every other failure')
-  for (const code of ['pattern-invalid', 'classify-failed']) {
+  for (const code of ['pattern-invalid', 'classify-failed', 'retention-log-failed']) {
     const f = foldFlows([start, { ts: at(300), event: 'failure', where: 'retention', code, reason: 'r' }], { now: NOW })
     assert.deepEqual([f.conditions.length, f.groups.length], [0, 1], code)
   }
@@ -34,10 +34,12 @@ test('every line the retention writes is in the closed sets (src/health/codes.mj
   const lines = [
     { event: 'failure', where: 'retention', code: 'retention-unparsable', reason: 'r' }, { event: 'failure', where: 'retention', code: 'retention-unreadable', reason: 'r' },
     { event: 'failure', where: 'retention', code: 'classify-failed', reason: 'r' }, { event: 'failure', where: 'retention', code: 'pattern-invalid', reason: 'r' }, { event: 'failure', where: 'retention', code: 'EACCES', reason: 'r' },
+    { event: 'failure', where: 'retention', code: 'retention-log-failed', reason: 'r' },
     { event: 'retention-ok', where: 'retention', reason: 'r' }, { event: 'retention-set', harness: 'cc', class: 'files', from: 'full', to: 'log', source: 'cli' },
+    { event: 'retention-set', harness: 'cc', class: 'files', from: 'log', to: 'full', source: 'file', file_sig: '1:2:3' },
   ]
   for (const l of lines) assert.deepEqual(checkRecord({ ts: 't', ...l }), [], JSON.stringify(l))
-  assert.deepEqual(lines.map((l) => isFailure(l)), [true, true, true, true, true, false, false])
+  assert.deepEqual(lines.map((l) => isFailure(l)), [true, true, true, true, true, true, false, false, false])
 })
 
 test('captureHealth over a real collector dir: the condition shows, the state is failing, and retention-ok takes the condition away; the old MITM\'s line is a legacy failure', () => {

@@ -214,8 +214,9 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
     else if (r.event === 'ca-ok') ca = null // the daemon found the CA usable again and rebuilt what it signs with (D1-2)
     // D40: ~/.asight/retention.json cannot be read or parsed (or holds a bad cell): every call is kept in full meanwhile,
     // and that is a condition until retention-ok. A traffic pattern that does not compile, or a classifier that threw, is a
-    // failure of its own (the groups below), not this condition: retention-ok does not say they are fixed.
-    else if (r.event === 'failure' && r.where === 'retention' && r.code !== 'pattern-invalid' && r.code !== 'classify-failed') retention = { kind: 'retention', ...pick(r), since: r.ts }
+    // failure of its own (the groups below), not this condition: retention-ok does not say they are fixed. (A change-log line that could not be
+    // written, `retention-log-failed`, is likewise its own failure: the settings file is fine.)
+    else if (r.event === 'failure' && r.where === 'retention' && r.code !== 'pattern-invalid' && r.code !== 'classify-failed' && r.code !== 'retention-log-failed') retention = { kind: 'retention', ...pick(r), since: r.ts }
     else if (r.event === 'retention-ok') retention = null
   }
   out.conditions = [...[ca, degraded, version, mismatch, retention].filter(Boolean), ...untrusted.values(), ...neg.values()].map((c) => ({ ...c, failure: true }))

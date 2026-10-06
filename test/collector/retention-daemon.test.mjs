@@ -134,6 +134,9 @@ test('K2 / K3 at the daemon: retention.json is read per call, hot (≤ 1 s); `cc
     const lg = last(T)
     assert.deepEqual([lg.body_retention, lg.req_body, lg.body_wire_bytes.req, lg.req_headers.authorization], ['log', { raw_chars: Buffer.byteLength(b.body), verbatim: false }, Buffer.byteLength(b.body), 'Bearer sk-ant-oat-SECRET'])
     assert.equal('body' in lg.resp || 'raw' in lg.resp, false); assert.equal(lg.resp.verbatim, false)
+    // M3 (review): the hand edit is itself an event with the old and new value — written by the daemon, source:file
+    const changeLog = () => { try { return ndjson(path.join(s.home, '.asight', 'logs', 'retention.ndjson')).map((c) => `${c.harness}/${c.class} ${c.from}→${c.to} ${c.source}`) } catch { return [] } }
+    assert.deepEqual(changeLog(), ['cc/telemetry full→log file'])
     await s.call({ host: API, path: '/v1/messages/count_tokens', body: '{"model":"m","messages":[]}' })
     const ct = await until(() => last('/v1/messages/count_tokens'))
     assert.deepEqual([ct.traffic_class, ct.req_body, 'body_retention' in ct], ['token-count', '{"model":"m","messages":[]}', false], 'token-count is full by default')
@@ -151,6 +154,7 @@ test('K2 / K3 at the daemon: retention.json is read per call, hot (≤ 1 s); `cc
     await s.call({ ...batch(5), path: T })
     await until(() => flowsOf(s.dir).find((f) => f.event === 'retention-ok'))
     assert.equal(captureHealth({ home: path.join(s.home, '.asight') }).collector.conditions.some((c) => c.kind === 'retention'), false)
+    assert.deepEqual(changeLog(), ['cc/telemetry full→log file', 'cc/telemetry log→full file'], 'the torn file was no change; its repair to {} is the second edit')
   } finally { await s.done() }
 })
 
