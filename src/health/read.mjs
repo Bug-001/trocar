@@ -154,9 +154,14 @@ function collectorHealth({ dir, now, fs, alive, identity, maxBytes, read }) {
   c.summary = collectorSummary(c)
   return c
 }
+// A manifest that cannot be read (installed null) is "unknown" — but never hides what is worse (1.5 order: ✗ and ⚠
+// rank above ? unknown): the daemon and the failures are judged all the same, and the worse wins.
 function collectorSummary(c) {
-  if (c.installed === null) return { state: 'unknown', reason: c.manifest_error }
-  if (!c.installed) return c.residue.length ? { state: 'residue', n: c.residue.length } : { state: 'not-installed' }
+  if (c.installed === false) return c.residue.length ? { state: 'residue', n: c.residue.length } : { state: 'not-installed' }
+  const s = judgedSummary(c)
+  return c.installed === null && RANK[s.state] < RANK.unknown ? { state: 'unknown', reason: c.manifest_error } : s
+}
+function judgedSummary(c) {
   const d = c.daemon, n = c.conditions.length + c.failures.length
   if (d.state === 'not-running') return { state: 'not-running', since: d.last_record_at, n, ...(d.unclean ? { reason: d.why } : d.last_stop ? { signal: d.last_stop.signal ?? null, reason: d.last_stop.reason ?? null } : {}) }
   if (d.state === 'not-responding') return { state: 'not-responding', since: d.lock_refreshed_at, n }
@@ -249,5 +254,8 @@ export function captureHealth({ home = asightHome(), now = Date.now(), fs = node
   if (summary.state === 'not-installed') summary = { state: 'not-installed' }
   read.errors = [...new Map(read.errors.map((e) => [e.file, e])).values()] // one entry per file
   if (read.errors.length) summary = { ...summary, read_errors: read.errors.length }
-  return { generated_at: new Date(now).toISOString(), installed: collector.installed === true || legacy.present, summary, collector, legacy, raw, read }
+  // installed: true when either capture is there; null when the collector's manifest cannot be read and nothing else
+  // says so — false only means not installed (4.4)
+  const installed = collector.installed === true || legacy.present ? true : collector.installed === null ? null : false
+  return { generated_at: new Date(now).toISOString(), installed, summary, collector, legacy, raw, read }
 }

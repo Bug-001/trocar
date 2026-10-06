@@ -55,7 +55,7 @@ const SUMMARY = {
 const ago = (h, iso) => Math.round((Date.parse(h.generated_at) - Date.parse(iso)) / 1000)
 function daemonText(h) {
   const c = h.collector, d = c.daemon
-  if (c.installed === null) return `collector: whether it is installed is unknown — ${c.manifest_error}`
+  if (c.installed === null) return `collector: whether it is installed is unknown — ${c.manifest_error}; daemon ${d.state}${d.pid ? ` (pid ${d.pid})` : ''}`
   if (!c.installed) return c.residue && c.residue.length ? `collector: not installed — an uninstall left ${c.residue.length} item(s): ${c.residue.map((r) => `${r.path} (${r.result})`).join(', ')}` : 'collector: not installed'
   const at = d.last_record_at ? ` · last record at ${d.last_record_at}` : ''
   if (d.state === 'running') return `collector daemon: pid ${d.pid} holds a fresh lock but its control socket did not answer${at}`
@@ -77,7 +77,7 @@ export function formatHealth(h, { daemonLine = true } = {}) {
   if (exp.length) lines.push(`not captured by design (last 24 h): ${exp.map(([k, n]) => `${k} ${n}`).join(', ')}`)
   if (h.legacy && h.legacy.present) {
     const l = h.legacy
-    lines.push(`old capture (MITM / reverse proxy): ${l.state === 'running' ? `running since ${l.last_start.ts}` : l.state === 'no-events' ? `wrote ${l.capture.file} at ${l.capture.mtime}, no events file` : l.state === 'unknown' ? `unknown — ${l.error}` : l.state === 'stopped' ? `stopped${l.last_stop ? ` at ${l.last_stop.ts}${l.last_stop.signal ? ` (${l.last_stop.signal})` : ''}` : ''}` : `NOT running — ${l.summary.reason || 'gone without a clean stop'} (last record ${l.last_record_at})`}`)
+    lines.push(`old capture (MITM / reverse proxy): ${l.state === 'running' ? `running since ${l.last_start.ts}` : l.state === 'no-events' ? `wrote ${l.capture.file} at ${l.capture.mtime}, no events file` : l.state === 'unknown' ? `unknown — ${l.error || l.summary.reason}` : l.state === 'stopped' ? `stopped${l.last_stop ? ` at ${l.last_stop.ts}${l.last_stop.signal ? ` (${l.last_stop.signal})` : ''}` : ''}` : `NOT running — ${l.summary.reason || 'gone without a clean stop'} (last record ${l.last_record_at})`}`)
     for (const g of l.failures || []) lines.push(groupLine(g))
   }
   for (const p of (h.raw && h.raw.problems) || []) lines.push(`raw layer: ${p.op} ${p.outcome} ${p.file || p.target || ''}: ${p.reason || ''}`)

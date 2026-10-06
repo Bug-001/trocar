@@ -88,7 +88,7 @@ test('an unreadable flows/ or collector directory throws (503); an unparsable ma
       fs.chmodSync(b.h, 0o000)
       try { assert.throws(() => b.health(), (e) => e instanceof HealthUnreadable && /EACCES/.test(e.message), 'a collector directory that cannot be looked at is not "not installed"') } finally { fs.chmodSync(b.h, 0o700) }
     }
-    b.manifest('{not json')
+    b.manifest('{not json'); b.lock() // a daemon that runs: nothing worse than not knowing (no lock: ✗ wins)
     const r = b.health()
     assert.deepEqual([r.collector.installed, r.summary.state, r.read.errors.length], [null, 'unknown', 1])
   } finally { b.done() }
@@ -157,6 +157,24 @@ test('the old capture with no start / stop line read: a fresh capture file is no
     r = b.health()
     assert.deepEqual([r.read.truncated, r.legacy.state, r.summary.state], [true, 'unknown', 'unknown'], 'a cut tail: unknown, never stopped')
     assert.match(r.summary.reason, /whether the old capture runs is unknown/)
+  } finally { b.done() }
+})
+
+// 1.5 order, 4.4: a manifest that cannot be read is "unknown", but never above what is worse — the daemon and
+// the failures are judged all the same; the top-level installed is null then, not false.
+test('an unreadable manifest: unknown never hides a failure or a dead daemon, and installed is null, not false', () => {
+  const b = home()
+  try {
+    installed(b); b.lock(); b.state('on', at(H))
+    b.flows([{ ts: at(H / 2), event: 'failure', where: 'engine', code: 'lookup-miss', reason: 'r' }])
+    b.manifest('{oops')
+    let r = b.health()
+    assert.deepEqual([r.installed, r.collector.installed, r.summary.state, r.summary.n], [null, null, 'failing', 1], '⚠ is not hidden by ?')
+    r = b.health({ alive: () => false })
+    assert.deepEqual([r.summary.state, r.installed], ['not-running', null], '✗ is not hidden by ?')
+    fs.rmSync(path.join(b.c, 'flows'), { recursive: true }); b.flows([{ ts: at(2 * H), event: 'daemon-start', pid: 4242 }])
+    r = b.health()
+    assert.deepEqual([r.summary.state, /does not parse/.test(r.summary.reason)], ['unknown', true], 'nothing worse: still unknown, with why')
   } finally { b.done() }
 })
 
