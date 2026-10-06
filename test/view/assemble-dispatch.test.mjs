@@ -26,3 +26,20 @@ test('assemble.mjs names no wire and imports no wire dissector (D25)', () => {
   assert.doesNotMatch(SRC, /from ['"]\.\.\/dissect\/(openai|cc)\.mjs['"]/);
   assert.doesNotMatch(SRC, /\bopenai\.|chat\/completions|\/responses|looksCC|x-claude-code/);
 });
+
+test('an HTTP Responses stream that ends in response.failed, or in an error event, is an error step and never the next cache baseline', () => {
+  const user = (t) => ({ type: 'message', role: 'user', content: [{ type: 'input_text', text: t }] });
+  const a1 = { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'a1' }] };
+  const done = { type: 'response.completed', response: { id: 'ra', status: 'completed', output: [a1], usage: { input_tokens: 5, output_tokens: 1 } } };
+  for (const end of [{ type: 'response.failed', response: { id: 'rb', status: 'failed', error: { code: 'server_error' } } }, { type: 'error', code: 'server_error', message: 'boom' }]) {
+    const a = rec('h1', '/v1/responses', { model: 'm', input: [user('q1')] });
+    a.resp.raw_sse = [done];
+    const b = rec('h2', '/v1/responses', { model: 'm', input: [user('q1'), a1, user('q2')] });
+    b.resp.raw_sse = [{ type: 'response.created', response: { id: 'rb' } }, end];
+    const c = rec('h3', '/v1/responses', { model: 'm', input: [user('q1'), a1, user('q3')] });
+    c.resp.raw_sse = [done];
+    const steps = assembleSession([a, b, c]).steps;
+    assert.deepEqual(steps.map((s) => s.error), [false, true, false], end.type);
+    assert.equal(steps[2].cacheBreak.cause, 'append', `${end.type}: c extends a's prefix; the failed b never became the baseline`);
+  }
+});

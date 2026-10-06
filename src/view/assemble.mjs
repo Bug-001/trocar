@@ -10,7 +10,7 @@ import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf, captureLabelsOf } fr
 import { blockSpans } from '../adapters/cc.mjs';
 import { scanJson, spanAt } from '../adapters/content-hash.mjs';
 import { slimBlock, compBuckets } from './blockmeta.mjs';
-import { mintRawRef, composeTextRef, fieldTextOf } from '../etl/orchestrator.mjs';
+import { mintRawRef, composeTextRef, fieldTextOf, TEXT_REF_FIELD } from '../etl/orchestrator.mjs';
 import { sessionKeyOf, hintsOf, observerEffectsOf } from '../dissect/harnesses.mjs';
 import { wireFormatOf, boardDissectorFor, contextStateOf, blockKeysOf } from '../dissect/registry.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
@@ -108,7 +108,8 @@ function unknownSummary(recs, partial) {
       ? 'Some records in this session are read as a call by no registered dissector (src/dissect/registry.mjs): '
         + 'an unknown wire, or a record of a known wire that is no call (e.g. a message the server pushed with no '
         + 'call open). They are counted here and NOT rendered; the rest of the session is.'
-      : 'No registered dissector claims these bytes (src/dissect/registry.mjs), so they are NOT '
+      : 'No registered dissector reads these records as a call (src/dissect/registry.mjs): an unknown wire, or '
+        + 'records of a known wire that are no call (e.g. messages the server pushed with no call open). They are NOT '
         + 'parsed and NOT rendered — showing them under another wire\'s vocabulary would be a fabrication.',
     records: recs.length,
     endpoints: uniq(recs.map((r) => String((r && r.endpoint) || '').split('?')[0])),
@@ -253,6 +254,9 @@ function slimRec(rec) {
   return { id: rec.id, request };
 }
 
+// A record's raw_ref (4.2:40), or null when it cannot be addressed: no id, or no stream it was read from.
+const rawRefOf = (rec) => (rec && rec.id != null && rec._stream ? mintRawRef(sessionIdOf(rec), rec._stream, String(rec.id)) : null);
+
 // Turn a call's assembled blocks into their WIRE shape: metadata + a text_ref locator, no body.
 //
 // The locator is minted in the SAME form the DuckDB projection persists (RFC 4.2:40 —
@@ -267,9 +271,7 @@ function slimRec(rec) {
 function withRefs(flat, rec) {
   let spans = null;
   try { spans = blockSpans(rec); } catch { spans = null; }
-  const id = rec && rec.id != null ? String(rec.id) : null;
-  const stream = rec && rec._stream;
-  const base = id && stream ? mintRawRef(sessionIdOf(rec), stream, id) : null;
+  const base = rawRefOf(rec);
   return flat.map((b, i) => {
     const span = spans && spans[i];
     return slimBlock(b, base && span ? composeTextRef(base, span) : null);
@@ -283,8 +285,7 @@ function withRefs(flat, rec) {
 function withPathRefs(flat, rec) {
   let root = null;
   try { root = typeof rec.req_body === 'string' ? scanJson(rec.req_body) : null; } catch { root = null; }
-  const id = rec && rec.id != null ? String(rec.id) : null;
-  const base = id && rec._stream ? mintRawRef(sessionIdOf(rec), rec._stream, id) : null;
+  const base = rawRefOf(rec);
   return flat.map((b) => {
     const span = base && root && Array.isArray(b.path) ? spanAt(root, b.path) : null;
     return slimBlock(b, span ? composeTextRef(base, span) : null);
@@ -311,7 +312,7 @@ function wireOf(rec, format, ctx = null, norm = null) {
 function extraMessagesOf(rec) {
   const xs = rec && Array.isArray(rec.req_extra_messages) ? rec.req_extra_messages : [];
   if (!xs.length) return null;
-  const base = rec.id != null && rec._stream ? mintRawRef(sessionIdOf(rec), rec._stream, String(rec.id)) : null;
+  const base = rawRefOf(rec);
   return { extraMessages: xs.map((v, k) => {
     const field = `req_extra_messages.${k}`;
     if (typeof v === 'string') return { key: `req_extra_messages[${k}]`, chars: v.length, ref: base ? composeTextRef(base, [0, v.length], field) : null };
@@ -320,9 +321,10 @@ function extraMessagesOf(rec) {
 }
 // Locators for a context assembled across records: each block's bytes live in the record and field its segment
 // came from (D37 ②), addressed by a field-qualified text_ref (4.2:40). `scans` caches each (record, field)'s
-// scanned JSON once per session. A block whose span cannot be found, or whose record cannot be addressed, is
-// shipped inline and labelled unaddressable by slimBlock (invariant 4).
-function withLocatedRefs(flat, locateFn, scans) {
+// scanned JSON once per session. A block that cannot be addressed is shipped inline and labelled unaddressable
+// by slimBlock with the reason it could not be (invariant 4) — a field outside the 4.2:40 grammar included, so a
+// dissector's mistake labels one block instead of failing the whole session. Exported for its own test.
+export function withLocatedRefs(flat, locateFn, scans = new Map()) {
   const rootOf = (rec, field) => {
     let m = scans.get(rec);
     if (!m) scans.set(rec, (m = new Map()));
@@ -337,10 +339,16 @@ function withLocatedRefs(flat, locateFn, scans) {
   return flat.map((b) => {
     const loc = locateFn(b);
     const rec = loc && loc.rec;
-    const base = rec && rec.id != null && rec._stream ? mintRawRef(sessionIdOf(rec), rec._stream, String(rec.id)) : null;
-    const root = base ? rootOf(rec, loc.field) : null;
-    const span = root ? spanAt(root, loc.path) : null;
-    return slimBlock(b, span ? composeTextRef(base, span, loc.field) : null);
+    if (!rec) return slimBlock(b, null, 'the dissector placed this block in no source record');
+    const base = rawRefOf(rec);
+    const of = `record ${rec.id ?? '(no id)'}`;
+    if (!base) return slimBlock(b, null, `its source ${of} carries no id or stream to address`);
+    if (loc.field !== 'req_body' && !TEXT_REF_FIELD.test(String(loc.field))) return slimBlock(b, null, `field "${loc.field}" of ${of} is no text_ref field segment (4.2:40)`);
+    const root = rootOf(rec, loc.field);
+    if (!root) return slimBlock(b, null, `field ${loc.field} of ${of} holds no JSON text`);
+    const span = spanAt(root, loc.path);
+    if (!span) return slimBlock(b, null, `path ${JSON.stringify(loc.path)} is not in field ${loc.field} of ${of}`);
+    return slimBlock(b, composeTextRef(base, span, loc.field));
   });
 }
 // 4.6 R2 「不成块的顶层键逐个列出」: every top-level request key that is not a block section, each with a
@@ -351,8 +359,7 @@ function nonBlockKeysOf(rec, format) {
   try { root = scanJson(rec.req_body); } catch { return []; }
   if (!root || root.kind !== 'object') return [];
   const keep = blockKeysOf(format);
-  const id = rec.id != null ? String(rec.id) : null;
-  const base = id && rec._stream ? mintRawRef(sessionIdOf(rec), rec._stream, id) : null;
+  const base = rawRefOf(rec);
   const out = [];
   for (const [key, node] of root.props) if (!keep.includes(key)) out.push({ key, chars: node.end - node.start, ref: base ? composeTextRef(base, [node.start, node.end]) : null });
   return out;

@@ -363,7 +363,9 @@ export function canonUsage(usage = {}) {
 // via `asight capture --raw-sse`). This is the OpenAI dissector rebuilding blocks from raw events.
 // normEvents is the event-list half, shared with the WebSocket dissector (openai-ws.mjs), whose events
 // arrive as one server message each. A terminal response.completed / .incomplete / .failed carries the
-// output and usage; an `error` event with no terminal response is stop_reason 'error'.
+// output and usage; an `error` event with no terminal response is stop_reason 'error'. (Before the split an HTTP
+// stream ending in response.failed or an `error` event read as stop_reason null; it now says 'failed' / 'error',
+// and the `failed` hook below makes such a call an error step that is never a cache baseline — as on WebSocket.)
 export function normEvents(events) {
   let completed = null;
   for (const e of events || []) if (e && /^response\.(completed|incomplete|failed)$/.test(e.type)) completed = e.response || completed;
@@ -401,6 +403,8 @@ export const RESPONSES = Object.freeze({
   id: 'openai-responses', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'],
   boardFlat: (req) => boardFlat(req), normResp: (rec) => normResp(rec),
   reqCounts: (req) => reqCountsFor('responses', req), ctxTokens,
+  // the stream's terminal says the response failed, or an `error` event arrived with no terminal (normEvents)
+  failed: (norm) => norm.stop_reason === 'failed' || norm.stop_reason === 'error',
 });
 export const CHAT = Object.freeze({
   id: 'openai-chat', provider: 'openai', blockKeys: ['tools', 'messages'],

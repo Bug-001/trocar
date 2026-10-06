@@ -208,7 +208,7 @@ const HEAVY = ['text', 'block', 'desc', 'schema', 'props'];
  * badged `v0-converted` upstream. Leaving them indistinguishable would let re-serialized content
  * pass as byte-verbatim (invariant 4), so `unaddressable` states the reason in place.
  */
-export function slimBlock(b, textRef) {
+export function slimBlock(b, textRef, why = null) {
   const out = { ...b };
   out.bytes = blockBytes(b);
   out.chars = blockChars(b);
@@ -224,7 +224,8 @@ export function slimBlock(b, textRef) {
   }
   // NOT addressable → keep the body exactly as it was, so the row renders as it always did, and say
   // why it was inlined. Stripping HEAVY here is what produced an unreadable, unfetchable row.
-  out.unaddressable = 'no verbatim byte span for this block (re-serialized / v0-converted source) — '
+  // `why`: the caller's specific reason, when it knows one (e.g. a cross-record context, src/view/assemble.mjs).
+  out.unaddressable = `${why || 'no verbatim byte span for this block (re-serialized / v0-converted source)'} — `
     + 'body inlined as-is, NOT resolved from the raw capture';
   return out;
 }

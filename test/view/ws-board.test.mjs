@@ -126,6 +126,9 @@ test('a server message pushed with no call open, and a binary opener, are counte
   const v = sessionView([call, push, bin], 'CX');
   assert.deepEqual(v.analyzed.steps.map((s) => s.id), ['c1']);
   assert.deepEqual([v.analyzed.unknown.partial, v.analyzed.unknown.records], [true, 2]);
+  const only = sessionView([push, bin], 'CX').analyzed.unknown; // no call at all: the whole session is unrendered
+  assert.deepEqual([only.partial, only.records], [false, 2]);
+  assert.match(only.reason, /records of a known wire that are no call/, 'not "no dissector claims these bytes": one does');
 });
 
 test('a call that ends in an error is an error step and never the next call\'s cache baseline; unread reply messages are labelled', () => {
@@ -143,6 +146,8 @@ test('a call that ends in an error is an error step and never the next call\'s c
   assert.deepEqual(steps[2].wire.labels.map((l) => l.id), ['reply-unread']);
   assert.match(steps[2].wire.labels[0].label, /1 reply message not read/);
   assert.deepEqual(steps[1].wire.labels, []);
+  // these hand-built records were read from no stream: each stitched block says so where it is shown (invariant 4)
+  for (const blk of steps[2].flat.filter((x) => x.sec === 'messages')) assert.match(blk.unaddressable, /record [ac] carries no id or stream to address/);
 });
 
 test('end to end through `asight serve`: the session lists under codex, and every block of every call opens over /api/block', T, async (t) => {
