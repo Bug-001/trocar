@@ -15,7 +15,8 @@ const dsh = stream({ id: 'a1', ts_request: '2026-10-06T00:00:00Z', is_llm_call: 
 test('Anthropic-wire calls carry wire facts and their non-block keys', () => {
   const c = assembleSession([dsh]).steps[0];
   const { observerEffect, ...rest } = c.wire;
-  assert.deepEqual(rest, { format: 'anthropic', vendor: 'deepseek', transport: 'http', contextState: 'complete', labels: [] });
+  assert.deepEqual(rest, { format: 'anthropic', vendor: 'deepseek', cacheSemanticsKnown: false, transport: 'http', contextState: 'complete', labels: [] },
+    'DeepSeek over the Anthropic wire: cache semantics unknown (3.3:89 OPEN), as in the DB');
   assert.deepEqual(observerEffect.map((e) => e.id), ['dsh-plugin'], 'a transparent dsh capture carries the trust-plugin observer effect (3.1 table)');
   assert.deepEqual(c.nonBlockKeys.map((k) => k.key), ['model', 'dsh_session_log']);
   const { start, end } = parseTextRef(c.nonBlockKeys[1].ref);
@@ -28,8 +29,31 @@ test('flat-lane calls carry the same facts; a legacy capture has no observer eff
     req_headers: { 'x-session-id': 'Z', host: 'open.bigmodel.cn' }, req_body: '{"model":"glm","messages":[{"role":"user","content":"q"}],"stream":true}',
     resp: { status: 200, kind: 'sse', raw_sse: [] } });
   const c = assembleSession([z]).steps[0];
-  assert.deepEqual(c.wire, { format: 'openai-chat', vendor: 'zai', transport: 'http', contextState: 'complete', observerEffect: null, labels: [] });
+  assert.deepEqual(c.wire, { format: 'openai-chat', vendor: 'zai', cacheSemanticsKnown: false, transport: 'http', contextState: 'complete', observerEffect: null, labels: [] });
   assert.deepEqual(c.nonBlockKeys.map((k) => k.key), ['model', 'stream']);
+});
+
+test('wire.cacheSemanticsKnown is the DB\'s answer per call: vendor AND wire (3.3:89)', async () => {
+  const { runEtl } = await import('../../src/etl/orchestrator.mjs');
+  const { freshConn } = await import('../etl/helpers.mjs');
+  const anth = (id, host) => stream({ ...dsh, id, host, ts_request: `2026-10-06T00:00:0${id.slice(-1)}Z`, req_headers: { 'x-deepseek-harness-session-id': 'V' } });
+  const chat = (id, host) => stream({ id, ts_request: `2026-10-06T00:00:0${id.slice(-1)}Z`, is_llm_call: true, endpoint: '/v1/chat/completions', host,
+    capture: 'transparent', proc: { pid: 1, exe: '/x', agent: 'deepseek-dsh' }, req_headers: { 'x-deepseek-harness-session-id': 'V' },
+    req_body: '{"model":"m","messages":[{"role":"user","content":"q"}]}',
+    // a usage chunk, so the call has a cache_events row to compare with
+    resp: { status: 200, kind: 'sse', raw_sse: [{ choices: [{ index: 0, delta: { content: 'ok' }, finish_reason: 'stop' }], usage: { prompt_tokens: 5, completion_tokens: 1 } }] } });
+  const cases = [
+    [anth('v1', 'api.anthropic.com'), true], [anth('v2', 'api.deepseek.com'), false], [chat('v3', 'api.deepseek.com'), true],
+    [chat('v4', 'api.moonshot.cn'), false], [chat('v5', 'llm.example.internal'), false],
+  ];
+  for (const [r, known] of cases) assert.equal(assembleSession([r]).steps[0].wire.cacheSemanticsKnown, known, `${r.host} ${r.endpoint}`);
+  const conn = await freshConn();
+  await runEtl(cases.map(([r]) => stream({ ...r })), conn);
+  const db = (await conn.runAndReadAll('SELECT call_id, extra FROM cache_events')).getRowObjects();
+  for (const [r, known] of cases) {
+    const row = db.find((x) => x.call_id === r.id);
+    assert.equal(JSON.parse(row.extra).vendor_cache_semantics === 'unknown', !known, `${r.id}: board and DB agree`);
+  }
 });
 
 test('a server-edited Anthropic response is contextState server_edited', () => {

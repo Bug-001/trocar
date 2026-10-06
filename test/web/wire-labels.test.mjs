@@ -47,6 +47,14 @@ test('an unknown vendor says its cache semantics are unknown; WebSocket transpor
   assert.doesNotMatch((await render(session(call(W)))).raw, /厂商缓存语义未知|WebSocket/);
 });
 
+test('a known vendor whose cache semantics are unknown on this wire still gets the badge (dsh, Kimi; 3.3:89)', async () => {
+  for (const vendor of ['deepseek', 'moonshot']) {
+    const v = await render(session(call({ ...W, format: vendor === 'deepseek' ? 'anthropic' : 'openai-chat', vendor, cacheSemanticsKnown: false })));
+    assert.match(v.raw, /厂商缓存语义未知/, vendor);
+  }
+  assert.doesNotMatch((await render(session(call({ ...W, cacheSemanticsKnown: true })))).raw, /厂商缓存语义未知/);
+});
+
 test('top-level keys that are not blocks are listed one by one with a locator (R2)', async () => {
   const v = await render(session(call(W, { nonBlockKeys: [{ key: 'model', chars: 7, ref: 'S/c.ndjson#r1::9-16' }, { key: 'dsh_plugin_packages', chars: 2, ref: null }] })));
   assert.match(v.raw, /data-nbk="S\/c\.ndjson#r1::9-16"[^>]*>model<\/code>/);

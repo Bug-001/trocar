@@ -15,6 +15,7 @@ import { mintRawRef, composeTextRef, fieldTextOf, TEXT_REF_FIELD } from '../etl/
 import { sessionKeyOf, observerEffectsOf, hintsOf } from '../dissect/harnesses.mjs';
 import { wireFormatOf, boardDissectorFor, contextStateOf, blockKeysOf, flatLaneOf } from '../dissect/registry.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
+import { cacheSemanticsKnown } from '../cache/cache-events.mjs';
 import { requestEncodingOf } from '../dissect/request-body.mjs';
 
 // D17④ 地面真相(RFC 3.3:65 · 独立字节护城河). The demo proxied prefix identity with the 32-bit
@@ -318,7 +319,9 @@ function withPathRefs(flat, rec) {
 }
 
 // Canonical wire facts per call (3.2:131-133), baked HERE so the page only reads them (invariant 3):
-// format, vendor (null = cache semantics unknown), transport, context state, observer effects and the
+// format, vendor, whether that vendor's cache semantics are known on this wire (3.3:89: the DB's rule — false for
+// an unknown host, for a vendor with no cache row, and for DeepSeek over the Anthropic wire), transport, context
+// state, observer effects and the
 // incompleteness labels (4.6 §记录 「不完整的标注」 — shown on the call, never dropped). Cheap: no body parse.
 // A cross-record context (ctx, from the dissector) brings its own state and, when partial, what is missing;
 // `norm.unread` counts reply messages the dissector could not read (D38: never skipped without a trace).
@@ -329,7 +332,8 @@ function wireOf(rec, format, ctx = null, norm = null) {
     text: `${unread} server message${unread > 1 ? 's' : ''} of this call are not JSON text (binary, past the size cap, or not decodable); the reply shown is read from the others` });
   // a request sent compressed and shown decompressed says so (4.6 §记录, invariant 4): exact text, not the wire bytes
   const enc = rec && typeof rec.req_body === 'string' ? requestEncodingOf(rec) : null;
-  return { format, vendor: vendorOf(rec), transport: rec && rec.transport === 'ws' ? 'ws' : 'http',
+  const vendor = vendorOf(rec);
+  return { format, vendor, cacheSemanticsKnown: cacheSemanticsKnown(vendor, format), transport: rec && rec.transport === 'ws' ? 'ws' : 'http',
     contextState: ctx ? ctx.contextState : contextStateOf(rec), ...(ctx && ctx.contextState === 'partial' && ctx.missing ? { contextMissing: ctx.missing } : {}),
     observerEffect: observerEffectsOf(rec), labels, ...(enc ? { reqEncoding: enc } : {}) };
 }

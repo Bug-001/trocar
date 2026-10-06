@@ -52,7 +52,10 @@ export function breakKindFor(vendor, wireFormat = null) {
   const only = VERIFIED_WIRES[vendor];
   return only && wireFormat != null && !only.includes(wireFormat) ? UNKNOWN_LABELS : row;
 }
-const semanticsKnown = (vendor, wireFormat) => breakKindFor(vendor, wireFormat) !== UNKNOWN_LABELS;
+// true when the vendor's cache semantics are established for this wire — false = the DB writes NULL labels and
+// 「厂商缓存语义未知」. The board bakes the same answer per call (wire.cacheSemanticsKnown, src/view/assemble.mjs).
+export const cacheSemanticsKnown = (vendor, wireFormat) => breakKindFor(vendor, wireFormat) !== UNKNOWN_LABELS;
+const semanticsKnown = cacheSemanticsKnown;
 
 // ── Tier-1 numeric truth: hit_ratio = cache_read / total_input (RFC 3.3 L12) ──
 // null when the denominator is 0/unknown (guard div0). Phase-1 = Anthropic, whose denominator IS

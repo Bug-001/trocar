@@ -1553,7 +1553,7 @@ function ctxBlock(b,i,prevKeys){
   // D17② per-block first-appearance: this block is NEW this call (not carried from the previous one),
   // i.e. part of the growth. Reused blocks (the cache-eligible prefix) stay unmarked to keep it quiet.
   const life=(prevKeys&&!b.volatile&&!prevKeys.has(b.key))?`<span class="lifemark" title="first appears this call — new content added to the context (part of the re-sent Δ)">◆ new</span>`:''
-  const cc=b.cc?`<span class="ccbadge" title="Claude Code set a cache_control breakpoint here — the cacheable prefix is stored up to and including this block (${esc(JSON.stringify(b.cc))})">⟐ cache bp</span>`:''
+  const cc=b.cc?`<span class="ccbadge" title="the request sets a cache_control breakpoint here (${esc(JSON.stringify(b.cc))}). With Anthropic's cache semantics the cacheable prefix is stored up to and including this block; another vendor may treat it differently — see the call's 厂商缓存语义未知 badge">⟐ cache bp</span>`:''
   const vol=b.volatile?`<span class="volbadge" title="carries a per-request nonce (cch=…, cc_prev_req=…): its bytes change every call, yet cache-hit stays ~100% — Anthropic excludes this billing block from the cache key">↻ per-call nonce</span>`:''
   // 保真标 (invariant 4 / spec 2.3 §验收#2): mark each tool def's faithfulness. D15 capture stores
   // the full schema verbatim → 'verbatim' (part of AC-1). Old v0 traces kept only name + param names
@@ -1781,7 +1781,10 @@ function wireBadges(c){
   const cs=CTX_LABEL[w.contextState]; if(cs&&!(w.contextState==='partial'&&c.reqIncomplete)) h+=`<span class="pobadge" title="${esc((w.contextMissing?w.contextMissing+' — ':'')+cs[1])}">${esc(cs[0])}</span> `
   for(const e of (w.observerEffect||[])) h+=`<span class="pobadge" title="${esc(e.what)} — caused by asight's ${esc(e.cause)}">观测者效应 · capture changed client behaviour: ${esc(e.what)}</span> `
   if(w.transport==='ws') h+=`<span class="metabadge">WebSocket</span> `
-  if(w.format&&w.vendor==null) h+=`<span class="metabadge" title="cache labels are per vendor (the upstream host); this host is not a known vendor, so none are claimed">厂商缓存语义未知 · vendor cache semantics unknown</span> `
+  // 3.3:89, server-baked (the DB's rule): unknown host, a vendor with no cache row, or a vendor not verified on this
+  // wire. Older payloads without the flag fall back to "no known vendor".
+  const cacheUnknown=w.cacheSemanticsKnown!=null?w.cacheSemanticsKnown===false:w.vendor==null
+  if(w.format&&cacheUnknown) h+=`<span class="metabadge" title="cache labels are per vendor (the upstream host); this vendor's cache semantics are not established for this wire, so none are claimed — a cache_control mark on a block is shown as sent, not as what this vendor does with it">厂商缓存语义未知 · vendor cache semantics unknown</span> `
   for(const l of (w.labels||[])) h+=`<span class="pobadge" title="${esc(l.text)}">${esc(l.label)}</span> `
   // 4.6 §记录 / invariant 4: sent compressed, shown decompressed — the exact text, not the exact wire bytes
   if(w.reqEncoding) h+=`<span class="metabadge" title="the request body went over the wire compressed (content-encoding: ${esc(w.reqEncoding)}); its text here is after decompression, and its sizes are of that text">请求体已解压 · request decompressed (${esc(w.reqEncoding)})</span> `
