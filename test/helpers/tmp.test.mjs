@@ -31,9 +31,8 @@ const ENDINGS = {
 }
 
 for (const [name, [ending, status]] of Object.entries(ENDINGS)) {
-  test(`tmpDir: the directory is removed when the process ${name}`, (t) => {
-    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-tmpchild-'))
-    t.after(() => fs.rmSync(scratch, { recursive: true, force: true }))
+  test(`tmpDir: the directory is removed when the process ${name}`, () => {
+    const scratch = tmpDir('asight-tmpchild-') // the children's dirs are made in here; this one goes at exit, mode-000 leftovers of a broken helper included
     const body = `
       import { tmpDir } from ${JSON.stringify(HELPER)}
       import fs from 'node:fs'
@@ -55,9 +54,8 @@ for (const [name, [ending, status]] of Object.entries(ENDINGS)) {
 }
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
-  test(`tmpDir: the directory is removed when the process is sent ${sig} (a hung npm test that is interrupted), and it still dies of the signal`, (t) => {
-    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-tmpchild-'))
-    t.after(() => fs.rmSync(scratch, { recursive: true, force: true }))
+  test(`tmpDir: the directory is removed when the process is sent ${sig} (a hung npm test that is interrupted), and it still dies of the signal`, () => {
+    const scratch = tmpDir('asight-tmpchild-') // the children's dirs are made in here; this one goes at exit, mode-000 leftovers of a broken helper included
     const script = path.join(scratch, 'kid.mjs')
     fs.writeFileSync(script, `
       import { tmpDir } from ${JSON.stringify(HELPER)}
@@ -75,9 +73,8 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
   })
 }
 
-test('tmpDir: a directory holding a mode-000 file and a mode-000 subdirectory is removed too', (t) => {
-  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-tmpchild-'))
-  t.after(() => { try { fs.chmodSync(path.join(scratch, 'x'), 0o700) } catch {} fs.rmSync(scratch, { recursive: true, force: true }) })
+test('tmpDir: a directory holding a mode-000 file and a mode-000 subdirectory is removed too', () => {
+  const scratch = tmpDir('asight-tmpchild-')
   const script = path.join(scratch, 'kid.mjs')
   fs.writeFileSync(script, `
     import { tmpDir } from ${JSON.stringify(HELPER)}
