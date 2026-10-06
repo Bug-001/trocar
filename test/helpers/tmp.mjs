@@ -9,7 +9,7 @@
 //   const dir = tmpDir('asight-foo-')          // was: fs.mkdtempSync(path.join(os.tmpdir(), 'asight-foo-'))
 //
 // Ctrl-C (SIGINT), SIGTERM and SIGHUP clean up too, then die of the signal as they would have. A kill -9 cannot run any
-// cleanup: `npm test`'s leak check (test/helpers/leak-guard.mjs) is what says so.
+// cleanup: `npm test`'s leak check (test/helpers/leak-guard.cjs) is what says so.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -31,8 +31,10 @@ export function tmpDir(prefix = 'asight-') {
   return dir
 }
 
-/** Removes a directory tmpDir made now, rather than at exit (a test that wants the path gone to prove something). */
+/** Removes a directory tmpDir made now, rather than at exit (a test that wants the path gone to prove something). It only ever
+ *  removes what tmpDir returned in this process: any other path is left alone, so a wrong argument cannot delete anything real. */
 export function removeTmp(dir) {
+  if (!made.has(dir)) return
   rm.removeTree(dir)
   made.delete(dir)
 }

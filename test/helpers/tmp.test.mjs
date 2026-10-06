@@ -22,6 +22,18 @@ test('tmpDir: a fresh directory under os.tmpdir() with the prefix; removeTmp tak
   removeTmp(dir)
 })
 
+test('removeTmp: only a directory tmpDir made — a path it did not make is left alone, whatever the caller passed', () => {
+  const mine = tmpDir('asight-tmptest-')
+  const notMine = path.join(mine, 'not-made-by-tmpDir')
+  fs.mkdirSync(notMine)
+  fs.writeFileSync(path.join(notMine, 'f'), 'x')
+  removeTmp(notMine)
+  removeTmp(path.join(mine, 'f-nonexistent'))
+  assert.ok(fs.existsSync(path.join(notMine, 'f')), 'a subdirectory of a tmpDir is not itself a tmpDir')
+  removeTmp(mine)
+  assert.equal(fs.existsSync(mine), false)
+})
+
 // each ending of a process that has made a directory: [how the script ends, expected exit status]
 const ENDINGS = {
   'falls off the end': ['', 0],
