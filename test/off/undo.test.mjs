@@ -15,7 +15,7 @@ import { certBlocks, composeBundle } from '../../src/off/pem.mjs'
 import { lineComment } from '../../src/off/text-edit.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
-const ROOT = createCa({ commonName: 'undo root' }), CORP = createCa({ commonName: 'undo corp relay' })
+const ROOT = createCa({ commonName: 'undo root' }), CORP = createCa({ commonName: 'undo corp relay' }), OSROOT = createCa({ commonName: 'undo os root' })
 const roots = { node: [ROOT.certPem], osText: '' }
 const box = () => { const home = tmpDir('asight-undo-'); return { home, dir: path.join(home, '.asight', 'collector'), ca: (n) => path.join(home, '.asight', 'collector', 'ca', n) } }
 const sha = (f) => (fs.existsSync(f) ? crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex') : null)
@@ -160,10 +160,10 @@ test('bundle gone while a live process may use it: rebuilt without the CA from N
   const s = await setup((b) => [repH(b, 'aa'), repH(b, 'bb')])
   const live = [proc(70, '/x/aa'), proc(71, '/x/bb')]
   fs.rmSync(s.b.ca('combined-aa.pem')); fs.rmSync(s.b.ca('combined-bb.pem')); fs.rmSync(path.join(s.b.home, 'corp.pem'))
-  const r = await s.run({ ids: ['aa'], procs: async () => live })
+  const r = await s.run({ ids: ['aa'], procs: async () => live, roots: { node: [ROOT.certPem], osText: OSROOT.certPem } })
   const aa = s.b.ca('combined-aa.pem')
   assert.deepEqual(r.kept_bundles.map((k) => [k.harness, k.pids, k.rebuilt, k.lost_fps?.length, k.unread?.map((u) => u.errno)]), [['aa', [70], true, 1, ['ENOENT']]], 'rebuilt, and the user CA that could not be carried over is named with its errno')
-  assert.deepEqual(fpsOf(aa), certBlocks(ROOT.certPem).map((c) => c.fp), 'Node roots only: the user CA source is gone, and the asight CA is not in it')
+  assert.deepEqual(fpsOf(aa), [ROOT, OSROOT].flatMap((c) => certBlocks(c.certPem).map((x) => x.fp)), 'Node\'s roots and the OS roots; the user CA source is gone, and the asight CA is not in it')
   assert.ok(!fs.existsSync(s.b.ca('combined-bb.pem')), 'bb was not asked about (ids)')
   const none = await s.run({ ids: ['bb'], procs: async () => [] })
   assert.deepEqual([none.kept_bundles, none.left, fs.existsSync(s.b.ca('combined-bb.pem'))], [[], [], false], 'nobody uses a missing bundle: it is just dropped')
@@ -218,4 +218,15 @@ test('step 5: only a process that may have read the entry is reported, with unti
   assert.deepEqual(r.still_trusting, [{ pid: 2, harness: 'aa', until: 'next-connection' }, { pid: 4, harness: 'bb', until: 'restart' }, { pid: 6, harness: 'jj', until: 'restart' }])
   const only = await setup((b) => [repH(b, 'aa'), repH(b, 'bb')])
   assert.deepEqual((await only.run({ ids: ['aa'], procs: async () => [proc(1, '/x/bb')] })).still_trusting, [], 'a process of a harness that was not undone is not reported')
+})
+
+test('a bundle nobody holds that cannot be removed still holds the CA: an item left with its reason, not a crash that leaves the rest undone; so is a CA file that cannot be removed', async () => {
+  const s = await setup((b) => [repH(b, 'aa'), repH(b, 'bb')])
+  const refuse = (names) => ({ ...fs, rmSync: (p, o) => { if (names.some((n) => String(p).endsWith(n))) throw Object.assign(new Error(`EACCES: permission denied, rm '${p}'`), { code: 'EACCES' }); return fs.rmSync(p, o) } })
+  const r = await s.run({ fs: refuse(['combined-aa.pem', 'asight-ca.pem']), dropCa: true })
+  assert.deepEqual(r.kept_bundles, [{ path: s.b.ca('combined-aa.pem'), harness: 'aa', pids: [], holds_ca: true, error: 'EACCES' }])
+  assert.deepEqual(r.left.map((l) => [path.basename(l.path), l.harness, l.result]), [['combined-aa.pem', 'aa', 'error'], ['asight-ca.pem', null, 'error']])
+  assert.match(r.left[0].reason, /held by no running process but could not be removed \(EACCES\).*still holds the asight CA/)
+  assert.ok(!fs.existsSync(s.b.ca('combined-bb.pem')) && r.results.length === 2, 'the other harness and every entry were still undone')
+  assert.deepEqual(r.manifest.files.filter((f) => f.role === 'bundle' || f.role === 'ca-cert').map((f) => path.basename(f.path)).sort(), ['asight-ca.pem', 'combined-aa.pem'], 'what is left stays in the manifest')
 })

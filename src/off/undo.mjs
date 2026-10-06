@@ -135,7 +135,13 @@ export async function undoHarnesses({ dir, home, manifest, ids = null, procs = a
     }
     const one = (f, byHarness) => {
       const h = holders(f, byHarness)
-      if (h.pids && !h.pids.length) { rm(f.path); without(manifest.files, f); return } // nobody holds it: removed whatever its state (a directory too)
+      if (h.pids && !h.pids.length) { // nobody holds it: removed whatever its state (a directory too)
+        try { rm(f.path); without(manifest.files, f) } catch (e) {
+          out.kept_bundles.push({ path: f.path, harness: f.harness, pids: [], holds_ca: true, error: errText(e) })
+          fail(f, `${f.path} is held by no running process but could not be removed (${errText(e)}); it still holds the asight CA — fix the file, then run it again`)
+        }
+        return
+      }
       const keep = { path: f.path, harness: f.harness, pids: h.pids || [], ...(h.why ? { unjudged: true, error: h.why } : {}) }
       const s = strip(f)
       if (s.ok) {
@@ -152,7 +158,7 @@ export async function undoHarnesses({ dir, home, manifest, ids = null, procs = a
     for (const f of bundles) one(f, true)
     for (const f of extras) one(f, false)
   }
-  if (dropCa) for (const f of manifest.files.filter((x) => x.role === 'ca-cert')) { rm(f.path); without(manifest.files, f) } // uninstall only (4.6 第 3 步)
+  if (dropCa) for (const f of manifest.files.filter((x) => x.role === 'ca-cert')) { try { rm(f.path); without(manifest.files, f) } catch (e) { fail(f, `${f.path} could not be removed (${errText(e)})`) } } // uninstall only (4.6 第 3 步)
 
   // ── 4: rc lines and patch rows, then plugins and the shim ─────────────────────────────────────────────────────────────────────────
   for (const e of entries) if (!config(e)) undoOne(e)
