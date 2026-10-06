@@ -22,8 +22,8 @@ test('T14: from a user CA file only CERTIFICATE blocks are taken; every other bl
   const mixed = `${KEY}\n${CORP.certPem}\n-----BEGIN TRUSTED CERTIFICATE-----\nAAAA\n-----END TRUSTED CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nnot base64 der\n-----END CERTIFICATE-----\n`
   const r = certsOf('/corp/mixed.pem', mixed)
   assert.deepEqual(r.certs.map((p) => new X509Certificate(p).fingerprint256), [fp(CORP)])
-  assert.deepEqual(r.skipped, [{ file: '/corp/mixed.pem', type: 'PRIVATE KEY' }, { file: '/corp/mixed.pem', type: 'TRUSTED CERTIFICATE' }, { file: '/corp/mixed.pem', type: 'CERTIFICATE (unparsable)' }])
-  assert.deepEqual(certsOf('/corp/ca.der', Buffer.from([0x30, 0x82, 0x01, 0x0a])).skipped, [{ file: '/corp/ca.der', type: 'DER or other non-PEM content' }])
+  assert.deepEqual(r.skipped, [{ file: '/corp/mixed.pem', type: 'PRIVATE KEY', index: 1, why: 'a private key is never copied' }, { file: '/corp/mixed.pem', type: 'TRUSTED CERTIFICATE', index: 3, why: 'only CERTIFICATE blocks are carried over' }, { file: '/corp/mixed.pem', type: 'CERTIFICATE', index: 4, why: 'it does not parse as a certificate' }], 'named by type and position, never by content (D-28)')
+  assert.deepEqual(certsOf('/corp/ca.der', Buffer.from([0x30, 0x82, 0x01, 0x0a])).skipped, [{ file: '/corp/ca.der', type: null, index: null, why: 'it holds no PEM block (a DER file, or not a certificate file)' }])
 })
 
 test('T14: a bundle is Node roots + OS roots + the user CAs + the asight CA, each once; the user CAs are remembered by fingerprint', () => {
@@ -73,5 +73,5 @@ test('T14 through the plan: each harness\'s bundle carries only its own CAs; a p
   assert.deepEqual(fps(b.data), [fp(R1), fp(OS1), fp(OTHER), fp(ASIGHT)])
   assert.deepEqual([a.sources, a.user_fps], [['/a/ca.pem'], [fp(CORP)]])
   assert.ok(!JSON.stringify(p.files).includes('U0VDUkVULUtFWQ'), 'the private key is nowhere in what will be written')
-  assert.deepEqual(p.records.filter((r) => r.code === 'cert-not-merged').map((r) => [r.harness, /\/a\/ca\.pem: a PRIVATE KEY block/.test(r.reason)]), [['alpha', true]])
+  assert.deepEqual(p.records.filter((r) => r.code === 'cert-not-merged').map((r) => [r.harness, /\/a\/ca\.pem: block 1 \(PRIVATE KEY\) is not carried over/.test(r.reason)]), [['alpha', true]])
 })

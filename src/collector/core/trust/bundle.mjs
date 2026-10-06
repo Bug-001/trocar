@@ -12,18 +12,20 @@ import { writeDurable, saveManifest, sha256 } from './journal.mjs'
 const BLOCK = /-----BEGIN ([A-Z0-9 ]+)-----[\s\S]*?-----END \1-----/g
 const fpOf = (pem) => { try { return new X509Certificate(pem).fingerprint256 } catch { return null } }
 
-// The CERTIFICATE blocks of a user's CA file, and what was left out of it: { certs: [pem], skipped: [{file, type}] }.
+// The CERTIFICATE blocks of a user's CA file, and what was left out of it: { certs: [pem], skipped: [{file, type, index,
+// why}] }. `index` is the block's position in the file from 1 and `type` its PEM type; a file with no PEM block at all
+// is { type: null, index: null } (a DER file?). Never the contents of a block (D-28, 4.6 「合并包」).
 export function certsOf(file, buf) {
   const text = Buffer.isBuffer(buf) ? buf.toString('latin1') : String(buf)
   const blocks = [...text.matchAll(BLOCK)]
-  if (!blocks.length) return { certs: [], skipped: [{ file, type: text.trim() ? 'DER or other non-PEM content' : 'empty file' }] }
+  if (!blocks.length) return { certs: [], skipped: [{ file, type: null, index: null, why: 'it holds no PEM block (a DER file, or not a certificate file)' }] }
   const certs = []
   const skipped = []
-  for (const m of blocks) {
-    if (m[1] !== 'CERTIFICATE') { skipped.push({ file, type: m[1] }); continue }
-    if (fpOf(m[0])) certs.push(m[0].trim())
-    else skipped.push({ file, type: 'CERTIFICATE (unparsable)' })
-  }
+  blocks.forEach((m, i) => {
+    if (m[1] !== 'CERTIFICATE') skipped.push({ file, type: m[1], index: i + 1, why: /PRIVATE KEY/.test(m[1]) ? 'a private key is never copied' : 'only CERTIFICATE blocks are carried over' })
+    else if (fpOf(m[0])) certs.push(m[0].trim())
+    else skipped.push({ file, type: 'CERTIFICATE', index: i + 1, why: 'it does not parse as a certificate' })
+  })
   return { certs, skipped }
 }
 

@@ -125,6 +125,7 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
     watch: draft.watch,
     notes: draft.notes,
     records: path.join(dir, 'flows'), // install notes are kept here as install-note events (D38)
+    events: path.join(dir, 'flows', `${new Date().toISOString().slice(0, 10)}.ndjson`), // install-note lines are appended here (D-28)
   })
 
   const m = newManifest()
@@ -159,8 +160,15 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
     const r = unit.enable()
     if (r.code !== 0) unitFailed = `${unit.path} is written but "systemctl --user enable --now" failed (${r.err || `exit ${r.code}`}); start the daemon with "asight collector start", or enable the unit once systemd --user runs`
   }
-  for (const r of plan.records) appendEvent(dir, { event: EVENT.installNote, where: 'install', ...r }) // D38: what install said, kept where status finds it
-  if (unitFailed) { plan.notes.push(unitFailed); appendEvent(dir, { event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed }) }
+  // 4.6 安装 / 卸载不静默 (D-28): everything the command prints is also an install-note in flows/, for the board, where
+  // status finds it; a line that cannot be written is added to the printed notes, never dropped, and never fails the install
+  const put = (rec) => { try { appendEvent(dir, rec) } catch (w) { plan.notes.push(`not recorded (${String((w && w.message) || w)}): ${rec.reason}`) } }
+  for (const e of m.entries.filter((x) => x.prior_value)) {
+    const prior = e.keys ? `${e.path} ${e.keys.join('.')} was ${e.prior_value}; it now points at ${e.value}` : `${e.path} held ${Object.entries(e.prior_value).map(([k, v]) => `${k}=${v}`).join(', ')}; asight commented it out (uninstall restores it)`
+    put({ event: EVENT.installNote, where: 'install', kind: 'prior-value', harness: e.harness, path: e.path, reason: prior })
+  }
+  for (const r of plan.records) put({ event: EVENT.installNote, where: 'install', kind: 'note', ...r })
+  if (unitFailed) { plan.notes.push(unitFailed); put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed }) }
   return { already: false, manifest: m, plan }
 }
 
@@ -310,7 +318,7 @@ async function uninstall(dir, { env = process.env, purgeData = false, scan = asy
       const until = typeof au === 'function' ? au(f, { collectorDir: dir, readText, home: env.HOME || os.homedir() }) : (au || 'restart')
       if (!until) continue
       report.still_trusting.push({ pid: f.pid, agent: a, until })
-      noted.push({ code: CODE.stillTrusting, harness: a, pid: f.pid, reason: `pid ${f.pid} (${a}) may still trust the asight CA ${UNTIL_TEXT[until] || UNTIL_TEXT.restart}; asight restarts nothing` })
+      noted.push({ code: CODE.stillTrusting, harness: a, pid: f.pid, reason: `pid ${f.pid} (${a}) trusts the asight CA ${UNTIL_TEXT[until] || UNTIL_TEXT.restart}` })
     }
     // the autostart unit (4.6 order: after the trust entries, before the CA key): disabled, removed, its wants/ links
     if (unitFile) {

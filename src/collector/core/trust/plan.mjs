@@ -38,6 +38,7 @@ export function planTrust({ descriptors, ctxFor, caCertPem, collectorDir, roots 
   const entries = []
   const files = []
   const notes = []
+  const skipped = [] // every block of a user CA file that is not carried over: {harness, file, type, index (from 1), note} (D-28)
   const under = (p) => p.startsWith(collectorDir + path.sep)
   const owned = []
   const watch = []
@@ -105,7 +106,13 @@ export function planTrust({ descriptors, ctxFor, caCertPem, collectorDir, roots 
         sources.push(src)
         const got = certsOf(src, buf)
         userCerts.push(...got.certs)
-        for (const k of got.skipped) note(d.name, CODE.certNotMerged, `${k.file}: a ${k.type} block is not a CERTIFICATE PEM block, so it is not merged into ${path.basename(f.path)} (only certificates are carried over)`)
+        // 4.6 「合并包」: only CERTIFICATE blocks are carried over, and the install report names every other block —
+        // by type and position, never its contents (a private key is never copied anywhere) (D-28)
+        for (const k of got.skipped) {
+          const text = `${k.file}: ${k.type ? `block ${k.index} (${k.type})` : 'the file'} is not carried over: ${k.why}`
+          note(d.name, CODE.certNotMerged, text, { kind: 'skipped-block', file: k.file, type: k.type, index: k.index })
+          skipped.push({ harness: d.name, file: k.file, type: k.type, index: k.index, note: `${d.name}: ${text}` })
+        }
       }
       if (f.bundle) {
         const b = composeBundle({ nodeRoots: roots.node, osRootsText: roots.osText, userCerts, caPem: caCertPem })
@@ -119,8 +126,8 @@ export function planTrust({ descriptors, ctxFor, caCertPem, collectorDir, roots 
     }
     for (const n of out.notes || []) note(d.name, typeof n === 'string' ? CODE.harnessNote : n.code, typeof n === 'string' ? n : n.text)
   }
-  function note(harness, code, text) { notes.push(`${harness}: ${text}`); records.push({ harness, code, reason: text }) }
+  function note(harness, code, text, extra = {}) { const n = `${harness}: ${text}`; notes.push(n); records.push({ harness, code, reason: n, ...extra }) } // the record says what was printed, word for word (D-28)
   const shims = owned.filter((o) => o.role === 'shim')
   if (new Set(shims.map((o) => path.basename(o.path))).size !== shims.length) throw new Error('two launch shims of one name: the shim directory holds one shim per command')
-  return { entries, files, owned, watch, notes, records, paths: [...files.map((f) => f.path), ...owned.map((o) => o.path), ...entries.map((e) => e.path)] }
+  return { entries, files, owned, watch, notes, records, skipped, paths: [...files.map((f) => f.path), ...owned.map((o) => o.path), ...entries.map((e) => e.path)] }
 }

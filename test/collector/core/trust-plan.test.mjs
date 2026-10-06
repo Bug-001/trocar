@@ -6,6 +6,7 @@ import { planTrust } from '../../../src/collector/core/trust/plan.mjs'
 
 const CA = createCa({ commonName: 'asight collector CA' })
 const USER = createCa({ commonName: 'corp CA' })
+const OTHER = createCa({ commonName: 'other corp CA' })
 const DIR = '/h/.asight/collector'
 const files = { '/corp/ca.pem': `-----BEGIN PRIVATE KEY-----\nSECRET\n-----END PRIVATE KEY-----\n${USER.certPem}`, '/corp/dup.pem': USER.certPem }
 const ctx = { readText: (f) => files[f] ?? null }
@@ -19,8 +20,22 @@ test('trust plan: entries and trust files are listed before anything is written;
   assert.ok(!p.files[0].data.includes('PRIVATE KEY'), 'never a private key')
   assert.equal(p.files[0].data.match(/BEGIN CERTIFICATE/g).length, 2, 'user CA once (deduplicated by fingerprint) + the asight CA')
   assert.deepEqual(p.files[0].sources, ['/corp/ca.pem', '/corp/dup.pem'], 'the readable user files it carries certificates from')
-  assert.deepEqual(p.notes, ['alpha: /corp/ca.pem: a PRIVATE KEY block is not a CERTIFICATE PEM block, so it is not merged into extra-alpha.pem (only certificates are carried over)', 'alpha: /corp/gone.pem is unreadable; its certificates are not carried over', 'alpha: n'])
+  assert.deepEqual(p.notes, ['alpha: /corp/ca.pem: block 1 (PRIVATE KEY) is not carried over: a private key is never copied', 'alpha: /corp/gone.pem is unreadable; its certificates are not carried over', 'alpha: n'])
   assert.deepEqual(p.records.map((r) => r.code), ['cert-not-merged', 'source-unreadable', 'harness-note'], 'each note carries its code (D38)')
+  assert.ok(!p.notes.join('\n').includes('SECRET'), 'a block is named by type and position, never by its contents')
+})
+
+test('trust plan: every block of a user CA file that is not carried over is reported by file, type and position — TRUSTED CERTIFICATE, a key, a broken certificate, a DER file (D-28, 4.6 合并包)', () => {
+  const broken = '-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydA==\n-----END CERTIFICATE-----\n'
+  const trusted = USER.certPem.replace(/BEGIN CERTIFICATE/, 'BEGIN TRUSTED CERTIFICATE').replace(/END CERTIFICATE/, 'END TRUSTED CERTIFICATE')
+  const more = { ...files, '/corp/mixed.pem': `${trusted}${broken}-----BEGIN RSA PRIVATE KEY-----\nSECRET\n-----END RSA PRIVATE KEY-----\n${OTHER.certPem}`, '/corp/ca.der': '0\u0082\u0003\u00a0binary' }
+  const p = planTrust({ descriptors: [{ name: 'alpha', inject: () => ({ files: [{ path: `${DIR}/ca/extra-alpha.pem`, certsFrom: ['/corp/mixed.pem', '/corp/ca.der'] }] }) }], ctxFor: () => ({ readText: (f) => more[f] ?? null }), caCertPem: CA.certPem, collectorDir: DIR })
+  assert.deepEqual(p.skipped.map(({ file, type, index }) => [file, type, index]), [['/corp/mixed.pem', 'TRUSTED CERTIFICATE', 1], ['/corp/mixed.pem', 'CERTIFICATE', 2], ['/corp/mixed.pem', 'RSA PRIVATE KEY', 3], ['/corp/ca.der', null, null]])
+  assert.match(p.notes[1], /block 2 \(CERTIFICATE\) is not carried over: it does not parse as a certificate/)
+  assert.match(p.notes[3], /\/corp\/ca\.der: the file is not carried over: it holds no PEM block \(a DER file/)
+  assert.equal(p.files[0].data.match(/BEGIN CERTIFICATE/g).length, 2, 'the one good certificate + the asight CA')
+  assert.ok(p.files[0].data.includes(OTHER.certPem.trim()))
+  assert.ok(!JSON.stringify(p).includes('SECRET'))
 })
 
 test('trust plan: refuses login-environment files, forbidden keys, values outside the collector dir, relative paths', () => {
@@ -70,7 +85,7 @@ test('trust plan: owned files — in an agent\'s directory only with "asight" in
   const p = plan(() => ({ owned: [P, { path: `${DIR}/plugins/alpha/package.json`, role: 'plugin', data: '{"type":"module"}\n' }], watch: [{ path: '/h/.config/alpha/node_modules', why: 'npm install' }], notes: [{ code: 'harness-note', text: 'first run fetches a package' }, 'plain'] }))
   assert.deepEqual(p.paths, [P.path, `${DIR}/plugins/alpha/package.json`], 'owned files are listed before anything is written')
   assert.deepEqual([p.owned[0].harness, p.owned[0].mode, p.watch], ['alpha', 0o600, [{ harness: 'alpha', path: '/h/.config/alpha/node_modules', why: 'npm install' }]])
-  assert.deepEqual(p.records, [{ harness: 'alpha', code: 'harness-note', reason: 'first run fetches a package' }, { harness: 'alpha', code: 'harness-note', reason: 'plain' }])
+  assert.deepEqual(p.records, [{ harness: 'alpha', code: 'harness-note', reason: 'alpha: first run fetches a package' }, { harness: 'alpha', code: 'harness-note', reason: 'alpha: plain' }])
   assert.throws(() => plan(() => ({ owned: [{ ...P, path: '/h/.config/alpha/plugins/ca.js' }] })), /has "asight" in its name and the sentinel/)
   assert.throws(() => plan(() => ({ owned: [{ ...P, data: '// trust plugin\n' }] })), /has "asight" in its name and the sentinel/)
   assert.throws(() => plan(() => ({ owned: [{ ...P, path: '/h/.local/bin/alpha', role: 'shim' }] })), /lives in .*\/bin, the shim directory/)

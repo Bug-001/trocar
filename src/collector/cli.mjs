@@ -44,7 +44,7 @@ export function formatStatus(s) {
 
 // Durable failure records (D38), newest last: what failed, where, and why.
 export function formatFailures(list) {
-  const one = (f) => `  ${f.ts} ${f.event || `flow ${f.flow_id}`}${f.where ? ` (${f.where})` : ''}${f.pid != null ? ` pid ${f.pid}` : ''}${f.agent ? ` ${f.agent}` : ''}: ${f.code && f.code !== f.reason ? `${f.code} — ` : ''}${f.reason || f.error?.message || f.error || f.not_captured || ''}${f.suppressed ? ` (+${f.suppressed} more)` : ''}${f.hint ? ` — ${f.hint}` : ''}`
+  const one = (f) => `  ${f.ts} ${f.event || `flow ${f.flow_id}`}${f.where ? ` (${f.where})` : ''}${f.pid != null ? ` pid ${f.pid}` : ''}${f.agent ? ` ${f.agent}` : ''}: ${f.event === 'agent-untrusted' && f.code && f.code !== f.reason ? `${f.code} — ` : ''}${f.reason || f.error?.message || f.error || f.not_captured || ''}${f.suppressed ? ` (+${f.suppressed} more)` : ''}${f.hint ? ` — ${f.hint}` : ''}`
   return [`recent failures (${list.length}):`, ...list.map(one)].join('\n')
 }
 
@@ -71,7 +71,7 @@ export function formatPlan(p) {
     ...p.entries.map((e) => `  ${e.harness}: ${e.path}${e.real_path ? ` → ${e.real_path}` : ''} ${e.what || `${e.keys.join('.')} = ${e.value}`}`),
     ...(p.unit ? [`  autostart unit (systemd --user, enabled --now): ${p.unit.path}${Object.keys(p.unit.env).length ? ` with ${Object.entries(p.unit.env).map(([k, v]) => `${k}=${v}`).join(' ')} for the daemon alone (it checks a relay's certificate with it)` : ''}`,
       ...p.unit.links.map((l) => `  autostart link (made by systemctl --user enable): ${l}`)] : []),
-    ...(p.records ? [`  install notes (event log): ${p.records}/`] : []),
+    ...(p.records ? [`  install notes (event log): ${p.records}/`] : p.events ? [`  install notes (appended, for the board): ${p.events}`] : []),
     ...(p.watch || []).map((w) => `  ${w.harness} itself may write ${w.path} (${w.why}); uninstall reports it, never deletes it`)].join('\n')
 }
 
