@@ -11,35 +11,14 @@
 //   RegExp[] vs array   → every RegExp matches some element
 //   object   vs Map/obj → every key present and equal (string) or matching (RegExp)
 // Put cheap paths (exe, argv) before 'env' in a pattern: env may be a lazy read of the process.
+// The matching itself (factAt / holds / matchPattern) lives in src/off/signature.mjs: `asight off` judges which live process belongs to
+// which harness with the same code, from the signatures `install` copied into the manifest (1.6 R3, 4.6 撤销顺序).
+import { factAt, holds, matchPattern } from '../../off/signature.mjs'
+
+export { matchPattern }
 
 const RUNTIMES = new Set(['node', 'rust', 'python'])
 const NAME_RE = /^[a-z][a-z0-9-]*$/
-
-function factAt(facts, p) {
-  let cur = facts
-  for (const k of p.split('.')) {
-    if (cur == null) return undefined
-    cur = Array.isArray(cur) && /^\d+$/.test(k) ? cur[Number(k)] : cur[k]
-  }
-  return cur
-}
-
-function holds(want, got) {
-  if (want instanceof RegExp) {
-    if (typeof got === 'string') return want.test(got)
-    return Array.isArray(got) && got.some((g) => typeof g === 'string' && want.test(g))
-  }
-  if (Array.isArray(want)) return Array.isArray(got) && want.every((re) => got.some((g) => typeof g === 'string' && re.test(g)))
-  const get = got instanceof Map ? (k) => got.get(k) : (k) => (got || {})[k]
-  return Object.entries(want).every(([k, v]) => {
-    const g = get(k)
-    return g != null && (v instanceof RegExp ? v.test(g) : g === v)
-  })
-}
-
-export function matchPattern(pattern, facts) {
-  return Object.entries(pattern).every(([p, want]) => holds(want, factAt(facts, p)))
-}
 
 const anyOf = (patterns, facts) => (patterns || []).some((p) => matchPattern(p, facts))
 

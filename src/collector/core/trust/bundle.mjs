@@ -6,68 +6,13 @@
 // which CA did not make it. Rebuilt atomically when the roots change (daemon start, daily); at uninstall rewritten
 // without the asight CA. Knows no harness and no OS: the caller passes the roots.
 import nodeFs from 'node:fs'
-import crypto, { X509Certificate } from 'node:crypto'
 import { writeDurable, sha256 } from '../../../off/fsutil.mjs'
 import { saveManifest } from '../../../off/manifest.mjs'
+import { certsOf, rootsFingerprint, composeBundle, userCertsIn } from '../../../off/pem.mjs'
 
-const BLOCK = /-----BEGIN ([A-Z0-9 ]+)-----[\s\S]*?-----END \1-----/g
-// Every PEM block of a file, in order, from its BEGIN line: a block whose END line does not come before the next BEGIN (a
-// file cut short) is listed with pem: null, so it is reported, never silently dropped (review D1-7).
-const BEGIN = /-----BEGIN ([A-Z0-9 ]+)-----/g
-function pemBlocks(text) {
-  const begins = [...text.matchAll(BEGIN)]
-  return begins.map((b, i) => {
-    const end = `-----END ${b[1]}-----`
-    const at = text.indexOf(end, b.index + b[0].length)
-    const next = i + 1 < begins.length ? begins[i + 1].index : text.length
-    return { type: b[1], pem: at >= 0 && at < next ? text.slice(b.index, at + end.length) : null }
-  })
-}
-const fpOf = (pem) => { try { return new X509Certificate(pem).fingerprint256 } catch { return null } }
-
-// The CERTIFICATE blocks of a user's CA file, and what was left out of it: { certs: [pem], skipped: [{file, type, index,
-// why}] }. `index` is the block's position in the file from 1 and `type` its PEM type; a file with no PEM block at all
-// is { type: null, index: null } (a DER file?). Never the contents of a block (D-28, 4.6 「合并包」).
-export function certsOf(file, buf) {
-  const text = Buffer.isBuffer(buf) ? buf.toString('latin1') : String(buf)
-  const blocks = pemBlocks(text)
-  if (!blocks.length) return { certs: [], skipped: [{ file, type: null, index: null, why: 'it holds no PEM block (a DER file, or not a certificate file)' }] }
-  const certs = []
-  const skipped = []
-  blocks.forEach((b, i) => {
-    if (b.pem == null) skipped.push({ file, type: b.type, index: i + 1, why: `it has no END ${b.type} line (the file is cut short?)` })
-    else if (b.type !== 'CERTIFICATE') skipped.push({ file, type: b.type, index: i + 1, why: /PRIVATE KEY/.test(b.type) ? 'a private key is never copied' : 'only CERTIFICATE blocks are carried over' })
-    else if (fpOf(b.pem)) certs.push(b.pem.trim())
-    else skipped.push({ file, type: 'CERTIFICATE', index: i + 1, why: 'it does not parse as a certificate' })
-  })
-  return { certs, skipped }
-}
-
-// One fingerprint for the root set, so a rebuild knows the roots changed.
-export function rootsFingerprint(nodeRoots, osRootsText) {
-  const fps = [...nodeRoots, ...(String(osRootsText || '').match(BLOCK) || [])].map(fpOf).filter(Boolean).sort()
-  return crypto.createHash('sha256').update([...new Set(fps)].join('\n')).digest('hex')
-}
-
-// The bundle text: Node roots, OS roots, the user's CAs, the asight CA (when given), each certificate once.
-export function composeBundle({ nodeRoots, osRootsText, userCerts = [], caPem = null }) {
-  const seen = new Set()
-  const out = []
-  const add = (pem) => { const fp = fpOf(pem); if (fp && !seen.has(fp)) { seen.add(fp); out.push(pem.trim()) } }
-  for (const p of nodeRoots) add(p)
-  for (const m of String(osRootsText || '').match(BLOCK) || []) if (m.startsWith('-----BEGIN CERTIFICATE-----')) add(m)
-  const userFps = []
-  for (const p of userCerts) { const fp = fpOf(p); if (fp && !userFps.includes(fp)) userFps.push(fp); add(p) } // kept even when a root today
-  if (caPem) add(caPem)
-  return { data: out.join('\n') + '\n', user_fps: userFps, roots_fp: rootsFingerprint(nodeRoots, osRootsText) }
-}
-
-// The user's certificates of an existing bundle (by fingerprint, as recorded at install): what a rebuild carries over
-// without reading the user's files again (they may have moved; their contents are not asight's to re-copy).
-export function userCertsIn(text, userFps) {
-  const want = new Set(userFps || [])
-  return (String(text || '').match(BLOCK) || []).filter((pem) => want.has(fpOf(pem)))
-}
+// The PEM readers and the bundle composer moved into src/off/pem.mjs, so `asight off` (which runs without the collector) makes the same
+// bundle the install does (1.6 R3, 0.1 §2); the collector's importers keep their names here.
+export { certsOf, rootsFingerprint, composeBundle, userCertsIn }
 
 // Rebuild every bundle the manifest lists whose roots changed (`withCa`), or every one without the asight CA
 // (uninstall step 2, `withCa: false`). Atomic per file (temp + rename); the manifest records the new roots / sha.
