@@ -38,6 +38,20 @@ test('trust plan: every block of a user CA file that is not carried over is repo
   assert.ok(!JSON.stringify(p).includes('SECRET'))
 })
 
+// review D1-7 (4.6 合并包: every block not carried over is reported by type and file): a block with no END line — a
+// user CA file cut short — is reported, and the blocks around it are still read.
+test('trust plan: a block with no END line is reported by type and position, and the complete blocks around it are carried over (D1-7)', () => {
+  const cut = (pem) => pem.slice(0, pem.indexOf('-----END'))
+  const more = { '/corp/ab.pem': `${USER.certPem}${cut(OTHER.certPem)}`, '/corp/ba.pem': `${cut(OTHER.certPem)}${USER.certPem}` }
+  for (const [file, idx] of [['/corp/ab.pem', 2], ['/corp/ba.pem', 1]]) {
+    const p = planTrust({ descriptors: [{ name: 'alpha', inject: () => ({ files: [{ path: `${DIR}/ca/extra-alpha.pem`, certsFrom: [file] }] }) }], ctxFor: () => ({ readText: (f) => more[f] ?? null }), caCertPem: CA.certPem, collectorDir: DIR })
+    assert.deepEqual(p.skipped.map(({ file: f, type, index }) => [f, type, index]), [[file, 'CERTIFICATE', idx]], file)
+    assert.match(p.notes[0], /has no END CERTIFICATE line/)
+    assert.ok(p.files[0].data.includes(USER.certPem.trim()), `${file}: the complete certificate is carried over`)
+    assert.equal(p.files[0].data.match(/BEGIN CERTIFICATE/g).length, 2, 'the complete user certificate + the asight CA')
+  }
+})
+
 test('trust plan: refuses login-environment files, forbidden keys, values outside the collector dir, relative paths', () => {
   for (const bad of ['/h/.bashrc', '/h/.config/environment.d/asight.conf', '/h/.profile', '/etc/environment']) assert.throws(() => plan(() => ({ entries: [entry({ path: bad })] })), /login-environment/, bad)
   for (const k of ['NODE_OPTIONS', 'SSL_CERT_DIR', 'NODE_TLS_REJECT_UNAUTHORIZED']) assert.throws(() => plan(() => ({ entries: [entry({ keys: ['env', k] })] })), /never written/, k)

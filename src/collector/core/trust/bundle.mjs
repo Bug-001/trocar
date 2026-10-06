@@ -10,6 +10,18 @@ import crypto, { X509Certificate } from 'node:crypto'
 import { writeDurable, saveManifest, sha256 } from './journal.mjs'
 
 const BLOCK = /-----BEGIN ([A-Z0-9 ]+)-----[\s\S]*?-----END \1-----/g
+// Every PEM block of a file, in order, from its BEGIN line: a block whose END line does not come before the next BEGIN (a
+// file cut short) is listed with pem: null, so it is reported, never silently dropped (review D1-7).
+const BEGIN = /-----BEGIN ([A-Z0-9 ]+)-----/g
+function pemBlocks(text) {
+  const begins = [...text.matchAll(BEGIN)]
+  return begins.map((b, i) => {
+    const end = `-----END ${b[1]}-----`
+    const at = text.indexOf(end, b.index + b[0].length)
+    const next = i + 1 < begins.length ? begins[i + 1].index : text.length
+    return { type: b[1], pem: at >= 0 && at < next ? text.slice(b.index, at + end.length) : null }
+  })
+}
 const fpOf = (pem) => { try { return new X509Certificate(pem).fingerprint256 } catch { return null } }
 
 // The CERTIFICATE blocks of a user's CA file, and what was left out of it: { certs: [pem], skipped: [{file, type, index,
@@ -17,13 +29,14 @@ const fpOf = (pem) => { try { return new X509Certificate(pem).fingerprint256 } c
 // is { type: null, index: null } (a DER file?). Never the contents of a block (D-28, 4.6 「合并包」).
 export function certsOf(file, buf) {
   const text = Buffer.isBuffer(buf) ? buf.toString('latin1') : String(buf)
-  const blocks = [...text.matchAll(BLOCK)]
+  const blocks = pemBlocks(text)
   if (!blocks.length) return { certs: [], skipped: [{ file, type: null, index: null, why: 'it holds no PEM block (a DER file, or not a certificate file)' }] }
   const certs = []
   const skipped = []
-  blocks.forEach((m, i) => {
-    if (m[1] !== 'CERTIFICATE') skipped.push({ file, type: m[1], index: i + 1, why: /PRIVATE KEY/.test(m[1]) ? 'a private key is never copied' : 'only CERTIFICATE blocks are carried over' })
-    else if (fpOf(m[0])) certs.push(m[0].trim())
+  blocks.forEach((b, i) => {
+    if (b.pem == null) skipped.push({ file, type: b.type, index: i + 1, why: `it has no END ${b.type} line (the file is cut short?)` })
+    else if (b.type !== 'CERTIFICATE') skipped.push({ file, type: b.type, index: i + 1, why: /PRIVATE KEY/.test(b.type) ? 'a private key is never copied' : 'only CERTIFICATE blocks are carried over' })
+    else if (fpOf(b.pem)) certs.push(b.pem.trim())
     else skipped.push({ file, type: 'CERTIFICATE', index: i + 1, why: 'it does not parse as a certificate' })
   })
   return { certs, skipped }
