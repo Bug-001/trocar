@@ -17,23 +17,31 @@ import zlib from 'node:zlib'
 import { makeSseReconstructor } from './sse-reconstruct.mjs'
 import { failureOf } from './events.mjs'
 import { logResponse, MAX_BODY_BYTES } from './envelope.mjs'
-import { utf8Strict } from './request-body.mjs'
+import { utf8Strict, decodedOverLimit, responseDecodeLimit, MAX_DECODED_RESPONSE_BYTES } from './request-body.mjs'
 
 export { MAX_BODY_BYTES }
 const utf8 = (buf) => utf8Strict(buf)
-// {buf} decoded per content-encoding, or {buf (the wire bytes), error}
-export function decodeBodyChecked(buf, enc = '') {
+// {buf} decoded per content-encoding, or {buf (the wire bytes), error}. A body that decodes past `maxBytes` is not expanded (a
+// compression bomb): it is the same failure, with `over:true` and a reason that says what the limit was.
+const overMessage = (maxBytes, llm) => `decoded size over ${maxBytes} bytes${llm ? '' : ' for a call that is not inference'}; the wire bytes are in raw_b64`
+export function decodeBodyChecked(buf, enc = '', maxBytes = MAX_DECODED_RESPONSE_BYTES, llm = true) {
+  const o = { maxOutputLength: maxBytes }
   try {
-    if (enc.includes('br')) return { buf: zlib.brotliDecompressSync(buf) }
-    if (enc.includes('gzip')) return { buf: zlib.gunzipSync(buf) }
-    if (enc.includes('deflate')) return { buf: zlib.inflateSync(buf) }
-  } catch (e) { return { buf, error: String((e && e.message) || e), ...(e && typeof e.code === 'string' ? { code: e.code } : {}) } }
+    if (enc.includes('br')) return { buf: zlib.brotliDecompressSync(buf, o) }
+    if (enc.includes('gzip')) return { buf: zlib.gunzipSync(buf, o) }
+    if (enc.includes('deflate')) return { buf: zlib.inflateSync(buf, o) }
+  } catch (e) {
+    const code = e && typeof e.code === 'string' ? e.code : undefined
+    if (decodedOverLimit({ decoded: false, code, error: String((e && e.message) || e) })) return { buf, error: overMessage(maxBytes, llm), over: true, ...(code ? { code } : {}) }
+    return { buf, error: String((e && e.message) || e), ...(code ? { code } : {}) }
+  }
   return { buf }
 }
-// onDecodeError({error, code}) is told when the body cannot be decompressed (the caller writes the event line, L-4)
-export function bodyResp(status, wire, enc, onDecodeError = null) {
+// onDecodeError({error, code}) is told when the body cannot be decompressed (the caller writes the event line, L-4);
+// `maxBytes` / `llm` = the decode limit of this call (request-body.mjs::responseDecodeLimit)
+export function bodyResp(status, wire, enc, onDecodeError = null, { maxBytes = MAX_DECODED_RESPONSE_BYTES, llm = true } = {}) {
   if (!wire.length) return { status, kind: 'empty' }
-  const dec = decodeBodyChecked(wire, enc)
+  const dec = decodeBodyChecked(wire, enc, maxBytes, llm)
   if (dec.error) { if (onDecodeError) onDecodeError(dec); return { status, kind: 'text', encoding_error: dec.error, raw_b64: wire.toString('base64') } }
   // JSON is read only from valid UTF-8: bytes that are not would parse with U+FFFD in their place (a lossy body, invariant 2)
   const t = utf8(dec.buf)
@@ -45,7 +53,9 @@ export function bodyResp(status, wire, enc, onDecodeError = null) {
 //   level      'full' | 'log' — the retention level of this call (log: nothing is buffered, the bytes are only counted)
 //   rawSse     keep the decoded SSE text in `resp.raw` (set for a non-LLM stream: the reconstructor would rebuild nothing)
 //   maxBodyBytes  the storage cap per body; what is past it is counted, not kept
-export function teeResponse(up, res, { keepRawSse = false, rawSse = false, level = 'full', maxBodyBytes = MAX_BODY_BYTES, where, onEvent = () => {} }, done) {
+//   llm        the call is inference: a compressed response is expanded to at most 64 MiB, else 1 MiB (request-body.mjs::responseDecodeLimit,
+//              `maxDecodedBytes` overrides it); a body past the limit is not expanded: its wire bytes are kept and it says so
+export function teeResponse(up, res, { keepRawSse = false, rawSse = false, level = 'full', maxBodyBytes = MAX_BODY_BYTES, llm = true, maxDecodedBytes = responseDecodeLimit(llm), where, onEvent = () => {} }, done) {
   res.writeHead(up.statusCode || 502, up.headers)
   const logged = level === 'log'
   const isSse = String(up.headers['content-type'] || '').includes('text/event-stream')
@@ -67,8 +77,20 @@ export function teeResponse(up, res, { keepRawSse = false, rawSse = false, level
     else if (enc.includes('gzip')) decoder = zlib.createGunzip()
     else if (enc.includes('deflate')) decoder = zlib.createInflate()
     if (decoder) {
-      decoder.on('data', feedSse)
-      decoder.on('error', (e) => { decodeError = e; onEvent(failureOf(where, e, 'decode-failed', { reason: `the SSE response (content-encoding ${enc}) could not be decompressed: ${e.message}; its wire bytes are kept (raw_b64)` })) })
+      // the stream is expanded chunk by chunk; past maxDecodedBytes it is not expanded further: the decoder is dropped, what was
+      // read stays in the reconstruction, and the wire bytes are kept like those of a stream that cannot be decompressed
+      let decoded = 0
+      decoder.on('data', (d) => {
+        if (decodeError) return
+        decoded += d.length
+        if (decoded > maxDecodedBytes) {
+          decodeError = Object.assign(new Error(overMessage(maxDecodedBytes, llm)), { code: 'ERR_BUFFER_TOO_LARGE' })
+          decoder.destroy(decodeError) // 'error' (not a silent close): the end handler below may already be waiting on it
+          return onEvent(failureOf(where, decodeError, 'decode-failed', { reason: `the SSE response (content-encoding ${enc}) decodes to more than ${maxDecodedBytes} bytes and is not expanded further; its wire bytes are kept (raw_b64)` }))
+        }
+        feedSse(d)
+      })
+      decoder.on('error', (e) => { if (decodeError) return; decodeError = e; onEvent(failureOf(where, e, 'decode-failed', { reason: `the SSE response (content-encoding ${enc}) could not be decompressed: ${e.message}; its wire bytes are kept (raw_b64)` })) })
     }
   }
   const finish = (aborted) => {
@@ -85,7 +107,7 @@ export function teeResponse(up, res, { keepRawSse = false, rawSse = false, level
     } else {
       // a body that cannot be decompressed is a decode-failed line too, like the SSE one (4.1: 响应解压失败 MUST 各留一行);
       // a body cut at the cap cannot be decompressed because it was cut: labelled truncated, not a decode failure
-      resp = bodyResp(up.statusCode, Buffer.concat(wire), enc, cut.wire ? null : (dec) => onEvent(failureOf(where, { code: dec.code, message: dec.error }, 'decode-failed', { reason: `the response body (content-encoding ${enc}) could not be decompressed: ${dec.error}; its wire bytes are kept (raw_b64)` })))
+      resp = bodyResp(up.statusCode, Buffer.concat(wire), enc, cut.wire ? null : (dec) => onEvent(failureOf(where, { code: dec.code, message: dec.error }, 'decode-failed', { reason: `the response body (content-encoding ${enc}) could not be decompressed: ${dec.error}; its wire bytes are kept (raw_b64)` })), { maxBytes: maxDecodedBytes, llm })
     }
     if (!logged) {
       resp.request_id = requestId

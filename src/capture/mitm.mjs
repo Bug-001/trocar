@@ -95,7 +95,7 @@ export function createMitmProxy({ targetHost, leaf, upstreamProxy, connectUpstre
       }
       const upreq = https.request({ host: targetHost, port: 443, method: req.method, path: req.url, headers: fwd, createConnection: connect }, (up) => {
         const tsRespStart = isoStamp()
-        teeResponse(up, res, { keepRawSse, rawSse: !isLlmCall(req.url), level: rt.level, maxBodyBytes, where: 'mitm', onEvent }, (resp, aborted, respWire) => {
+        teeResponse(up, res, { keepRawSse, rawSse: !isLlmCall(req.url), llm: isLlmCall(req.url), level: rt.level, maxBodyBytes, where: 'mitm', onEvent }, (resp, aborted, respWire) => {
           if (settled) return // one envelope per request
           settled = true
           onEnvelope(buildEnvelope({ id, tsRequest, tsRespStart, durationMs: dur(), method: req.method, endpoint: req.url, ...d40(respWire), reqHeaders: req.headers, capture: 'mitm', resp, error: aborted }))

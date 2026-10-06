@@ -80,7 +80,7 @@ export function createReverseProxy({ target, upstreamProxy = '', keepRawSse = fa
 
       const upstream = client.request(options, (up) => {
         const tsRespStart = isoStamp()
-        teeResponse(up, res, { keepRawSse, rawSse: !isLlmCall(req.url), level: rt.level, maxBodyBytes, where: 'proxy', onEvent }, (resp, aborted, respWire) => {
+        teeResponse(up, res, { keepRawSse, rawSse: !isLlmCall(req.url), llm: isLlmCall(req.url), level: rt.level, maxBodyBytes, where: 'proxy', onEvent }, (resp, aborted, respWire) => {
           if (settled) return // one envelope per request
           settled = true
           onEnvelope(buildEnvelope({ id, tsRequest, tsRespStart, durationMs: dur(), method: req.method, endpoint: req.url, ...d40(respWire), reqHeaders: req.headers, capture: 'reverse-proxy', resp, error: aborted }))

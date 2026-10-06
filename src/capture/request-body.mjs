@@ -24,6 +24,16 @@ export const MAX_DECODED_BYTES = 256 * 1024 * 1024
 // V8's string limit — the whole call was then not captured. Over it the wire bytes are kept (req_body_b64) and the call says so
 // (req_encoding_error), the way a body that does not decode does. The reader has the same number.
 export const NON_INFERENCE_MAX_DECODED_BYTES = 1024 * 1024
+// A RESPONSE is decoded under the same two-limit rule (review 2026-10-07: a 713 KB gzip reply that expands to 700 MiB left no envelope
+// at all, stalled the daemon's one event loop for 510 ms and cost 732 MiB of RSS, and the wire cap alone bounds nothing: 64 MiB of
+// gzip can be 64 GiB). A call that is not inference is decoded up to 1 MiB; inference up to 64 MiB, which is the cap on one stored
+// body (MAX_BODY_BYTES in envelope.mjs) — a real model reply is a few MB at most, and "inference" is told by path, so any host can
+// claim it. Over the limit the wire bytes are kept (raw_b64) and the reply says so (encoding_error), the way a body that does not
+// decode does.
+export const MAX_DECODED_RESPONSE_BYTES = 64 * 1024 * 1024
+export const responseDecodeLimit = (llm) => (llm ? MAX_DECODED_RESPONSE_BYTES : NON_INFERENCE_MAX_DECODED_BYTES)
+/** True when decodeContent stopped because the output passed its maxBytes (zlib's ERR_BUFFER_TOO_LARGE), not because the bytes are bad. */
+export const decodedOverLimit = (dec) => !!dec && !dec.decoded && (dec.code === 'ERR_BUFFER_TOO_LARGE' || /larger than|output length/i.test(dec.error || ''))
 
 const STRICT = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }) // a BOM stays: bytes, not text
 /** The text of `buf` when it is valid UTF-8, else null. Never a lossy decode. */
@@ -80,7 +90,7 @@ export function shapeRequestBody({ headers, body, incomplete = false, llm = true
   const maxBytes = llm ? MAX_DECODED_BYTES : NON_INFERENCE_MAX_DECODED_BYTES
   const dec = decodeContent(body, wire.req_content_encoding, { maxBytes })
   if (!dec.decoded) {
-    const over = dec.code === 'ERR_BUFFER_TOO_LARGE' || /larger than|output length/i.test(dec.error || '')
+    const over = decodedOverLimit(dec)
     return { req_body: null, extra: { ...wire, req_encoding_error: over ? `decoded body over the ${maxBytes}-byte capture limit${llm ? '' : ' for a call that is not inference'}; the wire bytes are in req_body_b64` : dec.error } }
   }
   const text = utf8Strict(dec.buf)
