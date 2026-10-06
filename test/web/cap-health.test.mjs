@@ -82,6 +82,7 @@ const TABLE = [
   ['not installed (F9)', { status: 200, body: { installed: false, summary: { state: 'not-installed' }, read: { errors: [] } } }, 'dim', /^– 未安装$/],
   ['unreadable → 503 (F9)', { status: 503, body: { error: 'capture health could not be read: /h/flows: EACCES' } }, 'warn', /^\? 健康读不出:capture health could not be read: \/h\/flows: EACCES$/],
   ['a file unreadable', ok({ part: 'collector', state: 'ok', since: T, read_errors: 1 }), 'ok', / · 读不全$/],
+  ['conditions read in part', ok({ part: 'collector', state: 'unknown', partial: true, reason: 'the current conditions could not be read whole (the last daemon-start is older than the part of flows/ read)' }), 'warn', /^\? 采集器状态不明 · the current conditions could not be read whole/],
 ];
 
 test('#caphealth: every /api/capture-health state from the 1.5 matrix, never empty', async () => {
@@ -186,6 +187,16 @@ test('采集健康: the ctrlmode list — failures by reason, what holds now, th
   health.current = { ...FAILING, body: { ...FAILING.body, collector: { ...FAILING.body.collector, failures: [] } } }
   await M.pollCapHealth(); await settle()
   assert.doesNotMatch(h.getEl('timeline').innerHTML, /lookup-miss/)
+})
+
+// conditions folded without the last daemon-start are said to be partial where they are listed
+test('采集健康: partial conditions are said in the ledger', async () => {
+  const health = { current: { ...FAILING, body: { ...FAILING.body, collector: { ...FAILING.body.collector, conditions: [], conditions_partial: true } } } }
+  const h = harness(health)
+  const M = await load(); await M.pollCapHealth(); await settle()
+  await M.poll(); await settle()
+  h.getEl('caphealth')._onclick(); await settle()
+  assert.match(h.getEl('ledger').innerHTML, /读不全 · partial — the last daemon-start is older than the part of flows\/ read/)
 })
 
 test('an empty board says why when capture fails or the collector is not running — not when only the old MITM runs fine', async () => {

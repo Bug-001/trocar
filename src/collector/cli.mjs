@@ -72,6 +72,7 @@ export function formatHealth(h, { daemonLine = true } = {}) {
   if (daemonLine) lines.push(daemonText(h))
   lines.push(`capture health: ${(SUMMARY[h.summary.state] || ((x) => x.state))(h.summary)}${h.summary.part && h.summary.part !== 'collector' ? ` (${h.summary.part === 'legacy' ? 'the old capture' : 'the raw layer'})` : ''}${h.summary.read_errors ? ' · 读不全: some files could not be read (below)' : ''}`)
   if (c.conditions && c.conditions.length) lines.push(c.conditions_as_of ? `conditions as of ${c.conditions_as_of} (the daemon is not running):` : 'conditions now:', ...c.conditions.map(condLine))
+  if (c.conditions_partial) lines.push('(the conditions are partial: the last daemon-start is older than the part of flows/ read, so some that still hold may be missing)')
   if (c.failures && c.failures.length) lines.push(`recent failures (${c.failures.length} kind(s), last 24 h):`, ...c.failures.map(groupLine))
   const exp = Object.entries(c.expected || {})
   if (exp.length) lines.push(`not captured by design (last 24 h): ${exp.map(([k, n]) => `${k} ${n}`).join(', ')}`)

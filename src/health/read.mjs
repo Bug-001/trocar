@@ -147,7 +147,9 @@ function collectorHealth({ dir, now, fs, alive, identity, maxBytes, read }) {
   const sw = st.value ? { desired: st.value.desired === 'on' ? 'on' : 'off', since: st.value.updated_at || null } : st.missing ? { desired: 'off', since: null } : { desired: null, since: null, error: st.error }
   const c = {
     present: true, installed, residue, ...(man.error ? { manifest_error: man.error } : {}), daemon, switch: sw,
-    conditions: fold.conditions, ...(fold.partial ? { conditions_partial: true } : {}),
+    // partial: no daemon-start in what was read AND the read stopped at its limit — the start may be beyond it; a
+    // flows/ read whole with no daemon-start is a daemon that never started, its conditions complete
+    conditions: fold.conditions, ...(fold.partial && flows.truncated ? { conditions_partial: true } : {}),
     ...(daemon.state !== 'running' && fold.conditions.length ? { conditions_as_of: fold.last_ts } : {}),
     failures: fold.groups, expected: fold.expected, agents: fold.agents, install: notesOf(dir, fold, m, fs, read),
   }
@@ -167,6 +169,8 @@ function judgedSummary(c) {
   if (d.state === 'not-responding') return { state: 'not-responding', since: d.lock_refreshed_at, n }
   if (n) return { state: 'failing', n }
   if (d.state === 'unknown') return { state: 'unknown', reason: d.error }
+  // the last daemon-start is not in what was read: the conditions are only what that part says — never ✓ or ○
+  if (c.conditions_partial) return { state: 'unknown', partial: true, reason: 'the current conditions could not be read whole (the last daemon-start is older than the part of flows/ read)' }
   if (c.switch.desired === 'off') return { state: 'off', since: c.switch.since || (d.last_start && d.last_start.ts) || null }
   return { state: 'ok', since: latest(d.last_start && d.last_start.ts, c.switch.since) }
 }

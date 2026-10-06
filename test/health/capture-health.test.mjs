@@ -178,6 +178,29 @@ test('an unreadable manifest: unknown never hides a failure or a dead daemon, an
   } finally { b.done() }
 })
 
+// 4.6 §记录「记录本身写不成」: a long-running daemon's daemon-start and an agent-untrusted of days ago sit behind
+// more than the bytes read; the conditions are then partial — the summary is never ✓ (nor ○), and status says so.
+test('conditions folded without the last daemon-start are partial: unknown, never ok or off; status says it', async () => {
+  const b = home()
+  const { formatHealth } = await import('../../src/collector/cli.mjs')
+  try {
+    b.manifest({ version: 1, complete: true, created_at: at(100 * H), entries: [], files: [] }); b.lock(); b.state('on', at(72 * H))
+    b.flows([{ ts: at(72 * H), event: 'daemon-start', pid: 4242 }, { ts: at(72 * H - 1000), event: 'agent-untrusted', pid: 77, agent: 'claude-code', reason: 'var-missing' }])
+    const rows = []
+    for (let i = 0; i < 3000; i++) rows.push({ ts: at(2 * H - i * 1000), flow_id: `flow_${i}`, decision: 'decrypt', pid: 78, agent: 'claude-code', host: 'api.anthropic.com', dst: { address: '1.2.3.4', port: 443 } })
+    b.flows(rows)
+    let r = b.health({ maxBytes: 64 << 10 })
+    assert.deepEqual([r.read.truncated, r.collector.conditions_partial, r.collector.conditions.length], [true, true, 0], 'precondition: the start and the untrusted agent are outside what was read')
+    assert.deepEqual([r.summary.state, r.summary.partial], ['unknown', true], 'never ✓ 采集中')
+    assert.match(formatHealth(r, { daemonLine: false }).join('\n'), /conditions are partial/)
+    b.state('off', at(H))
+    assert.equal(b.health({ maxBytes: 64 << 10 }).summary.state, 'unknown', 'nor ○ 采集关')
+    b.state('on', at(72 * H))
+    r = b.health() // read whole: the condition is there, ⚠
+    assert.deepEqual([r.collector.conditions_partial, r.collector.conditions.map((c) => c.pid), r.summary.state], [undefined, [77], 'failing'])
+  } finally { b.done() }
+})
+
 test('the old capture per source (RFC 4.1 落地细节 (3)): MITM and reverse proxy each by their last start / stop; a clean stop is ○ below ✓', () => {
   const b = home()
   try {
