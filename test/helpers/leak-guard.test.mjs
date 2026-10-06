@@ -56,7 +56,7 @@ test('leak-guard: every test file process sees a TMPDIR inside the run\'s direct
   assert.deepEqual(r.left, [])
 })
 
-test('leak-guard: leaked() — directories and our prefixes count, a stray library file does not', (t) => {
+test('leak-guard: leaked() — directories and our prefixes count, a stray library file does not', () => {
   const dir = tmpDir('asight-leakedtest-')
   fs.mkdirSync(path.join(dir, 'whatever'))
   fs.writeFileSync(path.join(dir, 'asight-x'), '')
@@ -64,5 +64,4 @@ test('leak-guard: leaked() — directories and our prefixes count, a stray libra
   fs.writeFileSync(path.join(dir, 'atrace-z'), '')
   fs.writeFileSync(path.join(dir, 'libduck.so'), '')
   assert.deepEqual(leaked(dir, fs.readdirSync(dir).sort()), ['as-y', 'asight-x', 'atrace-z', 'whatever'])
-  assert.equal(typeof t.name, 'string')
 })
