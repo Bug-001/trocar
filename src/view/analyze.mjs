@@ -314,16 +314,23 @@ function failedCall(r) {
   return st != null && st !== 200
 }
 
-export function analyze(records) {
+// opts.giOf(rec) → the call's GLOBAL step index when this analyzer sees only part of a session (a session
+// that mixes wire formats, src/view/assemble.mjs); undefined → the local index. It is asked about the
+// record as passed in, before any sentinel stub is made of it.
+export function analyze(records, opts = {}) {
   // Admit on `is_llm_call` alone. Non-LLM records stay out (they carry only a response body by
   // design — 保真边界, not a loss). Sentinels get an empty request stub so the downstream walkers
   // never dereference a missing `.request`; `rec` here is already a view-side hydrated clone, so
   // stubbing does not touch the raw NDJSON source truth (invariant 2).
-  const llm = records.filter((r) => r && r.is_llm_call).map((r) => (
-    isUnparsed(r)
+  const giGiven = new Map()
+  const llm = records.filter((r) => r && r.is_llm_call).map((r) => {
+    const out = isUnparsed(r)
       ? { ...r, request: { messages: [], tools: [], system: [], message_count: 0, tool_count: 0 }, _unparsed: true }
       : r
-  ))
+    const g = opts.giOf ? opts.giOf(r) : undefined
+    if (g != null) giGiven.set(out, g)
+    return out
+  })
   llm.sort((a, b) => String(a.ts_request).localeCompare(String(b.ts_request)) || String(a.id).localeCompare(String(b.id)))
 
   // ── segment into streams/lanes by lineage + role marker ─────────────────────
@@ -369,7 +376,7 @@ export function analyze(records) {
     const failed = failedCall(r)
     // #21: the collector's own word on WHY the stored body is incomplete (null when it is complete).
     const reqIncomplete = reqIncompleteOf(r)
-    const step = { gi: stepList.length, id: r.id, streamId: stream.id, rec: r, norm: normResp(r),
+    const step = { gi: giGiven.has(r) ? giGiven.get(r) : stepList.length, id: r.id, streamId: stream.id, rec: r, norm: normResp(r),
       msgCount, tools, ctx: ctxTokens(r), status,
       ts: r.ts_request, compaction: false,
       unparsed: !!r._unparsed,

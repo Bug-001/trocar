@@ -11,7 +11,7 @@ import { blockSpans } from '../adapters/cc.mjs';
 import { scanJson, spanAt } from '../adapters/content-hash.mjs';
 import { slimBlock, compBuckets } from './blockmeta.mjs';
 import { mintRawRef, composeTextRef } from '../etl/orchestrator.mjs';
-import { sessionKeyOf } from '../dissect/harnesses.mjs';
+import { sessionKeyOf, hintsOf } from '../dissect/harnesses.mjs';
 import { wireFormatOf, boardDissectorFor } from '../dissect/registry.mjs';
 
 // D17④ 地面真相(RFC 3.3:65 · 独立字节护城河). The demo proxied prefix identity with the 32-bit
@@ -92,8 +92,9 @@ export function recordsForSession(records, sessionId) {
 // We deliberately emit ZERO calls/lanes/blocks: any number we printed here would be a number we did
 // not parse. The evidence below (endpoints, user-agents, models) is copied verbatim from the envelope
 // so a human can see WHAT arrived without us pretending to have understood it.
-function assembleUnknown(records) {
-  const recs = records || [];
+// The evidence block for records no dissector claims. `partial` = they sit inside a session whose other
+// records ARE rendered (a mixed session); otherwise the whole session is unrecognized.
+function unknownSummary(recs, partial) {
   const uniq = (xs) => [...new Set(xs.filter(Boolean))];
   const models = uniq(recs.map((r) => {
     let b = r && r.request && typeof r.request === 'object' ? r.request : null;
@@ -101,15 +102,22 @@ function assembleUnknown(records) {
     return b && typeof b.model === 'string' ? b.model : null;
   }));
   return {
-    provider: 'unknown',
-    unknown: {
-      reason: 'No registered dissector claims these bytes (src/dissect/registry.mjs), so they are NOT '
+    partial,
+    reason: partial
+      ? 'Some records in this session match no registered dissector (src/dissect/registry.mjs). They are '
+        + 'counted here and NOT rendered; the rest of the session is.'
+      : 'No registered dissector claims these bytes (src/dissect/registry.mjs), so they are NOT '
         + 'parsed and NOT rendered — showing them under another wire\'s vocabulary would be a fabrication.',
-      records: recs.length,
-      endpoints: uniq(recs.map((r) => String((r && r.endpoint) || '').split('?')[0])),
-      userAgents: uniq(recs.map((r) => (headersOf(r) || {})['user-agent'])),
-      models,
-    },
+    records: recs.length,
+    endpoints: uniq(recs.map((r) => String((r && r.endpoint) || '').split('?')[0])),
+    userAgents: uniq(recs.map((r) => (headersOf(r) || {})['user-agent'])),
+    models,
+  };
+}
+function assembleUnknown(records) {
+  return {
+    provider: 'unknown',
+    unknown: unknownSummary(records || [], false),
     streams: [], steps: [], lanes: [],
     stats: { calls: 0, streams: 0, subagents: 0, monitors: 0, compactions: 0, totalIn: 0, totalOut: 0, peakCtx: 0 },
   };
@@ -121,6 +129,14 @@ function assembleUnknown(records) {
 // `boardDissectorFor`). The cache-break + ground-truth machinery (cacheBreak / prefixSha256 / realGroundTruth)
 // is wire-agnostic over the flat block vocabulary, so it is REUSED verbatim. Lanes beyond `main` and the
 // resource ledger are not extracted on this path (fidelity: not-yet-extracted, not misreported).
+// Lanes a flat-lane wire can be split into by the harness table's hints (3.4). Labels are server-side
+// (invariant 3); the board renders them as it renders analyze()'s lanes.
+const FLAT_LANES = {
+  main: { kind: 'main', icon: '💬', label: 'conversation' },
+  subagent: { kind: 'subagent', icon: '🧬', label: 'subagent' },
+  aux: { kind: 'aux', icon: '⚙', label: 'other util' },
+  probe: { kind: 'probe', icon: '👁', label: 'warm-up / probe requests' },
+};
 // analyze()'s step order (ts_request, then id), exactly: every assembler uses it, so a session's global
 // step index is one sort whichever wires it mixes.
 const stepOrder = (a, b) => String(a.ts_request).localeCompare(String(b.ts_request)) || String(a.id).localeCompare(String(b.id));
@@ -129,8 +145,14 @@ function assembleFlatLane(records, d, opts = {}) {
   // the shared layer does not branch).
   const llm = (records || []).filter((r) => r && r.is_llm_call && boardDissectorFor(r) === d).sort(stepOrder);
   const calls = [];
-  let prevFlat = null, gi = 0;
+  const prevFlatOf = new Map(); // lane kind → the last call that established a cache prefix in that lane
+  let local = 0;
   for (const r of llm) {
+    // the harness table's lane hint (3.4: e.g. a subagent header); labels are server-side (invariant 3)
+    const laneKind = FLAT_LANES[hintsOf(r).lane] ? hintsOf(r).lane : 'main';
+    const prevFlat = prevFlatOf.get(laneKind) || null;
+    const gi = opts.giOf ? opts.giOf(r) : local;
+    local++;
     let req; try { req = JSON.parse(r.req_body); } catch { req = null; }
     // req_body null (a WebSocket call whose request message is undecoded, or a server push: 4.6 §传输) parses to null,
     // which used to throw below and take the whole session's /api/session down: such a call has no request
@@ -152,7 +174,7 @@ function assembleFlatLane(records, d, opts = {}) {
     brk.gtReal = true;
     const kept = !opts.keepFlat || opts.keepFlat(gi); // see assembleSession: retention window
     calls.push({
-      gi: gi++, id: r.id, streamId: 'main', rec: kept ? slimRec(r) : { id: r.id, request: { model: req.model } }, norm, wireFormat: d.id,
+      gi, id: r.id, streamId: laneKind, rec: kept ? slimRec(r) : { id: r.id, request: { model: req.model } }, norm, wireFormat: d.id,
       ctx: d.ctxTokens(norm),
       msgCount: req.message_count || 0,
       tools: Array.isArray(req.tools) ? req.tools.length : 0,
@@ -166,21 +188,22 @@ function assembleFlatLane(records, d, opts = {}) {
     });
     // A call that failed never established a cache prefix, so it MUST NOT become the next baseline.
     const st = (respOf(r) || {}).status;
-    if (!(r.error || (st != null && st !== 200))) prevFlat = flat;
+    if (!(r.error || (st != null && st !== 200))) prevFlatOf.set(laneKind, flat);
   }
-  const mainLane = {
-    id: 'main', streamId: 'main', kind: 'main', icon: '💬', label: 'conversation',
-    calls, events: [], resources: [], seenFiles: [], giLocal: new Map(),
-    peakCtx: calls.reduce((m, c) => Math.max(m, c.ctx), 1),
-    spawnStep: null, parent: null, flagged: 0,
-  };
+  const kinds = Object.keys(FLAT_LANES).filter((k) => calls.some((c) => c.streamId === k));
+  const lanes = kinds.map((k) => {
+    const lc = calls.filter((c) => c.streamId === k);
+    return { id: k, streamId: k, ...FLAT_LANES[k], calls: lc, events: [], resources: [], seenFiles: [],
+      giLocal: new Map(lc.map((c, i) => [c.gi, i])), peakCtx: lc.reduce((m, c) => Math.max(m, c.ctx), 1),
+      spawnStep: null, parent: null, flagged: 0 };
+  });
   const stats = {
-    calls: calls.length, streams: 1, subagents: 0, monitors: 0, compactions: 0,
+    calls: calls.length, streams: lanes.length, subagents: lanes.filter((l) => l.kind === 'subagent').length, monitors: 0, compactions: 0,
     totalIn: calls.reduce((a, c) => a + ((c.norm.usage || {}).input_tokens || 0), 0),
     totalOut: calls.reduce((a, c) => a + ((c.norm.usage || {}).output_tokens || 0), 0),
     peakCtx: calls.reduce((a, c) => Math.max(a, c.ctx), 0),
   };
-  return { provider: d.provider, streams: [{ id: 'main', kind: 'main', calls }], steps: calls, stats, lanes: [mainLane] };
+  return { provider: d.provider, streams: lanes.map((l) => ({ id: l.id, kind: l.kind, calls: l.calls })), steps: calls, stats, lanes };
 }
 
 // records = ONE session's raw (v0/demo-shape) records. Returns analyze() output with each
@@ -253,17 +276,64 @@ function withPathRefs(flat, rec) {
 // is two flats plus N cheap metas instead of N flats. That is what lets a 578-call session be
 // assembled whole (all 578 bars on the timeline, correct diffs) without the assembled view growing
 // past what can be serialized. Omitted → keep everything (unchanged full-send behaviour).
+//
+// ONE SESSION, SEVERAL WIRES (D37 ①: the wire format is per call — an auxiliary model, a provider template
+// or a per-model protocol choice can mix them). Each record goes to the assembler of its own wire; when more
+// than one wire is present the calls carry the session's GLOBAL step index (one sort, analyze()'s order),
+// lanes of the same id merge, and `steps[gi]` is the call with that gi (the browser rehydrates by it).
+// Records no dissector claims are counted in `analyzed.unknown` and never rendered (3.1:58).
 export function assembleSession(records, opts = {}) {
-  const d = (records || []).map(boardDissectorFor).find(Boolean);
-  if (d) return assembleFlatLane(records, d, opts);
-  if ((records || []).some((r) => wireFormatOf(r) === 'anthropic')) return assembleAnalyzed(records, opts);
-  return assembleUnknown(records); // no registered dissector claims these bytes → labelled, never faked (3.1:58)
+  const recs = records || [];
+  const groups = new Map(); // dissector object | 'analyzed' → records
+  const unknown = [];
+  for (const r of recs) {
+    const d = boardDissectorFor(r);
+    const key = d || (wireFormatOf(r) === 'anthropic' ? 'analyzed' : null);
+    if (!key) { if (r && r.is_llm_call) unknown.push(r); continue; }
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  }
+  if (!groups.size) return assembleUnknown(unknown.length ? unknown : recs); // labelled, never faked
+  let sub = opts;
+  if (groups.size > 1) {
+    const order = [...groups.values()].flat().filter((r) => r && r.is_llm_call).sort(stepOrder);
+    const giByRec = new Map(order.map((r, i) => [r, i])); // by record identity: ids repeat across files
+    sub = { ...opts, giOf: (r) => giByRec.get(r) };
+  }
+  const views = [...groups].map(([k, rs]) => (k === 'analyzed' ? assembleAnalyzed(rs, sub) : assembleFlatLane(rs, k, sub)));
+  const A = views.length === 1 ? views[0] : mergeViews(views);
+  if (unknown.length) A.unknown = unknownSummary(unknown, true);
+  return A;
+}
+
+// Several wires in one session: steps re-sorted by the global gi, lanes of the same id merged.
+function mergeViews(views) {
+  const steps = views.flatMap((v) => v.steps || []).sort((a, b) => a.gi - b.gi);
+  const by = new Map();
+  for (const l of views.flatMap((v) => v.lanes || [])) {
+    const cur = by.get(l.id);
+    if (!cur) { by.set(l.id, { ...l, calls: [...l.calls], events: [...(l.events || [])], resources: [...(l.resources || [])] }); continue; }
+    cur.calls = [...cur.calls, ...l.calls].sort((a, b) => a.gi - b.gi);
+    cur.events.push(...(l.events || []));
+    cur.resources.push(...(l.resources || []));
+    cur.peakCtx = Math.max(cur.peakCtx || 1, l.peakCtx || 1);
+  }
+  const lanes = [...by.values()].map((l) => ({ ...l, giLocal: new Map(l.calls.map((c, i) => [c.gi, i])) }));
+  const sum = (k) => views.reduce((a, v) => a + (((v.stats || {})[k]) || 0), 0);
+  const streams = views.flatMap((v) => v.streams || []);
+  return { provider: 'mixed', providers: views.map((v) => v.provider), streams, steps, lanes,
+    stats: { calls: steps.length, streams: streams.length, subagents: sum('subagents'), monitors: sum('monitors'),
+      compactions: sum('compactions'), totalIn: sum('totalIn'), totalOut: sum('totalOut'),
+      peakCtx: Math.max(0, ...views.map((v) => (v.stats || {}).peakCtx || 0)) } };
 }
 
 // The multi-lane path (the Anthropic wire): analyze() segments lanes, then each call is baked.
 function assembleAnalyzed(records, opts = {}) {
   // Dissect each record to the shape the board's block extractor reads (v0 in-place; D10 req_body→request).
-  const A = analyze(records.map(hydrateForBoard));
+  // A global step index (mixed session) is looked up on the original record, not the hydrated copy.
+  const hydrated = records.map(hydrateForBoard);
+  const giOfHydrated = opts.giOf ? new Map(hydrated.map((h, i) => [h, opts.giOf(records[i])])) : null;
+  const A = analyze(hydrated, giOfHydrated ? { giOf: (h) => giOfHydrated.get(h) } : {});
   for (const lane of A.lanes || []) {
     let prevFlat = null;
     for (const call of lane.calls || []) {
