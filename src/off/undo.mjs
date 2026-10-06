@@ -40,6 +40,7 @@ const KEPT_BECAUSE = {
 }
 const UNTIL_VALUES = ['restart', 'next-connection', 'next-handshake', 'session-end']
 
+const known = (item) => KNOWN_KINDS.includes(item.kind)
 const isMap = (v) => v instanceof Map
 const processEnv = (p) => { try { const e = typeof p.env === 'function' ? p.env() : p.env; return isMap(e) ? e : null } catch { return null } } // gone, or not ours to read
 const errText = (e) => String((e && e.code) || (e && e.message) || e)
@@ -89,17 +90,18 @@ export async function undoHarnesses({ dir, home, manifest, ids = null, procs = a
   const entries = [...manifest.entries].reverse().filter((e) => inScope(e.harness) && (e.kind === 'json-key' || e.kind === 'text'))
   const config = (e) => !(e.kind === 'text' && e.format !== 'dotenv-block') // step 1; the rest are step 4's
   for (const e of entries) if (config(e)) undoOne(e)
-  // an entry this build cannot undo is said, here and not by each caller: an unknown kind, or an entry that names no harness (no harness's `off`
-  // takes it). It stays in the manifest and `off` exits 1 for it (1.6 R3). The old capture's ledger kinds are known: the legacy undo takes them.
-  for (const e of manifest.entries) {
+  // an item this build cannot undo is said, here and not by each caller: an entry or a file of an unknown kind (it is not touched, whatever its role),
+  // or an entry that names no harness (no harness's `off` takes it). It stays in the manifest and `off` exits 1 for it (1.6 R3). The old capture's
+  // ledger kinds are known: the legacy undo takes them.
+  for (const e of [...manifest.entries, ...manifest.files]) {
     const orphan = (e.kind === 'json-key' || e.kind === 'text') && typeof e.harness !== 'string'
-    if ((KNOWN_KINDS.includes(e.kind) && !orphan) || !(ids == null || (typeof e.harness === 'string' && ids.includes(e.harness)))) continue
+    if ((known(e) && !orphan) || !(ids == null || (typeof e.harness === 'string' && ids.includes(e.harness)))) continue
     out.left.push({ path: e.path, harness: e.harness ?? null, result: 'unknown-kind', reason: orphan ? `${e.path} names no harness, so no harness's off takes it out; ${undoByHand(e)}` : `${e.path} is of kind ${JSON.stringify(e.kind ?? null)}, which this build does not undo; by hand: ${undoByHand(e)}` })
   }
 
   // ── 2 and 3: bundles and extra trust files ────────────────────────────────────────────────────────────────────────────────────────
-  const bundles = manifest.files.filter((f) => f.role === 'bundle' && inScope(f.harness))
-  const extras = manifest.files.filter((f) => f.role === 'trust-file' && inScope(f.harness))
+  const bundles = manifest.files.filter((f) => f.role === 'bundle' && inScope(f.harness) && known(f))
+  const extras = manifest.files.filter((f) => f.role === 'trust-file' && inScope(f.harness) && known(f))
   if (bundles.length || extras.length) {
     const t = await table()
     const ca = (() => {
@@ -189,12 +191,12 @@ export async function undoHarnesses({ dir, home, manifest, ids = null, procs = a
     for (const f of bundles) one(f, true)
     for (const f of extras) one(f, false)
   }
-  if (dropCa) for (const f of manifest.files.filter((x) => x.role === 'ca-cert')) { try { rm(f.path); without(manifest.files, f) } catch (e) { fail(f, `${f.path} could not be removed (${errText(e)})`) } } // uninstall only (4.6 第 3 步)
+  if (dropCa) for (const f of manifest.files.filter((x) => x.role === 'ca-cert' && known(x))) { try { rm(f.path); without(manifest.files, f) } catch (e) { fail(f, `${f.path} could not be removed (${errText(e)})`) } } // uninstall only (4.6 第 3 步)
 
   // ── 4: rc lines and patch rows, then plugins and the shim ─────────────────────────────────────────────────────────────────────────
   for (const e of entries) if (!config(e)) undoOne(e)
   removeEmptyDirs([backupDir(home)], fs) // the last backup is gone (rmdir leaves a directory that still holds one)
-  for (const f of [...manifest.files].reverse().filter((x) => (x.role === 'plugin' || x.role === 'shim') && inScope(x.harness))) {
+  for (const f of [...manifest.files].reverse().filter((x) => (x.role === 'plugin' || x.role === 'shim') && inScope(x.harness) && known(x))) {
     try {
       const r = removeOwnedFile(f, fs)
       if (r.result === 'removed') out.removed.push(f.path)

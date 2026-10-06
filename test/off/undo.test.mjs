@@ -137,6 +137,13 @@ test('an entry of a kind this build does not know is left alone, and so is a man
   const all = await s.run({ manifest: m2 })
   assert.deepEqual(all.left.map((l) => [l.path, l.result]), [[path.join(s.b.home, 'x'), 'unknown-kind'], ['/y', 'unknown-kind'], ['/z', 'unknown-kind']], 'a run for everything says all three; a kind of the old capture\'s ledger is known: the legacy undo takes it')
   assert.match(all.left[2].reason, /names no harness/)
+  // a file of a kind it does not know is not touched whatever its role, and is said the same way
+  const t = await setup((b) => [plugH(b)])
+  const m3 = readManifest(t.b.dir)
+  const plugin = m3.files.find((f) => f.role === 'plugin' && f.path.endsWith('asight-ca.js'))
+  Object.assign(plugin, { kind: 'future-file', undo_by_hand: 'rm the plugin' })
+  const r3 = await t.run({ manifest: m3 })
+  assert.deepEqual([r3.left.map((l) => [l.path, l.harness, l.result]), fs.existsSync(plugin.path), r3.removed.includes(plugin.path), r3.manifest.files.includes(plugin)], [[[plugin.path, 'plug', 'unknown-kind']], true, false, true], 'kept on disk and in the manifest; the plugin dir asight owns, of a kind it knows, still went')
   await assert.rejects(undoHarnesses({ dir: s.b.dir, home: s.b.home, manifest: { version: 3, unsupported: true, entries: [], files: [] }, ids: null }), /version 3.*nothing was changed/)
 })
 
