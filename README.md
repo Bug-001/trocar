@@ -158,6 +158,16 @@ WebSocket recorder. An
 eBPF helper steers only the connections of agent processes you run to a loopback engine, which decrypts
 only for agents that trust the collector CA. Everything else, including other users, goes direct.
 
+What it keeps (D40): for a trusted agent it decrypts **every** host it talks to by default (policy `all`), not just the
+model API, and stores every call verbatim — telemetry, uploads, account calls, session sync, downloads — so you can see
+what an agent harness does besides calling the model. Where that is too much, `asight keep` sets, per harness and
+traffic class (`llm` · `token-count` · `session-sync` · `telemetry` · `files` · `account` · `other`), whether to keep
+the whole call (`full`, bodies capped at 64 MiB with a label) or only a line per call (`log`: headers and sizes, no
+body). A change reaches the calls that start after it, within a second, and never touches what is already stored.
+The cost of `all`, honestly: a child process of an agent that does not trust the collector CA (a sandboxed tool's
+`npm` or `git`) fails up to two connections per host before that host passes through untouched; each is a line in
+`flows/`. A state file that already says `auto` keeps `auto` (known API hosts only).
+
 | what | where | undo |
 |---|---|---|
 | capability helper (once per machine, `sudo`) | `/usr/local/libexec/asight/asight-redirector`, root 0755, file caps `cap_bpf,cap_net_admin,cap_perfmon` — no setuid, no account, no system unit | `sudo asight setup-helper --remove` |
@@ -283,6 +293,7 @@ asight mitm [--port 9899] [--host api.anthropic.com]
 asight desktop {on|off|status}        # macOS + Clash Verge
 sudo asight setup-helper [--binary <path>] [--remove]   # Linux, once per machine
 asight collector install | start | on | off | status [--json] | uninstall [--purge-data]
+asight keep [<harness|all> <class|all> <full|log>]   # what is kept of each call: show / set (no daemon needed)
 ```
 
 Design authority: [`spec/01-asight-rfc/`](spec/01-asight-rfc/) (entry `0.0-overview.md`). This README is
