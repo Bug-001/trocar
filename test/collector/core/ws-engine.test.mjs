@@ -1,6 +1,7 @@
 // ws-engine.test.mjs — RFC 4.6 acceptance W (WebSocket, D37) through the real engine (createEngine) over
 // TLS against the mock upstream's Responses WebSocket (test/lab/mock-upstream/ws.mjs), with the real 0600
-// record store: envelopes, flows/ and failures/ are read back from disk.
+// record store and the daemon's failure recorder: envelopes, connection rows and failure events (all in flows/) are
+// read back from disk.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
@@ -13,6 +14,7 @@ import { createEngine } from '../../../src/collector/core/engine/engine.mjs'
 import { createStaticRedirector } from '../../../src/collector/core/redirector.mjs'
 import { rebuildWsWire } from '../../../src/collector/core/ws/raw.mjs'
 import { createRecordStore } from '../../../src/collector/core/record/store.mjs'
+import { createFailureRecorder, recentFailures } from '../../../src/collector/core/events.mjs'
 import { request } from '../../lab/helpers.mjs'
 
 const T = { timeout: 20000 }
@@ -34,7 +36,7 @@ async function lab(t, { terminal = TERMINAL, recording, delays, describe } = {})
   const store = createRecordStore({ root: path.join(dir, 'rec') }) // real 0600 files: W10 and flows/ read the disk
   const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: mock.port, family: 4 }, pid: 11, agent: 'codex', decrypt: true })
   const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: fs.readFileSync(labCa.caCert),
-    store: { envelope: (e) => { envelopes.push(e); return store.envelope(e) }, flow: (f) => store.flow(f), failure: (r) => store.failure(r) },
+    store: { envelope: (e) => { envelopes.push(e); return store.envelope(e) }, flow: (f) => store.flow(f) }, onFailure: createFailureRecorder(path.join(dir, 'rec')).event, // as the daemon wires it
     isRecording: recording || (() => true), describe: describe || (() => ({ wsTerminal: terminal })), onError: (e) => errors.push(e) })
   const { port } = await engine.listen({})
   const clients = []
@@ -42,7 +44,7 @@ async function lab(t, { terminal = TERMINAL, recording, delays, describe } = {})
   t.after(async () => { for (const c of clients) c.sock.destroy(); await engine.close(); await mock.close(); store.close(); fs.rmSync(dir, { recursive: true, force: true }) })
   const connect = async (opts = {}) => { const c = await wsConnect(port, { tls: { servername: 'api.openai.com', ca: asightCa.certPem }, ...opts }); clients.push(c); return c }
   const read = (sub) => { const d = path.join(dir, 'rec', sub); return fs.existsSync(d) ? fs.readdirSync(d).filter((f) => f.endsWith('.ndjson')).flatMap((f) => fs.readFileSync(path.join(d, f), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))) : [] }
-  return { mock, engine, envelopes, errors, connect, log: () => mock.state.log, port, onDisk: () => read(''), flows: () => read('flows'), failures: () => read('failures'), dir }
+  return { mock, engine, envelopes, errors, connect, log: () => mock.state.log, port, onDisk: () => read(''), flows: () => read('flows').filter((r) => r.event == null), failures: () => read('flows').filter((r) => r.event === 'failure'), dir }
 }
 
 const VARIANTS = [
@@ -187,26 +189,29 @@ test('mid-call upstream RST: the client gets only upstream bytes, the call is an
 })
 
 // D38: a capture failure is never silent. Through the engine, the ws recorder's failure
-// lands in failures/ on disk with the flow's id, and the flows/ ws summary counts it.
-test('D38 a WebSocket capture failure through the engine: failures/ on disk names the flow and the reason; flows/ ws.failures counts it', T, async (t) => {
+// lands in flows/ on disk as a failure event with the flow's id, the connection row's ws summary counts it, and
+// `asight collector status` (recentFailures, the reader it uses with or without a daemon) lists it.
+test('D38 a WebSocket capture failure through the engine: a flows/ failure event names the flow and the reason; ws.failures counts it; status lists it', T, async (t) => {
   const L = await lab(t)
   const c = await L.connect() // no deflate agreed
   c.sock.write(encodeFrame(1, 'x', { rsv1: true })) // RSV1 without permessage-deflate: the mock fails the connection
   await until(() => c.state.closed, 'connection failed by the mock')
   const [f] = await until(() => L.flows().length && L.flows(), 'flows/ record')
   assert.equal(f.ws.failures, 1)
-  assert.deepEqual(L.failures().map((x) => [x.flow_id, x.transport, x.reason, x.d]), [[f.flow_id, 'ws', 'decode-failed', 'c']])
+  assert.deepEqual(L.failures().map((x) => [x.flow_id, x.where, x.code, x.d]), [[f.flow_id, 'ws', 'decode-failed', 'c']])
+  assert.ok(recentFailures(path.join(L.dir, 'rec')).some((x) => x.where === 'ws' && x.code === 'decode-failed' && x.flow_id === f.flow_id), 'status lists it')
+  assert.equal(fs.existsSync(path.join(L.dir, 'rec', 'failures')), false, 'no second failure directory nobody reads')
 })
 
 // Plan 3c §2: describe(meta) must not throw; if it does, the flow goes on with no extras (fail-open) and
-// the throw is not silent (D38): onError and a failures/ record.
-test('describe throws: the connection is still decrypted and recorded with the fallback cut; the throw is in failures/ and reaches onError', T, async (t) => {
+// the throw is not silent (D38): onError and a flows/ failure event.
+test('describe throws: the connection is still decrypted and recorded with the fallback cut; the throw is a flows/ failure event and reaches onError', T, async (t) => {
   const L = await lab(t, { describe: () => { throw new Error('registry not ready') } })
   const c = await L.connect()
   await c.sendText(create({ input: [user('no extras')] })); await c.events()
   c.sock.destroy() // no terminal pattern reached the recorder: the call is written at close
   await until(() => L.envelopes.length === 1 && L.flows().length, 'envelope and flow')
   assert.equal(L.envelopes[0].transport, 'ws')
-  assert.deepEqual(L.failures().map((x) => [x.reason, x.pid, x.agent, x.error]), [['describe-error', 11, 'codex', 'registry not ready']])
+  assert.deepEqual(L.failures().map((x) => [x.code, x.pid, x.agent, x.reason]), [['describe-error', 11, 'codex', 'registry not ready']])
   assert.deepEqual(L.errors.map((e) => e.message), ['registry not ready'])
 })

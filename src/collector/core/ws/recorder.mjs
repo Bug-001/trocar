@@ -25,6 +25,8 @@ import { messageBytes } from './raw.mjs'
 import { buildWsEnvelope } from '../record/envelope.mjs'
 import { isLlmCall } from '../../../capture/envelope.mjs'
 
+const noFailureSink = (r) => { throw Object.assign(new Error(`capture failure with nowhere to be recorded: ${r.code}: ${r.reason}`), { code: r.code }) } // a wiring fault: loud, never dropped
+
 const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }) // a BOM stays: bytes, not text
 const CLOSED = { type: 'ws_closed', message: 'connection closed before the terminal message' }
 const REASONS = ['off-window', 'write-failed', 'decode-failed']
@@ -49,12 +51,13 @@ export function compileTerminal(spec, target, onInvalid = () => {}) {
 }
 
 /**
- * createWsRecorder({flow, upgrade, seqStart, genId, recordStore, isRecording, terminal, maxCallBytes, now})
+ * createWsRecorder({flow, upgrade, seqStart, genId, recordStore, isRecording, terminal, maxCallBytes, now, onFailure})
  *   → { fromClient(chunk), fromUpstream(chunk), end(error|null), summary() }
  * upgrade = {req:{head}, resp:{head}} (the exchange tee's heads); terminal = FlowExtras.wsTerminal.
  * summary() = {frames, calls, recorded, partial, dropped_frames, tail_raw?, broken?} for flows/.
+ * onFailure({event, where:'ws', code, flow_id, reason, …}) = the engine's failure sink (flows/ event lines, D38).
  */
-export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordStore, isRecording = () => true, terminal = null, maxCallBytes = MAX_CALL_BYTES, now = () => new Date() }) {
+export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordStore, isRecording = () => true, terminal = null, maxCallBytes = MAX_CALL_BYTES, now = () => new Date(), onFailure = noFailureSink }) {
   const ext = (upgrade.resp.head.headers || []).filter(([k]) => k.toLowerCase() === 'sec-websocket-extensions').map(([, v]) => v).join(', ')
   const { deflate } = parseExtensions(ext)
   const keepClient = isLlmCall(upgrade.req.head.target) // a non-LLM client message is metadata only (RFC 4.1)
@@ -83,11 +86,11 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
     return out
   }
 
-  // User requirement 2026-10-06 (proposed D38, number pending in RFC 4.6 §记录): a capture failure is never silent. Each one is written at once, with its
-  // reason, to the store's failures/ stream; summary().failures counts them for flows/.
-  function fail(reason, error, extra) {
+  // D38 (4.6 §记录): a capture failure is never silent. Each one goes at once, with its reason, to onFailure — a
+  // flows/ event line {where:'ws', code, flow_id, reason}; summary().failures counts them for the connection row.
+  function fail(code, error, extra) {
     failures++
-    try { recordStore.failure({ ts: iso(), flow_id: flow.id, transport: 'ws', reason, error: String((error && error.message) || error), ...extra }) } catch { /* the store counts and reports its own failures */ }
+    onFailure({ event: 'failure', where: 'ws', code, flow_id: flow.id, reason: String((error && error.message) || error), ...extra })
   }
 
   function newCall(h) {

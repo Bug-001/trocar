@@ -10,6 +10,7 @@ import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
 import { createEngine } from '../../../src/collector/core/engine/engine.mjs'
 import { createStaticRedirector } from '../../../src/collector/core/redirector.mjs'
 import { createRecordStore } from '../../../src/collector/core/record/store.mjs'
+import { createFailureRecorder } from '../../../src/collector/core/events.mjs'
 
 const a = createCa({ commonName: 'system store CA' }), b = createCa({ commonName: 'bundle file CA' }), x = createCa({ commonName: 'extra CA' })
 
@@ -58,7 +59,7 @@ test('engine: an upstream signed by a CA only the (injected) system store holds 
     await new Promise((r) => up.listen(0, '127.0.0.1', r))
     const root = path.join(dir, String(++n)), store = createRecordStore({ root }), errors = []
     const engine = createEngine({ redirector: createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 3, agent: 'cc', decrypt: true }),
-      issuer: createLeafIssuer(loadCa(asightCa)), store, systemCa, onError: (e) => errors.push(e.message) })
+      issuer: createLeafIssuer(loadCa(asightCa)), store, systemCa, onFailure: createFailureRecorder(root).event, onError: (e) => errors.push(e.message) })
     const { port } = await engine.listen({})
     const issuer = await new Promise((resolve) => {
       const c = tls.connect({ port, host: '127.0.0.1', servername: 'api.anthropic.com', ca: clientCa }, () => { const i = c.getPeerX509Certificate().issuer; c.on('end', () => resolve(i)); c.resume(); c.write('ping') })
@@ -66,7 +67,7 @@ test('engine: an upstream signed by a CA only the (injected) system store holds 
     })
     await engine.close(); up.close(); store.close()
     const read = (sub) => { const d = path.join(root, sub); return fs.existsSync(d) ? fs.readdirSync(d).flatMap((f) => fs.readFileSync(path.join(d, f), 'utf8').trim().split('\n').map((l) => JSON.parse(l))) : [] }
-    return { issuer, flows: read('flows'), failures: read('failures'), errors, stats: engine.stats() }
+    return { issuer, flows: read('flows').filter((r) => r.event == null), failures: read('flows').filter((r) => r.event === 'failure'), errors, stats: engine.stats() }
   }
   const ok = await run(corp, asightCa.certPem, corp.certPem)
   assert.match(ok.issuer, /asight collector CA/, 'decrypted: the engine trusted the corporate CA from the system store')
@@ -77,9 +78,9 @@ test('engine: an upstream signed by a CA only the (injected) system store holds 
   assert.equal(bad.stats.notCaptured.upstreamCert, 1)
   const none = await run(corp, corp.certPem, [])
   assert.match(none.issuer, /corporate inspection CA/, 'no system roots: the corporate upstream is not trusted either, so it steps aside')
-  assert.deepEqual(none.failures.map((f) => f.reason), ['system-roots-unavailable'], 'and that is not silent')
+  assert.deepEqual(none.failures.map((f) => [f.where, f.code]), [['engine', 'system-roots-unavailable']], 'and that is not silent')
   assert.equal(none.errors.length, 1)
   const partial = await run(corp, asightCa.certPem, { certs: [corp.certPem], errors: ['/etc/ssl/certs/ca-certificates.crt: EACCES: permission denied'] })
   assert.match(partial.issuer, /asight collector CA/, 'what was read is still used')
-  assert.deepEqual(partial.failures.map((f) => [f.reason, f.error]), [['trust-store-error', '/etc/ssl/certs/ca-certificates.crt: EACCES: permission denied']], 'an unreadable source is not silent')
+  assert.deepEqual(partial.failures.map((f) => [f.code, f.reason]), [['trust-store-error', '/etc/ssl/certs/ca-certificates.crt: EACCES: permission denied']], 'an unreadable source is not silent')
 })

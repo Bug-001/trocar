@@ -24,8 +24,8 @@ function upgrade({ ext, offer, target = '/v1/responses' }) {
 }
 function rig({ ext = null, offer, terminal = TERMINAL, target, write, maxCallBytes, split = Infinity, seqStart = 0 } = {}) {
   const out = [], failures = []; let on = true; let n = 0
-  const store = { envelope: (e) => (write ? write(e, out, store) : (out.push(e), true)), failure: (f) => failures.push(f), lastError: null }
-  const r = createWsRecorder({ flow: FLOW, upgrade: upgrade({ ext, offer, target }), seqStart, genId: () => `id${n++}`, isRecording: () => on, terminal, maxCallBytes, recordStore: store })
+  const store = { envelope: (e) => (write ? write(e, out, store) : (out.push(e), true)), lastError: null }
+  const r = createWsRecorder({ flow: FLOW, upgrade: upgrade({ ext, offer, target }), seqStart, genId: () => `id${n++}`, isRecording: () => on, terminal, maxCallBytes, recordStore: store, onFailure: (f) => failures.push(f) })
   const wire = { c: [], s: [] }
   const feed = (fn, b) => { for (let i = 0; i < b.length; i += split) fn(b.subarray(i, i + split)) }
   return { r, out, failures, wire, c: (b) => { wire.c.push(b); feed(r.fromClient, b) }, s: (b) => { wire.s.push(b); feed(r.fromUpstream, b) }, set on(v) { on = v } }
@@ -332,23 +332,23 @@ test('no silent failure (proposed D38) — a failed write, an undecodable messag
   t.c(cli(1, ev('response.create'))); t.s(srv(1, ev('response.completed')))                                       // the store does not write it
   t.c(cli(1, ev('response.create'))); t.s(srv(1, Buffer.from([0xff, 0xff]), { rsv1: true })); t.s(srv(1, ev('response.completed')))
   t.c(cli(1, ev('response.create'))); t.s(srv(1, ev('response.output_text.delta'))); t.s(Buffer.from([0x83, 0]))
-  assert.deepEqual(t.failures.map((f) => [f.reason, f.flow_id, f.transport, f.d, f.i, f.seq]), [['write-failed', 'f1', 'ws', undefined, undefined, 0], ['decode-failed', 'f1', 'ws', 's', 3, undefined], ['broken', 'f1', 'ws', 's', undefined, undefined]], 'written when they happen')
-  assert.deepEqual([t.failures[0].error, typeof t.failures[1].error, t.failures[2].error], ['ENOSPC: no space left', 'string', 'reserved opcode 3'])
+  assert.deepEqual(t.failures.map((f) => [f.code, f.flow_id, f.where, f.d, f.i, f.seq]), [['write-failed', 'f1', 'ws', undefined, undefined, 0], ['decode-failed', 'f1', 'ws', 's', 3, undefined], ['broken', 'f1', 'ws', 's', undefined, undefined]], 'written when they happen')
+  assert.deepEqual([t.failures[0].reason, typeof t.failures[1].reason, t.failures[2].reason], ['ENOSPC: no space left', 'string', 'reserved opcode 3'])
   t.c(cli(1, ev('response.create'))); t.r.end(null)                                                                // a call opened after the stop
   assert.deepEqual(t.out.map((e) => e.ws_truncated), [undefined, undefined, true, true], 'the stopped direction lost bytes of the open call and of every later one')
-  assert.deepEqual([t.out.at(-1).partial_reasons, t.r.summary().failures, t.failures[0].id, t.failures.every((f) => typeof f.ts === 'string')], [['write-failed', 'decode-failed'], 3, t.out[0].id, true])
+  assert.deepEqual([t.out.at(-1).partial_reasons, t.r.summary().failures, t.failures[0].id, t.failures.every((f) => f.event === 'failure')], [['write-failed', 'decode-failed'], 3, t.out[0].id, true])
   const n = rig()                                                                                                       // RSV1 with no deflate agreed
   n.c(cli(1, ev('response.create'))); n.s(srv(1, 'abc', { rsv1: true }))
-  assert.deepEqual(n.failures.map((f) => [f.reason, f.d, f.i]), [['decode-failed', 's', 1]])
+  assert.deepEqual(n.failures.map((f) => [f.code, f.d, f.i]), [['decode-failed', 's', 1]])
   const o = rig({ ext: 'permessage-deflate' }); o.on = false                                                              // off: no envelope, but the failure is recorded (it breaks the window)
   o.c(cli(1, ev('response.create'))); o.s(srv(1, Buffer.from([0xff, 0xff]), { rsv1: true })); o.r.end(null)
-  assert.deepEqual([o.out.length, o.failures.map((f) => f.reason)], [0, ['decode-failed']])
+  assert.deepEqual([o.out.length, o.failures.map((f) => f.code)], [0, ['decode-failed']])
   const x = rig({ write: () => { throw new Error('EIO: disk gone') } })
   x.c(cli(1, 'a')); x.s(srv(1, ev('response.completed')))
-  assert.deepEqual(x.failures.map((f) => [f.reason, f.error]), [['write-failed', 'EIO: disk gone']])
-  const lostAtEnd = [], y = createWsRecorder({ flow: FLOW, upgrade: upgrade({}), terminal: TERMINAL, genId: () => { throw new Error('id source gone') }, recordStore: { envelope: () => true, failure: (f) => lostAtEnd.push(f) } })
+  assert.deepEqual(x.failures.map((f) => [f.code, f.reason]), [['write-failed', 'EIO: disk gone']])
+  const lostAtEnd = [], y = createWsRecorder({ flow: FLOW, upgrade: upgrade({}), terminal: TERMINAL, genId: () => { throw new Error('id source gone') }, recordStore: { envelope: () => true }, onFailure: (f) => lostAtEnd.push(f) })
   y.fromClient(cli(1, 'a')); assert.doesNotThrow(() => y.end(null))
-  assert.deepEqual(lostAtEnd.map((f) => [f.reason, f.error]), [['recorder-error', 'id source gone']], 'an internal error at the end is recorded too')
+  assert.deepEqual(lostAtEnd.map((f) => [f.code, f.reason]), [['recorder-error', 'id source gone']], 'an internal error at the end is recorded too')
 })
 
 test('more pinned details: decoded bytes in req_body_b64; a server message begun in the previous call joins the next one; a terminal past the call total keeps the window; the default cap', async () => {
@@ -401,10 +401,10 @@ test('switch details at call boundaries: frames between calls go with an off-beg
 // connection it would have cut (RFC 4.6 §记录 pattern-invalid); the usable patterns still cut.
 test('an invalid terminal pattern is a pattern-invalid failure record; the usable one still cuts the call', () => {
   const t = rig({ terminal: [{ pathSuffix: '/responses', patterns: ['(', '^\\{"type":"response\\.completed"'] }] })
-  assert.deepEqual(t.failures.map((f) => [f.reason, f.flow_id, f.transport, f.pattern, typeof f.error]), [['pattern-invalid', 'f1', 'ws', '(', 'string']])
+  assert.deepEqual(t.failures.map((f) => [f.code, f.flow_id, f.where, f.pattern, typeof f.reason]), [['pattern-invalid', 'f1', 'ws', '(', 'string']])
   t.c(cli(1, ev('response.create'))); t.s(srv(1, ev('response.completed')))
   assert.equal(t.out.length, 1, 'cut at the terminal message by the usable pattern')
   assert.equal(t.r.summary().failures, 1)
   const none = rig({ terminal: [{ patterns: ['['] }] })
-  assert.deepEqual(none.failures.map((f) => f.reason), ['pattern-invalid'])
+  assert.deepEqual(none.failures.map((f) => f.code), ['pattern-invalid'])
 })

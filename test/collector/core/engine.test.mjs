@@ -11,13 +11,13 @@ test('engine: lookup miss closes the socket; a known flow is spliced to its dest
   const echo = net.createServer((s) => s.pipe(s)); await new Promise((r) => echo.listen(0, '127.0.0.1', r))
   const redirector = createStaticRedirector()
   const failures = []
-  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(createCa())), store: { envelope() {}, flow() {}, failure: (f) => failures.push(f) } })
+  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(createCa())), store: { envelope() {}, flow() {} }, onFailure: (f) => failures.push(f) })
   const { port } = await engine.listen({})
   let missPort = 0
   const miss = await new Promise((r) => { const c = net.connect(port, '127.0.0.1', () => { missPort = c.localPort }); c.on('close', () => r(true)); c.on('error', () => {}) })
   assert.equal(miss, true)
-  // the agent's connection was closed: not silent (D38) — failures/ names the peer
-  assert.deepEqual(failures.map((f) => [f.reason, f.peer.port, typeof f.ts]), [['lookup-miss', missPort, 'string']])
+  // the agent's connection was closed: not silent (D38) — a failure event names the peer
+  assert.deepEqual(failures.map((f) => [f.event, f.where, f.code, f.peer.port, typeof f.reason]), [['failure', 'engine', 'lookup-miss', missPort, 'string']])
   redirector.set = redirector.set // static redirector keyed by client port: register on connect
   const echoed = await new Promise((resolve) => {
     const c = net.connect(port, '127.0.0.1')
@@ -82,7 +82,7 @@ test('engine: two consecutive rejections on one host splice that host only; anot
   const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 5, agent: 'dsh', decrypt: true })
   const told = []; for (const m of ['watch', 'unwatch', 'detach']) redirector[m] = async (...a) => { told.push([m, ...a]) }
   const asightCa = createCa(); const flows = []
-  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: upCa.certPem, store: { envelope() {}, flow: (f) => flows.push(f), failure() {} } })
+  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: upCa.certPem, store: { envelope() {}, flow: (f) => flows.push(f) }, onFailure() {} })
   const { port } = await engine.listen({})
   const hello = (servername, ca) => new Promise((resolve) => {
     const c = tls.connect({ port, host: '127.0.0.1', servername, ca }, () => { const issuer = c.getPeerX509Certificate().issuer; c.on('end', () => resolve(issuer)); c.resume(); c.write('x') })
@@ -110,11 +110,11 @@ test('engine: connectUpstream throwing (e.g. a bad destination port) is an engin
   const failures = [], errors = [], flows = []
   const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: 1, family: 4 }, pid: 1, agent: 'x', decrypt: false })
   const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(createCa())), connectUpstream: () => { throw new RangeError('bad port') },
-    store: { envelope() {}, flow: (f) => flows.push(f), failure: (f) => failures.push(f) }, onError: (e) => errors.push(e.message) })
+    store: { envelope() {}, flow: (f) => flows.push(f) }, onFailure: (f) => failures.push(f), onError: (e) => errors.push(e.message) })
   const { port } = await engine.listen({})
   for (let i = 0; i < 2; i++) await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('close', r); c.on('error', () => {}) })
   await engine.close()
-  assert.deepEqual(failures.map((f) => [f.reason, f.flow_id, f.error]), [['engine-error', 'flow_000001', 'bad port'], ['engine-error', 'flow_000002', 'bad port']])
+  assert.deepEqual(failures.map((f) => [f.code, f.flow_id, f.reason]), [['engine-error', 'flow_000001', 'bad port'], ['engine-error', 'flow_000002', 'bad port']])
   assert.deepEqual(flows.map((f) => [f.flow_id, f.decision, f.error.type, f.error.side]), [['flow_000001', 'error', 'engine_error', 'engine'], ['flow_000002', 'error', 'engine_error', 'engine']])
   assert.equal(engine.stats().active, 0)
 })
@@ -123,46 +123,53 @@ test('engine: a flows/ record that cannot be written is a flow-write-failed fail
   const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path')
   const { createRecordStore } = await import('../../../src/collector/core/record/store.mjs')
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-flowfail-'))
-  fs.writeFileSync(path.join(root, 'flows'), '') // a file where the flows/ directory should be
+  const flowsDir = path.join(root, 'flows')
+  fs.mkdirSync(flowsDir); fs.mkdirSync(path.join(flowsDir, `${new Date().toISOString().slice(0, 10)}.ndjson`)) // the day's connection-row file is a directory
   const store = createRecordStore({ root })
+  const failures = []
   const up = net.createServer((sk) => sk.end()); await new Promise((r) => up.listen(0, '127.0.0.1', r))
-  const engine = createEngine({ redirector: createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 2, agent: 'x', decrypt: false }), issuer: createLeafIssuer(loadCa(createCa())), store })
+  const engine = createEngine({ redirector: createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 2, agent: 'x', decrypt: false }), issuer: createLeafIssuer(loadCa(createCa())), store, onFailure: (f) => failures.push(f) })
   const { port } = await engine.listen({})
   await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('close', r); c.on('error', () => {}); c.resume() })
   await engine.close(); up.close(); store.close()
-  const lines = fs.readdirSync(path.join(root, 'failures')).flatMap((f) => fs.readFileSync(path.join(root, 'failures', f), 'utf8').trim().split('\n').map((l) => JSON.parse(l)))
   fs.rmSync(root, { recursive: true, force: true })
-  assert.deepEqual(lines.map((l) => [l.reason, l.flow_id, /flows/.test(l.error)]), [['flow-write-failed', 'flow_000001', true]])
+  assert.deepEqual(failures.map((l) => [l.where, l.code, l.flow_id, /EISDIR|illegal operation/.test(l.reason)]), [['engine', 'flow-write-failed', 'flow_000001', true]])
 })
 
-// Both halves of the union (feat/collector-v1): ws-recorder's lookup-miss failure record AND the daemon's onError
-// (code 'lookup-miss') for the same miss, plus the daemon's listener 'error' handler after listen.
-test('engine: a lookup miss and a listener error after listen reach onError, never an uncaught exception (D38)', async () => {
+// Cross-guard: both halves of the merge survive — the failure record for a lookup miss (ws-recorder's side) AND
+// the listener 'error' handler after listen (the daemon's side), each a failure record and an onError, never an
+// uncaught exception. Dropping either half of a future conflict resolution turns this red.
+test('engine: a lookup miss and a listener error after listen are failure records and reach onError, never an uncaught exception (D38)', async () => {
   const errors = [], failures = []
   const made = []; const orig = net.createServer
   net.createServer = (...a) => { const s = orig(...a); made.push(s); return s }
   let engine
   try {
-    engine = createEngine({ redirector: createStaticRedirector(), issuer: createLeafIssuer(loadCa(createCa())), store: { envelope() {}, flow() {}, failure: (f) => failures.push(f) }, onError: (e) => errors.push(e) })
+    engine = createEngine({ redirector: createStaticRedirector(), issuer: createLeafIssuer(loadCa(createCa())), store: { envelope() {}, flow() {} }, onFailure: (f) => failures.push(f), onError: (e) => errors.push(e) })
     const { port } = await engine.listen({})
     await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('close', r); c.on('error', () => {}) })
     made[0].emit('error', Object.assign(new Error('accept EMFILE'), { code: 'EMFILE' }))
     assert.deepEqual(errors.map((e) => e.code), ['lookup-miss', 'EMFILE'])
     assert.match(errors[0].message, /no original destination for 127\.0\.0\.1:\d+; the steered connection was closed/)
-    assert.deepEqual(failures.map((f) => [f.reason, f.peer.address]), [['lookup-miss', '127.0.0.1']])
+    assert.deepEqual(failures.map((f) => [f.where, f.code, f.peer ? f.peer.address : null]), [['engine', 'lookup-miss', '127.0.0.1'], ['engine', 'EMFILE', null]])
+    assert.match(failures[1].reason, /the engine's listener on 127\.0\.0\.1: accept EMFILE/)
   } finally { net.createServer = orig; if (engine) await engine.close() }
 })
 
-// Union (feat/collector-v1): the daemon's onError AND ws-recorder's failure() record, both under the same code.
+// The daemon's onError AND the failure record, under the same code: loader-down / loader-timeout, never lookup-miss.
 test('engine: a lookup the helper cannot answer is its own failure (not a miss), and the connection is closed (D38)', { timeout: 10_000 }, async () => {
   const errors = [], failures = []
-  const engine = createEngine({ redirector: { lookup: async () => { throw new Error('redirector loader is not running') } }, issuer: createLeafIssuer(loadCa(createCa())), store: { envelope() {}, flow() {}, failure: (f) => failures.push(f) }, onError: (e) => errors.push(e) })
+  let fail = new Error('redirector loader is not running')
+  const engine = createEngine({ redirector: { lookup: async () => { throw fail } }, issuer: createLeafIssuer(loadCa(createCa())), store: { envelope() {}, flow() {} }, onFailure: (f) => failures.push(f), onError: (e) => errors.push(e) })
   try {
     const { port } = await engine.listen({})
     await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('close', r); c.on('error', () => {}) })
-    assert.deepEqual(errors.map((e) => e.code), ['lookup-error'], 'one record, not also a lookup-miss')
+    assert.deepEqual(errors.map((e) => e.code), ['loader-down'], 'one record, not also a lookup-miss')
     assert.match(errors[0].message, /looking up the original destination of 127\.0\.0\.1:\d+ failed \(redirector loader is not running\); the steered connection was closed/)
     assert.equal(engine.stats().lookupMisses, 0)
-    assert.deepEqual(failures.map((f) => [f.reason, f.peer.address, f.error]), [['lookup-error', '127.0.0.1', 'redirector loader is not running']])
+    assert.deepEqual(failures.map((f) => [f.code, f.peer.address, /redirector loader is not running/.test(f.reason)]), [['loader-down', '127.0.0.1', true]])
+    fail = Object.assign(new Error('no answer from the helper in 2000 ms'), { code: 'loader-timeout' })
+    await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('close', r); c.on('error', () => {}) })
+    assert.deepEqual(failures.map((f) => f.code), ['loader-down', 'loader-timeout'])
   } finally { await engine.close() }
 })

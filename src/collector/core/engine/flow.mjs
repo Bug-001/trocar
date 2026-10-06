@@ -49,7 +49,7 @@ export function handleFlow(client, meta, ctx) {
       // recording never breaks teardown, and a record that was not written is not silent (D38)
       let ok = true, why = null
       try { ok = ctx.store.flow(rec) !== false } catch (e) { ok = false; why = e }
-      if (!ok) ctx.failure({ reason: 'flow-write-failed', flow_id: rec.flow_id, error: msgOf(why || ctx.store.lastError || 'the store did not write the flow record') })
+      if (!ok) ctx.failure({ code: 'flow-write-failed', flow_id: rec.flow_id, reason: msgOf(why || ctx.store.lastError || 'the store did not write the flow record') })
       resolveFlow(rec)
     }
     if (client.destroyed) return write()
@@ -58,9 +58,9 @@ export function handleFlow(client, meta, ctx) {
   }
   // An exception inside the engine's own handling (a bug, or daemon-supplied code such as the policy
   // throwing) costs this one flow, never the collector, and is recorded (RFC 4.6 §记录, D38): flows/
-  // error + failures/ engine-error, both sockets closed. Every event handler that routes is guarded.
+  // error + an engine-error failure event, both sockets closed. Every event handler that routes is guarded.
   function internalError(e) {
-    ctx.failure({ reason: 'engine-error', flow_id: rec.flow_id, error: msgOf(e) })
+    ctx.failure({ code: 'engine-error', flow_id: rec.flow_id, reason: msgOf(e) })
     handedOff = true; selfClosed = true
     try { client.destroy() } catch { /* ignore */ }
     if (upstream) { try { upstream.destroy() } catch { /* ignore */ } }
@@ -70,7 +70,7 @@ export function handleFlow(client, meta, ctx) {
   function teardown() {
     // open exchanges carry the connection's first error; a plain 'flow closed' only when there was none
     const why = rec.error ? { type: rec.error.type, message: rec.error.message } : { type: 'ECONNRESET', message: 'flow closed' }
-    if (activeTee) { try { activeTee.abort(why) } catch (e) { ctx.failure({ reason: 'engine-error', flow_id: rec.flow_id, error: `recording stopped: ${msgOf(e)}` }) } }
+    if (activeTee) { try { activeTee.abort(why) } catch (e) { ctx.failure({ code: 'engine-error', flow_id: rec.flow_id, reason: `recording stopped: ${msgOf(e)}` }) } }
     finish()
   }
   function setDecision(inner, isTunnel) {
@@ -111,7 +111,7 @@ export function handleFlow(client, meta, ctx) {
     let tee = activeTee
     // the recording side copy never throws into the forwarding path: a recorder that throws stops
     // recording this connection (recorded, D38) and the bytes keep flowing
-    const copy = (fn) => { if (!tee) return; try { fn(tee) } catch (e) { tee = null; activeTee = null; ctx.failure({ reason: 'engine-error', flow_id: rec.flow_id, error: `recording stopped: ${msgOf(e)}` }) } }
+    const copy = (fn) => { if (!tee) return; try { fn(tee) } catch (e) { tee = null; activeTee = null; ctx.failure({ code: 'engine-error', flow_id: rec.flow_id, reason: `recording stopped: ${msgOf(e)}` }) } }
     cSock.on('data', (d) => { copy((t) => t.fromClient(d)); if (uSock.writable && !uSock.write(d)) cSock.pause() })
     uSock.on('drain', () => cSock.resume())
     uSock.on('data', (d) => { copy((t) => t.fromUpstream(d)); if (cSock.writable && !cSock.write(d)) uSock.pause() })
@@ -207,12 +207,12 @@ export function handleFlow(client, meta, ctx) {
   // credentials) on our own initiative (invariant 1 / D30), so that one flow is closed; (pid, host) is
   // negative at once either way, so later flows (the client's retry) splice without trying.
   //   A leaf we cannot issue (cause 'leaf-error', an internal error) steps aside the same way, but is
-  // not negative-cached (asight's fault, not the host's) and is written to failures/ (D38).
+  // not negative-cached (asight's fault, not the host's) and is a leaf-error failure event (D38).
   function stepAside(upTls, buf, cSock, host, isTunnel, key, cause, why) {
     handedOff = true                                    // the original upstream closes under us; we own teardown
     try { upTls.destroy() } catch { /* ignore */ }
     if (cause === 'upstream-cert') { ctx.negCache.mark(key, { cause, meta, host }); ctx.counters.notCaptured.upstreamCert++ }
-    else { ctx.counters.notCaptured.leafError++; ctx.failure({ reason: 'leaf-error', flow_id: rec.flow_id, host, error: why }) }
+    else { ctx.counters.notCaptured.leafError++; ctx.failure({ code: 'leaf-error', flow_id: rec.flow_id, host, reason: why }) }
     rec.not_captured = cause; rec.reason = why
     if (isTunnel) {
       try { cSock.destroy() } catch { /* ignore */ }

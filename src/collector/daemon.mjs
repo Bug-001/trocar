@@ -141,7 +141,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       issuer, store, upstreamCa,
       policy: (meta, host) => tracker.policy(meta, host),
       isRecording: () => sw.isRecording(), // sampled per request (4.6 §开关): a request after off is never recorded
-      onError: (e) => failure('engine', e, (e && e.fields) || {}), // describe-error carries pid, agent, dst as fields (4.6 §记录)
+      onFailure: (rec) => failure.event(rec), // the engine's and the WebSocket recorder's failures: flows/, folded
+      onError: (e) => log('engine', e), // stderr only: every one of them is also a record through onFailure
     })
     const want = enginePort ?? manifest.engine_port ?? 0
     const { port } = await engine.listen({ port: want, hosts: ['127.0.0.1'] }).catch((e) => {

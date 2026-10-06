@@ -349,13 +349,13 @@ test('client reset before a routing decision is caught: flow finalized with the 
 
 // D38: a capture failure is never silent — and an internal error costs one flow, never
 // the collector (fail-open). RFC 4.6 §引擎 5 / §记录「采集失败不静默」.
-test('a leaf the engine cannot issue steps aside like an unverifiable upstream: the client reaches the real upstream; flows/ and failures/ say leaf-error; nothing negative (D38)', async () => {
+test('a leaf the engine cannot issue steps aside like an unverifiable upstream: the client reaches the real upstream; flows/ says leaf-error (connection row and failure event); nothing negative (D38)', async () => {
   const h = await harness({ upstream: httpsUpstream((s) => s.on('data', () => s.end(RESP))), leafIssuer: { secureContextFor() { throw new Error('cannot sign a leaf') } } })
   const r = await request(h.port, upCa.certPem, REQ)
   await h.close()
   assert.match(r.cert.issuer, /upstream test CA/); assert.equal(r.got, RESP)
   assert.deepEqual([h.flows[0].decision, h.flows[0].not_captured, h.flows[0].reason], ['splice', 'leaf-error', 'cannot sign a leaf'])
-  assert.deepEqual(h.failures.map((f) => [f.reason, f.flow_id, f.host, f.error]), [['leaf-error', h.flows[0].flow_id, 'upstream.test', 'cannot sign a leaf']])
+  assert.deepEqual(h.failures.map((f) => [f.code, f.flow_id, f.host, f.reason]), [['leaf-error', h.flows[0].flow_id, 'upstream.test', 'cannot sign a leaf']])
   assert.equal(h.ctx.negCache.list().length, 0, 'asight\'s own fault, not a property of the host'); assert.equal(h.ctx.counters.notCaptured.leafError, 1)
 })
 
@@ -365,7 +365,7 @@ test('an internal error while routing (here the daemon\'s policy throws) ends th
   await h.close()
   assert.equal(r, 'closed')
   assert.deepEqual([h.flows[0].decision, h.flows[0].error.type, h.flows[0].error.message], ['error', 'engine_error', 'policy bug'])
-  assert.deepEqual(h.failures.map((f) => [f.reason, f.flow_id, f.error]), [['engine-error', h.flows[0].flow_id, 'policy bug']])
+  assert.deepEqual(h.failures.map((f) => [f.code, f.flow_id, f.reason]), [['engine-error', h.flows[0].flow_id, 'policy bug']])
 })
 
 test('a socket error on either side reaches flows/ with its side (D38)', async () => {
@@ -409,12 +409,12 @@ test('flows/ bytes_up / bytes_down == the agent socket\'s own counters: decrypte
 
 // D38 / invariant 4: an HTTP framing error stops recording the rest of the connection — recorded when it
 // happens, and the open exchange says framer_error, not a connection reset it never was.
-test('an upstream framing error is a failures/ framer-error with the flow id; the open exchange is written as framer_error (D38)', async () => {
+test('an upstream framing error is a framer-error failure event with the flow id; the open exchange is written as framer_error (D38)', async () => {
   const bad = 'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nZZ\r\nxx\r\n0\r\n\r\n'
   const h = await harness({ upstream: httpsUpstream((s) => s.on('data', () => s.end(bad))) })
   const r = await request(h.port, asightCa.certPem, REQ)
   await h.close()
   assert.equal(r.got, bad, 'forwarded untouched')
-  assert.deepEqual(h.failures.map((f) => [f.reason, f.flow_id, f.side]), [['framer-error', h.flows[0].flow_id, 'response']])
+  assert.deepEqual(h.failures.map((f) => [f.code, f.flow_id, f.side]), [['framer-error', h.flows[0].flow_id, 'response']])
   assert.deepEqual(h.envelopes.map((e) => [e.error, e.resp.error?.type]), [[true, 'framer_error']])
 })

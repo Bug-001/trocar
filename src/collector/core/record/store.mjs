@@ -53,7 +53,6 @@ export function createRecordStore({ root, onError = () => {}, now = () => new Da
     flow(rec) { return write((d) => path.join(root, 'flows', `${d}.ndjson`), rec) }, // false = not written (D38: the engine records that)
     audit(rec) { write((d) => path.join(root, 'audit', `${d}.ndjson`), rec) },
     replay(env) { write((d) => path.join(root, 'replays', `${d}.ndjson`), env) },
-    failure(rec) { return write((d) => path.join(root, 'failures', `${d}.ndjson`), rec) }, // capture failures, never silent (RFC 4.6 §记录)
     get lastError() { return lastError },
     get errors() { return errors },
     get openFiles() { return fds.size },

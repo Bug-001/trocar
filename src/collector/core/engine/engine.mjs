@@ -12,7 +12,7 @@ import { createUpstreamTrust, systemRoots } from '../tls/roots.mjs'
 
 // upstreamCa: extra CAs the engine trusts upstream (test seam); systemCa: stands in for the OS store
 // (tests; undefined = read it): PEM text / array, or a systemRoots()-shaped {certs, errors}. The upstream trust set is built once (RFC 4.6 §引擎 5, tls/roots.mjs).
-export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, describe = () => ({}), onError = () => {} }) {
+export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, describe = () => ({}), onError = () => {}, onFailure = null }) {
   const counters = { active: 0, total: 0, decrypted: 0, spliced: 0, lookupMisses: 0, notCaptured: { h2: 0, httpsProxy: 0, upstreamCert: 0, negative: 0, leafError: 0 } }
   const servers = []
   const active = new Set()
@@ -21,12 +21,15 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   const negCache = createNegativeCache()
   let flowSeq = 0
   const defaultConnect = (dst) => net.connect(dst.port, dst.address)
-  // A capture failure is never silent (D38): written to failures/ when it happens. A
-  // store without failure() is a wiring fault, reported like a failed write (via onError).
+  // A capture failure is never silent (D38, 4.6 §记录): one shaped record {event:'failure', where:'engine', code,
+  // reason, …} the moment it happens, handed to onFailure — the daemon's failure recorder, which writes it to flows/
+  // with its own descriptor, folded per where + code (core/events.mjs). The WebSocket recorder's go the same way
+  // (where:'ws'). No sink wired is a wiring fault, reported through onError (stderr) instead of being dropped.
   function failure(rec) {
+    const r = { event: 'failure', where: 'engine', ...rec }
     try {
-      if (typeof store.failure !== 'function') throw new Error(`capture failure not recorded (the store has no failure()): ${rec.reason}`)
-      store.failure({ ts: new Date().toISOString(), ...rec })
+      if (typeof onFailure !== 'function') throw Object.assign(new Error(`capture failure with nowhere to be recorded: ${r.where} ${r.code}: ${r.reason}`), { code: r.code })
+      onFailure(r)
     } catch (e) { onError(e) }
   }
   const upstreamTrust = createUpstreamTrust({
@@ -37,10 +40,10 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   })
   // a trust-store source that is there but unreadable, or no OS store at all: the engine still verifies
   // against what it has, but upstreams signed by a CA only the missing part holds will step aside (D38)
-  for (const error of upstreamTrust.errors) { onError(new Error(error)); failure({ reason: 'trust-store-error', error }) }
+  for (const error of upstreamTrust.errors) { onError(new Error(error)); failure({ code: 'trust-store-error', reason: error }) }
   if (upstreamTrust.missingSystem) {
     const error = 'no OS trust store found: upstreams signed by a system-only CA will step aside'
-    onError(new Error(error)); failure({ reason: 'system-roots-unavailable', error })
+    onError(new Error(error)); failure({ code: 'system-roots-unavailable', reason: error })
   }
 
   async function onConnection(socket) {
@@ -53,27 +56,28 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     const peer = { address: socket.remoteAddress, port: socket.remotePort }
     let meta = null
     try { meta = await redirector.lookup(peer) }
-    catch (e) { // the helper could not be asked: not a miss, its own record (D38) — in failures/ and to the daemon
-      const code = (e && e.code) || 'lookup-error', error = String((e && e.message) || e)
+    catch (e) { // the helper could not be asked: not a miss (4.6 §引擎 1, D38) — loader-timeout, or loader-down with its error
+      const code = e && e.code === 'loader-timeout' ? 'loader-timeout' : 'loader-down'
+      const reason = `looking up the original destination of ${peer.address}:${peer.port} failed (${String((e && e.message) || e)}); the steered connection was closed`
       socket.destroy()
-      failure({ reason: code, peer, error })
-      onError(Object.assign(new Error(`looking up the original destination of ${peer.address}:${peer.port} failed (${error}); the steered connection was closed`), { code }))
+      failure({ code, peer, reason })
+      onError(Object.assign(new Error(reason), { code }))
       return
     }
-    // RFC 4.6 §引擎 1: no envelope, no flows/ — but the connection is closed, so it is not silent (D38)
-    // ...and the daemon hears it too (onError, code 'lookup-miss'), so its own flows/ record and status see it
+    // RFC 4.6 §引擎 1: no envelope, no connection row — but the connection is closed, so it is not silent (D38)
     if (!meta) {
       counters.lookupMisses++
-      failure({ reason: 'lookup-miss', peer })
+      const reason = `no original destination for ${peer.address}:${peer.port}; the steered connection was closed`
+      failure({ code: 'lookup-miss', peer, reason })
       socket.destroy()
-      onError(Object.assign(new Error(`no original destination for ${peer.address}:${peer.port}; the steered connection was closed`), { code: 'lookup-miss' }))
+      onError(Object.assign(new Error(reason), { code: 'lookup-miss' }))
       return
     }
     // FlowExtras from the daemon. A throw must not cost the agent its connection: the flow goes on with
     // none (fail-open: no WS patterns → fallback cut), and the throw is recorded (D38).
     try { meta = { ...meta, ...(describe(meta) || {}) } } catch (e) {
       onError(e)
-      failure({ reason: 'describe-error', pid: meta.pid ?? null, agent: meta.agent ?? null, dst: meta.dst, error: String((e && e.message) || e) })
+      failure({ code: 'describe-error', pid: meta.pid ?? null, agent: meta.agent ?? null, dst: meta.dst, reason: String((e && e.message) || e) })
     }
     counters.active++
     const ctx = {
@@ -83,13 +87,13 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     }
     let started
     try { started = handleFlow(socket, meta, ctx) } catch (e) { // a synchronous throw (e.g. net.connect on a bad port): this connection only
-      onError(e); failure({ reason: 'engine-error', pid: meta.pid ?? null, agent: meta.agent ?? null, dst: meta.dst, error: String((e && e.message) || e) })
+      onError(e); failure({ code: 'engine-error', pid: meta.pid ?? null, agent: meta.agent ?? null, dst: meta.dst, reason: String((e && e.message) || e) })
       socket.destroy(); counters.active--; return
     }
     const done = started.then((rec) => {
       if (rec && rec.decision === 'decrypt') counters.decrypted++
       else if (rec && rec.decision === 'splice') counters.spliced++
-    }).catch((e) => onError(e)).finally(() => { active.delete(done); counters.active-- })
+    }).catch((e) => { failure({ code: 'engine-error', pid: meta.pid ?? null, dst: meta.dst, reason: `handling the connection failed: ${String((e && e.message) || e)}` }); onError(e) }).finally(() => { active.delete(done); counters.active-- })
     active.add(done)
     socket.removeListener('error', duringLookup) // handleFlow's own listener has taken over
   }
@@ -107,7 +111,8 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
         srv.once('error', reject)
         srv.listen(boundPort, host, () => {
           srv.removeListener('error', reject)
-          srv.on('error', onError) // after listen (e.g. EMFILE on accept): reported, never an uncaught exception
+          // after listen (e.g. EMFILE on accept): recorded and reported, never an uncaught exception
+          srv.on('error', (e) => { failure({ code: (e && e.code) || 'engine-error', reason: `the engine's listener on ${host}: ${String((e && e.message) || e)}` }); onError(e) })
           boundPort = srv.address().port; servers.push(srv); bindNext()
         })
       }

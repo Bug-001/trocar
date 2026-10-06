@@ -22,10 +22,11 @@ const errOf = (e) => (e ? { type: e.code || e.type || 'error', message: String(e
 /** createExchangeTee({flow, recordStore, isRecording, maxBodyBytes, newId, wsTerminal, onFailure})
  *   → {fromClient, fromUpstream, clientEnded(err?), upstreamEnded(err?), abort(error), wsSummary(), stats}
  * wsTerminal = FlowExtras.wsTerminal (harness data, Plan 3c §2); wsSummary() = the ws recorder's summary
- * for flows/ once the connection switched to WebSocket, else null. onFailure(record) takes the capture
- * failures (RFC 4.6 §记录, D38): a framing error stops recording the rest of the connection. */
-export function createExchangeTee({ flow, recordStore, isRecording = () => true, maxBodyBytes = 64 << 20, newId, wsTerminal = null,
-  onFailure = (r) => { if (recordStore.failure) recordStore.failure({ ts: new Date().toISOString(), ...r }) } }) {
+ * for flows/ once the connection switched to WebSocket, else null. onFailure({code, reason, …}) takes the
+ * capture failures (RFC 4.6 §记录, D38) — the engine's failure(), which writes them to flows/; the
+ * WebSocket recorder gets the same sink. A framing error stops recording the rest of the connection. */
+export const noFailureSink = (r) => { throw Object.assign(new Error(`capture failure with nowhere to be recorded: ${r.code}: ${r.reason}`), { code: r.code }) } // a wiring fault: loud, never dropped
+export function createExchangeTee({ flow, recordStore, isRecording = () => true, maxBodyBytes = 64 << 20, newId, wsTerminal = null, onFailure = noFailureSink }) {
   const stats = { exchanges: 0, recorded: 0 }
   const run = defaultRunTag()
   let idSeq = 0
@@ -68,7 +69,7 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
     onUpgrade() {},
     onError(e) { // body never completes; no later request on this connection is framed
       if (curReq) { curReq.partial = 'framer-error'; curReq = null }
-      onFailure({ reason: 'framer-error', flow_id: flow.id, side: 'request', error: e.message })
+      onFailure({ code: 'framer-error', flow_id: flow.id, side: 'request', reason: e.message })
     },
   })
 
@@ -89,13 +90,13 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
       // RFC 4.6 §引擎 6: after a WebSocket 101 the raw bytes keep flowing; the side copy goes to ws/. The
       // upgrade is no envelope of its own: its seq is the first call's (RFC 4.6 §记录).
       pending.shift()
-      ws = createWsRecorder({ flow, upgrade: { req: ex.req, resp: curResp }, seqStart: ex.seq, genId, recordStore, isRecording, terminal: wsTerminal })
+      ws = createWsRecorder({ flow, upgrade: { req: ex.req, resp: curResp }, seqStart: ex.seq, genId, recordStore, isRecording, terminal: wsTerminal, onFailure })
       curResp = null
       if (early.length) ws.fromClient(early) // frames sent before the 101 arrived (RFC 6455 says wait; some don't)
       if (rest && rest.length) ws.fromUpstream(rest)
     },
     // no later response is framed: the open exchanges end here, labelled with the cause (invariant 4)
-    onError(e) { onFailure({ reason: 'framer-error', flow_id: flow.id, side: 'response', error: e.message }); abort({ type: 'framer_error', message: e.message }) },
+    onError(e) { onFailure({ code: 'framer-error', flow_id: flow.id, side: 'response', reason: e.message }); abort({ type: 'framer_error', message: e.message }) },
   })
 
   function respPartOf(resp, aborted) {
