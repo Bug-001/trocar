@@ -83,3 +83,16 @@ test('adapter: helper and heartbeat errors are forwarded for the daemon to recor
     assert.deepEqual(got.sort(), [['heartbeat', 'timeout'], ['helper', 'ringbuf poll failed']])
   } finally { await r.close(); p.done() }
 })
+
+// D-22 (4.6 OPEN 登出后): whether logind keeps the daemon after logout, said in daemon-start — never guessed.
+test('adapter: linger() is true with the logind marker, false without, null when it cannot be told', async () => {
+  const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-linger-'))
+  try {
+    const r = (o) => createLinuxRedirector({ makeClient: () => null, procRoot: dir, uid: 1000, lingerDir: dir, ...o })
+    assert.equal(r({ userName: () => 'u' }).linger(), false)
+    fs.writeFileSync(path.join(dir, 'u'), '')
+    assert.equal(r({ userName: () => 'u' }).linger(), true)
+    assert.equal(r({ lingerDir: path.join(dir, 'u', 'x'), userName: () => 'u' }).linger(), null, 'ENOTDIR: unknown, not "off"')
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})

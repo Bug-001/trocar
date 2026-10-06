@@ -8,10 +8,13 @@
 //   - directCount(pid): the agent's connections still going direct (§开关语义「为什么开了还没采到」).
 // No harness names, no policy: the daemon wires this to core.
 import { EventEmitter } from 'node:events'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { REDIRECTOR_PROTO } from './redirector-client.mjs'
 import { readFacts, listPids, readStatus, countDirectConnections } from './procinfo.mjs'
 
-export function createLinuxRedirector({ makeClient, procRoot = '/proc', uid = process.getuid() }) {
+export function createLinuxRedirector({ makeClient, procRoot = '/proc', uid = process.getuid(), lingerDir = '/var/lib/systemd/linger', userName = () => os.userInfo().username }) {
   const ev = new EventEmitter()
   let client = null
   let enginePort = null
@@ -53,6 +56,8 @@ export function createLinuxRedirector({ makeClient, procRoot = '/proc', uid = pr
     },
     directCount: (pid) => countDirectConnections(pid, { root: procRoot, enginePort }),
     helperInfo: () => (client ? client.loaderInfo : { pid: null, proto: null, build: null }),
+    // Whether logind keeps this user's daemon after the last logout (4.6 OPEN 登出后): true / false, null = unknown.
+    linger() { try { fs.statSync(path.join(lingerDir, userName())); return true } catch (e) { return e && e.code === 'ENOENT' ? false : null } },
     expectedProto: REDIRECTOR_PROTO,
   })
 }

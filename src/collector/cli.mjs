@@ -2,12 +2,13 @@
 // daemon in the foreground until SIGTERM/SIGINT; on/off/status only talk to its control socket
 // ($XDG_RUNTIME_DIR/asight/collector.sock); install/uninstall are the per-user half (no sudo); setup-helper is the
 // machine-wide half (sudo, once). Exit codes: 0 ok · 1 the kernel did not reach the asked state, or the step
-// failed · 2 usage / no runtime dir · 3 no daemon answers.
+// failed (for `start`: refused, or a step of the stop failed) · 2 usage / no runtime dir · 3 no daemon answers ·
+// 70 the daemon crashed (an uncaught exception, recorded as `crash` first).
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { controlSocketPath, controlRequest } from './core/control.mjs'
-import { readRecentFailures } from './core/events.mjs'
+import { readRecentFailures, appendEvent } from './core/events.mjs'
 import { UNTIL_TEXT } from './core/codes.mjs'
 import { lockState } from '../health/read.mjs'
 import { collectorHome } from '../paths.mjs'
@@ -72,7 +73,24 @@ export function formatPlan(p) {
     ...(p.watch || []).map((w) => `  ${w.harness} itself may write ${w.path} (${w.why}); uninstall reports it, never deletes it`)].join('\n')
 }
 
-const waitForSignal = () => new Promise((resolve) => { process.once('SIGTERM', resolve); process.once('SIGINT', resolve) })
+// SIGHUP (the terminal closed, SSH dropped, logout) and SIGQUIT stop it cleanly like SIGTERM / SIGINT — Node's default
+// for SIGHUP is to exit at once, leaving the lock behind and the next start recording a crash that never was (D-27).
+export const STOP_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT']
+const waitForSignal = () => new Promise((resolve) => {
+  const on = (sig) => { for (const s of STOP_SIGNALS) process.removeListener(s, handlers[s]); resolve(sig) }
+  const handlers = Object.fromEntries(STOP_SIGNALS.map((s) => [s, () => on(s)]))
+  for (const s of STOP_SIGNALS) process.once(s, handlers[s])
+})
+// An uncaught exception or rejection in the daemon: one `crash` record with the first line of the stack, then a
+// non-zero exit — the next start's "no clean stop" then has a reason on disk (D-5).
+function onCrash(dir, err, exit) {
+  return (e) => {
+    const first = String((e && e.stack) || e).split('\n').slice(0, 2).join(' | ')
+    try { appendEvent(dir, { event: 'failure', where: 'daemon', code: 'crash', reason: first }) } catch (w) { err(`[events] ${String((w && w.message) || w)}`) }
+    err(`asight collector: crashed: ${first}`)
+    exit(70)
+  }
+}
 const loadDaemon = () => import('./daemon.mjs')
 const loadInstall = () => import('./install.mjs')
 
@@ -102,16 +120,21 @@ export async function runSetupHelper(argv, { arch = null, out = (s) => console.l
   } catch (e) { err(e.message); return 1 }
 }
 
-export async function runCollector(argv, { env = process.env, home = os.homedir(), out = (s) => console.log(s), err = (s) => console.error(s), request = controlRequest, daemon = null, install = null, waitForStop = waitForSignal, script = process.argv[1] } = {}) {
+export async function runCollector(argv, { env = process.env, home = os.homedir(), out = (s) => console.log(s), err = (s) => console.error(s), request = controlRequest, daemon = null, install = null, waitForStop = waitForSignal, script = process.argv[1], proc = process, exit = (c) => process.exit(c) } = {}) {
   const [verb, ...rest] = argv
   const D = () => daemon || loadDaemon()
   const I = () => install || loadInstall()
   if (verb === 'start') {
+    const dir = collectorHome(path.join(home, '.asight'))
+    const crash = onCrash(dir, err, exit)
+    proc.on('uncaughtException', crash); proc.on('unhandledRejection', crash)
+    const foreground = !env.INVOCATION_ID && !!(proc.stdin && proc.stdin.isTTY) // not under systemd, at a terminal: closing it stops the daemon
     let d
-    try { d = await (await D()).startDaemon({ env, log: (where, e) => err(`[${where}] ${e && e.message ? e.message : e}`) }) } catch (e) { err(`asight collector start: ${e.message}`); return 1 }
+    try { d = await (await D()).startDaemon({ dir, env, foreground, log: (where, e) => err(`[${where}] ${e && e.message ? e.message : e}`) }) } catch (e) { err(`asight collector start: ${e.message}`); return 1 }
     out(`asight collector: engine 127.0.0.1:${d.port}, control ${d.socketPath}`)
-    await waitForStop()
-    await d.stop()
+    const signal = await waitForStop()
+    const r = await d.stop({ signal: typeof signal === 'string' ? signal : null })
+    if (r && r.failed && r.failed.length) { err(`asight collector: stopped, but ${r.failed.join(', ')} failed while stopping (recorded in flows/)`); return 1 }
     return 0
   }
   if (verb === 'install' || verb === 'uninstall') {

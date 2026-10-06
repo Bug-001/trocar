@@ -426,9 +426,11 @@ test('daemon: a step that fails while stopping is recorded with its reason, and 
   try {
     const realClose = d.redirector.close.bind(d.redirector)
     d.redirector.close = async () => { await realClose(); throw new Error('the helper did not exit in time') }
-    await d.stop()
+    const r = await d.stop()
+    assert.deepEqual(r.failed, ['helper'], 'stop says which step failed, so `collector start` exits non-zero')
     const f = flowsOf(s).find((x) => x.event === 'failure' && x.where === 'helper')
     assert.match(f && f.reason, /^while stopping: the helper did not exit in time$/)
+    assert.deepEqual(flowsOf(s).filter((x) => x.event === 'daemon-stop').map((x) => x.failed), [['helper']])
     assert.ok(!fs.existsSync(path.join(s.collector, 'lock')), 'the later steps ran: the lock is gone')
     assert.ok(!fs.existsSync(s.sock), 'and the control socket')
   } finally { p.done(); s.done() }
@@ -585,4 +587,41 @@ test('daemon: the lock carries pid, start time and boot id and is refreshed whil
   } finally { await d.stop(); p.done() }
   assert.equal(fs.existsSync(file), false, 'a clean stop removes it')
   s.done()
+})
+
+// D-24 / D-27 / W-4 / D-22: the daemon's own lifecycle is on disk — what started (with its identity, version, whether
+// it runs in a terminal, its own NODE_EXTRA_CA_CERTS, linger) and what stopped it (SIGHUP = the terminal closed).
+test('daemon: daemon-start carries its identity, version, foreground, upstream_ca and linger; daemon-stop the signal; the next start sees a clean stop (D-24, D-27)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const lingerDir = path.join(s.root, 'linger'); fs.mkdirSync(lingerDir); fs.writeFileSync(path.join(lingerDir, os.userInfo().username), '')
+  const { arch: base } = fakeArch(p)
+  const withLinger = { os: 'linux', createRedirector: (o) => { const r = base.createRedirector(o); r.linger = () => fs.existsSync(path.join(lingerDir, os.userInfo().username)); return r } }
+  const opts = { dir: s.collector, socketPath: s.sock, arch: withLinger, harnesses: [cc], foreground: true, env: { ...process.env, NODE_EXTRA_CA_CERTS: '/etc/relay-ca.pem' }, identity: () => ({ start_time: '42', boot_id: 'b-9' }) }
+  let d = await startDaemon(opts)
+  await d.stop({ signal: 'SIGHUP' })
+  d = await startDaemon({ ...opts, foreground: false, env: { ...process.env, NODE_EXTRA_CA_CERTS: '' } })
+  try {
+    const life = flowsOf(s).filter((f) => f.event === 'daemon-start' || f.event === 'daemon-stop')
+    assert.deepEqual(life.map((f) => [f.event, f.pid, f.start_time ?? null, f.boot_id ?? null, f.version ?? null, f.foreground ?? null, f.upstream_ca ?? null, f.linger ?? null, f.signal ?? null]),
+      [['daemon-start', process.pid, '42', 'b-9', '0.0.0', true, '/etc/relay-ca.pem', true, null], ['daemon-stop', process.pid, null, null, null, null, null, null, 'SIGHUP'], ['daemon-start', process.pid, '42', 'b-9', '0.0.0', false, null, true, null]])
+    assert.equal(flowsOf(s).filter((f) => f.code === 'unclean-stop').length, 0, 'a SIGHUP stop is a clean stop')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+// D-31: started as root (sudo -E), it refuses before writing anything else, and the refusal it records in the user's
+// collector directory is given back to the directory's owner — no root-owned file the user's daemon cannot append to.
+test('daemon: started as root it refuses (root-refused), and the record it leaves is chowned to the collector directory owner (D-31)', async () => {
+  const s = sandbox()
+  await install(s)
+  const chowned = []
+  await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch: { os: 'linux', createRedirector: () => { throw new Error('must not get this far') } }, harnesses: [cc], getuid: () => 0, chown: (f, u, g) => chowned.push([path.relative(s.collector, f), u, g]) }), /not as root/)
+  try {
+    const rec = flowsOf(s).find((f) => f.where === 'start')
+    assert.deepEqual([rec.code, /not as root/.test(rec.reason)], ['root-refused', true])
+    const { uid, gid } = fs.statSync(s.collector)
+    assert.deepEqual(chowned.map(([f]) => f).sort(), ['flows', path.join('flows', fs.readdirSync(path.join(s.collector, 'flows'))[0])])
+    assert.ok(chowned.every(([, u, g]) => u === uid && g === gid))
+    assert.equal(fs.existsSync(path.join(s.collector, 'lock')), false, 'nothing else written')
+  } finally { s.done() }
 })

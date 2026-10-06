@@ -39,6 +39,7 @@ export async function loadParts({ arch = null, harnesses = null, env = process.e
 
 export const collectorPaths = (dir = collectorHome(asightHome())) => ({ dir, caDir: path.join(dir, 'ca'), state: path.join(dir, 'state.json'), lock: path.join(dir, 'lock'), markers: path.join(dir, 'run', 'trust') })
 const errText = (e) => String((e && e.message) || e)
+const VERSION = (() => { try { return JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version } catch { return null } })() // null: said as unknown in daemon-start
 // Every failure record carries a code (asight's name from src/health/codes.mjs, or the errno): the fold key (D-3).
 const coded = (e, code) => Object.assign(new Error(errText(e)), { code: (e && e.code) || code })
 
@@ -47,14 +48,32 @@ const coded = (e, code) => Object.assign(new Error(errText(e)), { code: (e && e.
 // Every failure this daemon owns leaves a durable record with a reason in flows/ and shows in status (D38, user
 // 2026-10-06): core/events.mjs createFailureRecorder (one line per place and error code per 10 s, the folded count
 // written when the window closes or at stop).
+// getuid / chown: test seams for the root refusal (D-31).
 export async function startDaemon(opts = {}) {
   const dir = opts.dir || collectorHome(asightHome())
   const log = opts.log || (() => {})
-  try { return await runDaemon({ ...opts, dir, log }) } catch (e) {
+  const getuid = opts.getuid || (() => (typeof process.getuid === 'function' ? process.getuid() : -1))
+  try {
+    // as root it would write root-owned 0600 files into the user's flows/ and captures, which the user's own daemon
+    // then cannot append to (D36, D-31): refused before anything is written
+    if (getuid() === 0) throw Object.assign(new Error('asight collector start: run it as the user whose agents you capture, not as root (D36)'), { code: 'root-refused' })
+    return await runDaemon({ ...opts, dir, log })
+  } catch (e) {
     // the refusal is recorded where status finds it — unless nothing is installed here (no directory to write into)
-    if (fs.existsSync(dir)) { try { appendEvent(dir, { event: 'failure', where: 'start', code: (e && e.code) || 'start-failed', reason: errText(e) }) } catch (w) { log('events', w) } }
+    if (fs.existsSync(dir)) {
+      try {
+        appendEvent(dir, { event: 'failure', where: 'start', code: (e && e.code) || 'start-failed', reason: errText(e) })
+        if (getuid() === 0) ownedLikeDir(dir, opts.chown || fs.chownSync) // root: the record must not become a root-owned file
+      } catch (w) { log('events', w) }
+    }
     throw e
   }
+}
+function ownedLikeDir(dir, chown) {
+  const { uid, gid } = fs.statSync(dir)
+  const flows = path.join(dir, 'flows')
+  chown(flows, uid, gid)
+  for (const n of fs.readdirSync(flows)) chown(path.join(flows, n), uid, gid)
 }
 
 // The recent failure records for status, with what could not be read (D-2: an unreadable flows/ is never "none").
@@ -63,7 +82,7 @@ export function failuresOnDisk(dir) {
   return { failures: r.list, ...(r.errors.length || r.truncated ? { failures_read: { errors: r.errors, truncated: r.truncated } } : {}) }
 }
 
-async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = procIdentity, lockRefreshMs = 1000 }) {
+async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = procIdentity, lockRefreshMs = 1000, foreground = false }) {
   const P = collectorPaths(dir)
   const failure = createFailureRecorder(P.dir, { log })
   let manifest
@@ -200,6 +219,10 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     fs.renameSync(`${P.lock}.tmp-${process.pid}`, P.lock)
     const lockTimer = setInterval(() => { try { const t = new Date(); fs.utimesSync(P.lock, t, t) } catch (e) { failure('daemon', coded(new Error(`the lock ${P.lock} could not be refreshed (${errText(e)}); readers will judge this daemon unresponsive`), e && e.code ? e.code : 'record-error')) } }, lockRefreshMs)
     lockTimer.unref()
+    // lifecycle (D-24): readers fold conditions from the last daemon-start; upstream_ca = the daemon's own
+    // NODE_EXTRA_CA_CERTS (W-4: relays with a private CA rely on it), linger = whether logout ends this daemon
+    failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: VERSION, foreground: !!foreground,
+      upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: typeof redirector.linger === 'function' ? redirector.linger() : null })
     tracker.start()
     await tracker.rescan()
     const applyPolicy = () => { const st = sw.state(); tracker.setPolicy({ mode: st.policy, extraHosts: st.extra_hosts }) }
@@ -226,19 +249,24 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     })
     markReady()
 
-    async function stop() {
+    // stop({signal}) — signal: what stopped it (SIGTERM, SIGINT, SIGHUP = the terminal closed or the user logged out,
+    // SIGQUIT), else `reason`. Returns {failed: [where…]}: a step that failed makes `collector start` exit non-zero.
+    async function stop({ signal = null, reason = null } = {}) {
       clearInterval(lockTimer)
       failure.flush() // folded counts are written, not lost
+      const failed = []
       // every step runs; one that fails is recorded with its reason, never thrown past the rest (D38)
-      const step = async (where, fn) => { try { await fn() } catch (e) { failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: (e && e.code) || 'stop-failed' })) } }
+      const step = async (where, fn) => { try { await fn() } catch (e) { failed.push(where); failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: (e && e.code) || 'stop-failed' })) } }
       await step('control', () => control.close())
       clearInterval(bundleTimer)
       tracker.stop()
       await step('helper', () => redirector.close()) // the helper exits; its unpinned links vanish; new connections go direct
       await step('engine', () => Promise.race([engine.close(), new Promise((r) => setTimeout(r, 2000).unref())]))
       await step('record', () => store.close())
-      fs.rmSync(P.lock, { force: true })
       failure.flush()
+      failure.write({ event: 'daemon-stop', pid: process.pid, ...(signal ? { signal } : { reason: reason || 'stop requested' }), ...(failed.length ? { failed } : {}) })
+      fs.rmSync(P.lock, { force: true }) // last: a lock still there at the next start means this stop never finished
+      return { failed }
     }
     return { port, socketPath: sock, paths: P, stop, status, tracker, engine, redirector, switch: sw }
   } catch (e) {

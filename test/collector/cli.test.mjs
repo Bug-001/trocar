@@ -60,6 +60,34 @@ test('cli: with no daemon answering (not running, no runtime dir, stuck) status 
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })
 
+// D-27 / D-5 / stop exit code: `start` waits for SIGTERM, SIGINT, SIGHUP or SIGQUIT and tells stop() which; a stop
+// with a failed step exits 1; an uncaught exception is one `crash` record, then exit 70.
+test('cli: start stops on SIGHUP like SIGTERM, passes the signal to stop, exits 1 when a stop step failed, and records a crash (D-5, D-27)', async () => {
+  const { EventEmitter } = await import('node:events')
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-cli-start-'))
+  try {
+    const stops = []
+    let failed = []
+    const daemon = { startDaemon: async (o) => ({ port: 1, socketPath: '/s', foreground: o.foreground, stop: async (x) => { stops.push(x); return { failed } } }) }
+    const proc = new EventEmitter()
+    let t = io()
+    const running = runCollector(['start'], { home, env: {}, daemon, proc, exit: () => {}, ...t }) // the real signal wait
+    await new Promise((r) => setImmediate(r))
+    process.emit('SIGHUP')
+    assert.equal(await running, 0)
+    assert.deepEqual(stops, [{ signal: 'SIGHUP' }])
+    failed = ['helper']
+    t = io(); assert.equal(await runCollector(['start'], { home, env: {}, daemon, proc, exit: () => {}, waitForStop: async () => 'SIGTERM', ...t }), 1, 'a stop step failed: non-zero')
+    assert.match(t.e.join('\n'), /helper failed while stopping/)
+    const exits = []
+    t = io(); await runCollector(['start'], { home, env: {}, daemon, proc: (proc.removeAllListeners(), proc), exit: (c) => exits.push(c), waitForStop: async () => 'SIGTERM', ...t })
+    proc.emit('uncaughtException', new TypeError('boom in a timer'))
+    assert.deepEqual(exits, [70])
+    const f = JSON.parse(fs.readFileSync(path.join(home, '.asight', 'collector', 'flows', fs.readdirSync(path.join(home, '.asight', 'collector', 'flows'))[0]), 'utf8').trim())
+    assert.deepEqual([f.where, f.code, /TypeError: boom in a timer/.test(f.reason)], ['daemon', 'crash', true])
+  } finally { fs.rmSync(home, { recursive: true, force: true }) }
+})
+
 test('cli: install / uninstall hand the descriptors, OS and process table from daemon.loadParts to install.mjs', async () => {
   const seen = []
   const U = { UNIT_NAME: 'asight-collector.service', unitPath: (h) => `${h}/.config/systemd/user/asight-collector.service`, wantsLink: (h) => `${h}/.config/systemd/user/default.target.wants/asight-collector.service`, unitText: ({ node, script, env }) => `${JSON.stringify(env)} ExecStart="${node}" "${script}" collector start`, systemctl: () => ({ code: 0 }), removeWantsLinks: () => [] }
