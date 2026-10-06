@@ -11,7 +11,7 @@
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { asightHome } from '../paths.mjs'
-import { readFlows, readDay, foldFlows, pick, groupKey, WINDOW_MS, HealthUnreadable } from './flows.mjs'
+import { readFlows, readDay, foldFlows, pick, groupKey, lastRun, WINDOW_MS, HealthUnreadable } from './flows.mjs'
 import { isFailure } from './codes.mjs'
 
 export { HealthUnreadable }
@@ -108,8 +108,7 @@ function notesOf(dir, fold, m, fs, read) {
     const days = [iso.slice(0, 10), new Date(Date.parse(iso) + 86400e3).toISOString().slice(0, 10)]
     const out = []
     for (const d of days) { const r = readDay({ dir, date: d, fs }); read.errors.push(...r.errors); out.push(...r.records.filter((x) => x.event === event && Date.parse(x.ts) >= Date.parse(iso) - 60e3)) }
-    const lastT = out.length ? Date.parse(out[out.length - 1].ts) : 0
-    return out.filter((n) => Date.parse(n.ts) >= lastT - 60e3).map(pick)
+    return lastRun(out.map(pick))
   }
   return {
     install: fold.install.install.length ? fold.install.install : at(m && m.complete ? m.created_at : null, 'install-note'),

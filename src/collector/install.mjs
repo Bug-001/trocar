@@ -52,9 +52,19 @@ function refuseRoot(verb) {
 // nothing at all, not even the manifest.
 // A failed install or uninstall step is recorded where status finds it (D38) — when the collector directory exists;
 // otherwise (nothing installed, or refused as root) the command's own output is the only report.
+// `run` (this run's start time) is on every line one install or uninstall writes, and each run ends with one
+// `kind:'result'` note — a failed one too — so the board's "last install / uninstall" is the newest run's lines,
+// never an older run's warnings after a clean run (4.6 安装 / 卸载不静默, review D1-5).
 async function recorded(dir, where, fn) {
-  try { return await fn() } catch (e) {
-    try { if (fs.existsSync(dir)) appendEvent(dir, { event: 'failure', where, code: (e && e.code) || `${where}-error`, reason: String((e && e.message) || e) }) } catch (w) {
+  const run = new Date().toISOString()
+  try { return await fn(run) } catch (e) {
+    const reason = String((e && e.message) || e)
+    try {
+      if (fs.existsSync(dir)) {
+        appendEvent(dir, { event: 'failure', where, code: (e && e.code) || `${where}-error`, reason, run })
+        appendEvent(dir, { event: `${where}-note`, kind: 'result', outcome: 'failed', run, reason: `${where} failed: ${reason}` })
+      }
+    } catch (w) {
       if (e && typeof e === 'object') e.message += ` (and recording this failure failed: ${String((w && w.message) || w)})` // never mask the original
     }
     throw e
@@ -64,7 +74,7 @@ async function recorded(dir, where, fn) {
 export async function installCollector({ home = os.homedir(), ...opts } = {}) {
   refuseRoot('install')
   const dir = collectorHome(path.join(home, '.asight')) // collectorHome takes the asight home
-  return recorded(dir, 'install', () => install(dir, { home, ...opts }))
+  return recorded(dir, 'install', (run) => install(dir, { home, ...opts, run }))
 }
 
 // The roots a combined bundle starts from (4.6 「合并包」): Node's own, and the OS bundle the arch names.
@@ -87,7 +97,7 @@ export function daemonEnv(env, dir) {
 
 // unit: the arch's per-user autostart unit as { path, links, text(env), enable, disable, stop, removeWants } (null: none /
 // --no-unit); links = what enabling it creates.
-async function install(dir, { home, env = process.env, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), freePort = freeEnginePort, onPlan = () => {}, osRootsFile = null, roots = null, unit = null }) {
+async function install(dir, { home, env = process.env, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), freePort = freeEnginePort, onPlan = () => {}, osRootsFile = null, roots = null, unit = null, run = null }) {
   const prior = readManifest(dir)
   if (prior && prior.complete) {
     // installed — but "already installed" only when its CA is usable (D-4): a CA that cannot be read or used is said
@@ -162,13 +172,15 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
   }
   // 4.6 安装 / 卸载不静默 (D-28): everything the command prints is also an install-note in flows/, for the board, where
   // status finds it; a line that cannot be written is added to the printed notes, never dropped, and never fails the install
-  const put = (rec) => { try { appendEvent(dir, rec) } catch (w) { plan.notes.push(`not recorded (${String((w && w.message) || w)}): ${rec.reason}`) } }
+  const put = (rec) => { try { appendEvent(dir, { ...rec, run }) } catch (w) { plan.notes.push(`not recorded (${String((w && w.message) || w)}): ${rec.reason}`) } }
   for (const e of m.entries.filter((x) => x.prior_value)) {
     const prior = e.keys ? `${e.path} ${e.keys.join('.')} was ${e.prior_value}; it now points at ${e.value}` : `${e.path} held ${Object.entries(e.prior_value).map(([k, v]) => `${k}=${v}`).join(', ')}; asight commented it out (uninstall restores it)`
     put({ event: EVENT.installNote, where: 'install', kind: 'prior-value', harness: e.harness, path: e.path, reason: prior })
   }
   for (const r of plan.records) put({ event: EVENT.installNote, where: 'install', kind: 'note', ...r })
   if (unitFailed) { plan.notes.push(unitFailed); put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed }) }
+  const counts = { entries: m.entries.length, files: m.files.filter((f) => f.role === 'trust-file').length, notes: plan.notes.length }
+  put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome: 'installed', counts, reason: `installed: ${counts.entries} trust entr${counts.entries === 1 ? 'y' : 'ies'} and ${counts.files} trust file(s) written, ${counts.notes} note(s)` })
   return { already: false, manifest: m, plan }
 }
 
@@ -208,7 +220,7 @@ export async function stopDaemon({ socketPath, lockFile, request = controlReques
 export async function uninstallCollector({ home = os.homedir(), ...opts } = {}) {
   refuseRoot('uninstall')
   const dir = collectorHome(path.join(home, '.asight')) // collectorHome takes the asight home
-  return recorded(dir, 'uninstall', () => uninstall(dir, { home, ...opts }))
+  return recorded(dir, 'uninstall', (run) => uninstall(dir, { home, ...opts, run }))
 }
 
 // 4.6 撤销顺序: (1) the config entries (JSON keys, dotenv blocks) → (2) combined bundles → (3) asight-ca.pem and the
@@ -252,7 +264,7 @@ function bundleUsers(bundle, m, procs, match, byName) {
   return pids
 }
 
-async function uninstall(dir, { env = process.env, purgeData = false, scan = async () => [], match = () => ({ agent: null }), stop = null, harnesses = [], osRootsFile = null, roots = null, unit = null }) {
+async function uninstall(dir, { env = process.env, purgeData = false, scan = async () => [], match = () => ({ agent: null }), stop = null, harnesses = [], osRootsFile = null, roots = null, unit = null, run = null }) {
   const runtime = env.XDG_RUNTIME_DIR ? path.join(env.XDG_RUNTIME_DIR, 'asight') : null
   const report = { daemon: null, entries: [], removed: [], residue: [], kept_bundles: [], still_trusting: [], kept_captures: !purgeData, notes: [], left: [] } // left: what could not be undone, {path, harness, result} each (D-18)
   const byName = new Map(harnesses.map((d) => [d.name, d]))
@@ -338,11 +350,16 @@ async function uninstall(dir, { env = process.env, purgeData = false, scan = asy
   }
   // after the purge, so --purge-data never deletes what this run could not undo; a line that cannot be written is
   // said in the command's output (and so on stderr's caller), never dropped, and never stops the uninstall
-  const put = (rec) => { try { appendEvent(dir, rec) } catch (w) { report.notes.push(`not recorded (${String((w && w.message) || w)}): ${rec.reason}`) } }
+  const put = (rec) => { try { appendEvent(dir, { ...rec, run }) } catch (w) { report.notes.push(`not recorded (${String((w && w.message) || w)}): ${rec.reason}`) } }
   for (const f of failed) put({ event: EVENT.failure, where: 'uninstall', ...f })
   // notes too — except after --purge-data that left nothing: the operator asked for an empty collector directory, and the
   // command's output has every one of them (4.6 安装 / 卸载不静默)
-  if (m && !(purgeData && !report.left.length)) for (const n of noted) put({ event: EVENT.uninstallNote, where: 'uninstall', kind: n.code, ...n })
+  if (m && !(purgeData && !report.left.length)) {
+    for (const n of noted) put({ event: EVENT.uninstallNote, where: 'uninstall', kind: n.code, ...n })
+    const counts = { entries: report.entries.length, left: report.left.length, still_trusting: report.still_trusting.length, notes: noted.length }
+    put({ event: EVENT.uninstallNote, where: 'uninstall', kind: 'result', outcome: counts.left ? 'left' : 'uninstalled', counts,
+      reason: counts.left ? `uninstalled, except ${counts.left} item(s) that could not be undone; the install manifest is kept` : `uninstalled: ${counts.entries} trust entr${counts.entries === 1 ? 'y' : 'ies'} undone, ${counts.notes} note(s)` })
+  }
   if (m) {
     if (report.left.length || left.bundles.length) { // keep exactly what is left; the next uninstall finds it (4.6: the manifest goes last)
       saveManifest(dir, { ...m, complete: false, ...(report.left.length ? { uninstall_left: report.left, uninstalled_at: new Date().toISOString() } : {}), ...(left.bundles.length ? { pending_bundles: true } : {}), planned: [], watched: [], entries: left.entries, files: [...left.files, ...left.bundles] })

@@ -123,7 +123,7 @@ const KEEP = ['ts', 'event', 'where', 'code', 'reason', 'suppressed', 'folded', 
   'flow_id', 'seq', 'd', 'i', 'pattern', 'candidates', 'cause', 'via', 'hint', 'which', 'file', 'harness', 'path', 'kind',
   'type', 'index', 'desired', 'actual', 'links', 'counts', 'from', 'to', 'lost', 'exit', 'stderr', 'signal', 'failed',
   'version', 'foreground', 'linger', 'upstream_ca', 'dropped', 'errno', 'route', 'phase', 'decision', 'inner',
-  'not_captured', 'write_failed', 'transport', 'port', 'out', 'servername', 'op', 'outcome', 'records', 'originalKept', 'reader', 'target', 'source', 'id']
+  'not_captured', 'write_failed', 'transport', 'port', 'out', 'servername', 'op', 'outcome', 'records', 'originalKept', 'reader', 'target', 'source', 'id', 'run']
 const CLIP = 1000
 const clip = (v) => (typeof v === 'string' && v.length > CLIP ? `${v.slice(0, CLIP)}… (${v.length} chars)` : v)
 /** A record cut down to metadata: listed fields only, long strings clipped and said so, `error` as {type, message, side}. */
@@ -153,6 +153,16 @@ export function groupKey(r) {
   if (r.event === 'failure') return `${r.where}/${r.code}`
   return r.event === 'agent-untrusted' ? `agent-untrusted:${r.code ?? r.reason}` : `${r.event}${r.where ? `/${r.where}` : ''}`
 }
+/** The lines of the newest install (or uninstall) run, oldest first: every line one run writes carries its `run` and
+ *  the run ends with a `kind:'result'` line (4.6 安装 / 卸载不静默, D1-5). Lines without `run`: those within a minute
+ *  of the newest. */
+export function lastRun(notes) {
+  if (!notes.length) return []
+  const last = notes[notes.length - 1]
+  if (last.run != null) return notes.filter((n) => n.run === last.run)
+  const lastT = Date.parse(last.ts)
+  return notes.filter((n) => n.run == null && Date.parse(n.ts) >= lastT - 60e3)
+}
 // a folded line (events.mjs: written when the 10 s window closes) re-states the last suppressed record and stands for
 // exactly `suppressed` occurrences — the first one of the window was its own line already
 const PRELUDE_MS = 60_000 // a daemon's start-up lines are written within this before its daemon-start
@@ -168,7 +178,7 @@ const weight = (r) => (r.folded ? 0 : 1) + (typeof r.suppressed === 'number' ? r
  *   expected                 {not_captured: count} of the last 24 h
  *   agents                   [{agent, last_captured, last_failure, last_failure_key}]
  *   last_ts                  the newest line of any kind ("last record at")
- *   install                  the install-note / uninstall-note lines read, newest batch per kind
+ *   install                  the install-note / uninstall-note lines of the newest run per kind (lastRun)
  */
 export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = {}) {
   let startIdx = -1
@@ -227,11 +237,7 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
   }
   out.groups = [...groups.values()]
   out.agents = [...agents.values()]
-  // one batch per kind: the notes written within a minute of the newest one
-  for (const k of ['install', 'uninstall']) {
-    const l = out.install[k]
-    const lastT = l.length ? Date.parse(l[l.length - 1].ts) : 0
-    out.install[k] = l.filter((n) => Date.parse(n.ts) >= lastT - 60e3)
-  }
+  // one batch per kind: the newest run's lines
+  for (const k of ['install', 'uninstall']) out.install[k] = lastRun(out.install[k])
   return out
 }

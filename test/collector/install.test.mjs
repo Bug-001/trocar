@@ -294,7 +294,9 @@ test('install lists every file it will write or change before writing any, and w
     assert.deepEqual(touched, [listed.manifest, ...listed.ca, ...listed.files.map((f) => f.path), ...listed.entries.map((e) => e.path), listed.events].sort(), 'written == listed, nothing else (the install notes too, D-28)')
     const notes = fs.readFileSync(listed.events, 'utf8').trim().split('\n').map((l) => JSON.parse(l))
     assert.ok(notes.length && notes.every((n) => n.event === 'install-note'), 'only install-note lines')
-    assert.deepEqual(notes.map((n) => n.reason), r.plan.notes, 'every printed note is on disk, in order')
+    assert.deepEqual(notes.filter((n) => n.kind !== 'result').map((n) => n.reason), r.plan.notes, 'every printed note is on disk, in order')
+    assert.deepEqual([notes.at(-1).kind, notes.at(-1).outcome, notes.at(-1).counts], ['result', 'installed', { entries: 1, files: 1, notes: 1 }], 'the run ends with its result line (D1-5)')
+    assert.equal(new Set(notes.map((n) => n.run)).size, 1, 'one run id on every line')
     assert.ok(r.manifest.complete)
   } finally { b.done() }
 })
@@ -654,7 +656,8 @@ test('uninstall writes an uninstall-note for every result but a plain restore an
     assert.deepEqual(r.entries.map((e) => e.result), ['reverted-not-identical'])
     const { recentFailures } = await import('../../src/collector/core/events.mjs')
     const lines = fs.readdirSync(path.join(b.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(b.dir, 'flows', n), 'utf8').trim().split('\n').map((l) => JSON.parse(l))).filter((l) => l.event !== 'install-note')
-    assert.deepEqual(lines.map((l) => [l.event, l.kind, l.path ?? l.pid]), [['uninstall-note', 'reverted-not-identical', settingsOf(b)], ['uninstall-note', 'still-trusting', 4242]])
+    assert.deepEqual(lines.map((l) => [l.event, l.kind, l.path ?? l.pid]), [['uninstall-note', 'reverted-not-identical', settingsOf(b)], ['uninstall-note', 'still-trusting', 4242], ['uninstall-note', 'result', undefined]])
+    assert.deepEqual([lines[2].outcome, lines[2].counts], ['uninstalled', { entries: 1, left: 0, still_trusting: 1, notes: 2 }])
     assert.match(lines[0].reason, /not byte for byte what it was before install/)
     assert.deepEqual(recentFailures(b.dir), [], 'notes are not failures')
     assert.equal(readManifest(b.dir), null)
@@ -664,6 +667,28 @@ test('uninstall writes an uninstall-note for every result but a plain restore an
     const r2 = await uninstallCollector({ home: b.home, env: {}, scan: async () => running, match, stop: stopNone })
     assert.ok(r2.notes.some((n) => /^not recorded \(.+\): pid 4242 \(claude-code\) trusts the asight CA until it restarts$/.test(n)), JSON.stringify(r2.notes))
     assert.equal(readManifest(b.dir), null, 'a note that cannot be written never stops the uninstall')
+  } finally { b.done() }
+})
+
+// D1-5 (4.6 安装 / 卸载不静默): a clean run writes its result line too, and "last" is the newest run — an older run's
+// warnings never stand in for it; a failed run ends with outcome 'failed'.
+test('the board\'s last install / uninstall is the newest run: a clean uninstall after one that left a note shows only its own result; a failed install says so (D1-5)', async () => {
+  const b = box()
+  const { captureHealth } = await import('../../src/health/read.mjs')
+  const last = () => captureHealth({ home: path.join(b.home, '.asight'), alive: () => false }).collector.install
+  try {
+    fs.mkdirSync(path.join(b.home, '.claude')); fs.writeFileSync(settingsOf(b), '{"model":"x"}')
+    await installCollector(base(b))
+    const doc = JSON.parse(fs.readFileSync(settingsOf(b), 'utf8')); doc.theme = 'dark'; fs.writeFileSync(settingsOf(b), JSON.stringify(doc)) // edited since
+    await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
+    assert.deepEqual(last().uninstall.map((n) => [n.kind, n.outcome ?? null]), [['reverted-not-identical', null], ['result', 'uninstalled']])
+    await installCollector(base(b)) // within the same minute
+    await uninstallCollector({ home: b.home, env: {}, stop: stopNone }) // clean: restored byte for byte
+    assert.deepEqual(last().uninstall.map((n) => [n.kind, n.outcome]), [['result', 'uninstalled']], 'only the newest run: #1\'s note is not "last"')
+    assert.deepEqual(last().install.map((n) => [n.kind, n.outcome ?? null]).at(-1), ['result', 'installed'])
+    fs.writeFileSync(settingsOf(b), '{"model": "x",, }') // the next install fails
+    await assert.rejects(installCollector(base(b)), /JSON/)
+    assert.deepEqual(last().install.map((n) => [n.kind, n.outcome]), [['result', 'failed']], 'a failed install is the last install')
   } finally { b.done() }
 })
 
