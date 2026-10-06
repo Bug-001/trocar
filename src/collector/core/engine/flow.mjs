@@ -201,7 +201,7 @@ export function handleFlow(client, meta, ctx) {
     let tee = activeTee
     // the recording side copy never throws into the forwarding path: a recorder that throws stops
     // recording this connection (recorded, D38) and the bytes keep flowing
-    const copy = (fn) => { if (!tee) return; try { fn(tee) } catch (e) { tee = null; activeTee = null; ctx.failure({ code: 'engine-error', flow_id: rec.flow_id, reason: `recording stopped: ${msgOf(e)}` }) } }
+    const copy = (fn) => { if (!tee) return; try { fn(tee) } catch (e) { tee = null; activeTee = null; drain.loseTee(); ctx.failure({ code: 'engine-error', flow_id: rec.flow_id, reason: `recording stopped: ${msgOf(e)}` }) } }
     // The drain gate (RFC 1.6 §1.3, engine/drain.mjs) sits between the upstream and the client. It runs before the tee sees
     // a chunk (an envelope that ends in this very chunk then already says what the gate added) and after the chunk is
     // written (a response that ended closes the connection); the tee still reads the upstream's own bytes.

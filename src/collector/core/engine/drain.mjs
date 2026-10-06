@@ -37,7 +37,8 @@ export function insertConnectionClose(head) {
 
 const statusOf = (head) => { const m = /^HTTP\/\d(?:\.\d)? (\d{3})/.exec(head.toString('latin1', 0, 16)); return m ? Number(m[1]) : null }
 
-export function createDrain({ flowId, tee = null, client, upstream, timeoutMs = 5000, destroy = null, onClosed = () => {}, onFailure = () => {} }) {
+export function createDrain({ flowId, tee: teeIn = null, client, upstream, timeoutMs = 5000, destroy = null, onClosed = () => {}, onFailure = () => {} }) {
+  let tee = teeIn // null: a spliced connection, or one whose recording stopped (loseTee)
   let phase = 'open'  // open (not asked) | closing | waiting | closed | cut | broken
   let mode = 'stream' // hold: the head of the response in flight has not been forwarded, its bytes are held until the head is whole · stream: it has
   let seq = null      // the exchange whose response head is being held
@@ -65,6 +66,7 @@ export function createDrain({ flowId, tee = null, client, upstream, timeoutMs = 
       hard()
     }
     timer = setTimeout(force, timeoutMs); if (timer.unref) timer.unref()
+    try { client.once('close', () => { if (timer) { clearTimeout(timer); timer = null } }) } catch { /* nothing to listen on */ } // the client is gone: relay() drops the other side
     return 'closed'
   }
   function cut() { phase = 'cut'; if (timer) { clearTimeout(timer); timer = null } held = []; heldLen = 0; onClosed('cut'); hard(); return 'cut' }
@@ -102,7 +104,7 @@ export function createDrain({ flowId, tee = null, client, upstream, timeoutMs = 
         }
         const head = buf.subarray(0, end + 4), rest = buf.subarray(end + 4)
         const r = insertConnectionClose(head)
-        if (r.added) tee.markAdded(seq, 'connection-close')
+        if (r.added && tee) tee.markAdded(seq, 'connection-close')
         out.push(r.head)
         const status = statusOf(head)
         const interim = status != null && status >= 100 && status < 200 && status !== 101 // 100 Continue and the like: the final head follows
@@ -120,6 +122,7 @@ export function createDrain({ flowId, tee = null, client, upstream, timeoutMs = 
     const ended = turnEnded; turnEnded = false
     if (phase !== 'closing') return
     try {
+      if (!tee) { phase = 'waiting'; return } // recording stopped: no boundary to see any more
       const b = tee.boundary()
       if (b.blind) { phase = 'waiting'; return }
       if (held.length) return // part of a head is still held: never close with bytes unforwarded
@@ -132,8 +135,9 @@ export function createDrain({ flowId, tee = null, client, upstream, timeoutMs = 
     start, beforeUpstream, afterUpstream,
     flush() { const out = held; held = []; heldLen = 0; return out }, // the upstream went away: what was held is still the client's
     onTurnEnd() { turnEnded = true }, // the WebSocket recorder saw the terminal message in the chunk just fed to it
+    loseTee() { tee = null }, // the flow stopped recording this connection (its recorder threw): what it saw last is no longer true, so the connection waits for its own close
     state() {
-      if (phase === 'closing') { try { return blind(tee.boundary()) ? 'waiting' : 'closing' } catch { return 'waiting' } }
+      if (phase === 'closing') { try { return blind(tee && tee.boundary()) ? 'waiting' : 'closing' } catch { return 'waiting' } }
       return phase === 'broken' ? 'waiting' : phase
     },
   }

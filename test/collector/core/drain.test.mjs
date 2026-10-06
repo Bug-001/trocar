@@ -163,6 +163,17 @@ test('gate: a throw inside it is fail-open — the held bytes go on unchanged, e
   g.afterUpstream(); assert.notEqual(g.state(), 'closed')
 })
 
+test('gate: once the flow has stopped recording (its recorder threw) what the tee saw last is no longer true: the connection waits for its own close, it is not closed on a stale view', () => {
+  const { g, tee, c } = gateOf({ view: { idle: false, headPending: false, seq: 0, blind: false } })
+  assert.equal(g.start(), 'closing')
+  g.loseTee()
+  assert.equal(g.state(), 'waiting')
+  tee.view = { idle: true, headPending: false, seq: null, blind: false } // would have closed it
+  g.afterUpstream()
+  assert.deepEqual([g.state(), c.ended], ['waiting', 0])
+  assert.deepEqual(g.beforeUpstream(Buffer.from('x')).map(String), ['x'])
+})
+
 test('gate: when the upstream goes away with part of a head held, flush() hands those bytes back for the client', () => {
   const { g } = gateOf()
   g.start()
