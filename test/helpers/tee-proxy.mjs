@@ -13,17 +13,20 @@ import { createRecordStore } from '../../src/collector/core/record/store.mjs';
 
 export async function startTeeProxy({ upstreamPort, dir, flow = {}, wsTerminal } = {}) {
   const store = createRecordStore({ root: dir });
-  const envelopes = [];
+  const envelopes = [], failures = [];
   const recordStore = {
     envelope: (e) => { envelopes.push(e); store.envelope(e); return true; },
     flow: (e) => store.flow(e), audit: (e) => store.audit(e), replay: (e) => store.replay(e),
+    // capture failures (D38): written like the engine writes them, and kept so a test can assert there were none
+    failure: (r) => { failures.push(r); return store.failure(r); },
   };
   let n = 0;
   const sockets = new Set();
   const server = net.createServer((client) => {
     const fl = { id: `flow-${++n}`, host: flow.host || 'relay.asight.test', scheme: 'https', dst: { address: '127.0.0.1', port: upstreamPort, family: 4 },
       proc: flow.proc || { pid: 1, exe: '/x/agent', agent: null } };
-    // wsTerminal: forwarded for the WebSocket recorder (plan (c)); today's createExchangeTee ignores it.
+    // wsTerminal: the harness's terminal-message patterns, handed to the WebSocket recorder after a 101
+    // (4.6 §传输与帧级记录); without it a call runs to the next client message or the end of the connection.
     const tee = createExchangeTee({ flow: fl, recordStore, ...(wsTerminal ? { wsTerminal } : {}) });
     const up = net.connect(upstreamPort, '127.0.0.1');
     for (const s of [client, up]) { sockets.add(s); s.on('close', () => sockets.delete(s)); }
@@ -36,7 +39,7 @@ export async function startTeeProxy({ upstreamPort, dir, flow = {}, wsTerminal }
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   return {
-    port: server.address().port, envelopes,
+    port: server.address().port, envelopes, failures,
     files: () => fs.readdirSync(dir).filter((f) => f.endsWith('.ndjson')).sort().map((f) => path.join(dir, f)),
     close: () => new Promise((r) => { for (const s of sockets) s.destroy(); server.close(() => { store.close(); r(); }); }),
   };
