@@ -13,6 +13,7 @@ import { collectorHome } from '../paths.mjs'
 import { loadOrCreateCa, caPaths, readCa } from './core/tls/ca-store.mjs'
 import { checkCa } from './core/tls/ca.mjs'
 import { planTrust } from './core/trust/plan.mjs'
+import { livenessOf } from './core/registry.mjs'
 import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, removeOwnedFile, undoEntry, removeEmptyDirs, manifestPath, sweepTemps, describeEntry } from './core/trust/journal.mjs'
 import { EVENT, CODE, UNTIL_TEXT } from './core/codes.mjs'
 import { rewriteBundles } from './core/trust/bundle.mjs'
@@ -158,6 +159,10 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
   if (daemon && daemon.note) { plan.notes.push(daemon.note); plan.records.push({ code: CODE.unitEnvNotCarried, reason: daemon.note }) }
   if (JSON.stringify(plan.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${plan.paths.join(', ')}); only the CA was written; run "asight collector uninstall", then install again`)
   m.planned = plan.paths
+  // what `off` needs to judge, from this manifest alone, which live process may hold what asight wrote for a harness (4.6 撤销顺序): written before
+  // any user file changes, like the rest of the plan, and only for a harness this install changed something for
+  const touched = new Set([...plan.entries, ...plan.files, ...plan.owned].map((x) => x.harness))
+  m.liveness = Object.fromEntries(harnesses.filter((d) => touched.has(d.name)).map((d) => [d.name, livenessOf(d, osName)]))
   m.watched = plan.watch.map((w) => ({ ...w, existed_before: fs.existsSync(w.path) })) // before anything of the plan is written
   saveManifest(dir, m)
   fs.mkdirSync(path.join(dir, 'run', 'trust'), { recursive: true, mode: 0o700 }) // plugins write their marker here, daemon up or not

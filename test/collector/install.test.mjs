@@ -766,7 +766,7 @@ test('install writes manifest version 2: every item has kind and undo_by_hand, a
     fs.writeFileSync(settingsOf(b), before, { mode: 0o640 })
     await installCollector(base(b))
     const m = JSON.parse(fs.readFileSync(path.join(b.dir, 'install-manifest.json'), 'utf8')) // the file itself: readManifest would fill in what is missing
-    assert.deepEqual([m.version, m.confirmed_paths, m.kept_backups, m.liveness], [2, [], [], {}])
+    assert.deepEqual([m.version, m.confirmed_paths, m.kept_backups, m.liveness], [2, [], [], { 'claude-code': { signature: null, rereads: true, until: 'restart' } }], 'liveness: osName none has no signature to snapshot')
     for (const it of [...m.entries, ...m.files]) { assert.ok(it.kind && it.undo_by_hand && it.undo_by_hand.length > 10, JSON.stringify(it)) }
     assert.deepEqual(m.files.map((f) => f.kind), ['owned-file', 'owned-file'], 'the CA files install pushes with a role only get their kind when saved')
     const e = m.entries[0]
@@ -833,4 +833,39 @@ test('a manifest of a version this build does not read stops install and uninsta
     await assert.rejects(uninstallCollector({ home: b.home, env: {}, stop: async () => { throw new Error('the daemon must not be stopped for a manifest this build cannot read') } }), /version 3/)
     assert.deepEqual(snap(), first)
   } finally { b.done() }
+})
+
+// ---- D39 / 4.6 撤销顺序 (Task 4): the liveness snapshot — what `off` needs to judge, with no descriptor in sight, which live process may hold what ----
+test('install records liveness per harness it changed anything for: its signature as JSON, whether it re-reads its entry, until when a running one still trusts', async () => {
+  const b = box()
+  try {
+    const { reviveSignature, matchHarness } = await import('../../src/off/signature.mjs')
+    const rep = { ...repHarness(b.dir, { rereadsEntry: true, afterUninstall: 'next-connection', untilEnviron: 'SSL_CERT_FILE' }), signatures: { none: { match: [{ exe: /\/rep$/ }], exclude: [{ argv: [/^--helper$/] }] } } }
+    const quiet = { name: 'quiet', runtime: 'node', signatures: { none: { match: [{ exe: /quiet$/ }] } }, hosts: [], trust: { chain: [{ var: 'X', semantic: 'append' }] }, inject: () => ({}) } // injects nothing
+    fs.writeFileSync(path.join(b.home, 'corp.pem'), createCa({ commonName: 'corp' }).certPem)
+    await installCollector(base(b, { harnesses: [rep, quiet], roots: { node: [], osText: '' } }))
+    const m = JSON.parse(fs.readFileSync(path.join(b.dir, 'install-manifest.json'), 'utf8')) // the file as written: what `off` reads
+    assert.deepEqual(Object.keys(m.liveness), ['rep'], 'a harness install changed nothing for has no liveness: nothing of it to judge')
+    assert.deepEqual([m.liveness.rep.rereads, m.liveness.rep.until, m.liveness.rep.until_environ], [true, 'next-connection', 'SSL_CERT_FILE'])
+    const sig = reviveSignature(m.liveness.rep.signature)
+    assert.deepEqual(sig, rep.signatures.none, 'the signature survives the manifest')
+    assert.equal(matchHarness(m.liveness, { exe: '/x/rep', argv: ['rep'], env: null }), 'rep')
+    assert.equal(matchHarness(m.liveness, { exe: '/x/rep', argv: ['rep', '--helper'], env: null }), null, 'and so does its exclude')
+  } finally { b.done() }
+})
+
+test('liveness of a harness with no signature for this OS or no data form of afterUninstall: no signature (it matches no process), and a descriptor whose afterUninstall is a function snapshots restart', async () => {
+  const b = box()
+  try {
+    const fn = { ...cc, trust: { ...cc.trust, rereadsEntry: false, afterUninstall: () => 'next-handshake' } }
+    await installCollector(base(b, { harnesses: [fn] })) // osName 'none': claude-code declares a linux signature only
+    assert.deepEqual(readManifest(b.dir).liveness, { 'claude-code': { signature: null, rereads: false, until: 'restart' } })
+  } finally { b.done() }
+})
+
+test('a descriptor whose afterUninstall is a string that is no known "until" is refused when it is validated, not read as restart', async () => {
+  const { validateDescriptor } = await import('../../src/collector/core/registry.mjs')
+  assert.throws(() => validateDescriptor({ ...cc, trust: { ...cc.trust, afterUninstall: 'next-connnection' } }), /afterUninstall.*next-connnection/)
+  assert.throws(() => validateDescriptor({ ...cc, trust: { ...cc.trust, untilEnviron: 3 } }), /untilEnviron/)
+  assert.doesNotThrow(() => validateDescriptor({ ...cc, trust: { ...cc.trust, afterUninstall: 'session-end', untilEnviron: 'X' } }))
 })

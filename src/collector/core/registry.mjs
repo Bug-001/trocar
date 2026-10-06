@@ -13,7 +13,8 @@
 // Put cheap paths (exe, argv) before 'env' in a pattern: env may be a lazy read of the process.
 // The matching itself (factAt / holds / matchPattern) lives in src/off/signature.mjs: `asight off` judges which live process belongs to
 // which harness with the same code, from the signatures `install` copied into the manifest (1.6 R3, 4.6 撤销顺序).
-import { factAt, holds, matchPattern } from '../../off/signature.mjs'
+import { factAt, holds, matchPattern, serializeSignature } from '../../off/signature.mjs'
+import { UNTIL_TEXT } from './codes.mjs'
 
 export { matchPattern }
 
@@ -44,7 +45,26 @@ export function validateDescriptor(d) {
   }
   if (!Array.isArray(d.hosts)) throw new Error(`${where}: hosts must be an array`)
   if (!d.trust || !Array.isArray(d.trust.chain) || d.trust.chain.length === 0) throw new Error(`${where}: trust.chain must be a non-empty array`)
+  const au = d.trust.afterUninstall
+  if (au !== undefined && typeof au !== 'function' && !(typeof au === 'string' && Object.hasOwn(UNTIL_TEXT, au))) throw new Error(`${where}: trust.afterUninstall must be one of ${Object.keys(UNTIL_TEXT).join(', ')} (or a function of the process): ${JSON.stringify(au)}`)
+  if (d.trust.untilEnviron !== undefined && (typeof d.trust.untilEnviron !== 'string' || d.trust.untilEnviron === '')) throw new Error(`${where}: trust.untilEnviron must be the name of an environment variable`)
   return d
+}
+
+/** What `off` needs to judge, from the install manifest alone, which live process may hold what asight wrote for this harness (4.6 撤销顺序
+ *  第 2 / 5 步; manifest `liveness.<harness>`): the signature for `osName` as JSON (null: this descriptor has none for it, so it matches no
+ *  process), whether the harness re-reads its entry while running, and until when a running one still trusts asight after `off` — the data form of
+ *  `trust.afterUninstall` ('restart' when it declares none, and when it is a function of the process, which a manifest cannot hold: Hermes). With
+ *  `trust.untilEnviron` (Kimi), only a process whose environment names that variable at a file of asight's is reported at all. */
+export function livenessOf(d, osName) {
+  const t = d.trust || {}
+  const sig = d.signatures && d.signatures[osName]
+  return {
+    signature: sig ? serializeSignature(sig) : null,
+    rereads: !!t.rereadsEntry,
+    until: typeof t.afterUninstall === 'string' ? t.afterUninstall : 'restart',
+    ...(typeof t.untilEnviron === 'string' ? { until_environ: t.untilEnviron } : {}),
+  }
 }
 
 export function createRegistry(descriptors) {
