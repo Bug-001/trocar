@@ -3,7 +3,8 @@
 //
 //   node scripts/count-tests.mjs read <test-output> <os> <node>   → one JSON line {os, node, tests, pass, fail, ...} on stdout
 //   node scripts/count-tests.mjs compare <dir>                    → reads every *.json `read` wrote, exits 1 unless each OS agrees
-//                                                                   on the number of tests across its Node versions
+//                                                                   on the number of tests across its Node versions (an empty or
+//                                                                   unreadable file is a job that reported nothing, and fails too)
 //
 // Why: a run that drops test results does not fail — `--test-force-exit` on Node 20 reported 1903 to 1924 of 1936 tests, all
 // "0 fail" (see test/helpers/flush-exit.cjs). The same suite on the same OS runs the same tests on Node 20 and 22, so a count
@@ -48,8 +49,17 @@ function main(argv) {
     return 0
   }
   if (cmd === 'compare' && a) {
-    const entries = fs.readdirSync(a).filter((f) => f.endsWith('.json')).map((f) => JSON.parse(fs.readFileSync(path.join(a, f), 'utf8')))
-    const { ok, lines, problems } = compareCounts(entries)
+    // a job whose `read` died (no summary in its output) leaves an empty file behind: that is a job that reported nothing, not a crash here
+    const entries = [], unreadable = []
+    for (const f of fs.readdirSync(a).filter((f) => f.endsWith('.json')).sort()) {
+      try {
+        const e = JSON.parse(fs.readFileSync(path.join(a, f), 'utf8'))
+        if (typeof e?.tests !== 'number' || typeof e?.os !== 'string' || e?.node == null) throw new Error('no os / node / tests in it')
+        entries.push(e)
+      } catch (err) { unreadable.push(`${f}: no usable count (${err.message}) — that job reported nothing`) }
+    }
+    const result = compareCounts(entries)
+    const lines = result.lines, problems = [...result.problems, ...unreadable], ok = result.ok && unreadable.length === 0
     const text = [...lines, ...problems.map((p) => `MISMATCH ${p}`)].join('\n') + '\n'
     process.stdout.write(text)
     if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, '### Test counts per OS and Node version\n\n```\n' + text + '```\n')

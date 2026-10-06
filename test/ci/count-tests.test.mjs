@@ -58,5 +58,11 @@ test('count-tests: the CLI — read writes the JSON line, compare exits 1 on a m
   const bad = run('compare', counts)
   assert.equal(bad.status, 1)
   assert.match(bad.stdout, /MISMATCH ubuntu-latest: Node 20 ran 1940, Node 22 ran 1938 tests/)
+  // a job whose `read` died leaves an empty file (the shell redirect made it): the compare says so by name, and fails
+  fs.writeFileSync(path.join(counts, 'b.json'), '')
+  const empty = run('compare', counts)
+  assert.equal(empty.status, 1)
+  assert.match(empty.stdout, /MISMATCH b\.json: no usable count .* that job reported nothing/)
+  assert.match(empty.stdout, /only Node 20 reported a count/, 'and what is left of the OS is not compared as if it were whole')
   assert.equal(run('compare').status, 2)
 })
