@@ -6,39 +6,17 @@
 // reply says why (encoding_error), so the board labels it 回复未解码, never an empty hole. Driven through the real engine over real TLS.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import tls from 'node:tls'
 import zlib from 'node:zlib'
-import { createEngine } from '../../../src/collector/core/engine/engine.mjs'
-import { createStaticRedirector } from '../../../src/collector/core/redirector.mjs'
-import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
-import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
 import { shapeResponse } from '../../../src/collector/core/record/body.mjs'
 import { NON_INFERENCE_MAX_DECODED_BYTES, MAX_DECODED_RESPONSE_BYTES } from '../../../src/capture/request-body.mjs'
-import { closeWithin, within } from '../../helpers/bounded.mjs'
+import { engineExchange } from '../../helpers/engine-exchange.mjs'
 
 const T = { timeout: 30_000 }
 const MiB = 1 << 20
 const gzipZeros = (mib) => zlib.gzipSync(Buffer.alloc(mib * MiB), { level: 9 })
 
-// one request through the engine to an upstream that answers `wire` (a gzip body) with the given head fields
-async function exchange({ path, ctype, wire, extra = [] }) {
-  const upCa = createCa({ commonName: 'bomb upstream CA' }), upIssuer = createLeafIssuer(loadCa(upCa)), asightCa = createCa()
-  const head = ['HTTP/1.1 200 OK', `Content-Type: ${ctype}`, 'Content-Encoding: gzip', `Content-Length: ${wire.length}`, 'Connection: close', ...extra].join('\r\n') + '\r\n\r\n'
-  const up = tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)), ALPNProtocols: ['http/1.1'] }, (s) => { s.on('error', () => {}); s.once('data', () => s.end(Buffer.concat([Buffer.from(head), wire]))) })
-  await new Promise((r) => up.listen(0, '127.0.0.1', r))
-  const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 3, agent: 'claude-code', decrypt: true })
-  const envelopes = [], failures = []
-  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: upCa.certPem, store: { envelope: (e) => { envelopes.push(e); return true }, flow: () => {} }, onFailure: (f) => failures.push(f) })
-  const { port } = await engine.listen({})
-  const got = await within(new Promise((resolve) => {
-    let n = 0
-    const c = tls.connect({ port, host: '127.0.0.1', servername: 'files.example.test', ca: asightCa.certPem, ALPNProtocols: ['http/1.1'] }, () => c.write(`GET ${path} HTTP/1.1\r\nHost: files.example.test\r\nConnection: close\r\n\r\n`))
-    c.on('data', (d) => { n += d.length }); c.on('error', () => resolve(n)); c.on('close', () => resolve(n))
-  }), 20_000, 'the client got its response')
-  await within(new Promise((r) => { const t = setInterval(() => { if (envelopes.length) { clearInterval(t); r() } }, 5) }), 10_000, 'an envelope was written')
-  await closeWithin(engine); up.close()
-  return { env: envelopes[0], envelopes, failures, got, head }
-}
+// one request through the engine to an upstream that answers `wire` (a gzip body) with the given content type
+const exchange = ({ path, ctype, wire }) => engineExchange({ path, headers: { 'Content-Type': ctype, 'Content-Encoding': 'gzip' }, wire })
 
 test('a non-inference reply that decodes past 1 MiB is not expanded: the envelope has the wire bytes and says why; the client got every byte (§记录, D40 audit)', T, async () => {
   const wire = gzipZeros(40)                      // ~40 KB on the wire, 40 MiB decoded

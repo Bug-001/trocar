@@ -13,7 +13,8 @@ test('4.1 #9 — a pre-D40 {raw_chars} body is legacy-meta and says 「本条采
   assert.equal(bodyRetentionOf(old), 'legacy-meta')
   assert.equal(retentionLabelOf(old).label, '本条采于 D40 之前,只存了长度')
   assert.equal(LEGACY_META_TEXT, '本条采于 D40 之前,只存了长度')
-  assert.deepEqual(captureLabelsOf(old).map((l) => l.id), ['retention-legacy-meta'])
+  // a pre-D40 record also kept its JSON reply parsed and re-serialized (no body_wire_bytes, no resp.raw): that is said too (4.1 保真边界 ⑤)
+  assert.deepEqual(captureLabelsOf(old).map((l) => l.id), ['retention-legacy-meta', 'resp-json-reserialized'])
   for (const rec of [full({ id: 'f' }), inference({ id: 'i' }), full({ id: 'b', reqBody: null, reqB64: 'AAEC' }), full({ id: 'e', reqBody: '' })]) {
     assert.equal(bodyRetentionOf(rec), 'full', rec.id)
     assert.equal(retentionLabelOf(rec), null, `${rec.id}: a complete body carries no 「非逐字」 label`)

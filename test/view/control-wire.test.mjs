@@ -134,7 +134,7 @@ test('H4 — a request cut at the capture cap, or one that never finished, is la
 
 test('L1 — a pre-D40 record whose kept length is 0 had no body (a GET): it is an empty body, not 「只存了长度」 and not 「this is not an empty body」', () => {
   const get = controlRecordWire({ ...preD40({ id: 'g', rawChars: 0 }), method: 'GET', endpoint: '/api/web/domain_info?domain=x.test' })
-  assert.deepEqual([get.ctl.retention, get.ctl.req.kind, get.ctl.req.bytes, get.ctl.labels.map((l) => l.id)], ['full', 'empty', 0, []])
+  assert.deepEqual([get.ctl.retention, get.ctl.req.kind, get.ctl.req.bytes, get.ctl.labels.map((l) => l.id)], ['full', 'empty', 0, ['resp-json-reserialized']]) // no body label — only its parsed JSON reply says it is not the wire text (4.1 保真边界 ⑤)
   // one that kept a length is still 「只存了长度」, and a log record of 0 bytes stays a log record
   assert.equal(controlRecordWire(preD40({ id: 'o', rawChars: 12 })).ctl.req.kind, 'length-only')
   const log0 = controlRecordWire(logged({ id: 'l0', wire: [0, 5] }))
@@ -182,7 +182,7 @@ test('F1 — only the newest 80 records of a class carry their bodies; every old
   // the labels survive the slimming: a pre-D40 / log / cut record says so even when it is old
   const mix = [preD40({ id: 'o1', at: iso(0) }), logged({ id: 'l1', at: iso(1) }), ...Array.from({ length: 100 }, (_, i) => full({ id: `n${i}`, at: iso(2 + i) }))]
   const m = controlView(mix, 'telemetry').records
-  assert.deepEqual([m[0].id, m[0].ctl.detail, m[0].ctl.labels.map((l) => l.id)], ['o1', false, ['retention-legacy-meta']])
+  assert.deepEqual([m[0].id, m[0].ctl.detail, m[0].ctl.labels.map((l) => l.id)], ['o1', false, ['retention-legacy-meta', 'resp-json-reserialized']])
   assert.deepEqual([m[1].id, m[1].ctl.labels.map((l) => l.id)], ['l1', ['retention-log']])
 })
 

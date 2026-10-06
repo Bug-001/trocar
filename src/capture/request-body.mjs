@@ -32,6 +32,18 @@ export const NON_INFERENCE_MAX_DECODED_BYTES = 1024 * 1024
 // decode does.
 export const MAX_DECODED_RESPONSE_BYTES = 64 * 1024 * 1024
 export const responseDecodeLimit = (llm) => (llm ? MAX_DECODED_RESPONSE_BYTES : NON_INFERENCE_MAX_DECODED_BYTES)
+/**
+ * A JSON reply as an envelope stores it (RFC 4.1 保真边界 ⑤, D40 audit): `body` = the parsed value, which is what readers use, and `raw` = the
+ * wire text whenever writing `body` back out would not give that text — whitespace, a trailing newline, the order of integer-like keys, a number
+ * past 2^53 (12345678901234567890 parses to 12345678901234567000), a duplicated key (the last wins), \uXXXX escapes, a BOM. A reply that
+ * re-serializes to itself stores no `raw`: nothing is lost and nothing is stored twice. `text` MUST already be valid UTF-8 (a BOM is not JSON:
+ * it is skipped for the parse only). → {body, raw?} | null when it does not parse. Shared by both capture paths, so they cannot drift.
+ */
+export function parseJsonReply(text) {
+  let body
+  try { body = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text) } catch { return null }
+  return JSON.stringify(body) === text ? { body } : { body, raw: text }
+}
 /** True when decodeContent stopped because the output passed its maxBytes (zlib's ERR_BUFFER_TOO_LARGE), not because the bytes are bad. */
 export const decodedOverLimit = (dec) => !!dec && !dec.decoded && (dec.code === 'ERR_BUFFER_TOO_LARGE' || /larger than|output length/i.test(dec.error || ''))
 

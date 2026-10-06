@@ -151,6 +151,10 @@ export function captureLabelsOf(rec) {
   }
   const keep = retentionLabelOf(rec);
   if (keep) out.push({ id: `retention-${keep.retention}`, label: keep.label, text: keep.text });
+  // 4.1 保真边界 ⑤: before D40 a JSON reply was stored as the parsed value, re-serialized on write — not the wire bytes. A record from D40 on
+  // carries body_wire_bytes and keeps resp.raw whenever the two differ, so a parsed reply without either is the old kind (the shape alone says so)
+  if (r.kind === 'json' && r.body !== undefined && typeof r.raw !== 'string' && !rec.body_wire_bytes) out.push({ id: 'resp-json-reserialized', label: 'JSON · 重新序列化,非线上原字节 · re-serialized, not wire bytes',
+    text: 'the reply is stored as the parsed JSON and was written back out: whitespace, key order, integers past 2^53 and duplicated keys may differ from what was on the wire (this capture predates the verbatim reply text)' });
   return out;
 }
 

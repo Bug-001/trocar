@@ -1,9 +1,10 @@
 // body.mjs — turn a response's decoded bytes into a recordable shape (RFC 4.6 §记录). SSE is kept
 // VERBATIM (the full decoded text in `raw`, so event: / id: / comment lines survive — invariant 2)
-// alongside the Anthropic reconstruction; JSON is parsed; other text is UTF-8 or raw_b64. Decoding
+// alongside the Anthropic reconstruction; JSON is parsed (and keeps its wire text in `raw` when re-serializing would change it);
+// other text is UTF-8 or raw_b64. Decoding
 // failures and truncation are labeled in place (invariant 4), never silently dropped.
 import { makeSseReconstructor } from '../../../capture/sse-reconstruct.mjs'
-import { decodeContent, utf8Strict, responseDecodeLimit, decodedOverLimit } from '../../../capture/request-body.mjs'
+import { decodeContent, utf8Strict, responseDecodeLimit, decodedOverLimit, parseJsonReply } from '../../../capture/request-body.mjs'
 
 // decodeContent moved to src/capture/request-body.mjs when the request-body rule became one rule for every call (D40);
 // re-exported here because the response side below still uses it.
@@ -47,10 +48,12 @@ export function shapeResponse({ status, headers = [], body, truncated = false, l
     } else {
       const utf = tryUtf8(dec.buf)
       if (ctype.includes('json') && utf !== null) {
-        // JSON is read only from valid UTF-8: bytes that are not would parse with U+FFFD in place of them (a lossy body)
-        // (a leading BOM is not JSON: it is skipped for the parse only — a JSON reply is stored parsed, never as its wire bytes, 4.1 保真边界 ⑤)
-        try { resp.body = JSON.parse(utf.charCodeAt(0) === 0xfeff ? utf.slice(1) : utf); resp.kind = 'json' }
-        catch { resp.kind = 'text'; resp.raw = utf }
+        // JSON is read only from valid UTF-8: bytes that are not would parse with U+FFFD in place of them (a lossy body). The parsed
+        // value is what readers use; the wire text is also kept whenever it is not what the value re-serializes to (parseJsonReply,
+        // 4.1 保真边界 ⑤: a big integer, a duplicated key, key order and whitespace must not change silently)
+        const j = parseJsonReply(utf)
+        if (j) { resp.body = j.body; resp.kind = 'json'; if (j.raw !== undefined) resp.raw = j.raw }
+        else { resp.kind = 'text'; resp.raw = utf }
       } else if (utf !== null) {
         resp.kind = 'text'; resp.raw = utf
       } else {

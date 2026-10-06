@@ -17,7 +17,7 @@ import zlib from 'node:zlib'
 import { makeSseReconstructor } from './sse-reconstruct.mjs'
 import { failureOf } from './events.mjs'
 import { logResponse, MAX_BODY_BYTES } from './envelope.mjs'
-import { utf8Strict, decodedOverLimit, responseDecodeLimit, MAX_DECODED_RESPONSE_BYTES } from './request-body.mjs'
+import { utf8Strict, decodedOverLimit, responseDecodeLimit, parseJsonReply, MAX_DECODED_RESPONSE_BYTES } from './request-body.mjs'
 
 export { MAX_BODY_BYTES }
 const utf8 = (buf) => utf8Strict(buf)
@@ -45,7 +45,8 @@ export function bodyResp(status, wire, enc, onDecodeError = null, { maxBytes = M
   if (dec.error) { if (onDecodeError) onDecodeError(dec); return { status, kind: 'text', encoding_error: dec.error, raw_b64: wire.toString('base64') } }
   // JSON is read only from valid UTF-8: bytes that are not would parse with U+FFFD in their place (a lossy body, invariant 2)
   const t = utf8(dec.buf)
-  if (t !== null) { try { return { status, kind: 'json', body: JSON.parse(t) } } catch { /* not JSON: keep its bytes */ } }
+  // the parsed value, plus the wire text when writing the value back out would not give it (parseJsonReply, 4.1 保真边界 ⑤)
+  if (t !== null) { const j = parseJsonReply(t); if (j) return { status, kind: 'json', body: j.body, ...(j.raw !== undefined ? { raw: j.raw } : {}) } }
   return t !== null ? { status, kind: 'text', raw: t } : { status, kind: 'text', raw_b64: dec.buf.toString('base64') }
 }
 
