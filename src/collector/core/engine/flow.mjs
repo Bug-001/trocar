@@ -30,6 +30,8 @@ export function handleFlow(client, meta, ctx) {
   let activeTee = null
   let finished = false
   let handedOff = false     // true once a routing decision hands the sockets to relay()
+  let relaying = false      // relay() owns teardown (armPre's handlers on a decrypted pair go quiet)
+  let tunnelAsked = false   // the client sent CONNECT inside a TLS connection we terminated (an https:// proxy)
   let selfClosed = false    // the engine tore this flow down itself (internalError)
   let upstream = null       // the TCP connection to the original destination
   let firstByteTimer = null
@@ -40,7 +42,7 @@ export function handleFlow(client, meta, ctx) {
   function waitFor(phase, host) {
     waitDone()
     const ms = ctx.upstreamSlowMs ?? 5000, t0w = Date.now()
-    slowTimer = setTimeout(() => { slowTimer = null; ctx.failure({ reason: 'upstream-slow', flow_id: rec.flow_id, host, phase, waited_ms: Date.now() - t0w }) }, ms)
+    slowTimer = setTimeout(() => { slowTimer = null; ctx.failure({ reason: 'upstream-slow', flow_id: rec.flow_id, host, phase, waited_ms: Math.max(ms, Date.now() - t0w) }) }, ms) // a timer can fire a ms early
     if (slowTimer.unref) slowTimer.unref()
   }
   function waitDone() { if (slowTimer) { clearTimeout(slowTimer); slowTimer = null } }
@@ -146,7 +148,7 @@ export function handleFlow(client, meta, ctx) {
   // down the upstream). We destroy the TLS socket directly rather than end()-then-destroy, because a
   // destroy that follows a graceful end() does not RST the underlying connection.
   function relay(cSock, uSock) {
-    handedOff = true // relay now owns teardown; the pre-decision handlers go quiet
+    handedOff = true; relaying = true // relay now owns teardown; the pre-decision handlers (and armPre's) go quiet
     if (firstByteTimer) { clearTimeout(firstByteTimer); firstByteTimer = null }
     let tee = activeTee
     // the recording side copy never throws into the forwarding path: a recorder that throws stops
@@ -232,8 +234,17 @@ export function handleFlow(client, meta, ctx) {
     const key = negKey(meta, host)
     const h1 = alpn === null || alpn.includes('http/1.1')
     const neg = ctx.negCache.get(key)
-    const skip = !meta.decrypt ? skipOf(sni ?? meta.dst.address) : ch.malformed ? ['malformed-hello', null] : skipOf(sni ?? meta.dst.address)
+    let skip = !meta.decrypt ? skipOf(sni ?? meta.dst.address) : ch.malformed ? ['malformed-hello', null] : skipOf(sni ?? meta.dst.address)
+    // An https:// proxy from the daemon's table for this process (RFC 4.6 §引擎 3 / §记录 https:// 代理): an own
+    // one is terminated even outside the decrypt policy (it is part of `auto`); a listed one that is not the
+    // process's own is spliced and labelled, unless the policy covers its host (`all`).
+    const proxy = isTunnel ? null : (meta.proxies || []).find((p) => p && p.scheme === 'https' && Number(p.port) === meta.dst.port && String(p.host).toLowerCase() === String(sni ?? meta.dst.address).toLowerCase())
+    if (proxy) {
+      rec.via_proxy = { scheme: 'https', host: proxy.host, port: Number(proxy.port), source: proxy.source ?? null, terminated: false }
+      if (skip && skip[0] === 'policy') skip = proxy.own ? null : ['https-proxy', 'proxy-not-own']
+    }
     if (!skip && h1 && !neg) return decrypt(buf, cSock, uSock, sni, host, isTunnel, key)
+    if (skip && skip[0] === 'https-proxy') ctx.counters.notCaptured.httpsProxy++
     // Every splice says why in flows/ (invariant 4, D38): untrusted / malformed / outside the policy, or a
     // host we would decrypt but do not — the negative cache (RFC 4.6 §引擎 5) or an offer without
     // http/1.1 (h2 only: T8). Spliced either way; the redirector is never told.
@@ -339,9 +350,58 @@ export function handleFlow(client, meta, ctx) {
   function decrypt(buf, cSock, uSock, sni, host, isTunnel, key) {
     terminate(buf, cSock, uSock, sni, host, isTunnel, key, (clientTls, upTls) => {
       setDecision('decrypt', isTunnel)
-      startTee(host, 'https')
-      relay(clientTls, upTls)
+      if (rec.via_proxy) rec.via_proxy.terminated = true
+      routeInner(clientTls, upTls, host, isTunnel)
     })
+  }
+
+  // What the client says first on a terminated TLS connection decides what it is (RFC 4.6 §记录 https:// 代理):
+  // a CONNECT makes this TLS server a proxy (an own https:// proxy, or any proxy under `all`) — relayed as in
+  // §引擎 3, the tunnelled TLS routed again; anything else is the decrypted call itself, for the exchange tee.
+  function routeInner(cTls, uTls, host, isTunnel) {
+    handedOff = true                                    // the raw sockets' pre-decision handlers go quiet
+    armPre(cTls, uTls)
+    const chunks = []
+    let decided = false
+    const stop = () => { decided = true; cTls.removeListener('data', onC); uTls.removeListener('data', onU) }
+    const onC = guard((d) => {
+      if (decided) return
+      chunks.push(d)
+      const buf = Buffer.concat(chunks), cls = classify(buf)
+      if (cls === 'need-more') return
+      stop()
+      if (cls === 'connect' && !isTunnel) {
+        rec.via_proxy = rec.via_proxy || { scheme: 'https', host, port: meta.dst.port, source: null, terminated: true }
+        tunnelAsked = true; rec.decision = 'tunnel'
+        return handleConnect(buf, cTls, uTls)
+      }
+      startTee(host, 'https').fromClient(buf); uTls.write(buf); relay(cTls, uTls)
+    })
+    const onU = guard((d) => {
+      if (decided) return
+      stop()
+      const pre = Buffer.concat(chunks)
+      startTee(host, 'https')
+      if (pre.length) { activeTee.fromClient(pre); uTls.write(pre) }
+      activeTee.fromUpstream(d); cTls.write(d); relay(cTls, uTls)
+    })
+    cTls.on('data', onC); uTls.on('data', onU)
+  }
+
+  // Between terminating TLS and relay() owning the connection nothing else listens for a side going (the raw
+  // sockets' handlers went quiet), so a side that goes must still finish the flow here. Before the client asked
+  // for a tunnel, quietly, as relay() would (an idle connection, a client rejecting our leaf); after a CONNECT
+  // inside the TLS and before the tunnel's decision, as a close before a decision (not_captured 'error').
+  function armPre(cS, uS) {
+    const go = (side) => (e) => {
+      if (relaying || finished) return
+      relaying = true
+      if (e instanceof Error && !rec.error) rec.error = { type: e.code || 'error', message: msgOf(e), side }
+      if (tunnelAsked && !rec.inner) { notCaptured('error'); if (!rec.error) rec.error = closedBefore(side) }
+      teardown()
+      for (const s of [cS, uS, client, upstream]) { try { s.destroy() } catch { /* ignore */ } }
+    }
+    for (const ev of ['end', 'close', 'error']) { cS.on(ev, go('client')); uS.on(ev, go('upstream')) }
   }
 
   // ── CONNECT: relay the proxy exchange verbatim, then route the tunnelled bytes ─────────────────
