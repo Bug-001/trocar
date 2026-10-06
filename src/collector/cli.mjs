@@ -16,9 +16,9 @@ import { collectorHome } from '../paths.mjs'
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 export const USAGE = [
-  'usage: asight collector install [--no-unit] (per user, no sudo: CA, agent trust entries, systemd --user unit)',
+  'usage: asight collector on | install [harness…] [--dry-run] [--yes] [--no-autostart | --no-unit] [--json]   (= asight on: per user, no sudo; the first one installs: CA, trust entries, systemd --user unit)',
   '       asight collector start               (run the daemon in the foreground; the unit runs exactly this)',
-  '       asight collector on | off | status [--json]',
+  '       asight collector off | status [--json]',
   '       asight collector uninstall [--purge-data]',
   '       sudo asight setup-helper [--binary <path>] [--remove]',
 ].join('\n')
@@ -101,19 +101,9 @@ export function formatInstallNotes(h) {
   return [`notes of the last install (${notes.length}):`, ...notes.map((n) => `  [${n.code || n.kind || 'note'}] ${n.reason}`)]
 }
 
-// Every file install will write or change, printed before it writes any (4.6).
-export function formatPlan(p) {
-  return ['asight collector install will write or change these files, and nothing else:',
-    `  install manifest: ${p.manifest}`,
-    `  collector CA (in no trust store): ${p.ca.join(', ')}`,
-    ...p.files.map((f) => `  ${f.harness}: ${f.path} = ${f.sources.length ? `the certificates of ${f.sources.join(', ')} + ` : ''}the collector CA`),
-    ...(p.owned || []).map((o) => `  ${o.harness}: ${o.path} (asight's ${o.role})`),
-    ...p.entries.map((e) => `  ${e.harness}: ${e.path}${e.real_path ? ` → ${e.real_path}` : ''} ${e.what || `${e.keys.join('.')} = ${e.value}`}`),
-    ...(p.unit ? [`  autostart unit (systemd --user, enabled --now): ${p.unit.path}${Object.keys(p.unit.env).length ? ` with ${Object.entries(p.unit.env).map(([k, v]) => `${k}=${v}`).join(' ')} for the daemon alone (it checks a relay's certificate with it)` : ''}`,
-      ...p.unit.links.map((l) => `  autostart link (made by systemctl --user enable): ${l}`)] : []),
-    ...(p.records ? [`  install notes (event log): ${p.records}/`] : p.events ? [`  install notes (appended, for the board): ${p.events}`] : []),
-    ...(p.watch || []).map((w) => `  ${w.harness} itself may write ${w.path} (${w.why}); uninstall reports it, never deletes it`)].join('\n')
-}
+// Every file `on` will write or change, printed before it writes any (4.6): src/cli/receipt.mjs holds the words, this is where the
+// collector's callers have always found it.
+export { formatPlan } from '../cli/receipt.mjs'
 
 // SIGHUP (the terminal closed, SSH dropped, logout) and SIGQUIT stop it cleanly like SIGTERM / SIGINT — Node's default
 // for SIGHUP is to exit at once, leaving the lock behind and the next start recording a crash that never was (D-27).
@@ -136,15 +126,11 @@ function onCrash(dir, err, exit) {
 const loadDaemon = () => import('./daemon.mjs')
 const loadInstall = () => import('./install.mjs')
 
-// The arch's autostart unit for this user, as install.mjs consumes it (null with --no-unit or on an OS without one).
-function unitOf(parts, home, script) {
+// The arch's autostart unit for this user, as install.mjs consumes it (null with --no-unit or on an OS without one): data plus the few systemctl verbs
+// (arch/linux/unit.mjs userUnit). `run` is the injected runner of OS tools; none means a real `systemctl --user` (refused under `npm test`, 0.1 §3).
+function unitOf(parts, home, script, run = null) {
   const U = parts.arch && parts.arch.unit
-  if (!U) return null
-  return {
-    path: U.unitPath(home), links: [U.wantsLink(home)], text: (env) => U.unitText({ node: process.execPath, script, env }),
-    enable: () => U.systemctl(['enable', '--now', U.UNIT_NAME]), disable: () => U.systemctl(['disable', '--now', U.UNIT_NAME]),
-    stop: () => U.systemctl(['stop', U.UNIT_NAME]), removeWants: (onError) => U.removeWantsLinks(home, { onError }),
-  }
+  return U && U.userUnit ? U.userUnit({ home, node: process.execPath, script, run }) : null
 }
 
 export async function runSetupHelper(argv, { arch = null, out = (s) => console.log(s), err = (s) => console.error(s), packageRoot = PACKAGE_ROOT } = {}) {
@@ -162,7 +148,7 @@ export async function runSetupHelper(argv, { arch = null, out = (s) => console.l
   } catch (e) { err(e.message); return 1 }
 }
 
-export async function runCollector(argv, { env = process.env, home = os.homedir(), out = (s) => console.log(s), err = (s) => console.error(s), request = controlRequest, daemon = null, install = null, waitForStop = waitForSignal, script = process.argv[1], proc = process, exit = (c) => process.exit(c) } = {}) {
+export async function runCollector(argv, { env = process.env, home = os.homedir(), out = (s) => console.log(s), err = (s) => console.error(s), request = controlRequest, daemon = null, install = null, waitForStop = waitForSignal, script = process.argv[1], proc = process, exit = (c) => process.exit(c), platform = process.platform, onDeps = {} } = {}) {
   const [verb, ...rest] = argv
   const D = () => daemon || loadDaemon()
   const I = () => install || loadInstall()
@@ -180,24 +166,22 @@ export async function runCollector(argv, { env = process.env, home = os.homedir(
     if (r && r.failed && r.failed.length) { err(`asight collector: stopped, but ${r.failed.join(', ')} failed while stopping (recorded in flows/)`); return 1 }
     return 0
   }
-  if (verb === 'install' || verb === 'uninstall') {
+  if (verb === 'install' || verb === 'on') { // the first `on` is the install (1.6 §1.6); `collector install` is its old name (§2 hidden alias)
+    const { runOnCli } = await import('../cli/on.mjs')
+    return runOnCli(rest, { io: { out, err, stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }, env, home, platform, deps: { daemon: daemon || undefined, install: install || undefined, request, script, ...onDeps } })
+  }
+  if (verb === 'uninstall') {
     try {
       const parts = await (await D()).loadParts({ env })
-      const { installCollector, uninstallCollector } = await I()
-      if (verb === 'install') {
-        const r = await installCollector({ home, env, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, osRootsFile: parts.osRootsFile, unit: rest.includes('--no-unit') ? null : unitOf(parts, home, script), onPlan: (p) => out(formatPlan(p)) })
-        if (r.already) { out('already installed'); return 0 }
-        out([`installed for ${os.userInfo().username}: engine port ${r.manifest.engine_port}`, ...r.manifest.entries.filter((e) => e.prior_value).map((e) => `  ${e.harness}: ${e.path} ${e.keys ? `${e.keys.join('.')} was ${e.prior_value}` : `held ${Object.entries(e.prior_value).map(([k, v]) => `${k}=${v}`).join(', ')} (commented out; uninstall restores it)`}`), ...r.plan.notes.map((n) => `note: ${n}`)].join('\n'))
-        return 0
-      }
+      const { uninstallCollector } = await I()
       const r = await uninstallCollector({ home, env, purgeData: rest.includes('--purge-data'), scan: parts.scan, osRootsFile: parts.osRootsFile, unit: unitOf(parts, home, script) })
       const left = r.left || []
       out([`${left.length ? 'uninstalled, except' : 'uninstalled'} (daemon: ${r.daemon}; ${r.kept_captures ? 'captures kept, --purge-data removes them' : 'captures removed'})`, ...r.entries.map((e) => `  ${e.harness}: ${e.path} ${e.result}`), ...(r.kept_bundles || []).map((k) => (k.holds_ca ? `  kept ${k.path} STILL WITH the asight CA (it could not be rewritten: ${k.error}) for pid ${k.pids.join(', ')}; fix the file, then run uninstall again` : `  kept ${k.path} without the asight CA for pid ${k.pids.join(', ')}; run uninstall again once they exit`)), ...r.still_trusting.map((p) => `  pid ${p.pid} (${p.agent}) trusts the asight CA ${UNTIL_TEXT[p.until] || UNTIL_TEXT.restart}`), ...(r.residue || []).map((p) => `  left in place: ${p}`), ...r.notes.map((n) => `note: ${n}`)].join('\n'))
       if (left.length) { err(`asight collector uninstall: ${left.length} item(s) could not be undone (${left.map((l) => `${l.path}: ${l.result}`).join('; ')}); the install manifest is kept — fix them, then run uninstall again`); return 1 }
       return 0
-    } catch (e) { err(`asight collector ${verb}: ${e.message}`); return 1 }
+    } catch (e) { err(`asight collector uninstall: ${e.message}`); return 1 }
   }
-  if (!['on', 'off', 'status'].includes(verb)) { err(USAGE); return 2 }
+  if (!['off', 'status'].includes(verb)) { err(USAGE); return 2 }
   // No daemon answered — not running, no runtime dir, or stuck: what is on disk says why and what failed last (D-2),
   // read by the board's own reader (src/health/read.mjs)
   const fromDisk = () => {
@@ -213,7 +197,7 @@ export async function runCollector(argv, { env = process.env, home = os.homedir(
   try { socketPath = controlSocketPath({ env }) } catch (e) { err(e.message); fromDisk(); return 2 }
   const json = rest.includes('--json')
   let r
-  try { r = await request({ socketPath, method: verb === 'status' ? 'GET' : 'POST', path: `/${verb}`, body: verb === 'on' ? {} : undefined }) } catch (e) {
+  try { r = await request({ socketPath, method: verb === 'status' ? 'GET' : 'POST', path: `/${verb}`, body: undefined }) } catch (e) {
     if (e.code === 'ENOENT' || e.code === 'ECONNREFUSED') {
       err('the collector daemon is not running: start it with "asight collector start" (or "systemctl --user start asight-collector")')
       fromDisk()
