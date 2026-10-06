@@ -77,7 +77,7 @@ export function wsIncompleteOf(rec) {
       ? `${nonVerbatim} client message(s) stored as their size only — ${why.label}`
       : `${nonVerbatim} client message(s) of a non-LLM endpoint stored as their size only (non-verbatim) — ${LEGACY_META_TEXT}`);
   }
-  return { partial, partialReasons, truncated, omitted, undecoded, nonVerbatim, ...(openerUndecoded ? { requestUndecoded: true } : {}), text: `WebSocket call: ${parts.join('; ')}` };
+  return { partial, partialReasons, truncated, omitted, undecoded, nonVerbatim, ...(nonVerbatim ? { retention: bodyRetentionOf(rec) === 'log' ? 'log' : 'legacy-meta' } : {}), ...(openerUndecoded ? { requestUndecoded: true } : {}), text: `WebSocket call: ${parts.join('; ')}` };
 }
 
 // The response body's labels (RFC 4.1 落地细节 (10), 4.6 §记录 体不完整; D38): the old capture and the
