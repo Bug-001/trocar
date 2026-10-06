@@ -169,7 +169,7 @@ asight raw seal --legacy ~/.asight/sessions        # pre-2026-10 files: refuses 
 asight raw verify ~/.asight/sessions               # decode every sealed copy, compare byte for byte with its original
 asight raw compare ~/.asight/sessions              # per session: what the board, ETL and resolver read via the originals vs. via their sealed copies (--list: per file)
 asight raw seal --legacy ~/.asight/sessions --delete-original --dry-run   # which originals would be deleted, which refused
-asight raw seal --legacy ~/.asight/sessions --delete-original   # deletes only originals that already have a sealed copy, after a byte-for-byte check
+asight raw seal --legacy ~/.asight/sessions --delete-original   # deletes only originals that already have a sealed copy, after a byte-for-byte check; each deletion journalled first (no journal, no deletion)
 asight raw export <session-id>                     # back to plain NDJSON: ~/.asight/export/<session>/, one file per segment (0600)
 asight raw journal                                 # every refusal, skip, failure and deletion, with its reason
 ```
