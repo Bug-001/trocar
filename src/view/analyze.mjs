@@ -305,6 +305,12 @@ const AUX_KINDS = new Set(['aux', 'notify', 'titlegen', 'quota'])
 // empty request stub plus `unparsed:true`, and the view shows an explicit "unrenderable" call
 // rather than a hole in the numbering. Marked, never invented.
 const isUnparsed = (r) => !(r.request && Array.isArray(r.request.messages))
+// The reason an unparsed call shows in place of its context, one wording for every assembly path (the flat-lane
+// wires use it too). A labelled body says exactly what happened; with no label (v0, legacy MITM) truncation and
+// corruption cannot be told apart.
+export const unparsedErrMsg = (reqIncomplete) => (reqIncomplete
+  ? `unrenderable: req_body could not be parsed — ${reqIncomplete.text}`
+  : 'unrenderable: req_body could not be parsed (truncated / corrupt capture)')
 // A call is "failed" if it carries an error key, a non-200 status, or is an unparsed sentinel.
 // (Status-less records — an in-flight capture with no response yet — are NOT failures.)
 function failedCall(r) {
@@ -387,9 +393,7 @@ export function analyze(records, opts = {}) {
       respIncomplete: respIncompleteOf(r), // a response body not decoded / not JSON / empty / partly parsed / cut
       // `error` now covers EVERY non-200 (was: only 5xx — so a 401/429 rendered as a normal call).
       error: failed,
-      // A labelled body says exactly what happened. The old wording stays for captures with no label
-      // (v0, legacy MITM), where truncation and corruption cannot be told apart.
-      errMsg: r._unparsed ? (reqIncomplete ? `unrenderable: req_body could not be parsed — ${reqIncomplete.text}` : 'unrenderable: req_body could not be parsed (truncated / corrupt capture)')
+      errMsg: r._unparsed ? unparsedErrMsg(reqIncomplete)
         : (rs.error?.message || (status != null && status !== 200 ? `HTTP ${status}` : (r.error ? String(r.error.message || r.error) : null))),
       // Cache-prefix chaining (audit 2026-07-19). A call that FAILED did not establish a new cache
       // prefix at the provider — a 401/429/502 never got far enough to write one — so the next call's

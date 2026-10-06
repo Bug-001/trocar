@@ -5,7 +5,7 @@
 // provider parsing in the browser → invariant 3 / AC-3 intact (adding a provider = a new
 // server-side analyzer, frontend unchanged).
 import { createHash } from 'node:crypto';
-import { analyze, linearContext, cacheBreak, normResp, flatBlockText } from './analyze.mjs';
+import { analyze, linearContext, cacheBreak, normResp, flatBlockText, unparsedErrMsg } from './analyze.mjs';
 import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf, captureLabelsOf } from '../dissect/capture-labels.mjs'; // #21 request-body labels, D38 WebSocket labels, response labels; captureLabelsOf: the per-call wire.labels (4.6 §记录)
 import { blockSpans } from '../adapters/cc.mjs';
 import { scanJson, spanAt } from '../adapters/content-hash.mjs';
@@ -167,12 +167,20 @@ function assembleFlatLane(records, d, opts = {}) {
     const gi = opts.giOf ? opts.giOf(r) : local;
     local++;
     let req;
+    let unparsed = false; // a request body that does not parse has no context to show: say so (invariant 4, D38)
     if (ctx) req = ctx.req;
     else {
       try { req = JSON.parse(r.req_body); } catch { req = null; }
-      // req_body null (a WebSocket call whose request message is undecoded, or a server push: 4.6 §传输) parses to null,
-      // which used to throw below and take the whole session's /api/session down: such a call has no request
-      if (!req || typeof req !== 'object') req = (r.request && typeof r.request === 'object') ? r.request : {};
+      if (!req || typeof req !== 'object') {
+        if (r.request && typeof r.request === 'object') req = r.request; // demo v0 shape
+        else {
+          req = {};
+          // a body that is there but does not parse is unrenderable, with its reason (R4-3). A req_body that is null (a
+          // WebSocket call whose request message is undecoded, or a server push: 4.6 §传输) is no body at all: such a call
+          // has no request, and its labels say why (wsIncomplete); it must not take /api/session down either
+          if (r.req_body != null) unparsed = true;
+        }
+      }
     }
     r.request = req; // so the board's callComp / cost read the parsed request
     // derived counts the board header + raw card read (parallel to hydrateForBoard on the multi-lane path)
@@ -182,7 +190,7 @@ function assembleFlatLane(records, d, opts = {}) {
     const norm = d.normResp(r);
     const usage = norm.canonUsage;
     const st = (respOf(r) || {}).status;
-    const failed = !!(d.failed && d.failed(norm, r));
+    const failed = unparsed || !!(d.failed && d.failed(norm, r));
     const wire = wireOf(r, d.id, ctx, norm);
     const brk = cacheBreak(prevFlat, flat, {});
     // 3.2:124 on the board too: what is shown of a partial / server-edited context is not what the model saw,
@@ -203,6 +211,8 @@ function assembleFlatLane(records, d, opts = {}) {
       tools: Array.isArray(req.tools) ? req.tools.length : 0,
       ts: r.ts_request || r.ts || '', status: (r.resp && r.resp.status) || null,
       compaction: false, error: !!r.error || failed, reqIncomplete: reqIncompleteOf(r), wsIncomplete: wsIncompleteOf(r), respIncomplete: respIncompleteOf(r),
+      // the same sentinel the multi-lane path makes of a body that did not parse: the page shows why, not an empty window
+      ...(unparsed ? { unparsed: true, errMsg: unparsedErrMsg(reqIncompleteOf(r)) } : null),
       wire, nonBlockKeys: kept ? nonBlockKeysOf(r, d.id) : [], ...extraMessagesOf(r), respRefs: respRefsOf(r),
       // shipped as metadata + a text_ref per block, never the body (4.2:55); a cross-record context locates each
       // block in the record and field its bytes came from; out of the window: no blocks
