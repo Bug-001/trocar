@@ -18,6 +18,7 @@
 import { dissectBlocks, sysLabel, parseBashReads } from '../dissect/cc.mjs'
 import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf } from '../dissect/capture-labels.mjs'
 import { hintsOf } from '../dissect/harnesses.mjs'
+import { compactionVerdict } from '../identity/session-identity.mjs'
 // Envelope drift guard (R1): the D10 envelope stores the response under `resp`, demo v0 under
 // `response`. Reading `.response` directly is the bug class that silently killed every HTTP status
 // on real captures — so go through the shared helper, never the raw key. (assemble.mjs imports
@@ -281,6 +282,27 @@ function userEvents(newMessages, step, streamId) {
   return ev
 }
 
+// The board's message-count drop rule for compaction (the last step of the shared verdict, compactionVerdict): a
+// big collapse, or any drop that carries Claude Code's own "continued from a previous conversation" preamble. A
+// small drop alone is not enough here — on a real CC session the main lane goes 58 → 55 (no compaction) before the
+// real 55 → 4. The ETL's rule (markCompaction: any drop) differs; that divergence is the user's call (3.4 「骤降」).
+export function boardCompactionDrop(from, to, cur = {}) {
+  const drop = to < from
+  const bigDrop = drop && to < from - 5 && to < from * 0.7
+  return bigDrop || (drop && cur.preamble) ? { compaction: true, compaction_from: from, compaction_to: to }
+    : { compaction: false, compaction_from: null, compaction_to: null }
+}
+// What a compaction verdict says about itself on the board (1.5:38 / 1.5:79: the UI tells confirmed from inferred).
+// A harness header hint is the harness's own word (high, not inferred); a text marker and a count drop are inferred
+// (medium, 3.4). `preamble` only refines the wording of a drop.
+export function compactionMeta(v, preamble = false) {
+  if (!v || !v.compaction) return { compaction: false }
+  const byHint = v.basis === 'hint'
+  return { compaction: true, compactionInferred: !byHint, compactionConfidence: byHint ? 'high' : 'medium',
+    compactionBasis: byHint ? 'harness-header' : v.basis === 'marker' ? 'harness-marker' : (preamble ? 'preamble+msg-count-drop' : 'msg-count-drop'),
+    evictedFrom: v.compaction_from, evictedTo: v.compaction_to }
+}
+
 const LANE_META = {
   main: { icon: '💬', label: 'conversation' },
   subagent: { icon: '🧬', label: 'subagent' },
@@ -445,6 +467,7 @@ export function analyze(records, opts = {}) {
     const resMap = new Map()
     const seenMap = new Map() // filenames the agent saw (in results/prose) but never opened
     let prevCount = 0, prevCtx = 0
+    let prevInfo = null // { msgCount, marker } of the last renderable call in this lane: the compaction verdict's predecessor
     for (let k = 0; k < s.calls.length; k++) {
       const step = s.calls[k]
       // Unparsed sentinel: no context to diff. Emit the visible error marker and leave prevCount /
@@ -468,23 +491,21 @@ export function analyze(records, opts = {}) {
       }
 
       const drop = msgs.length < prevCount
-      const bigDrop = drop && msgs.length < prevCount - 5 && msgs.length < prevCount * 0.7
       const hasPreamble = msgs.slice(0, 4).some((m) => /continued from a previous conversation/i.test(textOfMessage(m)))
       const isSummarize = /^\s*<analysis>/.test(step.norm.text || '')
+      // 3.4, the ETL's verdict (compactionVerdict): a harness header hint first (x-cc-compaction-request, dsh's compact
+      // header), a text marker on its rising edge, then the board's drop rule.
+      // 保真边界 (invariant 4 · spec 1.5:37 / 3.4:16,21): a drop or a marker is INFERRED from observed shape, never
+      // confirmed by the harness, and says so (medium, `compactionInferred`); a header hint is the harness's own word.
+      // `basis` names WHICH evidence fired: CC's own "continued from a previous conversation" preamble (the stronger
+      // drop signal) vs. a bare message-count collapse (a number going down — the weaker guess).
+      const h = hintsOf(step.rec)
+      const marker = h.compactionMarker === true
+      const verdict = compactionVerdict(prevInfo, { hint: h.compaction === true, marker, msgCount: msgs.length, preamble: hasPreamble }, boardCompactionDrop)
+      prevInfo = { msgCount: msgs.length, marker }
       let newMsgs
-      if (bigDrop || (drop && hasPreamble)) {
-        step.compaction = true
-        // 保真边界 (invariant 4 · spec 1.5:37 / 3.4:16,21): CC emits NO explicit compaction marker —
-        // this verdict is INFERRED from observed shape, never confirmed by the harness. Carry that in
-        // the data so a consumer can render "≈ inferred" instead of asserting it; spec 3.4:21 pins the
-        // level at medium. `basis` names WHICH evidence fired: CC's own "continued from a previous
-        // conversation" preamble (the stronger signal, and the harness's own words) vs. a bare
-        // message-count collapse (a number going down — the weaker guess).
-        step.compactionInferred = true
-        step.compactionConfidence = 'medium'
-        step.compactionBasis = hasPreamble ? 'preamble+msg-count-drop' : 'msg-count-drop'
-        step.evictedFrom = prevCount
-        step.evictedTo = msgs.length
+      if (verdict.compaction) {
+        Object.assign(step, compactionMeta(verdict, hasPreamble))
         for (const res of resMap.values()) {
           const last = res.segments[res.segments.length - 1]
           if (last.evict == null) last.evict = step.gi
@@ -499,7 +520,7 @@ export function analyze(records, opts = {}) {
         s.events.push({ type: 'compaction', step: step.gi, streamId: s.id, from: step.evictedFrom, to: step.evictedTo,
           // the event travels to the UI on its own — it MUST carry the inference marker with it,
           // otherwise the timeline re-asserts as fact what the step knows is a guess (invariant 4).
-          inferred: true, confidence: step.compactionConfidence, basis: step.compactionBasis })
+          inferred: step.compactionInferred, confidence: step.compactionConfidence, basis: step.compactionBasis })
       if (isSummarize) {
         step.summarizing = true
         s.events.push({ type: 'summarize', step: step.gi, streamId: s.id, out: step.norm.usage?.output_tokens })

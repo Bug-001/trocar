@@ -263,16 +263,18 @@ export function markCompaction(prevMsgCount, curMsgCount) {
 //   2. a harness text marker (medium) on its RISING edge only: the marker stays in the history afterwards, and a
 //      lane's first call has no edge (the capture may have started after the compaction, or a new synthesized
 //      session may still carry an old marker);
-//   3. the message-count drop (medium, markCompaction).
+//   3. the message-count drop (medium, markCompaction). `drop(prevCount, curCount, cur)` replaces this last step
+//      only: the board passes its own threshold (analyze.mjs::boardCompactionDrop) — the two drop rules differ, a
+//      known divergence left to the user.
 // compaction_from is the predecessor's message count, NULL when the lane has none — never an invented 0
 // (invariant 4). `basis` names the evidence that fired, so a reader can say how sure it is.
-export function compactionVerdict(prev, cur) {
+export function compactionVerdict(prev, cur, drop = markCompaction) {
   const NONE = { compaction: false, compaction_from: null, compaction_to: null, basis: null }
   const from = prev ? prev.msgCount | 0 : null
   const to = cur.msgCount | 0
   if (cur.hint) return { compaction: true, compaction_from: from, compaction_to: to, basis: 'hint' }
   if (cur.marker && prev && !prev.marker) return { compaction: true, compaction_from: from, compaction_to: to, basis: 'marker' }
   if (!prev) return NONE
-  const m = markCompaction(prev.msgCount, cur.msgCount)
-  return m.compaction ? { ...m, basis: 'msg-count-drop' } : NONE
+  const m = drop(prev.msgCount | 0, to, cur)
+  return m.compaction ? { compaction: true, compaction_from: m.compaction_from, compaction_to: m.compaction_to, basis: 'msg-count-drop' } : NONE
 }

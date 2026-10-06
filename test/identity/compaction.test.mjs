@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { markCompaction, forkOf, compactionVerdict } from '../../src/identity/session-identity.mjs'
+import { boardCompactionDrop } from '../../src/view/analyze.mjs'
 import { rec } from './fixtures.mjs'
 
 test('markCompaction: message-count drop within a session flags compaction with from/to', () => {
@@ -29,5 +30,14 @@ test('compactionVerdict: hint first, a marker on its rising edge only, else the 
   assert.deepEqual(v({ msgCount: 5, marker: true }, { marker: true, msgCount: 6 }), [false, null, null, null], 'the marker stays in the history')
   assert.deepEqual(v({ msgCount: 9, marker: false }, { msgCount: 2 }), [true, 9, 2, 'msg-count-drop'])
   assert.deepEqual(v(null, { msgCount: 2 }), [false, null, null, null])
+})
+
+test('compactionVerdict: a drop rule replaces only the last step (the board passes its own threshold)', () => {
+  const prev = { msgCount: 58, marker: false }
+  assert.equal(compactionVerdict(prev, { msgCount: 55 }).compaction, true, 'the ETL: any drop')
+  assert.equal(compactionVerdict(prev, { msgCount: 55 }, boardCompactionDrop).compaction, false, 'the board: a small drop alone is not enough')
+  assert.equal(compactionVerdict(prev, { msgCount: 55, preamble: true }, boardCompactionDrop).compaction, true, 'unless CC says it continued a conversation')
+  assert.equal(compactionVerdict({ msgCount: 55, marker: false }, { msgCount: 4 }, boardCompactionDrop).compaction, true)
+  assert.equal(compactionVerdict(prev, { hint: true, msgCount: 60 }, boardCompactionDrop).basis, 'hint', 'a hint never consults the drop rule')
 })
 

@@ -2077,7 +2077,7 @@ function lifecycleNav(){
   }
   const comps=(anchor.events||[]).filter(e=>e.type==='compaction'||e.type==='summarize')
   if(comps.length){
-    const kids=comps.map(e=>{ const at=L(e.step), lbl=e.type==='compaction'?`✂ compaction ${e.from}→${e.to} msgs`:`🗜 summary (${kf(e.out)} tok out)`; return `<div class="navsub" data-navstep="${at}"><span class="nsl">${lbl}</span><span class="nsx">#${at+1}</span></div>` }).join('')
+    const kids=comps.map(e=>{ const at=L(e.step), lbl=e.type==='compaction'?`✂ compaction ${e.from??'?'}→${e.to} msgs`:`🗜 summary (${kf(e.out)} tok out)`; return `<div class="navsub" data-navstep="${at}"><span class="nsl">${lbl}</span><span class="nsx">#${at+1}</span></div>` }).join('')
     h+=navGroup('life-comp','✂','context resets',comps.length,kids)
   }
   return h||'<div class="navsub" style="opacity:.5">no resources tracked yet</div>'

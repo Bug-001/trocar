@@ -5,13 +5,14 @@
 // provider parsing in the browser → invariant 3 / AC-3 intact (adding a provider = a new
 // server-side analyzer, frontend unchanged).
 import { createHash } from 'node:crypto';
-import { analyze, linearContext, cacheBreak, normResp, flatBlockText, unparsedErrMsg } from './analyze.mjs';
+import { analyze, linearContext, cacheBreak, normResp, flatBlockText, unparsedErrMsg, boardCompactionDrop, compactionMeta } from './analyze.mjs';
+import { compactionVerdict } from '../identity/session-identity.mjs';
 import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf, captureLabelsOf } from '../dissect/capture-labels.mjs'; // #21 request-body labels, D38 WebSocket labels, response labels; captureLabelsOf: the per-call wire.labels (4.6 §记录)
 import { blockSpans } from '../adapters/cc.mjs';
 import { scanJson, spanAt } from '../adapters/content-hash.mjs';
 import { slimBlock, compBuckets } from './blockmeta.mjs';
 import { mintRawRef, composeTextRef, fieldTextOf, TEXT_REF_FIELD } from '../etl/orchestrator.mjs';
-import { sessionKeyOf, observerEffectsOf } from '../dissect/harnesses.mjs';
+import { sessionKeyOf, observerEffectsOf, hintsOf } from '../dissect/harnesses.mjs';
 import { wireFormatOf, boardDissectorFor, contextStateOf, blockKeysOf, flatLaneOf } from '../dissect/registry.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
 import { requestEncodingOf } from '../dissect/request-body.mjs';
@@ -157,6 +158,7 @@ function assembleFlatLane(records, d, opts = {}) {
   const scans = new Map(); // record → field → scanned JSON root, shared by every call's locators (linear, not N²)
   const calls = [];
   const prevFlatOf = new Map(); // lane kind → the last call that established a cache prefix in that lane
+  const prevInfoOf = new Map(); // lane kind → { msgCount, marker } of the last parsed call: the compaction verdict's predecessor
   let local = 0;
   for (const r of llm) {
     const ctx = plans && d.contextOf ? d.contextOf(r, plans) : null; // { req, contextState, missing, locate }
@@ -192,7 +194,15 @@ function assembleFlatLane(records, d, opts = {}) {
     const st = (respOf(r) || {}).status;
     const failed = unparsed || !!(d.failed && d.failed(norm, r));
     const wire = wireOf(r, d.id, ctx, norm);
-    const brk = cacheBreak(prevFlat, flat, {});
+    // 3.4 compaction, the ETL's verdict (compactionVerdict) with the board's drop rule: a harness hint (Codex
+    // request_kind=compaction, a compact header), a text marker on its rising edge (Hermes), then a big drop.
+    // The count is the dissector's own (the ETL's), so compaction_from / _to match DuckDB.
+    const h = hintsOf(r);
+    const msgN = d.messageCount ? d.messageCount(req) : (req.message_count || 0);
+    const comp = unparsed ? { compaction: false } : compactionMeta(compactionVerdict(prevInfoOf.get(laneKind) || null,
+      { hint: h.compaction === true, marker: h.compactionMarker === true, msgCount: msgN }, boardCompactionDrop));
+    if (!unparsed) prevInfoOf.set(laneKind, { msgCount: msgN, marker: h.compactionMarker === true });
+    const brk = cacheBreak(prevFlat, flat, { compaction: comp.compaction });
     // 3.2:124 on the board too: what is shown of a partial / server-edited context is not what the model saw,
     // so no byte-identity claim and no ground truth is made over it
     const blind = wire.contextState === 'partial' || wire.contextState === 'server_edited';
@@ -210,7 +220,7 @@ function assembleFlatLane(records, d, opts = {}) {
       msgCount: req.message_count || 0,
       tools: Array.isArray(req.tools) ? req.tools.length : 0,
       ts: r.ts_request || r.ts || '', status: (r.resp && r.resp.status) || null,
-      compaction: false, error: !!r.error || failed, reqIncomplete: reqIncompleteOf(r), wsIncomplete: wsIncompleteOf(r), respIncomplete: respIncompleteOf(r),
+      ...comp, error: !!r.error || failed, reqIncomplete: reqIncompleteOf(r), wsIncomplete: wsIncompleteOf(r), respIncomplete: respIncompleteOf(r),
       // the same sentinel the multi-lane path makes of a body that did not parse: the page shows why, not an empty window
       ...(unparsed ? { unparsed: true, errMsg: unparsedErrMsg(reqIncompleteOf(r)) } : null),
       wire, nonBlockKeys: kept ? nonBlockKeysOf(r, d.id) : [], ...extraMessagesOf(r), respRefs: respRefsOf(r),
@@ -227,12 +237,16 @@ function assembleFlatLane(records, d, opts = {}) {
   const kinds = Object.keys(FLAT_LANES).filter((k) => calls.some((c) => c.streamId === k));
   const lanes = kinds.map((k) => {
     const lc = calls.filter((c) => c.streamId === k);
-    return { id: k, streamId: k, ...FLAT_LANES[k], calls: lc, events: [], resources: [], seenFiles: [],
+    // the compaction events the board's outline lists, carrying the step's inference marker with them (invariant 4)
+    const events = lc.filter((c) => c.compaction).map((c) => ({ type: 'compaction', step: c.gi, streamId: k, from: c.evictedFrom, to: c.evictedTo,
+      inferred: c.compactionInferred, confidence: c.compactionConfidence, basis: c.compactionBasis }));
+    return { id: k, streamId: k, ...FLAT_LANES[k], calls: lc, events, resources: [], seenFiles: [],
       giLocal: new Map(lc.map((c, i) => [c.gi, i])), peakCtx: lc.reduce((m, c) => Math.max(m, c.ctx), 1),
       spawnStep: null, parent: null, flagged: 0 };
   });
   const stats = {
-    calls: calls.length, streams: lanes.length, subagents: lanes.filter((l) => l.kind === 'subagent').length, monitors: 0, compactions: 0,
+    calls: calls.length, streams: lanes.length, subagents: lanes.filter((l) => l.kind === 'subagent').length, monitors: 0,
+    compactions: calls.filter((c) => c.compaction).length,
     totalIn: calls.reduce((a, c) => a + ((c.norm.usage || {}).input_tokens || 0), 0),
     totalOut: calls.reduce((a, c) => a + ((c.norm.usage || {}).output_tokens || 0), 0),
     peakCtx: calls.reduce((a, c) => Math.max(a, c.ctx), 0),
