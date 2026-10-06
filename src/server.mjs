@@ -28,6 +28,8 @@ import { monitoringStatus, monitoringOn, monitoringOff } from './capture/control
 import { listSources, dirInputs, isSealedPath, sealedSources, unreadCapture } from './raw/discover.mjs';
 import { sealedReadProblem } from './raw/journal.mjs';
 import { emptyMeta, mergeMeta, foldSealed } from './etl/session-meta.mjs';
+import { captureHealth, HealthUnreadable } from './health/read.mjs';
+import { asightHome } from './paths.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = path.join(HERE, 'web'); // src/web — the reused demo board (self-contained index.html)
@@ -411,7 +413,9 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
   proxyUrl = process.env.ASIGHT_PROXY_URL || 'http://127.0.0.1:8899', controlDeps = {}, readRetryMs = 30000,
   // where `asight raw seal` files a shard's records by session (bin passes ~/.asight/sessions): sealed
   // files there continuing a shard of a served root are read with it (src/raw/discover.mjs rule 3)
-  sessionsRoot = null } = {}) {
+  sessionsRoot = null,
+  // the asight home /api/capture-health reads (D38): ~/.asight unless a test passes a sandbox; resolved per request
+  healthHome = null } = {}) {
   // The SQL family is OPTIONAL — a board with no DuckDB store is a normal, fully-working state.
   // But "the store was never built" and "the store is BROKEN" are different truths, and collapsing
   // them (a bare catch → db=null → 404 "no analytics db") made every corruption, permission problem
@@ -685,6 +689,14 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         const cls = url.searchParams.get('class');
         const ctl = await loadControlRecords();
         return sendJson(res, 200, withErrors(controlView(ctl, cls), ctl.sourceErrors));
+      }
+      // D38 (RFC 4.4): capture health, read from disk only — the collector's flows/, lock, manifest and state.json,
+      // the raw journal, the old capture's events — never through the collector daemon's socket (4.4 OPEN: that
+      // relay waits for per-user isolation). Fixed paths under ~/.asight, nothing from the request (4.4 路径安全).
+      // Unreadable → 503 with the reason, never an empty answer; metadata only (src/health/flows.mjs pick).
+      if (p === '/api/capture-health') {
+        try { return sendJson(res, 200, captureHealth({ home: healthHome || asightHome() })); }
+        catch (e) { if (e instanceof HealthUnreadable) return sendJson(res, 503, { error: `capture health could not be read: ${e.message}` }); throw e; }
       }
       if (p === '/api/pricing') { // D14: editable unit-price config (cost = usage × price, derived)
         const { pricing, source } = loadPricing();
