@@ -204,9 +204,12 @@ export function sessionView(records, sessionId, { enrich, bound, page, maxBytes 
   // window it is asking for the WHOLE session's shape plus one page of bodies — which the retention
   // window below delivers at bounded cost, with nothing dropped and so nothing to disclose.
   const win = page ? windowOf(page) : null;
+  const all = recs;
   if (!win) ({ recs, bound: autoBound } = tailBound(recs, maxBytes));
   const probes = probeRecs(recs);
-  const analyzed = assembleSession(llmRecs(recs), win ? { keepFlat: (gi) => inPage(gi, win) } : undefined);
+  // A context stitched across records (D37 ②, a WebSocket call) is planned over the WHOLE session, so a call
+  // the tail bound keeps does not turn partial because its predecessor fell outside the bound.
+  const analyzed = assembleSession(llmRecs(recs), { ...(win ? { keepFlat: (gi) => inPage(gi, win) } : {}), chainRecords: llmRecs(all) });
   const slim = recs.map((r) => ({
     is_llm_call: !!r.is_llm_call, ts_request: r.ts_request, id: r.id,
     response: { status: (respOf(r) || {}).status ?? null }, // R1: read via respOf (D10 `resp` + v0 `response`)

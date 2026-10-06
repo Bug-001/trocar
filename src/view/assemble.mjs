@@ -10,7 +10,7 @@ import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf, captureLabelsOf } fr
 import { blockSpans } from '../adapters/cc.mjs';
 import { scanJson, spanAt } from '../adapters/content-hash.mjs';
 import { slimBlock, compBuckets } from './blockmeta.mjs';
-import { mintRawRef, composeTextRef } from '../etl/orchestrator.mjs';
+import { mintRawRef, composeTextRef, fieldTextOf } from '../etl/orchestrator.mjs';
 import { sessionKeyOf, hintsOf, observerEffectsOf } from '../dissect/harnesses.mjs';
 import { wireFormatOf, boardDissectorFor, contextStateOf, blockKeysOf } from '../dissect/registry.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
@@ -105,8 +105,9 @@ function unknownSummary(recs, partial) {
   return {
     partial,
     reason: partial
-      ? 'Some records in this session match no registered dissector (src/dissect/registry.mjs). They are '
-        + 'counted here and NOT rendered; the rest of the session is.'
+      ? 'Some records in this session are read as a call by no registered dissector (src/dissect/registry.mjs): '
+        + 'an unknown wire, or a record of a known wire that is no call (e.g. a message the server pushed with no '
+        + 'call open). They are counted here and NOT rendered; the rest of the session is.'
       : 'No registered dissector claims these bytes (src/dissect/registry.mjs), so they are NOT '
         + 'parsed and NOT rendered — showing them under another wire\'s vocabulary would be a fabrication.',
     records: recs.length,
@@ -137,28 +138,40 @@ const FLAT_LANES = {
   subagent: { kind: 'subagent', icon: '🧬', label: 'subagent' },
   aux: { kind: 'aux', icon: '⚙', label: 'other util' },
   probe: { kind: 'probe', icon: '👁', label: 'warm-up / probe requests',
-    note: 'A request the harness itself marks as a warm-up or probe (its request-kind hint): it primes the cache and is not a conversation turn. Its body is kept verbatim like any call.' },
+    note: 'A request the harness itself marks as a warm-up or probe (a request-kind hint, or a request that asks for no output): it primes the cache and is not a conversation turn. Its body is kept verbatim like any call, and a later call may build on it.' },
 };
 // analyze()'s step order (ts_request, then id), exactly: every assembler uses it, so a session's global
 // step index is one sort whichever wires it mixes.
 const stepOrder = (a, b) => String(a.ts_request).localeCompare(String(b.ts_request)) || String(a.id).localeCompare(String(b.id));
 function assembleFlatLane(records, d, opts = {}) {
-  // Admit every record the registry hands to THIS dissector (shape in, shape out: the dissector dispatches,
-  // the shared layer does not branch).
-  const llm = (records || []).filter((r) => r && r.is_llm_call && boardDissectorFor(r) === d).sort(stepOrder);
+  // Admit every record the registry hands to THIS dissector and the dissector reads as a call (shape in, shape
+  // out: the dissector dispatches, the shared layer does not branch; assembleSession counts the rest).
+  const admits = (r) => !d.admits || d.admits(r);
+  const llm = (records || []).filter((r) => r && r.is_llm_call && boardDissectorFor(r) === d && admits(r)).sort(stepOrder);
+  // A wire whose context spans records (D37 ②) plans it over every record of the session — including the ones a
+  // tail bound leaves out (opts.chainRecords) — so no call looks partial only because the view is bounded.
+  const plans = d.prepare ? d.prepare(opts.chainRecords || records || []) : null;
+  const scans = new Map(); // record → field → scanned JSON root, shared by every call's locators (linear, not N²)
   const calls = [];
   const prevFlatOf = new Map(); // lane kind → the last call that established a cache prefix in that lane
   let local = 0;
   for (const r of llm) {
-    // the harness table's lane hint (3.4: e.g. a subagent header); labels are server-side (invariant 3)
-    const laneKind = FLAT_LANES[hintsOf(r).lane] ? hintsOf(r).lane : 'main';
+    const ctx = plans && d.contextOf ? d.contextOf(r, plans) : null; // { req, contextState, missing, locate }
+    // the dissector's own lane (a warm-up, 3.1:37) first, else the harness table's hint (3.4: e.g. a subagent
+    // header); labels are server-side (invariant 3)
+    const hint = (d.laneOf && d.laneOf(r)) || hintsOf(r).lane;
+    const laneKind = FLAT_LANES[hint] ? hint : 'main';
     const prevFlat = prevFlatOf.get(laneKind) || null;
     const gi = opts.giOf ? opts.giOf(r) : local;
     local++;
-    let req; try { req = JSON.parse(r.req_body); } catch { req = null; }
-    // req_body null (a WebSocket call whose request message is undecoded, or a server push: 4.6 §传输) parses to null,
-    // which used to throw below and take the whole session's /api/session down: such a call has no request
-    if (!req || typeof req !== 'object') req = (r.request && typeof r.request === 'object') ? r.request : {};
+    let req;
+    if (ctx) req = ctx.req;
+    else {
+      try { req = JSON.parse(r.req_body); } catch { req = null; }
+      // req_body null (a WebSocket call whose request message is undecoded, or a server push: 4.6 §传输) parses to null,
+      // which used to throw below and take the whole session's /api/session down: such a call has no request
+      if (!req || typeof req !== 'object') req = (r.request && typeof r.request === 'object') ? r.request : {};
+    }
     r.request = req; // so the board's callComp / cost read the parsed request
     // derived counts the board header + raw card read (parallel to hydrateForBoard on the multi-lane path)
     Object.assign(req, d.reqCounts(req));
@@ -166,8 +179,14 @@ function assembleFlatLane(records, d, opts = {}) {
     const flat = d.boardFlat(req, r);
     const norm = d.normResp(r);
     const usage = norm.canonUsage;
+    const st = (respOf(r) || {}).status;
+    const failed = !!(d.failed && d.failed(norm, r));
+    const wire = wireOf(r, d.id, ctx, norm);
     const brk = cacheBreak(prevFlat, flat, {});
-    const curPfx = prefixSha256(flat, brk.idx);
+    // 3.2:124 on the board too: what is shown of a partial / server-edited context is not what the model saw,
+    // so no byte-identity claim and no ground truth is made over it
+    const blind = wire.contextState === 'partial' || wire.contextState === 'server_edited';
+    const curPfx = blind ? null : prefixSha256(flat, brk.idx);
     const prevPfx = prefixSha256(prevFlat, brk.idx);
     const prefixByteIdentical = brk.idx > 0 && curPfx != null && curPfx === prevPfx;
     brk.prefixSha256 = curPfx;
@@ -181,17 +200,17 @@ function assembleFlatLane(records, d, opts = {}) {
       msgCount: req.message_count || 0,
       tools: Array.isArray(req.tools) ? req.tools.length : 0,
       ts: r.ts_request || r.ts || '', status: (r.resp && r.resp.status) || null,
-      compaction: false, error: !!r.error, reqIncomplete: reqIncompleteOf(r), wsIncomplete: wsIncompleteOf(r), respIncomplete: respIncompleteOf(r),
-      wire: wireOf(r, d.id), nonBlockKeys: kept ? nonBlockKeysOf(r, d.id) : [],
-      // shipped as metadata + a text_ref per block, never the body (4.2:55); out of the window: no blocks
-      flat: kept ? withPathRefs(flat, r) : [], ...(kept ? null : { paged_out: true }),
+      compaction: false, error: !!r.error || failed, reqIncomplete: reqIncompleteOf(r), wsIncomplete: wsIncompleteOf(r), respIncomplete: respIncompleteOf(r),
+      wire, nonBlockKeys: kept ? nonBlockKeysOf(r, d.id) : [], ...extraMessagesOf(r),
+      // shipped as metadata + a text_ref per block, never the body (4.2:55); a cross-record context locates each
+      // block in the record and field its bytes came from; out of the window: no blocks
+      flat: kept ? (ctx ? withLocatedRefs(flat, ctx.locate, scans) : withPathRefs(flat, r)) : [], ...(kept ? null : { paged_out: true }),
       // Tier A, same as the multi-lane path: computed from `flat` BEFORE the retention window drops it.
       comp: compBuckets(flat),
       usage, cacheBreak: brk, gt: brk.gt, prefixSha256: curPfx,
     });
     // A call that failed never established a cache prefix, so it MUST NOT become the next baseline.
-    const st = (respOf(r) || {}).status;
-    if (!(r.error || (st != null && st !== 200))) prevFlatOf.set(laneKind, flat);
+    if (!(r.error || failed || (st != null && st !== 200))) prevFlatOf.set(laneKind, flat);
   }
   const kinds = Object.keys(FLAT_LANES).filter((k) => calls.some((c) => c.streamId === k));
   const lanes = kinds.map((k) => {
@@ -275,9 +294,54 @@ function withPathRefs(flat, rec) {
 // Canonical wire facts per call (3.2:131-133), baked HERE so the page only reads them (invariant 3):
 // format, vendor (null = cache semantics unknown), transport, context state, observer effects and the
 // incompleteness labels (4.6 §记录 「不完整的标注」 — shown on the call, never dropped). Cheap: no body parse.
-function wireOf(rec, format) {
+// A cross-record context (ctx, from the dissector) brings its own state and, when partial, what is missing;
+// `norm.unread` counts reply messages the dissector could not read (D38: never skipped without a trace).
+function wireOf(rec, format, ctx = null, norm = null) {
+  const labels = captureLabelsOf(rec);
+  const unread = norm && norm.unread;
+  if (unread) labels.push({ id: 'reply-unread', label: `回复部分未读 · ${unread} reply message${unread > 1 ? 's' : ''} not read`,
+    text: `${unread} server message${unread > 1 ? 's' : ''} of this call are not JSON text (binary, past the size cap, or not decodable); the reply shown is read from the others` });
   return { format, vendor: vendorOf(rec), transport: rec && rec.transport === 'ws' ? 'ws' : 'http',
-    contextState: contextStateOf(rec), observerEffect: observerEffectsOf(rec), labels: captureLabelsOf(rec) };
+    contextState: ctx ? ctx.contextState : contextStateOf(rec), ...(ctx && ctx.contextState === 'partial' && ctx.missing ? { contextMissing: ctx.missing } : {}),
+    observerEffect: observerEffectsOf(rec), labels };
+}
+// 3.1:37: client messages that arrived while the call was open (req_extra_messages, e.g. an interrupt) belong to
+// the call and MUST be visible — listed one by one with a locator to their verbatim text (4.2:40 字段段), or with
+// what is stored instead. Cheap meta: no parse.
+function extraMessagesOf(rec) {
+  const xs = rec && Array.isArray(rec.req_extra_messages) ? rec.req_extra_messages : [];
+  if (!xs.length) return null;
+  const base = rec.id != null && rec._stream ? mintRawRef(sessionIdOf(rec), rec._stream, String(rec.id)) : null;
+  return { extraMessages: xs.map((v, k) => {
+    const field = `req_extra_messages.${k}`;
+    if (typeof v === 'string') return { key: `req_extra_messages[${k}]`, chars: v.length, ref: base ? composeTextRef(base, [0, v.length], field) : null };
+    return { key: `req_extra_messages[${k}]`, chars: null, ref: null, note: `stored ${fieldTextOf(rec, field).missing.replace(/^stores \S+ as /, 'as ')}` };
+  }) };
+}
+// Locators for a context assembled across records: each block's bytes live in the record and field its segment
+// came from (D37 ②), addressed by a field-qualified text_ref (4.2:40). `scans` caches each (record, field)'s
+// scanned JSON once per session. A block whose span cannot be found, or whose record cannot be addressed, is
+// shipped inline and labelled unaddressable by slimBlock (invariant 4).
+function withLocatedRefs(flat, locateFn, scans) {
+  const rootOf = (rec, field) => {
+    let m = scans.get(rec);
+    if (!m) scans.set(rec, (m = new Map()));
+    if (!m.has(field)) {
+      const t = field === 'req_body' ? (typeof rec.req_body === 'string' ? rec.req_body : null) : (fieldTextOf(rec, field).text ?? null);
+      let root = null;
+      try { root = t != null ? scanJson(t) : null; } catch { root = null; }
+      m.set(field, root);
+    }
+    return m.get(field);
+  };
+  return flat.map((b) => {
+    const loc = locateFn(b);
+    const rec = loc && loc.rec;
+    const base = rec && rec.id != null && rec._stream ? mintRawRef(sessionIdOf(rec), rec._stream, String(rec.id)) : null;
+    const root = base ? rootOf(rec, loc.field) : null;
+    const span = root ? spanAt(root, loc.path) : null;
+    return slimBlock(b, span ? composeTextRef(base, span, loc.field) : null);
+  });
 }
 // 4.6 R2 「不成块的顶层键逐个列出」: every top-level request key that is not a block section, each with a
 // locator to its verbatim value (null when the record cannot be addressed).
@@ -312,7 +376,8 @@ export function assembleSession(records, opts = {}) {
   const groups = new Map(); // dissector object | 'analyzed' → records
   const unknown = [];
   for (const r of recs) {
-    const d = boardDissectorFor(r);
+    let d = boardDissectorFor(r);
+    if (d && d.admits && !d.admits(r)) d = null; // a record of a known wire that is no call (e.g. a server push): counted
     const key = d || (wireFormatOf(r) === 'anthropic' ? 'analyzed' : null);
     if (!key) { if (r && r.is_llm_call) unknown.push(r); continue; }
     if (!groups.has(key)) groups.set(key, []);

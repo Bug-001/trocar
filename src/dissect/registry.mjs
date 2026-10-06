@@ -6,6 +6,7 @@ import { detect as anthropicShape, serverEdited, CC_SECTIONS } from './cc.mjs';
 import { contextStateOfRequest } from './capture-labels.mjs';
 import { wireShape, RESPONSES, CHAT } from './openai.mjs';
 import { isWsHandshake } from './ws-handshake.mjs';
+import { RESPONSES_WS } from './openai-ws.mjs';
 
 export { isWsHandshake };
 const epPath = (rec) => String((rec && rec.endpoint) || '').split('?')[0];
@@ -45,8 +46,9 @@ export function wireFormatOf(rec) {
 
 // Board dissectors for the flat-lane wires (D25: dissector = adapter; the shared assembler only calls
 // them). The Anthropic wire is assembled by the multi-lane analyzer (src/view/analyze.mjs), so it has no
-// row here. Adding a wire = one dissector object + one row.
-const BOARD = { 'openai-responses': RESPONSES, 'openai-chat': CHAT };
+// row here. Adding a wire = one dissector object + one row. The WebSocket row's object also carries the
+// cross-record hooks (prepare / contextOf / admits / laneOf / failed, src/dissect/openai-ws.mjs).
+const BOARD = { 'openai-responses': RESPONSES, 'openai-chat': CHAT, 'openai-responses-ws': RESPONSES_WS };
 export function boardDissectorFor(rec) {
   return BOARD[wireFormatOf(rec)] || null;
 }
