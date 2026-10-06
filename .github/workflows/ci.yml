@@ -43,7 +43,7 @@ jobs:
           path: counts/
 
   # A run that drops test results does not fail (Node 20's --test-force-exit reported 1903 to 1924 of 1936 tests, all "0 fail";
-  # test/helpers/flush-exit.mjs is the fix). The suite runs the same tests on Node 20 and 22 on the same OS, so a count that
+  # test/helpers/flush-exit.cjs is the fix). The suite runs the same tests on Node 20 and 22 on the same OS, so a count that
   # differs between them is a run that lost some. Runs even when a test job is red, so the counts are still on the page.
   counts-agree:
     needs: test

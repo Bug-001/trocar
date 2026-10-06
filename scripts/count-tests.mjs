@@ -6,7 +6,7 @@
 //                                                                   on the number of tests across its Node versions
 //
 // Why: a run that drops test results does not fail — `--test-force-exit` on Node 20 reported 1903 to 1924 of 1936 tests, all
-// "0 fail" (see test/helpers/flush-exit.mjs). The same suite on the same OS runs the same tests on Node 20 and 22, so a count
+// "0 fail" (see test/helpers/flush-exit.cjs). The same suite on the same OS runs the same tests on Node 20 and 22, so a count
 // that differs between the two is a run that lost some. (.github/workflows/ci.yml: each matrix job writes its count, the
 // `counts-agree` job compares them.)
 import fs from 'node:fs'
