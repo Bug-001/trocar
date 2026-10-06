@@ -27,7 +27,9 @@ const num = (x) => (x == null ? 0 : Number(x));
 // Canonical usage mapping (RFC 3.2 "provider -> canonical" table), keyed by the WIRE FORMAT the usage
 // object arrived in (D37 ①: the names are the wire's, whichever vendor answered): 'anthropic' (alias
 // 'cc'), 'openai-responses' / 'openai-responses-ws', 'openai-chat'. Anything else fails loud.
-export function mapUsage(provider, raw = {}) {
+// opts.vendor (vendors.mjs::vendorOf, the upstream host's vendor, null = unknown): whether an ABSENT cache-write
+// counter is NULL is decided per vendor (3.2 D37 note, 3.3:89) — see the Anthropic branch.
+export function mapUsage(provider, raw = {}, opts = {}) {
   if (provider === 'openai-responses' || provider === 'openai-responses-ws') return mapResponses(raw || {});
   if (provider === 'openai-chat') return mapChat(raw || {});
   if (provider !== 'anthropic' && provider !== 'cc') {
@@ -35,10 +37,14 @@ export function mapUsage(provider, raw = {}) {
   }
   const input_uncached = num(raw.input_tokens);
   const cache_read = num(raw.cache_read_input_tokens);
-  const cache_write = num(raw.cache_creation_input_tokens); // Anthropic always reports -> 0, not null
+  // Anthropic itself always reports the write counter (absent there reads as 0, as before). Another vendor on this
+  // wire that omits it (dsh / DeepSeek has no write concept, 3.2 Edge; GLM, Moonshot, an unknown relay: 3.3:89 OPEN,
+  // default NULL + 标未知) reported nothing: NULL, never a 0 that AVG / COUNT would take as a reported zero (3.2).
+  const writeUnreported = raw.cache_creation_input_tokens == null && 'vendor' in opts && opts.vendor !== 'anthropic';
+  const cache_write = writeUnreported ? null : num(raw.cache_creation_input_tokens);
   const output = num(raw.output_tokens);
   const reasoning = raw.output_tokens_details?.thinking_tokens ?? null;
-  const total_input = input_uncached + cache_read + cache_write;
+  const total_input = input_uncached + cache_read + (cache_write ?? 0);
 
   // Faithfulness (invariant 2): every raw key not consumed above survives in extra.
   const extra = { ...raw };

@@ -13,6 +13,7 @@ import { collectExtra } from './contract.mjs';
 import { ENVELOPE_CONSUMED } from './envelope.mjs';
 import { wireFormatOf, contextStateOf } from '../dissect/registry.mjs';
 import { hintsOf } from '../dissect/harnesses.mjs';
+import { vendorOf } from '../dissect/vendors.mjs';
 import { mapUsage } from '../model/schema.mjs';
 import {
   parseSessionCC,
@@ -127,7 +128,7 @@ export function parseCall(record) {
     endpoint: record?.endpoint || '',
     model: req.model || null,
     stream: req.stream === true,
-    usage: isLlm ? mapUsage('cc', ccUsage(resp)) : mapUsage('cc', {}),
+    usage: isLlm ? mapUsage('cc', ccUsage(resp), { vendor: vendorOf(record) }) : mapUsage('cc', {}), // NULL write per vendor (3.2)
     stop_reason: isLlm ? stopReasonOf(resp) : null,
     duration_ms: record?.duration_ms ?? null,
     error: !!record?.error || resp.kind === 'error' || (resp.status || 0) >= 500,

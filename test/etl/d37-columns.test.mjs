@@ -47,6 +47,17 @@ test('a server-edited response is context_state=server_edited with a NULL prefix
   assert.deepEqual([r[0].context_state, r[0].prefix_sha256], ['server_edited', null]);
 });
 
+test('a dsh call whose usage has no write counter stores cache_write NULL, an Anthropic one 0 (3.2 Edge, 3.3:89)', async () => {
+  const conn = await freshConn();
+  const noWrite = { kind: 'sse', status: 200, usage: { input_tokens: 100, cache_read_input_tokens: 60, output_tokens: 5 } };
+  const dsh = { capture: 'transparent', host: 'api.deepseek.com', endpoint: '/anthropic/v1/messages', proc: { pid: 4, exe: '/x/dsh', agent: 'dsh' },
+    req_headers: { 'x-deepseek-harness-session-id': 'D' }, resp: noWrite };
+  await runEtl([cc('d1', dsh), cc('a2', { ...transparent, resp: noWrite })], conn);
+  const r = await rows(conn, 'SELECT u.call_id, u.cache_write, u.total_input, e.cache_write_billing FROM usage u JOIN cache_events e USING (call_id) ORDER BY u.call_id');
+  assert.deepEqual(r.map((x) => [x.call_id, x.cache_write, x.total_input]), [['a2', 0, 160], ['d1', null, 160]]);
+  assert.equal(r.find((x) => x.call_id === 'd1').cache_write_billing, null, 'no write semantics is borrowed either');
+});
+
 test('observer_effect: transparent CC calls carry it; a legacy capture of the same harness does not (R5)', async () => {
   const conn = await freshConn();
   await runEtl([cc('t1', transparent), cc('l2', { capture: 'mitm', req_headers: { 'x-claude-code-session-id': 'S', 'user-agent': 'claude-cli/2.1', host: 'api.anthropic.com' } })], conn);

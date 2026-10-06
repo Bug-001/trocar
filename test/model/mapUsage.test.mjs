@@ -40,6 +40,17 @@ test('mapUsage: unknown provider fails loud (never silently mis-maps)', () => {
   assert.throws(() => mapUsage('openai', {}), /no canonical mapping for provider/);
 });
 
+test('anthropic wire: an absent write counter is NULL for any vendor but Anthropic (3.2 D37 note, 3.3:89)', () => {
+  const raw = { input_tokens: 100, cache_read_input_tokens: 60, output_tokens: 5 };
+  for (const vendor of ['deepseek', 'zai', 'moonshot', null]) {
+    const u = mapUsage('cc', raw, { vendor });
+    assert.deepEqual([u.cache_write, u.total_input], [null, 160], `${vendor}: reported nothing → NULL, not a made-up 0`);
+  }
+  assert.equal(mapUsage('cc', raw, { vendor: 'anthropic' }).cache_write, 0, 'Anthropic always reports it: absent reads as 0');
+  assert.equal(mapUsage('cc', { ...raw, cache_creation_input_tokens: 7 }, { vendor: 'deepseek' }).cache_write, 7, 'a reported write is kept, whoever reports it');
+  assert.equal(mapUsage('cc', raw).cache_write, 0, 'no vendor given: unchanged');
+});
+
 test('openai-responses: input_tokens is total; cached → cache_read; write NULL unless reported', () => {
   const u = mapUsage('openai-responses', { input_tokens: 1000, input_tokens_details: { cached_tokens: 768 }, output_tokens: 40,
     output_tokens_details: { reasoning_tokens: 12 }, total_tokens: 1040 });
