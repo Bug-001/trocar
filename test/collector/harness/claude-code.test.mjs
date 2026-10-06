@@ -67,6 +67,36 @@ test('claude-code: host-managed, --restricted and --setting-sources without user
 // T10, CC half: the plan writes exactly CC's one entry; extra-cc.pem when the user already relies on a value.
 const injectCtx = (s, { env = {}, running = [] } = {}) => ({ ...ctxFor({ home: s.home, env }), running: running.map((e) => new Map(Object.entries(e))), collectorDir: path.join(s.home, '.asight', 'collector'), caPem: path.join(s.home, '.asight', 'collector', 'ca', 'asight-ca.pem') })
 
+test('claude-code: a settings file that does not parse or cannot be read is a broken layer — named as the reason when untrusted, never read as "no settings" (D-9)', () => {
+  const s = sandbox()
+  try {
+    const pem = s.put('ca/asight.pem', CA.certPem)
+    const user = s.put('.claude/settings.json', '{ "env": { "NODE_EXTRA_CA_CERTS": "' + pem + '", } oops')
+    const a = judge(cc, ctxFor({ home: s.home }))
+    assert.deepEqual([a.trust.trusted, a.trust.reason, a.trust.via], [false, 'settings-unparsable', `user settings env (${user})`])
+    const l = a.layers.find((x) => x.broken)
+    assert.deepEqual([l.file, l.ignored, typeof l.error], [user, 'settings-unparsable', 'string'])
+    fs.writeFileSync(user, JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: pem } }))
+    const unread = judge(cc, { ...ctxFor({ home: s.home }), readTextOrError: (f) => (f === user ? { text: null, error: { code: 'EACCES', message: 'permission denied' } } : { text: null, error: null }) })
+    assert.deepEqual([unread.trust.trusted, unread.trust.reason], [false, 'settings-unreadable'])
+    assert.match(unread.layers[0].error, /^EACCES: permission denied$/)
+    // a broken project file does not take away trust the user settings give
+    const proj = path.join(s.home, 'repo'); s.put('repo/.claude/settings.json', '{ nope')
+    const b = judge(cc, ctxFor({ home: s.home, cwd: proj }))
+    assert.deepEqual([b.trust.trusted, b.trust.reason, b.layers.filter((x) => x.broken).length], [true, 'ok', 1])
+    assert.ok(cc.trust.hints['settings-unparsable'] && cc.trust.hints['settings-unreadable'])
+  } finally { s.done() }
+})
+
+test('claude-code inject: a ~/.claude.json that cannot be read is a note, not "no value to carry over" (D-9)', () => {
+  const s = sandbox()
+  try {
+    s.put('.claude.json', '{ "env": ')
+    const plan = planTrust({ descriptors: [cc], ctxFor: () => injectCtx(s), caCertPem: CA.certPem, collectorDir: path.join(s.home, '.asight', 'collector') })
+    assert.ok(plan.notes.some((n) => n.includes(path.join(s.home, '.claude.json')) && /does not parse .*NODE_EXTRA_CA_CERTS in it is not carried over/.test(n)), JSON.stringify(plan.notes))
+  } finally { s.done() }
+})
+
 test('claude-code inject: no existing value → settings env.NODE_EXTRA_CA_CERTS = asight-ca.pem; $CLAUDE_CONFIG_DIR moves the file', () => {
   const s = sandbox()
   try {

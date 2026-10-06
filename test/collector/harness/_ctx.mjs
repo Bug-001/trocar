@@ -6,7 +6,7 @@ import path from 'node:path'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createRegistry } from '../../../src/collector/core/registry.mjs'
 import { createTrustChecker, effectiveEnv, markerLayer } from '../../../src/collector/core/trust/confirm.mjs'
-import { readText } from '../../../src/collector/core/config-read.mjs'
+import { readText, readTextOrError } from '../../../src/collector/core/config-read.mjs'
 
 export function sandbox() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-h-'))
@@ -22,6 +22,7 @@ export function ctxFor({ home, cwd = home, env = {}, argv = [], os: osName = 'no
   return {
     os: osName, environ, env: environ, home, cwd, argv, startedAt, startTicks, pid,
     readText: (f) => readText(f),
+    readTextOrError: (f) => readTextOrError(f),
     mtimeOf: (f) => { try { return fs.statSync(f).mtimeMs } catch { return null } },
     listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } },
     ...(unparsable ? { unparsable } : {}),

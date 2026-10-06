@@ -20,15 +20,19 @@ const BASE_URL_KEYS = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_BEDROCK_BASE_URL', 'ANTH
 const HOST_MANAGED_DROPS = new Set(['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'NO_PROXY', 'no_proxy', 'NODE_EXTRA_CA_CERTS', 'NODE_TLS_REJECT_UNAUTHORIZED'])
 const MANAGED_DIR = { linux: '/etc/claude-code', darwin: '/Library/Application Support/ClaudeCode' }
 
+// {vars} | {broken, error} | null (absent, or no env block). A file that is there but cannot be read or does not
+// parse is `broken` ('settings-unreadable' / 'settings-unparsable'), never read as "no env" (D-9, D38).
 function envBlock(ctx, file) {
-  const text = ctx.readText(file)
+  const { text, error } = ctx.readTextOrError(file)
+  if (error) return { broken: 'settings-unreadable', error: `${error.code || 'error'}: ${error.message}` }
   if (text == null) return null
-  const { data } = parseJsonc(text)
+  const { data, error: bad } = parseJsonc(text)
   if (data == null && ctx.unparsable) ctx.unparsable(file) // reported, judged as absent (D38)
+  if (bad) return { broken: 'settings-unparsable', error: bad }
   if (!data || !data.env || typeof data.env !== 'object') return null
   const vars = {}
   for (const [k, v] of Object.entries(data.env)) if (typeof v === 'string') vars[k] = v
-  return vars
+  return { vars }
 }
 
 function layers(ctx) {
@@ -56,10 +60,13 @@ function layers(ctx) {
   for (const [label, file, scope] of sources) {
     if (seen.has(file)) continue
     seen.add(file)
-    const vars = envBlock(ctx, file)
-    if (!vars) continue
+    const b = envBlock(ctx, file)
+    if (!b) continue
     const name = `${label} (${file})`
     const mtimeMs = ctx.mtimeOf(file)
+    // Claude Code cannot take a CA from it either; the layer is left out and named when the verdict is untrusted
+    if (b.broken) { out.push({ name, file, mode: 'override', vars: {}, live: false, mtimeMs, ignored: b.broken, broken: true, error: b.error }); continue }
+    const { vars } = b
     const scopeOff = restricted ? 'settings-ignored-restricted' : (allowed && scope !== 'policy' && !allowed.has(scope)) ? 'settings-ignored-setting-sources' : null
     if (scopeOff) { out.push({ name, file, mode: 'override', vars, live: false, mtimeMs, ignored: scopeOff }); continue }
     if (hostManaged) {
@@ -91,13 +98,15 @@ function inject(ctx) {
     files.push(path.join(managed, 'managed-settings.json'))
     for (const n of ctx.listDir(path.join(managed, 'managed-settings.d')).filter((x) => x.endsWith('.json')).sort()) files.push(path.join(managed, 'managed-settings.d', n))
   }
-  for (const f of files) { const vars = envBlock(ctx, f); if (vars) see(vars[CA_VAR]) }
+  const unread = []
+  for (const f of files) { const b = envBlock(ctx, f); if (b && b.vars) see(b.vars[CA_VAR]); else if (b && b.broken) unread.push(`${f} ${b.broken === 'settings-unparsable' ? 'does not parse' : 'cannot be read'} (${b.error}): a ${CA_VAR} in it is not carried over`) }
   const sources = [...seen].filter((v) => path.isAbsolute(v))
   const extra = path.join(ctx.collectorDir, 'ca', 'extra-cc.pem')
   return {
     entries: [{ kind: 'json-key', path: settings, keys: ['env', CA_VAR], value: sources.length ? extra : ctx.caPem, semantic: 'append' }],
     files: sources.length ? [{ path: extra, certsFrom: sources }] : [],
     notes: [
+      ...unread,
       ...[...seen].filter((v) => !path.isAbsolute(v)).map((v) => `${CA_VAR}=${v} is a relative path; its certificates are not carried over`),
       `a ${CA_VAR} exported only in a shell asight did not see no longer reaches Claude Code: settings env wins over the launch env`,
     ],
@@ -132,6 +141,8 @@ export default {
       'settings-ignored-setting-sources': '--setting-sources excludes the scope that holds the CA',
       'config-after-start': 'this Claude Code started before the CA was in its settings, and asight treats a running Claude Code as reading NODE_EXTRA_CA_CERTS only at start: restart it to be captured',
       'start-time-unknown': 'the start time of this Claude Code could not be read, so it is not known whether it started after the CA was in its settings; restart it to be captured',
+      'settings-unparsable': 'a Claude Code settings file does not parse, so the NODE_EXTRA_CA_CERTS in it cannot be in effect: fix the file, then restart Claude Code',
+      'settings-unreadable': 'a Claude Code settings file cannot be read (permissions?), so whether it holds the CA is not known: fix it, then restart Claude Code',
     },
   },
 }

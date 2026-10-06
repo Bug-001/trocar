@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { readText, hostOf, expandHome, parseDotenv, parseTomlLite, parseJsonc, dig } from '../../../src/collector/core/config-read.mjs'
+import { readText, readTextOrError, hostOf, expandHome, parseDotenv, parseTomlLite, parseJsonc, dig } from '../../../src/collector/core/config-read.mjs'
 
 test('config-read: hostOf takes URLs, bare hosts, IPv6 literals; junk is null', () => {
   assert.equal(hostOf('https://API.Example.com:8443/v1'), 'api.example.com')
@@ -78,12 +78,27 @@ test('config-read: TOML inline tables are read; arrays and multi-line strings ov
   assert.equal(errors, 3, 'the line that is not key = value, the one with text after its table, the unclosed table')
 })
 
+test('config-read: readTextOrError keeps "cannot be read" apart from "not there" (D-9)', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-cr-'))
+  try {
+    assert.deepEqual(readTextOrError(path.join(d, 'nope')), { text: null, error: null })
+    assert.deepEqual(readTextOrError(path.join(d, 'nope', 'deeper')), { text: null, error: null }, 'ENOTDIR is absent too')
+    fs.writeFileSync(path.join(d, 'a'), 'x')
+    assert.deepEqual(readTextOrError(path.join(d, 'a')), { text: 'x', error: null })
+    fs.mkdirSync(path.join(d, 'dir'))
+    assert.deepEqual([readTextOrError(path.join(d, 'dir')).text, readTextOrError(path.join(d, 'dir')).error.code], [null, 'EISDIR'])
+    const eacces = readTextOrError(path.join(d, 'a'), { readFile: () => { throw Object.assign(new Error('permission denied'), { code: 'EACCES' }) } })
+    assert.deepEqual(eacces, { text: null, error: { code: 'EACCES', message: 'permission denied' } })
+  } finally { fs.rmSync(d, { recursive: true }) }
+})
+
 test('config-read: JSONC strips comments and trailing commas but not inside strings', () => {
   const { data } = parseJsonc('{\n // c\n "provider": { "x": { "options": { "baseURL": "https://a.example.com//v1", }, }, },\n /* b */ "s": "/* keep */",\n}')
   assert.equal(data.provider.x.options.baseURL, 'https://a.example.com//v1')
   assert.equal(dig(data, 'provider.x.options.baseURL'), 'https://a.example.com//v1')
   assert.equal(data.s, '/* keep */')
-  assert.deepEqual(parseJsonc('{ nope'), { data: null, errors: 1 })
+  const bad = parseJsonc('{ nope')
+  assert.deepEqual([bad.data, bad.errors, typeof bad.error], [null, 1, 'string'], 'the parser\'s message is kept for the record (D-9)')
 })
 
 test('config-read: the Node release of an executable is read from its embedded download URL, also across a chunk edge; never by running it', async () => {

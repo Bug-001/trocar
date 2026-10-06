@@ -17,7 +17,7 @@ import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, pre
 import { EVENT, CODE, UNTIL_TEXT } from './core/codes.mjs'
 import { rewriteBundles } from './core/trust/bundle.mjs'
 import { controlRequest } from './core/control.mjs'
-import { readText } from './core/config-read.mjs'
+import { readText, readTextOrError } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
 import { lockState, procIdentity } from '../health/read.mjs'
 
@@ -104,7 +104,7 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
   const envMap = new Map(Object.entries(env).filter(([, v]) => typeof v === 'string'))
   const ctxFor = (d) => ({
     os: osName, home, env: envMap, running: facts.filter((f) => match(f).agent === d.name).map((f) => f.env || new Map()),
-    readText: (f) => readText(f), readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir, collectorDir: dir, caPem: ca.pem,
+    readText: (f) => readText(f), readTextOrError: (f) => readTextOrError(f), readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir, collectorDir: dir, caPem: ca.pem,
   })
   const R = roots || readRoots(osRootsFile)
   const draft = planTrust({ descriptors: harnesses, ctxFor, caCertPem: null, collectorDir: dir, roots: R })

@@ -134,7 +134,11 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       if (row.watchError) failure('watch', coded(new Error(`watching ${row.agent} pid ${row.pid} failed: ${row.watchError}`), 'watch-failed'))
       if (row.configError) failure('harness', coded(new Error(`${row.agent} pid ${row.pid}: reading its configuration failed (${row.configError}); judged on its known hosts only`), 'config-error'))
       for (const r of row.readErrors || []) failure('harness', Object.assign(new Error(`${row.agent} pid ${row.pid}: ${r} exists but cannot be read; judged as if it were absent`), { code: CODE.configUnreadable }), { pid: row.pid, agent: row.agent })
-      for (const f of row.parseErrors || []) failure('harness', Object.assign(new Error(`${row.agent} pid ${row.pid}: ${f} exists but does not parse; judged as if it were absent`), { code: CODE.configUnparsable }), { pid: row.pid, agent: row.agent })
+      const broken = new Set((row.brokenLayers || []).map((l) => l.file)) // a Claude Code settings file has its own, fuller record below (D-9)
+      for (const f of row.parseErrors || []) if (!broken.has(f)) failure('harness', Object.assign(new Error(`${row.agent} pid ${row.pid}: ${f} exists but does not parse; judged as if it were absent`), { code: CODE.configUnparsable }), { pid: row.pid, agent: row.agent })
+      for (const l of row.brokenLayers || []) { // D-9: never read as "no settings" — the CA and the relay hosts in it are unknown
+        failure('harness', coded(new Error(`${row.agent} pid ${row.pid}: ${l.file} ${l.code === 'settings-unparsable' ? 'does not parse' : 'cannot be read'} (${l.error}); that layer is not counted${row.trusted ? '' : ', so it is judged untrusted'} and a relay host set in it is not decrypted`), l.code), { pid: row.pid, file: l.file })
+      }
       const last = recordedUntrusted.get(row.pid)
       if (row.trusted) { // agent-trusted when a pid becomes trusted (first verdict, or after untrusted): conditions it clears (D-24)
         recordedUntrusted.delete(row.pid)

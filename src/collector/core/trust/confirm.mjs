@@ -135,6 +135,10 @@ export function createTrustChecker({ caCertPem, readFile = fs.readFileSync, stat
       }
     }
     if (!res.trusted && trust.refine) res.reason = trust.refine(res, res.env, { argv, ...extra }) || res.reason
+    // a layer that is there but could not be read or parsed (layer.broken, D-9): what it holds is unknown, so an
+    // untrusted verdict names it rather than a guess such as var-missing
+    const broken = !res.trusted && layers.find((l) => l.broken)
+    if (broken) { res.reason = broken.ignored; res.via = broken.name }
     return res
   }
 

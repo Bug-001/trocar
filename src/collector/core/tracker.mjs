@@ -38,6 +38,7 @@ const hostIs = (k, h) => k === h || (k.startsWith('.') && h.endsWith(k))
 const mtimeOfFile = (f) => { try { return fs.statSync(f).mtimeMs } catch { return null } }
 const listDirNames = (d) => { try { return fs.readdirSync(d) } catch { return [] } }
 const ABSENT = new Set(['ENOENT', 'ENOTDIR', 'EISDIR'])
+const NOT_THERE = new Set(['ENOENT', 'ENOTDIR'])
 export function watchDirNames(dir, onName, onWatchError = () => {}, watch = fs.watch) {
   const w = watch(dir, (_ev, name) => onName(name == null ? null : String(name)))
   w.on('error', onWatchError) // re-judgement on appearance stops; a rescan still reads the markers — and it is reported
@@ -104,7 +105,9 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     const readText = (f) => { try { return readFile(f) } catch (e) { if (!ABSENT.has(e && e.code)) row.readErrors.push(`${f}: ${(e && e.code) || e}`); return null } }
     // unparsable(file): a harness reports a config file it read that does not parse (judged as absent; D38, review 3 #9)
     const unparsable = (f) => { if (!row.parseErrors.includes(f)) row.parseErrors.push(f) }
-    const ctx = { os: facts.os, environ, env: environ, home: environ.get('HOME') || home, cwd: facts.cwd || '/', argv: facts.argv || [], startedAt: facts.startedAt ?? null, readText, mtimeOf, listDir, unparsable }
+    // like readText, but "there and unreadable" (EACCES, EISDIR, EIO…) stays apart from "not there" (D-9: never read as "no settings")
+    const readTextOrError = (f) => { try { return { text: readFile(f), error: null } } catch (e) { return NOT_THERE.has(e && e.code) ? { text: null, error: null } : { text: null, error: { code: (e && e.code) || null, message: String((e && e.message) || e) } } } }
+    const ctx = { os: facts.os, environ, env: environ, home: environ.get('HOME') || home, cwd: facts.cwd || '/', argv: facts.argv || [], startedAt: facts.startedAt ?? null, readText, readTextOrError, mtimeOf, listDir, unparsable }
     factsOf.set(facts.pid, facts)
     const layers = call(d.layers, ctx, row).filter(Boolean)
     for (const l of layers) if (l.live === false) { const t = installedAt(l); if (t != null) l.since = t } // review 2 #5
@@ -135,6 +138,8 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     const bypass = call(d.bypass, live, row).filter((b) => b && b.host).map((b) => ({ host: String(b.host).toLowerCase(), reason: String(b.reason || 'not-via-trust-path') }))
     const parent = row.ppid != null ? table.get(row.ppid) : null
     Object.assign(row, { trusted: t.trusted, reason: t.reason, trustVar: t.var, trustVia: t.via, decrypt: t.trusted, hosts, bypass, proxies, wsTerminal: d.wsTerminal || null, parentAgent: parent ? parent.agent : null, ...(cause ? { cause } : {}) })
+    const broken = layers.filter((l) => l.broken).map((l) => ({ name: l.name, file: l.file ?? null, code: l.ignored, error: l.error ?? null }))
+    if (broken.length) row.brokenLayers = broken // a config file there but unreadable / unparsable (D-9): the daemon records each
     const trustFile = t.trusted && t.file ? t.file : null
     Object.defineProperties(row, { trustFile: { value: trustFile }, trustKey: { value: trustFile ? statKey(trustFile) : null } }) // not listed in agents()
     table.set(facts.pid, row)

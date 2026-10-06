@@ -10,6 +10,15 @@ export function readText(file, { readFile = fs.readFileSync } = {}) {
   try { return readFile(file, 'utf8') } catch { return null }
 }
 
+// {text, error}: a missing file is {text: null, error: null}; one that is there but cannot be read (EACCES, EISDIR,
+// EIO…) is {text: null, error: {code, message}} — "unreadable" is never folded into "absent" (D-9, D38).
+const ABSENT = new Set(['ENOENT', 'ENOTDIR'])
+export function readTextOrError(file, { readFile = fs.readFileSync } = {}) {
+  try { return { text: readFile(file, 'utf8'), error: null } } catch (e) {
+    return ABSENT.has(e && e.code) ? { text: null, error: null } : { text: null, error: { code: (e && e.code) || null, message: String((e && e.message) || e) } }
+  }
+}
+
 export function hostOf(url) {
   if (typeof url !== 'string' || !url.trim()) return null
   try {
@@ -168,7 +177,7 @@ export function parseJsonc(text) {
     if (c === ',') { let j = i + 1; while (/\s/.test(s[j] || '')) j++; if (s[j] === '}' || s[j] === ']') continue }
     out += c
   }
-  try { return { data: JSON.parse(out), errors: 0 } } catch { return { data: null, errors: 1 } }
+  try { return { data: JSON.parse(out), errors: 0 } } catch (e) { return { data: null, errors: 1, error: e.message } }
 }
 
 

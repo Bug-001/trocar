@@ -798,3 +798,23 @@ test('daemon: a trusted agent whose trust file changed is judged again by the ch
     assert.equal((await clients[0].raw({ op: '__watched' })).watch['9191'], 0)
   } finally { await d.stop(); p.done(); s.done() }
 })
+
+test('daemon: a Claude Code whose settings.json does not parse is a settings-unparsable failure with pid and file, and agent-untrusted names it, with the hint (D-9)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const settings = path.join(s.home, '.claude', 'settings.json')
+  fs.writeFileSync(settings, fs.readFileSync(settings, 'utf8').replace(/\}\s*$/, ',, }')) // the user broke it after install
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] })
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    p.add(9292, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
+    await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 9292, pid: 9292, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
+    const u = await until(() => flowsOf(s).find((f) => f.event === 'agent-untrusted' && f.pid === 9292))
+    assert.deepEqual([u.reason, u.via], ['settings-unparsable', `user settings env (${settings})`])
+    assert.match(u.hint, /does not parse/)
+    const f = flowsOf(s).find((x) => x.code === 'settings-unparsable')
+    assert.deepEqual([f.event, f.where, f.pid, f.file], ['failure', 'harness', 9292, settings])
+    assert.match(f.reason, /does not parse \(.+\); that layer is not counted, so it is judged untrusted/)
+  } finally { await d.stop(); p.done(); s.done() }
+})
