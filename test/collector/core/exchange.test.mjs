@@ -280,6 +280,12 @@ test('D40: the level is the one sampled when the request STARTED — a change in
   t.fromUpstream(Buffer.from(ok('{"a":1}')))
   t.fromClient(Buffer.from(post('/b', 'ghi'))); t.fromUpstream(Buffer.from(ok('{"b":1}')))
   assert.deepEqual([out[0].body_retention, out[0].req_body, out[1].body_retention, out[1].req_body, out[1].resp.body], ['log', { raw_chars: 6, verbatim: false }, undefined, 'ghi', { b: 1 }])
+  // and the other way round — the one that matters for invariant 2: a call that started `full` is kept in full when the operator
+  // turns the class to `log` while its request is still arriving and while its response is still arriving
+  level = 'full'
+  t.fromClient(Buffer.from('POST /c HTTP/1.1\r\nContent-Length: 6\r\n\r\nabc')); level = 'log'; t.fromClient(Buffer.from('def'))
+  t.fromUpstream(Buffer.from('HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 7\r\n\r\n{"c"')); level = 'log'; t.fromUpstream(Buffer.from(':1}'))
+  assert.deepEqual([out[2].req_body, 'body_retention' in out[2], out[2].resp.body], ['abcdef', false, { c: 1 }])
 })
 
 test('D40: pipelined requests of different levels each get the level of their own request: a response follows the request it answers', () => {
