@@ -24,13 +24,14 @@ export async function applyDDL(connection, ddlPath = DEFAULT_DDL) {
 
 const num = (x) => (x == null ? 0 : Number(x));
 
-// Canonical usage mapping (RFC 3.2 "provider -> canonical" table).
-// Phase 1 = Anthropic/CC column only; other providers land in Phase 4.
+// Canonical usage mapping (RFC 3.2 "provider -> canonical" table), keyed by the WIRE FORMAT the usage
+// object arrived in (D37 ①: the names are the wire's, whichever vendor answered): 'anthropic' (alias
+// 'cc'), 'openai-responses' / 'openai-responses-ws', 'openai-chat'. Anything else fails loud.
 export function mapUsage(provider, raw = {}) {
+  if (provider === 'openai-responses' || provider === 'openai-responses-ws') return mapResponses(raw || {});
+  if (provider === 'openai-chat') return mapChat(raw || {});
   if (provider !== 'anthropic' && provider !== 'cc') {
-    throw new Error(
-      `mapUsage: no canonical mapping for provider '${provider}' (Phase 1 = anthropic/cc only)`,
-    );
+    throw new Error(`mapUsage: no canonical mapping for provider '${provider}' (anthropic | openai-responses[-ws] | openai-chat)`);
   }
   const input_uncached = num(raw.input_tokens);
   const cache_read = num(raw.cache_read_input_tokens);
@@ -52,3 +53,22 @@ export function mapUsage(provider, raw = {}) {
   }
   return { input_uncached, cache_read, cache_write, output, reasoning, total_input, extra };
 }
+
+// OpenAI Responses: input_tokens is the TOTAL input (cached included); input_tokens_details.cached_tokens
+// is the cache-read part. The wire has no cache-write counter except on relays that add
+// cache_write_tokens — absent → NULL, never 0 (3.2: NULL = not reported). Unconsumed keys stay in extra.
+function mapResponses(raw) {
+  const total = num(raw.input_tokens);
+  const det = raw.input_tokens_details || {};
+  const read = num(det.cached_tokens);
+  const write = det.cache_write_tokens == null ? null : num(det.cache_write_tokens);
+  const extra = { ...raw };
+  delete extra.input_tokens; delete extra.output_tokens; delete extra.input_tokens_details; delete extra.output_tokens_details;
+  const { cached_tokens, cache_write_tokens, ...restIn } = det;
+  if (Object.keys(restIn).length) extra.input_tokens_details = restIn;
+  const { reasoning_tokens, ...restOut } = raw.output_tokens_details || {};
+  if (Object.keys(restOut).length) extra.output_tokens_details = restOut;
+  return { input_uncached: Math.max(0, total - read - (write ?? 0)), cache_read: read, cache_write: write,
+    output: num(raw.output_tokens), reasoning: reasoning_tokens ?? null, total_input: total, extra };
+}
+function mapChat() { throw new Error("mapUsage: no canonical mapping for provider 'openai-chat' yet"); }

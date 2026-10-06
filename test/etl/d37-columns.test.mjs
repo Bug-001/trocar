@@ -76,3 +76,14 @@ test('request_bytes of a metadata-only body is its raw_chars, not the size of th
   const [c] = await rows(conn, "SELECT request_bytes, wire_format, context_state, transport FROM calls WHERE call_id='p1'");
   assert.deepEqual([Number(c.request_bytes), c.wire_format, c.context_state, c.transport], [12345, null, null, 'http'], 'a probe is not an inference call: no wire, no context');
 });
+
+test('sessions.provider is mixed when the main lane mixes wire formats', async () => {
+  const conn = await freshConn();
+  const oc = (id, sec, endpoint, b) => ({ id, ts_request: `2026-10-06T00:00:0${sec}Z`, endpoint, is_llm_call: true, capture: 'transparent',
+    proc: { pid: 1, exe: '/x/opencode', agent: 'opencode' }, req_headers: { 'x-opencode-session-id': 'OC' }, req_body: JSON.stringify(b),
+    resp: { kind: 'sse', status: 200, usage: {}, raw_sse: [] } });
+  await runEtl([oc('a', 1, '/v1/messages', { model: 'claude', system: [{ type: 'text', text: 's' }], messages: [{ role: 'user', content: 'q' }] }),
+    oc('b', 2, '/v1/responses', { model: 'gpt', input: [] })], conn);
+  assert.deepEqual((await rows(conn, 'SELECT wire_format FROM calls ORDER BY call_id')).map((r) => r.wire_format), ['anthropic', 'openai-responses']);
+  assert.equal((await rows(conn, "SELECT provider FROM sessions WHERE session_id='OC'"))[0].provider, 'mixed');
+});

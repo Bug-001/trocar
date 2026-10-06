@@ -34,8 +34,14 @@ export async function startTeeProxy({ upstreamPort, dir, flow = {}, wsTerminal }
     up.on('data', (c) => { tee.fromUpstream(c); client.write(c); });
     client.on('end', () => { tee.clientEnded(); up.end(); });
     up.on('end', () => { tee.upstreamEnded(); client.end(); });
-    client.on('error', () => up.destroy());
-    up.on('error', () => client.destroy());
+    // As the engine's flow teardown does (src/collector/core/engine/flow.mjs): once both sides are closed, an
+    // exchange still open (a reset mid-stream) is finalized with the connection's first error.
+    let firstErr = null, closed = 0;
+    client.on('error', (e) => { firstErr = firstErr || e; up.destroy(); });
+    up.on('error', (e) => { firstErr = firstErr || e; client.destroy(); });
+    const teardown = () => { if (++closed === 2) tee.abort(firstErr ? { type: firstErr.code || 'error', message: firstErr.message } : { type: 'ECONNRESET', message: 'flow closed' }); };
+    client.on('close', teardown);
+    up.on('close', teardown);
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   return {

@@ -399,15 +399,25 @@ export function ctxTokens(norm) {
 // branches on a wire. Registered by wire format in src/dissect/registry.mjs (`boardDissectorFor`).
 // `provider` is the pre-D37 board label (analyzed.provider), kept for readers of old payloads; `blockKeys`
 // are the request's top-level keys that become context blocks (everything else is a non-block key).
+// The ETL adapter generated from the same object (src/adapters/dissected.mjs) also reads: `consumedBody` — the
+// request keys this dissector maps to blocks / columns (the rest are unmapped, 3.1:44); `messageCount` — the
+// message count compaction compares (3.4); `faithfulnessOf` — a flat block's 3.2 faithfulness.
+const blockFaithfulness = (b) => faithfulness(b && b.block); // tools / system descriptors carry no .block → verbatim
 export const RESPONSES = Object.freeze({
   id: 'openai-responses', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'],
   boardFlat: (req) => boardFlat(req), normResp: (rec) => normResp(rec),
   reqCounts: (req) => reqCountsFor('responses', req), ctxTokens,
   // the stream's terminal says the response failed, or an `error` event arrived with no terminal (normEvents)
   failed: (norm) => norm.stop_reason === 'failed' || norm.stop_reason === 'error',
+  consumedBody: ['model', 'stream', 'instructions', 'tools', 'input'],
+  messageCount: (req) => (Array.isArray(req && req.input) ? req.input.length : typeof (req && req.input) === 'string' ? 1 : 0),
+  faithfulnessOf: blockFaithfulness,
 });
 export const CHAT = Object.freeze({
   id: 'openai-chat', provider: 'openai', blockKeys: ['tools', 'messages'],
   boardFlat: (req) => boardFlatChat(req), normResp: (rec) => normRespChat(rec),
   reqCounts: (req) => reqCountsFor('chat', req), ctxTokens,
+  consumedBody: ['model', 'stream', 'messages', 'tools'],
+  messageCount: (req) => (Array.isArray(req && req.messages) ? req.messages.length : 0),
+  faithfulnessOf: blockFaithfulness,
 });

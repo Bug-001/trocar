@@ -5,6 +5,8 @@ import assert from 'node:assert/strict';
 import { runEtl, rebuildContext, parseTextRef } from '../../src/etl/orchestrator.mjs';
 import { envelopeAdapter, ENVELOPE_CONSUMED, quarantineReason } from '../../src/adapters/envelope.mjs';
 import { freshConn, countOf } from '../etl/helpers.mjs';
+import { createRegistry } from '../../src/adapters/contract.mjs';
+import { ccAdapter } from '../../src/adapters/cc.mjs';
 
 const rows = async (conn, sql) => (await conn.runAndReadAll(sql)).getRowObjects();
 const resolverOf = (records) => { const by = new Map(records.map((r) => [String(r.id), r.req_body])); return (ref) => { const p = parseTextRef(ref); return by.get(p.recordId).slice(p.start, p.end); }; };
@@ -50,7 +52,8 @@ test('inference on a wire with no ETL adapter yet is quarantined with that wire 
   const conn = await freshConn();
   const codex = { id: 'x1', ts_request: '2026-10-06T00:00:00Z', endpoint: '/backend-api/codex/responses', is_llm_call: true,
     req_headers: { 'session-id': 'S' }, req_body: '{"model":"m","input":[]}', resp: { status: 200 } };
-  await runEtl([codex], conn);
+  // a registry without the Responses adapter (the default one has it): the reason names the wire
+  await runEtl([codex], conn, { registry: createRegistry().register(ccAdapter).register(envelopeAdapter) });
   assert.deepEqual((await rows(conn, 'SELECT id, reason FROM etl_quarantine')).map((x) => [x.id, x.reason]), [['x1', 'no-adapter:openai-responses']]);
 });
 

@@ -21,6 +21,8 @@ import { createHash } from 'node:crypto';
 import { createRegistry } from '../adapters/contract.mjs';
 import { ccAdapter } from '../adapters/cc.mjs';
 import { envelopeAdapter, quarantineReason } from '../adapters/envelope.mjs';
+import { dissectorAdapter } from '../adapters/dissected.mjs';
+import { RESPONSES } from '../dissect/openai.mjs';
 import { deriveCacheEvents } from '../cache/cache-events.mjs';
 import { harnessOf, observerEffectsOf } from '../dissect/harnesses.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
@@ -130,11 +132,13 @@ function requestBytes(record) {
 }
 const jsonOrNull = (v) => (v == null ? null : JSON.stringify(v));
 
-// The default registry: the Anthropic-wire inference adapter + the generic envelope adapter for every
-// non-inference record (control plane, probes, side uploads) of any harness. Inference on a wire with no
-// adapter yet is quarantined with its reason. Fresh per run so no cross-run state leaks.
+// The default registry: one inference adapter per wire format (the Anthropic one, and adapters generated
+// from the board's dissector objects, D25) + the generic envelope adapter for every non-inference record
+// (control plane, probes, side uploads) of any harness. Inference on a wire with no adapter yet is
+// quarantined with its reason. Fresh per run so no cross-run state leaks.
 function defaultRegistry() {
-  return createRegistry().register(ccAdapter).register(envelopeAdapter);
+  return createRegistry().register(ccAdapter).register(envelopeAdapter)
+    .register(dissectorAdapter(RESPONSES, { name: 'openai-responses' }));
 }
 
 async function ensureQuarantineTable(conn) {
