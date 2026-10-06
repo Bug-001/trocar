@@ -168,16 +168,21 @@ function collectorSummary(c) {
 
 // The old MITM / reverse proxy (RFC 4.1 过渡期, D38): ~/.asight/logs/mitm-events.ndjson. Without it, a capture file
 // written within 24 h means an old process started before the events writer existed: said, never "not installed".
+// a capture file the old capture wrote within 24 h: {file, mtime} or null
+function freshCapture(home, now, fs) {
+  for (const f of ['claude-capture.ndjson', 'capture.ndjson']) {
+    let s; try { s = fs.statSync(path.join(home, f)) } catch { continue }
+    if (now - s.mtimeMs <= WINDOW_MS) return { file: path.join(home, f), mtime: new Date(s.mtimeMs).toISOString() }
+  }
+  return null
+}
 function legacyHealth({ home, now, fs, alive, read }) {
   const file = path.join(home, 'logs', 'mitm-events.ndjson')
   const t = tailLines(file, 1 << 20, fs)
   if (t.error) { read.errors.push({ file, error: t.error }); return { present: true, state: 'unknown', error: t.error, summary: { state: 'unknown', reason: t.error } } }
   if (t.missing) {
-    for (const f of ['claude-capture.ndjson', 'capture.ndjson']) {
-      let s; try { s = fs.statSync(path.join(home, f)) } catch { continue }
-      if (now - s.mtimeMs <= WINDOW_MS) return { present: true, state: 'no-events', capture: { file: path.join(home, f), mtime: new Date(s.mtimeMs).toISOString() }, summary: { state: 'no-events', since: new Date(s.mtimeMs).toISOString() } }
-    }
-    return { present: false, state: 'none', summary: { state: 'not-installed' } }
+    const cap = freshCapture(home, now, fs)
+    return cap ? { present: true, state: 'no-events', capture: cap, summary: { state: 'no-events', since: cap.mtime } } : { present: false, state: 'none', summary: { state: 'not-installed' } }
   }
   read.files.push(file); read.unparsable += t.unparsable
   if (t.truncated) read.truncated = true
@@ -193,6 +198,17 @@ function legacyHealth({ home, now, fs, alive, read }) {
   const sources = [...by.values()].map((s) => ({ ...s, state: s.last_start && !s.last_stop ? (s.last_start.pid == null || alive(s.last_start.pid) ? 'running' : 'gone') : 'stopped' }))
   const failures = groupsOf(t.recs.filter(isFailure), now)
   const last = t.recs.length ? t.recs[t.recs.length - 1].ts : null
+  // no start / stop line of any source in what was read is never "stopped" by itself (4.1 落地细节 (3)): the last
+  // start may be before the tail read (unknown), or the process predates the events writer (judged by the capture file)
+  if (!sources.length) {
+    const cap = freshCapture(home, now, fs)
+    const st = t.truncated ? 'unknown' : cap ? 'no-events' : null
+    if (st) {
+      const why = t.truncated ? `no mitm-start / mitm-stop in the last ${1 << 20} bytes of ${file}: whether the old capture runs is unknown` : null
+      return { present: true, state: st, sources, last_start: null, last_stop: null, last_record_at: last, failures, ...(cap ? { capture: cap } : {}),
+        summary: failures.length ? { state: 'failing', n: failures.length } : st === 'unknown' ? { state: 'unknown', reason: why } : { state: 'no-events', since: cap.mtime } }
+    }
+  }
   const gone = sources.find((s) => s.state === 'gone'), running = sources.find((s) => s.state === 'running')
   const lead = gone || running || sources.at(-1) || {}
   const l = { present: true, state: gone ? 'not-running' : running ? 'running' : 'stopped', sources, last_start: lead.last_start || null, last_stop: lead.last_stop || null, last_record_at: last, failures }

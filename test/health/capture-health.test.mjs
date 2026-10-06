@@ -135,6 +135,31 @@ test('the old capture: running / failing / stopped; no events but a fresh captur
   } finally { b.done() }
 })
 
+// 4.1 落地细节 (3): no start / stop line of any source in what was read is never "stopped" by itself — an events
+// file holding only another line next to a fresh capture file is "no-events"; a start pushed out of the tail read is
+// "unknown".
+test('the old capture with no start / stop line read: a fresh capture file is no-events, a cut tail is unknown — never stopped', () => {
+  const b = home()
+  try {
+    fs.mkdirSync(path.join(b.h, 'logs'), { recursive: true })
+    const evFile = path.join(b.h, 'logs', 'mitm-events.ndjson')
+    fs.writeFileSync(path.join(b.h, 'claude-capture.ndjson'), '{}\n')
+    fs.utimesSync(path.join(b.h, 'claude-capture.ndjson'), new Date(NOW - 60e3), new Date(NOW - 60e3)) // an old MITM writes now
+    fs.writeFileSync(evFile, JSON.stringify({ ts: at(30 * H), event: 'failure', where: 'shard', code: 'shard-failed', reason: 'x' }) + '\n')
+    let r = b.health()
+    assert.deepEqual([r.legacy.state, r.summary.state, r.summary.part], ['no-events', 'no-events', 'legacy'], 'a shard line only: no-events, not "stopped"')
+    fs.utimesSync(path.join(b.h, 'claude-capture.ndjson'), new Date(NOW - 30 * H), new Date(NOW - 30 * H))
+    assert.equal(b.health().legacy.state, 'stopped', 'nothing written for 24 h, nothing read about a start: stopped')
+    // a running MITM, then over 1 MiB of later lines: its mitm-start is outside the tail read
+    const lines = [JSON.stringify({ ts: at(40 * H), event: 'mitm-start', source: 'mitm', pid: 99, port: 9898 })]
+    for (let i = 0; i < 4000; i++) lines.push(JSON.stringify({ ts: at(30 * H), event: 'failure', where: 'mitm', code: 'ECONNRESET', servername: 'api.anthropic.com', reason: 'x'.repeat(300) }))
+    fs.writeFileSync(evFile, lines.join('\n') + '\n')
+    r = b.health()
+    assert.deepEqual([r.read.truncated, r.legacy.state, r.summary.state], [true, 'unknown', 'unknown'], 'a cut tail: unknown, never stopped')
+    assert.match(r.summary.reason, /whether the old capture runs is unknown/)
+  } finally { b.done() }
+})
+
 test('the old capture per source (RFC 4.1 落地细节 (3)): MITM and reverse proxy each by their last start / stop; a clean stop is ○ below ✓', () => {
   const b = home()
   try {
