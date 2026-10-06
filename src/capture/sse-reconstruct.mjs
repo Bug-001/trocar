@@ -8,10 +8,11 @@ export function makeSseReconstructor(keepRaw = false) {
   const blocks = []
   const raw = []
   let messageMeta = null, stopReason = null, usage = {}, errorObj = null, pending = ''
+  let unparsed = 0 // D38 L-5: a `data:` line that is not JSON is counted (and kept with keepRaw), never dropped unsaid
 
   function handleEvent(data) {
     let evt
-    try { evt = JSON.parse(data) } catch { return }
+    try { evt = JSON.parse(data) } catch { unparsed++; if (keepRaw) raw.push({ unparsed: data }); return }
     if (keepRaw) raw.push(evt)
     switch (evt.type) {
       case 'message_start': {
@@ -84,6 +85,7 @@ export function makeSseReconstructor(keepRaw = false) {
         text, thinking: thinking || undefined, tool_calls: toolCalls,
         ...(errorObj ? { error: errorObj } : {}),
         ...(keepRaw ? { raw_sse: raw } : {}),
+        ...(unparsed ? { unparsed_events: unparsed } : {}),
       }
     },
   }
