@@ -2,6 +2,9 @@
 // redirector steered to it, asks the redirector who the peer is, and hands each known flow to
 // handleFlow; unknown peers are dropped. close() stops accepting and waits for in-flight flows to
 // finish rather than killing them (RFC 4.6 §开关: connections established while on keep relaying).
+//   drain({agents, now}) / relayed({agents}) / drained({agents}): what `off` asks of the connections still relayed (RFC 1.6 §1.3,
+// engine/drain.mjs): close each at the boundary the engine can see, count what is still on its way out or waiting for its
+// own close, cut everything on `now`, and say when none is left.
 //   describe(meta) → FlowExtras {wsTerminal, proxies} (Plan 3c §2): the daemon's per-process data
 // (harness WS terminal patterns, the process's own proxies), merged into the flow's meta. Core knows no
 // harness; it only reads that data.
@@ -13,10 +16,13 @@ import { createUpstreamTrust, systemRoots } from '../tls/roots.mjs'
 // upstreamCa: extra CAs the engine trusts upstream (test seam); systemCa: stands in for the OS store
 // (tests; undefined = read it): PEM text / array, or a systemRoots()-shaped {certs, errors}. The upstream trust set is built once (RFC 4.6 §引擎 5, tls/roots.mjs).
 // timing (tests): {firstByteTimeoutMs, upstreamSlowMs, preludeStallMs} — the engine's waits, 5 s each by default.
-export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, describe = () => ({}), onError = () => {}, onFailure = null, timing = {} }) {
+export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, describe = () => ({}), onError = () => {}, onFailure = null, timing = {}, drainTimeoutMs }) {
   const counters = { active: 0, total: 0, decrypted: 0, spliced: 0, lookupMisses: 0, notCaptured: { h2: 0, httpsProxy: 0, upstreamCert: 0, negative: 0, leafError: 0 } }
   const servers = []
   const active = new Set()
+  // every connection past the lookup: {agent, handle}; the handle is the flow's own (flow.mjs registers it), for drain() / relayed()
+  const flows = new Set()
+  const waiters = new Set() // drained() promises, checked whenever a flow ends
   // (pid, host) pairs the engine no longer tries to decrypt (RFC 4.6 §引擎 5). A hit is spliced and
   // labelled in flows/; the redirector is never told (the kernel can only stop a whole process).
   // Every write into it is a failure event (D-12, 4.6 §记录 负缓存写入): from then on this (pid, host) is spliced, not
@@ -87,19 +93,23 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     }
     counters.active++
     const ctx = {
-      ...timing, issuer, store, upstreamCa, upstreamTrust, policy, isRecording, negCache, counters, failure,
+      ...timing, drainTimeoutMs, issuer, store, upstreamCa, upstreamTrust, policy, isRecording, negCache, counters, failure,
       connectUpstream: connectUpstream || defaultConnect,
       newFlowId: () => `flow_${String(++flowSeq).padStart(6, '0')}`,
     }
+    const entry = { agent: meta.agent ?? null, handle: null }
+    flows.add(entry)
+    ctx.register = (h) => { entry.handle = h }
+    const gone = () => { flows.delete(entry); for (const w of [...waiters]) w() }
     let started
     try { started = handleFlow(socket, meta, ctx) } catch (e) { // a synchronous throw (e.g. net.connect on a bad port): this connection only
       onError(e); failure({ code: 'engine-error', pid: meta.pid ?? null, agent: meta.agent ?? null, dst: meta.dst, reason: String((e && e.message) || e) })
-      socket.destroy(); counters.active--; return
+      socket.destroy(); counters.active--; gone(); return
     }
     const done = started.then((rec) => {
       if (rec && rec.decision === 'decrypt') counters.decrypted++
       else if (rec && rec.decision === 'splice') counters.spliced++
-    }).catch((e) => { failure({ code: 'engine-error', pid: meta.pid ?? null, dst: meta.dst, reason: `handling the connection failed: ${String((e && e.message) || e)}` }); onError(e) }).finally(() => { active.delete(done); counters.active-- })
+    }).catch((e) => { failure({ code: 'engine-error', pid: meta.pid ?? null, dst: meta.dst, reason: `handling the connection failed: ${String((e && e.message) || e)}` }); onError(e) }).finally(() => { active.delete(done); counters.active--; gone() })
     active.add(done)
     socket.removeListener('error', duringLookup) // handleFlow's own listener has taken over
   }
@@ -136,6 +146,39 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     return { active: counters.active, total: counters.total, decrypted: counters.decrypted, spliced: counters.spliced, lookupMisses: counters.lookupMisses, storeErrors, notCaptured: { ...counters.notCaptured } }
   }
 
+  // `off` (RFC 1.6 §1.3): every connection of `agents` (null = all) that is still relayed is asked to close where the engine can
+  // see a boundary — an idle one at once, an HTTP one when its response has ended, a WebSocket one at the turn's terminal
+  // message — or, on `now`, is cut. → {closing, waiting, cut}: still on its way out / waiting for its own close (a spliced
+  // connection, a WebSocket whose turn end is not seen) / cut. Connections closed at once are in none of them.
+  const mine = (e, agents) => !agents || agents.has(e.agent)
+  function drain({ agents = null, now = false } = {}) {
+    const out = { closing: 0, waiting: 0, cut: 0 }
+    for (const e of [...flows]) {
+      if (!mine(e, agents) || !e.handle) continue
+      let r
+      try { r = e.handle.start({ now }) } catch (err) { failure({ code: 'engine-error', agent: e.agent, reason: `closing a connection after off failed: ${String((err && err.message) || err)}` }); onError(err); continue }
+      if (r === 'closing' || r === 'waiting' || r === 'cut') out[r]++
+    }
+    return out
+  }
+  // → {closing, waiting}: the connections of `agents` that off has asked to close and that are still relayed
+  function relayed({ agents = null } = {}) {
+    const out = { closing: 0, waiting: 0 }
+    for (const e of flows) {
+      if (!mine(e, agents) || !e.handle) continue
+      const st = e.handle.state()
+      if (st === 'closing' || st === 'waiting') out[st]++
+    }
+    return out
+  }
+  // resolves once no connection of `agents` (null = all) is left in the engine, closing or not
+  function drained({ agents = null } = {}) {
+    return new Promise((resolve) => {
+      const check = () => { if (![...flows].some((e) => mine(e, agents))) { waiters.delete(check); resolve() } }
+      waiters.add(check); check()
+    })
+  }
+
   // negatives() is for status only; forgetPid(pid) is called by the daemon when that process exits.
-  return { listen, close, stats, negatives: () => neg.list(), forgetPid: (pid) => neg.forgetPid(pid) }
+  return { listen, close, stats, drain, relayed, drained, negatives: () => neg.list(), forgetPid: (pid) => neg.forgetPid(pid) }
 }

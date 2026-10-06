@@ -2,8 +2,20 @@
 // the gate's own rules on fake sockets, and the real engine over TLS against the mock upstream (V36 unit half, V37, V38).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { EventEmitter } from 'node:events'
+import { EventEmitter, once } from 'node:events'
+import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
+import tls from 'node:tls'
 import { insertConnectionClose, createDrain } from '../../../src/collector/core/engine/drain.mjs'
+import { startMockUpstream } from '../../lab/mock-upstream/server.mjs'
+import { makeLabCa } from '../../lab/mock-upstream/lab-ca.mjs'
+import { wsConnect } from '../../lab/ws-client.mjs'
+import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
+import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
+import { createEngine } from '../../../src/collector/core/engine/engine.mjs'
+import { createStaticRedirector } from '../../../src/collector/core/redirector.mjs'
+import { createRecordStore } from '../../../src/collector/core/record/store.mjs'
+import { createFailureRecorder } from '../../../src/collector/core/events.mjs'
+import { closeWithin } from '../../helpers/bounded.mjs'
 
 const head = (lines) => Buffer.from(`${lines.join('\r\n')}\r\n\r\n`, 'latin1')
 const CRLF = '\r\n'
@@ -167,4 +179,133 @@ test('gate: bytes that do not start a status head (the head began before the gat
   const h = gateOf(); h.g.start()
   const long = Buffer.from(`HTTP/1.1 200 OK\r\nx: ${'a'.repeat(70 * 1024)}`)
   assert.equal(Buffer.concat(h.g.beforeUpstream(long)).length, long.length)
+})
+
+// ── the real engine, over TLS, against the mock upstream ───────────────────────────────────────────────────────────────
+const T = { timeout: 20000 }
+const TERMINAL = [{ pathSuffix: '/responses', patterns: ['^\\{"type":"(response\\.(completed|failed|incomplete)|error)"'] }]
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const until = async (fn, what, ms = 4000) => { for (const end = Date.now() + ms; Date.now() < end; await sleep(5)) { const v = fn(); if (v) return v } throw new Error(`${what}: not within ${ms}ms`) }
+const asightCa = createCa()
+const labCaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-drain-labca-'))
+const labCa = makeLabCa(labCaDir)
+process.on('exit', () => fs.rmSync(labCaDir, { recursive: true, force: true }))
+const BODY = JSON.stringify({ model: 'claude-x', max_tokens: 16, messages: [{ role: 'user', content: [{ type: 'text', text: 'drain me' }] }] })
+const SSE_BODY = (text = 'drain me') => JSON.stringify({ model: 'claude-x', max_tokens: 16, stream: true, messages: [{ role: 'user', content: [{ type: 'text', text: `${text} [[mock:slow-drip]]` }] }] })
+const split = (b) => { const i = b.indexOf('\r\n\r\n') + 4; return { head: b.subarray(0, i).toString('latin1'), body: b.subarray(i) } }
+
+async function lab(t, { delays, terminal = TERMINAL, spliceHost = 'splice.asight.test', upstream = null } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-drain-'))
+  const mock = upstream ? await upstream() : await startMockUpstream({ tls: { key: fs.readFileSync(labCa.key), cert: fs.readFileSync(labCa.cert) }, delays })
+  const envelopes = [], errors = []
+  const store = createRecordStore({ root: path.join(dir, 'rec') })
+  const L = { recording: true }
+  const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: mock.port, family: 4 }, pid: 11, agent: 'claude-code', decrypt: true })
+  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: fs.readFileSync(labCa.caCert), systemCa: [],
+    store: { envelope: (e) => { envelopes.push(e); return store.envelope(e) }, flow: (f) => store.flow(f) }, onFailure: createFailureRecorder(path.join(dir, 'rec')).event,
+    isRecording: () => L.recording, policy: (meta, host) => host !== spliceHost, describe: () => ({ wsTerminal: terminal }), onError: (e) => errors.push(e), drainTimeoutMs: 1500 })
+  const { port } = await engine.listen({})
+  const clients = []
+  t.after(async () => {
+    for (const c of clients) c.sock.destroy()
+    try { await mock.close(); await closeWithin(engine) } finally { store.close(); fs.rmSync(dir, { recursive: true, force: true }) }
+  })
+  const read = (sub) => { const d = path.join(dir, 'rec', sub); return fs.existsSync(d) ? fs.readdirSync(d).filter((f) => f.endsWith('.ndjson')).flatMap((f) => fs.readFileSync(path.join(d, f), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))) : [] }
+  // a keep-alive TLS client through the engine: what it received, whether it was closed
+  const client = async ({ servername = 'api.anthropic.com', ca = asightCa.certPem } = {}) => {
+    const sock = tls.connect({ port, host: '127.0.0.1', servername, ca }); sock.on('error', () => {})
+    await once(sock, 'secureConnect')
+    const chunks = []; sock.on('data', (d) => chunks.push(d))
+    const c = { sock, bytes: () => Buffer.concat(chunks), closed: new Promise((r) => sock.once('close', r)), ended: new Promise((r) => sock.once('end', r)) }
+    clients.push(c); return c
+  }
+  const post = (c, p, body, headers = {}) => c.sock.write(`POST ${p} HTTP/1.1\r\nHost: api.anthropic.com\r\ncontent-type: application/json\r\n${Object.entries(headers).map(([k, v]) => `${k}: ${v}\r\n`).join('')}content-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`)
+  const wire = (n = 0) => { const e = mock.state.log.filter((x) => x.type === 'request')[n]; return e && Buffer.from(e.resp_raw_b64, 'base64') } // the bytes the mock wrote for its nth response
+  const connectWs = async (opts = {}) => { const c = await wsConnect(port, { tls: { servername: 'api.openai.com', ca: asightCa.certPem }, ...opts }); clients.push(c); return c }
+  return { mock, engine, port, envelopes, errors, client, post, wire, connectWs, set recording(v) { L.recording = v }, rows: () => read('flows').filter((r) => r.event == null), failures: () => read('flows').filter((r) => r.event === 'failure'), dir }
+}
+const NOW = { agents: null }
+
+test('V37: off lands after the request went out and before the response head: one Connection: close line, the body verbatim, no reuse; recorded in the envelope and on the flows/ row', T, async (t) => {
+  const L = await lab(t, { delays: { stallMs: 300 } })
+  const c = await L.client()
+  L.post(c, '/v1/messages', BODY, { 'x-mock-scenario': 'slow-headers' }) // the mock answers 300 ms later
+  await sleep(60); L.recording = false // off: requests from now on are not recorded; this one began on
+  assert.deepEqual(L.engine.drain(NOW), { closing: 1, waiting: 0, cut: 0 })
+  assert.deepEqual(L.engine.relayed(NOW), { closing: 1, waiting: 0 })
+  await c.closed
+  const sent = split(L.wire()), got = split(c.bytes())
+  assert.equal(got.head, sent.head.replace(/\r\n\r\n$/, '\r\nConnection: close\r\n\r\n'), 'the head the client got: the mock\'s, plus the one line before the blank line')
+  assert.ok(got.body.equals(sent.body), 'the body byte for byte')
+  const env = await until(() => L.envelopes.at(-1), 'the envelope')
+  assert.deepEqual(env.asight_added, ['connection-close'])
+  assert.equal(Object.keys(env).at(-1), 'asight_added', 'appended after every other key')
+  assert.equal(env.resp_head_raw, sent.head, 'resp_head_raw is the head the upstream sent')
+  const [row] = await until(() => { const r = L.rows().filter((x) => x.asight_added); return r.length && r }, 'the flows/ row')
+  assert.deepEqual(row.asight_added, [{ seq: 0, what: 'connection-close' }])
+  assert.deepEqual(L.engine.relayed(NOW), { closing: 0, waiting: 0 }, 'once the connection is gone nothing is relayed')
+})
+
+test('V37: the upstream already says Connection: close → nothing added, nothing recorded; a head already forwarded (a stream) → nothing added', T, async (t) => {
+  const L = await lab(t, { delays: { stallMs: 300 } })
+  const c = await L.client()
+  L.post(c, '/v1/messages', BODY, { 'x-mock-scenario': 'slow-headers', connection: 'close' }) // the mock then answers with Connection: close
+  await sleep(60)
+  assert.deepEqual(L.engine.drain(NOW), { closing: 1, waiting: 0, cut: 0 })
+  await c.closed
+  assert.equal(split(c.bytes()).head, split(L.wire()).head, 'the head as the mock wrote it')
+  const env = await until(() => L.envelopes.at(-1), 'the envelope')
+  assert.equal(env.asight_added, undefined)
+  await until(() => L.rows().length, 'the row'); assert.equal(L.rows().at(-1).asight_added, undefined)
+
+  const S = await lab(t, { delays: { dripMs: 80 } })
+  const s2 = await S.client()
+  S.post(s2, '/v1/messages', SSE_BODY())
+  await until(() => s2.bytes().includes('message_start'), 'the first events')
+  assert.deepEqual(S.engine.drain(NOW), { closing: 1, waiting: 0, cut: 0 })
+  await s2.closed
+  const sent = split(S.wire()), got = split(s2.bytes())
+  assert.equal(got.head, sent.head, 'the head had been forwarded: nothing to add')
+  assert.ok(got.body.equals(sent.body), 'every event, to the last one, then the close')
+  const env2 = await until(() => S.envelopes.at(-1), 'the stream envelope')
+  assert.equal(env2.asight_added, undefined)
+  await until(() => S.rows().length, 'the stream row'); assert.equal(S.rows().at(-1).asight_added, undefined)
+})
+
+test('V37: an idle keep-alive connection is closed at once, with or without a request behind it; a request that starts after off is not recorded and the line it gets is on the flows/ row only', T, async (t) => {
+  const L = await lab(t, { delays: { stallMs: 300 } })
+  const fresh = await L.client()                       // TLS done, nothing sent: nothing in flight
+  const used = await L.client()
+  L.post(used, '/v1/messages', BODY); await until(() => used.bytes().toString('latin1').endsWith('0\r\n\r\n'), 'the first response') // keep-alive, now idle
+  const n = L.envelopes.length
+  L.recording = false
+  assert.deepEqual(L.engine.drain(NOW), { closing: 0, waiting: 0, cut: 0 }, 'both closed at once: nothing left to wait for')
+  await Promise.all([fresh.closed, used.closed])
+  const late = await L.client() // a connection the engine still got (it was steered before the link went away)
+  L.post(late, '/v1/messages', BODY, { 'x-mock-scenario': 'slow-headers' })
+  await sleep(60)
+  assert.deepEqual(L.engine.drain(NOW), { closing: 1, waiting: 0, cut: 0 })
+  await late.closed
+  assert.match(split(late.bytes()).head, /\r\nConnection: close\r\n\r\n$/)
+  assert.equal(L.envelopes.length, n, 'nothing recorded after off')
+  const row = await until(() => L.rows().find((x) => x.asight_added), 'the row of the late connection')
+  assert.deepEqual(row.asight_added, [{ seq: 0, what: 'connection-close' }])
+})
+
+test('V37: a small response that reaches the engine whole, head and body in one chunk, is still marked in its envelope (the gate acts before the tee closes the exchange)', T, async (t) => {
+  const reply = '{"id":"msg_1","type":"message","content":[{"type":"text","text":"pong"}]}'
+  const resp = `HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: ${reply.length}\r\n\r\n${reply}`
+  const L = await lab(t, { upstream: async () => {
+    const srv = tls.createServer({ key: fs.readFileSync(labCa.key), cert: fs.readFileSync(labCa.cert) }, (s) => { s.on('error', () => {}); s.once('data', () => setTimeout(() => s.write(resp), 200)) })
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r))
+    return { port: srv.address().port, state: { log: [] }, close: () => new Promise((r) => { srv.close(r); srv.closeAllConnections?.() }) }
+  } })
+  const c = await L.client()
+  L.post(c, '/v1/messages', BODY)
+  await sleep(60)
+  assert.deepEqual(L.engine.drain(NOW), { closing: 1, waiting: 0, cut: 0 })
+  await c.closed
+  assert.equal(c.bytes().toString('latin1'), resp.replace('\r\n\r\n', '\r\nConnection: close\r\n\r\n'))
+  const env = await until(() => L.envelopes.at(-1), 'the envelope')
+  assert.deepEqual([env.asight_added, env.resp_head_raw, env.resp.kind], [['connection-close'], resp.slice(0, resp.indexOf('\r\n\r\n') + 4), 'json'])
 })

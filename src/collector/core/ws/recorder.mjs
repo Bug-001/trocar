@@ -51,13 +51,18 @@ export function compileTerminal(spec, target, onInvalid = () => {}) {
 }
 
 /**
- * createWsRecorder({flow, upgrade, seqStart, genId, recordStore, isRecording, terminal, maxCallBytes, now, onFailure})
- *   → { fromClient(chunk), fromUpstream(chunk), end(error|null), summary() }
+ * createWsRecorder({flow, upgrade, seqStart, genId, recordStore, isRecording, terminal, maxCallBytes, now, onFailure, onTurnEnd})
+ *   → { fromClient(chunk), fromUpstream(chunk), end(error|null), summary(), state() }
+ * onTurnEnd() is called once a call has closed on its terminal message (the engine's drain gate closes the connection
+ * after the chunk that carried it, 1.6 §1.3). state() = where the connection stands: 'idle' = no call open and no
+ * message in flight (a connection `off` may close at once); 'open' = a call is open and its terminal message is awaited;
+ * 'blind' = the recorder cannot see where a turn ends (the harness declared no terminal message, the open call may have
+ * lost its terminal message, or a direction is no longer followed) — such a connection is not closed by off.
  * upgrade = {req:{head}, resp:{head}} (the exchange tee's heads); terminal = FlowExtras.wsTerminal.
  * summary() = {frames, calls, recorded, partial, dropped_frames, tail_raw?, broken?} for flows/.
  * onFailure({event, where:'ws', code, flow_id, reason, …}) = the engine's failure sink (flows/ event lines, D38).
  */
-export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordStore, isRecording = () => true, terminal = null, maxCallBytes = MAX_CALL_BYTES, now = () => new Date(), onFailure = noFailureSink }) {
+export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordStore, isRecording = () => true, terminal = null, maxCallBytes = MAX_CALL_BYTES, now = () => new Date(), onFailure = noFailureSink, onTurnEnd = () => {} }) {
   const ext = (upgrade.resp.head.headers || []).filter(([k]) => k.toLowerCase() === 'sec-websocket-extensions').map(([, v]) => v).join(', ')
   const { deflate } = parseExtensions(ext)
   const keepClient = isLlmCall(upgrade.req.head.target) // a non-LLM client message is metadata only (RFC 4.1)
@@ -163,10 +168,12 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
     } else if (open && (h.rec || h.start === open)) {
       join(open, h)
       if (value.decode_error || omitted) open.blind = true // this one might have been its terminal message
-      else if (isTerminal && bytes && isTerminal(bytes)) { const call = open; open = null; close(call, idx, null) }
+      else if (isTerminal && bytes && isTerminal(bytes)) { const call = open; open = null; close(call, idx, null); turnEnded() }
     } else if (open) drop(h) // begun off outside the call now open: not part of it, not recorded (C14)
     else { const push = newCall(h); join(push, h); close(push, idx, null) }
   }
+
+  function turnEnded() { try { onTurnEnd() } catch (e) { fail('recorder-error', e) } } // the gate's callback never throws into the forwarding path
 
   function drop(h) {
     const mine = new Set(h.frames)
@@ -224,7 +231,14 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
     } catch (e) { fail('recorder-error', e) } // never into the relay, never silent
   }
 
+  function state() {
+    if (ended) return 'idle'
+    if (!isTerminal || dirs.c.broken || dirs.s.broken || (open && open.blind)) return 'blind'
+    return open || dirs.c.msg || dirs.s.msg ? 'open' : 'idle'
+  }
+
   return {
+    state,
     fromClient: (chunk) => feed('c', chunk),
     fromUpstream: (chunk) => feed('s', chunk),
     end: (error) => finish(error || null),
