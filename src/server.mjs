@@ -262,19 +262,21 @@ function makeRecordLoader(source, { retryMs = 30000, sessionsRoot = null } = {})
     const passSkips = [];
     const vanished = [];
     for (const f of files) {
-      let size = 0;
+      let size = 0, fid = '';
       // Gone (ENOENT) is re-listed once below; any other stat failure is reported, and the rest is read.
-      try { size = fssync.statSync(f).size; } catch (e) {
+      try { const st = fssync.statSync(f); size = st.size; fid = `${st.ino}.${fileSig(st)}`; } catch (e) {
         if (e && e.code === 'ENOENT') { vanished.push(f); continue; }
         passSkips.push({ root: path.dirname(f), name: path.basename(f), reason: 'unreadable', error: (e && e.code) || String(e), attention: true }); continue;
       }
+      // A sealed file never grows (D35): read whole, once, frame by frame; what it could not yield is
+      // counted and named (`source.errors`), its readable records still show. So its mark is kept only
+      // while the file is the same one (inode + size/mtime/ctime): one replaced in place — another seal
+      // under the same name — is read whole again, and said so, instead of serving the old records.
+      const sealed = isSealedPath(f);
       const prev = marks.get(f);
       let from = 0, keep = [], problem = null;
-      if (prev && size >= prev.size) { from = prev.size; keep = prev.records; problem = prev.problem; }
-      else if (prev) { resets.push({ file: f, was: prev.size, now: size, why: 'file shrank — rotated, truncated or replaced' }); }
-      // A sealed file never grows (D35): read whole, once, frame by frame; what it could not yield is
-      // counted and named (`source.errors`), its readable records still show.
-      const sealed = isSealedPath(f);
+      if (prev && (sealed ? prev.fid === fid : size >= prev.size)) { from = prev.size; keep = prev.records; problem = prev.problem; }
+      else if (prev) { resets.push({ file: f, was: prev.size, now: size, why: sealed ? 'sealed file replaced — read again whole' : 'file shrank — rotated, truncated or replaced' }); }
       // The watermark is the end of the last COMPLETE line, not the file size: a record caught
       // half-written used to be parsed torn (counted corrupt) and its remainder then dropped as a
       // fragment on the next pass, so it never reached the board.
@@ -309,7 +311,7 @@ function makeRecordLoader(source, { retryMs = 30000, sessionsRoot = null } = {})
       const all = from > 0 ? keep.concat(fresh) : fresh;
       // lines that held a record readRecords could not parse: counted per file and shown (invariant 4)
       const corrupt = (from > 0 ? prev.corrupt || 0 : 0) + ((fresh.scan && fresh.scan.skippedLines) || 0);
-      nextMarks.set(f, { size, records: all, corrupt, problem });
+      nextMarks.set(f, { size, records: all, corrupt, problem, fid });
       for (const r of all) records.push(r);
       for (const r of tail) records.push(r); // provisional: not in the mark
     }

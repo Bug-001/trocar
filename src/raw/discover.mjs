@@ -81,8 +81,12 @@ function scanRoot(root, fs) {
       else {
         // reason + attention (may it hold capture bytes?), and a `report` when the name looks like a
         // capture the readers must name (unreadCapture)
-        const why = unreadCapture(e.name);
-        skipped.push({ name: e.name, file: p, ...skipReason(root, e), ...(why ? { report: why } : {}) });
+        // A sealed name that is not a file (a dangling link, a link to a directory) may stand for capture
+        // bytes too: read-cc-line's classifier keys `attention` on *.ndjson only, so it is set here, and
+        // named in the report — else it raised nothing at all.
+        const sealedName = isSealedPath(e.name);
+        const why = unreadCapture(e.name) || (sealedName ? 'a sealed file that is not a regular file (a dangling link, or a link to a directory) — not read' : null);
+        skipped.push({ name: e.name, file: p, ...skipReason(root, e), ...(sealedName ? { attention: true } : {}), ...(why ? { report: why } : {}) });
       }
       continue;
     }

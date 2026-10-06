@@ -687,7 +687,9 @@ async function poll(){
     if(sel.dataset.sig!==opts){ sel.innerHTML=opts; sel.dataset.sig=opts; if(curSel)sel.value=curSel }
     if(!curSel){ const p0=realP[0]||unres[0]; if(p0)curSel=`${p0.sessions[0].project_slug}::${p0.sessions[0].session_id}`; if(curSel)sel.value=curSel }
     if(!curSel){ renderEmpty('No sessions captured yet. Start a tap with `asight monitor on` (Claude Code CLI) or `asight desktop on` (Claude Desktop, macOS + Clash Verge), then run your agent. Check what is arranged with `asight monitor status`.'); return }
-    if(curSel==='__control__'){ document.body.classList.add('ctrlmode'); await renderControlView(); return }
+    // the control view replaces the session's timeline: coming back must fetch and render the session
+    // again (and show its own errors), not short-circuit on the sigs of the render it replaced
+    if(curSel==='__control__'){ document.body.classList.add('ctrlmode'); lastCheapSig=null; lastRenderSig=null; await renderControlView(); return }
     document.body.classList.remove('ctrlmode'); controlSig=null // leaving control view: force a full re-render next time (else a stale session header sticks)
     hideSessionChrome(false)
     const [slug,id]=curSel.split('::')

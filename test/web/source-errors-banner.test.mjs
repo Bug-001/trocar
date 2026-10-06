@@ -99,3 +99,21 @@ test('a session\'s own read errors stay in the bar across a poll that skips its 
   await M.poll();   // same calls / last_ts / window: the session is not fetched again
   assert.match(getEl('srcbar').innerHTML, /calls\.ndjson\.0002\.sealed<\/b> — 7 record\(s\) unreadable/, 'the session\'s errors were dropped');
 });
+
+// review finding 3: session → control view → the same session, unchanged. The cheap short-circuit
+// skipped the session's fetch on the way back, so its own errors (and its timeline) were not shown.
+test('a session\'s own read errors are back after a visit to the control view', async () => {
+  const { M, getEl } = await boot({ projects: [SESSION], source: { skipped: [], errors: [] } }, {
+    session: { source: { errors: [{ file: '/h/.asight/sessions/S/calls.ndjson.0002.sealed', reason: 'frame 4 corrupt', unreadableRecords: 7 }] } },
+    control: { classes: [{ class: 'telemetry', count: 1 }], source: { errors: [{ file: '/h/.asight/sessions/control/telemetry.ndjson.0001.sealed', reason: 'frame 0 corrupt', unreadableRecords: 3 }] } },
+    extra: ",pick:(v)=>{curSel=v}" });
+  await M.poll();
+  assert.match(getEl('srcbar').innerHTML, /calls\.ndjson\.0002\.sealed/);
+  M.pick('__control__');
+  await M.poll();
+  assert.match(getEl('srcbar').innerHTML, /telemetry\.ndjson\.0001\.sealed/);
+  assert.doesNotMatch(getEl('srcbar').innerHTML, /calls\.ndjson\.0002\.sealed/, 'the control view shows the session\'s errors');
+  M.pick('P::S');
+  await M.poll();
+  assert.match(getEl('srcbar').innerHTML, /calls\.ndjson\.0002\.sealed<\/b> — 7 record\(s\) unreadable/, 'the session\'s errors were dropped on the way back');
+});
