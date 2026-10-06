@@ -3,11 +3,11 @@
 // with real TLS clients, install / uninstall, the sealer), then asserts what F asks of every item: (i) a durable record
 // on disk with a closed reason code; (ii) GET /api/capture-health — over HTTP, from a real `asight serve` server —
 // shows the same reason; and for the daemon side (iii) `asight collector status` lists it with no daemon running.
-//   Where an F item is checked elsewhere, the test that does is named in place (F5, F8, F9). What still waits is a `todo`
-// test (one left: F5's WebSocket fidelity labels vs the top bar, an unresolved spec conflict): it runs,
-// and turns into a plain test when decided. The engine's connection-row codes (C2 T-1 / T-2 / T-4 / T-11..T-15) and the
-// combined-bundle check (D-21) landed with the merge of the lanes, so F1(b), F1(d), F2 (table), F4 and F5 (HTTP) are
-// plain tests. [VM] items are listed at the end; they are not run here.
+//   Where an F item is checked elsewhere, the test that does is named in place (F5, F8, F9). No `todo` is left: the
+// engine's connection-row codes (C2 T-1 / T-2 / T-4 / T-11..T-15) and the combined-bundle check (D-21) landed with the
+// merge of the lanes, and the last one, F5's WebSocket labels vs the top bar, with the decision of
+// 2026-10-06 (the class split, 4.6 F5). F1(b), F1(d), F2 (table), F4 and F5 (HTTP and WebSocket) are plain tests.
+// [test-machine] items are listed at the end; they are not run here.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -25,6 +25,9 @@ import { controlRequest } from '../../src/collector/core/control.mjs'
 import { runCollector } from '../../src/collector/cli.mjs'
 import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
+import { createWsRecorder } from '../../src/collector/core/ws/recorder.mjs'
+import { createFailureRecorder } from '../../src/collector/core/events.mjs'
+import { encodeFrame } from '../lab/ws-client.mjs'
 import { createRedirectorClient } from '../../src/collector/arch/linux/redirector-client.mjs'
 import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector.mjs'
 import cc from '../../src/collector/harness/claude-code.mjs'
@@ -558,16 +561,85 @@ test('F1(d) a bundle rebuilt without a user CA it held (its source file moved) i
   } finally { p.done(); s.done() }
 })
 
-// F5 says these labels "不让顶栏变 ⚠", while 4.6 §记录 lists the WebSocket recorder's write-failed /
-// decode-failed / broken / recorder-error as failure events and 1.5 turns every failure ⚠ — today a flows/ holding only
-// ws/decode-failed is ⚠ 1 (src/health/codes.mjs FAILURE_EVENTS). Which rule wins is the user's call; until then this is
-// a todo, not a pointer to a test that never had a WebSocket event in it.
-test('F5 fidelity labels (WebSocket recorder events in flows/) do not turn the top bar ⚠', { todo: 'spec conflict, unresolved: 4.6 F5 vs 4.6 §记录 (WS recorder codes are failure events) and 1.5 (failures are ⚠)' }, () => { assert.fail('waits on a spec decision') })
+// F5 (WebSocket): the labels on a WebSocket call (不完整 / 已截断 / 未解码) say what is missing from
+// THAT call; the top bar goes ⚠ by the D38 class of what happened. A failed write, a message that cannot be decoded, and
+// data lost because a direction stopped being followed (or asight's own code threw) are failure events: ⚠. A call cut at
+// the 64 MiB cap is by design: a label on the call (`ws_truncated`), no event, no ⚠. The real recorder writes the real
+// flows/ through the daemon's failure recorder, the endpoint is read over HTTP; the top bar maps `summary.state` 'failing'
+// to ⚠ N and 'ok' to ✓ (test/web/cap-health.test.mjs). The cap is lowered through the recorder's own option: the engine
+// takes the 64 MiB constant, and a test that sends 64 MiB through TLS proves nothing more.
+const WS_FLOW = { id: 'ws-f5', host: 'api.openai.com', scheme: 'https', dst: { address: '10.0.0.1', port: 443, family: 4 }, proc: { pid: 7171, exe: CC_EXE, agent: 'claude-code' } }
+const wsUpgrade = (ext) => {
+  const raw = (line, hs) => `${line}\r\n${hs.map(([k, v]) => `${k}: ${v}`).join('\r\n')}\r\n\r\n`
+  const reqH = [['Host', 'api.openai.com'], ['Upgrade', 'websocket'], ['Session-Id', 's-f5']], respH = [['Upgrade', 'websocket'], ...(ext ? [['Sec-WebSocket-Extensions', ext]] : [])]
+  const head = (s, extra) => ({ raw: Buffer.from(s, 'latin1'), startLine: s.split('\r\n')[0], ...extra })
+  return { req: { head: head(raw('GET /v1/responses HTTP/1.1', reqH), { method: 'GET', target: '/v1/responses', headers: reqH }) },
+    resp: { head: head(raw('HTTP/1.1 101 Switching Protocols', respH), { status: 101, headers: respH }) } }
+}
+test('F5 WebSocket labels and the top bar, by D38 class: a call cut at the cap is a label only (✓); a failed write, an undecodable message and a stopped direction are failure events (⚠)', { timeout: 30000 }, async () => {
+  const S = await scene()
+  const failures = createFailureRecorder(S.s.collector) // as the daemon wires it into the engine and the recorder
+  try {
+    const out = []; let n = 0
+    const rec = (o = {}) => createWsRecorder({ flow: WS_FLOW, upgrade: wsUpgrade(o.ext), genId: () => `ws-env-${n++}`, onFailure: failures.event, terminal: [{ pathSuffix: '/responses', patterns: ['^\\{"type":"response\\.completed"'] }],
+      recordStore: { envelope: o.write || ((e) => (out.push(e), true)), lastError: null }, ...o })
+    const ev = (type, extra = {}) => JSON.stringify({ type, ...extra })
+    const cli = (op, payload, opts) => encodeFrame(op, payload, opts), srv = (op, payload, opts) => encodeFrame(op, payload, { mask: false, ...opts })
+    const wsKeys = async () => keys(await endpoint(S.s)).filter((k) => k.startsWith('ws/'))
+    const before = await endpoint(S.s)
+    assert.equal(before.summary.state, 'ok', 'precondition: a running collector, nothing wrong')
+
+    // (1) a call that goes past the cap: its messages after the cap are {omitted_bytes}, the envelope says ws_truncated
+    const cap = rec({ maxCallBytes: 4000 })
+    cap.fromClient(cli(1, ev('response.create', { input: 1 })))
+    cap.fromUpstream(srv(1, ev('response.output_text.delta', { delta: 'x'.repeat(3000) }))); cap.fromUpstream(srv(1, ev('response.output_text.delta', { delta: 'y'.repeat(3000) })))
+    cap.fromUpstream(srv(1, ev('response.completed'))); cap.end(null)
+    assert.deepEqual(out.map((e) => [e.ws_truncated, e.partial, e.resp.messages.some((m) => m && m.omitted_bytes)]), [[true, undefined, true]], 'the call carries 已截断 (and is not "partial": nothing was lost to a failure)')
+    failures.flush()
+    assert.deepEqual(flowsOf(S.s).filter((f) => f.where === 'ws'), [], 'no event is written for a cut at the cap')
+    let h = await endpoint(S.s)
+    assert.equal(h.summary.state, 'ok', 'the top bar stays ✓')
+    assert.deepEqual(await wsKeys(), [], 'and no WebSocket group is listed')
+    out.length = 0
+
+    // (2) a failed write: the envelope is lost, and that is a failure event
+    const w = rec({ write: () => { throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }) } })
+    w.fromClient(cli(1, ev('response.create'))); w.fromUpstream(srv(1, ev('response.completed')))
+    h = await endpoint(S.s)
+    assert.equal(h.summary.state, 'failing', 'a failed write turns the top bar ⚠')
+    assert.deepEqual(await wsKeys(), ['ws/write-failed'])
+
+    // (3) a message that cannot be decoded (RSV1 with no permessage-deflate agreed)
+    const d = rec()
+    d.fromClient(cli(1, ev('response.create'))); d.fromUpstream(srv(1, 'abc', { rsv1: true })); d.fromUpstream(srv(1, ev('response.completed'))); d.end(null)
+    assert.deepEqual(out.map((e) => [e.partial_reasons, e.resp.messages.some((m) => m && m.decode_error)]), [[['decode-failed'], true]], 'the call is labelled (不完整 / 未解码) and its undecodable message keeps its bytes')
+    assert.deepEqual(await wsKeys(), ['ws/write-failed', 'ws/decode-failed'])
+    out.length = 0
+
+    // (4) data lost because a direction stopped being followed (a reserved opcode): the same ws_truncated label as a cap, the other class
+    const b = rec()
+    b.fromClient(cli(1, ev('response.create'))); b.fromUpstream(srv(1, ev('response.output_text.delta'))); b.fromUpstream(Buffer.from([0x83, 0])); b.end(null)
+    assert.deepEqual(out.map((e) => [e.ws_truncated, e.partial_reasons]), [[true, ['decode-failed']]], 'labelled 已截断 like the cap, but a stopped direction is an error')
+    assert.ok((await wsKeys()).includes('ws/broken'))
+
+    // (5) asight's own code throwing while it follows a direction loses data too: recorder-error, not "bad data"
+    const x = rec({ genId: () => { throw new Error('id source gone') } })
+    x.fromClient(cli(1, 'a')); x.end(null)
+    assert.ok((await wsKeys()).includes('ws/recorder-error'))
+
+    failures.flush()
+    h = await endpoint(S.s)
+    assert.equal(h.summary.state, 'failing')
+    assert.deepEqual([...new Set(await wsKeys())].sort(), ['ws/broken', 'ws/decode-failed', 'ws/recorder-error', 'ws/write-failed'], 'each failure class event is a group of its own, the cap is none of them')
+    assert.equal(h.summary.n, h.collector.failures.length, 'the ⚠ N counts the failure groups, every one of them a failure')
+    for (const f of flowsOf(S.s).filter((x) => x.where === 'ws')) assert.equal(f.event, 'failure', 'every WebSocket record in flows/ is a failure event: the cap writes none')
+  } finally { failures.flush(); await S.done() }
+})
 
 // Elsewhere:
 //   F5 (WebSocket): test/web/ws-incomplete.test.mjs — partial / ws_truncated / undecoded / non-verbatim reach /api/session
-//       and render as 不完整 / 已截断 / 未解码 / 非逐字, through both assemblers. Whether the recorder's flows/ events turn
-//       the top bar ⚠ is the todo above (no test covered it). Response-body labels: test/web/resp-incomplete.test.mjs.
+//       and render as 不完整 / 已截断 / 未解码 / 非逐字, through both assemblers. Which of them turn the top bar ⚠ (by D38
+//       class) is the F5 WebSocket test above. Response-body labels: test/web/resp-incomplete.test.mjs.
 //   F4 (the capture file itself unwritable on the daemon's path): test/collector/daemon.test.mjs "an envelope that cannot be
 //       written is a durable failure record" — record/EISDIR in flows/, and the agent still gets its reply.
 //   F8: test/capture/legacy-failures.test.mjs, legacy-run.test.mjs, legacy-ops.test.mjs (4.1 #6b); "old MITM only is not
