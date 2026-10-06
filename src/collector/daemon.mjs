@@ -400,6 +400,9 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         ...(await sw.report()),
         engine: { port, v6: v6Error ? null : port, v6_error: v6Error, ...engine.stats() },
         negatives: engine.negatives(), // (pid, host) pairs no longer decrypted until the process exits (D-12)
+        // connections of the harnesses that are off and still relayed (1.6 §1.3): closing = on their way out at the response / turn
+        // end, waiting = a spliced one or a WebSocket whose turn end is not seen, which close by themselves (`off --now` cuts them)
+        relayed: engine.relayed({ agents: new Set(Object.entries(sw.state().harnesses).filter(([, h]) => h.desired === 'off').map(([id]) => id)) }),
         ca: caState, // {ok, not_after} or {ok:false, which, file, reason}: "CA unusable", never "not installed" (D-4)
         unmatched: tracker.unmatched(), // processes two descriptors claim (D-19)
         helper: { pid, proto, build, expected_proto: redirector.expectedProto, ok: proto === redirector.expectedProto, down: helperDown, unparsable_lines: unparsable, timeouts },
@@ -425,20 +428,41 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     Object.assign(impl, {
       status,
       on: async ({ body }) => { const r = await sw.on({ ...(body && typeof body === 'object' ? body : {}), harnesses: namesOf(body) }); syncTracker(); return { ...(await status()), ...(r.noop ? { noop: true } : {}) } },
-      // → {…status, unwatched: [pid], confirmed}: the pids taken out of the kernel watch table, and whether the kernel confirms the state asked for (every
-      // unwatch answered; with no harness left on, the links gone). With the helper dead its table is gone with it: every pid counts as taken out and
-      // `confirmed` does not wait on an unwatch nobody can answer. `now` / `exit` are accepted and ignored until the drain (1.6 §1.3) is wired.
+      // → {…status, unwatched: [pid], confirmed, relayed: {closing, waiting, cut}, pid}: the pids taken out of the kernel watch table, and whether the kernel
+      // confirms the state asked for (every unwatch answered; with no harness left on, the links gone). With the helper dead its table is gone with it: every pid
+      // counts as taken out and `confirmed` does not wait on an unwatch nobody can answer. After the switch the engine closes the connections of those harnesses
+      // that are still relayed (1.6 §1.3; `now`: cuts them instead) and `relayed` says how many are left closing / waiting / were cut. `exit` (no names: the
+      // whole daemon is going, 1.6 §1.4 5) stops the daemon once nothing is relayed any more, or at once with `now`; the request never waits for it.
       off: async ({ body }) => {
-        const r = await sw.off({ harnesses: namesOf(body, { allowState: true }) })
+        const b = body && typeof body === 'object' ? body : {}
+        for (const k of ['now', 'exit']) if (b[k] !== undefined && typeof b[k] !== 'boolean') throw Object.assign(new Error(`"${k}" must be true or false`), { status: 400 })
+        const names = namesOf(body, { allowState: true })
+        if (b.exit === true && names) throw Object.assign(new Error('"exit" stops the whole daemon: it takes no harness names (leave them out)'), { status: 400 })
+        const r = await sw.off({ harnesses: names })
+        const relayed = engine.drain({ agents: names ? new Set(names) : null, now: b.now === true })
         const st = await status()
-        return { ...st, ...(r.noop ? { noop: true } : {}), unwatched: r.unwatched, confirmed: r.unwatch_failed.length === 0 && (sw.anyOn() || st.actual === 'off') }
+        if (b.exit === true) exitWhenDrained(b.now === true)
+        return { ...st, ...(r.noop ? { noop: true } : {}), unwatched: r.unwatched, confirmed: r.unwatch_failed.length === 0 && (sw.anyOn() || st.actual === 'off'), relayed, pid: process.pid }
       },
     })
     markReady()
 
     // stop({signal}) — signal: what stopped it (SIGTERM, SIGINT, SIGHUP = the terminal closed or the user logged out,
-    // SIGQUIT), else `reason`. Returns {failed: [where…]}: a step that failed makes `collector start` exit non-zero.
-    async function stop({ signal = null, reason = null } = {}) {
+    // SIGQUIT), else `reason`. Returns {failed: [where…]}: a step that failed makes `collector start` exit non-zero. It
+    // runs once: a second call (a signal while the daemon is stopping itself after `off`) gets the first one's result.
+    let stopping = null
+    let markExited
+    const exited = new Promise((r) => { markExited = r }) // resolves with stop()'s result, however the daemon came to stop
+    const stop = (o) => { if (!stopping) { stopping = doStop(o); stopping.then(markExited, () => markExited({ failed: ['stop'] })) } return stopping }
+    // `off` with no names (1.6 §1.4 5): when no connection is left in the engine — or at once on `now` (a second wait is cut at 500 ms: whatever
+    // the engine still holds then goes with the process) — the daemon stops itself like for SIGTERM, with reason 'off'. A little later than
+    // the reply, so the reply is written before the control socket closes.
+    function exitWhenDrained(now) {
+      const left = engine.drained({ agents: null })
+      const ready = now ? Promise.race([left, new Promise((r) => setTimeout(r, 500))]) : left
+      ready.then(() => new Promise((r) => setTimeout(r, 50))).then(() => stop({ reason: 'off' })).catch((e) => failure('daemon', coded(e, 'stop-failed')))
+    }
+    async function doStop({ signal = null, reason = null } = {}) {
       clearInterval(lockTimer); clearInterval(caTimer); clearInterval(checkTimer)
       if (!helperDown) { try { const s = await redirector.status(); if (s && s.drops) lastDrops = s.drops } catch { /* the helper is going: what was last read is written */ } }
       noteDrops({ force: true }) // drops not yet reported are written, not lost
@@ -457,7 +481,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       fs.rmSync(P.lock, { force: true }) // last: a lock still there at the next start means this stop never finished
       return { failed }
     }
-    return { port, socketPath: sock, paths: P, stop, status, tracker, engine, redirector, switch: sw }
+    return { port, socketPath: sock, paths: P, stop, exited, status, tracker, engine, redirector, switch: sw }
   } catch (e) {
     failure.flush()
     await control.close()

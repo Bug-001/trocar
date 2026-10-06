@@ -145,11 +145,11 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
       assert.equal(blk.text, relayBody.slice(Number(from), Number(to)), `${b.key}: board bytes == relay bytes`)
     }
 
-    await req(s.sock, 'POST', '/off')
-    assert.match(await send('asight-after-off'), /^HTTP\/1\.1 200 OK/) // 4.6 §开关「已有连接」: keeps relaying until it closes
-    await new Promise((r) => setTimeout(r, 200))
-    assert.ok(!fs.readFileSync(path.join(s.collector, capture), 'utf8').includes('asight-after-off'), 'a request that starts after off is never recorded')
-    c.end(); await once(c, 'close')
+    const off = await req(s.sock, 'POST', '/off')
+    // 1.6 §1.3 / 4.6 §开关「已有连接」: a connection through the engine with nothing in flight is closed at once, so the agent's next request goes direct
+    assert.deepEqual([off.relayed, off.pid], [{ closing: 0, waiting: 0, cut: 0 }, process.pid])
+    if (!c.destroyed) await once(c, 'close') // it may already be gone: closed while the reply was on its way
+    assert.ok(!fs.readFileSync(path.join(s.collector, capture), 'utf8').includes('asight-after-off'))
     await until(() => flowsOf(s).some((f) => f.decision === 'decrypt' && f.agent === 'claude-code' && f.pid === 4242))
   } finally { if (server) server.close(); await d.stop(); up.close(); p.done(); s.done() }
 })
@@ -1245,5 +1245,87 @@ test('daemon: /on and /off take only a non-empty array of harness names the daem
     const named = await req(s.sock, 'POST', '/off', { harnesses: ['claude-code'] })
     assert.deepEqual(Object.entries(named.harnesses).map(([id, h]) => [id, h.desired]), [['claude-code', 'off'], ['codex', 'on']])
     assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).harnesses).sort(), ['claude-code', 'codex'], 'only harnesses that exist are ever written')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+// 1.6 §1.3 / §1.4 5 (V36 daemon half): `off` with no names and `exit` — the daemon stops itself once no connection is left in the engine, or at
+// once with `now`; a spliced connection (the engine sees no response boundary) keeps it alive until it closes by itself.
+async function withSplice(fn) {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home } })
+  const echo = net.createServer((x) => x.pipe(x)); await new Promise((r) => echo.listen(0, '127.0.0.1', r))
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    p.add(4242, { uid: UID, exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
+    await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 4242, pid: 4242, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
+    await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 4242))
+    const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
+    await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: echo.address().port, family: 4 }, pid: 4242, decrypt: 0 })
+    raw.write('ZZZZ not a protocol the engine knows\n') // classified unknown: passed through, never framed
+    await once(raw, 'data')
+    await fn({ s, d, raw, flows: () => flowsOf(s) })
+  } finally { echo.close(); await d.stop(); p.done(); s.done() }
+}
+
+test('daemon: POST /off {exit:true} with a spliced connection open: the reply says 1 waiting and the daemon\'s pid, it stays up, status counts the connection, and it stops (daemon-stop, reason off) once the connection closes by itself (V36 daemon half, 1.6 §1.4 5)', async () => {
+  await withSplice(async ({ s, d, raw, flows }) => {
+    const off = await req(s.sock, 'POST', '/off', { exit: true })
+    assert.deepEqual([off.relayed, off.pid, off.desired], [{ closing: 0, waiting: 1, cut: 0 }, process.pid, 'off'])
+    await new Promise((r) => setTimeout(r, 400))
+    const st = await req(s.sock, 'GET', '/status')
+    assert.deepEqual(st.relayed, { closing: 0, waiting: 1 }, 'still running, and status counts what is still relayed')
+    assert.equal(fs.existsSync(path.join(s.collector, 'lock')), true)
+    let stopped = false; d.exited.then(() => { stopped = true })
+    raw.destroy() // the connection closes by itself
+    await until(() => stopped)
+    const stop = flows().find((f) => f.event === 'daemon-stop')
+    assert.deepEqual([stop.reason, stop.signal, stop.failed], ['off', undefined, undefined])
+    assert.equal(fs.existsSync(path.join(s.collector, 'lock')), false)
+    const spliced = flows().find((f) => f.decision === 'splice')
+    assert.deepEqual([spliced.error, spliced.agent], [undefined, 'claude-code'])
+  })
+})
+
+test('daemon: POST /off {exit:true, now:true} cuts the spliced connection and stops the daemon within 1 s; the row says cut-by-off (V36 daemon half, 1.6 §1.3)', async () => {
+  await withSplice(async ({ s, d, raw, flows }) => {
+    const t0 = Date.now()
+    const off = await req(s.sock, 'POST', '/off', { exit: true, now: true })
+    assert.deepEqual(off.relayed, { closing: 0, waiting: 0, cut: 1 })
+    await d.exited
+    assert.ok(Date.now() - t0 < 1000, `stopped in ${Date.now() - t0} ms`)
+    if (!raw.destroyed) await once(raw, 'close') // cut
+    const row = flows().find((f) => f.decision === 'splice')
+    assert.deepEqual([row.error.type, row.error.side], ['cut-by-off', 'engine'])
+    assert.equal(flows().find((f) => f.event === 'daemon-stop').reason, 'off')
+  })
+})
+
+test('daemon: /off takes boolean now and exit only, and exit takes no harness names; a refusal is a 400 that changes nothing (1.6 §1.4)', async () => {
+  await withSplice(async ({ s, d }) => {
+    for (const body of [{ now: 'yes' }, { exit: 1 }, { exit: true, harnesses: ['claude-code'] }]) {
+      await assert.rejects(req(s.sock, 'POST', '/off', body), (e) => e.status === 400, JSON.stringify(body))
+    }
+    assert.equal((await req(s.sock, 'GET', '/status')).desired, 'on', 'nothing was turned off')
+    const named = await req(s.sock, 'POST', '/off', { harnesses: ['claude-code'], now: true })
+    assert.deepEqual(named.relayed, { closing: 0, waiting: 0, cut: 1 }, 'a named off with now cuts that harness\'s connections and leaves the daemon running')
+    assert.equal(await Promise.race([d.exited.then(() => 'stopped'), new Promise((r) => setTimeout(() => r('running'), 300))]), 'running')
+  })
+})
+
+test('daemon: POST /off {exit:true} with nothing relayed stops the daemon on its own, once, and a later stop() is a no-op that returns the same result', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const { arch } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home } })
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    const off = await req(s.sock, 'POST', '/off', { exit: true })
+    assert.deepEqual(off.relayed, { closing: 0, waiting: 0, cut: 0 })
+    const r = await d.exited
+    assert.deepEqual(r, { failed: [] })
+    assert.deepEqual(await d.stop({ signal: 'SIGTERM' }), r)
+    assert.equal(flowsOf(s).filter((f) => f.event === 'daemon-stop').length, 1, 'one daemon-stop line, for the reason that stopped it first')
   } finally { await d.stop(); p.done(); s.done() }
 })

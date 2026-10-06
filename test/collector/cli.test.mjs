@@ -95,6 +95,22 @@ test('cli: start stops on SIGHUP like SIGTERM, passes the signal to stop, exits 
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })
 
+// 1.6 §1.4 5: after `off` with no names the daemon stops itself once nothing is relayed; `start` then returns 0 without any signal, so the unit exits
+// cleanly and systemd does not restart it (Restart=on-failure)
+test('cli: start returns when the daemon has stopped itself (off), exit 0, without waiting for a signal; a signal arriving later gets the first stop\'s result', async () => {
+  const home = tmpDir('asight-cli-start-')
+  try {
+    let result = { failed: [] }
+    const stops = []
+    const daemon = { startDaemon: async () => ({ port: 1, socketPath: '/s', exited: Promise.resolve(result), stop: async (x) => { stops.push(x); return result } }) }
+    let t = io()
+    assert.equal(await runCollector(['start'], { home, env: {}, daemon, proc: { on() {} }, waitForStop: () => new Promise(() => {}), ...t }), 0, 'no signal ever came')
+    assert.deepEqual(stops, [{ signal: null }])
+    result = { failed: ['helper'] }
+    t = io(); assert.equal(await runCollector(['start'], { home, env: {}, daemon, proc: { on() {} }, waitForStop: () => new Promise(() => {}), ...t }), 1, 'a step of its own stop failed')
+  } finally { fs.rmSync(home, { recursive: true, force: true }) }
+})
+
 test('cli: install / uninstall hand the descriptors, OS and process table from daemon.loadParts to install.mjs', async () => {
   const seen = []
   const U = { UNIT_NAME: 'asight-collector.service', unitPath: (h) => `${h}/.config/systemd/user/asight-collector.service`, wantsLink: (h) => `${h}/.config/systemd/user/default.target.wants/asight-collector.service`, unitText: ({ node, script, env }) => `${JSON.stringify(env)} ExecStart="${node}" "${script}" collector start`, systemctl: () => ({ code: 0 }), removeWantsLinks: () => [] }

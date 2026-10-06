@@ -56,6 +56,9 @@ export function handleFlow(client, meta, ctx) {
   const destroyAll = () => { for (const s of socks) { try { s.destroy() } catch { /* already gone */ } } }
   let gate = null
   let drainAsked = false
+  // the gate says it is about to close (or cut) the connection: the engine did it, not the client (the leaf-rejection judge ignores it), and a
+  // cut says so on the row — before the sockets are destroyed, because a TLS socket emits its close events inside destroy()
+  const onGateClosed = (kind) => { selfClosed = true; if (kind === 'cut' && !rec.error) rec.error = { type: 'cut-by-off', message: 'the connection was cut by asight off --now', side: 'engine' } }
   let upstream = null       // the TCP connection to the original destination
   let firstByteTimer = null
   let slowTimer = null      // the upstream-slow watch while the engine waits on the upstream (RFC 4.6 §记录)
@@ -165,13 +168,10 @@ export function handleFlow(client, meta, ctx) {
     start({ now = false } = {}) {
       if (finished) return 'closed'
       if (gate) {
-        const r = gate.start({ now })
-        if (r === 'cut' && !rec.error) rec.error = { type: 'cut-by-off', message: 'the connection was cut by asight off --now', side: 'engine' } // the row says why (set before the close events fire)
-        return r
+        return gate.start({ now })
       }
       if (now) { // not yet relayed (the TLS handshake, a proxy prelude): cut as well
-        selfClosed = true
-        if (!rec.error) rec.error = { type: 'cut-by-off', message: 'the connection was cut by asight off --now', side: 'engine' }
+        onGateClosed('cut')
         if (!handedOff) preTeardown(rec.error); else destroyAll()
         return 'cut'
       }
@@ -205,7 +205,7 @@ export function handleFlow(client, meta, ctx) {
     // The drain gate (RFC 1.6 §1.3, engine/drain.mjs) sits between the upstream and the client. It runs before the tee sees
     // a chunk (an envelope that ends in this very chunk then already says what the gate added) and after the chunk is
     // written (a response that ended closes the connection); the tee still reads the upstream's own bytes.
-    const drain = gate = createDrain({ flowId: rec.flow_id, tee, client: cSock, upstream: uSock, timeoutMs: ctx.drainTimeoutMs ?? 5000, destroy: destroyAll, onClosed: () => { selfClosed = true }, onFailure: ctx.failure })
+    const drain = gate = createDrain({ flowId: rec.flow_id, tee, client: cSock, upstream: uSock, timeoutMs: ctx.drainTimeoutMs ?? 5000, destroy: destroyAll, onClosed: onGateClosed, onFailure: ctx.failure })
     track(cSock); track(uSock)
     if (drainAsked) { drainAsked = false; drain.start({ now: false }) }
     cSock.on('data', (d) => { copy((t) => t.fromClient(d)); if (uSock.writable && !uSock.write(d)) cSock.pause() })
@@ -457,7 +457,7 @@ export function handleFlow(client, meta, ctx) {
     cTls.on('data', onC); uTls.on('data', onU)
     // TLS is terminated on both legs and the client has said nothing yet: nothing is in flight, off closes it at once
     track(cTls); track(uTls)
-    gate = createDrain({ flowId: rec.flow_id, tee: IDLE, client: cTls, upstream: uTls, timeoutMs: ctx.drainTimeoutMs ?? 5000, destroy: destroyAll, onClosed: () => { selfClosed = true }, onFailure: ctx.failure })
+    gate = createDrain({ flowId: rec.flow_id, tee: IDLE, client: cTls, upstream: uTls, timeoutMs: ctx.drainTimeoutMs ?? 5000, destroy: destroyAll, onClosed: onGateClosed, onFailure: ctx.failure })
   }
 
   // Between terminating TLS and relay() owning the connection nothing else listens for a side going (the raw

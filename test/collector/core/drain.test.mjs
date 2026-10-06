@@ -201,7 +201,7 @@ async function lab(t, { delays, terminal = TERMINAL, spliceHost = 'splice.asight
   const store = createRecordStore({ root: path.join(dir, 'rec') })
   const L = { recording: true }
   const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: mock.port, family: 4 }, pid: 11, agent: 'claude-code', decrypt: true })
-  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: fs.readFileSync(labCa.caCert), systemCa: [],
+  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: fs.readFileSync(labCa.caCert), systemCa: fs.readFileSync(labCa.caCert, 'utf8'),
     store: { envelope: (e) => { envelopes.push(e); return store.envelope(e) }, flow: (f) => store.flow(f) }, onFailure: createFailureRecorder(path.join(dir, 'rec')).event,
     isRecording: () => L.recording, policy: (meta, host) => host !== spliceHost, describe: () => ({ wsTerminal: terminal }), onError: (e) => errors.push(e), drainTimeoutMs: 1500 })
   const { port } = await engine.listen({})
@@ -308,4 +308,91 @@ test('V37: a small response that reaches the engine whole, head and body in one 
   assert.equal(c.bytes().toString('latin1'), resp.replace('\r\n\r\n', '\r\nConnection: close\r\n\r\n'))
   const env = await until(() => L.envelopes.at(-1), 'the envelope')
   assert.deepEqual([env.asight_added, env.resp_head_raw, env.resp.kind], [['connection-close'], resp.slice(0, resp.indexOf('\r\n\r\n') + 4), 'json'])
+})
+
+// ── WebSocket (V38) ───────────────────────────────────────────────────────────────────────────────────────────────
+const user = (text) => ({ type: 'message', role: 'user', content: [{ type: 'input_text', text }] })
+const create = (text) => JSON.stringify({ type: 'response.create', model: 'gpt-test-1', store: false, stream: true, input: [user(text)] })
+const b64 = (s) => Buffer.from(s, 'base64')
+const mockWire = (L) => { // what the mock wrote on the WebSocket connection: the 101, then its frames in order
+  const log = L.mock.state.log
+  return Buffer.concat([b64(log.find((e) => e.type === 'request').resp_raw_b64), ...log.filter((e) => e.type === 'ws_frame' && e.dir === 'out').map((e) => b64(e.raw_b64))])
+}
+
+test('V38: off while a call is open: the engine forwards every frame up to the terminal message, then closes (FIN); it wrote no byte the upstream did not send; the call is recorded whole', T, async (t) => {
+  const L = await lab(t, { delays: { dripMs: 100 } })
+  const c = await L.connectWs()
+  await c.sendText(create('drain ws [[mock:slow-drip]]'))
+  assert.equal((await c.message()).opcode, 1) // the first event is in: the call is open
+  assert.deepEqual(L.engine.drain(NOW), { closing: 1, waiting: 0, cut: 0 })
+  assert.equal(c.state.closed, false, 'not closed under an open call')
+  await until(() => c.state.closed, 'the close after the terminal message', 8000)
+  assert.ok(Buffer.concat(c.state.received).equals(mockWire(L)), 'the client got exactly the mock\'s bytes: the 101 and every frame to response.completed, no synthesized close frame')
+  assert.equal(c.state.ended, true, 'a FIN, not a reset'); assert.equal(c.state.error, null)
+  const types = L.mock.state.log.filter((e) => e.type === 'ws_frame' && e.dir === 'out').map((e) => e.opcode)
+  assert.ok(types.length > 3 && types.every((o) => o === 1), 'text frames only')
+  const env = await until(() => L.envelopes.at(-1), 'the envelope')
+  assert.equal(L.envelopes.length, 1)
+  assert.equal(JSON.parse(env.resp.messages.at(-1)).type, 'response.completed')
+  assert.equal(env.error, undefined); assert.equal(env.asight_added, undefined, 'nothing is added to a WebSocket connection')
+  assert.deepEqual(L.failures(), [])
+})
+
+test('V38: off with no call open: the WebSocket connection is closed at once, with no frame of ours; no terminal message declared: it is not closed and counts as waiting', T, async (t) => {
+  const L = await lab(t)
+  const c = await L.connectWs()
+  assert.deepEqual(L.engine.drain(NOW), { closing: 0, waiting: 0, cut: 0 })
+  await until(() => c.state.closed, 'closed at once')
+  assert.ok(Buffer.concat(c.state.received).equals(mockWire(L)), 'only the 101')
+  const N = await lab(t, { terminal: null, delays: { dripMs: 50 } })
+  const d = await N.connectWs()
+  await d.sendText(create('no pattern [[mock:slow-drip]]'))
+  assert.deepEqual(N.engine.drain(NOW), { closing: 0, waiting: 1, cut: 0 })
+  await d.events(); await sleep(300)
+  assert.equal(d.state.closed, false, 'the call ran to its end and the connection stays open: nothing says where a turn ends')
+  assert.deepEqual(N.engine.relayed(NOW), { closing: 0, waiting: 1 })
+  assert.deepEqual(N.engine.drain({ agents: null, now: true }), { closing: 0, waiting: 0, cut: 1 }, '--now cuts it')
+  await until(() => d.state.closed, 'cut')
+})
+
+// ── off --now and what stays (V36 unit half) ──────────────────────────────────────────────────────────────────────
+// an SSE response under way, a WebSocket with a call open, a spliced connection (a host outside the decrypt policy)
+async function trio(t) {
+  const L = await lab(t, { delays: { dripMs: 200 } })
+  const sse = await L.client(); L.post(sse, '/v1/messages', SSE_BODY())
+  const ws = await L.connectWs(); await ws.sendText(create('trio [[mock:slow-drip]]'))
+  const sp = await L.client({ servername: 'splice.asight.test', ca: fs.readFileSync(labCa.caCert) })
+  await until(() => sse.bytes().includes('message_start'), 'the stream is under way')
+  await ws.message()
+  return { L, sse, ws, sp, closedAll: () => Promise.all([sse.closed, until(() => ws.state.closed, 'ws closed', 3000), sp.closed]) }
+}
+
+test('V36 unit: off --now cuts the SSE, the WebSocket and the spliced connection: cut 3, all closed within 1 s, three rows with error.type cut-by-off', T, async (t) => {
+  const { L, ws, sse, sp } = await trio(t)
+  const t0 = Date.now()
+  assert.deepEqual(L.engine.drain({ agents: null, now: true }), { closing: 0, waiting: 0, cut: 3 })
+  await Promise.all([sse.closed, sp.closed, until(() => ws.state.closed, 'ws closed', 1000)])
+  assert.ok(Date.now() - t0 < 1000, `closed in ${Date.now() - t0} ms`)
+  const rows = await until(() => { const r = L.rows().filter((x) => x.error && x.error.type === 'cut-by-off'); return r.length === 3 && r }, 'three cut rows')
+  assert.deepEqual(rows.map((r) => r.error.side), ['engine', 'engine', 'engine'])
+  assert.deepEqual(rows.map((r) => r.decision).sort(), ['decrypt', 'decrypt', 'splice'])
+  const interrupted = await until(() => L.envelopes.length === 2 && L.envelopes, 'the two interrupted calls are written, not lost')
+  assert.deepEqual(interrupted.map((e) => [e.error, e.resp.kind, e.resp.error.type]).sort(), [[true, 'error', 'cut-by-off'], [true, 'error', 'ws_closed']], 'the stream says it was cut by off; the WebSocket call that its connection closed before the terminal message')
+  await L.engine.drained(NOW)
+})
+
+test('V36 unit: without now the same situation is closing 2, waiting 1 — the stream and the WebSocket finish and close, the splice stays and keeps drained() pending', T, async (t) => {
+  const { L, ws, sse, sp } = await trio(t)
+  assert.deepEqual(L.engine.drain({ agents: new Set(['codex']) }), { closing: 0, waiting: 0, cut: 0 }, 'other harnesses are not touched')
+  assert.deepEqual(L.engine.relayed({ agents: new Set(['codex']) }), { closing: 0, waiting: 0 })
+  assert.deepEqual(L.engine.drain(NOW), { closing: 2, waiting: 1, cut: 0 })
+  assert.deepEqual(L.engine.relayed(NOW), { closing: 2, waiting: 1 })
+  let drained = false; L.engine.drained(NOW).then(() => { drained = true })
+  await Promise.all([sse.closed, until(() => ws.state.closed, 'ws closed', 6000)])
+  assert.deepEqual(L.engine.relayed(NOW), { closing: 0, waiting: 1 }, 'what is left is the splice, waiting for its own close')
+  await sleep(150); assert.equal(drained, false, 'the engine is not drained while it holds the splice')
+  assert.ok(sse.bytes().toString('latin1').endsWith('0\r\n\r\n'), 'the stream ran to its last chunk')
+  sp.sock.destroy()
+  await until(() => drained, 'drained once the splice closed')
+  assert.equal((await until(() => L.rows().find((r) => r.decision === 'splice'), 'splice row')).error, undefined, 'not cut: it closed by itself')
 })

@@ -174,8 +174,9 @@ export async function runCollector(argv, { env = process.env, home = os.homedir(
     let d
     try { d = await (await D()).startDaemon({ dir, env, foreground, log: (where, e) => err(`[${where}] ${e && e.message ? e.message : e}`) }) } catch (e) { err(`asight collector start: ${e.message}`); return 1 }
     out(`asight collector: engine 127.0.0.1:${d.port}, control ${d.socketPath}`)
-    const signal = await waitForStop()
-    const r = await d.stop({ signal: typeof signal === 'string' ? signal : null })
+    // a signal, or the daemon stopping itself (after `off` with no names, once nothing is relayed: 1.6 §1.4 5; exit 0 so systemd does not restart it)
+    const signal = await Promise.race([waitForStop(), d.exited ? d.exited.then(() => null) : new Promise(() => {})])
+    const r = await d.stop({ signal: typeof signal === 'string' ? signal : null }) // stops once: when the daemon has stopped itself this is its result
     if (r && r.failed && r.failed.length) { err(`asight collector: stopped, but ${r.failed.join(', ')} failed while stopping (recorded in flows/)`); return 1 }
     return 0
   }
