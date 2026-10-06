@@ -17,6 +17,7 @@
 // linearContext (below) is now just the board's PROJECTION of that dissector's canonical spine.
 import { dissectBlocks, sysLabel, parseBashReads } from '../dissect/cc.mjs'
 import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf } from '../dissect/capture-labels.mjs'
+import { hintsOf } from '../dissect/harnesses.mjs'
 // Envelope drift guard (R1): the D10 envelope stores the response under `resp`, demo v0 under
 // `response`. Reading `.response` directly is the bug class that silently killed every HTTP status
 // on real captures — so go through the shared helper, never the raw key. (assemble.mjs imports
@@ -288,10 +289,13 @@ const LANE_META = {
   titlegen: { icon: '🏷', label: 'session title-gen' },
   quota: { icon: '🔌', label: 'quota / keep-alive' },
   aux: { icon: '⚙', label: 'other util' },
-  probe: { icon: '👁', label: 'count_tokens probes' },
+  // only a harness hint puts an inference call here (count_tokens probes are no inference call: the page draws them)
+  probe: { icon: '👁', label: 'warm-up / probe requests',
+    note: 'A request the harness itself marks as a warm-up or probe: it primes the cache and is not a conversation turn. Its body is kept verbatim like any call, and a later call may build on it.' },
 }
-const LANE_ORDER = { main: 0, subagent: 1, monitor: 2, notify: 3, titlegen: 4, quota: 5, aux: 6 }
+const LANE_ORDER = { main: 0, subagent: 1, monitor: 2, notify: 3, titlegen: 4, quota: 5, aux: 6, probe: 7 }
 const AUX_KINDS = new Set(['aux', 'notify', 'titlegen', 'quota'])
+const EVENT_ONLY_KINDS = new Set(['monitor', 'probe', ...AUX_KINDS]) // one event per call, no ReAct / resource walk
 
 // ── admission (audit 2026-07-19 · invariant 4) ──────────────────────────────────────────
 // EVERY captured LLM call is admitted, whatever its HTTP status. The old filter demanded a
@@ -348,10 +352,15 @@ export function analyze(records, opts = {}) {
   let prevKind = null
   const stepList = []
 
+  let probeStream = null
   for (const r of llm) {
     const msgCount = r.request.message_count
     const tools = r.request.tool_count || 0
-    const sub = isSub(r)
+    // 3.4 lane precedence probe > monitor > aux > subagent > main, the ETL's (session-identity.mjs::lane): inside each
+    // tier the harness table's hint decides first (Z-Code x-zcode-session-type, dsh origin, CC x-claude-code-agent-id,
+    // a request-kind warm-up), then Claude Code's own markers
+    const hint = hintsOf(r).lane
+    const sub = hint === 'subagent' || isSub(r)
     // The main conversation runs on the primary (opus) model; utility calls run on a small model
     // (haiku). A tiny haiku call (≤2 msgs) is background util REGARDLESS of tool count — otherwise
     // a burst of failed haiku retries (tools≥1) during a network drop pollutes the conversation lane.
@@ -364,9 +373,11 @@ export function analyze(records, opts = {}) {
       // conversation turn under "quota / keep-alive", asserting a lane we do not know (invariant 4).
       if (!mainStream) mainStream = mkStream('main')
       stream = mainStream
+    } else if (hint === 'probe') {
+      stream = probeStream || (probeStream = mkStream('probe'))
     } else if (isMonitor(r)) {
       stream = monitorStream || (monitorStream = mkStream('monitor'))
-    } else if (msgCount <= 2 && !sub && (tools === 0 || small)) {
+    } else if (hint === 'aux' || (msgCount <= 2 && !sub && (tools === 0 || small))) {
       const sk = auxSubkind(r, userTextOf(r))
       stream = auxStreams.get(sk) || auxStreams.set(sk, mkStream(sk)).get(sk)
     } else if (sub) {
@@ -414,7 +425,7 @@ export function analyze(records, opts = {}) {
   const toolNameById = new Map()
   for (const s of streams) {
     // monitor + aux-family lanes: no ReAct/resource extraction — just one event per call
-    if (s.kind === 'monitor' || AUX_KINDS.has(s.kind)) {
+    if (EVENT_ONLY_KINDS.has(s.kind)) {
       let prevCtx = 0
       for (const step of s.calls) {
         step.dCtx = step.ctx - prevCtx; prevCtx = step.ctx
@@ -578,6 +589,7 @@ export function analyze(records, opts = {}) {
       return {
         id: laneId, streamId: s.id, kind: s.kind, icon: LANE_META[s.kind].icon,
         label: s.kind === 'subagent' ? `subagent: ${s.spawnArg || 'task'}` : LANE_META[s.kind].label,
+        ...(LANE_META[s.kind].note ? { note: LANE_META[s.kind].note } : null),
         calls: s.calls, events: s.events, resources: s.resources, seenFiles: s.seenFiles || [], giLocal,
         peakCtx: s.calls.reduce((m, c) => Math.max(m, c.ctx), 1),
         spawnStep: s.spawnStep ?? null, parent: s.parent,
