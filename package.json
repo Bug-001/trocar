@@ -16,7 +16,7 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node --test --test-force-exit",
+    "test": "node --test --test-force-exit --require ./test/helpers/flush-exit.cjs --require ./test/helpers/leak-guard.cjs",
     "etl": "node src/etl/cli.mjs",
     "serve": "node src/server.mjs",
     "demo": "node src/server.mjs --source samples/demo-session.ndjson"

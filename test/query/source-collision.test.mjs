@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import os from 'node:os';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { writeFileSync, rmSync } from 'node:fs';
 import { buildResolver } from '../../src/query/source.mjs';
 import { composeTextRef, mintRawRef } from '../../src/etl/orchestrator.mjs';
+import { tmpDir } from '../helpers/tmp.mjs';
 
 // ── BUG 2 (audit 2026-07-19) — the raw-bytes index was keyed on a BARE record id ────────
 // A DIRECTORY source indexes every *.ndjson into one `recordId → {file,offset,length}` map.
@@ -23,7 +23,7 @@ const REC = (id, body) => JSON.stringify({
 
 // two capture files that BOTH contain req_00001 / req_00002, with distinguishable bodies
 function twoFileDir() {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'asight-collide-'));
+  const dir = tmpDir('asight-collide-');
   writeFileSync(path.join(dir, 'alpha.ndjson'),
     REC('req_00001', { model: 'ALPHA-model-one', messages: [] }) +
     REC('req_00002', { model: 'ALPHA-model-two', messages: [] }));
@@ -107,7 +107,7 @@ test('BUG2: a single-FILE source is unaffected (no collisions possible)', async 
 // is what makes it a lie (invariant 2), and guessing silently is what makes it undetectable
 // (invariant 4). The loud error is also what makes the capture-side fix findable.
 function oneFileTwice() {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'asight-collide1-'));
+  const dir = tmpDir('asight-collide1-');
   writeFileSync(path.join(dir, 'claude-capture.ndjson'),
     REC('req_00001', { model: 'FIRST-writer', messages: [] }) +
     REC('req_00002', { model: 'unique-one', messages: [] }) +

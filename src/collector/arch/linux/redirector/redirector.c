@@ -49,8 +49,10 @@
 
 /* Line protocol version. The client carries the same constant and fails open (keeps working,
  * warns) on a mismatch, so an old client talking to a new loader never wedges. Bump on any
- * wire-visible change (fields, op semantics). */
-#define ASIGHT_PROTO 1
+ * wire-visible change (fields, op semantics).
+ * 2 (D38): status carries `drops`; config / heartbeat / watch / unwatch answer ok:false with the errno when the map
+ * write fails; attach failed carries the errno. */
+#define ASIGHT_PROTO 2
 
 /* Overridden by the Makefile (-DASIGHT_BUILD_HASH=...) so `ready` can report the exact build. */
 #ifndef ASIGHT_BUILD_HASH
@@ -175,10 +177,16 @@ static int json_str(const char *s, const char *key, char *out, size_t n)
 	return 1;
 }
 
-static void write_config(void)
+/* 0, or the negative errno of a failed map write: the caller answers ok:false with it, never a false ok (D38 D-15). */
+static int write_config(void)
 {
 	__u32 k = 0;
-	bpf_map__update_elem(skel->maps.config_map, &k, sizeof(k), &cur_cfg, sizeof(cur_cfg), BPF_ANY);
+	return bpf_map__update_elem(skel->maps.config_map, &k, sizeof(k), &cur_cfg, sizeof(cur_cfg), BPF_ANY);
+}
+static void reply_rc(long long id, int rc, const char *what)
+{
+	if (rc == 0) emitf("{\"id\":%lld,\"ok\":true}", id);
+	else emitf("{\"id\":%lld,\"ok\":false,\"error\":\"%s failed: %s\"}", id, what, strerror(rc < 0 ? -rc : rc));
 }
 
 /* ---- ring buffer: emit exec/exit/flow as event lines ---- */
@@ -228,10 +236,11 @@ static int on_event(void *ctx, void *data, size_t sz)
 }
 
 /* ---- ops ---- */
+/* 0, or the negative errno (D-14: `attach failed` says why). */
 static int do_attach(void)
 {
 	int cg = open(CGROUP_ROOT, O_RDONLY);
-	if (cg < 0) return -1;
+	if (cg < 0) return -errno;
 	struct bpf_program *progs[3] = {
 		skel->progs.asight_connect4, skel->progs.asight_connect6, skel->progs.asight_sockops,
 	};
@@ -239,14 +248,15 @@ static int do_attach(void)
 		if (cg_links[i]) continue; /* idempotent */
 		cg_links[i] = bpf_program__attach_cgroup(progs[i], cg);
 		if (!cg_links[i]) {
+			int err = errno ? -errno : -EINVAL; /* libbpf sets errno on a NULL link */
 			for (int j = 0; j < i; j++) { bpf_link__destroy(cg_links[j]); cg_links[j] = NULL; }
 			close(cg);
-			return -1;
+			return err;
 		}
 	}
 	close(cg);
 	cur_cfg.attached = 1;
-	write_config();
+	(void)write_config(); /* `attached` is an informational mirror the BPF side never reads; status reads the links */
 	return 0;
 }
 static void do_detach(void)
@@ -262,7 +272,7 @@ static void do_detach(void)
 	if (had_connect && cg_links[2]) usleep(50000); /* drain in-flight steered handshakes */
 	if (cg_links[2]) { bpf_link__destroy(cg_links[2]); cg_links[2] = NULL; }
 	cur_cfg.attached = 0;
-	write_config();
+	(void)write_config(); /* informational mirror, see do_attach */
 }
 
 /* CapEff of this process, as the raw hex capability mask from /proc/self/status. */
@@ -318,6 +328,32 @@ static uid_t proc_real_uid(__u32 tgid)
 	return ruid;
 }
 
+/* The `drops` counters summed over the CPUs, as a JSON object by reason (asight.h ASIGHT_DROP_*), or null when they
+ * cannot be read — unknown, never zero (D38 D-16). */
+static void read_drops(char *out, size_t n)
+{
+	static const char *names[ASIGHT_DROP_MAX] = { "no-config", "hb-stale", "no-listener", "orig-write", "byport-write", "ringbuf-full" };
+	int ncpu = libbpf_num_possible_cpus();
+	snprintf(out, n, "null");
+	if (ncpu <= 0) return;
+	__u64 *vals = calloc((size_t)ncpu, sizeof(__u64));
+	if (!vals) return;
+	size_t off = (size_t)snprintf(out, n, "{");
+	for (__u32 k = 0; k < ASIGHT_DROP_MAX; k++) {
+		__u64 sum = 0;
+		if (bpf_map__lookup_elem(skel->maps.drops, &k, sizeof(k), vals, sizeof(__u64) * (size_t)ncpu, 0) != 0) {
+			snprintf(out, n, "null");
+			free(vals);
+			return;
+		}
+		for (int c = 0; c < ncpu; c++) sum += vals[c];
+		off += (size_t)snprintf(out + off, n - off, "%s\"%s\":%llu", k ? "," : "", names[k], (unsigned long long)sum);
+		if (off >= n) { snprintf(out, n, "null"); free(vals); return; }
+	}
+	snprintf(out + off, n - off, "}");
+	free(vals);
+}
+
 static void reply_status(long long id)
 {
 	__u64 hb = cur_cfg.hb_ns;
@@ -343,9 +379,11 @@ static void reply_status(long long id)
 	read_cap_eff(cap_eff, sizeof(cap_eff));
 	unsigned kmaj = 0, kmin = 0;
 	int tier = kernel_tier(&kmaj, &kmin);
+	char drops[256];
+	read_drops(drops, sizeof(drops));
 	emitf("{\"id\":%lld,\"ok\":true,\"attached\":%s,\"engine_port\":%u,\"hb_age_ms\":%lld,"
-	      "\"cap_eff\":\"%s\",\"kernel\":\"%u.%u\",\"kernel_tier\":%d,\"links\":[%s]}",
-	      id, live == 3 ? "true" : "false", cur_cfg.engine_port, age, cap_eff, kmaj, kmin, tier, links);
+	      "\"cap_eff\":\"%s\",\"kernel\":\"%u.%u\",\"kernel_tier\":%d,\"links\":[%s],\"drops\":%s}",
+	      id, live == 3 ? "true" : "false", cur_cfg.engine_port, age, cap_eff, kmaj, kmin, tier, links, drops);
 }
 
 static void reply_lookup(long long id, long long port, long long family)
@@ -377,17 +415,13 @@ static void dispatch(const char *line)
 	if (!strcmp(op, "ping")) { emitf("{\"id\":%lld,\"ok\":true}", id); return; }
 	if (!strcmp(op, "config")) {
 		if (json_num(line, "engine_port", &v)) cur_cfg.engine_port = (__u16)v;
-		write_config();
-		emitf("{\"id\":%lld,\"ok\":true}", id);
+		reply_rc(id, write_config(), "config map write");
 		return;
 	}
-	if (!strcmp(op, "attach")) {
-		if (do_attach() == 0) emitf("{\"id\":%lld,\"ok\":true}", id);
-		else emitf("{\"id\":%lld,\"ok\":false,\"error\":\"attach failed\"}", id);
-		return;
-	}
+	if (!strcmp(op, "attach")) { reply_rc(id, do_attach(), "attach"); return; }
 	if (!strcmp(op, "detach")) { do_detach(); emitf("{\"id\":%lld,\"ok\":true}", id); return; }
-	if (!strcmp(op, "heartbeat")) { cur_cfg.hb_ns = monotonic_ns(); write_config(); emitf("{\"id\":%lld,\"ok\":true}", id); return; }
+	/* a beat the kernel never saw is not a beat: steering lapses 2 s later, so say so (D-15) */
+	if (!strcmp(op, "heartbeat")) { cur_cfg.hb_ns = monotonic_ns(); reply_rc(id, write_config(), "heartbeat (config map write)"); return; }
 	if (!strcmp(op, "watch")) {
 		if (!json_num(line, "tgid", &v)) { emitf("{\"id\":%lld,\"ok\":false,\"error\":\"no tgid\"}", id); return; }
 		__u32 tgid = (__u32)v;
@@ -398,15 +432,14 @@ static void dispatch(const char *line)
 		if (ruid != getuid()) { emitf("{\"id\":%lld,\"ok\":false,\"error\":\"tgid not owned by this user\"}", id); return; }
 		long long d = 0; json_num(line, "decrypt", &d);
 		struct asight_verdict ver = { .decrypt = d ? 1 : 0 };
-		bpf_map__update_elem(skel->maps.watch_map, &tgid, sizeof(tgid), &ver, sizeof(ver), BPF_ANY);
-		emitf("{\"id\":%lld,\"ok\":true}", id);
+		reply_rc(id, bpf_map__update_elem(skel->maps.watch_map, &tgid, sizeof(tgid), &ver, sizeof(ver), BPF_ANY), "watch map update");
 		return;
 	}
 	if (!strcmp(op, "unwatch")) {
 		if (!json_num(line, "tgid", &v)) { emitf("{\"id\":%lld,\"ok\":false,\"error\":\"no tgid\"}", id); return; }
 		__u32 tgid = (__u32)v;
-		bpf_map__delete_elem(skel->maps.watch_map, &tgid, sizeof(tgid), 0);
-		emitf("{\"id\":%lld,\"ok\":true}", id);
+		int rc = bpf_map__delete_elem(skel->maps.watch_map, &tgid, sizeof(tgid), 0);
+		reply_rc(id, rc == -ENOENT ? 0 : rc, "unwatch map delete"); /* already gone (the exit hook dropped it) is fine */
 		return;
 	}
 	if (!strcmp(op, "status")) { reply_status(id); return; }
@@ -533,8 +566,10 @@ int main(int argc, char **argv)
 	if (lock_down() != 0) { fprintf(stderr, "asight-redirector: privilege lock-down failed\n"); cleanup(); return 5; }
 
 	if (selftest) {
-		cur_cfg.engine_port = 18999; write_config();
-		if (do_attach()) { fprintf(stderr, "selftest: attach failed\n"); cleanup(); return 1; }
+		cur_cfg.engine_port = 18999;
+		if (write_config()) { fprintf(stderr, "selftest: config map write failed\n"); cleanup(); return 1; }
+		int rc = do_attach();
+		if (rc) { fprintf(stderr, "selftest: attach failed: %s\n", strerror(-rc)); cleanup(); return 1; }
 		reply_status(0);
 		do_detach();
 		reply_status(1);

@@ -3,8 +3,8 @@
 // fields (host/scheme/dst/proc/flow_id/seq/req_head_raw/resp_head_raw, plus req_truncated/
 // req_body_bytes/req_partial only when the request body is incomplete) are appended AFTER req_body,
 // and raw request/response heads are preserved latin1-verbatim for byte-exact resend (invariant 2).
-import { buildEnvelope } from '../../../capture/envelope.mjs'
-import { shapeResponse } from './body.mjs'
+import { buildEnvelope, isLlmCall } from '../../../capture/envelope.mjs'
+import { shapeResponse, decodeContent } from './body.mjs'
 
 // Lowercase header names and join repeats with ', ' — the same shape Node's http gives.
 function lowerHeaders(pairs) {
@@ -14,6 +14,28 @@ function lowerHeaders(pairs) {
     o[lk] = o[lk] === undefined ? v : o[lk] + ', ' + v
   }
   return o
+}
+
+// A request body the client compressed (Claude Code gzip when CLAUDE_CODE_GZIP_REQUEST_BODIES forces it;
+// Codex zstd on the ChatGPT-login HTTP path) — RFC 4.6 §传输与帧级记录「请求体压缩」, §记录, acceptance T16.
+// The wire bytes stay verbatim (req_body_b64 + req_content_encoding); req_body is the decoded text. zstd is
+// never decoded at capture: the reader decodes req_body_b64, so a capture does not depend on which Node
+// recorded it; req_body is then null and req_encoding_error says so (invariant 4). LLM calls only: a
+// non-LLM body stays {raw_chars} metadata (RFC 4.1). req_encoding_error means "the bytes are complete, only
+// not decoded" (§记录): a body cut at the cap or never finished is not decoded at all — its req_truncated /
+// req_partial says why — and decoded bytes that are not UTF-8 are not stored as lossy text.
+// → null, or {text: Buffer|null, wire: {...}}
+function compressedRequest(reqHeaders, body, incomplete) {
+  const enc = reqHeaders['content-encoding']
+  const codings = String(enc || '').split(',').map((c) => c.trim().toLowerCase()).filter(Boolean)
+  if (!body || !body.length || codings.every((c) => c === 'identity')) return null
+  const wire = { req_body_b64: body.toString('base64'), req_content_encoding: enc }
+  if (incomplete) return { text: null, wire }
+  if (codings.includes('zstd')) return { text: null, wire: { ...wire, req_encoding_error: 'zstd request body not decoded at capture; decode req_body_b64' } }
+  const dec = decodeContent(body, enc)
+  if (!dec.decoded) return { text: null, wire: { ...wire, req_encoding_error: dec.error } }
+  try { new TextDecoder('utf-8', { fatal: true }).decode(dec.buf) } catch { return { text: null, wire: { ...wire, req_encoding_error: 'decoded body is not UTF-8' } } }
+  return { text: dec.buf, wire }
 }
 
 /**
@@ -27,6 +49,7 @@ function lowerHeaders(pairs) {
  */
 export function buildTransparentEnvelope({ id, flow, seq, req, resp, error = null }) {
   const reqHeaders = lowerHeaders(req.head.headers)
+  const comp = isLlmCall(req.head.target) ? compressedRequest(reqHeaders, req.body, !!(req.truncated || req.partial)) : null
   const haveResp = !!resp && !resp.aborted && !error
   const durationMs = resp && resp.tsStart && resp.tsEnd ? Date.parse(resp.tsEnd) - Date.parse(resp.tsStart) : null
 
@@ -49,7 +72,7 @@ export function buildTransparentEnvelope({ id, flow, seq, req, resp, error = nul
     durationMs,
     method: req.head.method,
     endpoint: req.head.target,
-    reqBody: req.body,
+    reqBody: comp ? comp.text : req.body,
     reqHeaders,
     resp: shaped,
     capture: 'transparent',
@@ -58,8 +81,10 @@ export function buildTransparentEnvelope({ id, flow, seq, req, resp, error = nul
 
   // Append the transparent-capture fields AFTER everything buildEnvelope produced (key order matters:
   // the sharder scans the first "req_headers":{ … to "req_body").
+  if (comp && comp.text === null) env.req_body = null // undecoded: buildEnvelope would say '' (an empty body); the bytes are in req_body_b64
   return {
     ...env,
+    ...(comp ? comp.wire : {}),
     host: flow.host,
     scheme: flow.scheme,
     dst: flow.dst,
@@ -73,5 +98,51 @@ export function buildTransparentEnvelope({ id, flow, seq, req, resp, error = nul
     // string here, so the labels sit at top level.
     ...(req.truncated ? { req_truncated: true, req_body_bytes: req.body ? req.body.length : 0 } : {}),
     ...(req.partial ? { req_partial: req.partial } : {}),
+  }
+}
+
+/**
+ * buildWsEnvelope({id, flow, seq, upgrade, call, wsRaw, error}) → the envelope of ONE logical WebSocket
+ * call (RFC 4.6 §传输与帧级记录, D37). The upgrade is not an envelope of its own: every call carries the
+ * upgrade request's headers (req_headers / req_head_raw: the sharder reads a session key there)
+ * and the upstream's 101 head (resp_head_raw).
+ *   upgrade = {req:{head}, resp:{head}}   the heads as the exchange tee holds them
+ *   call    = {client:[v], server:[v], tsStart, tsRespStart, tsEnd, partial:[reason], truncated}
+ *     v = a message as stored: its text, {b64}, {b64, decode_error}, {omitted_bytes}, or, for a non-LLM
+ *     endpoint's client message, {raw_chars, verbatim:false}. client[0] opened the call; none = a server
+ *     message that arrived with no call open.
+ *   wsRaw   = the call's ws_raw entries in frame order (core/ws/raw.mjs)
+ *   error   = null | {type, message}: the connection ended the call before its terminal message; the
+ *             server messages then sit under resp.partial, the shape of an interrupted HTTP response
+ * Only the opener's TEXT is req_body; a non-text opener is req_body:null + req_body_b64 (its decoded
+ * bytes, no req_content_encoding); one past the cap or not decodable is req_body:null, labelled by
+ * ws_truncated / partial_reasons and by its frames in ws_raw.
+ */
+export function buildWsEnvelope({ id, flow, seq, upgrade, call, wsRaw, error = null }) {
+  const [opener = null, ...extra] = call.client
+  const messages = { kind: 'ws', messages: call.server }
+  const env = buildEnvelope({
+    id, tsRequest: call.tsStart, tsRespStart: call.tsRespStart, tsRespEnd: call.tsEnd,
+    durationMs: call.tsRespStart ? Date.parse(call.tsEnd) - Date.parse(call.tsRespStart) : null,
+    method: upgrade.req.head.method, endpoint: upgrade.req.head.target, reqBody: null,
+    reqHeaders: lowerHeaders(upgrade.req.head.headers),
+    resp: error ? { status: null, kind: 'error', error: { type: error.type, message: error.message }, partial: messages } : messages,
+    capture: 'transparent', error: !!error,
+  })
+  env.req_body = typeof opener === 'string' || (opener && opener.verbatim === false) ? opener : null // keeps its key position
+  const ext = (upgrade.resp.head.headers || []).filter(([k]) => k.toLowerCase() === 'sec-websocket-extensions').map(([, v]) => v)
+  return {
+    ...env,
+    host: flow.host, scheme: flow.scheme, dst: flow.dst, proc: flow.proc, flow_id: flow.id, seq,
+    req_head_raw: upgrade.req.head.raw.toString('latin1'),
+    resp_head_raw: upgrade.resp.head.raw.toString('latin1'),
+    ...(opener && typeof opener.b64 === 'string' && !opener.decode_error ? { req_body_b64: opener.b64 } : {}),
+    transport: 'ws',
+    ws_frames: wsRaw.length ? [wsRaw[0].i, wsRaw[wsRaw.length - 1].i] : null,
+    ws_ext: ext.length ? ext.join(', ') : null,
+    ws_raw: wsRaw,
+    ...(extra.length ? { req_extra_messages: extra } : {}),
+    ...(call.partial.length ? { partial: true, partial_reasons: call.partial } : {}),
+    ...(call.truncated ? { ws_truncated: true } : {}),
   }
 }

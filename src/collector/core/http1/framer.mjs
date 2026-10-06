@@ -3,20 +3,29 @@
 // keeps forwarding the original bytes untouched (RFC 4.6 §引擎 6). It never throws out of push():
 // a framing violation routes to onError and the framer stops, leaving the relay to carry on.
 //
-// createFramer(side, h) → { push(chunk), end(), expect({method}) }
+// createFramer(side, h) → { push(chunk), end(), expect({method}), release(), takeRest() }
 //   side: 'request' | 'response'. The response framer needs each request's method, in order; the
 //   exchange layer calls expect({method}) once per request head (FIFO; supports pipelining).
 //   h: { onHead, onBody, onEnd, onUpgrade, onError } — see RFC 4.6 and the plan for the shapes.
+//   Protocol switch: the response framer calls onUpgrade({rest}) after a 101 / CONNECT 2xx head, rest =
+//   the bytes that followed the head in the same push. After a request that asks to upgrade (Upgrade +
+//   Connection: upgrade) the request framer holds what follows: release() frames it as HTTP again (the
+//   upgrade was refused, e.g. 426), takeRest() returns it and stops (the upgrade happened).
 import { parseHead } from '../engine/sniff.mjs'
+
+const tokensOf = (headers, name) => headers.filter(([k]) => k.toLowerCase() === name).flatMap(([, v]) => v.split(',').map((t) => t.trim().toLowerCase()))
+/** A request that asks to switch protocols (RFC 9110 §7.8): an Upgrade header and Connection: upgrade. */
+export const asksUpgrade = (headers) => tokensOf(headers || [], 'upgrade').some(Boolean) && tokensOf(headers || [], 'connection').includes('upgrade')
 
 export function createFramer(side, h) {
   const isReq = side === 'request'
   let buf = Buffer.alloc(0)
-  let state = 'head'          // head | length | chunk-size | chunk-data | chunk-crlf | trailers | close | failed
+  let state = 'head'          // head | length | chunk-size | chunk-data | chunk-crlf | trailers | close | upgrade-wait | failed
   let ctx = null             // per-message framing context
   let failed = false
   let upgraded = false
   const methodQueue = []     // response side: request methods awaiting their response (FIFO)
+  let awaitUpgrade = false   // request side: the message being framed asked to switch protocols
 
   function fail(msg) { if (!failed) { failed = true; state = 'failed'; h.onError(new Error(msg)) } }
 
@@ -43,13 +52,18 @@ export function createFramer(side, h) {
   function endMessage(framing, interim) {
     h.onEnd(interim ? { framing, interim: true } : { framing })
     ctx = null
-    state = 'head'
+    // After an Upgrade request the next bytes are either the next HTTP request (upgrade refused) or
+    // the new protocol (101): hold them until the exchange layer says which (release / takeRest).
+    state = awaitUpgrade ? 'upgrade-wait' : 'head'
+    awaitUpgrade = false
   }
-  function doUpgrade() { upgraded = true; h.onUpgrade() }
+  // The bytes after the 101 / CONNECT 2xx head belong to the new protocol: hand them over.
+  function doUpgrade() { upgraded = true; const rest = buf; buf = Buffer.alloc(0); h.onUpgrade({ rest }) }
 
   function onHeadReq(parsed, raw) {
     const [method, target, version] = parsed.startLine.split(' ')
     h.onHead({ raw, startLine: parsed.startLine, headers: parsed.headers, method, target, version })
+    awaitUpgrade = asksUpgrade(parsed.headers)
     const te = headerValues(parsed.headers, 'transfer-encoding')
     const cl = headerValues(parsed.headers, 'content-length')
     if (teIsChunked(te)) { ctx = {}; state = 'chunk-size' }
@@ -138,5 +152,9 @@ export function createFramer(side, h) {
       catch (e) { fail(e.message) }
     },
     expect({ method }) { methodQueue.push(method) },
+    // request side, upgrade-wait: the upgrade was refused → frame what followed as HTTP again
+    release() { if (state === 'upgrade-wait' && !failed && !upgraded) { state = 'head'; try { process() } catch (e) { fail(e.message) } } },
+    // request side, upgrade-wait: the upgrade happened → the held bytes belong to the new protocol
+    takeRest() { upgraded = true; const rest = buf; buf = Buffer.alloc(0); return rest },
   }
 }

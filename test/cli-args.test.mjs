@@ -66,10 +66,10 @@ test('every flag the CLI reads with a value is declared', () => {
   // for that one command. This pins the list so adding a flag without declaring it is caught here
   // rather than by a user watching a watcher poll nothing.
   for (const f of ['--interval', '--db', '--file', '--out', '--port', '--source', '--target',
-    '--host', '--proxy', '--upstream', '--capture-target']) {
+    '--host', '--proxy', '--upstream', '--capture-target', '--sessions', '--quiet', '--against', '--tail']) {
     assert.ok(VALUED_FLAGS.has(f), `${f} takes a value but is not declared`);
   }
-  for (const b of ['--watch', '--rebuild', '--control', '--raw-sse', '--remove-ca', '--no-autostart']) {
+  for (const b of ['--watch', '--rebuild', '--control', '--raw-sse', '--remove-ca', '--no-autostart', '--legacy', '--delete-original', '--dry-run']) {
     assert.ok(!VALUED_FLAGS.has(b), `${b} is a boolean switch but is declared as valued`);
   }
 });

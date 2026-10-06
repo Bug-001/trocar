@@ -12,9 +12,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { readRecords } from '../../src/etl/ingest.mjs';
+import { tmpDir } from '../helpers/tmp.mjs';
 
 const rec = (id) => JSON.stringify({
   id, ts_request: '2026-07-15T00:00:00.000Z', endpoint: '/v1/messages', method: 'POST',
@@ -23,7 +23,7 @@ const rec = (id) => JSON.stringify({
 });
 
 function tmp(text) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-ingest-'));
+  const dir = tmpDir('asight-ingest-');
   const file = path.join(dir, 'cap.ndjson');
   fs.writeFileSync(file, text);
   return file;

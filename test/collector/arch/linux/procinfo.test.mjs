@@ -1,15 +1,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import {
-  readExe, readArgv, readEnviron, readComm, listPids, countDirectConnections,
+  readExe, readArgv, readEnviron, readComm, listPids, countDirectConnections, directConnections,
 } from '../../../../src/collector/arch/linux/procinfo.mjs'
+import { tmpDir } from '../../../helpers/tmp.mjs'
 
 // Build a synthetic /proc tree in a tmp dir so these run everywhere with no root.
 function makeProc() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-proc-'))
+  const root = tmpDir('asight-proc-')
   const mk = (pid, { exe, cmdline, environ, comm, fds = [] }) => {
     const d = path.join(root, String(pid))
     fs.mkdirSync(path.join(d, 'fd'), { recursive: true })
@@ -72,11 +72,25 @@ test('countDirectConnections counts non-engine ESTABLISHED sockets and excludes 
   assert.equal(countDirectConnections(100, { root, enginePort: 1 }), 2)
 })
 
+// D-17 / review D1-3 (4.6 §开关语义): the count comes from /proc/<pid>/fd against /proc/net/tcp*; when a table that is
+// there cannot be read (EACCES, e.g. an LSM policy) the count is unknown with the errno — never 0. An absent tcp6 (IPv6
+// off) is not an error.
+test('directConnections: an unreadable /proc/net/tcp* is "unknown" with the errno, never 0; an absent tcp6 is fine (D1-3)', { skip: process.getuid && process.getuid() === 0 ? 'root reads a 0000 file' : false }, () => {
+  const { root } = makeProc()
+  assert.deepEqual(directConnections(100, { root, enginePort: 8443 }), { count: 1, error: null })
+  fs.rmSync(path.join(root, 'net', 'tcp6'))
+  assert.deepEqual(directConnections(100, { root, enginePort: 8443 }), { count: 1, error: null }, 'no tcp6 with IPv6 off')
+  fs.chmodSync(path.join(root, 'net', 'tcp'), 0)
+  try { assert.deepEqual(directConnections(100, { root, enginePort: 8443 }), { count: null, error: 'EACCES' }) } finally { fs.chmodSync(path.join(root, 'net', 'tcp'), 0o600) }
+  fs.rmSync(path.join(root, 'net', 'tcp'))
+  assert.deepEqual(directConnections(100, { root, enginePort: 8443 }), { count: null, error: 'ENOENT' }, 'no table at all: unknown')
+})
+
 test('missing pid yields null/0/[]', () => {
   const { root } = makeProc()
   assert.equal(readExe(99999, { root }), null)
   assert.deepEqual(readArgv(99999, { root }), [])
   assert.equal(readComm(99999, { root }), null)
-  assert.equal(readEnviron(99999, { root }).size, 0)
+  assert.equal(readEnviron(99999, { root }), null, 'an unreadable environment is not an empty one (D-20)')
   assert.equal(countDirectConnections(99999, { root, enginePort: 8443 }), 0)
 })

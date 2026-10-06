@@ -13,6 +13,8 @@
 // against ~/.claude/projects, which is a board-side concern, not a capture fact.
 
 import { headersOf } from '../view/assemble.mjs';
+import { harnessOf, LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
+import { openSealed } from '../raw/reader.mjs';
 
 const isProbe = (r) => /count_tokens/.test((r && r.endpoint) || '');
 
@@ -24,19 +26,16 @@ function entrypointFromHeaders(h) {
   return null;
 }
 
-function harnessFromHeaders(h) {
-  const ua = String(h['user-agent'] || h['originator'] || '').toLowerCase();
-  if (/claude-cli|claude-code/.test(ua)) return { harness: 'claude-code', provider: 'anthropic' };
-  if (/codex/.test(ua)) return { harness: 'codex', provider: 'openai' };
-  if (/deepseek/.test(ua)) return { harness: 'deepseek-cli', provider: 'deepseek' };
-  // OpenCode's provider is wire-derived (D3), which a single-record fold can't see; the board still
-  // resolves it from the opened session. Leave provider null here rather than claim one unobserved.
-  if (/opencode/.test(ua)) return { harness: 'opencode', provider: null };
-  return { harness: null, provider: null };
-}
+// Harness exactly as board.harnessOf derives it (D37 ①, src/dissect/harnesses.mjs): the first record
+// WITH proc decides, else the first record with headers; harness_src remembers which. The provider is
+// the legacy pricing key, else the first wire dialect seen in the session (wire_provider).
+// A meta.json written before D37 has no harness_src: its harness came from a UA, i.e. from headers.
+const srcOf = (m) => m.harness_src || (m.harness != null ? 'headers' : null);
+const settle = (m) => { m.provider = m.harness == null ? null : (LEGACY_PROVIDER[m.harness] ?? m.wire_provider ?? null); return m; };
 
 export function emptyMeta(sessionId) {
-  return { session_id: sessionId, calls: 0, probes: 0, other: 0, has_subagent: false, last_ts: '', entrypoint: null, harness: null, provider: null };
+  return { session_id: sessionId, calls: 0, probes: 0, other: 0, has_subagent: false, last_ts: '', entrypoint: null,
+    harness: null, harness_inferred: false, harness_src: null, wire_provider: null, provider: null };
 }
 
 export function foldRecord(meta, r) {
@@ -51,17 +50,22 @@ export function foldRecord(meta, r) {
   const h = headersOf(r) || {};
   if (String(h['x-claude-code-agent-id'] || '').trim()) meta.has_subagent = true;
   if (meta.entrypoint == null) { const e = entrypointFromHeaders(h); if (e) meta.entrypoint = e; }
-  if (meta.harness == null) { const hh = harnessFromHeaders(h); if (hh.harness) { meta.harness = hh.harness; meta.provider = hh.provider; } }
-  return meta;
+  if (meta.wire_provider == null) meta.wire_provider = wireProviderOfEndpoint(r.endpoint);
+  if ((r.proc && meta.harness_src !== 'proc') || (meta.harness_src == null && (r.req_headers || r.request_headers))) {
+    const hh = harnessOf(r);
+    meta.harness = hh.id; meta.harness_inferred = hh.inferred; meta.harness_src = r.proc ? 'proc' : 'headers';
+  }
+  return settle(meta);
 }
 
 // Combine two metas of the SAME session — how incremental shard runs accumulate: counts add, last_ts
-// is the max, has_subagent ORs, and the first-seen entrypoint/harness wins (a session's identity
-// does not change mid-stream).
+// is the max, has_subagent ORs, the first-seen entrypoint wins, and the harness follows the fold's rule
+// (a proc-identified run beats a UA-only one, else the first run with headers wins).
 export function mergeMeta(a, b) {
   if (!a) return b;
   if (!b) return a;
-  return {
+  const w = srcOf(a) === 'proc' ? a : srcOf(b) === 'proc' ? b : (srcOf(a) ? a : b);
+  return settle({
     session_id: a.session_id || b.session_id,
     calls: a.calls + b.calls,
     probes: a.probes + b.probes,
@@ -69,7 +73,30 @@ export function mergeMeta(a, b) {
     has_subagent: a.has_subagent || b.has_subagent,
     last_ts: a.last_ts > b.last_ts ? a.last_ts : b.last_ts,
     entrypoint: a.entrypoint || b.entrypoint,
-    harness: a.harness || b.harness,
-    provider: a.provider || b.provider,
-  };
+    harness: w.harness ?? null,
+    harness_inferred: w.harness_src ? !!w.harness_inferred : w.harness != null,
+    harness_src: srcOf(w),
+    wire_provider: a.wire_provider || b.wire_provider || null,
+    provider: null, // settle() derives it
+  });
+}
+
+// Fold the records of sealed files (D35) into `meta`, one frame at a time. Returns null, or the first
+// file that could not be read in full — { file, reason, unreadableRecords } — so a caller never takes a
+// partial fold for the whole session (no silent shrink).
+export function foldSealed(meta, files) {
+  for (const f of files) {
+    let sf;
+    try { sf = openSealed(f); } catch (e) { return { file: f, reason: e.message, unreadableRecords: null }; }
+    let bad = 0, first = null;
+    try {
+      for (const { line } of sf.lines({ onError: (i, e) => { bad++; first = first || e.message; } })) {
+        const text = line.toString('utf8').trim();
+        if (!text) continue;
+        try { foldRecord(meta, JSON.parse(text)); } catch { /* malformed line — no contribution, as in the NDJSON fold */ }
+      }
+    } finally { sf.close(); }
+    if (bad) return { file: f, reason: first, unreadableRecords: bad };
+  }
+  return null;
 }

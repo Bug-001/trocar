@@ -33,6 +33,9 @@
   .monbtn:hover{border-color:var(--fg);}
   .monwhere{color:var(--dim);font-family:var(--mono,monospace);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .monbadge{color:var(--dimmer);font-size:9px;border:1px solid var(--border);border-radius:4px;padding:0 4px;}
+  /* D38 capture health (1.2 顶栏 / 1.5): never empty; a disclosure, not an alert — no blinking, no sound */
+  .caphealth{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--dim);cursor:pointer;white-space:nowrap;max-width:420px;overflow:hidden;text-overflow:ellipsis;}
+  .caphealth.ok{color:var(--green);} .caphealth.warn{color:var(--amber);border-color:var(--amber);} .caphealth.bad{color:var(--red);border-color:var(--red);}
   h1{font-family:var(--mono);font-size:16px;margin:0;letter-spacing:.5px;font-weight:600;}
   h1 b{color:var(--accent);}
   .spacer{flex:1;}
@@ -434,6 +437,7 @@
   </div>
   <div class="live"><span class="dot" id="dot"></span><label><input type="checkbox" id="liveChk" checked style="vertical-align:middle"> live</label></div>
   <span class="monctl" id="monctl" style="display:none"></span>
+  <span class="caphealth" id="caphealth" title="capture health (D38) — reading…">? 采集健康 · 读取中</span>
   <div class="spacer"></div>
   <div class="stats" id="stats"></div>
 </header>
@@ -471,6 +475,8 @@
 
 <div id="rails"></div>
 <div id="truncbar" style="display:none"></div>
+<div id="unknownbar" style="display:none"></div>
+<div id="srcbar" style="display:none"></div>
 
 <main>
   <div id="ctxnav"></div>
@@ -565,11 +571,12 @@ function md(s){
 }
 
 // agent chip is TABLE-DRIVEN off the server's meta.harness (not a hardcode) — a new harness is a
-// new row here + a server-side analyzer; this render code is untouched (invariant 3 / AC-3).
-const CHIP={'claude-code':{ic:'🟠',name:'Claude Code'},'codex':{ic:'🟢',name:'Codex'},'deepseek-cli':{ic:'🔵',name:'DeepSeek CLI'},'opencode':{ic:'🟣',name:'OpenCode'}}
+// new row here + a row in src/dissect/harnesses.mjs; this render code is untouched (invariant 3 / AC-3).
+// Keys = the 3.2 harness ids (D37); 'claude-code' / 'deepseek-cli' stay as legacy aliases (1.2:70).
+const CHIP={'cc':{ic:'🟠',name:'Claude Code'},'claude-code':{ic:'🟠',name:'Claude Code'},'codex':{ic:'🟢',name:'Codex'},'opencode':{ic:'🟣',name:'OpenCode'},'kimi':{ic:'🌙',name:'Kimi Code'},'dsh':{ic:'🐋',name:'DeepSeek dsh'},'hermes':{ic:'⚕',name:'Hermes'},'zcode':{ic:'🔷',name:'Z-Code'},'deepseek-cli':{ic:'🔵',name:'DeepSeek CLI'}}
 // unknown harness MUST NOT borrow Claude's 🟠 — that would silently pass foreign bytes off as CC
 // (invariant 4). Render an explicit unlabeled state instead.
-const chipFor=m=>{ const h=(m&&CHIP[m.harness])||{ic:'⬜',name:(m&&m.harness)||'unidentified agent'};const ep=m&&m.entrypoint==='desktop'?' · Desktop':m&&m.entrypoint==='cli'?' · CLI':''; return `${h.ic} ${h.name}${ep}` }
+const chipFor=m=>{ const h=(m&&CHIP[m.harness])||{ic:'⬜',name:(m&&m.harness)||'unidentified agent'};const ep=m&&m.entrypoint==='desktop'?' · Desktop':m&&m.entrypoint==='cli'?' · CLI':''; const inf=m&&m.harness_inferred?' · 推断自 UA':''; const syn=m&&m.session_synthesized?' · 按推测归组 (system prompt + time)':''; return `${h.ic} ${h.name}${ep}${inf}${syn}` }
 let A=null, raw=[], probes={count:0,series:[]}, meta=null
 let projectsFlat=[] // all sessions across projects (for same-name / fork detection in the top bar)
 let lanes=[], anchor=null, anchorTs=[], playhead=0, follow=true, lastScrolled=-1, curSel=null
@@ -616,11 +623,61 @@ let pageInfo=null   // the server's `page` envelope for the loaded view: {cursor
 let pageSig=null    // which session `pageCur` was chosen for (re-park the window on a session switch)
 let pageReaimed=false // guard: the "window past what the server assembled" re-aim fires at most once
 
+// 4.4:83 · invariant 4 · D38: what the board did not read, or read only in part, is said on screen —
+// in ONE bar (D38 R-7a: two branches' reports, `source` and `source_errors`, had two bars). It shows
+// /api/projects `source`: entries not read (`skipped`), lines that would not parse, and `errors` —
+// files read but not in full (a damaged sealed file, D35; a capture-looking file not read; an
+// original and its sealed copy that differ) — plus the `source.errors` of the session or control view
+// on screen (`more`). Only what may hold capture bytes raises the bar; the rest (config files, the CA,
+// subdirectories) is counted in it and listed in its tooltip. A file not read in full turns it red:
+// the view below is missing what it holds, never a smaller-but-healthy board.
+let projSource=null // last /api/projects `source`: the session and control views add their own errors
+// the errors of the view on screen, kept: a poll that skips the session fetch (nothing changed) still
+// shows them, instead of dropping back to the projects' own until the session changes
+let viewErrors={sel:null,list:[]}
+function renderSourceHealth(h,more){
+  const bar=document.getElementById('srcbar'); if(!bar)return
+  const sk=(h&&h.skipped)||[], warn=sk.filter(x=>x.attention), rest=sk.length-warn.length
+  const corrupt=Object.entries((h&&h.corrupt_lines)||{}), resets=(h&&h.resets)||[], unid=(h&&h.unidentified_lines)||0
+  const byFile=new Map(); for(const e of [...((h&&h.errors)||[]),...(more||[])]) if(e&&e.file&&!byFile.has(e.file)) byFile.set(e.file,e)
+  const parts=[]
+  if(warn.length) parts.push(`${warn.length} capture file${warn.length!==1?'s':''} not read: `+warn.slice(0,4).map(x=>`<b>${esc(x.name)}</b> (${esc(x.reason)})`).join(', ')+(warn.length>4?` +${warn.length-4} more`:''))
+  if(corrupt.length) parts.push(`${corrupt.reduce((n,[,c])=>n+c,0)} unparseable line(s) in `+corrupt.slice(0,3).map(([f,c])=>`<b>${esc(f.split('/').pop())}</b> ×${c}`).join(', '))
+  if(resets.length) parts.push(`${resets.length} file(s) shrank and were re-read`)
+  const pend=Object.keys((h&&h.tail_pending)||{}); if(pend.length) parts.push(`${pend.length} file(s) end in an incomplete line (a write in progress, or a writer that stopped mid-line): `+pend.slice(0,3).map(f=>`<b>${esc(f.split('/').pop())}</b>`).join(', '))
+  if(unid) parts.push(`${unid} record(s) without an id (listed; their blocks cannot open)`)
+  // shard mode does not count bad lines in session shards yet: say so, never let silence read as "none"
+  if(h&&h.corrupt_lines===null) parts.push('bad lines in session shards are not counted yet (shard mode)')
+  if(!parts.length&&!byFile.size){ bar.style.display='none'; bar.innerHTML=''; bar.title=''; return }
+  const errTitle=[...byFile.values()].map(e=>`${e.file} — ${e.reason||''}`)
+  bar.title=sk.map(x=>`${x.root}/${x.name} — ${x.reason}${x.of?' (same file as '+x.of+')':''}${x.error?' · '+x.error:''}`).concat(corrupt.map(([f,c])=>`${f} — ${c} unparseable line(s)`)).concat(errTitle).join('\n')
+  // "not measured" alone is not a loss: say what it is, without claiming something is missing
+  if(!byFile.size&&parts.length===1&&h.corrupt_lines===null){ bar.title=sk.map(x=>`${x.root}/${x.name} — ${x.reason}`).join('\n'); bar.innerHTML=`ⓘ 未计数 · ${parts[0]}: a shard line that does not parse is left out of its session without a count${rest?` · ${rest} other entr${rest!==1?'ies':'y'} not read (hover for the list)`:''}.`; bar.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #3d4a5c;background:#141b24;color:#9fb3c8;border-radius:5px;font-size:11px;line-height:1.45'; return }
+  const notAll=parts.length?`⚠ 源未全读 · not everything in the capture source is on this board: ${parts.join(' · ')}${rest?` · ${rest} other entr${rest!==1?'ies':'y'} not read (files that are not *.ndjson, subdirectories; hover for the list)`:''} — the raw files on disk are untouched.`:''
+  if(!byFile.size){ bar.innerHTML=notAll; bar.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #7a5b18;background:#241d0b;color:#e8c15a;border-radius:5px;font-size:11px;line-height:1.45'; return }
+  bar.innerHTML=`⚠ 源文件读不全 · ${byFile.size} capture file(s) could not be read as-is — the view below is missing what they hold or shows both copies; the files stay on disk (check with <code>asight raw verify</code>):<br>`
+    +[...byFile.values()].map(e=>`<b>${esc(String(e.file).split('/').pop())}</b> — ${e.kind==='coexist-mismatch'?'original and sealed copy differ, both shown':(e.unreadableRecords!=null?e.unreadableRecords+' record(s) unreadable':'unreadable')}: ${esc(String(e.reason||''))}`).join('<br>')
+    +(notAll?'<br>'+notAll:'')
+  bar.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #7a2b18;background:#2a1210;color:#f08a6a;border-radius:5px;font-size:11px;line-height:1.45'
+}
+
 async function poll(){
   try{
     const sel=document.getElementById('fileSel')
-    const pj=await fetch('/api/projects').then(r=>r.json()).catch(()=>({projects:[]}))
+    // A failed listing is NOT an empty one (invariant 4): the server answers 500 {error} when a capture
+    // source cannot be read, and swallowing it here rendered "No sessions captured yet".
+    const pj=await fetch('/api/projects').then(r=>r.json().catch(()=>({})).then(j=>r.ok===false||(j.error&&!j.projects)?{error:j.error||('HTTP '+r.status)}:j)).catch(e=>({error:String(e&&e.message||e)}))
+    if(pj.error){
+      const bar=document.getElementById('srcbar')
+      if(bar){ bar.title=''; bar.innerHTML=`⚠ 无法列出会话 · could not list the sessions: <b>${esc(pj.error)}</b> — the capture files on disk are untouched; fix the source or restart the server.`
+        bar.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #7a2b18;background:#2a1210;color:#f08a6a;border-radius:5px;font-size:11px;line-height:1.45' }
+      renderEmpty('Could not list the sessions — see the banner above.')
+      lastCheapSig=null; lastRenderSig=null; document.getElementById('dot').classList.remove('on')
+      return
+    }
     const projects=pj.projects||[]
+    projSource=pj.source||null
+    renderSourceHealth(projSource,viewErrors.sel===curSel?viewErrors.list:null) // before any early return: "no sessions" next to "2 files not read" is the point
     projectsFlat=projects.flatMap(p=>p.sessions||[])
     const realP=projects.filter(p=>p.slug!=='_unresolved'), unres=projects.filter(p=>p.slug==='_unresolved')
     const optFor=s=>{
@@ -631,11 +688,15 @@ async function poll(){
     }
     const grp=p=>`<optgroup label="${esc(p.name)}">${p.sessions.map(optFor).join('')}</optgroup>`
     const opts=realP.map(grp).join('')+unres.map(p=>`<optgroup label="⋯ ${esc(p.name)}">${p.sessions.map(optFor).join('')}</optgroup>`).join('')
-      +`<optgroup label="⚙ session-less"><option value="__control__">⚙ control-plane (telemetry · flags · account · registry)</option></optgroup>`
+      +`<optgroup label="⚙ session-less"><option value="__control__">⚙ control-plane (telemetry · flags · account · registry)</option><option value="__caphealth__">${esc(capHealthLabel())}</option></optgroup>`
     if(sel.dataset.sig!==opts){ sel.innerHTML=opts; sel.dataset.sig=opts; if(curSel)sel.value=curSel }
     if(!curSel){ const p0=realP[0]||unres[0]; if(p0)curSel=`${p0.sessions[0].project_slug}::${p0.sessions[0].session_id}`; if(curSel)sel.value=curSel }
-    if(!curSel){ renderEmpty('No sessions captured yet. Start a tap with `asight monitor on` (Claude Code CLI) or `asight desktop on` (Claude Desktop, macOS + Clash Verge), then run your agent. Check what is arranged with `asight monitor status`.'); return }
-    if(curSel==='__control__'){ document.body.classList.add('ctrlmode'); await renderControlView(); return }
+    boardEmpty=!curSel
+    if(!curSel){ renderEmpty(emptyMessage()); return }
+    // the control and capture-health views replace the session's timeline: coming back must fetch and render the
+    // session again (and show its own errors), not short-circuit on the sigs of the render it replaced
+    if(curSel==='__caphealth__'){ document.body.classList.add('ctrlmode'); controlSig=null; lastCheapSig=null; lastRenderSig=null; renderCapHealthView(); return }
+    if(curSel==='__control__'){ document.body.classList.add('ctrlmode'); lastCheapSig=null; lastRenderSig=null; await renderControlView(); return }
     document.body.classList.remove('ctrlmode'); controlSig=null // leaving control view: force a full re-render next time (else a stale session header sticks)
     hideSessionChrome(false)
     const [slug,id]=curSel.split('::')
@@ -679,6 +740,8 @@ async function poll(){
       return
     }
     pageInfo=d.page||null
+    viewErrors={sel:curSel,list:(d.source&&d.source.errors)||[]}
+    renderSourceHealth(projSource,viewErrors.list) // this session's files it could not read in full
     // BUG 1 · self-correct. The server may assemble FEWER calls than /api/projects counted (a large
     // session is tail-bounded server-side BEFORE paging is applied — see the WIRING GAP note in the
     // audit). If our window landed entirely past what it actually assembled, every call would render
@@ -706,6 +769,11 @@ async function poll(){
     if(sig===lastRenderSig){ document.getElementById('dot').classList.toggle('on',document.getElementById('liveChk').checked); return }
     lastRenderSig=sig
     A=d.analyzed||{lanes:[],calls:[]} // server-side analyze() output, per-call fields pre-baked
+    // 3.1:58 · 不变式4 — traffic no dissector recognizes is counted and named, never drawn as something else.
+    { const ub=document.getElementById('unknownbar'), u=A&&A.unknown
+      if(ub){ if(u){ ub.innerHTML=`⚠ 未识别 · unrecognized traffic — <b>${u.records}</b> record${u.records===1?'':'s'}${u.partial?' in this session':''} match no dissector and are NOT rendered (${esc((u.endpoints||[]).join(', '))}). ${esc(u.reason||'')}`
+          ub.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #7a3b3b;background:#241010;color:#e89a9a;border-radius:5px;font-size:11px;line-height:1.45'
+        } else { ub.style.display='none'; ub.innerHTML='' } } }
     lanes=buildLanes(A,probes)
     anchor=lanes.find(l=>l.kind==='main')||lanes[0]||null
     if(!anchor){ render(); return }
@@ -748,7 +816,7 @@ function hideSessionChrome(hide){ document.getElementById('saw').style.display=h
 // byte counts. Mirror of respOf()/headersOf() on the server (src/view/assemble.mjs).
 const rsp=r=>(r&&(r.resp||r.response))||{}
 const rhdr=r=>(r&&(r.req_headers||r.request_headers))||{}
-const rbytes=r=>(r&&r.request&&r.request.raw_chars)??(typeof (r&&r.req_body)==='string'?r.req_body.length:null)
+const rbytes=r=>(r&&r.request&&r.request.raw_chars)??(r&&r.req_body&&typeof r.req_body==='object'?r.req_body.raw_chars:null)??(typeof (r&&r.req_body)==='string'?r.req_body.length:null)
 
 // ── control-plane view: the session-LESS traffic, categorized ────────────────
 const CTRL_META={
@@ -763,9 +831,12 @@ async function renderControlView(){
   hideSessionChrome(true)
   document.getElementById('dot').classList.toggle('on',document.getElementById('liveChk').checked)
   const list=await fetch('/api/control').then(r=>r.json()).catch(()=>({classes:[]}))
+  viewErrors={sel:'__control__',list:(list.source&&list.source.errors)||[]}
+  renderSourceHealth(projSource,viewErrors.list) // control/ files it could not read in full
   const sig=JSON.stringify(list.classes)
   const tl=document.getElementById('timeline')
   if(sig===controlSig && tl.dataset.mode==='control') return
+  capHSig=null
   controlSig=sig
   const got=await Promise.all((list.classes||[]).map(c=>fetch('/api/control?class='+encodeURIComponent(c.class)).then(r=>r.json()).then(d=>({class:c.class,records:d.records||[]})).catch(()=>({class:c.class,records:[]}))))
   controlData={}; got.forEach(c=>controlData[c.class]=c.records)
@@ -776,7 +847,7 @@ async function renderControlView(){
   document.getElementById('sessMeta').textContent='session-less traffic'
   document.getElementById('stats').innerHTML=`<span><b>${total}</b> calls</span><span><b>${got.length}</b> categories</span>`
   const cls=got.slice().sort((a,b)=>(CTRL_ORDER.indexOf(a.class)+99)%99 - (CTRL_ORDER.indexOf(b.class)+99)%99)
-  let html=`<div class="ctrlhdr">⚙ <b>Control-plane traffic</b> — the session-less calls Claude Code makes around your conversations (no <code>x-claude-code-session-id</code>). Captured but kept out of the conversation picker. Click any call for its request + response.</div>`
+  let html=`<div class="ctrlhdr">⚙ <b>Control-plane traffic</b> — the session-less calls agents make around your conversations (no session key from the harness table). Captured but kept out of the conversation picker. Click any call for its request + response.</div>`
   for(const c of cls){
     const m=CTRL_META[c.class]||{ic:'•',what:''}
     const recent=c.records.slice(-80).reverse()
@@ -815,9 +886,97 @@ function openControlDetail(cls,i){
   det.className='open'
   det.innerHTML=`<div class="dclose" id="dclose">✕ close</div>`+
     `<h3>${esc(r.method||'')} ${esc((r.endpoint||'').split('?')[0])} · ${resp.status??'?'}</h3>`+
-    `<div class="din">${fmtTime(r.ts_request)} · UA <b>${esc(hdr['user-agent']||'?')}</b> · request ${kf(rbytes(r))} bytes (request body isn't decoded for non-LLM calls; the response is)</div>`+
+    `<div class="din">${fmtTime(r.ts_request)} · UA <b>${esc(hdr['user-agent']||'?')}</b> · request ${kf(rbytes(r))} bytes`+
+      // 4.6 W16 read half · 4.1 保真边界: a non-LLM body (HTTP or WebSocket) is stored as its length only
+      (r.req_body&&typeof r.req_body==='object'&&r.req_body.verbatim===false?` <span class="pobadge" title="non-inference request bodies are stored as their length only (4.1 保真边界)">非逐字 · length only</span>`:' (request body not decoded for non-LLM calls; the response is)')+`</div>`+
     `<div class="din" style="color:var(--dim)">response body:</div>`+
     collapse('<pre>'+esc(bodyStr)+'</pre>',bodyStr.length,'ctrl:'+cls+':'+i)
+}
+
+// ── D38 采集健康 (2.6 §C session-less group · 1.5): the ctrlmode grid over /api/capture-health — the timeline lists
+// failures by reason (24 h), the ledger what holds now, each agent's last capture and last failure, the daemon, the
+// last install / uninstall; a row opens its metadata in #detail. Not a session: the data is capture metadata, not
+// normalized rows. Every name shown (agent, where, code) comes from the payload: no harness or provider is named here.
+const NO_SESSIONS='No sessions captured yet. Start a tap with `asight monitor on` (Claude Code CLI) or `asight desktop on` (Claude Desktop, macOS + Clash Verge), then run your agent. Check what is arranged with `asight monitor status`.'
+let boardEmpty=false, capHSig=null, capHRows=[]
+// an empty board while capture fails or the collector is not running says so (0.1 §0 #5), never "not started yet"
+function emptyMessage(){
+  const s=capH&&capH.summary
+  if(capH&&capH.unreadable) return `没采到会话 · no sessions — and capture health could not be read (${capH.unreadable}); see 采集健康`
+  if(!s) return NO_SESSIONS
+  const who=s.part==='legacy'?'旧 MITM / the old capture':'采集器 / the collector'
+  if(s.state==='failing') return `没采到会话:${s.n} 个采集失败,见采集健康 · no sessions: ${s.n} capture failure(s), see 采集健康 (top bar / ⚙ session-less)`
+  if(s.state==='not-running'||s.state==='not-responding') return `没采到会话:${who}${s.state==='not-running'?'没在跑':'没响应'},见采集健康 · no sessions: ${s.part==='legacy'?'the old capture':'the collector'} is ${s.state==='not-running'?'not running':'not responding'} — see 采集健康`
+  return NO_SESSIONS
+}
+function capHealthLabel(){
+  const s=capH&&capH.summary
+  if(capH&&capH.unreadable) return '? 采集健康 · capture health (unreadable)'
+  if(!s) return '采集健康 · capture health'
+  return s.state==='failing'?`⚠ 采集健康 (${s.n}) · capture health`:'采集健康 · capture health'
+}
+const chRow=(i,tm,what,count,reason,cls='')=>`<div class="ctrlrow" data-ch="${i}"><span class="tm">${esc(tm)}</span><span class="m">${esc(count)}</span><span class="ep" title="${esc(reason)}">${esc(what)} — ${esc(reason)}</span><span class="st ${cls}"></span></div>`
+const groupWhat=g=>g.last&&g.last.event==='failure'?`${g.last.where}/${g.last.code}`:g.key
+function renderCapHealthView(){
+  hideSessionChrome(true)
+  document.getElementById('agentChip').textContent='⚙ 采集健康'
+  document.getElementById('forkChip').style.display='none'
+  document.getElementById('sessTitle').textContent='capture health · 采集健康'
+  const tl=document.getElementById('timeline'), led=document.getElementById('ledger')
+  if(!capH){ tl.dataset.mode='caphealth'; tl.innerHTML='<div class="ctrlhdr">reading /api/capture-health …</div>'; led.innerHTML=''; return }
+  const sig=JSON.stringify({...capH,generated_at:null})
+  if(sig===capHSig&&tl.dataset.mode==='caphealth') return
+  capHSig=sig
+  document.getElementById('sessMeta').textContent=`read from disk at ${fmtWhen(capH.generated_at)}`
+  if(capH.unreadable){ tl.dataset.mode='caphealth'; tl.innerHTML=`<div class="ctrlhdr">⚠ <b>capture health could not be read</b> — ${esc(capH.unreadable)}. Nothing below can be trusted to be complete; the files on disk are untouched.</div>`; led.innerHTML=''; return }
+  const c=capH.collector||{}, l=capH.legacy||{}, r=capH.raw||{}, rd=capH.read||{}
+  capHRows=[]
+  const row=(rec,tm,what,count,reason,cls)=>{ capHRows.push(rec); return chRow(capHRows.length-1,tm,what,count,reason,cls) }
+  const sec=(title,n,body,open)=>`<details class="ctrlsec" ${open?'open':''}><summary><b>${esc(title)}</b> <span class="cc">${n}</span></summary>${body||'<div class="ctrlrow" style="cursor:default;color:var(--dimmer)">none</div>'}</details>`
+  const fails=(c.failures||[]).slice().sort((a,b)=>String(b.last_ts).localeCompare(String(a.last_ts)))
+  let html=`<div class="ctrlhdr">⚙ <b>采集健康 · capture health</b> — every capture failure asight recorded, read from disk (the collector's <code>flows/</code>, its lock and install manifest, the raw journal, the old capture's events). A disclosure, not an alert: failures of the last ${esc(rd.window_hours||24)} h by reason; what was not captured by design is only counted. Click a row for its metadata (never record bytes).</div>`
+  if((rd.errors||[]).length) html+=`<div class="ctrlhdr" style="color:var(--amber)">⚠ 读不全 · could not read: ${rd.errors.map(e=>`<code>${esc(e.file)}</code> (${esc(e.error)})`).join(', ')} — what they hold is missing below.</div>`
+  if(rd.truncated) html+=`<div class="ctrlhdr">only the most recent part of <code>flows/</code> was read (older records left out).</div>`
+  html+=sec('failures · last 24 h',fails.length,fails.map(g=>row(g.last,fmtWhen(g.last_ts),groupWhat(g),'×'+g.count,(g.last&&(g.last.reason||(g.last.error&&g.last.error.message)))||'','err')).join(''),true)
+  if(l.present) html+=sec('old capture (MITM / reverse proxy) · '+l.state,(l.failures||[]).length,(l.failures||[]).map(g=>row(g.last,fmtWhen(g.last_ts),groupWhat(g),'×'+g.count,(g.last&&g.last.reason)||'','err')).join(''),(l.failures||[]).length>0)
+  html+=sec('raw layer (seal / verify / read)',(r.problems||[]).length,(r.problems||[]).map(p=>row(p,fmtWhen(p.ts),`${p.op} ${p.outcome}`,'',`${p.file||p.target||''} ${p.reason||''}`,'err')).join(''),(r.problems||[]).length>0)
+  const exp=Object.entries(c.expected||{})
+  html+=sec('not captured by design · counted',exp.reduce((n,[,k])=>n+k,0),exp.map(([k,n])=>`<div class="ctrlrow" style="cursor:default"><span class="tm"></span><span class="m">×${n}</span><span class="ep">${esc(k)}</span><span class="st"></span></div>`).join(''),false)
+  tl.dataset.mode='caphealth'; tl.innerHTML=html
+  document.querySelectorAll('#timeline .ctrlrow[data-ch]').forEach(el=>el.onclick=()=>openCapHealthDetail(+el.dataset.ch))
+  led.innerHTML=capHealthLedger(c,l)
+  document.querySelectorAll('#ledger .res[data-ch]').forEach(el=>el.onclick=()=>openCapHealthDetail(+el.dataset.ch))
+  document.getElementById('stats').innerHTML=`<span><b>${fails.length}</b> failure kinds</span><span><b>${(c.conditions||[]).length}</b> holding now</span>`
+}
+function capHealthLedger(c,l){
+  const d=c.daemon||{}
+  const item=(rec,nm,via,sub)=>{ capHRows.push(rec); return `<div class="res" data-ch="${capHRows.length-1}"><div class="top"><span class="nm" title="${esc(nm)}">${esc(nm)}</span><span class="via">${esc(via||'')}</span></div>${sub?`<div class="sub" style="font-size:10px;color:var(--dim)">${esc(sub)}</div>`:''}</div>` }
+  let html=`<div class="curmeta">${esc(capHealthView(capH,{okAt:capHOkAt,err:null,now:capHOkAt||0}).text)}</div>`
+  html+=`<h2><span class="gi" style="background:var(--red)"></span>holding now <span class="ct">(${(c.conditions||[]).length})</span></h2>`
+  if(c.conditions_as_of) html+=`<div style="color:var(--dim);font-size:10px">as of ${esc(fmtWhen(c.conditions_as_of))} — the collector daemon is not running</div>`
+  if(c.conditions_partial) html+=`<div style="color:var(--amber);font-size:10px">读不全 · partial — the last daemon-start is older than the part of flows/ read: conditions that still hold may be missing here</div>`
+  html+=(c.conditions||[]).map(x=>item(x,`${x.kind}${x.pid!=null?' pid '+x.pid:''}${x.agent?' '+x.agent:''}${x.host?' '+x.host:''}`,'since '+fmtWhen(x.since),x.reason)).join('')||'<div style="color:var(--dimmer);font-size:10px">nothing</div>'
+  html+=`<h2><span class="gi" style="background:var(--accent)"></span>collector daemon</h2>`
+  html+=c.installed===false?item(c,c.residue&&c.residue.length?`not installed · ${c.residue.length} item(s) left`:'not installed','',(c.residue||[]).map(x=>`${x.path} (${x.result})`).join(' · ')):item(d,`${d.state||'?'}${d.pid?' · pid '+d.pid:''}`,c.switch&&c.switch.desired?'switch '+c.switch.desired:'',[d.last_start&&`started ${fmtWhen(d.last_start.ts)}${d.last_start.foreground?' (foreground: closing its terminal stops it)':''}`,d.last_stop&&`stopped ${fmtWhen(d.last_stop.ts)}${d.last_stop.signal?' by '+d.last_stop.signal:''}`,d.why,d.error,d.last_record_at&&`last record ${fmtWhen(d.last_record_at)}`].filter(Boolean).join(' · '))
+  if((c.agents||[]).length){
+    html+=`<h2><span class="gi" style="background:var(--green)"></span>agents · last 24 h</h2>`
+    html+=c.agents.map(a=>item(a,a.agent,'',`last captured ${a.last_captured?fmtWhen(a.last_captured):'—'} · last failure ${a.last_failure?fmtWhen(a.last_failure)+' ('+a.last_failure_key+')':'—'}`)).join('')
+  }
+  const notes=(c.install&&[...(c.install.install||[]),...(c.install.uninstall||[])])||[]
+  if(notes.length){
+    html+=`<h2><span class="gi" style="background:var(--amber)"></span>last install / uninstall</h2>`
+    html+=notes.map(n=>item(n,`${n.event} · ${n.kind||''}`,fmtWhen(n.ts),n.reason)).join('')
+  }
+  if(l.present&&l.state!=='none') html+=`<h2><span class="gi" style="background:var(--purple)"></span>old capture</h2>`+((l.sources||[]).length
+    ? l.sources.map(x=>item(x,`${x.source==='proxy'?'reverse proxy':'MITM'} · ${x.state==='gone'?'gone without a clean stop':x.state}`,x.last_start&&x.last_start.pid!=null?'pid '+x.last_start.pid:'',[x.last_start&&`started ${fmtWhen(x.last_start.ts)}`,x.last_stop&&`stopped ${fmtWhen(x.last_stop.ts)}${x.last_stop.signal?' by '+x.last_stop.signal:''}`].filter(Boolean).join(' · '))).join('')
+    : item(l,l.state,l.last_start?'started '+fmtWhen(l.last_start.ts):'',l.capture?`${l.capture.file} written ${fmtWhen(l.capture.mtime)}, no events file`:(l.error||'')))
+  return html
+}
+function openCapHealthDetail(i){
+  const rec=capHRows[i]; if(!rec) return
+  const det=document.getElementById('detail'), txt=JSON.stringify(rec,null,2)
+  det.className='open'
+  det.innerHTML=`<div class="dclose" id="dclose">✕ close</div><h3>采集健康 · ${esc(rec.event||rec.kind||rec.op||rec.state||rec.agent||'record')}</h3><div class="din">metadata only — asight's capture records never carry request or response bytes here</div>`+collapse('<pre>'+esc(txt)+'</pre>',txt.length,'caph:'+i)
 }
 
 function buildLanes(A,probes){
@@ -1302,8 +1461,10 @@ function openDetail(lane,i){
   if(lane.kind==='probe'){
     const k=Math.max(1,turnsReviewed(c.ts))
     const turn=anchor.calls[Math.min(anchor.calls.length-1,k-1)], rq=turn?.rec?.request||{}
-    title=`👁 count_tokens measurement · ${fmtTime(c.ts)}`
-    body=`<div class="din">A probe that sends the <b>entire</b> context to be counted (verbatim) and gets back only its size. A ruler, not a turn — no model output, not billed.</div>`+
+    title=`👁 ${esc(lane.label||'probe')} · ${fmtTime(c.ts)}`
+    // a server lane says what it is (lane.note); the count_tokens rail is a ruler whose body is not kept
+    body=(lane.note?`<div class="din">${esc(lane.note)}</div>`
+      :`<div class="din">A token-count probe: the agent sends a copy of the context to be measured and gets back only its size. A ruler, not a turn — no model output, not billed. asight keeps only the size: the probe's request body is <b>not retained</b> (it is almost a copy of the next request; 3.2 / D34).</div>`)+
       `<div class="din">measured <b>${kf(c.ctx)}</b> tokens</div>`+
       `<div class="din">payload ≈ the context around ${callRef(k)}: <b>${kf(rq.message_count)}</b> messages · system <b>${kf(rq.system_chars)}</b> chars · <b>${kf(rq.tool_count)}</b> tools · ${kf(rq.context_chars)} bytes on the wire.</div>`
   } else if(lane.kind==='monitor'){
@@ -1392,7 +1553,7 @@ function ctxBlock(b,i,prevKeys){
   // D17② per-block first-appearance: this block is NEW this call (not carried from the previous one),
   // i.e. part of the growth. Reused blocks (the cache-eligible prefix) stay unmarked to keep it quiet.
   const life=(prevKeys&&!b.volatile&&!prevKeys.has(b.key))?`<span class="lifemark" title="first appears this call — new content added to the context (part of the re-sent Δ)">◆ new</span>`:''
-  const cc=b.cc?`<span class="ccbadge" title="Claude Code set a cache_control breakpoint here — the cacheable prefix is stored up to and including this block (${esc(JSON.stringify(b.cc))})">⟐ cache bp</span>`:''
+  const cc=b.cc?`<span class="ccbadge" title="the request sets a cache_control breakpoint here (${esc(JSON.stringify(b.cc))}). With Anthropic's cache semantics the cacheable prefix is stored up to and including this block; another vendor may treat it differently — see the call's 厂商缓存语义未知 badge">⟐ cache bp</span>`:''
   const vol=b.volatile?`<span class="volbadge" title="carries a per-request nonce (cch=…, cc_prev_req=…): its bytes change every call, yet cache-hit stays ~100% — Anthropic excludes this billing block from the cache key">↻ per-call nonce</span>`:''
   // 保真标 (invariant 4 / spec 2.3 §验收#2): mark each tool def's faithfulness. D15 capture stores
   // the full schema verbatim → 'verbatim' (part of AC-1). Old v0 traces kept only name + param names
@@ -1445,6 +1606,8 @@ function resolvedBody(got,b){
   // resolver's fidelity classification exists to prevent.
   const badge=got.fidelity==='verbatim'
     ? `<div class="cbsrc" title="resolved by 「定位源记录 → slice(start,end)」 over the raw NDJSON — the bytes the model received (AC-1)">✓ 逐字回源 · verbatim from capture</div>`
+    : got.fidelity==='decoded'
+      ? `<div class="cbsrc" title="the wire carried these bytes compressed; this is the exact text after decompression, not the exact wire bytes">↺ 解码后逐字 · verbatim after decompression</div>`
     : got.fidelity
       ? `<div class="cbsrc" title="these bytes were re-serialized on the way into the capture, so they are NOT a byte-verbatim record of the wire">⚠ ${esc(got.fidelity)} — not byte-verbatim</div>`
       : ''
@@ -1582,6 +1745,70 @@ function renderResourceView(el){
   el.innerHTML=`<div class="rphd">📄 ${esc(path)} <span class="rpx" id="rpx">✕ call raw</span></div>${body}`
   const x=document.getElementById('rpx'); if(x)x.onclick=()=>{ viewPin=null; renderRawPanel() }
 }
+// #21 · 不变式4 · 4.6 「不完整的标注,各说一件事」: the capture stored only part of this request body. Say which
+// thing happened where the call is shown: 已截断 = cut at the capture cap; 不完整 = not received whole.
+// Wording is baked server-side (call.reqIncomplete); this only picks the tag from its two booleans.
+// D38 a WebSocket call's labels ride in the same badge row — 不完整 (earlier messages missing: context),
+// 已截断 (past the cap), 未解码 (could not be decompressed), 非逐字 (a non-LLM endpoint: size only).
+// 4.1 落地细节 (10): the response body's labels (call.respIncomplete) ride in the same row.
+function reqBadge(c){
+  const q=c&&c.reqIncomplete, w=c&&c.wsIncomplete, r=c&&c.respIncomplete
+  let out=''
+  if(q){
+    const tag=[q.truncated?'请求体已截断 · request body truncated':'',q.partial?'请求体不完整 · request body incomplete':''].filter(Boolean).join(' · ')||'请求体不完整 · request body incomplete'
+    out+=`<div class="rpk"><span class="pobadge" title="${esc(q.text)}">${tag}</span> ${esc(q.text)}</div>`
+  }
+  if(w){
+    const tag=[w.partial?'不完整 · context incomplete':'',w.truncated?'已截断 · truncated':'',w.undecoded?'未解码 · not decoded':'',w.nonVerbatim?'非逐字 · non-verbatim':''].filter(Boolean).join(' · ')
+    out+=`<div class="rpk"><span class="pobadge" title="${esc(w.text)}">${tag}</span> ${esc(w.text)}</div>`
+  }
+  if(r){
+    const tag=[r.undecoded?'响应未解码 · response not decoded':'',r.binary?'响应非文本 · response not text':'',r.notJson?'响应不是 JSON · response not JSON':'',r.empty?'响应为空 · empty response':'',r.unparsed?'响应不完整 · response incomplete':'',r.truncated?'响应已截断 · response truncated':''].filter(Boolean).join(' · ')
+    out+=`<div class="rpk"><span class="pobadge" title="${esc(r.text)}">${tag}</span> ${esc(r.text)}</div>`
+  }
+  return out
+}
+// Canonical wire badges (server-baked call.wire, 3.2:133 · 不变式4). Generic vocabulary only: no wire names
+// here (test/web/no-wire-knowledge.test.mjs). G9: shown in the raw panel and atop the context window.
+const CTX_LABEL={reconstructed:['跨记录拼接 · stitched across records','context reassembled from earlier records of this connection; every block is still verbatim'],
+  partial:['不完整 · partial context','what is shown is NOT the full context the model saw: a record this call depends on is missing, or the request body was stored incomplete'],
+  server_edited:['服务端删改 · server-edited context','the response reports the server edited the context: the request bytes are not exactly what the model saw']}
+function wireBadges(c){
+  const w=c&&c.wire; if(!w) return ''
+  let h=''
+  // a request stored incomplete already has its own, exact badge (reqBadge): do not say it twice
+  // contextMissing (server-baked) says WHICH earlier record a partial context lacks
+  const cs=CTX_LABEL[w.contextState]; if(cs&&!(w.contextState==='partial'&&c.reqIncomplete)) h+=`<span class="pobadge" title="${esc((w.contextMissing?w.contextMissing+' — ':'')+cs[1])}">${esc(cs[0])}</span> `
+  for(const e of (w.observerEffect||[])) h+=`<span class="pobadge" title="${esc(e.what)} — caused by asight's ${esc(e.cause)}">观测者效应 · capture changed client behaviour: ${esc(e.what)}</span> `
+  if(w.transport==='ws') h+=`<span class="metabadge">WebSocket</span> `
+  // 3.3:89, server-baked (the DB's rule): unknown host, a vendor with no cache row, or a vendor not verified on this
+  // wire. Older payloads without the flag fall back to "no known vendor".
+  const cacheUnknown=w.cacheSemanticsKnown!=null?w.cacheSemanticsKnown===false:w.vendor==null
+  if(w.format&&cacheUnknown) h+=`<span class="metabadge" title="cache labels are per vendor (the upstream host); this vendor's cache semantics are not established for this wire, so none are claimed — a cache_control mark on a block is shown as sent, not as what this vendor does with it">厂商缓存语义未知 · vendor cache semantics unknown</span> `
+  // a fact the call's own exact badge (reqBadge: reqIncomplete / wsIncomplete / respIncomplete) already says is not said again
+  const said=new Set([c.respIncomplete&&c.respIncomplete.truncated&&'resp-truncated', c.respIncomplete&&c.respIncomplete.undecoded&&'resp-undecoded', c.wsIncomplete&&c.wsIncomplete.truncated&&'ws-truncated'].filter(Boolean))
+  for(const l of (w.labels||[])) if(!said.has(l.id)) h+=`<span class="pobadge" title="${esc(l.text)}">${esc(l.label)}</span> `
+  // 4.6 §记录 / invariant 4: sent compressed, shown decompressed — the exact text, not the exact wire bytes
+  if(w.reqEncoding) h+=`<span class="metabadge" title="the request body went over the wire compressed (content-encoding: ${esc(w.reqEncoding)}); its text here is after decompression, and its sizes are of that text">请求体已解压 · request decompressed (${esc(w.reqEncoding)})</span> `
+  return h
+}
+const wireLine=c=>{ const b=wireBadges(c); return b?`<div class="rpk">${b}</div>`:'' }
+// 4.6 R2: request keys that are not context blocks, one by one, each fetched from the raw record on click;
+// 3.1:37: the call's later client messages (call.extraMessages) the same way — never silently dropped
+function nonBlockList(c){
+  const ks=(c&&c.nonBlockKeys)||[], xs=(c&&c.extraMessages)||[]
+  const item=k=>k.ref?`<code class="nbk" data-nbk="${esc(k.ref)}" style="cursor:pointer">${esc(k.key)}</code> ${kf(k.chars)}c`:`<code>${esc(k.key)}</code> ${k.chars!=null?kf(k.chars)+'c':esc(k.note||'not stored as text')}`
+  return (ks.length?`<div class="rpk" title="request keys that are not context blocks — verbatim in the raw record">keys · `+ks.map(item).join(' · ')+`<div class="nbkbody"></div></div>`:'')+
+    (xs.length?`<div class="rpk" title="client messages sent while this call was open — part of the call, not of the context; verbatim in the raw record">later client messages in this call · `+xs.map(item).join(' · ')+`<div class="nbkbody"></div></div>`:'')
+}
+// 4.6 R2: the reply as captured (call.respRefs, server-baked): one locator per piece, fetched from the raw record on
+// click; a piece with no locator says why in place (invariant 4)
+function replyList(c){
+  const rs=(c&&c.respRefs)||[]; if(!rs.length) return ''
+  return `<div class="rpk" title="the reply as captured — each piece resolves to its bytes in the raw record">reply · `+
+    rs.map(x=>x.ref?`<code class="nbk" data-nbk="${esc(x.ref)}" style="cursor:pointer">${esc(x.label)}</code> ${kf(x.chars)}c`
+      :`<code title="${esc(x.why||'')}">${esc(x.label)}</code> <span class="metabadge">${esc(x.why||'not addressable')}</span>`).join(' · ')+`<div class="nbkbody"></div></div>`
+}
 function renderRawPanel(){
   const el=document.getElementById('rawpanel'); if(!el) return
   if(viewPin) return renderResourceView(el)
@@ -1597,16 +1824,17 @@ function renderRawPanel(){
   // never kf(undefined) → "?", which reads as "the capture didn't have it". usage/cost DID arrive
   // (cheap meta) and stay truthful.
   if(call.paged_out){
-    el.innerHTML=`<div class="rphd">🩻 raw · call #${playhead+1}</div>`+
-      `<div class="rpk">${esc(String(rq.model||'').replace('claude-',''))} · <span class="pobadge" title="this call's verbatim body was not shipped on this page — it is intact in the raw trace (不变式4)">正文未随本页下发 · body not on this page</span></div>`+
+    el.innerHTML=`<div class="rphd">🩻 raw · call #${playhead+1}</div>`+wireLine(call)+
+      `<div class="rpk">${esc(String(rq.model||'').replace('claude-',''))} · <span class="pobadge" title="this call's verbatim body was not shipped on this page — ${call.reqIncomplete?'what was stored of it':'it'} is intact in the raw trace (不变式4)">正文未随本页下发 · body not on this page</span></div>`+
       `<div class="rpk">usage · read <b>${kf(read)}</b> · new-cache <b>${kf(create)}</b> · fresh <b>${kf(fresh)}</b> · out <b>${kf(out)}</b></div>`+
-      `<div class="rpk rpcost">${costLine}</div>`
+      `<div class="rpk rpcost">${costLine}</div>`+reqBadge(call)
     return }
-  el.innerHTML=`<div class="rphd">🩻 raw · call #${playhead+1}</div>`+
-    `<div class="rpk">${esc(String(rq.model||'').replace('claude-',''))} · ${kf(rq.context_chars)} bytes wire</div>`+
+  el.innerHTML=`<div class="rphd">🩻 raw · call #${playhead+1}</div>`+wireLine(call)+
+    `<div class="rpk">${esc(String(rq.model||'').replace('claude-',''))} · ${kf(rq.context_chars)} ${call.reqIncomplete?'bytes stored (not the whole request)':call.wire&&call.wire.reqEncoding?'chars after decompression':'bytes wire'}</div>`+
     `<div class="rpk">msgs <b>${kf(rq.message_count)}</b> · tools <b>${kf(rq.tool_count)}</b> · system <b>${kf(rq.system_chars)}</b>c</div>`+
     `<div class="rpk">usage · read <b>${kf(read)}</b> · new-cache <b>${kf(create)}</b> · fresh <b>${kf(fresh)}</b> · out <b>${kf(out)}</b></div>`+
-    `<div class="rpk rpcost">${costLine}</div>`
+    `<div class="rpk rpcost">${costLine}</div>`+reqBadge(call)+nonBlockList(call)+replyList(call)
+  el.onclick=e=>{ const t=e.target&&e.target.closest&&e.target.closest('[data-nbk]'); if(t){ const bc=t.parentElement.querySelector('.nbkbody'); if(bc) fetchBody({text_ref:t.dataset.nbk},bc) } }
 }
 function renderContextWindow(){
   renderRawPanel()
@@ -1619,15 +1847,23 @@ function renderContextWindow(){
   // no content, which is the single worst outcome for a tool whose value is "what you see IS the wire".
   if(call.paged_out){ curFlat=[]
     const lo=(pageCur|0)+1, hi=(pageCur|0)+PAGE_LIMIT, tot=(pageInfo&&pageInfo.total)||null
-    win.innerHTML=`<div class="pagedout">`+
+    win.innerHTML=reqBadge(call)+`<div class="pagedout">`+
       `<div class="pohd">⏸ 正文未随本页下发 · body not loaded on this page</div>`+
       `<div class="pobody">Call <b>#${playhead+1}</b> of ${anchor.calls.length} sits outside the loaded window `+
       `(calls <b>#${lo}</b>–<b>#${Math.min(hi,tot||hi)}</b>${tot?` of ${tot}`:''}). Its ctx / usage / cache figures above and `+
       `on the timeline are <b>real</b> — only the verbatim request body was left off this page to keep the `+
-      `response shippable. <b>Not lost</b>: it is intact in the raw NDJSON (不变式4 · 未下发 ≠ 丢失).</div>`+
+      `response shippable. <b>Not lost</b>: ${call.reqIncomplete?'what was stored of it (only part of the request — see above)':'it'} is intact in the raw NDJSON (不变式4 · 未下发 ≠ 丢失).</div>`+
       `<div><button class="pobtn" id="loadpage">⤓ 载入这一页 · load this window</button></div>`+
     `</div>`
     const lb=document.getElementById('loadpage'); if(lb) lb.onclick=()=>ensurePage(call,true)
+    return }
+  // 不变式4: an unparsed call has no blocks. Drawing the window anyway shows "0 blocks · ? bytes" and
+  // every earlier block as removed, which reads as "the model saw nothing". Say what happened instead
+  // (errMsg is baked server-side; it carries the capture's own label when the collector set one).
+  if(call.unparsed){ curFlat=[]
+    win.innerHTML=(call.wsIncomplete||call.respIncomplete?reqBadge({wsIncomplete:call.wsIncomplete,respIncomplete:call.respIncomplete}):'')+`<div class="pagedout"><div class="pohd">⚠ 无法呈现 · nothing to render for this call</div>`+
+      `<div class="pobody">${esc(call.errMsg||'the request body could not be parsed')}. `+
+      (call.reqIncomplete?'The raw record holds only the bytes that were stored; the rest was never captured.':'The raw record is on disk unchanged (不变式4).')+`</div></div>`
     return }
   const flat=call.flat||[]; curFlat=flat // pre-baked server-side (D18a)
   const rq=call.rec.request||{}, u=call.usage||{} // neutral canonical usage (D18a Q1)
@@ -1649,9 +1885,9 @@ function renderContextWindow(){
   const refKeys=refFlat?new Set(refFlat.map(b=>b.key)):null // ◆new marks vs the diff reference
   const curKeys=new Set(flat.map(b=>b.key))
   const removed=refFlat?refFlat.filter(b=>!b.volatile&&!curKeys.has(b.key)):[]
-  let html=`<div class="cwmeta">`+
+  let html=reqBadge(call)+wireLine(call)+`<div class="cwmeta">`+
     `<div class="cwtitle">context @ call <b>#${playhead+1}</b>/${anchor.calls.length} · ${esc(model)} · ${fmtTime(call.ts)}</div>`+
-    `<div class="cwsub">the exact input to the model, in assembly order <b>tools → system → messages</b> · ${kf(flat.length)} blocks · ${kf(rq.context_chars)} bytes on the wire</div>`+
+    `<div class="cwsub">${call.reqIncomplete?'the stored part of the request':'the exact input to the model'}, in assembly order <b>tools → system → messages</b> · ${kf(flat.length)} blocks · ${kf(rq.context_chars)} ${call.reqIncomplete?'bytes stored (not the whole request)':'bytes on the wire'}</div>`+
     `<div class="cwcache">⚡ KV cache this call: <b class="chit">${hitPct}%</b> reused · <b>${kf(read)}</b> tok read · <b>${kf(create)}</b> newly cached · <b>${kf(fresh)}</b> fresh${brk.firstCall?(read?' · first captured call — reuse is from a warm cross-session cache prefix (tools+system)':' · first call, nothing to reuse'):''}</div>`+
     taxSummary(tax)+growthLine(tax,prevTax,brk,!!(prevCall&&prevCall.paged_out))+diffControl(refIdx,removed.length)+
   `</div>`+removedSection(removed,refIdx)
@@ -1846,7 +2082,7 @@ function lifecycleNav(){
   }
   const comps=(anchor.events||[]).filter(e=>e.type==='compaction'||e.type==='summarize')
   if(comps.length){
-    const kids=comps.map(e=>{ const at=L(e.step), lbl=e.type==='compaction'?`✂ compaction ${e.from}→${e.to} msgs`:`🗜 summary (${kf(e.out)} tok out)`; return `<div class="navsub" data-navstep="${at}"><span class="nsl">${lbl}</span><span class="nsx">#${at+1}</span></div>` }).join('')
+    const kids=comps.map(e=>{ const at=L(e.step), lbl=e.type==='compaction'?`✂ compaction ${e.from??'?'}→${e.to} msgs`:`🗜 summary (${kf(e.out)} tok out)`; return `<div class="navsub" data-navstep="${at}"><span class="nsl">${lbl}</span><span class="nsx">#${at+1}</span></div>` }).join('')
     h+=navGroup('life-comp','✂','context resets',comps.length,kids)
   }
   return h||'<div class="navsub" style="opacity:.5">no resources tracked yet</div>'
@@ -2056,8 +2292,13 @@ function renderMon(el,d){
   el.innerHTML=`<span class="mondot ${on?'on':''}" title="透明监测 ${on?'开启中':'已关闭'}"></span>`
     +`<button class="monbtn" id="monBtn">监测 ${on?'ON':'OFF'}</button>`
     +`<span class="monwhere" title="透明监测把被测流量转发到的真实上游端点">→ ${esc(m.forwardingTarget||'—')}</span>`
-    +(m.autostart?`<span class="monbadge" title="已加入用户级开机自启(非全机)">开机自启</span>`:'')
-    +(m.caTrusted?`<span class="monbadge" title="采集 CA 已装入用户级信任库(非全机弱化 TLS)">CA✓</span>`:'')
+    +(m.autostart?`<span class="monbadge" title="已加入用户级开机自启(非全机)">开机自启</span>`:m.autostartError?`<span class="monbadge" style="color:var(--amber)" title="${esc(m.autostartError)}">开机自启 ?</span>`:'')
+    +(m.caTrusted===true?`<span class="monbadge" title="采集 CA 已装入用户级信任库(非全机弱化 TLS)">CA✓</span>`
+      :m.caTrusted===false?`<span class="monbadge" style="color:var(--red)" title="采集 CA 不在用户级信任库里 · the capture CA is not in the user trust store">CA ✗</span>`
+      :m.caTrusted===null?`<span class="monbadge" style="color:var(--amber)" title="CA 信任态查不出 · could not check the CA trust">CA ? ${esc(m.caError||'')}</span>`:'')
+    +(m.nodeExtraCaCerts&&m.nodeExtraCaCerts.matches===false?`<span class="monbadge" style="color:var(--red)" title="node 版 agent 实际信任的是登录会话的 NODE_EXTRA_CA_CERTS:现为 ${esc(m.nodeExtraCaCerts.value||'(未设)')},应为 ${esc(m.nodeExtraCaCerts.expected||'')}">NODE_EXTRA_CA_CERTS ✗</span>`
+      :m.nodeExtraCaCerts&&m.nodeExtraCaCerts.matches===null?`<span class="monbadge" style="color:var(--amber)" title="${esc(m.nodeExtraCaCerts.error||'')}">NODE_EXTRA_CA_CERTS ?</span>`:'')
+    +(m.steerError?`<span class="monbadge" style="color:var(--amber)" title="${esc(m.steerError)}">steer ? 读不出</span>`:'')
   const btn=document.getElementById('monBtn'); if(!btn) return
   btn.onclick=async()=>{ // 开就是开、关就是关 — 直接切,无确认框(服务端 CSRF/Host/Origin 门才是护栏)
     const action=on?'off':'on'
@@ -2083,6 +2324,62 @@ function renderMon(el,d){
   el.innerHTML=`<span class="mondot" title="监测控制未启用"></span>`
     +`<span class="monwhere" title="This board was started read-only, so the D26 control endpoints are not mounted. Restart the server with --control to arrange transparent monitoring from here. Either way the board keeps showing what was captured — only the on/off switch is absent.">监测控制未启用 · control not enabled${r?` · HTTP ${r.status}`:''} — read-only board</span>`
 })()
+
+// ── D38 capture health (1.2 顶栏 #caphealth · 1.5 状态矩阵 · 4.4 /api/capture-health) ─────────────────────────
+// Its OWN 1.5 s timer: not the "live" checkbox, not poll() (which returns early on an empty board, in the control view
+// and when the session did not change — a capture that stopped would leave the last ✓ frozen there). Never empty;
+// no "seen" state, no alert (Non-Goal): it says what holds now and what failed in 24 h. The state and N come from
+// the server (src/health/, the reader `asight collector status` uses); this only words them.
+const CAPH_MS=1500
+let capH=null, capHOkAt=null, capHErr=null, capHBusy=false
+const fmtWhen=ts=>{ if(!ts) return '—'; const d=new Date(ts); if(isNaN(d)) return String(ts); return d.toDateString()===new Date().toDateString()?d.toLocaleTimeString():d.toLocaleString() }
+// → {cls, text}: cls ok | warn | bad | dim
+function capHealthView(h,{okAt,err,now}){
+  if(okAt!=null&&now-okAt>2*CAPH_MS) return {cls:'warn',text:`? 未刷新 · 截至 ${fmtWhen(okAt)}`}
+  if(err&&okAt==null) return {cls:'warn',text:`? 未刷新 · 截至 —`}
+  if(!h) return {cls:'dim',text:'? 采集健康 · 读取中'}
+  if(h.unreadable) return {cls:'warn',text:`? 健康读不出:${h.unreadable}`}
+  const s=h.summary||{}, legacy=s.part==='legacy', tail=s.read_errors?' · 读不全':'', oldName=s.source==='proxy'?'旧反代':'旧 MITM'
+  const t={
+    ok:()=>({cls:'ok',text:legacy?`✓ ${oldName} · 最后启动于 ${fmtWhen(s.since)}`:`✓ 采集中 · 自 ${fmtWhen(s.since)} 起`}),
+    failing:()=>({cls:'bad',text:`⚠ ${s.n}`}),
+    off:()=>({cls:'dim',text:`○ 采集关 · 自 ${fmtWhen(s.since)} 起`}),
+    'not-running':()=>({cls:'bad',text:`✗ ${legacy?oldName:'采集器'}没在跑 · 最后记录于 ${fmtWhen(s.since)}${s.signal?` · 因 ${s.signal}`:''}`}),
+    stopped:()=>({cls:'dim',text:`○ 旧采集停了 · 自 ${fmtWhen(s.since)} 起`}),
+    'not-responding':()=>({cls:'bad',text:`✗ 采集器没响应 · 最后心跳 ${fmtWhen(s.since)}`}),
+    unknown:()=>({cls:'warn',text:`? ${legacy?'旧采集':'采集器'}状态不明 · ${s.reason||''}`}),
+    'no-events':()=>({cls:'warn',text:'? 旧采集 · 没有事件记录(重启后才有)'}),
+    residue:()=>({cls:'warn',text:`– 未安装 · 残留 ${s.n} 项`}),
+    'not-installed':()=>({cls:'dim',text:'– 未安装'}),
+  }[s.state]
+  const v=t?t():{cls:'warn',text:`? ${s.state||'unknown state'}`}
+  return {cls:v.cls,text:v.text+tail}
+}
+function renderCapHealth(){
+  const el=document.getElementById('caphealth'); if(!el) return
+  const v=capHealthView(capH,{okAt:capHOkAt,err:capHErr,now:Date.now()})
+  el.className='caphealth '+v.cls; el.textContent=v.text
+  el.title=`capture health (D38) — ${v.text}${capHErr?`\nlast attempt failed: ${capHErr}`:''}${capHOkAt?`\nread at ${fmtWhen(capHOkAt)}`:''}\nclick: the 采集健康 list (⚙ session-less)`
+}
+async function pollCapHealth(){
+  renderCapHealth() // a request that hangs still lets "未刷新" appear on time
+  if(capHBusy) return
+  capHBusy=true
+  try{
+    const r=await fetch('/api/capture-health',{cache:'no-store'})
+    const j=await r.json().catch(()=>null)
+    if(r.status===503&&j&&j.error){ capH={unreadable:j.error}; capHOkAt=Date.now(); capHErr=null }
+    else if(r.ok&&j&&j.summary){ capH=j; capHOkAt=Date.now(); capHErr=null }
+    else capHErr=(j&&j.error)||('HTTP '+r.status)
+  }catch(e){ capHErr=String(e&&e.message||e) }
+  finally{ capHBusy=false }
+  renderCapHealth()
+  if(curSel==='__caphealth__') renderCapHealthView() // its own data: refreshed even with "live" unchecked
+  else if(boardEmpty) renderEmpty(emptyMessage())
+}
+document.getElementById('caphealth').onclick=()=>{ curSel='__caphealth__'; const sel=document.getElementById('fileSel'); sel.dataset.sig=''; closeDetail(); poll() }
+pollCapHealth()
+setInterval(pollCapHealth,CAPH_MS)
 
 poll()
 setInterval(()=>{if(document.getElementById('liveChk').checked)poll()},1500)

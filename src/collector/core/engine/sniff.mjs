@@ -6,10 +6,11 @@
 const METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS', 'TRACE']
 const TOKENS = ['CONNECT ', ...METHODS.map((m) => m + ' ')]
 
-/** 'need-more' | 'tls' | 'connect' | 'http' | 'unknown' */
+/** 'need-more' | 'tls' | 'connect' | 'socks' | 'http' | 'unknown' */
 export function classify(buf) {
   if (buf.length === 0) return 'need-more'
   if (buf.length >= 2 && buf[0] === 0x16 && buf[1] === 0x03) return 'tls' // TLS handshake record
+  if (buf[0] === 0x04 || buf[0] === 0x05) return 'socks'                  // SOCKS4/4a or SOCKS5 prelude (D37)
   const s = buf.toString('latin1')
   if (s.startsWith('CONNECT ')) return 'connect'
   for (const m of METHODS) if (s.startsWith(m + ' ')) return 'http'

@@ -2,12 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
 import { etlFile } from '../src/etl/cli.mjs';
 import { createServer } from '../src/server.mjs';
 import { fixtureGate, hasFixture } from './helpers/fixture.mjs';
+import { tmpDir } from './helpers/tmp.mjs';
 
 const FIXTURE = path.resolve('test/fixtures/cc-session-real.ndjson');
 
@@ -23,7 +23,7 @@ function get(port, p) {
 let store, srv, port;
 test.before(async () => {
   if (!hasFixture()) return; // every test below is fixtureGate()d — nothing to ETL, nothing to serve
-  store = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'asight-srv-')), 'asight.duckdb');
+  store = path.join(tmpDir('asight-srv-'), 'asight.duckdb');
   await etlFile(FIXTURE, { dbPath: store, rebuild: true });
   const made = await createServer({ dbPath: store, sourcePath: FIXTURE });
   srv = made.server;

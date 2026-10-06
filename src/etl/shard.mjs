@@ -9,21 +9,32 @@
 // The hard constraint is invariant 2: the source NDJSON is the ONE source of truth. So this module
 // COPIES RAW LINE BYTES. It never JSON.parses a record and re-serialises it — that would silently
 // renormalise number formatting, key order and unicode escapes, and every "verbatim" claim
-// downstream would become a lie. Session identity is read by a bounded scan of the header region,
-// which is also why `sessionIdOfLine` works on the raw string instead of a parsed object.
+// downstream would become a lie. The record is parsed only to READ it (class, session key, meta): the
+// session key is its harness's HEADER key from the one table (src/dissect/harnesses.mjs, 3.4:21 — the
+// sharder never reads a body key). A line that does not parse is keyed by a bounded scan of its header
+// region (`sessionIdOfLine`), which works on the raw string.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { emptyMeta, foldRecord, mergeMeta } from './session-meta.mjs';
+import { resolveCoexistence, isSealedPath, streamOfSealed } from '../raw/discover.mjs';
+import { appendJournal, defaultJournalPath } from '../raw/journal.mjs';
+import { sessionKeyOf, HEADER_SESSION_KEYS } from '../dissect/harnesses.mjs';
 
 const NL = 0x0a;
-const SID_KEY = /"x-claude-code-session-id"\s*:\s*"([^"]+)"/i;
+const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const SID_KEYS_RE = new RegExp(`"(${HEADER_SESSION_KEYS.map(esc).join('|')})"\\s*:\\s*"([^"]+)"`, 'gi');
 
 // Records with no session header still belong to the corpus — dropping them would be an
 // invariant-2 violation dressed up as tidying. Session-LESS traffic is the control plane; it lands
 // under `control/<class>.ndjson`, bucketed by endpoint (4.2:51 · demo sessions.mjs controlClass).
 export const CONTROL_DIR = 'control';
+// Header-less INFERENCE (Kimi's body key, Hermes's synthesized key — 3.4:21) is session traffic whose key the
+// sharder may not read (headers only). It MUST NOT land in control/: it goes here, byte-copied, and the board
+// groups it by its read-side key (gate G12). Not a session dir: no meta.json.
+export const UNKEYED_DIR = '_unkeyed';
+const SESSIONLESS_DIRS = new Set([CONTROL_DIR, UNKEYED_DIR]);
 
 // Which per-session stream a record belongs to (4.2:51 · demo sessions.mjs classOf). The split keeps
 // the board's calls timeline clean: `calls.ndjson` = real inference (the ReAct spine, feeds every
@@ -66,8 +77,12 @@ export function sessionIdOfLine(line) {
   // a generous cap so a malformed record degrades to "unassigned" rather than scanning a 200 KB body.
   let end = line.indexOf('"req_body"', i);
   if (end < 0) end = Math.min(line.length, i + 65536);
-  const m = SID_KEY.exec(line.slice(i + k.length, end));
-  return m ? m[1] : null;
+  // Any header session key of the table: the harness is unknown here (the line did not parse), so the table's
+  // order decides between two keys — the parsed path uses the record's own harness row instead.
+  const found = new Map();
+  for (const m of line.slice(i + k.length, end).matchAll(SID_KEYS_RE)) if (!found.has(m[1].toLowerCase())) found.set(m[1].toLowerCase(), m[2]);
+  for (const name of HEADER_SESSION_KEYS) if (found.has(name)) return found.get(name);
+  return null;
 }
 
 // A session id that survives sanitisation but is still an unusable directory name ('' / '.' / '..').
@@ -76,10 +91,11 @@ export function sessionIdOfLine(line) {
 const UNSAFE_SID = '_badsid';
 
 // A session id reaches the filesystem as a directory name. It comes from a header, i.e. from the
-// wire, so it is untrusted: `../` or a NUL would escape the shard root.
+// wire, so it is untrusted: `../` or a NUL would escape the shard root. A value naming a reserved
+// session-less dir (`control`, `_unkeyed`) would mix a session into it: parked too.
 function safeName(sid) {
   const s = String(sid).replace(/[^A-Za-z0-9._-]/g, '_');
-  return !s || s === '.' || s === '..' ? UNSAFE_SID : s.slice(0, 128);
+  return !s || s === '.' || s === '..' || SESSIONLESS_DIRS.has(s) ? UNSAFE_SID : s.slice(0, 128);
 }
 
 class ShardWriter {
@@ -144,35 +160,51 @@ function headFingerprint(file, len) {
  * backfill shards written before the archive layer; going forward `shardOnce` keeps meta fresh
  * incrementally, so this is a one-time / repair operation.
  */
-export async function rebuildMeta(outDir) {
-  const { createInterface } = await import('node:readline');
-  let sessions = 0, records = 0;
+// D35: a stream may also exist as sealed segments (sealed in place, original deleted, maybe a fresh
+// file beside it). They are folded too, one copy per line (discover.mjs coexistence); a segment that
+// cannot be read in full leaves that session's meta.json untouched and is returned in `errors` —
+// never a smaller count written over a correct one. Per-session files of a collector shard (other
+// stream names) are not `asight shard`'s records and stay out; the board adds them when it lists.
+// NDJSON and sealed inputs go through ONE line source (ingest.mjs forEachLine) and one fold, so the
+// count is the same before and after sealing: `records` = records folded into meta, `malformed` =
+// non-blank lines that are not JSON, counted apart (review 3 F11 — the NDJSON path counted them as
+// records, the sealed path did not).
+export async function rebuildMeta(outDir, { journal = defaultJournalPath() } = {}) {
+  const { forEachLine } = await import('./ingest.mjs');
+  let sessions = 0, records = 0, malformed = 0;
+  const errors = [];
   let entries = [];
-  try { entries = fs.readdirSync(outDir, { withFileTypes: true }); } catch { return { sessions: 0, records: 0 }; }
+  try { entries = fs.readdirSync(outDir, { withFileTypes: true }); } catch { return { sessions: 0, records: 0, malformed: 0, errors }; }
   for (const e of entries) {
-    // control/ is session-less (no meta); skip it. Everything else is a session dir.
-    if (!e.isDirectory() || e.name === CONTROL_DIR) continue;
+    // control/ and _unkeyed/ are session-less (no meta); skip them. Everything else is a session dir.
+    if (!e.isDirectory() || SESSIONLESS_DIRS.has(e.name)) continue;
     const meta = emptyMeta(e.name);
-    let seen = false;
+    let seen = false, bad = null, mal = 0;
+    const dir = path.join(outDir, e.name), names = Object.values(STREAM_FILE);
+    let inputs = names.map((n) => path.join(dir, n)).filter((f) => fs.existsSync(f));
+    try { inputs = resolveCoexistence([...inputs, ...fs.readdirSync(dir).filter((n) => isSealedPath(n) && names.includes(streamOfSealed(n))).sort().map((n) => path.join(dir, n))]).files; } catch { continue; }
     // Fold ALL of a session's streams (calls/probes/other) so meta.calls/probes/other match the split
     // — reading only calls.ndjson would undercount probes and other, which the board lists.
-    for (const stream of Object.values(STREAM_FILE)) {
-      const shard = path.join(outDir, e.name, stream);
-      let size = 0;
-      try { size = fs.statSync(shard).size; } catch { continue; }
-      if (!size) continue;
+    for (const f of inputs) {
+      if (!isSealedPath(f)) { let size = 0; try { size = fs.statSync(f).size; } catch { continue; } if (!size) continue; }
       seen = true;
-      const rl = createInterface({ input: fs.createReadStream(shard, { encoding: 'utf8' }), crlfDelay: Infinity });
-      for await (const line of rl) {
-        if (!line) continue;
-        records++;
-        try { foldRecord(meta, JSON.parse(line)); } catch { /* malformed line — skip its contribution */ }
-      }
+      const rep = await forEachLine(f, (line) => {
+        const t = line.trim();
+        if (!t) return true;
+        let v; try { v = JSON.parse(t); } catch { mal++; return true; }
+        foldRecord(meta, v);
+        return true;
+      });
+      if (rep.sealedError || rep.unreadableRecords) { bad = { file: f, reason: rep.sealedError || rep.unreadable[0].reason, unreadableRecords: rep.sealedError ? null : rep.unreadableRecords }; break; }
     }
+    // D38: a read failure is journalled, not only printed (second review, low)
+    if (bad) { errors.push({ session: e.name, ...bad }); appendJournal({ op: 'read', reader: 'rebuild-meta', outcome: 'failed', session: e.name, ...bad, metaKept: true }, { journal }); continue; }
     if (!seen) continue;
+    records += meta.calls + meta.probes + meta.other;
+    malformed += mal;
     try { fs.writeFileSync(path.join(outDir, e.name, 'meta.json'), JSON.stringify(meta), { mode: 0o600 }); sessions++; } catch { /* best-effort */ }
   }
-  return { sessions, records };
+  return { sessions, records, malformed, errors };
 }
 
 // Sum bytes of every *.ndjson file under `dir` (one level of nesting: dir/*.ndjson + dir/*/*.ndjson).
@@ -199,13 +231,17 @@ function ndjsonBytes(dir) {
  * either the intact original or the complete new set, never a half-written session (invariant 2).
  *
  * Idempotent: a dir already carrying `probes.ndjson`/`other.ndjson` or the `.split-v2` marker is skipped.
+ * A dir that cannot be migrated is left exactly as it was and named in `failures` with a closed reason (D38):
+ * bytes-not-conserved | keyed-elsewhere (under the table's keys, 3.4:21, some line belongs to another session;
+ * moving it would touch that session's files, so nothing moves) | error:<code>.
  */
 export async function resplitShards(outDir) {
   let entries = [];
-  try { entries = fs.readdirSync(outDir, { withFileTypes: true }); } catch { return { done: 0, skipped: 0, failed: 0 }; }
+  const failures = [];
+  try { entries = fs.readdirSync(outDir, { withFileTypes: true }); } catch { return { done: 0, skipped: 0, failed: 0, failures }; }
   let done = 0, skipped = 0, failed = 0;
   for (const e of entries) {
-    if (!e.isDirectory() || e.name === CONTROL_DIR) continue;
+    if (!e.isDirectory() || SESSIONLESS_DIRS.has(e.name)) continue;
     const sdir = path.join(outDir, e.name);
     const calls = path.join(sdir, 'calls.ndjson');
     if (!fs.existsSync(calls)) { skipped++; continue; }
@@ -223,6 +259,17 @@ export async function resplitShards(outDir) {
       const after = ndjsonBytes(tmp);
       if (after !== before) { // byte-conservation guard: refuse to swap if a single byte went missing
         failed++;
+        failures.push({ dir: e.name, reason: 'bytes-not-conserved' });
+        fs.rmSync(tmp, { recursive: true, force: true });
+        continue;
+      }
+      // Only this dir's own streams and the session-less buckets are moved below; a line the table now keys to
+      // ANOTHER session would be deleted with tmp. Refuse before touching anything (invariant 2).
+      const elsewhere = fs.readdirSync(tmp, { withFileTypes: true })
+        .filter((x) => x.isDirectory() && x.name !== safeName(e.name) && x.name !== e.name && !SESSIONLESS_DIRS.has(x.name)).map((x) => x.name);
+      if (elsewhere.length) {
+        failed++;
+        failures.push({ dir: e.name, reason: 'keyed-elsewhere', sessions: elsewhere.sort() });
         fs.rmSync(tmp, { recursive: true, force: true });
         continue;
       }
@@ -237,15 +284,16 @@ export async function resplitShards(outDir) {
       // direct resplit leaves the archive layer consistent without a separate rebuildMeta pass.
       const pmeta = path.join(produced, 'meta.json');
       if (fs.existsSync(pmeta)) fs.renameSync(pmeta, path.join(sdir, 'meta.json'));
-      // Fold any stray control lines up into the shared control/ bucket (append, byte-exact).
-      const tmpControl = path.join(tmp, CONTROL_DIR);
-      if (fs.existsSync(tmpControl)) {
-        const dstControl = path.join(outDir, CONTROL_DIR);
-        fs.mkdirSync(dstControl, { recursive: true, mode: 0o700 });
-        for (const f of fs.readdirSync(tmpControl)) {
+      // Fold stray session-less lines up into the shared control/ and _unkeyed/ buckets (append, byte-exact).
+      for (const bucket of SESSIONLESS_DIRS) {
+        const tmpBucket = path.join(tmp, bucket);
+        if (!fs.existsSync(tmpBucket)) continue;
+        const dstBucket = path.join(outDir, bucket);
+        fs.mkdirSync(dstBucket, { recursive: true, mode: 0o700 });
+        for (const f of fs.readdirSync(tmpBucket)) {
           if (!f.endsWith('.ndjson')) continue;
-          const buf = fs.readFileSync(path.join(tmpControl, f));
-          const fd = fs.openSync(path.join(dstControl, f), 'a', 0o600);
+          const buf = fs.readFileSync(path.join(tmpBucket, f));
+          const fd = fs.openSync(path.join(dstBucket, f), 'a', 0o600);
           try { fs.writeSync(fd, buf); } finally { fs.closeSync(fd); }
         }
       }
@@ -253,14 +301,15 @@ export async function resplitShards(outDir) {
       fs.rmSync(tmp, { recursive: true, force: true });
       fs.rmSync(calls + '.premigrate', { force: true }); // new set is fully in place; drop the backup
       done++;
-    } catch {
+    } catch (err) {
       // Roll forward-safe: if the original was backed up but the swap failed, restore it.
       fs.rmSync(tmp, { recursive: true, force: true });
       if (!fs.existsSync(calls) && fs.existsSync(calls + '.premigrate')) fs.renameSync(calls + '.premigrate', calls);
       failed++;
+      failures.push({ dir: e.name, reason: `error:${(err && err.code) || 'unknown'}` });
     }
   }
-  return { done, skipped, failed };
+  return { done, skipped, failed, failures };
 }
 
 /**
@@ -341,7 +390,7 @@ export async function shardOnce({ file, outDir, ...opts } = {}) {
  * @param {number}  chunkSize   read buffer
  * @param {number}  flushBytes  per-session write buffer
  * @param {Function} onProgress called with {records, bytes} periodically
- * @returns {{records, bytes, offset, sessions, unassigned, partial}}
+ * @returns {{records, bytes, offset, sessions, unassigned, unkeyed, partial}}
  */
 export async function shardStream({
   file, outDir, fromOffset = 0, chunkSize = 1024 * 1024,
@@ -355,7 +404,7 @@ export async function shardStream({
   // copy; the shard bytes stay verbatim, the meta is a derived projection.
   const metas = new Map();
   const out = {
-    records: 0, bytes: 0, offset: start, sessions: counts, unassigned: 0, partial: false,
+    records: 0, bytes: 0, offset: start, sessions: counts, unassigned: 0, unkeyed: 0, partial: false,
   };
   if (start >= size) return out;
 
@@ -378,13 +427,15 @@ export async function shardStream({
       const lineWithNl = buf.subarray(from, nl + 1);
       from = nl + 1;
       if (lineWithNl.length > 1) {
-        const sid = sessionIdOfLine(lineWithNl.subarray(0, Math.min(lineWithNl.length, 8192)).toString('utf8'));
-        // Parse the record ONCE, for classification (classOf/controlClass need is_llm_call + endpoint)
-        // and the meta fold. The RAW bytes are still what gets written — this parse never touches the
-        // shard content, so invariant 2 holds. A partial/malformed line fails to parse (rec=null); its
-        // bytes are still kept, it just can't be classified beyond its session id.
+        // Parse the record ONCE, for its session key, classification (classOf/controlClass need is_llm_call +
+        // endpoint) and the meta fold. The RAW bytes are still what gets written — this parse never touches
+        // the shard content, so invariant 2 holds. A partial/malformed line fails to parse (rec=null); its
+        // bytes are still kept, keyed by the header scan, and it can't be classified beyond that.
         let rec = null;
         try { rec = JSON.parse(lineWithNl.subarray(0, lineWithNl.length - 1).toString('utf8')); } catch { /* keep bytes, skip derivation */ }
+        if (rec && typeof rec !== 'object') rec = null;
+        const sid = rec ? sessionKeyOf(rec, { headersOnly: true }).key
+          : sessionIdOfLine(lineWithNl.subarray(0, Math.min(lineWithNl.length, 8192)).toString('utf8'));
         let relPath, name;
         if (sid) {
           name = safeName(sid);
@@ -399,6 +450,11 @@ export async function shardStream({
             if (!meta) { meta = emptyMeta(sid); metas.set(name, meta); }
             foldRecord(meta, rec);
           }
+        } else if (rec && rec.is_llm_call === true) {
+          // Inference whose key is not a header (3.4:21): never control/ (gate G12)
+          out.unkeyed++;
+          name = UNKEYED_DIR;
+          relPath = UNKEYED_DIR + '/' + STREAM_FILE.call;
         } else {
           // Session-less control plane: bucket by endpoint (demo controlClass). No per-session meta —
           // control traffic never appears in the board's session list (4.2:51 "不进 3.2 会话表").

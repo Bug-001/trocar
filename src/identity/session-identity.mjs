@@ -1,37 +1,36 @@
 // src/identity/session-identity.mjs
-// CC (Anthropic / Claude Code) session identity + lineage — PURE functions, no I/O, no DuckDB.
-// Single authority for RFC 3.4 judgment; the 3.1 CC adapter IMPORTS these (does NOT inline them),
-// and 4.2 ETL calls them to fill the `sessions` lineage columns + `calls` (session_id/class/
-// control_kind/lane/compaction) columns.
+// Session identity + lineage — PURE functions, no I/O, no DuckDB. Single authority for RFC 3.4
+// judgment; the 3.1 adapters IMPORT these (do NOT inline them), and 4.2 ETL calls them to fill the
+// `sessions` lineage columns + `calls` (session_id/class/control_kind/lane/compaction) columns.
 //
-// D10 unified-envelope field names consumed here (4.1): record.req_headers (redacted, but
-// x-claude-code-session-id is preserved by SECRET_HEADERS-only redaction), record.req_body
-// ({system[], messages[], metadata, model}), record.endpoint, record.is_llm_call,
+// D37 ①: the session key, lane / parent / compaction HINTS and key aliases come from the ONE harness
+// table (src/dissect/harnesses.mjs) the board and the sharder also read; the CC heuristics below
+// (cc_is_subagent, security monitor, haiku aux, 认亲) run after it. Never pid or connection (3.4 关键区分).
+//
+// D10 unified-envelope field names consumed here (4.1): record.req_headers, record.req_body (PARSED:
+// {system[], messages[], metadata, model}), record.endpoint, record.is_llm_call, record.proc,
 // record.ts_request (fallback record.ts).
 //
 // Ported from the v0 prototype, following RFC 3.4 where they differ.
 //
-// DEFERRED / STUBBED (flagged, not implemented in Phase 1 CC-first):
+// DEFERRED / STUBBED (flagged, not implemented):
 //   • CC /rewind online behavior = 待数据决策 R (RFC 3.4 Edge cases) — pending a real /rewind
 //     capture; suspected to surface as a message_count drop, but NOT decided. Not handled here.
-//   • Codex explicit fork (forkedFromId / parentThreadId) — lives in the Codex adapter (Phase 4).
-//   • DeepSeek synthetic session-key (no native id) — lives in the DeepSeek adapter (Phase 4).
+//   • Codex explicit fork (forkedFromId) — no online fork signal verified yet (3.4, lab).
+//   • Hermes / Kimi synthesized session keys — src/dissect/synth-key.mjs (gate G11), applied by the ETL.
 //   CC itself has NO explicit online fork signal (RFC 3.4 "无显式"), so forkOf() is a null stub.
+import { sessionKeyOf, hintsOf } from '../dissect/harnesses.mjs'
 
 // --- Task 1: native_id + confidence, class (llm/control), sessionIdFor -----------------------
 
-// native_id: the x-claude-code-session-id header only. RFC 3.4 (line 13/21) grades the CC id as
-// `high` confidence and lists ONLY this header for CC — there is NO RFC-sanctioned medium CC tier.
-// The demo's metadata.user_id JSON fallback is DROPPED here (adversarial verify MINOR): in real CC
-// traffic metadata.user_id is an opaque account hash, not JSON carrying a session_id, so parsing it
-// would mint spurious ids and could mislabel a genuinely session-less control call as an llm session.
-// native_id is stored verbatim (the demo's safe()/slug-sanitize is intentionally NOT ported — that
-// was for filenames; here the id is a value column).
+// native_id: the harness's own session key (RFC 3.4 table, src/dissect/harnesses.mjs), with its
+// confidence (header = high, body key = medium). A record whose harness is not identified by proc keeps
+// the pre-D37 header keys (legacy captures). CC: the x-claude-code-session-id header only — body
+// metadata.user_id is NOT a source (gate G3: in real CC traffic it is an opaque account hash, so parsing
+// it would mint spurious ids). Never pid or connection (3.4 关键区分). Stored verbatim (a value column).
 export function nativeId(record) {
-  const h = record.req_headers || {}
-  const sid = h['x-claude-code-session-id'] || h['X-Claude-Code-Session-Id']
-  if (sid) return { native_id: String(sid), native_id_confidence: 'high' }
-  return { native_id: null, native_id_confidence: 'low' }
+  const k = sessionKeyOf(record)
+  return k.key ? { native_id: k.key, native_id_confidence: k.confidence || 'low' } : { native_id: null, native_id_confidence: 'low' }
 }
 
 // D9 class ∈ {llm, control}. RFC 3.4 line 30 defines the control plane as *session-less* AND
@@ -76,9 +75,17 @@ export function controlKindFor(record) {
 
 // --- Task 3: lane classification (main/subagent/probe; monitor/aux reserved) ----------------
 
+// The system prompt's text. The Anthropic wire allows `system` as a string or as an array of text blocks;
+// mapping over a string threw and aborted the whole ETL run.
+function systemText(record) {
+  const sys = record.req_body?.system
+  if (typeof sys === 'string') return sys
+  return Array.isArray(sys) ? sys.map((b) => b?.text || '').join('') : ''
+}
+
 // Subagent marker in the CC system prompt (ported from demo isSub; request.system → req_body.system).
 export function isSubagent(record) {
-  const sys = (record.req_body?.system || []).map((b) => b?.text || '').join('')
+  const sys = systemText(record)
   return /cc_is_subagent=true/.test(sys)
 }
 
@@ -86,22 +93,27 @@ export function isSubagent(record) {
 // guardrail — system prompt "You are a security monitor for autonomous AI coding agents…",
 // a distinct always-on lane, ~1 per 2 turns, non-streaming JSON, tools=0).
 export function isMonitor(record) {
-  const sys = (record.req_body?.system || []).map((b) => b?.text || '').join('')
+  const sys = systemText(record)
   return /you are a security monitor/i.test(sys)
 }
 
 // lane ∈ main|subagent|monitor|aux|probe (per-CALL, per B-lane the ETL reads call.lane not
-// session.lane). CC online signals (demo v6/v9/v10): probe = count_tokens endpoint; monitor =
-// security-monitor system marker; aux = a small background model (haiku) with a tiny message
-// array — the notify/titlegen/quota util calls ("classify lanes by MODEL, not tool-count" —
-// demo v10 lesson; aux sub-classes are render-time projections per D8, NOT schema enums);
-// subagent = cc_is_subagent marker. Precedence probe > monitor > aux > subagent > main
-// (a count_tokens under a subagent is still a probe; subagents run the main model, not haiku).
+// session.lane). Precedence probe > monitor > aux > subagent > main (3.4 涉及源文件). Within it a
+// harness HINT (src/dissect/harnesses.mjs: a header or body field the harness itself sets, high) decides
+// first at its own level — a Codex prewarm is a probe, a dsh `origin:"subagent"` / Codex
+// x-openai-subagent / CC x-claude-code-agent-id is a subagent — and the CC heuristics follow: probe =
+// count_tokens endpoint; monitor = security-monitor system marker; aux = a small background model
+// (haiku) with a tiny message array ("classify lanes by MODEL, not tool-count" — demo v10 lesson);
+// subagent = cc_is_subagent marker. (A count_tokens under a subagent is still a probe; subagents run
+// the main model, not haiku.)
 export function lane(record) {
   if (/\/messages\/count_tokens/.test(String(record.endpoint || ''))) return 'probe'
+  const hinted = hintsOf(record).lane
+  if (hinted === 'probe') return 'probe'
   if (isMonitor(record)) return 'monitor'
+  if (hinted === 'aux') return 'aux'
   if (/haiku/i.test(String(record.req_body?.model || '')) && messageCount(record) <= 2) return 'aux'
-  if (isSubagent(record)) return 'subagent'
+  if (hinted === 'subagent' || isSubagent(record)) return 'subagent'
   return 'main'
 }
 
@@ -114,7 +126,7 @@ export function entrypoint(record) {
   const ua = String(h['user-agent'] || '')
   if (/claude-desktop/i.test(ua)) return 'desktop'
   if (h['x-app']) return String(h['x-app'])
-  const sys = (record.req_body?.system || []).map((b) => b?.text || '').join('')
+  const sys = systemText(record)
   const m = sys.match(/cc_entrypoint=([^;]+)/)
   return m ? m[1] : '?'
 }
@@ -134,15 +146,18 @@ export function forkOf(record) {
 }
 
 // Per-record parseSession delegate (3.1 shape {native_id, parent, fork_of, forked_at, lane,
-// entrypoint, title, extra} + native_id_confidence forwarded by cc.mjs). `parent` needs the
-// cross-call 认亲 corpus, so it is resolved by 4.2 ETL (resolveParent), not here → parent:null.
+// entrypoint, title, extra} + native_id_confidence forwarded by cc.mjs). `parent` = the RAW parent id a
+// harness declares on this record (dsh body parentSession, OpenCode / Codex parent header; high), else
+// null; `aliases` = this record's other header keys (e.g. Codex thread-id). The ETL resolves `parent`
+// through every session's aliases (gate G4) and falls back to the CC 认亲 pass (resolveParent).
 export function parseSessionCC(record) {
   const { native_id, native_id_confidence } = nativeId(record)
   const f = forkOf(record)
   return {
     native_id,
     native_id_confidence,
-    parent: null,           // resolved in the ETL lineage pass (resolveParent), not per-record
+    parent: hintsOf(record).parent?.id ?? null, // harness-declared, raw; resolved through aliases by the ETL
+    aliases: sessionKeyOf(record).aliases,
     fork_of: f.fork_of_session_id, // CC has no online fork signal (deferred) → null
     forked_at: f.forked_at_seq,
     lane: lane(record),
@@ -230,13 +245,51 @@ export function resolveParent(subRecord, candidates) {
 // --- Task 6: compaction marking (drop-count authoritative; compaction ≠ fork) ---------------
 
 // Compaction = a *shrink* of the messages array between consecutive same-session calls (换血),
-// NOT a fork. Authority for the drop is 3.3's leading-prefix divergence (structural_divergence_seq):
-// the ETL MUST only call this after 3.3 confirms a prefix drop (not append/reorder). The rule here
-// is the count drop (drop-count authoritative), explicitly NOT the "message[0] changed" heuristic.
-// It fills calls.compaction / compaction_from / compaction_to and MUST NOT touch sessions.fork_of.
-export function markCompaction(prevMsgCount, curMsgCount) {
+// NOT a fork. This is the one drop rule of the verdict (compactionVerdict, step 3), shared by the ETL and the board
+// (3.4 「骤降」): only a SHARP drop counts — at least 6 messages fewer AND under 70% of what the lane
+// had. A small drop alone is not enough: on a real CC session the main lane goes 58 → 55 (no compaction) before the
+// real 55 → 4. One exception (3.4): a drop that brings Claude Code's
+// own "continued from a previous conversation" preamble in (`cur.preamble`, hasCompactionPreamble) counts whatever its
+// size. compactionVerdict passes `preamble` true only on the preamble's RISING edge — once a compaction has put it in
+// the history every later call of the lane carries it, and a carried preamble says nothing about a later small dip.
+// It fills calls.compaction / compaction_from / compaction_to and MUST NOT touch sessions.fork_of; it is explicitly NOT
+// the "message[0] changed" heuristic (3.3).
+export function markCompaction(prevMsgCount, curMsgCount, cur = {}) {
   const from = prevMsgCount | 0
   const to = curMsgCount | 0
-  if (from - to > 0) return { compaction: true, compaction_from: from, compaction_to: to }
+  const drop = to < from
+  const sharp = drop && to < from - 5 && to < from * 0.7
+  if (sharp || (drop && cur.preamble)) return { compaction: true, compaction_from: from, compaction_to: to }
   return { compaction: false, compaction_from: null, compaction_to: null }
+}
+
+// Claude Code's own summary preamble in the first messages of a compacted context ("This session is being continued
+// from a previous conversation …"). One test for the ETL (adapters/cc.mjs) and the board (view/analyze.mjs).
+export function hasCompactionPreamble(messages) {
+  const textOf = (m) => (typeof (m && m.content) === 'string' ? m.content
+    : Array.isArray(m && m.content) ? m.content.map((b) => (b && b.type === 'text' ? b.text : '')).join('\n') : '')
+  return Array.isArray(messages) && messages.slice(0, 4).some((m) => /continued from a previous conversation/i.test(textOf(m)))
+}
+
+// The compaction verdict of ONE call against its in-lane predecessor (3.4), one rule for the ETL and the board.
+// prev = { msgCount, marker, preamble } of the previous call in the same session lane, or null when there is none;
+// cur = { hint, marker, msgCount, preamble }. In order:
+//   1. a harness header / request-kind hint (high) — compaction even on a lane's first call;
+//   2. a harness text marker (medium) on its RISING edge only: the marker stays in the history afterwards, and a
+//      lane's first call has no edge (the capture may have started after the compaction, or a new synthesized
+//      session may still carry an old marker);
+//   3. only a sharp message-count drop (medium, markCompaction) — no other evidence, no verdict. CC's own preamble
+//      lets a smaller drop count, on its RISING edge only, like the marker: the preamble stays in the first messages of
+//      every later call, so a carried one is no evidence (a 30 → 27 dip long after a compaction is no compaction).
+// compaction_from is the predecessor's message count, NULL when the lane has none — never an invented 0
+// (invariant 4). `basis` names the evidence that fired, so a reader can say how sure it is.
+export function compactionVerdict(prev, cur) {
+  const NONE = { compaction: false, compaction_from: null, compaction_to: null, basis: null }
+  const from = prev ? prev.msgCount | 0 : null
+  const to = cur.msgCount | 0
+  if (cur.hint) return { compaction: true, compaction_from: from, compaction_to: to, basis: 'hint' }
+  if (cur.marker && prev && !prev.marker) return { compaction: true, compaction_from: from, compaction_to: to, basis: 'marker' }
+  if (!prev) return NONE
+  const m = markCompaction(prev.msgCount | 0, to, { preamble: !!cur.preamble && !prev.preamble })
+  return m.compaction ? { compaction: true, compaction_from: m.compaction_from, compaction_to: m.compaction_to, basis: 'msg-count-drop' } : NONE
 }

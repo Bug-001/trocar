@@ -6,6 +6,7 @@
 //   off     — revert steer (+ optional --remove-ca)
 //   verify  — assert the CA is in the user-level trust store (no machine trust)
 //   doctor  — onboard self-check: deps probe + 「测试」四问 (4.1:61 / 4.5:41,77)
+//   raw     — D35 sealed raw logs: seal (closed shards, or --legacy pre-D35 files) · verify · compare · export · journal
 import path from 'node:path'
 import { asightHome, captureOut, mitmOut, serveSource } from '../src/paths.mjs';
 import { parseArgs } from '../src/cli-args.mjs';
@@ -41,6 +42,7 @@ async function main() {
         // state, which is why it survived. src/paths.mjs exists to keep what capture WRITES and
         // what serve READS in agreement; this verb is the one it was written for.
         sourcePath: flag('--source', process.env.ASIGHT_SOURCE || serveSource()),
+        sessionsRoot: path.join(asightHome(), 'sessions'),   // where `asight raw seal` files by session (D35)
         control,
         captureTarget: flag('--capture-target', undefined),
         proxyUrl: flag('--proxy', undefined),
@@ -54,17 +56,25 @@ async function main() {
       const ctl = await import(r('src', 'capture', 'control.mjs'));
       const sub = positional() || 'status';
       const opts = { proxyUrl: flag('--proxy', undefined), captureTarget: flag('--capture-target', undefined) };
-      if (sub === 'on') { const out = ctl.monitoringOn({ ...opts, withAutostart: !rest.includes('--no-autostart') }); console.log('monitoring ON:', JSON.stringify(out.status, null, 2)); console.log('CA:', out.onboard.install.ok ? 'user-level trust OK' : 'FAILED', '· autostart:', out.autostart ? (out.autostart.ok ? out.autostart.plistPath : out.autostart.reason) : 'skipped'); }
+      if (sub === 'on') {
+        const { appendLegacyEvent } = await import(r('src', 'capture', 'events.mjs'));
+        const out = ctl.monitoringOn({ ...opts, withAutostart: !rest.includes('--no-autostart'), onEvent: (e) => appendLegacyEvent(e) });
+        console.log('monitoring ON:', JSON.stringify(out.status, null, 2));
+        console.log('CA:', out.onboard.install.ok ? 'user-level trust OK' : 'FAILED', '· autostart:', out.autostart ? (out.autostart.ok ? out.autostart.plistPath : `⚠ ${out.autostart.loadError || out.autostart.reason}`) : 'skipped');
+        if (!out.ok) process.exitCode = 1;
+      }
       else if (sub === 'off') { const out = ctl.monitoringOff({ ...opts, removeCa: rest.includes('--remove-ca') }); console.log('monitoring OFF:', JSON.stringify(out.status, null, 2)); }
       else { console.log(JSON.stringify(ctl.monitoringStatus(opts), null, 2)); }
       break;
     }
     case 'etl': {
-      const { etlFile } = await import(r('src', 'etl', 'cli.mjs'));
+      const { etlFile, reportSkips } = await import(r('src', 'etl', 'cli.mjs'));
       const file = positional();
-      if (!file) die('usage: asight etl <ndjson> [--db <path>] [--rebuild]');
+      if (!file) die('usage: asight etl <ndjson|sealed|dir> [--db <path>] [--rebuild]');
       const out = await etlFile(file, { dbPath: flag('--db', undefined), rebuild: rest.includes('--rebuild') });
       console.log(`ETL: ${out.records} records from ${out.file} → ${out.dbPath}`, JSON.stringify(out.stats));
+      reportSkips(out); // also the sealed files read only in part (journalled by etlFile)
+      if (out.sourceErrors.length) process.exitCode = 1;
       break;
     }
     case 'shard': {
@@ -80,15 +90,20 @@ async function main() {
         const t0 = Date.now();
         const res = await resplitShards(outDir);
         console.log(`shard: resplit ${res.done} sessions (${res.skipped} already split, ${res.failed} failed) in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+        for (const f of res.failures || []) console.log(`shard: resplit left ${f.dir} as it was: ${f.reason}${f.sessions ? ` (${f.sessions.join(', ')})` : ''}`);
         const mr = await rebuildMeta(outDir);
-        console.log(`shard: rebuilt meta for ${mr.sessions} sessions (${mr.records} records)`);
+        console.log(`shard: rebuilt meta for ${mr.sessions} sessions (${mr.records} records${mr.malformed ? `, ${mr.malformed} malformed line(s) not counted` : ''})`);
+        for (const e of mr.errors) console.error(`shard: meta.json of ${e.session} left as it was — ${e.file} could not be read in full: ${e.reason}`);
+        if (mr.errors.length) process.exitCode = 1;
         break;
       }
       if (rest.includes('--rebuild-meta')) {
         // Backfill/repair per-session meta.json (the archive layer) by streaming each existing shard.
         const t0 = Date.now();
         const res = await rebuildMeta(outDir);
-        console.log(`shard: rebuilt meta for ${res.sessions} sessions (${res.records} records) in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+        console.log(`shard: rebuilt meta for ${res.sessions} sessions (${res.records} records${res.malformed ? `, ${res.malformed} malformed line(s) not counted` : ''}) in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+        for (const e of res.errors) console.error(`shard: meta.json of ${e.session} left as it was — ${e.file} could not be read in full: ${e.reason}`);
+        if (res.errors.length) process.exitCode = 1;
         break;
       }
       const watch = rest.includes('--watch');
@@ -106,21 +121,28 @@ async function main() {
             `shard: +${res.records} records (${(res.bytes / 1e6).toFixed(1)} MB) from offset `
             + `${res.resumedFrom} → ${res.offset} in ${secs}s`
             + (res.unassigned ? `, ${res.unassigned} without a session header` : '')
+            + (res.unkeyed ? `, ${res.unkeyed} inference calls keyed outside the headers (→ _unkeyed/)` : '')
             + (res.partial ? ', trailing partial record left for next run' : ''),
           );
         }
         return res;
       };
 
-      await run();
-      if (watch) {
-        console.log(`shard: watching ${file} → ${outDir} every ${every / 1000}s`);
-        for (;;) {
-          await new Promise((res2) => setTimeout(res2, every));
-          try { await run(); } catch (e) { console.error(`shard: ${e.message}`); }
+      if (!watch) { await run(); break; }
+      // D38 L-13: a round that fails is a line in ~/.asight/logs/mitm-events.ndjson (the board's 采集健康 shows it),
+      // once per distinct error — the same one again is not re-written until a round succeeds
+      const { appendLegacyEvent, failureOf } = await import(r('src', 'capture', 'events.mjs'));
+      console.log(`shard: watching ${file} → ${outDir} every ${every / 1000}s`);
+      let lastErr = null;
+      for (;;) {
+        try { await run(); lastErr = null; } catch (e) {
+          const key = `${e && e.code}|${e && e.message}`;
+          if (key !== lastErr) appendLegacyEvent(failureOf('shard', e, 'shard-failed', { file, reason: `asight shard --watch failed (${(e && e.message) || e}): new sessions in ${file} do not reach ${outDir} until it succeeds` }));
+          else console.error(`shard: ${(e && e.message) || e}`);
+          lastErr = key;
         }
+        await new Promise((res2) => setTimeout(res2, every));
       }
-      break;
     }
     case 'capture': {
       // base_url tee (RFC 4.1 采集源#1): transparent reverse-proxy → append D10 envelopes to a
@@ -134,12 +156,17 @@ async function main() {
       // SSE the reconstructor doesn't yet parse (it's Anthropic-shaped) — e.g. OpenAI Responses (Codex):
       // without it the reconstructed resp is empty and the events are LOST (invariant 2 · source truth).
       const keepRawSse = rest.includes('--raw-sse') || process.env.ASIGHT_RAW_SSE === '1';
+      // D38 (RFC 4.1 过渡期): a write that fails never crashes the proxy; failures and start / stop are lines in
+      // ~/.asight/logs/mitm-events.ndjson (src/capture/legacy-run.mjs, events.mjs)
+      const { createCaptureSink, legacyLifecycle } = await import(r('src', 'capture', 'legacy-run.mjs'));
+      const { appendLegacyEvent, failureOf } = await import(r('src', 'capture', 'events.mjs'));
       fs.mkdirSync(path.dirname(out), { recursive: true });
-      const sink = fs.createWriteStream(out, { flags: 'a' });
+      const sink = createCaptureSink(out);
+      const life = legacyLifecycle({ source: 'proxy', port, out });
       let n = 0;
-      const server = createReverseProxy({ target, upstreamProxy, keepRawSse, onEnvelope: (env) => { sink.write(JSON.stringify(env) + '\n'); if (++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
-      server.on('error', (e) => { console.error('capture error:', e.message); if (e.code === 'EADDRINUSE') process.exit(1); });
-      server.listen(port, '127.0.0.1', () => console.log(`asight capture (reverse-proxy tee) → ${target}\n  listening http://127.0.0.1:${port}  → ${out}\n  point the harness at it: HTTPS_PROXY / base_url → http://127.0.0.1:${port} (or run: asight on)`));
+      const server = createReverseProxy({ target, upstreamProxy, keepRawSse, onEvent: (e) => appendLegacyEvent(e), onEnvelope: (env) => { if (sink.write(env) && ++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
+      server.on('error', (e) => { appendLegacyEvent(failureOf('proxy', e, 'start-failed')); if (e.code === 'EADDRINUSE') process.exit(1); });
+      server.listen(port, '127.0.0.1', () => { life.started(server.address().port); console.log(`asight capture (reverse-proxy tee) → ${target}\n  listening http://127.0.0.1:${port}  → ${out}\n  point the harness at it: HTTPS_PROXY / base_url → http://127.0.0.1:${port} (or run: asight on)`); });
       break;
     }
     case 'mitm': {
@@ -163,12 +190,24 @@ async function main() {
       const ca = generateCa({ hosts: [targetHost], caDir: caDir() }); // leaf must cover the host we terminate
       const leaf = { key: fs.readFileSync(ca.leafKey), cert: fs.readFileSync(ca.leafCrt) };
       const keepRawSse = rest.includes('--raw-sse') || process.env.ASIGHT_RAW_SSE === '1';
+      // D38 (RFC 4.1 过渡期): refused leaves, cut upstreams, failed writes, start / stop → mitm-events.ndjson
+      const { createCaptureSink, legacyLifecycle } = await import(r('src', 'capture', 'legacy-run.mjs'));
+      const { appendLegacyEvent, failureOf } = await import(r('src', 'capture', 'events.mjs'));
       fs.mkdirSync(path.dirname(out), { recursive: true });
-      const sink = fs.createWriteStream(out, { flags: 'a' });
+      const sink = createCaptureSink(out);
+      const life = legacyLifecycle({ source: 'mitm', port, out });
       let n = 0;
-      const server = createMitmProxy({ targetHost, leaf, upstreamProxy, keepRawSse, onEnvelope: (env) => { sink.write(JSON.stringify(env) + '\n'); if (++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
-      server.on('error', (e) => { console.error('mitm error:', e.message); if (e.code === 'EADDRINUSE') process.exit(1); });
-      server.listen(port, '127.0.0.1', () => console.log(`asight mitm (CONNECT · TLS-terminate ${targetHost}, blind-tunnel rest) → ${out}\n  listening http://127.0.0.1:${port}  · upstream ${upstreamProxy}\n  steer CC-Desktop here via a Clash rule (4.1) — run: asight desktop on --port ${port}`));
+      const server = createMitmProxy({ targetHost, leaf, upstreamProxy, keepRawSse, onEvent: (e) => appendLegacyEvent(e), log: (m) => console.error(m), onEnvelope: (env) => { if (sink.write(env) && ++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
+      server.on('error', (e) => { appendLegacyEvent(failureOf('mitm', e, 'start-failed')); if (e.code === 'EADDRINUSE') process.exit(1); });
+      // D38 L-12: the Desktop steer this MITM serves is checked at start and every 60 s; losing it is a line
+      if (process.platform === 'darwin') {
+        const { getDesktopSteer } = await import(r('src', 'capture', 'desktop-steer.mjs'));
+        const { createSteerWatch } = await import(r('src', 'capture', 'steer-watch.mjs'));
+        const steer = getDesktopSteer();
+        const check = createSteerWatch({ status: () => steer.status() });
+        check(); setInterval(check, 60000).unref();
+      }
+      server.listen(port, '127.0.0.1', () => { life.started(server.address().port); console.log(`asight mitm (CONNECT · TLS-terminate ${targetHost}, blind-tunnel rest) → ${out}\n  listening http://127.0.0.1:${port}  · upstream ${upstreamProxy}\n  steer CC-Desktop here via a Clash rule (4.1) — run: asight desktop on --port ${port}`); });
       break;
     }
     case 'desktop': {
@@ -202,6 +241,16 @@ async function main() {
         console.log('  mihomo reload:', out.reload.status === 204 || out.reload.status === 200 ? `OK (${out.status.mihomoSock || 'socket'})` : `status ${out.reload.status}${out.reload.error ? ' ' + out.reload.error : ''}`);
         if (agents.reserved) console.log('  capture agents:', agents.reason);
         else console.log(`  capture agents: mitm(${MITM_LABEL}) + CA-trust primer(${ENV_LABEL}) installed → ${agents.mitm.plistPath}, ${agents.env.plistPath}`);
+        // D38 L-7: an agent that did not load is said and recorded — the MITM is not running, whatever the plist says
+        if (!agents.reserved && !agents.ok) {
+          const { appendLegacyEvent } = await import(r('src', 'capture', 'events.mjs'));
+          for (const [label, a] of [[MITM_LABEL, agents.mitm], [ENV_LABEL, agents.env]]) {
+            if (!a.loadError) continue;
+            console.log(`  ⚠ ${label} did NOT load: ${a.loadError}`);
+            appendLegacyEvent({ event: 'failure', where: 'autostart', code: 'autostart-load-failed', file: a.plistPath, reason: `${label}: ${a.loadError}` });
+          }
+          process.exitCode = 1;
+        }
         // the immediate step failed → say why and how to apply it by hand (D29), never just a status code
         if (!out.ok) console.log('  ⚠ route NOT live now:', out.reason);
         else console.log('  route live in mihomo:', out.status.live === true ? 'yes ✓' : out.status.live === false ? 'NO' : 'unknown');
@@ -222,6 +271,16 @@ async function main() {
       }
       break;
     }
+    case 'collector': { // per-user transparent collector (RFC 4.6, D36): install / start / on / off / status / uninstall
+      const { runCollector } = await import(r('src', 'collector', 'cli.mjs'));
+      process.exitCode = await runCollector(rest);
+      break;
+    }
+    case 'setup-helper': { // machine-wide, once, with sudo: the capability helper (RFC 4.6 §特权助手, D36)
+      const { runSetupHelper } = await import(r('src', 'collector', 'cli.mjs'));
+      process.exitCode = await runSetupHelper(rest);
+      break;
+    }
     case 'uninstall': {
       // one-step revert (4.5 §C): drop CA from the user trust store + clear the CC-CLI steer + tear
       // down the Desktop Clash steer AND the two capture agents (durable mitm + NODE_EXTRA_CA_CERTS
@@ -230,12 +289,14 @@ async function main() {
       const ob = await import(r('src', 'capture', 'onboard.mjs'));
       const { removeCaptureAgents } = await import(r('src', 'capture', 'capture-agents.mjs'));
       ob.atraceOff({ removeCa: true });
-      let steer = null;
-      try { const { getDesktopSteer } = await import(r('src', 'capture', 'desktop-steer.mjs')); steer = await getDesktopSteer().off(); } catch { /* non-mac / no verge */ }
+      // D38 L-11: a steer that could not be reverted is printed and recorded, never "n/a" (steer-watch.mjs)
+      const { getDesktopSteer } = await import(r('src', 'capture', 'desktop-steer.mjs'));
+      const { uninstallSteer } = await import(r('src', 'capture', 'steer-watch.mjs'));
+      const steerLine = await uninstallSteer({ getSteer: getDesktopSteer });
       const agents = removeCaptureAgents();
       console.log('asight uninstalled:');
       console.log('  · CA removed from the user-level trust store + CC-CLI settings.json steer cleared');
-      console.log('  · Desktop Clash steer:', steer && !steer.reserved ? (steer.ok ? 'removed' : `⚠ NOT fully removed — ${steer.reason}`) : 'n/a');
+      console.log('  · Desktop Clash steer:', steerLine);
       console.log('  · capture agents:', agents.reserved ? 'n/a' : 'removed (com.asight.mitm + com.asight.env)');
       console.log('  · data/db left intact. NOTE: NODE_EXTRA_CA_CERTS in the live login session persists until logout (run: launchctl unsetenv NODE_EXTRA_CA_CERTS).');
       break;
@@ -246,7 +307,8 @@ async function main() {
       console.log('CA:', out.ca.caCrt, out.ca.existed ? '(already existed)' : '(generated)');
       console.log('trust install:', out.install.ok ? 'OK — user-level, NO machine-wide trust' : 'FAILED', JSON.stringify(out.install.result));
       console.log('CC-CLI steer: HTTPS_PROXY →', out.steer.HTTPS_PROXY, '(run a CC-CLI session to capture in byte-exact D10)');
-      console.log('verify:', ob.verifyUserTrustOnly() ? 'CA present in user trust store ✓' : 'not found ✗');
+      let v; try { v = ob.verifyUserTrustOnly() ? 'CA present in user trust store ✓' : 'not found ✗'; } catch (e) { v = `? ${e.message}`; } // not checkable is said
+      console.log('verify:', v);
       break;
     }
     case 'off': {
@@ -257,9 +319,139 @@ async function main() {
     }
     case 'verify': {
       const ob = await import(r('src', 'capture', 'onboard.mjs'));
-      console.log(ob.verifyUserTrustOnly()
+      let v; try { v = ob.verifyUserTrustOnly(); } catch (e) { console.log(`CA trust ? ${e.message}`); process.exitCode = 1; break; } // never "not installed" for "could not check"
+      console.log(v
         ? 'CA present in user-level trust store, no machine-wide trust ✓'
         : 'CA not installed ✗ (run: asight on)');
+      break;
+    }
+    case 'raw': {
+      // D35 (RFC 4.2 §原始层封存). Every outcome that is not plain success is also written to the raw
+      // journal (~/.asight/raw/journal.jsonl) — `asight raw journal` shows it.
+      const sub = positional(0), target = positional(1);
+      const mod = (m) => import(r('src', 'raw', m));
+      const mb = (n) => (n / 1048576).toFixed(1) + ' MB';
+      const usage = 'usage: asight raw seal <closed-shard> [--sessions <dir>]\n'
+        + '       asight raw seal --legacy <file|dir> [--dry-run] [--delete-original] [--quiet <seconds>]\n'
+        + '       asight raw verify <sealed|dir> [--against <original>]\n'
+        + '       asight raw compare <dir> [--list]\n'
+        + '       asight raw export <session-id|file.sealed> [--sessions <dir>] [--out <dir|file>]\n'
+        + '       asight raw journal [--tail <n>]';
+      if (sub === 'seal') {
+        if (!target) die(usage);
+        try {
+          if (rest.includes('--legacy')) {
+            const { sealLegacy, failureState } = await mod('legacy.mjs');
+            const deleteOriginal = rest.includes('--delete-original');
+            const q = flag('--quiet', undefined);
+            const dryRun = rest.includes('--dry-run');
+            const res = await sealLegacy(path.resolve(target), { deleteOriginal, dryRun, quietMs: q === undefined ? undefined : Number(q) * 1000,
+              onFile: (f) => console.log(`  ${f}`) });
+            // what is not sealed is said, never passed over (review 3 F5): each odd file with its reason,
+            // the known markers as a count
+            const pre = dryRun ? 'would skip' : 'skipped ';
+            for (const x of res.skipped) console.log(`${pre} ${x.file}: ${x.reason}`);
+            const kinds = Object.entries(res.known).sort(([a], [b]) => (a < b ? -1 : 1));
+            if (kinds.length) console.log(`not a record stream (left as they are): ${kinds.map(([k, n]) => `${n} ${k}`).join(', ')}`);
+            if (dryRun) {
+              // nothing written: list what a real run would do, and why anything would be refused
+              // which case each file is (review 3 F6): seal and keep, or check against its copy and delete
+              for (const x of res.plan) console.log(x.action === 'seal'
+                ? `would seal (keep original)  ${x.file}  ${mb(fs.statSync(x.file).size)}`
+                : `would check byte for byte against ${x.copies.map((c) => path.basename(c)).join(', ')}, then delete original  ${x.file}  ${mb(fs.statSync(x.file).size)}`);
+              for (const x of res.refused) console.error(`would refuse ${x.file}: ${x.reason}`);
+              for (const x of [...res.locks, ...res.claims]) console.log(`would remove ${x.file}: ${x.reason}`);
+              console.log(`dry run: ${res.plan.length} file(s) ready${deleteOriginal ? ' to delete' : ''}, ${res.refused.length} refused, ${res.skipped.length} skipped — nothing was written`);
+              if (res.refused.length) process.exitCode = 1;
+              break;
+            }
+            const raw = res.sealed.reduce((a, x) => a + x.bytes, 0), sealed = res.sealed.reduce((a, x) => a + x.sealedBytes, 0);
+            console.log(`sealed ${res.sealed.length} file(s): ${mb(raw)} → ${mb(sealed)}${raw ? ` (${(sealed / raw * 100).toFixed(2)} %)` : ''}`);
+            if (res.deletedOnly.length) console.log(`deleted ${res.deletedOnly.length} original(s) after a byte-for-byte check against their sealed copy`);
+            for (const x of [...res.locks, ...res.claims]) console.log(`${x.outcome === 'removed' ? 'removed ' : 'FAILED  '} ${x.file}: ${x.reason}`);
+            for (const x of res.refused) console.error(`refused  ${x.file}: ${x.reason}`);
+            for (const x of res.failed) console.error(`FAILED   ${x.file}: ${x.reason} (${failureState(x)})`);
+            if (!deleteOriginal && res.sealed.length) console.log('originals KEPT — both copies now exist and readers use the originals. Check with `asight raw verify '
+              + target + '`, then run this again with --delete-original to delete each original after a byte-for-byte check.');
+            if (res.refused.length || res.failed.length || [...res.locks, ...res.claims].some((x) => x.outcome === 'failed')) process.exitCode = 1;
+          } else {
+            const { sealShard } = await mod('seal.mjs');
+            const res = await sealShard(path.resolve(target), { sessionsRoot: path.resolve(flag('--sessions', path.join(asightHome(), 'sessions'))) });
+            console.log(`sealed ${res.records} records: ${mb(res.bytes)} → ${mb(res.sealedBytes)} in ${res.outputs.length} file(s); original deleted after verification`);
+            if (res.unsafeKeys) console.log(`  ${res.unsafeKeys} line(s) carried a session key that is not a safe directory name — filed in the per-shard file`);
+            for (const o of res.outputs) console.log(`  ${o.path}${o.session ? '' : '  (no session key)'}`);
+          }
+        } catch (e) { console.error(e.message); process.exitCode = 1; }
+        break;
+      }
+      if (sub === 'verify') {
+        if (!target) die(usage);
+        const { runVerify } = await mod('verify.mjs');
+        const against = flag('--against', null);
+        let results;
+        try { results = runVerify({ target: path.resolve(target), against: against && path.resolve(against) }); } catch (e) { console.error(`verify failed: ${e.message}`); process.exitCode = 1; break; }
+        // a copy of only the first bytes of a file that grew says so ("prefix"), never a plain ok
+        for (const x of results) {
+          if (x.mode === 'unreadable') { console.log(`FAILED (unreadable) ${x.original} — ${x.reason}`); continue; }
+          if (x.mode === 'empty') { console.log(`empty  ${x.sealed[0]} — ${x.note}`); continue; }
+          console.log(`${x.ok ? (x.covers === 'prefix' ? 'ok (prefix)' : 'ok    ') : 'FAILED'} ${x.mode === 'self' ? '(by itself) ' : ''}${x.sealed.join(', ')}${x.original ? ' vs ' + x.original : ''}${x.ok ? ` · ${x.records} records` : ' — ' + x.reason}`);
+          if (x.note) console.log(`       note: ${x.note}`);
+        }
+        if (!results.length) console.error('no sealed files found');
+        if (!results.length || results.some((x) => !x.ok)) process.exitCode = 1;
+        break;
+      }
+      if (sub === 'compare') {
+        // Before deleting originals (review 3 F1): per session and control class, the readers' output
+        // over the originals vs over the sealed copies alone — in-process, through the readers' own
+        // functions. Exit 1 on any difference, or when nothing was compared.
+        if (!target) die(usage);
+        const { runCompare } = await import(r('src', 'query', 'raw-compare.mjs'));
+        const t0 = Date.now();
+        let res;
+        try { res = await runCompare({ root: path.resolve(target), onGroup: (g) => {
+          if (g.status === 'same') console.log(`same        ${g.group} · ${g.records} records, ${g.resolver.checked} ids resolved alike${g.uncovered.length ? ` · not covered (no sealed copy, would not be deleted): ${g.uncovered.map((f) => path.basename(f)).join(', ')}` : ''}`);
+          else if (g.status === 'diff') console.log(`DIFF        ${g.group} · ${g.diff.at != null ? `record ${g.diff.at}: ${g.diff.what} — now ${g.diff.before}, after deletion ${g.diff.after}` : g.diff.what}`);
+          else if (g.status === 'not-covered') console.log(`not covered ${g.group} · no original here has a sealed copy: ${g.uncovered.map((f) => path.basename(f)).join(', ')} (not compared, would not be deleted)`);
+          if (g.notCompared) for (const f of g.notCompared) console.log(`  NOT COMPARED, yet --delete-original would delete it: ${f}`);
+          for (const n of g.notes) console.log(`  note: ${n}`);
+        } }); } catch (e) { console.error(`compare failed: ${e.message} — nothing compared`); process.exitCode = 1; break; }
+        const n = (s) => res.groups.filter((g) => g.status === s).length;
+        // --list: one line per original, for the cross-check against `seal --legacy --delete-original --dry-run`
+        if (rest.includes('--list')) for (const g of res.groups) {
+          if (g.status === 'same' || g.status === 'diff') for (const f of g.deletable) console.log(`compared-original ${f}`);
+          for (const f of g.uncovered) console.log(`not-covered ${f}`);
+          for (const f of g.notCompared || []) console.log(`not-compared ${f}`);
+        }
+        // counted per original, not per group: a group can mix covered and uncovered originals
+        const del = res.groups.reduce((a, g) => a + g.deletable.length, 0), lost = res.groups.reduce((a, g) => a + (g.notCompared || []).length, 0);
+        const unc = res.groups.reduce((a, g) => a + g.uncovered.length, 0);
+        console.log(`compared ${res.compared} records in ${res.groups.filter((g) => g.kind !== 'not-compared' && (g.status === 'same' || g.status === 'diff')).length} groups (${res.groups.filter((g) => g.kind === 'session' && g.status !== 'not-covered' && g.status !== 'sealed-only').length} sessions): ${n('diff')} differ, ${unc} original(s) not covered, ${n('sealed-only')} sealed only · ${del + lost} original(s) --delete-original would delete, ${lost ? `${lost} of them NOT compared` : 'all of them compared'} · ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+        if (!res.compared) console.error('nothing compared: no original here has a sealed copy — seal first (`asight raw seal --legacy <dir>`)');
+        if (!res.ok) process.exitCode = 1;
+        break;
+      }
+      if (sub === 'export') {
+        if (!target) die(usage);
+        const { runExport } = await mod('export.mjs');
+        const out = flag('--out', undefined);
+        try {
+          const res = runExport({ target, sessionsRoot: path.resolve(flag('--sessions', path.join(asightHome(), 'sessions'))), out: out && path.resolve(out) });
+          console.log(`exported ${res.records} records (${mb(res.bytes)}) → ${res.out}${res.outputs.length > 1 || res.out !== res.outputs[0].file ? `/ (${res.outputs.length} file(s), one per segment, 0600)` : ' (0600)'}`);
+          for (const o of res.outputs) if (o.file !== res.out) console.log(`  ${o.file} · ${o.records} records`);
+        } catch (e) { console.error(e.message); process.exitCode = 1; }
+        break;
+      }
+      if (sub === 'journal') {
+        const { readJournal, defaultJournalPath } = await mod('journal.mjs');
+        let all;
+        try { all = readJournal(); } catch (e) { console.error(`cannot read the raw journal ${defaultJournalPath()}: ${e.message}`); process.exitCode = 1; break; }
+        const n = Number(flag('--tail', 50));
+        console.log(`${defaultJournalPath()} · ${all.length} entries`);
+        for (const e of all.slice(-n)) console.log(JSON.stringify(e));
+        break;
+      }
+      die(usage);
       break;
     }
     case 'doctor': case 'test': {
@@ -279,27 +471,40 @@ async function main() {
       let srcMeta = { exists: false, bytes: 0 }, records = [];
       const readErrors = [];
       let files = [];
+      // ④b covers every file that holds captured bytes: the sources, sealed copies superseded by an
+      // original that still exists, and the default export dir (D35 · 4.1 §凭据处置).
+      const extraPerm = [];
       for (const root of sources) {
         try {
-          const part = (await import(r('src', 'server.mjs'))).sourceFiles(root);
+          const part = (await import(r('src', 'server.mjs'))).sourceFiles(root, { sessionsRoot: path.join(asightHome(), 'sessions') });
           files.push(...part.files);
+          extraPerm.push(...part.superseded.map((x) => x.sealed));
         } catch (e) { readErrors.push(`${root}: ${e.message}`); }
       }
+      extraPerm.push(...(await import(r('src', 'raw', 'export.mjs'))).exportFiles());
+      // every sealed file `asight raw seal` filed by session, whichever source it continues
+      extraPerm.push(...(await import(r('src', 'raw', 'discover.mjs'))).sealedUnder(path.join(asightHome(), 'sessions')).filter((f) => !files.includes(f)));
       if (files.length) {
         let bytes = 0;
         for (const f of files) { try { bytes += fs.statSync(f).size; } catch {} }
         srcMeta = { exists: true, bytes, mtimeMs: Date.now() };
         for (const f of files) {
           if (records.length >= LIMIT) break;
-          try { for (const rec of await readRecords(f, { limit: LIMIT - records.length })) records.push(rec); }
-          catch (e) { readErrors.push(`${f}: ${e.message}`); }
+          try {
+            const got = await readRecords(f, { limit: LIMIT - records.length });
+            for (const rec of got) records.push(rec);
+            // a sealed file read only in part is a read error, and leaves a journal entry
+            const { sealedReadProblem, appendJournal } = await import(r('src', 'raw', 'journal.mjs'));
+            const p = sealedReadProblem(got.scan);
+            if (p) { readErrors.push(`${f}: ${p.unreadableRecords ?? 'all'} record(s) unreadable — ${p.reason}`); appendJournal({ op: 'read', reader: 'doctor', outcome: 'failed', ...p }); }
+          } catch (e) { readErrors.push(`${f}: ${e.message}`); }
         }
       }
       // A read failure MUST be visible: a silently-swallowed error is what let ③ pass vacuously.
       for (const e of readErrors) console.error('read error:', e);
       const source = sources.join(', ') || '(none)';
       const deps = st.checkDeps({ has });
-      const res = st.runSelfTest({ records, srcMeta, deps, files, verify: () => ob.verifyUserTrustOnly() });
+      const res = st.runSelfTest({ records, srcMeta, deps, files: [...files, ...extraPerm], verify: () => ob.verifyUserTrustOnly() });
       const mark = (b, warn) => (b ? '✓' : warn ? '⚠' : '✗');
       console.log('asight doctor — onboard 自检(依赖探测 + 「测试」四问)\n');
       console.log('deps:');
@@ -311,6 +516,18 @@ async function main() {
       console.log(`  ${mark(res.q3.ok)} ③ 凭据没漏     — ${res.q3.note}`);
       console.log(`  ${mark(res.q4.ok, true)} ④ 没弱化全机 TLS — ${res.q4.note}`);
       console.log(`  ${mark(res.q4b.ok)} ④b 采集文件仅属主可读 — ${res.q4b.note}`);
+      // The process collector (4.6 §确认信任: status / doctor MUST report every running-but-untrusted agent with its reason; §合并包:
+      // install and doctor MUST report every CA block not carried into a bundle, its type and its file): the same text as
+      // `asight collector status` (the live daemon when it answers, else what is on disk), then the notes of the last install.
+      // It only reads; it never changes the exit code (review B-7).
+      {
+        const { runCollector, formatInstallNotes } = await import(r('src', 'collector', 'cli.mjs'));
+        const { captureHealth } = await import(r('src', 'health', 'read.mjs'));
+        const indent = (s) => String(s).split('\n').map((l) => `  ${l}`).join('\n');
+        console.log('\n按进程采集器(collector, 4.6):');
+        try { await runCollector(['status'], { out: (s) => console.log(indent(s)), err: (s) => console.log(indent(s)) }); } catch (e) { console.log(indent(`collector status could not be read: ${e.message}`)); }
+        try { for (const l of formatInstallNotes(captureHealth({ home: asightHome() }))) console.log(indent(l)); } catch (e) { console.log(indent(`the last install's notes could not be read: ${e.message}`)); }
+      }
       if (res.hardFail) { console.error('\n✗ credential leak detected — the redact firewall MUST be fixed before capturing further.'); process.exit(1); }
       console.log('\n✓ 采集文件仅属主可读;凭据逐字存储 = 设计如此。(①②③④ 供你核对 — 见上方说明)');
       break;
@@ -320,7 +537,7 @@ async function main() {
 
 usage:
   asight serve [--port 9800] [--db <path>] [--source <ndjson|dir>]
-  asight etl <ndjson> [--db <path>] [--rebuild]
+  asight etl <ndjson|sealed|dir> [--db <path>] [--rebuild]
   asight capture [--port 8899] [--target https://api.anthropic.com] [--out <ndjson>] [--upstream <proxy>] [--raw-sse]
   asight mitm    [--port 9899] [--host api.anthropic.com] [--out <ndjson>] [--upstream <proxy>]   CC-Desktop MITM source (D10 tee)
   asight desktop {on|off|status} [--port 9899]  macOS-only: steer CC-Desktop's claude-code→anthropic into asight mitm (durable, reversible)
@@ -329,6 +546,12 @@ usage:
   asight uninstall                              one-step revert: remove CA + clear steer
   asight verify
   asight doctor [--source <ndjson>]             self-check: deps probe + 「测试」四问 (是否真在抓/抓得对/凭据没漏/没弱化全机 TLS)
+  asight raw seal <closed-shard> [--sessions <dir>]                     D35: seal a CLOSED shard (needs <shard>.closed), per session
+  asight raw seal --legacy <file|dir> [--dry-run] [--delete-original] [--quiet <s>]  seal pre-D35 files/trees nothing writes; keeps originals by default
+  asight raw verify <sealed|dir> [--against <original>]                 decode sealed copies, compare byte for byte with the original
+  asight raw compare <dir> [--list]                                     readers' output over the originals vs the sealed copies alone, per session (before deleting)
+  asight raw export <session-id|file.sealed> [--out <dir|file>]         sealed → plain NDJSON, one file per segment (0600, default ~/.asight/export/<session>/)
+  asight raw journal [--tail <n>]                                       the durable record of refusals, failures, deletions
   asight --version`);
   }
 }

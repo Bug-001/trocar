@@ -43,3 +43,8 @@ test('classify and parseHead: CONNECT, plain HTTP, unknown, need-more', () => {
   assert.equal(classify(Buffer.from('PO')), 'need-more')
   assert.equal(parseHead(Buffer.from('GET / HTTP/1.1\r\nHost: x\r\n')), null)
 })
+
+test('classify: a SOCKS4 or SOCKS5 first byte is a proxy prelude (D37)', () => {
+  assert.equal(classify(Buffer.from([5])), 'socks'); assert.equal(classify(Buffer.from([4, 1, 0, 80])), 'socks')
+  assert.equal(classify(Buffer.from([0x16])), 'need-more'); assert.equal(classify(Buffer.from([0x06, 0x00])), 'unknown')
+})

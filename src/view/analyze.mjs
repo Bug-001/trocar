@@ -16,6 +16,9 @@
 // bash-read parsing) lives in ONE dissector — src/dissect/cc.mjs — shared with the ETL adapter.
 // linearContext (below) is now just the board's PROJECTION of that dissector's canonical spine.
 import { dissectBlocks, sysLabel, parseBashReads } from '../dissect/cc.mjs'
+import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf } from '../dissect/capture-labels.mjs'
+import { hintsOf } from '../dissect/harnesses.mjs'
+import { compactionVerdict, hasCompactionPreamble } from '../identity/session-identity.mjs'
 // Envelope drift guard (R1): the D10 envelope stores the response under `resp`, demo v0 under
 // `response`. Reading `.response` directly is the bug class that silently killed every HTTP status
 // on real captures — so go through the shared helper, never the raw key. (assemble.mjs imports
@@ -279,6 +282,17 @@ function userEvents(newMessages, step, streamId) {
   return ev
 }
 
+// What a compaction verdict says about itself on the board (1.5:38 / 1.5:79: the UI tells confirmed from inferred).
+// A harness header hint is the harness's own word (high, not inferred); a text marker and a count drop are inferred
+// (medium, 3.4). `preamble` only refines the wording of a drop.
+export function compactionMeta(v, preamble = false) {
+  if (!v || !v.compaction) return { compaction: false }
+  const byHint = v.basis === 'hint'
+  return { compaction: true, compactionInferred: !byHint, compactionConfidence: byHint ? 'high' : 'medium',
+    compactionBasis: byHint ? 'harness-header' : v.basis === 'marker' ? 'harness-marker' : (preamble ? 'preamble+msg-count-drop' : 'msg-count-drop'),
+    evictedFrom: v.compaction_from, evictedTo: v.compaction_to }
+}
+
 const LANE_META = {
   main: { icon: '💬', label: 'conversation' },
   subagent: { icon: '🧬', label: 'subagent' },
@@ -287,10 +301,13 @@ const LANE_META = {
   titlegen: { icon: '🏷', label: 'session title-gen' },
   quota: { icon: '🔌', label: 'quota / keep-alive' },
   aux: { icon: '⚙', label: 'other util' },
-  probe: { icon: '👁', label: 'count_tokens probes' },
+  // only a harness hint puts an inference call here (count_tokens probes are no inference call: the page draws them)
+  probe: { icon: '👁', label: 'warm-up / probe requests',
+    note: 'A request the harness itself marks as a warm-up or probe: it primes the cache and is not a conversation turn. Its body is kept verbatim like any call, and a later call may build on it.' },
 }
-const LANE_ORDER = { main: 0, subagent: 1, monitor: 2, notify: 3, titlegen: 4, quota: 5, aux: 6 }
+const LANE_ORDER = { main: 0, subagent: 1, monitor: 2, notify: 3, titlegen: 4, quota: 5, aux: 6, probe: 7 }
 const AUX_KINDS = new Set(['aux', 'notify', 'titlegen', 'quota'])
+const EVENT_ONLY_KINDS = new Set(['monitor', 'probe', ...AUX_KINDS]) // one event per call, no ReAct / resource walk
 
 // ── admission (audit 2026-07-19 · invariant 4) ──────────────────────────────────────────
 // EVERY captured LLM call is admitted, whatever its HTTP status. The old filter demanded a
@@ -304,6 +321,12 @@ const AUX_KINDS = new Set(['aux', 'notify', 'titlegen', 'quota'])
 // empty request stub plus `unparsed:true`, and the view shows an explicit "unrenderable" call
 // rather than a hole in the numbering. Marked, never invented.
 const isUnparsed = (r) => !(r.request && Array.isArray(r.request.messages))
+// The reason an unparsed call shows in place of its context, one wording for every assembly path (the flat-lane
+// wires use it too). A labelled body says exactly what happened; with no label (v0, legacy MITM) truncation and
+// corruption cannot be told apart.
+export const unparsedErrMsg = (reqIncomplete) => (reqIncomplete
+  ? `unrenderable: req_body could not be parsed — ${reqIncomplete.text}`
+  : 'unrenderable: req_body could not be parsed (truncated / corrupt capture)')
 // A call is "failed" if it carries an error key, a non-200 status, or is an unparsed sentinel.
 // (Status-less records — an in-flight capture with no response yet — are NOT failures.)
 function failedCall(r) {
@@ -313,16 +336,25 @@ function failedCall(r) {
   return st != null && st !== 200
 }
 
-export function analyze(records) {
+// opts.giOf(rec) → the call's GLOBAL step index when this analyzer sees only part of a session (a session
+// that mixes wire formats, src/view/assemble.mjs); undefined → the local index. It is asked about the
+// record as passed in, before any sentinel stub is made of it.
+export function analyze(records, opts = {}) {
   // Admit on `is_llm_call` alone. Non-LLM records stay out (they carry only a response body by
   // design — 保真边界, not a loss). Sentinels get an empty request stub so the downstream walkers
   // never dereference a missing `.request`; `rec` here is already a view-side hydrated clone, so
   // stubbing does not touch the raw NDJSON source truth (invariant 2).
-  const llm = records.filter((r) => r && r.is_llm_call).map((r) => (
-    isUnparsed(r)
+  const giGiven = new Map()
+  const llm = records.filter((r) => r && r.is_llm_call).map((r) => {
+    const out = isUnparsed(r)
       ? { ...r, request: { messages: [], tools: [], system: [], message_count: 0, tool_count: 0 }, _unparsed: true }
       : r
-  ))
+    // the stub keeps the non-enumerable source-stream stamp a spread drops: its reply still needs a locator
+    if (out !== r && r._stream) Object.defineProperty(out, '_stream', { value: r._stream, enumerable: false, configurable: true })
+    const g = opts.giOf ? opts.giOf(r) : undefined
+    if (g != null) giGiven.set(out, g)
+    return out
+  })
   llm.sort((a, b) => String(a.ts_request).localeCompare(String(b.ts_request)) || String(a.id).localeCompare(String(b.id)))
 
   // ── segment into streams/lanes by lineage + role marker ─────────────────────
@@ -332,10 +364,15 @@ export function analyze(records) {
   let prevKind = null
   const stepList = []
 
+  let probeStream = null
   for (const r of llm) {
     const msgCount = r.request.message_count
     const tools = r.request.tool_count || 0
-    const sub = isSub(r)
+    // 3.4 lane precedence probe > monitor > aux > subagent > main, the ETL's (session-identity.mjs::lane): inside each
+    // tier the harness table's hint decides first (Z-Code x-zcode-session-type, dsh origin, CC x-claude-code-agent-id,
+    // a request-kind warm-up), then Claude Code's own markers
+    const hint = hintsOf(r).lane
+    const sub = hint === 'subagent' || isSub(r)
     // The main conversation runs on the primary (opus) model; utility calls run on a small model
     // (haiku). A tiny haiku call (≤2 msgs) is background util REGARDLESS of tool count — otherwise
     // a burst of failed haiku retries (tools≥1) during a network drop pollutes the conversation lane.
@@ -348,9 +385,11 @@ export function analyze(records) {
       // conversation turn under "quota / keep-alive", asserting a lane we do not know (invariant 4).
       if (!mainStream) mainStream = mkStream('main')
       stream = mainStream
+    } else if (hint === 'probe') {
+      stream = probeStream || (probeStream = mkStream('probe'))
     } else if (isMonitor(r)) {
       stream = monitorStream || (monitorStream = mkStream('monitor'))
-    } else if (msgCount <= 2 && !sub && (tools === 0 || small)) {
+    } else if (hint === 'aux' || (msgCount <= 2 && !sub && (tools === 0 || small))) {
       const sk = auxSubkind(r, userTextOf(r))
       stream = auxStreams.get(sk) || auxStreams.set(sk, mkStream(sk)).get(sk)
     } else if (sub) {
@@ -366,13 +405,18 @@ export function analyze(records) {
     const rs = respOf(r) || {}
     const status = rs.status ?? null
     const failed = failedCall(r)
-    const step = { gi: stepList.length, id: r.id, streamId: stream.id, rec: r, norm: normResp(r),
+    // #21: the collector's own word on WHY the stored body is incomplete (null when it is complete).
+    const reqIncomplete = reqIncompleteOf(r)
+    const step = { gi: giGiven.has(r) ? giGiven.get(r) : stepList.length, id: r.id, streamId: stream.id, rec: r, norm: normResp(r),
       msgCount, tools, ctx: ctxTokens(r), status,
       ts: r.ts_request, compaction: false,
       unparsed: !!r._unparsed,
+      reqIncomplete,
+      wsIncomplete: wsIncompleteOf(r), // D38 a WebSocket call's labels (4.6 各说一件事)
+      respIncomplete: respIncompleteOf(r), // a response body not decoded / not JSON / empty / partly parsed / cut
       // `error` now covers EVERY non-200 (was: only 5xx — so a 401/429 rendered as a normal call).
       error: failed,
-      errMsg: r._unparsed ? 'unrenderable: req_body could not be parsed (truncated / corrupt capture)'
+      errMsg: r._unparsed ? unparsedErrMsg(reqIncomplete)
         : (rs.error?.message || (status != null && status !== 200 ? `HTTP ${status}` : (r.error ? String(r.error.message || r.error) : null))),
       // Cache-prefix chaining (audit 2026-07-19). A call that FAILED did not establish a new cache
       // prefix at the provider — a 401/429/502 never got far enough to write one — so the next call's
@@ -393,7 +437,7 @@ export function analyze(records) {
   const toolNameById = new Map()
   for (const s of streams) {
     // monitor + aux-family lanes: no ReAct/resource extraction — just one event per call
-    if (s.kind === 'monitor' || AUX_KINDS.has(s.kind)) {
+    if (EVENT_ONLY_KINDS.has(s.kind)) {
       let prevCtx = 0
       for (const step of s.calls) {
         step.dCtx = step.ctx - prevCtx; prevCtx = step.ctx
@@ -413,6 +457,7 @@ export function analyze(records) {
     const resMap = new Map()
     const seenMap = new Map() // filenames the agent saw (in results/prose) but never opened
     let prevCount = 0, prevCtx = 0
+    let prevInfo = null // { msgCount, marker, preamble } of the last renderable call in this lane: the compaction verdict's predecessor
     for (let k = 0; k < s.calls.length; k++) {
       const step = s.calls[k]
       // Unparsed sentinel: no context to diff. Emit the visible error marker and leave prevCount /
@@ -436,23 +481,27 @@ export function analyze(records) {
       }
 
       const drop = msgs.length < prevCount
-      const bigDrop = drop && msgs.length < prevCount - 5 && msgs.length < prevCount * 0.7
-      const hasPreamble = msgs.slice(0, 4).some((m) => /continued from a previous conversation/i.test(textOfMessage(m)))
+      const hasPreamble = hasCompactionPreamble(msgs)
       const isSummarize = /^\s*<analysis>/.test(step.norm.text || '')
+      // 3.4, the ETL's verdict (compactionVerdict): a harness header hint first (x-cc-compaction-request, dsh's compact
+      // header), a text marker on its rising edge, then a sharp drop — the same shared rule the ETL runs.
+      // 保真边界 (invariant 4 · spec 1.5:37 / 3.4:16,21): a drop or a marker is INFERRED from observed shape, never
+      // confirmed by the harness, and says so (medium, `compactionInferred`); a header hint is the harness's own word.
+      // `basis` names WHICH evidence fired: CC's own "continued from a previous conversation" preamble (the stronger
+      // drop signal) vs. a bare message-count collapse (a number going down — the weaker guess).
+      const h = hintsOf(step.rec)
+      const marker = h.compactionMarker === true
+      // the preamble is evidence on its rising edge only (compactionVerdict): once a compaction has put it in the history
+      // every later call of the lane carries it, and a carried one neither makes a drop a compaction nor names its basis
+      const preambleNew = hasPreamble && !(prevInfo && prevInfo.preamble)
+      // 3.4: a request stored in part (the collector's req_* labels, the ETL's context_state 'partial') shows what arrived,
+      // not the context the model saw: its message count is no observation, so no verdict and no new baseline
+      const verdict = step.reqIncomplete ? { compaction: false }
+        : compactionVerdict(prevInfo, { hint: h.compaction === true, marker, msgCount: msgs.length, preamble: hasPreamble })
+      if (!step.reqIncomplete) prevInfo = { msgCount: msgs.length, marker, preamble: hasPreamble }
       let newMsgs
-      if (bigDrop || (drop && hasPreamble)) {
-        step.compaction = true
-        // 保真边界 (invariant 4 · spec 1.5:37 / 3.4:16,21): CC emits NO explicit compaction marker —
-        // this verdict is INFERRED from observed shape, never confirmed by the harness. Carry that in
-        // the data so a consumer can render "≈ inferred" instead of asserting it; spec 3.4:21 pins the
-        // level at medium. `basis` names WHICH evidence fired: CC's own "continued from a previous
-        // conversation" preamble (the stronger signal, and the harness's own words) vs. a bare
-        // message-count collapse (a number going down — the weaker guess).
-        step.compactionInferred = true
-        step.compactionConfidence = 'medium'
-        step.compactionBasis = hasPreamble ? 'preamble+msg-count-drop' : 'msg-count-drop'
-        step.evictedFrom = prevCount
-        step.evictedTo = msgs.length
+      if (verdict.compaction) {
+        Object.assign(step, compactionMeta(verdict, preambleNew))
         for (const res of resMap.values()) {
           const last = res.segments[res.segments.length - 1]
           if (last.evict == null) last.evict = step.gi
@@ -467,7 +516,7 @@ export function analyze(records) {
         s.events.push({ type: 'compaction', step: step.gi, streamId: s.id, from: step.evictedFrom, to: step.evictedTo,
           // the event travels to the UI on its own — it MUST carry the inference marker with it,
           // otherwise the timeline re-asserts as fact what the step knows is a guess (invariant 4).
-          inferred: true, confidence: step.compactionConfidence, basis: step.compactionBasis })
+          inferred: step.compactionInferred, confidence: step.compactionConfidence, basis: step.compactionBasis })
       if (isSummarize) {
         step.summarizing = true
         s.events.push({ type: 'summarize', step: step.gi, streamId: s.id, out: step.norm.usage?.output_tokens })
@@ -557,6 +606,7 @@ export function analyze(records) {
       return {
         id: laneId, streamId: s.id, kind: s.kind, icon: LANE_META[s.kind].icon,
         label: s.kind === 'subagent' ? `subagent: ${s.spawnArg || 'task'}` : LANE_META[s.kind].label,
+        ...(LANE_META[s.kind].note ? { note: LANE_META[s.kind].note } : null),
         calls: s.calls, events: s.events, resources: s.resources, seenFiles: s.seenFiles || [], giLocal,
         peakCtx: s.calls.reduce((m, c) => Math.max(m, c.ctx), 1),
         spawnStep: s.spawnStep ?? null, parent: s.parent,

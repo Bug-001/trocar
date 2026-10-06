@@ -32,6 +32,7 @@ export const SCENARIOS = {
   'content-length': { framing: 'length' },
   'conn-close': { framing: 'close' },
   keepalive: { keepAlive: true },
+  'slow-tool-close': { tool: true, slowHeaders: true, framing: 'close' }, // the next call needs a new connection
 }
 
 // What a relay in front of the provider (nginx here) answers when the provider is unreachable.

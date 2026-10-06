@@ -80,6 +80,9 @@ export function wireShape(rec) {
   if (looksAnthropic(rec, body)) return null;                 // never claim Anthropic wire
   if (Array.isArray(body && body.input)) return 'responses';  // shape first
   if (/(^|\/)responses$/.test(epPath(rec))) return 'responses'; // corroboration (also covers an unparseable body)
+  // an unparseable body on the Chat path (e.g. a request the collector stored cut, #21): the path is all there
+  // is, and the call must still be shown with its reason rather than as unrecognized traffic
+  if (body == null && /(^|\/)chat\/completions$/.test(epPath(rec))) return 'chat';
   if (looksChat(rec, body)) return 'chat';
   return null;
 }
@@ -132,30 +135,33 @@ function summaryText(item) {
   if (Array.isArray(s)) return s.map((x) => (x && (x.text || x.summary_text)) || '').join('');
   return typeof s === 'string' ? s : '';
 }
-// returns [{ role, block }] — one per rendered block (a message may fan out to several content blocks)
+// returns [{ role, block, sub }] — one per rendered block (a message may fan out to several content blocks).
+// `sub` = the JSON path of the block's bytes WITHIN the item (the board's text_ref locator, 4.2:40).
 export function itemToBlocks(item) {
-  if (!item || typeof item !== 'object') return [{ role: 'user', block: { type: 'text', text: String(item ?? '') } }];
+  if (!item || typeof item !== 'object') return [{ role: 'user', block: { type: 'text', text: String(item ?? '') }, sub: [] }];
   const t = item.type;
   if (t === 'message' || item.content) {
     const role = item.role || 'user';
-    const content = Array.isArray(item.content) ? item.content : [{ type: 'input_text', text: String(item.content ?? '') }];
-    return content.map((c) => {
-      if (!c || typeof c !== 'object') return { role, block: { type: 'text', text: String(c ?? '') } };
-      if (c.type === 'input_text' || c.type === 'output_text' || c.type === 'text') return { role, block: { type: 'text', text: c.text || '' } };
-      if (c.type === 'input_image' || c.type === 'image') return { role, block: { type: 'image', source: { media_type: c.image_url || c.detail || 'image' } } };
-      if (c.type === 'refusal') return { role, block: { type: 'text', text: c.refusal || '' } };
-      return { role, block: { type: 'text', text: JSON.stringify(c) } };
+    const arr = Array.isArray(item.content);
+    const content = arr ? item.content : [{ type: 'input_text', text: String(item.content ?? '') }];
+    return content.map((c, ci) => {
+      const sub = arr ? ['content', ci] : ['content'];
+      if (!c || typeof c !== 'object') return { role, block: { type: 'text', text: String(c ?? '') }, sub };
+      if (c.type === 'input_text' || c.type === 'output_text' || c.type === 'text') return { role, block: { type: 'text', text: c.text || '' }, sub };
+      if (c.type === 'input_image' || c.type === 'image') return { role, block: { type: 'image', source: { media_type: c.image_url || c.detail || 'image' } }, sub };
+      if (c.type === 'refusal') return { role, block: { type: 'text', text: c.refusal || '' }, sub };
+      return { role, block: { type: 'text', text: JSON.stringify(c) }, sub };
     });
   }
-  if (t === 'function_call') return [{ role: 'assistant', block: { type: 'tool_use', name: item.name || '', id: item.call_id || item.id || '', input: safeJson(item.arguments) } }];
+  if (t === 'function_call') return [{ role: 'assistant', block: { type: 'tool_use', name: item.name || '', id: item.call_id || item.id || '', input: safeJson(item.arguments) }, sub: [] }];
   if (t === 'function_call_output') {
     const out = item.output;
     const content = typeof out === 'string' ? out : (out && out.content) || JSON.stringify(out ?? '');
-    return [{ role: 'tool', block: { type: 'tool_result', tool_use_id: item.call_id || '', content } }];
+    return [{ role: 'tool', block: { type: 'tool_result', tool_use_id: item.call_id || '', content }, sub: [] }];
   }
-  if (t === 'reasoning') return [{ role: 'assistant', block: { type: 'thinking', thinking: summaryText(item), signature: item.encrypted_content ? 'encrypted' : '' } }];
+  if (t === 'reasoning') return [{ role: 'assistant', block: { type: 'thinking', thinking: summaryText(item), signature: item.encrypted_content ? 'encrypted' : '' }, sub: [] }];
   // fallback (item_reference / unknown): render verbatim JSON, marked non-standard.
-  return [{ role: (item.role || 'assistant'), block: { type: 'text', text: JSON.stringify(item) } }];
+  return [{ role: (item.role || 'assistant'), block: { type: 'text', text: JSON.stringify(item) }, sub: [] }];
 }
 
 // ── board projection: raw Responses request → flat block descriptors (same vocab as CC linearContext).
@@ -174,18 +180,22 @@ export function boardFlat(req) {
       sec: 'tools', kind: 'tool', role: 'tool', name, ttype: t.type || 'function',
       props, descChars: desc.length, cc: null, mcp, verbatim: true,
       desc, schema, resKey: mcp ? 'mcp::' + (name.split(/[._]/)[1] || name) : '',
-      key: 'T:' + name + ':' + desc.length + ':' + props.length,
+      key: 'T:' + name + ':' + desc.length + ':' + props.length, path: ['tools', i],
     });
   });
   const instr = typeof (req && req.instructions) === 'string' ? req.instructions : (req && req.instructions != null ? JSON.stringify(req.instructions) : '');
-  if (instr) flat.push({ sec: 'system', kind: 'system', role: 'system', si: 0, label: sysLabel(instr), text: instr, chars: instr.length, volatile: false, cc: null, key: okey('S:', { type: 'text', text: instr }) });
+  if (instr) flat.push({ sec: 'system', kind: 'system', role: 'system', si: 0, label: sysLabel(instr), text: instr, chars: instr.length, volatile: false, cc: null, key: okey('S:', { type: 'text', text: instr }), path: ['instructions'] });
+  if (typeof (req && req.input) === 'string') { // the Responses API accepts a bare string input: one user block
+    const block = { type: 'text', text: req.input };
+    flat.push({ sec: 'messages', kind: 'text', role: 'user', mi: 0, bi: 0, block, toolName: '', cc: null, resKey: '', key: okey('M:user:text:', block), path: ['input'] });
+  }
   const input = Array.isArray(req && req.input) ? req.input : [];
   let mi = 0;
   for (const item of input) {
     let bi = 0;
-    for (const { role, block } of itemToBlocks(item)) {
+    for (const { role, block, sub } of itemToBlocks(item)) {
       const type = block.type;
-      const d = { sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), key: okey('M:' + role + ':' + type + ':', block) };
+      const d = { sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), key: okey('M:' + role + ':' + type + ':', block), path: ['input', mi, ...sub] };
       if (type === 'thinking') d.faithfulness = faithfulness(block);
       flat.push(d);
       bi++;
@@ -208,30 +218,38 @@ const chatText = (content) => {
   if (Array.isArray(content)) return content.map((c) => (c && typeof c === 'object' ? (c.text || '') : String(c ?? ''))).join('');
   return content == null ? '' : JSON.stringify(content);
 };
-// one chat message → [{role, block}] (a message may fan out: assistant text + several tool_calls)
+// one chat message → [{role, block, sub}] (a message may fan out: assistant text + several tool_calls).
+// `sub` = the JSON path of the block's bytes within the message (the board's text_ref locator).
 export function chatMessageToBlocks(m) {
-  if (!m || typeof m !== 'object') return [{ role: 'user', block: { type: 'text', text: String(m ?? '') } }];
+  if (!m || typeof m !== 'object') return [{ role: 'user', block: { type: 'text', text: String(m ?? '') }, sub: [] }];
   const role = m.role || 'user';
-  if (role === 'tool') return [{ role: 'tool', block: { type: 'tool_result', tool_use_id: m.tool_call_id || '', content: chatText(m.content) } }];
+  if (role === 'tool') return [{ role: 'tool', block: { type: 'tool_result', tool_use_id: m.tool_call_id || '', content: chatText(m.content) }, sub: ['content'] }];
   const out = [];
+  // DeepSeek / Kimi / GLM thinking models: an assistant turn's reasoning travels as `reasoning_content` (plain
+  // text), echoed back on later requests. It came before that turn's reply, so its block goes first. (Its exact
+  // round-trip rules are a lab check, 0.0 待数据决策 DS; the bytes are shown verbatim either way.)
+  if (typeof m.reasoning_content === 'string' && m.reasoning_content) {
+    out.push({ role: 'assistant', block: { type: 'thinking', thinking: m.reasoning_content }, sub: ['reasoning_content'] });
+  }
   if (Array.isArray(m.content)) {
-    for (const c of m.content) {
-      if (!c || typeof c !== 'object') { out.push({ role, block: { type: 'text', text: String(c ?? '') } }); continue; }
+    m.content.forEach((c, ci) => {
+      const sub = ['content', ci];
+      if (!c || typeof c !== 'object') { out.push({ role, block: { type: 'text', text: String(c ?? '') }, sub }); return; }
       if (c.type === 'image_url' || c.type === 'input_image' || c.type === 'image') {
-        const u = c.image_url; out.push({ role, block: { type: 'image', source: { media_type: (u && (u.url || u.detail)) || 'image' } } });
-      } else if (c.type === 'refusal') out.push({ role, block: { type: 'text', text: c.refusal || '' } });
-      else out.push({ role, block: { type: 'text', text: c.text != null ? c.text : JSON.stringify(c) } });
-    }
+        const u = c.image_url; out.push({ role, block: { type: 'image', source: { media_type: (u && (u.url || u.detail)) || 'image' } }, sub });
+      } else if (c.type === 'refusal') out.push({ role, block: { type: 'text', text: c.refusal || '' }, sub });
+      else out.push({ role, block: { type: 'text', text: c.text != null ? c.text : JSON.stringify(c) }, sub });
+    });
   } else if (typeof m.content === 'string' && m.content.length) {
-    out.push({ role, block: { type: 'text', text: m.content } });
+    out.push({ role, block: { type: 'text', text: m.content }, sub: ['content'] });
   }
-  for (const tc of Array.isArray(m.tool_calls) ? m.tool_calls : []) {
+  (Array.isArray(m.tool_calls) ? m.tool_calls : []).forEach((tc, k) => {
     const f = (tc && tc.function) || {};
-    out.push({ role: 'assistant', block: { type: 'tool_use', name: f.name || '', id: (tc && tc.id) || '', input: safeJson(f.arguments) } });
-  }
+    out.push({ role: 'assistant', block: { type: 'tool_use', name: f.name || '', id: (tc && tc.id) || '', input: safeJson(f.arguments) }, sub: ['tool_calls', k] });
+  });
   // a genuinely empty message (e.g. {role:'assistant', content:null} with no tool_calls) still gets a
   // block, so the block count never silently under-reports what was on the wire.
-  if (!out.length) out.push({ role, block: { type: 'text', text: '' } });
+  if (!out.length) out.push({ role, block: { type: 'text', text: '' }, sub: [] });
   return out;
 }
 export function boardFlatChat(req) {
@@ -248,7 +266,7 @@ export function boardFlatChat(req) {
       sec: 'tools', kind: 'tool', role: 'tool', name, ttype: (t && t.type) || 'function',
       props, descChars: desc.length, cc: null, mcp, verbatim: true,
       desc, schema, resKey: mcp ? 'mcp::' + (name.split(/[._]/)[1] || name) : '',
-      key: 'T:' + name + ':' + desc.length + ':' + props.length,
+      key: 'T:' + name + ':' + desc.length + ':' + props.length, path: ['tools', i],
     });
   });
   const msgs = Array.isArray(req && req.messages) ? req.messages : [];
@@ -258,14 +276,14 @@ export function boardFlatChat(req) {
   while (lead < msgs.length && msgs[lead] && (msgs[lead].role === 'system' || msgs[lead].role === 'developer')) lead++;
   for (let i = 0; i < lead; i++) {
     const text = chatText(msgs[i].content);
-    flat.push({ sec: 'system', kind: 'system', role: 'system', si: i, label: sysLabel(text), text, chars: text.length, volatile: false, cc: null, key: okey('S:', { type: 'text', text }) });
+    flat.push({ sec: 'system', kind: 'system', role: 'system', si: i, label: sysLabel(text), text, chars: text.length, volatile: false, cc: null, key: okey('S:', { type: 'text', text }), path: ['messages', i, 'content'] });
   }
   let mi = 0;
   for (let i = lead; i < msgs.length; i++) {
     let bi = 0;
-    for (const { role, block } of chatMessageToBlocks(msgs[i])) {
+    for (const { role, block, sub } of chatMessageToBlocks(msgs[i])) {
       const type = block.type;
-      flat.push({ sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), key: okey('M:' + role + ':' + type + ':', block) });
+      flat.push({ sec: 'messages', kind: type, role, mi, bi, block, toolName: type === 'tool_use' ? (block.name || '') : '', cc: null, resKey: resourceRef(block), key: okey('M:' + role + ':' + type + ':', block), path: ['messages', i, ...sub] });
       bi++;
     }
     mi++;
@@ -274,12 +292,16 @@ export function boardFlatChat(req) {
 }
 // Chat usage → the SAME neutral canonical names. prompt_tokens is TOTAL input (incl cached); the chat
 // wire has no cache-write counter, so `create` is 0 — reported as 0 because it is absent, not guessed.
+// DeepSeek reports the exact split (prompt_cache_hit/miss_tokens) and wins; OpenAI nests cached_tokens; Kimi
+// may put cached_tokens at the top level. Same precedence as the ETL's mapUsage('openai-chat').
 export function canonUsageChat(usage = {}) {
   const u = usage || {};
   const d = u.prompt_tokens_details || {};
-  const read = d.cached_tokens || 0;
   const input = u.prompt_tokens || 0;
-  return { read, create: 0, fresh: Math.max(0, input - read), out: u.completion_tokens || 0 };
+  // `??`, not `||`: a reported 0 is a fact (the same reading as mapChat)
+  const read = u.prompt_cache_hit_tokens != null ? u.prompt_cache_hit_tokens : (d.cached_tokens ?? u.cached_tokens ?? 0);
+  const fresh = u.prompt_cache_miss_tokens != null ? u.prompt_cache_miss_tokens : Math.max(0, input - read);
+  return { read, create: 0, fresh, out: u.completion_tokens || 0 };
 }
 // SSE chunks (or a non-streaming JSON body) → { model, usage, text, tool_calls, stop_reason }.
 export function normRespChat(rec) {
@@ -287,7 +309,7 @@ export function normRespChat(rec) {
   const events = Array.isArray(resp.raw_sse) ? resp.raw_sse : [];
   const body = resp.body && typeof resp.body === 'object' ? resp.body : null;
   const frames = events.length ? events : (body ? [body] : []);
-  let text = '', model = null, id = null, stop = null, usage = {};
+  let text = '', thinking = '', model = null, id = null, stop = null, usage = {};
   const acc = new Map();                                       // tool_calls arrive split across deltas
   for (const e of frames) {
     if (!e || typeof e !== 'object') continue;
@@ -297,7 +319,9 @@ export function normRespChat(rec) {
     for (const c of Array.isArray(e.choices) ? e.choices : []) {
       if (!c || typeof c !== 'object') continue;
       if (c.finish_reason) stop = c.finish_reason;
+      if (c.usage) usage = c.usage;                             // Kimi reports usage inside the choice
       const d = c.delta || c.message || {};
+      if (typeof d.reasoning_content === 'string') thinking += d.reasoning_content;
       if (typeof d.content === 'string') text += d.content;
       else if (Array.isArray(d.content)) text += chatText(d.content);
       for (const tc of Array.isArray(d.tool_calls) ? d.tool_calls : []) {
@@ -312,7 +336,7 @@ export function normRespChat(rec) {
     }
   }
   const tool_calls = [...acc.values()].map((t) => ({ id: t.id, name: t.name, input: safeJson(t.args) }));
-  return { model, id, stop_reason: stop, usage, canonUsage: canonUsageChat(usage), text, thinking: undefined, tool_calls };
+  return { model, id, stop_reason: stop, usage, canonUsage: canonUsageChat(usage), text, thinking: thinking || undefined, tool_calls };
 }
 
 // ── shape-dispatched entry points (the shared view layer calls THESE, never a per-shape branch) ────
@@ -336,24 +360,29 @@ export function reqCountsFor(shape, req) {
 }
 
 // ── usage: OpenAI Responses usage → the board's NEUTRAL canonical {read, create, fresh, out} ─────
-// OpenAI input_tokens is TOTAL input (incl cached); cached_tokens is the portion served from cache.
+// OpenAI input_tokens is TOTAL input (incl cached); cached_tokens is the portion served from cache. `fresh` is what is
+// neither read nor written: total − read − write, the ETL's input_uncached (3.2 table, F3) and the
+// Anthropic meaning (uncached + read + write = total). Same clamp at 0 as src/model/schema.mjs::mapResponses.
 export function canonUsage(usage = {}) {
   const u = usage || {};
   const d = u.input_tokens_details || {};
   const read = d.cached_tokens || 0;
   const create = d.cache_write_tokens || 0;
   const input = u.input_tokens || 0;
-  return { read, create, fresh: Math.max(0, input - read), out: u.output_tokens || 0 };
+  return { read, create, fresh: Math.max(0, input - read - create), out: u.output_tokens || 0 };
 }
 
 // ── normalize the SSE response → { model, usage, text, tool_calls, stop_reason } from resp.raw_sse.
 // The reverse-proxy's reconstruction is Anthropic-shaped (empty for OpenAI), so we read raw_sse (kept
 // via `asight capture --raw-sse`). This is the OpenAI dissector rebuilding blocks from raw events.
-export function normResp(rec) {
-  const resp = (rec && rec.resp) || (rec && rec.response) || {};
-  const events = Array.isArray(resp.raw_sse) ? resp.raw_sse : [];
+// normEvents is the event-list half, shared with the WebSocket dissector (openai-ws.mjs), whose events
+// arrive as one server message each. A terminal response.completed / .incomplete / .failed carries the
+// output and usage; an `error` event with no terminal response is stop_reason 'error'. (Before the split an HTTP
+// stream ending in response.failed or an `error` event read as stop_reason null; it now says 'failed' / 'error',
+// and the `failed` hook below makes such a call an error step that is never a cache baseline — as on WebSocket.)
+export function normEvents(events) {
   let completed = null;
-  for (const e of events) if (e && (e.type === 'response.completed' || e.type === 'response.incomplete')) completed = e.response || completed;
+  for (const e of events || []) if (e && /^response\.(completed|incomplete|failed)$/.test(e.type)) completed = e.response || completed;
   const usage = (completed && completed.usage) || {};
   const output = Array.isArray(completed && completed.output) ? completed.output : [];
   let text = '';
@@ -363,8 +392,14 @@ export function normResp(rec) {
     if (o.type === 'function_call') toolCalls.push({ id: o.call_id, name: o.name, input: safeJson(o.arguments) });
   }
   // fallback: if no response.completed (interrupted), stitch text from output_text.delta events
-  if (!completed) for (const e of events) if (e && e.type === 'response.output_text.delta') text += e.delta || '';
-  return { model: (completed && completed.model) || null, id: (completed && completed.id) || null, stop_reason: (completed && completed.status) || null, usage, canonUsage: canonUsage(usage), text, thinking: undefined, tool_calls: toolCalls };
+  if (!completed) for (const e of events || []) if (e && e.type === 'response.output_text.delta') text += e.delta || '';
+  const errored = !completed && (events || []).some((e) => e && e.type === 'error');
+  return { model: (completed && completed.model) || null, id: (completed && completed.id) || null,
+    stop_reason: (completed && completed.status) || (errored ? 'error' : null), usage, canonUsage: canonUsage(usage), text, thinking: undefined, tool_calls: toolCalls };
+}
+export function normResp(rec) {
+  const resp = (rec && rec.resp) || (rec && rec.response) || {};
+  return normEvents(Array.isArray(resp.raw_sse) ? resp.raw_sse : []);
 }
 
 // context-size proxy for the timeline bar (real: total input tokens from usage). Responses names it
@@ -373,3 +408,30 @@ export function ctxTokens(norm) {
   const u = (norm && norm.usage) || {};
   return u.input_tokens || u.prompt_tokens || 0;
 }
+
+// ── D25 dissector objects: what the shared board assembler (src/view/assemble.mjs) calls, so it never
+// branches on a wire. Registered by wire format in src/dissect/registry.mjs (`boardDissectorFor`).
+// `provider` is the pre-D37 board label (analyzed.provider), kept for readers of old payloads; `blockKeys`
+// are the request's top-level keys that become context blocks (everything else is a non-block key).
+// The ETL adapter generated from the same object (src/adapters/dissected.mjs) also reads: `consumedBody` — the
+// request keys this dissector maps to blocks / columns (the rest are unmapped, 3.1:44); `messageCount` — the
+// message count compaction compares (3.4); `faithfulnessOf` — a flat block's 3.2 faithfulness.
+const blockFaithfulness = (b) => faithfulness(b && b.block); // tools / system descriptors carry no .block → verbatim
+export const RESPONSES = Object.freeze({
+  id: 'openai-responses', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'],
+  boardFlat: (req) => boardFlat(req), normResp: (rec) => normResp(rec),
+  reqCounts: (req) => reqCountsFor('responses', req), ctxTokens,
+  // the stream's terminal says the response failed, or an `error` event arrived with no terminal (normEvents)
+  failed: (norm) => norm.stop_reason === 'failed' || norm.stop_reason === 'error',
+  consumedBody: ['model', 'stream', 'instructions', 'tools', 'input'],
+  messageCount: (req) => (Array.isArray(req && req.input) ? req.input.length : typeof (req && req.input) === 'string' ? 1 : 0),
+  faithfulnessOf: blockFaithfulness,
+});
+export const CHAT = Object.freeze({
+  id: 'openai-chat', provider: 'openai', blockKeys: ['tools', 'messages'],
+  boardFlat: (req) => boardFlatChat(req), normResp: (rec) => normRespChat(rec),
+  reqCounts: (req) => reqCountsFor('chat', req), ctxTokens,
+  consumedBody: ['model', 'stream', 'messages', 'tools'],
+  messageCount: (req) => (Array.isArray(req && req.messages) ? req.messages.length : 0),
+  faithfulnessOf: blockFaithfulness,
+});

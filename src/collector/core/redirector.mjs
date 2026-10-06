@@ -23,7 +23,24 @@
 //   watch(pid, verdict): void      — mark a pid decrypt/observe-only (Plan 2).
 //   unwatch(pid): void             — stop managing a pid (Plan 2).
 //   heartbeat(): void              — liveness the kernel gates redirection on (Plan 2).
-//   events: 'exec' | 'exit' | 'flow-meta' | 'down'  — process + redirector lifecycle (Plan 2).
+//   events: 'exec' | 'exit' | 'flow-meta' | 'down'  — process + redirector lifecycle (Plan 2); 'helper-error' {reason}
+//           (the helper reported an error) and 'heartbeat-error' {reason} (a heartbeat failed) — failures the daemon
+//           records (D38).
+//
+// What the daemon (src/collector/daemon.mjs, Plan 3a) also needs from an arch adapter — the Linux one is
+// arch/linux/redirector.mjs; a later OS implements the same names:
+//   start() / close()              — spawn / stop the OS helper; close() leaves agent traffic direct.
+//   configure(enginePort)          — the port the kernel steers decrypt-verdict connections to.
+//   scan(): Promise<ProcFacts[]>   — this user's live processes (startup and every `on`).
+//   directCount(pid): {count, error} — the process's connections still going direct (status only); count null +
+//                                    the errno when it cannot be told (never 0, D-17).
+//   'facts-error' {os, pid, code, comm, argv, reason} — a process of this user whose exe could not be read, so never judged
+//                                    (D-30); comm and argv are what is still readable, for "could this be an agent".
+//   unreadable(): [{pid, comm, errno, argv}] — those of this user still there since the last scan (not the helper's own).
+//   helperInfo() → {pid, proto, build}; expectedProto — the helper protocol this build speaks.
+//   restart() / linger()           — respawn a dead helper; whether the OS keeps the daemon after logout (Plan 3a).
+//   'exec' carries ProcFacts = { os, pid, ppid, uid, exe, argv, env (Map, read lazily), cwd, startedAt,
+//   startTicks (Plan 3a), source:'exec'|'scan' } — OS-neutral; `os` picks the harness signature key.
 //
 // createStaticRedirector is the test/dev implementation: no kernel, metadata set by hand and
 // keyed by the client source port (the Linux redirector keys by source port too — sockops writes

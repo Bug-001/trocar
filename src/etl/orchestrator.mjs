@@ -15,18 +15,30 @@
 //   • adapters/cc.mjs        → ccAdapter (parseSession/parseCall/parseBlocks/parseResources)
 //   • cache/cache-events.mjs → deriveCacheEvents (D17 cache forensics, 3.3)
 //   • identity/session-identity.mjs → buildParentIndex/resolveParent (lineage),
-//                                     markCompaction, messageCount, isSubagent (3.4)
+//                                     compactionVerdict, messageCount, isSubagent (3.4)
 //   • etl/watermark.mjs      → session_id-keyed incremental checkpoints
 import { createHash } from 'node:crypto';
 import { createRegistry } from '../adapters/contract.mjs';
 import { ccAdapter } from '../adapters/cc.mjs';
+import { envelopeAdapter, quarantineReason, v0RequestOf } from '../adapters/envelope.mjs';
+import { dissectorAdapter } from '../adapters/dissected.mjs';
+import { RESPONSES, CHAT } from '../dissect/openai.mjs';
+import { RESPONSES_WS } from '../dissect/openai-ws.mjs';
 import { deriveCacheEvents } from '../cache/cache-events.mjs';
+import { harnessOf, observerEffectsOf } from '../dissect/harnesses.mjs';
+import { vendorOf } from '../dissect/vendors.mjs';
+import { TEXT_REF_FIELD, fieldTextOf } from '../dissect/record-fields.mjs';
+import { createSynthKeys, SYNTH_RULE } from '../dissect/synth-key.mjs';
+import { requestEncodingOf } from '../dissect/request-body.mjs';
+
+export { TEXT_REF_FIELD, fieldTextOf };
 import {
   buildParentIndex,
   resolveParent,
-  markCompaction,
+  compactionVerdict,
   messageCount,
   isSubagent,
+  nativeId,
 } from '../identity/session-identity.mjs';
 import {
   ensureWatermarkTable,
@@ -34,6 +46,9 @@ import {
   setConsumed,
   resetWatermark,
   CONTROL_KEY,
+  ensureMetaTable,
+  getProjectionVersion,
+  setProjectionVersion,
 } from './watermark.mjs';
 
 // ── 回源 pointers (raw_ref / text_ref) — the AC-1 technical payoff (RFC 4.2:37) ──────
@@ -43,11 +58,18 @@ import {
 // spanOf(node)); ETL mints raw_ref and composes the persisted text_ref = raw_ref + span.
 //   raw_ref  = "<session_id>/<stream>#<record.id>"        → one source record
 //   text_ref = "<raw_ref>::<start>-<end>"                 → a block's bytes in req_body
+//            | "<raw_ref>::<field>::<start>-<end>"        → bytes of another field of the record (4.2:40
+//              字段段, gate G1): a WebSocket call's stitched blocks live in an EARLIER record's
+//              resp.messages[j] (D37 ②); R2 compares the reply (resp.raw); 3.1:37 shows req_extra_messages.
+// TEXT_REF_FIELD / fieldTextOf (the field segment's grammar and text) live in src/dissect/record-fields.mjs,
+// re-exported here for the readers that import them from this module.
 export function mintRawRef(sessionId, streamBasename, recordId) {
   return `${sessionId ?? '_control'}/${streamBasename}#${recordId}`;
 }
-export function composeTextRef(rawRef, span) {
-  return `${rawRef}::${span[0]}-${span[1]}`;
+export function composeTextRef(rawRef, span, field = null) {
+  if (field == null || field === 'req_body') return `${rawRef}::${span[0]}-${span[1]}`;
+  if (!TEXT_REF_FIELD.test(field)) throw new Error(`composeTextRef: "${field}" is not a text_ref field (4.2:40)`);
+  return `${rawRef}::${field}::${span[0]}-${span[1]}`;
 }
 export function parseTextRef(textRef) {
   const i = textRef.lastIndexOf('::');
@@ -56,10 +78,14 @@ export function parseTextRef(textRef) {
   // so `req_plain` looked up as `req_plai` and the resolver reported the record "absent" rather than
   // reporting a malformed ref. A silently wrong answer from the source-truth resolver is the worst
   // failure mode this module can have.
-  if (i < 0) return { rawRef: textRef, start: null, end: null, recordId: textRef.slice(textRef.lastIndexOf('#') + 1) };
-  const rawRef = textRef.slice(0, i);
+  if (i < 0) return { rawRef: textRef, field: null, start: null, end: null, recordId: textRef.slice(textRef.lastIndexOf('#') + 1) };
+  const head = textRef.slice(0, i);
   const [start, end] = textRef.slice(i + 2).split('-').map(Number);
-  return { rawRef, start, end, recordId: rawRef.slice(rawRef.lastIndexOf('#') + 1) };
+  // A field segment sits between the record id and the span. Record ids never contain "::" (the
+  // /api/block grammar refuses them), so the first "::" after the last "#" starts it.
+  const j = head.indexOf('::', head.lastIndexOf('#') + 1);
+  const rawRef = j >= 0 ? head.slice(0, j) : head;
+  return { rawRef, field: j >= 0 ? head.slice(j + 2) : null, start, end, recordId: rawRef.slice(rawRef.lastIndexOf('#') + 1) };
 }
 
 // ── envelope helpers (D10, provider-neutral — NOT provider parse branches) ───────────
@@ -76,19 +102,31 @@ function decodeBody(record) {
       return { ...record, req_body: {} };
     }
   }
-  return { ...record, req_body: {} };
+  // The demo v0 shape: the parsed `request` object stands in for req_body (adapters/envelope.mjs::v0RequestOf)
+  return { ...record, req_body: v0RequestOf(record) ?? {} };
 }
 function requestBytes(record) {
+  // 3.2:47 counts the body's bytes ON THE WIRE: for a body sent compressed, req_body is its decoded text
+  // (4.6 §记录), and the wire bytes are req_body_b64
+  if (typeof record?.req_body_b64 === 'string' && requestEncodingOf(record)) return Buffer.from(record.req_body_b64, 'base64').length;
   const b = record?.req_body;
+  // a metadata-only body ({raw_chars, verbatim:false}, 4.1:161) reports the captured size, not the size
+  // of the metadata object
+  if (b && typeof b === 'object' && b.verbatim === false && Number.isFinite(b.raw_chars)) return b.raw_chars;
   const s = typeof b === 'string' ? b : b == null ? '' : JSON.stringify(b);
   return Buffer.byteLength(s, 'utf8');
 }
 const jsonOrNull = (v) => (v == null ? null : JSON.stringify(v));
 
-// The default single-adapter registry (Phase-1 = CC only). Fresh per run so no
-// cross-run quarantine/conflict state leaks between invocations.
+// The default registry: one inference adapter per wire format (the Anthropic one, and adapters generated
+// from the board's dissector objects, D25) + the generic envelope adapter for every non-inference record
+// (control plane, probes, side uploads) of any harness. Inference on a wire with no adapter yet is
+// quarantined with its reason. Fresh per run so no cross-run state leaks.
 function defaultRegistry() {
-  return createRegistry().register(ccAdapter);
+  return createRegistry().register(ccAdapter).register(envelopeAdapter)
+    .register(dissectorAdapter(RESPONSES, { name: 'openai-responses' }))
+    .register(dissectorAdapter(CHAT, { name: 'openai-chat' }))
+    .register(dissectorAdapter(RESPONSES_WS, { name: 'openai-responses-ws' }));
 }
 
 async function ensureQuarantineTable(conn) {
@@ -115,7 +153,23 @@ async function quarantineRecord(conn, record, reason) {
 //           req_body = the verbatim captured STRING). Production streams NDJSON lines;
 //           the append-only prefix is RE-READ each run and skipped per session by the
 //           watermark (byte-offset fast-forward is an Extension, RFC 4.2 Risk).
-// opts    : { registry?, streamBasename?='capture.ndjson', harness?, provider? }
+// opts    : { registry?, streamBasename?='capture.ndjson' (when a record has no _stream), streamOf? }
+//           streamOf(record) → the stream the record was READ from, when the caller knows it per
+//           record: a sealed file holds lines of their ORIGINAL stream(s), never "the sealed file",
+//           and raw_ref MUST name that original stream (RFC 4.2:39, D35).
+// The projection's version (4.2:51: incremental MUST equal a full rebuild, bit for bit). Bump it whenever the same
+// source would project to different rows — a new column, a changed mapping or inference. A store written by another
+// version cannot be extended incrementally: its old rows would keep the old rules while the new rows follow the new
+// ones, with no warning. So runEtl refuses and asks for --rebuild (which is always exact).
+//   (none stored) = before D37 · 2 = D37 columns and the feat/read-seven closeout fixes (2026-10-06: cache_write NULL
+//   per vendor, compaction_from NULL on a lane's first call, req_extra_messages in calls.extra, WebSocket calls whose
+//   request was not stored are ingested) · 3 = the compaction verdict as the integration closeout left it (3.4): a v0
+//   envelope is counted by its request object (0de6eaf), a call of unknown context gives no verdict and is no baseline
+//   (0492e88), only a SHARP drop counts (b4d5320), and CC's preamble counts on its rising edge only — each
+//   of them changes `calls.compaction` for the same source, so a store written by version 2 keeps verdicts a rebuild
+//   would not make
+export const PROJECTION_VERSION = 3;
+
 export async function runEtl(records, connection, opts = {}) {
   const conn = connection;
   const {
@@ -125,6 +179,17 @@ export async function runEtl(records, connection, opts = {}) {
 
   await ensureWatermarkTable(conn);
   await ensureQuarantineTable(conn);
+  await ensureMetaTable(conn);
+  const storedVersion = await getProjectionVersion(conn);
+  if (storedVersion !== PROJECTION_VERSION) {
+    const held = Number((await conn.runAndReadAll('SELECT (SELECT count(*) FROM calls) + (SELECT count(*) FROM etl_watermark) AS n')).getRowObjects()[0].n);
+    if (held > 0) {
+      throw new Error(`incremental ETL refused: this store was written by ${storedVersion == null ? 'an older projection (before D37, no version stored)' : `projection version ${storedVersion}`}, ` +
+        `and this code writes version ${PROJECTION_VERSION}. Extending it would leave the rows already there as the old rules made them, ` +
+        'so the result would differ from a full rebuild (4.2:51). Re-run with --rebuild.');
+    }
+    await setProjectionVersion(conn, PROJECTION_VERSION); // an empty store takes this version
+  }
 
   const stats = { ingested: 0, skipped: 0, quarantined: 0 };
 
@@ -156,49 +221,113 @@ export async function runEtl(records, connection, opts = {}) {
   // real predecessor → incremental cache_events == full cache_events.
   const prevBlocks = new Map(); // laneKey -> BlockRow[]
   const prevMsgCount = new Map(); // laneKey -> number
+  const prevMarker = new Map(); // laneKey -> did the previous call carry a compaction text marker
+  const prevPreamble = new Map(); // laneKey -> did the previous call carry CC's "continued from a previous conversation" preamble
+  // the compaction verdict's predecessor of a lane, advanced by every call whose message count is observed (a call of
+  // unknown context leaves the chain alone): its count, and whether it carried the marker / the preamble (both count on
+  // their rising edge only: once in the history they stay in every later call)
+  const advanceLane = (laneKey, msgCount, call) => {
+    prevMsgCount.set(laneKey, msgCount); prevMarker.set(laneKey, !!call.compaction_marker); prevPreamble.set(laneKey, !!call.compaction_preamble)
+  }
+  // 3.4 lineage from harness hints, over the WHOLE stream (skipped records included) so incremental == full:
+  const aliasToSid = new Map(); // an alias key (e.g. Codex thread-id) -> the session_id it belongs to
+  const parentHint = new Map(); // session_id -> the raw parent id a harness declared (first seen wins)
   const seen = new Map(); // watermark key -> running per-session record index
   const corpus = []; // decoded claimed records (this run) for the lineage pass
+  // adapter -> its per-run state (adapter.begin()), created on first use and kept for the whole run, so a
+  // cross-record reader (the WebSocket previous_response_id chain, D37 ②) sees every record in file order —
+  // watermark-skipped ones included — and incremental == full.
+  const adapterState = new Map();
+  const stateOf = (a) => {
+    if (typeof a.begin !== 'function') return undefined;
+    if (!adapterState.has(a)) adapterState.set(a, a.begin());
+    return adapterState.get(a);
+  };
+  // 3.4 合成键 (gate G11): one assigner per run, fed every record in file order (watermark-skipped and quarantined
+  // ones too), so a keyless Hermes / Kimi call gets the same key on every run — and the same key the board gives it.
+  const synth = createSynthKeys();
+  // the stream a record was READ from (4.2:39; for a sealed file, its original stream, D35)
+  const streamOf = (r) => (opts.streamOf && opts.streamOf(r)) || r._stream || streamBasename;
 
   await conn.run('BEGIN');
   try {
     for await (const record of records) {
+      // every keyless inference record moves the synthesized-key window, the ones quarantined below included —
+      // the board stamps them too, so both readers draw the same windows (3.4 合成键, gate G11)
+      const synthOf = synth.keyOf(record);
       const claim = registry.dispatch(record);
       if (claim.status !== 'claimed') {
-        await quarantineRecord(conn, record, 'no-adapter-detect');
+        await quarantineRecord(conn, record, quarantineReason(record));
         stats.quarantined++;
         continue;
       }
       const adapter = claim.adapter;
-      const harness = adapter.harness ?? opts.harness ?? 'cc';
-      const provider = adapter.provider ?? opts.provider ?? 'anthropic';
+      const st = stateOf(adapter);
+      // D37 (3.2:28): sessions.harness = the proc identity through the harness table, never the adapter's
+      // wire; a legacy record without proc is UA-inferred and says so (sessions.extra.harness_inferred).
+      const ident = harnessOf(record);
+      // D37 (3.2:50): the vendor comes from the envelope host; cache labels are keyed by it (3.3:89).
+      const vendor = vendorOf(record);
 
-      const call = adapter.parseCall(record);
+      const call = adapter.parseCall(record, st);
       const isLlm = call.class === 'llm';
       const sess = isLlm ? adapter.parseSession(record) : null;
-      const sid = isLlm ? (sess.native_id ?? null) : null; // control -> NULL session_id
+      const synthKey = isLlm && sess.native_id == null ? synthOf : null;
+      const sid = isLlm ? (sess.native_id ?? synthKey ?? null) : null; // control -> NULL session_id
       const key = sid == null ? CONTROL_KEY : sid;
+      if (sid != null) {
+        for (const a of sess.aliases || []) if (!aliasToSid.has(a)) aliasToSid.set(a, sid);
+        if (sess.parent && !parentHint.has(sid)) parentHint.set(sid, sess.parent);
+      }
       const idx = (seen.get(key) ?? -1) + 1;
       seen.set(key, idx);
+
+      // A SHIFTED HISTORY (4.2:49-50). The watermark counts records per key across the whole stream,
+      // which is valid only if nothing was inserted BEFORE the consumed position since the last run:
+      // true for one append-only file and for the collector's daily files (dated at write time,
+      // 4.6 §记录), not when an earlier file of a directory grows after a later one was ingested.
+      // So the record now at the last consumed position must be the call stored there; if it is not,
+      // an incremental run would skip a record without a word. Refuse — --rebuild is always exact.
+      // (No row at that seq = a duplicate id that was never written there; nothing to compare.)
+      if (idx === (await consumedOf(key)) - 1) {
+        const at = (await conn.runAndReadAll(
+          sid == null ? 'SELECT call_id FROM calls WHERE session_id IS NULL AND seq = $1'
+            : 'SELECT call_id FROM calls WHERE session_id = $1 AND seq = $2',
+          sid == null ? [idx] : [sid, idx])).getRowObjects()[0];
+        if (at && String(at.call_id) !== String(record.id)) {
+          throw new Error(`incremental ETL refused: the source changed under the watermark for ${sid == null ? 'session-less records' : 'session ' + sid} ` +
+            `(position ${idx} now holds ${record.id}${record._stream ? ' from ' + record._stream : ''}, the store holds ${at.call_id}) — ` +
+            'an earlier source file grew after a later one was ingested. Re-run with --rebuild.');
+        }
+      }
 
       const norm = decodeBody(record);
       corpus.push(norm); // full corpus (incl. skipped) → deterministic cross-batch lineage
 
       const laneKey = sid == null ? null : sid + '\x00' + call.lane;
-      const curBlocks = adapter.parseBlocks(record);
-      const msgCount = messageCount(norm);
+      const curBlocks = adapter.parseBlocks(record, st);
+      // an adapter may count messages itself (a chained wire's record carries only a delta). A call whose context is
+      // not known has no observed count (3.4: a partial context — a continuation with no predecessor in the capture,
+      // a request that was not stored or stored in part, a body that did not parse): null = no compaction verdict
+      // from it and it is not the lane's baseline for the next call, the rule the board follows too.
+      const counted = typeof adapter.messageCount === 'function' ? adapter.messageCount(record, st) : messageCount(norm);
+      const msgCount = call.context_state === 'partial' ? null : counted;
 
       // ── watermark skip: already consumed for this session. Still advance predecessor
       //    state (so the first NEW in-lane call gets the correct N-1), but write nothing.
       if (idx < (await consumedOf(key))) {
         if (laneKey && isLlm) {
           prevBlocks.set(laneKey, curBlocks);
-          prevMsgCount.set(laneKey, msgCount);
+          if (msgCount != null) advanceLane(laneKey, msgCount, call);
         }
         stats.skipped++;
         continue;
       }
 
-      const rawRef = mintRawRef(sid, streamBasename, record.id);
+      // 4.2:39 — <stream_file> is the file THIS record was read from (readRecords stamps a non-enumerable
+      // _stream; for a sealed file, its ORIGINAL stream). One run over a directory spans several files;
+      // one name for all would point every later file's blocks at the first file.
+      const rawRef = mintRawRef(sid, streamOf(record), record.id);
       const ts = record.ts ?? record.ts_request ?? null;
 
       // ── sessions (llm-with-session only; control is session-LESS) ──
@@ -209,24 +338,36 @@ export async function runEtl(records, connection, opts = {}) {
             'native_id_confidence,extra) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ' +
             'ON CONFLICT (session_id) DO UPDATE SET ' +
             'started_at = LEAST(sessions.started_at, excluded.started_at), ' +
-            'ended_at = GREATEST(sessions.ended_at, excluded.ended_at)',
+            'ended_at = GREATEST(sessions.ended_at, excluded.ended_at), ' +
+            'harness = COALESCE(sessions.harness, excluded.harness)',
           [
-            sid, harness, provider, sess.native_id ?? null, sess.parent ?? null,
+            // provider is the main-lane wire SUMMARY (3.2:29), written after the loop from calls
+            // parent_session_id: written only by the lineage pass below (one writer → incremental == full)
+            sid, ident.id, null, sess.native_id ?? null, null,
             sess.fork_of ?? null, sess.forked_at ?? null, sess.title ?? null, sess.cwd ?? null,
             sess.entrypoint ?? null, ts, ts, sess.native_id_confidence ?? null,
-            JSON.stringify(sess.extra ?? {}),
+            JSON.stringify({ ...(sess.extra ?? {}), ...(ident.inferred ? { harness_inferred: true } : {}),
+              ...(synthKey ? { session_key: 'synthesized', synth_rule: SYNTH_RULE } : {}) }), // native_id stays NULL, confidence low
           ],
         );
       }
 
       // ── calls (every claimed record; compaction is a cross-call inference) ──
-      const comp =
-        isLlm && laneKey ? markCompaction(prevMsgCount.get(laneKey) ?? 0, msgCount) : { compaction: false, compaction_from: null, compaction_to: null };
+      // 3.4 (compactionVerdict, the board's rule too): a harness hint first (header, high; a text marker only on
+      // its rising edge, medium), else a SHARP message-count drop (medium; CC's own preamble lets a smaller one
+      // count, on its rising edge only). A lane's first call has no predecessor: compaction_from stays NULL. Never a
+      // fork (sessions.fork_of is not touched).
+      let comp = { compaction: false, compaction_from: null, compaction_to: null };
+      // msgCount null = the adapter does not know this call's context (its request was not stored): no verdict
+      if (isLlm && laneKey && msgCount != null) {
+        const prev = prevMsgCount.has(laneKey) ? { msgCount: prevMsgCount.get(laneKey), marker: !!prevMarker.get(laneKey), preamble: !!prevPreamble.get(laneKey) } : null;
+        comp = compactionVerdict(prev, { hint: !!call.compaction_hint, marker: !!call.compaction_marker, msgCount, preamble: !!call.compaction_preamble });
+      }
       await conn.run(
         'INSERT INTO calls (call_id,session_id,seq,ts,endpoint,model,stream,class,control_kind,' +
           'lane,request_bytes,raw_ref,stop_reason,duration_ms,error,compaction,compaction_from,' +
-          'compaction_to,unmapped_count,extra) VALUES ' +
-          '($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) ' +
+          'compaction_to,unmapped_count,extra,wire_format,vendor,transport,context_state,observer_effect) VALUES ' +
+          '($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25) ' +
           'ON CONFLICT (call_id) DO NOTHING',
         [
           record.id, sid, idx, ts, call.endpoint || null, call.model ?? null, !!call.stream,
@@ -234,11 +375,15 @@ export async function runEtl(records, connection, opts = {}) {
           call.stop_reason ?? null, call.duration_ms ?? null, call.error ? 'true' : null,
           comp.compaction, comp.compaction_from, comp.compaction_to, call.unmapped_count ?? 0,
           JSON.stringify(call.extra ?? {}),
+          // D37 (3.2:49-53); an envelope without `transport` is HTTP (3.2:132)
+          call.wire_format ?? null, vendor, record.transport === 'ws' ? 'ws' : 'http',
+          call.context_state ?? null, jsonOrNull(observerEffectsOf(record)),
         ],
       );
 
-      // ── usage (llm only; cache_write NULL MUST NOT be coerced to 0) ──
-      if (isLlm) {
+      // ── usage (llm only; cache_write NULL MUST NOT be coerced to 0). An adapter returns usage:null when
+      //    the wire reported none (e.g. a probe): then no usage and no cache_events row, never a fake zero.
+      if (isLlm && call.usage) {
         const u = call.usage || {};
         await conn.run(
           'INSERT INTO usage (call_id,input_uncached,cache_read,cache_write,output,reasoning,' +
@@ -253,7 +398,10 @@ export async function runEtl(records, connection, opts = {}) {
 
       // ── block_contents (dedup by content_hash, INSERT-IF-ABSENT) + call_blocks map ──
       for (const blk of curBlocks) {
-        const textRef = Array.isArray(blk.text_ref) ? composeTextRef(rawRef, blk.text_ref) : null;
+        // A block whose bytes live in another record (an earlier WebSocket call) or another field (that call's
+        // resp.messages.<j>) points THERE (4.2:40), never at this record: the ref is always to verbatim bytes.
+        const srcRaw = blk.source ? mintRawRef(blk.source.sessionId ?? sid, blk.source.stream || streamBasename, blk.source.recordId) : rawRef;
+        const textRef = Array.isArray(blk.text_ref) ? composeTextRef(srcRaw, blk.text_ref, blk.source ? blk.source.field : null) : null;
         await conn.run(
           'INSERT INTO block_contents (content_hash,section,role,kind,chars,preview,text_ref,' +
             'faithfulness,extra) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (content_hash) DO NOTHING',
@@ -270,13 +418,13 @@ export async function runEtl(records, connection, opts = {}) {
       }
 
       // ── cache_events (llm only; D17 forensics via 3.3 deriveCacheEvents) ──
-      if (isLlm) {
+      if (isLlm && call.usage) {
         const u = call.usage || {};
         const ev = deriveCacheEvents(
           prevBlocks.get(laneKey) ?? null,
           curBlocks,
           { cache_read: u.cache_read, cache_write: u.cache_write, total_input: u.total_input },
-          { compaction: comp.compaction, call_id: record.id, provider },
+          { compaction: comp.compaction, call_id: record.id, vendor, wireFormat: call.wire_format ?? null, contextState: call.context_state ?? null },
         );
         await conn.run(
           'INSERT INTO cache_events (call_id,break_kind,hit_ratio,declared_breakpoints,' +
@@ -305,30 +453,44 @@ export async function runEtl(records, connection, opts = {}) {
         resSeq.set(sid, rs);
       }
 
-      // advance predecessor state AFTER this call is written
+      // advance predecessor state AFTER this call is written (a call of unknown context leaves the count chain alone)
       if (laneKey && isLlm) {
         prevBlocks.set(laneKey, curBlocks);
-        prevMsgCount.set(laneKey, msgCount);
+        if (msgCount != null) advanceLane(laneKey, msgCount, call);
       }
       touched.add(key);
       stats.ingested++;
     }
 
-    // ── lineage pass (RFC 3.4 认亲): parent_session_id via first-user-msg ↔ parent
-    //    Task/Agent prompt. Runs over the FULL run corpus so batching can't change the
-    //    result. UPDATEs are idempotent; only subagent sessions with a resolved parent.
+    // ── sessions.provider = SUMMARY (3.2:29): the main lane's wire format, 'mixed' when it mixes.
+    //    Recomputed from the calls table, so incremental == full by construction.
+    await conn.run(
+      'UPDATE sessions SET provider = t.p FROM (' +
+        "SELECT session_id, CASE WHEN count(DISTINCT wire_format) = 1 THEN min(wire_format) ELSE 'mixed' END AS p " +
+        "FROM calls WHERE class = 'llm' AND lane = 'main' AND wire_format IS NOT NULL AND session_id IS NOT NULL " +
+        'GROUP BY session_id) AS t WHERE sessions.session_id = t.session_id',
+    );
+
+    // ── lineage pass (RFC 3.4), over the FULL run corpus so batching can't change the result; the only
+    //    writer of parent_session_id. (a) harness-declared parents (high): the raw id resolved through the
+    //    corpus's alias keys (gate G4: a Codex parent header names a THREAD id), else kept as the harness
+    //    gave it. (b) CC 认亲 (first user msg ↔ parent Task/Agent prompt) for sessions still without one.
+    const known = new Set((await conn.runAndReadAll('SELECT session_id FROM sessions')).getRowObjects().map((r) => r.session_id));
+    for (const [sid, raw] of parentHint) {
+      const parent = known.has(raw) ? raw : (aliasToSid.get(raw) ?? raw);
+      if (parent !== sid) await conn.run('UPDATE sessions SET parent_session_id = $1 WHERE session_id = $2', [parent, sid]);
+    }
     const candidates = buildParentIndex(corpus);
     const subFirst = new Map(); // session_id -> first subagent record
     for (const rec of corpus) {
       if (!isSubagent(rec)) continue;
-      const h = rec.req_headers || {};
-      const sid = h['x-claude-code-session-id'] || h['X-Claude-Code-Session-Id'] || null;
+      const sid = nativeId(rec).native_id;
       if (sid && !subFirst.has(sid)) subFirst.set(sid, rec);
     }
     for (const [sid, rec] of subFirst) {
       const { parent_session_id } = resolveParent(rec, candidates);
       if (parent_session_id) {
-        await conn.run('UPDATE sessions SET parent_session_id = $1 WHERE session_id = $2', [parent_session_id, sid]);
+        await conn.run('UPDATE sessions SET parent_session_id = $1 WHERE session_id = $2 AND parent_session_id IS NULL', [parent_session_id, sid]);
       }
     }
 

@@ -10,9 +10,8 @@ import { randomBytes } from 'node:crypto'
 import https from 'node:https'
 import net from 'node:net'
 import tls from 'node:tls'
-import zlib from 'node:zlib'
 import { buildEnvelope, isoStamp, HOP_BY_HOP } from './envelope.mjs'
-import { makeSseReconstructor, decodeBody } from './sse-reconstruct.mjs'
+import { teeResponse } from './response-tee.mjs'
 
 // CONNECT tunnel through an egress proxy for https upstreams (ported from proxy.mjs L81-116).
 function makeConnectTunnel(targetHost, targetPort, proxyUrl) {
@@ -45,7 +44,9 @@ function makeConnectTunnel(targetHost, targetPort, proxyUrl) {
 // ref (invariant 2) — the blocks become unviewable. A short run tag, minted once per writer, is
 // enough: unique per run, still ordinal and readable inside it (req_k3f9a1-00007).
 const runTag = () => Date.now().toString(36).slice(-4) + randomBytes(2).toString('hex');
-export function createReverseProxy({ target, upstreamProxy = '', keepRawSse = false, onEnvelope }) {
+// onEvent (D38, RFC 4.1 过渡期): an upstream that closes mid-response, an SSE stream that cannot be decompressed
+// (response-tee.mjs) — the CLI appends them to ~/.asight/logs/mitm-events.ndjson.
+export function createReverseProxy({ target, upstreamProxy = '', keepRawSse = false, onEnvelope, onEvent = () => {} }) {
   const TARGET = target instanceof URL ? target : new URL(target)
   const useProxy = Boolean(upstreamProxy) && TARGET.protocol === 'https:'
   let seq = 0
@@ -74,36 +75,17 @@ export function createReverseProxy({ target, upstreamProxy = '', keepRawSse = fa
 
       const upstream = client.request(options, (up) => {
         const tsRespStart = isoStamp()
-        res.writeHead(up.statusCode || 502, up.headers)
-        const isSse = String(up.headers['content-type'] || '').includes('text/event-stream')
-        const enc = String(up.headers['content-encoding'] || '').toLowerCase()
-        const recon = isSse ? makeSseReconstructor(keepRawSse) : null
-        const jsonChunks = isSse ? null : []
-        let decoder = null
-        if (isSse && enc) {
-          if (enc.includes('br')) decoder = zlib.createBrotliDecompress()
-          else if (enc.includes('gzip')) decoder = zlib.createGunzip()
-          else if (enc.includes('deflate')) decoder = zlib.createInflate()
-          if (decoder) { decoder.on('data', (d) => recon.push(d)); decoder.on('error', () => {}) }
-        }
-        let done = false
-        const finalize = () => {
-          if (done) return; done = true; settled = true
-          let resp
-          if (isSse) resp = { status: up.statusCode, kind: 'sse', ...recon.finish() }
-          else {
-            const buf = decodeBody(Buffer.concat(jsonChunks), enc)
-            let parsed; try { parsed = JSON.parse(buf.toString('utf8')) } catch { parsed = { _unparsed_chars: buf.length } }
-            resp = { status: up.statusCode, kind: 'json', body: parsed }
-          }
-          resp.request_id = up.headers['request-id'] || up.headers['x-request-id'] || null
-          onEnvelope(buildEnvelope({ id, tsRequest, tsRespStart, durationMs: dur(), method: req.method, endpoint: req.url, reqBody: bodyBuf, reqHeaders: req.headers, capture: 'reverse-proxy', resp }))
-        }
-        up.on('data', (chunk) => { res.write(chunk); if (isSse) { if (decoder) decoder.write(chunk); else recon.push(chunk) } else jsonChunks.push(chunk) })
-        up.on('end', () => { res.end(); if (decoder) { decoder.on('end', finalize); decoder.end() } else finalize() })
+        teeResponse(up, res, { keepRawSse, where: 'proxy', onEvent }, (resp, aborted) => {
+          if (settled) return // one envelope per request
+          settled = true
+          onEnvelope(buildEnvelope({ id, tsRequest, tsRespStart, durationMs: dur(), method: req.method, endpoint: req.url, reqBody: bodyBuf, reqHeaders: req.headers, capture: 'reverse-proxy', resp, error: aborted }))
+        })
       })
 
       upstream.on('error', (err) => {
+        // the response is under way (a reset mid-stream): teeResponse ends the client's response and writes the one
+        // error:true envelope when `up` closes; nothing may be appended to the stream the client already has
+        if (res.headersSent) { res.destroy(); return }
         if (!settled) {
           settled = true
           onEnvelope(buildEnvelope({ id, tsRequest, tsRespStart: null, durationMs: dur(), method: req.method, endpoint: req.url, reqBody: bodyBuf, reqHeaders: req.headers, capture: 'reverse-proxy', error: true, resp: { status: null, kind: 'error', error: { type: err.code || 'upstream_error', message: String((err && err.message) || err) } } }))

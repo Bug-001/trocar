@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { assembleSession } from '../../src/view/assemble.mjs';
 import { readRecords } from '../../src/etl/ingest.mjs';
 import { buildResolver } from '../../src/query/source.mjs';
+import { tmpDir } from '../helpers/tmp.mjs';
 
 // RFC 3.1 dissector · D18a (2026-07-16 amendment): the board must render the PRODUCT capture format (D10:
 // verbatim req_body STRING + resp), not just the demo v0 shape. Before the CC dissector's board-intake
@@ -52,7 +52,7 @@ function d10Record(over = {}) {
 // `_stream` and every block is addressable. Returns { call, rec, file } — `rec` is the ORIGINAL record
 // (with req_body), which the tests diff the resolved bytes against.
 function boardFromCapture(record = d10Record()) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-d10-'));
+  const dir = tmpDir('asight-d10-');
   const file = path.join(dir, 'cap.ndjson');
   fs.writeFileSync(file, JSON.stringify(record) + '\n');
   return { file, record };

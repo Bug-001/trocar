@@ -1,0 +1,166 @@
+// z-code.mjs — Z-Code (RFC 4.6 §身份与信任 tables, D37). Facts: the linux-arm64 desktop package in /opt/ZCode and its
+// CLI bundle resources/glm/zcode.cjs (agent runtime 0.13.3) on a test machine, read statically and run as a CLI against
+// the mock (lab ① ②); the desktop bundle app.asar for the settings file.
+// Identity: the desktop runs `<exe> <glm>/zcode.cjs app-server --stdio …` with ELECTRON_RUN_AS_NODE=1 (exe
+// /opt/ZCode/zcode, the GUI's own); the CLI is the same with -p / tui and sets process.title = "zcode-cli", which
+// replaces its cmdline. Remote mode runs ~/.zcode/server/node with ~/.zcode/server/agents/glm/zcode.cjs, and a wrapper
+// may run it under node: both are node with the bundle as its entry script. `__zcode-plugin-host` (one per run) and `__zcode-dwf-child` children are not the agent.
+// Trust: caCertFile scopes User (~/.zcode/cli/config.json) < Project (zcode.json, .zcode/config.json in every dir from
+// the git root down to the cwd) < Env (ZCODE_AGENT_CA_CERT; '' turns it off). A set path becomes an explicit `ca` on a
+// new https.Agent per request (replaces: NODE_EXTRA_CA_CERTS then no longer counts); with none, the default store,
+// which Electron-as-Node extends with NODE_EXTRA_CA_CERTS (lab ②). The desktop CA setting (httpProxyCaCertPath in
+// ~/.zcode/v2/setting.json) reaches the agent as ZCODE_AGENT_CA_CERT and overrides the user file. Config is read per
+// new or resumed session; a resident session keeps what it loaded: not live. The CLI loads the nearest .env (fill).
+// Not via the trust path: the CLI refreshes its built-in providers by plain fetch from the Z-Code origin (and the CDN
+// it names), so a CLI's origin host is passed through (an app-server does not refresh).
+// Injection (D37④): network.caCertFile in ~/.zcode/cli/config.json = combined-z-code.pem, which carries the user's CAs
+// it replaces or makes ineffective: the caCertFile it replaces, the desktop setting, NODE_EXTRA_CA_CERTS / a set
+// ZCODE_AGENT_CA_CERT of the install shell and running Z-Code (4.6 合并包).
+import path from 'node:path'
+import { parseJsonc, hostOf } from '../core/config-read.mjs'
+import { CODE } from '../core/codes.mjs'
+import { urlHostsDeep, dotenvLayer } from './_common.mjs'
+
+const ZEXE = /(^|\/)zcode( \(deleted\))?$/
+const NODE = /(^|\/)node( \(deleted\))?$/
+const CJS = /\/glm\/zcode\.cjs$/
+const AS_NODE = { ELECTRON_RUN_AS_NODE: '1' }
+const TITLE = /^zcode-cli$/
+// the model fetch follows only ZCODE_HTTP_PROXY / network.httpProxy (HTTP(S)_PROXY is web-fetch only)
+const CDN_HOST = 'cdn-zcode.z.ai'
+const PROXY_SOURCES = [
+  ['ZCODE_HTTP_PROXY', 'env:ZCODE_HTTP_PROXY'],
+  ['zcode:project:httpProxy', 'config:project zcode.json / .zcode/config.json network.httpProxy'],
+  ['zcode:user:httpProxy', 'config:~/.zcode/cli/config.json network.httpProxy'],
+]
+
+function jsonAt(ctx, file) {
+  const text = file ? ctx.readText(file) : null
+  if (text == null) return null
+  const { data } = parseJsonc(text)
+  if (data == null && ctx.unparsable) ctx.unparsable(file) // reported, judged as absent (D38)
+  return data
+}
+const desktopSettings = (env, home) => path.join(env.get('ZCODE_DESKTOP_HOME_DIR') || home, '.zcode', 'v2', 'setting.json')
+
+function configLayer(ctx, files, scope) {
+  const vars = {}
+  const cas = []
+  let mtimeMs = null
+  for (const f of files) {
+    const net = (jsonAt(ctx, f) || {}).network || {}
+    if (typeof net.caCertFile === 'string' && net.caCertFile.trim()) cas.push(net.caCertFile.trim())
+    if (typeof net.httpProxy === 'string' && net.httpProxy) vars[`zcode:${scope}:httpProxy`] = net.httpProxy
+    const m = ctx.mtimeOf(f)
+    if (m != null) mtimeMs = Math.max(mtimeMs ?? 0, m)
+  }
+  // several project files feed one scope and their order is not pinned down: each must hold the CA (`list`)
+  if (cas.length) vars[`zcode:${scope}:caCertFile`] = [...new Set(cas)].join('\n')
+  return Object.keys(vars).length ? { name: `${scope} config (${files.filter((f) => ctx.readText(f) != null).join(', ')})`, file: files.length === 1 ? files[0] : undefined, mode: 'override', vars, live: false, mtimeMs } : null
+}
+
+// Every dir from the git root (the nearest ancestor holding .git; none: the cwd alone) down to the cwd.
+function projectDirs(ctx) {
+  const cwd = path.resolve(ctx.cwd)
+  const chain = []
+  for (let d = cwd; ; d = path.dirname(d)) { chain.push(d); if (ctx.listDir(d).includes('.git')) return chain.reverse(); if (path.dirname(d) === d) return [cwd] }
+}
+
+function nearestDotenv(ctx) {
+  for (let dir = path.resolve(ctx.cwd); ; dir = path.dirname(dir)) {
+    const f = path.join(dir, '.env')
+    if (ctx.readText(f) != null) return f
+    if (path.dirname(dir) === dir) return null
+  }
+}
+
+function layers(ctx) {
+  const desk = jsonAt(ctx, desktopSettings(ctx.environ, ctx.home)) || {}
+  const dotenv = nearestDotenv(ctx)
+  return [
+    dotenv && dotenvLayer(ctx, dotenv, { name: dotenv, mode: 'fill' }),
+    configLayer(ctx, [path.join(ctx.home, '.zcode', 'cli', 'config.json')], 'user'),
+    configLayer(ctx, projectDirs(ctx).flatMap((d) => [path.join(d, 'zcode.json'), path.join(d, '.zcode', 'config.json')]), 'project'),
+    typeof desk.httpProxyCaCertPath === 'string' && desk.httpProxyCaCertPath.trim()
+      ? { name: 'desktop setting (~/.zcode/v2/setting.json)', mode: 'override', vars: { 'zcode:desktop:caPath': desk.httpProxyCaCertPath.trim() }, live: true }
+      : null,
+  ].filter(Boolean)
+}
+
+function configHosts(ctx) {
+  const base = ctx.env.get('ZCODE_DATA_BASE_DIR') || ctx.home
+  const files = [ctx.env.get('ZCODE_PERSONAL_PROVIDER_CONFIG_FILE') || path.join(base, '.zcode', 'v2', 'provider_config.json'), ctx.env.get('ZCODE_BUILTIN_PROVIDER_CONFIG_FILE')]
+  const hosts = []
+  for (const f of files) urlHostsDeep(jsonAt(ctx, f), /^(baseUrl|baseURL|base_url)$/, hosts)
+  return hosts
+}
+
+// The Z-Code origin a CLI refreshes its built-in providers from by plain fetch (4.6 Z-Code row, lab ②).
+function originHost(env) {
+  const test = (env.get('ZCODE_ENV') || '').trim().toLowerCase() === 'test'
+  const set = [env.get('ZCODE_BASE_URL'), env.get('ZCODE_ENDPOINT_ORIGIN'), env.get(test ? 'ZCODE_TEST_BASE_URL' : 'ZCODE_PRODUCTION_BASE_URL')].find((v) => v && v.trim())
+  return hostOf((set || (test ? 'https://zcode.chatglm.site' : 'https://zcode.z.ai')).trim())
+}
+
+function inject(ctx) {
+  const zdir = path.join(ctx.home, '.zcode')
+  if (!ctx.listDir(zdir).length) return { notes: [{ code: CODE.harnessNote, text: `${zdir} does not exist (Z-Code has not run for this user), so no trust entry is written; after running Z-Code once, run asight collector uninstall and install again` }] }
+  const cfg = path.join(zdir, 'cli', 'config.json')
+  const bundle = path.join(ctx.collectorDir, 'ca', 'combined-z-code.pem')
+  const seen = new Set()
+  const see = (v) => { if (typeof v === 'string' && v.trim() !== '' && !v.startsWith(ctx.collectorDir + path.sep)) seen.add(v.trim()) }
+  see(((jsonAt(ctx, cfg) || {}).network || {}).caCertFile)
+  const deskFile = desktopSettings(ctx.env, ctx.home)
+  const desk = (jsonAt(ctx, deskFile) || {}).httpProxyCaCertPath
+  see(desk)
+  for (const env of [ctx.env, ...ctx.running]) { see(env.get('NODE_EXTRA_CA_CERTS')); see(env.get('ZCODE_AGENT_CA_CERT')) }
+  const notes = [...seen].filter((v) => !path.isAbsolute(v)).map((v) => ({ code: CODE.relativePath, text: `${v} is a relative CA path; its certificates are not carried over into ${path.basename(bundle)}` }))
+  if (typeof desk === 'string' && desk.trim()) notes.push({ code: CODE.harnessNote, text: `the Z-Code desktop setting httpProxyCaCertPath (${desk.trim()}, in ${deskFile}) reaches the desktop agent as ZCODE_AGENT_CA_CERT and wins over asight's caCertFile, so the desktop is not captured while it is set; its CA is merged into ${path.basename(bundle)}, so it can be cleared` })
+  if (ctx.env.has('ZCODE_AGENT_CA_CERT')) notes.push({ code: CODE.harnessNote, text: `ZCODE_AGENT_CA_CERT is set in this shell; a Z-Code started with it ignores asight's caCertFile and is not captured` })
+  return {
+    entries: [{ kind: 'json-key', path: cfg, keys: ['network', 'caCertFile'], value: bundle, semantic: 'replace' }],
+    files: [{ path: bundle, bundle: true, certsFrom: [...seen].filter((v) => path.isAbsolute(v)) }],
+    notes,
+  }
+}
+
+export default {
+  name: 'z-code',
+  runtime: 'node',
+  signatures: {
+    linux: {
+      match: [
+        { exe: ZEXE, argv: [CJS], env: AS_NODE },
+        { exe: ZEXE, 'argv.0': TITLE, env: AS_NODE },
+        { exe: NODE, 'argv.1': CJS },
+        { exe: NODE, 'argv.0': TITLE },
+      ],
+      exclude: [{ argv: [/^__zcode-(plugin-host|dwf-child)$/] }],
+      longLived: [{ argv: [/^(app|agent)-server$/] }],
+    },
+  },
+  hosts: ['api.z.ai', 'open.bigmodel.cn', 'zcode.z.ai', 'api.moonshot.cn', 'api.minimaxi.com', 'api.deepseek.com', 'dashscope.aliyuncs.com', 'dashscope-intl.aliyuncs.com', 'api.xiaomimimo.com', 'api.openai.com', 'api.anthropic.com', 'api.x.ai', 'openrouter.ai', 'opencode.ai'],
+  layers,
+  configHosts,
+  // 不经信任路径: the CDN's plugin marketplace and assets trust ZCODE_AGENT_CA_CERT only, never caCertFile (every process);
+  // the CLI's provider refresh reaches its origin by plain fetch. Another CDN address the origin returns is not known
+  // beforehand: under `all` it is decrypted, that refresh fails once, then the (pid, host) negative cache (review 3 #5).
+  bypass: (ctx) => [{ host: CDN_HOST, reason: 'not-via-trust-path' }, ...(ctx.argv.some((a) => /^(app|agent)-server$/.test(a)) ? [] : [{ host: originHost(ctx.env), reason: 'not-via-trust-path' }])],
+  proxies: (ctx) => PROXY_SOURCES.filter(([k]) => (ctx.env.get(k) || '') !== '').map(([k, source]) => ({ url: ctx.env.get(k), source })),
+  inject,
+  trust: {
+    chain: [
+      { var: 'ZCODE_AGENT_CA_CERT', semantic: 'replace', emptyStops: true },
+      { var: 'zcode:project:caCertFile', semantic: 'replace', list: true },
+      { var: 'zcode:user:caCertFile', semantic: 'replace', list: true },
+      { var: 'NODE_EXTRA_CA_CERTS', semantic: 'append' },
+    ],
+    refine: (r, env) => (r.var === 'ZCODE_AGENT_CA_CERT' && env.get('zcode:desktop:caPath') && (env.get('ZCODE_AGENT_CA_CERT') || '').trim() === env.get('zcode:desktop:caPath') ? 'desktop-ca-override' : null),
+    rereadsEntry: true, // every new or resumed session reads caCertFile again: a live Z-Code may load the bundle
+    afterUninstall: 'session-end',
+    hints: {
+      'desktop-ca-override': 'the Z-Code desktop CA setting (httpProxyCaCertPath) overrides ~/.zcode/cli/config.json; its CA is in combined-z-code.pem, so the setting can be cleared',
+      shadowed: 'ZCODE_AGENT_CA_CERT (set, or empty) or a project zcode.json / .zcode/config.json overrides the user caCertFile',
+    },
+  },
+}

@@ -78,7 +78,9 @@ session (the older `atrace` name was this project's v0 prototype).
 
 No ETL, no database, no build step — the board reads the NDJSON directly. With no `--source` it reads
 the capture directory every tap writes into, so **Claude Code, Codex and OpenCode sessions appear side
-by side on one board**. Pass `--source <file|dir>` to look somewhere else.
+by side on one board**. It also reads the per-user process collector's `~/.asight/collector/capture-*.ndjson`
+when that directory exists (its `flows/`, `audit/` and `replays/` are not envelopes and are not shown).
+Pass `--source <file|dir>` to look somewhere else.
 
 ## What you see
 
@@ -89,7 +91,40 @@ lifecycle** — which files entered context, when, via which tool *(Claude Code 
 
 Cost is a local, editable estimate in `~/.asight/pricing.json`; providers return usage, never dollars.
 
-Optional: `asight etl <capture.ndjson> --rebuild` loads a DuckDB projection
+What the board cannot vouch for, it labels on the call (raw panel and the top of the context window):
+- **不完整 · partial context**: what is shown is not the whole context the model saw (an earlier record is
+  missing, or the request body was stored incomplete — then the request's own label says exactly how).
+- **跨记录拼接 · stitched across records**: the context was reassembled from earlier records of the same
+  connection; every block is still verbatim.
+- **服务端删改 · server-edited context**: the response says the server edited the context it was sent.
+- **观测者效应 · capture changed client behaviour**: what asight's trust injection changes in that agent
+  (e.g. request gzip off, a different TLS stack); legacy captures carry none.
+- **厂商缓存语义未知**: the upstream host is not a known vendor, so no cache labels are claimed for it.
+- **已截断 / 不完整 / 回复未解码 / 压缩请求体未解码**: which bytes of this record are missing or were not decoded.
+  A request the agent sent compressed is decoded by asight when it reads it and shown with **请求体已解压 ·
+  request decompressed**; its blocks open as 「解码后逐字」 (the exact text after decompression, not the wire
+  bytes). 「压缩请求体未解码」 then means asight could not decode it either (e.g. zstd on a Node without zstd).
+- **未识别 · unrecognized traffic** (a banner): records no dissector reads are counted and named, never
+  drawn as something else — also when only some records of a session are unrecognized. One session may
+  mix wire formats; each call is read by its own.
+- Request keys that are not context blocks are listed one by one, each opening its verbatim bytes.
+  A token-count probe keeps only its size, and its detail says so.
+- **The reply as captured** is listed in the raw panel with a locator per piece — the whole decoded
+  stream of an HTTP call, each server message of a WebSocket call — each opening its verbatim bytes. A
+  piece that cannot be opened says why (a JSON reply the collector stored parsed, a message kept as
+  base64 or past the size cap, no reply at all).
+- **Codex over WebSocket** (its default transport): each turn sends only its new input, so the board
+  rebuilds the context the model saw from the earlier calls on the same connection, following
+  `previous_response_id`. Every block still opens its verbatim bytes, also when they sit in an earlier
+  call's reply. Such a call is badged 跨记录拼接; if an earlier call it builds on was not captured, it is
+  badged 不完整 and says which one, and no cache claim is made over it. A warm-up (`generate:false`) sits
+  in the probe lane, not on the turn axis; messages the agent sent while a call was open (an interrupt)
+  are listed on that call.
+
+Optional: `asight etl <capture.ndjson|dir> --rebuild` (a directory such as `~/.asight/collector`: its
+top-level `*.ndjson` in name order, subdirectories never read; an incremental run refuses and asks
+for `--rebuild` if an earlier file grew after a later one was loaded, or if the store was written by an
+older version of asight) loads a DuckDB projection
 (`sessions / calls / call_blocks / block_contents / usage / resource_events / cache_events`) for
 cross-session SQL. The board works fine without it.
 
@@ -115,6 +150,80 @@ agent read, all tool output, and any secret you pasted into a chat land on disk 
 `~/.asight/**` as sensitive; on a shared machine, `chmod -R go-rwx ~/.asight`. The dashboard binds
 loopback and enforces a Host/Origin allowlist, so a website you visit cannot reach it.
 
+### The per-user process collector (Linux, preview)
+
+`asight collector` captures agent CLIs by process instead of by proxy or base URL (RFC 4.6, D31) — Claude Code,
+OpenCode, DeepSeek `dsh`, Kimi Code, Hermes and Z-Code; Codex's entry is in, its end-to-end run waits for the
+WebSocket recorder. An
+eBPF helper steers only the connections of agent processes you run to a loopback engine, which decrypts
+only for agents that trust the collector CA. Everything else, including other users, goes direct.
+
+| what | where | undo |
+|---|---|---|
+| capability helper (once per machine, `sudo`) | `/usr/local/libexec/asight/asight-redirector`, root 0755, file caps `cap_bpf,cap_net_admin,cap_perfmon` — no setuid, no account, no system unit | `sudo asight setup-helper --remove` |
+| collector CA (per user, in **no** trust store) | `~/.asight/collector/ca/` (key 0600) | `asight collector uninstall` |
+| Claude Code trust entry | `env.NODE_EXTRA_CA_CERTS` in `~/.claude/settings.json` → the collector CA, or → `~/.asight/collector/ca/extra-cc.pem` (your existing CA's certificates + the collector CA) when you already set one | uninstall removes only that key, or puts your value back |
+| the other agents' trust entries | OpenCode: plugin `~/.config/opencode/plugins/asight-ca.js`; dsh: plugin dir `~/.asight/collector/plugins/dsh/` + a sentinel row in its patch file; Kimi Code: launch shim `~/.asight/collector/bin/kimi` + one sentinel `PATH` line after the installer's in your shell rc; Hermes / Codex: a sentinel block atop their `.env` (`SSL_CERT_FILE` → `combined-<agent>.pem`); Z-Code: `network.caCertFile` in `~/.zcode/cli/config.json` → `combined-z-code.pem`. A combined bundle = Node + OS roots + the CAs that agent already used + the collector CA | uninstall takes out only asight's text or key, removes asight's files (a bundle a running agent still uses is kept, without the collector CA, until the next uninstall) |
+| autostart unit (per user) | `~/.config/systemd/user/asight-collector.service`, enabled `--now`; it carries the `NODE_EXTRA_CA_CERTS` of the shell you install from, for the daemon only | uninstall disables and removes it (`install --no-unit` skips it) |
+| install manifest | `~/.asight/collector/install-manifest.json` — every file and key it changed, never a copy of your file | removed last by uninstall |
+| captures | `~/.asight/collector/capture-<date>.ndjson`; `flows/` holds connection metadata and failure records | kept unless `uninstall --purge-data` (which deletes `flows/` too, then records there anything it could not undo) |
+
+```sh
+sudo asight setup-helper      # once per machine (Linux)
+asight collector install      # per user, no sudo; lists every file it will change first; starts the daemon (systemd --user); then restart your agents
+asight collector start        # the daemon in the foreground, if you installed with --no-unit
+asight collector on           # steer + record; `off` stops recording at once
+asight collector status       # each agent and why it is (not) captured, and the recent failures
+asight serve                  # the captures appear on the board
+```
+
+A relay or proxy with a private CA keeps working: install carries the CA you already gave Claude Code
+into `extra-cc.pem` (the other agents' CAs into their bundles), and the daemon verifies upstreams with
+Node's store plus `NODE_EXTRA_CA_CERTS`: the autostart unit carries the value of the shell you install
+from; with `--no-unit`, start the daemon from a shell that has it. asight does not count on a Claude Code process that was already
+running at install picking up the new trust entry (not verified for every mode), so `status` reports it
+untrusted (`config-after-start`, with a hint to restart it) and its connections go direct, unrecorded,
+until you restart it.
+
+Capture failures are never silent: a refused or failed install step, a file uninstall could not undo, a
+helper or engine error, a failed heartbeat or attach, an envelope that could not be written, an agent
+judged untrusted, an unusable CA, connections the kernel let go direct, links lost behind the daemon's
+back — each leaves a line with its reason and a closed code in `~/.asight/collector/flows/`, and
+`asight collector status` prints the recent ones, also when the daemon is not running (it then judges
+the daemon from its lock: not running, or stuck). One exception: an install refused before it wrote
+anything (nothing installed yet, or run as root) has no collector directory to write into, so the
+command's output is its only report. Uninstall that cannot undo something exits 1 and keeps the install
+manifest for the next run. After upgrading, run `sudo asight setup-helper` again: the helper protocol is
+now 2.
+
+## Shrinking the raw logs — sealed files (D35)
+
+Raw captures grow with the square of a conversation (every call re-sends the whole history), so they
+dwarf the agent's own logs. A **closed** capture file can be *sealed*: re-encoded losslessly into a
+`<stream>.<NNNN>.sealed` file (per-record byte deltas + brotli frames + an index) that is typically a
+few percent of the original. Every reader — the board, `asight etl`, the "view verbatim bytes" panel —
+reads sealed files directly and shows exactly the same records; the original is deleted only after
+every record and the whole file are proven to decode back byte for byte.
+
+```sh
+asight raw seal --legacy ~/.asight/sessions --dry-run   # every check, nothing written: what would be sealed, refused or skipped, and why
+asight raw seal --legacy ~/.asight/sessions        # pre-2026-10 files: refuses while anything writes them; keeps originals
+asight raw verify ~/.asight/sessions               # decode every sealed copy, compare byte for byte with its original
+asight raw compare ~/.asight/sessions              # per session: what the board, ETL and resolver read via the originals vs. via their sealed copies (--list: per file)
+asight raw seal --legacy ~/.asight/sessions --delete-original --dry-run   # which originals would be deleted, which refused
+asight raw seal --legacy ~/.asight/sessions --delete-original   # deletes only originals that already have a sealed copy, after a byte-for-byte check; each deletion journalled first (no journal, no deletion)
+asight raw export <session-id>                     # back to plain NDJSON: ~/.asight/export/<session>/, one file per segment (0600)
+asight raw journal                                 # every refusal, skip, failure and deletion, with its reason
+```
+
+`asight raw seal <closed-shard>` files a shard's records by session under `~/.asight/sessions/<session>/`;
+`asight serve --source <the shard's directory>` reads them as part of that directory (a different
+`--sessions` must then be served too). The old root `~/.atrace/asight/` is never sealed — move it into
+`~/.asight` first.
+
+A capture file that is still being written is never sealed. Sealed and exported files hold the same
+plaintext and credentials as the capture and are created owner-only (0600); `asight doctor` checks them.
+
 ## Claude Desktop — the one environment-dependent case
 
 Desktop force-overwrites its base URL and ignores `settings.json`, so it cannot be steered by config.
@@ -138,13 +247,23 @@ your machine — every path above still is. `asight desktop off` restores the co
 - **Resource lifecycle is Claude Code only.** It is built on Claude Code's tool vocabulary. Codex and
   OpenCode get context replay, blocks, cache analysis and usage — their resource lanes render empty
   rather than guessing.
-- **DeepSeek is not supported** — no dissector yet.
+- **DeepSeek's cache semantics on its Anthropic endpoint are not settled.** `dsh` (that endpoint) and
+  DeepSeek's Chat Completions API are read like any other wire, but calls to the Anthropic endpoint show
+  「厂商缓存语义未知」 until a real capture settles them (3.3 OPEN).
+- **Some sessions are grouped by guess.** Hermes on a custom endpoint, and Kimi without a body key, send
+  no session id at all; their calls are grouped by the system prompt and a 30-minute gap (never by process
+  or connection), and the chip says 「按推测归组」. The rule is provisional until checked on a real capture.
+- **On captures without process identity the harness is a guess.** Sessions recorded by the MITM or
+  reverse proxy carry no `proc.agent`, so the board names their agent from the User-Agent and its chip
+  says so (「推断自 UA」). Sessions from the per-process collector are named by process, never by UA.
 - **DuckDB is a projection, not an analytics product.** Roughly a dozen canned queries, no query UI.
   Open the `.duckdb` file with any DuckDB client and write your own SQL.
 - **Non-verbatim data is labelled in place.** Raw NDJSON is the only source of truth; DuckDB is
   rebuildable from it. SSE replies are faithful reconstructions of the streamed frames. Data imported
   from the v0 demo is badged `v0-converted` (re-serialized bodies, summarized tool schemas); fresh
-  captures are byte-exact with full tool schemas.
+  captures are byte-exact with full tool schemas. A request body the collector stored only in part is
+  badged on its call with the exact reason: 已截断 (cut at the 64 MiB capture cap) or 不完整 (the capture
+  did not get it whole, e.g. the upstream answered 413 before it was sent).
 - **No npm distribution, no LICENSE.** The package is `private`, so `npx asight` does not exist. Clone
   it and treat it as source-available for personal research.
 - **Personal research instrument.** Single-user, loopback-only, observe-only: it will never inject or
@@ -155,11 +274,15 @@ your machine — every path above still is. `asight desktop off` restores the co
 ```sh
 asight capture [--port 8899] [--target <url>] [--out <ndjson>] [--upstream <proxy>] [--raw-sse]
 asight serve   [--port 9800] [--source <ndjson|dir>] [--db <path>] [--control]
-asight etl <ndjson> [--rebuild]
+asight etl <ndjson|sealed|dir> [--rebuild]
 asight on [--proxy <url>] | off [--remove-ca] | uninstall | verify | doctor
+asight raw seal <closed-shard> | seal --legacy <file|dir> [--dry-run] [--delete-original]
+asight raw verify <sealed|dir> [--against <original>] | compare <dir> [--list] | export <session|file.sealed> | journal
 asight monitor {on|off|status}
 asight mitm [--port 9899] [--host api.anthropic.com]
 asight desktop {on|off|status}        # macOS + Clash Verge
+sudo asight setup-helper [--binary <path>] [--remove]   # Linux, once per machine
+asight collector install | start | on | off | status [--json] | uninstall [--purge-data]
 ```
 
 Design authority: [`spec/01-asight-rfc/`](spec/01-asight-rfc/) (entry `0.0-overview.md`). This README is

@@ -122,3 +122,16 @@ export function scanJson(text) {
   if (i !== N) throw new Error(`scanJson: trailing content at ${i}`);
   return root;
 }
+
+// Walk a scanJson tree by a JSON path (object keys / array indexes) → [start, end) of that value, or null
+// when the path does not exist in the bytes (the caller then ships the block unaddressed and says so).
+export function spanAt(root, path) {
+  let n = root;
+  for (const k of path || []) {
+    if (!n) return null;
+    if (n.kind === 'object') n = n.props.get(String(k));
+    else if (n.kind === 'array' && Number.isInteger(k)) n = n.items[k];
+    else return null;
+  }
+  return n ? [n.start, n.end] : null;
+}

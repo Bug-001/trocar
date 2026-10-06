@@ -112,3 +112,21 @@ test('control_calls shows only class=control; unmapped_fields aggregates extra k
   assert.equal(um[0].harness, 'cc');
   assert.equal(Number(um[0].n), 1);
 });
+
+test('D37 columns exist on a fresh DB and are added to a pre-D37 DB', async () => {
+  const cols = async (c) => (await c.runAndReadAll("SELECT column_name FROM information_schema.columns WHERE table_name = 'calls' ORDER BY ordinal_position")).getRowObjects().map((r) => r.column_name);
+  const D37 = ['wire_format', 'vendor', 'transport', 'context_state', 'observer_effect'];
+  const fresh = await cols(await freshDb());
+  assert.deepEqual(fresh.slice(-5), D37, 'fresh: the D37 columns come last');
+  // a store created by the pre-D37 DDL: the original 20 calls columns + a view over calls, one old row
+  const old = await (await DuckDBInstance.create(':memory:')).connect();
+  await old.run('CREATE TABLE calls (call_id TEXT PRIMARY KEY, session_id TEXT, seq INT, ts TIMESTAMP, endpoint TEXT, model TEXT, stream BOOL, class TEXT, control_kind TEXT, lane TEXT, request_bytes INT, raw_ref TEXT, stop_reason TEXT, duration_ms INT, error TEXT, compaction BOOL, compaction_from INT, compaction_to INT, unmapped_count INT, extra JSON)');
+  await old.run("CREATE VIEW control_calls AS SELECT call_id, ts, endpoint, control_kind, error, raw_ref FROM calls WHERE class = 'control'");
+  await old.run("INSERT INTO calls (call_id, class) VALUES ('old-1', 'llm')");
+  await applyDDL(old);
+  assert.deepEqual(await cols(old), fresh, 'migrated: the same columns in the same order as a fresh store');
+  const [r] = (await old.runAndReadAll("SELECT wire_format, vendor, context_state FROM calls WHERE call_id='old-1'")).getRowObjects();
+  assert.deepEqual([r.wire_format, r.vendor, r.context_state], [null, null, null], 'old rows stay, new columns NULL');
+  await applyDDL(old); // a second run is a no-op
+  assert.deepEqual(await cols(old), fresh);
+});

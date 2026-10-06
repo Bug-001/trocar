@@ -2,11 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
 import { createServer } from '../src/server.mjs';
 import { ccLlmRecord } from './fixtures/cc-record.mjs';
+import { tmpDir } from './helpers/tmp.mjs';
 
 // BROKEN MUST NOT LOOK LIKE EMPTY (audit 2026-07-19).
 // asight's whole value is that what it shows IS what went over the wire. The worst outcome is a
@@ -21,7 +21,7 @@ const get = (port, p) => new Promise((resolve, reject) => {
   });
   r.on('error', reject); r.end();
 });
-const tmpdir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'asight-storeerr-'));
+const tmpdir = () => tmpDir('asight-storeerr-');
 async function serve(opts) {
   const { server } = await createServer(opts);
   server.listen(0, '127.0.0.1'); await once(server, 'listening');

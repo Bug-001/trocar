@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { captureOut, mitmOut, serveSource, asightHome } from '../src/paths.mjs';
+import { captureOut, mitmOut, serveSource, asightHome, collectorHome } from '../src/paths.mjs';
 
 // FIRST-RUN DEAD END (audit 2026-07-19). The capture writers and the board reader defaulted to
 // DIFFERENT paths: `asight capture` → ~/.atrace/capture.ndjson, `asight mitm` →
@@ -61,4 +61,19 @@ test('defaults live under the user home, never outside it', () => {
 test('capture and mitm write DISTINCT files (one board, one file per source)', () => {
   assert.notEqual(captureOut(), mitmOut(),
     'two capture sources appending to one file would interleave two harnesses into one stream');
+});
+
+// 4.6 §记录: the per-user collector writes ~/.asight/collector/capture-<date>.ndjson. The home root's
+// own scan is one level deep and only descends into <sub>/calls.ndjson, so without its own root the
+// collector's captures never reach a board that `asight serve` opens with no --source.
+test('the collector directory is a default board root when it exists (4.6 §记录)', () => {
+  const home = existingHome();
+  try {
+    assert.equal(collectorHome(home), path.join(home, 'collector'));
+    assert.deepEqual(serveSource({ home, legacyExists: false }), [home], 'absent collector dir: unchanged');
+    fs.mkdirSync(collectorHome(home));
+    assert.deepEqual(serveSource({ home, legacyExists: false }), [home, collectorHome(home)]);
+    const legacy = path.join(home, 'legacy-root');
+    assert.deepEqual(serveSource({ home, legacy, legacyExists: true }), [home, collectorHome(home), legacy], 'order: home, collector, legacy');
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

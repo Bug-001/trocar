@@ -59,6 +59,7 @@ test('"opencode" does not collide with the /codex/ row', () => {
 
 test('existing harness rows are unchanged by the new row', () => {
   const cc = metaFor([rec(1, { ua: 'claude-cli/2.0.0', endpoint: '/v1/messages', sid: 'ses_CC' })], 'ses_CC');
-  assert.equal(cc.harness, 'claude-code');
+  assert.equal(cc.harness, 'cc'); // 3.2 id (D37); 'claude-code' stays a chip alias
+  assert.equal(cc.harness_inferred, true, 'no proc on this legacy record → inferred from UA');
   assert.equal(cc.provider, 'anthropic');
 });

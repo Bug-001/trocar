@@ -9,9 +9,8 @@ import { randomBytes } from 'node:crypto'
 import https from 'node:https'
 import net from 'node:net'
 import tls from 'node:tls'
-import zlib from 'node:zlib'
 import { buildEnvelope, isoStamp, HOP_BY_HOP } from './envelope.mjs'
-import { makeSseReconstructor, decodeBody } from './sse-reconstruct.mjs'
+import { teeResponse } from './response-tee.mjs'
 
 // default: open a TLS connection to the real api tunneled through the upstream CONNECT proxy.
 export function makeUpstreamConnector({ upstreamProxy, targetHost }) {
@@ -33,7 +32,7 @@ export function makeUpstreamConnector({ upstreamProxy, targetHost }) {
 }
 
 // default: blind-tunnel a non-target host straight through the upstream proxy, untouched.
-export function makeBlindTunnel({ upstreamProxy }) {
+export function makeBlindTunnel({ upstreamProxy, onFail = () => {} }) {
   const UP = new URL(upstreamProxy)
   return (hostPort, client, head) => {
     const up = net.connect(Number(UP.port || 8080), UP.hostname, () => up.write(`CONNECT ${hostPort} HTTP/1.1\r\nHost: ${hostPort}\r\nConnection: keep-alive\r\n\r\n`))
@@ -41,13 +40,13 @@ export function makeBlindTunnel({ upstreamProxy }) {
     const onUp = (d) => {
       buf = Buffer.concat([buf, d]); const i = buf.indexOf('\r\n\r\n'); if (i === -1) return
       const statusLine = buf.slice(0, buf.indexOf('\r\n')).toString(); up.removeListener('data', onUp)
-      if (!/ 200/.test(statusLine)) { client.end(); up.end(); return }
+      if (!/ 200/.test(statusLine)) { onFail(`${hostPort}: ${statusLine}`); client.end(); up.end(); return }
       client.write('HTTP/1.1 200 Connection Established\r\n\r\n')
       const leftover = buf.slice(i + 4); if (leftover.length) client.write(leftover)
       if (head && head.length) up.write(head)
       client.pipe(up); up.pipe(client)
     }
-    up.on('data', onUp); up.on('error', () => client.destroy()); client.on('error', () => up.destroy())
+    up.on('data', onUp); up.on('error', (e) => { onFail(`${hostPort}: ${(e && e.code) || e}`); client.destroy() }); client.on('error', () => up.destroy())
   }
 }
 
@@ -58,9 +57,14 @@ export function makeBlindTunnel({ upstreamProxy }) {
 // ref (invariant 2) — the blocks become unviewable. A short run tag, minted once per writer, is
 // enough: unique per run, still ordinal and readable inside it (req_k3f9a1-00007).
 const runTag = () => Date.now().toString(36).slice(-4) + randomBytes(2).toString('hex');
-export function createMitmProxy({ targetHost, leaf, upstreamProxy, connectUpstream, blindTunnel, keepRawSse = false, onEnvelope }) {
+// D38 (RFC 4.1 过渡期采集源的失败也不静默): onEvent gets a failure record for every TLS handshake an agent refuses
+// (it does not trust this CA — L-1), every upstream that closes mid-response and every SSE stream that cannot be
+// decompressed (response-tee.mjs); the CLI appends them to ~/.asight/logs/mitm-events.ndjson. Client-socket errors
+// and blind tunnels that fail (outside the capture target) are only counted (`server.legacyStats`) and logged (L-10).
+export function createMitmProxy({ targetHost, leaf, upstreamProxy, connectUpstream, blindTunnel, keepRawSse = false, onEnvelope, onEvent = () => {}, log = () => {} }) {
   const connect = connectUpstream || makeUpstreamConnector({ upstreamProxy, targetHost })
-  const blind = blindTunnel || makeBlindTunnel({ upstreamProxy })
+  const stats = { clientErrors: 0, tunnelFailures: 0 }
+  const blind = blindTunnel || makeBlindTunnel({ upstreamProxy, onFail: (why) => { stats.tunnelFailures++; log(`asight mitm: blind tunnel failed (${why}); ${stats.tunnelFailures} so far`) } })
   let seq = 0
   const run = runTag()
 
@@ -84,40 +88,39 @@ export function createMitmProxy({ targetHost, leaf, upstreamProxy, connectUpstre
       }
       const upreq = https.request({ host: targetHost, port: 443, method: req.method, path: req.url, headers: fwd, createConnection: connect }, (up) => {
         const tsRespStart = isoStamp()
-        res.writeHead(up.statusCode || 502, up.headers)
-        const isSse = String(up.headers['content-type'] || '').includes('text/event-stream')
-        const enc = String(up.headers['content-encoding'] || '').toLowerCase()
-        const recon = isSse ? makeSseReconstructor(keepRawSse) : null
-        const jsonChunks = isSse ? null : []
-        let decoder = null
-        if (isSse && enc) {
-          if (enc.includes('br')) decoder = zlib.createBrotliDecompress()
-          else if (enc.includes('gzip')) decoder = zlib.createGunzip()
-          else if (enc.includes('deflate')) decoder = zlib.createInflate()
-          if (decoder) { decoder.on('data', (d) => recon.push(d)); decoder.on('error', () => {}) }
-        }
-        let done = false
-        const finalize = () => {
-          if (done) return; done = true; settled = true
-          let resp
-          if (isSse) resp = { status: up.statusCode, kind: 'sse', ...recon.finish() }
-          else {
-            const buf = decodeBody(Buffer.concat(jsonChunks), enc)
-            let parsed; try { parsed = JSON.parse(buf.toString('utf8')) } catch { parsed = { _unparsed_chars: buf.length } }
-            resp = { status: up.statusCode, kind: 'json', body: parsed }
-          }
-          resp.request_id = up.headers['request-id'] || up.headers['x-request-id'] || null
-          onEnvelope(buildEnvelope({ id, tsRequest, tsRespStart, durationMs: dur(), method: req.method, endpoint: req.url, reqBody: bodyBuf, reqHeaders: req.headers, capture: 'mitm', resp }))
-        }
-        up.on('data', (chunk) => { res.write(chunk); if (isSse) { if (decoder) decoder.write(chunk); else recon.push(chunk) } else jsonChunks.push(chunk) })
-        up.on('end', () => { res.end(); if (decoder) { decoder.on('end', finalize); decoder.end() } else finalize() })
+        teeResponse(up, res, { keepRawSse, where: 'mitm', onEvent }, (resp, aborted) => {
+          if (settled) return // one envelope per request
+          settled = true
+          onEnvelope(buildEnvelope({ id, tsRequest, tsRespStart, durationMs: dur(), method: req.method, endpoint: req.url, reqBody: bodyBuf, reqHeaders: req.headers, capture: 'mitm', resp, error: aborted }))
+        })
       })
-      upreq.on('error', (err) => { emitError(err); if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: { type: 'atrace_mitm_upstream_error', message: err.message } })) })
+      upreq.on('error', (err) => {
+        // the response is under way (a reset mid-stream): teeResponse ends the agent's response and writes the one
+        // error:true envelope when `up` closes; nothing may be appended to what the agent already has
+        if (res.headersSent) { res.destroy(); return }
+        emitError(err); res.writeHead(502, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: { type: 'atrace_mitm_upstream_error', message: err.message } }))
+      })
       if (bodyBuf.length) upreq.write(bodyBuf)
       upreq.end()
     })
   })
-  mitmHttps.on('tlsClientError', () => {})
+  // L-1: an agent that does not trust this CA (Desktop not fully restarted, the CA regenerated, a CN collision) fails
+  // every handshake here — each one is a failure line, never nothing (it was `() => {}`).
+  mitmHttps.on('tlsClientError', (err, sock) => {
+    onEvent({ event: 'failure', where: 'mitm', code: (err && err.code) || 'tls-client-error', servername: (sock && sock.servername) || null,
+      reason: `a client's TLS handshake with the capture failed (${(err && err.message) || err}): the agent may not trust the asight CA — its request did not go through` })
+  })
+  // Node (and Bun) clients send no alert: they finish the handshake, check the chain in JS, and close (RFC 4.6:67
+  // says the same of the collector). A secured connection the client closes within 2 s without one request is that.
+  mitmHttps.on('secureConnection', (s) => {
+    const t0 = Date.now()
+    s.once('close', () => {
+      if (s.asightRequests || Date.now() - t0 > 2000) return
+      onEvent({ event: 'failure', where: 'mitm', code: 'client-rejected-leaf', servername: s.servername || null,
+        reason: 'a client finished the TLS handshake with the capture and closed without sending a request: the agent may not trust the asight CA (fully restart the agent so it inherits NODE_EXTRA_CA_CERTS) — its request did not go through' })
+    })
+  })
+  mitmHttps.prependListener('request', (req) => { req.socket.asightRequests = (req.socket.asightRequests || 0) + 1 })
 
   // the CONNECT proxy: MITM only targetHost, blind-tunnel everything else.
   const server = http.createServer((req, res) => { res.writeHead(405, { 'content-type': 'text/plain' }); res.end('mitm: CONNECT only\n') })
@@ -126,11 +129,15 @@ export function createMitmProxy({ targetHost, leaf, upstreamProxy, connectUpstre
     if (host === targetHost) {
       client.write('HTTP/1.1 200 Connection Established\r\n\r\n')
       if (head && head.length) client.unshift(head)
-      client.on('error', () => {})
+      client.on('error', (e) => { stats.clientErrors++; log(`asight mitm: client socket error (${(e && e.code) || e}); ${stats.clientErrors} so far`) })
+      // http.Server sockets are half-open: a client that closes after refusing the leaf (TLS 1.3) left this socket
+      // open forever and the TLS server never heard of it — no tlsClientError, no record, a leaked socket. Not here.
+      client.allowHalfOpen = false
       mitmHttps.emit('connection', client) // TLS-terminate + handle decrypted requests
     } else {
       blind(creq.url, client, head) // never decrypted, never recorded
     }
   })
+  server.legacyStats = stats
   return server
 }

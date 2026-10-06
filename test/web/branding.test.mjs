@@ -15,7 +15,9 @@ const html = fs.readFileSync(path.join(ROOT, 'src', 'web', 'index.html'), 'utf8'
 const cli = fs.readFileSync(path.join(ROOT, 'bin', 'asight.mjs'), 'utf8');
 
 const title = (html.match(/<title>([^<]*)<\/title>/) || [])[1] || '';
-const emptyMsg = (html.match(/renderEmpty\('(No sessions[^']*)'\)/) || [])[1] || '';
+// the default empty-state copy: inline in renderEmpty(…), or (D38, where the empty state can also say that
+// capture fails) the NO_SESSIONS constant it falls back to
+const emptyMsg = (html.match(/renderEmpty\('(No sessions[^']*)'\)/) || html.match(/const NO_SESSIONS='(No sessions[^']*)'/) || [])[1] || '';
 
 test('the browser tab title names the product', () => {
   assert.match(title, /asight/i, `<title> is "${title}" — the product is asight`);

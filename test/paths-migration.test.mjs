@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { asightHome, legacyHome, captureOut, mitmOut, serveSource, caDir } from '../src/paths.mjs';
+import { tmpDir } from './helpers/tmp.mjs';
 
 // D27 (spec/01-asight-rfc/0.0-overview.md, 2026-07-20): the product's on-disk home is ~/.asight/.
 //
@@ -60,7 +61,7 @@ test('capture and mitm still write DISTINCT files (D20: one file per physical so
 test('serve reads the directory the capture writers write into (the first-run dead end)', () => {
   assert.equal(path.dirname(captureOut()), asightHome(), 'asight capture must write where asight serve looks');
   assert.equal(path.dirname(mitmOut()), asightHome(), 'asight mitm must write where asight serve looks');
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-mig-home-'));
+  const home = tmpDir('asight-mig-home-');
   try {
     assert.ok([].concat(serveSource({ home, legacyExists: false })).includes(home),
       'an existing home must be offered as a root');
@@ -85,7 +86,7 @@ test('the legacy root is NOT offered when it does not exist (no phantom source)'
 
 // The CA is the one artifact where "not found" causes an ACTIVE harm rather than a gap.
 test('an already-onboarded machine keeps its existing CA instead of minting a second root', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-ca-'));
+  const dir = tmpDir('asight-ca-');
   const legacy = path.join(dir, 'legacy-ca');
   fs.mkdirSync(legacy);
   fs.writeFileSync(path.join(legacy, 'atrace-ca.crt'), 'x');
@@ -97,7 +98,7 @@ test('an already-onboarded machine keeps its existing CA instead of minting a se
 });
 
 test('a fresh machine puts the CA in the new home', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-ca-'));
+  const dir = tmpDir('asight-ca-');
   assert.equal(caDir({ home: path.join(dir, 'h'), legacyCa: path.join(dir, 'absent') }), path.join(dir, 'h', 'ca'));
   fs.rmSync(dir, { recursive: true, force: true });
 });

@@ -28,6 +28,9 @@ const RECORDS = [
   rec({ sid: 'S1', tag: 'p', ts: '2026-07-20T00:00:02Z', endpoint: '/v1/messages/count_tokens', llm: false }),
   rec({ sid: 'S1', tag: 'b', ts: '2026-07-20T00:00:05Z', agent: 'sub-1' }),
   rec({ sid: 'S2', tag: 'c', ts: '2026-07-20T00:01:00Z', ua: 'codex/1.0', endpoint: '/v1/responses', app: '' }),
+  // D37 ①: a UA-only record first, then one with proc — the proc record decides (not inferred).
+  rec({ sid: 'S3', tag: 'd', ts: '2026-07-20T00:02:00Z' }),
+  { ...rec({ sid: 'S3', tag: 'e', ts: '2026-07-20T00:02:01Z', ua: 'x' }), proc: { pid: 7, exe: '/x/claude', agent: 'claude-code' } },
 ];
 
 function foldAll(records) {
@@ -89,4 +92,18 @@ test('mergeMeta accumulates incremental runs (counts add, last_ts maxes, flags O
   assert.equal(m.calls, 2, 'incremental runs must add call counts, not replace');
   assert.equal(m.last_ts, '2026-07-20T00:00:09Z', 'merged last_ts must be the later run');
   assert.equal(m.has_subagent, true, 'a subagent seen in either run must survive the merge');
+});
+
+test('the proc-identified run wins a merge in either order; a pre-D37 meta.json reads as UA-inferred', () => {
+  const ua = foldRecord(emptyMeta('S'), rec({ sid: 'S', tag: 'a', ts: '2026-07-20T00:00:01Z' }));
+  const byProc = foldRecord(emptyMeta('S'), { ...rec({ sid: 'S', tag: 'b', ts: '2026-07-20T00:00:02Z' }), proc: { pid: 1, agent: 'claude-code' } });
+  assert.deepEqual([ua.harness, ua.harness_inferred], ['cc', true]);
+  for (const m of [mergeMeta(ua, byProc), mergeMeta(byProc, ua)]) assert.deepEqual([m.harness, m.harness_inferred], ['cc', false]);
+  // a pre-D37 meta.json keeps its harness when the next run starts with a UA nobody can name
+  const legacyMeta = { session_id: 'S', calls: 1, probes: 0, other: 0, last_ts: '', entrypoint: null, harness: 'claude-code', provider: 'anthropic' };
+  const m = mergeMeta(legacyMeta, foldRecord(emptyMeta('S'), rec({ sid: 'S', tag: 'c', ts: '2026-07-20T00:00:03Z', ua: 'axios/1' })));
+  assert.deepEqual([m.harness, m.harness_inferred, m.provider], ['claude-code', true, 'anthropic']);
+  // written by the pre-D37 fold, which only ever read the UA
+  const [s] = projectsViewFromMetas([{ session_id: 'L', harness: 'claude-code', provider: 'anthropic', calls: 1 }]).projects[0].sessions;
+  assert.deepEqual([s.harness, s.harness_inferred], ['claude-code', true]);
 });

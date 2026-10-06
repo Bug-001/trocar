@@ -34,6 +34,11 @@ export const legacyHome = () => path.join(os.homedir(), '.atrace', 'asight');
 export const captureOut = () => path.join(asightHome(), 'capture.ndjson');
 // MITM (Claude Desktop — the only source that must decrypt TLS)
 export const mitmOut = () => path.join(asightHome(), 'claude-capture.ndjson');
+// The per-user process collector (RFC 4.6 §记录) writes its envelopes to <here>/capture-<date>.ndjson.
+// Its subdirectories flows/ audit/ replays/ are NOT envelopes; the board never reads them because a
+// root's scan only descends into <sub>/calls.ndjson (server.mjs sourceFiles), and `asight etl <dir>`
+// does not descend at all. It needs a root of its own: the home's one-level scan never reaches it.
+export const collectorHome = (home = asightHome()) => path.join(home, 'collector');
 
 // Capture CA. NOT symmetric with the others: for every other path "not found" means an empty board,
 // but for the CA it means the code MINTS A SECOND ROOT and asks the user to trust it — while the
@@ -58,12 +63,45 @@ export function caDir({ home = asightHome(), legacyCa = path.join(os.homedir(), 
 // capture — every user who upgraded past D27 and has not captured since — the list named a directory
 // that is not there, buildResolver stat()ed it, and `asight serve` died at startup instead of serving
 // the sessions plainly sitting in the other root. Filter both.
-export function serveSource({ home = asightHome(), legacy = legacyHome(), legacyExists = null } = {}) {
+// 2026-10-06 (4.4:129): the collector directory is the third root, between the home and the legacy
+// one, and filtered the same way — a machine that has never run the collector lists no phantom root.
+export function serveSource({ home = asightHome(), legacy = legacyHome(), legacyExists = null, collector = collectorHome(home) } = {}) {
   const roots = [];
   if (existsQuiet(home)) roots.push(home);
+  if (existsQuiet(collector)) roots.push(collector);
   const hasLegacy = legacyExists == null ? existsQuiet(legacy) : legacyExists;
   if (hasLegacy) roots.push(legacy);
   return roots;
+}
+
+// What counts as a capture file at the top of a source directory: a `*.ndjson` that is a regular
+// file or a symlink to one (e.g. ~/.asight/codex-capture.ndjson -> ~/.atrace/codex-capture.ndjson). ONE rule
+// for the board loader, the block resolver and `asight etl <dir>`: they used to disagree (isFile()
+// in two of them dropped links silently), so the board listed what the resolver could not open.
+// A link that points nowhere, or at a directory, is not a capture file.
+export function isCaptureFile(dir, ent) {
+  if (!ent.name.endsWith('.ndjson')) return false;
+  if (ent.isFile()) return true;
+  if (!ent.isSymbolicLink()) return false;
+  try { return fs.statSync(path.join(dir, ent.name)).isFile(); } catch { return false; }
+}
+
+// Why an entry that is NOT a capture file was not read (4.4:83: a skipped or unknown file is
+// reported, never folded into empty). Same three readers. `attention` = it may hold capture bytes
+// the reader did not show (a dangling link, a compressed capture, a *.ndjson that is not a file);
+// the rest (a config file, the CA, a database, a subdirectory) is listed and counted but is not
+// capture data.
+const COMPRESSED = new Set(['.gz', '.zst', '.bz2', '.xz', '.zip', '.br', '.lz4']);
+export function skipReason(dir, ent) {
+  const name = ent.name, ndjson = name.endsWith('.ndjson');
+  let target = ent;
+  if (ent.isSymbolicLink()) {
+    try { target = fs.statSync(path.join(dir, name)); } catch { return { reason: 'broken-symlink', attention: ndjson }; }
+  }
+  if (target.isDirectory()) return { reason: 'directory', attention: ndjson };
+  if (COMPRESSED.has(path.extname(name).toLowerCase())) return { reason: 'compressed', attention: true };
+  if (ndjson) return { reason: 'not-a-file', attention: true }; // a fifo, socket or device named *.ndjson
+  return { reason: 'not-ndjson', attention: false };
 }
 
 function existsQuiet(p) { try { return fs.existsSync(p) } catch { return false } }

@@ -63,4 +63,15 @@ struct asight_config {
 
 #define ASIGHT_HEARTBEAT_STALE_NS (2000ULL * 1000ULL * 1000ULL) /* 2 s */
 
+/* D38 (D-16): per-CPU counters (PERCPU_ARRAY `drops`, index = reason) of what the kernel side let go direct or could
+ * not report, so it is never silent. The helper sums the CPUs into status `drops`; the daemon turns increases into
+ * kernel-drops failure events. Names in redirector.c read_drops(), same order. */
+#define ASIGHT_DROP_NO_CONFIG    0 /* a watched decrypt connection, but no config / no engine port: not rewritten */
+#define ASIGHT_DROP_HB_STALE     1 /* heartbeat older than 2 s (daemon stuck, helper not beating): not rewritten */
+#define ASIGHT_DROP_NO_LISTENER  2 /* nobody listens on the engine port: not rewritten */
+#define ASIGHT_DROP_ORIG_WRITE   3 /* orig_dst could not be written: not rewritten (the engine could not look it up) */
+#define ASIGHT_DROP_BYPORT_WRITE 4 /* by_port could not be written at ESTABLISHED: the engine's lookup will miss */
+#define ASIGHT_DROP_RINGBUF_FULL 5 /* an exec / exit / flow event did not fit the ring buffer */
+#define ASIGHT_DROP_MAX          6
+
 #endif /* ASIGHT_BPF_H */

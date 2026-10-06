@@ -11,13 +11,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import os from 'node:os';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { buildResolver } from '../../src/query/source.mjs';
 import { composeTextRef, mintRawRef } from '../../src/etl/orchestrator.mjs';
+import { tmpDir } from '../helpers/tmp.mjs';
 
 const refFor = (stream, id, start, end) => composeTextRef(mintRawRef('sess', stream, id), [start, end]);
-const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'asight-fidelity-'));
+const tmp = () => tmpDir('asight-fidelity-');
 
 // ── BUG 1 ────────────────────────────────────────────────────────────────────────────────
 // A v0 demo record stores the request as PARSED JSON; normalizeRecord rebuilds a body with
