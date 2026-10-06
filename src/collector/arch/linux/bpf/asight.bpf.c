@@ -85,6 +85,21 @@ struct {
 	__uint(max_entries, 1 << 20);
 } events SEC(".maps");
 
+/* D38 (D-16): what the kernel side let go direct or could not report, by reason (asight.h ASIGHT_DROP_*). */
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, ASIGHT_DROP_MAX);
+	__type(key, __u32);
+	__type(value, __u64);
+} drops SEC(".maps");
+
+static __always_inline void count_drop(__u32 why)
+{
+	__u64 *n = bpf_map_lookup_elem(&drops, &why);
+	if (n)
+		*n += 1; /* per-CPU slot: no other CPU writes it */
+}
+
 static __always_inline struct asight_config *get_config(void)
 {
 	__u32 k = 0;
@@ -128,8 +143,10 @@ static __always_inline int heartbeat_fresh(struct asight_config *cfg)
 static __always_inline void report_flow4(struct bpf_sock_addr *ctx, __u32 tgid)
 {
 	struct asight_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-	if (!e)
+	if (!e) {
+		count_drop(ASIGHT_DROP_RINGBUF_FULL);
 		return;
+	}
 	__builtin_memset(e, 0, sizeof(*e));
 	e->type = ASIGHT_EV_FLOW;
 	e->family = 4;
@@ -144,8 +161,10 @@ static __always_inline void report_flow4(struct bpf_sock_addr *ctx, __u32 tgid)
 static __always_inline void report_flow6(struct bpf_sock_addr *ctx, __u32 tgid)
 {
 	struct asight_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-	if (!e)
+	if (!e) {
+		count_drop(ASIGHT_DROP_RINGBUF_FULL);
 		return;
+	}
 	__builtin_memset(e, 0, sizeof(*e));
 	e->type = ASIGHT_EV_FLOW;
 	e->family = 6;
@@ -180,10 +199,18 @@ int asight_connect4(struct bpf_sock_addr *ctx)
 		return 1; /* watched but pass-through: record metadata only */
 	}
 	struct asight_config *cfg = get_config();
-	if (!cfg || cfg->engine_port == 0 || !heartbeat_fresh(cfg))
+	if (!cfg || cfg->engine_port == 0) {
+		count_drop(ASIGHT_DROP_NO_CONFIG);
 		return 1;
-	if (!engine_listening4(ctx, cfg->engine_port))
+	}
+	if (!heartbeat_fresh(cfg)) {
+		count_drop(ASIGHT_DROP_HB_STALE);
 		return 1;
+	}
+	if (!engine_listening4(ctx, cfg->engine_port)) {
+		count_drop(ASIGHT_DROP_NO_LISTENER);
+		return 1;
+	}
 
 	struct asight_orig o = {};
 	o.family = 4;
@@ -192,7 +219,10 @@ int asight_connect4(struct bpf_sock_addr *ctx)
 	o.ip4 = ctx->user_ip4;	/* network order, pre-rewrite */
 	o.port = ctx->user_port;	/* network order, pre-rewrite */
 	__u64 cookie = bpf_get_socket_cookie(ctx);
-	bpf_map_update_elem(&orig_dst, &cookie, &o, BPF_ANY);
+	if (bpf_map_update_elem(&orig_dst, &cookie, &o, BPF_ANY) != 0) {
+		count_drop(ASIGHT_DROP_ORIG_WRITE);
+		return 1; /* never rewrite what the engine could not look up: it would close the connection */
+	}
 
 	ctx->user_ip4 = bpf_htonl(ENGINE_IP4);
 	ctx->user_port = bpf_htons(cfg->engine_port);
@@ -218,10 +248,18 @@ int asight_connect6(struct bpf_sock_addr *ctx)
 		return 1;
 	}
 	struct asight_config *cfg = get_config();
-	if (!cfg || cfg->engine_port == 0 || !heartbeat_fresh(cfg))
+	if (!cfg || cfg->engine_port == 0) {
+		count_drop(ASIGHT_DROP_NO_CONFIG);
 		return 1;
-	if (!engine_listening6(ctx, cfg->engine_port))
+	}
+	if (!heartbeat_fresh(cfg)) {
+		count_drop(ASIGHT_DROP_HB_STALE);
 		return 1;
+	}
+	if (!engine_listening6(ctx, cfg->engine_port)) {
+		count_drop(ASIGHT_DROP_NO_LISTENER);
+		return 1;
+	}
 
 	struct asight_orig o = {};
 	o.family = 6;
@@ -233,7 +271,10 @@ int asight_connect6(struct bpf_sock_addr *ctx)
 	o.ip6[3] = ctx->user_ip6[3];
 	o.port = ctx->user_port;
 	__u64 cookie = bpf_get_socket_cookie(ctx);
-	bpf_map_update_elem(&orig_dst, &cookie, &o, BPF_ANY);
+	if (bpf_map_update_elem(&orig_dst, &cookie, &o, BPF_ANY) != 0) {
+		count_drop(ASIGHT_DROP_ORIG_WRITE);
+		return 1;
+	}
 
 	ctx->user_ip6[0] = 0;
 	ctx->user_ip6[1] = 0;
@@ -257,7 +298,8 @@ int asight_sockops(struct bpf_sock_ops *skops)
 	struct asight_portkey k = {};
 	k.sport = (__u16)skops->local_port; /* host byte order */
 	k.family = o->family;
-	bpf_map_update_elem(&by_port, &k, o, BPF_ANY);
+	if (bpf_map_update_elem(&by_port, &k, o, BPF_ANY) != 0)
+		count_drop(ASIGHT_DROP_BYPORT_WRITE); /* already rewritten: the engine's lookup will miss and say so */
 	bpf_map_delete_elem(&orig_dst, &cookie);
 	return 1;
 }
@@ -272,8 +314,10 @@ int BPF_PROG(asight_exec, struct task_struct *p, pid_t old_pid, struct linux_bin
 		return 0; /* only the owner's process events are reported */
 
 	struct asight_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-	if (!e)
+	if (!e) {
+		count_drop(ASIGHT_DROP_RINGBUF_FULL); /* this agent will not be recognised until a rescan */
 		return 0;
+	}
 	__builtin_memset(e, 0, sizeof(*e));
 	e->type = ASIGHT_EV_EXEC;
 	e->pid = tgid;
@@ -300,8 +344,10 @@ int BPF_PROG(asight_exit, struct task_struct *p)
 		return 0;
 
 	struct asight_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-	if (!e)
+	if (!e) {
+		count_drop(ASIGHT_DROP_RINGBUF_FULL);
 		return 0;
+	}
 	__builtin_memset(e, 0, sizeof(*e));
 	e->type = ASIGHT_EV_EXIT;
 	e->pid = tgid;

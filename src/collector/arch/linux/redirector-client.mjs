@@ -43,7 +43,7 @@ import net from 'node:net'
 /** Line-protocol version. Must equal ASIGHT_PROTO in redirector.c. */
 // asight.h ASIGHT_HEARTBEAT_STALE_NS: past this age the kernel stops rewriting connects.
 export const HEARTBEAT_STALE_MS = 2000
-export const REDIRECTOR_PROTO = 1
+export const REDIRECTOR_PROTO = 2 // 2 (D38): status `drops`; config / heartbeat / watch / unwatch say when the map write failed
 
 /** Where the setup-helper step installs the capped loader (the `asight setup-helper` CLI is not built
  *  yet; use `sudo node install.mjs setup-helper`); override with ASIGHT_REDIRECTOR_BIN. */

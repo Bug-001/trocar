@@ -11,7 +11,7 @@ import readline from 'node:readline'
 // its driver (redirector-client.test.mjs sets ASIGHT_FAKE_LOADER=1).
 if (process.env.ASIGHT_FAKE_LOADER !== '1') process.exit(0)
 
-const PROTO = process.env.ASIGHT_FAKE_PROTO ? Number(process.env.ASIGHT_FAKE_PROTO) : 1
+const PROTO = process.env.ASIGHT_FAKE_PROTO ? Number(process.env.ASIGHT_FAKE_PROTO) : 2 // = REDIRECTOR_PROTO
 const state = {
   attached: false,
   enginePort: 0,
