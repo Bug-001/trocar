@@ -145,7 +145,7 @@ export function resolveCoexistence(all, { fs = nodeFs } = {}) {
       // freed inode, which then shows up as a report — noise, never a loss.)
       if (st.ino === s.ino) {
         if (st.size === s.length && st.mtimeMs === s.mtimeMs) return o;
-        mismatched.push({ sealed: f, original: o, why: `the original was changed after it was sealed (size ${st.size} vs ${s.length}) — both are read, records may appear twice` });
+        mismatched.push({ sealed: f, original: o, why: `the original was changed after it was sealed (${st.size === s.length ? `same size, ${st.size} bytes, other mtime` : `size ${st.size} vs ${s.length}`}) — both are read, records may appear twice` });
         return null;
       }
       // Another inode. Of another size it is another file (`asight shard` writing a fresh calls.ndjson
