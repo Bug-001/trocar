@@ -5,7 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
-import net from 'node:net'; import tls from 'node:tls'; import { once } from 'node:events'
+import net from 'node:net'; import tls from 'node:tls'
 import { Duplex } from 'node:stream'
 import { startMockUpstream } from '../../lab/mock-upstream/server.mjs'
 import { startMockProxy } from '../../lab/mock-upstream/proxy.mjs'
@@ -15,6 +15,7 @@ import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
 import { createEngine } from '../../../src/collector/core/engine/engine.mjs'
 import { createStaticRedirector } from '../../../src/collector/core/redirector.mjs'
 import { createRecordStore } from '../../../src/collector/core/record/store.mjs'
+import { within, onceWithin as once } from '../../helpers/bounded.mjs'
 
 const T = { timeout: 20000 }
 const asightCa = createCa()
@@ -23,6 +24,9 @@ const body = JSON.stringify({ model: 'claude-sonnet-4-5', stream: true, messages
 const REQ = `POST /v1/messages HTTP/1.1\r\nHost: ${HOST}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`
 const b64 = (s) => Buffer.from(s, 'base64')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+// Every wait on an event in this file is bounded (`once` is test/helpers/bounded.mjs::onceWithin, and `exchange` /
+// `httpsProxyClient` carry their own bound): a wait that never ends would park the test, and through `lab()`'s after hook,
+// which waits for every flow still open, the whole file and its process for ever (three runs hung 5+ h that way).
 
 // The engine steers every accepted connection to `dst()` (the mock proxy, or a stand-in in front of it).
 async function lab(t, proxyOpts, { proxies = () => [], trustLab = true, dst = null, policy = () => true, decrypt = true, timing = {} } = {}) {
@@ -42,7 +46,13 @@ async function lab(t, proxyOpts, { proxies = () => [], trustLab = true, dst = nu
     describe: () => ({ proxies: proxies(proxy.port) }), timing,
   })
   const { port } = await engine.listen({})
-  t.after(async () => { await engine.close(); await proxy.close(); await mock.close(); store.close(); fs.rmSync(dir, { recursive: true, force: true }) })
+  // The stand-ins go first: closing them destroys the sockets they hold, so every flow still open ends. engine.close()
+  // waits for in-flight flows and never destroys one (4.6 §开关), so with a client socket a failed test left open it used to
+  // wait for ever; now it has a deadline, and the hook says what it was waiting for.
+  t.after(async () => {
+    try { await proxy.close(); await mock.close(); await within(engine.close(), 5000, 'engine.close() (a flow or a client socket is still open)') }
+    finally { store.close(); fs.rmSync(dir, { recursive: true, force: true }) }
+  })
   const settled = async (n) => { for (let i = 0; i < 400 && flows.length < n; i++) await sleep(10) }
   return { port, mock, proxy, envelopes, flows, failures, engine, dir, labCa, settled }
 }
@@ -53,7 +63,7 @@ async function socks(port, { version, auth, domain = HOST, ip }) {
   const wrote = [], got = []
   let buf = Buffer.alloc(0)
   sock.on('data', (d) => { buf = Buffer.concat([buf, d]) })
-  const read = async (n) => { for (let i = 0; buf.length < n; i++) { if (i > 500) throw new Error('no reply'); await sleep(5) } const b = buf.subarray(0, n); buf = buf.subarray(n); got.push(b); return b }
+  const read = async (n) => { for (let i = 0; buf.length < n; i++) { if (i > 500) { sock.destroy(); throw new Error('no reply') } await sleep(5) } const b = buf.subarray(0, n); buf = buf.subarray(n); got.push(b); return b }
   const write = (b) => { wrote.push(b); sock.write(b) }
   const portBytes = Buffer.from([1, 187]) // 443
   const detach = () => { sock.removeAllListeners('data') }
@@ -68,10 +78,10 @@ async function socks(port, { version, auth, domain = HOST, ip }) {
   write(Buffer.concat([Buffer.from([5, 1, 0, 3, domain.length]), Buffer.from(domain), portBytes]))
   const rep = await read(10); detach(); return { sock, ok: rep[1] === 0, wrote, got }
 }
-const exchange = (socket, ca = asightCa.certPem) => new Promise((resolve, reject) => {
+const exchange = (socket, ca = asightCa.certPem) => within(new Promise((resolve, reject) => {
   const c = tls.connect({ socket, servername: HOST, ca }, () => c.write(REQ))
   let b = Buffer.alloc(0); c.on('data', (d) => { b = Buffer.concat([b, d]) }); c.on('end', () => resolve(b)); c.on('error', reject)
-})
+}), 10000, 'the tunnelled exchange never completed', () => socket.destroy())
 const flowsFile = (L) => path.join(L.dir, 'rec', 'flows', fs.readdirSync(path.join(L.dir, 'rec', 'flows'))[0])
 
 for (const [name, opts, client] of [
@@ -196,11 +206,14 @@ test('T6 CONNECT refused: client bytes sent behind the CONNECT head still reach 
 // inside the tunnel (TLS in TLS). Only the API host is in the decrypt policy here (`auto`).
 const PROXY_HOST = 'proxy.asight.test'
 const onlyApi = (meta, host) => host === HOST
-const httpsProxyClient = (port, ca, { innerCa = ca } = {}) => new Promise((resolve, reject) => {
-  const outer = tls.connect({ port, host: '127.0.0.1', servername: PROXY_HOST, ca }, () => outer.write(`CONNECT ${HOST}:443 HTTP/1.1\r\nHost: ${HOST}:443\r\n\r\n`))
-  outer.on('error', reject)
-  outer.once('data', (reply) => exchange(outer, innerCa).then((resp) => resolve({ reply, resp, issuer: outer.getPeerX509Certificate().issuer }), reject))
-})
+const httpsProxyClient = (port, ca, { innerCa = ca } = {}) => {
+  let outer
+  return within(new Promise((resolve, reject) => {
+    outer = tls.connect({ port, host: '127.0.0.1', servername: PROXY_HOST, ca }, () => outer.write(`CONNECT ${HOST}:443 HTTP/1.1\r\nHost: ${HOST}:443\r\n\r\n`))
+    outer.on('error', reject)
+    outer.once('data', (reply) => exchange(outer, innerCa).then((resp) => resolve({ reply, resp, issuer: outer.getPeerX509Certificate().issuer }), reject))
+  }), 12000, 'the client through the https:// proxy never finished', () => outer.destroy())
+}
 const table = (own) => (port) => [{ scheme: 'https', host: PROXY_HOST, port, own, source: 'env:HTTPS_PROXY' }]
 
 test('W8 an https:// proxy from the process\'s own config: outer TLS terminated, CONNECT relayed and recorded, the inner call decrypted and recorded', T, async (t) => {
@@ -273,10 +286,10 @@ test('W12 an own https:// proxy whose certificate the engine cannot verify: the 
 test('an own https:// proxy: the client goes after CONNECT 200 without starting the inner TLS — the row is written, nothing hangs', T, async (t) => {
   const L = await lab(t, { kind: 'connect', tls: true }, { proxies: table(true), policy: onlyApi })
   let outer
-  await new Promise((resolve) => {
+  await within(new Promise((resolve) => {
     outer = tls.connect({ port: L.port, host: '127.0.0.1', servername: PROXY_HOST, ca: asightCa.certPem }, () => outer.write(`CONNECT ${HOST}:443 HTTP/1.1\r\n\r\n`))
     outer.on('error', () => {}); outer.once('data', () => outer.end()); outer.on('close', resolve)
-  })
+  }), 8000, 'the client that goes after CONNECT 200 never saw its connection close', () => outer.destroy())
   await L.settled(1)
   if (!L.flows.length) { outer.destroy(); L.proxy.close(); assert.fail('the flow never finished') }
   const f = L.flows[0]

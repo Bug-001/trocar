@@ -17,6 +17,13 @@ import { makeSseReconstructor } from '../../src/capture/sse-reconstruct.mjs'
 import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
+import { within } from '../helpers/bounded.mjs'
+
+// Every test here has a deadline (the `D` option) and every wait that depends on a peer is bounded (test/helpers/bounded.mjs):
+// a wait that never ends parked `node --test` on this file for 4.5 h — it hangs, it does not fail. L-1 was the one: it waited
+// for a TLS client's error that never comes when the client trusts the leaf (NODE_TLS_REJECT_UNAUTHORIZED=0, or anything on the
+// path that makes the chain verify).
+const D = { timeout: 20000 }
 
 const listen = async (srv) => { srv.listen(0, '127.0.0.1'); await once(srv, 'listening'); return srv.address().port }
 // an upstream answering every request with `handler(req, res)`
@@ -46,7 +53,7 @@ const allInSet = (events) => { for (const e of events) assert.deepEqual(checkRec
 // which once wrote a second envelope with the same id and appended an error JSON to the client's stream)
 const cutSocket = (sock, cut) => { const raw = sock._parent || sock; if (cut === 'reset') (raw.resetAndDestroy ? raw : sock).resetAndDestroy(); else sock.destroy() }
 for (const cut of ['fin', 'reset']) {
-  test(`L-2 (${cut}): an upstream that closes mid-response → one error:true envelope with what arrived, the client's response ended (not hanging, nothing appended), an upstream-aborted event`, async () => {
+  test(`L-2 (${cut}): an upstream that closes mid-response → one error:true envelope with what arrived, the client's response ended (not hanging, nothing appended), an upstream-aborted event`, D, async () => {
     const p = await proxied((req, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write('event: message_start\ndata: {"type":"message_start","message":{"id":"m1","model":"x"}}\n\n'); setTimeout(() => cutSocket(res.socket, cut), 20) })
     try {
       const r = await p.send()
@@ -63,7 +70,7 @@ for (const cut of ['fin', 'reset']) {
   })
 }
 
-test('L-3: a compressed SSE stream that cannot be decompressed → the envelope still comes, with encoding_error and the wire bytes; a decode-failed event', async () => {
+test('L-3: a compressed SSE stream that cannot be decompressed → the envelope still comes, with encoding_error and the wire bytes; a decode-failed event', D, async () => {
   const garbage = Buffer.from('this is not gzip at all, but says it is')
   const p = await proxied((req, res) => { res.writeHead(200, { 'content-type': 'text/event-stream', 'content-encoding': 'gzip' }); res.end(garbage) })
   try {
@@ -78,7 +85,7 @@ test('L-3: a compressed SSE stream that cannot be decompressed → the envelope 
   } finally { p.close() }
 })
 
-test('L-4: a body that is not JSON keeps its text; one that cannot be decompressed keeps its bytes', async () => {
+test('L-4: a body that is not JSON keeps its text; one that cannot be decompressed keeps its bytes', D, async () => {
   const html = '<html><body>502 Bad Gateway (from a proxy)</body></html>'
   let p = await proxied((req, res) => { res.writeHead(502, { 'content-type': 'text/html' }); res.end(html) })
   try {
@@ -104,7 +111,7 @@ test('L-4: a body that is not JSON keeps its text; one that cannot be decompress
   try { await p.send(); await p.until(() => p.envelopes.length); assert.deepEqual(p.envelopes[0].resp.body, { ok: 1 }, 'a good body is unchanged'); assert.deepEqual(p.events, [], 'and no event') } finally { p.close() }
 })
 
-test('L-5: an SSE data: line that is not JSON is counted, and kept with --raw-sse', () => {
+test('L-5: an SSE data: line that is not JSON is counted, and kept with --raw-sse', D, () => {
   for (const keep of [false, true]) {
     const r = makeSseReconstructor(keep)
     r.push(Buffer.from('data: {"type":"message_start","message":{"id":"a"}}\n\ndata: <html>oops</html>\n\n'))
@@ -115,7 +122,7 @@ test('L-5: an SSE data: line that is not JSON is counted, and kept with --raw-ss
   assert.equal(makeSseReconstructor().finish().unparsed_events, undefined, 'none: no field')
 })
 
-test('L-1: an agent that refuses the capture\'s leaf (does not trust the CA) — every handshake is a failure line with its code; L-10: a failed blind tunnel is counted and logged, never an event line', async () => {
+test('L-1: an agent that refuses the capture\'s leaf (does not trust the CA) — every handshake is a failure line with its code; L-10: a failed blind tunnel is counted and logged, never an event line', D, async () => {
   const ca = createCa({ commonName: 'asight legacy test CA' })
   const leafCtx = createLeafIssuer(loadCa(ca)).issue('api.anthropic.com')
   const events = []
@@ -124,15 +131,21 @@ test('L-1: an agent that refuses the capture\'s leaf (does not trust the CA) —
   const port = await listen(px)
   try {
     // TLS 1.3 (the server never sees the client's Finished) and TLS 1.2 (it does, then the client closes): Node clients
-    // send no alert either way — they check the chain in JS and close
+    // send no alert either way — they check the chain in JS and close. The client trusts only a CA that has nothing to do
+    // with the leaf's (`ca`, `rejectUnauthorized`), so the refusal does not depend on the machine's trust store or on
+    // NODE_TLS_REJECT_UNAUTHORIZED; and it is bounded: a client that accepted the leaf is a loud failure, not a wait.
+    const stranger = createCa({ commonName: 'a CA the agent trusts, not the capture\'s' })
     for (const v of ['TLSv1.3', 'TLSv1.2']) {
-      await new Promise((resolve) => {
-        const sock = net.connect(port, '127.0.0.1', () => sock.write('CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n'))
+      let sock
+      await within(new Promise((resolve, reject) => {
+        sock = net.connect(port, '127.0.0.1', () => sock.write('CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n'))
+        sock.on('error', () => {})
         sock.once('data', () => {
-          const t = tls.connect({ socket: sock, servername: 'api.anthropic.com', minVersion: v, maxVersion: v }) // the system store: the asight CA is not in it
+          const t = tls.connect({ socket: sock, servername: 'api.anthropic.com', minVersion: v, maxVersion: v, ca: stranger.certPem, rejectUnauthorized: true })
+          t.on('secureConnect', () => { sock.destroy(); reject(new Error(`the ${v} client accepted the capture's leaf: it was to refuse it`)) })
           t.on('error', () => { sock.destroy(); resolve() }) // as an agent does: the tunnel goes with the refused TLS session
         })
-      })
+      }), 5000, `the ${v} client's handshake with the capture (neither refused nor accepted)`, () => sock.destroy())
     }
     for (let i = 0; i < 200 && events.length < 2; i++) await new Promise((r) => setTimeout(r, 10))
     assert.equal(events.length, 2, 'one line per refused handshake')
@@ -159,7 +172,7 @@ test('L-1: an agent that refuses the capture\'s leaf (does not trust the CA) —
   } finally { px2.close(); refuse.close() }
 })
 
-for (const cut of ['fin', 'reset']) test(`L-2 on the MITM too (4.1 #6, ${cut}): an upstream cut mid-stream → one error:true envelope (capture:mitm) with what arrived, the agent's connection ended, a mitm/upstream-aborted event`, async () => {
+for (const cut of ['fin', 'reset']) test(`L-2 on the MITM too (4.1 #6, ${cut}): an upstream cut mid-stream → one error:true envelope (capture:mitm) with what arrived, the agent's connection ended, a mitm/upstream-aborted event`, D, async () => {
   const ca = createCa({ commonName: 'asight legacy test CA' })
   const leafCtx = createLeafIssuer(loadCa(ca)).issue('api.anthropic.com')
   const api = https.createServer({ key: leafCtx.keyPem, cert: leafCtx.certPem }, (req, res) => {
