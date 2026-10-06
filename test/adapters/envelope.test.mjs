@@ -108,7 +108,8 @@ test('envelope adapter: keys ∪ extra == record keys; WebSocket structure is co
   const c = envelopeAdapter.parseCall(rec);
   // Invariant 4 (as #21 decided for req_*): a label that says "this record is incomplete" has no calls column,
   // so consuming it would erase it from the DuckDB row. It stays in extra.
-  assert.deepEqual(Object.keys(c.extra).sort(), ['novel_x', 'partial', 'partial_reasons', 'req_body_bytes', 'req_encoding_error', 'req_partial', 'req_truncated', 'ws_truncated']);
-  assert.equal(c.unmapped_count, 8);
+  // So do a call's later client messages (3.1:37: visible, "same as 未映射字段"): nothing maps them to a column.
+  assert.deepEqual(Object.keys(c.extra).sort(), ['novel_x', 'partial', 'partial_reasons', 'req_body_bytes', 'req_encoding_error', 'req_extra_messages', 'req_partial', 'req_truncated', 'ws_truncated']);
+  assert.equal(c.unmapped_count, 9);
   for (const k of Object.keys(rec)) assert.ok(ENVELOPE_CONSUMED.has(k) !== (k in c.extra), `${k}: consumed xor extra`);
 });

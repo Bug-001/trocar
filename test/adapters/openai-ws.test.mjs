@@ -138,3 +138,17 @@ test('a record of the WebSocket wire that is no call is quarantined as not-a-cal
   assert.deepEqual((await rows(conn, 'SELECT id, reason FROM etl_quarantine ORDER BY id')).map((x) => [x.id, x.reason]),
     [['o1', 'not-a-call:openai-responses-ws'], ['p1', 'not-a-call:openai-responses-ws']]);
 });
+
+test('W13 / 3.1:37: a client message sent while the call was open reaches DuckDB verbatim in calls.extra', async () => {
+  const inc = (id) => JSON.stringify({ type: 'response.incomplete', response: { id, status: 'incomplete', output: [], usage: { input_tokens: 5, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } } });
+  const interrupt = '{"type":"response.interrupt"}';
+  const rec = { id: 'a', seq: 0, ts_request: '2026-10-06T00:00:00Z', transport: 'ws', is_llm_call: true, endpoint: '/v1/responses', flow_id: 'F',
+    host: 'api.openai.com', capture: 'transparent', proc: { pid: 1, agent: 'codex' }, req_headers: { 'session-id': 'CX', 'sec-websocket-key': 'k' },
+    req_body: create({ input: [user('q1')] }), req_extra_messages: [interrupt], resp: { kind: 'ws', messages: [inc('r1')] } };
+  Object.defineProperty(rec, '_stream', { value: 'c.ndjson', enumerable: false });
+  const conn = await freshConn();
+  await runEtl([rec], conn);
+  const [c] = await rows(conn, "SELECT unmapped_count, extra FROM calls WHERE call_id = 'a'");
+  assert.deepEqual(JSON.parse(c.extra).req_extra_messages, [interrupt], 'kept verbatim, not dropped as "consumed"');
+  assert.ok(Number(c.unmapped_count) >= 1);
+});

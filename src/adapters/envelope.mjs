@@ -20,10 +20,13 @@ export const ENVELOPE_CONSUMED = new Set([
   // intervention fields reserved by 5.1 (D33)
   'origin', 'client_req_body', 'client_resp', 'intervention', 'resend_of',
   // D37 / WebSocket structure the read side interprets (gate G7)
-  'transport', 'ws_frames', 'ws_ext', 'ws_raw', 'body_retention', 'req_body_b64', 'req_content_encoding', 'req_extra_messages',
+  'transport', 'ws_frames', 'ws_ext', 'ws_raw', 'body_retention', 'req_body_b64', 'req_content_encoding',
   // NOT listed on purpose: req_truncated / req_body_bytes / req_partial (#21) and partial / partial_reasons /
   // ws_truncated / req_encoding_error. They say a record is incomplete and calls has no column for them, so
   // consuming them would drop the invariant-4 label from the DuckDB row; unmapped, they land in calls.extra.
+  // Nor req_extra_messages: client messages sent while the call was open (e.g. response.interrupt) MUST be
+  // visible, "same as 未映射字段" (3.1:37). No reader maps them to a column or a block, so consuming them would
+  // drop them from DuckDB without a trace; unmapped, they land verbatim in calls.extra (3.1:59).
 ]);
 
 const parsedBody = (r) => {
