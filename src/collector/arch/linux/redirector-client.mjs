@@ -63,6 +63,7 @@ export function createRedirectorClient({
   env = process.env,
   requestTimeoutMs = 2000, // a helper that does not answer: loader-timeout, never a lookup that hangs the agent's connection (D-13)
   clock = () => performance.now(), // monotonic: a wall-clock jump never fakes or hides a heartbeat gap, never cuts a lookup short
+  exitGraceMs = 500, // a broken stdin waits this long for the helper's 'exit', which says how it ended (D-14)
 } = {}) {
   const resolvedBinary = binary || (env && env.ASIGHT_REDIRECTOR_BIN) || DEFAULT_REDIRECTOR_BIN
 
@@ -180,8 +181,14 @@ export function createRedirectorClient({
     // its stderr still reaches ours, and its last lines go into helper-down (why it could not start, load or attach)
     if (child.stderr) readline.createInterface({ input: child.stderr }).on('line', (l) => { process.stderr.write(`[helper] ${l}\n`); stderrTail.push(l.slice(0, 500)); if (stderrTail.length > STDERR_TAIL) stderrTail.shift() })
     // A helper that died between our check and the write makes stdin emit EPIPE. Without a listener that is an
-    // uncaught exception that takes the whole daemon down; it is the helper going down, reported as such.
-    child.stdin.on('error', (err) => fail(`loader stdin: ${err.code || err.message}`))
+    // uncaught exception that takes the whole daemon down; it is the helper going down, reported as such. A killed
+    // helper's broken pipe usually comes before its 'exit': that exit (its name, the stderr tail) is what helper-down
+    // carries (D-14), so the pipe error is the reason only when no exit follows within exitGraceMs.
+    child.stdin.on('error', (err) => {
+      const c = child
+      const t = setTimeout(() => fail(`loader stdin: ${err.code || err.message}`), exitGraceMs)
+      c.once('exit', () => clearTimeout(t))
+    })
     child.on('exit', (code, signal) => {
       stopHeartbeat()
       const exit = signal || HELPER_EXIT[code] || `code ${code}`

@@ -141,12 +141,26 @@ test('attach sends a heartbeat before the attach frame, so steering is live when
 })
 
 test('a helper that dies under a write (stdin EPIPE) is reported down, never an uncaught exception', async () => {
-  const { m, c } = await started()
+  const { m, c } = await started({ mock: { autoReply: false } }) // a dead helper answers nothing
   const down = once(c, 'down')
   const pending = c.status() // in flight when the pipe breaks
   m.child.stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))
   assert.match((await down)[0].reason, /loader stdin: EPIPE/)
   await assert.rejects(pending, /redirector loader down: loader stdin: EPIPE/)
+})
+
+// D-14: a helper killed while a request is in flight breaks our stdin before its 'exit' arrives; helper-down still
+// carries how it ended (the exit name), not only "loader stdin: EPIPE".
+test('a helper killed under a write reports its exit (SIGKILL), not just the broken pipe (D-14)', async () => {
+  const { m, c } = await started({ mock: { autoReply: false } })
+  const down = once(c, 'down')
+  const pending = c.status()
+  m.child.stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })) // the pipe breaks first …
+  await new Promise((r) => setImmediate(r))
+  m.child.signalCode = 'SIGKILL'; m.child.emit('exit', null, 'SIGKILL') // … then the exit is seen
+  const [d] = await down
+  assert.deepEqual([d.exit, d.reason], ['SIGKILL', 'loader killed by SIGKILL'])
+  await assert.rejects(pending, /loader killed by SIGKILL/)
 })
 
 test('a failed periodic heartbeat is reported (heartbeat-error), never swallowed (D38)', async () => {
