@@ -49,6 +49,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
   const factsOf = new Map() // pid → the ProcFacts it was judged on (re-judged when its marker appears or its grace ends)
   const pending = new Map() // pid → timer that re-judges a marker-pending process at the end of its grace
   const subs = []
+  let judgedSeq = 0 // every verdict is numbered: a rescan knows which rows were judged after it began
   let mode = 'auto'
   let extra = new Set()
 
@@ -74,7 +75,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     }
     const d = m.descriptor
     const environ = facts.env || new Map()
-    const row = { pid: facts.pid, ppid: facts.ppid ?? null, agent: m.agent, exe: facts.exe ?? null, argv0: (facts.argv || [])[0] ?? null, source: facts.source, since: prev ? prev.since : now(), readErrors: [], parseErrors: [] }
+    const row = { pid: facts.pid, ppid: facts.ppid ?? null, agent: m.agent, exe: facts.exe ?? null, argv0: (facts.argv || [])[0] ?? null, source: facts.source, since: prev ? prev.since : now(), judged: ++judgedSeq, readErrors: [], parseErrors: [] }
     const readText = (f) => { try { return readFile(f) } catch (e) { if (!ABSENT.has(e && e.code)) row.readErrors.push(`${f}: ${(e && e.code) || e}`); return null } }
     // unparsable(file): a harness reports a config file it read that does not parse (judged as absent; D38, review 3 #9)
     const unparsable = (f) => { if (!row.parseErrors.includes(f)) row.parseErrors.push(f) }
@@ -150,12 +151,14 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     stop() { for (const close of subs.splice(0)) close(); for (const t of pending.values()) clearTimeout(t); pending.clear() },
     onExec, onExit, policy,
     async rescan() {
+      const begun = judgedSeq
       const live = await redirector.scan()
       const seen = new Set()
       for (const f of live) { seen.add(f.pid); try { await onExec(f) } catch (e) { onError(e, { pid: f.pid, phase: 'judge' }) } } // one bad process never blocks on
-      // exits missed while the helper was down; a pid the scan did not list but that lives started after the scan (its
-      // exec event judged it, its plugin may have written its marker already): kept (review 3 #7)
-      for (const pid of [...table.keys()]) if (!seen.has(pid) && !alive(pid)) forget(pid)
+      // exits missed while the helper was down: a row the scan did not list goes, unless an exec event judged it after
+      // this rescan began (it started after the scan; review 3 #7). Not "the pid lives": another user's process may
+      // reuse it, and its exit would never reach us (review 4 #8). A marker goes only once its pid is gone.
+      for (const pid of [...table.keys()]) if (!seen.has(pid) && !(table.get(pid).judged > begun)) forget(pid)
       if (markerDir) for (const n of listDir(markerDir)) if (/^\d+$/.test(n) && !seen.has(Number(n)) && !alive(Number(n))) { try { fs.rmSync(path.join(markerDir, n), { force: true }) } catch { /* void */ } }
     },
     agents: () => [...table.values()].sort((a, b) => a.pid - b.pid).map((r) => ({ ...r, hosts: [...r.hosts], bypass: r.bypass.map((b) => ({ ...b })), readErrors: [...r.readErrors], parseErrors: [...r.parseErrors] })),

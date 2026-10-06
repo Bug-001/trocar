@@ -221,16 +221,21 @@ test('tracker: rescan removes markers whose pid is gone', async () => {
   assert.equal(r.tracker.describe(830).trusted, true)
 })
 
-test('tracker: a pid the rescan did not list but that lives (it started after the scan) keeps its row and its marker; a dead one loses both (review 3 #7)', async () => {
-  const living = new Set([840])
+test('tracker: an agent that execs during a rescan (after its scan) keeps its row and its marker; an unlisted row judged before the rescan goes, even if its pid lives on as another user\'s process (review 3 #7, review 4 #8)', async () => {
+  const living = new Set([840, 842]) // 842: reused by a process of another uid (signal 0 says EPERM: "alive")
   const r = markerRig({ alive: (pid) => living.has(pid) })
-  r.redirector.emit('exec', facts(840, { exe: '/opt/beta', argv: ['beta'], startTicks: '5', startedAt: r.clock })); await settle()
-  await r.appear(840, 5)
+  r.redirector.emit('exec', facts(842, { exe: '/opt/beta', argv: ['beta'], startTicks: '7', startedAt: r.clock })); await settle()
   r.redirector.emit('exec', facts(841, { exe: '/opt/beta', argv: ['beta'], startTicks: '6', startedAt: r.clock })); await settle()
-  await r.appear(841, 6)
-  r.redirector.live = [] // the scan was taken before 840 and 841 started; 841 has exited since, its exit event missed
+  await r.appear(841, 6) // 841 exits later, its exit event missed
+  r.tick(1000)
+  r.redirector.scan = async () => { // the snapshot is taken, then 840 execs and writes its marker before the rescan ends
+    const snapshot = []
+    r.tick(10); r.redirector.emit('exec', facts(840, { exe: '/opt/beta', argv: ['beta'], startTicks: '5', startedAt: r.clock })); await settle()
+    await r.appear(840, 5)
+    return snapshot
+  }
   await r.tracker.rescan()
-  assert.deepEqual([r.tracker.describe(840) && r.tracker.describe(840).trusted, r.tracker.describe(841)], [true, null])
+  assert.deepEqual([r.tracker.describe(840) && r.tracker.describe(840).trusted, r.tracker.describe(841), r.tracker.describe(842)], [true, null, null])
   assert.deepEqual(fs.readdirSync(r.markerDir), ['840'])
 })
 
