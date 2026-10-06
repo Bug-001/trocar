@@ -24,6 +24,7 @@ export { certsOf, rootsFingerprint, composeBundle, userCertsIn }
 //   At uninstall (`withCa: false`) a bundle that is not there (ENOENT) has nothing to rewrite, but one that is there and cannot
 //   be read still holds the asight CA: that is a failure of its own (EACCES, EIO, a directory), never a skip (D38, 4.6
 //   「撤销顺序」第 2 步: not silent).
+//   `only` (a Set of harness ids, daemon only): the bundles of other harnesses are left as they are; a bundle with no harness is rebuilt as before.
 //   `report` ({rebuilt: [{path, harness, why}], failed: [{path, harness, error}], lost: [{path, harness, fps, sources}]}) makes
 //   the caller see each bundle's own fate: a bundle whose rebuild throws is listed in `failed` (its old file is untouched: the
 //   write is temp + rename) and the others still go on. Without `report` the first failure throws.
@@ -31,11 +32,12 @@ export { certsOf, rootsFingerprint, composeBundle, userCertsIn }
 //   source file moved or went (`sources`, each with the errno) or no longer has that certificate. The rebuilt bundle is
 //   still right for Node, the OS and asight, but an agent that REPLACES its roots with it can no longer reach a relay that
 //   signs with the lost CA (D38: a silent partial is what 4.6 「合并包」 forbids).
-export function rewriteBundles({ dir, manifest, nodeRoots, osRootsText, caPem = null, withCa = true, force = false, fs = nodeFs, report = null }) {
+export function rewriteBundles({ dir, manifest, nodeRoots, osRootsText, caPem = null, withCa = true, force = false, only = null, fs = nodeFs, report = null }) {
   const done = []
   const rootsFp = rootsFingerprint(nodeRoots, osRootsText)
   for (const f of manifest.files.filter((x) => x.role === 'bundle')) {
     if (withCa && !force && f.without_ca) continue // `off` kept it without the asight CA for a live process: never written back with it (4.6 「合并包」, D39); `force` (`on`) does
+    if (withCa && !force && only && f.harness != null && !only.has(f.harness)) continue // `only`: the harnesses whose desired state is on (a daemon rebuilds no other); null = every one
     try {
       let cur = null, gone = null
       try { cur = fs.readFileSync(f.path, 'utf8') } catch (e) { gone = e.code || String(e.message || e) }

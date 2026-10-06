@@ -208,3 +208,24 @@ test('D39: a bundle off kept without the asight CA is not rebuilt back with it b
     assert.ok(fps(fs.readFileSync(kept, 'utf8')).includes(fp(ASIGHT)) && m.files[0].without_ca === undefined)
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
+
+// 4.6 「合并包」: the rebuild is for the harnesses whose desired state is on (`only`, a Set the daemon makes from state.json); a bundle of another harness is
+// left as it is, a missing one too (`off` took it), a bundle with no harness is rebuilt as ever, `force` (`on`) and uninstall (`withCa: false`) are not limited by it.
+test('D39: only= limits the daemon\'s rebuild to the harnesses that are on — a bundle of another harness is not rebuilt, not even when it is missing; force and uninstall ignore it', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-b-'))
+  try {
+    const dir = path.join(root, 'collector'); fs.mkdirSync(path.join(dir, 'ca'), { recursive: true })
+    const m = newManifest()
+    const b = composeBundle({ nodeRoots: [R1.certPem], osRootsText: '', userCerts: [CORP.certPem], caPem: ASIGHT.certPem })
+    const put = (name, harness) => { const f = path.join(dir, 'ca', `combined-${name}.pem`); fs.writeFileSync(f, b.data); m.files.push({ path: f, role: 'bundle', ...(harness ? { harness } : {}), user_fps: b.user_fps, roots_fp: b.roots_fp }); return f }
+    const [on, off, orphan] = [put('on', 'on'), put('off', 'off'), put('orphan', null)]
+    const args = { dir, manifest: m, nodeRoots: [R1.certPem, R2.certPem], osRootsText: '', caPem: ASIGHT.certPem }
+    assert.deepEqual(rewriteBundles({ ...args, only: new Set(['on']) }), [on, orphan], 'roots changed: the harness that is on, and the one bundle with no harness')
+    assert.deepEqual(fps(fs.readFileSync(off, 'utf8')), [fp(R1), fp(CORP), fp(ASIGHT)], 'the other harness\'s bundle is as it was')
+    fs.rmSync(off)
+    assert.deepEqual(rewriteBundles({ ...args, only: new Set(['on']), nodeRoots: [R1.certPem] }).includes(off), false)
+    assert.ok(!fs.existsSync(off), 'missing, and not its harness\'s to rebuild: not made again')
+    assert.deepEqual(rewriteBundles({ ...args, force: true, only: new Set(['on']) }).includes(off), true, 'force (`on`) is not limited')
+    assert.deepEqual(rewriteBundles({ ...args, nodeRoots: [R2.certPem], only: new Set() }), [orphan], 'nothing is on: only the bundle that names no harness follows the roots')
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})

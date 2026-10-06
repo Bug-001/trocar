@@ -14,6 +14,7 @@ import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
 import { startDaemon } from '../../src/collector/daemon.mjs'
 import { installCollector } from '../../src/collector/install.mjs'
+import { writeStateAtomic, setDesired, emptyState } from '../../src/off/state.mjs'
 import { controlRequest } from '../../src/collector/core/control.mjs'
 import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
@@ -570,6 +571,7 @@ test('daemon: combined bundles follow the roots — rebuilt at start when the OS
   const rep = { name: 'rep', runtime: 'rust', hosts: [], signatures: { linux: { match: [{ exe: /\/rep$/ }] } }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
     inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }] }) }
   await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, osRootsFile: osRoots })
+  writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['rep'], 'on')) // the daemon rebuilds the bundles of the harnesses whose desired state is on only (4.6 「合并包」, D39)
   const bundle = path.join(dir, 'ca', 'combined-rep.pem')
   const before = fs.readFileSync(bundle, 'utf8')
   const { arch } = fakeArch(p)
@@ -583,6 +585,44 @@ test('daemon: combined bundles follow the roots — rebuilt at start when the OS
     for (const c of [newRoot.certPem, corp.certPem, fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'), 'utf8')]) assert.ok(now.includes(c.trim()), 'the new root, the user\'s CA and the asight CA')
     assert.ok(now.includes(tls.rootCertificates[0].trim()), 'Node\'s roots stay first')
     assert.ok(flowsOf(s).some((f) => f.event === 'bundles-rebuilt' && f.code === 'roots-changed' && f.reason.includes('combined-rep.pem')), 'the rebuild is recorded')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+// 4.6 「合并包」, D39: the daily rebuild is for the harnesses whose desired state is on, and works on the manifest as it is on disk. `asight off <h>` runs while
+// the daemon does (it is not stopped for one harness): what it removed or kept without the asight CA must not come back with it, and the manifest it saved
+// must not be written over by the copy the daemon read at start.
+test('daemon: the daily bundle rebuild never writes the asight CA back into a bundle `asight off` removed, nor puts its undone entries back, and leaves a harness that is not on alone (4.6 「合并包」, D39)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  const { createCa } = await import('../../src/collector/core/tls/ca.mjs')
+  const { readManifest } = await import('../../src/off/manifest.mjs')
+  const { undoHarnesses } = await import('../../src/off/undo.mjs')
+  const tlsMod = await import('node:tls')
+  const osRoots = path.join(s.root, 'os-roots.pem'); fs.writeFileSync(osRoots, '')
+  fs.writeFileSync(path.join(s.home, 'corp.pem'), createCa({ commonName: 'corp' }).certPem)
+  const dir = s.collector
+  const repOf = (name) => ({ name, runtime: 'rust', hosts: [], signatures: { linux: { match: [{ exe: new RegExp(`/${name}$`) }] } }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
+    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, `.${name}.env`), vars: { SSL_CERT_FILE: path.join(dir, 'ca', `combined-${name}.pem`) }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', `combined-${name}.pem`), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }] }) })
+  const list = [repOf('stay'), repOf('gone'), repOf('idle')]
+  await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: list, freePort: async () => 0, osRootsFile: osRoots })
+  writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['stay', 'gone'], 'on')) // idle was never turned on
+  const bundle = (n) => path.join(dir, 'ca', `combined-${n}.pem`)
+  const idleBefore = fs.readFileSync(bundle('idle'), 'utf8')
+  const { arch } = fakeArch(p)
+  const d = await startDaemon({ dir, socketPath: s.sock, arch: { ...arch, osRootsFile: osRoots }, harnesses: list, bundleMs: 30 })
+  try {
+    // `asight off gone`, while the daemon runs: its entry out, its bundle removed (nobody holds it), the manifest saved
+    const off = await undoHarnesses({ dir, home: s.home, manifest: readManifest(dir), ids: ['gone'], procs: async () => [], roots: { node: tlsMod.rootCertificates, osText: '' } })
+    writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['stay'], 'on'))
+    assert.deepEqual([off.results.map((r) => r.result), fs.existsSync(bundle('gone'))], [['restored'], false])
+    const saved = fs.readFileSync(path.join(dir, 'install-manifest.json'), 'utf8')
+    // the distro updates its roots: the next rebuild is due for every bundle whose roots differ
+    const newRoot = createCa({ commonName: 'a new OS root' }); fs.writeFileSync(osRoots, newRoot.certPem)
+    await until(() => fs.readFileSync(bundle('stay'), 'utf8').includes(newRoot.certPem.trim()))
+    assert.deepEqual([fs.existsSync(bundle('gone')), fs.readFileSync(bundle('idle'), 'utf8') === idleBefore], [false, true], 'the bundle `off` removed is not recreated, and a harness that is not on is left as it is')
+    const m = readManifest(dir)
+    assert.deepEqual([m.entries.map((e) => e.harness).sort(), m.files.filter((f) => f.role === 'bundle').map((f) => f.harness).sort(), Object.keys(m.liveness).sort()], [['idle', 'stay'], ['idle', 'stay'], ['idle', 'stay']], '`off`\'s manifest stands: nothing of gone came back from the copy read at start')
+    assert.ok(JSON.parse(saved).files.every((f) => f.harness !== 'gone'), 'what off saved had no bundle of gone')
+    assert.ok(!flowsOf(s).some((f) => f.event === 'bundles-rebuilt' && f.harness === 'gone'), 'and no rebuild was recorded for it')
   } finally { await d.stop(); p.done(); s.done() }
 })
 
