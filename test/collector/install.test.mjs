@@ -536,6 +536,42 @@ test('uninstall step 2: a harness that re-reads its entry while running keeps th
   } finally { b.done() }
 })
 
+// 4.6 安装 / 卸载不静默: an entry that could not be undone keeps the bundle it names (the agent's next start reads it), and a second uninstall
+// with the same process alive still finds a kept bundle as the first left it — the first one removed the CA certificate it was judged by
+test('uninstall: a replace-semantics entry that cannot be undone keeps its bundle without the asight CA and says so; the second uninstall with the holder alive says the same, not "still holds the CA" (4.6 撤销顺序 第 2 步)', async () => {
+  const b = box()
+  try {
+    fs.writeFileSync(path.join(b.home, 'corp.pem'), createCa({ commonName: 'corp relay CA' }).certPem)
+    fs.mkdirSync(path.join(b.home, '.rep')); fs.writeFileSync(path.join(b.home, '.rep', '.env'), 'KEY=sk-secret\n')
+    const roots = { node: [createCa({ commonName: 'a root' }).certPem], osText: '' }
+    await installCollector(base(b, { harnesses: [repHarness(b.dir)], roots }))
+    const bundle = path.join(b.dir, 'ca', 'combined-rep.pem'), env = path.join(b.home, '.rep', '.env')
+    const asightFp = new X509Certificate(fs.readFileSync(path.join(b.dir, 'ca', 'asight-ca.pem'))).fingerprint256
+    const holds = () => fs.readFileSync(bundle, 'utf8').split(/(?=-----BEGIN CERTIFICATE-----)/).some((c) => new X509Certificate(c).fingerprint256 === asightFp)
+    const installed = fs.readFileSync(env)
+    fs.rmSync(env); fs.symlinkSync(path.join(b.home, 'elsewhere'), env); fs.writeFileSync(path.join(b.home, 'elsewhere'), 'X=1\n') // the entry became a link: left-link
+    const r = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, scan: async () => [], roots })
+    assert.deepEqual(r.left.map((l) => [path.basename(l.path), l.harness, l.result]), [['.env', 'rep', 'left-link'], ['combined-rep.pem', 'rep', 'error']], 'the entry, and the bundle that stays because of it')
+    assert.deepEqual([fs.existsSync(bundle), holds()], [true, false], 'kept, without the asight CA: an agent with no bundle has no network at its next start')
+    assert.deepEqual(r.kept_bundles, [{ path: bundle, harness: 'rep', pids: [], entry_left: [env] }])
+    assert.ok(r.notes.some((n) => n.includes(bundle) && /kept, without the asight CA, because .*\.env, which could not be undone, still points at it/.test(n)), r.notes.join(' | '))
+    const fail = readEvents(b.dir).find((e) => e.event === 'failure' && e.where === 'uninstall' && e.path === bundle)
+    assert.deepEqual([fail.code, fail.harness, /still points at it/.test(fail.reason)], ['entry-not-undone', 'rep', true])
+    assert.ok(readManifest(b.dir) && readManifest(b.dir).files.some((f) => f.path === bundle), 'the manifest is kept with both')
+    // the entry is fixed and a process that started after install holds the bundle: kept for it, twice
+    fs.rmSync(env); fs.writeFileSync(env, installed)
+    const live = [{ pid: 70, exe: '/x/rep', startedAt: Date.now() + 5000, env: new Map() }]
+    const first = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, scan: async () => live, roots })
+    assert.deepEqual([first.left, first.kept_bundles], [[], [{ path: bundle, harness: 'rep', pids: [70] }]])
+    assert.ok(!fs.existsSync(path.join(b.dir, 'ca', 'asight-ca.pem')), 'the first uninstall removed the CA certificate')
+    const second = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, scan: async () => live, roots })
+    assert.deepEqual([second.left, second.kept_bundles, holds()], [[], [{ path: bundle, harness: 'rep', pids: [70] }], false], 'the same answer: kept without the asight CA, no holds_ca, nothing left, exit stays 0')
+    assert.ok(second.notes.some((n) => /is kept, without the asight CA, for running processes that may have loaded it \(pid 70\)/.test(n)))
+    const done = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, scan: async () => [], roots })
+    assert.deepEqual([done.kept_bundles, fs.existsSync(path.join(b.dir, 'ca')), readManifest(b.dir)], [[], false, null])
+  } finally { b.done() }
+})
+
 test('install / uninstall: the autostart unit is listed with its env and link, written complete, enabled, then stopped through systemd, disabled and removed with its dirs (S10, review 3 #1 #8 #10)', async () => {
   const b = box()
   try {

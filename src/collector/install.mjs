@@ -266,7 +266,7 @@ async function uninstall(dir, { home = path.dirname(path.dirname(dir)), env = pr
   if (!m) report.notes.push('nothing is installed for this user')
   else {
     const out = await undoHarnesses({ dir, home, manifest: m, ids: null, procs: scan, roots: roots || (m.files.some((f) => f.role === 'bundle') ? readRoots(osRootsFile) : null), dropCa: true })
-    const failure = (l, code = l.result === 'error' ? CODE.entryNotUndone : l.result) => failed.push({ code, harness: l.harness, path: l.path, reason: l.reason }) // left-unparsable / left-link are D38 codes
+    const failure = (l, code = l.result === 'error' || l.result === 'unknown-kind' ? CODE.entryNotUndone : l.result) => failed.push({ code, harness: l.harness, path: l.path, reason: l.reason }) // left-unparsable / left-link are D38 codes
     report.entries = out.results
     report.removed.push(...out.removed)
     report.kept_bundles = out.kept_bundles
@@ -278,16 +278,18 @@ async function uninstall(dir, { home = path.dirname(path.dirname(dir)), env = pr
       else if (!['restored', 'left-unparsable', 'left-link', 'error'].includes(r.result)) noted.push({ code: r.result, harness: r.harness, path: r.path, reason: UNDO_NOTE[r.result] || r.result }) // already-restored, missing, left-user-value
     }
     for (const k of out.kept_bundles.filter((x) => !x.holds_ca && !x.unjudged && !x.error)) {
+      const entry = k.entry_left ? `${k.entry_left.join(', ')}, which could not be undone, still points at it` : null // an agent's next start reads the bundle through it
+      const again = `run uninstall again once ${k.pids.length ? 'they exit' : 'that is fixed'}`
       noted.push(k.rebuilt
-        ? { code: CODE.harnessNote, harness: k.harness, path: k.path, reason: `${k.path} was gone while a running process may use it (pid ${k.pids.join(', ')}); it was rebuilt without the asight CA${k.lost_fps ? `, but without ${k.lost_fps.length} user CA(s) its source files no longer hold` : ''}; run uninstall again once they exit` }
-        : { code: CODE.bundleKept, harness: k.harness, path: k.path, reason: `${k.path} is kept, without the asight CA, for running processes that may have loaded it (pid ${k.pids.join(', ')}); run uninstall again once they exit` })
+        ? { code: CODE.harnessNote, harness: k.harness, path: k.path, reason: `${k.path} was gone while ${[...(k.pids.length ? [`a running process may use it (pid ${k.pids.join(', ')})`] : []), ...(entry ? [entry] : [])].join(' and ')}; it was rebuilt without the asight CA${k.lost_fps ? `, but without ${k.lost_fps.length} user CA(s) its source files no longer hold` : ''}; ${again}` }
+        : { code: CODE.bundleKept, harness: k.harness, path: k.path, reason: `${k.path} is kept, without the asight CA, ${[...(k.pids.length ? [`for running processes that may have loaded it (pid ${k.pids.join(', ')})`] : []), ...(entry ? [`because ${entry}`] : [])].join(' and ')}; ${again}` })
     }
     for (const c of out.changed) noted.push({ code: CODE.harnessNote, harness: c.harness, path: c.path, reason: `${c.path}, asight's ${c.role}, had been changed since install; it was removed all the same` })
     for (const w of out.residue) { report.residue.push(w.path); noted.push({ code: CODE.residue, harness: w.harness, path: w.path, reason: `${w.path} appeared after install (${w.why}); it may serve the user's own plugins too, so asight did not remove it` }) }
     for (const p of report.still_trusting) noted.push({ code: CODE.stillTrusting, harness: p.agent, pid: p.pid, reason: `pid ${p.pid} (${p.agent}) trusts the asight CA ${UNTIL_TEXT[p.until] || UNTIL_TEXT.restart}` })
     if (out.procs_error) noted.push({ code: CODE.harnessNote, reason: `which agents still trust the asight CA is not known: the process table could not be read (${out.procs_error})` })
     // an entry of a kind uninstall does not undo (a future writer's, or one this build does not know) stays, and is said (1.6 R3)
-    for (const e of m.entries.filter((x) => !out.left.some((l) => l.path === x.path && l.harness === x.harness))) {
+    for (const e of m.entries.filter((x) => !out.left.some((l) => l.path === x.path && l.harness === (x.harness ?? null)))) {
       report.left.push({ path: e.path, harness: e.harness ?? null, result: 'unknown-kind' })
       failure({ harness: e.harness ?? null, path: e.path, result: 'unknown-kind', reason: `${e.path}: this item is of kind ${JSON.stringify(e.kind ?? null)}, which uninstall does not undo; ${undoByHand(e)}` }, CODE.entryNotUndone)
     }

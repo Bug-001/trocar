@@ -23,7 +23,7 @@
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { undoEntry, removeOwnedFile, describeEntry } from './journal.mjs'
-import { saveManifest } from './manifest.mjs'
+import { saveManifest, KNOWN_KINDS, undoByHand } from './manifest.mjs'
 import { dropBackup } from './backup.mjs'
 import { backupDir } from './paths.mjs'
 import { removeEmptyDirs, sweepTemps, writeDurable, sha256 } from './fsutil.mjs'
@@ -64,6 +64,7 @@ export async function undoHarnesses({ dir, home, manifest, ids = null, procs = a
   }
   const touched = new Set([...manifest.entries, ...manifest.files].map((x) => x.harness).filter(inScope))
   const table = async () => { try { return { list: await procs(), error: null } } catch (e) { return { list: [], error: errText(e) } } }
+  const leftEntries = [] // the entries step 1 could not undo: they stay in the manifest and still name what they named
   const rm = (p) => { sweepTemps(p, fs); if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); out.removed.push(p) } }
   const fail = (item, reason) => { out.left.push({ path: item.path, harness: item.harness ?? null, result: 'error', reason }) }
 
@@ -74,6 +75,7 @@ export async function undoHarnesses({ dir, home, manifest, ids = null, procs = a
     const row = { ...r, backup: e.backup ?? null, what: describeEntry(e) } // `what`: what asight put there (the key and value, the block, the line), for a message
     out.results.push(row)
     if (UNDO_LEFT.has(r.result)) { // stays in the manifest, with its backup: the only copy of what the user had
+      leftEntries.push(e)
       out.left.push({ path: e.path, harness: e.harness, result: r.result, reason: r.result === 'left-unparsable' ? `${e.path} is no longer valid JSON; asight's ${describeEntry(e)} may still be in it` : r.reason })
       if (e.backup) row.backup_kept = e.backup
       return
@@ -87,6 +89,13 @@ export async function undoHarnesses({ dir, home, manifest, ids = null, procs = a
   const entries = [...manifest.entries].reverse().filter((e) => inScope(e.harness) && (e.kind === 'json-key' || e.kind === 'text'))
   const config = (e) => !(e.kind === 'text' && e.format !== 'dotenv-block') // step 1; the rest are step 4's
   for (const e of entries) if (config(e)) undoOne(e)
+  // an entry this build cannot undo is said, here and not by each caller: an unknown kind, or an entry that names no harness (no harness's `off`
+  // takes it). It stays in the manifest and `off` exits 1 for it (1.6 R3). The old capture's ledger kinds are known: the legacy undo takes them.
+  for (const e of manifest.entries) {
+    const orphan = (e.kind === 'json-key' || e.kind === 'text') && typeof e.harness !== 'string'
+    if ((KNOWN_KINDS.includes(e.kind) && !orphan) || !(ids == null || (typeof e.harness === 'string' && ids.includes(e.harness)))) continue
+    out.left.push({ path: e.path, harness: e.harness ?? null, result: 'unknown-kind', reason: orphan ? `${e.path} names no harness, so no harness's off takes it out; ${undoByHand(e)}` : `${e.path} is of kind ${JSON.stringify(e.kind ?? null)}, which this build does not undo; by hand: ${undoByHand(e)}` })
+  }
 
   // ── 2 and 3: bundles and extra trust files ────────────────────────────────────────────────────────────────────────────────────────
   const bundles = manifest.files.filter((f) => f.role === 'bundle' && inScope(f.harness))
@@ -101,7 +110,7 @@ export async function undoHarnesses({ dir, home, manifest, ids = null, procs = a
     // variable, never by an entry that re-reads), or any whose environ names it (a child that inherited it). null: cannot be told.
     const holders = (f, byHarness) => {
       if (t.error) return { why: t.error }
-      if (byHarness && !liveness[f.harness]) return { why: `the install manifest has no liveness record for ${f.harness} (it was written by an older asight)` }
+      if (byHarness && !liveness[f.harness]) return { why: `the install manifest has no liveness record for ${f.harness} (written by an older asight; "asight on" adds it, then run this again)` }
       return { pids: t.list.filter((p) => {
         const env = processEnv(p)
         return (byHarness && matchHarness(liveness, p) === f.harness && mayHaveRead(p, liveness[f.harness], since.get(f.harness))) || (!!env && [...env.values()].some((v) => typeof v === 'string' && v.includes(f.path)))
@@ -112,7 +121,9 @@ export async function undoHarnesses({ dir, home, manifest, ids = null, procs = a
     const strip = (f) => {
       let cur
       try { cur = fs.readFileSync(f.path, 'utf8') } catch (e) { return { gone: errText(e) } }
-      if (!ca.fp) return { holds: ca.error }
+      // no CA fingerprint to look for: an uninstall's step 3 already removed asight-ca.pem. A file that is byte for byte what an earlier run
+      // wrote without the CA (`without_ca`, and the sha it recorded then) is still so, so the next run judges it by the same rule (4.6 第 2 步)
+      if (!ca.fp) return f.without_ca === true && f.sha256 === sha256(Buffer.from(cur)) ? { ok: true } : { holds: ca.error }
       const s = stripCert(cur, ca.fp)
       if (!s.removed) return { ok: true } // already without it (an earlier run kept it so)
       try { writeDurable(f.path, s.text, 0o600, fs); Object.assign(f, { sha256: sha256(Buffer.from(s.text)), without_ca: true }); return { ok: true } } catch (e) { return { holds: errText(e) } }
@@ -130,29 +141,36 @@ export async function undoHarnesses({ dir, home, manifest, ids = null, procs = a
         out.kept_bundles.push({ ...keep, rebuilt: true, ...(lost.length ? { lost_fps: lost, unread } : {}) })
       } catch (e) {
         out.kept_bundles.push({ ...keep, error: errText(e) })
-        fail(f, `${f.path} is gone and could not be rebuilt (${errText(e)}); a running process may use it (pid ${keep.pids.join(', ')}): restart ${f.harness}`)
+        fail(f, `${f.path} is gone and could not be rebuilt (${errText(e)}); ${keep.pids.length ? `a running process may use it (pid ${keep.pids.join(', ')}): restart ${f.harness}` : `${f.harness} reads it at its next start, through ${keep.entry_left.join(', ')} that could not be undone: fix that, then run it again`}`)
       }
     }
+    // does an entry step 1 could not undo still name this file? a JSON entry by its value, a dotenv block by one of its variables
+    const naming = (f) => leftEntries.filter((e) => e.harness === f.harness && [e.value, ...Object.values(e.vars || {})].some((v) => typeof v === 'string' && path.resolve(v) === path.resolve(f.path))).map((e) => e.path)
     const one = (f, byHarness) => {
       const h = holders(f, byHarness)
-      if (h.pids && !h.pids.length) { // nobody holds it: removed whatever its state (a directory too)
+      // a replace-semantics bundle the entry of which is still in place is in use by the next start of its agent, whether or not a process holds
+      // it now: removing it leaves an agent with no network (4.6 安装 / 卸载不静默); an extra file is only warned about by Node when it is gone
+      const entry = byHarness ? naming(f) : []
+      if (h.pids && !h.pids.length && !entry.length) { // nobody holds it: removed whatever its state (a directory too)
         try { rm(f.path); without(manifest.files, f) } catch (e) {
           out.kept_bundles.push({ path: f.path, harness: f.harness, pids: [], holds_ca: true, error: errText(e) })
           fail(f, `${f.path} is held by no running process but could not be removed (${errText(e)}); it still holds the asight CA — fix the file, then run it again`)
         }
         return
       }
-      const keep = { path: f.path, harness: f.harness, pids: h.pids || [], ...(h.why ? { unjudged: true, error: h.why } : {}) }
+      const keep = { path: f.path, harness: f.harness, pids: h.pids || [], ...(h.why ? { unjudged: true, error: h.why } : {}), ...(entry.length ? { entry_left: entry } : {}) }
       const s = strip(f)
+      const used = [...(keep.pids.length ? [`a running process may have loaded it (pid ${keep.pids.join(', ')})`] : []), ...(entry.length ? [`${entry.join(', ')}, which could not be undone, still points at it`] : [])].join(' and ') || 'a running process may have loaded it (pid unknown)'
       if (s.ok) {
         out.kept_bundles.push(keep)
         if (h.why) fail(f, `${f.path} is kept, without the asight CA, because whether a running process holds it is not known (${h.why}); run it again`)
+        else if (entry.length) fail(f, `${f.path} is kept, without the asight CA, because ${used}: fix that entry, then run it again`)
       } else if (s.holds || s.gone !== 'ENOENT') { // unreadable, or unwritable: it still holds the CA
         const why = s.holds || s.gone
         out.kept_bundles.push({ ...keep, holds_ca: true, error: why })
-        fail(f, `${f.path} still holds the asight CA: it could not be rewritten without it (${why}), and a running process may have loaded it (pid ${keep.pids.join(', ') || 'unknown'}); it is kept as it is — fix the file, then run it again`)
+        fail(f, `${f.path} still holds the asight CA: it could not be rewritten without it (${why}), and ${used}; it is kept as it is — fix the file, then run it again`)
       } else if (!byHarness) without(manifest.files, f) // an extra file that is gone only warns where it is named: nothing to keep
-      else if (h.pids) rebuild(f, keep)
+      else if (h.pids || entry.length) rebuild(f, keep)
       else { out.kept_bundles.push(keep); fail(f, `${f.path} is gone, and whether a running process uses it is not known (${h.why}), so it was not rebuilt`) }
     }
     for (const f of bundles) one(f, true)

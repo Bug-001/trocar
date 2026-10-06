@@ -11,6 +11,7 @@ import { installCollector } from '../../src/collector/install.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
+import { sha256 } from '../../src/off/fsutil.mjs'
 import { certBlocks, composeBundle } from '../../src/off/pem.mjs'
 import { lineComment } from '../../src/off/text-edit.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -127,6 +128,15 @@ test('an entry of a kind this build does not know is left alone, and so is a man
   m.entries.push({ kind: 'mystery', harness: 'aa', path: path.join(s.b.home, 'x'), undo_by_hand: 'rm x' })
   const r = await s.run({ manifest: m })
   assert.deepEqual([r.results.length, r.manifest.entries.map((e) => e.kind)], [1, ['mystery']], 'the one it knows is undone, the one it does not stays')
+  assert.deepEqual(r.left.map((l) => [l.path, l.harness, l.result]), [[path.join(s.b.home, 'x'), 'aa', 'unknown-kind']], 'and it is said by undoHarnesses itself, so no caller (off, asight-off, uninstall) can forget it (1.6 R3)')
+  assert.match(r.left[0].reason, /kind "mystery", which this build does not undo; by hand: rm x/)
+  // another harness's unknown item is not this run's; an entry that names no harness is said by a run for everything, never by one for some
+  const m2 = readManifest(s.b.dir)
+  m2.entries.push({ kind: 'mystery', harness: 'bb', path: '/y', undo_by_hand: 'rm y' }, { kind: 'text', path: '/z', line: 'x', format: 'line', undo_by_hand: 'edit z' }, { kind: 'legacy-env', path: '/legacy', undo_by_hand: 'unset it' })
+  assert.deepEqual((await s.run({ manifest: m2, ids: ['aa'] })).left.map((l) => l.path), [path.join(s.b.home, 'x')], 'a run for aa says aa\'s item and not bb\'s or the one with no harness')
+  const all = await s.run({ manifest: m2 })
+  assert.deepEqual(all.left.map((l) => [l.path, l.result]), [[path.join(s.b.home, 'x'), 'unknown-kind'], ['/y', 'unknown-kind'], ['/z', 'unknown-kind']], 'a run for everything says all three; a kind of the old capture\'s ledger is known: the legacy undo takes it')
+  assert.match(all.left[2].reason, /names no harness/)
   await assert.rejects(undoHarnesses({ dir: s.b.dir, home: s.b.home, manifest: { version: 3, unsupported: true, entries: [], files: [] }, ids: null }), /version 3.*nothing was changed/)
 })
 
@@ -229,4 +239,53 @@ test('a bundle nobody holds that cannot be removed still holds the CA: an item l
   assert.match(r.left[0].reason, /held by no running process but could not be removed \(EACCES\).*still holds the asight CA/)
   assert.ok(!fs.existsSync(s.b.ca('combined-bb.pem')) && r.results.length === 2, 'the other harness and every entry were still undone')
   assert.deepEqual(r.manifest.files.filter((f) => f.role === 'bundle' || f.role === 'ca-cert').map((f) => path.basename(f.path)).sort(), ['asight-ca.pem', 'combined-aa.pem'], 'what is left stays in the manifest')
+})
+
+test('an entry step 1 could not undo still names its bundle: the bundle is kept without the asight CA, held or not (no bundle, no network at the agent\'s next start), rebuilt when gone, and removed once the entry is undone (4.6 安装 / 卸载不静默)', async () => {
+  const s = await setup((b) => [repH(b, 'aa'), repH(b, 'bb')])
+  const asightFp = certBlocks(fs.readFileSync(s.b.ca('asight-ca.pem'), 'utf8'))[0].fp
+  const bundle = s.b.ca('combined-aa.pem')
+  const installed = fs.readFileSync(s.user[0])
+  fs.rmSync(s.user[0]); fs.symlinkSync(write(s.b, 'elsewhere.env', 'X=1\n'), s.user[0]) // aa's .env is a link to some other file now: left-link
+  const r = await s.run()
+  assert.deepEqual(r.results.map((x) => [path.basename(path.dirname(x.path)), x.result]).sort(), [['.aa', 'left-link'], ['.bb', 'restored']])
+  assert.equal(fs.readFileSync(bundle, 'utf8'), composeBundle({ nodeRoots: roots.node, osRootsText: '', userCerts: [CORP.certPem], caPem: null }).data, 'kept: the same bundle without the asight CA, byte for byte')
+  assert.ok(!fpsOf(bundle).includes(asightFp) && !fs.existsSync(s.b.ca('combined-bb.pem')), 'bb\'s entry is out, so nobody needs its bundle')
+  assert.deepEqual(r.kept_bundles, [{ path: bundle, harness: 'aa', pids: [], entry_left: [s.user[0]] }], 'nobody holds it: it is the entry that keeps it')
+  assert.deepEqual(r.left.map((l) => [path.basename(l.path), l.harness, l.result]), [['.env', 'aa', 'left-link'], ['combined-aa.pem', 'aa', 'error']], 'the entry, and the bundle that stays because of it')
+  assert.match(r.left[1].reason, /kept, without the asight CA.*\.env, which could not be undone, still points at it/)
+  assert.deepEqual([r.manifest.entries.map((e) => e.harness), r.manifest.files.filter((f) => f.role === 'bundle').map((f) => [path.basename(f.path), f.without_ca])], [['aa'], [['combined-aa.pem', true]]], 'both stay in the manifest')
+  // a bundle that is gone while the entry stands is rebuilt (nobody needs to be running: the next start reads it)
+  fs.rmSync(bundle)
+  const gone = await s.run({ manifest: r.manifest })
+  assert.deepEqual([gone.kept_bundles.map((k) => [k.rebuilt, k.entry_left?.length]), fpsOf(bundle)], [[[true, 1]], [ROOT, CORP].flatMap((c) => certBlocks(c.certPem).map((x) => x.fp))], 'rebuilt without the CA from Node\'s roots and the recorded user CA')
+  // the entry is fixed: the next run undoes it and nobody needs the bundle
+  fs.rmSync(s.user[0]); fs.writeFileSync(s.user[0], installed)
+  const done = await s.run({ manifest: gone.manifest })
+  assert.deepEqual([done.results.map((x) => x.result), done.left, done.kept_bundles, fs.existsSync(bundle), fs.readFileSync(s.user[0], 'utf8')], [['restored'], [], [], false, 'KEY_A=sk-a\n'])
+  // a run for another harness leaves aa's alone: not its entry, so not its bundle
+  const t = await setup((b) => [repH(b, 'aa'), repH(b, 'bb')])
+  fs.rmSync(t.user[0]); fs.symlinkSync(write(t.b, 'elsewhere.env', 'X=1\n'), t.user[0])
+  const bb = await t.run({ ids: ['bb'] })
+  assert.deepEqual([bb.left, bb.kept_bundles, fs.existsSync(t.b.ca('combined-aa.pem'))], [[], [], true], 'aa is not in this run (nothing of it is touched)')
+})
+
+test('uninstall twice with a process still holding a kept bundle: the second run finds it as the first left it — without the CA, whose certificate the first run removed — and says the same, not "still holds the asight CA"', async () => {
+  const s = await setup((b) => [repH(b, 'aa'), jsonH(b)])
+  const live = [proc(70, '/x/aa'), proc(71, '/bin/node', { env: { NODE_EXTRA_CA_CERTS: s.b.ca('extra-jj.pem') } })]
+  const first = await s.run({ procs: async () => live, dropCa: true })
+  assert.ok(!fs.existsSync(s.b.ca('asight-ca.pem')), 'the first run removed the CA certificate')
+  const expected = [{ path: s.b.ca('combined-aa.pem'), harness: 'aa', pids: [70] }, { path: s.b.ca('extra-jj.pem'), harness: 'jj', pids: [71] }]
+  assert.deepEqual([first.kept_bundles, first.left], [expected, []])
+  const sha = (f) => sha256(fs.readFileSync(f))
+  const files = [s.b.ca('combined-aa.pem'), s.b.ca('extra-jj.pem')]; const bytes = files.map(sha)
+  const second = await s.run({ procs: async () => live, dropCa: true }) // the manifest as the first run saved it
+  assert.deepEqual([second.kept_bundles, second.left, files.map(sha)], [expected, [], bytes], 'kept the same way, nothing to say, the files as they were')
+  // a file that is not what the first run wrote cannot be called stripped without the CA to look for: that stays the honest answer
+  fs.appendFileSync(files[0], '\n')
+  const edited = await s.run({ procs: async () => live, dropCa: true })
+  assert.deepEqual(edited.kept_bundles.map((k) => [k.harness, k.holds_ca ?? false, k.error ?? null]), [['aa', true, 'ENOENT'], ['jj', false, null]], 'the edited one still holds what it held (its CA cannot be named: ENOENT); the untouched one is as before')
+  assert.deepEqual(edited.left.map((l) => [l.harness, l.result]), [['aa', 'error']])
+  const gone = await s.run({ procs: async () => [], dropCa: true })
+  assert.deepEqual([gone.kept_bundles, gone.left, files.some((f) => fs.existsSync(f))], [[], [], false], 'nobody holds them now: both go')
 })
