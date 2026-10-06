@@ -95,3 +95,13 @@ test('K1 guard can fail: a planted file with a harness name and a class pattern 
   const planted = { '/x/a.mjs': "const h = 'claude'\n", '/x/b.mjs': "const p = '/api/event_logging/'\n", '/x/c.mjs': "// claude and event_logging in a comment only\nconst ok = 1\n" }
   assert.deepEqual(offenders(Object.keys(planted), (f) => planted[f]).map((s) => s.replace(/^.*?x\//, '')), ['a.mjs: claude', 'b.mjs: event_logging'])
 })
+
+// review (F8): which of the three pattern-only classes a harness's table row can ever produce
+test('unmatchedClasses: a class no usable pattern of the row names is unmatched; a pattern that does not compile does not count; an unknown harness has none', async () => {
+  const { unmatchedClasses, PATTERN_ONLY_CLASSES } = await import('../../src/dissect/traffic.mjs')
+  assert.deepEqual([...PATTERN_ONLY_CLASSES], ['session-sync', 'files', 'account'])
+  const rows = [{ id: 'a', traffic: [{ host: 'x.test', class: 'files', path: '^/u' }, { host: 'x.test', class: 'account', path: '(' }, { host: 'x.test', class: 'telemetry' }] }, { id: 'b' }]
+  assert.deepEqual(unmatchedClasses('a', rows), ['session-sync', 'account'], 'files has a usable pattern; the account one does not compile; telemetry is not a pattern-only class')
+  assert.deepEqual(unmatchedClasses('b', rows), ['session-sync', 'files', 'account'])
+  assert.deepEqual(unmatchedClasses('c', rows), ['session-sync', 'files', 'account'])
+})

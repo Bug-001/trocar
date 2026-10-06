@@ -283,7 +283,7 @@ async function main() {
     }
     case 'keep': { // D40 (RFC 4.6 §记录「保存级别」): what is kept of each call, per harness × traffic class — show and set; no daemon needed
       const { runKeep, formatKeepSizes } = await import(r('src', 'capture', 'keep.mjs'));
-      const { retentionHarnessIds } = await import(r('src', 'dissect', 'traffic.mjs'));
+      const { retentionHarnessIds, unmatchedClasses } = await import(r('src', 'dissect', 'traffic.mjs'));
       // `--db <path>` names the analytics store the sizes are read from (default: the one `asight serve` opens), `--json` prints the report
       // the board's /api/retention serves — both are the show mode's; the three words (harness class level) are the set mode's
       const showing = args.positionals.length === 0 && !rest.includes('--help') && !rest.includes('-h');
@@ -293,7 +293,7 @@ async function main() {
         const { DEFAULT_DB_PATH } = await import(r('src', 'db.mjs'));
         return retentionReportFromStore({ dbPath: flag('--db', process.env.ASIGHT_DB || DEFAULT_DB_PATH) });
       };
-      if (!asJson) process.exitCode = runKeep([...args.positionals, ...(rest.includes('--help') || rest.includes('-h') ? ['--help'] : [])], { harnesses: retentionHarnessIds() });
+      if (!asJson) process.exitCode = runKeep([...args.positionals, ...(rest.includes('--help') || rest.includes('-h') ? ['--help'] : [])], { harnesses: retentionHarnessIds(), unmatched: Object.fromEntries(retentionHarnessIds().map((h) => [h, unmatchedClasses(h)])) });
       if (showing && !process.exitCode) {
         try { const rep = await report(); console.log(asJson ? JSON.stringify(rep, null, 2) : formatKeepSizes(rep).join('\n')); }
         catch (e) { console.error(`asight keep: the sizes could not be read (${(e && e.message) || e})`); process.exitCode = 1; }

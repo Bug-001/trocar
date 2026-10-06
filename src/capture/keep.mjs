@@ -15,14 +15,20 @@ const USAGE = `usage:
   asight keep <harness|all> <class|all> <full|log>  set it: full = the body verbatim (64 MiB cap), log = one line per call (headers and sizes, no body)
   classes: ${TRAFFIC_CLASSES.join(' · ')}`
 
-/** formatKeep({levels, problems, file, harnesses}) → the table as text. */
-export function formatKeep({ levels, problems = [], file, harnesses }) {
+/**
+ * formatKeep({levels, problems, file, harnesses, unmatched}) → the table as text. `unmatched` = {harness: [class…]} (the caller's, from the
+ * read-side table): a cell no pattern can ever fill is marked `*`.
+ */
+export function formatKeep({ levels, problems = [], file, harnesses, unmatched = {} }) {
   const w = Math.max(...harnesses.map((h) => h.length), 7)
-  const cw = TRAFFIC_CLASSES.map((c) => Math.max(c.length, 4))
+  const cw = TRAFFIC_CLASSES.map((c) => Math.max(c.length, 5))
+  const star = (h, c) => ((unmatched[h] || []).includes(c) ? '*' : '')
+  const anyStar = harnesses.some((h) => TRAFFIC_CLASSES.some((c) => star(h, c)))
   const lines = [`what is kept of each call · ${file}`]
   if (problems.length) lines.push(`⚠ ${problems.map((p) => p.reason).join('\n⚠ ')}`)
   lines.push('', ['harness'.padEnd(w), ...TRAFFIC_CLASSES.map((c, i) => c.padEnd(cw[i]))].join('  ').trimEnd())
-  for (const h of harnesses) lines.push([h.padEnd(w), ...TRAFFIC_CLASSES.map((c, i) => ((levels[h] && levels[h][c]) || 'full').padEnd(cw[i]))].join('  ').trimEnd())
+  for (const h of harnesses) lines.push([h.padEnd(w), ...TRAFFIC_CLASSES.map((c, i) => (((levels[h] && levels[h][c]) || 'full') + star(h, c)).padEnd(cw[i]))].join('  ').trimEnd())
+  if (anyStar) lines.push('', '* no traffic pattern of that harness can class a call so (src/dissect/harnesses.mjs): none ever is, so the setting changes nothing yet')
   lines.push('', 'full = the body verbatim (64 MiB cap) · log = one line per call: headers and sizes, no body',
     'A change reaches the calls that start after it (within a second, no restart). What is already stored is never deleted or rewritten.')
   return lines.join('\n')
@@ -75,12 +81,12 @@ export function formatKeepSizes(report) {
  * runKeep(argv, {out, err, file, logFile, harnesses}) → exit code. `argv` = the arguments after `keep`.
  * `harnesses` = the ids the settings may name (the read-side table's, plus `unknown`), from the caller: this module names none.
  */
-export function runKeep(argv, { out = (s) => console.log(s), err = (s) => console.error(s), file = retentionFile(), logFile = retentionLog(), harnesses = [], source = 'cli' } = {}) {
+export function runKeep(argv, { out = (s) => console.log(s), err = (s) => console.error(s), file = retentionFile(), logFile = retentionLog(), harnesses = [], source = 'cli', unmatched = {} } = {}) {
   const args = argv.filter((a) => !a.startsWith('--'))
   if (argv.includes('--help') || argv.includes('-h')) { out(USAGE); return 0 }
   if (args.length === 0) {
     const r = readRetentionFile(file)
-    out(formatKeep({ levels: r.levels, problems: r.problems, file, harnesses }))
+    out(formatKeep({ levels: r.levels, problems: r.problems, file, harnesses, unmatched }))
     return 0
   }
   if (args.length !== 3) { err(`asight keep: expected <harness|all> <class|all> <full|log>, got ${args.length} argument(s)\n${USAGE}`); return 2 }
@@ -93,6 +99,10 @@ export function runKeep(argv, { out = (s) => console.log(s), err = (s) => consol
       out('applies to the calls that start from now on (within a second); what is already stored is not changed')
     }
     if (res.logError) err(`asight keep: the change was made, but its record in ${logFile} could not be written (${res.logError})`)
+    // a cell no pattern can ever fill: the setting is stored and harmless, but it changes nothing — say so rather than exit 0 in silence
+    const hs = harness === 'all' ? harnesses : [harness], cs = cls === 'all' ? TRAFFIC_CLASSES : [cls]
+    const dead = hs.flatMap((h) => cs.filter((c) => (unmatched[h] || []).includes(c)).map((c) => `${h} · ${c}`))
+    if (dead.length) err(`asight keep: note — no traffic pattern of ${dead.length > 1 ? 'these harnesses' : 'this harness'} can class a call as that, so none ever is and the setting changes nothing yet: ${dead.join(', ')} (patterns are data in src/dissect/harnesses.mjs; only a harness with one for the class can use it)`)
     return 0
   } catch (e) {
     if (e instanceof RetentionArgError || (e && e.code === 'bad-args')) { err(`asight keep: ${e.message}\n${USAGE}`); return 2 }

@@ -2484,7 +2484,10 @@ function renderRetentionView(){
       // what is stored may not be what the switch says now: a change reaches only the calls after it, so a cell with calls kept both ways says how many each
       const mixed=sz&&rows.filter(r=>r.windows[win].calls).length>1||sz&&rows.some(r=>r.windows[win].calls&&r.retention!==lv)
       const split=mixed?`<div class="num mix">已存 · stored: ${rows.filter(r=>r.windows[win].calls).map(r=>`${RET_LABEL[r.retention]||r.retention} ${r.windows[win].calls} 条`).join(' · ')}</div>`:''
-      html+=`<td title="${esc(title)}"><button class="lvl ${lv}" data-h="${esc(h)}" data-c="${esc(c)}" data-to="${to}"${R.control?'':' disabled'}>${RET_LABEL[lv]}</button>${sz?retNums(sumWin(rows,win))+split:need}</td>`
+      // a cell no pattern of this harness's table row can ever fill: the switch stores the setting, but no call is ever classed so (4.6 §记录「保存级别」)
+      const nopat=(R.unmatched&&R.unmatched[h]||[]).includes(c)
+      const nopatNote=nopat?`<div class="num nopat" style="color:var(--amber)">无模式 · no pattern: never matches</div>`:''
+      html+=`<td title="${esc(title+(nopat?'\n无模式 · this harness has no pattern for '+c+': no call is ever classed so, the setting changes nothing yet':''))}"${nopat?' class="nopatcell" style="opacity:.6"':''}><button class="lvl ${lv}" data-h="${esc(h)}" data-c="${esc(c)}" data-to="${to}"${R.control?'':' disabled'}>${RET_LABEL[lv]}</button>${nopatNote}${sz?retNums(sumWin(rows,win))+split:need}</td>`
     }
     html+=`<td>${sz?retNums(T&&T.by_harness[h]&&T.by_harness[h][win]?{...T.by_harness[h][win]}:sumWin([],win)):need}</td></tr>`
   }

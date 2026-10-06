@@ -53,6 +53,17 @@ export function compileTraffic(rows = HARNESSES, onInvalid = () => {}) {
   return out;
 }
 
+// The three classes only a harness's own `traffic` patterns can produce. `llm` and `token-count` come from the endpoint, `telemetry` also from the
+// shared third-party table (every harness), `other` is what is left: those four always have a way to match. These three do not: a harness whose
+// row has no pattern for one never has a call classed so, and a setting for that cell changes nothing (review 2026-10-07: only the cc row had any).
+export const PATTERN_ONLY_CLASSES = Object.freeze(['session-sync', 'files', 'account']);
+
+/** unmatchedClasses(harnessId, rows) → the PATTERN_ONLY_CLASSES the harness has no (usable) pattern for: a setting for them has no effect yet. */
+export function unmatchedClasses(harnessId, rows = HARNESSES) {
+  const have = new Set((compileTraffic(rows).get(harnessId) || []).map((e) => e.class));
+  return PATTERN_ONLY_CLASSES.filter((c) => !have.has(c));
+}
+
 /**
  * makeClassifier({endpointClass, rows, onInvalid}) → classify({harness, host, method, endpoint}) → a class id.
  * Order: the endpoint (llm, token-count) → the harness's own entries (first match) → the shared third-party table → other.

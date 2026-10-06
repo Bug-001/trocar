@@ -11,7 +11,7 @@
 // It reads settings and files; it writes nothing (the one write path is setRetention(), src/capture/retention.mjs).
 import fsp from 'node:fs/promises';
 import { retentionFile, retentionLog, readRetentionFile, TRAFFIC_CLASSES } from '../capture/retention.mjs';
-import { retentionHarnessIds } from '../dissect/traffic.mjs';
+import { retentionHarnessIds, unmatchedClasses } from '../dissect/traffic.mjs';
 import { asightHome } from '../paths.mjs';
 import { openDb } from '../db.mjs';
 import { retentionSizes, SIZE_WINDOWS, SIZE_COLUMNS } from './queries.mjs';
@@ -113,6 +113,8 @@ export async function retentionReport({ home = asightHome(), conn = null, dbErro
     generated_at: new Date(now).toISOString(),
     control: !!control,
     classes: [...TRAFFIC_CLASSES], levels: cur.levels, harnesses, known_harnesses: ids,
+    // per harness: the classes no pattern of its table row can ever produce — a setting for such a cell has no effect (4.6 §记录「保存级别」)
+    unmatched: Object.fromEntries([...new Set([...ids, ...harnesses])].map((h) => [h, unmatchedClasses(h)])),
     settings, changes: log.changes, ...(log.error ? { changes_error: log.error } : {}),
     sizes, sizes_reason: sizesReason, totals,
     seal, disk: diskOut, db: dbPath ? await statDb(dbPath, fs) : null,

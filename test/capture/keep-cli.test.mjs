@@ -9,7 +9,7 @@ import crypto from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { runKeep, formatKeep } from '../../src/capture/keep.mjs'
-import { retentionHarnessIds } from '../../src/dissect/traffic.mjs'
+import { retentionHarnessIds, unmatchedClasses } from '../../src/dissect/traffic.mjs'
 import { TRAFFIC_CLASSES } from '../../src/capture/retention.mjs'
 import { retentionFile, retentionLog } from '../../src/paths.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -81,4 +81,39 @@ test('the real CLI: `asight keep` in a child process over a throwaway HOME, exit
   const before = sha(path.join(home, '.asight', 'retention.json'))
   r = run('cc', 'bogus', 'log'); assert.equal(r.status, 2); assert.match(r.stderr, /unknown class/); assert.equal(sha(path.join(home, '.asight', 'retention.json')), before)
   assert.ok(!fs.existsSync(path.join(home, '.asight', 'collector')), 'it did not need the collector')
+  // F8 through the real wiring: a cell no pattern can fill exits 0, stores the setting, and says it changes nothing yet; the table stars it
+  r = run('codex', 'files', 'log'); assert.equal(r.status, 0, r.stderr); assert.match(r.stderr, /changes nothing yet: codex · files/)
+  r = run(); assert.match(r.stdout, /codex\s+full\s+full\s+full\*\s+full\s+log\*\s+full\*\s+full\s/); assert.match(r.stdout, /\* no traffic pattern of that harness/)
+})
+
+// ── review (F8): only the cc row of the harness table has traffic patterns, so `asight keep codex files log` used to exit 0 and change nothing, silently ──
+const UNMATCHED = Object.fromEntries(HARNESSES.map((h) => [h, unmatchedClasses(h)]))
+const rigU = () => { const k = rig(); return { ...k, run: (argv) => runKeep(argv, { out: (s) => k.out.push(s), err: (s) => k.err.push(s), file: k.file, logFile: k.logFile, harnesses: HARNESSES, unmatched: UNMATCHED }) } }
+
+test('F8 — a cell no pattern can ever fill is said: `asight keep codex files log` still exits 0 and stores the setting, but notes that it changes nothing yet; a cell that can match is not noted', () => {
+  assert.deepEqual(unmatchedClasses('cc'), [], 'the cc row has a pattern for each of the three')
+  assert.deepEqual(unmatchedClasses('codex'), ['session-sync', 'files', 'account'])
+  assert.deepEqual(unmatchedClasses('nobody-knows-this'), ['session-sync', 'files', 'account'], 'a harness the table does not list only reaches the shared table')
+  const k = rigU()
+  assert.equal(k.run(['codex', 'files', 'log']), 0)
+  assert.deepEqual(JSON.parse(fs.readFileSync(k.file, 'utf8')).levels, { codex: { files: 'log' } }, 'stored, harmless')
+  assert.match(k.err.join('\n'), /note — no traffic pattern of this harness can class a call as that, so none ever is and the setting changes nothing yet: codex · files/)
+  const k2 = rigU()
+  k2.run(['cc', 'files', 'log']); k2.run(['codex', 'telemetry', 'log']); k2.run(['codex', 'llm', 'log']); k2.run(['codex', 'other', 'log'])
+  assert.deepEqual(k2.err, [], 'cc has a files pattern; telemetry (shared third-party table), llm / token-count (endpoint) and other always have a way to match')
+  const k3 = rigU()
+  k3.run(['all', 'account', 'log'])
+  const note = k3.err.join('\n')
+  assert.match(note, /these harnesses/); assert.match(note, /codex · account/); assert.doesNotMatch(note, /\bcc · account/)
+})
+
+test('F8 — the show table marks such cells with * and says what it means; with nothing to mark there is no legend', () => {
+  const k = rigU()
+  k.run([])
+  const t = k.out.join('\n')
+  const row = (h) => t.split('\n').find((l) => l.startsWith(h.padEnd(7)))
+  assert.match(row('codex'), /full\*/, 'codex · files has no pattern')
+  assert.doesNotMatch(row('cc'), /\*/)
+  assert.match(t, /\* no traffic pattern of that harness can class a call so/)
+  assert.doesNotMatch(formatKeep({ levels: {}, file: 'f', harnesses: ['cc'], unmatched: { cc: [] } }), /\*/)
 })

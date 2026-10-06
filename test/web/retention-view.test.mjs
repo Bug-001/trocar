@@ -108,6 +108,18 @@ test('2.6 #7 — the table: one row per harness, one column per class, the level
   assert.match(html, /改动只影响之后开始的调用;已存的数据不删/, 'what a change does and does not do is said on the page')
 })
 
+test('F8 — a cell no pattern of the harness can ever fill says so in place (无模式 · no pattern: never matches); the cells that can match do not', async () => {
+  const rep = await payload()
+  assert.deepEqual(rep.unmatched.cc, [], 'the report says it, from the table')
+  assert.deepEqual(rep.unmatched.codex, ['session-sync', 'files', 'account'])
+  const t = await shown({ report: rep })
+  const html = t.tl()
+  for (const c of ['session-sync', 'files', 'account']) assert.match(text(cellOf(html, 'codex', c)), /无模式 · no pattern: never matches/, `codex · ${c}`)
+  for (const c of ['llm', 'token-count', 'telemetry', 'other']) assert.doesNotMatch(text(cellOf(html, 'codex', c)), /无模式/, `codex · ${c}`)
+  for (const c of rep.classes) assert.doesNotMatch(text(cellOf(html, 'cc', c)), /无模式/, `cc · ${c} has a pattern`)
+  assert.match(cellOf(html, 'codex', 'files'), /title="[^"]*this harness has no pattern for files: no call is ever classed so/)
+})
+
 test('2.6 #7 / 4.1 #9 — pre-D40 records are a row of their own: 「D40 之前 · 只存了长度」, the request length they kept, the response size 「未记录」 (never a 0)', async () => {
   const t = await shown({ report: await payload() })
   const html = t.tl()
