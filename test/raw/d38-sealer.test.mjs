@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tmpDir, conversation, envelope, toLine, writeShard } from './helpers.mjs';
 import { listSources } from '../../src/raw/discover.mjs';
-import { sealShard } from '../../src/raw/seal.mjs';
+import { sealShard, sealUnchecked } from '../../src/raw/seal.mjs';
 import { sealLegacy } from '../../src/raw/legacy.mjs';
 import { markClosed } from '../../src/raw/closed.mjs';
 import { appendJournal, readJournal } from '../../src/raw/journal.mjs';
@@ -62,10 +62,13 @@ test('S-4: a segment of the stream the sealer cannot open is journalled, not onl
     const f = writeShard(path.join(root, 'sessions', S, 'calls.ndjson'), conversation(S, 2).map((r) => toLine(r)));
     const bad = f + '.0005.sealed', journal = path.join(root, 'j.jsonl');
     fs.writeFileSync(bad, 'not a sealed file at all, but long enough to have a header, a tail and a trailer ......');
-    await sealLegacy(f, { ...NONE, journal });
+    // the sealer itself (the legacy entry refuses before it gets there — confirm review row 5, delete-path.test.mjs)
+    await sealUnchecked(f, { split: false, deleteOriginal: false, journal });
     const e = readJournal({ journal }).find((x) => x.file === bad);
     assert.ok(e && e.outcome === 'note' && /could not be opened/.test(e.reason), JSON.stringify(readJournal({ journal })));
     assert.ok(fs.existsSync(bad), 'the unopenable file was touched');
+    const r = (await sealLegacy(f, { ...NONE, journal })).refused.find((x) => x.file === f);
+    assert.match(r.reason, /calls\.ndjson\.0005\.sealed could not be read/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

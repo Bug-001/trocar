@@ -155,3 +155,24 @@ for (const what of ['a session directory', 'an original']) {
     } finally { try { fs.chmodSync(bad, 0o700); } catch {} fs.rmSync(root, { recursive: true, force: true }); }
   });
 }
+
+// ── row 5: a copy that cannot be read is named, never "no sealed copy yet" ────────────────────────
+test('row 5: a sealed segment of the stream whose index cannot be read is named in the refusal — delete and seal alike', async () => {
+  const { root, f, journal } = sealedTree();
+  try {
+    await sealLegacy(f, { ...NONE, journal });
+    const copy = f + '.0001.sealed';
+    assert.ok(fs.existsSync(copy), 'precondition: the copy');
+    fs.truncateSync(copy, fs.statSync(copy).size - 7);                  // its index tail is cut
+    for (const deleteOriginal of [true, false]) {
+      const res = await sealLegacy(f, { ...NONE, journal, deleteOriginal });
+      const r = res.refused.find((x) => x.file === f);
+      assert.ok(r, `deleteOriginal=${deleteOriginal}: not refused`);
+      assert.doesNotMatch(r.reason, /no sealed copy yet/);
+      assert.match(r.reason, /calls\.ndjson\.0001\.sealed could not be read/);
+      assert.ok(fs.existsSync(f));
+      assert.ok(!fs.existsSync(f + '.0002.sealed'), 'sealed a second time beside a copy that cannot be read');
+    }
+    assert.ok(readJournal({ journal }).some((e) => e.outcome === 'refused' && e.file === f && /0001\.sealed could not be read/.test(e.reason)));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

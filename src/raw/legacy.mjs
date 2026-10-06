@@ -20,7 +20,7 @@ import { spawnSync } from 'node:child_process';
 import { sealUnchecked, SealRefused, oldRootReason, cleanDeadLocks, acquireLock, releaseLock, realish } from './seal.mjs';
 import { asightHome } from '../paths.mjs';
 import { verifyAgainst, copyRelation } from './verify.mjs';
-import { sealedSources, isSealedPath, streamOfSealed } from './discover.mjs';
+import { sealedSources, sealedSourcesError, isSealedPath, streamOfSealed } from './discover.mjs';
 import { fsyncDir, closedMarkerPath } from './closed.mjs';
 import { appendJournal, defaultJournalPath } from './journal.mjs';
 
@@ -345,6 +345,11 @@ function planCopies(fs, f, { deleteOriginal }) {
   // fresh calls.ndjson `asight shard --watch` writes after a deletion) is no reason to: it is the
   // only copy of its records, left alone, and this file is sealed as the next segment (review 3 F3).
   const copies = sameStreamCopies(fs, f);
+  // a segment of this stream that cannot be read may be this file's copy, or not: that cannot be
+  // told, so neither a seal nor a delete goes on beside it — named, never "no sealed copy yet"
+  // (review 3 confirm, row 5)
+  const bad = copies.filter((c) => c.rel === 'unreadable');
+  if (bad.length) return { refused: `${bad.map((c) => `${path.basename(c.file)} could not be read (${c.why})`).join('; ')} — a sealed segment of this stream whose source cannot be told, so it may be this file's copy. Check with \`asight raw verify\`; nothing sealed or deleted` };
   const stale = copies.filter((c) => c.rel === 'earlier');
   if (stale.length) return { refused: `its sealed copy ${stale.map((c) => path.basename(c.file)).join(', ')} holds only its first ${stale[0].length} bytes (${stale[0].why}) — so the original still holds every byte of that copy. Check with \`asight raw verify\`, delete that copy, then seal again` };
   const same = copies.filter((c) => c.rel === 'same').map((c) => c.file);
@@ -407,12 +412,17 @@ function deleteLocked(fs, f, copies, { moved, journal, noJournal }) {
 export const failureState = (x) => (x.originalKept === false ? (x.state || 'original deleted') : 'original kept');
 
 // Sealed segments of `f`'s stream beside it whose only source has `f`'s name, each with its relation to
-// the file now at that path (verify.mjs copyRelation): { file, length, rel: same|earlier|other, why }.
+// the file now at that path (verify.mjs copyRelation): { file, length, rel: same|earlier|other, why };
+// a segment whose index cannot be read is kept as { file, rel: 'unreadable', why } (row 5).
 // The deleter's test: `--delete-original` deletes `f` only against its `same` copies — and `asight raw
 // compare` takes its "would be deleted" set from this very function (review 3, second pass on F1).
 export function sameStreamCopies(fs, f) {
   const dir = path.dirname(f), name = path.basename(f);
   return fs.readdirSync(dir).filter((n) => isSealedPath(n) && streamOfSealed(n) === name).map((n) => path.join(dir, n))
-    .map((p) => { const s = sealedSources(p, { fs }); return s && s.length === 1 && s[0].name === name ? { file: p, length: s[0].length, ...copyRelation(s[0], f, { fs }) } : null; })
+    .map((p) => {
+      const s = sealedSources(p, { fs });
+      if (!s) return { file: p, rel: 'unreadable', why: sealedSourcesError(p) || 'its index could not be read' };
+      return s.length === 1 && s[0].name === name ? { file: p, length: s[0].length, ...copyRelation(s[0], f, { fs }) } : null;
+    })
     .filter(Boolean);
 }

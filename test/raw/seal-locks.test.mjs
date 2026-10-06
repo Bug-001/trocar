@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { sealShard } from '../../src/raw/seal.mjs';
+import { sealShard, sealUnchecked } from '../../src/raw/seal.mjs';
 import { sealLegacy } from '../../src/raw/legacy.mjs';
 import { markClosed } from '../../src/raw/closed.mjs';
 import { readJournal } from '../../src/raw/journal.mjs';
@@ -155,7 +155,7 @@ test('an empty segment left by an interrupted claim: named by readers, removed (
     const recs = await readRecords(old);
     assert.match(recs.scan.sealedError, /empty — a segment name an interrupted seal claimed/);
     assert.ok(listSources([path.join(root, 'sessions')]).files.includes(old), 'the empty claim is not listed (and so not reported)');
-    await sealLegacy(f, { ...NONE, journal });
+    await sealUnchecked(f, { split: false, deleteOriginal: false, journal });          // the sealer's own cleanup (the legacy entry's: delete-path.test.mjs)
     assert.equal(fs.existsSync(old), false, 'the old empty claim survived the next seal');
     assert.ok(fs.existsSync(young), 'a claim that may still be in use was removed');
     assert.ok(readJournal({ journal }).some((e) => e.outcome === 'claim-removed' && e.file === old));
