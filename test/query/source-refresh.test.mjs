@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { buildResolver } from '../../src/query/source.mjs';
+import { changeUntilCtimeMoves } from '../helpers/ctime.mjs';
 
 const rec = (id, text) => JSON.stringify({ id, req_body: JSON.stringify({ messages: [{ role: 'user', content: text }] }) }) + '\n';
 const bodyOf = (line) => JSON.parse(line).req_body;
@@ -151,7 +152,8 @@ test('an unreadable new file is skipped and noted; it does not stop other files 
     const before = r.scan.bytesIndexed;
     await r.refresh(); // still unreadable: noted once, and an open failure indexed nothing, so no rebuild
     assert.deepEqual([r.scan.skipped.filter((x) => x.reason === 'unreadable').length, r.scan.bytesIndexed], [1, before]);
-    fs.chmodSync(path.join(r1, 'locked.ndjson'), 0o600);
+    // chmod changes only ctime, which is what tells the failed file's signature apart: make it a change that moves it (helpers/ctime.mjs)
+    changeUntilCtimeMoves(fs, path.join(r1, 'locked.ndjson'), () => fs.chmodSync(path.join(r1, 'locked.ndjson'), 0o600));
     assert.equal(await r.refresh(), true);
     assert.equal(r.detail('S/locked.ndjson#L').status, 'ok');
     assert.deepEqual(r.scan.skipped.filter((x) => x.reason === 'unreadable'), [], 'the note clears once the file indexes');

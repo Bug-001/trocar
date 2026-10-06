@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { sealLegacy, otherSealers, isRunning } from '../../src/raw/legacy.mjs';
 import { readJournal } from '../../src/raw/journal.mjs';
 import { tmpDir, conversation, toLine, writeShard } from './helpers.mjs';
+import { changeUntilCtimeMoves } from '../helpers/ctime.mjs';
 
 // The confirm review of review 3 ("yes, with conditions") on the path that deletes originals —
 // `asight raw seal --legacy --delete-original`, about to run on 7.6 GB nobody can capture again. One
@@ -198,19 +199,20 @@ test('row 6: an original rewritten in place between its byte-for-byte check and 
     await sealLegacy(f, { ...NONE, journal });
     const T = Math.floor(Date.now() / 1000) - 60;
     fs.utimesSync(f, T, T);                                         // a whole second: restorable exactly
-    let done = false;
+    let done = false, ctimes = null;
     const spy = { ...fs, fsyncSync: (fd) => {                        // the first fsync is of the copy's directory, after the check
       if (!done) {
         done = true;
         const at = fs.readFileSync(f).indexOf('lorem');
-        const w = fs.openSync(f, 'r+'); fs.writeSync(w, Buffer.from('L'), 0, 1, at); fs.closeSync(w);
-        fs.utimesSync(f, T, T);
+        // ctime is the kernel's coarse clock: a rewrite in the tick of the run's own stat would leave it where it was (helpers/ctime.mjs)
+        ctimes = changeUntilCtimeMoves(fs, f, () => { const w = fs.openSync(f, 'r+'); fs.writeSync(w, Buffer.from('L'), 0, 1, at); fs.closeSync(w); fs.utimesSync(f, T, T); });
       }
       return fs.fsyncSync(fd);
     } };
     const res = await sealLegacy(f, { ...NONE, journal, deleteOriginal: true, fs: spy });
     assert.ok(done, 'precondition: the rewrite happened');
     assert.equal(fs.statSync(f).mtimeMs, T * 1000, 'precondition: mtime restored');
+    assert.notEqual(ctimes[1], ctimes[0], 'precondition: ctime moved (the one stamp a writer cannot put back)');
     assert.ok(fs.existsSync(f), 'an original rewritten after its check was deleted');
     assert.deepEqual(res.deletedOnly, []);
     assert.match(res.refused.find((r) => r.file === f).reason, /changed after the quiet window/);
