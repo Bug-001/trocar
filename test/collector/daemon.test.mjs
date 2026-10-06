@@ -204,6 +204,7 @@ test('daemon: a helper death is degraded and on reports why; a protocol mismatch
     const on = await req(s.sock, 'POST', '/on', {})
     assert.deepEqual([on.desired, on.actual], ['on', 'off'])
     assert.ok(flowsOf(s).some((f) => f.event === 'attach-failed' && /helper is down/.test(f.error)))
+    assert.deepEqual(flowsOf(s).filter((f) => f.event === 'helper-down').map((f) => f.exit), ['SIGKILL'], 'helper-down names how it ended (D-14)')
     const failures = (await req(s.sock, 'GET', '/status')).failures.map((f) => f.event)
     assert.ok(failures.includes('helper-down') && failures.includes('attach-failed'), `status reports both (D38): ${failures}`)
   } finally { await d.stop() }

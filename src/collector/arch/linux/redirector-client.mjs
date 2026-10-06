@@ -49,6 +49,10 @@ export const REDIRECTOR_PROTO = 1
  *  yet; use `sudo node install.mjs setup-helper`); override with ASIGHT_REDIRECTOR_BIN. */
 export const DEFAULT_REDIRECTOR_BIN = '/usr/local/libexec/asight/asight-redirector'
 
+/** The helper's exit codes (redirector.c main) by name, for helper-down (D38 D-14). */
+export const HELPER_EXIT = { 1: 'load-failed', 2: 'usage', 3: 'parent-mismatch', 4: 'environment', 5: 'lockdown-failed' }
+const STDERR_TAIL = 20
+
 export function createRedirectorClient({
   binary,
   args = [],
@@ -57,6 +61,8 @@ export function createRedirectorClient({
   autoHeartbeatMs = 500,
   lookupWaitMs = 200,
   env = process.env,
+  requestTimeoutMs = 2000, // a helper that does not answer: loader-timeout, never a lookup that hangs the agent's connection (D-13)
+  clock = () => performance.now(), // monotonic: a wall-clock jump never fakes or hides a heartbeat gap, never cuts a lookup short
 } = {}) {
   const resolvedBinary = binary || (env && env.ASIGHT_REDIRECTOR_BIN) || DEFAULT_REDIRECTOR_BIN
 
@@ -70,16 +76,25 @@ export function createRedirectorClient({
   let readyResolve = null
   let readyReject = null
   let loaderInfo = { proto: null, build: null, pid: null }
+  const stderrTail = [] // the helper's last stderr lines: why it would not start or attach (D-14)
+  const counters = { unparsable: 0, timeouts: 0 }
 
   function send(op, extra = {}) {
     if (down || !child || child.exitCode != null || child.signalCode != null) {
-      return Promise.reject(new Error('redirector loader is not running'))
+      return Promise.reject(Object.assign(new Error('redirector loader is not running'), { code: 'loader-down' }))
     }
     const id = nextId++
     const line = JSON.stringify({ id, op, ...extra }) + '\n'
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject })
-      child.stdin.write(line, (err) => { if (err) { pending.delete(id); reject(err) } })
+      const timer = requestTimeoutMs > 0 ? setTimeout(() => {
+        if (!pending.delete(id)) return
+        counters.timeouts++
+        reject(Object.assign(new Error(`the helper did not answer ${op} within ${requestTimeoutMs} ms`), { code: 'loader-timeout' }))
+      }, requestTimeoutMs) : null
+      if (timer && timer.unref) timer.unref()
+      const done = (fn) => (v) => { if (timer) clearTimeout(timer); fn(v) }
+      pending.set(id, { resolve: done(resolve), reject: done(reject) })
+      child.stdin.write(line, (err) => { if (err && pending.delete(id)) { if (timer) clearTimeout(timer); reject(Object.assign(err, { code: err.code || 'loader-down' })) } })
     })
   }
 
@@ -87,11 +102,11 @@ export function createRedirectorClient({
     line = line.trim()
     if (!line) return
     let msg
-    try { msg = JSON.parse(line) } catch { emitter.emit('loader-error', { reason: `unparsable line from the helper, ignored: ${line.slice(0, 200)}` }); return }
+    try { msg = JSON.parse(line) } catch { counters.unparsable++; emitter.emit('loader-error', { reason: `unparsable line from the helper, ignored: ${line.slice(0, 200)}` }); return }
     if (msg.id != null && pending.has(msg.id)) {
       const { resolve, reject } = pending.get(msg.id)
       pending.delete(msg.id)
-      if (msg.ok === false) reject(new Error(msg.error || 'loader error'))
+      if (msg.ok === false) reject(Object.assign(new Error(msg.error || 'loader error'), { code: 'loader-down' })) // the helper's own error, in the reason
       else resolve(msg)
       return
     }
@@ -128,24 +143,24 @@ export function createRedirectorClient({
     }
   }
 
-  function fail(reason) {
+  function fail(reason, extra = {}) {
     if (down) return
     down = true
     stopHeartbeat()
-    for (const { reject } of pending.values()) reject(new Error('redirector loader down: ' + reason))
+    for (const { reject } of pending.values()) reject(Object.assign(new Error('redirector loader down: ' + reason), { code: 'loader-down' }))
     pending.clear()
     if (readyReject) { readyReject(new Error('redirector loader down: ' + reason)); readyResolve = readyReject = null }
-    emitter.emit('down', { reason })
+    emitter.emit('down', { reason, ...extra, ...(stderrTail.length ? { stderr: [...stderrTail] } : {}) })
   }
 
   function startHeartbeat() {
     if (autoHeartbeatMs > 0 && !hbTimer) {
       // A failed beat, or beats more than the kernel's 2 s freshness apart (a stalled event loop), let steering lapse
       // (fail-open: those connections went direct). Never silent (D38).
-      let lastOk = Date.now()
+      let lastOk = clock()
       hbTimer = setInterval(() => {
         heartbeat().then(() => {
-          const gap = Date.now() - lastOk; lastOk = Date.now()
+          const gap = Math.round(clock() - lastOk); lastOk = clock()
           if (gap > HEARTBEAT_STALE_MS) emitter.emit('heartbeat-error', { code: 'heartbeat-gap', reason: `no heartbeat for ${gap} ms (the kernel stops steering after ${HEARTBEAT_STALE_MS} ms); connections in that window went direct` })
         }, (e) => { if (!down) emitter.emit('heartbeat-error', { code: 'heartbeat-failed', reason: String((e && e.message) || e) }) })
       }, autoHeartbeatMs)
@@ -159,15 +174,19 @@ export function createRedirectorClient({
     // --parent-pid goes AFTER args so the real loader (binary=the helper, args=[]) sees it as its
     // own flag, while a test harness (binary=node, args=[script]) still runs the script first.
     const spawnArgs = [...args, '--parent-pid', String(parentPid)]
-    child = spawn(resolvedBinary, spawnArgs, { stdio: ['pipe', 'pipe', 'inherit'], env })
+    child = spawn(resolvedBinary, spawnArgs, { stdio: ['pipe', 'pipe', 'pipe'], env })
     const rl = readline.createInterface({ input: child.stdout })
     rl.on('line', onLine)
+    // its stderr still reaches ours, and its last lines go into helper-down (why it could not start, load or attach)
+    if (child.stderr) readline.createInterface({ input: child.stderr }).on('line', (l) => { process.stderr.write(`[helper] ${l}\n`); stderrTail.push(l.slice(0, 500)); if (stderrTail.length > STDERR_TAIL) stderrTail.shift() })
     // A helper that died between our check and the write makes stdin emit EPIPE. Without a listener that is an
     // uncaught exception that takes the whole daemon down; it is the helper going down, reported as such.
     child.stdin.on('error', (err) => fail(`loader stdin: ${err.code || err.message}`))
     child.on('exit', (code, signal) => {
       stopHeartbeat()
-      fail(signal ? `loader killed by ${signal}` : `loader exited with code ${code}`)
+      const exit = signal || HELPER_EXIT[code] || `code ${code}`
+      // after its stderr is drained, so the tail is complete
+      setImmediate(() => fail(signal ? `loader killed by ${signal}` : `loader exited with code ${code}${HELPER_EXIT[code] ? ` (${HELPER_EXIT[code]})` : ''}`, { exit }))
     })
     child.on('error', (err) => {
       if (err && err.code === 'ENOENT') {
@@ -204,7 +223,7 @@ export function createRedirectorClient({
     const port = peer && peer.port
     if (port == null) return null
     const family = peer.address && net.isIPv6(peer.address) ? 6 : 4
-    const deadline = Date.now() + lookupWaitMs
+    const deadline = clock() + lookupWaitMs
     for (;;) {
       let r
       r = await send('lookup', { port, family }) // a transport error is thrown, never read as a miss (D38)
@@ -212,7 +231,7 @@ export function createRedirectorClient({
         const label = r.pid != null ? labels.get(r.pid) : null
         return { dst: r.dst, pid: r.pid ?? null, agent: label ? label.agent : null, decrypt: !!r.decrypt }
       }
-      if (Date.now() >= deadline) return null
+      if (clock() >= deadline) return null
       await new Promise((res) => setTimeout(res, 20))
     }
   }
@@ -240,5 +259,6 @@ export function createRedirectorClient({
   Object.defineProperty(emitter, '_child', { get() { return child } })
   Object.defineProperty(emitter, '_binary', { get() { return resolvedBinary } })
   Object.defineProperty(emitter, 'loaderInfo', { get() { return loaderInfo } })
+  Object.defineProperty(emitter, 'counters', { get() { return { ...counters } } }) // unparsable lines, timed-out requests (status)
   return emitter
 }

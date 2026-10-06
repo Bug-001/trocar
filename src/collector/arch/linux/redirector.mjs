@@ -57,7 +57,7 @@ export function createLinuxRedirector({ makeClient, procRoot = '/proc', uid = pr
       return out
     },
     directCount: (pid) => directConnections(pid, { root: procRoot, enginePort }), // {count, error}: unknown is never 0 (D-17)
-    helperInfo: () => (client ? client.loaderInfo : { pid: null, proto: null, build: null }),
+    helperInfo: () => (client ? { ...client.loaderInfo, ...(client.counters || {}) } : { pid: null, proto: null, build: null }), // + unparsable lines, timed-out requests (D-13)
     // Whether logind keeps this user's daemon after the last logout (4.6 OPEN 登出后): true / false, null = unknown.
     linger() { try { fs.statSync(path.join(lingerDir, userName())); return true } catch (e) { return e && e.code === 'ENOENT' ? false : null } },
     expectedProto: REDIRECTOR_PROTO,

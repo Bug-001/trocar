@@ -31,7 +31,8 @@ function mock({ autoReply = true, reply = replyFor } = {}) {
       writes.push(line)
       if (autoReply) {
         let msg; try { msg = JSON.parse(line) } catch {}
-        if (msg && msg.id != null) setImmediate(() => stdout.write(JSON.stringify(reply(msg)) + '\n'))
+        const r = msg && msg.id != null ? reply(msg) : null // null: the helper never answers this one
+        if (r) setImmediate(() => stdout.write(JSON.stringify(r) + '\n'))
       }
       if (cb) cb()
       return true
@@ -184,4 +185,60 @@ test('lookup rejects when the helper cannot be asked — a transport error is ne
   await assert.rejects(c.lookup({ address: '127.0.0.1', port: 5002 }), /by_port map read failed/)
   m.child.kill()
   await assert.rejects(c.lookup({ address: '127.0.0.1', port: 5003 }))
+})
+
+// D-13: a request the helper never answers rejects as loader-timeout (the agent's connection is closed, not hung);
+// timing uses a monotonic clock, so a wall-clock jump neither fakes nor hides a heartbeat gap or cuts a lookup short.
+test('a request the helper does not answer is loader-timeout after requestTimeoutMs, counted (D-13)', async () => {
+  const { c } = await started({ requestTimeoutMs: 40, mock: { reply: (msg) => (msg.op === 'lookup' ? null : replyFor(msg)) } })
+  const t0 = Date.now()
+  const keepAlive = setTimeout(() => {}, 5000) // the request timer is unref'd: in the daemon the engine keeps the loop alive
+  await assert.rejects(c.lookup({ address: '127.0.0.1', port: 5000 }), (e) => e.code === 'loader-timeout' && /did not answer lookup within 40 ms/.test(e.message))
+  clearTimeout(keepAlive)
+  assert.ok(Date.now() - t0 < 1000)
+  assert.equal(c.counters.timeouts, 1)
+  assert.equal((await c.status()).ok, true, 'answered requests are unaffected')
+  await c.close()
+})
+
+test('heartbeat gaps and lookup deadlines follow the monotonic clock, not the wall clock (D-13)', async () => {
+  let mono = 0
+  const { m, c } = await started({ autoHeartbeatMs: 20, clock: () => mono })
+  const errs = []; c.on('heartbeat-error', (e) => errs.push(e))
+  const keepAlive = setTimeout(() => {}, 5000)
+  const realNow = Date.now; Date.now = () => realNow() + 3600e3 // the wall clock jumps an hour ahead
+  try {
+    await c.attach()
+    await new Promise((r) => setTimeout(r, 120))
+    assert.deepEqual(errs, [], 'a wall-clock jump is not a gap')
+    mono += 2500 // the monotonic clock says 2.5 s passed between two beats: that is a gap
+    await new Promise((r) => setTimeout(r, 80))
+    assert.deepEqual(errs.map((e) => e.code), ['heartbeat-gap'])
+  } finally { Date.now = realNow; clearTimeout(keepAlive) }
+  const before = m.frames().filter((f) => f.op === 'lookup').length
+  mono = 0
+  const pending = c.lookup({ address: '127.0.0.1', port: 6000 }) // lookupWaitMs 200: keeps asking while the clock stands still
+  await new Promise((r) => setTimeout(r, 60)); mono = 1e6 // …and stops at the next try once the monotonic deadline is past
+  assert.equal(await pending, null)
+  assert.ok(m.frames().filter((f) => f.op === 'lookup').length - before >= 2)
+  await c.close()
+})
+
+// D-14: why the helper went down — its exit code by name and its last stderr lines — goes with the down event.
+test('a helper that exits carries the exit name and its last stderr lines into down (D-14)', async () => {
+  const m = mock()
+  m.child.stderr = new PassThrough()
+  const c = createRedirectorClient({ binary: '/x/bin', spawn: m.spawn, autoHeartbeatMs: 0, parentPid: 1234 })
+  const down = once(c, 'down')
+  const p = c.start().catch(() => {})
+  const writes = []; const realWrite = process.stderr.write; process.stderr.write = (x) => { writes.push(String(x)); return true }
+  try {
+    m.child.stderr.write('asight-redirector: /sys/fs/cgroup is not a cgroup2 mount (unified hierarchy required)\n')
+    await new Promise((r) => setImmediate(r))
+    m.child.exitCode = 4; m.child.emit('exit', 4, null)
+    const [d] = await down
+    assert.deepEqual([d.exit, /exited with code 4 \(environment\)/.test(d.reason), d.stderr], ['environment', true, ['asight-redirector: /sys/fs/cgroup is not a cgroup2 mount (unified hierarchy required)']])
+    assert.ok(writes.some((w) => w.startsWith('[helper] asight-redirector: /sys/fs/cgroup')), 'still on our stderr')
+  } finally { process.stderr.write = realWrite }
+  await p
 })
