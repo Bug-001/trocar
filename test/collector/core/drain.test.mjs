@@ -4,6 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter, once } from 'node:events'
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
+import net from 'node:net'
 import tls from 'node:tls'
 import { insertConnectionClose, createDrain } from '../../../src/collector/core/engine/drain.mjs'
 import { startMockUpstream } from '../../lab/mock-upstream/server.mjs'
@@ -163,6 +164,29 @@ test('gate: a throw inside it is fail-open — the held bytes go on unchanged, e
   g.afterUpstream(); assert.notEqual(g.state(), 'closed')
 })
 
+test('gate: a throw on the second head of a chunk (after a 1xx) is fail-open for the whole chunk — the interim head it had already composed goes first, then what was held, every byte as the upstream sent it (T05 review)', () => {
+  const { g, tee, failures, marks } = gateOf()
+  tee.markAdded = () => { throw new Error('boom') } // only the final head asks for the line: the 100 Continue is not marked
+  g.start()
+  const chunk = Buffer.concat([head(['HTTP/1.1 100 Continue']), head(['HTTP/1.1 200 OK', 'content-length: 0'])])
+  const out = g.beforeUpstream(chunk)
+  assert.equal(text(out), chunk.toString('latin1'), 'both heads, in order, unchanged: the client misses nothing')
+  assert.deepEqual([failures.map((f) => f.code), marks], [['engine-error'], []])
+  assert.deepEqual(g.flush(), [], 'nothing is left held')
+})
+
+test('gate: loseTee hands back what was held, as it came, and the gate adds nothing from then on — an addition no tee records would be silent (T05 review)', () => {
+  const { g, marks } = gateOf()
+  g.start()
+  assert.deepEqual(g.beforeUpstream(Buffer.from('HTTP/1.1 200 O')), [], 'a head in two chunks: the first is held')
+  assert.equal(text(g.loseTee()), 'HTTP/1.1 200 O')
+  assert.equal(g.state(), 'waiting')
+  const h = head(['HTTP/1.1 200 OK', 'content-length: 0'])
+  assert.equal(text(g.beforeUpstream(h)), h.toString('latin1'), 'the head that follows is not given the line')
+  assert.deepEqual(marks, [])
+  assert.deepEqual(g.loseTee(), [], 'asked again: nothing')
+})
+
 test('gate: once the flow has stopped recording (its recorder threw) what the tee saw last is no longer true: the connection waits for its own close, it is not closed on a stale view', () => {
   const { g, tee, c } = gateOf({ view: { idle: false, headPending: false, seq: 0, blind: false } })
   assert.equal(g.start(), 'closing')
@@ -210,11 +234,11 @@ async function lab(t, { delays, terminal = TERMINAL, spliceHost = 'splice.asight
   const mock = upstream ? await upstream() : await startMockUpstream({ tls: { key: fs.readFileSync(labCa.key), cert: fs.readFileSync(labCa.cert) }, delays })
   const envelopes = [], errors = []
   const store = createRecordStore({ root: path.join(dir, 'rec') })
-  const L = { recording: true }
+  const L = { recording: true, boom: false }
   const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: mock.port, family: 4 }, pid: 11, agent: 'claude-code', decrypt: true })
   const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: fs.readFileSync(labCa.caCert), systemCa: fs.readFileSync(labCa.caCert, 'utf8'),
     store: { envelope: (e) => { envelopes.push(e); return store.envelope(e) }, flow: (f) => store.flow(f) }, onFailure: createFailureRecorder(path.join(dir, 'rec')).event,
-    isRecording: () => L.recording, policy: (meta, host) => host !== spliceHost, describe: () => ({ wsTerminal: terminal }), onError: (e) => errors.push(e), drainTimeoutMs: 1500 })
+    isRecording: () => { if (L.boom) throw new Error('the switch sampler threw'); return L.recording }, policy: (meta, host) => host !== spliceHost, describe: () => ({ wsTerminal: terminal }), onError: (e) => errors.push(e), drainTimeoutMs: 1500 })
   const { port } = await engine.listen({})
   const clients = []
   t.after(async () => {
@@ -233,7 +257,7 @@ async function lab(t, { delays, terminal = TERMINAL, spliceHost = 'splice.asight
   const post = (c, p, body, headers = {}) => c.sock.write(`POST ${p} HTTP/1.1\r\nHost: api.anthropic.com\r\ncontent-type: application/json\r\n${Object.entries(headers).map(([k, v]) => `${k}: ${v}\r\n`).join('')}content-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`)
   const wire = (n = 0) => { const e = mock.state.log.filter((x) => x.type === 'request')[n]; return e && Buffer.from(e.resp_raw_b64, 'base64') } // the bytes the mock wrote for its nth response
   const connectWs = async (opts = {}) => { const c = await wsConnect(port, { tls: { servername: 'api.openai.com', ca: asightCa.certPem }, ...opts }); clients.push(c); return c }
-  return { mock, engine, port, envelopes, errors, client, post, wire, connectWs, set recording(v) { L.recording = v }, rows: () => read('flows').filter((r) => r.event == null), failures: () => read('flows').filter((r) => r.event === 'failure'), dir }
+  return { mock, engine, port, envelopes, errors, client, post, wire, connectWs, set recording(v) { L.recording = v }, set boom(v) { L.boom = v }, rows: () => read('flows').filter((r) => r.event == null), failures: () => read('flows').filter((r) => r.event === 'failure'), dir }
 }
 const NOW = { agents: null }
 
@@ -303,6 +327,21 @@ test('V37: an idle keep-alive connection is closed at once, with or without a re
   assert.deepEqual(row.asight_added, [{ seq: 0, what: 'connection-close' }])
 })
 
+test('V37: off between the TCP connect and the TLS handshake: once the engine has terminated the TLS nothing is in flight, so the connection is closed at once — not left open and uncounted (1.6 §1.3, T05 review)', T, async (t) => {
+  const L = await lab(t)
+  const raw = net.connect(L.port, '127.0.0.1'); raw.on('error', () => {}); await once(raw, 'connect')
+  await until(() => L.engine.stats().active === 1, 'the engine accepted it')
+  assert.deepEqual(L.engine.drain(NOW), { closing: 1, waiting: 0, cut: 0 }, 'not yet relayed: asked, and the answer is that it is on its way out')
+  const sock = tls.connect({ socket: raw, servername: 'api.anthropic.com', ca: asightCa.certPem }); sock.on('error', () => {})
+  const closed = new Promise((r) => sock.once('close', r)) // the engine's FIN may reach the client before it has reported the handshake done: either way it is closed
+  await Promise.race([closed, sleep(3000).then(() => { throw new Error('the idle connection that off asked for was left open') })])
+  assert.deepEqual(L.engine.relayed(NOW), { closing: 0, waiting: 0 })
+  await Promise.race([L.engine.drained(NOW), sleep(3000).then(() => { throw new Error('drained() never resolved') })])
+  assert.equal(L.engine.stats().active, 0)
+  const row = await until(() => L.rows().find((r) => r.decision === 'decrypt'), 'the connection row')
+  assert.equal(row.error, undefined, 'the engine closed it: the client\'s leaf judgment is not charged to the client')
+})
+
 test('V37: a small response that reaches the engine whole, head and body in one chunk, is still marked in its envelope (the gate acts before the tee closes the exchange)', T, async (t) => {
   const reply = '{"id":"msg_1","type":"message","content":[{"type":"text","text":"pong"}]}'
   const resp = `HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: ${reply.length}\r\n\r\n${reply}`
@@ -319,6 +358,29 @@ test('V37: a small response that reaches the engine whole, head and body in one 
   assert.equal(c.bytes().toString('latin1'), resp.replace('\r\n\r\n', '\r\nConnection: close\r\n\r\n'))
   const env = await until(() => L.envelopes.at(-1), 'the envelope')
   assert.deepEqual([env.asight_added, env.resp_head_raw, env.resp.kind], [['connection-close'], resp.slice(0, resp.indexOf('\r\n\r\n') + 4), 'json'])
+})
+
+// an upstream the test drives by hand: `onConn(socket)` is its whole behaviour; every socket is destroyed with it
+const rawUpstream = (onConn) => async () => {
+  const socks = new Set()
+  const srv = tls.createServer({ key: fs.readFileSync(labCa.key), cert: fs.readFileSync(labCa.cert) }, (s) => { socks.add(s); s.on('error', () => {}); onConn(s) })
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r))
+  return { port: srv.address().port, state: { log: [] }, close: () => new Promise((r) => { for (const x of socks) x.destroy(); srv.close(r) }) }
+}
+
+test('an HTTP connection whose framing failed is waiting, not closed: the tee no longer follows its responses, so off sees no boundary on it; --now cuts it (1.6 §1.3, T05 review)', T, async (t) => {
+  const L = await lab(t, { upstream: rawUpstream((s) => s.on('data', () => {})) }) // never answers
+  const c = await L.client()
+  c.sock.write('POST /v1/messages HTTP/1.1\r\nHost: api.anthropic.com\r\ncontent-length: abc\r\n\r\n') // the request framer cannot frame this
+  await until(() => L.failures().some((f) => f.code === 'framer-error'), 'the framing failure')
+  assert.deepEqual(L.engine.drain(NOW), { closing: 0, waiting: 1, cut: 0 })
+  assert.deepEqual(L.engine.relayed(NOW), { closing: 0, waiting: 1 })
+  await sleep(150)
+  assert.equal(c.sock.destroyed, false, 'not closed: there is no response boundary to close at')
+  assert.deepEqual(L.engine.drain({ agents: null, now: true }), { closing: 0, waiting: 0, cut: 1 })
+  await c.closed
+  const row = await until(() => L.rows().find((r) => r.framer_error), 'the row')
+  assert.deepEqual([row.framer_error.side, row.error.type], ['request', 'cut-by-off'])
 })
 
 // ── WebSocket (V38) ───────────────────────────────────────────────────────────────────────────────────────────────

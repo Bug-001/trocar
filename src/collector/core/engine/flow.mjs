@@ -201,19 +201,32 @@ export function handleFlow(client, meta, ctx) {
     let tee = activeTee
     // the recording side copy never throws into the forwarding path: a recorder that throws stops
     // recording this connection (recorded, D38) and the bytes keep flowing
-    const copy = (fn) => { if (!tee) return; try { fn(tee) } catch (e) { tee = null; activeTee = null; drain.loseTee(); ctx.failure({ code: 'engine-error', flow_id: rec.flow_id, reason: `recording stopped: ${msgOf(e)}` }) } }
+    // What the gate had put into the bytes the client got is on the row even then (invariant 4): finish() reads the tee's notes, and this tee is gone. What
+    // the gate held for the client goes out at once, in order (`loose`), as it came.
+    const loose = []
+    const copy = (fn) => {
+      if (!tee) return
+      try { fn(tee) } catch (e) {
+        const lost = tee; tee = null; activeTee = null
+        try { const added = lost.rowNotes().asightAdded; if (added) rec.asight_added = added } catch { /* the tee that threw may not answer either */ }
+        loose.push(...drain.loseTee())
+        ctx.failure({ code: 'engine-error', flow_id: rec.flow_id, reason: `recording stopped: ${msgOf(e)}` })
+      }
+    }
+    const toClient = (parts) => { for (const p of parts) if (cSock.writable && !cSock.write(p)) uSock.pause() }
     // The drain gate (RFC 1.6 §1.3, engine/drain.mjs) sits between the upstream and the client. It runs before the tee sees
     // a chunk (an envelope that ends in this very chunk then already says what the gate added) and after the chunk is
     // written (a response that ended closes the connection); the tee still reads the upstream's own bytes.
     const drain = gate = createDrain({ flowId: rec.flow_id, tee, client: cSock, upstream: uSock, timeoutMs: ctx.drainTimeoutMs ?? 5000, destroy: destroyAll, onClosed: onGateClosed, onFailure: ctx.failure })
     track(cSock); track(uSock)
     if (drainAsked) { drainAsked = false; drain.start({ now: false }) }
-    cSock.on('data', (d) => { copy((t) => t.fromClient(d)); if (uSock.writable && !uSock.write(d)) cSock.pause() })
+    cSock.on('data', (d) => { copy((t) => t.fromClient(d)); if (loose.length) toClient(loose.splice(0)); if (uSock.writable && !uSock.write(d)) cSock.pause() })
     uSock.on('drain', () => cSock.resume())
     uSock.on('data', (d) => {
       const parts = drain.beforeUpstream(d)
       copy((t) => t.fromUpstream(d))
-      for (const p of parts) if (cSock.writable && !cSock.write(p)) uSock.pause()
+      toClient(parts)
+      if (loose.length) toClient(loose.splice(0))
       drain.afterUpstream()
     })
     cSock.on('drain', () => uSock.resume())
@@ -458,6 +471,7 @@ export function handleFlow(client, meta, ctx) {
     // TLS is terminated on both legs and the client has said nothing yet: nothing is in flight, off closes it at once
     track(cTls); track(uTls)
     gate = createDrain({ flowId: rec.flow_id, tee: IDLE, client: cTls, upstream: uTls, timeoutMs: ctx.drainTimeoutMs ?? 5000, destroy: destroyAll, onClosed: onGateClosed, onFailure: ctx.failure })
+    if (drainAsked) { drainAsked = false; gate.start({ now: false }) } // off came before the handshake was done (T05 review): nothing is in flight, so it is closed now, as a connection off found here would be
   }
 
   // Between terminating TLS and relay() owning the connection nothing else listens for a side going (the raw

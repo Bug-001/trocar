@@ -9,11 +9,14 @@
 // meet a reset. It is recorded (tee.markAdded → the envelope's and the flows/ row's `asight_added`), never silent.
 // Closing is `end()` after the last write (a FIN, never an RST); `destroy()` only after `timeoutMs`, and not while the
 // client's bytes are still unread. `now` (asight off --now) destroys at once. Any throw in here is fail-open: the held
-// bytes go on unchanged, the throw is recorded (engine-error), and the connection is no longer gated.
+// bytes go on unchanged — what this chunk had already composed first, then what is still held — the throw is recorded
+// (engine-error), and the connection is no longer gated. The same holds when the flow stops recording this connection
+// (loseTee): what the gate holds goes to the client as it came, and nothing is added any more — an addition nobody
+// records would be a silent one.
 //
 //   createDrain({flowId, tee, client, upstream, timeoutMs, destroy, onClosed, onFailure})
 //     → {start({now}) → 'closing' | 'waiting' | 'closed' | 'cut', beforeUpstream(chunk) → Buffer[], afterUpstream(),
-//        flush() → Buffer[], onTurnEnd(), state()}
+//        flush() → Buffer[], loseTee() → Buffer[], onTurnEnd(), state()}
 // `tee` is the exchange tee (absent for a spliced connection); client / upstream are the sockets relay() forwards between.
 
 const CRLF2 = Buffer.from('\r\n\r\n')
@@ -48,9 +51,11 @@ export function createDrain({ flowId, tee: teeIn = null, client, upstream, timeo
   let timer = null
   const hard = destroy || (() => { for (const s of [client, upstream]) { try { s.destroy() } catch { /* already gone */ } } })
 
-  const failOpen = (e) => { // never into the forwarding path: what is held goes on unchanged, and this connection is not gated any more
+  // never into the forwarding path: what is held goes on unchanged, after what this chunk had already composed for the client (`done`:
+  // an interim head, say), and this connection is not gated any more
+  const failOpen = (e, done = []) => {
     phase = 'broken'
-    const out = held; held = []; heldLen = 0
+    const out = [...done, ...held]; held = []; heldLen = 0
     try { onFailure({ code: 'engine-error', flow_id: flowId, reason: `the drain gate failed: ${String((e && e.message) || e)}; this connection is no longer closed by off` }) } catch { /* the sink is the engine's */ }
     return out
   }
@@ -89,10 +94,10 @@ export function createDrain({ flowId, tee: teeIn = null, client, upstream, timeo
   // already carries asight_added). → what to write, in order.
   function beforeUpstream(chunk) {
     if (phase !== 'closing' || mode !== 'hold') return [chunk]
+    const out = []
     try {
       held.push(chunk); heldLen += chunk.length
       let buf = Buffer.concat(held)
-      const out = []
       for (;;) { // a head, then (after a 1xx) maybe the next one in the same bytes
         const lead = buf.toString('latin1', 0, 5)
         if (!'HTTP/'.startsWith(lead)) { mode = 'stream'; held = []; heldLen = 0; out.push(buf); return out } // not the start of a status head (the head began earlier than the gate saw): nothing to insert into
@@ -114,7 +119,7 @@ export function createDrain({ flowId, tee: teeIn = null, client, upstream, timeo
         if (!interim) { out.push(rest); return out }
         buf = rest; held = [buf]; heldLen = buf.length
       }
-    } catch (e) { return failOpen(e) }
+    } catch (e) { return failOpen(e, out) }
   }
 
   // After the chunk went out: the response (or the turn) is over → close
@@ -135,7 +140,9 @@ export function createDrain({ flowId, tee: teeIn = null, client, upstream, timeo
     start, beforeUpstream, afterUpstream,
     flush() { const out = held; held = []; heldLen = 0; return out }, // the upstream went away: what was held is still the client's
     onTurnEnd() { turnEnded = true }, // the WebSocket recorder saw the terminal message in the chunk just fed to it
-    loseTee() { tee = null }, // the flow stopped recording this connection (its recorder threw): what it saw last is no longer true, so the connection waits for its own close
+    // the flow stopped recording this connection (its recorder threw): what the tee saw last is no longer true, so the connection waits for its own
+    // close, and the gate adds nothing from here on (nobody would record it). → the bytes it held, for the client as they came
+    loseTee() { tee = null; mode = 'stream'; const out = held; held = []; heldLen = 0; return out },
     state() {
       if (phase === 'closing') { try { return blind(tee && tee.boundary()) ? 'waiting' : 'closing' } catch { return 'waiting' } }
       return phase === 'broken' ? 'waiting' : phase

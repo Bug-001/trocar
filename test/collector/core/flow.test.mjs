@@ -451,3 +451,31 @@ test('an upstream framing error is a framer-error failure event with the flow id
   assert.deepEqual(h.failures.map((f) => [f.code, f.flow_id, f.side]), [['framer-error', h.flows[0].flow_id, 'response']])
   assert.deepEqual(h.envelopes.map((e) => [e.error, e.resp.error?.type]), [[true, 'framer_error']])
 })
+
+// 1.6 §1.3 / invariant 4: when the recorder throws after the drain gate put its `Connection: close` into a head, the connection stops being recorded
+// but the row still says what the client was given — the gate's note must not die with the tee. (The tee throws here because its failure sink does:
+// a framing failure that cannot be reported comes out of push(); the engine's own sink never throws, so this is the defensive path.)
+test('a recorder that throws after the drain gate added Connection: close: the flows/ row still says asight_added and the bytes the client got are the upstream\'s plus that line, in order (invariant 4)', async () => {
+  const head = 'HTTP/1.1 200 OK\r\ncontent-length: 10\r\n\r\n'
+  const h = await harness({ upstream: httpsUpstream((s) => s.once('data', () => { setTimeout(() => s.write(`${head}abc`), 150); setTimeout(() => s.write('defghij'), 500) })) })
+  const handles = []
+  h.ctx.register = (x) => handles.push(x)
+  h.ctx.failure = (r) => { if (r.code === 'framer-error') throw new Error('the failure sink threw'); h.failures.push(r) }
+  const c = tls.connect({ port: h.port, host: '127.0.0.1', servername: 'upstream.test', ca: asightCa.certPem, ALPNProtocols: ['http/1.1'] })
+  let got = ''; c.on('data', (d) => { got += d.toString('latin1') }); c.on('error', () => {})
+  const wait = async (fn, what) => { for (const end = Date.now() + 4000; Date.now() < end; await new Promise((r) => setTimeout(r, 10))) if (fn()) return; throw new Error(`${what}: not within 4000ms`) }
+  await once(c, 'secureConnect')
+  c.write('POST /v1/messages HTTP/1.1\r\nHost: upstream.test\r\nContent-Length: 2\r\n\r\n{}')
+  await new Promise((r) => setTimeout(r, 60)) // the request is out, its response head is not
+  assert.equal(handles[0].start({ now: false }), 'closing')
+  await wait(() => got.includes('\r\n\r\nabc'), 'the head with the line')
+  h.ctx.isRecording = () => { throw new Error('the sampler threw') }
+  c.write('GET /next HTTP/1.1\r\nHost: upstream.test\r\n\r\n') // pipelined: its head makes the request framer throw, and its failure sink does too
+  await wait(() => got.endsWith('defghij'), 'the rest of the body')
+  assert.equal(got, `${head.replace('\r\n\r\n', '\r\nConnection: close\r\n\r\n')}abcdefghij`)
+  assert.deepEqual(h.failures.filter((f) => f.code === 'engine-error').map((f) => /recording stopped/.test(f.reason)), [true])
+  assert.equal(handles[0].state(), 'waiting', 'no longer followed: it waits for its own close, not closed on a stale view')
+  c.destroy()
+  await h.close()
+  assert.deepEqual(h.flows[0].asight_added, [{ seq: 0, what: 'connection-close' }], 'the row still says what the client was given')
+})
