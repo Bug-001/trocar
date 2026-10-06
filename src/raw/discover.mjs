@@ -85,7 +85,7 @@ const fileLike = (fs, dir, e) => e.isFile() || (e.isSymbolicLink() && (() => { t
 
 function scanRoot(root, fs) {
   const st = fs.statSync(root);                        // missing root throws: broken MUST NOT look empty
-  if (!st.isDirectory()) return { files: [root], skipped: [] };
+  if (!st.isDirectory()) return { flat: [root], below: [], skipped: [] };
   const flat = [], below = [], skipped = [];
   for (const e of fs.readdirSync(root, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
     const p = path.join(root, e.name);
@@ -121,7 +121,7 @@ function scanRoot(root, fs) {
     if (!took.length) skipped.push(dirSkip);
     else below.push(...orderInputs(took, ['calls.ndjson']));
   }
-  return { files: [...orderInputs(flat), ...below], skipped };
+  return { flat, below, skipped };   // listSources orders flat files together with their continuations
 }
 
 // Coexistence over an explicit list of files (a session dir, the control dir, or a whole scan): drop
@@ -182,7 +182,7 @@ function addContinuations(perRoot, sessionsRoot, fs) {
   perRoot.forEach((r, k) => { try { if (fs.statSync(r.root).isDirectory()) want.set(fs.realpathSync(r.root), k); } catch {} });
   if (!want.size) return unattributed;
   let ents; try { ents = fs.readdirSync(sessionsRoot, { withFileTypes: true }); } catch { return unattributed; }
-  const have = new Set(perRoot.flatMap((r) => r.files.map((f) => path.resolve(f))));
+  const have = new Set(perRoot.flatMap((r) => [...r.flat, ...r.below].map((f) => path.resolve(f))));
   for (const e of ents.sort((a, b) => (a.name < b.name ? -1 : 1))) {
     if (!e.isDirectory()) continue;
     const dir = path.join(sessionsRoot, e.name);
@@ -194,7 +194,7 @@ function addContinuations(perRoot, sessionsRoot, fs) {
       // unreadable: whose continuation it is cannot be told — say so rather than drop it silently
       if (!src) { unattributed.push({ file: q, reason: `${sealedSourcesError(q) || 'unreadable'} — a sealed file under the sessions directory that could not be opened, so it is unknown whether its records belong to this source`, unreadableRecords: null }); continue; }
       const k = src.length === 1 ? want.get(realDir(fs, path.dirname(src[0].abs))) : undefined;
-      if (k !== undefined) perRoot[k].files.push(q);
+      if (k !== undefined) perRoot[k].cont.push(q);
     }
   }
   return unattributed;
@@ -215,9 +215,15 @@ export function sealedUnder(dir, { fs = nodeFs } = {}) {
 // roots → { files (to read, in a stable order), perRoot, skipped, superseded, mismatched, unattributed, sig }.
 // `exclude`: paths to treat as absent (`asight raw compare` reads the state after deletion this way).
 export function listSources(roots, { fs = nodeFs, sessionsRoot = null, exclude = null } = {}) {
-  const perRoot = roots.map((root) => ({ root, ...scanRoot(root, fs) }));
-  if (exclude) for (const r of perRoot) r.files = r.files.filter((f) => !exclude.has(f));
+  const perRoot = roots.map((root) => ({ root, ...scanRoot(root, fs), cont: [] }));
   const unattributed = sessionsRoot ? addContinuations(perRoot, sessionsRoot, fs) : [];
+  // A continuation continues one of the root's flat streams: they are ONE sequence per stream, by
+  // segment, the live file last (orderInputs) — appended after every flat file, a session whose older
+  // shard was sealed read its newer records first (review 3, second pass on F2).
+  for (const r of perRoot) {
+    r.files = [...orderInputs([...r.flat, ...r.cont]), ...r.below];
+    if (exclude) r.files = r.files.filter((f) => !exclude.has(f));
+  }
   const { superseded, mismatched, drop } = resolveCoexistence(perRoot.flatMap((r) => r.files), { fs });
   for (const r of perRoot) r.files = r.files.filter((f) => !drop.has(f));
   const files = perRoot.flatMap((r) => r.files);

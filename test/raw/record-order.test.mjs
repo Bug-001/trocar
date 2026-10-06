@@ -8,6 +8,8 @@ import { tmpDir, conversation, envelope, toLine, writeShard } from './helpers.mj
 import { createServer } from '../../src/server.mjs';
 import { shardOnce } from '../../src/etl/shard.mjs';
 import { sealLegacy } from '../../src/raw/legacy.mjs';
+import { sealShard } from '../../src/raw/seal.mjs';
+import { markClosed } from '../../src/raw/closed.mjs';
 import { orderInputs, listSources } from '../../src/raw/discover.mjs';
 
 // 4.2 「watermark」: a session's record sequence read from sealed files is the one read from the
@@ -62,5 +64,27 @@ test('F2: a flat root reads a stream\'s older sealed segment before the fresh fi
     await sealLegacy(cap, { ...NONE, journal: path.join(root, 'j.jsonl'), deleteOriginal: true });
     writeShard(cap, [toLine(envelope({ id: 'new-and-longer', body: '' }))]);   // not the old size: not a copy of it (F4)
     assert.deepEqual(listSources([path.dirname(cap)]).files.map((f) => path.basename(f)), ['codex-capture.ndjson.0001.sealed', 'codex-capture.ndjson']);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+// Second pass on F2 (缺接线): on a flat root, the per-session files `asight raw seal` writes for a
+// collector shard (continuations, discover rule 3) were appended after every flat file — so a session
+// whose OLDER shard was sealed read its newer records first.
+test('F2: a flat collector root reads a sealed older shard\'s continuation before the newer shard', async () => {
+  const root = tmpDir();
+  try {
+    const cap = path.join(root, 'collector'), ses = path.join(root, 'sessions');
+    const mk = (day, pre) => { const f = writeShard(path.join(cap, `capture-2026-10-0${day}.ndjson`), conversation(S, 2, { idPrefix: pre, start: day * 10 }).map((r) => toLine(r))); markClosed(f); return f; };
+    const older = mk(5, 'd1_'); mk(6, 'd2_');
+    const ids = async () => {
+      const { server } = await createServer({ dbPath: '/nonexistent-db', sourcePath: cap, sessionsRoot: ses, enrich: () => null });
+      server.listen(0, '127.0.0.1'); await once(server, 'listening');
+      try { return (await get(server.address().port, `/api/session?id=${S}`)).records.map((r) => r.id); } finally { server.close(); }
+    };
+    const before = await ids();
+    assert.deepEqual(before, ['d1_00050', 'd1_00051', 'd2_00060', 'd2_00061']);
+    await sealShard(older, { sessionsRoot: ses, journal: null });
+    assert.equal(fs.existsSync(older), false, 'precondition: the older shard now lives only in its sealed files');
+    assert.deepEqual(await ids(), before, 'the sealed older shard is read after the newer one');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
