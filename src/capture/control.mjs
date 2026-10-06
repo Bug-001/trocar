@@ -82,9 +82,9 @@ export function monitoringOn({
 // item. Symmetric & reversible (采集安全 Risk/回滚).
 export function monitoringOff({
   settingsPath = DEFAULT_SETTINGS, removeCa = false, captureTarget = null, proxyUrl = 'http://127.0.0.1:8899',
-  onboard = onboardReal, autostart = getAutostartInstaller(),
+  onboard = onboardReal, autostart = getAutostartInstaller(), getenv = launchctlGetenv,
 } = {}) {
   const ob = onboard.atraceOff({ settingsPath, removeCa });
   const auto = autostart.remove({ label: MONITOR_LABEL });
-  return { ok: true, onboard: ob, autostart: auto, status: monitoringStatus({ settingsPath, captureTarget, proxyUrl, onboard, autostart }) };
+  return { ok: true, onboard: ob, autostart: auto, status: monitoringStatus({ settingsPath, captureTarget, proxyUrl, onboard, autostart, getenv }) };
 }

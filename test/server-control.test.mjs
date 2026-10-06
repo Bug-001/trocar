@@ -15,7 +15,8 @@ function fakeDeps() {
     verifyUserTrustOnly: () => false,
   };
   const autostart = { platform: 'darwin', install: () => ({ ok: true, plistPath: '/p' }), remove: () => ({ ok: true, removed: false }), status: () => ({ installed: false }) };
-  return { log, controlDeps: { onboard, autostart } };
+  const getenv = () => null; // the status's default reader is the real `launchctl getenv`: inject one (test/helpers/no-real-os.cjs refuses the real tool)
+  return { log, controlDeps: { onboard, autostart, getenv } };
 }
 const req = (port, method, p, { headers = {}, body } = {}) => new Promise((resolve, reject) => {
   const r = http.request({ host: '127.0.0.1', port, method, path: p, headers }, (res) => { let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve({ status: res.statusCode, body: b })); });
