@@ -34,7 +34,8 @@ export async function loadParts({ arch = null, harnesses = null, env = process.e
   const list = harnesses || (await loadHarnesses())
   const registry = createRegistry(list)
   const redirector = A.createRedirector({ env })
-  return { arch: A, os: A.os, osRootsFile: A.osRootsFile || null, harnesses: list, registry, scan: () => redirector.scan(), match: (f) => registry.match(f) }
+  // linger: whether the OS keeps this user's daemon after logout (true / false; null = not readable) — `asight on` says so (1.6 §1.1), it never enables it (R8)
+  return { arch: A, os: A.os, osRootsFile: A.osRootsFile || null, harnesses: list, registry, scan: () => redirector.scan(), match: (f) => registry.match(f), linger: () => (typeof redirector.linger === 'function' ? redirector.linger() : null) }
 }
 
 export const collectorPaths = (dir = collectorHome(asightHome())) => ({ dir, caDir: path.join(dir, 'ca'), state: path.join(dir, 'state.json'), lock: path.join(dir, 'lock'), markers: path.join(dir, 'run', 'trust') })
@@ -307,6 +308,10 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     // the harnesses `on` with no names means, and a version 1 state.json is carried to (1.6 §1.5, V28): the installed ones — those the install
     // manifest names, because asight wrote an entry or a file for them. One it never installed is no capture target: not judged, no agent-untrusted
     const installed = () => [...new Set([...(manifest.entries || []), ...(manifest.files || [])].map((e) => e.harness).filter(Boolean))]
+    // a manifest the CLI wrote since (and that this build reads, and that is complete) replaces the one read at start; one that cannot be read leaves the old one, and says so
+    const reloadManifest = () => {
+      try { const fresh = readManifest(P.dir); if (fresh && !fresh.unsupported && fresh.complete) manifest = fresh } catch (e) { failure('daemon', coded(e, 'manifest-unreadable')) }
+    }
     // desired state → the tracker: which harnesses are enabled, and each one's decrypt policy
     const syncTracker = () => { const st = sw.state(); tracker.setEnabled(sw.enabled()); tracker.setPolicy({ byHarness: Object.fromEntries(Object.entries(st.harnesses).map(([id, h]) => [id, { mode: h.policy, extraHosts: h.extra_hosts }])) }) }
     // bring the kernel watch table to the enabled set. With the helper dead there is no table to bring: its links and watch table died with it,
@@ -432,7 +437,9 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     Object.assign(impl, {
       status,
       // capture on again cancels a pending `off {exit}` (exitWhenDrained): the daemon that was going away is the one now serving it
-      on: async ({ body }) => { const r = await sw.on({ ...(body && typeof body === 'object' ? body : {}), harnesses: namesOf(body) }); exitAsked++; syncTracker(); return { ...(await status()), ...(r.noop ? { noop: true } : {}) } },
+      // The manifest is read again first (1.6 §1.1, R9): `asight on` writes the entries, and their `installed_at`, before it asks, so a harness turned on
+      // again after `off` is judged against when asight wrote the entry NOW — a process that started while it was off is config-after-start, and says so
+      on: async ({ body }) => { reloadManifest(); const r = await sw.on({ ...(body && typeof body === 'object' ? body : {}), harnesses: namesOf(body) }); exitAsked++; syncTracker(); return { ...(await status()), ...(r.noop ? { noop: true } : {}) } },
       // → {…status, unwatched: [pid], confirmed, relayed: {closing, waiting, cut}, pid}: the pids taken out of the kernel watch table, and whether the kernel
       // confirms the state asked for (every unwatch answered; with no harness left on, the links gone). With the helper dead its table is gone with it: every pid
       // counts as taken out and `confirmed` does not wait on an unwatch nobody can answer. After the switch the engine closes the connections of those harnesses

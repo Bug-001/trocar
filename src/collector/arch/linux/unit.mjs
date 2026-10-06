@@ -4,7 +4,7 @@
 // file-capability exec and either would strip its capabilities.
 import fs from 'node:fs'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { execTool } from '../../../off/exec.mjs'
 
 export const UNIT_NAME = 'asight-collector.service'
 export const unitPath = (home) => path.join(home, '.config', 'systemd', 'user', UNIT_NAME)
@@ -25,9 +25,10 @@ export function unitText({ node, script, env = {} }) {
   ].join('\n')
 }
 
-export function systemctl(args, { run = spawnSync } = {}) {
-  const r = run('systemctl', ['--user', ...args], { encoding: 'utf8' })
-  return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || (r.error && r.error.message) || '').trim() }
+// `run` is the injected runner (a test's recording fake: spawnSync-shaped); without one this is a real `systemctl --user` — except under `npm test`,
+// where src/off/exec.mjs refuses a real tool (0.1 §3). A systemctl that could not start is `code: null` with the reason in `err`.
+export function systemctl(args, { run = null, env = process.env } = {}) {
+  return execTool('systemctl', ['--user', ...args], { run, env })
 }
 
 // The wants/ symlinks `enable` created; `disable` removes them, this catches the ones left when systemd --user was down.
@@ -45,4 +46,22 @@ export function removeWantsLinks(home, { onError = () => {} } = {}) {
     try { fs.rmdirSync(path.join(dir, d)) } catch { /* not empty: other units' links */ }
   }
   return gone
+}
+
+// The unit as `asight on` / `uninstall` (src/collector/install.mjs) consume it: the data (where it is, the link `enable` makes, its text for a
+// given daemon environment) and the few systemctl verbs they need, each returning { code, out, err }. 1.6 §2: `on` enables AND starts it (`enable
+// --now`) when no daemon answers, only enables when one does (拉起不是重启: a daemon someone started by hand is never started a second time), and
+// with `--no-autostart` only starts it (`start`: this run, nothing at login). `reload` is for a unit file rewritten under a loaded unit.
+export function userUnit({ home, node, script, run = null, env = process.env }) {
+  const sc = (args) => systemctl(args, { run, env })
+  return {
+    name: UNIT_NAME, path: unitPath(home), links: [wantsLink(home)],
+    text: (e) => unitText({ node, script, env: e }),
+    enable: ({ now = true } = {}) => sc(now ? ['enable', '--now', UNIT_NAME] : ['enable', UNIT_NAME]),
+    start: () => sc(['start', UNIT_NAME]),
+    reload: () => sc(['daemon-reload']),
+    disable: () => sc(['disable', '--now', UNIT_NAME]),
+    stop: () => sc(['stop', UNIT_NAME]),
+    removeWants: (onError) => removeWantsLinks(home, { onError }),
+  }
 }
