@@ -47,7 +47,7 @@ export const ENVELOPE_CONSUMED = new Set([
 const parsedBody = (r) => {
   const b = r && r.req_body;
   if (b && typeof b === 'object') return b;
-  // D40: a non-inference body can be up to 64 MiB; it is parsed only for a session key, never when it is that big
+  // D40: a non-inference body can be up to 64 MiB and is never a source of a session key (harnesses.mjs::parseableBody): not parsed
   if (typeof b === 'string' && parseableBody(r, b)) { try { const v = JSON.parse(b); return v && typeof v === 'object' ? v : {}; } catch { return {}; } }
   return {};
 };

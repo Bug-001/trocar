@@ -108,12 +108,13 @@ export function headerOf(rec, name) {
   return null;
 }
 
-// D40: a request that is not an inference call keeps its body too, up to 64 MiB (a Files upload, an update package). The
-// readers parse a body only to read a session key out of it (identity, lineage) — never worth it for a record that is not
-// an inference call and whose body is this big; an inference body of any size is parsed as before. One rule for every
-// reader (this function, the ETL, the envelope adapter).
-export const NON_INFERENCE_PARSE_CAP = 1024 * 1024;
-export const parseableBody = (rec, text) => !!rec && typeof text === 'string' && (rec.is_llm_call === true || text.length <= NON_INFERENCE_PARSE_CAP);
+// D40: a request that is not an inference call keeps its body too (up to 64 MiB: a Files upload, an update package, a telemetry batch). The
+// readers parse a body only to read a session key / hint out of it (identity, lane, lineage), and that is for an INFERENCE call only: before D40
+// a non-inference body was `{raw_chars}` and gave no key, so reading one now would change which session — or none — a record belongs to across
+// the D40 boundary (a Hermes `session_id` in a telemetry body would key it), and the header-only sharder would disagree with the ETL (3.4:21).
+// A non-inference record is identified by its headers alone, as it always was. One rule for every reader (this function, the ETL, the envelope
+// adapter).
+export const parseableBody = (rec, text) => !!rec && typeof text === 'string' && rec.is_llm_call === true;
 
 const PARSED = new WeakMap();
 export function bodyOf(rec) {

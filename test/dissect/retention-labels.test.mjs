@@ -67,9 +67,28 @@ test('a record from before D40 is given the class the capture would give it: the
   assert.equal(trafficClassOf(null), 'other')
 })
 
-test('a non-inference body over 1 MiB is not parsed for identity (D40: it may be a 64 MiB upload); an inference body of any size is', () => {
+test('a non-inference body is never parsed for identity or hints (D40: it may be a 64 MiB upload, and before D40 it gave no key); an inference body of any size is', () => {
   const big = JSON.stringify({ blob: 'x'.repeat(1024 * 1024 + 10) })
   assert.equal(bodyOf({ is_llm_call: false, req_body: big }), null)
   assert.ok(bodyOf({ is_llm_call: true, req_body: big }))
-  assert.deepEqual(bodyOf({ is_llm_call: false, req_body: '{"a":1}' }), { a: 1 })
+  assert.equal(bodyOf({ is_llm_call: false, req_body: '{"a":1}' }), null, 'not even a small one: the rule is the call\'s kind, not its size')
+  assert.deepEqual(bodyOf({ is_llm_call: true, req_body: '{"a":1}' }), { a: 1 })
+})
+
+// review (F9): `NON_INFERENCE_PARSE_CAP` let a small non-inference body be parsed, so a hermes telemetry body {"session_id":"abc-123"} gave a session
+// key — one the pre-D40 shape (`{raw_chars}`) never gave. The class and session of the same call then differed across the D40 boundary, and
+// the header-only sharder (3.4:21) and the ETL disagreed.
+test('F9 — a session key in the body of a call that is not inference is not a session key: kimi / hermes body keys are read from inference calls only, so the sharder and the ETL agree and nothing moves across the D40 boundary', async () => {
+  const { sessionKeyOf } = await import('../../src/dissect/harnesses.mjs')
+  const hermes = { pid: 3, exe: '/x/hermes', agent: 'hermes' }, kimi = { pid: 4, exe: '/x/kimi', agent: 'kimi-code' }
+  const body = (o) => JSON.stringify(o)
+  for (const [proc, key, endpoint] of [[hermes, 'session_id', '/telemetry/x'], [hermes, 'prompt_cache_key', '/telemetry/x'], [kimi, 'prompt_cache_key', '/upload']]) {
+    const nonLlm = full({ id: 'n', proc, host: 'x.example.test', endpoint, cls: 'other', reqBody: body({ [key]: 'abc-123' }), headers: { 'user-agent': 'x' } })
+    assert.equal(sessionKeyOf(nonLlm).key, null, `${proc.agent}.${key}: no key from a non-inference body`)
+    assert.equal(sessionKeyOf(nonLlm).key, sessionKeyOf(nonLlm, { headersOnly: true }).key, 'the header-only sharder and the full reader agree')
+    // the pre-D40 shape of the same call gave no key either: nothing changes across the boundary
+    assert.equal(sessionKeyOf({ ...nonLlm, req_body: { raw_chars: 20, verbatim: false } }).key, null)
+    // an inference call keeps reading its body key
+    assert.equal(sessionKeyOf({ ...nonLlm, is_llm_call: true, endpoint: '/v1/chat/completions', traffic_class: 'llm' }).key, 'abc-123', `${proc.agent}.${key}: inference is as before`)
+  }
 })

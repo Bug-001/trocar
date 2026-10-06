@@ -98,7 +98,7 @@ function decodeBody(record) {
   const b = record?.req_body;
   if (b && typeof b === 'object') return record;
   if (typeof b === 'string') {
-    // D40: a non-inference body can be 64 MiB; it is read only for a session key, so past the cap it is not parsed
+    // D40: a non-inference body can be 64 MiB and is never a source of a session key (harnesses.mjs::parseableBody): it is not parsed
     if (!parseableBody(record, b)) return { ...record, req_body: {} };
     try {
       return { ...record, req_body: JSON.parse(b) };

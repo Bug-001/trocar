@@ -75,6 +75,16 @@ test('K7 — an inference call at the log level is one calls row: no blocks, no 
   assert.equal(c.a3.compaction, false)
 })
 
+test('F9 — a body key in a non-inference call (hermes session_id in a telemetry batch) does not give it a session: it is a session-less control row, as its pre-D40 shape was', async () => {
+  const conn = await freshConn()
+  const hermes = { pid: 3, exe: '/x/hermes', agent: 'hermes' }
+  const telemetry = (id, reqBody) => full({ id, proc: hermes, host: 'telemetry.example.test', endpoint: '/v1/batch', cls: 'other', reqBody, headers: { 'user-agent': 'hermes/1' } })
+  await runEtl([telemetry('t-new', '{"session_id":"abc-123","events":[1]}'), { ...telemetry('t-old', null), req_body: { raw_chars: 40, verbatim: false } }], conn)
+  const c = await calls(conn)
+  assert.deepEqual([c['t-new'].session_id, c['t-new'].class, c['t-old'].session_id, c['t-old'].class], [null, 'control', null, 'control'])
+  assert.equal(num((await rows(conn, 'SELECT count(*) AS n FROM sessions'))[0].n), 0, 'no session was made from a telemetry body')
+})
+
 test('a keyless logged inference call stays keyless and goes to the session-less rows, however its harness synthesizes keys', async () => {
   const conn = await freshConn()
   const kimi = { proc: { pid: 9, exe: '/x/kimi', agent: 'kimi-code' }, headers: { 'user-agent': 'kimi/2' } }
