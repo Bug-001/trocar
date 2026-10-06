@@ -178,6 +178,7 @@ test('a response with no request to pair with is one unpaired-response event per
   t.fromClient(Buffer.from('POST /v1/messages HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}XX')) // bad chunk terminator: the request framer stops
   for (let i = 0; i < 3; i++) t.fromUpstream(Buffer.from(i === 1 ? 'HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n' : OK0))
   assert.deepEqual(out.map((e) => e.req_partial), ['framer-error'], 'the first response pairs with the broken request')
+  assert.deepEqual(t.rowNotes(), { framerError: { side: 'request', message: 'bad chunk terminator' } }, 'the row says framing stopped (D38 review A)')
   assert.deepEqual(failures.map((f) => [f.reason, f.side ?? f.status]), [['framer-error', 'request'], ['unpaired-response', 404]])
 })
 

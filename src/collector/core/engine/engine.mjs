@@ -62,7 +62,8 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     try { meta = await redirector.lookup(peer) }
     catch (e) { // the helper could not be asked: not a miss (4.6 §引擎 1, D38) — loader-timeout, or loader-down with its error
       const code = e && e.code === 'loader-timeout' ? 'loader-timeout' : 'loader-down'
-      const reason = `looking up the original destination of ${peer.address}:${peer.port} failed (${String((e && e.message) || e)}); the steered connection was closed`
+      const detail = `${e && e.code && e.code !== code ? `${e.code}: ` : ''}${String((e && e.message) || e)}` // the helper's own errno stays in the text
+      const reason = `looking up the original destination of ${peer.address}:${peer.port} failed (${detail}); the steered connection was closed`
       socket.destroy()
       failure({ code, peer, reason })
       onError(Object.assign(new Error(reason), { code }))

@@ -90,13 +90,15 @@ test('tracker: policy = known hosts ∪ config hosts ∪ operator hosts, or all;
   redirector.emit('exec', facts(501)); await settle()
   for (const h of ['api.alpha.test', 'eu.alpha-cdn.test', 'relay.example.com']) assert.equal(tracker.policy({ pid: 500 }, h), true, h)
   for (const h of ['registry.npmjs.org', 'alpha-cdn.test']) assert.equal(tracker.policy({ pid: 500 }, h), false, h)
-  assert.equal(tracker.policy({ pid: 501 }, 'api.alpha.test'), false)
-  assert.equal(tracker.policy({ pid: 999 }, 'api.alpha.test'), false)
+  // never decrypted, and the engine is told the flows/ code (D38): untrusted with the resolver's reason, untracked
+  assert.deepEqual(tracker.policy({ pid: 501 }, 'api.alpha.test'), { not_captured: 'untrusted', reason: tracker.describe(501).reason })
+  assert.ok(tracker.describe(501).reason, 'the resolver said why')
+  assert.deepEqual(tracker.policy({ pid: 999 }, 'api.alpha.test'), { not_captured: 'untracked' })
   tracker.setPolicy({ mode: 'auto', extraHosts: ['Registry.npmjs.org'] })
   assert.equal(tracker.policy({ pid: 500 }, 'registry.npmjs.org'), true)
   tracker.setPolicy({ mode: 'all' })
   assert.equal(tracker.policy({ pid: 500 }, 'anything.example'), true)
-  assert.equal(tracker.policy({ pid: 501 }, 'anything.example'), false, 'all never covers an untrusted process')
+  assert.equal(tracker.policy({ pid: 501 }, 'anything.example').not_captured, 'untrusted', 'all never covers an untrusted process')
 })
 
 test('tracker: exit forgets; rescan re-judges live processes and drops vanished ones', async () => {

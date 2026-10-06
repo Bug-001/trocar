@@ -14,6 +14,8 @@ import { socksHandshake } from './socks.mjs'
 const msgOf = (e) => String((e && e.message) || e)
 // host of a CONNECT authority or a SOCKS target: "[::1]:443" → "::1", "a.test:443" → "a.test"
 const hostOf = (authority) => (authority.startsWith('[') ? authority.slice(1, Math.max(1, authority.indexOf(']'))) : authority.split(':')[0])
+// the codes the daemon's policy() may hand the engine for a row (RFC 4.6 §记录 连接行怎么落码)
+const DAEMON_CODES = ['not-trust-path', 'untracked', 'untrusted']
 const closedBefore = (side) => ({ type: 'closed_before_decision', message: `the ${side} closed before a routing decision`, side })
 
 export function handleFlow(client, meta, ctx) {
@@ -44,13 +46,17 @@ export function handleFlow(client, meta, ctx) {
   function waitDone() { if (slowTimer) { clearTimeout(slowTimer); slowTimer = null } }
   // the row's not_captured code (closed set, codes.mjs) and why (RFC 4.6 §记录 连接行怎么落码)
   function notCaptured(code, reason) { rec.not_captured = code; if (reason != null) rec.reason = reason }
-  // policy(meta, host): true = decrypt; {not_captured:'not-trust-path', reason} = the daemon's own expected
-  // code; anything else = outside the decrypt policy. → null (decrypt) or [code, reason]
+  // policy(meta, host): true = decrypt; false = outside the decrypt policy; or the daemon's own code
+  // {not_captured, reason} when it can say more (DAEMON_CODES). A process the kernel steers without decrypt is
+  // untrusted (with the resolver's reason when the daemon gives one) or untracked. → null (decrypt) or [code, reason]
   function skipOf(host) {
-    if (!meta.decrypt) return ['untrusted', null]
-    const v = ctx.policy(meta, host)
-    if (v && typeof v === 'object') return v.not_captured === 'not-trust-path' ? ['not-trust-path', v.reason ?? null] : ['policy', v.reason ?? null]
-    return v ? null : ['policy', null]
+    let v = null
+    if (meta.decrypt) v = ctx.policy(meta, host) // a throw is this flow's engine-error (guard)
+    else try { v = ctx.policy(meta, host) } catch (e) { ctx.failure({ reason: 'engine-error', flow_id: rec.flow_id, error: `policy threw: ${msgOf(e)}` }) }
+    const own = v && typeof v === 'object' && DAEMON_CODES.includes(v.not_captured) ? [v.not_captured, v.reason ?? null] : null
+    if (!meta.decrypt) return own && own[0] !== 'not-trust-path' ? own : ['untrusted', null]
+    if (own) return own
+    return v && typeof v !== 'object' ? null : ['policy', null]
   }
   function finish(decision, extra = {}) {
     if (finished) return
@@ -67,6 +73,7 @@ export function handleFlow(client, meta, ctx) {
     // envelopes the store did not write, and a decrypted connection whose later bytes were not framed (D38)
     const notes = activeTee && activeTee.rowNotes ? activeTee.rowNotes() : {}
     if (notes.writeFailed) rec.write_failed = notes.writeFailed
+    if (notes.framerError) rec.framer_error = notes.framerError
     if (notes.notFollowed && !rec.not_captured) notCaptured('upgrade-not-followed', notes.notFollowed)
     // bytes_up / bytes_down = the agent's own connection's wire bytes (RFC 4.6 §记录): read off the
     // accepted socket once it has closed, so proxy preludes, TLS records (and the closing alerts after
@@ -225,7 +232,7 @@ export function handleFlow(client, meta, ctx) {
     const key = negKey(meta, host)
     const h1 = alpn === null || alpn.includes('http/1.1')
     const neg = ctx.negCache.get(key)
-    const skip = !meta.decrypt ? ['untrusted', null] : ch.malformed ? ['malformed-hello', null] : skipOf(sni ?? meta.dst.address)
+    const skip = !meta.decrypt ? skipOf(sni ?? meta.dst.address) : ch.malformed ? ['malformed-hello', null] : skipOf(sni ?? meta.dst.address)
     if (!skip && h1 && !neg) return decrypt(buf, cSock, uSock, sni, host, isTunnel, key)
     // Every splice says why in flows/ (invariant 4, D38): untrusted / malformed / outside the policy, or a
     // host we would decrypt but do not — the negative cache (RFC 4.6 §引擎 5) or an offer without

@@ -164,9 +164,12 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
   // Decrypt policy (4.6 §解密策略): `auto` = the harness's known API hosts ∪ the base_url / relay hosts its readers
   // found in this process's env and config files ∪ hosts the operator added; `all` = every TLS host of a trusted
   // process. Never for an untrusted or unknown process, never for a host the harness declares not via the trust path.
+  // Those two get the code their connection row carries (RFC 4.6 §记录, D38): `untracked` for a pid the kernel steers
+  // but the table does not hold (exited, dropped by a rescan), `untrusted` with the resolver's reason.
   function policy(meta, host) {
     const row = meta && table.get(meta.pid)
-    if (!row || !row.decrypt) return false
+    if (!row) return { not_captured: 'untracked' }
+    if (!row.decrypt) return { not_captured: 'untrusted', reason: row.reason ?? null }
     const h = String(host || '').toLowerCase()
     if (row.bypass.some((b) => hostIs(b.host, h))) return false
     if (mode === 'all') return true

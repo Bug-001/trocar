@@ -9,7 +9,7 @@ import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
 import { handleFlow } from '../../../src/collector/core/engine/flow.mjs'
 import { createNegativeCache } from '../../../src/collector/core/engine/negcache.mjs'
-import { NOT_CAPTURED, isNotCapturedCode } from '../../../src/collector/core/engine/codes.mjs'
+import { NOT_CAPTURED, ENGINE_EVENTS, isNotCapturedCode } from '../../../src/collector/core/engine/codes.mjs'
 
 const upCa = createCa({ commonName: 'upstream test CA' }); const upIssuer = createLeafIssuer(loadCa(upCa))
 const asightCa = createCa(); const issuer = createLeafIssuer(loadCa(asightCa))
@@ -41,6 +41,9 @@ const rawTalk = (port, bytes, { end = true } = {}) => new Promise((resolve) => {
   let got = Buffer.alloc(0); c.on('data', (d) => { got = Buffer.concat([got, d]) }); c.on('error', () => {}); c.on('close', () => resolve(got))
 })
 
+// Every engine failure record carries a code from the closed event set (RFC 4.6 §记录 事件行, D38).
+const assertEvents = (fs) => { for (const f of fs) assert.ok(ENGINE_EVENTS.includes(f.reason), `${f.reason} is not an engine event code`) }
+
 // The §记录 criterion, as the board's scan will apply it: a row the bytes missed has a closed code.
 function assertCriterion(rows) {
   for (const r of rows) {
@@ -58,6 +61,10 @@ const cases = [
   ['outside the decrypt policy (plain HTTP)', () => sink(), { policy: () => false }, (p) => rawTalk(p, REQ), ['splice', 'policy']],
   ['the daemon says not-trust-path', () => tlsUp(), { policy: () => ({ not_captured: 'not-trust-path', reason: 'declared' }) }, (p) => tlsTalk(p), ['splice', 'not-trust-path', 'declared']],
   ['an unknown code from the policy is just policy', () => tlsUp(), { policy: () => ({ not_captured: 'made-up' }) }, (p) => tlsTalk(p), ['splice', 'policy']],
+  ['the daemon no longer holds the pid (untracked)', () => tlsUp(), { policy: () => ({ not_captured: 'untracked' }) }, (p) => tlsTalk(p), ['splice', 'untracked']],
+  ['an untrusted process: the resolver\'s reason from the daemon', () => tlsUp(), { meta: { decrypt: false }, policy: () => ({ not_captured: 'untrusted', reason: 'settings shadowed' }) }, (p) => tlsTalk(p), ['splice', 'untrusted', 'settings shadowed']],
+  ['an untrusted process the daemon no longer holds', () => sink(), { meta: { decrypt: false }, policy: () => ({ not_captured: 'untracked' }) }, (p) => rawTalk(p, REQ), ['splice', 'untracked']],
+  ['an untrusted process whose policy() throws: still untrusted, the throw recorded', () => tlsUp(), { meta: { decrypt: false }, policy: () => { throw new Error('boom') } }, (p) => tlsTalk(p), ['splice', 'untrusted'], (r, h) => assert.deepEqual(h.failures.map((f) => [f.reason, f.flow_id, /policy threw: boom/.test(f.error)]), [['engine-error', r.flow_id, true]])],
   ['only h2', () => tlsUp(['h2']), {}, (p) => tlsTalk(p, { ALPNProtocols: ['h2'] }), ['splice', 'h2', 'alpn-h2-only']],
   ['an ALPN offer with neither h2 nor http/1.1', () => tlsUp(['x-other']), {}, (p) => tlsTalk(p, { ALPNProtocols: ['x-other'] }), ['splice', 'unknown-protocol', 'alpn x-other']],
   ['the upstream speaks first', () => net.createServer((s) => { s.on('error', () => {}); s.end('SSH-2.0-banner\r\n') }), {}, (p) => rawTalk(p, null, { end: false }), ['splice', 'upstream-first']],
@@ -74,8 +81,8 @@ for (const [name, up, opts, drive, [decision, code, reason], more] of cases) {
     const [r] = h.flows
     assert.deepEqual([r.decision, r.not_captured], [decision, code]); if (reason) assert.equal(r.reason, reason)
     assert.equal(NOT_CAPTURED.failure.includes(code) || NOT_CAPTURED.expected.includes(code), true)
-    if (more) more(r)
-    assertCriterion(h.flows)
+    if (more) more(r, h)
+    assertCriterion(h.flows); assertEvents(h.failures)
   })
 }
 
@@ -109,7 +116,7 @@ test('a slow upstream TLS handshake is waited for, not cut: the agent gets its r
   await h.close(); origin.close()
   assert.equal(got, RESP, 'the agent was not cut while the engine waited on its upstream')
   assert.deepEqual([h.flows[0].decision, h.flows[0].error], ['decrypt', undefined])
-  assert.deepEqual(h.failures.map((f) => [f.reason, f.flow_id, f.phase, f.host, f.waited_ms >= 100]), [['upstream-slow', h.flows[0].flow_id, 'tls', 'upstream.test', true]])
+  assert.deepEqual(h.failures.map((f) => [f.reason, f.flow_id, f.phase, f.host, f.waited_ms >= 100]), [['upstream-slow', h.flows[0].flow_id, 'tls', 'upstream.test', true]]); assertEvents(h.failures)
 })
 
 test('a slow proxy reply to CONNECT is waited for, not cut; relayed verbatim when it comes (D38 T-5)', async () => {
@@ -166,4 +173,14 @@ test('a client that gives up while the upstream never answers our TLS handshake 
   } finally { c.destroy() }
   await h.close()
   assert.deepEqual([h.flows.length, h.flows[0].decision, h.flows[0].not_captured, h.flows[0].error.type, h.flows[0].error.side], [1, 'error', 'error', 'closed_before_decision', 'client'])
+})
+
+test('a decrypted row whose response could not be framed says framer_error (the rest is not recorded) (D38 review A)', async () => {
+  const bad = 'HTTP/1.1 200 OK\r\nContent-Length: abc\r\n\r\nxyz'
+  const up = tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)), ALPNProtocols: ['http/1.1'] }, (s) => { s.on('error', () => {}); s.on('data', () => s.end(bad)) })
+  const h = await rig(up)
+  assert.equal(await tlsTalk(h.port), bad, 'the bytes still reach the agent verbatim')
+  await h.close()
+  assert.deepEqual([h.flows[0].decision, h.flows[0].framer_error], ['decrypt', { side: 'response', message: 'bad content-length' }])
+  assert.deepEqual(h.failures.map((f) => [f.reason, f.side]), [['framer-error', 'response']]); assertEvents(h.failures)
 })

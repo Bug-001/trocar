@@ -8,6 +8,6 @@ import { NOT_CAPTURED_FAILURE, NOT_CAPTURED_EXPECTED } from '../../../health/cod
 export const NOT_CAPTURED = Object.freeze({ failure: NOT_CAPTURED_FAILURE, expected: NOT_CAPTURED_EXPECTED })
 
 // The engine's failure events (where:'engine'; written through the engine's failure() sink).
-export const ENGINE_EVENTS = Object.freeze(['lookup-miss', 'lookup-error', 'describe-error', 'engine-error', 'leaf-error', 'flow-write-failed', 'system-roots-unavailable', 'trust-store-error', 'framer-error', 'negative-cache-add', 'upstream-slow', 'unpaired-response'])
+export const ENGINE_EVENTS = Object.freeze(['lookup-miss', 'loader-down', 'loader-timeout', 'describe-error', 'engine-error', 'leaf-error', 'flow-write-failed', 'system-roots-unavailable', 'trust-store-error', 'framer-error', 'negative-cache-add', 'upstream-slow', 'unpaired-response'])
 
 export const isNotCapturedCode = (c) => NOT_CAPTURED.failure.includes(c) || NOT_CAPTURED.expected.includes(c)

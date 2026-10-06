@@ -23,7 +23,8 @@ const errOf = (e) => (e ? { type: e.code || e.type || 'error', message: String(e
  *   → {fromClient, fromUpstream, clientEnded(err?), upstreamEnded(err?), abort(error), wsSummary(), rowNotes(), stats}
  * rowNotes() = what flows/ must say about this connection (RFC 4.6 §记录, D38): {writeFailed} = envelopes the
  * store did not write (HTTP and WebSocket), {notFollowed} = the reply after which nothing more was framed
- * (a non-WebSocket 101, a CONNECT 2xx).
+ * (a non-WebSocket 101, a CONNECT 2xx), {framerError: {side, message}} = framing failed, nothing after it is
+ * recorded.
  * wsTerminal = FlowExtras.wsTerminal (harness data, Plan 3c §2); wsSummary() = the ws recorder's summary
  * for flows/ once the connection switched to WebSocket, else null. onFailure({code, reason, …}) takes the
  * capture failures (RFC 4.6 §记录, D38) — the engine's failure(), which writes them to flows/; the
@@ -43,6 +44,7 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
   let writeFailed = 0  // envelopes the store did not write (false or a throw): counted on the flows/ row
   let notFollowed = null
   let unpaired = false // one unpaired-response event per connection
+  let framerError = null // {side, message}: framing stopped here, the rest of the connection is not recorded
   // the WebSocket recorder writes through this, so its lost envelopes are counted on the row too
   const counted = {
     envelope(env) { let ok; try { ok = recordStore.envelope(env) } catch (e) { writeFailed++; throw e } if (ok === false) writeFailed++; return ok },
@@ -81,6 +83,7 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
     onUpgrade() {},
     onError(e) { // body never completes; no later request on this connection is framed
       if (curReq) { curReq.partial = 'framer-error'; curReq = null }
+      if (!framerError) framerError = { side: 'request', message: e.message }
       onFailure({ code: 'framer-error', flow_id: flow.id, side: 'request', reason: e.message })
     },
   })
@@ -111,7 +114,7 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
       if (rest && rest.length) ws.fromUpstream(rest)
     },
     // no later response is framed: the open exchanges end here, labelled with the cause (invariant 4)
-    onError(e) { onFailure({ code: 'framer-error', flow_id: flow.id, side: 'response', reason: e.message }); abort({ type: 'framer_error', message: e.message }) },
+    onError(e) { if (!framerError) framerError = { side: 'response', message: e.message }; onFailure({ code: 'framer-error', flow_id: flow.id, side: 'response', reason: e.message }); abort({ type: 'framer_error', message: e.message }) },
   })
 
   function respPartOf(resp, aborted) {
@@ -174,7 +177,7 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
     upstreamEnded(err) { if (ws) ws.end(errOf(err)); else if (!stopped) respFramer.end() },
     abort,
     wsSummary: () => (ws ? ws.summary() : null),
-    rowNotes: () => ({ ...(writeFailed ? { writeFailed } : {}), ...(notFollowed ? { notFollowed } : {}) }),
+    rowNotes: () => ({ ...(writeFailed ? { writeFailed } : {}), ...(notFollowed ? { notFollowed } : {}), ...(framerError ? { framerError } : {}) }),
     stats,
   }
 }

@@ -174,3 +174,14 @@ test('engine: a lookup the helper cannot answer is its own failure (not a miss),
     assert.deepEqual(failures.map((f) => f.code), ['loader-down', 'loader-timeout'])
   } finally { await engine.close() }
 })
+
+test('engine: a lookup that timed out is loader-timeout; the helper\'s own errno stays in the error text (D38)', { timeout: 10_000 }, async () => {
+  const failures = []
+  for (const e of [Object.assign(new Error('no answer in 2000 ms'), { code: 'loader-timeout' }), Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })]) {
+    const engine = createEngine({ redirector: { lookup: async () => { throw e } }, issuer: createLeafIssuer(loadCa(createCa())), store: { envelope() {}, flow() {} }, onFailure: (f) => failures.push(f) })
+    const { port } = await engine.listen({})
+    await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('close', r); c.on('error', () => {}) })
+    await engine.close()
+  }
+  assert.deepEqual(failures.map((f) => [f.code, /\(([^)]*)\); the steered/.exec(f.reason)[1]]), [['loader-timeout', 'no answer in 2000 ms'], ['loader-down', 'EPIPE: write EPIPE']])
+})
