@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { listSources, isSealedPath, streamOfSealed } from '../../src/raw/discover.mjs';
+import { listSources, isSealedPath, streamOfSealed, sealedSources } from '../../src/raw/discover.mjs';
 import { sealShard, sealUnchecked } from '../../src/raw/seal.mjs';
 import { markClosed } from '../../src/raw/closed.mjs';
 import { tmpDir, conversation, toLine, writeShard } from './helpers.mjs';
@@ -70,6 +70,50 @@ test('a different file at the original path is not mistaken for it; an in-place 
     assert.ok(r.files.some((x) => x.endsWith('S-2/calls.ndjson.0001.sealed')), 'the sealed copy must still be read');
     assert.equal(r.mismatched.length, 1);
     assert.match(r.mismatched[0].why, /changed after it was sealed/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+// An inode is no file identity: Linux ext4 and tmpfs hand a freed inode straight to the next file
+// (the test above was red on one filesystem, green on APFS). So the recycled inode is injected
+// here, and the result must not depend on the filesystem the suite happens to run on.
+const withIno = (ino, file) => ({
+  ...fs,
+  statSync: (p, ...a) => { const st = fs.statSync(p, ...a); return p === file ? Object.assign(Object.create(Object.getPrototypeOf(st)), st, { ino }) : st; },
+});
+
+test('a new file that reuses the sealed original\'s inode is another file, not a damaged original (ext4)', async () => {
+  const root = tmpDir();
+  try {
+    const f = shardOf(path.join(root, 'S-1', 'calls.ndjson'));
+    await sealUnchecked(f, { split: false, deleteOriginal: true });
+    const { ino } = sealedSources(path.join(root, 'S-1', 'calls.ndjson.0001.sealed'))[0];
+    for (const n of [1, 2, 8]) {                                               // shorter, longer than the sealed one, and much longer
+      shardOf(f, 'S-1', n);                                                    // `asight shard` writes a fresh calls.ndjson…
+      const r = listSources([root], { fs: withIno(ino, f) });                  // …and the filesystem gives it the freed inode
+      assert.deepEqual(rel(root, r.files), ['S-1/calls.ndjson', 'S-1/calls.ndjson.0001.sealed'], `${n}: both are read`);
+      assert.deepEqual(r.mismatched, [], `${n}: a new file is not a damaged original`);
+      assert.deepEqual(r.superseded, [], `${n}: the sealed copy stays the only home of its records`);
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('the same inode is still reported when its first bytes are the sealed ones (grown) or it has the sealed size (touched, rewritten)', async () => {
+  const root = tmpDir();
+  try {
+    const g = shardOf(path.join(root, 'S-2', 'calls.ndjson'), 'S-2');
+    await sealUnchecked(g, { split: false, deleteOriginal: false });          // both copies kept
+    const sealed = path.join(root, 'S-2', 'calls.ndjson.0001.sealed');
+    const { length } = sealedSources(sealed)[0];
+    fs.appendFileSync(g, '{"id":"later"}\n');                                // grown in place: its first `length` bytes are the sealed ones
+    let r = listSources([root]);
+    assert.ok(r.files.includes(sealed), 'the sealed copy is read too');
+    assert.equal(r.mismatched.length, 1);
+    assert.match(r.mismatched[0].why, new RegExp(`changed after it was sealed \\(size ${length + 15} vs ${length}\\)`));
+    fs.writeFileSync(g, Buffer.alloc(length, 0x41));                          // the sealed size, other bytes, other mtime
+    fs.utimesSync(g, new Date(), new Date(Date.now() + 5000));
+    r = listSources([root]);
+    assert.equal(r.mismatched.length, 1);
+    assert.match(r.mismatched[0].why, /same size, \d+ bytes, other mtime/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

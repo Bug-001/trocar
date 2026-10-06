@@ -25,6 +25,7 @@
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { readIndex } from './format.mjs';
+import { copyRelation } from './relation.mjs';
 import { isCaptureFile, skipReason } from '../paths.mjs';
 
 export const SEALED_EXT = '.sealed';
@@ -126,6 +127,23 @@ function scanRoot(root, fs) {
   return { flat, below, skipped };   // listSources orders flat files together with their continuations
 }
 
+// Does the file at `o` (the same inode as the sealed original, another size) still begin with the bytes
+// that were sealed — the sealed original, grown in place — or is it another file that was handed the freed
+// inode (ext4 and tmpfs do that at once; APFS never does)? An inode is no file identity, a shard's bytes
+// are (4.2 「并存期」): hashed here only where the stat cannot tell, and remembered — a file that is another
+// file stays so while it only grows, a live calls.ndjson is not re-hashed at every poll. A read that fails
+// cannot tell: it counts as the sealed original, so the report stays (never a silent loss of the warning).
+const prefixCache = new Map();
+function keptSealedPrefix(o, s, st, fs) {
+  if (st.size < s.length) return false;                      // it cannot hold what was sealed
+  const k = `${o}\0${st.ino}\0${s.sha256}`, hit = prefixCache.get(k);
+  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.v;
+  if (hit && !hit.v && st.size >= hit.size) return false;
+  let v; try { v = copyRelation(s, o, { fs }).rel !== 'other'; } catch { v = true; }
+  prefixCache.set(k, { size: st.size, mtimeMs: st.mtimeMs, v });
+  return v;
+}
+
 // Coexistence over an explicit list of files (a session dir, the control dir, or a whole scan): drop
 // sealed files superseded by an original that is IN THIS LIST and still the very file that was sealed.
 export function resolveCoexistence(all, { fs = nodeFs } = {}) {
@@ -141,10 +159,13 @@ export function resolveCoexistence(all, { fs = nodeFs } = {}) {
       if (!o) return null;
       let st; try { st = fs.statSync(o); } catch { return null; }
       // Same inode but different size/mtime: the sealed original was changed in place afterwards —
-      // both are read (never lose a byte) and that is reported, duplicates possible. (ext4 may reuse a
-      // freed inode, which then shows up as a report — noise, never a loss.)
+      // both are read (never lose a byte) and that is reported, duplicates possible. Unless the file of
+      // another size does not begin with the sealed bytes: then it is another file that reuses the freed
+      // inode (the fresh calls.ndjson `asight shard` writes after the sealer deleted the old one, on
+      // ext4) — read beside the sealed copy and, as for another inode of another size, nothing to report.
       if (st.ino === s.ino) {
         if (st.size === s.length && st.mtimeMs === s.mtimeMs) return o;
+        if (st.size !== s.length && !keptSealedPrefix(o, s, st, fs)) return null;
         mismatched.push({ sealed: f, original: o, why: `the original was changed after it was sealed (${st.size === s.length ? `same size, ${st.size} bytes, other mtime` : `size ${st.size} vs ${s.length}`}) — both are read, records may appear twice` });
         return null;
       }
