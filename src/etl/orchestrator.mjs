@@ -30,6 +30,7 @@ import {
   markCompaction,
   messageCount,
   isSubagent,
+  nativeId,
 } from '../identity/session-identity.mjs';
 import {
   ensureWatermarkTable,
@@ -204,6 +205,10 @@ export async function runEtl(records, connection, opts = {}) {
   // real predecessor → incremental cache_events == full cache_events.
   const prevBlocks = new Map(); // laneKey -> BlockRow[]
   const prevMsgCount = new Map(); // laneKey -> number
+  const prevMarker = new Map(); // laneKey -> did the previous call carry a compaction text marker
+  // 3.4 lineage from harness hints, over the WHOLE stream (skipped records included) so incremental == full:
+  const aliasToSid = new Map(); // an alias key (e.g. Codex thread-id) -> the session_id it belongs to
+  const parentHint = new Map(); // session_id -> the raw parent id a harness declared (first seen wins)
   const seen = new Map(); // watermark key -> running per-session record index
   const corpus = []; // decoded claimed records (this run) for the lineage pass
 
@@ -228,6 +233,10 @@ export async function runEtl(records, connection, opts = {}) {
       const sess = isLlm ? adapter.parseSession(record) : null;
       const sid = isLlm ? (sess.native_id ?? null) : null; // control -> NULL session_id
       const key = sid == null ? CONTROL_KEY : sid;
+      if (sid != null) {
+        for (const a of sess.aliases || []) if (!aliasToSid.has(a)) aliasToSid.set(a, sid);
+        if (sess.parent && !parentHint.has(sid)) parentHint.set(sid, sess.parent);
+      }
       const idx = (seen.get(key) ?? -1) + 1;
       seen.set(key, idx);
 
@@ -255,7 +264,8 @@ export async function runEtl(records, connection, opts = {}) {
 
       const laneKey = sid == null ? null : sid + '\x00' + call.lane;
       const curBlocks = adapter.parseBlocks(record);
-      const msgCount = messageCount(norm);
+      // an adapter may count messages itself (a chained wire's record carries only a delta)
+      const msgCount = typeof adapter.messageCount === 'function' ? adapter.messageCount(record) : messageCount(norm);
 
       // ── watermark skip: already consumed for this session. Still advance predecessor
       //    state (so the first NEW in-lane call gets the correct N-1), but write nothing.
@@ -263,6 +273,7 @@ export async function runEtl(records, connection, opts = {}) {
         if (laneKey && isLlm) {
           prevBlocks.set(laneKey, curBlocks);
           prevMsgCount.set(laneKey, msgCount);
+          prevMarker.set(laneKey, !!call.compaction_marker);
         }
         stats.skipped++;
         continue;
@@ -286,7 +297,8 @@ export async function runEtl(records, connection, opts = {}) {
             'harness = COALESCE(sessions.harness, excluded.harness)',
           [
             // provider is the main-lane wire SUMMARY (3.2:29), written after the loop from calls
-            sid, ident.id, null, sess.native_id ?? null, sess.parent ?? null,
+            // parent_session_id: written only by the lineage pass below (one writer → incremental == full)
+            sid, ident.id, null, sess.native_id ?? null, null,
             sess.fork_of ?? null, sess.forked_at ?? null, sess.title ?? null, sess.cwd ?? null,
             sess.entrypoint ?? null, ts, ts, sess.native_id_confidence ?? null,
             JSON.stringify({ ...(sess.extra ?? {}), ...(ident.inferred ? { harness_inferred: true } : {}) }),
@@ -295,8 +307,15 @@ export async function runEtl(records, connection, opts = {}) {
       }
 
       // ── calls (every claimed record; compaction is a cross-call inference) ──
-      const comp =
-        isLlm && laneKey ? markCompaction(prevMsgCount.get(laneKey) ?? 0, msgCount) : { compaction: false, compaction_from: null, compaction_to: null };
+      // 3.4: a harness hint first (header, high; a text marker only on its rising edge, medium), else the
+      // message-count drop (medium). Never a fork (sessions.fork_of is not touched).
+      let comp = { compaction: false, compaction_from: null, compaction_to: null };
+      if (isLlm && laneKey) {
+        const prevN = prevMsgCount.get(laneKey) ?? 0;
+        comp = call.compaction_hint || (call.compaction_marker && !prevMarker.get(laneKey))
+          ? { compaction: true, compaction_from: prevN, compaction_to: msgCount }
+          : markCompaction(prevN, msgCount);
+      }
       await conn.run(
         'INSERT INTO calls (call_id,session_id,seq,ts,endpoint,model,stream,class,control_kind,' +
           'lane,request_bytes,raw_ref,stop_reason,duration_ms,error,compaction,compaction_from,' +
@@ -388,6 +407,7 @@ export async function runEtl(records, connection, opts = {}) {
       if (laneKey && isLlm) {
         prevBlocks.set(laneKey, curBlocks);
         prevMsgCount.set(laneKey, msgCount);
+        prevMarker.set(laneKey, !!call.compaction_marker);
       }
       touched.add(key);
       stats.ingested++;
@@ -402,21 +422,26 @@ export async function runEtl(records, connection, opts = {}) {
         'GROUP BY session_id) AS t WHERE sessions.session_id = t.session_id',
     );
 
-    // ── lineage pass (RFC 3.4 认亲): parent_session_id via first-user-msg ↔ parent
-    //    Task/Agent prompt. Runs over the FULL run corpus so batching can't change the
-    //    result. UPDATEs are idempotent; only subagent sessions with a resolved parent.
+    // ── lineage pass (RFC 3.4), over the FULL run corpus so batching can't change the result; the only
+    //    writer of parent_session_id. (a) harness-declared parents (high): the raw id resolved through the
+    //    corpus's alias keys (gate G4: a Codex parent header names a THREAD id), else kept as the harness
+    //    gave it. (b) CC 认亲 (first user msg ↔ parent Task/Agent prompt) for sessions still without one.
+    const known = new Set((await conn.runAndReadAll('SELECT session_id FROM sessions')).getRowObjects().map((r) => r.session_id));
+    for (const [sid, raw] of parentHint) {
+      const parent = known.has(raw) ? raw : (aliasToSid.get(raw) ?? raw);
+      if (parent !== sid) await conn.run('UPDATE sessions SET parent_session_id = $1 WHERE session_id = $2', [parent, sid]);
+    }
     const candidates = buildParentIndex(corpus);
     const subFirst = new Map(); // session_id -> first subagent record
     for (const rec of corpus) {
       if (!isSubagent(rec)) continue;
-      const h = rec.req_headers || {};
-      const sid = h['x-claude-code-session-id'] || h['X-Claude-Code-Session-Id'] || null;
+      const sid = nativeId(rec).native_id;
       if (sid && !subFirst.has(sid)) subFirst.set(sid, rec);
     }
     for (const [sid, rec] of subFirst) {
       const { parent_session_id } = resolveParent(rec, candidates);
       if (parent_session_id) {
-        await conn.run('UPDATE sessions SET parent_session_id = $1 WHERE session_id = $2', [parent_session_id, sid]);
+        await conn.run('UPDATE sessions SET parent_session_id = $1 WHERE session_id = $2 AND parent_session_id IS NULL', [parent_session_id, sid]);
       }
     }
 

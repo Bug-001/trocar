@@ -58,7 +58,8 @@ test('observer_effect: transparent CC calls carry it; a legacy capture of the sa
 
 test('sessions.harness is the proc identity; legacy rows say harness_inferred; provider is the main-lane wire summary', async () => {
   const conn = await freshConn();
-  await runEtl([cc('t1', { ...transparent, proc: { pid: 3, exe: '/x/dsh', agent: 'deepseek-dsh' }, req_headers: { 'x-claude-code-session-id': 'S', 'user-agent': 'claude-cli/2.1' } })], conn);
+  // dsh's own session header (3.4, through the harness table) beside a Claude UA
+  await runEtl([cc('t1', { ...transparent, proc: { pid: 3, exe: '/x/dsh', agent: 'deepseek-dsh' }, req_headers: { 'x-deepseek-harness-session-id': 'S', 'user-agent': 'claude-cli/2.1' } })], conn);
   let s = (await rows(conn, 'SELECT harness, provider, extra FROM sessions'))[0];
   assert.deepEqual([s.harness, s.provider, JSON.parse(s.extra).harness_inferred], ['dsh', 'anthropic', undefined], 'proc wins over a Claude UA');
   const conn2 = await freshConn();

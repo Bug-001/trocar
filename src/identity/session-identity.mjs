@@ -1,37 +1,36 @@
 // src/identity/session-identity.mjs
-// CC (Anthropic / Claude Code) session identity + lineage — PURE functions, no I/O, no DuckDB.
-// Single authority for RFC 3.4 judgment; the 3.1 CC adapter IMPORTS these (does NOT inline them),
-// and 4.2 ETL calls them to fill the `sessions` lineage columns + `calls` (session_id/class/
-// control_kind/lane/compaction) columns.
+// Session identity + lineage — PURE functions, no I/O, no DuckDB. Single authority for RFC 3.4
+// judgment; the 3.1 adapters IMPORT these (do NOT inline them), and 4.2 ETL calls them to fill the
+// `sessions` lineage columns + `calls` (session_id/class/control_kind/lane/compaction) columns.
 //
-// D10 unified-envelope field names consumed here (4.1): record.req_headers (redacted, but
-// x-claude-code-session-id is preserved by SECRET_HEADERS-only redaction), record.req_body
-// ({system[], messages[], metadata, model}), record.endpoint, record.is_llm_call,
+// D37 ①: the session key, lane / parent / compaction HINTS and key aliases come from the ONE harness
+// table (src/dissect/harnesses.mjs) the board and the sharder also read; the CC heuristics below
+// (cc_is_subagent, security monitor, haiku aux, 认亲) run after it. Never pid or connection (3.4 关键区分).
+//
+// D10 unified-envelope field names consumed here (4.1): record.req_headers, record.req_body (PARSED:
+// {system[], messages[], metadata, model}), record.endpoint, record.is_llm_call, record.proc,
 // record.ts_request (fallback record.ts).
 //
 // Ported from the v0 prototype, following RFC 3.4 where they differ.
 //
-// DEFERRED / STUBBED (flagged, not implemented in Phase 1 CC-first):
+// DEFERRED / STUBBED (flagged, not implemented):
 //   • CC /rewind online behavior = 待数据决策 R (RFC 3.4 Edge cases) — pending a real /rewind
 //     capture; suspected to surface as a message_count drop, but NOT decided. Not handled here.
-//   • Codex explicit fork (forkedFromId / parentThreadId) — lives in the Codex adapter (Phase 4).
-//   • DeepSeek synthetic session-key (no native id) — lives in the DeepSeek adapter (Phase 4).
+//   • Codex explicit fork (forkedFromId) — no online fork signal verified yet (3.4, lab).
+//   • Hermes / Kimi synthesized session keys — src/dissect/synth-key.mjs (gate G11), applied by the ETL.
 //   CC itself has NO explicit online fork signal (RFC 3.4 "无显式"), so forkOf() is a null stub.
+import { sessionKeyOf, hintsOf } from '../dissect/harnesses.mjs'
 
 // --- Task 1: native_id + confidence, class (llm/control), sessionIdFor -----------------------
 
-// native_id: the x-claude-code-session-id header only. RFC 3.4 (line 13/21) grades the CC id as
-// `high` confidence and lists ONLY this header for CC — there is NO RFC-sanctioned medium CC tier.
-// The demo's metadata.user_id JSON fallback is DROPPED here (adversarial verify MINOR): in real CC
-// traffic metadata.user_id is an opaque account hash, not JSON carrying a session_id, so parsing it
-// would mint spurious ids and could mislabel a genuinely session-less control call as an llm session.
-// native_id is stored verbatim (the demo's safe()/slug-sanitize is intentionally NOT ported — that
-// was for filenames; here the id is a value column).
+// native_id: the harness's own session key (RFC 3.4 table, src/dissect/harnesses.mjs), with its
+// confidence (header = high, body key = medium). A record whose harness is not identified by proc keeps
+// the pre-D37 header keys (legacy captures). CC: the x-claude-code-session-id header only — body
+// metadata.user_id is NOT a source (gate G3: in real CC traffic it is an opaque account hash, so parsing
+// it would mint spurious ids). Never pid or connection (3.4 关键区分). Stored verbatim (a value column).
 export function nativeId(record) {
-  const h = record.req_headers || {}
-  const sid = h['x-claude-code-session-id'] || h['X-Claude-Code-Session-Id']
-  if (sid) return { native_id: String(sid), native_id_confidence: 'high' }
-  return { native_id: null, native_id_confidence: 'low' }
+  const k = sessionKeyOf(record)
+  return k.key ? { native_id: k.key, native_id_confidence: k.confidence || 'low' } : { native_id: null, native_id_confidence: 'low' }
 }
 
 // D9 class ∈ {llm, control}. RFC 3.4 line 30 defines the control plane as *session-less* AND
@@ -91,17 +90,22 @@ export function isMonitor(record) {
 }
 
 // lane ∈ main|subagent|monitor|aux|probe (per-CALL, per B-lane the ETL reads call.lane not
-// session.lane). CC online signals (demo v6/v9/v10): probe = count_tokens endpoint; monitor =
-// security-monitor system marker; aux = a small background model (haiku) with a tiny message
-// array — the notify/titlegen/quota util calls ("classify lanes by MODEL, not tool-count" —
-// demo v10 lesson; aux sub-classes are render-time projections per D8, NOT schema enums);
-// subagent = cc_is_subagent marker. Precedence probe > monitor > aux > subagent > main
-// (a count_tokens under a subagent is still a probe; subagents run the main model, not haiku).
+// session.lane). Precedence probe > monitor > aux > subagent > main (3.4 涉及源文件). Within it a
+// harness HINT (src/dissect/harnesses.mjs: a header or body field the harness itself sets, high) decides
+// first at its own level — a Codex prewarm is a probe, a dsh `origin:"subagent"` / Codex
+// x-openai-subagent / CC x-claude-code-agent-id is a subagent — and the CC heuristics follow: probe =
+// count_tokens endpoint; monitor = security-monitor system marker; aux = a small background model
+// (haiku) with a tiny message array ("classify lanes by MODEL, not tool-count" — demo v10 lesson);
+// subagent = cc_is_subagent marker. (A count_tokens under a subagent is still a probe; subagents run
+// the main model, not haiku.)
 export function lane(record) {
   if (/\/messages\/count_tokens/.test(String(record.endpoint || ''))) return 'probe'
+  const hinted = hintsOf(record).lane
+  if (hinted === 'probe') return 'probe'
   if (isMonitor(record)) return 'monitor'
+  if (hinted === 'aux') return 'aux'
   if (/haiku/i.test(String(record.req_body?.model || '')) && messageCount(record) <= 2) return 'aux'
-  if (isSubagent(record)) return 'subagent'
+  if (hinted === 'subagent' || isSubagent(record)) return 'subagent'
   return 'main'
 }
 
@@ -134,15 +138,18 @@ export function forkOf(record) {
 }
 
 // Per-record parseSession delegate (3.1 shape {native_id, parent, fork_of, forked_at, lane,
-// entrypoint, title, extra} + native_id_confidence forwarded by cc.mjs). `parent` needs the
-// cross-call 认亲 corpus, so it is resolved by 4.2 ETL (resolveParent), not here → parent:null.
+// entrypoint, title, extra} + native_id_confidence forwarded by cc.mjs). `parent` = the RAW parent id a
+// harness declares on this record (dsh body parentSession, OpenCode / Codex parent header; high), else
+// null; `aliases` = this record's other header keys (e.g. Codex thread-id). The ETL resolves `parent`
+// through every session's aliases (gate G4) and falls back to the CC 认亲 pass (resolveParent).
 export function parseSessionCC(record) {
   const { native_id, native_id_confidence } = nativeId(record)
   const f = forkOf(record)
   return {
     native_id,
     native_id_confidence,
-    parent: null,           // resolved in the ETL lineage pass (resolveParent), not per-record
+    parent: hintsOf(record).parent?.id ?? null, // harness-declared, raw; resolved through aliases by the ETL
+    aliases: sessionKeyOf(record).aliases,
     fork_of: f.fork_of_session_id, // CC has no online fork signal (deferred) → null
     forked_at: f.forked_at_seq,
     lane: lane(record),

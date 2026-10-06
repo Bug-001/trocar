@@ -12,6 +12,7 @@ import { contentHash, scanJson, hashSpan, spanOf } from './content-hash.mjs';
 import { collectExtra } from './contract.mjs';
 import { ENVELOPE_CONSUMED } from './envelope.mjs';
 import { wireFormatOf, contextStateOf } from '../dissect/registry.mjs';
+import { hintsOf } from '../dissect/harnesses.mjs';
 import { mapUsage } from '../model/schema.mjs';
 import {
   parseSessionCC,
@@ -137,8 +138,11 @@ export function parseCall(record) {
     // (gate G17); its req_* labels stay in calls.extra, unconsumed, saying why. One rule for board + ETL.
     wire_format: record?.is_llm_call === true ? 'anthropic' : null,
     context_state: record?.is_llm_call === true ? contextStateOf(record) : null,
-    // compaction/compaction_from/to are a cross-call (message_count-drop) inference decided
-    // by ETL/3.4 (markCompaction), NOT a single-record parse — left unset here on purpose.
+    // 3.4 compaction: a harness hint (header, high) or a text marker (medium; the ETL takes its rising
+    // edge). compaction/compaction_from/to themselves are cross-call, decided by the ETL (markCompaction
+    // falls back to the message-count drop when neither is present).
+    compaction_hint: hintsOf(record).compaction === true,
+    compaction_marker: hintsOf(record).compactionMarker === true,
   };
 }
 
