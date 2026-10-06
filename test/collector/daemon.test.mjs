@@ -569,3 +569,20 @@ test('daemon: an event line that cannot be written is on stderr and in status; o
     assert.deepEqual(flowsOf(s).slice(-2).map((l) => (l.event === 'log-gap' ? ['log-gap', l.lost] : [l.where, l.code])), [['log-gap', 1], ['helper', 'helper-error']])
   } finally { await d.stop(); p.done(); s.done() }
 })
+
+// D-25: the lock names pid, start time and boot id, and its mtime is refreshed, so readers judge the daemon from disk.
+test('daemon: the lock carries pid, start time and boot id and is refreshed while it runs; a clean stop removes it (D-25)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const { arch } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], identity: (pid) => ({ start_time: `t${pid}`, boot_id: 'boot-1' }), lockRefreshMs: 30 })
+  const file = path.join(s.collector, 'lock')
+  try {
+    const lock = JSON.parse(fs.readFileSync(file, 'utf8'))
+    assert.deepEqual([lock.pid, lock.start_time, lock.boot_id, lock.socket], [process.pid, `t${process.pid}`, 'boot-1', s.sock])
+    const old = new Date(Date.now() - 60_000); fs.utimesSync(file, old, old)
+    await until(() => fs.statSync(file).mtimeMs > Date.now() - 5000, 2000)
+  } finally { await d.stop(); p.done() }
+  assert.equal(fs.existsSync(file), false, 'a clean stop removes it')
+  s.done()
+})

@@ -245,7 +245,8 @@ test('uninstall records a file it could not undo because it is no longer JSON (D
     const code = await runCollector(['status'], { home: b.home, env: { XDG_RUNTIME_DIR: path.join(b.home, 'run') }, out: (x) => out.push(x), err: (x) => err.push(x) })
     assert.equal(code, 3)
     assert.match(err[0], /daemon is not running/)
-    assert.match(out[0], /^recent failures \(1\):\n  \S+ failure \(uninstall\): .*no longer valid JSON/, 'read from disk, with no daemon')
+    assert.match(out[0], /^collector daemon: not running/, 'the lock says so first (D-25)')
+    assert.match(out[1], /^recent failures \(1\):\n  \S+ failure \(uninstall\): .*no longer valid JSON/, 'read from disk, with no daemon')
   } finally { b.done() }
 })
 
@@ -317,6 +318,21 @@ test('uninstall leaves a settings file that became a symbolic link alone and rec
     assert.ok(fs.lstatSync(settingsOf(b)).isSymbolicLink(), 'never replaced by a regular file')
     const { recentFailures } = await import('../../src/collector/core/events.mjs')
     assert.deepEqual(recentFailures(b.dir).map((f) => [f.where, /symbolic link/.test(f.reason)]), [['uninstall', true]], 'recorded after the purge, so it survives it')
+  } finally { b.done() }
+})
+
+// D-25: a lock whose pid is now another process (start time or boot id differ) is never killed by — even when some
+// daemon answers on the socket (it is not the lock's pid).
+test('stopDaemon: a lock naming a reused pid is stale — never killed by, with or without a daemon answering (D-25)', async () => {
+  const b = box()
+  const lockFile = path.join(b.home, 'lock')
+  fs.writeFileSync(lockFile, JSON.stringify({ pid: 4242, start_time: '100', boot_id: 'b1', socket: path.join(b.home, 's.sock') }))
+  const killed = []
+  const reused = { alive: () => true, identity: () => ({ start_time: '999', boot_id: 'b1' }), kill: (pid) => killed.push(pid) }
+  try {
+    assert.equal(await stopDaemon({ socketPath: null, lockFile, request: async () => { throw Object.assign(new Error('x'), { code: 'ECONNREFUSED' }) }, ...reused }), 'none', 'nobody answers: a stale lock, nothing to stop')
+    await assert.rejects(stopDaemon({ socketPath: null, lockFile, request: async () => ({}), ...reused }), /names a process that is not it \(pid 4242 is another process now/)
+    assert.deepEqual(killed, [], 'the reused pid is never signalled')
   } finally { b.done() }
 })
 

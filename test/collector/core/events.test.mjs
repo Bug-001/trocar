@@ -67,7 +67,7 @@ test('failure recorder: lines it cannot write go to stderr and the lost count; t
 test('readRecentFailures: an unreadable flows/ or day file is an error, never "no failures"; a partial read is truncated (D-2)', () => {
   const b = box()
   try {
-    assert.deepEqual(readRecentFailures(b.dir), { list: [], errors: [], truncated: false }, 'no flows/ yet: nothing recorded')
+    assert.deepEqual(readRecentFailures(b.dir), { list: [], errors: [], truncated: false, last_ts: null }, 'no flows/ yet: nothing recorded')
     fs.writeFileSync(path.join(b.dir, 'flows'), 'not a directory')
     const r = readRecentFailures(b.dir)
     assert.deepEqual([r.list, r.errors.length, /ENOTDIR/.test(r.errors[0])], [[], 1, true])

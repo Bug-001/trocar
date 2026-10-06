@@ -23,6 +23,7 @@ import { createRecordStore } from './core/record/store.mjs'
 import { createEngine } from './core/engine/engine.mjs'
 import { appendEvent, readRecentFailures, createFailureRecorder } from './core/events.mjs'
 import { EVENT, CODE, trustReasonText } from './core/codes.mjs'
+import { procIdentity } from '../health/read.mjs'
 
 export { loadArch } // the CLI reaches arch only through this file (layering rule 5)
 
@@ -62,7 +63,7 @@ export function failuresOnDisk(dir) {
   return { failures: r.list, ...(r.errors.length || r.truncated ? { failures_read: { errors: r.errors, truncated: r.truncated } } : {}) }
 }
 
-async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log }) {
+async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = procIdentity, lockRefreshMs = 1000 }) {
   const P = collectorPaths(dir)
   const failure = createFailureRecorder(P.dir, { log })
   let manifest
@@ -192,8 +193,13 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     sw = createSwitch({ redirector, stateFile: P.state, ensureReady, onEvent: event })
     await redirector.start()
     await redirector.configure(port)
-    fs.writeFileSync(`${P.lock}.tmp-${process.pid}`, JSON.stringify({ pid: process.pid, helper_pid: redirector.helperInfo().pid, engine_port: port, socket: sock }) + '\n', { mode: 0o600 })
+    // the lock (4.6 §控制面, D-25): pid + start time + boot id, so a reused pid or a reboot is never "running"; its
+    // mtime is refreshed every second, so a stuck daemon shows as unresponsive within 5 s — read from disk alone
+    const me = identity(process.pid)
+    fs.writeFileSync(`${P.lock}.tmp-${process.pid}`, JSON.stringify({ pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, helper_pid: redirector.helperInfo().pid, engine_port: port, socket: sock }) + '\n', { mode: 0o600 })
     fs.renameSync(`${P.lock}.tmp-${process.pid}`, P.lock)
+    const lockTimer = setInterval(() => { try { const t = new Date(); fs.utimesSync(P.lock, t, t) } catch (e) { failure('daemon', coded(new Error(`the lock ${P.lock} could not be refreshed (${errText(e)}); readers will judge this daemon unresponsive`), e && e.code ? e.code : 'record-error')) } }, lockRefreshMs)
+    lockTimer.unref()
     tracker.start()
     await tracker.rescan()
     const applyPolicy = () => { const st = sw.state(); tracker.setPolicy({ mode: st.policy, extraHosts: st.extra_hosts }) }
@@ -221,6 +227,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     markReady()
 
     async function stop() {
+      clearInterval(lockTimer)
       failure.flush() // folded counts are written, not lost
       // every step runs; one that fails is recorded with its reason, never thrown past the rest (D38)
       const step = async (where, fn) => { try { await fn() } catch (e) { failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: (e && e.code) || 'stop-failed' })) } }

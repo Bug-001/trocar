@@ -49,6 +49,13 @@ test('cli: with no daemon answering (not running, no runtime dir, stuck) status 
     fs.rmSync(path.join(dir, 'flows'), { recursive: true }); fs.writeFileSync(path.join(dir, 'flows'), 'x')
     t = io(); assert.equal(await runCollector(['status'], { env, home, request: async () => { throw Object.assign(new Error('x'), { code: 'ECONNREFUSED' }) }, ...t }), 3)
     assert.match(t.o.join('\n'), /failure records unreadable: .*flows: ENOTDIR/)
+    assert.match(t.o[0], /collector daemon: not running \(it stopped cleanly, or never started\)/, 'no lock')
+    fs.writeFileSync(path.join(dir, 'lock'), JSON.stringify({ pid: 2 ** 22 + 7, start_time: '1', boot_id: 'b', socket: '/x' })) // a pid nothing runs as
+    t = io(); await runCollector(['status'], { env, home, request: async () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }) }, ...t })
+    assert.match(t.o[0], /collector daemon: not running — its last run ended without a clean stop \(pid \d+ is not running\)/, 'kill -9: said from the lock alone')
+    fs.writeFileSync(path.join(dir, 'lock'), JSON.stringify({ pid: process.pid, socket: '/x' })); const old = new Date(Date.now() - 30_000); fs.utimesSync(path.join(dir, 'lock'), old, old)
+    t = io(); await runCollector(['status'], { env, home, request: async () => { throw Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }) }, ...t })
+    assert.match(t.o[0], /collector daemon: not responding — pid \d+ has not refreshed its lock for 3\d s/, 'a stuck daemon')
     assert.match(formatStatus({ ...STATUS, failures: [], failures_read: { errors: ['/f: EACCES'], truncated: true }, events: { lost: 2 } }), /failure records unreadable: \/f: EACCES\n\(older failure records left out[^\n]*\nevent log: 2 line\(s\) could not be written/)
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })

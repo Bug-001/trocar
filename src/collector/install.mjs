@@ -18,6 +18,7 @@ import { rewriteBundles } from './core/trust/bundle.mjs'
 import { controlRequest } from './core/control.mjs'
 import { readText } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
+import { lockState, procIdentity } from '../health/read.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const pidAlive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' } }
@@ -159,12 +160,13 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
 // 4.6 §安装清单与卸载 step 1: stop this user's daemon and wait until it AND its helper are gone (the helper's
 // links are unpinned and go with it). The daemon is looked for at the runtime socket and at the socket its lock
 // names (XDG_RUNTIME_DIR unset, or logind removed /run/user/<uid>): a daemon that steers must never be orphaned.
-// A lock whose pid is dead is stale: never kill by it. A live pid that answers on no socket is not killed either
-// (it may be another program by now): uninstall stops with nothing removed and says what to do.
-export async function stopDaemon({ socketPath, lockFile, request = controlRequest, alive = pidAlive, kill = process.kill.bind(process), stopUnit = null, timeoutMs = 5000 }) {
-  let lock = null
-  let unreadable = false // a lock cut short by a crash or power loss: whether a daemon runs is unknown
-  try { lock = JSON.parse(fs.readFileSync(lockFile, 'utf8')) } catch (e) { if (e.code !== 'ENOENT') unreadable = true }
+// A lock whose daemon is gone (pid dead, or its start time / boot id is another process's: D-25) is stale: never
+// kill by it. A live daemon that answers on no socket is not killed either: uninstall stops with nothing removed
+// and says what to do.
+export async function stopDaemon({ socketPath, lockFile, request = controlRequest, alive = pidAlive, identity = procIdentity, kill = process.kill.bind(process), stopUnit = null, timeoutMs = 5000 }) {
+  const ls = lockState({ file: lockFile, alive, identity })
+  const lock = ls.lock || null
+  const unreadable = ls.state === 'unknown' // a lock cut short by a crash or power loss: whether a daemon runs is unknown
   let answered = false
   for (const sock of [...new Set([socketPath, lock && lock.socket].filter(Boolean))]) {
     try { await request({ socketPath: sock, method: 'GET', path: '/status', timeoutMs: 2000 }); answered = true; break } catch (e) {
@@ -173,10 +175,11 @@ export async function stopDaemon({ socketPath, lockFile, request = controlReques
   }
   if (!answered) {
     if (unreadable) throw new Error(`${lockFile} is unreadable, so whether a collector daemon still runs is unknown; stop any (pgrep -f "asight collector start"), delete ${lockFile}, then run uninstall again; nothing was removed`)
-    if (lock && lock.pid && alive(lock.pid)) throw new Error(`a collector daemon may still be running (pid ${lock.pid} in ${lockFile}) but answers on no control socket; stop it (kill ${lock.pid}), or delete ${lockFile} if that pid is not an asight collector, then run uninstall again; nothing was removed`)
+    if (ls.state === 'running' || ls.state === 'unresponsive') throw new Error(`a collector daemon may still be running (pid ${lock.pid} in ${lockFile}${ls.state === 'unresponsive' ? `, lock not refreshed for ${Math.round(ls.age_ms / 1000)} s` : ''}) but answers on no control socket; stop it (kill ${lock.pid}), or delete ${lockFile} if that pid is not an asight collector, then run uninstall again; nothing was removed`)
     return 'none'
   }
   if (!lock || !lock.pid) throw new Error('a collector daemon answers but left no lock file; stop it by hand, nothing was removed')
+  if (ls.state === 'stale') throw new Error(`a collector daemon answers, but ${lockFile} names a process that is not it (${ls.why}); stop the daemon by hand (pgrep -f "asight collector start"), nothing was removed`) // never kill a reused pid
   if (stopUnit) stopUnit() // a unit-managed daemon is stopped through systemd, which then knows it is meant to be down
   if (alive(lock.pid)) kill(lock.pid, 'SIGTERM') // no unit, or this daemon was started by hand (`asight collector start`)
   const pids = [lock.pid, lock.helper_pid].filter(Boolean)

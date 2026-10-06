@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { controlSocketPath, controlRequest } from './core/control.mjs'
 import { readRecentFailures } from './core/events.mjs'
 import { UNTIL_TEXT } from './core/codes.mjs'
+import { lockState } from '../health/read.mjs'
 import { collectorHome } from '../paths.mjs'
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -42,6 +43,16 @@ export function formatStatus(s) {
 export function formatFailures(list) {
   const one = (f) => `  ${f.ts} ${f.event || `flow ${f.flow_id}`}${f.where ? ` (${f.where})` : ''}${f.pid != null ? ` pid ${f.pid}` : ''}${f.agent ? ` ${f.agent}` : ''}: ${f.code && f.code !== f.reason ? `${f.code} — ` : ''}${f.reason || f.error?.message || f.error || f.not_captured || ''}${f.suppressed ? ` (+${f.suppressed} more)` : ''}${f.hint ? ` — ${f.hint}` : ''}`
   return [`recent failures (${list.length}):`, ...list.map(one)].join('\n')
+}
+
+// Whether the daemon runs, judged from its lock alone (4.6 §控制面, D-25) — for when its socket does not answer.
+export function formatLock(ls, lastTs) {
+  const at = lastTs ? ` · last record at ${lastTs}` : ''
+  if (ls.state === 'none') return `collector daemon: not running (it stopped cleanly, or never started)${at}`
+  if (ls.state === 'stale') return `collector daemon: not running — its last run ended without a clean stop (${ls.why})${at}`
+  if (ls.state === 'unresponsive') return `collector daemon: not responding — pid ${ls.lock.pid} has not refreshed its lock for ${Math.round(ls.age_ms / 1000)} s${at}`
+  if (ls.state === 'running') return `collector daemon: pid ${ls.lock.pid} holds a fresh lock but its control socket did not answer${at}`
+  return `collector daemon: state unknown — ${ls.error}${at}`
 }
 
 // What could not be read of flows/ (D-2): an unreadable directory or file is never shown as "no failures".
@@ -122,7 +133,9 @@ export async function runCollector(argv, { env = process.env, home = os.homedir(
   if (!['on', 'off', 'status'].includes(verb)) { err(USAGE); return 2 }
   // No daemon answered — not running, no runtime dir, or stuck: what is on disk says why and what failed last (D-2)
   const fromDisk = () => {
-    const r = readRecentFailures(collectorHome(path.join(home, '.asight')))
+    const dir = collectorHome(path.join(home, '.asight'))
+    const r = readRecentFailures(dir)
+    out(formatLock(lockState({ file: path.join(dir, 'lock') }), r.last_ts))
     if (r.list.length) out(formatFailures(r.list))
     for (const l of formatReadProblems(r)) out(l)
   }

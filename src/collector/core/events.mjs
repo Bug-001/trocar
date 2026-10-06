@@ -23,7 +23,7 @@ export function appendEvent(dir, rec, { now = new Date(), fs = nodeFs } = {}) {
 // failures past `limit` were left out.
 export function readRecentFailures(dir, { limit = 10, files = 2, maxBytes = 1 << 20, fs = nodeFs } = {}) {
   const d = path.join(dir, 'flows')
-  const out = { list: [], errors: [], truncated: false }
+  const out = { list: [], errors: [], truncated: false, last_ts: null } // last_ts: the newest line of any kind ("last record at")
   let names
   try { names = fs.readdirSync(d).filter((n) => /^\d{4}-\d{2}-\d{2}\.ndjson$/.test(n)).sort().slice(-files) } catch (e) {
     if (e.code !== 'ENOENT') out.errors.push(`${d}: ${errText(e)}`)
@@ -46,6 +46,7 @@ export function readRecentFailures(dir, { limit = 10, files = 2, maxBytes = 1 <<
     for (const line of text.split('\n')) {
       let r = null
       try { r = JSON.parse(line) } catch { continue } // the first line of a tail may be cut
+      if (r && typeof r.ts === 'string') out.last_ts = r.ts
       if (isFailure(r)) out.list.push(r)
     }
   }
