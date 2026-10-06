@@ -242,7 +242,8 @@ export function otherSealers(procs, { target = null, sessionsRoot = path.join(as
   });
 }
 
-const sameStat = (a, b) => a.size === b.size && a.mtimeMs === b.mtimeMs && a.ino === b.ino;
+// ctime too: a rewrite in place that restores size and mtime (utimes) still moves ctime (review 3 confirm, row 6)
+const sameStat = (a, b) => a.size === b.size && a.mtimeMs === b.mtimeMs && a.ino === b.ino && a.ctimeMs === b.ctimeMs;
 
 export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, quietMs = DEFAULT_QUIET_MS,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)), fdHolders = defaultFdHolders, processList = defaultProcessList,

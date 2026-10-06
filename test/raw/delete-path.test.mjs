@@ -176,3 +176,29 @@ test('row 5: a sealed segment of the stream whose index cannot be read is named 
     assert.ok(readJournal({ journal }).some((e) => e.outcome === 'refused' && e.file === f && /0001\.sealed could not be read/.test(e.reason)));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+// ── row 6: a rewrite that keeps size, mtime and inode still counts as a change ───────────────────
+test('row 6: an original rewritten in place between its byte-for-byte check and the unlink, size and mtime restored, is not deleted', async () => {
+  const { root, f, journal } = sealedTree();
+  try {
+    await sealLegacy(f, { ...NONE, journal });
+    const T = Math.floor(Date.now() / 1000) - 60;
+    fs.utimesSync(f, T, T);                                         // a whole second: restorable exactly
+    let done = false;
+    const spy = { ...fs, fsyncSync: (fd) => {                        // the first fsync is of the copy's directory, after the check
+      if (!done) {
+        done = true;
+        const at = fs.readFileSync(f).indexOf('lorem');
+        const w = fs.openSync(f, 'r+'); fs.writeSync(w, Buffer.from('L'), 0, 1, at); fs.closeSync(w);
+        fs.utimesSync(f, T, T);
+      }
+      return fs.fsyncSync(fd);
+    } };
+    const res = await sealLegacy(f, { ...NONE, journal, deleteOriginal: true, fs: spy });
+    assert.ok(done, 'precondition: the rewrite happened');
+    assert.equal(fs.statSync(f).mtimeMs, T * 1000, 'precondition: mtime restored');
+    assert.ok(fs.existsSync(f), 'an original rewritten after its check was deleted');
+    assert.deepEqual(res.deletedOnly, []);
+    assert.match(res.refused.find((r) => r.file === f).reason, /changed after the quiet window/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
