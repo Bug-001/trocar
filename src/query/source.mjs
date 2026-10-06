@@ -295,7 +295,7 @@ const listRoot = (root, sessionsRoot = null) => {
 // `source` may be one path or SEVERAL roots (D27: the new home plus the legacy one that still holds
 // the user's captures). Scanning only the first would make raw-byte refs from the other root
 // unresolvable — the block viewer would report "record not found" for bytes that are on disk.
-export async function buildResolver(source, { retryMs = 30000, sessionsRoot = null, lister = (root) => listRoot(root, sessionsRoot), frameCache = createFrameCache(8), unreadableSealed = null } = {}) {
+export async function buildResolver(source, { retryMs = 30000, sessionsRoot = null, lister = (root) => listRoot(root, sessionsRoot), frameCache = createFrameCache(8), unreadableSealed = null, onIndexChange = null } = {}) {
   const roots = (Array.isArray(source) ? source : [source]).filter(Boolean);
   if (roots.length > 1) return buildMultiResolver(roots, { retryMs, sessionsRoot });
   const sourcePath = roots[0];
@@ -335,12 +335,13 @@ export async function buildResolver(source, { retryMs = 30000, sessionsRoot = nu
   const failedAt = new Map(); // file -> { sig, e, at } of its last failed read
   const statSig = (f) => { try { const st = statSync(f); return `${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`; } catch { return 'gone'; } };
   const unchangedFailure = (f) => { const x = failedAt.get(f); return !!x && x.sig === statSig(f) && Date.now() - x.at < retryMs; };
-  const attempt = (f, from, run) => {
+  // `into`: the index the attempt writes — the live one, or the fresh one a rebuild swaps in
+  const attempt = (f, from, run, into = idx) => {
     const sig = statSig(f); // before the read: a change that lands during it must not be absorbed
-    const log = { n: 0, q: [], b: [] }, counts = { c: scan.corruptLines, u: scan.unidentifiedLines, cb: scan.corruptByFile[path.basename(f)] };
+    const sc = into.scan, log = { n: 0, q: [], b: [] }, counts = { c: sc.corruptLines, u: sc.unidentifiedLines, cb: sc.corruptByFile[path.basename(f)] };
     const ok = (mk) => { failedAt.delete(f); unnote((x) => x.root === path.dirname(f) && x.name === path.basename(f)); return mk; };
     const fail = (e) => {
-      undoAttempt(idx, f, from, log, counts);
+      undoAttempt(into, f, from, log, counts);
       failedAt.set(f, { sig, e, at: Date.now() });
       note(path.dirname(f), path.basename(f), 'unreadable', e);
       return null;
@@ -348,7 +349,7 @@ export async function buildResolver(source, { retryMs = 30000, sessionsRoot = nu
     return run(log, ok, fail);
   };
   // a sealed file is indexed whole from its own index (sync); an NDJSON file by the line scan
-  const indexSafe = (f, from = 0) => attempt(f, from, (log, ok, fail) => (isSealedPath(f) ? Promise.resolve().then(() => indexSealed(f, idx, frameCache)) : indexFile(f, idx, from, log)).then(ok, fail));
+  const indexSafe = (f, from = 0, into = idx) => attempt(f, from, (log, ok, fail) => (isSealedPath(f) ? Promise.resolve().then(() => indexSealed(f, into, frameCache)) : indexFile(f, into, from, log)).then(ok, fail), into);
   const indexSafeSync = (f, from = 0) => attempt(f, from, (log, ok, fail) => { try { return ok(isSealedPath(f) ? indexSealed(f, idx, frameCache) : indexFileSync(f, idx, from, log)); } catch (e) { return fail(e); } });
   for (const f of [...files]) { const mk = await indexSafe(f); if (mk) marks.set(f, mk); else files.splice(files.indexOf(f), 1); }
   // A file that left the root takes its failure (and its note) with it. By full path: one level down,
@@ -503,14 +504,34 @@ export async function buildResolver(source, { retryMs = 30000, sessionsRoot = nu
     // that persists. A recovered file's note goes when it indexes; a gone file's, below.
     files.length = 0;
   };
+  // Rebuilt into a FRESH index, swapped in at once. The rebuild awaits file reads and lookups run in
+  // between: on a half-built index one copy of a duplicate (two files holding one id — a sealed copy
+  // and its per-session continuation) was back while the other was not, and it answered `ok` with
+  // one record's bytes for a ref that names two (invariant 2). Lookups now see the old index, whole,
+  // until the new one is. `onIndexChange`: the multi-root resolver re-poisons in the same tick.
   const rebuildAll = async () => {
-    clearIndex();
+    const next = { qual: new Map(), byId: new Map(), sealed: [], scan: { corruptLines: 0, corruptByFile: {}, unidentifiedLines: 0, unreadableSealed: [], bytesIndexed: 0 } };
+    const nextFiles = [], nextMarks = new Map();
     const listed = listFiles(null);
     forgetUnlisted(listed);
-    for (const f of listed) {
-      if (unchangedFailure(f)) { note(path.dirname(f), path.basename(f), 'unreadable', failedAt.get(f).e); continue; }
-      const mk = await indexSafe(f); if (mk) { files.push(f); marks.set(f, mk); }
-    }
+    try {
+      for (const f of listed) {
+        if (unchangedFailure(f)) { note(path.dirname(f), path.basename(f), 'unreadable', failedAt.get(f).e); continue; }
+        const mk = await indexSafe(f, 0, next); if (mk) { nextFiles.push(f); nextMarks.set(f, mk); }
+      }
+    } catch (e) { for (const sf of next.sealed) sf.close(); throw e; }
+    // the swap: synchronous, nothing reads in between
+    for (const fd of fds.values()) try { closeSync(fd); } catch {}
+    fds.clear(); bodyCache.clear();
+    const oldSealed = idx.sealed;
+    Object.assign(idx, { qual: next.qual, byId: next.byId, sealed: next.sealed });
+    for (const sf of oldSealed) sf.close();
+    frameCache.clear();
+    const { bytesIndexed, ...counts } = next.scan;
+    Object.assign(scan, counts, { bytesIndexed: (scan.bytesIndexed || 0) + bytesIndexed });
+    marks.clear(); for (const [f, m] of nextMarks) marks.set(f, m);
+    files.length = 0; files.push(...nextFiles);
+    if (onIndexChange) onIndexChange();
   };
   // The same, synchronously, for Stale: it runs inside a detail() call.
   const rebuildSync = () => {
@@ -537,7 +558,7 @@ export async function buildResolver(source, { retryMs = 30000, sessionsRoot = nu
       if (unchangedFailure(f)) { note(path.dirname(f), path.basename(f), 'unreadable', failedAt.get(f).e); continue; } // tried again once it changes or retryMs passes
       let st; try { st = statSync(f); } catch (e) { note(path.dirname(f), path.basename(f), 'vanished', e); continue; }
       const m = marks.get(f);
-      if (!m) { const mk = await indexSafe(f); if (mk) { files.push(f); marks.set(f, mk); changed = true; } continue; }
+      if (!m) { const mk = await indexSafe(f); if (mk) { files.push(f); marks.set(f, mk); changed = true; if (onIndexChange) onIndexChange(); } continue; } // a new copy: poisoned before any await
       if (st.ino !== m.ino || st.size < m.size || (m.sealed && st.size !== m.size)) { await rebuildAll(); changed = true; break; } // a sealed file never grows
       if (st.size === m.size) continue;
       undoTail(idx, path.basename(f), m.tail);
@@ -566,6 +587,9 @@ async function buildMultiResolver(roots, { sessionsRoot, ...opts }) {
   const shared = { at: null, ls: null };
   const frameCache = createFrameCache(8);   // one frame LRU for every root's sealed files
   const unreadableSealed = () => parts.flatMap((p) => (p.scan && p.scan.unreadableSealed) || []);
+  // Re-poisons every root whenever one root's index changes (a rebuild swapped in, a new file indexed),
+  // in the same tick — never on a later await, when a lookup may already have run.
+  const poison = () => poisonSplitDuplicates(parts.map((p) => p.index));
   const lister = (root) => {
     const good = listable();
     if (!good.includes(root)) return listRoot(root, sessionsRoot); // throws this root's own error
@@ -580,10 +604,9 @@ async function buildMultiResolver(roots, { sessionsRoot, ...opts }) {
     // root, never the whole board: throwing here takes down `asight serve` at startup and the user
     // sees a crash where they should see the sessions that ARE readable (invariant 2 — a capture on
     // disk stays readable). What is dropped is recorded so `scan` can report it rather than hide it.
-    try { parts.push(Object.assign(await buildResolver(r, { ...opts, lister, frameCache, unreadableSealed }), { rootPath: r })); }
+    try { parts.push(Object.assign(await buildResolver(r, { ...opts, lister, frameCache, unreadableSealed, onIndexChange: poison }), { rootPath: r })); }
     catch (e) { unreadable.push({ root: r, reason: (e && e.message) || String(e) }); }
   }
-  const poison = () => poisonSplitDuplicates(parts.map((p) => p.index));
   poison();
   // Stale (an indexed file is gone): every root re-lists and re-indexes together, then the ref is asked
   // again once — the copy that replaces the file may sit in another root.
