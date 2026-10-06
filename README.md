@@ -167,7 +167,7 @@ every record and the whole file are proven to decode back byte for byte.
 asight raw seal --legacy ~/.asight/sessions --dry-run   # every check, nothing written: what would be sealed, refused or skipped, and why
 asight raw seal --legacy ~/.asight/sessions        # pre-2026-10 files: refuses while anything writes them; keeps originals
 asight raw verify ~/.asight/sessions               # decode every sealed copy, compare byte for byte with its original
-asight raw compare ~/.asight/sessions              # per session: what the board, ETL and resolver read now vs. from the sealed copies alone
+asight raw compare ~/.asight/sessions              # per session: what the board, ETL and resolver read via the originals vs. via their sealed copies (--list: per file)
 asight raw seal --legacy ~/.asight/sessions --delete-original --dry-run   # which originals would be deleted, which refused
 asight raw seal --legacy ~/.asight/sessions --delete-original   # deletes only originals that already have a sealed copy, after a byte-for-byte check
 asight raw export <session-id>                     # back to plain NDJSON: ~/.asight/export/<session>/, one file per segment (0600)
@@ -230,7 +230,7 @@ asight serve   [--port 9800] [--source <ndjson|dir>] [--db <path>] [--control]
 asight etl <ndjson|sealed|dir> [--rebuild]
 asight on [--proxy <url>] | off [--remove-ca] | uninstall | verify | doctor
 asight raw seal <closed-shard> | seal --legacy <file|dir> [--dry-run] [--delete-original]
-asight raw verify <sealed|dir> [--against <original>] | compare <dir> | export <session|file.sealed> | journal
+asight raw verify <sealed|dir> [--against <original>] | compare <dir> [--list] | export <session|file.sealed> | journal
 asight monitor {on|off|status}
 asight mitm [--port 9899] [--host api.anthropic.com]
 asight desktop {on|off|status}        # macOS + Clash Verge
