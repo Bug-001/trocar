@@ -57,7 +57,7 @@ let seq = 0;
 async function load() {
   const html = fs.readFileSync(INDEX, 'utf8');
   const js = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].at(-1)[1];
-  await import(`data:text/javascript;base64,${Buffer.from(js + '\n;globalThis.__M__={poll,pollCapHealth};\n' + `//# ch-${++seq}\n`).toString('base64')}`);
+  await import(`data:text/javascript;base64,${Buffer.from(js + '\n;globalThis.__M__={poll,pollCapHealth,openCapHealthDetail};\n' + `//# ch-${++seq}\n`).toString('base64')}`);
   await settle();
   return globalThis.__M__;
 }
@@ -148,3 +148,55 @@ test('#caphealth: a failing or hanging request shows "? 未刷新 · 截至 T" a
     assert.equal(h.getEl('caphealth').textContent, '? 未刷新 · 截至 —', 'never answered at all: said, not left at "读取中"');
   } finally { Date.now = realNow; }
 });
+
+// (RFC 2.6 §C session-less group, 1.5 空态): the 采集健康 list in the ctrlmode grid, its option in the
+// picker's ⚙ session-less group, and an empty board that says why it is empty.
+const FAILING = { status: 200, body: {
+  generated_at: T, installed: true, summary: { part: 'collector', state: 'failing', n: 3 },
+  collector: { installed: true, daemon: { state: 'running', pid: 4242, last_start: { ts: T, foreground: true } }, switch: { desired: 'on' },
+    conditions: [{ kind: 'untrusted', pid: 7, agent: 'agent-x', since: T, reason: 'var-missing', failure: true }],
+    failures: [{ key: 'engine/lookup-miss', count: 3, first_ts: T, last_ts: T, last: { ts: T, event: 'failure', where: 'engine', code: 'lookup-miss', reason: 'no flow for 127.0.0.1:5', peer: '127.0.0.1:5' } },
+      { key: 'agent-untrusted:var-missing', count: 1, first_ts: T, last_ts: T, last: { ts: T, event: 'agent-untrusted', pid: 7, agent: 'agent-x', reason: 'var-missing' } }],
+    expected: { policy: 4 }, agents: [{ agent: 'agent-x', last_captured: null, last_failure: T, last_failure_key: 'agent-untrusted:var-missing' }],
+    install: { install: [{ ts: T, event: 'install-note', kind: 'skipped-block', file: '/u/ca.der', type: 'DER', reason: 'not PEM' }], uninstall: [] } },
+  legacy: { present: false, state: 'none' }, raw: { problems: [{ ts: T, op: 'seal', outcome: 'refused', file: '/s', reason: 'no close marker' }], failures: [] },
+  read: { files: [], errors: [{ file: '/h/flows/2026-10-05.ndjson', error: 'EACCES' }], truncated: false, window_hours: 24 } } };
+
+test('采集健康: the ctrlmode list — failures by reason, what holds now, the daemon, agents, install notes, unread files', async () => {
+  const health = { current: FAILING };
+  const h = harness(health);
+  const M = await load(); await M.pollCapHealth(); await settle();
+  await M.poll(); await settle();
+  assert.match(h.getEl('fileSel').innerHTML, /<optgroup label="⚙ session-less">.*value="__caphealth__">⚠ 采集健康 \(3\)/, 'an item in the session-less group, with its count')
+  h.getEl('caphealth')._onclick(); await settle()
+  assert.ok(document.body.classList.contains('ctrlmode'), 'the ctrlmode grid')
+  const tl = h.getEl('timeline').innerHTML, led = h.getEl('ledger').innerHTML
+  assert.match(tl, /engine\/lookup-miss — no flow for 127\.0\.0\.1:5/); assert.match(tl, /×3/)
+  assert.match(tl, /seal refused/, 'the raw layer\'s problems'); assert.match(tl, /policy/, 'expected class counted')
+  assert.match(tl, /读不全 · could not read: <code>\/h\/flows\/2026-10-05\.ndjson<\/code> \(EACCES\)/)
+  assert.match(led, /untrusted pid 7 agent-x/); assert.match(led, /running · pid 4242/); assert.match(led, /foreground: closing its terminal stops it/)
+  assert.match(led, /last captured — · last failure/); assert.match(led, /install-note · skipped-block/)
+  M.openCapHealthDetail(0); await settle()
+  assert.match(h.getEl('detail').innerHTML, /&quot;peer&quot;: &quot;127\.0\.0\.1:5&quot;/, 'a row opens its metadata')
+  // live unchecked: the list still follows its own payload
+  h.getEl('liveChk').checked = false
+  health.current = { ...FAILING, body: { ...FAILING.body, collector: { ...FAILING.body.collector, failures: [] } } }
+  await M.pollCapHealth(); await settle()
+  assert.doesNotMatch(h.getEl('timeline').innerHTML, /lookup-miss/)
+})
+
+test('an empty board says why when capture fails or the collector is not running — not when only the old MITM runs fine', async () => {
+  const cases = [
+    [FAILING, /没采到会话:3 个采集失败,见采集健康/],
+    [ok({ part: 'collector', state: 'not-running', since: T }), /没采到会话:采集器 \/ the collector没在跑/],
+    [ok({ part: 'legacy', state: 'ok', since: T }), /^No sessions captured yet/],
+    [{ status: 503, body: { error: 'flows: EACCES' } }, /capture health could not be read \(flows: EACCES\)/],
+  ]
+  for (const [payload, re] of cases) {
+    const health = { current: payload };
+    const h = harness(health);
+    const M = await load(); await M.pollCapHealth(); await M.poll(); await settle();
+    assert.match(h.getEl('ctxwin').innerHTML.replace(/<[^>]+>/g, ''), re)
+    if (re.source.includes('No sessions')) assert.doesNotMatch(h.getEl('ctxwin').innerHTML, /没在跑|失败/, 'only the old MITM, running fine: no "not running" claim')
+  }
+})

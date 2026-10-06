@@ -687,12 +687,14 @@ async function poll(){
     }
     const grp=p=>`<optgroup label="${esc(p.name)}">${p.sessions.map(optFor).join('')}</optgroup>`
     const opts=realP.map(grp).join('')+unres.map(p=>`<optgroup label="⋯ ${esc(p.name)}">${p.sessions.map(optFor).join('')}</optgroup>`).join('')
-      +`<optgroup label="⚙ session-less"><option value="__control__">⚙ control-plane (telemetry · flags · account · registry)</option></optgroup>`
+      +`<optgroup label="⚙ session-less"><option value="__control__">⚙ control-plane (telemetry · flags · account · registry)</option><option value="__caphealth__">${esc(capHealthLabel())}</option></optgroup>`
     if(sel.dataset.sig!==opts){ sel.innerHTML=opts; sel.dataset.sig=opts; if(curSel)sel.value=curSel }
     if(!curSel){ const p0=realP[0]||unres[0]; if(p0)curSel=`${p0.sessions[0].project_slug}::${p0.sessions[0].session_id}`; if(curSel)sel.value=curSel }
-    if(!curSel){ renderEmpty('No sessions captured yet. Start a tap with `asight monitor on` (Claude Code CLI) or `asight desktop on` (Claude Desktop, macOS + Clash Verge), then run your agent. Check what is arranged with `asight monitor status`.'); return }
-    // the control view replaces the session's timeline: coming back must fetch and render the session
-    // again (and show its own errors), not short-circuit on the sigs of the render it replaced
+    boardEmpty=!curSel
+    if(!curSel){ renderEmpty(emptyMessage()); return }
+    // the control and capture-health views replace the session's timeline: coming back must fetch and render the
+    // session again (and show its own errors), not short-circuit on the sigs of the render it replaced
+    if(curSel==='__caphealth__'){ document.body.classList.add('ctrlmode'); controlSig=null; lastCheapSig=null; lastRenderSig=null; renderCapHealthView(); return }
     if(curSel==='__control__'){ document.body.classList.add('ctrlmode'); lastCheapSig=null; lastRenderSig=null; await renderControlView(); return }
     document.body.classList.remove('ctrlmode'); controlSig=null // leaving control view: force a full re-render next time (else a stale session header sticks)
     hideSessionChrome(false)
@@ -828,6 +830,7 @@ async function renderControlView(){
   const sig=JSON.stringify(list.classes)
   const tl=document.getElementById('timeline')
   if(sig===controlSig && tl.dataset.mode==='control') return
+  capHSig=null
   controlSig=sig
   const got=await Promise.all((list.classes||[]).map(c=>fetch('/api/control?class='+encodeURIComponent(c.class)).then(r=>r.json()).then(d=>({class:c.class,records:d.records||[]})).catch(()=>({class:c.class,records:[]}))))
   controlData={}; got.forEach(c=>controlData[c.class]=c.records)
@@ -880,6 +883,89 @@ function openControlDetail(cls,i){
     `<div class="din">${fmtTime(r.ts_request)} · UA <b>${esc(hdr['user-agent']||'?')}</b> · request ${kf(rbytes(r))} bytes (request body isn't decoded for non-LLM calls; the response is)</div>`+
     `<div class="din" style="color:var(--dim)">response body:</div>`+
     collapse('<pre>'+esc(bodyStr)+'</pre>',bodyStr.length,'ctrl:'+cls+':'+i)
+}
+
+// ── D38 采集健康 (2.6 §C session-less group · 1.5): the ctrlmode grid over /api/capture-health — the timeline lists
+// failures by reason (24 h), the ledger what holds now, each agent's last capture and last failure, the daemon, the
+// last install / uninstall; a row opens its metadata in #detail. Not a session: the data is capture metadata, not
+// normalized rows. Every name shown (agent, where, code) comes from the payload: no harness or provider is named here.
+const NO_SESSIONS='No sessions captured yet. Start a tap with `asight monitor on` (Claude Code CLI) or `asight desktop on` (Claude Desktop, macOS + Clash Verge), then run your agent. Check what is arranged with `asight monitor status`.'
+let boardEmpty=false, capHSig=null, capHRows=[]
+// an empty board while capture fails or the collector is not running says so (0.1 §0 #5), never "not started yet"
+function emptyMessage(){
+  const s=capH&&capH.summary
+  if(capH&&capH.unreadable) return `没采到会话 · no sessions — and capture health could not be read (${capH.unreadable}); see 采集健康`
+  if(!s) return NO_SESSIONS
+  const who=s.part==='legacy'?'旧 MITM / the old capture':'采集器 / the collector'
+  if(s.state==='failing') return `没采到会话:${s.n} 个采集失败,见采集健康 · no sessions: ${s.n} capture failure(s), see 采集健康 (top bar / ⚙ session-less)`
+  if(s.state==='not-running'||s.state==='not-responding') return `没采到会话:${who}${s.state==='not-running'?'没在跑':'没响应'},见采集健康 · no sessions: ${s.part==='legacy'?'the old capture':'the collector'} is ${s.state==='not-running'?'not running':'not responding'} — see 采集健康`
+  return NO_SESSIONS
+}
+function capHealthLabel(){
+  const s=capH&&capH.summary
+  if(capH&&capH.unreadable) return '? 采集健康 · capture health (unreadable)'
+  if(!s) return '采集健康 · capture health'
+  return s.state==='failing'?`⚠ 采集健康 (${s.n}) · capture health`:'采集健康 · capture health'
+}
+const chRow=(i,tm,what,count,reason,cls='')=>`<div class="ctrlrow" data-ch="${i}"><span class="tm">${esc(tm)}</span><span class="m">${esc(count)}</span><span class="ep" title="${esc(reason)}">${esc(what)} — ${esc(reason)}</span><span class="st ${cls}"></span></div>`
+const groupWhat=g=>g.last&&g.last.event==='failure'?`${g.last.where}/${g.last.code}`:g.key
+function renderCapHealthView(){
+  hideSessionChrome(true)
+  document.getElementById('agentChip').textContent='⚙ 采集健康'
+  document.getElementById('forkChip').style.display='none'
+  document.getElementById('sessTitle').textContent='capture health · 采集健康'
+  const tl=document.getElementById('timeline'), led=document.getElementById('ledger')
+  if(!capH){ tl.dataset.mode='caphealth'; tl.innerHTML='<div class="ctrlhdr">reading /api/capture-health …</div>'; led.innerHTML=''; return }
+  const sig=JSON.stringify({...capH,generated_at:null})
+  if(sig===capHSig&&tl.dataset.mode==='caphealth') return
+  capHSig=sig
+  document.getElementById('sessMeta').textContent=`read from disk at ${fmtWhen(capH.generated_at)}`
+  if(capH.unreadable){ tl.dataset.mode='caphealth'; tl.innerHTML=`<div class="ctrlhdr">⚠ <b>capture health could not be read</b> — ${esc(capH.unreadable)}. Nothing below can be trusted to be complete; the files on disk are untouched.</div>`; led.innerHTML=''; return }
+  const c=capH.collector||{}, l=capH.legacy||{}, r=capH.raw||{}, rd=capH.read||{}
+  capHRows=[]
+  const row=(rec,tm,what,count,reason,cls)=>{ capHRows.push(rec); return chRow(capHRows.length-1,tm,what,count,reason,cls) }
+  const sec=(title,n,body,open)=>`<details class="ctrlsec" ${open?'open':''}><summary><b>${esc(title)}</b> <span class="cc">${n}</span></summary>${body||'<div class="ctrlrow" style="cursor:default;color:var(--dimmer)">none</div>'}</details>`
+  const fails=(c.failures||[]).slice().sort((a,b)=>String(b.last_ts).localeCompare(String(a.last_ts)))
+  let html=`<div class="ctrlhdr">⚙ <b>采集健康 · capture health</b> — every capture failure asight recorded, read from disk (the collector's <code>flows/</code>, its lock and install manifest, the raw journal, the old capture's events). A disclosure, not an alert: failures of the last ${esc(rd.window_hours||24)} h by reason; what was not captured by design is only counted. Click a row for its metadata (never record bytes).</div>`
+  if((rd.errors||[]).length) html+=`<div class="ctrlhdr" style="color:var(--amber)">⚠ 读不全 · could not read: ${rd.errors.map(e=>`<code>${esc(e.file)}</code> (${esc(e.error)})`).join(', ')} — what they hold is missing below.</div>`
+  if(rd.truncated) html+=`<div class="ctrlhdr">only the most recent part of <code>flows/</code> was read (older records left out).</div>`
+  html+=sec('failures · last 24 h',fails.length,fails.map(g=>row(g.last,fmtWhen(g.last_ts),groupWhat(g),'×'+g.count,(g.last&&(g.last.reason||(g.last.error&&g.last.error.message)))||'','err')).join(''),true)
+  if(l.present) html+=sec('old capture (MITM / reverse proxy) · '+l.state,(l.failures||[]).length,(l.failures||[]).map(g=>row(g.last,fmtWhen(g.last_ts),groupWhat(g),'×'+g.count,(g.last&&g.last.reason)||'','err')).join(''),(l.failures||[]).length>0)
+  html+=sec('raw layer (seal / verify / read)',(r.problems||[]).length,(r.problems||[]).map(p=>row(p,fmtWhen(p.ts),`${p.op} ${p.outcome}`,'',`${p.file||p.target||''} ${p.reason||''}`,'err')).join(''),(r.problems||[]).length>0)
+  const exp=Object.entries(c.expected||{})
+  html+=sec('not captured by design · counted',exp.reduce((n,[,k])=>n+k,0),exp.map(([k,n])=>`<div class="ctrlrow" style="cursor:default"><span class="tm"></span><span class="m">×${n}</span><span class="ep">${esc(k)}</span><span class="st"></span></div>`).join(''),false)
+  tl.dataset.mode='caphealth'; tl.innerHTML=html
+  document.querySelectorAll('#timeline .ctrlrow[data-ch]').forEach(el=>el.onclick=()=>openCapHealthDetail(+el.dataset.ch))
+  led.innerHTML=capHealthLedger(c,l)
+  document.querySelectorAll('#ledger .res[data-ch]').forEach(el=>el.onclick=()=>openCapHealthDetail(+el.dataset.ch))
+  document.getElementById('stats').innerHTML=`<span><b>${fails.length}</b> failure kinds</span><span><b>${(c.conditions||[]).length}</b> holding now</span>`
+}
+function capHealthLedger(c,l){
+  const d=c.daemon||{}
+  const item=(rec,nm,via,sub)=>{ capHRows.push(rec); return `<div class="res" data-ch="${capHRows.length-1}"><div class="top"><span class="nm" title="${esc(nm)}">${esc(nm)}</span><span class="via">${esc(via||'')}</span></div>${sub?`<div class="sub" style="font-size:10px;color:var(--dim)">${esc(sub)}</div>`:''}</div>` }
+  let html=`<div class="curmeta">${esc(capHealthView(capH,{okAt:capHOkAt,err:null,now:capHOkAt||0}).text)}</div>`
+  html+=`<h2><span class="gi" style="background:var(--red)"></span>holding now <span class="ct">(${(c.conditions||[]).length})</span></h2>`
+  if(c.conditions_as_of) html+=`<div style="color:var(--dim);font-size:10px">as of ${esc(fmtWhen(c.conditions_as_of))} — the collector daemon is not running</div>`
+  html+=(c.conditions||[]).map(x=>item(x,`${x.kind}${x.pid!=null?' pid '+x.pid:''}${x.agent?' '+x.agent:''}${x.host?' '+x.host:''}`,'since '+fmtWhen(x.since),x.reason)).join('')||'<div style="color:var(--dimmer);font-size:10px">nothing</div>'
+  html+=`<h2><span class="gi" style="background:var(--accent)"></span>collector daemon</h2>`
+  html+=c.installed===false?item(c,c.residue&&c.residue.length?`not installed · ${c.residue.length} item(s) left`:'not installed','',(c.residue||[]).map(x=>`${x.path} (${x.result})`).join(' · ')):item(d,`${d.state||'?'}${d.pid?' · pid '+d.pid:''}`,c.switch&&c.switch.desired?'switch '+c.switch.desired:'',[d.last_start&&`started ${fmtWhen(d.last_start.ts)}${d.last_start.foreground?' (foreground: closing its terminal stops it)':''}`,d.last_stop&&`stopped ${fmtWhen(d.last_stop.ts)}${d.last_stop.signal?' by '+d.last_stop.signal:''}`,d.why,d.error,d.last_record_at&&`last record ${fmtWhen(d.last_record_at)}`].filter(Boolean).join(' · '))
+  if((c.agents||[]).length){
+    html+=`<h2><span class="gi" style="background:var(--green)"></span>agents · last 24 h</h2>`
+    html+=c.agents.map(a=>item(a,a.agent,'',`last captured ${a.last_captured?fmtWhen(a.last_captured):'—'} · last failure ${a.last_failure?fmtWhen(a.last_failure)+' ('+a.last_failure_key+')':'—'}`)).join('')
+  }
+  const notes=(c.install&&[...(c.install.install||[]),...(c.install.uninstall||[])])||[]
+  if(notes.length){
+    html+=`<h2><span class="gi" style="background:var(--amber)"></span>last install / uninstall</h2>`
+    html+=notes.map(n=>item(n,`${n.event} · ${n.kind||''}`,fmtWhen(n.ts),n.reason)).join('')
+  }
+  if(l.present&&l.state!=='none') html+=`<h2><span class="gi" style="background:var(--purple)"></span>old capture</h2>`+item(l,l.state,l.last_start?'started '+fmtWhen(l.last_start.ts):'',l.capture?`${l.capture.file} written ${fmtWhen(l.capture.mtime)}, no events file`:(l.error||''))
+  return html
+}
+function openCapHealthDetail(i){
+  const rec=capHRows[i]; if(!rec) return
+  const det=document.getElementById('detail'), txt=JSON.stringify(rec,null,2)
+  det.className='open'
+  det.innerHTML=`<div class="dclose" id="dclose">✕ close</div><h3>采集健康 · ${esc(rec.event||rec.kind||rec.op||rec.state||rec.agent||'record')}</h3><div class="din">metadata only — asight's capture records never carry request or response bytes here</div>`+collapse('<pre>'+esc(txt)+'</pre>',txt.length,'caph:'+i)
 }
 
 function buildLanes(A,probes){
@@ -2210,7 +2296,10 @@ async function pollCapHealth(){
   }catch(e){ capHErr=String(e&&e.message||e) }
   finally{ capHBusy=false }
   renderCapHealth()
+  if(curSel==='__caphealth__') renderCapHealthView() // its own data: refreshed even with "live" unchecked
+  else if(boardEmpty) renderEmpty(emptyMessage())
 }
+document.getElementById('caphealth').onclick=()=>{ curSel='__caphealth__'; const sel=document.getElementById('fileSel'); sel.dataset.sig=''; closeDetail(); poll() }
 pollCapHealth()
 setInterval(pollCapHealth,CAPH_MS)
 
