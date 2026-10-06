@@ -10,7 +10,7 @@
 //   • model/schema.mjs (3.2) → mapUsage('cc', rawUsage)  (canonical usage mapping)
 import { contentHash, scanJson, hashSpan, spanOf } from './content-hash.mjs';
 import { collectExtra } from './contract.mjs';
-import { ENVELOPE_CONSUMED } from './envelope.mjs';
+import { ENVELOPE_CONSUMED, v0RequestOf } from './envelope.mjs';
 import { wireFormatOf, contextStateOf } from '../dissect/registry.mjs';
 import { hintsOf } from '../dissect/harnesses.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
@@ -54,7 +54,7 @@ export function reqObj(record) {
       return {};
     }
   }
-  return {};
+  return v0RequestOf(record) ?? {}; // the demo v0 shape: the parsed request object (see envelope.mjs)
 }
 function withParsedBody(record) {
   return { ...record, req_body: reqObj(record) };

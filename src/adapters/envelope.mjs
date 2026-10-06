@@ -8,6 +8,13 @@ import { collectExtra } from './contract.mjs';
 import { classOf, controlKind, nativeId } from '../identity/session-identity.mjs';
 import { isProbeEndpoint, unsupportedOf, wireFormatOf, boardDissectorFor } from '../dissect/registry.mjs';
 
+// The demo v0 envelope has no `req_body` (the verbatim request string, D10); it carries the parsed request as an object under
+// `request`, and the board has always read it from there (view/assemble.mjs, view/analyze.mjs). The ETL's identity layer reads a
+// PARSED body too, so it takes that object when there is no req_body at all — otherwise every v0 call counts 0 messages, takes
+// no lane from its model, and DuckDB never finds the compaction the board shows. Only the parsed object: v0 never stored the wire
+// bytes, so no block, span or raw ref can be made from it (and none is). → the object, or null.
+export const v0RequestOf = (record) => (record && record.req_body == null && record.request && typeof record.request === 'object' ? record.request : null);
+
 // Every envelope key the read side understands (4.1 D10, 4.6 §记录, the D33 intervention reserve, D37 and
 // the WebSocket recorder's fields, gate G7). Shared by every adapter, so none reports these as unmapped.
 export const ENVELOPE_CONSUMED = new Set([

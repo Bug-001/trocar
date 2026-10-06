@@ -20,7 +20,7 @@
 import { createHash } from 'node:crypto';
 import { createRegistry } from '../adapters/contract.mjs';
 import { ccAdapter } from '../adapters/cc.mjs';
-import { envelopeAdapter, quarantineReason } from '../adapters/envelope.mjs';
+import { envelopeAdapter, quarantineReason, v0RequestOf } from '../adapters/envelope.mjs';
 import { dissectorAdapter } from '../adapters/dissected.mjs';
 import { RESPONSES, CHAT } from '../dissect/openai.mjs';
 import { RESPONSES_WS } from '../dissect/openai-ws.mjs';
@@ -102,7 +102,8 @@ function decodeBody(record) {
       return { ...record, req_body: {} };
     }
   }
-  return { ...record, req_body: {} };
+  // The demo v0 shape: the parsed `request` object stands in for req_body (adapters/envelope.mjs::v0RequestOf)
+  return { ...record, req_body: v0RequestOf(record) ?? {} };
 }
 function requestBytes(record) {
   // 3.2:47 counts the body's bytes ON THE WIRE: for a body sent compressed, req_body is its decoded text
