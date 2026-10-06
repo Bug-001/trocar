@@ -10,9 +10,11 @@
 //                        or the operator's 「只记日志」): never shown as an empty body.
 //   ctl.labels           what to say in place (4.1 保真边界, via captureLabelsOf): 本条采于 D40 之前,只存了长度 · 只记日志 · 已截断 · 压缩请求体未解码 …
 //   ctl.host / hostHeader / hostDiffers   the host the bytes went to (SNI …) and the request's own Host header — a mismatch is a behaviour signal
+//                        (not for a reverse-proxy record: there `host` is the upstream and the Host header is the client's address to the proxy, always different)
+//   ctl.req / ctl.resp .truncated / .incomplete / .stored_bytes   a body cut at the capture cap, or a request that never finished: the stored bytes are only part of it
 // A small JSON reply stays in `resp.body` (the feature-flag ledger reads it there); a body over the cap leaves `resp.body` and is in ctl.resp.text.
 // Envelope fields only — no provider knowledge, no host or endpoint literal (invariant 3). Pure over the record.
-import { captureLabelsOf, bodyRetentionOf } from '../dissect/capture-labels.mjs';
+import { captureLabelsOf, bodyRetentionOf, reqIncompleteOf, isLogOnly } from '../dissect/capture-labels.mjs';
 import { requestEncodingOf } from '../dissect/request-body.mjs';
 import { trafficClassOf } from '../dissect/traffic.mjs';
 import { headerOf } from '../dissect/harnesses.mjs';
@@ -43,7 +45,14 @@ function textBody(kind, text, bytes) {
   return { kind, text: t, chars, shown_chars: t.length, clipped: t.length < chars, ...(bytes != null ? { bytes } : {}) };
 }
 
+// the bytes of the request body that are in the record (a stored prefix when the call was cut or never finished)
+const storedReqBytes = (rec) => (typeof rec.req_body === 'string' ? Buffer.byteLength(rec.req_body) : typeof rec.req_body_b64 === 'string' ? b64Bytes(rec.req_body_b64) : null);
 function reqView(rec) {
+  const v = reqBodyView(rec);
+  const inc = reqIncompleteOf(rec); // req_truncated (cut at the cap) / req_partial (never finished): what is stored is not the request (invariant 4)
+  return inc ? { ...v, incomplete: true, truncated: inc.truncated, ...(inc.partial ? { partial: inc.partial } : {}), stored_bytes: inc.storedBytes ?? storedReqBytes(rec) } : v;
+}
+function reqBodyView(rec) {
   const wire = finite(rec.body_wire_bytes && rec.body_wire_bytes.req);
   const b = rec.req_body;
   if (typeof b === 'string') {
@@ -52,7 +61,11 @@ function reqView(rec) {
     const enc = requestEncodingOf(rec);
     return enc ? { ...v, decoded_from: enc } : v; // a compressed request shown decoded says so (4.6 §记录)
   }
-  if (b && typeof b === 'object' && b.verbatim === false) return { kind: 'length-only', bytes: finite(b.raw_chars) ?? wire };
+  if (b && typeof b === 'object' && b.verbatim === false) {
+    const n = finite(b.raw_chars) ?? wire;
+    if (n === 0 && !isLogOnly(rec)) return { kind: 'empty', bytes: 0 }; // a pre-D40 GET kept `raw_chars: 0`: there was no body, nothing was lost
+    return { kind: 'length-only', bytes: n };
+  }
   if (b == null && typeof rec.req_body_b64 === 'string') {
     const enc = requestEncodingOf(rec);
     const n = wire ?? b64Bytes(rec.req_body_b64);
@@ -70,10 +83,12 @@ function respView(rec) {
   const wire = finite(rec.body_wire_bytes && rec.body_wire_bytes.resp);
   const base = wire != null ? { bytes: wire } : {};
   if (r.verbatim === false) return { kind: 'length-only', bytes: finite(r.raw_chars) ?? wire };
+  // a body cut at the capture cap (resp.truncated + body_bytes): `bytes` is the whole reply on the wire, the text only its stored prefix
+  const cut = (part, v) => (part.truncated === true ? { ...v, truncated: true, stored_bytes: finite(part.body_bytes) } : v);
   const bodyOf = (part) => {
     if (part.kind === 'ws' && Array.isArray(part.messages)) return textBody('ws', part.messages.map(messageText).join('\n'), wire ?? undefined);
-    if (typeof part.raw === 'string') return textBody(part.kind === 'sse' ? 'sse' : 'text', part.raw, wire ?? undefined);
-    if (typeof part.raw_b64 === 'string') return part.encoding_error ? { kind: 'undecoded', encoding: part.encoding_error, bytes: wire ?? b64Bytes(part.raw_b64), ...base } : { kind: 'binary', bytes: wire ?? b64Bytes(part.raw_b64), hex: hexOfB64(part.raw_b64) };
+    if (typeof part.raw === 'string') return cut(part, textBody(part.kind === 'sse' ? 'sse' : 'text', part.raw, wire ?? undefined));
+    if (typeof part.raw_b64 === 'string') return part.encoding_error ? { kind: 'undecoded', encoding: part.encoding_error, bytes: wire ?? b64Bytes(part.raw_b64), ...base } : cut(part, { kind: 'binary', bytes: wire ?? b64Bytes(part.raw_b64), hex: hexOfB64(part.raw_b64) });
     if (part.kind === 'json') {
       const text = JSON.stringify(part.body === undefined ? null : part.body, null, 2);
       return text.length <= BODY_SHOW_CHARS ? { kind: 'json', ...base } : textBody('json', text, wire ?? undefined); // small: the record's own resp.body is shown
@@ -96,9 +111,14 @@ export function controlRecordWire(rec) {
   try {
     const hostHeader = headerOf(rec, 'host');
     const norm = (h) => (h ? String(h).toLowerCase().replace(/:\d+$/, '') : null);
+    const labels = captureLabelsOf(rec);
+    const inc = reqIncompleteOf(rec); // the request-body labels live in reqIncompleteOf (capture-labels.mjs), not in captureLabelsOf
+    if (inc) labels.push({ id: 'req-incomplete', label: inc.truncated ? '已截断 · request cut at the cap' : '不完整 · request never finished', text: inc.text });
     const ctl = {
-      retention: bodyRetentionOf(rec), traffic_class: trafficClassOf(rec), labels: captureLabelsOf(rec),
-      host: typeof rec.host === 'string' ? rec.host : null, hostHeader, hostDiffers: !!(typeof rec.host === 'string' && hostHeader && norm(rec.host) !== norm(hostHeader)),
+      retention: bodyRetentionOf(rec), traffic_class: trafficClassOf(rec), labels,
+      host: typeof rec.host === 'string' ? rec.host : null, hostHeader,
+      // a reverse-proxy record's `host` is the upstream and its Host header the client's address to the proxy: they differ by construction (4.1), not as a signal
+      hostDiffers: !!(rec.capture !== 'reverse-proxy' && typeof rec.host === 'string' && hostHeader && norm(rec.host) !== norm(hostHeader)),
       wire_bytes: rec.body_wire_bytes && typeof rec.body_wire_bytes === 'object' ? { req: finite(rec.body_wire_bytes.req), resp: finite(rec.body_wire_bytes.resp) } : null,
       req: reqView(rec), resp: respView(rec),
     };

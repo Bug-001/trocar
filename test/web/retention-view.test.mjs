@@ -286,6 +286,30 @@ test('2.6 #5 — a body cut for display says how much is shown of how much there
   assert.match(html, /the rest is intact in the source record/)
 })
 
+test('H4 — a request cut at the cap or never finished is shown as a prefix: 已截断 / 不完整, how much of how much is stored, and no 「逐字」 tag on it', async () => {
+  let html = await detail(full({ id: 'c', endpoint: '/api/oauth/file_upload', cls: 'files', reqBody: 'x'.repeat(2000), wire: [100000000, 5], extra: { req_truncated: true, req_body_bytes: 2000 } }))
+  assert.match(html, /已截断 · request cut at the cap/, 'the label')
+  assert.match(html, /<b>已截断 · cut at the cap<\/b> · only the first 2\.0k of 100000k bytes is stored/)
+  assert.match(html, /⟨前缀,不是完整的体 · prefix only/)
+  assert.doesNotMatch(html, /⟨逐字/, 'the unfold tag does not call a prefix verbatim')
+  html = await detail(full({ id: 'p', reqBody: 'y'.repeat(2000), wire: [2000, 5], extra: { req_partial: 'aborted' } }))
+  assert.match(html, /不完整 · request never finished/)
+  assert.match(html, /<b>不完整 · never finished<\/b> · only the first 2\.0k of 2\.0k bytes is stored/)
+  assert.doesNotMatch(html, /⟨逐字/)
+  html = await detail(full({ id: 'b', reqBody: null, reqB64: Buffer.alloc(64, 1).toString('base64'), wire: [5000, 5], extra: { req_truncated: true, req_body_bytes: 64 } }))
+  assert.match(html, /二进制 · 前缀,不是完整的体/)
+  assert.doesNotMatch(html, /逐字存为 base64/)
+  // the complete body keeps its tag
+  html = await detail(full({ id: 'ok', reqBody: 'z'.repeat(2000), wire: [2000, 5] }))
+  assert.match(html, /⟨逐字 · /)
+})
+
+test('L1 — a pre-D40 GET with no body shows an empty body, not 「只存了长度 … this is not an empty body」', async () => {
+  const html = await detail({ ...preD40({ id: 'g', rawChars: 0 }), method: 'GET' })
+  assert.match(html, /request body: \(empty\)/)
+  assert.doesNotMatch(html, /本条采于 D40 之前|not an empty body|length only/)
+})
+
 test('4.1 #9 — the host the bytes went to and the request\'s Host header are both shown, and a mismatch is flagged (a behaviour signal)', async () => {
   let html = await detail(full({ id: 'h1', host: 'api.example.test', headers: { 'user-agent': 'x', host: 'api.example.test:443' } }))
   assert.match(html, /host <b>api\.example\.test<\/b> · Host header <b>api\.example\.test:443<\/b>/)

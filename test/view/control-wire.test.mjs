@@ -108,6 +108,45 @@ test('a non-LLM WebSocket call: its messages as stored (and the ones that are on
   assert.deepEqual(w.resp.messages, undefined)
 })
 
+// ── review: what the panel says about a body that is only part of the call, an empty one, and a mismatching Host ──────────
+test('H4 — a request cut at the capture cap, or one that never finished, is labelled in place and carries how much of it is stored: never shown as the whole body (invariant 4)', () => {
+  // the collector's record of a 100 MB upload cut at the cap: 20 chars stored, 100,000,000 on the wire
+  const cut = controlRecordWire(full({ id: 'c', endpoint: '/api/oauth/file_upload', cls: 'files', reqBody: 'x'.repeat(20), wire: [100000000, 5], extra: { req_truncated: true, req_body_bytes: 20 } }))
+  assert.equal(label(cut, 'req-incomplete').label, '已截断 · request cut at the cap')
+  assert.match(label(cut, 'req-incomplete').text, /cut at the capture cap: only the first 20 bytes are stored/)
+  assert.deepEqual([cut.ctl.req.truncated, cut.ctl.req.incomplete, cut.ctl.req.stored_bytes, cut.ctl.req.bytes, cut.ctl.req.chars], [true, true, 20, 100000000, 20])
+  // a 413 that came back before the upload finished: req_partial, no req_body_bytes — the stored bytes are what arrived
+  const part = controlRecordWire(full({ id: 'p', reqBody: '{"half":', wire: [8, 5], extra: { req_partial: 'early-response' } }))
+  assert.equal(label(part, 'req-incomplete').label, '不完整 · request never finished')
+  assert.match(label(part, 'req-incomplete').text, /never finished uploading/)
+  assert.deepEqual([part.ctl.req.partial, part.ctl.req.truncated, part.ctl.req.stored_bytes], ['early-response', false, 8])
+  // binary prefix: the same
+  const bin = controlRecordWire(full({ id: 'b', reqBody: null, reqB64: Buffer.alloc(64, 1).toString('base64'), wire: [5000, 5], extra: { req_truncated: true, req_body_bytes: 64 } }))
+  assert.deepEqual([bin.ctl.req.kind, bin.ctl.req.truncated, bin.ctl.req.stored_bytes, bin.ctl.req.bytes], ['binary', true, 64, 5000])
+  // a response cut at the cap says it on its side too
+  const rcut = controlRecordWire(full({ id: 'r', resp: { status: 200, kind: 'text', raw: 'y'.repeat(10), truncated: true, body_bytes: 10 }, wire: [5, 99999] }))
+  assert.deepEqual([rcut.ctl.resp.truncated, rcut.ctl.resp.stored_bytes, rcut.ctl.resp.bytes], [true, 10, 99999])
+  assert.ok(label(rcut, 'resp-truncated'))
+  // a complete request carries neither
+  const ok = controlRecordWire(full({ id: 'ok', reqBody: '{"a":1}' }))
+  assert.deepEqual([label(ok, 'req-incomplete'), ok.ctl.req.truncated, ok.ctl.req.incomplete], [undefined, undefined, undefined])
+})
+
+test('L1 — a pre-D40 record whose kept length is 0 had no body (a GET): it is an empty body, not 「只存了长度」 and not 「this is not an empty body」', () => {
+  const get = controlRecordWire({ ...preD40({ id: 'g', rawChars: 0 }), method: 'GET', endpoint: '/api/web/domain_info?domain=x.test' })
+  assert.deepEqual([get.ctl.retention, get.ctl.req.kind, get.ctl.req.bytes, get.ctl.labels.map((l) => l.id)], ['full', 'empty', 0, []])
+  // one that kept a length is still 「只存了长度」, and a log record of 0 bytes stays a log record
+  assert.equal(controlRecordWire(preD40({ id: 'o', rawChars: 12 })).ctl.req.kind, 'length-only')
+  const log0 = controlRecordWire(logged({ id: 'l0', wire: [0, 5] }))
+  assert.deepEqual([log0.ctl.retention, log0.ctl.req.kind], ['log', 'length-only'])
+})
+
+test('F7 — a reverse-proxy record\'s host (the upstream) always differs from the Host header (the client\'s address to the proxy): that is not a behaviour signal; the same pair from any other capture is', () => {
+  const rp = { ...full({ id: 'rp', host: 'api.anthropic.com', proc: null, headers: { 'user-agent': 'x', host: '127.0.0.1:9800' } }), capture: 'reverse-proxy' }
+  assert.deepEqual([controlRecordWire(rp).ctl.host, controlRecordWire(rp).ctl.hostHeader, controlRecordWire(rp).ctl.hostDiffers], ['api.anthropic.com', '127.0.0.1:9800', false])
+  for (const capture of ['mitm', 'transparent']) assert.equal(controlRecordWire({ ...rp, capture }).ctl.hostDiffers, true, capture)
+})
+
 test('a record this cannot read is returned with the reason, never thrown at the panel', () => {
   for (const r of [{}, { req_body: 5, resp: 7 }, { req_body: {}, resp: { kind: 'json' } }, null === 1 ? 0 : { resp: { kind: 'error', partial: 1 } }]) {
     const w = controlRecordWire(r)
@@ -133,6 +172,22 @@ test('K7 — a session with calls kept as a log line only: counted and labelled,
   const only = sessionView([recs[1]], 'S-d40')
   assert.deepEqual([only.analyzed.stats.calls, only.logged.count], [0, 1], 'a session of only log calls says so instead of showing nothing')
   assert.equal(sessionView([recs[0]], 'S-d40').logged, null, 'nothing to say when nothing was logged')
+})
+
+// review (F5): 2.6 §C used to say session-attached non-inference calls (probe / other) "follow the same body rules via openDetail". They do not:
+// the probe lane draws the measurement and a note, `other` is only counted. Pinned, so the spec's now-narrower sentence stays true, and so the
+// probe's `retention` (what the note says about its body) is carried through the session payload.
+test('F5 — a session-attached count_tokens probe and a session-attached other call keep their bodies in the capture record only: the session payload carries the measurement and the retention, never the body', () => {
+  const sid = { 'user-agent': 'claude-cli/2', host: 'api.anthropic.com', 'x-claude-code-session-id': 'S-d40' }
+  const probe = (id, at, extra = {}) => full({ id, at, endpoint: '/v1/messages/count_tokens', cls: 'token-count', headers: sid, reqBody: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'PROBE-BODY-MARKER-' + id }] }), resp: { status: 200, kind: 'json', body: { input_tokens: 1234 } }, ...extra })
+  const other = full({ id: 'ot', at: 5, endpoint: '/api/something/else', cls: 'other', headers: sid, reqBody: '{"note":"OTHER-BODY-MARKER"}' })
+  const recs = [inference({ id: 'a1', at: 1 }), probe('p1', 2), { ...logged({ id: 'p2', at: 3, endpoint: '/v1/messages/count_tokens', cls: 'token-count', headers: sid }), resp: { status: 200, kind: 'json', body: { input_tokens: 77 }, headers: {}, request_id: null } },
+    { ...preD40({ id: 'p3', at: 4, endpoint: '/v1/messages/count_tokens', headers: sid, resp: { status: 200, kind: 'json', body: { input_tokens: 55 } } }) }, other]
+  const v = sessionView(recs, 'S-d40')
+  const wire = JSON.stringify(v)
+  assert.doesNotMatch(wire, /PROBE-BODY-MARKER|OTHER-BODY-MARKER/, 'no request body of a probe or an `other` call goes down with the session')
+  assert.deepEqual(v.probes.series.map((p) => [p.tokens, p.retention]), [[1234, 'full'], [77, 'log'], [55, 'legacy-meta']], 'each probe says what became of its body (the lane note reads it)')
+  assert.deepEqual([v.meta.probes, v.meta.other], [3, 1], 'the other call is counted, and only counted')
 })
 
 test('K7 — the session list counts them (and the archive layer\'s meta agrees with the board)', () => {

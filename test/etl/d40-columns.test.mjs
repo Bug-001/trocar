@@ -44,6 +44,13 @@ test('3.2 #5 — the six D40 columns hold the expected values for a D40 record, 
   assert.ok(num(c.oldllm.request_bytes) > 0)
 })
 
+test('a pre-D40 record with a kept length of 0 is body_retention full (it had no body), not legacy-meta, so the size view does not count a GET as a lost body', async () => {
+  const conn = await freshConn()
+  await runEtl([{ ...preD40({ id: 'get', rawChars: 0, endpoint: '/api/web/domain_info?domain=x.test' }), method: 'GET' }, preD40({ id: 'post', at: 2, rawChars: 99 })], conn)
+  const c = await calls(conn)
+  assert.deepEqual([c.get.body_retention, num(c.get.request_bytes), c.post.body_retention, num(c.post.request_bytes)], ['full', 0, 'legacy-meta', 99])
+})
+
 test('the columns are not invented where nothing says them: no host → NULL, an unknown agent is harness NULL, no stored size → NULL', async () => {
   const conn = await freshConn()
   await runEtl([full({ id: 'x', host: null, proc: { pid: 1, exe: '/x/mystery', agent: 'mystery' }, headers: { 'user-agent': 'curl/8' } })], conn)

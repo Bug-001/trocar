@@ -911,13 +911,20 @@ function ctlBodyHtml(v,title,key){
   if(v.kind==='length-only') return `<div class="din" ${dim}>${title}: <b>非逐字 · 只存了长度 · length only${v.bytes!=null?' · '+v.bytes+' bytes':''}</b> — the body was not stored (see the label above); this is not an empty body.</div>`
   if(v.kind==='empty') return `<div class="din" ${dim}>${title}: (empty)</div>`
   if(v.kind==='none') return `<div class="din" ${dim}>${title}: (no body in the record)</div>`
-  if(v.kind==='binary') return `<div class="din" ${dim}>${title}: <b>二进制 · ${v.bytes} 字节 · 逐字存为 base64</b> (binary, stored verbatim as base64) — the first ${Math.min(v.bytes,4096)} bytes as hex:</div><pre>${esc(v.hex||'')}</pre>`
+  // a body that is only part of the call (cut at the capture cap, or a request that never finished): never 「逐字」 of the whole — it says
+  // how much of how much is stored (invariant 4; the label above says why)
+  const cut=!!(v.truncated||v.incomplete)
+  const cutWord=v.truncated?'已截断 · cut at the cap':'不完整 · never finished'
+  const cutOf=cut?` · <b>${cutWord}</b> · ${v.stored_bytes!=null?'only the first '+kf(v.stored_bytes)+' of ':'a prefix of '}${v.bytes!=null?kf(v.bytes):'?'} bytes is stored`:''
+  if(v.kind==='binary') return cut
+    ? `<div class="din" ${dim}>${title}: <b>二进制 · 前缀,不是完整的体</b>${cutOf} — the first ${Math.min(v.stored_bytes!=null?v.stored_bytes:4096,4096)} bytes as hex:</div><pre>${esc(v.hex||'')}</pre>`
+    : `<div class="din" ${dim}>${title}: <b>二进制 · ${v.bytes} 字节 · 逐字存为 base64</b> (binary, stored verbatim as base64) — the first ${Math.min(v.bytes,4096)} bytes as hex:</div><pre>${esc(v.hex||'')}</pre>`
   if(v.kind==='undecoded') return `<div class="din" ${dim}>${title}: <b>压缩请求体未解码 · compressed, not decoded</b> · ${esc(v.encoding||'')}${v.bytes!=null?' · '+v.bytes+' bytes':''}</div>`
   const text=v.text==null?'':String(v.text)
   const clip=v.clipped?` <span class="pobadge">已截断显示 · showing the first ${kf(v.shown_chars)} of ${kf(v.chars)} chars</span> the rest is intact in the source record.`:''
   const dec=v.decoded_from?` · sent ${esc(v.decoded_from)}-compressed, shown decoded`:''
-  return `<div class="din" ${dim}>${title}${v.bytes!=null?' · '+kf(v.bytes)+' bytes':''}${dec}${clip}:</div>`+
-    collapse('<pre>'+esc(text)+'</pre>',text.length,key,`⟨逐字 · ${v.bytes!=null?kf(v.bytes)+' 字节':kf(text.length)+' chars'} · click to unfold⟩`)
+  return `<div class="din" ${dim}>${title}${cut?cutOf:v.bytes!=null?' · '+kf(v.bytes)+' bytes':''}${dec}${clip}:</div>`+
+    collapse('<pre>'+esc(text)+'</pre>',text.length,key,cut?`⟨前缀,不是完整的体 · prefix only · click to unfold⟩`:`⟨逐字 · ${v.bytes!=null?kf(v.bytes)+' 字节':kf(text.length)+' chars'} · click to unfold⟩`)
 }
 function ctlLabelsHtml(c){
   return ((c&&c.labels)||[]).map(l=>`<div class="rpk"><span class="pobadge" title="${esc(l.text||'')}">${esc(l.label)}</span> ${esc(l.text||'')}</div>`).join('')

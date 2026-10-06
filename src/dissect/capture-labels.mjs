@@ -165,7 +165,8 @@ export const isLogOnly = (rec) => !!rec && typeof rec === 'object' && rec.body_r
 export function bodyRetentionOf(rec) {
   if (isLogOnly(rec)) return 'log';
   const b = rec && rec.req_body;
-  if (rec && rec.is_llm_call !== true && b && typeof b === 'object' && b.verbatim === false && Number.isFinite(b.raw_chars)) return 'legacy-meta';
+  // raw_chars 0 is a call that had no body (a GET: domain_info, list sessions): nothing was lost, so it is not 「只存了长度」
+  if (rec && rec.is_llm_call !== true && b && typeof b === 'object' && b.verbatim === false && Number.isFinite(b.raw_chars) && b.raw_chars > 0) return 'legacy-meta';
   return 'full';
 }
 // → null for a call whose bodies are all there, else {retention, label, text, harness?, class?}. The label of a `log` call names

@@ -29,6 +29,15 @@ test('the shape alone identifies a pre-D40 record, but only a NON-inference one:
   assert.deepEqual([bodyRetentionOf(null), bodyRetentionOf({}), isLogOnly(undefined)], ['full', 'full', false])
 })
 
+test('a pre-D40 record that kept a length of 0 had no body: it is full, not legacy-meta, and says nothing (review L1)', () => {
+  const get = preD40({ id: 'g', rawChars: 0 })
+  assert.equal(bodyRetentionOf(get), 'full')
+  assert.equal(retentionLabelOf(get), null)
+  assert.deepEqual(captureLabelsOf(get).filter((l) => l.id.startsWith('retention-')), [])
+  assert.equal(bodyRetentionOf(preD40({ id: 'o', rawChars: 1 })), 'legacy-meta', 'one byte kept as a length is still only a length')
+  assert.equal(bodyRetentionOf({ ...logged({ id: 'l', wire: [0, 3] }) }), 'log', 'a log record is told by body_retention first')
+})
+
 test('a log record says 「只记日志 · 用户设置 <harness> · <类别>」 with the harness the level was looked up under; an old-capture record is the cc row', () => {
   const l = retentionLabelOf(logged({ id: 'l', endpoint: '/v1/code/sessions/s/worker/events', cls: 'session-sync' }))
   assert.deepEqual([l.retention, l.harness, l.class, l.label], ['log', 'cc', 'session-sync', '只记日志 · 用户设置 cc · session-sync'])
