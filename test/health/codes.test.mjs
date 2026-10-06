@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { NOT_CAPTURED_FAILURE, NOT_CAPTURED_EXPECTED, FAILURE_EVENTS, STATE_EVENTS, WHERE, CODES, TRUST_REASONS, OFF_WHERE, OFF_EVENTS, OFF_CODES, isFailure, isCode, notCapturedClass, checkRecord } from '../../src/health/codes.mjs'
+import { NOT_CAPTURED_FAILURE, NOT_CAPTURED_EXPECTED, FAILURE_EVENTS, STATE_EVENTS, CODES, TRUST_REASONS, OFF_WHERE, OFF_EVENTS, OFF_CODES, isFailure, isCode, isEvent, isWhere, notCapturedClass, checkRecord } from '../../src/health/codes.mjs'
 import { WHERE_OFF, EVENT_OFF_NOTE, CODE_OFF } from '../../src/off/names.mjs'
 import { EVENT, CODE, TRUST_REASON } from '../../src/collector/core/codes.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
@@ -20,9 +20,9 @@ const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e
 // `fail` for parse errors); `failure('…')` is the daemon's failure recorder (its first argument is `where`).
 function literals(root) {
   const out = []
-  // src/capture: the old capture's event writers (RFC 4.1 过渡期, D38) use the same names
-  const legacy = fs.existsSync(path.join(root, 'src', 'capture')) ? walk(path.join(root, 'src', 'capture')) : []
-  for (const f of [...walk(path.join(root, 'src', 'collector')), ...legacy]) {
+  // src/capture: the old capture's event writers (RFC 4.1 过渡期, D38) use the same names; src/off and src/cli (RFC 1.6, D39⑦) write `off`'s
+  const more = ['capture', 'off', 'cli'].flatMap((d) => (fs.existsSync(path.join(root, 'src', d)) ? walk(path.join(root, 'src', d)) : []))
+  for (const f of [...walk(path.join(root, 'src', 'collector')), ...more]) {
     const src = fs.readFileSync(f, 'utf8')
     const rel = path.relative(root, f)
     const grab = (re, kind) => { for (const m of src.matchAll(re)) out.push({ kind, name: m[1], file: rel }) }
@@ -35,18 +35,24 @@ function literals(root) {
     // a name written through the collector's name maps (src/collector/core/codes.mjs): `EVENT.agentTrusted`, `CODE.residue`
     for (const m of src.matchAll(/\bEVENT\.(\w+)/g)) out.push({ kind: 'event', name: EVENT[m[1]] ?? `EVENT.${m[1]} (not in the map)`, file: rel })
     for (const m of src.matchAll(/\bCODE\.(\w+)/g)) out.push({ kind: 'code', name: CODE[m[1]] ?? `CODE.${m[1]} (not in the map)`, file: rel })
+    // and through src/off/names.mjs, the undo side's own copy (D39⑦): `CODE_OFF.backupKept`, `EVENT_OFF_NOTE`, `WHERE_OFF`
+    for (const m of src.matchAll(/\bCODE_OFF\.(\w+)/g)) out.push({ kind: 'code', name: CODE_OFF[m[1]] ?? `CODE_OFF.${m[1]} (not in the map)`, file: rel })
+    for (const m of src.matchAll(/\bEVENT_OFF_NOTE\b/g)) out.push({ kind: 'event', name: EVENT_OFF_NOTE, file: rel })
+    for (const m of src.matchAll(/\bWHERE_OFF\b/g)) out.push({ kind: 'where', name: WHERE_OFF, file: rel })
     if (rel.endsWith(path.join('ws', 'recorder.mjs'))) grab(/\bfail\(\s*'([^']+)'/g, 'code')
   }
   return out
 }
-const outside = (lits) => lits.filter(({ kind, name }) => !(kind === 'event' ? [...FAILURE_EVENTS, ...STATE_EVENTS].includes(name)
-  : kind === 'where' ? WHERE.includes(name) : kind === 'code' ? isCode(name) : [...NOT_CAPTURED_FAILURE, ...NOT_CAPTURED_EXPECTED].includes(name)))
+// the same sets checkRecord() judges by (isEvent / isWhere / isCode), so a name the scan lets through is one the check lets through
+const outside = (lits) => lits.filter(({ kind, name }) => !(kind === 'event' ? isEvent(name)
+  : kind === 'where' ? isWhere(name) : kind === 'code' ? isCode(name) : [...NOT_CAPTURED_FAILURE, ...NOT_CAPTURED_EXPECTED].includes(name)))
 
 test('D38 every event / where / code / not_captured a collector writer names is in the closed set (src/health/codes.mjs)', () => {
   const lits = literals(REPO)
   for (const [kind, name] of [['event', 'agent-untrusted'], ['where', 'engine'], ['not_captured', 'h2'], ['code', 'write-failed']]) {
     assert.ok(lits.some((l) => l.kind === kind && l.name === name), `the scan still sees ${kind} ${name} (else it proves nothing)`)
   }
+  assert.ok(lits.some((l) => l.kind === 'where' && l.name === 'off' && l.file.startsWith(path.join('src', 'off'))), 'and it reaches src/off (D39⑦), where `off` names its records')
   assert.deepEqual(outside(lits), [])
 })
 
@@ -56,7 +62,10 @@ test('D38 the scan fails on a name outside the set (planted tree)', () => {
     fs.mkdirSync(path.join(root, 'src', 'collector', 'core', 'ws'), { recursive: true })
     fs.writeFileSync(path.join(root, 'src', 'collector', 'a.mjs'), "w({ event: 'agent-wandered', where: 'nowhere', code: 'oops-code' }); failure('elsewhere', e); r.not_captured = 'shrug'; notCaptured('hmm', why)\n")
     fs.writeFileSync(path.join(root, 'src', 'collector', 'core', 'ws', 'recorder.mjs'), "fail('made-up', e)\n")
-    assert.deepEqual(outside(literals(root)).map((l) => `${l.kind} ${l.name}`).sort(), ['code made-up', 'code oops-code', 'event agent-wandered', 'not_captured hmm', 'not_captured shrug', 'where elsewhere', 'where nowhere'])
+    fs.mkdirSync(path.join(root, 'src', 'off')); fs.mkdirSync(path.join(root, 'src', 'cli'))
+    fs.writeFileSync(path.join(root, 'src', 'off', 'b.mjs'), "w({ event: 'off-notes', where: 'offf', code: 'backup-lost' }); w({ event: 'off-note', where: 'off', code: 'backup-kept' }); x = CODE_OFF.backupLost; y = CODE_OFF.backupKept\n")
+    fs.writeFileSync(path.join(root, 'src', 'cli', 'c.mjs'), "w({ event: 'failure', where: 'cli', code: 'cli-broke' })\n")
+    assert.deepEqual(outside(literals(root)).map((l) => `${l.kind} ${l.name}`).sort(), ['code CODE_OFF.backupLost (not in the map)', 'code backup-lost', 'code cli-broke', 'code made-up', 'code oops-code', 'event agent-wandered', 'event off-notes', 'not_captured hmm', 'not_captured shrug', 'where cli', 'where elsewhere', 'where nowhere', 'where offf'].sort())
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
@@ -123,7 +132,7 @@ test('D39 the off names (where off, event off-note, codes backup-failed / backup
 test('D39 an off-note is a state change, not a failure: the indicator turns on a failure event only', () => {
   assert.equal(isFailure({ event: 'off-note', where: 'off', code: 'backup-kept', reason: 'x' }), false)
   assert.equal(isFailure({ event: 'failure', where: 'off', code: 'backup-failed', reason: 'x' }), true)
-  assert.ok(!FAILURE_EVENTS.includes('off-note') && !STATE_EVENTS.includes('off-note'), 'kept out of the D40-edited lists: its own block (OFF_EVENTS)')
+  assert.ok(!FAILURE_EVENTS.includes('off-note'), 'a state change: it is not on the failure list')
 })
 
 test('D39 src/off/names.mjs is the same list as the closed set (src/off cannot import src/health)', () => {

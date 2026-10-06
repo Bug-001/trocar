@@ -70,6 +70,8 @@ const ERRNO = /^(E[A-Z0-9_]+|Z_[A-Z_]+)$/ // Node's own error codes (errno, ERR_
 const sets = { nc: new Set([...NOT_CAPTURED_FAILURE, ...NOT_CAPTURED_EXPECTED]), ncFail: new Set(NOT_CAPTURED_FAILURE), fail: new Set(FAILURE_EVENTS), event: new Set([...FAILURE_EVENTS, ...STATE_EVENTS, ...OFF_EVENTS]), where: new Set([...WHERE, ...OFF_WHERE]), code: new Set([...CODES, ...OFF_CODES]) }
 
 export const isCode = (c) => sets.code.has(c) || ERRNO.test(String(c))
+export const isEvent = (e) => sets.event.has(e) // the sets checkRecord() judges by, for the static scans (test/health/codes.test.mjs): one rule, not two
+export const isWhere = (w) => sets.where.has(w)
 
 /** 'failure' | 'expected' | null — the class of a connection row's not_captured. */
 export function notCapturedClass(nc) {

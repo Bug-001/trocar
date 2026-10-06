@@ -18,12 +18,23 @@ test('receipt schema: the keys, the exit codes and the version are the 1.6 R5 / 
 
 test('receipt schema: newReceipt is the empty receipt in key order, a fresh object each time, and it validates', () => {
   const r = newReceipt('off')
-  assert.deepEqual(r, { schema: 1, command: 'off', ok: true, changed: [], created: [], removed: [], skipped: [], restart: [], relayed: { closing: 0, waiting: 0, cut: 0 }, undo: [], log: null })
+  assert.deepEqual(r, { schema: 1, command: 'off', ok: true, changed: [], created: [], removed: [], skipped: [], restart: [], relayed: 'unknown', undo: [], log: null })
   assert.deepEqual(Object.keys(r), RECEIPT_KEYS)
   assert.notEqual(newReceipt('off').changed, r.changed, 'no list shared between receipts')
-  assert.notEqual(newReceipt('off').relayed, r.relayed)
   assert.deepEqual(validateReceipt(r), [])
   for (const c of ['on', 'off', 'status', 'uninstall', 'doctor']) assert.deepEqual(validateReceipt(newReceipt(c)), [], c)
+})
+
+// R5 / R11 (V10): what was not read is "unknown", never 0. A command that forgets to write `relayed` must not print a confident zero.
+test('receipt schema: a fresh receipt does not claim zero relayed connections: relayed is "unknown" until a command measures it', () => {
+  for (const c of ['on', 'off', 'status', 'uninstall', 'doctor']) {
+    const r = newReceipt(c)
+    assert.equal(r.relayed, 'unknown', c)
+    assert.notDeepEqual(r.relayed, { closing: 0, waiting: 0, cut: 0 })
+    assert.deepEqual(validateReceipt(r), [], `${c}: "unknown" is a valid answer`)
+  }
+  const measured = newReceipt('off'); measured.relayed = { closing: 0, waiting: 0, cut: 0 }
+  assert.deepEqual(validateReceipt(measured), [], 'zeros a command wrote on purpose are valid too')
 })
 
 test('receipt schema: a missing key is named', () => {
@@ -80,12 +91,13 @@ test('receipt schema: relayed is "unknown" or three non-negative integers', () =
   assert.ok(problems((r) => { r.relayed = 'none' }).some((s) => s.includes('relayed')), 'only "unknown" is a word for not knowing')
   assert.ok(problems((r) => { r.relayed = null }).some((s) => s.includes('relayed')))
   assert.ok(problems((r) => { r.relayed = 0 }).some((s) => s.includes('relayed')))
+  const counted = (r) => { r.relayed = { closing: 0, waiting: 0, cut: 0 }; return r.relayed } // a fresh receipt's relayed is the string "unknown"
   for (const k of ['closing', 'waiting', 'cut']) {
-    assert.ok(problems((r) => { delete r.relayed[k] }).some((s) => s.includes(`relayed.${k}`)), `${k} missing`)
-    assert.ok(problems((r) => { r.relayed[k] = -1 }).some((s) => s.includes(`relayed.${k}`)), `${k} negative`)
-    assert.ok(problems((r) => { r.relayed[k] = 1.5 }).some((s) => s.includes(`relayed.${k}`)), `${k} fractional`)
-    assert.ok(problems((r) => { r.relayed[k] = '2' }).some((s) => s.includes(`relayed.${k}`)), `${k} a string`)
-    assert.ok(problems((r) => { r.relayed[k] = null }).some((s) => s.includes(`relayed.${k}`)), `${k} null (not 0: R11)`)
+    assert.ok(problems((r) => { delete counted(r)[k] }).some((s) => s.includes(`relayed.${k}`)), `${k} missing`)
+    assert.ok(problems((r) => { counted(r)[k] = -1 }).some((s) => s.includes(`relayed.${k}`)), `${k} negative`)
+    assert.ok(problems((r) => { counted(r)[k] = 1.5 }).some((s) => s.includes(`relayed.${k}`)), `${k} fractional`)
+    assert.ok(problems((r) => { counted(r)[k] = '2' }).some((s) => s.includes(`relayed.${k}`)), `${k} a string`)
+    assert.ok(problems((r) => { counted(r)[k] = null }).some((s) => s.includes(`relayed.${k}`)), `${k} null (not 0: R11)`)
   }
 })
 

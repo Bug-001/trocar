@@ -12,8 +12,10 @@ export const EXIT = Object.freeze({ ok: 0, incomplete: 1, usage: 2, unknown: 3, 
 /** R5: the top-level keys every receipt carries, in the order `newReceipt` writes them. */
 export const RECEIPT_KEYS = Object.freeze(['schema', 'command', 'ok', 'changed', 'created', 'removed', 'skipped', 'restart', 'relayed', 'undo', 'log'])
 
-/** An empty receipt for `command`, ok until something says otherwise; a fresh object (its lists are the caller's to fill). `linger`
+/** An empty receipt for `command`, ok until something says otherwise; a fresh object (its lists are the caller's to fill). `relayed`
+ *  starts as `'unknown'` (R5 / R11: what was not read is not 0): a command that counted connections writes `{closing, waiting, cut}`
+ *  over it — `on`, which has none to count, writes zeros on purpose — and one that forgot prints 「不知道」, not a confident 0. `linger`
  *  (`on` / `status` on Linux) and the command-specific keys (`daemon`, `kept_backups`, …) are added by the command. */
 export function newReceipt(command) {
-  return { schema: SCHEMA_VERSION, command, ok: true, changed: [], created: [], removed: [], skipped: [], restart: [], relayed: { closing: 0, waiting: 0, cut: 0 }, undo: [], log: null }
+  return { schema: SCHEMA_VERSION, command, ok: true, changed: [], created: [], removed: [], skipped: [], restart: [], relayed: 'unknown', undo: [], log: null }
 }
