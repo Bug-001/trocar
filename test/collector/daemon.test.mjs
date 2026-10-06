@@ -1329,3 +1329,25 @@ test('daemon: POST /off {exit:true} with nothing relayed stops the daemon on its
     assert.equal(flowsOf(s).filter((f) => f.event === 'daemon-stop').length, 1, 'one daemon-stop line, for the reason that stopped it first')
   } finally { await d.stop(); p.done(); s.done() }
 })
+
+test('daemon: a harness that state.json turns off (the CLI writes the file; the 5 s check reads it) has its relayed connections drained too, not only one the /off route turned off (1.6 §1.3, §1.5)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home }, checkMs: 100 })
+  const echo = net.createServer((x) => x.pipe(x)); await new Promise((r) => echo.listen(0, '127.0.0.1', r))
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    p.add(4242, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
+    await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 4242, pid: 4242, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
+    await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 4242))
+    const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
+    await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: echo.address().port, family: 4 }, pid: 4242, decrypt: 0 })
+    raw.write('ZZZZ not a protocol the engine knows\n'); await once(raw, 'data')
+    assert.deepEqual((await req(s.sock, 'GET', '/status')).relayed, { closing: 0, waiting: 0 }, 'while it is on nothing is asked to close')
+    rewriteState(s, (st) => { st.harnesses['claude-code'].desired = 'off' })
+    const st = await until(async () => { const x = await req(s.sock, 'GET', '/status'); return x.relayed.waiting === 1 && x })
+    assert.equal(st.harnesses['claude-code'].desired, 'off')
+    raw.destroy()
+  } finally { echo.close(); await d.stop(); p.done(); s.done() }
+})

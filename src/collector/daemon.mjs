@@ -314,7 +314,10 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     const reconcileTable = () => { syncTracker(); return tracker.reconcile({ kernelGone: !!helperDown }) }
     // the switch calls this when harnesses go off, before the links come off: their processes leave the kernel watch table first
     sw = createSwitch({ redirector, stateFile: P.state, installed, ensureReady, onEvent: event, reconcile: reconcileTable })
-    const reload = async () => { const r = await sw.reloadIfChanged(); if (r.changed) syncTracker(); return r } // the file may only take capture away (switch.mjs)
+    // the file may only take capture away (switch.mjs). A harness the file turned off is off like one the route turned off: its connections still relayed
+    // are closed where the engine sees a boundary (1.6 §1.3) — the CLI writes the file before it asks the route, and a daemon whose route nobody reached
+    // would otherwise keep them for good
+    const reload = async () => { const r = await sw.reloadIfChanged(); if (r.changed) syncTracker(); if (r.turnedOff.length) engine.drain({ agents: new Set(r.turnedOff) }); return r }
     // An unwatch the helper did not answer leaves a pid the kernel may still steer although its harness is off. It is asked again here — before every
     // beat and at the 5 s check — until it is answered; true = the table is clean.
     const settle = async () => { if (tracker.stuckPids().length) await reconcileTable(); return tracker.stuckPids().length === 0 }
