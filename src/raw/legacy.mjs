@@ -280,6 +280,11 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
   // another sealer: two runs over one tree would each check and delete, or seal what the other deletes
   const o = otherSealers(procs, { target, fs });
   if (o.length) throw refuseAll(`another \`asight raw seal\` is running (pid ${o.map((p) => p.pid).join(', ')}) — run one sealer at a time; nothing sealed or deleted`);
+  // No deletion without a durable record of it (review 3 confirm, row 3): a journal that cannot be
+  // written refuses the whole delete run here — before the quiet window, before any lock or empty
+  // claim is removed, long before any original. Each unlink then has its own `deleting` entry first.
+  const noJournal = `the raw journal ${journal ?? '(none)'} cannot be written — a deletion must be recorded before it is made; nothing deleted`;
+  if (deleteOriginal && !dryRun && !appendJournal({ op: 'delete-original', outcome: 'started', target }, { journal })) throw refuseAll(noJournal);
   // 2. quiet window
   const before = new Map();
   for (const f of files.splice(0)) { try { before.set(f, fs.statSync(f)); files.push(f); } catch (e) { refused.push({ file: f, reason: `could not be read (${e.code || e.message}) — nothing sealed or deleted` }); } }
@@ -319,11 +324,6 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
   if (dryRun) return { target, dryRun: true, plan, wouldSeal: plan.filter((x) => x.action === 'seal').map((x) => x.file), refused, locks, claims, skipped, known };
 
   const sealed = [], deletedOnly = [], failed = [];
-  // No deletion without a durable record of it (review 3 confirm, row 3): a journal that cannot be
-  // written refuses the whole delete run before anything is deleted.
-  const noJournal = `the raw journal ${journal ?? '(none)'} cannot be written — a deletion must be recorded before it is made; nothing deleted`;
-  if (plan.some((x) => x.action === 'delete')
-    && !appendJournal({ op: 'delete-original', outcome: 'started', target, files: plan.filter((x) => x.action === 'delete').length }, { journal })) throw refuseAll(noJournal);
   // A file that changed since the quiet window is being written after all: refuse it, whatever step
   // we are at. Asked before each file and again between its byte-for-byte check and the unlink.
   const moved = (f) => { let now = null; try { now = fs.statSync(f); } catch {} return now && sameStat(before.get(f), now) ? null : 'changed after the quiet window — something is still writing it; nothing deleted'; };

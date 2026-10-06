@@ -94,11 +94,18 @@ test('row 3: a raw journal that cannot be written refuses the whole delete run â
   const ro = path.join(root, 'ro');
   try {
     await sealLegacy(f, { ...NONE, journal: path.join(root, 'j.jsonl') });
+    // nor is anything else removed first: an old empty claim, a dead lock
+    const claim = f + '.0002.sealed', lock = f + '.sealing';
+    fs.writeFileSync(claim, ''); const t = new Date(Date.now() - 120000); fs.utimesSync(claim, t, t);
+    fs.writeFileSync(lock, String(spawnSync(process.execPath, ['-e', '']).pid));
     fs.mkdirSync(ro); fs.chmodSync(ro, 0o500);
+    let quiet = 0;
     for (const journal of [path.join(ro, 'journal.jsonl'), null]) {
-      await assert.rejects(sealLegacy(f, { ...NONE, journal, deleteOriginal: true }), /raw journal .*cannot be written.*nothing deleted/);
+      await assert.rejects(sealLegacy(f, { ...NONE, journal, deleteOriginal: true, sleep: async () => { quiet++; } }), /raw journal .*cannot be written.*nothing deleted/);
       assert.ok(fs.existsSync(f), `deleted without a durable record (journal ${journal})`);
+      assert.ok(fs.existsSync(claim) && fs.existsSync(lock), 'removed files although the run was refused');
     }
+    assert.equal(quiet, 0, 'refused only after the quiet window â€” say so before waiting');
   } finally { fs.chmodSync(ro, 0o700); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
