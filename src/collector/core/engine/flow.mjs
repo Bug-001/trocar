@@ -12,8 +12,16 @@ import { createUpstreamTrust } from '../tls/roots.mjs'
 import { socksHandshake } from './socks.mjs'
 
 const msgOf = (e) => String((e && e.message) || e)
-// host of a CONNECT authority or a SOCKS target: "[::1]:443" → "::1", "a.test:443" → "a.test"
-const hostOf = (authority) => (authority.startsWith('[') ? authority.slice(1, Math.max(1, authority.indexOf(']'))) : authority.split(':')[0])
+// host of a CONNECT authority or a SOCKS target: "[::1]:443" → "::1", "a.test:443" → "a.test". An IPv6 literal is
+// written compressed whatever form the client sent ("[0:0:0:0:0:0:0:1]:443" → "::1"), as SOCKS5 targets are (RFC 4.6
+// §记录 代理前导): one spelling per host on the row and in the negative-cache key.
+const hostOf = (authority) => {
+  if (!authority.startsWith('[')) return authority.split(':')[0]
+  const raw = authority.slice(1, Math.max(1, authority.indexOf(']')))
+  try { return new URL(`http://[${raw}]`).hostname.slice(1, -1) } catch { return raw }
+}
+// the prelude's target: the authority as sent, its IPv6 literal compressed ("[0:0::1]:443" → "[::1]:443")
+const targetOf = (authority) => (authority.startsWith('[') && authority.includes(']') ? `[${hostOf(authority)}]${authority.slice(authority.indexOf(']') + 1)}` : authority)
 // the codes the daemon's policy() may hand the engine for a row (RFC 4.6 §记录 连接行怎么落码)
 const DAEMON_CODES = ['not-trust-path', 'untracked', 'untrusted']
 const closedBefore = (side) => ({ type: 'closed_before_decision', message: `the ${side} closed before a routing decision`, side })
@@ -457,7 +465,7 @@ export function handleFlow(client, meta, ctx) {
       // the prelude both ways, verbatim (Proxy-Authorization is a credential: flows/ is 0600, RFC 4.1); every
       // round trip on this connection (a CONNECT retried after a 407), each direction in order
       connectPrelude.c.push(buf.subarray(0, h.headLength)); connectPrelude.s.push(all.subarray(0, ph.headLength))
-      rec.prelude = { kind: 'connect', target: authority, client_b64: Buffer.concat(connectPrelude.c).toString('base64'), proxy_b64: Buffer.concat(connectPrelude.s).toString('base64') }
+      rec.prelude = { kind: 'connect', target: targetOf(authority), client_b64: Buffer.concat(connectPrelude.c).toString('base64'), proxy_b64: Buffer.concat(connectPrelude.s).toString('base64') }
       if (status >= 200 && status < 300) {
         route(cSock, uSock, innerPre, connectHost, true, after) // decrypt/splice the tunnelled TLS
       } else {

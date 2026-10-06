@@ -382,6 +382,13 @@ test('review B · IPv6 targets: SOCKS5 ATYP 4 and a CONNECT authority are record
   const c = net.connect(C.port, '127.0.0.1'); await once(c, 'connect'); c.on('error', () => {})
   c.write('CONNECT [::1]:443 HTTP/1.1\r\n\r\n'); await once(c, 'data'); c.destroy(); await C.settled(1)
   assert.deepEqual([C.flows[0].prelude.target, C.flows[0].host], ['[::1]:443', '::1'])
+  // review TR-7: an uncompressed IPv6 authority is recorded in the same compressed form; the bytes sent stay as sent
+  const head = 'CONNECT [0:0:0:0:0:0:0:1]:443 HTTP/1.1\r\n\r\n'
+  const U = await lab(t, { kind: 'connect', refuse: true })
+  const u = net.connect(U.port, '127.0.0.1'); await once(u, 'connect'); u.on('error', () => {})
+  u.write(head); await once(u, 'data'); u.destroy(); await U.settled(1)
+  assert.deepEqual([U.flows[0].prelude.target, U.flows[0].host], ['[::1]:443', '::1'])
+  assert.equal(b64(U.flows[0].prelude.client_b64).toString('latin1'), head, 'the prelude bytes are verbatim')
 })
 
 test('review B · a first byte that only looks like SOCKS (0x05, then a partial "greeting" and silence) is passed through after the stall, not held', T, async (t) => {
