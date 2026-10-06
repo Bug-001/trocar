@@ -59,6 +59,18 @@ test('a drop that carries CC\'s own preamble is a compaction on DuckDB and on th
   assert.deepEqual(boardCompactions(assembleSession(make())), db);
 });
 
+// 3.4: after a real compaction CC's preamble stays in the first messages of every
+// later call of the lane. It is evidence on its rising edge only, so the dips that follow (30 → 27) are no compaction.
+// Before, `drop && preamble` fired on every one of them, on DuckDB and on the board alike.
+test('a lane that keeps CC\'s preamble after its compaction: only the call that brings it in is a compaction, not the dips that follow, on DuckDB and on the board', async () => {
+  const make = () => [3, 55, 4, 30, 27].map((n, i) => v0('c' + (i + 1), n, i + 1, { preamble: i >= 2 })) // 55 → 4 brings the preamble in; 4 → 30 grows; 30 → 27 carries it
+  const conn = await freshConn();
+  await runEtl(make(), conn);
+  const db = compactions(await rowsOf(conn));
+  assert.deepEqual(db, [['c3', 55, 4]], 'DuckDB: 30 → 27 with the preamble carried is not one');
+  assert.deepEqual(boardCompactions(assembleSession(make())), db, 'the board shows the same one, from → to');
+});
+
 // The real captured CC session is v0-shaped (39 records, every call has `request`, none has req_body). It is not in the
 // repo (.gitignore keeps real captures out), so the gate skips it on a clone; the maintainer has it.
 test('real CC fixture: DuckDB and the board find the same compactions, with the same from → to (the one real 55 → 4, not 58 → 55)', fixtureGate(), async () => {

@@ -48,6 +48,22 @@ test('markCompaction: a small drop is not a compaction, a sharp one is; the edge
   assert.deepEqual(markCompaction(58, 55), { compaction: false, compaction_from: null, compaction_to: null }, 'no evidence: from / to stay NULL')
 })
 
+// Review (3.4): the stated rule is "only a sharp drop"; CC's preamble is a refinement on top
+// of it, and the preamble stays in the first messages of EVERY later call of a compacted lane. Counted on every call it
+// carries, any one-message dip after a compaction (30 → 27 on a lane that already holds 30) would be a compaction too. So
+// it counts on its rising edge only, like the text marker: the call that brings it in, not the calls that carry it.
+test('compactionVerdict: CC\'s preamble lets a small drop count on its rising edge only; carried in the history it is no evidence', () => {
+  const v = (prev, cur) => { const { compaction, compaction_from, compaction_to, basis } = compactionVerdict(prev, cur); return [compaction, compaction_from, compaction_to, basis] }
+  const none = [false, null, null, null]
+  assert.deepEqual(v({ msgCount: 58, marker: false, preamble: false }, { msgCount: 55, preamble: true }), [true, 58, 55, 'msg-count-drop'], 'the call that brings the preamble in: a small drop counts')
+  assert.deepEqual(v({ msgCount: 58, marker: false }, { msgCount: 55, preamble: true }), [true, 58, 55, 'msg-count-drop'], 'a predecessor that says nothing about a preamble had none')
+  assert.deepEqual(v({ msgCount: 30, marker: false, preamble: true }, { msgCount: 27, preamble: true }), none, 'carried: 30 → 27 long after a compaction is no compaction')
+  assert.deepEqual(v({ msgCount: 8, marker: false, preamble: true }, { msgCount: 7, preamble: true }), none, 'carried: a single message fewer')
+  assert.deepEqual(v({ msgCount: 8, marker: false, preamble: true }, { msgCount: 6 }), none, 'a drop that takes the preamble away is no evidence either')
+  assert.deepEqual(v({ msgCount: 30, marker: false, preamble: true }, { msgCount: 4, preamble: true }), [true, 30, 4, 'msg-count-drop'], 'a second compaction is a sharp drop and needs no preamble')
+  assert.deepEqual(v({ msgCount: 30, marker: false, preamble: true }, { hint: true, msgCount: 27, preamble: true }), [true, 30, 27, 'hint'], 'a harness hint is judged first, whatever the preamble does')
+})
+
 test('markCompaction: any drop that carries CC\'s own preamble counts; growth never does', () => {
   assert.equal(markCompaction(8, 6, { preamble: true }).compaction, true)
   assert.equal(markCompaction(8, 6, { preamble: false }).compaction, false)

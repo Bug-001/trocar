@@ -62,3 +62,39 @@ test('after --rebuild the upgraded store equals a full build, and extends increm
   await runEtl([cc('c1', 1), cc('c2', 2), cc('c3', 3)], full);
   assert.deepEqual(await dumpAll(conn), await dumpAll(full));
 });
+
+// The compaction verdict changed more than once on this branch (a v0 envelope counted by its request object,
+// a call of unknown context judged no compaction, only a sharp drop, the preamble on its rising edge): each change makes
+// `calls.compaction` differ for the same source, and a store written by version 2 has the rows of the older rules. A lane
+// 3 → 58 → 55 is what the rule before the closeout flagged at 58 → 55; extending that store with the lane's real 55 → 4
+// would give two compactions where a rebuild gives one (4.2:51).
+test('a store of version 2 (the compaction rules before the closeout) is refused: extending it keeps a verdict a rebuild does not make', async () => {
+  const at = (id, n, sec) => ({ ...cc(id, 1), ts_request: `2026-10-06T00:00:${String(sec).padStart(2, '0')}.000Z`, req_body: body(n) });
+  const lane = (counts) => counts.map((n, i) => at('c' + (i + 1), n, i + 1));
+  const conn = await freshConn();
+  await runEtl(lane([3, 58, 55]), conn);
+  // what the old rule (any drop) wrote for 58 → 55, under the version it stamped
+  await conn.run("UPDATE calls SET compaction = true, compaction_from = 58, compaction_to = 55 WHERE call_id = 'c3'");
+  await conn.run("UPDATE etl_meta SET value = '2' WHERE key = 'projection_version'");
+  const before = await dumpAll(conn);
+  const compactionsOf = async (c) => (await rows(c, 'SELECT call_id, compaction_from, compaction_to FROM calls WHERE compaction ORDER BY seq')).map((r) => [r.call_id, Number(r.compaction_from), Number(r.compaction_to)]);
+
+  await assert.rejects(runEtl(lane([3, 58, 55, 4]), conn), /projection version 2, and this code writes version 3.*--rebuild/);
+  assert.deepEqual(await dumpAll(conn), before, 'the refused run wrote nothing');
+
+  // what the refusal prevents: with the version waved through, the old verdict stays beside the new one
+  const waved = await freshConn();
+  await runEtl(lane([3, 58, 55]), waved);
+  await waved.run("UPDATE calls SET compaction = true, compaction_from = 58, compaction_to = 55 WHERE call_id = 'c3'");
+  await runEtl(lane([3, 58, 55, 4]), waved);
+  assert.deepEqual(await compactionsOf(waved), [['c3', 58, 55], ['c4', 55, 4]], 'incremental over the old rows: two compactions');
+
+  // --rebuild is exact: the one real compaction, and the store extends incrementally again
+  await rebuild(lane([3, 58, 55, 4]), conn);
+  assert.deepEqual(await compactionsOf(conn), [['c4', 55, 4]]);
+  assert.equal(await version(conn), String(PROJECTION_VERSION));
+  const full = await freshConn();
+  await rebuild(lane([3, 58, 55, 4, 6]), full);
+  await runEtl(lane([3, 58, 55, 4, 6]), conn);
+  assert.deepEqual(await dumpAll(conn), await dumpAll(full));
+});

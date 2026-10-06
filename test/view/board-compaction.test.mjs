@@ -68,3 +68,33 @@ test('a compaction call names compaction as its cache-break cause on a flat lane
   const x4 = assembleSession(sessions.codex()).steps[3];
   assert.equal(x4.cacheBreak.cause, 'compaction');
 });
+
+// 3.4: CC's "continued from a previous conversation" preamble stays in the first
+// messages of every call after a compaction, so it is evidence on its rising edge only. A D10 (req_body) CC lane whose
+// compaction is too small to be a sharp drop (8 → 3: not below 8 − 5) is a compaction only through the preamble; the
+// one-message dip that follows (8 → 7, the preamble carried) is not. DuckDB and the board give the same answer, and the
+// board says the preamble was the evidence only where it was.
+const PREAMBLE = 'This session is being continued from a previous conversation that ran out of context.\n\nSummary:\nearlier work.';
+const cc = (id, n, sec, preamble) => stream({ id, ts_request: ts(sec), endpoint: '/v1/messages', method: 'POST', is_llm_call: true, capture: 'transparent',
+  host: 'api.anthropic.com', proc: { pid: 1, exe: '/x/claude', agent: 'claude-code' }, req_headers: { 'x-claude-code-session-id': 'CCS', 'user-agent': 'claude-cli/2' },
+  req_body: JSON.stringify({ model: 'claude-opus-4-8', system: [{ type: 'text', text: 's' }],
+    messages: Array.from({ length: n }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: [{ type: 'text', text: i === 0 && preamble ? PREAMBLE : 'm' + i }] })) }),
+  resp: { kind: 'sse', status: 200, usage: { input_tokens: 1, output_tokens: 1 } } });
+
+test('a CC lane that carries the preamble after its compaction: the preamble is evidence once, on DuckDB and on the board', async () => {
+  const make = () => [cc('p1', 3, 1, false), cc('p2', 8, 2, false), cc('p3', 3, 3, true), cc('p4', 8, 4, true), cc('p5', 7, 5, true)];
+  const conn = await freshConn();
+  await runEtl(make(), conn);
+  const db = (await conn.runAndReadAll('SELECT call_id, compaction, compaction_from, compaction_to FROM calls ORDER BY call_id')).getRowObjects();
+  assert.deepEqual(db.filter((r) => r.compaction).map((r) => [r.call_id, Number(r.compaction_from), Number(r.compaction_to)]), [['p3', 8, 3]], 'DuckDB: 8 → 3 brings the preamble in; 8 → 7 carries it');
+  const A = assembleSession(make());
+  assert.deepEqual(A.steps.filter((s) => s.compaction).map((s) => [s.id, s.evictedFrom, s.evictedTo, s.compactionBasis]), [['p3', 8, 3, 'preamble+msg-count-drop']], 'the board agrees, and names the preamble where it was the evidence');
+  assert.equal(A.stats.compactions, 1);
+  // a second, sharp compaction on the same lane needs no preamble: it is a bare drop, and the board does not credit the carried preamble
+  const more = () => [...make(), cc('p6', 30, 6, true), cc('p7', 4, 7, true)];
+  const conn2 = await freshConn();
+  await runEtl(more(), conn2);
+  const db2 = (await conn2.runAndReadAll('SELECT call_id, compaction_from, compaction_to FROM calls WHERE compaction ORDER BY call_id')).getRowObjects();
+  assert.deepEqual(db2.map((r) => [r.call_id, Number(r.compaction_from), Number(r.compaction_to)]), [['p3', 8, 3], ['p7', 30, 4]]);
+  assert.deepEqual(assembleSession(more()).steps.filter((s) => s.compaction).map((s) => [s.id, s.compactionBasis]), [['p3', 'preamble+msg-count-drop'], ['p7', 'msg-count-drop']]);
+});

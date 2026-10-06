@@ -247,10 +247,13 @@ export function resolveParent(subRecord, candidates) {
 // Compaction = a *shrink* of the messages array between consecutive same-session calls (换血),
 // NOT a fork. This is the one drop rule of the verdict (compactionVerdict, step 3), shared by the ETL and the board
 // (3.4 「骤降」): only a SHARP drop counts — at least 6 messages fewer AND under 70% of what the lane
-// had — or any drop that carries Claude Code's own "continued from a previous conversation" preamble
-// (`cur.preamble`, hasCompactionPreamble). A small drop alone is not enough: on a real CC session the main lane goes
-// 58 → 55 (no compaction) before the real 55 → 4. It fills calls.compaction / compaction_from / compaction_to and
-// MUST NOT touch sessions.fork_of; it is explicitly NOT the "message[0] changed" heuristic (3.3).
+// had. A small drop alone is not enough: on a real CC session the main lane goes 58 → 55 (no compaction) before the
+// real 55 → 4. One exception (3.4): a drop that brings Claude Code's
+// own "continued from a previous conversation" preamble in (`cur.preamble`, hasCompactionPreamble) counts whatever its
+// size. compactionVerdict passes `preamble` true only on the preamble's RISING edge — once a compaction has put it in
+// the history every later call of the lane carries it, and a carried preamble says nothing about a later small dip.
+// It fills calls.compaction / compaction_from / compaction_to and MUST NOT touch sessions.fork_of; it is explicitly NOT
+// the "message[0] changed" heuristic (3.3).
 export function markCompaction(prevMsgCount, curMsgCount, cur = {}) {
   const from = prevMsgCount | 0
   const to = curMsgCount | 0
@@ -269,13 +272,15 @@ export function hasCompactionPreamble(messages) {
 }
 
 // The compaction verdict of ONE call against its in-lane predecessor (3.4), one rule for the ETL and the board.
-// prev = { msgCount, marker } of the previous call in the same session lane, or null when there is none;
+// prev = { msgCount, marker, preamble } of the previous call in the same session lane, or null when there is none;
 // cur = { hint, marker, msgCount, preamble }. In order:
 //   1. a harness header / request-kind hint (high) — compaction even on a lane's first call;
 //   2. a harness text marker (medium) on its RISING edge only: the marker stays in the history afterwards, and a
 //      lane's first call has no edge (the capture may have started after the compaction, or a new synthesized
 //      session may still carry an old marker);
-//   3. only a sharp message-count drop (medium, markCompaction) — no other evidence, no verdict.
+//   3. only a sharp message-count drop (medium, markCompaction) — no other evidence, no verdict. CC's own preamble
+//      lets a smaller drop count, on its RISING edge only, like the marker: the preamble stays in the first messages of
+//      every later call, so a carried one is no evidence (a 30 → 27 dip long after a compaction is no compaction).
 // compaction_from is the predecessor's message count, NULL when the lane has none — never an invented 0
 // (invariant 4). `basis` names the evidence that fired, so a reader can say how sure it is.
 export function compactionVerdict(prev, cur) {
@@ -285,6 +290,6 @@ export function compactionVerdict(prev, cur) {
   if (cur.hint) return { compaction: true, compaction_from: from, compaction_to: to, basis: 'hint' }
   if (cur.marker && prev && !prev.marker) return { compaction: true, compaction_from: from, compaction_to: to, basis: 'marker' }
   if (!prev) return NONE
-  const m = markCompaction(prev.msgCount | 0, to, cur)
+  const m = markCompaction(prev.msgCount | 0, to, { preamble: !!cur.preamble && !prev.preamble })
   return m.compaction ? { compaction: true, compaction_from: m.compaction_from, compaction_to: m.compaction_to, basis: 'msg-count-drop' } : NONE
 }

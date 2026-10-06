@@ -163,8 +163,12 @@ async function quarantineRecord(conn, record, reason) {
 // ones, with no warning. So runEtl refuses and asks for --rebuild (which is always exact).
 //   (none stored) = before D37 · 2 = D37 columns and the feat/read-seven closeout fixes (2026-10-06: cache_write NULL
 //   per vendor, compaction_from NULL on a lane's first call, req_extra_messages in calls.extra, WebSocket calls whose
-//   request was not stored are ingested)
-export const PROJECTION_VERSION = 2;
+//   request was not stored are ingested) · 3 = the compaction verdict as the integration closeout left it (3.4): a v0
+//   envelope is counted by its request object (0de6eaf), a call of unknown context gives no verdict and is no baseline
+//   (0492e88), only a SHARP drop counts (b4d5320), and CC's preamble counts on its rising edge only — each
+//   of them changes `calls.compaction` for the same source, so a store written by version 2 keeps verdicts a rebuild
+//   would not make
+export const PROJECTION_VERSION = 3;
 
 export async function runEtl(records, connection, opts = {}) {
   const conn = connection;
@@ -218,6 +222,13 @@ export async function runEtl(records, connection, opts = {}) {
   const prevBlocks = new Map(); // laneKey -> BlockRow[]
   const prevMsgCount = new Map(); // laneKey -> number
   const prevMarker = new Map(); // laneKey -> did the previous call carry a compaction text marker
+  const prevPreamble = new Map(); // laneKey -> did the previous call carry CC's "continued from a previous conversation" preamble
+  // the compaction verdict's predecessor of a lane, advanced by every call whose message count is observed (a call of
+  // unknown context leaves the chain alone): its count, and whether it carried the marker / the preamble (both count on
+  // their rising edge only: once in the history they stay in every later call)
+  const advanceLane = (laneKey, msgCount, call) => {
+    prevMsgCount.set(laneKey, msgCount); prevMarker.set(laneKey, !!call.compaction_marker); prevPreamble.set(laneKey, !!call.compaction_preamble)
+  }
   // 3.4 lineage from harness hints, over the WHOLE stream (skipped records included) so incremental == full:
   const aliasToSid = new Map(); // an alias key (e.g. Codex thread-id) -> the session_id it belongs to
   const parentHint = new Map(); // session_id -> the raw parent id a harness declared (first seen wins)
@@ -307,7 +318,7 @@ export async function runEtl(records, connection, opts = {}) {
       if (idx < (await consumedOf(key))) {
         if (laneKey && isLlm) {
           prevBlocks.set(laneKey, curBlocks);
-          if (msgCount != null) { prevMsgCount.set(laneKey, msgCount); prevMarker.set(laneKey, !!call.compaction_marker); }
+          if (msgCount != null) advanceLane(laneKey, msgCount, call);
         }
         stats.skipped++;
         continue;
@@ -344,12 +355,12 @@ export async function runEtl(records, connection, opts = {}) {
       // ── calls (every claimed record; compaction is a cross-call inference) ──
       // 3.4 (compactionVerdict, the board's rule too): a harness hint first (header, high; a text marker only on
       // its rising edge, medium), else a SHARP message-count drop (medium; CC's own preamble lets a smaller one
-      // count). A lane's first call has no predecessor: compaction_from stays NULL. Never a fork (sessions.fork_of
-      // is not touched).
+      // count, on its rising edge only). A lane's first call has no predecessor: compaction_from stays NULL. Never a
+      // fork (sessions.fork_of is not touched).
       let comp = { compaction: false, compaction_from: null, compaction_to: null };
       // msgCount null = the adapter does not know this call's context (its request was not stored): no verdict
       if (isLlm && laneKey && msgCount != null) {
-        const prev = prevMsgCount.has(laneKey) ? { msgCount: prevMsgCount.get(laneKey), marker: !!prevMarker.get(laneKey) } : null;
+        const prev = prevMsgCount.has(laneKey) ? { msgCount: prevMsgCount.get(laneKey), marker: !!prevMarker.get(laneKey), preamble: !!prevPreamble.get(laneKey) } : null;
         comp = compactionVerdict(prev, { hint: !!call.compaction_hint, marker: !!call.compaction_marker, msgCount, preamble: !!call.compaction_preamble });
       }
       await conn.run(
@@ -445,7 +456,7 @@ export async function runEtl(records, connection, opts = {}) {
       // advance predecessor state AFTER this call is written (a call of unknown context leaves the count chain alone)
       if (laneKey && isLlm) {
         prevBlocks.set(laneKey, curBlocks);
-        if (msgCount != null) { prevMsgCount.set(laneKey, msgCount); prevMarker.set(laneKey, !!call.compaction_marker); }
+        if (msgCount != null) advanceLane(laneKey, msgCount, call);
       }
       touched.add(key);
       stats.ingested++;

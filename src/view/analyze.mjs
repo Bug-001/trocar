@@ -457,7 +457,7 @@ export function analyze(records, opts = {}) {
     const resMap = new Map()
     const seenMap = new Map() // filenames the agent saw (in results/prose) but never opened
     let prevCount = 0, prevCtx = 0
-    let prevInfo = null // { msgCount, marker } of the last renderable call in this lane: the compaction verdict's predecessor
+    let prevInfo = null // { msgCount, marker, preamble } of the last renderable call in this lane: the compaction verdict's predecessor
     for (let k = 0; k < s.calls.length; k++) {
       const step = s.calls[k]
       // Unparsed sentinel: no context to diff. Emit the visible error marker and leave prevCount /
@@ -491,14 +491,17 @@ export function analyze(records, opts = {}) {
       // drop signal) vs. a bare message-count collapse (a number going down — the weaker guess).
       const h = hintsOf(step.rec)
       const marker = h.compactionMarker === true
+      // the preamble is evidence on its rising edge only (compactionVerdict): once a compaction has put it in the history
+      // every later call of the lane carries it, and a carried one neither makes a drop a compaction nor names its basis
+      const preambleNew = hasPreamble && !(prevInfo && prevInfo.preamble)
       // 3.4: a request stored in part (the collector's req_* labels, the ETL's context_state 'partial') shows what arrived,
       // not the context the model saw: its message count is no observation, so no verdict and no new baseline
       const verdict = step.reqIncomplete ? { compaction: false }
         : compactionVerdict(prevInfo, { hint: h.compaction === true, marker, msgCount: msgs.length, preamble: hasPreamble })
-      if (!step.reqIncomplete) prevInfo = { msgCount: msgs.length, marker }
+      if (!step.reqIncomplete) prevInfo = { msgCount: msgs.length, marker, preamble: hasPreamble }
       let newMsgs
       if (verdict.compaction) {
-        Object.assign(step, compactionMeta(verdict, hasPreamble))
+        Object.assign(step, compactionMeta(verdict, preambleNew))
         for (const res of resMap.values()) {
           const last = res.segments[res.segments.length - 1]
           if (last.evict == null) last.evict = step.gi
