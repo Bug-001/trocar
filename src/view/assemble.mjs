@@ -6,13 +6,12 @@
 // server-side analyzer, frontend unchanged).
 import { createHash } from 'node:crypto';
 import { analyze, linearContext, cacheBreak, normResp, flatBlockText } from './analyze.mjs';
-import * as openai from '../dissect/openai.mjs'; // D25 · Phase 4: the OpenAI/Codex dissector
 import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf } from '../dissect/capture-labels.mjs'; // #21 request-body labels, D38 WebSocket labels, response labels
 import { blockSpans } from '../adapters/cc.mjs';
 import { slimBlock, compBuckets } from './blockmeta.mjs';
 import { mintRawRef, composeTextRef } from '../etl/orchestrator.mjs';
 import { sessionKeyOf } from '../dissect/harnesses.mjs';
-import { wireFormatOf } from '../dissect/registry.mjs';
+import { wireFormatOf, boardDissectorFor } from '../dissect/registry.mjs';
 
 // D17④ 地面真相(RFC 3.3:65 · 独立字节护城河). The demo proxied prefix identity with the 32-bit
 // bounded content_hash SEQUENCE (collision-prone). Product MUST use a REAL full SHA-256 over the
@@ -82,16 +81,10 @@ export function recordsForSession(records, sessionId) {
   return records.filter((r) => sessionIdOf(r) === sessionId);
 }
 
-// ── provider dispatch (D25 · one dissector per provider) ──────────────────────────────────────
-// Anthropic-wire detection is the shared registry's (src/dissect/registry.mjs → dissect/cc.mjs detect):
-// endpoint, wire-protocol headers and body shape, never the UA (3.1:23). It used to be the implicit `else`
-// branch here, which rendered foreign bytes under Claude Code's vocabulary with no label.
-// 'openai' | 'cc' | 'unknown' — an EXPLICIT unknown, never a silent fallback to a known dissector.
-function providerOf(records) {
-  for (const r of records || []) if (openai.detect(r)) return 'openai';
-  for (const r of records || []) if (wireFormatOf(r) === 'anthropic') return 'cc';
-  return 'unknown';
-}
+// ── wire dispatch (D25 · one dissector per WIRE FORMAT, D37 ①) ──────────────────────────────────
+// Which dissector reads a record is the shared registry's answer (src/dissect/registry.mjs): the flat-lane
+// wires have a board dissector object there; the Anthropic wire is assembled by the multi-lane analyzer
+// (src/view/analyze.mjs). This module names no wire and imports no wire dissector.
 
 // No dissector claimed these bytes. Report that IN PLACE (invariant 4) and COUNT them (3.1:44 — an
 // unclaimed record MUST land in a labelled "unrecognized" state, MUST NOT be silently dropped).
@@ -109,10 +102,8 @@ function assembleUnknown(records) {
   return {
     provider: 'unknown',
     unknown: {
-      reason: 'No dissector recognizes this traffic. asight has dissectors for the Anthropic '
-        + '(Claude Code) and OpenAI (Responses / Chat Completions) wire formats; these bytes match '
-        + 'neither, so they are NOT parsed and NOT rendered — showing them under another provider\'s '
-        + 'vocabulary would be a fabrication.',
+      reason: 'No registered dissector claims these bytes (src/dissect/registry.mjs), so they are NOT '
+        + 'parsed and NOT rendered — showing them under another wire\'s vocabulary would be a fabrication.',
       records: recs.length,
       endpoints: uniq(recs.map((r) => String((r && r.endpoint) || '').split('?')[0])),
       userAgents: uniq(recs.map((r) => (headersOf(r) || {})['user-agent'])),
@@ -123,34 +114,32 @@ function assembleUnknown(records) {
   };
 }
 
-// Codex/OpenAI assembler (Phase 4). Produces the SAME `analyzed` shape the CC path does — a single
-// `main` lane of calls, each baked with the neutral fields the board reads (flat/usage/cacheBreak/gt/
-// prefixSha256) — but via the OpenAI dissector (src/dissect/openai.mjs). The cache-break + ground-truth
-// machinery (cacheBreak / prefixSha256 / realGroundTruth) is provider-agnostic over the flat block
-// vocabulary, so it is REUSED verbatim. Lanes beyond `main` (subagent/monitor/aux) + the resource
-// ledger are CC-specific and left empty here (fidelity: not-yet-extracted for Codex, not misreported).
-function assembleOpenai(records, opts = {}) {
-  // Admit every record the dissector CLAIMS, keyed on its wire shape. This used to be a hard-coded
-  // `/responses` endpoint test, which is the half of D25's warning that renders a blank board: once
-  // detect() claims Chat Completions, an endpoint-only filter drops all of it and the session shows
-  // as empty. Shape in, shape out — the dissector dispatches, the shared layer does not branch.
-  const shapeOf = (r) => (r && r.is_llm_call ? openai.wireShape(r) : null);
-  const llm = (records || []).filter((r) => shapeOf(r) !== null)
-    .sort((a, b) => String(a.ts_request || a.ts || '').localeCompare(String(b.ts_request || b.ts || '')));
+// Flat-lane assembler (one per wire format, chosen from the registry's table): produces the SAME `analyzed`
+// shape the multi-lane path does — a `main` lane of calls, each baked with the neutral fields the board reads
+// (flat/usage/cacheBreak/gt/prefixSha256) — through the dissector object `d` (src/dissect/registry.mjs
+// `boardDissectorFor`). The cache-break + ground-truth machinery (cacheBreak / prefixSha256 / realGroundTruth)
+// is wire-agnostic over the flat block vocabulary, so it is REUSED verbatim. Lanes beyond `main` and the
+// resource ledger are not extracted on this path (fidelity: not-yet-extracted, not misreported).
+// analyze()'s step order (ts_request, then id), exactly: every assembler uses it, so a session's global
+// step index is one sort whichever wires it mixes.
+const stepOrder = (a, b) => String(a.ts_request).localeCompare(String(b.ts_request)) || String(a.id).localeCompare(String(b.id));
+function assembleFlatLane(records, d, opts = {}) {
+  // Admit every record the registry hands to THIS dissector (shape in, shape out: the dissector dispatches,
+  // the shared layer does not branch).
+  const llm = (records || []).filter((r) => r && r.is_llm_call && boardDissectorFor(r) === d).sort(stepOrder);
   const calls = [];
   let prevFlat = null, gi = 0;
   for (const r of llm) {
-    const shape = shapeOf(r);
     let req; try { req = JSON.parse(r.req_body); } catch { req = null; }
     // req_body null (a WebSocket call whose request message is undecoded, or a server push: 4.6 §传输) parses to null,
     // which used to throw below and take the whole session's /api/session down: such a call has no request
     if (!req || typeof req !== 'object') req = (r.request && typeof r.request === 'object') ? r.request : {};
     r.request = req; // so the board's callComp / cost read the parsed request
-    // derived counts the board header + raw card read (parallel to hydrateForBoard for CC)
-    Object.assign(req, openai.reqCountsFor(shape, req));
+    // derived counts the board header + raw card read (parallel to hydrateForBoard on the multi-lane path)
+    Object.assign(req, d.reqCounts(req));
     req.context_chars = (r.req_body || '').length; // verbatim wire byte count
-    const flat = openai.boardFlatFor(shape, req);
-    const norm = openai.normRespFor(shape, r);
+    const flat = d.boardFlat(req, r);
+    const norm = d.normResp(r);
     const usage = norm.canonUsage;
     const brk = cacheBreak(prevFlat, flat, {});
     const curPfx = prefixSha256(flat, brk.idx);
@@ -162,23 +151,20 @@ function assembleOpenai(records, opts = {}) {
     brk.gtReal = true;
     const kept = !opts.keepFlat || opts.keepFlat(gi); // see assembleSession: retention window
     calls.push({
-      gi: gi++, id: r.id, streamId: 'main', rec: r, norm, wireShape: shape,
-      ctx: openai.ctxTokens(norm),
+      gi: gi++, id: r.id, streamId: 'main', rec: r, norm, wireFormat: d.id,
+      ctx: d.ctxTokens(norm),
       msgCount: req.message_count || 0,
       tools: Array.isArray(req.tools) ? req.tools.length : 0,
       ts: r.ts_request || r.ts || '', status: (r.resp && r.resp.status) || null,
       compaction: false, error: !!r.error, reqIncomplete: reqIncompleteOf(r), wsIncomplete: wsIncompleteOf(r), respIncomplete: respIncompleteOf(r),
       flat: kept ? flat : [], ...(kept ? null : { paged_out: true }),
-      // Tier A, same as the CC path: computed from `flat` BEFORE the retention window drops it, so a
-      // Codex session's timeline is as complete as a Claude Code one. Omitting it here is the same
-      // family of bug as this branch skipping withRefs/slimRec — one endpoint, two block shapes.
+      // Tier A, same as the multi-lane path: computed from `flat` BEFORE the retention window drops it.
       comp: compBuckets(flat),
       usage, cacheBreak: brk, gt: brk.gt, prefixSha256: curPfx,
     });
-    // Same rule as the CC assembler: a call that failed never established a cache prefix, so it
-    // MUST NOT become the baseline for the next one (otherwise the board invents a cache break).
-    const oaStatus = (respOf(r) || {}).status;
-    if (!(r.error || (oaStatus != null && oaStatus !== 200))) prevFlat = flat;
+    // A call that failed never established a cache prefix, so it MUST NOT become the next baseline.
+    const st = (respOf(r) || {}).status;
+    if (!(r.error || (st != null && st !== 200))) prevFlat = flat;
   }
   const mainLane = {
     id: 'main', streamId: 'main', kind: 'main', icon: '💬', label: 'conversation',
@@ -192,7 +178,7 @@ function assembleOpenai(records, opts = {}) {
     totalOut: calls.reduce((a, c) => a + ((c.norm.usage || {}).output_tokens || 0), 0),
     peakCtx: calls.reduce((a, c) => Math.max(a, c.ctx), 0),
   };
-  return { provider: 'openai', streams: [{ id: 'main', kind: 'main', calls }], steps: calls, stats, lanes: [mainLane] };
+  return { provider: d.provider, streams: [{ id: 'main', kind: 'main', calls }], steps: calls, stats, lanes: [mainLane] };
 }
 
 // records = ONE session's raw (v0/demo-shape) records. Returns analyze() output with each
@@ -251,9 +237,14 @@ function withRefs(flat, rec) {
 // assembled whole (all 578 bars on the timeline, correct diffs) without the assembled view growing
 // past what can be serialized. Omitted → keep everything (unchanged full-send behaviour).
 export function assembleSession(records, opts = {}) {
-  const provider = providerOf(records);
-  if (provider === 'openai') return assembleOpenai(records, opts); // Phase 4: Codex/OpenAI path
-  if (provider === 'unknown') return assembleUnknown(records); // no dissector → labelled, never faked
+  const d = (records || []).map(boardDissectorFor).find(Boolean);
+  if (d) return assembleFlatLane(records, d, opts);
+  if ((records || []).some((r) => wireFormatOf(r) === 'anthropic')) return assembleAnalyzed(records, opts);
+  return assembleUnknown(records); // no registered dissector claims these bytes → labelled, never faked (3.1:58)
+}
+
+// The multi-lane path (the Anthropic wire): analyze() segments lanes, then each call is baked.
+function assembleAnalyzed(records, opts = {}) {
   // Dissect each record to the shape the board's block extractor reads (v0 in-place; D10 req_body→request).
   const A = analyze(records.map(hydrateForBoard));
   for (const lane of A.lanes || []) {

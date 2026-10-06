@@ -373,3 +373,18 @@ export function ctxTokens(norm) {
   const u = (norm && norm.usage) || {};
   return u.input_tokens || u.prompt_tokens || 0;
 }
+
+// ── D25 dissector objects: what the shared board assembler (src/view/assemble.mjs) calls, so it never
+// branches on a wire. Registered by wire format in src/dissect/registry.mjs (`boardDissectorFor`).
+// `provider` is the pre-D37 board label (analyzed.provider), kept for readers of old payloads; `blockKeys`
+// are the request's top-level keys that become context blocks (everything else is a non-block key).
+export const RESPONSES = Object.freeze({
+  id: 'openai-responses', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'],
+  boardFlat: (req) => boardFlat(req), normResp: (rec) => normResp(rec),
+  reqCounts: (req) => reqCountsFor('responses', req), ctxTokens,
+});
+export const CHAT = Object.freeze({
+  id: 'openai-chat', provider: 'openai', blockKeys: ['tools', 'messages'],
+  boardFlat: (req) => boardFlatChat(req), normResp: (rec) => normRespChat(rec),
+  reqCounts: (req) => reqCountsFor('chat', req), ctxTokens,
+});

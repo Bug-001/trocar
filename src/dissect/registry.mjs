@@ -3,7 +3,7 @@
 // adapters both dispatch through this, so the two readers cannot disagree about what a record is.
 // Leaf module.
 import { detect as anthropicShape } from './cc.mjs';
-import { wireShape } from './openai.mjs';
+import { wireShape, RESPONSES, CHAT } from './openai.mjs';
 import { isWsHandshake } from './ws-handshake.mjs';
 
 export { isWsHandshake };
@@ -40,4 +40,12 @@ export function wireFormatOf(rec) {
   const shape = wireShape(rec);
   if (shape) return shape === 'chat' ? 'openai-chat' : 'openai-responses';
   return anthropicShape(rec) ? 'anthropic' : null;
+}
+
+// Board dissectors for the flat-lane wires (D25: dissector = adapter; the shared assembler only calls
+// them). The Anthropic wire is assembled by the multi-lane analyzer (src/view/analyze.mjs), so it has no
+// row here. Adding a wire = one dissector object + one row.
+const BOARD = { 'openai-responses': RESPONSES, 'openai-chat': CHAT };
+export function boardDissectorFor(rec) {
+  return BOARD[wireFormatOf(rec)] || null;
 }
