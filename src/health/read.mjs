@@ -229,7 +229,8 @@ export function captureHealth({ home = asightHome(), now = Date.now(), fs = node
   const parts = [{ part: 'collector', ...collector.summary }, { part: 'legacy', ...legacy.summary }]
   let summary = parts.reduce((a, b) => (RANK[b.state] > RANK[a.state] ? b : a))
   if (summary.state === 'failing') summary = { ...summary, n: parts.filter((p) => p.state === 'failing').reduce((k, p) => k + p.n, 0) }
-  if (raw.failures.length && ['ok', 'off', 'failing'].includes(summary.state)) summary = { part: summary.state === 'failing' ? summary.part : 'raw', state: 'failing', n: (summary.n || 0) + raw.failures.length }
+  // the raw layer's failures count whatever else is installed (the sealer works on the old pipeline's sessions too)
+  if (raw.failures.length && RANK[summary.state] <= RANK.failing) summary = { part: summary.state === 'failing' ? summary.part : 'raw', state: 'failing', n: (summary.state === 'failing' ? summary.n : 0) + raw.failures.length }
   if (summary.state === 'not-installed') summary = { state: 'not-installed' }
   read.errors = [...new Map(read.errors.map((e) => [e.file, e])).values()] // one entry per file
   if (read.errors.length) summary = { ...summary, read_errors: read.errors.length }

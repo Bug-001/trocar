@@ -153,7 +153,10 @@ export function groupKey(r) {
   if (r.event === 'failure') return `${r.where}/${r.code}`
   return r.event === 'agent-untrusted' ? `agent-untrusted:${r.code ?? r.reason}` : `${r.event}${r.where ? `/${r.where}` : ''}`
 }
-const weight = (r) => 1 + (typeof r.suppressed === 'number' ? r.suppressed : 0)
+// a folded line (events.mjs: written when the 10 s window closes) re-states the last suppressed record and stands for
+// exactly `suppressed` occurrences — the first one of the window was its own line already
+const PRELUDE_MS = 60_000 // a daemon's start-up lines are written within this before its daemon-start
+const weight = (r) => (r.folded ? 0 : 1) + (typeof r.suppressed === 'number' ? r.suppressed : 0)
 
 /**
  * foldFlows(records, {now}) →
@@ -171,10 +174,21 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
   let startIdx = -1
   for (let i = records.length - 1; i >= 0; i--) if (records[i].event === 'daemon-start') { startIdx = i; break }
   const out = { last_start: startIdx >= 0 ? pick(records[startIdx]) : null, last_stop: null, conditions: [], partial: startIdx < 0 && records.length > 0, groups: [], expected: {}, agents: [], last_ts: null, install: { install: [], uninstall: [] } }
-  // conditions: only what was written after the last daemon-start
+  // conditions: only what this run wrote — from the last daemon-start, plus the start-up lines written before it (the
+  // CA check, the helper's protocol): back to the last daemon-stop, the previous daemon-start, a refused start, or this
+  // start's own unclean-stop, and no further than 60 s before daemon-start (4.6 §事件与码)
+  let from = Math.max(0, startIdx)
+  const startMs = startIdx >= 0 ? Date.parse(records[startIdx].ts) : NaN
+  for (let i = startIdx - 1; startIdx > 0 && i >= 0; i--) {
+    const r = records[i]
+    if (r.event === 'daemon-stop' || r.event === 'daemon-start' || (r.event === 'failure' && r.where === 'start')) break
+    if (!(startMs - Date.parse(r.ts) <= PRELUDE_MS)) break // also: a line without a readable ts is not taken
+    from = i
+    if (r.event === 'failure' && r.code === 'unclean-stop') break
+  }
   const untrusted = new Map(), neg = new Map()
   let degraded = null, version = null, mismatch = null, ca = null
-  for (let i = Math.max(0, startIdx); i < records.length; i++) {
+  for (let i = from; i < records.length; i++) {
     const r = records[i]
     if (r.event === 'daemon-stop') out.last_stop = pick(r)
     else if (r.event === 'agent-untrusted') untrusted.set(r.pid, { kind: 'untrusted', ...pick(r), since: r.ts })

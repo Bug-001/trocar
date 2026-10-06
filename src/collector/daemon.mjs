@@ -102,6 +102,13 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
 
   let redirector = null
   try {
+    // First the previous run (4.6 §事件与码): an unclean stop is the first line of this start; readers take this start's
+    // lines from here on as this run's, up to and past daemon-start — the CA check below included.
+    let stale = null
+    let unreadable = false
+    try { stale = JSON.parse(fs.readFileSync(P.lock, 'utf8')) } catch (e) { if (e.code !== 'ENOENT') unreadable = true } // ENOENT: the last daemon stopped cleanly
+    if (stale && stale.pid) failure('daemon', coded(new Error(`the previous daemon (pid ${stale.pid}) ended without a clean stop (crash, kill -9 or power loss); its helper and links went with it, and connections then in flight through its engine were cut (how many is not known)`), 'unclean-stop'))
+    else if (unreadable) failure('daemon', coded(new Error('the previous daemon left an unreadable lock (crash or power loss): it ended without a clean stop, and connections then in flight through its engine were cut (how many is not known)'), 'unclean-stop'))
     // The CA is checked at start and once a day (D-4, 4.6 §身份与信任「CA」): both files readable, a pair, inside its
     // validity. Unusable → this daemon never hooks (agents go direct, zero errors) and says "CA unusable" — not
     // "not installed" — in flows/ (ca-invalid: which part, which file, the errno) and in status.
@@ -113,11 +120,6 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     const caTimer = setInterval(() => { caState = { ...judgeCa(readCa({ dir: P.caDir })), checked_at: new Date().toISOString() }; if (!caState.ok) caFailure(caState) }, caCheckMs)
     caTimer.unref()
     const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error'), e && e.file ? { file: e.file } : {}) })
-    let stale = null
-    let unreadable = false
-    try { stale = JSON.parse(fs.readFileSync(P.lock, 'utf8')) } catch (e) { if (e.code !== 'ENOENT') unreadable = true } // ENOENT: the last daemon stopped cleanly
-    if (stale && stale.pid) failure('daemon', coded(new Error(`the previous daemon (pid ${stale.pid}) ended without a clean stop (crash, kill -9 or power loss); its helper and links went with it, and connections then in flight through its engine were cut (how many is not known)`), 'unclean-stop'))
-    else if (unreadable) failure('daemon', coded(new Error('the previous daemon left an unreadable lock (crash or power loss): it ended without a clean stop, and connections then in flight through its engine were cut (how many is not known)'), 'unclean-stop'))
     // switch / helper events: their own descriptor (events.mjs, a lost line becomes a log-gap), and every failure
     // among them carries `reason`
     let engine = null // created after the tracker; the tracker's onGone reaches it at call time

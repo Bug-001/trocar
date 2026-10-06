@@ -122,6 +122,22 @@ test('foldFlows: conditions since the last daemon-start, cleared by the events t
   const again = foldFlows([...recs, { ts: at(H), event: 'daemon-start', pid: 3 }], { now: NOW })
   assert.deepEqual(again.conditions, [], 'a new daemon-start: the last run\'s conditions are no longer current')
   assert.equal(foldFlows([{ ts: at(H), event: 'agent-untrusted', pid: 4, reason: 'x' }], { now: NOW }).partial, true, 'no daemon-start read: said')
+  // a start's own lines written before daemon-start (the CA check, the helper's protocol) belong to that run (4.6 §事件与码)
+  const S = Date.parse(at(H)), t = (ms) => new Date(S - ms).toISOString()
+  const prelude = [
+    { ts: t(30 * 60e3), event: 'agent-untrusted', pid: 20, reason: 'x' }, // the crashed run's, long before
+    { ts: t(5000), event: 'failure', where: 'daemon', code: 'unclean-stop', reason: 'r' },
+    { ts: t(4000), event: 'failure', where: 'ca', code: 'ca-invalid', which: 'pair', file: '/c', reason: 'r' },
+    { ts: t(3000), event: 'helper-version-mismatch', got: 3, expected: 2, reason: 'r' },
+    { ts: at(H), event: 'daemon-start', pid: 5 },
+  ]
+  assert.deepEqual(foldFlows(prelude, { now: NOW }).conditions.map((c) => c.kind).sort(), ['ca-invalid', 'helper-version'])
+  const crashed = [{ ts: t(20e3), event: 'agent-untrusted', pid: 21, reason: 'x' }, ...prelude.slice(1)] // within 60 s, but before the unclean-stop
+  assert.ok(!foldFlows(crashed, { now: NOW }).conditions.some((c) => c.pid === 21), 'the line before this start\'s unclean-stop is the last run\'s')
+  const stoppedBefore = [{ ts: t(9000), event: 'agent-untrusted', pid: 22, reason: 'x' }, { ts: t(8000), event: 'daemon-stop' }, ...prelude.slice(2)]
+  assert.deepEqual(foldFlows(stoppedBefore, { now: NOW }).conditions.map((c) => c.kind).sort(), ['ca-invalid', 'helper-version'], 'a daemon-stop bounds it too')
+  const refusedBefore = [{ ts: t(9000), event: 'helper-version-mismatch', got: 3, expected: 2, reason: 'r' }, { ts: t(8000), event: 'failure', where: 'start', code: 'start-failed', reason: 'r' }, { ts: at(H), event: 'daemon-start', pid: 6 }]
+  assert.deepEqual(foldFlows(refusedBefore, { now: NOW }).conditions, [], 'a refused start bounds it: its lines are not this run\'s')
 })
 
 test('foldFlows: 24 h failure groups (folded counts included), expected counts, per-agent last capture and failure', () => {
@@ -139,7 +155,8 @@ test('foldFlows: 24 h failure groups (folded counts included), expected counts, 
   ]
   const f = foldFlows(recs, { now: NOW })
   const g = Object.fromEntries(f.groups.map((x) => [x.key, x.count]))
-  assert.deepEqual(g, { 'engine/lookup-miss': 6, 'agent-untrusted:var-missing': 1, 'flow:untrusted': 1, 'flow:client-rejected-leaf': 1 })
+  assert.deepEqual(g, { 'engine/lookup-miss': 5, 'agent-untrusted:var-missing': 1, 'flow:untrusted': 1, 'flow:client-rejected-leaf': 1 })
+  // 'a' + the 4 folded into 'b' (the folded line stands for the suppressed ones only: test/collector/f-group F3(e))
   assert.equal(f.groups.find((x) => x.key === 'engine/lookup-miss').last.reason, 'b')
   assert.deepEqual(f.expected, { policy: 2 })
   const cc = f.agents.find((a) => a.agent === 'claude-code')

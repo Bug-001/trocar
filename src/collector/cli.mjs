@@ -50,6 +50,7 @@ const SUMMARY = {
   'not-responding': (x) => `✗ not responding · lock last refreshed at ${x.since}`, unknown: (x) => `? state unknown · ${x.reason}`,
   'no-events': (x) => `? the old capture wrote at ${x.since} but has no events file (an old process; restart it to have them)`,
   residue: (x) => `– not installed · ${x.n} item(s) left behind`, 'not-installed': () => '– not installed',
+  stopped: (x) => `○ the old capture stopped at ${x.since}${x.signal ? ` (${x.signal})` : ''}`,
 }
 const ago = (h, iso) => Math.round((Date.parse(h.generated_at) - Date.parse(iso)) / 1000)
 function daemonText(h) {
