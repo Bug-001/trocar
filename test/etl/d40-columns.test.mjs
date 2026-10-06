@@ -12,7 +12,7 @@ import { etlFile } from '../../src/etl/cli.mjs'
 import { applyDDL } from '../../src/model/schema.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { freshConn, dumpAll } from './helpers.mjs'
-import { preD40, full, logged, inference, line, HOST } from '../fixtures/d40-records.mjs'
+import { preD40, full, logged, inference, line, sized, HOST } from '../fixtures/d40-records.mjs'
 
 const rows = async (conn, sql) => (await conn.runAndReadAll(sql)).getRowObjects()
 const num = (v) => (v == null ? null : Number(v))
@@ -153,4 +153,36 @@ test('a 2 MiB non-inference body is neither parsed for a session key nor held by
   const { bodyOf } = await import('../../src/dissect/harnesses.mjs')
   assert.equal(bodyOf(upload), null, 'not parsed for identity')
   assert.ok(bodyOf({ ...upload, is_llm_call: true }), 'an inference body of the same size is parsed as before')
+})
+
+// ── review: the byte counts are counted whole, past the cap, and past 2 GiB ────────────────────────────────────────────
+// `body_wire_bytes` counts a body the capture only stored a 64 MiB prefix of; one 3 GB download made the INT32 column overflow, the
+// whole ETL batch rolled back, and every later `asight etl` (and rebuild) failed at the same record.
+test('a call counted past 2 GiB lands: request_bytes, response_bytes and record_bytes hold it, and the calls around it land too', async () => {
+  const conn = await freshConn()
+  const GIB3 = 3 * 1024 ** 3
+  const recs = [full({ id: 'a', at: 1 }), sized(full({ id: 'dl', at: 2, endpoint: '/download', cls: 'files', reqBody: '', wire: [GIB3 + 7, GIB3] }), GIB3 + 123), full({ id: 'b', at: 3 })]
+  const stats = await runEtl(recs, conn)
+  assert.deepEqual([stats.ingested, stats.quarantined], [3, 0], 'nothing rolled back')
+  const c = await calls(conn)
+  assert.deepEqual([num(c.dl.request_bytes), num(c.dl.response_bytes), num(c.dl.record_bytes)], [GIB3 + 7, GIB3, GIB3 + 123])
+  const types = Object.fromEntries((await rows(conn, "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'calls' AND column_name LIKE '%\\_bytes' ESCAPE '\\'")).map((r) => [r.column_name, r.data_type]))
+  assert.deepEqual(types, { request_bytes: 'BIGINT', response_bytes: 'BIGINT', record_bytes: 'BIGINT' })
+  // a rebuild of the same stream is the same rows
+  const again = await freshConn(); await rebuild(recs, again)
+  assert.deepEqual(await dumpAll(again), await dumpAll(conn))
+})
+
+test('a store made while the byte columns were INT is widened by applyDDL, keeps its values, and then takes a value past 2 GiB', async () => {
+  const old = await (await DuckDBInstance.create(':memory:')).connect()
+  await old.run('CREATE TABLE calls (call_id TEXT PRIMARY KEY, session_id TEXT, seq INT, ts TIMESTAMP, endpoint TEXT, model TEXT, stream BOOL, class TEXT, control_kind TEXT, lane TEXT, request_bytes INT, raw_ref TEXT, stop_reason TEXT, duration_ms INT, error TEXT, compaction BOOL, compaction_from INT, compaction_to INT, unmapped_count INT, extra JSON, wire_format TEXT, vendor TEXT, transport TEXT, context_state TEXT, observer_effect JSON, harness TEXT, host TEXT, traffic_class TEXT, body_retention TEXT, response_bytes INT, record_bytes INT)')
+  await old.run("INSERT INTO calls (call_id, request_bytes, response_bytes, record_bytes) VALUES ('k', 11, 22, 33)")
+  assert.deepEqual((await rows(old, "SELECT data_type FROM information_schema.columns WHERE table_name = 'calls' AND column_name = 'request_bytes'"))[0], { data_type: 'INTEGER' })
+  await applyDDL(old)
+  await applyDDL(old) // idempotent: every ETL start runs it
+  const t = Object.fromEntries((await rows(old, "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'calls' AND column_name IN ('request_bytes','response_bytes','record_bytes')")).map((r) => [r.column_name, r.data_type]))
+  assert.deepEqual(t, { request_bytes: 'BIGINT', response_bytes: 'BIGINT', record_bytes: 'BIGINT' })
+  assert.deepEqual((await rows(old, "SELECT request_bytes, response_bytes, record_bytes FROM calls WHERE call_id = 'k'")).map((r) => [num(r.request_bytes), num(r.response_bytes), num(r.record_bytes)])[0], [11, 22, 33], 'the old values are kept')
+  await old.run("UPDATE calls SET response_bytes = 3000000000 WHERE call_id = 'k'")
+  assert.equal(num((await rows(old, "SELECT response_bytes FROM calls WHERE call_id = 'k'"))[0].response_bytes), 3000000000)
 })

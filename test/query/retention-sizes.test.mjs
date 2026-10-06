@@ -8,6 +8,12 @@ import { retentionSizes } from '../../src/query/queries.mjs'
 import { NAMED_QUERIES, runNamed } from '../../src/query/index.mjs'
 import { freshConn } from '../etl/helpers.mjs'
 import { DuckDBInstance } from '@duckdb/node-api'
+import fs from 'node:fs'
+import path from 'node:path'
+import { etlFile } from '../../src/etl/cli.mjs'
+import { retentionReport } from '../../src/query/retention.mjs'
+import { tmpDir } from '../helpers/tmp.mjs'
+import { line } from '../fixtures/d40-records.mjs'
 import { preD40, full, logged, inference, sized } from '../fixtures/d40-records.mjs'
 
 const NOW = Date.parse('2026-10-07T12:00:00.000Z') // 24 h back = 10-06 12:00, 7 d back = 09-30 12:00
@@ -74,4 +80,42 @@ test('the named-query contract carries it (3.5: the frontend and the server ask 
   assert.ok(NAMED_QUERIES.retentionSizes)
   const s = await runNamed(await store(), 'retentionSizes')
   assert.ok(s.rows.length > 0)
+})
+
+// review (F2): `asight etl` runs applyDDL — which ADDS the six columns, NULL in every old row — and only then refuses the incremental run
+// of a version-3 store. The columns are there, so "no such column" no longer tells; the store's projection version does. Without it the
+// report said every old telemetry / session-sync row was 「保存全部」 · `other` — a claim about bytes nobody checked (invariant 4).
+test('a version-3 store that `asight etl` has already ALTERed (the six columns there, NULL) is refused, not read as full / other', async () => {
+  const dir = tmpDir('asight-v3-')
+  const file = path.join(dir, 'capture.ndjson')
+  fs.writeFileSync(file, [full({ id: 't1', at: 1 }), full({ id: 't2', at: 2, endpoint: '/v1/code/sessions/cse_1/worker/events', cls: 'session-sync' })].map(line).join(''))
+  const dbPath = path.join(dir, 'a.duckdb')
+  await etlFile(file, { dbPath })
+  // make it what a version-3 store looks like after the real `asight etl` of this code: version 3, the D40 columns NULL
+  const db = await DuckDBInstance.create(dbPath); const conn = await db.connect()
+  await conn.run("UPDATE etl_meta SET value = '3' WHERE key = 'projection_version'")
+  await conn.run('UPDATE calls SET harness = NULL, host = NULL, traffic_class = NULL, body_retention = NULL, response_bytes = NULL, record_bytes = NULL')
+  conn.closeSync?.(); db.closeSync?.()
+  // the real etlFile: applyDDL runs first (columns present), then runEtl refuses the incremental run
+  await assert.rejects(etlFile(file, { dbPath }), /incremental ETL refused.*projection version 3.*--rebuild/)
+  const db2 = await DuckDBInstance.create(dbPath); const c2 = await db2.connect()
+  try {
+    await assert.rejects(retentionSizes(c2, { now: NOW }), (e) => e.code === 'predates-d40' && /projection version 3/.test(e.message) && /--rebuild/.test(e.message))
+    const rep = await retentionReport({ home: dir, conn: c2, now: NOW })
+    assert.equal(rep.sizes, null, 'no sizes: not a table of `unknown · other · full` rows')
+    assert.match(rep.sizes_reason, /需要重建.*projection version 3/)
+    // after the rebuild the same store reads again, with the real values
+    await etlFile(file, { dbPath, rebuild: true })
+  } finally { c2.closeSync?.(); db2.closeSync?.() }
+  const db3 = await DuckDBInstance.create(dbPath); const c3 = await db3.connect()
+  try {
+    const s = await retentionSizes(c3, { now: NOW })
+    assert.deepEqual(s.rows.map((r) => `${r.harness}/${r.class}/${r.retention}`), ['cc/session-sync/full', 'cc/telemetry/full'])
+  } finally { c3.closeSync?.(); db3.closeSync?.() }
+})
+
+test('a current-version store with a row that has no body_retention / traffic_class is refused too, never coalesced into 「保存全部」 · other', async () => {
+  const conn = await store()
+  await conn.run("UPDATE calls SET body_retention = NULL WHERE call_id = 'r1'")
+  await assert.rejects(retentionSizes(conn, { now: NOW }), (e) => e.code === 'predates-d40' && /1 row\(s\) have no body_retention/.test(e.message))
 })

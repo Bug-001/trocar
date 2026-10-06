@@ -2,7 +2,7 @@
 // frontend and the 3.2 tables: the frontend never assembles raw table/column names, and
 // every result speaks provider-neutral CANONICAL vocabulary (invariant 3 — no
 // cache_read_input_tokens etc. ever leaves here). Read-only; writes go through ETL (4.2).
-import { rebuildContext } from '../etl/orchestrator.mjs';
+import { rebuildContext, PROJECTION_VERSION } from '../etl/orchestrator.mjs';
 import { TRAFFIC_CLASS_IDS } from '../dissect/traffic.mjs';
 
 const N = (v) => (typeof v === 'bigint' ? Number(v) : v);
@@ -165,10 +165,18 @@ export const SIZE_COLUMNS = ['calls', 'request_bytes', 'response_bytes', 'respon
 export async function retentionSizes(conn, { now = Date.now() } = {}) {
   const have = new Set((await q(conn, "SELECT column_name FROM information_schema.columns WHERE table_name = 'calls'")).map((r) => r.column_name));
   const missing = ['harness', 'traffic_class', 'body_retention', 'response_bytes', 'record_bytes'].filter((c) => !have.has(c));
-  if (missing.length) {
-    const e = new Error(`the analytics store predates D40 (no ${missing.join(', ')} on calls): run asight etl <source> --rebuild`);
-    e.code = 'predates-d40';
-    throw e;
+  const predates = (why) => Object.assign(new Error(`the analytics store predates D40 (${why}): run asight etl <source> --rebuild`), { code: 'predates-d40' });
+  if (missing.length) throw predates(`no ${missing.join(', ')} on calls`);
+  // The columns alone do not say it: `asight etl` adds them to an old store (applyDDL) BEFORE it refuses the incremental run, so a
+  // version-3 store can hold the six columns with NULL in every old row — which would read as "kept in full" and "other". The store's
+  // own projection version (4.2: the one number that says which rules wrote its rows) is what tells.
+  const [{ n: held }] = await q(conn, 'SELECT count(*) AS n FROM calls');
+  if (held > 0) {
+    let version = null;
+    try { const r = await q(conn, "SELECT value FROM etl_meta WHERE key = 'projection_version'"); if (r.length) version = Number(r[0].value); } catch { /* no etl_meta: written before D37 */ }
+    if (version !== PROJECTION_VERSION) throw predates(`its rows were written by projection version ${version ?? 'none (before D37)'}, this code reads ${PROJECTION_VERSION}`);
+    const [{ n: unset }] = await q(conn, 'SELECT count(*) AS n FROM calls WHERE body_retention IS NULL OR traffic_class IS NULL');
+    if (unset > 0) throw predates(`${unset} row(s) have no body_retention / traffic_class`);
   }
   const params = SIZE_WINDOWS.filter(([, ms]) => ms != null).map(([, ms]) => new Date(now - ms).toISOString());
   const sel = [];
@@ -183,7 +191,7 @@ export async function retentionSizes(conn, { now = Date.now() } = {}) {
       `count(*) FILTER (WHERE ${w} AND record_bytes IS NULL) AS "${name}_stored_unrecorded"`);
   }
   const got = await q(conn,
-    `SELECT COALESCE(harness, 'unknown') AS harness, COALESCE(traffic_class, 'other') AS class, COALESCE(body_retention, 'full') AS retention, ${sel.join(', ')}
+    `SELECT COALESCE(harness, 'unknown') AS harness, traffic_class AS class, body_retention AS retention, ${sel.join(', ')}
      FROM calls GROUP BY ALL`, params);
   const rank = (list, v) => (list.indexOf(v) < 0 ? list.length : list.indexOf(v));
   const rows = got.map((r) => ({ harness: r.harness, class: r.class, retention: r.retention,
