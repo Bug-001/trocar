@@ -79,7 +79,7 @@ test('a store of version 2 (the compaction rules before the closeout) is refused
   const before = await dumpAll(conn);
   const compactionsOf = async (c) => (await rows(c, 'SELECT call_id, compaction_from, compaction_to FROM calls WHERE compaction ORDER BY seq')).map((r) => [r.call_id, Number(r.compaction_from), Number(r.compaction_to)]);
 
-  await assert.rejects(runEtl(lane([3, 58, 55, 4]), conn), /projection version 2, and this code writes version 3.*--rebuild/);
+  await assert.rejects(runEtl(lane([3, 58, 55, 4]), conn), new RegExp(`projection version 2, and this code writes version ${PROJECTION_VERSION}.*--rebuild`));
   assert.deepEqual(await dumpAll(conn), before, 'the refused run wrote nothing');
 
   // what the refusal prevents: with the version waved through, the old verdict stays beside the new one

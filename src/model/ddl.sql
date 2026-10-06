@@ -47,7 +47,13 @@ CREATE TABLE IF NOT EXISTS calls (
   vendor TEXT,              -- D37 (3.2:50) from the envelope host; unknown = NULL
   transport TEXT,           -- D37 (3.2:51) http | ws
   context_state TEXT,       -- D37 (3.2:52) complete | reconstructed | partial | server_edited
-  observer_effect JSON      -- D37 (3.2:53) what capture changed in the client; NULL = none known
+  observer_effect JSON,     -- D37 (3.2:53) what capture changed in the client; NULL = none known
+  harness TEXT,             -- D40 (3.2) call-level harness id (the read-side table's; NULL = not identified); control rows have one too
+  host TEXT,                -- D40 the envelope host (SNI etc.), else the Host header
+  traffic_class TEXT,       -- D40 llm | token-count | session-sync | telemetry | files | account | other
+  body_retention TEXT,      -- D40 full | log (the operator's setting) | legacy-meta (a non-LLM record from before D40: its length only)
+  response_bytes INT,       -- D40 wire response body bytes (body_wire_bytes.resp); NULL = not recorded (never 0)
+  record_bytes INT          -- D40 this record's line on disk, newline included = the stored bytes; NULL = not known
 );
 -- D37 migration for a store created before these columns existed. Placed BEFORE the views, and a no-op
 -- on a fresh store (IF NOT EXISTS). New columns come last on both, so column order matches.
@@ -56,6 +62,13 @@ ALTER TABLE calls ADD COLUMN IF NOT EXISTS vendor TEXT;
 ALTER TABLE calls ADD COLUMN IF NOT EXISTS transport TEXT;
 ALTER TABLE calls ADD COLUMN IF NOT EXISTS context_state TEXT;
 ALTER TABLE calls ADD COLUMN IF NOT EXISTS observer_effect JSON;
+-- D40 migration, same way: new columns come last on both, so the order matches a fresh store.
+ALTER TABLE calls ADD COLUMN IF NOT EXISTS harness TEXT;
+ALTER TABLE calls ADD COLUMN IF NOT EXISTS host TEXT;
+ALTER TABLE calls ADD COLUMN IF NOT EXISTS traffic_class TEXT;
+ALTER TABLE calls ADD COLUMN IF NOT EXISTS body_retention TEXT;
+ALTER TABLE calls ADD COLUMN IF NOT EXISTS response_bytes INT;
+ALTER TABLE calls ADD COLUMN IF NOT EXISTS record_bytes INT;
 
 -- Deduped context block content (same bytes across calls stored once).
 CREATE TABLE IF NOT EXISTS block_contents (

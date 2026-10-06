@@ -38,7 +38,8 @@ export function dissectorAdapter(d, { name = d.id, priority = 50 } = {}) {
     ...(d.createChain ? { begin: () => ({ chain: d.createChain() }) } : {}),
     // a record of this wire that the dissector reads as no call (a server push, a non-create message) is not
     // claimed: it is quarantined with its reason, never dropped (3.1:58)
-    detect: (rec) => !!rec && rec.is_llm_call === true && wireFormatOf(rec) === d.id && (!d.admits || d.admits(rec)),
+    // D40: a call kept as a log line only has no body to read: the envelope adapter takes it
+    detect: (rec) => !!rec && rec.is_llm_call === true && rec.body_retention !== 'log' && wireFormatOf(rec) === d.id && (!d.admits || d.admits(rec)),
     parseSession(record) {
       const norm = { ...record, req_body: parse(record.req_body) };
       const n = nativeId(norm);

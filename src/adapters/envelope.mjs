@@ -1,12 +1,17 @@
 // src/adapters/envelope.mjs — the ONE adapter for every envelope that is not an inference call
 // (is_llm_call !== true), for ALL harnesses: control plane (telemetry / registry / account), count_tokens
-// probes, and body_retention:'verbatim' side uploads. It parses no provider wire, so it yields no blocks
-// and no usage (a probe is not inference: no fake zero-usage row, 3.2:134). Class follows 3.4 classOf (a
-// session key makes it 'llm', else 'control'); lane: probe for count_tokens, aux for other
-// session-attributed traffic, NULL for control.
+// probes, uploads — and, since D40, an inference call the operator set to 「只记日志」 (body_retention:'log': its
+// bodies were not stored, so there is nothing for a wire dissector to read). It parses no provider wire, so it
+// yields no blocks and no usage (a probe is not inference: no fake zero-usage row, 3.2:134). Class follows 3.4
+// classOf (a session key makes it 'llm', else 'control'); lane: probe for count_tokens, aux for other
+// session-attributed traffic, NULL for control — and NULL for a logged-only inference call, whose lane (main or
+// aux) cannot be told without its body. D40: these bodies are stored verbatim like any call's; the row keeps
+// only the size, the pointer back to the record is raw_ref (3.2 §D40).
 import { collectExtra } from './contract.mjs';
 import { classOf, controlKind, nativeId } from '../identity/session-identity.mjs';
 import { isProbeEndpoint, unsupportedOf, wireFormatOf, boardDissectorFor } from '../dissect/registry.mjs';
+import { parseableBody } from '../dissect/harnesses.mjs';
+import { isLogOnly } from '../dissect/capture-labels.mjs';
 
 // The demo v0 envelope has no `req_body` (the verbatim request string, D10); it carries the parsed request as an object under
 // `request`, and the board has always read it from there (view/assemble.mjs, view/analyze.mjs). The ETL's identity layer reads a
@@ -42,14 +47,15 @@ export const ENVELOPE_CONSUMED = new Set([
 const parsedBody = (r) => {
   const b = r && r.req_body;
   if (b && typeof b === 'object') return b;
-  if (typeof b === 'string') { try { const v = JSON.parse(b); return v && typeof v === 'object' ? v : {}; } catch { return {}; } }
+  // D40: a non-inference body can be up to 64 MiB; it is parsed only for a session key, never when it is that big
+  if (typeof b === 'string' && parseableBody(r, b)) { try { const v = JSON.parse(b); return v && typeof v === 'object' ? v : {}; } catch { return {}; } }
   return {};
 };
 
 export const envelopeAdapter = {
   name: 'envelope',
   priority: 10,
-  detect: (record) => !!record && record.is_llm_call !== true,
+  detect: (record) => !!record && (record.is_llm_call !== true || isLogOnly(record)),
   parseSession(record) {
     const n = nativeId({ ...record, req_body: parsedBody(record) });
     return { native_id: n.native_id, native_id_confidence: n.native_id_confidence, parent: null, fork_of: null,
@@ -62,7 +68,7 @@ export const envelopeAdapter = {
     return {
       class: cls,
       control_kind: cls === 'control' ? controlKind(record.endpoint) : null,
-      lane: cls === 'control' ? null : (isProbeEndpoint(record) ? 'probe' : 'aux'),
+      lane: cls === 'control' || isLogOnly(record) ? null : (isProbeEndpoint(record) ? 'probe' : 'aux'),
       endpoint: record.endpoint || '',
       model: null,
       stream: false,
