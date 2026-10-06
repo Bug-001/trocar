@@ -324,7 +324,9 @@ test('client abort mid-flight tears down the upstream socket (acceptance T3)', a
   const t = Date.now(); c.destroy()
   await within(closedUp, 'the upstream socket closed after the client abort', 1000)
   await h.close()
-  assert.ok(upClosedAt > 0 && upClosedAt - t < 120, `upstream closed ${upClosedAt - t}ms after client abort`)
+  // "at once" (relay destroys the upstream on the client's end), with room for a loaded parallel suite (134 ms
+  // seen at 8 parallel runs); without the teardown the upstream only closes at its idle timeout, never here
+  assert.ok(upClosedAt > 0 && upClosedAt - t < 400, `upstream closed ${upClosedAt - t}ms after client abort`)
 })
 
 test('client reset before a routing decision is caught: flow finalized with the error, upstream dropped (T3)', async () => {
