@@ -536,5 +536,6 @@ test('daemon: describe hands the engine the harness WebSocket terminators and th
     await until(() => capture().some((x) => x.req_body === msg2), 1500)
     const f = await until(() => flowsOf(s).find((r) => r.event === 'failure' && r.where === 'engine' && r.code === 'describe-error'))
     assert.match(f.reason, /describing pid 5151 \(codex\) for 127\.0\.0\.1:\d+ failed: extras exploded/)
+    assert.deepEqual([f.pid, f.agent, f.dst && f.dst.port], [5151, 'codex', mock.port], 'pid, agent and destination as fields')
   } finally { if (c) c.sock.destroy(); await d.stop(); await mock.close(); p.done(); s.done() }
 })

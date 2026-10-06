@@ -135,13 +135,13 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       // connection goes on without them, the engine records it, and flows/ gets it under its code (4.6 §记录)
       describe: (meta) => {
         try { return tracker.extrasFor(meta && meta.pid) } catch (e) {
-          throw Object.assign(new Error(`describing pid ${meta && meta.pid} (${meta && meta.agent}) for ${meta && meta.dst ? `${meta.dst.address}:${meta.dst.port}` : '?'} failed: ${errText(e)}; the connection goes on without WebSocket terminators or proxies`), { code: CODE.describeError })
+          throw Object.assign(new Error(`describing pid ${meta && meta.pid} (${meta && meta.agent}) for ${meta && meta.dst ? `${meta.dst.address}:${meta.dst.port}` : '?'} failed: ${errText(e)}; the connection goes on without WebSocket terminators or proxies`), { code: CODE.describeError, fields: { pid: meta ? meta.pid ?? null : null, agent: meta ? meta.agent ?? null : null, dst: meta ? meta.dst ?? null : null } })
         }
       },
       issuer, store, upstreamCa,
       policy: (meta, host) => tracker.policy(meta, host),
       isRecording: () => sw.isRecording(), // sampled per request (4.6 §开关): a request after off is never recorded
-      onError: (e) => failure('engine', e),
+      onError: (e) => failure('engine', e, (e && e.fields) || {}), // describe-error carries pid, agent, dst as fields (4.6 §记录)
     })
     const want = enginePort ?? manifest.engine_port ?? 0
     const { port } = await engine.listen({ port: want, hosts: ['127.0.0.1'] }).catch((e) => {
