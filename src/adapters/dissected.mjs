@@ -12,9 +12,9 @@
 import { contentHash, scanJson, spanAt } from './content-hash.mjs';
 import { collectExtra } from './contract.mjs';
 import { ENVELOPE_CONSUMED } from './envelope.mjs';
-import { classOf, nativeId, lane as identityLane } from '../identity/session-identity.mjs';
+import { classOf, nativeId } from '../identity/session-identity.mjs';
 import { hintsOf, sessionKeyOf } from '../dissect/harnesses.mjs';
-import { wireFormatOf, contextStateOf } from '../dissect/registry.mjs';
+import { wireFormatOf, contextStateOf, flatLaneOf } from '../dissect/registry.mjs';
 import { fieldTextOf } from '../dissect/record-fields.mjs';
 import { mapUsage } from '../model/schema.mjs';
 
@@ -44,7 +44,7 @@ export function dissectorAdapter(d, { name = d.id, priority = 50 } = {}) {
       const n = nativeId(norm);
       const h = hintsOf(record); // harness-declared parent (raw) + aliases: resolved by the ETL (3.4, gate G4)
       return { native_id: n.native_id, native_id_confidence: n.native_id_confidence, parent: h.parent ? h.parent.id : null,
-        aliases: sessionKeyOf(norm).aliases, fork_of: null, forked_at: null, lane: identityLane(norm), entrypoint: null, title: null, cwd: null, extra: {} };
+        aliases: sessionKeyOf(norm).aliases, fork_of: null, forked_at: null, lane: flatLaneOf(d, record), entrypoint: null, title: null, cwd: null, extra: {} };
     },
     parseCall(record, state) {
       const plan = planOf(record, state);
@@ -61,7 +61,8 @@ export function dissectorAdapter(d, { name = d.id, priority = 50 } = {}) {
       const h = hintsOf(record);
       const failed = !!(d.failed && d.failed(resp, record));
       return {
-        class: classOf(norm), control_kind: null, lane: (d.laneOf && d.laneOf(record)) || identityLane(norm),
+        // the board's rule exactly (registry.flatLaneOf): Claude Code's lane heuristics are not this wire's
+        class: classOf(norm), control_kind: null, lane: flatLaneOf(d, record),
         endpoint: record.endpoint || '', model: req.model || resp.model || null, stream: req.stream === true,
         usage: hasUsage(resp.usage) ? mapUsage(d.id, resp.usage) : null, stop_reason: resp.stop_reason ?? null, duration_ms: record.duration_ms ?? null,
         error: !!record.error || r.kind === 'error' || (r.status || 0) >= 500 || failed,

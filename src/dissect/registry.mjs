@@ -6,6 +6,7 @@ import { detect as anthropicShape, serverEdited, CC_SECTIONS } from './cc.mjs';
 import { contextStateOfRequest } from './capture-labels.mjs';
 import { wireShape, RESPONSES, CHAT } from './openai.mjs';
 import { isWsHandshake } from './ws-handshake.mjs';
+import { hintsOf } from './harnesses.mjs';
 import { RESPONSES_WS } from './openai-ws.mjs';
 
 export { isWsHandshake };
@@ -51,6 +52,15 @@ export function wireFormatOf(rec) {
 const BOARD = { 'openai-responses': RESPONSES, 'openai-chat': CHAT, 'openai-responses-ws': RESPONSES_WS };
 export function boardDissectorFor(rec) {
   return BOARD[wireFormatOf(rec)] || null;
+}
+
+// The lane of a call on a flat-lane wire (the OpenAI wires), ONE rule for the board and the ETL: the dissector's
+// own lane (a warm-up, 3.1:37), else the harness table's hint (3.4), else main (gate G15). Claude Code's
+// heuristics (haiku aux, security monitor, cc_is_subagent) read Anthropic-wire fields and do not apply here.
+export const FLAT_LANE_KINDS = Object.freeze(['main', 'subagent', 'aux', 'probe']);
+export function flatLaneOf(d, rec) {
+  const hint = (d && d.laneOf && d.laneOf(rec)) || hintsOf(rec).lane;
+  return FLAT_LANE_KINDS.includes(hint) ? hint : 'main';
 }
 
 // The request's top-level keys that become context blocks, per wire format; every other top-level key is a

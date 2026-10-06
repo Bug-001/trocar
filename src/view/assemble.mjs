@@ -11,8 +11,8 @@ import { blockSpans } from '../adapters/cc.mjs';
 import { scanJson, spanAt } from '../adapters/content-hash.mjs';
 import { slimBlock, compBuckets } from './blockmeta.mjs';
 import { mintRawRef, composeTextRef, fieldTextOf, TEXT_REF_FIELD } from '../etl/orchestrator.mjs';
-import { sessionKeyOf, hintsOf, observerEffectsOf } from '../dissect/harnesses.mjs';
-import { wireFormatOf, boardDissectorFor, contextStateOf, blockKeysOf } from '../dissect/registry.mjs';
+import { sessionKeyOf, observerEffectsOf } from '../dissect/harnesses.mjs';
+import { wireFormatOf, boardDissectorFor, contextStateOf, blockKeysOf, flatLaneOf } from '../dissect/registry.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
 import { requestEncodingOf } from '../dissect/request-body.mjs';
 
@@ -161,9 +161,8 @@ function assembleFlatLane(records, d, opts = {}) {
   for (const r of llm) {
     const ctx = plans && d.contextOf ? d.contextOf(r, plans) : null; // { req, contextState, missing, locate }
     // the dissector's own lane (a warm-up, 3.1:37) first, else the harness table's hint (3.4: e.g. a subagent
-    // header); labels are server-side (invariant 3)
-    const hint = (d.laneOf && d.laneOf(r)) || hintsOf(r).lane;
-    const laneKind = FLAT_LANES[hint] ? hint : 'main';
+    // header) — the rule the ETL uses too (registry.flatLaneOf); labels are server-side (invariant 3)
+    const laneKind = flatLaneOf(d, r);
     const prevFlat = prevFlatOf.get(laneKind) || null;
     const gi = opts.giOf ? opts.giOf(r) : local;
     local++;
