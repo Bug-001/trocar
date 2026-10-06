@@ -495,7 +495,10 @@ function assembleAnalyzed(records, opts = {}) {
       // D17④: REAL prefix SHA-256 over verbatim bytes (not the demo's 32-bit structural proxy). Two calls'
       // prefixes are byte-identical iff their full SHA-256 over [0,idx) match → independent byte truth.
       const read = u.cache_read_input_tokens || 0, create = u.cache_creation_input_tokens || 0;
-      const curPfx = prefixSha256(flat, brk.idx);
+      // 3.2:124, as on the flat-lane path: what is shown of a partial / server-edited context is not what the model
+      // saw, so no byte-identity claim and no ground truth is made over it (the ETL writes NULL / NULL too)
+      const blind = call.wire.contextState === 'partial' || call.wire.contextState === 'server_edited';
+      const curPfx = blind ? null : prefixSha256(flat, brk.idx);
       const prevPfx = prefixSha256(prevFlat, brk.idx);
       const prefixByteIdentical = brk.idx > 0 && curPfx != null && curPfx === prevPfx;
       brk.prefixSha256 = curPfx;                       // 逐字字节事实(可独立复算)
