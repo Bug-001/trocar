@@ -1,0 +1,14 @@
+CONNECT 127.0.0.1:18000 HTTP/1.1
+User-Agent: Go-http-client/1.1
+Proxy-Connection: Keep-Alive
+Host: 127.0.0.1:18000
+Proxy-Authorization: Basic dmIuc3Bpa2U6MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+
+HEAD /asight-health/spike HTTP/1.1
+Host: 127.0.0.1:18000
+User-Agent: Go-http-client/1.1
+
+HEAD /asight-health/spike HTTP/1.1
+Host: 127.0.0.1:18000
+User-Agent: Go-http-client/1.1
+
