@@ -173,7 +173,7 @@ const weight = (r) => (r.folded ? 0 : 1) + (typeof r.suppressed === 'number' ? r
  *   last_start / last_stop   the last daemon-start, and the daemon-stop after it (or null)
  *   conditions               what still holds since the last daemon-start (with no daemon-start read: over all records
  *                            read, `partial:true`) — untrusted agents, negative-cache pairs, a dead helper, a wrong
- *                            helper protocol, desired ≠ actual, an unusable CA; each {kind, failure:true, since, …}
+ *                            helper protocol, desired ≠ actual, an unusable CA, an unreadable retention.json; each {kind, failure:true, since, …}
  *   groups                   failures of the last 24 h by groupKey: {key, count, first_ts, last_ts, last}
  *   expected                 {not_captured: count} of the last 24 h
  *   agents                   [{agent, last_captured, last_failure, last_failure_key}]
@@ -197,7 +197,7 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
     if (r.event === 'failure' && r.code === 'unclean-stop') break
   }
   const untrusted = new Map(), neg = new Map()
-  let degraded = null, version = null, mismatch = null, ca = null
+  let degraded = null, version = null, mismatch = null, ca = null, retention = null
   for (let i = from; i < records.length; i++) {
     const r = records[i]
     if (r.event === 'daemon-stop') out.last_stop = pick(r)
@@ -212,8 +212,13 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
     else if (r.event === 'failure' && r.code === 'negative-cache') neg.set(`${r.pid}\u0000${r.host}`, { kind: 'negative-cache', ...pick(r), since: r.ts })
     else if (r.event === 'failure' && r.code === 'ca-invalid') ca = { kind: 'ca-invalid', ...pick(r), since: r.ts }
     else if (r.event === 'ca-ok') ca = null // the daemon found the CA usable again and rebuilt what it signs with (D1-2)
+    // D40: ~/.asight/retention.json cannot be read or parsed (or holds a bad cell): every call is kept in full meanwhile,
+    // and that is a condition until retention-ok. A traffic pattern that does not compile, or a classifier that threw, is a
+    // failure of its own (the groups below), not this condition: retention-ok does not say they are fixed.
+    else if (r.event === 'failure' && r.where === 'retention' && r.code !== 'pattern-invalid' && r.code !== 'classify-failed') retention = { kind: 'retention', ...pick(r), since: r.ts }
+    else if (r.event === 'retention-ok') retention = null
   }
-  out.conditions = [...[ca, degraded, version, mismatch].filter(Boolean), ...untrusted.values(), ...neg.values()].map((c) => ({ ...c, failure: true }))
+  out.conditions = [...[ca, degraded, version, mismatch, retention].filter(Boolean), ...untrusted.values(), ...neg.values()].map((c) => ({ ...c, failure: true }))
   // the last 24 h: failure groups, expected counts, per agent
   const cutoff = now - windowMs
   const groups = new Map(), agents = new Map()
