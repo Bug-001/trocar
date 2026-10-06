@@ -17,7 +17,9 @@ const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e
 // `fail` for parse errors); `failure('…')` is the daemon's failure recorder (its first argument is `where`).
 function literals(root) {
   const out = []
-  for (const f of walk(path.join(root, 'src', 'collector'))) {
+  // src/capture: the old capture's event writers (RFC 4.1 过渡期, D38) use the same names
+  const legacy = fs.existsSync(path.join(root, 'src', 'capture')) ? walk(path.join(root, 'src', 'capture')) : []
+  for (const f of [...walk(path.join(root, 'src', 'collector')), ...legacy]) {
     const src = fs.readFileSync(f, 'utf8')
     const rel = path.relative(root, f)
     const grab = (re, kind) => { for (const m of src.matchAll(re)) out.push({ kind, name: m[1], file: rel }) }
