@@ -4,9 +4,17 @@
 //   lock = {pid, start_time, boot_id, helper_pid, engine_port, socket}: start_time is /proc/<pid>/stat field 22
 // (clock ticks since boot), boot_id /proc/sys/kernel/random/boot_id; the daemon refreshes the file's mtime every
 // 1 s. A pid is reused and a lock survives a reboot, so "running" needs all three to match and a fresh mtime.
-// Node built-ins only (0.1 §2).
+//   captureHealth() is what GET /api/capture-health answers and `asight collector status` prints when no daemon
+// answers (RFC 4.4, 4.6 §记录「看得到」): from disk only — flows/ (src/health/flows.mjs), the lock, the install manifest,
+// state.json, the raw journal and the old capture's events file — never through the daemon's socket.
+// Node built-ins, src/paths.mjs and src/raw/ only (0.1 §2).
 import nodeFs from 'node:fs'
 import path from 'node:path'
+import { asightHome } from '../paths.mjs'
+import { readFlows, readDay, foldFlows, pick, groupKey, WINDOW_MS, HealthUnreadable } from './flows.mjs'
+import { isFailure } from './codes.mjs'
+
+export { HealthUnreadable }
 
 export const LOCK_FRESH_MS = 5000
 
@@ -50,4 +58,166 @@ export function lockState({ file, now = Date.now(), alive = pidAlive, identity =
   if (verified && String(lock.boot_id) !== id.boot_id) return { state: 'stale', lock, why: 'the machine has rebooted since (boot id differs)', age_ms }
   if (verified && String(lock.start_time) !== id.start_time) return { state: 'stale', lock, why: `pid ${lock.pid} is another process now (start time differs)`, age_ms }
   return { state: age_ms > LOCK_FRESH_MS ? 'unresponsive' : 'running', lock, age_ms, ...(verified ? {} : { verified: false }) }
+}
+
+// ── captureHealth ─────────────────────────────────────────────────────────────────────────────────────────────
+const errText = (e) => String((e && e.message) || e)
+const DAEMON = { none: 'not-running', stale: 'not-running', unresponsive: 'not-responding', running: 'running', unknown: 'unknown' }
+// how bad each state is (1.5: `?` unreadable > ✗ > ⚠ > `?` unknown > ○ > ✓ > –); the top bar shows the worst part
+export const RANK = { unreadable: 8, 'not-running': 7, 'not-responding': 7, failing: 6, unknown: 5, 'no-events': 5, off: 4, ok: 3, residue: 2, 'not-installed': 1 }
+const latest = (...ts) => ts.filter(Boolean).sort().at(-1) || null
+
+function readJson(file, fs) {
+  let text
+  try { text = fs.readFileSync(file, 'utf8') } catch (e) { return e.code === 'ENOENT' ? { missing: true } : { error: `${file}: ${errText(e)}` } }
+  try { return { value: JSON.parse(text) } } catch (e) { return { error: `${file} does not parse (${e.message})` } }
+}
+// the complete lines of a file's last `max` bytes; {missing} / {error}
+function tailLines(file, max, fs) {
+  let fd
+  try { fd = fs.openSync(file, 'r') } catch (e) { return e.code === 'ENOENT' ? { missing: true } : { error: `${file}: ${errText(e)}` } }
+  try {
+    const size = fs.fstatSync(fd).size, len = Math.min(size, max)
+    const buf = Buffer.alloc(len)
+    fs.readSync(fd, buf, 0, len, size - len)
+    let text = buf.toString('utf8')
+    if (size > len) text = text.slice(text.indexOf('\n') + 1)
+    const recs = []
+    let unparsable = 0
+    for (const l of text.split('\n')) { if (!l) continue; try { const r = JSON.parse(l); if (r && typeof r === 'object') recs.push(r); else unparsable++ } catch { unparsable++ } }
+    return { recs, truncated: size > len, unparsable }
+  } catch (e) { return { error: `${file}: ${errText(e)}` } } finally { fs.closeSync(fd) }
+}
+const groupsOf = (recs, now, key = groupKey) => {
+  const m = new Map()
+  for (const r of recs) {
+    if (!(Date.parse(r.ts) >= now - WINDOW_MS)) continue
+    const k = key(r)
+    const g = m.get(k) || { key: k, count: 0, first_ts: r.ts, last_ts: r.ts, last: null }
+    g.count += 1 + (typeof r.suppressed === 'number' ? r.suppressed : 0); g.last_ts = r.ts; g.last = pick(r)
+    m.set(k, g)
+  }
+  return [...m.values()]
+}
+
+// The notes the last install / uninstall wrote (install-note / uninstall-note): in the window read, else in the day
+// files of the date the manifest gives (an install a week ago is still "the last install").
+function notesOf(dir, fold, m, fs, read) {
+  const at = (iso, event) => {
+    if (!iso) return []
+    const days = [iso.slice(0, 10), new Date(Date.parse(iso) + 86400e3).toISOString().slice(0, 10)]
+    const out = []
+    for (const d of days) { const r = readDay({ dir, date: d, fs }); read.errors.push(...r.errors); out.push(...r.records.filter((x) => x.event === event && Date.parse(x.ts) >= Date.parse(iso) - 60e3)) }
+    const lastT = out.length ? Date.parse(out[out.length - 1].ts) : 0
+    return out.filter((n) => Date.parse(n.ts) >= lastT - 60e3).map(pick)
+  }
+  return {
+    install: fold.install.install.length ? fold.install.install : at(m && m.complete ? m.created_at : null, 'install-note'),
+    uninstall: fold.install.uninstall.length ? fold.install.uninstall : at(m && m.uninstalled_at, 'uninstall-note'),
+  }
+}
+
+function collectorHealth({ dir, now, fs, alive, identity, maxBytes, read }) {
+  try { fs.statSync(dir) } catch (e) {
+    if (e.code === 'ENOENT') return { present: false, installed: false, residue: [], summary: { state: 'not-installed' } }
+    throw new HealthUnreadable(`${dir}: ${errText(e)}`)
+  }
+  const man = readJson(path.join(dir, 'install-manifest.json'), fs)
+  if (man.error) read.errors.push({ file: path.join(dir, 'install-manifest.json'), error: man.error })
+  const m = man.value && typeof man.value === 'object' ? man.value : null
+  const installed = man.error ? null : !!(m && m.complete)
+  // what an uninstall could not undo (D-18), or what a crashed install left
+  const residue = !m || m.complete ? [] : Array.isArray(m.uninstall_left) && m.uninstall_left.length
+    ? m.uninstall_left.map((l) => ({ path: l.path, harness: l.harness ?? null, result: l.result }))
+    : [...(m.entries || []).map((e) => ({ path: e.path, harness: e.harness ?? null, result: 'install did not finish' })), ...(m.files || []).map((f) => ({ path: f.path, harness: f.harness ?? null, result: 'install did not finish' }))]
+  const flows = readFlows({ dir, now, fs, maxBytes }) // an unreadable flows/ throws: 503
+  read.files.push(...flows.files); read.errors.push(...flows.errors); read.unparsable += flows.unparsable
+  if (flows.truncated) read.truncated = true
+  const fold = foldFlows(flows.records, { now })
+  const ls = lockState({ file: path.join(dir, 'lock'), now, alive, identity, fs })
+  const daemon = {
+    state: DAEMON[ls.state], ...(ls.lock ? { pid: ls.lock.pid } : {}), ...(ls.why ? { why: ls.why } : {}), ...(ls.error ? { error: ls.error } : {}),
+    ...(ls.age_ms != null ? { lock_refreshed_at: new Date(now - ls.age_ms).toISOString() } : {}), ...(ls.verified === false ? { verified: false } : {}),
+    unclean: ls.state === 'stale', last_record_at: fold.last_ts, last_start: fold.last_start, last_stop: fold.last_stop,
+  }
+  const st = readJson(path.join(dir, 'state.json'), fs)
+  if (st.error) read.errors.push({ file: path.join(dir, 'state.json'), error: st.error })
+  const sw = st.value ? { desired: st.value.desired === 'on' ? 'on' : 'off', since: st.value.updated_at || null } : st.missing ? { desired: 'off', since: null } : { desired: null, since: null, error: st.error }
+  const c = {
+    present: true, installed, residue, ...(man.error ? { manifest_error: man.error } : {}), daemon, switch: sw,
+    conditions: fold.conditions, ...(fold.partial ? { conditions_partial: true } : {}),
+    ...(daemon.state !== 'running' && fold.conditions.length ? { conditions_as_of: fold.last_ts } : {}),
+    failures: fold.groups, expected: fold.expected, agents: fold.agents, install: notesOf(dir, fold, m, fs, read),
+  }
+  c.summary = collectorSummary(c)
+  return c
+}
+function collectorSummary(c) {
+  if (c.installed === null) return { state: 'unknown', reason: c.manifest_error }
+  if (!c.installed) return c.residue.length ? { state: 'residue', n: c.residue.length } : { state: 'not-installed' }
+  const d = c.daemon, n = c.conditions.length + c.failures.length
+  if (d.state === 'not-running') return { state: 'not-running', since: d.last_record_at, n, ...(d.unclean ? { reason: d.why } : d.last_stop ? { signal: d.last_stop.signal ?? null, reason: d.last_stop.reason ?? null } : {}) }
+  if (d.state === 'not-responding') return { state: 'not-responding', since: d.lock_refreshed_at, n }
+  if (n) return { state: 'failing', n }
+  if (d.state === 'unknown') return { state: 'unknown', reason: d.error }
+  if (c.switch.desired === 'off') return { state: 'off', since: c.switch.since || (d.last_start && d.last_start.ts) || null }
+  return { state: 'ok', since: latest(d.last_start && d.last_start.ts, c.switch.since) }
+}
+
+// The old MITM / reverse proxy (RFC 4.1 过渡期, D38): ~/.asight/logs/mitm-events.ndjson. Without it, a capture file
+// written within 24 h means an old process started before the events writer existed: said, never "not installed".
+function legacyHealth({ home, now, fs, alive, read }) {
+  const file = path.join(home, 'logs', 'mitm-events.ndjson')
+  const t = tailLines(file, 1 << 20, fs)
+  if (t.error) { read.errors.push({ file, error: t.error }); return { present: true, state: 'unknown', error: t.error, summary: { state: 'unknown', reason: t.error } } }
+  if (t.missing) {
+    for (const f of ['claude-capture.ndjson', 'capture.ndjson']) {
+      let s; try { s = fs.statSync(path.join(home, f)) } catch { continue }
+      if (now - s.mtimeMs <= WINDOW_MS) return { present: true, state: 'no-events', capture: { file: path.join(home, f), mtime: new Date(s.mtimeMs).toISOString() }, summary: { state: 'no-events', since: new Date(s.mtimeMs).toISOString() } }
+    }
+    return { present: false, state: 'none', summary: { state: 'not-installed' } }
+  }
+  read.files.push(file); read.unparsable += t.unparsable
+  if (t.truncated) read.truncated = true
+  let start = null, stop = null
+  for (const r of t.recs) { if (r.event === 'mitm-start') { start = pick(r); stop = null } else if (r.event === 'mitm-stop') stop = pick(r) }
+  const failures = groupsOf(t.recs.filter(isFailure), now)
+  const running = start && !stop && (start.pid == null || alive(start.pid))
+  const last = t.recs.length ? t.recs[t.recs.length - 1].ts : null
+  const l = { present: true, state: running ? 'running' : 'not-running', last_start: start, last_stop: stop, last_record_at: last, failures }
+  l.summary = !running ? { state: 'not-running', since: (stop && stop.ts) || last, n: failures.length, ...(start && !stop ? { reason: `pid ${start.pid} is gone without a clean stop` } : {}) }
+    : failures.length ? { state: 'failing', n: failures.length } : { state: 'ok', since: start.ts }
+  return l
+}
+
+// The raw layer's journal (4.2 §原始层封存, D35): every outcome that is not plain success.
+function rawHealth({ home, now, fs, read }) {
+  const file = path.join(home, 'raw', 'journal.jsonl')
+  const t = tailLines(file, 1 << 20, fs)
+  if (t.missing) return { problems: [], failures: [] }
+  if (t.error) { read.errors.push({ file, error: t.error }); return { problems: [], failures: [], error: t.error } }
+  read.files.push(file); read.unparsable += t.unparsable
+  const bad = t.recs.filter((r) => r.outcome != null && r.outcome !== 'ok')
+  return { problems: bad.slice(-20).map(pick), ...(bad.length > 20 || t.truncated ? { truncated: true } : {}), failures: groupsOf(bad, now, (r) => `raw:${r.op}/${r.outcome}`) }
+}
+
+/**
+ * captureHealth({home}) → the /api/capture-health payload (RFC 4.4): `installed`,
+ * `summary` (the top bar's state, the worst of the collector's and the old capture's), `collector`, `legacy`, `raw`,
+ * `read` (files read, files that could not be, truncated). Throws HealthUnreadable when flows/ (or the collector
+ * directory) cannot be read at all — never an empty answer.
+ */
+export function captureHealth({ home = asightHome(), now = Date.now(), fs = nodeFs, alive = pidAlive, identity = procIdentity, maxBytes } = {}) {
+  const read = { files: [], errors: [], truncated: false, unparsable: 0, window_hours: WINDOW_MS / 3600e3 }
+  const collector = collectorHealth({ dir: path.join(home, 'collector'), now, fs, alive, identity, maxBytes, read })
+  const legacy = legacyHealth({ home, now, fs, alive, read })
+  const raw = rawHealth({ home, now, fs, read })
+  const parts = [{ part: 'collector', ...collector.summary }, { part: 'legacy', ...legacy.summary }]
+  let summary = parts.reduce((a, b) => (RANK[b.state] > RANK[a.state] ? b : a))
+  if (summary.state === 'failing') summary = { ...summary, n: parts.filter((p) => p.state === 'failing').reduce((k, p) => k + p.n, 0) }
+  if (raw.failures.length && ['ok', 'off', 'failing'].includes(summary.state)) summary = { part: summary.state === 'failing' ? summary.part : 'raw', state: 'failing', n: (summary.n || 0) + raw.failures.length }
+  if (summary.state === 'not-installed') summary = { state: 'not-installed' }
+  read.errors = [...new Map(read.errors.map((e) => [e.file, e])).values()] // one entry per file
+  if (read.errors.length) summary = { ...summary, read_errors: read.errors.length }
+  return { generated_at: new Date(now).toISOString(), installed: collector.installed === true || legacy.present, summary, collector, legacy, raw, read }
 }

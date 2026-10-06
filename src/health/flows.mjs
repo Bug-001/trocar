@@ -104,12 +104,26 @@ export function readFlows({ dir, now = Date.now(), windowMs = WINDOW_MS, maxByte
   return out
 }
 
+/** One UTC day's flows/ lines (original and sealed segments, oldest first), for notes older than the window. */
+export function readDay({ dir, date, fs = nodeFs, maxBytes = 1 << 20 } = {}) {
+  const d = path.join(dir, 'flows')
+  const out = { records: [], errors: [] }
+  let names
+  try { names = fs.readdirSync(d) } catch (e) { if (e.code !== 'ENOENT') out.errors.push({ file: d, error: errText(e) }); return out }
+  const all = names.filter((n) => { const m = DAY.exec(n); return m && m[1] === date }).map((n) => path.join(d, n))
+  const kept = resolveCoexistence(all, { fs }).files
+  for (const f of [...kept.filter((x) => DAY.exec(path.basename(x))[2]).sort(), ...kept.filter((x) => !DAY.exec(path.basename(x))[2])]) {
+    try { for (const l of readDayFile(f, maxBytes, fs).lines) { try { out.records.push(JSON.parse(l)) } catch { /* counted by readFlows when in its window */ } } } catch (e) { out.errors.push({ file: f, error: errText(e) }) }
+  }
+  return out
+}
+
 // ── the metadata whitelist ─────────────────────────────────────────────────────────────────────────────────────
 const KEEP = ['ts', 'event', 'where', 'code', 'reason', 'suppressed', 'folded', 'pid', 'agent', 'host', 'dst', 'peer',
   'flow_id', 'seq', 'd', 'i', 'pattern', 'candidates', 'cause', 'via', 'hint', 'which', 'file', 'harness', 'path', 'kind',
   'type', 'index', 'desired', 'actual', 'links', 'counts', 'from', 'to', 'lost', 'exit', 'stderr', 'signal', 'failed',
   'version', 'foreground', 'linger', 'upstream_ca', 'dropped', 'errno', 'route', 'phase', 'decision', 'inner',
-  'not_captured', 'write_failed', 'transport', 'port', 'out', 'servername', 'op', 'outcome', 'records', 'originalKept']
+  'not_captured', 'write_failed', 'transport', 'port', 'out', 'servername', 'op', 'outcome', 'records', 'originalKept', 'reader', 'target']
 const CLIP = 1000
 const clip = (v) => (typeof v === 'string' && v.length > CLIP ? `${v.slice(0, CLIP)}… (${v.length} chars)` : v)
 /** A record cut down to metadata: listed fields only, long strings clipped and said so, `error` as {type, message, side}. */
