@@ -5,14 +5,26 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { X509Certificate } from 'node:crypto'
+import net from 'node:net'
+import tls from 'node:tls'
+import { once } from 'node:events'
+import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
-import { startControlServer } from '../../src/collector/core/control.mjs'
-import { installCollector, uninstallCollector, stopDaemon, freeEnginePort, daemonEnv } from '../../src/collector/install.mjs'
+import { startControlServer, controlRequest } from '../../src/collector/core/control.mjs'
+import { installCollector, uninstallCollector, stopDaemon, freeEnginePort, daemonEnv, turnOn } from '../../src/collector/install.mjs'
+import { startDaemon } from '../../src/collector/daemon.mjs'
 import { readManifest } from '../../src/collector/core/trust/journal.mjs'
-import { createCa } from '../../src/collector/core/tls/ca.mjs'
+import { undoHarnesses } from '../../src/off/undo.mjs'
+import { userUnit } from '../../src/collector/arch/linux/unit.mjs'
+import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
+import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
+import { createRedirectorClient } from '../../src/collector/arch/linux/redirector-client.mjs'
+import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector.mjs'
 import cc from '../../src/collector/harness/claude-code.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { onNone } from '../helpers/signature-os.mjs'
+import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
+import { fakeSystem, recordingExec, fakeDaemon, ROOTS } from '../cli/fixtures/on-ctx.mjs'
 
 function box() {
   const home = tmpDir('asight-inst-')
@@ -904,4 +916,122 @@ test('a descriptor whose afterUninstall is a string that is no known "until" is 
   assert.throws(() => validateDescriptor({ ...cc, trust: { ...cc.trust, afterUninstall: 'next-connnection' } }), /afterUninstall.*next-connnection/)
   assert.throws(() => validateDescriptor({ ...cc, trust: { ...cc.trust, untilEnviron: 3 } }), /untilEnviron/)
   assert.doesNotThrow(() => validateDescriptor({ ...cc, trust: { ...cc.trust, afterUninstall: 'session-end', untilEnviron: 'X' } }))
+})
+
+// ── asight on: the unit, and a harness turned on again (1.6 §1.6 · §1.1; V33, V16 unit half) ───────────────────────────────────────────────
+const onBase = (b, o = {}) => ({ home: b.home, env: { HOME: b.home }, osName: 'none', harnesses: [cc], freePort: async () => 47011, roots: ROOTS, confirm: async () => true, socketPath: '/x/c.sock', sleep: async () => {}, linger: () => true, ...o })
+const unitOf = (b, run) => userUnit({ home: b.home, node: '/usr/bin/node', script: '/repo/bin/asight.mjs', run })
+
+test('V33: on --no-autostart writes the unit and starts it without enable, the daemon is then running; on --no-unit writes no unit and the manifest lists none', async () => {
+  const b = box()
+  try {
+    const sys = fakeSystem()
+    const r = await turnOn(onBase(b, { unit: unitOf(b, sys.exec.run), request: sys.daemon.request, autostart: false }))
+    assert.equal(r.exit, 0)
+    const unitFile = path.join(b.home, '.config', 'systemd', 'user', 'asight-collector.service')
+    assert.ok(fs.existsSync(unitFile), 'the unit is installed')
+    assert.deepEqual(sys.exec.calls, ['systemctl --user start asight-collector.service'], 'started for this run, and never enabled: is-enabled would not say enabled')
+    assert.equal(sys.exec.calls.some((c) => /enable/.test(c)), false)
+    assert.equal(sys.daemon.state.up, true, 'the daemon is running')
+    assert.deepEqual(readManifest(b.dir).files.filter((f) => f.role === 'unit').map((f) => f.path), [unitFile], 'and listed: uninstall removes it')
+  } finally { b.done() }
+  const c = box()
+  try {
+    const ex = recordingExec()
+    const r = await turnOn(onBase(c, { unit: null, request: fakeDaemon({ up: false }).request }))
+    assert.equal(r.exit, 0)
+    assert.ok(!fs.existsSync(path.join(c.home, '.config')), '--no-unit writes no unit')
+    assert.deepEqual(readManifest(c.dir).files.filter((f) => f.role === 'unit'), [], 'the manifest lists none')
+    assert.deepEqual(ex.calls, [])
+  } finally { c.done() }
+})
+
+// A keep-alive TLS relay for relay.asight.test with its own private CA (the shape daemon.test.mjs uses): answers every complete request with a fixed message.
+const FAKE_LOADER = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
+const REPLY = '{"id":"msg_1","type":"message","role":"assistant","model":"claude-x","content":[{"type":"text","text":"pong"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":1}}'
+async function relay() {
+  const ca = createCa({ commonName: 'v16 relay CA' })
+  const issuer = createLeafIssuer(loadCa(ca))
+  const got = []
+  const srv = tls.createServer({ SNICallback: (n, cb) => cb(null, issuer.secureContextFor(n)) }, (sock) => {
+    let buf = Buffer.alloc(0)
+    sock.on('data', (d) => {
+      buf = Buffer.concat([buf, d])
+      for (;;) {
+        const end = buf.indexOf('\r\n\r\n'); if (end < 0) return
+        const len = Number(/content-length: (\d+)/i.exec(buf.subarray(0, end).toString('latin1'))[1])
+        if (buf.length < end + 4 + len) return
+        got.push(buf.subarray(0, end + 4 + len)); buf = buf.subarray(end + 4 + len)
+        sock.write(`HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: ${REPLY.length}\r\n\r\n${REPLY}`)
+      }
+    })
+  })
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r))
+  return { ca, got, port: srv.address().port, close: () => srv.close() }
+}
+const until = async (fn, ms = 3000) => { const end = Date.now() + ms; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 20)) } }
+const pause = (ms) => new Promise((r) => setTimeout(r, ms))
+
+test('V16 (unit half): a Claude Code started while its harness was off, then on again, is config-after-start — passed through with no client error, listed under restart by the on receipt, trusted only after it restarts (1.6 §1.1, R9)', async () => {
+  const root = tmpDir('as-v16-'); const home = path.join(root, 'home'); fs.mkdirSync(home)
+  const b = { home, dir: path.join(home, '.asight', 'collector') }
+  const sock = path.join(root, 'run', 'c.sock')
+  const p = fakeProc(); const up = await relay()
+  const clients = []
+  const arch = { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient: () => { const c = createRedirectorClient({ binary: process.execPath, args: [FAKE_LOADER], env: { ...process.env, ASIGHT_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 }); clients.push(c); return c }, procRoot: p.root, uid: process.getuid() }) }
+  const ticks = () => Math.ceil((Date.now() / 1000 - p.btime) * 100)
+  const CC_EXE = '/home/u/.local/share/claude/versions/2.1.289'
+  const start = async (pid) => { p.add(pid, { uid: process.getuid(), exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: root, env: { HOME: home }, startTicks: ticks() }); await clients[0].raw({ op: '__emit', ev: 'exec', tgid: pid, pid, comm: 'claude', filename: CC_EXE, ts_ns: pid }) }
+  const ask = (method, path_, body) => controlRequest({ socketPath: sock, method, path: path_, body })
+  const agentOf = async (pid) => (await ask('GET', '/status')).agents.find((a) => a.pid === pid)
+  const on = (o = {}) => turnOn(onBase(b, { socketPath: sock, request: controlRequest, unit: null, ...o }))
+  fs.mkdirSync(path.join(home, '.claude')); fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}` } }, null, 2)) // the user's own relay: its host is in the decrypt policy
+  let d = null
+  try {
+    // the first on: the entry is written, no daemon answers (no unit), so nothing is asked of one
+    const first = await on()
+    assert.deepEqual([first.exit, first.receipt.daemon.state], [0, 'not-running'])
+    d = await startDaemon({ dir: b.dir, socketPath: sock, arch, harnesses: [cc], env: { ...process.env, HOME: home }, upstreamCa: up.ca.certPem }) // restores the desired state: attached
+    await pause(30)
+    await start(4242) // started after the entry: trusted
+    await until(async () => { const a = await agentOf(4242); return a && a.trusted })
+    // off for the harness: the daemon stops watching it and the entry goes
+    await ask('POST', '/off', { harnesses: ['claude-code'] })
+    const out = await undoHarnesses({ dir: b.dir, home, manifest: readManifest(b.dir), ids: ['claude-code'], procs: async () => [], roots: ROOTS })
+    assert.deepEqual(out.left, [])
+    await pause(30)
+    await start(4343) // started while it is off
+    await pause(40)
+    // on again: the entry is written now, so both processes are older than it
+    const again = await on({ confirm: async () => { throw new Error('nothing new to confirm: the settings file was confirmed by the first on') } })
+    assert.equal(again.exit, 0, JSON.stringify(again.receipt.notes))
+    assert.deepEqual(again.receipt.restart.map((x) => [x.harness, x.pid, x.reason]).sort((x, y) => x[1] - y[1]), [['claude-code', 4242, 'config-after-start'], ['claude-code', 4343, 'config-after-start']], 'the receipt says which processes capture waits for a restart of')
+    const row = await agentOf(4343)
+    assert.deepEqual([row.trusted, row.reason, row.decrypt], [false, 'config-after-start', false])
+    assert.equal((await clients[0].raw({ op: '__watched' })).watch['4343'], 0, 'the kernel only observes it: its connections go direct')
+    // its connection passes through the engine untouched: the client sees the relay's own certificate, no error, and the relay got the bytes
+    const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
+    await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4343, decrypt: 0 })
+    const conn = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: up.ca.certPem }); await once(conn, 'secureConnect')
+    const body = JSON.stringify({ model: 'claude-x', max_tokens: 4, messages: [{ role: 'user', content: 'v16-through' }] })
+    const reply = await new Promise((resolve, reject) => { let t = ''; conn.on('error', reject); conn.on('data', (x) => { t += x; if (t.endsWith(REPLY)) resolve(t) }); conn.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`) })
+    assert.match(reply, /^HTTP\/1\.1 200 OK/)
+    assert.ok(Buffer.concat(up.got).toString().includes('v16-through'), 'the relay received it')
+    conn.end()
+    assert.equal(fs.readdirSync(b.dir).filter((n) => /^capture-.*\.ndjson$/.test(n)).length, 0, 'and nothing of it was recorded: it was not decrypted')
+    // after a restart the new process is trusted — it started after the entry — and decrypted
+    await pause(30)
+    await start(4444)
+    const fresh = await until(async () => { const a = await agentOf(4444); return a && a.trusted && a })
+    assert.deepEqual([fresh.reason, fresh.decrypt], ['ok', true])
+    const raw2 = net.connect(d.port, '127.0.0.1'); await once(raw2, 'connect')
+    await clients[0].raw({ op: '__inject_port', port: raw2.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4444, decrypt: 1 })
+    const conn2 = tls.connect({ socket: raw2, servername: 'relay.asight.test', ca: fs.readFileSync(path.join(b.dir, 'ca', 'asight-ca.pem'), 'utf8') }); await once(conn2, 'secureConnect') // asight's leaf, which only a process that trusts asight's CA accepts
+    const body2 = JSON.stringify({ model: 'claude-x', max_tokens: 4, messages: [{ role: 'user', content: 'v16-after-restart' }] })
+    await new Promise((resolve, reject) => { let t = ''; conn2.on('error', reject); conn2.on('data', (x) => { t += x; if (t.endsWith(REPLY)) resolve(t) }); conn2.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body2)}\r\n\r\n${body2}`) })
+    const capture = await until(() => fs.readdirSync(b.dir).find((n) => /^capture-.*\.ndjson$/.test(n)))
+    const envs = await until(() => { const t = fs.readFileSync(path.join(b.dir, capture), 'utf8'); return t.includes('v16-after-restart') && t.trim().split('\n').map((l) => JSON.parse(l)) })
+    assert.deepEqual([envs.length, envs[0].proc.pid, envs[0].proc.agent], [1, 4444, 'claude-code'], 'recorded verbatim, from the process that restarted')
+    conn2.end()
+  } finally { await (d && d.stop()); up.close(); p.done() }
 })

@@ -340,6 +340,138 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
   })
 }
 
+/** `asight on` (1.6 §1.1, §1.6, R1, R6, R9, R12): plan → confirm → desired state first → write → unit → daemon → receipt. Library form of the command: `runOnCli`
+ *  (src/cli/on.mjs) parses the arguments and prints; everything the world gives is injected (`fs`, `request`, `now`, `getuid`, `helperState`, `linger`,
+ *  `sleep`), so a test runs it in a sandbox HOME. Refuses root by throwing (R7); everything else is a receipt: `exit` 0 done · 1 not done or a problem ·
+ *  2 not in a terminal without a yes (the plan is in the receipt, nothing was written).
+ *    ids        harness code ids, or null for every one found   confirm(plan) → true | false | null (null: nobody can be asked)   onPlan(plan): print it
+ *    unit       the autostart unit (arch/linux/unit.mjs userUnit), or null (`--no-unit`)   autostart  false: `start` it, never `enable` (`--no-autostart`)
+ *    request    the control socket's client (default: controlRequest at $XDG_RUNTIME_DIR/asight/collector.sock, or `socketPath`)
+ *  → { receipt, manifest, plan, exit }. */
+export async function turnOn(opts = {}) {
+  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, osRootsFile = null, roots = null, unit = null, autostart = true, freePort = freeEnginePort, onPlan = () => {}, confirm = null, dryRun = false, request = controlRequest, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, socketPath = null, sleep: pause = sleep, user = null } = opts
+  refuseRoot('on', getuid)
+  const dir = collectorHome(path.join(home, '.asight'))
+  const stateF = path.join(dir, 'state.json')
+  const username = (() => { try { return user || os.userInfo().username } catch { return String(env.USER || '') } })()
+  const fresh = () => ({ ...newReceipt('on'), user: username, relayed: { closing: 0, waiting: 0, cut: 0 }, undo: ['asight off', 'asight uninstall'], log: path.join(dir, 'flows') }) // on relays nothing: zeros on purpose
+  if (helperState) {
+    const h = await helperState()
+    if (h && h.ok === false) return { receipt: { ...fresh(), ok: false, notes: [`the capability helper is missing or not the right version (${h.reason || 'not usable'}); nothing was changed. Run: sudo asight setup-helper`] }, manifest: null, plan: null, exit: 1 }
+  }
+  const lingerNow = () => { try { const v = linger ? linger() : undefined; return v === true || v === false ? { linger: v } : { linger: 'unknown', linger_reason: linger ? 'the linger state could not be read (/var/lib/systemd/linger)' : 'nothing reads it here' } } catch (e) { return { linger: 'unknown', linger_reason: String((e && e.message) || e) } } }
+  return recorded(dir, 'install', async (run) => {
+    const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, osRootsFile, roots, unit, fs, now })
+    const stateRead = (() => { try { return { ...readStateFile(stateF, { fs, installed: plan.targets }), error: null } } catch (e) { return { state: emptyState(), from: null, error: e } } })()
+    const need = plan.targets.filter((id) => !(stateRead.state.harnesses[id] && stateRead.state.harnesses[id].desired === 'on'))
+    const stateNew = need.length > 0 && !fs.existsSync(stateF)
+    const r = { ...fresh(), ...lingerNow(), harnesses: plan.targets, changed: plan.changed, created: [...plan.created, ...(stateNew ? [stateF] : [])], skipped: [...plan.skipped], restart: plan.restart, unchanged: plan.unchanged, notes: [...plan.notes] }
+    if (stateRead.error) r.notes.push(`${stateF} could not be read (${String(stateRead.error.message || stateRead.error)}); it is written again`)
+    if (!plan.targets.length) return { receipt: { ...r, ok: false, changed: [], created: [], notes: [...r.notes, 'no agent asight can capture was found: nothing was changed. Install one, then run asight on again'] }, manifest: plan._.prior, plan, exit: 1 }
+    const named = !!ids && plan.skipped.some((s) => ids.includes(s.what)) // a harness asked for by name that has nothing to install: not done
+    if (dryRun) return { receipt: { ...r, dry_run: true, ok: !named }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
+    if (plan.writing || need.length > 0) onPlan(plan)
+    if (plan.first || plan.newPaths.length) {
+      const verdict = confirm ? await confirm(plan) : null
+      if (verdict == null) return { receipt: { ...r, ok: false, planned: true, needs_yes: true, notes: [...r.notes, '不在终端里,没有 --yes:只打印了计划,什么都没改。看过计划之后加 --yes 再跑一次'] }, manifest: plan._.prior, plan, exit: 2 }
+      if (verdict === false) return { receipt: { ...r, ok: false, planned: true, declined: true, notes: [...r.notes, '没有确认:什么都没改'] }, manifest: plan._.prior, plan, exit: 1 }
+    }
+
+    // ── confirmed: from here on, writes ──
+    const m = openManifest({ dir, plan, now, fs })
+    // the desired state goes first (R9, R12): an `off` that lands meanwhile writes the same file, and every write below reads it again
+    if (need.length) writeStateAtomic(stateF, setDesired(stateRead.state, need, 'on', now()), { fs })
+    const guard = () => {
+      let st
+      try { st = readStateFile(stateF, { fs }).state } catch (e) { throw stop(`${stateF} cannot be read (${String((e && e.message) || e)}), so it is not known whether an off was asked; stopped (1.6 R12)`) }
+      const off = plan.targets.filter((id) => !(st.harnesses[id] && st.harnesses[id].desired === 'on'))
+      if (off.length) throw stop(`${off.join(', ')} was turned off while this on ran (${stateF}); stopped, the off wins (1.6 R12). What was written is a resumable install: asight on finishes it`)
+    }
+    const notes = r.notes
+    const problems = []
+    let written = null, final = null, halt = false
+    try { ({ final, written } = await writeInstall({ dir, home, plan, m, osName, harnesses, freePort, now, fs, guard, confirmed: true })) } catch (e) {
+      if (!e.stopsRun) throw e
+      written = e.written; halt = true
+      problems.push(e.message)
+    }
+    const put = noteRun({ dir, run, final: final || { records: [] }, written: written || { entries: [] }, notes, fs })
+    const receipt = {
+      ...r,
+      changed: (written ? written.entries : []).map((e) => ({ path: e.path, change: changeText(e, e.prior_value), backup: e.backup ?? null })),
+      created: [...(plan._.prior ? [] : [manifestPath(dir)]), ...(stateNew ? [stateF] : []), ...(written && written.caCreated ? plan._.ca ? [plan._.ca.key, plan._.ca.pem] : [] : []), ...(written ? [...written.files, ...written.owned, ...(written.unit && unit ? [unit.path] : [])] : [])],
+      unchanged: written ? written.intact : [],
+    }
+    const finish = (outcome, reason) => {
+      receipt.ok = !problems.length && !named && !(written && written.userChanged.length) // an entry the user changed is left, and not in effect: not "done"
+      receipt.notes = [...notes, ...problems]
+      const counts = { entries: m.entries.length, changed: receipt.changed.length, notes: receipt.notes.length }
+      put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome, counts, reason })
+      return { receipt, manifest: m, plan, exit: receipt.ok ? 0 : 1 }
+    }
+    if (halt) { put({ event: EVENT.failure, where: 'install', code: 'install-error', reason: problems[0] }); return finish('stopped', `on stopped: ${problems[0]}`) }
+
+    // ── the unit and the daemon: started when nothing answers, never started a second time (拉起不是重启, R8) ──
+    const sock = socketPath || (() => { try { return controlSocketPath({ env }) } catch { return null } })()
+    const probe = async () => {
+      if (!sock) return { up: false, why: 'XDG_RUNTIME_DIR is not set, so there is no control socket to ask' }
+      try { await request({ socketPath: sock, method: 'GET', path: '/status', timeoutMs: 2000 }); return { up: true } } catch (e) {
+        if (e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED')) return { up: false }
+        return { up: false, stuck: String((e && e.message) || e) }
+      }
+    }
+    const checked = (fn) => { try { fn() } catch (e) { if (!e.stopsRun) throw e; problems.push(e.message); halt = true } }
+    const was = await probe()
+    let up = was.up, started = false, unitFailed = null
+    if (was.stuck) { problems.push(`a daemon holds the control socket but does not answer (${was.stuck}); run "asight off", then "asight on" (off stops a stuck daemon, 1.6 §1.4)`); halt = true }
+    else if (unit) {
+      checked(() => guard())
+      if (!halt) {
+        if (written.unit === 'rewrite' && typeof unit.reload === 'function') unit.reload() // a unit file rewritten under a loaded unit
+        const rr = autostart ? unit.enable({ now: !was.up }) : (was.up ? null : unit.start())
+        started = !was.up
+        if (rr && rr.code !== 0) {
+          unitFailed = `${unit.path} is written but "systemctl --user ${autostart ? `enable${was.up ? '' : ' --now'}` : 'start'}" failed (${rr.err || `exit ${rr.code}`}); start the daemon with "${DAEMON_CMD}", or enable the unit once systemd --user runs`
+          notes.push(unitFailed); problems.push(unitFailed); put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed })
+        } else if (!was.up) {
+          for (let i = 0; i < 60 && !up; i++) { up = (await probe()).up; if (!up) await pause(250) }
+          if (!up) {
+            const why = `the unit was ${autostart ? 'enabled and started' : 'started'}, but no daemon answers on ${sock}; look at "systemctl --user status ${UNIT_NAME_HINT}" and the board's capture health`
+            problems.push(why); put({ event: EVENT.failure, where: 'start', code: 'start-failed', reason: why })
+          }
+        }
+      }
+    } else if (!up) notes.push(`没有自启单元,守护进程没在跑:运行 ${DAEMON_CMD}(它按 state.json 里的期望态挂引流)${was.why ? `;${was.why}` : ''}`)
+    const pid = readLockPid(dir, fs)
+    receipt.daemon = { state: up ? 'running' : 'not-running', started: started && up, ...(pid ? { pid } : {}) }
+    receipt.unit = unit ? { path: unit.path, written: written.unit || false, autostart, enabled: autostart && !unitFailed } : null
+    // the links last: the daemon attaches on this request, and answers with what the kernel confirms
+    if (up && !halt) checked(() => guard())
+    if (up && !halt) {
+      let status = null
+      try { status = await request({ socketPath: sock, method: 'POST', path: '/on', body: { harnesses: plan.targets } }) } catch (e) {
+        const why = `the daemon did not take the on request (${String((e && e.message) || e)})`
+        problems.push(why); put({ event: EVENT.failure, where: 'control', code: 'control-error', reason: why })
+      }
+      if (status) {
+        receipt.restart = (status.agents || []).filter((a) => a && !a.trusted && !a.off && RESTART_REASONS.has(a.reason) && plan.targets.includes(a.agent)).map((a) => ({ harness: a.agent, pid: a.pid, reason: a.reason }))
+        receipt.capture = { desired: status.desired ?? null, actual: status.actual ?? null }
+        if (status.actual !== 'on') {
+          const why = status.helper && status.helper.ok === false ? `the capability helper speaks protocol ${status.helper.proto}, this daemon expects ${status.helper.expected_proto}; run: sudo asight setup-helper`
+            : status.degraded ? `the helper is down (${status.degraded.reason}); nothing is steered, agents connect directly`
+              : status.ca && status.ca.ok === false ? `the collector CA is unusable (${status.ca.which}: ${status.ca.reason}); nothing is steered` : `the kernel does not confirm the links (actual: ${status.actual}); nothing is steered, agents connect directly`
+          problems.push(why); put({ event: EVENT.failure, where: 'switch', code: 'state-mismatch', reason: why })
+        }
+      }
+    }
+    const wrote = written.entries.length || written.files.length || written.owned.length || written.unit
+    return finish(wrote ? 'installed' : 'on', problems.length ? `on did not finish: ${problems[0]}` : `on: ${plan.targets.join(', ')}`)
+  })
+}
+
+const UNIT_NAME_HINT = 'asight-collector.service'
+function readLockPid(dir, fs) { try { return JSON.parse(fs.readFileSync(path.join(dir, 'lock'), 'utf8')).pid ?? null } catch { return null } }
+
 // 4.6 §安装清单与卸载 step 1: stop this user's daemon and wait until it AND its helper are gone (the helper's
 // links are unpinned and go with it). The daemon is looked for at the runtime socket and at the socket its lock
 // names (XDG_RUNTIME_DIR unset, or logind removed /run/user/<uid>): a daemon that steers must never be orphaned.
