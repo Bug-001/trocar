@@ -75,3 +75,43 @@ test('row 2: the run refuses while another `asight raw seal` works in its tree (
     assert.equal(res.deletedOnly.length, 1);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+// ── row 3: a journal entry before every unlink; no journal, no deletion ──────────────────────────
+test('row 3: a raw journal that cannot be written refuses the whole delete run — nothing deleted', async () => {
+  const { root, f } = sealedTree();
+  const ro = path.join(root, 'ro');
+  try {
+    await sealLegacy(f, { ...NONE, journal: path.join(root, 'j.jsonl') });
+    fs.mkdirSync(ro); fs.chmodSync(ro, 0o500);
+    for (const journal of [path.join(ro, 'journal.jsonl'), null]) {
+      await assert.rejects(sealLegacy(f, { ...NONE, journal, deleteOriginal: true }), /raw journal .*cannot be written.*nothing deleted/);
+      assert.ok(fs.existsSync(f), `deleted without a durable record (journal ${journal})`);
+    }
+  } finally { fs.chmodSync(ro, 0o700); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('row 3: each original\'s "deleting" entry is durable before its unlink; a journal that breaks mid-run stops the run there', async () => {
+  const root = tmpDir(), journal = path.join(root, 'j.jsonl');
+  try {
+    const dir = path.join(root, 'sessions', SID);
+    const files = ['calls.ndjson', 'probes.ndjson', 'other.ndjson'].map((n) => writeShard(path.join(dir, n), conversation(SID, 2, { idPrefix: n[0] }).map((r) => toLine(r))));
+    await sealLegacy(dir, { ...NONE, journal });
+    const before = [];
+    const spy = { ...fs, unlinkSync: (p) => { if (files.includes(p)) before.push([p, readJournal({ journal }).at(-1)]); return fs.unlinkSync(p); } };
+    let n = 0;
+    // the journal breaks before the 2nd file and would work again for the 3rd: the run stopped at the 2nd
+    const res = await sealLegacy(dir, { ...NONE, journal, deleteOriginal: true, fs: spy, onFile: () => { n++; fs.chmodSync(journal, n === 2 ? 0o400 : 0o600); } });
+    assert.equal(before.length, 1, 'an original was unlinked after the journal could not be written');
+    assert.equal(before[0][1].op, 'delete-original');
+    assert.equal(before[0][1].outcome, 'deleting', 'no durable entry before the unlink');
+    assert.equal(before[0][1].file, before[0][0]);
+    assert.deepEqual(res.deletedOnly.map((x) => x.file), [before[0][0]]);
+    const kept = files.filter((f) => f !== before[0][0]);
+    assert.equal(kept.length, 2);
+    for (const f of kept) {
+      assert.ok(fs.existsSync(f));
+      assert.match(res.refused.find((r) => r.file === f).reason, /raw journal .*cannot be written/);
+    }
+    assert.equal(n, 2, 'the run went on after the journal broke');
+  } finally { try { fs.chmodSync(journal, 0o600); } catch {} fs.rmSync(root, { recursive: true, force: true }); }
+});

@@ -275,10 +275,17 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
   if (dryRun) return { target, dryRun: true, plan, wouldSeal: plan.filter((x) => x.action === 'seal').map((x) => x.file), refused, locks, skipped, known };
 
   const sealed = [], deletedOnly = [], failed = [];
+  // No deletion without a durable record of it (review 3 confirm, row 3): a journal that cannot be
+  // written refuses the whole delete run before anything is deleted.
+  const noJournal = `the raw journal ${journal ?? '(none)'} cannot be written — a deletion must be recorded before it is made; nothing deleted`;
+  if (plan.some((x) => x.action === 'delete')
+    && !appendJournal({ op: 'delete-original', outcome: 'started', target, files: plan.filter((x) => x.action === 'delete').length }, { journal })) throw refuseAll(noJournal);
   // A file that changed since the quiet window is being written after all: refuse it, whatever step
   // we are at. Asked before each file and again between its byte-for-byte check and the unlink.
   const moved = (f) => { let now = null; try { now = fs.statSync(f); } catch {} return now && sameStat(before.get(f), now) ? null : 'changed after the quiet window — something is still writing it; nothing deleted'; };
+  let stopped = false;
   for (const { file: f, action, copies } of plan) {
+    if (stopped) { refused.push({ file: f, reason: `not attempted — ${noJournal}` }); continue; }
     onFile(f);
     const m = moved(f);
     if (m) { refused.push({ file: f, reason: m }); appendJournal({ op: 'seal-legacy', outcome: 'refused', file: f, reason: m }, { journal }); continue; }
@@ -288,7 +295,8 @@ export async function sealLegacy(target, { fs = nodeFs, deleteOriginal = false, 
       catch (e) { failed.push({ file: f, reason: e.message, originalKept: fs.existsSync(f) }); }
       continue;
     }
-    const r = deleteVerified(fs, f, copies, { moved, journal });
+    const r = deleteVerified(fs, f, copies, { moved, journal, noJournal });
+    if (r.stop) stopped = true;
     if (r.deleted && !r.error) deletedOnly.push({ file: f, copies });
     else if (r.refused) refused.push({ file: f, reason: r.refused });
     else failed.push({ file: f, reason: r.error, originalKept: !r.deleted, ...(r.deleted ? { state: r.state } : {}) });
@@ -321,8 +329,10 @@ export function planFile(fs, f, { deleteOriginal = false } = {}) {
 // Delete `f` after proving `copies` (copies of all of it, by content) byte for byte, durably: the
 // copies' directories are fsync'd before the unlink, the original's after it (E5 order). Every outcome
 // is journalled, a failure with the true state of the original — before the unlink "kept", after it
-// "deleted, <the step that failed>" (review 3 F7). → { deleted, refused?, error?, state? }
-function deleteVerified(fs, f, copies, { moved, journal }) {
+// "deleted, <the step that failed>" (review 3 F7) — and a `deleting` entry is durable before the
+// unlink: when it cannot be written the file is kept and the run stops (`stop`; confirm review, row 3).
+// → { deleted, refused?, error?, state?, stop? }
+function deleteVerified(fs, f, copies, { moved, journal, noJournal }) {
   // the shard's seal lock, from the check through the unlink: no sealer touches this file meanwhile
   // (review 3 confirm, row 2). One a live sealer holds refuses the file, its lock left alone.
   let lock;
@@ -331,9 +341,9 @@ function deleteVerified(fs, f, copies, { moved, journal }) {
     appendJournal({ op: 'delete-original', outcome: 'refused', file: f, reason }, { journal });
     return { deleted: false, refused: reason };
   }
-  try { return deleteLocked(fs, f, copies, { moved, journal }); } finally { releaseLock(fs, lock); }
+  try { return deleteLocked(fs, f, copies, { moved, journal, noJournal }); } finally { releaseLock(fs, lock); }
 }
-function deleteLocked(fs, f, copies, { moved, journal }) {
+function deleteLocked(fs, f, copies, { moved, journal, noJournal }) {
   const v = verifyAgainst(copies, f, { fs });
   if (!v.ok) {
     const reason = `its sealed copy does not match it byte for byte (${v.reason}) — nothing deleted; check with \`asight raw verify\``;
@@ -345,6 +355,8 @@ function deleteLocked(fs, f, copies, { moved, journal }) {
     for (const dir of new Set(copies.map((c) => path.dirname(c)))) fsyncDir(fs, dir);
     const late = moved(f);
     if (late) { appendJournal({ op: 'delete-original', outcome: 'refused', file: f, reason: late }, { journal }); return { deleted: false, refused: late }; }
+    // durable before the unlink: the record that this file is being deleted, and against what
+    if (!appendJournal({ op: 'delete-original', outcome: 'deleting', file: f, against: copies, records: v.records, bytes: v.bytes }, { journal })) return { deleted: false, refused: noJournal, stop: true };
     step = 'unlink';
     fs.unlinkSync(f);
     step = 'removing its close marker';
