@@ -88,3 +88,46 @@ test('F10: the legacy entry cleans dead locks in the tree it seals; a live one i
     assert.ok(readJournal({ journal }).some((x) => x.op === 'lock' && x.outcome === 'removed' && x.pid === dead));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+// Second pass on F12 (缺接线): the lock is per source path, but the dead-temp cleanup was per name in
+// the target dir — so a sealer deleted the LIVE temp of another sealer filing a same-named shard into
+// the same session dir, and that one aborted ("seal aborted, original kept: ENOENT … .tmp").
+test('F12: a temp of a sealer that is still running is never removed by another', async () => {
+  const root = tmpDir();
+  try {
+    const ses = path.join(root, 'sessions');
+    const shard = writeShard(path.join(root, 'a', 'capture-2026-10-05.ndjson'), conversation(S, 2).map((r) => toLine(r)));
+    markClosed(shard);
+    fs.mkdirSync(path.join(ses, S), { recursive: true });
+    const live = path.join(ses, S, `.capture-2026-10-05.ndjson.${process.ppid}-0badc0de.tmp`);   // a running process's temp
+    const dead = path.join(ses, S, `.capture-2026-10-05.ndjson.${spawnSync(process.execPath, ['-e', '']).pid}-deadbeef.tmp`);
+    fs.writeFileSync(live, 'in progress'); fs.writeFileSync(dead, 'left by a kill');
+    await sealShard(shard, { sessionsRoot: ses, journal: null });
+    assert.ok(fs.existsSync(live), 'a live sealer\'s temp was deleted');
+    assert.equal(fs.existsSync(dead), false, 'a dead sealer\'s temp was kept');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+const PAIR = `
+import { sealShard } from ${JSON.stringify(SEAL)};
+await sealShard(process.env.SHARD, { sessionsRoot: process.env.SESSIONS, journal: null });
+`;
+test('F12: two sealers filing same-named shards into one session dir at once both finish, nothing lost', async () => {
+  const { spawn } = await import('node:child_process');
+  const run = (shard, ses) => new Promise((res) => { const c = spawn(process.execPath, ['--input-type=module', '-e', PAIR], { env: { ...process.env, SHARD: shard, SESSIONS: ses } }); let err = ''; c.stderr.on('data', (d) => (err += d)); c.on('close', (code) => res({ code, err })); });
+  for (let round = 0; round < 6; round++) {
+    const root = tmpDir();
+    try {
+      const ses = path.join(root, 'sessions');
+      const a = writeShard(path.join(root, 'a', 'capture-2026-10-05.ndjson'), conversation(S, 60, { idPrefix: 'pa_' }).map((r) => toLine(r)));
+      const b = writeShard(path.join(root, 'b', 'capture-2026-10-05.ndjson'), conversation(S, 60, { idPrefix: 'pb_' }).map((r) => toLine(r)));
+      markClosed(a); markClosed(b);
+      const [ra, rb] = await Promise.all([run(a, ses), run(b, ses)]);
+      assert.equal(ra.code, 0, `round ${round}, sealer a: ${ra.err}`);
+      assert.equal(rb.code, 0, `round ${round}, sealer b: ${rb.err}`);
+      const segs = listFiles(path.join(ses, S));
+      assert.equal(segs.length, 2, `round ${round}: ${segs.map((f) => path.basename(f))}`);
+      assert.equal(decodeAll([segs[0]]).size + decodeAll([segs[1]]).size, 120);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
+});

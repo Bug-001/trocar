@@ -126,7 +126,7 @@ async function sealCore(shard, { fs = nodeFs, sessionsRoot, split = true, delete
     // Copies left by an interrupted earlier run of the SAME source are superseded by this verified
     // set. Removing them first is safe: the original still holds every byte.
     const ours = new Set([...outs.values()].map((o) => o.tmp));
-    for (const o of outs.values()) { removeEarlierCopies(fs, o.dir, name, { sum, length }); cleanStaleTemps(fs, o.dir, name, ours); }
+    for (const o of outs.values()) { removeEarlierCopies(fs, o.dir, name, { sum, length }); cleanStaleTemps(fs, o.dir, name, ours, journal); }
     for (const o of outs.values()) {
       o.final = publish(fs, o.dir, name, o.tmp);
       renamed = true;
@@ -299,9 +299,7 @@ const LOCK_EXT = '.sealing';
 function lockHolder(fs, p) {
   let pid = NaN, age = Infinity;
   try { pid = Number(fs.readFileSync(p, 'utf8')); age = Date.now() - fs.statSync(p).mtimeMs; } catch (e) { if (e.code === 'ENOENT') return null; throw e; }
-  let alive = false;
-  if (pid > 0) { try { process.kill(pid, 0); alive = true; } catch (k) { alive = k.code === 'EPERM'; } }
-  else alive = age < 5000;
+  const alive = pid > 0 ? pidAlive(pid) : age < 5000;
   return { pid: pid > 0 ? pid : null, alive };
 }
 function acquireLock(fs, shard, journal) {
@@ -344,10 +342,19 @@ export function cleanDeadLocks(dir, { fs = nodeFs, journal = null, dryRun = fals
 }
 // Temps a killed run left in a target dir. We hold the shard's lock, so any temp of this shard that
 // is not one of ours is dead weight (a temp is never a reader's input: no .sealed / .ndjson suffix).
-function cleanStaleTemps(fs, dir, name, ours) {
-  const re = new RegExp('^\\.' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\.\\d+-[0-9a-f]{8}\\.tmp$');
+// Our lock is per source path, but a target dir can receive same-named temps from ANOTHER sealer (a
+// same-named shard of another capture dir filing into the same session dir): a temp whose embedded
+// pid is still running belongs to a live seal and is left alone (review 3, second pass on F12).
+function cleanStaleTemps(fs, dir, name, ours, journal) {
+  const re = new RegExp('^\\.' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\.(\\d+)-[0-9a-f]{8}\\.tmp$');
   for (const f of fs.readdirSync(dir)) {
-    const p = path.join(dir, f);
-    if (re.test(f) && !ours.has(p)) try { fs.unlinkSync(p); } catch {}
+    const p = path.join(dir, f), m = re.exec(f);
+    if (!m || ours.has(p) || pidAlive(Number(m[1]))) continue;
+    try { fs.unlinkSync(p); appendJournal({ op: 'seal', outcome: 'temp-removed', file: p, reason: `the temp of an interrupted seal (pid ${m[1]} is not running)` }, { journal, fs }); }
+    catch (e) { if (e.code !== 'ENOENT') appendJournal({ op: 'seal', outcome: 'note', file: p, reason: `a dead seal's temp could not be removed (${e.message})` }, { journal, fs }); }
   }
+}
+function pidAlive(pid) {
+  if (!(pid > 0)) return false;
+  try { process.kill(pid, 0); return true; } catch (k) { return k.code === 'EPERM'; }
 }
