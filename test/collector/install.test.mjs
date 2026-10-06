@@ -599,3 +599,13 @@ test('uninstall step 5: a Claude Code from before install is reported too — it
     assert.deepEqual(r.still_trusting, [{ pid: 4343, agent: 'claude-code', until: 'restart' }])
   } finally { b.done() }
 })
+
+// D-4: "already installed" only with a usable CA.
+test('install: installed but with an unusable CA is not "already installed" — it says what is wrong and how to fix it (D-4)', async () => {
+  const b = box()
+  try {
+    await installCollector(base(b))
+    fs.writeFileSync(path.join(b.home, '.asight', 'collector', 'ca', 'asight-ca.pem'), 'not a certificate')
+    await assert.rejects(installCollector(base(b)), /installed, but its CA is unusable \(cert: .*run "asight collector uninstall", then "asight collector install"/)
+  } finally { b.done() }
+})

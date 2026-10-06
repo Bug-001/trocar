@@ -10,7 +10,8 @@ import tls from 'node:tls'
 import os from 'node:os'
 import path from 'node:path'
 import { collectorHome } from '../paths.mjs'
-import { loadOrCreateCa, caPaths } from './core/tls/ca-store.mjs'
+import { loadOrCreateCa, caPaths, readCa } from './core/tls/ca-store.mjs'
+import { checkCa } from './core/tls/ca.mjs'
 import { planTrust } from './core/trust/plan.mjs'
 import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, removeOwnedFile, undoEntry, removeEmptyDirs, manifestPath, sweepTemps, describeEntry } from './core/trust/journal.mjs'
 import { EVENT, CODE, UNTIL_TEXT } from './core/codes.mjs'
@@ -88,7 +89,13 @@ export function daemonEnv(env, dir) {
 // --no-unit); links = what enabling it creates.
 async function install(dir, { home, env = process.env, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), freePort = freeEnginePort, onPlan = () => {}, osRootsFile = null, roots = null, unit = null }) {
   const prior = readManifest(dir)
-  if (prior && prior.complete) return { already: true, manifest: prior, plan: null }
+  if (prior && prior.complete) {
+    // installed — but "already installed" only when its CA is usable (D-4): a CA that cannot be read or used is said
+    const c = readCa({ dir: path.join(dir, 'ca') })
+    const st = c.error ? { ok: false, which: c.which, reason: c.error } : checkCa(c)
+    if (!st.ok) throw Object.assign(new Error(`the collector is installed, but its CA is unusable (${st.which}: ${st.reason}); run "asight collector uninstall", then "asight collector install"`), { code: 'ca-invalid' })
+    return { already: true, manifest: prior, plan: null }
+  }
   if (prior && prior.pending_bundles) throw new Error(`an earlier uninstall kept combined bundles that running agents still use (${prior.files.filter((f) => f.role === 'bundle').map((f) => f.path).join(', ')}); run "asight collector uninstall" again once they exit`)
   if (prior && prior.uninstall_left) throw new Error(`an earlier uninstall left entries it could not undo (${manifestPath(dir)}); fix what it reported, then run "asight collector uninstall" again`)
   if (prior) throw new Error(`an earlier install did not finish (${manifestPath(dir)}); run "asight collector uninstall" first`)

@@ -84,7 +84,7 @@ test('ca-store: readCa returns the installed pair and never mints one', () => {
   const h = home()
   try {
     const dir = path.join(h, '.asight', 'collector', 'ca')
-    assert.equal(readCa({ dir }), null)
+    assert.deepEqual((({ which, code }) => ({ which, code }))(readCa({ dir })), { which: 'key', code: 'ENOENT' }, 'nothing installed: which file and why, never null (D-4)')
     assert.ok(!fs.existsSync(dir), 'reading created nothing')
     const ca = loadOrCreateCa({ dir })
     assert.equal(readCa({ dir }).certPem, ca.certPem)

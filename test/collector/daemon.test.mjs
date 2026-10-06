@@ -682,3 +682,37 @@ test('daemon: [::1] that cannot be bound for another reason (no IPv6) is recorde
     assert.deepEqual(flowsOf(s).filter((f) => f.where === 'engine').map((f) => f.code), ['EADDRNOTAVAIL'])
   } finally { await d.stop(); p.done(); s.done() }
 })
+
+// D-4 / F1(c): an unusable CA (the key of another CA, a key file gone, or found broken by the daily check) means
+// "CA unusable" on disk and in status — never "not installed" — and the daemon never hooks: agents go direct.
+test('daemon: an unusable CA is recorded as ca-invalid with which part and file, status says so, on never attaches; the daily check finds a CA broken later (D-4)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const caDir = path.join(s.collector, 'ca')
+  const goodKey = fs.readFileSync(path.join(caDir, 'ca.key'), 'utf8')
+  fs.writeFileSync(path.join(caDir, 'ca.key'), createCa().keyPem) // another CA's key: not a pair
+  let d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc] })
+  try {
+    const rec = flowsOf(s).find((f) => f.code === 'ca-invalid')
+    assert.deepEqual([rec.where, rec.which, rec.file], ['ca', 'pair', path.join(caDir, 'asight-ca.pem')])
+    const on = await req(s.sock, 'POST', '/on', {})
+    assert.deepEqual([on.ca.ok, on.ca.which, on.actual], [false, 'pair', 'off'], 'never hooked')
+    assert.ok(flowsOf(s).some((f) => f.event === 'attach-failed' && /CA is unusable/.test(f.reason)))
+    assert.ok(!JSON.stringify(on).includes('not installed'), 'never "not installed"')
+  } finally { await d.stop() }
+  fs.rmSync(path.join(caDir, 'ca.key'))
+  d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc] })
+  try {
+    const st = await req(s.sock, 'GET', '/status')
+    assert.deepEqual([st.ca.ok, st.ca.which, st.ca.errno], [false, 'key', 'ENOENT'], 'a missing key file: which file and the errno')
+  } finally { await d.stop() }
+  fs.writeFileSync(path.join(caDir, 'ca.key'), goodKey, { mode: 0o600 })
+  d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc], caCheckMs: 40 })
+  try {
+    assert.equal((await req(s.sock, 'GET', '/status')).ca.ok, true)
+    const before = flowsOf(s).filter((f) => f.code === 'ca-invalid').length
+    fs.writeFileSync(path.join(caDir, 'asight-ca.pem'), 'garbage')
+    await until(() => flowsOf(s).filter((f) => f.code === 'ca-invalid').length > before)
+    assert.equal((await req(s.sock, 'GET', '/status')).ca.which, 'cert', 'the daily check found it')
+  } finally { await d.stop(); p.done(); s.done() }
+})

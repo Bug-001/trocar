@@ -17,7 +17,7 @@ import { createTracker } from './core/tracker.mjs'
 import { createSwitch } from './core/switch.mjs'
 import { startControlServer, controlSocketPath } from './core/control.mjs'
 import { readCa } from './core/tls/ca-store.mjs'
-import { loadCa } from './core/tls/ca.mjs'
+import { loadCa, checkCa } from './core/tls/ca.mjs'
 import { createLeafIssuer } from './core/tls/leaf.mjs'
 import { createRecordStore } from './core/record/store.mjs'
 import { createEngine } from './core/engine/engine.mjs'
@@ -82,7 +82,7 @@ export function failuresOnDisk(dir) {
   return { failures: r.list, ...(r.errors.length || r.truncated ? { failures_read: { errors: r.errors, truncated: r.truncated } } : {}) }
 }
 
-async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = procIdentity, lockRefreshMs = 1000, foreground = false }) {
+async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = procIdentity, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3 }) {
   const P = collectorPaths(dir)
   const failure = createFailureRecorder(P.dir, { log })
   let manifest
@@ -101,7 +101,16 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
 
   let redirector = null
   try {
-    const issuer = createLeafIssuer(loadCa(ca))
+    // The CA is checked at start and once a day (D-4, 4.6 §身份与信任「CA」): both files readable, a pair, inside its
+    // validity. Unusable → this daemon never hooks (agents go direct, zero errors) and says "CA unusable" — not
+    // "not installed" — in flows/ (ca-invalid: which part, which file, the errno) and in status.
+    const judgeCa = (c) => (c.error ? { ok: false, which: c.which, file: c.file, errno: c.code, reason: c.error } : { ...checkCa(c), file: c.paths.pem })
+    let caState = { ...judgeCa(ca), checked_at: new Date().toISOString() }
+    const caFailure = (st) => failure('ca', Object.assign(new Error(`the collector CA is unusable (${st.which}: ${st.reason}); nothing is steered, agent connections go direct`), { code: 'ca-invalid' }), { which: st.which, file: st.file, ...(st.errno ? { errno: st.errno } : {}) })
+    if (!caState.ok) caFailure(caState)
+    const issuer = caState.ok ? createLeafIssuer(loadCa(ca)) : { secureContextFor() { throw new Error(`the collector CA is unusable (${caState.which})`) }, issue() { throw new Error('the collector CA is unusable') } }
+    const caTimer = setInterval(() => { caState = { ...judgeCa(readCa({ dir: P.caDir })), checked_at: new Date().toISOString() }; if (!caState.ok) caFailure(caState) }, caCheckMs)
+    caTimer.unref()
     const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error')) })
     let stale = null
     let unreadable = false
@@ -149,7 +158,9 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     const bundleTimer = setInterval(refreshBundles, 24 * 3600 * 1000); bundleTimer.unref()
     // plugins (dsh, OpenCode) write their per-pid marker here; it exists while the daemon runs (0700, the operator's)
     fs.mkdirSync(P.markers, { recursive: true, mode: 0o700 })
-    const tracker = createTracker({ redirector, registry, trust: createTrustChecker({ caCertPem: ca.certPem }), onVerdict, markerDir: P.markers, caPem: ca.paths.pem, collectorDir: P.dir,
+    // with no usable CA certificate nothing can be confirmed to trust it: every agent is untrusted (and never hooked anyway)
+    const trust = (() => { try { return createTrustChecker({ caCertPem: ca.certPem }) } catch { return { check: () => ({ trusted: false, reason: 'ca-unusable', var: null, via: null }) } } })()
+    const tracker = createTracker({ redirector, registry, trust, onVerdict, markerDir: P.markers, caPem: ca.paths.pem, collectorDir: P.dir,
       installedAt: (l) => installedAt(manifest, l), // config-after-start is judged against when asight wrote the value
       onGone: (row, via) => { // D-24, D-12: the agent and every condition it held are gone; so are its negative-cache entries
         const last = recordedUntrusted.get(row.pid); recordedUntrusted.delete(row.pid) // the reason it was recorded untrusted for ends here
@@ -199,6 +210,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     }
 
     async function ensureReady() {
+      if (!caState.ok) throw new Error(`the collector CA is unusable (${caState.which}: ${caState.reason}); not attaching, agent connections go direct`)
       if (helperDown) throw new Error(`the redirector helper is down (${helperDown}); restart the collector`)
       if (v6Held) throw new Error(`${v6Held}; refusing to attach so no IPv6 connection is steered to it (M8)`)
       const { proto } = redirector.helperInfo()
@@ -246,6 +258,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         ...(await sw.report()),
         engine: { port, v6: v6Error ? null : port, v6_error: v6Error, ...engine.stats() },
         negatives: engine.negatives(), // (pid, host) pairs no longer decrypted until the process exits (D-12)
+        ca: caState, // {ok, not_after} or {ok:false, which, file, reason}: "CA unusable", never "not installed" (D-4)
         unmatched: tracker.unmatched(), // processes two descriptors claim (D-19)
         helper: { pid, proto, build, expected_proto: redirector.expectedProto, ok: proto === redirector.expectedProto, down: helperDown },
         agents, running_untrusted: agents.filter((a) => !a.trusted).length,
@@ -263,7 +276,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     // stop({signal}) — signal: what stopped it (SIGTERM, SIGINT, SIGHUP = the terminal closed or the user logged out,
     // SIGQUIT), else `reason`. Returns {failed: [where…]}: a step that failed makes `collector start` exit non-zero.
     async function stop({ signal = null, reason = null } = {}) {
-      clearInterval(lockTimer)
+      clearInterval(lockTimer); clearInterval(caTimer)
       failure.flush() // folded counts are written, not lost
       const failed = []
       // every step runs; one that fails is recorded with its reason, never thrown past the rest (D38)

@@ -28,3 +28,16 @@ test('createCa: a v3 CA that node parses and openssl verifies against itself', (
   assert.match(text, /Certificate Sign/)
   assert.match(text, /Subject Key Identifier/)
 })
+
+// D-4 (4.6 §身份与信任「CA」): the CA is checked, not just read — a key and certificate that are not one pair, a
+// certificate out of its validity, or files that do not parse each say which part is wrong.
+test('checkCa: ok; key / cert that do not parse; expired; not yet valid; key and certificate from two CAs', async () => {
+  const { checkCa } = await import('../../../src/collector/core/tls/ca.mjs')
+  const a = createCa(), b = createCa()
+  const ok = checkCa(a)
+  assert.deepEqual([ok.ok, typeof ok.not_after], [true, 'string'])
+  assert.deepEqual(['key', 'cert', 'pair'].map((w) => checkCa(w === 'key' ? { ...a, keyPem: 'garbage' } : w === 'cert' ? { ...a, certPem: 'garbage' } : { keyPem: b.keyPem, certPem: a.certPem }).which), ['key', 'cert', 'pair'])
+  const old = createCa({ now: new Date('2000-01-01T00:00:00Z'), years: 1 })
+  assert.deepEqual([checkCa(old).ok, checkCa(old).which], [false, 'expired'])
+  assert.equal(checkCa({ ...a, now: new Date('1999-01-01T00:00:00Z') }).which, 'not-yet-valid')
+})

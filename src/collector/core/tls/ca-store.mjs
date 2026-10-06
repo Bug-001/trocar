@@ -40,9 +40,15 @@ export function loadOrCreateCa({ dir, fs = nodeFs }) {
   return { keyPem, certPem, created: true, paths: p }
 }
 
-// The CA as installed, or null. The daemon only reads it: `asight collector install` mints it, inside the
-// install manifest, so uninstall finds and removes it (4.6 §安装清单与卸载).
+// The CA as installed, or {error, code, which, file} saying which file could not be read and why — an unreadable CA is
+// "CA unusable", never "not installed" (D38 D-4). The daemon only reads it: `asight collector install` mints it,
+// inside the install manifest, so uninstall finds and removes it (4.6 §安装清单与卸载).
 export function readCa({ dir, fs = nodeFs }) {
   const p = caPaths(dir)
-  try { return { keyPem: fs.readFileSync(p.key, 'utf8'), certPem: fs.readFileSync(p.pem, 'utf8'), created: false, paths: p } } catch { return null }
+  const read = (which, file) => { try { return { text: fs.readFileSync(file, 'utf8') } } catch (e) { return { error: `${file}: ${String(e.message || e)}`, code: e.code || null, which, file } } }
+  const key = read('key', p.key)
+  if (key.error) return { ...key, paths: p }
+  const cert = read('cert', p.pem)
+  if (cert.error) return { ...cert, paths: p }
+  return { keyPem: key.text, certPem: cert.text, created: false, paths: p }
 }
