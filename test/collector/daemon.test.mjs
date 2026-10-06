@@ -19,6 +19,10 @@ import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
 import { createRedirectorClient } from '../../src/collector/arch/linux/redirector-client.mjs'
 import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector.mjs'
 import cc from '../../src/collector/harness/claude-code.mjs'
+import codex from '../../src/collector/harness/codex.mjs'
+import { startMockUpstream } from '../lab/mock-upstream/server.mjs'
+import { makeLabCa } from '../lab/mock-upstream/lab-ca.mjs'
+import { wsConnect } from '../lab/ws-client.mjs'
 import { createServer } from '../../src/server.mjs'
 import { serveSource } from '../../src/paths.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
@@ -26,6 +30,7 @@ import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
 const UID = process.getuid()
 const CC_EXE = '/home/u/.local/share/claude/versions/2.1.289'
+const CODEX_EXE = '/home/u/.local/bin/codex'
 function fakeArch(p, extraEnv = {}) {
   const clients = []
   const makeClient = () => { const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, ASIGHT_FAKE_LOADER: '1', ...extraEnv }, autoHeartbeatMs: 0 }); clients.push(c); return c }
@@ -479,4 +484,40 @@ test('daemon: combined bundles follow the roots — rebuilt at start when the OS
     assert.ok(now.includes(tls.rootCertificates[0].trim()), 'Node\'s roots stay first')
     assert.ok(flowsOf(s).some((f) => f.event === 'bundles-rebuilt' && f.code === 'roots-changed' && f.reason.includes('combined-rep.pem')), 'the rebuild is recorded')
   } finally { await d.stop(); p.done(); s.done() }
+})
+
+// The daemon hands the engine each process's harness data (plan 3c §2 describe): Codex's WebSocket terminators reach the
+// recorder, so a call is cut at response.completed and is on disk while the connection stays open (W10 through the
+// product path); without them it waits for the next message or the close. The same FlowExtras carry its own proxies.
+test('daemon: describe hands the engine the harness WebSocket terminators and the process\'s own proxies — a Codex WebSocket call is on disk at response.completed (plan 3c §2, W10)', { timeout: 20000 }, async () => {
+  const s = sandbox(); const p = fakeProc()
+  const labCa = makeLabCa(path.join(s.root, 'lab-ca'))
+  const mock = await startMockUpstream({ tls: { key: fs.readFileSync(labCa.key), cert: fs.readFileSync(labCa.cert) } })
+  fs.mkdirSync(path.join(s.home, '.codex')); fs.writeFileSync(path.join(s.home, '.codex', 'config.toml'), 'model = "gpt-test-1"\n')
+  await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [codex], freePort: async () => 0 })
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [codex], env: { ...process.env, HOME: s.home }, upstreamCa: fs.readFileSync(labCa.caCert, 'utf8') })
+  let c = null
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    p.add(5151, { uid: UID, exe: CODEX_EXE, argv: ['codex', 'exec', 'hi'], cwd: s.home, env: { HOME: s.home, HTTPS_PROXY: 'https://u:pw@Proxy.Lab.test:8443' }, startTicks: nowTicks(p) })
+    await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 5151, pid: 5151, comm: 'codex', filename: CODEX_EXE, ts_ns: 1 })
+    const row = await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 5151 && a.trusted))
+    assert.deepEqual([row.agent, row.trust_var, row.hosts.includes('proxy.lab.test')], ['codex', 'SSL_CERT_FILE', true])
+    assert.deepEqual(d.tracker.extrasFor(5151), { wsTerminal: codex.wsTerminal, proxies: [{ scheme: 'https', host: 'proxy.lab.test', port: 8443, own: true, source: 'env:HTTPS_PROXY' }] })
+
+    const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
+    await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: mock.port, family: 4 }, pid: 5151, decrypt: 1 })
+    const bundle = fs.readFileSync(path.join(s.collector, 'ca', 'combined-codex.pem'), 'utf8') // what this codex trusts
+    c = await wsConnect(0, { tls: { socket: raw, servername: 'api.openai.com', ca: bundle }, extensions: 'permessage-deflate; client_max_window_bits' })
+    assert.equal(c.status, 101)
+    const msg = JSON.stringify({ type: 'response.create', model: 'gpt-test-1', store: false, stream: true, input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'asight-ws-describe' }] }] })
+    await c.sendText(msg)
+    const evs = await c.events()
+    assert.equal(evs.at(-1).type, 'response.completed')
+    const capture = () => fs.readdirSync(s.collector).filter((n) => /^capture-.*\.ndjson$/.test(n)).flatMap((n) => fs.readFileSync(path.join(s.collector, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)))
+    const [e] = await until(() => { const l = capture().filter((x) => x.transport === 'ws'); return l.length && l }, 1500)
+    assert.ok(!c.state.closed, 'cut at the terminal message, not at the close')
+    assert.deepEqual([e.req_body, e.resp.messages.map((m) => JSON.parse(m)), e.proc.pid, e.proc.agent], [msg, evs, 5151, 'codex'])
+  } finally { if (c) c.sock.destroy(); await d.stop(); await mock.close(); p.done(); s.done() }
 })

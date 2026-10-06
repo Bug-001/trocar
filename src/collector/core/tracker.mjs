@@ -15,6 +15,19 @@ import path from 'node:path'
 import { nodeReleaseVersion } from './config-read.mjs'
 import { effectiveEnv, markerLayer, MARKER_VAR } from './trust/confirm.mjs'
 
+const PROXY_SCHEMES = { 'http:': ['http', 80], 'https:': ['https', 443], 'socks:': ['socks5', 1080], 'socks4:': ['socks4', 1080], 'socks4a:': ['socks4a', 1080], 'socks5:': ['socks5', 1080], 'socks5h:': ['socks5h', 1080] }
+
+// A proxy setting of this process → the engine's ProxyEntry (plan 3c §2). Scheme-less "host:port" is http (curl's
+// reading); unknown schemes are dropped; credentials never leave the URL. Every entry the daemon hands over comes from
+// the process's own env or the config its harness file names, so own:true (4.6 §引擎 3).
+export function toProxyEntry({ url, source }) {
+  let u
+  try { u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(String(url)) ? String(url) : `http://${url}`) } catch { return null }
+  const s = PROXY_SCHEMES[u.protocol]
+  if (!s || !u.hostname) return null
+  return { scheme: s[0], host: u.hostname.replace(/^\[|\]$/g, '').toLowerCase(), port: u.port ? Number(u.port) : s[1], own: true, source: String(source || '') }
+}
+
 function call(fn, ctx, row) {
   if (!fn) return []
   try { const v = fn(ctx); return Array.isArray(v) ? v : [] } catch (e) { row.configError = String((e && e.message) || e); return [] }
@@ -100,12 +113,15 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
       }
     }
     const live = { ...ctx, env: effectiveEnv(environ, layers.filter((l) => !l.ignored)).env }
-    const hosts = [...new Set([...d.hosts, ...call(d.configHosts, live, row)].filter(Boolean).map((h) => String(h).toLowerCase()))]
+    const proxies = call(d.proxies, live, row).map((p) => toProxyEntry(typeof p === 'string' ? { url: p, source: 'harness' } : p || {})).filter(Boolean)
+    // its own https:// proxy is in auto like a base_url host: the engine may end the outer TLS (4.6 §引擎 3)
+    const proxyHosts = proxies.filter((p) => p.scheme === 'https').map((p) => p.host)
+    const hosts = [...new Set([...d.hosts, ...call(d.configHosts, live, row), ...proxyHosts].filter(Boolean).map((h) => String(h).toLowerCase()))]
     // 不经信任路径 (4.6 §身份与信任, D37④): connections of a trusted process that do not take the injected trust path
     // (they still use the default roots). The harness declares them as data; never decrypted, under `all` too.
     const bypass = call(d.bypass, live, row).filter((b) => b && b.host).map((b) => ({ host: String(b.host).toLowerCase(), reason: String(b.reason || 'not-via-trust-path') }))
     const parent = row.ppid != null ? table.get(row.ppid) : null
-    Object.assign(row, { trusted: t.trusted, reason: t.reason, trustVar: t.var, trustVia: t.via, decrypt: t.trusted, hosts, bypass, parentAgent: parent ? parent.agent : null })
+    Object.assign(row, { trusted: t.trusted, reason: t.reason, trustVar: t.var, trustVia: t.via, decrypt: t.trusted, hosts, bypass, proxies, wsTerminal: d.wsTerminal || null, parentAgent: parent ? parent.agent : null })
     table.set(facts.pid, row)
     try { await redirector.watch(facts.pid, { decrypt: row.decrypt, agent: row.agent }) } catch (e) { row.watchError = String((e && e.message) || e) }
     onVerdict(row, prev || null)
@@ -161,8 +177,10 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
       for (const pid of [...table.keys()]) if (!seen.has(pid) && !(table.get(pid).judged > begun)) forget(pid)
       if (markerDir) for (const n of listDir(markerDir)) if (/^\d+$/.test(n) && !seen.has(Number(n)) && !alive(Number(n))) { try { fs.rmSync(path.join(markerDir, n), { force: true }) } catch { /* void */ } }
     },
-    agents: () => [...table.values()].sort((a, b) => a.pid - b.pid).map((r) => ({ ...r, hosts: [...r.hosts], bypass: r.bypass.map((b) => ({ ...b })), readErrors: [...r.readErrors], parseErrors: [...r.parseErrors] })),
+    agents: () => [...table.values()].sort((a, b) => a.pid - b.pid).map((r) => ({ ...r, hosts: [...r.hosts], bypass: r.bypass.map((b) => ({ ...b })), proxies: r.proxies.map((p) => ({ ...p })), readErrors: [...r.readErrors], parseErrors: [...r.parseErrors] })),
     describe: (pid) => (table.has(pid) ? { ...table.get(pid) } : null),
+    // FlowExtras for the engine's describe (plan 3c §2): the harness's WebSocket terminators and this process's own proxies
+    extrasFor(pid) { const r = pid == null ? null : table.get(pid); return r ? { wsTerminal: r.wsTerminal, proxies: r.proxies.map((p) => ({ ...p })) } : {} },
     metaFor(pid) { const r = table.get(pid); return r ? { agent: r.agent, exe: r.exe, parentPid: r.ppid, parentAgent: r.parentAgent } : null },
     setPolicy({ mode: m = 'auto', extraHosts = [] } = {}) { mode = m === 'all' ? 'all' : 'auto'; extra = new Set(extraHosts.map((h) => String(h).toLowerCase())) },
   }

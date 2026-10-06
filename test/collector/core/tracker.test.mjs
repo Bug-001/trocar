@@ -8,7 +8,7 @@ import { EventEmitter } from 'node:events'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createRegistry } from '../../../src/collector/core/registry.mjs'
 import { createTrustChecker } from '../../../src/collector/core/trust/confirm.mjs'
-import { createTracker, watchDirNames } from '../../../src/collector/core/tracker.mjs'
+import { createTracker, watchDirNames, toProxyEntry } from '../../../src/collector/core/tracker.mjs'
 
 const ca = createCa()
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-trk-'))
@@ -195,6 +195,30 @@ test('tracker: hosts a harness declares as not via the trust path are never decr
   assert.equal(tracker.policy({ pid: 600 }, 'models.alpha.test'), false, 'all and operator hosts do not override it')
   assert.equal(tracker.policy({ pid: 600 }, 'anything.example'), true)
   assert.deepEqual(tracker.agents().find((x) => x.pid === 601).bypass, [{ host: 'models.alpha.test', reason: 'before-plugin' }, { host: 'api.alpha.test', reason: 'ws-path' }])
+})
+
+test('tracker: extrasFor hands the engine this process\'s own proxies and the harness WebSocket terminators (plan 3c describe, 4.6 §引擎 3)', async () => {
+  const delta = { ...agent, name: 'delta', signatures: { linux: { match: [{ exe: /\/delta$/ }] } },
+    proxies: (ctx) => ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY'].filter((k) => ctx.env.get(k)).map((k) => ({ url: ctx.env.get(k), source: `env:${k}` })),
+    wsTerminal: [{ pathSuffix: '/ws', patterns: ['^\\{"done"'] }] }
+  const { redirector, tracker } = rig([delta, agent])
+  const env = new Map([['EXTRA_CA', PEM], ['HTTPS_PROXY', 'https://user:secret@Proxy.Example.com:8443'], ['HTTP_PROXY', 'plain-proxy.example.com:3128'], ['ALL_PROXY', 'ftp://x']])
+  redirector.emit('exec', facts(550, { exe: '/opt/delta', env }))
+  redirector.emit('exec', facts(551, { env: new Map([['EXTRA_CA', PEM], ['HTTPS_PROXY', 'https://p.example.com']]) })); await settle()
+  assert.deepEqual(tracker.extrasFor(550), {
+    wsTerminal: [{ pathSuffix: '/ws', patterns: ['^\\{"done"'] }],
+    proxies: [
+      { scheme: 'https', host: 'proxy.example.com', port: 8443, own: true, source: 'env:HTTPS_PROXY' }, // no credentials
+      { scheme: 'http', host: 'plain-proxy.example.com', port: 3128, own: true, source: 'env:HTTP_PROXY' },
+    ],
+  })
+  assert.deepEqual(tracker.extrasFor(551), { wsTerminal: null, proxies: [] }, 'a harness that declares no proxy reader hands none over')
+  assert.deepEqual([tracker.extrasFor(null), tracker.extrasFor(9999)], [{}, {}])
+  // the process's own https proxy is part of auto, like a base_url host (4.6 §引擎 3); its plain-http proxy is not
+  assert.deepEqual(['proxy.example.com', 'plain-proxy.example.com'].map((h) => tracker.policy({ pid: 550 }, h)), [true, false])
+  assert.deepEqual(toProxyEntry({ url: 'socks5h://[::1]:1080', source: 's' }), { scheme: 'socks5h', host: '::1', port: 1080, own: true, source: 's' })
+  assert.deepEqual([toProxyEntry({ url: 'socks://127.0.0.1', source: 's' }).scheme, toProxyEntry({ url: 'https://h', source: 's' }).port], ['socks5', 443])
+  assert.deepEqual([toProxyEntry({ url: 'ftp://x', source: 's' }), toProxyEntry({ url: 'http://', source: 's' })], [null, null])
 })
 
 test('tracker: a long-lived process missing the variable is env-frozen; a config file that exists but cannot be read is reported, not taken for absent (D38)', async () => {

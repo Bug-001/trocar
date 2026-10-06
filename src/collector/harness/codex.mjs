@@ -94,6 +94,6 @@ export default {
     hints: { shadowed: 'a CODEX_CA_CERTIFICATE exported in the shell is picked before the $CODEX_HOME/.env SSL_CERT_FILE' },
   },
   // One logical WebSocket call ends at one of these server messages (RFC 4.6 §传输与帧级记录). Data only: the daemon
-  // hands it to the engine (plan 3c WsTerminal shape) once the WebSocket recorder is in.
+  // hands it to the engine per connection (describe → tracker.extrasFor, plan 3c WsTerminal shape).
   wsTerminal: [{ pathSuffix: '/responses', patterns: ['^\\{"type":"(response\\.(completed|failed|incomplete)|error)"'] }],
 }
