@@ -270,7 +270,11 @@ export function handleFlow(client, meta, ctx) {
     cSock.resume(); relay(cSock, fresh)
   }
 
-  function decrypt(buf, cSock, uSock, sni, host, isTunnel, key) {
+  // Terminate TLS on both legs: first to the upstream (SNI as the client sent it, ALPN http/1.1, the
+  // upstream trust set), then — only once that verified — to the client with a per-SNI leaf; then hand the
+  // two plaintext sockets to onSecure(clientTls, upTls). We never stand in for an upstream (§引擎 5); the
+  // step-aside and the D37 rejection rule live here, so every path that terminates TLS gets both.
+  function terminate(buf, cSock, uSock, sni, host, isTunnel, key, onSecure) {
     // the OS store ∪ Node's roots ∪ NODE_EXTRA_CA_CERTS (+ upstreamCa), one context (tls/roots.mjs)
     if (!ctx.upstreamTrust) ctx.upstreamTrust = createUpstreamTrust({ extra: ctx.upstreamCa })
     // rejectUnauthorized:false only so the two upstream failures can be told apart: an 'error' before
@@ -297,7 +301,6 @@ export function handleFlow(client, meta, ctx) {
       if (!upTls.authorized) return stepAside(upTls, all, cSock, host, isTunnel, key, 'upstream-cert', String(upTls.authorizationError || 'upstream certificate not verified'))
       let leaf
       try { leaf = ctx.issuer.secureContextFor(host) } catch (e) { return stepAside(upTls, all, cSock, host, isTunnel, key, 'leaf-error', msgOf(e)) }
-      setDecision('decrypt', isTunnel)
       cSock.unshift(all)                                    // replay the ClientHello to our TLS server
       clientTls = new tls.TLSSocket(cSock, { isServer: true, secureContext: leaf, ALPNProtocols: ['http/1.1'] })
       // Rejection (§引擎 5, D37): the client closes or resets without one byte of application data, alert
@@ -320,12 +323,25 @@ export function handleFlow(client, meta, ctx) {
         ctx.negCache.observe(key, { rejected: true, meta, host })
       }
       clientTls.on('error', judge); clientTls.on('end', judge); clientTls.on('close', judge)
-      activeTee = createExchangeTee({
-        flow: { id: rec.flow_id, host, scheme: 'https', dst: meta.dst, proc: { pid: meta.pid, exe: meta.exe ?? null, agent: meta.agent } },
-        recordStore: ctx.store, isRecording: ctx.isRecording, wsTerminal: meta.wsTerminal ?? null, onFailure: ctx.failure,
-      })
-      relay(clientTls, upTls)
+      onSecure(clientTls, upTls)
     }))
+  }
+
+  // the decrypted call(s) on this connection go to the exchange tee
+  const startTee = (host, scheme) => {
+    activeTee = createExchangeTee({
+      flow: { id: rec.flow_id, host, scheme, dst: meta.dst, proc: { pid: meta.pid, exe: meta.exe ?? null, agent: meta.agent } },
+      recordStore: ctx.store, isRecording: ctx.isRecording, wsTerminal: meta.wsTerminal ?? null, onFailure: ctx.failure,
+    })
+    return activeTee
+  }
+
+  function decrypt(buf, cSock, uSock, sni, host, isTunnel, key) {
+    terminate(buf, cSock, uSock, sni, host, isTunnel, key, (clientTls, upTls) => {
+      setDecision('decrypt', isTunnel)
+      startTee(host, 'https')
+      relay(clientTls, upTls)
+    })
   }
 
   // ── CONNECT: relay the proxy exchange verbatim, then route the tunnelled bytes ─────────────────
@@ -434,11 +450,7 @@ export function handleFlow(client, meta, ctx) {
     const skip = skipOf(host)
     if (!skip) {
       setDecision('decrypt', isTunnel)
-      activeTee = createExchangeTee({
-        flow: { id: rec.flow_id, host, scheme: 'http', dst: meta.dst, proc: { pid: meta.pid, exe: meta.exe ?? null, agent: meta.agent } },
-        recordStore: ctx.store, isRecording: ctx.isRecording, wsTerminal: meta.wsTerminal ?? null, onFailure: ctx.failure,
-      })
-      activeTee.fromClient(buf)
+      startTee(host, 'http').fromClient(buf)
       uSock.write(buf)
       relay(cSock, uSock)
     } else {
