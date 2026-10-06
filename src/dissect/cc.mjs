@@ -185,3 +185,27 @@ export function serverEdited(rec) {
   for (const e of Array.isArray(resp.raw_sse) ? resp.raw_sse : []) if (hit(e) || hit(e && e.message) || hit(e && e.delta)) return true;
   return false;
 }
+
+// D37 ① / 3.1:23 — the Anthropic Messages WIRE, read from the endpoint, the wire-protocol headers and the
+// body shape. Never from the UA or a harness session header: those name a harness, not a wire. (Moved
+// from src/view/assemble.mjs `looksCC`, which used both and so claimed any Claude-UA traffic.)
+// `max_tokens` is deliberately NOT a signal: Chat Completions carries it too. An Anthropic body on an OpenAI
+// path is still claimed (bytes beat path); openai.mjs `wireShape` refuses exactly these markers, so the two
+// detectors stay disjoint.
+const epPath = (rec) => String((rec && rec.endpoint) || '').split('?')[0];
+export function detect(rec) {
+  if (!rec) return false;
+  const ep = epPath(rec);
+  if (ep.includes('count_tokens')) return false; // a probe, not an inference call (3.2:134)
+  if (/(^|\/)v1\/messages$/.test(ep)) return true; // incl. relay prefixes (/anthropic, /coding, /api/anthropic)
+  const h = (rec.req_headers || rec.request_headers) || {};
+  if (h['anthropic-version'] || h['anthropic-beta']) return true;
+  let body = rec.request && typeof rec.request === 'object' ? rec.request : null;
+  if (!body && typeof rec.req_body === 'string') { try { body = JSON.parse(rec.req_body); } catch { body = null; } }
+  if (!body || !Array.isArray(body.messages) || Array.isArray(body.input)) return false;
+  if (body.system !== undefined) return true;
+  const tools = Array.isArray(body.tools) ? body.tools : [];
+  if (tools.some((t) => t && t.input_schema !== undefined)) return true;
+  return body.messages.some((m) => Array.isArray(m && m.content)
+    && m.content.some((c) => c && (c.type === 'tool_use' || c.type === 'tool_result')));
+}

@@ -12,6 +12,7 @@ import { blockSpans } from '../adapters/cc.mjs';
 import { slimBlock, compBuckets } from './blockmeta.mjs';
 import { mintRawRef, composeTextRef } from '../etl/orchestrator.mjs';
 import { sessionKeyOf } from '../dissect/harnesses.mjs';
+import { wireFormatOf } from '../dissect/registry.mjs';
 
 // D17④ 地面真相(RFC 3.3:65 · 独立字节护城河). The demo proxied prefix identity with the 32-bit
 // bounded content_hash SEQUENCE (collision-prone). Product MUST use a REAL full SHA-256 over the
@@ -82,39 +83,13 @@ export function recordsForSession(records, sessionId) {
 }
 
 // ── provider dispatch (D25 · one dissector per provider) ──────────────────────────────────────
-// Positive CC/Anthropic detection. This USED to be the implicit `else` branch — anything the OpenAI
-// dissector did not claim was handed to the Claude Code dissector, so foreign bytes (Gemini, or any
-// harness we have no dissector for) rendered under Claude Code's vocabulary with NO label, zeroed
-// usage, and — because the CC walker finds nothing — could even emit a FALSE 'provider-contradiction'
-// accusation. Invariant 4 requires the opposite: what we cannot faithfully represent MUST say so.
-// Signals are the wire-stable ones 3.1:23 asks for (endpoint / header / body shape), most reliable
-// first. Body shape is required because the frozen view fixtures carry no `endpoint` at all.
-//
-// WIRING GAP (reported, not made): this belongs in src/dissect/cc.mjs as `detect(rec)`, next to the
-// dissector it speaks for — cc.mjs is outside this change's file scope.
-function looksCC(rec) {
-  if (!rec) return false;
-  const h = headersOf(rec);
-  if (h['anthropic-version'] || h['anthropic-beta']) return true;
-  const ua = String(h['user-agent'] || h['originator'] || '').toLowerCase();
-  if (/claude|anthropic/.test(ua)) return true;
-  if (h['x-claude-code-session-id']) return true;
-  const ep = String(rec.endpoint || '').split('?')[0];
-  if (/(^|\/)v1\/messages$/.test(ep)) return true;
-  // Anthropic request-body shape (D10 verbatim string or a v0 parsed `request` object)
-  let body = rec.request && typeof rec.request === 'object' ? rec.request : null;
-  if (!body && typeof rec.req_body === 'string') { try { body = JSON.parse(rec.req_body); } catch { body = null; } }
-  if (!body || !Array.isArray(body.messages)) return false;
-  if (body.system !== undefined || body.max_tokens !== undefined) return true;
-  const tools = Array.isArray(body.tools) ? body.tools : [];
-  if (tools.some((t) => t && t.input_schema !== undefined)) return true;
-  return body.messages.some((m) => Array.isArray(m && m.content)
-    && m.content.some((c) => c && (c.type === 'tool_use' || c.type === 'tool_result')));
-}
+// Anthropic-wire detection is the shared registry's (src/dissect/registry.mjs → dissect/cc.mjs detect):
+// endpoint, wire-protocol headers and body shape, never the UA (3.1:23). It used to be the implicit `else`
+// branch here, which rendered foreign bytes under Claude Code's vocabulary with no label.
 // 'openai' | 'cc' | 'unknown' — an EXPLICIT unknown, never a silent fallback to a known dissector.
 function providerOf(records) {
   for (const r of records || []) if (openai.detect(r)) return 'openai';
-  for (const r of records || []) if (looksCC(r)) return 'cc';
+  for (const r of records || []) if (wireFormatOf(r) === 'anthropic') return 'cc';
   return 'unknown';
 }
 
