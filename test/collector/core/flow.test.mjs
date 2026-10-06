@@ -308,14 +308,17 @@ test('inside a CONNECT tunnel an unverifiable upstream closes that one flow (no 
 
 test('client abort mid-flight tears down the upstream socket (acceptance T3)', async () => {
   let upSock = null; let upClosedAt = 0
+  let reached; const requestReached = new Promise((r) => { reached = r })
+  let upClosed; const closedUp = new Promise((r) => { upClosed = r })
   // consume the request bytes (a real upstream reads them) so the socket reports close on the RST
-  const h = await harness({ upstream: httpsUpstream((s) => { upSock = s; s.on('data', () => {}); s.on('close', () => { upClosedAt = Date.now() }) }) })
+  const h = await harness({ upstream: httpsUpstream((s) => { upSock = s; s.on('data', () => reached()); s.on('close', () => { upClosedAt = Date.now(); upClosed() }) }) })
   const c = tls.connect({ port: h.port, host: '127.0.0.1', servername: 'upstream.test', ca: asightCa.certPem }, () => c.write(REQ))
   c.on('error', () => {})
-  await new Promise((r) => setTimeout(r, 120)) // let the decrypt handshake + REQ reach the upstream
+  // wait for the decrypt handshake + REQ to reach the upstream (a fixed 120 ms flaked under a loaded suite)
+  await within(requestReached, 'the decrypted request reached the upstream')
   assert.ok(upSock, 'upstream should have accepted the decrypted connection')
   const t = Date.now(); c.destroy()
-  await new Promise((r) => setTimeout(r, 150))
+  await within(closedUp, 'the upstream socket closed after the client abort', 1000)
   await h.close()
   assert.ok(upClosedAt > 0 && upClosedAt - t < 120, `upstream closed ${upClosedAt - t}ms after client abort`)
 })
