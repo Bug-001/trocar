@@ -33,6 +33,9 @@
   .monbtn:hover{border-color:var(--fg);}
   .monwhere{color:var(--dim);font-family:var(--mono,monospace);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .monbadge{color:var(--dimmer);font-size:9px;border:1px solid var(--border);border-radius:4px;padding:0 4px;}
+  /* D38 capture health (1.2 顶栏 / 1.5): never empty; a disclosure, not an alert — no blinking, no sound */
+  .caphealth{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--dim);cursor:pointer;white-space:nowrap;max-width:420px;overflow:hidden;text-overflow:ellipsis;}
+  .caphealth.ok{color:var(--green);} .caphealth.warn{color:var(--amber);border-color:var(--amber);} .caphealth.bad{color:var(--red);border-color:var(--red);}
   h1{font-family:var(--mono);font-size:16px;margin:0;letter-spacing:.5px;font-weight:600;}
   h1 b{color:var(--accent);}
   .spacer{flex:1;}
@@ -434,6 +437,7 @@
   </div>
   <div class="live"><span class="dot" id="dot"></span><label><input type="checkbox" id="liveChk" checked style="vertical-align:middle"> live</label></div>
   <span class="monctl" id="monctl" style="display:none"></span>
+  <span class="caphealth" id="caphealth" title="capture health (D38) — reading…">? 采集健康 · 读取中</span>
   <div class="spacer"></div>
   <div class="stats" id="stats"></div>
 </header>
@@ -2157,6 +2161,58 @@ function renderMon(el,d){
   el.innerHTML=`<span class="mondot" title="监测控制未启用"></span>`
     +`<span class="monwhere" title="This board was started read-only, so the D26 control endpoints are not mounted. Restart the server with --control to arrange transparent monitoring from here. Either way the board keeps showing what was captured — only the on/off switch is absent.">监测控制未启用 · control not enabled${r?` · HTTP ${r.status}`:''} — read-only board</span>`
 })()
+
+// ── D38 capture health (1.2 顶栏 #caphealth · 1.5 状态矩阵 · 4.4 /api/capture-health) ─────────────────────────
+// Its OWN 1.5 s timer: not the "live" checkbox, not poll() (which returns early on an empty board, in the control view
+// and when the session did not change — a capture that stopped would leave the last ✓ frozen there). Never empty;
+// no "seen" state, no alert (Non-Goal): it says what holds now and what failed in 24 h. The state and N come from
+// the server (src/health/, the reader `asight collector status` uses); this only words them.
+const CAPH_MS=1500
+let capH=null, capHOkAt=null, capHErr=null, capHBusy=false
+const fmtWhen=ts=>{ if(!ts) return '—'; const d=new Date(ts); if(isNaN(d)) return String(ts); return d.toDateString()===new Date().toDateString()?d.toLocaleTimeString():d.toLocaleString() }
+// → {cls, text}: cls ok | warn | bad | dim
+function capHealthView(h,{okAt,err,now}){
+  if(okAt!=null&&now-okAt>2*CAPH_MS) return {cls:'warn',text:`? 未刷新 · 截至 ${fmtWhen(okAt)}`}
+  if(err&&okAt==null) return {cls:'warn',text:`? 未刷新 · 截至 —`}
+  if(!h) return {cls:'dim',text:'? 采集健康 · 读取中'}
+  if(h.unreadable) return {cls:'warn',text:`? 健康读不出:${h.unreadable}`}
+  const s=h.summary||{}, legacy=s.part==='legacy', tail=s.read_errors?' · 读不全':''
+  const t={
+    ok:()=>({cls:'ok',text:legacy?`✓ 旧 MITM · 最后启动于 ${fmtWhen(s.since)}`:`✓ 采集中 · 自 ${fmtWhen(s.since)} 起`}),
+    failing:()=>({cls:'bad',text:`⚠ ${s.n}`}),
+    off:()=>({cls:'dim',text:`○ 采集关 · 自 ${fmtWhen(s.since)} 起`}),
+    'not-running':()=>({cls:'bad',text:`✗ ${legacy?'旧 MITM':'采集器'}没在跑 · 最后记录于 ${fmtWhen(s.since)}${s.signal?` · 因 ${s.signal}`:''}`}),
+    'not-responding':()=>({cls:'bad',text:`✗ 采集器没响应 · 最后心跳 ${fmtWhen(s.since)}`}),
+    unknown:()=>({cls:'warn',text:`? ${legacy?'旧采集':'采集器'}状态不明 · ${s.reason||''}`}),
+    'no-events':()=>({cls:'warn',text:'? 旧采集 · 没有事件记录(重启后才有)'}),
+    residue:()=>({cls:'warn',text:`– 未安装 · 残留 ${s.n} 项`}),
+    'not-installed':()=>({cls:'dim',text:'– 未安装'}),
+  }[s.state]
+  const v=t?t():{cls:'warn',text:`? ${s.state||'unknown state'}`}
+  return {cls:v.cls,text:v.text+tail}
+}
+function renderCapHealth(){
+  const el=document.getElementById('caphealth'); if(!el) return
+  const v=capHealthView(capH,{okAt:capHOkAt,err:capHErr,now:Date.now()})
+  el.className='caphealth '+v.cls; el.textContent=v.text
+  el.title=`capture health (D38) — ${v.text}${capHErr?`\nlast attempt failed: ${capHErr}`:''}${capHOkAt?`\nread at ${fmtWhen(capHOkAt)}`:''}\nclick: the 采集健康 list (⚙ session-less)`
+}
+async function pollCapHealth(){
+  renderCapHealth() // a request that hangs still lets "未刷新" appear on time
+  if(capHBusy) return
+  capHBusy=true
+  try{
+    const r=await fetch('/api/capture-health',{cache:'no-store'})
+    const j=await r.json().catch(()=>null)
+    if(r.status===503&&j&&j.error){ capH={unreadable:j.error}; capHOkAt=Date.now(); capHErr=null }
+    else if(r.ok&&j&&j.summary){ capH=j; capHOkAt=Date.now(); capHErr=null }
+    else capHErr=(j&&j.error)||('HTTP '+r.status)
+  }catch(e){ capHErr=String(e&&e.message||e) }
+  finally{ capHBusy=false }
+  renderCapHealth()
+}
+pollCapHealth()
+setInterval(pollCapHealth,CAPH_MS)
 
 poll()
 setInterval(()=>{if(document.getElementById('liveChk').checked)poll()},1500)
