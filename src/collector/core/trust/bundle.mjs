@@ -35,6 +35,7 @@ export function rewriteBundles({ dir, manifest, nodeRoots, osRootsText, caPem = 
   const done = []
   const rootsFp = rootsFingerprint(nodeRoots, osRootsText)
   for (const f of manifest.files.filter((x) => x.role === 'bundle')) {
+    if (withCa && !force && f.without_ca) continue // `off` kept it without the asight CA for a live process: never written back with it (4.6 「合并包」, D39); `force` (`on`) does
     try {
       let cur = null, gone = null
       try { cur = fs.readFileSync(f.path, 'utf8') } catch (e) { gone = e.code || String(e.message || e) }
@@ -54,6 +55,7 @@ export function rewriteBundles({ dir, manifest, nodeRoots, osRootsText, caPem = 
       const lost = cur == null && report ? (f.user_fps || []).filter((x) => !b.user_fps.includes(x)) : []
       writeDurable(f.path, b.data, 0o600, fs)
       Object.assign(f, { roots_fp: b.roots_fp, sha256: sha256(Buffer.from(b.data)), ...(cur == null ? { user_fps: b.user_fps } : {}), ...(withCa ? {} : { without_ca: true }) })
+      if (withCa) delete f.without_ca
       done.push(f.path)
       if (report) report.rebuilt.push({ path: f.path, harness: f.harness ?? null, why: cur == null ? gone : 'roots-changed' })
       if (lost.length) (report.lost ||= []).push({ path: f.path, harness: f.harness ?? null, fps: lost, sources: unread })

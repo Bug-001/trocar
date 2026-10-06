@@ -90,6 +90,7 @@ test('T14 / D38 F1(d): a bundle that is missing or unreadable is rebuilt from th
     fs.rmSync(y)
     assert.deepEqual(rewriteBundles({ ...args, withCa: false }).includes(y), false)
     assert.ok(!fs.existsSync(y), 'uninstall never recreates a bundle')
+    for (const f of m.files) delete f.without_ca // the rewrite above flagged them as kept without the CA; `on` clears that (D39), and what follows is the daemon's rebuild of a harness that is on
     // a rebuild that cannot write: reported with the bundle, the old file as it was, the rest still done
     fs.chmodSync(ca, 0o555)
     try {
@@ -183,4 +184,27 @@ test('T14 through the plan: each harness\'s bundle carries only its own CAs; a p
   assert.deepEqual([a.sources, a.user_fps], [['/a/ca.pem'], [fp(CORP)]])
   assert.ok(!JSON.stringify(p.files).includes('U0VDUkVULUtFWQ'), 'the private key is nowhere in what will be written')
   assert.deepEqual(p.records.filter((r) => r.code === 'cert-not-merged').map((r) => [r.harness, /\/a\/ca\.pem: block 1 \(PRIVATE KEY\) is not carried over/.test(r.reason)]), [['alpha', true]])
+})
+
+// 4.6 「合并包」 / D39: `off` keeps a bundle a live process may hold as the same file without the asight CA (`without_ca`); the daemon's rebuild (roots changed,
+// or the file went missing) is for a harness whose desired state is on, and MUST NOT write the CA back into one `off` stripped. `force` — what `on` uses when
+// it turns the harness on again — does.
+test('D39: a bundle off kept without the asight CA is not rebuilt back with it by the daemon\'s rebuild, whether the roots changed or the file went missing; force rebuilds it', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-b-'))
+  try {
+    const dir = path.join(root, 'collector'); fs.mkdirSync(path.join(dir, 'ca'), { recursive: true })
+    const m = newManifest()
+    const stripped = composeBundle({ nodeRoots: [R1.certPem], osRootsText: '', userCerts: [CORP.certPem], caPem: null })
+    const kept = path.join(dir, 'ca', 'combined-kept.pem'); fs.writeFileSync(kept, stripped.data)
+    const live = path.join(dir, 'ca', 'combined-live.pem'); const lb = composeBundle({ nodeRoots: [R1.certPem], osRootsText: '', userCerts: [CORP.certPem], caPem: ASIGHT.certPem }); fs.writeFileSync(live, lb.data)
+    m.files.push({ path: kept, role: 'bundle', harness: 'kept', user_fps: stripped.user_fps, roots_fp: stripped.roots_fp, without_ca: true }, { path: live, role: 'bundle', harness: 'live', user_fps: lb.user_fps, roots_fp: lb.roots_fp })
+    const args = { dir, manifest: m, nodeRoots: [R1.certPem, R2.certPem], osRootsText: '', caPem: ASIGHT.certPem }
+    assert.deepEqual(rewriteBundles(args), [live], 'the roots changed: the bundle of a harness that is on is rebuilt, the stripped one is not')
+    assert.deepEqual(fps(fs.readFileSync(kept, 'utf8')), [fp(R1), fp(CORP)], 'still without the asight CA, and with its old roots')
+    fs.rmSync(kept)
+    assert.deepEqual(rewriteBundles({ ...args, report: { rebuilt: [], failed: [] } }), [], 'gone: not made again either — nothing of asight\'s is meant to be there')
+    assert.ok(!fs.existsSync(kept))
+    assert.deepEqual(rewriteBundles({ ...args, force: true }), [kept, live], 'force: `on` writes it back, with the CA (and the flag goes)')
+    assert.ok(fps(fs.readFileSync(kept, 'utf8')).includes(fp(ASIGHT)) && m.files[0].without_ca === undefined)
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
