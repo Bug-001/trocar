@@ -50,3 +50,13 @@ test('openai-responses: input_tokens is total; cached → cache_read; write NULL
   assert.equal(mapUsage('openai-responses-ws', { input_tokens: 5 }).total_input, 5);
   assert.equal(mapUsage('openai-responses', { input_tokens: 5 }).reasoning, null, 'no reasoning detail → NULL, not 0');
 });
+
+test('openai-chat: DeepSeek hit/miss wins over cached_tokens; cache_write NULL', () => {
+  const ds = mapUsage('openai-chat', { prompt_tokens: 900, completion_tokens: 30, prompt_tokens_details: { cached_tokens: 0 }, prompt_cache_hit_tokens: 640, prompt_cache_miss_tokens: 260 });
+  assert.deepEqual([ds.cache_read, ds.input_uncached, ds.cache_write, ds.output, ds.total_input], [640, 260, null, 30, 900]);
+  const oa = mapUsage('openai-chat', { prompt_tokens: 500, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 384, audio_tokens: 0 }, total_tokens: 505,
+    completion_tokens_details: { reasoning_tokens: 3 } });
+  assert.deepEqual([oa.cache_read, oa.input_uncached, oa.cache_write, oa.reasoning, oa.total_input], [384, 116, null, 3, 500]);
+  assert.deepEqual(oa.extra, { total_tokens: 505, prompt_tokens_details: { audio_tokens: 0 } }, 'unmapped keys survive in extra');
+  assert.equal(mapUsage('openai-chat', { prompt_tokens: 9, cached_tokens: 4 }).cache_read, 4, 'Kimi names it at the top level');
+});

@@ -225,6 +225,12 @@ export function chatMessageToBlocks(m) {
   const role = m.role || 'user';
   if (role === 'tool') return [{ role: 'tool', block: { type: 'tool_result', tool_use_id: m.tool_call_id || '', content: chatText(m.content) }, sub: ['content'] }];
   const out = [];
+  // DeepSeek / Kimi / GLM thinking models: an assistant turn's reasoning travels as `reasoning_content` (plain
+  // text), echoed back on later requests. It came before that turn's reply, so its block goes first. (Its exact
+  // round-trip rules are a lab check, 0.0 待数据决策 DS; the bytes are shown verbatim either way.)
+  if (typeof m.reasoning_content === 'string' && m.reasoning_content) {
+    out.push({ role: 'assistant', block: { type: 'thinking', thinking: m.reasoning_content }, sub: ['reasoning_content'] });
+  }
   if (Array.isArray(m.content)) {
     m.content.forEach((c, ci) => {
       const sub = ['content', ci];
@@ -286,12 +292,15 @@ export function boardFlatChat(req) {
 }
 // Chat usage → the SAME neutral canonical names. prompt_tokens is TOTAL input (incl cached); the chat
 // wire has no cache-write counter, so `create` is 0 — reported as 0 because it is absent, not guessed.
+// DeepSeek reports the exact split (prompt_cache_hit/miss_tokens) and wins; OpenAI nests cached_tokens; Kimi
+// may put cached_tokens at the top level. Same precedence as the ETL's mapUsage('openai-chat').
 export function canonUsageChat(usage = {}) {
   const u = usage || {};
   const d = u.prompt_tokens_details || {};
-  const read = d.cached_tokens || 0;
   const input = u.prompt_tokens || 0;
-  return { read, create: 0, fresh: Math.max(0, input - read), out: u.completion_tokens || 0 };
+  const read = u.prompt_cache_hit_tokens != null ? u.prompt_cache_hit_tokens : (d.cached_tokens || u.cached_tokens || 0);
+  const fresh = u.prompt_cache_miss_tokens != null ? u.prompt_cache_miss_tokens : Math.max(0, input - read);
+  return { read, create: 0, fresh, out: u.completion_tokens || 0 };
 }
 // SSE chunks (or a non-streaming JSON body) → { model, usage, text, tool_calls, stop_reason }.
 export function normRespChat(rec) {
@@ -299,7 +308,7 @@ export function normRespChat(rec) {
   const events = Array.isArray(resp.raw_sse) ? resp.raw_sse : [];
   const body = resp.body && typeof resp.body === 'object' ? resp.body : null;
   const frames = events.length ? events : (body ? [body] : []);
-  let text = '', model = null, id = null, stop = null, usage = {};
+  let text = '', thinking = '', model = null, id = null, stop = null, usage = {};
   const acc = new Map();                                       // tool_calls arrive split across deltas
   for (const e of frames) {
     if (!e || typeof e !== 'object') continue;
@@ -309,7 +318,9 @@ export function normRespChat(rec) {
     for (const c of Array.isArray(e.choices) ? e.choices : []) {
       if (!c || typeof c !== 'object') continue;
       if (c.finish_reason) stop = c.finish_reason;
+      if (c.usage) usage = c.usage;                             // Kimi reports usage inside the choice
       const d = c.delta || c.message || {};
+      if (typeof d.reasoning_content === 'string') thinking += d.reasoning_content;
       if (typeof d.content === 'string') text += d.content;
       else if (Array.isArray(d.content)) text += chatText(d.content);
       for (const tc of Array.isArray(d.tool_calls) ? d.tool_calls : []) {
@@ -324,7 +335,7 @@ export function normRespChat(rec) {
     }
   }
   const tool_calls = [...acc.values()].map((t) => ({ id: t.id, name: t.name, input: safeJson(t.args) }));
-  return { model, id, stop_reason: stop, usage, canonUsage: canonUsageChat(usage), text, thinking: undefined, tool_calls };
+  return { model, id, stop_reason: stop, usage, canonUsage: canonUsageChat(usage), text, thinking: thinking || undefined, tool_calls };
 }
 
 // ── shape-dispatched entry points (the shared view layer calls THESE, never a per-shape branch) ────

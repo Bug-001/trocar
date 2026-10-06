@@ -71,4 +71,21 @@ function mapResponses(raw) {
   return { input_uncached: Math.max(0, total - read - (write ?? 0)), cache_read: read, cache_write: write,
     output: num(raw.output_tokens), reasoning: reasoning_tokens ?? null, total_input: total, extra };
 }
-function mapChat() { throw new Error("mapUsage: no canonical mapping for provider 'openai-chat' yet"); }
+// OpenAI-compatible Chat Completions: prompt_tokens is the TOTAL input. DeepSeek reports the exact split
+// (prompt_cache_hit_tokens / prompt_cache_miss_tokens), preferred when present; otherwise OpenAI's
+// prompt_tokens_details.cached_tokens (Kimi may put cached_tokens at the top level). No Chat wire reports
+// cache writes → cache_write NULL (3.2 Edge: DeepSeek has no write concept; NULL is not 0).
+function mapChat(raw) {
+  const hit = raw.prompt_cache_hit_tokens, miss = raw.prompt_cache_miss_tokens;
+  const det = raw.prompt_tokens_details || {};
+  const read = hit != null ? num(hit) : num(det.cached_tokens ?? raw.cached_tokens);
+  const uncached = miss != null ? num(miss) : Math.max(0, num(raw.prompt_tokens) - read);
+  const extra = { ...raw };
+  for (const k of ['prompt_tokens', 'completion_tokens', 'prompt_cache_hit_tokens', 'prompt_cache_miss_tokens', 'cached_tokens', 'prompt_tokens_details', 'completion_tokens_details']) delete extra[k];
+  const { cached_tokens, ...restIn } = det;
+  if (Object.keys(restIn).length) extra.prompt_tokens_details = restIn;
+  const { reasoning_tokens, ...restOut } = raw.completion_tokens_details || {};
+  if (Object.keys(restOut).length) extra.completion_tokens_details = restOut;
+  return { input_uncached: uncached, cache_read: read, cache_write: null, output: num(raw.completion_tokens),
+    reasoning: reasoning_tokens ?? null, total_input: read + uncached, extra };
+}

@@ -22,7 +22,7 @@ import { createRegistry } from '../adapters/contract.mjs';
 import { ccAdapter } from '../adapters/cc.mjs';
 import { envelopeAdapter, quarantineReason } from '../adapters/envelope.mjs';
 import { dissectorAdapter } from '../adapters/dissected.mjs';
-import { RESPONSES } from '../dissect/openai.mjs';
+import { RESPONSES, CHAT } from '../dissect/openai.mjs';
 import { RESPONSES_WS } from '../dissect/openai-ws.mjs';
 import { deriveCacheEvents } from '../cache/cache-events.mjs';
 import { harnessOf, observerEffectsOf } from '../dissect/harnesses.mjs';
@@ -116,6 +116,7 @@ const jsonOrNull = (v) => (v == null ? null : JSON.stringify(v));
 function defaultRegistry() {
   return createRegistry().register(ccAdapter).register(envelopeAdapter)
     .register(dissectorAdapter(RESPONSES, { name: 'openai-responses' }))
+    .register(dissectorAdapter(CHAT, { name: 'openai-chat' }))
     .register(dissectorAdapter(RESPONSES_WS, { name: 'openai-responses-ws' }));
 }
 
