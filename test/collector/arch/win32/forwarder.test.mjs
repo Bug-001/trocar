@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 import { recordNetwork, nonLoopback } from './fixtures/no-network.mjs'
 import { locateKernel, ensureBinary, verifyCopy, hashFile, loadPin, mainPackage, reinstallCommands, sacState, sacBlocks, createForwarder, BACKOFF_MS, KERNEL_EXE, KERNEL_LICENSE, KERNEL_SOURCE } from '../../../../src/collector/arch/win32/forwarder.mjs'
+import { checkRecord } from '../../../../src/health/codes.mjs'
 import { buildForwarderConfig } from '../../../../src/netenv/mihomo/rules.mjs'
 import { createController } from '../../../../src/netenv/mihomo/controller.mjs'
 import { CC_GROUP, CODEX_GROUP, forwarder as ruleInputs } from '../../../netenv/fixtures/rules/inputs.mjs'
@@ -281,6 +282,7 @@ test('W74 a kernel that does not come up says why: Smart App Control when it is 
   assert.deepEqual([c.ok, c.code, c.reason, c.port], [false, 'forwarder-start-failed', 'port-taken', taken.ports[CODEX_GROUP.g]])
   assert.equal(taken.spawned.length, 0, 'nothing was spawned onto a port somebody holds')
   assert.equal(taken.fwd.state().phase, 'stopped')
+  for (const w of [crash, plain, mute, nobody, taken]) assert.deepEqual(inClosedSets(w.events), [], 'W38: every start failure is in the closed sets')
 })
 
 test('W12 W55 reload: the new text goes to the kernel by PUT /configs?force=true and to the config file; the read-back follows the group (off has no fallback group); a port the new text opens that is taken, or a kernel that refuses, leaves the old config running', async (t) => {
@@ -368,6 +370,8 @@ async function fakeKernel(t, over = {}) {
   return { fwd, clock, children, alive, die, events, verified, build, forms, dir, start: () => fwd.start({ build, forms }) }
 }
 const restarts = (k) => k.events.failures.filter((f) => f.code === 'forwarder-restart').map((f) => f.delay_ms)
+/** W38: every record the forwarder hands the recorder is in the closed sets (a failure goes through the recorder as `event:'failure'`). */
+const inClosedSets = (events) => [...events.failures.map((f) => ({ event: 'failure', ...f })), ...events.states].flatMap((r) => checkRecord(r).map((why) => `${r.code || r.event}: ${why}`))
 
 test('W28 a kernel that exits again and again: respawned after 1, 2, 4, 8, 16, then 30 s (the cap), the fifth failure in a row is forwarder-down (once, where netenv), the tries go on, and every spawn is preceded by a digest check (W27 ④)', async (t) => {
   const k = await fakeKernel(t)
@@ -390,6 +394,7 @@ test('W28 a kernel that exits again and again: respawned after 1, 2, 4, 8, 16, t
   assert.deepEqual(k.events.failures.filter((f) => f.code === 'forwarder-down').map((f) => [f.where, f.attempts]), [['netenv', 5]], 'the fifth, once')
   assert.equal(k.verified.length, k.children.length, 'the copy is checked before the first start and before each re-spawn, no more and no fewer')
   assert.deepEqual([k.fwd.state().down, k.fwd.state().streak], [true, 7])
+  assert.deepEqual(inClosedSets(k.events), [], 'W38: restart, down and start records are in the closed sets')
   assert.deepEqual(k.events.states.filter((e) => e.event === 'forwarder-start').length, 8)
 })
 
@@ -442,6 +447,7 @@ test('W28 stopNow: the kernel is stopped, the lock is gone, and no re-spawn foll
   k2.die(k2.children[0]); await settle()
   assert.equal(k2.clock.pending().length, 1, 'a re-spawn is waiting')
   await k2.fwd.stopNow()
+  assert.deepEqual(k2.clock.pending(), [], 'the waiting re-spawn is cancelled, not merely ignored when it fires')
   await k2.clock.advance(300_000)
   assert.equal(k2.children.length, 1, 'stopNow also cancels the one that was waiting')
 })
@@ -551,6 +557,7 @@ test('W28 drain: after an off the kernel stays until the agents that were in the
   assert.deepEqual(await d.done, { stopped: true })
   assert.deepEqual([k.fwd.state().phase, k.alive.has(k.children[1].pid), fs.existsSync(path.join(k.dir, 'forwarder.lock'))], ['stopped', false, false])
   assert.deepEqual(k.events.states.at(-1), { event: 'forwarder-stop', where: 'forwarder', pid: k.children[1].pid, reason: 'drained' })
+  assert.deepEqual(inClosedSets(k.events), [], 'W38: draining and stop records are in the closed sets')
   const empty = await fakeKernel(t)
   await empty.start()
   const e = empty.fwd.drain({ pidsInWindow: [] })

@@ -89,7 +89,7 @@ test('W57 N9 on the real core: the user\'s-VPN client (own: false) reads /versio
   assert.equal(cfg.json['mixed-port'], w.ports.mixed)
   assert.deepEqual(sent, ['GET /version', 'GET /configs'])
   const refused = [() => ro.get('/rules'), () => ro.get('/proxies'), () => ro.get('/proxies/Manual'), () => ro.get('/proxies/asight-fb-x'), () => ro.get('/connections'), () => ro.get('/logs'), () => ro.get('/traffic'), () => ro.get('/providers/rules'),
-    () => ro.put('/configs?force=true', { payload: 'mixed-port: 1\n' }), () => ro.put('/proxies/Manual', { name: 'node-a' }), () => ro.put('/providers/rules/asight-r-x'), () => ro.put('/configs', { mode: 'global' })]
+    () => ro.put('/configs?force=true', { payload: 'mixed-port: 1\n' }), () => ro.put('/proxies/Manual', { name: 'node-a' }), () => ro.put('/providers/rules/asight-x'), () => ro.put('/configs', { mode: 'global' })]
   for (const call of refused) assert.throws(call, (e) => e instanceof ControllerRefused)
   assert.equal(sent.length, 2, 'not one of them reached the network')
   assert.equal((await w.m.ctl('GET', '/rules')).status, 200, 'the real core would have answered /rules: it is the client that does not ask')

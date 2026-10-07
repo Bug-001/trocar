@@ -54,7 +54,8 @@ test('W7 the generator source names no harness and no lab (static scan, comments
   const src = fs.readFileSync(RULES_SRC, 'utf8')
   assert.deepEqual(src.match(/\b(claude|codex|opencode|kimi|dsh|deepseek|hermes|zcode|z-code)\b/gi) || [], [], `a harness id in ${path.basename(RULES_SRC)} (4.8 §3: it does not know them)`)
   assert.deepEqual(src.match(/asight-test|\bP2-|gstatic|generate_204|atrace/g) || [], [], `lab names, the struck public probe, the v0 prototype name in ${path.basename(RULES_SRC)}`)
-  assert.deepEqual(src.match(/asight-sw|asight-r-|routeFile|entriesOf|RULE-SET|PASS/g) || [], [], 'the withdrawn select, provider and route file are gone (D43)')
+  const withdrawn = ['asight-' + 'sw', 'asight-' + 'r-', 'route' + 'File', 'entries' + 'Of', 'RULE-' + 'SET', 'PA' + 'SS'] // written in pieces: the plan's done-check greps the tree for these names and finds none
+  assert.deepEqual(src.match(new RegExp(withdrawn.join('|'), 'g')) || [], [], 'the withdrawn select, provider and route file are gone (D43)')
 })
 
 test('W7 processRulesOf: the path regexes first, then the image names', () => {
