@@ -284,6 +284,8 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
       r.detach(); return o.badGateway('lookup')
     }
     if (!meta) { authFailed(o.user, 'unknown user'); r.detach(); return o.denied() }
+    // the client left while the lookup ran: nobody is waiting for a dial, and the user's proxy must not get its credentials for one (§5.1, §5.2)
+    if (r.isGone()) return void r.detach()
 
     // 4. a health probe: answered here, nothing leaves the machine
     if (meta.health) return healthTunnel(socket, r, o, meta.group, unknown)

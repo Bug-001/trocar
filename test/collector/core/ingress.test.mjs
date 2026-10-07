@@ -519,5 +519,101 @@ test('W17 a connection whose pid is known keeps the (pid, host) key: neg_key is 
   assert.equal(L.engine.forgetPid(77), 1)
 })
 
+// ── fail-open: a client that leaves, a hold that grows, a command that is not CONNECT (4.8 §5.1) ───────────────────────────────────
+// Each is a MUST the ingress carries. Removing any one of them left the first suite green (review 2026-10-07), so each has a test that goes red without it.
+const IDLE = { connections: 1, flows: 0, health: 0, authFailed: 0, unknown: 0, refused: 0, unreachable: 0 } // one connection came, nothing became of it
+const socksLogin = async (c) => { c.write(Buffer.from([5, 1, 2])); await c.bytes(2); c.write(Buffer.concat([Buffer.from([1, USER.length]), Buffer.from(USER), Buffer.from([TOKEN.length]), Buffer.from(TOKEN)])); await c.bytes(2) }
+const hungSocket = () => { const s = new PassThrough(); s.connecting = true; return s } // a TCP connect that never completes; destroy() is its close
+const until = (pred, what, ms = 2000) => within((async () => { while (!pred()) await sleep(5) })(), ms, what)
+const closedOf = (s) => new Promise((r) => (s.destroyed ? r() : s.once('close', r)))
+function noCrash(t) { const seen = []; const on = (e) => seen.push(String((e && e.stack) || e)); process.on('uncaughtException', on); t.after(() => process.removeListener('uncaughtException', on)); return seen }
+// a proxy that takes the prelude and never answers; `socks` has every connection it was given
+async function silentProxy(t) {
+  const socks = []
+  const srv = net.createServer((s) => { const rec = { sock: s, got: [], closed: closedOf(s) }; socks.push(rec); s.on('error', () => {}); s.on('data', (d) => rec.got.push(d)) })
+  await listen(srv); t.after(() => { srv.close(); for (const r of socks) r.sock.destroy() })
+  return { port: srv.address().port, socks }
+}
+
+test('W13 engine.close() leaves an agent flow that is in flight alone: it keeps relaying, its row is written, and close() returns only after it has ended', T, async (t) => {
+  const L = await lab(t)
+  const c = L.client(); c.write(connectHead(`127.0.0.1:${L.echoPort}`)); assert.match(await c.head(), /^HTTP\/1\.1 200 /)
+  c.write('one'); assert.equal((await c.bytes(3)).toString(), 'one')
+  let closed = false
+  const closing = L.engine.close().then(() => { closed = true })
+  await sleep(150) // closeIdle has run and the listener is shut
+  assert.equal(c.ended, false, 'close() did not destroy the flow')
+  c.write('two'); assert.equal((await c.bytes(3)).toString(), 'two', 'the flow still relays after close() began')
+  assert.equal(closed, false, 'close() is waiting for the flow')
+  c.sock.end(); await within(closing, 4000, 'engine.close() once the flow had ended')
+  assert.deepEqual([L.flows.length, L.flows[0].pid, L.flows[0].bytes_up, L.flows[0].bytes_down], [1, 4242, 6, 6], 'the flow\'s row was written')
+})
+
+test('W13 a client that resets after the ingress has answered, or while it looks up or dials, ends that connection only: never an uncaught exception', T, async (t) => {
+  const crashes = noCrash(t)
+  const L = await lab(t, { connectUpstream: (d) => (d.port === 1 ? hungSocket() : net.connect(d.port, d.address)) })
+  const real = L.redirector.lookupIngress.bind(L.redirector)
+  L.redirector.lookupIngress = async (q) => { if (q.target.port === 2) await sleep(250); return real(q) }
+  const dead = await new Promise((r) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)) }) })
+  for (let i = 0; i < 6; i++) {
+    const denied = L.client(); denied.write(connectHead('127.0.0.1:9', { pass: 'f'.repeat(32) })); await denied.head(); denied.sock.resetAndDestroy() // reset after the 407
+    const bad502 = L.client(); bad502.write(connectHead(`127.0.0.1:${dead}`)); await bad502.head(); bad502.sock.resetAndDestroy() // reset after the 502
+    const looking = L.client(); looking.write(connectHead('127.0.0.1:2')); await sleep(30); looking.sock.resetAndDestroy() // reset during the lookup
+    const dialling = L.client(); dialling.write(connectHead('127.0.0.1:1')); await sleep(30); dialling.sock.resetAndDestroy() // reset during the dial
+  }
+  await sleep(400) // every lookup has returned
+  assert.deepEqual(crashes, [], 'no uncaught exception')
+  assert.equal(L.engine.stats().ingress.flows, 0)
+})
+
+test('W13 a client that leaves while the upstream is being dialled takes the dial down: the upstream is destroyed, no connection row is written, nothing is counted', T, async (t) => {
+  const hung = []
+  const L = await lab(t, { connectUpstream: (d) => (d.port === 1 ? (hung.push(hungSocket()), hung.at(-1)) : net.connect(d.port, d.address)) })
+  const a = L.client(); a.write(connectHead('127.0.0.1:1')) // a direct upstream whose connect never completes
+  await until(() => hung.length, 'the ingress to dial'); a.sock.destroy()
+  await within(closedOf(hung[0]), 1500, 'the direct upstream to be destroyed')
+  const proxy = await silentProxy(t) // an http proxy that has the prelude and never answers
+  const P = await lab(t, { meta: { upstream: { kind: 'http', host: '127.0.0.1', port: proxy.port } } })
+  const b = P.client(); b.write(connectHead('upstream.test:443'))
+  await until(() => proxy.socks.length && proxy.socks[0].got.length, 'the proxy to get the prelude'); b.sock.destroy()
+  await within(proxy.socks[0].closed, 1500, 'the connection to the proxy to be destroyed')
+  await sleep(100)
+  for (const X of [L, P]) { assert.equal(X.flows.length, 0, 'the client left before the upstream was up: no flow existed, so no row'); assert.deepEqual(X.failures, []); assert.deepEqual(X.engine.stats().ingress, IDLE) }
+})
+
+test('W13 a client that leaves while lookupIngress is still running never gets a dial: the user\'s proxy sees no connection and no Proxy-Authorization for a connection nobody waits on', T, async (t) => {
+  const proxy = await silentProxy(t)
+  const L = await lab(t, { meta: { upstream: { kind: 'http', host: '127.0.0.1', port: proxy.port, auth: CRED } } })
+  const real = L.redirector.lookupIngress.bind(L.redirector)
+  L.redirector.lookupIngress = async (q) => { await sleep(300); return real(q) }
+  const c = L.client(); c.write(connectHead('upstream.test:443'))
+  await sleep(100); c.sock.resetAndDestroy()
+  await sleep(500) // the lookup has returned by now
+  assert.equal(proxy.socks.length, 0, 'not one connection to the proxy')
+  assert.deepEqual(L.dials, []); assert.equal(L.flows.length, 0); assert.deepEqual(L.failures, []); assert.deepEqual(L.engine.stats().ingress, IDLE)
+})
+
+test('W13 a SOCKS5 command that is not CONNECT (BIND, UDP ASSOCIATE) is answered "command not supported" and recorded ingress-unknown; no lookup, no dial', T, async (t) => {
+  const L = await lab(t)
+  for (const cmd of [2, 3]) {
+    const c = L.client(); await socksLogin(c); c.write(Buffer.from([5, cmd, 0, 1, 127, 0, 0, 1, 0, 80]))
+    const rep = await c.bytes(10); assert.deepEqual([rep[0], rep[1]], [5, 7], `command ${cmd}`); await c.closed()
+  }
+  assert.deepEqual(L.failures.map((f) => [f.where, f.code, /command (\d)/.exec(f.reason)?.[1]]), [['ingress', 'ingress-unknown', '2'], ['ingress', 'ingress-unknown', '3']])
+  for (const f of L.failures) assert.deepEqual(checkRecord(f), [])
+  assert.deepEqual(L.dials, []); assert.equal(L.redirector.ingressLookups, 0, 'no lookup for a command the ingress does not do'); assert.equal(L.engine.stats().ingress.unknown, 2)
+})
+
+test('W13 a client that sends more than 256 KiB before the tunnel is open is cut off with ingress-unknown, and the dial it was waiting on is taken down', T, async (t) => {
+  const hung = []
+  const L = await lab(t, { connectUpstream: () => { const s = hungSocket(); hung.push(s); return s } })
+  const c = L.client(); c.write(connectHead('203.0.113.7:443'))
+  await until(() => hung.length, 'the ingress to dial')
+  c.write(Buffer.alloc(300 * 1024, 0x41)); await c.closed()
+  await within(closedOf(hung[0]), 1500, 'the dial to be taken down')
+  assert.deepEqual(L.failures.map((f) => [f.where, f.code]), [['ingress', 'ingress-unknown']]); assert.match(L.failures[0].reason, /more than 256 KiB/)
+  assert.deepEqual(checkRecord(L.failures[0]), []); assert.equal(L.flows.length, 0)
+})
+
 // the drain gate (CLI T5, 1.6 §1.3): an ingress flow mid-SSE when the switch goes off closes at the response end, like a transparent one
 test('W15 drain: an ingress flow mid-SSE when the switch goes off ends at the response end (the CLI plan\'s T5 gate)', { skip: 'CLI T5 (`off` drains in-flight calls, `Connection: close`) is not on this branch: the ingress flows go through the same handleFlow, so they will drain the same way; this runs once T5 lands' }, () => {})
