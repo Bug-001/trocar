@@ -299,6 +299,7 @@ export function createWin32Redirector({ helper, procWatcher, groups, home = null
       if (helper && typeof helper.close === 'function') await helper.close()
     },
     heartbeat() {}, // nothing is gated on a heartbeat: when the engine is gone the kernel falls back on its own health check (4.8 §3.3)
+    setBeatGate() {}, // the daemon's per-harness gate (1.6 §1.5) is asked before each automatic heartbeat; there are none here, and the daemon's own 5 s check re-reads state.json (core/redirector.mjs)
     helperInfo: () => ({ ...info }),
     expectedProto: HELPER_PROTO,
 

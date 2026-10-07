@@ -842,6 +842,8 @@ test('the Windows redirector has every call the daemon, the tracker and the swit
   for (const name of Object.keys(NOT_ON_WINDOWS)) assert.ok(called.has(name) && !(name in r), `${name} is still called and still absent on Windows: ${NOT_ON_WINDOWS[name]}`)
   for (const name of ['configure', 'directCount']) assert.ok(called.has(name) && typeof r[name] === 'function', `the two calls the review found missing or synchronous: ${name}`)
   assert.equal(await r.configure(18790), undefined, 'configure is accepted and tells the kernel nothing: its config has the engine port from ingress.json')
+  assert.ok(called.has('setBeatGate') && typeof r.setBeatGate === 'function', 'the daemon sets the beat gate (1.6 §1.5) on any redirector')
+  assert.equal(r.setBeatGate(() => false), undefined, 'and a redirector with no heartbeat accepts it and gates nothing')
 })
 
 test('what the redirector may do (static): it imports only the modules that read or plan, opens no socket, runs nothing, writes no file or registry key, names no harness, and the user\'s login is read in one place', async () => {
