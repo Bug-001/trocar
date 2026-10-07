@@ -17,13 +17,14 @@
 
 import { homedir } from 'node:os';
 import path from 'node:path';
-import http from 'node:http';
 import { execFileSync } from 'node:child_process';
 import * as realFs from 'node:fs';
-import { PROXY_NAME, DESKTOP_RULE, MARK_BEGIN, MARK_END, stripBlock, stripRuntime, stripMergeLegacy } from '../off/clash.mjs';
+import {
+  PROXY_NAME, DESKTOP_RULE, MARK_BEGIN, MARK_END, stripBlock, stripRuntime, stripMergeLegacy, knownMihomoSocks, mihomoSockCandidates, discoverMihomoSock, probeVersion, mihomoPayloadReload, probeProxy,
+} from '../off/clash.mjs';
 
-// The pure strip transforms live in src/off/clash.mjs (RFC 1.6 §4: `asight off` and `desktop off` run one undo); the names tests and other modules import from here stay.
-export { PROXY_NAME, DESKTOP_RULE, stripBlock, stripRuntime, stripMergeLegacy };
+// The strip transforms, the socket discovery and the reload live in src/off/clash.mjs (RFC 1.6 §4: `asight off` and `desktop off` run one undo); the names tests and other modules import from here stay.
+export { PROXY_NAME, DESKTOP_RULE, stripBlock, stripRuntime, stripMergeLegacy, knownMihomoSocks, mihomoSockCandidates, discoverMihomoSock, mihomoPayloadReload };
 const BEGIN = `// ${MARK_BEGIN}`;  // Script.js (JavaScript)
 const END = `// ${MARK_END}`;
 const YBEGIN = `# ${MARK_BEGIN}`;  // clash-verge.yaml (YAML)
@@ -82,90 +83,6 @@ export function spliceRuntime(yaml, port) {
     else if (!didR && ln.replace(/\s+$/, '') === 'rules:') { out.push(YBEGIN, `- ${DESKTOP_RULE}`, YEND); didR = true; }
   }
   return { yaml: out.join('\n'), splicedProxies: didP, splicedRules: didR };
-}
-
-// ── the mihomo control socket: discovered, never hard-coded (D29) ─────────────────────────────
-// Where the live core listens depends on how Verge runs it: 2.5.x service mode = clash-verge-service
-// starts mihomo as root with `-ext-ctl-unix /var/run/clash-verge-service/users/<uid>/…`; older service
-// mode used /tmp/verge/…; sidecar mode uses the runtime yaml's external-controller-unix (which service
-// mode leaves STALE). So: ask the running process first, then the yaml, then the known spots — and
-// only trust a candidate that actually answers.
-export const knownMihomoSocks = (uid) => [
-  ...(uid != null ? [`/var/run/clash-verge-service/users/${uid}/verge-mihomo.sock`] : []),
-  '/tmp/verge/verge-mihomo.sock',
-];
-
-export function mihomoSockCandidates({ psText = '', runtimeYaml = '', known = [] } = {}) {
-  const fromPs = [];
-  for (const line of psText.split('\n')) {
-    // the path may contain spaces (ps joins argv with ' '): take it up to the next ` -flag` or EOL
-    const m = /(?:^|\s)--?ext-ctl-unix(?:=|\s+)(.+?)(?=\s+-{1,2}[A-Za-z][\w-]*(?:[=\s]|$)|\s*$)/.exec(line);
-    if (m) fromPs.push(m[1]);
-  }
-  const y = /^external-controller-unix:[ \t]*(['"]?)(.+?)\1[ \t]*$/m.exec(runtimeYaml);
-  return [...new Set([...fromPs, ...(y ? [y[2]] : []), ...known])];
-}
-
-export async function discoverMihomoSock(candidates, probe = probeVersion) {
-  const tried = [];
-  for (const c of candidates) {
-    tried.push(c);
-    if (await probe(c).catch(() => false)) return { sock: c, tried };
-  }
-  return { sock: null, tried };
-}
-
-// read-only: does something speaking mihomo's API answer on this socket? Only a socket owned by root
-// (service mode) or by us (sidecar mode) qualifies: the reload sends it the WHOLE config inline,
-// subscription credentials included, so a socket another local user planted (world-writable /tmp,
-// or a `-ext-ctl-unix` on some other process's command line) must never be picked.
-function probeVersion(sock) {
-  try {
-    const st = realFs.statSync(sock);
-    if (!st.isSocket() || (st.uid !== 0 && st.uid !== process.getuid?.())) return Promise.resolve(false);
-  } catch { return Promise.resolve(false); }
-  return new Promise((resolve) => {
-    const req = http.request({ socketPath: sock, method: 'GET', path: '/version', timeout: 1500 }, (res) => {
-      let b = ''; res.setEncoding('utf8'); res.on('data', (c) => (b += c));
-      res.on('end', () => { try { resolve(res.statusCode === 200 && !!JSON.parse(b).version); } catch { resolve(false); } });
-    });
-    req.on('timeout', () => req.destroy(new Error('timeout')));
-    req.on('error', () => resolve(false)); req.end();
-  });
-}
-
-// ── the mihomo hot-reload: PUT /configs {payload} ─────────────────────────────────────────────
-// The `{path}` form is dead in service mode: mihomo only loads files under its home dir / SAFE_PATHS,
-// and there that is a root-owned dir the user cannot write (400 "path is not subpath of home
-// directory or SAFE_PATHS"). `{payload}` carries the config inline (204 on v1.19.31) → no file is
-// written anywhere. mihomo validates and keeps the OLD config on error → VPN-safe; its own error
-// message is carried back so a rejection is diagnosable, not just a status code.
-export function mihomoPayloadReload(sock) {
-  return (yamlPayload) => new Promise((resolve) => {
-    const body = JSON.stringify({ payload: yamlPayload });
-    const req = http.request({ socketPath: sock, method: 'PUT', path: '/configs?force=true', timeout: 30000, headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } },
-      (res) => {
-        let b = ''; res.setEncoding('utf8'); res.on('data', (c) => (b += c));
-        res.on('end', () => {
-          const r = { status: res.statusCode };
-          if (res.statusCode >= 300) { let msg = b.trim(); try { msg = JSON.parse(b).message || msg; } catch { /* not JSON */ } if (msg) r.error = msg; }
-          resolve(r);
-        });
-      });
-    req.on('timeout', () => req.destroy(new Error('timed out waiting for mihomo')));
-    req.on('error', (e) => resolve({ status: 0, error: e.message }));
-    req.end(body);
-  });
-}
-function probeProxy(sock) {
-  return new Promise((resolve) => {
-    const req = http.request({ socketPath: sock, method: 'GET', path: '/proxies', timeout: 5000 }, (res) => {
-      let b = ''; res.on('data', (c) => (b += c));
-      res.on('end', () => { try { resolve(!!JSON.parse(b).proxies?.[PROXY_NAME]); } catch { resolve(null); } });
-    });
-    req.on('timeout', () => req.destroy(new Error('timeout')));
-    req.on('error', () => resolve(null)); req.end(); // could not ask → UNKNOWN, never "not live"
-  });
 }
 
 // The by-hand way to make Verge regenerate (and so apply the durable Script.js state) when the

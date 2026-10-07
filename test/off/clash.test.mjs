@@ -17,3 +17,8 @@ test('stripBlock takes the sentinel block out of Script.js (the // form) and of 
   assert.equal(clash.stripBlock(yaml), 'proxies:\n- {name: VPN}\n')
   assert.equal(clash.stripBlock('function main(c) { return c; }\n'), 'function main(c) { return c; }\n', 'no block: the bytes are not touched')
 })
+
+test('1.6 §4: the socket discovery, the payload reload and the probes are src/off/clash.mjs\'s too, and desktop-steer says so', () => {
+  for (const name of ['knownMihomoSocks', 'mihomoSockCandidates', 'discoverMihomoSock', 'mihomoPayloadReload']) assert.equal(steer[name], clash[name], `${name} is src/off/clash.mjs's`)
+  for (const name of ['probeVersion', 'probeProxy']) assert.equal(typeof clash[name], 'function', `${name} is exported from src/off/clash.mjs (module-private in desktop-steer before)`)
+})
