@@ -700,3 +700,17 @@ test('what the redirector may do (static): it imports only the modules that read
   assert.equal(/\b(claude|codex|opencode|kimi|dsh|deepseek|hermes|zcode|z-code)\b/i.test(code), false, 'arch names no harness: the groups it is given say it')
   assert.equal([...code.matchAll(/authOf\(/g)].length, 1, 'the reference to a login is turned into one in a single function')
 })
+
+test('W16 end to end on the dedicated port: a connection of a child of the agent (a process that is not the form\'s) is spliced and leaves exactly one metadata row, the agent\'s child meets the origin\'s own certificate, and no envelope or failure is written (D40: cannot decrypt → splice and record)', async (t) => {
+  const E = await wired(t, { ownerOf: owner({ pid: 21, source: 'socket-table', ms: 5 }, { pid: 20, source: 'socket-table', ms: 5 }) })
+  trust(E.r, 20, 21) // even a trusted child is no dsh: the table says whose connection it is, and it is not dsh's
+  const child = await E.agent('of.deepseek-dsh.cli', privCa.certPem)
+  assert.equal(child.got, RESP)
+  assert.match(child.issuer, /private origin CA/)
+  await E.settled()
+  assert.equal(E.flows.length, 1, 'one row')
+  assert.deepEqual([E.flows[0].decision, E.flows[0].not_captured, E.flows[0].pid, E.flows[0].agent, E.flows[0].reason], ['splice', 'untracked', 21, 'deepseek-dsh', 'not-a-process-of-form'])
+  assert.deepEqual([E.envelopes.length, E.failures.length], [0, 0])
+  const own = await E.agent('of.deepseek-dsh.cli', asightCa.certPem) // dsh's own process, trusted: decrypted
+  assert.match(own.issuer, /asight/i)
+})
