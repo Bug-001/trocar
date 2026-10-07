@@ -51,10 +51,11 @@ export function controlEndpoint({ dir, fs = nodeFs, randomBytes = nodeRandomByte
     if (have) fs.renameSync(tmp, file) // there is a file that is no endpoint: replace it
     else {
       try { fs.linkSync(tmp, file) } catch (e) {
-        if (e.code !== 'EEXIST') throw e
-        const won = readControlEndpoint({ dir, fs })
-        if (won && !won.error) return won
-        fs.renameSync(tmp, file) // it appeared and is no endpoint either
+        if (e.code === 'EEXIST') {
+          const won = readControlEndpoint({ dir, fs })
+          if (won && !won.error) return won
+        }
+        fs.renameSync(tmp, file) // it appeared and is no endpoint either; or the file system cannot link (then two starts at the very same moment may each keep their own: the daemon that wins the pipe is the one the file must name, and a second start finds the pipe taken)
       }
     }
   } finally { fs.rmSync(tmp, { force: true }) }

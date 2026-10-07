@@ -49,6 +49,20 @@ test('W26 a reader that finds no control.json says so and writes nothing; a cont
   }
 })
 
+test('W26 two starts at the same moment end up with one endpoint: the one that linked first wins and the other reads it; a file system that cannot link still gets its file', () => {
+  const d = tmpDir('asight-ctl-')
+  const winner = { path: `${PIPE_PREFIX}aaaaaaaaaaaaaaaa`, token: 'b'.repeat(64) }
+  const racing = { ...fs, linkSync: (from, to) => { fs.writeFileSync(to, `${JSON.stringify(winner)}\n`); throw Object.assign(new Error('EEXIST: file already exists'), { code: 'EEXIST' }) } }
+  assert.deepEqual(controlEndpoint({ dir: d, fs: racing }), winner, 'the loser returns what the winner wrote')
+  assert.deepEqual(readControlEndpoint({ dir: d }), winner)
+  assert.deepEqual(fs.readdirSync(d), [CONTROL_FILE], 'and leaves no temp file')
+  const e = tmpDir('asight-ctl-')
+  const noLinks = { ...fs, linkSync: () => { throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' }) } }
+  const made = controlEndpoint({ dir: e, fs: noLinks })
+  assert.deepEqual(readControlEndpoint({ dir: e }), made)
+  assert.deepEqual(fs.readdirSync(e), [CONTROL_FILE])
+})
+
 test('W26 the names come from the injected random source, 8 bytes for the pipe and 32 for the token', () => {
   const asked = []
   const e = controlEndpoint({ dir: tmpDir('asight-ctl-'), randomBytes: (n) => { asked.push(n); return Buffer.alloc(n, asked.length) } })
