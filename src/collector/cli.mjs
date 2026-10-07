@@ -1,15 +1,13 @@
 // cli.mjs — `asight collector …` and `asight setup-helper` (RFC 4.6 §控制面, §安装清单与卸载, D36). `start` runs the
-// daemon in the foreground until SIGTERM/SIGINT; status only talks to its control socket
-// ($XDG_RUNTIME_DIR/asight/collector.sock); install / on / off / uninstall are the old names of `asight on | off | uninstall`
-// (src/cli/on.mjs, src/off/main.mjs, src/cli/uninstall.mjs: the per-user half, no sudo); setup-helper is the machine-wide half (sudo, once). Exit codes: 0 ok · 1 the kernel did not reach the asked state, or the step
-// failed (for `start`: refused, or a step of the stop failed) · 2 usage / no runtime dir · 3 no daemon answers ·
-// 70 the daemon crashed (an uncaught exception, recorded as `crash` first).
+// daemon in the foreground until SIGTERM/SIGINT; install / on / off / status / uninstall are the old names of `asight on | off | status | uninstall`
+// (src/cli/on.mjs, src/off/main.mjs, src/cli/status.mjs, src/cli/uninstall.mjs: the per-user half, no sudo); setup-helper is the machine-wide half (sudo, once). This file keeps the text of what the
+// daemon and the disk say (formatStatus, formatHealth, formatInstallNotes) that `status` and `doctor` print. Exit codes: 0 ok · 1 the kernel did not reach the asked state, or the step
+// failed (for `start`: refused, or a step of the stop failed) · 2 usage · 3 `status` could not judge (1.6 R4) · 70 the daemon crashed (an uncaught exception, recorded as `crash` first).
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { controlSocketPath, controlRequest } from './core/control.mjs'
+import { controlRequest } from './core/control.mjs'
 import { appendEvent } from './core/events.mjs'
-import { captureHealth } from '../health/read.mjs'
 import { collectorHome } from '../paths.mjs'
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -18,7 +16,7 @@ export const USAGE = [
   'usage: asight collector on | install [harness…] [--dry-run] [--yes] [--no-autostart | --no-unit] [--json]   (= asight on: per user, no sudo; the first one installs: CA, trust entries, systemd --user unit)',
   '       asight collector start               (run the daemon in the foreground; the unit runs exactly this)',
   '       asight collector off [harness…] [--now] [--dry-run] [--yes] [--json]   (= asight off)',
-  '       asight collector status [--json]',
+  '       asight collector status [harness…] [--json]   (= asight status)',
   '       asight collector uninstall [--purge-data] [--dry-run] [--yes] [--json]   (= asight uninstall)',
   '       sudo asight setup-helper [--binary <path>] [--remove]',
 ].join('\n')
@@ -140,7 +138,7 @@ export async function runSetupHelper(argv, { arch = null, out = (s) => console.l
   } catch (e) { err(e.message); return 1 }
 }
 
-export async function runCollector(argv, { env = process.env, home = os.homedir(), out = (s) => console.log(s), err = (s) => console.error(s), request = controlRequest, daemon = null, install = null, waitForStop = waitForSignal, script = process.argv[1], proc = process, exit = (c) => process.exit(c), platform = process.platform, onDeps = {}, offDeps = {} } = {}) {
+export async function runCollector(argv, { env = process.env, home = os.homedir(), out = (s) => console.log(s), err = (s) => console.error(s), request = controlRequest, daemon = null, install = null, waitForStop = waitForSignal, script = process.argv[1], proc = process, exit = (c) => process.exit(c), platform = process.platform, onDeps = {}, offDeps = {}, statusDeps = {} } = {}) {
   const [verb, ...rest] = argv
   const D = () => daemon || loadDaemon()
   if (verb === 'start') {
@@ -167,29 +165,7 @@ export async function runCollector(argv, { env = process.env, home = os.homedir(
     return run(rest, { io, env, home, platform, deps: { request, ...offDeps } })
   }
   if (verb !== 'status') { err(USAGE); return 2 }
-  // No daemon answered — not running, no runtime dir, or stuck: what is on disk says why and what failed last (D-2),
-  // read by the board's own reader (src/health/read.mjs)
-  const fromDisk = () => {
-    let h
-    try { h = captureHealth({ home: path.join(home, '.asight') }) } catch (e) {
-      if (e.collector) out(daemonText({ collector: e.collector, generated_at: new Date().toISOString() })) // the lock is still read
-      out(`capture health could not be read: ${e.message}`)
-      return
-    }
-    for (const l of formatHealth(h)) out(l)
-  }
-  let socketPath
-  try { socketPath = controlSocketPath({ env }) } catch (e) { err(e.message); fromDisk(); return 2 }
-  const json = rest.includes('--json')
-  let r
-  try { r = await request({ socketPath, method: verb === 'status' ? 'GET' : 'POST', path: `/${verb}`, body: undefined }) } catch (e) {
-    if (e.code === 'ENOENT' || e.code === 'ECONNREFUSED') {
-      err('the collector daemon is not running: start it with "asight collector start" (or "systemctl --user start asight-collector")')
-      fromDisk()
-      return 3
-    }
-    err(`the collector daemon did not answer: ${e.message}`); fromDisk(); return 1
-  }
-  out(json ? JSON.stringify(r, null, 2) : formatStatus(r))
-  return verb === 'status' || r.actual === verb ? 0 : 1
+  // the old name of `asight status` (§2 hidden alias): the daemon when it answers, else the disk — one judgement per harness (src/cli/status.mjs)
+  const { runStatusCli } = await import('../cli/status.mjs')
+  return runStatusCli(rest, { io: { out, err, stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }, env, home, platform, deps: { request, ...statusDeps } })
 }
