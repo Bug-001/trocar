@@ -102,15 +102,25 @@ test('analyzed.unknown renders a banner with the counts (3.1:58)', async () => {
 
 test('probe detail says the request body is not retained (3.2:134); a server lane says what it is', async () => {
   const s = session(call(W));
-  s.probes = { count: 1, series: [{ ts: '2026-10-06T00:00:00Z', tokens: 900 }] };
+  s.probes = { count: 1, series: [{ ts: '2026-10-06T00:00:00Z', tokens: 900, retention: 'legacy-meta' }] };
   const { M, getEl } = await loadIndex(s, ['poll', 'openDetail', 'get lanes(){return lanes}']);
   await M.poll();
   M.openDetail(M.lanes.find((l) => l.kind === 'probe'), 0);
-  assert.match(getEl('detail').innerHTML, /not retained/);
+  assert.match(getEl('detail').innerHTML, /not retained/, 'a probe captured before D40 kept only the length');
+  assert.match(getEl('detail').innerHTML, /本条采于 D40 之前,只存了长度/);
   assert.doesNotMatch(getEl('detail').innerHTML, /\(verbatim\)/, 'the old text claimed the probe body was kept verbatim');
   M.openDetail({ kind: 'probe', label: 'warm-up / probe requests', note: 'a warm-up request: not a conversation turn', calls: [{ ts: '2026-10-06T00:00:00Z', ctx: 5 }] }, 0);
   assert.match(getEl('detail').innerHTML, /a warm-up request: not a conversation turn/);
   assert.doesNotMatch(getEl('detail').innerHTML, /token-count probe/);
+  // D40: since then the body is kept verbatim by default, or not stored when the operator chose a log line — each says so (a not-retained claim on a kept body would be false)
+  for (const [retention, re, not] of [['full', /kept verbatim/, /not retained|not stored/], ['log', /not stored.*只记日志/, /kept verbatim/]]) {
+    const s2 = session(call(W)); s2.probes = { count: 1, series: [{ ts: '2026-10-06T00:00:00Z', tokens: 900, retention }] };
+    const t = await loadIndex(s2, ['poll', 'openDetail', 'get lanes(){return lanes}']);
+    await t.M.poll();
+    t.M.openDetail(t.M.lanes.find((l) => l.kind === 'probe'), 0);
+    assert.match(t.getEl('detail').innerHTML, re, retention);
+    assert.doesNotMatch(t.getEl('detail').innerHTML, not, retention);
+  }
 });
 
 test('a partial call\'s badge says which earlier record is missing (server-baked contextMissing)', async () => {

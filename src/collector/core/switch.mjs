@@ -15,8 +15,11 @@
 import fs from 'node:fs'
 import { readStateFile, emptyState, setDesired, writeStateAtomic } from '../../off/state.mjs'
 
-// The decrypt policy of a harness whose entry names none. One line: D40 (decrypt-all) changes only this.
-export const DEFAULT_POLICY = 'auto'
+// Decrypt policy of a harness whose entry names none (RFC 4.6 §引擎 解密策略, D40): `all` — every host of a trusted agent process — so what an
+// agent does besides calling the model is seen . `auto` (the known API hosts only) stays as an opt-down the operator chose.
+// An install that never wrote a policy gets `all`; an entry that already says `auto` keeps it: on disk an old default `auto` cannot be
+// told from a chosen one, so what is written is respected (src/off/state.mjs keeps `auto`, the version 1 migration too). One line: this one.
+export const DEFAULT_POLICY = 'all'
 
 const sameHosts = (a, b) => a.length === b.length && a.every((h, i) => h === b[i])
 const withDefaults = (st) => ({ ...st, harnesses: Object.fromEntries(Object.entries(st.harnesses).map(([id, h]) => [id, { ...h, policy: h.policy ?? DEFAULT_POLICY, extra_hosts: h.extra_hosts ?? [] }])) })

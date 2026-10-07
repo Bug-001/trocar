@@ -34,7 +34,7 @@ const srcOf = (m) => m.harness_src || (m.harness != null ? 'headers' : null);
 const settle = (m) => { m.provider = m.harness == null ? null : (LEGACY_PROVIDER[m.harness] ?? m.wire_provider ?? null); return m; };
 
 export function emptyMeta(sessionId) {
-  return { session_id: sessionId, calls: 0, probes: 0, other: 0, has_subagent: false, last_ts: '', entrypoint: null,
+  return { session_id: sessionId, calls: 0, logged: 0, probes: 0, other: 0, has_subagent: false, last_ts: '', entrypoint: null,
     harness: null, harness_inferred: false, harness_src: null, wire_provider: null, provider: null };
 }
 
@@ -42,7 +42,9 @@ export function foldRecord(meta, r) {
   if (!r) return meta;
   // Mirror the sharder's classOf split exactly: call | probe | other. A record is exactly one class,
   // so meta.calls + meta.probes + meta.other equals the session's sharded record count.
-  if (r.is_llm_call) meta.calls++;
+  // D40: an inference call kept as a log line only (body_retention:'log') is counted apart — the board cannot draw it, and says so
+  if (r.is_llm_call && r.body_retention === 'log') meta.logged = (meta.logged || 0) + 1;
+  else if (r.is_llm_call) meta.calls++;
   else if (isProbe(r)) meta.probes++;
   else meta.other++;
   const t = String(r.ts_request || '');
@@ -68,6 +70,7 @@ export function mergeMeta(a, b) {
   return settle({
     session_id: a.session_id || b.session_id,
     calls: a.calls + b.calls,
+    logged: (a.logged || 0) + (b.logged || 0),
     probes: a.probes + b.probes,
     other: (a.other || 0) + (b.other || 0),
     has_subagent: a.has_subagent || b.has_subagent,

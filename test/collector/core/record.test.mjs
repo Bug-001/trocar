@@ -41,7 +41,8 @@ test('envelope: a request body cut at the cap is labelled req_truncated + req_bo
   assert.equal(cut.req_body, '{"model":"m","mess')   // the captured prefix is still stored as-is
   const keys = Object.keys(cut)
   for (const k of ['req_truncated', 'req_body_bytes']) assert.ok(keys.indexOf(k) > keys.indexOf('req_body'), k)
-  assert.equal(mk('/api/event_logging/batch', 'abcd', true).req_truncated, true)   // non-LLM {raw_chars} too
+  const nonLlm = mk('/api/event_logging/batch', 'abcd', true)   // D40: a non-LLM body is cut and labelled the same way
+  assert.deepEqual([nonLlm.req_truncated, nonLlm.req_body_bytes, nonLlm.req_body], [true, 4, 'abcd'])
   const whole = mk('/v1/messages', '{"model":"m"}', false)
   for (const k of ['req_truncated', 'req_body_bytes', 'req_partial']) assert.equal(k in whole, false, k)
 })
@@ -226,7 +227,7 @@ test('store: a capture file renamed or deleted while open is reopened, and that 
 
 // RFC 4.6 §传输与帧级记录「请求体压缩」/ §记录 · acceptance T16 (D38 T-14): a compressed request body used to be
 // read as UTF-8 and stored as U+FFFD noise that looked verbatim.
-test('compressed request bodies: wire bytes verbatim in req_body_b64; gzip decoded; zstd never decoded at capture; non-LLM stays metadata', async () => {
+test('compressed request bodies: wire bytes verbatim in req_body_b64; gzip decoded; zstd never decoded at capture; a non-LLM endpoint is the same (D40)', async () => {
   const zlib = (await import('node:zlib')).default
   const json = '{"model":"m","messages":[{"role":"user","content":"压缩 ok"}]}'
   const mk = (target, enc, body) => buildTransparentEnvelope({ id: 'c', flow: FLOW, seq: 0, resp: null, error: null,
@@ -247,8 +248,10 @@ test('compressed request bodies: wire bytes verbatim in req_body_b64; gzip decod
   } finally { zlib.zstdDecompressSync = real }
   const bad = mk('/v1/messages', 'gzip', Buffer.from('not gzip'))
   assert.equal(bad.req_body, null); assert.ok(bad.req_encoding_error); assert.equal(bad.req_body_b64, Buffer.from('not gzip').toString('base64'))
+  // D40 flipped this: a non-LLM endpoint's compressed body used to be {raw_chars}; now it takes the LLM shape (4.6 T16)
   const nonLlm = mk('/api/event_logging/batch', 'gzip', gz)
-  assert.deepEqual(nonLlm.req_body, { raw_chars: gz.length, verbatim: false }); assert.equal(nonLlm.req_body_b64, undefined); assert.equal(nonLlm.req_content_encoding, undefined)
+  assert.deepEqual([nonLlm.req_body, nonLlm.req_body_b64, nonLlm.req_content_encoding], [json, gz.toString('base64'), 'gzip'])
+  assert.equal(nonLlm.is_llm_call, false); assert.deepEqual(nonLlm.body_wire_bytes, { req: gz.length, resp: null })
   const plain = mk('/v1/messages', 'identity', Buffer.from(json))
   assert.equal(plain.req_body, json); assert.equal(plain.req_body_b64, undefined)
   assert.equal(mk('/v1/messages', null, Buffer.from(json)).req_body_b64, undefined, 'an uncompressed body has no wire fields')

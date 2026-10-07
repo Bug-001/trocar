@@ -6,9 +6,9 @@ import { COMMANDS, HIDDEN_ALIASES, helpText, resolveAlias, commandNamed } from '
 
 const commandsOf = (text) => new Set(text.split('\n').map((l) => l.match(/^ {2}(?:sudo )?asight ([a-z-]+)/)).filter(Boolean).map((m) => m[1]))
 
-test('V19: the commands in help are the commands of the table (1.6 §2 lists these sixteen), none twice a command, and no hidden alias or `test` is among them', () => {
+test('V19: the commands in help are the commands of the table (1.6 §2 lists these seventeen), none twice a command, and no hidden alias or `test` is among them', () => {
   const names = COMMANDS.map((c) => c.name)
-  assert.deepEqual([...names].sort(), ['capture', 'daemon', 'desktop', 'doctor', 'etl', 'help', 'mitm', 'monitor', 'off', 'on', 'raw', 'serve', 'setup-helper', 'shard', 'status', 'uninstall'])
+  assert.deepEqual([...names].sort(), ['capture', 'daemon', 'desktop', 'doctor', 'etl', 'help', 'keep', 'mitm', 'monitor', 'off', 'on', 'raw', 'serve', 'setup-helper', 'shard', 'status', 'uninstall'])
   assert.equal(new Set(names).size, names.length, 'a name once')
   for (const platform of ['linux', 'darwin', 'win32']) assert.deepEqual([...commandsOf(helpText(undefined, { platform }))].sort(), [...names].sort(), platform)
   assert.deepEqual([...commandsOf(helpText())].sort(), [...names].sort(), 'with no platform given: this one')
@@ -31,8 +31,8 @@ test('the hidden aliases are the table of 1.6 §2, and resolveAlias puts what an
   for (const argv of [['on'], ['collector'], ['collector', 'bogus'], ['collect', 'on'], ['installx'], []]) assert.deepEqual(resolveAlias(argv), { argv, alias: null }, argv.join(' '))
 })
 
-test('R7: exactly the per-user commands that change state refuse root (on off uninstall daemon), and setup-helper is the one that needs it', () => {
-  assert.deepEqual(COMMANDS.filter((c) => c.mutates).map((c) => c.name).sort(), ['daemon', 'off', 'on', 'uninstall'])
+test('R7: exactly the per-user commands that change state refuse root (on off uninstall daemon keep), and setup-helper is the one that needs it', () => {
+  assert.deepEqual(COMMANDS.filter((c) => c.mutates).map((c) => c.name).sort(), ['daemon', 'keep', 'off', 'on', 'uninstall'])
   assert.deepEqual(COMMANDS.filter((c) => c.needsRoot).map((c) => c.name), ['setup-helper'])
 })
 
@@ -52,7 +52,7 @@ test('help: the first screen says on, off and status and which generation they d
   }
   const section = (from, to) => commandsOf(text.split('\n').slice(at[from], at[to]).join('\n'))
   assert.deepEqual([...section(0, 1)].sort(), ['doctor', 'off', 'on', 'status', 'uninstall'])
-  assert.deepEqual([...section(1, 2)].sort(), ['etl', 'raw', 'serve'], 'raw export | journal are data')
+  assert.deepEqual([...section(1, 2)].sort(), ['etl', 'keep', 'raw', 'serve'], 'raw export | journal are data; keep (D40) is what is kept of the data')
   assert.deepEqual([...section(2, 3)].sort(), ['daemon', 'help', 'raw', 'setup-helper'], 'raw seal | verify | compare are maintenance')
   const one = helpText('off')
   assert.match(one, /asight off \[harness…\] \[--now\] \[--dry-run\] \[--yes\] \[--json\]/)

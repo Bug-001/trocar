@@ -25,8 +25,10 @@ import { dissectorAdapter } from '../adapters/dissected.mjs';
 import { RESPONSES, CHAT } from '../dissect/openai.mjs';
 import { RESPONSES_WS } from '../dissect/openai-ws.mjs';
 import { deriveCacheEvents } from '../cache/cache-events.mjs';
-import { harnessOf, observerEffectsOf } from '../dissect/harnesses.mjs';
-import { vendorOf } from '../dissect/vendors.mjs';
+import { harnessOf, observerEffectsOf, parseableBody } from '../dissect/harnesses.mjs';
+import { vendorOf, hostOf } from '../dissect/vendors.mjs';
+import { trafficClassOf } from '../dissect/traffic.mjs';
+import { bodyRetentionOf } from '../dissect/capture-labels.mjs';
 import { TEXT_REF_FIELD, fieldTextOf } from '../dissect/record-fields.mjs';
 import { createSynthKeys, SYNTH_RULE } from '../dissect/synth-key.mjs';
 import { requestEncodingOf } from '../dissect/request-body.mjs';
@@ -96,6 +98,8 @@ function decodeBody(record) {
   const b = record?.req_body;
   if (b && typeof b === 'object') return record;
   if (typeof b === 'string') {
+    // D40: a non-inference body can be 64 MiB and is never a source of a session key (harnesses.mjs::parseableBody): it is not parsed
+    if (!parseableBody(record, b)) return { ...record, req_body: {} };
     try {
       return { ...record, req_body: JSON.parse(b) };
     } catch {
@@ -105,7 +109,11 @@ function decodeBody(record) {
   // The demo v0 shape: the parsed `request` object stands in for req_body (adapters/envelope.mjs::v0RequestOf)
   return { ...record, req_body: v0RequestOf(record) ?? {} };
 }
+const finiteBytes = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
 function requestBytes(record) {
+  // D40 (3.2 §D40): the envelope counts the wire bytes itself, past the storage cap too (the stored body of a 70 MiB upload is a prefix)
+  const wired = finiteBytes(record?.body_wire_bytes?.req);
+  if (wired != null) return wired;
   // 3.2:47 counts the body's bytes ON THE WIRE: for a body sent compressed, req_body is its decoded text
   // (4.6 §记录), and the wire bytes are req_body_b64
   if (typeof record?.req_body_b64 === 'string' && requestEncodingOf(record)) return Buffer.from(record.req_body_b64, 'base64').length;
@@ -167,8 +175,10 @@ async function quarantineRecord(conn, record, reason) {
 //   envelope is counted by its request object (0de6eaf), a call of unknown context gives no verdict and is no baseline
 //   (0492e88), only a SHARP drop counts (b4d5320), and CC's preamble counts on its rising edge only — each
 //   of them changes `calls.compaction` for the same source, so a store written by version 2 keeps verdicts a rebuild
-//   would not make
-export const PROJECTION_VERSION = 3;
+//   would not make · 4 = the six D40 columns (harness, host, traffic_class, body_retention, response_bytes, record_bytes)
+//   and request_bytes counted from body_wire_bytes.req: the same source projects to different rows, and the rows a
+//   version-3 store holds have NULL where a rebuild writes values
+export const PROJECTION_VERSION = 4;
 
 export async function runEtl(records, connection, opts = {}) {
   const conn = connection;
@@ -302,7 +312,10 @@ export async function runEtl(records, connection, opts = {}) {
       }
 
       const norm = decodeBody(record);
-      corpus.push(norm); // full corpus (incl. skipped) → deterministic cross-batch lineage
+      // D40: a non-inference record now keeps its body verbatim (a string) where it used to keep {raw_chars}. Lineage reads
+      // inference requests only, and would otherwise hold every such body (up to 64 MiB each) for the whole run: it gets the
+      // record without it, exactly what it saw before D40. A v0 / pre-D40 record is passed on as it was.
+      corpus.push(record.is_llm_call !== true && typeof record.req_body === 'string' ? { ...norm, req_body: {} } : norm); // full corpus (incl. skipped) → deterministic cross-batch lineage
 
       const laneKey = sid == null ? null : sid + '\x00' + call.lane;
       const curBlocks = adapter.parseBlocks(record, st);
@@ -311,12 +324,18 @@ export async function runEtl(records, connection, opts = {}) {
       // a request that was not stored or stored in part, a body that did not parse): null = no compaction verdict
       // from it and it is not the lane's baseline for the next call, the rule the board follows too.
       const counted = typeof adapter.messageCount === 'function' ? adapter.messageCount(record, st) : messageCount(norm);
-      const msgCount = call.context_state === 'partial' ? null : counted;
+      // D40: a call with no body to read has no context to count — an inference call the operator set to 「只记日志」, or a
+      // non-inference one whose body is now stored verbatim (count_tokens carries a copy of the context, which is not this
+      // lane's context): no compaction verdict from it and it is not the lane's baseline, as for a partial context (3.4).
+      // Records from before D40 ({raw_chars}) are counted as they always were.
+      const logOnly = bodyRetentionOf(record) === 'log';
+      const bodyNotContext = logOnly || (record.is_llm_call !== true && typeof record.req_body === 'string');
+      const msgCount = call.context_state === 'partial' || bodyNotContext ? null : counted;
 
       // ── watermark skip: already consumed for this session. Still advance predecessor
       //    state (so the first NEW in-lane call gets the correct N-1), but write nothing.
       if (idx < (await consumedOf(key))) {
-        if (laneKey && isLlm) {
+        if (laneKey && isLlm && !logOnly) {
           prevBlocks.set(laneKey, curBlocks);
           if (msgCount != null) advanceLane(laneKey, msgCount, call);
         }
@@ -366,8 +385,9 @@ export async function runEtl(records, connection, opts = {}) {
       await conn.run(
         'INSERT INTO calls (call_id,session_id,seq,ts,endpoint,model,stream,class,control_kind,' +
           'lane,request_bytes,raw_ref,stop_reason,duration_ms,error,compaction,compaction_from,' +
-          'compaction_to,unmapped_count,extra,wire_format,vendor,transport,context_state,observer_effect) VALUES ' +
-          '($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25) ' +
+          'compaction_to,unmapped_count,extra,wire_format,vendor,transport,context_state,observer_effect,' +
+          'harness,host,traffic_class,body_retention,response_bytes,record_bytes) VALUES ' +
+          '($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31) ' +
           'ON CONFLICT (call_id) DO NOTHING',
         [
           record.id, sid, idx, ts, call.endpoint || null, call.model ?? null, !!call.stream,
@@ -378,6 +398,10 @@ export async function runEtl(records, connection, opts = {}) {
           // D37 (3.2:49-53); an envelope without `transport` is HTTP (3.2:132)
           call.wire_format ?? null, vendor, record.transport === 'ws' ? 'ws' : 'http',
           call.context_state ?? null, jsonOrNull(observerEffectsOf(record)),
+          // D40 (3.2 §D40): what the per-class size view groups and adds up. harness NULL = not identified (the settings call it
+          // `unknown`); response_bytes / record_bytes NULL = not recorded (a record from before D40, a hand-built one) — never 0.
+          ident.id, hostOf(record), trafficClassOf(record), bodyRetentionOf(record),
+          finiteBytes(record.body_wire_bytes?.resp), finiteBytes(record._bytes),
         ],
       );
 
@@ -454,7 +478,7 @@ export async function runEtl(records, connection, opts = {}) {
       }
 
       // advance predecessor state AFTER this call is written (a call of unknown context leaves the count chain alone)
-      if (laneKey && isLlm) {
+      if (laneKey && isLlm && !logOnly) {
         prevBlocks.set(laneKey, curBlocks);
         if (msgCount != null) advanceLane(laneKey, msgCount, call);
       }

@@ -5,6 +5,9 @@
 //   drain({agents, now}) / relayed({agents}) / drained({agents}): what `off` asks of the connections still relayed (RFC 1.6 §1.3,
 // engine/drain.mjs): close each at the boundary the engine can see, count what is still on its way out or waiting for its
 // own close, cut everything on `now`, and say when none is left.
+//   retention(proc, host, method, path) → {class, level} (D40, RFC 4.6 §记录「保存级别」): the daemon's callback — which
+// traffic class a call is and how much of it to keep (`full` | `log`); sampled when the request starts. The core knows no
+// harness and no pattern; absent = every call `full`.
 //   describe(meta) → FlowExtras {wsTerminal, proxies} (Plan 3c §2): the daemon's per-process data
 // (harness WS terminal patterns, the process's own proxies), merged into the flow's meta. Core knows no
 // harness; it only reads that data.
@@ -16,7 +19,7 @@ import { createUpstreamTrust, systemRoots } from '../tls/roots.mjs'
 // upstreamCa: extra CAs the engine trusts upstream (test seam); systemCa: stands in for the OS store
 // (tests; undefined = read it): PEM text / array, or a systemRoots()-shaped {certs, errors}. The upstream trust set is built once (RFC 4.6 §引擎 5, tls/roots.mjs).
 // timing (tests): {firstByteTimeoutMs, upstreamSlowMs, preludeStallMs} — the engine's waits, 5 s each by default.
-export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, describe = () => ({}), onError = () => {}, onFailure = null, timing = {}, drainTimeoutMs }) {
+export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, retention = null, describe = () => ({}), onError = () => {}, onFailure = null, timing = {}, drainTimeoutMs }) {
   const counters = { active: 0, total: 0, decrypted: 0, spliced: 0, lookupMisses: 0, notCaptured: { h2: 0, httpsProxy: 0, upstreamCert: 0, negative: 0, leafError: 0 } }
   const servers = []
   const active = new Set()
@@ -93,7 +96,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     }
     counters.active++
     const ctx = {
-      ...timing, drainTimeoutMs, issuer, store, upstreamCa, upstreamTrust, policy, isRecording, negCache, counters, failure,
+      ...timing, drainTimeoutMs, issuer, store, upstreamCa, upstreamTrust, policy, isRecording, retention, negCache, counters, failure,
       connectUpstream: connectUpstream || defaultConnect,
       newFlowId: () => `flow_${String(++flowSeq).padStart(6, '0')}`,
     }

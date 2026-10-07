@@ -158,7 +158,7 @@ test('V28: a version 2 entry without policy or extra_hosts reads as the default 
   const f = tmpState(); fs.mkdirSync(path.dirname(f), { recursive: true })
   fs.writeFileSync(f, JSON.stringify({ version: 2, updated_at: 'T0', harnesses: { codex: { desired: 'on', updated_at: 'T1' }, hermes: { desired: 'sideways', policy: 'auto' }, junk: 7 } }))
   const s = readState(f, () => {}, { installed: IN() })
-  assert.equal(DEFAULT_POLICY, 'auto')
+  assert.equal(DEFAULT_POLICY, 'all', 'D40: the default is decrypt-all')
   assert.deepEqual(pick(s.harnesses.codex, ['desired', 'policy', 'extra_hosts', 'updated_at']), { desired: 'on', policy: DEFAULT_POLICY, extra_hosts: [], updated_at: 'T1' })
   assert.deepEqual([s.harnesses.hermes.desired, s.harnesses.junk.desired], ['off', 'off'], 'anything but "on" is off')
   assert.equal(s.updated_at, 'T0')
@@ -244,4 +244,30 @@ test('switch: a harness that is not known is still recorded as asked, and on / o
   const before = JSON.parse(fs.readFileSync(file, 'utf8'))
   await sw.on({ harnesses: ['codex'] })
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), before, 'asking for what is already so does not move any updated_at')
+})
+
+// D40 (RFC 4.6 §引擎 解密策略) on D39's per-harness state.json: the default decrypt policy is `all`; what is written on disk is respected
+// (an old default `auto` cannot be told from a chosen one), so only an entry with NO policy gets `all`.
+test('D40 default policy: no state file, or no policy written → all; an entry that says auto keeps auto; an unreadable file reads as the default', async () => {
+  const dir = path.dirname(tmpState())
+  fs.mkdirSync(dir, { recursive: true })
+  const at = (name, body) => { const f = path.join(dir, name); fs.writeFileSync(f, JSON.stringify(body)); return f }
+  const pol = (f, onError) => readState(f, onError, { installed: ['codex'] }).harnesses.codex.policy
+  const fresh = createSwitch({ redirector: fakeRedirector(), stateFile: path.join(dir, 'absent.json'), installed: () => ['codex'], onEvent: () => {} })
+  assert.equal((await fresh.report()).harnesses.codex.policy, 'all', 'a fresh install: no file, no entry, the default')
+  assert.equal(pol(at('nopolicy.json', { version: 1, desired: 'on', extra_hosts: [] })), 'all', 'a version 1 state that never named one')
+  assert.equal(pol(at('auto.json', { version: 1, desired: 'on', policy: 'auto', extra_hosts: [] })), 'auto', 'written auto is kept')
+  assert.equal(pol(at('all.json', { version: 1, desired: 'on', policy: 'all' })), 'all')
+  assert.equal(pol(at('v2-auto.json', { version: 2, updated_at: 'T0', harnesses: { codex: { desired: 'on', policy: 'auto', updated_at: 'T0' } } })), 'auto', 'a version 2 entry that says auto keeps it')
+  assert.equal(pol(at('v2-none.json', { version: 2, updated_at: 'T0', harnesses: { codex: { desired: 'on', updated_at: 'T0' } } })), 'all', 'a version 2 entry without one')
+  const errs = []; const torn = path.join(dir, 'torn.json'); fs.writeFileSync(torn, '{ torn')
+  assert.equal(pol(torn, (e) => errs.push(e)), 'all'); assert.equal(errs.length, 1, 'an unreadable file is still reported')
+  // the first `on` of a fresh install writes `all`; a later `on` without a policy keeps what is there
+  const stateFile = path.join(dir, 'fresh', 'state.json')
+  await createSwitch({ redirector: fakeRedirector(), stateFile, installed: () => ['codex'], onEvent: () => {} }).on()
+  assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).harnesses.codex.policy, 'all')
+  const old = at('old-install.json', { version: 1, desired: 'off', policy: 'auto', extra_hosts: [] })
+  const sw = createSwitch({ redirector: fakeRedirector(), stateFile: old, installed: () => ['codex'], onEvent: () => {} })
+  assert.equal((await sw.on()).harnesses.codex.policy, 'auto', 'turning on does not change the policy of an install that wrote one')
+  assert.equal((await sw.on({ policy: 'all' })).harnesses.codex.policy, 'all', 'the operator can still choose')
 })

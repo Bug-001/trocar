@@ -108,10 +108,17 @@ What the board cannot vouch for, it labels on the call (raw panel and the top of
   drawn as something else — also when only some records of a session are unrecognized. One session may
   mix wire formats; each call is read by its own.
 - Request keys that are not context blocks are listed one by one, each opening its verbatim bytes.
-  A token-count probe keeps only its size, and its detail says so.
+  A token-count probe's request body is kept verbatim like any other (D40; `asight keep` can turn that into a log
+  line), and its detail says which: kept, log only (**只记日志**), or captured before D40 and kept as a length
+  only (**本条采于 D40 之前,只存了长度**).
+- **保存什么 · what is kept** (the session picker's last group): the `asight keep` table on the board — per harness
+  and traffic class the level, the calls, the bytes on the wire and the bytes stored over 24 h / 7 d / all, so you
+  can see which class costs what before you change it. Each number says where it comes from (the analytics store as
+  of the last `asight etl`, the disk total live, once-sealed sizes as an **估计**). The switches work only under
+  `asight serve --control`; without it the page shows the `asight keep` command to run.
 - **The reply as captured** is listed in the raw panel with a locator per piece — the whole decoded
   stream of an HTTP call, each server message of a WebSocket call — each opening its verbatim bytes. A
-  piece that cannot be opened says why (a JSON reply the collector stored parsed, a message kept as
+  piece that cannot be opened says why (a JSON reply stored parsed only — one from before D40, or one that re-serializes to itself — a message kept as
   base64 or past the size cap, no reply at all).
 - **Codex over WebSocket** (its default transport): each turn sends only its new input, so the board
   rebuilds the context the model saw from the earlier calls on the same connection, following
@@ -171,6 +178,16 @@ only for agents that trust the collector CA. Everything else, including other us
 there is no collector yet: `asight on` / `off` drive the old capture (the Claude Desktop Clash rule and MITM of
 the section below), and `asight daemon` says 本平台未实现. On Windows `on` says so too, and `off` takes out
 whatever the old capture left.
+
+What it keeps (D40): for a trusted agent it decrypts **every** host it talks to by default (policy `all`), not just the
+model API, and stores every call verbatim — telemetry, uploads, account calls, session sync, downloads — so you can see
+what an agent harness does besides calling the model. Where that is too much, `asight keep` sets, per harness and
+traffic class (`llm` · `token-count` · `session-sync` · `telemetry` · `files` · `account` · `other`), whether to keep
+the whole call (`full`, bodies capped at 64 MiB with a label) or only a line per call (`log`: headers and sizes, no
+body). A change reaches the calls that start after it, within a second, and never touches what is already stored.
+The cost of `all`, honestly: a child process of an agent that does not trust the collector CA (a sandboxed tool's
+`npm` or `git`) fails up to two connections per host before that host passes through untouched; each is a line in
+`flows/`. A state file that already says `auto` keeps `auto` (known API hosts only).
 
 | what | where | undo |
 |---|---|---|
@@ -311,6 +328,7 @@ asight doctor [harness…] [--source <ndjson|dir>] [--json]
 # data
 asight serve [--port 9800] [--source <ndjson|dir>] [--db <path>] [--control]
 asight etl <ndjson|sealed|dir> [--db <path>] [--rebuild]
+asight keep [<harness|all> <class|all> <full|log>] [--db <store>] [--json]   # what is kept of each call: show the levels and sizes, or set one (no daemon needed)
 asight raw export <session-id|file.sealed> [--out <dir|file>] | journal [--tail <n>]
 
 # maintenance

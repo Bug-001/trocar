@@ -11,7 +11,7 @@ import path from 'node:path';
 import { createExchangeTee } from '../../src/collector/core/engine/exchange.mjs';
 import { createRecordStore } from '../../src/collector/core/record/store.mjs';
 
-export async function startTeeProxy({ upstreamPort, dir, flow = {}, wsTerminal } = {}) {
+export async function startTeeProxy({ upstreamPort, dir, flow = {}, wsTerminal, retention } = {}) {
   const store = createRecordStore({ root: dir });
   const envelopes = [], failures = [];
   const recordStore = {
@@ -27,7 +27,7 @@ export async function startTeeProxy({ upstreamPort, dir, flow = {}, wsTerminal }
       proc: flow.proc || { pid: 1, exe: '/x/agent', agent: null } };
     // wsTerminal: the harness's terminal-message patterns, handed to the WebSocket recorder after a 101
     // (4.6 §传输与帧级记录); without it a call runs to the next client message or the end of the connection.
-    const tee = createExchangeTee({ flow: fl, recordStore, ...(wsTerminal ? { wsTerminal } : {}) });
+    const tee = createExchangeTee({ flow: fl, recordStore, ...(wsTerminal ? { wsTerminal } : {}), ...(retention ? { retention } : {}) });
     const up = net.connect(upstreamPort, '127.0.0.1');
     for (const s of [client, up]) { sockets.add(s); s.on('close', () => sockets.delete(s)); }
     client.on('data', (c) => { tee.fromClient(c); up.write(c); });

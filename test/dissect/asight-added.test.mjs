@@ -12,7 +12,8 @@ import { freshConn } from '../etl/helpers.mjs';
 const stream = (r) => (Object.defineProperty(r, '_stream', { value: 'c.ndjson', enumerable: false }), r);
 const call = (extra = {}) => stream({ id: 'ca1', ts_request: '2026-10-07T00:00:00Z', is_llm_call: true, endpoint: '/v1/messages', capture: 'transparent', host: 'api.anthropic.com',
   proc: { pid: 1, exe: '/x', agent: 'claude-code' }, req_headers: { 'x-claude-code-session-id': 'S1' }, req_body: '{"model":"m","messages":[{"role":"user","content":"q"}]}',
-  req_head_raw: 'POST /v1/messages HTTP/1.1\r\n\r\n', resp_head_raw: 'HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n', resp: { status: 200, kind: 'json', body: { usage: { input_tokens: 1, output_tokens: 1 } } }, ...extra });
+  req_head_raw: 'POST /v1/messages HTTP/1.1\r\n\r\n', resp_head_raw: 'HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n', body_wire_bytes: { req: 60, resp: 40 }, resp: { status: 200, kind: 'json', body: { usage: { input_tokens: 1, output_tokens: 1 } } }, ...extra });
+// body_wire_bytes: what a record from D40 on carries; without it (and without resp.raw) a JSON reply reads as the pre-D40 re-serialized kind and gets its own label (4.1 保真边界 ⑤), which this file's fixture is not about
 
 test('captureLabelsOf: asight_added connection-close is labelled 「asight 加的」, naming the line and saying the body and resp_head_raw are the upstream\'s', () => {
   const l = captureLabelsOf(call({ asight_added: ['connection-close'] })).filter((x) => x.id === 'asight-added');

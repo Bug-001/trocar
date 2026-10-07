@@ -66,7 +66,8 @@ function withParsedBody(record) {
 // body shape). Control-plane and count_tokens records go to the envelope adapter (./envelope.mjs); a
 // harness's UA or session header no longer decides the wire.
 export function detect(record) {
-  return record?.is_llm_call === true && wireFormatOf(record) === 'anthropic';
+  // D40: a call the operator set to 「只记日志」 has no body to dissect; the envelope adapter takes it (a row, no blocks, no usage)
+  return record?.is_llm_call === true && record.body_retention !== 'log' && wireFormatOf(record) === 'anthropic';
 }
 
 // ── usage (承 demo normResp; mapping delegated to 3.2 schema.mapUsage) ──────────

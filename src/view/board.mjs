@@ -9,6 +9,8 @@
 import { assembleSession, sessionIdOf, headersOf, respOf } from './assemble.mjs';
 import { harnessOf as harnessOfRecord, LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
 import { stampSynthKeys } from '../dissect/synth-key.mjs';
+import { isLogOnly, bodyRetentionOf, retentionLabelOf } from '../dissect/capture-labels.mjs';
+import { controlRecordWire, CONTROL_DETAIL_RECORDS } from './control-wire.mjs';
 
 // tolerate both envelope shapes: demo v0 `request_headers` + product D10 `req_headers` (Codex).
 const anyHeaders = (recs) => headersOf(recs.find((r) => r.request_headers || r.req_headers));
@@ -18,6 +20,9 @@ const isProbe = (r) => /count_tokens/.test(r.endpoint || '');
 // A session record that is neither real inference nor a count_tokens probe — the sharder's `other`
 // stream. Kept exactly complementary to is_llm_call/isProbe so calls+probes+other = the session total.
 const isOther = (r) => !r.is_llm_call && !isProbe(r);
+// D40 (3.2 §D40, K7): an inference call the operator set to 「只记日志」 kept its headers and sizes but no body. It is neither a call the board can
+// draw (nothing to dissect) nor nothing: it is counted and shown apart, labelled, so a session of them does not read as "no calls".
+const isLogged = (r) => !!r.is_llm_call && isLogOnly(r);
 
 // ── grouping ────────────────────────────────────────────────────────────────
 // Records carrying their harness's session key (src/dissect/harnesses.mjs, RFC 3.4) belong to a
@@ -38,11 +43,13 @@ export function groupSessions(records) {
 export const controlRecords = (records) => stampSynthKeys(records).filter((r) => !sessionIdOf(r));
 
 // ── per-session derived meta (cheap; no analyze) ──────────────────────────────
-const llmRecs = (recs) => recs.filter((r) => r.is_llm_call);
+const llmRecs = (recs) => recs.filter((r) => r.is_llm_call && !isLogOnly(r));
+const loggedRecs = (recs) => recs.filter(isLogged);
 const probeRecs = (recs) => recs.filter(isProbe);
 const otherRecs = (recs) => recs.filter(isOther);
 const probeSeries = (precs) =>
-  precs.map((r) => { const rp = respOf(r); return { ts: r.ts_request, tokens: (rp && rp.body && rp.body.input_tokens) ?? null }; })
+  // D40: `retention` says whether the probe's own request body was kept (full), set to a log line (log) or never kept (legacy-meta)
+  precs.map((r) => { const rp = respOf(r); return { ts: r.ts_request, tokens: (rp && rp.body && rp.body.input_tokens) ?? null, retention: bodyRetentionOf(r) }; })
     .filter((p) => p.tokens != null);
 function entrypointOf(recs) {
   const h = anyHeaders(recs);
@@ -90,6 +97,7 @@ function applyEnrich(base, enrich) {
     provider: base.provider ?? null,
     title: (info && info.title) || null,
     calls: base.calls || 0,
+    logged: base.logged || 0, // D40: inference calls kept as a log line only (a meta.json written before D40 has none)
     probes: base.probes || 0,
     other: base.other || 0,
     has_subagent: !!base.has_subagent,
@@ -103,6 +111,7 @@ function sessionMetaFor(id, recs, enrich) {
     entrypoint: entrypointOf(recs),
     ...harnessOf(recs), // { harness, harness_inferred, provider }
     calls: llmRecs(recs).length,
+    logged: loggedRecs(recs).length,
     probes: probeRecs(recs).length,
     other: otherRecs(recs).length,
     has_subagent: hasSubagent(recs),
@@ -165,7 +174,7 @@ export function projectsViewFromMetas(metas, { enrich } = {}) {
 export function tailBound(recs, maxBytes) {
   const bytesOf = (r) => (typeof r.req_body === 'string' ? r.req_body.length
     : (r.request ? JSON.stringify(r.request).length : 0));
-  const calls = (rs) => rs.reduce((n, r) => n + (r.is_llm_call ? 1 : 0), 0);
+  const calls = (rs) => rs.reduce((n, r) => n + (r.is_llm_call && !isLogOnly(r) ? 1 : 0), 0);
   let total = 0;
   for (const r of recs) total += bytesOf(r);
   if (!maxBytes || total <= maxBytes) return { recs, bound: null };
@@ -202,6 +211,18 @@ function onWire(analyzed) {
   const lanes = (analyzed.lanes || []).map((l) => ({ ...l, calls: (l.calls || []).map((c) => c.gi) }));
   return { ...rest, lanes };
 }
+// D40: the calls of a session that were kept as a log line only — how many, which setting did it, and the newest few with what is still
+// known of them (time, endpoint, status, the wire sizes). null when there are none. Nothing here is a body: there is none to show.
+const LOGGED_SHOWN = 50;
+function loggedView(recs) {
+  if (!recs.length) return null;
+  const labels = [...new Set(recs.map((r) => (retentionLabelOf(r) || {}).label).filter(Boolean))];
+  const items = recs.slice(-LOGGED_SHOWN).reverse().map((r) => {
+    const rp = respOf(r) || {}, w = r.body_wire_bytes || {};
+    return { id: r.id, ts: r.ts_request || r.ts || null, endpoint: String(r.endpoint || '').split('?')[0], status: rp.status ?? null, request_bytes: w.req ?? null, response_bytes: w.resp ?? null };
+  });
+  return { count: recs.length, labels, items, shown: items.length };
+}
 export function sessionView(records, sessionId, { enrich, bound, page, maxBytes } = {}) {
   const g = groupSessions(records);
   let recs = g.get(sessionId);
@@ -227,6 +248,7 @@ export function sessionView(records, sessionId, { enrich, bound, page, maxBytes 
   const view = {
     records: slim,
     analyzed,
+    logged: loggedView(loggedRecs(recs)),
     probes: { count: probes.length, series: probeSeries(probes) },
     meta: sessionMetaFor(sessionId, recs, enrich),
     truncated: bound || autoBound || null, // 保真边界 (invariant 4): set when a large session was tail-bounded
@@ -332,9 +354,15 @@ function controlClass(r) {
   if (/statsig|telemetry|event|metric|flag/.test(e)) return 'telemetry';
   return 'control';
 }
-export function controlView(records, cls) {
+export function controlView(records, cls, { detail = CONTROL_DETAIL_RECORDS } = {}) {
   const ctrl = controlRecords(records);
-  if (cls) return { class: cls, records: ctrl.filter((r) => controlClass(r) === cls) };
+  // D40: the records go out reshaped for the detail panel (bodies as stored, clipped for display, labelled; the heavy fields stay in the source).
+  // Only the newest `detail` of a class carry their bodies (the page lists and opens that many); older ones go slim, so the answer is bounded.
+  if (cls) {
+    const list = ctrl.filter((r) => controlClass(r) === cls);
+    const slimBefore = Math.max(0, list.length - detail);
+    return { class: cls, total: list.length, detail_limit: detail, records: list.map((r, i) => controlRecordWire(r, { detail: i >= slimBefore })) };
+  }
   const counts = new Map();
   for (const r of ctrl) { const c = controlClass(r); counts.set(c, (counts.get(c) || 0) + 1); }
   return { classes: [...counts.entries()].map(([c, n]) => ({ class: c, count: n })) };

@@ -15,7 +15,13 @@ const B = (path, confidence = 'medium') => ({ from: 'body', name: path.join('.')
 // identified by proc (legacy captures, unknown agents), so upgrading never regroups an old capture.
 export const LEGACY_SESSION_KEYS = [H('x-claude-code-session-id'), H('x-session-id', 'medium'), H('session-id', 'medium'), H('thread-id', 'medium')];
 
-const ROW = { ua: null, parentKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [] };
+// `traffic` (D40, RFC 4.6 §记录「保存级别」): which of the non-model traffic classes (session-sync · telemetry · files ·
+// account) a call is, told by host + path — DATA, not code (D20, 0.1 §5: the capture core parses no provider). Each entry
+// {host, path?, class}: `host` exact or `*.suffix`, any case; `path` a regex source tested on the path without its
+// querystring; the first entry that matches wins. Nothing matches → the shared third-party table (src/dissect/traffic.mjs),
+// then `other`. A harness with no entries is not a loss: its calls are `other`, kept in full (4.1 Edge cases).
+const ROW = { ua: null, parentKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [] };
+const T = (host, cls, pathSource) => ({ host, class: cls, ...(pathSource ? { path: pathSource } : {}) });
 const effect = (id, cause, what) => ({ id, captures: ['transparent'], cause, what });
 
 export const HARNESSES = Object.freeze([
@@ -24,7 +30,19 @@ export const HARNESSES = Object.freeze([
     lane: [{ header: 'x-claude-code-agent-id', lane: 'subagent' }],
     compaction: [{ header: 'x-cc-compaction-request' }],
     observerEffects: [effect('cc-gzip-off', 'NODE_EXTRA_CA_CERTS in settings env',
-      'request-body gzip (flag-driven) is off because a custom CA is set')] },
+      'request-body gzip (flag-driven) is off because a custom CA is set')],
+    // the endpoints measured on the live capture (2026-10-07): remote-session sync, telemetry, uploads,
+    // account calls. The order matters: the upload before the broader /api/oauth/ account rule.
+    traffic: [
+      T('api.anthropic.com', 'session-sync', '^/v1/code/sessions(/|$)'),
+      T('api.anthropic.com', 'telemetry', '^/api/event_logging/'),
+      T('api.anthropic.com', 'files', '^/api/oauth/file_upload'),
+      T('api.anthropic.com', 'files', '^/v1/files'),
+      T('api.anthropic.com', 'account', '^/api/oauth/'),
+      T('api.anthropic.com', 'account', '^/api/web/domain_info'),
+      T('claude.ai', 'account'),
+      T('downloads.claude.ai', 'files'),
+    ] },
   { ...ROW, id: 'codex', agents: ['codex'], ua: /codex/,
     sessionKeys: [H('session-id'), H('thread-id')], // over WebSocket these come from the upgrade request (4.6)
     parentKeys: [H('x-codex-parent-thread-id')],    // a THREAD id; resolved through aliases later (gate G4)
@@ -67,6 +85,8 @@ export const HEADER_SESSION_KEYS = Object.freeze([...new Set([
 
 // Legacy-only row: the pre-D37 DeepSeek CLI. Reachable by UA inference only, never by proc.agent.
 const LEGACY_DEEPSEEK_CLI = { id: 'deepseek-cli', ua: /deepseek/, legacy: true };
+// the ids harnessOf can return that are in no table row: a retention row must exist for each (src/dissect/traffic.mjs::retentionHarnessIds)
+export const LEGACY_HARNESS_IDS = Object.freeze([LEGACY_DEEPSEEK_CLI.id]);
 const byId = (id) => HARNESSES.find((h) => h.id === id);
 const UA_ORDER = [byId('cc'), byId('opencode'), byId('codex'), LEGACY_DEEPSEEK_CLI]; // opencode before codex, as before D37
 const BY_AGENT = new Map(HARNESSES.flatMap((h) => h.agents.map((a) => [a, h])));
@@ -90,13 +110,21 @@ export function headerOf(rec, name) {
   return null;
 }
 
+// D40: a request that is not an inference call keeps its body too (up to 64 MiB: a Files upload, an update package, a telemetry batch). The
+// readers parse a body only to read a session key / hint out of it (identity, lane, lineage), and that is for an INFERENCE call only: before D40
+// a non-inference body was `{raw_chars}` and gave no key, so reading one now would change which session — or none — a record belongs to across
+// the D40 boundary (a Hermes `session_id` in a telemetry body would key it), and the header-only sharder would disagree with the ETL (3.4:21).
+// A non-inference record is identified by its headers alone, as it always was. One rule for every reader (this function, the ETL, the envelope
+// adapter).
+export const parseableBody = (rec, text) => !!rec && typeof text === 'string' && rec.is_llm_call === true;
+
 const PARSED = new WeakMap();
 export function bodyOf(rec) {
   if (!rec || typeof rec !== 'object') return null;
   if (rec.request && typeof rec.request === 'object') return rec.request; // demo v0 shape
   const b = rec.req_body;
   if (b && typeof b === 'object') return b.verbatim === false ? null : b; // {raw_chars, verbatim:false} has no body
-  if (typeof b !== 'string' || !b) return null;
+  if (typeof b !== 'string' || !b || !parseableBody(rec, b)) return null;
   if (!PARSED.has(rec)) {
     let v = null;
     try { v = JSON.parse(b); } catch { v = null; }

@@ -25,10 +25,13 @@ export function qCapturing(records, srcMeta) {
 }
 
 // ② 抓得对:LLM call 有 verbatim req_body(string,非空)+ 一个重建出的 resp(usage/text/tool_calls 或标 error)。
+// D40: a call the operator set to 「只记日志」 (body_retention:'log', `asight keep`) has no body BY CHOICE: it is counted apart (`logged`), never
+// as a missing verbatim req_body (it reported ✗ for a setting that was working). src/capture may not import src/dissect, so the field is read here.
 export function qCorrect(records) {
-  let llm = 0, good = 0, badReq = 0, badResp = 0;
+  let llm = 0, good = 0, badReq = 0, badResp = 0, logged = 0;
   for (const r of records) {
     if (!isLlmCall(r.endpoint || '')) continue;
+    if (r.body_retention === 'log') { logged++; continue; }
     llm++;
     const hasReq = typeof r.req_body === 'string' && r.req_body.length > 0;
     const resp = r.resp || {};
@@ -38,10 +41,11 @@ export function qCorrect(records) {
     if (hasReq && hasResp) good++;
   }
   // ok = 有 LLM call 且没有一条丢了 verbatim 请求体(缺响应体可能是 interrupted,归 warn 不判死)。
-  return { ok: llm > 0 && badReq === 0, llm, good, badReq, badResp,
-    note: llm === 0 ? 'no LLM calls to validate (capture a /v1/messages turn)'
+  const keptNote = logged ? ` · ${logged} LLM call(s) kept as a log line only (只记日志, set with \`asight keep\`): no body by choice, not a capture failure` : '';
+  return { ok: llm > 0 && badReq === 0, llm, good, badReq, badResp, logged,
+    note: (llm === 0 ? (logged ? 'no LLM call kept a body to validate' : 'no LLM calls to validate (capture a /v1/messages turn)')
       : `${good}/${llm} LLM call(s) carry verbatim req_body + a reconstructed response`
-        + (badReq ? ` · ✗ ${badReq} missing verbatim req_body` : '') + (badResp ? ` · ⚠ ${badResp} missing response (interrupted?)` : '') };
+        + (badReq ? ` · ✗ ${badReq} missing verbatim req_body` : '') + (badResp ? ` · ⚠ ${badResp} missing response (interrupted?)` : '')) + keptNote };
 }
 
 // ③ 凭据(2026-07-20 起改义)。**旧契约**:secret header MUST 为 `<redacted>`,泄漏 = 硬失败。

@@ -12,6 +12,13 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const die = (m) => { console.error(m); process.exit(1) }
 const r = (...p) => path.join(ROOT, ...p)
 
+// D40 (RFC 4.6 §记录「保存级别」): the retention settings the OLD capture applies — the reverse proxy and the MITM. The wiring is
+// src/legacy-retention.mjs (it joins src/capture/ to the read-side table's classifier, which src/capture/ may not import).
+async function legacyRetention() {
+  const { buildLegacyRetention } = await import(r('src', 'legacy-retention.mjs'));
+  return buildLegacyRetention();
+}
+
 export const LEGACY_COMMANDS = new Set(['serve', 'monitor', 'etl', 'shard', 'capture', 'mitm', 'desktop', 'raw'])
 
 /** Runs one of LEGACY_COMMANDS with the arguments after its name → the exit code the body set (0 when it set none). */
@@ -176,7 +183,8 @@ async function body(cmd, rest) {
       const sink = createCaptureSink(out);
       const life = legacyLifecycle({ source: 'proxy', port, out });
       let n = 0;
-      const server = createReverseProxy({ target, upstreamProxy, keepRawSse, onEvent: (e) => appendLegacyEvent(e), onEnvelope: (env) => { if (sink.write(env) && ++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
+      const retention = await legacyRetention();
+      const server = createReverseProxy({ target, upstreamProxy, keepRawSse, retention, onEvent: (e) => appendLegacyEvent(e), onEnvelope: (env) => { if (sink.write(env) && ++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
       server.on('error', (e) => { appendLegacyEvent(failureOf('proxy', e, 'start-failed')); if (e.code === 'EADDRINUSE') process.exit(1); });
       server.listen(port, '127.0.0.1', () => { life.started(server.address().port); console.log(`asight capture (reverse-proxy tee) → ${target}\n  listening http://127.0.0.1:${port}  → ${out}\n  point the harness at it: HTTPS_PROXY / base_url → http://127.0.0.1:${port} (or run: asight monitor on --no-autostart)`); });
       break;
@@ -208,7 +216,8 @@ async function body(cmd, rest) {
       fs.mkdirSync(path.dirname(out), { recursive: true });
       const sink = createCaptureSink(out);
       let n = 0;
-      const server = createMitmProxy({ targetHost, leaf, upstreamProxy, keepRawSse, onEvent: (e) => appendLegacyEvent(e), log: (m) => console.error(m), onEnvelope: (env) => { if (sink.write(env) && ++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
+      const retention = await legacyRetention();
+      const server = createMitmProxy({ targetHost, leaf, upstreamProxy, keepRawSse, retention, onEvent: (e) => appendLegacyEvent(e), log: (m) => console.error(m), onEnvelope: (env) => { if (sink.write(env) && ++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
       // given its server, a SIGTERM (what `launchctl unload` makes launchd send) drains: no new connections, the open ones get 10 s to end, then `mitm-stop` says how many were cut (RFC 1.6 §4)
       const life = legacyLifecycle({ source: 'mitm', port, out, server });
       server.on('error', (e) => { appendLegacyEvent(failureOf('mitm', e, 'start-failed')); if (e.code === 'EADDRINUSE') process.exit(1); });

@@ -6,7 +6,8 @@
 //     `analyzed` only (invariant 3 / AC-3). The demo render code reads pre-baked per-call fields.
 //   • SQL (RFC 3.5): /api/sessions · /api/session/:id · /api/call/:id/context — DuckDB-backed
 //     canonical rows for cross-session analytics + AC-1 byte-verbatim context (optional; needs a db).
-// OBSERVE-only: never originates LLM calls, never writes storage. no-store is a CORRECTNESS
+//   • /api/capture-health (D38) · /api/retention (D40): metadata read from disk / the projection, no record bytes.
+// OBSERVE-only: never originates LLM calls, never writes storage (the opt-in control plane's settings files are not storage). no-store is a CORRECTNESS
 // requirement (the 1.5s live poll MUST never eat a stale cached response).
 import http from 'node:http';
 import fssync from 'node:fs';
@@ -32,6 +33,9 @@ import { listSources, dirInputs, isSealedPath, sealedSources, unreadCapture } fr
 import { sealedReadProblem } from './raw/journal.mjs';
 import { emptyMeta, mergeMeta, foldSealed } from './etl/session-meta.mjs';
 import { captureHealth, HealthUnreadable } from './health/read.mjs';
+import { retentionReport } from './query/retention.mjs';
+import { setRetention, readRetentionFile, RetentionArgError, retentionFile, retentionLog } from './capture/retention.mjs';
+import { retentionHarnessIds } from './dissect/traffic.mjs';
 import { asightHome } from './paths.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -388,10 +392,11 @@ function enrichClaude(id) {
   return info;
 }
 
-// D26 control plane — the three (and only three) mutation/status endpoints, mounted only when
-// `control` is enabled. Directly maps to the underlying onboard commands (atraceOn/atraceOff via
-// control.mjs). OBSERVE-only: arranges capture, never originates. Gated by hostOk/originOk + CSRF.
-async function handleControl(req, res, { p, csrf, captureTarget, proxyUrl, deps }) {
+// D26 control plane — the three mutation/status endpoints, plus D40's fourth (POST /control/retention), mounted only
+// when `control` is enabled. The first three map to the underlying onboard commands (atraceOn/atraceOff via control.mjs).
+// OBSERVE-only: arranges capture, never originates. Gated by hostOk/originOk + CSRF. `home` is the asight home the retention
+// settings live in (~/.asight; a test passes a sandbox).
+async function handleControl(req, res, { p, csrf, captureTarget, proxyUrl, deps, home }) {
   if (!hostOk(req)) return sendJson(res, 403, { error: 'forbidden: non-loopback Host (anti DNS-rebind)' });
   if (!originOk(req)) return sendJson(res, 403, { error: 'forbidden: cross-origin request' });
   // deps (onboard/autostart) injectable for tests; with the real ones, a boot item that does not load is a line in
@@ -415,6 +420,28 @@ async function handleControl(req, res, { p, csrf, captureTarget, proxyUrl, deps 
       if (body.action === 'off') return sendJson(res, 200, monitoringOff({ ...base, removeCa: !!body.removeCa }));
     } catch (e) { return sendJson(res, 500, { error: String((e && e.message) || e) }); }
     return sendJson(res, 400, { error: "action must be 'on' or 'off'" });
+  }
+  // D40 (RFC 4.4, 4.6 §记录「保存级别」·修改): change ONE cell of what is kept of each call. It calls the same function `asight keep`
+  // does (setRetention: names checked first, atomic 0600 write, one line in the change log with source 'board'), reads and
+  // writes ~/.asight/retention.json only — the settings file is not storage (not the source NDJSON, not the derived tables),
+  // and nothing here touches either; it does not go through the collector daemon's socket and sends no request.
+  if (p === '/control/retention' && req.method === 'POST') {
+    if ((req.headers['x-asight-csrf'] || '') !== csrf) return sendJson(res, 403, { error: 'bad or missing CSRF token' });
+    let body;
+    try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return sendJson(res, 400, { error: 'invalid JSON body' }); }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return sendJson(res, 400, { error: 'the body must be {harness, class, level}' });
+    const { harness, class: cls, level } = body;
+    // one cell: the board changes the cell it shows; `all` is the command line's convenience
+    if (typeof harness !== 'string' || typeof cls !== 'string' || harness === 'all' || cls === 'all') return sendJson(res, 400, { error: 'name one harness and one class (all is for `asight keep`)' });
+    const file = retentionFile(home), logFile = retentionLog(home);
+    try {
+      const r = setRetention({ file, logFile, harness, class: cls, level, source: 'board', harnesses: retentionHarnessIds() });
+      const cur = readRetentionFile(file);
+      return sendJson(res, 200, { changed: r.changed, levels: cur.levels, settings: { ok: cur.problems.length === 0, problems: cur.problems }, ...(r.logError ? { log_error: r.logError } : {}) });
+    } catch (e) {
+      if (e instanceof RetentionArgError || (e && e.code === 'bad-args')) return sendJson(res, 400, { error: e.message });
+      return sendJson(res, 409, { error: String((e && e.message) || e) }); // an unreadable settings file: nothing was changed
+    }
   }
   return sendJson(res, 404, { error: 'unknown control endpoint' });
 }
@@ -680,7 +707,7 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
       if (!hostOk(req)) return sendJson(res, 403, { error: 'forbidden: non-loopback Host (anti DNS-rebind)' });
       if (!originOk(req)) return sendJson(res, 403, { error: 'forbidden: cross-origin request' });
       // D26: opt-in control plane (mutations) — mounted only when enabled; data plane stays read-only.
-      if (control && p.startsWith('/control/')) return handleControl(req, res, { p, csrf, captureTarget, proxyUrl, deps: controlDeps });
+      if (control && p.startsWith('/control/')) return handleControl(req, res, { p, csrf, captureTarget, proxyUrl, deps: controlDeps, home: healthHome || asightHome() });
       if (req.method !== 'GET') return sendJson(res, 405, { error: 'method not allowed' });
       let m;
 
@@ -747,6 +774,12 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
       if (p === '/api/capture-health') {
         try { return sendJson(res, 200, captureHealth({ home: healthHome || asightHome() })); }
         catch (e) { if (e instanceof HealthUnreadable) return sendJson(res, 503, { error: `capture health could not be read: ${e.message}` }); throw e; }
+      }
+      // D40 (RFC 4.4 端点表, 2.6 §D): what is kept of each call per harness × class, what each class takes, what ~/.asight takes. Read
+      // only, metadata only (no record bytes): the settings file, the change log's tail, the projection's sizes (up to the newest
+      // call in the store, which is as far as the last `asight etl` got; sizes:null + the reason when there is no store — never 0) and lstat sizes of the files under the home.
+      if (p === '/api/retention') {
+        return sendJson(res, 200, await retentionReport({ home: healthHome || asightHome(), conn: db ? db.connection : null, dbError, dbPath, control }));
       }
       if (p === '/api/pricing') { // D14: editable unit-price config (cost = usage × price, derived)
         const { pricing, source } = loadPricing();
