@@ -12,6 +12,7 @@
 
 import nodeHttp from 'node:http'
 import path from 'node:path'
+import { topKey } from './yaml-top.mjs'
 
 /** Thrown, with nothing sent, for a request the allow-list does not name. */
 export class ControllerRefused extends Error {
@@ -174,13 +175,6 @@ export function judgeServer({ ps, serverPid, installDirs = [] }) {
   return no('other-user')
 }
 
-const topKey = (text, key) => { // a top-level scalar of a YAML file, read in memory: the file holds the secret and the subscription, so nothing else of it is looked at
-  const m = new RegExp(`^${key}:[ \\t]*(.*?)[ \\t]*$`, 'm').exec(text)
-  if (!m) return null
-  let v = m[1]
-  if (v.startsWith('"')) { const e = /^"((?:[^"\\]|\\.)*)"/.exec(v); v = e ? e[1].replace(/\\(.)/g, '$1') : v } else if (v.startsWith("'")) { const e = /^'((?:[^']|'')*)'/.exec(v); v = e ? e[1].replace(/''/g, "'") : v } else v = v.replace(/[ \t]+#.*$/, '')
-  return v === '' ? null : v
-}
 const pipeNameOf = (v) => (v == null ? null : (/(?:^|\\)pipe\\([A-Za-z0-9._-]{1,128})\s*$/.exec(String(v)) || /^([A-Za-z0-9._-]{1,128})$/.exec(String(v)) || [])[1] ?? null)
 const specOf = (v) => (/^(pipe|tcp|unix):/.test(String(v)) ? String(v) : `pipe:${pipeNameOf(v) ?? ''}`)
 
