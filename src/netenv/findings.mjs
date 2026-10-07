@@ -84,7 +84,8 @@ export const FINDINGS = {
   'other-redirector': { cls: 'hint', asightFirst: false, what: () => '本机还有别的连接改写', why: () => '根 cgroup 上有别人的 connect 程序(如 dae),或有 Winsock LSP:可能与 asight 互相改写', commands: (c) => [os(c, { linux: 'sudo bpftool cgroup tree /sys/fs/cgroup', win32: 'netsh winsock show catalog', darwin: 'netstat -rn' })], verify: () => '—' },
   'fake-ip': { cls: 'hint', asightFirst: false, what: (c) => `${c.h} 的 API host 解析到 198.18.0.0/15`, why: () => 'VPN 的 fake-ip;asight 按 SNI 记 host', commands: () => [], verify: () => '—' },
   'inferred-behaviour': { cls: 'hint', asightFirst: false, what: (c) => `${c.h} 在本平台的代理行为是按别的平台实测推断的`, why: () => '本平台还没测', commands: () => [], verify: () => '—' },
-  'cause-unknown': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 连不上,没找到具体原因`, why: () => 'asight 的事实里没有哪一项能解释它',
+  // The user named the harness (§9.1: the symptom is said by agent), and nothing in the facts explains it. asight has no fact that says an agent cannot connect, so this does not claim it: a condition, a hint.
+  'cause-unknown': { cls: 'hint', asightFirst: true, what: (c) => `如果 ${c.h} 仍连不上:asight 这边没找到具体原因`, why: () => 'asight 读到的(期望态、进程、信任入口、代理设置)里没有哪一项能解释它;你点名了它,所以给出怎样把 asight 排除在外',
     commands: (c) => [asight(c, `asight off ${c.h}`), gui(`再试 ${c.h}:仍连不上 → 与 asight 无关;连得上 → ${`asight on ${c.h}`},再跑 asight doctor ${c.h} --json,并看看板「采集健康」里那段时间的失败`)], verify: (c) => `再试 ${c.h}:仍连不上 → 与 asight 无关` },
 }
 // the trust reasons not listed above (a variable missing, a file unreadable, …): the daemon's own hint says what to do about this agent
@@ -108,7 +109,7 @@ function inferred(F, hf) {
 }
 
 /**
- * The findings for the facts and the topology they were drawn into (§9.6). `harnesses` = names (only those harnesses' findings, and `cause-unknown` when one of them has none that explains it) or null (all of
+ * The findings for the facts and the topology they were drawn into (§9.6). `harnesses` = names (only those harnesses' findings, and the hint `cause-unknown` when one of them has no failure or expected finding that explains it) or null (all of
  * them, and the machine's). `user` is the name to put in a command that needs it. Pure: it reads nothing, runs nothing.
  */
 export function diagnose({ facts: F, topology: T, harnesses = null, user = null }) {
@@ -140,7 +141,7 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     if (drifts.some((d) => d.code === 'netenv-changed')) add('netenv-changed')
     if (hf.fakeIp === true) add('fake-ip')
     if (inferred(F, hf)) add('inferred-behaviour')
-    if (named && F.desired[h] === 'on' && ![...found.values()].some((f) => f.class === 'failure') && hf.installed !== false) add('cause-unknown')
+    if (named && F.desired[h] === 'on' && hf.installed !== false && ![...found.values()].some((f) => f.class !== 'hint')) add('cause-unknown') // a failure or an expected finding already says why; only hints (about the data) leave it open
     out.push(...[...found.values()].sort((a, b) => BY_CLASS[a.class] - BY_CLASS[b.class]))
   }
   if (!named) {

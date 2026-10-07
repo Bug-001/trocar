@@ -127,16 +127,33 @@ test('V49 `doctor <harness>` reports that harness only; with no name, all of the
   assert.ok(all.some((x) => x.code === 'linger-off' && !x.harness))
 })
 
-test('V51 an agent that cannot connect and nothing explains it: `cause-unknown`, the first command is `asight off <harness>`, the text says 仍连不上 → 与 asight 无关; a harness that is off gets none, and nor does one that has a failure of its own', () => {
-  const f = facts('claude-code')
+test('V51 a harness the user names with nothing in the facts to explain it: `cause-unknown` — a hint, worded as a condition (「如果 … 仍连不上」: asight has no fact that says it cannot connect), the first command `asight off <harness>`, the text 「仍连不上 → 与 asight 无关」; never labelled a failure on a harness that is captured', () => {
+  const f = facts('claude-code') // on, steered, trusted: captured, nothing wrong that asight can read
   const found = findingsOf(f, ['claude-code']).find((x) => x.code === 'cause-unknown')
-  assert.equal(found.class, 'failure')
+  assert.equal(found.class, 'hint', 'asight cannot say that it fails to connect: it is not a failure')
+  assert.match(found.what, /^如果 claude-code 仍连不上/, 'a condition, not a statement')
   assert.equal(found.commands[0].run, 'asight off claude-code')
-  assert.ok(renderFindings([found]).join('\n').includes('仍连不上 → 与 asight 无关'))
+  const text = renderFindings([found]).join('\n')
+  assert.ok(text.includes('仍连不上 → 与 asight 无关'))
+  assert.doesNotMatch(text, /\[失败\]/)
+  assert.match(text, /^\[提示\] claude-code · cause-unknown — 如果 claude-code 仍连不上/)
   assert.match(found.verify, /仍连不上 → 与 asight 无关/)
-  assert.deepEqual(findingsOf({ ...f, desired: { 'claude-code': 'off' } }, ['claude-code']).map((x) => x.code), ['desired-off'], 'off: asight is not on the path, the finding is that it is off')
-  assert.ok(!findingsOf(SETS['daemon-not-running'].facts, ['claude-code']).some((x) => x.code === 'cause-unknown'), 'a failure that explains it')
-  assert.ok(!findingsOf(f, null).some((x) => x.code === 'cause-unknown'), 'it answers a symptom somebody named')
+  assert.deepEqual(validateFinding(found), [])
+  // it comes after every other finding: it is what is left when nothing above explains
+  const withHints = findingsOf(row(2).facts, ['claude-code']).map((x) => x.code)
+  assert.deepEqual(withHints, ['inferred-behaviour', 'cause-unknown'], 'a hint about the data does not explain a failure to connect: both are said, the condition last')
+})
+
+test('V51 what explains the harness is not repeated by it: a failure or an expected finding for the harness (not on the path, off, a daemon that is down, a process that started before `on`) means no cause-unknown; nor for a harness that is off, one that is not named, or one that is not installed', () => {
+  const explained = (f, h = 'claude-code') => findingsOf(f, [h]).some((x) => x.code === 'cause-unknown')
+  assert.equal(explained(SETS['daemon-not-running'].facts), false, 'a failure that explains it')
+  assert.equal(explained(row(5).facts), false, 'an expected finding (it started before `on`: config-after-start) explains why it is not captured')
+  assert.equal(explained(row(4).facts), false, 'off: the finding is that it is off')
+  assert.equal(explained(row(17).facts, 'codex'), false, 'proxy mode, the proxy was changed: it explains it')
+  assert.equal(explained(facts('claude-code', {}, { installed: false })), false, 'not installed: nothing to connect')
+  assert.equal(explained(facts('claude-code', { desired: { 'claude-code': 'off' } })), false)
+  assert.ok(!findingsOf(facts('claude-code'), null).some((x) => x.code === 'cause-unknown'), 'it answers a symptom somebody named')
+  assert.equal(explained(facts('claude-code')), true, 'and nothing explains a healthy one the user named')
 })
 
 test('renderFindings: what and why, each command on a line of its own (shell named when it is not sh; a step in an application has no $), and how to check', () => {
