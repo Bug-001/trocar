@@ -13,7 +13,8 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { createController, discover as discoverController, maskEndpoint } from '../mihomo/controller.mjs'
-import { names, probeUrl, SCRIPT_SENTINEL, scanScript, insertScriptBlock, stripScriptBlock as stripScriptText } from '../mihomo/rules.mjs'
+import { names, probeUrl, routeFile, SCRIPT_SENTINEL, scanScript, insertScriptBlock, stripScriptBlock as stripScriptText } from '../mihomo/rules.mjs'
+import { spliceRuntimeText, stripRuntimeText, RuntimeShapeError } from '../mihomo/runtime-text.mjs'
 import { topKey, topBool, topInt } from '../mihomo/yaml-top.mjs'
 
 export { discoverController as discover }
@@ -202,6 +203,7 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
   }
 
   // ---- the named writes (4.7 §3.4): each one recorded in the ledger, the file kinds backed up first (R2) ----------------------------------------------------------------------------
+  const REACTIVATE = '去 Clash Verge → 订阅,点当前订阅重新激活'
   const need = () => { if (!ledger) throw new TypeError('a write needs the ledger: asight records every change it makes to a VPN (4.7 §4, 1.6 R1)'); return ledger }
   const bytesOf = (text) => Buffer.from(text, 'latin1')
   const stamp = () => now().toISOString()
@@ -274,6 +276,62 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     return { ok: true, changed: true, identical, receipt: { kind: 'vpn-script-block', key: file, change: 'removed', backup: identical === true ? null : b.path } }
   }
 
+  /** asight's own route file for group `g` (the rule provider's file): `lines` = the process rules when the group is on, null / [] when off (an empty file). Its own file, so there is no backup; undoing it is deleting it. */
+  async function writeRuleFile(g, lines) {
+    const led = need()
+    const file = path.join(home, names(g).routeFile)
+    const text = routeFile(lines)
+    if (rd(file).text === text && led.find('vpn-rule-file', file)) return { ok: true, changed: false, receipt: null }
+    const code = await writeAtomic(file, text, 'utf8')
+    if (code) return { ok: false, code, reason: `${path.basename(file)} could not be written (${code})`, changed: false }
+    const entry = { kind: 'vpn-rule-file', key: file, path: file, group: g, existed_before: false, post_sha256: sha256(text), installed_at: stamp(), undo_by_hand: `delete ${file}` }
+    led.record(entry)
+    return { ok: true, changed: true, receipt: { kind: entry.kind, key: file, change: 'written', backup: null }, entry }
+  }
+  async function removeRuleFile(g) {
+    const led = need()
+    const file = path.join(home, names(g).routeFile)
+    try { fs.rmSync(file, { force: true }) } catch (e) { return { ok: false, code: (e && e.code) || 'error', reason: `${path.basename(file)} could not be removed` } }
+    try { fs.rmdirSync(P.asightDir) } catch { /* not empty (another group's file), or gone */ }
+    led.forget('vpn-rule-file', file)
+    return { ok: true }
+  }
+
+  /** `PUT /proxies/asight-sw-<g> {name}`: PASS (off) or asight-fb-<g> (on); anything else is refused by the controller before a byte is sent (it throws). Runtime-only, so no backup; the ledger says how to undo it. */
+  async function putSelect(g, name) {
+    const led = need()
+    const n = names(g)
+    const r = await put(`/proxies/${n.sw}`, { name })
+    if (!r.ok) return { ok: false, status: r.status, reason: r.status === 0 ? 'controller-unreadable' : 'refused', text: r.text }
+    const entry = { kind: 'vpn-runtime-select', key: n.sw, target: n.sw, value: name, installed_at: stamp(), undo_by_hand: REACTIVATE }
+    led.record(entry)
+    return { ok: true, status: r.status, receipt: { kind: entry.kind, key: n.sw, change: name === 'PASS' ? 'off' : 'on', backup: null }, entry }
+  }
+  /** `PUT /providers/rules/asight-r-<g>`: the core reads the route file again. Not recorded (it only refreshes what a recorded file says). */
+  async function refreshProvider(g) {
+    const r = await put(`/providers/rules/${names(g).provider}`)
+    return { ok: r.ok, status: r.status, reason: r.ok ? null : r.status === 0 ? 'controller-unreadable' : 'refused' }
+  }
+
+  /**
+   * `PUT /configs?force=true {payload}`: the runtime file's text with the block spliced in (`block`, from buildBlock) or all of asight's entries taken out (`strip: true`), pushed to the core (D29; 204 in 64-78 ms, [T0]).
+   * The text is read from the runtime file, spliced in memory and sent: it holds the user's nodes and the subscription, so it is never written, logged or returned. A shape of the runtime the text splice does not read
+   * (RuntimeShapeError) is `reason: 'runtime-shape'`: nothing is sent and the caller falls back to the next strategy. → { ok, receipt } | { ok: false, reason, ... }
+   */
+  async function pushPayload({ block = null, strip = false } = {}) {
+    const led = need()
+    const rt = rd(P.runtime)
+    if (rt.text === null) return { ok: false, reason: 'runtime-unreadable', detail: rt.error }
+    let yaml
+    try { yaml = strip ? stripRuntimeText({ yaml: rt.text }).yaml : spliceRuntimeText({ yaml: rt.text, block }).yaml } catch (e) { if (e instanceof RuntimeShapeError) return { ok: false, reason: 'runtime-shape', detail: e.message }; throw e }
+    const r = await put('/configs?force=true', { payload: yaml })
+    if (!r.ok) return { ok: false, status: r.status, reason: r.status === 0 ? 'controller-unreadable' : 'refused', text: r.text }
+    if (strip) { led.forget('vpn-runtime-block', 'runtime'); return { ok: true, receipt: { kind: 'vpn-runtime-block', key: 'runtime', change: 'removed', backup: null } } }
+    const entry = { kind: 'vpn-runtime-block', key: 'runtime', installed_at: stamp(), undo_by_hand: REACTIVATE }
+    led.record(entry)
+    return { ok: true, receipt: { kind: entry.kind, key: 'runtime', change: 'pushed', backup: null }, entry }
+  }
+
   /** What the probe (src/netenv/probe.mjs detect) is given about Verge: the file fields, the runtime's few fields, how the controller was found (masked), and whether it is running. */
   async function facts() {
     const fields = await readFields()
@@ -288,5 +346,5 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     }
   }
 
-  return { home, paths: P, readFields, readConfigs, readFindProcessMode, verify, refreshProbe, processRulesNaming, facts, controllerInfo, writeScriptBlock, stripScriptBlock, reset: () => { found = null }, sentinel: SCRIPT_SENTINEL }
+  return { home, paths: P, readFields, readConfigs, readFindProcessMode, verify, refreshProbe, processRulesNaming, facts, controllerInfo, writeScriptBlock, stripScriptBlock, writeRuleFile, removeRuleFile, putSelect, refreshProvider, pushPayload, reset: () => { found = null }, sentinel: SCRIPT_SENTINEL }
 }

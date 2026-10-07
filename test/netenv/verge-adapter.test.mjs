@@ -6,10 +6,10 @@ import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { discover, maskEndpoint } from '../../src/netenv/mihomo/controller.mjs'
+import { discover, maskEndpoint, ControllerRefused } from '../../src/netenv/mihomo/controller.mjs'
 import { createVergeAdapter } from '../../src/netenv/adapters/clash-verge-rev.mjs'
 import { stubHelper, vergeProcs, proc, SESSION, VERGE_DIR } from './fixtures/win-facts.mjs'
-import { startWorld, snapshot, sha, LEAKS, USER_PROVIDER, USER_GROUP, USER_DOMAIN, NODE, VERGE_YAML, PROFILES_YAML, SCRIPT_JS, userRuntime, GROUPS } from './fixtures/verge-world.mjs'
+import { startWorld, snapshot, sha, LEAKS, USER_PROVIDER, USER_GROUP, USER_DOMAIN, NODE, SUB_URL, VERGE_YAML, PROFILES_YAML, SCRIPT_JS, userRuntime, GROUPS } from './fixtures/verge-world.mjs'
 import { names, buildScriptJs, insertScriptBlock, stripScriptBlock, scanScript } from '../../src/netenv/mihomo/rules.mjs'
 
 // ---- N3 · N4: discovery ----------------------------------------------------------------------------------------------------------------------------------
@@ -437,4 +437,159 @@ test('the script is written through a temp file and a rename; a rename that fail
   assert.equal(sha(file), before)
   assert.deepEqual(fs.readdirSync(w.file('profiles')), ['Script.js'], 'no temp file is left')
   assert.equal(w.ledger.find('vpn-script-block', file), null)
+})
+
+// ---- the rule files, the select, the provider refresh --------------------------------------------------------------------------------------------------------------------
+
+test('asight\'s route file: written whole (patterns when on, empty when off), an entry of asight\'s own (no backup), written again only when it changes, removed with its directory', async (t) => {
+  const w = await startWorld(t)
+  const g = 'claude-code.cli'
+  const lines = w.block().files[names(g).routeFile].split('\n').filter(Boolean)
+  const file = w.file(names(g).routeFile)
+  const on = await w.adapter.writeRuleFile(g, lines)
+  assert.deepEqual([on.ok, on.changed, on.receipt.backup], [true, true, null])
+  assert.equal(fs.readFileSync(file, 'utf8'), lines.join('\n') + '\n')
+  assert.deepEqual(w.ledger.find('vpn-rule-file', file), { kind: 'vpn-rule-file', key: file, path: file, group: g, existed_before: false, post_sha256: sha(file), installed_at: w.ledger.find('vpn-rule-file', file).installed_at, undo_by_hand: `delete ${file}` })
+  assert.deepEqual([(await w.adapter.writeRuleFile(g, lines)).changed, w.ledger.entries().length], [false, 1], 'the same lines again: nothing written')
+  const off = await w.adapter.writeRuleFile(g, null)
+  assert.deepEqual([off.changed, fs.readFileSync(file, 'utf8')], [true, ''])
+  assert.deepEqual([w.ledger.backups().length, w.ledger.entries().length], [0, 1], 'one entry for one file, however often it is written; and never a backup')
+  await w.adapter.writeRuleFile('codex.app', lines)
+  assert.equal((await w.adapter.removeRuleFile(g)).ok, true)
+  assert.deepEqual([fs.existsSync(file), fs.existsSync(w.adapter.paths.asightDir), w.ledger.entries().map((e) => e.group)], [false, true, ['codex.app']], 'the directory stays while another group\'s file is in it')
+  await w.adapter.removeRuleFile('codex.app')
+  assert.deepEqual([fs.existsSync(w.adapter.paths.asightDir), w.ledger.entries().length], [false, 0])
+  assert.deepEqual(await w.adapter.removeRuleFile('never-there'), { ok: true })
+  fs.writeFileSync(w.file('asight'), 'a file where the directory should be')
+  const blocked = await w.adapter.writeRuleFile(g, lines)
+  assert.deepEqual([blocked.ok, blocked.changed, ['EEXIST', 'ENOTDIR'].includes(blocked.code)], [false, false, true])
+})
+
+test('putSelect sets the switch to PASS or its own fallback group and records it as a runtime change with its by-hand undo; anything else is refused before it is sent', async (t) => {
+  const w = await startWorld(t)
+  w.live(GROUPS)
+  const g = 'claude-code.cli'
+  const n = names(g)
+  const on = await w.adapter.putSelect(g, n.fb)
+  assert.deepEqual([on.ok, on.status, w.core.groups.get(n.sw).now, on.receipt.change], [true, 204, n.fb, 'on'])
+  const entry = w.ledger.find('vpn-runtime-select', n.sw)
+  assert.deepEqual([entry.target, entry.value, entry.undo_by_hand], [n.sw, n.fb, '去 Clash Verge → 订阅,点当前订阅重新激活'])
+  assert.equal((await w.adapter.putSelect(g, 'PASS')).receipt.change, 'off')
+  assert.equal(w.ledger.find('vpn-runtime-select', n.sw).value, 'PASS', 'one entry per group: the latest value')
+  const before = w.core.requests.length
+  await assert.rejects(w.adapter.putSelect(g, 'DIRECT'), ControllerRefused)
+  await assert.rejects(w.adapter.putSelect(g, names('codex.app').fb), ControllerRefused)
+  assert.equal(w.core.requests.length, before, 'zero requests for a refused write')
+  w.core.failOn('PUT', /^\/proxies\//, 500, 'select "boom" failed')
+  const bad = await w.adapter.putSelect(g, n.fb)
+  assert.deepEqual([bad.ok, bad.status, bad.reason, bad.text], [false, 500, 'refused', 'select <q> failed'])
+  assert.equal(w.ledger.find('vpn-runtime-select', n.sw).value, 'PASS', 'a write that failed is not recorded')
+  w.core.failures.length = 0
+  const none = await w.adapter.putSelect('no-such-group', 'PASS')
+  assert.deepEqual([none.ok, none.status], [false, 404])
+})
+
+test('refreshProvider re-reads asight\'s own route file (204, ruleCount follows) and records nothing', async (t) => {
+  const w = await startWorld(t)
+  w.live(GROUPS)
+  const g = 'claude-code.cli'
+  fs.writeFileSync(w.file(names(g).routeFile), 'PROCESS-NAME,a.exe\nPROCESS-NAME,b.exe\nPROCESS-NAME,c.exe\n')
+  assert.equal((await w.adapter.verify(g)).ruleCount, 0, 'the core has not read the file yet')
+  const r = await w.adapter.refreshProvider(g)
+  assert.deepEqual([r.ok, r.status, r.reason], [true, 204, null])
+  assert.equal((await w.adapter.verify(g)).ruleCount, 3)
+  assert.deepEqual(w.ledger.entries(), [])
+  assert.deepEqual(await w.adapter.refreshProvider('nope'), { ok: false, status: 404, reason: 'refused' })
+})
+
+// ---- the payload ----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+test('pushPayload sends the runtime with the block spliced in and the core loads it; strip takes every asight entry out again; the ledger follows', async (t) => {
+  const w = await startWorld(t)
+  const b = w.block()
+  for (const g of GROUPS) await w.adapter.writeRuleFile(g.g, b.files[names(g.g).routeFile].split('\n').filter(Boolean))
+  const r = await w.adapter.pushPayload({ block: b })
+  assert.deepEqual([r.ok, r.receipt.kind], [true, 'vpn-runtime-block'])
+  assert.deepEqual([...w.core.groups.keys()].filter((k) => k.startsWith('asight-')).sort(), GROUPS.flatMap((g) => [names(g.g).fb, names(g.g).sw]).sort())
+  assert.equal(w.core.groups.get(names('claude-code.cli').sw).now, 'PASS', 'a block that has just been loaded is off')
+  assert.equal((await w.adapter.verify('claude-code.cli')).ruleCount, 2, 'the provider read the route file')
+  assert.equal(w.ledger.find('vpn-runtime-block', 'runtime').undo_by_hand, '去 Clash Verge → 订阅,点当前订阅重新激活')
+  const out = await w.adapter.pushPayload({ strip: true })
+  assert.deepEqual([out.ok, out.receipt.change], [true, 'removed'])
+  assert.deepEqual([...w.core.groups.keys(), ...w.core.providers.keys(), ...w.core.rules.map((x) => x.payload)].filter((k) => /asight/.test(k)), [], 'nothing of asight\'s is left in the runtime')
+  assert.equal(w.ledger.find('vpn-runtime-block', 'runtime'), null)
+  assert.ok(w.core.groups.has(USER_GROUP) && w.core.providers.has(USER_PROVIDER), 'the user\'s own are as they were')
+})
+
+test('pushPayload: a runtime shape the text splice does not read sends nothing (runtime-shape); a refused push and a core that is gone are results with a reason; no runtime file is unreadable', async (t) => {
+  const w = await startWorld(t)
+  const b = w.block()
+  fs.writeFileSync(w.file('clash-verge.yaml'), userRuntime().replace('proxies:\n', 'proxies: [a, b]\n').replace(/- name: node-b[\s\S]*?(?=proxy-groups:)/, ''))
+  const shape = await w.adapter.pushPayload({ block: b })
+  assert.deepEqual([shape.ok, shape.reason], [false, 'runtime-shape'])
+  assert.match(shape.detail, /inline/)
+  fs.writeFileSync(w.file('clash-verge.yaml'), userRuntime())
+  w.core.rejectPayload = 'cannot load "config": bad'
+  const refused = await w.adapter.pushPayload({ block: b })
+  assert.deepEqual([refused.ok, refused.status, refused.reason, refused.text], [false, 400, 'refused', 'cannot load <q>: bad'])
+  assert.equal(w.core.writes().length, 1, 'only the refused push was sent')
+  assert.equal(w.ledger.find('vpn-runtime-block', 'runtime'), null, 'a push that did not happen is not recorded')
+  fs.rmSync(w.file('clash-verge.yaml'))
+  assert.deepEqual(await w.adapter.pushPayload({ block: b }), { ok: false, reason: 'runtime-unreadable', detail: 'ENOENT' })
+  fs.writeFileSync(w.file('clash-verge.yaml'), userRuntime())
+  await w.core.stop()
+  assert.deepEqual([(await w.adapter.pushPayload({ block: b })).reason, (await w.adapter.refreshProvider('claude-code.cli')).reason, (await w.adapter.putSelect('claude-code.cli', 'PASS')).reason], ['controller-unreadable', 'controller-unreadable', 'controller-unreadable'])
+})
+
+test('N8 the runtime goes to the core and nowhere else: nothing under ~/.asight, no ledger entry, no result holds the subscription address or a node', async (t) => {
+  const w = await startWorld(t)
+  const b = w.block()
+  const before = snapshot(w.sandbox)
+  const pushed = [await w.adapter.pushPayload({ block: b }), await w.adapter.pushPayload({ strip: true }), await w.adapter.pushPayload({ block: b })]
+  assert.deepEqual(snapshot(w.sandbox), before, 'a push writes no file at all: not the runtime, not a copy of it')
+  const results = [pushed, await w.adapter.writeScriptBlock({ blockText: buildScriptJs({ block: b }) }), await w.adapter.putSelect('claude-code.cli', names('claude-code.cli').fb), await w.adapter.pushPayload({ strip: true })]
+  assert.ok(w.core.lastPayload.includes(SUB_URL) && w.core.lastPayload.includes(NODE), 'the payload is the whole runtime: the test is not empty')
+  const under = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir, { recursive: true }).map((r) => path.join(dir, r)).filter((f) => fs.statSync(f).isFile()) : [])
+  for (const f of under(w.asightHome)) for (const leak of [SUB_URL, 'sub.example', NODE, USER_DOMAIN, USER_GROUP]) assert.ok(!fs.readFileSync(f, 'latin1').includes(leak), `${path.basename(f)} must not hold ${leak}`)
+  const text = JSON.stringify([results, w.ledger.entries(), w.ledger.kept()])
+  for (const leak of LEAKS) assert.ok(!text.includes(leak), `${leak} must not be in a result or an entry`)
+  assert.equal(fs.existsSync(path.join(w.asightHome, 'collector', 'flows')), false, 'and flows/ is not written to')
+})
+
+// ---- N6: the ledger ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+test('N6 every named write has one ledger entry and one receipt row; the file kinds have a backup (or are asight\'s own file); the runtime kinds say how to undo them by hand', async (t) => {
+  const w = await startWorld(t)
+  const b = w.block()
+  const original = fs.readFileSync(w.file('profiles/Script.js'))
+  const rows = []
+  const note = (r) => { if (r.receipt) rows.push(r.receipt); return r }
+  note(await w.adapter.writeScriptBlock({ blockText: buildScriptJs({ block: b }) }))
+  for (const g of GROUPS) note(await w.adapter.writeRuleFile(g.g, b.files[names(g.g).routeFile].split('\n').filter(Boolean)))
+  note(await w.adapter.pushPayload({ block: b }))
+  note(await w.adapter.putSelect('claude-code.cli', names('claude-code.cli').fb))
+  note(await w.adapter.putSelect('codex.app', 'PASS'))
+  note(await w.adapter.refreshProvider('claude-code.cli')) // a refresh is not recorded
+  const entries = w.ledger.entries()
+  assert.deepEqual(entries.map((e) => e.kind).sort(), ['vpn-rule-file', 'vpn-rule-file', 'vpn-runtime-block', 'vpn-runtime-select', 'vpn-runtime-select', 'vpn-script-block'])
+  assert.equal(rows.length, entries.length, 'receipt rows == ledger entries')
+  assert.deepEqual(new Set(rows.map((r) => `${r.kind}|${r.key}`)), new Set(entries.map((e) => `${e.kind}|${e.key}`)))
+  for (const e of entries) assert.ok(typeof e.undo_by_hand === 'string' && e.undo_by_hand.length > 10, `${e.kind} says how to undo it by hand`)
+  const script = entries.find((e) => e.kind === 'vpn-script-block')
+  assert.deepEqual([script.existed_before, fs.readFileSync(script.backup).equals(original), script.pre_sha256 === sha(w.file('profiles/Script.js')) ? 'unchanged' : 'changed'], [true, true, 'changed'], 'the script has a backup of the file as it was')
+  assert.match(script.undo_by_hand, /delete the lines from "\/\/ >>> asight collector/)
+  for (const e of entries.filter((x) => x.kind === 'vpn-rule-file')) assert.deepEqual([e.existed_before, e.backup], [false, undefined], 'asight\'s own file: no backup, undone by deleting it')
+  for (const e of entries.filter((x) => x.kind.startsWith('vpn-runtime'))) assert.match(e.undo_by_hand, /重新激活/)
+  assert.deepEqual(w.ledger.backups().length, 1, 'exactly one backup: the user\'s file')
+})
+
+test('a write without a ledger is refused; the reads need none', async (t) => {
+  const w = await startWorld(t, { adapter: { ledger: null } })
+  await assert.rejects(w.adapter.writeScriptBlock({ blockText: 'x' }), TypeError)
+  await assert.rejects(w.adapter.writeRuleFile('claude-code.cli', null), TypeError)
+  await assert.rejects(w.adapter.putSelect('claude-code.cli', 'PASS'), TypeError)
+  await assert.rejects(w.adapter.pushPayload({ strip: true }), TypeError)
+  await assert.rejects(w.adapter.stripScriptBlock(), TypeError)
+  assert.deepEqual(w.core.writes(), [])
+  assert.equal((await w.adapter.readFields()).tun, false)
 })
