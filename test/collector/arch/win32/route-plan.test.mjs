@@ -1067,10 +1067,10 @@ test('W5 the form results: an elevated process of a form and a process whose pat
   assert.deepEqual(plan(b)['claude-code.settings'].forms, { 'claude-code.cli': { reason: null }, 'claude-code.vscode': { reason: null } }, 'nothing seen, nothing said')
 })
 
-test('W71 (plan half): fed its own answers as `last`, a system proxy that turned PAC or could not be read leaves the followers on the upstream and the bypass table they had, with a hint; a group that was not routed before stays not routed', () => {
+test('W71 (plan half): fed its own result as `last`, a system proxy that turned PAC or could not be read leaves the followers on the upstream and the bypass table they had, with a hint; a group that was not routed before stays not routed', () => {
   const b = box()
   const before = plan(b, { netenv: NETENV({ systemProxy: sys({ override: '<local>;*.corp.com' }) }) })
-  const last = Object.fromEntries(Object.values(before).map((r) => [r.g, r.answer]))
+  const last = before // the plan\'s own return value is the next call\'s `last`
   for (const [why, sp] of [['system-proxy-pac', sys({ autoConfigUrl: 'http://wpad/p.pac' })], ['system-proxy-unreadable', { ok: false, reason: 'timeout' }]]) {
     const after = plan(b, { netenv: NETENV({ systemProxy: sp }), last })
     assert.deepEqual([after['codex.env'].entry, after['codex.env'].on, after['codex.env'].reason, after['codex.env'].hint], ['auto', true, null, why])
@@ -1081,6 +1081,41 @@ test('W71 (plan half): fed its own answers as `last`, a system proxy that turned
   const same = plan(b, { netenv: NETENV({ systemProxy: sys({ override: '<local>;*.corp.com' }) }), last })
   assert.deepEqual(Object.values(same).map((r) => r.answer), Object.values(before).map((r) => r.answer), 'an unchanged system proxy gives the answers it gave: the daemon compares these and reloads nothing')
   assert.ok(Object.values(before).every((r) => !('hint' in r.answer) && JSON.stringify(r.answer).length > 0))
+})
+
+test('W71 (plan half): only a group that WAS connected is left on its last upstream — the answer a group worked out while it was off, or was not routed, is what it would have dialled, not what it did (OPEN 17)', () => {
+  const b = box()
+  const pac = NETENV({ systemProxy: sys({ autoConfigUrl: 'http://wpad/p.pac' }) })
+  const only = (...hs) => Object.fromEntries(hs.map((h) => [h, { desired: 'on', updated_at: null }]))
+  // the harnesses were off: the plan still works out the upstream the kernel forwards to (the system proxy as it then was)
+  const off = plan(b, { desired: {} })
+  assert.deepEqual([off['codex.env'].on, off['codex.env'].reason, off['codex.env'].upstream], [false, 'desired-off', PROXY('127.0.0.1', 7897)])
+  // the user moved to a PAC and then runs `asight on codex`: the plan before had the group off, so there is nothing to stay on
+  const onNow = plan(b, { desired: only('codex'), netenv: pac, last: off })
+  assert.deepEqual([onNow['codex.env'].entry, onNow['codex.env'].on, onNow['codex.env'].reason, onNow['codex.env'].why, onNow['codex.env'].hint, onNow['codex.env'].upstream], [null, false, 'not-routed', 'system-proxy-pac', undefined, null],
+    'not connected through a hop the user no longer uses')
+  assert.deepEqual(onNow['codex.env'], plan(b, { desired: only('codex'), netenv: pac })['codex.env'], 'the same as with no `last` at all')
+  // connected, then the PAC: it stays (the other tests); connected, `off`, then the PAC and `on` again: the off plan was not connected, so it does not
+  const live = plan(b, { desired: only('codex', 'hermes') })
+  const stayed = plan(b, { desired: only('codex', 'hermes'), netenv: pac, last: live })
+  assert.deepEqual([stayed['codex.env'].on, stayed['codex.env'].hint, stayed['codex.env'].upstream], [true, 'system-proxy-pac', PROXY('127.0.0.1', 7897)])
+  const turnedOff = plan(b, { desired: {}, netenv: pac, last: stayed })
+  assert.deepEqual([turnedOff['codex.env'].on, turnedOff['codex.env'].reason], [false, 'desired-off'], 'off: nothing connected')
+  const again = plan(b, { desired: only('codex', 'hermes'), netenv: pac, last: turnedOff })
+  assert.deepEqual([again['codex.env'].entry, again['codex.env'].reason, again['codex.env'].why], [null, 'not-routed', 'system-proxy-pac'], 'and `on` again after the PAC does not pick the old hop up from the off plan')
+  // an opt-in group the user named is connected like any other, and stays; one nobody named was never connected, so it has nothing to stay on even though it has an answer of its own
+  const desktop = plan(b, { desired: only('claude-code'), optIns: ['claude-code.desktop'] })
+  assert.deepEqual([desktop['claude-code.desktop'].entry, desktop['claude-code.desktop'].on], ['opt-in', true])
+  const desktopPac = plan(b, { desired: only('claude-code'), optIns: ['claude-code.desktop'], netenv: pac, last: desktop })
+  assert.deepEqual([desktopPac['claude-code.desktop'].entry, desktopPac['claude-code.desktop'].hint, desktopPac['claude-code.desktop'].upstream], ['opt-in', 'system-proxy-pac', PROXY('127.0.0.1', 7897)])
+  const unnamed = plan(b, { desired: only('claude-code') })
+  assert.deepEqual([unnamed['claude-code.desktop'].entry, unnamed['claude-code.desktop'].reason, unnamed['claude-code.desktop'].upstream], [null, 'opt-in-needed', PROXY('127.0.0.1', 7897)])
+  const unnamedPac = plan(b, { desired: only('claude-code'), optIns: ['claude-code.desktop'], netenv: pac, last: unnamed })
+  assert.deepEqual([unnamedPac['claude-code.desktop'].entry, unnamedPac['claude-code.desktop'].reason, unnamedPac['claude-code.desktop'].why], [null, 'not-routed', 'system-proxy-pac'], 'named only now, after the PAC: nothing was connected before')
+  // `last` is the previous RESULT: handing it the answers (the old shape) is a bug of the caller, said so rather than read as "nothing to stay on"
+  assert.throws(() => plan(b, { last: { 'codex.env': live['codex.env'].answer } }), { name: 'TypeError', message: /previous result/ })
+  assert.doesNotThrow(() => plan(b, { last: { 'no-such-group': { on: true, answer: null } } }), 'a group that is gone is nothing')
+  assert.doesNotThrow(() => plan(b, { last: null }))
 })
 
 test('planRoutes wants its inputs: the groups, the network as it was read, asight\'s own ports (without them no loop could be seen), and the ctx that says where the files are', () => {

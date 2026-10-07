@@ -122,7 +122,9 @@ function observe(procs) {
  *             upstream on one is a loop; REQUIRED, a plan that cannot see a loop is not a plan). Not 4.7's `netenv.json`: that does not copy `ProxyOverride`, and the bypass table is made of it.
  *   groups    `groupsOf(descriptors)` · desired  `state.json` v2's `harnesses` (`{ <harness>: { desired: 'on' | 'off' } }`, or the string): a harness not in it is off
  *   optIns    the groups or forms the user named (`--opt-in`) and asight has the record of · manifest the install manifest (`priorOf`) · ctx where the files are (`priorOf`)
- *   procs     what is running, `[{ pid, match, elevated }]` (`observe`) · last `{ [group id]: the group's `answer` before }`: what a system proxy that became a PAC or unreadable leaves a follower on (4.8 OPEN 17)
+ *   procs     what is running, `[{ pid, match, elevated }]` (`observe`)
+ *   last      the plan before, `{ [group id]: that group's result }` (planRoutes' own return value will do): what a system proxy that became a PAC or unreadable leaves a follower on (4.8 OPEN 17). Only a group whose result then
+ *             had `on: true` has an upstream to stay on: the `answer` of a group that was off or not routed is what it would have dialled, not what it did, and `asight on` after the user moved to a PAC must not connect it to a hop they no longer use
  * A group's result: `{ g, harness, entry, on, reason, code?, why?, detail?, protocol?, upstream, bypass, untranslated, envUnreadable, egressDiffers?, hint?, unknown?, forms, answer }`
  *   entry     'auto' (asight writes it: a file of the agent's own), 'opt-in' (the user named it), or null (no entry: `reason` says why) · on  the group's forms go through the engine (entry is not null), which is what the kernel's
  *             `on` is · reason  the first that holds of `desired-off` · `opt-in-needed` · `not-routed` (`why`: `system-proxy-pac` · `system-proxy-unreadable` · `upstream-protocol` (`protocol`) · `upstream-unparseable`) · `route-loop`
@@ -131,7 +133,7 @@ function observe(procs) {
  *             what an agent that outlives `off` sends. `bypass` the targets that hop is left direct for, `untranslated` how many entries asight could not read, `egressDiffers` (a connected group whose WebSocket did not follow the
  *             system proxy), `hint` (`system-proxy-pac` / `system-proxy-unreadable`: kept on the last upstream), `unknown` what could not be read (1.6 §9.4's reasons), `envUnreadable` (a proxy in the user's terminal alone is invisible).
  *   forms     `{ [form id]: { reason, elevatedPids?, unknownPaths? } }` — the group's reason for each form, else `elevated-agent` or `form-path-unknown` when a process says so
- *   answer    the raw `upstreamFor` answer, with the bypass table and without any login: what the next call takes as `last[g]`, and what is compared to know whether the system proxy moved the group's upstream
+ *   answer    the raw `upstreamFor` answer, with the bypass table and without any login: what the next call keeps from `last[g]` (when the group is `on`), and what is compared to know whether the system proxy moved the group's upstream
  * Nothing here writes. The order of the reasons is the order in which a user can act: switch the harness on, name the item, fix the proxy, and only then the entry that takes no login.
  */
 export function planRoutes({ netenv, groups, desired = null, optIns = [], manifest = null, ctx, procs = [], last = null } = {}) {
@@ -142,10 +144,16 @@ export function planRoutes({ netenv, groups, desired = null, optIns = [], manife
   const named = new Set(optIns || [])
   const wanted = (h) => { const d = desired && desired[h]; return (typeof d === 'string' ? d : d && d.desired) === 'on' }
   const seen = observe(procs)
+  const stayOn = (g) => { // the answer a group that WAS connected is left on; a group that was off or not routed has none, whoever passes `last`
+    const prev = last && last[g]
+    if (prev == null) return null
+    if (typeof prev !== 'object' || typeof prev.on !== 'boolean') throw new TypeError("planRoutes `last` is the previous result of each group (the return value of planRoutes), not its upstream answer: whether the group was connected is in the result")
+    return prev.on ? prev.answer || null : null
+  }
   const out = {}
   for (const { g, harness, group, forms, proxy } of groups) {
     const prior = priorOf({ harness, group, ctx, manifest })
-    const answer = upstreamFor({ group, prior: prior.value, noProxy: prior.noProxy, systemProxy: netenv.systemProxy, hkcuEnv: netenv.hkcuEnv, ownPorts: netenv.ownPorts, envNames: (proxy && proxy.env) || [], branches: (proxy && proxy.branches) || [], last: (last && last[g]) || null })
+    const answer = upstreamFor({ group, prior: prior.value, noProxy: prior.noProxy, systemProxy: netenv.systemProxy, hkcuEnv: netenv.hkcuEnv, ownPorts: netenv.ownPorts, envNames: (proxy && proxy.env) || [], branches: (proxy && proxy.branches) || [], last: stayOn(g) })
     const gate = entryGate(group, { optedIn: named.has(g) || forms.some((f) => named.has(f.id)), upstreamCredentialed: answer.credentialed === true })
     let reason = null
     let why = {}
