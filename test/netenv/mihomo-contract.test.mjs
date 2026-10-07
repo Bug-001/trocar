@@ -29,6 +29,7 @@ import { startRealEngine } from './fixtures/real-engine.mjs'
 import { BIN, gate, freePort, sleep, startMihomo, startStubDns } from './fixtures/real-mihomo.mjs'
 import { forwarderLikeConfig, groupOf, textOf, overlay, G, TOKEN, LISTENER_TOKEN } from './fixtures/generated-config.mjs'
 import { buildForwarderConfig, processRulesOf } from '../../src/netenv/mihomo/rules.mjs'
+import { translateBypass } from '../../src/collector/arch/win32/upstream.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const PROBE_FILE = path.join(HERE, 'fixtures', 'mihomo-probe.bytes')
@@ -306,6 +307,30 @@ test('W72 the re-entry from the fallback keeps the bypass: with the engine down,
   assert.equal((await s.agent(`other.example:${s.origin}`)).body, 'origin-ok')
   assert.deepEqual(s.hop.seen.slice(seen), [`other.example:${s.origin}`], 'any other name, re-entered: the upstream, with its name')
   assert.deepEqual(s.hop.refused, [])
+})
+
+// 4.8 §2.2: whenever a table names `localhost`, translateBypass adds the row `ip-cidr 127.0.0.0/8`, because the core has turned that name into 127.0.0.1 by the time its rules run. The premise is about the RE-ENTERED path (the fallback
+// engaged, the target re-enters through `re.<g>` and is judged by ②): there the CONNECT `localhost:<port>` reaches the rule as an address, the range row sends it DIRECT and the name row alone leaves it to the upstream. The forward-only path
+// (⑤) is covered above; the table here is translateBypass's own answer for `localhost`, not a copy of it.
+test('W72 `localhost` in a bypass table, re-entered from the fallback: the 127.0.0.0/8 row that translateBypass adds sends `localhost:<port>` DIRECT, and the name row alone would leave it to the upstream', gate, async (t) => {
+  const { bypass } = translateBypass('localhost', 'wininet')
+  assert.deepEqual(bypass, [{ kind: 'domain', value: 'localhost' }, { kind: 'ip-cidr', value: '127.0.0.0/8' }])
+  /** How many connections to `localhost:<origin>`, taken through the re-entry with the engine down, reached the user's upstream under this table. */
+  const viaUpstream = async (rows) => {
+    const s = await shape(t, { upstream: { user: 'hop-user', pass: 'hop-pass' }, bypass: rows })
+    assert.equal((await s.agent(`127.0.0.1:${s.origin}`)).body, 'origin-ok')
+    await sleep(1300)
+    await s.getEngine().close()
+    assert.equal((await s.agent(`127.0.0.1:${s.origin}`)).body, 'origin-ok', 'the first connection after the engine died')
+    for (let i = 0; i < 50 && (await s.nowOf()) !== `asight-re-${s.g}`; i++) { await s.agent(`127.0.0.1:${s.origin}`); await sleep(100) }
+    assert.equal(await s.nowOf(), `asight-re-${s.g}`, 'the fallback is engaged: what follows is the re-entered path')
+    const seen = s.hop.seen.length
+    assert.equal((await s.agent(`localhost:${s.origin}`)).body, 'origin-ok')
+    assert.deepEqual(s.hop.refused, [])
+    return s.hop.seen.length - seen
+  }
+  assert.equal(await viaUpstream(bypass), 0, 'with the range row: taken by ② and sent DIRECT, the upstream saw nothing')
+  assert.equal(await viaUpstream([bypass[0]]), 1, 'with the name row alone: the name is already an address when the rule runs, so it goes to the upstream (this is why the range row is there)')
 })
 
 // ---- W12 / W55 on a real core: one PUT /configs?force=true switches a group; the others stay -------------------------------------------------------
