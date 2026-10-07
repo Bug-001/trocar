@@ -302,15 +302,22 @@ test('W74 a kernel that does not come up says why: Smart App Control when it is 
   assert.deepEqual([c.ok, c.code, c.reason, c.port], [false, 'forwarder-start-failed', 'port-taken', taken.ports[CODEX_GROUP.g]])
   assert.equal(taken.spawned.length, 0, 'nothing was spawned onto a port somebody holds')
   assert.equal(taken.fwd.state().phase, 'stopped')
-  for (const w of [crash, plain, mute, nobody, taken]) assert.deepEqual(inClosedSets(w.events), [], 'W38: every start failure is in the closed sets')
+  const ctl = await kernelWorld(t, { sacOn: async () => true })
+  await holdPort(t, ctl.ports.controller)
+  const d = await ctl.fwd.start({ build: ctl.build, forms: FORMS })
+  assert.deepEqual([d.ok, d.code, d.reason, d.port, ctl.spawned.length], [false, 'forwarder-start-failed', 'port-taken', ctl.ports.controller, 0], 'the controller port is checked with the group ports (4.8 §8): a kernel that cannot be talked to is no kernel')
+  for (const w of [crash, plain, mute, nobody, taken, ctl]) assert.deepEqual(inClosedSets(w.events), [], 'W38: every start failure is in the closed sets')
 })
 
 test('W12 W55 reload: the new text goes to the kernel by PUT /configs?force=true and to the config file; the read-back follows the group (off has no fallback group); a port the new text opens that is taken, or a kernel that refuses, leaves the old config running', async (t) => {
   const k = await kernelWorld(t, {})
   await k.fwd.start({ build: k.build, forms: FORMS })
   const codexOff = FORMS.map((f) => (f.f === 'codex.app' ? { ...f, on: false } : f))
+  const seen = logOf(k.log).length
   const r = await k.fwd.reload({ build: (c) => k.build(c, [CC_GROUP, { ...CODEX_GROUP, on: false }]), forms: codexOff })
   assert.equal(r.ok, true)
+  const probed = logOf(k.log).slice(seen).map((q) => q.path).filter((q) => q.includes('/delay?url=')).map((q) => q.split('/')[2])
+  assert.deepEqual(probed.sort(), ['asight-fb-claude-code.cli', 'asight-fb-claude-code.vscode'], 'after every reload the probe of each form that is on is asked for now (4.8 §3.3), and not that of the form that is off')
   assert.deepEqual(r.readBack.forms, { 'claude-code.cli': { state: 'on', now: 'asight-in-claude-code.cli' }, 'claude-code.vscode': { state: 'on', now: 'asight-in-claude-code.vscode' }, 'codex.app': { state: 'off' } })
   const puts = logOf(k.log).filter((q) => q.method === 'PUT')
   assert.deepEqual(puts.map((q) => q.path), ['/configs?force=true'])
@@ -327,7 +334,10 @@ test('W12 W55 reload: the new text goes to the kernel by PUT /configs?force=true
   assert.equal(fs.readFileSync(k.P.config, 'utf8'), before, 'a refused reload changes nothing on disk')
   const refusing = await kernelWorld(t, { fake: { refuseReload: true } })
   await refusing.fwd.start({ build: refusing.build, forms: FORMS })
-  assert.deepEqual((await refusing.fwd.reload({ build: refusing.build, forms: FORMS })).error, { status: 400, text: '' }, 'the status, not the core\'s words (they may quote the user\'s config)')
+  const running = fs.readFileSync(refusing.P.config)
+  const smaller = (c) => refusing.build(c, [CC_GROUP]) // a text that is not the one running: a file written before the PUT would show
+  assert.deepEqual((await refusing.fwd.reload({ build: smaller, forms: FORMS })).error, { status: 400, text: '' }, 'the status, not the core\'s words (they may quote the user\'s config)')
+  assert.ok(fs.readFileSync(refusing.P.config).equals(running), 'the file is written after the core has accepted the text (4.8 §8): a refusing core leaves it byte-identical')
 })
 
 test('W28 the read-back is what the kernel says: the engine down is fallback (not on, not an error), a group it does not know is missing, an answer it does not give plainly is unknown', async (t) => {
@@ -402,6 +412,7 @@ test('W28 a kernel that exits again and again: respawned after 1, 2, 4, 8, 16, t
   for (let n = 1; n <= 7; n++) {
     k.die(k.children.at(-1))
     await settle()
+    assert.ok(!fs.existsSync(path.join(k.dir, 'forwarder.lock')), 'a kernel that exited leaves no lock naming its pid')
     const delay = k.clock.pending()[0]
     waited.push(delay)
     await k.clock.advance(delay - 1)
@@ -475,9 +486,13 @@ test('W28 stopNow: the kernel is stopped, the lock is gone, and no re-spawn foll
 test('W28 a real child that is killed from outside is brought back by the same path: a new pid, the lock rewritten, the read-back on again', async (t) => {
   const k = await kernelWorld(t, { backoffMs: [30], stableMs: 60_000 })
   const first = await k.fwd.start({ build: k.build, forms: FORMS })
+  const seen = logOf(k.log).length
   process.kill(first.pid, 'SIGKILL')
   for (let i = 0; i < 100 && k.spawned.length < 2; i++) await new Promise((r) => setTimeout(r, 30))
   for (let i = 0; i < 100 && k.fwd.state().phase !== 'running'; i++) await new Promise((r) => setTimeout(r, 30))
+  const probes = () => new Set(logOf(k.log).slice(seen).map((q) => q.path).filter((q) => q.includes('/delay?url=')).map((q) => q.split('/')[2]))
+  for (let i = 0; i < 100 && probes().size < 3; i++) await new Promise((r) => setTimeout(r, 30))
+  assert.deepEqual([...probes()].sort(), ['asight-fb-claude-code.cli', 'asight-fb-claude-code.vscode', 'asight-fb-codex.app'], 'the re-spawned kernel is asked for every probe at once, as after a reload: its first health check may not have happened')
   const s = k.fwd.state()
   assert.deepEqual([k.spawned.length, s.phase, s.pid !== first.pid], [2, 'running', true])
   assert.equal(JSON.parse(fs.readFileSync(k.P.lock, 'utf8')).pid, s.pid)
@@ -602,6 +617,35 @@ test('W28 stopNow while a re-spawn is in flight: the kernel the attempt spawned 
   await k.clock.advance(300_000)
   assert.deepEqual([k.children.length, k.clock.pending(), k.events.states.filter((e) => e.event === 'forwarder-start').length], [2, [], 1], 'the aborted attempt is not a start and not a failure')
   assert.deepEqual(k.events.failures.map((f) => f.code), ['forwarder-restart'], 'only the restart that was announced')
+})
+
+test('W28 stopNow does not wait for a kernel that is not answering: the attempt sees it at its next poll, kills the child and returns (the fake clock never reaches startTimeoutMs, so only that check can end it)', { timeout: 10_000 }, async (t) => {
+  let up = true
+  const makeController = () => ({ get: async (q) => (q === '/version' && !up ? { ok: false, status: 0, error: 'ECONNREFUSED' } : { ok: true, status: 200, json: { now: 'asight-in-claude-code.cli' } }), put: async () => ({ ok: true, status: 204 }) })
+  const k = await fakeKernel(t, { fwd: { makeController, startTimeoutMs: 10_000 } })
+  await k.start()
+  k.die(k.children[0]); await settle()
+  up = false
+  await k.clock.advance(1000)
+  assert.deepEqual([k.children.length, k.fwd.state().phase], [2, 'starting'], 'the re-spawn is polling a kernel that does not answer')
+  assert.deepEqual(await k.fwd.stopNow(), { pids: [], stopped: true })
+  assert.deepEqual([k.alive.size, k.fwd.state().phase], [0, 'stopped'])
+})
+
+test('W28 a re-spawn whose timer fired while a call was in front of it finds the kernel already up and spawns nothing', async (t) => {
+  const gate = { p: null, open: () => {}, hold() { this.p = new Promise((r) => { this.open = r }) } }
+  const makeController = () => ({ get: async (q) => (q === '/version' ? { ok: true, status: 200, json: { version: 'fake' } } : { ok: true, status: 200, json: { now: 'asight-in-claude-code.cli' } }), put: async () => { if (gate.p) await gate.p; return { ok: true, status: 204 } } })
+  const k = await fakeKernel(t, { fwd: { makeController } })
+  await k.start()
+  gate.hold()
+  const slow = k.fwd.reload({ build: k.build, forms: k.forms }) // sits in its PUT, holding its turn
+  await settle()
+  k.die(k.children[0]); await settle() // the kernel dies meanwhile: a re-spawn is set for 1 s
+  const next = k.fwd.start({ build: k.build, forms: k.forms }) // queued behind the reload
+  await k.clock.advance(1000) // the re-spawn's timer fires: queued behind both
+  gate.open()
+  await slow; await next; await settle()
+  assert.deepEqual([k.children.length, k.alive.size, k.fwd.state().phase], [2, 1, 'running'], 'the start brought it up; the re-spawn behind it has nothing to do')
 })
 
 test('W28 reload and start while a re-spawn is in flight wait for it and then act on what is there: one kernel, never two', async (t) => {
