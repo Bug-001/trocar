@@ -205,6 +205,46 @@ for (const eol of ['\n', '\r\n']) for (const prof of PROFILES) {
   })
 }
 
+// ── asight's own value is told from a user's CA when the collector directory has backslashes and the value in the config has forward slashes (4.8 §6.1) ──
+import { isOwnPath } from '../../../src/collector/harness/_common.mjs'
+test('W19: asight\'s own value — written with forward slashes — is not read as a user CA when the collector directory comes back with backslashes (Claude Code, Codex, Hermes, Z-Code)', () => {
+  const DIR_W = raw`C:\Users\u\.asight\collector`
+  const HOME_W = raw`C:\Users\u`
+  const OWN = { bundle: (h) => `C:/Users/u/.asight/collector/ca/combined-${h}.pem`, ca: 'C:/Users/u/.asight/collector/ca/asight-ca.pem', extra: 'C:/users/U/.ASIGHT/collector/ca/extra-cc.pem' } // the last one: another case
+  const files = new Map()
+  const norm = (p) => p.replace(/\//g, '\\').toLowerCase()
+  const put = (p, t) => files.set(norm(p), t)
+  const readText = (f) => files.get(norm(f)) ?? null
+  const listDir = (d) => { const pre = norm(d).replace(/\\$/, '') + '\\'; const out = new Set(); for (const k of files.keys()) if (k.startsWith(pre)) out.add(k.slice(pre.length).split('\\')[0]); return [...out] }
+  put(raw`C:\Users\u\.codex\.env`, `# BEGIN\nSSL_CERT_FILE=${OWN.bundle('codex')}\n# END\n`)
+  put(raw`C:\Users\u\AppData\Local\hermes\.env`, `SSL_CERT_FILE=${OWN.bundle('hermes')}\n`)
+  put(raw`C:\Users\u\.zcode\cli\config.json`, JSON.stringify({ network: { caCertFile: OWN.bundle('z-code') } }))
+  put(raw`C:\Users\u\.claude\settings.json`, JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: OWN.ca } }))
+  const env = new Map([['NODE_EXTRA_CA_CERTS', OWN.extra], ['SSL_CERT_FILE', OWN.bundle('codex')]])
+  const ctx = { os: 'win32', home: HOME_W, env, running: [new Map([['NODE_EXTRA_CA_CERTS', OWN.ca], ['SSL_CERT_FILE', OWN.bundle('hermes')]])], readText, readTextOrError: (f) => ({ text: readText(f), error: null }), readBytes: () => null, listDir, collectorDir: DIR_W, caPem: `${DIR_W}\\ca\\asight-ca.pem` }
+  for (const name of ['codex', 'hermes', 'z-code', 'claude-code']) {
+    const out = only(name)[0].win32.inject(ctx)
+    assert.deepEqual((out.files || []).flatMap((f) => f.certsFrom || []), [], `${name}: no CA file of the user's is found in what asight itself wrote`)
+    assert.deepEqual((out.notes || []).map((n) => (typeof n === 'string' ? n : n.text)).filter((t) => /relative/.test(t)), [], `${name}: asight's own value is not reported as a relative CA path`)
+    for (const e of out.entries || []) assert.ok(!/extra-cc/.test(String(e.value)), `${name}: Claude Code's key stays asight-ca.pem, it does not turn into a combined extra bundle`)
+  }
+  // a user's CA somewhere else is still found (an absolute path of the host the test runs on: the descriptors judge it with the host's path rules)
+  const userCa = path.resolve('/corp/ca.pem')
+  const claude = only('claude-code')[0].win32.inject({ ...ctx, env: new Map([['NODE_EXTRA_CA_CERTS', userCa]]), running: [] })
+  assert.deepEqual([claude.files.length, claude.files[0] && claude.files[0].certsFrom], [1, [userCa]], 'the user\'s own CA still takes the extra bundle')
+})
+
+test('isOwnPath: on Windows a path is asight\'s when it is under the collector directory whatever the slash and the case, and not for a sibling directory of a longer name; elsewhere it is the plain prefix', () => {
+  const win = { os: 'win32', collectorDir: raw`C:\Users\u\.asight\collector` }
+  for (const own of ['C:/Users/u/.asight/collector/ca/x.pem', raw`C:\Users\u\.asight\collector\ca\x.pem`, 'c:/USERS/U/.asight/Collector/ca/x.pem']) assert.equal(isOwnPath(win, own), true, own)
+  for (const other of ['C:/Users/u/.asight/collector2/ca/x.pem', 'C:/Users/u/.asight/collector', 'C:/corp/ca.pem', '', null, undefined, 7]) assert.equal(isOwnPath(win, other), false, String(other))
+  assert.equal(isOwnPath({ os: 'win32', collectorDir: 'C:/Users/u/.asight/collector/' }, 'C:/Users/u/.asight/collector/ca/x.pem'), true, 'a trailing slash on the directory')
+  const lin = { os: 'linux', collectorDir: '/h/.asight/collector' }
+  assert.equal(isOwnPath(lin, '/h/.asight/collector/ca/x.pem'), true)
+  assert.equal(isOwnPath(lin, '/h/.asight/collector2/ca/x.pem'), false)
+  assert.equal(isOwnPath(lin, '/H/.ASIGHT/collector/ca/x.pem'), false, 'case counts outside Windows')
+})
+
 // ── W20: the combined bundle's Windows roots (4.8 §6.2) ──
 import nodeFs from 'node:fs'
 import { windowsRoots, droppedNote, RootsUnavailableError } from '../../../src/collector/arch/win32/roots.mjs'

@@ -8,6 +8,7 @@
 import path from 'node:path'
 import { expandHome, parseDotenv } from '../../core/config-read.mjs'
 import { CODE } from '../../core/codes.mjs'
+import { isOwnPath } from '../_common.mjs'
 import { localAppData } from './_paths.mjs'
 
 const raw = String.raw
@@ -41,7 +42,7 @@ function inject(ctx) {
   const old = oldRelease(ctx.readText, path.join(root, 'hermes-agent')) === true
   // CA files the block covers: the same keys in each home's .env and .op.env and in the checkout .env (all out of effect once the block is in the home .env), and the launch env it overrides
   const seen = new Set()
-  const see = (v) => { if (typeof v === 'string' && v !== '' && !v.startsWith(ctx.collectorDir + path.sep)) seen.add(v) }
+  const see = (v) => { if (typeof v === 'string' && v !== '' && !isOwnPath(ctx, v)) seen.add(v) }
   for (const f of [...homes.flatMap((h) => [path.join(h, '.env'), path.join(h, '.op.env')]), ...checkouts.map((c) => path.join(c, '.env'))]) for (const [k, v] of parseDotenv(ctx.readText(f) || '')) if (COVERED.includes(k)) see(v)
   for (const env of [ctx.env, ...running]) for (const k of COVERED) see(env.get(k))
   const notes = [...seen].filter((v) => !path.win32.isAbsolute(v)).map((v) => ({ code: CODE.relativePath, text: `${v} is a relative CA path; its certificates are not carried over into ${path.basename(bundle)}` }))

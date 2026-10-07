@@ -18,7 +18,7 @@
 import path from 'node:path'
 import { parseTomlLite, parseDotenv, hostOf, dig, expandHome } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
-import { envProxies, argAfter, dotenvLayer } from './_common.mjs'
+import { envProxies, argAfter, dotenvLayer, isOwnPath } from './_common.mjs'
 
 const SYSTEM_CONFIG = { linux: '/etc/codex/config.toml', darwin: '/etc/codex/config.toml' }
 const codexHome = (env, home) => expandHome(env.get('CODEX_HOME') || '', home) || path.join(home, '.codex')
@@ -57,7 +57,7 @@ function inject(ctx) {
   if (!present.length) return { notes: [...notes, { code: CODE.harnessNote, text: `no Codex home exists (${def}, or a CODEX_HOME of this shell or of a running codex), so no trust entry is written; after running Codex once, run asight collector uninstall and install again` }] }
   const bundle = path.join(ctx.collectorDir, 'ca', 'combined-codex.pem')
   const seen = new Set() // SSL_CERT_FILE values the block overrides: the user's lines, the launch env
-  const see = (v) => { if (typeof v === 'string' && v !== '' && !v.startsWith(ctx.collectorDir + path.sep)) seen.add(v) }
+  const see = (v) => { if (typeof v === 'string' && v !== '' && !isOwnPath(ctx, v)) seen.add(v) }
   for (const h of present) see(parseDotenv(ctx.readText(path.join(h, '.env')) || '').get('SSL_CERT_FILE'))
   for (const env of [ctx.env, ...ctx.running]) see(env.get('SSL_CERT_FILE'))
   notes.push(...[...seen].filter((v) => !path.isAbsolute(v)).map((v) => ({ code: CODE.relativePath, text: `${v} is a relative CA path; its certificates are not carried over into ${path.basename(bundle)}` })))

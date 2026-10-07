@@ -1,10 +1,21 @@
 // _common.mjs — small readers shared by harness descriptors. Harness data only; no engine, no OS code.
+import path from 'node:path'
 import { hostOf, parseDotenv } from '../core/config-read.mjs'
 
 export const envValues = (env, keys) => keys.map((k) => env.get(k)).filter((v) => typeof v === 'string' && v !== '')
 export const envHosts = (env, keys) => envValues(env, keys).map(hostOf).filter(Boolean)
 // Proxy settings as { url, source }; the tracker turns them into the engine's ProxyEntry (plan 3c `describe`).
 export const envProxies = (env, keys) => keys.filter((k) => (env.get(k) || '') !== '').map((k) => ({ url: env.get(k), source: `env:${k}` }))
+
+// Whether a CA path in an agent's config or environment is one asight wrote: a path under the collector directory. A descriptor skips it when it collects the user's CA files (the
+// bundle would otherwise carry asight's own bundle, and asight's CA would be recorded as a user CA). On Windows the values asight writes into agent configs have forward slashes (4.8 §6.1)
+// while the collector directory comes back with backslashes (and any case): compare ignoring both; elsewhere the plain prefix.
+export function isOwnPath(ctx, v) {
+  if (typeof v !== 'string' || v === '' || !ctx.collectorDir) return false
+  if (ctx.os !== 'win32') return v.startsWith(ctx.collectorDir + path.sep)
+  const n = (p) => String(p).replace(/\\/g, '/').toLowerCase()
+  return n(v).startsWith(`${n(ctx.collectorDir).replace(/\/+$/, '')}/`)
+}
 
 // Value after a flag: `--flag v` or `--flag=v`.
 export function argAfter(argv, flags) {
