@@ -85,7 +85,9 @@ export async function locateKernel({ pin, arch, resolvePackage = defaultResolveP
  * Find the kernel (locateKernel), then put it where it runs from: `dir` is `%USERPROFILE%\.asight\collector\kernel\`, the exe and the licence and source files beside it. A copy, not a run from the package: Windows does
  * not let a running exe be replaced or deleted, and a kernel in `node_modules` would block `npm i -g` and `npm uninstall` for as long as it lives (4.8 §8). The copy goes to a temp name, is hashed, and only then takes
  * the name; a target that is already there with the right digest is left alone (its mtime does not move).
- * → `{ path, sha256, copied }` · `{ missing }` · `{ mismatch: { of: 'package' | 'copy', commands } }`. The copy is ledgered as `forwarder-binary` (path and sha256) by the caller (Task 8(c)'s `on`); `uninstall` removes it.
+ * → `{ path, sha256, copied }` · `{ missing }` · `{ mismatch: { of: 'package' | 'copy', commands } }` · `{ blocked: { step: 'copy' | 'replace', reason } }` (`reason`: the errno, or its text). `replace` is the upgrade that meets a kernel which is
+ * running or draining (the pin moved, `kernel\` holds the old exe, Windows will not let it be replaced: EPERM / EBUSY / EACCES): the old exe is untouched and no temp file is left; `on` does not stop that kernel by itself (it may
+ * have agents attached), so it exits 1 and says: wait for the drain, or `asight off --now`, then `asight on` (4.8 §8). The copy is ledgered as `forwarder-binary` (path and sha256) by the caller (Task 8(c)'s `on`); `uninstall` removes it.
  */
 export async function ensureBinary({ pin, arch, dir, resolvePackage, fs = nodeFs, hash = (f) => hashFile(f, { fs }), main = mainPackage() } = {}) {
   const located = await locateKernel({ pin, arch, resolvePackage, fs, hash, main })
@@ -99,11 +101,16 @@ export async function ensureBinary({ pin, arch, dir, resolvePackage, fs = nodeFs
   if (isFile(fs, target)) { try { have = await hash(target) } catch { have = null } }
   if (!have || !same(have, want)) {
     const tmp = `${target}.tmp-${process.pid}`
-    fs.copyFileSync(exe, tmp)
+    let step = 'copy'
     try {
+      fs.copyFileSync(exe, tmp)
       if (!same(await hash(tmp), want)) { fs.rmSync(tmp, { force: true }); return { mismatch: { of: 'copy', commands: reinstallCommands({ main, platformPackage: pin.assets[arch].package }) } } }
+      step = 'replace'
       fs.renameSync(tmp, target)
-    } catch (e) { fs.rmSync(tmp, { force: true }); throw e }
+    } catch (e) {
+      try { fs.rmSync(tmp, { force: true }) } catch { /* the next run overwrites a stray temp name of the same pid; another pid's is the user's to clear */ }
+      return { blocked: { step, reason: (e && e.code) || errText(e) } }
+    }
     copied = true
   }
   for (const name of [KERNEL_LICENSE, KERNEL_SOURCE]) { // the licence text and the source address travel with the exe (GPL-3.0-only)

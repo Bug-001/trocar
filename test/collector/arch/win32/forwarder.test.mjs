@@ -79,6 +79,26 @@ test('W27 ① a copy that was changed is replaced by the one in the package (tha
   assert.deepEqual(tree(w.pkg), before)
 })
 
+test('W27 ③ a copy that cannot be made, cannot take the name (the upgrade met a kernel that is running) or arrives wrong is an answer, not an exception, and leaves no temp file behind; the exe that is there is untouched', async (t) => {
+  const w = world(t)
+  await ensureBinary(w)
+  const old = path.join(w.dir, KERNEL_EXE)
+  fs.writeFileSync(old, flip(EXE)) // the kernel of the version before the pin moved: another digest, and running, so Windows will not let it be replaced
+  const held = () => { throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' }) }
+  assert.deepEqual(await ensureBinary({ ...w, fs: { ...fs, renameSync: held } }), { blocked: { step: 'replace', reason: 'EPERM' } })
+  assert.deepEqual(fs.readdirSync(w.dir).sort(), [KERNEL_EXE, KERNEL_LICENSE, KERNEL_SOURCE].sort(), 'no temp file: a stray 60 MB file would also make removeBinary\'s rmdir fail')
+  assert.equal(sha(fs.readFileSync(old)), sha(flip(EXE)), 'the exe that is running is not touched')
+  assert.deepEqual([(await ensureBinary(w)).copied, sha(fs.readFileSync(old))], [true, sha(EXE)], 'and once nothing holds it, the next `on` replaces it')
+  const full = world(t)
+  const half = (from, to) => { fs.writeFileSync(to, 'partial'); throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }) }
+  assert.deepEqual(await ensureBinary({ ...full, fs: { ...fs, copyFileSync: half } }), { blocked: { step: 'copy', reason: 'ENOSPC' } })
+  assert.deepEqual(fs.readdirSync(full.dir), [], 'the half-written copy is removed')
+  const bent = world(t)
+  const wrong = await ensureBinary({ ...bent, fs: { ...fs, copyFileSync: (from, to) => fs.writeFileSync(to, flip(fs.readFileSync(from))) } })
+  assert.deepEqual(wrong, { mismatch: { of: 'copy', commands: COMMANDS_X64 } }, 'the copy is hashed before it takes the name (W27 ① "its digest is the pin\'s")')
+  assert.deepEqual(fs.readdirSync(bent.dir), [], 'neither the exe nor a temp file: nothing was renamed')
+})
+
 test('W27 ② no package, a package with no exe, an architecture the pin does not have, a pin with no exe digest: forwarder-binary-missing with the reason, and the reinstall commands (except for an architecture nobody builds)', async (t) => {
   const w = world(t)
   const gone = await locateKernel({ ...w, resolvePackage: () => null })
