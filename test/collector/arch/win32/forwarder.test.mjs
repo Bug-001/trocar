@@ -5,11 +5,16 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import net from 'node:net'
+import { spawn as nodeSpawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 import { recordNetwork, nonLoopback } from './fixtures/no-network.mjs'
-import { locateKernel, ensureBinary, verifyCopy, hashFile, loadPin, mainPackage, reinstallCommands, sacState, sacBlocks, KERNEL_EXE, KERNEL_LICENSE, KERNEL_SOURCE } from '../../../../src/collector/arch/win32/forwarder.mjs'
+import { locateKernel, ensureBinary, verifyCopy, hashFile, loadPin, mainPackage, reinstallCommands, sacState, sacBlocks, createForwarder, KERNEL_EXE, KERNEL_LICENSE, KERNEL_SOURCE } from '../../../../src/collector/arch/win32/forwarder.mjs'
+import { buildForwarderConfig } from '../../../../src/netenv/mihomo/rules.mjs'
+import { createController } from '../../../../src/netenv/mihomo/controller.mjs'
+import { CC_GROUP, CODEX_GROUP, forwarder as ruleInputs } from '../../../netenv/fixtures/rules/inputs.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const FORWARDER_SRC = path.join(HERE, '..', '..', '..', '..', 'src', 'collector', 'arch', 'win32', 'forwarder.mjs')
@@ -184,4 +189,137 @@ test('W74 sacState: 0 is off, 1 is on, 2 is evaluation; no key or no value is of
 
 test('W74 only a state that says so blames Smart App Control: on and evaluation do, off and an unknown one do not', () => {
   assert.deepEqual(['off', 'on', 'evaluation', { unknown: { reason: 'denied' } }].map(sacBlocks), [false, true, true, false])
+})
+
+// ---- the kernel's life (W28 W55 W74): a fake kernel (a node script with mihomo's command line) as a REAL child process, and the product's own controller client --------------------------------------------------
+
+const FAKE = path.join(HERE, 'fixtures', 'fake-mihomo.mjs')
+const freePort = () => new Promise((res) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)) }) })
+const isFree = (port) => new Promise((res) => { const s = net.createServer(); s.once('error', () => res(false)); s.listen(port, '127.0.0.1', () => s.close(() => res(true))) })
+const holdPort = (t, port) => new Promise((res) => { const s = net.createServer(); s.listen(port, '127.0.0.1', () => { t.after(() => s.close()); res() }) })
+const FORMS = [{ f: 'claude-code.cli', on: true }, { f: 'claude-code.vscode', on: true }, { f: 'codex.app', on: true }]
+const logOf = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [])
+
+/** The collector directory, the copy of the kernel in it, free ports, a spawn that starts the fake as a real child (and kills every one at the end), and the recorder. `fake` is fake-mihomo's knobs. */
+async function kernelWorld(t, { fake = {}, groups = [CC_GROUP, CODEX_GROUP], ...over } = {}) {
+  const root = tmpDir('asight-fwd-')
+  const dir = path.join(root, 'collector')
+  const bin = path.join(dir, 'kernel', KERNEL_EXE)
+  fs.mkdirSync(path.dirname(bin), { recursive: true })
+  fs.writeFileSync(bin, EXE)
+  const ports = { engine: await freePort(), controller: await freePort(), [CC_GROUP.g]: await freePort(), [CODEX_GROUP.g]: await freePort() }
+  const log = path.join(root, 'fake.log')
+  const spawned = []
+  const spawn = (b, args, opts) => {
+    spawned.push({ bin: b, args, opts })
+    const c = nodeSpawn(process.execPath, [FAKE, ...args], { ...opts, env: { ...process.env, ASIGHT_FAKE_MIHOMO: '1', FAKE_MIHOMO: JSON.stringify({ log, ...fake }) } })
+    t.after(() => { try { process.kill(c.pid) } catch { /* gone */ } })
+    return c
+  }
+  const events = { failures: [], states: [], failure: (r) => events.failures.push(r), state: (r) => events.states.push(r) }
+  const hashed = []
+  const verify = () => verifyCopy({ dir: path.dirname(bin), pin: world(t).pin, arch: 'x64', hash: async (f) => { hashed.push(f); return hashFile(f) } })
+  const secret = '0123456789abcdef0123456789abcdef'
+  const build = (controller, set = groups) => buildForwarderConfig(ruleInputs({ groups: set.map((g) => ({ ...g, port: ports[g.g] })), enginePort: ports.engine, controller }))
+  const fwd = createForwarder({ dir, bin, controller: { port: ports.controller, secret }, spawn, events, isFree, verifyCopy: verify, pollMs: 10, startTimeoutMs: 1500, ...over })
+  t.after(() => fwd.stopNow())
+  return { fwd, dir, bin, ports, log, spawned, events, hashed, build, secret, root, P: { config: path.join(dir, 'forwarder', 'config.json'), lock: path.join(dir, 'forwarder.lock') } }
+}
+
+test('W28 start: the kernel is spawned detached on the copy in kernel\\ with its home and config, the config is 0600 and is the generator\'s text, forwarder.lock names pid, start time, endpoint and config, and the read-back says on for every form', async () => {
+  const k = await kernelWorld(test, {})
+  const r = await k.fwd.start({ build: k.build, forms: FORMS })
+  assert.equal(r.ok, true)
+  assert.deepEqual(Object.values(r.readBack.forms).map((x) => x.state), ['on', 'on', 'on'])
+  assert.equal(k.spawned.length, 1)
+  assert.deepEqual([k.spawned[0].bin, k.spawned[0].args], [k.bin, ['-d', path.join(k.dir, 'forwarder', 'home'), '-f', k.P.config]])
+  assert.deepEqual([k.spawned[0].opts.detached, k.spawned[0].opts.stdio, k.spawned[0].opts.windowsHide], [true, 'ignore', true])
+  assert.equal(fs.readFileSync(k.P.config, 'utf8'), k.build({ port: k.ports.controller, secret: k.secret }))
+  assert.equal(fs.statSync(k.P.config).mode & 0o777, 0o600, 'it holds the controller secret and the tokens')
+  assert.deepEqual(JSON.parse(fs.readFileSync(k.P.lock, 'utf8')), { pid: r.pid, startedAt: null, endpoint: `tcp:127.0.0.1:${k.ports.controller}`, config: k.P.config })
+  assert.deepEqual(k.events.states.map((e) => [e.event, e.pid, e.adopted]), [['forwarder-start', r.pid, false]])
+  assert.deepEqual(k.events.failures, [])
+  const asked = logOf(k.log).map((q) => q.path)
+  for (const f of ['claude-code.cli', 'claude-code.vscode', 'codex.app']) assert.ok(asked.some((q) => q.startsWith(`/group/asight-fb-${f}/delay?url=`)), `the ${f} probe is asked for now, not left to the interval (the first connection would race it)`)
+})
+
+test('W27 ④ the copy is checked before the spawn: one hash of kernel\\ per start; a changed copy is not spawned (of copy), nor a deleted one (file-missing); the failure is recorded, the status says why', async () => {
+  const k = await kernelWorld(test, {})
+  assert.equal((await k.fwd.start({ build: k.build, forms: FORMS })).ok, true)
+  assert.deepEqual(k.hashed, [k.bin], 'one hash of the one copy')
+  await k.fwd.stopNow()
+  fs.writeFileSync(k.bin, flip(EXE))
+  const bad = await k.fwd.start({ build: k.build, forms: FORMS })
+  assert.deepEqual([bad.ok, bad.code, bad.of], [false, 'forwarder-digest-mismatch', 'copy'])
+  assert.equal(k.spawned.length, 1, 'not started again, and not repaired from the package')
+  fs.rmSync(k.bin)
+  const gone = await k.fwd.start({ build: k.build, forms: FORMS })
+  assert.deepEqual([gone.ok, gone.code, gone.reason], [false, 'forwarder-binary-missing', 'file-missing'])
+  assert.equal(k.spawned.length, 1)
+  assert.deepEqual(k.events.failures.map((f) => [f.where, f.code]), [['forwarder', 'forwarder-digest-mismatch'], ['forwarder', 'forwarder-binary-missing']])
+  assert.equal(k.fwd.state().phase, 'stopped')
+})
+
+test('W74 a kernel that does not come up says why: Smart App Control when it is on (or evaluating), else what happened (exit code, no answer, no such file); a taken port is the port\'s, never Smart App Control\'s', async (t) => {
+  const crash = await kernelWorld(t, { fake: { crash: true, exitCode: 3 }, sacOn: async () => true })
+  const a = await crash.fwd.start({ build: crash.build, forms: FORMS })
+  assert.deepEqual([a.ok, a.code, a.reason, a.exit], [false, 'forwarder-start-failed', 'smart-app-control', 3])
+  assert.match(a.because, /exited \(code 3\)/, 'what happened is kept beside the reason')
+  assert.deepEqual(crash.events.failures.map((f) => [f.where, f.code, f.reason]), [['forwarder', 'forwarder-start-failed', 'smart-app-control']])
+  const plain = await kernelWorld(t, { fake: { crash: true, exitCode: 3 } })
+  const b = await plain.fwd.start({ build: plain.build, forms: FORMS })
+  assert.deepEqual([b.code, b.exit], ['forwarder-start-failed', 3])
+  assert.match(b.reason, /exited \(code 3\) before it answered/)
+  const mute = await kernelWorld(t, { fake: { noController: true }, startTimeoutMs: 300 })
+  assert.match((await mute.fwd.start({ build: mute.build, forms: FORMS })).reason, /did not answer within 300 ms/)
+  const nobody = await kernelWorld(t, { spawn: () => { throw Object.assign(new Error('spawn UNKNOWN'), { code: 'UNKNOWN' }) } })
+  assert.deepEqual([(await nobody.fwd.start({ build: nobody.build, forms: FORMS })).reason], ['UNKNOWN'])
+  const taken = await kernelWorld(t, { sacOn: async () => true })
+  await holdPort(t, taken.ports[CODEX_GROUP.g])
+  const c = await taken.fwd.start({ build: taken.build, forms: FORMS })
+  assert.deepEqual([c.ok, c.code, c.reason, c.port], [false, 'forwarder-start-failed', 'port-taken', taken.ports[CODEX_GROUP.g]])
+  assert.equal(taken.spawned.length, 0, 'nothing was spawned onto a port somebody holds')
+  assert.equal(taken.fwd.state().phase, 'stopped')
+})
+
+test('W12 W55 reload: the new text goes to the kernel by PUT /configs?force=true and to the config file; the read-back follows the group (off has no fallback group); a port the new text opens that is taken, or a kernel that refuses, leaves the old config running', async (t) => {
+  const k = await kernelWorld(t, {})
+  await k.fwd.start({ build: k.build, forms: FORMS })
+  const codexOff = FORMS.map((f) => (f.f === 'codex.app' ? { ...f, on: false } : f))
+  const r = await k.fwd.reload({ build: (c) => k.build(c, [CC_GROUP, { ...CODEX_GROUP, on: false }]), forms: codexOff })
+  assert.equal(r.ok, true)
+  assert.deepEqual(r.readBack.forms, { 'claude-code.cli': { state: 'on', now: 'asight-in-claude-code.cli' }, 'claude-code.vscode': { state: 'on', now: 'asight-in-claude-code.vscode' }, 'codex.app': { state: 'off' } })
+  const puts = logOf(k.log).filter((q) => q.method === 'PUT')
+  assert.deepEqual(puts.map((q) => q.path), ['/configs?force=true'])
+  assert.equal(JSON.parse(fs.readFileSync(k.P.config, 'utf8')).listeners.length, 2, 'both listeners stay (a form that is off only forwards)')
+  assert.deepEqual(r.readBack.forms['claude-code.cli'], (await k.fwd.check()).forms['claude-code.cli'], 'check() reads the same')
+  // the read-back disagreeing with what was asked is not ok: the caller writes no entry then
+  const wrong = await k.fwd.reload({ build: (c) => k.build(c, [CC_GROUP, { ...CODEX_GROUP, on: false }]), forms: FORMS })
+  assert.deepEqual([wrong.ok, wrong.readBack.forms['codex.app'].state], [false, 'missing'], 'asked for on, and the kernel has no such group')
+  const before = fs.readFileSync(k.P.config, 'utf8')
+  const extra = await freePort()
+  await holdPort(t, extra)
+  const blocked = await k.fwd.reload({ build: (c) => buildForwarderConfig(ruleInputs({ groups: [CC_GROUP, { ...CODEX_GROUP, port: extra }], enginePort: k.ports.engine, controller: c })), forms: FORMS })
+  assert.deepEqual([blocked.ok, blocked.reason, blocked.port], [false, 'port-taken', extra])
+  assert.equal(fs.readFileSync(k.P.config, 'utf8'), before, 'a refused reload changes nothing on disk')
+  const refusing = await kernelWorld(t, { fake: { refuseReload: true } })
+  await refusing.fwd.start({ build: refusing.build, forms: FORMS })
+  assert.deepEqual((await refusing.fwd.reload({ build: refusing.build, forms: FORMS })).error, { status: 400, text: '' }, 'the status, not the core\'s words (they may quote the user\'s config)')
+})
+
+test('W28 the read-back is what the kernel says: the engine down is fallback (not on, not an error), a group it does not know is missing, an answer it does not give plainly is unknown', async (t) => {
+  const down = await kernelWorld(t, { fake: { engineDown: true } })
+  const r = await down.fwd.start({ build: down.build, forms: FORMS })
+  assert.equal(r.ok, false, 'asked for on, and the engine is not answering')
+  assert.deepEqual(r.readBack.forms['claude-code.cli'], { state: 'fallback', now: 'asight-re-claude-code.settings' })
+  const k = await kernelWorld(t, {})
+  await k.fwd.start({ build: k.build, forms: FORMS })
+  const ask = await k.fwd.check()
+  assert.equal(ask.ok, true)
+  const unknownForm = await k.fwd.reload({ build: k.build, forms: [{ f: 'nobody.cli', on: true }] })
+  assert.deepEqual(unknownForm.readBack.forms['nobody.cli'], { state: 'missing' })
+  const odd = await kernelWorld(t, { makeController: ({ port, secret }) => { const real = createController({ endpoint: `tcp:127.0.0.1:${port}`, secret, own: true }); return { ...real, get: async (q) => (q === '/proxies/asight-fb-codex.app' ? { status: 500, ok: false, json: null, text: '' } : q === '/proxies/asight-fb-claude-code.cli' ? { status: 200, ok: true, json: { now: 'somebody-else' }, text: '' } : real.get(q)) } } })
+  await odd.fwd.start({ build: odd.build, forms: [] })
+  assert.deepEqual((await odd.fwd.reload({ build: odd.build, forms: FORMS })).readBack.forms, { 'claude-code.cli': { state: 'unknown', reason: 'unexpected-now' }, 'claude-code.vscode': { state: 'on', now: 'asight-in-claude-code.vscode' }, 'codex.app': { state: 'unknown', reason: 'status-500' } })
+  assert.deepEqual(await createForwarder({ dir: k.dir, bin: k.bin, controller: { port: 1, secret: 'x' }, isFree }).check(), { ok: false, forms: {}, reason: 'not-running' })
 })

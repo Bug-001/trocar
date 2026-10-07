@@ -8,9 +8,11 @@
 
 import nodeFs from 'node:fs'
 import path from 'node:path'
+import { spawn as nodeSpawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
+import { createController } from '../../../netenv/mihomo/controller.mjs'
 
 export const KERNEL_EXE = 'asight-forwarder.exe'
 export const KERNEL_LICENSE = 'LICENSE-mihomo.txt'
@@ -151,3 +153,177 @@ export async function sacState({ helper }) {
 }
 /** Is the unsigned kernel at risk? Only a state that says so: an unknown one is not a reason to blame Smart App Control for a start that failed (the plan line says 「不知道」 for it, not this). */
 export const sacBlocks = (state) => state === 'on' || state === 'evaluation'
+
+// ---- the running kernel (4.8 §3.3 · §4 · §8, W12 W28 W55 W74) ---------------------------------------------------------------------------------------------
+
+const pidAlive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' } }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const errText = (e) => String((e && e.message) || e)
+const exitText = (e) => (e.signal ? `signal ${e.signal}` : `code ${e.code}`)
+
+function writeAtomic(fs, file, text) {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  const tmp = `${file}.tmp-${process.pid}`
+  fs.writeFileSync(tmp, text, { mode: 0o600 })
+  fs.renameSync(tmp, file)
+}
+
+/** What the forwarder needs to know of a config text (buildForwarderConfig's: JSON): every port the kernel is to hold, and each fallback group's probe address. A text that is not the generator's is a bug of the caller. */
+function readConfig(text) {
+  let c
+  try { c = JSON.parse(text) } catch (e) { throw new TypeError(`the kernel's config is not JSON: ${errText(e)}`) }
+  const m = /^127\.0\.0\.1:(\d+)$/.exec(String(c['external-controller']))
+  if (!m || typeof c.secret !== 'string') throw new TypeError("the kernel's config has no external-controller on 127.0.0.1 or no secret")
+  const probes = {}
+  for (const g of c['proxy-groups'] || []) if (/^asight-fb-/.test(g.name)) probes[g.name.slice('asight-fb-'.length)] = g.url
+  return { ports: new Set([...(c.listeners || []).map((l) => l.port), Number(m[1])]), probes, controller: { port: Number(m[1]), secret: c.secret } }
+}
+
+/**
+ * createForwarder → the kernel's process: start it, change its config, keep it up, stop it.
+ *   dir        the collector directory: `forwarder.lock` (`{pid, startedAt, endpoint, config}`) and `forwarder/` (the config, 0600, and the kernel's home) are made in it
+ *   bin        the kernel exe (the copy in `kernel\`)
+ *   controller `{ port, secret }` for this run, chosen at random by the caller
+ *   verifyCopy () → verifyCopy()'s answer for THIS kernel (the caller binds dir, pin and arch): asked before EVERY spawn, the first one and each respawn (W27 ④)
+ *   sacOn      () → whether Smart App Control would block an unsigned exe: a start that fails then says so (W74)
+ *   isFree     (port) → whether a loopback port can be bound; REQUIRED: this file may not import `node:net` (W27 ⑦). A taken port is not re-chosen here: the form's entry holds it (ingress-config.mjs).
+ *   spawn · makeController · now · setTimer · clearTimer · isAlive · kill · procStart (pid → start time, ms, or null) · fs   the OS and the clock, injected
+ *   events     `{ failure(rec), state(rec) }`: the §12 records, to the daemon's recorder
+ * `build(controller)` → the config text for the controller the forwarder is really talking to (so the text and the client cannot disagree); `forms` is `[{ f, on }]`, the forms whose fallback group should be there
+ * (on) or not (off), which the read-back checks (§4.1: an entry is written only after it says on).
+ */
+export function createForwarder({
+  dir, bin, controller, spawn = nodeSpawn, makeController = ({ port, secret }) => createController({ endpoint: `tcp:127.0.0.1:${port}`, secret, own: true }),
+  now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, events = { failure() {}, state() {} }, sacOn = async () => false, verifyCopy: verify = async () => ({ ok: true }), isFree,
+  isAlive = pidAlive, kill = (pid) => process.kill(pid), procStart = async () => null, fs = nodeFs,
+  pollMs = 50, startTimeoutMs = 10_000, stopWaitMs = 5_000,
+} = {}) {
+  if (typeof isFree !== 'function') throw new TypeError('createForwarder needs isFree(port)')
+  const P = { lock: path.join(dir, 'forwarder.lock'), config: path.join(dir, 'forwarder', 'config.json'), home: path.join(dir, 'forwarder', 'home'), forwarder: path.join(dir, 'forwarder') }
+  let creds = { ...controller }
+  let ctl = makeController(creds)
+  let cur = null // { text, forms, ports: Set, probes }: the config the kernel runs
+  let proc = null // { pid, startedAt, child, adopted }
+  let phase = 'stopped' // stopped · starting · running
+
+  const fail = (code, reason, extra = {}) => { const rec = { where: code === 'forwarder-down' ? 'netenv' : 'forwarder', code, reason, ...extra }; events.failure(rec); return { ok: false, ...rec } }
+  const rmLock = () => { try { fs.rmSync(P.lock, { force: true }) } catch { /* nothing to remove */ } }
+
+  // a start that did not come up is Smart App Control's when it is on (or evaluating): that is the reason an operator can act on (W74)
+  async function startFailed(what, detail = {}) {
+    if (await sacOn()) return fail('forwarder-start-failed', 'smart-app-control', { ...detail, because: what })
+    return fail('forwarder-start-failed', what, detail)
+  }
+
+  /** One attempt to bring the kernel up on `text`: the copy is checked, the ports are free, the config is written, the process is spawned and its controller answers. A failure it returns has already been recorded. */
+  async function attempt(text, next) {
+    const v = await verify()
+    if (v && v.mismatch) return fail('forwarder-digest-mismatch', 'the kernel copy in kernel\\ is not the pinned exe (its sha256 differs): it is not started, `asight on` puts the pinned one back', { of: v.mismatch.of || 'copy' })
+    if (v && v.missing) return fail('forwarder-binary-missing', v.missing.reason || 'file-missing')
+    for (const port of next.ports) if (!(await isFree(port))) return fail('forwarder-start-failed', 'port-taken', { port })
+    writeAtomic(fs, P.config, text)
+    fs.mkdirSync(P.home, { recursive: true, mode: 0o700 })
+    let child
+    let spawnError = null
+    let exited = null
+    try { child = spawn(bin, ['-d', P.home, '-f', P.config], { cwd: P.home, detached: true, stdio: 'ignore', windowsHide: true }) } catch (e) { spawnError = e }
+    const spawnFailed = () => startFailed(spawnError.code || errText(spawnError), { errno: spawnError.code ?? null })
+    if (spawnError) return spawnFailed()
+    const p = { pid: child.pid, startedAt: null, child, adopted: false }
+    child.once('error', (e) => { spawnError = e })
+    child.once('exit', (code, sig) => { exited = { code, signal: sig }; if (proc === p) onExit(p) })
+    const t0 = now()
+    for (;;) {
+      if (spawnError) return spawnFailed()
+      if (exited) return startFailed(`the kernel exited (${exitText(exited)}) before it answered`, { exit: exited.signal || exited.code })
+      if ((await ctl.get('/version')).ok) break
+      if (now() - t0 > startTimeoutMs) { try { child.kill() } catch { /* gone */ } return startFailed(`the kernel's controller did not answer within ${startTimeoutMs} ms`) }
+      await sleep(pollMs)
+    }
+    child.unref?.()
+    p.startedAt = await procStart(p.pid)
+    writeAtomic(fs, P.lock, `${JSON.stringify({ pid: p.pid, startedAt: p.startedAt, endpoint: `tcp:127.0.0.1:${creds.port}`, config: P.config })}\n`)
+    proc = p
+    phase = 'running'
+    cur = { ...next, text }
+    events.state({ event: 'forwarder-start', where: 'forwarder', pid: p.pid, adopted: false })
+    if (exited) onExit(p) // it died between "answered" and here
+    return { ok: true, pid: p.pid }
+  }
+
+  // a kernel that exits by itself or is killed: the lock goes (supervision is the next commit's)
+  function onExit(p) {
+    if (proc !== p) return
+    proc = null; phase = 'stopped'
+    rmLock()
+  }
+
+  // the probe of each form that is on, asked for now rather than at the next interval (4.8 §3.3): the engine may have just come up
+  const refresh = (forms) => Promise.all((forms || []).filter((f) => f.on && cur && cur.probes[f.f]).map((f) => ctl.get(`/group/asight-fb-${f.f}/delay?url=${encodeURIComponent(cur.probes[f.f])}&timeout=2000`)))
+  // what the kernel says now, form by form: on = its fallback group selects the engine; fallback = it selects the re-entry (the engine is down); off = no group; anything it does not say plainly is unknown, not a guess
+  async function readBack(forms) {
+    const out = {}
+    await Promise.all((forms || []).map(async ({ f, on }) => {
+      const r = await ctl.get(`/proxies/asight-fb-${f}`)
+      const now_ = r.ok && r.json && typeof r.json.now === 'string' ? r.json.now : null
+      if (r.status === 404) out[f] = { state: on ? 'missing' : 'off' }
+      else if (now_ !== null) out[f] = !on ? { state: 'still-on' } : now_ === `asight-in-${f}` ? { state: 'on', now: now_ } : now_.startsWith('asight-re-') ? { state: 'fallback', now: now_ } : { state: 'unknown', reason: 'unexpected-now' }
+      else out[f] = { state: 'unknown', reason: r.status ? `status-${r.status}` : r.error || 'no-answer' }
+    }))
+    return { ok: (forms || []).every(({ f, on }) => out[f].state === (on ? 'on' : 'off')), forms: out }
+  }
+
+  async function start({ build, forms }) {
+    if (proc && phase === 'running') return reload({ build, forms })
+    const text = build({ ...creds })
+    const parsed = readConfig(text)
+    phase = 'starting'
+    const r = await attempt(text, { forms, ports: parsed.ports, probes: parsed.probes })
+    if (!r.ok) { phase = 'stopped'; const { ok, ...why } = r; return { ok, ...why } }
+    await refresh(forms)
+    const back = await readBack(forms)
+    return { ok: back.ok, pid: r.pid, readBack: back }
+  }
+
+  async function reload({ build, forms }) {
+    if (!proc || phase !== 'running') return start({ build, forms })
+    const text = build({ ...creds })
+    const parsed = readConfig(text)
+    for (const port of parsed.ports) {
+      if (!cur.ports.has(port) && !(await isFree(port))) { const f = fail('forwarder-start-failed', 'port-taken', { port }); return { ok: false, readBack: null, code: f.code, reason: f.reason, port } }
+    }
+    const put = await ctl.put('/configs?force=true', { payload: text })
+    if (!put.ok) return { ok: false, readBack: null, error: { status: put.status, text: put.text } }
+    writeAtomic(fs, P.config, text)
+    cur = { text, forms, ports: parsed.ports, probes: parsed.probes }
+    await refresh(forms)
+    const back = await readBack(forms)
+    return { ok: back.ok, readBack: back }
+  }
+
+  const check = async () => (proc && cur ? readBack(cur.forms) : { ok: false, forms: {}, reason: 'not-running' })
+
+  // stop the process we hold (or adopted) and wait for it to be gone; `reason` is what the state event says
+  async function stopKernel(reason) {
+    const p = proc
+    if (!p) { phase = 'stopped'; return true }
+    try { if (p.child) p.child.kill(); else kill(p.pid) } catch { /* already gone */ }
+    const t0 = now()
+    while (isAlive(p.pid) && now() - t0 < stopWaitMs) await sleep(pollMs)
+    if (isAlive(p.pid)) return false
+    proc = null
+    rmLock()
+    phase = 'stopped'
+    events.state({ event: 'forwarder-stop', where: 'forwarder', pid: p.pid, reason })
+    return true
+  }
+
+  /** `off --now` and `uninstall`: stop at once. */
+  async function stopNow() { return { stopped: await stopKernel('stop-now') } }
+
+  return {
+    start, reload, check, stopNow,
+    controller: () => ({ ...creds }),
+    state: () => ({ phase, pid: proc ? proc.pid : null, adopted: proc ? proc.adopted : false }),
+  }
+}
