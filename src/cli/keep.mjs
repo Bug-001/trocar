@@ -13,7 +13,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { parseArgs } from '../cli-args.mjs'
 import { EXIT } from '../off/schema.mjs'
-import { resolveHarnesses } from './harness-names.mjs'
+import { resolveHarnesses, HARNESS_IDS, NAME_ALIASES } from './harness-names.mjs'
 
 /** `name` as typed → the id the settings use: `all` and a read-side id as they are, a CLI name or alias (1.6 §3) → the read-side id of that harness, anything else as typed. */
 export function settingHarness(name, { ids, idOfAgent }) {
@@ -40,7 +40,9 @@ export async function runKeepCli(argv, { io, home = os.homedir(), deps = {} } = 
   const base = path.join(home, '.asight')
   let code = EXIT.ok
   if (!asJson) {
-    code = runKeep(words, { out: io.out, err: io.err, file: retentionFile(base), logFile: retentionLog(base), harnesses: ids, unmatched: Object.fromEntries(ids.map((h) => [h, unmatchedClasses(h)])) })
+    // the refusal of a harness word names the settings' ids (src/capture/keep.mjs knows no others); the names of `on` / `off` / `status` are taken too, so say them (1.6 §3: a wrong name lists what is accepted)
+    const err = (m) => io.err(/unknown harness/.test(String(m)) ? `${m}\n(also accepted, the names of on / off / status: ${[...HARNESS_IDS, ...Object.keys(NAME_ALIASES)].join(', ')})` : m)
+    code = runKeep(words, { out: io.out, err, file: retentionFile(base), logFile: retentionLog(base), harnesses: ids, unmatched: Object.fromEntries(ids.map((h) => [h, unmatchedClasses(h)])) })
   }
   if (showing && code === EXIT.ok) {
     try {

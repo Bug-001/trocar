@@ -52,6 +52,8 @@ test('V61: `keep` takes the harness names of `on` / `off` / `status` (code ids a
     assert.equal(levels(s.home)[id].telemetry, 'log', `${name} is filed under ${id}`)
   }
   assert.deepEqual([...HARNESS_IDS, ...Object.keys(NAME_ALIASES)].filter((n) => !(n in asked)), [], 'every name `on` accepts is a name `keep` accepts')
+  const unknown = await s.run(['keep', 'clade', 'files', 'log']); assert.equal(unknown.exit, 2)
+  assert.match(unknown.io.stderrText(), /unknown harness "clade"[\s\S]*claude-code, codex[\s\S]*claude, dsh, kimi, zcode/, 'a wrong name lists what is accepted: the settings ids and the names of on / off / status')
   const { file, log } = files(s.home); const before = [sha(file), sha(log)]
   for (const argv of [['keep', 'clade', 'files', 'log'], ['keep', 'Claude', 'files', 'log'], ['keep', 'claude', 'nope', 'log'], ['keep', 'claude', 'files', 'half'], ['keep', 'claude', 'files']]) {
     const r = await s.run(argv); assert.equal(r.exit, 2, argv.join(' ')); assert.match(r.io.stderrText(), /usage:/)
