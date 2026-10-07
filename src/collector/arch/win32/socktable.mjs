@@ -1,6 +1,6 @@
 // socktable.mjs — which process of a form owns the connection that just reached the hop (RFC 4.8 §5.3, W4).
 //
-// On Windows the engine's peer is the VPN (or the own forwarder), not the agent, so the owner pid is worked out from the TCP owner table
+// On Windows the engine's peer is the own forwarder (asight's kernel), not the agent, so the owner pid is worked out from the TCP owner table
 // the helper reads (GetExtendedTcpTable: no CIM, no elevation, ~5 ms [E6]): the processes that hold a connection (any state, any age) whose
 // remote port is the hop's. Of those, exactly one is a candidate (a process of the form) and none is a process the caller has no row for →
 // it. Never a guess: a wrong pid makes the engine decrypt a process that does not trust asight's CA and breaks it, so more than one, none, an

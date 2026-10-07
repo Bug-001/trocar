@@ -66,14 +66,15 @@ export const CODES_BY_PART = Object.freeze({
 export const CODES = Object.freeze([...new Set(Object.values(CODES_BY_PART).flat())])
 
 // What `asight off` writes (RFC 1.6 R1 / R2 / R3, D39⑦). A block of its own, below CODES and apart from the lists above (which carry D40's
-// `retention` names since the merge): feat/win-collector adds blocks to this file too, so folding the blocks into WHERE, STATE_EVENTS and
-// CODES_BY_PART waits until it has merged (1.6 §闭集); `sets` below adds them.
+// `retention` names): the branch that owned the blocks below is merged into this tree now, and they stay blocks all the same — each is held
+// against its own RFC table by its own test (W38 below, V53 for the NET_* names), and folding them into WHERE / STATE_EVENTS / CODES_BY_PART
+// is a closed-set restructuring that goes with the unit that owns those tables (1.6 §9.7), not a drive-by here; `sets` below adds them.
 // src/off/names.mjs holds the same names (src/off may import nothing outside itself); test/health/codes.test.mjs holds the two equal.
 export const OFF_WHERE = Object.freeze(['off'])
 export const OFF_EVENTS = Object.freeze(['off-note']) // a state change (the last one of a run carries kind:'result'), not a failure
 export const OFF_CODES = Object.freeze(['backup-failed', 'backup-kept', 'undone-by-marker'])
 
-// What the Windows collector writes (RFC 4.8 §12, D42) and the names it shares with the VPN adapter (4.7 §5, D41) and the CLI (1.6 §9.7).
+// What the Windows collector writes (RFC 4.8 §12, D42) and the names it shares with the netenv side (4.7 §5, D41; read-only since D43) and the CLI (1.6 §9.7).
 // Blocks of their own, below OFF_*, for the reason OFF_* is: D40 edits WHERE / STATE_EVENTS / CODES_BY_PART, and the lists that
 // another branch appends to stay edit-free here; `sets` below adds the blocks. test/health/codes.test.mjs holds each against the
 // RFC's table written out by hand (W38).

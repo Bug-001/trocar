@@ -1,6 +1,6 @@
 // ingress.mjs — the engine's proxy ingress (RFC 4.8 §5.1, §5.2). Where the transparent listener takes connections a
-// kernel steered, this takes the ones a proxy client hands over on purpose: mihomo (Verge's block, or asight's own
-// forwarder) sends each agent connection here as `CONNECT host:port` with `Proxy-Authorization: Basic <route>.<group>:<token>`,
+// kernel steered, this takes the ones a proxy client hands over on purpose: asight's own forwarder (the kernel, D43 — the
+// user's VPN is never pointed here) sends each agent connection as `CONNECT host:port` with `Proxy-Authorization: Basic <of.<form>>:<token>`,
 // or as a SOCKS5 CONNECT with RFC 1929 credentials. The ingress answers like the proxy it is, dials the upstream,
 // and only then says yes; the bytes after that are an agent's, and go to handleFlow exactly as a transparent flow's do.
 //
