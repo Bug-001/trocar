@@ -86,13 +86,32 @@ function completeManifest(m) {
 
 const unsupportedVersion = (v) => !Number.isInteger(v) || v < 1 || v > MANIFEST_VERSION
 
+// What a manifest of a version this build reads must look like before anything uses it: the lists it names are lists of the right items. A file that parses as JSON but
+// has another shape (`{"version":2}`, `entries: {}`, `entries: [null]`, `files: null`) is not the manifest asight wrote — it is as unusable as one that does not parse, and
+// the callers treat it the same way (an error to say, then asight's own marks), instead of crashing half-way through an undo with the routing already off (R3, R11).
+// A version-1 manifest may lack a list (it is then empty); a version-2 one is written with `entries` and `files` always (newManifest), so a missing one is damage.
+function checkShape(m, v, name) {
+  const need = (key, item, required) => {
+    if (m[key] === undefined && !required) { m[key] = []; return }
+    if (!Array.isArray(m[key])) throw new Error(`${name} is not an install manifest this build can use: \`${key}\` is ${m[key] === undefined ? 'missing' : `not a list (${m[key] === null ? 'null' : typeof m[key]})`}`)
+    const bad = m[key].findIndex((x) => (item === 'object' ? !isPlainObject(x) : typeof x !== 'string'))
+    if (bad >= 0) throw new Error(`${name} is not an install manifest this build can use: \`${key}[${bad}]\` is not ${item === 'object' ? 'an object' : 'a string'}`)
+  }
+  if (m.entries === undefined && m.files === undefined) throw new Error(`${name} is not an install manifest this build can use: it lists neither \`entries\` nor \`files\``)
+  need('entries', 'object', v >= MANIFEST_VERSION)
+  need('files', 'object', v >= MANIFEST_VERSION)
+  need('watched', 'object', false)
+  need('dirs', 'string', false)
+}
+
 /** Text → manifest. A version 1 text is upgraded (`upgraded_from: 1`); a version this build does not know comes back as parsed, flagged
- *  `unsupported: true`, untouched. Throws what JSON.parse throws, or an Error for JSON that is not an object. */
+ *  `unsupported: true`, untouched. Throws what JSON.parse throws, or an Error for JSON that is not an object or whose lists are not the lists of a manifest. */
 export function parseManifest(text, name = MANIFEST) {
   const m = JSON.parse(text)
   if (!isPlainObject(m)) throw new Error(`${name} is not a manifest (a JSON object)`)
   const v = m.version === undefined ? 1 : m.version
   if (unsupportedVersion(v)) return { ...m, unsupported: true }
+  checkShape(m, v, name)
   if (v < MANIFEST_VERSION) m.upgraded_from = v
   return completeManifest(m)
 }

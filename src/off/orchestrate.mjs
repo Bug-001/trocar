@@ -163,8 +163,22 @@ const defaultRoots = (fs) => { let osText = ''; for (const f of OS_ROOT_FILES) {
  *  (`changed`, `removed`, `skipped`, `left`, `kept_bundles`, `still_trusting`, `residue`, `kept_backups`, `dropped_backups`, `pending`, `orphan_backups`, `problems`,
  *  `notes`, `failures`, `events`, `stopped` (an error ended the undoing part-way; what it had done is in the other fields), `mode`: 'manifest' | 'marker' | 'none' |
  *  'unsupported'). */
-export async function undoSide(w, { ids = null, manifest, manifestError = null, yes = false, interactive = false, io = null, say = null, dropCa = false } = {}) {
+export async function undoSide(w, opts = {}) {
   const u = { mode: 'none', changed: [], removed: [], skipped: [], left: [], kept_bundles: [], still_trusting: [], residue: [], kept_backups: [], dropped_backups: [], pending: [], orphan_backups: [], problems: [], notes: [], failures: [], events: [], undone_by_marker: false, procs_error: null, stopped: false }
+  try { return await undoBody(w, opts, u) } catch (e) { // whatever throws here (a manifest of a shape nobody foresaw, a file that vanishes) must not cost the receipt: the routing is already off and files may already be written (R1, R11)
+    u.stopped = true
+    if (u.raw && !u.changed.length && !u.removed.length) { // the files were written before it threw: the receipt lists them, as the plain undo would have
+      for (const r of u.raw.results) if (r.result === 'restored' || r.result === 'reverted-not-identical') u.changed.push({ path: r.path, change: '去掉 asight 加的部分', backup: r.backup_kept || null, result: r.result, ...withHarness(r.harness) })
+      u.removed.push(...u.raw.removed)
+      if (!u.left.length) u.left = u.raw.left.map((l) => ({ path: l.path, result: l.result, reason: l.reason, ...withHarness(l.harness) }))
+    }
+    u.problems.push(`undoing the entries stopped: ${errMessage(e)}; what was done before it is listed here, the rest is as it was: run asight off again, or undo the rest by hand (the install manifest names each file)`)
+    u.failures.push({ code: 'entry-not-undone', reason: `undoing the entries stopped: ${errMessage(e)}` })
+    return u
+  }
+}
+
+async function undoBody(w, { ids = null, manifest, manifestError = null, yes = false, interactive = false, io = null, say = null, dropCa = false } = {}, u) {
   if (manifest && manifest.unsupported) {
     u.mode = 'unsupported'
     u.problems.push(w.standalone
@@ -189,6 +203,7 @@ export async function undoSide(w, { ids = null, manifest, manifestError = null, 
       out = e.partial; stopped = e // it stopped after the files were changed (the last write of the manifest): what it did is in the receipt all the same, below
     }
     const note = (code, extra, reason) => u.events.push({ kind: code, code, ...extra, reason }) // `kind` = `code`: one line per thing the operator should know (4.6 安装 / 卸载不静默)
+    u.raw = out // what the undo did, for a receipt if what follows throws (undoSide)
     u.results = out.results
     for (const r of out.results) {
       const e = before.get(`${r.harness}\0${r.path}\0${r.what}`)

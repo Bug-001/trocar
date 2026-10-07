@@ -446,3 +446,18 @@ test('a platform without the new collector (macOS): status prints the old captur
   assert.match(io.stdoutText(), /本机网络环境: 不知道\(probe broke\)/)
   assert.deepEqual(fs.readdirSync(home), [], 'nothing was written: there is no ~/.asight here to keep the board\'s copy in')
 })
+
+test('semantics 2: an install manifest that parses but is not a manifest ({"version":2}, entries as an object) is 不知道 with the file and the reason — exit 3, no stack trace, never "没有装入口" — in the text and in --json', async () => {
+  for (const body of ['{"version":2}', (m) => ({ ...m, entries: { a: 1 } })]) {
+    const s = await installedHome()
+    const file = path.join(s.dir, 'install-manifest.json')
+    fs.writeFileSync(file, typeof body === 'string' ? body : JSON.stringify(body(JSON.parse(fs.readFileSync(file, 'utf8')))))
+    const r = await run(s, [], { request: asDaemon(reply()) })
+    assert.equal(r.exit, 3, r.text)
+    assert.match(r.text, /安装清单: 不知道\([^)]*install-manifest\.json[^)]*not an install manifest this build can use/)
+    assert.ok(!/没有装入口/.test(r.text), 'a manifest nobody can read does not say "nothing is installed"')
+    const doc = (await run(s, ['--json'], { request: asDaemon(reply()) })).io.json()
+    assert.deepEqual(validateReceipt(doc), [])
+    assert.match(doc.manifest_error, /install-manifest\.json.*not an install manifest this build can use/)
+  }
+})

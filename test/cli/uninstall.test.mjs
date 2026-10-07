@@ -363,3 +363,24 @@ test('formatUninstallReceipt: not done says so and what to do; the entries left 
   const purged = formatUninstallReceipt({ ...r, ok: true, left: [], problems: [], kept_bundles: [], purge_data: true, kept_captures: false }, { home })
   assert.match(purged, /^asight 已卸载/); assert.match(purged, /采集数据已删\(--purge-data\)。/); assert.doesNotMatch(purged, /保留在/)
 })
+
+test('semantics 2: an install manifest of the wrong shape is treated as unreadable by uninstall too — the entries go by their marks (after a yes), a receipt is printed, and the way on is named when asight on then refuses', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] })
+  s.sys.daemon.state.up = false
+  const file = path.join(s.dir, 'install-manifest.json')
+  fs.writeFileSync(file, '{"version":2}')
+  const before = s.userFiles()
+  const no = await s.uninstall({}) // not a terminal, no yes
+  assert.equal(no.exit, 1)
+  assert.deepEqual(s.userFiles(), before, 'no file is touched without a yes')
+  assert.match(no.receipt.notes.join('\n'), /the install manifest cannot be read .*not an install manifest this build can use/)
+  const r = await s.uninstall({ yes: true })
+  assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
+  assert.ok(!fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('asight') && !fs.readFileSync(path.join(s.home, '.codex', '.env'), 'utf8').includes('asight collector'), 'the entries went by their marks')
+  // `on` does not write over a manifest it cannot read, and says what to do
+  const t = await installedHome({ names: ['claude-code'] })
+  fs.writeFileSync(path.join(t.dir, 'install-manifest.json'), '{"version":2,"entries":null,"files":[]}')
+  const snap = t.userFiles()
+  await assert.rejects(() => t.on(), /the install manifest cannot be read .*asight on does not write over it.*asight off.*mv '.*install-manifest\.json'/)
+  assert.deepEqual(t.userFiles(), snap, 'and wrote nothing')
+})

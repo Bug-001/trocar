@@ -11,6 +11,7 @@ import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
+import { undoSide, offWorld } from '../../src/off/orchestrate.mjs'
 import { certBlocks } from '../../src/off/pem.mjs'
 import { HARNESS_IDS } from '../../src/cli/harness-names.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -524,3 +525,51 @@ for (const [harness, rel] of [['codex', '.codex/.env'], ['hermes', '.hermes/.env
     for (const line of flowEvents(t.dir)) assert.deepEqual(checkRecord(line), [], JSON.stringify(line))
   })
 }
+
+// The audit's MEDIUM finding (semantics 2): a manifest that parses but has another shape used to crash `off` before it did anything (routing still on, nothing undone) or half-way
+// (routing off, no receipt). Now it is as unreadable as one that does not parse: the routing is taken off, the entries are found by asight's marks after a yes (R3), and a receipt is printed.
+for (const [what, doc] of [['{"version":2}', () => ({ version: 2 })], ['entries is an object', (m) => ({ ...m, entries: { a: 1 } })], ['entries holds null', (m) => ({ ...m, entries: [...m.entries, null] })], ['files is null', (m) => ({ ...m, files: null })]]) {
+  test(`R3 / semantics 2: an install manifest of the wrong shape (${what}) — off takes the routing off, touches no file without a yes, says why and exits 1; with --yes it undoes by the marks; a receipt either way`, async () => {
+    const s = await installedHome({ names: ['claude-code', 'codex'] })
+    s.sys.daemon.state.up = false
+    const manifestFile = path.join(s.dir, 'install-manifest.json')
+    fs.writeFileSync(manifestFile, JSON.stringify(doc(JSON.parse(fs.readFileSync(manifestFile, 'utf8')))))
+    const installed = s.userFiles()
+    const first = await s.off()
+    assert.equal(first.exit, 1)
+    assert.deepEqual(validateReceipt(first.receipt), [])
+    assert.deepEqual(s.userFiles(), installed, 'no file is touched without a yes')
+    assert.match(first.receipt.notes.join('\n'), /the install manifest cannot be read .*not an install manifest this build can use/)
+    assert.match(first.receipt.problems.join('\n'), /unreadable.*asight off --yes/)
+    assert.deepEqual([first.receipt.routing.confirmed, Object.values(s.state().harnesses).map((h) => h.desired)], [true, ['off', 'off']], 'the routing is off and desired is off, with no manifest to say what is installed')
+    assert.deepEqual(first.receipt.pending.map((p) => path.relative(s.home, p.path)).sort(), ['.claude/settings.json', '.codex/.env'])
+    assert.equal(flowEvents(s.dir).at(-1).kind, 'result')
+    const second = await s.off({ yes: true })
+    assert.equal(second.exit, 0, JSON.stringify(second.receipt.problems))
+    assert.equal(second.receipt.undone_by_marker, true)
+    assert.ok(!/asight/.test(fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8')) && !/asight collector/.test(fs.readFileSync(path.join(s.home, '.codex', '.env'), 'utf8')))
+  })
+}
+
+test('semantics 2: whatever throws while the entries are undone costs no receipt — undoSide hands back what it had, marked stopped, with a problem and a failure in the closed set, and the routing is not undone by it', async () => {
+  const s = await installedHome({ names: ['claude-code'] })
+  const w = offWorld({ home: s.home, env: s.sh.env, deps: s.offDeps() })
+  // a manifest object of a shape the reader would have refused, handed straight in: the undo must not throw
+  const u = await undoSide(w, { ids: null, manifest: { version: 2, entries: null, files: [] } })
+  assert.deepEqual([u.stopped, u.mode, u.failures.map((f) => f.code)], [true, 'manifest', ['entry-not-undone']])
+  assert.match(u.problems.join('\n'), /undoing the entries stopped: .*run asight off again/)
+  assert.deepEqual(u.failures.map((f) => checkRecord({ ts: new Date().toISOString(), event: 'failure', where: 'off', run: 'r', ...f })), [[]])
+  // and through runOff, with a throw AFTER the files were written (the check of whether a file is still there, EIO): the receipt lists what was done, says what stopped, and a result line ends the run
+  const t = await installedHome({ names: ['claude-code'] })
+  t.sys.daemon.state.up = false
+  const settings = path.join(t.home, '.claude', 'settings.json')
+  const real = await import('node:fs')
+  const fsx = new Proxy(real.default, { get: (o, k) => (k === 'existsSync' ? (f) => { if (String(f) === settings) throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' }); return o.existsSync(f) } : o[k]) })
+  const r = await t.off({ deps: { fs: fsx } })
+  assert.ok(!fs.readFileSync(settings, 'utf8').includes('asight'), 'the entry had been undone before it threw')
+  assert.equal(r.exit, 1)
+  assert.deepEqual(validateReceipt(r.receipt), [])
+  assert.deepEqual(r.receipt.changed.map((c) => c.path), [settings], 'and the receipt says so: it lists what was written')
+  assert.match(r.receipt.problems.join('\n'), /undoing the entries stopped: EIO: i\/o error/)
+  assert.deepEqual([r.receipt.routing.confirmed, flowEvents(t.dir).at(-1).kind, flowEvents(t.dir).at(-1).outcome], [true, 'result', 'failed'])
+})

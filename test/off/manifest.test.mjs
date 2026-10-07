@@ -147,3 +147,42 @@ test('the ledger of the old capture is a manifest in a file of its own: written 
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).version, 99, 'not written over')
   saveManifest(dir, newManifest()); assert.equal(readManifest(dir).version, MANIFEST_VERSION, 'saveManifest / readManifest are the same code with the install manifest\'s name')
 })
+
+// The audit's MEDIUM finding (semantics 2): JSON that parses but is not the manifest asight wrote — `{"version":2}`, `entries: {…}`, `entries: [null]`, `files: null` — was accepted, and
+// `off` then crashed before it did anything (or half-way, with the routing already off and no receipt). It is as unusable as a file that does not parse: the same error, and the
+// same way on (R3: asight's own marks).
+test('R3: a manifest whose lists are not the lists of a manifest is an error, like one that does not parse — never "nothing installed"; a version 1 manifest may leave a list out', () => {
+  const { dir } = dirOf()
+  const bad = {
+    'no lists at all': { version: 2 },
+    'neither entries nor files, no version': {},
+    'version 2 without files': { version: 2, entries: [] },
+    'version 2 without entries': { version: 2, files: [] },
+    'entries is an object': { version: 2, entries: { a: 1 }, files: [] },
+    'entries holds null': { version: 2, entries: [null], files: [] },
+    'entries holds a string': { version: 2, entries: ['x'], files: [] },
+    'files is null': { version: 2, entries: [], files: null },
+    'files holds an array': { version: 2, entries: [], files: [[]] },
+    'watched is a string': { version: 2, entries: [], files: [], watched: 'x' },
+    'watched holds null': { version: 2, entries: [], files: [], watched: [null] },
+    'dirs holds an object': { version: 2, entries: [], files: [], dirs: [{}] },
+    'dirs is null': { version: 2, entries: [], files: [], dirs: null },
+    'version 1 with entries null': { version: 1, entries: null, files: [] },
+  }
+  for (const [what, doc] of Object.entries(bad)) {
+    writeRaw(dir, doc)
+    assert.throws(() => readManifest(dir), /not an install manifest this build can use/, what)
+    assert.throws(() => readManifestAt(manifestPath(dir)), /not an install manifest this build can use/, what)
+  }
+  assert.throws(() => { writeRaw(dir, { version: 2, entries: [null], files: [] }); readManifest(dir) }, /`entries\[0\]` is not an object/, 'it says which list and which item')
+  assert.throws(() => { writeRaw(dir, { version: 2, entries: [] }); readManifest(dir) }, /`files` is missing/)
+  assert.throws(() => { writeRaw(dir, { version: 2, entries: [], files: null }); readManifest(dir) }, /`files` is not a list \(null\)/)
+  // what is allowed: empty lists; a version 1 file with one list or the lists of its day; a manifest of a version this build does not know is handed back flagged, whatever shape
+  writeRaw(dir, { version: 2, entries: [], files: [] })
+  assert.deepEqual([readManifest(dir).entries, readManifest(dir).files, readManifest(dir).watched, readManifest(dir).dirs], [[], [], [], []], 'a list that may be absent is empty')
+  writeRaw(dir, { version: 1, entries: [{ kind: 'json-key', harness: 'claude-code', path: '/p', keys: ['k'], value: 'v' }] })
+  const v1 = readManifest(dir)
+  assert.deepEqual([v1.upgraded_from, v1.files, v1.entries.length], [1, [], 1], 'a version 1 file without `files` reads as one with none')
+  writeRaw(dir, { version: 7, entries: 'whatever' })
+  assert.equal(readManifest(dir).unsupported, true)
+})

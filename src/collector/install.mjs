@@ -136,7 +136,10 @@ const stop = (message) => Object.assign(new Error(message), { stopsRun: true })
  *  `_` is what the writing needs (the manifest as read, the draft, the roots). `ids`: the harness code ids named, or null for every one found. */
 export async function planOn({ home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), osRootsFile = null, roots = null, unit = null, fs = nodeFs, now = () => new Date() } = {}) {
   const dir = collectorHome(path.join(home, '.asight'))
-  const prior = readManifest(dir, fs)
+  let prior
+  try { prior = readManifest(dir, fs) } catch (e) { // not written over: it is the only list of what asight changed; `off` has the way back by asight's own marks (R3)
+    throw new Error(`the install manifest cannot be read (${String((e && e.message) || e)}); asight on does not write over it. Run "asight off" (it undoes asight's changes by their marks, after a yes, or at once with --yes); if asight on still refuses, the file is damaged and nothing else lists what asight changed: move it aside (mv '${manifestPath(dir)}' '${manifestPath(dir)}.damaged'), then run asight on`)
+  }
   refuseUnsupported(dir, prior)
   if (prior && prior.complete) {
     // installed — but only usable when its CA is (D-4): a CA that cannot be read or used is said, with how to start over
