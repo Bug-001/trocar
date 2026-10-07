@@ -8,10 +8,11 @@
 // NO_PROXY set), and the process killed in t.after. Requests go through Node's `net` as an explicit proxy client, never through `curl`.
 //
 // The "engine" is the REAL engine and proxy ingress (src/collector/core/engine; test/netenv/fixtures/real-engine.mjs puts a recording tap in
-// front of it): Task 3 swapped the stand-in (engine-fixture.mjs, which the Windows spike still ships) for it. Until Task 5 lands
-// `buildBlock` / `buildForwarderConfig`, the config is test/netenv/fixtures/inline-block.mjs; that swap is one commit in Task 5. Shapes (4.8 §3.3):
+// front of it): Task 3 swapped the stand-in (engine-fixture.mjs, which the Windows spike still ships) for it, and Task 5 swapped the inline config
+// (inline-block.mjs, which the spike still ships too) for the generators' own output (src/netenv/mihomo/rules.mjs, via fixtures/generated-config.mjs). Shapes (4.8 §3.3):
 //   1. Verge-like: the mixed port is both what agents reach and the re-entry point; the agent stand-in has its own `http` listener (IN-NAME).
 //   2. own-forwarder-like: a form listener with `rule: in-<g>` sub-rules; its own port is the re-entry point.
+// The "verbatim" tests load the generators' text as it is, with a dotted group id like the product's (claude-code.cli): the real core must accept it.
 // The probe bytes mihomo really sent are compared with test/netenv/fixtures/mihomo-probe.bytes (the re-entry port normalised to 18000);
 // ASIGHT_RECORD_PROBE=1 rewrites that file from this run. W13 (test/collector/core/ingress.test.mjs) replays it into the real ingress.
 import test from 'node:test'
@@ -21,10 +22,12 @@ import http from 'node:http'
 import net from 'node:net'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { startRealEngine } from './fixtures/real-engine.mjs'
-import { vergeLikeConfig, forwarderLikeConfig, G, TOKEN } from './fixtures/inline-block.mjs'
+import { vergeLikeConfig, forwarderLikeConfig, groupOf, G, TOKEN } from './fixtures/generated-config.mjs'
+import { buildBlock, buildForwarderConfig } from '../../src/netenv/mihomo/rules.mjs'
 
 const BIN = process.env.ASIGHT_MIHOMO_BIN
 const gate = BIN ? {} : { skip: 'set ASIGHT_MIHOMO_BIN to a mihomo binary to run the real-mihomo contract (4.8 W57); a Verge-bundled verge-mihomo may be used read-only' }
@@ -35,12 +38,13 @@ const PROBE_PORT = 18000 // the re-entry port the committed bytes are normalised
 const freePort = () => new Promise((res) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)) }) })
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-async function startMihomo(t, { config, routeFile, route, onLines, secret, controller }) {
+async function startMihomo(t, { config, configText, files = {}, routeFile, route, onLines, secret, controller }) {
   const home = tmpDir('asight-mihomo-')
-  fs.writeFileSync(path.join(home, 'config.yaml'), JSON.stringify(config)) // JSON is YAML
+  fs.writeFileSync(path.join(home, 'config.yaml'), configText ?? JSON.stringify(config)) // JSON is YAML
   fs.mkdirSync(path.join(home, 'asight'), { recursive: true })
-  const routePath = path.join(home, route.replace(/^\.\//, ''))
-  fs.writeFileSync(routePath, routeFile(onLines))
+  for (const [rel, text] of Object.entries(files)) fs.writeFileSync(path.join(home, rel), text) // route files the generator wrote, as they are
+  const routePath = route ? path.join(home, route.replace(/^\.\//, '')) : null
+  if (routePath) fs.writeFileSync(routePath, routeFile(onLines))
   const proc = spawn(BIN, ['-d', home, '-f', path.join(home, 'config.yaml')], { env: { PATH: '/usr/bin:/bin', HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] })
   const killIt = () => { try { proc.kill('SIGKILL') } catch { /* gone */ } }
   process.once('exit', killIt)
@@ -91,25 +95,25 @@ function destinations(logs) {
   return out
 }
 
-async function shape(t, { name, make, unifiedDelay = true, agentAuth }) {
+async function shape(t, { name, make, unifiedDelay = true, agentAuth, g = G }) {
   const ports = {}
   for (const k of ['mixed', 'form', 'agent', 'controller', 'engine', 'blocked', 'origin']) ports[k] = await freePort()
-  const secret = `s${Math.random().toString(16).slice(2)}`
+  const secret = randomBytes(16).toString('hex') // the generator wants a real secret: 16+ letters and digits
   const reenter = name === 'verge-like' ? ports.mixed : ports.form
   const agentPort = name === 'verge-like' ? ports.agent : ports.form
   const origin = http.createServer((q, r) => r.end('origin-ok')).listen(ports.origin, '127.0.0.1')
   t.after(() => origin.close())
-  let engine = await startRealEngine({ port: ports.engine, token: TOKEN, reenterPort: reenter })
+  let engine = await startRealEngine({ port: ports.engine, token: TOKEN, reenterPort: reenter, group: g })
   t.after(() => engine.close())
-  const built = make({ ports, secret, unifiedDelay })
+  const built = make({ ports, secret, unifiedDelay, g })
   const m = await startMihomo(t, { ...built, secret, controller: ports.controller })
   const agent = () => viaProxy(agentPort, `127.0.0.1:${ports.origin}`, { auth: agentAuth })
-  const fbUrl = `http://127.0.0.1:${reenter}/asight-health/${G}`
-  const nowOf = async () => (await m.ctl('GET', `/proxies/asight-fb-${G}`)).json().now
+  const fbUrl = `http://127.0.0.1:${reenter}/asight-health/${g}`
+  const nowOf = async () => (await m.ctl('GET', `/proxies/asight-fb-${g}`)).json().now
   const alive = async (n) => (await m.ctl('GET', `/proxies/${n}`)).json().alive
-  const refresh = () => m.ctl('GET', `/group/asight-fb-${G}/delay?url=${encodeURIComponent(fbUrl)}&timeout=2000`)
+  const refresh = () => m.ctl('GET', `/group/asight-fb-${g}/delay?url=${encodeURIComponent(fbUrl)}&timeout=2000`)
   const agentConnects = () => engine.events.filter((e) => e.kind === 'agent-connect').length
-  return { ports, m, agent, nowOf, alive, refresh, agentConnects, reenter, getEngine: () => engine, restartEngine: async () => { engine = await startRealEngine({ port: ports.engine, token: TOKEN, reenterPort: reenter }); t.after(() => engine.close()); return engine }, origin: ports.origin }
+  return { g, ports, m, agent, nowOf, alive, refresh, agentConnects, reenter, getEngine: () => engine, restartEngine: async () => { engine = await startRealEngine({ port: ports.engine, token: TOKEN, reenterPort: reenter, group: g }); t.after(() => engine.close()); return engine }, origin: ports.origin }
 }
 
 async function runContract(t, opts) {
@@ -121,26 +125,26 @@ async function runContract(t, opts) {
 }
 
 async function contractSteps(s, opts) {
-  const { m } = s
+  const { m, g } = s
   // the select starts on PASS (default off): the agent stand-in is NOT sent to the engine
-  assert.equal((await s.m.ctl('GET', `/proxies/asight-sw-${G}`)).json().now, 'PASS', 'a fresh block is off (PASS first)')
+  assert.equal((await s.m.ctl('GET', `/proxies/asight-sw-${g}`)).json().now, 'PASS', 'a fresh block is off (PASS first)')
   assert.equal((await s.agent()).body, 'origin-ok')
   assert.equal(s.agentConnects(), 0, 'with the switch on PASS the engine sees nothing')
 
   // on: select the fallback group, route the stand-in. Both members alive, the group selects asight-in, the engine is in the path.
-  assert.equal((await m.ctl('PUT', `/proxies/asight-sw-${G}`, { name: `asight-fb-${G}` })).status, 204)
+  assert.equal((await m.ctl('PUT', `/proxies/asight-sw-${g}`, { name: `asight-fb-${g}` })).status, 204)
   assert.equal((await s.agent()).body, 'origin-ok')
   assert.equal(s.agentConnects(), 1, 'the stand-in went through the engine')
   assert.equal((await s.refresh()).status, 200)
-  assert.equal(await s.nowOf(), `asight-in-${G}`)
-  assert.equal(await s.alive(`asight-in-${G}`), true, 'asight-in is alive (the engine answered the local probe)')
-  assert.equal(await s.alive(`asight-re-${G}`), true, 'asight-re is alive (the re-entry point answered its own probe)')
+  assert.equal(await s.nowOf(), `asight-in-${g}`)
+  assert.equal(await s.alive(`asight-in-${g}`), true, 'asight-in is alive (the engine answered the local probe)')
+  assert.equal(await s.alive(`asight-re-${g}`), true, 'asight-re is alive (the re-entry point answered its own probe)')
 
   // the bytes mihomo really sent to the engine
   const closed = s.getEngine().events.find((e) => e.kind === 'probe-closed')
   assert.ok(closed, 'the engine saw a complete probe connection')
   const raw = normalise(Buffer.from(closed.raw, 'base64').toString('latin1'), s.reenter)
-  const heads = (raw.match(/^HEAD \/asight-health\/spike HTTP\/1\.1\r\n/gm) || []).length
+  const heads = (raw.match(new RegExp(`^HEAD /asight-health/${g.replace(/\./g, '\\.')} HTTP/1\\.1\\r\\n`, 'gm')) || []).length
   assert.equal(heads, opts.unifiedDelay === false ? 1 : 2, 'unified-delay decides one or two HEADs in the tunnel')
   assert.match(raw, /^CONNECT 127\.0\.0\.1:18000 HTTP\/1\.1\r\n/, 'the probe targets the re-entry point itself')
   if (opts.record) {
@@ -154,8 +158,8 @@ async function contractSteps(s, opts) {
 
   // provider reads (4.8 §4.1): the LIST carries ruleCount; the single-provider GET does not exist (405)
   const list = (await m.ctl('GET', '/providers/rules')).json().providers
-  assert.equal(list[`asight-r-${G}`].ruleCount, 1, 'GET /providers/rules lists asight-r-<g> with its ruleCount')
-  assert.equal((await m.ctl('GET', `/providers/rules/asight-r-${G}`)).status, 405, 'GET /providers/rules/<name> is 405 on this core')
+  assert.equal(list[`asight-r-${g}`].ruleCount, 1, 'GET /providers/rules lists asight-r-<g> with its ruleCount')
+  assert.equal((await m.ctl('GET', `/providers/rules/asight-r-${g}`)).status, 405, 'GET /providers/rules/<name> is 405 on this core')
 
   // the engine dies: the NEXT agent request succeeds (mihomo redials through asight-re) and the group flips within 5 s. Measured: a request that arrives
   // within 1 s of the group's last health check can NOT trigger a new one (mihomo's singleDo window), so it retries the dead engine ten times and fails;
@@ -167,28 +171,28 @@ async function contractSteps(s, opts) {
   const after = await s.agent()
   assert.equal(after.body, 'origin-ok', `the first request after the engine died succeeded (${after.connect})`)
   let flipped = null
-  while (Date.now() - t0 < 5000) { if ((await s.nowOf()) === `asight-re-${G}`) { flipped = Date.now() - t0; break } await sleep(100) }
+  while (Date.now() - t0 < 5000) { if ((await s.nowOf()) === `asight-re-${g}`) { flipped = Date.now() - t0; break } await sleep(100) }
   assert.ok(flipped !== null, 'now = asight-re within 5 s of the engine dying')
   assert.equal(s.agentConnects(), connectsBefore, 'nothing reached the dead engine')
 
   // the engine is back: the daemon's refresh (the group's own probe URL) brings the group back to asight-in
   await s.restartEngine()
   assert.equal((await s.refresh()).status, 200)
-  assert.equal(await s.nowOf(), `asight-in-${G}`, 'refresh after the engine returned')
+  assert.equal(await s.nowOf(), `asight-in-${g}`, 'refresh after the engine returned')
   assert.equal((await s.agent()).body, 'origin-ok'); assert.equal(s.getEngine().events.filter((e) => e.kind === 'agent-connect').length, 1)
 
   // off: PASS falls through to the user's own rules, the engine is not asked
-  assert.equal((await m.ctl('PUT', `/proxies/asight-sw-${G}`, { name: 'PASS' })).status, 204)
+  assert.equal((await m.ctl('PUT', `/proxies/asight-sw-${g}`, { name: 'PASS' })).status, 204)
   const eBefore = s.getEngine().events.filter((e) => e.kind === 'agent-connect').length
   if (opts.name === 'verge-like') assert.equal((await viaProxy(s.ports.agent, `127.0.0.1:${s.ports.blocked}`)).body, '', 'the user rule (REJECT on a port) still applies when the switch is PASS')
   assert.equal((await s.agent()).body, 'origin-ok')
   assert.equal(s.getEngine().events.filter((e) => e.kind === 'agent-connect').length, eBefore, 'PASS: the engine sees nothing')
 
   // an EMPTY route file means off at the provider layer too (the two-key off): refreshed, the count is 0 and the stand-in is not routed
-  assert.equal((await m.ctl('PUT', `/proxies/asight-sw-${G}`, { name: `asight-fb-${G}` })).status, 204)
+  assert.equal((await m.ctl('PUT', `/proxies/asight-sw-${g}`, { name: `asight-fb-${g}` })).status, 204)
   fs.writeFileSync(m.routePath, '')
-  assert.equal((await m.ctl('PUT', `/providers/rules/asight-r-${G}`)).status, 204)
-  assert.equal((await m.ctl('GET', '/providers/rules')).json().providers[`asight-r-${G}`].ruleCount, 0)
+  assert.equal((await m.ctl('PUT', `/providers/rules/asight-r-${g}`)).status, 204)
+  assert.equal((await m.ctl('GET', '/providers/rules')).json().providers[`asight-r-${g}`].ruleCount, 0)
   assert.equal((await s.agent()).body, 'origin-ok'); assert.equal(s.getEngine().events.filter((e) => e.kind === 'agent-connect').length, eBefore, 'empty route file: not routed')
 
   // zero external connections: every destination mihomo logged is 127.0.0.1; nothing was downloaded
@@ -219,15 +223,68 @@ test('W57 unified-delay off: one HEAD in the tunnel, answered, both members aliv
 // retry, so traffic comes. What must hold: with traffic, the flip within 5 s, and a success after it.
 test('W57 engine dies within 1 s of a health check: the first connection may be slow or fail, traffic still flips the group and the next one succeeds', gate, async (t) => {
   const s = await shape(t, { name: 'verge-like', make: vergeLikeConfig })
-  assert.equal((await s.m.ctl('PUT', `/proxies/asight-sw-${G}`, { name: `asight-fb-${G}` })).status, 204)
+  const { g } = s
+  assert.equal((await s.m.ctl('PUT', `/proxies/asight-sw-${g}`, { name: `asight-fb-${g}` })).status, 204)
   assert.equal((await s.refresh()).status, 200)
-  assert.equal(await s.nowOf(), `asight-in-${G}`)
+  assert.equal(await s.nowOf(), `asight-in-${g}`)
   await s.getEngine().close() // no pause: inside the window
   const first = await s.agent()
   t.diagnostic(`first connection after the engine died inside the window: connect=${first.connect} ok=${first.body === 'origin-ok'} ms=${first.ms}`)
   if (first.body !== 'origin-ok') assert.equal(first.connect, '200', `a failed first connection is a closed tunnel after mihomo's 200, not a refused CONNECT (${first.connect})`)
   const t0 = Date.now(); let flipped = false
-  while (Date.now() - t0 < 5000) { if ((await s.nowOf()) === `asight-re-${G}`) { flipped = true; break } await s.agent(); await sleep(300) } // an agent retries: traffic
+  while (Date.now() - t0 < 5000) { if ((await s.nowOf()) === `asight-re-${g}`) { flipped = true; break } await s.agent(); await sleep(300) } // an agent retries: traffic
   assert.ok(flipped, 'with traffic, the group flips to asight-re within 5 s')
   assert.equal((await s.agent()).body, 'origin-ok', 'the next connection succeeds')
+})
+
+// The product's group ids have dots (claude-code.cli): they are in the listener name, the sub-rule name, every outbound and group name, the provider name, the probe's URL path and the
+// ingress user (vb.claude-code.cli). The whole contract again with one, on both shapes.
+test('W57 shape 1 with a dotted group id (the product\'s kind of id): the whole contract holds', gate, async (t) => {
+  await runContract(t, { name: 'verge-like', make: vergeLikeConfig, g: 'claude-code.cli' })
+})
+
+test('W57 shape 2 with a dotted group id', gate, async (t) => {
+  await runContract(t, { name: 'forwarder-like', make: forwarderLikeConfig, agentAuth: 'agent:ap', g: 'claude-code.cli' })
+})
+
+// The generators' text, as it is (no overlay): the real core must load it. The engine is not running in these (no tap): they check what the config says about itself and what a
+// loopback client can see, which is the part a fake would get wrong.
+async function loadVerbatim(t, { on }) {
+  const ports = {}
+  for (const k of ['form', 'controller', 'engine', 'origin']) ports[k] = await freePort()
+  const secret = randomBytes(16).toString('hex'), g = 'claude-code.cli'
+  const origin = http.createServer((q, r) => r.end('origin-ok')).listen(ports.origin, '127.0.0.1')
+  t.after(() => origin.close())
+  const text = buildForwarderConfig({ forms: [{ g, port: ports.form, upstream: 'direct' }], enginePort: ports.engine, token: TOKEN, controller: { port: ports.controller, secret }, on })
+  const files = on ? buildBlock({ groups: [groupOf(g)], enginePort: ports.engine, token: TOKEN, reenter: { host: '127.0.0.1', port: ports.form } }).files : {}
+  const m = await startMihomo(t, { configText: text, files, secret, controller: ports.controller })
+  return { m, ports, g, files }
+}
+
+test('W57 the forward-only config text, verbatim: the core loads it, the form listener forwards to its next hop, no engine outbound exists, nothing is downloaded', gate, async (t) => {
+  const { m, ports, g } = await loadVerbatim(t, { on: false })
+  assert.equal((await viaProxy(ports.form, `127.0.0.1:${ports.origin}`)).body, 'origin-ok', 'MATCH -> asight-up-<g> (direct)')
+  assert.equal((await m.ctl('GET', `/proxies/asight-up-${g}`)).status, 200)
+  assert.equal((await m.ctl('GET', `/proxies/asight-in-${g}`)).status, 404, 'the engine is not in the path')
+  assert.equal((await m.ctl('GET', `/proxies/asight-fb-${g}`)).status, 404)
+  assert.deepEqual(fs.readdirSync(m.home).sort().filter((f) => !['asight', 'cache.db', 'config.yaml'].includes(f)), [], 'no geodata or other file appeared in the home')
+})
+
+test('W57 the on config text, verbatim, with a dotted id: the core loads it; the select starts at PASS; the fallback group exists; the file provider reads the route file the block ships; with the engine down the group probes to the re-entry point', gate, async (t) => {
+  const { m, ports, g, files } = await loadVerbatim(t, { on: true })
+  const sw = (await m.ctl('GET', `/proxies/asight-sw-${g}`)).json()
+  assert.equal(sw.now, 'PASS', 'PASS first: the daemon turns the form on')
+  assert.deepEqual(sw.all, ['PASS', `asight-fb-${g}`])
+  const fb = (await m.ctl('GET', `/proxies/asight-fb-${g}`)).json()
+  assert.equal(fb.type, 'Fallback'); assert.deepEqual(fb.all, [`asight-in-${g}`, `asight-re-${g}`])
+  const routeLines = Object.values(files)[0].split('\n').filter(Boolean).length
+  assert.ok(routeLines >= 1)
+  assert.equal((await m.ctl('GET', '/providers/rules')).json().providers[`asight-r-${g}`].ruleCount, routeLines, 'the provider read the route file')
+  assert.equal((await viaProxy(ports.form, `127.0.0.1:${ports.origin}`)).body, 'origin-ok', 'PASS: the connection continues to MATCH -> asight-up-<g>')
+  // the daemon's refresh after an engine (re)start (4.8 §3.3): the engine is down, the re-entry point answers its own probe, so the group settles on asight-re
+  const url = `http://127.0.0.1:${ports.form}/asight-health/${g}`
+  assert.equal((await m.ctl('GET', `/group/asight-fb-${g}/delay?url=${encodeURIComponent(url)}&timeout=2000`)).status, 200)
+  assert.equal((await m.ctl('GET', `/proxies/asight-fb-${g}`)).json().now, `asight-re-${g}`)
+  assert.equal((await m.ctl('GET', `/proxies/asight-re-${g}`)).json().alive, true)
+  assert.equal((await m.ctl('GET', `/proxies/asight-in-${g}`)).json().alive, false, 'nothing listens on the engine port')
 })
