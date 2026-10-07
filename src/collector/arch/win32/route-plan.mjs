@@ -24,18 +24,23 @@ export function groupsOf(descriptors) {
 
 const text = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null)
 const none = { value: null, noProxy: null }
-// A Windows path is the same path in either slash and any case; the journal records the path as the group's `files(ctx)` gave it, and the same call gives it back.
+// A Windows path is the same path in either slash and any case: the journal records the path as `files(ctx)` gave it at install, and a later ctx may spell it otherwise.
 const norm = (p) => String(p).replace(/\\/g, '/').toLowerCase()
 const getIn = (data, keys) => keys.reduce((cur, k) => (cur !== null && typeof cur === 'object' && !Array.isArray(cur) ? cur[k] : undefined), data)
 const sameKeys = (a, b) => Array.isArray(a) && a.length === b.length && a.every((k, i) => k === b[i])
 
-/** The manifest's record of this group's proxy entry in this file, or null: the entry asight wrote there (not the trust entry of the same file: that one has other keys or other variables). */
-function recordOf(manifest, e, file) {
+/** Is this manifest row the record of the proxy entry `e` that `harness` has (not the trust entry of the same file: that one has other keys or other variables)? */
+const isProxyRecord = (rec, e, harness) => !!rec && typeof rec === 'object' && rec.harness === harness && typeof rec.path === 'string'
+  && (e.format === 'json-key' ? sameKeys(rec.keys, e.key) : rec.kind === 'text' && rec.format === 'dotenv-block' && rec.vars != null && Object.hasOwn(rec.vars, e.block.urlVar))
+
+/** The manifest's records of this harness's proxy entry, one per file, the OLDEST (the manifest keeps them in the order asight wrote them: the first holds what the user had, a later one holds asight's own earlier address): a Map from
+ *  the normalised path to the record. Which files these are does not depend on any `files(ctx)`: that list follows the env of whoever asks (CODEX_HOME, CLAUDE_CONFIG_DIR, a running codex), and the install shell's is not the daemon's. */
+function recordsOf(manifest, e, harness) {
+  const out = new Map()
   for (const rec of (manifest && Array.isArray(manifest.entries) ? manifest.entries : [])) {
-    if (!rec || typeof rec.path !== 'string' || norm(rec.path) !== norm(file)) continue
-    if (e.format === 'json-key') { if (sameKeys(rec.keys, e.key)) return rec } else if (rec.kind === 'text' && rec.format === 'dotenv-block' && rec.vars && Object.hasOwn(rec.vars, e.block.urlVar)) return rec
+    if (isProxyRecord(rec, e, harness) && !out.has(norm(rec.path))) out.set(norm(rec.path), rec)
   }
-  return null
+  return out
 }
 
 /** What the journal recorded as the value asight put out of effect: a string for a JSON key, `{ VAR: value }` for a dotenv block. Anything else is that the user had none. */
@@ -62,23 +67,27 @@ function readLive(group, ctx, file) {
 }
 
 /**
- * priorOf({ group, ctx, manifest }) → { value, noProxy, source: 'manifest' | 'file' | null, unknown?: [{ what: 'agent-proxy', reason, detail? }] }
+ * priorOf({ harness, group, ctx, manifest }) → { value, noProxy, source: 'manifest' | 'file' | null, unknown?: [{ what: 'agent-proxy', reason, detail? }] }
  * The proxy the agent has in this group's entry before asight (4.8 §2.2 ①): the text of it (`value`) and of its NO_PROXY (`noProxy`, for a group whose harness names that key). Asight's own entry replaces the
- * value in the file, so once the manifest holds a record of the entry (the journal's `prior_value`) that is the answer, even a null one (the user had none, and the file now holds asight's own address); a file
- * with no record is read as it is. With several files (one per Codex home, per Hermes profile) the first that has a proxy answers, in the order the group lists its files. A file that cannot be read or parsed
- * is `unknown` with a reason from 1.6 §9.4's closed set, and the others are still read.
+ * value in the file, so for every file the manifest holds a record of the entry in (the journal's `prior_value`) that is the answer, even a null one (the user had none, and the file now holds asight's own address);
+ * a file with no record is read as it is. The records are looked up by harness and entry, NOT by `files(ctx)`: that list follows the env of the process that asks, and the daemon that re-plans is not the shell that ran `on`.
+ * The records come first, in the order the manifest holds them (the order asight wrote them), then the files of `files(ctx)` that have none, in the order the group lists them; the first that has a proxy answers.
+ * A file that cannot be read or parsed is `unknown` with a reason from 1.6 §9.4's closed set, and the others are still read.
  * `value` MAY CARRY THE USER'S CREDENTIALS (`http://user:password@host`): it is for `upstreamFor` and for whoever resolves its `auth_ref` (`proxyAuthOf`), and for nothing that prints or records.
  * Only a group whose entry is a file asight writes (`proxyEntry.kind:'file'`) has a prior here: the entry of an opt-in item (a policy value, a shim, a launcher, an app setting) is recorded by the step that writes it (Task 14).
  */
-export function priorOf({ group, ctx, manifest = null } = {}) {
+export function priorOf({ harness, group, ctx, manifest = null } = {}) {
   if (!group || typeof group !== 'object' || !group.proxyEntry) throw new TypeError('priorOf needs the group')
+  if (typeof harness !== 'string' || harness === '') throw new TypeError("priorOf needs the group's harness: the manifest's records say which harness wrote them, and two harnesses have the same kind of entry")
   if (!ctx || typeof ctx.readTextOrError !== 'function') throw new TypeError('priorOf needs the ctx (readTextOrError) that says where the files are')
   const e = group.proxyEntry
   if (e.kind !== 'file') return { ...none, source: null }
+  const records = recordsOf(manifest, e, harness)
+  const live = []
+  for (const file of e.files(ctx)) if (!records.has(norm(file)) && !live.some((f) => norm(f) === norm(file))) live.push(file)
   let source = null
   const unknown = []
-  for (const file of e.files(ctx)) {
-    const rec = recordOf(manifest, e, file)
+  for (const { rec, file } of [...[...records.values()].map((rec) => ({ rec })), ...live.map((file) => ({ file }))]) {
     const got = rec ? fromRecord(rec, group) : readLive(group, ctx, file)
     if (got.unknown) { unknown.push(got.unknown); continue }
     if (rec) source = 'manifest'
@@ -135,7 +144,7 @@ export function planRoutes({ netenv, groups, desired = null, optIns = [], manife
   const seen = observe(procs)
   const out = {}
   for (const { g, harness, group, forms, proxy } of groups) {
-    const prior = priorOf({ group, ctx, manifest })
+    const prior = priorOf({ harness, group, ctx, manifest })
     const answer = upstreamFor({ group, prior: prior.value, noProxy: prior.noProxy, systemProxy: netenv.systemProxy, hkcuEnv: netenv.hkcuEnv, ownPorts: netenv.ownPorts, envNames: (proxy && proxy.env) || [], branches: (proxy && proxy.branches) || [], last: (last && last[g]) || null })
     const gate = entryGate(group, { optedIn: named.has(g) || forms.some((f) => named.has(f.id)), upstreamCredentialed: answer.credentialed === true })
     let reason = null
