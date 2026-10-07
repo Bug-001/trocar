@@ -244,12 +244,19 @@ static int do_attach(void)
 	struct bpf_program *progs[3] = {
 		skel->progs.asight_connect4, skel->progs.asight_connect6, skel->progs.asight_sockops,
 	};
-	for (int i = 0; i < 3; i++) {
+	/* sockops FIRST, then connect4 / connect6. connect4/6 steer a connection from the instant they are attached (and stash its original destination
+	 * under the socket cookie), and only sockops moves that stash to by_port at ACTIVE_ESTABLISHED. With the order the other way round, a connection
+	 * made between the two attaches was steered with no sockops to record where it was going: the engine accepted it, found no original destination
+	 * and closed it, a new connection reset in its handshake (S5b; collector-switch S5 on the real daemon). The reverse of do_detach, which removes
+	 * connect4/6 first and sockops last. cg_links keeps its own order: [0]=connect4, [1]=connect6, [2]=sockops. */
+	static const int order[3] = { 2, 0, 1 };
+	for (int n = 0; n < 3; n++) {
+		int i = order[n];
 		if (cg_links[i]) continue; /* idempotent */
 		cg_links[i] = bpf_program__attach_cgroup(progs[i], cg);
 		if (!cg_links[i]) {
 			int err = errno ? -errno : -EINVAL; /* libbpf sets errno on a NULL link */
-			for (int j = 0; j < i; j++) { bpf_link__destroy(cg_links[j]); cg_links[j] = NULL; }
+			for (int j = 0; j < 3; j++) { if (cg_links[j]) { bpf_link__destroy(cg_links[j]); cg_links[j] = NULL; } } /* all or nothing */
 			close(cg);
 			return err;
 		}
