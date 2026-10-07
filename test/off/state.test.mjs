@@ -43,7 +43,7 @@ test('readStateFile: version 1 (or an old file with no version) comes back migra
 
 test('migrateV1: a field that is not well formed reads as off or absent; policy and extra_hosts are copied only when the old file had them', () => {
   assert.deepEqual(migrateV1({ desired: 'maybe' }, [A], NOW), { version: 2, updated_at: NOW.toISOString(), harnesses: { [A]: { desired: 'off', updated_at: NOW.toISOString() } } })
-  assert.deepEqual(migrateV1({ desired: 'on', policy: 'bogus', extra_hosts: 'x' }, [A], NOW).harnesses[A], { desired: 'on', policy: 'auto', updated_at: NOW.toISOString() })
+  assert.deepEqual(migrateV1({ desired: 'on', policy: 'bogus', extra_hosts: 'x' }, [A], NOW).harnesses[A], { desired: 'on', updated_at: NOW.toISOString() })
   assert.deepEqual(migrateV1({ desired: 'on', extra_hosts: [1, 'a'] }, [], NOW).harnesses, {})
 })
 

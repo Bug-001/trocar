@@ -3,20 +3,16 @@
 // (RFC 4.6 §记录: the board never reads flows/, so these are never mistaken for envelopes). appendEvent writes with its
 // own descriptor, so a record store whose files broke can still report that it broke. `asight collector status` and
 // the board read them back through src/health/ (captureHealth), also when no daemon is running.
-import nodeFs from 'node:fs'
-import path from 'node:path'
+import { appendFlowEvent } from '../../off/events.mjs'
 import { isFailure, UNFOLDED_CODES } from '../../health/codes.mjs'
 import { readFlows } from '../../health/flows.mjs'
 
 // The closed sets and the failure / expected split live in src/health/codes.mjs (D38: writers and readers share them).
 export { isFailure }
 
-// `day` (YYYY-MM-DD): the file to write, when the caller keeps a day that never goes back (the daemon's recorder)
-export function appendEvent(dir, rec, { now = new Date(), day = null, fs = nodeFs } = {}) {
-  const file = path.join(dir, 'flows', `${day || now.toISOString().slice(0, 10)}.ndjson`)
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-  fs.appendFileSync(file, JSON.stringify({ ts: now.toISOString(), ...rec }) + '\n', { mode: 0o600 })
-}
+// The line writer is src/off/events.mjs (`asight off` writes the same lines without this directory, 1.6 R3). `day` (YYYY-MM-DD): the file to write,
+// when the caller keeps a day that never goes back (the daemon's recorder)
+export const appendEvent = appendFlowEvent
 
 // The failure records in flows/, read the way `asight collector status` and the board read them (src/health/flows.mjs:
 // sealed day files too; an unreadable flows/ throws, never "no failures"), oldest first.

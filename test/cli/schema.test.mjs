@@ -2,7 +2,7 @@
 // check V9 runs over every command's output. Each rule has a bad input that makes it say so (0.1 §3: a check must be able to fail).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, newReceipt, validateReceipt } from '../../src/cli/schema.mjs'
+import { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, newReceipt, validateReceipt, validateTopology, ROUTING, TOPOLOGY_KINDS, TOPOLOGY_VIA, UNKNOWN_REASONS, FINDING_CLASSES } from '../../src/cli/schema.mjs'
 import * as off from '../../src/off/schema.mjs'
 
 const mutate = (fn, command = 'off') => { const r = newReceipt(command); fn(r); return r }
@@ -129,4 +129,58 @@ test('receipt schema: a harness field anywhere in the receipt is a canonical id 
 test('receipt schema: a receipt that went through JSON.stringify and back still validates (what --json prints)', () => {
   const r = newReceipt('status'); r.linger = 'unknown'; r.relayed = 'unknown'; r.restart.push({ harness: 'codex', pid: 1 })
   assert.deepEqual(validateReceipt(JSON.parse(JSON.stringify(r))), [])
+})
+
+// ── the topology (1.6 §9.4, V43): the closed sets are the spec's, and each rule of validateTopology has an input that breaks it ─────────────────────────────────────────────────────────────────────────
+test('topology schema: the closed sets are the ones of 1.6 §9.4, proxy mode and the old capture included, so the Windows branch adds none', () => {
+  assert.deepEqual([...ROUTING], ['driver', 'proxy', 'legacy', 'none', 'unknown'])
+  assert.deepEqual([...TOPOLOGY_KINDS], ['agent', 'proxy', 'asight-engine', 'asight-forwarder', 'legacy-mitm', 'upstream', 'egress', 'unknown'])
+  assert.deepEqual([...TOPOLOGY_VIA], ['direct', 'proxy-http', 'proxy-socks', 'proxy-https', 'system-proxy', 'tun', 'ebpf', 'forward', 'egress', 'unknown'])
+  assert.deepEqual([...UNKNOWN_REASONS], ['denied', 'timeout', 'absent', 'unparseable', 'owner-unreadable', 'pac', 'controller-unreadable', 'kernel-filter-invisible', 'env-unreadable'])
+  assert.deepEqual([...FINDING_CLASSES], ['failure', 'expected', 'hint'])
+})
+
+test('validateTopology: a topology is valid, and every rule has a bad input that says so', () => {
+  const good = () => ({ 'claude-code': {
+    routing: 'driver', on_path: true, captured: true, reason: null,
+    nodes: [{ id: 'a', kind: 'agent', name: 'claude', pid: 4121 }, { id: 'e', kind: 'asight-engine', name: 'asight 引擎', port: 47123, asight: true }, { id: 'p', kind: 'proxy', name: 'mihomo', product: 'mihomo', port: 7890 }, { id: 'x', kind: 'egress', name: '出口' }],
+    edges: [{ from: 'a', to: 'e', via: 'ebpf' }, { from: 'e', to: 'p', via: 'proxy-http' }, { from: 'a', to: 'p', via: 'proxy-http' }, { from: 'p', to: 'x', via: 'egress' }],
+    branches: [{ name: 'all', path: ['a', 'e', 'p', 'x'], off_path: ['a', 'p', 'x'], on_path: true, captured: true, reason: null }],
+    running: [{ pid: 3990, path: ['a', 'p', 'x'], note: 'start-time-settings' }],
+  } })
+  assert.deepEqual(validateTopology(good()), [])
+  const bad = (name, fn, re) => { const t = good(); fn(t['claude-code']); assert.match(validateTopology(t).join('; '), re, name) }
+  bad('routing', (x) => { x.routing = 'mixed' }, /routing: "mixed"/)
+  bad('node kind', (x) => { x.nodes[1].kind = 'vpn-block' }, /kind: "vpn-block"/)
+  bad('node name', (x) => { x.nodes[0].name = '' }, /name: empty/)
+  bad('edge to nowhere', (x) => { x.edges[0].to = 'zz' }, /from \/ to is not a node/)
+  bad('edge via', (x) => { x.edges[0].via = 'wormhole' }, /via: "wormhole"/)
+  bad('unknown reason', (x) => { x.nodes[2].unknown = { reason: 'because' } }, /unknown\.reason: "because"/)
+  bad('first node of a path', (x) => { x.branches[0].path = [x.branches[0].path[1], x.branches[0].path[0]] }, /first node is not the agent/)
+  bad('a node twice', (x) => { x.branches[0].path = [...x.branches[0].path, x.branches[0].path[1]] }, /a node is on the path twice/)
+  bad('a path through a missing node', (x) => { x.branches[0].off_path = ['a', 'nope'] }, /nope is not a node/)
+  bad('branch name', (x) => { x.branches[0].name = 'tcp' }, /branches\[0\]\.name/)
+  bad('a running process', (x) => { x.running[0].note = 'sleeping' }, /running\[0\]: needs pid and a note/)
+  bad('on_path', (x) => { x.on_path = 'maybe' }, /on_path: not true, false or null/)
+  bad('reason', (x) => { x.reason = 'because' }, /reason: "because" is not null or a status reason/)
+  const t = good(); t.claude = t['claude-code']; delete t['claude-code']
+  assert.match(validateTopology(t).join('; '), /"claude" is not a harness id/)
+  assert.deepEqual(validateTopology(null), ['topology: not an object'])
+})
+
+test('validateFinding (1.6 §9.6, V49): a code in the closed sets, a class, a what and a why that say something, commands that are whole lines with a known shell and no <…>, a verify; a hint may have no command, a failure may not', async () => {
+  const { validateFinding } = await import('../../src/cli/schema.mjs')
+  const ok = { code: 'proxy-dead', class: 'failure', harness: 'codex', what: 'w', why: 'y', commands: [{ run: 'asight status codex', shell: 'sh' }], verify: 'v' }
+  assert.deepEqual(validateFinding(ok), [])
+  assert.deepEqual(validateFinding({ ...ok, class: 'hint', commands: [] }), [])
+  const bad = (over) => validateFinding({ ...ok, ...over })
+  assert.match(bad({ code: 'nope' })[0], /code/)
+  assert.match(bad({ class: 'loud' })[0], /class/)
+  assert.match(bad({ harness: 'cod' })[0], /harness/)
+  assert.match(bad({ what: ' ' })[0], /what/)
+  assert.match(bad({ verify: '' })[0], /verify/)
+  assert.match(bad({ commands: [] })[0], /says what to do/)
+  assert.match(bad({ commands: [{ run: 'kill <pid>', shell: 'sh' }] })[0], /placeholder/)
+  assert.match(bad({ commands: [{ run: 'x', shell: 'zsh' }] })[0], /shell/)
+  assert.match(validateFinding(null)[0], /not an object/)
 })

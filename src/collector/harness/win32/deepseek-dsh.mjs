@@ -7,7 +7,7 @@
 // the plugin): `- insert: [{id: asight-ca, name: ./asight-ca.mjs}]`. The plugin (plugins/win32/dsh.mjs) adds nothing on Node < 22.19 or under --use-openssl-ca.
 import path from 'node:path'
 import { expandHome } from '../../core/config-read.mjs'
-import { lineComment } from '../../core/trust/text-edit.mjs'
+import { lineComment } from '../../../off/text-edit.mjs'
 import { renderPlugin } from '../_plugins.mjs'
 import { fwd } from './_paths.mjs'
 

@@ -7,6 +7,7 @@ import net from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { markClosed } from '../../src/raw/closed.mjs';
+import { osStubs } from '../helpers/os-stubs.mjs'; // on a Mac `doctor`'s status block asks launchd and the keychain (read-only): stubs answer (0.1 §3)
 import { conversation, envelope, toLine, writeShard, listFiles } from './helpers.mjs';
 
 // E2 / E8 / E9 through the PRODUCT layout and the CLI only (review F2): a collector shard in
@@ -16,7 +17,7 @@ import { conversation, envelope, toLine, writeShard, listFiles } from './helpers
 // are the continuation of a shard that lived in the served directory (0.2 状态表 「封存文件」).
 // helpers.mjs points HOME at a sandbox; every spawned CLI gets that HOME.
 const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'bin', 'asight.mjs');
-const env = { ...process.env, ASIGHT_SOURCE: '', ASIGHT_DB: path.join(os.homedir(), 'no.duckdb') };
+const env = { ...process.env, PATH: osStubs().path, ASIGHT_SOURCE: '', ASIGHT_DB: path.join(os.homedir(), 'no.duckdb') };
 const cli = (...a) => spawnSync(process.execPath, [BIN, ...a], { encoding: 'utf8', env });
 const A = 'aaaaaaaa-1111-4111-8111-11111111111a', B = 'bbbbbbbb-2222-4222-8222-22222222222b';
 

@@ -20,6 +20,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { spawnSync } from 'node:child_process'
+import { execTool } from '../../../off/exec.mjs'
 
 export const DEFAULTS = {
   helperDir: '/usr/local/libexec/asight',
@@ -53,6 +54,21 @@ function mountOptions(p) {
     }
   }
   return best
+}
+
+// Is the capability helper there for `asight on` to attach with? (1.6 §5「助手缺失或版本不对」: on attaches nothing and says `sudo asight setup-helper`.)
+// → { ok: true } | { ok: false, reason }: the file is at its fixed path, a regular executable, and carries the file capabilities (`getcap`, through
+// src/off/exec.mjs: a test injects `run`; a machine without getcap is not a refusal — the capabilities are then unchecked, not missing). What this does
+// NOT ask is the protocol version: that needs the loader to run, which only the daemon does; a helper of another protocol is refused by the daemon at start
+// (`helper-version-mismatch`) and `asight on` reports it from the daemon's answer.
+export function helperState({ cfg = DEFAULTS, run = null, fsys = fs } = {}) {
+  let st
+  try { st = fsys.statSync(cfg.helperBin) } catch (e) { return { ok: false, reason: `${cfg.helperBin} is not there (${e.code || e.message})` } }
+  if (!st.isFile()) return { ok: false, reason: `${cfg.helperBin} is not a regular file` }
+  try { fsys.accessSync(cfg.helperBin, fs.constants.X_OK) } catch { return { ok: false, reason: `${cfg.helperBin} is not executable by this user` } }
+  const caps = execTool('getcap', [cfg.helperBin], { run })
+  if (caps.code === 0 && !/cap_bpf/.test(caps.out)) return { ok: false, reason: `${cfg.helperBin} has no file capabilities (getcap: ${caps.out || 'none'})` }
+  return { ok: true }
 }
 
 // ---- root helper (once per machine) --------------------------------------------------------

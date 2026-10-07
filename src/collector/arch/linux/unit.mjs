@@ -2,9 +2,9 @@
 // 单元」, D36). Listed in the install manifest like every other file asight writes; enabled with --now so the
 // daemon starts at once and at every login. MUST NOT set NoNewPrivileges or CapabilityBoundingSet: the helper is a
 // file-capability exec and either would strip its capabilities.
-import fs from 'node:fs'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { execTool } from '../../../off/exec.mjs'
+import { removeWantsLinks } from '../../../off/autostart.mjs'
 
 export const UNIT_NAME = 'asight-collector.service'
 export const unitPath = (home) => path.join(home, '.config', 'systemd', 'user', UNIT_NAME)
@@ -20,29 +20,34 @@ export function unitText({ node, script, env = {} }) {
   return [
     '[Unit]', 'Description=asight transparent collector (per user)', '',
     '[Service]', 'Type=simple', ...Object.entries(env).map(([k, v]) => `Environment="${esc(`${k}=${v}`)}"`),
-    `ExecStart=${quoteExec(node)} ${quoteExec(script)} collector start`, 'Restart=on-failure', 'RestartSec=2', '',
+    `ExecStart=${quoteExec(node)} ${quoteExec(script)} daemon`, 'Restart=on-failure', 'RestartSec=2', '',
     '[Install]', 'WantedBy=default.target', '',
   ].join('\n')
 }
 
-export function systemctl(args, { run = spawnSync } = {}) {
-  const r = run('systemctl', ['--user', ...args], { encoding: 'utf8' })
-  return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || (r.error && r.error.message) || '').trim() }
+// `run` is the injected runner (a test's recording fake: spawnSync-shaped); without one this is a real `systemctl --user` — except under `npm test`,
+// where src/off/exec.mjs refuses a real tool (0.1 §3). A systemctl that could not start is `code: null` with the reason in `err`.
+export function systemctl(args, { run = null, env = process.env } = {}) {
+  return execTool('systemctl', ['--user', ...args], { run, env })
 }
 
-// The wants/ symlinks `enable` created; `disable` removes them, this catches the ones left when systemd --user was down.
-// onError(path, err): a link that is there but cannot be removed (D38: the caller records it).
-export function removeWantsLinks(home, { onError = () => {} } = {}) {
-  const dir = path.dirname(unitPath(home))
-  const gone = []
-  for (const d of (() => { try { return fs.readdirSync(dir) } catch { return [] } })()) {
-    if (!d.endsWith('.wants')) continue
-    const link = path.join(dir, d, UNIT_NAME)
-    let st = null
-    try { st = fs.lstatSync(link) } catch { continue } // absent
-    if (!st.isSymbolicLink()) continue
-    try { fs.rmSync(link); gone.push(link) } catch (e) { onError(link, e); continue }
-    try { fs.rmdirSync(path.join(dir, d)) } catch { /* not empty: other units' links */ }
+// The wants/ symlinks `enable` created are src/off/autostart.mjs (`asight off` removes them without this directory, 1.6 R3).
+export { removeWantsLinks } from '../../../off/autostart.mjs'
+
+// The unit as `asight on` / `uninstall` (src/collector/install.mjs) consume it: the data (where it is, the link `enable` makes, its text for a
+// given daemon environment) and the few systemctl verbs they need, each returning { code, out, err }. 1.6 §2: `on` enables AND starts it (`enable
+// --now`) when no daemon answers, only enables when one does (拉起不是重启: a daemon someone started by hand is never started a second time), and
+// with `--no-autostart` only starts it (`start`: this run, nothing at login). `reload` is for a unit file rewritten under a loaded unit.
+export function userUnit({ home, node, script, run = null, env = process.env }) {
+  const sc = (args) => systemctl(args, { run, env })
+  return {
+    name: UNIT_NAME, path: unitPath(home), links: [wantsLink(home)],
+    text: (e) => unitText({ node, script, env: e }),
+    enable: ({ now = true } = {}) => sc(now ? ['enable', '--now', UNIT_NAME] : ['enable', UNIT_NAME]),
+    start: () => sc(['start', UNIT_NAME]),
+    reload: () => sc(['daemon-reload']),
+    disable: () => sc(['disable', '--now', UNIT_NAME]),
+    stop: () => sc(['stop', UNIT_NAME]),
+    removeWants: (onError) => removeWantsLinks(home, { onError }),
   }
-  return gone
 }

@@ -1,7 +1,7 @@
 // test/health/codes.test.mjs — the D38 closed sets (RFC 4.6 §记录「失败不静默」, src/health/codes.mjs): every name a
 // collector writer puts in `event` / `where` / `code` / `not_captured` is in the set (a static scan of src/collector,
 // proven able to fail on a planted file); the failure / expected split; checkRecord; and the 0.1 §2 dependency rule
-// for src/health (node built-ins, src/paths.mjs, src/raw/ only). The Windows collector's names (RFC 4.8 §12, W38): ROUTE_*,
+// for src/health (node built-ins, src/paths.mjs, src/raw/ and src/off/proc.mjs only). The Windows collector's names (RFC 4.8 §12, W38): ROUTE_*,
 // the NET_* names it shares with 4.7 / 1.6, CAPTURE_KINDS.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -10,7 +10,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as closedSets from '../../src/health/codes.mjs'
-import { NOT_CAPTURED_FAILURE, NOT_CAPTURED_EXPECTED, FAILURE_EVENTS, STATE_EVENTS, CODES, TRUST_REASONS, OFF_WHERE, OFF_EVENTS, OFF_CODES, ROUTE_WHERE, ROUTE_EVENTS, ROUTE_CODES, ROUTE_FAILURE_CODES, ROUTE_TRUST_REASONS, ROUTE_STATUS_REASONS, NET_WHERE, NET_CODES, NET_FAILURE_CODES, CAPTURE_KINDS, isFailure, isCode, isEvent, isWhere, notCapturedClass, checkRecord } from '../../src/health/codes.mjs'
+import { NOT_CAPTURED_FAILURE, NOT_CAPTURED_EXPECTED, FAILURE_EVENTS, STATE_EVENTS, CODES, TRUST_REASONS, OFF_WHERE, OFF_EVENTS, OFF_CODES, ROUTE_WHERE, ROUTE_EVENTS, ROUTE_CODES, ROUTE_FAILURE_CODES, ROUTE_TRUST_REASONS, ROUTE_STATUS_REASONS, NET_WHERE, NET_EVENTS, NET_CODES, NET_FAILURE_CODES, STATUS_REASONS, CAPTURE_KINDS, isFailure, isCode, isEvent, isWhere, notCapturedClass, checkRecord } from '../../src/health/codes.mjs'
 import { WHERE_OFF, EVENT_OFF_NOTE, CODE_OFF } from '../../src/off/names.mjs'
 import { EVENT, CODE, TRUST_REASON } from '../../src/collector/core/codes.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
@@ -23,7 +23,7 @@ const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e
 function literals(root) {
   const out = []
   // src/capture: the old capture's event writers (RFC 4.1 过渡期, D38) use the same names; src/off and src/cli (RFC 1.6, D39⑦) write `off`'s;
-  // src/netenv (RFC 4.7, 4.8 §12) writes the drift and routing failures of the VPN / forwarder side
+  // src/netenv (RFC 4.7, 4.8 §12) writes the drift and routing failures of the VPN / forwarder side, and `netenv-change` (1.6 §9.7)
   const more = ['capture', 'off', 'cli', 'netenv'].flatMap((d) => (fs.existsSync(path.join(root, 'src', d)) ? walk(path.join(root, 'src', d)) : []))
   for (const f of [...walk(path.join(root, 'src', 'collector')), ...more]) {
     const src = fs.readFileSync(f, 'utf8')
@@ -94,14 +94,14 @@ test('D38 checkRecord: names outside the set, a failure without a reason; errno 
   assert.ok(CODES.includes('lookup-miss') && CODES.includes('ca-invalid'))
 })
 
-test('0.1 §2 src/health imports only node built-ins, src/paths.mjs and src/raw/', () => {
+test('0.1 §2 src/health imports only node built-ins, src/paths.mjs, src/raw/ and src/off/proc.mjs', () => {
   const dir = path.join(REPO, 'src', 'health')
   for (const f of walk(dir)) {
     for (const m of fs.readFileSync(f, 'utf8').matchAll(/\bfrom\s*'([^']+)'|\bimport\s*\(\s*'([^']+)'\s*\)/g)) {
       const spec = m[1] || m[2]
       if (spec.startsWith('node:')) continue
       const to = path.relative(REPO, path.resolve(path.dirname(f), spec)).split(path.sep).join('/')
-      assert.ok(to === 'src/paths.mjs' || to.startsWith('src/raw/') || to.startsWith('src/health/'), `${path.relative(REPO, f)} imports ${to}`)
+      assert.ok(to === 'src/paths.mjs' || to === 'src/off/proc.mjs' || to.startsWith('src/raw/') || to.startsWith('src/health/'), `${path.relative(REPO, f)} imports ${to}`)
     }
   }
 })
@@ -234,10 +234,12 @@ test('W38 the names shared with 1.6 §9.7 and 4.7 §5 are defined once: one bloc
   assert.ok(isWhere('netenv'))
 })
 
-test('W38 the 4.7 §5 / 1.6 §9.7 netenv codes: the failure class writes a failure event, the notice class (egress-differs) never does', () => {
-  assert.deepEqual(NET_CODES.filter((c) => !NET_FAILURE_CODES.includes(c)).sort(), ['egress-differs'], '提示 class: status / doctor only')
-  assert.deepEqual([...NET_FAILURE_CODES].sort(), ['forwarder-down', 'route-loop'])
-  for (const code of NET_FAILURE_CODES) assert.deepEqual(checkRecord({ event: 'failure', where: 'netenv', code, reason: 'why' }), [], code)
+test('W38 the three names 4.7 §5 and 1.6 §9.7 share: route-loop and forwarder-down are the failure class (a failure event), egress-differs the notice class (status and doctor only, never a failure event)', () => {
+  assert.deepEqual(['route-loop', 'forwarder-down'].filter((c) => !NET_FAILURE_CODES.includes(c)), [], 'the failure class')
+  assert.ok(NET_CODES.includes('egress-differs') && !NET_FAILURE_CODES.includes('egress-differs'), '提示 class: status / doctor only')
+  for (const code of ['route-loop', 'forwarder-down']) assert.deepEqual(checkRecord({ event: 'failure', where: 'netenv', code, reason: 'why' }), [], code)
+  assert.deepEqual(checkRecord({ event: 'netenv-change', where: 'netenv', harness: 'codex', code: 'egress-differs', from: 'a', to: 'b' }), [], 'a notice rides a state change, which is no failure')
+  assert.equal(isFailure({ event: 'netenv-change', where: 'netenv', code: 'egress-differs' }), false)
 })
 
 test('W38 the sets still reject a name beside the Windows ones (the check can fail)', () => {
@@ -247,9 +249,41 @@ test('W38 the sets still reject a name beside the Windows ones (the check can fa
   assert.deepEqual(checkRecord({ event: 'failure', where: 'netenv', code: 'route-lost', reason: 'x' }), ['code "route-lost"'])
 })
 
-// The status reason set (1.6 §2) is CLI plan task 9's; until it lands here there is nothing to hold the Windows reasons against.
-// The moment it does, this goes from skipped to a check: its list must take the Windows reasons and trust reasons in.
-test('W38 seam: STATUS_REASONS, once it exists, includes the Windows status reasons and trust reasons', (t) => {
-  if (!Array.isArray(closedSets.STATUS_REASONS)) return t.skip('STATUS_REASONS is not on this branch yet (CLI plan task 9): spread ROUTE_STATUS_REASONS and ROUTE_TRUST_REASONS into it when it lands')
-  for (const r of [...ROUTE_STATUS_REASONS, ...ROUTE_TRUST_REASONS]) assert.ok(closedSets.STATUS_REASONS.includes(r), r)
+// The status reason set (1.6 §2, CLI plan task 9): its list takes the Windows status reasons and trust reasons in (4.8 §2.3, §5.4, §6.3, §12).
+test('W38: STATUS_REASONS includes the Windows status reasons and trust reasons', () => {
+  assert.ok(Array.isArray(closedSets.STATUS_REASONS) && closedSets.STATUS_REASONS === STATUS_REASONS)
+  for (const r of [...ROUTE_STATUS_REASONS, ...ROUTE_TRUST_REASONS]) assert.ok(STATUS_REASONS.includes(r), r)
+  for (const r of ['not-routed', 'desired-off', 'negative-cache']) assert.ok(STATUS_REASONS.includes(r), `${r} is still one`)
+  assert.equal(new Set(STATUS_REASONS).size, STATUS_REASONS.length, 'no name twice')
+})
+
+// D39⑩ / D43 (RFC 1.6 §9.7, V53): the names the network topology and `doctor` use. A block of its own, like OFF_* and ROUTE_*.
+const NET_LIST = ['not-routed', 'proxy-changed', 'proxy-dead', 'proxy-unsupported', 'netenv-changed', 'elevated-agent', 'forwarder-down', 'upstream-unreachable', 'egress-differs', 'opt-in-needed', 'shim-not-on-path', 'not-via-entry', 'needs-admin', 'linger-off', 'system-proxy-pac', 'other-redirector', 'fake-ip', 'inferred-behaviour', 'cause-unknown', 'route-loop']
+test('V53: the net names are the 1.6 §9.7 list (route-loop, shared with 4.7, once), isCode knows each, and the records they go on pass checkRecord', () => {
+  assert.deepEqual(NET_WHERE, ['netenv'])
+  assert.deepEqual(NET_EVENTS, ['netenv-change'])
+  assert.deepEqual([...NET_CODES].sort(), [...NET_LIST].sort())
+  for (const c of NET_CODES) {
+    assert.ok(isCode(c), c)
+    assert.deepEqual(checkRecord({ event: 'netenv-change', where: 'netenv', harness: 'codex', code: c, from: 'a', to: 'b' }), [], c)
+  }
+  for (const c of NET_FAILURE_CODES) assert.deepEqual(checkRecord({ event: 'failure', where: 'netenv', code: c, reason: 'x' }), [], c)
+  assert.deepEqual([...NET_FAILURE_CODES].sort(), ['elevated-agent', 'forwarder-down', 'not-routed', 'not-via-entry', 'proxy-dead', 'proxy-unsupported', 'route-loop', 'shim-not-on-path', 'upstream-unreachable'])
+  for (const c of NET_FAILURE_CODES) assert.ok(NET_CODES.includes(c), `${c} is a net code`)
+  assert.equal(isFailure({ event: 'netenv-change', where: 'netenv', code: 'proxy-changed' }), false, 'a netenv-change is a state change: the indicator turns on a failure event only')
+  assert.ok(!FAILURE_EVENTS.includes('netenv-change'))
+  assert.deepEqual(checkRecord({ event: 'netenv-chang', where: 'netenvv', code: 'proxy-lost' }), ['event "netenv-chang"', 'where "netenvv"', 'code "proxy-lost"'], 'the check can still fail')
+})
+
+test('V53: the status reasons gain the nine 1.6 §9.7 names (the proxy-mode ones are the Windows branch\'s)', () => {
+  for (const r of ['not-routed', 'proxy-changed', 'elevated-agent', 'forwarder-down', 'upstream-unreachable', 'route-loop', 'opt-in-needed', 'shim-not-on-path', 'not-via-entry']) assert.ok(STATUS_REASONS.includes(r), r)
+  for (const r of ['desired-off', 'config-after-start', 'negative-cache']) assert.ok(STATUS_REASONS.includes(r), `${r} is still one`)
+})
+
+test('V53 (D43): the names 4.7 and 4.8 share are defined once in src/health/codes.mjs, and the withdrawn VPN-block names are nowhere in src/', () => {
+  const text = fs.readFileSync(path.join(REPO, 'src', 'health', 'codes.mjs'), 'utf8')
+  for (const name of ['route-loop', 'forwarder-down', 'egress-differs']) assert.equal(text.split(`'${name}'`).length - 1, 1, `${name} occurs once in src/health/codes.mjs`)
+  const all = walk(path.join(REPO, 'src')).map((f) => [path.relative(REPO, f), fs.readFileSync(f, 'utf8')])
+  assert.ok(all.length > 50, 'the scan sees src/')
+  for (const needle of ['clash-mode-bypass', 'vpn-block-']) assert.deepEqual(all.filter(([, t]) => t.includes(needle)).map(([f]) => f), [], `${needle} is withdrawn (D43): in no set, in no file`)
 })

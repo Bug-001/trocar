@@ -1,10 +1,10 @@
-// test/collector/core/text-edit.test.mjs — the sentinel block and sentinel line asight writes into comment-capable
+// test/off/text-edit.test.mjs — the sentinel block and sentinel line asight writes into comment-capable
 // files (RFC 4.6 §身份与信任「标记与安装」「同名键」, §安装清单与卸载「撤一个文件的规则」; T10 / T11 text parts).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { applyOps, reverseOps } from '../../../src/collector/core/trust/json-text.mjs'
-import { parseDotenv } from '../../../src/collector/core/config-read.mjs'
-import { dotenvBlock, insertLine, removeAsightText, onlySkeleton, BLOCK_BEGIN, BLOCK_END, OFF_PREFIX, SENTINEL, lineComment } from '../../../src/collector/core/trust/text-edit.mjs'
+import { applyOps, reverseOps } from '../../src/off/json-text.mjs'
+import { dotenvBlock, insertLine, removeAsightText, asightResidue, onlySkeleton, BLOCK_BEGIN, BLOCK_END, OFF_PREFIX, SENTINEL, lineComment } from '../../src/off/text-edit.mjs'
+import { parseDotenv } from '../../src/collector/core/config-read.mjs'
 
 const B = '/h/.asight/collector/ca/combined-x.pem'
 
@@ -73,6 +73,56 @@ test('text-edit: after the user edited the file, only asight\'s block / lines go
   assert.ok(SENTINEL.length > 0 && BLOCK_END.includes(SENTINEL))
 })
 
+// The audit's HIGH finding (semantics 1): the removal read only the exact bytes asight wrote, so a file an editor had touched (CRLF, trailing blanks, an `export`) reported
+// "asight's text is no longer in this file" while the assignment was still there — and `off` then deleted the bundle it named.
+test('text-edit: asight\'s block is found the way an editor leaves it — CRLF, blanks, indent, `export`, spaces around =, quotes, a trailing comment, a BOM, a copy — and the user\'s own lines stay', () => {
+  const user = 'KEY=sk-secret\nSSL_CERT_FILE=/corp/ca.pem\n'
+  const r = dotenvBlock(user, { SSL_CERT_FILE: B })
+  const asLF = r.text
+  const forms = {
+    crlf: (t) => t.replace(/\n/g, '\r\n'),
+    'trailing blanks': (t) => t.replace(/\n/g, ' \t\n'),
+    indent: (t) => t.replace(/^(?=.)/gm, '  '),
+    export: (t) => t.replace(/^SSL_CERT_FILE=/m, 'export SSL_CERT_FILE='),
+    'spaces around =': (t) => t.replace(new RegExp(`^SSL_CERT_FILE=${B}`, 'm'), `SSL_CERT_FILE = ${B}`),
+    'double quotes': (t) => t.replace(`SSL_CERT_FILE=${B}`, `SSL_CERT_FILE="${B}"`),
+    'single quotes + comment': (t) => t.replace(`SSL_CERT_FILE=${B}`, `SSL_CERT_FILE='${B}'  # mine`),
+    BOM: (t) => `\uFEFF${t}`,
+  }
+  for (const [name, edit] of Object.entries(forms)) {
+    const edited = edit(asLF)
+    if (name !== 'BOM') assert.equal(reverseOps(edited, r.ops), null, `${name}: the plain reverse refuses a file that is not what asight wrote`)
+    const out = removeAsightText(edited, r.ops)
+    assert.equal(out.found, true, name)
+    assert.ok(!out.text.includes(B) && !out.text.includes(BLOCK_BEGIN) && !out.text.includes(BLOCK_END), `${name}: nothing of asight's is left: ${JSON.stringify(out.text)}`)
+    assert.deepEqual(asightResidue(out.text, { vars: { SSL_CERT_FILE: B } }), [], name)
+    const own = out.text.replace(/\r/g, '').split('\n').map((l) => l.trim()).filter(Boolean)
+    assert.deepEqual(own.map((l) => l.replace(/^\uFEFF/, '')), ['KEY=sk-secret', 'SSL_CERT_FILE=/corp/ca.pem'], `${name}: the user's own lines stay, the one asight put out of effect is back in effect`)
+  }
+  // a BOM is the file's, not asight's: it stays where it was
+  assert.ok(removeAsightText(`\uFEFF${asLF}`, r.ops).text.startsWith('\uFEFFKEY=sk-secret'))
+  // a copy of the assignment (the user pasted the block twice): an agent that reads the last one would still get the bundle, so every one goes
+  const twice = `${asLF}${asLF.split('\n').slice(1, 2).join('\n')}\n`
+  assert.equal((twice.match(new RegExp(B, 'g')) || []).length, 2)
+  assert.ok(!removeAsightText(twice, r.ops).text.includes(B))
+  // the value of the same key the USER set is not asight's: another path stays untouched
+  const own = `${asLF}SSL_CERT_FILE=${B}.mine\n`
+  assert.ok(removeAsightText(own, r.ops).text.includes(`SSL_CERT_FILE=${B}.mine`))
+  // the last line without a newline: the line before keeps its own
+  assert.equal(removeAsightText(`A=1\nSSL_CERT_FILE=${B}`, [{ offset: 0, removed: '', inserted: `${BLOCK_BEGIN}\nSSL_CERT_FILE=${B}\n${BLOCK_END}\n` }]).text, 'A=1\n')
+})
+
+test('text-edit: asightResidue names the lines (outside comments) that still hold a path asight put there — a dotenv value, an asight path in a rc line or a YAML row — and nothing else', () => {
+  const vars = { SSL_CERT_FILE: B, HERMES_CA_BUNDLE: B }
+  assert.deepEqual(asightResidue(`A=1\nSSL_CERT_FILE=${B};\n# was ${B}\nB=2\nHERMES_CA_BUNDLE=\${B}\n`, { vars }), [2], 'a form the removal cannot read still names the file; a comment does not')
+  assert.deepEqual(asightResidue('A=1\n', { vars }), [])
+  assert.deepEqual(asightResidue(`A=1\n`, {}), [], 'an entry that names no path of its own has no residue')
+  const row = `- insert: [{ name: "/h/.asight/collector/plugins/dsh/index.js" }] ${lineComment('dsh plugin')}`
+  assert.deepEqual(asightResidue(`- set: {a: 1}\n- insert: [ { name: "/h/.asight/collector/plugins/dsh/index.js" } ]\n`, { line: row }), [2], 'a YAML row the user re-spaced still loads the plugin')
+  assert.deepEqual(asightResidue('- set: {a: 1}\n', { line: row }), [])
+  assert.deepEqual(asightResidue('export PATH="/h/.asight/collector/bin:$PATH"\n', { line: `export PATH="/h/.asight/collector/bin:$PATH" ${lineComment('kimi shim')}` }), [1])
+})
+
 test('text-edit: what counts as only asight\'s skeleton — blank for every format; comments too for a YAML list', () => {
   assert.equal(onlySkeleton('\n  \n', 'line'), true)
   assert.equal(onlySkeleton('# a user comment\n', 'line'), false, 'a comment the user wrote in an rc or .env is theirs')
@@ -117,4 +167,15 @@ test('text-edit: a value with a space is written double-quoted only when the ent
   assert.equal(dotenvBlock('', { SSL_CERT_FILE: B }, { quote: true }).text, `${BLOCK_BEGIN}\nSSL_CERT_FILE=${B}\n${BLOCK_END}\n`, 'nothing to quote: byte for byte the unquoted block')
   for (const bad of ['C:/a "b"/c.pem', 'C:/a b/$HOME.pem', 'C:/a b/`x`.pem', 'C:\\a b\\c.pem', 'C:/a b/c.pem\nX=1', 'C:/a b/c.pem\r']) assert.throws(() => dotenvBlock('', { SSL_CERT_FILE: bad }, { quote: true }), /cannot be written|unquoted absolute paths only/, JSON.stringify(bad))
   assert.equal(dotenvBlock('', { SSL_CERT_FILE: "C:/Users/O'Brien (x86)/ca.pem" }, { quote: true }).text.split('\n')[1], `SSL_CERT_FILE="C:/Users/O'Brien (x86)/ca.pem"`, 'a single quote and brackets are fine inside double quotes')
+})
+
+// D39③ / task 3: the text asight put into users' files before this build must stay recognisable (the sentinel is how an install the
+// manifest has lost, or a standalone asight-off, finds its own block and line — 1.6 R3). Pinned as literals: a test that imports the
+// constants would follow a changed constant and stay green.
+test('text-edit: the sentinel text written into users\' files is exactly what earlier builds wrote', () => {
+  assert.equal(SENTINEL, 'asight collector')
+  assert.equal(BLOCK_BEGIN, '# >>> asight collector >>> written by `asight collector install`; `asight collector uninstall` removes this block')
+  assert.equal(BLOCK_END, '# <<< asight collector <<<')
+  assert.equal(OFF_PREFIX, '#asight-collector-off# ')
+  assert.equal(lineComment('Kimi shim'), '# asight collector: Kimi shim (`asight collector uninstall` removes this line)')
 })

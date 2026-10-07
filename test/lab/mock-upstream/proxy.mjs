@@ -24,6 +24,7 @@ function reader(sock) {
 export async function startMockProxy({ kind = 'connect', target, tls: tlsOpts = null, auth = null, refuse = false, host = '127.0.0.1', port = 0 } = {}) {
   if (!['connect', 'socks4', 'socks5'].includes(kind) || (tlsOpts && kind !== 'connect')) throw new TypeError(`mock proxy: no ${tlsOpts ? 'TLS ' : ''}kind ${kind}`)
   const log = []
+  const peers = [] // { conn, peer_port }: where each connection came from (the client's local port), for a lab that must tell the engine's dial from the agent's own; `log` is the prelude's and stays as it was
   const open = new Set() // every socket we hold, so close() never waits on a half-closed tunnel
   let n = 0
   async function onConn(sock) {
@@ -33,6 +34,7 @@ export async function startMockProxy({ kind = 'connect', target, tls: tlsOpts = 
     const take = async (p) => { const b = await p; got.push(b); return b }
     const send = (b) => { const x = Buffer.from(b); sent.push(x); sock.write(x) }
     const entry = { type: 'prelude', kind, conn: ++n, target: null, ok: false }
+    peers.push({ conn: entry.conn, peer_port: sock.remotePort })
     const done = () => log.push({ ...entry, in_b64: Buffer.concat(got).toString('base64'), out_b64: Buffer.concat(sent).toString('base64') })
     try {
       let ok = !refuse
@@ -80,5 +82,5 @@ export async function startMockProxy({ kind = 'connect', target, tls: tlsOpts = 
   const server = tlsOpts ? tls.createServer(tlsOpts, onConn) : net.createServer(onConn)
   await new Promise((resolve) => server.listen(port, host, resolve))
   const p = server.address().port
-  return { port: p, url: `${tlsOpts ? 'https' : kind === 'connect' ? 'http' : kind}://${host}:${p}`, log, close: () => new Promise((resolve) => { server.close(() => resolve()); for (const s of open) s.destroy() }) }
+  return { port: p, peers, url: `${tlsOpts ? 'https' : kind === 'connect' ? 'http' : kind}://${host}:${p}`, log, close: () => new Promise((resolve) => { server.close(() => resolve()); for (const s of open) s.destroy() }) }
 }

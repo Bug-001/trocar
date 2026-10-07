@@ -40,7 +40,7 @@ export function migrateV1(v1, installedIds, now = new Date()) {
   const at = typeof v1.updated_at === 'string' && v1.updated_at ? v1.updated_at : now.toISOString()
   const one = {
     desired: v1.desired === 'on' ? 'on' : 'off',
-    ...(v1.policy ? { policy: v1.policy === 'all' ? 'all' : 'auto' } : {}),
+    ...(v1.policy === 'all' || v1.policy === 'auto' ? { policy: v1.policy } : {}),
     ...(Array.isArray(v1.extra_hosts) ? { extra_hosts: hostList(v1.extra_hosts) } : {}),
     updated_at: at,
   }

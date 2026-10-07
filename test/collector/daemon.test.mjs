@@ -14,6 +14,7 @@ import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
 import { startDaemon } from '../../src/collector/daemon.mjs'
 import { installCollector } from '../../src/collector/install.mjs'
+import { writeStateAtomic, setDesired, emptyState } from '../../src/off/state.mjs'
 import { controlRequest } from '../../src/collector/core/control.mjs'
 import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
@@ -28,15 +29,17 @@ import { createServer } from '../../src/server.mjs'
 import { serveSource } from '../../src/paths.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
+import { writeNetenv } from '../../src/netenv/index.mjs'
+import { settingSha } from '../../src/netenv/redact.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
 const UID = process.getuid()
 const CC_EXE = '/home/u/.local/share/claude/versions/2.1.289'
 const CODEX_EXE = '/home/u/.local/bin/codex'
-function fakeArch(p, extraEnv = {}) {
+function fakeArch(p, extraEnv = {}, clientOpts = {}) {
   const clients = []
-  const makeClient = () => { const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, ASIGHT_FAKE_LOADER: '1', ...extraEnv }, autoHeartbeatMs: 0 }); clients.push(c); return c }
+  const makeClient = () => { const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, ASIGHT_FAKE_LOADER: '1', ...extraEnv }, autoHeartbeatMs: 0, ...clientOpts }); clients.push(c); return c }
   return { clients, arch: { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: UID }) } }
 }
 function sandbox() {
@@ -67,6 +70,8 @@ async function relay() {
   const ca = createCa({ commonName: 'lab relay CA' })
   const issuer = createLeafIssuer(loadCa(ca))
   const got = []
+  const held = [] // replies withheld while `hold` is set (a response that is slow): release() sends them in order
+  const state = { hold: false }
   const srv = tls.createServer({ SNICallback: (n, cb) => cb(null, issuer.secureContextFor(n)) }, (s) => {
     let buf = Buffer.alloc(0)
     s.on('data', (d) => {
@@ -77,12 +82,13 @@ async function relay() {
         const len = Number(/content-length: (\d+)/i.exec(buf.subarray(0, end).toString('latin1'))[1])
         if (buf.length < end + 4 + len) return
         got.push(buf.subarray(0, end + 4 + len)); buf = buf.subarray(end + 4 + len)
-        s.write(`HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: ${REPLY.length}\r\n\r\n${REPLY}`)
+        const reply = () => { if (s.writable) s.write(`HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: ${REPLY.length}\r\n\r\n${REPLY}`) }
+        if (state.hold) held.push(reply); else reply()
       }
     })
   })
   await new Promise((r) => srv.listen(0, '127.0.0.1', r))
-  return { ca, got, port: srv.address().port, close: () => srv.close() }
+  return { ca, got, port: srv.address().port, hold: () => { state.hold = true }, release: () => { state.hold = false; while (held.length) held.shift()() }, close: () => srv.close() }
 }
 
 test('daemon: CC trusted through the installed settings key is decrypted and recorded verbatim; the board serves it from its default source; off stops recording (S2/S1/T7 unit)', async () => {
@@ -112,12 +118,15 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
     const extraCc = fs.readFileSync(path.join(s.collector, 'ca', 'extra-cc.pem'), 'utf8') // what CC now trusts: relay CA + asight CA
     const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: extraCc }); await once(c, 'secureConnect')
     const sid = '6a1b7c2d-0000-4000-8000-000000000001'
-    const send = (text) => new Promise((resolve) => {
+    const post = (text) => {
       const body = JSON.stringify({ model: 'claude-x', max_tokens: 16, system: [{ type: 'text', text: 'You are a test.' }], messages: [{ role: 'user', content: [{ type: 'text', text }] }] })
+      return `POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test:${up.port}\r\nanthropic-version: 2023-06-01\r\nx-claude-code-session-id: ${sid}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
+    }
+    const send = (text) => new Promise((resolve) => {
       let reply = ''
       const onData = (x) => { reply += x; if (reply.endsWith(REPLY)) { c.off('data', onData); resolve(reply) } }
       c.on('data', onData)
-      c.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test:${up.port}\r\nanthropic-version: 2023-06-01\r\nx-claude-code-session-id: ${sid}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`)
+      c.write(post(text))
     })
     assert.match(await send('asight-e2e-1'), /^HTTP\/1\.1 200 OK/)
     const capture = await until(() => fs.readdirSync(s.collector).find((n) => /^capture-.*\.ndjson$/.test(n)))
@@ -144,11 +153,23 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
       assert.equal(blk.text, relayBody.slice(Number(from), Number(to)), `${b.key}: board bytes == relay bytes`)
     }
 
-    await req(s.sock, 'POST', '/off')
-    assert.match(await send('asight-after-off'), /^HTTP\/1\.1 200 OK/) // 4.6 §开关「已有连接」: keeps relaying until it closes
-    await new Promise((r) => setTimeout(r, 200))
-    assert.ok(!fs.readFileSync(path.join(s.collector, capture), 'utf8').includes('asight-after-off'), 'a request that starts after off is never recorded')
-    c.end(); await once(c, 'close')
+    // 4.6 §开关「已有连接」: a request that started before off is recorded, one that starts after it is not, through the daemon's own isRecording wiring
+    // (sw.isRecording(meta.agent)). The connection is kept busy across off — the relay is slow — so the next request is pipelined on it after off.
+    let seen = ''; c.on('data', (x) => { seen += x })
+    up.hold()
+    c.write(post('asight-in-flight'))
+    await until(() => up.got.length === 2)
+    const off = await req(s.sock, 'POST', '/off')
+    assert.deepEqual([off.relayed, off.pid], [{ closing: 1, waiting: 0, cut: 0 }, process.pid], 'busy: it closes at the response boundary, not at once')
+    c.write(post('asight-after-off')) // started after off
+    await until(() => up.got.length === 3) // still the agent's own request: forwarded untouched, just not recorded
+    up.release()
+    await once(c, 'close') // the engine closes it once the responses are out
+    assert.equal(seen.split(REPLY).length - 1, 2, 'both replies reached the client in full before the close')
+    await until(() => fs.readFileSync(path.join(s.collector, capture), 'utf8').includes('asight-in-flight'))
+    const after = fs.readFileSync(path.join(s.collector, capture), 'utf8')
+    assert.ok(!after.includes('asight-after-off'), 'a request that starts after off is never recorded')
+    assert.equal(after.trim().split('\n').length, 2, 'the first call and the one that was in flight when off came')
     await until(() => flowsOf(s).some((f) => f.decision === 'decrypt' && f.agent === 'claude-code' && f.pid === 4242))
   } finally { if (server) server.close(); await d.stop(); up.close(); p.done(); s.done() }
 })
@@ -161,7 +182,7 @@ test('daemon: the same program without the CA is only observed; its direct conne
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home } })
   try {
     p.add(5151, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) })
-    await req(s.sock, 'POST', '/on', {})
+    await req(s.sock, 'POST', '/on', { harnesses: ['claude-code'] })
     const row = (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 5151) // picked up by the rescan in `on`
     assert.deepEqual([row.agent, row.trusted, row.reason, row.decrypt, row.source], ['claude-code', false, 'var-missing', false, 'scan'])
     assert.equal(row.hint, 'no asight trust entry is in effect for this process', 'status says why in words (R4)')
@@ -206,7 +227,7 @@ test('daemon: an agent started by another agent is recorded with parent_pid and 
   try {
     p.add(5100, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) })
     p.add(5101, { ppid: 5100, uid: UID, exe: CC_EXE, argv: ['claude', '-p'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) })
-    await req(s.sock, 'POST', '/on', {})
+    await req(s.sock, 'POST', '/on', { harnesses: ['claude-code'] })
     const agents = (await req(s.sock, 'GET', '/status')).agents
     assert.deepEqual(['5100', '5101'].map((id) => { const a = agents.find((x) => x.pid === Number(id)); return [a.parent_pid, a.parent_agent] }), [[1, null], [5100, 'claude-code']])
     for (const pid of [5100, 5101]) await clients[0].raw({ op: '__emit', ev: 'flow', pid, dst: { address: '160.79.104.10', port: 443, family: 4 }, ts_ns: pid })
@@ -228,8 +249,8 @@ test('daemon: an agent started with ANTHROPIC_UNIX_SOCKET or the HTTP3 flag is a
   try {
     p.add(5300, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home, ANTHROPIC_UNIX_SOCKET: '/run/ant.sock', BUN_FEATURE_FLAG_EXPERIMENTAL_HTTP3_CLIENT: '1' }, startTicks: nowTicks(p) })
     p.add(5301, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) })
-    await req(s.sock, 'POST', '/on', {})
-    await req(s.sock, 'POST', '/off', {}); await req(s.sock, 'POST', '/on', {}) // every on judges the live processes again
+    await req(s.sock, 'POST', '/on', { harnesses: ['claude-code'] })
+    await req(s.sock, 'POST', '/off', {}); await req(s.sock, 'POST', '/on', { harnesses: ['claude-code'] }) // every on judges the live processes again
     const st = await req(s.sock, 'GET', '/status')
     assert.deepEqual(st.agents.find((a) => a.pid === 5300).unreachable.map((u) => [u.transport, u.var]), [['af-unix', 'ANTHROPIC_UNIX_SOCKET'], ['quic', 'BUN_FEATURE_FLAG_EXPERIMENTAL_HTTP3_CLIENT']])
     assert.deepEqual(st.agents.find((a) => a.pid === 5301).unreachable, [])
@@ -323,7 +344,7 @@ test('daemon: the install-time engine port held by another process → start fai
   try {
     await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [cc], freePort: async () => squat.address().port })
     const { arch, clients } = fakeArch(p)
-    await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }), /recorded at install is held by another process; nothing is steered/)
+    await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }), /recorded at install is held by another process; nothing is steered, agent connections go direct\. Free the port, or run "asight uninstall" and "asight on" to pick a new one$/)
     assert.ok(flowsOf(s).some((f) => f.event === 'failure' && f.where === 'start' && /held by another process/.test(f.reason)), 'the refusal to start is recorded (D38)')
     assert.equal(clients.length, 0, 'the helper was never spawned, so no connection is redirected')
     assert.ok(!fs.existsSync(path.join(s.collector, 'lock')))
@@ -366,11 +387,15 @@ test('daemon: a Claude Code started before install is config-after-start — unt
     const row = on.agents.find((a) => a.pid === 6161)
     assert.deepEqual([row.agent, row.trusted, row.reason, row.decrypt, row.trust_via.startsWith('user settings env')], ['claude-code', false, 'config-after-start', false, true])
     assert.equal((await clients[0].raw({ op: '__watched' })).watch['6161'], 0, 'the kernel only observes it: its connections go direct')
-    await req(s.sock, 'POST', '/off'); await req(s.sock, 'POST', '/on', {}) // a second judgment of the same pid and reason
+    await req(s.sock, 'POST', '/on', {}); await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 6161, pid: 6161, comm: 'claude', filename: CC_EXE, ts_ns: 6 }) // a second judgment of the same pid and reason
+    await new Promise((r) => setTimeout(r, 50))
     const recs = flowsOf(s).filter((f) => f.event === 'agent-untrusted')
     assert.deepEqual(recs.map((f) => [f.pid, f.agent, f.code, f.via.startsWith('user settings env')]), [[6161, 'claude-code', 'config-after-start', true]], 'a durable record with the reason code, once per pid and reason (D38)')
     assert.match(recs[0].reason, /restart it to be captured/, 'reason is the text that says what to do; the code is machine-readable (D38 event shape)')
     assert.ok(statusFailures(await req(s.sock, 'GET', '/status')).some((f) => f.event === 'agent-untrusted' && f.pid === 6161), 'status shows it')
+    // switched off, it is not a capture target: the condition ends (agent-exit via off), and `on` opens it again for the pid that is still untrusted (1.6 §1.5)
+    await req(s.sock, 'POST', '/off'); await req(s.sock, 'POST', '/on', {})
+    assert.deepEqual(flowsOf(s).filter((f) => (f.event === 'agent-untrusted' || f.event === 'agent-exit') && f.pid === 6161).map((f) => [f.event, f.code, f.via && f.via.startsWith('user settings env') ? 'trust-via' : f.via ?? null]), [['agent-untrusted', 'config-after-start', 'trust-via'], ['agent-exit', 'config-after-start', 'off'], ['agent-untrusted', 'config-after-start', 'trust-via']])
     await clients[0].raw({ op: '__emit', ev: 'exit', tgid: 6161, ts_ns: 9 })
     const exit = await until(() => flowsOf(s).find((f) => f.event === 'agent-exit' && f.pid === 6161))
     assert.equal(exit.code, 'config-after-start', 'its exit ends the condition, and says which one (D38)')
@@ -553,6 +578,7 @@ test('daemon: a plugin harness is marker-pending (not recorded) until its marker
   const { arch, clients } = fakeArch(p)
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc, plug] })
   try {
+    await req(s.sock, 'POST', '/on', { harnesses: ['claude-code', 'plug-agent'] }) // a harness that is off is not judged at all (1.6 §1.5): the plugin harness is on
     const markers = path.join(s.collector, 'run', 'trust')
     assert.equal(fs.statSync(markers).mode & 0o777, 0o700, 'the marker dir exists while the daemon runs, the operator\'s only')
     const ticks = nowTicks(p)
@@ -586,6 +612,7 @@ test('daemon: combined bundles follow the roots — rebuilt at start when the OS
   const rep = { name: 'rep', runtime: 'rust', hosts: [], signatures: { linux: { match: [{ exe: /\/rep$/ }] } }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
     inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }] }) }
   await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, osRootsFile: osRoots })
+  writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['rep'], 'on')) // the daemon rebuilds the bundles of the harnesses whose desired state is on only (4.6 「合并包」, D39)
   const bundle = path.join(dir, 'ca', 'combined-rep.pem')
   const before = fs.readFileSync(bundle, 'utf8')
   const { arch } = fakeArch(p)
@@ -599,6 +626,72 @@ test('daemon: combined bundles follow the roots — rebuilt at start when the OS
     for (const c of [newRoot.certPem, corp.certPem, fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'), 'utf8')]) assert.ok(now.includes(c.trim()), 'the new root, the user\'s CA and the asight CA')
     assert.ok(now.includes(tls.rootCertificates[0].trim()), 'Node\'s roots stay first')
     assert.ok(flowsOf(s).some((f) => f.event === 'bundles-rebuilt' && f.code === 'roots-changed' && f.reason.includes('combined-rep.pem')), 'the rebuild is recorded')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+// 4.6 「合并包」, D39: the daily rebuild is for the harnesses whose desired state is on, and works on the manifest as it is on disk. `asight off <h>` runs while
+// the daemon does (it is not stopped for one harness): what it removed or kept without the asight CA must not come back with it, and the manifest it saved
+// must not be written over by the copy the daemon read at start.
+test('daemon: the daily bundle rebuild never writes the asight CA back into a bundle `asight off` removed, nor puts its undone entries back, and leaves a harness that is not on alone (4.6 「合并包」, D39)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  const { createCa } = await import('../../src/collector/core/tls/ca.mjs')
+  const { readManifest } = await import('../../src/off/manifest.mjs')
+  const { undoHarnesses } = await import('../../src/off/undo.mjs')
+  const tlsMod = await import('node:tls')
+  const osRoots = path.join(s.root, 'os-roots.pem'); fs.writeFileSync(osRoots, '')
+  fs.writeFileSync(path.join(s.home, 'corp.pem'), createCa({ commonName: 'corp' }).certPem)
+  const dir = s.collector
+  const repOf = (name) => ({ name, runtime: 'rust', hosts: [], signatures: { linux: { match: [{ exe: new RegExp(`/${name}$`) }] } }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
+    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, `.${name}.env`), vars: { SSL_CERT_FILE: path.join(dir, 'ca', `combined-${name}.pem`) }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', `combined-${name}.pem`), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }] }) })
+  const list = [repOf('stay'), repOf('gone'), repOf('idle')]
+  await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: list, freePort: async () => 0, osRootsFile: osRoots })
+  writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['stay', 'gone'], 'on')) // idle was never turned on
+  const bundle = (n) => path.join(dir, 'ca', `combined-${n}.pem`)
+  const idleBefore = fs.readFileSync(bundle('idle'), 'utf8')
+  const { arch } = fakeArch(p)
+  const d = await startDaemon({ dir, socketPath: s.sock, arch: { ...arch, osRootsFile: osRoots }, harnesses: list, bundleMs: 30 })
+  try {
+    // `asight off gone`, while the daemon runs: its entry out, its bundle removed (nobody holds it), the manifest saved
+    const off = await undoHarnesses({ dir, home: s.home, manifest: readManifest(dir), ids: ['gone'], procs: async () => [], roots: { node: tlsMod.rootCertificates, osText: '' } })
+    writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['stay'], 'on'))
+    assert.deepEqual([off.results.map((r) => r.result), fs.existsSync(bundle('gone'))], [['restored'], false])
+    const saved = fs.readFileSync(path.join(dir, 'install-manifest.json'), 'utf8')
+    // the distro updates its roots: the next rebuild is due for every bundle whose roots differ
+    const newRoot = createCa({ commonName: 'a new OS root' }); fs.writeFileSync(osRoots, newRoot.certPem)
+    await until(() => fs.readFileSync(bundle('stay'), 'utf8').includes(newRoot.certPem.trim()))
+    assert.deepEqual([fs.existsSync(bundle('gone')), fs.readFileSync(bundle('idle'), 'utf8') === idleBefore], [false, true], 'the bundle `off` removed is not recreated, and a harness that is not on is left as it is')
+    const m = readManifest(dir)
+    assert.deepEqual([m.entries.map((e) => e.harness).sort(), m.files.filter((f) => f.role === 'bundle').map((f) => f.harness).sort(), Object.keys(m.liveness).sort()], [['idle', 'stay'], ['idle', 'stay'], ['idle', 'stay']], '`off`\'s manifest stands: nothing of gone came back from the copy read at start')
+    assert.ok(JSON.parse(saved).files.every((f) => f.harness !== 'gone'), 'what off saved had no bundle of gone')
+    assert.ok(!flowsOf(s).some((f) => f.event === 'bundles-rebuilt' && f.harness === 'gone'), 'and no rebuild was recorded for it')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+// 1.6 R12: the daemon's rebuild reads the manifest, rewrites bundles and saves the manifest — the same files `on`, `off` and `uninstall` change — so it does that under the op lock.
+test('daemon: the bundle rebuild runs under the op lock (1.6 R12) — while another command holds it nothing is rewritten and the manifest is not read-modified-saved; a round after it lets go does the rebuild; a stale lock is taken over and released', async () => {
+  const s = sandbox(); const p = fakeProc()
+  const { createCa } = await import('../../src/collector/core/tls/ca.mjs')
+  const osRoots = path.join(s.root, 'os-roots.pem'); fs.writeFileSync(osRoots, '')
+  const dir = s.collector
+  const rep = { name: 'rep', runtime: 'rust', hosts: [], signatures: { linux: { match: [{ exe: /\/rep$/ }] } }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
+    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [], role: 'bundle' }] }) }
+  await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, osRootsFile: osRoots })
+  writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['rep'], 'on'))
+  const bundle = path.join(dir, 'ca', 'combined-rep.pem'), lock = path.join(dir, 'op.lock')
+  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, start_time: null, boot_id: null }) + '\n') // another command is running: this process stands in for it
+  const root1 = createCa({ commonName: 'an OS root' }); fs.writeFileSync(osRoots, root1.certPem)
+  const d = await startDaemon({ dir, socketPath: s.sock, arch: { ...fakeArch(p).arch, osRootsFile: osRoots }, harnesses: [rep], bundleMs: 30 })
+  try {
+    await new Promise((r) => setTimeout(r, 250)) // several rounds at 30 ms
+    assert.ok(!fs.readFileSync(bundle, 'utf8').includes(root1.certPem.trim()), 'nothing was rewritten while the lock was held')
+    assert.ok(fs.readFileSync(lock, 'utf8').includes(String(process.pid)), 'and the holder\'s lock is still its own')
+    fs.rmSync(lock) // the command is done
+    await until(() => fs.readFileSync(bundle, 'utf8').includes(root1.certPem.trim()))
+    assert.ok(!fs.existsSync(lock), 'the daemon let go of the lock after its rebuild')
+    const root2 = createCa({ commonName: 'another OS root' }); fs.writeFileSync(osRoots, root2.certPem)
+    fs.writeFileSync(lock, JSON.stringify({ pid: 2 ** 22 + 7, start_time: '1', boot_id: 'b' }) + '\n') // the lock of a command that died
+    await until(() => fs.readFileSync(bundle, 'utf8').includes(root2.certPem.trim()))
+    assert.ok(!fs.existsSync(lock), 'a stale lock is taken over, and released')
   } finally { await d.stop(); p.done(); s.done() }
 })
 
@@ -714,6 +807,17 @@ test('daemon: daemon-start carries its identity, version, foreground, upstream_c
       [['daemon-start', process.pid, '42', 'b-9', '0.0.0', true, '/etc/relay-ca.pem', true, null], ['daemon-stop', process.pid, null, null, null, null, null, null, 'SIGHUP'], ['daemon-start', process.pid, '42', 'b-9', '0.0.0', false, null, true, null]])
     assert.equal(flowsOf(s).filter((f) => f.code === 'unclean-stop').length, 0, 'a SIGHUP stop is a clean stop')
   } finally { await d.stop(); p.done(); s.done() }
+})
+
+// 1.6 §2: what the daemon tells a user to run is a command of help, never a hidden alias (`collector install` / `collector uninstall` are only kept for scripts written before D39).
+test('daemon: started where asight is not installed, or where the manifest cannot be read, it says which commands to run — `asight on`, `asight uninstall` (1.6 §2)', async () => {
+  const s = sandbox()
+  try {
+    const arch = { os: 'linux', createRedirector: () => { throw new Error('must not get this far') } }
+    await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }), (e) => e.code === 'not-installed' && /the collector is not installed for this user: run "asight on" first$/.test(e.message))
+    fs.mkdirSync(s.collector, { recursive: true }); fs.writeFileSync(path.join(s.collector, 'install-manifest.json'), '{not json')
+    await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }), (e) => e.code === 'manifest-unreadable' && /is unreadable \(.*\); run "asight uninstall", then "asight on"$/.test(e.message))
+  } finally { s.done() }
 })
 
 // D-31: started as root (sudo -E), it refuses before writing anything else, and the refusal it records in the user's
@@ -885,7 +989,7 @@ test('daemon: every check (5 s), with nobody running status — links lost behin
     await clients[0].raw({ op: '__yank' })
     const mm = await until(() => flowsOf(s).find((f) => f.code === 'state-mismatch'))
     assert.deepEqual([mm.event, mm.where, mm.desired, mm.actual, mm.links], ['failure', 'switch', 'on', 'off', []])
-    assert.match(mm.reason, /capture is on but the kernel has not got this instance's links: nothing is steered/)
+    assert.match(mm.reason, /capture is on but the kernel has not got this instance's links: nothing is steered.*; run "asight on" again$/)
     await new Promise((r) => setTimeout(r, 100))
     assert.equal(flowsOf(s).filter((f) => f.code === 'state-mismatch').length, 1, 'once per disagreement, not once per check')
     const switches = () => flowsOf(s).filter((f) => f.event === 'switch')
@@ -970,5 +1074,450 @@ test('daemon: a Claude Code whose settings.json does not parse is a settings-unp
     const f = flowsOf(s).find((x) => x.code === 'settings-unparsable')
     assert.deepEqual([f.event, f.where, f.pid, f.file], ['failure', 'harness', 9292, settings])
     assert.match(f.reason, /does not parse \(.+\); that layer is not counted, so it is judged untrusted/)
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+
+// ── per-harness switching and the state.json re-read before every heartbeat (1.6 §1.5 / V30 unit half, 4.6 §开关语义) ───────────────
+const opsOf = async (c) => (await c.raw({ op: '__oplog' })).log
+const installWithClaudeHome = (s) => { fs.mkdirSync(path.join(s.home, '.claude')); fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), '{}'); return install(s) } // a Claude Code home to put the trust key in
+// a machine with Claude Code and Codex homes, both installed: the install manifest names both, so `on` with no names turns both on
+const installBoth = (s) => {
+  fs.mkdirSync(path.join(s.home, '.claude')); fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), '{}')
+  fs.mkdirSync(path.join(s.home, '.codex')); fs.writeFileSync(path.join(s.home, '.codex', 'config.toml'), 'model = "gpt-test-1"\n')
+  return installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [cc, codex], freePort: async () => 0 })
+}
+const afterMark = async (c, name) => { const log = await opsOf(c); return log.slice(log.lastIndexOf(`mark ${name}`) + 1) }
+const rewriteState = (s, fn) => { const f = path.join(s.collector, 'state.json'); const st = JSON.parse(fs.readFileSync(f, 'utf8')); fn(st); fs.writeFileSync(f, JSON.stringify(st)) } // the operator's CLI, in place
+const untrustedLines = (s) => flowsOf(s).filter((f) => f.event === 'agent-untrusted')
+const watched = async (c) => (await c.raw({ op: '__watched' })).watch // the kernel's own table: tgid → decrypt
+
+test('V30 unit half: a 3 s event-loop stall while state.json turns a harness off — after it the table is reconciled before the next heartbeat, nothing is attached by the file, and no agent-untrusted is written for the harness that is off', { timeout: 60000 }, async () => {
+  const s = sandbox(); const p = fakeProc()
+  await installBoth(s)
+  const { arch, clients } = fakeArch(p, {}, { autoHeartbeatMs: 100 })
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc, codex], env: { ...process.env, HOME: s.home }, checkMs: 150 })
+  try {
+    const on = await req(s.sock, 'POST', '/on', {})
+    assert.deepEqual([on.desired, on.actual, Object.values(on.harnesses).map((h) => h.desired)], ['on', 'on', ['on', 'on']], 'no names: every installed harness')
+    const exec = async (pid, exe, argv, env) => { p.add(pid, { uid: UID, exe, argv, cwd: s.root, env, startTicks: nowTicks(p) }); await clients[0].raw({ op: '__emit', ev: 'exec', tgid: pid, pid, comm: argv[0], filename: exe, ts_ns: pid }) }
+    await exec(4242, CC_EXE, ['claude', '-p', 'hi'], { HOME: s.home }) // trusted through the key `install` wrote
+    await exec(4343, CC_EXE, ['claude'], { HOME: s.root }) // no key in its HOME: untrusted, and said so while the harness is on
+    await exec(4545, CODEX_EXE, ['codex', 'exec', 'hi'], { HOME: s.root })
+    const rows = await until(async () => { const a = (await req(s.sock, 'GET', '/status')).agents; return a.length === 3 && a })
+    assert.deepEqual(rows.map((a) => [a.pid, a.trusted]), [[4242, true], [4343, false], [4545, false]])
+    assert.deepEqual(untrustedLines(s).map((l) => [l.pid, l.agent]), [[4343, 'claude-code'], [4545, 'codex']])
+
+    // the operator's CLI writes claude-code off; the daemon's event loop is stalled over the next 3 s
+    await clients[0].raw({ op: '__mark', name: 'stall' })
+    rewriteState(s, (st) => { st.harnesses['claude-code'].desired = 'off' })
+    const end = Date.now() + 3000; while (Date.now() < end) { /* the stall: no timer, no socket runs */ }
+    const after = await until(async () => { const a = await afterMark(clients[0], 'stall'); return a.includes('heartbeat') && a })
+    assert.deepEqual(after.slice(0, 2), ['unwatch 4242', 'unwatch 4343'], 'the table is reconciled first, before any heartbeat')
+    assert.ok(after.indexOf('heartbeat') > 1 && !after.includes('detach'), 'codex is still on: the links stay, the beat resumes after the unwatches')
+    assert.deepEqual(await watched(clients[0]), { 4545: 0 }, 'the kernel watches codex only')
+    const st = await req(s.sock, 'GET', '/status')
+    assert.deepEqual([st.desired, st.actual, st.harnesses['claude-code'].desired, st.harnesses.codex.desired, st.running_untrusted], ['on', 'on', 'off', 'on', 1])
+    assert.deepEqual(st.agents.map((a) => [a.pid, !!a.off]), [[4242, true], [4343, true], [4545, false]])
+    assert.equal(st.agents[0].reason, 'off')
+
+    // a process of the harness that is off is neither judged nor reported; what was recorded about the others ends
+    const before = untrustedLines(s).length
+    await exec(4444, CC_EXE, ['claude'], { HOME: s.root })
+    await until(async () => (await req(s.sock, 'GET', '/status')).agents.some((a) => a.pid === 4444 && a.off))
+    assert.equal(untrustedLines(s).length, before, 'no agent-untrusted for a harness that is off')
+    assert.deepEqual(await watched(clients[0]), { 4545: 0 })
+    const ended = flowsOf(s).filter((f) => f.event === 'agent-exit')
+    assert.deepEqual(ended.map((f) => [f.pid, f.via, f.code]), [[4343, 'off', 'var-missing']], 'the untrusted condition of 4343 ends: it is off, not exited')
+
+    // codex goes off in the file too: nothing is left on, the table first, then the links
+    await clients[0].raw({ op: '__mark', name: 'last' })
+    rewriteState(s, (x) => { x.harnesses.codex.desired = 'off' })
+    const last = await until(async () => { const a = await afterMark(clients[0], 'last'); return a.includes('detach') && a })
+    assert.deepEqual(last, ['unwatch 4545', 'detach'], 'unwatch, then detach, and not one more heartbeat')
+    const off = await req(s.sock, 'GET', '/status')
+    assert.deepEqual([off.desired, off.actual, off.links, off.recording], ['off', 'off', [], false])
+    assert.deepEqual(await watched(clients[0]), {})
+
+    // the file never attaches: writing claude-code on again changes nothing until an `on` request
+    await clients[0].raw({ op: '__mark', name: 'again' })
+    rewriteState(s, (x) => { x.harnesses['claude-code'].desired = 'on' })
+    await new Promise((r) => setTimeout(r, 600)) // several 5 s checks' worth at checkMs 150, and no heartbeat timer to carry a reload either
+    assert.deepEqual([await afterMark(clients[0], 'again'), (await req(s.sock, 'GET', '/status')).harnesses['claude-code'].desired], [[], 'off'])
+    const back = await req(s.sock, 'POST', '/on', { harnesses: ['claude-code'] })
+    assert.deepEqual([back.desired, back.actual, back.harnesses['claude-code'].desired, back.harnesses.codex.desired], ['on', 'on', 'on', 'off'])
+    assert.deepEqual(back.agents.map((a) => [a.pid, !!a.off]), [[4242, false], [4343, false], [4444, false], [4545, true]], 'the rescan behind on judges the harness again')
+    assert.deepEqual(Object.keys(await watched(clients[0])).sort(), ['4242', '4343', '4444'])
+    assert.equal(flowsOf(s).filter((f) => f.event === 'failure' && f.where === 'switch').length, 0, 'no state-mismatch on the way')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+test('daemon: /off {harnesses} unwatches exactly those processes and says which, the links stay while any harness is on and come off with the last, /on {harnesses} turns only those on', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await installBoth(s)
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc, codex], env: { ...process.env, HOME: s.home } })
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    for (const [pid, exe, argv] of [[4242, CC_EXE, ['claude']], [4545, CODEX_EXE, ['codex']]]) { p.add(pid, { uid: UID, exe, argv, cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) }); await clients[0].raw({ op: '__emit', ev: 'exec', tgid: pid, pid, comm: argv[0], filename: exe, ts_ns: pid }) }
+    await until(async () => (await req(s.sock, 'GET', '/status')).agents.length === 2)
+    const part = await req(s.sock, 'POST', '/off', { harnesses: ['codex'] })
+    assert.deepEqual([part.desired, part.actual, part.unwatched, part.confirmed, part.noop], ['on', 'on', [4545], true, undefined])
+    assert.deepEqual([part.harnesses.codex.desired, part.harnesses['claude-code'].desired, part.agents.map((a) => !!a.off)], ['off', 'on', [false, true]])
+    assert.deepEqual(Object.keys(await watched(clients[0])), ['4242'])
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(s.collector, 'state.json'), 'utf8')).harnesses.codex.desired, 'off', 'written first: the file is what a restart would restore')
+    const again = await req(s.sock, 'POST', '/off', { harnesses: ['codex'] })
+    assert.deepEqual([again.noop, again.unwatched, again.confirmed], [true, [], true])
+    const all = await req(s.sock, 'POST', '/off', {})
+    assert.deepEqual([all.desired, all.actual, all.links, all.unwatched, all.confirmed], ['off', 'off', [], [4242], true])
+    assert.deepEqual(await watched(clients[0]), {})
+    assert.deepEqual((await opsOf(clients[0])).filter((o) => /^(unwatch|detach)/.test(o)), ['unwatch 4545', 'unwatch 4242', 'detach'], 'the watch table first, the links last')
+    const one = await req(s.sock, 'POST', '/on', { harnesses: ['codex'] })
+    assert.deepEqual([one.desired, one.actual, one.harnesses.codex.desired, one.harnesses['claude-code'].desired, one.agents.map((a) => [a.pid, !!a.off])], ['on', 'on', 'on', 'off', [[4242, true], [4545, false]]])
+    assert.deepEqual(Object.keys(await watched(clients[0])), ['4545'])
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+test('daemon: a harness that state.json has off at start is never watched or reported untrusted; a version 1 state.json restores on for the installed harnesses only (V28)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await installWithClaudeHome(s) // the install manifest names claude-code; codex was never installed
+  fs.writeFileSync(path.join(s.collector, 'state.json'), JSON.stringify({ version: 2, updated_at: 'T0', harnesses: { 'claude-code': { desired: 'off', updated_at: 'T0' }, codex: { desired: 'on', updated_at: 'T0' } } }))
+  p.add(4242, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.root }, startTicks: nowTicks(p) })
+  p.add(4545, { uid: UID, exe: CODEX_EXE, argv: ['codex'], cwd: s.root, env: { HOME: s.root }, startTicks: nowTicks(p) })
+  let a = fakeArch(p)
+  let d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: a.arch, harnesses: [cc, codex], env: { ...process.env, HOME: s.home } })
+  try {
+    const st = await req(s.sock, 'GET', '/status')
+    assert.deepEqual([st.desired, st.actual, st.agents.map((x) => [x.pid, !!x.off])], ['on', 'on', [[4242, true], [4545, false]]], 'restored from the file: codex on, claude-code off — the file may name a harness the manifest does not')
+    assert.deepEqual([Object.keys(await watched(a.clients[0])), untrustedLines(s).map((l) => l.agent)], [['4545'], ['codex']])
+    await d.stop()
+    const seen = untrustedLines(s).length
+    fs.writeFileSync(path.join(s.collector, 'state.json'), JSON.stringify({ version: 1, desired: 'on', policy: 'all', extra_hosts: ['relay.example.com'], updated_at: 'T1' })) // what an older daemon left
+    a = fakeArch(p)
+    d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: a.arch, harnesses: [cc, codex], env: { ...process.env, HOME: s.home } })
+    const v1 = await req(s.sock, 'GET', '/status')
+    assert.deepEqual([v1.desired, v1.actual, v1.agents.map((x) => [x.pid, !!x.off])], ['on', 'on', [[4242, false], [4545, true]]], 'only the installed harness is carried to on: codex was never installed, so it is not a capture target')
+    assert.deepEqual(Object.entries(v1.harnesses).map(([id, h]) => [id, h.desired, h.policy, h.extra_hosts, h.updated_at]), [['claude-code', 'on', 'all', ['relay.example.com'], 'T1']])
+    assert.deepEqual(untrustedLines(s).slice(seen).map((l) => l.agent), ['claude-code'], 'no agent-untrusted for the harness that was never installed')
+    assert.deepEqual(Object.keys(await watched(a.clients[0])), ['4242'])
+    assert.equal(d.tracker.policy({ pid: 4242 }, 'anything.example').not_captured, 'untrusted', 'policy all is in force, and still never for an untrusted process')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+test('daemon: an unwatch the helper cannot do is a tracker failure and /off says confirmed:false; with no heartbeat running the 5 s check is what reads state.json and takes a harness away', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await installBoth(s)
+  const { arch, clients } = fakeArch(p) // autoHeartbeatMs 0: no beat gate runs at all
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc, codex], env: { ...process.env, HOME: s.home }, checkMs: 100 })
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    for (const [pid, exe, argv] of [[4242, CC_EXE, ['claude']], [4545, CODEX_EXE, ['codex']]]) { p.add(pid, { uid: UID, exe, argv, cwd: s.root, env: { HOME: s.root }, startTicks: nowTicks(p) }); await clients[0].raw({ op: '__emit', ev: 'exec', tgid: pid, pid, comm: argv[0], filename: exe, ts_ns: pid }) }
+    await until(async () => (await req(s.sock, 'GET', '/status')).agents.length === 2)
+    const real = d.redirector.unwatch
+    d.redirector.unwatch = async (pid) => { if (pid === 4545) throw Object.assign(new Error('helper said no'), { code: 'loader-down' }); return real(pid) }
+    const bad = await req(s.sock, 'POST', '/off', { harnesses: ['codex'] })
+    assert.deepEqual([bad.desired, bad.unwatched, bad.confirmed, bad.agents.find((a) => a.pid === 4545).off], ['on', [], false, true], 'the pid the kernel may still steer is not reported as taken away')
+    assert.ok(flowsOf(s).some((f) => f.event === 'failure' && f.where === 'tracker' && /pid 4545 \(unwatch\): helper said no/.test(f.reason)), 'and it is a record, not a swallowed error')
+    assert.deepEqual(Object.keys(await watched(clients[0])).sort(), ['4242', '4545'], 'the kernel still has it')
+    d.redirector.unwatch = real
+    const retry = await req(s.sock, 'POST', '/off', { harnesses: ['codex'] }) // the repeat is what makes it true: nothing was left to turn off, the table is asked again
+    assert.deepEqual([retry.unwatched, retry.confirmed, Object.keys(await watched(clients[0]))], [[4545], true, ['4242']])
+    // the CLI writes claude-code off; nothing beats (autoHeartbeatMs 0), so only the check can see it
+    rewriteState(s, (st) => { st.harnesses['claude-code'].desired = 'off' })
+    // the check reads the file (desired turns off), then takes the table, then the links: `actual` is the last of them, so it is what says the check is done
+    const st = await until(async () => { const x = await req(s.sock, 'GET', '/status'); return x.harnesses['claude-code'].desired === 'off' && x.actual === 'off' && x })
+    assert.deepEqual([st.desired, st.actual, st.links, st.agents.map((a) => !!a.off), await watched(clients[0])], ['off', 'off', [], [true, true], {}], 'taken away by the check: the table, then the links')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+// ── the table must be clean before the beat resumes; a dead helper has nothing to unwatch; the route checks its names (review of Task 2) ──
+// two agents, one per harness, both on and in the kernel's table
+async function twoAgents(s, p, clients) {
+  await req(s.sock, 'POST', '/on', {})
+  for (const [pid, exe, argv] of [[4242, CC_EXE, ['claude']], [4545, CODEX_EXE, ['codex']]]) { p.add(pid, { uid: UID, exe, argv, cwd: s.root, env: { HOME: s.root }, startTicks: nowTicks(p) }); await clients[0].raw({ op: '__emit', ev: 'exec', tgid: pid, pid, comm: argv[0], filename: exe, ts_ns: pid }) }
+  await until(async () => (await req(s.sock, 'GET', '/status')).agents.length === 2)
+}
+const failUnwatchOf = (d, pid) => { const real = d.redirector.unwatch; const box = { asked: 0, restore: () => { d.redirector.unwatch = real } }; d.redirector.unwatch = async (x) => { if (x === pid) { box.asked++; throw Object.assign(new Error('helper said no'), { code: 'loader-down' }) } return real(x) }; return box }
+
+test('daemon: an unwatch that fails when state.json turns a harness off is asked again at every beat tick, and no heartbeat goes out until the kernel table is clean (4.6 §开关语义, V30)', { timeout: 30000 }, async () => {
+  const s = sandbox(); const p = fakeProc()
+  await installBoth(s)
+  const { arch, clients } = fakeArch(p, {}, { autoHeartbeatMs: 100 })
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc, codex], env: { ...process.env, HOME: s.home } }) // checkMs stays 5 s: only the beat gate runs
+  try {
+    await twoAgents(s, p, clients)
+    const bad = failUnwatchOf(d, 4242)
+    rewriteState(s, (st) => { st.harnesses['claude-code'].desired = 'off' }) // the operator's CLI: claude-code off; codex still on, so the beat would go on
+    await until(() => bad.asked >= 3) // the reload asked once, and the next ticks asked again
+    await clients[0].raw({ op: '__mark', name: 'stuck' })
+    const asked = bad.asked
+    await new Promise((r) => setTimeout(r, 500)) // five beat ticks' worth
+    assert.deepEqual(await afterMark(clients[0], 'stuck'), [], 'no heartbeat while the kernel may still steer a pid of the harness that is off (the steering lapses, fail open)')
+    assert.ok(bad.asked > asked, 'the unwatch is asked again every tick, not once')
+    assert.deepEqual(Object.keys(await watched(clients[0])).sort(), ['4242', '4545'], 'the kernel really still holds it')
+    assert.equal((await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 4242).off, true, 'status says it is off — and the beat says the table is not clean yet')
+    bad.restore()
+    const after = await until(async () => { const a = await afterMark(clients[0], 'stuck'); return a.includes('heartbeat') && a })
+    assert.equal(after[0], 'unwatch 4242', 'the table is clean first, and only then does the beat resume')
+    assert.deepEqual(await watched(clients[0]), { 4545: 0 })
+    assert.equal(after.filter((o) => o === 'unwatch 4242').length, 1, 'answered once')
+    const st = await req(s.sock, 'GET', '/status')
+    assert.deepEqual([st.desired, st.actual, st.harnesses['claude-code'].desired], ['on', 'on', 'off'])
+    assert.ok(flowsOf(s).some((f) => f.event === 'failure' && f.where === 'tracker' && /pid 4242 \(unwatch\): helper said no/.test(f.reason)), 'the failure is a record, folded, not swallowed')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+test('daemon: with no beat gate running, the 5 s check asks again for an unwatch that failed when state.json turned a harness off', { timeout: 30000 }, async () => {
+  const s = sandbox(); const p = fakeProc()
+  await installBoth(s)
+  const { arch, clients } = fakeArch(p) // autoHeartbeatMs 0
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc, codex], env: { ...process.env, HOME: s.home }, checkMs: 100 })
+  try {
+    await twoAgents(s, p, clients)
+    const bad = failUnwatchOf(d, 4242)
+    rewriteState(s, (st) => { st.harnesses['claude-code'].desired = 'off' })
+    await until(() => bad.asked >= 3) // the check that read the file asked once; the later checks ask again
+    assert.deepEqual(Object.keys(await watched(clients[0])).sort(), ['4242', '4545'])
+    bad.restore()
+    await until(async () => !(4242 in await watched(clients[0])))
+    assert.deepEqual(await watched(clients[0]), { 4545: 0 }, 'nobody asked: the check made the table clean')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+test('daemon: with the helper dead, /off is confirmed — its links and watch table died with it — and nothing is asked of it or recorded as an unwatch failure', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await installBoth(s)
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc, codex], env: { ...process.env, HOME: s.home } })
+  try {
+    await twoAgents(s, p, clients)
+    clients[0]._child.kill('SIGKILL')
+    await until(async () => (await req(s.sock, 'GET', '/status')).degraded)
+    const one = await req(s.sock, 'POST', '/off', { harnesses: ['codex'] })
+    assert.deepEqual([one.desired, one.actual, !!one.degraded, one.confirmed, one.unwatched, one.agents.map((a) => !!a.off)], ['on', 'off', true, true, [4545], [false, true]], 'confirmed: nothing is steered; the pid is out of a table that no longer exists')
+    const all = await req(s.sock, 'POST', '/off', {})
+    assert.deepEqual([all.desired, all.actual, all.confirmed, all.unwatched, all.agents.map((a) => !!a.off)], ['off', 'off', true, [4242], [true, true]])
+    assert.deepEqual(d.tracker.stuckPids(), [])
+    assert.deepEqual(flowsOf(s).filter((f) => f.where === 'tracker' && /unwatch/.test(f.reason || '')), [], 'no unwatch-error: nobody could have answered it')
+    assert.equal(JSON.parse(fs.readFileSync(path.join(s.collector, 'state.json'), 'utf8')).harnesses.codex.desired, 'off', 'the desired state is still written')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+test('daemon: /on and /off take only a non-empty array of harness names the daemon knows; anything else is a 400 naming the problem, changes nothing and is no daemon failure (1.6 §1.5)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await installBoth(s)
+  const { arch } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc, codex], env: { ...process.env, HOME: s.home } })
+  try {
+    const file = path.join(s.collector, 'state.json')
+    const bad400 = async (route, body, re) => assert.rejects(req(s.sock, 'POST', route, body), (e) => e.status === 400 && re.test(e.message), `${route} ${JSON.stringify(body)}`)
+    for (const route of ['/on', '/off']) {
+      await bad400(route, { harnesses: 'codex' }, /non-empty array/) // a string would spread into one name per character
+      await bad400(route, { harnesses: [] }, /non-empty array/) // not "all"
+      await bad400(route, { harnesses: [''] }, /non-empty array/)
+      await bad400(route, { harnesses: [1] }, /non-empty array/)
+      await bad400(route, { harnesses: { codex: true } }, /non-empty array/)
+      await bad400(route, { harnesses: ['codex', 'nope'] }, /unknown harness: nope/) // the typo is named; codex is not turned on by a request that is refused
+    }
+    assert.equal(fs.existsSync(file), false, 'not one of them wrote the state file')
+    assert.deepEqual(flowsOf(s).filter((f) => f.where === 'control'), [], 'a caller\'s mistake is not a failure of the daemon')
+    const all = await req(s.sock, 'POST', '/on', { harnesses: null }) // null is "every installed harness", like leaving it out
+    assert.deepEqual(Object.entries(all.harnesses).map(([id, h]) => [id, h.desired]), [['claude-code', 'on'], ['codex', 'on']])
+    const named = await req(s.sock, 'POST', '/off', { harnesses: ['claude-code'] })
+    assert.deepEqual(Object.entries(named.harnesses).map(([id, h]) => [id, h.desired]), [['claude-code', 'off'], ['codex', 'on']])
+    assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).harnesses).sort(), ['claude-code', 'codex'], 'only harnesses that exist are ever written')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+// 1.6 §1.3 / §1.4 5 (V36 daemon half): `off` with no names and `exit` — the daemon stops itself once no connection is left in the engine, or at
+// once with `now`; a spliced connection (the engine sees no response boundary) keeps it alive until it closes by itself.
+async function withSplice(fn) {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home } })
+  const echo = net.createServer((x) => x.pipe(x)); await new Promise((r) => echo.listen(0, '127.0.0.1', r))
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    p.add(4242, { uid: UID, exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
+    await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 4242, pid: 4242, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
+    await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 4242))
+    const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
+    await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: echo.address().port, family: 4 }, pid: 4242, decrypt: 0 })
+    raw.write('ZZZZ not a protocol the engine knows\n') // classified unknown: passed through, never framed
+    await once(raw, 'data')
+    await fn({ s, d, raw, flows: () => flowsOf(s) })
+  } finally { echo.close(); await d.stop(); p.done(); s.done() }
+}
+
+test('daemon: POST /off {exit:true} with a spliced connection open: the reply says 1 waiting and the daemon\'s pid, it stays up, status counts the connection, and it stops (daemon-stop, reason off) once the connection closes by itself (V36 daemon half, 1.6 §1.4 5)', async () => {
+  await withSplice(async ({ s, d, raw, flows }) => {
+    const off = await req(s.sock, 'POST', '/off', { exit: true })
+    assert.deepEqual([off.relayed, off.pid, off.desired], [{ closing: 0, waiting: 1, cut: 0 }, process.pid, 'off'])
+    await new Promise((r) => setTimeout(r, 400))
+    const st = await req(s.sock, 'GET', '/status')
+    assert.deepEqual(st.relayed, { closing: 0, waiting: 1 }, 'still running, and status counts what is still relayed')
+    assert.equal(fs.existsSync(path.join(s.collector, 'lock')), true)
+    let stopped = false; d.exited.then(() => { stopped = true })
+    raw.destroy() // the connection closes by itself
+    await until(() => stopped)
+    const stop = flows().find((f) => f.event === 'daemon-stop')
+    assert.deepEqual([stop.reason, stop.signal, stop.failed], ['off', undefined, undefined])
+    assert.equal(fs.existsSync(path.join(s.collector, 'lock')), false)
+    const spliced = flows().find((f) => f.decision === 'splice')
+    assert.deepEqual([spliced.error, spliced.agent], [undefined, 'claude-code'])
+  })
+})
+
+test('daemon: /on after POST /off {exit:true} while a splice is still open cancels the pending exit — the daemon stays up and attached when the splice closes, and a later /off {exit:true} stops it (1.6 §1.4 5, T05 review)', async () => {
+  await withSplice(async ({ s, d, raw, flows }) => {
+    const off = await req(s.sock, 'POST', '/off', { exit: true })
+    assert.deepEqual(off.relayed, { closing: 0, waiting: 1, cut: 0 })
+    const on = await req(s.sock, 'POST', '/on', {})
+    assert.deepEqual([on.desired, on.actual], ['on', 'on'])
+    let stopped = false; d.exited.then(() => { stopped = true })
+    raw.destroy() // the splice closes by itself: nothing is left in the engine, but the operator turned capture on again
+    await new Promise((r) => setTimeout(r, 500))
+    assert.equal(stopped, false, 'the daemon did not exit although capture is on')
+    const st = await req(s.sock, 'GET', '/status')
+    assert.deepEqual([st.desired, st.actual], ['on', 'on'], 'still attached')
+    assert.equal(fs.existsSync(path.join(s.collector, 'lock')), true)
+    assert.equal(flows().some((f) => f.event === 'daemon-stop'), false)
+    // the exit is re-armed by a later /off {exit:true}, not left cancelled for good
+    const off2 = await req(s.sock, 'POST', '/off', { exit: true })
+    assert.deepEqual(off2.relayed, { closing: 0, waiting: 0, cut: 0 })
+    await d.exited
+    assert.equal(flows().find((f) => f.event === 'daemon-stop').reason, 'off')
+  })
+})
+
+test('daemon: a withdrawn exit is not revived — /off {exit:true}, /on, then a plain /off (no exit) while the splice is still open: when the splice closes the daemon stays up, off (1.6 §1.4 5, T05 review)', async () => {
+  await withSplice(async ({ s, d, raw }) => {
+    await req(s.sock, 'POST', '/off', { exit: true })
+    await req(s.sock, 'POST', '/on', {})
+    const off = await req(s.sock, 'POST', '/off', { harnesses: ['claude-code'] }) // asks nothing of the daemon's life
+    assert.equal(off.desired, 'off')
+    let stopped = false; d.exited.then(() => { stopped = true })
+    raw.destroy()
+    await new Promise((r) => setTimeout(r, 500))
+    assert.equal(stopped, false, 'the exit that /on withdrew did not come back')
+    assert.equal((await req(s.sock, 'GET', '/status')).desired, 'off')
+  })
+})
+
+test('daemon: POST /off {exit:true, now:true} cuts the spliced connection and stops the daemon within 1 s; the row says cut-by-off (V36 daemon half, 1.6 §1.3)', async () => {
+  await withSplice(async ({ s, d, raw, flows }) => {
+    const t0 = Date.now()
+    const off = await req(s.sock, 'POST', '/off', { exit: true, now: true })
+    assert.deepEqual(off.relayed, { closing: 0, waiting: 0, cut: 1 })
+    await d.exited
+    assert.ok(Date.now() - t0 < 1000, `stopped in ${Date.now() - t0} ms`)
+    if (!raw.destroyed) await once(raw, 'close') // cut
+    const row = flows().find((f) => f.decision === 'splice')
+    assert.deepEqual([row.error.type, row.error.side], ['cut-by-off', 'engine'])
+    assert.equal(flows().find((f) => f.event === 'daemon-stop').reason, 'off')
+  })
+})
+
+test('daemon: /off takes boolean now and exit only, and exit takes no harness names; a refusal is a 400 that changes nothing (1.6 §1.4)', async () => {
+  await withSplice(async ({ s, d }) => {
+    for (const body of [{ now: 'yes' }, { exit: 1 }, { exit: true, harnesses: ['claude-code'] }]) {
+      await assert.rejects(req(s.sock, 'POST', '/off', body), (e) => e.status === 400, JSON.stringify(body))
+    }
+    assert.equal((await req(s.sock, 'GET', '/status')).desired, 'on', 'nothing was turned off')
+    const named = await req(s.sock, 'POST', '/off', { harnesses: ['claude-code'], now: true })
+    assert.deepEqual(named.relayed, { closing: 0, waiting: 0, cut: 1 }, 'a named off with now cuts that harness\'s connections and leaves the daemon running')
+    assert.equal(await Promise.race([d.exited.then(() => 'stopped'), new Promise((r) => setTimeout(() => r('running'), 300))]), 'running')
+  })
+})
+
+test('daemon: POST /off {exit:true} with nothing relayed stops the daemon on its own, once, and a later stop() is a no-op that returns the same result', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const { arch } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home } })
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    const off = await req(s.sock, 'POST', '/off', { exit: true })
+    assert.deepEqual(off.relayed, { closing: 0, waiting: 0, cut: 0 })
+    const r = await d.exited
+    assert.deepEqual(r, { failed: [] })
+    assert.deepEqual(await d.stop({ signal: 'SIGTERM' }), r)
+    assert.equal(flowsOf(s).filter((f) => f.event === 'daemon-stop').length, 1, 'one daemon-stop line, for the reason that stopped it first')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+test('daemon: a harness that state.json turns off (the CLI writes the file; the 5 s check reads it) has its relayed connections drained too, not only one the /off route turned off (1.6 §1.3, §1.5)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home }, checkMs: 100 })
+  const echo = net.createServer((x) => x.pipe(x)); await new Promise((r) => echo.listen(0, '127.0.0.1', r))
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    p.add(4242, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
+    await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 4242, pid: 4242, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
+    await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 4242))
+    const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
+    await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: echo.address().port, family: 4 }, pid: 4242, decrypt: 0 })
+    raw.write('ZZZZ not a protocol the engine knows\n'); await once(raw, 'data')
+    assert.deepEqual((await req(s.sock, 'GET', '/status')).relayed, { closing: 0, waiting: 0 }, 'while it is on nothing is asked to close')
+    rewriteState(s, (st) => { st.harnesses['claude-code'].desired = 'off' })
+    const st = await until(async () => { const x = await req(s.sock, 'GET', '/status'); return x.relayed.waiting === 1 && x })
+    assert.equal(st.harnesses['claude-code'].desired, 'off')
+    raw.destroy()
+  } finally { echo.close(); await d.stop(); p.done(); s.done() }
+})
+
+// §9.5 / V47: the 5 s check stats the files a harness reads its proxy from and compares what it finds with what `on` recorded (`adopted`): one `netenv-change` per change, however many checks, nothing written to the agent's file.
+test('daemon: the 5 s check records a change of the proxy setting once — netenv-change, no failure while the harness is still captured — and never writes the agent\'s file', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const file = path.join(s.home, '.claude', 'settings.json')
+  const setProxy = (v) => { const d = JSON.parse(fs.readFileSync(file, 'utf8')); d.env.HTTPS_PROXY = v; fs.writeFileSync(file, `${JSON.stringify(d, null, 2)}\n`) }
+  setProxy('http://proxy.old:3128')
+  const rec = { at: 'T', routing: 'driver', chain: 'c', source: [], sha256: settingSha('http://proxy.old:3128'), file_sha256: settingSha('http://proxy.old:3128'), proxy: 'http://proxy.old:3128', vpn: null }
+  writeNetenv(s.home, { at: 'T', products: [], unknown: [{ reason: 'a test' }], adopted: { 'claude-code': rec } })
+  const { arch } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home }, checkMs: 20 })
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    await new Promise((r) => setTimeout(r, 150))
+    assert.equal(flowsOf(s).filter((f) => f.event === 'netenv-change').length, 0, 'what `on` found is what is there: nothing to say')
+    setProxy('http://proxy.new:3128')
+    const bytes = fs.readFileSync(file)
+    await until(() => flowsOf(s).some((f) => f.event === 'netenv-change'))
+    await new Promise((r) => setTimeout(r, 200)) // more checks than one
+    const lines = flowsOf(s).filter((f) => f.where === 'netenv' || f.event === 'netenv-change')
+    assert.deepEqual(lines.map((f) => [f.event, f.where, f.code, f.harness, f.from, f.to, f.captured]), [['netenv-change', 'netenv', 'proxy-changed', 'claude-code', 'http://proxy.old:3128', 'http://proxy.new:3128', true]], 'one line, no failure: the eBPF route still steers it')
+    assert.deepEqual(fs.readFileSync(file), bytes, 'the daemon only reads the agent\'s file')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+// §9.5: the semantics of a drift belong to the record `on` made, not to a property of the platform module (the Linux one has none, a proxy-mode one need not declare one): a record of a routing that owns the
+// proxy field is measured against what asight wrote there, so the entry asight put in the field is not a change — and the user's own edit of it is, with the harness left uncaptured.
+test('daemon: the 5 s check takes a proxy-mode record\'s own semantics — the field holding what asight wrote says nothing, the user\'s edit of it is one netenv-change (captured false) and one failure — with an arch that declares no routing', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const file = path.join(s.home, '.claude', 'settings.json')
+  const setProxy = (v) => { const d = JSON.parse(fs.readFileSync(file, 'utf8')); d.env.HTTPS_PROXY = v; fs.writeFileSync(file, `${JSON.stringify(d, null, 2)}\n`) }
+  const KERNEL = 'http://127.0.0.1:17991'
+  setProxy(KERNEL) // `on` in proxy mode pointed the agent's proxy at asight's own kernel
+  const rec = { at: 'T', routing: 'proxy', chain: 'c', source: [], sha256: settingSha('http://proxy.old:3128'), file_sha256: settingSha('http://proxy.old:3128'), proxy: 'http://proxy.old:3128', vpn: null, written_sha256: settingSha(KERNEL) }
+  writeNetenv(s.home, { at: 'T', products: [], unknown: [{ reason: 'a test' }], adopted: { 'claude-code': rec } })
+  const { arch } = fakeArch(p)
+  assert.equal(arch.routing, undefined, 'the arch module declares nothing: the record says what kind it is')
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home }, checkMs: 20 })
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    await new Promise((r) => setTimeout(r, 200))
+    assert.deepEqual(flowsOf(s).filter((f) => f.where === 'netenv' || f.event === 'netenv-change'), [], 'what asight wrote is not a change of the user\'s setting')
+    setProxy('http://proxy.new:3128')
+    const bytes = fs.readFileSync(file)
+    await until(() => flowsOf(s).some((f) => f.event === 'failure' && f.where === 'netenv'))
+    await new Promise((r) => setTimeout(r, 200))
+    const lines = flowsOf(s).filter((f) => f.where === 'netenv' || f.event === 'netenv-change')
+    assert.deepEqual(lines.map((f) => [f.event, f.where, f.code, f.harness, f.captured]), [['netenv-change', 'netenv', 'proxy-changed', 'claude-code', false], ['failure', 'netenv', 'proxy-changed', 'claude-code', undefined]])
+    assert.deepEqual(fs.readFileSync(file), bytes)
   } finally { await d.stop(); p.done(); s.done() }
 })

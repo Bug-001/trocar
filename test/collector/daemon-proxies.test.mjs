@@ -119,7 +119,7 @@ test('daemon: describe that throws costs the connection nothing — it goes on w
   const d = await startDaemon({ dir, socketPath: sock, arch, harnesses: [ccWithProxies], env: { ...process.env, HOME: home }, upstreamCa: fs.readFileSync(labCa.caCert, 'utf8') })
   let raw = null
   try {
-    await req(sock, 'POST', '/on', {})
+    await req(sock, 'POST', '/on', { policy: 'auto' }) // the proxy is "outside the policy" only under `auto`; under the default `all` (D40) it would be terminated
     p.add(4444, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: home, env: { HOME: home, HTTPS_PROXY: `https://${PROXY_HOST}:${proxy.port}` }, startTicks: nowTicks(p) })
     await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 4444, pid: 4444, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
     await until(async () => (await req(sock, 'GET', '/status')).agents.find((a) => a.pid === 4444 && a.trusted))

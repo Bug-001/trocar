@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { lockState, procIdentity, LOCK_FRESH_MS } from '../../src/health/read.mjs'
+import { lockState, procIdentity, captureHealth, LOCK_FRESH_MS } from '../../src/health/read.mjs'
 
 function box() { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-lock-')); return { dir, file: path.join(dir, 'lock'), done: () => fs.rmSync(dir, { recursive: true, force: true }) } }
 const LOCK = { pid: 4242, start_time: '9000', boot_id: 'b-1', helper_pid: 4243, engine_port: 7000, socket: '/run/s' }
@@ -45,4 +45,32 @@ test('procIdentity reads /proc/<pid>/stat field 22 and the boot id; nothing read
     assert.deepEqual(procIdentity(77, { root }), { start_time: '31337', boot_id: 'abc-def' })
     assert.deepEqual(procIdentity(78, { root }), { start_time: null, boot_id: 'abc-def' })
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+// ── the switch as state.json version 2 says it (1.6 §1.5; the board's "capture off since T") ──────────────────────────────────────
+test('captureHealth reads state.json per harness: all on → on, none → off, some → mixed, with since = the newest per-harness updated_at; version 1 still reads', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-sw-read-'))
+  const dir = path.join(home, 'collector'); fs.mkdirSync(dir, { recursive: true })
+  const put = (v) => fs.writeFileSync(path.join(dir, 'state.json'), typeof v === 'string' ? v : JSON.stringify(v))
+  const sw = () => captureHealth({ home, now: Date.parse('2026-10-07T12:00:00Z'), alive: () => false }).collector.switch
+  try {
+    assert.deepEqual(sw(), { desired: 'off', since: null, harnesses: {} }, 'never switched: off, and it says since nowhere')
+    put({ version: 2, updated_at: 'T9', harnesses: { a: { desired: 'on', updated_at: 'T1' }, b: { desired: 'on', updated_at: 'T3' } } })
+    assert.deepEqual(sw(), { desired: 'on', since: 'T3', harnesses: { a: { desired: 'on', updated_at: 'T1' }, b: { desired: 'on', updated_at: 'T3' } } })
+    put({ version: 2, updated_at: 'T9', harnesses: { a: { desired: 'on', updated_at: 'T1' }, b: { desired: 'off', updated_at: 'T2' } } })
+    assert.deepEqual([sw().desired, sw().since, sw().harnesses.b], ['mixed', 'T2', { desired: 'off', updated_at: 'T2' }])
+    put({ version: 2, updated_at: 'T9', harnesses: { a: { desired: 'off', updated_at: 'T5' }, b: { desired: 'off', updated_at: 'T4' } } })
+    assert.deepEqual([sw().desired, sw().since], ['off', 'T5'], 'capture off since the last harness went off')
+    put({ version: 2, updated_at: 'T9', harnesses: {} })
+    assert.deepEqual([sw().desired, sw().since], ['off', 'T9'], 'no harness recorded: the file\'s own time')
+    put({ version: 1, desired: 'on', updated_at: 'T7' })
+    assert.deepEqual([sw().desired, sw().since, 'harnesses' in sw()], ['on', 'T7', false], 'a version 1 file left by an older daemon')
+    put({ desired: 'off', updated_at: 'T6' })
+    assert.deepEqual([sw().desired, sw().since], ['off', 'T6'])
+    for (const bad of ['{ torn', '[]', JSON.stringify({ version: 3, harnesses: {} })]) {
+      put(bad)
+      const h = captureHealth({ home, now: Date.now(), alive: () => false })
+      assert.deepEqual([h.collector.switch.desired, typeof h.collector.switch.error, h.read.errors.length], [null, 'string', 1], `${bad}: unreadable is said, never "off"`)
+    }
+  } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })

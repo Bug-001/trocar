@@ -37,6 +37,9 @@ function sandbox() {
     fs.writeFileSync(path.join(bin, name), '#!/bin/sh\nexit 0\n');
     fs.chmodSync(path.join(bin, name), 0o755);
   }
+  // `ps -o lstart= -p <pid>`: the identity the op lock asks of a process on a Mac (src/off/proc.mjs identityFor) — one fixed start time, so no real ps runs under npm test (0.1 §3)
+  fs.writeFileSync(path.join(bin, 'ps'), '#!/bin/sh\necho "Wed Oct  7 04:27:00 2026"\n');
+  fs.chmodSync(path.join(bin, 'ps'), 0o755);
   return { home, verge, bin, dead: path.join(home, 'no-such-mihomo.sock') };
 }
 const cli = (sb, args, sock) => run(process.execPath, [BIN, ...args], {
@@ -55,12 +58,19 @@ test('`asight desktop off` with no reachable mihomo PRINTS the reason + the Prof
   } finally { fs.rmSync(sb.home, { recursive: true, force: true }); }
 });
 
-test('`asight uninstall` surfaces an incomplete Desktop-steer teardown instead of printing "removed"', darwinOnly, async () => {
+test('`asight uninstall` surfaces an incomplete Desktop-steer teardown instead of printing "removed" — exit 1, the route named, what to do', darwinOnly, async () => {
   const sb = sandbox();
   try {
-    const { stdout } = await cli(sb, ['uninstall'], sb.dead);
-    assert.match(stdout, /Desktop Clash steer: ⚠ NOT fully removed/);
-    assert.match(stdout, /reactivate/);
+    // launchd answers like a machine where the unload took (list → 113), so the one thing left undone is the Clash route the core could not be asked about
+    fs.writeFileSync(path.join(sb.bin, 'launchctl'), '#!/bin/sh\ncase "$1" in list) exit 113;; *) exit 0;; esac\n');
+    const r = await cli(sb, ['uninstall'], sb.dead).then((x) => ({ code: 0, ...x }), (e) => ({ code: e.code, stdout: e.stdout, stderr: e.stderr }));
+    assert.equal(r.code, 1, `a teardown that could not be confirmed is exit 1 (R4): ${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, /asight 没有卸完/);
+    assert.doesNotMatch(r.stdout, /asight 已卸载/, 'never the plain "uninstalled" line on a failed teardown');
+    assert.match(r.stdout, /没撤掉: [^\n]*Script\.js[^\n]*is Clash Verge running\? Start it and run asight off again/, 'the file, why, and what to do');
+    assert.ok(r.stdout.includes(sb.dead), 'names the socket it could not reach');
+    assert.match(r.stderr, /asight off: entry-not-undone: the Clash route was not confirmed gone/, 'and the failure is on stderr too');
+    assert.doesNotMatch(fs.readFileSync(path.join(sb.verge, 'profiles', 'Script.js'), 'utf8'), /atrace/, 'the durable half was stripped (D28: only the block)');
   } finally { fs.rmSync(sb.home, { recursive: true, force: true }); }
 });
 

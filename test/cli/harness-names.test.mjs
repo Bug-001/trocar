@@ -5,6 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { HARNESS_IDS, NAME_ALIASES, resolveHarnesses } from '../../src/cli/harness-names.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
+import { OFF_NAMES, resolveOffNames } from '../../src/off/main.mjs'
 
 test('harness names: CLI ids are the descriptor names (1.6 §3: CLI 名 = 代码 id)', async () => {
   const names = (await loadHarnesses()).map((d) => d.name).sort()
@@ -54,4 +55,12 @@ test('harness names: what is not a string is unknown, not a crash', () => {
   const r = resolveHarnesses([null, 7, 'codex'])
   assert.equal(r.ok, false)
   assert.deepEqual(r.unknown, ['null', '7'])
+})
+
+test('harness names: src/off/main.mjs keeps its own copy of the §3 table (it may import nothing outside src/off) — the ids, the aliases and the resolution are the same as src/cli/harness-names.mjs', () => {
+  assert.deepEqual([...OFF_NAMES.ids], [...HARNESS_IDS])
+  assert.deepEqual({ ...OFF_NAMES.aliases }, { ...NAME_ALIASES })
+  for (const names of [[], ['claude'], ['claude-code', 'claude'], ['zcode', 'codex', 'dsh'], ['kimi', 'nope', 'nope', 'x'], ['constructor'], ['Claude'], ['__proto__']]) {
+    assert.deepEqual(resolveOffNames(names), resolveHarnesses(names), JSON.stringify(names))
+  }
 })

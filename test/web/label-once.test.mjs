@@ -39,3 +39,11 @@ test('a label only the wire family has still shows: a reply that never finished,
   const raw = await shown(call({ ...W, labels }, {}));
   assert.equal(count(raw, /reply never finished/g) >= 1 && count(raw, /compressed request not decoded/g) >= 1, true);
 });
+
+// 1.6 §1.3 / invariant 4: a call whose response head asight added a line to says so on the call, once — the one wire family label has no D38 twin
+test('a call asight added Connection: close to is labelled 「asight 加的」 on the call, once, with what it means', async () => {
+  const labels = [{ id: 'asight-added', label: 'asight 加的 · Connection: close', text: 'asight added the hop-by-hop header Connection: close to this response when capture was turned off; the response body is byte for byte what the upstream sent, and resp_head_raw is the upstream head' }];
+  const raw = await shown(call({ ...W, labels }, {}));
+  assert.equal(count(raw, /asight 加的 · Connection: close/g), 1);
+  assert.equal(count(raw, /resp_head_raw is the upstream head/g) >= 1, true, 'the meaning is on the page, not only the name');
+});

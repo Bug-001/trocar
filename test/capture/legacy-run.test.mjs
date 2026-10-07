@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { createCaptureSink, legacyLifecycle } from '../../src/capture/legacy-run.mjs'
 import { captureHealth } from '../../src/health/read.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
+import { WITH_PARENT, watchEnv } from '../helpers/standin.mjs'
 
 const BIN = fileURLToPath(new URL('../../bin/asight.mjs', import.meta.url))
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'asight-legrun-'))
@@ -68,15 +69,47 @@ test('lifecycle: mitm-start once listening, mitm-stop with the signal, a crash l
   for (const r of recs) assert.deepEqual(checkRecord({ ts: 't', ...r }), [])
 })
 
+// RFC 1.6 §4 「旧 MITM 达到 off 保证的条件」: given its server, a SIGTERM (what `launchctl unload` makes launchd send) stops the MITM accepting, lets the connections already open end by themselves for at most
+// drainMs, cuts what is left and says how many in `mitm-stop`. SIGINT / SIGHUP (a person at the terminal) and a lifecycle with no server stop at once, as before.
+test('1.6 §4: SIGTERM with a server drains — no new connections, the open one ends by itself → cut 0; one that stays is cut after drainMs and counted; SIGINT does not wait', async () => {
+  const mkClock = () => { let t = 0; const hooks = []; return { ms: () => t, sleep: async (n) => { t += n; for (const h of hooks) if (!h.done && t >= h.at) { h.done = true; h.fn() } await new Promise((r) => setTimeout(r, 3)) }, at: (ms, fn) => hooks.push({ at: ms, fn, done: false }) } }
+  const mk = async (signal, { closeAt = null } = {}) => {
+    const recs = [], exits = []
+    const proc = Object.assign(new EventEmitter(), { pid: 77, exit: (c) => exits.push(c) })
+    const server = http.createServer(); await once(server.listen(0, '127.0.0.1'), 'listening')
+    const clock = mkClock()
+    legacyLifecycle({ source: 'mitm', port: server.address().port, out: '/o', record: (r) => recs.push(r), proc, log: () => {}, server, drainMs: 10000, clock }).started()
+    const client = net.connect(server.address().port, '127.0.0.1'); client.on('error', () => {}); await once(client, 'connect')
+    await new Promise((r) => setTimeout(r, 10)) // the server has seen the connection
+    if (closeAt != null) clock.at(closeAt, () => client.destroy())
+    proc.emit(signal)
+    for (let i = 0; i < 300 && !exits.length; i++) await new Promise((r) => setTimeout(r, 10))
+    const listening = server.listening
+    client.destroy(); server.close()
+    return { recs, exits, listening, t: clock.ms() }
+  }
+  const ends = await mk('SIGTERM', { closeAt: 2000 })
+  assert.deepEqual(ends.exits, [0])
+  assert.deepEqual([ends.recs.at(-1).event, ends.recs.at(-1).signal, ends.recs.at(-1).cut], ['mitm-stop', 'SIGTERM', 0])
+  assert.equal(ends.listening, false, 'it stopped accepting')
+  assert.ok(ends.t >= 2000 && ends.t < 10000, `it waited for the connection (${ends.t} ms), not for the whole drain`)
+  const stays = await mk('SIGTERM')
+  assert.equal(stays.recs.at(-1).cut, 1, 'the connection that never ended was cut after the drain, and counted')
+  assert.ok(stays.t >= 10000)
+  const now = await mk('SIGINT')
+  assert.deepEqual([now.recs.at(-1).signal, 'cut' in now.recs.at(-1), now.t], ['SIGINT', false, 0], 'a person at the terminal: stop at once, no count (it is not an `off`)')
+  for (const r of [...ends.recs, ...stays.recs, ...now.recs]) assert.deepEqual(checkRecord({ ts: 't', ...r }), [])
+})
+
 // ── the CLI, end to end, with HOME in a temp dir ────────────────────────────────────────────────────────────────
 const readEvents = (home) => { try { return fs.readFileSync(path.join(home, '.asight', 'logs', 'mitm-events.ndjson'), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) } catch { return [] } }
 async function until(fn, ms = 15000) { const t0 = Date.now(); while (!fn()) { if (Date.now() - t0 > ms) return false; await new Promise((r) => setTimeout(r, 25)) } return true }
 function run(home, args) {
   const e = { ...process.env, HOME: home }
   for (const k of ['HTTPS_PROXY', 'https_proxy', 'ASIGHT_SOURCE', 'ASIGHT_CAPTURE_PORT', 'ASIGHT_MITM_PORT', 'ATRACE_UPSTREAM_PROXY']) delete e[k]
-  const p = spawn(process.execPath, [BIN, ...args], { env: e, stdio: ['ignore', 'pipe', 'pipe'] })
-  let err = ''; p.stderr.on('data', (d) => { err += d })
-  return { p, err: () => err }
+  const p = spawn(process.execPath, [...WITH_PARENT, BIN, ...args], { env: watchEnv(e), stdio: ['ignore', 'pipe', 'pipe'] }) // the capture server of a test: gone with the test process if that is killed
+  let err = '', out = ''; p.stderr.on('data', (d) => { err += d }); p.stdout.on('data', (d) => { out += d })
+  return { p, err: () => err, out: () => out }
 }
 
 test('`asight capture` (the reverse proxy): mitm-start, a failed write is a sink line while the client gets its answer, SIGTERM is mitm-stop; the health reader reads them', async () => {
@@ -85,11 +118,13 @@ test('`asight capture` (the reverse proxy): mitm-start, a failed write is a sink
   up.listen(0, '127.0.0.1'); await once(up, 'listening')
   const out = path.join(home, 'out-is-a-dir')
   fs.mkdirSync(out) // every envelope write fails: EISDIR
-  const { p, err } = run(home, ['capture', '--port', '0', '--target', `http://127.0.0.1:${up.address().port}`, '--out', out])
+  const { p, err, out: said } = run(home, ['capture', '--port', '0', '--target', `http://127.0.0.1:${up.address().port}`, '--out', out])
   try {
     assert.ok(await until(() => readEvents(home).some((e) => e.event === 'mitm-start')), `mitm-start written (stderr: ${err()})`)
     const start = readEvents(home).find((e) => e.event === 'mitm-start')
     assert.deepEqual([start.source, start.pid, start.out], ['proxy', p.pid, out])
+    assert.ok(await until(() => /point the harness at it/.test(said())), `the banner (stdout: ${said()})`)
+    assert.match(said(), /\(or run: asight monitor on --no-autostart\)/, 'the banner names the command that points Claude Code CLI at the proxy: `asight on` is the collector now (1.6 §2, §4)')
     const body = await new Promise((resolve, reject) => {
       http.request({ host: '127.0.0.1', port: start.port, method: 'POST', path: '/v1/messages', headers: { 'content-type': 'application/json', 'x-api-key': SECRET } }, (res) => { let b = ''; res.on('data', (c) => { b += c }); res.on('end', () => resolve(b)) }).on('error', reject).end('{"model":"m"}')
     })

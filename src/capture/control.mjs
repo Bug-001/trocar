@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { caDir } from '../paths.mjs';
 import * as onboardReal from './onboard.mjs';
 import { getAutostartInstaller, MONITOR_LABEL } from './autostart.mjs';
+import { runOffCli } from '../off/main.mjs';
+import { hasNewCollector } from '../off/legacy.mjs';
 
 const HOME = os.homedir();
 const DEFAULT_SETTINGS = path.join(HOME, '.claude', 'settings.json');
@@ -87,4 +89,19 @@ export function monitoringOff({
   const ob = onboard.atraceOff({ settingsPath, removeCa });
   const auto = autostart.remove({ label: MONITOR_LABEL });
   return { ok: true, onboard: ob, autostart: auto, status: monitoringStatus({ settingsPath, captureTarget, proxyUrl, onboard, autostart, getenv }) };
+}
+
+// ── the switch on a platform without the new collector (RFC 1.6 §4, D26 transitional, V40) ──────────────────────────────────────────────────────────────────────────────────────────
+// There the web "off" is `asight off` (no names: both generations of the capture, the receipt and the exit code are the CLI's), not only `atraceOff`. The "on" stays what it was
+// (atraceOn + com.asight.monitor: the old `monitor on`). Where the new collector exists both endpoints are unchanged, and the status says what "off" does there.
+export const OFF_NOTE_STEER_ONLY = '只管旧 CC-CLI steer,不等于 `asight off`';
+/** Does the switch's "off" run `asight off`? `deps.hasNewCollector(platform)` replaces the answer (a test's). */
+export const offIsAsightOff = (deps = {}, platform = process.platform) => !(deps.hasNewCollector || hasNewCollector)(platform);
+/** `asight off --json` run in this process (the same code the CLI runs; no child process) → { exit, receipt, stderr }: `receipt` is the parsed JSON, or null when the command printed none. */
+export async function asightOffInProcess({ home = os.homedir(), env = process.env, platform = process.platform, deps = {} } = {}) {
+  const out = [], err = [];
+  const io = { out: (l) => out.push(l), err: (l) => err.push(l), stdin: null, stdout: null, stderr: null };
+  const exit = await runOffCli(['--json', '--yes'], { io, env, home, platform, deps });
+  let receipt = null; try { receipt = JSON.parse(out.join('\n')); } catch { /* the command printed no receipt: stderr says why */ }
+  return { exit, receipt, stderr: err.join('\n') };
 }

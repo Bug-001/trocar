@@ -25,10 +25,13 @@ export function qCapturing(records, srcMeta) {
 }
 
 // ② 抓得对:LLM call 有 verbatim req_body(string,非空)+ 一个重建出的 resp(usage/text/tool_calls 或标 error)。
+// D40: a call the operator set to 「只记日志」 (body_retention:'log', `asight keep`) has no body BY CHOICE: it is counted apart (`logged`), never
+// as a missing verbatim req_body (it reported ✗ for a setting that was working). src/capture may not import src/dissect, so the field is read here.
 export function qCorrect(records) {
-  let llm = 0, good = 0, badReq = 0, badResp = 0;
+  let llm = 0, good = 0, badReq = 0, badResp = 0, logged = 0;
   for (const r of records) {
     if (!isLlmCall(r.endpoint || '')) continue;
+    if (r.body_retention === 'log') { logged++; continue; }
     llm++;
     const hasReq = typeof r.req_body === 'string' && r.req_body.length > 0;
     const resp = r.resp || {};
@@ -38,10 +41,11 @@ export function qCorrect(records) {
     if (hasReq && hasResp) good++;
   }
   // ok = 有 LLM call 且没有一条丢了 verbatim 请求体(缺响应体可能是 interrupted,归 warn 不判死)。
-  return { ok: llm > 0 && badReq === 0, llm, good, badReq, badResp,
-    note: llm === 0 ? 'no LLM calls to validate (capture a /v1/messages turn)'
+  const keptNote = logged ? ` · ${logged} LLM call(s) kept as a log line only (只记日志, set with \`asight keep\`): no body by choice, not a capture failure` : '';
+  return { ok: llm > 0 && badReq === 0, llm, good, badReq, badResp, logged,
+    note: (llm === 0 ? (logged ? 'no LLM call kept a body to validate' : 'no LLM calls to validate (capture a /v1/messages turn)')
       : `${good}/${llm} LLM call(s) carry verbatim req_body + a reconstructed response`
-        + (badReq ? ` · ✗ ${badReq} missing verbatim req_body` : '') + (badResp ? ` · ⚠ ${badResp} missing response (interrupted?)` : '') };
+        + (badReq ? ` · ✗ ${badReq} missing verbatim req_body` : '') + (badResp ? ` · ⚠ ${badResp} missing response (interrupted?)` : '')) + keptNote };
 }
 
 // ③ 凭据(2026-07-20 起改义)。**旧契约**:secret header MUST 为 `<redacted>`,泄漏 = 硬失败。
@@ -72,24 +76,29 @@ export function qNoLeak(records) {
 }
 
 // ④b 采集文件不可被他人读取(**新硬红线**)。凭据现在就在这些字节里,所以唯一还成立的保证是
-// 「只有属主读得到」。一次 stat,取代原来那套改写防火墙。
+// 「只有属主读得到」。一次 stat,取代原来那套改写防火墙。三种结果,不混:
+//   bad         mode 里有 group / other 的位 → 失败(退出 1),文案「采集文件可被他人读取」;
+//   unreadable  stat 不出来(权限、竞态删除…) → 不知道(退出 3),带文件与 errno:读不到的文件不是「被他人读取」,也不是「没问题」(R11);
+//   checked 0   一个文件也没核 → 不知道,什么都没认证。
+const shq = (f) => `'${String(f).replace(/'/g, `'\\''`)}'`;
 export function qFilePerms(files) {
   if (!files || files.length === 0) {
-    return { ok: false, checked: 0, bad: [],
-      note: '✗ 没有检查任何文件 — no capture files were examined, so permissions cannot be certified.' };
+    return { ok: false, checked: 0, bad: [], unreadable: [],
+      note: '? 没有检查任何文件 — no capture files were examined, so permissions cannot be certified (无法判定).' };
   }
-  const bad = [];
+  const bad = [], unreadable = [];
   for (const f of files) {
     try {
       const st = fsMod.statSync(f);
       const mode = st.mode & 0o777;
       if (mode & 0o077) bad.push({ file: f, mode: '0' + mode.toString(8) });
-    } catch (e) { bad.push({ file: f, mode: 'unreadable: ' + e.message }); }
+    } catch (e) { unreadable.push({ file: f, error: (e && (e.code || e.message)) || String(e) }); }
   }
-  return { ok: bad.length === 0, checked: files.length, bad,
-    note: bad.length
-      ? `✗ ${bad.length} capture file(s) readable by group/others [${bad.map((b) => `${b.file.split('/').pop()} ${b.mode}`).join(', ')}] — these bytes contain live API credentials. Fix: chmod 600`
-      : `all ${files.length} capture file(s) are owner-only (0600)` };
+  const parts = [];
+  if (bad.length) parts.push(`✗ 采集文件可被他人读取: ${bad.length} 个 [${bad.map((b) => `${b.file.split('/').pop()} ${b.mode}`).join(', ')}] — capture file(s) readable by group/others; these bytes contain live API credentials. Fix: chmod 600 ${bad.map((b) => shq(b.file)).join(' ')}`);
+  if (unreadable.length) parts.push(`? 不知道: ${unreadable.length} 个文件的权限读不出来 [${unreadable.map((u) => `${u.file}: ${u.error}`).join('; ')}] — cannot say they are owner-only`);
+  return { ok: bad.length === 0 && unreadable.length === 0, checked: files.length, bad, unreadable,
+    note: parts.length ? parts.join(' · ') : `all ${files.length} capture file(s) are owner-only (0600)` };
 }
 
 // ④ 没弱化全机 TLS:CA 只在用户级信任库(import-only,D22 — asight 从不写全机信任)。verify=()->bool 注入。
@@ -99,19 +108,31 @@ export function qUserTrustOnly(verify) {
   return { ok, err,
     note: ok ? 'CA present in the USER trust store; asight never writes machine-wide trust (import-only, D22)'
       : err ? 'trust check errored: ' + err
-      : 'CA not found in the user trust store — not onboarded yet (run: asight on). asight only ever installs user-level.' };
+      : 'CA not found in the user trust store — this item is about the old capture\'s CA, which only `asight monitor on` (or the board\'s 监测 toggle) puts there; the collector\'s own CA (`asight on`) is in no trust store by design, so this is expected when you use `asight on` alone. asight only ever installs user-level.' };
 }
 
-// 组装四问 + 依赖探测为一个结构化结果。hardFail = 凭据泄漏(唯一不可谈判的安全红线;其余是给人核对的诊断)。
-export function runSelfTest({ records = [], srcMeta = null, deps = [], verify = null, files = [] } = {}) {
+// 组装四问 + 依赖探测为一个结构化结果。三个结局(R4),不混:
+//   failed        有采集文件可被他人读取(④b `bad`)→ 退出 1。唯一不可谈判的安全红线;其余是给人核对的诊断。已发现的问题压过「判不了」。
+//   undetermined  什么也没核到 / 核不全 → 退出 3(「无法判定」),不是过:零条记录、零个文件、读不出权限的文件、读失败的采集文件。
+//                 「核到零条」报「过」会让人以为权限已经核过(0.1 §3 「测试必须能变红」;这条守卫曾经缺席)。
+//   否则 ok → 0。
+// `hardFail` = failed:旧名字,只表示「必须以非 0 退出的失败」;`undetermined` 另走自己的退出码。
+export function runSelfTest({ records = [], srcMeta = null, deps = [], verify = null, files = [], readErrors = [] } = {}) {
   const q1 = qCapturing(records, srcMeta);
   const q2 = qCorrect(records);
   const q3 = qNoLeak(records);
   const q4 = qUserTrustOnly(verify);
   // The red line MOVED (2026-07-20): credentials are stored verbatim by design, so the failure is no
   // longer "a secret is present" but "the file holding it is readable by someone else". q3 still
-  // hard-fails on a VACUOUS scan — reading nothing must never certify anything.
+  // refuses to certify a VACUOUS scan — reading nothing must never certify anything.
   const q4b = qFilePerms(files);
   const depsMissing = deps.filter((d) => !d.present);
-  return { deps, depsMissing, q1, q2, q3, q4, q4b, hardFail: !q3.ok || !q4b.ok, sampled: records.length };
+  const failed = q4b.bad.length > 0;
+  const why = [];
+  if (!q3.ok) why.push('没有核到任何记录(0 records examined),③ 与 ④b 都说不了话');
+  if (q4b.checked === 0) why.push('没有核任何采集文件的权限(no capture files examined)');
+  if (q4b.unreadable.length) why.push(`${q4b.unreadable.length} 个文件的权限读不出来`);
+  if (readErrors.length) why.push(`${readErrors.length} 个采集文件没读完整(read errors)`);
+  const undetermined = !failed && why.length > 0;
+  return { deps, depsMissing, q1, q2, q3, q4, q4b, failed, undetermined, undeterminedWhy: why, hardFail: failed, sampled: records.length };
 }

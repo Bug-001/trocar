@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import zlib from 'node:zlib';
-import { expandRequestBody, requestEncodingOf } from '../../src/dissect/request-body.mjs';
+import { expandRequestBody, requestEncodingOf, NON_INFERENCE_MAX_DECODED_BYTES } from '../../src/dissect/request-body.mjs';
 import { captureLabelsOf } from '../../src/dissect/capture-labels.mjs';
 
 const TEXT = '{"model":"m","messages":[{"role":"user","content":"héllo"}]}';
@@ -75,4 +75,41 @@ test('the label: only when no text is left; the collector\'s reason when the rea
   assert.deepEqual(ids(never), ['req-undecoded']);
   assert.match(captureLabelsOf(never)[0].text, /zstd not decoded at capture/);
   assert.deepEqual(ids({ req_body: null, req_encoding_error: 'lost' }), ['req-undecoded'], 'the collector said so: labelled even with no bytes');
+});
+
+// review (H2): zstd is never decoded at capture, so the READER decodes it — and now any host of any agent can send such a body, not only
+// an inference endpoint. 12 records of ~9 KB each held 2.4 GB of heap at the old 256 MiB-per-record limit. A record that is not an
+// inference call is expanded only up to NON_INFERENCE_MAX_DECODED_BYTES; the wire bytes stay, and the call is labelled.
+test('a record that is not an inference call is expanded up to 1 MiB only: a bomb stays as wire bytes, labelled, and costs no memory; an inference record keeps its higher limit', () => {
+  const bomb = zlib.gzipSync(Buffer.alloc(3 * 1024 * 1024, 0x61));
+  const rec = (llm) => ({ id: 'b', is_llm_call: llm, endpoint: llm ? '/v1/messages' : '/api/event_logging/v2/batch', req_body: null, req_content_encoding: 'gzip', req_body_b64: bomb.toString('base64'), req_encoding_error: 'collector did not decode' });
+  const before = process.memoryUsage().heapUsed;
+  const records = Array.from({ length: 40 }, () => expandRequestBody(rec(false)));
+  const grew = process.memoryUsage().heapUsed - before;
+  for (const r of records) {
+    assert.equal(r.req_body, null);
+    assert.match(r._reqBodyDecodeError, new RegExp(`over the reader's ${NON_INFERENCE_MAX_DECODED_BYTES}-byte limit`));
+    assert.deepEqual(ids(r), ['req-undecoded']);
+  }
+  assert.ok(grew < 64 * 1024 * 1024, `40 bombs held ${grew} bytes`); // unbounded, 40 × 3 MiB of text alone is 120 MiB, and a real zstd bomb is far worse
+  const llm = expandRequestBody(rec(true));
+  assert.equal(llm.req_body.length, 3 * 1024 * 1024, 'inference: decoded as before');
+  const small = { id: 's', is_llm_call: false, req_body: null, req_content_encoding: 'gzip', req_body_b64: zlib.gzipSync(Buffer.alloc(512 * 1024, 0x62)).toString('base64') };
+  assert.equal(expandRequestBody(small).req_body.length, 512 * 1024, 'under the limit a non-inference body decodes too');
+});
+
+test('the same bound holds through the loader every reader uses (readRecords), for a zstd body too', async () => {
+  const fs = await import('node:fs'); const path = await import('node:path'); const { tmpDir } = await import('../helpers/tmp.mjs');
+  const { readRecords } = await import('../../src/etl/ingest.mjs');
+  const has = typeof zlib.zstdCompressSync === 'function';
+  const enc = has ? 'zstd' : 'gzip';
+  const wire = has ? zlib.zstdCompressSync(Buffer.alloc(8 * 1024 * 1024, 0x61)) : zlib.gzipSync(Buffer.alloc(8 * 1024 * 1024, 0x61));
+  const dir = tmpDir('asight-bomb-'); const file = path.join(dir, 'capture.ndjson');
+  fs.writeFileSync(file, Array.from({ length: 12 }, (_, i) => JSON.stringify({ id: `n${i}`, is_llm_call: false, method: 'POST', endpoint: '/api/x', req_headers: {}, req_body: null, req_content_encoding: enc, req_body_b64: wire.toString('base64'), req_encoding_error: 'collector did not decode', resp: { status: 200, kind: 'empty' } }) + '\n').join(''));
+  const before = process.memoryUsage().heapUsed;
+  const recs = await readRecords(file);
+  const grew = process.memoryUsage().heapUsed - before;
+  assert.equal(recs.length, 12);
+  assert.ok(recs.every((r) => r.req_body === null && /over the reader's \d+-byte limit/.test(r._reqBodyDecodeError)));
+  assert.ok(grew < 64 * 1024 * 1024, `12 bombs held ${grew} bytes`);
 });

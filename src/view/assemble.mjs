@@ -410,7 +410,7 @@ function respRefsOf(rec) {
   };
   if (part.kind === 'ws' && Array.isArray(part.messages)) return part.messages.map((_, j) => one(`message ${j + 1}${cut}`, `resp.messages.${j}`));
   if (typeof part.raw === 'string') return [one((part.kind === 'sse' ? 'stream' : 'body') + cut, 'resp.raw')];
-  if (part.body !== undefined) return [{ label: 'body', ref: null, chars: null, why: 'a JSON reply is stored parsed by the collector, so it has no byte-verbatim text to point at (gate G16)' }];
+  if (part.body !== undefined) return [{ label: 'body', ref: null, chars: null, why: 'a JSON reply that re-serializes to itself, or one captured before D40, is stored parsed only, so it has no byte-verbatim text to point at (gate G16)' }];
   if (typeof part.raw_b64 === 'string') {
     return [{ label: 'body', ref: null, chars: null, why: part.encoding_error ? `could not be decoded (${part.encoding_error}); kept as base64 in the record` : 'not UTF-8 text; kept as base64 in the record' }];
   }

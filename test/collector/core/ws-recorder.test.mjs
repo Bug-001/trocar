@@ -22,13 +22,13 @@ function upgrade({ ext, offer, target = '/v1/responses' }) {
     resp: { head: head(raw('HTTP/1.1 101 Switching Protocols', respH), { status: 101, headers: respH }) },
   }
 }
-function rig({ ext = null, offer, terminal = TERMINAL, target, write, maxCallBytes, split = Infinity, seqStart = 0 } = {}) {
-  const out = [], failures = []; let on = true; let n = 0
+function rig({ ext = null, offer, terminal = TERMINAL, target, write, maxCallBytes, split = Infinity, seqStart = 0, retention } = {}) {
+  const out = [], failures = [], turns = { n: 0 }; let on = true; let n = 0
   const store = { envelope: (e) => (write ? write(e, out, store) : (out.push(e), true)), lastError: null }
-  const r = createWsRecorder({ flow: FLOW, upgrade: upgrade({ ext, offer, target }), seqStart, genId: () => `id${n++}`, isRecording: () => on, terminal, maxCallBytes, recordStore: store, onFailure: (f) => failures.push(f) })
+  const r = createWsRecorder({ flow: FLOW, upgrade: upgrade({ ext, offer, target }), seqStart, genId: () => `id${n++}`, isRecording: () => on, terminal, maxCallBytes, retention, recordStore: store, onFailure: (f) => failures.push(f), onTurnEnd: () => { turns.n++ } })
   const wire = { c: [], s: [] }
   const feed = (fn, b) => { for (let i = 0; i < b.length; i += split) fn(b.subarray(i, i + split)) }
-  return { r, out, failures, wire, c: (b) => { wire.c.push(b); feed(r.fromClient, b) }, s: (b) => { wire.s.push(b); feed(r.fromUpstream, b) }, set on(v) { on = v } }
+  return { r, out, failures, wire, turns, c: (b) => { wire.c.push(b); feed(r.fromClient, b) }, s: (b) => { wire.s.push(b); feed(r.fromUpstream, b) }, set on(v) { on = v } }
 }
 const ev = (type, extra = {}) => JSON.stringify({ type, ...extra })
 const srv = (op, payload, opts) => encodeFrame(op, payload, { mask: false, ...opts })
@@ -131,15 +131,48 @@ test('W15 / T2: a call cut before its terminal message is error:true with resp.p
   assert.deepEqual([q.out[0].error, q.out[0].resp.error.type], [true, 'ws_closed'], 'a clean close before the terminal message also interrupts the call')
 })
 
-test('W16: a non-LLM path keeps client messages as {raw_chars, verbatim:false} and no client data payload; the server direction still rebuilds', () => {
+// D40 FLIPPED THIS (it asserted that a non-LLM path keeps client messages as {raw_chars, verbatim:false} with no payload):
+// what an agent sends over a WebSocket besides model calls is exactly what is worth reading, so the call is recorded like
+// an LLM one — messages verbatim, frames keep their payload, ws_raw rebuilds the wire (4.6 W16).
+test('W16: a non-LLM path is recorded verbatim in both directions, and ws_raw rebuilds the wire like any other call (D40)', () => {
   const t = rig({ target: '/realtime/control' })
   t.c(Buffer.concat([cli(1, 'secret', { fin: false }), cli(9, 'p'), cli(0, '-ish')])); t.s(srv(1, ev('response.completed')))
   t.r.end(null)
   const [e] = t.out
-  assert.deepEqual([e.req_body, e.is_llm_call, e.resp.messages], [{ raw_chars: 10, verbatim: false }, false, [ev('response.completed')]])
-  assert.deepEqual(e.ws_raw.map((f) => [f.d, 'p' in f, 'm' in f]), [['c', false, false], ['c', true, false], ['c', false, false], ['s', false, true]])
-  assert.ok(rebuildWsWire(e, 's').s.equals(Buffer.concat(t.wire.s)))
-  assert.doesNotMatch(JSON.stringify(t.out), /secret|c2VjcmV0/)
+  assert.deepEqual([e.req_body, e.is_llm_call, e.resp.messages], ['secret-ish', false, [ev('response.completed')]])
+  assert.deepEqual(e.ws_raw.map((f) => [f.d, 'p' in f, 'm' in f]), [['c', false, true], ['c', true, false], ['c', false, true], ['s', false, true]], 'text frames slice the stored message, the ping keeps its payload')
+  assert.equal('body_retention' in e, false)
+  assert.deepEqual([e.traffic_class, e.body_wire_bytes], ['other', { req: 'secret-ish'.length, resp: ev('response.completed').length }])
+  assertWholeWire(t)
+  assert.match(JSON.stringify(t.out), /secret-ish/)
+})
+
+test('W16 at the log level: both directions are {raw_chars, verbatim:false}, the frames keep a header and no payload, the envelope says so; a change reaches the next call only (D40 · K2)', () => {
+  let level = 'log'
+  const asked = []
+  const t = rig({ target: '/realtime/control', terminal: [{ pathSuffix: '/control', patterns: TERMINAL[0].patterns }], retention: (method, target) => { asked.push([method, target]); return { class: 'telemetry', level } } })
+  const first = ev('response.create', { input: 'secret input' })
+  t.c(cli(1, first)); t.s(srv(1, ev('response.created')))
+  level = 'full'                                                  // the operator edits the file while the call is open
+  t.s(srv(1, ev('response.completed')))                           // the terminal message closes the call
+  const [e] = t.out
+  assert.deepEqual(e.req_body, { raw_chars: first.length, verbatim: false })
+  assert.deepEqual(e.resp.messages, [{ raw_chars: ev('response.created').length, verbatim: false }, { raw_chars: ev('response.completed').length, verbatim: false }])
+  assert.deepEqual([e.body_retention, e.traffic_class, e.body_wire_bytes], ['log', 'telemetry', { req: first.length, resp: ev('response.created').length + ev('response.completed').length }])
+  assert.ok(e.ws_raw.every((f) => !('p' in f) && !('m' in f) && typeof f.h === 'string'), 'headers only')
+  assert.equal(e.req_headers['session-id'], 's-1', 'the headers of the upgrade stay'); assert.match(e.req_head_raw, /^GET \/realtime\/control/)
+  assert.doesNotMatch(JSON.stringify(e), /secret input/)
+  // the call was cut at its terminal message all the same, and the NEXT call is sampled afresh: full now
+  t.c(cli(1, ev('response.create', { input: 'second' }))); t.s(srv(1, ev('response.completed')))
+  const second = t.out[1]
+  assert.deepEqual([second.req_body, 'body_retention' in second, second.resp.messages], [ev('response.create', { input: 'second' }), false, [ev('response.completed')]])
+  assert.ok(asked.length >= 2 && asked.every(([m, tgt]) => m === 'GET' && tgt === '/realtime/control'), 'asked with the upgrade request\'s method and target')
+})
+
+test('a retention callback that throws or is absent keeps the call in full, told by its endpoint (D40 · fail toward keeping)', () => {
+  const t = rig({ retention: () => { throw new Error('boom') } })
+  t.c(cli(1, ev('response.create'))); t.s(srv(1, ev('response.completed')))
+  assert.deepEqual([t.out[0].req_body, t.out[0].traffic_class, 'body_retention' in t.out[0]], [ev('response.create'), 'llm', false])
 })
 
 // A takeover sender keeps one streaming deflate context; a no-takeover sender compresses each message alone.
@@ -187,6 +220,50 @@ test('W6 / C14: on→off→on, deflate takeover both ways: a call begun on is re
   f.c(cli(1, 'a')); f.s(srv(1, 'A1')); f.on = false; f.c(cli(1, 'b')); f.on = true; f.s(srv(1, 'B1')); f.c(cli(1, 'c')); f.s(srv(1, 'C1')); f.r.end(null)
   assert.deepEqual(f.out.map((e) => [e.req_body, e.resp.messages, e.partial_reasons]), [['a', ['A1'], undefined], ['c', ['C1'], ['off-window']]])
   assert.deepEqual(connection(f).ids, [0, 1, 4, 5], 'B1 arrived on, but belongs to the call begun off')
+})
+
+// the drain gate's view of the connection (1.6 §1.3, engine/drain.mjs): idle = nothing to wait for, open = a call whose terminal message is awaited,
+// blind = no terminal message can be seen here, so `off` does not close it
+test('state(): idle with no call, open while a call (or a message of it) is in flight, idle again at its terminal message — which fires onTurnEnd once, and a call cut by the end of the connection does not', () => {
+  const t = rig()
+  assert.deepEqual([t.r.state(), t.turns.n], ['idle', 0])
+  t.c(cli(1, ev('response.create').slice(0, 8), { fin: false })) // a client message begun, not finished
+  assert.equal(t.r.state(), 'open', 'a message in flight is not idle')
+  t.c(cli(0, ev('response.create').slice(8)))
+  assert.equal(t.r.state(), 'open', 'the call is open')
+  t.s(srv(1, ev('response.created')))
+  assert.deepEqual([t.r.state(), t.turns.n], ['open', 0])
+  t.s(srv(1, ev('response.completed')))
+  assert.deepEqual([t.r.state(), t.turns.n], ['idle', 1], 'the terminal message closes the call and the turn is announced once')
+  t.s(srv(1, ev('rate_limits.updated'))) // a server message with no call open is a call of its own, written at once: not a turn that ended
+  assert.deepEqual([t.r.state(), t.turns.n, t.out.length], ['idle', 1, 2], 'written alone, and no turn end is announced for it')
+  t.c(cli(1, ev('response.create'))); assert.equal(t.r.state(), 'open')
+  t.r.end(null)
+  assert.deepEqual([t.r.state(), t.turns.n], ['idle', 1], 'a call the connection closed under is no turn end; the connection is over')
+})
+
+test('state(): blind when the harness declared no terminal message, when either direction is no longer followed (a reserved opcode), or when the open call may have lost its terminal message (an undecodable or omitted server message)', () => {
+  const none = rig({ terminal: null }); none.c(cli(1, 'a'))
+  assert.equal(none.r.state(), 'blind', 'no terminal pattern for this path: nothing says where a turn ends')
+  const idleNone = rig({ terminal: null })
+  assert.equal(idleNone.r.state(), 'blind', 'even with no call open: it cannot be told that none will start')
+
+  const c = rig(); c.c(cli(1, ev('response.create'))); assert.equal(c.r.state(), 'open')
+  c.c(Buffer.from([0x83, 0x80, 0, 0, 0, 0])) // a masked client frame with a reserved opcode: the client direction stops
+  assert.deepEqual([c.r.summary().broken, c.r.state()], [{ c: 'reserved opcode 3' }, 'blind'], 'a client direction that is not followed')
+
+  const s = rig(); s.c(cli(1, ev('response.create'))); s.s(Buffer.from([0x83, 0x00]))
+  assert.deepEqual([s.r.summary().broken, s.r.state()], [{ s: 'reserved opcode 3' }, 'blind'], 'a server direction that is not followed')
+  const idleBroken = rig(); idleBroken.s(Buffer.from([0x83, 0x00]))
+  assert.equal(idleBroken.r.state(), 'blind', 'also with no call open: it cannot be seen that none starts')
+
+  const d = rig({ ext: 'permessage-deflate' }); d.c(cli(1, ev('response.create')))
+  d.s(srv(1, Buffer.from([0xff, 0xff, 0xff]), { rsv1: true })) // does not inflate: this might have been the terminal message
+  assert.deepEqual([d.failures.map((f) => f.code), d.r.state(), d.turns.n], [['decode-failed'], 'blind', 0], 'an undecodable message of the open call')
+
+  const o = rig({ maxCallBytes: 100 }); o.c(cli(1, ev('response.create')))
+  o.s(srv(1, 'x'.repeat(150))) // one message past the cap: omitted, so its text is not seen
+  assert.deepEqual([o.r.state(), o.turns.n], ['blind', 0], 'an omitted message of the open call')
 })
 
 test('W-2: an exception in the recorder itself is recorder-error, not broken; that direction stops being followed and the relay never sees it', () => {

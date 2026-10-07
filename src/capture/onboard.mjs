@@ -10,6 +10,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { getTrustStoreInstaller, CA_CN } from './trust-store.mjs'
 import { caDir as canonicalCaDir } from '../paths.mjs'
+import { readSettings, backupSettingsOnce, STEER_KEYS, clearCliSteer as undoCliSteer } from '../off/legacy.mjs'
 
 // D27 canonical CA home. It MUST equal paths.caDir() so every CA consumer (mitm, onboard install,
 // leafHosts) resolves the SAME directory — a second dir is how a second same-CN CA came to exist and
@@ -83,7 +84,9 @@ export function generateCa({ caDir = DEFAULT_CA_DIR, hosts = [LEAF_HOST], force 
     run('openssl', ['genrsa', '-out', S('leaf.key'), '2048'])
     run('openssl', ['req', '-new', '-key', S('leaf.key'), '-subj', `/CN=${wanted[0]}`, '-out', S('leaf.csr')])
     writeFileSync(S('leaf.ext'), `subjectAltName=${wanted.map((h) => `DNS:${h}`).join(',')}\nextendedKeyUsage=serverAuth\nkeyUsage=digitalSignature,keyEncipherment\n`)
-    run('openssl', ['x509', '-req', '-in', S('leaf.csr'), '-CA', S('atrace-ca.crt'), '-CAkey', S('atrace-ca.key'), '-CAcreateserial', '-days', '3650', '-sha256', '-extfile', S('leaf.ext'), '-out', S('leaf.crt')])
+    // `-CAserial` names the serial file: without it openssl derives the name from the CA's path, and the system LibreSSL of macOS reads the staging dir's `.asight-tmp-…` as the extension
+    // and writes `<HOME>/.srl` — a file outside ~/.asight that no receipt lists and no uninstall removes (audit rule-b 4). CA_SPILL moves the right one along with the rest.
+    run('openssl', ['x509', '-req', '-in', S('leaf.csr'), '-CA', S('atrace-ca.crt'), '-CAkey', S('atrace-ca.key'), '-CAserial', S('atrace-ca.srl'), '-CAcreateserial', '-days', '3650', '-sha256', '-extfile', S('leaf.ext'), '-out', S('leaf.crt')])
     for (const f of CA_ARTIFACTS) if (!existsSync(S(f))) throw new Error(`asight CA generation produced no ${f} (openssl failed silently?) — nothing was installed into ${caDir}`)
     writeFileSync(S(HOSTS_FILE), JSON.stringify(wanted) + '\n') // what this leaf can authorize
     for (const k of ['atrace-ca.key', 'leaf.key']) { try { chmodSync(S(k), 0o600) } catch { /* best-effort */ } }
@@ -113,32 +116,8 @@ export function uninstallCa({ platform = process.platform, installerOpts = {} } 
 
 // ── CC-CLI steer (cross-platform): point the harness at the local capture proxy via
 // ~/.claude/settings.json env; atraceOff reverts. No Clash (that is macOS-Desktop only). ──
-// The user's settings.json is THEIR file (model / permissions / mcpServers live here). A read we
-// cannot fully understand MUST NOT become an empty object we then write back — that silently
-// destroys everything in it. Only a genuinely absent file means "start from {}"; every other
-// failure (unparseable JSON, EACCES, a directory, …) THROWS so nothing is written.
-function readSettings(p) {
-  let raw
-  try { raw = readFileSync(p, 'utf8') } catch (e) {
-    if (e.code === 'ENOENT') return {} // no file yet → a fresh {} is the honest starting point
-    throw new Error(`asight refused to touch ${p}: cannot read it (${e.code || e.message}). Nothing was written — fix or move the file, then retry.`)
-  }
-  try { return JSON.parse(raw) } catch (e) {
-    throw new Error(`asight refused to overwrite ${p}: it is not strict JSON (${e.message}). Comments/trailing commas are not parseable here, and overwriting would destroy your model/permissions/mcpServers. Nothing was written — make it strict JSON (or move it aside), then retry.`)
-  }
-}
-
-// Copy the user's pre-steer settings.json to <path>.asight-bak — ONCE, so repeated on/off cycles
-// keep the ORIGINAL (a per-write backup would just archive an already-steered file).
-function backupSettingsOnce(p) {
-  const bak = p + '.asight-bak'
-  try { if (existsSync(p) && !existsSync(bak)) writeFileSync(bak, readFileSync(p, 'utf8')) } catch { /* best-effort */ }
-}
-
-// The keys the steer OWNS. Anything pre-existing under these names belongs to the user (a corporate
-// proxy, a VPN) and is DISPLACED, not owned — so `on` stashes it and `off` puts it back. Keys absent
-// from the stash were introduced by asight and are the only ones `off` may delete (零残留 · 4.1:101).
-const STEER_KEYS = ['HTTPS_PROXY', 'NO_PROXY']
+// The undo half (readSettings, backupSettingsOnce, STEER_KEYS, readStash, clearCliSteer) lives in src/off/legacy.mjs (RFC 1.6 §4): `asight off` and `monitor off` run one undo, not two.
+// The user's settings.json is THEIR file (model / permissions / mcpServers live here). A read we cannot fully understand MUST NOT become an empty object we then write back — see readSettings.
 
 // Stash of what the steer displaced. Written ONCE per on→off cycle: a second `on` must not overwrite
 // the user's real values with asight's own. Consumed (deleted) by `off` once restored.
@@ -151,10 +130,6 @@ function stashDisplaced(stashPath, env) {
     writeFileSync(stashPath, JSON.stringify({ settingsPath: null, env: displaced }, null, 2) + '\n')
   } catch { /* best-effort: a missing stash degrades to today's delete-on-off, never blocks capture */ }
 }
-function readStash(stashPath) {
-  try { return JSON.parse(readFileSync(stashPath, 'utf8')).env || {} } catch { return null }
-}
-
 export function writeCliSteer({ settingsPath = DEFAULT_SETTINGS_PATH, stashPath = DEFAULT_STASH_PATH, proxyUrl }) {
   const s = readSettings(settingsPath) // throws before any write if we can't understand the file
   stashDisplaced(stashPath, s.env) // record what we are about to displace, BEFORE displacing it
@@ -167,19 +142,7 @@ export function writeCliSteer({ settingsPath = DEFAULT_SETTINGS_PATH, stashPath 
 // `restoreProxy` (explicit) > stash (what `on` displaced) > delete (asight introduced it).
 // The explicit form is how a caller points HTTPS_PROXY back at the upstream VPN/direct (4.1:61).
 export function clearCliSteer({ settingsPath = DEFAULT_SETTINGS_PATH, stashPath = DEFAULT_STASH_PATH, restoreProxy = '' } = {}) {
-  const s = readSettings(settingsPath)
-  const stash = readStash(stashPath)
-  if (s.env) {
-    for (const k of STEER_KEYS) {
-      if (stash?.[k] !== undefined) s.env[k] = stash[k] // user's own value — put it back verbatim
-      else delete s.env[k]                              // asight introduced it — remove it
-    }
-    if (restoreProxy) s.env.HTTPS_PROXY = restoreProxy  // explicit override beats both
-  }
-  backupSettingsOnce(settingsPath)
-  writeFileSync(settingsPath, JSON.stringify(s, null, 2) + '\n')
-  if (stash) { try { rmSync(stashPath, { force: true }) } catch { /* best-effort */ } }
-  return s.env || {}
+  return undoCliSteer({ settingsPath, stashPath, restoreProxy })
 }
 
 // One-call onboard: generate CA (if needed) + install into user trust + steer CC-CLI.
@@ -203,9 +166,9 @@ export function atraceOn({ caDir, proxyUrl = 'http://127.0.0.1:8899', settingsPa
   if (!trusted) {
     const detail = install.result?.stderr?.trim() || install.result?.stdout?.trim() || `exit status ${install.result?.status}`
     const e = new Error(
-      `asight on ABORTED: installing the capture CA into the ${install.platform} user trust store FAILED (${detail}). ` +
+      `asight monitor on ABORTED: installing the capture CA into the ${install.platform} user trust store FAILED (${detail}). ` +
       `NOTHING was steered — ${settingsPath || DEFAULT_SETTINGS_PATH} is unchanged and the harness still talks to the API directly. ` +
-      `The CA itself was generated at ${ca.caCrt}; trust it (or fix the installer) and re-run \`asight on\`. ` +
+      `The CA itself was generated at ${ca.caCrt}; trust it (or fix the installer) and re-run \`asight monitor on\` (or the board's 监测 toggle). ` +
       `Steering the harness at the capture proxy without a trusted CA would break every request with a TLS error.`,
     )
     e.ca = ca

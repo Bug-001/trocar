@@ -6,13 +6,13 @@
 // listed, never ⚠. A Node errno (ENOSPC, EACCES, ERR_SSL_…) goes into `code` unchanged; free text only in `reason`.
 
 /** not_captured on a connection row — capture went wrong. */
-export const NOT_CAPTURED_FAILURE = Object.freeze(['untrusted', 'untracked', 'client-rejected-leaf', 'negative-cache', 'upstream-cert', 'leaf-error', 'h2', 'malformed-hello', 'ws-not-recorded'])
+export const NOT_CAPTURED_FAILURE = Object.freeze(['untrusted', 'untracked', 'client-rejected-leaf', 'negative-cache', 'upstream-cert', 'upstream-handshake', 'leaf-error', 'h2', 'malformed-hello', 'ws-not-recorded'])
 /** not_captured on a connection row — not captured by design. */
 export const NOT_CAPTURED_EXPECTED = Object.freeze(['policy', 'not-trust-path', 'https-proxy', 'proxy-refused', 'upstream-first', 'unknown-protocol', 'upgrade-not-followed', 'error'])
 
 /** Event lines that are failures. Every other event is a state change the reader folds conditions with. */
 export const FAILURE_EVENTS = Object.freeze(['failure', 'agent-untrusted', 'helper-down', 'helper-version-mismatch', 'attach-failed', 'detach-failed', 'log-gap'])
-export const STATE_EVENTS = Object.freeze(['switch', 'daemon-start', 'daemon-stop', 'agent-exit', 'agent-trusted', 'negative-cache-cleared', 'bundles-rebuilt', 'agent-transport', 'ca-ok', 'install-note', 'uninstall-note', 'mitm-start', 'mitm-stop'])
+export const STATE_EVENTS = Object.freeze(['switch', 'daemon-start', 'daemon-stop', 'agent-exit', 'agent-trusted', 'negative-cache-cleared', 'bundles-rebuilt', 'agent-transport', 'ca-ok', 'install-note', 'uninstall-note', 'mitm-start', 'mitm-stop', 'retention-ok', 'retention-set'])
 
 /** Failure codes the failure recorder never folds by where + code: the reader folds each of them into a condition per
  *  (pid, host), so a folded line would make the pairs folded into it vanish (4.6 §事件与码, D1-1). Bounded: a (pid,
@@ -22,7 +22,9 @@ export const UNFOLDED_CODES = Object.freeze(['negative-cache'])
 /** The part of asight a record comes from. */
 export const WHERE = Object.freeze(['start', 'daemon', 'control', 'record', 'events', 'watch', 'harness', 'tracker', 'engine', 'ws', 'helper', 'heartbeat', 'state', 'switch', 'kernel', 'ca', 'bundle', 'install', 'uninstall',
   // the old capture (RFC 4.1 过渡期, ~/.asight/logs/mitm-events.ndjson; deleted with it)
-  'mitm', 'proxy', 'sink', 'autostart', 'steer', 'shard'])
+  'mitm', 'proxy', 'sink', 'autostart', 'steer', 'shard',
+  // the retention settings (D40, RFC 4.6 §记录「保存级别」): read by the collector's engine and by the old MITM / reverse proxy
+  'retention'])
 
 /** The reasons a running agent is not (yet) trusted — the `code` of `agent-untrusted`, and of the `agent-exit` that ends
  *  it. Generic ones come from the resolver (core/trust/confirm.mjs, core/tracker.mjs); the rest are a harness's own
@@ -51,6 +53,10 @@ export const CODES_BY_PART = Object.freeze({
   helper: ['helper-error', 'heartbeat-failed', 'heartbeat-gap', 'loader-down', 'loader-timeout'],
   engine: ['lookup-miss', 'describe-error', 'engine-error', 'leaf-error', 'flow-write-failed', 'system-roots-unavailable', 'trust-store-error', 'upstream-ca-unreadable', 'framer-error', 'negative-cache', 'upstream-slow', 'unpaired-response'],
   ws: ['write-failed', 'decode-failed', 'broken', 'recorder-error', 'pattern-invalid'],
+  // retention.json cannot be read / parsed / holds a cell that is neither full nor log (the call is kept in full), or the
+  // classifier threw; a traffic pattern that does not compile is `pattern-invalid` (above), also under where 'retention'; a hand edit whose line in
+  // the change log could not be written is `retention-log-failed` (the edit applies; the record of it is missing)
+  retention: ['retention-unparsable', 'retention-unreadable', 'classify-failed', 'pattern-invalid', 'retention-log-failed'],
   switch: ['state-mismatch', 'state-unparsable'],
   kernel: ['kernel-drops'],
   ca: ['ca-invalid'],
@@ -59,8 +65,9 @@ export const CODES_BY_PART = Object.freeze({
 })
 export const CODES = Object.freeze([...new Set(Object.values(CODES_BY_PART).flat())])
 
-// What `asight off` writes (RFC 1.6 R1 / R2 / R3, D39⑦). A block of its own, below CODES and apart from the lists above, so that
-// the lists other branches append to (D40: WHERE, STATE_EVENTS, CODES_BY_PART) stay edit-free here; `sets` below adds them.
+// What `asight off` writes (RFC 1.6 R1 / R2 / R3, D39⑦). A block of its own, below CODES and apart from the lists above (which carry D40's
+// `retention` names since the merge): feat/win-collector adds blocks to this file too, so folding the blocks into WHERE, STATE_EVENTS and
+// CODES_BY_PART waits until it has merged (1.6 §闭集); `sets` below adds them.
 // src/off/names.mjs holds the same names (src/off may import nothing outside itself); test/health/codes.test.mjs holds the two equal.
 export const OFF_WHERE = Object.freeze(['off'])
 export const OFF_EVENTS = Object.freeze(['off-note']) // a state change (the last one of a run carries kind:'result'), not a failure
@@ -93,20 +100,26 @@ export const ROUTE_STATUS_REASONS = Object.freeze(['form-unsupported', 'fallback
 /** The envelope's `capture`: how the call reached the engine (4.1 信封表, 4.8 §5.6): `transparent` (Linux, and the other per-process captures) or `proxy` (Windows: the call came through asight's own kernel, D43). */
 export const CAPTURE_KINDS = Object.freeze(['transparent', 'proxy'])
 
-// The netenv names that 4.7 §5 and 1.6 §9.7 both own: defined here once, by the first branch to land (their RFC texts say so). Whoever merges
-// the CLI plan's task 13 (`NET_WHERE` · `NET_EVENTS` · `NET_CODES` · `NET_FAILURE_CODES`) takes this block as the start of its own: the same
-// names, `netenv-change` and the other 1.6 §9.7 codes added to them, nothing defined twice (W38 counts the literals).
+// What the network topology and `asight doctor` write and say (RFC 1.6 §9.7, D39⑩, D43). A block of its own, like the ones above (they stay apart from WHERE / STATE_EVENTS / CODES_BY_PART for the same reason); `sets` below adds it.
+// `netenv-change` is a state change (the topology moved: a proxy setting, the machine's network environment); `failure` with `where: 'netenv'` is written for the codes in NET_FAILURE_CODES, and for
+// `proxy-changed` only when it leaves a harness that is on uncaptured (proxy mode, where the changed entry bypasses asight). D43 withdrew the VPN-block codes: the new collector writes nothing into a VPN.
+// `route-loop`, `forwarder-down` and `egress-differs` are shared with 4.7 / 4.8 (D41, D43): each is defined here, once (test/health/codes.test.mjs W38 counts the literals).
 export const NET_WHERE = Object.freeze(['netenv'])
-/** The class 失败: written as a `failure` event (4.7 §5 and 1.6 §9.7 give each its class). */
-export const NET_FAILURE_CODES = Object.freeze([
-  'route-loop', // 4.7 §5, 4.8 §2.2: the upstream asight computed is its own port; 1.6 §9.7's too
-  'forwarder-down', // 1.6 §9.7
-])
-const NET_NOTICE_CODES = ['egress-differs'] // the class 提示, 4.7 §5 and 1.6 §9.7: `status` and `doctor` only, never a failure event
-export const NET_CODES = Object.freeze([...NET_FAILURE_CODES, ...NET_NOTICE_CODES])
+export const NET_EVENTS = Object.freeze(['netenv-change'])
+const ROUTE_LOOP = 'route-loop', FORWARDER_DOWN = 'forwarder-down', EGRESS_DIFFERS = 'egress-differs' // the names shared with 4.7 / 4.8: written once, used by name below
+const NET_FAILURE_OWN = ['not-routed', 'proxy-dead', 'proxy-unsupported', 'elevated-agent', 'upstream-unreachable', 'shim-not-on-path', 'not-via-entry']
+export const NET_CODES = Object.freeze([...NET_FAILURE_OWN, 'proxy-changed', 'netenv-changed', 'opt-in-needed', 'needs-admin', 'linger-off', 'system-proxy-pac', 'other-redirector', 'fake-ip', 'inferred-behaviour', 'cause-unknown', ROUTE_LOOP, FORWARDER_DOWN, EGRESS_DIFFERS])
+export const NET_FAILURE_CODES = Object.freeze([...NET_FAILURE_OWN, ROUTE_LOOP, FORWARDER_DOWN])
+// the net names `status` gives as the reason an agent is not captured (1.6 §9.7); the proxy-mode reasons of 4.8 §12 (`form-unsupported`, `fallback-active`, `form-path-unknown`) are ROUTE_STATUS_REASONS above
+const NET_STATUS_REASONS = Object.freeze(['not-routed', 'proxy-changed', 'elevated-agent', 'upstream-unreachable', 'opt-in-needed', 'shim-not-on-path', 'not-via-entry', ROUTE_LOOP, FORWARDER_DOWN])
+
+// What `asight status` says of an agent that is not captured (RFC 1.6 §2 / V32, 4.6 §记录「事件与码的名字」): one name from this closed set, whatever the reason. asight's own, then every trust
+// reason above (the resolver's and the harnesses' own). A block of its own, as the ones above are. The Windows collector's reasons (ROUTE_STATUS_REASONS: what a form that is not captured says; ROUTE_TRUST_REASONS: why a running agent is not trusted) are part of it. `negative-cache` is also a code of the engine.
+export const STATUS_OWN_REASONS = Object.freeze(['desired-off', 'entry-missing', 'entry-changed', 'link-missing', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'negative-cache'])
+export const STATUS_REASONS = Object.freeze([...new Set([...STATUS_OWN_REASONS, ...NET_STATUS_REASONS, ...ROUTE_STATUS_REASONS, ...TRUST_REASONS, ...ROUTE_TRUST_REASONS])])
 
 const ERRNO = /^(E[A-Z0-9_]+|Z_[A-Z_]+)$/ // Node's own error codes (errno, ERR_*, zlib's Z_*), written as they are
-const sets = { nc: new Set([...NOT_CAPTURED_FAILURE, ...NOT_CAPTURED_EXPECTED]), ncFail: new Set(NOT_CAPTURED_FAILURE), fail: new Set(FAILURE_EVENTS), event: new Set([...FAILURE_EVENTS, ...STATE_EVENTS, ...OFF_EVENTS, ...ROUTE_EVENTS]), where: new Set([...WHERE, ...OFF_WHERE, ...ROUTE_WHERE, ...NET_WHERE]),
+const sets = { nc: new Set([...NOT_CAPTURED_FAILURE, ...NOT_CAPTURED_EXPECTED]), ncFail: new Set(NOT_CAPTURED_FAILURE), fail: new Set(FAILURE_EVENTS), event: new Set([...FAILURE_EVENTS, ...STATE_EVENTS, ...OFF_EVENTS, ...ROUTE_EVENTS, ...NET_EVENTS]), where: new Set([...WHERE, ...OFF_WHERE, ...ROUTE_WHERE, ...NET_WHERE]),
   code: new Set([...CODES, ...OFF_CODES, ...ROUTE_CODES, ...ROUTE_TRUST_REASONS, ...NET_CODES]) }
 
 export const isCode = (c) => sets.code.has(c) || ERRNO.test(String(c))

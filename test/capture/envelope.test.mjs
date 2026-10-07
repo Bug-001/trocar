@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { buildEnvelope, isoStamp, isLlmCall, HOP_BY_HOP, createEnvelopeWriter } from '../../src/capture/envelope.mjs'
+import { buildEnvelope, isoStamp, isLlmCall, endpointClass, logResponse, HOP_BY_HOP, createEnvelopeWriter } from '../../src/capture/envelope.mjs'
 import { ccAdapter } from '../../src/adapters/cc.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
@@ -32,14 +32,20 @@ test('isLlmCall: relay-prefixed and Gemini inference paths count, count_tokens d
   for (const p of ['/v1/messages/count_tokens', '/v1/models', '/api/event_logging/v2/batch']) assert.equal(isLlmCall(p), false, p)
 })
 
+test('endpointClass tells llm and token-count by the endpoint alone; every other class is the read side\'s to tell (D40)', () => {
+  assert.equal(endpointClass('/v1/messages'), 'llm'); assert.equal(endpointClass('/anthropic/v1/messages?beta=true'), 'llm')
+  assert.equal(endpointClass('/v1/messages/count_tokens'), 'token-count')
+  assert.equal(endpointClass('/api/event_logging/v2/batch'), null)
+})
+
 test('buildEnvelope emits EXACT canonical D10 field names', () => {
   const body = Buffer.from(JSON.stringify({ model: 'claude-x', system: 'you are', messages: [{ role: 'user', content: 'hi' }], tools: [{ name: 't', description: 'd', input_schema: { type: 'object' } }] }))
   const env = buildEnvelope({ ...baseArgs, reqBody: body, capture: 'reverse-proxy' })
   assert.deepEqual(Object.keys(env).sort(), [
-    'auth_mode', 'capture', 'duration_ms', 'endpoint', 'id', 'is_llm_call',
-    'method', 'req_body', 'req_headers', 'resp', 'ts', 'ts_request',
+    'auth_mode', 'body_wire_bytes', 'capture', 'duration_ms', 'endpoint', 'id', 'is_llm_call',
+    'method', 'req_body', 'req_headers', 'resp', 'traffic_class', 'ts', 'ts_request',
     'ts_response_end', 'ts_response_start',
-  ])
+  ])  // D40: traffic_class + body_wire_bytes on every envelope; host / body_retention / b64 only when there is something to say
   assert.equal(env.ts, env.ts_request) // core.ts mirrors request start
   assert.equal(env.is_llm_call, true)
   assert.equal(env.capture, 'reverse-proxy')
@@ -67,10 +73,95 @@ test('capture→adapter seam: a built envelope feeds parseBlocks and rebuilds by
   assert.equal(toolBlk.text, '{"name":"Read","description":"Read a file","input_schema":{"type":"object"}}')
 })
 
-test('non-llm req_body is labeled metadata, not verbatim', () => {
-  const env = buildEnvelope({ ...baseArgs, endpoint: '/v1/messages/count_tokens', reqBody: Buffer.from('x'.repeat(42)), capture: 'mitm' })
-  assert.equal(env.is_llm_call, false)
-  assert.deepEqual(env.req_body, { raw_chars: 42, verbatim: false })
+// D40 FLIPPED THIS GUARD (it asserted "non-llm req_body is labeled metadata, not verbatim", i.e. {raw_chars}). The user
+// decided on 2026-10-07 that non-LLM traffic is not an exception: a telemetry batch, a session worker event, a
+// count_tokens context and a file upload are what an agent harness does BESIDES calling the model, which is exactly
+// what is worth reading. Spec 4.1 验收 #3b. The old shape is still READ (read side labels it 「本条采于 D40 之前」).
+test('a non-llm request body is stored verbatim, like an llm one (D40 · 4.1 #3b)', () => {
+  const wire = '{ "events" : [ {"name":"tengu_init"} ] }' // odd spacing on purpose: stored as sent, not re-serialized
+  for (const endpoint of ['/v1/messages/count_tokens', '/api/event_logging/v2/batch', '/v1/code/sessions/cse_1/worker/events']) {
+    const env = buildEnvelope({ ...baseArgs, endpoint, reqBody: Buffer.from(wire), capture: 'mitm' })
+    assert.equal(env.is_llm_call, false, endpoint)
+    assert.equal(env.req_body, wire, endpoint)
+    assert.equal('req_body_b64' in env, false)
+    assert.deepEqual(env.body_wire_bytes, { req: Buffer.byteLength(wire), resp: null })
+  }
+  // the SAME bytes sent to an llm endpoint take the same shape: only is_llm_call / traffic_class differ
+  const a = buildEnvelope({ ...baseArgs, endpoint: '/v1/messages', reqBody: Buffer.from(wire), capture: 'mitm' })
+  const b = buildEnvelope({ ...baseArgs, endpoint: '/api/event_logging/v2/batch', reqBody: Buffer.from(wire), capture: 'mitm' })
+  for (const k of ['is_llm_call', 'traffic_class', 'endpoint']) { delete a[k]; delete b[k] }
+  assert.deepEqual(a, b)
+  // no body (a GET) is the empty string, as it is for an llm call, never {raw_chars: 0}
+  assert.equal(buildEnvelope({ ...baseArgs, method: 'GET', endpoint: '/api/web/domain_info', reqBody: Buffer.alloc(0), capture: 'mitm' }).req_body, '')
+})
+
+test('a request body that is not UTF-8 is req_body:null + req_body_b64 = the wire bytes, with no content-encoding (D40 · 4.1 #3d)', () => {
+  const bin = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe, 0x00, 0x80]) // not UTF-8
+  for (const endpoint of ['/api/oauth/file_upload', '/v1/messages']) {
+    const env = buildEnvelope({ ...baseArgs, endpoint, reqBody: bin, capture: 'reverse-proxy' })
+    assert.equal(env.req_body, null, endpoint)
+    assert.equal(env.req_body_b64, bin.toString('base64'), endpoint)
+    assert.equal('req_content_encoding' in env, false, 'the missing content-encoding is what tells this apart from a compressed body')
+    assert.equal('req_encoding_error' in env, false)
+  }
+  // a BOM is bytes, not text: kept
+  const bom = Buffer.from('\ufeff{"a":1}', 'utf8')
+  assert.equal(buildEnvelope({ ...baseArgs, endpoint: '/x', reqBody: bom, capture: 'mitm' }).req_body, '\ufeff{"a":1}')
+})
+
+test('a compressed request body is handled the same on every endpoint: wire bytes kept, gzip decoded, zstd never (D40 · T16)', async () => {
+  const zlib = (await import('node:zlib')).default
+  const text = '{"events":[1,2,3]}'
+  const gz = zlib.gzipSync(text)
+  for (const endpoint of ['/v1/messages', '/api/event_logging/v2/batch']) {
+    const env = buildEnvelope({ ...baseArgs, endpoint, reqHeaders: { 'content-encoding': 'gzip' }, reqBody: gz, capture: 'mitm' })
+    assert.deepEqual([env.req_body, env.req_body_b64, env.req_content_encoding, 'req_encoding_error' in env], [text, gz.toString('base64'), 'gzip', false], endpoint)
+    assert.deepEqual(env.body_wire_bytes.req, gz.length, 'the wire length is the compressed length')
+  }
+  const calls = []; const zs = zlib.zstdDecompressSync; if (zs) zlib.zstdDecompressSync = (...a) => { calls.push(a); return zs(...a) } // a spy: zstd is never decoded at capture
+  try {
+    const z = Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x00])
+    const env = buildEnvelope({ ...baseArgs, endpoint: '/api/event_logging/v2/batch', reqHeaders: { 'Content-Encoding': 'zstd' }, reqBody: z, capture: 'mitm' })
+    assert.deepEqual([env.req_body, env.req_body_b64, env.req_content_encoding], [null, z.toString('base64'), 'zstd'])
+    assert.match(env.req_encoding_error, /zstd/)
+    assert.equal(calls.length, 0)
+  } finally { if (zs) zlib.zstdDecompressSync = zs }
+  // a body that claims gzip and is not: kept as wire bytes, labelled; decoded-but-not-UTF-8 likewise
+  const bad = buildEnvelope({ ...baseArgs, endpoint: '/x', reqHeaders: { 'content-encoding': 'gzip' }, reqBody: Buffer.from('nope'), capture: 'mitm' })
+  assert.equal(bad.req_body, null); assert.ok(bad.req_encoding_error); assert.equal(bad.req_body_b64, Buffer.from('nope').toString('base64'))
+  const notText = buildEnvelope({ ...baseArgs, endpoint: '/x', reqHeaders: { 'content-encoding': 'gzip' }, reqBody: zlib.gzipSync(Buffer.from([0xff, 0xfe])), capture: 'mitm' })
+  assert.equal(notText.req_body, null); assert.equal(notText.req_encoding_error, 'decoded body is not UTF-8')
+})
+
+test('a body cut at the cap or never finished is not decoded and says why; the wire length is still exact (D40 · invariant 4)', async () => {
+  const zlib = (await import('node:zlib')).default
+  const gz = zlib.gzipSync('x'.repeat(100)).subarray(0, 12)
+  const cut = buildEnvelope({ ...baseArgs, endpoint: '/api/x', reqHeaders: { 'content-encoding': 'gzip' }, reqBody: gz, reqTruncated: true, reqWireBytes: 5000, capture: 'mitm' })
+  assert.deepEqual([cut.req_body, cut.req_body_b64, cut.req_truncated, cut.req_body_bytes, cut.body_wire_bytes.req, 'req_encoding_error' in cut], [null, gz.toString('base64'), true, 12, 5000, false])
+  const text = buildEnvelope({ ...baseArgs, endpoint: '/api/x', reqBody: Buffer.from('{"a":'), reqPartial: 'aborted', capture: 'mitm' })
+  assert.deepEqual([text.req_body, text.req_partial, 'req_truncated' in text], ['{"a":', 'aborted', false])
+  // a UTF-8 character cut in half by the cap is bytes, not text: never a lossy U+FFFD
+  const half = Buffer.from('ab€', 'utf8').subarray(0, 4)
+  const env = buildEnvelope({ ...baseArgs, endpoint: '/api/x', reqBody: half, reqTruncated: true, reqWireBytes: 99, capture: 'mitm' })
+  assert.deepEqual([env.req_body, env.req_body_b64], [null, half.toString('base64')])
+})
+
+test('the log level keeps the headers and the size, not the body, and says so in place (D40 · 4.1 #3e, invariant 4)', () => {
+  const env = buildEnvelope({ ...baseArgs, endpoint: '/api/event_logging/v2/batch', reqBody: null, reqWireBytes: 4321, retention: 'log', trafficClass: 'telemetry',
+    resp: logResponse({ status: 200, headers: { 'Content-Type': 'application/json', 'request-id': 'rid_9' }, wireBytes: 17 }), capture: 'mitm', host: 'api.anthropic.com' })
+  assert.deepEqual(env.req_body, { raw_chars: 4321, verbatim: false })
+  assert.deepEqual(env.resp, { status: 200, kind: 'json', headers: { 'content-type': 'application/json', 'request-id': 'rid_9' }, request_id: 'rid_9', raw_chars: 17, verbatim: false })
+  assert.deepEqual([env.body_retention, env.traffic_class, env.host, env.body_wire_bytes], ['log', 'telemetry', 'api.anthropic.com', { req: 4321, resp: null }])
+  assert.equal(env.req_headers.authorization, baseArgs.reqHeaders.authorization, 'the headers are the main behaviour signal: kept verbatim')
+  assert.equal(logResponse({ status: 204, wireBytes: 0 }).kind, 'empty'); assert.equal(logResponse({ status: 200, headers: { 'content-type': 'text/event-stream' }, wireBytes: 5 }).kind, 'sse')
+  assert.equal('body_retention' in buildEnvelope({ ...baseArgs, reqBody: Buffer.from('{}'), capture: 'mitm' }), false, 'a full-level envelope carries no body_retention')
+})
+
+test('D40 field order: everything new follows req_body, so the sharder still finds the session headers first', () => {
+  const env = buildEnvelope({ ...baseArgs, reqBody: Buffer.from('{}'), host: 'h.test', trafficClass: 'llm', capture: 'mitm' })
+  const keys = Object.keys(env)
+  for (const k of ['host', 'traffic_class', 'body_wire_bytes']) assert.ok(keys.indexOf(k) > keys.indexOf('req_body'), k)
+  assert.ok(JSON.stringify(env).indexOf('"req_headers":{') < JSON.stringify(env).indexOf('"req_body"'))
 })
 
 // CONTRACT CHANGE, not a relaxation (2026-07-20 · spec 4.1 §采集安全 patched in the
@@ -123,4 +214,26 @@ test('HOP_BY_HOP contains the relay-managed headers', () => {
   for (const h of ['host', 'connection', 'content-length', 'transfer-encoding', 'proxy-authorization']) {
     assert.ok(HOP_BY_HOP.has(h))
   }
+})
+
+// review (H2): the decoded copy of a compressed request body is bounded for a call that is not inference — 204 KB of gzip used to become
+// a 200 MiB req_body (and an escape-heavy one pushed the NDJSON line past V8's string limit: the call was not captured at all). The wire
+// bytes are the verbatim record either way; over the limit they stay as stored and the call says so.
+test('a compressed body that decodes past 1 MiB on a call that is not inference keeps its wire bytes and says so; inference keeps its higher limit', async () => {
+  const zlib = (await import('node:zlib')).default
+  const { NON_INFERENCE_MAX_DECODED_BYTES } = await import('../../src/capture/request-body.mjs')
+  const bomb = zlib.gzipSync(Buffer.alloc(3 * 1024 * 1024, 0x61)) // 3 MiB of 'a' in ~3 KB
+  assert.ok(bomb.length < 10 * 1024, 'a small body on the wire')
+  const nonLlm = buildEnvelope({ ...baseArgs, endpoint: '/api/event_logging/v2/batch', reqHeaders: { 'content-encoding': 'gzip' }, reqBody: bomb, capture: 'mitm' })
+  assert.deepEqual([nonLlm.req_body, nonLlm.req_body_b64, nonLlm.req_content_encoding, nonLlm.body_wire_bytes.req], [null, bomb.toString('base64'), 'gzip', bomb.length])
+  assert.match(nonLlm.req_encoding_error, new RegExp(`over the ${NON_INFERENCE_MAX_DECODED_BYTES}-byte capture limit for a call that is not inference`))
+  assert.ok(JSON.stringify(nonLlm).length < 50 * 1024, 'the record stays small')
+  // the same shape is labelled for the reader and the board (invariant 4): not an empty or a verbatim-text body
+  const { captureLabelsOf } = await import('../../src/dissect/capture-labels.mjs')
+  assert.deepEqual(captureLabelsOf(nonLlm).map((l) => l.id), ['req-undecoded'])
+  // under the limit a non-inference body is decoded as before; an inference body of the same size decodes (its limit is 256 MiB)
+  const small = zlib.gzipSync(Buffer.alloc(512 * 1024, 0x62))
+  assert.equal(buildEnvelope({ ...baseArgs, endpoint: '/api/event_logging/v2/batch', reqHeaders: { 'content-encoding': 'gzip' }, reqBody: small, capture: 'mitm' }).req_body.length, 512 * 1024)
+  const llm = buildEnvelope({ ...baseArgs, endpoint: '/v1/messages', reqHeaders: { 'content-encoding': 'gzip' }, reqBody: bomb, capture: 'mitm' })
+  assert.deepEqual([llm.req_body.length, 'req_encoding_error' in llm], [3 * 1024 * 1024, false])
 })

@@ -5,7 +5,7 @@
 import {
   listSessions, sessionCalls, sessionComposition, sessionResources, callContext,
   filesEverInContext, cacheHitDistribution, breakKindComparison, unmappedFields,
-  forkTree, resourceLifecycle,
+  forkTree, resourceLifecycle, retentionSizes,
 } from './queries.mjs';
 
 // name -> { fn, args } where args names the positional params after the connection (for validation).
@@ -23,6 +23,8 @@ export const NAMED_QUERIES = {
   cacheHitDistribution: { fn: cacheHitDistribution, args: [] },
   breakKindComparison: { fn: breakKindComparison, args: [] },
   unmappedFields: { fn: unmappedFields, args: [] },
+  // what each (harness, class, retention) holds, by window (D40, 3.5 「保存什么」)
+  retentionSizes: { fn: retentionSizes, args: [] },
 };
 
 // runNamed(conn, name, params?) — params is an object keyed by the query's arg names. Throws on an

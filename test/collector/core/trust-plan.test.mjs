@@ -78,7 +78,7 @@ test('trust plan: a replace-semantics entry may only point at its own harness\'s
 })
 
 test('trust plan: text entries — a dotenv block passes the same checks as a key; a login-environment file only ever gets the shim PATH line', async () => {
-  const { lineComment } = await import('../../../src/collector/core/trust/text-edit.mjs')
+  const { lineComment } = await import('../../../src/off/text-edit.mjs')
   const block = (vars, o = {}) => ({ kind: 'text', format: 'dotenv-block', path: '/h/.alpha/.env', vars, semantic: 'replace', ...o })
   assert.equal(plan(() => ({ entries: [block({ SSL_CERT_FILE: `${DIR}/ca/combined-alpha.pem` })], files: [BUNDLE] })).entries[0].format, 'dotenv-block')
   assert.throws(() => plan(() => ({ entries: [block({ SSL_CERT_FILE: `${DIR}/ca/asight-ca.pem` })] })), /SSL_CERT_FILE replaces the trust store/)
