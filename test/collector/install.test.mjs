@@ -9,7 +9,6 @@ import net from 'node:net'
 import tls from 'node:tls'
 import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
-import { spawn } from 'node:child_process'
 import { startControlServer, controlRequest } from '../../src/collector/core/control.mjs'
 import { installCollector, freeEnginePort, daemonEnv, turnOn } from '../../src/collector/install.mjs'
 import { uninstallCollector } from '../helpers/uninstall.mjs'
@@ -23,6 +22,7 @@ import { createRedirectorClient } from '../../src/collector/arch/linux/redirecto
 import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector.mjs'
 import cc from '../../src/collector/harness/claude-code.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { spawnStandin } from '../helpers/standin.mjs'
 import { onNone } from '../helpers/signature-os.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { fakeSystem, recordingExec, fakeDaemon, ROOTS } from '../cli/fixtures/on-ctx.mjs'
@@ -175,7 +175,7 @@ test('install and uninstall refuse to run as root (D36)', async () => {
 
 test('uninstall with no runtime dir set finds the daemon through its lock, asks it to switch off, stops it after checking its identity, then removes (S10)', async () => {
   const b = box()
-  const daemon = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }) // stands in for `asight collector start`
+  const daemon = spawnStandin() // stands in for `asight collector start`; ends by itself if this process is killed before the `finally` (test/helpers/standin.mjs)
   const sock = path.join(tmpDir('as-u-'), 'c.sock')
   const asked = []
   const control = await startControlServer({ socketPath: sock, routes: { 'GET /status': async () => ({ desired: 'on' }), 'POST /off': async ({ body }) => { asked.push(body); return { desired: 'off', actual: 'off', confirmed: true, relayed: { closing: 0, waiting: 0, cut: 0 }, pid: daemon.pid } } } })

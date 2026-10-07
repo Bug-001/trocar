@@ -3,6 +3,7 @@
 // on a line `log` on stdin prints the proxy's prelude log and its peer ports as one JSON line; `END` stops it. Not production.
 import readline from 'node:readline'
 import { startMockProxy } from '../../mock-upstream/proxy.mjs'
+import '../../../helpers/exit-with-parent.mjs' // a daemon of a test ends when the test process is gone (test/helpers/standin.mjs)
 
 if (process.env.ASIGHT_MOCK_PROXY === '1') {
   const proxy = await startMockProxy({ kind: 'connect', target: { port: Number(process.env.ASIGHT_MOCK_TARGET_PORT) } })

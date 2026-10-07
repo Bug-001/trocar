@@ -4,9 +4,10 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { tmpDir, removeTmp } from './tmp.mjs'
+import { EXIT_WITH_PARENT, watchEnv } from './standin.mjs'
 
 const HELPER = fileURLToPath(new URL('./tmp.mjs', import.meta.url))
 const env = { ...process.env }
@@ -70,6 +71,7 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
     const scratch = tmpDir('asight-tmpchild-') // the children's dirs are made in here; this one goes at exit, mode-000 leftovers of a broken helper included
     const script = path.join(scratch, 'kid.mjs')
     fs.writeFileSync(script, `
+      import ${JSON.stringify(EXIT_WITH_PARENT)} // …and, if the test that started this one is killed, its parent being gone (a kill -9 leaves no cleanup to run)
       import { tmpDir } from ${JSON.stringify(HELPER)}
       import fs from 'node:fs'
       const dir = tmpDir('asight-kid-')
@@ -79,11 +81,43 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
       setInterval(() => {}, 1000) // a hung test: nothing but the signal ends this process
     `)
     const report = path.join(scratch, 'dir.txt')
-    const r = spawnSync(process.execPath, [script], { env: { ...env, TMPDIR: scratch, REPORT: report }, encoding: 'utf8', timeout: 60_000 })
+    const r = spawnSync(process.execPath, [script], { env: watchEnv({ ...env, TMPDIR: scratch, REPORT: report }), encoding: 'utf8', timeout: 60_000 })
     assert.equal(r.signal, sig, `status ${r.status}: ${r.stderr}`)
     assert.equal(fs.existsSync(fs.readFileSync(report, 'utf8')), false)
   })
 }
+
+test('tmpDir: the hung child of the signal tests (nothing but a signal ends it) is bounded by its parent — SIGKILL the process that started it and it goes, taking its directory with it', async () => {
+  const scratch = tmpDir('asight-tmpchild-')
+  const kid = path.join(scratch, 'hung.mjs'), parent = path.join(scratch, 'parent.mjs'), report = path.join(scratch, 'dir.txt')
+  fs.writeFileSync(kid, `
+    import ${JSON.stringify(EXIT_WITH_PARENT)}
+    import { tmpDir } from ${JSON.stringify(HELPER)}
+    import fs from 'node:fs'
+    const dir = tmpDir('asight-kid-')
+    fs.writeFileSync(process.env.REPORT, dir)
+    setInterval(() => {}, 1000) // a hung test: only a signal ends this process, and the death of its parent
+  `)
+  fs.writeFileSync(parent, `
+    import { spawn } from 'node:child_process'
+    const c = spawn(process.execPath, [${JSON.stringify(kid)}], { stdio: 'ignore', env: { ...process.env, ASIGHT_WATCH_PID: String(process.pid) } })
+    console.log(c.pid)
+    setInterval(() => {}, 1000)
+  `)
+  const p = spawn(process.execPath, [parent], { env: { ...env, TMPDIR: scratch, REPORT: report }, stdio: ['ignore', 'pipe', 'inherit'] })
+  let out = ''
+  p.stdout.on('data', (d) => { out += d })
+  const until = async (fn, ms) => { for (const end = Date.now() + ms; Date.now() < end;) { if (fn()) return true; await new Promise((r) => setTimeout(r, 50)) } return fn() }
+  const alive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' } }
+  assert.ok(await until(() => out.includes('\n') && fs.existsSync(report), 15000), 'the hung child started and made its directory')
+  const pid = Number(out.trim()), made = fs.readFileSync(report, 'utf8')
+  try {
+    assert.ok(alive(pid) && fs.existsSync(made), 'it is up and holds its directory')
+    p.kill('SIGKILL')
+    assert.ok(await until(() => !alive(pid), 10000), `the hung child ${pid} outlived its parent`)
+    assert.ok(await until(() => !fs.existsSync(made), 5000), 'and its directory went with it (process.exit runs the cleanup)')
+  } finally { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } p.kill('SIGKILL') }
+})
 
 test('tmpDir: a directory holding a mode-000 file and a mode-000 subdirectory is removed too', () => {
   const scratch = tmpDir('asight-tmpchild-')

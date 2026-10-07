@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { createCaptureSink, legacyLifecycle } from '../../src/capture/legacy-run.mjs'
 import { captureHealth } from '../../src/health/read.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
+import { WITH_PARENT, watchEnv } from '../helpers/standin.mjs'
 
 const BIN = fileURLToPath(new URL('../../bin/asight.mjs', import.meta.url))
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'asight-legrun-'))
@@ -106,7 +107,7 @@ async function until(fn, ms = 15000) { const t0 = Date.now(); while (!fn()) { if
 function run(home, args) {
   const e = { ...process.env, HOME: home }
   for (const k of ['HTTPS_PROXY', 'https_proxy', 'ASIGHT_SOURCE', 'ASIGHT_CAPTURE_PORT', 'ASIGHT_MITM_PORT', 'ATRACE_UPSTREAM_PROXY']) delete e[k]
-  const p = spawn(process.execPath, [BIN, ...args], { env: e, stdio: ['ignore', 'pipe', 'pipe'] })
+  const p = spawn(process.execPath, [...WITH_PARENT, BIN, ...args], { env: watchEnv(e), stdio: ['ignore', 'pipe', 'pipe'] }) // the capture server of a test: gone with the test process if that is killed
   let err = '', out = ''; p.stderr.on('data', (d) => { err += d }); p.stdout.on('data', (d) => { out += d })
   return { p, err: () => err, out: () => out }
 }
