@@ -85,9 +85,13 @@ const identity = (row) => `${row.startedAt ?? '?'}|${row.exe ?? ''}`
 
 /** createProcWatcher({ helper, intervalMs, now, all, timers }) → EventEmitter with start() · stop() · poll() · scan() · unreadable() · stats().
  *  Events: 'exec' ProcFacts (source 'exec') · 'exit' {pid, startedAt} · 'facts-error' {os, pid, comm, argv, code, reason} (a process whose image path
- *  cannot be read: never judged, told once) · 'poll-error' {code:'helper-error', cause, reason} (the helper failed, `cause` = the client's error code: once per run of failures, never thrown).
+ *  cannot be read: never judged, told once) · 'poll-error' {code:'helper-error', cause, reason, …} (something went wrong in a poll, told once per run of
+ *  the same failure, never thrown: `cause` = the client's error code when the helper failed, 'listener-threw' {event, pid} when a listener of another
+ *  event threw — that event is not retried, the rest of the poll is still announced — and 'malformed-rows' {count} when the helper's answer held rows
+ *  that are not processes, which are skipped).
  *  The first poll() is the baseline and emits nothing: what is already running is scan()'s (startup and every `on`), exec / exit are what
- *  changes after it. scan() throws what the helper throws — a daemon that cannot list processes must say so. `all` asks for every session. */
+ *  changes after it. scan() throws what the helper throws — a daemon that cannot list processes must say so. `all` asks for every session.
+ *  poll() never rejects and never throws into a timer: every failure of a poll is a 'poll-error'. */
 export function createProcWatcher({ helper, intervalMs = 2000, now = Date.now, all = false, timers = { setInterval, clearInterval } } = {}) {
   const ev = new EventEmitter()
   const known = new Map() // pid → { identity, startedAt } of the processes already reported (or in the baseline)
@@ -95,13 +99,28 @@ export function createProcWatcher({ helper, intervalMs = 2000, now = Date.now, a
   let primed = false
   let busy = false
   let failing = false
+  let malformed = false
   let timer = null
-  const counters = { polls: 0, lastPollAt: null }
+  const counters = { polls: 0, lastPollAt: null, listenerErrors: 0 }
+
+  /** Announces one event so that a listener that throws cannot take the rest of the poll (or the timer) with it: the throw becomes a poll-error,
+   *  and a poll-error listener that throws has nobody left to tell. */
+  function tell(name, payload) {
+    try { ev.emit(name, payload) } catch (e) {
+      counters.listenerErrors++
+      if (name === 'poll-error') return
+      tell('poll-error', { code: 'helper-error', cause: 'listener-threw', event: name, pid: payload && payload.pid != null ? payload.pid : null, reason: `a '${name}' listener threw: ${String((e && e.message) || e).slice(0, 200)}` })
+    }
+  }
 
   async function snapshot() {
     const r = await helper.call('ps', all ? { all: true } : {})
     if (!r || !Array.isArray(r.procs)) throw new Error('the helper\'s ps answer has no process list')
-    return r.procs
+    const rows = r.procs.filter((x) => x && typeof x === 'object' && Number.isInteger(x.pid))
+    if (rows.length !== r.procs.length) {
+      if (!malformed) { malformed = true; tell('poll-error', { code: 'helper-error', cause: 'malformed-rows', count: r.procs.length - rows.length, reason: `${r.procs.length - rows.length} of the helper's ${r.procs.length} ps rows are not processes (no integer pid); they are skipped` }) }
+    } else malformed = false
+    return rows
   }
 
   function noteUnreadable(rows) {
@@ -114,44 +133,48 @@ export function createProcWatcher({ helper, intervalMs = 2000, now = Date.now, a
       if (prev && prev.id === id) continue
       const argv = splitCommandLine(r.cmdline)
       unreadable.set(r.pid, { id, pid: r.pid, comm: r.name ?? null, errno: null, argv })
-      ev.emit('facts-error', { os: 'win32', pid: r.pid, comm: r.name ?? null, code: null, argv, reason: `${r.name ?? 'a process'} (pid ${r.pid}): its image path cannot be read; it is never judged` })
+      tell('facts-error', { os: 'win32', pid: r.pid, comm: r.name ?? null, code: null, argv, reason: `${r.name ?? 'a process'} (pid ${r.pid}): its image path cannot be read; it is never judged` })
     }
     for (const pid of [...unreadable.keys()]) if (!here.has(pid)) unreadable.delete(pid)
   }
 
-  /** One difference step. Resolves true when it ran, false when the previous one was still in flight. */
+  async function step() {
+    let rows
+    try { rows = await snapshot() } catch (e) {
+      if (!failing) { failing = true; tell('poll-error', { code: 'helper-error', cause: (e && e.code) ?? null, reason: String((e && e.message) || e) }) }
+      return
+    }
+    failing = false
+    counters.polls++
+    counters.lastPollAt = now()
+    noteUnreadable(rows)
+    const present = new Set(rows.map((r) => r.pid))
+    const exits = []
+    const execs = []
+    for (const [pid, prev] of known) if (!present.has(pid)) { exits.push({ pid, startedAt: prev.startedAt }); known.delete(pid) }
+    for (const r of rows) {
+      if (r.exe == null) continue
+      const prev = known.get(r.pid)
+      if (prev && prev.identity === identity(r)) continue
+      if (prev) exits.push({ pid: r.pid, startedAt: prev.startedAt })
+      known.set(r.pid, { identity: identity(r), startedAt: r.startedAt ?? null })
+      execs.push(r)
+    }
+    if (primed) {
+      for (const x of exits) tell('exit', x)
+      for (const r of execs) tell('exec', factsOf(r, 'exec'))
+    }
+    primed = true
+  }
+
+  /** One difference step. Resolves true when it ran, false when the previous one was still in flight. Never rejects. */
   async function poll() {
     if (busy) return false
     busy = true
-    try {
-      let rows
-      try { rows = await snapshot() } catch (e) {
-        if (!failing) { failing = true; ev.emit('poll-error', { code: 'helper-error', cause: (e && e.code) ?? null, reason: String((e && e.message) || e) }) }
-        return true
-      }
-      failing = false
-      counters.polls++
-      counters.lastPollAt = now()
-      noteUnreadable(rows)
-      const present = new Set(rows.map((r) => r.pid))
-      const exits = []
-      const execs = []
-      for (const [pid, prev] of known) if (!present.has(pid)) { exits.push({ pid, startedAt: prev.startedAt }); known.delete(pid) }
-      for (const r of rows) {
-        if (r.exe == null) continue
-        const prev = known.get(r.pid)
-        if (prev && prev.identity === identity(r)) continue
-        if (prev) exits.push({ pid: r.pid, startedAt: prev.startedAt })
-        known.set(r.pid, { identity: identity(r), startedAt: r.startedAt ?? null })
-        execs.push(r)
-      }
-      if (primed) {
-        for (const x of exits) ev.emit('exit', x)
-        for (const r of execs) ev.emit('exec', factsOf(r, 'exec'))
-      }
-      primed = true
-      return true
+    try { await step() } catch (e) {
+      tell('poll-error', { code: 'helper-error', cause: 'poll-threw', reason: `a poll threw: ${String((e && e.message) || e).slice(0, 200)}` })
     } finally { busy = false }
+    return true
   }
 
   async function scan() {
@@ -160,13 +183,15 @@ export function createProcWatcher({ helper, intervalMs = 2000, now = Date.now, a
     return rows.filter((r) => r.exe != null).map((r) => factsOf(r, 'scan'))
   }
 
+  const tick = () => { poll().catch(() => {}) } // poll() does not reject; this is the last wall before an unhandled rejection takes the daemon down
+
   return Object.assign(ev, {
     poll,
     scan,
     start() {
       if (timer) return
-      poll()
-      timer = timers.setInterval(() => { poll() }, intervalMs)
+      tick()
+      timer = timers.setInterval(tick, intervalMs)
       if (timer && timer.unref) timer.unref()
     },
     stop() { if (timer) { timers.clearInterval(timer); timer = null } },

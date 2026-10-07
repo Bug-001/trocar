@@ -528,6 +528,73 @@ test('W2 a helper that fails is one poll-error per run of failures, never a thro
   assert.match(ev[1][1].reason, /down/)
 })
 
+test('W2 a listener that throws loses nothing: the rest of the poll is announced, and the throw is one poll-error with the event and the pid', async () => {
+  const w = createProcWatcher({ helper: psHelper([[row(1)], [row(1), row(2), row(3), row(4)], [row(1), row(2), row(3), row(4)]]) })
+  const seen = []
+  w.on('exec', (f) => { seen.push(f.pid); if (f.pid === 2) throw new Error('listener bug') })
+  const errs = []
+  w.on('poll-error', (x) => errs.push(x))
+  await w.poll()
+  assert.equal(await w.poll(), true, 'a poll whose listener threw still ran')
+  assert.deepEqual(seen, [2, 3, 4], 'pids 3 and 4 were not lost to the throw on pid 2')
+  assert.deepEqual(errs.map((e) => [e.code, e.cause, e.event, e.pid]), [['helper-error', 'listener-threw', 'exec', 2]])
+  assert.match(errs[0].reason, /exec.*listener bug/)
+  await w.poll()
+  assert.deepEqual(seen, [2, 3, 4], 'the event that threw is told once: it is not announced again every poll')
+  assert.equal(errs.length, 1)
+  assert.equal(w.stats().listenerErrors, 1)
+})
+
+test('W2 a throwing exit, facts-error or poll-error listener is survived the same way, and a poll-error listener that throws cannot loop', async () => {
+  const bad = row(30, { exe: null, name: 'svc.exe' })
+  const w = createProcWatcher({ helper: psHelper([[row(1), row(2)], [row(3), bad], [row(3), bad]]) })
+  const ev = []
+  w.on('exit', (x) => { ev.push(['exit', x.pid]); throw new Error('exit listener bug') })
+  w.on('facts-error', (x) => { ev.push(['facts-error', x.pid]); throw new Error('facts-error listener bug') })
+  w.on('exec', (x) => ev.push(['exec', x.pid]))
+  const errs = []
+  w.on('poll-error', (x) => { errs.push(x.cause + ':' + x.event); throw new Error('poll-error listener bug') })
+  await w.poll()
+  await w.poll()
+  assert.deepEqual(ev.map(([n, pid]) => `${n}:${pid}`).sort(), ['exec:3', 'exit:1', 'exit:2', 'facts-error:30'], 'every announcement was made')
+  assert.deepEqual([...errs].sort(), ['listener-threw:exit', 'listener-threw:exit', 'listener-threw:facts-error'])
+})
+
+test('W2 a malformed row in the helper\'s answer is skipped and told once per run; the rest of the snapshot is used', async () => {
+  const w = createProcWatcher({ helper: psHelper([[row(10)], [row(10), null, 'x', { name: 'no pid' }, { pid: '12' }, row(11)], [row(10), null, row(11)], [row(10), row(11)], [row(10), row(11), 7]]) })
+  const ev = collect(w)
+  await w.poll()
+  assert.equal(await w.poll(), true, 'a null in the list is not an exception')
+  assert.deepEqual(brief(ev), [['poll-error', undefined], ['exec', 11]], 'told while the answer is read, then the diff: pid 11 was not lost to the rows around it')
+  assert.deepEqual([ev[0][1].code, ev[0][1].cause, ev[0][1].count], ['helper-error', 'malformed-rows', 4])
+  await w.poll()
+  assert.equal(ev.length, 2, 'the next malformed snapshot is the same run: not told again')
+  await w.poll() // a clean one ends the run
+  await w.poll()
+  assert.deepEqual(ev.slice(2).map(([n, x]) => [n, x.cause, x.count]), [['poll-error', 'malformed-rows', 1]])
+  assert.deepEqual((await w.scan()).map((f) => f.pid), [10, 11], 'scan() skips them too')
+})
+
+test('W2 start() and the interval never leave an unhandled rejection, whatever a listener or the helper\'s answer does', async () => {
+  const unhandled = []
+  const on = (e) => unhandled.push(e)
+  process.on('unhandledRejection', on)
+  try {
+    let tick
+    const w = createProcWatcher({ helper: psHelper([[row(1)], [row(1), null, row(2)], [row(1), null, row(2), row(3)]]), intervalMs: 5, timers: { setInterval: (fn) => { tick = fn; return 'T' }, clearInterval() {} } })
+    w.on('exec', () => { throw new Error('listener bug') })
+    w.on('poll-error', () => { throw new Error('and this one') })
+    w.start()
+    await until(() => w.stats().polls === 1)
+    tick()
+    await until(() => w.stats().polls === 2) // a tick while the previous poll is in flight is skipped: wait for each
+    tick()
+    await until(() => w.stats().polls === 3)
+    await new Promise((r) => setTimeout(r, 30)) // an unhandled rejection is reported after the microtasks drain
+    assert.deepEqual(unhandled, [])
+  } finally { process.off('unhandledRejection', on) }
+})
+
 test('W2 start() polls at once and on the interval; a poll still in flight is not started twice; stop() clears the timer', async () => {
   const h = psHelper([[row(10)], [row(10), row(11)]], { delayMs: 30 })
   let tick; let cleared = 0
