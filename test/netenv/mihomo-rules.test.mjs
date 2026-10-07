@@ -8,9 +8,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { fileURLToPath } from 'node:url'
-import { buildBlock, checkLoops, names, probeUrl, processRulesOf, routeFile, RouteLoopError, spliceRuntime, stripRuntime, FILTER_TOKEN, buildScriptJs, SCRIPT_SENTINEL } from '../../src/netenv/mihomo/rules.mjs'
+import { buildBlock, checkLoops, names, probeUrl, processRulesOf, routeFile, RouteLoopError, spliceRuntime, stripRuntime, FILTER_TOKEN, buildScriptJs, SCRIPT_SENTINEL, insertScriptBlock, stripScriptBlock, scanScript } from '../../src/netenv/mihomo/rules.mjs'
 import { TOKEN, ENGINE_PORT, REENTER, ONE, TWO, THREE, block, IMAGES, goldenText } from './fixtures/rules/inputs.mjs'
 import { runtimeFixture } from './fixtures/rules/runtime.mjs'
+import { injectScript, stripBlock as stripOldBlock } from '../../src/capture/desktop-steer.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const RULES_SRC = path.join(HERE, '..', '..', 'src', 'netenv', 'mihomo', 'rules.mjs')
@@ -395,4 +396,105 @@ test('W10 a sentinel that is not two different one-line comments, or data that h
   assert.throws(() => buildScriptJs({ block: sneaky }), /sentinel/)
   assert.throws(() => buildScriptJs({ block: { ...EMPTY, proxies: [{ name: 'node-a' }] } }), /asight-/)
   assert.throws(() => buildScriptJs({}), /block/)
+})
+
+// ---- W10: the sentinel block goes into Script.js and comes out again, byte for byte (D28) ----------------------------------------------------------
+
+const BLOCK_TEXT = buildScriptJs({ block: BLOCK2 })
+const VERGE_DEFAULT = 'function main(config, profileName) {\n  return config;\n}\n'
+const SCRIPTS = {
+  'the stock script': VERGE_DEFAULT,
+  'CRLF line ends': VERGE_DEFAULT.replace(/\n/g, '\r\n'),
+  'no newline at the end': 'function main(config, profileName) {\n  return config;\n}',
+  'an empty file': '',
+  'a BOM': `\ufeff${VERGE_DEFAULT}`,
+  'the user\'s own code and a trailing note': "// mine\nconst x = 1;\nfunction main(config) {\n  config.rules.unshift('DOMAIN,a,DIRECT');\n  return config;\n}\n\n// trailing note",
+  'blank lines at the end': `${VERGE_DEFAULT}\n\n`,
+  'mixed line ends': 'function main(c) {\r\n  return c;\n}\r\n',
+}
+const eolOf = (t) => (t.includes('\r\n') ? '\r\n' : '\n')
+
+test('W10 insert, then strip: Script.js is back to the original byte for byte (the block is last, one line end before it, in the file\'s own line ends)', () => {
+  for (const [what, original] of Object.entries(SCRIPTS)) {
+    const put = insertScriptBlock(original, BLOCK_TEXT)
+    assert.equal(put.ok, true, what)
+    const nl = eolOf(original)
+    assert.equal(put.text, original + (original === '' ? '' : nl) + BLOCK_TEXT.replace(/\n/g, nl), what)
+    assert.ok(put.text.startsWith(original), `${what}: nothing of the user's file moved`)
+    const out = stripScriptBlock(put.text)
+    assert.deepEqual({ ok: out.ok, removed: out.removed }, { ok: true, removed: 1 }, what)
+    assert.equal(out.text, original, what)
+  }
+})
+
+test('W10 insert is idempotent and replaces an older block of ours; strip with no block changes nothing', () => {
+  for (const original of Object.values(SCRIPTS)) {
+    const once = insertScriptBlock(original, BLOCK_TEXT).text
+    assert.equal(insertScriptBlock(once, BLOCK_TEXT).text, once)
+    const newer = buildScriptJs({ block: buildBlock(block(ONE)) })
+    const swapped = insertScriptBlock(once, newer)
+    assert.equal(swapped.replaced, 1)
+    assert.equal(swapped.text, insertScriptBlock(original, newer).text, 'the old block leaves nothing behind')
+    assert.deepEqual(stripScriptBlock(original), { ok: true, text: original, removed: 0 })
+  }
+})
+
+test('W10 what the user wrote around the block survives the strip; two blocks (pasted twice) both go', () => {
+  const put = insertScriptBlock(VERGE_DEFAULT, BLOCK_TEXT).text
+  const edited = `// first line\n${put}\n// last line`
+  assert.equal(stripScriptBlock(edited).text, `// first line\n${VERGE_DEFAULT}\n// last line`)
+  const twice = `${put}\n${BLOCK_TEXT}`
+  assert.deepEqual({ ...stripScriptBlock(twice), text: undefined }, { ok: true, text: undefined, removed: 2 })
+  assert.equal(stripScriptBlock(twice).text, VERGE_DEFAULT)
+  const atTop = `${BLOCK_TEXT}\n${VERGE_DEFAULT}`
+  assert.equal(stripScriptBlock(atTop).text, VERGE_DEFAULT, 'a block the user moved to the top takes its own line end with it')
+})
+
+test('W10 a sentinel the user damaged is not guessed at: ok:false, nothing changes, insert refuses too', () => {
+  const put = insertScriptBlock(VERGE_DEFAULT, BLOCK_TEXT).text
+  const lines = put.split('\n')
+  const begin = lines.indexOf(SCRIPT_SENTINEL.begin), end = lines.indexOf(SCRIPT_SENTINEL.end)
+  const damaged = {
+    'the begin line edited': lines.map((l, i) => (i === begin ? l.replace('on', 'ON') : l)).join('\n'),
+    'a space after the end line': lines.map((l, i) => (i === end ? `${l} ` : l)).join('\n'),
+    'the end line deleted': lines.filter((_, i) => i !== end).join('\n'),
+    'the begin line deleted': lines.filter((_, i) => i !== begin).join('\n'),
+    'a second begin before the end': lines.flatMap((l, i) => (i === begin + 1 ? [SCRIPT_SENTINEL.begin, l] : [l])).join('\n'),
+    'a sentinel mentioned in a comment': `${put}\n// remember: >>> asight collector is below`,
+  }
+  for (const [what, text] of Object.entries(damaged)) {
+    const out = stripScriptBlock(text)
+    assert.equal(out.ok, false, what)
+    assert.equal(out.text, text, `${what}: untouched`)
+    assert.ok(typeof out.reason === 'string' && out.reason.length > 0, what)
+    const again = insertScriptBlock(text, BLOCK_TEXT)
+    assert.deepEqual({ ok: again.ok, text: again.text }, { ok: false, text }, `${what}: insert leaves it alone too`)
+  }
+})
+
+test('W10 the old capture\'s block and ours never touch each other (4.7 §3.4: two blocks)', () => {
+  const old = injectScript(VERGE_DEFAULT, 7777)
+  assert.notEqual(old, VERGE_DEFAULT)
+  const both = insertScriptBlock(old, BLOCK_TEXT).text
+  assert.equal(stripScriptBlock(both).text, old, 'taking ours out leaves the old block exactly as it was')
+  const withoutOld = stripOldBlock(both)
+  assert.equal(scanScript(withoutOld).blocks.length, 1, 'taking the old out leaves ours')
+  assert.equal(stripScriptBlock(withoutOld).text, stripOldBlock(old))
+})
+
+test('W10 scanScript reports each block\'s text in LF, whatever the file\'s line ends, so its hash does not depend on them', () => {
+  for (const original of [VERGE_DEFAULT, VERGE_DEFAULT.replace(/\n/g, '\r\n')]) {
+    const scan = scanScript(insertScriptBlock(original, BLOCK_TEXT).text)
+    assert.deepEqual(scan.problems, [])
+    assert.equal(scan.blocks.length, 1)
+    assert.equal(scan.blocks[0].text, BLOCK_TEXT)
+    assert.equal(scan.blocks[0].firstLine + BLOCK_TEXT.split('\n').length - 1, scan.blocks[0].lastLine)
+  }
+  assert.deepEqual(scanScript(VERGE_DEFAULT), { blocks: [], problems: [] })
+})
+
+test('W10 a block text that is not bracketed by the sentinel is refused', () => {
+  assert.throws(() => insertScriptBlock(VERGE_DEFAULT, 'var x = 1;'), /sentinel/)
+  assert.throws(() => insertScriptBlock(VERGE_DEFAULT, `${SCRIPT_SENTINEL.begin}\nvar x;`), /sentinel/)
+  assert.throws(() => stripScriptBlock(VERGE_DEFAULT, { begin: 'x', end: 'y' }), /comment/)
 })
