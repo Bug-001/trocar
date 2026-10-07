@@ -176,6 +176,9 @@ const settle = (task, k) => ({ code: (task.code !== 0 ? task.code : k.code) ?? 1
  *                    When schtasks REFUSES the registration, the Run-key fallback takes over (4.8 §7): `via: 'run-key'`, code 0 (`on` does not fail because the Task Scheduler said no), `reason` (why), `ledger` (the manifest entry,
  *                    runKeyFallback's), `ours`, `event` (the `task-register-failed` failure record for the caller to write: it carries the reason and names the entry used instead), and with `now` the supervised daemon is started
  *                    directly (the Run value only runs at the next login). When the fallback fails too, code is not 0 and `err` has both reasons.
+ *                    Exactly one login mechanism is left live: by the task, asight's own Run value of an earlier fallback is taken out (`runKey: 'removed' | 'restored'` when it was there: the caller drops the `run-key`
+ *                    ledger entry; `enable({ prior })` takes the ledger entry's prior so that the user's own value comes back); by the fallback, an earlier task is switched off (`task: 'disabled'`). Either that cannot be
+ *                    done is `warn` (a line for the receipt; `on` does not fail for it, because the supervisor singleton keeps a second start from running a second daemon).
  *   start()          the `--no-autostart` run: this session, nothing at login. A task with a login trigger would be an autostart, so none is registered: the supervised daemon is started directly, detached, with no window.
  *   reload()         nothing to do: a rewritten task is registered again by `enable` (`/F`).
  *   disable({ prior }) a no-argument `off`: the task is switched off (`/Change /DISABLE`; it does not end a running instance, the caller stops the supervisor parent first, 4.8 §4.2) and asight's Run value is taken out, whichever
@@ -204,9 +207,14 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
   return {
     name: 'asight-collector', path: file, links: [],
     text: () => taskXml({ user: user || taskUser(env), node, asight: script, conhost }),
-    enable({ now = true } = {}) {
+    enable({ now = true, prior = null } = {}) {
       const c = register({ file, run, env, fs })
-      if (c.code === 0) return { ...(now ? schtasks(['/Run', '/TN', TASK_NAME], tools) : c), via: 'task' }
+      if (c.code === 0) {
+        // the task is the one start at login now: an earlier fallback's Run value would start a second supervisor at every login, so it goes (the user's own prior value, the ledger's, comes back)
+        const gone = removeRunValue({ run, env, prior })
+        const note = gone.runKey === 'failed' ? { warn: `the HKCU Run entry ${RUN_KEY.name} of an earlier \`on\` could not be taken out (${gone.err || 'no reason given'}): both it and the task start asight at login (one supervisor runs, the other leaves at once); \`asight off\` removes both` } : {}
+        return { ...(now ? schtasks(['/Run', '/TN', TASK_NAME], tools) : c), via: 'task', ...(gone.runKey !== 'absent' ? { runKey: gone.runKey } : {}), ...note }
+      }
       if (c.precondition) return { ...c, via: 'task' }
       const why = errOf(c)
       const f = runKeyFallback({ command: daemonCommandLine({ node, asight: script, conhost }), run, env })
@@ -215,8 +223,14 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
         return { code: c.code ?? 1, out: '', err: `${why}; the Run-key fallback failed too: ${f.reason}`, via: 'task', ...(f.entry ? { ledger: f.entry } : {}), event: { event: 'failure', where: 'install', code: 'task-register-failed', reason } }
       }
       const event = { event: 'failure', where: 'install', code: 'task-register-failed', reason: `schtasks /Create was refused (${why}); asight starts at login through the HKCU Run entry ${RUN_KEY.name} instead, with the supervisor parent restarting the daemon` }
+      // the Run value is the one start at login now: a task an earlier `on` registered would start a second supervisor, so it is switched off (it stays registered; the undo takes it out)
+      const q = taskState(tools)
+      const off = q.state === 'present' ? schtasks(['/Change', '/TN', TASK_NAME, '/DISABLE'], tools) : null
+      const task = off ? (off.code === 0 ? 'disabled' : 'failed') : null
+      const warn = task === 'failed' ? `the task ${TASK_NAME} of an earlier \`on\` is still registered and enabled (/Change /DISABLE: ${errOf(off)}): both it and the Run entry start asight at login (one supervisor runs, the other leaves at once); \`asight off\` disables both`
+        : q.state === 'unknown' ? `${q.err}: an earlier task ${TASK_NAME} may still be registered and enabled next to the Run entry (one supervisor runs, the other leaves at once); \`asight off\` disables both` : null
       const started = now ? startDirect() : null
-      const base = { via: 'run-key', reason: why, ledger: f.entry, ours: f.ours, event }
+      const base = { via: 'run-key', reason: why, ledger: f.entry, ours: f.ours, event, ...(task ? { task } : {}), ...(warn ? { warn } : {}) }
       return started && started.code !== 0 ? { code: started.code, out: '', err: started.err, ...base } : { ...ok, ...base, ...(started ? { pid: started.pid } : {}) }
     },
     start: startDirect,
@@ -249,16 +263,36 @@ const realSleep = (ms, { signal } = {}) => new Promise((resolve) => {
  *   command  { node, args }: the child, which MUST NOT carry `--supervise` (a child that did would be a supervisor of its own)
  *   dir      the collector directory (the lock goes there)
  *   spawn · now · sleep(ms, { signal }) · fs · pid · startedAt · log(line)   what the world gives; a test passes fakes. `startedAt` defaults to this process's start (now minus its uptime).
+ *   isLive({ pid, startedAt }) → boolean   the identity check of a lock that is already there (`lockHolderAlive`: runSupervisor passes it): true = that supervisor still runs, so this one is a second one: it says so in one line,
+ *                    starts no daemon, leaves the holder's lock alone and ends with 0 (`{ done: resolved 0, stop, lockFile, refused: <holder> }`). False, a throw (said in the log) or no check at all = the lock is taken over.
+ *                    The singleton matters because every supervisor would start a daemon that exits 1 against the first one's control endpoint, and be restarted for ever; and `off` can stop only the supervisor the lock names.
  * → { done: Promise<exit code of the supervisor: 0>, stop(): Promise (asked to stop: the child is ended, nothing restarts, the lock goes), lockFile }
  */
-export function superviseChild({ spawn = nodeSpawn, command, dir, now = Date.now, sleep = realSleep, fs = nodeFs, pid = process.pid, startedAt = Math.round(Date.now() - process.uptime() * 1000), log = () => {} } = {}) {
+export function superviseChild({ spawn = nodeSpawn, command, dir, now = Date.now, sleep = realSleep, fs = nodeFs, pid = process.pid, startedAt = Math.round(Date.now() - process.uptime() * 1000), log = () => {}, isLive = null } = {}) {
   if (!command || typeof command.node !== 'string' || !Array.isArray(command.args)) throw new TypeError('superviseChild needs command: { node, args }')
   if (command.args.includes('--supervise')) throw new TypeError('the supervised command must not carry --supervise: it would start a supervisor of its own')
   const lockFile = path.join(dir, SUPERVISOR_LOCK)
+  const body = `${JSON.stringify({ pid, startedAt })}\n`
+  // the lock is made exclusively; one that is there names a supervisor that may still run: then this one is a second, and leaves (a hard stop leaves a stale lock behind, so "there" is not enough: the identity check says whether the holder lives)
+  const held = () => { try { const o = JSON.parse(fs.readFileSync(lockFile, 'utf8')); return Number.isSafeInteger(o.pid) && o.pid > 0 && Number.isFinite(o.startedAt) ? { pid: o.pid, startedAt: o.startedAt } : null } catch { return null } }
+  let other = null
   try {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
-    fs.writeFileSync(lockFile, `${JSON.stringify({ pid, startedAt })}\n`, { mode: 0o600 })
+    try { fs.writeFileSync(lockFile, body, { mode: 0o600, flag: 'wx' }) } catch (e) {
+      if (e.code !== 'EEXIST') throw e
+      const h = held()
+      if (h && h.pid !== pid && isLive) {
+        let live = false
+        try { live = Boolean(isLive(h)) } catch (err) { log(`${SUPERVISOR_LOCK} names pid ${h.pid}, and whether it still runs could not be told (${(err && err.message) || err}): taking the lock over`) }
+        if (live) other = h
+      }
+      if (!other) fs.writeFileSync(lockFile, body, { mode: 0o600 })
+    }
   } catch (e) { log(`${SUPERVISOR_LOCK} could not be written (${(e && e.code) || (e && e.message) || e}); the daemon is supervised all the same, but \`asight off\` cannot find this process by it`) }
+  if (other) {
+    log(`another supervisor (pid ${other.pid}) holds ${SUPERVISOR_LOCK} and runs: this one starts no second daemon and leaves`)
+    return { done: Promise.resolve(0), stop: async () => 0, lockFile, refused: other }
+  }
   const removeLock = () => { // only our own: a newer supervisor's lock is not ours to delete
     try { if (JSON.parse(fs.readFileSync(lockFile, 'utf8')).pid === pid) fs.rmSync(lockFile, { force: true }) } catch { /* no lock, or not readable: nothing of ours */ }
   }
@@ -304,13 +338,30 @@ export function superviseChild({ spawn = nodeSpawn, command, dir, now = Date.now
   return { done, stop, lockFile }
 }
 
+export const LOCK_START_TOLERANCE_MS = 2000 // the lock's start time is "now minus uptime" and the OS's is the creation time: the same process agrees to within this (4.8 §7, the same 2 s as forwarder.lock)
+
+/**
+ * Does the process a supervisor.lock names still run (4.8 §7)? Windows is asked for the start time of that pid (`Get-Process`, through execTool: one fixed question about one integer) and the answer is the same process when
+ * it agrees with the lock's to within 2 s; a pid that is running with another start time is a reused pid. → true · false (no such process, or another one); throws when it cannot be told (powershell did not run or answered
+ * with something else), and the supervisor says so and takes the lock over: not knowing is "not running", so that asight starts instead of not starting. A pid that is not a positive integer is a TypeError: it never reaches a command.
+ */
+export function lockHolderAlive({ pid, startedAt } = {}, { run = null, env = process.env, toleranceMs = LOCK_START_TOLERANCE_MS } = {}) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new TypeError(`lockHolderAlive needs a positive integer pid, got ${JSON.stringify(pid)}`)
+  const script = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if (-not $p) { 'gone' } else { try { [DateTimeOffset]::new($p.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds() } catch { 'unreadable' } }`
+  const r = execTool('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { run, env })
+  if (r.code !== 0) throw new Error(`the start time of pid ${pid} could not be asked: powershell ${r.code === null ? 'did not run' : `exited ${r.code}`}${r.err ? ` (${r.err.slice(0, 200)})` : ''}`)
+  if (r.out === 'gone') return false
+  if (!/^\d{10,}$/.test(r.out)) throw new Error(`the start time of pid ${pid} could not be read: powershell answered ${JSON.stringify(r.out.slice(0, 60))}`)
+  return Math.abs(Number(r.out) - startedAt) <= toleranceMs
+}
+
 /**
  * `asight daemon --supervise` (src/cli/daemon.mjs calls this): supervises `node <asight> daemon` until the daemon exits 0 or a stop signal arrives (SIGINT, SIGTERM, SIGHUP: a console closing). → the exit code.
  * `asight` is the script the daemon child runs (the CLI passes its own `process.argv[1]`); `dir` is the collector directory.
  */
-export async function runSupervisor({ node = process.execPath, asight, dir, proc = process, log = (line) => { try { proc.stderr.write(`asight daemon --supervise: ${line}\n`) } catch { /* no console to write to */ } }, deps = {} } = {}) {
+export async function runSupervisor({ node = process.execPath, asight, dir, proc = process, run = null, env = process.env, log = (line) => { try { proc.stderr.write(`asight daemon --supervise: ${line}\n`) } catch { /* no console to write to */ } }, deps = {} } = {}) {
   if (typeof asight !== 'string' || asight === '') throw new TypeError('runSupervisor needs the asight script the daemon child runs')
-  const sup = superviseChild({ command: { node, args: [asight, 'daemon'] }, dir, log, ...deps })
+  const sup = superviseChild({ command: { node, args: [asight, 'daemon'] }, dir, log, isLive: (holder) => lockHolderAlive(holder, { run, env }), ...deps })
   const signals = ['SIGINT', 'SIGTERM', 'SIGHUP']
   const onSignal = () => { sup.stop() }
   for (const s of signals) proc.on(s, onSignal)
