@@ -11,6 +11,7 @@ import { validateReceipt } from '../../src/cli/schema.mjs'
 import { standalonePath } from '../../src/off/paths.mjs'
 import { installedHome, writeDaemonLock, flowEvents, procTable, fakeClock, DAEMON_ROWS, hangsOnStatus, snapshot } from '../off/fixtures/off-ctx.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
+import { runStatus } from './fixtures/status-ctx.mjs'
 
 const BASE = new Date('2026-10-07T00:00:00Z')
 /** `asight uninstall <argv>` over a sandbox: the exit code, and what it printed. */
@@ -383,4 +384,30 @@ test('semantics 2: an install manifest of the wrong shape is treated as unreadab
   const snap = t.userFiles()
   await assert.rejects(() => t.on(), /the install manifest cannot be read .*asight on does not write over it.*asight off.*mv '.*install-manifest\.json'/)
   assert.deepEqual(t.userFiles(), snap, 'and wrote nothing')
+})
+
+// audit rule-b 8 (4.5 零残留): `~/.asight/netenv.json` — what status / doctor / on last read of the VPN software, for the board — is asight's own file and was never removed (mac and Linux);
+// with no daemon the receipt said 「守护进程(pid null)已停掉」 about a daemon that was not there.
+test('uninstall removes ~/.asight/netenv.json with the rest of asight\'s own files — the plan lists it, nothing but the kept captures is left in ~/.asight — and with no daemon the receipt does not say one was stopped', async () => {
+  const s = await installedHome({ names: ['claude-code'] }); keep(s)
+  s.sys.daemon.state.up = false
+  await runStatus(s) // writes the board's copy
+  const nf = path.join(s.home, '.asight', 'netenv.json')
+  assert.ok(fs.existsSync(nf), 'status wrote it')
+  const dry = await cli(s, ['--dry-run', '--json'])
+  assert.ok(dry.io.json().removed.includes(nf), 'the plan lists it')
+  assert.ok(fs.existsSync(nf), 'and a dry run removed nothing')
+  const { exit, io } = await cli(s, ['--json'])
+  assert.equal(exit, 0, io.text())
+  const r = io.json()
+  assert.ok(r.removed.includes(nf) && !fs.existsSync(nf), 'removed, and in the receipt')
+  const walk = (d) => (fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)])) : [])
+  assert.deepEqual(walk(path.join(s.home, '.asight')).map((f) => path.relative(path.join(s.home, '.asight'), f)).filter((f) => !/^collector[\\/](capture-|audit|replays|flows)/.test(f)), [], 'nothing of asight\'s own is left: only the captures and the records')
+  assert.deepEqual([r.daemon.state, r.daemon.pid], ['none', null], 'there was no daemon: none is the state, not "stopped" with no pid')
+  assert.ok(!/pid null/.test(formatUninstallReceipt(r, { home: s.home })) && !/守护进程\(pid null\)/.test(io.text()), 'and the text does not say it')
+  assert.match(formatUninstallReceipt({ ...r, daemon: { pid: null, state: 'stopped' } }, { home: s.home }), /守护进程已停掉/, 'a stopped daemon whose pid is not known is said without one, never "(pid null)"')
+  // a daemon that was running is still said to be stopped, with its pid
+  const t = await installedHome({ names: ['claude-code'] })
+  const run = await cli(t, ['--json'])
+  assert.deepEqual([run.io.json().daemon.state, Number.isInteger(run.io.json().daemon.pid)], ['stopped', true])
 })

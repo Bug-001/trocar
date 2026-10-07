@@ -152,11 +152,11 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const attached = reply ? (reply.actual === 'on' ? true : reply.actual === 'off' ? false : null) : null
   f.link = reply ? { attached, helper: reply.helper && (reply.helper.down || reply.helper.ok === false) ? 'missing' : 'ok', helper_reason: reply.helper && reply.helper.down ? String(reply.helper.down) : reply.helper && reply.helper.ok === false ? `helper protocol ${reply.helper.proto} (this daemon expects ${reply.helper.expected_proto})` : null, reason: attached === null ? kernelReason(reply) : null } : { attached: null, helper: 'ok', helper_reason: null, reason: null }
   // the processes: the daemon's rows when it answered, else the process table matched with the manifest's `liveness`
+  // The table is read whatever else is missing: the processes the user started themselves (`asight serve`, a foreground `capture`) are found by their command line alone. Only the
+  // matching of a process to a harness needs the manifest's signatures; with no daemon and no manifest (a fresh machine, or after uninstall) that is what cannot be said (audit rule-b 6, R11)
   let table = null, tableError = null
-  if (!reply && !m) tableError = f.manifest.error || 'there is no install manifest to match the processes with'
-  else {
-    try { table = await (deps.procs ? deps.procs() : listProcs({ exec: deps.exec || null, platform })) } catch (e) { rethrowSandbox(e); tableError = errText(e) }
-  }
+  try { table = await (deps.procs ? deps.procs() : listProcs({ exec: deps.exec || null, platform, env })) } catch (e) { rethrowSandbox(e); tableError = errText(e) }
+  const matchError = !reply && !m ? (f.manifest.error || 'there is no install manifest to match the processes with') : tableError
   f.userProcs = table ? { list: userProcessesOf(table) } : { error: tableError }
   const matched = table && m ? table.map((p) => ({ p, h: matchHarness(m.liveness, p) })) : [] // which harness each process of the table is, by the manifest's signatures
   const negatives = new Set((reply && Array.isArray(reply.negatives) ? reply.negatives : []).map((n) => n.pid))
@@ -176,7 +176,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
       const listed = new Set(rows.map((a) => a.pid))
       for (const x of matched) if (x.h === id && !listed.has(x.p.pid)) procs.push({ pid: x.p.pid, startedAt: x.p.startedAt, trusted: null })
     } else if (table && m) procs = matched.filter((x) => x.h === id).map((x) => ({ pid: x.p.pid, startedAt: x.p.startedAt, trusted: null }))
-    else { procs = []; why.push(`the processes could not be listed (${tableError})`) }
+    else { procs = []; why.push(`the processes could not be listed (${matchError})`) }
     const installedAt = m ? installedAtOf(m, id) : null
     const judged = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', linkAttached: f.link.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt })
     if (f.daemon.state === 'unknown' && desired === 'on') why.push(f.daemon.reason)
@@ -266,7 +266,7 @@ async function legacyStatus(argv, { io, env, home, platform, deps, json }) {
   const j = art ? judgeLegacy(art, { home }) : null
   const exit = error || artError || (j && j.unreadable) ? EXIT.unknown : failedIn24h(health) || (j && j.failing) ? EXIT.incomplete : EXIT.ok
   const netenv = await lookAtNetenv({ home, platform, env, deps }) // §6: the VPN software is looked at on every platform, not only where the new collector runs
-  if (json) { io.out(JSON.stringify({ ...newReceipt('status'), ok: exit === EXIT.ok, platform, note: 'this platform has no new collector: the old capture is what on / off drive here', ...(j ? { harnesses: legacyStatusJson(j), legacy: { ca: j.ca.present, ledger: j.ledger } } : { legacy_error: artError }), ...(health ? { health } : { health_error: error }), netenv: netenv.result || { error: netenv.error }, ...(netenv.write_error ? { netenv_write_error: netenv.write_error } : {}) }, null, 2)); return exit }
+  if (json) { io.out(JSON.stringify({ ...newReceipt('status'), ok: exit === EXIT.ok, platform, note: 'this platform has no new collector: the old capture is what on / off drive here', relayed_reason: 'the old capture does not report how many connections still go through its MITM: it counts them when it stops (the mitm-stop line), not while it runs', ...(j ? { harnesses: legacyStatusJson(j), legacy: { ca: j.ca.present, ledger: j.ledger } } : { legacy_error: artError }), ...(health ? { health } : { health_error: error }), netenv: netenv.result || { error: netenv.error }, ...(netenv.write_error ? { netenv_write_error: netenv.write_error } : {}) }, null, 2)); return exit }
   io.out(`本平台(${platform})还没有新采集器:这里 asight on / off 驱动旧采集(过渡期,1.6 §4)。`)
   for (const l of j ? legacyStatusLines(j, { home }) : [`旧采集的状态读不出来: 不知道(${artError})`]) io.out(l)
   io.out('下面是旧采集与原始层的健康:')

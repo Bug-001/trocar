@@ -61,7 +61,7 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
   for (const n of r.notes || []) lines.push(`${r.ok === false && past ? '问题' : '说明'}: ${n}`)
   lines.push(`关采集、撤掉 asight 的全部影响  asight off${r.standalone ? `      asight 坏了也能用: ${r.standalone}` : ''}`) // `standalone`: the single-file asight-off, once the run has written it (Task 8)
   lines.push('开采集  asight on      看状态  asight status      完全删掉 asight  asight uninstall(采集数据默认保留)')
-  if (r.log) lines.push(`记录: 看板「采集健康」 / ${t(r.log)}/`)
+  if (r.log) lines.push(`记录: 看板「采集健康」 / ${t(r.log)}${/\.\w+$/.test(path.basename(r.log)) ? '' : '/'}`) // the new collector's is a directory (flows/); the old capture's is one file (mitm-events.ndjson)
   return lines.join('\n')
 }
 

@@ -461,3 +461,26 @@ test('semantics 2: an install manifest that parses but is not a manifest ({"vers
     assert.match(doc.manifest_error, /install-manifest\.json.*not an install manifest this build can use/)
   }
 })
+
+// audit rule-b 6 (R11): with no daemon and no manifest — a fresh machine, or after uninstall — `status` printed 「你自己起的 asight 进程: 不知道」 although the processes a user started
+// themselves are found by their command line alone: the table was not read because the MANIFEST (needed only to match processes to harnesses) was missing.
+test('R11: with no daemon and no install manifest the asight processes the user started themselves are still listed — the process table is read, only the matching to harnesses is not known', async () => {
+  const s = await installedHome()
+  const out = await s.uninstall({ yes: true })
+  assert.equal(out.exit, 0, JSON.stringify(out.receipt.problems))
+  assert.ok(!fs.existsSync(path.join(s.dir, 'install-manifest.json')), 'nothing is installed any more')
+  const serve = { pid: 7001, ppid: 1, uid: 1000, startedAt: Date.now() - 1000, exe: '/usr/bin/node', argv: ['/usr/bin/node', '/home/u/asight/bin/asight.mjs', 'serve', '--port', '4000'], env: () => null }
+  const unrelated = { pid: 7002, ppid: 1, uid: 1000, startedAt: Date.now() - 1000, exe: '/usr/bin/vim', argv: ['vim'], env: () => null }
+  const r = await run(s, [], { procs: async () => [serve, unrelated] })
+  assert.match(r.text, /你自己起的 asight 进程仍在跑: asight serve\(pid 7001,/)
+  assert.ok(!/你自己起的 asight 进程: 不知道/.test(r.text), r.text)
+  const doc = (await run(s, ['--json'], { procs: async () => [serve, unrelated] })).io.json()
+  assert.deepEqual(doc.user_processes.map((p) => [p.pid, p.command]), [[7001, 'asight serve']])
+  // a table that cannot be read is still 不知道, with the reason
+  const bad = await run(s, [], { procs: async () => { throw new Error('ps failed (exit 1: nope)') } })
+  assert.match(bad.text, /你自己起的 asight 进程: 不知道\(ps failed \(exit 1: nope\)\)/)
+  // what needs the manifest is still said as not known, with the reason: a named harness's entry
+  const named = await run(s, ['codex'], { procs: async () => [serve] })
+  assert.match(named.text, /codex\s+没有: desired-off[^\n]*信任入口: 不知道\(no install manifest in /)
+  assert.match(named.text, /你自己起的 asight 进程仍在跑: asight serve\(pid 7001,/)
+})

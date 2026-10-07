@@ -213,7 +213,8 @@ export async function legacyArtifacts({ home = nodeOs.homedir(), platform = proc
 
   // the login environment's CA variable, and the CA in the trust store
   out.envValue = { value: null }
-  out.oldCa = { where: platform === 'darwin' ? 'keychain' : platform === 'linux' ? 'nss' : null, present: false }
+  // a platform with no user-level trust store this code can read has not been asked: not "not in it" but not known (R11) — win32 is reserved (D22)
+  out.oldCa = platform === 'darwin' || platform === 'linux' ? { where: platform === 'darwin' ? 'keychain' : 'nss', present: false } : { where: null, present: null, error: `本平台(${platform})没有读用户级信任库的办法,旧 CA 在不在不知道` }
   if (platform === 'darwin') {
     const g = execTool('launchctl', ['getenv', LEGACY_ENV_VAR], { run: exec, env })
     if (g.code === 0) out.envValue = { value: g.out || null }

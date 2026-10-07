@@ -24,7 +24,7 @@ function daemonLines(r, past, cutNote) {
   const rel = r.relayed && r.relayed !== 'unknown' ? r.relayed : null
   const waiting = rel && rel.waiting > 0
   if (d.state === 'draining') parts.push(waiting ? `守护进程仍在排空:pid ${d.pid},还剩 ${rel.waiting} 条等它们自己关闭;asight off --now 立即切断` : `守护进程${d.pid ? `(pid ${d.pid})` : ''}排空后退出`)
-  else if (d.state === 'stopped') parts.push(`守护进程(pid ${d.pid})已停掉`)
+  else if (d.state === 'stopped') parts.push(d.pid == null ? '守护进程已停掉' : `守护进程(pid ${d.pid})已停掉`)
   else if (d.state === 'running' && d.pid) parts.push(`守护进程(pid ${d.pid})继续为其余 harness 服务`)
   else if (d.state === 'unresponsive') parts.push(`守护进程(pid ${d.pid})没响应,也停不掉:手动停止 kill -9 ${d.pid}`)
   const head = parts.filter(Boolean).join(';')

@@ -8,7 +8,8 @@ import nodeOs from 'node:os'
 import { EXIT, newReceipt } from './schema.mjs'
 import { acquireOpLock, LOCK_BUSY } from './lock.mjs'
 import { identityFor } from './proc.mjs'
-import { legacyLockPath, legacyEventsFile } from './paths.mjs'
+import { legacyLockPath, legacyEventsFile, asightHome } from './paths.mjs'
+import { removeEmptyDirs } from './fsutil.mjs'
 import { formatOffReceipt } from './receipt.mjs'
 import { legacyArtifacts, undoLegacy, LEGACY_NOTE } from './legacy.mjs'
 
@@ -56,6 +57,7 @@ export async function legacyOffCli(argv, { io, env = process.env, home = nodeOs.
       io.out(json ? JSON.stringify(receipt, null, 2) : formatOffReceipt(receipt, { home, tense: 'future' }))
       return EXIT.ok
     }
+    const homeThere = fs.existsSync(asightHome(home)) // taking the lock makes ~/.asight; on a machine that never had asight it must not be left behind, empty
     let lock = null
     try { lock = await acquireOpLock({ file: legacyLockPath(home), waitMs: deps.lockWaitMs ?? LEGACY_LOCK_WAIT_MS, alive: deps.alive, identity: deps.identity || identityFor({ platform, exec: deps.exec || null, env }), fs, now: ms, sleep }) } catch (e) {
       if (!e || e.code !== LOCK_BUSY) throw e
@@ -71,7 +73,7 @@ export async function legacyOffCli(argv, { io, env = process.env, home = nodeOs.
       else { receipt.relayed = 'unknown'; receipt.relayed_reason = r.cut_reason || '读不到' }
       if (flags.has('--now')) receipt.notes.push('--now 在旧采集上没有用:旧 MITM 收到 SIGTERM 后自己排空,在途连接最多等 10 s,余下的切断并计数')
       if (!r.changed.length && !r.removed.length && r.ok) receipt.notes.push('没有旧采集的东西可撤:这台机器上没有 asight 的旧 steer、Clash 块、LaunchAgent 或旧 CA')
-    } finally { lock.release() }
+    } finally { lock.release(); if (!homeThere) removeEmptyDirs([asightHome(home)], fs) }
     io.out(json ? JSON.stringify(receipt, null, 2) : formatOffReceipt(receipt, { home, cutNote: '(旧 MITM:在途连接最多等 10 s,余下的随卸载切断)' }))
     return receipt.ok ? EXIT.ok : EXIT.incomplete
   } catch (e) {

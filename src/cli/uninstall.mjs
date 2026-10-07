@@ -14,6 +14,7 @@ import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readManifest, saveManifest, manifestPath } from '../off/manifest.mjs'
 import { disableAutostart, unitFilePath, removeWantsLinks } from '../off/autostart.mjs'
 import { standalonePath, backupDir, opLockFile, asightHome } from '../off/paths.mjs'
+import { netenvFile } from '../netenv/index.mjs'
 import { dropBackup, orphanBackups } from '../off/backup.mjs'
 import { removeOwnedFile } from '../off/journal.mjs'
 import { removeEmptyDirs, sweepTemps } from '../off/fsutil.mjs'
@@ -49,7 +50,7 @@ function planUninstall(w, m) {
   const entries = usable ? m.entries.filter((e) => e.kind === 'json-key' || e.kind === 'text') : []
   return {
     changed: entries.map((e) => ({ path: e.path, change: `去掉 ${e.kind === 'text' ? 'asight 加的文字' : (e.keys || []).join('.')}`, backup: e.backup ?? null, ...(typeof e.harness === 'string' ? { harness: e.harness } : {}) })),
-    removed: [...(usable ? m.files.map((f) => f.path) : []), path.join(w.dir, 'state.json'), backupDir(w.home), standalonePath(w.home), ...(m ? [manifestPath(w.dir)] : [])],
+    removed: [...(usable ? m.files.map((f) => f.path) : []), path.join(w.dir, 'state.json'), backupDir(w.home), standalonePath(w.home), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(m ? [manifestPath(w.dir)] : [])],
     notes: usable || !m ? [] : [`the install manifest is version ${JSON.stringify(m.version)}, which this build does not read: no entry would be touched`],
     autostart: { planned: true },
   }
@@ -120,7 +121,8 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     if (!stop && routing.confirmed) {
       stop = await w.stopDaemon({ unitManaged: w.unitManaged() })
       if (stop.signals.length || !stop.stopped) put({ kind: 'daemon-stop', how: stop.how, signals: stop.signals, stopped: stop.stopped, pid: stop.pid, reason: stop.stopped ? `the daemon was stopped (${stop.signals.join(', ') || 'it had exited'})` : `the daemon was NOT stopped${stop.error ? `: ${stop.error}` : ''}` })
-      receipt.daemon = stop.stopped ? { pid: stop.pid ?? routing.daemon.pid, state: 'stopped' } : { pid: stop.pid, state: 'unresponsive' }
+      // nothing to stop (no lock, no unit that was running, no pid known from the daemon's own reply) is not "the daemon (pid null) was stopped": the receipt says no daemon was there
+      receipt.daemon = !stop.stopped ? { pid: stop.pid, state: 'unresponsive' } : stop.pid == null && routing.daemon.pid == null && (routing.state === 'none' || routing.state === 'stale') ? { pid: null, state: 'none' } : { pid: stop.pid ?? routing.daemon.pid, state: 'stopped' }
       if (!stop.stopped) { receipt.problems.push(`the daemon (pid ${stop.pid}) could not be stopped${stop.error ? ` (${stop.error})` : ''}; stop it by hand: kill -9 ${stop.pid}, then run asight uninstall again`); failed.push({ code: 'stop-failed', reason: receipt.problems.at(-1) }) }
       else if (routing.relayed !== 'unknown') { // what the daemon was still holding went with it, counted (1.6 §1.1)
         const last = drained && drained.rel ? drained.rel : routing.relayed
@@ -182,7 +184,8 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       for (const f of m && !m.unsupported ? m.files.filter((x) => x.role === 'ca-key') : []) rm(f.path)
       if (!m) rm(path.join(w.dir, 'ca'))
       const runtime = env.XDG_RUNTIME_DIR ? path.join(env.XDG_RUNTIME_DIR, 'asight') : null
-      for (const p of [path.join(w.dir, 'run'), w.lockFile, w.stateF, runtime, standalonePath(home)]) if (p) rm(p)
+      // `netenv.json` is what `status`, `doctor` and `on` last read of the VPN software, for the board: asight's own file, written outside collector/, so zero residue is not met without it (audit rule-b 8)
+      for (const p of [path.join(w.dir, 'run'), w.lockFile, w.stateF, runtime, standalonePath(home), netenvFile(home)]) if (p) rm(p)
       removeEmptyDirs([path.dirname(standalonePath(home))], fs)
     }
     for (const n of noted) if (!receipt.notes.includes(n.reason)) receipt.notes.push(n.reason) // the command prints every one of them

@@ -113,7 +113,11 @@ export async function legacyOn({ home = nodeOs.homedir(), env = process.env, yes
   }
 
   if (!plan.verge) {
-    receipt.ok = false; receipt.notes.push(`没找到 Clash Verge(${plan.paths.vergeDir}):旧采集靠 Clash 把 Desktop 的 claude-code 引到 MITM,这里没有可挂的路由;什么都没写`)
+    const why = `没找到 Clash Verge(${plan.paths.vergeDir}):旧采集靠 Clash 把 Desktop 的 claude-code 引到 MITM,这里没有可挂的路由;什么都没写`
+    // nothing was written and nothing will be: there is no way to undo and no log to point at (R1). A dry run has nothing to preview, and says why a real run stops here: exit 0 (R6, V7)
+    receipt.undo = []; receipt.log = null; delete receipt.standalone
+    if (dryRun) { Object.assign(receipt, { dry_run: true, planned: true, blocked: why }); receipt.notes.push(`${why}(真跑的 asight on 在这里停下)`); return { receipt, exit: EXIT.ok } }
+    receipt.ok = false; receipt.notes.push(why)
     return { receipt, exit: EXIT.incomplete }
   }
   const toWrite = plan.writes

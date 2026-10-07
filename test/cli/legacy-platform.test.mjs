@@ -25,6 +25,7 @@ import { writeBackup } from '../../src/off/backup.mjs'
 import { sha256 } from '../../src/off/fsutil.mjs'
 import { legacyManifestPath } from '../../src/off/paths.mjs'
 import { fakeIo, snapshot, changedFiles } from './fixtures/on-ctx.mjs'
+import { formatOnReceipt } from '../../src/cli/receipt.mjs'
 import { standalonePath, backupDir } from '../../src/off/paths.mjs'
 import { injectScript } from '../../src/capture/desktop-steer.mjs'
 import { macHome, fakeMac, fakeCore, fakeClock, fakeOpenssl, readEvents, USER_MAIN, NO_OP, CA_CN, LABELS } from './fixtures/legacy-ctx.mjs'
@@ -837,4 +838,53 @@ test('R12 / audit rule-b 3: off on the old capture takes over a lock whose pid i
   assert.equal(await runOffCli(['--json'], offCtx(live, io2, { mac: mac2, deps: { alive: (pid) => pid === 1, lockWaitMs: 60 } })), 1)
   assert.match(JSON.parse(io2.stdoutText()).problems.join('\n'), /another asight command \(pid 1\) holds .*legacy-op\.lock/)
   assert.equal(JSON.parse(fs.readFileSync(lockFile(live), 'utf8')).pid, 1, 'and the holder\'s lock is untouched')
+})
+
+// audit rule-b 7 (R1, R6, V7): with no Clash Verge `on` writes nothing — and still named `~/.asight/bin/asight-off` and the log as the way back and the record; its dry run exited 1 with
+// nothing to read. And the old capture's log is ONE FILE (mitm-events.ndjson): the receipt printed it with a trailing `/`, as it prints the new collector's flows/ directory.
+test('R1 / R6 / V7: on with no Clash Verge — the receipt names no undo and no log (nothing was written), the dry run says what a real run meets and exits 0, a real run exits 1', async () => {
+  const bare = () => macHome({ block: false, runtime: false, agents: [], steer: false, ca: false, verge: false })
+  const real = bare(); const before = snapshot(real.home)
+  const io = fakeIo()
+  assert.equal(await runOnCli(['--yes', '--json'], onCtx(real, io, { mac: fakeMac({ loaded: [], keychain: false }) })), 1)
+  const r = io.json()
+  assert.deepEqual(validateReceipt(r), [])
+  assert.deepEqual([r.ok, r.changed, r.created, r.undo, r.log, 'standalone' in r], [false, [], [], [], null, false])
+  assert.ok(!JSON.stringify(r).includes('asight-off') && !JSON.stringify(r).includes('mitm-events'), 'neither the undo program nor the log is named: neither is there')
+  assert.deepEqual(snapshot(real.home), before)
+  const dry = bare(); const dryBefore = snapshot(dry.home); const io2 = fakeIo()
+  assert.equal(await runOnCli(['--dry-run', '--json'], onCtx(dry, io2, { mac: fakeMac({ loaded: [], keychain: false }) })), 0)
+  const d = io2.json()
+  assert.deepEqual([d.ok, d.dry_run, d.undo, d.log], [true, true, [], null])
+  assert.match(d.blocked, /没找到 Clash Verge/); assert.match(d.notes.join('\n'), /真跑的 asight on 在这里停下/)
+  assert.deepEqual(snapshot(dry.home), dryBefore, 'a dry run writes nothing')
+})
+
+test('R1: the receipt prints the old capture\'s log as the file it is, and the new collector\'s flows directory with its slash', () => {
+  const base = { schema: 1, command: 'on', ok: true, changed: [], created: [], removed: [], skipped: [], restart: [], relayed: { closing: 0, waiting: 0, cut: 0 }, undo: ['asight off'], notes: [] }
+  const home = '/Users/alice'
+  assert.match(formatOnReceipt({ ...base, log: `${home}/.asight/logs/mitm-events.ndjson` }, { home }), /记录: 看板「采集健康」 \/ ~\/\.asight\/logs\/mitm-events\.ndjson$/m, 'a file: no trailing slash')
+  assert.match(formatOnReceipt({ ...base, log: `${home}/.asight/collector/flows` }, { home }), /记录: 看板「采集健康」 \/ ~\/\.asight\/collector\/flows\/$/m, 'a directory: with it')
+})
+
+// audit rule-b 10 (R11, V10): on win32 nothing reads a user trust store, and status said 「旧 CA: 不在用户级信任库里」; and `status --json` on a Mac gave `relayed: 'unknown'` with no reason, where V10 asks
+// every 不知道 to carry its why in the JSON too.
+test('R11 / V10: win32 has no store this code can read, so the old CA is 不知道 with that said — never 「不在用户级信任库里」; a Mac and a Linux that were asked still say 在 / 不在; --json carries relayed_reason', async () => {
+  const mac = fakeMac({ loaded: [], keychain: false })
+  const win = fakeIo()
+  assert.equal(await runStatusCli([], statusCtx(freshMac(), win, { mac, platform: 'win32' })), 0, win.text())
+  assert.match(win.stdoutText(), /^旧 CA\(.*\): 不知道\(本平台\(win32\)没有读用户级信任库的办法/m)
+  assert.ok(!/不在用户级信任库里/.test(win.stdoutText()), 'a store that was not read is not "not in it"')
+  assert.ok(!mac.calls.some((c) => /^(security|certutil) /.test(c)), 'and none was asked')
+  const jw = await statusJson(freshMac(), statusCtx(freshMac(), fakeIo(), { mac: fakeMac({ loaded: [], keychain: false }), platform: 'win32' }))
+  assert.equal(jw.j.legacy.ca, null, 'JSON: null, not false')
+  // a Mac whose keychain was asked and does not hold it still says so
+  const dar = fakeIo()
+  assert.equal(await runStatusCli([], statusCtx(freshMac(), dar, { mac: fakeMac({ loaded: [], keychain: false }) })), 0, dar.text())
+  assert.match(dar.stdoutText(), /^旧 CA\(.*\): 不在用户级信任库里$/m)
+  // V10: the connection count is not known on the old capture, and the JSON says why
+  const s = freshMac()
+  const r = await statusJson(s, statusCtx(s, fakeIo(), { mac: fakeMac({ loaded: [], keychain: false }) }))
+  assert.equal(r.j.relayed, 'unknown')
+  assert.match(r.j.relayed_reason, /old capture does not report how many connections still go through its MITM/)
 })

@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { runUninstallCli } from '../../src/cli/uninstall.mjs'
+import { runOffCli } from '../../src/off/main.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { LEGACY_NOTE } from '../../src/off/legacy.mjs'
@@ -119,4 +120,29 @@ test('uninstall with nothing of asight on the Mac is exit 0 and writes nothing b
   assert.equal(io.json().ok, true)
   assert.deepEqual(changedFiles(before, snapshot(s.home)).filter((f) => !f.startsWith('.asight/')), [], 'nothing of the user\'s moved')
   assert.deepEqual(mac.mutating(), [], 'no tool that changes a machine was run')
+})
+
+// audit rule-b 8: on a Mac that never had asight, taking the old capture's lock made ~/.asight and `off` left it behind, empty; `uninstall` left `netenv.json` (and so the directory) behind.
+test('old capture: off on a machine that never had asight leaves no ~/.asight; uninstall takes ~/.asight/netenv.json with the rest and leaves the directory only for the captures and the log of what it did', async () => {
+  const bare = () => macHome({ block: false, runtime: false, agents: [], steer: false, ca: false })
+  const offRun = async (s) => { const io = fakeIo(); return { exit: await runOffCli([], ctx(s, io, { mac: fakeMac({ loaded: [], keychain: false }) })), io } }
+  const uninstallRun = async (s) => { const io = fakeIo(); return { exit: await runUninstallCli([], ctx(s, io, { mac: fakeMac({ loaded: [], keychain: false }) })), io } }
+  const s = bare()
+  assert.ok(!fs.existsSync(path.join(s.home, '.asight')), 'a machine that never had asight')
+  const off = await offRun(s)
+  assert.equal(off.exit, 0, off.io.text())
+  assert.ok(!fs.existsSync(path.join(s.home, '.asight')), 'off made nothing and left nothing, not even an empty ~/.asight')
+  // uninstall of an old install that only has the board's copy of the VPN probe left
+  const t = bare(); fs.mkdirSync(path.join(t.home, '.asight'), { recursive: true })
+  const nf = path.join(t.home, '.asight', 'netenv.json'); fs.writeFileSync(nf, '{"schema":1}\n')
+  const un = await uninstallRun(t)
+  assert.equal(un.exit, 0, un.io.text())
+  assert.ok(!fs.existsSync(nf), 'netenv.json is removed')
+  assert.deepEqual(tree(path.join(t.home, '.asight')), ['logs', path.join('logs', 'mitm-events.ndjson')], 'what is left of asight\'s is the log of what the uninstall did (the logs stay, 4.6)')
+  assert.ok(un.io.text().includes('netenv.json'), 'the receipt lists it among what was removed')
+  // with a capture in it the directory stays — the captures are the user's
+  const u = bare(); fs.mkdirSync(path.join(u.home, '.asight'), { recursive: true })
+  fs.writeFileSync(path.join(u.home, '.asight', 'netenv.json'), '{"schema":1}\n'); fs.writeFileSync(path.join(u.home, '.asight', 'capture-2026-10-06.ndjson'), '{}\n')
+  assert.equal((await uninstallRun(u)).exit, 0)
+  assert.deepEqual(fs.readdirSync(path.join(u.home, '.asight')).sort(), ['capture-2026-10-06.ndjson', 'logs'], 'the captures are the user\'s, and so stay with the log')
 })

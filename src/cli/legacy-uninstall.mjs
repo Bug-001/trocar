@@ -10,6 +10,7 @@ import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { identityFor } from '../off/proc.mjs'
+import { netenvFile } from '../netenv/index.mjs'
 import { asightHome, backupDir, legacyLockPath, legacyEventsFile, legacyManifestPath, standalonePath } from '../off/paths.mjs'
 import { readManifestAt } from '../off/manifest.mjs'
 import { dropBackup, orphanBackups } from '../off/backup.mjs'
@@ -28,6 +29,7 @@ function ownFiles({ home, fs, purge }) {
   const caDir = path.join(dir, 'ca')
   if (fs.existsSync(caDir)) out.dirs.push(caDir)
   if (fs.existsSync(standalonePath(home))) out.files.push(standalonePath(home))
+  if (fs.existsSync(netenvFile(home))) out.files.push(netenvFile(home)) // what `status` / `doctor` / `on` last read of the VPN software, for the board: asight's own (audit rule-b 8)
   if (purge) { try { for (const n of fs.readdirSync(dir)) if (DATA_FILE.test(n)) out.files.push(path.join(dir, n)) } catch { /* no ~/.asight: no captures */ } }
   return out
 }
@@ -85,6 +87,8 @@ export async function legacyUninstallCli(argv, { io, env = process.env, home = n
       const outcome = receipt.ok ? 'uninstalled' : 'failed'
       appendLegacyEvent({ event: 'uninstall-note', where: 'uninstall', kind: 'result', outcome, reason: receipt.ok ? `uninstalled: the old capture is out, ${receipt.dropped_backups.length} backup(s) removed` : `uninstall did not finish: ${receipt.problems[0] || 'the old capture is not all undone'}` }, { file: legacyEventsFile(home), now: now(), log: (m) => io.err(m) })
     } finally { lock.release() }
+    // taking the lock made ~/.asight when there was none, and a clean uninstall leaves the lock's directory empty: it goes too (zero residue); with anything else in it (the captures, the logs) it stays
+    if (receipt.ok && !receipt.problems.length) removeEmptyDirs([asightHome(home)], fs)
     print(receipt)
     return receipt.ok ? EXIT.ok : EXIT.incomplete
   } catch (e) {
