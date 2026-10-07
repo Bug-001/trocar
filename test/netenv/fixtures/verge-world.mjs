@@ -6,6 +6,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { tmpDir } from '../../helpers/tmp.mjs'
 import { startFakeCore } from './fake-core.mjs'
+import { memoryLedger } from './ledger.mjs'
 import { createController } from '../../../src/netenv/mihomo/controller.mjs'
 import { createVergeAdapter, VERGE_DIR_NAME } from '../../../src/netenv/adapters/clash-verge-rev.mjs'
 import { buildBlock, routeFile, names } from '../../../src/netenv/mihomo/rules.mjs'
@@ -55,9 +56,10 @@ export async function startWorld(t, { script = SCRIPT_JS, runtime = userRuntime(
   if (script !== null) put(path.join('profiles', 'Script.js'), script)
   for (const [rel, text] of Object.entries(files)) put(rel, text)
   const core = await startFakeCore(t, { home, runtimeText: runtime, userProviders: { [USER_PROVIDER]: 7 }, ...coreOpts })
+  const ledger = memoryLedger({ home: sandbox })
   const state = { running: true, daemon: true }
-  const adapter = createVergeAdapter({ home, controller: createController({ endpoint: core.endpoint }), running: () => state.running, daemonAlive: () => state.daemon, ...adapterOpts })
-  const world = { sandbox, home, core, adapter, state, file: (rel) => path.join(home, rel), asightHome: path.join(sandbox, '.asight') }
+  const adapter = createVergeAdapter({ home, controller: createController({ endpoint: core.endpoint }), ledger, running: () => state.running, daemonAlive: () => state.daemon, ...adapterOpts })
+  const world = { sandbox, home, core, adapter, ledger, state, file: (rel) => path.join(home, rel), asightHome: path.join(sandbox, '.asight') }
   world.block = (groups = GROUPS) => buildBlock(blockInput(groups))
   /** The block as the core has it: spliced into the runtime, loaded, the route files written (on = patterns, off = empty). */
   world.live = (groups = GROUPS, { on = [] } = {}) => {

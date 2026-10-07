@@ -13,7 +13,7 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { createController, discover as discoverController, maskEndpoint } from '../mihomo/controller.mjs'
-import { SCRIPT_SENTINEL, scanScript } from '../mihomo/rules.mjs'
+import { names, probeUrl, SCRIPT_SENTINEL, scanScript } from '../mihomo/rules.mjs'
 import { topKey, topBool, topInt } from '../mihomo/yaml-top.mjs'
 
 export { discoverController as discover }
@@ -130,5 +130,90 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     return c.findProcessMode === null ? { mode: null, reason: 'unreadable' } : { mode: c.findProcessMode, reason: null }
   }
 
-  return { home, paths: P, readFields, readConfigs, readFindProcessMode, controllerInfo, reset: () => { found = null }, sentinel: SCRIPT_SENTINEL }
+  /**
+   * What the runtime says about group `g` (4.8 §4.1 复核): `{ live, now, fbNow, ruleCount, reason }`. `now` is asight-sw-<g>'s, `fbNow` asight-fb-<g>'s, `ruleCount` comes from the provider LIST (v1.19.32 has
+   * no read of one provider, only the list; everything else in the list is dropped here). live: true = on (the select is on the fallback group AND the provider has rules), false = off (the select is on PASS,
+   * or the provider is empty, or the block is not in the runtime), null = not read. `reason`: null · fallback-active (on, but the group chose the re-entry point while the daemon is alive: the engine does not
+   * answer mihomo) · off · empty-provider · block-not-in-runtime · controller-unreadable · unreadable.
+   */
+  async function verify(g, { daemonAlive: alive = daemonAlive() } = {}) {
+    const n = names(g)
+    const sw = await get(`/proxies/${n.sw}`)
+    if (sw.status === 0) return { live: null, now: null, fbNow: null, ruleCount: null, reason: 'controller-unreadable' }
+    if (sw.status === 404) return { live: false, now: null, fbNow: null, ruleCount: null, reason: 'block-not-in-runtime' }
+    if (!sw.ok || !sw.json || typeof sw.json.now !== 'string') return { live: null, now: null, fbNow: null, ruleCount: null, reason: 'unreadable' }
+    const now = sw.json.now
+    const fb = await get(`/proxies/${n.fb}`)
+    const fbNow = fb.ok && fb.json && typeof fb.json.now === 'string' ? fb.json.now : null
+    const list = await get('/providers/rules')
+    const mine = list.ok && list.json && list.json.providers && typeof list.json.providers === 'object' ? list.json.providers[n.provider] : undefined
+    const ruleCount = mine && Number.isInteger(mine.ruleCount) ? mine.ruleCount : null // the rest of the list is dropped here
+    let isLive = null
+    if (now !== n.fb) isLive = false // PASS: asight's route is off whatever the provider holds
+    else if (ruleCount === 0) isLive = false // the group is on but there is nothing for it to match
+    else if (ruleCount !== null) isLive = true
+    const reason = isLive === true ? (alive === true && fbNow === n.re ? 'fallback-active' : null) : isLive === false ? (now !== n.fb ? 'off' : 'empty-provider') : 'unreadable'
+    return { live: isLive, now, fbNow, ruleCount, reason }
+  }
+
+  /** The daemon calls this after the engine (re)starts: a health check of asight-fb-<g> against the group's OWN probe URL (mihomo records alive per URL), so a group that is on asight-re goes back to asight-in at once (4.8 §3.3). */
+  async function refreshProbe(g, { reenterPort } = {}) {
+    const port = reenterPort ?? (await readConfigs()).mixedPort
+    if (!Number.isInteger(port)) return { ok: false, status: 0, reason: 'unreadable' }
+    const r = await get(`/group/${names(g).fb}/delay?url=${encodeURIComponent(probeUrl(port, g))}&timeout=2000`)
+    return { ok: r.ok, status: r.status, reason: r.ok ? null : r.status === 0 ? 'controller-unreadable' : 'unreadable' }
+  }
+
+  // ---- the user's process rules that name an agent's image (4.8 §3.4 egress-differs, 4.7 N14): only the index and the type leave this function ----------------------------------------
+  const baseName = (p) => String(p).split(/[\\/]/).pop().toLowerCase()
+  const regexOf = (p) => { try { return new RegExp(p, 'i') } catch { return null } }
+  const KINDS = { processname: 'name', processpath: 'path', processnameregex: 'nameRegex', processpathregex: 'pathRegex' }
+  function processPiecesOf(rule) {
+    const kind = KINDS[String(rule.type).toLowerCase().replace(/-/g, '')]
+    if (kind) return [{ kind, payload: String(rule.payload ?? '') }]
+    if (!['and', 'or', 'not'].includes(String(rule.type).toLowerCase())) return []
+    return [...String(rule.payload ?? '').matchAll(/\(\s*PROCESS-(NAME-REGEX|PATH-REGEX|NAME|PATH)\s*,\s*([^()]*?)\s*\)/gi)].map((m) => ({ kind: KINDS[`process${m[1].toLowerCase().replace(/-/g, '')}`], payload: m[2] }))
+  }
+  function pieceHitsForm(piece, form) {
+    const paths = (form.imagePaths || []).map(String)
+    const images = [...(form.imageNames || []), ...paths.map(baseName)].map((x) => String(x).toLowerCase())
+    const re = piece.kind.endsWith('Regex') ? regexOf(piece.payload) : null
+    if (piece.kind === 'name') return images.includes(piece.payload.toLowerCase())
+    if (piece.kind === 'path') return paths.some((p) => p.toLowerCase() === piece.payload.toLowerCase())
+    if (piece.kind === 'nameRegex') return !!re && images.some((i) => re.test(i))
+    return !!re && paths.some((p) => re.test(p))
+  }
+  /**
+   * Which of the user's own process rules name one of asight's forms: `forms` = `[{ id, imageNames: ['codex.exe'], imagePaths: [concrete paths seen] }]` → `{ ok, rules: [{ index, type, forms: [id] }], reason }`.
+   * `GET /rules` is read, every rule is looked at in memory and everything but the index, the rule type and the form ids is dropped: no domain, no group, no node name, no payload leaves (N14). Rules
+   * of asight's own and non-process rules are never listed. A process rule nested in AND / OR / NOT is found when its payload has no parenthesis of its own.
+   */
+  async function processRulesNaming(forms) {
+    const r = await get('/rules')
+    if (!r.ok || !r.json || !Array.isArray(r.json.rules)) return { ok: false, rules: [], reason: r.status === 0 ? 'controller-unreadable' : 'unreadable' }
+    const out = []
+    for (const rule of r.json.rules) {
+      if (!rule || typeof rule !== 'object') continue
+      const pieces = processPiecesOf(rule)
+      const hit = pieces.length ? forms.filter((f) => pieces.some((p) => pieceHitsForm(p, f))) : []
+      if (hit.length) out.push({ index: rule.index, type: String(rule.type), forms: hit.map((f) => f.id) })
+    }
+    return { ok: true, rules: out, reason: null }
+  }
+
+  /** What the probe (src/netenv/probe.mjs detect) is given about Verge: the file fields, the runtime's few fields, how the controller was found (masked), and whether it is running. */
+  async function facts() {
+    const fields = await readFields()
+    const c = await readConfigs()
+    const version = c.ok ? await get('/version') : null
+    const info = controllerInfo()
+    return {
+      fields,
+      running: running(),
+      runtime: c.ok ? { version: version && version.ok && version.json && typeof version.json.version === 'string' ? version.json.version : null, mode: c.mode, mixedPort: c.mixedPort, tun: c.tun, findProcessMode: c.findProcessMode } : { unknown: { reason: c.reason, ...(info && info.unknown ? { tried: info.unknown.tried } : {}) } },
+      controller: info,
+    }
+  }
+
+  return { home, paths: P, readFields, readConfigs, readFindProcessMode, verify, refreshProbe, processRulesNaming, facts, controllerInfo, reset: () => { found = null }, sentinel: SCRIPT_SENTINEL }
 }

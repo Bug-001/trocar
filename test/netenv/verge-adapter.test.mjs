@@ -7,8 +7,8 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import { discover, maskEndpoint } from '../../src/netenv/mihomo/controller.mjs'
 import { stubHelper, vergeProcs, proc, SESSION, VERGE_DIR } from './fixtures/win-facts.mjs'
-import { startWorld, snapshot, LEAKS, VERGE_YAML, PROFILES_YAML, SCRIPT_JS, userRuntime } from './fixtures/verge-world.mjs'
-import { buildScriptJs, insertScriptBlock, scanScript } from '../../src/netenv/mihomo/rules.mjs'
+import { startWorld, snapshot, LEAKS, USER_PROVIDER, USER_GROUP, USER_DOMAIN, NODE, VERGE_YAML, PROFILES_YAML, SCRIPT_JS, userRuntime, GROUPS } from './fixtures/verge-world.mjs'
+import { names, buildScriptJs, insertScriptBlock, scanScript } from '../../src/netenv/mihomo/rules.mjs'
 
 // ---- N3 · N4: discovery ----------------------------------------------------------------------------------------------------------------------------------
 
@@ -199,6 +199,19 @@ test('readFields: the runtime outranks config.yaml, the global script is the one
   }
 })
 
+// ---- N9: the provider list ---------------------------------------------------------------------------------------------------------------------------------------
+
+test('N9 verify reads the rule count from the provider LIST and drops the rest of it: the user\'s provider is in no result; there is no read of a single provider', async (t) => {
+  const w = await startWorld(t)
+  w.live(GROUPS, { on: ['claude-code.cli'] })
+  const v = await w.adapter.verify('claude-code.cli')
+  assert.equal(v.ruleCount, 2, 'the two lines of the route file')
+  assert.ok(!JSON.stringify(v).includes(USER_PROVIDER))
+  assert.deepEqual(w.core.requests.filter((r) => r.path.startsWith('/providers')).map((r) => `${r.method} ${r.path}`), ['GET /providers/rules'])
+  assert.ok(!w.core.requests.some((r) => /^\/providers\/rules\/./.test(r.path)), 'GET /providers/rules/<name> is 405 on v1.19.32: the client never sends it')
+  for (const f of ['verify', 'readFields', 'readConfigs', 'processRulesNaming', 'facts']) assert.equal(typeof w.adapter[f], 'function')
+})
+
 // ---- N13 ---------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 test('N13 find-process-mode is read from GET /configs: off, strict, always; a field that cannot be read is unknown; asight has no write for it', async (t) => {
@@ -206,7 +219,7 @@ test('N13 find-process-mode is read from GET /configs: off, strict, always; a fi
     const w = await startWorld(t, { core: { findProcessMode: mode } })
     assert.deepEqual(await w.adapter.readFindProcessMode(), { mode, reason: null })
     assert.deepEqual(w.core.writes(), [], 'zero PATCH and zero PUT')
-    assert.deepEqual(Object.keys(w.adapter).filter((k) => /find|process/i.test(k)), ['readFindProcessMode'], 'a reader: no setter')
+    assert.deepEqual(Object.keys(w.adapter).filter((k) => /find|process/i.test(k)), ['readFindProcessMode', 'processRulesNaming'], 'a reader and a rule finder: no setter')
   }
   const odd = await startWorld(t, { core: { findProcessMode: 'sometimes' } })
   assert.deepEqual(await odd.adapter.readFindProcessMode(), { mode: null, reason: 'unreadable' })
@@ -219,3 +232,73 @@ test('N13 find-process-mode is read from GET /configs: off, strict, always; a fi
   assert.deepEqual(await gone.adapter.readFindProcessMode(), { mode: null, reason: 'controller-unreadable' })
 })
 
+// ---- N14 ---------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+const FORMS = [
+  { id: 'codex.cli', imageNames: ['codex.exe'], imagePaths: [String.raw`C:\Users\u\AppData\Roaming\npm\node_modules\@openai\codex\vendor\codex.exe`] },
+  { id: 'codex.app', imageNames: ['codex.exe'], imagePaths: [String.raw`C:\Users\u\AppData\Local\OpenAI\Codex\bin\0123456789abcdef\codex.exe`] },
+  { id: 'claude-code.cli', imageNames: ['claude.exe'], imagePaths: [String.raw`C:\Users\u\.local\bin\claude.exe`] },
+]
+test('N14 the user\'s process rules that name an agent come back as index, type and form ids; no domain, group, node or payload leaves; nothing is written', async (t) => {
+  const w = await startWorld(t)
+  const before = snapshot(w.sandbox)
+  const r = await w.adapter.processRulesNaming(FORMS)
+  assert.deepEqual(r, { ok: true, rules: [{ index: 1, type: 'ProcessName', forms: ['codex.cli', 'codex.app'] }], reason: null }, 'PROCESS-NAME,codex.exe is the user\'s second rule; curl.exe is no agent')
+  const text = JSON.stringify(r)
+  for (const leak of [USER_GROUP, USER_DOMAIN, NODE, 'Proxy', 'DIRECT', 'curl']) assert.ok(!text.includes(leak), `${leak} must not leave`)
+  assert.deepEqual(w.core.requests.map((q) => `${q.method} ${q.path}`), ['GET /rules'])
+  assert.deepEqual(snapshot(w.sandbox), before, 'GET /rules is never written to disk')
+})
+
+test('N14 name, path and regex rules, in the core\'s own spelling and nested in AND / OR; a rule that names nobody asight serves is not listed; no rule at all is an answer too', async (t) => {
+  const w = await startWorld(t, { runtime: userRuntime([
+    'PROCESS-PATH,C:\\Users\\u\\.local\\bin\\claude.exe,' + USER_GROUP,
+    'PROCESS-PATH-REGEX,OpenAI.Codex,' + USER_GROUP,
+    'PROCESS-NAME-REGEX,^claude,' + USER_GROUP,
+    'PROCESS-PATH-REGEX,\\\\tools\\\\somebody-else,' + USER_GROUP,
+    'AND,((PROCESS-NAME,codex.exe),(DOMAIN,' + USER_DOMAIN + ')),' + USER_GROUP,
+    'OR,((PROCESS-NAME,nothing.exe),(DST-PORT,443)),DIRECT',
+    'DOMAIN-KEYWORD,(PROCESS-NAME,claude.exe),DIRECT',
+  ]) })
+  const r = await w.adapter.processRulesNaming(FORMS)
+  assert.deepEqual(r.rules.map((x) => [x.type, x.forms]), [
+    ['ProcessName', ['codex.cli', 'codex.app']], ['ProcessPath', ['claude-code.cli']], ['ProcessPathRegex', ['codex.cli', 'codex.app']], ['ProcessNameRegex', ['claude-code.cli']], ['AND', ['codex.cli', 'codex.app']],
+  ])
+  assert.ok(!JSON.stringify(r).includes(USER_GROUP))
+  assert.deepEqual((await w.adapter.processRulesNaming([{ id: 'path-only', imageNames: [], imagePaths: [String.raw`C:\x\codex.exe`] }])).rules.map((x) => [x.type, x.forms]), [['ProcessName', ['path-only']], ['AND', ['path-only']]], 'an image name is also the base name of a path')
+  const quiet = await startWorld(t)
+  assert.deepEqual(await quiet.adapter.processRulesNaming([{ id: 'kimi-code.cli', imageNames: ['kimi.exe'], imagePaths: [] }]), { ok: true, rules: [], reason: null })
+  await quiet.core.stop()
+  assert.deepEqual(await quiet.adapter.processRulesNaming(FORMS), { ok: false, rules: [], reason: 'controller-unreadable' })
+})
+
+// ---- the probe refresh and the probe facts -----------------------------------------------------------------------------------------------------------------------------
+
+test('refreshProbe checks the group against its own loopback probe URL; after the engine is back the group goes from asight-re to asight-in; nothing is written', async (t) => {
+  const w = await startWorld(t)
+  w.live(GROUPS, { on: ['claude-code.cli'] })
+  const n = names('claude-code.cli')
+  w.core.engineAlive = false
+  w.core.healthCheck()
+  assert.equal(w.core.groups.get(n.fb).now, n.re)
+  w.core.engineAlive = true
+  const r = await w.adapter.refreshProbe('claude-code.cli')
+  assert.deepEqual(r, { ok: true, status: 200, reason: null })
+  assert.equal(w.core.groups.get(n.fb).now, n.in)
+  assert.deepEqual(w.core.requests.slice(-2).map((q) => q.path), ['/configs', `/group/${n.fb}/delay?url=http%3A%2F%2F127.0.0.1%3A7897%2Fasight-health%2Fclaude-code.cli&timeout=2000`])
+  await w.adapter.refreshProbe('claude-code.cli', { reenterPort: 7900 })
+  assert.ok(w.core.requests.at(-1).path.includes('127.0.0.1%3A7900'))
+  assert.deepEqual(w.core.writes(), [])
+  assert.deepEqual(await w.adapter.refreshProbe('nope'), { ok: false, status: 404, reason: 'unreadable' })
+})
+
+test('facts() is what the probe is given: the §3.2 fields, the runtime\'s few, how the controller was found; no secret and no name of the user\'s', async (t) => {
+  const w = await startWorld(t)
+  w.state.running = true
+  const f = await w.adapter.facts()
+  assert.deepEqual([f.running, f.runtime, f.controller], [true, { version: 'v1.19.32', mode: 'rule', mixedPort: 7897, tun: false, findProcessMode: 'strict' }, { how: 'given', endpoint: w.core.endpoint.replace(/[0-9a-f]{8,}/gi, '<k>') }])
+  for (const leak of LEAKS) assert.ok(!JSON.stringify(f).includes(leak), leak)
+  await w.core.stop()
+  const down = await w.adapter.facts()
+  assert.deepEqual(down.runtime, { unknown: { reason: 'controller-unreadable' } })
+})
