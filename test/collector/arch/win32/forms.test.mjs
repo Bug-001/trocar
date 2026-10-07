@@ -48,6 +48,26 @@ test('matchForm: forms are tried in order, and a form that cannot be judged yet 
   assert.deepEqual(at(z, { cmdline: null, cmdlineState: 'pending' }), { kind: 'pending', forms: ['z.cli'] }, 'the wider z.desktop would be a wrong answer for a z.cli whose command line has not come yet')
 })
 
+test('formPathShape: with the user\'s profile directory given, the user name is masked wherever the profile is (redirected, domain, UNC), in either slash style and any case; only that directory is', () => {
+  const D = { home: raw`D:\profiles\alice` }
+  assert.equal(formPathShape(raw`D:\profiles\alice\AppData\Local\x\y.exe`, D), raw`D:\profiles\<user>\AppData\Local\x\y.exe`)
+  assert.equal(formPathShape('d:/Profiles/Alice/scoop/y.exe', D), 'd:/Profiles/<user>/scoop/y.exe', 'either slash, any case: the name is masked as the path spells it')
+  assert.equal(formPathShape(raw`D:\profiles\alice`, D), raw`D:\profiles\<user>`, 'the profile directory itself')
+  assert.equal(formPathShape(raw`\\fileserver\home\alice.smith\AppData\Local\x\y.exe`, { home: '\\\\fileserver\\home\\alice.smith\\' }), raw`\\fileserver\home\<user>\AppData\Local\x\y.exe`, 'a UNC home, with a trailing slash in what the caller gave')
+  assert.equal(formPathShape(raw`D:\profiles\alice2\x\y.exe`, D), raw`D:\profiles\alice2\x\y.exe`, 'a directory that only starts like the profile is not the profile')
+  assert.equal(formPathShape(raw`D:\tools\y.exe`, D), raw`D:\tools\y.exe`, 'nothing of the user\'s in it: as it is')
+  assert.equal(formPathShape(raw`C:\Users\bob\x\y.exe`, D), raw`C:\Users\<user>\x\y.exe`, 'another user\'s profile under C:\Users is masked too')
+  assert.equal(formPathShape(raw`C:\Users\alice\x\y.exe`, { home: raw`C:\Users\alice` }), raw`C:\Users\<user>\x\y.exe`, 'the usual profile: the same answer with or without the home')
+  for (const home of [null, undefined, '', 'C:', '/', raw`C:\Users\alice\(x`]) assert.equal(formPathShape(raw`D:\x\y.exe`, { home }), raw`D:\x\y.exe`, `a home that names no profile masks nothing: ${JSON.stringify(home)}`)
+})
+
+test('matchForm: a path-unknown answer from a redirected or domain profile has no user name in it when the profile directory is passed', () => {
+  const r = matchForm(FORMS, { exe: raw`D:\profiles\alice\scoop\shims\agent.exe`, cmdline: null, cmdlineState: 'not-asked' }, { home: raw`D:\profiles\alice` })
+  assert.deepEqual([r.kind, r.shape], ['path-unknown', raw`D:\profiles\<user>\scoop\shims\agent.exe`])
+  assert.ok(!JSON.stringify(r).includes('alice'), 'the user name is not in the answer')
+  assert.equal(matchForm(FORMS, { exe: raw`D:\profiles\alice\scoop\shims\agent.exe`, cmdline: null, cmdlineState: 'not-asked' }).kind, 'path-unknown', 'without a home it still answers, with the C:\\Users shape only')
+})
+
 test('formPathShape: only the user directory is masked, in either slash style', () => {
   assert.equal(formPathShape(raw`C:\Users\Bob Smith\AppData\Local\x\y.exe`), raw`C:\Users\<user>\AppData\Local\x\y.exe`)
   assert.equal(formPathShape('c:/users/bob/x/y.exe'), 'c:/users/<user>/x/y.exe')

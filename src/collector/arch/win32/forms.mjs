@@ -11,9 +11,19 @@ const re = (pattern) => new RegExp(pattern, 'i')
 const baseName = (p) => String(p).split(/[\\/]/).pop()
 const hits = (patterns, text) => patterns.some((p) => re(p).test(text))
 
-/** The path of a process with the user's directory masked, for `form-path-unknown`: `C:\Users\<user>\AppData\…`; the rest is kept so the shape shows. */
-export function formPathShape(exe) {
-  return String(exe).replace(/^([A-Za-z]:[\\/]Users[\\/])[^\\/]+/i, '$1<user>')
+/** The path of a process with the user's directory masked, for `form-path-unknown`: `C:\Users\<user>\AppData\…`; the rest is kept so the shape shows.
+ *  `home` is the user's profile directory (`%USERPROFILE%`, the daemon's `ctx.home`): the profile's own name is masked wherever the profile is (a redirected `D:\profiles\alice`,
+ *  a domain `\\server\home\alice`), in either slash style and any case. Without it, or for a path under some other profile, only the `X:\Users\<name>` shape is masked. */
+export function formPathShape(exe, { home = null } = {}) {
+  const p = String(exe)
+  const h = home ? String(home).replace(/[\\/]+$/, '') : ''
+  const last = h.split(/[\\/]/).pop()
+  if (last && /[\\/]/.test(h)) { // a drive root has no profile name to mask
+    const part = (c) => (c === '\\' || c === '/' ? '[\\\\/]' : c.replace(/[.*+?^${}()|[\]]/g, '\\$&')) // a separator is either slash; any other character is itself
+    const at = new RegExp(`^${[...h].map(part).join('')}(?=[\\\\/]|$)`, 'i').exec(p)
+    if (at) return p.slice(0, at[0].length - last.length) + '<user>' + p.slice(at[0].length)
+  }
+  return p.replace(/^([A-Za-z]:[\\/]Users[\\/])[^\\/]+/i, '$1<user>')
 }
 
 /** matchForm(forms, { exe, cmdline, cmdlineState }) → one of
@@ -21,8 +31,9 @@ export function formPathShape(exe) {
  *    { kind:'pending', forms:[id] }          a form needs the command line, and it is not known yet (`pending`, `cim-backoff`): ask again when it is
  *    { kind:'path-unknown', forms:[id], shape }  the image is one only an agent has, but the path is none of the known install shapes (`form-path-unknown`)
  *    { kind:'none' }                         not an agent (a `node.exe` without the dsh command line, any other program)
- *  A form whose image is a shared one (`python.exe`, `node.exe`, `Code.exe`) never gives `path-unknown`: most processes of that image are not agents. */
-export function matchForm(forms, proc) {
+ *  A form whose image is a shared one (`python.exe`, `node.exe`, `Code.exe`) never gives `path-unknown`: most processes of that image are not agents.
+ *  `home` (optional): the user's profile directory, so the `shape` of a `path-unknown` has no user name in it wherever the profile is (see formPathShape). */
+export function matchForm(forms, proc, { home = null } = {}) {
   const exe = proc && typeof proc.exe === 'string' ? proc.exe : ''
   const image = baseName(exe).toLowerCase()
   const same = exe === '' ? [] : forms.filter((f) => f.match && f.match.image.toLowerCase() === image)
@@ -39,7 +50,7 @@ export function matchForm(forms, proc) {
     return { kind: 'form', id: f.id }
   }
   const only = same.filter((f) => f.match.reportUnknownPath)
-  if (only.length) return { kind: 'path-unknown', forms: only.map((f) => f.id), shape: formPathShape(exe) }
+  if (only.length) return { kind: 'path-unknown', forms: only.map((f) => f.id), shape: formPathShape(exe, { home }) }
   return { kind: 'none' }
 }
 
