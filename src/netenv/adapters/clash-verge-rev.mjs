@@ -353,10 +353,12 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
   async function removeRuleFile(g) {
     const led = need()
     const file = path.join(home, names(g).routeFile)
+    let existed = false
+    try { fs.statSync(file); existed = true } catch { /* not there */ }
     try { fs.rmSync(file, { force: true }) } catch (e) { return { ok: false, code: (e && e.code) || 'error', reason: `${path.basename(file)} could not be removed` } }
     try { fs.rmdirSync(P.asightDir) } catch { /* not empty (another group's file), or gone */ }
     led.forget('vpn-rule-file', file)
-    return { ok: true }
+    return { ok: true, changed: existed, receipt: existed ? { kind: 'vpn-rule-file', key: file, change: 'removed', backup: null } : null }
   }
 
   /** `PUT /proxies/asight-sw-<g> {name}`: PASS (off) or asight-fb-<g> (on); anything else is refused by the controller before a byte is sent (it throws). Runtime-only, so no backup; the ledger says how to undo it. */
@@ -412,7 +414,7 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     const receipts = []
     const rowOf = (g) => rows.find((r) => r.g === g)
     const wanted = (g) => groups.find((x) => x.g === g)
-    const step = (row, name, r) => { row.steps.push({ step: name, ok: r.ok === true, ...(r.status === undefined ? {} : { status: r.status }), ...(r.code ? { code: r.code } : {}), ...(r.reason ? { reason: r.reason } : {}) }); if (r.receipt) receipts.push(r.receipt); return r }
+    const step = (row, name, r, { receipt = true } = {}) => { row.steps.push({ step: name, ok: r.ok === true, ...(r.status === undefined ? {} : { status: r.status }), ...(r.code ? { code: r.code } : {}), ...(r.reason ? { reason: r.reason } : {}) }); if (r.receipt && receipt) receipts.push(r.receipt); return r }
     const writeFiles = (row) => (async () => step(row, 'file', await writeRuleFile(row.g, row.want === 'on' ? wanted(row.g).lines ?? null : null)))()
     const finish = () => { const ok = rows.every((r) => r.state === 'verified'); return { ok, exit: ok ? 0 : 1, rows, receipts, lines } }
     let ctl = await live()
@@ -451,7 +453,7 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     if (on.length && pick.on[0] === 'payload') {
       for (const row of active) { row.strategy = row.want === 'on' ? ['payload'] : row.strategy; if (row.want === 'on') await writeFiles(row) } // the provider loads the files when the runtime does
       const pushed = block ? await pushPayload({ block }) : { ok: false, reason: 'block-needed' }
-      for (const row of on) step(row, 'payload', pushed)
+      on.forEach((row, i) => step(row, 'payload', pushed, { receipt: i === 0 })) // every row shows the step, the receipt of the one push is listed once
       if (pushed.ok) { payloadAccepted = true; for (const row of on) step(row, 'select', await putSelect(row.g, names(row.g).fb)) } else { if (block) payloadAccepted = false; for (const row of on) row.strategy.push('none') }
     } else {
       for (const row of on) {
@@ -482,7 +484,8 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
 
   /**
    * The no-argument `off`: every group off (read back), the block out of the global script (D28), the route files deleted. `groups`: the group ids (asight's rule files in the ledger are removed too). The runtime
-   * keeps asight's inert block and the core's cache.db one selection until Verge next regenerates the runtime: listed in `residue`, not a failure (4.8 §4.3). exit 1 when a group could not be read back, or the strip refused.
+   * keeps asight's inert block and the core's cache.db one selection until Verge next regenerates the runtime: listed in `residue`, not a failure (4.8 §4.3). exit 1 when a group could not be read back, the strip refused, or a route file could not be deleted (it stays, emptied, and the ledger keeps it).
+   * Receipts: a file deleted here is listed once, as removed, and not also as the empty write that came before it.
    */
   async function removeBlock({ groups }) {
     const led = need()
@@ -491,12 +494,17 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     if (await live()) for (const g of ids) { const v = await verify(g); if (v.reason !== 'block-not-in-runtime' && v.live !== null) blockWasLive = true }
     const off = await applyGroups({ groups: ids.map((g) => ({ g, on: false })) })
     const script = await stripScriptBlock()
-    for (const g of ids) await removeRuleFile(g)
+    const gone = []
+    const stuck = []
+    for (const g of ids) { const r = await removeRuleFile(g); if (!r.ok) stuck.push(g); else if (r.receipt) gone.push(r.receipt) }
+    const emptied = new Set(gone.map((r) => r.key)) // a file that is deleted in this same `off` is listed once, as removed: not also as the empty file it was a moment ago
     const lines = [...off.lines]
     if (script.ok && script.identical === false) lines.push('Script.js 已撤销,但不逐字节相同(你改过块外的内容),备份留着')
     if (!script.ok) lines.push(`Script.js 里的哨兵被改坏,没有动它(${script.detail || script.code || script.reason})`)
-    const ok = off.ok && script.ok
-    return { ok, exit: ok ? 0 : 1, rows: off.rows, script, receipts: [...off.receipts, ...(script.receipt ? [script.receipt] : [])], residue: blockWasLive ? RESIDUE.map((r) => ({ ...r })) : [], lines }
+    if (stuck.length) lines.push(`规则文件删不掉,留着一个空文件:${stuck.join('、')}`)
+    const ok = off.ok && script.ok && stuck.length === 0
+    const receipts = [...off.receipts.filter((r) => !(r.kind === 'vpn-rule-file' && emptied.has(r.key))), ...(script.receipt ? [script.receipt] : []), ...gone]
+    return { ok, exit: ok ? 0 : 1, rows: off.rows, script, receipts, residue: blockWasLive ? RESIDUE.map((r) => ({ ...r })) : [], lines }
   }
 
   /**

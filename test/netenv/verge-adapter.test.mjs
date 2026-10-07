@@ -472,7 +472,7 @@ test('asight\'s route file: written whole (patterns when on, empty when off), an
   assert.deepEqual([fs.existsSync(file), fs.existsSync(w.adapter.paths.asightDir), w.ledger.entries().map((e) => e.group)], [false, true, ['codex.app']], 'the directory stays while another group\'s file is in it')
   await w.adapter.removeRuleFile('codex.app')
   assert.deepEqual([fs.existsSync(w.adapter.paths.asightDir), w.ledger.entries().length], [false, 0])
-  assert.deepEqual(await w.adapter.removeRuleFile('never-there'), { ok: true })
+  assert.deepEqual(await w.adapter.removeRuleFile('never-there'), { ok: true, changed: false, receipt: null })
   fs.writeFileSync(w.file('asight'), 'a file where the directory should be')
   const blocked = await w.adapter.writeRuleFile(g, lines)
   assert.deepEqual([blocked.ok, blocked.changed, ['EEXIST', 'ENOTDIR'].includes(blocked.code)], [false, false, true])
@@ -611,6 +611,41 @@ test('N6 every named write has one ledger entry and one receipt row; the file ki
   for (const e of entries.filter((x) => x.kind === 'vpn-rule-file')) assert.deepEqual([e.existed_before, e.backup], [false, undefined], 'asight\'s own file: no backup, undone by deleting it')
   for (const e of entries.filter((x) => x.kind.startsWith('vpn-runtime'))) assert.match(e.undo_by_hand, /重新激活/)
   assert.deepEqual(w.ledger.backups().length, 1, 'exactly one backup: the user\'s file')
+})
+
+// The same equation for the calls that turn things on and off: one receipt row per change, whatever the number of groups, and a file that `off` deletes is listed as removed and not as written.
+test('N6 R1 a call\'s receipts are its ledger entries: installBlock lists the pushed runtime once however many groups are on; the whole `off` lists each route file as removed, none as written', async (t) => {
+  const w = await startWorld(t)
+  const b = w.block()
+  const first = await w.adapter.installBlock({ block: b, blockText: buildScriptJs({ block: b }), groups: GROUPS.map((x) => ({ g: x.g, on: true, lines: b.files[names(x.g).routeFile].split('\n').filter(Boolean) })) })
+  assert.equal(first.ok, true)
+  const key = (r) => `${r.kind}|${r.key}`
+  assert.equal(first.receipts.filter((r) => r.kind === 'vpn-runtime-block').length, 1, 'one push of the runtime is one receipt row, not one per group')
+  assert.equal(first.receipts.length, w.ledger.entries().length, 'receipt rows == ledger entries')
+  assert.equal(new Set(first.receipts.map(key)).size, first.receipts.length, 'no row twice')
+  assert.deepEqual(new Set(first.receipts.map(key)), new Set(w.ledger.entries().map((e) => `${e.kind}|${e.key}`)))
+  const files = w.ledger.entries().filter((e) => e.kind === 'vpn-rule-file').map((e) => e.key)
+  assert.equal(files.length, 2)
+
+  const off = await w.adapter.removeBlock({ groups: GROUPS.map((x) => x.g) })
+  assert.equal(off.ok, true)
+  assert.deepEqual(off.receipts.filter((r) => r.kind === 'vpn-rule-file').map((r) => [r.key, r.change]).sort(), files.map((f) => [f, 'removed']).sort(), 'each file asight deleted is listed once, as removed')
+  for (const f of files) assert.equal(fs.existsSync(f), false)
+  assert.equal(new Set(off.receipts.map((r) => `${r.kind}|${r.key}|${r.change}`)).size, off.receipts.length)
+  assert.deepEqual(off.receipts.filter((r) => r.kind === 'vpn-script-block').map((r) => r.change), ['removed'])
+})
+
+test('N6 R1 a route file that cannot be deleted is not listed as removed and not hidden: the `off` says so and exits 1, and the ledger still knows the file', async (t) => {
+  const stuck = (file) => /route-codex\.app\.txt$/.test(String(file))
+  const w = await startWorld(t, { adapter: { fs: new Proxy(fs, { get: (target, prop) => (prop === 'rmSync' ? (file, ...rest) => { if (stuck(file)) throw Object.assign(new Error('busy'), { code: 'EBUSY' }); return target.rmSync(file, ...rest) } : target[prop]) }) } })
+  const b = w.block()
+  await w.adapter.installBlock({ block: b, blockText: buildScriptJs({ block: b }), groups: GROUPS.map((x) => ({ g: x.g, on: true, lines: b.files[names(x.g).routeFile].split('\n').filter(Boolean) })) })
+  const off = await w.adapter.removeBlock({ groups: GROUPS.map((x) => x.g) })
+  assert.deepEqual([off.ok, off.exit], [false, 1])
+  assert.ok(off.lines.some((l) => l.includes('codex.app')), 'the line names the group whose file stayed')
+  const kept = w.ledger.entries().filter((e) => e.kind === 'vpn-rule-file')
+  assert.deepEqual(kept.map((e) => e.group), ['codex.app'], 'the file that is still there is still in the ledger')
+  assert.deepEqual(off.receipts.filter((r) => r.kind === 'vpn-rule-file').map((r) => [path.basename(r.key), r.change]).sort(), [['route-claude-code.cli.txt', 'removed'], ['route-codex.app.txt', 'written']], 'the stuck file keeps the receipt of what was done to it: emptied')
 })
 
 test('a write without a ledger is refused; the reads need none', async (t) => {
