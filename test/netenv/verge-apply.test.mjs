@@ -160,7 +160,7 @@ test('W11 none: a payload the core refuses leaves only the files written, and th
   assert.deepEqual([third.ok, third.rows[0].strategy, pushes()], [true, ['payload'], 2])
 })
 
-test('W11 none: no controller to talk to, or a core that is not Verge\'s, writes the files and says 未生效; a push with no block to push says block-needed', async (t) => {
+test('W11 none: no controller to talk to writes the files and says 未生效 (a controller that is not Verge\'s is the same, and is held in verge-adapter.test.mjs: N4 at the adapter); a push with no block to push says block-needed', async (t) => {
   const w = await startWorld(t)
   await w.core.stop()
   const r = await w.adapter.applyGroups({ groups: both(w) })

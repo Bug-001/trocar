@@ -130,6 +130,39 @@ test('N4 a controller whose server is not Verge\'s own core is not trusted and n
   }
 })
 
+// N4 at the adapter, not only at discover(): the adapter built with a controller it must not trust behaves as one with no controller, and sends not one request to it
+test('N4 the adapter finds a same-named pipe owned by another user and does not trust it: verify is 「不知道」, a switch sends no request and writes only the files with the 未生效 line, the whole `off` says asight may still be on the path; the discovery says why', async (t) => {
+  const w = await startWorld(t)
+  const asked = []
+  const record = (method) => async (p, body) => { asked.push([method, p, body ?? null]); return { status: 200, ok: true, json: { version: 'v1.19.32' }, text: '' } } // a core that would answer anything: only the trust check stands in the way
+  const makeClient = () => ({ get: record('GET'), put: record('PUT'), endpoint: 'pipe:verge-mihomo-<k>' })
+  const procs = REFUSED['another user\'s session'].procs
+  const helper = stubHelper({ procs, pipes: { [PIPE.enumerate]: { serverPid: 5000 } } })
+  const adapter = createVergeAdapter({ home: w.home, helper, listPipes: async () => [PIPE.enumerate], makeClient, ledger: w.ledger, running: () => true, env: {} })
+  const b = w.block()
+  const original = fs.readFileSync(w.file('profiles/Script.js'))
+  const lines = (g) => b.files[names(g).routeFile].split('\n').filter(Boolean)
+
+  assert.deepEqual(await adapter.verify('claude-code.cli'), { live: null, now: null, fbNow: null, ruleCount: null, reason: 'controller-unreadable' })
+  assert.deepEqual([(await adapter.readConfigs()).ok, (await adapter.processRulesNaming([])).reason, (await adapter.refreshProbe('claude-code.cli', { reenterPort: 7897 })).reason], [false, 'controller-unreadable', 'controller-unreadable'])
+  assert.deepEqual([(await adapter.putSelect('claude-code.cli', 'PASS')).reason, (await adapter.refreshProvider('claude-code.cli')).reason, (await adapter.pushPayload({ block: b })).reason], ['controller-unreadable', 'controller-unreadable', 'controller-unreadable'])
+  assert.deepEqual(asked, [], 'not one request, not even GET /version, reached the pipe of the other user')
+
+  const on = await adapter.installBlock({ block: b, blockText: buildScriptJs({ block: b }), groups: GROUPS.map((x) => ({ g: x.g, on: true, lines: lines(x.g) })) })
+  assert.deepEqual([on.ok, on.exit], [false, 1])
+  assert.ok(on.lines.includes('已写入,未生效 · 去 Clash Verge → 订阅,点当前订阅重新激活'))
+  assert.deepEqual(on.rows.map((r) => [r.strategy, r.state, r.live, r.reason]), [[['none'], 'not-live', null, 'controller-unreadable'], [['none'], 'not-live', null, 'controller-unreadable']])
+  assert.equal(fs.readFileSync(w.file(names('claude-code.cli').routeFile), 'utf8'), lines('claude-code.cli').join('\n') + '\n', 'the route files are written')
+  assert.ok(fs.readFileSync(w.file('profiles/Script.js'), 'utf8').includes('asight collector'), 'and the block is in the script: the next activation has it')
+  assert.deepEqual(asked, [], 'installBlock sent nothing either')
+
+  const off = await adapter.removeBlock({ groups: GROUPS.map((x) => x.g) })
+  assert.deepEqual([off.ok, off.exit, off.lines], [false, 1, ['asight 可能仍在 Clash 的路径上,去 Clash Verge 重新激活']])
+  assert.ok(fs.readFileSync(w.file('profiles/Script.js')).equals(original), 'the files are undone all the same')
+  assert.deepEqual(asked, [])
+  assert.deepEqual(adapter.controllerInfo().unknown.tried.find((x) => x.how === 'enumerate'), { how: 'enumerate', why: 'other-user' })
+})
+
 test('N4 the pipe that is not there, a helper that cannot answer, and a port with two owners are not trusted either', async () => {
   const c = clients(() => true)
   const gone = await discover({ ...world(), helper: stubHelper({ procs: vergeProcs() }), readRuntime: async () => null, makeClient: c.makeClient })
