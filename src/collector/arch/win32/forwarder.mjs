@@ -220,6 +220,12 @@ export function createForwarder({
   let stopping = false
   let drainPids = null
 
+  // The kernel is changed by one thing at a time: a call of the daemon (start, reload, adopt, stopNow), the supervisor's own re-spawn and a drain's last stop each wait for the one in front. Without it a stopNow
+  // returned "stopped" while a re-spawn was still coming up and the attempt then committed a kernel nobody tracked, and a reload during a re-spawn spawned a second kernel. `stopping` is how a call that is waiting
+  // (or an attempt that is running) tells the one in front to give up: stopNow sets it before it queues.
+  let tail = Promise.resolve()
+  const exclusive = (fn) => { const run = tail.then(fn); tail = run.then(() => {}, () => {}); return run }
+
   const fail = (code, reason, extra = {}) => { const rec = { where: code === 'forwarder-down' ? 'netenv' : 'forwarder', code, reason, ...extra }; events.failure(rec); return { ok: false, ...rec } }
   const startOf = async (pid) => { try { const v = await procStart(pid); return Number.isFinite(v) ? v : null } catch { return null } }
   const rmLock = () => { try { fs.rmSync(P.lock, { force: true }) } catch { /* nothing to remove */ } }
@@ -228,6 +234,14 @@ export function createForwarder({
   async function startFailed(what, detail = {}) {
     if (await sacOn()) return fail('forwarder-start-failed', 'smart-app-control', { ...detail, because: what })
     return fail('forwarder-start-failed', what, detail)
+  }
+
+  // kill a process we hold (our child) or adopted (a pid) and wait for it to be gone: true when it is
+  async function reap(p) {
+    try { if (p.child) p.child.kill(); else kill(p.pid) } catch { /* already gone */ }
+    const t0 = now()
+    while (isAlive(p.pid) && now() - t0 < stopWaitMs) await sleep(pollMs)
+    return !isAlive(p.pid)
   }
 
   /** One attempt to bring the kernel up on `text`: the copy is checked, the ports are free, the config is written, the process is spawned and its controller answers. A failure it returns has already been recorded. */
@@ -251,12 +265,14 @@ export function createForwarder({
     for (;;) {
       if (spawnError) return spawnFailed()
       if (exited) return startFailed(`the kernel exited (${exitText(exited)}) before it answered`, { exit: exited.signal || exited.code })
+      if (stopping) { await reap(p); return { ok: false, stopped: true } } // stopNow came while we waited: this kernel is not to live
       if ((await ctl.get('/version')).ok) break
       if (now() - t0 > startTimeoutMs) { try { child.kill() } catch { /* gone */ } return startFailed(`the kernel's controller did not answer within ${startTimeoutMs} ms`) }
       await sleep(pollMs)
     }
     child.unref?.()
     p.startedAt = await startOf(p.pid)
+    if (stopping) { await reap(p); return { ok: false, stopped: true } } // asked to stop while it came up (or while its start time was read): do not commit it
     writeAtomic(fs, P.lock, `${JSON.stringify({ pid: p.pid, startedAt: p.startedAt, endpoint: `tcp:127.0.0.1:${creds.port}`, config: P.config })}\n`)
     proc = p
     phase = 'running'
@@ -284,11 +300,11 @@ export function createForwarder({
     events.failure({ where: 'forwarder', code: 'forwarder-restart', reason: `the kernel ${why}; trying again in ${delay} ms`, attempt: streak, delay_ms: delay })
     if (streak >= DOWN_AFTER && !downReported) { downReported = true; events.failure({ where: 'netenv', code: 'forwarder-down', reason: `the kernel did not stay up ${streak} times in a row`, attempts: streak }) }
     phase = 'backoff'
-    respawnTimer = setTimer(() => { respawnTimer = null; respawn().catch((e) => { streak++; schedule(`did not start again (${errText(e)})`) }) }, delay)
+    respawnTimer = setTimer(() => { respawnTimer = null; exclusive(respawn).catch((e) => { if (stopping) return; streak++; schedule(`did not start again (${errText(e)})`) }) }, delay)
     respawnTimer?.unref?.()
   }
   async function respawn() {
-    if (stopping || !cur) return
+    if (stopping || !cur || proc) return // stopped meanwhile, or a start / reload that was in front of us brought it up
     phase = 'starting'
     const r = await attempt(cur.text, cur) // the same text and the same ports; the copy was checked again inside
     if (stopping) return
@@ -311,8 +327,8 @@ export function createForwarder({
     return { ok: (forms || []).every(({ f, on }) => out[f].state === (on ? 'on' : 'off')), forms: out }
   }
 
-  async function start({ build, forms }) {
-    if (proc && phase === 'running') return reload({ build, forms })
+  async function startNow({ build, forms }) {
+    if (proc && phase === 'running') return reloadNow({ build, forms })
     const text = build({ ...creds })
     const parsed = readConfig(text)
     clearTimer(respawnTimer); respawnTimer = null
@@ -325,8 +341,8 @@ export function createForwarder({
     return { ok: back.ok, pid: r.pid, readBack: back }
   }
 
-  async function reload({ build, forms }) {
-    if (!proc || phase !== 'running') return start({ build, forms })
+  async function reloadNow({ build, forms }) {
+    if (!proc || phase !== 'running') return startNow({ build, forms })
     const text = build({ ...creds })
     const parsed = readConfig(text)
     for (const port of parsed.ports) {
@@ -344,7 +360,7 @@ export function createForwarder({
   const check = async () => (proc && cur ? readBack(cur.forms) : { ok: false, forms: {}, reason: 'not-running' })
 
   // a kernel left by an earlier daemon is kept only when its pid, its start time and its controller all say it is the one the lock names
-  async function adopt() {
+  async function adoptNow() {
     let lock
     try { lock = JSON.parse(fs.readFileSync(P.lock, 'utf8')) } catch (e) { return { adopted: false, reason: e && e.code === 'ENOENT' ? 'no-lock' : 'lock-unreadable' } }
     if (!lock || !Number.isInteger(lock.pid) || typeof lock.config !== 'string') return { adopted: false, reason: 'lock-unreadable' }
@@ -373,17 +389,14 @@ export function createForwarder({
 
   const remaining = () => (drainPids || []).filter((pid) => isAlive(pid))
 
-  // stop the process we hold (or adopted) and wait for it to be gone; `reason` is what the state event says
+  // stop the process we hold (or adopted) and wait for it to be gone; `reason` is what the state event says. Only called inside `exclusive`.
   async function stopKernel(reason) {
     stopping = true
     clearTimer(respawnTimer); respawnTimer = null
     clearTimer(watchTimer); watchTimer = null
     const p = proc
     if (!p) { phase = 'stopped'; return true }
-    try { if (p.child) p.child.kill(); else kill(p.pid) } catch { /* already gone */ }
-    const t0 = now()
-    while (isAlive(p.pid) && now() - t0 < stopWaitMs) await sleep(pollMs)
-    if (isAlive(p.pid)) return false
+    if (!(await reap(p))) return false
     proc = null
     clearTimer(p.stable)
     rmLock()
@@ -403,7 +416,7 @@ export function createForwarder({
       const tick = async () => {
         drainTimer = null
         if (remaining().length > 0) { drainTimer = setTimer(tick, watchMs); drainTimer?.unref?.(); return }
-        resolve({ stopped: await stopKernel('drained') })
+        resolve({ stopped: await exclusive(() => stopKernel('drained')) })
       }
       drainTimer = setTimer(tick, 0)
     })
@@ -411,12 +424,19 @@ export function createForwarder({
   }
 
   /** `off --now` and `uninstall`: stop at once. `pids` are the agents still in the drain window that lose their connection. */
-  async function stopNow() {
+  function stopNow() {
+    stopping = true // an attempt in flight sees it and gives up; a waiting re-spawn does nothing
+    clearTimer(respawnTimer); respawnTimer = null
     clearTimer(drainTimer); drainTimer = null
-    const pids = remaining()
-    const stopped = await stopKernel('stop-now')
-    return { pids, stopped }
+    return exclusive(async () => {
+      const pids = remaining()
+      const stopped = await stopKernel('stop-now')
+      return { pids, stopped }
+    })
   }
+  const start = (a) => exclusive(() => startNow(a))
+  const reload = (a) => exclusive(() => reloadNow(a))
+  const adopt = () => exclusive(adoptNow)
 
   /** `uninstall`: remove the copy and the files beside it. A file Windows still holds (the kernel is running, a drain is on) stays and `reason` says why (W28). */
   function removeBinary() {

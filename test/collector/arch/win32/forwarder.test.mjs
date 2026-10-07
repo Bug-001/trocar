@@ -558,6 +558,41 @@ test('W28 an adopted kernel that dies is respawned like one asight started (the 
   assert.deepEqual([k.children.length, k.verified.length, k.fwd.state().phase, k.fwd.state().adopted], [1, 1, 'running', false])
 })
 
+/** A fake kernel whose /version answers only when the test lets it: `hold()` before a re-spawn and the supervisor's own attempt stays in flight (spawned, not yet answered) until `open()`. */
+async function slowKernel(t) {
+  const gate = { p: null, open: () => {}, hold() { this.p = new Promise((r) => { this.open = r }) } }
+  const makeController = () => ({ get: async (q) => { if (q === '/version') { if (gate.p) await gate.p; return { ok: true, status: 200, json: { version: 'fake' } } } return { ok: true, status: 200, json: { now: 'asight-in-claude-code.cli' } } }, put: async () => ({ ok: true, status: 204 }) })
+  const k = await fakeKernel(t, { fwd: { makeController } })
+  await k.start()
+  k.die(k.children[0]); await settle()
+  gate.hold()
+  await k.clock.advance(1000) // the re-spawn's timer fires: the second kernel is spawned and its controller does not answer yet
+  assert.deepEqual([k.children.length, k.fwd.state().phase], [2, 'starting'], 'the re-spawn is in flight')
+  return { k, gate }
+}
+
+test('W28 stopNow while a re-spawn is in flight: the kernel the attempt spawned is killed before stopNow answers, nothing is committed (no lock, no pid), and no re-spawn follows', async (t) => {
+  const { k, gate } = await slowKernel(t)
+  const stopped = k.fwd.stopNow()
+  gate.open() // the kernel answers after it was asked to stop
+  assert.deepEqual(await stopped, { pids: [], stopped: true })
+  assert.deepEqual([k.alive.size, fs.existsSync(path.join(k.dir, 'forwarder.lock')), k.fwd.state().phase, k.fwd.state().pid], [0, false, 'stopped', null], 'a kernel is alive after stopNow said it stopped it: uninstall\'s removeBinary would fail on it')
+  await k.clock.advance(300_000)
+  assert.deepEqual([k.children.length, k.clock.pending(), k.events.states.filter((e) => e.event === 'forwarder-start').length], [2, [], 1], 'the aborted attempt is not a start and not a failure')
+  assert.deepEqual(k.events.failures.map((f) => f.code), ['forwarder-restart'], 'only the restart that was announced')
+})
+
+test('W28 reload and start while a re-spawn is in flight wait for it and then act on what is there: one kernel, never two', async (t) => {
+  for (const op of ['reload', 'start']) {
+    const { k, gate } = await slowKernel(t)
+    const answer = k.fwd[op]({ build: k.build, forms: k.forms })
+    gate.open()
+    const r = await answer
+    assert.deepEqual([r.ok, k.children.length, k.alive.size, k.fwd.state().phase], [true, 2, 1, 'running'], `${op}: a second kernel would lose on port-taken on a real machine and fail \`on\` for nothing`)
+    assert.deepEqual(r.readBack.forms, { 'claude-code.cli': { state: 'on', now: 'asight-in-claude-code.cli' } })
+  }
+})
+
 test('W28 drain: after an off the kernel stays until the agents that were in the window have exited, status counts them, the kernel is stopped when the last one is gone; a kernel that dies meanwhile is respawned (they still need it)', async (t) => {
   const k = await fakeKernel(t, { fwd: { watchMs: 1000 } })
   await k.start()
