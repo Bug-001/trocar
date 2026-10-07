@@ -16,6 +16,7 @@ import { createController, discover as discoverController, maskEndpoint } from '
 import { names, probeUrl, routeFile, SCRIPT_SENTINEL, scanScript, insertScriptBlock, stripScriptBlock as stripScriptText } from '../mihomo/rules.mjs'
 import { spliceRuntimeText, stripRuntimeText, RuntimeShapeError } from '../mihomo/runtime-text.mjs'
 import { topKey, topBool, topInt } from '../mihomo/yaml-top.mjs'
+import { NET_FAILURE_CODES } from '../../health/codes.mjs'
 
 export { discoverController as discover }
 
@@ -43,6 +44,28 @@ function scriptFileOf(profiles) {
     if (m) return /^[A-Za-z0-9_.-]{1,100}$/.test(m[1]) && !m[1].startsWith('.') ? m[1] : null
   }
   return null
+}
+
+// ---- 4.7 §5: what drifts, and what to do about it ----------------------------------------------------------------------------------------------------------------------------------
+const run = (text, note = null) => ({ run: text, shell: 'powershell', ...(note ? { note } : {}) }) // an asight command, typed in the user's PowerShell
+const gui = (path) => ({ run: path, shell: 'gui' }) // a menu path in the proxy software
+/** The findings of 4.7 §5 as data: the code, what it is, and the commands (asight's first, then the GUI steps; as the RFC's table lists them). Task 10's `doctor` and `status` render from this, they do not retype it. */
+export const DRIFT = Object.freeze({
+  'vpn-block-missing': { what: '期望开,Script.js 里没有块(用户删了,或 Verge 重置了脚本)', commands: [run('asight on', '重写块;先印计划')] },
+  'vpn-block-changed': { what: '块的 sha256 与清单不同', commands: [run('asight on', '按清单重写'), run('asight off', '想保留你改的')] },
+  'vpn-block-not-live': { what: '文件里有块,运行时没有(还没重新激活;或块的代码出错,返回了原配置);或块在运行时、期望为开,asight-sw-* 却是 PASS', commands: [gui('Clash Verge Rev → 订阅 → 点当前订阅'), run('asight doctor', '仍不行')] },
+  'vpn-block-unverifiable': { what: '控制口读不到,不知道块生没生效', commands: [run('asight status', '看试过的位置'), gui('Clash Verge Rev → 设置 → 外部控制')] },
+  'vpn-rule-file-missing': { what: '期望开,规则文件不在', commands: [run('asight on')] },
+  'vpn-service-copy': { what: '服务模式下规则文件被拷进服务目录,改原文件不生效', commands: [] },
+  'clash-mode-bypass': { what: '全局或直连模式:不看规则,asight 块不起作用', commands: [gui('Clash Verge Rev → 代理 → 规则')] },
+  'find-process-off': { what: 'find-process-mode 是 off,块里的进程规则不起作用', commands: [gui('把 find-process-mode 改成 strict 或 always')] },
+  'route-loop': { what: '生成时发现进程规则匹配 asight 自己', commands: [run('asight on'), run('asight off', '仍有')] },
+})
+/** One finding: `{ code, class: 'failure' | 'notice', what, commands, ...extra }` (extra: the group `g`, a `sub` reason). */
+export function finding(code, extra = {}) {
+  const d = DRIFT[code]
+  if (!d) throw new TypeError(`${code} is not a drift code of 4.7 §5`)
+  return { code, class: NET_FAILURE_CODES.includes(code) ? 'failure' : 'notice', what: d.what, commands: d.commands.map((c) => ({ ...c })), ...extra }
 }
 
 /**
@@ -462,6 +485,40 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     return { ok, exit: ok ? 0 : 1, rows: off.rows, script, receipts: [...off.receipts, ...(script.receipt ? [script.receipt] : [])], residue: blockWasLive ? RESIDUE.map((r) => ({ ...r })) : [], lines }
   }
 
+  /**
+   * What differs from what was asked (4.7 §5): `groups` = `[{ g, on }]`, the state the operator asked for. Nothing is reported for a group that is expected off, and nothing at all when nothing is expected on.
+   * Reads the script (the block there, its hash against the ledger's), the route files, verge.yaml (service mode) and the runtime through the controller; changes nothing and sends no write.
+   * → `[finding]`: vpn-block-missing · vpn-block-changed (sub: sentinel-damaged) · vpn-block-not-live (per group; sub: not-activated · select-reset · provider-empty) · vpn-block-unverifiable · vpn-rule-file-missing (per group) ·
+   * vpn-service-copy (a notice) · clash-mode-bypass · find-process-off (per group). route-loop comes from generating the block: finding('route-loop', { rule }). Verge not running: no runtime finding (there is no runtime).
+   */
+  async function drift({ groups }) {
+    const on = groups.filter((x) => x.on)
+    if (on.length === 0) return []
+    const out = []
+    const fields = await readFields()
+    const entry = ledger ? ledger.find('vpn-script-block', scriptPath()) : null
+    if (fields.script.problems > 0) out.push(finding('vpn-block-changed', { sub: 'sentinel-damaged' }))
+    else if (fields.script.blocks === 0) out.push(finding('vpn-block-missing'))
+    else if (entry && fields.script.blockSha256 !== entry.block_sha256) out.push(finding('vpn-block-changed'))
+    for (const x of on) if (rd(path.join(home, names(x.g).routeFile)).text === null) out.push(finding('vpn-rule-file-missing', { g: x.g }))
+    if (fields.serviceMode === true) out.push(finding('vpn-service-copy'))
+    let ctl = await live()
+    if (ctl && (await get('/version')).status === 0) ctl = controller ? null : await live()
+    if (!ctl) { if (running() !== false) out.push(finding('vpn-block-unverifiable')); return out }
+    const cfg = await readConfigs()
+    if (cfg.ok && (cfg.mode === 'global' || cfg.mode === 'direct')) out.push(finding('clash-mode-bypass'))
+    if (cfg.ok && cfg.findProcessMode === 'off') for (const x of on) out.push(finding('find-process-off', { g: x.g }))
+    let unreadable = false
+    for (const x of on) {
+      const v = await verify(x.g)
+      if (v.live === null) unreadable = true
+      else if (v.reason === 'block-not-in-runtime') { if (fields.script.blocks > 0 && fields.script.problems === 0) out.push(finding('vpn-block-not-live', { g: x.g, sub: 'not-activated' })) } else if (v.reason === 'off') out.push(finding('vpn-block-not-live', { g: x.g, sub: 'select-reset' }))
+      else if (v.reason === 'empty-provider') out.push(finding('vpn-block-not-live', { g: x.g, sub: 'provider-empty' }))
+    }
+    if (unreadable) out.push(finding('vpn-block-unverifiable'))
+    return out
+  }
+
   /** What the probe (src/netenv/probe.mjs detect) is given about Verge: the file fields, the runtime's few fields, how the controller was found (masked), and whether it is running. */
   async function facts() {
     const fields = await readFields()
@@ -476,5 +533,5 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     }
   }
 
-  return { home, paths: P, readFields, readConfigs, readFindProcessMode, verify, refreshProbe, processRulesNaming, facts, controllerInfo, writeScriptBlock, stripScriptBlock, writeRuleFile, removeRuleFile, putSelect, refreshProvider, pushPayload, pickApply, applyGroups, installBlock, removeBlock, reset: () => { found = null; payloadAccepted = null }, sentinel: SCRIPT_SENTINEL }
+  return { home, paths: P, readFields, readConfigs, readFindProcessMode, verify, refreshProbe, processRulesNaming, facts, controllerInfo, writeScriptBlock, stripScriptBlock, writeRuleFile, removeRuleFile, putSelect, refreshProvider, pushPayload, pickApply, applyGroups, installBlock, removeBlock, drift, reset: () => { found = null; payloadAccepted = null }, sentinel: SCRIPT_SENTINEL }
 }

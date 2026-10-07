@@ -7,10 +7,11 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { discover, maskEndpoint, createController, ControllerRefused } from '../../src/netenv/mihomo/controller.mjs'
-import { createVergeAdapter } from '../../src/netenv/adapters/clash-verge-rev.mjs'
+import { createVergeAdapter, DRIFT, finding } from '../../src/netenv/adapters/clash-verge-rev.mjs'
+import { isCode, checkRecord } from '../../src/health/codes.mjs'
 import { stubHelper, vergeProcs, proc, SESSION, VERGE_DIR } from './fixtures/win-facts.mjs'
 import { startWorld, snapshot, sha, LEAKS, USER_PROVIDER, USER_GROUP, USER_DOMAIN, NODE, SUB_URL, VERGE_YAML, PROFILES_YAML, SCRIPT_JS, userRuntime, GROUPS } from './fixtures/verge-world.mjs'
-import { names, buildScriptJs, insertScriptBlock, stripScriptBlock, scanScript } from '../../src/netenv/mihomo/rules.mjs'
+import { names, buildBlock, buildScriptJs, insertScriptBlock, stripScriptBlock, scanScript } from '../../src/netenv/mihomo/rules.mjs'
 
 // ---- N3 · N4: discovery ----------------------------------------------------------------------------------------------------------------------------------
 
@@ -618,4 +619,96 @@ test('a found controller is looked for again when it stops answering: Verge rest
   const asked = helper.calls.length
   await ad.verify('claude-code.cli')
   assert.equal(helper.calls.length, asked, 'a controller that is not found is not searched for again at every call (a few seconds\' memory)')
+})
+
+// ---- N7: drift ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+const CC = 'claude-code.cli'
+const CODEX = 'codex.app'
+async function healthyWorld(t, over = {}) {
+  const w = await startWorld(t, over)
+  const b = w.block()
+  const groups = [CC, CODEX].map((g) => ({ g, on: true, lines: b.files[names(g).routeFile].split('\n').filter(Boolean) }))
+  assert.equal((await w.adapter.installBlock({ block: b, blockText: buildScriptJs({ block: b }), groups })).ok, true)
+  return { w, expected: groups.map(({ g, on }) => ({ g, on })), b }
+}
+const shape = (fs_) => fs_.map((f) => [f.code, f.g ?? null, f.sub ?? null])
+
+test('N7 nothing differs when everything is as it was asked: no finding, no write', async (t) => {
+  const { w, expected } = await healthyWorld(t)
+  const mark = w.core.requests.length
+  assert.deepEqual(await w.adapter.drift({ groups: expected }), [])
+  assert.deepEqual(w.core.requests.slice(mark).filter((q) => q.method !== 'GET'), [], 'drift reads and sends no write')
+})
+
+test('N7 each code of 4.7 §5 comes from one injected fact and only from it', async (t) => {
+  const cases = {
+    'vpn-block-missing': { set: (w) => fs.writeFileSync(w.file('profiles/Script.js'), SCRIPT_JS), want: [['vpn-block-missing', null, null]] },
+    'vpn-block-missing (and the runtime has none either: not also "not live")': { set: (w) => { fs.writeFileSync(w.file('profiles/Script.js'), SCRIPT_JS); w.core.load(userRuntime()) }, want: [['vpn-block-missing', null, null]] },
+    'vpn-block-changed (the block was edited)': { set: (w) => fs.writeFileSync(w.file('profiles/Script.js'), fs.readFileSync(w.file('profiles/Script.js'), 'latin1').replace('"interval":30', '"interval":31'), 'latin1'), want: [['vpn-block-changed', null, null]] },
+    'vpn-block-changed (a sentinel was damaged)': { set: (w) => fs.writeFileSync(w.file('profiles/Script.js'), fs.readFileSync(w.file('profiles/Script.js'), 'latin1').replace('// <<< asight collector <<<', '// <<< asight collector <<< x'), 'latin1'), want: [['vpn-block-changed', null, 'sentinel-damaged']] },
+    'vpn-block-not-live (not activated yet)': { set: (w) => w.core.load(userRuntime()), want: [['vpn-block-not-live', CC, 'not-activated'], ['vpn-block-not-live', CODEX, 'not-activated']] },
+    'vpn-block-not-live (select-reset)': { set: (w) => w.core.select(names(CODEX).sw, 'PASS'), want: [['vpn-block-not-live', CODEX, 'select-reset']] },
+    'vpn-block-not-live (provider-empty)': { set: (w) => { fs.writeFileSync(w.file(names(CC).routeFile), 'PROCESS-NAME,x.exe\n'); fs.writeFileSync(w.file(names(CODEX).routeFile), ''); w.core.reloadProvider(names(CODEX).provider) }, want: [['vpn-block-not-live', CODEX, 'provider-empty']] },
+    'vpn-block-unverifiable': { set: async (w) => { await w.core.stop() }, want: [['vpn-block-unverifiable', null, null]] },
+    'vpn-block-unverifiable (one group cannot be read)': { set: (w) => w.core.failOn('GET', /^\/proxies\/asight-sw-codex\.app$/, 500), want: [['vpn-block-unverifiable', null, null]] },
+    'vpn-rule-file-missing': { set: (w) => fs.rmSync(w.file(names(CC).routeFile)), want: [['vpn-rule-file-missing', CC, null]] },
+    'vpn-service-copy': { set: (w) => fs.writeFileSync(w.file('verge.yaml'), VERGE_YAML().replace('enable_service_mode: false', 'enable_service_mode: true')), want: [['vpn-service-copy', null, null]] },
+    'clash-mode-bypass (global)': { set: (w) => { w.core.mode = 'global' }, want: [['clash-mode-bypass', null, null]] },
+    'clash-mode-bypass (direct)': { set: (w) => { w.core.mode = 'direct' }, want: [['clash-mode-bypass', null, null]] },
+    'find-process-off': { set: (w) => { w.core.findProcessMode = 'off' }, want: [['find-process-off', CC, null], ['find-process-off', CODEX, null]] },
+  }
+  for (const [what, { set, want }] of Object.entries(cases)) {
+    const { w, expected } = await healthyWorld(t)
+    await set(w)
+    assert.deepEqual(shape(await w.adapter.drift({ groups: expected })), want, what)
+  }
+})
+
+test('N7 the commands are 4.7 §5\'s table, word for word (asight\'s first where it lists them), the classes are the failure / notice split', async (t) => {
+  const TABLE = {
+    'vpn-block-missing': ['failure', [['asight on', 'powershell', '重写块;先印计划']]],
+    'vpn-block-changed': ['failure', [['asight on', 'powershell', '按清单重写'], ['asight off', 'powershell', '想保留你改的']]],
+    'vpn-block-not-live': ['failure', [['Clash Verge Rev → 订阅 → 点当前订阅', 'gui', null], ['asight doctor', 'powershell', '仍不行']]],
+    'vpn-block-unverifiable': ['failure', [['asight status', 'powershell', '看试过的位置'], ['Clash Verge Rev → 设置 → 外部控制', 'gui', null]]],
+    'vpn-rule-file-missing': ['failure', [['asight on', 'powershell', null]]],
+    'vpn-service-copy': ['notice', []],
+    'clash-mode-bypass': ['failure', [['Clash Verge Rev → 代理 → 规则', 'gui', null]]],
+    'find-process-off': ['failure', [['把 find-process-mode 改成 strict 或 always', 'gui', null]]],
+    'route-loop': ['failure', [['asight on', 'powershell', null], ['asight off', 'powershell', '仍有']]],
+  }
+  assert.deepEqual(Object.keys(DRIFT).sort(), Object.keys(TABLE).sort(), 'every code of the table, and no other')
+  for (const [code, [cls, commands]] of Object.entries(TABLE)) {
+    const f = finding(code, { g: 'x' })
+    assert.deepEqual([f.code, f.class, f.g, f.commands.map((c) => [c.run, c.shell, c.note ?? null])], [code, cls, 'x', commands], code)
+    assert.ok(f.what.length > 5)
+    assert.equal(isCode(code), true)
+    assert.deepEqual(checkRecord({ event: 'failure', where: 'netenv', code, reason: 'x' }), [])
+  }
+  const a = finding('route-loop')
+  a.commands[0].run = 'changed'
+  assert.equal(finding('route-loop').commands[0].run, 'asight on', 'a finding is a copy: the table cannot be changed through one')
+  assert.throws(() => finding('made-up'), TypeError)
+})
+
+test('N7 route-loop is raised by generating the block: the error that buildBlock throws becomes the finding', () => {
+  let err = null
+  try { buildBlock({ groups: [{ g: CC, route: 'vb', pathPatterns: [String.raw`\\node\.exe`], names: [] }], enginePort: 18790, token: '0123456789abcdef0123456789abcdef', reenter: { host: '127.0.0.1', port: 7897 }, ownImages: [String.raw`C:\Program Files\nodejs\node.exe`] }) } catch (e) { err = e }
+  assert.equal(err.code, 'route-loop')
+  assert.deepEqual(shape([finding(err.code, { rule: err.rule })]), [['route-loop', null, null]])
+})
+
+test('N7 a group expected off is not reported, whatever state it is in; with nothing expected on there is no finding; Verge not running leaves only the file findings', async (t) => {
+  const { w, expected } = await healthyWorld(t)
+  w.core.select(names(CODEX).sw, 'PASS')
+  fs.rmSync(w.file(names(CODEX).routeFile))
+  assert.deepEqual(shape(await w.adapter.drift({ groups: [{ g: CC, on: true }, { g: CODEX, on: false }] })), [])
+  assert.deepEqual(await w.adapter.drift({ groups: expected.map((x) => ({ ...x, on: false })) }), [])
+  fs.writeFileSync(w.file('profiles/Script.js'), SCRIPT_JS)
+  await w.core.stop()
+  w.state.running = false
+  w.adapter.reset()
+  assert.deepEqual(shape(await w.adapter.drift({ groups: expected })), [['vpn-block-missing', null, null], ['vpn-rule-file-missing', CODEX, null]], 'no runtime, so no "unverifiable"')
+  w.state.running = true
+  assert.equal(shape(await w.adapter.drift({ groups: expected })).some(([c]) => c === 'vpn-block-unverifiable'), true, 'Verge running and the controller silent is')
 })
