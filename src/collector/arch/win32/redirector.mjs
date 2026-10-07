@@ -40,25 +40,30 @@ function kernelForm(f, hostsOf) {
 }
 
 /**
- * kernelGroupsOf({ groups, routes, groupPorts, authOf, hostsOf, skipped }) → the `groups` of `buildForwarderConfig` (rules.mjs, 4.8 §3.1): `[{ g, port, on, upstream, bypass, auth, forms: [{ f, rules, hosts? }] }]`.
- * `groups` is `groupsOf(descriptors)`, `routes` planRoutes' result, `groupPorts` ingress.json's. A group is in the kernel when the plan has an answer for it, it has a port, it has a form that can be carried (`supported`) and there is an upstream to
- * forward to — a group with none has no hop to forward an agent that outlives `off` to, and sending it direct would go round the proxy the user's agent needs; and not when its entry takes no login (`auth: false`) while its upstream
- * needs one (a port any process could use must not carry the user's login, 4.8 §3.2). `on` is the plan's. The login of a credentialed upstream is resolved here, by `authOf`, into the config: the one place besides the manifest it is written.
- * `skipped` (an array, optional): every group the plan has an answer for and the kernel does not carry is pushed as `{ g, reason }` (`no-upstream` · `no-port` · `no-supported-form` · `login-on-open-port`), so that a group left out is said by whoever
+ * kernelGroupsOf({ groups, routes, groupPorts, authOf, hostsOf, skipped, carried }) → the `groups` of `buildForwarderConfig` (rules.mjs, 4.8 §3.1): `[{ g, port, on, upstream, bypass, auth, forms: [{ f, rules, hosts? }] }]`.
+ * `groups` is `groupsOf(descriptors)`, `routes` planRoutes' result, `groupPorts` ingress.json's. A group is in the kernel when the plan has an answer for it, it is on or `carried` names it, it has a port, it has a form that can be carried
+ * (`supported`) and there is an upstream to forward to — a group with none has no hop to forward an agent that outlives `off` to, and sending it direct would go round the proxy the user's agent needs; and not when its entry takes no login
+ * (`auth: false`) while its upstream needs one (a port any process could use must not carry the user's login, 4.8 §3.2). `on` is the plan's. `carried` (an iterable of group ids, optional; the default is none) says which groups may STAY in the
+ * kernel while they are off: the ones whose entries may still exist (installed, once on, or opted in — an agent that outlives `off` needs the port to come back to). A group that is off and not in it is not in the kernel at all: it never had a
+ * listener, and a loopback listener for a harness the user never enabled — the unauthenticated Claude Desktop port is the sharpest case — is an opening with no user behind it (audit F7). It is not `skipped`: the plan already says why it is off.
+ * The login of a credentialed upstream is resolved here, by `authOf`, into the config: the one place besides the manifest it is written.
+ * `skipped` (an array, optional): every group the plan has ON and the kernel does not carry is pushed as `{ g, reason }` (`no-upstream` · `no-port` · `no-supported-form` · `login-on-open-port`), so that a group left out is said by whoever
  * asked (`attach()`), never silently.
  */
-export function kernelGroupsOf({ groups, routes, groupPorts, authOf = () => null, hostsOf = () => null, skipped = [] } = {}) {
+export function kernelGroupsOf({ groups, routes, groupPorts, authOf = () => null, hostsOf = () => null, skipped = [], carried = null } = {}) {
   const out = []
+  const mayCarry = new Set(carried || [])
   for (const { g, group, forms } of groups) {
     const r = routes && routes[g]
     const port = groupPorts && groupPorts[g]
-    const carried = forms.filter((f) => f.supported === true && f.match)
+    const carriedForms = forms.filter((f) => f.supported === true && f.match)
     if (!r) continue // the plan has no answer yet: nothing to carry and nothing to say
-    const why = !r.upstream ? 'no-upstream' : !Number.isInteger(port) ? 'no-port' : carried.length === 0 ? 'no-supported-form' : group.auth === false && r.upstream.credentialed ? 'login-on-open-port' : null
+    if (r.on !== true && !mayCarry.has(g)) continue // off and never installed or opted in: no listener at all (audit F7)
+    const why = !r.upstream ? 'no-upstream' : !Number.isInteger(port) ? 'no-port' : carriedForms.length === 0 ? 'no-supported-form' : group.auth === false && r.upstream.credentialed ? 'login-on-open-port' : null
     if (why) { skipped.push({ g, reason: why }); continue }
     const up = r.upstream
     const upstream = up.kind === 'direct' ? 'direct' : { type: up.kind, host: up.host, port: up.port, ...(up.credentialed ? loginOf(g, up, authOf) : {}) }
-    out.push({ g, port, on: r.on === true, upstream, bypass: r.bypass || [], auth: group.auth !== false, forms: carried.map((f) => kernelForm(f, hostsOf)) })
+    out.push({ g, port, on: r.on === true, upstream, bypass: r.bypass || [], auth: group.auth !== false, forms: carriedForms.map((f) => kernelForm(f, hostsOf)) })
   }
   return out
 }
@@ -94,11 +99,13 @@ function refusalOf(r) {
  *                `{ g, ok: false, gated: true, reason }` in `entries.written`; one that throws is a refusal. Codex's and Hermes's proxy lines join a block the trust entry wrote and may not be written before 4.8 W19's four conditions hold (plan Task 8): the wiring
  *                (daemon.mjs, the one place that knows the harnesses and what the journal can do) says so here, and `entries` is a writer that does not have to know it
  *   ownImages    asight's own images (the engine's node.exe, the kernel's exe), for the loop check of the config (rules.mjs: required, `undefined` is a TypeError) · hostsOf  `(form) → [host]`: the host set of a host-tree form (route-plan.mjs `hostSetOf`)
+ *   carried      `() → Iterable<group id> | null` (default: none): the groups whose entries may still exist (installed, once on, or opted in) and may therefore stay in the kernel — listener, port, forward-only — while the plan has them off.
+ *                A group that is off and not named here is not in the kernel at all (audit F7): the wiring that knows the manifest says which ones; not saying is "no group", the safe side of fewer listeners
  * Events: 'exec' ProcFacts · 'exit' {pid, startedAt} · 'facts-update' ProcFacts (a command line that was not known yet is, or was given up on) · 'facts-error' (a process whose image cannot be read) — the watcher's, passed on after
  *   the table has taken them in, so a listener that asks the table finds the process there · 'helper-error' {reason, code, …} (the watcher's `poll-error`: the helper failed, or a listener threw) ·
  *   'form-exit' {form, neg_key} (the last process of a form is gone: the engine forgets that form's negative-cache entries, 4.8 §5.5).
  */
-export function createWin32Redirector({ helper, procWatcher, groups, home = null, ownerOf = null, routes = () => ({}), ingress = () => ({}), authOf = () => null, onFailure = () => {}, forwarder = null, entries = null, gate = null, ownImages, hostsOf = () => null, now = Date.now } = {}) {
+export function createWin32Redirector({ helper, procWatcher, groups, home = null, ownerOf = null, routes = () => ({}), ingress = () => ({}), authOf = () => null, onFailure = () => {}, forwarder = null, entries = null, gate = null, ownImages, hostsOf = () => null, carried = () => null, now = Date.now } = {}) {
   if (!procWatcher || typeof procWatcher.on !== 'function') throw new TypeError('createWin32Redirector needs the process watcher (procinfo.mjs createProcWatcher)')
   if (!Array.isArray(groups)) throw new TypeError('createWin32Redirector needs the groups (route-plan.mjs groupsOf)')
   const ev = new EventEmitter()
@@ -202,7 +209,7 @@ export function createWin32Redirector({ helper, procWatcher, groups, home = null
   function kernelPlan() {
     const ing = ingress() || {}
     const skipped = []
-    const planned = kernelGroupsOf({ groups, routes: routes() || {}, groupPorts: ing.groupPorts, authOf, hostsOf, skipped })
+    const planned = kernelGroupsOf({ groups, routes: routes() || {}, groupPorts: ing.groupPorts, authOf, hostsOf, skipped, carried: carried() })
     return { ing, groups: planned, skipped, forms: planned.flatMap((x) => x.forms.map((f) => ({ f: f.f, on: x.on }))) }
   }
   const configOf = (planned, ing, controller) => buildForwarderConfig({ groups: planned, enginePort: ing.enginePort, token: ing.ingressToken, listenerToken: ing.listenerToken, controller, ownImages })

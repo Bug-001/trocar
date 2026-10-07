@@ -596,7 +596,7 @@ function wiredKernel(over = {}) {
   const log = []
   const k = kernel(log, over.kernel)
   const e = entriesLog(log, over.entries)
-  const ctx = bed({ forwarder: k, entries: e, routes: ROUTES, ownImages: OWN_IMAGES, gate: () => ({ ok: true }), ...over.redirector })
+  const ctx = bed({ forwarder: k, entries: e, routes: ROUTES, ownImages: OWN_IMAGES, gate: () => ({ ok: true }), carried: () => ['deepseek-dsh.env'], ...over.redirector }) // dsh was on once (its entries may still exist), the plan has it off: carried, so its listener stays forward-only
   return { ...ctx, k, e, log }
 }
 const parse = (text) => JSON.parse(text)
@@ -623,6 +623,17 @@ test('attach(): the kernel gets one config for every planned group (on groups wi
   const rules = cfg['sub-rules']
   assert.ok(rules['in-codex.env'].includes('DOMAIN-SUFFIX,corp.example.com,DIRECT') && rules['in-codex.env'].includes('IP-CIDR,10.0.0.0/8,DIRECT,no-resolve'), 'the group\'s own bypass table is in its sub-rule (4.8 §3.1 ⑤)')
   assert.equal(rules['in-claude-code.settings'].some((l) => /DIRECT/.test(l) && !/DST-PORT/.test(l)), false, 'and not in another group\'s')
+})
+
+test('audit F7 / 4.8 §3.1: a group the plan has off and nothing carries opens NO listener — not on `on`, not on `detach`; `carried` is what keeps a once-on group\'s port there (the unauthenticated Claude Desktop port is the sharpest case)', async () => {
+  const off = () => ({ ...ROUTES(), 'deepseek-dsh.env': route({ on: false, entry: null, reason: 'desired-off', upstream: HTTP_PROXY }) })
+  const bare = wiredKernel({ redirector: { routes: off, carried: () => null } }) // the wiring said nothing: no group may stay while off
+  await bare.r.attach()
+  assert.deepEqual(listenersOf(bare.k.calls[0].text), ['asight-l-claude-code.settings', 'asight-l-codex.env'], 'the off group\'s listener is not in the kernel at all')
+  assert.ok(!parse(bare.k.calls[0].text).proxies.some((p) => p.name === 'asight-up-deepseek-dsh.env'), 'nor is its upstream')
+  const kept = wiredKernel({ redirector: { routes: off } }) // the default of wiredKernel: dsh is carried
+  await kept.r.detach()
+  assert.ok(listenersOf(kept.k.calls[0].text).includes('asight-l-deepseek-dsh.env'), 'a carried group keeps its listener forward-only when it goes off: an agent that outlives off still points at the port')
 })
 
 test('W12 order: the proxy entries of the groups that are on are written only after the kernel read the forms back as on; the groups the plan says are off have theirs undone after the kernel switched', async () => {
@@ -805,8 +816,9 @@ test('kernelGroupsOf on the real harness data: every group with a plan, a port a
   const routes = Object.fromEntries(ids.map((g) => [g, route({ on: g !== 'hermes.cli' })]))
   const groupPorts = Object.fromEntries(ids.map((g, i) => [g, 18900 + i]))
   const hostsOf = (f) => ['api.kimi.com', 'relay.example.net']
-  const carried = kernelGroupsOf({ groups: all, routes, groupPorts, authOf: () => CRED, hostsOf })
+  const carried = kernelGroupsOf({ groups: all, routes, groupPorts, authOf: () => CRED, hostsOf, carried: ['hermes.cli'] })
   assert.deepEqual(carried.map((x) => x.g), ids, 'all seven harnesses\' groups; hermes.desktop has no group and is in none')
+  assert.ok(!kernelGroupsOf({ groups: all, routes, groupPorts, authOf: () => CRED, hostsOf }).some((x) => x.g === 'hermes.cli'), 'audit F7: an off group that nothing carries (never installed, never opted in) opens no listener — not even its port')
   const cc = carried.find((x) => x.g === 'claude-code.settings')
   assert.deepEqual(cc.forms.map((f) => f.f), ['claude-code.cli', 'claude-code.vscode'])
   assert.deepEqual(cc.forms[0].rules, processRulesOf({ pathPatterns: all.find((x) => x.g === 'claude-code.settings').forms[0].match.path, names: [] }), 'the form\'s own path patterns, no image name (claude.exe is two programs)')
