@@ -11,15 +11,37 @@
 # EOF on stdin ends the loop. Verbs: version ps tcp-table reg-read net-if route token roots pipe-server (what each returns: section 1 of 4.8).
 #
 # Windows PowerShell 5.1, C# 5 (Add-Type compiles with the .NET Framework compiler: no string interpolation, no ?., no out var).
+# The one parameter: the registry keys the harness files declare (policy values), as base64 of JSON, which reg-read may read besides the fixed list below.
+param([string]$ExtraRegAllowB64 = '')
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $script:Proto = 1
 
 # What reg-read may read. The same list as REG_READ_ALLOW in helper.mjs; a test keeps the two equal.
 $RegAllowJson = @'
-[{"hive":"HKCU","key":"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings","names":["ProxyEnable","ProxyServer","ProxyOverride","AutoConfigURL"]},{"hive":"HKCU","key":"Environment","names":["Path"]},{"hive":"HKLM","key":"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy","names":["VerifiedAndReputablePolicyState"]}]
+[{"hive":"HKCU","key":"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings","names":["ProxyEnable","ProxyServer","ProxyOverride","AutoConfigURL"]},{"hive":"HKCU","key":"Environment","names":["Path","HTTPS_PROXY","HTTP_PROXY","ALL_PROXY","NO_PROXY"]},{"hive":"HKLM","key":"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment","names":["Path"]},{"hive":"HKLM","key":"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy","names":["VerifiedAndReputablePolicyState"]}]
 '@
-$script:RegAllow = ConvertFrom-Json -InputObject $RegAllowJson
+$script:RegAllow = @(ConvertFrom-Json -InputObject $RegAllowJson)
+
+# Besides that list: the policy keys a harness file declares (4.8 section 2.4). helper.mjs checked them before it started this script; they are checked again here, with the
+# same two patterns as POLICY_KEY_PATTERN and POLICY_NAME_PATTERN in helper.mjs. A key that is not under Software\Policies is not a declaration: the script does not start.
+$PolicyKeyPattern = '^Software\\Policies(\\[A-Za-z0-9][A-Za-z0-9 _.-]*)+$'
+$PolicyNamePattern = '^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$'
+if ($ExtraRegAllowB64.Length -gt 0) {
+  $extra = @(ConvertFrom-Json -InputObject ([System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($ExtraRegAllowB64))))
+  foreach ($e in $extra) {
+    $eh = [string]$e.hive
+    $ek = ([string]$e.key).Replace('/', '\').TrimEnd('\')
+    $en = @($e.names | ForEach-Object { [string]$_ })
+    $namesOk = ($en.Count -gt 0)
+    foreach ($n in $en) { if ($n -notmatch $PolicyNamePattern) { $namesOk = $false } }
+    if ((($eh -ieq 'HKCU') -or ($eh -ieq 'HKLM')) -and ($ek -match $PolicyKeyPattern) -and ($ek -notmatch '[\x00-\x1f]') -and $namesOk) {
+      $script:RegAllow += [pscustomobject]@{ hive = $eh; key = $ek; names = $en }
+    } else {
+      throw ('extra reg-read entry refused: ' + $eh + '\' + $ek)
+    }
+  }
+}
 
 # The native half. Every method here only reads: a process snapshot (Toolhelp32), image path / start time / session / token integrity through
 # PROCESS_QUERY_LIMITED_INFORMATION (which opens across integrity levels), the TCP owner-pid table, the best route for an address (a table
