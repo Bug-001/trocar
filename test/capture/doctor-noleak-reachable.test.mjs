@@ -92,11 +92,14 @@ test('qNoLeak counts credential-bearing records instead of failing on them', () 
   assert.equal(r.withCreds, 1, 'but it must be reported');
 });
 
-test('runSelfTest hard-fails when nothing was examined', () => {
+test('runSelfTest does not certify when nothing was examined: 无法判定 (exit 3), not ok and not a failure', () => {
   const res = runSelfTest({ records: [], srcMeta: { exists: true, bytes: 999 }, deps: [], verify: () => true });
-  assert.equal(res.hardFail, true,
-    'doctor exits non-zero on hardFail alone. A source that EXISTS but yielded no records means the '
-    + 'read failed — which is exactly the D27 array-source bug — and must not exit 0.');
+  assert.equal(res.undetermined, true,
+    'doctor exits 3 on `undetermined`. A source that EXISTS but yielded no records means the read failed — '
+    + 'which is exactly the D27 array-source bug — and must not exit 0. (It used to exit 1 as a "hard fail", '
+    + 'which said a problem was found when none was: R4 keeps 1 for a found problem and 3 for not knowing.)');
+  assert.equal(res.failed, false);
+  assert.equal(res.hardFail, false);
 });
 
 test('END TO END: doctor hard-fails on a world-readable capture (the red line\'s new home)', () => {

@@ -10,7 +10,6 @@
 import path from 'node:path'
 import { asightHome, captureOut, mitmOut, serveSource } from '../src/paths.mjs';
 import { parseArgs } from '../src/cli-args.mjs';
-import os from 'node:os';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -454,88 +453,10 @@ async function main() {
       die(usage);
       break;
     }
-    case 'doctor': case 'test': {
-      // onboard 自检:依赖探测 + 「测试」四问(4.1:61 / 4.5:41,77). Human reviews the four answers;
-      // exit non-zero ONLY on a credential leak (the one non-negotiable security red line).
-      const { spawnSync } = await import('node:child_process');
-      const { readRecords } = await import(r('src', 'etl', 'ingest.mjs'));
-      const st = await import(r('src', 'capture', 'selftest.mjs'));
-      const ob = await import(r('src', 'capture', 'onboard.mjs'));
-      const has = (bin) => spawnSync(process.platform === 'win32' ? 'where' : 'which', [bin], { stdio: 'ignore' }).status === 0;
-      // Resolve the source the SAME way the board does. `serveSource()` returns an ARRAY of roots
-      // (D27), and a root is usually a DIRECTORY — `fs.statSync(array)` throws ERR_INVALID_ARG_TYPE,
-      // the catch below swallowed it, and doctor then certified a capture it had read nothing from.
-      // One resolver, shared: src/server.mjs::sourceFiles.
-      const sources = [].concat(flag('--source', process.env.ASIGHT_SOURCE || serveSource())).filter(Boolean);
-      const LIMIT = 5000;
-      let srcMeta = { exists: false, bytes: 0 }, records = [];
-      const readErrors = [];
-      let files = [];
-      // ④b covers every file that holds captured bytes: the sources, sealed copies superseded by an
-      // original that still exists, and the default export dir (D35 · 4.1 §凭据处置).
-      const extraPerm = [];
-      for (const root of sources) {
-        try {
-          const part = (await import(r('src', 'server.mjs'))).sourceFiles(root, { sessionsRoot: path.join(asightHome(), 'sessions') });
-          files.push(...part.files);
-          extraPerm.push(...part.superseded.map((x) => x.sealed));
-        } catch (e) { readErrors.push(`${root}: ${e.message}`); }
-      }
-      extraPerm.push(...(await import(r('src', 'raw', 'export.mjs'))).exportFiles());
-      // every sealed file `asight raw seal` filed by session, whichever source it continues
-      extraPerm.push(...(await import(r('src', 'raw', 'discover.mjs'))).sealedUnder(path.join(asightHome(), 'sessions')).filter((f) => !files.includes(f)));
-      if (files.length) {
-        let bytes = 0;
-        for (const f of files) { try { bytes += fs.statSync(f).size; } catch {} }
-        srcMeta = { exists: true, bytes, mtimeMs: Date.now() };
-        for (const f of files) {
-          if (records.length >= LIMIT) break;
-          try {
-            const got = await readRecords(f, { limit: LIMIT - records.length });
-            for (const rec of got) records.push(rec);
-            // a sealed file read only in part is a read error, and leaves a journal entry
-            const { sealedReadProblem, appendJournal } = await import(r('src', 'raw', 'journal.mjs'));
-            const p = sealedReadProblem(got.scan);
-            if (p) { readErrors.push(`${f}: ${p.unreadableRecords ?? 'all'} record(s) unreadable — ${p.reason}`); appendJournal({ op: 'read', reader: 'doctor', outcome: 'failed', ...p }); }
-          } catch (e) { readErrors.push(`${f}: ${e.message}`); }
-        }
-      }
-      // A read failure MUST be visible: a silently-swallowed error is what let ③ pass vacuously.
-      for (const e of readErrors) console.error('read error:', e);
-      const source = sources.join(', ') || '(none)';
-      const deps = st.checkDeps({ has });
-      const res = st.runSelfTest({ records, srcMeta, deps, files: [...files, ...extraPerm], verify: () => ob.verifyUserTrustOnly() });
-      const mark = (b, warn) => (b ? '✓' : warn ? '⚠' : '✗');
-      console.log('asight doctor — onboard 自检(依赖探测 + 「测试」四问)\n');
-      console.log('deps:');
-      for (const d of deps) console.log(`  ${mark(d.present, true)} ${d.bin} — ${d.present ? 'found' : 'MISSING · ' + d.hint} (${d.why})`);
-      console.log(`\n源:${source}${srcMeta.exists ? ` · ${(srcMeta.bytes / 1024).toFixed(0)} KB${records.length >= LIMIT ? ` · sampled first ${LIMIT} records` : ''}` : ' · (not found)'}\n`);
-      console.log('四问(人核对):');
-      console.log(`  ${mark(res.q1.ok, true)} ① 是否真在抓   — ${res.q1.note}`);
-      console.log(`  ${mark(res.q2.ok, res.q2.llm === 0)} ② 抓得对       — ${res.q2.note}`);
-      console.log(`  ${mark(res.q3.ok)} ③ 凭据没漏     — ${res.q3.note}`);
-      console.log(`  ${mark(res.q4.ok, true)} ④ 没弱化全机 TLS — ${res.q4.note}`);
-      console.log(`  ${mark(res.q4b.ok)} ④b 采集文件仅属主可读 — ${res.q4b.note}`);
-      // The process collector (4.6 §确认信任: status / doctor MUST report every running-but-untrusted agent with its reason; §合并包:
-      // install and doctor MUST report every CA block not carried into a bundle, its type and its file): the same text as
-      // `asight collector status` (the live daemon when it answers, else what is on disk), then the notes of the last install.
-      // It only reads; it never changes the exit code (review B-7).
-      {
-        const { runCollector, formatInstallNotes } = await import(r('src', 'collector', 'cli.mjs'));
-        const { captureHealth } = await import(r('src', 'health', 'read.mjs'));
-        const indent = (s) => String(s).split('\n').map((l) => `  ${l}`).join('\n');
-        console.log('\n按进程采集器(collector, 4.6):');
-        try { await runCollector(['status'], { out: (s) => console.log(indent(s)), err: (s) => console.log(indent(s)) }); } catch (e) { console.log(indent(`collector status could not be read: ${e.message}`)); }
-        try { for (const l of formatInstallNotes(captureHealth({ home: asightHome() }))) console.log(indent(l)); } catch (e) { console.log(indent(`the last install's notes could not be read: ${e.message}`)); }
-        // 1.6 R3 / V35: the copy of the undo side that needs no source tree is the version this asight writes (read only; `asight on` writes it again)
-        try {
-          const { checkStandalone } = await import(r('src', 'off', 'standalone.mjs'));
-          const c = checkStandalone({ home: os.homedir() });
-          console.log(indent(c.ok ? `✓ asight-off(不依赖源码的撤销副本): ${c.path} · 版本 ${c.found},与当前一致` : `⚠ asight-off(不依赖源码的撤销副本)不是当前版本: ${c.reason}`));
-        } catch (e) { console.log(indent(`⚠ asight-off 副本无法核对: ${e.message}`)); }
-      }
-      if (res.hardFail) { console.error('\n✗ credential leak detected — the redact firewall MUST be fixed before capturing further.'); process.exit(1); }
-      console.log('\n✓ 采集文件仅属主可读;凭据逐字存储 = 设计如此。(①②③④ 供你核对 — 见上方说明)');
+    case 'doctor': case 'test': { // `test` is doctor's old alias (1.6 §2 drops it with the command table, Task 11)
+      const { runDoctor } = await import(r('src', 'cli', 'doctor.mjs'));
+      const { makeIo } = await import(r('src', 'off', 'io.mjs'));
+      process.exitCode = await runDoctor(rest, { io: makeIo({ stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }) });
       break;
     }
     default:
