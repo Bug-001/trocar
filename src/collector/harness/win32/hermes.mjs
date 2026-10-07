@@ -4,7 +4,8 @@
 // `hermes.desktop` has no known install: a form with no way to recognise it, listed so `status` says 「unknown · not measured」 and does not leave it out.
 // Trust: the same sentinel block carries SSL_CERT_FILE = combined-hermes.pem (and HERMES_CA_BUNDLE for a release ≤ v2026.9.24, by the checkout's install-stamp.json), in the
 // .env of the Hermes root and of every profile; it is the Linux descriptor's injection with the Windows root: the Linux file reads ~/.hermes, Windows keeps its data in
-// %LOCALAPPDATA%\hermes, so the root moves and nothing else does. (The managed-.env note of the Linux file is a Linux directory and is not repeated.)
+// %LOCALAPPDATA%\hermes, so the root moves and nothing else does. The managed .env note is kept for HERMES_MANAGED_DIR (that variable applies on Windows too); Linux's default
+// /etc/hermes has no Windows counterpart that anyone measured, so without the variable there is nothing to read (4.8 §6.1).
 import path from 'node:path'
 import { expandHome, parseDotenv } from '../../core/config-read.mjs'
 import { CODE } from '../../core/codes.mjs'
@@ -50,6 +51,10 @@ function inject(ctx) {
   const flipped = files.filter((f) => ctx.readText(f) == null)
   const checkoutEnvs = checkouts.map((c) => path.join(c, '.env')).filter((f) => ctx.readText(f) != null)
   if (flipped.length && checkoutEnvs.length) notes.push({ code: CODE.harnessNote, text: `${flipped.join(', ')} does not exist, so asight creates it for its block; Hermes then reads ${checkoutEnvs.join(', ')} as a fill instead of an override, so its keys no longer win over the environment Hermes is started with` })
+  // the managed .env is read last and wins over the home .env, so a CA variable set there keeps asight's block out of effect (told, as on Linux)
+  const managed = ctx.env.get('HERMES_MANAGED_DIR')
+  const managedVars = managed ? new Map(parseDotenv(ctx.readText(path.join(managed, '.env')) || '')) : new Map()
+  for (const k of COVERED) if (managedVars.has(k)) notes.push({ code: CODE.harnessNote, text: `${path.join(managed, '.env')} sets ${k}; Hermes reads that file last, so it wins over asight's block and Hermes is not captured while it is there` })
   return {
     entries: files.map((f) => ({ kind: 'text', format: 'dotenv-block', path: f, vars: { SSL_CERT_FILE: bundle, ...(old ? { HERMES_CA_BUNDLE: bundle } : {}) }, semantic: 'replace' })),
     files: [{ path: bundle, bundle: true, certsFrom: [...seen].filter((v) => path.win32.isAbsolute(v)) }],

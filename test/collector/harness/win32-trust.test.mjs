@@ -205,6 +205,25 @@ for (const eol of ['\n', '\r\n']) for (const prof of PROFILES) {
   })
 }
 
+test('W19: Hermes — a HERMES_MANAGED_DIR .env that sets SSL_CERT_FILE or HERMES_CA_BUNDLE wins over asight\'s block (Hermes reads it last), and the install says so; without it, no note', () => {
+  const hermes = only('hermes')[0].win32
+  const b = box('John Smith')
+  b.put('AppData/Local/hermes/config.yaml', 'x: 1\n')
+  const managed = path.join(b.home, 'ProgramData', 'hermes-managed')
+  const ctx = (env = {}) => ({ os: 'win32', home: b.home, env: new Map(Object.entries(env)), running: [], collectorDir: b.dir, caPem: path.join(b.dir, 'ca', 'asight-ca.pem'), readText: (f) => { try { return fs.readFileSync(f, 'utf8') } catch { return null } }, listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } } })
+  const notes = (env) => hermes.inject(ctx(env)).notes.map((n) => n.text).filter((t) => /sets \w+; Hermes reads that file last/.test(t))
+  assert.deepEqual(notes({}), [], 'no managed directory: nothing to say')
+  assert.deepEqual(notes({ HERMES_MANAGED_DIR: managed }), [], 'a managed directory without the file, or without these variables')
+  b.put('ProgramData/hermes-managed/.env', 'OTHER=1\n')
+  assert.deepEqual(notes({ HERMES_MANAGED_DIR: managed }), [])
+  b.put('ProgramData/hermes-managed/.env', 'SSL_CERT_FILE=C:/corp/ca.pem\r\nHERMES_CA_BUNDLE=C:/corp/ca.pem\r\n')
+  assert.deepEqual(notes({ HERMES_MANAGED_DIR: managed }).map((t) => t.replace(managed, '<managed>').replace(/\\/g, '/')), [
+    '<managed>/.env sets SSL_CERT_FILE; Hermes reads that file last, so it wins over asight\'s block and Hermes is not captured while it is there',
+    '<managed>/.env sets HERMES_CA_BUNDLE; Hermes reads that file last, so it wins over asight\'s block and Hermes is not captured while it is there',
+  ])
+  assert.deepEqual(notes({}), [], 'HERMES_MANAGED_DIR unset: Windows has no default managed directory that was measured (4.8 §6.1)')
+})
+
 // ── asight's own value is told from a user's CA when the collector directory has backslashes and the value in the config has forward slashes (4.8 §6.1) ──
 import { isOwnPath } from '../../../src/collector/harness/_common.mjs'
 test('W19: asight\'s own value — written with forward slashes — is not read as a user CA when the collector directory comes back with backslashes (Claude Code, Codex, Hermes, Z-Code)', () => {
@@ -407,8 +426,10 @@ test('W19 proxy entry: Claude Code and Z-Code write the proxy key beside the tru
 })
 
 // The same file for Codex and Hermes is one sentinel block holding the trust variable and the proxy lines, entered separately (4.8 §2.3). The journal today refuses a second block in a file
-// that already has asight's (journal.mjs editText), so the proxy lines cannot join the trust block yet: Task 8(c) extends text-edit / journal for it, and this turns green there.
-test.todo('W19 proxy entry: Codex and Hermes — the proxy lines join the sentinel block the trust entry wrote, and off undoes the two in the opposite order to the original bytes (Task 8(c): the journal joins an existing block)')
+// that already has asight's (journal.mjs editText), so the proxy lines cannot join the trust block yet, and the proxy-half tests above run on a file with NO trust block — a state
+// production never has. THIS IS NOT THE W19 OF THE COMBINED CASE: W19 is half-passed for Codex and Hermes until this todo is a real test. It is Task 8(c)'s gate (plan, Task 8: the join option,
+// undo in both orders and after the user's edit, the CRLF and the space cases on the combined block, and no prior_value in install notes); `attach()` does not write those two entries before it.
+test.todo('W19 proxy entry GATE (Task 8(c)): Codex and Hermes — the proxy lines join the sentinel block the trust entry wrote (default-off join option), off undoes the two in LIFO order to the original bytes in both write orders and after the user edited around the block, in LF and CRLF files and in a profile with spaces, and the user\'s proxy credentials in prior_value reach no install note')
 
 // ── W22: dsh and OpenCode (the plugin sources themselves: win32-plugins.test.mjs) ──
 const ROW = '- insert: [{id: asight-ca, name: ./asight-ca.mjs}]'
