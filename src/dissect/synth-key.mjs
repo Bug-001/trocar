@@ -39,7 +39,8 @@ export function createSynthKeys({ gapMs = SYNTH_GAP_MS } = {}) {
   const open = new Map(); // `${harness}\0${hash}` → { key, lastMs }
   return {
     keyOf(rec) {
-      if (!rec || rec.is_llm_call !== true || sessionKeyOf(rec).key) return null;
+      // a call kept as a log line only (D40) has no system text to anchor a task by: it stays keyless, and is shown as such
+      if (!rec || rec.is_llm_call !== true || rec.body_retention === 'log' || sessionKeyOf(rec).key) return null;
       const h = harnessOf(rec);
       if (!h.row || h.row.synth !== true) return null;
       const ms = Date.parse(rec.ts_request || rec.ts || '');

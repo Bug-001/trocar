@@ -65,7 +65,7 @@ export async function readRecords(filePath, { normalize = true, limit = Infinity
   let lineNo = 0;
   // One line (readline's view of it: no "\n", CRLF folded) → a record, a blank, or a reported skip.
   // Returns false once `limit` is reached.
-  const take = (line, stream) => {
+  const take = (line, stream, bytes) => {
     lineNo++;
     const s = line.trim();
     if (!s) { scan.blankLines++; return true; }
@@ -93,6 +93,10 @@ export async function readRecords(filePath, { normalize = true, limit = Infinity
     if (rec && typeof rec === 'object' && !Object.prototype.hasOwnProperty.call(rec, '_stream')) {
       Object.defineProperty(rec, '_stream', { value: stream, enumerable: false, configurable: true });
     }
+    // D40 (3.2 calls.record_bytes): how many bytes this record's line takes on disk, trailing newline included — the
+    // stored size a per-class size view adds up. Stamped like _stream: never part of the record as captured. The same
+    // formula for a plain file and a sealed one, so the number does not change when a shard is sealed.
+    if (rec && typeof rec === 'object' && bytes != null) Object.defineProperty(rec, '_bytes', { value: bytes, enumerable: false, configurable: true });
     out.push(rec);
     return out.length < limit; // bounded read (e.g. the self-test samples a head)
   };
@@ -103,7 +107,7 @@ export async function readRecords(filePath, { normalize = true, limit = Infinity
 
 // Every line of a capture file as readline sees it — an NDJSON stream, or a sealed file decoded frame
 // by frame (never whole in memory, 4.6 §日志体积预算) and cut the same way — with the stream it came
-// from (for a sealed file, each record's ORIGINAL stream). The one line source of readRecords (board,
+// from (for a sealed file, each record's ORIGINAL stream) and its size on disk (`onLine(text, stream, bytes)`, D40). The one line source of readRecords (board,
 // ETL, doctor), `asight shard --rebuild-meta` and `asight raw compare`, so they count the same lines
 // (review 3 F11, F1). `onLine(text, stream)` returns false to stop. Returns what a sealed read could
 // not do — { sealedError } or { unreadableRecords, unreadable } — counted, never a silently short read
@@ -128,7 +132,7 @@ export async function forEachLine(filePath, onLine, { startOffset = 0, endOffset
     const end = Number.isFinite(endOffset) ? { end: endOffset - 1 } : {};
     const rl = createInterface({ input: createReadStream(filePath, { encoding: 'utf8', start, ...end }), crlfDelay: Infinity });
     const stream = basename(filePath);
-    for await (const line of rl) if (onLine(line, stream) === false) { rl.close(); break; }
+    for await (const line of rl) if (onLine(line, stream, lineBytes(line)) === false) { rl.close(); break; }
     return {};
   }
   let sf;
@@ -140,11 +144,15 @@ export async function forEachLine(filePath, onLine, { startOffset = 0, endOffset
   };
   try {
     outer: for (const { line, entry } of sf.lines({ onError })) {
-      for (const piece of readlinePieces(line, entry.newline)) if (onLine(piece, entry.stream) === false) break outer;
+      for (const piece of readlinePieces(line, entry.newline)) if (onLine(piece, entry.stream, lineBytes(piece)) === false) break outer;
     }
   } finally { sf.close(); }
   return rep;
 }
+
+// A line's size on disk as the readers count it: its text as UTF-8 plus the newline readline took off (the last line of a
+// file without one is counted with it; a few bytes in a whole capture, and the same for plain and sealed files).
+const lineBytes = (text) => Buffer.byteLength(text, 'utf8') + 1;
 
 // readline (crlfDelay: Infinity) breaks lines at "\n", "\r\n" and a lone "\r", and drops a "\r" at
 // EOF. A sealed record is one source line up to and including its "\n"; this cuts it the same way.

@@ -29,11 +29,11 @@ function upgrade(target, session = [['Session-Id', 'ws-session-1']]) {
   return { req: { head: head(raw(`GET ${target} HTTP/1.1`, reqH), { method: 'GET', target, headers: reqH }) }, resp: { head: head(raw('HTTP/1.1 101 Switching Protocols', [['Upgrade', 'websocket']]), { status: 101, headers: [['Upgrade', 'websocket']] }) } }
 }
 // One connection through the real recorder into the real store; returns the envelopes it wrote.
-function connection(store, { target = '/v1/responses', maxCallBytes, flow = 'f1', session }, drive) {
+function connection(store, { target = '/v1/responses', maxCallBytes, flow = 'f1', session, retention }, drive) {
   const out = []
   let n = 0
   const r = createWsRecorder({ flow: { id: flow, host: 'api.example.test', scheme: 'https', dst: { address: '10.0.0.1', port: 443, family: 4 }, proc: { pid: 7, exe: '/x/agent', agent: 'agent-x' } },
-    upgrade: upgrade(target, session), seqStart: 0, genId: () => `${flow}-${n++}`, isRecording: () => true, terminal: TERMINAL, maxCallBytes,
+    upgrade: upgrade(target, session), seqStart: 0, genId: () => `${flow}-${n++}`, isRecording: () => true, terminal: TERMINAL, maxCallBytes, retention,
     recordStore: { envelope: (e) => { out.push(e); return store.envelope(e) }, lastError: null }, onFailure: () => {} })
   drive(r)
   r.end()
@@ -55,7 +55,8 @@ E.truncated = connection(store, { flow: 'f3', maxCallBytes: 64 }, (r) => {
   r.fromUpstream(srv(1, ev('response.output_text.delta', { delta: 'y'.repeat(200) })))
   r.fromUpstream(srv(1, ev('response.completed')))
 })[0]
-E.meta = connection(store, { flow: 'f4', target: '/v1/realtime-status' }, (r) => { r.fromClient(cli(1, ev('status.get'))); r.fromClient(cli(1, ev('status.get'))) })
+// D40: a non-LLM endpoint is verbatim now; what still has no bytes is a call the operator set to the `log` level (and the records written before D40)
+E.meta = connection(store, { flow: 'f4', target: '/v1/realtime-status', retention: () => ({ class: 'telemetry', level: 'log' }) }, (r) => { r.fromClient(cli(1, ev('status.get'))); r.fromClient(cli(1, ev('status.get'))) })
 // the call's own opener cannot be decompressed (RSV1 with no deflate agreed): req_body null, no req_body_b64
 E.openerUndecoded = connection(store, { flow: 'f6' }, (r) => { r.fromClient(cli(1, 'not deflated', { rsv1: true })); r.fromUpstream(srv(1, ev('response.completed'))) })[0]
 // an Anthropic-shaped body on a WebSocket: the board assembles it on the other path (src/view/analyze.mjs)
@@ -100,8 +101,12 @@ test('wsIncompleteOf: each label the recorder writes, one thing each; complete a
   const none = wsIncompleteOf({ ...E.openerUndecoded, ws_raw: E.openerUndecoded.ws_raw.filter((f) => f.d !== 'c') })
   assert.ok(!none.requestUndecoded, 'no client data frame in ws_raw: no request message to have failed')
   const m = wsIncompleteOf(E.meta[0])
-  assert.ok(m && m.nonVerbatim >= 1, 'a non-LLM endpoint: non-verbatim')
-  assert.match(m.text, /non-LLM endpoint stored as their size only/)
+  assert.ok(m && m.nonVerbatim >= 1, 'a call set to the log level: its messages are non-verbatim')
+  // D40: the label says WHY there is only a size — the operator's setting, not a property of the endpoint
+  assert.match(m.text, /client message\(s\) stored as their size only — 只记日志 · 用户设置 [a-z]+ · /)
+  // …and a record from before D40 (no body_retention) says it predates the change, as the 2.6 / 4.1 label
+  const legacy = wsIncompleteOf({ ...E.meta[0], body_retention: undefined })
+  assert.match(legacy.text, /non-LLM endpoint stored as their size only \(non-verbatim\) — 本条采于 D40 之前,只存了长度/)
 })
 
 test('the board: /api/session carries the labels and where the call is shown it says 不完整 / 已截断 / 未解码 — none renders as complete (F5); a WebSocket call on a wire nobody registered is counted, not rendered', async () => {

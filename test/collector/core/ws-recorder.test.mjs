@@ -22,10 +22,10 @@ function upgrade({ ext, offer, target = '/v1/responses' }) {
     resp: { head: head(raw('HTTP/1.1 101 Switching Protocols', respH), { status: 101, headers: respH }) },
   }
 }
-function rig({ ext = null, offer, terminal = TERMINAL, target, write, maxCallBytes, split = Infinity, seqStart = 0 } = {}) {
+function rig({ ext = null, offer, terminal = TERMINAL, target, write, maxCallBytes, split = Infinity, seqStart = 0, retention } = {}) {
   const out = [], failures = []; let on = true; let n = 0
   const store = { envelope: (e) => (write ? write(e, out, store) : (out.push(e), true)), lastError: null }
-  const r = createWsRecorder({ flow: FLOW, upgrade: upgrade({ ext, offer, target }), seqStart, genId: () => `id${n++}`, isRecording: () => on, terminal, maxCallBytes, recordStore: store, onFailure: (f) => failures.push(f) })
+  const r = createWsRecorder({ flow: FLOW, upgrade: upgrade({ ext, offer, target }), seqStart, genId: () => `id${n++}`, isRecording: () => on, terminal, maxCallBytes, retention, recordStore: store, onFailure: (f) => failures.push(f) })
   const wire = { c: [], s: [] }
   const feed = (fn, b) => { for (let i = 0; i < b.length; i += split) fn(b.subarray(i, i + split)) }
   return { r, out, failures, wire, c: (b) => { wire.c.push(b); feed(r.fromClient, b) }, s: (b) => { wire.s.push(b); feed(r.fromUpstream, b) }, set on(v) { on = v } }
@@ -131,15 +131,48 @@ test('W15 / T2: a call cut before its terminal message is error:true with resp.p
   assert.deepEqual([q.out[0].error, q.out[0].resp.error.type], [true, 'ws_closed'], 'a clean close before the terminal message also interrupts the call')
 })
 
-test('W16: a non-LLM path keeps client messages as {raw_chars, verbatim:false} and no client data payload; the server direction still rebuilds', () => {
+// D40 FLIPPED THIS (it asserted that a non-LLM path keeps client messages as {raw_chars, verbatim:false} with no payload):
+// what an agent sends over a WebSocket besides model calls is exactly what is worth reading, so the call is recorded like
+// an LLM one — messages verbatim, frames keep their payload, ws_raw rebuilds the wire (4.6 W16).
+test('W16: a non-LLM path is recorded verbatim in both directions, and ws_raw rebuilds the wire like any other call (D40)', () => {
   const t = rig({ target: '/realtime/control' })
   t.c(Buffer.concat([cli(1, 'secret', { fin: false }), cli(9, 'p'), cli(0, '-ish')])); t.s(srv(1, ev('response.completed')))
   t.r.end(null)
   const [e] = t.out
-  assert.deepEqual([e.req_body, e.is_llm_call, e.resp.messages], [{ raw_chars: 10, verbatim: false }, false, [ev('response.completed')]])
-  assert.deepEqual(e.ws_raw.map((f) => [f.d, 'p' in f, 'm' in f]), [['c', false, false], ['c', true, false], ['c', false, false], ['s', false, true]])
-  assert.ok(rebuildWsWire(e, 's').s.equals(Buffer.concat(t.wire.s)))
-  assert.doesNotMatch(JSON.stringify(t.out), /secret|c2VjcmV0/)
+  assert.deepEqual([e.req_body, e.is_llm_call, e.resp.messages], ['secret-ish', false, [ev('response.completed')]])
+  assert.deepEqual(e.ws_raw.map((f) => [f.d, 'p' in f, 'm' in f]), [['c', false, true], ['c', true, false], ['c', false, true], ['s', false, true]], 'text frames slice the stored message, the ping keeps its payload')
+  assert.equal('body_retention' in e, false)
+  assert.deepEqual([e.traffic_class, e.body_wire_bytes], ['other', { req: 'secret-ish'.length, resp: ev('response.completed').length }])
+  assertWholeWire(t)
+  assert.match(JSON.stringify(t.out), /secret-ish/)
+})
+
+test('W16 at the log level: both directions are {raw_chars, verbatim:false}, the frames keep a header and no payload, the envelope says so; a change reaches the next call only (D40 · K2)', () => {
+  let level = 'log'
+  const asked = []
+  const t = rig({ target: '/realtime/control', terminal: [{ pathSuffix: '/control', patterns: TERMINAL[0].patterns }], retention: (method, target) => { asked.push([method, target]); return { class: 'telemetry', level } } })
+  const first = ev('response.create', { input: 'secret input' })
+  t.c(cli(1, first)); t.s(srv(1, ev('response.created')))
+  level = 'full'                                                  // the operator edits the file while the call is open
+  t.s(srv(1, ev('response.completed')))                           // the terminal message closes the call
+  const [e] = t.out
+  assert.deepEqual(e.req_body, { raw_chars: first.length, verbatim: false })
+  assert.deepEqual(e.resp.messages, [{ raw_chars: ev('response.created').length, verbatim: false }, { raw_chars: ev('response.completed').length, verbatim: false }])
+  assert.deepEqual([e.body_retention, e.traffic_class, e.body_wire_bytes], ['log', 'telemetry', { req: first.length, resp: ev('response.created').length + ev('response.completed').length }])
+  assert.ok(e.ws_raw.every((f) => !('p' in f) && !('m' in f) && typeof f.h === 'string'), 'headers only')
+  assert.equal(e.req_headers['session-id'], 's-1', 'the headers of the upgrade stay'); assert.match(e.req_head_raw, /^GET \/realtime\/control/)
+  assert.doesNotMatch(JSON.stringify(e), /secret input/)
+  // the call was cut at its terminal message all the same, and the NEXT call is sampled afresh: full now
+  t.c(cli(1, ev('response.create', { input: 'second' }))); t.s(srv(1, ev('response.completed')))
+  const second = t.out[1]
+  assert.deepEqual([second.req_body, 'body_retention' in second, second.resp.messages], [ev('response.create', { input: 'second' }), false, [ev('response.completed')]])
+  assert.ok(asked.length >= 2 && asked.every(([m, tgt]) => m === 'GET' && tgt === '/realtime/control'), 'asked with the upgrade request\'s method and target')
+})
+
+test('a retention callback that throws or is absent keeps the call in full, told by its endpoint (D40 · fail toward keeping)', () => {
+  const t = rig({ retention: () => { throw new Error('boom') } })
+  t.c(cli(1, ev('response.create'))); t.s(srv(1, ev('response.completed')))
+  assert.deepEqual([t.out[0].req_body, t.out[0].traffic_class, 'body_retention' in t.out[0]], [ev('response.create'), 'llm', false])
 })
 
 // A takeover sender keeps one streaming deflate context; a no-takeover sender compresses each message alone.

@@ -420,6 +420,18 @@
   .ctrlrow .m{color:var(--amber);width:40px;}
   .ctrlrow .ep{color:var(--fg);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .ctrlrow .st{color:var(--green);} .ctrlrow .st.err{color:var(--red);}
+  /* D40 保存什么: harness × class table, level toggles, sizes */
+  .retwin{display:inline-flex;gap:4px;margin:0 0 8px;} .retwin button{font:inherit;font-size:11px;cursor:pointer;background:var(--panel);color:var(--dim);border:1px solid var(--border);border-radius:5px;padding:2px 9px;}
+  .retwin button.on{color:var(--fg);border-color:var(--accent);}
+  .retscroll{overflow-x:auto;max-width:100%;} .retscroll .rettbl{min-width:max-content;}
+  .rettbl{border-collapse:collapse;width:100%;font-size:11px;} .rettbl th,.rettbl td{border:1px solid var(--border);padding:5px 7px;vertical-align:top;text-align:left;}
+  .rettbl thead th{background:var(--panel2);font-weight:600;white-space:nowrap;} .rettbl tbody th{background:var(--panel2);font-family:var(--mono);white-space:nowrap;}
+  .rettbl td .num{font-family:var(--mono);font-size:10px;color:var(--dim);line-height:1.5;white-space:nowrap;} .rettbl td .num .est{color:var(--amber);}
+  .rettbl td .need{font-size:9.5px;color:var(--amber);}
+  .rettbl tr.legacy th,.rettbl tr.legacy td{font-style:italic;color:var(--dim);} .rettbl tr.total th,.rettbl tr.total td{background:var(--panel2);}
+  .lvl{font:inherit;font-size:10.5px;cursor:pointer;border-radius:4px;padding:1px 7px;margin-bottom:3px;border:1px solid var(--border);background:var(--panel);color:var(--green);}
+  .lvl.log{color:var(--amber);border-color:var(--amber);} .lvl:disabled{cursor:not-allowed;opacity:.55;} .lvl:not(:disabled):hover{border-color:var(--fg);}
+  .retmsg{font-size:11px;margin:4px 0 8px;} .retmsg.err{color:var(--red);} .retmsg.warn{color:var(--amber);}
 </style>
 </head>
 <body>
@@ -475,6 +487,7 @@
 
 <div id="rails"></div>
 <div id="truncbar" style="display:none"></div>
+<div id="loggedbar" style="display:none"></div>
 <div id="unknownbar" style="display:none"></div>
 <div id="srcbar" style="display:none"></div>
 
@@ -682,13 +695,13 @@ async function poll(){
     const realP=projects.filter(p=>p.slug!=='_unresolved'), unres=projects.filter(p=>p.slug==='_unresolved')
     const optFor=s=>{
       const label=s.title||(String(s.session_id).startsWith('sess-')?'untitled':'· '+String(s.session_id).slice(0,8))
-      const kinds=[s.calls?`${s.calls} call${s.calls!==1?'s':''}`:null,s.probes?`${s.probes} probe${s.probes!==1?'s':''}`:null].filter(Boolean).join(' · ')
+      const kinds=[s.calls?`${s.calls} call${s.calls!==1?'s':''}`:null,s.logged?`${s.logged} 只记日志 · log-only`:null,s.probes?`${s.probes} probe${s.probes!==1?'s':''}`:null].filter(Boolean).join(' · ')
       const ic=s.entrypoint==='desktop'?'🖥':'⌨'
       return `<option value="${esc(s.project_slug)}::${esc(s.session_id)}">${ic} ${esc(label)}${s.has_subagent?' 🧬':''} — ${kinds}</option>`
     }
     const grp=p=>`<optgroup label="${esc(p.name)}">${p.sessions.map(optFor).join('')}</optgroup>`
     const opts=realP.map(grp).join('')+unres.map(p=>`<optgroup label="⋯ ${esc(p.name)}">${p.sessions.map(optFor).join('')}</optgroup>`).join('')
-      +`<optgroup label="⚙ session-less"><option value="__control__">⚙ control-plane (telemetry · flags · account · registry)</option><option value="__caphealth__">${esc(capHealthLabel())}</option></optgroup>`
+      +`<optgroup label="⚙ session-less"><option value="__control__">⚙ control-plane (telemetry · flags · account · registry)</option><option value="__caphealth__">${esc(capHealthLabel())}</option><option value="__retention__">保存什么 · what is kept</option></optgroup>`
     if(sel.dataset.sig!==opts){ sel.innerHTML=opts; sel.dataset.sig=opts; if(curSel)sel.value=curSel }
     if(!curSel){ const p0=realP[0]||unres[0]; if(p0)curSel=`${p0.sessions[0].project_slug}::${p0.sessions[0].session_id}`; if(curSel)sel.value=curSel }
     boardEmpty=!curSel
@@ -696,6 +709,7 @@ async function poll(){
     // the control and capture-health views replace the session's timeline: coming back must fetch and render the
     // session again (and show its own errors), not short-circuit on the sigs of the render it replaced
     if(curSel==='__caphealth__'){ document.body.classList.add('ctrlmode'); controlSig=null; lastCheapSig=null; lastRenderSig=null; renderCapHealthView(); return }
+    if(curSel==='__retention__'){ document.body.classList.add('ctrlmode'); controlSig=null; lastCheapSig=null; lastRenderSig=null; renderRetentionView(); return } // D40 保存什么
     if(curSel==='__control__'){ document.body.classList.add('ctrlmode'); lastCheapSig=null; lastRenderSig=null; await renderControlView(); return }
     document.body.classList.remove('ctrlmode'); controlSig=null // leaving control view: force a full re-render next time (else a stale session header sticks)
     hideSessionChrome(false)
@@ -761,6 +775,14 @@ async function poll(){
     if(tb){ if(t){ tb.innerHTML=`⚠ 非完整视图 · showing the most recent <b>${t.shown}</b> of <b>${t.total||'?'}</b> calls (${t.kept_mb} MB of ${t.file_mb} MB) — this session is too large for the demo loader; older calls are omitted from the view but intact in the raw trace.`
       tb.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #7a5b18;background:#241d0b;color:#e8c15a;border-radius:5px;font-size:11px;line-height:1.45'
     } else { tb.style.display='none'; tb.innerHTML='' } }
+    // D40 (3.2 K7 · 不变式4): inference calls the operator set to 「只记日志」 kept their headers and sizes but no body — they cannot be drawn,
+    // and a session of them is NOT "no calls". Counted and named here, with the setting that did it.
+    { const lb=document.getElementById('loggedbar'), lg=d.logged
+      if(lb){ if(lg&&lg.count){
+          const what=(lg.items||[]).slice(0,5).map(x=>`${fmtTime(x.ts)} ${esc(x.endpoint)} · ${x.status??'?'}${x.request_bytes!=null?' · '+kf(x.request_bytes)+' B out':''}${x.response_bytes!=null?' · '+kf(x.response_bytes)+' B back':''}`).join(' · ')
+          lb.innerHTML=`⚠ 只记日志 · <b>${lg.count}</b> call${lg.count!==1?'s':''} of this session ${lg.count!==1?'were':'was'} kept as a log line only (${esc((lg.labels||[]).join('; '))}): the headers and sizes are recorded, the request and reply bodies are not, so ${lg.count!==1?'they are':'it is'} not on the timeline. This is not "no calls" — newest: ${what}`
+          lb.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #7a5b18;background:#241d0b;color:#e8c15a;border-radius:5px;font-size:11px;line-height:1.45'
+        } else { lb.style.display='none'; lb.innerHTML='' } } }
     // skip the whole re-analyze+render when this session's data is unchanged — otherwise the
     // 1.5s live poll rebuilds the context window and wipes any block you just expanded.
     // BUG 1: the window is part of the render sig — the slim `records` list does NOT change when the
@@ -807,7 +829,7 @@ function renderEmpty(msg){ document.body.classList.remove('ctrlmode'); brushDrag
   const ph=document.getElementById('phlabel'); if(ph)ph.textContent=''                   // position indicator (#n/N)
   const lh=document.getElementById('lanehint'); if(lh)lh.innerHTML=''                    // which lane / how many turns
 }
-function hideSessionChrome(hide){ document.getElementById('saw').style.display=hide?'none':''; document.getElementById('rails').style.display=hide?'none':'' }
+function hideSessionChrome(hide){ document.getElementById('saw').style.display=hide?'none':''; document.getElementById('rails').style.display=hide?'none':''; const lb=document.getElementById('loggedbar'); if(hide&&lb){ lb.style.display='none'; lb.innerHTML='' } }
 
 // Envelope-tolerant readers (R1, audit 2026-07-19). /api/control ships RAW records: the product
 // D10 envelope uses `resp`/`req_headers`/`req_body`, demo v0 used `response`/`request_headers`/
@@ -823,7 +845,7 @@ const CTRL_META={
   control:{ic:'🚩',what:'feature flags & experiments — the config your client is actually running'},
   account:{ic:'👤',what:'account & onboarding settings'},
   registry:{ic:'🧩',what:'MCP server registry lookups (installable + configured)'},
-  telemetry:{ic:'📊',what:'usage/UI analytics batches (event bodies not on the wire capture; response = accepted count)'},
+  telemetry:{ic:'📊',what:'usage/UI analytics batches (D40: the event bodies are stored and shown; records from before D40 kept only their length)'},
   other:{ic:'❔',what:'uncategorized session-less calls'},
 }
 const CTRL_ORDER=['control','account','registry','telemetry','other']
@@ -838,7 +860,7 @@ async function renderControlView(){
   if(sig===controlSig && tl.dataset.mode==='control') return
   capHSig=null
   controlSig=sig
-  const got=await Promise.all((list.classes||[]).map(c=>fetch('/api/control?class='+encodeURIComponent(c.class)).then(r=>r.json()).then(d=>({class:c.class,records:d.records||[]})).catch(()=>({class:c.class,records:[]}))))
+  const got=await Promise.all((list.classes||[]).map(c=>fetch('/api/control?class='+encodeURIComponent(c.class)).then(r=>r.json()).then(d=>({class:c.class,records:d.records||[],limit:d.detail_limit||80})).catch(()=>({class:c.class,records:[],limit:80}))))
   controlData={}; got.forEach(c=>controlData[c.class]=c.records)
   const total=got.reduce((a,c)=>a+c.records.length,0)
   document.getElementById('agentChip').textContent='⚙ control-plane'
@@ -850,12 +872,13 @@ async function renderControlView(){
   let html=`<div class="ctrlhdr">⚙ <b>Control-plane traffic</b> — the session-less calls agents make around your conversations (no session key from the harness table). Captured but kept out of the conversation picker. Click any call for its request + response.</div>`
   for(const c of cls){
     const m=CTRL_META[c.class]||{ic:'•',what:''}
-    const recent=c.records.slice(-80).reverse()
+    const lim=c.limit||80 // the server sends bodies for this many of the newest; older records are slim (ctl.omitted)
+    const recent=c.records.slice(-lim).reverse()
     const rows=recent.map((r)=>{
       const gi=c.records.indexOf(r), st=rsp(r).status
       return `<div class="ctrlrow" data-cls="${esc(c.class)}" data-i="${gi}"><span class="tm">${fmtTime(r.ts_request)}</span><span class="m">${esc(r.method||'')}</span><span class="ep">${esc((r.endpoint||'').split('?')[0])}</span><span class="st ${st>=400?'err':''}">${st??'?'}</span></div>`
     }).join('')
-    const more=c.records.length>80?`<div class="ctrlrow" style="cursor:default;color:var(--dimmer)">… ${c.records.length-80} older not shown</div>`:''
+    const more=c.records.length>lim?`<div class="ctrlrow" style="cursor:default;color:var(--dimmer)">… ${c.records.length-lim} older not shown</div>`:''
     html+=`<details class="ctrlsec" ${c.class==='control'?'open':''}><summary>${m.ic} <b>${esc(c.class)}</b> <span class="cc">${c.records.length}</span><span class="cwhat">${esc(m.what)}</span></summary>${rows}${more}</details>`
   }
   tl.dataset.mode='control'; tl.innerHTML=html
@@ -879,18 +902,56 @@ function controlLedger(got,total){
   }
   return html
 }
+// D40 (2.6 §C 「请求与响应体」, §保真边界 1): the call as stored — the request body as it is (text), or a size and a hex head (binary), the reply
+// beside it (a non-LLM SSE stream as its raw text), the host the bytes went to next to the request's own Host header, and what is missing,
+// in place: 本条采于 D40 之前,只存了长度 · 只记日志 · 已截断 · 压缩请求体未解码. The server reshaped the record (`ctl`: bodies clipped at 1 MiB with the
+// clip said, the heavy fields left in the source); a record without `ctl` (an older server) falls back to the raw fields.
+function ctlBodyHtml(v,title,key){
+  if(!v) return ''
+  const dim='style="color:var(--dim)"'
+  if(v.kind==='length-only') return `<div class="din" ${dim}>${title}: <b>非逐字 · 只存了长度 · length only${v.bytes!=null?' · '+v.bytes+' bytes':''}</b> — the body was not stored (see the label above); this is not an empty body.</div>`
+  if(v.kind==='empty') return `<div class="din" ${dim}>${title}: (empty)</div>`
+  if(v.kind==='none') return `<div class="din" ${dim}>${title}: (no body in the record)</div>`
+  // a body that is only part of the call (cut at the capture cap, or a request that never finished): never 「逐字」 of the whole — it says
+  // how much of how much is stored (invariant 4; the label above says why)
+  const cut=!!(v.truncated||v.incomplete)
+  const cutWord=v.truncated?'已截断 · cut at the cap':'不完整 · never finished'
+  const cutOf=cut?` · <b>${cutWord}</b> · ${v.stored_bytes!=null?'only the first '+kf(v.stored_bytes)+' of ':'a prefix of '}${v.bytes!=null?kf(v.bytes):'?'} bytes is stored`:''
+  if(v.kind==='binary') return cut
+    ? `<div class="din" ${dim}>${title}: <b>二进制 · 前缀,不是完整的体</b>${cutOf} — the first ${Math.min(v.stored_bytes!=null?v.stored_bytes:4096,4096)} bytes as hex:</div><pre>${esc(v.hex||'')}</pre>`
+    : `<div class="din" ${dim}>${title}: <b>二进制 · ${v.bytes} 字节 · 逐字存为 base64</b> (binary, stored verbatim as base64) — the first ${Math.min(v.bytes,4096)} bytes as hex:</div><pre>${esc(v.hex||'')}</pre>`
+  if(v.kind==='undecoded') return `<div class="din" ${dim}>${title}: <b>压缩请求体未解码 · compressed, not decoded</b> · ${esc(v.encoding||'')}${v.bytes!=null?' · '+v.bytes+' bytes':''}</div>`
+  const text=v.text==null?'':String(v.text)
+  const clip=v.clipped?` <span class="pobadge">已截断显示 · showing the first ${kf(v.shown_chars)} of ${kf(v.chars)} chars</span> the rest is intact in the source record.`:''
+  const dec=v.decoded_from?` · sent ${esc(v.decoded_from)}-compressed, shown decoded`:''
+  return `<div class="din" ${dim}>${title}${cut?cutOf:v.bytes!=null?' · '+kf(v.bytes)+' bytes':''}${dec}${clip}:</div>`+
+    collapse('<pre>'+esc(text)+'</pre>',text.length,key,cut?`⟨前缀,不是完整的体 · prefix only · click to unfold⟩`:`⟨逐字 · ${v.bytes!=null?kf(v.bytes)+' 字节':kf(text.length)+' chars'} · click to unfold⟩`)
+}
+function ctlLabelsHtml(c){
+  return ((c&&c.labels)||[]).map(l=>`<div class="rpk"><span class="pobadge" title="${esc(l.text||'')}">${esc(l.label)}</span> ${esc(l.text||'')}</div>`).join('')
+}
+// what the server left out of this record to keep the answer small (ctl.omitted): said in place, with where it is (invariant 4)
+function ctlOmittedHtml(c,r){
+  const o=(c&&c.omitted)||[]
+  return o.length?`<div class="rpk"><span class="pobadge">未随本视图下发 · not shipped to this view</span> ${esc(o.join(', '))} — intact in the source record${r&&r.id?' <b>'+esc(r.id)+'</b>':''}${c.detail===false?'; this is an older call: its request and reply bodies are not shown here':''}.</div>`:''
+}
 function openControlDetail(cls,i){
   const r=(controlData[cls]||[])[i]; if(!r)return
-  const det=document.getElementById('detail'), resp=rsp(r), hdr=rhdr(r)
-  const body=resp.body, bodyStr=body==null?'(empty)':(typeof body==='string'?body:JSON.stringify(body,null,2))
+  const det=document.getElementById('detail'), resp=rsp(r), hdr=rhdr(r), c=r.ctl||{}
+  const key='ctrl:'+cls+':'+i, slim=c.detail===false // a slim record carries no bodies: the omitted line says so, not "no body in the record"
+  // the request: from ctl when the server reshaped it, else the raw fields (a record without ctl)
+  const req=c.req||(typeof r.req_body==='string'?{kind:'text',text:r.req_body,bytes:r.req_body.length}:(r.req_body&&typeof r.req_body==='object'&&r.req_body.verbatim===false?{kind:'length-only',bytes:r.req_body.raw_chars}:null))
+  // the reply: a small JSON body stays in resp.body (shown pretty-printed, as stored); anything else is in ctl.resp
+  let rv=c.resp||{kind:'none'}
+  if(resp.body!=null&&(!c.resp||(c.resp.kind==='json'&&c.resp.text==null))) rv={kind:'json',text:typeof resp.body==='string'?resp.body:JSON.stringify(resp.body,null,2),bytes:c.resp&&c.resp.bytes}
+  const sent=c.wire_bytes&&c.wire_bytes.req!=null?c.wire_bytes.req:rbytes(r)
+  const hostLine=(c.host||c.hostHeader)?`<div class="din">host <b>${esc(c.host||'—')}</b>${c.hostHeader?` · Host header <b>${esc(c.hostHeader)}</b>`:''}${c.hostDiffers?` <span class="pobadge" title="the host the bytes went to differs from the request's own Host header — a behaviour signal">host ≠ Host</span>`:''}${c.traffic_class?` · class <b>${esc(c.traffic_class)}</b>`:''}</div>`:''
   det.className='open'
   det.innerHTML=`<div class="dclose" id="dclose">✕ close</div>`+
     `<h3>${esc(r.method||'')} ${esc((r.endpoint||'').split('?')[0])} · ${resp.status??'?'}</h3>`+
-    `<div class="din">${fmtTime(r.ts_request)} · UA <b>${esc(hdr['user-agent']||'?')}</b> · request ${kf(rbytes(r))} bytes`+
-      // 4.6 W16 read half · 4.1 保真边界: a non-LLM body (HTTP or WebSocket) is stored as its length only
-      (r.req_body&&typeof r.req_body==='object'&&r.req_body.verbatim===false?` <span class="pobadge" title="non-inference request bodies are stored as their length only (4.1 保真边界)">非逐字 · length only</span>`:' (request body not decoded for non-LLM calls; the response is)')+`</div>`+
-    `<div class="din" style="color:var(--dim)">response body:</div>`+
-    collapse('<pre>'+esc(bodyStr)+'</pre>',bodyStr.length,'ctrl:'+cls+':'+i)
+    `<div class="din">${fmtTime(r.ts_request)} · UA <b>${esc(hdr['user-agent']||'?')}</b> · request ${kf(sent)} bytes</div>`+
+    hostLine+ctlLabelsHtml(c)+ctlOmittedHtml(c,r)+
+    (slim?'':(req?ctlBodyHtml(req,'request body',key+':req'):'')+ctlBodyHtml(rv,'response body'+(rv.kind==='json'?' (JSON, as stored)':''),key))
 }
 
 // ── D38 采集健康 (2.6 §C session-less group · 1.5): the ctrlmode grid over /api/capture-health — the timeline lists
@@ -993,7 +1054,7 @@ function buildLanes(A,probes){
   })
   const series=probes.series||[]
   if(series.length){
-    const calls=series.map((p,i)=>({gi:i,ts:p.ts,ctx:p.tokens||0,probe:true,usage:{read:0,create:0,fresh:p.tokens||0,out:0}}))
+    const calls=series.map((p,i)=>({gi:i,ts:p.ts,ctx:p.tokens||0,probe:true,retention:p.retention||null,usage:{read:0,create:0,fresh:p.tokens||0,out:0}}))
     ls.push({id:'probe',kind:'probe',icon:'👁',label:'count_tokens probes',calls,events:[],resources:[],
       giLocal:new Map(calls.map((c,i)=>[c.gi,i])),peakCtx:calls.reduce((m,c)=>Math.max(m,c.ctx),1),flagged:0})
   }
@@ -1455,6 +1516,15 @@ function selectTick(lane,i){
   const c=lane.calls[i]; if(c&&anchor.calls.length){ playhead=nearestByTs(anchor,c.ts); follow=false; renderSaw(); renderContextWindow(); renderContextNav() }
   openDetail(lane,i)
 }
+// D40: what became of a count_tokens probe's own request body (it carries a copy of the context): kept verbatim unless the operator set that
+// class to a log line, and never kept before D40. The probe lane draws the measurement only, so the note says where the body is.
+function probeBodyNote(c){
+  const k=c&&c.retention
+  if(k==='full') return `The probe's request body is <b>kept verbatim</b> in its capture record (since D40, 保存什么 · token-count is 全部 by default); this board draws the measurement, not the body.`
+  if(k==='log') return `The probe's request body was <b>not stored</b> — 只记日志: you set token-count to a log line only (保存什么).`
+  if(k==='legacy-meta') return `The probe's request body was <b>not retained</b> — 本条采于 D40 之前,只存了长度.`
+  return `Whether the probe's request body is kept is the 保存什么 setting for token-count.`
+}
 function openDetail(lane,i){
   const c=lane.calls[i], det=document.getElementById('detail')
   let title, body
@@ -1464,7 +1534,7 @@ function openDetail(lane,i){
     title=`👁 ${esc(lane.label||'probe')} · ${fmtTime(c.ts)}`
     // a server lane says what it is (lane.note); the count_tokens rail is a ruler whose body is not kept
     body=(lane.note?`<div class="din">${esc(lane.note)}</div>`
-      :`<div class="din">A token-count probe: the agent sends a copy of the context to be measured and gets back only its size. A ruler, not a turn — no model output, not billed. asight keeps only the size: the probe's request body is <b>not retained</b> (it is almost a copy of the next request; 3.2 / D34).</div>`)+
+      :`<div class="din">A token-count probe: the agent sends a copy of the context to be measured and gets back only its size. A ruler, not a turn — no model output, not billed. ${probeBodyNote(c)}</div>`)+
       `<div class="din">measured <b>${kf(c.ctx)}</b> tokens</div>`+
       `<div class="din">payload ≈ the context around ${callRef(k)}: <b>${kf(rq.message_count)}</b> messages · system <b>${kf(rq.system_chars)}</b> chars · <b>${kf(rq.tool_count)}</b> tools · ${kf(rq.context_chars)} bytes on the wire.</div>`
   } else if(lane.kind==='monitor'){
@@ -1759,7 +1829,7 @@ function reqBadge(c){
     out+=`<div class="rpk"><span class="pobadge" title="${esc(q.text)}">${tag}</span> ${esc(q.text)}</div>`
   }
   if(w){
-    const tag=[w.partial?'不完整 · context incomplete':'',w.truncated?'已截断 · truncated':'',w.undecoded?'未解码 · not decoded':'',w.nonVerbatim?'非逐字 · non-verbatim':''].filter(Boolean).join(' · ')
+    const tag=[w.partial?'不完整 · context incomplete':'',w.truncated?'已截断 · truncated':'',w.undecoded?'未解码 · not decoded':'',w.nonVerbatim?(w.retention==='log'?'只记日志 · log level':'本条采于 D40 之前,只存了长度'):''].filter(Boolean).join(' · ')
     out+=`<div class="rpk"><span class="pobadge" title="${esc(w.text)}">${tag}</span> ${esc(w.text)}</div>`
   }
   if(r){
@@ -2324,6 +2394,138 @@ function renderMon(el,d){
   el.innerHTML=`<span class="mondot" title="监测控制未启用"></span>`
     +`<span class="monwhere" title="This board was started read-only, so the D26 control endpoints are not mounted. Restart the server with --control to arrange transparent monitoring from here. Either way the board keeps showing what was captured — only the on/off switch is absent.">监测控制未启用 · control not enabled${r?` · HTTP ${r.status}`:''} — read-only board</span>`
 })()
+
+// ── D40 保存什么 (2.6 §D · 4.4 GET /api/retention, POST /control/retention) ──────────────────────────────────────────────
+// What is kept of each call, per harness × traffic class: `全部` (the bodies verbatim, 64 MiB cap) or `只记日志` (headers and sizes, no body), with
+// what each class takes. Every harness and class name comes from the payload (closed sets, normalized ids): no host or endpoint is named here (不变式 3).
+// The numbers say where they come from: per-class numbers are the analytics store AS OF the last `asight etl` ("需要先跑 asight etl" when there is
+// none — never 0), the disk total is lstat sizes (live), the once-sealed size is an estimate and says so. A change reaches the calls that start after
+// it; what is stored is never deleted (不变式 2). Changing a level goes through POST /control/retention, which exists only under `serve --control`:
+// without it the switches are greyed and the command to run is shown.
+const RET_MS=10000
+let retH=null, retHAt=0, retHErr=null, retBusy=false, retMsg=null, retSig=null, retWin='all'
+try{ const w=localStorage.getItem('asight.retWin'); if(w==='24h'||w==='7d'||w==='all') retWin=w }catch{}
+const RET_WINS=[['24h','24 h'],['7d','7 d'],['all','全部 · all']]
+const RET_LABEL={full:'全部',log:'只记日志'}
+const fmtB=n=>n==null?'—':n<1024?n+' B':n<1048576?(n/1024).toFixed(1)+' KiB':n<1073741824?(n/1048576).toFixed(1)+' MiB':(n/1073741824).toFixed(2)+' GiB'
+async function pollRetention(force){
+  if(retBusy) return
+  if(!force&&retHAt&&Date.now()-retHAt<RET_MS) return // a failed read waits its turn too: no retry loop against a server that is down
+  retBusy=true
+  try{
+    const r=await fetch('/api/retention',{cache:'no-store'})
+    const j=await r.json().catch(()=>null)
+    if(r.ok&&j&&j.classes){ retH=j; retHErr=null }
+    else retHErr=(j&&j.error)||('HTTP '+r.status)
+  }catch(e){ retHErr=String(e&&e.message||e) }
+  finally{ retBusy=false; retHAt=Date.now() }
+  if(curSel==='__retention__') renderRetentionView()
+}
+async function setRetentionLevel(h,c,level){
+  retMsg=null
+  try{
+    const st=await fetch('/control/status',{cache:'no-store'})
+    if(!st.ok) throw new Error('the control plane is off (HTTP '+st.status+') — start the server with --control')
+    const csrf=(await st.json()).csrf
+    const r=await fetch('/control/retention',{method:'POST',headers:{'content-type':'application/json','x-asight-csrf':csrf},body:JSON.stringify({harness:h,class:c,level})})
+    const j=await r.json().catch(()=>({}))
+    if(!r.ok) throw new Error(j.error||('HTTP '+r.status))
+    const ch=(j.changed||[])[0]
+    retMsg={cls:'ok',text:ch?`${h} · ${c}: ${RET_LABEL[ch.from]||ch.from} → ${RET_LABEL[ch.to]||ch.to} — applies to the calls that start from now on (within a second); what is already stored is not changed`:`${h} · ${c} was already ${RET_LABEL[level]||level}`}
+    if(j.log_error) retMsg={cls:'warn',text:retMsg.text+` — but its record in the change log could not be written (${j.log_error})`}
+  }catch(e){ retMsg={cls:'err',text:`could not change ${h} · ${c}: ${String(e&&e.message||e)}`} }
+  retSig=null
+  await pollRetention(true)
+  renderRetentionView()
+}
+const sumWin=(rows,win)=>rows.reduce((a,r)=>{ const w=r.windows[win]; for(const k in w) a[k]=(a[k]||0)+w[k]; return a },{calls:0,request_bytes:0,response_bytes:0,response_unrecorded:0,stored_bytes:0,stored_unrecorded:0})
+function retNums(w){
+  if(!w) return ''
+  const unrec=w.response_unrecorded?` +响应未记录 ×${w.response_unrecorded}`:''
+  const stored=w.stored_unrecorded?'≥'+fmtB(w.stored_bytes):fmtB(w.stored_bytes)
+  return `<div class="num">${w.calls} 条 · 线上 ${fmtB(w.request_bytes+w.response_bytes)}${unrec}</div>`+
+    `<div class="num">存 ${stored}${w.sealed_estimate_bytes!=null?` · 封存后 ≈${fmtB(w.sealed_estimate_bytes)} <span class="est">估计</span>`:''}</div>`
+}
+function renderRetentionView(){
+  hideSessionChrome(true)
+  document.getElementById('agentChip').textContent='⚙ 保存什么'
+  document.getElementById('forkChip').style.display='none'
+  document.getElementById('sessTitle').textContent='what is kept · 保存什么'
+  const tl=document.getElementById('timeline'), led=document.getElementById('ledger')
+  document.getElementById('dot').classList.toggle('on',document.getElementById('liveChk').checked)
+  if(!retH){
+    tl.dataset.mode='retention'; led.innerHTML=''
+    tl.innerHTML=retHErr?`<div class="ctrlhdr">⚠ <b>保存什么 could not be read</b> — ${esc(retHErr)}. The settings and the captured files are untouched.</div>`:'<div class="ctrlhdr">reading /api/retention …</div>'
+    pollRetention(); return
+  }
+  const sig=JSON.stringify([{...retH,generated_at:null},retWin,retMsg,retHErr])
+  if(sig===retSig&&tl.dataset.mode==='retention'){ pollRetention(); return }
+  retSig=sig
+  const R=retH, sz=R.sizes, T=R.totals, win=retWin
+  document.getElementById('sessMeta').textContent=sz?`sizes: newest call in the store ${sz.as_of||'(empty store)'}`:'sizes: 需要先跑 asight etl'
+  const rowsOf=(h,c)=>sz?sz.rows.filter(r=>r.harness===h&&r.class===c&&r.retention!=='legacy-meta'):[]
+  const need='<div class="need">需要先跑 asight etl</div>'
+  const cmd=(h,c,to)=>`asight keep ${h} ${c} ${to}`
+  let html=`<div class="ctrlhdr">⚙ <b>保存什么 · what is kept</b> — per harness × traffic class: <b>全部</b> keeps the bodies verbatim (64 MiB cap per body), <b>只记日志</b> keeps one line per call (headers and sizes, no body). `+
+    `<b>改动只影响之后开始的调用;已存的数据不删</b> · a change reaches the calls that start after it; what is already stored is never deleted or rewritten.</div>`
+  if(retHErr) html+=`<div class="retmsg err">⚠ could not refresh: ${esc(retHErr)} — the table below is the last one read</div>`
+  if(R.settings&&!R.settings.ok) html+=`<div class="retmsg warn">⚠ 设置文件读不出 · the settings file has a problem: ${esc((R.settings.problems||[]).map(p=>p.reason).join('; '))} — 两条采集路径现在按全部保存 · both capture paths keep everything in full until it is fixed</div>`
+  if(!R.control) html+=`<div class="retmsg warn">控制面没开 · the control plane is off, so the switches are greyed. Start the server with <code>asight serve --control</code> to change them here, or run <code>asight keep &lt;harness&gt; &lt;class&gt; &lt;full|log&gt;</code> in a terminal.</div>`
+  if(retMsg) html+=`<div class="retmsg ${retMsg.cls}">${esc(retMsg.text)}</div>`
+  if(!sz) html+=`<div class="retmsg warn">${esc(R.sizes_reason||'需要先跑 asight etl')}</div>`
+  html+=`<div class="retwin">${RET_WINS.map(([k,l])=>`<button data-win="${k}" class="${k===win?'on':''}">${esc(l)}</button>`).join('')}</div>`
+  html+=`<div class="retscroll"><table class="rettbl"><thead><tr><th>harness</th>${R.classes.map(c=>`<th>${esc(c)}</th>`).join('')}<th>合计 · total</th></tr></thead><tbody>`
+  for(const h of R.harnesses){
+    html+=`<tr><th>${esc(h)}</th>`
+    for(const c of R.classes){
+      const lv=(R.levels[h]&&R.levels[h][c])||'full', to=lv==='full'?'log':'full', rows=rowsOf(h,c)
+      const parts=rows.map(r=>`${RET_LABEL[r.retention]||r.retention}: ${r.windows[win].calls} 条`).join(' · ')
+      const title=R.control?`${h} · ${c}: ${RET_LABEL[lv]} — click to set ${RET_LABEL[to]}${parts?'\n'+parts:''}`:`${h} · ${c}: ${RET_LABEL[lv]}\n控制面没开 · to change: ${cmd(h,c,to)}${parts?'\n'+parts:''}`
+      // what is stored may not be what the switch says now: a change reaches only the calls after it, so a cell with calls kept both ways says how many each
+      const mixed=sz&&rows.filter(r=>r.windows[win].calls).length>1||sz&&rows.some(r=>r.windows[win].calls&&r.retention!==lv)
+      const split=mixed?`<div class="num mix">已存 · stored: ${rows.filter(r=>r.windows[win].calls).map(r=>`${RET_LABEL[r.retention]||r.retention} ${r.windows[win].calls} 条`).join(' · ')}</div>`:''
+      // a cell no pattern of this harness's table row can ever fill: the switch stores the setting, but no call is ever classed so (4.6 §记录「保存级别」)
+      const nopat=(R.unmatched&&R.unmatched[h]||[]).includes(c)
+      const nopatNote=nopat?`<div class="num nopat" style="color:var(--amber)">无模式 · no pattern: never matches</div>`:''
+      html+=`<td title="${esc(title+(nopat?'\n无模式 · this harness has no pattern for '+c+': no call is ever classed so, the setting changes nothing yet':''))}"${nopat?' class="nopatcell" style="opacity:.6"':''}><button class="lvl ${lv}" data-h="${esc(h)}" data-c="${esc(c)}" data-to="${to}"${R.control?'':' disabled'}>${RET_LABEL[lv]}</button>${nopatNote}${sz?retNums(sumWin(rows,win))+split:need}</td>`
+    }
+    html+=`<td>${sz?retNums(T&&T.by_harness[h]&&T.by_harness[h][win]?{...T.by_harness[h][win]}:sumWin([],win)):need}</td></tr>`
+  }
+  if(sz){
+    const leg=sz.rows.filter(r=>r.retention==='legacy-meta')
+    if(leg.length){
+      html+=`<tr class="legacy"><th>D40 之前 · 只存了长度</th>`
+      for(const c of R.classes){
+        const w=sumWin(leg.filter(r=>r.class===c),win)
+        html+=`<td>${w.calls?`<div class="num">${w.calls} 条 · 请求 ${fmtB(w.request_bytes)}</div><div class="num">响应体 未记录 · 存 ${w.stored_unrecorded?'≥':''}${fmtB(w.stored_bytes)}</div>`:'<div class="num">—</div>'}</td>`
+      }
+      const lw=sumWin(leg,win)
+      html+=`<td><div class="num">${lw.calls} 条 · 请求 ${fmtB(lw.request_bytes)}</div><div class="num">响应体 未记录</div></td></tr>`
+    }
+    html+=`<tr class="total"><th>合计 · total</th>${R.classes.map(c=>`<td>${retNums(T.by_class[c]&&T.by_class[c][win]?T.by_class[c][win]:sumWin([],win))}</td>`).join('')}<td>${retNums(T.all[win])}</td></tr>`
+  }
+  html+=`</tbody></table></div>`
+  html+=`<div class="ctrlhdr" style="margin-top:10px">线上 = request + response bodies as they went over the wire (also past the 64 MiB cap); 存 = the NDJSON lines stored, before sealing; 封存后 = 存 × the sealed files' overall ratio — one global number, so only an <b>估计</b> for any one class. `+
+    `Harnesses not listed have no calls yet: <code>asight keep ${esc(R.known_harnesses.filter(h=>!R.harnesses.includes(h)).join('|')||'<harness>')} &lt;class&gt; &lt;full|log&gt;</code> sets them in advance.</div>`
+  tl.dataset.mode='retention'; tl.innerHTML=html
+  // the ledger: where each number comes from, the disk, what changed lately
+  const D=R.disk||{}, g=D.groups||{}, S=R.seal||{}
+  let L=`<div class="curmeta">⚙ 保存什么 · where the numbers come from</div>`
+  L+=sz?`<div style="color:var(--dim);font-size:10px;margin-bottom:6px">按类数字截至库里最新一条调用 ${esc(sz.as_of||'—')}(不是 <code>asight etl</code> 跑的时刻;之后的调用要再跑一次才计入)· newest call in the store, not live · windows end ${esc(fmtWhen(sz.windows_end))}</div>`:`<div style="color:var(--amber);font-size:10px;margin-bottom:6px">${esc(R.sizes_reason||'需要先跑 asight etl')}</div>`
+  L+=`<h2><span class="gi" style="background:var(--accent)"></span><span style="text-transform:none">~/.asight</span> 盘上占用 <span class="ct">${fmtB(D.total_bytes)}</span></h2><div style="color:var(--dim);font-size:10px">lstat file sizes, live · ${D.files??0} files</div>`
+  for(const [k,l] of [['captures','采集文件 · captures'],['sealed','封存文件 · sealed'],['sessions','sessions/ 分片副本 · shard copies'],['duckdb','DuckDB'],['logs','日志 · logs'],['other','其他 · other']]) L+=`<div class="res"><div class="top"><span class="nm">${esc(l)}</span><span class="via">${fmtB(g[k]&&g[k].bytes)}</span></div></div>`
+  if((D.unreadable||[]).length) L+=`<div style="color:var(--amber);font-size:10px">⚠ ${D.unreadable.length} path(s) could not be read, so the total is a floor: ${esc(D.unreadable.slice(0,3).map(u=>u.path).join(', '))}</div>`
+  if(R.db&&R.db.path) L+=`<div style="color:var(--dim);font-size:10px">analytics store ${esc(R.db.path)}${R.db.bytes!=null?' · '+fmtB(R.db.bytes):''} (it holds no bodies)</div>`
+  L+=`<div style="color:var(--dim);font-size:10px;margin-top:4px">${S.ratio!=null?`封存比 · seal ratio ${S.ratio.toFixed(3)} over ${S.files} sealed file(s) — 估计 only`:'没有可读的封存文件 · no readable sealed file: no once-sealed estimate'}</div>`
+  L+=`<h2><span class="gi" style="background:var(--green)"></span>最近的修改 · recent changes <span class="ct">${(R.changes||[]).length}</span></h2>`
+  L+=(R.changes||[]).slice().reverse().map(c=>`<div class="res"><div class="top"><span class="nm">${esc(c.harness)} · ${esc(c.class)}</span><span class="via">${esc(RET_LABEL[c.from]||c.from)} → ${esc(RET_LABEL[c.to]||c.to)}</span></div><div class="sub" style="font-size:10px;color:var(--dim)">${esc(fmtWhen(c.ts))} · ${esc(c.source||'?')}</div></div>`).join('')||'<div style="color:var(--dimmer);font-size:10px">none yet</div>'
+  if(R.changes_error) L+=`<div style="color:var(--amber);font-size:10px">⚠ the change log could not be read: ${esc(R.changes_error)}</div>`
+  led.innerHTML=L
+  document.getElementById('stats').innerHTML=sz?`<span><b>${T.all.all.calls}</b> calls kept</span><span><b>${fmtB(T.all.all.stored_bytes)}</b> stored</span>`:`<span>sizes: 需要先跑 asight etl</span>`
+  document.querySelectorAll('#timeline .retwin button').forEach(b=>b.onclick=()=>{ retWin=b.dataset.win; try{ localStorage.setItem('asight.retWin',retWin) }catch{} retSig=null; renderRetentionView() })
+  document.querySelectorAll('#timeline .lvl').forEach(b=>b.onclick=()=>{ if(b.disabled) return; b.disabled=true; setRetentionLevel(b.dataset.h,b.dataset.c,b.dataset.to) })
+  pollRetention()
+}
 
 // ── D38 capture health (1.2 顶栏 #caphealth · 1.5 状态矩阵 · 4.4 /api/capture-health) ─────────────────────────
 // Its OWN 1.5 s timer: not the "live" checkbox, not poll() (which returns early on an empty board, in the control view

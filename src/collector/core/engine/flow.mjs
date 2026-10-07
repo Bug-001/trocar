@@ -25,6 +25,15 @@ const targetOf = (authority) => (authority.startsWith('[') && authority.includes
 // the codes the daemon's policy() may hand the engine for a row (RFC 4.6 §记录 连接行怎么落码)
 const DAEMON_CODES = ['not-trust-path', 'untracked', 'untrusted']
 const closedBefore = (side) => ({ type: 'closed_before_decision', message: `the ${side} closed before a routing decision`, side })
+// The upstream answered the ENGINE's TLS handshake with an alert that says it wanted something the engine cannot give:
+// a client certificate (mTLS: 'certificate required' under TLS 1.3; 'handshake failure' / 'bad certificate' / 'no certificate'
+// under 1.2), or it refused this handshake for a reason the agent's own would not meet. Node names the alert from OpenSSL's
+// reason text, which differs by version ('sslv3 alert …' / 'ssl/tls alert …'), so the code is matched on its tail.
+// A network failure (reset, timeout, refused) is not one: it keeps closing the client (RFC 4.6 §引擎 5).
+const UPSTREAM_REFUSAL = /^ERR_SSL_.*ALERT_(CERTIFICATE_REQUIRED|HANDSHAKE_FAILURE|BAD_CERTIFICATE|NO_CERTIFICATE)$/
+const refusedByUpstream = (err) => UPSTREAM_REFUSAL.test(String((err && err.code) || ''))
+const refusalWhy = (err, clientMoved) => `${err.code}: the upstream refused the engine's TLS handshake (a host that wants a client certificate does); ` +
+  (clientMoved ? 'this connection is closed and the next one to the host is passed through' : "passed through, so the agent's own handshake reaches the host")
 
 export function handleFlow(client, meta, ctx) {
   const t0 = Date.now()
@@ -286,12 +295,13 @@ export function handleFlow(client, meta, ctx) {
   function stepAside(upTls, buf, cSock, host, isTunnel, key, cause, why) {
     handedOff = true                                    // the original upstream closes under us; we own teardown
     try { upTls.destroy() } catch { /* ignore */ }
-    if (cause === 'upstream-cert') { ctx.negCache.mark(key, { cause, meta, host }); ctx.counters.notCaptured.upstreamCert++ }
+    if (cause === 'upstream-handshake') ctx.negCache.mark(key, { cause, meta, host })
+    else if (cause === 'upstream-cert') { ctx.negCache.mark(key, { cause, meta, host }); ctx.counters.notCaptured.upstreamCert++ }
     else { ctx.counters.notCaptured.leafError++; ctx.failure({ code: 'leaf-error', flow_id: rec.flow_id, host, reason: why }) }
     rec.not_captured = cause; rec.reason = why
     if (isTunnel) {
       try { cSock.destroy() } catch { /* ignore */ }
-      return finish('tunnel', { host, error: { type: cause.replace('-', '_'), message: why, side: cause === 'upstream-cert' ? 'upstream' : 'engine' } })
+      return finish('tunnel', { host, error: { type: cause.replace('-', '_'), message: why, side: cause === 'leaf-error' ? 'engine' : 'upstream' } })
     }
     setDecision('splice', false)
     const fresh = ctx.connectUpstream(meta.dst)
@@ -322,7 +332,12 @@ export function handleFlow(client, meta, ctx) {
     const takeHeld = () => { cSock.removeListener('data', hold); cSock.pause(); return held.length ? Buffer.concat([buf, ...held]) : buf }
     upTls.on('error', (err) => {
       waitDone()
-      if (!clientTls) { try { cSock.destroy() } catch { /* ignore */ }; finish(isTunnel ? 'tunnel' : 'decrypt', { host, not_captured: 'error', error: { type: err.code || 'upstream_tls_error', message: msgOf(err), side: 'upstream' } }) }
+      if (clientTls) return
+      // The upstream answered our handshake with an alert that means it wants a client certificate (mTLS, TLS 1.2: the
+      // refusal comes before the handshake is done). The client has not been touched yet, so this is the same case as
+      // an unverifiable certificate: the client's own handshake, certificate and all, goes to the real host (§引擎 5).
+      if (refusedByUpstream(err) && !finished && !handedOff) return guard(() => stepAside(upTls, takeHeld(), cSock, host, isTunnel, key, 'upstream-handshake', refusalWhy(err, false)))()
+      try { cSock.destroy() } catch { /* ignore */ }; finish(isTunnel ? 'tunnel' : 'decrypt', { host, not_captured: 'error', error: { type: err.code || 'upstream_tls_error', message: msgOf(err), side: 'upstream' } })
     })
     upTls.on('secureConnect', guard(() => {
       waitDone()
@@ -357,6 +372,17 @@ export function handleFlow(client, meta, ctx) {
         ctx.negCache.observe(key, { rejected: true, meta, host })
       }
       clientTls.on('error', judge); clientTls.on('end', judge); clientTls.on('close', judge)
+      // TLS 1.3: a host that wants a client certificate says so AFTER our handshake is done — the client is already on our
+      // leaf and cannot be moved to the real host, so this one connection fails. What is not allowed is to fail it again:
+      // the (pid, host) is passed through from the next connection, at once (an alert is an answer, not a guess). An alert
+      // that comes after the upstream has spoken is not this, and counts for nothing here.
+      let upstreamSpoke = false
+      upTls.once('data', () => { upstreamSpoke = true })
+      upTls.on('error', (err) => {
+        if (upstreamSpoke || finished || !refusedByUpstream(err)) return
+        notCaptured('upstream-handshake', refusalWhy(err, true))
+        ctx.negCache.mark(key, { cause: 'upstream-handshake', meta, host })
+      })
       onSecure(clientTls, upTls)
     }))
   }
@@ -365,7 +391,7 @@ export function handleFlow(client, meta, ctx) {
   const startTee = (host, scheme) => {
     activeTee = createExchangeTee({
       flow: { id: rec.flow_id, host, scheme, dst: meta.dst, proc: { pid: meta.pid, exe: meta.exe ?? null, agent: meta.agent } },
-      recordStore: ctx.store, isRecording: ctx.isRecording, wsTerminal: meta.wsTerminal ?? null, onFailure: ctx.failure,
+      recordStore: ctx.store, isRecording: ctx.isRecording, wsTerminal: meta.wsTerminal ?? null, retention: ctx.retention, onFailure: ctx.failure,
     })
     return activeTee
   }

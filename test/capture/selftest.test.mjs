@@ -109,3 +109,21 @@ test('readRecords honors a limit (bounded sampling for the self-test)', fixtureG
   const capped = await readRecords(FIXTURE, { limit: 5 });
   assert.equal(capped.length, 5);
 });
+
+// D40 audit (缺接线): an LLM call the operator set to 「只记日志」 (`asight keep`, body_retention:'log') has no req_body BY CHOICE. `asight doctor` ②
+// counted it as a missing verbatim req_body and printed ✗ for a setting that was working.
+test('qCorrect: a call kept at the log level is counted apart, not as a missing verbatim req_body (D40)', () => {
+  const kept = { endpoint: '/v1/messages', req_body: '{"model":"m"}', resp: { usage: { output_tokens: 1 } } };
+  const logged = { endpoint: '/v1/messages', req_body: { raw_chars: 13, verbatim: false }, body_retention: 'log', resp: { status: 200, kind: 'json', raw_chars: 4, verbatim: false } };
+  const mixed = qCorrect([kept, logged]);
+  assert.deepEqual([mixed.ok, mixed.llm, mixed.good, mixed.badReq, mixed.logged], [true, 1, 1, 0, 1], 'the kept call is validated, the logged one is only counted');
+  assert.match(mixed.note, /1 LLM call\(s\) kept as a log line only/); assert.doesNotMatch(mixed.note, /missing verbatim/);
+  const only = qCorrect([logged, logged]);
+  assert.deepEqual([only.llm, only.badReq, only.logged], [0, 0, 2], 'nothing to validate, nothing missing: llm === 0 is the ⚠ case in the doctor, not ✗');
+  assert.match(only.note, /no LLM call kept a body to validate/); assert.match(only.note, /2 LLM call\(s\) kept as a log line only/);
+  // a real loss is still a loss: an inference record WITHOUT the log marker and without a body
+  assert.equal(qCorrect([{ endpoint: '/v1/messages', req_body: { raw_chars: 13, verbatim: false }, resp: { usage: {} } }]).badReq, 1);
+  // and the whole self-test: the log call does not turn ② red
+  const run = runSelfTest({ records: [kept, logged], srcMeta: { exists: true, bytes: 1, mtimeMs: 1 }, files: [] });
+  assert.equal(run.q2.ok, true);
+});

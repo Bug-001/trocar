@@ -24,6 +24,9 @@ import { createEngine } from './core/engine/engine.mjs'
 import { appendEvent, createFailureRecorder } from './core/events.mjs'
 import { EVENT, CODE, trustReasonText } from './core/codes.mjs'
 import { procIdentity, captureHealth } from '../health/read.mjs'
+import { createRetention, retentionFile } from '../capture/retention.mjs'
+import { endpointClass } from '../capture/envelope.mjs'
+import { makeClassifier, harnessIdOfAgent } from '../dissect/traffic.mjs'
 
 export { loadArch } // the CLI reaches arch only through this file (layering rule 5)
 
@@ -83,7 +86,7 @@ export function healthOnDisk(dir) {
   try { return captureHealth({ home: path.dirname(dir) }) } catch (e) { return { error: `capture health could not be read: ${errText(e)}` } }
 }
 
-async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = procIdentity, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000 }) {
+async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = procIdentity, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000 }) {
   const P = collectorPaths(dir)
   const failure = createFailureRecorder(P.dir, { log })
   let manifest
@@ -138,6 +141,16 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       failure.write({ event: 'ca-ok', file: caState.file, reason: 'the collector CA is usable again: leaves are signed with it and agents are judged against it from now on' })
     }, caCheckMs)
     caTimer.unref()
+    // D40 (4.6 §记录「保存级别」): which traffic class a call is and how much of it to keep. The settings file is read by the
+    // engine at the start of every request (re-checked at most once a second, no restart) and a problem with it is a failure event
+    // here (flows/, folded) — the call is kept in full meanwhile. The class patterns are the read-side harness table's data
+    // (src/dissect), handed in as a function: the core names no harness (D20, 0.1 §5).
+    const keep = createRetention({
+      file: retentionPath || retentionFile(path.dirname(P.dir)),
+      classify: makeClassifier({ endpointClass, rows: trafficRows, onInvalid: (b) => failure.event({ where: 'retention', code: 'pattern-invalid', reason: `a traffic pattern of ${b.harness} is skipped (${b.reason}): ${JSON.stringify(b.entry)}` }) }),
+      onFailure: (rec) => failure.event(rec),
+      onOk: (rec) => failure.write(rec),
+    })
     const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error'), e && e.file ? { file: e.file } : {}) })
     // switch / helper events: their own descriptor (events.mjs, a lost line becomes a log-gap), and every failure
     // among them carries `reason`
@@ -242,6 +255,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       issuer, store, upstreamCa,
       policy: (meta, host) => tracker.policy(meta, host),
       isRecording: () => sw.isRecording(), // sampled per request (4.6 §开关): a request after off is never recorded
+      retention: (meta, host, method, path) => keep.decide({ harness: harnessIdOfAgent(meta && meta.agent), host, method, endpoint: path }), // sampled with it (D40)
       onFailure: (rec) => failure.event(rec), // the engine's and the WebSocket recorder's failures: flows/, folded
       onError: (e) => log('engine', e), // stderr only: every one of them is also a record through onFailure
     })

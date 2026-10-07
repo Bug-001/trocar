@@ -13,6 +13,12 @@ import zlib from 'node:zlib';
 const UTF8 = new TextDecoder('utf-8', { fatal: true });
 // A body that decompresses past this is not expanded (a bomb, or not a request): it is labelled, not loaded.
 export const MAX_DECODED_BYTES = 256 * 1024 * 1024;
+// D40: any host of any agent can now send a compressed body, not only an inference endpoint, so a record that is not an inference call
+// is expanded only up to this much (the board shows no more than 1 MiB of a body anyway, src/view/control-wire.mjs). Over it the wire
+// bytes stay as stored and the call is labelled 「压缩请求体未解码」 — 12 records of 9 KB each measured 2.4 GB of heap at the old limit.
+// The capture side has the same number (src/capture/request-body.mjs).
+export const NON_INFERENCE_MAX_DECODED_BYTES = 1024 * 1024;
+export const decodeLimitOf = (rec) => (rec && rec.is_llm_call === true ? MAX_DECODED_BYTES : NON_INFERENCE_MAX_DECODED_BYTES);
 
 // The wire content-encoding of the request body, or null (no encoding, or `identity`).
 export function requestEncodingOf(rec) {
@@ -41,7 +47,7 @@ const stamp = (rec, k, v) => Object.defineProperty(rec, k, { value: v, enumerabl
 
 // → rec (the same object). Idempotent. Sets rec.req_body to the decoded text and stamps _reqBodyFrom =
 // 'reader-decoded'; on failure leaves req_body as it was and stamps _reqBodyDecodeError = <reason>.
-export function expandRequestBody(rec, { maxBytes = MAX_DECODED_BYTES } = {}) {
+export function expandRequestBody(rec, { maxBytes = decodeLimitOf(rec) } = {}) {
   if (!rec || typeof rec !== 'object' || typeof rec.req_body === 'string') return rec;
   if (rec._reqBodyFrom || rec._reqBodyDecodeError) return rec; // already tried
   if (typeof rec.req_body_b64 !== 'string' || !requestEncodingOf(rec)) return rec;

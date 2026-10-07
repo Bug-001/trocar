@@ -47,7 +47,7 @@ test('early final response (413 mid-upload): prefix body labelled req_partial:ea
   t.fromUpstream(Buffer.from('HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\n\r\n'))
   t.fromClient(Buffer.from('"n":123}GET /next HTTP/1.1\r\n\r\n'))
   t.fromUpstream(Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'))
-  assert.deepEqual(out.map((e) => [e.endpoint, e.resp.status, e.req_body, e.req_partial]), [['/v1/messages', 413, '{"model":"m",', 'early-response'], ['/next', 200, { raw_chars: 0, verbatim: false }, undefined]])
+  assert.deepEqual(out.map((e) => [e.endpoint, e.resp.status, e.req_body, e.req_partial]), [['/v1/messages', 413, '{"model":"m",', 'early-response'], ['/next', 200, '', undefined]])
   assert.equal('req_truncated' in out[0], false)
   assert.equal(out[1].method, 'GET'); assert.equal(out[1].req_head_raw, 'GET /next HTTP/1.1\r\n\r\n')
 })
@@ -119,7 +119,7 @@ test('WebSocket 101: no HTTP envelope for the upgrade; frames after it (even in 
   t.fromClient(cframe('ping'))
   t.fromUpstream(sframe('done'))
   assert.deepEqual(out.map((e) => [e.seq, e.transport, e.req_body, e.resp.messages ?? e.resp.status]),
-    [[0, undefined, { raw_chars: 0, verbatim: false }, 200], [1, 'ws', 'early', ['done']], [2, 'ws', 'ping', ['done']]], 'the first call takes the upgrade\'s seq: no gap, no duplicate')
+    [[0, undefined, '', 200], [1, 'ws', 'early', ['done']], [2, 'ws', 'ping', ['done']]], 'the first call takes the upgrade\'s seq: no gap, no duplicate')
   assert.equal(out[2].req_head_raw, UPGRADE); assert.equal(out[2].resp_head_raw, SWITCH)
   assert.equal(t.wsSummary().calls, 2)
   t.upstreamEnded(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }))
@@ -227,4 +227,102 @@ test('a gzip request body is recorded decoded, its wire bytes kept; the bytes th
   t.fromUpstream(Buffer.from('HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}'))
   assert.equal(out[0].req_body, '{"model":"m"}'); assert.equal(out[0].req_body_b64, gz.toString('base64')); assert.equal(out[0].req_content_encoding, 'gzip')
   assert.ok(wire.equals(copy), 'recording never rewrites the forwarded bytes')
+})
+
+// ── D40 (RFC 4.6 §记录「保存级别」): class + level sampled when the request starts; wire lengths exact past the cap ─────────
+const ok = (body, extra = '') => `HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n${extra}Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
+const post = (path, body, extra = '') => `POST ${path} HTTP/1.1\r\n${extra}Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
+
+test('D40: the retention callback is asked once per request with (proc, host, method, path); its class lands in traffic_class, host and body_wire_bytes are written', () => {
+  const { out, store } = sink(); const asked = []
+  const t = createExchangeTee({ flow: FLOW, recordStore: store, retention: (...a) => { asked.push(a); return { class: 'telemetry', level: 'full' } } })
+  t.fromClient(Buffer.from(post('/api/event_logging/v2/batch?x=1', '{"e":1}'))); t.fromUpstream(Buffer.from(ok('{"ok":1}')))
+  assert.deepEqual(asked, [[FLOW.proc, 'h.test', 'POST', '/api/event_logging/v2/batch?x=1']])
+  assert.deepEqual([out[0].traffic_class, out[0].host, out[0].body_wire_bytes, out[0].req_body, 'body_retention' in out[0]], ['telemetry', 'h.test', { req: 7, resp: 8 }, '{"e":1}', false])
+  const bare = sink(); const u = createExchangeTee({ flow: FLOW, recordStore: bare.store })
+  u.fromClient(Buffer.from(post('/v1/messages', '{}'))); u.fromUpstream(Buffer.from(ok('{}')))
+  assert.equal(bare.out[0].traffic_class, 'llm', 'no callback: every call is full, told by its endpoint')
+})
+
+test('D40 · K2: at the log level nothing is buffered — req_body and resp are sizes — and the headers and the exact wire lengths stay', () => {
+  const { out, store } = sink()
+  const t = createExchangeTee({ flow: FLOW, recordStore: store, retention: () => ({ class: 'telemetry', level: 'log' }) })
+  const body = 'x'.repeat(300)
+  t.fromClient(Buffer.from(`POST /api/event_logging/v2/batch HTTP/1.1\r\nAuthorization: Bearer k\r\nContent-Length: 300\r\n\r\n${body.slice(0, 100)}`)); t.fromClient(Buffer.from(body.slice(100)))
+  t.fromUpstream(Buffer.from('HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nRequest-Id: r1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n3\r\n!!!\r\n0\r\n\r\n'))
+  const [e] = out
+  assert.deepEqual(e.req_body, { raw_chars: 300, verbatim: false })
+  assert.deepEqual(e.resp, { status: 200, kind: 'json', headers: { 'content-type': 'application/json', 'request-id': 'r1', 'transfer-encoding': 'chunked' }, request_id: 'r1', raw_chars: 8, verbatim: false })
+  assert.deepEqual([e.body_retention, e.body_wire_bytes, e.req_headers.authorization], ['log', { req: 300, resp: 8 }, 'Bearer k'])
+  assert.match(e.req_head_raw, /^POST \/api\/event_logging/); assert.match(e.resp_head_raw, /^HTTP\/1.1 200/)
+  assert.doesNotMatch(JSON.stringify(e), /xxxxxxxx|hello/, 'no byte of either body is in the envelope')
+})
+
+test('D40 · K2: body_wire_bytes is the full length past the 64 MiB cap, at the log level (a 65 MiB request and a 66 MiB response; no label, nothing was kept) and at full (a cut prefix + the exact length)', () => {
+  const MiB = 1 << 20, chunk = Buffer.alloc(MiB, 0x61)
+  const lg = sink()
+  const t = createExchangeTee({ flow: FLOW, recordStore: lg.store, retention: () => ({ class: 'files', level: 'log' }) })
+  t.fromClient(Buffer.from(`POST /upload HTTP/1.1\r\nContent-Length: ${65 * MiB}\r\n\r\n`)); for (let i = 0; i < 65; i++) t.fromClient(chunk)
+  t.fromUpstream(Buffer.from(`HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: ${66 * MiB}\r\n\r\n`)); for (let i = 0; i < 66; i++) t.fromUpstream(chunk)
+  assert.deepEqual(lg.out[0].body_wire_bytes, { req: 65 * MiB, resp: 66 * MiB })
+  assert.deepEqual([lg.out[0].req_body, lg.out[0].resp.raw_chars, 'req_truncated' in lg.out[0], 'truncated' in lg.out[0].resp], [{ raw_chars: 65 * MiB, verbatim: false }, 66 * MiB, false, false])
+  const full = sink(); const f = createExchangeTee({ flow: FLOW, recordStore: full.store, maxBodyBytes: 8 })
+  f.fromClient(Buffer.from(post('/upload', '0123456789abcdef'))); f.fromUpstream(Buffer.from(ok('{"long":"response body"}')))
+  const e = full.out[0]
+  assert.deepEqual([e.req_body, e.req_truncated, e.req_body_bytes, e.body_wire_bytes], ['01234567', true, 8, { req: 16, resp: 24 }])
+  assert.deepEqual([e.resp.truncated, e.resp.body_bytes], [true, 8])
+})
+
+// review (F11): the envelope is the same whether or not the bytes were held, so the assertions above cannot tell a log-level exchange that buffers a
+// 64 MiB body from one that does not — and not buffering is the point of the level (4.6 §日志体积预算: a download must not sit in memory). Setting the
+// `keep` flag true left all of them green. What is held is what gets concatenated into the envelope: the spy counts those bytes.
+test('F11 — at the log level a body is never held: only the heads are concatenated; at full the same traffic concatenates both bodies', () => {
+  const MiB = 1 << 20, chunk = Buffer.alloc(MiB, 0x61), orig = Buffer.concat
+  const concatenated = (level) => {
+    const { store, out } = sink()
+    const t = createExchangeTee({ flow: FLOW, recordStore: store, retention: () => ({ class: 'files', level }) })
+    let total = 0
+    Buffer.concat = (list, len) => { for (const b of list) total += b.length; return orig.call(Buffer, list, len) }
+    try {
+      t.fromClient(Buffer.from(`POST /upload HTTP/1.1\r\nContent-Length: ${4 * MiB}\r\n\r\n`)); for (let i = 0; i < 4; i++) t.fromClient(chunk)
+      t.fromUpstream(Buffer.from(`HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: ${4 * MiB}\r\n\r\n`)); for (let i = 0; i < 4; i++) t.fromUpstream(chunk)
+    } finally { Buffer.concat = orig }
+    assert.equal(out.length, 1)
+    assert.deepEqual(out[0].body_wire_bytes, { req: 4 * MiB, resp: 4 * MiB }, 'counted either way')
+    return total
+  }
+  assert.ok(concatenated('log') < 64 * 1024, 'log: nothing of either body was held')
+  assert.ok(concatenated('full') >= 8 * MiB, 'full: both bodies were held (so the spy sees what it is meant to see)')
+})
+
+test('D40: the level is the one sampled when the request STARTED — a change in the middle of the body does not reach it; the next request takes the new one', () => {
+  const { out, store } = sink(); let level = 'log'
+  const t = createExchangeTee({ flow: FLOW, recordStore: store, retention: () => ({ class: 'telemetry', level }) })
+  t.fromClient(Buffer.from('POST /a HTTP/1.1\r\nContent-Length: 6\r\n\r\nabc')); level = 'full'; t.fromClient(Buffer.from('def'))
+  t.fromUpstream(Buffer.from(ok('{"a":1}')))
+  t.fromClient(Buffer.from(post('/b', 'ghi'))); t.fromUpstream(Buffer.from(ok('{"b":1}')))
+  assert.deepEqual([out[0].body_retention, out[0].req_body, out[1].body_retention, out[1].req_body, out[1].resp.body], ['log', { raw_chars: 6, verbatim: false }, undefined, 'ghi', { b: 1 }])
+  // and the other way round — the one that matters for invariant 2: a call that started `full` is kept in full when the operator
+  // turns the class to `log` while its request is still arriving and while its response is still arriving
+  level = 'full'
+  t.fromClient(Buffer.from('POST /c HTTP/1.1\r\nContent-Length: 6\r\n\r\nabc')); level = 'log'; t.fromClient(Buffer.from('def'))
+  t.fromUpstream(Buffer.from('HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 7\r\n\r\n{"c"')); level = 'log'; t.fromUpstream(Buffer.from(':1}'))
+  assert.deepEqual([out[2].req_body, 'body_retention' in out[2], out[2].resp.body], ['abcdef', false, { c: 1 }])
+})
+
+test('D40: pipelined requests of different levels each get the level of their own request: a response follows the request it answers', () => {
+  const { out, store } = sink()
+  const t = createExchangeTee({ flow: FLOW, recordStore: store, retention: (_p, _h, _m, path) => ({ class: 'other', level: path === '/quiet' ? 'log' : 'full' }) })
+  t.fromClient(Buffer.from(`${post('/quiet', 'q')}${post('/loud', 'l')}`))
+  t.fromUpstream(Buffer.from(`${ok('{"q":1}')}${ok('{"l":1}')}`))
+  assert.deepEqual(out.map((e) => [e.endpoint, e.body_retention, e.resp.body, e.resp.raw_chars]), [['/quiet', 'log', undefined, 7], ['/loud', undefined, { l: 1 }, undefined]])
+})
+
+test('D40: a retention callback that throws or answers nonsense is `full`, and never stops the framing', () => {
+  for (const retention of [() => { throw new Error('boom') }, () => null, () => ({ class: 'nonsense', level: 'half' })]) {
+    const { out, store } = sink()
+    const t = createExchangeTee({ flow: FLOW, recordStore: store, retention })
+    t.fromClient(Buffer.from(post('/v1/messages', '{"a":1}'))); t.fromUpstream(Buffer.from(ok('{}')))
+    assert.deepEqual([out[0].req_body, 'body_retention' in out[0], ['llm', 'other'].includes(out[0].traffic_class)], ['{"a":1}', false, true])
+  }
 })

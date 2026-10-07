@@ -8,7 +8,11 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-const DEFAULT_STATE = { version: 1, desired: 'off', policy: 'auto', extra_hosts: [] }
+// Decrypt policy (RFC 4.6 §引擎 解密策略, D40): the default is `all` — every host of a trusted agent process — so what an agent does
+// besides calling the model is seen. `auto` (the known API hosts only) stays as an opt-down the operator chose.
+// An install that never wrote a policy gets `all`; a state.json that already says `auto` keeps it: on disk an old default
+// `auto` cannot be told from a chosen one, so what is written is respected.
+const DEFAULT_STATE = { version: 1, desired: 'off', policy: 'all', extra_hosts: [] }
 
 // An unreadable state file (not a missing one) is reported through onError and read as the default `off`.
 export function readState(file, onError = () => {}) {
@@ -17,7 +21,7 @@ export function readState(file, onError = () => {}) {
     return {
       ...DEFAULT_STATE,
       desired: s.desired === 'on' ? 'on' : 'off',
-      policy: s.policy === 'all' ? 'all' : 'auto',
+      policy: s.policy === 'auto' ? 'auto' : 'all',
       extra_hosts: Array.isArray(s.extra_hosts) ? s.extra_hosts.filter((h) => typeof h === 'string') : [],
       updated_at: s.updated_at || null,
     }

@@ -6,6 +6,7 @@
 //   off     — revert steer (+ optional --remove-ca)
 //   verify  — assert the CA is in the user-level trust store (no machine trust)
 //   doctor  — onboard self-check: deps probe + 「测试」四问 (4.1:61 / 4.5:41,77)
+//   keep    — D40 what is kept of each call, per harness × traffic class: show / set (src/capture/keep.mjs)
 //   raw     — D35 sealed raw logs: seal (closed shards, or --legacy pre-D35 files) · verify · compare · export · journal
 import path from 'node:path'
 import { asightHome, captureOut, mitmOut, serveSource } from '../src/paths.mjs';
@@ -23,6 +24,13 @@ const args = parseArgs(rest);
 const flag = args.flag;
 const positional = args.positional;
 const r = (...p) => path.join(ROOT, ...p);
+
+// D40 (RFC 4.6 §记录「保存级别」): the retention settings the OLD capture applies — the reverse proxy and the MITM. The wiring is
+// src/legacy-retention.mjs (it joins src/capture/ to the read-side table's classifier, which src/capture/ may not import).
+async function legacyRetention() {
+  const { buildLegacyRetention } = await import(r('src', 'legacy-retention.mjs'));
+  return buildLegacyRetention();
+}
 
 async function main() {
   if (cmd === '--version' || cmd === '-v' || cmd === 'version') {
@@ -164,7 +172,8 @@ async function main() {
       const sink = createCaptureSink(out);
       const life = legacyLifecycle({ source: 'proxy', port, out });
       let n = 0;
-      const server = createReverseProxy({ target, upstreamProxy, keepRawSse, onEvent: (e) => appendLegacyEvent(e), onEnvelope: (env) => { if (sink.write(env) && ++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
+      const retention = await legacyRetention();
+      const server = createReverseProxy({ target, upstreamProxy, keepRawSse, retention, onEvent: (e) => appendLegacyEvent(e), onEnvelope: (env) => { if (sink.write(env) && ++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
       server.on('error', (e) => { appendLegacyEvent(failureOf('proxy', e, 'start-failed')); if (e.code === 'EADDRINUSE') process.exit(1); });
       server.listen(port, '127.0.0.1', () => { life.started(server.address().port); console.log(`asight capture (reverse-proxy tee) → ${target}\n  listening http://127.0.0.1:${port}  → ${out}\n  point the harness at it: HTTPS_PROXY / base_url → http://127.0.0.1:${port} (or run: asight on)`); });
       break;
@@ -197,7 +206,8 @@ async function main() {
       const sink = createCaptureSink(out);
       const life = legacyLifecycle({ source: 'mitm', port, out });
       let n = 0;
-      const server = createMitmProxy({ targetHost, leaf, upstreamProxy, keepRawSse, onEvent: (e) => appendLegacyEvent(e), log: (m) => console.error(m), onEnvelope: (env) => { if (sink.write(env) && ++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
+      const retention = await legacyRetention();
+      const server = createMitmProxy({ targetHost, leaf, upstreamProxy, keepRawSse, retention, onEvent: (e) => appendLegacyEvent(e), log: (m) => console.error(m), onEnvelope: (env) => { if (sink.write(env) && ++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
       server.on('error', (e) => { appendLegacyEvent(failureOf('mitm', e, 'start-failed')); if (e.code === 'EADDRINUSE') process.exit(1); });
       // D38 L-12: the Desktop steer this MITM serves is checked at start and every 60 s; losing it is a line
       if (process.platform === 'darwin') {
@@ -268,6 +278,25 @@ async function main() {
         if (!agents.reserved) console.log('  capture agents removed:', MITM_LABEL, '+', ENV_LABEL);
       } else {
         console.log(JSON.stringify({ steer: await steer.status(), agents: statusCaptureAgents() }, null, 2));
+      }
+      break;
+    }
+    case 'keep': { // D40 (RFC 4.6 §记录「保存级别」): what is kept of each call, per harness × traffic class — show and set; no daemon needed
+      const { runKeep, formatKeepSizes } = await import(r('src', 'capture', 'keep.mjs'));
+      const { retentionHarnessIds, unmatchedClasses } = await import(r('src', 'dissect', 'traffic.mjs'));
+      // `--db <path>` names the analytics store the sizes are read from (default: the one `asight serve` opens), `--json` prints the report
+      // the board's /api/retention serves — both are the show mode's; the three words (harness class level) are the set mode's
+      const showing = args.positionals.length === 0 && !rest.includes('--help') && !rest.includes('-h');
+      const asJson = showing && rest.includes('--json');
+      const report = async () => {
+        const { retentionReportFromStore } = await import(r('src', 'query', 'retention.mjs'));
+        const { DEFAULT_DB_PATH } = await import(r('src', 'db.mjs'));
+        return retentionReportFromStore({ dbPath: flag('--db', process.env.ASIGHT_DB || DEFAULT_DB_PATH) });
+      };
+      if (!asJson) process.exitCode = runKeep([...args.positionals, ...(rest.includes('--help') || rest.includes('-h') ? ['--help'] : [])], { harnesses: retentionHarnessIds(), unmatched: Object.fromEntries(retentionHarnessIds().map((h) => [h, unmatchedClasses(h)])) });
+      if (showing && !process.exitCode) {
+        try { const rep = await report(); console.log(asJson ? JSON.stringify(rep, null, 2) : formatKeepSizes(rep).join('\n')); }
+        catch (e) { console.error(`asight keep: the sizes could not be read (${(e && e.message) || e})`); process.exitCode = 1; }
       }
       break;
     }
@@ -543,6 +572,7 @@ usage:
   asight desktop {on|off|status} [--port 9899]  macOS-only: steer CC-Desktop's claude-code→anthropic into asight mitm (durable, reversible)
   asight on   [--proxy http://127.0.0.1:8899]   generate CA + install (user-level) + steer CC-CLI
   asight off  [--remove-ca]
+  asight keep [<harness|all> <class|all> <full|log>]   what is kept of each call, per harness × traffic class: show it with the sizes (--db <store>, --json), or set it (no daemon needed)
   asight uninstall                              one-step revert: remove CA + clear steer
   asight verify
   asight doctor [--source <ndjson>]             self-check: deps probe + 「测试」四问 (是否真在抓/抓得对/凭据没漏/没弱化全机 TLS)

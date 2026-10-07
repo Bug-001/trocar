@@ -92,7 +92,7 @@ async function relay({ reply = 'HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n', g
 // A trusted Claude Code agent (pid 7171) behind a real daemon, with a private-CA relay as its upstream; `inject(dst)` makes
 // the fake helper steer one more client connection to the engine and returns the client's raw socket. What a test then
 // does with that socket is the failure it wants (a refused leaf, a hang-up, garbage, a broken reply …).
-async function scene({ reply, got = null, daemon = {} } = {}) {
+async function scene({ reply, got = null, daemon = {}, policy = null } = {}) { // policy: the decrypt policy `on` is given; default is the product's (all, D40)
   const s = sandbox(); const p = fakeProc(); const up = await relay({ reply, got })
   const relayCa = path.join(s.home, 'relay-ca.pem'); fs.writeFileSync(relayCa, up.ca.certPem)
   fs.mkdirSync(path.join(s.home, '.claude'))
@@ -100,7 +100,7 @@ async function scene({ reply, got = null, daemon = {} } = {}) {
   await install(s)
   const { arch, clients } = fakeArch(p)
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], upstreamCa: up.ca.certPem, ...daemon })
-  await req(s.sock, 'POST', '/on', {})
+  await req(s.sock, 'POST', '/on', policy ? { policy } : {})
   p.add(7171, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
   await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 7171, pid: 7171, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
   await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 7171 && a.trusted))
@@ -232,7 +232,7 @@ test('F2 not captured: a direct connection of an untrusted agent is a failure-cl
 // product path: the same kinds of connection through the daemon, and what the endpoint makes of the rows — a failure-class
 // code is listed and turns the bar ⚠, an expected-class code is only counted.
 test('F2 table-driven: every connection row the bytes missed carries a closed not_captured; failure-class ones are listed and ⚠, expected-class ones only counted', async () => {
-  const S = await scene()
+  const S = await scene({ policy: 'auto' }) // `policy` is the code of a host outside `auto`; under the default `all` (D40) no host is outside
   const sink = net.createServer((c) => { c.on('error', () => {}); c.resume(); c.on('end', () => c.end()) })
   const banner = net.createServer((c) => { c.on('error', () => {}); c.end('SSH-2.0-banner\r\n') })
   await Promise.all([sink, banner].map((x) => new Promise((r) => x.listen(0, '127.0.0.1', r))))

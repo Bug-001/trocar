@@ -128,3 +128,25 @@ test('switch: a state file that cannot be written fails the request and leaves n
   await assert.rejects(sw.on())
   assert.deepEqual(fs.readdirSync(path.dirname(f)).filter((n) => n.includes('.tmp-')), [])
 })
+
+// D40 (RFC 4.6 §引擎 解密策略): the default decrypt policy is `all`; what is written on disk is respected (an old default
+// `auto` cannot be told from a chosen one), so only an install with NO policy gets `all`.
+test('D40 default policy: no state file, or no policy written → all; a state.json that says auto keeps auto; an unreadable file reads as the default', async () => {
+  const dir = path.dirname(tmpState())
+  fs.mkdirSync(dir, { recursive: true })
+  const at = (name, body) => { const f = path.join(dir, name); fs.writeFileSync(f, body); return f }
+  assert.equal(readState(path.join(dir, 'absent.json')).policy, 'all', 'a fresh install')
+  assert.equal(readState(at('nopolicy.json', JSON.stringify({ version: 1, desired: 'on', extra_hosts: [] }))).policy, 'all', 'a state that never named one')
+  assert.equal(readState(at('auto.json', JSON.stringify({ version: 1, desired: 'on', policy: 'auto', extra_hosts: [] }))).policy, 'auto', 'written auto is kept')
+  assert.equal(readState(at('all.json', JSON.stringify({ version: 1, desired: 'on', policy: 'all' }))).policy, 'all')
+  const errs = []
+  assert.equal(readState(at('torn.json', '{ torn'), (e) => errs.push(e)).policy, 'all'); assert.equal(errs.length, 1, 'an unreadable file is still reported')
+  // the first `on` of a fresh install writes `all`; a later `on` without a policy keeps what is there
+  const stateFile = path.join(dir, 'fresh', 'state.json')
+  await createSwitch({ redirector: fakeRedirector(), stateFile }).on()
+  assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).policy, 'all')
+  const old = at('old-install.json', JSON.stringify({ version: 1, desired: 'off', policy: 'auto', extra_hosts: [] }))
+  const sw = createSwitch({ redirector: fakeRedirector(), stateFile: old })
+  assert.equal((await sw.on()).policy, 'auto', 'turning on does not change the policy of an install that wrote one')
+  assert.equal((await sw.on({ policy: 'all' })).policy, 'all', 'the operator can still choose')
+})

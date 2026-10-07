@@ -2,7 +2,8 @@
 // frontend and the 3.2 tables: the frontend never assembles raw table/column names, and
 // every result speaks provider-neutral CANONICAL vocabulary (invariant 3 — no
 // cache_read_input_tokens etc. ever leaves here). Read-only; writes go through ETL (4.2).
-import { rebuildContext } from '../etl/orchestrator.mjs';
+import { rebuildContext, PROJECTION_VERSION } from '../etl/orchestrator.mjs';
+import { TRAFFIC_CLASS_IDS } from '../dissect/traffic.mjs';
 
 const N = (v) => (typeof v === 'bigint' ? Number(v) : v);
 function normRows(list) {
@@ -150,4 +151,52 @@ export async function resourceLifecycle(conn, sessionId) {
     if (open) segments.push(open); // still resident at session end (no evict observed)
     return { resource_id: r.resource_id, kind: r.kind, label: r.label, segments, loads };
   });
+}
+
+// ── 保存什么 (D40 · 3.5 查询集「保存什么」行 · 2.6 §D · 4.4 /api/retention) ───────────────────────────────────────────
+// What each (harness, traffic class, body_retention) holds, over the last 24 h, the last 7 d and everything: the number of
+// calls, the body bytes that went over the wire (request; response — with the calls whose response size was never recorded
+// counted apart, never added as 0), and the bytes stored (`record_bytes`, one NDJSON line each: the size before sealing;
+// calls whose stored size is unknown are counted apart too). `as_of` is the newest `ts` the projection holds (NOT the moment the ETL ran) — the numbers
+// stop at the last call the last `asight etl` read, never live. Every number comes from `calls` and nothing else: no source file is read.
+export const SIZE_WINDOWS = Object.freeze([['24h', 24 * 3600e3], ['7d', 7 * 24 * 3600e3], ['all', null]]);
+const RETENTION_ORDER = ['full', 'log', 'legacy-meta'];
+export const SIZE_COLUMNS = ['calls', 'request_bytes', 'response_bytes', 'response_unrecorded', 'stored_bytes', 'stored_unrecorded'];
+export async function retentionSizes(conn, { now = Date.now() } = {}) {
+  const have = new Set((await q(conn, "SELECT column_name FROM information_schema.columns WHERE table_name = 'calls'")).map((r) => r.column_name));
+  const missing = ['harness', 'traffic_class', 'body_retention', 'response_bytes', 'record_bytes'].filter((c) => !have.has(c));
+  const predates = (why) => Object.assign(new Error(`the analytics store predates D40 (${why}): run asight etl <source> --rebuild`), { code: 'predates-d40' });
+  if (missing.length) throw predates(`no ${missing.join(', ')} on calls`);
+  // The columns alone do not say it: `asight etl` adds them to an old store (applyDDL) BEFORE it refuses the incremental run, so a
+  // version-3 store can hold the six columns with NULL in every old row — which would read as "kept in full" and "other". The store's
+  // own projection version (4.2: the one number that says which rules wrote its rows) is what tells.
+  const [{ n: held }] = await q(conn, 'SELECT count(*) AS n FROM calls');
+  if (held > 0) {
+    let version = null;
+    try { const r = await q(conn, "SELECT value FROM etl_meta WHERE key = 'projection_version'"); if (r.length) version = Number(r[0].value); } catch { /* no etl_meta: written before D37 */ }
+    if (version !== PROJECTION_VERSION) throw predates(`its rows were written by projection version ${version ?? 'none (before D37)'}, this code reads ${PROJECTION_VERSION}`);
+    const [{ n: unset }] = await q(conn, 'SELECT count(*) AS n FROM calls WHERE body_retention IS NULL OR traffic_class IS NULL');
+    if (unset > 0) throw predates(`${unset} row(s) have no body_retention / traffic_class`);
+  }
+  const params = SIZE_WINDOWS.filter(([, ms]) => ms != null).map(([, ms]) => new Date(now - ms).toISOString());
+  const sel = [];
+  let pi = 0;
+  for (const [name, ms] of SIZE_WINDOWS) {
+    const w = ms == null ? 'TRUE' : `ts >= CAST($${++pi} AS TIMESTAMP)`;
+    sel.push(`count(*) FILTER (WHERE ${w}) AS "${name}_calls"`,
+      `COALESCE(sum(request_bytes) FILTER (WHERE ${w}), 0) AS "${name}_request_bytes"`,
+      `COALESCE(sum(response_bytes) FILTER (WHERE ${w}), 0) AS "${name}_response_bytes"`,
+      `count(*) FILTER (WHERE ${w} AND response_bytes IS NULL) AS "${name}_response_unrecorded"`,
+      `COALESCE(sum(record_bytes) FILTER (WHERE ${w}), 0) AS "${name}_stored_bytes"`,
+      `count(*) FILTER (WHERE ${w} AND record_bytes IS NULL) AS "${name}_stored_unrecorded"`);
+  }
+  const got = await q(conn,
+    `SELECT COALESCE(harness, 'unknown') AS harness, traffic_class AS class, body_retention AS retention, ${sel.join(', ')}
+     FROM calls GROUP BY ALL`, params);
+  const rank = (list, v) => (list.indexOf(v) < 0 ? list.length : list.indexOf(v));
+  const rows = got.map((r) => ({ harness: r.harness, class: r.class, retention: r.retention,
+    windows: Object.fromEntries(SIZE_WINDOWS.map(([name]) => [name, Object.fromEntries(SIZE_COLUMNS.map((c) => [c, r[`${name}_${c}`]]))])) }))
+    .sort((a, b) => (a.harness < b.harness ? -1 : a.harness > b.harness ? 1 : 0) || rank(TRAFFIC_CLASS_IDS, a.class) - rank(TRAFFIC_CLASS_IDS, b.class) || rank(RETENTION_ORDER, a.retention) - rank(RETENTION_ORDER, b.retention));
+  const [{ as_of }] = await q(conn, 'SELECT CAST(max(ts) AS VARCHAR) AS as_of FROM calls');
+  return { as_of: as_of ?? null, windows_end: new Date(now).toISOString(), rows };
 }
