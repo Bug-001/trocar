@@ -1182,9 +1182,19 @@ test('W69 hostSetOf: only a name the kernel\'s DOMAIN-SUFFIX rule can match is i
   for (const c of candidates) {
     const accepted = (() => { try { buildForwarderConfig(forwarder({ groups: [{ ...KIMI_GROUP, forms: [{ ...KIMI_GROUP.forms[0], hosts: [c.toLowerCase()] }] }] })); return true } catch { return false } })()
     const inSet = hostSetOf({ form: { hosts: { defaults: [] } }, extraHosts: [c] }).hosts.length === 1
-    assert.equal(inSet, accepted && !/^\d+(\.\d+){3}$/.test(c), `${JSON.stringify(c)}: in the set ${inSet}, generator accepts ${accepted}`)
+    assert.equal(inSet, accepted && !/^\d+(\.\d+){3}$/.test(c) && c !== 'localhost', `${JSON.stringify(c)}: in the set ${inSet}, generator accepts ${accepted}; an address literal and the name \`localhost\` are the two the generator takes and the rule never meets`)
   }
   assert.doesNotThrow(() => buildForwarderConfig(forwarder({ groups: [{ ...KIMI_GROUP, forms: [{ ...KIMI_GROUP.forms[0], hosts: r.hosts }] }] })), 'whatever the user wrote, `on` gets a set the config accepts')
+})
+
+test('W69 / OPEN 28 hostSetOf: the name `localhost` is said, not counted as captured — the kernel\'s own hosts table has made it 127.0.0.1 before the rules run, so DOMAIN-SUFFIX,localhost never meets it (a relay on this machine by name)', () => {
+  const b = box()
+  b.put('.kimi-code/config.toml', 'base_url = "http://localhost:8080/v1"\n')
+  const r = hostSetOf({ form: KIMI_VSCODE, readSettings: settingsOf(b.ctx()), extraHosts: ['LocalHost', 'localhost.', 'relay.localhost', 'localhost.example', 'mylocalhost'] })
+  assert.deepEqual(r.hosts, [...KIMI_DEFAULTS, 'relay.localhost', 'localhost.example', 'mylocalhost'], 'only the exact name is the one the hosts table turns into an address: a name under it, or beside it, is a name')
+  assert.deepEqual(r.dropped, ['localhost', 'localhost.'], 'the name from Kimi\'s settings, said once; the root-dot spelling of it too')
+  assert.doesNotThrow(() => buildForwarderConfig(forwarder({ groups: [{ ...KIMI_GROUP, forms: [{ ...KIMI_GROUP.forms[0], hosts: r.hosts }] }] })))
+  assert.deepEqual(hostSetOf({ form: { hosts: { defaults: ['localhost', 'a.example'] } } }), { hosts: ['a.example'], settings: 'absent', dropped: ['localhost'] }, 'a default host is judged the same way')
 })
 
 test('hostSetOf wants a form with a host set, and a reader when the form has settings to read', () => {
@@ -1198,8 +1208,8 @@ test('hostSetOf wants a form with a host set, and a reader when the form has set
 
 const PLAN_SRC = fs.readFileSync(fileURLToPath(new URL('../../../../src/collector/arch/win32/route-plan.mjs', import.meta.url)), 'utf8')
 
-test('route-plan.mjs imports only the config readers, forms.mjs and upstream.mjs, touches no disk, process, network or OS by itself (the files it reads come through the ctx it is given), and names no harness: its groups are data (W39)', () => {
-  assert.deepEqual(reaches(PLAN_SRC, ['../../core/config-read.mjs', './forms.mjs', './upstream.mjs']), [])
+test('route-plan.mjs imports only the config readers, forms.mjs, upstream.mjs and the rule text generator (the judge of a host name), touches no disk, process, network or OS by itself (the files it reads come through the ctx it is given), and names no harness: its groups are data (W39)', () => {
+  assert.deepEqual(reaches(PLAN_SRC, ['../../core/config-read.mjs', './forms.mjs', './upstream.mjs', '../../../netenv/mihomo/rules.mjs']), [])
   assert.ok(reaches("import fs from 'node:fs'\n", ['./forms.mjs']).length > 0, 'the scan can fail')
   assert.ok(reaches("/** the process. */\nconst x = process.platform\n", []).length > 0 && reaches('/** the process. */\nconst x = 1\n', []).length === 0, 'a call is found, prose in a comment is not')
   const code = PLAN_SRC.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')

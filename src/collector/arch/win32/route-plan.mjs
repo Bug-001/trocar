@@ -5,6 +5,7 @@
 // (`forms.mjs`): the harness is on, the user named an opt-in form, the upstream is something asight can dial. It reads, through the ctx it is given, the files the agents read; it writes nothing, opens no socket
 // and names no harness: the groups and forms it is given are the harness files' data (arch/ never imports harness/, the daemon hands them in).
 import { parseDotenv, parseJsonc } from '../../core/config-read.mjs'
+import { bypassRuleOf } from '../../../netenv/mihomo/rules.mjs'
 import { entryGate } from './forms.mjs'
 import { upstreamFor } from './upstream.mjs'
 
@@ -183,10 +184,14 @@ export function planRoutes({ netenv, groups, desired = null, optIns = [], manife
 
 // ---- the host set of a host-tree form (4.8 §3.5, OPEN 22) -------------------------------------------------------------------------------------------------
 
-// What the kernel's rule text takes as a host: the generator's own check (rules.mjs), held equal to it by a test that judges a table of names with both. A numeric dotted quad (an address, or something that cannot be a name) is
-// left out: the rule is DOMAIN-SUFFIX, which never matches a connection to an address literal, so it would be a rule that looks like capture and is none.
-const HOST_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$/
+// What the kernel's rule `DOMAIN-SUFFIX,<host>` can meet. Three kinds of name cannot: a name the generator refuses (its own check, asked through `bypassRuleOf`, so there is no copy of its pattern here); a numeric dotted quad (an address,
+// or something that cannot be a name): the rule never matches a connection to an address literal; and the name `localhost`: the kernel's own hosts table has made it 127.0.0.1 by the time its rules run, so the name is gone (4.8 §3.1 末,
+// measured on the re-entry path; OPEN 28). Each of them would be a line that looks like capture and is none, so each is said (`dropped`) and not written.
 const NUMERIC_QUAD = /^\d+(\.\d+){3}$/
+function matchable(name) {
+  if (NUMERIC_QUAD.test(name) || name.replace(/\.$/, '') === 'localhost') return false
+  try { bypassRuleOf({ kind: 'domain', value: name }); return true } catch { return false }
+}
 
 /**
  * hostSetOf({ form, readSettings, extraHosts }) → { hosts: [name], settings: 'read' | 'absent' | { unreadable: { reason, detail? } }, dropped: [name] }
@@ -194,7 +199,8 @@ const NUMERIC_QUAD = /^\d+(\.\d+){3}$/
  * The set is the form's default hosts (its harness file), then the base-URL hosts found in the extension's own settings (`form.hosts.settings.hostsOf` over the text `readSettings()` gives: `{ text, error }`, the shape of the
  * ctx's `readTextOrError`; read-only, `on` and `status` both call this), then `extraHosts` (the operator's, state.json): each name once, lower case, in that order. A settings file that is not there is `'absent'` (nothing configured: not a failure);
  * one that cannot be read or parsed is `{ unreadable: { reason } }` (`denied` · `unparseable`, 1.6 §9.4; `detail` the errno, never a path) and the set is then the other two sources, which the caller says (D38).
- * `dropped` are the names that cannot go in the kernel's rule (an address literal, a wildcard, a port, a character the generator refuses): said, never written, never thrown — no input of the user's makes `on` fail.
+ * `dropped` are the names the kernel's rule cannot meet or the generator refuses (an address literal, the name `localhost`, a wildcard, a port, a character the generator refuses): said, never written, never thrown — no input of the user's makes `on` fail.
+ * A relay on this machine, configured by an address or by `localhost`, is therefore not captured by this form (4.8 OPEN 28): `dropped` and `status` are the label that says so.
  */
 export function hostSetOf({ form, readSettings, extraHosts = [] } = {}) {
   const spec = form && form.hosts
@@ -220,7 +226,7 @@ export function hostSetOf({ form, readSettings, extraHosts = [] } = {}) {
   for (const h of [...spec.defaults, ...found, ...(extraHosts || [])]) {
     const name = typeof h === 'string' ? h.trim().toLowerCase() : ''
     if (name === '') continue
-    const into = HOST_NAME.test(name) && !NUMERIC_QUAD.test(name) ? hosts : dropped
+    const into = matchable(name) ? hosts : dropped
     if (!into.includes(name)) into.push(name)
   }
   return { hosts, settings, dropped }
