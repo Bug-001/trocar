@@ -27,7 +27,7 @@ async function realWorld(t) {
   const sandbox = tmpDir('asight-realworld-')
   const home = path.join(sandbox, 'AppData', 'Roaming', VERGE_DIR_NAME)
   fs.mkdirSync(path.join(home, 'profiles'), { recursive: true })
-  const yaml = loopbackRuntimeText({ mixed: ports.mixed, controller: ports.controller, secret }).replace('find-process-mode: "off"', 'find-process-mode: strict')
+  const yaml = loopbackRuntimeText({ mixed: ports.mixed, controller: ports.controller, secret })
   const put = (rel, text) => fs.writeFileSync(path.join(home, rel), text)
   put('verge.yaml', VERGE_YAML()); put('config.yaml', CONFIG_YAML); put('profiles.yaml', PROFILES_YAML); put(path.join('profiles', 'Script.js'), SCRIPT_JS); put('clash-verge.yaml', yaml)
   const m = await startMihomo(t, { configText: yaml, configName: 'clash-verge.yaml', home, secret, controller: ports.controller })

@@ -9,8 +9,8 @@ import http from 'node:http'
 import path from 'node:path'
 import { tmpDir } from '../../helpers/tmp.mjs'
 
-export async function startFakeCore(t, { listen = 'tcp', secret = null, version = 'v1.19.32', mode = 'rule', findProcessMode = 'strict', tun = false, mixedPort = 7897, extraConfig = {} } = {}) {
-  const core = { requests: [], mode, findProcessMode, tun, mixedPort, version, failures: [] }
+export async function startFakeCore(t, { listen = 'tcp', secret = null, version = 'v1.19.32', mode = 'rule', tun = false, mixedPort = 7897, extraConfig = {} } = {}) {
+  const core = { requests: [], mode, tun, mixedPort, version, failures: [] }
   core.failOn = (method, pattern, status, message = 'forced failure') => core.failures.push({ method, pattern, status, message })
   core.writes = () => core.requests.filter((r) => r.method !== 'GET')
 
@@ -19,7 +19,7 @@ export async function startFakeCore(t, { listen = 'tcp', secret = null, version 
     const fault = core.failures.find((f) => f.method === method && f.pattern.test(p))
     if (fault) return [fault.status, { message: fault.message }]
     if (method === 'GET' && p === '/version') return [200, { meta: true, version: core.version }]
-    if (method === 'GET' && p === '/configs') return [200, { port: 0, 'mixed-port': core.mixedPort, 'allow-lan': false, mode: core.mode, 'find-process-mode': core.findProcessMode, tun: { enable: core.tun }, 'log-level': 'info', ...extraConfig }]
+    if (method === 'GET' && p === '/configs') return [200, { port: 0, 'mixed-port': core.mixedPort, 'allow-lan': false, mode: core.mode, 'find-process-mode': 'strict', tun: { enable: core.tun }, 'log-level': 'info', ...extraConfig }]
     return [404, { message: 'Resource not found' }]
   }
   const server = http.createServer((req, res) => {

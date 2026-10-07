@@ -98,7 +98,7 @@ test('N15 (a) the Verge adapter exports no write function (module and adapter ob
   const w = await startWorld(t)
   assert.deepEqual([...Object.keys(mod), ...Object.keys(w.adapter)].filter((k) => WRITE_VERB.test(k)), [])
   assert.ok(Object.keys(w.adapter).length >= 5, 'and the check looks at something: the adapter\'s reads')
-  assert.ok(WRITE_VERB.test('writeScriptBlock') && WRITE_VERB.test('pushPayload') && WRITE_VERB.test('putSelect'), 'and it can see the names the withdrawn route had')
+  assert.ok(['writeConfig', 'saveChoice', 'applyChange', 'resetAll'].every((n) => WRITE_VERB.test(n)) && !WRITE_VERB.test('readFields'), 'and the pattern tells a write verb from a read')
 })
 
 // ---- (b) runtime: a recording fs ---------------------------------------------------------------------------------------------------------------------------

@@ -10,7 +10,7 @@
 // The "engine" is the REAL engine and proxy ingress (src/collector/core/engine; test/netenv/fixtures/real-engine.mjs puts a recording tap in front of it): Task 3 swapped the stand-in (engine-fixture.mjs, which the
 // Windows spike still ships) for it, and the inline config was swapped (inline-block.mjs, which the spike still ships too) for the generator's own output (src/netenv/mihomo/rules.mjs, via
 // fixtures/generated-config.mjs). One shape since D43 (the Verge-like shape, where the engine's re-entry point was the user's own mixed port, went with the VPN-block route):
-//   own-forwarder-like: a form listener with `rule: in-<g>` sub-rules; its own port is the re-entry point (4.8 §3.3).
+//   a form listener with `rule: in-<g>` sub-rules; its own port is the re-entry point (4.8 §3.3).
 // The loopback rule `AND,((DST-PORT,<re-entry>),(IP-CIDR,127.0.0.1/32,no-resolve)),DIRECT` (the core of the §3.3 fallback design) is red-able only against a user whose rules would send the probe to the re-entry
 // point somewhere else: a next hop of 'direct' lets it through by accident (measured: with the rule mutated away the default shape still passed 8 of 8). So there is a variant with an http next hop (with
 // credentials) that refuses every target but the origin. A real VPN, or a proxy that refuses loopback, is that user.
