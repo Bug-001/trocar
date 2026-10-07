@@ -19,7 +19,7 @@ import { EVENT, CODE } from './core/codes.mjs'
 import { controlRequest, controlSocketPath } from './core/control.mjs'
 import { readText, readTextOrError } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
-import { backupDir, opLockFile } from '../off/paths.mjs'
+import { backupDir, opLockFile, standalonePath } from '../off/paths.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readStateFile, emptyState, setDesired, writeStateAtomic } from '../off/state.mjs'
 import { newReceipt } from '../off/schema.mjs'
@@ -357,7 +357,7 @@ export async function turnOn(opts = {}) {
   const dir = collectorHome(path.join(home, '.asight'))
   const stateF = path.join(dir, 'state.json')
   const username = (() => { try { return user || os.userInfo().username } catch { return String(env.USER || '') } })()
-  const fresh = () => ({ ...newReceipt('on'), user: username, relayed: { closing: 0, waiting: 0, cut: 0 }, undo: ['asight off', 'asight uninstall'], log: path.join(dir, 'flows') }) // on relays nothing: zeros on purpose
+  const fresh = () => ({ ...newReceipt('on'), user: username, relayed: { closing: 0, waiting: 0, cut: 0 }, undo: ['asight off', 'asight uninstall', standalonePath(home)], standalone: standalonePath(home), commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'], log: path.join(dir, 'flows') }) // on relays nothing: zeros on purpose; the undo list and the four commands are what V29 asks the first receipt to carry (Task 8 makes the standalone file)
   if (helperState) {
     const h = await helperState()
     if (h && h.ok === false) return { receipt: { ...fresh(), ok: false, notes: [`the capability helper is missing or not the right version (${h.reason || 'not usable'}); nothing was changed. Run: sudo asight setup-helper`] }, manifest: null, plan: null, exit: 1 }

@@ -6,6 +6,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { runOnCli } from '../../src/cli/on.mjs'
+import { runOffCli } from '../../src/off/main.mjs'
+import { runUninstallCli } from '../../src/cli/uninstall.mjs'
+import { standalonePath } from '../../src/off/paths.mjs'
 import { formatOnReceipt, formatPlan } from '../../src/cli/receipt.mjs'
 import { validateReceipt, newReceipt } from '../../src/cli/schema.mjs'
 import { readStateFile } from '../../src/off/state.mjs'
@@ -14,6 +17,7 @@ import cc from '../../src/collector/harness/claude-code.mjs'
 import codex from '../../src/collector/harness/codex.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { fakeIo, onCtx, snapshot, changedFiles, seedClaude, fakeSystem, fakeDaemon } from './fixtures/on-ctx.mjs'
+import { installedHome, flowEvents } from '../off/fixtures/off-ctx.mjs'
 
 const settingsOf = (home) => path.join(home, '.claude', 'settings.json')
 
@@ -223,4 +227,77 @@ test('formatPlan: every file the first on will write is listed before any is wri
   const once = formatPlan(plan, { home: '/h', autostart: false })
   assert.match(once, /started, not enabled/, '--no-autostart: the unit is started once, not enabled')
   assert.doesNotMatch(once, /autostart link/, 'and no link is made')
+})
+
+// ── T07: what off and uninstall print is what they did (V3, V29) ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+// asight's own bookkeeping (the state file, the manifest, the lock, the records, the backups) is not a user file: the receipt lists what was taken out of the user's files and what
+// asight removed that it had made for them (bundles, plugins, shims, the CA, the unit), and the diff must be exactly that.
+const bookkeeping = (rel) => /^\.asight\/(backup|collector\/flows)\//.test(rel) || /(^|\/)(state\.json|install-manifest\.json|op\.lock)$/.test(rel)
+const listedPaths = (r) => new Set([...(r.changed || []).map((c) => c.path), ...(r.removed || []).map((x) => (typeof x === 'string' ? x : x.path)), ...(r.kept_bundles || []).map((k) => k.path), ...((r.autostart && r.autostart.removed) || [])])
+const ctxOf = (s, io, deps = {}) => ({ io, env: s.sh.env, home: s.home, platform: 'linux', deps: s.offDeps({ getuid: () => 1000, ...deps }) })
+
+test('V3 (off): every file the receipt lists, in the text and in --json, is a file that changed, and every user file that changed is listed', async () => {
+  const setup = async () => {
+    const s = await installedHome({ names: ['claude-code', 'codex'] })
+    fs.appendFileSync(path.join(s.home, '.codex', '.env'), 'EDITED_AFTER=1\n') // a file the user edited after asight: still listed, as undone-but-not-identical
+    return { s, before: snapshot(s.home) }
+  }
+  const diffOf = (s, before) => changedFiles(before, snapshot(s.home)).filter((rel) => !bookkeeping(rel)).map((rel) => path.join(s.home, rel))
+  const a = await setup(); const io = fakeIo()
+  assert.equal(await runOffCli(['--json'], ctxOf(a.s, io)), 0, io.text())
+  const listed = listedPaths(io.json()), diff = diffOf(a.s, a.before)
+  assert.ok(diff.length >= 3, `off changes several files: ${diff}`)
+  assert.deepEqual(diff.filter((f) => !listed.has(f)), [], 'a file that changed and is not in the receipt')
+  assert.deepEqual([...listed].filter((f) => !diff.includes(f)), [], 'a file in the receipt that did not change')
+  // the text: every changed file has its row, and every row is a changed file (paths under HOME are shown as ~/…)
+  const b = await setup(); const io2 = fakeIo()
+  assert.equal(await runOffCli([], ctxOf(b.s, io2)), 0, io2.text())
+  const text = io2.stdoutText(), shown = (f) => f.replace(b.s.home, '~')
+  const rows = text.split('\n').filter((l) => /^ {2}~\//.test(l)).map((l) => l.trim().split(/\s{2,}/)[0].replace('~', b.s.home))
+  const diffB = diffOf(b.s, b.before)
+  assert.deepEqual(diffB.filter((f) => !text.includes(shown(f))), [], 'every changed file is in the text')
+  assert.deepEqual(rows.filter((f) => !diffB.includes(f)), [], 'every row of the text is a changed file')
+  assert.ok(rows.length >= 2)
+})
+
+test('V3 (uninstall): the receipt lists what changed and what asight removed — the files that changed or went are exactly those, the captures and the records excepted', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] })
+  fs.mkdirSync(path.join(s.dir, 'audit'), { recursive: true }); fs.writeFileSync(path.join(s.dir, 'audit', 'a.ndjson'), '{}\n') // a capture: kept, so not in the receipt
+  const before = snapshot(s.home)
+  const io = fakeIo()
+  assert.equal(await runUninstallCli(['--json'], ctxOf(s, io)), 0, io.text())
+  const r = io.json()
+  const diff = changedFiles(before, snapshot(s.home)).filter((rel) => !/^\.asight\/collector\/(flows|audit)\//.test(rel) && !/^\.asight\/backup\//.test(rel) && !/(^|\/)op\.lock$/.test(rel)).map((rel) => path.join(s.home, rel))
+  const listed = listedPaths(r)
+  assert.deepEqual(diff.filter((f) => !listed.has(f)), [], 'a file that changed or went and is not in the receipt')
+  assert.deepEqual([...listed].filter((f) => !diff.includes(f) && fs.existsSync(f)), [], 'a file in the receipt that is still there unchanged')
+  assert.ok(fs.existsSync(path.join(s.dir, 'audit', 'a.ndjson')), 'the capture is not in the receipt and is still there')
+  assert.ok(r.dropped_backups.length > 0 && r.dropped_backups.every((b) => !fs.existsSync(b)), 'the backups it deleted are named')
+})
+
+test('V29: the first on receipt, in the text and in --json, carries the four commands and the absolute path of asight-off; every item of the manifest has a kind and an undo_by_hand; flows/ has the install-note and the off-note runs, each ending in a result line', async () => {
+  const home = tmpDir('asight-on-v29-'); seedClaude(home)
+  const io = fakeIo()
+  assert.equal(await runOnCli(['--yes', '--json'], onCtx(home, io)), 0)
+  const r = io.json()
+  const everything = JSON.stringify(r)
+  for (const c of ['asight on', 'asight off', 'asight status', 'asight uninstall']) assert.ok(everything.includes(c), `--json carries ${c}`)
+  assert.ok(r.undo.includes(standalonePath(home)) && r.standalone === standalonePath(home), 'the absolute path of asight-off: the undo list and the key')
+  assert.ok(path.isAbsolute(r.standalone))
+  const io2 = fakeIo(); const home2 = tmpDir('asight-on-v29b-'); seedClaude(home2)
+  assert.equal(await runOnCli(['--yes'], onCtx(home2, io2)), 0)
+  for (const c of ['asight on', 'asight off', 'asight status', 'asight uninstall', standalonePath(home2)]) assert.ok(io2.stdoutText().includes(c), `the text carries ${c}`)
+  const m = readManifest(path.join(home, '.asight', 'collector'))
+  const items = [...m.entries, ...m.files]
+  assert.ok(items.length >= 3)
+  for (const it of items) assert.deepEqual([typeof it.kind === 'string' && it.kind !== '', typeof it.undo_by_hand === 'string' && it.undo_by_hand !== ''], [true, true], `${it.path}: kind and undo_by_hand`)
+  // the records: one run of install-note and one of off-note, each ends with kind 'result'
+  const s = await installedHome({ names: ['claude-code'] })
+  assert.equal(await runOffCli([], ctxOf(s, fakeIo())), 0)
+  const events = flowEvents(s.dir)
+  for (const name of ['install-note', 'off-note']) {
+    const runs = [...new Set(events.filter((e) => e.event === name).map((e) => e.run))]
+    assert.ok(runs.length >= 1, `${name} has a run`)
+    for (const run of runs) assert.equal(events.filter((e) => e.event === name && e.run === run).at(-1).kind, 'result', `${name} ${run} ends with a result line`)
+  }
 })
