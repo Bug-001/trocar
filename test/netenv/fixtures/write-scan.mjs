@@ -8,8 +8,14 @@
 
 /** The file-system calls that change something (4.7 N15 names writeFile, appendFile, rename, unlink, rm, rmdir, copyFile, mkdir and `open` with a write flag; the rest are the same kind). */
 export const WRITE_FNS = Object.freeze(['writeFile', 'appendFile', 'rename', 'unlink', 'rm', 'rmdir', 'copyFile', 'mkdir', 'mkdtemp', 'truncate', 'ftruncate', 'createWriteStream', 'symlink', 'link', 'cp', 'chmod', 'chown', 'utimes'])
-const WRITE_CALL = new RegExp(`(?:\\b(?:fs|nodeFs|fsp|fsPromises|promises)\\s*\\.\\s*(?:promises\\s*\\.\\s*)?|(?<![\\w$.]))(${WRITE_FNS.join('|')})(?:Sync)?\\s*\\(`, 'g')
-const OPEN_CALL = /(?:\b(?:fs|nodeFs|fsp|fsPromises|promises)\s*\.\s*(?:promises\s*\.\s*)?|(?<![\w$.]))(open)(?:Sync)?\s*\(\s*[^,()]+,\s*(['"])([^'"]*)\2/g
+// The receiver is whatever it is: `fs.writeFileSync(`, `io.writeFileSync(` (import * as io), `fp.writeFile(` (promises as fp), `fs.promises.writeFile(`, a bare `writeFile(`. A module this scan watches (it names a product's
+// directory, or sits in src/netenv/) has no business with a method of these names on any object, so the scan does not guess which object is the fs. What it cannot see by name is a write function under
+// ANOTHER name: `import { writeFileSync as wf }`, `const { rmSync: del } = require('node:fs')` (aliasesOf finds those and the call is then `wf(`).
+const WRITE_CALL = new RegExp(`(?<![\\w$])(${WRITE_FNS.join('|')})(?:Sync)?\\s*\\(`, 'g')
+const OPEN_CALL = /(?<![\w$])(open)(?:Sync)?\s*\(\s*[^,()]+,\s*(['"])([^'"]*)\2/g
+const FS_MODULE = String.raw`['"](?:node:)?fs(?:\/promises)?['"]`
+const FS_IMPORT = new RegExp(String.raw`import\s*\{([^}]*)\}\s*from\s*${FS_MODULE}`, 'g')
+const FS_DESTRUCTURE = new RegExp(String.raw`(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:await\s+)?(?:require\s*\(\s*${FS_MODULE}\s*\)|import\s*\(\s*${FS_MODULE}\s*\)|\b(?:fs|nodeFs|fsp|fsPromises|promises)\b)`, 'g')
 const REGEX_AFTER = /(?:^|[^\w$])(?:return|typeof|case|in|of|void|delete|throw|new|else|do|yield|await)\s*$/
 
 /** { nc, code }: `nc` is the source with comments blanked, `code` also has strings, template text and regex literals blanked. Same length as the source; line ends are kept. */
@@ -110,12 +116,27 @@ export function functionExtents(code) {
 
 const lineOf = (src, at) => src.slice(0, at).split('\n').length
 
+/** The local names a module gives to a write function of node:fs: `import { writeFileSync as wf }` and `const { rmSync: del } = require('node:fs')` (or `= fs`) → Map(local name → the write function's name). */
+export function aliasesOf(nc) {
+  const out = new Map()
+  for (const m of [...nc.matchAll(FS_IMPORT), ...nc.matchAll(FS_DESTRUCTURE)]) {
+    for (const entry of m[1].split(',')) {
+      const [from, to] = entry.split(/\s+as\s+|\s*:\s*/).map((x) => x.trim())
+      const base = (from || '').replace(/Sync$/, '')
+      if (to && to !== from && WRITE_FNS.includes(base) && /^[A-Za-z_$][\w$]*$/.test(to)) out.set(to, base)
+    }
+  }
+  return out
+}
+
 /** Every write call in `src`: [{ call, helper, line }], `helper` the name of the innermost named function it is in ('' at the top level). `open` counts when its flag writes (w, a or +). */
 export function writesOf(src) {
   const { nc, code } = views(src)
   const extents = functionExtents(code)
   const found = []
   for (const m of code.matchAll(WRITE_CALL)) found.push({ call: m[1], at: m.index })
+  const aliases = aliasesOf(nc)
+  if (aliases.size > 0) for (const m of code.matchAll(new RegExp(`(?<![\\w$.])(${[...aliases.keys()].map((k) => k.replaceAll('$', '\\$')).join('|')})\\s*\\(`, 'g'))) found.push({ call: aliases.get(m[1]), at: m.index })
   for (const m of nc.matchAll(OPEN_CALL)) {
     const at = m.index + m[0].indexOf('open')
     if (/[wa+]/.test(m[3]) && code.startsWith('open', at)) found.push({ call: 'open', at }) // the name is code, not text inside a string
