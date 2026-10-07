@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 import { startHelper } from '../../../../src/collector/arch/win32/helper.mjs'
-import { refuseElevated, nodePreflight, NODE_MIN_MAJOR, taskXml, taskUser, userUnit, register, TASK_NAME, TASK_FILE } from '../../../../src/collector/arch/win32/autostart.mjs'
+import { refuseElevated, nodePreflight, NODE_MIN_MAJOR, taskXml, taskUser, userUnit, register, daemonCommandLine, readRunValue, runKeyFallback, removeRunValue, TASK_NAME, TASK_FILE, RUN_KEY } from '../../../../src/collector/arch/win32/autostart.mjs'
 import { elevationByWhoami, refuseElevatedByWhoami } from '../../../../src/off/win32.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
 import { controlEndpoint, readControlEndpoint, CONTROL_FILE, PIPE_PREFIX } from '../../../../src/collector/arch/win32/control-path.mjs'
@@ -335,15 +335,10 @@ test('W24 enable registers the task from the file install wrote and runs it: /Cr
   assert.deepEqual(later.calls.map((c) => c[1]).slice(1), ['/Create', '/Run'], 'now is the default')
 })
 
-test('W24 enable says why it failed: a /Create that schtasks refused, a /Run that did not start, a task file that is not there', () => {
+test('W24 enable says why it failed: a /Run that did not start, a task file that is not there, and (below) a /Create that was refused', () => {
   const o = withHome()
-  const refused = fakeTools({ 'schtasks /Create': { status: 1, stderr: 'ERROR: Access is denied.' } })
-  const a = installed(userUnit({ ...o, run: refused })).enable()
-  assert.deepEqual([a.code, a.err], [1, 'ERROR: Access is denied.'])
-  assert.equal(refused.calls.length, 1, 'a task that was not registered is not run')
-  assert.deepEqual(fs.readdirSync(path.dirname(path.join(o.home, '.asight', 'collector', TASK_FILE))), [TASK_FILE], 'the UTF-16 copy is removed on the failure path too')
   const notRun = fakeTools({ 'schtasks /Run': { status: 1, stderr: 'ERROR: The system cannot find the file specified.' } })
-  const b = installed(userUnit({ ...withHome(), run: notRun })).enable()
+  const b = installed(userUnit({ ...o, run: notRun })).enable()
   assert.deepEqual([b.code, b.via], [1, 'task'])
   assert.match(b.err, /cannot find/)
   const none = fakeTools()
@@ -352,6 +347,11 @@ test('W24 enable says why it failed: a /Create that schtasks refused, a /Run tha
   assert.match(c.err, /task file/)
   assert.deepEqual(none.calls, [], 'no schtasks without a file to register')
   assert.equal(register({ file: path.join(o.home, 'nope.xml'), run: none }).code, null)
+  const refusedHome = withHome()
+  const refused = fakeTools({ 'schtasks /Create': { status: 1, stderr: 'ERROR: Access is denied.' }, 'reg add': { status: 1, stderr: 'ERROR: Access is denied.' }, 'reg query': { status: 1 } })
+  const a = installed(userUnit({ ...refusedHome, run: refused })).enable()
+  assert.equal(a.code, 1)
+  assert.deepEqual(fs.readdirSync(path.join(refusedHome.home, '.asight', 'collector')), [TASK_FILE], 'the UTF-16 copy is removed on the failure path too')
 })
 
 test('W24 start (the --no-autostart run: this session, nothing at login) starts the supervised daemon itself without registering anything: conhost --headless, detached, no window, and a spawn that did not start is a failure, not a success', () => {
@@ -376,18 +376,156 @@ test('W24 start (the --no-autostart run: this session, nothing at login) starts 
 
 test('W24 disable (a no-argument off) switches the task off and leaves it registered; remove (uninstall) deletes it; a task that is not there is already as asked, not an error', () => {
   const o = withHome()
-  const present = fakeTools({ 'schtasks /Query': { status: 0 } })
-  assert.deepEqual(userUnit({ ...o, run: present }).disable(), { code: 0, out: '', err: '', via: 'task' })
-  assert.deepEqual(present.calls, [['schtasks', '/Query', '/TN', TASK_NAME], ['schtasks', '/Change', '/TN', TASK_NAME, '/DISABLE']])
-  const gone = fakeTools({ 'schtasks /Query': { status: 1, stderr: 'ERROR: The system cannot find the file specified.' } })
-  assert.deepEqual(userUnit({ ...o, run: gone }).disable(), { code: 0, out: '', err: '', absent: true })
-  assert.deepEqual(gone.calls.map((c) => c[1]), ['/Query'], 'nothing is changed or deleted')
-  const rm = fakeTools({ 'schtasks /Query': { status: 0 } })
-  assert.deepEqual(userUnit({ ...o, run: rm }).remove(), { code: 0, out: '', err: '', via: 'task' })
-  assert.deepEqual(rm.calls, [['schtasks', '/Query', '/TN', TASK_NAME], ['schtasks', '/Delete', '/TN', TASK_NAME, '/F']])
-  const rmGone = fakeTools({ 'schtasks /Query': { status: 1 } })
-  assert.equal(userUnit({ ...o, run: rmGone }).remove().absent, true)
-  const stuck = fakeTools({ 'schtasks /Query': { status: 0 }, 'schtasks /Change': { status: 1, stderr: 'ERROR: Access is denied.' } })
+  const noRunKey = { 'reg query': { status: 1, stderr: 'ERROR: The system was unable to find the specified registry key or value.' } }
+  const present = fakeTools({ 'schtasks /Query': { status: 0 }, ...noRunKey })
+  assert.deepEqual(userUnit({ ...o, run: present }).disable(), { code: 0, out: '', err: '', task: 'disabled', runKey: 'absent' })
+  assert.deepEqual(present.calls.filter((c) => c[0] === 'schtasks'), [['schtasks', '/Query', '/TN', TASK_NAME], ['schtasks', '/Change', '/TN', TASK_NAME, '/DISABLE']])
+  const gone = fakeTools({ 'schtasks /Query': { status: 1, stderr: 'ERROR: The system cannot find the file specified.' }, ...noRunKey })
+  assert.deepEqual(userUnit({ ...o, run: gone }).disable(), { code: 0, out: '', err: '', task: 'absent', runKey: 'absent' })
+  assert.deepEqual(gone.calls.filter((c) => c[0] === 'schtasks').map((c) => c[1]), ['/Query'], 'nothing is changed or deleted')
+  const rm = fakeTools({ 'schtasks /Query': { status: 0 }, ...noRunKey })
+  assert.deepEqual(userUnit({ ...o, run: rm }).remove(), { code: 0, out: '', err: '', task: 'removed', runKey: 'absent' })
+  assert.deepEqual(rm.calls.filter((c) => c[0] === 'schtasks'), [['schtasks', '/Query', '/TN', TASK_NAME], ['schtasks', '/Delete', '/TN', TASK_NAME, '/F']])
+  const stuck = fakeTools({ 'schtasks /Query': { status: 0 }, 'schtasks /Change': { status: 1, stderr: 'ERROR: Access is denied.' }, ...noRunKey })
   const f = userUnit({ ...o, run: stuck }).disable()
-  assert.deepEqual([f.code, f.err], [1, 'ERROR: Access is denied.'], 'a task that could not be switched off says so')
+  assert.deepEqual([f.code, f.err, f.task], [1, 'ERROR: Access is denied.', 'failed'], 'a task that could not be switched off says so')
+})
+
+// ---- W24: the Run-key fallback -------------------------------------------------------------------------------------------------------------------
+
+const RUN_PATH = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+/** What `reg query HKCU\…\Run /v asight-collector` prints when the value is there. */
+const REG_OUT = (kind, data) => `\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\n    asight-collector    ${kind}    ${data}\n`
+const COMMAND = `conhost.exe --headless "${NODE}" "${SCRIPT}" daemon --supervise`
+/** A registry that a fake `reg` reads and writes: the one Run value of ours (null = absent). `add` and `delete` are recorded as they come. */
+function fakeRegistry(initial = null, { addFails = false, deleteFails = false, dropWrites = false } = {}) {
+  const reg = { value: initial }
+  const run = fakeTools({
+    'schtasks /Create': { status: 1, stderr: 'ERROR: Access is denied.' },
+    'schtasks /Query': { status: 1 },
+    reg: (file, args) => {
+      if (args[0] === 'query') return reg.value ? { status: 0, stdout: REG_OUT(reg.value.kind, reg.value.value) } : { status: 1, stderr: 'ERROR: The system was unable to find the specified registry key or value.' }
+      if (args[0] === 'add') { if (addFails) return { status: 1, stderr: 'ERROR: Access is denied.' }; if (!dropWrites) reg.value = { kind: args[args.indexOf('/t') + 1], value: args[args.indexOf('/d') + 1] }; return { status: 0, stdout: 'The operation completed successfully.' } }
+      if (args[0] === 'delete') { if (deleteFails) return { status: 1, stderr: 'ERROR: Access is denied.' }; reg.value = null; return { status: 0 } }
+      return { status: 1 }
+    },
+  })
+  return Object.assign(run, { reg })
+}
+
+test('W24 the Run value is read from `reg query` as the registry prints it: the kind and the data, absent as absent, and a failure that is not "absent" as an error', () => {
+  assert.deepEqual(RUN_KEY, { hive: 'HKCU', key: 'Software\\Microsoft\\Windows\\CurrentVersion\\Run', name: 'asight-collector' })
+  assert.deepEqual(readRunValue({ run: fakeTools({ reg: { status: 0, stdout: REG_OUT('REG_SZ', COMMAND) } }) }), { present: true, kind: 'REG_SZ', value: COMMAND })
+  assert.deepEqual(readRunValue({ run: fakeTools({ reg: { status: 0, stdout: REG_OUT('REG_EXPAND_SZ', '%ProgramFiles%\\x.exe') } }) }), { present: true, kind: 'REG_EXPAND_SZ', value: '%ProgramFiles%\\x.exe' })
+  assert.deepEqual(readRunValue({ run: fakeTools({ reg: { status: 0, stdout: REG_OUT('REG_SZ', '') } }) }), { present: true, kind: 'REG_SZ', value: '' }, 'an empty string is a value')
+  assert.deepEqual(readRunValue({ run: fakeTools({ reg: { status: 0, stdout: REG_OUT('REG_SZ', COMMAND).replace('asight-collector', 'ASIGHT-Collector') } }) }), { present: true, kind: 'REG_SZ', value: COMMAND }, 'a value name does not care about case')
+  assert.deepEqual(readRunValue({ run: fakeTools({ reg: { status: 1, stderr: 'ERROR: not found' } }) }), { present: false })
+  assert.match(readRunValue({ run: fakeTools({ reg: { status: 0, stdout: 'something else entirely' } }) }).error, /not .*value/i, 'an answer that is no value is an error, not "absent"')
+  assert.match(readRunValue({ run: () => ({ status: null, stdout: '', stderr: '', error: new Error('spawn reg ENOENT') }) }).error, /ENOENT/)
+  assert.deepEqual(fakeTools({}).calls, [])
+  const q = fakeTools({ reg: { status: 1 } }); readRunValue({ run: q })
+  assert.deepEqual(q.calls, [['reg', 'query', RUN_PATH, '/v', 'asight-collector']], 'one fixed query of one value')
+})
+
+test('W24 a /Create that schtasks refused: the Run value is written with the same supervised command, ledgered, read back, task-register-failed is the event, the daemon is started, and on still succeeds (code 0)', () => {
+  const o = withHome()
+  const run = fakeRegistry()
+  const spawned = []
+  const fakeSpawn = (cmd, args) => { spawned.push([cmd, ...args]); return { pid: 77, unref() {}, on() {} } }
+  const u = installed(userUnit({ ...o, run, spawn: fakeSpawn }))
+  const r = u.enable({ now: true })
+  assert.equal(r.code, 0, 'on does not fail because the Task Scheduler refused')
+  assert.equal(r.via, 'run-key', 'the receipt says which path was used')
+  assert.match(r.reason, /Access is denied/, '... and why the task was not registered')
+  assert.deepEqual(r.ledger, { kind: 'run-key', hive: 'HKCU', key: RUN_KEY.key, name: 'asight-collector', value: COMMAND, prior: null })
+  assert.equal(r.ours, false)
+  assert.deepEqual(r.event, { event: 'failure', where: 'install', code: 'task-register-failed', reason: r.event.reason })
+  assert.match(r.event.reason, /Access is denied/)
+  assert.match(r.event.reason, /Run/, 'the event names the entry that is used instead')
+  assert.deepEqual(checkRecord(r.event), [], 'a record of the closed set')
+  assert.deepEqual(run.calls.map((c) => c.slice(0, 2).join(' ')), ['schtasks /Create', 'reg query', 'reg add', 'reg query'], 'create, look at the old value, write, read it back; no /Run (there is no task)')
+  assert.deepEqual(run.calls[2], ['reg', 'add', RUN_PATH, '/v', 'asight-collector', '/t', 'REG_SZ', '/d', COMMAND, '/f'])
+  assert.equal(run.reg.value.value, COMMAND)
+  assert.equal(COMMAND, `conhost.exe ${inner(x2(u.text({})), 'Arguments')}`, 'the command is the task\'s action: the same supervised one')
+  assert.deepEqual(spawned, [['conhost.exe', '--headless', NODE, SCRIPT, 'daemon', '--supervise']], 'the login entry runs at the next login, so with now the daemon is started directly')
+  assert.equal(r.pid, 77)
+  assert.deepEqual(fs.readdirSync(path.dirname(u.path)), [TASK_FILE])
+  // not now: registered for login only, nothing started
+  const none = []
+  const r2 = installed(userUnit({ ...withHome(), run: fakeRegistry(), spawn: (...a) => { none.push(a); return { pid: 1, unref() {}, on() {} } } })).enable({ now: false })
+  assert.deepEqual([r2.code, r2.via, none.length], [0, 'run-key', 0])
+})
+const x2 = (t) => t // the unit's text, unchanged (the XML escapes nothing in these paths)
+
+test('W24 the prior value is recorded and not lost: a different string already there is kept in the ledger, one of ours is not taken for a prior, and a value that is not a string is never overwritten', () => {
+  const other = fakeRegistry({ kind: 'REG_SZ', value: '"C:\\Tools\\mine.exe" --quiet' })
+  const r = installed(userUnit({ ...withHome(), run: other, spawn: () => ({ pid: 1, unref() {}, on() {} }) })).enable({ now: false })
+  assert.deepEqual([r.code, r.via, r.ours], [0, 'run-key', false])
+  assert.deepEqual(r.ledger.prior, { kind: 'REG_SZ', value: '"C:\\Tools\\mine.exe" --quiet' })
+  assert.equal(other.reg.value.value, COMMAND, 'and the value is ours now')
+  const again = fakeRegistry({ kind: 'REG_SZ', value: COMMAND })
+  const r2 = installed(userUnit({ ...withHome(), run: again })).enable({ now: false })
+  assert.deepEqual([r2.code, r2.ledger.prior, r2.ours], [0, null, true], 'what an earlier on wrote is ours: no prior, and the caller keeps the prior its ledger already has')
+  const odd = fakeRegistry({ kind: 'REG_DWORD', value: '0x1' })
+  const r3 = installed(userUnit({ ...withHome(), run: odd })).enable({ now: false })
+  assert.notEqual(r3.code, 0, 'a value that is not a string cannot be put back, so it is not touched')
+  assert.match(r3.err, /REG_DWORD/)
+  assert.deepEqual(odd.calls.filter((c) => c[0] === 'reg').map((c) => c[1]), ['query'], 'not one write')
+  assert.equal(r3.event.code, 'task-register-failed')
+})
+
+test('W24 a fallback that did not take is a failure with both reasons: reg add refused, a write that reads back as something else, a daemon that would not start; the event is there each time', () => {
+  const a = installed(userUnit({ ...withHome(), run: fakeRegistry(null, { addFails: true }) })).enable({ now: false })
+  assert.equal(a.code, 1)
+  assert.match(a.err, /Access is denied/)
+  assert.match(a.err, /Run/)
+  assert.equal(a.event.code, 'task-register-failed')
+  const b = installed(userUnit({ ...withHome(), run: fakeRegistry(null, { dropWrites: true }) })).enable({ now: false })
+  assert.notEqual(b.code, 0)
+  assert.match(b.err, /read back|did not take/)
+  const c = installed(userUnit({ ...withHome(), run: fakeRegistry(), spawn: () => ({ pid: undefined, unref() {}, on() {} }) })).enable({ now: true })
+  assert.notEqual(c.code, 0, 'the entry is written but nothing runs now: that is not a success')
+  assert.match(c.err, /did not start/)
+  assert.equal(c.via, 'run-key')
+  assert.ok(c.ledger, 'the entry that was written is still reported, so the ledger has it')
+  const missing = fakeRegistry()
+  const d = userUnit({ ...withHome(), run: missing }).enable() // no task file: a precondition, not a refusal
+  assert.equal(d.code, null)
+  assert.deepEqual(missing.calls, [], 'no schtasks and no reg for a file that is not there')
+})
+
+test('W24 off and uninstall remove only the Run value: ours with no prior is deleted, ours over a prior puts the prior back with its kind, one that is not ours is left, and nothing but that one value is named', () => {
+  const o = withHome()
+  const del = fakeRegistry({ kind: 'REG_SZ', value: COMMAND })
+  assert.deepEqual(userUnit({ ...o, run: del }).disable(), { code: 0, out: '', err: '', task: 'absent', runKey: 'removed' })
+  assert.equal(del.reg.value, null)
+  assert.deepEqual(del.calls.filter((c) => c[0] === 'reg' && c[1] === 'delete'), [['reg', 'delete', RUN_PATH, '/v', 'asight-collector', '/f']])
+  const prior = { kind: 'REG_EXPAND_SZ', value: '%ProgramFiles%\\Tools\\mine.exe' }
+  const put = fakeRegistry({ kind: 'REG_SZ', value: COMMAND })
+  assert.deepEqual(userUnit({ ...o, run: put }).remove({ prior }), { code: 0, out: '', err: '', task: 'absent', runKey: 'restored' })
+  assert.deepEqual(put.reg.value, prior, 'the user\'s own value is back, with its kind')
+  const theirs = fakeRegistry({ kind: 'REG_SZ', value: '"C:\\Tools\\mine.exe" --quiet' })
+  assert.deepEqual(userUnit({ ...o, run: theirs }).remove(), { code: 0, out: '', err: '', task: 'absent', runKey: 'left' }, 'a value that is not ours is not ours to delete')
+  assert.deepEqual(theirs.calls.filter((c) => c[0] === 'reg').map((c) => c[1]), ['query'])
+  const none = fakeRegistry(null)
+  assert.deepEqual(userUnit({ ...o, run: none }).remove(), { code: 0, out: '', err: '', task: 'absent', runKey: 'absent' })
+  const stuck = fakeRegistry({ kind: 'REG_SZ', value: COMMAND }, { deleteFails: true })
+  const f = userUnit({ ...o, run: stuck }).remove()
+  assert.deepEqual([f.code, f.runKey], [1, 'failed'])
+  assert.match(f.err, /Access is denied/)
+  for (const c of [...del.calls, ...put.calls, ...stuck.calls].filter((c) => c[0] === 'reg' && c[1] !== 'query')) assert.ok(c.includes('/v') && c.includes('asight-collector') && c[2] === RUN_PATH, `only the one value is named: ${c.join(' ')}`)
+  // a task and a Run value together (an earlier on used the task, a later one the fallback): both go
+  const both = fakeRegistry({ kind: 'REG_SZ', value: COMMAND })
+  const bothRun = (file, args) => (file === 'schtasks' && args[0] === '/Query' ? { status: 0, stdout: '', stderr: '' } : null)
+  const r = userUnit({ ...o, run: (file, args, opts) => bothRun(file, args) || both(file, args, opts) }).remove()
+  assert.deepEqual([r.code, r.task, r.runKey], [0, 'removed', 'removed'])
+})
+
+test('W24 daemonCommandLine is the task\'s action as one line, and removeRunValue is the same undo the unit uses', () => {
+  assert.equal(daemonCommandLine({ node: NODE, asight: SCRIPT }), COMMAND)
+  assert.equal(daemonCommandLine({ node: NODE, asight: SCRIPT, conhost: 'C:\\Windows\\System32\\conhost.exe' }), `C:\\Windows\\System32\\conhost.exe --headless "${NODE}" "${SCRIPT}" daemon --supervise`)
+  assert.throws(() => daemonCommandLine({ node: 'C:\\no"de.exe', asight: SCRIPT }), TypeError)
+  const r = fakeRegistry({ kind: 'REG_SZ', value: COMMAND })
+  assert.equal(removeRunValue({ run: r }).runKey, 'removed')
+  assert.equal(runKeyFallback({ command: COMMAND, run: fakeRegistry() }).ok, true, 'and the fallback writes it through the same reader')
 })

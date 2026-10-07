@@ -10,6 +10,9 @@ import { collectorHome } from '../../../paths.mjs'
 
 export const TASK_NAME = '\\asight\\collector' // the scheduled task, in the \asight folder of the Task Scheduler
 export const TASK_FILE = 'asight-collector.task.xml' // the task's XML, an owned file of the install manifest, beside the collector's other files
+/** The login start-up entry that stands in when the Task Scheduler refuses the task (4.8 §7): one value of the user's own Run key. */
+export const RUN_KEY = Object.freeze({ hive: 'HKCU', key: 'Software\\Microsoft\\Windows\\CurrentVersion\\Run', name: 'asight-collector' })
+const RUN_PATH = `${RUN_KEY.hive}\\${RUN_KEY.key}`
 
 /** The oldest Node `on` accepts (package.json `engines`; a test holds the two equal). Older than that and the daemon would exit at every login with an error nobody sees (4.8 §7). */
 export const NODE_MIN_MAJOR = 20
@@ -50,6 +53,13 @@ const plain = (name, v, { quoted = false } = {}) => {
 }
 const xmlText = (v) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
+const daemonArgs = (node, asight) => `--headless "${plain('node', node, { quoted: true })}" "${plain('asight', asight, { quoted: true })}" daemon --supervise`
+/** The task's action as one command line, which is what the Run value holds: `conhost.exe --headless "<node>" "<asight>" daemon --supervise` (no window; the supervisor parent; 4.8 §7). */
+export function daemonCommandLine({ node, asight, conhost = 'conhost.exe' } = {}) {
+  const c = plain('conhost', conhost, { quoted: true })
+  return `${/\s/.test(c) ? `"${c}"` : c} ${daemonArgs(node, asight)}`
+}
+
 /** `DOMAIN\name`, the form the Task Scheduler wants for a trigger and a principal: from USERDOMAIN and USERNAME, the name alone without a domain, the OS's own answer when the environment says nothing. */
 export function taskUser(env = process.env) {
   const name = env.USERNAME || os.userInfo().username
@@ -64,7 +74,7 @@ export function taskUser(env = process.env) {
  */
 export function taskXml({ user, node, asight, conhost = 'conhost.exe' } = {}) {
   const u = xmlText(plain('user', user))
-  const args = `--headless "${plain('node', node, { quoted: true })}" "${plain('asight', asight, { quoted: true })}" daemon --supervise`
+  const args = daemonArgs(node, asight)
   return [
     '<?xml version="1.0" encoding="UTF-16"?>',
     '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
@@ -85,58 +95,121 @@ export function taskXml({ user, node, asight, conhost = 'conhost.exe' } = {}) {
 const schtasks = (args, { run, env }) => execTool('schtasks', args, { run, env })
 
 /** `schtasks /Create /XML <file> /TN \asight\collector /F` from the task file install wrote. schtasks reads the file as the encoding it declares, which is UTF-16, and install writes text as UTF-8: so a UTF-16LE copy with a byte
- *  order mark (the T0 form) is made beside it, handed over, and removed. → `{ code, out, err }`; a file that cannot be read is `code: null` with the reason. */
+ *  order mark (the T0 form) is made beside it, handed over, and removed. → `{ code, out, err }`; a file that cannot be read is `code: null` with the reason and `precondition: true` (schtasks was not asked, so it is not a refusal to fall back from). */
 export function register({ file, run = null, env = process.env, fs = nodeFs } = {}) {
   const copy = `${file}.utf16`
   try {
     fs.writeFileSync(copy, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(fs.readFileSync(file, 'utf8'), 'utf16le')]), { mode: 0o600 })
   } catch (e) {
     try { fs.rmSync(copy, { force: true }) } catch { /* nothing was made */ }
-    return { code: null, out: '', err: `the task file ${file} cannot be read or copied (${(e && e.code) || (e && e.message) || e})` }
+    return { code: null, out: '', err: `the task file ${file} cannot be read or copied (${(e && e.code) || (e && e.message) || e})`, precondition: true } // not a refusal of schtasks: nothing was asked of it
   }
   try { return schtasks(['/Create', '/XML', copy, '/TN', TASK_NAME, '/F'], { run, env }) } finally { try { fs.rmSync(copy, { force: true }) } catch { /* the next register overwrites it */ } }
 }
 
 const ok = { code: 0, out: '', err: '' }
 const taskExists = ({ run, env }) => schtasks(['/Query', '/TN', TASK_NAME], { run, env }).code === 0
+const errOf = (r) => r.err || (r.code === null ? 'it did not run' : `exit ${r.code}`)
+const ours = (value) => /\bdaemon --supervise\s*$/.test(value) // what an earlier `on` of asight wrote: the supervised daemon command
+
+/**
+ * The Run value, read: `reg query HKCU\...\Run /v asight-collector` → `{ present: true, kind, value }` · `{ present: false }` · `{ error }` (reg did not run, or answered with something that is no value).
+ * One fixed query of one value: asight reads no other value of that key.
+ */
+export function readRunValue({ run = null, env = process.env } = {}) {
+  const r = execTool('reg', ['query', RUN_PATH, '/v', RUN_KEY.name], { run, env })
+  if (r.code === null) return { error: `reg query did not run (${r.err || 'no reason given'})` }
+  if (r.code !== 0) return { present: false }
+  const m = new RegExp(`^[ \\t]+${RUN_KEY.name}[ \\t]+(REG_[A-Z_]+)(?:[ \\t]+(.*))?$`, 'mi').exec(r.out)
+  if (!m) return { error: `reg query answered, but not with the value ${RUN_KEY.name}` }
+  return { present: true, kind: m[1].toUpperCase(), value: m[2] ?? '' }
+}
+
+/**
+ * The fallback of 4.8 §7: write the one Run value that starts the supervised daemon at login, with `reg add … /t REG_SZ` through execTool, and read it back (生效要复核).
+ * → `{ ok: true, ours, entry }` · `{ ok: false, reason, entry? }`. `entry` is what the manifest ledgers: `{ kind: 'run-key', hive, key, name, value, prior }`, where `prior` is the user's own value that was there (`{ kind, value }`, to be put back by
+ * the undo) or null. A value an earlier `on` of asight wrote is not a prior: `ours` is true and `prior` null, and the caller keeps the prior its ledger already has. A prior that is not a string (REG_SZ or REG_EXPAND_SZ) could
+ * not be put back, so it is never overwritten. `entry` comes with a failure only when the write went through and the read-back disagreed (the undo is idempotent, so it is ledgered all the same).
+ */
+export function runKeyFallback({ command, run = null, env = process.env } = {}) {
+  const before = readRunValue({ run, env })
+  if (before.error) return { ok: false, reason: before.error }
+  const mine = before.present && ours(before.value)
+  if (before.present && !mine && !['REG_SZ', 'REG_EXPAND_SZ'].includes(before.kind)) return { ok: false, reason: `${RUN_PATH}\\${RUN_KEY.name} already exists as ${before.kind}, not a string, and asight does not overwrite what it cannot put back` }
+  const entry = { kind: 'run-key', hive: RUN_KEY.hive, key: RUN_KEY.key, name: RUN_KEY.name, value: command, prior: before.present && !mine ? { kind: before.kind, value: before.value } : null }
+  const w = execTool('reg', ['add', RUN_PATH, '/v', RUN_KEY.name, '/t', 'REG_SZ', '/d', command, '/f'], { run, env })
+  if (w.code !== 0) return { ok: false, reason: `reg add failed (${errOf(w)})` }
+  const after = readRunValue({ run, env })
+  if (after.error || !after.present || after.value !== command) return { ok: false, entry, reason: `the Run value did not take: read back as ${after.error ? after.error : after.present ? JSON.stringify(after.value) : 'absent'}` }
+  return { ok: true, ours: mine, entry }
+}
+
+/**
+ * Takes asight's Run value out, and only that value: ours with no prior is deleted (`reg delete … /v asight-collector /f`), ours over a prior puts the prior back with its kind, a value that is not ours is left, an absent one is already
+ * as asked. → `{ code, out, err, runKey: 'removed' | 'restored' | 'left' | 'absent' | 'failed' }`. `prior` is the ledger entry's.
+ */
+export function removeRunValue({ run = null, env = process.env, prior = null } = {}) {
+  const cur = readRunValue({ run, env })
+  if (cur.error) return { code: null, out: '', err: cur.error, runKey: 'failed' }
+  if (!cur.present) return { ...ok, runKey: 'absent' }
+  if (!ours(cur.value)) return { ...ok, runKey: 'left' }
+  const r = prior ? execTool('reg', ['add', RUN_PATH, '/v', RUN_KEY.name, '/t', prior.kind, '/d', prior.value, '/f'], { run, env }) : execTool('reg', ['delete', RUN_PATH, '/v', RUN_KEY.name, '/f'], { run, env })
+  return { code: r.code, out: '', err: r.err, runKey: r.code === 0 ? (prior ? 'restored' : 'removed') : 'failed' } // reg's "The operation completed successfully." is not worth carrying
+}
+
+const settle = (task, k) => ({ code: task.code !== 0 ? task.code : k.code, out: [task.out, k.out].filter(Boolean).join('\n'), err: [task.err, k.err].filter(Boolean).join('; '), task: task.state, runKey: k.runKey })
 
 /**
  * The per-user autostart as `asight on` (src/cli/on.mjs) and install.mjs consume it, the same shape as arch/linux/unit.mjs `userUnit`: `{ name, path, links, text(env), enable({ now }), start(), reload(), disable(), remove() }`, each verb
  * returning `{ code, out, err }`. `path` is the task's XML, an owned file the install manifest lists; `links` is empty (a task has no wants/ link); `text(env)` is the XML (a Windows task has no environment of its own, so the
  * daemon environment install offers is not carried: a daemon the task starts trusts the system store, 4.8 §6.2). Nothing is registered until `enable`.
- *   enable({ now })  registers the task (`/Create /XML … /F`, which also switches a disabled one on) and, with `now` (the default; install passes false when a daemon already answers), runs it (`/Run`).
+ *   enable({ now })  registers the task (`/Create /XML … /F`, which also switches a disabled one on) and, with `now` (the default; install passes false when a daemon already answers), runs it (`/Run`) → `via: 'task'`.
+ *                    When schtasks REFUSES the registration, the Run-key fallback takes over (4.8 §7): `via: 'run-key'`, code 0 (`on` does not fail because the Task Scheduler said no), `reason` (why), `ledger` (the manifest entry,
+ *                    runKeyFallback's), `ours`, `event` (the `task-register-failed` failure record for the caller to write: it carries the reason and names the entry used instead), and with `now` the supervised daemon is started
+ *                    directly (the Run value only runs at the next login). When the fallback fails too, code is not 0 and `err` has both reasons.
  *   start()          the `--no-autostart` run: this session, nothing at login. A task with a login trigger would be an autostart, so none is registered: the supervised daemon is started directly, detached, with no window.
  *   reload()         nothing to do: a rewritten task is registered again by `enable` (`/F`).
- *   disable()        a no-argument `off`: `/Change /DISABLE`. It does not end a running instance (the supervisor parent is stopped first by the caller, 4.8 §4.2). A task that is not there is already as asked.
- *   remove()         `uninstall`: `/Delete /F`.
+ *   disable({ prior }) a no-argument `off`: the task is switched off (`/Change /DISABLE`; it does not end a running instance, the caller stops the supervisor parent first, 4.8 §4.2) and asight's Run value is taken out, whichever
+ *                    of the two an earlier `on` used. → `{ code, out, err, task: 'disabled' | 'absent' | 'failed', runKey }`. `prior` is the Run entry's ledgered prior value.
+ *   remove({ prior }) `uninstall`: the task is deleted (`/Delete /F`) and the Run value taken out the same way. A task that is not there is already as asked (found with `/Query`, never by parsing a localised error text).
  */
 export function userUnit({ home, node, script, run = null, env = process.env, fs = nodeFs, spawn = nodeSpawn, user = null, conhost = 'conhost.exe' } = {}) {
   const file = path.join(collectorHome(path.join(home, '.asight')), TASK_FILE)
   const tools = { run, env }
+  function startDirect() {
+    let child
+    try { child = spawn(conhost, ['--headless', node, script, 'daemon', '--supervise'], { detached: true, stdio: 'ignore', windowsHide: true }) } catch (e) { return { code: null, out: '', err: `${conhost} could not be started (${(e && e.code) || (e && e.message) || e})` } }
+    if (!child || child.pid === undefined) return { code: null, out: '', err: `${conhost} did not start the supervised daemon` }
+    if (typeof child.on === 'function') child.on('error', () => {}) // a late spawn error is not an uncaught exception; the daemon that never answers is what `on` reports
+    child.unref()
+    return { ...ok, via: 'direct', pid: child.pid }
+  }
+  // the task is changed or deleted when it is there, and asight's Run value is taken out; each says what it did
+  const undo = (args, done, prior) => {
+    const t = taskExists(tools) ? (() => { const r = schtasks(args, tools); return { ...r, state: r.code === 0 ? done : 'failed' } })() : { ...ok, state: 'absent' }
+    return settle(t, removeRunValue({ run, env, prior }))
+  }
   return {
     name: 'asight-collector', path: file, links: [],
     text: () => taskXml({ user: user || taskUser(env), node, asight: script, conhost }),
     enable({ now = true } = {}) {
       const c = register({ file, run, env, fs })
-      if (c.code !== 0) return { ...c, via: 'task' }
-      return { ...(now ? schtasks(['/Run', '/TN', TASK_NAME], tools) : c), via: 'task' }
+      if (c.code === 0) return { ...(now ? schtasks(['/Run', '/TN', TASK_NAME], tools) : c), via: 'task' }
+      if (c.precondition) return { ...c, via: 'task' }
+      const why = errOf(c)
+      const f = runKeyFallback({ command: daemonCommandLine({ node, asight: script, conhost }), run, env })
+      if (!f.ok) {
+        const reason = `schtasks /Create was refused (${why}) and the HKCU Run entry ${RUN_KEY.name} could not be written either (${f.reason}): asight does not start at login`
+        return { code: c.code ?? 1, out: '', err: `${why}; the Run-key fallback failed too: ${f.reason}`, via: 'task', ...(f.entry ? { ledger: f.entry } : {}), event: { event: 'failure', where: 'install', code: 'task-register-failed', reason } }
+      }
+      const event = { event: 'failure', where: 'install', code: 'task-register-failed', reason: `schtasks /Create was refused (${why}); asight starts at login through the HKCU Run entry ${RUN_KEY.name} instead, with the supervisor parent restarting the daemon` }
+      const started = now ? startDirect() : null
+      const base = { via: 'run-key', reason: why, ledger: f.entry, ours: f.ours, event }
+      return started && started.code !== 0 ? { code: started.code, out: '', err: started.err, ...base } : { ...ok, ...base, ...(started ? { pid: started.pid } : {}) }
     },
-    start() {
-      let child
-      try { child = spawn(conhost, ['--headless', node, script, 'daemon', '--supervise'], { detached: true, stdio: 'ignore', windowsHide: true }) } catch (e) { return { code: null, out: '', err: `${conhost} could not be started (${(e && e.code) || (e && e.message) || e})` } }
-      if (!child || child.pid === undefined) return { code: null, out: '', err: `${conhost} did not start the supervised daemon` }
-      if (typeof child.on === 'function') child.on('error', () => {}) // a late spawn error is not an uncaught exception; the daemon that never answers is what `on` reports
-      child.unref()
-      return { ...ok, via: 'direct', pid: child.pid }
-    },
+    start: startDirect,
     reload: () => ({ ...ok }),
-    disable() {
-      if (!taskExists(tools)) return { ...ok, absent: true }
-      return { ...schtasks(['/Change', '/TN', TASK_NAME, '/DISABLE'], tools), via: 'task' }
-    },
-    remove() {
-      if (!taskExists(tools)) return { ...ok, absent: true }
-      return { ...schtasks(['/Delete', '/TN', TASK_NAME, '/F'], tools), via: 'task' }
-    },
+    disable: ({ prior = null } = {}) => undo(['/Change', '/TN', TASK_NAME, '/DISABLE'], 'disabled', prior),
+    remove: ({ prior = null } = {}) => undo(['/Delete', '/TN', TASK_NAME, '/F'], 'removed', prior),
   }
 }
