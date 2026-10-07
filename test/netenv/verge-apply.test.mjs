@@ -3,7 +3,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import { startWorld, snapshot, sha, GROUPS, VERGE_YAML } from './fixtures/verge-world.mjs'
+import { startWorld, snapshot, sha, GROUPS, VERGE_YAML, userRuntime } from './fixtures/verge-world.mjs'
+import { createController } from '../../src/netenv/mihomo/controller.mjs'
 import { names, buildScriptJs } from '../../src/netenv/mihomo/rules.mjs'
 import { pickApply } from '../../src/netenv/adapters/clash-verge-rev.mjs'
 
@@ -158,6 +159,49 @@ test('W11 none: a payload the core refuses leaves only the files written, and th
   w.core.rejectPayload = null
   const third = await w.adapter.applyGroups({ groups: both(w), block: w.block() })
   assert.deepEqual([third.ok, third.rows[0].strategy, pushes()], [true, ['payload'], 2])
+})
+
+test('W11 none: only a core that REFUSED the config (4xx) closes the payload strategy for the round; a core that failed (5xx), a controller that did not answer, a runtime that could not be read or spliced is tried again at the next `on`', async (t) => {
+  const pushes = (w) => w.core.requests.filter((q) => q.path === '/configs?force=true').length
+  // a 5xx: the core is sick, not saying no to this config
+  const sick = await startWorld(t)
+  sick.core.failOn('PUT', /^\/configs$/, 500)
+  const first = await sick.adapter.installBlock({ block: sick.block(), blockText: buildScriptJs({ block: sick.block() }), groups: both(sick) })
+  assert.deepEqual([first.rows[0].strategy, first.rows[0].steps.find((x) => x.step === 'payload').status], [['payload', 'none'], 500])
+  sick.core.failures.length = 0
+  const second = await sick.adapter.applyGroups({ groups: both(sick), block: sick.block() })
+  assert.deepEqual([second.ok, second.rows[0].strategy, pushes(sick)], [true, ['payload'], 2], 'tried again, without reset(), and it went through')
+  // the controller drops the push (status 0: the pipe went away for a moment): the same
+  let real = null
+  let drop = true
+  const flaky = { endpoint: 'flaky', get: (p) => real.get(p), put: (p, b) => (drop && p.startsWith('/configs') ? Promise.resolve({ status: 0, ok: false, json: null, text: '', error: 'ECONNRESET' }) : real.put(p, b)) }
+  const dropped = await startWorld(t, { adapter: { controller: flaky } })
+  real = createController({ endpoint: dropped.core.endpoint })
+  const lost = await dropped.adapter.applyGroups({ groups: both(dropped), block: dropped.block() })
+  assert.deepEqual([lost.rows[0].strategy, lost.rows[0].steps.find((x) => x.step === 'payload').reason], [['payload', 'none'], 'controller-unreadable'])
+  drop = false
+  assert.deepEqual([(await dropped.adapter.applyGroups({ groups: both(dropped), block: dropped.block() })).rows[0].strategy, pushes(dropped)], [['payload'], 1], 'the next `on` pushes it')
+  // a runtime that cannot be read: nothing is sent, and it is not a refusal either
+  const gone = await startWorld(t)
+  fs.rmSync(gone.file('clash-verge.yaml'))
+  const unread = await gone.adapter.applyGroups({ groups: both(gone), block: gone.block() })
+  assert.deepEqual([unread.rows[0].strategy, unread.rows[0].steps.find((x) => x.step === 'payload').reason], [['payload', 'none'], 'runtime-unreadable'])
+  fs.writeFileSync(gone.file('clash-verge.yaml'), userRuntime())
+  const back = await gone.adapter.applyGroups({ groups: both(gone), block: gone.block() })
+  assert.deepEqual([back.ok, back.rows[0].strategy], [true, ['payload']], 'the runtime is readable again: the next `on` pushes it')
+  // a runtime shape the text splice does not read: the same, the strategy stays open
+  const shaped = await startWorld(t)
+  const good = fs.readFileSync(shaped.file('clash-verge.yaml'), 'utf8')
+  fs.writeFileSync(shaped.file('clash-verge.yaml'), good.replace('proxies:\n', 'proxies: [a, b]\n').replace(/- name: node-b[\s\S]*?(?=proxy-groups:)/, ''))
+  assert.equal((await shaped.adapter.applyGroups({ groups: both(shaped), block: shaped.block() })).rows[0].steps.find((x) => x.step === 'payload').reason, 'runtime-shape')
+  fs.writeFileSync(shaped.file('clash-verge.yaml'), good)
+  assert.deepEqual((await shaped.adapter.applyGroups({ groups: both(shaped), block: shaped.block() })).rows[0].strategy, ['payload'])
+  // a 4xx is the core saying no to this config: not repeated until reset() (W11 none, below)
+  const no = await startWorld(t)
+  no.core.failOn('PUT', /^\/configs$/, 403)
+  await no.adapter.applyGroups({ groups: both(no), block: no.block() })
+  no.core.failures.length = 0
+  assert.deepEqual([(await no.adapter.applyGroups({ groups: both(no), block: no.block() })).rows[0].strategy, pushes(no)], [['none'], 1])
 })
 
 test('W11 none: no controller to talk to writes the files and says 未生效 (a controller that is not Verge\'s is the same, and is held in verge-adapter.test.mjs: N4 at the adapter); a push with no block to push says block-needed', async (t) => {

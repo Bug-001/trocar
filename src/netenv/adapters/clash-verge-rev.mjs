@@ -73,7 +73,7 @@ export function finding(code, extra = {}) {
  *   blockInRuntime    asight's groups are in the core's runtime (Verge activated a Script.js that has the block, or a payload put it there)
  *   serviceMode       Verge runs its core as the SYSTEM service: the service may copy the route file into its own directory, after which refreshing asight's provider reads the copy ([L4b] S5: not measured)
  *   controllerWritable  the controller was found and trusted (4.7 §3.3); false / null: nothing can be told to the core
- *   payloadAccepted   a push of the runtime has been accepted (true), was refused or could not be read (false), or was not tried yet (null: try it)
+ *   payloadAccepted   a push of the runtime has been accepted (true), was refused by the core (false: a 4xx), or was not tried yet or failed in a way that may pass (null: try it)
  * → { on: [...], off: [...] }, the keys in the order they are turned: 'select' (PUT the group's switch) and 'provider' (write the route file and refresh the provider), 'payload' (push the runtime with the block
  * spliced in), 'none' (only the files are written: 已写入,未生效 · 去 Clash Verge → 订阅,点当前订阅重新激活). With the block live: on needs BOTH keys to land and off only ONE (PASS, or an empty provider, both mean off).
  * Service mode leaves the provider out of both. Without the block in the runtime there is nothing to switch off (the route files are all there is) and `on` pushes the payload, unless it was refused before.
@@ -404,7 +404,7 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
   }
 
   // ---- switching groups: the strategy, the writes, and the read-back (4.8 §4.1 §4.3 §4.4; W11 W55 W56) ----------------------------------------------------------------------------
-  let payloadAccepted = null // true / false once a push was accepted / refused; null: not tried
+  let payloadAccepted = null // true: a push was accepted; false: the core refused one (4xx) and is not asked again until reset(); null: not tried, or it failed for a reason that may pass (5xx, no answer, an unreadable runtime)
 
   /**
    * Turn groups on or off: `groups` = `[{ g, on, lines }]` (`lines`: the group's process rules, used when it is on; `block`: buildBlock()'s output, needed only when the block is not in the runtime yet and has to be
@@ -460,7 +460,7 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
       for (const row of active) { row.strategy = row.want === 'on' ? ['payload'] : row.strategy; if (row.want === 'on') await writeFiles(row) } // the provider loads the files when the runtime does
       const pushed = block ? await pushPayload({ block }) : { ok: false, reason: 'block-needed' }
       on.forEach((row, i) => step(row, 'payload', pushed, { receipt: i === 0 })) // every row shows the step, the receipt of the one push is listed once
-      if (pushed.ok) { payloadAccepted = true; for (const row of on) step(row, 'select', await putSelect(row.g, names(row.g).fb)) } else { if (block) payloadAccepted = false; for (const row of on) row.strategy.push('none') }
+      if (pushed.ok) { payloadAccepted = true; for (const row of on) step(row, 'select', await putSelect(row.g, names(row.g).fb)) } else { if (block && pushed.status >= 400 && pushed.status < 500) payloadAccepted = false; for (const row of on) row.strategy.push('none') } // only a core that said no to this config closes the strategy: a 5xx, a controller that did not answer, a runtime that could not be read are tried again
     } else {
       for (const row of on) {
         row.strategy = pick.on
@@ -561,5 +561,6 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     }
   }
 
+  // `reset()`: call it at the start of every `on`: it forgets the found controller and re-opens the payload strategy that a refusal closed (see payloadAccepted). The ledger's vpn-runtime-* entries are not touched (Task 8 forgets them when verify() says block-not-in-runtime).
   return { home, paths: P, readFields, readConfigs, readFindProcessMode, verify, refreshProbe, processRulesNaming, facts, controllerInfo, writeScriptBlock, stripScriptBlock, writeRuleFile, removeRuleFile, putSelect, refreshProvider, pushPayload, pickApply, applyGroups, installBlock, removeBlock, drift, reset: () => { found = null; payloadAccepted = null }, sentinel: SCRIPT_SENTINEL }
 }
