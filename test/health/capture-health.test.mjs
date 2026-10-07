@@ -250,3 +250,26 @@ test('only metadata leaves: a WebSocket row\'s tail_raw and an envelope-looking 
     assert.doesNotMatch(s, /U0VDUkVU|c2VjcmV0|secret|Proxy-Authorization/)
   } finally { b.done() }
 })
+
+// RFC 1.6 §6 「看板」 / V10: `netenv` rides in the payload, read from ~/.asight/netenv.json (src/netenv writes it): missing says it is not written yet and why, an unreadable or unparsable
+// file says the file and the errno, a good one is passed through — never an absent key, never a quiet 「无」; and a broken netenv.json does not turn the bar to 读不全 (it is a cache the next
+// `asight status` writes again, not capture health)
+test('netenv: written → passed through; missing → present:false with the reason; unreadable or not JSON → the file and the error, and the read errors stay empty', () => {
+  const b = home()
+  try {
+    installed(b); b.lock(); b.state('on', at(H))
+    const none = b.health().netenv
+    assert.deepEqual([none.present, typeof none.reason], [false, 'string'])
+    assert.match(none.reason, /netenv\.json/)
+    const doc = { schema: 1, at: at(H), products: [{ product: 'clash-verge', mode: 'rule', via: {} }], unknown: [] }
+    fs.writeFileSync(path.join(b.h, 'netenv.json'), JSON.stringify(doc))
+    assert.deepEqual(b.health().netenv, { present: true, ...doc })
+    fs.writeFileSync(path.join(b.h, 'netenv.json'), '{"products"')
+    const bad = b.health()
+    assert.equal(bad.netenv.present, true)
+    assert.match(bad.netenv.error, /netenv\.json[^\n]*(parse|JSON)/)
+    assert.deepEqual([bad.read.errors.length, bad.summary.read_errors], [0, undefined], 'not capture health')
+    fs.rmSync(path.join(b.h, 'netenv.json')); fs.mkdirSync(path.join(b.h, 'netenv.json'))
+    assert.match(b.health({ fs: { ...fs, readFileSync: (f, ...r) => { if (String(f).endsWith('netenv.json')) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); return fs.readFileSync(f, ...r) } } }).netenv.error, /netenv\.json: EACCES/)
+  } finally { b.done() }
+})

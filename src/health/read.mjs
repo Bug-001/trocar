@@ -244,10 +244,22 @@ function rawHealth({ home, now, fs, read }) {
   return { problems: bad.slice(-20).map(pick), ...(bad.length > 20 || t.truncated ? { truncated: true } : {}), failures: groupsOf(bad, now, (r) => `raw:${r.op}/${r.outcome}`) }
 }
 
+// What `asight status`, `doctor` and `on` last read of the VPN / proxy software (RFC 1.6 §6 「看板」): ~/.asight/netenv.json, written by src/netenv/index.mjs (not imported here: 0.1 §2).
+// A missing file is "not written yet" with the reason; one that cannot be read or parsed carries the file and the error. Neither is an absent key or an empty list, and neither goes into
+// `read.errors`: the file is a cache the next `asight status` writes again, and a broken one must not turn the bar to 读不全 (it is not capture health).
+function netenvOf({ home, fs }) {
+  const file = path.join(home, 'netenv.json')
+  const r = readJson(file, fs)
+  if (r.missing) return { present: false, reason: `${file} is not there yet: asight status, doctor and on write it` }
+  if (r.error) return { present: true, error: r.error }
+  if (!r.value || typeof r.value !== 'object' || Array.isArray(r.value)) return { present: true, error: `${file} is not a JSON object` }
+  return { present: true, ...r.value }
+}
+
 /**
  * captureHealth({home}) → the /api/capture-health payload (RFC 4.4): `installed`,
  * `summary` (the top bar's state, the worst of the collector's and the old capture's), `collector`, `legacy`, `raw`,
- * `read` (files read, files that could not be, truncated). Throws HealthUnreadable when flows/ (or the collector
+ * `netenv` (the VPN / proxy software, 1.6 §6), `read` (files read, files that could not be, truncated). Throws HealthUnreadable when flows/ (or the collector
  * directory) cannot be read at all — never an empty answer.
  */
 export function captureHealth({ home = asightHome(), now = Date.now(), fs = nodeFs, alive = pidAlive, identity = procIdentity, maxBytes } = {}) {
@@ -266,5 +278,5 @@ export function captureHealth({ home = asightHome(), now = Date.now(), fs = node
   // installed: true when either capture is there; null when the collector's manifest cannot be read and nothing else
   // says so — false only means not installed (4.4)
   const installed = collector.installed === true || legacy.present ? true : collector.installed === null ? null : false
-  return { generated_at: new Date(now).toISOString(), installed, summary, collector, legacy, raw, read }
+  return { generated_at: new Date(now).toISOString(), installed, summary, collector, legacy, raw, netenv: netenvOf({ home, fs }), read }
 }
