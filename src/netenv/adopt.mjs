@@ -6,6 +6,7 @@
 import nodeFs from 'node:fs'
 import { parseJsonc, parseDotenv } from '../collector/core/config-read.mjs'
 import { redactProxyUrl, settingSha, parseProxyUrl } from './redact.mjs'
+import { readNetenvFile } from './index.mjs'
 
 const errCode = (e) => (e && e.code) || String((e && e.message) || e)
 const unknown = (reason, detail) => ({ unknown: { reason, detail } })
@@ -53,3 +54,9 @@ export function readProxySetting(desc, { home, env = process.env, fs = nodeFs } 
 
 /** The files a harness reads a proxy from, resolved for this HOME and environment (the daemon stats them in its 5 s check). */
 export const proxyFilesOf = (desc, { home, env = process.env }) => desc.proxy.files.map((f) => f.path({ home, env }))
+
+/** What `on` found of each harness's proxy setting and drew (`adopted.<h>` of ~/.asight/netenv.json, §9.5), or null when it was never written; the drift of a setting is measured against it. */
+export function readAdopted(home, { fs = nodeFs } = {}) {
+  const n = readNetenvFile(home, { fs })
+  return n && n.adopted && typeof n.adopted === 'object' && !Array.isArray(n.adopted) ? n.adopted : null
+}

@@ -24,13 +24,29 @@ export async function detectNetenv({ home = os.homedir(), platform = process.pla
   return { at: now().toISOString(), products: clash.products, unknown: clash.unknown }
 }
 
-/** Writes the result to ~/.asight/netenv.json whole or not at all (temp file, rename), 0600 in a 0700 directory when it had to be made → `{ path }`; throws what failed. */
+/** ~/.asight/netenv.json as it is on disk → the object, or null when it is not there or does not parse (the board says that itself: src/health/read.mjs netenvOf). */
+export function readNetenvFile(home, { fs = nodeFs } = {}) {
+  try { const v = JSON.parse(fs.readFileSync(netenvFile(home), 'utf8')); return v && typeof v === 'object' && !Array.isArray(v) ? v : null } catch { return null }
+}
+/** What a write keeps of the file already there: the probe's own keys are replaced whole; `adopted` (what `on` found, 1.6 §9.5) is carried over when the new result has none, and so is each harness of
+ *  `topology` the new one does not redraw (a `status codex` redraws codex only: the others keep their own `at`). */
+export function mergeNetenv(prev, result) {
+  const out = { ...result }
+  if (!prev) return out
+  if (out.adopted === undefined && prev.adopted !== undefined) out.adopted = prev.adopted
+  if (out.topology !== undefined && prev.topology && typeof prev.topology === 'object') out.topology = { ...prev.topology, ...out.topology }
+  else if (out.topology === undefined && prev.topology !== undefined) out.topology = prev.topology
+  return out
+}
+
+/** Writes the result to ~/.asight/netenv.json whole or not at all (temp file, rename), 0600 in a 0700 directory when it had to be made → `{ path }`; throws what failed. It is the one place under
+ *  src/netenv that writes (4.7 N15). */
 export function writeNetenv(home, result, { fs = nodeFs } = {}) {
   const file = netenvFile(home)
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   const tmp = `${file}.tmp-${process.pid}`
   try {
-    fs.writeFileSync(tmp, JSON.stringify({ schema: NETENV_SCHEMA, ...result }, null, 2) + '\n', { mode: 0o600 })
+    fs.writeFileSync(tmp, JSON.stringify({ schema: NETENV_SCHEMA, ...mergeNetenv(readNetenvFile(home, { fs }), result) }, null, 2) + '\n', { mode: 0o600 })
     fs.chmodSync(tmp, 0o600)
     fs.renameSync(tmp, file)
   } catch (e) { try { fs.rmSync(tmp, { force: true }) } catch { /* the failure that matters is e */ } throw e }

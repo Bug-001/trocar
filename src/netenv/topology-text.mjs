@@ -18,7 +18,7 @@ const paren = (...parts) => { const p = parts.filter(Boolean); return p.length ?
 function hopText(n, via, detail, inferred = false) {
   switch (n.kind) {
     case 'agent': return detail ? `${n.name}${n.pid ? ` pid ${n.pid}` : ''}${n.version ? ` · ${n.version}` : ''}${n.elevated ? ' · 提权' : ''}` : `${n.name}${n.pid ? ` ${n.pid}` : ''}${n.elevated ? '(提权)' : ''}`
-    case 'asight-engine': return detail ? `${n.name}${n.pid ? ` pid ${n.pid}` : ''} · ${n.addr}:${n.port}${n.mode === 'decrypt' ? ' · 解密' : ''}${paren(passText(n))}` : `${n.name} :${n.port}${paren(passText(n))}`
+    case 'asight-engine': return detail ? `${n.name}${n.pid ? ` pid ${n.pid}` : ''}${n.port ? ` · ${n.addr}:${n.port}` : ''}${n.mode === 'decrypt' ? ' · 解密' : ''}${paren(passText(n))}` : `${n.name}${n.port ? ` :${n.port}` : ''}${paren(passText(n))}` // a daemon that did not say its port is drawn without one: no `:undefined`
     case 'asight-forwarder': return `${n.name} :${n.port}${paren(n.mode === 'forward-only' ? '只转发' : n.mode === 'down' ? '没人在听' : null)}`
     case 'legacy-mitm': return `${n.name} :${n.port}`
     case 'proxy': {
@@ -67,6 +67,23 @@ const distinct = (t) => t.branches.filter((b, i) => t.branches.findIndex((x) => 
 
 /** One line per way a harness's traffic goes: the path with asight on it (HTTP and WebSocket that take the same path are one line). */
 export const renderCompact = (t) => distinct(t).map((b) => `${prefixOf(t, b)}${chain(t, b.path)}`)
+
+/**
+ * The 「各 harness 的路」 block of `status` (§9.2): a header with the mode, how long ago it was probed and where the detail is, then each harness's compact lines with the verdict (on the path or not · captured or
+ * not and why) at the end of the last one. `topo` = { <h>: HarnessTopology } (what `--json` carries), `ids` the order. Rendered from the topology and nothing else.
+ */
+export function renderPathBlock(topo, { ids = Object.keys(topo), now = null } = {}) {
+  const list = ids.filter((h) => topo[h])
+  if (!list.length) return []
+  const first = topo[list[0]]
+  const ago = now != null && Number.isFinite(Date.parse(first.at)) ? ` · ${Math.max(0, Math.round((now - Date.parse(first.at)) / 1000))} 秒前探测` : ''
+  const lines = [`各 harness 的路(${ROUTING_TEXT[first.routing] || ROUTING_TEXT.unknown} · 新连接${ago} · 细节: asight status <harness>)`]
+  for (const h of list) {
+    const t = topo[h], rows = renderCompact(t)
+    rows.forEach((r, i) => lines.push(`  ${i ? ' '.repeat(13) : h.padEnd(13)} ${r}${i === rows.length - 1 ? `   ${verdictText(t.branches[0])}` : ''}`))
+  }
+  return lines
+}
 
 /** What `status` says after a branch's chain: 「在路径上 · 是」 / 「不在 · 否 · desired-off」 — whether asight is on the path, whether the harness is captured, and why not. */
 export const verdictText = (b) => `${b.on_path === true ? '在路径上' : b.on_path === false ? '不在' : '在不在路径上不知道'} · ${tri(b.captured)}${b.reason ? ` · ${b.reason}` : ''}`

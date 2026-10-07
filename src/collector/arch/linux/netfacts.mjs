@@ -63,7 +63,7 @@ function startSettingOf({ proc, current, adopted, startedAt }) {
  */
 export async function linuxNetFacts(ctx, deps = {}) {
   const { status, settings = {}, adopted = null, env = process.env } = ctx
-  const exec = deps.exec || (ctx.deps && ctx.deps.exec) || null, root = deps.procRoot || '/proc'
+  const exec = deps.exec || (ctx.deps && ctx.deps.exec) || null, root = deps.procRoot || (ctx.deps && ctx.deps.procRoot) || '/proc'
   const unknowns = [], reply = status.daemon.reply
   const rows = reply && Array.isArray(reply.agents) ? reply.agents : null
   const procs = {}
