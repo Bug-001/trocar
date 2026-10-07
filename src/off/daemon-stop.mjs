@@ -40,7 +40,7 @@ export function readDaemonLock({ file, now = Date.now(), alive = pidAlive, ident
   return { state: age_ms > DAEMON_LOCK_FRESH_MS ? 'unresponsive' : 'running', lock, age_ms, ...(verified ? {} : { verified: false }) }
 }
 
-/** What there is to deal with → `{ state, lock, reason?, age_ms? }`:
+/** What there is to deal with → `{ state, lock, socket, reason?, age_ms? }` (`socket`: the one that answered, or null):
  *    none          no lock and nothing answers: no daemon
  *    stale         the lock names a process that is gone or is another one now, and nothing answers: no daemon (its helper may linger)
  *    running       it answers (GET /status)
@@ -50,15 +50,15 @@ export function readDaemonLock({ file, now = Date.now(), alive = pidAlive, ident
 export async function daemonState({ lockFile, socketPath = null, request = controlRequest, identity = procIdentity, alive = pidAlive, now = Date.now, fs = nodeFs, timeoutMs = 5000 } = {}) {
   const L = readDaemonLock({ file: lockFile, now: now(), alive, identity, fs })
   const lock = L.lock || null
-  let answered = false, hung = null
+  let answered = false, hung = null, answeredOn = null
   for (const sock of [...new Set([socketPath, lock && lock.socket].filter(Boolean))]) {
-    try { await request({ socketPath: sock, method: 'GET', path: '/status', timeoutMs }); answered = true; break } catch (e) {
-      if (e && e.status) { answered = true; break } // it answered, with an error: it is there
+    try { await request({ socketPath: sock, method: 'GET', path: '/status', timeoutMs }); answered = true; answeredOn = sock; break } catch (e) {
+      if (e && e.status) { answered = true; answeredOn = sock; break } // it answered, with an error: it is there
       if (e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED')) continue // nobody listens on it
       hung = String((e && e.message) || e)
     }
   }
-  const out = (state, reason) => ({ state, lock, ...(reason ? { reason } : {}), ...(L.age_ms != null ? { age_ms: L.age_ms } : {}) })
+  const out = (state, reason) => ({ state, lock, socket: answeredOn, ...(reason ? { reason } : {}), ...(L.age_ms != null ? { age_ms: L.age_ms } : {}) })
   if (L.state === 'unresponsive') return out('unresponsive', `${lockFile} was not refreshed for ${Math.round(L.age_ms / 1000)} s`)
   if (answered) return out('running')
   if (hung) return out('unresponsive', `the control socket does not answer (${hung})`)

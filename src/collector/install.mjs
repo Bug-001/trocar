@@ -24,7 +24,8 @@ import { pidAlive } from '../off/proc.mjs'
 import { dropBackup } from '../off/backup.mjs'
 import { undoHarnesses } from '../off/undo.mjs'
 import { undoByHand } from '../off/manifest.mjs'
-import { backupDir } from '../off/paths.mjs'
+import { backupDir, opLockFile } from '../off/paths.mjs'
+import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readStateFile, emptyState, setDesired, writeStateAtomic } from '../off/state.mjs'
 import { newReceipt } from '../off/schema.mjs'
 
@@ -111,6 +112,7 @@ export function daemonEnv(env, dir) {
 //   turnOn      the command: plan → confirm → desired state first → write → unit → daemon → receipt
 //   installCollector   the install half alone, as the harness and lab tests set an agent up (no state.json, no daemon, no confirmation)
 
+const OP_LOCK_WAIT_MS = 10_000 // 1.6 R12: another state-changing command (an `off`, say) is waited for at most this long
 const nodeFs = fs
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 const act = (a) => a !== 'skip-intact' && a !== 'skip-user-changed'
@@ -388,11 +390,20 @@ export async function turnOn(opts = {}) {
       if (verdict === false) return { receipt: { ...r, ok: false, planned: true, declined: true, notes: [...r.notes, '没有确认:什么都没改'] }, manifest: plan._.prior, plan, exit: 1 }
     }
 
-    // ── confirmed: from here on, writes ──
+    // ── confirmed: from here on, writes — one state-changing command at a time (R12): the lock is held to the end of this callback (the try below), and
+    // the desired state is read again under it, so what an `off` that has just finished left is the base of what is written, not the read of a minute ago
+    let lock
+    try { lock = await acquireOpLock({ file: opLockFile(home), waitMs: OP_LOCK_WAIT_MS, fs }) } catch (e) {
+      if (e && e.code === LOCK_BUSY) return { receipt: { ...r, ok: false, notes: [...r.notes, String((e && e.message) || e)] }, manifest: plan._.prior, plan, exit: 1 }
+      throw e
+    }
+    try {
     const m = openManifest({ dir, plan, now, fs })
     // the desired state goes first (R9, R12): an `off` that lands meanwhile writes the same file, and every write below reads it again
-    if (need.length) writeStateAtomic(stateF, setDesired(stateRead.state, need, 'on', now()), { fs })
-    else if (stateWrite) writeStateAtomic(stateF, stateRead.state, { fs }) // version 1 → 2, nothing turned on: "on since" stays where it was
+    const locked = (() => { try { return readState() } catch { return stateRead } })()
+    const needNow = plan.targets.filter((id) => !(locked.state.harnesses[id] && locked.state.harnesses[id].desired === 'on'))
+    if (needNow.length) writeStateAtomic(stateF, setDesired(locked.state, needNow, 'on', now()), { fs })
+    else if (stateWrite) writeStateAtomic(stateF, locked.state, { fs }) // version 1 → 2, nothing turned on: "on since" stays where it was
     const guard = () => {
       let st
       try { st = readState().state } catch (e) { throw stop(`${stateF} cannot be read (${String((e && e.message) || e)}), so it is not known whether an off was asked; stopped (1.6 R12)`) }
@@ -446,8 +457,8 @@ export async function turnOn(opts = {}) {
           unitFailed = `${unit.path} is written but "systemctl --user ${autostart ? `enable${was.up ? '' : ' --now'}` : 'start'}" failed (${rr.err || `exit ${rr.code}`}); start the daemon with "${DAEMON_CMD}", or enable the unit once systemd --user runs`
           notes.push(unitFailed); problems.push(unitFailed); put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed })
         } else if (!was.up) {
-          for (let i = 0; i < 60 && !up; i++) { up = (await probe()).up; if (!up) await pause(250) }
-          if (!up) {
+          for (let i = 0; i < 60 && !up && !halt; i++) { up = (await probe()).up; if (!up) { await pause(250); checked(() => guard()) } } // an off that lands while the daemon starts is seen within a poll, not after 15 s (R12)
+          if (!up && !halt) {
             const why = `the unit was ${autostart ? 'enabled and started' : 'started'}, but no daemon answers on ${sock}; look at "systemctl --user status ${UNIT_NAME_HINT}" and the board's capture health`
             problems.push(why); put({ event: EVENT.failure, where: 'start', code: 'start-failed', reason: why })
           }
@@ -478,6 +489,7 @@ export async function turnOn(opts = {}) {
     }
     const wrote = written.entries.length || written.files.length || written.owned.length || written.unit
     return finish(wrote ? 'installed' : 'on', problems.length ? `on did not finish: ${problems[0]}` : `on: ${plan.targets.join(', ')}`)
+    } finally { lock.release() }
   })
 }
 
