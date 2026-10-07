@@ -457,6 +457,45 @@ test('W15 bytes that reach the agent\'s upstream in the same chunk as the proxy\
   assert.deepEqual([L.flows[0].decision, L.flows[0].not_captured], ['splice', 'upstream-first'])
 })
 
+test('W15 a proxy that does not answer is waited for without a limit and said once: upstream-slow (phase proxy-reply) after upstreamSlowMs, no credentials in it, the agent not cut; a client that leaves first leaves no event', T, async (t) => {
+  let release, held = null
+  const slow = net.createServer((s) => { held = s; s.on('error', () => {}); s.once('data', () => { new Promise((r) => { release = r }).then(() => s.write('HTTP/1.1 200 Connection established\r\n\r\n')) }) })
+  await listen(slow); t.after(() => { slow.close(); if (held) held.destroy() })
+  const L = await lab(t, { timing: { upstreamSlowMs: 80 }, meta: { upstream: { kind: 'http', host: '127.0.0.1', port: slow.address().port, auth: CRED } } })
+  const c = L.client(); c.write(connectHead('upstream.test:443'))
+  await until(() => L.failures.length, 'the upstream-slow event')
+  await sleep(250) // the event is once, not every interval
+  assert.deepEqual(L.failures.map((f) => [f.where, f.code, f.phase, f.host]), [['engine', 'upstream-slow', 'proxy-reply', 'upstream.test']])
+  assert.ok(L.failures[0].waited_ms >= 80, `waited_ms ${L.failures[0].waited_ms}`); assert.deepEqual(checkRecord(L.failures[0]), [])
+  assert.equal(JSON.stringify(L.failures).includes('pw-SECRET'), false, 'the user\'s proxy credentials are not in it')
+  assert.equal(c.buf.length, 0, 'the agent was not cut and was told nothing')
+  await until(() => release, 'the proxy to receive the prelude'); release()
+  assert.match(await c.head(), /^HTTP\/1\.1 200 /, 'the wait had no limit: the proxy\'s late answer still reaches the agent'); assert.equal(L.failures.length, 1)
+  // a SOCKS5 proxy that never answers its greeting is the same; and a client that goes before the threshold takes the watch with it
+  const quiet = await silentProxy(t)
+  const S = await lab(t, { timing: { upstreamSlowMs: 150 }, meta: { upstream: { kind: 'socks5', host: '127.0.0.1', port: quiet.port } } })
+  const gone = S.client(); gone.write(connectHead('upstream.test:443')); await until(() => quiet.socks.length && quiet.socks[0].got.length, 'the greeting'); gone.sock.destroy()
+  const stays = S.client(); stays.write(connectHead('upstream.test:443'))
+  await until(() => S.failures.length, 'the SOCKS5 upstream-slow event'); await sleep(300)
+  assert.deepEqual(S.failures.map((f) => [f.code, f.phase]), [['upstream-slow', 'proxy-reply']], 'one event, for the client that stayed; none for the one that left before the threshold')
+})
+
+test('W15 a proxy whose reply to CONNECT is not an HTTP status line is a dial that failed, not a refusal: 502, bad_proxy_reply in the row, the proxy\'s own bytes not forwarded', T, async (t) => {
+  const garbage = net.createServer((s) => { s.on('error', () => {}); s.once('data', () => s.write('SSH-2.0-OpenSSH_9.6\r\n\r\n')) })
+  await listen(garbage); t.after(() => garbage.close())
+  const L = await lab(t, { meta: { upstream: { kind: 'http', host: '127.0.0.1', port: garbage.address().port } } })
+  const c = L.client(); c.write(connectHead('upstream.test:443'))
+  assert.equal(await c.head(), 'HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n', 'asight\'s own 502, not the proxy\'s bytes'); await c.closed(); await L.settled(1)
+  const [row] = L.flows
+  assert.deepEqual([row.decision, row.not_captured, row.error.type, row.error.side, 'reason' in row && row.reason], ['error', 'error', 'bad_proxy_reply', 'upstream', null])
+  assert.match(row.error.message, /not .*HTTP status line/); assert.equal(JSON.stringify(row).includes('NaN'), false)
+  assert.deepEqual([L.engine.stats().ingress.unreachable, L.engine.stats().ingress.refused], [1, 0])
+  const old = net.createServer((s) => { s.on('error', () => {}); s.once('data', () => s.write('HTTP/1.0 200 OK\r\n\r\n')) }) // an HTTP/1.0 proxy that says yes is still a yes
+  await listen(old); t.after(() => old.close())
+  const M = await lab(t, { meta: { upstream: { kind: 'http', host: '127.0.0.1', port: old.address().port } } })
+  const d = M.client(); d.write(connectHead('upstream.test:443')); assert.match(await d.head(), /^HTTP\/1\.1 200 /)
+})
+
 // The step-aside (4.6 让路): the engine does not trust the origin's CA, the agent does: the engine drops its own handshake and the agent meets the real
 // upstream with its own ClientHello. Through the ingress that second dial is a handshake with the proxy again — unless the proxy is the user's and
 // wants their credentials, which asight does not send twice (invariant 1).

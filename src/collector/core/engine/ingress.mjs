@@ -151,7 +151,10 @@ async function viaHttp(sock, up, target, deadline) {
   const m = await r.take(headOf, deadline)
   const rest = r.detach()
   if (m.gone || m.timeout || m.invalid) return { ok: false, kind: 'unreachable', error: { type: m.invalid ? 'bad_proxy_reply' : 'proxy_closed', message: m.invalid || `the proxy ${m.timeout ? 'did not answer' : 'closed the connection'} before its reply to CONNECT` } }
-  const status = parseInt(m.head.startLine.split(' ')[1], 10)
+  // a reply that is not an HTTP status line is not a refusal the agent should be shown: the proxy is not speaking HTTP (or is not a proxy), so the dial failed
+  const line = /^HTTP\/\d(?:\.\d)? (\d{3})(?: |$)/.exec(m.head.startLine)
+  if (!line) return { ok: false, kind: 'unreachable', error: { type: 'bad_proxy_reply', message: `the proxy's reply to CONNECT is not an HTTP status line (${printable(m.head.startLine, 40)})` } }
+  const status = Number(line[1])
   if (status >= 200 && status < 300) return { ok: true, sock, reply: status, rest }
   return { ok: false, kind: 'refused', reason: `proxy-status-${status}`, reply: status, raw: Buffer.concat([m.raw, rest]) }
 }
@@ -196,7 +199,7 @@ async function viaSocks5(sock, up, target, deadline) {
  *   connectUpstream  ({address, port}) → a connecting net.Socket (the engine's; tests inject)
  *   failure          (rec) the engine's failure sink; the ingress writes where:'ingress' records through it
  *   refuse           (meta, info) — the flows/ row of a connection the upstream refused or could not be reached (no flow started)
- *   timing           {ingressOpenerMs = 10000, ingressHealthIdleMs = 30000, ingressDialMs = 0 (no limit)}
+ *   timing           {ingressOpenerMs = 10000, ingressHealthIdleMs = 30000, ingressDialMs = 0 (no limit), upstreamSlowMs = 5000 (one upstream-slow event while a proxy has not answered)}
  */
 export function createIngress({ token, lookupIngress, handleFlow, connectUpstream, failure, timing = {}, refuse = () => {} }) {
   if (typeof token !== 'string' || token.length < 16) throw new TypeError('the ingress needs the install\'s token (a string of at least 16 characters)')
@@ -337,16 +340,26 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     const kind = up.kind || 'direct'
     if (!['direct', 'http', 'socks5'].includes(kind)) return { ok: false, kind: 'unreachable', error: { type: 'unsupported_upstream', message: `the upstream kind ${JSON.stringify(printable(kind))} is not one the ingress dials (direct, http, socks5)` } }
     const to = kind === 'direct' ? { address: target.host, port: target.port } : { address: up.host, port: up.port }
-    let sock
-    try { sock = connectUpstream(to) } catch (e) { return { ok: false, kind: 'unreachable', error: { type: e.code || 'upstream_error', message: msgOf(e) } } }
-    track(sock)
-    sock.on('error', () => {}) // the handshake owns the outcome; a late error must not be uncaught
-    try { await whenConnected(sock) } catch (e) { sock.destroy(); return { ok: false, kind: 'unreachable', error: { type: e.code || 'upstream_error', message: msgOf(e) } } }
-    if (kind === 'direct') return { ok: true, sock, reply: null, rest: Buffer.alloc(0) }
-    const deadline = timing.ingressDialMs ? Date.now() + timing.ingressDialMs : Infinity
-    const d = kind === 'socks5' ? await viaSocks5(sock, up, target, deadline) : await viaHttp(sock, up, target, deadline)
-    if (!d.ok) sock.destroy()
-    return d
+    // Waiting on the user's proxy has no time limit (D31: cutting the agent because a proxy is slow would break it), but it is not silent either (D38):
+    // once, past upstreamSlowMs, the same upstream-slow event the flow raises for the waits it owns (flow.mjs waitFor). No flow exists yet, so no flow_id.
+    let slow = null
+    if (kind !== 'direct') {
+      const ms = timing.upstreamSlowMs ?? 5000, t0 = Date.now()
+      slow = setTimeout(() => { slow = null; const waited = Math.max(ms, Date.now() - t0); failure({ code: 'upstream-slow', host: target.host, phase: 'proxy-reply', waited_ms: waited, reason: `${target.host} has not answered the proxy request for ${waited} ms; still waiting` }) }, ms) // a timer can fire a ms early
+      if (slow.unref) slow.unref()
+    }
+    try {
+      let sock
+      try { sock = connectUpstream(to) } catch (e) { return { ok: false, kind: 'unreachable', error: { type: e.code || 'upstream_error', message: msgOf(e) } } }
+      track(sock)
+      sock.on('error', () => {}) // the handshake owns the outcome; a late error must not be uncaught
+      try { await whenConnected(sock) } catch (e) { sock.destroy(); return { ok: false, kind: 'unreachable', error: { type: e.code || 'upstream_error', message: msgOf(e) } } }
+      if (kind === 'direct') return { ok: true, sock, reply: null, rest: Buffer.alloc(0) }
+      const deadline = timing.ingressDialMs ? Date.now() + timing.ingressDialMs : Infinity
+      const d = kind === 'socks5' ? await viaSocks5(sock, up, target, deadline) : await viaHttp(sock, up, target, deadline)
+      if (!d.ok) sock.destroy()
+      return d
+    } finally { if (slow) clearTimeout(slow) }
   }
 
   // a health probe tunnel (4.8 §3.3, §5.1): the group's own re-entry point, answered with what mihomo's http / socks5 outbound looks for
