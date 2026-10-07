@@ -18,6 +18,7 @@ import { sha256, readOrNull } from './fsutil.mjs'
 import { asightHome, legacyManifestPath, legacyPendingPath, legacyEventsFile } from './paths.mjs'
 import { dropBackup } from './backup.mjs'
 import { readManifestAt, saveManifestAt } from './manifest.mjs'
+import { listProcs, pidAlive } from './proc.mjs'
 import { makeClash, stripBlock, stripRuntime, stripMergeLegacy, SCRIPT_BEGIN, PROXY_NAME } from './clash.mjs'
 
 /** Does this platform have the new per-process collector? Only Linux today (4.6; 1.6 §1.2). One function, used everywhere the branch is taken: where it is false `on` / `off` / `status` /
@@ -37,6 +38,7 @@ export const LEGACY_CA_CN = 'atrace local MITM CA'
 export const LEGACY_CA_NICKNAME = 'asight-ca'
 const LEGACY_ENV_VAR = 'NODE_EXTRA_CA_CERTS'
 const CLAUDE_CODE = 'claude-code'
+const MITM_STOP_GRACE_MS = 5000 // launchd kills a job ExitTimeOut (15 s) after its SIGTERM: the 10 s drain and this much more
 const CODE_NOT_UNDONE = 'entry-not-undone' // a name of the closed set (src/health/codes.mjs): an item that was not undone
 
 const legacyWhy = (e) => String((e && (e.code || e.message)) || e)
@@ -252,6 +254,24 @@ function appendLegacyLine(home, rec, { fs, now, log }) {
   }
 }
 
+/** The last MiB of ~/.asight/logs/mitm-events.ndjson as records (what the MITM said of its own life), `{ recs, error? }`. A missing file is no records, not an error. */
+function legacyEventsTail(home, fs) {
+  const file = legacyEventsFile(home)
+  let text
+  try {
+    const size = fs.statSync(file).size
+    const from = Math.max(0, size - (1 << 20))
+    const buf = Buffer.alloc(size - from)
+    const fd = fs.openSync(file, 'r')
+    try { fs.readSync(fd, buf, 0, buf.length, from) } finally { fs.closeSync(fd) }
+    text = buf.toString('utf8')
+    if (from > 0) text = text.slice(text.indexOf('\n') + 1) // the first line of a cut part is not whole
+  } catch (e) { return e && e.code === 'ENOENT' ? { recs: [] } : { recs: [], error: `${file}: ${legacyWhy(e)}` } }
+  const recs = []
+  for (const l of text.split('\n')) { if (!l.trim()) continue; try { recs.push(JSON.parse(l)) } catch { /* a line cut by a crash */ } }
+  return { recs }
+}
+
 // ── undoing it ────────────────────────────────────────────────────────────────────────────────────
 
 const shaOfFile = (fs, file) => { try { return sha256(readOrNull(fs, file)) } catch { return null } }
@@ -263,15 +283,15 @@ function realClock() { return { ms: Date.now, sleep: (ms) => new Promise((resolv
 
 /**
  * Takes the old capture out (RFC 1.6 §4). `scope` is 'all' (the only one there is). Everything the world gives is a parameter a test replaces (0.1 §3): `exec` (launchctl, security, certutil, ps),
- * `fs`, `env`, `clock` ({ ms, sleep }: the waits for the MITM are made of it), `now` (a Date), `mihomo` (src/off/clash.mjs's seams: sock, psText,
- * knownSocks, mihomoReload, probeLive), `log` (stderr).
+ * `fs`, `env`, `clock` ({ ms, sleep }: the waits for the MITM are made of it), `now` (a Date), `alive` (is a pid running), `procs` (the process table), `mihomo` (src/off/clash.mjs's seams: sock, psText,
+ * knownSocks, mihomoReload, probeLive), `log` (stderr), `drainMs` (how long the MITM may keep its connections open; 0 for `off --now`).
  * Order: marker `~/.asight/legacy-off.pending` → CC settings from the stash → Clash: strip the block and the Merge.yaml leftovers, strip the runtime, hot-reload, READ the live proxy list back (also
  * when the file has no block: the runtime may still hold the route) → only then `launchctl unload com.asight.mitm` (launchd sends SIGTERM; the MITM stops accepting and drains) → com.asight.monitor
  * → com.asight.env and, when the login environment's CA variable is asight's, `launchctl unsetenv` → the CA → the ledger (a backup goes when the file is back to what it was) → the marker goes.
  * When the route cannot be confirmed gone the MITM is NOT unloaded (it would leave Desktop pointed at nothing): `ok` is false and the receipt says why.
  * → { changed, removed, skipped, left, notes, problems, kept_backups, restart, cut: number | 'unknown', cut_reason?, ok, events }
  */
-export async function undoLegacy({ home = nodeOs.homedir(), platform = process.platform, exec = null, fs = nodeFs, env = process.env, clock = null, now = null, mihomo = {}, log = (m) => { try { process.stderr.write(`${m}\n`) } catch { /* nothing left to tell */ } }, drainMs = 10000, scope = 'all', record = true } = {}) {
+export async function undoLegacy({ home = nodeOs.homedir(), platform = process.platform, exec = null, fs = nodeFs, env = process.env, clock = null, now = null, alive = pidAlive, procs = null, mihomo = {}, log = (m) => { try { process.stderr.write(`${m}\n`) } catch { /* nothing left to tell */ } }, drainMs = 10000, scope = 'all', record = true } = {}) {
   if (scope !== 'all') throw new RangeError(`undoLegacy: scope ${JSON.stringify(scope)} is not one there is (only 'all')`)
   const clk = clock || realClock()
   const nowFn = now || (() => new Date(clk.ms()))
@@ -303,9 +323,12 @@ export async function undoLegacy({ home = nodeOs.homedir(), platform = process.p
   }
   try {
     // 1 · the CC-CLI steer, from its stash (an old command wrote it: no ledger entry, no backup)
+    let steerUndone = false
+    const steerSince = (() => { try { return fs.statSync(p.stashPath).mtimeMs } catch { return null } })() // when the steer went in: a process started before it never read it
     if (art.ccSteer.stash !== null) {
       try {
         clearCliSteer({ settingsPath: p.settingsPath, stashPath: p.stashPath, backup: false, fs })
+        steerUndone = true
         row(p.settingsPath, '去掉 env.HTTPS_PROXY / NO_PROXY(旧 CC-CLI steer,按暂存值还原)', 'old-command', { old_command: true })
         res.removed.push(p.stashPath)
         say('cc-steer', `the CC-CLI steer was taken out of ${p.settingsPath} from its stash`, { file: p.settingsPath })
@@ -363,6 +386,105 @@ export async function undoLegacy({ home = nodeOs.homedir(), platform = process.p
       } else res.skipped.push({ what: p.runtimePath, reason: 'Clash Verge is here, but nothing says asight put a route in it (no block, no ledger entry, not in the live proxy list): it is not reloaded' })
     }
 
+    // 3 · the LaunchAgents: the MITM first (launchd sends it SIGTERM; it drains), then the monitor, then the environment primer
+    if (onDarwin) {
+      const unload = (a) => {
+        const r = a.installed ? execTool('launchctl', ['unload', a.plistPath], { run: exec, env }) : execTool('launchctl', ['remove', a.label], { run: exec, env }) // loaded with no plist: only its label is left to name it
+        const l = execTool('launchctl', ['list', a.label], { run: exec, env })
+        const gone = l.code === null ? r.code === 0 : l.code !== 0 // launchctl list <label> exits non-zero for a label that is not loaded
+        return { gone, why: gone ? null : `launchctl unload ${a.plistPath} did not take ${a.label} out (${r.err || `exit ${r.code}`})` }
+      }
+      const dropPlist = (a, what) => {
+        try { fs.rmSync(a.plistPath, { force: true }) } catch (e) { fail(CODE_NOT_UNDONE, `${a.plistPath} could not be removed (${legacyWhy(e)})`, { file: a.plistPath }); res.left.push({ path: a.plistPath, harness: CLAUDE_CODE, result: 'error', reason: legacyWhy(e) }); return false }
+        res.removed.push(a.plistPath); say('launch-agent', `${a.label} was unloaded and ${a.plistPath} removed${what ? ` (${what})` : ''}`, { file: a.plistPath }); return true
+      }
+      const present = (a) => a.installed === true || a.loaded === true
+      const ledgerRow = (a, kind) => ledgerEntry(ledger, kind, a.plistPath)
+      // the MITM
+      const mitm = art.agents.mitm
+      if (present(mitm)) {
+        if (!routeGone) {
+          res.skipped.push({ what: mitm.label, reason: 'the Clash route was not confirmed gone, so the MITM was left running: unloading it now would leave Claude Desktop pointed at a proxy that is not there' })
+        } else {
+          const tail = legacyEventsTail(home, fs)
+          const lastStart = [...tail.recs].reverse().find((r) => r.event === 'mitm-start' && (r.source || 'mitm') === 'mitm')
+          const pid = mitm.pid ?? (lastStart && Number.isInteger(lastStart.pid) && alive(lastStart.pid) ? lastStart.pid : null)
+          const stoppedAfter = nowFn().toISOString()
+          const u = unload(mitm)
+          if (!u.gone) { fail(CODE_NOT_UNDONE, u.why, { file: mitm.plistPath }); res.left.push({ path: mitm.plistPath, harness: CLAUDE_CODE, result: 'error', reason: u.why }); res.cut = 'unknown'; res.cut_reason = u.why } else {
+            if (pid == null) { res.cut = mitm.loaded === false || mitm.loaded === true ? 0 : 'unknown' } else {
+              // the MITM drains: it stops accepting, waits for open connections for at most drainMs, writes `mitm-stop` with `cut`, exits. Wait for that line.
+              const end = clk.ms() + drainMs + MITM_STOP_GRACE_MS
+              let stop = null, gone = false
+              for (;;) {
+                const t = legacyEventsTail(home, fs)
+                stop = t.recs.find((r) => r.event === 'mitm-stop' && (r.source || 'mitm') === 'mitm' && r.pid === pid && String(r.ts) >= stoppedAfter) || null
+                gone = !alive(pid)
+                if (stop || gone || clk.ms() >= end) break
+                await clk.sleep(250)
+              }
+              if (stop && Number.isInteger(stop.cut)) res.cut = stop.cut
+              else if (stop) { res.cut = 'unknown'; res.cut_reason = 'this MITM was started by a build that does not count the connections it cuts' }
+              else if (gone) { res.cut = 'unknown'; res.cut_reason = `the MITM (pid ${pid}) is gone, but wrote no mitm-stop line: ${tail.error || 'killed, or the log could not be read'}` }
+              else { res.cut = 'unknown'; res.cut_reason = `the MITM (pid ${pid}) is still running ${Math.round((drainMs + MITM_STOP_GRACE_MS) / 1000)} s after its unload`; fail(CODE_NOT_UNDONE, res.cut_reason, { file: mitm.plistPath }) }
+            }
+            if (dropPlist(mitm, res.cut === 0 ? '没有在途连接' : typeof res.cut === 'number' ? `${res.cut} 条在途连接被切断` : null)) {
+              row(mitm.plistPath, '卸载并删除 com.asight.mitm', ledgerRow(mitm, 'legacy-launch-agent') ? 'reverted' : 'old-command', { old_command: !ledgerRow(mitm, 'legacy-launch-agent'), launch_agent: true })
+              const e = ledgerRow(mitm, 'legacy-launch-agent'); if (e) e.__done = true
+            }
+          }
+        }
+      }
+      // the monitor (the old CC-CLI reverse proxy's boot item) and the environment primer
+      for (const key of ['monitor', 'env']) {
+        const a = art.agents[key]
+        if (!present(a)) continue
+        const u = unload(a)
+        if (!u.gone) { fail(CODE_NOT_UNDONE, u.why, { file: a.plistPath }); res.left.push({ path: a.plistPath, harness: CLAUDE_CODE, result: 'error', reason: u.why }); continue }
+        if (dropPlist(a, null)) {
+          const kind = key === 'env' ? 'legacy-env' : 'legacy-launch-agent'
+          row(a.plistPath, `卸载并删除 ${a.label}`, ledgerRow(a, kind) ? 'reverted' : 'old-command', { old_command: !ledgerRow(a, kind), launch_agent: true })
+          const e = ledgerRow(a, kind); if (e) e.__done = true
+        }
+      }
+      // the login environment's CA variable: asight's own value only
+      const mine = ownCaPaths(art, home)
+      if (art.envValue.value && mine.has(art.envValue.value)) {
+        const r = execTool('launchctl', ['unsetenv', LEGACY_ENV_VAR], { run: exec, env })
+        if (r.code === 0) { row('launchctl', `unsetenv ${LEGACY_ENV_VAR}(登录环境里它指向 asight 的 CA)`, 'old-command', { old_command: true, environment: true }); say('login-env', `${LEGACY_ENV_VAR} was unset in the login environment (it pointed at asight's CA)`) } else fail(CODE_NOT_UNDONE, `launchctl unsetenv ${LEGACY_ENV_VAR} failed (${r.err || `exit ${r.code}`}): the login environment still points at asight's CA`)
+      } else if (art.envValue.value) res.notes.push(`${LEGACY_ENV_VAR} in the login environment is ${art.envValue.value}, not asight's CA: left as it is`)
+      else if (art.envValue.error) res.notes.push(`${art.envValue.error}: whether the login environment still points at asight's CA is not known`)
+    }
+
+    // 4 · the old CA in the user-level trust store
+    if (art.oldCa.where && art.oldCa.present !== false && (platform === 'darwin' || platform === 'linux')) {
+      let last = null, chk = null
+      const f = caFindArgv({ platform, home })
+      const missing = (c) => c.code === 44 || /could not be found|could not find/i.test(`${c.err}${c.out}`)
+      for (let tries = 0; tries < 5; tries++) { // a second same-CN CA (2026-07-21) goes too: delete, look again, until the store says there is none
+        last = uninstallCa({ platform, home, run: exec, env })
+        chk = execTool(f.file, f.args, { run: exec, env })
+        if (missing(chk) || last.status !== 0) break
+      }
+      const gone = missing(chk)
+      if (gone || (last.status === 0 && chk.code !== 0)) { row(platform === 'darwin' ? p.keychain : p.nssdb, `去掉旧 CA(${platform === 'darwin' ? LEGACY_CA_CN : LEGACY_CA_NICKNAME})`, 'old-command', { old_command: true, trust_store: true }); say('old-ca', `the old CA was taken out of the user trust store (${platform === 'darwin' ? 'login keychain' : 'NSS database'})`) } else {
+        fail(CODE_NOT_UNDONE, `the old CA is still in the user trust store (${(last.stderr || `exit ${last.status}`)})`)
+        res.left.push({ path: platform === 'darwin' ? p.keychain : p.nssdb, harness: CLAUDE_CODE, result: 'error', reason: last.stderr || `exit ${last.status}` })
+      }
+    } else if (art.oldCa.present === null) res.notes.push(`${art.oldCa.error}: whether the old CA is in the trust store is not known`)
+
+    // 5 · the claude processes that were started while the CC-CLI steer was in settings.json still point at its port: said, not stopped (R8)
+    if (steerUndone) {
+      try {
+        const table = await (procs ? procs() : listProcs({ platform, exec }))
+        for (const x of table) {
+          const isClaude = (x.argv || [x.exe]).some((a) => /(^|\/)claude(-code)?$/.test(String(a || '')))
+          if (isClaude && !(steerSince != null && x.startedAt != null && x.startedAt < steerSince)) res.restart.push({ harness: CLAUDE_CODE, pid: x.pid })
+        }
+        if (res.restart.length) res.notes.push(`正在跑的 claude 进程(${res.restart.map((r) => r.pid).join(', ')})若是 steer 生效期间启动的,重启前仍连着那个本地端口;asight 不替你重启它们`)
+      } catch (e) { legacyRethrowSandbox(e); res.notes.push(`the process table could not be read (${legacyWhy(e)}), so the claude processes started while the CC-CLI steer was on are not listed`) }
+    }
+
     // 6 · the ledger: what was undone is struck off; the file goes when nothing is left in it
     if (ledger) {
       const m = ledger.manifest
@@ -387,3 +509,11 @@ function ownCaPaths(art, home) {
   if (art.agents && art.agents.env && art.agents.env.caPath) out.add(art.agents.env.caPath)
   return out
 }
+
+/** `undoLegacy` as the `legacyUndo` hook of `asight off` / `asight uninstall` on Linux, in the shape of their receipts (src/off/orchestrate.mjs, src/cli/uninstall.mjs): the CC steer and the NSS CA
+ *  that an old command left there. It writes nothing when there is nothing (a run of `off` that has no old capture to undo must not leave a file). */
+export async function legacyUndoHook(ctx = {}) {
+  const r = await undoLegacy({ home: ctx.home, platform: 'linux', exec: ctx.exec || null, fs: ctx.fs || nodeFs, env: ctx.env || process.env, now: ctx.now || null })
+  return { changed: r.changed, removed: r.removed, skipped: r.skipped, left: r.left, problems: r.problems, notes: r.notes, ok: r.ok }
+}
+

@@ -21,7 +21,7 @@ export const manifestPath = (dir) => path.join(dir, MANIFEST)
 export const MANIFEST_VERSION = 2
 /** The version of the undo side: bumped whenever the manifest's shape or the rules of undoing change (a new item kind, a new step). It is the number in the first lines of the
  *  generated ~/.asight/bin/asight-off, which `asight doctor` compares with the current one (1.6 R3, V35); every `on` writes the copy again, so a bump costs nothing. */
-export const OFF_VERSION = 1
+export const OFF_VERSION = 2 // 2: the copy also takes out the old capture (src/off/legacy.mjs, 1.6 §4): a copy written by version 1 does not know it
 
 /** The kinds of item this build can undo (the `legacy-*` ones are the old capture's ledger, 1.6 §4, written by `on` on a platform without the
  *  new collector). An item of any other kind is left alone by `off` and listed (unknownItems). */

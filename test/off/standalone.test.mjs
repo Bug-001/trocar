@@ -21,6 +21,7 @@ import { runOnCli } from '../../src/cli/on.mjs'
 import { formatPlan } from '../../src/cli/receipt.mjs'
 import { fakeIo, onCtx, seedClaude } from '../cli/fixtures/on-ctx.mjs'
 import { installedHome, flowEvents } from './fixtures/off-ctx.mjs'
+import { macHome } from '../cli/fixtures/legacy-ctx.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
@@ -317,7 +318,7 @@ test('V35: `asight doctor` has a line for the copy — a ✓ when it is current,
   const good = fs.readFileSync(file, 'utf8')
   assert.match(line(doctor()), new RegExp(`✓ asight-off[^\\n]*${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} · 版本 ${OFF_VERSION}`))
   fs.writeFileSync(file, good.replace(`// asight-off ${OFF_VERSION} —`, '// asight-off 0 —'))
-  assert.match(line(doctor()), /⚠ asight-off[^\n]*is version 0, this asight writes version 1/)
+  assert.match(line(doctor()), new RegExp(`⚠ asight-off[^\\n]*is version 0, this asight writes version ${OFF_VERSION}`))
   fs.rmSync(file)
   assert.match(line(doctor()), /⚠ asight-off[^\n]*is not there/)
   assert.ok(!fs.existsSync(file), 'doctor reads: it does not write the copy')
@@ -373,4 +374,27 @@ test('a copy that cannot be written stops the on before one file of the agents\'
   assert.ok(failure && failure.where === 'install' && failure.code === 'EACCES', JSON.stringify(failure))
   const retry = fakeIo()
   assert.equal(await runOnCli(['--yes', '--json'], onCtx(home, retry)), 0, 'and once that is put right, the same on finishes')
+})
+
+// ── the old capture (1.6 §4): the copy takes it out too, with the repository out of reach ────────────
+
+test('1.6 §4: on a platform with no new collector the copy is `asight off` for the old capture — it says so, undoes the CC steer from its stash, asks launchd only what is loaded; nothing of the repository is needed', async () => {
+  const s = macHome({ block: false, runtime: false, agents: [], steer: true, displaced: { HTTPS_PROXY: 'http://corp:3128' } })
+  const dir = tmpDir('asight-stub-'), bin = path.join(dir, 'bin'), log = path.join(dir, 'calls.log')
+  fs.mkdirSync(bin)
+  fs.writeFileSync(path.join(bin, 'launchctl'), `#!/bin/sh\necho "launchctl $*" >> "${log}"\ncase "$1" in list) exit 113;; *) exit 0;; esac\n`, { mode: 0o755 })
+  fs.writeFileSync(path.join(bin, 'ps'), `#!/bin/sh\necho "ps $*" >> "${log}"\nexit 0\n`, { mode: 0o755 }) // no process
+  fs.writeFileSync(path.join(bin, 'security'), `#!/bin/sh\necho "security $*" >> "${log}"\ncase "$1" in find-certificate) exit 44;; *) exit 0;; esac\n`, { mode: 0o755 })
+  const text = buildStandalone({ version: OFF_VERSION })
+  assert.ok(text.includes('undoLegacy') && text.includes('legacyOffCli'), 'the generated file carries the old capture\'s undo')
+  const AS_MAC = `runOffCli(process.argv.slice(2), { standalone: true, platform: 'darwin', deps: { getuid: () => 501 } })`
+  const r = await runCopy(text.replace(STANDALONE_ENTRY, AS_MAC), ['--json'], { env: { HOME: s.home, PATH: bin, ASIGHT_MIHOMO_SOCK: path.join(s.home, 'no-such-mihomo.sock') } })
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  assert.equal(r.stderr.split('\n')[0], '本平台 on / off 驱动旧采集(过渡期)', 'in --json the note goes to stderr, stdout is the one JSON')
+  const out = JSON.parse(r.stdout)
+  assert.deepEqual([out.command, out.ok, out.legacy], ['off', true, true])
+  assert.equal(JSON.parse(fs.readFileSync(s.settings, 'utf8')).env.HTTPS_PROXY, 'http://corp:3128', 'the value the steer displaced is back')
+  assert.equal(fs.existsSync(s.stash), false)
+  const calls = fs.readFileSync(log, 'utf8').trim().split('\n')
+  assert.ok(calls.every((c) => /^(launchctl (list|getenv)|security find-certificate|ps )/.test(c)), `only reads: ${calls.join(' | ')}`)
 })
