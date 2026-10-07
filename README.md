@@ -164,8 +164,8 @@ before it changes a file of yours it keeps a copy in `~/.asight/backup/`. `on` n
 capture that is running: the processes that need a restart are listed. Name an agent (`asight off claude-code`)
 to switch only that one.
 
-On Linux the capture is a process collector (RFC 4.6, D31) — Claude Code, OpenCode, DeepSeek `dsh`, Kimi Code,
-Hermes and Z-Code; Codex's entry is in, its end-to-end run waits for the WebSocket recorder. An
+On Linux the capture is a process collector (RFC 4.6, D31) — Claude Code, Codex (its WebSocket transport is
+recorded call by call), OpenCode, DeepSeek `dsh`, Kimi Code, Hermes and Z-Code. An
 eBPF helper steers only the connections of agent processes you run to a loopback engine, which decrypts
 only for agents that trust the collector CA. Everything else, including other users, goes direct. On macOS
 there is no collector yet: `asight on` / `off` drive the old capture (the Claude Desktop Clash rule and MITM of
