@@ -164,3 +164,102 @@ export function buildBlock({ groups, enginePort, token, reenter, ownImages } = {
   }
   return out
 }
+
+// ---- the config splice, for the payload path and the global script (4.8 §3.6, §4.1; W9 W58) -----------------------------------------------------------
+
+export const FILTER_TOKEN = '^asight-'
+
+// One function does the splice for both paths: spliceRuntime() calls it on a copy of the runtime, and buildScriptJs() writes its source into the global
+// script. So the two cannot drift apart, and W58 (the results are equal) tests the glue around it rather than two hand-kept copies. Because its text is
+// embedded in a file the proxy software runs in its own script engine, it is ES5 only: no arrow functions, template literals, let / const, spread, `?.`, `??`,
+// no ES2015+ built-ins, no comments inside (a test scans the emitted script), and it uses nothing outside its two arguments and the language's own objects.
+//
+// `B` = { proxies, groups, providers, rules } adds the block (after taking out any block of ours that is already there); `B` null takes it out. Everything is
+// computed before anything is assigned to `config`, so a throw leaves the config exactly as it was (the script's try/catch relies on this). A section that is
+// not the shape a config has throws instead of being guessed at; an absent one is created when adding and left absent when taking out.
+function asightApply(config, B) {
+  var PREFIX = /^asight-/;
+  var OUR_RULE = /^RULE-SET,asight-r-[^,]+,asight-sw-[^,]+$/;
+  var LOOP_RULE = /^AND,\(\(DST-PORT,[0-9]+\),\(IP-CIDR,127\.0\.0\.1\/32,no-resolve\)\),DIRECT$/;
+  var TOKEN = '^asight-';
+  var isList = function (v) { return Object.prototype.toString.call(v) === '[object Array]'; };
+  var list = function (v, what) {
+    if (v === undefined || v === null) return [];
+    if (!isList(v)) throw new Error(what + ' is not a list');
+    return v;
+  };
+  var ours = function (item) { return !!item && typeof item.name === 'string' && PREFIX.test(item.name); };
+  var hasToken = function (f) { return f.split('|').indexOf(TOKEN) !== -1; };
+  var withFilter = function (g, adding) {
+    if (!g || typeof g !== 'object') return g;
+    var f = g['exclude-filter'];
+    var next;
+    if (adding) {
+      if (!(g['include-all'] || g['include-all-proxies'] || g['include-all-providers'])) return g;
+      if (f === undefined || f === null || f === '') next = TOKEN;
+      else if (typeof f !== 'string') throw new Error('exclude-filter is not a string');
+      else if (hasToken(f)) return g;
+      else next = f + '|' + TOKEN;
+    } else {
+      if (typeof f !== 'string') return g;
+      if (f === TOKEN) next = undefined;
+      else if (f.slice(-(TOKEN.length + 1)) === '|' + TOKEN) next = f.slice(0, -(TOKEN.length + 1));
+      else return g;
+    }
+    var copy = {};
+    Object.keys(g).forEach(function (k) { copy[k] = g[k]; });
+    if (next === undefined) delete copy['exclude-filter']; else copy['exclude-filter'] = next;
+    return copy;
+  };
+  var proxies = list(config.proxies, 'proxies').filter(function (p) { return !ours(p); });
+  var groups = list(config['proxy-groups'], 'proxy-groups').filter(function (g) { return !ours(g); }).map(function (g) { return withFilter(g, !!B); });
+  var source = list(config.rules, 'rules');
+  var rules = [];
+  for (var i = 0; i < source.length; i++) {
+    var rule = source[i];
+    var after = source[i + 1];
+    if (typeof rule === 'string' && (OUR_RULE.test(rule) || (LOOP_RULE.test(rule) && typeof after === 'string' && OUR_RULE.test(after)))) continue;
+    rules.push(rule);
+  }
+  var providers = {};
+  var had = config['rule-providers'];
+  if (had !== undefined && had !== null) {
+    if (typeof had !== 'object' || isList(had)) throw new Error('rule-providers is not a map');
+    Object.keys(had).forEach(function (k) { if (!PREFIX.test(k)) providers[k] = had[k]; });
+  }
+  if (B) {
+    var add = JSON.parse(JSON.stringify(B));
+    proxies = proxies.concat(add.proxies);
+    groups = groups.concat(add.groups);
+    Object.keys(add.providers).forEach(function (k) { providers[k] = add.providers[k]; });
+    rules = add.rules.concat(rules);
+  }
+  var own = Object.prototype.hasOwnProperty;
+  if (B || own.call(config, 'proxies')) config.proxies = proxies;
+  if (B || own.call(config, 'proxy-groups')) config['proxy-groups'] = groups;
+  if (B || own.call(config, 'rule-providers')) config['rule-providers'] = providers;
+  if (B || own.call(config, 'rules')) config.rules = rules;
+  return config;
+}
+
+// what the splice takes from a block (the route files are written separately); every name must start with asight-, or taking the block out again would miss it
+function dataOf(block) {
+  const ok = block && Array.isArray(block.proxies) && Array.isArray(block.groups) && Array.isArray(block.rules) && block.providers && typeof block.providers === 'object'
+  if (!ok) throw new TypeError('a block is { proxies, groups, providers, rules } as buildBlock() returns it')
+  for (const item of [...block.proxies, ...block.groups]) if (typeof item?.name !== 'string' || !item.name.startsWith(NAME_PREFIX)) throw new TypeError(`every name in a block starts with ${NAME_PREFIX}: ${JSON.stringify(item?.name)}`)
+  for (const key of Object.keys(block.providers)) if (!key.startsWith(NAME_PREFIX)) throw new TypeError(`every provider in a block starts with ${NAME_PREFIX}: ${JSON.stringify(key)}`)
+  return { proxies: block.proxies, groups: block.groups, providers: block.providers, rules: block.rules }
+}
+const configOf = (runtime) => {
+  if (runtime === null || typeof runtime !== 'object' || Array.isArray(runtime)) throw new TypeError('the runtime is the parsed config object')
+  return structuredClone(runtime)
+}
+
+/** The runtime config with the block spliced in (what the payload path pushes): a new object, the input is not touched. Splicing twice is splicing once. */
+export function spliceRuntime({ runtime, block }) {
+  return asightApply(configOf(runtime), dataOf(block))
+}
+/** The runtime config with everything of asight's taken out, the include-all filters back as they were: a new object. */
+export function stripRuntime({ runtime }) {
+  return asightApply(configOf(runtime), null)
+}

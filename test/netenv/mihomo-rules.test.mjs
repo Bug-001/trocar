@@ -7,8 +7,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { buildBlock, checkLoops, names, probeUrl, processRulesOf, routeFile, RouteLoopError } from '../../src/netenv/mihomo/rules.mjs'
+import { buildBlock, checkLoops, names, probeUrl, processRulesOf, routeFile, RouteLoopError, spliceRuntime, stripRuntime, FILTER_TOKEN } from '../../src/netenv/mihomo/rules.mjs'
 import { TOKEN, ENGINE_PORT, REENTER, ONE, TWO, THREE, block, IMAGES, goldenText } from './fixtures/rules/inputs.mjs'
+import { runtimeFixture } from './fixtures/rules/runtime.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const RULES_SRC = path.join(HERE, '..', '..', 'src', 'netenv', 'mihomo', 'rules.mjs')
@@ -201,4 +202,94 @@ test('W8 buildBlock given the own images refuses to produce a block when a rule 
   assert.throws(() => buildBlock(block(loop, { ownImages: OWN })), (e) => e instanceof RouteLoopError && e.code === 'route-loop' && e.rule === 'PROCESS-NAME,node.exe' && e.imageIndex === 0)
   assert.doesNotThrow(() => buildBlock(block(THREE, { ownImages: OWN })))
   assert.doesNotThrow(() => buildBlock(block(loop)), 'without the images there is nothing to check against (Task 8 always passes them)')
+})
+
+// ---- W9: the include-all groups, and the runtime splice (the payload path) ------------------------------------------------------------------------
+
+const deepFreeze = (o) => { if (o && typeof o === 'object') { Object.freeze(o); Object.values(o).forEach(deepFreeze) } return o }
+const BLOCK2 = buildBlock(block(TWO))
+const splice = (runtime, b = BLOCK2) => spliceRuntime({ runtime, block: b })
+
+test('W9 a group with include-all (any spelling) gets exclude-filter ^asight- (joined with | when it has one); a group without is not touched; the user\'s entries stay', () => {
+  const user = runtimeFixture(), out = splice(deepFreeze(runtimeFixture()))
+  const group = (name) => out['proxy-groups'].find((g) => g.name === name)
+  assert.equal(FILTER_TOKEN, '^asight-')
+  assert.equal(group('AUTO')['exclude-filter'], 'IEPL|BGP|^asight-')
+  assert.equal(group('AUTO-ALL')['exclude-filter'], '^asight-')
+  assert.equal(group('AUTO-PROV')['exclude-filter'], '^asight-')
+  for (const name of ['Proxy', 'Manual']) assert.deepEqual(group(name), user['proxy-groups'].find((g) => g.name === name), `${name} has no include-all: untouched`)
+  assert.deepEqual(out.proxies.slice(0, 2), user.proxies, 'the user\'s nodes keep their place')
+  assert.deepEqual(out['rule-providers']['user-ads'], user['rule-providers']['user-ads'])
+  assert.deepEqual(out.rules.slice(0, BLOCK2.rules.length), BLOCK2.rules, 'asight\'s rules come first')
+  assert.deepEqual(out.rules.slice(BLOCK2.rules.length), user.rules, 'then the user\'s, in order')
+  for (const g of out['proxy-groups'].filter((x) => x.name.startsWith('asight-'))) assert.ok(!('exclude-filter' in g), 'asight\'s own groups carry no filter')
+  assert.deepEqual(out['proxy-groups'].map((g) => g.name), [...user['proxy-groups'].map((g) => g.name), ...BLOCK2.groups.map((g) => g.name)], 'asight\'s groups are last, so the user\'s list reads as before')
+  assert.deepEqual(Object.keys(out['rule-providers']).sort(), ['asight-r-claude-code.cli', 'asight-r-kimi-code.cli', 'user-ads'])
+  assert.equal(out.mode, 'rule'); assert.equal(out['find-process-mode'], 'strict') // nothing else in the config moved
+})
+
+test('W9 the input is not touched, and what comes out shares nothing with the block', () => {
+  const input = deepFreeze(runtimeFixture())
+  const out = splice(input)
+  out.proxies[0].port = 1; out['proxy-groups'][1]['exclude-filter'] = 'x'
+  assert.deepEqual(input, runtimeFixture())
+  const again = splice(runtimeFixture())
+  again.proxies.at(-1).port = 1
+  assert.equal(splice(runtimeFixture()).proxies.at(-1).port, REENTER.port, 'the block\'s own objects are copied, not handed out')
+  assert.equal(BLOCK2.proxies.at(-1).port, REENTER.port)
+})
+
+test('W9 splicing twice is splicing once (no second token, no duplicate name); another block replaces the first', () => {
+  const once = splice(runtimeFixture())
+  assert.deepEqual(splice(once), once)
+  const names = (o) => [...o.proxies.map((p) => p.name), ...o['proxy-groups'].map((g) => g.name)]
+  assert.equal(new Set(names(once)).size, names(once).length, 'mihomo answers 400 to a duplicate name')
+  const other = buildBlock(block(ONE, { reenter: { host: '127.0.0.1', port: 7898 } }))
+  const swapped = splice(once, other)
+  assert.deepEqual(swapped, splice(runtimeFixture(), other), 'the earlier block leaves nothing behind: not its group, not its loopback rule on the old port')
+  assert.deepEqual(swapped.rules.slice(0, other.rules.length), other.rules)
+  assert.equal(swapped.rules.filter((r) => r.startsWith('AND,((DST-PORT,7897)')).length, 0, 'the old loopback rule is gone')
+  assert.ok(!JSON.stringify(swapped).includes('kimi'))
+  assert.equal(swapped['proxy-groups'].find((g) => g.name === 'AUTO')['exclude-filter'], 'IEPL|BGP|^asight-', 'the filter was already there: not appended again')
+})
+
+test('W9 stripRuntime is the exact inverse: back to the user\'s config, with no asight left in it', () => {
+  assert.deepEqual(stripRuntime({ runtime: splice(runtimeFixture()) }), runtimeFixture())
+  assert.deepEqual(stripRuntime({ runtime: runtimeFixture() }), runtimeFixture(), 'nothing to strip is not a change')
+  assert.ok(!/asight/i.test(JSON.stringify(stripRuntime({ runtime: splice(runtimeFixture()) }))), 'the spike measured asight count 0 after the strip: the filter token goes too')
+  const f = (exclude) => stripRuntime({ runtime: { 'proxy-groups': [{ name: 'g', 'include-all': true, 'exclude-filter': exclude }] } })['proxy-groups'][0]
+  assert.equal(f('a|^asight-')['exclude-filter'], 'a')
+  assert.ok(!('exclude-filter' in f('^asight-')), 'a filter that is only the token was ours: the key goes')
+  assert.equal(f('a|^asight-|b')['exclude-filter'], 'a|^asight-|b', 'a token in the middle is not what asight appends: left alone')
+  assert.equal(f('^asight-x')['exclude-filter'], '^asight-x')
+})
+
+test('W9 refused, not guessed: a filter that is not a string, sections that are not lists or a map; the input stays', () => {
+  const run = (patch) => { const rt = { ...runtimeFixture(), ...patch }; return () => spliceRuntime({ runtime: deepFreeze(rt), block: BLOCK2 }) }
+  assert.throws(run({ 'proxy-groups': [{ name: 'g', 'include-all': true, 'exclude-filter': ['a', 'b'] }] }), /exclude-filter/)
+  assert.throws(run({ 'proxy-groups': 'oops' }), /proxy-groups/)
+  assert.throws(run({ proxies: { a: 1 } }), /proxies/)
+  assert.throws(run({ rules: 5 }), /rules/)
+  assert.throws(run({ 'rule-providers': [] }), /rule-providers/)
+  assert.throws(() => spliceRuntime({ runtime: 'mode: rule', block: BLOCK2 }), /runtime/)
+  assert.throws(() => spliceRuntime({ runtime: runtimeFixture(), block: { proxies: [{ name: 'user-node' }], groups: [], providers: {}, rules: [] } }), /asight-/, 'a block with a name that is not asight-… could not be stripped again')
+})
+
+test('W9 a missing or empty filter counts as none; absent sections are created; a config with only rules still gets the whole block', () => {
+  const out = splice({ rules: ['MATCH,DIRECT'], 'proxy-groups': [{ name: 'g', type: 'url-test', 'include-all': true, 'exclude-filter': '' }] })
+  assert.equal(out['proxy-groups'][0]['exclude-filter'], '^asight-')
+  assert.deepEqual(out.proxies, BLOCK2.proxies)
+  assert.deepEqual(Object.keys(out['rule-providers']), Object.keys(BLOCK2.providers))
+  assert.equal(out.rules.at(-1), 'MATCH,DIRECT')
+  const bare = splice({ rules: ['MATCH,DIRECT'] })
+  assert.deepEqual(bare['proxy-groups'], BLOCK2.groups)
+  assert.deepEqual(stripRuntime({ runtime: splice({ rules: ['MATCH,DIRECT'], proxies: [], 'proxy-groups': [], 'rule-providers': {} }) }), { rules: ['MATCH,DIRECT'], proxies: [], 'proxy-groups': [], 'rule-providers': {} })
+})
+
+test('W9 only asight- names are asight\'s: a user rule that mentions one, a user rule shaped like the loopback rule, a node called asightx all survive splice and strip', () => {
+  const user = { ...runtimeFixture(), proxies: [{ name: 'asightx', type: 'direct' }], rules: ['DOMAIN,asight-in-foo.example.com,Proxy', 'DOMAIN,asight-r-foo.example.com,Proxy', 'RULE-SET,asight-r-mine,Proxy', `AND,((DST-PORT,${REENTER.port}),(IP-CIDR,127.0.0.1/32,no-resolve)),DIRECT`, 'MATCH,Proxy'] }
+  const out = splice(user)
+  assert.deepEqual(out.rules.slice(BLOCK2.rules.length), user.rules, 'the user\'s own loopback-shaped rule is not followed by a RULE-SET of ours: it is theirs')
+  assert.deepEqual(out.proxies[0], user.proxies[0])
+  assert.deepEqual(stripRuntime({ runtime: out }), user)
 })
