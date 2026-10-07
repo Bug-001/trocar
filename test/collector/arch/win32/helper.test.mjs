@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
-import { HELPER_VERBS, HELPER_PS1, REG_READ_ALLOW, startHelper } from '../../../../src/collector/arch/win32/helper.mjs'
+import { HELPER_PROTO, HELPER_VERBS, HELPER_PS1, REG_READ_ALLOW, startHelper } from '../../../../src/collector/arch/win32/helper.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 
@@ -126,3 +126,169 @@ test('W1 a helper that speaks another protocol is a failed start, and says so', 
   assert.match(h.failures[0].reason, /protocol 9/)
 })
 
+// ---------- W1: a helper that dies is a rejection of every pending call, plus ONE helper-down; a start that fails is helper-start-failed ----------
+
+test('W1 killing the helper rejects every pending call and writes one helper-down', async (t) => {
+  const h = started(t, { verbs: { ps: { hang: true }, 'tcp-table': { hang: true } } })
+  await h.ready
+  const pending = [h.call('ps'), h.call('tcp-table', {})]
+  const settled = Promise.allSettled(pending)
+  await new Promise((r) => setTimeout(r, 30))
+  process.kill(h.pid, 'SIGKILL')
+  for (const r of await settled) { assert.equal(r.status, 'rejected'); assert.equal(r.reason.code, 'helper-down') }
+  await rejects(h.call('version'), 'helper-down') // and later calls fail at once, instead of waiting out their timeout
+  assert.equal(h.failures.length, 1, 'one helper-down, not one per pending call')
+  assert.equal(h.failures[0].event, 'helper-down')
+  assert.match(h.failures[0].reason, /SIGKILL/)
+  assert.equal(h.failures[0].exit, 'SIGKILL')
+  assert.deepEqual(checkRecord(h.failures[0]), [])
+  assert.equal(h.exits.length, 1)
+})
+
+test('W1 an exit with a code after the helper was ready is helper-down with that code and its last stderr lines', async (t) => {
+  const h = started(t, { stderr: ['Add-Type : policy', 'at line 3'], exitAfter: 1, exitCode: 3 })
+  await h.call('version')
+  await new Promise((r) => setTimeout(r, 100))
+  assert.equal(h.failures.length, 1)
+  const [f] = h.failures
+  assert.equal(f.event, 'helper-down')
+  assert.equal(f.exit, 'code 3')
+  assert.deepEqual(f.stderr, ['Add-Type : policy', 'at line 3'])
+  assert.deepEqual(checkRecord(f), [])
+})
+
+test('W1 a helper that exits before it is ready is helper-start-failed (policy blocking Add-Type, no PowerShell)', async (t) => {
+  const h = started(t, { ready: false, exitCode: 1, stderr: ['Cannot invoke method. Method invocation is supported only on core types in this language mode.'] })
+  await rejects(h.call('version'), 'helper-start-failed')
+  await assert.rejects(h.ready)
+  assert.equal(h.failures.length, 1)
+  const [f] = h.failures
+  assert.deepEqual([f.event, f.where, f.code], ['failure', 'helper', 'helper-start-failed'])
+  assert.match(f.stderr[0], /language mode/)
+  assert.deepEqual(checkRecord(f), [])
+})
+
+test('W1 a spawn that fails (the program is not there, or spawn throws) is helper-start-failed', async () => {
+  for (const spawnFn of [
+    () => ghostChild((c) => c.emit('error', Object.assign(new Error('spawn powershell.exe ENOENT'), { code: 'ENOENT' }))),
+    () => { throw Object.assign(new Error('spawn EACCES'), { code: 'EACCES' }) },
+  ]) {
+    const failures = []
+    const h = startHelper({ spawn: spawnFn, onFailure: (r) => failures.push(r) })
+    await assert.rejects(h.call('ps'), (e) => e.code === 'helper-start-failed')
+    assert.equal(failures.length, 1)
+    assert.deepEqual([failures[0].event, failures[0].where, failures[0].code], ['failure', 'helper', 'helper-start-failed'])
+    assert.match(failures[0].errno, /^E(NOENT|ACCES)$/)
+    assert.deepEqual(checkRecord(failures[0]), [])
+    h.close()
+  }
+})
+
+test('W1 a helper that goes down by two routes at once (error, then close) is still ONE record', async () => {
+  const failures = []
+  const h = startHelper({ spawn: () => ghostChild((c) => { c.emit('error', Object.assign(new Error('spawn x ENOENT'), { code: 'ENOENT' })); c.emit('close', 1, null); c.emit('error', new Error('again')) }), onFailure: (r) => failures.push(r) })
+  await assert.rejects(h.ready)
+  await new Promise((r) => setTimeout(r, 20))
+  assert.equal(failures.length, 1)
+})
+
+test('W1 a helper that never says ready is killed and is helper-start-failed', async (t) => {
+  const h = started(t, { hangBeforeReady: true }, { readyTimeoutMs: 100 })
+  await rejects(h.call('version'), 'helper-start-failed')
+  assert.equal(h.failures.length, 1)
+  assert.match(h.failures[0].reason, /not ready within 100 ms/)
+})
+
+test('W1 close() is not a failure: no helper-down, the child is gone, later calls are refused', async (t) => {
+  const h = started(t, {})
+  await h.call('version')
+  await h.close()
+  await rejects(h.call('version'), 'helper-closed')
+  assert.equal(h.failures.length, 0)
+  assert.equal(h.exits.length, 1)
+  assert.equal(h.exits[0].closed, true)
+})
+
+// ---------- W1: helper.ps1 has no write verb (static scan), and says what the JS side says ----------
+
+const PS = fs.readFileSync(HELPER_PS1, 'utf8')
+/** What a read-only helper must never contain: the spec's list (Set-ItemProperty New-Item Remove- netsh schtasks setx Register-) and the other
+ *  ways to write, run, fetch or stop something. The scan reads the whole file, comments included, so a comment cannot hide one either. */
+const WRITE_PATTERNS = [
+  /\bSet-[A-Za-z]+/, /\bNew-(?!Object\b)[A-Za-z]+/, /\b(Remove|Register|Unregister|Clear|Export|Import|Enable|Disable|Install|Uninstall|Restart|Rename|Move|Copy)-[A-Za-z]*/,
+  /\bOut-File\b/, /\bAdd-Content\b/, /\b(Start|Stop)-(Process|Service|Job|Sleep)\b/, /\bInvoke-[A-Za-z]+/, /\b(iex|iwr|irm|sc\.exe|reg\.exe)\b/i,
+  /\bnetsh\b/i, /\bschtasks\b/i, /\bsetx\b/i, /\breg\s+(add|delete|import|copy|save|load|restore)\b/i,
+  /\[(System\.)?IO\.(File|Directory)\]::(Write|Append|Create|Delete|Move|Copy|Open|Replace|SetAttributes)/i, /\.(SetValue|DeleteValue|DeleteSubKey|DeleteSubKeyTree|CreateSubKey|Kill|Terminate)\(/,
+  /\bWebClient\b|\bHttpClient\b|\bTcpClient\b|\bSocket\b|\bNamedPipeClientStream\b/,
+]
+const writeVerbsIn = (text) => WRITE_PATTERNS.filter((re) => re.test(text)).map(String)
+
+test('W1 helper.ps1 contains no write, run or fetch verb (static scan); the scan can fail', () => {
+  assert.deepEqual(writeVerbsIn(PS), [])
+  for (const planted of ['Set-ItemProperty -Path x', 'New-Item y', 'Remove-Item z', 'netsh winhttp', 'schtasks /Create', 'setx A B', 'Register-ScheduledTask', 'Set-Content f', 'Out-File f', '[IO.File]::WriteAllText($f,$t)', '$k.SetValue("a",1)', 'Start-Process x', 'Invoke-Expression $x', 'reg add HKCU\\x']) {
+    assert.ok(writeVerbsIn(planted).length > 0, `the scan misses: ${planted}`)
+  }
+  assert.deepEqual(writeVerbsIn('New-Object System.Text.StringBuilder'), [], 'New-Object builds a .NET object in memory: the one New- the helper uses')
+})
+
+test('W1 helper.ps1 opens the registry and the certificate stores read-only', () => {
+  const opens = [...PS.matchAll(/OpenSubKey\(([^)]*)\)/g)].map((m) => m[1])
+  assert.ok(opens.length > 0)
+  for (const a of opens) assert.match(a, /,\s*\$false\s*$/, `OpenSubKey(${a}) is not read-only`)
+  const stores = [...PS.matchAll(/\.Open\(([^)]*)\)/g)].map((m) => m[1])
+  assert.ok(stores.length > 0)
+  for (const a of stores) assert.match(a, /OpenFlags\]::ReadOnly/, `X509Store.Open(${a}) is not read-only`)
+})
+
+test('W1 helper.ps1 answers exactly the verbs the JS side allows, and reads exactly the registry names the JS side allows', () => {
+  const verbs = [...PS.matchAll(/^\s*'([a-z-]+)'\s*\{/gm)].map((m) => m[1])
+  assert.deepEqual([...verbs].sort(), [...HELPER_VERBS].sort())
+  assert.equal(Number(/\$script:Proto\s*=\s*(\d+)/.exec(PS)[1]), HELPER_PROTO, 'the protocol number in the ready line')
+  const m = /\$RegAllowJson\s*=\s*@'\r?\n([\s\S]*?)\r?\n'@/.exec(PS)
+  assert.ok(m, 'the allow-list literal is there')
+  assert.deepEqual(JSON.parse(m[1]), JSON.parse(JSON.stringify(REG_READ_ALLOW)))
+})
+
+/** Delimiters balance outside comments, strings and here-strings: the cheapest guard against a typo in code no CI here can run. */
+function balanced(src, { comment }) {
+  const stack = []
+  const pairs = { ')': '(', ']': '[', '}': '{' }
+  const ps = comment === '#'
+  let i = 0
+  while (i < src.length) {
+    const c = src[i]
+    if ((ps && c === '#') || (!ps && c === '/' && src[i + 1] === '/')) { while (i < src.length && src[i] !== '\n') i++; continue }
+    if (c === '\'' || c === '"') {
+      i++
+      while (i < src.length) {
+        if (ps && c === '\'' && src[i] === '\'' && src[i + 1] === '\'') { i += 2; continue } // '' inside a PowerShell single-quoted string
+        if (src[i] === c) break
+        if ((ps && c === '"' && src[i] === '`') || (!ps && src[i] === '\\')) i++
+        i++
+      }
+      i++
+      continue
+    }
+    if ('([{'.includes(c)) stack.push(c)
+    else if (pairs[c]) { if (stack.pop() !== pairs[c]) return `unbalanced ${c} near offset ${i}` }
+    i++
+  }
+  return stack.length ? `unclosed ${stack.join('')}` : null
+}
+
+test('W1 helper.ps1 and the C# inside it have balanced delimiters', () => {
+  const hereStrings = [...PS.matchAll(/@'\r?\n([\s\S]*?)\r?\n'@/g)].map((m) => m[1])
+  assert.ok(hereStrings.length >= 2, 'the C# and the allow-list are here-strings')
+  const cs = hereStrings.find((h) => h.includes('DllImport'))
+  assert.ok(cs, 'the native code is a here-string')
+  assert.equal(balanced(cs, { comment: '//' }), null)
+  const rest = PS.replace(/@'\r?\n[\s\S]*?\r?\n'@/g, '')
+  assert.equal(balanced(rest, { comment: '#' }), null)
+  assert.equal(balanced('function f { if ($a) { 1 }', { comment: '#' }), 'unclosed {', 'the checker itself can fail')
+  assert.equal(balanced("$x = 'it''s (' # }", { comment: '#' }), null, "a doubled quote stays inside the string")
+})
+
+test('W1 helper.ps1 is ASCII only (Windows PowerShell 5.1 reads a script without a BOM in the ANSI code page)', () => {
+  assert.equal([...PS].filter((ch) => ch.charCodeAt(0) > 126).length, 0)
+  assert.ok(!PS.startsWith('\uFEFF'))
+})

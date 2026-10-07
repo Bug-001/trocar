@@ -15,6 +15,12 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $script:Proto = 1
 
+# What reg-read may read. The same list as REG_READ_ALLOW in helper.mjs; a test keeps the two equal.
+$RegAllowJson = @'
+[{"hive":"HKCU","key":"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings","names":["ProxyEnable","ProxyServer","ProxyOverride","AutoConfigURL"]},{"hive":"HKCU","key":"Environment","names":["Path"]},{"hive":"HKLM","key":"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy","names":["VerifiedAndReputablePolicyState"]}]
+'@
+$script:RegAllow = ConvertFrom-Json -InputObject $RegAllowJson
+
 # The native half. Every method here only reads: a process snapshot (Toolhelp32), image path / start time / session / token integrity through
 # PROCESS_QUERY_LIMITED_INFORMATION (which opens across integrity levels), the TCP owner-pid table, the best route for an address (a table
 # lookup, nothing is sent), and the server pid of a named pipe. JSON for the big answers is built here: ConvertTo-Json is slow on thousands of rows.
@@ -283,6 +289,40 @@ function Verb-TcpTable($a) {
   return @{ __raw = [AsightWin]::TcpJson([int[]]$pids, [int]$a.remotePort, [int]$a.localPort, [string[]]$states) }
 }
 
+function Verb-RegRead($a) {
+  $hive = [string]$a.hive
+  $key = ([string]$a.key).Replace('/', '\').TrimEnd('\')
+  $rule = $null
+  foreach ($r in $script:RegAllow) { if (($r.hive -ieq $hive) -and ($r.key -ieq $key)) { $rule = $r } }
+  if ($null -eq $rule) { throw ('forbidden-key: ' + $hive + '\' + $key) }
+  $names = @()
+  if ($null -ne $a.names) { $names = @($a.names | ForEach-Object { [string]$_ }) }
+  if ($names.Count -eq 0) { throw 'forbidden-name: no names' }
+  foreach ($n in $names) {
+    $okName = $false
+    foreach ($allowed in $rule.names) { if ($allowed -ieq $n) { $okName = $true } }
+    if (-not $okName) { throw ('forbidden-name: ' + $n) }
+  }
+  $root = [Microsoft.Win32.Registry]::CurrentUser
+  if ($hive -ieq 'HKLM') { $root = [Microsoft.Win32.Registry]::LocalMachine }
+  $k = $root.OpenSubKey($key, $false)
+  $exists = ($null -ne $k)
+  $vals = [ordered]@{}
+  if ($exists) {
+    try {
+      foreach ($n in $names) {
+        $kind = $null
+        try { $kind = $k.GetValueKind($n).ToString() } catch { $kind = $null }
+        if ($null -eq $kind) { continue }
+        $v = $k.GetValue($n, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        if ($v -is [byte[]]) { $v = [Convert]::ToBase64String($v) }
+        $vals[$n] = [ordered]@{ kind = $kind; value = $v }
+      }
+    } finally { $k.Close() }
+  }
+  return [ordered]@{ keyExists = $exists; values = $vals }
+}
+
 function Get-IfList {
   $list = @()
   foreach ($n in [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
@@ -326,6 +366,35 @@ function Verb-Token($a) {
   return [ordered]@{ pid = $PID; elevated = (($t[0] -eq 1) -or ($t[2] -ge 12288)); elevationType = $type; integrity = [AsightWin]::IntegrityNameOf($t[2]); system = [bool]$id.IsSystem; sessionId = [AsightWin]::OwnSession() }
 }
 
+# The roots the user's and the machine's Root stores hold, read-only, de-duplicated by the SHA-256 of the DER. PEM, 64 columns, LF.
+function Verb-Roots($a) {
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  $byFp = @{}
+  $counts = [ordered]@{}
+  foreach ($loc in 'CurrentUser', 'LocalMachine') {
+    $s = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root', $loc)
+    $s.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
+    try {
+      $counts[$loc] = $s.Certificates.Count
+      foreach ($c in $s.Certificates) {
+        $fp = ([BitConverter]::ToString($sha.ComputeHash($c.RawData))).Replace('-', '').ToLowerInvariant()
+        if (-not $byFp.ContainsKey($fp)) {
+          $b64 = [Convert]::ToBase64String($c.RawData)
+          $sb = New-Object System.Text.StringBuilder
+          [void]$sb.Append("-----BEGIN CERTIFICATE-----`n")
+          for ($i = 0; $i -lt $b64.Length; $i += 64) { [void]$sb.Append($b64.Substring($i, [Math]::Min(64, $b64.Length - $i)) + "`n") }
+          [void]$sb.Append("-----END CERTIFICATE-----`n")
+          $byFp[$fp] = @{ pem = $sb.ToString(); stores = (New-Object 'System.Collections.Generic.List[string]') }
+        }
+        [void]$byFp[$fp].stores.Add($loc)
+      }
+    } finally { $s.Close() }
+  }
+  $certs = @()
+  foreach ($fp in ($byFp.Keys | Sort-Object)) { $certs += [ordered]@{ sha256 = $fp; pem = $byFp[$fp].pem; stores = @($byFp[$fp].stores) } }
+  return [ordered]@{ counts = $counts; certs = @($certs) }
+}
+
 function Verb-PipeServer($a) {
   Need-Native
   $name = [string]$a.name
@@ -338,9 +407,11 @@ function Dispatch([string]$verb, $a) {
     'version' { return (Verb-Version $a) }
     'ps' { return (Verb-Ps $a) }
     'tcp-table' { return (Verb-TcpTable $a) }
+    'reg-read' { return (Verb-RegRead $a) }
     'net-if' { return (Verb-NetIf $a) }
     'route' { return (Verb-Route $a) }
     'token' { return (Verb-Token $a) }
+    'roots' { return (Verb-Roots $a) }
     'pipe-server' { return (Verb-PipeServer $a) }
     default { throw ('unknown-verb: ' + $verb) }
   }
