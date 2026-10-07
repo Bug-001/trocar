@@ -111,10 +111,14 @@ test('W7 routing: the block routes the agents and no rule matches Claude Desktop
   }
 })
 
-test('W7 the generator source names no harness and no lab (static scan, comments included)', () => {
-  const src = fs.readFileSync(RULES_SRC, 'utf8')
-  assert.deepEqual(src.match(/\b(claude|codex|opencode|kimi|dsh|deepseek|hermes|zcode|z-code)\b/gi) || [], [], 'a harness id in the generator (4.8 §3: it does not know them)')
-  assert.deepEqual(src.match(/asight-test|\bP2-|gstatic|generate_204|atrace/g) || [], [], 'lab names, the struck public probe, the v0 prototype name')
+test('W7 the generator source names no harness and no lab (static scan, comments included): rules.mjs and the pieces of it that live elsewhere', () => {
+  // the Script.js strip and the runtime strip are rules.mjs's in everything but the directory (src/off, because the undo runs them: 1.6 R3), and the text splice is its sibling
+  const SIDE = ['src/off/script-block.mjs', 'src/off/runtime-strip.mjs', 'src/netenv/mihomo/runtime-text.mjs'].map((f) => path.join(HERE, '..', '..', f))
+  for (const file of [RULES_SRC, ...SIDE]) {
+    const src = fs.readFileSync(file, 'utf8')
+    assert.deepEqual(src.match(/\b(claude|codex|opencode|kimi|dsh|deepseek|hermes|zcode|z-code)\b/gi) || [], [], `a harness id in ${path.basename(file)} (4.8 §3: it does not know them)`)
+    assert.deepEqual(src.match(/asight-test|\bP2-|gstatic|generate_204|atrace/g) || [], [], `lab names, the struck public probe, the v0 prototype name in ${path.basename(file)}`)
+  }
 })
 
 test('W7 off is an empty route file; on is the lines, one per row, LF', () => {
