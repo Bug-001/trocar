@@ -115,7 +115,9 @@ test('the pattern lint accepts the subset and rejects what JavaScript and .NET r
 test('loadHarnesses attaches win32/<name>.mjs as desc.win32, skips the win32 directory and its helpers, and leaves a harness without Windows data as it was', async () => {
   const dir = tmpDir('asight-load-')
   fs.mkdirSync(path.join(dir, 'win32'))
-  const desc = (n) => `export default { name: ${JSON.stringify(n)} }\n`
+  // a descriptor owes `asight status` / `doctor` its `proxy` export (1.6 §9.7): loadHarnesses checks the shape, so a stub has one
+  const proxy = { env: ['HTTPS_PROXY'], files: [], systemProxy: { http: false, ws: false }, schemes: ['http'], unsupported: {}, branches: ['all'], measured: { win32: 'inferred', linux: 'inferred', darwin: 'inferred' }, restart: { hint: 'restart it', processes: 'the stub' } }
+  const desc = (n) => `export default { name: ${JSON.stringify(n)}, proxy: ${JSON.stringify(proxy)} }\n`
   for (const n of ['one', 'two']) fs.writeFileSync(path.join(dir, `${n}.mjs`), desc(n))
   fs.writeFileSync(path.join(dir, 'win32', 'one.mjs'), 'export default { forms: [] }\n')
   fs.writeFileSync(path.join(dir, 'win32', '_paths.mjs'), 'export default { notAHarness: true }\n')

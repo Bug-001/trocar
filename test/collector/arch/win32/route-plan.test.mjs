@@ -702,8 +702,8 @@ test('priorOf: once asight has written the entry, the user\'s proxy is the manif
     const file = b.put(rel, user)
     const m = newManifest()
     for (const e of proxyEntries(group, b.ctx(), ingress)) {
-      if (e.kind === 'text') applyTextEntry({ dir: b.dir, manifest: m, harness, file: e.path, edit: e })
-      else applyJsonKey({ dir: b.dir, manifest: m, harness, file: e.path, keys: e.keys, value: e.value })
+      if (e.kind === 'text') applyTextEntry({ dir: b.dir, home: b.home, manifest: m, harness, file: e.path, edit: e })
+      else applyJsonKey({ dir: b.dir, home: b.home, manifest: m, harness, file: e.path, keys: e.keys, value: e.value })
     }
     assert.ok(fs.readFileSync(file, 'utf8').includes('127.0.0.1:17991'), `${g}: the file holds asight's address now`)
     assert.deepEqual(priorOf({ harness, group, ctx: b.ctx(), manifest: m }), { value: USER_PROXY, noProxy, source: 'manifest' }, `${g}: the user's proxy, not asight's address`)
@@ -715,7 +715,7 @@ test('priorOf: once asight has written the entry, the user\'s proxy is the manif
   const file = b.put('.claude/settings.json', '{"env": {"ANTHROPIC_BASE_URL": "https://relay.example.com"}}\n')
   const m = newManifest()
   const e = proxyEntries(group, b.ctx(), ingress)[0]
-  applyJsonKey({ dir: b.dir, manifest: m, harness: 'claude-code', file: e.path, keys: e.keys, value: e.value })
+  applyJsonKey({ dir: b.dir, home: b.home, manifest: m, harness: 'claude-code', file: e.path, keys: e.keys, value: e.value })
   assert.deepEqual(priorOf({ harness: 'claude-code', group, ctx: b.ctx(), manifest: m }), { value: null, noProxy: null, source: 'manifest' })
   assert.ok(fs.readFileSync(file, 'utf8').includes('127.0.0.1:17991'))
   // the entries of other groups, and the trust entry of the same file, are not this group's
@@ -763,8 +763,8 @@ test('priorOf: the manifest answers for every file asight wrote an entry in, whi
   const install = b.ctx({ CODEX_HOME: path.join(b.home, 'work-codex'), CLAUDE_CONFIG_DIR: path.join(b.home, 'work-claude') })
   const codex = of('codex.env')
   const claude = of('claude-code.settings')
-  for (const e of proxyEntries(codex.group, install, ingress)) applyTextEntry({ dir: b.dir, manifest: m, harness: 'codex', file: e.path, edit: e })
-  for (const e of proxyEntries(claude.group, install, ingress)) applyJsonKey({ dir: b.dir, manifest: m, harness: 'claude-code', file: e.path, keys: e.keys, value: e.value })
+  for (const e of proxyEntries(codex.group, install, ingress)) applyTextEntry({ dir: b.dir, home: b.home, manifest: m, harness: 'codex', file: e.path, edit: e })
+  for (const e of proxyEntries(claude.group, install, ingress)) applyJsonKey({ dir: b.dir, home: b.home, manifest: m, harness: 'claude-code', file: e.path, keys: e.keys, value: e.value })
   assert.equal(codex.group.proxyEntry.files(install).length, 2, 'the install ctx lists both Codex homes')
   assert.deepEqual(claude.group.proxyEntry.files(install), [path.join(b.home, 'work-claude', 'settings.json')])
   const want = { codex: { value: USER_PROXY, noProxy: 'intranet.example', source: 'manifest' }, claude: { value: USER_PROXY, noProxy: null, source: 'manifest' } }
@@ -858,7 +858,7 @@ test('resolveLogin: `prior:<group>` is the login in the user\'s proxy of that gr
   assert.deepEqual(resolveLogin('prior:claude-code.settings', { groups: GROUPS, ctx }), { username: 'al@ice', password: 's3:cret' }, 'the file before asight: the login is decoded')
   const m = newManifest()
   const e = proxyEntries(group, ctx, ingress)[0]
-  applyJsonKey({ dir: b.dir, manifest: m, harness: 'claude-code', file: e.path, keys: e.keys, value: e.value })
+  applyJsonKey({ dir: b.dir, home: b.home, manifest: m, harness: 'claude-code', file: e.path, keys: e.keys, value: e.value })
   assert.ok(fs.readFileSync(file, 'utf8').includes('127.0.0.1:17991'), 'the file holds asight\'s address now, and has no login')
   assert.deepEqual(resolveLogin('prior:claude-code.settings', { groups: GROUPS, ctx, manifest: m }), { username: 'al@ice', password: 's3:cret' }, 'after asight wrote the entry the manifest is what answers: the same login, not the one of asight\'s own address')
   const env = { ok: true, values: { HTTPS_PROXY: 'socks5://bob:pw@proxy.example:1080', ALL_PROXY: 'http://plain.example:3128' } }
@@ -944,7 +944,7 @@ test('W5 §2.2 ①: an agent with a proxy of its own keeps it as the upstream �
   // after `on` the file holds asight's address and the manifest holds the user's: the same plan
   const m = newManifest()
   const e = proxyEntries(gdata('claude-code.settings').group, b.ctx(), { port: 17991, listenerToken: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' })[0]
-  applyJsonKey({ dir: b.dir, manifest: m, harness: 'claude-code', file: e.path, keys: e.keys, value: e.value })
+  applyJsonKey({ dir: b.dir, home: b.home, manifest: m, harness: 'claude-code', file: e.path, keys: e.keys, value: e.value })
   const after = plan(b, { manifest: m })
   assert.deepEqual(after['claude-code.settings'], p['claude-code.settings'])
   const blind = plan(b)

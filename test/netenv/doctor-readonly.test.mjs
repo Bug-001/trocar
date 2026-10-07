@@ -85,7 +85,14 @@ test('V50 status and doctor only read: they write netenv.json and flows/ and not
 })
 
 test('V50 the code: what the network facts run is named in a list of readers (ss, ip, gsettings, ps, scutil, lsof, netstat, reg, schtasks, where.exe), nothing in src/netenv or the facts of a platform connects anywhere but the VPN core\'s unix socket, and no write verb or `Get-NetTCPConnection` is in it', () => {
-  const files = [...fs.readdirSync(path.join(REPO, 'src/netenv')).map((f) => path.join('src/netenv', f)), 'src/collector/arch/linux/netfacts.mjs']
+  const walkFiles = (d) => fs.readdirSync(path.join(REPO, d), { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walkFiles(path.join(d, e.name)) : [path.join(d, e.name)]))
+  // src/netenv/mihomo/controller.mjs connects to a controller and, for asight's OWN kernel only (own:true, 4.8 §3.3), writes: its allow-list is held by test/netenv/controller.test.mjs (N9),
+  // so it is not scanned for verbs here. What this test holds is that the status / doctor side (src/netenv, src/cli, src/off) only ever asks it as the user's VPN: no `own: true` outside it.
+  const CONTROLLER = path.join('src/netenv/mihomo', 'controller.mjs')
+  const files = [...walkFiles('src/netenv').filter((f) => f !== CONTROLLER), 'src/collector/arch/linux/netfacts.mjs']
+  assert.ok(files.length > 10 && files.includes(path.join('src/netenv', 'clash.mjs')), 'the scan sees src/netenv, its subdirectories too')
+  const ownCallers = [...walkFiles('src/netenv'), ...walkFiles('src/cli'), ...walkFiles('src/off')].filter((f) => f !== CONTROLLER && /\bown:\s*true\b/.test(fs.readFileSync(path.join(REPO, f), 'utf8').replace(/^\s*\/\/.*$/gm, '')))
+  assert.deepEqual(ownCallers, [], 'no status / doctor file asks a controller as asight\'s own kernel (the writing form): only arch/win32/forwarder.mjs does')
   for (const rel of files) {
     const src = fs.readFileSync(path.join(REPO, rel), 'utf8')
     for (const m of src.matchAll(/execTool\(\s*'([^']+)'/g)) assert.ok(READ_ONLY.has(m[1]), `${rel}: execTool('${m[1]}') is not a read-only query`)

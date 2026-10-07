@@ -8,7 +8,8 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 import { planTrust } from '../../../src/collector/core/trust/plan.mjs'
-import { installCollector, uninstallCollector } from '../../../src/collector/install.mjs'
+import { installCollector } from '../../../src/collector/install.mjs'
+import { uninstallCollector } from '../../helpers/uninstall.mjs'
 import { readManifest, installedAt } from '../../../src/collector/core/trust/journal.mjs'
 import { parseDotenv } from '../../../src/collector/core/config-read.mjs'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
@@ -381,7 +382,7 @@ for (const c0 of CASES) for (const shape of SHAPES) {
     assert.deepEqual(entries.map((e) => e.path), [file], 'the file the agent reads')
     const m = newManifest()
     const e = entries[0]
-    const done = e.kind === 'text' ? applyTextEntry({ dir: b.dir, manifest: m, harness: c.harness, file: e.path, edit: e }) : applyJsonKey({ dir: b.dir, manifest: m, harness: c.harness, file: e.path, keys: e.keys, value: e.value })
+    const done = e.kind === 'text' ? applyTextEntry({ dir: b.dir, home: b.home, manifest: m, harness: c.harness, file: e.path, edit: e }) : applyJsonKey({ dir: b.dir, home: b.home, manifest: m, harness: c.harness, file: e.path, keys: e.keys, value: e.value })
     const written = fs.readFileSync(file, 'utf8')
     assert.equal(c.value(written), URL_OF(c.g), 'the agent now reads the group\'s port, with the credentials the listener asks for')
     if (c.block) assert.equal(/NO_PROXY=localhost,127\.0\.0\.1,::1\r?\n/.test(written), c.noProxy !== false, 'the loopback never goes round the kernel (a block that writes NO_PROXY)')
@@ -399,7 +400,7 @@ for (const c0 of CASES) for (const shape of SHAPES) {
     const fresh = proxyEntries(group, { ...ctxOf(b), listDir: () => ['x'] }, INGRESS)
     if (fresh.length) {
       const m2 = newManifest()
-      const d2 = fresh[0].kind === 'text' ? applyTextEntry({ dir: b.dir, manifest: m2, harness: c.harness, file: fresh[0].path, edit: fresh[0] }) : applyJsonKey({ dir: b.dir, manifest: m2, harness: c.harness, file: fresh[0].path, keys: fresh[0].keys, value: fresh[0].value })
+      const d2 = fresh[0].kind === 'text' ? applyTextEntry({ dir: b.dir, home: b.home, manifest: m2, harness: c.harness, file: fresh[0].path, edit: fresh[0] }) : applyJsonKey({ dir: b.dir, home: b.home, manifest: m2, harness: c.harness, file: fresh[0].path, keys: fresh[0].keys, value: fresh[0].value })
       assert.equal(c.value(fs.readFileSync(fresh[0].path, 'utf8')), URL_OF(c.g))
       undoEntry(d2)
       assert.equal(fs.existsSync(fresh[0].path), false)
@@ -415,9 +416,9 @@ test('W19 proxy entry: Claude Code and Z-Code write the proxy key beside the tru
     const ctx = ctxOf(b)
     const trust = planTrust({ descriptors: [d], ctxFor: () => ctx, caCertPem: CA.certPem, collectorDir: b.dir }).entries[0]
     const m = newManifest()
-    const first = applyJsonKey({ dir: b.dir, manifest: m, harness: c.harness, file: trust.path, keys: trust.keys, value: trust.value })
+    const first = applyJsonKey({ dir: b.dir, home: b.home, manifest: m, harness: c.harness, file: trust.path, keys: trust.keys, value: trust.value })
     const [p] = proxyEntries(d.win32.groups.find((g) => g.g === c.g), ctx, INGRESS)
-    const second = applyJsonKey({ dir: b.dir, manifest: m, harness: c.harness, file: p.path, keys: p.keys, value: p.value })
+    const second = applyJsonKey({ dir: b.dir, home: b.home, manifest: m, harness: c.harness, file: p.path, keys: p.keys, value: p.value })
     assert.equal(c.value(fs.readFileSync(file, 'utf8')), URL_OF(c.g))
     assert.ok(fs.readFileSync(file, 'utf8').includes(trust.value), 'both keys are there')
     assert.deepEqual([undoEntry(second).result, undoEntry(first).result], ['restored', 'restored'])
