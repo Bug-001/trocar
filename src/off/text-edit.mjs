@@ -25,7 +25,7 @@ const unquote = (v) => { const t = v.trim(); const m = /^(["'])(.*)\1/.exec(t); 
 // prior = the value the agent used to read (the last assignment wins in dotenvy and python-dotenv), or null.
 // The block ends its lines the way the file does (a .env edited on Windows is CRLF: an editor that keeps a file's line ending then never mixes them); a line's own \r is not part of
 // what it assigns. `quote`: a value that cannot stand unquoted (a space in it) is written in double quotes instead of refused; `vars` keeps the plain value, the quotes are only text.
-export function dotenvBlock(text, vars, { quote = false } = {}) {
+const shownVars = (vars, quote) => {
   const shown = {}
   for (const [k, v] of Object.entries(vars)) {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) throw new Error(`${k} is not a dotenv key`)
@@ -33,6 +33,10 @@ export function dotenvBlock(text, vars, { quote = false } = {}) {
     else if (quote && QUOTABLE_VALUE.test(v)) shown[k] = `"${v}"`
     else throw new Error(`${k}=${v}: asight writes unquoted absolute paths only (no spaces, quotes, # or $)${quote ? CANNOT_QUOTE : ''}`)
   }
+  return shown
+}
+export function dotenvBlock(text, vars, { quote = false } = {}) {
+  const shown = shownVars(vars, quote)
   const src = text == null ? '' : text
   const crlf = (src.match(/\r\n/g) || []).length
   const eol = crlf > (src.match(/\n/g) || []).length - crlf ? '\r\n' : '\n'
@@ -49,6 +53,37 @@ export function dotenvBlock(text, vars, { quote = false } = {}) {
   const block = [BLOCK_BEGIN, ...Object.entries(shown).map(([k, v]) => `${k}=${v}`), BLOCK_END].join(eol) + eol
   ops.push({ offset: 0, removed: '', inserted: block })
   return { text: applyOps(src, ops), ops, prior: Object.keys(prior).length ? prior : null }
+}
+
+/** Join further variables into the sentinel block a file already holds (4.8 §2.3: one block per file, entered separately — Codex's and Hermes's proxy
+ *  lines join the trust block the trust entry wrote). Only an entry that says `joinBlock: true` reaches this, and only through a journal whose manifest
+ *  lists the block for the same harness (journal.mjs); everything else keeps dotenvBlock's refusal of a second block. The file's own line ending is kept,
+ *  the new lines go in before the block's end marker, and the user's lines assigning one of `vars` outside the block get OFF_PREFIX exactly as dotenvBlock's
+ *  (the last assignment wins in dotenvy and python-dotenv, so what is left outside is out of effect). `prior` is the value each joined key had outside. */
+export function joinDotenvBlock(text, vars, { quote = false } = {}) {
+  const shown = shownVars(vars, quote)
+  if (text == null) throw new Error('there is no asight block to join')
+  const begin = text.indexOf(BLOCK_BEGIN)
+  const end = text.indexOf(BLOCK_END)
+  if (begin < 0 || end < begin) throw new Error('there is no asight block to join')
+  const crlf = (text.match(/\r\n/g) || []).length
+  const eol = crlf > (text.match(/\n/g) || []).length - crlf ? '\r\n' : '\n'
+  const atEnd = text.lastIndexOf('\n', end) + 1 // the start of the block's end-marker line: the new lines go right before it
+  const insideBlock = (at) => at >= begin && at < end + BLOCK_END.length
+  const prior = {}
+  const ops = []
+  for (const at of lineStarts(text)) {
+    if (insideBlock(at)) continue
+    const e = text.indexOf('\n', at)
+    const line = text.slice(at, e < 0 ? text.length : e).replace(/\r$/, '')
+    const m = /^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=(.*)$/.exec(line)
+    if (!m || !(m[1] in vars)) continue
+    if (!(m[1] in prior)) prior[m[1]] = unquote(m[2])
+    ops.push({ offset: at, removed: '', inserted: OFF_PREFIX })
+  }
+  ops.push({ offset: atEnd, removed: '', inserted: Object.entries(shown).map(([k, v]) => `${k}=${v}`).join(eol) + eol, asight: true }) // `asight`: these lines are asight's without carrying the sentinel, so removeAsightText takes them out too
+  ops.sort((a, b) => b.offset - a.offset) // pure insertions: highest offset first, the lower ones stay valid (dotenvBlock's order)
+  return { text: applyOps(text, ops), ops, prior: Object.keys(prior).length ? prior : null }
 }
 
 // One line after the last line matching `after` (a shell rc: the Kimi shim's PATH line goes after the kimi installer's
@@ -113,7 +148,7 @@ export function removeAsightText(text, ops) {
   let t = text
   let found = false
   for (const op of ops) {
-    if (!op.inserted.includes(SENTINEL)) continue
+    if (!op.inserted.includes(SENTINEL) && op.asight !== true) continue // a joined block's lines are asight's without the sentinel (joinDotenvBlock)
     if (op.removed !== '') { // a row that replaced the user's `[]`: the `[]` comes back in its place
       const i = t.indexOf(op.inserted)
       if (i >= 0) { t = t.slice(0, i) + op.removed + t.slice(i + op.inserted.length); found = true }

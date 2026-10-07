@@ -20,7 +20,7 @@
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { setKey, getPath, reverseOps } from '../../../off/json-text.mjs'
-import { dotenvBlock, insertLine, removeAsightText, BLOCK_BEGIN } from '../../../off/text-edit.mjs'
+import { dotenvBlock, joinDotenvBlock, insertLine, removeAsightText, BLOCK_BEGIN } from '../../../off/text-edit.mjs'
 import { sha256, readOrNull, writeDurable, missingDirs, editTarget } from '../../../off/fsutil.mjs'
 import { saveManifest, undoByHand } from '../../../off/manifest.mjs'
 import { writeBackup } from '../../../off/backup.mjs'
@@ -168,14 +168,22 @@ export function applyJsonKey({ dir, manifest, harness, file, keys, value, home, 
 }
 
 // A text entry (text-edit.mjs): edit = { format: 'dotenv-block', vars, quote? } | { format: 'line', line, after? } |
-// { format: 'yaml-list', line }. Text asight already put there under an install this manifest does not list is
-// refused: a second block or row would only be undone once.
-function editText(file, text, edit) {
+// { format: 'yaml-list', line } | a dotenv-block with `joinBlock: true` (4.8 §2.3: the proxy lines of Codex and Hermes
+// join the sentinel block the trust entry wrote — one block per file, entered separately). Text asight already put there
+// under an install this manifest does not list is refused: a second block or row would only be undone once. `joined` (the
+// caller has checked the manifest lists the block for this harness) is the only way past that refusal, and only into the
+// existing block (text-edit.mjs joinDotenvBlock); the default stays the refusal, so nothing joins by accident.
+function editText(file, text, edit, { joined = false } = {}) {
   if (text != null && (text.includes(BLOCK_BEGIN) || (edit.line && text.includes(edit.line)))) {
-    throw new Error(`${file} already holds asight's text from an install this manifest does not list; take it out, then install again`)
+    if (!(joined && text.includes(BLOCK_BEGIN) && edit.format === 'dotenv-block')) {
+      throw new Error(`${file} already holds asight's text from an install this manifest does not list; take it out, then install again`)
+    }
   }
   try {
-    if (edit.format === 'dotenv-block') return dotenvBlock(text, edit.vars, { quote: edit.quote === true })
+    if (edit.format === 'dotenv-block') {
+      if (joined && text != null && text.includes(BLOCK_BEGIN)) return joinDotenvBlock(text, edit.vars, { quote: edit.quote === true })
+      return dotenvBlock(text, edit.vars, { quote: edit.quote === true })
+    }
     if (edit.format === 'line' || edit.format === 'yaml-list') return { ...insertLine(text, { line: edit.line, after: edit.after || null, format: edit.format === 'yaml-list' ? 'yaml-list' : 'lines' }), prior: null }
   } catch (e) { throw new Error(`${file}: ${e.message}`) }
   throw new Error(`${file}: unknown text edit ${edit.format}`)
@@ -191,11 +199,14 @@ export function applyTextEntry({ dir, manifest, harness, file, edit, home, now =
   const j = judgeEntry({ manifest, planned: { harness, kind: 'text', path: file, format: edit.format, ...(edit.vars ? { vars: edit.vars } : { line: edit.line }) }, fs })
   if (j.action === 'skip-intact') return null // nothing written, as when the key already held the value
   if (j.action === 'skip-user-changed') throw refuseChanged(j)
+  // `joinBlock` (text-edit.mjs joinDotenvBlock) may only join a block THIS manifest lists for the same harness: a block
+  // from an install this manifest does not list is still refused, join or no join
+  const joined = edit.joinBlock === true && (manifest.entries || []).some((x) => x.harness === harness && x.path === file && x.kind === 'text' && x.format === 'dotenv-block')
   const real = editTarget(file, fs)
   const before = readOrNull(fs, real)
   if (j.adopt) { j.entry.post_sha256 = sha256(before); saveManifest(dir, manifest, fs); return j.entry }
   // an intent a crashed run left, whose write never happened: the file is still as it was, so its text is not yet in it
-  const res = editText(file, before == null ? null : before.toString('utf8'), edit)
+  const res = editText(file, before == null ? null : before.toString('utf8'), edit, { joined })
   const resumed = j.action === 'resume' ? j.entry : null
   const fresh = {
     kind: 'text', harness, path: file, ...(real !== file ? { real_path: real } : {}), format: edit.format,
