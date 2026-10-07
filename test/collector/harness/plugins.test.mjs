@@ -7,10 +7,13 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import tls from 'node:tls'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { renderPlugin, PLUGIN_SOURCES } from '../../../src/collector/harness/_plugins.mjs'
 import { CA } from './_ctx.mjs'
 
+// the plugin needs tls.setDefaultCACertificates (Node >= 22.19) and the probe tls.getCACertificates (>= 22.15); an older Node (the CI matrix has 20) skips the real-Node test, so every Node counts the same tests
+const NODE_TLS_ROOTS = typeof tls.setDefaultCACertificates === 'function' && typeof tls.getCACertificates === 'function'
 const SRC = { dsh: 'dsh/index.js', opencode: 'opencode/asight-ca.js' }
 const read = (rel) => fs.readFileSync(new URL(rel, PLUGIN_SOURCES), 'utf8')
 const code = (src) => src.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s\/\/ .*$/gm, '')
@@ -165,7 +168,7 @@ test('renderPlugin fills in this user\'s CA file and marker dir as string litera
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
-test('T13 real Node (Linux): the rendered dsh plugin puts the asight CA into the default roots and writes the marker with this process\'s start time', { skip: process.platform !== 'linux' && 'needs /proc' }, async () => {
+test('T13 real Node (Linux): the rendered dsh plugin puts the asight CA into the default roots and writes the marker with this process\'s start time', { skip: (process.platform !== 'linux' && 'needs /proc') || (!NODE_TLS_ROOTS && 'needs Node >= 22.19 (tls.setDefaultCACertificates)') }, async () => {
   const { spawnSync } = await import('node:child_process')
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-t13r-'))
   try {

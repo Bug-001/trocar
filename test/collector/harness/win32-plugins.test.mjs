@@ -7,10 +7,14 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import tls from 'node:tls'
 import { pathToFileURL } from 'node:url'
 import { renderPlugin, PLUGIN_SOURCES } from '../../../src/collector/harness/_plugins.mjs'
 import { CA } from './_ctx.mjs'
 
+// The plugin changes the default roots with tls.setDefaultCACertificates (Node >= 22.19), and the probe reads them with tls.getCACertificates (>= 22.15): on an older Node (the CI matrix has 20) the
+// real-Node test is skipped, not failed or left out, so every Node version still counts the same number of tests.
+const NODE_TLS_ROOTS = typeof tls.setDefaultCACertificates === 'function' && typeof tls.getCACertificates === 'function'
 const SRC = { dsh: 'win32/dsh.mjs', opencode: 'win32/opencode.js' }
 const read = (rel) => fs.readFileSync(new URL(rel, PLUGIN_SOURCES), 'utf8')
 const code = (src) => src.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s\/\/ .*$/gm, '')
@@ -144,7 +148,7 @@ test('W22 OpenCode: a missing or non-PEM CA file, --use-openssl-ca on a Node sid
   assert.deepEqual(await m.mod.AsightCaPlugin({}), {}, 'it registers no hooks')
 })
 
-test('W22: the marker is the process\' own start in milliseconds, one number — the engine tells a reused pid by it; a real Node loads the rendered dsh plugin into its default roots and writes it', async () => {
+test('W22: the marker is the process\' own start in milliseconds, one number — the engine tells a reused pid by it; a real Node loads the rendered dsh plugin into its default roots and writes it', { skip: !NODE_TLS_ROOTS && 'needs Node >= 22.19 (tls.setDefaultCACertificates)' }, async () => {
   const { spawnSync } = await import('node:child_process')
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-w22r-'))
   try {
