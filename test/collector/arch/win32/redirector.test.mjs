@@ -200,7 +200,7 @@ const target = (address, port = 443) => ({ address, port })
 /** An ownerOf that answers what the test says (a list, one per call; then nobody) and remembers what it was asked. */
 function owner(...answers) {
   const calls = []
-  const fn = async (q) => { calls.push({ hop: q.hop, candidates: [...q.candidates] }); const a = answers.length ? answers.shift() : null; if (a instanceof Error) throw a; return a ?? { pid: null, source: null, ms: 3 } }
+  const fn = async (q) => { calls.push({ hop: q.hop, candidates: [...q.candidates], known: [...(q.known || [])] }); const a = answers.length ? answers.shift() : null; if (a instanceof Error) throw a; return a ?? { pid: null, source: null, ms: 3 } }
   fn.calls = calls
   return fn
 }
@@ -240,7 +240,8 @@ test('W16 a pid known and judged trusted: decrypt, the form, the harness, the im
   const { r } = bed({ ownerOf: o })
   trust(r, 10)
   assert.deepEqual(await ask(r, 'of.claude-code.cli'), { pid: 10, agent: 'claude-code', decrypt: true, capture: 'proxy', form: 'claude-code.cli', exe: IMG.ccCli, upstream: { kind: 'direct' }, pid_source: 'socket-table', pid_ms: 7, negKey: '10' })
-  assert.deepEqual(o.calls, [{ hop: { port: 18801 }, candidates: [10, 11] }], 'the cli\'s processes only, not the VS Code form\'s that shares the port, nor anyone\'s else')
+  assert.deepEqual([o.calls[0].hop, o.calls[0].candidates], [{ port: 18801 }, [10, 11]], 'the cli\'s processes only, not the VS Code form\'s that shares the port, nor anyone\'s else')
+  assert.deepEqual(o.calls[0].known.sort((a, b) => a - b), [10, 11, 12, 13, 20, 21, 22, 30], 'and the whole table is what the redirector can account for: a holder outside it is a process nobody has seen')
 })
 
 test('W16 a pid known and judged untrusted (or not judged at all): not decrypted, with no code of ours — the tracker answers for a pid, with the resolver\'s own reason', async () => {
@@ -293,22 +294,51 @@ test('W16 a process whose command line is not known yet may be the form\'s: it i
   assert.deepEqual([r.pidsOf('z-code.cli'), (await ask(r, 'of.z-code.cli')).decrypt], [[40], true])
 })
 
-test('W16 the real socket-table answer through the redirector: one candidate is that process with no table read; two with one holding the connection is that one; two holding it is nobody, and the form is judged', async () => {
+test('W16 the real socket-table answer through the redirector: one candidate is that process when it holds the connection (the table is read for it too); two with one holding it is that one; two holding it is nobody, and the form is judged', async () => {
   const { ownerOf } = await import('../../../../src/collector/arch/win32/socktable.mjs')
-  const row = (pid, remotePort) => ({ pid, state: 'established', family: 4, localAddr: '127.0.0.1', localPort: 50000 + pid, remoteAddr: '127.0.0.1', remotePort })
+  const row = (pid, remotePort, extra = {}) => ({ pid, state: 'established', family: 4, localAddr: '127.0.0.1', localPort: 50000 + pid, remoteAddr: '127.0.0.1', remotePort, ...extra })
   let rows = [], reads = 0
-  const helper = { call: async () => { reads++; return { rows } } }
+  const asked = []
+  const helper = { call: async (verb, args) => { reads++; asked.push(args); return { rows } } }
   const { r } = bed({ ownerOf: (q) => ownerOf({ helper, ...q }) })
   trust(r, 10, 11)
+  rows = [row(13, 18802)]
   const only = await ask(r, 'of.codex.app') // codex.app has a single process: 13
-  assert.deepEqual([only.pid, only.pid_source, reads], [13, 'single-process', 0])
+  assert.deepEqual([only.pid, only.pid_source, reads], [13, 'single-process', 1])
   rows = [row(10, 18801), row(11, 443)]
-  assert.deepEqual([(await ask(r, 'of.claude-code.cli')).pid, reads], [10, 1])
+  assert.deepEqual([(await ask(r, 'of.claude-code.cli')).pid, reads], [10, 2])
+  assert.deepEqual(asked[1], { remotePort: 18801 }, 'every holder of the group\'s port is asked for: the candidates\' rows alone could not show a process nobody has seen')
   rows = [row(10, 18801), row(11, 18801)]
   const two = await ask(r, 'of.claude-code.cli')
   assert.deepEqual([two.pid, two.pid_source, two.decrypt], [null, null, true], 'two hold it: not guessed; both trusted, so the form is')
   distrust(r, 11)
   assert.equal((await ask(r, 'of.claude-code.cli')).skip.reason, 'pid-unresolved-mixed')
+})
+
+test('W16 / W43 a connection from a process the table has not seen yet is nobody\'s, whoever else of the form holds a tunnel: not attributed to a known process, and the form is judged (the process table lags a poll)', async () => {
+  const { ownerOf } = await import('../../../../src/collector/arch/win32/socktable.mjs')
+  const row = (pid, remotePort, extra = {}) => ({ pid, state: 'established', family: 4, localAddr: '127.0.0.1', localPort: 50000 + pid, remoteAddr: '127.0.0.1', remotePort, ...extra })
+  let rows = []
+  const { r } = bed({ ownerOf: (q) => ownerOf({ helper: { call: async () => ({ rows }) }, ...q }) })
+  trust(r, 10) // pid 11 of the cli form is the second terminal; pid 99 is a third, started a second ago, in nobody's table
+  rows = [row(10, 18801), row(99, 18801)]
+  const m = await ask(r, 'of.claude-code.cli')
+  assert.deepEqual([m.pid, m.pid_source, m.exe, m.negKey, m.decrypt, m.skip], [null, null, null, 'of.claude-code.cli', false, { not_captured: 'untrusted', reason: 'pid-unresolved-mixed' }], 'not 10 (which trusts asight\'s CA and would have been "the one holder"): the form has a process that is not trusted, so this connection is not decrypted')
+  trust(r, 11)
+  const judged = await ask(r, 'of.claude-code.cli')
+  assert.deepEqual([judged.pid, judged.decrypt], [null, true], 'every process the table knows is trusted: judged by form, with no pid')
+  // the form's only known process, an unseen one connecting: not "the single process"
+  rows = [row(77, 18802)]
+  const single = await ask(r, 'of.codex.app') // codex.app has the one process 13
+  assert.deepEqual([single.pid, single.pid_source, single.exe, single.negKey], [null, null, null, 'of.codex.app'])
+  rows = [row(13, 18802), row(77, 18802)]
+  assert.equal((await ask(r, 'of.codex.app')).pid, null, 'holding a connection of its own does not make the known one the owner')
+  // a known process of another form of the group is not an unseen one: the VS Code form's claude.exe (12) holds a tunnel on the shared port, the cli's 11 connects
+  rows = [row(12, 18801), row(11, 18801)]
+  const shared = await ask(r, 'of.claude-code.cli')
+  assert.deepEqual([shared.pid, shared.pid_source], [11, 'socket-table'])
+  rows = [row(11, 18801), row(0, 18801, { state: 'time-wait' }), row(30, 443)]
+  assert.equal((await ask(r, 'of.claude-code.cli')).pid, 11, 'the end of an earlier connection has no owner and is no process connecting now')
 })
 
 test('W16 a form with no process rule takes every connection of its port, so the owner is looked for among ALL processes: its own trusted process decrypts, any other process (a child) is spliced and named, nobody found is spliced', async () => {
@@ -317,7 +347,8 @@ test('W16 a form with no process rule takes every connection of its port, so the
   trust(r, 20, 22)
   const own = await ask(r, 'of.deepseek-dsh.cli')
   assert.deepEqual([own.pid, own.decrypt, own.skip, own.exe], [20, true, undefined, IMG.node])
-  assert.deepEqual(o.calls[0].candidates.sort((a, b) => a - b), [10, 11, 12, 13, 20, 21, 22, 30], 'every process the table has: a child of dsh is not a dsh process, and only the whole table can say whose connection this is')
+  assert.deepEqual(o.calls[0].candidates.sort((a, b) => a - b), [10, 11, 12, 13, 20, 21, 30], 'every process the table has but the group\'s other forms\': a child of dsh is not a dsh process, and only the whole table can say whose connection this is')
+  assert.deepEqual(o.calls[0].known.sort((a, b) => a - b), [10, 11, 12, 13, 20, 21, 22, 30], 'the whole table is what the redirector can account for')
   assert.equal(o.calls[0].hop.port, 18803)
   const child = await ask(r, 'of.deepseek-dsh.cli')
   assert.deepEqual([child.pid, child.decrypt, child.skip, child.negKey], [21, false, { not_captured: 'untracked', reason: 'not-a-process-of-form' }, '21'], 'a Node child of dsh: spliced, and the row says whose it was')
@@ -331,6 +362,20 @@ test('W16 a form with no process rule takes every connection of its port, so the
   const o2 = owner(); const desk = bed({ ownerOf: o2 }).r
   await ask(desk, 'of.deepseek-dsh.desktop')
   assert.deepEqual(o2.calls[0].candidates, [22], 'the desktop app has a process rule: only its own processes are candidates, as for any other form')
+})
+test('W16 on the dedicated port the group\'s other forms are not candidates: dsh\'s Desktop shares the group\'s port, is handed to its own form by its process rule, and holding a connection of its own does not make dsh CLI\'s process unfindable', async () => {
+  const { ownerOf } = await import('../../../../src/collector/arch/win32/socktable.mjs')
+  const row = (pid, remotePort) => ({ pid, state: 'established', family: 4, localAddr: '127.0.0.1', localPort: 50000 + pid, remoteAddr: '127.0.0.1', remotePort })
+  let rows = [row(20, 18803), row(22, 18803)] // the CLI's own connection and the Desktop's, one port
+  const { r } = bed({ ownerOf: (q) => ownerOf({ helper: { call: async () => ({ rows }) }, ...q }) })
+  trust(r, 20, 22)
+  const m = await ask(r, 'of.deepseek-dsh.cli')
+  assert.deepEqual([m.pid, m.decrypt, m.skip], [20, true, undefined], 'dsh CLI is decrypted while the Desktop app has a connection open')
+  rows = [row(20, 18803), row(21, 18803)] // dsh and one of its Node children: two candidates hold the port
+  assert.equal((await ask(r, 'of.deepseek-dsh.cli')).pid, null)
+  rows = [row(21, 18803), row(22, 18803)]
+  const child = await ask(r, 'of.deepseek-dsh.cli') // the child connects while the Desktop holds one
+  assert.deepEqual([child.pid, child.skip], [21, { not_captured: 'untracked', reason: 'not-a-process-of-form' }], 'and its connection is still known for what it is')
 })
 
 test('W72 (lookup half) a CONNECT target that hits the group\'s bypass table is {kind:"direct"}, any other the group\'s upstream; each kind of row, and the user\'s login stays out of a direct connection', async () => {

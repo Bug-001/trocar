@@ -72,8 +72,8 @@ function refusalOf(r) {
  *   procWatcher  `createProcWatcher()`: the redirector subscribes to its events in this call, so none is lost between the two
  *   groups       `groupsOf(descriptors)` (route-plan.mjs): `[{ g, harness, group, forms, proxy }]`, the harness files' Windows data
  *   home         the user's profile directory (`%USERPROFILE%`): `form-path-unknown` masks the user's name wherever the profile is (forms.mjs `formPathShape`)
- *   ownerOf      `({ hop: { port }, candidates: [pid] }) → { pid, source, ms }` (socktable.mjs `ownerOf`, bound to the helper by the daemon): which of the candidates holds the connection to the hop; none = no pid completion, every
- *                connection is judged by its form
+ *   ownerOf      `({ hop: { port }, candidates: [pid], known: [pid] }) → { pid, source, ms }` (socktable.mjs `ownerOf`, bound to the helper by the daemon): which of the candidates holds the connection to the hop, none when a process
+ *                the table has no row for holds one too (`known` = the whole table); none given = no pid completion, every connection is judged by its form
  *   routes       `() → planRoutes' result` ({ [group id]: { on, upstream, bypass, … } }): what the plan says NOW; the daemon re-plans when the system proxy or `desired` changes, so it is read at every lookup
  *   ingress      `() → loadIngressConfig's result` (`{ enginePort, groupPorts, ingressToken, listenerToken }`)
  *   authOf       `(auth_ref) → { username, password } | null`: the login a reference names (`prior:<group>`, `hkcu-env:<NAME>`); only this call turns a reference into a login, and only for one connection that is dialled through the proxy
@@ -105,6 +105,12 @@ export function createWin32Redirector({ helper, procWatcher, groups, home = null
   const pidsOf = (form) => [...procs].filter(([, p]) => p.match.kind === 'form' && p.match.id === form).map(([pid]) => pid)
   /** The processes a connection under `of.<form>` can be from: the form's own, and the ones whose command line is not known yet and may be (the watcher says again when it is). */
   const maybeOf = (form) => [...procs].filter(([, p]) => (p.match.kind === 'form' && p.match.id === form) || (p.match.kind === 'pending' && p.match.forms.includes(form))).map(([pid]) => pid)
+  /** The processes a connection to a form with no process rule can be from: every process of the session but the ones of the group's other forms, which their own process rules hand to those forms (dsh's Desktop shares dsh CLI's port, and its
+   *  connection held open must not make the CLI's own unfindable). A process of a form of ANOTHER group stays: nothing hands it to its form here, and it is judged for what it is (`not-a-process-of-form`). */
+  function takenBy({ form, g }) {
+    const elsewhere = ([, p]) => p.match.kind === 'form' && p.match.id !== form.id && byForm.get(p.match.id).g === g
+    return [...procs].filter((e) => !elsewhere(e)).map(([pid]) => pid)
+  }
   /** Forgets a process and its verdict; says `form-exit` when it was the last process of its form (after any `exit` the caller passes on, so a listener of both sees the process leave first). */
   function drop(pid, { then = () => {} } = {}) {
     const p = procs.get(pid)
@@ -132,12 +138,13 @@ export function createWin32Redirector({ helper, procWatcher, groups, home = null
   }
 
   /** Which process owns the connection that reached the group's port, best effort and never wrong (4.8 §5.3): one of `candidates`, or nobody. A form with a process rule in the kernel gets only its own processes there; a form with none takes
-   *  every connection of its port, so it is asked against every process. A socket table that cannot be asked never costs the connection: it is no pid, and the failure is recorded. */
+   *  every connection of its port, so it is asked against every process but the other forms' of its group. The table lags the real world by a poll, so a process that started a moment ago has no row here: `known` is every process the table
+   *  has, and the owner is answered only when no process outside it holds a connection to the port (socktable.mjs). A socket table that cannot be asked never costs the connection: it is no pid, and the failure is recorded. */
   async function owningPid(candidates, port) {
     const none = { pid: null, source: null, ms: null }
     if (!ownerOf || !Number.isInteger(port) || candidates.length === 0) return none
     try {
-      const r = await ownerOf({ hop: { port }, candidates })
+      const r = await ownerOf({ hop: { port }, candidates, known: [...procs.keys()] })
       return { pid: r && r.pid != null ? r.pid : null, source: (r && r.source) || null, ms: r && r.ms != null ? r.ms : null }
     } catch (e) {
       onFailure({ event: 'failure', where: 'helper', code: 'socktable-unavailable', reason: `the owner of a connection could not be asked for (${msgOf(e)}); the connection is judged by its form` })
@@ -184,8 +191,7 @@ export function createWin32Redirector({ helper, procWatcher, groups, home = null
       const port = ((ingress() || {}).groupPorts || {})[hit.g]
       if (Number.isInteger(port) && target.address === '127.0.0.1' && target.port === port) return { health: true, group: hit.form.id }
       const upstream = upstreamFor(hit.g, route, target.address) // before the table is asked: a connection that cannot be dialled should not wait on it
-      const own = hit.form.processRules !== false
-      const candidates = own ? maybeOf(hit.form.id) : [...procs.keys()]
+      const candidates = hit.form.processRules !== false ? maybeOf(hit.form.id) : takenBy(hit)
       const { pid, source, ms } = await owningPid(candidates, port)
       const { decrypt, skip } = judge(hit.form, pid, candidates)
       return {

@@ -1006,7 +1006,7 @@ test('W4 exactly one of the form\'s processes holds a connection to the hop (any
   const r = await ownerOf({ helper: h, hop: HOP, candidates: [10, 11] })
   assert.deepEqual({ pid: r.pid, source: r.source }, { pid: 10, source: 'socket-table' })
   assert.equal(typeof r.ms, 'number')
-  assert.deepEqual(h.calls.map((c) => [c.verb, c.args.pids, c.args.remotePort]), [['tcp-table', [10, 11], 7897]])
+  assert.deepEqual(h.calls.map((c) => [c.verb, c.args.pids, c.args.remotePort]), [['tcp-table', undefined, 7897]], 'the helper is asked for every holder of the port, not for the candidates\' rows: a process the caller has not seen shows only in the whole answer')
 })
 
 test('W4 two processes of the form hold one: null, never a guess', async () => {
@@ -1023,17 +1023,34 @@ test('W4 a long-lived connection opened before `on` counts like any other, and n
   assert.equal((await ownerOf({ helper: tableHelper([old, trow(11, 7897)]), hop: HOP, candidates: [10, 11] })).pid, null)
 })
 
-test('W4 one candidate is the answer without a table read (single-process); no candidate, no answer', async () => {
+test('W4 one candidate is the answer when it holds the connection and nobody else does (single-process); a pid listed twice is one candidate; no candidate, no answer and no table read', async () => {
   const h = tableHelper([trow(10, 7897)])
   const r = await ownerOf({ helper: h, hop: HOP, candidates: [10] })
   assert.deepEqual({ pid: r.pid, source: r.source }, { pid: 10, source: 'single-process' })
+  assert.equal(h.calls.length, 1, 'one table read: the process is the form\'s only one the caller knows, not necessarily the only one there is')
   assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [10, 10] })).source, 'single-process', 'a pid listed twice is one candidate')
-  assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [] })).pid, null)
-  assert.equal(h.calls.length, 0, 'zero table reads')
+  assert.equal((await ownerOf({ helper: tableHelper([trow(10, 443)]), hop: HOP, candidates: [10] })).pid, null, 'the one candidate holds nothing to the hop: nothing says the connection is its')
+  const none = tableHelper([trow(10, 7897)])
+  assert.equal((await ownerOf({ helper: none, hop: HOP, candidates: [] })).pid, null)
+  assert.equal(none.calls.length, 0, 'no candidate: no table read')
 })
 
-test('W4 the answer does not depend on the helper having filtered: rows of other pids and other ports are ignored here too', async () => {
-  const rows = [trow(999, 7897), trow(10, 9999), trow(11, 7897, { remoteAddr: '10.1.2.3' }), trow(12, 7897)]
+test('W4 a holder the caller has no row for is a process nobody has seen, and it may own the connection: null, however many known processes hold one (the 2 s the process table lags)', async () => {
+  // a second terminal starts while the first runs: both are claude.exe, only 10 is known, and the first connection of the new one comes within a second
+  assert.equal((await ownerOf({ helper: tableHelper([trow(10, 7897), trow(99, 7897)]), hop: HOP, candidates: [10, 11] })).pid, null, 'two known processes, one holding an old tunnel, an unseen one connecting: not 10')
+  assert.equal((await ownerOf({ helper: tableHelper([trow(99, 7897)]), hop: HOP, candidates: [10] })).pid, null, 'one known process, an unseen one connecting: not "the only process"')
+  assert.equal((await ownerOf({ helper: tableHelper([trow(10, 7897), trow(99, 7897)]), hop: HOP, candidates: [10] })).pid, null, 'the known one holds a connection too: still not it')
+  // `known` says which processes the caller can account for: a known process that is not a candidate is another form's, and cannot be this form's connection
+  const r = await ownerOf({ helper: tableHelper([trow(12, 7897), trow(11, 7897)]), hop: HOP, candidates: [10, 11], known: [10, 11, 12] })
+  assert.deepEqual({ pid: r.pid, source: r.source }, { pid: 11, source: 'socket-table' }, 'pid 12 is the VS Code form\'s, known: it shares the group\'s port and holds a connection, and is not the cli\'s')
+  assert.equal((await ownerOf({ helper: tableHelper([trow(12, 7897), trow(99, 7897), trow(11, 7897)]), hop: HOP, candidates: [10, 11], known: [10, 11, 12] })).pid, null, 'a holder outside `known` is unseen')
+  // a TIME_WAIT row has no owner (Windows reports pid 0): the end of some earlier connection, not a process that is connecting now
+  assert.equal((await ownerOf({ helper: tableHelper([trow(11, 7897), trow(0, 7897, { state: 'time-wait' })]), hop: HOP, candidates: [10, 11] })).pid, 11)
+  assert.equal((await ownerOf({ helper: tableHelper([trow(11, 7897), trow(99, 7897, { remoteAddr: '10.1.2.3' })]), hop: { port: 7897, address: '127.0.0.1' }, candidates: [10, 11] })).pid, 11, 'with the address named, a row to another host is not a holder')
+})
+
+test('W4 the answer does not depend on the helper having filtered: rows of other ports are ignored here too', async () => {
+  const rows = [trow(999, 9999), trow(10, 9999), trow(11, 7897, { remoteAddr: '10.1.2.3' }), trow(12, 7897)]
   assert.equal((await ownerOf({ helper: tableHelper(rows), hop: HOP, candidates: [10, 11, 12] })).pid, null, 'pid 11 also holds a row to that port, on another host: still ambiguous')
   assert.equal((await ownerOf({ helper: tableHelper(rows), hop: { port: 7897, address: '127.0.0.1' }, candidates: [10, 11, 12] })).pid, 12, 'a hop that names its address narrows the rows')
 })
@@ -1086,11 +1103,12 @@ test('W4 a lookup in flight when the helper is closed is null and NOT a failure:
   // while a helper that DIED under the question is still a failure (W4's unreadable case, above)
 })
 
-test('W4 through the real client and the fake helper: the verb filters, the answer is the same; a failing verb is the failure record', async (t) => {
+test('W4 through the real client and the fake helper: the verb answers the rows of the hop, the rest is the same; a failing verb is the failure record', async (t) => {
   const rows = [trow(10, 7897), trow(11, 443), trow(12, 7897, { family: 6, localAddr: '::1', remoteAddr: '::1' })]
   const h = started(t, { verbs: { 'tcp-table': { data: { rows } } } })
-  assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [10, 11] })).pid, 10)
+  assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [10, 11], known: [10, 11, 12] })).pid, 10)
   assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [10, 12] })).pid, null)
+  assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [10, 11] })).pid, null, 'pid 12 holds a row to the hop and nobody has seen it')
   const bad = started(t, { verbs: { 'tcp-table': { error: 'GetExtendedTcpTable af=23 rc=50' } } })
   const failures = []
   assert.equal((await ownerOf({ helper: bad, hop: HOP, candidates: [10, 11], onFailure: (f) => failures.push(f) })).pid, null)
