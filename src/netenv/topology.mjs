@@ -158,8 +158,8 @@ const vpnOf = (F) => (F.vpn ? drop({ product: F.vpn.product, version: F.vpn.vers
 // ── proxy mode (D43; 4.8 §10): agent → [its proxy entry, written by asight] asight's own kernel → asight's engine → the upstream the agent would have had without asight ─────────────────────────────────────────────
 // A form is one way of running a harness (codex.cli, claude-code.vscode, …). Per form the facts say: `setting` (the proxy the agent would use without asight, as of now), `systemProxy`, the `entry` it was
 // wired through ({ where, asight, opt_in, intact }) or null when it is not, `optIn` (§1.7: { state, code, enable }), `procs`; and the kernel's own `forwarder.forms[id]` ({ port, state: 'on' | 'forward-only',
-// upstream, source, clients }). The upstream is what the kernel and the engine dial: the agent's own proxy, else the OS proxy a form that follows it has, else the API host direct (4.8 §2.2).
-const NOT_ROUTED = { needed: 'opt-in-needed', 'pending-admin': 'needs-admin', 'needs-admin': 'needs-admin' }
+// upstream, source, clients, upstream_error? }) and `routeLoop` on a form it refused to wire. The upstream is what the kernel and the engine dial: the agent's own proxy, else the OS proxy a form that follows it has, else the API host direct (4.8 §2.2).
+const NOT_ROUTED = { needed: 'opt-in-needed', 'pending-admin': 'not-routed', 'needs-admin': 'not-routed' } // an opt-in waiting for the user's administrator rights leaves the form not routed; `needs-admin` is the finding that says what to run
 
 /** The verdict on one form: [on_path, captured, reason, engine] — `engine`: whether the engine is on the path (the kernel only forwards for a process it cannot tell, for an agent that is off or when the engine is gone). */
 function formVerdict(F, h, hf, fm, fwf) {
@@ -169,6 +169,7 @@ function formVerdict(F, h, hf, fm, fwf) {
     if (fm.optIn.state === 'unknown') return none(null, null, null)
     return none(false, false, fm.optIn.state === 'broken' ? fm.optIn.code : NOT_ROUTED[fm.optIn.state])
   }
+  if (fm.routeLoop === true) return none(false, false, 'route-loop') // the platform refused to wire a form whose upstream would be asight itself (4.8 §2.2)
   if (!fm.entry) return none(false, false, 'not-routed')
   if (fm.entry.intact === null) return none(null, null, null)
   if (fm.entry.intact === false) return none(false, false, 'proxy-changed')
@@ -176,6 +177,7 @@ function formVerdict(F, h, hf, fm, fwf) {
   if (!F.forwarder || F.forwarder.up === false || !fwf) return none(true, false, 'forwarder-down')
   if (main) return none(true, false, 'elevated-agent')
   if (F.daemon.state === 'not-running' || F.daemon.state === 'not-responding') return none(true, false, `daemon-${F.daemon.state}`)
+  if (fwf.upstream_error) return { on: true, captured: false, reason: 'upstream-unreachable', engine: true } // the engine could not dial the upstream (the platform's last 60 s of it)
   const j = judgeHarness({ desired: 'on', entryIntact: entryIntact(hf), entryWhy: 'entry-missing', linkAttached: fwf.state === 'on', helper: 'ok', daemon: F.daemon.state, procs: fm.procs.map((p) => ({ pid: p.pid, startedAt: p.startedAt, trusted: p.trusted, reason: p.reason, negative: p.negative })), installedAt: hf.installedAt })
   return { on: true, captured: j.captured, reason: (j.rows.find((r) => r.reason) || {}).reason ?? null, engine: true }
 }

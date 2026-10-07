@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildTopology, renderCompact } from '../../src/netenv/topology.mjs'
 import { validateTopology, UNKNOWN_REASONS } from '../../src/cli/schema.mjs'
-import { ROWS, facts, harness, proc, proxyOf, none, mihomoVpn, MIHOMO } from './fixtures/rows.mjs'
+import { ROWS, facts, harness, proc, proxyOf, none, mihomoVpn, MIHOMO, pfacts, form, fwForm } from './fixtures/rows.mjs'
 
 const kindOf = (t, id) => t.nodes.find((x) => x.id === id).kind
 
@@ -134,4 +134,17 @@ test('a scheme the agent cannot speak and does not fail on (dsh, SOCKS) is a dir
   const fails = buildTopology(facts('claude-code', { listeners: [MIHOMO], vpn: mihomoVpn() }, { setting: proxyOf('socks5://127.0.0.1:7890', [{ kind: 'env', where: 'ALL_PROXY' }]) }))['claude-code']
   assert.ok(fails.nodes.some((n) => n.kind === 'proxy'), 'a scheme the agent fails on keeps the hop: it is where the agent tries to go')
   assert.deepEqual(validateTopology({ 'deepseek-dsh': t }), [])
+})
+
+test('proxy mode verdicts the platform\'s facts can ask for: a form it refused to wire (route-loop), an upstream the engine cannot dial (upstream-unreachable, asight is on the path and the connection fails), an opt-in waiting for administrator rights (not-routed: the finding `needs-admin` says what to run)', () => {
+  const pf = (fm, fw) => buildTopology(pfacts('codex', fm, fw)).codex
+  const loop = pf(form('codex.cli', { routeLoop: true, entry: null, procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992))
+  assert.deepEqual([loop.on_path, loop.captured, loop.reason], [false, false, 'route-loop'])
+  const up = pf(form('codex.cli', { setting: proxyOf('http://proxy.corp:8080'), procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992, { upstream: 'http://proxy.corp:8080', source: 'agent', upstream_error: 'ECONNREFUSED' }))
+  assert.deepEqual([up.on_path, up.captured, up.reason], [true, false, 'upstream-unreachable'])
+  for (const state of ['pending-admin', 'needs-admin']) {
+    const t = pf(form('codex.cli', { entry: null, optIn: { state, code: 'needs-admin', enable: 'asight on codex --opt-in codex.machine' }, procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992))
+    assert.deepEqual([t.on_path, t.captured, t.reason], [false, false, 'not-routed'], state)
+    assert.deepEqual(validateTopology({ codex: t }), [], 'a reason in the closed set of status reasons')
+  }
 })

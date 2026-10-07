@@ -167,3 +167,20 @@ test('validateTopology: a topology is valid, and every rule has a bad input that
   assert.match(validateTopology(t).join('; '), /"claude" is not a harness id/)
   assert.deepEqual(validateTopology(null), ['topology: not an object'])
 })
+
+test('validateFinding (1.6 §9.6, V49): a code in the closed sets, a class, a what and a why that say something, commands that are whole lines with a known shell and no <…>, a verify; a hint may have no command, a failure may not', async () => {
+  const { validateFinding } = await import('../../src/cli/schema.mjs')
+  const ok = { code: 'proxy-dead', class: 'failure', harness: 'codex', what: 'w', why: 'y', commands: [{ run: 'asight status codex', shell: 'sh' }], verify: 'v' }
+  assert.deepEqual(validateFinding(ok), [])
+  assert.deepEqual(validateFinding({ ...ok, class: 'hint', commands: [] }), [])
+  const bad = (over) => validateFinding({ ...ok, ...over })
+  assert.match(bad({ code: 'nope' })[0], /code/)
+  assert.match(bad({ class: 'loud' })[0], /class/)
+  assert.match(bad({ harness: 'cod' })[0], /harness/)
+  assert.match(bad({ what: ' ' })[0], /what/)
+  assert.match(bad({ verify: '' })[0], /verify/)
+  assert.match(bad({ commands: [] })[0], /says what to do/)
+  assert.match(bad({ commands: [{ run: 'kill <pid>', shell: 'sh' }] })[0], /placeholder/)
+  assert.match(bad({ commands: [{ run: 'x', shell: 'zsh' }] })[0], /shell/)
+  assert.match(validateFinding(null)[0], /not an object/)
+})

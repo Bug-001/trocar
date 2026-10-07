@@ -2,7 +2,7 @@
 // are src/off/schema.mjs (the undo side prints receipts too and may import nothing outside src/off); this adds validateReceipt.
 import { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, newReceipt } from '../off/schema.mjs'
 import { HARNESS_IDS } from './harness-names.mjs'
-import { STATUS_REASONS } from '../health/codes.mjs'
+import { STATUS_REASONS, NET_CODES } from '../health/codes.mjs'
 
 export { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, newReceipt }
 
@@ -141,6 +141,7 @@ export function validateTopology(t) {
       for (const k of ['on_path', 'captured']) if (isObject(b) && !TRI.includes(b[k])) bad.push(`${w}.${k}: not true, false or null`)
       if (isObject(b) && !(b.reason === null || STATUS_REASONS.includes(b.reason))) bad.push(`${w}.reason: ${JSON.stringify(b.reason)} is not null or a status reason`)
     })
+    if (x.findings !== undefined && !(Array.isArray(x.findings) && x.findings.every((c) => NET_CODES.includes(c) || STATUS_REASONS.includes(c)))) bad.push(`${at}.findings: not a list of finding codes`)
     if (x.running !== undefined) {
       if (!Array.isArray(x.running)) bad.push(`${at}.running: not a list`)
       else x.running.forEach((r, i) => {
@@ -149,6 +150,28 @@ export function validateTopology(t) {
         else if (!Array.isArray(r.path) || r.path.some((id) => !nodes.has(id))) bad.push(`${w}.path: not a list of nodes`)
       })
     }
+  }
+  return bad
+}
+
+export const SHELLS = Object.freeze(['sh', 'powershell', 'gui'])
+/** Problems with one finding of `doctor --json` (1.6 §9.6, V49; `[]` = valid): a code, a class, a what and a why that say something, every command a whole line with its shell and no `<…>` left to fill in, a verify.
+ *  A failure or an expected finding has at least one command; a hint may have none. */
+export function validateFinding(f) {
+  if (!isObject(f)) return ['finding: not an object']
+  const bad = []
+  if (!(NET_CODES.includes(f.code) || STATUS_REASONS.includes(f.code))) bad.push(`code: ${JSON.stringify(f.code)} is not a finding code`)
+  if (!FINDING_CLASSES.includes(f.class)) bad.push(`class: ${JSON.stringify(f.class)} is not one of ${FINDING_CLASSES.join(' ')}`)
+  if (f.harness !== undefined && !HARNESS_IDS.includes(f.harness)) bad.push(`harness: ${JSON.stringify(f.harness)} is not a harness id`)
+  for (const k of ['what', 'why', 'verify']) if (!isString(f[k]) || f[k].trim() === '') bad.push(`${k}: empty`)
+  if (!Array.isArray(f.commands)) bad.push('commands: not a list')
+  else {
+    if (f.class !== 'hint' && f.commands.length === 0) bad.push('commands: a failure or an expected finding says what to do')
+    f.commands.forEach((c, i) => {
+      if (!isObject(c) || !isString(c.run) || c.run.trim() === '') bad.push(`commands[${i}].run: empty`)
+      else if (/<[^<>\n]+>/.test(c.run)) bad.push(`commands[${i}].run: has a <…> placeholder left`)
+      if (isObject(c) && !SHELLS.includes(c.shell)) bad.push(`commands[${i}].shell: not one of ${SHELLS.join(' ')}`)
+    })
   }
   return bad
 }

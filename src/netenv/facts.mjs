@@ -10,6 +10,8 @@
 //     harnesses: { <h>: { installed, entry: { state }, installedAt, setting, systemProxy: null | { value, pac } | { unknown },
 //                         behaviour: { follows: { http, ws }, schemes, unsupported, branches, measured, restart, files }, procs: [ { pid, name, exe, version, startedAt, watched, trusted, reason, negative,
 //                         startSetting: null | setting, elevated } ], negatives: [ { pid, host, reason } ], apiHosts, adopted: null | { at, routing, chain, source, sha256 }, forms: null | [ … ] } },
+//     linger: true | false | null (Linux: does the OS keep the daemon after the last logout), otherRedirector: true | false | null (another connect-rewriter on the machine: a platform that cannot tell says null),
+//     vpnKnown: whether the probe answered (a changed VPN is only judged against an answer),
 //     unknowns: [ { fact, reason, detail } ] }                                                    // a read that failed: said with its reason, never left out (R11)
 //
 // `archFacts(ctx)` is the platform's part, `ctx = { status, harnesses, settings, netenv, env, home, deps }` → `{ routing, listeners?, procs?: { <h>: [proc] }, forwarder?, forms?: { <h>: [form] }, systemProxy?,
@@ -57,9 +59,11 @@ export async function gatherNetFacts({ platform = process.platform, home, env = 
     desired: Object.fromEntries(status.harnesses.map((h) => [h.id, h.desired === 'on' ? 'on' : h.desired === 'off' ? 'off' : null])),
     daemon: { state: status.daemon.state, pid: status.daemon.pid ?? null, enginePort: (reply && reply.engine && reply.engine.port) ?? (status.daemon.lock && status.daemon.lock.engine_port) ?? null },
     link: { attached: status.link.attached, helper: status.link.helper, ids: reply && Array.isArray(reply.links) ? reply.links.map((l) => l.id).filter((x) => Number.isInteger(x)) : [] },
-    listeners: part.listeners || [], vpn: null, forwarder: part.forwarder || null, harnesses: {}, unknowns: [...(part.unknowns || [])],
+    listeners: part.listeners || [], vpn: null, vpnKnown: false, forwarder: part.forwarder || null, harnesses: {}, unknowns: [...(part.unknowns || [])],
+    linger: status.linger && typeof status.linger.linger === 'boolean' ? status.linger.linger : null, otherRedirector: typeof part.otherRedirector === 'boolean' ? part.otherRedirector : null,
   }
   f.vpn = vpnOf(netenv, f.unknowns)
+  f.vpnKnown = !!netenv && !netenv.error // a probe that did not run, or failed, says nothing about whether the VPN changed
   if (f.vpn && f.vpn.tun === null && typeof part.tun === 'boolean') f.vpn.tun = part.tun // the product did not say; the routing table did
   for (const l of f.listeners) if (!l.unknown && !l.product && f.vpn && f.vpn.port === l.port) l.product = f.vpn.product
   for (const h of status.harnesses) {
@@ -70,9 +74,10 @@ export async function gatherNetFacts({ platform = process.platform, home, env = 
     f.harnesses[h.id] = {
       installed: h.installed, entry: { state: h.entry.state }, installedAt: iso(h.installedAt), setting,
       systemProxy: part.systemProxy && (pr.systemProxy.http !== false || pr.systemProxy.ws !== false) ? part.systemProxy : null,
-      behaviour: { follows: { ...pr.systemProxy }, schemes: [...pr.schemes], unsupported: { ...pr.unsupported }, branches: [...pr.branches], measured: pr.measured[platform] || 'inferred', restart: { ...pr.restart }, files: proxyFilesOf(d, { home, env }) },
+      behaviour: { follows: { ...pr.systemProxy }, schemes: [...pr.schemes], unsupported: { ...pr.unsupported }, branches: [...pr.branches], measured: pr.measured[platform] || 'inferred', restart: { ...pr.restart }, files: proxyFilesOf(d, { home, env }),
+        fileKeys: pr.files.map((x) => ({ path: x.path({ home, env }), format: x.format, key: x.format === 'json' ? x.keys[0].join('.') : x.keys[0] })) },
       procs, negatives: reply && Array.isArray(reply.negatives) ? reply.negatives.filter((n) => procs.some((p) => p.pid === n.pid)).map((n) => ({ pid: n.pid, host: n.host, reason: 'negative-cache' })) : [],
-      apiHosts: [...(d.hosts || [])], adopted: adopted && adopted[h.id] ? adopted[h.id] : null, forms: (part.forms && part.forms[h.id]) || null,
+      apiHosts: [...(d.hosts || [])], fakeIp: part.fakeIp && part.fakeIp[h.id] === true ? true : null, adopted: adopted && adopted[h.id] ? adopted[h.id] : null, forms: (part.forms && part.forms[h.id]) || null,
       ...(part.legacy && part.legacy[h.id] ? { legacy: part.legacy[h.id] } : {}),
     }
   }

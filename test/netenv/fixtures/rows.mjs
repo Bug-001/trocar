@@ -97,7 +97,7 @@ const CODEX_PROC = { name: 'codex app-server', exe: 'C:\\Users\\u\\AppData\\Loca
 export const pfacts = (h, fm, fw, over = {}) => facts(h, {
   platform: 'win32', routing: 'proxy', daemon: { state: 'running', pid: 4121, enginePort: 17990 }, link: { attached: true, helper: 'ok', ids: [] },
   forwarder: { pid: 6120, up: true, forms: { [fm.id]: fw } }, ...over,
-}, { forms: [fm], procs: fm.procs })
+}, { forms: [fm], procs: fm.procs, behaviour: { ...BEHAVE[h], measured: 'lab' } }) // what the Windows branch measured on a test machine: nothing here is inferred
 const codexForm = (over = {}) => form('codex.cli', { procs: [proc(5530, CODEX_PROC)], ...over })
 const ENGINE_AND_KERNEL = ['agent', 'asight-forwarder', 'asight-engine']
 const CODEX_VIA_CLASH = '5530 → [.env HTTPS_PROXY · asight 写的] asight 自带内核 :17992 → asight 引擎 :17990 → [系统代理] Clash Verge Rev :7897 → 出口(Clash Verge Rev 选)'
