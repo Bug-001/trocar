@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { MANIFEST_VERSION, KNOWN_KINDS, newManifest, readManifest, saveManifest, undoByHand, unknownItems, manifestPath } from '../../src/off/manifest.mjs'
+import { MANIFEST_VERSION, KNOWN_KINDS, newManifest, readManifest, saveManifest, readManifestAt, saveManifestAt, undoByHand, unknownItems, manifestPath } from '../../src/off/manifest.mjs'
 import { applyJsonKey, applyTextEntry, writeOwnedFile } from '../../src/collector/core/trust/journal.mjs'
 import { SENTINEL, OFF_PREFIX, lineComment } from '../../src/off/text-edit.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -125,4 +125,25 @@ test('R3: undoByHand says, in one sentence, how to take each kind of item out wi
   assert.equal(undoByHand({ kind: 'mystery', path: '/z', undo_by_hand: 'run the mystery tool' }), 'run the mystery tool')
   assert.ok(!/^rm /.test(undoByHand({ kind: 'mystery', path: '/z' })) && undoByHand({ kind: 'mystery', path: '/z' }).length > 10)
   for (const kind of KNOWN_KINDS.filter((k) => k.startsWith('legacy-'))) assert.ok(undoByHand({ kind, path: '/p' }).includes('/p'), kind)
+})
+
+// 1.6 §4: the old capture's ledger ~/.asight/legacy-manifest.json is the same format in a file of its own (not in ~/.asight/collector/, so the board does not think the new collector is installed).
+test('the ledger of the old capture is a manifest in a file of its own: written 0600, its directory made 0700, read back, with kind and undo_by_hand filled in; a version it does not know is refused, never rewritten', () => {
+  const dir = tmpDir('asight-ledger-')
+  const file = path.join(dir, '.asight', 'legacy-manifest.json')
+  assert.equal(readManifestAt(file), null, 'no ledger is null')
+  const m = newManifest(new Date('2026-10-07T00:00:00Z'))
+  m.entries.push({ kind: 'legacy-clash-block', harness: 'claude-code', path: '/v/Script.js', backup: '/b/1', installed_at: 'x' })
+  saveManifestAt(file, m)
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600); assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700)
+  const back = readManifestAt(file)
+  assert.deepEqual([back.version, back.entries.length, back.entries[0].kind], [MANIFEST_VERSION, 1, 'legacy-clash-block'])
+  assert.match(back.entries[0].undo_by_hand, /old capture|asight off/, 'a legacy kind has a sentence for a person with no node')
+  assert.equal(fs.existsSync(manifestPath(path.dirname(file))), false, 'the install manifest is another file')
+  fs.writeFileSync(file, JSON.stringify({ version: 99, entries: [] }))
+  const odd = readManifestAt(file)
+  assert.equal(odd.unsupported, true)
+  assert.throws(() => saveManifestAt(file, odd), /version 99/)
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).version, 99, 'not written over')
+  saveManifest(dir, newManifest()); assert.equal(readManifest(dir).version, MANIFEST_VERSION, 'saveManifest / readManifest are the same code with the install manifest\'s name')
 })

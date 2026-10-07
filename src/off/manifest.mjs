@@ -90,20 +90,30 @@ export function parseManifest(text, name = MANIFEST) {
   return completeManifest(m)
 }
 
-/** The manifest in `dir`, or null when there is none. Never writes. */
-export function readManifest(dir, fs = nodeFs) {
-  const b = readOrNull(fs, manifestPath(dir))
-  return b == null ? null : parseManifest(b.toString('utf8'), manifestPath(dir))
+/** The manifest in the file `file` (the install manifest, or the old capture's ledger ~/.asight/legacy-manifest.json: the same format), or null when there is none. Never writes. */
+export function readManifestAt(file, fs = nodeFs) {
+  const b = readOrNull(fs, file)
+  return b == null ? null : parseManifest(b.toString('utf8'), file)
 }
 
-/** Writes the manifest (atomic, durable, 0600). Items pushed without a kind or an undo_by_hand get them first (in the caller's object too).
- *  Refuses a manifest of a version this build does not know: it would write version 2 shapes over data it cannot read. */
-export function saveManifest(dir, m, fs = nodeFs) {
-  if (m.unsupported || unsupportedVersion(m.version)) throw new Error(`the install manifest in ${dir} is version ${JSON.stringify(m.version)}; this build reads versions 1 and ${MANIFEST_VERSION} and will not write over it (use the asight that wrote it, or "asight off")`)
+/** The manifest in `dir`, or null when there is none. Never writes. */
+export function readManifest(dir, fs = nodeFs) {
+  return readManifestAt(manifestPath(dir), fs)
+}
+
+/** Writes the manifest to `file` (atomic, durable, 0600; the directory above it is made 0700 when it is not there). Items pushed without a kind or an undo_by_hand get them first (in the
+ *  caller's object too). Refuses a manifest of a version this build does not know: it would write version 2 shapes over data it cannot read. */
+export function saveManifestAt(file, m, fs = nodeFs) {
+  if (m.unsupported || unsupportedVersion(m.version)) throw new Error(`the manifest ${file} is version ${JSON.stringify(m.version)}; this build reads versions 1 and ${MANIFEST_VERSION} and will not write over it (use the asight that wrote it, or "asight off")`)
   completeManifest(m)
   const { upgraded_from: _read, ...out } = m // a fact about the read, not part of the manifest
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
-  writeDurable(manifestPath(dir), JSON.stringify(out, null, 2) + '\n', 0o600, fs)
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  writeDurable(file, JSON.stringify(out, null, 2) + '\n', 0o600, fs)
+}
+
+/** Writes the install manifest in `dir`. */
+export function saveManifest(dir, m, fs = nodeFs) {
+  saveManifestAt(manifestPath(dir), m, fs)
 }
 
 /** Items (entries and files) whose kind this build does not know, as [{path, kind}]: `off` leaves them and says so (R3). */

@@ -6,10 +6,15 @@
 // Imports only node:* and src/off (0.1 §2): the standalone ~/.asight/bin/asight-off is made of this directory, so the undo works when the repository is gone.
 //   hasNewCollector     the one question that decides which generation `on` / `off` / `status` drive on a platform (1.6 §1.2)
 //   clearCliSteer · uninstallCa · caRemoveArgv      the steer and the CA undo, moved from src/capture/onboard.mjs and trust-store.mjs, which call them: there is one undo, not two
+//   legacyArtifacts     what of the old capture is there (read only)
 import nodeFs from 'node:fs'
 import nodeOs from 'node:os'
 import path from 'node:path'
 import { execTool } from './exec.mjs'
+import { readOrNull } from './fsutil.mjs'
+import { legacyManifestPath } from './paths.mjs'
+import { readManifestAt } from './manifest.mjs'
+import { makeClash, stripBlock, stripRuntime, stripMergeLegacy, SCRIPT_BEGIN } from './clash.mjs'
 
 /** Does this platform have the new per-process collector? Only Linux today (4.6; 1.6 §1.2). One function, used everywhere the branch is taken: where it is false `on` / `off` / `status` /
  *  `uninstall` drive the old capture. */
@@ -26,7 +31,11 @@ export const LEGACY_LABELS = Object.freeze({ mitm: 'com.asight.mitm', monitor: '
 export const LEGACY_CA_CN = 'atrace local MITM CA'
 /** The NSS nickname the CA has on Linux. */
 export const LEGACY_CA_NICKNAME = 'asight-ca'
+const LEGACY_ENV_VAR = 'NODE_EXTRA_CA_CERTS'
 
+const legacyWhy = (e) => String((e && (e.code || e.message)) || e)
+const legacyMessage = (e) => String((e && e.message) || e)
+const legacyRethrowSandbox = (e) => { if (e && e.code === 'ESANDBOX') throw e } // a refusal of the test guard is never "the tool failed" (0.1 §3)
 
 // ── where things are ───────────────────────────────────────────────────────────────────────────────
 
@@ -101,9 +110,122 @@ export function caRemoveArgv({ platform, home = nodeOs.homedir(), keychain = nul
   if (platform === 'linux') return { file: 'certutil', args: ['-D', '-d', `sql:${nssdb || p.nssdb}`, '-n', LEGACY_CA_NICKNAME] }
   throw new Error(`there is no user-level trust store for ${platform} this code can take the old CA out of`)
 }
+const caFindArgv = ({ platform, home, keychain = null, nssdb = null }) => {
+  const p = legacyPaths({ home, platform })
+  return platform === 'darwin' ? { file: 'security', args: ['find-certificate', '-c', LEGACY_CA_CN, keychain || p.keychain] } : { file: 'certutil', args: ['-L', '-d', `sql:${nssdb || p.nssdb}`, '-n', LEGACY_CA_NICKNAME] }
+}
+
 /** Takes the CA out of the user trust store: the runner's `{ status, stdout, stderr }` of the delete (the same shape the trust-store installers return). `run` replaces the spawn. */
 export function uninstallCa({ platform, home = nodeOs.homedir(), run = null, env = process.env, keychain = null, nssdb = null }) {
   const a = caRemoveArgv({ platform, home, keychain, nssdb })
   const r = execTool(a.file, a.args, { run, env })
   return { status: r.code, stdout: r.out, stderr: r.err }
+}
+
+// ── reading what is there ──────────────────────────────────────────────────────────────────────────
+
+function readFileState(fs, file) {
+  try { const b = readOrNull(fs, file); return b == null ? { text: null } : { text: b.toString('utf8') } } catch (e) { return { text: null, error: `${file}: ${legacyWhy(e)}` } }
+}
+
+// the CA path a com.asight.env plist sets the variable to (its ProgramArguments: launchctl setenv NODE_EXTRA_CA_CERTS <path>)
+function envPlistCaPath(text) {
+  if (typeof text !== 'string') return null
+  const args = [...text.matchAll(/<string>([^<]*)<\/string>/g)].map((m) => m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'))
+  const at = args.indexOf(LEGACY_ENV_VAR)
+  return at >= 0 && args[at + 1] ? args[at + 1] : null
+}
+
+function launchdState({ label, plist, exec, env, fs, platform }) {
+  const out = { label, plistPath: plist, installed: false, loaded: null, pid: null }
+  try { out.installed = fs.existsSync(plist) } catch { out.installed = null }
+  if (platform !== 'darwin') return out
+  const r = execTool('launchctl', ['list', label], { run: exec, env })
+  out.loaded = r.code === 0 ? true : r.code === null ? null : false // launchctl list <label> exits non-zero for a label that is not loaded
+  if (out.loaded === null) out.error = `launchctl list ${label}: ${r.err || 'could not be run'}`
+  const m = /"PID"\s*=\s*(\d+)\s*;/.exec(r.out)
+  if (m) out.pid = Number(m[1])
+  return out
+}
+
+/**
+ * What of the old capture is on this machine, read only → `{ platform, paths, ccSteer, clashBlock, agents: { mitm, monitor, env }, envValue, oldCa, ledger }`. Every field that could not be read says
+ * why (`error`) and is `null`, never `false`: what was not read is not "absent" (R11). `live: true` also asks the Clash core whether the route is in its live proxy list (`status` does; `off` asks
+ * after its own strip). `exec` runs launchctl / security / certutil; `fs`, `env`, `mihomo` (the seams of src/off/clash.mjs makeClash) are a test's.
+ *   ccSteer    { settingsPath, stashPath, stash: {…displaced env}|null, stashError?, proxy, noProxy, error? } — steered = a stash exists (asight wrote it when it displaced the user's values)
+ *   clashBlock { scriptPath, runtimePath, mergePath, verge, script, runtime, merge, live?, error? } — the block in Script.js, the route in the runtime config, the old Merge.yaml leftovers
+ *   agents     { installed (the plist is there), loaded (launchd has it), pid (it is running), caPath (com.asight.env only: what it sets the variable to) }
+ *   envValue   { value, error? } — the login environment's CA variable now (macOS); oldCa { where, present } — the CA in the trust store
+ *   ledger     null (none) | { path, manifest } | { path, error }
+ */
+export async function legacyArtifacts({ home = nodeOs.homedir(), platform = process.platform, exec = null, fs = nodeFs, env = process.env, mihomo = {}, live = false } = {}) {
+  const p = legacyPaths({ home, platform })
+  const out = { platform, paths: p }
+
+  // the CC-CLI steer: the stash is the evidence (asight wrote it when it displaced the user's values); the settings are where it landed
+  const stash = readStash(p.stashPath, fs)
+  const settings = readFileState(fs, p.settingsPath)
+  let proxy = null, noProxy = null, settingsError = settings.error || null
+  if (settings.text != null) {
+    try { const s = JSON.parse(settings.text); proxy = (s && s.env && s.env.HTTPS_PROXY) || null; noProxy = (s && s.env && s.env.NO_PROXY) || null } catch (e) { settingsError = `${p.settingsPath}: not strict JSON (${legacyMessage(e)})` }
+  }
+  let stashExists = false
+  try { stashExists = fs.existsSync(p.stashPath) } catch { /* below: stash stays null */ }
+  out.ccSteer = { settingsPath: p.settingsPath, stashPath: p.stashPath, stash: stashExists ? (stash || {}) : null, ...(stashExists && stash === null ? { stashError: `${p.stashPath} could not be read` } : {}), proxy, noProxy, ...(settingsError ? { error: settingsError } : {}) }
+
+  // the Clash route
+  const cb = { scriptPath: p.scriptPath, runtimePath: p.runtimePath, mergePath: p.mergePath, verge: false, script: null, runtime: null, merge: null }
+  if (platform === 'darwin') {
+    const sc = readFileState(fs, p.scriptPath), rt = readFileState(fs, p.runtimePath), mg = readFileState(fs, p.mergePath)
+    cb.verge = sc.text != null || rt.text != null || mg.text != null
+    cb.script = sc.error ? null : sc.text == null ? false : sc.text.includes(SCRIPT_BEGIN)
+    cb.runtime = rt.error ? null : rt.text == null ? false : stripRuntime(rt.text) !== rt.text
+    cb.merge = mg.error ? null : mg.text == null ? false : stripBlock(stripMergeLegacy(mg.text)) !== mg.text
+    const errs = [sc.error, rt.error, mg.error].filter(Boolean)
+    if (errs.length) cb.error = errs.join('; ')
+    if (live) {
+      const clash = makeClash({ fs, scriptPath: p.scriptPath, runtimePath: p.runtimePath, mergePath: p.mergePath, exec, env, platform, ...mihomo })
+      let l = null; try { l = await clash.probeLive() } catch (e) { legacyRethrowSandbox(e) }
+      cb.live = l
+      const loc = clash.located()
+      cb.sock = loc ? loc.sock : null
+      cb.tried = loc ? loc.tried : []
+    }
+  }
+  out.clashBlock = cb
+
+  // the LaunchAgents
+  const agents = {}
+  for (const [k, label] of Object.entries(LEGACY_LABELS)) agents[k] = launchdState({ label, plist: p.plist(label), exec, env, fs, platform })
+  if (agents.env.installed) { const t = readFileState(fs, agents.env.plistPath); agents.env.caPath = envPlistCaPath(t.text) }
+  out.agents = agents
+
+  // the login environment's CA variable, and the CA in the trust store
+  out.envValue = { value: null }
+  out.oldCa = { where: platform === 'darwin' ? 'keychain' : platform === 'linux' ? 'nss' : null, present: false }
+  if (platform === 'darwin') {
+    const g = execTool('launchctl', ['getenv', LEGACY_ENV_VAR], { run: exec, env })
+    if (g.code === 0) out.envValue = { value: g.out || null }
+    else out.envValue = { value: null, error: `launchctl getenv ${LEGACY_ENV_VAR}: ${g.err || `exit ${g.code}`}` }
+    const f = caFindArgv({ platform, home })
+    const r = execTool(f.file, f.args, { run: exec, env })
+    if (r.code === 0) out.oldCa.present = true
+    else if (r.code === 44 || /could not be found|could not find/i.test(`${r.err}${r.out}`)) out.oldCa.present = false
+    else out.oldCa = { ...out.oldCa, present: null, error: `security find-certificate: ${r.err || `exit ${r.code}`}` }
+  } else if (platform === 'linux') {
+    let db = false
+    try { db = fs.existsSync(p.nssdb) } catch { /* no database to ask */ }
+    if (db) {
+      const f = caFindArgv({ platform, home })
+      const r = execTool(f.file, f.args, { run: exec, env })
+      if (r.code === 0) out.oldCa.present = true
+      else if (/could not find cert/i.test(`${r.err}${r.out}`)) out.oldCa.present = false
+      else out.oldCa = { ...out.oldCa, present: null, error: `certutil -L: ${r.err || `exit ${r.code}`}` }
+    }
+  }
+
+  // the ledger
+  const lf = legacyManifestPath(home)
+  try { const m = readManifestAt(lf, fs); out.ledger = m ? { path: lf, manifest: m } : null } catch (e) { out.ledger = { path: lf, error: legacyMessage(e) } }
+  return out
 }
