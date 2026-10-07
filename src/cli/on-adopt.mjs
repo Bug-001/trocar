@@ -5,7 +5,7 @@
 // entry like any other — and `on` asks first when the user edited that field since the last `on` (R6, the confirmation reason 「你改过的代理设置」). Only `on` ever writes an agent's setting (D30); this file
 // writes one file of asight's own, netenv.json, through writeNetenv.
 import { gatherNetFacts } from '../netenv/facts.mjs'
-import { readProxySetting, readAdopted, chainsAfterOn, adoptedRecord } from '../netenv/adopt.mjs'
+import { readProxySetting, readAdopted, chainsAfterOn, adoptedRecord, proxyFilesOf } from '../netenv/adopt.mjs'
 import { writeNetenv, netenvFile } from '../netenv/index.mjs'
 import nodeFs from 'node:fs'
 
@@ -32,7 +32,7 @@ export function editedFields({ adoption, routing, targets, home, env, fs = nodeF
   if (!adoption || adoption.error || !routing) return []
   return targets.filter((h) => routing.ownsProxyField(h) && adoption.adopted[h] && adoption.adopted[h].written_sha256).flatMap((h) => {
     const d = adoption.descriptors.find((x) => x.name === h), a = adoption.adopted[h]
-    const now = d ? readProxySetting(d, { home, env: {}, fs }) : null
+    const now = d ? readProxySetting(d, { home, env, fs, paths: a.file_paths || null, vars: false }) : null
     if (!now || now.unknown) return []
     if ([a.written_sha256, a.file_sha256].includes(now.sha256 ?? null)) return [] // what asight wrote, or what the user had before it: not an edit
     const field = routing.fieldOf(h) || {}
@@ -51,14 +51,14 @@ export async function recordAdoption({ adoption, routing, targets, home, env, no
     const d = adoption.descriptors.find((x) => x.name === h)
     if (!d || !adoption.facts.harnesses[h]) continue
     const setting = adoption.facts.harnesses[h].setting
-    const files = readProxySetting(d, { home, env: {}, fs })
+    const files = readProxySetting(d, { home, env, fs, vars: false }), paths = proxyFilesOf(d, { home, env }) // the files alone, found by the environment `on` runs in: what the daemon and `doctor` compare with
     let written = null
     if (routing && routing.ownsProxyField(h)) {
       try { await routing.adopt(h, setting && !setting.unknown ? setting : null) } catch (e) { rethrowSandbox(e); out.failed.push(h); out.notes.push(`${h}: ${errText(e)}`); continue }
-      written = readProxySetting(d, { home, env: {}, fs }) // what the field holds now: asight's own value, which a later edit is told from
+      written = readProxySetting(d, { home, env, fs, vars: false }) // what the field holds now: asight's own value, which a later edit is told from
     }
     const prev = adoption.adopted[h] || null
-    const rec = adoptedRecord({ facts: adoption.facts, topology: chains, h, now, files: files.unknown ? null : files, prev, written: written && !written.unknown ? written : null })
+    const rec = adoptedRecord({ facts: adoption.facts, topology: chains, h, now, files: files.unknown ? null : files, paths, prev, written: written && !written.unknown ? written : null })
     out.adopted[h] = rec
     if (rec !== prev) changed[h] = rec
   }

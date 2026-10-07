@@ -35,17 +35,19 @@ function fromFile(file, f, fs) {
  * else the proxy variables of `env`, else none. → `{ value: <redacted URL> | null, scheme, host, port, source: [{ kind: 'file', where, key } | { kind: 'env', where }], sha256, changedAt }`, with the value as
  * written on a non-enumerable `raw`; or `{ unknown: { reason, detail } }` when a file could not be read (an unreadable file may hold the very key that wins, so the answer is not "none") or the value is not a
  * URL (the detail never quotes the value). `changedAt` (ISO): when the file it came from last changed, null for an environment variable.
+ * `vars: false` reads the files alone (`env` still says where they are: CLAUDE_CONFIG_DIR, CODEX_HOME …): what a change of the user's own is measured on, since a variable of whatever shell asks says nothing of
+ * what the user changed. `paths` = the files as `on` found them (one per `proxy.files` entry, in order): a reader with no such environment (the daemon) reads the same files `on` did.
  */
-export function readProxySetting(desc, { home, env = process.env, fs = nodeFs } = {}) {
+export function readProxySetting(desc, { home, env = process.env, fs = nodeFs, paths = null, vars = true } = {}) {
   const p = desc.proxy
   let raw = null, source = null, changedAt = null
-  for (const f of p.files) {
-    const file = f.path({ home, env })
+  for (let i = 0; i < p.files.length; i++) {
+    const f = p.files[i], file = (paths && paths[i]) || f.path({ home, env })
     const r = fromFile(file, f, fs)
     if (r.unknown) return r
     if (r.value) { raw = r.value; source = { kind: 'file', where: file, key: r.key }; changedAt = new Date(r.mtimeMs).toISOString(); break }
   }
-  if (raw === null) for (const k of p.env) { const v = present(env[k]); if (v) { raw = v; source = { kind: 'env', where: k }; break } }
+  if (raw === null && vars) for (const k of p.env) { const v = present(env[k]); if (v) { raw = v; source = { kind: 'env', where: k }; break } }
   if (raw === null) return { value: null, scheme: null, host: null, port: null, source: [], sha256: null, changedAt: null }
   const u = parseProxyUrl(raw)
   if (!u) return unknown('unparseable', `${source.kind === 'file' ? `${source.key} in ${source.where}` : source.where} is not a proxy URL`)
@@ -77,20 +79,20 @@ export function projectedOn(facts, ids) {
 /** The topology `on` draws for `ids`: the projection above in driver mode, the facts as they are otherwise. */
 export const chainsAfterOn = (facts, ids) => buildTopology(facts.routing === 'driver' ? projectedOn(facts, ids) : facts)
 
-const FIELDS = ['routing', 'chain', 'source', 'sha256', 'file_sha256', 'proxy', 'vpn', 'written_sha256']
+const FIELDS = ['routing', 'chain', 'source', 'sha256', 'file_sha256', 'file_paths', 'proxy', 'vpn', 'written_sha256']
 /** Is `a` the same adoption as `b`, whatever the time (`at`)? */
 export const sameAdoption = (a, b) => !!a && !!b && FIELDS.every((k) => JSON.stringify(a[k] ?? null) === JSON.stringify(b[k] ?? null))
 
 /**
  * `adopted.<h>` of ~/.asight/netenv.json: what `on` found of the harness's proxy and drew. `{ at, routing, chain (the compact chain, redacted), source: [{ kind, where, key? }], sha256 (of the setting as the agent
  * reads it: the original is not kept: it may hold a password), file_sha256 (of the file part alone: the daemon has not the agent's environment), proxy (the setting, redacted: 「仍按启动时的设置」 shows it),
- * vpn (product, version, port, TUN: what `netenv-changed` is measured against) }` plus `written_sha256` (of the value `on` put in the field a routing owns: proxy mode). Unchanged → `prev` itself, so a second `on` writes nothing.
+ * file_paths (the files `on` read it from, in the order of the descriptor's `proxy.files`: the daemon reads those, it has not the environment that names them), vpn (product, version, port, TUN: what `netenv-changed` is measured against) }` plus `written_sha256` (of the value `on` put in the field a routing owns: proxy mode). Unchanged → `prev` itself, so a second `on` writes nothing.
  */
-export function adoptedRecord({ facts, topology, h, now = Date.now, files = null, prev = null, written = null }) {
+export function adoptedRecord({ facts, topology, h, now = Date.now, files = null, paths = null, prev = null, written = null }) {
   const s = (facts.harnesses[h] && facts.harnesses[h].setting) || { value: null, source: [], sha256: null }
   const rec = {
     at: new Date(typeof now === 'function' ? now() : now).toISOString(), routing: facts.routing, chain: topology && topology[h] ? renderCompact(topology[h]).join(' ; ') : '',
-    source: s.source || [], sha256: s.sha256 ?? null, file_sha256: files ? files.sha256 ?? null : s.sha256 ?? null, proxy: s.value ?? null, vpn: vpnPrint(facts.vpn),
+    source: s.source || [], sha256: s.sha256 ?? null, file_sha256: files ? files.sha256 ?? null : s.sha256 ?? null, file_paths: paths, proxy: s.value ?? null, vpn: vpnPrint(facts.vpn),
     ...(s.unknown ? { unknown: s.unknown } : {}), ...(written ? { written_sha256: written.sha256 ?? null } : {}),
   }
   return sameAdoption(prev, rec) && !!prev.unknown === !!rec.unknown ? prev : rec
@@ -139,11 +141,12 @@ export function driftCheck({ home, env = {}, harnesses, desired = () => null, ap
   const adopted = readAdopted(home, { fs }), done = []
   if (!adopted) return done
   for (const d of harnesses) {
-    if (!adopted[d.name]) continue
-    const sig = proxyFilesOf(d, { home, env }).map((f) => { try { const st = fs.statSync(f); return `${st.ino}:${st.size}:${st.mtimeMs}` } catch { return 'gone' } }).join('|')
+    if (!adopted[d.name] || desired(d.name) === 'off') continue // a harness that is off has asight nowhere on its path: what its settings do is not asight's to report
+    const paths = adopted[d.name].file_paths || proxyFilesOf(d, { home, env }) // the files `on` read: the daemon's own environment does not say where they are
+    const sig = paths.map((f) => { try { const st = fs.statSync(f); return `${st.ino}:${st.size}:${st.mtimeMs}` } catch { return 'gone' } }).join('|')
     if (state.sigs.get(d.name) === sig) continue
     state.sigs.set(d.name, sig)
-    const setting = readProxySetting(d, { home, env: {}, fs })
+    const setting = readProxySetting(d, { home, env, fs, paths, vars: false })
     for (const drift of detectDrift({ adopted, h: d.name, setting, routing: driftRoutingOf(adopted[d.name]), scope: 'files' })) {
       const key = `${d.name}|${drift.code}|${setting.sha256 ?? 'none'}`
       if (state.seen.has(key)) continue

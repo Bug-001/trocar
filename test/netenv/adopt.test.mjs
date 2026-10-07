@@ -4,6 +4,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { userUnit } from '../../src/collector/arch/linux/unit.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
@@ -28,6 +29,7 @@ const netenvOf = (s) => path.join(s.home, '.asight', 'netenv.json')
 const seedProxy = (s, value = USER_PROXY) => fs.writeFileSync(settingsOf(s), `${JSON.stringify({ model: 'x', env: { HTTPS_PROXY: value } }, null, 2)}\n`)
 /** The user changes the one value and nothing else (a file that is not what asight left would make `on` stop at an entry the user changed). */
 const setProxy = (s, value) => { const d = readJson(settingsOf(s)); d.env.HTTPS_PROXY = value; fs.writeFileSync(settingsOf(s), `${JSON.stringify(d, null, 2)}\n`) }
+const setProxyFile = (s, value) => setProxy(s, value) // (named for what it is in the test above: the file of the harness)
 const readJson = (f) => JSON.parse(fs.readFileSync(f, 'utf8'))
 
 test('V46 (a) Linux: `on` writes no proxy key anywhere — the changed files and keys hold none — the user\'s own is where it was, the receipt draws the chain with the credentials masked, and netenv.json has the hash and not the value', async () => {
@@ -143,7 +145,7 @@ test('V47 (b) proxy mode: a field that holds anything but what asight put there 
   for (const e of events) assert.deepEqual(checkRecord(e), [], 'in the closed sets')
   assert.deepEqual(fs.readFileSync(field.path), bytes, 'status, doctor and the daemon only read: the field is the user\'s')
   const off = []; driftCheck({ home: s.home, env: {}, harnesses: descs, desired: () => 'off', appendEvent: (e) => off.push(e), state: newDriftState() })
-  assert.deepEqual(off.map((e) => e.event), ['netenv-change'], 'a harness that is off has nothing to lose: no failure')
+  assert.deepEqual(off, [], 'a harness that is off is not checked: asight is not on its path, whatever its setting is')
 })
 
 test('driftCheck takes the semantics of the record `on` made, not a routing handed in: a proxy-mode record (routing proxy, or one that holds `written_sha256`) with the field holding what asight wrote is no drift, and the first edit of it is a drift that bypasses asight; a driver-mode record is measured against what `on` found', () => {
@@ -162,6 +164,58 @@ test('driftCheck takes the semantics of the record `on` made, not a routing hand
   assert.deepEqual(run(), [], 'a driver-mode record against the value `on` found')
   setProxy(s, 'http://proxy.new:3128')
   assert.deepEqual(run().map((e) => [e.event, e.captured]), [['netenv-change', true]], 'and an edit of it leaves the harness steered: one event, no failure')
+})
+
+const NO_SOURCE = path.join(os.tmpdir(), 'none')
+/** The codes `doctor claude-code` finds in a shell with `env` added to the sandbox's. */
+const doctorCodes = async (s, env = {}, deps = FACTS) => (await s.run(['doctor', 'claude-code', '--json', '--source', NO_SOURCE], { env: { ...s.ctx().env, ...env }, deps })).io.json().findings.map((f) => f.code)
+
+test('V47 drift is measured on what the files hold: a proxy variable in the shell that runs `status` / `doctor` is not a change the user made — `on` found none and `doctor` runs where HTTPS_PROXY is set, or the other way round — and an edit of the file still is', async () => {
+  const s = sandbox(ENGINE)
+  await s.run(['on', '--yes'], { deps: FACTS })
+  assert.deepEqual((await doctorCodes(s, { HTTPS_PROXY: 'http://127.0.0.1:7890' })).filter((c) => c === 'proxy-changed'), [], 'a variable of this shell: not an edit of anything')
+  const t = sandbox(ENGINE)
+  await t.run(['on', '--yes'], { env: { ...t.ctx().env, HTTPS_PROXY: 'http://127.0.0.1:7890' }, deps: FACTS })
+  assert.deepEqual((await doctorCodes(t)).filter((c) => c === 'proxy-changed'), [], '`on` ran where it was set, `doctor` does not: not an edit either')
+  setProxyFile(s, 'http://proxy.new:3128')
+  assert.ok((await doctorCodes(s)).includes('proxy-changed'), 'a value written into the file after `on` is')
+})
+
+test('V47 the files are found the same way by every reader: `on` records where it read them (CLAUDE_CONFIG_DIR of its shell), the daemon\'s check (which has no such variable) stats and reads those, and an edit there is seen', async () => {
+  const s = sandbox(ENGINE)
+  const dir = path.join(s.home, 'cc-config'); fs.mkdirSync(dir, { recursive: true })
+  const settings = path.join(dir, 'settings.json')
+  fs.writeFileSync(settings, `${JSON.stringify({ model: 'x', env: { HTTPS_PROXY: 'http://proxy.old:3128' } }, null, 2)}\n`)
+  const env = { ...s.ctx().env, CLAUDE_CONFIG_DIR: dir }
+  const on = await s.run(['on', '--yes', 'claude-code'], { env, deps: FACTS })
+  assert.equal(on.exit, 0, on.io.text())
+  const a = readJson(netenvOf(s)).adopted['claude-code']
+  assert.deepEqual(a.file_paths, [settings, path.join(dir, '.claude.json')], 'where `on` read the setting from')
+  assert.equal(a.file_sha256, settingSha('http://proxy.old:3128'), 'and what the file held')
+  const events = [], state = newDriftState()
+  const check = () => driftCheck({ home: s.home, env: {}, harnesses: descs, desired: () => 'on', appendEvent: (e) => events.push(e), state }) // the daemon: no CLAUDE_CONFIG_DIR
+  assert.deepEqual(check(), [], 'nothing changed')
+  const d = readJson(settings); d.env.HTTPS_PROXY = 'http://proxy.new:3128'; fs.writeFileSync(settings, `${JSON.stringify(d, null, 2)}\n`)
+  check(); check()
+  assert.deepEqual(events.map((e) => [e.event, e.code, e.from, e.to]), [['netenv-change', 'proxy-changed', 'http://proxy.old:3128', 'http://proxy.new:3128']])
+  const doctor = await s.run(['doctor', 'claude-code', '--json', '--source', NO_SOURCE], { env, deps: FACTS })
+  assert.ok(doctor.io.json().findings.some((f) => f.code === 'proxy-changed'), '`doctor` agrees with the daemon')
+})
+
+test('V47 a harness that is off has no drift to report: after `off` an edit of its proxy file says nothing — not to `doctor`, not to the daemon\'s check — and the record it left is not what the next report is about', async () => {
+  const s = sandbox(ENGINE); seedProxy(s)
+  await s.run(['on', '--yes'], { deps: FACTS })
+  const off = await s.run(['off', '--yes'], { deps: FACTS })
+  assert.equal(off.exit, 0, off.io.text())
+  setProxy(s, 'http://proxy.new:3128')
+  const codes = await doctorCodes(s)
+  assert.ok(codes.includes('desired-off') && !codes.includes('proxy-changed') && !codes.includes('netenv-changed'), codes.join())
+  const events = []
+  driftCheck({ home: s.home, env: {}, harnesses: descs, desired: () => 'off', appendEvent: (e) => events.push(e), state: newDriftState() })
+  assert.deepEqual(events, [])
+  const on = []
+  driftCheck({ home: s.home, env: {}, harnesses: descs, desired: () => 'on', appendEvent: (e) => on.push(e), state: newDriftState() })
+  assert.equal(on.length, 1, 'wanted on again, the same edit is a change')
 })
 
 const KERNEL = 'http://127.0.0.1:17992'
