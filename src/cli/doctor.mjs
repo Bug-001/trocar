@@ -1,7 +1,8 @@
 // doctor.mjs — `asight doctor [harness…] [--source F|DIR] [--json]` (RFC 1.6 §2, R4, R11; 4.1 §凭据处置): the self-check an operator runs when something looks wrong. It answers the four questions
 // of the 「测试」(is it capturing · is what it captured right · no credential outside the files · no machine-wide TLS weakening) and ④b (every file that holds captured bytes is owner-only), and it
 // folds in what `asight verify` was (the old CA is in the user trust store only). Then it prints, read-only, what `status` knows (the daemon, every harness, the VPN software) and what the last
-// install noted, the standalone undo copy, and the backups no manifest names. It never changes a thing of the user's; the one file it may write is `status`'s ~/.asight/netenv.json.
+// install noted, the standalone undo copy, and the backups no manifest names. It never changes a thing of the user's and starts nothing: its OS queries are read-only (`ps`, the trust-store
+// lookup, the process table); the files it may write are `status`'s ~/.asight/netenv.json and, when a sealed capture file could only be read in part, one line in ~/.asight/raw/journal.jsonl.
 //
 // Exit (R4): 1 — a capture file others can read (「采集文件可被他人读取」: the bytes hold live API keys) · 3 — it could not judge: no records examined, no file's permissions examined, a file whose permissions
 // could not be read, a capture file only partly read — never 0 (reading nothing and answering 「过」 is what this command once did, 0.1 §3) · 0 — the rest. The status block is a report and
@@ -69,8 +70,10 @@ async function collect({ home, env, sourceFlags, deps }) {
       extra.push(...part.superseded.map((x) => x.sealed)) // sealed copies superseded by an original that still exists hold the same credentials (D35)
     } catch (e) { readErrors.push(`${root}: ${(e && e.message) || e}`) }
   }
-  extra.push(...exportFiles(path.join(ah, 'export'), { fs })) // the default export dir (D35 · 4.1 §凭据处置)
-  extra.push(...sealedUnder(sessionsRoot, { fs }).filter((f) => !files.includes(f))) // every sealed file `asight raw seal` filed by session, whichever source it continues
+  // a directory that exists and cannot be listed is a read error (无法判定), never "no files": a mode-000 export dir holding a 0644 capture would otherwise be certified owner-only (0.1 §3, R11)
+  const unlistable = (d, e) => readErrors.push(`${d}: ${errText(e)}`)
+  extra.push(...exportFiles(path.join(ah, 'export'), { fs, onError: unlistable })) // the default export dir (D35 · 4.1 §凭据处置)
+  extra.push(...sealedUnder(sessionsRoot, { fs, onError: unlistable }).filter((f) => !files.includes(f))) // every sealed file `asight raw seal` filed by session, whichever source it continues
   const backups = filesIn(backupDir(home), fs) // what asight saved of the user's files before changing them: settings with tokens in them (R2)
   if (backups.error) readErrors.push(backups.error)
   extra.push(...backups.files)

@@ -102,6 +102,40 @@ test('④b covers ~/.asight/backup/: a backup of a user\'s file that others can 
   assert.ok(r.out.includes(`${path.basename(b)} 0644`), r.out)
 })
 
+// R11 / 0.1 §3: a directory that exists and cannot be listed is not "no files" — reading nothing and certifying is what this command once did. Real permissions: a mode-000 directory, restored afterwards
+const rootCanList = typeof process.getuid === 'function' && process.getuid() === 0 ? 'root lists a directory with no mode bits' : false
+test('④b: the export directory, a session directory in it, and the sessions directory — one that exists and cannot be listed is a read error (exit 3, the directory and the errno named), never a pass; listable again, the 0644 file in it is exit 1', { skip: rootCanList }, async () => {
+  const s = plain()
+  const src = path.join(s.home, 'src'); capture(src)
+  const ah = path.join(s.home, '.asight')
+  const leak = capture(path.join(ah, 'export', 'S1'), { mode: 0o644, name: 'leak.ndjson' }) // a capture others can read, where nobody can look
+  fs.mkdirSync(path.join(ah, 'sessions', 'S2'), { recursive: true })
+  const dirs = { 'the export directory': path.join(ah, 'export'), 'a session directory in the export directory': path.join(ah, 'export', 'S1'), 'the sessions directory': path.join(ah, 'sessions'), 'a session directory in the sessions directory': path.join(ah, 'sessions', 'S2') }
+  for (const [what, dir] of Object.entries(dirs)) {
+    fs.chmodSync(leak, dir.includes('export') ? 0o644 : 0o600) // hidden by the directory under test, or visible and clean (a problem that is found outranks not knowing: that is exit 1)
+    fs.chmodSync(dir, 0)
+    try {
+      const r = await doctor(s, ['--source', src])
+      assert.equal(r.exit, 3, `${what}: ${r.text}`)
+      assert.ok(r.err.includes(`read error: ${dir}: EACCES`), `${what}: ${r.err}`)
+      assert.ok(!r.out.includes('✓ 采集文件仅属主可读'), `${what}: no all-clear\n${r.out}`)
+      assert.match(r.err, /无法判定/)
+      if (what === 'the export directory') {
+        const j = await doctor(s, ['--source', src, '--json'], { io: fakeIo() })
+        assert.equal(j.exit, 3); assert.ok(j.io.json().read_errors.some((e) => e.startsWith(`${dir}: EACCES`)), JSON.stringify(j.io.json().read_errors))
+      }
+    } finally { fs.chmodSync(dir, 0o700) }
+  }
+  fs.chmodSync(leak, 0o644)
+  const r = await doctor(s, ['--source', src])
+  assert.equal(r.exit, 1, `listable: what was hidden is found\n${r.text}`); assert.match(r.out, /leak\.ndjson 0644/)
+  fs.chmodSync(leak, 0o600)
+  assert.equal((await doctor(s, ['--source', src])).exit, 0)
+  // a directory that is not there is no files, as before
+  fs.rmSync(path.join(ah, 'export'), { recursive: true }); fs.rmSync(path.join(ah, 'sessions'), { recursive: true })
+  assert.equal((await doctor(s, ['--source', src])).exit, 0)
+})
+
 test('the old `verify` is ④: the CA is in the user trust store (✓), is not (⚠ not onboarded), could not be checked (⚠ with the reason) — and none of them changes the exit', async () => {
   const s = plain()
   const src = path.join(s.home, 'src'); capture(src)
@@ -111,7 +145,16 @@ test('the old `verify` is ④: the CA is in the user trust store (✓), is not (
   assert.match(r.out, /⚠ ④ 没弱化全机 TLS[^\n]*not found in the user trust store/); assert.equal(r.exit, 0)
   r = await doctor(s, ['--source', src], { deps: { verify: () => { throw new Error('security: the keychain could not be opened') } } })
   assert.match(r.out, /⚠ ④ 没弱化全机 TLS[^\n]*trust check errored: security: the keychain could not be opened/); assert.equal(r.exit, 0)
-  assert.deepEqual(s.sys.exec.calls, [], 'doctor started no process')
+  assert.deepEqual(s.sys.exec.calls, [], 'with the trust-store check, the process table and the VPN probe injected, no OS tool ran at all')
+})
+
+test('what doctor runs, with the VPN probe left real: one read-only OS query (`ps`, to find the VPN core\'s socket) and nothing else — no `which`, no systemctl / launchctl / loginctl, nothing that starts, stops or changes a thing (the trust-store check and the process table are the other two queries; both are replaced here)', async () => {
+  const s = await installedHome()
+  const src = path.join(s.home, 'src'); capture(src)
+  const before = s.sys.exec.calls.length
+  const r = await doctor(s, ['--source', src], { deps: { netenv: undefined, knownSocks: [] } })
+  assert.equal(r.exit, 0, r.text)
+  assert.deepEqual(s.sys.exec.calls.slice(before), ['ps -axww -o command='])
 })
 
 test('dependencies: found on PATH, or MISSING with the one line that installs it — looked up in the files, no `which`', async () => {
