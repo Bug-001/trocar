@@ -19,7 +19,7 @@ const msgOf = (e) => String((e && e.message) || e)
 /** The login a proxy reference names, for one use: the connection the ingress dials through the proxy, or the kernel's own outbound to it. Not readable is an error with no login in it. */
 function loginOf(g, up, authOf) {
   const auth = authOf(up.auth_ref)
-  if (!auth) throw Object.assign(new Error(`the login of the upstream proxy of ${g} (${up.auth_ref}) cannot be read, so nothing can be dialled through that proxy`), { why: 'upstream-credentials-unavailable' })
+  if (!auth) throw Object.assign(new Error(`the login of the upstream proxy of ${g} (${up.auth_ref}) cannot be read, so nothing can be dialled through that proxy`), { code: 'upstream-unavailable', why: 'upstream-credentials-unavailable' })
   return { username: auth.username, password: auth.password }
 }
 
@@ -136,7 +136,7 @@ export function createWin32Redirector({ helper, procWatcher, groups, home = null
   function upstreamFor(g, route, host) {
     if (bypassHit(route.bypass, host)) return { kind: 'direct' }
     const up = route.upstream
-    if (!up || typeof up.kind !== 'string') throw Object.assign(new Error(`the group ${g} is on but has no upstream to dial`), { why: 'no-upstream' })
+    if (!up || typeof up.kind !== 'string') throw Object.assign(new Error(`the group ${g} has no upstream to dial`), { code: 'upstream-unavailable', why: 'no-upstream' })
     if (up.kind === 'direct') return { kind: 'direct' }
     const out = { kind: up.kind, host: up.host, port: up.port }
     if (up.credentialed) out.auth = loginOf(g, up, authOf)
@@ -185,18 +185,24 @@ export function createWin32Redirector({ helper, procWatcher, groups, home = null
 
   return Object.assign(ev, {
     /** What the proxy ingress asks for each connection a client hands over on purpose (4.8 §5.2, core/redirector.mjs): `user` is `of.<form>` (the ingress has checked the token already), `target` what it asked to reach.
-     *  → the flow's meta; `{ health: true, group }` for the group's own re-entry point (the kernel's probe: the ingress answers it, nothing is dialled or recorded); null for a user it does not know, or a group that is not on
-     *  (the ingress then answers it as an authentication failure, and the kernel's fallback group, which does not get the probe through, keeps the re-entry: the way to the upstream that needs no engine).
+     *  → the flow's meta; `{ health: true, group }` for the group's own re-entry point (the kernel's probe: the ingress answers it, nothing is dialled or recorded); null for a user it does not know, a group the plan has no answer for, or the probe of a group that is not on
+     *  (the ingress then answers it as an authentication failure, and the kernel's fallback group, which does not get the probe through, keeps the re-entry: the way to the upstream that needs no engine). An AGENT's connection of a group that is not on
+     *  (the plan flipped before the kernel's reload landed) is served, not refused: a spliced meta, no pid asked for, the group's upstream, `skip` = `untracked` · `group-off`; one with nothing to dial is null as before.
      *  The meta: `pid` (or null) · `agent` the harness · `decrypt` · `capture: 'proxy'` · `form` · `exe` · `upstream` (`{kind:'direct'}`, or the group's with its login: the ingress uses it for this one connection and keeps only whether there was
      *  one) · `pid_source` · `pid_ms` · `negKey` (the pid, or `of.<form>` when there is none: forms must not poison one another's negative cache, 4.8 §5.5) · `skip`, only when it is not decrypted and the tracker has no row to say why: the code
-     *  the row carries (`untrusted` + `pid-unresolved-mixed`, or `untracked`). Rejects, with a `why` (`no-upstream`, `upstream-credentials-unavailable`) and no login in the message, when the upstream cannot be dialled: the ingress then writes the engine's own `loader-down` failure with the message and answers 502. */
+     *  the row carries (`untrusted` + `pid-unresolved-mixed`, or `untracked`). Rejects, with `code: 'upstream-unavailable'`, a `why` (`no-upstream`, `upstream-credentials-unavailable`) and no login in the message, when the upstream cannot be dialled: the ingress then writes its own `upstream-unavailable` failure (where `ingress`) with the message and answers 502. */
     async lookupIngress({ user, target }) {
       const m = FORM_USER.exec(typeof user === 'string' ? user : '')
       const hit = m ? byForm.get(m[1]) : null
       const route = hit && (routes() || {})[hit.g]
-      if (!route || route.on !== true || !target) return null
+      if (!route || !target) return null
       const port = ((ingress() || {}).groupPorts || {})[hit.g]
-      if (Number.isInteger(port) && target.address === '127.0.0.1' && target.port === port) return { health: true, group: hit.form.id }
+      const probe = Number.isInteger(port) && target.address === '127.0.0.1' && target.port === port
+      if (route.on !== true) { // the plan has this group off: the kernel's probe is refused (its fallback then keeps the re-entry); an agent's connection that still arrives is the plan flipped before the kernel's reload landed, and is served
+        if (probe || !route.upstream) return null // nothing to serve it with: refused as before
+        return { pid: null, agent: hit.harness, decrypt: false, capture: 'proxy', form: hit.form.id, exe: null, upstream: upstreamFor(hit.g, route, target.address), pid_source: null, pid_ms: null, negKey: `of.${hit.form.id}`, skip: untracked('group-off') }
+      }
+      if (probe) return { health: true, group: hit.form.id }
       const upstream = upstreamFor(hit.g, route, target.address) // before the table is asked: a connection that cannot be dialled should not wait on it
       const candidates = hit.form.processRules !== false ? maybeOf(hit.form.id) : takenBy(hit)
       const { pid, source, ms } = await owningPid(candidates, port)

@@ -74,7 +74,7 @@ export const ROUTE_WHERE = Object.freeze(['routing', 'forwarder', 'ingress', 'op
 export const ROUTE_EVENTS = Object.freeze(['route-applied', 'forwarder-start', 'forwarder-stop', 'forwarder-draining', 'optin-applied', 'optin-removed']) // state changes, not failures
 /** `code` of a failure event, by the `where` the §12 table gives it. Every row of the table is the class 失败, so the next list is this one. */
 export const ROUTE_CODES = Object.freeze([
-  'ingress-auth-failed', 'ingress-unknown', 'engine-port-taken', // ingress
+  'ingress-auth-failed', 'ingress-unknown', 'engine-port-taken', 'upstream-unavailable', // ingress (`upstream-unavailable`: the group's upstream cannot be dialled at all, no login to dial it with or none to dial: the lookup refused, the agent got a 502)
   'fallback-active', // routing
   'forwarder-start-failed', 'forwarder-restart', 'forwarder-digest-mismatch', 'forwarder-binary-missing', // forwarder: the kernel comes in a platform package and `on` never downloads it (4.8 §8), so there is no download failure to name
   'optin-failed', // optin: an item the user named was not done (a refused prompt, a script error); a refused UAC is not this: it is `pending-admin` (1.6 §1.7)

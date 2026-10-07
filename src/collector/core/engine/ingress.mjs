@@ -287,8 +287,12 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     const dst = { address: o.target.host, port: o.target.port, ...(net.isIP(o.target.host) ? { family: net.isIP(o.target.host) } : {}) }
     let meta
     try { meta = await lookupIngress({ peer, user: o.user, target: dst }) } catch (e) {
-      const code = e && e.code === 'loader-timeout' ? 'loader-timeout' : 'loader-down'
-      failure({ code, peer, reason: `looking up the ingress connection of ${shownUser(o.user)} for ${o.target.host}:${o.target.port} failed (${msgOf(e)}); it was refused with a 502` })
+      if (e && e.code === 'upstream-unavailable') { // the redirector would not hand over a connection it cannot dial (no login for the upstream, none to dial): asight's own code and the ingress's own part, not a lookup that failed (4.8 §12)
+        failure({ where: 'ingress', code: 'upstream-unavailable', peer, ...(typeof e.why === 'string' ? { why: e.why } : {}), reason: `the upstream of the connection of ${shownUser(o.user)} to ${o.target.host}:${o.target.port} cannot be dialled (${msgOf(e)}); it was refused with a 502` })
+      } else {
+        const code = e && e.code === 'loader-timeout' ? 'loader-timeout' : 'loader-down'
+        failure({ code, peer, reason: `looking up the ingress connection of ${shownUser(o.user)} for ${o.target.host}:${o.target.port} failed (${msgOf(e)}); it was refused with a 502` })
+      }
       r.detach(); return o.badGateway('lookup')
     }
     if (!meta) { authFailed(o.user, 'unknown user'); r.detach(); return o.denied() }

@@ -151,7 +151,7 @@ test('D39 src/off/names.mjs is the same list as the closed set (src/off cannot i
 // The table below is the spec's §12 table written out by hand (code, where, class), not read back from the module, so a name
 // added, dropped or moved in codes.mjs and not in the RFC turns this red.
 const SPEC_12_FAILURES = [
-  ['ingress-auth-failed', 'ingress'], ['ingress-unknown', 'ingress'], ['engine-port-taken', 'ingress'],
+  ['ingress-auth-failed', 'ingress'], ['ingress-unknown', 'ingress'], ['engine-port-taken', 'ingress'], ['upstream-unavailable', 'ingress'],
   ['fallback-active', 'routing'],
   ['forwarder-start-failed', 'forwarder'], ['forwarder-restart', 'forwarder'], ['forwarder-digest-mismatch', 'forwarder'], ['forwarder-binary-missing', 'forwarder'],
   ['optin-failed', 'optin'],

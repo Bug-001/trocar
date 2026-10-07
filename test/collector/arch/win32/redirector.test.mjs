@@ -216,9 +216,9 @@ const trust = (r, ...pids) => { for (const p of pids) r.watch(p, { decrypt: true
 const distrust = (r, ...pids) => { for (const p of pids) r.watch(p, { decrypt: false, agent: 'x' }) }
 const ask = (r, user, t = target('api.anthropic.com')) => r.lookupIngress({ peer: { address: '127.0.0.1', port: 50000 }, user, target: t })
 
-test('an unknown route is null (the ingress answers it as an auth failure): not an `of.<form>` user, a form nobody lists, a re-entry user, a group that is not on or not planned', async () => {
+test('an unknown route is null (the ingress answers it as an auth failure): not an `of.<form>` user, a form nobody lists, a re-entry user, a group the plan has no answer for', async () => {
   const { r } = bed({ routes: () => ({ 'claude-code.settings': route(), 'codex.env': route({ on: false, entry: null, reason: 'desired-off' }), 'z-code.cli': route() }) })
-  for (const u of [undefined, null, '', 'of.', 'of.nobody', 'claude-code.cli', 're.claude-code.settings', 're.z-code.cli', 'asight', 'of.codex.app', 'of.deepseek-dsh.cli', 'OF.claude-code.cli']) assert.equal(await ask(r, u), null, `${u}: the re-entry user of a group whose id is also a form's (re.z-code.cli) is not that form's`)
+  for (const u of [undefined, null, '', 'of.', 'of.nobody', 'claude-code.cli', 're.claude-code.settings', 're.z-code.cli', 'asight', 'of.deepseek-dsh.cli', 'OF.claude-code.cli']) assert.equal(await ask(r, u), null, `${u}: the re-entry user of a group whose id is also a form's (re.z-code.cli) is not that form's`)
   assert.equal(await ask(r, 'of.hermes.desktop'), null, 'a form that is in no group')
   assert.notEqual(await ask(r, 'of.claude-code.cli'), null)
 })
@@ -233,6 +233,19 @@ test('a probe is a CONNECT to the group\'s own re-entry point 127.0.0.1:<its por
 test('a probe of a group that is not on is refused too: the kernel then keeps the re-entry, which is the way a connection still arriving goes upstream, and not the engine that has nothing to do with it', async () => {
   const { r } = bed({ routes: () => ({ 'claude-code.settings': route({ on: false, entry: null, reason: 'desired-off' }) }) })
   assert.equal(await ask(r, 'of.claude-code.cli', target('127.0.0.1', 18801)), null)
+})
+
+test('a connection of a group the plan has turned off before the kernel caught up is served, not refused: a spliced meta with the group\'s upstream and a code that says why, so the agent never sees an authentication failure; the probe is still refused', async () => {
+  const o = owner()
+  const off = (over = {}) => route({ on: false, entry: null, reason: 'desired-off', ...over })
+  const { r } = bed({ routes: () => ({ 'claude-code.settings': off(), 'codex.env': off({ upstream: HTTP_PROXY, bypass: BYPASS }), 'deepseek-dsh.env': off({ upstream: null }) }), ownerOf: o })
+  const m = await ask(r, 'of.claude-code.cli', target('api.anthropic.com'))
+  assert.deepEqual(m, { pid: null, agent: 'claude-code', decrypt: false, capture: 'proxy', form: 'claude-code.cli', exe: null, upstream: { kind: 'direct' }, pid_source: null, pid_ms: null, negKey: 'of.claude-code.cli', skip: { not_captured: 'untracked', reason: 'group-off' } })
+  assert.equal(o.calls.length, 0, 'a connection that is spliced anyway does not wait for the socket table')
+  assert.deepEqual((await ask(r, 'of.codex.app', target('api.openai.com'))).upstream, { kind: 'http', host: '127.0.0.1', port: 7897, auth: CRED }, 'it goes where the agent\'s own proxy leads, with the login, as for any connection')
+  assert.deepEqual((await ask(r, 'of.codex.app', target('gateway.internal'))).upstream, { kind: 'direct' }, 'and the bypass table applies')
+  assert.equal(await ask(r, 'of.claude-code.cli', target('127.0.0.1', 18801)), null, 'the kernel\'s probe of a group that is off is refused: its fallback keeps the re-entry')
+  assert.equal(await ask(r, 'of.deepseek-dsh.cli'), null, 'an off group with nothing to dial has nothing to serve either: refused as before')
 })
 
 test('W16 a pid known and judged trusted: decrypt, the form, the harness, the image, how the pid was found; the table was asked about the form\'s own processes and the group\'s port', async () => {
@@ -403,11 +416,11 @@ test('the upstream\'s login is resolved from its reference for this one connecti
   assert.deepEqual(meta.upstream.auth, CRED)
   assert.equal(JSON.stringify({ ...meta, upstream: { ...meta.upstream, auth: undefined } }).includes('pw-SECRET'), false)
   const noLogin = bed({ routes: () => ({ 'codex.env': route({ upstream: HTTP_PROXY, bypass: BYPASS }) }), authOf: () => null, ownerOf: o }).r
-  await assert.rejects(ask(noLogin, 'of.codex.app'), (e) => { assert.equal(e.why, 'upstream-credentials-unavailable'); assert.match(e.message, /prior:codex\.env/); assert.equal(e.message.includes('pw-'), false); return true })
+  await assert.rejects(ask(noLogin, 'of.codex.app'), (e) => { assert.deepEqual([e.why, e.code], ['upstream-credentials-unavailable', 'upstream-unavailable']); assert.match(e.message, /prior:codex\.env/); assert.equal(e.message.includes('pw-'), false); return true })
   assert.deepEqual((await ask(noLogin, 'of.codex.app', target('gateway.internal'))).upstream, { kind: 'direct' }, 'a bypassed target needs no login')
   assert.equal(o.calls.length, 2, 'the connection that was dialled and the bypassed one asked the table; the one that could not be dialled did not wait for it')
   const nothing = bed({ routes: () => ({ 'codex.env': route({ upstream: null }) }) }).r
-  await assert.rejects(ask(nothing, 'of.codex.app'), (e) => e.why === 'no-upstream')
+  await assert.rejects(ask(nothing, 'of.codex.app'), (e) => e.why === 'no-upstream' && e.code === 'upstream-unavailable')
 })
 
 test('a socket table that throws never costs the agent its connection: no pid, the form judged, and one `socktable-unavailable` failure that passes checkRecord', async () => {
@@ -432,11 +445,11 @@ const privCa = createCa({ commonName: 'private origin CA' })
 const REQ = 'GET /v1/models HTTP/1.1\r\nhost: upstream.test\r\n\r\n'
 const RESP = 'HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: keep-alive\r\n\r\nok'
 
-async function wired(t, { ownerOf } = {}) {
+async function wired(t, { ownerOf, ...over } = {}) {
   const issuer = createLeafIssuer(loadCa(privCa))
   const origin = tls.createServer({ SNICallback: (n, cb) => cb(null, issuer.secureContextFor(n)), ALPNProtocols: ['http/1.1'] }, (s) => { s.on('data', () => s.write(RESP)); s.on('error', () => {}) })
   await new Promise((r) => origin.listen(0, '127.0.0.1', r))
-  const { r, w } = bed({ ownerOf })
+  const { r, w } = bed({ ownerOf, ...over })
   const flows = [], envelopes = [], failures = []
   const engine = createEngine({
     redirector: r, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: privCa.certPem, ingressToken: TOKEN,
@@ -486,6 +499,31 @@ test('W16 end to end, no pid, every process of the form trusted: the same connec
   assert.deepEqual([E.flows[0].decision, E.flows[0].not_captured ?? null], ['decrypt', null])
   assert.deepEqual([E.envelopes[0].proc.agent, E.envelopes[0].proc.pid, E.envelopes[0].proc.exe], ['claude-code', null, null], 'no pid was found: the envelope says so rather than guessing')
   assert.deepEqual(E.failures, [])
+})
+
+test('end to end, a group the plan has just turned off: the agent\'s connection is spliced to the origin and answered with zero errors, the row says `untracked` · `group-off` (not an authentication failure at the kernel\'s outbound)', async (t) => {
+  const E = await wired(t, { routes: () => ({ 'claude-code.settings': route({ on: false, entry: null, reason: 'desired-off' }) }) })
+  trust(E.r, 10, 11) // even trusted: the plan says this group is off
+  const got = await E.agent('of.claude-code.cli', privCa.certPem)
+  assert.equal(got.got, RESP, 'the agent got its answer')
+  assert.match(got.issuer, /private origin CA/)
+  await E.settled()
+  assert.deepEqual([E.flows[0].decision, E.flows[0].not_captured, E.flows[0].reason, E.flows[0].pid, E.flows[0].agent], ['splice', 'untracked', 'group-off', null, 'claude-code'])
+  assert.deepEqual([E.envelopes.length, E.failures], [0, []])
+})
+
+test('end to end, an upstream that cannot be dialled (its login cannot be read): the agent gets a 502, and the failure is `upstream-unavailable` at the ingress with the reason, not `loader-down` (which sends a reader to restart the helper); it passes the closed set', async (t) => {
+  const { checkRecord } = await import('../../../../src/health/codes.mjs')
+  const E = await wired(t, { routes: () => ({ 'codex.env': route({ upstream: HTTP_PROXY }) }), authOf: () => null })
+  assert.equal(await E.agent('of.codex.app', privCa.certPem), 'closed', 'a 502, then nothing')
+  for (let i = 0; i < 100 && E.failures.length < 1; i++) await new Promise((x) => setTimeout(x, 10))
+  assert.equal(E.failures.length, 1)
+  const [f] = E.failures
+  assert.deepEqual([f.event, f.where, f.code, f.why], ['failure', 'ingress', 'upstream-unavailable', 'upstream-credentials-unavailable'])
+  assert.match(f.reason, /prior:codex\.env/)
+  assert.equal(JSON.stringify(f).includes('pw-'), false, 'no login in the record')
+  assert.deepEqual(checkRecord(f), [])
+  assert.equal(E.flows.length, 0, 'no flow: the connection never got an upstream')
 })
 
 // ---------- attach · detach · status (4.8 §2.1, §4.1, §4.2: the kernel first, the proxy entries only after it reads back; W12 order) ----------

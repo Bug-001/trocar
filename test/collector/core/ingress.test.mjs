@@ -272,6 +272,19 @@ test('W13 a lookup that throws is a 502 and a loader-down record, not a hang; a 
   const reply = await s.bytes(10); assert.deepEqual([reply[0], reply[1] !== 0], [5, true], 'a failure reply, never the success a SOCKS5 client would act on'); await s.closed()
 })
 
+test('W13 a lookup that refuses because the upstream cannot be dialled (the redirector\'s `upstream-unavailable`) is a 502 and that code at the ingress with its reason — not loader-down, which names a helper that has nothing to do with it', T, async (t) => {
+  const redirector = createStaticRedirector(); redirector.lookupIngress = async () => { throw Object.assign(new Error('the login of the upstream proxy of g (prior:g) cannot be read, so nothing can be dialled through that proxy'), { code: 'upstream-unavailable', why: 'upstream-credentials-unavailable' }) }
+  const L = await lab(t, { redirector })
+  const c = L.client(); c.write(connectHead('127.0.0.1:9')); assert.match(await c.head(), /^HTTP\/1\.1 502 /); await c.closed()
+  assert.deepEqual(L.failures.map((f) => [f.where, f.code, f.why]), [['ingress', 'upstream-unavailable', 'upstream-credentials-unavailable']])
+  assert.match(L.failures[0].reason, /cannot be read/)
+  assert.equal(L.failures[0].reason.includes(TOKEN), false)
+  const other = createStaticRedirector(); other.lookupIngress = async () => { throw Object.assign(new Error('x'), { code: 'upstream-surprise' }) }
+  const M = await lab(t, { redirector: other })
+  const d = M.client(); d.write(connectHead('127.0.0.1:9')); await d.head(); await d.closed()
+  assert.deepEqual(M.failures.map((f) => f.code), ['loader-down'], 'a code the ingress does not know is the lookup failing, as before')
+})
+
 test('W13 engine.close() ends a half-open handshake and a health tunnel instead of waiting out their idle timeouts (an in-flight flow is left alone: see the test below that opens one)', T, async (t) => {
   const L = await lab(t, { timing: { ingressOpenerMs: 60_000, ingressHealthIdleMs: 60_000 } })
   const h = L.client(); h.write(connectHead(`127.0.0.1:${HEALTH_PORT}`)); await h.head()
