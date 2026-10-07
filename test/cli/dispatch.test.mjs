@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { runCli } from '../../src/cli/main.mjs'
 import { COMMANDS, HIDDEN_ALIASES, helpText, commandNamed } from '../../src/cli/commands.mjs'
+import { LEGACY_COMMANDS } from '../../src/cli/legacy-commands.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { sandbox, installedViaCli, fakeIo, snapshot } from './fixtures/dispatch-ctx.mjs'
@@ -27,6 +28,42 @@ test('V19: every command help lists is dispatched to by name — as root for set
     assert.equal(await runCli([name, 'x', '--y'], c), 0, name)
     assert.deepEqual(seen, [[name, 'x', '--y']], `${name}: dispatched with its arguments as typed, and nothing else`)
   }
+})
+
+// The spy above replaces each command's `run`, so it cannot see whether the table's own `run` reaches the function it should (a `legacy('monitr')` or a renamed import passed it, 2026-10-07 review).
+// The two tests below go through the real `run`: the old bodies by `deps.runLegacy` (what they do reads and writes the machine), setup-helper by a fake arch.
+test('V19: every old body (LEGACY_COMMANDS) is reached through the real `run` of the command of its own name, with its arguments as typed and nothing else', async () => {
+  const asked = []
+  for (const name of [...LEGACY_COMMANDS].sort()) {
+    asked.length = 0
+    assert.ok(commandNamed(name), `${name} is a command of the table`)
+    const c = { io: fakeIo(), uid: 1000, platform: 'linux', deps: { runLegacy: async (n, argv) => { asked.push([n, ...argv]); return 0 } } }
+    assert.equal(await runCli([name, 'x', '--y'], c), 0, name)
+    assert.deepEqual(asked, [[name, 'x', '--y']], `${name} asks for the old body of that name`)
+  }
+  const failing = { io: fakeIo(), uid: 1000, platform: 'linux', deps: { runLegacy: async () => 1 } }
+  assert.equal(await runCli(['monitor', 'status'], failing), 1, 'and the exit code the body gave is the one the command leaves with')
+})
+
+test('V19: the names the table passes to legacy() are exactly LEGACY_COMMANDS (once each), and each has a case in the switch of legacy-commands.mjs', () => {
+  const src = (f) => fs.readFileSync(fileURLToPath(new URL(`../../src/cli/${f}`, import.meta.url)), 'utf8')
+  const passed = [...src('commands.mjs').matchAll(/\blegacy\('([a-z-]+)'\)/g)].map((m) => m[1])
+  assert.deepEqual([...passed].sort(), [...LEGACY_COMMANDS].sort(), 'a name in the table that LEGACY_COMMANDS does not know is a RangeError when run; one it knows and the table lacks is a body nobody can reach')
+  assert.equal(new Set(passed).size, passed.length, 'each once')
+  for (const name of LEGACY_COMMANDS) assert.match(src('legacy-commands.mjs'), new RegExp(`^ {4}case '${name}': \\{`, 'm'), `${name} has its case`)
+})
+
+test('V20: setup-helper as root runs the real table entry — --binary and --remove reach the arch, what it did is said on stdout, an arch that throws is exit 1 with its words on stderr', async () => {
+  const done = []
+  const arch = { install: { DEFAULTS: { helperBin: '/usr/local/libexec/asight/asight-redirector' }, setupHelper: (o) => { done.push(['setup', o.binarySrc]); return { bin: '/b', getcap: 'caps' } }, uninstallHelper: () => { done.push(['remove']); return { warnings: [] } } } }
+  const run = async (argv, over = arch) => { const io = fakeIo(); const exit = await runCli(argv, { io, uid: 0, platform: 'linux', deps: { arch: over } }); return { exit, io } }
+  let r = await run(['setup-helper', '--binary', '/tmp/h'])
+  assert.equal(r.exit, 0); assert.match(r.io.stdoutText(), /^installed \/b \(caps\)/); assert.equal(r.io.stderrText(), '')
+  r = await run(['setup-helper', '--remove'])
+  assert.equal(r.exit, 0); assert.match(r.io.stdoutText(), /^removed \/usr\/local\/libexec\/asight\/asight-redirector/)
+  assert.deepEqual(done, [['setup', '/tmp/h'], ['remove']], 'the arch was asked once each, with the binary as typed')
+  r = await run(['setup-helper'], { install: { setupHelper: () => { throw new Error('the capability bit could not be set') } } })
+  assert.equal(r.exit, 1); assert.equal(r.io.stdoutText(), ''); assert.match(r.io.stderrText(), /the capability bit could not be set/)
 })
 
 test('V19: every hidden alias dispatches to the command it claims, the rest of the arguments follow, and `collector` with anything else is a usage error', async () => {

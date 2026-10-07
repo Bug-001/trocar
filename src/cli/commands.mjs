@@ -2,14 +2,15 @@
 //   COMMANDS         [{ name, section: 'common' | 'data' | 'maintenance' | 'legacy', usage, summary, notes?, also?, mutates, needsRoot?, run(argv, ctx) → exit }]. `usage` is one or more lines (each begins
 //                    with `asight <name>`, or `sudo asight <name>`); `also` puts more lines of the same command under another section (`raw` is in two). `mutates`: R7 — the per-user commands
 //                    that change state refuse root (on off uninstall daemon). `needsRoot`: setup-helper, the only command that must be root. `run` gets the argv after the name and the context
-//                    of runCli: { io, env, home, platform, uid, deps }; each takes what it needs from `deps` (0.1 §3).
+//                    of runCli: { io, env, home, platform, uid, deps }; each takes what it needs from `deps` (0.1 §3): the old bodies `runLegacy`, `setup-helper` `arch`.
 //   HIDDEN_ALIASES  [{ argv, to }]: not in help, dispatched like the command they name; what follows the alias is passed on as typed.
 //   helpText        the help: four sections; one command when named.
 import { hasNewCollector } from '../off/legacy.mjs'
 
 const SECTIONS = Object.freeze([['common', '常用'], ['data', '数据'], ['maintenance', '维护'], ['legacy', '旧采集(过渡期)']])
 const via = (file, fn) => async (argv, c) => (await import(file))[fn](argv, c)
-const legacy = (name) => async (argv) => (await import('./legacy-commands.mjs')).runLegacyCommand(name, argv)
+// `deps.runLegacy(name, argv)` replaces the runner of the old bodies: a test asks which body a command reaches, not what it does (those read and write the machine)
+const legacy = (name) => async (argv, c) => ((c && c.deps && c.deps.runLegacy) || (await import('./legacy-commands.mjs')).runLegacyCommand)(name, argv)
 
 /** `asight doctor`; `doctor --only old-ca` is the hidden target of the alias `verify` (the old CA is in the user trust store, and only there). */
 async function doctor(argv, c) {
