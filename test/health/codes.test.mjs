@@ -153,7 +153,7 @@ test('D39 src/off/names.mjs is the same list as the closed set (src/off cannot i
 const SPEC_12_FAILURES = [
   ['ingress-auth-failed', 'ingress'], ['ingress-unknown', 'ingress'], ['engine-port-taken', 'ingress'],
   ['fallback-active', 'routing'],
-  ['forwarder-start-failed', 'forwarder'], ['forwarder-restart', 'forwarder'], ['forwarder-digest-mismatch', 'forwarder'], ['forwarder-binary-missing', 'forwarder'], ['forwarder-download-failed', 'forwarder'],
+  ['forwarder-start-failed', 'forwarder'], ['forwarder-restart', 'forwarder'], ['forwarder-digest-mismatch', 'forwarder'], ['forwarder-binary-missing', 'forwarder'],
   ['optin-failed', 'optin'],
   ['socktable-unavailable', 'helper'], ['helper-start-failed', 'helper'],
   ['task-register-failed', 'install'], ['elevated-token', 'start'],
@@ -177,6 +177,9 @@ test('W38 every §12 code is a code, and a failure event naming it with its wher
   }
   // the case the plan names
   assert.deepEqual(checkRecord({ event: 'failure', where: 'ingress', code: 'ingress-auth-failed', reason: 'token mismatch' }), [])
+  // `on` never downloads the kernel (4.8 §8, 1.6 R8): there is no download failure to name, and no module or test writes one
+  assert.ok(!ROUTE_CODES.includes('forwarder-download-failed') && !isCode('forwarder-download-failed'), 'forwarder-download-failed is withdrawn')
+  assert.deepEqual(checkRecord({ event: 'failure', where: 'forwarder', code: 'forwarder-download-failed', reason: 'x' }), ['code "forwarder-download-failed"'])
   // Windows codes sit beside the Linux ones, not inside the lists D40 edits
   for (const c of ROUTE_CODES) assert.ok(!CODES.includes(c), `${c} is defined once: ROUTE_CODES, not also CODES`)
 })

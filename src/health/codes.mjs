@@ -76,7 +76,7 @@ export const ROUTE_EVENTS = Object.freeze(['route-applied', 'forwarder-start', '
 export const ROUTE_CODES = Object.freeze([
   'ingress-auth-failed', 'ingress-unknown', 'engine-port-taken', // ingress
   'fallback-active', // routing
-  'forwarder-start-failed', 'forwarder-restart', 'forwarder-digest-mismatch', 'forwarder-binary-missing', 'forwarder-download-failed', // forwarder
+  'forwarder-start-failed', 'forwarder-restart', 'forwarder-digest-mismatch', 'forwarder-binary-missing', // forwarder: the kernel comes in a platform package and `on` never downloads it (4.8 §8), so there is no download failure to name
   'optin-failed', // optin: an item the user named was not done (a refused prompt, a script error); a refused UAC is not this: it is `pending-admin` (1.6 §1.7)
   'socktable-unavailable', 'helper-start-failed', // helper
   'task-register-failed', // install: `on` still succeeds, through the HKCU Run fallback (4.8 §7)
