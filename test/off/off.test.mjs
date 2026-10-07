@@ -272,3 +272,208 @@ test('a lock that cannot be read, and a daemon that does not answer: whether one
   const r2 = await h.off({ deps: { request: async (q) => { if (q.path === '/status') throw Object.assign(new Error('x'), { code: 'ENOENT' }); return h.sys.daemon.request(q) }, alive: live.alive, identity: live.identity, kill: live.kill, isHelper: live.isHelper, ...fakeClock() } })
   assert.deepEqual([r2.exit, live.sent, r2.receipt.daemon.state], [0, [[4243, 'SIGTERM']], 'stopped'])
 })
+
+test('R12: an off that cannot get the op lock in time has written desired off first and says which command holds it; nothing else is touched, exit 1', async () => {
+  const s = await installedHome({ names: ['claude-code'] }); const before = s.userFiles()
+  fs.writeFileSync(path.join(s.dir, 'op.lock'), JSON.stringify({ pid: 5555, start_time: '9', boot_id: 'boot-1' }))
+  const r = await s.off({ deps: { lockWaitMs: 40, alive: (pid) => pid === 5555, identity: (pid) => (pid === 5555 ? { start_time: '9', boot_id: 'boot-1' } : { start_time: null, boot_id: null }) } })
+  assert.equal(r.exit, 1); assert.match(r.receipt.problems[0], /another asight command \(pid 5555\) holds .*already off for every harness/)
+  assert.equal(s.state().harnesses['claude-code'].desired, 'off', 'desired off was written before the wait')
+  assert.deepEqual(s.userFiles(), before)
+  assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), [])
+  assert.equal(flowEvents(s.dir).at(-1).outcome, 'failed')
+  assert.equal(fs.readFileSync(path.join(s.dir, 'op.lock'), 'utf8').includes('5555'), true, 'the holder\'s lock is not ours to remove')
+})
+
+test('V27: over on, off and a daemon that has to be stopped, nothing restarts an agent — no signal goes to a pid that is not the daemon or its helper, no systemctl restart; the agents that may still trust asight are only listed', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] }); writeDaemonLock(s)
+  const t = procTable({ ...DAEMON_ROWS, 5000: { start_time: '5', boot_id: 'boot-1' }, 5001: { start_time: '6', boot_id: 'boot-1' } }, { survives: { 4242: ['SIGTERM'] } })
+  const agents = [
+    { pid: 5000, ppid: 1, uid: 1000, startedAt: Date.now() + 5000, exe: '/home/u/.local/share/claude/versions/2.1.289', argv: ['claude'], env: () => new Map() },
+    { pid: 5001, ppid: 1, uid: 1000, startedAt: Date.now() + 5000, exe: '/home/u/.local/bin/codex', argv: ['codex'], env: () => new Map() },
+    { pid: 7001, ppid: 1, uid: 1000, startedAt: 1, exe: '/usr/bin/node', argv: ['node', '/repo/bin/asight.mjs', 'serve', '--port', '9000'], env: () => new Map() },
+    { pid: 7002, ppid: 1, uid: 1000, startedAt: 1, exe: '/usr/bin/node', argv: ['node', '/repo/bin/asight.mjs', 'capture'], env: () => new Map() },
+    { pid: 7003, ppid: 1, uid: 1000, startedAt: 1, exe: '/usr/bin/node', argv: ['node', '/repo/bin/asight.mjs', 'etl'], env: () => new Map() },
+  ]
+  const procs = async () => agents
+  const calls = s.sys.exec.calls.length
+  const r = await s.off({ deps: { procs, request: hangsOnStatus(s), alive: (pid) => t.alive(pid) || agents.some((a) => a.pid === pid), identity: t.identity, kill: t.kill, isHelper: t.isHelper, ...fakeClock() } })
+  assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
+  assert.ok(t.sent.every(([pid]) => pid === 4242 || pid === 4243), `signals went to the daemon and its helper only: ${JSON.stringify(t.sent)}`)
+  assert.ok(execFrom(s, calls).every((c) => !/restart/.test(c)), 'no systemctl restart')
+  assert.deepEqual(r.receipt.still_trusting.map((p) => p.pid).sort(), [5000, 5001], 'the agents that may still trust asight are reported')
+  assert.deepEqual(r.receipt.restart, [], 'and off never lists anything to restart as a to-do of its own')
+  assert.deepEqual(r.receipt.user_processes, [{ pid: 7001, command: 'asight serve', note: '只读看板,不在 agent 路径上' }, { pid: 7002, command: 'asight capture', note: '前台采集,可能正中转 agent 的流量' }], 'what the user started themselves is listed, never killed')
+})
+
+test('D38: every line off writes to flows/ is in the closed sets, every run of off ends with a result line, and a clean off writes the desired state, the routing and the autostart', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] })
+  fs.appendFileSync(path.join(s.home, '.codex', '.env'), 'EXTRA=1\n') // an edit after install: a note with a code
+  const r = await s.off({ deps: { procs: async () => [{ pid: 5001, ppid: 1, uid: 1000, startedAt: Date.now() + 5000, exe: '/home/u/.local/bin/codex', argv: ['codex'], env: () => new Map() }] } })
+  assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
+  const mine = flowEvents(s.dir).filter((e) => e.where === 'off')
+  assert.ok(mine.length >= 5)
+  for (const e of flowEvents(s.dir)) assert.deepEqual(checkRecord(e), [], JSON.stringify(e))
+  assert.deepEqual(new Set(mine.map((e) => e.run)).size, 1, 'one run, one `run`')
+  assert.deepEqual(mine.map((e) => e.kind).filter(Boolean).slice(0, 3), ['desired-off', 'routing', 'note'])
+  assert.ok(mine.some((e) => e.kind === 'autostart'))
+  assert.ok(mine.some((e) => e.code === 'backup-kept') && mine.some((e) => e.code === 'reverted-not-identical') && mine.some((e) => e.code === 'still-trusting'))
+  const last = mine.at(-1)
+  assert.deepEqual([last.event, last.kind, last.outcome], ['off-note', 'result', 'off'])
+})
+
+test('V24: with the install manifest gone and no terminal, off takes the routing off, stops the daemon and leaves the files alone, lists what it found by asight\'s marks, exits 1 with outcome partial; with --yes it undoes them by those marks (undone-by-marker): the commented user line is back, the JSON value comes back from the backup', async () => {
+  const codexOriginal = 'SSL_CERT_FILE=/corp/ca.pem\nOPENAI_API_KEY=sk-test\n'
+  const s = await installedHome({ names: ['claude-code', 'codex'], seed: (home, sh) => {
+    fs.writeFileSync(path.join(home, '.codex', '.env'), codexOriginal)
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${sh.corp}" }\n}\n`)
+  } })
+  const settings = path.join(s.home, '.claude', 'settings.json'), codexEnv = path.join(s.home, '.codex', '.env')
+  const settingsOriginal = `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${s.sh.corp}" }\n}\n`
+  assert.match(fs.readFileSync(codexEnv, 'utf8'), /#asight-collector-off# SSL_CERT_FILE=\/corp\/ca\.pem/, 'install put the user line out of effect with the sentinel prefix')
+  fs.rmSync(path.join(s.dir, 'install-manifest.json'))
+  const installed = s.userFiles()
+  const first = await s.off({ yes: false, interactive: false })
+  assert.equal(first.exit, 1)
+  assert.deepEqual(validateReceipt(first.receipt), [])
+  assert.deepEqual(s.userFiles(), installed, 'the files are byte for byte what they were: nothing is changed without a yes')
+  assert.deepEqual(first.receipt.pending.map((p) => [path.relative(s.home, p.path), p.how]).sort(), [['.claude/settings.json', 'json-value'], ['.codex/.env', 'block']])
+  assert.match(first.receipt.problems.join('\n'), /manifest is missing.*asight off --yes/)
+  assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ['off', 'off'], 'desired off for every harness')
+  assert.deepEqual([first.receipt.routing.confirmed, s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), first.receipt.autostart.disabled], [true, ['POST /off {"exit":true}'], true], 'the routing is off, the daemon was asked to exit, the autostart is disabled — none of it needs the manifest')
+  assert.deepEqual([flowEvents(s.dir).at(-1).kind, flowEvents(s.dir).at(-1).outcome], ['result', 'partial'])
+  const second = await s.off({ yes: true })
+  assert.equal(second.exit, 0, JSON.stringify(second.receipt.problems))
+  assert.equal(second.receipt.undone_by_marker, true)
+  assert.equal(fs.readFileSync(codexEnv, 'utf8'), codexOriginal, 'the block is out and the commented user line is back')
+  assert.equal(fs.readFileSync(settings, 'utf8'), settingsOriginal, 'the JSON value is back, taken from the backup, this key only')
+  assert.deepEqual(flowEvents(s.dir).filter((e) => e.code === 'undone-by-marker').length, 2, 'one note per file, each with the code')
+  assert.equal(flowEvents(s.dir).at(-1).outcome, 'undone-by-marker')
+  const asked = fakeAsk(); const third = await s.off({ interactive: true, io: asked.io, say: asked.say }) // nothing left to find: no question
+  assert.deepEqual([third.exit, asked.said.length], [0, 0])
+})
+
+// a terminal that types `answer` to the one question (src/off/io.mjs confirm reads a line from stdin and prints the question to io.prompt || io.stdout)
+function fakeAsk(answer = 'y') {
+  const said = [], printed = []
+  const listeners = {}
+  const stdin = { isTTY: true, on: (e, f) => { listeners[e] = f }, removeListener: () => {}, pause: () => {}, resume: () => {} }
+  const stdout = { isTTY: true, write: (t) => { printed.push(t); if (/\[y\/N\] $/.test(t)) setImmediate(() => listeners.data && listeners.data(`${answer}\n`)) } }
+  return { io: { stdin, stdout, out: (t) => said.push(t), err: (t) => said.push(t) }, said, printed, say: (t) => said.push(t) }
+}
+
+test('V24 (terminal): the list is printed and ONE question asked; yes undoes by the marks, no leaves every file as it is (exit 1, partial)', async () => {
+  const make = async () => { const s = await installedHome({ names: ['codex'] }); fs.rmSync(path.join(s.dir, 'install-manifest.json')); return s }
+  const no = await make(); const before = no.userFiles(); const asked = fakeAsk('n')
+  const declined = await no.off({ interactive: true, io: asked.io, say: asked.say })
+  assert.deepEqual([declined.exit, no.userFiles(), asked.printed.filter((t) => /\[y\/N\]/.test(t)).length], [1, before, 1])
+  assert.match(asked.said.join('\n'), /\.codex\/\.env|\.codex[\\/]\.env/)
+  const yes = await make(); const asked2 = fakeAsk('y')
+  const done = await yes.off({ interactive: true, io: asked2.io, say: asked2.say })
+  assert.deepEqual([done.exit, done.receipt.undone_by_marker, /asight collector/.test(fs.readFileSync(path.join(yes.home, '.codex', '.env'), 'utf8'))], [0, true, false])
+})
+
+test('R3: a manifest this build does not read (a newer version) leaves every entry alone, says so, exits 1 — the routing is still taken off; an unreadable manifest falls back to the marks', async () => {
+  const s = await installedHome({ names: ['claude-code'] })
+  const manifestFile = path.join(s.dir, 'install-manifest.json')
+  const m = JSON.parse(fs.readFileSync(manifestFile, 'utf8')); m.version = 99
+  fs.writeFileSync(manifestFile, JSON.stringify(m)); const before = s.userFiles()
+  const r = await s.off()
+  assert.equal(r.exit, 1); assert.match(r.receipt.problems.join('\n'), /version 99.*no entry was touched/)
+  assert.deepEqual([s.userFiles(), r.receipt.routing.confirmed], [before, true])
+  assert.equal(flowEvents(s.dir).at(-1).outcome, 'left')
+  fs.writeFileSync(manifestFile, '{ not json')
+  const garbled = await s.off({ yes: true })
+  assert.equal(garbled.exit, 0, JSON.stringify(garbled.receipt.problems)); assert.match(garbled.receipt.notes.join('\n'), /manifest cannot be read/)
+  assert.ok(!fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('asight'), 'undone by the marks')
+})
+
+test('V34: an off that lands while `on` is writing wins — `on` exits 1, saying it was turned off; at the end desired is off, no entry is left in the manifest, the files are as they were, and the daemon is told to switch off', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] })
+  await s.off() // back to nothing installed by on: the second on below is the race
+  const before = s.userFiles(); const codexEnv = path.join(s.home, '.codex', '.env')
+  let offRun = null
+  const racing = { ...fs, renameSync: (a, b) => { if (b === codexEnv && !offRun) offRun = s.off(); return fs.renameSync(a, b) } } // `off` starts when `on` is about to write the second user file
+  const on = await s.on({ fs: racing })
+  const off = await offRun
+  assert.equal(on.exit, 1, JSON.stringify(on.receipt.notes))
+  assert.match(on.receipt.notes.join('\n'), /turned off while this on ran.*the off wins/)
+  assert.equal(off.exit, 0, JSON.stringify(off.receipt.problems))
+  assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ['off', 'off'], 'the final desired state is off')
+  assert.deepEqual(readManifest(s.dir).entries, [], 'no entry is left')
+  assert.deepEqual(s.userFiles(), before, 'and the user\'s files are as they were')
+  assert.deepEqual([...s.sys.daemon.state.on], [], 'nothing is attached')
+  assert.ok(!fs.existsSync(path.join(s.dir, 'op.lock')), 'both released the lock')
+})
+
+test('V34: whichever write of `on` the off lands in, the end is the same — off wins: desired off, no entry left, user files as before, no lock left; `on` exits 1 for every write before the last guard', async () => {
+  const count = await installedHome({ names: ['claude-code', 'codex'] })
+  await count.off()
+  let writes = 0
+  await count.on({ fs: { ...fs, renameSync: (a, b) => { writes++; return fs.renameSync(a, b) } } })
+  assert.ok(writes >= 8, `a first on has ${writes} writes: the loop below has something to cut`)
+  const exits = []
+  for (let k = 1; k <= writes; k++) {
+    const s = await installedHome({ names: ['claude-code', 'codex'] })
+    await s.off()
+    const before = s.userFiles(); let n = 0, offRun = null
+    const on = await s.on({ fs: { ...fs, renameSync: (a, b) => { if (++n === k && !offRun) offRun = s.off(); return fs.renameSync(a, b) } } })
+    const off = await offRun
+    exits.push(on.exit)
+    assert.equal(off.exit, 0, `write ${k}: ${JSON.stringify(off.receipt.problems)}`)
+    assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ['off', 'off'], `write ${k}: the final desired state is off`)
+    assert.deepEqual([readManifest(s.dir).entries, s.userFiles(), fs.existsSync(path.join(s.dir, 'op.lock')), [...s.sys.daemon.state.on]], [[], before, false, []], `write ${k}`)
+  }
+  assert.ok(exits.filter((x) => x === 1).length >= writes - 3, `on stopped for nearly every write: ${exits.join('')}`)
+})
+
+test('V8: backups — 0700 / 0600; a file back at its pre_sha256 loses its backup; one the user edited after asight keeps it, listed in kept_backups and as a backup-kept event; the next on does not write over the kept one; a file restored by hand before off ("already restored") loses its backup', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] })
+  const backupDir = path.join(s.home, '.asight', 'backup')
+  assert.equal(fs.statSync(backupDir).mode & 0o777, 0o700)
+  const entries = s.manifest().entries; const by = Object.fromEntries(entries.map((e) => [e.harness, e]))
+  for (const e of entries) { assert.ok(fs.existsSync(e.backup), `${e.harness} has a backup`); assert.equal(fs.statSync(e.backup).mode & 0o777, 0o600) }
+  fs.appendFileSync(by.codex.path, 'EXTRA=1\n') // edited after asight changed it
+  const r = await s.off()
+  assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
+  assert.ok(!fs.existsSync(by['claude-code'].backup), 'untouched since: back at its pre_sha256, so its backup is gone')
+  assert.deepEqual(r.receipt.changed.map((c) => [c.harness, c.result, c.backup, c.backup_dropped ?? false]).sort(), [['claude-code', 'restored', null, true], ['codex', 'reverted-not-identical', by.codex.backup, false]])
+  assert.ok(fs.existsSync(by.codex.backup), 'the edited file\'s backup stays')
+  assert.equal(fs.readFileSync(by.codex.path, 'utf8'), 'OPENAI_API_KEY=sk-test\nEXTRA=1\n', 'only asight\'s part went; the user\'s line stays')
+  assert.deepEqual(r.receipt.kept_backups.map((k) => [k.path, k.backup]), [[by.codex.path, by.codex.backup]])
+  assert.deepEqual(readManifest(s.dir).kept_backups.map((k) => [k.path, k.backup]), [[by.codex.path, by.codex.backup]], 'and in the manifest')
+  assert.ok(flowEvents(s.dir).some((e) => e.code === 'backup-kept' && e.path === by.codex.path), 'the event is written')
+  const kept = fs.readFileSync(by.codex.backup, 'utf8'), keptMtime = fs.statSync(by.codex.backup).mtimeMs
+  const on = await s.on()
+  assert.equal(on.exit, 0, JSON.stringify(on.receipt.notes))
+  assert.deepEqual([fs.readFileSync(by.codex.backup, 'utf8'), fs.statSync(by.codex.backup).mtimeMs], [kept, keptMtime], 'a second on does not write over the kept backup')
+  const fresh = readManifest(s.dir).entries.find((e) => e.harness === 'codex')
+  assert.notEqual(fresh.backup, by.codex.backup, 'it makes a new one for its own change')
+  // "already restored": the user put the file back by hand (from the backup) before off ran
+  fs.copyFileSync(fresh.backup, fresh.path)
+  const again = await s.off({ ids: ['codex'] })
+  assert.equal(again.exit, 0, JSON.stringify(again.receipt.problems))
+  assert.ok(!fs.existsSync(fresh.backup), 'the file was already back as it was: its backup is deleted')
+  assert.deepEqual(again.receipt.skipped.map((x) => x.reason), ['早已是安装前的样子'])
+})
+
+test('R12: while `on` holds the op lock (it waits for its daemon to come up) an off writes desired off at once but touches no entry until `on` has let go — and `on` sees the off within a poll instead of after fifteen seconds', async () => {
+  const s = await installedHome({ names: ['claude-code'] })
+  await s.off() // everything off; the next on is a re-on, which waits for a daemon that never comes
+  const never = async () => { throw Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) }
+  const settings = path.join(s.home, '.claude', 'settings.json')
+  let offRun = null, pauses = 0, meanwhile = null
+  const sleep = async () => {
+    if (++pauses !== 2) return
+    offRun = s.off({ deps: { request: never } })
+    await new Promise((resolve) => setTimeout(resolve, 60)) // off's turn: it can only wait
+    meanwhile = { entry: fs.readFileSync(settings, 'utf8').includes('NODE_EXTRA_CA_CERTS'), desired: s.state().harnesses['claude-code'].desired, lock: fs.existsSync(path.join(s.dir, 'op.lock')) }
+  }
+  const on = await s.on({ request: never, sleep })
+  assert.deepEqual(meanwhile, { entry: true, desired: 'off', lock: true }, 'on had written its entry and holds the lock; off had already written desired off and had not touched the entry')
+  assert.equal(on.exit, 1); assert.match(on.receipt.notes.join('\n'), /turned off while this on ran/)
+  assert.ok(pauses < 8, `on stopped at its next poll (${pauses} pauses), not after 60`)
+  const off = await offRun
+  assert.equal(off.exit, 0, JSON.stringify(off.receipt.problems))
+  assert.ok(!fs.readFileSync(settings, 'utf8').includes('NODE_EXTRA_CA_CERTS'), 'and then the entry is out')
+})
