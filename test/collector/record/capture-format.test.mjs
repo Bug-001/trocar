@@ -94,24 +94,39 @@ async function run(t, door, capture) {
   return { envelopes, flows, port }
 }
 
-test('W14 the same calls through the transparent door and through the ingress (vpn-block, own-forwarder): the envelopes are equal bar the route\'s own fields', T, async (t) => {
+test('W14 the same calls through the transparent door and through the ingress: the envelopes are equal bar the route\'s own fields', T, async (t) => {
   const base = await run(t, 'transparent', 'transparent')
   assert.equal(base.envelopes.length, 2); assert.deepEqual(base.envelopes.map((e) => [e.seq, e.is_llm_call, e.method, e.endpoint]), [[0, true, 'POST', '/v1/messages'], [1, true, 'POST', '/v1/messages']])
   assert.equal(base.envelopes[1].resp.kind, 'sse', 'the SSE call is a real stream, parsed as one'); assert.ok(base.envelopes[0].req_head_raw.startsWith('POST /v1/messages HTTP/1.1\r\n'), 'verbatim heads')
-  for (const capture of ['vpn-block', 'own-forwarder']) {
-    const via = await run(t, 'ingress', capture)
-    assert.deepEqual(via.envelopes.map(strip), base.envelopes.map(strip), `${capture}: the envelopes, minus ts*, ids, capture, dst, proc.pid, proc.exe`)
+  // One run through the ingress, not one per `capture` value: nothing reads meta.capture yet (the todo below), and `strip` removes the field, so a second run
+  // with another value would be the same run again and say nothing.
+  {
+    const capture = 'vpn-block', via = await run(t, 'ingress', capture)
+    assert.deepEqual(via.envelopes.map(strip), base.envelopes.map(strip), 'the envelopes, minus ts*, ids, capture, dst, proc.pid, proc.exe')
     assert.deepEqual(via.envelopes.map((e) => e.proc.agent), ['claude-code', 'claude-code'])
     assert.deepEqual(via.envelopes[0].dst, { address: '127.0.0.1', port: via.port, family: 4 }, 'dst is the target the proxy client asked for (a route field: not part of the comparison)')
     // the connection row of a direct upstream: the same, bar what the ingress adds. The agent's own wire bytes are the same too: the CONNECT and asight's
     // answers are not counted (4.8 §5.6).
     const [row] = via.flows, [baseRow] = base.flows
-    assert.deepEqual(stripRow(row, ['ingress', 'pid_source', 'pid_ms', 'upstream', 'bytes_down']), stripRow(baseRow, ['bytes_down']), `${capture}: the connection row, minus ingress, pid_source, pid_ms, upstream`)
+    assert.deepEqual(stripRow(row, ['ingress', 'pid_source', 'pid_ms', 'upstream', 'bytes_down']), stripRow(baseRow, ['bytes_down']), 'the connection row, minus ingress, pid_source, pid_ms, upstream')
     // bytes_down carries the leaf's ECDSA signature, whose DER length varies by a byte or two from handshake to handshake; the 39-byte \`200 Connection established\`
     // the ingress said is far outside that, so a count that included it would show here
-    assert.ok(Math.abs(row.bytes_down - baseRow.bytes_down) <= 4, `${capture}: bytes_down ${row.bytes_down} vs ${baseRow.bytes_down}: the agent's own bytes, not the ingress's answer`)
+    assert.ok(Math.abs(row.bytes_down - baseRow.bytes_down) <= 4, `bytes_down ${row.bytes_down} vs ${baseRow.bytes_down}: the agent's own bytes, not the ingress's answer`)
     assert.deepEqual([row.ingress, row.pid_source, row.pid_ms, row.upstream], [{ route: 'vb', group: 'claude-code.cli' }, 'socket-table', 4, { kind: 'direct' }])
     assert.equal('prelude' in row, false)
     assert.deepEqual(Object.keys(baseRow).filter((k) => ['ingress', 'pid_source', 'pid_ms', 'upstream'].includes(k)), [], 'the transparent row has none of them: Linux rows are unchanged')
   }
+})
+
+// What the envelope says about how the call reached the engine (4.8 §5.6, invariant 4). The ingress's meta carries `capture`, and nothing reads it yet: the envelope
+// builder writes the literal 'transparent' (collector/core/record/envelope.mjs, two places) and the `flow` that startTee hands the exchange recorder (flow.mjs) has no
+// `capture`. So today a Windows call is labelled `transparent`: the wrong label, and no other test sees it (`strip` above removes the field). Task 2(b) is those two
+// literals plus `capture: meta.capture` in that `flow`. A todo, not a skip: it runs, fails today, and goes green by itself when 2(b) is in. HARD DEPENDENCY OF TASK 8:
+// the daemon wiring that puts Windows data on disk must not land while this still carries `todo`.
+test('W14 (Task 2(b)) an envelope that came through the ingress carries the capture value its meta says: vpn-block, own-forwarder', { ...T, todo: 'Task 2(b): the envelope builder writes the literal transparent and startTee passes no meta.capture; a hard dependency of Task 8' }, async (t) => {
+  for (const capture of ['vpn-block', 'own-forwarder']) {
+    const via = await run(t, 'ingress', capture)
+    assert.deepEqual(via.envelopes.map((e) => e.capture), [capture, capture], `${capture}: the envelope says how the call reached the engine`)
+  }
+  assert.deepEqual((await run(t, 'transparent', 'transparent')).envelopes.map((e) => e.capture), ['transparent', 'transparent'], 'and a transparent call still says so')
 })

@@ -272,7 +272,7 @@ test('W13 a lookup that throws is a 502 and a loader-down record, not a hang; a 
   const reply = await s.bytes(10); assert.deepEqual([reply[0], reply[1] !== 0], [5, true], 'a failure reply, never the success a SOCKS5 client would act on'); await s.closed()
 })
 
-test('W13 engine.close() ends a half-open handshake and a health tunnel instead of waiting out their idle timeouts; in-flight flows still finish', T, async (t) => {
+test('W13 engine.close() ends a half-open handshake and a health tunnel instead of waiting out their idle timeouts (an in-flight flow is left alone: see the test below that opens one)', T, async (t) => {
   const L = await lab(t, { timing: { ingressOpenerMs: 60_000, ingressHealthIdleMs: 60_000 } })
   const h = L.client(); h.write(connectHead(`127.0.0.1:${HEALTH_PORT}`)); await h.head()
   const half = L.client(); half.write('CONNECT 127.0.0.1:1 HTTP/1.1\r\n')
@@ -295,6 +295,28 @@ test('W13 listen(): the ingress listens beside the transparent door; a redirecto
   await assert.rejects(() => mk({ lookup: async () => null }).listen({ ingress: { port: 0 } }), /no lookupIngress/)
   await assert.rejects(() => mk(createStaticRedirector()).listen({ ingress: { port: 0 } }), /token/)
   const plain = mk(createStaticRedirector()); const p = await plain.listen({}); assert.equal(p.ingressPort, undefined, 'without {ingress} nothing changes for the transparent door'); await closeWithin(plain)
+})
+
+test('W13 listen() twice on one ingress port, 127.0.0.1 first and [::1] after, as the daemon does it (D-10): one ingress behind both; a [::1] failure rejects only its own call and the 127.0.0.1 ingress goes on serving', T, async (t) => {
+  const v6 = await new Promise((r) => { const s = net.createServer(); s.once('error', () => r(false)); s.listen(0, '::1', () => s.close(() => r(true))) })
+  if (!v6) return t.skip('this machine has no IPv6 loopback')
+  const mk = () => createEngine({ redirector: { lookupIngress: async () => ({ health: true, group: 'spike' }) }, issuer: createLeafIssuer(loadCa(createCa())), store: { envelope() {}, flow() {} }, onFailure() {}, ingressToken: TOKEN })
+  const healthy = (host, port) => within(new Promise((res, rej) => { // the 200 of a health probe: the ingress answered on this address
+    const c = net.connect(port, host); let b = ''; c.on('error', rej); c.write(connectHead(`127.0.0.1:${HEALTH_PORT}`))
+    c.on('data', (d) => { b += d.toString('latin1'); if (b.includes('\r\n\r\n')) { c.destroy(); res(b.split('\r\n')[0]) } })
+  }), 4000, `the ingress on ${host}`)
+  const engine = mk(); t.after(() => closeWithin(engine))
+  const first = await engine.listen({ hosts: ['127.0.0.1'], ingress: { port: 0 } })
+  const second = await engine.listen({ hosts: ['::1'], ingress: { port: first.ingressPort } })
+  assert.deepEqual([second.ingressPort, second.port], [first.ingressPort, null], 'the same ingress port; a redirector with no lookup has no transparent door')
+  for (const host of ['127.0.0.1', '::1']) assert.equal(await healthy(host, first.ingressPort), 'HTTP/1.1 200 Connection established', host)
+  assert.equal(engine.stats().ingress.health, 2, 'one ingress, one set of counters, behind both listeners')
+  // [::1]:<port> is taken by someone else: the second call rejects, and what the first call bound is unharmed
+  const e2 = mk(); t.after(() => closeWithin(e2))
+  const a = await e2.listen({ hosts: ['127.0.0.1'], ingress: { port: 0 } })
+  const squatter = net.createServer(); await new Promise((r) => squatter.listen(a.ingressPort, '::1', r)); t.after(() => squatter.close())
+  await assert.rejects(() => e2.listen({ hosts: ['::1'], ingress: { port: a.ingressPort } }), { code: 'EADDRINUSE' })
+  assert.equal(await healthy('127.0.0.1', a.ingressPort), 'HTTP/1.1 200 Connection established', 'the 127.0.0.1 ingress still serves')
 })
 
 test('parseAuthority: host:port, [v6]:port and what is not one', () => {
