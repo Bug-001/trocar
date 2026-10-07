@@ -12,6 +12,7 @@ import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { linuxNetFacts } from '../../src/collector/arch/linux/netfacts.mjs'
 import { installedViaCli, snapshot } from '../cli/fixtures/dispatch-ctx.mjs'
 import { changedFiles } from '../cli/fixtures/on-ctx.mjs'
+import { driftCheck, newDriftState } from '../../src/netenv/adopt.mjs'
 import { claudeProc } from '../cli/fixtures/status-ctx.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -43,7 +44,7 @@ async function fakeMihomo() {
 }
 
 /** The world of a run: a recording runner (ps names the core's socket and, as the real command line does, its secret; ss lists the core's port), and a Claude Code process whose environment holds a proxy with credentials. */
-async function world() {
+async function world({ proxy = 'http://alice:pw@127.0.0.1:7897' } = {}) {
   const s = await installedViaCli(ENGINE)
   const mh = await fakeMihomo()
   seedVerge(s.home, mh.sock)
@@ -54,9 +55,9 @@ async function world() {
     if (file === 'ss') return { status: 0, stdout: 'LISTEN 0 4096 127.0.0.1:7897 0.0.0.0:* users:(("verge-mihomo",pid=11800,fd=7))', stderr: '' }
     return s.sys.exec.run(file, args, o)
   }
-  const procEnv = new Map([['HTTPS_PROXY', 'http://alice:pw@127.0.0.1:7897']])
+  const procEnv = new Map([['HTTPS_PROXY', proxy]])
   const settings = path.join(s.home, '.claude', 'settings.json')
-  const d = JSON.parse(fs.readFileSync(settings, 'utf8')); d.env.HTTPS_PROXY = 'http://alice:pw@127.0.0.1:7897'; fs.writeFileSync(settings, `${JSON.stringify(d, null, 2)}\n`)
+  const d = JSON.parse(fs.readFileSync(settings, 'utf8')); d.env.HTTPS_PROXY = proxy; fs.writeFileSync(settings, `${JSON.stringify(d, null, 2)}\n`)
   const deps = { exec, netenv: undefined, knownSocks: [], netFactsDeps: async () => ({ harnesses: descs, archFacts: linuxNetFacts }), procs: async () => [claudeProc(4121, Date.now() + 5000, procEnv)] }
   return { s, mh, calls, deps, close: () => mh.close() }
 }
@@ -94,21 +95,47 @@ test('V50 the code: what the network facts run is named in a list of readers (ss
   }
 })
 
+/** Everything a run of the commands prints, and what `on` and the daemon write, for a world whose agent has `proxy` set: [texts printed, texts written]. */
+async function everything(w) {
+  const printed = []
+  for (const argv of [['status'], ['status', 'claude-code'], ['status', '--json'], ['doctor', '--source', SRC], ['doctor', 'claude-code', '--json', '--source', SRC]]) {
+    const r = await w.s.run(argv, { deps: w.deps })
+    printed.push(r.io.text())
+  }
+  const on = await w.s.run(['on', '--yes', '--json'], { deps: w.deps }); printed.push(on.io.text())
+  const dir = path.join(w.s.home, '.asight')
+  const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]))
+  const written = [path.join(dir, 'netenv.json'), ...walk(path.join(dir, 'collector', 'flows'))].map((f) => fs.readFileSync(f, 'utf8'))
+  return { printed, written }
+}
+
 test('V52 nothing secret in anything they print or write: not a proxy credential (the agent\'s own, in its settings file and in its process\'s environment), nor the VPN\'s secret, subscription address or a node — in `status` (text and --json), `doctor` (text and --json), netenv.json and the events of flows/', async () => {
   const w = await world()
   try {
-    const printed = []
-    for (const argv of [['status'], ['status', 'claude-code'], ['status', '--json'], ['doctor', '--source', SRC], ['doctor', 'claude-code', '--json', '--source', SRC]]) {
-      const r = await w.s.run(argv, { deps: w.deps })
-      printed.push(r.io.text())
-    }
-    const on = await w.s.run(['on', '--yes', '--json'], { deps: w.deps }); printed.push(on.io.text())
-    const dir = path.join(w.s.home, '.asight')
-    const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]))
-    const written = [path.join(dir, 'netenv.json'), ...walk(path.join(dir, 'collector', 'flows'))].map((f) => fs.readFileSync(f, 'utf8'))
+    const { printed, written } = await everything(w)
     const text = [...printed, ...written].join('\n')
     for (const secret of SECRETS) assert.ok(!text.includes(secret), `${secret} must not appear`)
     assert.ok(text.includes('http://***@127.0.0.1:7897'), 'the proxy setting is there, masked (what `on` recorded of it)')
     assert.ok(printed.join('\n').includes('verge-mihomo') || printed.join('\n').includes('Clash Verge') || printed.join('\n').includes('mihomo'), 'and so is the product')
   } finally { await w.close() }
 })
+
+// A password may hold an `@` the URL does not escape (`http://carol:p@ssw0rd@host`): the credentials end at the LAST `@` of the authority, as every URL parser reads it, so the rest of the password is not a host.
+// The same password escaped (`%40`) must be hidden too. The assertion runs over everything: the text, the JSON, netenv.json, the events a drift writes (`from` / `to`) and the lines of flows/.
+for (const [label, proxy, secrets] of [['an unescaped @', 'http://carol:p@ssw0rd@127.0.0.1:7897', ['carol', 'ssw0rd', 'p@ss']], ['an escaped %40', 'http://carol:p%40ssw0rd@127.0.0.1:7897', ['carol', 'ssw0rd', 'p%40']]]) {
+  test(`V52 a password with ${label} is hidden whole: in status, doctor, \`on\`, netenv.json, flows/ and the events of a drift (from / to)`, async () => {
+    const w = await world({ proxy })
+    try {
+      const { printed, written } = await everything(w)
+      const events = []
+      const next = 'http://bob:s3@cret@proxy.new:3128'
+      const file = path.join(w.s.home, '.claude', 'settings.json'), d = JSON.parse(fs.readFileSync(file, 'utf8')); d.env.HTTPS_PROXY = next; fs.writeFileSync(file, `${JSON.stringify(d, null, 2)}\n`)
+      driftCheck({ home: w.s.home, env: {}, harnesses: descs, desired: () => 'on', appendEvent: (e) => events.push(e), state: newDriftState() })
+      assert.ok(events.some((e) => e.event === 'netenv-change'), 'the change was noticed')
+      const after = (await w.s.run(['status', 'claude-code', '--json'], { deps: w.deps })).io.text()
+      const text = [...printed, ...written, JSON.stringify(events), after].join('\n')
+      for (const secret of [...secrets, 'bob', 'cret']) assert.ok(!text.includes(secret), `${secret} must not appear`)
+      assert.ok(text.includes('http://***@127.0.0.1:7897') && text.includes('http://***@proxy.new:3128'), 'the settings are there, masked: the host and port are what is left')
+    } finally { await w.close() }
+  })
+}

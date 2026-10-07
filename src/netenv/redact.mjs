@@ -2,14 +2,21 @@
 // hash of the original value is ever kept (`adopted.<harness>.sha256`, so a changed setting is noticed without the setting being stored). Pure, imports only node:crypto.
 import crypto from 'node:crypto'
 
-const HEAD = /^([a-z][a-z0-9+.-]*:\/\/)?([^/@\s]*@)?([^?#]*)([?#].*)?$/i
+const SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i
 const DEFAULT_PORT = { http: 80, https: 443, socks4: 1080, socks5: 1080, socks5h: 1080 }
 
-/** `http://alice:pw@proxy.corp:8080/x?token=t` → `http://***@proxy.corp:8080/x`: the credentials and anything after `?` / `#` are left out; a value without credentials is shown as it is. */
+/**
+ * `http://alice:pw@proxy.corp:8080/x?token=t` → `http://***@proxy.corp:8080/x`: the credentials and anything after `?` / `#` are left out; a value without credentials is shown as it is. The credentials end at the
+ * LAST `@` of the authority (what is before the first `/`, `?` or `#`), as a URL parser reads them: a password may hold an `@` it did not escape (`p@ssw0rd`), and cutting at the first would print the rest of it.
+ */
 export function redactProxyUrl(url) {
-  const m = HEAD.exec(String(url ?? '').trim())
-  if (!m) return '***'
-  return `${m[1] || ''}${m[2] ? '***@' : ''}${m[3]}${m[4] ? '…' : ''}`
+  const text = String(url ?? '').trim()
+  const scheme = (SCHEME.exec(text) || [''])[0]
+  const rest = text.slice(scheme.length)
+  const end = rest.search(/[/?#]/), authority = end < 0 ? rest : rest.slice(0, end), after = end < 0 ? '' : rest.slice(end)
+  const at = authority.lastIndexOf('@')
+  const q = after.search(/[?#]/)
+  return `${scheme}${at >= 0 ? '***@' : ''}${authority.slice(at + 1)}${q < 0 ? after : after.slice(0, q)}${q < 0 ? '' : '…'}`
 }
 
 /** sha256 (hex) of the setting as written: what `adopted.<harness>.sha256` holds, in place of the value. */
