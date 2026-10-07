@@ -36,6 +36,18 @@ test('control: routes answer JSON; socket is 0600 in a 0700 dir; errors are JSON
   } finally { await srv.close(); fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
+test('control: a handler may refuse with a 4xx `status` (its answer is that status); any other throw — a 5xx, a non-integer, a 3xx — stays a 500', async () => {
+  const dir = runDir(); const socketPath = path.join(dir, 'asight', 'collector.sock')
+  const refuse = (status, message) => async () => { throw Object.assign(new Error(message), { status }) }
+  const srv = await startControlServer({ socketPath, routes: { 'POST /bad': refuse(400, 'unknown harness: x'), 'POST /gone': refuse(410, 'gone'), 'POST /five': refuse(503, 'busy'), 'POST /odd': refuse('400', 'text status'), 'POST /redirect': refuse(302, 'moved') } })
+  try {
+    const status = (route) => controlRequest({ socketPath, method: 'POST', path: route, body: {} }).then(() => 200, (e) => [e.status, e.message])
+    assert.deepEqual(await status('/bad'), [400, '400: unknown harness: x'])
+    assert.deepEqual(await status('/gone'), [410, '410: gone'])
+    for (const route of ['/five', '/odd', '/redirect']) assert.equal((await status(route))[0], 500, route)
+  } finally { await srv.close(); fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
 test('control: a second server on a live socket refuses; a stale socket file is replaced', async () => {
   const dir = runDir(); const socketPath = path.join(dir, 'asight', 'collector.sock')
   const a = await startControlServer({ socketPath, routes: { 'GET /status': async () => ({ who: 'a' }) } })

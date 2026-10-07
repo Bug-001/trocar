@@ -1,9 +1,9 @@
-// install.mjs — per-user `asight collector install|uninstall` (RFC 4.6 §安装清单与卸载, §身份与信任「信任注入」,
+// install.mjs — per-user `asight on` / `asight collector install` (RFC 4.6 §安装清单与卸载, §身份与信任「信任注入」,
 // D36, D37④; acceptance S10, T10, T11). No sudo: everything lives under the operator's ~/.asight/collector and in
 // the agents' own config entries; the machine-wide helper is `asight setup-helper` (arch). Nothing here knows a
 // harness or an OS: the descriptors declare their entries (`inject`), the caller passes `scan` / `match` (the
-// process table) from daemon.mjs. Install lists every file before touching one; uninstall undoes only what the
-// manifest lists, keeps captures unless purgeData, and is safe to run twice or after a crashed install.
+// process table) from daemon.mjs. Install lists every file before touching one. The way back — `asight off` and
+// `asight uninstall` — is src/off/ (the entries, the daemon stop, the lock) and src/cli/uninstall.mjs (1.6 §1.4, R3).
 import fs from 'node:fs'
 import net from 'node:net'
 import tls from 'node:tls'
@@ -13,16 +13,21 @@ import { collectorHome } from '../paths.mjs'
 import { loadOrCreateCa, caPaths, readCa } from './core/tls/ca-store.mjs'
 import { checkCa } from './core/tls/ca.mjs'
 import { planTrust } from './core/trust/plan.mjs'
-import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, removeOwnedFile, undoEntry, removeEmptyDirs, manifestPath, sweepTemps, describeEntry } from './core/trust/journal.mjs'
-import { EVENT, CODE, UNTIL_TEXT } from './core/codes.mjs'
-import { rewriteBundles } from './core/trust/bundle.mjs'
-import { controlRequest } from './core/control.mjs'
+import { livenessOf } from './core/registry.mjs'
+import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256 } from './core/trust/journal.mjs'
+import { EVENT, CODE } from './core/codes.mjs'
+import { controlRequest, controlSocketPath } from './core/control.mjs'
 import { readText, readTextOrError } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
-import { lockState, procIdentity } from '../health/read.mjs'
+import { runEventWriter } from '../off/events.mjs'
+import { backupDir, opLockFile, standalonePath } from '../off/paths.mjs'
+import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
+import { readStateFile, emptyState, setDesired, writeStateAtomic } from '../off/state.mjs'
+import { newReceipt } from '../off/schema.mjs'
+import { OFF_VERSION } from '../off/manifest.mjs'
+import { writeStandalone, checkStandalone } from '../off/standalone.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-const pidAlive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' } }
 const listDir = (d) => { try { return fs.readdirSync(d) } catch { return [] } }
 
 // An engine port that is free on both loopback families now (4.6 OPEN「按实例分配」, gate G3): recorded in the
@@ -42,8 +47,14 @@ export async function freeEnginePort({ tries = 20, listen = bindOnce } = {}) {
   throw new Error(`no port was free on both 127.0.0.1 and [::1] in ${tries} tries`)
 }
 
-function refuseRoot(verb) {
-  if (typeof process.getuid === 'function' && process.getuid() === 0) throw new Error(`asight collector ${verb}: run it as the user whose agents you capture, not as root (D36)`)
+// 1.6 R3: a manifest of a version this build does not read is never acted on — "already installed", or entries undone by guessing what its
+// fields mean. Plain Error: the caller records it as install-error / uninstall-error.
+function refuseUnsupported(dir, m) {
+  if (m && m.unsupported) throw new Error(`the install manifest ${manifestPath(dir)} is version ${JSON.stringify(m.version)}, which this build does not read (it reads 1 and 2); nothing was changed. Use the asight that wrote it, or run "asight off", which leaves what it does not know`)
+}
+
+function refuseRoot(verb, getuid = processUid) {
+  if (getuid() === 0) throw new Error(`asight ${verb === 'on' ? verb : `collector ${verb}`}: run it as the user whose agents you capture, not as root (D36); 用你自己的账号跑`)
 }
 
 // onPlan(list) is called once with every file install will write or change, BEFORE anything is written (4.6, user
@@ -71,12 +82,6 @@ async function recorded(dir, where, fn) {
   }
 }
 
-export async function installCollector({ home = os.homedir(), ...opts } = {}) {
-  refuseRoot('install')
-  const dir = collectorHome(path.join(home, '.asight')) // collectorHome takes the asight home
-  return recorded(dir, 'install', (run) => install(dir, { home, ...opts, run }))
-}
-
 // The roots a combined bundle starts from (4.6 「合并包」): Node's own, and the OS bundle the arch names.
 export function readRoots(osRootsFile, { nodeRoots = tls.rootCertificates } = {}) {
   let osText = ''
@@ -95,20 +100,57 @@ export function daemonEnv(env, dir) {
   return { env: { NODE_EXTRA_CA_CERTS: v }, note: null }
 }
 
-// unit: the arch's per-user autostart unit as { path, links, text(env), enable, disable, stop, removeWants } (null: none /
-// --no-unit); links = what enabling it creates.
-async function install(dir, { home, env = process.env, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), freePort = freeEnginePort, onPlan = () => {}, osRootsFile = null, roots = null, unit = null, run = null }) {
-  const prior = readManifest(dir)
-  if (prior && prior.complete) {
-    // installed — but "already installed" only when its CA is usable (D-4): a CA that cannot be read or used is said
-    const c = readCa({ dir: path.join(dir, 'ca') })
-    const st = c.error ? { ok: false, which: c.which, reason: c.error } : checkCa(c)
-    if (!st.ok) throw Object.assign(new Error(`the collector is installed, but its CA is unusable (${st.which}: ${st.reason}); run "asight collector uninstall", then "asight collector install"`), { code: 'ca-invalid' })
-    return { already: true, manifest: prior, plan: null }
+// ── `asight on` (RFC 1.6 §1.6, R6, R9, R12; D39) ────────────────────────────────────────────────────────────────────────────────────────
+// `on` is the install: the first one writes the CA, the combined bundles, the entries and the unit; every later one finds what is there and writes
+// only what is not. Per planned item the manifest and the disk say which (journal.mjs judgeEntry / judgeOwned): written (new), intact (never
+// rewritten — its `installed_at`, inode and mtime stay, or the agents already captured would be judged config-after-start and stop being
+// captured), resumed (an intent a crash left), or changed by the user since (reported, left). The order is R9's: what an entry points at (the
+// CA, the bundles, plugins, the shim) before the entry, the entries, the unit, and the links last — by the daemon, on `POST /on`.
+//   planOn      reads: the plan to print and to judge by (no write, no confirmation)
+//   turnOn      the command: plan → confirm → desired state first → write → unit → daemon → receipt
+//   installCollector   the install half alone, as the harness and lab tests set an agent up (no state.json, no daemon, no confirmation)
+
+const OP_LOCK_WAIT_MS = 10_000 // 1.6 R12: another state-changing command (an `off`, say) is waited for at most this long
+const nodeFs = fs
+const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
+const act = (a) => a !== 'skip-intact' && a !== 'skip-user-changed'
+const shortLine = (l) => String(l).split(' # ')[0].trim()
+const RESTART_REASONS = new Set(['config-after-start', 'env-frozen', 'start-time-unknown', 'no-marker', 'kimi-not-via-shim']) // 「重启后才会被采集」(1.6 §1.1)
+const DAEMON_CMD = 'asight daemon' // 1.6 §2: the autostart unit's ExecStart is this command (units written before the rename run its alias `collector start`)
+
+/** What the receipt says an entry did, in one phrase — the same words in the dry run (from the preview) and in the real run (from the entry). */
+export function changeText(e, prior = null) {
+  if (e.kind === 'text') {
+    if (e.vars) return `顶部加 asight 哨兵块(${Object.keys(e.vars).join(', ')})${prior ? `;注释掉你原有的 ${Object.keys(prior).join(', ')}` : ''}`
+    return `加一行(${shortLine(e.line)})`
   }
-  if (prior && prior.pending_bundles) throw new Error(`an earlier uninstall kept combined bundles that running agents still use (${prior.files.filter((f) => f.role === 'bundle').map((f) => f.path).join(', ')}); run "asight collector uninstall" again once they exit`)
-  if (prior && prior.uninstall_left) throw new Error(`an earlier uninstall could not undo ${prior.uninstall_left.length} item(s) (${prior.uninstall_left.map((l) => l.path).join(', ')}); fix them, run "asight collector uninstall" again, then install`)
-  if (prior) throw new Error(`an earlier install did not finish (${manifestPath(dir)}); run "asight collector uninstall" first`)
+  return prior != null ? `改 ${(e.keys || []).join('.')}(原值 ${prior})` : `加 ${(e.keys || []).join('.')}`
+}
+
+// An error that is not a failure of asight: an `off` asked for while this `on` ran (R12: off wins), or a step that has to stop the run.
+const stop = (message) => Object.assign(new Error(message), { stopsRun: true })
+
+/** What `on` would do, read from the disk and the manifest, written nowhere. Refusals come first, so a refused plan writes nothing at all (not even the
+ *  manifest): a file that is not JSON, a dangling link, a plugin file already there, a manifest this build cannot read, a CA that cannot be used.
+ *  → { first, newPaths, steps, targets, skipped, restart, changed, created, unchanged, manifest, ca, files, owned, entries, unit?, watch, notes,
+ *      records, events, _ } — the first fields are what is printed and receipted (`files` / `owned` / `entries` / `unit` only what would be written);
+ *  `_` is what the writing needs (the manifest as read, the draft, the roots). `ids`: the harness code ids named, or null for every one found. */
+export async function planOn({ home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), osRootsFile = null, roots = null, unit = null, fs = nodeFs, now = () => new Date() } = {}) {
+  const dir = collectorHome(path.join(home, '.asight'))
+  let prior
+  try { prior = readManifest(dir, fs) } catch (e) { // not written over: it is the only list of what asight changed; `off` has the way back by asight's own marks (R3)
+    throw new Error(`the install manifest cannot be read (${String((e && e.message) || e)}); asight on does not write over it. Run "asight off" (it undoes asight's changes by their marks, after a yes, or at once with --yes); if asight on still refuses, the file is damaged and nothing else lists what asight changed: move it aside (mv '${manifestPath(dir)}' '${manifestPath(dir)}.damaged'), then run asight on`)
+  }
+  refuseUnsupported(dir, prior)
+  if (prior && prior.complete) {
+    // installed — but only usable when its CA is (D-4): a CA that cannot be read or used is said, with how to start over
+    const c = readCa({ dir: path.join(dir, 'ca'), fs })
+    const st = c.error ? { ok: false, which: c.which, reason: c.error } : checkCa(c)
+    if (!st.ok) throw Object.assign(new Error(`the collector is installed, but its CA is unusable (${st.which}: ${st.reason}); run "asight uninstall", then "asight on"`), { code: 'ca-invalid' })
+  }
+  if (prior && prior.pending_bundles) throw new Error(`an earlier uninstall kept combined bundles that running agents still use (${prior.files.filter((f) => f.role === 'bundle' || f.role === 'trust-file').map((f) => f.path).join(', ')}); run "asight uninstall" again once they exit`)
+  if (prior && prior.uninstall_left) throw new Error(`an earlier uninstall could not undo ${prior.uninstall_left.length} item(s) (${prior.uninstall_left.map((l) => l.path).join(', ')}); fix them, run "asight uninstall" again, then "asight on"`)
+  const descs = ids ? harnesses.filter((d) => ids.includes(d.name)) : harnesses
   const ca = caPaths(path.join(dir, 'ca'))
   const facts = await scan()
   const envMap = new Map(Object.entries(env).filter(([, v]) => typeof v === 'string'))
@@ -117,267 +159,364 @@ async function install(dir, { home, env = process.env, osName, harnesses, scan =
     readText: (f) => readText(f), readTextOrError: (f) => readTextOrError(f), readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir, collectorDir: dir, caPem: ca.pem,
   })
   const R = roots || readRoots(osRootsFile)
-  const draft = planTrust({ descriptors: harnesses, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
-  // every per-file refusal too (a dangling link, a file that is not JSON, a patch file that is not a list, a plugin
-  // file already there) — before onPlan, before any write
+  const draft = planTrust({ descriptors: descs, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
   const daemon = unit ? daemonEnv(env, dir) : null
   if (daemon && daemon.note) draft.notes.push(daemon.note)
-  const preview = draft.entries.map((e) => (e.kind === 'text' ? previewTextEntry({ file: e.path, edit: e }) : previewJsonKey({ file: e.path, keys: e.keys, value: e.value })))
-  for (const o of draft.owned) if (fs.existsSync(o.path)) throw new Error(`${o.harness}: ${o.path} already exists; asight will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`)
-  if (unit && fs.existsSync(unit.path)) throw new Error(`${unit.path} already exists; asight will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`) // before anything is written (review 4 #7)
-  onPlan({
-    manifest: manifestPath(dir),
-    ca: [ca.key, ca.pem],
-    files: draft.files.map((f) => ({ harness: f.harness, path: f.path, sources: f.sources })),
-    owned: draft.owned.map((o) => ({ harness: o.harness, path: o.path, role: o.role })),
-    entries: draft.entries.map((e, i) => ({ harness: e.harness, path: e.path, ...(preview[i].real_path ? { real_path: preview[i].real_path } : {}), ...(e.kind === 'text' ? { what: describeEntry(e) } : { keys: e.keys, value: e.value }) })),
-    ...(unit ? { unit: { path: unit.path, env: daemon.env, links: unit.links || [] } } : {}),
+
+  // per item: written, intact, resumed, or changed by the user since (R9)
+  const steps = []
+  const entryJ = draft.entries.map((e) => {
+    const j = judgeEntry({ manifest: prior, planned: e, fs })
+    steps.push({ harness: e.harness, path: e.path, kind: 'entry', action: j.action, ...(j.why ? { why: j.why } : {}) })
+    return j
+  })
+  // every per-file refusal too, for what is to be written (a dangling link, a file that is not JSON, a patch file that is not a list) — before onPlan, before any write
+  const preview = draft.entries.map((e, i) => (entryJ[i].action !== 'write' ? null : e.kind === 'text' ? previewTextEntry({ file: e.path, edit: e, fs }) : previewJsonKey({ file: e.path, keys: e.keys, value: e.value, fs })))
+  const fileJ = draft.files.map((f) => {
+    const j = judgeOwned({ manifest: prior, file: f.path, fs })
+    steps.push({ harness: f.harness, path: f.path, kind: f.role, action: j.action, ...(j.why ? { why: j.why } : {}) })
+    return j
+  })
+  const ownedJ = draft.owned.map((o) => {
+    const j = judgeOwned({ manifest: prior, file: o.path, fs })
+    if (j.action === 'write' && fs.existsSync(o.path)) throw new Error(`${o.harness}: ${o.path} already exists; asight will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`)
+    steps.push({ harness: o.harness, path: o.path, kind: o.role, action: j.action, ...(j.why ? { why: j.why } : {}) })
+    return j
+  })
+  const unitJ = unit ? judgeOwned({ manifest: prior, file: unit.path, planned: sha256(Buffer.from(unit.text(daemon.env))), fs }) : null
+  if (unitJ && unitJ.action === 'write' && fs.existsSync(unit.path)) throw new Error(`${unit.path} already exists; asight will not write over it (left by an earlier install whose manifest is gone? remove it, then install again)`) // before anything is written (review 4 #7)
+  if (unitJ) steps.push({ harness: null, path: unit.path, kind: 'unit', action: unitJ.action, ...(unitJ.why ? { why: unitJ.why } : {}) })
+
+  // who is on, and who has nothing to do here (no entry, no file, not installed before): said, with the descriptor's own reason
+  const installed = new Set([...((prior && prior.entries) || []), ...((prior && prior.files) || [])].map((x) => x.harness).filter(Boolean))
+  const withItems = new Set([...draft.entries, ...draft.files, ...draft.owned].map((x) => x.harness))
+  const targets = descs.map((d) => d.name).filter((n) => withItems.has(n) || installed.has(n))
+  const reasonOf = (name) => draft.records.filter((r) => r.harness === name).map((r) => r.reason.replace(`${name}: `, '')).join('; ') || `no ${name} configuration was found on this machine: nothing to change for it`
+  const skipped = [
+    ...descs.map((d) => d.name).filter((n) => !targets.includes(n)).map((n) => ({ what: n, reason: reasonOf(n) })),
+    ...steps.filter((s) => s.action === 'skip-user-changed').map((s) => ({ what: s.path, reason: `${s.why}; run "asight off", then "asight on", to write it again` })),
+  ]
+  // what is written, and what the user has not yet confirmed (1.6 §1.6: the paths beyond the manifest's `confirmed_paths`; an installed one counts as confirmed)
+  const known = new Set([...((prior && prior.confirmed_paths) || []), ...((prior && prior.entries) || []).map((x) => x.path), ...((prior && prior.files) || []).filter((x) => x.role !== 'ca-key' && x.role !== 'ca-cert').map((x) => x.path)])
+  const first = known.size === 0
+  const newPaths = steps.filter((s) => act(s.action) && s.kind !== 'unit' && !known.has(s.path)).map((s) => s.path)
+  const writing = steps.some((s) => act(s.action))
+  const touched = new Set(steps.filter((s) => act(s.action) && s.harness).map((s) => s.harness))
+  const restart = facts.map((f) => ({ f, agent: match(f).agent })).filter((x) => x.agent && touched.has(x.agent)).map((x) => ({ harness: x.agent, pid: x.f.pid })) // what is running now was started before its entry
+  const entryRow = (e, i) => ({ harness: e.harness, path: e.path, ...(preview[i] && preview[i].real_path ? { real_path: preview[i].real_path } : entryJ[i].entry && entryJ[i].entry.real_path ? { real_path: entryJ[i].entry.real_path } : {}), ...(e.kind === 'text' ? { what: describeEntry(e) } : { keys: e.keys, value: e.value }) })
+  const day = now().toISOString().slice(0, 10)
+  const caNew = !(fs.existsSync(ca.key) && fs.existsSync(ca.pem))
+  const runDir = path.join(dir, 'run', 'trust')
+  return {
+    first, newPaths, steps, targets, skipped, restart, writing, installed: [...installed],
+    changed: draft.entries.map((e, i) => ({ e, j: entryJ[i], i })).filter((x) => act(x.j.action)).map((x) => ({ path: x.e.path, change: changeText(x.e, x.j.entry ? x.j.entry.prior_value : preview[x.i].prior), backup: null })),
+    created: [...(prior ? [] : [manifestPath(dir)]), ...(caNew ? [ca.key, ca.pem] : []), ...steps.filter((s) => act(s.action) && s.kind !== 'entry').map((s) => s.path)],
+    unchanged: steps.filter((s) => s.action === 'skip-intact').map((s) => s.path),
+    // what onPlan prints (formatPlan): every file this run would write or change, and nothing it would leave alone — the manifest only when it is
+    // written (the first on, or an on that writes something), the CA only when it is not there yet, the runtime directory only when it is made, the backup
+    // directory when a user file is to be changed (R2); turnOn adds `state` (state.json, when it writes it)
+    manifest: !prior || writing ? manifestPath(dir) : null,
+    ca: caNew ? [ca.key, ca.pem] : [],
+    run: fs.existsSync(runDir) || !writing ? null : runDir,
+    backups: draft.entries.some((e, i) => act(entryJ[i].action)) ? backupDir(home) : null,
+    files: draft.files.filter((f, i) => act(fileJ[i].action)).map((f) => ({ harness: f.harness, path: f.path, sources: f.sources })),
+    owned: draft.owned.filter((o, i) => act(ownedJ[i].action)).map((o) => ({ harness: o.harness, path: o.path, role: o.role })),
+    entries: draft.entries.map((e, i) => [e, i]).filter(([, i]) => act(entryJ[i].action)).map(([e, i]) => entryRow(e, i)),
+    ...(unit && act(unitJ.action) ? { unit: { path: unit.path, env: daemon.env, links: unit.links || [] } } : {}),
     watch: draft.watch,
     notes: draft.notes,
     records: path.join(dir, 'flows'), // install notes are kept here as install-note events (D38)
-    events: path.join(dir, 'flows', `${new Date().toISOString().slice(0, 10)}.ndjson`), // install-note lines are appended here (D-28)
-  })
+    events: path.join(dir, 'flows', `${day}.ndjson`), // install-note lines are appended here (D-28)
+    _: { dir, prior, ca, descs, ctxFor, R, daemon, draft, unit },
+  }
+}
 
-  const m = newManifest()
-  m.dirs = missingDirs(dir)
-  m.dirs.push(...missingDirs(ca.dir).filter((d) => !m.dirs.includes(d)))
+// The manifest the writing starts from: the one on disk, or — the first time — a new one that lists the directories asight is about to create and
+// the CA files before the CA is minted, and is saved at once (so a crash before the first user file leaves a manifest `uninstall` can use).
+function openManifest({ dir, plan, now, fs }) {
+  const { prior, ca } = plan._
+  if (prior) return prior
+  const m = newManifest(now())
+  m.dirs = missingDirs(dir, fs)
+  m.dirs.push(...missingDirs(ca.dir, fs).filter((d) => !m.dirs.includes(d)))
   m.files.push({ path: ca.key, role: 'ca-key' }, { path: ca.pem, role: 'ca-cert' })
-  saveManifest(dir, m) // creates dir 0700; the CA is listed before it is minted
-  const { certPem } = loadOrCreateCa({ dir: ca.dir })
-  m.engine_port = await freePort()
-  const plan = planTrust({ descriptors: harnesses, ctxFor, caCertPem: certPem, collectorDir: dir, roots: R })
-  if (daemon && daemon.note) { plan.notes.push(daemon.note); plan.records.push({ code: CODE.unitEnvNotCarried, reason: daemon.note }) }
-  if (JSON.stringify(plan.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${plan.paths.join(', ')}); only the CA was written; run "asight collector uninstall", then install again`)
-  m.planned = plan.paths
-  m.watched = plan.watch.map((w) => ({ ...w, existed_before: fs.existsSync(w.path) })) // before anything of the plan is written
-  saveManifest(dir, m)
+  saveManifest(dir, m, fs)
+  return m
+}
+
+// Every write of an `on`, in R9's order. `guard()` runs before each one (R12: it throws when an `off` asked for one of the harnesses in the meantime).
+// The manifest is saved only when it changed, so a second `on` on a complete install rewrites nothing. → { manifest, final, written }.
+async function writeInstall(args) {
+  const written = { entries: [], files: [], owned: [], unit: null, caCreated: false, intact: [], userChanged: [] }
+  try { return await writeInstallSteps(args, written) } catch (e) { if (e && e.stopsRun) e.written = written; throw e } // what was done before the stop is said
+}
+async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePort, now, fs, guard = () => {}, confirmed = false }, written) {
+  const { ca, descs, ctxFor, R, daemon, draft, unit } = plan._
+  const body = () => JSON.stringify({ ...m, upgraded_from: undefined })
+  let saved = body()
+  const save = () => { if (body() !== saved) { saveManifest(dir, m, fs); saved = body() } }
+  guard()
+  const caThere = fs.existsSync(ca.key) && fs.existsSync(ca.pem)
+  const { certPem } = loadOrCreateCa({ dir: ca.dir, fs })
+  written.caCreated = !caThere
+  if (m.engine_port == null) m.engine_port = await freePort()
+  const final = planTrust({ descriptors: descs, ctxFor, caCertPem: certPem, collectorDir: dir, roots: R })
+  if (daemon && daemon.note) { final.notes.push(daemon.note); final.records.push({ code: CODE.unitEnvNotCarried, reason: daemon.note }) }
+  if (JSON.stringify(final.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${final.paths.join(', ')}); only the CA was written; run "asight uninstall", then "asight on"`)
+  m.planned = final.paths
+  // what `off` needs to judge, from this manifest alone, which live process may hold what asight wrote for a harness (4.6 撤销顺序): written before any user
+  // file changes. Only what is missing is added — a manifest an older asight wrote has none for its harnesses, and `on` is how it gets them (4.6 「判活快照」)
+  const named = new Set([...m.entries, ...m.files].map((x) => x.harness).filter(Boolean))
+  const touched = new Set([...final.entries, ...final.files, ...final.owned].map((x) => x.harness))
+  for (const d of harnesses) if ((touched.has(d.name) || named.has(d.name)) && !m.liveness[d.name]) m.liveness[d.name] = livenessOf(d, osName)
+  const seen = new Set((m.watched || []).map((w) => w.path)) // `existed_before` was recorded when asight first came: a path an agent wrote since is not "there before"
+  m.watched = [...(m.watched || []), ...final.watch.filter((w) => !seen.has(w.path)).map((w) => ({ ...w, existed_before: fs.existsSync(w.path) }))]
+  save()
   fs.mkdirSync(path.join(dir, 'run', 'trust'), { recursive: true, mode: 0o700 }) // plugins write their marker here, daemon up or not
-  for (const f of plan.files) writeOwnedFile({ dir, manifest: m, harness: f.harness, role: f.role, file: f.path, data: f.data, sources: f.sources, extra: f.role === 'bundle' ? { user_fps: f.user_fps, roots_fp: f.roots_fp } : {} })
+  for (const f of final.files) {
+    if (judgeOwned({ manifest: m, file: f.path, fs }).action === 'skip-intact') { written.intact.push(f.path); continue }
+    guard()
+    writeOwnedFile({ dir, manifest: m, harness: f.harness, role: f.role, file: f.path, data: f.data, sources: f.sources, extra: f.role === 'bundle' ? { user_fps: f.user_fps, roots_fp: f.roots_fp } : {}, now: now(), fs })
+    written.files.push(f.path)
+  }
   // a plugin or shim exists before the entry that loads it (a dsh patch row naming a missing file only warns, still)
-  for (const o of plan.owned) writeOwnedFile({ dir, manifest: m, harness: o.harness, role: o.role, file: o.path, data: o.data, mode: o.mode, exclusive: true })
-  for (const e of plan.entries) {
-    if (e.kind === 'text') applyTextEntry({ dir, manifest: m, harness: e.harness, file: e.path, edit: e })
-    else applyJsonKey({ dir, manifest: m, harness: e.harness, file: e.path, keys: e.keys, value: e.value })
+  for (const o of final.owned) {
+    const j = judgeOwned({ manifest: m, file: o.path, fs })
+    if (j.action === 'skip-intact') { written.intact.push(o.path); continue }
+    guard()
+    writeOwnedFile({ dir, manifest: m, harness: o.harness, role: o.role, file: o.path, data: o.data, mode: o.mode, exclusive: j.action === 'write', now: now(), fs })
+    written.owned.push(o.path)
   }
-  // the per-user autostart unit (arch: systemd --user on Linux), listed like every other file, then enabled --now; a
-  // refused enable is recorded (D38), the daemon can still be started by hand
-  // The manifest is complete before the unit starts the daemon, which refuses an incomplete one (review 3 #8).
-  if (unit) writeOwnedFile({ dir, manifest: m, role: 'unit', file: unit.path, data: unit.text(daemon.env), mode: 0o644, exclusive: true })
-  m.complete = true
-  saveManifest(dir, m)
-  let unitFailed = null
+  for (const e of final.entries) {
+    const j = judgeEntry({ manifest: m, planned: e, fs })
+    if (j.action === 'skip-intact') { written.intact.push(e.path); continue }
+    if (j.action === 'skip-user-changed') { written.userChanged.push({ path: e.path, why: j.why }); continue }
+    guard()
+    const entry = e.kind === 'text'
+      ? applyTextEntry({ dir, manifest: m, harness: e.harness, file: e.path, edit: e, home, now: now(), fs }) // a backup of the file first (1.6 R2): no backup, no change
+      : applyJsonKey({ dir, manifest: m, harness: e.harness, file: e.path, keys: e.keys, value: e.value, home, now: now(), fs })
+    if (entry) written.entries.push(entry)
+  }
+  // the per-user autostart unit (arch: systemd --user on Linux), listed like every other file. The manifest is complete before the unit starts the
+  // daemon, which refuses an incomplete one (review 3 #8).
   if (unit) {
-    const r = unit.enable()
-    if (r.code !== 0) unitFailed = `${unit.path} is written but "systemctl --user enable --now" failed (${r.err || `exit ${r.code}`}); start the daemon with "asight collector start", or enable the unit once systemd --user runs`
+    const text = unit.text(daemon.env)
+    const j = judgeOwned({ manifest: m, file: unit.path, planned: sha256(Buffer.from(text)), fs })
+    if (j.action !== 'skip-intact') { guard(); writeOwnedFile({ dir, manifest: m, role: 'unit', file: unit.path, data: text, mode: 0o644, exclusive: j.action === 'write', now: now(), fs }); written.unit = j.action }
   }
-  // 4.6 安装 / 卸载不静默 (D-28): everything the command prints is also an install-note in flows/, for the board, where
-  // status finds it; a line that cannot be written is added to the printed notes, never dropped, and never fails the install
-  const put = (rec) => { try { appendEvent(dir, { ...rec, run }) } catch (w) { plan.notes.push(`not recorded (${String((w && w.message) || w)}): ${rec.reason}`) } }
-  for (const e of m.entries.filter((x) => x.prior_value)) {
+  m.complete = true
+  if (confirmed) m.confirmed_paths = [...new Set([...(m.confirmed_paths || []), ...final.paths, ...(unit ? [unit.path] : [])])] // what the operator was shown and said yes to (1.6 §1.6)
+  save()
+  return { manifest: m, final, written }
+}
+
+// 4.6 安装 / 卸载不静默 (D-28): everything the command prints is also an install-note in flows/, for the board, where status finds it; a line that cannot
+// be written is added to the printed notes, never dropped, and never fails the run. → the `put` the caller writes more with.
+function noteRun({ dir, run, final, written, notes, fs, log = null }) {
+  const put = runEventWriter({ dir, base: { run }, notes, fs, ...(log ? { log } : {}) }) // a line that cannot be written: stderr first, the receipt's notes, then a `log-gap` when one can again (R11)
+  for (const e of written.entries.filter((x) => x.prior_value)) {
     const prior = e.keys ? `${e.path} ${e.keys.join('.')} was ${e.prior_value}; it now points at ${e.value}` : `${e.path} held ${Object.entries(e.prior_value).map(([k, v]) => `${k}=${v}`).join(', ')}; asight commented it out (uninstall restores it)`
     put({ event: EVENT.installNote, where: 'install', kind: 'prior-value', harness: e.harness, path: e.path, reason: prior })
   }
-  for (const r of plan.records) put({ event: EVENT.installNote, where: 'install', kind: 'note', ...r })
-  if (unitFailed) { plan.notes.push(unitFailed); put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed }) }
-  const counts = { entries: m.entries.length, files: m.files.filter((f) => f.role === 'trust-file').length, notes: plan.notes.length }
-  put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome: 'installed', counts, reason: `installed: ${counts.entries} trust entr${counts.entries === 1 ? 'y' : 'ies'} and ${counts.files} trust file(s) written, ${counts.notes} note(s)` })
-  return { already: false, manifest: m, plan }
+  for (const r of final.records) put({ event: EVENT.installNote, where: 'install', kind: 'note', ...r })
+  return put
 }
 
-// 4.6 §安装清单与卸载 step 1: stop this user's daemon and wait until it AND its helper are gone (the helper's
-// links are unpinned and go with it). The daemon is looked for at the runtime socket and at the socket its lock
-// names (XDG_RUNTIME_DIR unset, or logind removed /run/user/<uid>): a daemon that steers must never be orphaned.
-// A lock whose daemon is gone (pid dead, or its start time / boot id is another process's: D-25) is stale: never
-// kill by it. A live daemon that answers on no socket is not killed either: uninstall stops with nothing removed
-// and says what to do.
-export async function stopDaemon({ socketPath, lockFile, request = controlRequest, alive = pidAlive, identity = procIdentity, kill = process.kill.bind(process), stopUnit = null, timeoutMs = 5000 }) {
-  const ls = lockState({ file: lockFile, alive, identity })
-  const lock = ls.lock || null
-  const unreadable = ls.state === 'unknown' // a lock cut short by a crash or power loss: whether a daemon runs is unknown
-  let answered = false
-  for (const sock of [...new Set([socketPath, lock && lock.socket].filter(Boolean))]) {
-    try { await request({ socketPath: sock, method: 'GET', path: '/status', timeoutMs: 2000 }); answered = true; break } catch (e) {
-      if (e.code !== 'ENOENT' && e.code !== 'ECONNREFUSED') throw e
+// The legacy shape of the install half: what the harness tests, the test rigs and `collector install` (before `on`) call. Never a confirmation, never state.json
+// or a daemon; `already` says every item was in place (no onPlan, nothing written, no event). A unit is enabled with `unit.enable()` (enable --now).
+export async function installCollector({ home = os.homedir(), ...opts } = {}) {
+  refuseRoot('install')
+  const dir = collectorHome(path.join(home, '.asight'))
+  return recorded(dir, 'install', async (run) => {
+    const fs = opts.fs || nodeFs
+    const now = opts.now || (() => new Date())
+    const plan = await planOn({ home, ...opts })
+    if (plan._.prior && plan._.prior.complete && !plan.writing) return { already: true, manifest: plan._.prior, plan: null }
+    const onPlan = opts.onPlan || (() => {})
+    onPlan(plan)
+    const m = openManifest({ dir, plan, now, fs })
+    const { manifest, final, written } = await writeInstall({ dir, home, plan, m, osName: opts.osName, harnesses: opts.harnesses, freePort: opts.freePort || freeEnginePort, now, fs })
+    let unitFailed = null
+    if (opts.unit) {
+      const r = opts.unit.enable()
+      if (r.code !== 0) unitFailed = `${opts.unit.path} is written but "systemctl --user enable --now" failed (${r.err || `exit ${r.code}`}); start the daemon with "${DAEMON_CMD}", or enable the unit once systemd --user runs`
     }
+    const put = noteRun({ dir, run, final, written, notes: final.notes, fs })
+    if (unitFailed) { final.notes.push(unitFailed); put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed }) }
+    const counts = { entries: manifest.entries.length, files: manifest.files.filter((f) => f.role === 'trust-file').length, notes: final.notes.length }
+    put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome: 'installed', counts, reason: `installed: ${counts.entries} trust entr${counts.entries === 1 ? 'y' : 'ies'} and ${counts.files} trust file(s) written, ${counts.notes} note(s)` })
+    return { already: false, manifest, plan: final }
+  })
+}
+
+/** `asight on` (1.6 §1.1, §1.6, R1, R6, R9, R12): plan → confirm → desired state first → write → unit → daemon → receipt. Library form of the command: `runOnCli`
+ *  (src/cli/on.mjs) parses the arguments and prints; everything the world gives is injected (`fs`, `request`, `now`, `getuid`, `helperState`, `linger` / `lingerRead`,
+ *  `sleep`), so a test runs it in a sandbox HOME. Refuses root by throwing (R7); everything else is a receipt: `exit` 0 done · 1 not done or a problem ·
+ *  2 not in a terminal without a yes (the plan is in the receipt, nothing was written).
+ *    ids        harness code ids, or null for every one found   confirm(plan) → true | false | null (null: nobody can be asked)   onPlan(plan): print it
+ *    unit       the autostart unit (arch/linux/unit.mjs userUnit), or null (`--no-unit`)   autostart  false: `start` it, never `enable` (`--no-autostart`)
+ *    request    the control socket's client (default: controlRequest at $XDG_RUNTIME_DIR/asight/collector.sock, or `socketPath`)
+ *  → { receipt, manifest, plan, exit }. */
+export async function turnOn(opts = {}) {
+  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, osRootsFile = null, roots = null, unit = null, autostart = true, freePort = freeEnginePort, onPlan = () => {}, confirm = null, dryRun = false, networkEdited = null, request = controlRequest, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS } = opts
+  refuseRoot('on', getuid)
+  const dir = collectorHome(path.join(home, '.asight'))
+  const stateF = path.join(dir, 'state.json')
+  const username = (() => { try { return user || os.userInfo().username } catch { return String(env.USER || '') } })()
+  const fresh = () => ({ ...newReceipt('on'), user: username, relayed: { closing: 0, waiting: 0, cut: 0 }, undo: ['asight off', 'asight uninstall', standalonePath(home)], standalone: standalonePath(home), commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'], log: path.join(dir, 'flows') }) // on relays nothing: zeros on purpose; the undo list and the four commands are what V29 asks the first receipt to carry (Task 8 makes the standalone file)
+  // A receipt of a run that wrote nothing and could not go on: no change, no file made, and no way to undo or log to point at — what is not there (R1: the receipt is what was done).
+  // `commands` (the four a user types) stay: they are true whether or not this run wrote anything.
+  const unwritten = (r) => { const { standalone: _unwritten, ...rest } = r; return { ...rest, changed: [], created: [], undo: [], log: null } }
+  // The helper (D36) is what the real `on` needs and the plan does not: a missing one stops the real run before anything is written, but `--dry-run` still shows the plan — it is what
+  // a user reads before deciding to `sudo asight setup-helper` — and exits 0 (R6, V7) with the stop said in the receipt (`blocked`).
+  let helperBlock = null
+  if (helperState) {
+    const h = await helperState()
+    if (h && h.ok === false) helperBlock = `the capability helper is missing or not the right version (${h.reason || 'not usable'}); nothing was changed. Run: sudo asight setup-helper`
   }
-  if (!answered) {
-    if (unreadable) throw new Error(`${lockFile} is unreadable, so whether a collector daemon still runs is unknown; stop any (pgrep -f "asight collector start"), delete ${lockFile}, then run uninstall again; nothing was removed`)
-    if (ls.state === 'running' || ls.state === 'unresponsive') throw new Error(`a collector daemon may still be running (pid ${lock.pid} in ${lockFile}${ls.state === 'unresponsive' ? `, lock not refreshed for ${Math.round(ls.age_ms / 1000)} s` : ''}) but answers on no control socket; stop it (kill ${lock.pid}), or delete ${lockFile} if that pid is not an asight collector, then run uninstall again; nothing was removed`)
-    return 'none'
-  }
-  if (!lock || !lock.pid) throw new Error('a collector daemon answers but left no lock file; stop it by hand, nothing was removed')
-  if (ls.state === 'stale') throw new Error(`a collector daemon answers, but ${lockFile} names a process that is not it (${ls.why}); stop the daemon by hand (pgrep -f "asight collector start"), nothing was removed`) // never kill a reused pid
-  if (stopUnit) stopUnit() // a unit-managed daemon is stopped through systemd, which then knows it is meant to be down
-  if (alive(lock.pid)) kill(lock.pid, 'SIGTERM') // no unit, or this daemon was started by hand (`asight collector start`)
-  const pids = [lock.pid, lock.helper_pid].filter(Boolean)
-  for (const end = Date.now() + timeoutMs; pids.some(alive);) {
-    if (Date.now() > end) throw new Error(`the collector daemon (pid ${pids.join(', ')}) is still running; nothing was removed`)
-    await sleep(25)
-  }
-  return 'stopped'
-}
-
-export async function uninstallCollector({ home = os.homedir(), ...opts } = {}) {
-  refuseRoot('uninstall')
-  const dir = collectorHome(path.join(home, '.asight')) // collectorHome takes the asight home
-  return recorded(dir, 'uninstall', (run) => uninstall(dir, { home, ...opts, run }))
-}
-
-// 4.6 撤销顺序: (1) the config entries (JSON keys, dotenv blocks) → (2) combined bundles → (3) asight-ca.pem and the
-// append trust files → (4) launch shims, rc lines, dsh patch rows, plugins (each loading line before the file it
-// loads); files an agent wrote because of asight's plugin are reported, never deleted → (5) report running agents,
-// restart none. The manifest goes only when everything it lists is undone: an entry uninstall could not undo stays
-// in it (D38: recorded, and `asight collector uninstall` exits non-zero) so the next run finds it again.
-const stepOf = (e) => (e.kind === 'text' && e.format !== 'dotenv-block' ? 4 : 1)
-const NOT_UNDONE = new Set(['left-unparsable', 'left-link', 'error'])
-
-// what each undo result other than a plain restore means for the user (4.6 撤销结果)
-const UNDO_NOTE = {
-  'already-restored': 'already back as it was before install: nothing to undo',
-  'reverted-not-identical': 'asight\'s key was removed, but the file is not byte for byte what it was before install (it was edited since)',
-  missing: 'the file is gone: nothing of asight\'s is left in it',
-  'left-user-value': 'the key now holds a value the user set: left as it is',
-}
-
-// May a live process of `harness` have read asight's entry for it (4.6 撤销顺序 step 2 (a), step 5)? It started after
-// that harness's earliest install time (its entries and the files asight owns for it), or the harness re-reads its
-// entry while running (`trust.rereadsEntry`: alive is enough), or its start time is unknown.
-function mayHaveRead(f, harness, m, byName) {
-  const d = byName.get(harness)
-  if (d && d.trust && d.trust.rereadsEntry) return true
-  const since = Math.min(...[...m.entries, ...m.files].filter((e) => e.harness === harness).map((e) => Date.parse(e.installed_at)).filter(Number.isFinite))
-  return f.startedAt == null || !Number.isFinite(since) || f.startedAt >= since
-}
-
-// Uninstall step 2 (4.6): has a live process of this uid loaded this bundle? (a) one of the bundle's harness that may
-// have read its entry; (b) its environ names the bundle (a child that inherited it). Judged from the manifest and
-// the process table only: the daemon is stopped and the entries are undone by now.
-function bundleUsers(bundle, m, procs, match, byName) {
-  const pids = []
-  for (const f of procs) {
-    let env = null
-    try { env = f.env } catch { /* gone, or not ours to read */ }
-    const inherited = env && [...env.values()].some((v) => typeof v === 'string' && v.includes(bundle.path))
-    const own = match(f).agent === bundle.harness && mayHaveRead(f, bundle.harness, m, byName)
-    if (own || inherited) pids.push(f.pid)
-  }
-  return pids
-}
-
-async function uninstall(dir, { env = process.env, purgeData = false, scan = async () => [], match = () => ({ agent: null }), stop = null, harnesses = [], osRootsFile = null, roots = null, unit = null, run = null }) {
-  const runtime = env.XDG_RUNTIME_DIR ? path.join(env.XDG_RUNTIME_DIR, 'asight') : null
-  const report = { daemon: null, entries: [], removed: [], residue: [], kept_bundles: [], still_trusting: [], kept_captures: !purgeData, notes: [], left: [] } // left: what could not be undone, {path, harness, result} each (D-18)
-  const byName = new Map(harnesses.map((d) => [d.name, d]))
-  const failed = [] // failure events, written after any purge so they survive it
-  const noted = [] // uninstall-note events (kept captures only: --purge-data asked for flows/ to go)
-  const m = readManifest(dir)
-  const unitFile = m && m.files.find((f) => f.role === 'unit')
-  report.daemon = await (stop || (() => stopDaemon({ socketPath: runtime && path.join(runtime, 'collector.sock'), lockFile: path.join(dir, 'lock'), stopUnit: unitFile && unit ? () => unit.stop() : null })))()
-  const rm = (p) => { sweepTemps(p); if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); report.removed.push(p) } }
-  const left = { entries: [], files: [], bundles: [] }
-  if (!m) report.notes.push('nothing is installed for this user')
-  else {
-    const undo = (e) => {
-      let r
-      try { r = undoEntry(e) } catch (err) { r = { path: e.path, harness: e.harness, result: 'error', reason: String((err && err.message) || err) } }
-      report.entries.push(r)
-      if (NOT_UNDONE.has(r.result)) {
-        left.entries.push(e)
-        report.left.push({ path: e.path, harness: e.harness, result: r.result })
-        const why = r.result === 'left-unparsable' ? `${e.path} is no longer valid JSON; asight's ${describeEntry(e)} may still be in it` : r.reason
-        failed.push({ code: r.result === 'error' ? CODE.entryNotUndone : r.result, harness: e.harness, path: e.path, reason: why }) // left-unparsable / left-link are D38 codes
-      } else if (r.result === 'reverted-not-identical') noted.push({ code: CODE.notIdentical, harness: e.harness, path: e.path, reason: `${e.path} was edited after install: only asight's ${describeEntry(e)} was taken out${r.deleted ? ' and the file, holding nothing else, removed' : ''}; the file is not byte for byte what it was before install, the rest is as the user left it` })
-      else if (r.result !== 'restored') noted.push({ code: r.result, harness: e.harness, path: e.path, reason: UNDO_NOTE[r.result] || r.result }) // already-restored, missing, left-user-value
+  if (helperBlock && !dryRun) return { receipt: unwritten({ ...fresh(), ok: false, notes: [helperBlock] }), manifest: null, plan: null, exit: 1 }
+  // `lingerRead()` → { state, error? } (src/collector/arch/linux/redirector.mjs) says why when it cannot be read; `linger()` → true | false | null is the older form
+  const lingerNow = () => { try {
+    if (lingerRead) { const r = lingerRead(); return r.state === true || r.state === false ? { linger: r.state } : { linger: 'unknown', linger_reason: r.error || 'the linger state could not be read' } }
+    const v = linger ? linger() : undefined
+    return v === true || v === false ? { linger: v } : { linger: 'unknown', linger_reason: linger ? 'the linger state could not be read (/var/lib/systemd/linger)' : 'nothing reads it here' }
+  } catch (e) { return { linger: 'unknown', linger_reason: String((e && e.message) || e) } } }
+  return recorded(dir, 'install', async (run) => {
+    const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, osRootsFile, roots, unit, fs, now })
+    // the copy of the undo side that needs no source tree (R3) is one more file asight writes: listed in the plan and the dry run when it is missing or not what src/off generates now
+    const standaloneCheck = checkStandalone({ home, version: OFF_VERSION, fs })
+    if (!standaloneCheck.ok) { plan.created = [...plan.created, standaloneCheck.path]; plan.standalone = standaloneCheck.path }
+    // A version 1 file (what `collector on|off` wrote before D39) is read for the harnesses installed before and the ones this run turns on, the same set
+    // the guard below reads it for — and is written back as version 2 here, before the first guard: the guard must never see a file the daemon's reader
+    // and this one read differently (1.6 §1.5, R12)
+    const known = [...new Set([...plan.installed, ...plan.targets])]
+    const readState = () => readStateFile(stateF, { fs, installed: known, now: now() })
+    const stateRead = (() => { try { return { ...readState(), error: null } } catch (e) { return { state: emptyState(), from: null, error: e } } })()
+    const need = plan.targets.filter((id) => !(stateRead.state.harnesses[id] && stateRead.state.harnesses[id].desired === 'on'))
+    const stateWrite = need.length > 0 || stateRead.from === 1 // an unreadable file is `need` too: every target is not on
+    const r = { ...fresh(), ...lingerNow(), harnesses: plan.targets, changed: plan.changed, created: [...plan.created, ...(stateWrite ? [stateF] : [])], skipped: [...plan.skipped], restart: plan.restart, unchanged: plan.unchanged, notes: [...plan.notes] }
+    if (stateRead.error) r.notes.push(`${stateF} could not be read (${String(stateRead.error.message || stateRead.error)}); it is written again`)
+    if (!plan.targets.length) return { receipt: unwritten({ ...r, ok: false, notes: [...r.notes, 'no agent asight can capture was found: nothing was changed. Install one, then run asight on again'] }), manifest: plan._.prior, plan, exit: 1 }
+    const named = !!ids && plan.skipped.some((s) => ids.includes(s.what)) // a harness asked for by name that has nothing to install: not done
+    // the proxy fields the user edited since the last `on` (1.6 §9.5): asked about like an extra file (R6); a routing that owns none has none
+    const edited = networkEdited && plan.targets.length ? await networkEdited(plan.targets) : []
+    if (edited.length) r.notes.push(...edited.map((e) => `你改过的代理设置: ${e.harness} 的 ${e.where || '代理字段'} 现在是 ${e.now ?? '空'}(asight 上次接上时是 ${e.was ?? '空'});on 会把它接成新的上游,再指回 asight`))
+    if (dryRun) return { receipt: { ...r, dry_run: true, ok: !named, ...(helperBlock ? { blocked: helperBlock, notes: [...r.notes, `${helperBlock.replace('nothing was changed. ', '')} (a real asight on stops there)`] } : {}) }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
+    if (plan.writing || stateWrite || edited.length) onPlan({ ...plan, state: stateWrite ? stateF : null, edited })
+    if (plan.first || plan.newPaths.length || edited.length) {
+      const verdict = confirm ? await confirm(plan) : null
+      if (verdict == null) return { receipt: { ...r, ok: false, planned: true, needs_yes: true, notes: [...r.notes, '不在终端里,没有 --yes:只打印了计划,什么都没改。看过计划之后加 --yes 再跑一次'] }, manifest: plan._.prior, plan, exit: 2 }
+      if (verdict === false) return { receipt: { ...r, ok: false, planned: true, declined: true, notes: [...r.notes, '没有确认:什么都没改'] }, manifest: plan._.prior, plan, exit: 1 }
     }
-    for (const e of [...m.entries].reverse()) if (stepOf(e) === 1) undo(e)
-    // step 2: every combined bundle becomes the same file without the asight CA, so a process still holding it keeps
-    // reaching its own relay; one a live process may have loaded stays (reported), the next uninstall judges again
-    const bundles = m.files.filter((x) => x.role === 'bundle')
-    const procs = bundles.length ? await scan() : []
-    // a bundle that is there but cannot be read (or written) was NOT rewritten: it still holds the asight CA, so when a live
-    // process may have loaded it that is an item that could not be undone — a failure, exit non-zero, the manifest kept —
-    // never "kept, without the asight CA" (D38; 4.6 安装 / 卸载不静默). One nobody holds is removed all the same.
-    const rewrite = { rebuilt: [], failed: [] }
-    if (bundles.length) { const R = roots || readRoots(osRootsFile); rewriteBundles({ dir, manifest: m, nodeRoots: R.node, osRootsText: R.osText, withCa: false, report: rewrite }) }
-    const notRewritten = new Map(rewrite.failed.map((x) => [x.path, x.error]))
-    for (const b of bundles) {
-      const pids = bundleUsers(b, m, procs, match, byName)
-      if (!pids.length) { rm(b.path); continue }
-      left.bundles.push(b)
-      const why = notRewritten.has(b.path) ? String((notRewritten.get(b.path) && (notRewritten.get(b.path).code || notRewritten.get(b.path).message)) || notRewritten.get(b.path)) : null
-      report.kept_bundles.push({ path: b.path, harness: b.harness, pids, ...(why ? { holds_ca: true, error: why } : {}) })
-      if (why) {
-        report.left.push({ path: b.path, harness: b.harness, result: 'error' })
-        failed.push({ code: CODE.entryNotUndone, harness: b.harness, path: b.path, reason: `${b.path} still holds the asight CA: it could not be rewritten without it (${why}), and a running process may have loaded it (pid ${pids.join(', ')}); it is kept as it is — fix the file, then run uninstall again` })
-      } else noted.push({ code: CODE.bundleKept, harness: b.harness, path: b.path, reason: `${b.path} is kept, without the asight CA, for running processes that may have loaded it (pid ${pids.join(', ')}); run uninstall again once they exit` })
+
+    // ── confirmed: from here on, writes — one state-changing command at a time (R12): the lock is held to the end of this callback (the try below), and
+    // the desired state is read again under it, so what an `off` that has just finished left is the base of what is written, not the read of a minute ago
+    let lock
+    try { lock = await acquireOpLock({ file: opLockFile(home), waitMs: lockWaitMs, fs }) } catch (e) {
+      if (e && e.code === LOCK_BUSY) return { receipt: unwritten({ ...r, ok: false, notes: [...r.notes, String((e && e.message) || e)] }), manifest: plan._.prior, plan, exit: 1 }
+      throw e
     }
-    for (const f of m.files.filter((x) => x.role === 'trust-file' || x.role === 'ca-cert')) rm(f.path)
-    for (const e of [...m.entries].reverse()) if (stepOf(e) === 4) undo(e)
-    for (const f of [...m.files].reverse().filter((x) => x.role === 'plugin' || x.role === 'shim')) {
-      try {
-        const r = removeOwnedFile(f)
-        if (r.result === 'removed') report.removed.push(f.path)
-        if (r.changed) noted.push({ code: CODE.harnessNote, harness: f.harness, path: f.path, reason: `${f.path}, asight's ${f.role}, had been changed since install; it was removed all the same` })
-      } catch (err) {
-        left.files.push(f); report.left.push({ path: f.path, harness: f.harness, result: 'error' })
-        failed.push({ code: CODE.entryNotUndone, harness: f.harness, path: f.path, reason: `${f.path}, asight's ${f.role}, could not be removed: ${String((err && err.message) || err)}` })
+    try {
+    const m = openManifest({ dir, plan, now, fs })
+    // the desired state goes first (R9, R12): an `off` that lands meanwhile writes the same file, and every write below reads it again
+    const locked = (() => { try { return readState() } catch { return stateRead } })()
+    const needNow = plan.targets.filter((id) => !(locked.state.harnesses[id] && locked.state.harnesses[id].desired === 'on'))
+    if (needNow.length) writeStateAtomic(stateF, setDesired(locked.state, needNow, 'on', now()), { fs })
+    else if (stateWrite) writeStateAtomic(stateF, locked.state, { fs }) // version 1 → 2, nothing turned on: "on since" stays where it was
+    // the undo that needs no source tree is in place before the first thing it undoes (R3): written on every `on`, nothing when it already is what src/off generates. A copy that
+    // cannot be written stops the run here, before one file of the agents' is touched — the way back first, like the backup of a file (R2) — and `recorded` writes the failure (R11)
+    let standalone
+    try { standalone = writeStandalone({ home, version: OFF_VERSION, fs }) } catch (e) {
+      throw Object.assign(new Error(`${standalonePath(home)}, the undo that works without the source tree, could not be written (${String((e && e.message) || e)}); no file of the agents' was changed — put that right, then run asight on again`), { code: e && e.code })
+    }
+    const guard = () => {
+      let st
+      try { st = readState().state } catch (e) { throw stop(`${stateF} cannot be read (${String((e && e.message) || e)}), so it is not known whether an off was asked; stopped (1.6 R12)`) }
+      const off = plan.targets.filter((id) => !(st.harnesses[id] && st.harnesses[id].desired === 'on'))
+      if (off.length) throw stop(`${off.join(', ')} was turned off while this on ran (${stateF}); stopped, the off wins (1.6 R12). What was written is a resumable install: asight on finishes it`)
+    }
+    const notes = r.notes
+    const problems = []
+    let written = null, final = null, halt = false
+    try { ({ final, written } = await writeInstall({ dir, home, plan, m, osName, harnesses, freePort, now, fs, guard, confirmed: true })) } catch (e) {
+      if (!e.stopsRun) throw e
+      written = e.written; halt = true
+      problems.push(e.message)
+    }
+    const put = noteRun({ dir, run, final: final || { records: [] }, written: written || { entries: [] }, notes, fs, log: opts.log })
+    const receipt = {
+      ...r,
+      changed: (written ? written.entries : []).map((e) => ({ path: e.path, change: changeText(e, e.prior_value), backup: e.backup ?? null })),
+      created: [...(plan._.prior ? [] : [manifestPath(dir)]), ...(stateWrite ? [stateF] : []), ...(standalone.written ? [standalone.path] : []), ...(written && written.caCreated ? plan._.ca ? [plan._.ca.key, plan._.ca.pem] : [] : []), ...(written ? [...written.files, ...written.owned, ...(written.unit && unit ? [unit.path] : [])] : [])],
+      unchanged: written ? written.intact : [],
+    }
+    const finish = (outcome, reason) => {
+      receipt.ok = !problems.length && !named && !(written && written.userChanged.length) // an entry the user changed is left, and not in effect: not "done"
+      const counts = { entries: m.entries.length, changed: receipt.changed.length, notes: notes.length + problems.length }
+      put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome, counts, reason }) // before the notes are taken: a result line that cannot be written adds its own "not recorded" (R11)
+      receipt.notes = [...notes, ...problems]
+      return { receipt, manifest: m, plan, exit: receipt.ok ? 0 : 1 }
+    }
+    if (halt) { put({ event: EVENT.failure, where: 'install', code: 'install-error', reason: problems[0] }); return finish('stopped', `on stopped: ${problems[0]}`) }
+
+    // ── the unit and the daemon: started when nothing answers, never started a second time (拉起不是重启, R8) ──
+    const sock = socketPath || (() => { try { return controlSocketPath({ env }) } catch { return null } })()
+    const probe = async () => {
+      if (!sock) return { up: false, why: 'XDG_RUNTIME_DIR is not set, so there is no control socket to ask' }
+      try { await request({ socketPath: sock, method: 'GET', path: '/status', timeoutMs: 2000 }); return { up: true } } catch (e) {
+        if (e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED')) return { up: false }
+        return { up: false, stuck: String((e && e.message) || e) }
       }
     }
-    for (const w of m.watched || []) {
-      if (w.existed_before || !fs.existsSync(w.path)) continue
-      report.residue.push(w.path)
-      noted.push({ code: CODE.residue, harness: w.harness, path: w.path, reason: `${w.path} appeared after install (${w.why}); it may serve the user's own plugins too, so asight did not remove it` })
+    const checked = (fn) => { try { fn() } catch (e) { if (!e.stopsRun) throw e; problems.push(e.message); halt = true } }
+    const was = await probe()
+    let up = was.up, started = false, unitFailed = null
+    if (was.stuck) { problems.push(`a daemon holds the control socket but does not answer (${was.stuck}); run "asight off", then "asight on" (off stops a stuck daemon, 1.6 §1.4)`); halt = true }
+    else if (unit) {
+      checked(() => guard())
+      if (!halt) {
+        if (written.unit === 'rewrite' && typeof unit.reload === 'function') unit.reload() // a unit file rewritten under a loaded unit
+        const rr = autostart ? unit.enable({ now: !was.up }) : (was.up ? null : unit.start())
+        started = !was.up
+        if (rr && rr.code !== 0) {
+          unitFailed = `${unit.path} is written but "systemctl --user ${autostart ? `enable${was.up ? '' : ' --now'}` : 'start'}" failed (${rr.err || `exit ${rr.code}`}); start the daemon with "${DAEMON_CMD}", or enable the unit once systemd --user runs`
+          notes.push(unitFailed); problems.push(unitFailed); put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed })
+        } else if (!was.up) {
+          for (let i = 0; i < 60 && !up && !halt; i++) { up = (await probe()).up; if (!up) { await pause(250); checked(() => guard()) } } // an off that lands while the daemon starts is seen within a poll, not after 15 s (R12)
+          if (!up && !halt) {
+            const why = `the unit was ${autostart ? 'enabled and started' : 'started'}, but no daemon answers on ${sock}; look at "systemctl --user status ${UNIT_NAME_HINT}" and the board's capture health`
+            problems.push(why); put({ event: EVENT.failure, where: 'start', code: 'start-failed', reason: why })
+          }
+        }
+      }
+    } else if (!up) notes.push(`没有自启单元,守护进程没在跑:运行 ${DAEMON_CMD}(它按 state.json 里的期望态挂引流)${was.why ? `;${was.why}` : ''}`)
+    const pid = readLockPid(dir, fs)
+    receipt.daemon = { state: up ? 'running' : 'not-running', started: started && up, ...(pid ? { pid } : {}) }
+    receipt.unit = unit ? { path: unit.path, written: written.unit || false, autostart, enabled: autostart && !unitFailed } : null
+    // the links last: the daemon attaches on this request, and answers with what the kernel confirms
+    if (up && !halt) checked(() => guard())
+    if (up && !halt) {
+      let status = null
+      try { status = await request({ socketPath: sock, method: 'POST', path: '/on', body: { harnesses: plan.targets } }) } catch (e) {
+        const why = `the daemon did not take the on request (${String((e && e.message) || e)})`
+        problems.push(why); put({ event: EVENT.failure, where: 'control', code: 'control-error', reason: why })
+      }
+      if (status) {
+        receipt.restart = (status.agents || []).filter((a) => a && !a.trusted && !a.off && RESTART_REASONS.has(a.reason) && plan.targets.includes(a.agent)).map((a) => ({ harness: a.agent, pid: a.pid, reason: a.reason }))
+        receipt.capture = { desired: status.desired ?? null, actual: status.actual ?? null }
+        if (status.actual !== 'on') {
+          const why = status.helper && status.helper.ok === false ? `the capability helper speaks protocol ${status.helper.proto}, this daemon expects ${status.helper.expected_proto}; run: sudo asight setup-helper`
+            : status.degraded ? `the helper is down (${status.degraded.reason}); nothing is steered, agents connect directly`
+              : status.ca && status.ca.ok === false ? `the collector CA is unusable (${status.ca.which}: ${status.ca.reason}); nothing is steered` : `the kernel does not confirm the links (actual: ${status.actual}); nothing is steered, agents connect directly`
+          problems.push(why); put({ event: EVENT.failure, where: 'switch', code: 'state-mismatch', reason: why })
+        }
+      }
     }
-    // step 5: report, never restart — only a process that may have read the entry; until: 'restart' (read at start: CC,
-    // Kimi shim, plugins), or what the descriptor says of this process (a function of its facts; null: it never read
-    // asight's entry, e.g. a kimi not started through the shim); each one is kept as an uninstall-note (review 3 #6)
-    const injected = new Set([...m.entries, ...m.files].map((x) => x.harness).filter(Boolean))
-    for (const f of await scan()) {
-      const a = match(f).agent
-      if (!a || !injected.has(a) || !mayHaveRead(f, a, m, byName)) continue
-      const au = (byName.get(a) || {}).trust?.afterUninstall
-      const until = typeof au === 'function' ? au(f, { collectorDir: dir, readText, home: env.HOME || os.homedir() }) : (au || 'restart')
-      if (!until) continue
-      report.still_trusting.push({ pid: f.pid, agent: a, until })
-      noted.push({ code: CODE.stillTrusting, harness: a, pid: f.pid, reason: `pid ${f.pid} (${a}) trusts the asight CA ${UNTIL_TEXT[until] || UNTIL_TEXT.restart}` })
-    }
-    // the autostart unit (4.6 order: after the trust entries, before the CA key): disabled, removed, its wants/ links
-    if (unitFile) {
-      if (unit) { const r = unit.disable(); if (r && r.code !== 0) failed.push({ code: CODE.unitNotDisabled, path: unitFile.path, reason: `systemctl --user disable failed (${r.err || `exit ${r.code}`}); the unit file is removed all the same, run "systemctl --user daemon-reload" once systemd --user runs` }) }
-      try { if (removeOwnedFile(unitFile).result === 'removed') report.removed.push(unitFile.path) } catch (err) { left.files.push(unitFile); report.left.push({ path: unitFile.path, harness: unitFile.harness || null, result: 'error' }); failed.push({ code: CODE.entryNotUndone, path: unitFile.path, reason: `${unitFile.path} could not be removed: ${String((err && err.message) || err)}` }) }
-      if (unit) report.removed.push(...unit.removeWants((p, err) => failed.push({ code: CODE.unitNotDisabled, path: p, reason: `${p}, the autostart link, could not be removed: ${String((err && err.message) || err)}` })))
-    }
-    // the CA private key and the runtime state (with the trust markers) last
-    for (const f of m.files.filter((x) => x.role === 'ca-key')) rm(f.path)
-    for (const p of [path.join(dir, 'run'), path.join(dir, 'lock'), path.join(dir, 'state.json'), runtime]) if (p) rm(p)
-  }
-  for (const n of noted) report.notes.push(n.reason) // the command prints every one of them
-  // then the data the operator asked to drop — also after an earlier plain uninstall left the captures behind
-  if (purgeData) {
-    for (const n of listDir(dir)) if (/^capture-.*\.ndjson$/.test(n)) rm(path.join(dir, n))
-    for (const sub of ['flows', 'audit', 'replays']) rm(path.join(dir, sub))
-  }
-  // after the purge, so --purge-data never deletes what this run could not undo; a line that cannot be written is
-  // said in the command's output (and so on stderr's caller), never dropped, and never stops the uninstall
-  const put = (rec) => { try { appendEvent(dir, { ...rec, run }) } catch (w) { report.notes.push(`not recorded (${String((w && w.message) || w)}): ${rec.reason}`) } }
-  for (const f of failed) put({ event: EVENT.failure, where: 'uninstall', ...f })
-  // notes too — except after --purge-data that left nothing: the operator asked for an empty collector directory, and the
-  // command's output has every one of them (4.6 安装 / 卸载不静默)
-  if (m && !(purgeData && !report.left.length)) {
-    for (const n of noted) put({ event: EVENT.uninstallNote, where: 'uninstall', kind: n.code, ...n })
-    const counts = { entries: report.entries.length, left: report.left.length, still_trusting: report.still_trusting.length, notes: noted.length }
-    put({ event: EVENT.uninstallNote, where: 'uninstall', kind: 'result', outcome: counts.left ? 'left' : 'uninstalled', counts,
-      reason: counts.left ? `uninstalled, except ${counts.left} item(s) that could not be undone; the install manifest is kept` : `uninstalled: ${counts.entries} trust entr${counts.entries === 1 ? 'y' : 'ies'} undone, ${counts.notes} note(s)` })
-  }
-  if (m) {
-    if (report.left.length || left.bundles.length) { // keep exactly what is left; the next uninstall finds it (4.6: the manifest goes last)
-      saveManifest(dir, { ...m, complete: false, ...(report.left.length ? { uninstall_left: report.left, uninstalled_at: new Date().toISOString() } : {}), ...(left.bundles.length ? { pending_bundles: true } : {}), planned: [], watched: [], entries: left.entries, files: [...left.files, ...left.bundles] })
-      return report
-    }
-    removeEmptyDirs(m.dirs.filter((d) => d !== dir)) // e.g. ca/
-    fs.rmSync(manifestPath(dir), { force: true }) // the manifest goes last: a second run still finds what the first left
-    sweepTemps(manifestPath(dir))
-    removeEmptyDirs(m.dirs)
-  } else if (purgeData) removeEmptyDirs([dir])
-  return report
+    const wrote = written.entries.length || written.files.length || written.owned.length || written.unit
+    return finish(wrote ? 'installed' : 'on', problems.length ? `on did not finish: ${problems[0]}` : `on: ${plan.targets.join(', ')}`)
+    } finally { lock.release() }
+  })
 }
+
+const UNIT_NAME_HINT = 'asight-collector.service'
+function readLockPid(dir, fs) { try { return JSON.parse(fs.readFileSync(path.join(dir, 'lock'), 'utf8')).pid ?? null } catch { return null } }

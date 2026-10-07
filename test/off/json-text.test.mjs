@@ -1,7 +1,7 @@
-// test/collector/core/json-text.test.mjs — minimal, verified text edits of one JSON key (4.6 「标记与安装」).
+// test/off/json-text.test.mjs — minimal, verified text edits of one JSON key (4.6 「标记与安装」).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { setKey, removeKey, reverseOps, applyOps, scanJson } from '../../../src/collector/core/trust/json-text.mjs'
+import { setKey, removeKey, reverseOps, applyOps, scanJson } from '../../src/off/json-text.mjs'
 
 const K = ['env', 'CA_FILE']
 const SETTINGS = '{\n    "model": "x",\n    "env": {\n        "A": "1"\n    },\n    "hooks": [1, {"b": null}]\n}\n'

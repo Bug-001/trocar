@@ -16,7 +16,7 @@
 import path from 'node:path'
 import { X509Certificate } from 'node:crypto'
 import { certsOf, composeBundle } from './bundle.mjs'
-import { SENTINEL } from './text-edit.mjs'
+import { SENTINEL } from '../../../off/text-edit.mjs'
 import { CODE } from '../codes.mjs'
 
 // Login-environment locations: a CA variable there makes every program of the user trust asight (vetoed, D37④).

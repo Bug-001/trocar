@@ -59,7 +59,7 @@ async function boardOver(sourcePath) {
 }
 
 test('the CLI resolves a default source instead of passing null', async () => {
-  const src = fs.readFileSync(path.join(import.meta.dirname, '..', 'bin', 'asight.mjs'), 'utf8');
+  const src = fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'cli', 'legacy-commands.mjs'), 'utf8');
   const serveVerb = src.slice(src.indexOf("case 'serve'"), src.indexOf("case 'monitor'"));
   assert.doesNotMatch(serveVerb, /sourcePath:\s*flag\('--source',\s*process\.env\.ASIGHT_SOURCE\s*\|\|\s*null\)/,
     'serve passed a bare null as the source default, so `asight serve` read nothing at all while '

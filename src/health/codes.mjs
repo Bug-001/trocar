@@ -65,10 +65,38 @@ export const CODES_BY_PART = Object.freeze({
 })
 export const CODES = Object.freeze([...new Set(Object.values(CODES_BY_PART).flat())])
 
+// What `asight off` writes (RFC 1.6 R1 / R2 / R3, D39⑦). A block of its own, below CODES and apart from the lists above (which carry D40's
+// `retention` names since the merge): feat/win-collector adds blocks to this file too, so folding the blocks into WHERE, STATE_EVENTS and
+// CODES_BY_PART waits until it has merged (1.6 §闭集); `sets` below adds them.
+// src/off/names.mjs holds the same names (src/off may import nothing outside itself); test/health/codes.test.mjs holds the two equal.
+export const OFF_WHERE = Object.freeze(['off'])
+export const OFF_EVENTS = Object.freeze(['off-note']) // a state change (the last one of a run carries kind:'result'), not a failure
+export const OFF_CODES = Object.freeze(['backup-failed', 'backup-kept', 'undone-by-marker'])
+
+// What the network topology and `asight doctor` write and say (RFC 1.6 §9.7, D39⑩, D43). A block of its own, like the one above (folded into the lists with it, after feat/win-collector has merged); `sets` below adds it.
+// `netenv-change` is a state change (the topology moved: a proxy setting, the machine's network environment); `failure` with `where: 'netenv'` is written for the codes in NET_FAILURE_CODES, and for
+// `proxy-changed` only when it leaves a harness that is on uncaptured (proxy mode, where the changed entry bypasses asight). D43 withdrew the VPN-block codes: the new collector writes nothing into a VPN.
+// `route-loop`, `forwarder-down` and `egress-differs` are shared with 4.7 / 4.8: each is defined here, once.
+export const NET_WHERE = Object.freeze(['netenv'])
+export const NET_EVENTS = Object.freeze(['netenv-change'])
+const ROUTE_LOOP = 'route-loop', FORWARDER_DOWN = 'forwarder-down', EGRESS_DIFFERS = 'egress-differs' // the names shared with 4.7 / 4.8: written once, used by name below
+const NET_FAILURE_OWN = ['not-routed', 'proxy-dead', 'proxy-unsupported', 'elevated-agent', 'upstream-unreachable', 'shim-not-on-path', 'not-via-entry']
+export const NET_CODES = Object.freeze([...NET_FAILURE_OWN, 'proxy-changed', 'netenv-changed', 'opt-in-needed', 'needs-admin', 'linger-off', 'system-proxy-pac', 'other-redirector', 'fake-ip', 'inferred-behaviour', 'cause-unknown', ROUTE_LOOP, FORWARDER_DOWN, EGRESS_DIFFERS])
+export const NET_FAILURE_CODES = Object.freeze([...NET_FAILURE_OWN, ROUTE_LOOP, FORWARDER_DOWN])
+// the net names `status` gives as the reason an agent is not captured (1.6 §9.7); the proxy-mode reasons of 4.8 §12 (`form-unsupported`, `fallback-active`, `form-path-unknown`) are the Windows branch's
+const NET_STATUS_REASONS = Object.freeze(['not-routed', 'proxy-changed', 'elevated-agent', 'upstream-unreachable', 'opt-in-needed', 'shim-not-on-path', 'not-via-entry', ROUTE_LOOP, FORWARDER_DOWN])
+
+// What `asight status` says of an agent that is not captured (RFC 1.6 §2 / V32, 4.6 §记录「事件与码的名字」): one name from this closed set, whatever the reason. asight's own, then every trust
+// reason above (the resolver's and the harnesses' own). A block of its own, as the one above is (folded into the lists with it, after feat/win-collector has merged). `negative-cache` is also a code of the engine.
+export const STATUS_OWN_REASONS = Object.freeze(['desired-off', 'entry-missing', 'entry-changed', 'link-missing', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'negative-cache'])
+export const STATUS_REASONS = Object.freeze([...new Set([...STATUS_OWN_REASONS, ...NET_STATUS_REASONS, ...TRUST_REASONS])])
+
 const ERRNO = /^(E[A-Z0-9_]+|Z_[A-Z_]+)$/ // Node's own error codes (errno, ERR_*, zlib's Z_*), written as they are
-const sets = { nc: new Set([...NOT_CAPTURED_FAILURE, ...NOT_CAPTURED_EXPECTED]), ncFail: new Set(NOT_CAPTURED_FAILURE), fail: new Set(FAILURE_EVENTS), event: new Set([...FAILURE_EVENTS, ...STATE_EVENTS]), where: new Set(WHERE), code: new Set(CODES) }
+const sets = { nc: new Set([...NOT_CAPTURED_FAILURE, ...NOT_CAPTURED_EXPECTED]), ncFail: new Set(NOT_CAPTURED_FAILURE), fail: new Set(FAILURE_EVENTS), event: new Set([...FAILURE_EVENTS, ...STATE_EVENTS, ...OFF_EVENTS, ...NET_EVENTS]), where: new Set([...WHERE, ...OFF_WHERE, ...NET_WHERE]), code: new Set([...CODES, ...OFF_CODES, ...NET_CODES]) }
 
 export const isCode = (c) => sets.code.has(c) || ERRNO.test(String(c))
+export const isEvent = (e) => sets.event.has(e) // the sets checkRecord() judges by, for the static scans (test/health/codes.test.mjs): one rule, not two
+export const isWhere = (w) => sets.where.has(w)
 
 /** 'failure' | 'expected' | null — the class of a connection row's not_captured. */
 export function notCapturedClass(nc) {

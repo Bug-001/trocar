@@ -92,7 +92,8 @@ function stripComments(src) {
 }
 const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : /\.mjs$/.test(e.name) ? [path.join(d, e.name)] : []))
 const HARNESS_NAMES = /\b(claude|codex|opencode|kimi|dsh|deepseek|hermes|zcode|z-code)\b/i
-const CLASS_PATTERNS = /event_logging|worker\/events|file_upload|domain_info|sentry|statsig|datadog|downloads\.|\/v1\/code\/sessions/i
+// `\bsentry\b`, not the substring: D39's `rereadsEntry` (a harness flag of the process registry) holds 「sEntry」 and is no Sentry host
+const CLASS_PATTERNS = /event_logging|worker\/events|file_upload|domain_info|\bsentry\b|statsig|datadog|downloads\.|\/v1\/code\/sessions/i
 export function offenders(files, read = (f) => fs.readFileSync(f, 'utf8')) {
   return files.flatMap((f) => { const code = stripComments(read(f)); return [HARNESS_NAMES, CLASS_PATTERNS].flatMap((re) => (re.test(code) ? [`${path.relative(REPO, f)}: ${code.match(re)[0]}`] : [])) })
 }
@@ -105,8 +106,8 @@ test('K1 guard: src/collector/core/** and the capture files that apply the reten
 })
 
 test('K1 guard can fail: a planted file with a harness name and a class pattern is caught', () => {
-  const planted = { '/x/a.mjs': "const h = 'claude'\n", '/x/b.mjs': "const p = '/api/event_logging/'\n", '/x/c.mjs': "// claude and event_logging in a comment only\nconst ok = 1\n" }
-  assert.deepEqual(offenders(Object.keys(planted), (f) => planted[f]).map((s) => s.replace(/^.*?x\//, '')), ['a.mjs: claude', 'b.mjs: event_logging'])
+  const planted = { '/x/a.mjs': "const h = 'claude'\n", '/x/b.mjs': "const p = '/api/event_logging/'\n", '/x/c.mjs': "// claude and event_logging in a comment only\nconst ok = 1\n", '/x/d.mjs': "const h = 'o1.ingest.sentry.io'\n", '/x/e.mjs': 'const k = t.rereadsEntry\n' }
+  assert.deepEqual(offenders(Object.keys(planted), (f) => planted[f]).map((s) => s.replace(/^.*?x\//, '')), ['a.mjs: claude', 'b.mjs: event_logging', 'd.mjs: sentry'], 'a Sentry host is caught; the word rereadsEntry is not one')
 })
 
 // review (F8): which of the three pattern-only classes a harness's table row can ever produce

@@ -11,9 +11,11 @@ import { X509Certificate } from 'node:crypto'
 import codex from '../../../src/collector/harness/codex.mjs'
 import { createRegistry } from '../../../src/collector/core/registry.mjs'
 import { planTrust } from '../../../src/collector/core/trust/plan.mjs'
-import { installCollector, uninstallCollector } from '../../../src/collector/install.mjs'
+import { installCollector } from '../../../src/collector/install.mjs'
+import { uninstallCollector } from '../../helpers/uninstall.mjs'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 import { sandbox, ctxFor, facts, judge, matchOf, CA, OTHER } from './_ctx.mjs'
+import { onNone } from '../../helpers/signature-os.mjs'
 
 const DAEMON = '/home/u/.codex/packages/app-server-daemon/releases/0.160.0/bin/codex'
 const fps = (text) => (String(text).match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || []).map((p) => new X509Certificate(p).fingerprint256)
@@ -110,7 +112,7 @@ test('codex through install / uninstall: the user\'s SSL_CERT_FILE line is put o
     const corp = s.put('corp.pem', OTHER.certPem)
     const before = `OPENAI_API_KEY=sk-secret\nexport SSL_CERT_FILE="${corp}"\n`
     const env = s.put('.codex/.env', before)
-    await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [codex], freePort: async () => 47017, roots: { node: [], osText: '' } })
+    await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [onNone(codex)], freePort: async () => 47017, roots: { node: [], osText: '' } })
     const dir = path.join(s.home, '.asight', 'collector')
     const bundle = path.join(dir, 'ca', 'combined-codex.pem')
     assert.match(fs.readFileSync(env, 'utf8'), new RegExp(`^# >>> asight collector >>>[^\\n]*\\nSSL_CERT_FILE=${bundle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n# <<< asight collector <<<\\nOPENAI_API_KEY=sk-secret\\n#asight-collector-off# export SSL_CERT_FILE=`))
@@ -119,10 +121,10 @@ test('codex through install / uninstall: the user\'s SSL_CERT_FILE line is put o
     // the .env is applied once, at start: a codex from before install never named the bundle; one started after did
     const old = { os: 'linux', pid: 98, exe: DAEMON, argv: [DAEMON, 'app-server', '--managed-daemon'], env: new Map(), startedAt: 0 }
     const live = { os: 'linux', pid: 99, exe: DAEMON, argv: [DAEMON, 'app-server', '--managed-daemon'], env: new Map(), startedAt: Date.now() + 1000 }
-    const r = await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none', harnesses: [codex], roots: { node: [], osText: '' }, scan: async () => [old, live], match: (f) => createRegistry([codex]).match(f) })
+    const r = await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none', roots: { node: [], osText: '' }, scan: async () => [old, live] })
     assert.deepEqual([r.entries.map((e) => e.result), r.kept_bundles.map((k) => k.pids), r.still_trusting], [['restored'], [[99]], [{ pid: 99, agent: 'codex', until: 'next-connection' }]])
     assert.equal(fs.readFileSync(env, 'utf8'), before)
-    assert.deepEqual((await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none', harnesses: [codex], roots: { node: [], osText: '' } })).kept_bundles, [])
+    assert.deepEqual((await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none', roots: { node: [], osText: '' } })).kept_bundles, [])
     assert.ok(!fs.existsSync(bundle))
   } finally { s.done() }
 })

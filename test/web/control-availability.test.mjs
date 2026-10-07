@@ -40,7 +40,7 @@ function El() {
   return el;
 }
 
-function harness({ controlOk, monitoring = { active: true, forwardingTarget: 'https://api.anthropic.com' } }) {
+function harness({ controlOk, monitoring = { active: true, forwardingTarget: 'https://api.anthropic.com' }, offResponse = null }) {
   const store = {};
   const getEl = (id) => store[id] || (store[id] = El());
   globalThis.document = {
@@ -66,6 +66,7 @@ function harness({ controlOk, monitoring = { active: true, forwardingTarget: 'ht
         ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ csrf: 'x', monitoring }) })
         : Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ error: 'not found' }) });
     }
+    if (u.startsWith('/control/monitoring') && offResponse) return Promise.resolve(offResponse);
     if (u.startsWith('/api/projects')) return Promise.resolve({ ok: true, json: () => Promise.resolve(PROJECTS) });
     return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
   };
@@ -138,4 +139,19 @@ test('the CA badge says ✓, ✗ or ? with the reason; NODE_EXTRA_CA_CERTS not p
     assert.match(html, yes, JSON.stringify(m));
     assert.doesNotMatch(html, no, JSON.stringify(m));
   }
+});
+
+// 1.6 §4 / V40: where the server's "off" is `asight off`, an off that is not done is SAID on the pill with its reason — the page never flips back to a quiet state; the status's note is the button's tooltip
+test('the off button carries the server\'s note; an `asight off` that was not done shows 关闭没做完 with its reason', async () => {
+  const h = harness({
+    controlOk: true,
+    monitoring: { active: true, forwardingTarget: 'x', offNote: '只管旧 CC-CLI steer,不等于 `asight off`' },
+    offResponse: { ok: true, status: 200, json: () => Promise.resolve({ ok: false, exit: 1, receipt: { command: 'off', ok: false, problems: ['the Clash route was not confirmed gone: 不知道'] } }) },
+  });
+  await loadModule();
+  const el = h.getEl('monctl');
+  assert.match(el.innerHTML, /id="monBtn" title="[^"]*不等于 `asight off`/, 'the note is on the button');
+  assert.doesNotMatch(el.innerHTML, /关闭没做完/, 'nothing is wrong before anyone pressed off');
+  await h.getEl('monBtn')._onclick(); await settle();
+  assert.match(el.innerHTML, /关闭没做完 ✗/); assert.match(el.innerHTML, /not confirmed gone: 不知道/);
 });

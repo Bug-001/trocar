@@ -27,7 +27,7 @@ import { TEXT_REF_FIELD } from './etl/orchestrator.mjs';
 import { createLru, memoKey } from './query/memo.mjs';
 import { loadPricing } from './view/pricing.mjs';
 import { randomBytes } from 'node:crypto';
-import { monitoringStatus, monitoringOn, monitoringOff } from './capture/control.mjs';
+import { monitoringStatus, monitoringOn, monitoringOff, offIsAsightOff, asightOffInProcess, OFF_NOTE_STEER_ONLY } from './capture/control.mjs';
 import { appendLegacyEvent } from './capture/events.mjs';
 import { listSources, dirInputs, isSealedPath, sealedSources, unreadCapture } from './raw/discover.mjs';
 import { sealedReadProblem } from './raw/journal.mjs';
@@ -402,8 +402,10 @@ async function handleControl(req, res, { p, csrf, captureTarget, proxyUrl, deps,
   // deps (onboard/autostart) injectable for tests; with the real ones, a boot item that does not load is a line in
   // ~/.asight/logs/mitm-events.ndjson (D38 L-7) — injected ones record nowhere unless the test says so
   const base = { captureTarget, proxyUrl, ...(deps && deps.autostart ? {} : { onEvent: appendLegacyEvent }), ...deps };
+  // 1.6 §4 (V40): where there is no new collector the "off" is `asight off`; where there is, it only takes the old CC-CLI steer out, and the status says so
+  const offIsCli = offIsAsightOff(deps || {});
   if (p === '/control/status' && req.method === 'GET') {
-    return sendJson(res, 200, { csrf, monitoring: monitoringStatus(base) });
+    return sendJson(res, 200, { csrf, monitoring: { ...monitoringStatus(base), offNote: offIsCli ? null : OFF_NOTE_STEER_ONLY } });
   }
   if (p === '/control/monitoring' && req.method === 'POST') {
     if ((req.headers['x-asight-csrf'] || '') !== csrf) return sendJson(res, 403, { error: 'bad or missing CSRF token' });
@@ -411,6 +413,10 @@ async function handleControl(req, res, { p, csrf, captureTarget, proxyUrl, deps,
     try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return sendJson(res, 400, { error: 'invalid JSON body' }); }
     try {
       if (body.action === 'on') return sendJson(res, 200, monitoringOn({ ...base, withAutostart: body.autostart !== false }));
+      if (body.action === 'off' && offIsCli) { // the receipt and the exit code are the CLI's: a failed off is `ok: false` with its receipt, never a silent 200 (D38)
+        const r = await ((deps && deps.asightOff) || asightOffInProcess)();
+        return sendJson(res, 200, { ok: r.exit === 0, exit: r.exit, receipt: r.receipt, ...(r.stderr ? { stderr: r.stderr } : {}), status: monitoringStatus(base) });
+      }
       if (body.action === 'off') return sendJson(res, 200, monitoringOff({ ...base, removeCa: !!body.removeCa }));
     } catch (e) { return sendJson(res, 500, { error: String((e && e.message) || e) }); }
     return sendJson(res, 400, { error: "action must be 'on' or 'off'" });
@@ -761,7 +767,8 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         return sendJson(res, 200, withErrors(controlView(ctl, cls), ctl.sourceErrors));
       }
       // D38 (RFC 4.4): capture health, read from disk only — the collector's flows/, lock, manifest and state.json,
-      // the raw journal, the old capture's events — never through the collector daemon's socket (4.4 OPEN: that
+      // the raw journal, the old capture's events, and `netenv` (~/.asight/netenv.json: the VPN / proxy software, 1.6 §6 「看板」)
+      // — never through the collector daemon's socket (4.4 OPEN: that
       // relay waits for per-user isolation). Fixed paths under ~/.asight, nothing from the request (4.4 路径安全).
       // Unreadable → 503 with the reason, never an empty answer; metadata only (src/health/flows.mjs pick).
       if (p === '/api/capture-health') {

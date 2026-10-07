@@ -74,8 +74,8 @@ const lastRequest = (mock) => mock.state.log.filter((e) => e.type === 'request')
 test('T17 default policy `all`: a trusted agent\'s connection to a host no harness lists is decrypted — request and response bytes are the mock\'s, class `other` — and the install writes policy all', async () => {
   const s = await scene()
   try {
-    assert.equal((await req(s.sock, 'GET', '/status')).policy, 'all', 'a fresh install runs `all`')
-    assert.equal(JSON.parse(fs.readFileSync(path.join(s.dir, 'state.json'), 'utf8')).policy, 'all')
+    assert.equal((await req(s.sock, 'GET', '/status')).harnesses['claude-code'].policy, 'all', 'a fresh install runs `all`')
+    assert.equal(JSON.parse(fs.readFileSync(path.join(s.dir, 'state.json'), 'utf8')).harnesses['claude-code'].policy, 'all', 'state.json is per harness since D39: the entry says so')
     const r = await s.call()
     assert.equal(r.ok, true); assert.match(r.issuer, /asight collector CA/, 'terminated by the engine')
     const e = lastRequest(s.mock)
@@ -90,7 +90,7 @@ test('T17 default policy `all`: a trusted agent\'s connection to a host no harne
 test('T17 an install whose state.json already says `auto` keeps it: the same connection is passed through and flows/ says not_captured:policy', async () => {
   const s = await scene({ state: { version: 1, desired: 'off', policy: 'auto', extra_hosts: [] } })
   try {
-    assert.equal((await req(s.sock, 'GET', '/status')).policy, 'auto')
+    assert.equal((await req(s.sock, 'GET', '/status')).harnesses['claude-code'].policy, 'auto', 'a version 1 file that wrote auto reads as auto for the installed harness')
     const r = await s.call({ ca: s.labCaPem })
     assert.equal(r.ok, true); assert.match(r.issuer, /lab|lab-vm|test/i); assert.doesNotMatch(r.issuer, /asight collector CA/, 'the client saw the upstream\'s own certificate')
     assert.equal(b64(lastRequest(s.mock).req_raw_b64).toString('latin1'), r.REQ)

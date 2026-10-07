@@ -17,15 +17,18 @@ import tls from 'node:tls'
 import { X509Certificate } from 'node:crypto'
 import http from 'node:http'
 import { once } from 'node:events'
+import { fakeMac } from '../cli/fixtures/legacy-ctx.mjs'
 import { fileURLToPath } from 'node:url'
 import { startDaemon } from '../../src/collector/daemon.mjs'
-import { installCollector, uninstallCollector } from '../../src/collector/install.mjs'
+import { installCollector } from '../../src/collector/install.mjs'
+import { uninstallCollector } from '../helpers/uninstall.mjs'
 import { controlRequest } from '../../src/collector/core/control.mjs'
 import { runCollector } from '../../src/collector/cli.mjs'
 import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
 import { createWsRecorder } from '../../src/collector/core/ws/recorder.mjs'
 import { createFailureRecorder } from '../../src/collector/core/events.mjs'
+import { writeStateAtomic, setDesired, emptyState } from '../../src/off/state.mjs'
 import { encodeFrame } from '../lab/ws-client.mjs'
 import { createRedirectorClient } from '../../src/collector/arch/linux/redirector-client.mjs'
 import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector.mjs'
@@ -52,6 +55,8 @@ function sandbox() {
 }
 const req = (sock, method, p, body) => controlRequest({ socketPath: sock, method, path: p, body })
 async function until(fn, ms = 4000) { const end = Date.now() + ms; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 20)) } }
+// the daemon rebuilds the bundles of the harnesses whose desired state is on only (4.6 「合并包」, D39)
+const turnedOn = (s, ids) => writeStateAtomic(path.join(s.collector, 'state.json'), setDesired(emptyState(), ids, 'on'))
 const install = (s, o = {}) => installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [cc], freePort: async () => 0, ...o })
 const nowTicks = (p) => Math.ceil((Date.now() / 1000 - p.btime) * 100)
 // (i): every flows/ line is in the D38 closed sets
@@ -74,7 +79,7 @@ async function endpoint(s) {
 // (iii): `asight collector status` with no daemon answering — it reads the disk
 async function statusOffline(s) {
   const o = []
-  const code = await runCollector(['status'], { env: { XDG_RUNTIME_DIR: path.join(s.root, 'norun') }, home: s.home, request: async () => { throw Object.assign(new Error('no daemon'), { code: 'ENOENT' }) }, out: (l) => o.push(l), err: (l) => o.push(l) })
+  const code = await runCollector(['status'], { env: { XDG_RUNTIME_DIR: path.join(s.root, 'norun') }, home: s.home, request: async () => { throw Object.assign(new Error('no daemon'), { code: 'ENOENT' }) }, statusDeps: { exec: fakeMac({ loaded: [], keychain: false }).run, netenv: async () => ({ at: 'T', products: [], unknown: [{ reason: 'a test: nothing looked at' }] }) }, out: (l) => o.push(l), err: (l) => o.push(l) }) // on a Mac status asks launchd and the keychain (read-only): the runner is the test's
   return { code, text: o.join('\n') }
 }
 const keys = (h) => (h.collector.failures || []).map((g) => g.key)
@@ -478,7 +483,7 @@ test('F1(d) an entry\'s combined bundle deleted → the daemon rebuilds it and r
   const osRoots = path.join(s.root, 'os-roots.pem'); fs.writeFileSync(osRoots, '')
   fs.mkdirSync(path.join(s.home, '.codex')); fs.writeFileSync(path.join(s.home, '.codex', 'config.toml'), 'model = "gpt-test-1"\n')
   const CODEX_EXE = '/home/u/.local/bin/codex'
-  await install(s, { harnesses: [codex], osRootsFile: osRoots })
+  await install(s, { harnesses: [codex], osRootsFile: osRoots }); turnedOn(s, ['codex'])
   const ca = path.join(s.collector, 'ca'); const bundle = path.join(ca, 'combined-codex.pem')
   const caFp = new X509Certificate(fs.readFileSync(path.join(ca, 'asight-ca.pem'))).fingerprint256
   const hasCa = () => (fs.readFileSync(bundle, 'utf8').match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || []).some((c) => new X509Certificate(c).fingerprint256 === caFp)
@@ -534,7 +539,7 @@ test('F1(d) a bundle rebuilt without a user CA it held (its source file moved) i
   fs.writeFileSync(path.join(s.home, '.codex', '.env'), `SSL_CERT_FILE=${corp}\n`)
   const p = fakeProc()
   try {
-    await install(s, { harnesses: [codex], osRootsFile: osRoots })
+    await install(s, { harnesses: [codex], osRootsFile: osRoots }); turnedOn(s, ['codex'])
     const bundle = path.join(s.collector, 'ca', 'combined-codex.pem')
     const corpFp = new X509Certificate(corpCa.certPem).fingerprint256
     const fpsOf = () => (fs.readFileSync(bundle, 'utf8').match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || []).map((c) => new X509Certificate(c).fingerprint256)

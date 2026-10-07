@@ -38,6 +38,9 @@
 //                                    (D-30); comm and argv are what is still readable, for "could this be an agent".
 //   unreadable(): [{pid, comm, errno, argv}] — those of this user still there since the last scan (not the helper's own).
 //   helperInfo() → {pid, proto, build}; expectedProto — the helper protocol this build speaks.
+//   setBeatGate(fn): async () => boolean, asked before EACH automatic heartbeat; false sends none that tick. The daemon re-reads
+//                                    state.json there and takes away what the operator turned off, so a loop that was stalled past the
+//                                    kernel's freshness window cannot resume steering before it has (4.6 §开关语义, 1.6 §1.5).
 //   restart() / linger()           — respawn a dead helper; whether the OS keeps the daemon after logout (Plan 3a).
 //   'exec' carries ProcFacts = { os, pid, ppid, uid, exe, argv, env (Map, read lazily), cwd, startedAt,
 //   startTicks (Plan 3a), source:'exec'|'scan' } — OS-neutral; `os` picks the harness signature key.
@@ -69,6 +72,7 @@ export function createStaticRedirector(defaultMeta = null, { waitMs = 200, pollM
   const byPort = new Map()
   const r = {
     lookups: 0,
+    setBeatGate() {}, // no kernel, no beats
     set(port, meta) { byPort.set(port, meta) },
     async lookup({ port }) {
       r.lookups++

@@ -346,3 +346,155 @@ test('tracker: an unreadable environment is untrusted as environ-unreadable, nev
   assert.deepEqual([a.trusted, a.reason, a.trustVia, a.decrypt], [false, 'environ-unreadable', 'EACCES', false])
   assert.deepEqual(redirector.calls, [['watch', 300, false]], 'observed only: its connections are metadata')
 })
+
+// ── per-harness switching (1.6 §1.5, D39②) ─────────────────────────────────────────────────────────────────────────────────────
+const beta = { ...agent, name: 'beta', hosts: ['api.beta.test'], signatures: { linux: { match: [{ exe: /\/beta$/ }] } } }
+const betaFacts = (pid, o = {}) => facts(pid, { exe: '/opt/beta', argv: ['beta'], ...o })
+
+test('tracker: a harness that is not on is never judged, never watched and never told to onVerdict; its rows are listed with off:true (1.6 §1.5)', async () => {
+  const verdicts = []
+  const { redirector, tracker } = rig([agent, beta], { onVerdict: (row) => verdicts.push([row.pid, row.agent, row.reason]) })
+  tracker.setEnabled(new Set(['beta']))
+  redirector.emit('exec', facts(700, { env: new Map([['EXTRA_CA', PEM]]) })); redirector.emit('exec', betaFacts(701, { env: new Map([['EXTRA_CA', PEM]]) })); await settle()
+  assert.deepEqual(redirector.calls, [['watch', 701, true]], 'the off harness reaches the kernel nowhere')
+  assert.deepEqual(verdicts, [[701, 'beta', 'ok']], 'no agent-untrusted / agent-trusted for it: onVerdict is where the daemon writes them')
+  const [off, on] = tracker.agents()
+  assert.deepEqual([off.pid, off.agent, off.off, off.trusted, off.reason, off.decrypt, off.hosts, off.proxies], [700, 'alpha', true, false, 'off', false, [], []])
+  assert.deepEqual([on.pid, on.off, on.trusted], [701, undefined, true])
+  assert.deepEqual(tracker.metaFor(700), { agent: 'alpha', exe: '/opt/alpha', parentPid: 1, parentAgent: null }, 'the engine can still name a flow that raced in')
+  assert.equal(tracker.policy({ pid: 700 }, 'api.alpha.test'), false, 'a connection that raced in is spliced as policy (expected), not untrusted (a failure)')
+  assert.equal(tracker.policy({ pid: 701 }, 'api.beta.test'), true)
+  tracker.setEnabled(null) // no switch wired: every harness, as before
+  redirector.emit('exec', facts(702)); await settle()
+  assert.deepEqual(redirector.calls.at(-1), ['watch', 702, false])
+})
+
+test('tracker: reconcile unwatches the rows of a harness turned off and tells onOff; again it does nothing; a rescan after it is on again judges them', async () => {
+  const offs = [], gone = []
+  const { redirector, tracker } = rig([agent, beta], { onOff: (row) => offs.push([row.pid, row.agent, row.trusted]), onGone: (row, via) => gone.push([row.pid, via]) })
+  redirector.emit('exec', facts(710, { env: new Map([['EXTRA_CA', PEM]]) })); redirector.emit('exec', facts(711)); redirector.emit('exec', betaFacts(712)); await settle()
+  tracker.setEnabled(new Set(['beta']))
+  assert.deepEqual(await tracker.reconcile(), { unwatched: [710, 711], failed: [] })
+  assert.deepEqual(redirector.calls.filter((c) => c[0] === 'unwatch'), [['unwatch', 710], ['unwatch', 711]])
+  assert.deepEqual(offs, [[710, 'alpha', true], [711, 'alpha', false]], 'told with the verdict they had, so the daemon can end what it recorded')
+  assert.deepEqual(tracker.agents().map((a) => [a.pid, !!a.off]), [[710, true], [711, true], [712, false]])
+  assert.deepEqual(await tracker.reconcile(), { unwatched: [], failed: [] })
+  redirector.emit('exec', facts(713)); await settle() // off since it started: never reported
+  redirector.emit('exit', { pid: 710 }); redirector.emit('exit', { pid: 713 }); await settle()
+  redirector.live = [facts(711, { source: 'scan' })]; await tracker.rescan() // 712 is not listed any more: it goes; 711 is still off
+  assert.deepEqual(gone, [[710, 'exit'], [712, 'rescan']], 'a row that was judged while on is still told when it leaves (its exit is an exit); 713 was never reported and leaves unreported')
+  tracker.setEnabled(new Set(['alpha', 'beta']))
+  await tracker.rescan()
+  assert.deepEqual([redirector.calls.at(-1), tracker.agents().map((a) => [a.pid, !!a.off, a.reason])], [['watch', 711, false], [[711, false, 'var-missing']]])
+})
+
+test('tracker: a harness turned off while its process is being judged is not reported afterwards (the judge in flight is superseded)', async () => {
+  const verdicts = []
+  const { redirector, tracker } = rig([agent], { onVerdict: (row) => verdicts.push(row.pid) })
+  let release
+  redirector.watch = (pid, v) => new Promise((res) => { release = () => { redirector.calls.push(['watch', pid, v.decrypt]); res() } })
+  redirector.emit('exec', facts(720)); await settle()
+  tracker.setEnabled(new Set()); await tracker.reconcile() // while the watch is still on its way
+  release(); await settle()
+  assert.deepEqual([verdicts, tracker.agents().map((a) => !!a.off), redirector.calls.filter((c) => c[0] === 'unwatch')], [[], [true], [['unwatch', 720]]])
+})
+
+test('tracker: an unwatch that fails is reported with its pid and listed as failed; the row is off all the same (nothing is steered by a row the table calls off)', async () => {
+  const { redirector, tracker, errors } = rig([agent])
+  redirector.emit('exec', facts(730)); redirector.emit('exec', facts(731)); await settle()
+  let broken = true
+  redirector.unwatch = async (pid) => { if (broken && pid === 730) throw new Error('helper said no'); redirector.calls.push(['unwatch', pid]) }
+  tracker.setEnabled(new Set())
+  assert.deepEqual(await tracker.reconcile(), { unwatched: [731], failed: [730] })
+  assert.deepEqual(errors, [[730, 'unwatch', 'helper said no']])
+  assert.deepEqual(tracker.agents().map((a) => !!a.off), [true, true])
+  assert.deepEqual(await tracker.reconcile(), { unwatched: [], failed: [730] }, 'a pid the kernel may still steer is asked about again every time, and said again while it fails')
+  broken = false
+  assert.deepEqual(await tracker.reconcile(), { unwatched: [730], failed: [] }, 'repeating it is what makes it true')
+  assert.deepEqual(await tracker.reconcile(), { unwatched: [], failed: [] })
+  assert.deepEqual(redirector.calls.filter((c) => c[0] === 'unwatch'), [['unwatch', 731], ['unwatch', 730]])
+})
+
+test('tracker: a pid whose unwatch failed is not asked about again once it has exited or been watched afresh', async () => {
+  const { redirector, tracker } = rig([agent])
+  redirector.emit('exec', facts(740)); redirector.emit('exec', facts(741)); await settle()
+  const real = redirector.unwatch; redirector.unwatch = async () => { throw new Error('no') }
+  tracker.setEnabled(new Set()); await tracker.reconcile()
+  redirector.unwatch = real
+  redirector.emit('exit', { pid: 740 }); await settle() // the kernel dropped it at exit
+  tracker.setEnabled(new Set(['alpha'])); redirector.live = [facts(741, { source: 'scan' })]; await tracker.rescan() // 741 is on again and watched afresh
+  tracker.setEnabled(new Set())
+  const before = redirector.calls.filter((c) => c[0] === 'unwatch').length
+  assert.deepEqual(await tracker.reconcile(), { unwatched: [741], failed: [] }, 'only the pid that is on again, judged again, goes off again; 740 is not asked about')
+  assert.equal(redirector.calls.filter((c) => c[0] === 'unwatch').length, before + 1)
+})
+
+test('tracker: stuckPids lists the pids whose unwatch is unanswered until a reconcile gets the answer, or the pid exits (the daemon sends no heartbeat while it is not empty)', async () => {
+  const { redirector, tracker } = rig([agent])
+  redirector.emit('exec', facts(750)); redirector.emit('exec', facts(751)); await settle()
+  assert.deepEqual(tracker.stuckPids(), [])
+  let broken = true
+  redirector.unwatch = async (pid) => { if (broken) throw new Error('helper said no'); redirector.calls.push(['unwatch', pid]) }
+  tracker.setEnabled(new Set()); await tracker.reconcile()
+  assert.deepEqual(tracker.stuckPids(), [750, 751])
+  redirector.emit('exit', { pid: 751 }); await settle()
+  assert.deepEqual(tracker.stuckPids(), [750], 'an exited pid is not the kernel\'s to steer')
+  broken = false; await tracker.reconcile()
+  assert.deepEqual(tracker.stuckPids(), [])
+})
+
+test('tracker: reconcile({kernelGone}) asks nothing of a dead helper — every pid counts as taken out, onOff is told, none stays stuck, no error is reported', async () => {
+  const offs = []
+  const { redirector, tracker, errors } = rig([agent], { onOff: (row) => offs.push(row.pid) })
+  redirector.emit('exec', facts(760)); redirector.emit('exec', facts(761)); await settle()
+  redirector.unwatch = async (pid) => { redirector.calls.push(['unwatch', pid]); throw new Error('redirector helper is not running') }
+  tracker.setEnabled(new Set()); await tracker.reconcile() // while the helper still lived: both stuck
+  assert.deepEqual(tracker.stuckPids(), [760, 761]); errors.length = 0; redirector.calls.length = 0
+  redirector.emit('exec', facts(762)); await settle() // judged off at once: nothing to ask either
+  assert.deepEqual(await tracker.reconcile({ kernelGone: true }), { unwatched: [760, 761], failed: [] })
+  assert.deepEqual([tracker.stuckPids(), errors, redirector.calls.filter((c) => c[0] === 'unwatch')], [[], [], []])
+  assert.deepEqual(tracker.agents().map((a) => [a.pid, !!a.off]), [[760, true], [761, true], [762, true]])
+  // a row still on when the helper is gone goes off the same way, told once
+  const b = rig([agent], { onOff: (row) => offs.push(row.pid) })
+  b.redirector.emit('exec', facts(770)); await settle()
+  b.redirector.unwatch = async () => { throw new Error('redirector helper is not running') }
+  b.tracker.setEnabled(new Set())
+  assert.deepEqual(await b.tracker.reconcile({ kernelGone: true }), { unwatched: [770], failed: [] })
+  assert.deepEqual([offs.filter((x) => x === 770), b.errors], [[770], []])
+})
+
+test('tracker: two reconciles at once do not both unwatch the same stuck pid (the beat gate, the check and an off request may all ask)', async () => {
+  const { redirector, tracker } = rig([agent])
+  redirector.emit('exec', facts(780)); await settle()
+  let broken = true
+  redirector.unwatch = async (pid) => { await new Promise((r) => setImmediate(r)); if (broken) throw new Error('no'); redirector.calls.push(['unwatch', pid]) }
+  tracker.setEnabled(new Set()); await tracker.reconcile()
+  broken = false
+  const [a, b] = await Promise.all([tracker.reconcile(), tracker.reconcile()])
+  assert.deepEqual([a, b], [{ unwatched: [780], failed: [] }, { unwatched: [], failed: [] }])
+  assert.deepEqual(redirector.calls.filter((c) => c[0] === 'unwatch'), [['unwatch', 780]], 'asked once')
+})
+
+test('tracker: a marker-pending process of a harness turned off stays off — at the end of its grace and when its marker appears', async () => {
+  const r = markerRig()
+  r.redirector.emit('exec', facts(740, { exe: '/opt/beta', argv: ['beta'], startTicks: '9001', startedAt: r.clock })); await settle()
+  assert.equal(r.tracker.describe(740).reason, 'marker-pending')
+  r.tracker.setEnabled(new Set(['alpha'])); await r.tracker.reconcile()
+  const calls = r.redirector.calls.length
+  for (const t of r.timers) t.fn()
+  r.tick(11_000); await r.appear(740, 9001); await settle()
+  assert.deepEqual([r.tracker.describe(740).off, r.redirector.calls.length], [true, calls], 'nothing watched again')
+})
+
+test('tracker: the decrypt policy is per harness — each uses its own mode and operator hosts, one the table has no entry for uses the default', async () => {
+  const { redirector, tracker } = rig([agent, beta])
+  redirector.emit('exec', facts(750, { env: new Map([['EXTRA_CA', PEM]]) })); redirector.emit('exec', betaFacts(751, { env: new Map([['EXTRA_CA', PEM]]) })); await settle()
+  tracker.setPolicy({ byHarness: { alpha: { mode: 'all' }, beta: { mode: 'auto', extraHosts: ['Relay.Beta.Test'] } } })
+  assert.deepEqual(['anything.example', 'api.alpha.test'].map((h) => tracker.policy({ pid: 750 }, h)), [true, true], 'alpha: all')
+  assert.deepEqual(['anything.example', 'api.beta.test', 'relay.beta.test'].map((h) => tracker.policy({ pid: 751 }, h)), [false, true, true], 'beta: its known hosts and its own operator host')
+  assert.equal(tracker.policy({ pid: 750 }, 'relay.beta.test'), true, 'under all')
+  tracker.setPolicy({ mode: 'auto', byHarness: { beta: { mode: 'all' } } }) // alpha has no entry: the default (auto) applies
+  assert.deepEqual([tracker.policy({ pid: 750 }, 'anything.example'), tracker.policy({ pid: 751 }, 'anything.example')], [false, true])
+  tracker.setPolicy({ mode: 'all' }) // the old form: one policy for every harness
+  assert.deepEqual([tracker.policy({ pid: 750 }, 'anything.example'), tracker.policy({ pid: 751 }, 'anything.example')], [true, true])
+})

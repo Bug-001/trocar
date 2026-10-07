@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { qNoLeak, runSelfTest } from '../../src/capture/selftest.mjs';
 import { tmpDir } from '../helpers/tmp.mjs';
+import { osStubs } from '../helpers/os-stubs.mjs';
 
 // THE ONE SECURITY RED LINE MUST BE ABLE TO GO RED.
 //
@@ -42,6 +43,7 @@ import { tmpDir } from '../helpers/tmp.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
 const CLI = path.join(ROOT, 'bin', 'asight.mjs');
+const OS_PATH = osStubs().path; // on a Mac `doctor`'s status block asks launchd and the keychain (read-only): stubs in the temp dir answer, the real tools are never run (0.1 §3)
 
 // A capture holding a real un-redacted credential. If doctor reads ANY records at all, it must find it.
 function leakySource() {
@@ -92,11 +94,14 @@ test('qNoLeak counts credential-bearing records instead of failing on them', () 
   assert.equal(r.withCreds, 1, 'but it must be reported');
 });
 
-test('runSelfTest hard-fails when nothing was examined', () => {
+test('runSelfTest does not certify when nothing was examined: 无法判定 (exit 3), not ok and not a failure', () => {
   const res = runSelfTest({ records: [], srcMeta: { exists: true, bytes: 999 }, deps: [], verify: () => true });
-  assert.equal(res.hardFail, true,
-    'doctor exits non-zero on hardFail alone. A source that EXISTS but yielded no records means the '
-    + 'read failed — which is exactly the D27 array-source bug — and must not exit 0.');
+  assert.equal(res.undetermined, true,
+    'doctor exits 3 on `undetermined`. A source that EXISTS but yielded no records means the read failed — '
+    + 'which is exactly the D27 array-source bug — and must not exit 0. (It used to exit 1 as a "hard fail", '
+    + 'which said a problem was found when none was: R4 keeps 1 for a found problem and 3 for not knowing.)');
+  assert.equal(res.failed, false);
+  assert.equal(res.hardFail, false);
 });
 
 test('END TO END: doctor hard-fails on a world-readable capture (the red line\'s new home)', () => {
@@ -110,7 +115,7 @@ test('END TO END: doctor hard-fails on a world-readable capture (the red line\'s
     let status = 0, out = '';
     try {
       // a sandbox HOME: doctor also scans the default export dir (D35 · E9), never the real one
-      out = execFileSync(process.execPath, [CLI, 'doctor', '--source', dir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: dir } });
+      out = execFileSync(process.execPath, [CLI, 'doctor', '--source', dir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: dir, PATH: OS_PATH } });
     } catch (e) { status = e.status; out = String(e.stdout || '') + String(e.stderr || ''); }
     assert.notEqual(status, 0,
       `doctor exited 0 on a world-readable capture holding live credentials.\n--- output ---\n${out}`);
@@ -118,7 +123,7 @@ test('END TO END: doctor hard-fails on a world-readable capture (the red line\'s
 
     // …and passes once the file is owner-only, credentials and all.
     fs.chmodSync(path.join(dir, 'capture.ndjson'), 0o600);
-    const ok = execFileSync(process.execPath, [CLI, 'doctor', '--source', dir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: dir } });
+    const ok = execFileSync(process.execPath, [CLI, 'doctor', '--source', dir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: dir, PATH: OS_PATH } });
     assert.match(ok, /record\(s\) captured/, 'a 0600 capture must pass and report what it read');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
@@ -152,7 +157,7 @@ test('END TO END: a bare doctor on a CLEAN multi-root capture examines records a
     let status = 0, out = '';
     try {
       out = execFileSync(process.execPath, [CLI, 'doctor'], {
-        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: home, ASIGHT_SOURCE: '' },
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: home, ASIGHT_SOURCE: '', PATH: OS_PATH },
       });
     } catch (e) { status = e.status; out = String(e.stdout || '') + String(e.stderr || ''); }
 
@@ -190,7 +195,7 @@ test('END TO END: a BARE `asight doctor` reads the D27 multi-root default', () =
     let status = 0, out = '';
     try {
       out = execFileSync(process.execPath, [CLI, 'doctor'], {
-        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: home, ASIGHT_SOURCE: '' },
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: home, ASIGHT_SOURCE: '', PATH: OS_PATH },
       });
     } catch (e) { status = e.status; out = String(e.stdout || '') + String(e.stderr || ''); }
     // Subject is SOURCE RESOLUTION, not credentials: a bare doctor must find the legacy root and

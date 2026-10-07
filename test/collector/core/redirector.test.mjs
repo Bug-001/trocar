@@ -20,3 +20,8 @@ test('static redirector: lookup waits for a late-registered port, else null (acc
   assert.equal((await pending).pid, 9)
   assert.equal(await r.lookup({ address: '127.0.0.1', port: 52000 }), null) // never registered → null after the wait
 })
+
+test('static redirector: setBeatGate exists (the contract of the daemon) and does nothing — there are no beats to gate', () => {
+  const r = createStaticRedirector(META)
+  assert.equal(r.setBeatGate(() => false), undefined)
+})

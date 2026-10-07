@@ -15,7 +15,7 @@
 import path from 'node:path'
 import { hostOf, expandHome, versionAtLeast } from '../core/config-read.mjs'
 import { MARKER_VAR } from '../core/trust/confirm.mjs'
-import { lineComment } from '../core/trust/text-edit.mjs'
+import { lineComment } from '../../off/text-edit.mjs'
 import { envValues, envProxies, argAfter, dotenvLayer } from './_common.mjs'
 import { renderPlugin, ANONYMOUS_MODULE_MANIFEST } from './_plugins.mjs'
 
@@ -65,6 +65,19 @@ function inject(ctx) {
   }
 }
 
+// How dsh reads a proxy (RFC 1.6 §9.7): the proxy names (HTTPS_PROXY, HTTP_PROXY, ALL_PROXY) from its environment and from $DSH_HOME/.env (the home file alone may set them, and only fills what the
+// environment lacks); no OS proxy. It does not take SOCKS: a SOCKS proxy is ignored and the request goes direct, silently.
+const proxy = {
+  env: ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'],
+  files: [{ path: ({ home, env }) => path.join(dshHome(new Map(Object.entries(env)), home), '.env'), format: 'dotenv', keys: ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY'] }],
+  systemProxy: { http: false, ws: false },
+  schemes: ['http', 'https'],
+  unsupported: { socks4: 'silent-direct', socks5: 'silent-direct', socks5h: 'silent-direct' },
+  branches: ['all'],
+  measured: { win32: 'lab', linux: 'inferred', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3); elsewhere inferred from it, until measured
+  restart: { hint: '退出这个 dsh(含 web / acp),再重新启动(它只在启动时读一次代理设置)', processes: 'dsh' },
+}
+
 export default {
   name: 'deepseek-dsh',
   runtime: 'node',
@@ -75,6 +88,7 @@ export default {
     },
   },
   hosts: ['api.deepseek.com'],
+  proxy,
   layers,
   configHosts,
   proxies: (ctx) => envProxies(ctx.env, ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']),

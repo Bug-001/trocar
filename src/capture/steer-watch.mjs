@@ -6,12 +6,27 @@
 // mihomo's live proxy list is `steer-missing` too; a Script.js that cannot be read is `steer-unreadable` (even at
 // the first check). One line per transition, none while it stays the same; a steer never installed (CC-CLI only)
 // writes nothing.
+//   legacyOffPending(): `asight off` writes ~/.asight/legacy-off.pending ({pid}) before it strips the Clash block and removes it after the MITM is unloaded (RFC 1.6 §4); while the pid in it is alive the
+// block's going away is off's own doing, not a loss, so the watch says nothing.
 //   uninstallSteer(): `asight uninstall`'s steer step — what to print, and the line to write when it failed.
+import { homedir } from 'node:os'
+import nodeFs from 'node:fs'
 import { appendLegacyEvent, failureOf } from './events.mjs'
+import { legacyPendingPath } from '../off/paths.mjs'
+import { pidAlive } from '../off/proc.mjs'
 
-export function createSteerWatch({ status, record = appendLegacyEvent }) {
+/** Is an `asight off` between the strip of the Clash block and the unload of the MITM right now: the marker names a pid that is alive. Never throws: a marker that cannot be read is no marker. */
+export function legacyOffPending({ home = homedir(), fs = nodeFs, alive = pidAlive } = {}) {
+  try {
+    const m = JSON.parse(fs.readFileSync(legacyPendingPath(home), 'utf8'))
+    return !!m && Number.isInteger(m.pid) && alive(m.pid)
+  } catch { return false }
+}
+
+export function createSteerWatch({ status, record = appendLegacyEvent, pending = () => false }) {
   let seen = false, last = null
   return async function check() {
+    if (pending()) return null // asight off is taking the steer out (1.6 §4): the block going away is its doing, not a failure
     let st
     try { st = await status() } catch (e) { st = { scriptInstalled: null, readError: String((e && e.message) || e) } }
     if (!st || st.reserved) return null

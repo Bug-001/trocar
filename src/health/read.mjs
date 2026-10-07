@@ -7,30 +7,17 @@
 //   captureHealth() is what GET /api/capture-health answers and `asight collector status` prints when no daemon
 // answers (RFC 4.4, 4.6 §记录「看得到」): from disk only — flows/ (src/health/flows.mjs), the lock, the install manifest,
 // state.json, the raw journal and the old capture's events file — never through the daemon's socket.
-// Node built-ins, src/paths.mjs and src/raw/ only (0.1 §2).
+// Node built-ins, src/paths.mjs, src/raw/ and src/off/proc.mjs (a process's identity and liveness: the one reader `off` uses too) only (0.1 §2).
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { asightHome } from '../paths.mjs'
+import { procIdentity, pidAlive } from '../off/proc.mjs'
 import { readFlows, readDay, foldFlows, pick, groupKey, lastRun, WINDOW_MS, HealthUnreadable } from './flows.mjs'
 import { isFailure } from './codes.mjs'
 
-export { HealthUnreadable }
+export { HealthUnreadable, procIdentity }
 
 export const LOCK_FRESH_MS = 5000
-
-/** {start_time, boot_id} of a live process (strings), each null when it cannot be read (no /proc, gone, EACCES). */
-export function procIdentity(pid, { root = '/proc', fs = nodeFs } = {}) {
-  let start_time = null, boot_id = null
-  try {
-    const stat = fs.readFileSync(path.join(root, String(pid), 'stat'), 'utf8')
-    const f = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/) // field 3 onward: comm may hold ')' or spaces
-    if (/^\d+$/.test(f[19] || '')) start_time = f[19]
-  } catch { /* gone or no /proc: start_time stays null, and the judge below says so */ }
-  try { boot_id = fs.readFileSync(path.join(root, 'sys', 'kernel', 'random', 'boot_id'), 'utf8').trim() || null } catch { /* no /proc */ }
-  return { start_time, boot_id }
-}
-
-const pidAlive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' } }
 
 /**
  * lockState({file}) → {state, …}:
@@ -116,6 +103,21 @@ function notesOf(dir, fold, m, fs, read) {
   }
 }
 
+// The switch as state.json says it (RFC 1.6 §1.5, src/off/state.mjs): version 2 is per harness — `desired` is 'on' when every harness is on,
+// 'off' when none is, 'mixed' otherwise (no harness recorded: off); `since` is the newest per-harness `updated_at` ("capture off since T").
+// Version 1 (before D39, or a file with no version) is one `desired` for everything. A version this build does not know is an error, never "off".
+// Read here and not through src/off/state.mjs: src/health depends on node built-ins, src/paths.mjs and src/raw/ only (0.1 §2).
+function switchOf(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return { error: 'is not a JSON object' }
+  if (v.version === 2) {
+    const hs = Object.entries(v.harnesses && typeof v.harnesses === 'object' ? v.harnesses : {}).map(([id, h]) => [id, { desired: h && h.desired === 'on' ? 'on' : 'off', updated_at: h && typeof h.updated_at === 'string' ? h.updated_at : null }])
+    const on = hs.filter(([, h]) => h.desired === 'on').length
+    return { desired: hs.length && on === hs.length ? 'on' : on ? 'mixed' : 'off', since: latest(...hs.map(([, h]) => h.updated_at)) || (typeof v.updated_at === 'string' ? v.updated_at : null), harnesses: Object.fromEntries(hs) }
+  }
+  if (v.version !== undefined && v.version !== 1) return { error: `is version ${JSON.stringify(v.version)}; this build reads versions 1 and 2` }
+  return { desired: v.desired === 'on' ? 'on' : 'off', since: v.updated_at || null }
+}
+
 function collectorHealth({ dir, now, fs, alive, identity, maxBytes, read }) {
   try { fs.statSync(dir) } catch (e) {
     if (e.code === 'ENOENT') return { present: false, installed: false, residue: [], summary: { state: 'not-installed' } }
@@ -142,9 +144,12 @@ function collectorHealth({ dir, now, fs, alive, identity, maxBytes, read }) {
   if (flows.truncated) read.truncated = true
   const fold = foldFlows(flows.records, { now })
   Object.assign(daemon, { last_record_at: fold.last_ts, last_start: fold.last_start, last_stop: fold.last_stop })
-  const st = readJson(path.join(dir, 'state.json'), fs)
-  if (st.error) read.errors.push({ file: path.join(dir, 'state.json'), error: st.error })
-  const sw = st.value ? { desired: st.value.desired === 'on' ? 'on' : 'off', since: st.value.updated_at || null } : st.missing ? { desired: 'off', since: null } : { desired: null, since: null, error: st.error }
+  const stateFile = path.join(dir, 'state.json')
+  const st = readJson(stateFile, fs)
+  const sw0 = st.value ? switchOf(st.value) : st.missing ? { desired: 'off', since: null, harnesses: {} } : { error: st.error }
+  const swError = sw0.error ? (st.error || `${stateFile} ${sw0.error}`) : null
+  if (swError) read.errors.push({ file: stateFile, error: swError })
+  const sw = swError ? { desired: null, since: null, error: swError } : sw0
   const c = {
     present: true, installed, residue, ...(man.error ? { manifest_error: man.error } : {}), daemon, switch: sw,
     // partial: no daemon-start in what was read AND the read stopped at its limit — the start may be beyond it; a
@@ -201,7 +206,8 @@ function legacyHealth({ home, now, fs, alive, read }) {
   for (const r of t.recs) {
     if (r.event !== 'mitm-start' && r.event !== 'mitm-stop') continue
     const k = r.source || 'mitm', s = by.get(k) || { source: k, last_start: null, last_stop: null }
-    if (r.event === 'mitm-start') { s.last_start = pick(r); s.last_stop = null } else s.last_stop = pick(r)
+    // `cut`: how many connections the MITM cut when it stopped (it drains for 10 s on `asight off`, 1.6 §4) — a count the whitelist of pick() does not carry, so the stop line says it here
+    if (r.event === 'mitm-start') { s.last_start = pick(r); s.last_stop = null } else s.last_stop = { ...pick(r), ...(Number.isInteger(r.cut) && r.cut >= 0 ? { cut: r.cut } : {}) }
     by.set(k, s)
   }
   const sources = [...by.values()].map((s) => ({ ...s, state: s.last_start && !s.last_stop ? (s.last_start.pid == null || alive(s.last_start.pid) ? 'running' : 'gone') : 'stopped' }))
@@ -239,10 +245,22 @@ function rawHealth({ home, now, fs, read }) {
   return { problems: bad.slice(-20).map(pick), ...(bad.length > 20 || t.truncated ? { truncated: true } : {}), failures: groupsOf(bad, now, (r) => `raw:${r.op}/${r.outcome}`) }
 }
 
+// What `asight status`, `doctor` and `on` last read of the VPN / proxy software (RFC 1.6 §6 「看板」): ~/.asight/netenv.json, written by src/netenv/index.mjs (not imported here: 0.1 §2).
+// A missing file is "not written yet" with the reason; one that cannot be read or parsed carries the file and the error. Neither is an absent key or an empty list, and neither goes into
+// `read.errors`: the file is a cache the next `asight status` writes again, and a broken one must not turn the bar to 读不全 (it is not capture health).
+function netenvOf({ home, fs }) {
+  const file = path.join(home, 'netenv.json')
+  const r = readJson(file, fs)
+  if (r.missing) return { present: false, reason: `${file} is not there yet: asight status, doctor and on write it` }
+  if (r.error) return { present: true, error: r.error }
+  if (!r.value || typeof r.value !== 'object' || Array.isArray(r.value)) return { present: true, error: `${file} is not a JSON object` }
+  return { present: true, ...r.value }
+}
+
 /**
  * captureHealth({home}) → the /api/capture-health payload (RFC 4.4): `installed`,
  * `summary` (the top bar's state, the worst of the collector's and the old capture's), `collector`, `legacy`, `raw`,
- * `read` (files read, files that could not be, truncated). Throws HealthUnreadable when flows/ (or the collector
+ * `netenv` (the VPN / proxy software, 1.6 §6), `read` (files read, files that could not be, truncated). Throws HealthUnreadable when flows/ (or the collector
  * directory) cannot be read at all — never an empty answer.
  */
 export function captureHealth({ home = asightHome(), now = Date.now(), fs = nodeFs, alive = pidAlive, identity = procIdentity, maxBytes } = {}) {
@@ -261,5 +279,5 @@ export function captureHealth({ home = asightHome(), now = Date.now(), fs = node
   // installed: true when either capture is there; null when the collector's manifest cannot be read and nothing else
   // says so — false only means not installed (4.4)
   const installed = collector.installed === true || legacy.present ? true : collector.installed === null ? null : false
-  return { generated_at: new Date(now).toISOString(), installed, summary, collector, legacy, raw, read }
+  return { generated_at: new Date(now).toISOString(), installed, summary, collector, legacy, raw, netenv: netenvOf({ home, fs }), read }
 }

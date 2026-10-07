@@ -5,7 +5,8 @@
 //     some agents rewrite their title later), only for this instance's uid (other users' processes are
 //     not ours, and their environ is unreadable anyway);
 //   - scan() lists this uid's live processes (startup and every `on`, §身份与信任);
-//   - directCount(pid): the agent's connections still going direct (§开关语义「为什么开了还没采到」).
+//   - directCount(pid): the agent's connections still going direct (§开关语义「为什么开了还没采到」);
+//   - setBeatGate(fn): the gate every automatic heartbeat asks first (the daemon re-reads state.json there), kept across the client being made.
 // No harness names, no policy: the daemon wires this to core.
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
@@ -14,10 +15,22 @@ import path from 'node:path'
 import { REDIRECTOR_PROTO } from './redirector-client.mjs'
 import { readFacts, listPids, readStatus, directConnections } from './procinfo.mjs'
 
+/** Whether logind keeps `user`'s daemon after their last logout (4.6 OPEN 登出后, 1.6 §1.1): `/var/lib/systemd/linger/<user>` is there or not → `{ state: true | false }`; a file that cannot be told (EACCES, ENOTDIR …)
+ *  is `{ state: null, error }` with the file and the errno — never "off". Read-only, and never `loginctl` (R8: asight does not enable linger, it says how). The daemon's `daemon-start` event reads it the same way. */
+export function lingerRead({ user = null, dir = '/var/lib/systemd/linger', fs: fsx = fs } = {}) {
+  let name = user
+  if (!name) { try { name = os.userInfo().username } catch (e) { return { state: null, error: `the user name could not be read (${(e && e.message) || e})` } } }
+  const file = path.join(dir, name)
+  try { fsx.statSync(file); return { state: true } } catch (e) { return e && e.code === 'ENOENT' ? { state: false } : { state: null, error: `${file}: ${(e && e.code) || (e && e.message) || e}` } }
+}
+/** `lingerRead` as true | false | null (null = could not be read; the errno is in `lingerRead`'s `error`). */
+export const lingerState = (o) => lingerRead(o).state
+
 export function createLinuxRedirector({ makeClient, procRoot = '/proc', uid = process.getuid(), lingerDir = '/var/lib/systemd/linger', userName = () => os.userInfo().username }) {
   const ev = new EventEmitter()
   let client = null
   let enginePort = null
+  let gate = null
 
   function wire(c) {
     c.on('exec', ({ tgid, comm }) => {
@@ -45,7 +58,8 @@ export function createLinuxRedirector({ makeClient, procRoot = '/proc', uid = pr
   }
 
   return Object.assign(ev, {
-    async start() { client = makeClient(); wire(client); await client.start(); return client.loaderInfo },
+    async start() { client = makeClient(); wire(client); if (gate && client.setBeatGate) client.setBeatGate(gate); await client.start(); return client.loaderInfo },
+    setBeatGate(fn) { gate = typeof fn === 'function' ? fn : null; if (client && client.setBeatGate) client.setBeatGate(gate) },
     async close() { const c = client; client = null; if (c) await c.close() },
     configure(port) { enginePort = port; return need().configure(port) },
     attach: () => need().attach(),
@@ -69,8 +83,9 @@ export function createLinuxRedirector({ makeClient, procRoot = '/proc', uid = pr
     },
     directCount: (pid) => directConnections(pid, { root: procRoot, enginePort }), // {count, error}: unknown is never 0 (D-17)
     helperInfo: () => (client ? { ...client.loaderInfo, ...(client.counters || {}) } : { pid: null, proto: null, build: null }), // + unparsable lines, timed-out requests (D-13)
-    // Whether logind keeps this user's daemon after the last logout (4.6 OPEN 登出后): true / false, null = unknown.
-    linger() { try { fs.statSync(path.join(lingerDir, userName())); return true } catch (e) { return e && e.code === 'ENOENT' ? false : null } },
+    // Whether logind keeps this user's daemon after the last logout (4.6 OPEN 登出后): true / false, null = unknown (`lingerRead()` says why).
+    linger() { return this.lingerRead().state },
+    lingerRead() { try { return lingerRead({ user: userName(), dir: lingerDir }) } catch (e) { return { state: null, error: `the user name could not be read (${(e && e.message) || e})` } } },
     expectedProto: REDIRECTOR_PROTO,
   })
 }

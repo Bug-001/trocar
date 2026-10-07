@@ -68,6 +68,19 @@ function inject(ctx) {
   }
 }
 
+// How Codex reads a proxy (RFC 1.6 §9.7): the HTTP(S)_PROXY family from $CODEX_HOME/.env (applied once, at start, over the launch env: the managed app-server daemon keeps the environment of the first
+// TUI) or the environment. Model HTTP follows the OS proxy and ignores SOCKS; its WebSocket does not follow the OS proxy (Windows test machine L2 / L16, 4.8 §2.3).
+const proxy = {
+  env: ['HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'HTTP_PROXY', 'http_proxy'],
+  files: [{ path: ({ home, env }) => path.join(codexHome(new Map(Object.entries(env)), home), '.env'), format: 'dotenv', keys: ['HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'HTTP_PROXY', 'http_proxy'] }],
+  systemProxy: { http: true, ws: false },
+  schemes: ['http', 'https'],
+  unsupported: { socks4: 'silent-direct', socks5: 'silent-direct', socks5h: 'silent-direct' },
+  branches: ['http', 'ws'],
+  measured: { win32: 'lab', linux: 'inferred', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3); elsewhere inferred from it, until measured
+  restart: { hint: '关掉所有 codex 窗口,再结束托管的 codex app-server --managed-daemon 进程(它沿用第一个 TUI 的环境),之后新开的 codex 才会重读代理设置', processes: 'codex app-server --managed-daemon', managed: true },
+}
+
 export default {
   name: 'codex',
   runtime: 'rust',
@@ -83,6 +96,7 @@ export default {
     },
   },
   hosts: ['api.openai.com', 'chatgpt.com'],
+  proxy,
   layers: (ctx) => [dotenvLayer(ctx, path.join(codexHome(ctx.environ, ctx.home), '.env'), { name: '$CODEX_HOME/.env', drop: (k) => /^CODEX_/.test(k), live: false })],
   configHosts,
   proxies: (ctx) => envProxies(ctx.env, ['HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'HTTP_PROXY', 'http_proxy']),

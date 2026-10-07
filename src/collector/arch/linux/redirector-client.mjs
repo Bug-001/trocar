@@ -28,6 +28,10 @@
 //     not owned by this uid).
 //   heartbeat() -> refresh the kernel freshness timestamp; attach() sends one before attaching, and the
 //     client auto-heartbeats every autoHeartbeatMs while attached (set 0 to disable, e.g. in tests).
+//   setBeatGate(fn) / the `beforeBeat` option -> before EACH automatic beat the client awaits `fn()`; false sends none that tick, a throw is
+//     a heartbeat-error and no beat (the steering lapses, fail open). The daemon re-reads state.json here (4.6 §开关语义): a loop that was
+//     stalled past the kernel's 2 s window must not beat again until it has taken away what the operator turned off. attach()'s own beat
+//     and an explicit heartbeat() are not gated; a gate still answering is not asked again (the ticks inside it are skipped).
 //   EventEmitter: 'exec'({tgid,pid,comm,filename,tsNs}), 'exit'({tgid,tsNs}),
 //     'flow-meta'({pid,dst,tsNs}) for a watched no-decrypt flow, 'down'({reason}), 'ready'
 //     ({pid,proto,build}), 'version-mismatch'({got,expected}).
@@ -64,6 +68,7 @@ export function createRedirectorClient({
   requestTimeoutMs = 2000, // a helper that does not answer: loader-timeout, never a lookup that hangs the agent's connection (D-13)
   clock = () => performance.now(), // monotonic: a wall-clock jump never fakes or hides a heartbeat gap, never cuts a lookup short
   exitGraceMs = 500, // a broken stdin waits this long for the helper's 'exit', which says how it ended (D-14)
+  beforeBeat = null, // async () => boolean, asked before every automatic beat (see the contract above); null: no gate
 } = {}) {
   const resolvedBinary = binary || (env && env.ASIGHT_REDIRECTOR_BIN) || DEFAULT_REDIRECTOR_BIN
 
@@ -76,6 +81,8 @@ export function createRedirectorClient({
   let down = false
   let readyResolve = null
   let readyReject = null
+  let gate = beforeBeat
+  let gating = false // the gate is answering: the ticks inside its question are skipped
   let loaderInfo = { proto: null, build: null, pid: null }
   const stderrTail = [] // the helper's last stderr lines: why it would not start or attach (D-14)
   const counters = { unparsable: 0, timeouts: 0 }
@@ -159,11 +166,17 @@ export function createRedirectorClient({
       // A failed beat, or beats more than the kernel's 2 s freshness apart (a stalled event loop), let steering lapse
       // (fail-open: those connections went direct). Never silent (D38).
       let lastOk = clock()
+      const beat = () => heartbeat().then(() => {
+        const gap = Math.round(clock() - lastOk); lastOk = clock()
+        if (gap > HEARTBEAT_STALE_MS) emitter.emit('heartbeat-error', { code: 'heartbeat-gap', reason: `no heartbeat for ${gap} ms (the kernel stops steering after ${HEARTBEAT_STALE_MS} ms); connections in that window went direct` })
+      }, (e) => { if (!down) emitter.emit('heartbeat-error', { code: 'heartbeat-failed', reason: String((e && e.message) || e) }) })
       hbTimer = setInterval(() => {
-        heartbeat().then(() => {
-          const gap = Math.round(clock() - lastOk); lastOk = clock()
-          if (gap > HEARTBEAT_STALE_MS) emitter.emit('heartbeat-error', { code: 'heartbeat-gap', reason: `no heartbeat for ${gap} ms (the kernel stops steering after ${HEARTBEAT_STALE_MS} ms); connections in that window went direct` })
-        }, (e) => { if (!down) emitter.emit('heartbeat-error', { code: 'heartbeat-failed', reason: String((e && e.message) || e) }) })
+        if (!gate) { beat(); return }
+        if (gating) return
+        gating = true
+        Promise.resolve().then(() => gate()).then(
+          (go) => { gating = false; if (go !== false && hbTimer) beat() }, // hbTimer: the gate itself may have detached
+          (e) => { gating = false; if (!down) emitter.emit('heartbeat-error', { code: 'heartbeat-failed', reason: `the beat gate failed (${String((e && e.message) || e)}); no heartbeat this tick` }) })
       }, autoHeartbeatMs)
       if (hbTimer.unref) hbTimer.unref()
     }
@@ -262,7 +275,9 @@ export function createRedirectorClient({
     }
   }
 
-  Object.assign(emitter, { start, close, configure, attach, detach, status, watch, unwatch, heartbeat, lookup, raw })
+  function setBeatGate(fn) { gate = typeof fn === 'function' ? fn : null }
+
+  Object.assign(emitter, { start, close, configure, attach, detach, status, watch, unwatch, heartbeat, lookup, raw, setBeatGate })
   Object.defineProperty(emitter, '_child', { get() { return child } })
   Object.defineProperty(emitter, '_binary', { get() { return resolvedBinary } })
   Object.defineProperty(emitter, 'loaderInfo', { get() { return loaderInfo } })

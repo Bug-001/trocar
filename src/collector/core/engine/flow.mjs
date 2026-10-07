@@ -10,6 +10,7 @@ import { createExchangeTee } from './exchange.mjs'
 import { negKey } from './negcache.mjs'
 import { createUpstreamTrust } from '../tls/roots.mjs'
 import { socksHandshake } from './socks.mjs'
+import { createDrain } from './drain.mjs'
 
 const msgOf = (e) => String((e && e.message) || e)
 // host of a CONNECT authority or a SOCKS target: "[::1]:443" → "::1", "a.test:443" → "a.test". An IPv6 literal is
@@ -24,6 +25,7 @@ const hostOf = (authority) => {
 const targetOf = (authority) => (authority.startsWith('[') && authority.includes(']') ? `[${hostOf(authority)}]${authority.slice(authority.indexOf(']') + 1)}` : authority)
 // the codes the daemon's policy() may hand the engine for a row (RFC 4.6 §记录 连接行怎么落码)
 const DAEMON_CODES = ['not-trust-path', 'untracked', 'untrusted']
+const IDLE = { boundary: () => ({ idle: true, headPending: false, seq: null, blind: false }) } // the drain gate's view of a connection that has carried nothing yet
 const closedBefore = (side) => ({ type: 'closed_before_decision', message: `the ${side} closed before a routing decision`, side })
 // The upstream answered the ENGINE's TLS handshake with an alert that says it wanted something the engine cannot give:
 // a client certificate (mTLS: 'certificate required' under TLS 1.3; 'handshake failure' / 'bad certificate' / 'no certificate'
@@ -53,7 +55,19 @@ export function handleFlow(client, meta, ctx) {
   let relaying = false      // relay() owns teardown (armPre's handlers on a decrypted pair go quiet)
   let tunnelAsked = false   // the client sent CONNECT inside a TLS connection we terminated (an https:// proxy)
   const connectPrelude = { c: [], s: [] } // every CONNECT round trip on this connection, for the prelude record
-  let selfClosed = false    // the engine tore this flow down itself (internalError)
+  let selfClosed = false    // the engine tore this flow down itself (internalError, or the drain gate closing it: RFC 1.6 §1.3)
+  // off (RFC 1.6 §1.3): the engine closes a connection that is still relayed where it can see a boundary (engine/drain.mjs).
+  // `socks` = every socket of this flow, for the cut (`off --now`); `gate` = the drain gate once relay() owns the
+  // connection (before the client's first request on a terminated TLS connection: a gate that closes it at once);
+  // `drainAsked` = off came before either, the gate starts when relay() begins
+  const socks = new Set()
+  const track = (s) => { if (s) socks.add(s); return s }
+  const destroyAll = () => { for (const s of socks) { try { s.destroy() } catch { /* already gone */ } } }
+  let gate = null
+  let drainAsked = false
+  // the gate says it is about to close (or cut) the connection: the engine did it, not the client (the leaf-rejection judge ignores it), and a
+  // cut says so on the row — before the sockets are destroyed, because a TLS socket emits its close events inside destroy()
+  const onGateClosed = (kind) => { selfClosed = true; if (kind === 'cut' && !rec.error) rec.error = { type: 'cut-by-off', message: 'the connection was cut by asight off --now', side: 'engine' } }
   let upstream = null       // the TCP connection to the original destination
   let firstByteTimer = null
   let slowTimer = null      // the upstream-slow watch while the engine waits on the upstream (RFC 4.6 §记录)
@@ -99,6 +113,7 @@ export function handleFlow(client, meta, ctx) {
     const notes = activeTee && activeTee.rowNotes ? activeTee.rowNotes() : {}
     if (notes.writeFailed) rec.write_failed = notes.writeFailed
     if (notes.framerError) rec.framer_error = notes.framerError
+    if (notes.asightAdded) rec.asight_added = notes.asightAdded // what the drain gate put into the bytes the client got (1.6 §1.3), recorded or not
     if (notes.notFollowed && !rec.not_captured) notCaptured('upgrade-not-followed', notes.notFollowed)
     // bytes_up / bytes_down = the agent's own connection's wire bytes (RFC 4.6 §记录): read off the
     // accepted socket once it has closed, so proxy preludes, TLS records (and the closing alerts after
@@ -155,6 +170,25 @@ export function handleFlow(client, meta, ctx) {
 
   // a synchronous throw (e.g. net.connect on a bad port) ends this flow with a record (D38)
   try { upstream = ctx.connectUpstream(meta.dst) } catch (e) { internalError(e); return flowDone }
+  track(client); track(upstream)
+  // What the engine's drain() asks of this flow (RFC 1.6 §1.3). start() → 'closing' | 'waiting' | 'closed' | 'cut';
+  // state() → 'open' (not asked) | 'closing' | 'waiting' | 'closed' | 'cut' | 'done'.
+  if (ctx.register) ctx.register({
+    start({ now = false } = {}) {
+      if (finished) return 'closed'
+      if (gate) {
+        return gate.start({ now })
+      }
+      if (now) { // not yet relayed (the TLS handshake, a proxy prelude): cut as well
+        onGateClosed('cut')
+        if (!handedOff) preTeardown(rec.error); else destroyAll()
+        return 'cut'
+      }
+      drainAsked = true // relay() starts the gate when it owns the connection
+      return 'closing'
+    },
+    state: () => (finished ? 'done' : gate ? gate.state() : drainAsked ? 'closing' : 'open'),
+  })
   upstream.once('error', (err) => preTeardown({ type: err.code || 'upstream_error', message: msgOf(err), side: 'upstream' }))
   upstream.on('close', () => preTeardown(closedBefore('upstream')))
   client.on('close', () => preTeardown(closedBefore('client')))
@@ -176,16 +210,40 @@ export function handleFlow(client, meta, ctx) {
     let tee = activeTee
     // the recording side copy never throws into the forwarding path: a recorder that throws stops
     // recording this connection (recorded, D38) and the bytes keep flowing
-    const copy = (fn) => { if (!tee) return; try { fn(tee) } catch (e) { tee = null; activeTee = null; ctx.failure({ code: 'engine-error', flow_id: rec.flow_id, reason: `recording stopped: ${msgOf(e)}` }) } }
-    cSock.on('data', (d) => { copy((t) => t.fromClient(d)); if (uSock.writable && !uSock.write(d)) cSock.pause() })
+    // What the gate had put into the bytes the client got is on the row even then (invariant 4): finish() reads the tee's notes, and this tee is gone. What
+    // the gate held for the client goes out at once, in order (`loose`), as it came.
+    const loose = []
+    const copy = (fn) => {
+      if (!tee) return
+      try { fn(tee) } catch (e) {
+        const lost = tee; tee = null; activeTee = null
+        try { const added = lost.rowNotes().asightAdded; if (added) rec.asight_added = added } catch { /* the tee that threw may not answer either */ }
+        loose.push(...drain.loseTee())
+        ctx.failure({ code: 'engine-error', flow_id: rec.flow_id, reason: `recording stopped: ${msgOf(e)}` })
+      }
+    }
+    const toClient = (parts) => { for (const p of parts) if (cSock.writable && !cSock.write(p)) uSock.pause() }
+    // The drain gate (RFC 1.6 §1.3, engine/drain.mjs) sits between the upstream and the client. It runs before the tee sees
+    // a chunk (an envelope that ends in this very chunk then already says what the gate added) and after the chunk is
+    // written (a response that ended closes the connection); the tee still reads the upstream's own bytes.
+    const drain = gate = createDrain({ flowId: rec.flow_id, tee, client: cSock, upstream: uSock, timeoutMs: ctx.drainTimeoutMs ?? 5000, destroy: destroyAll, onClosed: onGateClosed, onFailure: ctx.failure })
+    track(cSock); track(uSock)
+    if (drainAsked) { drainAsked = false; drain.start({ now: false }) }
+    cSock.on('data', (d) => { copy((t) => t.fromClient(d)); if (loose.length) toClient(loose.splice(0)); if (uSock.writable && !uSock.write(d)) cSock.pause() })
     uSock.on('drain', () => cSock.resume())
-    uSock.on('data', (d) => { copy((t) => t.fromUpstream(d)); if (cSock.writable && !cSock.write(d)) uSock.pause() })
+    uSock.on('data', (d) => {
+      const parts = drain.beforeUpstream(d)
+      copy((t) => t.fromUpstream(d))
+      toClient(parts)
+      if (loose.length) toClient(loose.splice(0))
+      drain.afterUpstream()
+    })
     cSock.on('drain', () => uSock.resume())
     // the first socket error of the flow, with its side, goes to flows/ (D38)
     const noteError = (e, side) => { if (e instanceof Error && !rec.error) rec.error = { type: e.code || 'error', message: msgOf(e), side } }
     // 'error' passes the Error, 'end' nothing, 'close' a boolean: a reset reaches the ws recorder as an error
     const clientGone = (e) => { noteError(e, 'client'); copy((t) => t.clientEnded(e instanceof Error ? e : null)); teardown(); try { if (!uSock.destroyed) uSock.destroy() } catch { /* ignore */ }; try { if (!upstream.destroyed) upstream.destroy() } catch { /* ignore */ } }
-    const upstreamGone = (e) => { noteError(e, 'upstream'); copy((t) => t.upstreamEnded(e instanceof Error ? e : null)); teardown(); try { if (cSock.writable) cSock.end() } catch { /* ignore */ } } // let the client drain, then it closes
+    const upstreamGone = (e) => { noteError(e, 'upstream'); copy((t) => t.upstreamEnded(e instanceof Error ? e : null)); teardown(); try { for (const p of drain.flush()) if (cSock.writable) cSock.write(p); if (cSock.writable) cSock.end() } catch { /* ignore */ } } // let the client drain, then it closes; bytes the gate still held are the client's
     cSock.on('end', clientGone); cSock.on('error', clientGone); cSock.on('close', clientGone)
     uSock.on('end', upstreamGone); uSock.on('error', upstreamGone); uSock.on('close', upstreamGone)
   }
@@ -391,7 +449,8 @@ export function handleFlow(client, meta, ctx) {
   const startTee = (host, scheme) => {
     activeTee = createExchangeTee({
       flow: { id: rec.flow_id, host, scheme, dst: meta.dst, proc: { pid: meta.pid, exe: meta.exe ?? null, agent: meta.agent } },
-      recordStore: ctx.store, isRecording: ctx.isRecording, wsTerminal: meta.wsTerminal ?? null, retention: ctx.retention, onFailure: ctx.failure,
+      recordStore: ctx.store, isRecording: () => ctx.isRecording(meta), wsTerminal: meta.wsTerminal ?? null, retention: ctx.retention, onFailure: ctx.failure,
+      onTurnEnd: () => { if (gate) gate.onTurnEnd() }, // a WebSocket call closed on its terminal message: the gate closes after this chunk
     })
     return activeTee
   }
@@ -412,7 +471,7 @@ export function handleFlow(client, meta, ctx) {
     armPre(cTls, uTls)
     const chunks = []
     let decided = false
-    const stop = () => { decided = true; cTls.removeListener('data', onC); uTls.removeListener('data', onU) }
+    const stop = () => { decided = true; gate = null; cTls.removeListener('data', onC); uTls.removeListener('data', onU) }
     const onC = guard((d) => {
       if (decided) return
       chunks.push(d)
@@ -435,6 +494,10 @@ export function handleFlow(client, meta, ctx) {
       activeTee.fromUpstream(d); cTls.write(d); relay(cTls, uTls)
     })
     cTls.on('data', onC); uTls.on('data', onU)
+    // TLS is terminated on both legs and the client has said nothing yet: nothing is in flight, off closes it at once
+    track(cTls); track(uTls)
+    gate = createDrain({ flowId: rec.flow_id, tee: IDLE, client: cTls, upstream: uTls, timeoutMs: ctx.drainTimeoutMs ?? 5000, destroy: destroyAll, onClosed: onGateClosed, onFailure: ctx.failure })
+    if (drainAsked) { drainAsked = false; gate.start({ now: false }) } // off came before the handshake was done (T05 review): nothing is in flight, so it is closed now, as a connection off found here would be
   }
 
   // Between terminating TLS and relay() owning the connection nothing else listens for a side going (the raw

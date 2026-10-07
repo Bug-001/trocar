@@ -2360,7 +2360,8 @@ document.getElementById('liveChk').onchange=e=>{if(e.target.checked){follow=true
 function renderMon(el,d){
   const m=(d&&d.monitoring)||{}, on=!!m.active
   el.innerHTML=`<span class="mondot ${on?'on':''}" title="透明监测 ${on?'开启中':'已关闭'}"></span>`
-    +`<button class="monbtn" id="monBtn">监测 ${on?'ON':'OFF'}</button>`
+    +`<button class="monbtn" id="monBtn"${m.offNote?` title="${esc('关: '+m.offNote)}"`:''}>监测 ${on?'ON':'OFF'}</button>`
+    +(d&&d.offProblem?`<span class="monbadge" style="color:var(--red)" title="${esc(d.offProblem)}">关闭没做完 ✗</span>`:'')
     +`<span class="monwhere" title="透明监测把被测流量转发到的真实上游端点">→ ${esc(m.forwardingTarget||'—')}</span>`
     +(m.autostart?`<span class="monbadge" title="已加入用户级开机自启(非全机)">开机自启</span>`:m.autostartError?`<span class="monbadge" style="color:var(--amber)" title="${esc(m.autostartError)}">开机自启 ?</span>`:'')
     +(m.caTrusted===true?`<span class="monbadge" title="采集 CA 已装入用户级信任库(非全机弱化 TLS)">CA✓</span>`
@@ -2374,8 +2375,11 @@ function renderMon(el,d){
     const action=on?'off':'on'
     btn.textContent='…'; btn.disabled=true
     try{
-      await fetch('/control/monitoring',{method:'POST',headers:{'content-type':'application/json','x-asight-csrf':d.csrf},body:JSON.stringify({action})})
-      const s=await fetch('/control/status',{cache:'no-store'}); if(s.ok) renderMon(el, await s.json())
+      const pr=await fetch('/control/monitoring',{method:'POST',headers:{'content-type':'application/json','x-asight-csrf':d.csrf},body:JSON.stringify({action})})
+      // where the server runs `asight off` (no new collector, 1.6 §4) an off that is not done says so and why (D38: never a silent switch back to OFF)
+      let pb=null; try{ pb=await pr.json() }catch(e){ pb=null }
+      const s=await fetch('/control/status',{cache:'no-store'})
+      if(s.ok){ const sd=await s.json(); if(action==='off'&&(!pr.ok||(pb&&pb.ok===false))) sd.offProblem=((pb&&(pb.error||(pb.receipt&&((pb.receipt.problems&&pb.receipt.problems[0])||(pb.receipt.notes&&pb.receipt.notes[0])))||pb.stderr))||`HTTP ${pr.status}`); renderMon(el, sd) }
     }catch(e){ btn.disabled=false; btn.textContent='监测 ✗' }
   }
 }

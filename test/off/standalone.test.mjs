@@ -1,0 +1,415 @@
+// test/off/standalone.test.mjs — the single-file ~/.asight/bin/asight-off (RFC 1.6 R3; plan Task 8). V2: with the repository out of reach it undoes the same entries and prints what
+// `asight off` prints. V11: what is generated imports node:* and nothing else. V35: a manifest or an item it does not know is left alone (exit 1, the hint is `asight off`), `doctor`'s
+// check reports a stale copy, and every `on` rewrites it. A sandbox HOME in which the real `on` has run; the file that `on` wrote is the file that runs, in a child process that is
+// handed a copy in a directory of its own (no relative import could find the repo), a PATH of stubs (the sandbox guard allows those, and nothing else), and no NODE_PATH.
+// Nothing here runs a real OS tool or touches a real process.
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import http from 'node:http'
+import path from 'node:path'
+import { spawn, spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { tmpDir } from '../helpers/tmp.mjs'
+import { buildStandalone, writeStandalone, checkStandalone, STANDALONE_ENTRY } from '../../src/off/standalone.mjs'
+import { OFF_VERSION, MANIFEST_VERSION, readManifest, saveManifest, manifestPath } from '../../src/off/manifest.mjs'
+import { standalonePath } from '../../src/off/paths.mjs'
+import { sha256 } from '../../src/off/fsutil.mjs'
+import { runOffCli } from '../../src/off/main.mjs'
+import { runOnCli } from '../../src/cli/on.mjs'
+import { formatPlan } from '../../src/cli/receipt.mjs'
+import { fakeIo, onCtx, seedClaude } from '../cli/fixtures/on-ctx.mjs'
+import { installedHome, flowEvents } from './fixtures/off-ctx.mjs'
+import { macHome } from '../cli/fixtures/legacy-ctx.mjs'
+import { verifyUserTrustOnly } from '../../src/capture/onboard.mjs'
+
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
+
+// ── running a copy ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// What asight-off calls at the end of the file. The tests that need a Linux answer on any machine, with no real uid and no real process table, replace exactly this call (and assert
+// first that it is there): the platform, the user id and the table's reader are what a person's machine decides, and every other byte of the file is the one `on` wrote.
+const AS_LINUX = `runOffCli(process.argv.slice(2), { standalone: true, platform: 'linux', deps: { platform: 'darwin', getuid: () => 1000 } })` // 'darwin' for the table: the reader runs `ps`, a stub here
+
+function stubBin() {
+  const dir = tmpDir('asight-stub-'), bin = path.join(dir, 'bin'), log = path.join(dir, 'calls.log')
+  fs.mkdirSync(bin)
+  for (const name of ['systemctl', 'ps']) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\nexit 0\n`, { mode: 0o755 }) // answers 0 and says nothing: no unit, no process
+  return { bin, calls: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : []) }
+}
+
+/** Runs `text` as a file called asight-off in a directory of its own; resolves { status, stdout, stderr }. */
+function runCopy(text, argv, { env = {}, nodeArgs = [], sibling = null } = {}) {
+  const dir = tmpDir('asight-std-')
+  const file = path.join(dir, 'asight-off')
+  fs.writeFileSync(file, text, { mode: 0o755 })
+  for (const [name, body] of Object.entries(sibling || {})) fs.writeFileSync(path.join(dir, name), body)
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [...nodeArgs, file, ...argv], { cwd: dir, env: { NODE_PATH: '', ASIGHT_TEST_SANDBOX: '1', TMPDIR: os.tmpdir(), ...env }, stdio: ['ignore', 'pipe', 'pipe'] })
+    const out = [], err = []
+    child.stdout.on('data', (d) => out.push(d)); child.stderr.on('data', (d) => err.push(d))
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`asight-off did not exit in 30 s; stdout so far: ${Buffer.concat(out)}`)) }, 30_000)
+    child.on('close', (status) => { clearTimeout(timer); resolve({ status, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8') }) })
+  })
+}
+
+/** The file `on` wrote for this sandbox, run with the Linux answer; the sandbox's own HOME and env, the stub PATH. */
+function runWritten(s, argv, { extraEnv = {}, stubs = stubBin() } = {}) {
+  const text = fs.readFileSync(standalonePath(s.home), 'utf8')
+  assert.ok(text.includes(STANDALONE_ENTRY), 'the file ends with the standard entry call')
+  return runCopy(text.replace(STANDALONE_ENTRY, AS_LINUX), argv, { env: { ...s.sh.env, PATH: stubs.bin, ...extraEnv } }).then((r) => ({ ...r, stubs }))
+}
+
+// two sandboxes in the same state never hold the same paths, times or backup names: what a receipt says is compared with those taken out
+const normalize = (obj, home) => JSON.parse(JSON.stringify(obj).split(home).join('<HOME>').replace(/[0-9a-f]{16}-\d{8}T\d{9}Z(-\d+)?/g, '<BACKUP>').replace(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z/g, '<TIME>'))
+const cliCtx = (s, io) => ({ io, home: s.home, env: s.sh.env, platform: 'linux', deps: s.offDeps({ getuid: () => 1000 }) })
+const brokenAsight = async () => { const s = await installedHome({ names: ['claude-code', 'codex'] }); s.sys.daemon.state.up = false; return s } // on has run; nothing answers any more
+const preEntries = (s) => readManifest(s.dir).entries.filter((e) => e.pre_sha256).map((e) => ({ path: e.path, pre: e.pre_sha256 }))
+const backToBefore = (list) => list.filter((e) => !fs.existsSync(e.path) || sha256(fs.readFileSync(e.path)) !== e.pre).map((e) => e.path)
+
+// ── V2 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+test('V2: with the repository out of reach the copy `on` wrote undoes the same entries and prints what `asight off` prints (the daemon gone)', async () => {
+  const a = await brokenAsight(), b = await brokenAsight()
+  const io = fakeIo()
+  const viaCli = await runOffCli(['--json'], cliCtx(a, io))
+  const r = await runWritten(b, ['--json'])
+  assert.equal(r.status, viaCli, r.stderr)
+  assert.equal(viaCli, 0, 'and it is a done off')
+  assert.deepEqual(normalize(JSON.parse(r.stdout), b.home), normalize(io.json(), a.home), 'the same receipt, key for key')
+  assert.deepEqual(backToBefore(preEntries(b)), [], 'every user file byte for byte as before on')
+  assert.ok(JSON.parse(r.stdout).changed.length >= 2, 'a receipt that lists what it undid')
+  assert.deepEqual(readManifest(b.dir).entries, [], 'the manifest was brought up to date')
+  assert.ok(r.stubs.calls().some((c) => /^systemctl --user disable asight-collector\.service/.test(c)), `no names: the autostart was disabled, through the one runner (${r.stubs.calls()})`)
+  assert.equal(r.stderr, '')
+})
+
+test('V2: the text a person reads is the same too, and a per-harness off leaves the other harness alone', async () => {
+  const a = await brokenAsight(), b = await brokenAsight()
+  const io = fakeIo()
+  assert.equal(await runOffCli(['claude'], cliCtx(a, io)), 0)
+  const r = await runWritten(b, ['claude'])
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(r.stdout.split(b.home).join('~').replace(/\n$/, ''), io.stdoutText().split(a.home).join('~').replace(/\n$/, ''), 'the same words')
+  assert.deepEqual(readManifest(b.dir).entries.map((e) => e.harness).filter((h) => h).filter((h, i, all) => all.indexOf(h) === i), ['codex'], 'only claude-code came out')
+})
+
+test('V2: with the install manifest lost the copy undoes by asight\'s own marks, after a yes, and prints what `asight off --yes` prints', async () => {
+  const a = await brokenAsight(), b = await brokenAsight()
+  const before = preEntries(b)
+  for (const s of [a, b]) fs.rmSync(manifestPath(s.dir))
+  const io = fakeIo()
+  const viaCli = await runOffCli(['--yes', '--json'], cliCtx(a, io))
+  const r = await runWritten(b, ['--yes', '--json'])
+  assert.equal(r.status, viaCli, r.stderr)
+  assert.equal(viaCli, 0, io.text())
+  const out = JSON.parse(r.stdout)
+  assert.deepEqual(normalize(out, b.home), normalize(io.json(), a.home))
+  assert.equal(out.undone_by_marker, true)
+  for (const e of before) assert.ok(!fs.readFileSync(e.path, 'utf8').includes(path.join(b.home, '.asight')), `${e.path} no longer points into ~/.asight (by marks the file is not promised byte for byte: nothing says what was there before)`)
+  const nobody = await runWritten(await brokenAsight().then((s) => { fs.rmSync(manifestPath(s.dir)); return s }), ['--json'])
+  assert.equal(nobody.status, 1, 'not in a terminal and no --yes: it lists, and stops')
+  assert.equal(JSON.parse(nobody.stdout).pending.length >= 2, true)
+})
+
+// a control socket in a short path (a unix socket's path is at most 103 bytes on macOS), answering from a fake daemon
+async function serveControl(daemon) {
+  const run = tmpDir('as-')
+  fs.mkdirSync(path.join(run, 'asight'), { mode: 0o700 })
+  const sock = path.join(run, 'asight', 'collector.sock')
+  if (sock.length > 100) return { skip: `the socket path ${sock} is too long for a unix socket` }
+  const server = http.createServer((req, res) => {
+    const chunks = []
+    req.on('data', (c) => chunks.push(c))
+    req.on('end', async () => {
+      try {
+        const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : null
+        const reply = await daemon.request({ method: req.method, path: req.url, body })
+        res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(reply))
+      } catch (e) { res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: String(e.message) })) }
+    })
+  })
+  await new Promise((resolve) => server.listen(sock, resolve))
+  return { run, server, close: () => new Promise((resolve) => server.close(resolve)) }
+}
+
+test('V2: a daemon that answers is told to switch off by the copy, over the control socket, and the receipt is the same', async (t) => {
+  const a = await installedHome({ names: ['claude-code', 'codex'] }), b = await installedHome({ names: ['claude-code', 'codex'] }) // both daemons up after on
+  const ctl = await serveControl(b.sys.daemon)
+  if (ctl.skip) return t.skip(ctl.skip)
+  try {
+    const io = fakeIo()
+    const viaCli = await runOffCli(['--json'], cliCtx(a, io))
+    const r = await runWritten(b, ['--json'], { extraEnv: { XDG_RUNTIME_DIR: ctl.run } })
+    assert.equal(r.status, viaCli, r.stderr)
+    assert.deepEqual(normalize(JSON.parse(r.stdout), b.home), normalize(io.json(), a.home))
+    assert.deepEqual(b.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), a.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), 'the copy posted the same off request')
+    assert.ok(b.sys.daemon.calls.some((c) => c.startsWith('POST /off') && c.includes('"exit":true')), 'no names: the daemon was asked to go once drained')
+  } finally { await ctl.close() }
+})
+
+// ── what it is made of ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+test('V11: what is generated imports node:* and nothing else — no import or export statement, no require, no dynamic import; every built-in comes in through the one loader, by a literal name', () => {
+  const text = buildStandalone({ version: 'test' })
+  assert.match(text, /^#!\/usr\/bin\/env node\n\/\/ asight-off test — generated from src\/off by asight on; do not edit\n/, 'the shebang and the version line, first')
+  assert.equal(buildStandalone({ version: 'test' }), text, 'the same text every time: `on` compares it with what is on disk')
+  const calls = [...text.matchAll(/__asightLoad\(/g)].length
+  const specs = [...text.matchAll(/__asightLoad\(\s*(['"])([^'"]+)\1\s*\)/g)].map((m) => m[2])
+  assert.ok(specs.length >= 8, `it loads the built-ins the undo side uses: ${specs}`)
+  assert.equal(specs.length, calls, 'every call of the loader names a built-in by a literal')
+  assert.deepEqual(specs.filter((s) => !s.startsWith('node:')), [], 'node:* only')
+  const bare = text.split('\n').filter((l) => /^\s*(import|export)\s/.test(l) || /\brequire\s*\(/.test(l.replace(/typeof require/g, '')) || /\bimport\s*\(/.test(l))
+  assert.deepEqual(bare, [], 'nothing else brings code in')
+  assert.ok(!/from\s+['"]\.{1,2}\//.test(text.replace(/\/\/.*$/gm, '')), 'and no relative path is left')
+})
+
+// The file has no extension: which kind of module Node takes it for is up to the Node (and a package.json somewhere above it). It is written to be right either way.
+test('the file runs however Node takes a file with no extension: not as an ES module (no detection), and as one (a package.json of type module above it)', async () => {
+  const text = buildStandalone({ version: 'test' })
+  const usage = async (opts) => { const r = await runCopy(text, ['--bogus'], opts); assert.deepEqual([r.status, /unknown option --bogus/.test(r.stderr)], [2, true], `${JSON.stringify(opts)}: ${r.stderr}`) }
+  await usage({}) // parses its own arguments and prints on the process's streams
+  if (spawnSync(process.execPath, ['--no-experimental-detect-module', '-e', '0']).status === 0) await usage({ nodeArgs: ['--no-experimental-detect-module'] })
+  if (typeof process.getBuiltinModule === 'function') await usage({ sibling: { 'package.json': '{"type":"module"}\n' } })
+})
+
+// ── what the generator refuses ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+const tree = (files) => { const dir = tmpDir('asight-gen-'); for (const [n, t] of Object.entries(files)) fs.writeFileSync(path.join(dir, n), t); return dir }
+const GOOD = {
+  'main.mjs': "import { help } from './help.mjs'\nexport async function runOffCli(argv) { console.log(help(argv)); return 7 }\n",
+  'help.mjs': "import { shout } from './util.mjs'\nexport const help = (a) => shout(a)\n",
+  'util.mjs': 'export const shout = (s) => s\n',
+}
+
+test('the generator: dependencies come first, a built-in is loaded once however a module names it, a template literal that looks like code stays text, and the file runs', async () => {
+  const dir = tree({
+    ...GOOD,
+    'help.mjs': "import nodeFs from 'node:fs'\nimport path, { sep as pathSep } from 'node:path'\nimport * as nodeOs from 'node:os'\nimport { shout } from './util.mjs'\nexport const TEXT = `\nexport const notReal = 1\nimport x from 'nope'\n${'}'}\n`\n// import y from 'no'\nexport function help(argv) { return [shout(argv.join()), nodeFs.existsSync('/') && path.basename('/a/b'), pathSep, typeof nodeOs.tmpdir, TEXT.length].join('|') }\n",
+    'util.mjs': "import fs from 'node:fs'\nimport nodeFs from 'node:fs'\nexport const shout = (s) => `${s}!` + (fs === nodeFs ? '' : 'DIFFERENT')\n",
+  })
+  const text = buildStandalone({ srcDir: dir, version: 'g1' })
+  const at = (name) => text.indexOf(`// ── src/off/${name} ──`)
+  assert.ok(at('util.mjs') > 0 && at('util.mjs') < at('help.mjs') && at('help.mjs') < at('main.mjs'), 'util, then help, then main')
+  assert.equal([...text.matchAll(/__asightLoad\('node:fs'\)/g)].length, 1, 'node:fs is loaded once, for both names it goes by')
+  const r = await runCopy(text, ['x', 'y'])
+  assert.deepEqual([r.status, r.stderr], [7, ''])
+  assert.equal(r.stdout.trim(), `x,y!|b|/|function|${"\nexport const notReal = 1\nimport x from 'nope'\n}\n".length}`)
+})
+
+test('the generator refuses what would make a wrong file: a duplicate top-level name, an import that is not node:* or a file of the directory, a cycle, an export it cannot strip, a rename of an import', () => {
+  const bad = (override, re) => assert.throws(() => buildStandalone({ srcDir: tree({ ...GOOD, ...override }), version: 'g' }), re)
+  const help = (extra) => ({ 'help.mjs': GOOD['help.mjs'] + extra }) // after the code
+  const top = (line) => ({ 'help.mjs': line + GOOD['help.mjs'] }) // before it, where imports are
+  bad({ ...help('const dup = 1\n'), 'util.mjs': `${GOOD['util.mjs']}const dup = 2\n` }, /dup.*(util|help)\.mjs.*(util|help)\.mjs/)
+  bad(top("import x from 'left-pad'\n"), /left-pad/)
+  bad(top("import x from '../paths.mjs'\n"), /\.\.\/paths\.mjs/)
+  bad(top("import x from 'fs'\n"), /'fs'/)
+  bad(top("import './nope.mjs'\n"), /side-effect/)
+  bad({ 'util.mjs': "import { help } from './help.mjs'\nexport const shout = (s) => help(s)\n" }, /cycle.*(help|util)\.mjs/)
+  bad(help("import late from 'node:os'\n"), /after the first statement/)
+  bad(help('export default 1\n'), /export default/)
+  bad(help('const q = 1\nexport { q }\n'), /export \{/)
+  bad(help("export * from './util.mjs'\n"), /export \*/)
+  bad({ 'help.mjs': "import { shout as yell } from './util.mjs'\nexport const help = (a) => yell(a)\n" }, /shout as yell/)
+  bad({ 'help.mjs': "import { nothing } from './util.mjs'\nexport const help = (a) => nothing(a)\n" }, /nothing.*util\.mjs/)
+  bad(help('export const { a, b } = { a: 1, b: 2 }\n'), /destructuring/)
+  bad({ 'help.mjs': `import path from 'node:path'\n${GOOD['help.mjs']}`, 'util.mjs': `${GOOD['util.mjs']}export const path = 1\n` }, /path.*(util|help)\.mjs/)
+  bad({ 'help.mjs': `import x from 'node:fs'\n${GOOD['help.mjs']}`, 'util.mjs': `import x from 'node:os'\n${GOOD['util.mjs']}` }, /x.*node:(fs|os).*node:(fs|os)/)
+  bad(help('export const module = 1\n'), /module/)
+  assert.throws(() => buildStandalone({ srcDir: tree({ 'main.mjs': GOOD['main.mjs'] }), version: 'g' }), /help\.mjs/, 'an import of a file that is not there')
+  assert.throws(() => buildStandalone({ version: '' }), /version/)
+})
+
+test('src/off carries OFF_VERSION as an integer, and the unique-name rule the generator needs holds over the real directory (it builds)', () => {
+  assert.ok(Number.isInteger(OFF_VERSION) && OFF_VERSION >= 1)
+  assert.ok(buildStandalone({ version: OFF_VERSION }).length > 20_000)
+})
+
+// ── V35 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+test('V35: an item of a kind the copy does not know is left alone — ok:false, exit 1, the hint is `asight off`; every other entry is undone', async () => {
+  const s = await brokenAsight()
+  const before = preEntries(s)
+  const mystery = path.join(s.home, 'mystery.cfg')
+  fs.writeFileSync(mystery, 'x')
+  const m = readManifest(s.dir)
+  m.entries.push({ harness: 'codex', path: mystery, kind: 'mystery', undo_by_hand: 'rm it' })
+  saveManifest(s.dir, m)
+  const r = await runWritten(s, ['--json'])
+  assert.equal(r.status, 1, r.stderr)
+  const out = JSON.parse(r.stdout)
+  assert.equal(out.ok, false)
+  const left = out.left.find((l) => l.path === mystery)
+  assert.ok(left && /asight off/.test(left.reason) && /mystery/.test(left.reason), `the item and the hint: ${JSON.stringify(out.left)}`)
+  assert.equal(fs.readFileSync(mystery, 'utf8'), 'x', 'the item was not touched')
+  assert.deepEqual(backToBefore(before), [], 'the entries it does know are back as they were')
+  assert.deepEqual(readManifest(s.dir).entries.map((e) => e.kind), ['mystery'], 'and the manifest keeps the one it left, for the asight that knows it')
+  assert.equal(flowEvents(s.dir).at(-1).outcome, 'left')
+  // `asight off` itself says the same thing with its own words: it IS the asight, so it cannot send anyone to itself
+  const t = await brokenAsight()
+  const mt = readManifest(t.dir); const myst2 = path.join(t.home, 'mystery.cfg'); fs.writeFileSync(myst2, 'x')
+  mt.entries.push({ harness: 'codex', path: myst2, kind: 'mystery', undo_by_hand: 'rm it' }); saveManifest(t.dir, mt)
+  const io = fakeIo()
+  assert.equal(await runOffCli(['--json'], cliCtx(t, io)), 1, 'asight off is not done either: an item left is a not-done off')
+  assert.ok(!/asight off/.test(io.json().left.find((l) => l.path === myst2).reason), 'but it does not tell anyone to run itself')
+})
+
+test('V35: a manifest newer than the copy knows is left alone — ok:false, exit 1, the hint is `asight off`; the routing is still taken off', async () => {
+  const s = await brokenAsight()
+  const file = manifestPath(s.dir)
+  const m = JSON.parse(fs.readFileSync(file, 'utf8')); m.version = MANIFEST_VERSION + 1
+  fs.writeFileSync(file, JSON.stringify(m))
+  const userBefore = s.userFiles()
+  const r = await runWritten(s, ['--json'])
+  assert.equal(r.status, 1, r.stderr)
+  const out = JSON.parse(r.stdout)
+  assert.equal(out.ok, false)
+  assert.match(out.problems.join('\n'), new RegExp(`version ${MANIFEST_VERSION + 1}[^\\n]*asight off`), 'the version it does not read, and what to run')
+  assert.deepEqual(s.userFiles(), userBefore, 'no entry was touched')
+  assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ['off', 'off'], 'the desired state is off all the same')
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).version, MANIFEST_VERSION + 1, 'and the manifest is as the newer asight wrote it')
+  const io = fakeIo(), t = await brokenAsight()
+  const f2 = manifestPath(t.dir); const m2 = JSON.parse(fs.readFileSync(f2, 'utf8')); m2.version = MANIFEST_VERSION + 1; fs.writeFileSync(f2, JSON.stringify(m2))
+  assert.equal(await runOffCli(['--json'], cliCtx(t, io)), 1)
+  assert.ok(!/run `asight off`/.test(io.json().problems.join('\n')), '`asight off` does not send anyone to itself')
+})
+
+test('V35: the check reports a copy that is stale, missing or not what src/off generates; writing it makes it equal; a second write changes nothing', async () => {
+  const home = tmpDir('asight-chk-')
+  const file = standalonePath(home)
+  const missing = checkStandalone({ home, version: OFF_VERSION })
+  assert.deepEqual([missing.ok, missing.path, missing.found, missing.expected], [false, file, null, String(OFF_VERSION)])
+  assert.match(missing.reason, /not there/)
+  const w = writeStandalone({ home, version: OFF_VERSION })
+  assert.deepEqual([w.path, w.written, fs.statSync(file).mode & 0o777, fs.readFileSync(file, 'utf8') === buildStandalone({ version: OFF_VERSION })], [file, true, 0o700, true])
+  assert.deepEqual([checkStandalone({ home, version: OFF_VERSION }).ok, writeStandalone({ home, version: OFF_VERSION }).written], [true, false], 'equal to what is generated: nothing to do')
+  assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700, 'the directory it made is the user\'s alone')
+  // an older copy (its version line says so)
+  fs.writeFileSync(file, '#!/usr/bin/env node\n// asight-off 0 — generated from src/off by asight on; do not edit\n', { mode: 0o700 })
+  const old = checkStandalone({ home, version: OFF_VERSION })
+  assert.deepEqual([old.ok, old.found, old.expected], [false, '0', String(OFF_VERSION)])
+  assert.match(old.reason, /version 0.*version/, 'says which version it is and which is current')
+  // the same version line over other content: still not what `on` writes
+  fs.writeFileSync(file, buildStandalone({ version: OFF_VERSION }) + '// edited\n', { mode: 0o700 })
+  const edited = checkStandalone({ home, version: OFF_VERSION })
+  assert.deepEqual([edited.ok, edited.found], [false, String(OFF_VERSION)])
+  assert.match(edited.reason, /differ/)
+  // a copy somebody made unusable
+  fs.writeFileSync(file, buildStandalone({ version: OFF_VERSION })); fs.chmodSync(file, 0o600)
+  assert.equal(checkStandalone({ home, version: OFF_VERSION }).ok, false, 'not executable')
+  assert.deepEqual([writeStandalone({ home, version: OFF_VERSION }).written, fs.statSync(file).mode & 0o700], [true, 0o700], 'written again, and executable')
+  // the version is a parameter, and OFF_VERSION is the default
+  assert.deepEqual([checkStandalone({ home }).ok, checkStandalone({ home, version: 'other' }).ok], [true, false])
+  // a copy that cannot be read is said, with why
+  fs.rmSync(file); fs.mkdirSync(file)
+  const dir = checkStandalone({ home })
+  assert.deepEqual([dir.ok, dir.found], [false, null]); assert.match(dir.reason, /EISDIR|cannot be read/)
+})
+
+test('V35: `asight doctor` has a line for the copy — a ✓ when it is current, a ⚠ that says what is wrong when it is not — and writes nothing', async () => {
+  const s = await installedHome({ names: ['claude-code'] })
+  const dir = tmpDir('asight-stub-'), bin = path.join(dir, 'bin'), log = path.join(dir, 'calls.log')
+  fs.mkdirSync(bin)
+  for (const name of ['security', 'systemctl', 'launchctl', 'certutil', 'loginctl', 'ss', 'ip']) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\nexit 1\n`, { mode: 0o755 }) // doctor's trust check finds these, and only these (`ss` and `ip` are the reads of its network facts, which only read) (its dependency probe looks at files on PATH, it starts no `which`)
+  const doctor = () => spawnSync(process.execPath, [path.join(REPO, 'bin', 'asight.mjs'), 'doctor', '--source', tmpDir('asight-src-')], { env: { PATH: bin, HOME: s.home, TMPDIR: os.tmpdir(), ASIGHT_TEST_SANDBOX: '1', ASIGHT_MIHOMO_SOCK: path.join(dir, 'none.sock') }, encoding: 'utf8', timeout: 60_000 }) // the VPN probe is pinned to a socket nobody listens on, so it asks no `ps` and can never reach the developer's own core
+  const line = (r) => r.stdout.split('\n').find((l) => l.includes('asight-off(')) || `(no line) ${r.stdout}`
+  const file = standalonePath(s.home)
+  const good = fs.readFileSync(file, 'utf8')
+  assert.match(line(doctor()), new RegExp(`✓ asight-off[^\\n]*${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} · 版本 ${OFF_VERSION}`))
+  fs.writeFileSync(file, good.replace(`// asight-off ${OFF_VERSION} —`, '// asight-off 0 —'))
+  assert.match(line(doctor()), new RegExp(`⚠ asight-off[^\\n]*is version 0, this asight writes version ${OFF_VERSION}`))
+  fs.rmSync(file)
+  assert.match(line(doctor()), /⚠ asight-off[^\n]*is not there/)
+  assert.ok(!fs.existsSync(file), 'doctor reads: it does not write the copy')
+  assert.deepEqual((fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '').split('\n').filter((c) => /^(systemctl|loginctl) |^certutil (?!-L )|^launchctl (?!list |getenv )/.test(c)), [], 'and runs none of the tools that change a machine (`certutil -L` is the question doctor asks of the user trust store on Linux, `launchctl list` / `getenv` the ones it asks on a Mac; 1.6 §2)')
+})
+
+// The filter of the test above lets `certutil -L` through (audit rule-b 1: on Linux doctor's question ④ is that very call, 1.6 §2, and the filter used to forbid every certutil, so the
+// test was red on every Linux run and green on a Mac). It must let through ONLY that: the question asked of the user trust store is a listing, whichever platform this runs on.
+test('V35: the trust-store question `asight doctor` asks is a read — certutil -L on Linux, security find-certificate on a Mac — never an add, a delete or a trust change', () => {
+  for (const platform of ['linux', 'darwin']) {
+    const calls = []
+    const sandbox = tmpDir('asight-trust-q-')
+    // "not found" is the answer a fake store gives: the question is what is under test, so the verdict (a throw or false) is not
+    try { verifyUserTrustOnly({ platform, installerOpts: { keychain: path.join(sandbox, 'login.keychain-db'), nssdb: path.join(sandbox, 'nssdb'), run: (file, args) => { calls.push([file, ...args]); return { status: platform === 'darwin' ? 44 : 255, stdout: '', stderr: platform === 'darwin' ? 'could not be found in the keychain' : 'certutil: Could not find cert' } } } }) } catch { /* the verdict */ }
+    assert.equal(calls.length, 1, platform)
+    assert.ok(platform === 'linux' ? calls[0][0] === 'certutil' && calls[0][1] === '-L' : calls[0][0] === 'security' && calls[0][1] === 'find-certificate', `${platform}: ${calls[0].join(' ')}`)
+    assert.ok(!calls[0].some((a) => ['-A', '-D', '-N', 'add-trusted-cert', 'delete-certificate', 'add-certificates'].includes(a)), `${platform}: no write verb`)
+  }
+})
+
+test('V35: every `on` writes the copy again — after the first on it is what src/off generates, and a copy that was changed is put back by the next on', async () => {
+  const s = await installedHome({ names: ['claude-code'] })
+  const file = standalonePath(s.home)
+  assert.equal(fs.readFileSync(file, 'utf8'), buildStandalone({ version: OFF_VERSION }), 'the first on wrote it')
+  assert.equal(fs.statSync(file).mode & 0o777, 0o700)
+  assert.deepEqual(checkStandalone({ home: s.home }), { ok: true, path: file, found: String(OFF_VERSION), expected: String(OFF_VERSION) })
+  fs.writeFileSync(file, '#!/usr/bin/env node\n// asight-off 0 — generated from src/off by asight on; do not edit\n', { mode: 0o700 })
+  const again = await s.on()
+  assert.equal(again.exit, 0)
+  assert.equal(fs.readFileSync(file, 'utf8'), buildStandalone({ version: OFF_VERSION }), 'the next on, with nothing else to do, wrote it again')
+  assert.ok(again.receipt.created.includes(file), 'and the receipt lists it, like every file asight writes')
+  const quiet = await s.on()
+  assert.ok(!quiet.receipt.created.includes(file), 'an on that finds it as it should be does not touch it')
+})
+
+// ── the receipt and the plan ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+test('the first on names the copy, lists it among what it created and in the plan it prints, and the file is there and runs; the dry run lists it too', async () => {
+  const home = tmpDir('asight-on-std-'); seedClaude(home)
+  const io = fakeIo()
+  assert.equal(await runOnCli(['--dry-run', '--json'], onCtx(home, io)), 0)
+  const dry = io.json()
+  assert.ok(dry.created.includes(standalonePath(home)) && !fs.existsSync(standalonePath(home)), 'the dry run says it will be written, and writes nothing')
+  const io2 = fakeIo()
+  assert.equal(await runOnCli(['--yes', '--json'], onCtx(home, io2)), 0)
+  const r = io2.json()
+  assert.ok(r.created.includes(standalonePath(home)) && r.standalone === standalonePath(home) && r.undo.includes(standalonePath(home)))
+  assert.match(io2.stderrText(), /asight-off/, 'the plan printed before the first write names it')
+  assert.deepEqual(r.created.slice().sort(), dry.created.slice().sort(), 'the dry run and the run list the same files')
+  const run = spawnSync(process.execPath, [standalonePath(home), '--bogus'], { env: { ...process.env, NODE_PATH: '' }, cwd: path.dirname(standalonePath(home)), encoding: 'utf8' })
+  assert.deepEqual([run.status, /unknown option --bogus/.test(run.stderr)], [2, true], 'the path the receipt prints is a file that runs')
+  assert.match(formatPlan({ first: true, files: [], entries: [], standalone: '/home/a/.asight/bin/asight-off' }, { home: '/home/a' }), /~\/\.asight\/bin\/asight-off/)
+})
+
+test('a copy that cannot be written stops the on before one file of the agents\' is touched, says why, exits 1 and leaves a failure line in flows/ (R3, R11)', async () => {
+  const home = tmpDir('asight-on-nostd-'); const settings = seedClaude(home)
+  const refuses = new Proxy(fs, { get: (t, k) => (k === 'openSync' ? (p, ...a) => { if (String(p).includes('asight-off')) throw Object.assign(new Error('EACCES: permission denied, open'), { code: 'EACCES' }); return t.openSync(p, ...a) } : typeof t[k] === 'function' ? t[k].bind(t) : t[k]) })
+  const before = fs.readFileSync(settings, 'utf8')
+  const io = fakeIo()
+  assert.equal(await runOnCli(['--yes', '--json'], onCtx(home, io, { deps: { fs: refuses } })), 1)
+  const r = io.json()
+  assert.equal(r.ok, false)
+  assert.match(r.notes.join('\n'), /asight-off[^\n]*the undo that works without the source tree, could not be written \(EACCES[^\n]*no file of the agents' was changed/)
+  assert.equal(r.standalone, undefined, 'the receipt names no path that is not a file')
+  assert.deepEqual([fs.existsSync(standalonePath(home)), fs.readFileSync(settings, 'utf8') === before], [false, true], 'no copy, and the agent\'s settings are as they were')
+  const failure = flowEvents(path.join(home, '.asight', 'collector')).find((e) => e.event === 'failure' && /asight-off/.test(e.reason))
+  assert.ok(failure && failure.where === 'install' && failure.code === 'EACCES', JSON.stringify(failure))
+  const retry = fakeIo()
+  assert.equal(await runOnCli(['--yes', '--json'], onCtx(home, retry)), 0, 'and once that is put right, the same on finishes')
+})
+
+// ── the old capture (1.6 §4): the copy takes it out too, with the repository out of reach ────────────
+
+test('1.6 §4: on a platform with no new collector the copy is `asight off` for the old capture — it says so, undoes the CC steer from its stash, asks launchd only what is loaded; nothing of the repository is needed', async () => {
+  const s = macHome({ block: false, runtime: false, agents: [], steer: true, displaced: { HTTPS_PROXY: 'http://corp:3128' } })
+  const dir = tmpDir('asight-stub-'), bin = path.join(dir, 'bin'), log = path.join(dir, 'calls.log')
+  fs.mkdirSync(bin)
+  fs.writeFileSync(path.join(bin, 'launchctl'), `#!/bin/sh\necho "launchctl $*" >> "${log}"\ncase "$1" in list) exit 113;; *) exit 0;; esac\n`, { mode: 0o755 })
+  fs.writeFileSync(path.join(bin, 'ps'), `#!/bin/sh\necho "ps $*" >> "${log}"\nexit 0\n`, { mode: 0o755 }) // no process
+  fs.writeFileSync(path.join(bin, 'security'), `#!/bin/sh\necho "security $*" >> "${log}"\ncase "$1" in find-certificate) exit 44;; *) exit 0;; esac\n`, { mode: 0o755 })
+  const text = buildStandalone({ version: OFF_VERSION })
+  assert.ok(text.includes('undoLegacy') && text.includes('legacyOffCli'), 'the generated file carries the old capture\'s undo')
+  const AS_MAC = `runOffCli(process.argv.slice(2), { standalone: true, platform: 'darwin', deps: { getuid: () => 501 } })`
+  const r = await runCopy(text.replace(STANDALONE_ENTRY, AS_MAC), ['--json'], { env: { HOME: s.home, PATH: bin, ASIGHT_MIHOMO_SOCK: path.join(s.home, 'no-such-mihomo.sock') } })
+  assert.equal(r.status, 0, r.stderr + r.stdout)
+  assert.equal(r.stderr.split('\n')[0], '本平台 on / off 驱动旧采集(过渡期)', 'in --json the note goes to stderr, stdout is the one JSON')
+  const out = JSON.parse(r.stdout)
+  assert.deepEqual([out.command, out.ok, out.legacy], ['off', true, true])
+  assert.equal(JSON.parse(fs.readFileSync(s.settings, 'utf8')).env.HTTPS_PROXY, 'http://corp:3128', 'the value the steer displaced is back')
+  assert.equal(fs.existsSync(s.stash), false)
+  const calls = fs.readFileSync(log, 'utf8').trim().split('\n')
+  assert.ok(calls.every((c) => /^(launchctl (list|getenv)|security find-certificate|ps )/.test(c)), `only reads: ${calls.join(' | ')}`)
+})

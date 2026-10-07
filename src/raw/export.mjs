@@ -40,14 +40,16 @@ export function sessionSealedFiles(sessionsRoot, session) {
 const SESSION_STREAMS = ['calls.ndjson', 'probes.ndjson', 'other.ndjson'];
 
 // Every file under the export dir and one level down — a session's directory (for `asight doctor` ④b:
-// they hold credentials too).
-export function exportFiles(dir = exportDir(), { fs = nodeFs } = {}) {
+// they hold credentials too). A directory that is not there is no files; one that exists and cannot be
+// listed is `onError(dir, err)` (doctor: 无法判定) — without an `onError` it is skipped as before.
+export function exportFiles(dir = exportDir(), { fs = nodeFs, onError = null } = {}) {
   const out = [];
-  let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  const bad = (d, e) => { if (onError && !(e && (e.code === 'ENOENT' || e.code === 'ENOTDIR'))) onError(d, e); };
+  let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { bad(dir, e); return out; }
   for (const e of ents) {
     const p = path.join(dir, e.name);
     if (e.isFile()) out.push(p);
-    else if (e.isDirectory()) try { for (const s of fs.readdirSync(p, { withFileTypes: true })) if (s.isFile()) out.push(path.join(p, s.name)); } catch {}
+    else if (e.isDirectory()) try { for (const s of fs.readdirSync(p, { withFileTypes: true })) if (s.isFile()) out.push(path.join(p, s.name)); } catch (err) { bad(p, err); }
   }
   return out;
 }

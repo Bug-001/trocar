@@ -9,11 +9,12 @@
 // mistakes the absence of a Windows installer for coverage — same discipline as relay-tee's X.
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
+import { LEGACY_CA_CN, LEGACY_CA_NICKNAME, caRemoveArgv } from '../off/legacy.mjs'
 
-// CA subject CN — "/CN=atrace local MITM CA".
-export const CA_CN = 'atrace local MITM CA'
+// CA subject CN — "/CN=atrace local MITM CA". (The name and the removal command live in src/off/legacy.mjs: `asight off` removes the CA with the same argv.)
+export const CA_CN = LEGACY_CA_CN
 // NSS nickname the CA is registered under (Linux).
-export const CA_NICKNAME = 'asight-ca'
+export const CA_NICKNAME = LEGACY_CA_NICKNAME
 
 // Default runner: run a command, capture status/stdout/stderr, NEVER throw on nonzero exit (a nonzero exit is data
 // for the caller). A command that could not be run at all (ENOENT: not on PATH) has status null and its `error` code.
@@ -52,7 +53,7 @@ export function darwinInstaller({ run = defaultRun, keychain } = {}) {
   const kc = keychain || path.join(process.env.HOME || '', 'Library/Keychains/login.keychain-db')
   const installArgv = (caPath) => ({ file: 'security', args: ['add-certificates', '-k', kc, caPath] })
   const verifyArgv = () => ({ file: 'security', args: ['find-certificate', '-c', CA_CN, kc] })
-  const uninstallArgv = () => ({ file: 'security', args: ['delete-certificate', '-c', CA_CN, kc] })
+  const uninstallArgv = () => caRemoveArgv({ platform: 'darwin', keychain: kc })
   return {
     platform: 'darwin', keychain: kc,
     installArgv, verifyArgv, uninstallArgv,
@@ -71,7 +72,7 @@ export function linuxInstaller({ run = defaultRun, nssdb } = {}) {
   const D = `sql:${db}`
   const installArgv = (caPath) => ({ file: 'certutil', args: ['-A', '-d', D, '-n', CA_NICKNAME, '-t', 'C,,', '-i', caPath] })
   const verifyArgv = () => ({ file: 'certutil', args: ['-L', '-d', D, '-n', CA_NICKNAME] })
-  const uninstallArgv = () => ({ file: 'certutil', args: ['-D', '-d', D, '-n', CA_NICKNAME] })
+  const uninstallArgv = () => caRemoveArgv({ platform: 'linux', nssdb: db })
   return {
     platform: 'linux', nssdb: db,
     installArgv, verifyArgv, uninstallArgv,

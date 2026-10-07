@@ -50,6 +50,18 @@ function inject(ctx) {
   }
 }
 
+// How OpenCode reads a proxy (RFC 1.6 §9.7): HTTPS_PROXY / HTTP_PROXY from its environment, at start; no config file, no OS proxy, no SOCKS (the request fails).
+const proxy = {
+  env: ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy'],
+  files: [],
+  systemProxy: { http: false, ws: false },
+  schemes: ['http', 'https'],
+  unsupported: { socks4: 'fails', socks5: 'fails', socks5h: 'fails' },
+  branches: ['all'],
+  measured: { win32: 'lab', linux: 'inferred', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3); elsewhere inferred from it, until measured
+  restart: { hint: '退出这个 OpenCode(含 serve / web),在设好代理环境变量的终端里重新启动', processes: 'opencode' },
+}
+
 export default {
   name: 'opencode',
   runtime: 'node', // Bun-compiled; NODE_EXTRA_CA_CERTS semantics
@@ -61,6 +73,7 @@ export default {
     },
   },
   hosts: ['api.anthropic.com', 'api.openai.com', 'chatgpt.com', 'api.deepseek.com', 'api.moonshot.ai', 'api.moonshot.cn', 'api.kimi.com', 'open.bigmodel.cn', 'api.z.ai', 'openrouter.ai', 'opencode.ai', 'api.minimax.io', 'api.x.ai', 'generativelanguage.googleapis.com'],
+  proxy,
   configHosts: (ctx) => providerHosts(configDocs(ctx)),
   bypass: (ctx) => [
     { host: 'models.dev', reason: 'before-plugin' },

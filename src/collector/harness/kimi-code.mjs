@@ -16,7 +16,7 @@
 import path from 'node:path'
 import { hostOf, expandHome } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
-import { lineComment } from '../core/trust/text-edit.mjs'
+import { lineComment } from '../../off/text-edit.mjs'
 import { envValues, envProxies } from './_common.mjs'
 import { renderShim } from './_plugins.mjs'
 
@@ -66,6 +66,18 @@ function inject(ctx) {
   }
 }
 
+// How Kimi Code reads a proxy (RFC 1.6 §9.7): the proxy variables of its environment, at start; SOCKS is supported; no config file, no OS proxy (its VS Code extension follows VS Code's own setting, on Windows).
+const proxy = {
+  env: ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY', 'all_proxy', 'ALL_PROXY'],
+  files: [],
+  systemProxy: { http: false, ws: false },
+  schemes: ['http', 'https', 'socks4', 'socks5', 'socks5h'],
+  unsupported: {},
+  branches: ['all'],
+  measured: { win32: 'lab', linux: 'inferred', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3); elsewhere inferred from it, until measured
+  restart: { hint: '退出这个 kimi,在新开的终端里以 `kimi` 重新启动(经 asight 的启动脚本,在那里读代理环境变量)', processes: 'kimi' },
+}
+
 export default {
   name: 'kimi-code',
   runtime: 'node',
@@ -76,6 +88,7 @@ export default {
     },
   },
   hosts: ['api.kimi.com', 'api.kimi.ai', 'api.moonshot.ai', 'api.moonshot.cn'],
+  proxy,
   configHosts,
   proxies: (ctx) => envProxies(ctx.env, ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY', 'all_proxy', 'ALL_PROXY']),
   inject,
@@ -89,8 +102,10 @@ export default {
       if (NODE.test(exe || argv[0] || '')) return 'kimi-npm-no-shim'
       return collectorDir && readText(path.join(collectorDir, 'bin', 'kimi')) == null ? 'shim-not-on-path' : 'kimi-not-via-shim'
     },
-    // uninstall step 5: only a kimi the shim started (its NODE_EXTRA_CA_CERTS is asight's file) ever trusted asight
-    afterUninstall: (f, { collectorDir }) => { let v = null; try { v = f.env && f.env.get(CA_VAR) } catch { /* gone */ } return typeof v === 'string' && v.startsWith(collectorDir + path.sep) ? 'restart' : null },
+    // uninstall step 5: only a kimi the shim started (its NODE_EXTRA_CA_CERTS is asight's file) ever trusted asight, and one that did trusts it until it
+    // restarts. Both as data, so the install manifest's liveness snapshot carries them and `off` (which has no descriptor) reports the same processes
+    afterUninstall: 'restart',
+    untilEnviron: CA_VAR,
     hints: {
       'kimi-not-via-shim': "this kimi did not start through asight's shim (started before install, by its absolute path, from a shell that did not read the rc PATH line, or by an IDE); start it as `kimi` from a new shell",
       'shim-not-on-path': "asight installed no launch shim for Kimi Code (see the install note: no ~/.kimi-code/bin/kimi, or no installer PATH line in a shell rc)",
