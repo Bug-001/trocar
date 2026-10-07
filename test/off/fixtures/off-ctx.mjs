@@ -7,6 +7,7 @@ import { turnOn } from '../../../src/collector/install.mjs'
 import { userUnit } from '../../../src/collector/arch/linux/unit.mjs'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
 import { runOff } from '../../../src/off/orchestrate.mjs'
+import { runUninstall } from '../../../src/cli/uninstall.mjs'
 import { readManifest } from '../../../src/off/manifest.mjs'
 import { HARNESS_IDS } from '../../../src/cli/harness-names.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
@@ -19,7 +20,7 @@ const allDescriptors = await loadHarnesses()
 const tick = () => new Promise((resolve) => setTimeout(resolve, 1))
 
 /** `asight on` has run for `names` (default Claude Code and Codex) in a fresh sandbox HOME of the seven-homes layout; `seed(home, sh)` may change the user's files first.
- *  → { home, sh, dir, sys, descs, on(o), off(o), offDeps(o), manifest(), state(), userFiles() }. `sys.daemon` is the fake daemon (`state.up`, `isRecording(h)`),
+ *  → { home, sh, dir, sys, descs, on(o), off(o), uninstall(o), offDeps(o), manifest(), state(), userFiles() }. `sys.daemon` is the fake daemon (`state.up`, `isRecording(h)`),
  *  `sys.exec.calls` every OS tool run, in order. */
 export async function installedHome({ names = ['claude-code', 'codex'], seed = null, daemon = {} } = {}) {
   const home = tmpDir('asight-offc-')
@@ -36,6 +37,7 @@ export async function installedHome({ names = ['claude-code', 'codex'], seed = n
     on: (o) => turnOn(onOpts(o)),
     offDeps,
     off: (o = {}) => runOff({ home, env: sh.env, ...o, deps: offDeps(o.deps) }),
+    uninstall: (o = {}) => runUninstall({ home, env: sh.env, ...o, deps: offDeps(o.deps) }),
     manifest: () => readManifest(dir),
     state: () => JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8')),
     userFiles: () => Object.fromEntries(Object.entries(snapshot(home)).filter(([rel]) => !rel.startsWith('.asight') && !rel.startsWith(path.join('.config', 'systemd')))),
@@ -49,6 +51,19 @@ export async function installedHome({ names = ['claude-code', 'codex'], seed = n
 export function writeDaemonLock(s, body = {}) {
   fs.writeFileSync(path.join(s.dir, 'lock'), JSON.stringify({ pid: 4242, start_time: '111', boot_id: 'boot-1', helper_pid: 4243, socket: SOCK, engine_port: 47011, ...body }) + '\n')
 }
+
+// A process table the test owns: `rows` = pid → { start_time, boot_id } of what is alive; `kill` records each signal and removes the pid unless it `survives` that signal.
+export function procTable(rows, { survives = {} } = {}) {
+  const live = new Map(Object.entries(rows).map(([pid, id]) => [Number(pid), id]))
+  const sent = []
+  return {
+    live, sent, alive: (pid) => live.has(pid), identity: (pid) => live.get(pid) || { start_time: null, boot_id: null }, isHelper: (pid) => pid === 4243,
+    kill: (pid, sig) => { sent.push([pid, sig]); if (!(survives[pid] || []).includes(sig)) live.delete(pid) },
+  }
+}
+export const fakeClock = () => { let t = 10_000_000; return { ms: () => t, sleep: async (ms) => { t += ms } } }
+export const DAEMON_ROWS = { 4242: { start_time: '111', boot_id: 'boot-1' }, 4243: { start_time: '112', boot_id: 'boot-1' } }
+export const hangsOnStatus = (s) => async (q) => { if (q.path === '/status') throw Object.assign(new Error('control request timed out'), { code: 'ETIMEDOUT' }); return s.sys.daemon.request(q) }
 
 /** Every `flows/` line, parsed, oldest first. */
 export const flowEvents = (dir) => (fs.existsSync(path.join(dir, 'flows')) ? fs.readdirSync(path.join(dir, 'flows')).sort().flatMap((n) => fs.readFileSync(path.join(dir, 'flows', n), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))) : [])

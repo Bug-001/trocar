@@ -18,7 +18,7 @@ import { sevenHomes, USER_CA } from './fixtures/seven-homes.mjs'
 import { readStateFile } from '../../src/off/state.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
-import { installedHome, writeDaemonLock, flowEvents, ALL_HARNESSES, ROOTS } from './fixtures/off-ctx.mjs'
+import { installedHome, writeDaemonLock, flowEvents, ALL_HARNESSES, ROOTS, procTable, fakeClock, DAEMON_ROWS, hangsOnStatus } from './fixtures/off-ctx.mjs'
 
 const ROOT = createCa({ commonName: 'off root' })
 const roots = { node: [ROOT.certPem], osText: '' }
@@ -202,18 +202,6 @@ test('1.6 §1.4 第 2 步: an off with no names asks the daemon to exit once dra
 })
 
 // a fake process table: pid → identity; `ignore`: signals a pid survives (a stopped or wedged process); every signal is recorded
-function procTable(rows, { survives = {} } = {}) {
-  const live = new Map(Object.entries(rows).map(([pid, id]) => [Number(pid), id]))
-  const sent = []
-  return {
-    live, sent, alive: (pid) => live.has(pid), identity: (pid) => live.get(pid) || { start_time: null, boot_id: null }, isHelper: (pid) => pid === 4243,
-    kill: (pid, sig) => { sent.push([pid, sig]); if (!(survives[pid] || []).includes(sig)) live.delete(pid) },
-  }
-}
-const fakeClock = () => { let t = 10_000_000; return { ms: () => t, sleep: async (ms) => { t += ms } } }
-const DAEMON_ROWS = { 4242: { start_time: '111', boot_id: 'boot-1' }, 4243: { start_time: '112', boot_id: 'boot-1' } }
-const hangsOnStatus = (s) => async (q) => { if (q.path === '/status') throw Object.assign(new Error('control request timed out'), { code: 'ETIMEDOUT' }); return s.sys.daemon.request(q) }
-
 test('1.6 §1.4 第 2 / 5 步 · 「守护进程卡死」: a stuck daemon is stopped FIRST (systemctl stop, then SIGTERM), its helper with it, and only then is the first entry undone; the receipt says so', async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   writeDaemonLock(s)
