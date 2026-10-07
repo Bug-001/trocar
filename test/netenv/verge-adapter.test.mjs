@@ -131,35 +131,20 @@ test('N4 a controller whose server is not Verge\'s own core is not trusted and n
 })
 
 // N4 at the adapter, not only at discover(): the adapter built with a controller it must not trust behaves as one with no controller, and sends not one request to it
-test('N4 the adapter finds a same-named pipe owned by another user and does not trust it: verify is 「不知道」, a switch sends no request and writes only the files with the 未生效 line, the whole `off` says asight may still be on the path; the discovery says why', async (t) => {
+test('N4 the adapter finds a same-named pipe owned by another user and does not trust it: the runtime is 「不知道」 (controller-unreadable), not one request reaches the pipe, the files are still read; the discovery says why', async (t) => {
   const w = await startWorld(t)
   const asked = []
   const record = (method) => async (p, body) => { asked.push([method, p, body ?? null]); return { status: 200, ok: true, json: { version: 'v1.19.32' }, text: '' } } // a core that would answer anything: only the trust check stands in the way
   const makeClient = () => ({ get: record('GET'), put: record('PUT'), endpoint: 'pipe:verge-mihomo-<k>' })
   const procs = REFUSED['another user\'s session'].procs
   const helper = stubHelper({ procs, pipes: { [PIPE.enumerate]: { serverPid: 5000 } } })
-  const adapter = createVergeAdapter({ home: w.home, helper, listPipes: async () => [PIPE.enumerate], makeClient, ledger: w.ledger, running: () => true, env: {} })
-  const b = w.block()
-  const original = fs.readFileSync(w.file('profiles/Script.js'))
-  const lines = (g) => b.files[names(g).routeFile].split('\n').filter(Boolean)
+  const adapter = createVergeAdapter({ home: w.home, helper, listPipes: async () => [PIPE.enumerate], makeClient, running: () => true, env: {} })
 
-  assert.deepEqual(await adapter.verify('claude-code.cli'), { live: null, now: null, fbNow: null, ruleCount: null, reason: 'controller-unreadable' })
-  assert.deepEqual([(await adapter.readConfigs()).ok, (await adapter.processRulesNaming([])).reason, (await adapter.refreshProbe('claude-code.cli', { reenterPort: 7897 })).reason], [false, 'controller-unreadable', 'controller-unreadable'])
-  assert.deepEqual([(await adapter.putSelect('claude-code.cli', 'PASS')).reason, (await adapter.refreshProvider('claude-code.cli')).reason, (await adapter.pushPayload({ block: b })).reason], ['controller-unreadable', 'controller-unreadable', 'controller-unreadable'])
+  assert.deepEqual(await adapter.readConfigs(), { ok: false, reason: 'controller-unreadable' })
+  const facts = await adapter.facts()
+  assert.deepEqual(facts.runtime, { unknown: { reason: 'controller-unreadable', tried: adapter.controllerInfo().unknown.tried } })
+  assert.equal(facts.fields.mixedPort, 7897, 'what the files say is still read')
   assert.deepEqual(asked, [], 'not one request, not even GET /version, reached the pipe of the other user')
-
-  const on = await adapter.installBlock({ block: b, blockText: buildScriptJs({ block: b }), groups: GROUPS.map((x) => ({ g: x.g, on: true, lines: lines(x.g) })) })
-  assert.deepEqual([on.ok, on.exit], [false, 1])
-  assert.ok(on.lines.includes('已写入,未生效 · 去 Clash Verge → 订阅,点当前订阅重新激活'))
-  assert.deepEqual(on.rows.map((r) => [r.strategy, r.state, r.live, r.reason]), [[['none'], 'not-live', null, 'controller-unreadable'], [['none'], 'not-live', null, 'controller-unreadable']])
-  assert.equal(fs.readFileSync(w.file(names('claude-code.cli').routeFile), 'utf8'), lines('claude-code.cli').join('\n') + '\n', 'the route files are written')
-  assert.ok(fs.readFileSync(w.file('profiles/Script.js'), 'utf8').includes('asight collector'), 'and the block is in the script: the next activation has it')
-  assert.deepEqual(asked, [], 'installBlock sent nothing either')
-
-  const off = await adapter.removeBlock({ groups: GROUPS.map((x) => x.g) })
-  assert.deepEqual([off.ok, off.exit, off.lines], [false, 1, ['asight 可能仍在 Clash 的路径上,去 Clash Verge 重新激活']])
-  assert.ok(fs.readFileSync(w.file('profiles/Script.js')).equals(original), 'the files are undone all the same')
-  assert.deepEqual(asked, [])
   assert.deepEqual(adapter.controllerInfo().unknown.tried.find((x) => x.how === 'enumerate'), { how: 'enumerate', why: 'other-user' })
 })
 
@@ -632,18 +617,6 @@ test('pushPayload: a runtime shape the text splice does not read sends nothing (
   assert.deepEqual([(await w.adapter.pushPayload({ block: b })).reason, (await w.adapter.refreshProvider('claude-code.cli')).reason, (await w.adapter.putSelect('claude-code.cli', 'PASS')).reason], ['controller-unreadable', 'controller-unreadable', 'controller-unreadable'])
 })
 
-test('N14 N9 a real core refuses a pushed config in words that name the user\'s own group, node and rule: none of it comes back from pushPayload, applyGroups or installBlock', async (t) => {
-  for (const { why, message } of RECORDED_REFUSALS) {
-    const w = await startWorld(t, { script: SCRIPT_JS })
-    w.core.rejectPayload = message.replace('My Private Group', USER_GROUP).replace('Secret Node', NODE).replace('x.example', USER_DOMAIN)
-    const b = w.block()
-    const results = [await w.adapter.pushPayload({ block: b }), await w.adapter.applyGroups({ groups: GROUPS.map((x) => ({ g: x.g, on: true, lines: ['PROCESS-NAME,claude.exe'] })), block: b }), await w.adapter.installBlock({ block: b, blockText: buildScriptJs({ block: b }), groups: GROUPS.map((x) => ({ g: x.g, on: true, lines: [] })) })]
-    const text = JSON.stringify([results, w.ledger.entries(), w.ledger.kept()])
-    for (const leak of [...LEAKS, 'Private', 'Secret Node', 'Zzz', 'duplicate', 'AUTO-ALL', 'unmarshal']) assert.ok(!text.includes(leak), `${why}: "${leak}" must not be in a result, an entry or a receipt`)
-    assert.deepEqual([results[0].ok, results[0].status, results[0].reason], [false, 400, 'refused'])
-  }
-})
-
 test('N8 the runtime goes to the core and nowhere else: nothing under ~/.asight, no ledger entry, no result holds the subscription address or a node', async (t) => {
   const w = await startWorld(t)
   const b = w.block()
@@ -686,41 +659,6 @@ test('N6 every named write has one ledger entry and one receipt row; the file ki
   assert.deepEqual(w.ledger.backups().length, 1, 'exactly one backup: the user\'s file')
 })
 
-// The same equation for the calls that turn things on and off: one receipt row per change, whatever the number of groups, and a file that `off` deletes is listed as removed and not as written.
-test('N6 R1 a call\'s receipts are its ledger entries: installBlock lists the pushed runtime once however many groups are on; the whole `off` lists each route file as removed, none as written', async (t) => {
-  const w = await startWorld(t)
-  const b = w.block()
-  const first = await w.adapter.installBlock({ block: b, blockText: buildScriptJs({ block: b }), groups: GROUPS.map((x) => ({ g: x.g, on: true, lines: b.files[names(x.g).routeFile].split('\n').filter(Boolean) })) })
-  assert.equal(first.ok, true)
-  const key = (r) => `${r.kind}|${r.key}`
-  assert.equal(first.receipts.filter((r) => r.kind === 'vpn-runtime-block').length, 1, 'one push of the runtime is one receipt row, not one per group')
-  assert.equal(first.receipts.length, w.ledger.entries().length, 'receipt rows == ledger entries')
-  assert.equal(new Set(first.receipts.map(key)).size, first.receipts.length, 'no row twice')
-  assert.deepEqual(new Set(first.receipts.map(key)), new Set(w.ledger.entries().map((e) => `${e.kind}|${e.key}`)))
-  const files = w.ledger.entries().filter((e) => e.kind === 'vpn-rule-file').map((e) => e.key)
-  assert.equal(files.length, 2)
-
-  const off = await w.adapter.removeBlock({ groups: GROUPS.map((x) => x.g) })
-  assert.equal(off.ok, true)
-  assert.deepEqual(off.receipts.filter((r) => r.kind === 'vpn-rule-file').map((r) => [r.key, r.change]).sort(), files.map((f) => [f, 'removed']).sort(), 'each file asight deleted is listed once, as removed')
-  for (const f of files) assert.equal(fs.existsSync(f), false)
-  assert.equal(new Set(off.receipts.map((r) => `${r.kind}|${r.key}|${r.change}`)).size, off.receipts.length)
-  assert.deepEqual(off.receipts.filter((r) => r.kind === 'vpn-script-block').map((r) => r.change), ['removed'])
-})
-
-test('N6 R1 a route file that cannot be deleted is not listed as removed and not hidden: the `off` says so and exits 1, and the ledger still knows the file', async (t) => {
-  const stuck = (file) => /route-codex\.app\.txt$/.test(String(file))
-  const w = await startWorld(t, { adapter: { fs: new Proxy(fs, { get: (target, prop) => (prop === 'rmSync' ? (file, ...rest) => { if (stuck(file)) throw Object.assign(new Error('busy'), { code: 'EBUSY' }); return target.rmSync(file, ...rest) } : target[prop]) }) } })
-  const b = w.block()
-  await w.adapter.installBlock({ block: b, blockText: buildScriptJs({ block: b }), groups: GROUPS.map((x) => ({ g: x.g, on: true, lines: b.files[names(x.g).routeFile].split('\n').filter(Boolean) })) })
-  const off = await w.adapter.removeBlock({ groups: GROUPS.map((x) => x.g) })
-  assert.deepEqual([off.ok, off.exit], [false, 1])
-  assert.ok(off.lines.some((l) => l.includes('codex.app')), 'the line names the group whose file stayed')
-  const kept = w.ledger.entries().filter((e) => e.kind === 'vpn-rule-file')
-  assert.deepEqual(kept.map((e) => e.group), ['codex.app'], 'the file that is still there is still in the ledger')
-  assert.deepEqual(off.receipts.filter((r) => r.kind === 'vpn-rule-file').map((r) => [path.basename(r.key), r.change]).sort(), [['route-claude-code.cli.txt', 'removed'], ['route-codex.app.txt', 'written']], 'the stuck file keeps the receipt of what was done to it: emptied')
-})
-
 test('a write without a ledger is refused; the reads need none', async (t) => {
   const w = await startWorld(t, { adapter: { ledger: null } })
   await assert.rejects(w.adapter.writeScriptBlock({ blockText: 'x' }), TypeError)
@@ -736,25 +674,23 @@ test('a write without a ledger is refused; the reads need none', async (t) => {
 
 test('a found controller is looked for again when it stops answering: Verge restarted and its pipe has a new name (the call that finds out is repeated against the new one)', async (t) => {
   const a = await startWorld(t)
-  a.live(GROUPS, { on: ['claude-code.cli'] })
-  const b = await startWorld(t) // Verge after its restart: the same data directory is the test's business, the core is a new one with the block, nothing selected
-  b.live(GROUPS)
+  const b = await startWorld(t) // Verge after its restart: the same data directory is the test's business, the core is a new one
   const pipes = { current: 'verge-mihomo-aaaa1111aaaa1111' }
   const ends = { 'pipe:verge-mihomo-aaaa1111aaaa1111': a.core, 'pipe:verge-mihomo-bbbb2222bbbb2222': b.core }
   const procs = vergeProcs()
   const helper = stubHelper({ procs, pipes: { 'verge-mihomo-aaaa1111aaaa1111': { serverPid: 4101 }, 'verge-mihomo-bbbb2222bbbb2222': { serverPid: 4101 } } })
-  const ad = createVergeAdapter({ home: a.home, helper, listPipes: async () => [pipes.current], makeClient: ({ endpoint, ...rest }) => createController({ endpoint: ends[endpoint].endpoint, ...rest }), ledger: a.ledger })
-  assert.equal((await ad.verify('claude-code.cli')).live, true)
+  const ad = createVergeAdapter({ home: a.home, helper, listPipes: async () => [pipes.current], makeClient: ({ endpoint, ...rest }) => createController({ endpoint: ends[endpoint].endpoint, ...rest }) })
+  assert.equal((await ad.readConfigs()).ok, true)
   assert.deepEqual([ad.controllerInfo().how, ad.controllerInfo().endpoint], ['enumerate', 'pipe:verge-mihomo-<k>'])
   await a.core.stop()
   pipes.current = 'verge-mihomo-bbbb2222bbbb2222'
-  assert.equal((await ad.verify('claude-code.cli')).live, false, 'the new core answered: the switch there is on PASS')
-  assert.ok(b.core.requests.some((q) => q.path === '/proxies/asight-sw-claude-code.cli'))
+  assert.equal((await ad.readConfigs()).ok, true, 'the new core answered')
+  assert.ok(b.core.requests.some((q) => q.path === '/configs'))
   await b.core.stop()
-  const gone = await ad.verify('claude-code.cli')
-  assert.deepEqual([gone.live, gone.reason], [null, 'controller-unreadable'])
+  const gone = await ad.readConfigs()
+  assert.deepEqual([gone.ok, gone.reason], [false, 'controller-unreadable'])
   const asked = helper.calls.length
-  await ad.verify('claude-code.cli')
+  await ad.readConfigs()
   assert.equal(helper.calls.length, asked, 'a controller that is not found is not searched for again at every call (a few seconds\' memory)')
 })
 

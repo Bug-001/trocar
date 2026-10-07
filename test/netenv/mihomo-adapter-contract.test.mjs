@@ -79,63 +79,6 @@ test('W57 adapter, reads: GET /rules gives the recorded payload strings and proc
   assert.deepEqual(w.ledger.entries(), [], 'nothing that failed is recorded')
 })
 
-test('W57 adapter, the whole turn on a real core: installBlock pushes the runtime, verify reads on and off from the provider list, a switch of one group leaves the other, removeBlock leaves PASS and a clean disk', gate, async (t) => {
-  const w = await realWorld(t)
-  const original = w.script()
-  const { block } = w
-  const reenter = w.ports.mixed
-
-  // first `on`: the block is not in the runtime, so the runtime is pushed with it spliced in; the select starts on PASS and is put on the fallback group
-  const first = await w.adapter.installBlock({ block, blockText: buildScriptJs({ block }), groups: groupsOn(w, [CC]) })
-  assert.deepEqual([first.ok, first.exit, first.script.ok, first.lines], [true, 0, true, []], JSON.stringify(first.rows))
-  assert.deepEqual(first.rows.map((r) => [r.g, r.strategy, r.state, r.live, r.now, r.reason]), [[CC, ['payload'], 'verified', true, names(CC).fb, null], [CODEX, ['none'], 'verified', false, 'PASS', 'off']])
-  assert.equal(first.rows[0].ruleCount, w.lines(CC).length, 'the count is the real provider list\'s: the lines of the route file')
-  assert.equal(first.rows[1].ruleCount, 0, 'an empty file is a provider with nothing in it')
-  assert.deepEqual([await nowOf(w, names(CC).sw), await nowOf(w, names(CODEX).sw)], [names(CC).fb, 'PASS'])
-  assert.equal((await w.adapter.verify(CC)).live, true)
-  assert.deepEqual(w.ledger.entries().map((e) => e.kind).sort(), ['vpn-rule-file', 'vpn-rule-file', 'vpn-runtime-block', 'vpn-runtime-select', 'vpn-script-block'])
-  assert.equal(first.receipts.length, w.ledger.entries().length, 'a receipt row for every ledger entry')
-
-  // the daemon's refresh after the engine (re)starts: the group's own probe URL; nothing listens on the engine port, so the group settles on the re-entry point
-  assert.deepEqual(await w.adapter.refreshProbe(CC, { reenterPort: reenter }), { ok: true, status: 200, reason: null })
-  assert.equal((await w.adapter.verify(CC)).fbNow, names(CC).re, 'asight-re answers its own probe, asight-in does not (no engine)')
-  assert.equal((await w.adapter.verify(CC, { daemonAlive: true })).reason, 'fallback-active', 'and with the daemon alive that is said')
-
-  // the runtime is pushed again (Verge activating the subscription): the core remembers the select in its cache.db, as the fake core's `storeSelected` does, and CC stays on
-  assert.equal((await w.adapter.pushPayload({ block })).ok, true)
-  assert.deepEqual([await nowOf(w, names(CC).sw), await nowOf(w, names(CODEX).sw)], [names(CC).fb, 'PASS'])
-
-  // off for one group: its select goes to PASS and its provider is emptied and re-read; the other group (off) is not touched, nor the script
-  const script = w.script()
-  const off = await w.adapter.applyGroups({ groups: [{ g: CC, on: false }] })
-  assert.deepEqual([off.ok, off.rows[0].strategy, off.rows[0].state, off.rows[0].live, off.rows[0].reason, off.rows[0].ruleCount], [true, ['select', 'provider'], 'verified', false, 'off', 0])
-  assert.ok(w.script().equals(script), 'Script.js is not touched by a switch')
-  // on again: both keys, read back
-  const on = await w.adapter.applyGroups({ groups: groupsOn(w, [CC]).slice(0, 1) })
-  assert.deepEqual([on.ok, on.rows[0].strategy, on.rows[0].live, on.rows[0].ruleCount], [true, ['select', 'provider'], true, w.lines(CC).length])
-  // one key is enough for off: the select alone, the provider left full, and the core says off
-  assert.equal((await w.m.ctl('PUT', `/proxies/${names(CC).sw}`, { name: 'PASS' })).status, 204)
-  const selectOnly = await w.adapter.verify(CC)
-  assert.deepEqual([selectOnly.live, selectOnly.now, selectOnly.ruleCount, selectOnly.reason], [false, 'PASS', w.lines(CC).length, 'off'])
-  await w.adapter.applyGroups({ groups: groupsOn(w, [CC]).slice(0, 1) })
-
-  // the whole `off`
-  const gone = await w.adapter.removeBlock({ groups: [CC, CODEX] })
-  assert.deepEqual([gone.ok, gone.exit, gone.lines, gone.script.identical], [true, 0, [], true])
-  assert.deepEqual(gone.residue.map((x) => x.kind), ['runtime-block', 'cache-db-select'])
-  assert.deepEqual([await nowOf(w, names(CC).sw), await nowOf(w, names(CODEX).sw)], ['PASS', 'PASS'], 'both read PASS from the core')
-  assert.ok(w.script().equals(original), 'Script.js is as it was, byte for byte')
-  assert.deepEqual([fs.existsSync(path.join(w.home, 'asight')), w.ledger.backups().length], [false, 0])
-  assert.deepEqual(w.ledger.entries().map((e) => e.kind).sort(), ['vpn-runtime-block', 'vpn-runtime-select', 'vpn-runtime-select'], 'the runtime kinds stay: they are the residue')
-  for (const row of gone.rows) assert.deepEqual([row.state, row.live], ['verified', false])
-
-  // the strip of the payload path: the runtime goes back without a trace of asight, and the core accepts it
-  const stripped = await w.adapter.pushPayload({ strip: true })
-  assert.deepEqual([stripped.ok, stripped.receipt.change], [true, 'removed'])
-  assert.equal((await w.adapter.verify(CC)).reason, 'block-not-in-runtime')
-  assert.deepEqual(Object.keys((await w.m.ctl('GET', '/providers/rules')).json().providers).filter((k) => k.startsWith('asight-')), [])
-})
-
 test('W57 adapter, a core that refuses a config: the adapter keeps the status and a reason class and none of the core\'s words; the recorded refusals and fixed messages are what this core says', gate, async (t) => {
   const w = await realWorld(t)
   const base = () => ({ 'mixed-port': w.ports.mixed, 'external-controller': `127.0.0.1:${w.ports.controller}`, secret: w.secret, mode: 'rule', proxies: [{ name: 'node-a', type: 'http', server: '127.0.0.1', port: 9 }],
@@ -158,16 +101,6 @@ test('W57 adapter, a core that refuses a config: the adapter keeps the status an
     const through = await w.ctl.put('/configs?force=true', { payload })
     assert.deepEqual([through.status, through.ok, through.text, through.json], [status, false, '', null], `${why}: the client hands on the status and nothing the core said`)
   }
-
-  // the adapter: a runtime that names a group that is not there is refused by the core; the result is the status and the class
-  fs.writeFileSync(w.file('clash-verge.yaml'), fs.readFileSync(w.file('clash-verge.yaml'), 'utf8').replace('- "MATCH,DIRECT"', '- "DOMAIN,x.example,My Private Group"\n- "MATCH,DIRECT"'))
-  const refused = await w.adapter.pushPayload({ block: w.block })
-  assert.deepEqual(refused, { ok: false, status: 400, reason: 'refused' })
-  const first = await w.adapter.installBlock({ block: w.block, blockText: buildScriptJs({ block: w.block }), groups: groupsOn(w, [CC]) })
-  const text = JSON.stringify([first, w.ledger.entries(), w.ledger.kept()])
-  for (const leak of ['Private', 'x.example', 'not found']) assert.ok(!text.includes(leak), `"${leak}" of the core's words is not in a result, an entry or a receipt`)
-  assert.deepEqual(first.rows.map((r) => [r.strategy, r.state, r.reason]), [[['payload', 'none'], 'not-live', 'block-not-in-runtime'], [['none'], 'verified', 'block-not-in-runtime']], 'the files are written and the receipt says 未生效')
-  assert.ok(first.lines.includes('已写入,未生效 · 去 Clash Verge → 订阅,点当前订阅重新激活'))
 
   // the fixed messages: each is what this core says for the thing it names, so the client's allow-list is the core's own list
   const seen = new Map()

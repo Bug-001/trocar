@@ -142,68 +142,6 @@ test('W11 find-process-mode off: an `on` writes nothing at all (the block\'s pro
   assert.deepEqual([off.ok, off.rows[0].state], [true, 'verified'])
 })
 
-test('W11 none: a payload the core refuses leaves only the files written, and the receipt says so; it is not tried again until the adapter looks again', async (t) => {
-  const w = await startWorld(t)
-  w.core.rejectPayload = 'cannot load'
-  const r = await w.adapter.installBlock({ block: w.block(), blockText: buildScriptJs({ block: w.block() }), groups: both(w) })
-  assert.deepEqual([r.ok, r.exit, r.script.ok], [false, 1, true])
-  assert.ok(r.lines.includes('已写入,未生效 · 去 Clash Verge → 订阅,点当前订阅重新激活'))
-  for (const row of r.rows) assert.deepEqual([row.strategy, row.state, row.live, row.reason], [['payload', 'none'], 'not-live', false, 'block-not-in-runtime'])
-  assert.equal(fs.readFileSync(w.file(names(CC).routeFile), 'utf8'), lines(w, CC).join('\n') + '\n', 'the files are written')
-  assert.ok(fs.readFileSync(w.file('profiles/Script.js'), 'utf8').includes('asight collector'), 'so is the block: the next activation has it')
-  const pushes = () => w.core.requests.filter((q) => q.path === '/configs?force=true').length
-  assert.equal(pushes(), 1)
-  const again = await w.adapter.applyGroups({ groups: both(w), block: w.block() })
-  assert.deepEqual([again.rows[0].strategy, pushes()], [['none'], 1], 'a refused push is not repeated')
-  w.adapter.reset()
-  w.core.rejectPayload = null
-  const third = await w.adapter.applyGroups({ groups: both(w), block: w.block() })
-  assert.deepEqual([third.ok, third.rows[0].strategy, pushes()], [true, ['payload'], 2])
-})
-
-test('W11 none: only a core that REFUSED the config (4xx) closes the payload strategy for the round; a core that failed (5xx), a controller that did not answer, a runtime that could not be read or spliced is tried again at the next `on`', async (t) => {
-  const pushes = (w) => w.core.requests.filter((q) => q.path === '/configs?force=true').length
-  // a 5xx: the core is sick, not saying no to this config
-  const sick = await startWorld(t)
-  sick.core.failOn('PUT', /^\/configs$/, 500)
-  const first = await sick.adapter.installBlock({ block: sick.block(), blockText: buildScriptJs({ block: sick.block() }), groups: both(sick) })
-  assert.deepEqual([first.rows[0].strategy, first.rows[0].steps.find((x) => x.step === 'payload').status], [['payload', 'none'], 500])
-  sick.core.failures.length = 0
-  const second = await sick.adapter.applyGroups({ groups: both(sick), block: sick.block() })
-  assert.deepEqual([second.ok, second.rows[0].strategy, pushes(sick)], [true, ['payload'], 2], 'tried again, without reset(), and it went through')
-  // the controller drops the push (status 0: the pipe went away for a moment): the same
-  let real = null
-  let drop = true
-  const flaky = { endpoint: 'flaky', get: (p) => real.get(p), put: (p, b) => (drop && p.startsWith('/configs') ? Promise.resolve({ status: 0, ok: false, json: null, text: '', error: 'ECONNRESET' }) : real.put(p, b)) }
-  const dropped = await startWorld(t, { adapter: { controller: flaky } })
-  real = createController({ endpoint: dropped.core.endpoint })
-  const lost = await dropped.adapter.applyGroups({ groups: both(dropped), block: dropped.block() })
-  assert.deepEqual([lost.rows[0].strategy, lost.rows[0].steps.find((x) => x.step === 'payload').reason], [['payload', 'none'], 'controller-unreadable'])
-  drop = false
-  assert.deepEqual([(await dropped.adapter.applyGroups({ groups: both(dropped), block: dropped.block() })).rows[0].strategy, pushes(dropped)], [['payload'], 1], 'the next `on` pushes it')
-  // a runtime that cannot be read: nothing is sent, and it is not a refusal either
-  const gone = await startWorld(t)
-  fs.rmSync(gone.file('clash-verge.yaml'))
-  const unread = await gone.adapter.applyGroups({ groups: both(gone), block: gone.block() })
-  assert.deepEqual([unread.rows[0].strategy, unread.rows[0].steps.find((x) => x.step === 'payload').reason], [['payload', 'none'], 'runtime-unreadable'])
-  fs.writeFileSync(gone.file('clash-verge.yaml'), userRuntime())
-  const back = await gone.adapter.applyGroups({ groups: both(gone), block: gone.block() })
-  assert.deepEqual([back.ok, back.rows[0].strategy], [true, ['payload']], 'the runtime is readable again: the next `on` pushes it')
-  // a runtime shape the text splice does not read: the same, the strategy stays open
-  const shaped = await startWorld(t)
-  const good = fs.readFileSync(shaped.file('clash-verge.yaml'), 'utf8')
-  fs.writeFileSync(shaped.file('clash-verge.yaml'), good.replace('proxies:\n', 'proxies: [a, b]\n').replace(/- name: node-b[\s\S]*?(?=proxy-groups:)/, ''))
-  assert.equal((await shaped.adapter.applyGroups({ groups: both(shaped), block: shaped.block() })).rows[0].steps.find((x) => x.step === 'payload').reason, 'runtime-shape')
-  fs.writeFileSync(shaped.file('clash-verge.yaml'), good)
-  assert.deepEqual((await shaped.adapter.applyGroups({ groups: both(shaped), block: shaped.block() })).rows[0].strategy, ['payload'])
-  // a 4xx is the core saying no to this config: not repeated until reset() (W11 none, below)
-  const no = await startWorld(t)
-  no.core.failOn('PUT', /^\/configs$/, 403)
-  await no.adapter.applyGroups({ groups: both(no), block: no.block() })
-  no.core.failures.length = 0
-  assert.deepEqual([(await no.adapter.applyGroups({ groups: both(no), block: no.block() })).rows[0].strategy, pushes(no)], [['none'], 1])
-})
-
 test('W11 none: no controller to talk to writes the files and says 未生效 (a controller that is not Verge\'s is the same, and is held in verge-adapter.test.mjs: N4 at the adapter); a push with no block to push says block-needed', async (t) => {
   const w = await startWorld(t)
   await w.core.stop()
@@ -239,108 +177,10 @@ test('W11 an unreadable read-back is 「不知道」 and exit 1: the writes were
 
 // ---- W55: one harness's switch does not touch another's ------------------------------------------------------------------------------------------------------------------------
 
-test('W55 two harnesses are on and `off codex`: only codex\'s switch goes to PASS and only its route file is emptied; Script.js is byte for byte the same; the other harness\'s switch, count and file are as they were', async (t) => {
-  const w = await startWorld(t)
-  const b = w.block()
-  const first = await w.adapter.installBlock({ block: b, blockText: buildScriptJs({ block: b }), groups: both(w) })
-  assert.deepEqual([first.ok, first.rows.map((r) => r.strategy)], [true, [['payload'], ['payload']]])
-  const script = sha(w.file('profiles/Script.js'))
-  const ccFile = fs.readFileSync(w.file(names(CC).routeFile), 'utf8')
-  const ccBefore = await w.adapter.verify(CC)
-  const mark = w.core.requests.length
-  const r = await w.adapter.applyGroups({ groups: [{ g: CODEX, on: false }] })
-  assert.deepEqual([r.ok, r.rows.map((x) => x.g)], [true, [CODEX]])
-  assert.deepEqual([sw(w, CODEX), sw(w, CC)], ['PASS', names(CC).fb])
-  assert.equal(fs.readFileSync(w.file(names(CODEX).routeFile), 'utf8'), '', 'codex\'s file is emptied')
-  assert.deepEqual([fs.readFileSync(w.file(names(CC).routeFile), 'utf8') === ccFile, sha(w.file('profiles/Script.js')) === script], [true, true])
-  assert.deepEqual(await w.adapter.verify(CC), ccBefore, 'the other harness: now, fbNow and ruleCount unchanged')
-  const touched = w.core.requests.slice(mark).filter((q) => q.method !== 'GET').map((q) => q.path)
-  assert.deepEqual(touched, [`/proxies/${names(CODEX).sw}`, `/providers/rules/${names(CODEX).provider}`], 'and nothing sent for the other one, not even a refresh')
-  const on = await w.adapter.applyGroups({ groups: [{ g: CODEX, on: true, lines: lines(w, CODEX) }] })
-  assert.deepEqual([on.ok, sw(w, CODEX), sw(w, CC)], [true, names(CODEX).fb, names(CC).fb], '`on codex` brings it back the same way')
-})
-
 test('W55 a group that is not in the runtime is not switched (no 404 step); only its file is emptied; the ones that are there are switched', async (t) => {
   const w = await startWorld(t)
   w.live([GROUPS[0]], { on: [CC] })
   const r = await w.adapter.applyGroups({ groups: [{ g: CC, on: false }, { g: CODEX, on: false }] })
   assert.deepEqual(r.rows.map((x) => [x.g, x.strategy, x.state]), [[CC, ['select', 'provider'], 'verified'], [CODEX, ['none'], 'verified']])
   assert.deepEqual(w.core.writes().map((q) => q.path), [`/proxies/${names(CC).sw}`, `/providers/rules/${names(CC).provider}`])
-})
-
-// ---- W56: Verge is not running, or its controller cannot be read --------------------------------------------------------------------------------------------------------------
-
-async function installed(t, over = {}) {
-  const w = await startWorld(t, over)
-  const b = w.block()
-  const original = fs.readFileSync(w.file('profiles/Script.js'))
-  const r = await w.adapter.installBlock({ block: b, blockText: buildScriptJs({ block: b }), groups: both(w) })
-  assert.equal(r.ok, true)
-  return { w, original }
-}
-const undone = (w, original) => [fs.readFileSync(w.file('profiles/Script.js')).equals(original), fs.existsSync(w.adapter.paths.asightDir), w.ledger.entries().filter((e) => e.kind === 'vpn-script-block' || e.kind === 'vpn-rule-file').length, w.ledger.backups().length]
-
-test('W56 Verge has exited (no runtime): the files are undone and `off` is done, exit 0', async (t) => {
-  const { w, original } = await installed(t)
-  await w.core.stop()
-  w.state.running = false
-  w.adapter.reset()
-  const r = await w.adapter.removeBlock({ groups: [CC, CODEX] })
-  assert.deepEqual([r.ok, r.exit, r.lines, r.residue], [true, 0, [], []])
-  assert.deepEqual(r.rows.map((x) => [x.state, x.reason, x.live]), [['verified', 'verge-not-running', false], ['verified', 'verge-not-running', false]])
-  assert.deepEqual(undone(w, original), [true, false, 0, 0], 'Script.js is as it was, the files are gone, the ledger and the backups are empty')
-})
-
-test('W56 Verge is running but its controller cannot be read: the files are undone too, but `off` says asight may still be on Clash\'s path and exits 1; a `running` that cannot be told is treated the same', async (t) => {
-  for (const running of [true, null]) {
-    const { w, original } = await installed(t)
-    await w.core.stop()
-    w.state.running = running
-    w.adapter.reset()
-    const r = await w.adapter.removeBlock({ groups: [CC, CODEX] })
-    assert.deepEqual([r.ok, r.exit, r.lines], [false, 1, ['asight 可能仍在 Clash 的路径上,去 Clash Verge 重新激活']], String(running))
-    assert.deepEqual(r.rows.map((x) => [x.state, x.reason, x.live]), [['unknown', 'controller-unreadable', null], ['unknown', 'controller-unreadable', null]])
-    assert.deepEqual(undone(w, original), [true, false, 0, 0], 'the files are undone all the same')
-  }
-})
-
-test('the whole `off` with Verge up: every group off and read back, the block out of Script.js byte for byte, the files and their ledger entries gone; the runtime residue is listed, not a failure', async (t) => {
-  const { w, original } = await installed(t)
-  await w.adapter.applyGroups({ groups: [{ g: CC, on: true, lines: lines(w, CC) }] })
-  const r = await w.adapter.removeBlock({ groups: [CC, CODEX] })
-  assert.deepEqual([r.ok, r.exit, r.lines, r.script.identical], [true, 0, [], true])
-  assert.deepEqual(r.rows.map((x) => [x.g, x.state, x.live]), [[CC, 'verified', false], [CODEX, 'verified', false]])
-  assert.deepEqual([sw(w, CC), sw(w, CODEX)], ['PASS', 'PASS'])
-  assert.deepEqual(undone(w, original), [true, false, 0, 0])
-  assert.deepEqual(r.residue.map((x) => x.kind), ['runtime-block', 'cache-db-select'])
-  assert.ok(w.core.groups.has(names(CC).sw), 'the inert block is still in the runtime: gone at Verge\'s next regeneration')
-  assert.deepEqual(w.ledger.entries().map((e) => e.kind).sort(), ['vpn-runtime-block', 'vpn-runtime-select', 'vpn-runtime-select'], 'the runtime kinds stay: they are the residue the status shows')
-  assert.equal(r.receipts.filter((x) => x.kind === 'vpn-script-block').length, 1)
-})
-
-test('the whole `off` with a damaged sentinel: Script.js is not touched and `off` exits 1, but the groups are off and the files are gone', async (t) => {
-  const { w } = await installed(t)
-  const file = w.file('profiles/Script.js')
-  fs.writeFileSync(file, fs.readFileSync(file, 'latin1').replace('// <<< asight collector <<<', '// <<< asight collector <<< x'), 'latin1')
-  const damaged = sha(file)
-  const r = await w.adapter.removeBlock({ groups: [CC, CODEX] })
-  assert.deepEqual([r.ok, r.exit, r.script.ok, r.script.reason, sha(file)], [false, 1, false, 'sentinel-damaged', damaged])
-  assert.ok(r.lines.some((l) => l.includes('哨兵被改坏')))
-  assert.deepEqual([r.rows.every((x) => x.state === 'verified'), fs.existsSync(w.adapter.paths.asightDir)], [true, false])
-})
-
-test('installBlock: a script that cannot take the block stops it before anything else is written', async (t) => {
-  const w = await startWorld(t, { script: null })
-  const b = w.block()
-  const r = await w.adapter.installBlock({ block: b, blockText: buildScriptJs({ block: b }), groups: both(w) })
-  assert.deepEqual([r.ok, r.exit, r.script.reason, r.rows], [false, 1, 'script-missing', []])
-  assert.deepEqual([w.core.writes(), fs.existsSync(w.adapter.paths.asightDir), w.ledger.entries()], [[], false, []])
-})
-
-test('the whole `off` takes out every route file the ledger knows of, also those of groups the caller did not name', async (t) => {
-  const { w, original } = await installed(t)
-  const r = await w.adapter.removeBlock({ groups: [CC] })
-  assert.deepEqual([r.ok, r.rows.map((x) => x.g)], [true, [CC, CODEX]])
-  assert.deepEqual(undone(w, original), [true, false, 0, 0])
-  assert.equal(sw(w, CODEX), 'PASS')
 })

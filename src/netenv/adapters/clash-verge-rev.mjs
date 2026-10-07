@@ -63,10 +63,6 @@ export function pickApply({ blockInRuntime, serviceMode, controllerWritable, pay
 
 const NONE_TEXT = '已写入,未生效 · 去 Clash Verge → 订阅,点当前订阅重新激活'
 const MAYBE_STILL_TEXT = 'asight 可能仍在 Clash 的路径上,去 Clash Verge 重新激活'
-const RESIDUE = Object.freeze([
-  { kind: 'runtime-block', text: 'Clash 运行时里留着不起作用的 asight 块,到你下次在 Clash Verge 里重新激活订阅时消失' },
-  { kind: 'cache-db-select', text: 'Clash 的 cache.db 留着一条 asight-sw-* 的选择记录(无害,asight 不改它的数据库)' },
-])
 
 /**
  * createVergeAdapter({ home, fs, controller, listPipes, helper, env, makeClient, installDirs, ledger, running, daemonAlive, now })
@@ -457,39 +453,6 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     return finish()
   }
 
-  /** The first `on`: the block into the global script, asight's route files, and the groups on or off (the payload when the block is not in the runtime yet). `blockText` = buildScriptJs(); `groups` as applyGroups(). */
-  async function installBlock({ block, blockText, groups }) {
-    const script = await writeScriptBlock({ blockText })
-    if (!script.ok) return { ok: false, exit: 1, script, rows: [], receipts: [], lines: [] }
-    const r = await applyGroups({ block, groups })
-    return { ...r, script, receipts: [...(script.receipt ? [script.receipt] : []), ...r.receipts] }
-  }
-
-  /**
-   * The no-argument `off`: every group off (read back), the block out of the global script (D28), the route files deleted. `groups`: the group ids (asight's rule files in the ledger are removed too). The runtime
-   * keeps asight's inert block and the core's cache.db one selection until Verge next regenerates the runtime: listed in `residue`, not a failure (4.8 §4.3). exit 1 when a group could not be read back, the strip refused, or a route file could not be deleted (it stays, emptied, and the ledger keeps it).
-   * Receipts: a file deleted here is listed once, as removed, and not also as the empty write that came before it.
-   */
-  async function removeBlock({ groups }) {
-    const led = need()
-    const ids = [...new Set([...groups, ...led.entries().filter((e) => e.kind === 'vpn-rule-file').map((e) => e.group)])]
-    let blockWasLive = false
-    if (await live()) for (const g of ids) { const v = await verify(g); if (v.reason !== 'block-not-in-runtime' && v.live !== null) blockWasLive = true }
-    const off = await applyGroups({ groups: ids.map((g) => ({ g, on: false })) })
-    const script = await stripScriptBlock()
-    const gone = []
-    const stuck = []
-    for (const g of ids) { const r = await removeRuleFile(g); if (!r.ok) stuck.push(g); else if (r.receipt) gone.push(r.receipt) }
-    const emptied = new Set(gone.map((r) => r.key)) // a file that is deleted in this same `off` is listed once, as removed: not also as the empty file it was a moment ago
-    const lines = [...off.lines]
-    if (script.ok && script.identical === false) lines.push('Script.js 已撤销,但不逐字节相同(你改过块外的内容),备份留着')
-    if (!script.ok) lines.push(`Script.js 里的哨兵被改坏,没有动它(${script.detail || script.code || script.reason})`)
-    if (stuck.length) lines.push(`规则文件删不掉,留着一个空文件:${stuck.join('、')}`)
-    const ok = off.ok && script.ok && stuck.length === 0
-    const receipts = [...off.receipts.filter((r) => !(r.kind === 'vpn-rule-file' && emptied.has(r.key))), ...(script.receipt ? [script.receipt] : []), ...gone]
-    return { ok, exit: ok ? 0 : 1, rows: off.rows, script, receipts, residue: blockWasLive ? RESIDUE.map((r) => ({ ...r })) : [], lines }
-  }
-
   /** What the probe (src/netenv/probe.mjs detect) is given about Verge: the file fields, the runtime's few fields, how the controller was found (masked), and whether it is running. */
   async function facts() {
     const fields = await readFields()
@@ -504,6 +467,5 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     }
   }
 
-  // `reset()`: call it at the start of every `on`: it forgets the found controller and re-opens the payload strategy that a refusal closed (see payloadAccepted). The ledger's vpn-runtime-* entries are not touched (Task 8 forgets them when verify() says block-not-in-runtime).
-  return { home, paths: P, readFields, readConfigs, readFindProcessMode, verify, refreshProbe, processRulesNaming, facts, controllerInfo, writeScriptBlock, stripScriptBlock, writeRuleFile, removeRuleFile, putSelect, refreshProvider, pushPayload, pickApply, applyGroups, installBlock, removeBlock, reset: () => { found = null; payloadAccepted = null }, sentinel: SCRIPT_SENTINEL }
+  return { home, paths: P, readFields, readConfigs, readFindProcessMode, verify, refreshProbe, processRulesNaming, facts, controllerInfo, writeScriptBlock, stripScriptBlock, writeRuleFile, removeRuleFile, putSelect, refreshProvider, pushPayload, pickApply, applyGroups, sentinel: SCRIPT_SENTINEL }
 }
