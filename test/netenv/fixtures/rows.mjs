@@ -1,7 +1,9 @@
 // test/netenv/fixtures/rows.mjs — one NetFacts per row of RFC 1.6 §9.3, with what `buildTopology` must say of it written out literally (V41, V42, V45). A NetFacts is what src/netenv/facts.mjs hands the
-// topology: the daemon, the link, the listeners, the VPN product, and per harness its setting, its processes and its entry. The expected values here are the spec's: they are not computed by
-// the code under test. `compact` is the chain of each branch as `renderCompact` prints it (whitespace is squashed by the test). Rows the spec gives as a different chain than the builder draws are
-// noted where they are.
+// topology: the daemon, the link, the listeners, the VPN product, and per harness its setting, its processes and its entry. The expected values here are written by hand, not computed by
+// the code under test. `compact` is the chain of each branch as `renderCompact` prints it (whitespace is squashed by the test): the compact form, which is NOT the 「链」 column of RFC 1.6 §9.3 word for word
+// (V41's wording says so). That column is an example for a reader; the differences are mainly (not only) these: `link <id>` and a product's version are in the detail view only (rows 1, 2); the compact line has the pid,
+// the edge's source (`[HTTPS_PROXY]`) and `出口(<product> 选)` (rows 4–7); row 3's TUN is `→ [TUN] 出口(<product> 选)`; the ports and the product names in the spec's examples are examples. Rows 21 and 22 differ in their verdict
+// and are noted where they are.
 export const squash = (s) => String(s).replace(/\s+/g, '')
 
 const API = { 'claude-code': 'api.anthropic.com', codex: 'chatgpt.com', hermes: 'api.openai.com', 'kimi-code': 'api.moonshot.cn' }
