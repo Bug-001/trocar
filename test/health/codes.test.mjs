@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { NOT_CAPTURED_FAILURE, NOT_CAPTURED_EXPECTED, FAILURE_EVENTS, STATE_EVENTS, CODES, TRUST_REASONS, OFF_WHERE, OFF_EVENTS, OFF_CODES, isFailure, isCode, isEvent, isWhere, notCapturedClass, checkRecord } from '../../src/health/codes.mjs'
+import { NOT_CAPTURED_FAILURE, NOT_CAPTURED_EXPECTED, FAILURE_EVENTS, STATE_EVENTS, CODES, TRUST_REASONS, OFF_WHERE, OFF_EVENTS, OFF_CODES, NET_WHERE, NET_EVENTS, NET_CODES, NET_FAILURE_CODES, STATUS_REASONS, isFailure, isCode, isEvent, isWhere, notCapturedClass, checkRecord } from '../../src/health/codes.mjs'
 import { WHERE_OFF, EVENT_OFF_NOTE, CODE_OFF } from '../../src/off/names.mjs'
 import { EVENT, CODE, TRUST_REASON } from '../../src/collector/core/codes.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
@@ -20,8 +20,8 @@ const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e
 // `fail` for parse errors); `failure('…')` is the daemon's failure recorder (its first argument is `where`).
 function literals(root) {
   const out = []
-  // src/capture: the old capture's event writers (RFC 4.1 过渡期, D38) use the same names; src/off and src/cli (RFC 1.6, D39⑦) write `off`'s
-  const more = ['capture', 'off', 'cli'].flatMap((d) => (fs.existsSync(path.join(root, 'src', d)) ? walk(path.join(root, 'src', d)) : []))
+  // src/capture: the old capture's event writers (RFC 4.1 过渡期, D38) use the same names; src/off and src/cli (RFC 1.6, D39⑦) write `off`'s; src/netenv writes `netenv-change` (1.6 §9.7)
+  const more = ['capture', 'off', 'cli', 'netenv'].flatMap((d) => (fs.existsSync(path.join(root, 'src', d)) ? walk(path.join(root, 'src', d)) : []))
   for (const f of [...walk(path.join(root, 'src', 'collector')), ...more]) {
     const src = fs.readFileSync(f, 'utf8')
     const rel = path.relative(root, f)
@@ -141,4 +141,35 @@ test('D39 src/off/names.mjs is the same list as the closed set (src/off cannot i
   assert.deepEqual(Object.values(CODE_OFF), OFF_CODES)
   assert.deepEqual(Object.keys(CODE_OFF), ['backupFailed', 'backupKept', 'undoneByMarker'])
   assert.ok(Object.isFrozen(CODE_OFF))
+})
+
+// D39⑩ / D43 (RFC 1.6 §9.7, V53): the names the network topology and `doctor` use. A block of its own, like OFF_*: the lists D40 appends to stay edit-free.
+const NET_LIST = ['not-routed', 'proxy-changed', 'proxy-dead', 'proxy-unsupported', 'netenv-changed', 'elevated-agent', 'forwarder-down', 'upstream-unreachable', 'egress-differs', 'opt-in-needed', 'shim-not-on-path', 'not-via-entry', 'needs-admin', 'linger-off', 'system-proxy-pac', 'other-redirector', 'fake-ip', 'inferred-behaviour', 'cause-unknown', 'route-loop']
+test('V53: the net names are the 1.6 §9.7 list (route-loop, shared with 4.7, once), isCode knows each, and the records they go on pass checkRecord', () => {
+  assert.deepEqual(NET_WHERE, ['netenv'])
+  assert.deepEqual(NET_EVENTS, ['netenv-change'])
+  assert.deepEqual([...NET_CODES].sort(), [...NET_LIST].sort())
+  for (const c of NET_CODES) {
+    assert.ok(isCode(c), c)
+    assert.deepEqual(checkRecord({ event: 'netenv-change', where: 'netenv', harness: 'codex', code: c, from: 'a', to: 'b' }), [], c)
+  }
+  for (const c of NET_FAILURE_CODES) assert.deepEqual(checkRecord({ event: 'failure', where: 'netenv', code: c, reason: 'x' }), [], c)
+  assert.deepEqual([...NET_FAILURE_CODES].sort(), ['elevated-agent', 'forwarder-down', 'not-routed', 'not-via-entry', 'proxy-dead', 'proxy-unsupported', 'route-loop', 'shim-not-on-path', 'upstream-unreachable'])
+  for (const c of NET_FAILURE_CODES) assert.ok(NET_CODES.includes(c), `${c} is a net code`)
+  assert.equal(isFailure({ event: 'netenv-change', where: 'netenv', code: 'proxy-changed' }), false, 'a netenv-change is a state change: the indicator turns on a failure event only')
+  assert.ok(!FAILURE_EVENTS.includes('netenv-change'))
+  assert.deepEqual(checkRecord({ event: 'netenv-chang', where: 'netenvv', code: 'proxy-lost' }), ['event "netenv-chang"', 'where "netenvv"', 'code "proxy-lost"'], 'the check can still fail')
+})
+
+test('V53: the status reasons gain the nine 1.6 §9.7 names (the proxy-mode ones are the Windows branch\'s)', () => {
+  for (const r of ['not-routed', 'proxy-changed', 'elevated-agent', 'forwarder-down', 'upstream-unreachable', 'route-loop', 'opt-in-needed', 'shim-not-on-path', 'not-via-entry']) assert.ok(STATUS_REASONS.includes(r), r)
+  for (const r of ['desired-off', 'config-after-start', 'negative-cache']) assert.ok(STATUS_REASONS.includes(r), `${r} is still one`)
+})
+
+test('V53 (D43): the names 4.7 and 4.8 share are defined once in src/health/codes.mjs, and the withdrawn VPN-block names are nowhere in src/', () => {
+  const text = fs.readFileSync(path.join(REPO, 'src', 'health', 'codes.mjs'), 'utf8')
+  for (const name of ['route-loop', 'forwarder-down', 'egress-differs']) assert.equal(text.split(`'${name}'`).length - 1, 1, `${name} occurs once in src/health/codes.mjs`)
+  const all = walk(path.join(REPO, 'src')).map((f) => [path.relative(REPO, f), fs.readFileSync(f, 'utf8')])
+  assert.ok(all.length > 50, 'the scan sees src/')
+  for (const needle of ['clash-mode-bypass', 'vpn-block-']) assert.deepEqual(all.filter(([, t]) => t.includes(needle)).map(([f]) => f), [], `${needle} is withdrawn (D43): in no set, in no file`)
 })
