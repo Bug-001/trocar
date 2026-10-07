@@ -161,6 +161,23 @@ test('V42: one hop that cannot be read changes no exit code and no verdict — i
   assert.equal((await status(s, ['--json'], { exec: nobody })).exit, before.exit)
 })
 
+test('1.6 §9.6: when the findings cannot be made `doctor --json` has `findings: null` and `findings_error` (the topology\'s reason), the text says 「不知道(…)」 and not 「没有」, and nothing else changes; when they were read and there are none, `findings` is []', async () => {
+  const s = await installedViaCli(ENGINE)
+  const none = path.join(s.home, 'none')
+  const fine = await s.run(['doctor', '--json', '--source', none])
+  const fineDoc = fine.io.json()
+  assert.ok(Array.isArray(fineDoc.findings), '`[]` or a list: it was read')
+  assert.equal(fineDoc.findings_error, undefined)
+  const broken = await s.run(['doctor', '--json', '--source', none], { deps: { netFactsDeps: async () => { throw new Error('boom: no facts') } } })
+  const doc = broken.io.json()
+  assert.deepEqual([doc.findings, doc.findings_error], [null, 'boom: no facts'])
+  assert.equal(broken.exit, fine.exit, 'a finding that could not be made is not a verdict that doctor could not give')
+  assert.deepEqual(doc.status.harnesses.map((h) => h.captured), fineDoc.status.harnesses.map((h) => h.captured))
+  const text = (await s.run(['doctor', '--source', none], { deps: { netFactsDeps: async () => { throw new Error('boom: no facts') } } })).io.stdoutText()
+  assert.match(text, /^ *发现\(网络与采集\): 不知道\(boom: no facts\)$/m)
+  assert.doesNotMatch(text, /发现\(网络与采集\): 没有/)
+})
+
 test('status writes ~/.asight/netenv.json once per run, with the probe and the topology in the same file (the board never sees one without the other)', async () => {
   const s = await installedViaCli(ENGINE)
   const renamed = []
