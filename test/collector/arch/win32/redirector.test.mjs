@@ -4,15 +4,22 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
+import net from 'node:net'
+import tls from 'node:tls'
 import { createWin32Redirector } from '../../../../src/collector/arch/win32/redirector.mjs'
 import { createProcWatcher } from '../../../../src/collector/arch/win32/procinfo.mjs'
 import { HELPER_PROTO } from '../../../../src/collector/arch/win32/helper.mjs'
 import { groupsOf } from '../../../../src/collector/arch/win32/route-plan.mjs'
+import { createEngine } from '../../../../src/collector/core/engine/engine.mjs'
+import { createCa, loadCa } from '../../../../src/collector/core/tls/ca.mjs'
+import { createLeafIssuer } from '../../../../src/collector/core/tls/leaf.mjs'
+import { within, closeWithin } from '../../../helpers/bounded.mjs'
 import claudeCode from '../../../../src/collector/harness/win32/claude-code.mjs'
 import codex from '../../../../src/collector/harness/win32/codex.mjs'
 import deepseekDsh from '../../../../src/collector/harness/win32/deepseek-dsh.mjs'
+import zCode from '../../../../src/collector/harness/win32/z-code.mjs'
 
-const GROUPS = groupsOf([{ name: 'claude-code', win32: claudeCode }, { name: 'codex', win32: codex }, { name: 'deepseek-dsh', win32: deepseekDsh }])
+const GROUPS = groupsOf([{ name: 'claude-code', win32: claudeCode }, { name: 'codex', win32: codex }, { name: 'deepseek-dsh', win32: deepseekDsh }, { name: 'z-code', win32: zCode }])
 const HOME = String.raw`C:\Users\u`
 const IMG = {
   ccCli: String.raw`C:\Users\u\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe`,
@@ -21,6 +28,7 @@ const IMG = {
   codexApp: String.raw`C:\Users\u\AppData\Local\OpenAI\Codex\bin\0123456789abcdef\codex.exe`,
   node: String.raw`C:\Program Files\nodejs\node.exe`,
   dshDesktop: String.raw`C:\Users\u\AppData\Local\Programs\DeepSeek Harness\DeepSeek Harness.exe`,
+  zcode: String.raw`C:\Users\u\AppData\Local\Programs\ZCode\ZCode.exe`,
   svchost: String.raw`C:\Windows\System32\svchost.exe`,
 }
 const DSH_CMD = String.raw`"C:\Program Files\nodejs\node.exe" C:\Users\u\AppData\Roaming\npm\node_modules\@deepseek-ai\dsh\bin\dsh.js`
@@ -176,4 +184,261 @@ test('with the real process watcher: a snapshot the helper answers reaches the t
 test('the redirector asks for what it needs: the watcher and the groups', () => {
   assert.throws(() => createWin32Redirector({ groups: GROUPS }), /process watcher/)
   assert.throws(() => createWin32Redirector({ procWatcher: watcher() }), /groups/)
+})
+
+// ---------- lookupIngress (4.8 §5.2 · §5.4): who the connection is, whether it is decrypted, where it goes on ----------
+
+const TOKEN = '0123456789abcdef0123456789abcdef'
+const PORTS = { 'claude-code.settings': 18801, 'codex.env': 18802, 'deepseek-dsh.env': 18803, 'z-code.cli': 18804 }
+const INGRESS = { enginePort: 18790, groupPorts: PORTS, ingressToken: TOKEN, listenerToken: 'fedcba9876543210fedcba9876543210' }
+const route = (over = {}) => ({ entry: 'auto', on: true, reason: null, upstream: { kind: 'direct', source: 'direct' }, bypass: [], ...over })
+const HTTP_PROXY = { kind: 'http', host: '127.0.0.1', port: 7897, credentialed: true, auth_ref: 'prior:codex.env', source: 'agent' }
+const CRED = { username: 'u1', password: 'pw-SECRET' }
+const BYPASS = [{ kind: 'local' }, { kind: 'domain-suffix', value: 'corp.example.com' }, { kind: 'ip-cidr', value: '10.0.0.0/8' }, { kind: 'domain', value: 'gateway.internal' }]
+const target = (address, port = 443) => ({ address, port })
+
+/** An ownerOf that answers what the test says (a list, one per call; then nobody) and remembers what it was asked. */
+function owner(...answers) {
+  const calls = []
+  const fn = async (q) => { calls.push({ hop: q.hop, candidates: [...q.candidates] }); const a = answers.length ? answers.shift() : null; if (a instanceof Error) throw a; return a ?? { pid: null, source: null, ms: 3 } }
+  fn.calls = calls
+  return fn
+}
+
+/** The redirector with a populated process table: Claude Code cli 10 and 11, its VS Code form 12, codex.app 13, dsh 20 (node.exe with the dsh command line), a Node child 21, dsh's desktop 22, svchost 30. */
+function bed(over = {}) {
+  const ctx = made({ routes: () => ({ 'claude-code.settings': route(), 'codex.env': route(), 'deepseek-dsh.env': route() }), ingress: () => INGRESS, authOf: () => CRED, ...over })
+  const { w } = ctx
+  for (const f of [facts(10, IMG.ccCli), facts(11, IMG.ccCli, { startedAt: 5000 }), facts(12, IMG.ccVscode), facts(13, IMG.codexApp), facts(20, IMG.node, { cmdline: DSH_CMD }), facts(21, IMG.node, { cmdline: OTHER_NODE_CMD }), facts(22, IMG.dshDesktop), facts(30, IMG.svchost)]) w.emit('exec', f)
+  return ctx
+}
+const trust = (r, ...pids) => { for (const p of pids) r.watch(p, { decrypt: true, agent: 'x' }) }
+const distrust = (r, ...pids) => { for (const p of pids) r.watch(p, { decrypt: false, agent: 'x' }) }
+const ask = (r, user, t = target('api.anthropic.com')) => r.lookupIngress({ peer: { address: '127.0.0.1', port: 50000 }, user, target: t })
+
+test('an unknown route is null (the ingress answers it as an auth failure): not an `of.<form>` user, a form nobody lists, a re-entry user, a group that is not on or not planned', async () => {
+  const { r } = bed({ routes: () => ({ 'claude-code.settings': route(), 'codex.env': route({ on: false, entry: null, reason: 'desired-off' }), 'z-code.cli': route() }) })
+  for (const u of [undefined, null, '', 'of.', 'of.nobody', 'claude-code.cli', 're.claude-code.settings', 're.z-code.cli', 'asight', 'of.codex.app', 'of.deepseek-dsh.cli', 'OF.claude-code.cli']) assert.equal(await ask(r, u), null, `${u}: the re-entry user of a group whose id is also a form's (re.z-code.cli) is not that form's`)
+  assert.equal(await ask(r, 'of.hermes.desktop'), null, 'a form that is in no group')
+  assert.notEqual(await ask(r, 'of.claude-code.cli'), null)
+})
+
+test('a probe is a CONNECT to the group\'s own re-entry point 127.0.0.1:<its port>: {health:true, group:<the form>} for each form of the group; the same address on another port, or another address on the port, is an agent\'s connection', async () => {
+  const { r } = bed({ ownerOf: owner() })
+  assert.deepEqual(await ask(r, 'of.claude-code.cli', target('127.0.0.1', 18801)), { health: true, group: 'claude-code.cli' })
+  assert.deepEqual(await ask(r, 'of.claude-code.vscode', target('127.0.0.1', 18801)), { health: true, group: 'claude-code.vscode' }, 'the probe path is the form\'s: /asight-health/<f>')
+  for (const t of [target('127.0.0.1', 18802), target('127.0.0.1', 443), target('localhost', 18801), target('::1', 18801), target('api.anthropic.com', 18801)]) assert.equal((await ask(r, 'of.claude-code.cli', t)).health, undefined, `${t.address}:${t.port}`)
+})
+
+test('a probe of a group that is not on is refused too: the kernel then keeps the re-entry, which is the way a connection still arriving goes upstream, and not the engine that has nothing to do with it', async () => {
+  const { r } = bed({ routes: () => ({ 'claude-code.settings': route({ on: false, entry: null, reason: 'desired-off' }) }) })
+  assert.equal(await ask(r, 'of.claude-code.cli', target('127.0.0.1', 18801)), null)
+})
+
+test('W16 a pid known and judged trusted: decrypt, the form, the harness, the image, how the pid was found; the table was asked about the form\'s own processes and the group\'s port', async () => {
+  const o = owner({ pid: 10, source: 'socket-table', ms: 7 })
+  const { r } = bed({ ownerOf: o })
+  trust(r, 10)
+  assert.deepEqual(await ask(r, 'of.claude-code.cli'), { pid: 10, agent: 'claude-code', decrypt: true, capture: 'proxy', form: 'claude-code.cli', exe: IMG.ccCli, upstream: { kind: 'direct' }, pid_source: 'socket-table', pid_ms: 7, negKey: '10' })
+  assert.deepEqual(o.calls, [{ hop: { port: 18801 }, candidates: [10, 11] }], 'the cli\'s processes only, not the VS Code form\'s that shares the port, nor anyone\'s else')
+})
+
+test('W16 a pid known and judged untrusted (or not judged at all): not decrypted, with no code of ours — the tracker answers for a pid, with the resolver\'s own reason', async () => {
+  const { r } = bed({ ownerOf: owner({ pid: 10, source: 'socket-table', ms: 2 }, { pid: 11, source: 'socket-table', ms: 2 }) })
+  distrust(r, 10)
+  const a = await ask(r, 'of.claude-code.cli'), b = await ask(r, 'of.claude-code.cli')
+  assert.deepEqual([a.pid, a.decrypt, a.skip, b.pid, b.decrypt, b.skip], [10, false, undefined, 11, false, undefined])
+})
+
+test('W16 with no pid, the form is judged as a whole: all of its processes trusted → decrypt; one untrusted, or one nobody judged, or one still pending → splice with `pid-unresolved-mixed`; none known → splice, untracked', async () => {
+  const { r, w } = bed({ ownerOf: owner() })
+  trust(r, 10, 11)
+  const all = await ask(r, 'of.claude-code.cli')
+  assert.deepEqual([all.pid, all.decrypt, all.skip, all.negKey, all.pid_source, all.exe], [null, true, undefined, 'of.claude-code.cli', null, null])
+  distrust(r, 11)
+  const mixed = await ask(r, 'of.claude-code.cli')
+  assert.deepEqual([mixed.decrypt, mixed.skip], [false, { not_captured: 'untrusted', reason: 'pid-unresolved-mixed' }])
+  r.unwatch(11)
+  assert.deepEqual((await ask(r, 'of.claude-code.cli')).skip, { not_captured: 'untrusted', reason: 'pid-unresolved-mixed' }, 'a process the tracker has not judged is not trusted')
+  r.watch(11, { decrypt: true }); w.emit('exec', facts(14, IMG.node, { cmdline: null, cmdlineState: 'pending' }))
+  assert.equal((await ask(r, 'of.claude-code.cli')).decrypt, true, 'a pending node.exe could be dsh, not a form of this group')
+  w.emit('exec', facts(15, String.raw`C:\Users\u\.local\bin\claude.exe`, { cmdlineState: 'pending', cmdline: null }))
+  assert.equal((await ask(r, 'of.claude-code.cli')).skip.reason, 'pid-unresolved-mixed', 'claude.exe needs no command line: it is a form at once, and until the tracker has judged it the form is not all trusted')
+  trust(r, 15)
+  assert.equal((await ask(r, 'of.claude-code.cli')).decrypt, true)
+  w.emit('exit', { pid: 13, startedAt: 1013 }) // codex.app's only process is gone
+  const none = await ask(r, 'of.codex.app')
+  assert.deepEqual([none.decrypt, none.skip], [false, { not_captured: 'untracked', reason: 'no-process-of-form' }], 'a connection from a process the table has not seen (it started less than a poll ago): spliced and recorded, not guessed at')
+})
+
+test('W16 two forms of one group (`of.claude-code.cli`, `of.claude-code.vscode`) resolve to their own forms with no pid: each its own processes, its own negative-cache key, its own verdict', async () => {
+  const o = owner()
+  const { r } = bed({ ownerOf: o })
+  trust(r, 10, 11); distrust(r, 12)
+  const cli = await ask(r, 'of.claude-code.cli'), vs = await ask(r, 'of.claude-code.vscode')
+  assert.deepEqual([cli.form, cli.negKey, cli.decrypt, cli.agent], ['claude-code.cli', 'of.claude-code.cli', true, 'claude-code'])
+  assert.deepEqual([vs.form, vs.negKey, vs.decrypt, vs.skip.reason], ['claude-code.vscode', 'of.claude-code.vscode', false, 'pid-unresolved-mixed'])
+  assert.deepEqual(o.calls.map((c) => c.candidates), [[10, 11], [12]], 'no process of one form is a candidate of the other, though they share a port')
+})
+
+test('W16 a process whose command line is not known yet may be the form\'s: it is a candidate for the pid and, until the tracker has judged it, keeps the form from being all trusted', async () => {
+  const o = owner()
+  const { r, w } = bed({ ownerOf: o, routes: () => ({ 'z-code.cli': route() }) })
+  w.emit('exec', facts(40, IMG.zcode, { cmdline: null, cmdlineState: 'pending' }))
+  assert.deepEqual(r.pidsOf('z-code.cli'), [], 'not yet a process of the form')
+  const m = await ask(r, 'of.z-code.cli')
+  assert.deepEqual([o.calls[0].candidates, m.decrypt, m.skip], [[40], false, { not_captured: 'untrusted', reason: 'pid-unresolved-mixed' }], 'one candidate and it is not judged: not decrypted, not "no process"')
+  w.emit('facts-update', facts(40, IMG.zcode, { cmdline: String.raw`"C:\Users\u\AppData\Local\Programs\ZCode\ZCode.exe" resources\glm\zcode.cjs app-server --stdio`, source: 'update' }))
+  trust(r, 40)
+  assert.deepEqual([r.pidsOf('z-code.cli'), (await ask(r, 'of.z-code.cli')).decrypt], [[40], true])
+})
+
+test('W16 the real socket-table answer through the redirector: one candidate is that process with no table read; two with one holding the connection is that one; two holding it is nobody, and the form is judged', async () => {
+  const { ownerOf } = await import('../../../../src/collector/arch/win32/socktable.mjs')
+  const row = (pid, remotePort) => ({ pid, state: 'established', family: 4, localAddr: '127.0.0.1', localPort: 50000 + pid, remoteAddr: '127.0.0.1', remotePort })
+  let rows = [], reads = 0
+  const helper = { call: async () => { reads++; return { rows } } }
+  const { r } = bed({ ownerOf: (q) => ownerOf({ helper, ...q }) })
+  trust(r, 10, 11)
+  const only = await ask(r, 'of.codex.app') // codex.app has a single process: 13
+  assert.deepEqual([only.pid, only.pid_source, reads], [13, 'single-process', 0])
+  rows = [row(10, 18801), row(11, 443)]
+  assert.deepEqual([(await ask(r, 'of.claude-code.cli')).pid, reads], [10, 1])
+  rows = [row(10, 18801), row(11, 18801)]
+  const two = await ask(r, 'of.claude-code.cli')
+  assert.deepEqual([two.pid, two.pid_source, two.decrypt], [null, null, true], 'two hold it: not guessed; both trusted, so the form is')
+  distrust(r, 11)
+  assert.equal((await ask(r, 'of.claude-code.cli')).skip.reason, 'pid-unresolved-mixed')
+})
+
+test('W16 a form with no process rule takes every connection of its port, so the owner is looked for among ALL processes: its own trusted process decrypts, any other process (a child) is spliced and named, nobody found is spliced', async () => {
+  const o = owner({ pid: 20, source: 'socket-table', ms: 4 }, { pid: 21, source: 'socket-table', ms: 4 }, { pid: 30, source: 'socket-table', ms: 4 }, null, { pid: 20, source: 'socket-table', ms: 4 })
+  const { r } = bed({ ownerOf: o })
+  trust(r, 20, 22)
+  const own = await ask(r, 'of.deepseek-dsh.cli')
+  assert.deepEqual([own.pid, own.decrypt, own.skip, own.exe], [20, true, undefined, IMG.node])
+  assert.deepEqual(o.calls[0].candidates.sort((a, b) => a - b), [10, 11, 12, 13, 20, 21, 22, 30], 'every process the table has: a child of dsh is not a dsh process, and only the whole table can say whose connection this is')
+  assert.equal(o.calls[0].hop.port, 18803)
+  const child = await ask(r, 'of.deepseek-dsh.cli')
+  assert.deepEqual([child.pid, child.decrypt, child.skip, child.negKey], [21, false, { not_captured: 'untracked', reason: 'not-a-process-of-form' }, '21'], 'a Node child of dsh: spliced, and the row says whose it was')
+  const other = await ask(r, 'of.deepseek-dsh.cli')
+  assert.deepEqual([other.pid, other.decrypt, other.exe], [30, false, IMG.svchost])
+  const nobody = await ask(r, 'of.deepseek-dsh.cli')
+  assert.deepEqual([nobody.pid, nobody.decrypt, nobody.skip], [null, false, { not_captured: 'untracked', reason: 'pid-unresolved' }], 'no pid on a dedicated port: nothing says it is dsh\'s, so it is not decrypted')
+  distrust(r, 20)
+  const untrusted = await ask(r, 'of.deepseek-dsh.cli')
+  assert.deepEqual([untrusted.pid, untrusted.decrypt, untrusted.skip], [20, false, undefined], 'dsh\'s own process the tracker judged untrusted: the tracker gives the reason')
+  const o2 = owner(); const desk = bed({ ownerOf: o2 }).r
+  await ask(desk, 'of.deepseek-dsh.desktop')
+  assert.deepEqual(o2.calls[0].candidates, [22], 'the desktop app has a process rule: only its own processes are candidates, as for any other form')
+})
+
+test('W72 (lookup half) a CONNECT target that hits the group\'s bypass table is {kind:"direct"}, any other the group\'s upstream; each kind of row, and the user\'s login stays out of a direct connection', async () => {
+  const refs = []
+  const { r } = bed({ routes: () => ({ 'claude-code.settings': route(), 'codex.env': route({ upstream: HTTP_PROXY, bypass: BYPASS }), 'deepseek-dsh.env': route() }), authOf: (ref) => { refs.push(ref); return CRED }, ownerOf: owner() })
+  for (const host of ['intranet', 'a.corp.example.com', 'corp.example.com', '10.1.2.3', 'gateway.internal', 'GATEWAY.internal']) assert.deepEqual((await ask(r, 'of.codex.app', target(host))).upstream, { kind: 'direct' }, host)
+  assert.deepEqual(refs, [], 'a direct connection never asks for the proxy\'s login')
+  for (const host of ['api.openai.com', 'x.gateway.internal', '11.0.0.1', 'evilcorp.example.com', '2001:db8::1']) assert.deepEqual((await ask(r, 'of.codex.app', target(host))).upstream, { kind: 'http', host: '127.0.0.1', port: 7897, auth: CRED }, host)
+  assert.deepEqual(refs.slice(0, 1), ['prior:codex.env'])
+})
+
+test('W72 a form of another group never borrows this group\'s table: the same targets through `of.claude-code.cli` (no table, an upstream of its own) all go to its upstream', async () => {
+  const socks = { kind: 'socks5', host: '127.0.0.1', port: 1080, source: 'system-proxy' }
+  const { r } = bed({ routes: () => ({ 'claude-code.settings': route({ upstream: socks }), 'codex.env': route({ upstream: HTTP_PROXY, bypass: BYPASS }), 'deepseek-dsh.env': route() }), ownerOf: owner() })
+  for (const host of ['intranet', 'a.corp.example.com', '10.1.2.3', 'gateway.internal']) {
+    assert.deepEqual((await ask(r, 'of.claude-code.cli', target(host))).upstream, { kind: 'socks5', host: '127.0.0.1', port: 1080 }, `${host} is codex's bypass, not claude code's`)
+    assert.deepEqual((await ask(r, 'of.codex.app', target(host))).upstream, { kind: 'direct' }, host)
+  }
+})
+
+test('the upstream\'s login is resolved from its reference for this one connection and is not in anything else the lookup says; one that cannot be read, or a group that is on with nothing to dial, fails the lookup with a reason that has no login in it', async () => {
+  const o = owner()
+  const { r } = bed({ routes: () => ({ 'codex.env': route({ upstream: HTTP_PROXY }) }), ownerOf: o })
+  const meta = await ask(r, 'of.codex.app')
+  assert.deepEqual(meta.upstream.auth, CRED)
+  assert.equal(JSON.stringify({ ...meta, upstream: { ...meta.upstream, auth: undefined } }).includes('pw-SECRET'), false)
+  const noLogin = bed({ routes: () => ({ 'codex.env': route({ upstream: HTTP_PROXY, bypass: BYPASS }) }), authOf: () => null, ownerOf: o }).r
+  await assert.rejects(ask(noLogin, 'of.codex.app'), (e) => { assert.equal(e.why, 'upstream-credentials-unavailable'); assert.match(e.message, /prior:codex\.env/); assert.equal(e.message.includes('pw-'), false); return true })
+  assert.deepEqual((await ask(noLogin, 'of.codex.app', target('gateway.internal'))).upstream, { kind: 'direct' }, 'a bypassed target needs no login')
+  assert.equal(o.calls.length, 2, 'the connection that was dialled and the bypassed one asked the table; the one that could not be dialled did not wait for it')
+  const nothing = bed({ routes: () => ({ 'codex.env': route({ upstream: null }) }) }).r
+  await assert.rejects(ask(nothing, 'of.codex.app'), (e) => e.why === 'no-upstream')
+})
+
+test('a socket table that throws never costs the agent its connection: no pid, the form judged, and one `socktable-unavailable` failure that passes checkRecord', async () => {
+  const { checkRecord } = await import('../../../../src/health/codes.mjs')
+  const failures = []
+  const { r } = bed({ ownerOf: owner(new Error('the helper died')), onFailure: (f) => failures.push(f) })
+  trust(r, 10, 11)
+  const m = await ask(r, 'of.claude-code.cli')
+  assert.deepEqual([m.pid, m.decrypt, m.pid_source], [null, true, null])
+  assert.equal(failures.length, 1)
+  assert.deepEqual([failures[0].where, failures[0].code, checkRecord(failures[0])], ['helper', 'socktable-unavailable', []])
+  assert.match(failures[0].reason, /the helper died/)
+  const without = bed({}).r // no socket table wired at all: pid completion is off, the form is judged
+  trust(without, 10, 11)
+  assert.deepEqual([(await ask(without, 'of.claude-code.cli')).pid_ms, (await ask(without, 'of.claude-code.cli')).decrypt], [null, true])
+})
+
+// ---------- W16 end to end: the real engine and ingress, this redirector's lookup, a TLS origin, an agent that does not trust asight's CA ----------
+
+const asightCa = createCa()
+const privCa = createCa({ commonName: 'private origin CA' })
+const REQ = 'GET /v1/models HTTP/1.1\r\nhost: upstream.test\r\n\r\n'
+const RESP = 'HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: keep-alive\r\n\r\nok'
+
+async function wired(t, { ownerOf } = {}) {
+  const issuer = createLeafIssuer(loadCa(privCa))
+  const origin = tls.createServer({ SNICallback: (n, cb) => cb(null, issuer.secureContextFor(n)), ALPNProtocols: ['http/1.1'] }, (s) => { s.on('data', () => s.write(RESP)); s.on('error', () => {}) })
+  await new Promise((r) => origin.listen(0, '127.0.0.1', r))
+  const { r, w } = bed({ ownerOf })
+  const flows = [], envelopes = [], failures = []
+  const engine = createEngine({
+    redirector: r, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: privCa.certPem, ingressToken: TOKEN,
+    policy: (meta) => (meta.decrypt ? true : meta.skip), // what the daemon's policy does with a meta that has no pid: the code lookupIngress gave it
+    store: { envelope: (e) => { envelopes.push(e); return true }, flow: (f) => { flows.push(structuredClone(f)); return true } }, onFailure: (f) => failures.push(f),
+  })
+  const { ingressPort } = await engine.listen({ ingress: { port: 0 } })
+  t.after(async () => { origin.close(); await closeWithin(engine) })
+  const settled = async ({ envelope = false } = {}) => { for (let i = 0; i < 400 && (flows.length < 1 || (envelope && envelopes.length < 1)); i++) await new Promise((x) => setTimeout(x, 10)) }
+  /** An agent's connection as the kernel hands it over (CONNECT as `of.<form>`), then TLS to the origin trusting `ca`: → { issuer, got } or 'closed' */
+  async function agent(user, ca) {
+    const sock = net.connect(ingressPort, '127.0.0.1'); sock.on('error', () => {})
+    const head = `CONNECT 127.0.0.1:${origin.address().port} HTTP/1.1\r\nHost: x\r\nProxy-Authorization: Basic ${Buffer.from(`${user}:${TOKEN}`).toString('base64')}\r\n\r\n`
+    sock.write(head)
+    await within(new Promise((res) => { let b = ''; const on = (d) => { b += d.toString('latin1'); if (b.includes('\r\n\r\n')) { sock.removeListener('data', on); res() } }; sock.on('data', on) }), 4000, 'the 200', () => sock.destroy())
+    return within(new Promise((resolve) => {
+      let issuerOf = null, got = ''
+      const c = tls.connect({ socket: sock, servername: 'upstream.test', ca, ALPNProtocols: ['http/1.1'] }, () => { issuerOf = c.getPeerX509Certificate().issuer; c.write(REQ) })
+      c.on('data', (d) => { got += d.toString('latin1'); if (got.length >= RESP.length) c.end() })
+      c.on('error', () => {}); c.on('close', () => resolve(issuerOf ? { issuer: issuerOf, got } : 'closed'))
+    }), 6000, 'the TLS exchange', () => sock.destroy())
+  }
+  return { r, w, flows, envelopes, failures, settled, agent }
+}
+
+test('W16 end to end, no pid, one process of the form untrusted: the connection is spliced, the agent meets the origin\'s own certificate and its answer with zero errors, and the row says why', async (t) => {
+  const E = await wired(t, { ownerOf: owner() })
+  trust(E.r, 10) // pid 11 of the same form has no verdict
+  const got = await E.agent('of.claude-code.cli', privCa.certPem)
+  assert.equal(got.got, RESP, 'the agent got its answer')
+  assert.match(got.issuer, /private origin CA/, 'from the origin: asight\'s CA never signed anything the agent saw')
+  await E.settled()
+  const [row] = E.flows
+  assert.deepEqual([row.decision, row.not_captured, row.reason, row.pid, row.agent], ['splice', 'untrusted', 'pid-unresolved-mixed', null, 'claude-code'])
+  assert.deepEqual([row.ingress, row.upstream], [{ route: 'of', group: 'claude-code.cli' }, { kind: 'direct' }])
+  assert.equal(E.envelopes.length, 0)
+  assert.deepEqual(E.failures, [], 'the agent saw no error and nothing was recorded as a failure')
+})
+
+test('W16 end to end, no pid, every process of the form trusted: the same connection is decrypted, the agent sees asight\'s leaf, the envelope names the form\'s agent and has no pid', async (t) => {
+  const E = await wired(t, { ownerOf: owner() })
+  trust(E.r, 10, 11)
+  const got = await E.agent('of.claude-code.cli', asightCa.certPem)
+  assert.equal(got.got, RESP)
+  assert.match(got.issuer, /asight/i, 'decrypted: the leaf is asight\'s')
+  await E.settled({ envelope: true })
+  assert.deepEqual([E.flows[0].decision, E.flows[0].not_captured ?? null], ['decrypt', null])
+  assert.deepEqual([E.envelopes[0].proc.agent, E.envelopes[0].proc.pid, E.envelopes[0].proc.exe], ['claude-code', null, null], 'no pid was found: the envelope says so rather than guessing')
+  assert.deepEqual(E.failures, [])
 })
