@@ -13,8 +13,7 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { createController, discover as discoverController, maskEndpoint } from '../mihomo/controller.mjs'
-import { names, probeUrl, routeFile, scanScript } from '../mihomo/rules.mjs'
-import { spliceRuntimeText, stripRuntimeText, RuntimeShapeError } from '../mihomo/runtime-text.mjs'
+import { names, probeUrl, scanScript } from '../mihomo/rules.mjs'
 import { topKey, topBool, topInt } from '../mihomo/yaml-top.mjs'
 
 export { discoverController as discover }
@@ -46,15 +45,14 @@ function scriptFileOf(profiles) {
 }
 
 /**
- * createVergeAdapter({ home, fs, controller, listPipes, helper, env, makeClient, installDirs, ledger, running, now })
+ * createVergeAdapter({ home, fs, controller, listPipes, helper, env, makeClient, installDirs, running, now })
  *  home        Verge's data directory (vergeHomeOf). Required.
- *  controller  an already-found controller ({ get, put }); without one the adapter finds it (discover(): listPipes, helper, env, installDirs) and trusts only Verge's own core (N4).
- *  ledger      the install manifest's door for the writes (4.7 §4): { backup(file, data) → path, record(entry), forget(kind, key), keepBackup(info), dropBackup(path), find(kind, key) }; without one nothing is written.
+ *  controller  an already-found controller ({ get }); without one the adapter finds it (discover(): listPipes, helper, env, installDirs) and trusts only Verge's own core (N4).
  *  running     () → true | false | null: whether Verge is running (null: cannot tell).
  */
-export function createVergeAdapter({ home, fs = nodeFs, controller = null, listPipes, helper = null, env = process.env, makeClient = createController, installDirs = [], ledger = null, running = () => null, now = () => new Date(), unknownTtlMs = 5000 } = {}) {
+export function createVergeAdapter({ home, fs = nodeFs, controller = null, listPipes, helper = null, env = process.env, makeClient = createController, installDirs = [], running = () => null, now = () => new Date(), unknownTtlMs = 5000 } = {}) {
   if (typeof home !== 'string' || home === '') throw new TypeError('the adapter needs Verge\'s data directory')
-  const P = { verge: path.join(home, 'verge.yaml'), config: path.join(home, 'config.yaml'), runtime: path.join(home, 'clash-verge.yaml'), profiles: path.join(home, 'profiles.yaml'), profilesDir: path.join(home, 'profiles'), asightDir: path.join(home, 'asight') }
+  const P = { verge: path.join(home, 'verge.yaml'), config: path.join(home, 'config.yaml'), runtime: path.join(home, 'clash-verge.yaml'), profiles: path.join(home, 'profiles.yaml'), profilesDir: path.join(home, 'profiles') }
   const rd = (file, enc = 'utf8') => { try { return { text: fs.readFileSync(file, enc) } } catch (e) { return { text: null, error: (e && e.code) || 'error' } } }
 
   // ---- the controller: found once, trusted only when it is Verge's, forgotten when it stops answering (Verge restarted: the pipe has a new name) ---------------------------------------
@@ -68,18 +66,15 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     found = r.unknown ? { unknown: r.unknown } : { ctl: makeClient({ endpoint: r.endpoint, secret: r.secret, timeoutMs: 8000 }), how: r.how, version: r.version, endpoint: maskEndpoint(r.endpoint) }
     return found.ctl ?? null
   }
-  async function call(method, target, body) {
+  async function get(target) {
     const ctl = await live()
     if (!ctl) return UNREADABLE
-    const send = (c) => (method === 'GET' ? c.get(target) : c.put(target, body))
-    const r = await send(ctl)
+    const r = await ctl.get(target)
     if (r.status !== 0 || controller) return r
     found = null // it went away (Verge restarted, and its pipe has a new name): look again, once
     const again = await live()
-    return again ? send(again) : r
+    return again ? again.get(target) : r
   }
-  const get = (target) => call('GET', target)
-  const put = (target, body = null) => call('PUT', target, body)
   /** What the last look for the controller found, for a caller that shows it: { how, endpoint (masked) } or { unknown: { reason, tried } }. */
   const controllerInfo = () => (controller ? { how: 'given', endpoint: controller.endpoint ?? null } : found && found.ctl ? { how: found.how, endpoint: found.endpoint } : found ? { unknown: found.unknown } : null)
 
@@ -192,87 +187,6 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     return { ok: true, rules: out, reason: null }
   }
 
-  // ---- the named writes (4.7 §3.4): each one recorded in the ledger, the file kinds backed up first (R2) ----------------------------------------------------------------------------
-  const REACTIVATE = '去 Clash Verge → 订阅,点当前订阅重新激活'
-  const need = () => { if (!ledger) throw new TypeError('a write needs the ledger: asight records every change it makes to a VPN (4.7 §4, 1.6 R1)'); return ledger }
-  const stamp = () => now().toISOString()
-  const RETRY = new Set(['EPERM', 'EBUSY', 'EACCES']) // Windows: an indexer or a virus scanner holds the file for a moment
-
-  // a temp file next to it, then a rename: a reader (Verge, the core) never sees half a file
-  async function writeAtomic(file, data, enc) {
-    const tmp = `${file}.asight-tmp-${process.pid}`
-    let mode = 0o644
-    try { mode = fs.statSync(file).mode & 0o777 } catch { /* a new file */ }
-    try {
-      fs.mkdirSync(path.dirname(file), { recursive: true })
-      fs.writeFileSync(tmp, data, { encoding: enc, mode })
-      for (let attempt = 1; ; attempt++) {
-        try { fs.renameSync(tmp, file); return null } catch (e) { if (attempt >= 3 || !RETRY.has(e && e.code)) throw e; await new Promise((r) => setTimeout(r, 40)) }
-      }
-    } catch (e) {
-      try { fs.rmSync(tmp, { force: true }) } catch { /* the failure that matters is e */ }
-      return (e && e.code) || 'error'
-    }
-  }
-  /** asight's own route file for group `g` (the rule provider's file): `lines` = the process rules when the group is on, null / [] when off (an empty file). Its own file, so there is no backup; undoing it is deleting it. */
-  async function writeRuleFile(g, lines) {
-    const led = need()
-    const file = path.join(home, names(g).routeFile)
-    const text = routeFile(lines)
-    if (rd(file).text === text && led.find('vpn-rule-file', file)) return { ok: true, changed: false, receipt: null }
-    const code = await writeAtomic(file, text, 'utf8')
-    if (code) return { ok: false, code, reason: `${path.basename(file)} could not be written (${code})`, changed: false }
-    const entry = { kind: 'vpn-rule-file', key: file, path: file, group: g, existed_before: false, post_sha256: sha256(text), installed_at: stamp(), undo_by_hand: `delete ${file}` }
-    led.record(entry)
-    return { ok: true, changed: true, receipt: { kind: entry.kind, key: file, change: 'written', backup: null }, entry }
-  }
-  async function removeRuleFile(g) {
-    const led = need()
-    const file = path.join(home, names(g).routeFile)
-    let existed = false
-    try { fs.statSync(file); existed = true } catch { /* not there */ }
-    try { fs.rmSync(file, { force: true }) } catch (e) { return { ok: false, code: (e && e.code) || 'error', reason: `${path.basename(file)} could not be removed` } }
-    try { fs.rmdirSync(P.asightDir) } catch { /* not empty (another group's file), or gone */ }
-    led.forget('vpn-rule-file', file)
-    return { ok: true, changed: existed, receipt: existed ? { kind: 'vpn-rule-file', key: file, change: 'removed', backup: null } : null }
-  }
-
-  /** `PUT /proxies/asight-sw-<g> {name}`: PASS (off) or asight-fb-<g> (on); anything else is refused by the controller before a byte is sent (it throws). Runtime-only, so no backup; the ledger says how to undo it. */
-  async function putSelect(g, name) {
-    const led = need()
-    const n = names(g)
-    const r = await put(`/proxies/${n.sw}`, { name })
-    if (!r.ok) return { ok: false, status: r.status, reason: r.status === 0 ? 'controller-unreadable' : 'refused', text: r.text } // `text`: one of the core's fixed messages, or ''
-    const entry = { kind: 'vpn-runtime-select', key: n.sw, target: n.sw, value: name, installed_at: stamp(), undo_by_hand: REACTIVATE }
-    led.record(entry)
-    return { ok: true, status: r.status, receipt: { kind: entry.kind, key: n.sw, change: name === 'PASS' ? 'off' : 'on', backup: null }, entry }
-  }
-  /** `PUT /providers/rules/asight-r-<g>`: the core reads the route file again. Not recorded (it only refreshes what a recorded file says). */
-  async function refreshProvider(g) {
-    const r = await put(`/providers/rules/${names(g).provider}`)
-    return { ok: r.ok, status: r.status, reason: r.ok ? null : r.status === 0 ? 'controller-unreadable' : 'refused' }
-  }
-
-  /**
-   * `PUT /configs?force=true {payload}`: the runtime file's text with the block spliced in (`block`, from buildBlock) or all of asight's entries taken out (`strip: true`), pushed to the core (D29; 204 in 64-78 ms, [T0]).
-   * The text is read from the runtime file, spliced in memory and sent: it holds the user's nodes and the subscription, so it is never written, logged or returned. A shape of the runtime the text splice does not read
-   * (RuntimeShapeError) is `reason: 'runtime-shape'`: nothing is sent and the caller falls back to the next strategy. → { ok, receipt } | { ok: false, reason, status?, detail? }; a refused push is `{ status, reason: 'refused' }` and
-   * nothing else, because what the core says about a refused config names the user's own group, node and rule (N14, 4.7 §3.4).
-   */
-  async function pushPayload({ block = null, strip = false } = {}) {
-    const led = need()
-    const rt = rd(P.runtime)
-    if (rt.text === null) return { ok: false, reason: 'runtime-unreadable', detail: rt.error }
-    let yaml
-    try { yaml = strip ? stripRuntimeText({ yaml: rt.text }).yaml : spliceRuntimeText({ yaml: rt.text, block }).yaml } catch (e) { if (e instanceof RuntimeShapeError) return { ok: false, reason: 'runtime-shape', detail: e.message }; throw e }
-    const r = await put('/configs?force=true', { payload: yaml })
-    if (!r.ok) return { ok: false, status: r.status, reason: r.status === 0 ? 'controller-unreadable' : 'refused' } // never the core's words: a refused config is quoted back with the user's group, node and rule in it
-    if (strip) { led.forget('vpn-runtime-block', 'runtime'); return { ok: true, receipt: { kind: 'vpn-runtime-block', key: 'runtime', change: 'removed', backup: null } } }
-    const entry = { kind: 'vpn-runtime-block', key: 'runtime', installed_at: stamp(), undo_by_hand: REACTIVATE }
-    led.record(entry)
-    return { ok: true, receipt: { kind: entry.kind, key: 'runtime', change: 'pushed', backup: null }, entry }
-  }
-
   /** What the probe (src/netenv/probe.mjs detect) is given about Verge: the file fields, the runtime's few fields, how the controller was found (masked), and whether it is running. */
   async function facts() {
     const fields = await readFields()
@@ -287,5 +201,5 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     }
   }
 
-  return { home, paths: P, readFields, readConfigs, readFindProcessMode, refreshProbe, processRulesNaming, facts, controllerInfo, writeRuleFile, removeRuleFile, putSelect, refreshProvider, pushPayload }
+  return { home, paths: P, readFields, readConfigs, readFindProcessMode, refreshProbe, processRulesNaming, facts, controllerInfo }
 }

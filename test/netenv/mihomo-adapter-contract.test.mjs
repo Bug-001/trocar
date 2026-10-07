@@ -15,7 +15,6 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { gate, freePort, startMihomo } from './fixtures/real-mihomo.mjs'
 import { loopbackRuntimeText } from './fixtures/rules/runtime.mjs'
 import { block as blockInput, CC_CLI, CODEX_APP } from './fixtures/rules/inputs.mjs'
-import { memoryLedger } from './fixtures/ledger.mjs'
 import { VERGE_YAML, PROFILES_YAML, SCRIPT_JS, CONFIG_YAML } from './fixtures/verge-world.mjs'
 import { RECORDED_RULES, RECORDED_REFUSALS, RECORDED_FIXED, RECORDED_FORMS, RECORDED_NAMING } from './fixtures/real-rules.mjs'
 import { createController } from '../../src/netenv/mihomo/controller.mjs'
@@ -25,7 +24,7 @@ import { buildBlock, buildScriptJs, names } from '../../src/netenv/mihomo/rules.
 const CC = CC_CLI.g
 const CODEX = CODEX_APP.g
 
-/** A Verge data directory with a real core running on its runtime, the adapter on that core's controller, and the ledger in memory. */
+/** A Verge data directory with a real core running on its runtime, the adapter on that core's controller, */
 async function realWorld(t, { rules = ['MATCH,DIRECT'], runtime = (y) => y } = {}) {
   const ports = { mixed: await freePort(), controller: await freePort(), engine: await freePort() }
   const secret = randomBytes(16).toString('hex')
@@ -39,11 +38,10 @@ async function realWorld(t, { rules = ['MATCH,DIRECT'], runtime = (y) => y } = {
   put('verge.yaml', VERGE_YAML()); put('config.yaml', CONFIG_YAML); put('profiles.yaml', PROFILES_YAML); put(path.join('profiles', 'Script.js'), SCRIPT_JS); put('clash-verge.yaml', yaml)
   const m = await startMihomo(t, { configText: yaml, configName: 'clash-verge.yaml', home, secret, controller: ports.controller })
   const ctl = createController({ endpoint: `tcp:127.0.0.1:${ports.controller}`, secret })
-  const ledger = memoryLedger({ home: sandbox })
-  const adapter = createVergeAdapter({ home, controller: ctl, ledger, running: () => true })
+  const adapter = createVergeAdapter({ home, controller: ctl, running: () => true })
   const block = buildBlock(blockInput([CC_CLI, CODEX_APP], { enginePort: ports.engine, reenter: { host: '127.0.0.1', port: ports.mixed } }))
   const lines = (g) => block.files[names(g).routeFile].split('\n').filter(Boolean)
-  return { ports, secret, sandbox, home, m, ctl, ledger, adapter, block, lines, file: (rel) => path.join(home, rel), script: () => fs.readFileSync(path.join(home, 'profiles', 'Script.js')) }
+  return { ports, secret, sandbox, home, m, ctl, adapter, block, lines, file: (rel) => path.join(home, rel), script: () => fs.readFileSync(path.join(home, 'profiles', 'Script.js')) }
 }
 const groupsOn = (w, on) => [CC, CODEX].map((g) => ({ g, on: on.includes(g), lines: w.lines(g) }))
 const nowOf = async (w, name) => (await w.m.ctl('GET', `/proxies/${name}`)).json().now
@@ -72,10 +70,7 @@ test('W57 adapter, reads: GET /rules gives the recorded payload strings and proc
   assert.deepEqual(await w.adapter.readFindProcessMode(), { mode: 'strict', reason: null })
 
   // a group that is not in the runtime is a 404 on this core, and every read and write of the adapter takes it for what it is
-  assert.deepEqual(await w.adapter.putSelect(CC, 'PASS'), { ok: false, status: 404, reason: 'refused', text: 'Resource not found' })
-  assert.deepEqual(await w.adapter.refreshProvider(CC), { ok: false, status: 404, reason: 'refused' })
   assert.deepEqual(await w.adapter.refreshProbe(CC, { reenterPort: w.ports.mixed }), { ok: false, status: 404, reason: 'unreadable' })
-  assert.deepEqual(w.ledger.entries(), [], 'nothing that failed is recorded')
 })
 
 test('W57 adapter, a core that refuses a config: the adapter keeps the status and a reason class and none of the core\'s words; the recorded refusals and fixed messages are what this core says', gate, async (t) => {

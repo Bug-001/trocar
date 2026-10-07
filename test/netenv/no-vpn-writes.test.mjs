@@ -4,8 +4,8 @@
 //       function; `own: true` (a controller client that may write) appears only in forwarder.mjs;
 //   (b) runtime: detect and the adapter's reads, run over a recording fs in a sandbox, put no write under any product directory.
 // The allowlist is by the NAME of one helper per legitimate writer (4.7 N15): `writeNetenvCache` writes ~/.asight/netenv.json, and the helpers of arch/win32 that write asight's own directory are
-// registered by name in OWN_WRITERS when their files exist (Tasks 7, 8, 9, 14). TODAY is the other half: the write sites the Verge adapter has until Task 6r takes them out. Every commit of
-// Task 6r that deletes one deletes its line, and a line whose helper no longer writes is red, so the list cannot be left behind. Two planted counter-examples turn each scan red.
+// registered by name in OWN_WRITERS when their files exist (Tasks 7, 8, 9, 14). The Verge adapter has no write site (Task 6r took the last two out: it only reads), so it is not on the list.
+// Two planted counter-examples turn each scan red.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -30,17 +30,11 @@ const SOURCES = walk(path.join(ROOT, 'src')).filter((f) => !rel(f).startsWith('s
 
 /** The two legitimate writers, by the name of one helper each (4.7 N15). */
 const OWN_WRITERS = Object.freeze(['writeNetenvCache'])
-/** Today's write sites in a module that names a product directory or sits in src/netenv: the Verge adapter's, until Task 6r takes them out (each commit deletes its lines). */
-const TODAY = [
-  { file: 'src/netenv/adapters/clash-verge-rev.mjs', helper: 'writeAtomic' },
-  { file: 'src/netenv/adapters/clash-verge-rev.mjs', helper: 'removeRuleFile' },
-]
-
 /** The writes of one module that the rule forbids: it names a product directory or sits in src/netenv/, and the write is not in an allowlisted helper. */
-export function violations(file, src, allow = TODAY) {
+export function violations(file, src) {
   const watched = file.startsWith('src/netenv/') || PRODUCT_DIR_NAMES.test(src.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, ''))
   if (!watched) return []
-  return writesOf(src).filter((w) => !OWN_WRITERS.includes(w.helper) && !allow.some((a) => a.file === file && a.helper === w.helper)).map((w) => `${file}:${w.line} ${w.call}() in ${w.helper || 'the top level'}`)
+  return writesOf(src).filter((w) => !OWN_WRITERS.includes(w.helper)).map((w) => `${file}:${w.line} ${w.call}() in ${w.helper || 'the top level'}`)
 }
 
 test('N15 (a) the scanner is what it says: it finds the write calls of every kind, the helper they are in, and nothing in a comment, a string, a template or a regex', () => {
@@ -71,8 +65,6 @@ test('N15 (a) the scanner keeps its place in every file of src/: the braces bala
 test('N15 (a) a module that names a product data directory, or sits in src/netenv/, calls a write function only inside an allowlisted helper', () => {
   const found = SOURCES.flatMap((f) => violations(rel(f), fs.readFileSync(f, 'utf8')))
   assert.deepEqual(found, [])
-  // the allowlist is not left behind: every line of it is a helper that still writes there (a deleted helper turns its own line red)
-  for (const a of TODAY) assert.ok(writesOf(fs.readFileSync(path.join(ROOT, a.file), 'utf8')).some((w) => w.helper === a.helper), `${a.file} ${a.helper} no longer writes: delete its line from TODAY`)
   assert.ok(OWN_WRITERS.length >= 1, 'the allowlist is never empty: the two legitimate writers are named')
 })
 
@@ -101,7 +93,7 @@ test('N15 (a) `createController({ own: true })` (a client that may write to a co
 
 // The Verge adapter exports no write function: TODAY's are the ones Task 6r deletes, so the list is the debt and shrinks to nothing.
 const WRITE_VERB = /^(write|strip|put|push|remove|install|apply|refresh|reset|insert)/i
-const ADAPTER_WRITERS_TODAY = ['writeRuleFile', 'removeRuleFile', 'putSelect', 'refreshProvider', 'pushPayload', 'refreshProbe']
+const ADAPTER_WRITERS_TODAY = ['refreshProbe']
 test('N15 (a) the Verge adapter exports no write function (module and adapter object)', async (t) => {
   const mod = await import('../../src/netenv/adapters/clash-verge-rev.mjs')
   const w = await startWorld(t)
