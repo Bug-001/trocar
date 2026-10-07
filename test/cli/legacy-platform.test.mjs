@@ -147,6 +147,42 @@ test('V23: a reload the core accepted is not proof — when the proxy list canno
   } finally { await core2.close() }
 })
 
+test('V23 / D28: a Merge.yaml of the user\'s own — prepend-rules that are not asight\'s — is no evidence of asight and is never rewritten: not one byte, no row in the receipt, no reload of Clash; with asight\'s route elsewhere the route comes out and Merge.yaml still is not touched', async () => {
+  const MERGE = 'prepend-rules:\n  - DOMAIN,corp.example.com,DIRECT\n  - DOMAIN-SUFFIX,intranet.example,DIRECT\n'
+  const s = macHome({ block: false, runtime: false, agents: [], steer: false, ca: false, userMain: USER_MAIN }); fs.writeFileSync(s.merge, MERGE)
+  const core = await fakeCore({ live: false }); const mac = fakeMac({ loaded: [], keychain: false })
+  try {
+    const before = snapshot(s.home); const io = fakeIo()
+    assert.equal(await runOffCli(['--json'], offCtx(s, io, { core, mac })), 0, io.text())
+    assert.equal(fs.readFileSync(s.merge, 'utf8'), MERGE, 'Merge.yaml is the user\'s: byte for byte')
+    assert.equal(core.state.puts.length, 0, 'nothing says asight put a route in this Clash: it is not reloaded')
+    assert.deepEqual([io.json().changed, changedFiles(before, snapshot(s.home))], [[], []], 'no row in the receipt, no file different')
+  } finally { await core.close() }
+  const t = macHome({ block: true, runtime: true, agents: [], steer: false, userMain: USER_MAIN }); fs.writeFileSync(t.merge, MERGE)
+  const core2 = await fakeCore({ live: true }); const mac2 = fakeMac({ loaded: [], keychain: false })
+  try {
+    const io = fakeIo()
+    assert.equal(await runOffCli(['--json'], offCtx(t, io, { core: core2, mac: mac2 })), 0, io.text())
+    assert.equal(fs.readFileSync(t.script, 'utf8'), USER_MAIN, 'the route is out of Script.js')
+    assert.equal(fs.readFileSync(t.merge, 'utf8'), MERGE, 'and Merge.yaml still is not touched')
+    assert.ok(!io.json().changed.some((c) => c.path === t.merge), 'the receipt does not list it')
+  } finally { await core2.close() }
+})
+
+test('V23: the core lists the route but there is no runtime config to reload from — off cannot take it out: exit 1, the problem says why (not "undefined"), no reload is sent, the MITM is left running', async () => {
+  const s = macHome({ block: false, runtime: false, agents: ['com.asight.mitm'], steer: false }); fs.rmSync(s.runtimePath)
+  const core = await fakeCore({ live: true }); const mac = fakeMac({ loaded: ['com.asight.mitm'], pids: {}, keychain: false })
+  try {
+    const io = fakeIo()
+    assert.equal(await runOffCli(['--json'], offCtx(s, io, { core, mac })), 1, io.text())
+    const r = io.json()
+    assert.ok(r.problems.some((p) => /still in the core's live proxy list and no reload was made: there is no runtime config/.test(p)), r.problems.join(' | '))
+    assert.ok(!r.problems.join(' ').includes('undefined') && r.skipped.every((x) => !String(x.reason).includes('undefined')))
+    assert.deepEqual([core.state.puts.length, mac.has(/launchctl unload .*com\.asight\.mitm/)], [0, false])
+    assert.ok(r.left.some((l) => l.path === s.script && l.reason && l.result === 'error'), 'the row left says why')
+  } finally { await core.close() }
+})
+
 test('V23 + R2: a ledgered block (asight on wrote it, with a backup) — the backup goes when Script.js is back to what it was; one the file no longer matches is KEPT and listed (kept_backups), and the ledger keeps it', async () => {
   for (const [name, userMain, identical] of [['custom main()', USER_MAIN, true], ['the stock no-op main()', NO_OP, false]]) {
     const s = macHome({ userMain, agents: [], steer: false })

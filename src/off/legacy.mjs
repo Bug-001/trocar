@@ -369,7 +369,7 @@ export async function undoLegacy({ home = nodeOs.homedir(), platform = process.p
           const tried = ((clash.located() || {}).tried || []).join(', ') || 'none'
           const why = unknown
             ? `不知道 · the Clash core did not answer, so whether ${PROXY_NAME} is still routed could not be read back (${(r.reload && r.reload.error) || `no live control socket found (tried: ${tried})`}); is Clash Verge running? Start it and run asight off again`
-            : r.reason
+            : (r.reason || `the core still lists ${PROXY_NAME}`)
           fail(CODE_NOT_UNDONE, `the Clash route was not confirmed gone: ${why}`, { file: p.scriptPath })
           res.left.push({ path: p.scriptPath, harness: CLAUDE_CODE, result: unknown ? 'unknown' : 'error', reason: why })
           res.clash_unknown = unknown

@@ -35,16 +35,8 @@ export function stripRuntime(yaml) {
   const tail = lines.at(-1) === '' ? lines.pop() : null // keep the final newline out of any item
   const out = []
   let section = null, listIndent = null, item = null
-  // the item's OWN `name` only (the dash line, or a key at the item's key column) — never a nested `name:` deeper inside some other proxy (e.g. plugin-opts), which would delete the user's proxy
-  const nameIs = `name:\\s*(['"]?)${clashEscape(PROXY_NAME)}\\1\\s*(?:[,}]|$)`
-  const isOurProxy = ([head, ...rest]) => {
-    if (new RegExp(`^\\s*-\\s+(?:\\{\\s*)?${nameIs}`).test(head)) return true
-    const inline = /^(\s*-\s+)\S/.exec(head) // `- key: v` → keys sit where `key` starts
-    const keyCol = inline ? inline[1].length : (rest.find((l) => l.trim()) || '').search(/\S/) // bare `-`
-    return rest.some((l) => l.length - l.trimStart().length === keyCol && new RegExp(`^\\s*${nameIs}`).test(l))
-  }
   const isOurRule = (l) => new RegExp(`^\\s*-\\s+(['"]?)${clashEscape(DESKTOP_RULE)}\\1\\s*$`).test(l)
-  const flush = () => { if (item && !isOurProxy(item)) out.push(...item); item = null }
+  const flush = () => { if (item && !isOurProxyItem(item)) out.push(...item); item = null }
   for (const ln of lines) {
     const top = /^[^\s#-][^:]*:/.test(ln)
     if (top) { flush(); section = ln.split(':')[0]; listIndent = null; out.push(ln); continue }
@@ -61,11 +53,59 @@ export function stripRuntime(yaml) {
   return out.join('\n')
 }
 
-/** The demo's atrace-desktop wrote `prepend-proxies:` / `prepend-rules:` blocks into Merge.yaml (inert on Verge 2.5.1). Strip that legacy shape too, so an off leaves a clean Merge.yaml. */
+// A proxy list item (its lines) that is asight's: its OWN `name` is exactly atrace-mitm (the dash line, or a key at the item's key column) — never a nested `name:` deeper inside some other proxy (e.g. plugin-opts),
+// which would delete the user's proxy.
+function isOurProxyItem([head, ...rest]) {
+  const nameIs = `name:\\s*(['"]?)${clashEscape(PROXY_NAME)}\\1\\s*(?:[,}]|$)`
+  if (new RegExp(`^\\s*-\\s+(?:\\{\\s*)?${nameIs}`).test(head)) return true
+  const inline = /^(\s*-\s+)\S/.exec(head) // `- key: v` → keys sit where `key` starts
+  const keyCol = inline ? inline[1].length : (rest.find((l) => l.trim()) || '').search(/\S/) // bare `-`
+  return rest.some((l) => l.length - l.trimStart().length === keyCol && new RegExp(`^\\s*${nameIs}`).test(l))
+}
+
+// A rule list item (its first line) that is asight's: the rule's target is the proxy atrace-mitm (nobody else's rule sends traffic to a proxy of that name).
+function isOurRuleItem(line) {
+  const text = line.replace(/^\s*-\s+/, '').trim().replace(/^(['"])(.*)\1$/, '$2')
+  return new RegExp(`,\\s*${clashEscape(PROXY_NAME)}\\s*(?:,\\s*no-resolve\\s*)?$`).test(text)
+}
+
+/** The demo's atrace-desktop wrote `prepend-proxies:` / `prepend-rules:` blocks into Merge.yaml (inert on Verge 2.5.1). Takes out ASIGHT'S items of those two lists and nothing else (D28: every other
+ *  byte stays): a proxy named exactly atrace-mitm, a rule whose target is atrace-mitm. A list's header goes with its last item; a list that holds anything else — the user's own `prepend-rules`
+ *  — keeps its header and its items, and a Merge.yaml with none of asight's items comes back byte for byte. (The old version took both lists whole, whatever they held.) */
 export function stripMergeLegacy(yaml) {
-  return yaml
-    .replace(/\n?prepend-proxies:\n(?:[ \t]*-[^\n]*\n?)+/g, '\n')
-    .replace(/\n?prepend-rules:\n(?:[ \t]*-[^\n]*\n?)+/g, '\n')
+  const lines = stripBlock(yaml).split('\n') // the demo's sentinel-wrapped form goes whole, as in stripRuntime
+  const tail = lines.at(-1) === '' ? lines.pop() : null
+  const out = []
+  let section = null, listIndent = null, item = null, header = -1, kept = 0, dropped = 0
+  const endItem = () => {
+    if (!item) return
+    let n = item.length
+    while (n > 1 && item[n - 1].trim() === '') n-- // the blank lines after an item are not its own
+    const ours = section === 'prepend-proxies' ? isOurProxyItem(item.slice(0, n)) : isOurRuleItem(item[0])
+    if (ours) { dropped++; out.push(...item.slice(n)) } else { kept++; out.push(...item) }
+    item = null
+  }
+  const endSection = () => {
+    endItem()
+    if (header >= 0 && dropped > 0 && kept === 0) out.splice(header, 1)
+    section = null; header = -1; listIndent = null; kept = 0; dropped = 0
+  }
+  for (const ln of lines) {
+    if (/^[^\s#-][^:]*:/.test(ln)) { // a top-level key ends the list before it
+      endSection()
+      if (/^prepend-(?:proxies|rules):[ \t\r]*(?:#.*)?$/.test(ln)) { section = ln.split(':')[0]; header = out.length }
+      out.push(ln); continue
+    }
+    if (!section) { out.push(ln); continue }
+    const dash = /^(\s*)-(?:\s|$)/.exec(ln)
+    if (dash && listIndent === null) listIndent = dash[1].length
+    if (dash && dash[1].length === listIndent) { endItem(); item = [ln]; continue }
+    if (item) { item.push(ln); continue }
+    out.push(ln)
+  }
+  endSection()
+  if (tail !== null) out.push(tail)
+  return out.join('\n')
 }
 
 // ── the mihomo control socket: discovered, never hard-coded (D29) ────────────────────────────────
@@ -243,6 +283,8 @@ export function makeClash({ fs = nodeFs, scriptPath, runtimePath, mergePath, soc
     if (!reloadOk(reloaded)) why.push(reloadWhy(reloaded))
     // an ACCEPTED reload is not proof either: if the core still lists the proxy, the route is live
     else if (reloaded.status != null && st.live === true) why.push(`mihomo accepted the reload but ${PROXY_NAME} is STILL in its live proxy list`)
+    // no reload was made (there is no runtime config to build a clean one from) and the core still lists the route: it is live, and nothing done here took it out
+    else if (reloaded.status == null && st.live === true) why.push(`${PROXY_NAME} is still in the core's live proxy list and no reload was made: there is no runtime config (${runtimePath}) to build a clean one from`)
     if (why.length) {
       return {
         ok: false,
