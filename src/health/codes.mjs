@@ -65,14 +65,15 @@ export const CODES_BY_PART = Object.freeze({
 })
 export const CODES = Object.freeze([...new Set(Object.values(CODES_BY_PART).flat())])
 
-// What `asight off` writes (RFC 1.6 R1 / R2 / R3, D39⑦). A block of its own, below CODES and apart from the lists above, so that
-// the lists other branches append to (D40: WHERE, STATE_EVENTS, CODES_BY_PART) stay edit-free here; `sets` below adds them.
+// What `asight off` writes (RFC 1.6 R1 / R2 / R3, D39⑦). A block of its own, below CODES and apart from the lists above (which carry D40's
+// `retention` names since the merge): feat/win-collector adds blocks to this file too, so folding the blocks into WHERE, STATE_EVENTS and
+// CODES_BY_PART waits until it has merged (1.6 §闭集); `sets` below adds them.
 // src/off/names.mjs holds the same names (src/off may import nothing outside itself); test/health/codes.test.mjs holds the two equal.
 export const OFF_WHERE = Object.freeze(['off'])
 export const OFF_EVENTS = Object.freeze(['off-note']) // a state change (the last one of a run carries kind:'result'), not a failure
 export const OFF_CODES = Object.freeze(['backup-failed', 'backup-kept', 'undone-by-marker'])
 
-// What the network topology and `asight doctor` write and say (RFC 1.6 §9.7, D39⑩, D43). A block of its own, like the one above, so the lists D40 appends to stay edit-free; `sets` below adds it.
+// What the network topology and `asight doctor` write and say (RFC 1.6 §9.7, D39⑩, D43). A block of its own, like the one above (folded into the lists with it, after feat/win-collector has merged); `sets` below adds it.
 // `netenv-change` is a state change (the topology moved: a proxy setting, the machine's network environment); `failure` with `where: 'netenv'` is written for the codes in NET_FAILURE_CODES, and for
 // `proxy-changed` only when it leaves a harness that is on uncaptured (proxy mode, where the changed entry bypasses asight). D43 withdrew the VPN-block codes: the new collector writes nothing into a VPN.
 // `route-loop`, `forwarder-down` and `egress-differs` are shared with 4.7 / 4.8: each is defined here, once.
@@ -86,7 +87,7 @@ export const NET_FAILURE_CODES = Object.freeze([...NET_FAILURE_OWN, ROUTE_LOOP, 
 const NET_STATUS_REASONS = Object.freeze(['not-routed', 'proxy-changed', 'elevated-agent', 'upstream-unreachable', 'opt-in-needed', 'shim-not-on-path', 'not-via-entry', ROUTE_LOOP, FORWARDER_DOWN])
 
 // What `asight status` says of an agent that is not captured (RFC 1.6 §2 / V32, 4.6 §记录「事件与码的名字」): one name from this closed set, whatever the reason. asight's own, then every trust
-// reason above (the resolver's and the harnesses' own). A block of its own, as the one above is, so the lists D40 appends to stay edit-free. `negative-cache` is also a code of the engine.
+// reason above (the resolver's and the harnesses' own). A block of its own, as the one above is (folded into the lists with it, after feat/win-collector has merged). `negative-cache` is also a code of the engine.
 export const STATUS_OWN_REASONS = Object.freeze(['desired-off', 'entry-missing', 'entry-changed', 'link-missing', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'negative-cache'])
 export const STATUS_REASONS = Object.freeze([...new Set([...STATUS_OWN_REASONS, ...NET_STATUS_REASONS, ...TRUST_REASONS])])
 
