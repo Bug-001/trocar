@@ -44,6 +44,15 @@ function recordsOf(manifest, e, harness) {
   return out
 }
 
+/** The manifest's records of this group's PROXY entry (4.8 §2.3), in the manifest's order: what the entries writer undoes (Task 8(c)) and what says a group is installed for the kernel's `carried` list (audit F7).
+ *  `group` is the group as the harness file declares it (the `group` of a `groupsOf` row), `harness` its harness: found by harness and entry — the same rule `priorOf` reads by — never the trust entry of the same file
+ *  (other keys, other variables), never a record of another harness. An entry kind that is not a file (a policy value, a shim: Task 14's) has none. */
+export function proxyRecordsOf(manifest, group, harness) {
+  if (!group || typeof group !== 'object' || !group.proxyEntry) throw new TypeError('proxyRecordsOf needs the group (the harness file\'s group, with its proxyEntry)')
+  if (group.proxyEntry.kind !== 'file') return []
+  return (manifest && Array.isArray(manifest.entries) ? manifest.entries : []).filter((rec) => isProxyRecord(rec, group.proxyEntry, harness))
+}
+
 /** What the journal recorded as the value asight put out of effect: a string for a JSON key, `{ VAR: value }` for a dotenv block. Anything else is that the user had none. */
 function fromRecord(rec, group) {
   const p = rec.prior_value
