@@ -15,7 +15,7 @@ export default {
   groups: [
     {
       g: 'claude-code.settings',
-      proxyEntry: { kind: 'file', format: 'json-key', file: settingsFile, key: ['env', 'HTTPS_PROXY'] },
+      proxyEntry: { kind: 'file', format: 'json-key', files: (ctx) => [settingsFile(ctx)], key: ['env', 'HTTPS_PROXY'] }, // the file the trust key is in too (CLAUDE_CONFIG_DIR or ~/.claude)
       auth: true,
       followsSystemProxy: { http: false, ws: false },
     },

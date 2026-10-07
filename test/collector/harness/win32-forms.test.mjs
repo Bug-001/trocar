@@ -120,6 +120,11 @@ test('every win32 data file has the shape the later tasks read: groups, forms, t
       assert.equal(typeof g.auth, 'boolean', `${g.g}: auth`)
       assert.ok(g.followsSystemProxy && typeof g.followsSystemProxy.http === 'boolean' && typeof g.followsSystemProxy.ws === 'boolean', `${g.g}: followsSystemProxy`)
       const automatic = g.proxyEntry.kind === 'file'
+      if (automatic) { // what proxyEntries() reads: the files the agent reads, and either one JSON key or the variables of a dotenv block
+        assert.equal(typeof g.proxyEntry.files, 'function', `${g.g}: files(ctx)`)
+        if (g.proxyEntry.format === 'json-key') assert.ok(Array.isArray(g.proxyEntry.key) && g.proxyEntry.key.every((k) => typeof k === 'string'), `${g.g}: key`)
+        else assert.deepEqual([g.proxyEntry.format, typeof g.proxyEntry.block.urlVar, typeof g.proxyEntry.block.fixed], ['dotenv-block', 'string', 'object'], `${g.g}: block`)
+      }
       assert.equal(!!(g.optIn && g.optIn.length), !automatic, `${g.g}: only a file entry is automatic; every other kind is named by the user (4.8 §2.4)`)
       for (const o of g.optIn || []) assert.ok(o.item && ['user', 'machine'].includes(o.scope) && typeof o.impact === 'string' && o.impact.length > 20, `${g.g}: an opt-in item says what it is, its scope and its impact`)
     }

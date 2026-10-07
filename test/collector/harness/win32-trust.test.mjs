@@ -227,3 +227,80 @@ test('W20: the combined bundle is Node\'s roots, the Windows roots, the user\'s 
   assert.deepEqual(fs.readdirSync(path.join(b.dir, 'ca')).filter((n) => n.includes('tmp')), [], 'no temp file left')
   assert.equal(readManifest(b.dir).files.find((f) => f.role === 'bundle').sha256, crypto.createHash('sha256').update(fs.readFileSync(bundle)).digest('hex'), 'the manifest names the new bytes')
 })
+
+// ── W19, the proxy half: each automatic proxy entry (data) written through the journal and undone to the byte ──
+import { proxyEntries } from '../../../src/collector/arch/win32/forms.mjs'
+import { newManifest, applyJsonKey, applyTextEntry, undoEntry } from '../../../src/collector/core/trust/journal.mjs'
+const INGRESS = { port: 17991, listenerToken: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' }
+const ctxOf = (b) => ({
+  os: 'win32', home: b.home, env: new Map([['USERPROFILE', b.home]]), running: [], collectorDir: b.dir, caPem: path.join(b.dir, 'ca', 'asight-ca.pem'),
+  readText: (f) => { try { return fs.readFileSync(f, 'utf8') } catch { return null } },
+  readTextOrError: (f) => { try { return { text: fs.readFileSync(f, 'utf8'), error: null } } catch (e) { return { text: null, error: e.code === 'ENOENT' ? null : { code: e.code, message: e.message } } } },
+  readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } },
+  listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } },
+})
+const USER = 'http://alice:s3cret@corp.example:3128'
+const CASES = [
+  { harness: 'claude-code', g: 'claude-code.settings', file: '.claude/settings.json', user: `{\n  "env": {\n    "HTTPS_PROXY": "${USER}",\n    "ANTHROPIC_BASE_URL": "https://relay.example.com"\n  }\n}\n`, value: (t) => JSON.parse(t).env.HTTPS_PROXY },
+  { harness: 'z-code', g: 'z-code.cli', file: '.zcode/cli/config.json', user: `{"network": {"httpProxy": "${USER}", "caCertFile": ""}}\n`, value: (t) => JSON.parse(t).network.httpProxy },
+  { harness: 'codex', g: 'codex.env', file: '.codex/.env', user: `OPENAI_API_KEY=sk-secret\nHTTPS_PROXY=${USER}\nNO_PROXY=intranet.example,10.0.0.0/8\n`, value: (t) => /^HTTPS_PROXY=(.*)$/m.exec(t)[1], block: true },
+  { harness: 'hermes', g: 'hermes.cli', file: 'AppData/Local/hermes/.env', user: `OPENROUTER_API_KEY=sk-secret\nHTTPS_PROXY=${USER}\n`, value: (t) => /^HTTPS_PROXY=(.*)$/m.exec(t)[1], block: true },
+]
+const URL_OF = (g) => `http://${g}:${INGRESS.listenerToken}@127.0.0.1:${INGRESS.port}`
+
+for (const c of CASES) {
+  test(`W19 proxy entry, ${c.g}: pointed at the group's kernel port with the user's proxy recorded as prior_value (the manifest alone), then put back to the byte — with and without a user file`, () => {
+    const b = box()
+    const group = only(c.harness)[0].win32.groups.find((g) => g.g === c.g)
+    const file = b.put(c.file, c.user)
+    const ctx = ctxOf(b)
+    // an agent that is installed but has no proxy of its own yet, and one that is not installed at all
+    const entries = proxyEntries(group, ctx, INGRESS)
+    assert.deepEqual(entries.map((e) => e.path), [file], 'the file the agent reads')
+    const m = newManifest()
+    const e = entries[0]
+    const done = e.kind === 'text' ? applyTextEntry({ dir: b.dir, manifest: m, harness: c.harness, file: e.path, edit: e }) : applyJsonKey({ dir: b.dir, manifest: m, harness: c.harness, file: e.path, keys: e.keys, value: e.value })
+    const written = fs.readFileSync(file, 'utf8')
+    assert.equal(c.value(written), URL_OF(c.g), 'the agent now reads the group\'s port, with the credentials the listener asks for')
+    if (c.block) assert.match(written, /NO_PROXY=localhost,127\.0\.0\.1,::1\n/, 'the loopback never goes round the kernel')
+    assert.ok(JSON.stringify(done.prior_value).includes(USER), 'the user\'s own proxy is what the manifest records, to become the upstream')
+    const leaks = []
+    const walk = (d) => { for (const n of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, n.name); if (n.isDirectory()) walk(f); else if (fs.readFileSync(f, 'utf8').includes('s3cret')) leaks.push(path.relative(b.home, f)) } }
+    walk(b.dir)
+    assert.deepEqual(leaks, [path.join('.asight', 'collector', 'install-manifest.json')], 'the credentials of the user\'s proxy are in the manifest and nowhere else asight writes')
+    assert.equal(undoEntry(done).result, 'restored')
+    assert.equal(fs.readFileSync(file, 'utf8'), c.user, 'byte for byte')
+    // no file before: the entry creates it and off removes it again, with the directories it made
+    fs.rmSync(path.dirname(file), { recursive: true, force: true })
+    const fresh = proxyEntries(group, { ...ctxOf(b), listDir: () => ['x'] }, INGRESS)
+    if (fresh.length) {
+      const m2 = newManifest()
+      const d2 = fresh[0].kind === 'text' ? applyTextEntry({ dir: b.dir, manifest: m2, harness: c.harness, file: fresh[0].path, edit: fresh[0] }) : applyJsonKey({ dir: b.dir, manifest: m2, harness: c.harness, file: fresh[0].path, keys: fresh[0].keys, value: fresh[0].value })
+      assert.equal(c.value(fs.readFileSync(fresh[0].path, 'utf8')), URL_OF(c.g))
+      undoEntry(d2)
+      assert.equal(fs.existsSync(fresh[0].path), false)
+    }
+  })
+}
+
+test('W19 proxy entry: Claude Code and Z-Code write the proxy key beside the trust key in one file, and off takes them out in the opposite order to the original bytes', () => {
+  for (const c of CASES.filter((x) => !x.block)) {
+    const b = box()
+    const d = only(c.harness)[0]
+    const file = b.put(c.file, c.user)
+    const ctx = ctxOf(b)
+    const trust = planTrust({ descriptors: [d], ctxFor: () => ctx, caCertPem: CA.certPem, collectorDir: b.dir }).entries[0]
+    const m = newManifest()
+    const first = applyJsonKey({ dir: b.dir, manifest: m, harness: c.harness, file: trust.path, keys: trust.keys, value: trust.value })
+    const [p] = proxyEntries(d.win32.groups.find((g) => g.g === c.g), ctx, INGRESS)
+    const second = applyJsonKey({ dir: b.dir, manifest: m, harness: c.harness, file: p.path, keys: p.keys, value: p.value })
+    assert.equal(c.value(fs.readFileSync(file, 'utf8')), URL_OF(c.g))
+    assert.ok(fs.readFileSync(file, 'utf8').includes(trust.value), 'both keys are there')
+    assert.deepEqual([undoEntry(second).result, undoEntry(first).result], ['restored', 'restored'])
+    assert.equal(fs.readFileSync(file, 'utf8'), c.user, c.g)
+  }
+})
+
+// The same file for Codex and Hermes is one sentinel block holding the trust variable and the proxy lines, entered separately (4.8 §2.3). The journal today refuses a second block in a file
+// that already has asight's (journal.mjs editText), so the proxy lines cannot join the trust block yet: Task 8(c) extends text-edit / journal for it, and this turns green there.
+test.todo('W19 proxy entry: Codex and Hermes — the proxy lines join the sentinel block the trust entry wrote, and off undoes the two in the opposite order to the original bytes (Task 8(c): the journal joins an existing block)')
