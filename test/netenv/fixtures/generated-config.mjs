@@ -4,6 +4,9 @@
 //     this one process and a process rule cannot tell them apart), the user's rules after the block (a blocked port, MATCH,DIRECT), debug logs (the test counts destinations).
 //   shape 2 (own forwarder): buildForwarderConfig()'s text with an overlay: the listener demands users (the stand-in and the re-entry connection are told apart by user, for the
 //     same reason), asight-re carries the re-entry user, find-process-mode off, unified-delay as the test wants, debug logs. The overlay changes nothing else.
+// Two options exist so that the loopback `AND ... DIRECT` rule (4.8 §3.3, the core of the fallback design) can go red: a user whose tail lets a probe to the re-entry point through
+// by accident (MATCH,DIRECT, a next hop of 'direct') hides a missing rule, and a real user's tail (a VPN, a proxy that refuses loopback) does not. `strictTail` (shape 1) ends the
+// user's rules in REJECT but for the origin; `upstream` (shape 2) names a next hop other than direct, which the test then makes refuse every target but the origin.
 // The unmodified text is loaded too (the "verbatim" tests of the contract): that is the product's config.
 import { buildBlock, buildForwarderConfig, routeFile } from '../../../src/netenv/mihomo/rules.mjs'
 
@@ -22,7 +25,7 @@ const base = ({ controller, secret, unifiedDelay }) => ({
 })
 
 /** Shape 1: the Verge-like config around buildBlock()'s output. `route` is the provider's own path: the test writes the stand-in's on-lines there. */
-export function vergeLikeConfig({ ports, secret, token = TOKEN, unifiedDelay = true, g = G }) {
+export function vergeLikeConfig({ ports, secret, token = TOKEN, unifiedDelay = true, g = G, strictTail = false }) {
   const b = buildBlock({ groups: [groupOf(g)], enginePort: ports.engine, token, reenter: { host: '127.0.0.1', port: ports.mixed } })
   return {
     config: {
@@ -30,15 +33,15 @@ export function vergeLikeConfig({ ports, secret, token = TOKEN, unifiedDelay = t
       'mixed-port': ports.mixed,
       listeners: [{ name: 'agent-in', type: 'http', port: ports.agent, listen: '127.0.0.1' }],
       proxies: b.proxies, 'proxy-groups': b.groups, 'rule-providers': b.providers,
-      rules: [...b.rules, `DST-PORT,${ports.blocked},REJECT`, 'MATCH,DIRECT'],
+      rules: [...b.rules, `DST-PORT,${ports.blocked},REJECT`, ...(strictTail ? [`DST-PORT,${ports.origin},DIRECT`, 'MATCH,REJECT'] : ['MATCH,DIRECT'])],
     },
     routeFile, route: b.providers[`asight-r-${g}`].path, onLines: ['IN-NAME,agent-in'],
   }
 }
 
 /** Shape 2: the forwarder's text, parsed, overlaid for the Mac (see the header), and written back as JSON. */
-export function forwarderLikeConfig({ ports, secret, token = TOKEN, unifiedDelay = true, g = G }) {
-  const text = buildForwarderConfig({ forms: [{ g, port: ports.form, upstream: 'direct' }], enginePort: ports.engine, token, controller: { port: ports.controller, secret }, on: true })
+export function forwarderLikeConfig({ ports, secret, token = TOKEN, unifiedDelay = true, g = G, upstream = 'direct' }) {
+  const text = buildForwarderConfig({ forms: [{ g, port: ports.form, upstream }], enginePort: ports.engine, token, controller: { port: ports.controller, secret }, on: true })
   const config = JSON.parse(text)
   config.listeners[0].users = [{ username: 'agent', password: 'ap' }, { username: 're', password: 'rp' }]
   Object.assign(config.proxies.find((p) => p.name === `asight-re-${g}`), { username: 're', password: 'rp' })

@@ -12,6 +12,10 @@
 // (inline-block.mjs, which the spike still ships too) for the generators' own output (src/netenv/mihomo/rules.mjs, via fixtures/generated-config.mjs). Shapes (4.8 §3.3):
 //   1. Verge-like: the mixed port is both what agents reach and the re-entry point; the agent stand-in has its own `http` listener (IN-NAME).
 //   2. own-forwarder-like: a form listener with `rule: in-<g>` sub-rules; its own port is the re-entry point.
+// The loopback rule `AND,((DST-PORT,<re-entry>),(IP-CIDR,127.0.0.1/32,no-resolve)),DIRECT` (the core of the §3.3 fallback design) is red-able only against a user whose rules would
+// send the probe to the re-entry point somewhere else: a tail of MATCH,DIRECT or a next hop of 'direct' lets it through by accident (measured: with the rule mutated away both default
+// shapes still passed 8 of 8). So each shape has a variant with a strict user: shape 1 ends its rules in MATCH,REJECT but for the origin, shape 2 has an http next hop (with
+// credentials) that refuses every target but the origin. A real VPN, or a proxy that refuses loopback, is that user.
 // The "verbatim" tests load the generators' text as it is, with a dotted group id like the product's (claude-code.cli): the real core must accept it.
 // The probe bytes mihomo really sent are compared with test/netenv/fixtures/mihomo-probe.bytes (the re-entry port normalised to 18000);
 // ASIGHT_RECORD_PROBE=1 rewrites that file from this run. W13 (test/collector/core/ingress.test.mjs) replays it into the real ingress.
@@ -27,7 +31,9 @@ import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { startRealEngine } from './fixtures/real-engine.mjs'
 import { vergeLikeConfig, forwarderLikeConfig, groupOf, G, TOKEN } from './fixtures/generated-config.mjs'
+import { loopbackRuntimeText } from './fixtures/rules/runtime.mjs'
 import { buildBlock, buildForwarderConfig } from '../../src/netenv/mihomo/rules.mjs'
+import { spliceRuntimeText, stripRuntimeText } from '../../src/netenv/mihomo/runtime-text.mjs'
 
 const BIN = process.env.ASIGHT_MIHOMO_BIN
 const gate = BIN ? {} : { skip: 'set ASIGHT_MIHOMO_BIN to a mihomo binary to run the real-mihomo contract (4.8 W57); a Verge-bundled verge-mihomo may be used read-only' }
@@ -95,9 +101,40 @@ function destinations(logs) {
   return out
 }
 
-async function shape(t, { name, make, unifiedDelay = true, agentAuth, g = G }) {
+/**
+ * An http proxy that is somebody's next hop (4.8 §4.2): it wants `user:pass`, tunnels to the origin and refuses every other target. `seen` lists what it tunnelled, `refused` what it
+ * turned away and why. A request for the re-entry point must never arrive here (the loopback rule sends it DIRECT), so `refused` stays empty.
+ */
+function startNextHop(t, { port, origin, user, pass }) {
+  const want = `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`
+  const seen = [], refused = [], sockets = new Set()
+  const srv = net.createServer((c) => {
+    sockets.add(c); c.on('close', () => sockets.delete(c)); c.on('error', () => {})
+    let buf = ''
+    const onData = (d) => {
+      buf += d.toString('latin1')
+      if (!buf.includes('\r\n\r\n')) return
+      c.removeListener('data', onData)
+      const [line, ...headers] = buf.split('\r\n\r\n')[0].split('\r\n')
+      const target = line.split(' ')[1] || ''
+      const auth = (headers.find((h) => /^proxy-authorization:/i.test(h)) || '').replace(/^[^:]*:\s*/, '')
+      if (auth !== want) { refused.push({ why: 'auth', target }); c.end('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="x"\r\nContent-Length: 0\r\n\r\n'); return }
+      if (Number(target.split(':').pop()) !== origin) { refused.push({ why: 'target', target }); c.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n'); return }
+      seen.push({ target })
+      const up = net.connect(origin, '127.0.0.1'); sockets.add(up); up.on('close', () => sockets.delete(up))
+      up.on('connect', () => { c.write('HTTP/1.1 200 Connection established\r\n\r\n'); c.pipe(up); up.pipe(c) })
+      for (const [x, y] of [[c, up], [up, c]]) { x.on('error', () => y.destroy()); x.on('close', () => y.destroy()) }
+    }
+    c.on('data', onData)
+  })
+  srv.listen(port, '127.0.0.1')
+  t.after(() => { for (const x of sockets) x.destroy(); srv.close() })
+  return { seen, refused }
+}
+
+async function shape(t, { name, make, unifiedDelay = true, agentAuth, g = G, strictTail = false, nextHop = null }) {
   const ports = {}
-  for (const k of ['mixed', 'form', 'agent', 'controller', 'engine', 'blocked', 'origin']) ports[k] = await freePort()
+  for (const k of ['mixed', 'form', 'agent', 'controller', 'engine', 'blocked', 'origin', 'nexthop']) ports[k] = await freePort()
   const secret = randomBytes(16).toString('hex') // the generator wants a real secret: 16+ letters and digits
   const reenter = name === 'verge-like' ? ports.mixed : ports.form
   const agentPort = name === 'verge-like' ? ports.agent : ports.form
@@ -105,7 +142,9 @@ async function shape(t, { name, make, unifiedDelay = true, agentAuth, g = G }) {
   t.after(() => origin.close())
   let engine = await startRealEngine({ port: ports.engine, token: TOKEN, reenterPort: reenter, group: g })
   t.after(() => engine.close())
-  const built = make({ ports, secret, unifiedDelay, g })
+  const hop = nextHop ? startNextHop(t, { port: ports.nexthop, origin: ports.origin, user: nextHop.user, pass: nextHop.pass }) : null
+  const upstream = nextHop ? { type: 'http', host: '127.0.0.1', port: ports.nexthop, username: nextHop.user, password: nextHop.pass } : undefined
+  const built = make({ ports, secret, unifiedDelay, g, strictTail, ...(upstream ? { upstream } : {}) })
   const m = await startMihomo(t, { ...built, secret, controller: ports.controller })
   const agent = () => viaProxy(agentPort, `127.0.0.1:${ports.origin}`, { auth: agentAuth })
   const fbUrl = `http://127.0.0.1:${reenter}/asight-health/${g}`
@@ -113,7 +152,7 @@ async function shape(t, { name, make, unifiedDelay = true, agentAuth, g = G }) {
   const alive = async (n) => (await m.ctl('GET', `/proxies/${n}`)).json().alive
   const refresh = () => m.ctl('GET', `/group/asight-fb-${g}/delay?url=${encodeURIComponent(fbUrl)}&timeout=2000`)
   const agentConnects = () => engine.events.filter((e) => e.kind === 'agent-connect').length
-  return { g, ports, m, agent, nowOf, alive, refresh, agentConnects, reenter, getEngine: () => engine, restartEngine: async () => { engine = await startRealEngine({ port: ports.engine, token: TOKEN, reenterPort: reenter, group: g }); t.after(() => engine.close()); return engine }, origin: ports.origin }
+  return { g, ports, m, hop, agent, nowOf, alive, refresh, agentConnects, reenter, getEngine: () => engine, restartEngine: async () => { engine = await startRealEngine({ port: ports.engine, token: TOKEN, reenterPort: reenter, group: g }); t.after(() => engine.close()); return engine }, origin: ports.origin }
 }
 
 async function runContract(t, opts) {
@@ -200,6 +239,10 @@ async function contractSteps(s, opts) {
   assert.ok(dsts.length >= 8, `enough connections logged to mean something (${dsts.length})`)
   assert.deepEqual([...new Set(dsts)], ['127.0.0.1'])
   assert.deepEqual(fs.readdirSync(m.home).sort().filter((f) => !['asight', 'cache.db', 'config.yaml'].includes(f)), [], 'no geodata or other file appeared in the home')
+  if (s.hop) {
+    assert.ok(s.hop.seen.length >= 1, 'the agent\'s own connections reached the next hop (with the user\'s credentials: it turns anything else away)')
+    assert.deepEqual(s.hop.refused, [], 'the next hop was asked for nothing but the origin: no probe to the re-entry point left through it')
+  }
   return { version: m.version, flipMs: flipped }
 }
 
@@ -245,6 +288,60 @@ test('W57 shape 1 with a dotted group id (the product\'s kind of id): the whole 
 
 test('W57 shape 2 with a dotted group id', gate, async (t) => {
   await runContract(t, { name: 'forwarder-like', make: forwarderLikeConfig, agentAuth: 'agent:ap', g: 'claude-code.cli' })
+})
+
+// The strict users (see the header): what keeps the re-entry point's own probe alive is the loopback rule alone. Without it the probe's CONNECT to 127.0.0.1:<re-entry> is the
+// user's to route: here a REJECT, or a next hop that turns it away, and asight-re is dead. These two went 8 of 8 green with the rule mutated away, so they are what pins it.
+test('W57 shape 1 with a strict user (rules end in MATCH,REJECT but for the origin): the loopback rule is what keeps asight-re alive; the whole contract holds', gate, async (t) => {
+  await runContract(t, { name: 'verge-like', make: vergeLikeConfig, strictTail: true })
+})
+
+test('W57 shape 2 with an http next hop that has credentials and refuses every target but the origin: asight-re stays alive, the credentials reach the hop, no probe leaves through it', gate, async (t) => {
+  await runContract(t, { name: 'forwarder-like', make: forwarderLikeConfig, agentAuth: 'agent:ap', nextHop: { user: 'hop-user', pass: 'hop-pass' } })
+})
+
+// The payload path on the real core (4.8 §4.1, W9, W58 text side): the runtime file as TEXT, spliced by runtime-text.mjs, PUT as {payload}. The object path and a mini reader prove the
+// text equals what rules.mjs says; only a core can say whether it LOADS, whether the include-all groups really leave asight's outbounds out, and whether the select starts on PASS.
+test('W57 payload: the spliced runtime text is accepted (204); include-all groups list the user\'s nodes and none of asight-*; the select is on PASS; the strip is accepted and leaves nothing of asight\'s', gate, async (t) => {
+  const ports = {}
+  for (const k of ['mixed', 'controller', 'engine']) ports[k] = await freePort()
+  const secret = randomBytes(16).toString('hex'), g = 'claude-code.cli'
+  const yaml = loopbackRuntimeText({ mixed: ports.mixed, controller: ports.controller, secret })
+  const m = await startMihomo(t, { configText: yaml, secret, controller: ports.controller })
+  const members = async (n) => (await m.ctl('GET', `/proxies/${n}`)).json().all
+  const push = (text) => m.ctl('PUT', '/configs?force=true', { payload: text })
+  assert.deepEqual(await members('AUTO-ALL'), ['node-a', 'node-b'], 'before the block: the include-all group lists the two nodes')
+
+  const blk = buildBlock({ groups: [groupOf(g)], enginePort: ports.engine, token: TOKEN, reenter: { host: '127.0.0.1', port: ports.mixed } })
+  for (const [rel, text] of Object.entries(blk.files)) fs.writeFileSync(path.join(m.home, rel), text) // the route files go first (4.8 §3.1): the provider reads one
+  const spliced = spliceRuntimeText({ yaml, block: blk })
+  assert.equal(spliced.filtered, 2, 'both include-all groups were given the filter')
+
+  const put = await push(spliced.yaml)
+  assert.equal(put.status, 204, `the core accepts the spliced runtime: ${put.body}`)
+  for (const n of ['AUTO-ALL', 'AUTO']) {
+    const all = await members(n)
+    assert.deepEqual(all, ['node-a', 'node-b'], `${n}: the user's nodes, none of asight's`)
+  }
+  assert.deepEqual(await members('Manual'), ['node-a', 'node-b'], 'a group that lists its members is as it was')
+  const sw = (await m.ctl('GET', `/proxies/asight-sw-${g}`)).json()
+  assert.equal(sw.now, 'PASS', 'a freshly spliced block is off: PASS first')
+  assert.deepEqual(sw.all, ['PASS', `asight-fb-${g}`])
+  assert.equal((await m.ctl('GET', `/proxies/asight-fb-${g}`)).json().type, 'Fallback')
+  assert.ok(`asight-r-${g}` in (await m.ctl('GET', '/providers/rules')).json().providers, 'the provider is loaded')
+
+  // the control: the same text without the filter lines. This is what the filter is for; the assertions above mean something only because this one pulls them in.
+  const unfiltered = spliced.yaml.replace('|^asight-"', '"').replace(/ {2}exclude-filter: "\^asight-"\n/, '')
+  assert.notEqual(unfiltered, spliced.yaml); assert.ok(!unfiltered.includes('^asight-'))
+  assert.equal((await push(unfiltered)).status, 204, 'the control loads')
+  assert.ok((await members('AUTO-ALL')).some((n) => n.startsWith('asight-')), 'without the filter the include-all group pulls asight-in-<g> in (what ^asight- prevents)')
+
+  const stripped = stripRuntimeText({ yaml: spliced.yaml })
+  assert.equal(stripped.unfiltered, 2)
+  assert.equal((await push(stripped.yaml)).status, 204, 'the core accepts the stripped runtime')
+  for (const n of ['asight-sw-', 'asight-fb-', 'asight-in-', 'asight-re-']) assert.equal((await m.ctl('GET', `/proxies/${n}${g}`)).status, 404, `${n}<g> is gone`)
+  assert.deepEqual(await members('AUTO-ALL'), ['node-a', 'node-b'])
+  assert.deepEqual(Object.keys((await m.ctl('GET', '/providers/rules')).json().providers).filter((k) => k.startsWith('asight-')), [], 'the provider is gone')
 })
 
 // The generators' text, as it is (no overlay): the real core must load it. The engine is not running in these (no tap): they check what the config says about itself and what a

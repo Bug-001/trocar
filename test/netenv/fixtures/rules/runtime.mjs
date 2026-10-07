@@ -85,3 +85,49 @@ rules:
 - GEOIP,CN,DIRECT
 - MATCH,Proxy
 `
+
+/**
+ * A runtime file the real core can load on a Mac loopback run (the W57 payload test): serde_yaml's block style as above, but the nodes are `http` outbounds at the discard port (nothing is
+ * dialled: select groups run no health check), the controller is the test's own, and there is no tun, no dns and no geodata download. Two include-all groups (one with a filter of the
+ * user's, one without) and one that lists its members; no `rule-providers` section (the splice creates it). It holds nothing of the user's.
+ */
+export const loopbackRuntimeText = ({ mixed, controller, secret }) => `mixed-port: ${mixed}
+mode: rule
+bind-address: 127.0.0.1
+allow-lan: false
+log-level: warning
+ipv6: false
+find-process-mode: "off"
+external-controller: 127.0.0.1:${controller}
+secret: ${secret}
+geo-auto-update: false
+geox-url:
+  geoip: http://127.0.0.1:9/g
+  geosite: http://127.0.0.1:9/g
+  mmdb: http://127.0.0.1:9/g
+  asn: http://127.0.0.1:9/g
+proxies:
+- name: node-a
+  type: http
+  server: 127.0.0.1
+  port: 9
+- name: node-b
+  type: http
+  server: 127.0.0.1
+  port: 9
+proxy-groups:
+- name: AUTO-ALL
+  type: select
+  include-all-proxies: true
+- name: AUTO
+  type: select
+  include-all: true
+  exclude-filter: IEPL|BGP
+- name: Manual
+  type: select
+  proxies:
+  - node-a
+  - node-b
+rules:
+- MATCH,DIRECT
+`
