@@ -50,12 +50,22 @@ const without = (list, item) => { const i = list.indexOf(item); if (i >= 0) list
 // asight owns for it), or the harness re-reads its entry while running (alive is enough), or its start time / the install time is unknown.
 const mayHaveRead = (p, l, since) => !!(l && l.rereads) || p.startedAt == null || since == null || p.startedAt >= since
 
-export async function undoHarnesses({ dir, home, manifest, ids = null, procs = async () => [], roots = null, now = new Date(), dropCa = false, fs = nodeFs }) {
+/** Undoes the entries (see the header) → `{ results, kept_bundles, removed, still_trusting, left, residue, changed, procs_error, manifest }`. An error that stops it
+ *  part-way (the last write of the manifest: ENOSPC, EACCES, a failed rename) is thrown with `partial` on it: the same object, as far as it got — the files that were
+ *  changed or removed by then are in it, because a receipt that said "nothing was changed" over a settings.json that was put back would be untrue (1.6 R1, V3). */
+export async function undoHarnesses(args) {
+  const out = { results: [], kept_bundles: [], removed: [], still_trusting: [], left: [], residue: [], changed: [], procs_error: null, manifest: args.manifest }
+  try { return await undoInto(args, out) } catch (e) {
+    if (e && typeof e === 'object') e.partial = out
+    throw e
+  }
+}
+
+async function undoInto({ dir, home, manifest, ids = null, procs = async () => [], roots = null, now = new Date(), dropCa = false, fs = nodeFs }, out) {
   if (manifest.unsupported) throw new Error(`the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read; nothing was changed`)
   const inScope = (h) => typeof h === 'string' && (ids == null || ids.includes(h))
   const liveness = manifest.liveness && typeof manifest.liveness === 'object' ? manifest.liveness : (manifest.liveness = {})
   if (!Array.isArray(manifest.kept_backups)) manifest.kept_backups = []
-  const out = { results: [], kept_bundles: [], removed: [], still_trusting: [], left: [], residue: [], changed: [], procs_error: null, manifest }
 
   // what the judgement needs, taken before any entry leaves the manifest
   const since = new Map()

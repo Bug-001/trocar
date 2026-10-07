@@ -80,11 +80,13 @@ export function desiredOff(w, ids, installed) {
 const counts = (r) => (r && ['closing', 'waiting', 'cut'].every((k) => Number.isInteger(r[k]) && r[k] >= 0) ? { closing: r.closing, waiting: r.waiting, cut: r.cut } : null)
 
 /** Step 3: take the routing off and confirm it (see the header). `exit`: the whole daemon is to go once drained (no names). → `{ confirmed, unstoppable, state,
- *  how, daemon: {pid, state}, relayed, relayed_reason?, stop?, problems: [], failures: [{code, reason}], events: [{kind, reason, …}] }`. */
+ *  how, socket (the control socket a daemon was found on, or the one that was to be asked), daemon: {pid, state}, relayed, relayed_reason?, stop?, problems: [],
+ *  notes: [], failures: [{code, reason}], events: [{kind, reason, …}] }`. */
 export async function switchRoutingOff(w, { ids = null, now = false, exit = false } = {}) {
-  const r = { confirmed: false, unstoppable: false, state: null, how: null, daemon: { pid: null, state: 'none' }, relayed: 'unknown', problems: [], failures: [], events: [] }
+  const r = { confirmed: false, unstoppable: false, state: null, how: null, socket: null, daemon: { pid: null, state: 'none' }, relayed: 'unknown', problems: [], notes: [], failures: [], events: [] }
   const st = await w.daemonState()
   r.state = st.state
+  r.socket = st.socket || w.socketPath || null // the one a daemon was found on (the lock names it when XDG_RUNTIME_DIR is unset): the caller asks the same one again
   const lock = st.lock || null
   const fail = (code, reason) => { r.problems.push(reason); r.failures.push({ code, reason }) }
   const stopIt = async (why) => {
@@ -101,7 +103,7 @@ export async function switchRoutingOff(w, { ids = null, now = false, exit = fals
   }
   if (st.state === 'running') {
     try {
-      const reply = await w.request({ socketPath: st.socket || w.socketPath, method: 'POST', path: '/off', body: { ...(ids ? { harnesses: ids } : {}), ...(now ? { now: true } : {}), ...(exit ? { exit: true } : {}) }, timeoutMs: OFF_ASK_MS })
+      const reply = await w.request({ socketPath: r.socket, method: 'POST', path: '/off', body: { ...(ids ? { harnesses: ids } : {}), ...(now ? { now: true } : {}), ...(exit ? { exit: true } : {}) }, timeoutMs: OFF_ASK_MS })
       r.relayed = counts(reply && reply.relayed) || 'unknown'
       if (r.relayed === 'unknown') r.relayed_reason = 'the daemon\'s reply did not carry the connection counts'
       r.daemon = { pid: Number.isInteger(reply && reply.pid) ? reply.pid : (lock && lock.pid) ?? null, state: exit ? 'draining' : 'running' }
@@ -115,11 +117,12 @@ export async function switchRoutingOff(w, { ids = null, now = false, exit = fals
   } else if (st.state === 'unresponsive' || st.state === 'starting') await stopIt(st.reason || 'does not answer')
   else if (st.state === 'none' || st.state === 'stale') {
     r.relayed = { closing: 0, waiting: 0, cut: 0 } // there is no engine: nothing is relayed
+    if (st.state === 'stale' && !lock && st.reason) { r.notes.push(st.reason); r.events.push({ kind: 'note', reason: st.reason }) } // a lock cut short: said, not hidden
     const helperGoneNow = () => helperGone(lock, { alive: w.alive, isHelper: w.isHelper })
     for (const end = w.ms() + 2000; lock && !helperGoneNow() && w.ms() < end;) await w.sleep(25) // a helper that is only now noticing its daemon died
     if (lock && !helperGoneNow()) await stopIt('is not running, but its helper still is')
     else { r.confirmed = true; r.how = 'no-daemon'; r.daemon = { pid: null, state: 'none' } }
-  } else fail('control-error', `${st.reason || 'whether a daemon runs is not known'}; stop any asight collector daemon by hand, then run asight off again; the entries are left as they are`)
+  } else fail('control-error', `${st.reason || 'whether a daemon runs is not known'}; the entries are left as they are. If no asight daemon runs (pgrep -f 'collector start' finds none), delete ${w.lockFile} and run asight off again; if one does, stop it by hand first`)
   return r
 }
 
@@ -158,9 +161,10 @@ const defaultRoots = (fs) => { let osText = ''; for (const f of OS_ROOT_FILES) {
 
 /** Step 4: the entries, by the manifest or by asight's own marks. `dropCa`: only `uninstall` removes asight-ca.pem. → one object of what was undone and what was left
  *  (`changed`, `removed`, `skipped`, `left`, `kept_bundles`, `still_trusting`, `residue`, `kept_backups`, `dropped_backups`, `pending`, `orphan_backups`, `problems`,
- *  `notes`, `failures`, `events`, `mode`: 'manifest' | 'marker' | 'none' | 'unsupported'). */
+ *  `notes`, `failures`, `events`, `stopped` (an error ended the undoing part-way; what it had done is in the other fields), `mode`: 'manifest' | 'marker' | 'none' |
+ *  'unsupported'). */
 export async function undoSide(w, { ids = null, manifest, manifestError = null, yes = false, interactive = false, io = null, say = null, dropCa = false } = {}) {
-  const u = { mode: 'none', changed: [], removed: [], skipped: [], left: [], kept_bundles: [], still_trusting: [], residue: [], kept_backups: [], dropped_backups: [], pending: [], orphan_backups: [], problems: [], notes: [], failures: [], events: [], undone_by_marker: false, procs_error: null }
+  const u = { mode: 'none', changed: [], removed: [], skipped: [], left: [], kept_bundles: [], still_trusting: [], residue: [], kept_backups: [], dropped_backups: [], pending: [], orphan_backups: [], problems: [], notes: [], failures: [], events: [], undone_by_marker: false, procs_error: null, stopped: false }
   if (manifest && manifest.unsupported) {
     u.mode = 'unsupported'
     u.problems.push(`the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read; no entry was touched. Use the asight that wrote it (or the asight-off it wrote)`)
@@ -171,13 +175,16 @@ export async function undoSide(w, { ids = null, manifest, manifestError = null, 
     const at = w.clock()
     const label = (e) => { try { return `${e.harness}\0${e.path}\0${describeEntry(e)}` } catch { return `${e.harness}\0${e.path}` } }
     const before = new Map(manifest.entries.map((e) => [label(e), { ...e }]))
-    let out
+    let out, stopped = null
     try {
       const roots = w.deps.roots || (manifest.files.some((f) => f.role === 'bundle') ? defaultRoots(w.fs) : null)
       out = await undoHarnesses({ dir: w.dir, home: w.home, manifest, ids, procs: w.procs, roots, now: at, dropCa, fs: w.fs })
     } catch (e) {
-      u.problems.push(`undoing the entries stopped: ${errMessage(e)}`); u.failures.push({ code: 'entry-not-undone', reason: errMessage(e) })
-      return u
+      if (!e || !e.partial) { // it stopped before one entry was touched
+        u.stopped = true; u.problems.push(`undoing the entries stopped: ${errMessage(e)}`); u.failures.push({ code: 'entry-not-undone', reason: errMessage(e) })
+        return u
+      }
+      out = e.partial; stopped = e // it stopped after the files were changed (the last write of the manifest): what it did is in the receipt all the same, below
     }
     const note = (code, extra, reason) => u.events.push({ kind: code, code, ...extra, reason }) // `kind` = `code`: one line per thing the operator should know (4.6 安装 / 卸载不静默)
     u.results = out.results
@@ -214,6 +221,11 @@ export async function undoSide(w, { ids = null, manifest, manifestError = null, 
     for (const k of u.kept_backups.filter((x) => x.at === at.toISOString())) note(CODE_OFF.backupKept, { path: k.path, backup: k.backup }, `${k.path}: ${k.reason}`)
     u.orphan_backups = orphanBackups({ home: w.home, manifest, fs: w.fs })
     if (u.orphan_backups.length) u.notes.push(`backups that no manifest entry names (leave them, or delete them if you do not need them): ${u.orphan_backups.join(', ')}`)
+    if (stopped) {
+      u.stopped = true
+      u.problems.push(`undoing the entries stopped: ${errMessage(stopped)}; what it did before is listed above, but the install manifest on disk still names those entries: run it again (an entry that is back as it was reads as already restored)`)
+      u.failures.push({ code: 'entry-not-undone', reason: `the install manifest could not be saved after the entries were undone: ${errMessage(stopped)}` })
+    }
     return u
   }
   // no manifest (or one that cannot be read): asight's own marks, listed first and undone only after a yes (R3)
@@ -314,7 +326,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     receipt.relayed = routing.relayed
     if (routing.relayed_reason) receipt.relayed_reason = routing.relayed_reason
     if (routing.stop) receipt.daemon_stop = { how: routing.stop.how, signals: routing.stop.signals, stopped: routing.stop.stopped }
-    receipt.problems.push(...routing.problems)
+    receipt.problems.push(...routing.problems); receipt.notes.push(...routing.notes)
     for (const ev of routing.events) put(ev)
     for (const f of routing.failures) put({ event: 'failure', ...f })
     put({ kind: 'routing', confirmed: routing.confirmed, state: routing.state, reason: `routing ${routing.confirmed ? 'off, confirmed' : 'NOT confirmed off'} (${routing.how || routing.state})` })

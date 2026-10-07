@@ -18,6 +18,9 @@ import { UNIT_FILE_NAME } from './autostart.mjs'
 /** A lock not refreshed for this long belongs to a daemon that does not run its timers: unresponsive (4.6 §Linux 机制, same as src/health LOCK_FRESH_MS). */
 export const DAEMON_LOCK_FRESH_MS = 5000
 
+// What readDaemonLock says (the words are src/health/read.mjs lockState's, which test/off/daemon-stop.test.mjs holds it to) of a lock whose content is no lock.
+const CUT_LOCK = /is not valid JSON|names no pid/
+
 const stopSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** The lock read as src/health/read.mjs lockState does → `{ state: 'none' | 'unknown' | 'stale' | 'running' | 'unresponsive', lock?, why?, error?, age_ms?, verified? }`.
@@ -42,19 +45,23 @@ export function readDaemonLock({ file, now = Date.now(), alive = pidAlive, ident
 
 /** What there is to deal with → `{ state, lock, socket, reason?, age_ms? }` (`socket`: the one that answered, or null):
  *    none          no lock and nothing answers: no daemon
- *    stale         the lock names a process that is gone or is another one now, and nothing answers: no daemon (its helper may linger)
+ *    stale         the lock names a process that is gone or is another one now, and nothing answers: no daemon (its helper may linger); or the lock was cut short
+ *                  (empty or garbage: a crash or a power loss) and the control socket that was asked refuses: no daemon either, `lock` is null then
  *    running       it answers (GET /status)
  *    starting      a fresh lock, a live pid, and the control socket is not there yet
  *    unresponsive  the lock was not refreshed for 5 s, or the socket is there and does not answer in `timeoutMs`: stuck (1.6 §1.4 第 2 步)
- *    unknown       the lock cannot be read and nothing answers: whether a daemon runs is not known (never read as "none") */
+ *    unknown       the lock cannot be read (an I/O error), or is cut short and there is no control socket to ask, and nothing answers: whether a daemon runs is
+ *                  not known (never read as "none") */
 export async function daemonState({ lockFile, socketPath = null, request = controlRequest, identity = procIdentity, alive = pidAlive, now = Date.now, fs = nodeFs, timeoutMs = 5000 } = {}) {
   const L = readDaemonLock({ file: lockFile, now: now(), alive, identity, fs })
   const lock = L.lock || null
   let answered = false, hung = null, answeredOn = null
-  for (const sock of [...new Set([socketPath, lock && lock.socket].filter(Boolean))]) {
+  const sockets = [...new Set([socketPath, lock && lock.socket].filter(Boolean))]
+  let refused = 0
+  for (const sock of sockets) {
     try { await request({ socketPath: sock, method: 'GET', path: '/status', timeoutMs }); answered = true; answeredOn = sock; break } catch (e) {
       if (e && e.status) { answered = true; answeredOn = sock; break } // it answered, with an error: it is there
-      if (e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED')) continue // nobody listens on it
+      if (e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED')) { refused++; continue } // nobody listens on it
       hung = String((e && e.message) || e)
     }
   }
@@ -62,7 +69,13 @@ export async function daemonState({ lockFile, socketPath = null, request = contr
   if (L.state === 'unresponsive') return out('unresponsive', `${lockFile} was not refreshed for ${Math.round(L.age_ms / 1000)} s`)
   if (answered) return out('running')
   if (hung) return out('unresponsive', `the control socket does not answer (${hung})`)
-  if (L.state === 'unknown') return out('unknown', `${L.error}, so whether a daemon runs is not known`)
+  if (L.state === 'unknown') {
+    // A lock whose content is garbage or empty was cut short (a crash or a power loss: ext4 keeps the rename and loses the data). A daemon writes it whole, by rename,
+    // AFTER its control socket is listening, so with the socket known and refusing there is no daemon serving: the same reading the daemon itself gives such a lock at
+    // its next start (an unclean stop). Without a socket to ask, or with a lock that cannot be read for another reason (EACCES, EIO), it stays not known (R11).
+    if (CUT_LOCK.test(L.error) && sockets.length && refused === sockets.length) return out('stale', `${L.error}; nothing listens on ${sockets.join(' or ')} either, so it is read as the lock of a daemon that ended without a clean stop (the next daemon start overwrites it)`)
+    return out('unknown', `${L.error}, so whether a daemon runs is not known${sockets.length ? '' : ' (no control socket path is known to ask: XDG_RUNTIME_DIR is not set)'}`)
+  }
   if (L.state === 'running') return out('starting', `pid ${lock.pid} holds a fresh lock, but its control socket is not there yet`)
   return out(L.state, L.why)
 }

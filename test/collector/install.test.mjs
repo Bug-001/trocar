@@ -334,16 +334,36 @@ test('uninstall leaves a settings file that became a symbolic link alone and rec
   } finally { b.done() }
 })
 
-test('uninstall: an unreadable lock with no daemon answering is "not known whether a daemon runs" — nothing is stopped or removed, desired is written off, the receipt says what to do (1.6 R11)', async () => {
+test('uninstall: a lock cut short and no control socket to ask is "not known whether a daemon runs" — nothing is stopped or removed, desired is written off, and the receipt names the file and says what to do — which works when followed (1.6 R11)', async () => {
   const b = box()
   try {
     await installCollector(base(b))
-    fs.writeFileSync(path.join(b.dir, 'lock'), '') // cut short by a power loss
+    const lockFile = path.join(b.dir, 'lock')
+    fs.writeFileSync(lockFile, '') // cut short by a power loss
     const r = await uninstallCollector({ home: b.home, env: {} })
     assert.equal(r.receipt.ok, false)
-    assert.match(r.receipt.problems.join('\n'), /so whether a daemon runs is not known; stop any asight collector daemon by hand, then run asight off again/)
+    const text = r.receipt.problems.join('\n')
+    assert.match(text, /so whether a daemon runs is not known \(no control socket path is known to ask: XDG_RUNTIME_DIR is not set\)/)
+    assert.ok(text.includes(`delete ${lockFile} and run asight off again`), 'the file is named, and so is the way out')
     assert.ok(fs.existsSync(path.join(b.dir, 'ca', 'ca.key')) && JSON.parse(fs.readFileSync(settingsOf(b), 'utf8')).env.NODE_EXTRA_CA_CERTS, 'nothing was removed or undone')
     assert.ok(r.exec.calls.every((c) => !/stop|kill/.test(c)))
+    fs.rmSync(lockFile) // the operator did as it says: no daemon runs, the lock goes
+    const again = await uninstallCollector({ home: b.home, env: {} })
+    assert.equal(again.receipt.ok, true, JSON.stringify(again.receipt.problems))
+    assert.ok(!fs.existsSync(path.join(b.dir, 'ca', 'ca.key')) && !fs.existsSync(settingsOf(b)), 'the second run finishes the job: the CA and the settings file asight made are gone')
+  } finally { b.done() }
+})
+
+test('uninstall: a lock cut short and a control socket nobody listens on is the last lock of a daemon that is gone — uninstall goes on, says so, and needs no manual step (1.6 R3, R11)', async () => {
+  const b = box()
+  try {
+    await installCollector(base(b))
+    fs.writeFileSync(path.join(b.dir, 'lock'), '{"pid":') // cut short
+    const r = await uninstallCollector({ home: b.home, env: {}, deps: { socketPath: path.join(b.home, 'run', 'collector.sock') } }) // the real client: ENOENT
+    assert.equal(r.receipt.ok, true, JSON.stringify(r.receipt.problems))
+    assert.match(r.receipt.notes.join('\n'), /not valid JSON.*nothing listens on .*collector\.sock either.*ended without a clean stop/)
+    assert.ok(!fs.existsSync(path.join(b.dir, 'ca', 'ca.key')), 'the CA is gone: it did finish')
+    assert.ok(r.exec.calls.every((c) => !/stop|kill/.test(c)), 'and nothing was signalled')
   } finally { b.done() }
 })
 

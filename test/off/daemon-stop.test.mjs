@@ -65,9 +65,29 @@ test('daemonState: none, stale, running, starting, unresponsive and unknown — 
   assert.equal(stuck.state, 'unresponsive'); assert.match(stuck.reason, /does not answer/)
   const old = await ask(DAEMON, answers, { ageMs: 6000 })
   assert.equal(old.state, 'unresponsive', 'the lock was not refreshed for 5 s: the spec says unresponsive, an answer or not'); assert.match(old.reason, /not refreshed for 6 s/)
-  const unknown = await ask('{"pid":', refused)
-  assert.equal(unknown.state, 'unknown'); assert.match(unknown.reason, /not valid JSON.*whether a daemon runs is not known/)
+  const unknown = await ask('{"pid":', refused, { socketPath: null })
+  assert.equal(unknown.state, 'unknown', 'a lock cut short and no socket to ask: not known'); assert.match(unknown.reason, /not valid JSON.*whether a daemon runs is not known \(no control socket path is known to ask: XDG_RUNTIME_DIR is not set\)/)
   assert.equal((await ask('{"pid":', answers)).state, 'running', 'an unreadable lock but an answering daemon')
+})
+
+test('a lock cut short (empty, garbage, no pid) while the control socket refuses is the lock of a daemon that is gone — stale, lock null, the reason says why; every other doubt stays unknown or unresponsive', async () => {
+  const t = table(UP); const sock = '/run/user/1000/asight/collector.sock'
+  const ask = (file, request, o = {}) => daemonState({ lockFile: file, socketPath: sock, request, alive: t.alive, identity: t.identity, now: () => 10_000_000, ...o })
+  for (const [name, body] of [['empty (a power loss keeps the rename and loses the data)', ''], ['cut short', '{"pid":'], ['garbage', 'x\u0000\u0000\u0000'], ['no pid', '{}']]) {
+    for (const refusal of [refused, absent]) {
+      const s = await ask(lockAt(body), refusal)
+      assert.deepEqual([s.state, s.lock, s.socket], ['stale', null, null], name)
+      assert.match(s.reason, /nothing listens on \/run\/user\/1000\/asight\/collector\.sock either.*ended without a clean stop/, name)
+    }
+  }
+  assert.equal((await ask(lockAt(''), hangs)).state, 'unresponsive', 'a socket that is there and does not answer is a stuck daemon, whatever the lock holds')
+  assert.equal((await ask(lockAt(''), answers)).state, 'running', 'and one that answers is running')
+  const dir = path.join(tmpDir('asight-dstop-'), 'lock'); fs.mkdirSync(dir) // a lock that cannot be READ (EISDIR here; EACCES, EIO in life) is no cut-short lock: nobody knows what it held
+  const io = await ask(dir, refused)
+  assert.equal(io.state, 'unknown'); assert.match(io.reason, /EISDIR.*whether a daemon runs is not known/)
+  const asked = []
+  const none = await ask(lockAt(''), async (q) => { asked.push(q.socketPath); throw Object.assign(new Error('x'), { code: 'ENOENT' }) }, { socketPath: null })
+  assert.deepEqual([none.state, asked], ['unknown', []], 'with no socket path there is nothing to ask, so nothing is concluded from not asking')
 })
 
 test('daemonState tries the socket the lock names when the runtime directory has none (XDG_RUNTIME_DIR unset or gone)', async () => {

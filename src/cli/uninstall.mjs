@@ -29,11 +29,11 @@ const relayedOf = (r) => (r && ['closing', 'waiting', 'cut'].every((k) => Number
 
 // The daemon was asked to exit once drained: wait until the connections it can see the end of are closed (`closing` is 0), it has gone, or `boundMs` is up.
 // → { rel: the last counts read (null: never read), gone: the daemon had exited by itself when last looked }.
-async function waitForDrain(w, first, boundMs) {
+async function waitForDrain(w, first, boundMs, socketPath) {
   let rel = relayedOf(first), gone = false
   for (const end = w.ms() + boundMs; rel && rel.closing > 0 && w.ms() < end;) {
     await w.sleep(200)
-    try { rel = relayedOf((await w.request({ socketPath: w.socketPath, method: 'GET', path: '/status', timeoutMs: 2000 })).relayed) || rel } catch (e) {
+    try { rel = relayedOf((await w.request({ socketPath, method: 'GET', path: '/status', timeoutMs: 2000 })).relayed) || rel } catch (e) {
       gone = !!e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED') // exited by itself (it drained), or not answering: nothing more to wait for
       break
     }
@@ -105,11 +105,11 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     receipt.routing = { confirmed: routing.confirmed, state: routing.state, how: routing.how }
     receipt.daemon = routing.daemon; receipt.relayed = routing.relayed
     if (routing.relayed_reason) receipt.relayed_reason = routing.relayed_reason
-    receipt.problems.push(...routing.problems)
+    receipt.problems.push(...routing.problems); receipt.notes.push(...routing.notes)
     for (const ev of routing.events) put(ev)
     for (const f of routing.failures) failed.push(f)
     let drained = null
-    if (routing.confirmed && routing.how === 'daemon-reply') drained = await waitForDrain(w, routing.relayed, deps.drainMs ?? DRAIN_MS)
+    if (routing.confirmed && routing.how === 'daemon-reply') drained = await waitForDrain(w, routing.relayed, deps.drainMs ?? DRAIN_MS, routing.socket) // the socket that answered: w.socketPath is null with XDG_RUNTIME_DIR unset
     receipt.autostart = disableAutostart({ home, exec: w.exec, env, fs })
     receipt.removed.push(...(receipt.autostart.removed || []))
     if (!receipt.autostart.note || receipt.autostart.error) put({ kind: 'autostart', disabled: receipt.autostart.disabled, reason: `autostart ${receipt.autostart.disabled ? 'disabled' : 'NOT disabled'}${receipt.autostart.error ? ` (${receipt.autostart.error})` : ''}` }) // nothing to say when there was no unit
@@ -144,7 +144,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       if (l) { for (const k of ['changed', 'removed', 'skipped', 'left']) receipt[k].push(...(l[k] || [])); receipt.problems.push(...(l.problems || [])); receipt.notes.push(...(l.notes || [])); if (l.ok === false && !(l.problems || []).length) receipt.problems.push('the old capture could not be fully undone') }
     }
     const noted = u.events.filter((e) => e.kind !== CODE_OFF.backupKept) // the backup an edited file kept is dropped below, listed in the receipt as non-identical: "kept" would be untrue
-    const blocked = !gone || u.mode === 'unsupported' || u.pending.length > 0
+    const blocked = !gone || u.mode === 'unsupported' || u.pending.length > 0 || u.stopped // `stopped`: the manifest on disk is not what the entries now are: it and the CA stay
     if (blocked) receipt.problems.push(gone ? 'asight\'s own files were left in place (the entries above are not all undone): run asight uninstall again' : 'asight\'s own files were left in place: the daemon is still running')
 
     // 6 · asight's own files — only when nothing above is still open
@@ -192,9 +192,12 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     // after the purge, so --purge-data never deletes what this run could not undo; a line that cannot be written is said in the output, never dropped, and never stops the uninstall
     for (const f of failed) put({ event: 'failure', ...f })
     const left = receipt.left.length
-    if (!(purgeData && !left && !blocked)) {
+    // the outcome follows the exit code (as `off`'s does): an item that could not be undone is 'left'; any other problem — a blocked run, a state.json that could not be
+    // written, the old capture's leftovers — is 'failed'; 'uninstalled' only when the run is clean
+    const failedRun = blocked || (receipt.problems.length > 0 && !left)
+    if (!(purgeData && !left && !blocked && !receipt.problems.length)) {
       for (const n of noted) put(n)
-      put({ kind: 'result', outcome: blocked ? 'failed' : left ? 'left' : 'uninstalled', counts: { entries: (u.results || []).length, left, still_trusting: u.still_trusting.length, notes: noted.length }, reason: blocked ? `uninstall did not finish: ${receipt.problems[0]}` : left ? `uninstalled, except ${left} item(s) that could not be undone; the install manifest is kept` : `uninstalled: ${(u.results || []).length} trust entr${(u.results || []).length === 1 ? 'y' : 'ies'} undone, ${noted.length} note(s)` })
+      put({ kind: 'result', outcome: failedRun ? 'failed' : left ? 'left' : 'uninstalled', counts: { entries: (u.results || []).length, left, still_trusting: u.still_trusting.length, notes: noted.length }, reason: failedRun ? `uninstall did not finish: ${receipt.problems[0]}` : left ? `uninstalled, except ${left} item(s) that could not be undone; the install manifest is kept` : `uninstalled: ${(u.results || []).length} trust entr${(u.results || []).length === 1 ? 'y' : 'ies'} undone, ${noted.length} note(s)` })
     }
     if (!blocked) {
       if (m && (left || receipt.kept_bundles.length)) { // keep exactly what is left; the next uninstall finds it (4.6: the manifest goes last)

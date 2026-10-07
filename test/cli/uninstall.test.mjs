@@ -148,6 +148,65 @@ test('1.6 「守护进程卡死」: a stuck daemon is stopped first, then the en
   assert.deepEqual(asightFiles(s), [])
 })
 
+test('uninstall: when the install manifest cannot be saved after the entries were undone the run is blocked, not "uninstalled" — exit 1, outcome failed, the receipt lists the files that changed, the CA, the state and the manifest stay, and the next uninstall finishes', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] })
+  const manifestFile = path.join(s.dir, 'install-manifest.json')
+  const state = { broken: true }
+  const full = { ...fs, renameSync: (a, b) => { if (state.broken && b === manifestFile) throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }); return fs.renameSync(a, b) } }
+  const r = await s.uninstall({ yes: true, deps: { fs: full } })
+  assert.equal(r.exit, 1)
+  assert.match(r.receipt.problems[0], /undoing the entries stopped: ENOSPC/)
+  assert.match(r.receipt.problems.join('\n'), /asight's own files were left in place \(the entries above are not all undone\)/)
+  assert.deepEqual(r.receipt.changed.map((c) => path.relative(s.home, c.path)).sort(), ['.claude/settings.json', '.codex/.env'], 'what was undone is in the receipt, although the manifest could not say so')
+  assert.ok(!fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('asight'), 'and it really was undone')
+  assert.deepEqual(['ca', 'state.json', 'install-manifest.json'].map((n) => fs.existsSync(path.join(s.dir, n))), [true, true, true], 'the CA, the state and the manifest stay: the manifest on disk is not what the files now are')
+  const last = flowEvents(s.dir).at(-1)
+  assert.deepEqual([last.kind, last.outcome], ['result', 'failed'], 'a failed run ends with outcome failed, never uninstalled')
+  assert.ok(flowEvents(s.dir).some((e) => e.event === 'failure' && e.code === 'entry-not-undone' && /ENOSPC/.test(e.reason)))
+  assert.doesNotMatch(formatUninstallReceipt(r.receipt, { home: s.home }), /没有改任何用户文件/)
+  state.broken = false
+  const again = await s.uninstall({ yes: true, deps: { fs: full } })
+  assert.equal(again.exit, 0, JSON.stringify(again.receipt.problems))
+  assert.deepEqual(asightFiles(s), [], 'the next run finishes: an entry that is back as it was reads as already restored')
+})
+
+test('uninstall: the result line follows the exit code — a state.json that cannot be written, or an old capture that could not be undone, is outcome failed, not uninstalled; clean stays uninstalled', async () => {
+  const stateFile = (s) => path.join(s.dir, 'state.json')
+  const a = await installedHome({ names: ['claude-code'] })
+  const nofull = { ...fs, renameSync: (x, y) => { if (y === stateFile(a)) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); return fs.renameSync(x, y) } }
+  const ra = await a.uninstall({ yes: true, deps: { fs: nofull } })
+  assert.equal(ra.exit, 1); assert.match(ra.receipt.problems[0], /state\.json could not be written \(EACCES/)
+  const lastA = flowEvents(a.dir).at(-1)
+  assert.deepEqual([lastA.kind, lastA.outcome], ['result', 'failed'])
+  assert.match(lastA.reason, /uninstall did not finish: state\.json could not be written/)
+  const b = await installedHome({ names: ['claude-code'] })
+  const rb = await b.uninstall({ yes: true, deps: { legacyUndo: async () => ({ problems: ['the old capture\'s Clash block could not be removed'] }) } })
+  assert.equal(rb.exit, 1)
+  assert.equal(flowEvents(b.dir).at(-1).outcome, 'failed')
+  const c = await installedHome({ names: ['claude-code'] })
+  assert.equal((await c.uninstall({ yes: true })).exit, 0)
+  assert.equal(flowEvents(c.dir).at(-1).outcome, 'uninstalled')
+})
+
+test('uninstall: the drain is polled on the socket that answered — with XDG_RUNTIME_DIR unset the lock names it; the daemon is asked on it until nothing is closing, and what never ends is counted as cut', async () => {
+  const s = await installedHome({ names: ['claude-code'], daemon: { relayed: { closing: 2, waiting: 1, cut: 0 }, exitOnOff: false } })
+  writeDaemonLock(s) // names the socket (SOCK) and a live daemon
+  const up = procTable(DAEMON_ROWS); const c = fakeClock()
+  const sockets = []; let polls = 0
+  const request = async (q) => {
+    sockets.push(q.socketPath)
+    if (!q.socketPath) throw Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:80'), { code: 'ECONNREFUSED' }) // what node does with no socket path: an HTTP request to localhost
+    if (q.method === 'GET' && q.path === '/status' && s.sys.daemon.calls.some((x) => x.startsWith('POST /off'))) { polls++; return { ...(await s.sys.daemon.request(q)), relayed: { closing: polls < 3 ? 2 : 0, waiting: 1, cut: 0 } } }
+    return s.sys.daemon.request(q)
+  }
+  const stoppedAt = []
+  const r = await s.uninstall({ yes: true, deps: { socketPath: null, request, alive: up.alive, identity: up.identity, isHelper: up.isHelper, ...c, stopDaemon: async () => { stoppedAt.push(polls); return { stopped: true, how: 'systemctl', pid: 4242, signals: ['systemctl-stop'], helper_pid: null } } } })
+  assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
+  assert.ok(sockets.length > 0 && sockets.every((x) => x === '/x/collector.sock'), `every question went to the socket the lock names: ${JSON.stringify([...new Set(sockets)])}`)
+  assert.deepEqual([polls, stoppedAt], [3, [3]], 'it polled until nothing was closing, then stopped the daemon')
+  assert.deepEqual(r.receipt.relayed, { closing: 0, waiting: 0, cut: 1 }, 'the one connection that waits for itself was cut and counted')
+})
+
 test('1.6 §1.5: a daemon that does not confirm the routing off leaves every entry and every file as it is, exit 1 (the same rule as off)', async () => {
   const s = await installedHome({ names: ['claude-code'], daemon: { onOff: async () => ({ desired: 'off', actual: 'on', confirmed: false, relayed: { closing: 0, waiting: 0, cut: 0 }, pid: 4242, unwatched: [], agents: [], helper: { ok: true } }) } })
   const before = s.userFiles()

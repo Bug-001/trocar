@@ -275,6 +275,36 @@ test('V3 (uninstall): the receipt lists what changed and what asight removed —
   assert.ok(r.dropped_backups.length > 0 && r.dropped_backups.every((b) => !fs.existsSync(b)), 'the backups it deleted are named')
 })
 
+test('V3 (off, the install manifest cannot be saved at the end): the entries were undone all the same, so the receipt — text and --json — lists exactly the files that changed, says why it stopped, exits 1; the next off finishes', async () => {
+  const setup = async () => {
+    const s = await installedHome({ names: ['claude-code', 'codex'] })
+    const manifestFile = path.join(s.dir, 'install-manifest.json')
+    const state = { broken: true }
+    const full = { ...fs, renameSync: (a, b) => { if (state.broken && b === manifestFile) throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }); return fs.renameSync(a, b) } } // the disk is full for the manifest only
+    return { s, state, full, before: snapshot(s.home) }
+  }
+  const diffOf = (s, before) => changedFiles(before, snapshot(s.home)).filter((rel) => !bookkeeping(rel) && !/install-manifest\.json\.asight-tmp-/.test(rel)).map((rel) => path.join(s.home, rel))
+  const a = await setup(); const io = fakeIo()
+  assert.equal(await runOffCli(['--json'], ctxOf(a.s, io, { fs: a.full })), 1, io.text())
+  const r = io.json(), diff = diffOf(a.s, a.before), listed = listedPaths(r)
+  assert.ok(diff.length >= 3, `the entries really were undone: ${diff}`)
+  assert.deepEqual(diff.filter((f) => !listed.has(f)), [], 'a file that changed and is not in the receipt')
+  assert.deepEqual([...listed].filter((f) => !diff.includes(f)), [], 'a file in the receipt that did not change')
+  assert.equal(r.ok, false); assert.match(r.problems.join('\n'), /undoing the entries stopped: ENOSPC.*install manifest on disk still names those entries/)
+  assert.deepEqual([flowEvents(a.s.dir).at(-1).kind, flowEvents(a.s.dir).at(-1).outcome], ['result', 'failed'])
+  assert.ok(flowEvents(a.s.dir).some((e) => e.event === 'failure' && e.code === 'entry-not-undone' && /ENOSPC/.test(e.reason)))
+  const b = await setup(); const io2 = fakeIo()
+  assert.equal(await runOffCli([], ctxOf(b.s, io2, { fs: b.full })), 1)
+  const text = io2.stdoutText(), shown = (f) => f.replace(b.s.home, '~')
+  assert.doesNotMatch(text, /没有改任何用户文件/, 'the text does not say nothing changed over files that were put back')
+  assert.deepEqual(diffOf(b.s, b.before).filter((f) => !text.includes(shown(f))), [], 'every changed file is in the text')
+  assert.match(text, /问题: undoing the entries stopped: ENOSPC/)
+  b.state.broken = false // space again: what the receipt said to do
+  const finished = await runOffCli([], ctxOf(b.s, fakeIo(), { fs: b.full }))
+  assert.equal(finished, 0, 'the second off finishes: an entry that is back as it was reads as already restored')
+  assert.deepEqual(readManifest(b.s.dir).entries, [])
+})
+
 test('V29: the first on receipt, in the text and in --json, carries the four commands and the absolute path of asight-off; every item of the manifest has a kind and an undo_by_hand; flows/ has the install-note and the off-note runs, each ending in a result line', async () => {
   const home = tmpDir('asight-on-v29-'); seedClaude(home)
   const io = fakeIo()

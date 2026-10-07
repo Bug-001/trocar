@@ -248,17 +248,41 @@ test('a daemon that cannot be stopped: the entries are undone all the same, exit
   assert.deepEqual([r2.exit, r2.receipt.routing.state, r2.receipt.daemon.state], [0, 'starting', 'stopped'])
 })
 
-test('a lock that cannot be read, and a daemon that does not answer: whether one runs is not known — nothing is stopped, no entry touched, exit 1; a stale lock with a live helper has the helper stopped', async () => {
-  const s = await installedHome({ names: ['claude-code'] }); const before = s.userFiles()
-  fs.writeFileSync(path.join(s.dir, 'lock'), '{"pid":')
-  const refuses = async (q) => { if (q.path === '/status') throw Object.assign(new Error('connect ENOENT'), { code: 'ENOENT' }); return s.sys.daemon.request(q) }
-  const t = procTable({}); const r = await s.off({ deps: { request: refuses, alive: t.alive, identity: t.identity, kill: t.kill, ...fakeClock() } })
-  assert.equal(r.exit, 1); assert.match(r.receipt.problems[0], /not valid JSON.*not known/)
-  assert.deepEqual([s.userFiles(), t.sent], [before, []])
+test('a lock cut short (empty or garbage) and nothing listening on the control socket is the last lock of a daemon that is gone: off goes on, undoes the entries, says so, and a second off does too; a stale lock with a live helper has the helper stopped', async () => {
+  const refusing = (s) => async (q) => { if (q.path === '/status') throw Object.assign(new Error('connect ENOENT'), { code: 'ENOENT' }); return s.sys.daemon.request(q) }
+  for (const body of ['', '{"pid":']) { // empty is what a power loss leaves; the other is a write cut off half way
+    const s = await installedHome({ names: ['claude-code'] }); fs.writeFileSync(path.join(s.dir, 'lock'), body)
+    const t = procTable({}); const world = { request: refusing(s), alive: t.alive, identity: t.identity, kill: t.kill, ...fakeClock() }
+    const r = await s.off({ deps: world })
+    assert.equal(r.exit, 0, `${JSON.stringify(body)}: ${JSON.stringify(r.receipt.problems)}`)
+    assert.deepEqual(validateReceipt(r.receipt), [])
+    assert.deepEqual([r.receipt.routing, t.sent], [{ confirmed: true, state: 'stale', how: 'no-daemon' }, []], 'nothing is stopped, nobody is signalled')
+    assert.ok(!fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('asight'), 'the entry is out')
+    assert.match(r.receipt.notes.join('\n'), /nothing listens on \/x\/collector\.sock either.*ended without a clean stop/, 'and the receipt says how the lock was read')
+    assert.ok(flowEvents(s.dir).some((e) => e.where === 'off' && e.kind === 'note' && /ended without a clean stop/.test(e.reason)), 'and so does flows/')
+    const again = await s.off({ deps: world })
+    assert.equal(again.exit, 0, `a second off (${JSON.stringify(body)}): ${JSON.stringify(again.receipt.problems)}`)
+  }
   const h = await installedHome({ names: ['claude-code'] }); writeDaemonLock(h)
   const live = procTable({ 4243: { start_time: '112', boot_id: 'boot-1' } }) // the daemon is dead, its helper lingers
-  const r2 = await h.off({ deps: { request: async (q) => { if (q.path === '/status') throw Object.assign(new Error('x'), { code: 'ENOENT' }); return h.sys.daemon.request(q) }, alive: live.alive, identity: live.identity, kill: live.kill, isHelper: live.isHelper, ...fakeClock() } })
+  const r2 = await h.off({ deps: { request: refusing(h), alive: live.alive, identity: live.identity, kill: live.kill, isHelper: live.isHelper, ...fakeClock() } })
   assert.deepEqual([r2.exit, live.sent, r2.receipt.daemon.state], [0, [[4243, 'SIGTERM']], 'stopped'])
+})
+
+test('a lock cut short and NO control socket to ask (XDG_RUNTIME_DIR unset) is not known: nothing is stopped, no entry touched, exit 1, the receipt names the file and the way out — and the way out works when followed (R11: not known is said, not read as none)', async () => {
+  const s = await installedHome({ names: ['claude-code'] }); const before = s.userFiles()
+  const lockFile = path.join(s.dir, 'lock'); fs.writeFileSync(lockFile, '')
+  const asked = []; const t = procTable({})
+  const world = { socketPath: null, request: async (q) => { asked.push(q.path); return s.sys.daemon.request(q) }, alive: t.alive, identity: t.identity, kill: t.kill, ...fakeClock() }
+  const r = await s.off({ deps: world })
+  assert.equal(r.exit, 1)
+  assert.match(r.receipt.problems[0], /not valid JSON.*whether a daemon runs is not known \(no control socket path is known to ask: XDG_RUNTIME_DIR is not set\)/)
+  assert.ok(r.receipt.problems[0].includes(`delete ${lockFile} and run asight off again`), 'it names the file, and what to do once no daemon runs')
+  assert.deepEqual([s.userFiles(), t.sent, asked], [before, [], []], 'no entry touched, nobody signalled, nobody asked')
+  fs.rmSync(lockFile) // as it says
+  const followed = await s.off({ deps: world })
+  assert.equal(followed.exit, 0, JSON.stringify(followed.receipt.problems))
+  assert.ok(!fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('asight'))
 })
 
 test('R12: an off that cannot get the op lock in time has written desired off first and says which command holds it; nothing else is touched, exit 1', async () => {
@@ -285,6 +309,9 @@ test('V27: over on, off and a daemon that has to be stopped, nothing restarts an
   ]
   const procs = async () => agents
   const calls = s.sys.exec.calls.length
+  // the `on` leg (installedHome has run it): all the OS tools it ran are the unit's `enable --now` — no restart, no stop, no signal — and all it asked of the daemon is its status and to attach the harnesses
+  assert.deepEqual(s.sys.exec.calls.slice(0, calls), ['systemctl --user enable --now asight-collector.service'], 'on starts the daemon (a start is not a restart) and touches no agent')
+  assert.deepEqual(s.sys.daemon.calls.map((c) => c.split(' {')[0]), ['GET /status', 'GET /status', 'POST /on'], 'on asks the daemon for its status and attaches the harnesses: nothing else')
   const r = await s.off({ deps: { procs, request: hangsOnStatus(s), alive: (pid) => t.alive(pid) || agents.some((a) => a.pid === pid), identity: t.identity, kill: t.kill, isHelper: t.isHelper, ...fakeClock() } })
   assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
   assert.ok(t.sent.every(([pid]) => pid === 4242 || pid === 4243), `signals went to the daemon and its helper only: ${JSON.stringify(t.sent)}`)
