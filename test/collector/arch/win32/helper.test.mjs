@@ -9,7 +9,8 @@ import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
-import { HELPER_PROTO, HELPER_VERBS, HELPER_PS1, REG_READ_ALLOW, POLICY_KEY_PATTERN, POLICY_NAME_PATTERN, declaredRegAllow, policyAllowOf, startHelper } from '../../../../src/collector/arch/win32/helper.mjs'
+import { HELPER_PROTO, HELPER_VERBS, HELPER_PS1, REG_KIND_NAMES, REG_READ_ALLOW, POLICY_KEY_PATTERN, POLICY_NAME_PATTERN, declaredRegAllow, policyAllowOf, regKindsOf, startHelper } from '../../../../src/collector/arch/win32/helper.mjs'
+import { readSystemProxy } from '../../../../src/collector/arch/win32/upstream.mjs'
 import { CMDLINE_STATES, PS_TIMEOUT_MS, createProcWatcher, elevationOf, splitCommandLine } from '../../../../src/collector/arch/win32/procinfo.mjs'
 import { ownerOf } from '../../../../src/collector/arch/win32/socktable.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
@@ -43,6 +44,32 @@ test('W1 the verb set is the closed list, frozen', () => {
   assert.deepEqual([...HELPER_VERBS], ['ps', 'tcp-table', 'reg-read', 'net-if', 'route', 'token', 'roots', 'pipe-server', 'version'])
   assert.ok(Object.isFrozen(HELPER_VERBS))
   assert.ok(HELPER_PS1.endsWith('helper.ps1'))
+})
+
+// helper.ps1 reads each value's kind as `$k.GetValueKind($n).ToString()`, which is .NET's RegistryValueKind (DWord, String, ExpandString, ...), and 4.8 §1 gives kinds as the registry names them (`REG_EXPAND_SZ`). The readers and
+// the fakes of every other test say REG_*; the client is where the two meet, so that a reader that asks for a DWORD does not get `DWord` from the real helper and find nothing.
+test('W1 reg-read answers give each value\'s kind in the registry\'s own names, whichever spelling the script wrote (the eight kinds .NET has); nothing else in the answer moves', async (t) => {
+  const net = { Unknown: 'REG_UNKNOWN', String: 'REG_SZ', ExpandString: 'REG_EXPAND_SZ', Binary: 'REG_BINARY', DWord: 'REG_DWORD', MultiString: 'REG_MULTI_SZ', QWord: 'REG_QWORD', None: 'REG_NONE' }
+  assert.deepEqual(Object.fromEntries(Object.keys(net).map((k) => [k, REG_KIND_NAMES[k.toLowerCase()]])), net, 'the table is exactly the eight names of [Microsoft.Win32.RegistryValueKind]')
+  assert.ok(Object.isFrozen(REG_KIND_NAMES))
+  const answer = { keyExists: true, values: { ProxyEnable: { kind: 'DWord', value: 1 }, ProxyServer: { kind: 'String', value: '127.0.0.1:7897' }, Path: { kind: 'ExpandString', value: '%X%;C:\\a' }, Blob: { kind: 'Binary', value: 'AQID' }, Already: { kind: 'REG_SZ', value: 'x' }, Odd: { kind: 'Weird', value: 1 }, Bare: 5 } }
+  assert.deepEqual(regKindsOf(answer), { keyExists: true, values: { ProxyEnable: { kind: 'REG_DWORD', value: 1 }, ProxyServer: { kind: 'REG_SZ', value: '127.0.0.1:7897' }, Path: { kind: 'REG_EXPAND_SZ', value: '%X%;C:\\a' }, Blob: { kind: 'REG_BINARY', value: 'AQID' }, Already: { kind: 'REG_SZ', value: 'x' }, Odd: { kind: 'Weird', value: 1 }, Bare: 5 } })
+  assert.equal(answer.values.ProxyEnable.kind, 'DWord', 'the answer it was given is not changed')
+  for (const x of [null, undefined, 'garbage', 7, [], { keyExists: false }, { values: 'no' }]) assert.deepEqual(regKindsOf(x), x, `not a registry read, returned as it is: ${JSON.stringify(x)}`)
+  // through the client, over the real line protocol: only reg-read is touched
+  const h = started(t, { verbs: { 'reg-read': { data: answer }, version: { data: { values: { A: { kind: 'DWord', value: 1 } } } } } })
+  const got = await h.call('reg-read', { hive: 'HKCU', key: 'Environment', names: ['Path'] })
+  assert.equal(got.values.Path.kind, 'REG_EXPAND_SZ')
+  assert.equal(got.values.ProxyEnable.kind, 'REG_DWORD')
+  assert.equal((await h.call('version')).values.A.kind, 'DWord', 'another verb\'s answer is not a registry read')
+})
+
+test('W71 the system proxy through the real client: a `DWord` ProxyEnable of 1 from the script is ON, a `String` one is not (the reader and the helper agree on the kind\'s name)', async (t) => {
+  const reg = (kind) => ({ keyExists: true, values: { ProxyEnable: { kind, value: kind === 'String' ? '1' : 1 }, ProxyServer: { kind: 'String', value: '127.0.0.1:7897' } } })
+  const dword = started(t, { verbs: { 'reg-read': { data: reg('DWord') } } })
+  assert.deepEqual(await readSystemProxy({ helper: dword }), { ok: true, enable: true, server: '127.0.0.1:7897', override: null, autoConfigUrl: null })
+  const text = started(t, { verbs: { 'reg-read': { data: reg('String') } } })
+  assert.equal((await readSystemProxy({ helper: text })).enable, null, 'text "1" is no DWORD 1 (4.8 §2.2)')
 })
 
 test('W1 an unknown verb is rejected in JS: no line reaches the helper', async (t) => {

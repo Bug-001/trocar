@@ -248,15 +248,18 @@ const HELPER_GONE = new Set(['helper-down', 'helper-closed', 'helper-start-faile
 const unreadable = (e) => ({ ok: false, reason: e && e.code === 'helper-timeout' ? 'timeout' : e && HELPER_GONE.has(e.code) ? 'absent' : 'denied', detail: (e && e.code) || 'error' })
 const valuesOf = (answer) => (answer && typeof answer === 'object' && answer.values && typeof answer.values === 'object' ? answer.values : null)
 const stringOf = (v) => (v && typeof v.value === 'string' ? v.value : null)
+/** A value that is a DWORD (the registry's own kind name; helper.mjs gives it in that spelling), as its number; anything else is null: text that reads `1` is no DWORD 1. */
+const dwordOf = (v) => (v && v.kind === 'REG_DWORD' && Number.isInteger(v.value) ? v.value : null)
 
 /** readSystemProxy({ helper, timeoutMs }) → { ok: true, enable: true | false | null, server, override, autoConfigUrl } | { ok: false, reason, detail }: the four values of `HKCU\...\Internet Settings` that say where WinINET sends a connection
- *  (4.7 §3, 4.8 §9), through the helper's read-only `reg-read`. A value that is not set is null (a key that is not there is all null, and is a read); `enable` is true only for a DWORD of 1. Never throws. */
+ *  (4.7 §3, 4.8 §9), through the helper's read-only `reg-read`. A value that is not set is null (a key that is not there is all null, and is a read); `enable` is true only for a DWORD of 1 and false only for a DWORD of 0:
+ *  a `ProxyEnable` of another kind or another number is null, which is off (how WinINET reads one that is text is unmeasured: 4.8 OPEN 27). Never throws. */
 export async function readSystemProxy({ helper, timeoutMs = 2000 } = {}) {
   let answer
   try { answer = await helper.call('reg-read', { hive: 'HKCU', key: INTERNET_SETTINGS, names: [...SYSTEM_PROXY_NAMES] }, { timeoutMs }) } catch (e) { return unreadable(e) }
   const v = valuesOf(answer)
   if (!v) return { ok: false, reason: 'unparseable', detail: 'answer' }
-  const n = v.ProxyEnable ? Number(v.ProxyEnable.value) : null
+  const n = dwordOf(v.ProxyEnable)
   return { ok: true, enable: n === 1 ? true : n === 0 ? false : null, server: stringOf(v.ProxyServer), override: stringOf(v.ProxyOverride), autoConfigUrl: stringOf(v.AutoConfigURL) }
 }
 

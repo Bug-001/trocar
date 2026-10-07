@@ -73,6 +73,18 @@ export function policyAllowOf(groups) {
   return [...byKey.values()]
 }
 
+/** The value kinds of a reg-read answer, in the registry's own names. helper.ps1 gives .NET's `RegistryValueKind` (`GetValueKind().ToString()`: `DWord`, `String`, `ExpandString`, ...); 4.8 §1 says `kind` is given as it is
+ *  (`REG_EXPAND_SZ` stays that, §6.3) and every reader (a DWORD `ProxyEnable`, §2.2; the Smart App Control state, §8; the PATH type a write must keep, §6.3) is written against these names, as are the fakes of the tests. */
+export const REG_KIND_NAMES = Object.freeze({ dword: 'REG_DWORD', qword: 'REG_QWORD', string: 'REG_SZ', expandstring: 'REG_EXPAND_SZ', multistring: 'REG_MULTI_SZ', binary: 'REG_BINARY', none: 'REG_NONE', unknown: 'REG_UNKNOWN' })
+
+/** The answer with each value's `kind` in REG_* names (a spelling that is not one of .NET's, such as one already in REG_* form, stays as it is). An answer that is not a registry read is returned unchanged: judging it is the caller's. */
+export function regKindsOf(data) {
+  if (!data || typeof data !== 'object' || !data.values || typeof data.values !== 'object') return data
+  const values = {}
+  for (const [name, v] of Object.entries(data.values)) values[name] = v && typeof v === 'object' && typeof v.kind === 'string' && Object.hasOwn(REG_KIND_NAMES, v.kind.toLowerCase()) ? { ...v, kind: REG_KIND_NAMES[v.kind.toLowerCase()] } : v
+  return { ...data, values }
+}
+
 const ABANDONED_CAP = 256
 const STDERR_TAIL = 20 // the last lines of its stderr that helper-down carries (4.6 §记录: 20, as the Linux client's)
 const normKey = (k) => trimKey(k).toLowerCase()
@@ -148,7 +160,7 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
     if (!p) { abandoned.delete(msg.id); return } // a late answer to a call that already timed out: the helper is free of it now
     pending.delete(msg.id)
     clearTimeout(p.timer)
-    if (msg.ok === true) p.resolve(msg.data)
+    if (msg.ok === true) p.resolve(p.verb === 'reg-read' ? regKindsOf(msg.data) : msg.data)
     else p.reject(err(String(msg.error ?? 'the helper reported an error'), 'helper-verb-error', { verb: p.verb }))
   }
 

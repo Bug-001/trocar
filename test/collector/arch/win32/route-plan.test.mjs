@@ -356,7 +356,11 @@ test('W71 readSystemProxy asks the four Internet Settings values the helper may 
     [{ ProxyEnable: dword(0), ProxyServer: sz('127.0.0.1:7897') }, { ok: true, enable: false, server: '127.0.0.1:7897', override: null, autoConfigUrl: null }],
     [{}, { ok: true, enable: null, server: null, override: null, autoConfigUrl: null }],
     [{ ProxyEnable: dword(1), AutoConfigURL: sz('http://wpad/proxy.pac') }, { ok: true, enable: true, server: null, override: null, autoConfigUrl: 'http://wpad/proxy.pac' }],
-    [{ ProxyEnable: sz('1'), ProxyServer: { kind: 'REG_EXPAND_SZ', value: '%X%:1' } }, { ok: true, enable: true, server: '%X%:1', override: null, autoConfigUrl: null }],
+    [{ ProxyEnable: sz('1'), ProxyServer: { kind: 'REG_EXPAND_SZ', value: '%X%:1' } }, { ok: true, enable: null, server: '%X%:1', override: null, autoConfigUrl: null }], // 4.8 §2.2: only a DWORD 1 is on; text that reads 1 is no DWORD
+    [{ ProxyEnable: sz('0'), ProxyServer: sz('127.0.0.1:7897') }, { ok: true, enable: null, server: '127.0.0.1:7897', override: null, autoConfigUrl: null }],
+    [{ ProxyEnable: { kind: 'REG_QWORD', value: 1 }, ProxyServer: sz('127.0.0.1:7897') }, { ok: true, enable: null, server: '127.0.0.1:7897', override: null, autoConfigUrl: null }],
+    [{ ProxyEnable: { kind: 'REG_BINARY', value: 'AQAAAA==' }, ProxyServer: sz('127.0.0.1:7897') }, { ok: true, enable: null, server: '127.0.0.1:7897', override: null, autoConfigUrl: null }],
+    [{ ProxyEnable: dword(1.5), ProxyServer: sz('127.0.0.1:7897') }, { ok: true, enable: null, server: '127.0.0.1:7897', override: null, autoConfigUrl: null }],
     [{ ProxyEnable: dword(7), ProxyServer: dword(5), ProxyOverride: sz('') }, { ok: true, enable: null, server: null, override: '', autoConfigUrl: null }],
   ]) assert.deepEqual(await readSystemProxy({ helper: fakeRegistry(reg).helper }), want)
   const none = fakeRegistry(null)
