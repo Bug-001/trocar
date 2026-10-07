@@ -218,11 +218,24 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
   const baseName = (p) => String(p).split(/[\\/]/).pop().toLowerCase()
   const regexOf = (p) => { try { return new RegExp(p, 'i') } catch { return null } }
   const KINDS = { processname: 'name', processpath: 'path', processnameregex: 'nameRegex', processpathregex: 'pathRegex' }
+  // GET /rules shows a logic rule's payload as the core renders it, not as the config spells it (measured on v1.19.32, W57): `((ProcessName,a.exe) && (Domain,x))`, `((ProcessName,a.exe) || (DstPort,443))`,
+  // `(!(ProcessName,a.exe))`, nested `(NOT,(!(ProcessName,a.exe)))`. Both spellings are read: `PROCESS-NAME` as a user writes it and `ProcessName` as the core says it. A piece's payload runs to its closing
+  // parenthesis by counting, as the core's own parser does, so a regex with groups (`^(claude|codex)\.exe$`) is whole.
+  const PIECE = /\(\s*PROCESS-?(NAME-?REGEX|PATH-?REGEX|NAME|PATH)\s*,/gi
   function processPiecesOf(rule) {
     const kind = KINDS[String(rule.type).toLowerCase().replace(/-/g, '')]
     if (kind) return [{ kind, payload: String(rule.payload ?? '') }]
     if (!['and', 'or', 'not'].includes(String(rule.type).toLowerCase())) return []
-    return [...String(rule.payload ?? '').matchAll(/\(\s*PROCESS-(NAME-REGEX|PATH-REGEX|NAME|PATH)\s*,\s*([^()]*?)\s*\)/gi)].map((m) => ({ kind: KINDS[`process${m[1].toLowerCase().replace(/-/g, '')}`], payload: m[2] }))
+    const text = String(rule.payload ?? '')
+    const out = []
+    for (const m of text.matchAll(PIECE)) {
+      const from = m.index + m[0].length
+      let depth = 1
+      let at = from
+      for (; at < text.length && depth > 0; at++) depth += text[at] === '(' ? 1 : text[at] === ')' ? -1 : 0
+      if (depth === 0) out.push({ kind: KINDS[`process${m[1].toLowerCase().replace(/-/g, '')}`], payload: text.slice(from, at - 1).trim() })
+    }
+    return out
   }
   function pieceHitsForm(piece, form) {
     const paths = (form.imagePaths || []).map(String)
@@ -236,7 +249,7 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
   /**
    * Which of the user's own process rules name one of asight's forms: `forms` = `[{ id, imageNames: ['codex.exe'], imagePaths: [concrete paths seen] }]` → `{ ok, rules: [{ index, type, forms: [id] }], reason }`.
    * `GET /rules` is read, every rule is looked at in memory and everything but the index, the rule type and the form ids is dropped: no domain, no group, no node name, no payload leaves (N14). Rules
-   * of asight's own and non-process rules are never listed. A process rule nested in AND / OR / NOT is found when its payload has no parenthesis of its own.
+   * of asight's own and non-process rules are never listed. A process rule nested in AND / OR / NOT is found in the core's own rendering of it (see processPiecesOf).
    */
   async function processRulesNaming(forms) {
     const r = await get('/rules')

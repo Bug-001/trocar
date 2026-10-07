@@ -17,6 +17,17 @@ const TYPE = { DOMAIN: 'Domain', 'DOMAIN-SUFFIX': 'DomainSuffix', 'DOMAIN-KEYWOR
   'PROCESS-PATH-REGEX': 'ProcessPathRegex', 'RULE-SET': 'RuleSet', GEOIP: 'GEOIP', MATCH: 'Match', AND: 'AND', OR: 'OR', NOT: 'NOT', 'DST-PORT': 'DstPort', 'IP-CIDR': 'IPCIDR' }
 const KIND = { select: 'Selector', fallback: 'Fallback', 'url-test': 'URLTest' }
 
+// GET /rules shows a logic rule's payload as the core renders it, not as the config spells it (measured on v1.19.32, the Verge-bundled core, W57):
+//   AND,((PROCESS-NAME,a.exe),(DOMAIN,x))  ->  ((ProcessName,a.exe) && (Domain,x))        OR  ->  the same with ||
+//   NOT,((PROCESS-NAME,a.exe))             ->  (!(ProcessName,a.exe))
+//   a logic rule inside a logic rule       ->  (AND,((..) && (..)))  /  (NOT,(!(..)))     a plain rule's payload is as written.
+const splitTop = (s) => { const out = []; let depth = 0, at = 0; for (let i = 0; i < s.length; i++) { if (s[i] === '(') depth++; else if (s[i] === ')') depth--; else if (s[i] === ',' && depth === 0) { out.push(s.slice(at, i)); at = i + 1 } } out.push(s.slice(at)); return out }
+function renderPayload(kind, payload) {
+  if (!['AND', 'OR', 'NOT'].includes(kind)) return payload
+  const subs = splitTop(payload.slice(1, -1)).map((x) => { const inner = x.slice(1, -1); const at = inner.indexOf(','); const k = inner.slice(0, at); return `(${TYPE[k] || k},${renderPayload(k, inner.slice(at + 1))})` })
+  return kind === 'NOT' ? `(!${subs[0]})` : `(${subs.join(kind === 'AND' ? ' && ' : ' || ')})`
+}
+
 export async function startFakeCore(t, { home, runtimeText = null, listen = 'tcp', secret = null, version = 'v1.19.32', mode = 'rule', findProcessMode = 'strict', tun = false, mixedPort = 7897, storeSelected = true, userProviders = {}, extraConfig = {} } = {}) {
   const core = { requests: [], engineAlive: true, reAlive: true, mode, findProcessMode, tun, mixedPort, version, storeSelected, lastPayload: null, rejectPayload: null, failures: [], groups: new Map(), providers: new Map(), rules: [], remembered: new Map() }
   const providerCount = (name, def) => {
@@ -39,9 +50,8 @@ export async function startFakeCore(t, { home, runtimeText = null, listen = 'tcp
     }
     core.rules = (cfg.rules || []).map((r, index) => {
       const parts = String(r).split(',')
-      const logic = ['AND', 'OR', 'NOT'].includes(parts[0])
       const last = parts.length - 1
-      return { index, type: TYPE[parts[0]] || parts[0], payload: parts.slice(1, last).join(','), proxy: parts[last], size: -1 }
+      return { index, type: TYPE[parts[0]] || parts[0], payload: renderPayload(parts[0], parts.slice(1, last).join(',')), proxy: parts[last], size: -1 }
     })
     core.healthCheck()
   }
