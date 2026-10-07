@@ -6,12 +6,13 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import net from 'node:net'
+import { EventEmitter } from 'node:events'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 import { recordNetwork, nonLoopback } from './fixtures/no-network.mjs'
-import { locateKernel, ensureBinary, verifyCopy, hashFile, loadPin, mainPackage, reinstallCommands, sacState, sacBlocks, createForwarder, KERNEL_EXE, KERNEL_LICENSE, KERNEL_SOURCE } from '../../../../src/collector/arch/win32/forwarder.mjs'
+import { locateKernel, ensureBinary, verifyCopy, hashFile, loadPin, mainPackage, reinstallCommands, sacState, sacBlocks, createForwarder, BACKOFF_MS, KERNEL_EXE, KERNEL_LICENSE, KERNEL_SOURCE } from '../../../../src/collector/arch/win32/forwarder.mjs'
 import { buildForwarderConfig } from '../../../../src/netenv/mihomo/rules.mjs'
 import { createController } from '../../../../src/netenv/mihomo/controller.mjs'
 import { CC_GROUP, CODEX_GROUP, forwarder as ruleInputs } from '../../../netenv/fixtures/rules/inputs.mjs'
@@ -322,4 +323,138 @@ test('W28 the read-back is what the kernel says: the engine down is fallback (no
   await odd.fwd.start({ build: odd.build, forms: [] })
   assert.deepEqual((await odd.fwd.reload({ build: odd.build, forms: FORMS })).readBack.forms, { 'claude-code.cli': { state: 'unknown', reason: 'unexpected-now' }, 'claude-code.vscode': { state: 'on', now: 'asight-in-claude-code.vscode' }, 'codex.app': { state: 'unknown', reason: 'status-500' } })
   assert.deepEqual(await createForwarder({ dir: k.dir, bin: k.bin, controller: { port: 1, secret: 'x' }, isFree }).check(), { ok: false, forms: {}, reason: 'not-running' })
+})
+
+// ---- W28 supervision: a fake clock, fake children and a fake controller, so the backoff is read off the clock and not waited for --------------------------------------------------------------------------------------
+
+const settle = async () => { for (let i = 0; i < 25; i++) await new Promise((r) => setImmediate(r)) }
+/** A clock that only moves when the test says: timers fire in order, and the promises they start are let to finish before the next one. */
+function fakeClock() {
+  let at = 0
+  let seq = 0
+  const timers = []
+  return {
+    now: () => at,
+    setTimer: (fn, ms) => { const h = { fn, at: at + ms, id: ++seq, unref() {} }; timers.push(h); return h },
+    clearTimer: (h) => { const i = timers.indexOf(h); if (i >= 0) timers.splice(i, 1) },
+    pending: () => timers.map((h) => h.at - at),
+    async advance(ms) {
+      const end = at + ms
+      for (;;) {
+        timers.sort((a, b) => a.at - b.at || a.id - b.id)
+        if (!timers.length || timers[0].at > end) break
+        const h = timers.shift(); at = h.at; h.fn(); await settle()
+      }
+      at = end; await settle()
+    },
+  }
+}
+async function fakeKernel(t, over = {}) {
+  const clock = fakeClock()
+  const root = tmpDir('asight-fwd-')
+  const dir = path.join(root, 'collector')
+  const children = []
+  const alive = new Set()
+  const spawn = () => { const c = new EventEmitter(); c.pid = 1000 + children.length; c.unref = () => {}; c.kill = () => { alive.delete(c.pid) }; children.push(c); alive.add(c.pid); return c }
+  const die = (c, code = 1) => { alive.delete(c.pid); c.emit('exit', code, null) } // the kernel exits by itself
+  const events = { failures: [], states: [], failure: (r) => events.failures.push(r), state: (r) => events.states.push(r) }
+  const verified = []
+  const verifyCopy = async () => { verified.push(clock.now()); return (over.verify && over.verify()) || { ok: true } }
+  const makeController = () => ({ get: async (q) => (q === '/version' ? { ok: true, status: 200, json: { version: 'fake' } } : { ok: true, status: 200, json: { now: 'asight-in-claude-code.cli' } }), put: async () => ({ ok: true, status: 204 }) })
+  const secret = '0123456789abcdef0123456789abcdef'
+  const build = () => buildForwarderConfig(ruleInputs({ groups: [{ ...CC_GROUP, port: 18801 }], enginePort: 18790, controller: { port: 18899, secret } }))
+  const fwd = createForwarder({ dir, bin: path.join(dir, 'kernel', KERNEL_EXE), controller: { port: 18899, secret }, spawn, makeController, events, isFree: async () => true, verifyCopy, isAlive: (pid) => alive.has(pid), now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer, pollMs: 1, ...over.fwd })
+  const forms = [{ f: 'claude-code.cli', on: true }]
+  return { fwd, clock, children, alive, die, events, verified, build, forms, dir, start: () => fwd.start({ build, forms }) }
+}
+const restarts = (k) => k.events.failures.filter((f) => f.code === 'forwarder-restart').map((f) => f.delay_ms)
+
+test('W28 a kernel that exits again and again: respawned after 1, 2, 4, 8, 16, then 30 s (the cap), the fifth failure in a row is forwarder-down (once, where netenv), the tries go on, and every spawn is preceded by a digest check (W27 ④)', async (t) => {
+  const k = await fakeKernel(t)
+  assert.deepEqual(BACKOFF_MS, [1000, 2000, 4000, 8000, 16000, 30000])
+  assert.equal((await k.start()).ok, true)
+  assert.equal(k.children.length, 1)
+  const waited = []
+  for (let n = 1; n <= 7; n++) {
+    k.die(k.children.at(-1))
+    await settle()
+    const delay = k.clock.pending()[0]
+    waited.push(delay)
+    await k.clock.advance(delay - 1)
+    assert.equal(k.children.length, n, `not before ${delay} ms`)
+    await k.clock.advance(1)
+    assert.equal(k.children.length, n + 1, `at ${delay} ms`)
+  }
+  assert.deepEqual(waited, [1000, 2000, 4000, 8000, 16000, 30000, 30000])
+  assert.deepEqual(restarts(k), waited, 'every try is a forwarder-restart record with its delay')
+  assert.deepEqual(k.events.failures.filter((f) => f.code === 'forwarder-down').map((f) => [f.where, f.attempts]), [['netenv', 5]], 'the fifth, once')
+  assert.equal(k.verified.length, k.children.length, 'the copy is checked before the first start and before each re-spawn, no more and no fewer')
+  assert.deepEqual([k.fwd.state().down, k.fwd.state().streak], [true, 7])
+  assert.deepEqual(k.events.states.filter((e) => e.event === 'forwarder-start').length, 8)
+})
+
+test('W28 a kernel that stayed up for 30 s starts the count again; one that did not keeps counting through its short lives', async (t) => {
+  const k = await fakeKernel(t)
+  await k.start()
+  k.die(k.children[0]); await settle()
+  await k.clock.advance(1000)
+  assert.equal(k.fwd.state().streak, 1)
+  await k.clock.advance(29_999)
+  k.die(k.children[1]); await settle()
+  assert.deepEqual([k.fwd.state().streak, k.clock.pending()[0]], [2, 2000], 'it lived 29.999 s: still the second failure in a row')
+  await k.clock.advance(2000)
+  await k.clock.advance(30_000)
+  assert.equal(k.fwd.state().streak, 0, 'and now it has stayed up')
+  k.die(k.children[2]); await settle()
+  assert.deepEqual([k.fwd.state().streak, k.clock.pending()[0], k.fwd.state().down], [1, 1000, false])
+})
+
+test('W28 W27 ④ a re-spawn onto a copy that was changed or deleted does not happen: the failure is the digest\'s (of copy) or file-missing, it counts toward the backoff and forwarder-down, and nothing is copied back from the package', async (t) => {
+  let bad = null
+  const k = await fakeKernel(t, { verify: () => bad })
+  await k.start()
+  bad = { mismatch: { of: 'copy' } }
+  k.die(k.children[0]); await settle()
+  for (let n = 0; n < 4; n++) await k.clock.advance(k.clock.pending()[0])
+  assert.equal(k.children.length, 1, 'never spawned')
+  assert.deepEqual(k.events.failures.filter((f) => f.code === 'forwarder-digest-mismatch').map((f) => f.of), ['copy', 'copy', 'copy', 'copy'])
+  assert.deepEqual(k.events.failures.filter((f) => f.code === 'forwarder-down').map((f) => f.attempts), [5])
+  bad = { missing: { reason: 'file-missing' } }
+  await k.clock.advance(k.clock.pending()[0])
+  assert.deepEqual(k.events.failures.filter((f) => f.code === 'forwarder-binary-missing').map((f) => f.reason), ['file-missing'], 'a deleted copy is its own failure')
+  bad = null // `asight on` put the pinned exe back
+  await k.clock.advance(k.clock.pending()[0])
+  assert.equal(k.children.length, 2, 'and the next try starts it')
+  assert.equal(k.fwd.state().phase, 'running')
+})
+
+test('W28 stopNow: the kernel is stopped, the lock is gone, and no re-spawn follows however long the clock runs; an exit that arrives after it is not a failure', async (t) => {
+  const k = await fakeKernel(t)
+  await k.start()
+  assert.ok(fs.existsSync(path.join(k.dir, 'forwarder.lock')))
+  assert.deepEqual(await k.fwd.stopNow(), { stopped: true })
+  assert.ok(!fs.existsSync(path.join(k.dir, 'forwarder.lock')))
+  k.children[0].emit('exit', null, 'SIGTERM')
+  await k.clock.advance(300_000)
+  assert.deepEqual([k.children.length, k.clock.pending(), restarts(k), k.fwd.state().phase], [1, [], [], 'stopped'])
+  const k2 = await fakeKernel(t)
+  await k2.start()
+  k2.die(k2.children[0]); await settle()
+  assert.equal(k2.clock.pending().length, 1, 'a re-spawn is waiting')
+  await k2.fwd.stopNow()
+  await k2.clock.advance(300_000)
+  assert.equal(k2.children.length, 1, 'stopNow also cancels the one that was waiting')
+})
+
+test('W28 a real child that is killed from outside is brought back by the same path: a new pid, the lock rewritten, the read-back on again', async (t) => {
+  const k = await kernelWorld(t, { backoffMs: [30], stableMs: 60_000 })
+  const first = await k.fwd.start({ build: k.build, forms: FORMS })
+  process.kill(first.pid, 'SIGKILL')
+  for (let i = 0; i < 100 && k.spawned.length < 2; i++) await new Promise((r) => setTimeout(r, 30))
+  for (let i = 0; i < 100 && k.fwd.state().phase !== 'running'; i++) await new Promise((r) => setTimeout(r, 30))
+  const s = k.fwd.state()
+  assert.deepEqual([k.spawned.length, s.phase, s.pid !== first.pid], [2, 'running', true])
+  assert.equal(JSON.parse(fs.readFileSync(k.P.lock, 'utf8')).pid, s.pid)
+  assert.equal((await k.fwd.check()).ok, true)
+  assert.deepEqual(k.events.failures.map((f) => [f.code, f.delay_ms]), [['forwarder-restart', 30]])
 })

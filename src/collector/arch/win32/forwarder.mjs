@@ -156,6 +156,10 @@ export const sacBlocks = (state) => state === 'on' || state === 'evaluation'
 
 // ---- the running kernel (4.8 §3.3 · §4 · §8, W12 W28 W55 W74) ---------------------------------------------------------------------------------------------
 
+export const BACKOFF_MS = Object.freeze([1000, 2000, 4000, 8000, 16000, 30000]) // 1, 2, 4 … capped at 30 s (§8)
+const DOWN_AFTER = 5 // the fifth straight failure is `forwarder-down`
+const START_TOLERANCE_MS = 2000 // how far a process's start time may be from the lock's before it is not the process that wrote it
+
 const pidAlive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' } }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const errText = (e) => String((e && e.message) || e)
@@ -196,15 +200,20 @@ export function createForwarder({
   dir, bin, controller, spawn = nodeSpawn, makeController = ({ port, secret }) => createController({ endpoint: `tcp:127.0.0.1:${port}`, secret, own: true }),
   now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, events = { failure() {}, state() {} }, sacOn = async () => false, verifyCopy: verify = async () => ({ ok: true }), isFree,
   isAlive = pidAlive, kill = (pid) => process.kill(pid), procStart = async () => null, fs = nodeFs,
-  pollMs = 50, startTimeoutMs = 10_000, stopWaitMs = 5_000,
+  pollMs = 50, startTimeoutMs = 10_000, stableMs = 30_000, stopWaitMs = 5_000, watchMs = 1000, backoffMs = BACKOFF_MS,
 } = {}) {
   if (typeof isFree !== 'function') throw new TypeError('createForwarder needs isFree(port)')
   const P = { lock: path.join(dir, 'forwarder.lock'), config: path.join(dir, 'forwarder', 'config.json'), home: path.join(dir, 'forwarder', 'home'), forwarder: path.join(dir, 'forwarder') }
   let creds = { ...controller }
   let ctl = makeController(creds)
   let cur = null // { text, forms, ports: Set, probes }: the config the kernel runs
-  let proc = null // { pid, startedAt, child, adopted }
-  let phase = 'stopped' // stopped · starting · running
+  let proc = null // { pid, startedAt, child, adopted, stable: timer }
+  let phase = 'stopped' // stopped · starting · running · backoff
+  let streak = 0
+  let downReported = false
+  let respawnTimer = null
+  let watchTimer = null
+  let stopping = false
 
   const fail = (code, reason, extra = {}) => { const rec = { where: code === 'forwarder-down' ? 'netenv' : 'forwarder', code, reason, ...extra }; events.failure(rec); return { ok: false, ...rec } }
   const rmLock = () => { try { fs.rmSync(P.lock, { force: true }) } catch { /* nothing to remove */ } }
@@ -229,9 +238,9 @@ export function createForwarder({
     try { child = spawn(bin, ['-d', P.home, '-f', P.config], { cwd: P.home, detached: true, stdio: 'ignore', windowsHide: true }) } catch (e) { spawnError = e }
     const spawnFailed = () => startFailed(spawnError.code || errText(spawnError), { errno: spawnError.code ?? null })
     if (spawnError) return spawnFailed()
-    const p = { pid: child.pid, startedAt: null, child, adopted: false }
+    const p = { pid: child.pid, startedAt: null, child, adopted: false, stable: null }
     child.once('error', (e) => { spawnError = e })
-    child.once('exit', (code, sig) => { exited = { code, signal: sig }; if (proc === p) onExit(p) })
+    child.once('exit', (code, sig) => { exited = { code, signal: sig }; if (proc === p) onExit(p, exitText(exited)) })
     const t0 = now()
     for (;;) {
       if (spawnError) return spawnFailed()
@@ -246,16 +255,39 @@ export function createForwarder({
     proc = p
     phase = 'running'
     cur = { ...next, text }
+    p.stable = setTimer(() => { if (proc === p) { streak = 0; downReported = false } }, stableMs) // the failures are "straight" until it has stayed up this long
+    p.stable?.unref?.()
     events.state({ event: 'forwarder-start', where: 'forwarder', pid: p.pid, adopted: false })
-    if (exited) onExit(p) // it died between "answered" and here
+    if (exited) onExit(p, exitText(exited)) // it died between "answered" and here
     return { ok: true, pid: p.pid }
   }
 
-  // a kernel that exits by itself or is killed: the lock goes (supervision is the next commit's)
-  function onExit(p) {
+  // a kernel that exits by itself or is killed is brought back after a backoff; the fifth straight failure is `forwarder-down`, and the tries go on at the cap
+  function onExit(p, how) {
     if (proc !== p) return
-    proc = null; phase = 'stopped'
+    proc = null
+    clearTimer(p.stable)
+    clearTimer(watchTimer); watchTimer = null
     rmLock()
+    if (stopping) return
+    streak++
+    schedule(`exited (${how})`)
+  }
+  function schedule(why) {
+    const delay = backoffMs[Math.min(streak - 1, backoffMs.length - 1)]
+    events.failure({ where: 'forwarder', code: 'forwarder-restart', reason: `the kernel ${why}; trying again in ${delay} ms`, attempt: streak, delay_ms: delay })
+    if (streak >= DOWN_AFTER && !downReported) { downReported = true; events.failure({ where: 'netenv', code: 'forwarder-down', reason: `the kernel did not stay up ${streak} times in a row`, attempts: streak }) }
+    phase = 'backoff'
+    respawnTimer = setTimer(() => { respawnTimer = null; respawn().catch((e) => { streak++; schedule(`did not start again (${errText(e)})`) }) }, delay)
+    respawnTimer?.unref?.()
+  }
+  async function respawn() {
+    if (stopping || !cur) return
+    phase = 'starting'
+    const r = await attempt(cur.text, cur) // the same text and the same ports; the copy was checked again inside
+    if (stopping) return
+    if (!r.ok) { streak++; schedule(`did not start again (${r.reason})`); return }
+    await refresh(cur.forms)
   }
 
   // the probe of each form that is on, asked for now rather than at the next interval (4.8 §3.3): the engine may have just come up
@@ -277,6 +309,8 @@ export function createForwarder({
     if (proc && phase === 'running') return reload({ build, forms })
     const text = build({ ...creds })
     const parsed = readConfig(text)
+    clearTimer(respawnTimer); respawnTimer = null
+    stopping = false; streak = 0; downReported = false
     phase = 'starting'
     const r = await attempt(text, { forms, ports: parsed.ports, probes: parsed.probes })
     if (!r.ok) { phase = 'stopped'; const { ok, ...why } = r; return { ok, ...why } }
@@ -305,6 +339,9 @@ export function createForwarder({
 
   // stop the process we hold (or adopted) and wait for it to be gone; `reason` is what the state event says
   async function stopKernel(reason) {
+    stopping = true
+    clearTimer(respawnTimer); respawnTimer = null
+    clearTimer(watchTimer); watchTimer = null
     const p = proc
     if (!p) { phase = 'stopped'; return true }
     try { if (p.child) p.child.kill(); else kill(p.pid) } catch { /* already gone */ }
@@ -312,6 +349,7 @@ export function createForwarder({
     while (isAlive(p.pid) && now() - t0 < stopWaitMs) await sleep(pollMs)
     if (isAlive(p.pid)) return false
     proc = null
+    clearTimer(p.stable)
     rmLock()
     phase = 'stopped'
     events.state({ event: 'forwarder-stop', where: 'forwarder', pid: p.pid, reason })
@@ -324,6 +362,6 @@ export function createForwarder({
   return {
     start, reload, check, stopNow,
     controller: () => ({ ...creds }),
-    state: () => ({ phase, pid: proc ? proc.pid : null, adopted: proc ? proc.adopted : false }),
+    state: () => ({ phase, pid: proc ? proc.pid : null, adopted: proc ? proc.adopted : false, streak, down: downReported }),
   }
 }
