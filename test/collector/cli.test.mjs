@@ -13,6 +13,7 @@ import { osStubs } from '../helpers/os-stubs.mjs' // on a Mac the real bin's sta
 
 const BIN = fileURLToPath(new URL('../../bin/asight.mjs', import.meta.url))
 const NO_PROBE = async () => ({ at: 'T', products: [], unknown: [{ reason: 'a test: the VPN probe is not run here' }] }) // status asks the VPN probe too: it never runs for real in a test (0.1 §3)
+const NO_EXEC = () => ({ status: 0, stdout: '', stderr: '' }) // and `ss` / `ip`, which it reads for the topology, find nothing (0.1 §3)
 const io = () => { const o = []; const e = []; return { o, e, out: (s) => o.push(s), err: (s) => e.push(s) } }
 const STATUS = { desired: 'on', actual: 'on', recording: true, degraded: null, engine: { port: 4711, v6: 4711, decrypted: 2, spliced: 1 }, helper: { pid: 9, proto: 1, ok: true }, running_untrusted: 1,
   agents: [{ pid: 10, agent: 'claude-code', trusted: true, trust_var: 'NODE_EXTRA_CA_CERTS', trust_via: 'user settings env', direct: 0 }, { pid: 11, agent: 'claude-code', trusted: false, reason: 'var-missing', direct: 2 },
@@ -26,7 +27,7 @@ test('cli: `collector status` is the one `asight status` (src/cli/status.mjs: it
   const request = async (q) => { calls.push([q.method, q.path, q.socketPath]); return STATUS }
   const env = { XDG_RUNTIME_DIR: '/run/user/1000' }
   const home = tmpDir('asight-cli-') // never the operator's own ~/.asight: status reads the disk too
-  const status = { platform: 'linux', statusDeps: { procs: async () => [], netenv: NO_PROBE } }
+  const status = { platform: 'linux', statusDeps: { procs: async () => [], netenv: NO_PROBE, exec: NO_EXEC } }
   let t = io(); assert.equal(await runCollector(['status'], { env, home, request, ...status, ...t }), 0)
   assert.ok(calls.length >= 1 && calls.every((c) => c[0] === 'GET' && c[1] === '/status' && c[2] === '/run/user/1000/asight/collector.sock'), '`on` and `off` are not here: they run src/cli/on.mjs and src/off/main.mjs, which plan, confirm and write before they ask the daemon anything; status only reads')
   const named = []
@@ -59,7 +60,7 @@ test('cli: with no daemon answering (not running, no runtime dir, stuck) status 
     appendEvent(dir, { event: 'failure', where: 'start', code: 'EADDRINUSE', reason: 'the engine port is held by another process' })
     fs.writeFileSync(path.join(dir, 'install-manifest.json'), JSON.stringify({ version: 1, complete: true, entries: [], files: [] })) // installed
     const env = { XDG_RUNTIME_DIR: '/run/user/1000' }
-    const status = { platform: 'linux', statusDeps: { procs: async () => [], netenv: NO_PROBE } }
+    const status = { platform: 'linux', statusDeps: { procs: async () => [], netenv: NO_PROBE, exec: NO_EXEC } }
     let t = io(); assert.equal(await runCollector(['status'], { env: {}, home, ...status, ...t }), 1)
     assert.deepEqual(t.e, [], 'no runtime dir is not an error of the caller\'s: there is just no control socket to ask'); assert.match(t.o.join('\n'), /failure \(start\/EADDRINUSE\): the engine port is held by another process/)
     t = io(); assert.equal(await runCollector(['status'], { env, home, request: async () => { throw Object.assign(new Error('timed out after 2000 ms'), { code: 'ETIMEDOUT' }) }, ...status, ...t }), 1)

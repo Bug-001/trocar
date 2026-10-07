@@ -318,7 +318,7 @@ test('status changes nothing in the HOME but ~/.asight/netenv.json (the board\'s
   let r = await run(s, ['claud']); assert.equal(r.exit, 2); assert.match(r.io.stderrText(), /unknown harness claud[^\n]*claude-code/); assert.equal(r.text, '')
   r = await run(s, ['--nope']); assert.equal(r.exit, 2); assert.match(r.io.stderrText(), /unknown option --nope/)
   const fresh = tmpDir('asight-fresh-')
-  const f = await runStatusCli([], { io: fakeIo(), home: fresh, platform: 'linux', env: { HOME: fresh }, deps: { request: down(), socketPath: SOCK, procs: async () => [], netenv: async () => NO_VPN } })
+  const f = await runStatusCli([], { io: fakeIo(), home: fresh, platform: 'linux', env: { HOME: fresh }, deps: { request: down(), socketPath: SOCK, procs: async () => [], netenv: async () => NO_VPN, exec: () => ({ status: 0, stdout: '', stderr: '' }) } })
   assert.equal(f, 0); assert.deepEqual(fs.readdirSync(fresh), [], 'on a machine with nothing installed it prints so, exits 0, and creates nothing')
 })
 

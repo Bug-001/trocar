@@ -136,6 +136,10 @@ test('④b: the export directory, a session directory in it, and the sessions di
   assert.equal((await doctor(s, ['--source', src])).exit, 0)
 })
 
+// the network reads of the topology (1.6 §9.7, V50): `ss` and `ip` only read; the tests below are about what doctor starts, stops or changes, so these are set aside
+const NET_READ = /^(ss -ltnpH|ip -j (route get 1\.1\.1\.1|-d link show dev \S+))$/
+const ranBesides = (s, from = 0) => s.sys.exec.calls.slice(from).filter((c) => !NET_READ.test(c))
+
 test('the old `verify` is ④: the CA is in the user trust store (✓), is not (⚠ not onboarded), could not be checked (⚠ with the reason) — and none of them changes the exit', async () => {
   const s = plain()
   const src = path.join(s.home, 'src'); capture(src)
@@ -145,7 +149,7 @@ test('the old `verify` is ④: the CA is in the user trust store (✓), is not (
   assert.match(r.out, /⚠ ④ 没弱化全机 TLS[^\n]*not found in the user trust store[^\n]*`asight monitor on`[^\n]*collector's own CA \(`asight on`\) is in no trust store/); assert.doesNotMatch(r.out, /run: asight on/); assert.equal(r.exit, 0)
   r = await doctor(s, ['--source', src], { deps: { verify: () => { throw new Error('security: the keychain could not be opened') } } })
   assert.match(r.out, /⚠ ④ 没弱化全机 TLS[^\n]*trust check errored: security: the keychain could not be opened/); assert.equal(r.exit, 0)
-  assert.deepEqual(s.sys.exec.calls, [], 'with the trust-store check, the process table and the VPN probe injected, no OS tool ran at all')
+  assert.deepEqual(ranBesides(s), [], 'with the trust-store check, the process table and the VPN probe injected, no OS tool ran at all')
 })
 
 test('what doctor runs, with the VPN probe left real: one read-only OS query (`ps`, to find the VPN core\'s socket) and nothing else — no `which`, no systemctl / launchctl / loginctl, nothing that starts, stops or changes a thing (the trust-store check and the process table are the other two queries; both are replaced here)', async () => {
@@ -154,7 +158,8 @@ test('what doctor runs, with the VPN probe left real: one read-only OS query (`p
   const before = s.sys.exec.calls.length
   const r = await doctor(s, ['--source', src], { deps: { netenv: undefined, knownSocks: [] } })
   assert.equal(r.exit, 0, r.text)
-  assert.deepEqual(s.sys.exec.calls.slice(before), ['ps -axww -o command='])
+  assert.deepEqual(ranBesides(s, before), ['ps -axww -o command='])
+  assert.deepEqual(s.sys.exec.calls.slice(before).filter((c) => NET_READ.test(c)), ['ss -ltnpH', 'ip -j route get 1.1.1.1'], 'and the two reads of the network facts, which only read')
 })
 
 test('dependencies: found on PATH, or MISSING with the one line that installs it — looked up in the files, no `which`', async () => {
@@ -181,7 +186,7 @@ test('the collector section is `asight status` for the same harnesses (the daemo
   assert.match(r.out, /pid 4388\s+没有: config-after-start — [^\n]*重启后才会被采集/)
   assert.match(r.out, /本机网络环境: Clash Verge\(规则模式/, 'the VPN software, from the same probe as status')
   assert.match(r.out, /✓ asight-off\(不依赖源码的撤销副本\):/, 'on wrote the standalone copy and it is the version this asight writes')
-  assert.equal(s.sys.exec.calls.length, before, 'doctor ran no OS tool: it reads, and it asks the daemon over its socket (R8)')
+  assert.deepEqual(ranBesides(s, before), [], 'doctor ran no OS tool but the reads of the network facts: it reads, and it asks the daemon over its socket (R8)')
   // a probe that fails is 不知道 with the reason, and still not an exit code
   const f = await doctor(s, ['--source', src], { deps: { netenv: async () => { throw new Error('boom: probe') } } })
   assert.match(f.out, /本机网络环境: 不知道\(boom: probe\)/); assert.equal(f.exit, 0)

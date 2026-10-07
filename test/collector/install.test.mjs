@@ -252,7 +252,7 @@ test('uninstall records a file it could not undo because it is no longer JSON (D
     assert.match(f[0].reason, /settings\.json is no longer valid JSON; asight's env\.NODE_EXTRA_CA_CERTS = .*asight-ca\.pem may still be in it/)
     const { runCollector } = await import('../../src/collector/cli.mjs')
     const out = []; const err = []
-    const code = await runCollector(['status'], { home: b.home, env: { XDG_RUNTIME_DIR: path.join(b.home, 'run') }, platform: 'linux', statusDeps: { procs: async () => [], netenv: async () => ({ at: 'T', products: [], unknown: [{ reason: 'a test' }] }) }, out: (x) => out.push(x), err: (x) => err.push(x) })
+    const code = await runCollector(['status'], { home: b.home, env: { XDG_RUNTIME_DIR: path.join(b.home, 'run') }, platform: 'linux', statusDeps: { procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), netenv: async () => ({ at: 'T', products: [], unknown: [{ reason: 'a test' }] }) }, out: (x) => out.push(x), err: (x) => err.push(x) })
     assert.equal(code, 1, 'a failure in the last 24 h (R4: 1; the old 3 was for "no daemon")')
     assert.match(out.join('\n'), /守护进程: 没在跑/)
     assert.match(out.join('\n'), /collector: not installed — an uninstall left 1 item\(s\): .*settings\.json \(left-unparsable\)\ncapture health:/, 'the residue is said first (D-18), never plain "not installed"')

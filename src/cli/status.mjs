@@ -23,6 +23,9 @@ import { removeAsightText, SENTINEL } from '../off/text-edit.mjs'
 import { userProcessesOf } from '../off/orchestrate.mjs'
 import { probeNetenv, netenvText, netenvFile, writeNetenv } from '../netenv/index.mjs'
 import { judgeHarness } from '../netenv/verdict.mjs'
+import { gatherNetFacts } from '../netenv/facts.mjs'
+import { readAdopted } from '../netenv/adopt.mjs'
+import { buildTopology, renderPathBlock, renderDetail } from '../netenv/topology.mjs'
 import { captureHealth } from '../health/read.mjs'
 import { legacyArtifacts, hasNewCollector } from '../off/legacy.mjs'
 import { legacyNamesProblem } from '../off/legacy-cli.mjs'
@@ -37,10 +40,10 @@ const errMessage = (e) => String((e && e.message) || e)
 const rethrowSandbox = (e) => { if (e && e.code === 'ESANDBOX') throw e } // a refusal of the test guard is never "the tool failed" (0.1 §3)
 
 /** One look at the VPN / proxy software, and the board's copy of what was seen (~/.asight/netenv.json; only where asight already has a home) → probeNetenv's `{ result }` / `{ error }`, plus `write_error` (the file and the errno) when the copy could not be written: `status` says it, a copy the board keeps showing stale is not silent (R11). */
-export async function lookAtNetenv({ home, platform, env, proxies = null, deps = {} }) {
+export async function lookAtNetenv({ home, platform, env, proxies = null, deps = {}, write = true }) {
   const fs = deps.fs || nodeFs
   const n = await probeNetenv({ home, platform, env, proxies, deps })
-  if (n.result) { try { if (fs.existsSync(asightHome(home))) writeNetenv(home, n.result, { fs }) } catch (e) { rethrowSandbox(e); n.write_error = `${netenvFile(home)}: ${errText(e)}` } }
+  if (write && n.result) { try { if (fs.existsSync(asightHome(home))) writeNetenv(home, n.result, { fs }) } catch (e) { rethrowSandbox(e); n.write_error = `${netenvFile(home)}: ${errText(e)}` } }
   return n
 }
 
@@ -77,7 +80,7 @@ const installedAtOf = (m, id) => { const t = [...(m.entries || []).filter((e) =>
 /** The facts `status` is made of. The daemon's `GET /status` when it answers (its view of the switch, the kernel, the processes and the connections), else the disk (state.json, the manifest, the process table
  *  read with the manifest's `liveness`). → { at, platform, user, daemon: { state, pid, reason, socket, reply }, state: { error? }, manifest: { value, error }, harnesses: [ { id, installed, desired, entry: { state, why },
  *  installedAt, procs, judged: { captured, rows }, why: [] } ], link, relayed, health }. Anything that could not be read is `null` / `unknown` and says why; nothing is thrown for it. */
-export async function gatherStatus({ home = nodeOs.homedir(), env = process.env, deps = {}, names = null } = {}) {
+export async function gatherStatus({ home = nodeOs.homedir(), env = process.env, deps = {}, names = null, record = true } = {}) {
   const fs = deps.fs || nodeFs, platform = deps.platform || process.platform
   const ms = deps.ms || Date.now, request = deps.request || controlRequest, alive = deps.alive || pidAlive, identity = deps.identity || procIdentity
   const dir = collectorDir(home), stateF = stateFile(home)
@@ -153,9 +156,31 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   // the VPN / proxy software, 1.6 §6; what each running process is set to use (its environment, Linux) tells which harness goes through it. The URLs are compared with the product's port and dropped.
   const proxies = {}
   for (const { p, h } of matched) { const env = h && typeof p.env === 'function' ? p.env() : null; if (env) proxies[h] = [...(proxies[h] || []), ...PROXY_VARS.map((k) => env.get(k)).filter(Boolean)] }
-  f.netenv = await lookAtNetenv({ home, platform, env, proxies, deps })
+  f.netenv = await lookAtNetenv({ home, platform, env, proxies, deps, write: record }) // `record: false`: the caller writes the copy itself, once, with the topology in it (recordNetenv)
   try { f.health = deps.captureHealth ? deps.captureHealth({ home: asightHome(home) }) : captureHealth({ home: asightHome(home), fs, alive, identity, now: ms() }) } catch (e) { rethrowSandbox(e); f.health = null; f.health_error = errText(e) }
   return f
+}
+
+/**
+ * The network facts and the topology of the harnesses `f` is about (1.6 §9): what `gatherStatus` read, the descriptors, the VPN probe, and this platform's part (`netFactsDeps` of the daemon module: the CLI reaches
+ * arch and harness only through it, layering rule 5). → `{ facts, topology }` (topology = { <h>: HarnessTopology }), or `{ topology_error }`: a failure of the build is said, and does not change what `status` judged.
+ */
+export async function gatherTopology(f, { home, env, platform, deps = {} }) {
+  try {
+    const fs = deps.fs || nodeFs
+    const mod = deps.netFactsDeps ? null : await (deps.daemon || import('../collector/daemon.mjs'))
+    const nd = deps.netFactsDeps ? await deps.netFactsDeps() : mod && typeof mod.netFactsDeps === 'function' ? await mod.netFactsDeps({ platform }) : null
+    if (!nd) return { topology_error: 'no reader of the network facts is wired into this build' }
+    const facts = await gatherNetFacts({ platform, home, env, harnesses: nd.harnesses, status: f, netenv: f.netenv, archFacts: nd.archFacts, adopted: readAdopted(home, { fs }), now: deps.ms || Date.now, fs, deps: { exec: deps.exec || null, ...(deps.procRoot ? { procRoot: deps.procRoot } : {}) } })
+    return { facts, topology: buildTopology(facts) }
+  } catch (e) { rethrowSandbox(e); return { topology_error: errMessage(e) } }
+}
+
+/** The board's copy (~/.asight/netenv.json): the probe's result and the topology, written once, only where asight already has a home. A failed write is `write_error`, said by status (the board would keep showing the old one). */
+export function recordNetenv(f, { home, deps = {} }) {
+  const fs = deps.fs || nodeFs, n = f.netenv
+  if (!n || !n.result) return
+  try { if (fs.existsSync(asightHome(home))) writeNetenv(home, { ...n.result, ...(f.topology ? { topology: f.topology } : {}) }, { fs }) } catch (e) { rethrowSandbox(e); n.write_error = `${netenvFile(home)}: ${errText(e)}` }
 }
 
 // ── what it says ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -179,7 +204,7 @@ const netenvWriteText = (n) => (n.write_error ? [`本机网络环境的副本没
 const userProcsText = (u) => (u.error ? [`你自己起的 asight 进程: 不知道(${u.error})`] : u.list.length ? [`你自己起的 asight 进程仍在跑: ${u.list.map((p) => `${p.command}(pid ${p.pid},${p.note})`).join('、')}`] : [])
 
 /** The lines of `asight status`. */
-export function renderStatus(f, { home = null } = {}) {
+export function renderStatus(f, { home = null, detail = [] } = {}) {
   const d = f.daemon, lines = [`asight 状态(本用户 ${f.user})`]
   lines.push(d.state === 'running' ? `守护进程: 在跑${d.pid ? `(pid ${d.pid})` : ''}${f.daemon.reply && f.daemon.reply.helper ? (f.link.helper === 'missing' ? `;助手有问题: ${f.link.helper_reason}` : `;助手 pid ${f.daemon.reply.helper.pid}`) : ''}`
     : d.state === 'not-running' ? `守护进程: 没在跑${d.reason ? `(${d.reason})` : ''}:什么都没有被采集;asight on 拉起它`
@@ -198,6 +223,8 @@ export function renderStatus(f, { home = null } = {}) {
       lines.push(`      pid ${r.pid}  ${r.captured === true ? `已被采集${byEntry ? '(守护进程还没判过它,这是按信任入口与启动时间判的)' : ''}` : r.captured === false ? `没有: ${r.reason ?? '(没给原因)'} — ${reasonText(r.reason, p && p.hint)}` : '不知道(守护进程没判过它)'}`)
     }
   }
+  if (f.topology) lines.push(...renderPathBlock(f.topology, { ids: f.harnesses.map((h) => h.id) }), ...detail.filter((id) => f.topology[id]).flatMap((id) => ['', ...renderDetail(f.topology[id])]))
+  else if (f.topology_error) lines.push(`各 harness 的路: 不知道(${f.topology_error})`)
   lines.push(relayedText(f), ...(f.linger && lingerText({ ...f.linger, user: f.user }) ? [lingerText({ ...f.linger, user: f.user })] : []), ...netenvText(f.netenv, { ids: f.harnesses.map((h) => h.id), platform: f.platform }), ...netenvWriteText(f.netenv), ...userProcsText(f.userProcs))
   const restart = restartOf(f)
   if (restart.length) lines.push(`需要你做的: ${restart.map((x) => `正在跑的 ${x.harness}(pid ${x.pid})重启后才会被采集`).join(';')};在那之前照常直连`)
@@ -245,18 +272,20 @@ export async function runStatusCli(argv, { io, env = process.env, home = nodeOs.
     if (problem) { io.err(`asight status: ${problem}`); return EXIT.usage }
     return legacyStatus(argv, { io, env, home, platform, deps, json })
   }
-  const f = await gatherStatus({ home, env, deps: { ...deps, platform }, names: named.ids })
+  const f = await gatherStatus({ home, env, deps: { ...deps, platform }, names: named.ids, record: false })
+  Object.assign(f, await gatherTopology(f, { home, env, platform, deps }))
+  recordNetenv(f, { home, deps })
   const wanted = f.harnesses.filter((h) => h.desired === 'on')
   const unreadable = f.harnesses.some((h) => h.judged.captured === null) || !!(f.state && f.state.error) || !!f.manifest.error || !!f.health_error
   const failing = wanted.some((h) => h.judged.captured === false) || failedIn24h(f.health)
   const exit = unreadable ? EXIT.unknown : failing ? EXIT.incomplete : EXIT.ok
   const restart = restartOf(f)
   if (json) {
-    const r = { ...newReceipt('status'), ok: exit === EXIT.ok, user: f.user, ...(f.linger || {}), daemon: { state: f.daemon.state, pid: f.daemon.pid, reason: f.daemon.reason }, harnesses: f.harnesses.map((h) => ({ harness: h.id, desired: h.desired ?? 'unknown', captured: h.judged.captured, reason: reasonOf(h.judged), entry: h.entry.state, ...(h.entry.why ? { entry_why: h.entry.why } : {}), why: h.why, rows: h.judged.rows })), ...(f.state && f.state.error ? { state_error: f.state.error } : {}), ...(f.manifest.error ? { manifest_error: f.manifest.error } : {}), ...(f.health_error ? { health_error: f.health_error } : {}), restart, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}), netenv: f.netenv.error ? { error: f.netenv.error } : f.netenv.result, ...(f.netenv.write_error ? { netenv_write_error: f.netenv.write_error } : {}), user_processes: f.userProcs.error ? 'unknown' : f.userProcs.list, log: path.join(f.dir, 'flows') }
+    const r = { ...newReceipt('status'), ok: exit === EXIT.ok, user: f.user, ...(f.linger || {}), daemon: { state: f.daemon.state, pid: f.daemon.pid, reason: f.daemon.reason }, harnesses: f.harnesses.map((h) => ({ harness: h.id, desired: h.desired ?? 'unknown', captured: h.judged.captured, reason: reasonOf(h.judged), entry: h.entry.state, ...(h.entry.why ? { entry_why: h.entry.why } : {}), why: h.why, rows: h.judged.rows })), ...(f.state && f.state.error ? { state_error: f.state.error } : {}), ...(f.manifest.error ? { manifest_error: f.manifest.error } : {}), ...(f.health_error ? { health_error: f.health_error } : {}), restart, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}), netenv: f.netenv.error ? { error: f.netenv.error } : f.netenv.result, ...(f.netenv.write_error ? { netenv_write_error: f.netenv.write_error } : {}), ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}), user_processes: f.userProcs.error ? 'unknown' : f.userProcs.list, log: path.join(f.dir, 'flows') }
     io.out(JSON.stringify(r, null, 2))
     return exit
   }
-  for (const l of renderStatus(f, { home })) io.out(l)
+  for (const l of renderStatus(f, { home, detail: named.ids || [] })) io.out(l)
   if (f.daemon.reply) for (const l of ['', ...formatStatus(f.daemon.reply).split('\n')]) io.out(l)
   else if (f.health) for (const l of ['', ...formatHealth(f.health)]) io.out(l)
   else io.out(`\ncapture health could not be read: ${f.health_error}`)
