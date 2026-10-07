@@ -59,6 +59,50 @@ export function routeFile(lines) {
   return `${lines.join('\n')}\n`
 }
 
+// ---- the loop check (4.8 §3.4) ---------------------------------------------------------------------------------------------------------------------
+
+export class RouteLoopError extends Error {
+  constructor({ rule, imageIndex }) {
+    super(`a process rule would match asight's own program (${rule}): no block is written`)
+    this.code = 'route-loop'
+    this.rule = rule
+    this.imageIndex = imageIndex
+  }
+}
+
+const baseName = (p) => p.split(/[\\/]/).pop()
+const PROCESS_TYPES = new Set(['PROCESS-NAME', 'PROCESS-PATH', 'PROCESS-NAME-REGEX', 'PROCESS-PATH-REGEX'])
+// How mihomo matches (rules/common/process.go): names and paths without case; a regex without case and unanchored. Read with the same, wider net.
+function hits(type, payload, image) {
+  switch (type) {
+    case 'PROCESS-NAME': return baseName(image).toLowerCase() === payload.toLowerCase()
+    case 'PROCESS-PATH': return image.toLowerCase() === payload.toLowerCase()
+    case 'PROCESS-NAME-REGEX': return compile(payload).test(baseName(image))
+    default: return compile(payload).test(image)
+  }
+}
+function compile(payload) {
+  try { return new RegExp(payload, 'i') } catch (e) { throw new TypeError(`a process rule is not a regex JS can compile (${payload}): ${e.message}`) }
+}
+
+/**
+ * Whether any process rule would match asight's own programs (the engine's `node.exe`, the forwarder): then the engine's re-entry would be routed to itself.
+ * `processRules`: rule strings (`PROCESS-NAME,x` ...; a trailing target is ignored). `ownImages`: image paths, at least one; a check with nothing to check against is a bug.
+ * Returns null, or `{ code: 'route-loop', rule, imageIndex }` for the first rule that matches (index into ownImages).
+ */
+export function checkLoops({ processRules, ownImages } = {}) {
+  if (!Array.isArray(ownImages) || ownImages.length === 0 || ownImages.some((p) => typeof p !== 'string' || p === '')) throw new TypeError('ownImages is a non-empty array of image paths')
+  for (const rule of processRules || []) {
+    if (typeof rule !== 'string') throw new TypeError('a rule is a string')
+    const parts = rule.split(',')
+    const type = parts[0].trim().toUpperCase()
+    if (!PROCESS_TYPES.has(type)) continue
+    const payload = (parts[1] ?? '').trim()
+    for (let i = 0; i < ownImages.length; i++) if (hits(type, payload, ownImages[i])) return { code: 'route-loop', rule, imageIndex: i }
+  }
+  return null
+}
+
 // ---- the block (4.8 §3.1) --------------------------------------------------------------------------------------------------------------------------
 
 function checkCommon({ enginePort, token, reenter }) {
@@ -88,9 +132,10 @@ function entriesOf({ g, route, enginePort, token, reenter }) {
 /**
  * The entries of the VPN block. `groups`: `[{ g, route: 'vb', pathPatterns: string[], names: string[] }]`; `reenter`: `{ host: '127.0.0.1', port }`, the proxy
  * software's own mixed port. Returns `{ proxies, groups, providers, rules, files }`; `files` maps a path relative to the proxy software's home to the text of its
- * route file as it is when the group is on (off is routeFile(null)).
+ * route file as it is when the group is on (off is routeFile(null)). `ownImages` (optional): when given, a rule that would match one of them refuses the whole
+ * block with a RouteLoopError (4.8 §3.4: no block is written).
  */
-export function buildBlock({ groups, enginePort, token, reenter } = {}) {
+export function buildBlock({ groups, enginePort, token, reenter, ownImages } = {}) {
   checkCommon({ enginePort, token, reenter })
   if (!Array.isArray(groups) || groups.length === 0) throw new TypeError('a block needs at least one group')
   const seen = new Set()
@@ -103,6 +148,10 @@ export function buildBlock({ groups, enginePort, token, reenter } = {}) {
     if (lines.length === 0) throw new TypeError(`group ${g} has no process rule: nothing to route`)
     return { g, route: grp.route, lines }
   })
+  if (ownImages !== undefined) {
+    const loop = checkLoops({ processRules: prepared.flatMap((p) => p.lines), ownImages })
+    if (loop) throw new RouteLoopError(loop)
+  }
   const out = { proxies: [], groups: [], providers: {}, rules: [reenterRule(reenter.port)], files: {} }
   for (const p of prepared) {
     const e = entriesOf({ g: p.g, route: p.route, enginePort, token, reenter })

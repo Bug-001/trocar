@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { buildBlock, names, probeUrl, processRulesOf, routeFile } from '../../src/netenv/mihomo/rules.mjs'
+import { buildBlock, checkLoops, names, probeUrl, processRulesOf, routeFile, RouteLoopError } from '../../src/netenv/mihomo/rules.mjs'
 import { TOKEN, ENGINE_PORT, REENTER, ONE, TWO, THREE, block, IMAGES, goldenText } from './fixtures/rules/inputs.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -155,4 +155,50 @@ test('W7 pure: the input is not touched (deep-frozen), the same input gives the 
   assert.deepEqual(a, b)
   a.proxies[0].port = 1
   assert.equal(buildBlock(input).proxies[0].port, ENGINE_PORT, 'the output shares nothing with an earlier output')
+})
+
+// ---- W8 ------------------------------------------------------------------------------------------------------------------------------------------
+
+const OWN = [IMAGES.engine, IMAGES.forwarder]
+const RULES_OF = (groups) => groups.flatMap(processRulesOf)
+
+test('W8 the generated rules do not match the engine or the forwarder: null', () => {
+  assert.equal(checkLoops({ processRules: RULES_OF(THREE), ownImages: OWN }), null)
+})
+
+test('W8 a process rule that matches the engine\'s image (or the forwarder\'s) is a route-loop, naming the rule and which image', () => {
+  const hit = (rule, imageIndex) => assert.deepEqual(checkLoops({ processRules: ['PROCESS-NAME,codex.exe', rule], ownImages: OWN }), { code: 'route-loop', rule, imageIndex }, rule)
+  hit('PROCESS-NAME,node.exe', 0)
+  hit('PROCESS-NAME,NODE.EXE', 0) // names compare without case
+  hit('PROCESS-PATH-REGEX,nodejs', 0) // unanchored, over the whole path
+  hit(String.raw`PROCESS-PATH-REGEX,\\node\.exe`, 0)
+  hit('PROCESS-PATH-REGEX,.*', 0)
+  hit('PROCESS-PATH-REGEX,PROGRAM FILES', 0) // case-insensitive
+  hit(String.raw`PROCESS-PATH,C:\Program Files\nodejs\node.exe`, 0)
+  hit('PROCESS-NAME-REGEX,^nod', 0)
+  hit('PROCESS-NAME,asight-forwarder.exe', 1)
+  hit(String.raw`PROCESS-PATH-REGEX,\\\.asight\\bin\\`, 1)
+})
+
+test('W8 a name rule is by base name, a path rule by the path; other rule types and a trailing target are not process rules', () => {
+  const none = (processRules) => assert.equal(checkLoops({ processRules, ownImages: OWN }), null, processRules.join(' | '))
+  none(['PROCESS-NAME,nodejs']) // a directory, not the image name
+  none(['PROCESS-NAME,node']) // no .exe: not equal
+  none(['DOMAIN,node.exe', 'DOMAIN-SUFFIX,nodejs', 'IP-CIDR,127.0.0.1/32'])
+  assert.equal(checkLoops({ processRules: ['PROCESS-NAME,node.exe,SomeGroup'], ownImages: OWN })?.code, 'route-loop', 'a rule written with its target is still read')
+  none([]) // nothing to check is fine; having no images to check against is not (below)
+})
+
+test('W8 the check cannot be vacuous: no images, a non-string image, or a regex JS cannot compile all throw', () => {
+  assert.throws(() => checkLoops({ processRules: ['PROCESS-NAME,a.exe'], ownImages: [] }), /ownImages/)
+  assert.throws(() => checkLoops({ processRules: ['PROCESS-NAME,a.exe'], ownImages: [''] }), /ownImages/)
+  assert.throws(() => checkLoops({ processRules: ['PROCESS-NAME,a.exe'] }), /ownImages/)
+  assert.throws(() => checkLoops({ processRules: ['PROCESS-PATH-REGEX,(['], ownImages: OWN }), /regex|compile|pattern/i)
+})
+
+test('W8 buildBlock given the own images refuses to produce a block when a rule would match them (the block is not written)', () => {
+  const loop = [{ ...ONE[0], names: ['node.exe'] }]
+  assert.throws(() => buildBlock(block(loop, { ownImages: OWN })), (e) => e instanceof RouteLoopError && e.code === 'route-loop' && e.rule === 'PROCESS-NAME,node.exe' && e.imageIndex === 0)
+  assert.doesNotThrow(() => buildBlock(block(THREE, { ownImages: OWN })))
+  assert.doesNotThrow(() => buildBlock(block(loop)), 'without the images there is nothing to check against (Task 8 always passes them)')
 })
