@@ -315,7 +315,7 @@ test('D38: every line off writes to flows/ is in the closed sets, every run of o
   assert.ok(mine.length >= 5)
   for (const e of flowEvents(s.dir)) assert.deepEqual(checkRecord(e), [], JSON.stringify(e))
   assert.deepEqual(new Set(mine.map((e) => e.run)).size, 1, 'one run, one `run`')
-  assert.deepEqual(mine.map((e) => e.kind).filter(Boolean).slice(0, 3), ['desired-off', 'routing', 'note'])
+  assert.deepEqual(mine.map((e) => e.kind).filter(Boolean).slice(0, 3), ['desired-off', 'routing', 'reverted-not-identical'])
   assert.ok(mine.some((e) => e.kind === 'autostart'))
   assert.ok(mine.some((e) => e.code === 'backup-kept') && mine.some((e) => e.code === 'reverted-not-identical') && mine.some((e) => e.code === 'still-trusting'))
   const last = mine.at(-1)

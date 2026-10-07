@@ -16,7 +16,7 @@ function rowStatus(c, t) {
 }
 
 // the connections and the daemon, in the §7 sentence: 「自启已停用;守护进程(pid 4012)排空后退出: 2 条连接仍经 asight 中转,…」
-function daemonLines(r, past) {
+function daemonLines(r, past, cutNote) {
   const parts = []
   if (r.all) parts.push(r.autostart && r.autostart.planned ? '将停用自启' : r.autostart && r.autostart.disabled ? '自启已停用' : r.autostart ? `自启没能停用(${r.autostart.error || '原因不明'})` : null)
   const d = r.daemon || {}
@@ -33,17 +33,19 @@ function daemonLines(r, past) {
     if (rel.closing > 0) conn.push(`${rel.closing} 条连接仍经 asight 中转,本次响应(或本轮)结束后关闭`)
     if (rel.waiting > 0 && d.state !== 'draining') conn.push(`${rel.waiting} 条等它自己关闭(asight off --now 立即切断)`)
     else if (rel.waiting > 0) conn.push(`其中 ${rel.waiting} 条是透传连接或看不到终止消息的 WebSocket`)
-    if (rel.cut > 0) conn.push(`${past ? '已切断' : '将切断'} ${rel.cut} 条连接(--now)`)
+    if (rel.cut > 0) conn.push(`${past ? '已切断' : '将切断'} ${rel.cut} 条连接${cutNote}`)
   }
   return head && conn.length ? [`${head}: ${conn.join(';')}`] : [...(head ? [head] : []), ...conn]
 }
 
-/** The receipt of `asight off` as text. `tense`: 'past' | 'future' (`--dry-run`: `r.dry_run`). `home`: paths under it are shown as `~/…`. */
-export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' : 'past' } = {}) {
+/** The receipt of `asight off` as text. `tense`: 'past' | 'future' (`--dry-run`: `r.dry_run`). `home`: paths under it are shown as `~/…`. `header`, `extra` and `footer`
+ *  let `asight uninstall` (src/cli/receipt.mjs) reuse the body: its own first line, lines of its own before the last one, and its own last line; `cutNote` is what
+ *  follows the number of connections cut (`off --now` says so, `uninstall` cuts them as a matter of course). */
+export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' : 'past', header = null, extra = [], footer = null, cutNote = '(--now)' } = {}) {
   const past = tense !== 'future'
   const t = (x) => offTilde(x, home)
   const scope = r.all ? '' : `${(r.harnesses || []).join('、')} 的`
-  const lines = [!past ? `asight 将关闭${scope}采集。` : r.ok === false ? `asight 没有做完${r.routing && r.routing.confirmed ? '(引流已摘,其余原因在下面)' : '(原因在下面)'}。` : `asight 已关闭${scope}采集。`]
+  const lines = [header ? header : !past ? `asight 将关闭${scope}采集。` : r.ok === false ? `asight 没有做完${r.routing && r.routing.confirmed ? '(引流已摘,其余原因在下面)' : '(原因在下面)'}。` : `asight 已关闭${scope}采集。`]
   const changed = r.changed || [], removed = r.removed || []
   if (changed.length) {
     lines.push(past ? '撤掉了:' : '将撤掉:')
@@ -53,7 +55,7 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   if (removed.length) lines.push(`${past ? 'asight 自己建的,删了' : 'asight 自己建的,将删'}: ${removed.map((p) => t(typeof p === 'string' ? p : p.path)).join('  ')}`)
   if ((r.skipped || []).length) lines.push(`跳过: ${r.skipped.map((s) => `${t(s.what)}(${s.reason})`).join('  ')}`)
   if (past && r.routing) lines.push(`引流: ${r.routing.confirmed ? '已摘' : '没有确认摘掉'}(${ROUTING_WORDS[r.routing.how] || r.routing.state || '不知道'})`)
-  lines.push(...daemonLines(r, past))
+  lines.push(...daemonLines(r, past, cutNote))
   if ((r.still_trusting || []).length) lines.push(`重启前仍信任 asight CA(不经 asight,只是还信任): ${r.still_trusting.map((p) => `${p.harness} pid ${p.pid}(${UNTIL_WORDS[p.until] || UNTIL_WORDS.restart})`).join('、')}`)
   for (const k of r.kept_bundles || []) {
     const who = k.pids && k.pids.length ? `pid ${k.pids.join(', ')} 可能加载过它,它们退出后再跑 asight off` : ''
@@ -68,6 +70,6 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   for (const l of r.left || []) lines.push(`没撤掉: ${t(l.path)}(${l.reason || l.result})`)
   for (const n of r.problems || []) lines.push(`问题: ${n}`)
   for (const n of r.notes || []) lines.push(`说明: ${n}`)
-  lines.push(past ? '再开  asight on' : '去掉 --dry-run 才会真的做。')
+  lines.push(...extra, footer || (past ? '再开  asight on' : '去掉 --dry-run 才会真的做。'))
   return lines.join('\n')
 }

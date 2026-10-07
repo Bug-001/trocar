@@ -143,6 +143,13 @@ function offChangeText(e, result) {
   const keys = (e.keys || []).join('.')
   return e.prior_value != null && result !== 'left-user-value' ? `把 ${keys} 换回原值` : `去掉 ${keys}`
 }
+const UNDO_NOTE = { // what each undo result other than a plain restore means for the user (4.6 撤销结果)
+  'already-restored': 'already back as it was before install: nothing to undo',
+  'reverted-not-identical': 'asight\'s key was removed, but the file is not byte for byte what it was before install (it was edited since)',
+  missing: 'the file is gone: nothing of asight\'s is left in it',
+  'left-user-value': 'the key now holds a value the user set: left as it is',
+}
+const UNTIL_REASON = { restart: 'until it restarts', 'next-connection': 'until its next new connection (it re-reads the bundle)', 'next-handshake': 'until its next TLS handshake (it re-reads the bundle)', 'session-end': 'until its current session ends' }
 const MARKER_TEXT = { block: '去掉 asight 哨兵块', line: '去掉 asight 加的一行', 'json-value': '去掉 asight 的值(原值从改前副本取回)', 'owned-file': '删除 asight 建的文件' }
 const SKIP_REASON = { 'already-restored': '早已是安装前的样子', missing: '文件已不在,没有 asight 的东西了', 'left-user-value': '这个键现在是你自己设的值,没动', 'already-removed': 'asight 的文字已不在这个文件里' }
 const SKIP_CODE = { 'already-restored': 'already-restored', missing: 'missing', 'left-user-value': 'left-user-value' } // the results that are in the closed set of codes (src/health/codes.mjs)
@@ -172,6 +179,8 @@ export async function undoSide(w, { ids = null, manifest, manifestError = null, 
       u.problems.push(`undoing the entries stopped: ${errMessage(e)}`); u.failures.push({ code: 'entry-not-undone', reason: errMessage(e) })
       return u
     }
+    const note = (code, extra, reason) => u.events.push({ kind: code, code, ...extra, reason }) // `kind` = `code`: one line per thing the operator should know (4.6 安装 / 卸载不静默)
+    u.results = out.results
     for (const r of out.results) {
       const e = before.get(`${r.harness}\0${r.path}\0${r.what}`)
       if (r.backup && !r.backup_kept) u.dropped_backups.push(r.backup)
@@ -179,25 +188,30 @@ export async function undoSide(w, { ids = null, manifest, manifestError = null, 
         const gone = !w.fs.existsSync(r.real_path || r.path)
         if (gone) u.removed.push(r.path)
         else u.changed.push({ path: r.path, change: offChangeText(e, r.result), backup: r.backup_kept || null, result: r.result, ...(r.backup && !r.backup_kept ? { backup_dropped: true } : {}), ...(r.result === 'reverted-not-identical' ? { not_identical: true } : {}), ...withHarness(r.harness) })
-        if (r.result === 'reverted-not-identical') u.events.push({ kind: 'note', code: 'reverted-not-identical', ...withHarness(r.harness), path: r.path, reason: `${r.path} was edited after asight changed it: only asight's ${r.what} was taken out; the rest is as you left it${r.backup_kept ? `; the backup of the file as it was is kept at ${r.backup_kept}` : ''}` })
-      } else if (SKIP_REASON[r.result]) {
-        u.skipped.push({ what: r.path, reason: SKIP_REASON[r.result] })
-        u.events.push({ kind: 'note', ...(SKIP_CODE[r.result] ? { code: SKIP_CODE[r.result] } : {}), ...withHarness(r.harness), path: r.path, reason: `${r.path}: ${SKIP_REASON[r.result]}` })
-      }
+      } else if (SKIP_REASON[r.result]) u.skipped.push({ what: r.path, reason: SKIP_REASON[r.result] })
+      if (r.result === 'reverted-not-identical') note('reverted-not-identical', { ...withHarness(r.harness), path: r.path }, `${r.path} was edited after install: only asight's ${r.what} was taken out${r.deleted ? ' and the file, holding nothing else, removed' : ''}; the file is not byte for byte what it was before install, the rest is as the user left it${r.backup_kept ? `; the file as it was is kept at ${r.backup_kept}` : ''}`)
+      else if (!['restored', 'left-unparsable', 'left-link', 'error'].includes(r.result)) note(SKIP_CODE[r.result] || 'harness-note', { ...withHarness(r.harness), path: r.path }, UNDO_NOTE[r.result] || r.result)
     }
     u.removed.push(...out.removed)
     u.left = out.left.map((l) => ({ path: l.path, result: l.result, reason: l.reason, ...withHarness(l.harness) }))
-    for (const l of u.left) u.failures.push({ code: l.result === 'error' || l.result === 'unknown-kind' ? 'entry-not-undone' : l.result, ...withHarness(l.harness), path: l.path, reason: l.reason || `${l.path}: ${l.result}` })
+    for (const l of u.left) u.failures.push({ code: l.result === 'error' || l.result === 'unknown-kind' ? 'entry-not-undone' : l.result, ...withHarness(l.harness), path: l.path, reason: l.reason })
     u.kept_bundles = out.kept_bundles
-    for (const k of out.kept_bundles.filter((x) => !x.holds_ca && !x.unjudged && !x.error)) u.events.push({ kind: 'note', code: 'bundle-kept', harness: k.harness, path: k.path, reason: `${k.path} is kept without the asight CA${k.pids.length ? ` for running processes that may have loaded it (pid ${k.pids.join(', ')})` : ''}${k.rebuilt ? '; it was gone and was rebuilt without the asight CA' : ''}` })
-    u.still_trusting = out.still_trusting
-    for (const p of out.still_trusting) u.events.push({ kind: 'note', code: 'still-trusting', harness: p.harness, pid: p.pid, reason: `pid ${p.pid} (${p.harness}) may still trust the asight CA until it restarts or re-reads its trust file` })
+    for (const k of out.kept_bundles.filter((x) => !x.holds_ca && !x.unjudged && !x.error)) {
+      const entry = k.entry_left ? `${k.entry_left.join(', ')}, which could not be undone, still points at it` : null // an agent's next start reads the bundle through it
+      const again = `run it again once ${k.pids.length ? 'they exit' : 'that is fixed'}`
+      note(k.rebuilt ? 'harness-note' : 'bundle-kept', { harness: k.harness, path: k.path }, k.rebuilt
+        ? `${k.path} was gone while ${[...(k.pids.length ? [`a running process may use it (pid ${k.pids.join(', ')})`] : []), ...(entry ? [entry] : [])].join(' and ')}; it was rebuilt without the asight CA${k.lost_fps ? `, but without ${k.lost_fps.length} user CA(s) its source files no longer hold` : ''}; ${again}`
+        : `${k.path} is kept, without the asight CA, ${[...(k.pids.length ? [`for running processes that may have loaded it (pid ${k.pids.join(', ')})`] : []), ...(entry ? [`because ${entry}`] : [])].join(' and ')}; ${again}`)
+    }
+    for (const c of out.changed) { note('harness-note', { harness: c.harness, path: c.path }, `${c.path}, asight's ${c.role}, had been changed since install; it was removed all the same`); u.notes.push(`${c.path}, asight's ${c.role}, had been changed since asight wrote it; it was removed all the same`) }
     u.residue = out.residue
-    for (const c of out.changed) u.notes.push(`${c.path}, asight's ${c.role}, had been changed since asight wrote it; it was removed all the same`)
-    if (out.procs_error) u.notes.push(`which agents still trust the asight CA is not known: the process table could not be read (${out.procs_error})`)
+    for (const x of out.residue) note('residue-not-removed', { harness: x.harness, path: x.path }, `${x.path} appeared after install (${x.why}); it may serve the user's own plugins too, so asight did not remove it`)
+    u.still_trusting = out.still_trusting
+    for (const p of out.still_trusting) note('still-trusting', { harness: p.harness, pid: p.pid }, `pid ${p.pid} (${p.harness}) trusts the asight CA ${UNTIL_REASON[p.until] || UNTIL_REASON.restart}`)
+    if (out.procs_error) { note('harness-note', {}, `which agents still trust the asight CA is not known: the process table could not be read (${out.procs_error})`); u.notes.push(`which agents still trust the asight CA is not known: the process table could not be read (${out.procs_error})`) }
     u.procs_error = out.procs_error
     u.kept_backups = (manifest.kept_backups || []).map((k) => ({ ...k }))
-    for (const k of u.kept_backups.filter((x) => x.at === at.toISOString())) u.events.push({ kind: 'note', code: CODE_OFF.backupKept, path: k.path, backup: k.backup, reason: `${k.path}: ${k.reason}` })
+    for (const k of u.kept_backups.filter((x) => x.at === at.toISOString())) note(CODE_OFF.backupKept, { path: k.path, backup: k.backup }, `${k.path}: ${k.reason}`)
     u.orphan_backups = orphanBackups({ home: w.home, manifest, fs: w.fs })
     if (u.orphan_backups.length) u.notes.push(`backups that no manifest entry names (leave them, or delete them if you do not need them): ${u.orphan_backups.join(', ')}`)
     return u
@@ -222,7 +236,7 @@ export async function undoSide(w, { ids = null, manifest, manifestError = null, 
       u.undone_by_marker = true
       if (r.how === 'owned-file') u.removed.push(r.path)
       else u.changed.push({ path: r.path, change: MARKER_TEXT[r.how], backup: r.restored_from || r.backup || null, result: r.result, ...withHarness(r.harness) })
-      u.events.push({ kind: 'note', code: CODE_OFF.undoneByMarker, ...withHarness(r.harness), path: r.path, reason: `${r.path}: ${MARKER_TEXT[r.how]} (found by asight's mark; there is no manifest to say what it was before)` })
+      u.events.push({ kind: CODE_OFF.undoneByMarker, code: CODE_OFF.undoneByMarker, ...withHarness(r.harness), path: r.path, reason: `${r.path}: ${MARKER_TEXT[r.how]} (found by asight's mark; there is no manifest to say what it was before)` })
     } else if (r.result === 'already-clean') u.skipped.push({ what: r.path, reason: 'asight 的标记已不在这个文件里' })
     else { u.left.push({ path: r.path, result: r.result, reason: r.reason || `${r.path}: ${r.result}`, ...withHarness(r.harness) }); u.failures.push({ code: r.result === 'left-unparsable' ? 'left-unparsable' : 'entry-not-undone', ...withHarness(r.harness), path: r.path, reason: r.reason || `${r.path} is no longer valid JSON; asight's value may still be in it` }) }
   }
@@ -230,10 +244,13 @@ export async function undoSide(w, { ids = null, manifest, manifestError = null, 
   return u
 }
 
-function offEventWriter(w, run, notes) {
+/** The writer of a run's `flows/` lines: `put(rec)` appends `{ts, event, where, run, …rec}` (a rec may bring its own `event`, e.g. 'failure'); a line that cannot be
+ *  written is added to `notes`, never dropped and never fatal (D38); nothing is written when there is no collector directory (nothing installed: the command's own
+ *  output is the only report). `event` / `where` default to `off`'s names; `uninstall` passes its own. */
+export function flowWriter(w, run, notes, { event = EVENT_OFF_NOTE, where = WHERE_OFF } = {}) {
   return (rec) => {
-    if (!w.fs.existsSync(w.dir)) return // nothing is installed here: the command's own output is the only report
-    try { appendFlowEvent(w.dir, { event: rec.event || EVENT_OFF_NOTE, where: WHERE_OFF, run, ...rec }, { now: w.clock(), fs: w.fs }) } catch (e) { notes.push(`not recorded (${errMessage(e)}): ${rec.reason}`) }
+    if (!w.fs.existsSync(w.dir)) return
+    try { appendFlowEvent(w.dir, { event, where, run, ...rec }, { now: w.clock(), fs: w.fs }) } catch (e) { notes.push(`not recorded (${errMessage(e)}): ${rec.reason}`) }
   }
 }
 
@@ -245,7 +262,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
   const w = offWorld({ home, env, deps })
   const run = w.clock().toISOString()
   const receipt = { ...newReceipt('off'), harnesses: ids || [], all: ids === null, now, undo: ['asight on'], log: path.join(w.dir, 'flows'), left: [], kept_bundles: [], still_trusting: [], residue: [], kept_backups: [], orphan_backups: [], pending: [], user_processes: [], notes: [], problems: [] }
-  const put = offEventWriter(w, run, receipt.notes)
+  const put = flowWriter(w, run, receipt.notes)
   const read = () => { try { return { manifest: readManifest(w.dir, w.fs), manifestError: null } } catch (e) { return { manifest: null, manifestError: e } } }
   let { manifest, manifestError } = read() // what the plan and the first desired-off go by; read AGAIN under the lock: an `on` that held it has written to the manifest since
   let installed = harnessIdsOf(manifest)
