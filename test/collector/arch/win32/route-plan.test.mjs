@@ -2,7 +2,8 @@
 // Task 6b owns the rules of upstream.mjs; Task 8(a) appends the route plan (planRoutes) that applies them to the groups. Nothing here runs Windows: the helper is an object with a `call`, the clock is injected.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { bypassHit, parseProxyText, proxyAuthOf, translateBypass, upstreamFor } from '../../../../src/collector/arch/win32/upstream.mjs'
+import { bypassHit, parseProxyText, proxyAuthOf, readHkcuEnv, readSystemProxy, sameSystemProxy, translateBypass, upstreamFor, watchSystemProxy } from '../../../../src/collector/arch/win32/upstream.mjs'
+import { regReadAllowed } from '../../../../src/collector/arch/win32/helper.mjs'
 import { bypassRuleOf } from '../../../../src/netenv/mihomo/rules.mjs'
 // the groups, as the harness files declare them (arch/ never imports harness/; a test may, to pin the rule to the real data)
 import claudeCode from '../../../../src/collector/harness/win32/claude-code.mjs'
@@ -315,4 +316,220 @@ test('W71 after `on`, a system proxy turned PAC (or unreadable) leaves a followe
   assert.equal(up(CODEX, { systemProxy: sys({ autoConfigUrl: 'http://wpad/p.pac' }), last: { source: 'system-proxy', reason: 'not-routed', why: 'system-proxy-pac' } }).reason, 'not-routed', 'nothing to keep when the last was no upstream')
   assert.equal(up(CODEX, { systemProxy: sys({ autoConfigUrl: 'http://wpad/p.pac' }) }).reason, 'not-routed', '`on` itself, with no last: not routed')
   assert.equal(up(CLAUDE, { systemProxy: sys({ autoConfigUrl: 'http://wpad/p.pac' }), last: direct }).hint, undefined, 'a group that does not follow has nothing to say about a PAC')
+})
+
+// ---------- the two registry reads (4.8 §1, §2.2, §9) and the watcher (W71, W72) ----------
+
+/** A helper that answers reg-read from a registry that is a plain object, and remembers what it was asked. */
+function fakeRegistry(initial) {
+  const reg = { internet: { ...initial }, env: {} }
+  const calls = []
+  const helper = {
+    calls,
+    async call(verb, args, opts) {
+      calls.push({ verb, args, opts })
+      if (reg.fail) throw Object.assign(new Error(reg.fail.message ?? 'x'), { code: reg.fail.code })
+      if (verb !== 'reg-read') throw new Error(`not asked for: ${verb}`)
+      if (regReadAllowed(args) === null) throw Object.assign(new Error('reg-read outside the allow-list'), { code: 'helper-forbidden-key' })
+      const src = /Environment$/i.test(args.key) ? reg.env : reg.internet
+      if (src === null) return { keyExists: false, values: {} }
+      const values = {}
+      for (const n of args.names) if (n in src && src[n] !== undefined) values[n] = src[n]
+      return reg.answer ?? { keyExists: true, values }
+    },
+  }
+  return { reg, helper }
+}
+const sz = (value) => ({ kind: 'REG_SZ', value })
+const dword = (value) => ({ kind: 'REG_DWORD', value })
+const VERGE = { ProxyEnable: dword(1), ProxyServer: sz('127.0.0.1:7897'), ProxyOverride: sz('localhost;<local>') }
+
+test('W71 readSystemProxy asks the four Internet Settings values the helper may read, and gives the answer in the form upstreamFor takes', async () => {
+  const { helper } = fakeRegistry(VERGE)
+  assert.deepEqual(await readSystemProxy({ helper }), { ok: true, enable: true, server: '127.0.0.1:7897', override: 'localhost;<local>', autoConfigUrl: null })
+  assert.equal(helper.calls.length, 1)
+  assert.deepEqual(helper.calls[0].args, { hive: 'HKCU', key: 'Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings', names: ['ProxyEnable', 'ProxyServer', 'ProxyOverride', 'AutoConfigURL'] })
+  assert.notEqual(regReadAllowed(helper.calls[0].args), null, 'on the helper\'s allow-list, so no write and no other key is asked')
+  for (const [reg, want] of [
+    [{ ProxyEnable: dword(0), ProxyServer: sz('127.0.0.1:7897') }, { ok: true, enable: false, server: '127.0.0.1:7897', override: null, autoConfigUrl: null }],
+    [{}, { ok: true, enable: null, server: null, override: null, autoConfigUrl: null }],
+    [{ ProxyEnable: dword(1), AutoConfigURL: sz('http://wpad/proxy.pac') }, { ok: true, enable: true, server: null, override: null, autoConfigUrl: 'http://wpad/proxy.pac' }],
+    [{ ProxyEnable: sz('1'), ProxyServer: { kind: 'REG_EXPAND_SZ', value: '%X%:1' } }, { ok: true, enable: true, server: '%X%:1', override: null, autoConfigUrl: null }],
+    [{ ProxyEnable: dword(7), ProxyServer: dword(5), ProxyOverride: sz('') }, { ok: true, enable: null, server: null, override: '', autoConfigUrl: null }],
+  ]) assert.deepEqual(await readSystemProxy({ helper: fakeRegistry(reg).helper }), want)
+  const none = fakeRegistry(null)
+  none.reg.internet = null
+  assert.deepEqual(await readSystemProxy({ helper: none.helper }), { ok: true, enable: null, server: null, override: null, autoConfigUrl: null }, 'a key that is not there is nothing set, and is read')
+})
+
+test('W71 an unreadable system proxy is a reason from the closed set, never a throw and never an empty answer: the helper timed out, is gone, refuses, or answers something that is not a registry read', async () => {
+  const cases = [[{ code: 'helper-timeout' }, 'timeout'], [{ code: 'helper-down' }, 'absent'], [{ code: 'helper-closed' }, 'absent'], [{ code: 'helper-start-failed' }, 'absent'], [{ code: 'helper-verb-error', message: 'Access to the registry key is denied' }, 'denied']]
+  for (const [fail, reason] of cases) {
+    const { reg, helper } = fakeRegistry(VERGE)
+    reg.fail = fail
+    assert.deepEqual(await readSystemProxy({ helper }), { ok: false, reason, detail: fail.code })
+  }
+  const bad = fakeRegistry(VERGE)
+  bad.reg.answer = { nope: 1 }
+  assert.deepEqual(await readSystemProxy({ helper: bad.helper }), { ok: false, reason: 'unparseable', detail: 'answer' })
+  bad.reg.answer = 'garbage'
+  assert.equal((await readSystemProxy({ helper: bad.helper })).reason, 'unparseable')
+})
+
+test('W5 readHkcuEnv reads the four proxy variables of the login environment (read-only, on the helper\'s list), keeps the ones that are set as text, and says why when it cannot', async () => {
+  const { reg, helper } = fakeRegistry({})
+  reg.env = { HTTPS_PROXY: sz('http://a:1'), NO_PROXY: sz('.corp.com'), ALL_PROXY: sz(''), HTTP_PROXY: dword(3), Path: sz('C:\\x') }
+  assert.deepEqual(await readHkcuEnv({ helper }), { ok: true, values: { HTTPS_PROXY: 'http://a:1', NO_PROXY: '.corp.com' } }, 'a blank value and a number are not a proxy; Path is not asked')
+  assert.deepEqual(helper.calls[0].args, { hive: 'HKCU', key: 'Environment', names: ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY'] })
+  assert.notEqual(regReadAllowed(helper.calls[0].args), null)
+  reg.env = null
+  assert.deepEqual(await readHkcuEnv({ helper }), { ok: true, values: {} })
+  reg.fail = { code: 'helper-timeout' }
+  assert.deepEqual(await readHkcuEnv({ helper }), { ok: false, reason: 'timeout', detail: 'helper-timeout' })
+})
+
+test('W71 sameSystemProxy compares the four values (a missing one is null); two unreadable answers are the same whatever the reason', () => {
+  const a = { ok: true, enable: true, server: 'x:1', override: 'o', autoConfigUrl: null }
+  assert.equal(sameSystemProxy(a, { ...a }), true)
+  assert.equal(sameSystemProxy(a, { ok: true, enable: true, server: 'x:1', override: 'o' }), true, 'undefined is null')
+  for (const k of ['enable', 'server', 'override', 'autoConfigUrl']) assert.equal(sameSystemProxy(a, { ...a, [k]: k === 'enable' ? false : 'changed' }), false, k)
+  assert.equal(sameSystemProxy({ ok: false, reason: 'timeout' }, { ok: false, reason: 'denied' }), true)
+  assert.equal(sameSystemProxy(a, { ok: false, reason: 'timeout' }), false)
+  assert.equal(sameSystemProxy({ ok: false, reason: 'timeout' }, a), false)
+})
+
+/** A clock the test drives: setInterval / clearInterval that run when the test says so. */
+function fakeTimers() {
+  const live = new Map()
+  const set = []
+  let n = 0
+  return {
+    live,
+    set,
+    timers: { setInterval(fn, ms) { const id = ++n; live.set(id, fn); set.push(ms); return { id, unref() {} } }, clearInterval(t) { live.delete(t.id) } },
+    async tick() { for (const fn of [...live.values()]) await fn() },
+  }
+}
+const settle = () => new Promise((r) => setImmediate(r))
+
+test('W71 watchSystemProxy: the first read is the baseline, no event; a change of the server, the switch, the override or the script address alone is one `change` with what differs', async () => {
+  const { reg, helper } = fakeRegistry(VERGE)
+  const clock = fakeTimers()
+  const seen = []
+  const w = watchSystemProxy({ helper, timers: clock.timers })
+  w.on('change', (e) => seen.push(e))
+  await w.ready
+  assert.deepEqual(clock.set, [5000], 'every five seconds')
+  assert.equal(helper.calls.length, 1)
+  await clock.tick()
+  assert.equal(seen.length, 0, 'nothing changed')
+  reg.internet.ProxyServer = sz('127.0.0.1:7890')
+  await clock.tick()
+  assert.equal(seen.length, 1)
+  assert.deepEqual(seen[0].changed, ['ProxyServer'])
+  assert.equal(seen[0].before.server, '127.0.0.1:7897')
+  assert.equal(seen[0].after.server, '127.0.0.1:7890')
+  await clock.tick()
+  assert.equal(seen.length, 1, 'the baseline moved with it')
+  reg.internet.ProxyOverride = sz('localhost;10.*;<local>')
+  await clock.tick()
+  assert.deepEqual(seen[1].changed, ['ProxyOverride'], 'ProxyOverride alone is a change (W72)')
+  reg.internet.ProxyEnable = dword(0)
+  await clock.tick()
+  assert.deepEqual(seen[2].changed, ['ProxyEnable'])
+  reg.internet.AutoConfigURL = sz('http://wpad/proxy.pac')
+  await clock.tick()
+  assert.deepEqual(seen[3].changed, ['AutoConfigURL'])
+  w.stop()
+})
+
+test('W71 a read that fails is a change to 「unreadable」 once, and the way back is a change once; two failures in a row are not a change; a read still running is not doubled', async () => {
+  const { reg, helper } = fakeRegistry(VERGE)
+  const clock = fakeTimers()
+  const seen = []
+  const w = watchSystemProxy({ helper, timers: clock.timers })
+  w.on('change', (e) => seen.push(e))
+  await w.ready
+  reg.fail = { code: 'helper-timeout' }
+  await clock.tick()
+  await clock.tick()
+  reg.fail = { code: 'helper-down' }
+  await clock.tick()
+  assert.equal(seen.length, 1)
+  assert.equal(seen[0].after.ok, false)
+  assert.deepEqual(seen[0].changed, ['ProxyEnable', 'ProxyServer', 'ProxyOverride', 'AutoConfigURL'], 'unreadable: nothing can be said to be the same')
+  reg.fail = null
+  await clock.tick()
+  assert.equal(seen.length, 2)
+  assert.equal(seen[1].after.ok, true)
+  // a read that has not come back when the next tick fires is waited for, not repeated
+  let release
+  const slow = { calls: 0, async call() { slow.calls++; await new Promise((r) => { release = r }); return { keyExists: true, values: {} } } }
+  const w2 = watchSystemProxy({ helper: slow, initial: { ok: true, enable: null, server: null, override: null, autoConfigUrl: null }, timers: clock.timers })
+  const first = w2.poll()
+  const second = w2.poll()
+  await settle()
+  assert.equal(slow.calls, 1)
+  release()
+  await Promise.all([first, second])
+  assert.equal(slow.calls, 1)
+  w.stop()
+  w2.stop()
+})
+
+test('W71 watchSystemProxy: a baseline the caller already read is used (a change between its read and the first tick is not lost), stop() ends the reads and the events, a listener that throws costs the others nothing', async () => {
+  const { reg, helper } = fakeRegistry(VERGE)
+  const clock = fakeTimers()
+  const initial = await readSystemProxy({ helper })
+  reg.internet.ProxyServer = sz('127.0.0.1:7890') // moved after the caller's read
+  const errors = []
+  const seen = []
+  const w = watchSystemProxy({ helper, initial, timers: clock.timers, onError: (e) => errors.push(e) })
+  w.on('change', () => { throw new Error('a listener bug') })
+  w.on('change', (e) => seen.push(e))
+  assert.equal(helper.calls.length, 1, 'no baseline read of its own')
+  await clock.tick()
+  assert.equal(seen.length, 1, 'the second listener still heard it')
+  assert.equal(errors.length, 1)
+  assert.match(errors[0].message, /a listener bug/)
+  w.stop()
+  assert.equal(clock.live.size, 0, 'the timer is cleared')
+  reg.internet.ProxyServer = sz('127.0.0.1:1')
+  const before = helper.calls.length
+  await w.poll()
+  assert.equal(helper.calls.length, before, 'a stopped watcher reads nothing')
+  assert.equal(seen.length, 1)
+  // a read that is still out when stop() comes is dropped: no event after the stop
+  let release
+  const slow = { async call() { await new Promise((r) => { release = r }); return { keyExists: true, values: { ProxyEnable: dword(1), ProxyServer: sz('x:1') } } } }
+  const late = []
+  const w2 = watchSystemProxy({ helper: slow, initial: { ok: true, enable: null, server: null, override: null, autoConfigUrl: null }, timers: clock.timers })
+  w2.on('change', (e) => late.push(e))
+  const inflight = w2.poll()
+  w2.stop()
+  release()
+  assert.equal(await inflight, false)
+  assert.equal(late.length, 0)
+})
+
+test('W71 end to end: the registry moves its port, the watcher says so, and only the follower\'s upstream is new', async () => {
+  const { reg, helper } = fakeRegistry(VERGE)
+  const clock = fakeTimers()
+  const w = watchSystemProxy({ helper, initial: await readSystemProxy({ helper }), timers: clock.timers })
+  const changes = []
+  w.on('change', (e) => changes.push(e))
+  const first = await readSystemProxy({ helper })
+  const before = { codex: up(CODEX, { systemProxy: first }), claude: up(CLAUDE, { systemProxy: first }) }
+  reg.internet.ProxyServer = sz('127.0.0.1:7890')
+  await clock.tick()
+  assert.equal(changes.length, 1)
+  const after = { codex: up(CODEX, { systemProxy: changes[0].after, last: before.codex }), claude: up(CLAUDE, { systemProxy: changes[0].after, last: before.claude }) }
+  assert.equal(before.codex.port, 7897)
+  assert.equal(after.codex.port, 7890)
+  assert.deepEqual(after.claude, before.claude, 'a group that does not follow has the same answer')
+  reg.internet.AutoConfigURL = sz('http://wpad/proxy.pac')
+  await clock.tick()
+  const pac = up(CODEX, { systemProxy: changes[1].after, last: after.codex })
+  assert.deepEqual([pac.port, pac.hint], [7890, 'system-proxy-pac'], 'PAC after `on`: the last upstream stays and it is said')
+  w.stop()
 })

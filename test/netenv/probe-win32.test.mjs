@@ -4,6 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { detect, PROBE_UNKNOWN_REASONS } from '../../src/netenv/probe.mjs'
+import { readSystemProxy } from '../../src/collector/arch/win32/upstream.mjs'
 import { startWorld, LEAKS, VERGE_YAML } from './fixtures/verge-world.mjs'
 import { vergeProcs, proc } from './fixtures/win-facts.mjs'
 
@@ -135,6 +136,16 @@ test('the system proxy: a PAC script is 「不知道 · pac」; a server in the 
   assert.deepEqual(unknownOf(detect(base({ systemProxy: { ok: false, reason: 'denied' } })), 'system-proxy'), [{ what: 'system-proxy', reason: 'denied' }])
   const off = detect(base({ systemProxy: { ok: true, enable: false, server: '', autoConfigUrl: '' } }))
   assert.deepEqual(off.systemProxy, { enabled: false, host: null, port: null, pac: false }); assert.deepEqual(unknownOf(off, 'system-proxy'), [])
+})
+
+test('the system proxy the upstream rule reads is the fact the probe takes, and ProxyOverride (a list of the user\'s own hosts) goes no further: it is not in the result that netenv.json holds', async () => {
+  const helper = { call: async () => ({ keyExists: true, values: { ProxyEnable: { kind: 'REG_DWORD', value: 1 }, ProxyServer: { kind: 'REG_SZ', value: '127.0.0.1:7897' }, ProxyOverride: { kind: 'REG_SZ', value: 'git.secret-corp.example;*.internal.example;<local>' } } }) }
+  const sp = await readSystemProxy({ helper })
+  assert.equal(sp.override, 'git.secret-corp.example;*.internal.example;<local>', 'upstream.mjs has it')
+  const r = detect(base({ systemProxy: sp }))
+  assert.deepEqual(r.systemProxy, { enabled: true, host: '127.0.0.1', port: 7897, pac: false })
+  assert.deepEqual(r.unknown, [])
+  assert.ok(!JSON.stringify(r).includes('secret-corp') && !JSON.stringify(r).includes('internal.example'), 'the probe does not copy what it was not asked to keep')
 })
 
 test('what cannot be read is unknown, not empty: a process snapshot that failed is products null (not []), with the reason; a reason outside the closed set is unparseable with what it said', () => {

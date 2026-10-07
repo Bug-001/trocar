@@ -7,7 +7,8 @@
 // facts = {
 //   procs:        { ok: true, rows: [{ pid, name, exe }] } | { ok: false, reason }                 the helper's `ps`
 //   listeners:    { ok: true, rows: [{ pid, port, addr }] } | { ok: false, reason }                the helper's `tcp-table`, LISTEN rows
-//   systemProxy:  { ok: true, enable, server, autoConfigUrl } | { ok: false, reason }             the helper's `reg-read` of Internet Settings (ProxyEnable · ProxyServer · AutoConfigURL)
+//   systemProxy:  { ok: true, enable, server, autoConfigUrl, override? } | { ok: false, reason }   the helper's `reg-read` of Internet Settings (ProxyEnable · ProxyServer · AutoConfigURL), as readSystemProxy() of src/collector/arch/win32/upstream.mjs gives it.
+//                 `override` (ProxyOverride: the user's own host list) is the upstream rule's, for the bypass table (4.8 §2.2): detect() never copies it, so it never reaches netenv.json
 //   interfaces:   { ok: true, rows: [{ name, description, up }], defaultIface } | { ok: false, reason }    `net-if` and `route` (the interface the default route takes)
 //   focusPorts:   [port]                                                                         ports whose owner matters (an agent's proxy setting names them); the system proxy's port always does
 //   verge:        the Verge adapter's facts() | null                                               { fields, running, runtime, controller }

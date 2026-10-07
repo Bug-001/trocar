@@ -236,3 +236,93 @@ export function upstreamFor({ group, prior = null, noProxy = null, systemProxy =
   // 3. direct: a TUN or another layer-3 VPN carries it as it did
   return finish('direct', { kind: 'direct' })
 }
+
+// ---- reading the registry, and watching the system proxy (4.8 §1 · §2.2 · §9; W71) ------------------------------------------------------------------------
+
+const INTERNET_SETTINGS = 'Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'
+const SYSTEM_PROXY_NAMES = Object.freeze(['ProxyEnable', 'ProxyServer', 'ProxyOverride', 'AutoConfigURL'])
+const LOGIN_ENV_NAMES = Object.freeze(['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY'])
+const HELPER_GONE = new Set(['helper-down', 'helper-closed', 'helper-start-failed'])
+
+/** A failed read as the closed set of 1.6 §9.4 says it: the helper timed out (`timeout`), is not there (`absent`), or refused or failed (`denied`); `detail` is the helper's error code. */
+const unreadable = (e) => ({ ok: false, reason: e && e.code === 'helper-timeout' ? 'timeout' : e && HELPER_GONE.has(e.code) ? 'absent' : 'denied', detail: (e && e.code) || 'error' })
+const valuesOf = (answer) => (answer && typeof answer === 'object' && answer.values && typeof answer.values === 'object' ? answer.values : null)
+const stringOf = (v) => (v && typeof v.value === 'string' ? v.value : null)
+
+/** readSystemProxy({ helper, timeoutMs }) → { ok: true, enable: true | false | null, server, override, autoConfigUrl } | { ok: false, reason, detail }: the four values of `HKCU\...\Internet Settings` that say where WinINET sends a connection
+ *  (4.7 §3, 4.8 §9), through the helper's read-only `reg-read`. A value that is not set is null (a key that is not there is all null, and is a read); `enable` is true only for a DWORD of 1. Never throws. */
+export async function readSystemProxy({ helper, timeoutMs = 2000 } = {}) {
+  let answer
+  try { answer = await helper.call('reg-read', { hive: 'HKCU', key: INTERNET_SETTINGS, names: [...SYSTEM_PROXY_NAMES] }, { timeoutMs }) } catch (e) { return unreadable(e) }
+  const v = valuesOf(answer)
+  if (!v) return { ok: false, reason: 'unparseable', detail: 'answer' }
+  const n = v.ProxyEnable ? Number(v.ProxyEnable.value) : null
+  return { ok: true, enable: n === 1 ? true : n === 0 ? false : null, server: stringOf(v.ProxyServer), override: stringOf(v.ProxyOverride), autoConfigUrl: stringOf(v.AutoConfigURL) }
+}
+
+/** readHkcuEnv({ helper, timeoutMs }) → { ok: true, values: { HTTPS_PROXY?, HTTP_PROXY?, ALL_PROXY?, NO_PROXY? } } | { ok: false, reason, detail }: the proxy variables of the login environment (`HKCU\Environment`), read-only; asight never writes one
+ *  (D43). Only a variable that is set to text is in `values`. Registry value names are not case-sensitive, so `https_proxy` is `HTTPS_PROXY`. Never throws. */
+export async function readHkcuEnv({ helper, timeoutMs = 2000 } = {}) {
+  let answer
+  try { answer = await helper.call('reg-read', { hive: 'HKCU', key: 'Environment', names: [...LOGIN_ENV_NAMES] }, { timeoutMs }) } catch (e) { return unreadable(e) }
+  const v = valuesOf(answer)
+  if (!v) return { ok: false, reason: 'unparseable', detail: 'answer' }
+  const values = {}
+  for (const name of LOGIN_ENV_NAMES) { const t = stringOf(v[name]); if (t !== null && t.trim() !== '') values[name] = t }
+  return { ok: true, values }
+}
+
+const SAME_FIELDS = Object.freeze(['enable', 'server', 'override', 'autoConfigUrl'])
+const nullish = (x) => (x === undefined ? null : x)
+
+/** Is the system proxy the same as it was? The four values (a missing one is null); two answers that could not be read are the same, whatever the reasons: a read that keeps failing is not a change. */
+export function sameSystemProxy(a, b) {
+  if (!a || !b || !a.ok || !b.ok) return !!a && !!b && !a.ok && !b.ok
+  return SAME_FIELDS.every((k) => nullish(a[k]) === nullish(b[k]))
+}
+const CHANGED_NAMES = Object.freeze({ enable: 'ProxyEnable', server: 'ProxyServer', override: 'ProxyOverride', autoConfigUrl: 'AutoConfigURL' })
+
+/**
+ * watchSystemProxy({ helper, everyMs = 5000, initial, read, onError, timers }) → { on('change', fn), off, stop(), poll(), ready, last() }
+ * Reads the system proxy at once (the baseline: no event) and every `everyMs`; a change of `ProxyEnable`, `ProxyServer`, `ProxyOverride` or `AutoConfigURL`, or a turn to or from unreadable, is one `change` event
+ * `{ before, after, changed: [registry value names] }` (unreadable: all four). The daemon recomputes the followers' upstream with `upstreamFor({ systemProxy: after, last })` and reloads the kernel (4.8 §2.2); this file writes nothing.
+ * `initial`: an answer the caller already has, so a change between its read and the first tick is not taken into the baseline. A read still running when the next tick comes is waited for, not repeated. A listener that throws costs the others
+ * nothing and is handed to `onError`. After `stop()` nothing is read and nothing is emitted.
+ */
+export function watchSystemProxy({ helper, everyMs = 5000, initial = null, read = readSystemProxy, onError = () => {}, timers = { setInterval, clearInterval } } = {}) {
+  const listeners = new Map()
+  let last = initial
+  let stopped = false
+  let busy = null
+  const emit = (event, payload) => {
+    for (const fn of [...(listeners.get(event) || [])]) { try { fn(payload) } catch (e) { try { onError(e) } catch { /* the owner's handler failed: nothing left to tell */ } } }
+  }
+  async function once() {
+    let next
+    try { next = await read({ helper }) } catch (e) { next = unreadable(e) }
+    if (stopped) return false
+    if (last === null) { last = next; return false }
+    if (sameSystemProxy(last, next)) { last = next; return false }
+    const before = last
+    last = next
+    const changed = before.ok && next.ok ? SAME_FIELDS.filter((k) => nullish(before[k]) !== nullish(next[k])).map((k) => CHANGED_NAMES[k]) : Object.values(CHANGED_NAMES)
+    emit('change', { before, after: next, changed })
+    return true
+  }
+  const poll = () => {
+    if (stopped) return Promise.resolve(false)
+    if (!busy) busy = once().finally(() => { busy = null })
+    return busy
+  }
+  const ready = initial === null ? poll() : Promise.resolve(false)
+  const timer = timers.setInterval(() => poll(), everyMs) // `once` never rejects: a failed read is an answer, a listener's throw is caught
+  if (timer && timer.unref) timer.unref()
+  return {
+    on(event, fn) { listeners.set(event, [...(listeners.get(event) || []), fn]); return this },
+    off(event, fn) { listeners.set(event, (listeners.get(event) || []).filter((f) => f !== fn)); return this },
+    stop() { stopped = true; timers.clearInterval(timer) },
+    poll,
+    ready,
+    last: () => last,
+  }
+}
