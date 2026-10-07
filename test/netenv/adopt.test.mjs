@@ -98,6 +98,19 @@ test('V47 (a) Linux: the setting is changed after `on` — the next connections 
   assert.deepEqual(detectDrift({ adopted: {}, h: 'claude-code', setting, routing: 'driver' }), [], 'with nothing adopted there is nothing to have drifted from')
 })
 
+test('V47 (a) a process whose environment holds only a key its harness does not read (ALL_PROXY for claude-code) was started with no proxy: `status claude-code` does not list it under 「仍按启动时的设置」, and says nothing false about where it goes', async () => {
+  const s = sandbox({ status: { engine: { port: 47123 }, agents: [{ pid: 4121, agent: 'claude-code', trusted: true, decrypt: true }] } })
+  await s.run(['on', '--yes'], { deps: { ...FACTS, ...LINUX } })
+  const started = Date.now() + 5000
+  const only = new Map([['ALL_PROXY', 'socks5://127.0.0.1:1080']])
+  const r = await s.run(['status', 'claude-code', '--json'], { deps: { ...FACTS, procs: async () => [claudeProc(4121, started, only)] } })
+  const text = r.io.text(), t = r.io.json().topology['claude-code']
+  assert.doesNotMatch(text, /仍按启动时的设置|1080/)
+  assert.deepEqual(t.running, [], 'no process is on another path')
+  const own = await s.run(['status', 'claude-code'], { deps: { ...FACTS, procs: async () => [claudeProc(4121, started, new Map([['HTTPS_PROXY', 'http://127.0.0.1:7890']]))] } })
+  assert.match(own.io.stdoutText(), /^pid 4121 仍按启动时的设置:/m, 'a key it does read is still reported')
+})
+
 test('V47 the daemon\'s 5 s check: a change of the file is one `netenv-change` (and no `failure`: the harness is still captured), however many checks run; a file nobody touched says nothing; it only reads', async () => {
   const s = sandbox(ENGINE); seedProxy(s)
   await s.run(['on', '--yes'], { deps: FACTS })

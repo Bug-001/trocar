@@ -1,16 +1,15 @@
 // netfacts.mjs (arch/linux) — Linux's part of the network facts (RFC 1.6 §9.7, 4.6 「eBPF 模式下的网络拓扑」): what the topology needs that only this platform can read, all of it read-only. `status` and `doctor`
 // call linuxNetFacts through src/netenv/facts.mjs (gatherNetFacts's `archFacts`); the daemon's `/status` and the process table are already read by `status`, so they come in as `status`:
-//   · the processes of each harness, with the watch table's verdict for each (watched with decrypt / without / absent), what proxy each was started with (the PROXY keys of its environment: nothing else of
+//   · the processes of each harness, with the watch table's verdict for each (watched with decrypt / without / absent), what proxy each was started with (the proxy keys of its environment THAT ITS HARNESS READS, `proxy.env`: nothing else of
 //     it is kept) and when;
 //   · the listeners on this machine (`ss -ltnpH`: a proxy's port names a product or a process of this user; another user's listener has no owner to read: `owner-unreadable`);
 //   · whether the way out of the machine is a TUN device (`ip -j route get` for a public address, then `ip -j -d link show dev`: no packet is sent, nothing is resolved — the CLI never goes online).
 // Routing is `driver` (the eBPF redirector). The system proxy (gsettings / kioslaverc) is not read: no harness is known to follow it on Linux (`proxy.measured.linux` is `inferred`). Imports no harness: the
-// descriptors' data arrives in `settings` and in `status`.
+// descriptors arrive in `ctx.harnesses` (their `proxy.env` names the keys of a process's environment that count) and their data in `settings` and in `status`.
 import { execTool } from '../../../off/exec.mjs'
 import { readExe } from '../../../off/proc.mjs'
 import { settingSha, redactProxyUrl, parseProxyUrl } from '../../../netenv/redact.mjs'
 
-const PROXY_KEYS = ['HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'HTTP_PROXY', 'http_proxy']
 const GENERIC = /^(node|python3?|bun|deno|ruby)$/
 const base = (p) => String(p).split('/').pop()
 const iso = (t) => (typeof t === 'number' && Number.isFinite(t) ? new Date(t).toISOString() : typeof t === 'string' ? t : null)
@@ -36,10 +35,12 @@ export function parseSs(text) {
   return out
 }
 
-/** What a process was started with, set against what a new one reads now → null (the same), or the setting it has instead (`inferred` when it is the one `on` found), or unknown. `file`: the current setting
- *  comes from a file the process cannot have re-read (settings are read at start): a change of the file after it started leaves it on the value it had, which only `adopted` remembers. */
-function startSettingOf({ proc, current, adopted, startedAt }) {
-  if (current && current.unknown) return null
+/** What a process was started with, set against what a new one reads now → null (the same), or the setting it has instead (`inferred` when it is the one `on` found), or unknown. `keys` = the environment
+ *  variables ITS harness reads for a proxy (`proxy.env` of the descriptor, in its order): another variable of the process is nothing to that agent (ALL_PROXY to claude-code, HTTPS_PROXY to z-code), and a harness whose
+ *  keys are not known has no claim made about it. `file`: the current setting comes from a file the process cannot have re-read (settings are read at start): a change of the file after it started leaves it
+ *  on the value it had, which only `adopted` remembers. */
+function startSettingOf({ proc, current, adopted, startedAt, keys }) {
+  if (!keys || (current && current.unknown)) return null
   if (current && current.source && current.source.some((s) => s.kind === 'file')) {
     const changed = Date.parse(current.changedAt), started = Date.parse(startedAt)
     if (!(Number.isFinite(changed) && Number.isFinite(started) && changed > started)) return null
@@ -49,7 +50,7 @@ function startSettingOf({ proc, current, adopted, startedAt }) {
   }
   const env = proc && typeof proc.env === 'function' ? proc.env() : null
   if (!env) return { unknown: { reason: 'denied', detail: 'the environment of the process cannot be read' } }
-  const key = PROXY_KEYS.find((k) => (env.get(k) || '').trim() !== '')
+  const key = keys.find((k) => (env.get(k) || '').trim() !== '')
   const raw = key ? env.get(key).trim() : null
   if ((raw ? settingSha(raw) : null) === ((current && current.sha256) || null)) return null
   const u = raw ? parseProxyUrl(raw) : null
@@ -62,7 +63,8 @@ function startSettingOf({ proc, current, adopted, startedAt }) {
  * one under npm test), `procRoot`. → { routing: 'driver', listeners, procs: { <h>: [proc] }, tun, unknowns }.
  */
 export async function linuxNetFacts(ctx, deps = {}) {
-  const { status, settings = {}, adopted = null, env = process.env } = ctx
+  const { status, settings = {}, adopted = null, env = process.env, harnesses = [] } = ctx
+  const keysOf = (id) => { const d = harnesses.find((x) => x.name === id); return d && d.proxy && Array.isArray(d.proxy.env) ? d.proxy.env : null }
   const exec = deps.exec || (ctx.deps && ctx.deps.exec) || null, root = deps.procRoot || (ctx.deps && ctx.deps.procRoot) || '/proc'
   const unknowns = [], reply = status.daemon.reply
   const rows = reply && Array.isArray(reply.agents) ? reply.agents : null
@@ -77,7 +79,7 @@ export async function linuxNetFacts(ctx, deps = {}) {
         pid: row.pid, name: processName(p && p.argv, exe, h.id), exe, version: versionOf(exe), startedAt,
         watched: !rows ? 'unknown' : agent ? (agent.off === true ? 'absent' : agent.decrypt === true ? 'decrypt' : 'no-decrypt') : 'absent',
         trusted: row.trusted === undefined ? null : row.trusted, reason: row.reason ?? null, negative: row.negative === true,
-        startSetting: startSettingOf({ proc: p, current: settings[h.id], adopted: adopted && adopted[h.id], startedAt }), elevated: null,
+        startSetting: startSettingOf({ proc: p, current: settings[h.id], adopted: adopted && adopted[h.id], startedAt, keys: keysOf(h.id) }), elevated: null,
       }
     })
   }

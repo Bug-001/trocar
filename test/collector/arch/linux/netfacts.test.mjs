@@ -4,7 +4,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { linuxNetFacts, parseSs, processName, versionOf } from '../../../../src/collector/arch/linux/netfacts.mjs'
 import { settingSha } from '../../../../src/netenv/redact.mjs'
+import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { fakeProc } from './fixtures/fake-proc.mjs'
+
+const descs = await loadHarnesses() // the keys a process's proxy is read from are each harness's own (`proxy.env`)
 
 const SS = [
   'LISTEN 0 4096 127.0.0.1:7890 0.0.0.0:* users:(("mihomo",pid=777,fd=7))',
@@ -90,7 +93,7 @@ test('linuxNetFacts: the proxy a process was started with is read from its envir
   const exe = '/home/u/.local/share/claude/versions/2.1.291', startedAt = Date.parse('2026-10-07T09:30:00Z')
   const startOf = async (envMap, cur) => {
     const m = [{ h: 'claude-code', p: { pid: 4121, exe, argv: ['claude'], startedAt, env: () => envMap } }]
-    return (await linuxNetFacts({ status: statusOf([row(4121)], undefined, m), settings: { 'claude-code': cur } }, { exec: runner(TABLE), procRoot: '/x' })).procs['claude-code'][0].startSetting
+    return (await linuxNetFacts({ status: statusOf([row(4121)], undefined, m), settings: { 'claude-code': cur }, harnesses: descs }, { exec: runner(TABLE), procRoot: '/x' })).procs['claude-code'][0].startSetting
   }
   const now = current('http://127.0.0.1:7890')
   assert.equal(await startOf(new Map([['HTTPS_PROXY', 'http://127.0.0.1:7890']]), now), null, 'started with what a new process reads now')
@@ -110,11 +113,38 @@ test('linuxNetFacts: a setting from a FILE that changed after the process starte
   const m = [{ h: 'claude-code', p: { pid: 4121, exe, argv: ['claude'], startedAt, env: () => new Map() } }]
   const file = { kind: 'file', where: '/h/.claude/settings.json', key: 'env.HTTPS_PROXY' }
   const after = current('http://127.0.0.1:7890', { source: [file], changedAt: '2026-10-07T09:45:00.000Z' })
-  const ask = async (cur, adopted) => (await linuxNetFacts({ status: statusOf([row(4121)], undefined, m), settings: { 'claude-code': cur }, adopted }, { exec: runner(TABLE), procRoot: '/x' })).procs['claude-code'][0].startSetting
+  const ask = async (cur, adopted) => (await linuxNetFacts({ status: statusOf([row(4121)], undefined, m), settings: { 'claude-code': cur }, adopted, harnesses: descs }, { exec: runner(TABLE), procRoot: '/x' })).procs['claude-code'][0].startSetting
   assert.deepEqual((await ask(after, null)).unknown.reason, 'absent')
   const had = await ask(after, { 'claude-code': { proxy: 'http://***@old.corp:3128', source: [file], sha256: 'abc' } })
   assert.deepEqual([had.value, had.host, had.inferred, had.sha256], ['http://***@old.corp:3128', 'old.corp', true, 'abc'])
   const hadNone = await ask(after, { 'claude-code': { proxy: null, source: [], sha256: null } })
   assert.deepEqual([hadNone.value, hadNone.inferred], [null, true], 'it had none when `on` looked')
   assert.equal(await ask(current('http://127.0.0.1:7890', { source: [file], changedAt: '2026-10-07T09:00:00.000Z' }), null), null, 'a file older than the process: the process read it')
+})
+
+test('linuxNetFacts: a process\'s start-time proxy is read from the keys ITS harness reads (`proxy.env`, in its order) and from no other — ALL_PROXY is nothing to claude-code, HTTPS_PROXY nothing to z-code', async () => {
+  const startedAt = Date.parse('2026-10-07T09:30:00Z')
+  const ask = async (h, envMap, cur = current()) => {
+    const m = [{ h, p: { pid: 4121, exe: `/x/${h}`, argv: [h], startedAt, env: () => envMap } }]
+    const status = { daemon: { state: 'running', reply: { agents: [{ pid: 4121, decrypt: true }] } }, harnesses: [{ id: h, procs: [row(4121)] }], matched: m }
+    return (await linuxNetFacts({ status, settings: { [h]: cur }, harnesses: descs }, { exec: runner(TABLE), procRoot: '/x' })).procs[h][0].startSetting
+  }
+  const only = (k, v) => new Map([[k, v]])
+  // claude-code reads HTTPS_PROXY, https_proxy, HTTP_PROXY, http_proxy — not ALL_PROXY: a process that has only that was started with no proxy, and a new one reads none: the same
+  assert.equal(await ask('claude-code', only('ALL_PROXY', 'socks5://127.0.0.1:1080')), null, 'ALL_PROXY is not a setting of claude-code')
+  assert.equal(await ask('claude-code', only('all_proxy', 'socks5://127.0.0.1:1080')), null)
+  assert.equal(await ask('claude-code', only('NO_PROXY', 'api.anthropic.com')), null)
+  // its own keys are, in the descriptor's order: HTTPS_PROXY wins over HTTP_PROXY, the lower-case spelling comes after
+  const both = new Map([['HTTP_PROXY', 'http://h.corp:1'], ['HTTPS_PROXY', 'http://s.corp:2']])
+  assert.deepEqual([(await ask('claude-code', both)).host, (await ask('claude-code', both)).source], ['s.corp', [{ kind: 'env', where: 'HTTPS_PROXY' }]])
+  assert.equal((await ask('claude-code', only('http_proxy', 'http://l.corp:3'))).host, 'l.corp')
+  // the same process with a proxy that a new one reads now: not a difference
+  assert.equal(await ask('claude-code', new Map([['ALL_PROXY', 'socks5://127.0.0.1:1080'], ['HTTPS_PROXY', 'http://127.0.0.1:7890']]), current('http://127.0.0.1:7890')), null)
+  // z-code reads ZCODE_HTTP_PROXY alone: a process with HTTPS_PROXY was started with none
+  assert.equal(await ask('z-code', only('HTTPS_PROXY', 'http://127.0.0.1:7890')), null, 'HTTPS_PROXY is nothing to z-code')
+  assert.equal((await ask('z-code', only('ZCODE_HTTP_PROXY', 'socks5h://127.0.0.1:1080'))).host, '127.0.0.1')
+  // codex does read ALL_PROXY (after HTTPS_PROXY)
+  assert.equal((await ask('codex', only('ALL_PROXY', 'socks5://127.0.0.1:1080'))).scheme, 'socks5')
+  // no descriptor for the harness → the keys are not known: no claim about what the process was started with
+  assert.equal((await linuxNetFacts({ status: { daemon: { state: 'running', reply: { agents: [] } }, harnesses: [{ id: 'claude-code', procs: [row(4121)] }], matched: [{ h: 'claude-code', p: { pid: 4121, exe: '/x', argv: ['claude'], startedAt, env: () => only('HTTPS_PROXY', 'http://a:1') } }] }, settings: { 'claude-code': current() }, harnesses: [] }, { exec: runner(TABLE), procRoot: '/x' })).procs['claude-code'][0].startSetting, null)
 })
