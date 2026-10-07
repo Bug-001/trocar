@@ -28,7 +28,7 @@ import { daemonState, stopDaemon, helperGone, isRedirectorHelper } from './daemo
 import { controlRequest, controlSocketPath } from './control-client.mjs'
 import { disableAutostart, unitFilePath } from './autostart.mjs'
 import { listProcs, identityFor, pidAlive } from './proc.mjs'
-import { appendFlowEvent } from './events.mjs'
+import { runEventWriter } from './events.mjs'
 import { confirm } from './io.mjs'
 import { describeEntry } from './journal.mjs'
 import { orphanBackups } from './backup.mjs'
@@ -279,9 +279,10 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
  *  written is added to `notes`, never dropped and never fatal (D38); nothing is written when there is no collector directory (nothing installed: the command's own
  *  output is the only report). `event` / `where` default to `off`'s names; `uninstall` passes its own. */
 export function flowWriter(w, run, notes, { event = EVENT_OFF_NOTE, where = WHERE_OFF } = {}) {
+  const write = runEventWriter({ dir: w.dir, base: { event, where, run }, notes, now: w.clock, fs: w.fs, ...(w.deps.log ? { log: w.deps.log } : {}) }) // stderr first, then a `log-gap` once a line can be written again (R11)
   return (rec) => {
     if (!w.fs.existsSync(w.dir)) return
-    try { appendFlowEvent(w.dir, { event, where, run, ...rec }, { now: w.clock(), fs: w.fs }) } catch (e) { notes.push(`not recorded (${errMessage(e)}): ${rec.reason}`) }
+    write(rec)
   }
 }
 

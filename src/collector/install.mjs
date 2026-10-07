@@ -19,6 +19,7 @@ import { EVENT, CODE } from './core/codes.mjs'
 import { controlRequest, controlSocketPath } from './core/control.mjs'
 import { readText, readTextOrError } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
+import { runEventWriter } from '../off/events.mjs'
 import { backupDir, opLockFile, standalonePath } from '../off/paths.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readStateFile, emptyState, setDesired, writeStateAtomic } from '../off/state.mjs'
@@ -311,8 +312,8 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
 
 // 4.6 安装 / 卸载不静默 (D-28): everything the command prints is also an install-note in flows/, for the board, where status finds it; a line that cannot
 // be written is added to the printed notes, never dropped, and never fails the run. → the `put` the caller writes more with.
-function noteRun({ dir, run, final, written, notes, fs }) {
-  const put = (rec) => { try { appendEvent(dir, { ...rec, run }, { fs }) } catch (w) { notes.push(`not recorded (${String((w && w.message) || w)}): ${rec.reason}`) } }
+function noteRun({ dir, run, final, written, notes, fs, log = null }) {
+  const put = runEventWriter({ dir, base: { run }, notes, fs, ...(log ? { log } : {}) }) // a line that cannot be written: stderr first, the receipt's notes, then a `log-gap` when one can again (R11)
   for (const e of written.entries.filter((x) => x.prior_value)) {
     const prior = e.keys ? `${e.path} ${e.keys.join('.')} was ${e.prior_value}; it now points at ${e.value}` : `${e.path} held ${Object.entries(e.prior_value).map(([k, v]) => `${k}=${v}`).join(', ')}; asight commented it out (uninstall restores it)`
     put({ event: EVENT.installNote, where: 'install', kind: 'prior-value', harness: e.harness, path: e.path, reason: prior })
@@ -357,16 +358,23 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
  *    request    the control socket's client (default: controlRequest at $XDG_RUNTIME_DIR/asight/collector.sock, or `socketPath`)
  *  → { receipt, manifest, plan, exit }. */
 export async function turnOn(opts = {}) {
-  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, osRootsFile = null, roots = null, unit = null, autostart = true, freePort = freeEnginePort, onPlan = () => {}, confirm = null, dryRun = false, request = controlRequest, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null } = opts
+  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, osRootsFile = null, roots = null, unit = null, autostart = true, freePort = freeEnginePort, onPlan = () => {}, confirm = null, dryRun = false, request = controlRequest, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS } = opts
   refuseRoot('on', getuid)
   const dir = collectorHome(path.join(home, '.asight'))
   const stateF = path.join(dir, 'state.json')
   const username = (() => { try { return user || os.userInfo().username } catch { return String(env.USER || '') } })()
   const fresh = () => ({ ...newReceipt('on'), user: username, relayed: { closing: 0, waiting: 0, cut: 0 }, undo: ['asight off', 'asight uninstall', standalonePath(home)], standalone: standalonePath(home), commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'], log: path.join(dir, 'flows') }) // on relays nothing: zeros on purpose; the undo list and the four commands are what V29 asks the first receipt to carry (Task 8 makes the standalone file)
+  // A receipt of a run that wrote nothing and could not go on: no change, no file made, and no way to undo or log to point at — what is not there (R1: the receipt is what was done).
+  // `commands` (the four a user types) stay: they are true whether or not this run wrote anything.
+  const unwritten = (r) => { const { standalone: _unwritten, ...rest } = r; return { ...rest, changed: [], created: [], undo: [], log: null } }
+  // The helper (D36) is what the real `on` needs and the plan does not: a missing one stops the real run before anything is written, but `--dry-run` still shows the plan — it is what
+  // a user reads before deciding to `sudo asight setup-helper` — and exits 0 (R6, V7) with the stop said in the receipt (`blocked`).
+  let helperBlock = null
   if (helperState) {
     const h = await helperState()
-    if (h && h.ok === false) return { receipt: { ...fresh(), ok: false, notes: [`the capability helper is missing or not the right version (${h.reason || 'not usable'}); nothing was changed. Run: sudo asight setup-helper`] }, manifest: null, plan: null, exit: 1 }
+    if (h && h.ok === false) helperBlock = `the capability helper is missing or not the right version (${h.reason || 'not usable'}); nothing was changed. Run: sudo asight setup-helper`
   }
+  if (helperBlock && !dryRun) return { receipt: unwritten({ ...fresh(), ok: false, notes: [helperBlock] }), manifest: null, plan: null, exit: 1 }
   // `lingerRead()` → { state, error? } (src/collector/arch/linux/redirector.mjs) says why when it cannot be read; `linger()` → true | false | null is the older form
   const lingerNow = () => { try {
     if (lingerRead) { const r = lingerRead(); return r.state === true || r.state === false ? { linger: r.state } : { linger: 'unknown', linger_reason: r.error || 'the linger state could not be read' } }
@@ -388,9 +396,9 @@ export async function turnOn(opts = {}) {
     const stateWrite = need.length > 0 || stateRead.from === 1 // an unreadable file is `need` too: every target is not on
     const r = { ...fresh(), ...lingerNow(), harnesses: plan.targets, changed: plan.changed, created: [...plan.created, ...(stateWrite ? [stateF] : [])], skipped: [...plan.skipped], restart: plan.restart, unchanged: plan.unchanged, notes: [...plan.notes] }
     if (stateRead.error) r.notes.push(`${stateF} could not be read (${String(stateRead.error.message || stateRead.error)}); it is written again`)
-    if (!plan.targets.length) return { receipt: { ...r, ok: false, changed: [], created: [], notes: [...r.notes, 'no agent asight can capture was found: nothing was changed. Install one, then run asight on again'] }, manifest: plan._.prior, plan, exit: 1 }
+    if (!plan.targets.length) return { receipt: unwritten({ ...r, ok: false, notes: [...r.notes, 'no agent asight can capture was found: nothing was changed. Install one, then run asight on again'] }), manifest: plan._.prior, plan, exit: 1 }
     const named = !!ids && plan.skipped.some((s) => ids.includes(s.what)) // a harness asked for by name that has nothing to install: not done
-    if (dryRun) return { receipt: { ...r, dry_run: true, ok: !named }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
+    if (dryRun) return { receipt: { ...r, dry_run: true, ok: !named, ...(helperBlock ? { blocked: helperBlock, notes: [...r.notes, `${helperBlock.replace('nothing was changed. ', '')} (a real asight on stops there)`] } : {}) }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
     if (plan.writing || stateWrite) onPlan({ ...plan, state: stateWrite ? stateF : null })
     if (plan.first || plan.newPaths.length) {
       const verdict = confirm ? await confirm(plan) : null
@@ -401,8 +409,8 @@ export async function turnOn(opts = {}) {
     // ── confirmed: from here on, writes — one state-changing command at a time (R12): the lock is held to the end of this callback (the try below), and
     // the desired state is read again under it, so what an `off` that has just finished left is the base of what is written, not the read of a minute ago
     let lock
-    try { lock = await acquireOpLock({ file: opLockFile(home), waitMs: OP_LOCK_WAIT_MS, fs }) } catch (e) {
-      if (e && e.code === LOCK_BUSY) return { receipt: { ...r, ok: false, notes: [...r.notes, String((e && e.message) || e)] }, manifest: plan._.prior, plan, exit: 1 }
+    try { lock = await acquireOpLock({ file: opLockFile(home), waitMs: lockWaitMs, fs }) } catch (e) {
+      if (e && e.code === LOCK_BUSY) return { receipt: unwritten({ ...r, ok: false, notes: [...r.notes, String((e && e.message) || e)] }), manifest: plan._.prior, plan, exit: 1 }
       throw e
     }
     try {
@@ -432,7 +440,7 @@ export async function turnOn(opts = {}) {
       written = e.written; halt = true
       problems.push(e.message)
     }
-    const put = noteRun({ dir, run, final: final || { records: [] }, written: written || { entries: [] }, notes, fs })
+    const put = noteRun({ dir, run, final: final || { records: [] }, written: written || { entries: [] }, notes, fs, log: opts.log })
     const receipt = {
       ...r,
       changed: (written ? written.entries : []).map((e) => ({ path: e.path, change: changeText(e, e.prior_value), backup: e.backup ?? null })),
@@ -441,9 +449,9 @@ export async function turnOn(opts = {}) {
     }
     const finish = (outcome, reason) => {
       receipt.ok = !problems.length && !named && !(written && written.userChanged.length) // an entry the user changed is left, and not in effect: not "done"
+      const counts = { entries: m.entries.length, changed: receipt.changed.length, notes: notes.length + problems.length }
+      put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome, counts, reason }) // before the notes are taken: a result line that cannot be written adds its own "not recorded" (R11)
       receipt.notes = [...notes, ...problems]
-      const counts = { entries: m.entries.length, changed: receipt.changed.length, notes: receipt.notes.length }
-      put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome, counts, reason })
       return { receipt, manifest: m, plan, exit: receipt.ok ? 0 : 1 }
     }
     if (halt) { put({ event: EVENT.failure, where: 'install', code: 'install-error', reason: problems[0] }); return finish('stopped', `on stopped: ${problems[0]}`) }

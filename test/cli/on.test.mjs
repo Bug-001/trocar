@@ -328,3 +328,54 @@ test('on: root is refused by the library too (R7), and a missing helper stops it
   assert.deepEqual([r.exit, r.receipt.ok], [1, false]); assert.match(r.receipt.notes.join(' '), /sudo asight setup-helper/)
   assert.deepEqual(snapshot(s.home), before)
 })
+
+// audit rule-b 7 (R1, R6, V7): a failed `on` that wrote nothing still pointed at `~/.asight/bin/asight-off` and the flows/ log, neither of which exists; and a dry run with the helper
+// missing exited 1 with no plan, so the plan could not be read before deciding to `sudo asight setup-helper` — V7 says a dry run exits 0.
+test('R1 / R6: an `on` that stopped before writing anything says so — no change, nothing made, no undo and no log to point at, no asight-off path (helper missing, no agent found, the lock held)', async () => {
+  const noHelper = () => ({ ok: false, reason: 'no helper' })
+  const s = sandbox(); const before = snapshot(s.home)
+  const r = await s.run({ helperState: noHelper })
+  const bare = (x) => [x.exit, x.receipt.ok, x.receipt.changed, x.receipt.created, x.receipt.undo, x.receipt.log, 'standalone' in x.receipt]
+  assert.deepEqual(bare(r), [1, false, [], [], [], null, false])
+  assert.deepEqual(validateReceipt(r.receipt), [])
+  assert.ok(!JSON.stringify(r.receipt).includes('asight-off') && !JSON.stringify(r.receipt).includes('flows'), 'neither the undo program nor the log is named: neither is there')
+  assert.deepEqual(snapshot(s.home), before)
+  // no agent to capture
+  const empty = sandbox(); fs.rmSync(path.join(empty.home, '.claude'), { recursive: true, force: true })
+  const none = await empty.run({ ids: ['claude-code'], harnesses: [] })
+  assert.deepEqual(bare(none), [1, false, [], [], [], null, false])
+  // another command holds the lock (a live pid, a lock written just now): `on` waits, gives up, and has written nothing — its receipt lists no change it did not make
+  const held = sandbox()
+  fs.mkdirSync(held.dir, { recursive: true }); fs.writeFileSync(path.join(held.dir, 'op.lock'), JSON.stringify({ pid: process.pid, start_time: null, boot_id: null }) + '\n')
+  const busy = await held.run({ lockWaitMs: 30 })
+  assert.equal(busy.exit, 1)
+  assert.match(busy.receipt.notes.join(' '), /another asight command \(pid \d+\) holds/)
+  assert.deepEqual([busy.receipt.changed, busy.receipt.created, busy.receipt.undo, busy.receipt.log], [[], [], [], null], 'the plan listed changes and files; none was made, so none is claimed')
+  assert.ok(!fs.existsSync(path.join(held.home, '.claude', 'settings.json')) || !fs.readFileSync(path.join(held.home, '.claude', 'settings.json'), 'utf8').includes('asight'), 'and none was')
+})
+
+test('R6 / V7: `on --dry-run` with the helper missing still prints the plan and exits 0 — the stop a real run would meet is in the receipt (`blocked`, a note) — and writes nothing; the real run exits 1', async () => {
+  const s = sandbox(); const before = snapshot(s.home)
+  const ok = await s.run({ dryRun: true })
+  const dry = await s.run({ dryRun: true, helperState: () => ({ ok: false, reason: 'no helper' }) })
+  assert.deepEqual([dry.exit, dry.receipt.ok, dry.receipt.dry_run], [0, true, true])
+  assert.deepEqual([dry.receipt.changed, dry.receipt.created], [ok.receipt.changed, ok.receipt.created], 'the plan is the one a user with a helper would get')
+  assert.ok(dry.receipt.changed.length > 0 && dry.receipt.created.length > 0, 'and it is a real plan')
+  assert.match(dry.receipt.blocked, /capability helper is missing.*sudo asight setup-helper/)
+  assert.match(dry.receipt.notes.join('\n'), /sudo asight setup-helper.*a real asight on stops there/)
+  assert.deepEqual(validateReceipt(dry.receipt), [])
+  assert.deepEqual(snapshot(s.home), before, 'a dry run writes nothing')
+  assert.equal((await s.run({ helperState: () => ({ ok: false, reason: 'no helper' }) })).exit, 1)
+})
+
+// audit rule-b 9 (R11): the lines of an `on` go through the same writer as `off`'s — a line that cannot be written reaches stderr first and the receipt's notes, and does not stop the install.
+test('R11: with flows/ unwritable `on` still installs (exit 0); stderr and the receipt say each line that could not be recorded', async () => {
+  const s = sandbox()
+  const err = []
+  const flaky = new Proxy(fs, { get: (o, k) => (k === 'appendFileSync' ? () => { throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }) } : o[k]) })
+  const r = await s.run({ fs: flaky, log: (m) => err.push(m) })
+  assert.equal(r.exit, 0, JSON.stringify(r.receipt.notes))
+  assert.ok(err.length >= 1 && err.every((m) => /could not be written to .*flows \(ENOSPC/.test(m)), `stderr said so: ${err.join(' | ')}`)
+  assert.equal(r.receipt.notes.filter((n) => /^not recorded \(ENOSPC/.test(n)).length, err.length, 'and the receipt says the same, line for line')
+  assert.ok(fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('NODE_EXTRA_CA_CERTS'), 'the install itself was done')
+})
