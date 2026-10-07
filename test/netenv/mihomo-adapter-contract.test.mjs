@@ -40,7 +40,7 @@ async function realWorld(t, { rules = ['MATCH,DIRECT'], runtime = (y) => y } = {
   const m = await startMihomo(t, { configText: yaml, configName: 'clash-verge.yaml', home, secret, controller: ports.controller })
   const ctl = createController({ endpoint: `tcp:127.0.0.1:${ports.controller}`, secret })
   const ledger = memoryLedger({ home: sandbox })
-  const adapter = createVergeAdapter({ home, controller: ctl, ledger, running: () => true, daemonAlive: () => false })
+  const adapter = createVergeAdapter({ home, controller: ctl, ledger, running: () => true })
   const block = buildBlock(blockInput([CC_CLI, CODEX_APP], { enginePort: ports.engine, reenter: { host: '127.0.0.1', port: ports.mixed } }))
   const lines = (g) => block.files[names(g).routeFile].split('\n').filter(Boolean)
   return { ports, secret, sandbox, home, m, ctl, ledger, adapter, block, lines, file: (rel) => path.join(home, rel), script: () => fs.readFileSync(path.join(home, 'profiles', 'Script.js')) }
@@ -72,7 +72,6 @@ test('W57 adapter, reads: GET /rules gives the recorded payload strings and proc
   assert.deepEqual(await w.adapter.readFindProcessMode(), { mode: 'strict', reason: null })
 
   // a group that is not in the runtime is a 404 on this core, and every read and write of the adapter takes it for what it is
-  assert.deepEqual(await w.adapter.verify(CC), { live: false, now: null, fbNow: null, ruleCount: null, reason: 'block-not-in-runtime' })
   assert.deepEqual(await w.adapter.putSelect(CC, 'PASS'), { ok: false, status: 404, reason: 'refused', text: 'Resource not found' })
   assert.deepEqual(await w.adapter.refreshProvider(CC), { ok: false, status: 404, reason: 'refused' })
   assert.deepEqual(await w.adapter.refreshProbe(CC, { reenterPort: w.ports.mixed }), { ok: false, status: 404, reason: 'unreadable' })

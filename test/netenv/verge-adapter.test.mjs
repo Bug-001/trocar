@@ -221,18 +221,6 @@ test('readFields: the runtime outranks config.yaml, the global script is the one
   }
 })
 
-// ---- N9: the provider list ---------------------------------------------------------------------------------------------------------------------------------------
-
-test('N9 verify reads the rule count from the provider LIST and drops the rest of it: the user\'s provider is in no result; there is no read of a single provider', async (t) => {
-  const w = await startWorld(t)
-  w.live(GROUPS, { on: ['claude-code.cli'] })
-  const v = await w.adapter.verify('claude-code.cli')
-  assert.equal(v.ruleCount, 2, 'the two lines of the route file')
-  assert.ok(!JSON.stringify(v).includes(USER_PROVIDER))
-  assert.deepEqual(w.core.requests.filter((r) => r.path.startsWith('/providers')).map((r) => `${r.method} ${r.path}`), ['GET /providers/rules'])
-  assert.ok(!w.core.requests.some((r) => /^\/providers\/rules\/./.test(r.path)), 'GET /providers/rules/<name> is 405 on v1.19.32: the client never sends it')
-  for (const f of ['verify', 'readFields', 'readConfigs', 'processRulesNaming', 'facts']) assert.equal(typeof w.adapter[f], 'function')
-})
 
 // ---- N13 ---------------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -570,10 +558,10 @@ test('refreshProvider re-reads asight\'s own route file (204, ruleCount follows)
   w.live(GROUPS)
   const g = 'claude-code.cli'
   fs.writeFileSync(w.file(names(g).routeFile), 'PROCESS-NAME,a.exe\nPROCESS-NAME,b.exe\nPROCESS-NAME,c.exe\n')
-  assert.equal((await w.adapter.verify(g)).ruleCount, 0, 'the core has not read the file yet')
+  assert.equal(w.core.providers.get(names(g).provider).ruleCount, 0, 'the core has not read the file yet')
   const r = await w.adapter.refreshProvider(g)
   assert.deepEqual([r.ok, r.status, r.reason], [true, 204, null])
-  assert.equal((await w.adapter.verify(g)).ruleCount, 3)
+  assert.equal(w.core.providers.get(names(g).provider).ruleCount, 3)
   assert.deepEqual(w.ledger.entries(), [])
   assert.deepEqual(await w.adapter.refreshProvider('nope'), { ok: false, status: 404, reason: 'refused' })
 })
@@ -588,7 +576,7 @@ test('pushPayload sends the runtime with the block spliced in and the core loads
   assert.deepEqual([r.ok, r.receipt.kind], [true, 'vpn-runtime-block'])
   assert.deepEqual([...w.core.groups.keys()].filter((k) => k.startsWith('asight-')).sort(), GROUPS.flatMap((g) => [names(g.g).fb, names(g.g).sw]).sort())
   assert.equal(w.core.groups.get(names('claude-code.cli').sw).now, 'PASS', 'a block that has just been loaded is off')
-  assert.equal((await w.adapter.verify('claude-code.cli')).ruleCount, 2, 'the provider read the route file')
+  assert.equal(w.core.providers.get(names('claude-code.cli').provider).ruleCount, 2, 'the provider read the route file')
   assert.equal(w.ledger.find('vpn-runtime-block', 'runtime').undo_by_hand, '去 Clash Verge → 订阅,点当前订阅重新激活')
   const out = await w.adapter.pushPayload({ strip: true })
   assert.deepEqual([out.ok, out.receipt.change], [true, 'removed'])

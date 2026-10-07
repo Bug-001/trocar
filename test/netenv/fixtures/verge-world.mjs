@@ -57,8 +57,8 @@ export async function startWorld(t, { script = SCRIPT_JS, runtime = userRuntime(
   for (const [rel, text] of Object.entries(files)) put(rel, text)
   const core = await startFakeCore(t, { home, runtimeText: runtime, userProviders: { [USER_PROVIDER]: 7 }, ...coreOpts })
   const ledger = memoryLedger({ home: sandbox })
-  const state = { running: true, daemon: true }
-  const adapter = createVergeAdapter({ home, controller: createController({ endpoint: core.endpoint }), ledger, running: () => state.running, daemonAlive: () => state.daemon, ...adapterOpts })
+  const state = { running: true }
+  const adapter = createVergeAdapter({ home, controller: createController({ endpoint: core.endpoint }), ledger, running: () => state.running, ...adapterOpts })
   const world = { sandbox, home, core, adapter, ledger, state, file: (rel) => path.join(home, rel), asightHome: path.join(sandbox, '.asight') }
   world.block = (groups = GROUPS) => buildBlock(blockInput(groups))
   /** The block as the core has it: spliced into the runtime, loaded, the route files written (on = patterns, off = empty). */

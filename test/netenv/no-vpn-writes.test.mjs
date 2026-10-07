@@ -101,7 +101,7 @@ test('N15 (a) `createController({ own: true })` (a client that may write to a co
 
 // The Verge adapter exports no write function: TODAY's are the ones Task 6r deletes, so the list is the debt and shrinks to nothing.
 const WRITE_VERB = /^(write|strip|put|push|remove|install|apply|refresh|reset|insert)/i
-const ADAPTER_WRITERS_TODAY = ['writeScriptBlock', 'stripScriptBlock', 'writeRuleFile', 'removeRuleFile', 'putSelect', 'refreshProvider', 'pushPayload', 'applyGroups', 'refreshProbe']
+const ADAPTER_WRITERS_TODAY = ['writeScriptBlock', 'stripScriptBlock', 'writeRuleFile', 'removeRuleFile', 'putSelect', 'refreshProvider', 'pushPayload', 'refreshProbe']
 test('N15 (a) the Verge adapter exports no write function (module and adapter object)', async (t) => {
   const mod = await import('../../src/netenv/adapters/clash-verge-rev.mjs')
   const w = await startWorld(t)
