@@ -13,7 +13,8 @@ import nodeOs from 'node:os'
 import path from 'node:path'
 import { EXIT, newReceipt } from './schema.mjs'
 import { resolveHarnesses } from './harness-names.mjs'
-import { runStatusCli } from './status.mjs'
+import { statusRun } from './status.mjs'
+import { diagnose, renderFindings } from '../netenv/findings.mjs'
 import { checkDeps, runSelfTest } from '../capture/selftest.mjs'
 import { verifyUserTrustOnly } from '../capture/onboard.mjs'
 import { readRecords } from '../etl/ingest.mjs'
@@ -101,9 +102,9 @@ async function statusBlock({ names, json, env, home, platform, deps }) {
   const out = [], err = []
   const io = { out: (s) => out.push(String(s)), err: (s) => err.push(String(s)), stdin: null, stdout: null }
   try {
-    const exit = await runStatusCli([...names, ...(json ? ['--json'] : [])], { io, env, home, platform, deps })
-    if (json) { try { return { json: JSON.parse(out.join('\n')), exit } } catch { return { json: { error: 'asight status printed no JSON', output: out.join('\n') }, exit } } }
-    return { lines: [...out, ...err], exit }
+    const { exit, f } = await statusRun([...names, ...(json ? ['--json'] : [])], { io, env, home, platform, deps })
+    if (json) { try { return { json: JSON.parse(out.join('\n')), exit, f } } catch { return { json: { error: 'asight status printed no JSON', output: out.join('\n') }, exit, f } } }
+    return { lines: [...out, ...err], exit, f }
   } catch (e) { rethrowSandbox(e); const msg = `collector status could not be read: ${(e && e.message) || e}`; return json ? { json: { error: msg }, exit: EXIT.unknown } : { lines: [msg], exit: EXIT.unknown } }
 }
 
@@ -131,6 +132,9 @@ export async function runDoctor(argv, { io, env = process.env, home = nodeOs.hom
   const exit = res.failed ? EXIT.incomplete : res.undetermined ? EXIT.unknown : EXIT.ok
   // the rest is a report
   const block = await statusBlock({ names, json, env, home, platform, deps })
+  // §9.6: what the network facts of that same read call for, each with the commands to run and how to check — printed, never run (R8). A harness named: only its findings. The exit is not theirs: they are the report (B-7).
+  let findings = null, findingsError = null
+  if (block.f && block.f.facts) { try { findings = diagnose({ facts: block.f.facts, topology: block.f.topology, harnesses: named.ids, user: block.f.user }) } catch (e) { rethrowSandbox(e); findingsError = errText(e) } } else findingsError = block.f && block.f.topology_error ? block.f.topology_error : 'the network facts were not read on this platform'
   let notes = [], notesError = null
   try { notes = formatInstallNotes((deps.captureHealth || captureHealth)({ home: asightHome(home), ...(deps.captureHealth ? {} : { fs }) })) } catch (e) { rethrowSandbox(e); notesError = errText(e) }
   const standalone = (() => { try { return checkStandalone({ home, fs }) } catch (e) { rethrowSandbox(e); return { ok: false, error: errText(e) } } })()
@@ -142,7 +146,7 @@ export async function runDoctor(argv, { io, env = process.env, home = nodeOs.hom
       ...newReceipt('doctor'), ok: exit === EXIT.ok, exit, verdict: res.failed ? 'failed' : res.undetermined ? 'undetermined' : 'ok', undetermined_why: res.undeterminedWhy,
       source: c.sources, records_examined: c.records.length, capture_files_checked: res.q4b.checked, readable_by_others: res.q4b.bad, unreadable: res.q4b.unreadable, read_errors: c.readErrors,
       questions: { capturing: { ok: res.q1.ok, note: res.q1.note }, correct: { ok: res.q2.ok, note: res.q2.note }, credentials: { ok: res.q3.ok, note: res.q3.note }, user_trust_only: { ok: res.q4.ok, note: res.q4.note }, file_permissions: { ok: res.q4b.ok, note: res.q4b.note } },
-      deps: depList, status: block.json, install_notes: notesError ? { error: notesError } : notes, standalone: standalone.error ? { ok: false, error: standalone.error } : { ok: standalone.ok, path: standalone.path, found: standalone.found, expected: standalone.expected, ...(standalone.reason ? { reason: standalone.reason } : {}) },
+      deps: depList, status: block.json, findings, ...(findingsError ? { findings_error: findingsError } : {}), install_notes: notesError ? { error: notesError } : notes, standalone: standalone.error ? { ok: false, error: standalone.error } : { ok: standalone.ok, path: standalone.path, found: standalone.found, expected: standalone.expected, ...(standalone.reason ? { reason: standalone.reason } : {}) },
       orphan_backups: orphansError ? { error: orphansError } : orphans,
     }, null, 2))
     return exit
@@ -162,6 +166,8 @@ export async function runDoctor(argv, { io, env = process.env, home = nodeOs.hom
   // 4.6 §确认信任 / §合并包: the same text as `asight status` (the live daemon when it answers, else what is on disk), then the notes of the last install; it only reads and never changes the exit
   io.out('\n按进程采集器(collector, 4.6):')
   for (const l of block.lines) io.out(indent(l))
+  if (findings) for (const l of findings.length ? ['发现(网络与采集,§9.6;doctor 只印命令,一条也不替你跑):', ...renderFindings(findings)] : ['发现(网络与采集): 没有']) io.out(indent(l))
+  else io.out(indent(`发现(网络与采集): 不知道(${findingsError})`))
   if (notesError) io.out(indent(`the last install's notes could not be read: ${notesError}`))
   else for (const l of notes) io.out(indent(l))
   // 1.6 R3 / V35: the copy of the undo side that needs no source tree is the version this asight writes (read only; `asight on` writes it again)

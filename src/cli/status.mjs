@@ -26,6 +26,7 @@ import { judgeHarness } from '../netenv/verdict.mjs'
 import { gatherNetFacts } from '../netenv/facts.mjs'
 import { readAdopted } from '../netenv/adopt.mjs'
 import { buildTopology, renderPathBlock, renderDetail } from '../netenv/topology.mjs'
+import { diagnose } from '../netenv/findings.mjs'
 import { captureHealth } from '../health/read.mjs'
 import { legacyArtifacts, hasNewCollector } from '../off/legacy.mjs'
 import { legacyNamesProblem } from '../off/legacy-cli.mjs'
@@ -172,7 +173,10 @@ export async function gatherTopology(f, { home, env, platform, deps = {} }) {
     const nd = deps.netFactsDeps ? await deps.netFactsDeps() : mod && typeof mod.netFactsDeps === 'function' ? await mod.netFactsDeps({ platform }) : null
     if (!nd) return { topology_error: 'no reader of the network facts is wired into this build' }
     const facts = await gatherNetFacts({ platform, home, env, harnesses: nd.harnesses, status: f, netenv: f.netenv, archFacts: nd.archFacts, adopted: readAdopted(home, { fs }), now: deps.ms || Date.now, fs, deps: { exec: deps.exec || null, ...(deps.procRoot ? { procRoot: deps.procRoot } : {}) } })
-    return { facts, topology: buildTopology(facts) }
+    const topology = buildTopology(facts)
+    // the codes `doctor` would give, on the topology of each harness (the board reads them there); the commands and the text are `doctor`'s
+    try { const by = diagnose({ facts, topology, harnesses: null, user: f.user }); for (const h of Object.keys(topology)) topology[h].findings = [...new Set(by.filter((x) => x.harness === h).map((x) => x.code))] } catch (e) { rethrowSandbox(e) }
+    return { facts, topology }
   } catch (e) { rethrowSandbox(e); return { topology_error: errMessage(e) } }
 }
 
@@ -257,20 +261,24 @@ async function legacyStatus(argv, { io, env, home, platform, deps, json }) {
   return exit
 }
 /** → the exit code (R4). `argv` is what follows `status`. `io` = { out, err } (src/off/io.mjs makeIo). */
-export async function runStatusCli(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
+export async function runStatusCli(argv, ctx = {}) { return (await statusRun(argv, ctx)).exit }
+
+/** `runStatusCli` that also hands back what it read: `{ exit, f }` (`f`: the facts of gatherStatus with `facts` / `topology` on them; null where the old capture is judged instead). `doctor` reads the same facts for its findings, so the daemon
+ *  is asked once and the topology it prints and the one it diagnoses are the same object. */
+export async function statusRun(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
   const names = []
   let json = false
   for (const a of argv) {
     if (a === '--json') json = true
-    else if (a.startsWith('-')) { io.err(`asight status: unknown option ${a}\n${USAGE}`); return EXIT.usage }
+    else if (a.startsWith('-')) { io.err(`asight status: unknown option ${a}\n${USAGE}`); return { exit: EXIT.usage, f: null } }
     else names.push(a)
   }
   const named = resolveHarnesses(names)
-  if (!named.ok) { io.err(`asight status: unknown harness ${named.unknown.join(', ')}; the names are: ${named.known.join(', ')}`); return EXIT.usage }
+  if (!named.ok) { io.err(`asight status: unknown harness ${named.unknown.join(', ')}; the names are: ${named.known.join(', ')}`); return { exit: EXIT.usage, f: null } }
   if (!hasNewCollector(platform)) { // 1.6 §4: no new collector here; only claude-code has an old capture
     const problem = legacyNamesProblem(named.ids)
-    if (problem) { io.err(`asight status: ${problem}`); return EXIT.usage }
-    return legacyStatus(argv, { io, env, home, platform, deps, json })
+    if (problem) { io.err(`asight status: ${problem}`); return { exit: EXIT.usage, f: null } }
+    return { exit: await legacyStatus(argv, { io, env, home, platform, deps, json }), f: null }
   }
   const f = await gatherStatus({ home, env, deps: { ...deps, platform }, names: named.ids, record: false })
   Object.assign(f, await gatherTopology(f, { home, env, platform, deps }))
@@ -283,11 +291,11 @@ export async function runStatusCli(argv, { io, env = process.env, home = nodeOs.
   if (json) {
     const r = { ...newReceipt('status'), ok: exit === EXIT.ok, user: f.user, ...(f.linger || {}), daemon: { state: f.daemon.state, pid: f.daemon.pid, reason: f.daemon.reason }, harnesses: f.harnesses.map((h) => ({ harness: h.id, desired: h.desired ?? 'unknown', captured: h.judged.captured, reason: reasonOf(h.judged), entry: h.entry.state, ...(h.entry.why ? { entry_why: h.entry.why } : {}), why: h.why, rows: h.judged.rows })), ...(f.state && f.state.error ? { state_error: f.state.error } : {}), ...(f.manifest.error ? { manifest_error: f.manifest.error } : {}), ...(f.health_error ? { health_error: f.health_error } : {}), restart, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}), netenv: f.netenv.error ? { error: f.netenv.error } : f.netenv.result, ...(f.netenv.write_error ? { netenv_write_error: f.netenv.write_error } : {}), ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}), user_processes: f.userProcs.error ? 'unknown' : f.userProcs.list, log: path.join(f.dir, 'flows') }
     io.out(JSON.stringify(r, null, 2))
-    return exit
+    return { exit, f }
   }
   for (const l of renderStatus(f, { home, detail: named.ids || [] })) io.out(l)
   if (f.daemon.reply) for (const l of ['', ...formatStatus(f.daemon.reply).split('\n')]) io.out(l)
   else if (f.health) for (const l of ['', ...formatHealth(f.health)]) io.out(l)
   else io.out(`\ncapture health could not be read: ${f.health_error}`)
-  return exit
+  return { exit, f }
 }

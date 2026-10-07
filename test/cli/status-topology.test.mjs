@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { validateReceipt, validateTopology } from '../../src/cli/schema.mjs'
+import { validateReceipt, validateTopology, validateFinding } from '../../src/cli/schema.mjs'
 import { captureHealth } from '../../src/health/read.mjs'
 import { asightHome } from '../../src/off/paths.mjs'
 import { renderCompact } from '../../src/netenv/topology.mjs'
@@ -128,4 +128,24 @@ test('status writes ~/.asight/netenv.json once per run, with the probe and the t
   assert.deepEqual(renamed.filter((f) => f.endsWith('netenv.json')), [path.join(s.home, '.asight', 'netenv.json')])
   const file = JSON.parse(fs.readFileSync(path.join(s.home, '.asight', 'netenv.json'), 'utf8'))
   assert.ok(Array.isArray(file.products) && file.topology['claude-code'], 'the probe\'s result and the topology')
+})
+
+test('V44: `doctor codex --json` gives `findings` and every one of them is codex\'s; `doctor --json` gives the findings of all of them; the topology of `status --json` carries the codes of its harness', async () => {
+  const s = await installedViaCli(ENGINE)
+  const deps = { netenv: async () => CLASH({ mixed_port: 7897 }), exec: withMihomo(s) }
+  const some = fs.readFileSync(path.join(s.home, '.codex', '.env'), 'utf8')
+  fs.writeFileSync(path.join(s.home, '.codex', '.env'), `${some}HTTPS_PROXY=socks5://127.0.0.1:7897\n`) // codex cannot speak SOCKS and goes straight out: a finding of its own
+  const one = (await s.run(['doctor', 'codex', '--json', '--source', path.join(s.home, 'none')], { deps })).io.json()
+  assert.ok(Array.isArray(one.findings) && one.findings.length > 0)
+  assert.ok(one.findings.every((f) => f.harness === 'codex'), 'only codex\'s, none of the machine\'s')
+  assert.ok(one.findings.some((f) => f.code === 'proxy-unsupported'))
+  for (const f of one.findings) assert.deepEqual(validateFinding(f), [], f.code)
+  const all = (await s.run(['doctor', '--json', '--source', path.join(s.home, 'none')], { deps })).io.json()
+  assert.ok(new Set(all.findings.map((f) => f.harness)).size >= 1 && all.findings.some((f) => f.harness === 'codex'))
+  const st = (await status(s, ['--json'], deps)).json()
+  assert.ok(st.topology.codex.findings.includes('proxy-unsupported'), 'the board\'s topology carries the codes')
+  assert.deepEqual(st.topology['claude-code'].findings.filter((c) => c === 'proxy-unsupported'), [])
+  const text = (await s.run(['doctor', 'codex', '--source', path.join(s.home, 'none')], { deps })).io.stdoutText()
+  assert.match(text, /\[失败\] codex · proxy-unsupported — /)
+  assert.match(text, /怎么验证: asight status codex/)
 })

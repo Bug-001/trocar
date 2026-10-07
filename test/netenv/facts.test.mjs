@@ -123,3 +123,16 @@ test('gatherNetFacts: a platform part that throws leaves the routing unknown and
   assert.equal(none.unknowns[0].reason, 'absent')
   await assert.rejects(gatherNetFacts({ ...base, home, status: status(), archFacts: async () => { throw Object.assign(new Error('refusing to run ss'), { code: 'ESANDBOX' }) } }), /refusing to run ss/)
 })
+
+test('gatherNetFacts: the host\'s linger state and another redirector, whether the VPN probe answered, the files and keys a harness reads its proxy from (to name the line in a command), and a fake-ip an arch part saw', async () => {
+  const home = tmpDir('asight-gather4-')
+  const arch = async () => ({ routing: 'driver', otherRedirector: true, fakeIp: { 'claude-code': true } })
+  const f = await gatherNetFacts({ ...base, home, status: { ...status(), linger: { linger: false } }, netenv: { result: { products: [], unknown: [{ reason: 'none' }] } }, archFacts: arch })
+  assert.deepEqual([f.linger, f.otherRedirector, f.vpnKnown], [false, true, true])
+  assert.deepEqual(f.harnesses['claude-code'].behaviour.fileKeys, [{ path: path.join(home, '.claude', 'settings.json'), format: 'json', key: 'env.HTTPS_PROXY' }, { path: path.join(home, '.claude.json'), format: 'json', key: 'env.HTTPS_PROXY' }])
+  assert.deepEqual([f.harnesses['claude-code'].fakeIp, f.harnesses.codex.fakeIp], [true, null])
+  const none = await gatherNetFacts({ ...base, home, status: status(), archFacts: async () => ({ routing: 'driver' }) })
+  assert.deepEqual([none.linger, none.otherRedirector, none.vpnKnown], [null, null, false], 'not read: not said')
+  const failed = await gatherNetFacts({ ...base, home, status: status(), netenv: { error: 'boom' }, archFacts: async () => ({ routing: 'driver' }) })
+  assert.equal(failed.vpnKnown, false, 'a probe that failed says nothing about whether the VPN changed')
+})
