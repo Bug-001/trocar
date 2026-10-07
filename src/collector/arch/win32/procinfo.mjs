@@ -90,14 +90,17 @@ const identity = (row) => `${row.startedAt ?? '?'}|${row.exe ?? ''}`
  *  event threw — that event is not retried, the rest of the poll is still announced — and 'malformed-rows' {count} when the helper's answer held rows
  *  that are not processes, which are skipped).
  *  The first poll() is the baseline and emits nothing: what is already running is scan()'s (startup and every `on`), exec / exit are what
- *  changes after it. scan() throws what the helper throws — a daemon that cannot list processes must say so. `all` asks for every session.
+ *  changes after it. scan() takes the baseline itself when none was taken (so scan-then-start and start-then-scan are both safe: a process created
+ *  between the two is an exec, never in neither), then lists the live processes as facts and moves nothing the diff knows. start() returns the baseline's
+ *  promise. scan() throws what the helper throws — a daemon that cannot list processes must say so. `all` asks for every session.
  *  poll() never rejects and never throws into a timer: every failure of a poll is a 'poll-error'. */
 export function createProcWatcher({ helper, intervalMs = 2000, now = Date.now, all = false, timers = { setInterval, clearInterval } } = {}) {
   const ev = new EventEmitter()
   const known = new Map() // pid → { identity, startedAt } of the processes already reported (or in the baseline)
   const unreadable = new Map()
   let primed = false
-  let busy = false
+  let inflight = null // the poll being run, so a scan can wait for the baseline instead of racing it
+  let first = null // start()'s baseline poll
   let failing = false
   let malformed = false
   let timer = null
@@ -168,16 +171,22 @@ export function createProcWatcher({ helper, intervalMs = 2000, now = Date.now, a
   }
 
   /** One difference step. Resolves true when it ran, false when the previous one was still in flight. Never rejects. */
-  async function poll() {
-    if (busy) return false
-    busy = true
-    try { await step() } catch (e) {
-      tell('poll-error', { code: 'helper-error', cause: 'poll-threw', reason: `a poll threw: ${String((e && e.message) || e).slice(0, 200)}` })
-    } finally { busy = false }
-    return true
+  function poll() {
+    if (inflight) return Promise.resolve(false)
+    inflight = (async () => {
+      try { await step() } catch (e) {
+        tell('poll-error', { code: 'helper-error', cause: 'poll-threw', reason: `a poll threw: ${String((e && e.message) || e).slice(0, 200)}` })
+      }
+      return true
+    })().finally(() => { inflight = null })
+    return inflight
   }
 
+  /** The live processes as facts. The baseline comes first: a scan taken before any baseline would leave a process created between the scan and the
+   *  first poll in neither (the baseline takes it in silently), so with none taken yet scan() takes it (or waits for the one in flight) itself. A process
+   *  created after the scan's own snapshot is then an `exec` — possibly one the scan already listed: a duplicate, never a gap (the tracker judges a pid again). */
   async function scan() {
+    if (!primed) { if (inflight) await inflight; else await poll() }
     const rows = await snapshot()
     noteUnreadable(rows)
     return rows.filter((r) => r.exe != null).map((r) => factsOf(r, 'scan'))
@@ -188,11 +197,14 @@ export function createProcWatcher({ helper, intervalMs = 2000, now = Date.now, a
   return Object.assign(ev, {
     poll,
     scan,
+    /** Polls at once and every `intervalMs`. Returns the baseline poll's promise (true once it ran): await it to know what is already running is taken in. */
     start() {
-      if (timer) return
-      tick()
+      if (timer) return first
+      first = poll()
+      first.catch(() => {})
       timer = timers.setInterval(tick, intervalMs)
       if (timer && timer.unref) timer.unref()
+      return first
     },
     stop() { if (timer) { timers.clearInterval(timer); timer = null } },
     /** The processes of this session whose image path is unreadable and that are still there: [{pid, comm, errno, argv}] (Linux's shape). */

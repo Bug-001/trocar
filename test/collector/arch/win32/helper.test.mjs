@@ -470,19 +470,53 @@ test('W2 a start time that cannot be read falls back to the image path to tell a
   assert.equal(ev[1][1].startTicks, null, 'no start time: no marker identity either')
 })
 
-test('W2 scan() lists the live processes as facts (source scan) and changes nothing the diff knows', async () => {
-  const h = psHelper([[row(10), row(11)], [row(11), row(12)]])
+test('W2 scan() lists the live processes as facts (source scan), announces nothing, and never moves what the diff knows', async () => {
+  const h = psHelper([[row(10), row(11)], [row(11), row(12)], [row(11), row(12)]])
   const w = createProcWatcher({ helper: h })
   const ev = collect(w)
-  const first = await w.scan()
-  assert.deepEqual(first.map((f) => [f.pid, f.source]), [[10, 'scan'], [11, 'scan']])
-  assert.deepEqual(ev, [])
-  await w.poll() // the baseline is the second snapshot; scan() did not take it
-  assert.deepEqual(ev, [])
-  assert.deepEqual(h.calls.map((c) => c.args), [{}, {}], 'this session only (the helper default)')
+  const first = await w.scan() // the baseline is taken first (snapshot 0, silent), then the scan's own snapshot (1)
+  assert.deepEqual(first.map((f) => [f.pid, f.source]), [[11, 'scan'], [12, 'scan']])
+  assert.deepEqual(ev, [], 'a scan announces nothing')
+  await w.poll() // snapshot 2 = snapshot 1: scan() did not move the diff, so pid 10 is gone and pid 12 is new to it (pid 12 was also in the scan: a duplicate, never a gap)
+  assert.deepEqual(brief(ev), [['exit', 10], ['exec', 12]])
+  assert.deepEqual(h.calls.map((c) => c.args), [{}, {}, {}], 'this session only (the helper default)')
   const all = createProcWatcher({ helper: h, all: true })
   await all.scan()
   assert.deepEqual(h.calls.at(-1).args, { all: true })
+})
+
+test('W2 a process created between scan() and start() is an exec, not swallowed by the baseline: scan-then-start and start-then-scan are both safe', async () => {
+  // The daemon scans at startup and at every `on`, and starts the watcher once. A baseline poll taken AFTER the scan would take the process
+  // created in between into the baseline silently: in no scan, in no exec. scan() takes the baseline itself when none exists yet, so the order does not matter.
+  const snaps = () => [[row(10)], [row(10), row(11)], [row(10), row(11)], [row(10), row(11), row(12)]]
+  for (const order of ['scan then start', 'start then scan', 'start, not awaited, then scan']) {
+    const w = createProcWatcher({ helper: psHelper(snaps()), intervalMs: 5, timers: { setInterval: () => 'T', clearInterval() {} } })
+    const ev = collect(w)
+    let facts
+    if (order === 'scan then start') { facts = await w.scan(); await w.start() } else if (order === 'start then scan') { await w.start(); facts = await w.scan() } else { w.start(); facts = await w.scan() }
+    assert.ok(facts.some((f) => f.pid === 10), order)
+    await w.poll(); await w.poll()
+    const execs = ev.filter(([n]) => n === 'exec').map(([, x]) => x.pid)
+    assert.ok(execs.includes(11) || facts.some((f) => f.pid === 11), `${order}: pid 11 is in the scan or announced`)
+    assert.ok(execs.includes(12), `${order}: pid 12, created last, is announced`)
+    w.stop()
+  }
+  // the gap, exactly: scan sees [10], the baseline would have seen [10, 11]
+  const w = createProcWatcher({ helper: psHelper([[10], [10, 11], [10, 11]].map((l) => l.map((p) => row(p)))) })
+  const ev = collect(w)
+  await w.scan()
+  await w.start()
+  await until(() => w.stats().polls >= 2)
+  assert.deepEqual(brief(ev), [['exec', 11]], 'pid 11 appeared after the scan began its snapshot: it must be announced')
+})
+
+test('W2 start() returns the baseline poll\'s promise, and a second start() the same one', async () => {
+  const w = createProcWatcher({ helper: psHelper([[row(10)]]), timers: { setInterval: () => 'T', clearInterval() {} } })
+  const first = w.start()
+  assert.ok(first && typeof first.then === 'function')
+  assert.equal(await first, true)
+  assert.equal(w.stats().polls, 1, 'the baseline was taken when the promise settled')
+  assert.equal(w.start(), first, 'a second start() does not poll again')
 })
 
 test('W2 elevation: integrity High or above is elevated; a token that cannot be opened while the image path can is elevated, marked inferred (4.8 §10.1)', () => {
