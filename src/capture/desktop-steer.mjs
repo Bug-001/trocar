@@ -17,14 +17,14 @@
 
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
 import * as realFs from 'node:fs';
 import {
-  PROXY_NAME, DESKTOP_RULE, MARK_BEGIN, MARK_END, stripBlock, stripRuntime, stripMergeLegacy, knownMihomoSocks, mihomoSockCandidates, discoverMihomoSock, probeVersion, mihomoPayloadReload, probeProxy,
+  PROXY_NAME, DESKTOP_RULE, MARK_BEGIN, MARK_END, stripBlock, stripRuntime, stripMergeLegacy, knownMihomoSocks, mihomoSockCandidates,
+  discoverMihomoSock, mihomoPayloadReload, makeClash, reloadOk, reloadWhy, REACTIVATE_HINT,
 } from '../off/clash.mjs';
 
-// The strip transforms, the socket discovery and the reload live in src/off/clash.mjs (RFC 1.6 §4: `asight off` and `desktop off` run one undo); the names tests and other modules import from here stay.
-export { PROXY_NAME, DESKTOP_RULE, stripBlock, stripRuntime, stripMergeLegacy, knownMihomoSocks, mihomoSockCandidates, discoverMihomoSock, mihomoPayloadReload };
+// The strip / reload / verify half and the socket discovery live in src/off/clash.mjs (RFC 1.6 §4: `asight off` and `desktop off` run one undo); the names tests and other modules import from here stay.
+export { PROXY_NAME, DESKTOP_RULE, stripBlock, stripRuntime, stripMergeLegacy, knownMihomoSocks, mihomoSockCandidates, discoverMihomoSock, mihomoPayloadReload, REACTIVATE_HINT };
 const BEGIN = `// ${MARK_BEGIN}`;  // Script.js (JavaScript)
 const END = `// ${MARK_END}`;
 const YBEGIN = `# ${MARK_BEGIN}`;  // clash-verge.yaml (YAML)
@@ -85,10 +85,6 @@ export function spliceRuntime(yaml, port) {
   return { yaml: out.join('\n'), splicedProxies: didP, splicedRules: didR };
 }
 
-// The by-hand way to make Verge regenerate (and so apply the durable Script.js state) when the
-// immediate step cannot: there is no supported external API for "regenerate" in Verge 2.5.x.
-export const REACTIVATE_HINT = 'open Clash Verge → Profiles and click the flame (reactivate) button on the active profile';
-
 // ── the macOS steer + non-darwin reserved stub ───────────────────────────────────────────────
 
 const reserved = (platform) => ({
@@ -108,50 +104,10 @@ export function getDesktopSteer(platform = process.platform, deps = {}) {
   const mergePath = deps.mergePath || path.join(vergeDir, 'profiles', 'Merge.yaml');
   const NO_OP = '// Define main function (script entry)\nfunction main(config, profileName) { return config; }\n';
 
-  // The live control socket (D29). deps.sock pins it; otherwise it is discovered lazily — only by the
-  // DEFAULT reload/probe, so a caller that injects both never has the real machine probed. A found
-  // socket is remembered for this steer; a miss is retried next call (Verge may just be starting).
-  // ASIGHT_MIHOMO_SOCK pins it too (unusual installs; and CLI tests, so a sandboxed run can never reach
-  // the developer's own core). No Verge runtime config for this HOME → there is no Verge to look for.
-  const pinned = deps.sock || process.env.ASIGHT_MIHOMO_SOCK;
-  let located = pinned ? { sock: pinned, tried: [pinned] } : null;
-  const locate = async () => {
-    if (located?.sock) return located;
-    if (!fs.existsSync(runtimePath)) return (located = { sock: null, tried: [] });
-    let psText = '';
-    try { psText = deps.psText ? deps.psText() : execFileSync('/bin/ps', ['-axww', '-o', 'command='], { encoding: 'utf8', timeout: 3000 }); } catch { /* no ps → other candidates */ }
-    let runtimeYaml = '';
-    try { runtimeYaml = fs.readFileSync(runtimePath, 'utf8'); } catch { /* absent/unreadable → other candidates */ }
-    const known = deps.knownSocks || knownMihomoSocks(process.getuid?.());
-    located = await discoverMihomoSock(mihomoSockCandidates({ psText, runtimeYaml, known }));
-    return located;
-  };
-  const noSock = (l) => `no live mihomo control socket found (tried: ${l.tried.join(', ') || 'none'})`;
-  const mihomoReload = deps.mihomoReload || (async (yaml) => {
-    const l = await locate();
-    return l.sock ? mihomoPayloadReload(l.sock)(yaml) : { status: 0, error: noSock(l) };
-  });
-  // no socket → UNKNOWN (null), never "not live": we could not ask
-  const probeLive = deps.probeLive || (async () => { const l = await locate(); return l.sock ? probeProxy(l.sock) : null; });
-
-  // ONLY a genuinely absent file may fall back to the default. Every other read failure (EACCES on
-  // the user's own Script.js, a directory, a broken symlink) MUST NOT degrade into "empty → use the
-  // NO_OP stub", because on() would then write a GENERATED script over Clash logic it never saw.
-  // Throw, naming the file, before anything is written (same discipline as onboard's settings.json).
-  const read = (p, dflt = '') => {
-    try { return fs.readFileSync(p, 'utf8'); } catch (e) {
-      if (e && e.code === 'ENOENT') return dflt;
-      // carry the cause forward: callers that already wrote something MUST render their own,
-      // accurate "what state is the machine in now" message rather than this pre-write one.
-      const err = new Error(`asight refused to touch ${p}: cannot read it (${e.code || e.message}). Nothing was written — fix or move the file, then retry.`);
-      err.code = e && e.code; err.path = p;
-      throw err;
-    }
-  };
-  // A reload we never had to make (no runtime config on disk) is not a failure; any attempted reload
-  // that mihomo did not accept IS one — the steer is not live, whatever the durable half did.
-  const reloadOk = (r) => r == null || r.status === null || r.status === 200 || r.status === 204;
-  const reloadWhy = (r) => `mihomo reload FAILED (status ${r?.status}${r?.error ? `: ${r.error}` : ''})`;
+  // The files of this Verge install and the core behind them (src/off/clash.mjs): the live control socket is discovered there (D29), `read` refuses a file it cannot read, and `status` / `off` are the
+  // undo `asight off` runs too. deps.sock / psText / knownSocks / mihomoReload / probeLive are that module's own seams.
+  const clash = makeClash({ fs, scriptPath, runtimePath, mergePath, sock: deps.sock, psText: deps.psText, knownSocks: deps.knownSocks, mihomoReload: deps.mihomoReload, probeLive: deps.probeLive, exec: deps.exec, env: deps.env || process.env, platform });
+  const { read, mihomoReload, status } = clash;
 
   async function on({ port = 9899 } = {}) {
     // 1. DURABLE: augment the global Script (rebuild from the clean original each time → idempotent).
@@ -212,66 +168,5 @@ export function getDesktopSteer(platform = process.platform, deps = {}) {
     return { ok: true, port, scriptPath, reload, status: st, ...(mergeCleanup ? { mergeCleanup } : {}) };
   }
 
-  // off() MUST report the REAL teardown outcome. A failed undo that reports ok:true tells the user
-  // monitoring is off while CC-Desktop traffic is STILL routed into the MITM — the worst shape of
-  // failure for a tool whose undo is first-class (4.1:64 「off 对称 … 零残留」).
-  // The undo strips ONLY the sentinel block (D28). Everything outside it — the user's own global-
-  // Script logic, including rules added while capture was on — stays byte-for-byte. Never roll the
-  // whole file back to a snapshot: that silently deletes whatever the user changed since it was taken.
-  async function off() {
-    let restoreError = null;
-    if (fs.existsSync(scriptPath)) {
-      try {
-        const cur = read(scriptPath);
-        const clean = stripBlock(cur);
-        if (clean !== cur) fs.writeFileSync(scriptPath, clean);
-      } catch (e) { restoreError = `could not strip the atrace block from ${scriptPath} (${e.code || e.message})`; }
-    }
-    let mergeCleanup = null;
-    try {
-      if (fs.existsSync(mergePath)) fs.writeFileSync(mergePath, stripBlock(stripMergeLegacy(read(mergePath))));
-    } catch (e) { mergeCleanup = { ok: false, path: mergePath, error: e.message }; }
-    // An unreadable runtime must not throw out of off() either: the Script.js strip has ALREADY
-    // run, so a throw leaves the machine half-torn-down with no structured result at all.
-    let reload = { status: null };
-    let runtimeError = null, rt = null;
-    try { rt = read(runtimePath, null); } catch (e) {
-      runtimeError = `cannot read the runtime config ${runtimePath} (${e.code || e.message}) — the runtime splice was NOT cleared`;
-    }
-    if (rt) reload = await mihomoReload(stripRuntime(rt));
-    const st = await status();
-    // Verify the undo actually landed — do not take the write's word for it.
-    const why = [];
-    if (restoreError) why.push(restoreError);
-    else if (st.scriptInstalled) why.push(`${scriptPath} still carries the atrace block after the strip (sentinel lines edited or missing?)`);
-    // UNKNOWN (unreadable Script.js) is not "clean": never claim a teardown we could not verify.
-    else if (st.scriptInstalled === null) why.push(`could not verify the strip — ${scriptPath} is unreadable (${st.readError || 'unknown error'})`);
-    if (runtimeError) why.push(runtimeError);
-    if (!reloadOk(reload)) why.push(reloadWhy(reload));
-    // an ACCEPTED reload is not proof either: if the core still lists the proxy, the route is live
-    else if (reload.status != null && st.live === true) why.push(`mihomo accepted the reload but ${PROXY_NAME} is STILL in its live proxy list`);
-    if (why.length) {
-      return {
-        ok: false,
-        // Once the block is really gone from Script.js, a Verge regen drops the live route too — so
-        // that is the by-hand fix. While the block is still there, reactivating would RE-APPLY it.
-        reason: `desktop steer NOT fully removed — ${why.join('; ')}. CC-Desktop traffic may STILL be routed into the MITM; ${st.scriptInstalled === false
-          ? `the atrace block IS gone from Script.js — to drop the live route now, ${REACTIVATE_HINT}`
-          : 're-run \`asight desktop off\` and check \`asight desktop status\`'}.`,
-        reload, status: st, ...(mergeCleanup ? { mergeCleanup } : {}),
-      };
-    }
-    return { ok: true, reload, status: st, ...(mergeCleanup ? { mergeCleanup } : {}) };
-  }
-
-  async function status() {
-    // status() must never crash: an unreadable Script.js is reported as UNKNOWN (null) + why, which
-    // is honest, rather than as `false` (= "not installed"), which would be a lie.
-    let scriptInstalled = false, readError = null;
-    try { scriptInstalled = read(scriptPath).includes(BEGIN); } catch (e) { scriptInstalled = null; readError = e.message; }
-    let live = null; try { live = await probeLive(); } catch { live = null; }
-    return { platform, scriptInstalled, live, proxyName: PROXY_NAME, scriptPath, ...(located ? { mihomoSock: located.sock } : {}), ...(readError ? { readError } : {}) };
-  }
-
-  return { platform, on, off, status };
+  return { platform, on, off: clash.off, status };
 }
