@@ -32,12 +32,9 @@ function walk(dir) {
 }
 const SOURCES = walk(path.join(ROOT, 'src'))
 
-/**
- * The old capture (D22 / D28 / D29: the Clash steer, the MITM, and `asight off`'s undo of them, 1.6 §4 · §6) is exempt as a WHOLE, by file: src/capture/ and src/off/legacy*.mjs. Its writes into Verge's
- * Script.js and merge file are what it is (D43 and 4.7 §4 leave it to 1.6 §4 and §6, which book that block); it goes when the old capture is retired. Everything new is not on this list.
- */
-export const OLD_CAPTURE = Object.freeze([/^src\/capture\//, /^src\/off\/legacy[^/]*\.mjs$/])
-export const isOldCapture = (file) => OLD_CAPTURE.some((re) => re.test(file))
+// The old capture is exempt as a WHOLE, by file (the shared pinned list is fixtures/old-capture.mjs, so the D43 scan of no-sysproxy-no-elevation.test.mjs exempts the same two and nothing else).
+export { OLD_CAPTURE, isOldCapture } from './fixtures/old-capture.mjs'
+import { OLD_CAPTURE, isOldCapture } from './fixtures/old-capture.mjs'
 
 /** The legitimate writers, by the name of one helper each (4.7 N15). */
 const OWN_WRITERS = Object.freeze(['writeNetenv'])
