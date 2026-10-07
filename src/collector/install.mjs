@@ -1,9 +1,9 @@
-// install.mjs — per-user `asight collector install|uninstall` (RFC 4.6 §安装清单与卸载, §身份与信任「信任注入」,
+// install.mjs — per-user `asight on` / `asight collector install` (RFC 4.6 §安装清单与卸载, §身份与信任「信任注入」,
 // D36, D37④; acceptance S10, T10, T11). No sudo: everything lives under the operator's ~/.asight/collector and in
 // the agents' own config entries; the machine-wide helper is `asight setup-helper` (arch). Nothing here knows a
 // harness or an OS: the descriptors declare their entries (`inject`), the caller passes `scan` / `match` (the
-// process table) from daemon.mjs. Install lists every file before touching one; uninstall undoes only what the
-// manifest lists, keeps captures unless purgeData, and is safe to run twice or after a crashed install.
+// process table) from daemon.mjs. Install lists every file before touching one. The way back — `asight off` and
+// `asight uninstall` — is src/off/ (the entries, the daemon stop, the lock) and src/cli/uninstall.mjs (1.6 §1.4, R3).
 import fs from 'node:fs'
 import net from 'node:net'
 import tls from 'node:tls'
@@ -14,16 +14,11 @@ import { loadOrCreateCa, caPaths, readCa } from './core/tls/ca-store.mjs'
 import { checkCa } from './core/tls/ca.mjs'
 import { planTrust } from './core/trust/plan.mjs'
 import { livenessOf } from './core/registry.mjs'
-import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, removeOwnedFile, removeEmptyDirs, manifestPath, sweepTemps, describeEntry, judgeEntry, judgeOwned, sha256 } from './core/trust/journal.mjs'
-import { EVENT, CODE, UNTIL_TEXT } from './core/codes.mjs'
+import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256 } from './core/trust/journal.mjs'
+import { EVENT, CODE } from './core/codes.mjs'
 import { controlRequest, controlSocketPath } from './core/control.mjs'
 import { readText, readTextOrError } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
-import { lockState, procIdentity } from '../health/read.mjs'
-import { pidAlive } from '../off/proc.mjs'
-import { dropBackup } from '../off/backup.mjs'
-import { undoHarnesses } from '../off/undo.mjs'
-import { undoByHand } from '../off/manifest.mjs'
 import { backupDir, opLockFile } from '../off/paths.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readStateFile, emptyState, setDesired, writeStateAtomic } from '../off/state.mjs'
@@ -495,146 +490,3 @@ export async function turnOn(opts = {}) {
 
 const UNIT_NAME_HINT = 'asight-collector.service'
 function readLockPid(dir, fs) { try { return JSON.parse(fs.readFileSync(path.join(dir, 'lock'), 'utf8')).pid ?? null } catch { return null } }
-
-// 4.6 §安装清单与卸载 step 1: stop this user's daemon and wait until it AND its helper are gone (the helper's
-// links are unpinned and go with it). The daemon is looked for at the runtime socket and at the socket its lock
-// names (XDG_RUNTIME_DIR unset, or logind removed /run/user/<uid>): a daemon that steers must never be orphaned.
-// A lock whose daemon is gone (pid dead, or its start time / boot id is another process's: D-25) is stale: never
-// kill by it. A live daemon that answers on no socket is not killed either: uninstall stops with nothing removed
-// and says what to do.
-export async function stopDaemon({ socketPath, lockFile, request = controlRequest, alive = pidAlive, identity = procIdentity, kill = process.kill.bind(process), stopUnit = null, timeoutMs = 5000 }) {
-  const ls = lockState({ file: lockFile, alive, identity })
-  const lock = ls.lock || null
-  const unreadable = ls.state === 'unknown' // a lock cut short by a crash or power loss: whether a daemon runs is unknown
-  let answered = false
-  for (const sock of [...new Set([socketPath, lock && lock.socket].filter(Boolean))]) {
-    try { await request({ socketPath: sock, method: 'GET', path: '/status', timeoutMs: 2000 }); answered = true; break } catch (e) {
-      if (e.code !== 'ENOENT' && e.code !== 'ECONNREFUSED') throw e
-    }
-  }
-  if (!answered) {
-    if (unreadable) throw new Error(`${lockFile} is unreadable, so whether a collector daemon still runs is unknown; stop any (pgrep -f "asight collector start"), delete ${lockFile}, then run uninstall again; nothing was removed`)
-    if (ls.state === 'running' || ls.state === 'unresponsive') throw new Error(`a collector daemon may still be running (pid ${lock.pid} in ${lockFile}${ls.state === 'unresponsive' ? `, lock not refreshed for ${Math.round(ls.age_ms / 1000)} s` : ''}) but answers on no control socket; stop it (kill ${lock.pid}), or delete ${lockFile} if that pid is not an asight collector, then run uninstall again; nothing was removed`)
-    return 'none'
-  }
-  if (!lock || !lock.pid) throw new Error('a collector daemon answers but left no lock file; stop it by hand, nothing was removed')
-  if (ls.state === 'stale') throw new Error(`a collector daemon answers, but ${lockFile} names a process that is not it (${ls.why}); stop the daemon by hand (pgrep -f "asight collector start"), nothing was removed`) // never kill a reused pid
-  if (stopUnit) stopUnit() // a unit-managed daemon is stopped through systemd, which then knows it is meant to be down
-  if (alive(lock.pid)) kill(lock.pid, 'SIGTERM') // no unit, or this daemon was started by hand (`asight collector start`)
-  const pids = [lock.pid, lock.helper_pid].filter(Boolean)
-  for (const end = Date.now() + timeoutMs; pids.some(alive);) {
-    if (Date.now() > end) throw new Error(`the collector daemon (pid ${pids.join(', ')}) is still running; nothing was removed`)
-    await sleep(25)
-  }
-  return 'stopped'
-}
-
-export async function uninstallCollector({ home = os.homedir(), ...opts } = {}) {
-  refuseRoot('uninstall')
-  const dir = collectorHome(path.join(home, '.asight')) // collectorHome takes the asight home
-  return recorded(dir, 'uninstall', (run) => uninstall(dir, { home, ...opts, run }))
-}
-
-// 4.6 撤销顺序 is src/off/undo.mjs (undoHarnesses, which `asight off` runs too, 1.6 R3): (1) the config entries → (2) combined bundles → (3) extra
-// trust files and asight-ca.pem → (4) rc lines, patch rows, plugins and shims → (5) report the running agents that may still trust asight. What
-// is left here is what only uninstall does: stop the daemon, the autostart unit, the CA key and the runtime state, the purge, and the notes and
-// failure events of this run. The manifest goes only when everything it lists is undone: an entry uninstall could not undo stays in it (D38:
-// recorded, and `asight collector uninstall` exits non-zero) so the next run finds it again.
-
-// what each undo result other than a plain restore means for the user (4.6 撤销结果)
-const UNDO_NOTE = {
-  'already-restored': 'already back as it was before install: nothing to undo',
-  'reverted-not-identical': 'asight\'s key was removed, but the file is not byte for byte what it was before install (it was edited since)',
-  missing: 'the file is gone: nothing of asight\'s is left in it',
-  'left-user-value': 'the key now holds a value the user set: left as it is',
-}
-
-async function uninstall(dir, { home = path.dirname(path.dirname(dir)), env = process.env, purgeData = false, scan = async () => [], stop = null, osRootsFile = null, roots = null, unit = null, run = null }) {
-  const runtime = env.XDG_RUNTIME_DIR ? path.join(env.XDG_RUNTIME_DIR, 'asight') : null
-  const report = { daemon: null, entries: [], removed: [], residue: [], kept_bundles: [], still_trusting: [], kept_captures: !purgeData, notes: [], left: [], dropped_backups: [] } // left: what could not be undone, {path, harness, result} each (D-18)
-  const failed = [] // failure events, written after any purge so they survive it
-  const noted = [] // uninstall-note events (kept captures only: --purge-data asked for flows/ to go)
-  const m = readManifest(dir)
-  refuseUnsupported(dir, m) // before the daemon is stopped or anything is undone
-  const unitFile = m && m.files.find((f) => f.role === 'unit')
-  report.daemon = await (stop || (() => stopDaemon({ socketPath: runtime && path.join(runtime, 'collector.sock'), lockFile: path.join(dir, 'lock'), stopUnit: unitFile && unit ? () => unit.stop() : null })))()
-  const rm = (p) => { sweepTemps(p); if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); report.removed.push(p) } }
-  let unitLeft = false
-  if (!m) report.notes.push('nothing is installed for this user')
-  else {
-    const out = await undoHarnesses({ dir, home, manifest: m, ids: null, procs: scan, roots: roots || (m.files.some((f) => f.role === 'bundle') ? readRoots(osRootsFile) : null), dropCa: true })
-    const failure = (l, code = l.result === 'error' || l.result === 'unknown-kind' ? CODE.entryNotUndone : l.result) => failed.push({ code, harness: l.harness, path: l.path, reason: l.reason }) // left-unparsable / left-link are D38 codes
-    report.entries = out.results
-    report.removed.push(...out.removed)
-    report.kept_bundles = out.kept_bundles
-    report.still_trusting = out.still_trusting.map(({ pid, harness, until }) => ({ pid, agent: harness, until }))
-    report.left = out.left.map(({ path: p, harness, result }) => ({ path: p, harness, result }))
-    for (const l of out.left) failure(l)
-    for (const r of out.results) {
-      if (r.result === 'reverted-not-identical') noted.push({ code: CODE.notIdentical, harness: r.harness, path: r.path, reason: `${r.path} was edited after install: only asight's ${r.what} was taken out${r.deleted ? ' and the file, holding nothing else, removed' : ''}; the file is not byte for byte what it was before install, the rest is as the user left it` })
-      else if (!['restored', 'left-unparsable', 'left-link', 'error'].includes(r.result)) noted.push({ code: r.result, harness: r.harness, path: r.path, reason: UNDO_NOTE[r.result] || r.result }) // already-restored, missing, left-user-value
-    }
-    for (const k of out.kept_bundles.filter((x) => !x.holds_ca && !x.unjudged && !x.error)) {
-      const entry = k.entry_left ? `${k.entry_left.join(', ')}, which could not be undone, still points at it` : null // an agent's next start reads the bundle through it
-      const again = `run uninstall again once ${k.pids.length ? 'they exit' : 'that is fixed'}`
-      noted.push(k.rebuilt
-        ? { code: CODE.harnessNote, harness: k.harness, path: k.path, reason: `${k.path} was gone while ${[...(k.pids.length ? [`a running process may use it (pid ${k.pids.join(', ')})`] : []), ...(entry ? [entry] : [])].join(' and ')}; it was rebuilt without the asight CA${k.lost_fps ? `, but without ${k.lost_fps.length} user CA(s) its source files no longer hold` : ''}; ${again}` }
-        : { code: CODE.bundleKept, harness: k.harness, path: k.path, reason: `${k.path} is kept, without the asight CA, ${[...(k.pids.length ? [`for running processes that may have loaded it (pid ${k.pids.join(', ')})`] : []), ...(entry ? [`because ${entry}`] : [])].join(' and ')}; ${again}` })
-    }
-    for (const c of out.changed) noted.push({ code: CODE.harnessNote, harness: c.harness, path: c.path, reason: `${c.path}, asight's ${c.role}, had been changed since install; it was removed all the same` })
-    for (const w of out.residue) { report.residue.push(w.path); noted.push({ code: CODE.residue, harness: w.harness, path: w.path, reason: `${w.path} appeared after install (${w.why}); it may serve the user's own plugins too, so asight did not remove it` }) }
-    for (const p of report.still_trusting) noted.push({ code: CODE.stillTrusting, harness: p.agent, pid: p.pid, reason: `pid ${p.pid} (${p.agent}) trusts the asight CA ${UNTIL_TEXT[p.until] || UNTIL_TEXT.restart}` })
-    if (out.procs_error) noted.push({ code: CODE.harnessNote, reason: `which agents still trust the asight CA is not known: the process table could not be read (${out.procs_error})` })
-    // an entry of a kind uninstall does not undo (a future writer's, or one this build does not know) stays, and is said (1.6 R3)
-    for (const e of m.entries.filter((x) => !out.left.some((l) => l.path === x.path && l.harness === (x.harness ?? null)))) {
-      report.left.push({ path: e.path, harness: e.harness ?? null, result: 'unknown-kind' })
-      failure({ harness: e.harness ?? null, path: e.path, result: 'unknown-kind', reason: `${e.path}: this item is of kind ${JSON.stringify(e.kind ?? null)}, which uninstall does not undo; ${undoByHand(e)}` }, CODE.entryNotUndone)
-    }
-    // uninstall deletes every backup (zero residue, 1.6 R2): the ones undo dropped (the file is back as it was), and the ones it kept because the
-    // user edited the file since (listed by `off`, and here); a backup that cannot be removed is said, never dropped silently
-    report.dropped_backups.push(...out.results.filter((r) => r.backup && !r.backup_kept).map((r) => r.backup))
-    m.kept_backups = m.kept_backups.filter((k) => {
-      try { if (dropBackup(k.backup)) report.dropped_backups.push(k.backup); return false } catch (err) { noted.push({ code: CODE.residue, path: k.backup, reason: `${k.backup}, the backup of ${k.path}, could not be removed (${String((err && err.message) || err)}); remove it by hand` }); return true }
-    })
-    removeEmptyDirs([backupDir(home)])
-    // the autostart unit (4.6 order: after the trust entries, before the CA key): disabled, removed, its wants/ links
-    if (unitFile) {
-      if (unit) { const r = unit.disable(); if (r && r.code !== 0) failed.push({ code: CODE.unitNotDisabled, path: unitFile.path, reason: `systemctl --user disable failed (${r.err || `exit ${r.code}`}); the unit file is removed all the same, run "systemctl --user daemon-reload" once systemd --user runs` }) }
-      try { if (removeOwnedFile(unitFile).result === 'removed') report.removed.push(unitFile.path) } catch (err) { unitLeft = true; report.left.push({ path: unitFile.path, harness: unitFile.harness || null, result: 'error' }); failed.push({ code: CODE.entryNotUndone, path: unitFile.path, reason: `${unitFile.path} could not be removed: ${String((err && err.message) || err)}` }) }
-      if (unit) report.removed.push(...unit.removeWants((p, err) => failed.push({ code: CODE.unitNotDisabled, path: p, reason: `${p}, the autostart link, could not be removed: ${String((err && err.message) || err)}` })))
-    }
-    // the CA private key and the runtime state (with the trust markers) last
-    for (const f of m.files.filter((x) => x.role === 'ca-key')) rm(f.path)
-    for (const p of [path.join(dir, 'run'), path.join(dir, 'lock'), path.join(dir, 'state.json'), runtime]) if (p) rm(p)
-  }
-  for (const n of noted) report.notes.push(n.reason) // the command prints every one of them
-  // then the data the operator asked to drop — also after an earlier plain uninstall left the captures behind
-  if (purgeData) {
-    for (const n of listDir(dir)) if (/^capture-.*\.ndjson$/.test(n)) rm(path.join(dir, n))
-    for (const sub of ['flows', 'audit', 'replays']) rm(path.join(dir, sub))
-  }
-  // after the purge, so --purge-data never deletes what this run could not undo; a line that cannot be written is
-  // said in the command's output (and so on stderr's caller), never dropped, and never stops the uninstall
-  const put = (rec) => { try { appendEvent(dir, { ...rec, run }) } catch (w) { report.notes.push(`not recorded (${String((w && w.message) || w)}): ${rec.reason}`) } }
-  for (const f of failed) put({ event: EVENT.failure, where: 'uninstall', ...f })
-  // notes too — except after --purge-data that left nothing: the operator asked for an empty collector directory, and the
-  // command's output has every one of them (4.6 安装 / 卸载不静默)
-  if (m && !(purgeData && !report.left.length)) {
-    for (const n of noted) put({ event: EVENT.uninstallNote, where: 'uninstall', kind: n.code, ...n })
-    const counts = { entries: report.entries.length, left: report.left.length, still_trusting: report.still_trusting.length, notes: noted.length }
-    put({ event: EVENT.uninstallNote, where: 'uninstall', kind: 'result', outcome: counts.left ? 'left' : 'uninstalled', counts,
-      reason: counts.left ? `uninstalled, except ${counts.left} item(s) that could not be undone; the install manifest is kept` : `uninstalled: ${counts.entries} trust entr${counts.entries === 1 ? 'y' : 'ies'} undone, ${counts.notes} note(s)` })
-  }
-  if (m) {
-    if (report.left.length || report.kept_bundles.length) { // keep exactly what is left; the next uninstall finds it (4.6: the manifest goes last)
-      const files = m.files.filter((f) => f.role !== 'ca-key' && f.role !== 'ca-cert' && (f !== unitFile || unitLeft))
-      saveManifest(dir, { ...m, complete: false, ...(report.left.length ? { uninstall_left: report.left, uninstalled_at: new Date().toISOString() } : {}), ...(report.kept_bundles.length ? { pending_bundles: true } : {}), planned: [], watched: [], files })
-      return report
-    }
-    removeEmptyDirs(m.dirs.filter((d) => d !== dir)) // e.g. ca/
-    fs.rmSync(manifestPath(dir), { force: true }) // the manifest goes last: a second run still finds what the first left
-    sweepTemps(manifestPath(dir))
-    removeEmptyDirs(m.dirs)
-  } else if (purgeData) removeEmptyDirs([dir])
-  return report
-}

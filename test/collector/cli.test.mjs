@@ -18,13 +18,17 @@ const STATUS = { desired: 'on', actual: 'on', recording: true, degraded: null, e
     { pid: 13, agent: 'deepseek-dsh', trusted: false, reason: 'dsh-node-too-old', hint: 'this dsh runs on a Node older than 22.19.0', direct: 1 }],
   unjudged: { count: 3, sample: [{ pid: 20, comm: 'sshd', errno: 'EACCES' }, { pid: 21, comm: '(sd-pam)', errno: 'EACCES' }] } }
 
-test('cli: off/status go to the control socket; exit 1 when the kernel did not reach the asked state; 3 with no daemon; 2 without XDG_RUNTIME_DIR', async () => {
+test('cli: status goes to the control socket (3 with no daemon, 2 without XDG_RUNTIME_DIR); `collector off` is the one `asight off` (src/off/main.mjs): same arguments, same exit code, nothing posted by this file', async () => {
   const calls = []
-  const request = async (q) => { calls.push([q.method, q.path, q.socketPath]); return q.path === '/off' ? { ...STATUS, desired: 'off', actual: 'on' } : STATUS }
+  const request = async (q) => { calls.push([q.method, q.path, q.socketPath]); return STATUS }
   const env = { XDG_RUNTIME_DIR: '/run/user/1000' }
-  let t = io(); assert.equal(await runCollector(['off'], { env, request, ...t }), 1)
-  t = io(); assert.equal(await runCollector(['status'], { env, request, ...t }), 0)
-  assert.deepEqual(calls, [['POST', '/off', '/run/user/1000/asight/collector.sock'], ['GET', '/status', '/run/user/1000/asight/collector.sock']], '`on` is not here: it plans, confirms and writes before it asks the daemon anything (src/cli/on.mjs); a POST /on without the install is not an `on`')
+  let t = io(); assert.equal(await runCollector(['status'], { env, request, ...t }), 0)
+  assert.deepEqual(calls, [['GET', '/status', '/run/user/1000/asight/collector.sock']], '`on` and `off` are not here: they run src/cli/on.mjs and src/off/main.mjs, which plan, confirm and write before they ask the daemon anything')
+  const named = []
+  const t1 = io(); assert.equal(await runCollector(['off', 'claude', '--now'], { env, request, platform: 'darwin', offDeps: { legacyOff: async (argv) => { named.push(argv); return 7 } }, ...t1 }), 7, '`collector off` is `asight off`: the platform without the new collector goes to the legacy hook, with the arguments as typed')
+  assert.deepEqual(named, [['claude', '--now']])
+  const t2 = io(); assert.equal(await runCollector(['off', '--bogus'], { env, request, platform: 'linux', ...t2 }), 2, 'and its usage errors are `asight off`\'s: exit 2')
+  assert.match(t2.e.join('\n'), /asight off: unknown option --bogus/)
   assert.match(t.o[0], /2 decrypted/); assert.match(t.o[0], /untrusted: var-missing · 2 direct/)
   assert.match(t.o[0], /  12 opencode \(started by claude-code\) decrypt \(asight:marker via plugin marker\) · 0 direct\n    not captured \(not via the trust path\): models\.dev \(before-plugin\)/)
   assert.match(t.o[0], /  14 claude-code decrypt .*\n    not captured \(transport the engine cannot reach\): af-unix \(ANTHROPIC_UNIX_SOCKET\), quic \(BUN_OPTIONS\)/, 'the agent line lists them (B-4b)')
@@ -110,7 +114,7 @@ test('cli: start returns when the daemon has stopped itself (off), exit 0, witho
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })
 
-test('cli: install / on go to the one `asight on` (src/cli/on.mjs) with the descriptors, OS and process table from daemon.loadParts; uninstall hands them to uninstall.mjs', async () => {
+test('cli: install / on go to the one `asight on` (src/cli/on.mjs) with the descriptors, OS and process table from daemon.loadParts; uninstall is the one `asight uninstall` (src/cli/uninstall.mjs)', async () => {
   const seen = []
   const mkU = () => ({ UNIT_NAME: 'asight-collector.service', userUnit: ({ home, node, script, run }) => ({ path: `${home}/.config/systemd/user/asight-collector.service`, links: [`${home}/.config/systemd/user/default.target.wants/asight-collector.service`], text: (env) => `${JSON.stringify(env)} ExecStart="${node}" "${script}" collector start`, ran: run }), unitPath: (h) => `${h}/.config/systemd/user/asight-collector.service`, wantsLink: (h) => `${h}/.config/systemd/user/default.target.wants/asight-collector.service`, unitText: ({ node, script, env }) => `${JSON.stringify(env)} ExecStart="${node}" "${script}" collector start`, systemctl: () => ({ code: 0 }), removeWantsLinks: () => [] })
   const parts = { os: 'linux', osRootsFile: '/os/roots.pem', arch: { unit: mkU() }, harnesses: [{ name: 'h' }], scan: async () => [], match: () => ({ agent: null }) }
@@ -122,7 +126,6 @@ test('cli: install / on go to the one `asight on` (src/cli/on.mjs) with the desc
       o.onPlan({ manifest: '/h/.asight/collector/install-manifest.json', ca: [], files: [], entries: [] })
       return { receipt: { ...newReceipt('on'), user: 'u', relayed: { closing: 0, waiting: 0, cut: 0 }, linger: true, changed: [{ path: '/h/s.json', change: '加 env.K', backup: null }], undo: ['asight off'], log: '/h/.asight/collector/flows' }, exit: 0 }
     },
-    uninstallCollector: async (o) => { seen.push(['uninstall', o.purgeData, !!o.unit]); return { daemon: 'stopped', kept_captures: !o.purgeData, entries: [{ harness: 'h', path: '/h/s.json', result: 'restored' }], still_trusting: [{ pid: 7, agent: 'h' }], notes: [] } },
   }
   const base = { home: '/h', daemon, install, script: '/repo/bin/asight.mjs', platform: 'linux' }
   let t = io(); assert.equal(await runCollector(['install', '--yes'], { ...base, ...t }), 0)
@@ -141,23 +144,12 @@ test('cli: install / on go to the one `asight on` (src/cli/on.mjs) with the desc
   t = io(); assert.equal(await runCollector(['install'], { ...base, install: { turnOn: async () => { throw new Error('boom') } }, ...t, onDeps: {} }), 1, 'a throw is exit 1, said once')
   assert.match(t.e.join('\n'), /boom/)
   t = io(); assert.equal(await runCollector(['install', '--yes'], { ...base, platform: 'darwin', ...t }), 1, 'a platform without the new collector is not given the Linux install')
-  t = io(); assert.equal(await runCollector(['uninstall', '--purge-data'], { daemon, install, ...t }), 0)
-  assert.match(t.o[0], /captures removed/); assert.match(t.o[0], /pid 7 \(h\) trusts the asight CA until it restarts/)
-  assert.deepEqual(seen, [['uninstall', true, true]])
-  // an item uninstall could not undo: exit 1, the manifest keeps it, the user is told to run uninstall again (D38)
-  const leftOne = { uninstallCollector: async (o) => { seen.push(['uninstall-opts', o.harnesses === undefined && o.match === undefined && o.scan === parts.scan, o.osRootsFile]); return { daemon: 'none', kept_captures: true, entries: [{ harness: 'h', path: '/h/s.json', result: 'left-unparsable' }], residue: ['/h/.config/h/node_modules'], kept_bundles: [{ path: '/h/ca/combined-h.pem', pids: [5, 6] }, { path: '/h/ca/combined-g.pem', pids: [7], holds_ca: true, error: 'EACCES' }], still_trusting: [{ pid: 5, agent: 'h', until: 'next-connection' }], notes: [], left: [{ path: '/h/s.json', harness: 'h', result: 'left-unparsable' }] } } }
-  t = io(); assert.equal(await runCollector(['uninstall'], { daemon, install: leftOne, ...t }), 1)
-  assert.deepEqual(seen.at(-1), ['uninstall-opts', true, '/os/roots.pem'], 'the process table and the OS roots reach uninstall; the descriptors and the registry do not: liveness is judged from the manifest, as `asight off` judges it (1.6 R3)')
-  assert.match(t.o[0], /left in place: \/h\/.config\/h\/node_modules/)
-  assert.match(t.o[0], /kept \/h\/ca\/combined-h\.pem without the asight CA for pid 5, 6; run uninstall again once they exit/)
-  assert.match(t.o[0], /kept \/h\/ca\/combined-g\.pem STILL WITH the asight CA \(it could not be rewritten: EACCES\) for pid 7; fix the file, then run uninstall again/, 'a bundle that could not be rewritten is not said to be without the CA (RV-2)')
-  assert.match(t.o[0], /pid 5 \(h\) trusts the asight CA until its next new connection/)
-  assert.match(t.e[0], /1 item\(s\) could not be undone \(\/h\/s\.json: left-unparsable\); the install manifest is kept — fix them, then run uninstall again/)
-  // D-18: something left that could not be undone — exit 1, and says the manifest is kept
-  const partial = { uninstallCollector: async () => ({ daemon: 'none', kept_captures: true, entries: [{ harness: 'h', path: '/h/s.json', result: 'left-link' }], still_trusting: [], notes: [], left: [{ path: '/h/s.json', harness: 'h', result: 'left-link' }] }) }
-  t = io(); assert.equal(await runCollector(['uninstall'], { daemon, install: partial, ...t }), 1)
-  assert.match(t.o[0], /^uninstalled, except/)
-  assert.match(t.e[0], /1 item\(s\) could not be undone \(\/h\/s\.json: left-link\); the install manifest is kept — fix them, then run uninstall again/)
+  const argvs = []
+  const uninstalled = { platform: 'darwin', offDeps: { legacyUninstall: async (argv) => { argvs.push(argv); return 5 } } }
+  t = io(); assert.equal(await runCollector(['uninstall', '--purge-data', '--yes'], { home: '/h', ...uninstalled, ...t }), 5, '`collector uninstall` is `asight uninstall`: the same entry point, the arguments as typed')
+  assert.deepEqual(argvs, [['--purge-data', '--yes']])
+  t = io(); assert.equal(await runCollector(['uninstall', 'claude-code'], { home: '/h', platform: 'linux', ...t }), 2, 'a harness name is a usage error: uninstall removes asight for every harness')
+  assert.match(t.e.join('\n'), /asight uninstall: takes no harness name \(claude-code\)/)
 })
 
 test('cli: setup-helper installs or removes through arch; a failure is exit 1', async () => {

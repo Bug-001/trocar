@@ -1,7 +1,7 @@
 // cli.mjs — `asight collector …` and `asight setup-helper` (RFC 4.6 §控制面, §安装清单与卸载, D36). `start` runs the
-// daemon in the foreground until SIGTERM/SIGINT; on/off/status only talk to its control socket
-// ($XDG_RUNTIME_DIR/asight/collector.sock); install/uninstall are the per-user half (no sudo); setup-helper is the
-// machine-wide half (sudo, once). Exit codes: 0 ok · 1 the kernel did not reach the asked state, or the step
+// daemon in the foreground until SIGTERM/SIGINT; status only talks to its control socket
+// ($XDG_RUNTIME_DIR/asight/collector.sock); install / on / off / uninstall are the old names of `asight on | off | uninstall`
+// (src/cli/on.mjs, src/off/main.mjs, src/cli/uninstall.mjs: the per-user half, no sudo); setup-helper is the machine-wide half (sudo, once). Exit codes: 0 ok · 1 the kernel did not reach the asked state, or the step
 // failed (for `start`: refused, or a step of the stop failed) · 2 usage / no runtime dir · 3 no daemon answers ·
 // 70 the daemon crashed (an uncaught exception, recorded as `crash` first).
 import os from 'node:os'
@@ -9,7 +9,6 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { controlSocketPath, controlRequest } from './core/control.mjs'
 import { appendEvent } from './core/events.mjs'
-import { UNTIL_TEXT } from './core/codes.mjs'
 import { captureHealth } from '../health/read.mjs'
 import { collectorHome } from '../paths.mjs'
 
@@ -18,8 +17,9 @@ const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 export const USAGE = [
   'usage: asight collector on | install [harness…] [--dry-run] [--yes] [--no-autostart | --no-unit] [--json]   (= asight on: per user, no sudo; the first one installs: CA, trust entries, systemd --user unit)',
   '       asight collector start               (run the daemon in the foreground; the unit runs exactly this)',
-  '       asight collector off | status [--json]',
-  '       asight collector uninstall [--purge-data]',
+  '       asight collector off [harness…] [--now] [--dry-run] [--yes] [--json]   (= asight off)',
+  '       asight collector status [--json]',
+  '       asight collector uninstall [--purge-data] [--dry-run] [--yes] [--json]   (= asight uninstall)',
   '       sudo asight setup-helper [--binary <path>] [--remove]',
 ].join('\n')
 
@@ -124,14 +124,6 @@ function onCrash(dir, err, exit) {
   }
 }
 const loadDaemon = () => import('./daemon.mjs')
-const loadInstall = () => import('./install.mjs')
-
-// The arch's autostart unit for this user, as install.mjs consumes it (null with --no-unit or on an OS without one): data plus the few systemctl verbs
-// (arch/linux/unit.mjs userUnit). `run` is the injected runner of OS tools; none means a real `systemctl --user` (refused under `npm test`, 0.1 §3).
-function unitOf(parts, home, script, run = null) {
-  const U = parts.arch && parts.arch.unit
-  return U && U.userUnit ? U.userUnit({ home, node: process.execPath, script, run }) : null
-}
 
 export async function runSetupHelper(argv, { arch = null, out = (s) => console.log(s), err = (s) => console.error(s), packageRoot = PACKAGE_ROOT } = {}) {
   try {
@@ -148,10 +140,9 @@ export async function runSetupHelper(argv, { arch = null, out = (s) => console.l
   } catch (e) { err(e.message); return 1 }
 }
 
-export async function runCollector(argv, { env = process.env, home = os.homedir(), out = (s) => console.log(s), err = (s) => console.error(s), request = controlRequest, daemon = null, install = null, waitForStop = waitForSignal, script = process.argv[1], proc = process, exit = (c) => process.exit(c), platform = process.platform, onDeps = {} } = {}) {
+export async function runCollector(argv, { env = process.env, home = os.homedir(), out = (s) => console.log(s), err = (s) => console.error(s), request = controlRequest, daemon = null, install = null, waitForStop = waitForSignal, script = process.argv[1], proc = process, exit = (c) => process.exit(c), platform = process.platform, onDeps = {}, offDeps = {} } = {}) {
   const [verb, ...rest] = argv
   const D = () => daemon || loadDaemon()
-  const I = () => install || loadInstall()
   if (verb === 'start') {
     const dir = collectorHome(path.join(home, '.asight'))
     const crash = onCrash(dir, err, exit)
@@ -170,18 +161,12 @@ export async function runCollector(argv, { env = process.env, home = os.homedir(
     const { runOnCli } = await import('../cli/on.mjs')
     return runOnCli(rest, { io: { out, err, stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }, env, home, platform, deps: { daemon: daemon || undefined, install: install || undefined, request, script, ...onDeps } })
   }
-  if (verb === 'uninstall') {
-    try {
-      const parts = await (await D()).loadParts({ env })
-      const { uninstallCollector } = await I()
-      const r = await uninstallCollector({ home, env, purgeData: rest.includes('--purge-data'), scan: parts.scan, osRootsFile: parts.osRootsFile, unit: unitOf(parts, home, script) })
-      const left = r.left || []
-      out([`${left.length ? 'uninstalled, except' : 'uninstalled'} (daemon: ${r.daemon}; ${r.kept_captures ? 'captures kept, --purge-data removes them' : 'captures removed'})`, ...r.entries.map((e) => `  ${e.harness}: ${e.path} ${e.result}`), ...(r.kept_bundles || []).map((k) => (k.holds_ca ? `  kept ${k.path} STILL WITH the asight CA (it could not be rewritten: ${k.error}) for pid ${k.pids.join(', ')}; fix the file, then run uninstall again` : `  kept ${k.path} without the asight CA for pid ${k.pids.join(', ')}; run uninstall again once they exit`)), ...r.still_trusting.map((p) => `  pid ${p.pid} (${p.agent}) trusts the asight CA ${UNTIL_TEXT[p.until] || UNTIL_TEXT.restart}`), ...(r.residue || []).map((p) => `  left in place: ${p}`), ...r.notes.map((n) => `note: ${n}`)].join('\n'))
-      if (left.length) { err(`asight collector uninstall: ${left.length} item(s) could not be undone (${left.map((l) => `${l.path}: ${l.result}`).join('; ')}); the install manifest is kept — fix them, then run uninstall again`); return 1 }
-      return 0
-    } catch (e) { err(`asight collector uninstall: ${e.message}`); return 1 }
+  if (verb === 'off' || verb === 'uninstall') { // the old names of `asight off` / `asight uninstall` (§2 hidden alias): the same code, the same output (1.6 §1.4, R3)
+    const io = { out, err, stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }
+    const run = verb === 'off' ? (await import('../off/main.mjs')).runOffCli : (await import('../cli/uninstall.mjs')).runUninstallCli
+    return run(rest, { io, env, home, platform, deps: { request, ...offDeps } })
   }
-  if (!['off', 'status'].includes(verb)) { err(USAGE); return 2 }
+  if (verb !== 'status') { err(USAGE); return 2 }
   // No daemon answered — not running, no runtime dir, or stuck: what is on disk says why and what failed last (D-2),
   // read by the board's own reader (src/health/read.mjs)
   const fromDisk = () => {
