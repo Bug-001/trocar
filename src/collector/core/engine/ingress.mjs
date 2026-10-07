@@ -25,6 +25,7 @@ const HEAD_MAX = 16 * 1024        // no opener or proxy reply head is longer
 const HOLD_MAX = 256 * 1024       // what a client may send while the upstream is being dialled
 const sha = (s) => crypto.createHash('sha256').update(s).digest()
 const printable = (s, n = 80) => String(s).replace(/[^\x20-\x7e]/g, '?').slice(0, n)
+const ROUTE_NAME = /^[\w-]+\.[\w.-]+$/ // the user an asight-written route or block authenticates as: <route>.<group>
 const msgOf = (e) => String((e && e.message) || e)
 
 const SOCKS_OK = Buffer.from([5, 0, 0, 1, 0, 0, 0, 0, 0, 0])
@@ -202,6 +203,10 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
   for (const [n, f] of Object.entries({ lookupIngress, handleFlow, connectUpstream, failure })) if (typeof f !== 'function') throw new TypeError(`createIngress: ${n} is required`)
   const tokenHash = sha(token)
   const tokenOk = (given) => crypto.timingSafeEqual(sha(String(given)), tokenHash)
+  // Who a record says tried: a name shaped like "<route>.<group>" that does not hold the token. Anything else is a client that put something else in
+  // the username field, and when that is the token (a generator that swapped username and password, a credential with no colon) it must not be written
+  // to flows/: no token, right or wrong, is in any record (§5.1).
+  const shownUser = (u) => (u === '' ? '' : ROUTE_NAME.test(u) && !u.includes(token) ? printable(u) : '(not a route name)')
   const openerMs = timing.ingressOpenerMs ?? 10_000, healthIdleMs = timing.ingressHealthIdleMs ?? 30_000
   const counters = { connections: 0, flows: 0, health: 0, authFailed: 0, unknown: 0, refused: 0, unreachable: 0 }
   const idle = new Set() // sockets that are not a flow: still in the handshake, or a health tunnel (closeIdle ends them; flows finish on their own)
@@ -212,7 +217,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     socket.on('error', () => {}) // ours from accept: a reset while we answer is this connection's end, never an uncaught exception (handleFlow adds its own once it owns the socket)
     const peer = { address: socket.remoteAddress, port: socket.remotePort }
     const unknown = (reason) => { counters.unknown++; failure({ where: 'ingress', code: 'ingress-unknown', peer, reason }) }
-    const authFailed = (user, reason) => { counters.authFailed++; failure({ where: 'ingress', code: 'ingress-auth-failed', peer, user: printable(user), reason }) }
+    const authFailed = (user, reason) => { counters.authFailed++; failure({ where: 'ingress', code: 'ingress-auth-failed', peer, user: shownUser(user), reason }) }
     const r = reader(socket, { onTooMuch: () => { unknown('the client sent more than 256 KiB before the tunnel was open'); socket.destroy() } })
     const w = { up: 0, down: 0 } // the opener's bytes in, and asight's answers out: not the agent's (§5.6)
     const say = (b) => { w.down += b.length; if (!socket.destroyed) socket.write(b) }
@@ -280,7 +285,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     let meta
     try { meta = await lookupIngress({ peer, user: o.user, target: dst }) } catch (e) {
       const code = e && e.code === 'loader-timeout' ? 'loader-timeout' : 'loader-down'
-      failure({ code, peer, reason: `looking up the ingress connection of ${printable(o.user)} for ${o.target.host}:${o.target.port} failed (${msgOf(e)}); it was refused with a 502` })
+      failure({ code, peer, reason: `looking up the ingress connection of ${shownUser(o.user)} for ${o.target.host}:${o.target.port} failed (${msgOf(e)}); it was refused with a 502` })
       r.detach(); return o.badGateway('lookup')
     }
     if (!meta) { authFailed(o.user, 'unknown user'); r.detach(); return o.denied() }
@@ -301,7 +306,9 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     current = null
     if (r.isGone()) { if (d.ok) d.sock.destroy(); r.detach(); return } // the client left while the upstream was dialled: no flow existed, nothing was lost
     const shown = { kind: up.kind || 'direct', ...(up.host ? { host: up.host } : {}), ...(up.port != null ? { port: up.port } : {}) }
-    const base = { ...meta, dst: meta.dst ?? dst, ingress: meta.ingress ?? { route, group } }
+    // The negative cache's key is part of the lookup's contract (§5.5); one that comes without it is keyed here the way the contract says, so a lookup that
+    // forgets it cannot make every connection without a pid share the key "null" and poison one another's hosts.
+    const base = { ...meta, dst: meta.dst ?? dst, ingress: meta.ingress ?? { route, group }, negKey: meta.negKey ?? (meta.pid != null ? String(meta.pid) : o.user) }
     if (!d.ok) {
       r.detach()
       if (d.kind === 'refused') { counters.refused++; refuse({ ...base, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}) } }, { decision: 'tunnel', not_captured: 'proxy-refused', reason: d.reason }); return o.refusedBy(d) }
