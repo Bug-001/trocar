@@ -78,7 +78,7 @@ async function endpoint(s) {
 // (iii): `asight collector status` with no daemon answering — it reads the disk
 async function statusOffline(s) {
   const o = []
-  const code = await runCollector(['status'], { env: { XDG_RUNTIME_DIR: path.join(s.root, 'norun') }, home: s.home, request: async () => { throw Object.assign(new Error('no daemon'), { code: 'ENOENT' }) }, out: (l) => o.push(l), err: (l) => o.push(l) })
+  const code = await runCollector(['status'], { env: { XDG_RUNTIME_DIR: path.join(s.root, 'norun') }, home: s.home, request: async () => { throw Object.assign(new Error('no daemon'), { code: 'ENOENT' }) }, statusDeps: { netenv: async () => ({ at: 'T', products: [], unknown: [{ reason: 'a test: nothing looked at' }] }) }, out: (l) => o.push(l), err: (l) => o.push(l) })
   return { code, text: o.join('\n') }
 }
 const keys = (h) => (h.collector.failures || []).map((g) => g.key)

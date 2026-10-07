@@ -4,6 +4,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { createRequire } from 'node:module'
@@ -21,6 +22,7 @@ const stub = (dir, name, body) => fs.writeFileSync(path.join(dir, name), `#!/bin
 
 test('no-real-os: the preload is on and the guard names the five tools of 0.1 §3', () => {
   assert.equal(process.env.ASIGHT_TEST_SANDBOX, '1')
+  assert.ok(process.env.ASIGHT_MIHOMO_SOCK.startsWith(fs.realpathSync(os.tmpdir()) + path.sep), 'the VPN core\'s socket is pinned inside the temp dir: a child `asight status` never asks the developer\'s own mihomo')
   assert.deepEqual([...REAL_TOOLS].sort(), [...TOOLS].sort())
   assert.deepEqual(takeRefusals(), [])
 })

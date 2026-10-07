@@ -34,6 +34,14 @@ const errText = (e) => String((e && (e.code || e.message)) || e)
 const errMessage = (e) => String((e && e.message) || e)
 const rethrowSandbox = (e) => { if (e && e.code === 'ESANDBOX') throw e } // a refusal of the test guard is never "the tool failed" (0.1 §3)
 
+/** One look at the VPN / proxy software, and the board's copy of what was seen (~/.asight/netenv.json; only where asight already has a home) → probeNetenv's `{ result }` / `{ error }`, plus `write_error` when the copy could not be written. */
+export async function lookAtNetenv({ home, platform, env, proxies = null, deps = {} }) {
+  const fs = deps.fs || nodeFs
+  const n = await probeNetenv({ home, platform, env, proxies, deps })
+  if (n.result) { try { if (fs.existsSync(asightHome(home))) writeNetenv(home, n.result, { fs }) } catch (e) { rethrowSandbox(e); n.write_error = errText(e) } }
+  return n
+}
+
 /**
  * The verdict on one harness (V32), pure. Inputs, every one of them `null` / 'unknown' when it could not be read:
  *   desired      'on' | 'off'
@@ -178,8 +186,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   // the VPN / proxy software, 1.6 §6; what each running process is set to use (its environment, Linux) tells which harness goes through it. The URLs are compared with the product's port and dropped.
   const proxies = {}
   if (table && m) for (const p of table) { const h = matchHarness(m.liveness, p); const env = h && typeof p.env === 'function' ? p.env() : null; if (env) proxies[h] = [...(proxies[h] || []), ...PROXY_VARS.map((k) => env.get(k)).filter(Boolean)] }
-  f.netenv = await probeNetenv({ home, platform, env, proxies, deps })
-  if (f.netenv.result) { try { if (fs.existsSync(asightHome(home))) writeNetenv(home, f.netenv.result, { fs }) } catch (e) { rethrowSandbox(e); f.netenv.write_error = errText(e) } } // the board's copy; only where asight already has a home
+  f.netenv = await lookAtNetenv({ home, platform, env, proxies, deps })
   try { f.health = deps.captureHealth ? deps.captureHealth({ home: asightHome(home) }) : captureHealth({ home: asightHome(home), fs, alive, identity, now: ms() }) } catch (e) { rethrowSandbox(e); f.health = null; f.health_error = errText(e) }
   return f
 }
@@ -240,9 +247,11 @@ async function legacyStatus(argv, { io, env, home, platform, deps, json }) {
   let health = null, error = null
   try { health = deps.captureHealth ? deps.captureHealth({ home: asightHome(home) }) : captureHealth({ home: asightHome(home), fs: deps.fs || nodeFs }) } catch (e) { rethrowSandbox(e); error = errMessage(e) }
   const exit = error ? EXIT.unknown : failedIn24h(health) ? EXIT.incomplete : EXIT.ok
-  if (json) { io.out(JSON.stringify({ ...newReceipt('status'), ok: exit === EXIT.ok, platform, note: 'this platform has no new collector: the old capture is what on / off drive here', ...(health ? { health } : { health_error: error }) }, null, 2)); return exit }
+  const netenv = await lookAtNetenv({ home, platform, env, deps }) // §6: the VPN software is looked at on every platform, not only where the new collector runs
+  if (json) { io.out(JSON.stringify({ ...newReceipt('status'), ok: exit === EXIT.ok, platform, note: 'this platform has no new collector: the old capture is what on / off drive here', ...(health ? { health } : { health_error: error }), netenv: netenv.result || { error: netenv.error } }, null, 2)); return exit }
   io.out(`本平台(${platform})还没有新采集器:这里 asight on / off 驱动旧采集(过渡期,1.6 §4),逐 harness 的判词不适用。下面是旧采集与原始层的状态:`)
   for (const l of health ? formatHealth(health) : [`capture health could not be read: ${error}`]) io.out(l)
+  for (const l of netenvText(netenv, { platform })) io.out(l)
   return exit
 }
 /** → the exit code (R4). `argv` is what follows `status`. `io` = { out, err } (src/off/io.mjs makeIo). */

@@ -17,7 +17,7 @@ import codex from '../../src/collector/harness/codex.mjs'
 
 const CLI = fileURLToPath(new URL('../../bin/asight.mjs', import.meta.url))
 const KEY = '-----BEGIN PRIVATE KEY-----\nU0VDUkVULUtFWQ==\n-----END PRIVATE KEY-----\n'
-// a clean, owner-only capture: doctor's own red line (a vacuous scan hard-fails) is not what this file is about
+// a clean, owner-only capture: doctor's own verdicts (a vacuous scan is 无法判定, exit 3) are not what this file is about
 const CLEAN = { id: 'req_1', is_llm_call: true, endpoint: 'https://api.anthropic.com/v1/messages', ts_request: '2026-01-01T00:00:00.000Z',
   req_headers: { 'anthropic-version': '2023-06-01', authorization: '<redacted>', 'x-claude-code-session-id': 's1' },
   req_body: JSON.stringify({ model: 'm', system: [], tools: [], messages: [{ role: 'user', content: 'hi' }] }),

@@ -328,3 +328,22 @@ test('V39 on: the same lines in the receipt (and in the plan\'s receipt when --j
     if (want === 'unknown') assert.match(doc.linger_reason, /EACCES/)
   }
 })
+
+test('a platform without the new collector (macOS): status prints the old capture\'s health and also what the VPN software is (§6: every platform), without "asight 没有改它" (the old capture does steer Clash there); --json carries the probe; a probe that fails is 不知道 with the reason', async () => {
+  const home = tmpDir('asight-st-mac-')
+  let io = fakeIo()
+  let exit = await runStatusCli([], { io, home, platform: 'darwin', env: {}, deps: { netenv: async () => CLASH() } })
+  assert.match(io.stdoutText(), /本平台\(darwin\)还没有新采集器/)
+  assert.match(io.stdoutText(), /本机网络环境: Clash Verge\(规则模式,系统代理已开\)/)
+  assert.ok(!io.stdoutText().includes('asight 没有改它'), io.stdoutText())
+  assert.ok([0, 1, 3].includes(exit))
+  io = fakeIo()
+  exit = await runStatusCli(['--json'], { io, home, platform: 'darwin', env: {}, deps: { netenv: async () => CLASH() } })
+  const v = io.json()
+  assert.deepEqual(validateReceipt(v), [])
+  assert.equal(v.netenv.products[0].product, 'clash-verge')
+  io = fakeIo()
+  await runStatusCli([], { io, home, platform: 'darwin', env: {}, deps: { netenv: async () => { throw new Error('probe broke') } } })
+  assert.match(io.stdoutText(), /本机网络环境: 不知道\(probe broke\)/)
+  assert.deepEqual(fs.readdirSync(home), [], 'nothing was written: there is no ~/.asight here to keep the board\'s copy in')
+})
