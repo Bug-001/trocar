@@ -11,6 +11,7 @@ import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { HELPER_PROTO, HELPER_VERBS, HELPER_PS1, REG_READ_ALLOW, startHelper } from '../../../../src/collector/arch/win32/helper.mjs'
 import { createProcWatcher, elevationOf, splitCommandLine } from '../../../../src/collector/arch/win32/procinfo.mjs'
+import { ownerOf } from '../../../../src/collector/arch/win32/socktable.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 
@@ -454,4 +455,101 @@ test('W2 a command line is split the way CommandLineToArgvW does (the documented
   assert.deepEqual(splitCommandLine('C:\\x\\a.exe'), ['C:\\x\\a.exe'])
   assert.deepEqual(splitCommandLine('node.exe  \t x'), ['node.exe', 'x'])
   for (const none of ['   ', '', null, undefined, 7]) assert.deepEqual(splitCommandLine(none), [], String(none))
+})
+
+// ---------- W4: which of the form's processes holds the connection to the hop (4.8 §5.3) ----------
+
+const trow = (pid, remotePort, extra = {}) => ({ pid, state: 'established', family: 4, localAddr: '127.0.0.1', localPort: 50000 + pid, remoteAddr: '127.0.0.1', remotePort, ...extra })
+/** An in-process helper whose tcp-table answers the given rows as they are (no filtering: ownerOf must not rely on the helper's). */
+function tableHelper(rows, { error = null, delayMs = 0 } = {}) {
+  return {
+    calls: [],
+    async call(verb, args, opts) {
+      this.calls.push({ verb, args, opts })
+      if (delayMs) await new Promise((r) => setTimeout(r, delayMs))
+      if (error) throw error
+      return { rows }
+    },
+  }
+}
+const HOP = { port: 7897 }
+
+test('W4 exactly one of the form\'s processes holds a connection to the hop (any state): its pid, from the socket table', async () => {
+  const h = tableHelper([trow(10, 7897), trow(11, 443), trow(11, 8080)])
+  const r = await ownerOf({ helper: h, hop: HOP, candidates: [10, 11] })
+  assert.deepEqual({ pid: r.pid, source: r.source }, { pid: 10, source: 'socket-table' })
+  assert.equal(typeof r.ms, 'number')
+  assert.deepEqual(h.calls.map((c) => [c.verb, c.args.pids, c.args.remotePort]), [['tcp-table', [10, 11], 7897]])
+})
+
+test('W4 two processes of the form hold one: null, never a guess', async () => {
+  const r = await ownerOf({ helper: tableHelper([trow(10, 7897), trow(11, 7897)]), hop: HOP, candidates: [10, 11] })
+  assert.deepEqual({ pid: r.pid, source: r.source }, { pid: null, source: null })
+  assert.equal((await ownerOf({ helper: tableHelper([trow(10, 443)]), hop: HOP, candidates: [10, 11] })).pid, null, 'none holds one')
+})
+
+test('W4 a long-lived connection opened before `on` counts like any other, and nothing is ever "claimed": the same table gives the same answer every time', async () => {
+  const old = trow(10, 7897, { state: 'close-wait', localPort: 40000 }) // older than the switch, half closed: any state, any age
+  const h = tableHelper([old])
+  for (let i = 0; i < 3; i++) assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [10, 11] })).pid, 10)
+  // a second process opens a connection later: now it is ambiguous, however old the first one is
+  assert.equal((await ownerOf({ helper: tableHelper([old, trow(11, 7897)]), hop: HOP, candidates: [10, 11] })).pid, null)
+})
+
+test('W4 one candidate is the answer without a table read (single-process); no candidate, no answer', async () => {
+  const h = tableHelper([trow(10, 7897)])
+  const r = await ownerOf({ helper: h, hop: HOP, candidates: [10] })
+  assert.deepEqual({ pid: r.pid, source: r.source }, { pid: 10, source: 'single-process' })
+  assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [10, 10] })).source, 'single-process', 'a pid listed twice is one candidate')
+  assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [] })).pid, null)
+  assert.equal(h.calls.length, 0, 'zero table reads')
+})
+
+test('W4 the answer does not depend on the helper having filtered: rows of other pids and other ports are ignored here too', async () => {
+  const rows = [trow(999, 7897), trow(10, 9999), trow(11, 7897, { remoteAddr: '10.1.2.3' }), trow(12, 7897)]
+  assert.equal((await ownerOf({ helper: tableHelper(rows), hop: HOP, candidates: [10, 11, 12] })).pid, null, 'pid 11 also holds a row to that port, on another host: still ambiguous')
+  assert.equal((await ownerOf({ helper: tableHelper(rows), hop: { port: 7897, address: '127.0.0.1' }, candidates: [10, 11, 12] })).pid, 12, 'a hop that names its address narrows the rows')
+})
+
+test('W4 a table that answers after 250 ms is null with ms >= 250, and not a failure', async () => {
+  const failures = []
+  const r = await ownerOf({ helper: tableHelper([trow(10, 7897)], { delayMs: 300 }), hop: HOP, candidates: [10, 11], onFailure: (f) => failures.push(f) })
+  assert.deepEqual({ pid: r.pid, source: r.source }, { pid: null, source: null })
+  assert.ok(r.ms >= 250, `ms ${r.ms}`)
+  assert.ok(r.ms < 290, `it did not wait for the late answer: ${r.ms}`)
+  assert.deepEqual(failures, [])
+  // the budget is a parameter, and the helper's own timeout is the same budget
+  const h = tableHelper([trow(10, 7897)])
+  await ownerOf({ helper: h, hop: HOP, candidates: [10, 11], budgetMs: 80 })
+  assert.equal(h.calls[0].opts.timeoutMs, 80)
+  const slow = Object.assign(new Error('helper tcp-table timed out after 80 ms'), { code: 'helper-timeout' })
+  const t = await ownerOf({ helper: tableHelper([], { error: slow }), hop: HOP, candidates: [10, 11], budgetMs: 80, onFailure: (f) => failures.push(f) })
+  assert.ok(t.pid === null && t.ms >= 80)
+  assert.deepEqual(failures, [], 'a helper-side timeout is over budget too')
+})
+
+test('W4 a table that cannot be read is null and one socktable-unavailable (a record the closed set knows)', async () => {
+  for (const error of [Object.assign(new Error('native-unavailable: Add-Type blocked'), { code: 'helper-verb-error' }), Object.assign(new Error('helper is down: killed'), { code: 'helper-down' })]) {
+    const failures = []
+    const r = await ownerOf({ helper: tableHelper([], { error }), hop: HOP, candidates: [10, 11], onFailure: (f) => failures.push(f) })
+    assert.deepEqual({ pid: r.pid, source: r.source }, { pid: null, source: null })
+    assert.equal(failures.length, 1)
+    assert.deepEqual([failures[0].event, failures[0].where, failures[0].code], ['failure', 'helper', 'socktable-unavailable'])
+    assert.ok(failures[0].reason.includes(error.message))
+    assert.deepEqual(checkRecord(failures[0]), [])
+  }
+  const failures = []
+  await ownerOf({ helper: { call: async () => ({ nonsense: true }) }, hop: HOP, candidates: [10, 11], onFailure: (f) => failures.push(f) })
+  assert.equal(failures.length, 1, 'an answer with no rows is an unreadable table, not an empty one')
+})
+
+test('W4 through the real client and the fake helper: the verb filters, the answer is the same; a failing verb is the failure record', async (t) => {
+  const rows = [trow(10, 7897), trow(11, 443), trow(12, 7897, { family: 6, localAddr: '::1', remoteAddr: '::1' })]
+  const h = started(t, { verbs: { 'tcp-table': { data: { rows } } } })
+  assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [10, 11] })).pid, 10)
+  assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [10, 12] })).pid, null)
+  const bad = started(t, { verbs: { 'tcp-table': { error: 'GetExtendedTcpTable af=23 rc=50' } } })
+  const failures = []
+  assert.equal((await ownerOf({ helper: bad, hop: HOP, candidates: [10, 11], onFailure: (f) => failures.push(f) })).pid, null)
+  assert.match(failures[0].reason, /rc=50/)
 })
