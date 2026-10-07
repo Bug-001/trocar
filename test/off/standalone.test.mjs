@@ -312,7 +312,7 @@ test('V35: `asight doctor` has a line for the copy — a ✓ when it is current,
   const s = await installedHome({ names: ['claude-code'] })
   const dir = tmpDir('asight-stub-'), bin = path.join(dir, 'bin'), log = path.join(dir, 'calls.log')
   fs.mkdirSync(bin)
-  for (const name of ['security', 'systemctl', 'launchctl', 'certutil', 'loginctl']) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\nexit 1\n`, { mode: 0o755 }) // doctor's trust check finds these, and only these (its dependency probe looks at files on PATH, it starts no `which`)
+  for (const name of ['security', 'systemctl', 'launchctl', 'certutil', 'loginctl', 'ss', 'ip']) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\nexit 1\n`, { mode: 0o755 }) // doctor's trust check finds these, and only these (`ss` and `ip` are the reads of its network facts, which only read) (its dependency probe looks at files on PATH, it starts no `which`)
   const doctor = () => spawnSync(process.execPath, [path.join(REPO, 'bin', 'asight.mjs'), 'doctor', '--source', tmpDir('asight-src-')], { env: { PATH: bin, HOME: s.home, TMPDIR: os.tmpdir(), ASIGHT_TEST_SANDBOX: '1', ASIGHT_MIHOMO_SOCK: path.join(dir, 'none.sock') }, encoding: 'utf8', timeout: 60_000 }) // the VPN probe is pinned to a socket nobody listens on, so it asks no `ps` and can never reach the developer's own core
   const line = (r) => r.stdout.split('\n').find((l) => l.includes('asight-off(')) || `(no line) ${r.stdout}`
   const file = standalonePath(s.home)
