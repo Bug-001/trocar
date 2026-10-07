@@ -1,7 +1,7 @@
 // capture-format.test.mjs — the record is one format whichever way the call reached the engine (the data format is the same on every platform;
 // RFC 4.8 §5.6; acceptance W14 here, W18 — the reader accepts all three `capture` values — with Task 2(b)).
 // The same exchange (a JSON call and an SSE call on one TLS connection, to one origin) goes through the transparent door (what Linux
-// uses) and through the proxy ingress (what the Windows `vpn-block` and `own-forwarder` use). The envelopes must be equal except for the
+// uses) and through the proxy ingress (what the Windows proxy mode uses). The envelopes must be equal except for the
 // fields that are about the route: time, ids, `capture`, `dst`, `proc.pid`, `proc.exe`. The connection rows of a direct upstream must be
 // equal except for what the ingress adds (`ingress`, `pid_source`, `pid_ms`, `upstream`).
 import test from 'node:test'
@@ -75,7 +75,7 @@ async function run(t, door, capture) {
   const envelopes = [], flows = [], failures = []
   const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port, family: 4 }, pid: 4242, agent: 'claude-code', decrypt: true })
   const meta = { pid: 4242, agent: 'claude-code', decrypt: true, capture, form: 'claude-code.cli', pid_source: 'socket-table', pid_ms: 4, negKey: '4242', upstream: { kind: 'direct' } }
-  redirector.setIngress('vb.claude-code.cli', meta)
+  redirector.setIngress('of.claude-code.cli', meta)
   const engine = createEngine({
     redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: originCa.certPem, ingressToken: TOKEN,
     store: { envelope: (e) => { envelopes.push(structuredClone(e)); return true }, flow: (f) => { flows.push(structuredClone(f)); return true } }, onFailure: (f) => failures.push(f),
@@ -85,7 +85,7 @@ async function run(t, door, capture) {
   let socket
   if (door === 'ingress') {
     socket = net.connect(ingressPort, '127.0.0.1'); socket.on('error', () => {})
-    socket.write(`CONNECT 127.0.0.1:${port} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nProxy-Authorization: Basic ${Buffer.from(`vb.claude-code.cli:${TOKEN}`).toString('base64')}\r\n\r\n`)
+    socket.write(`CONNECT 127.0.0.1:${port} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nProxy-Authorization: Basic ${Buffer.from(`of.claude-code.cli:${TOKEN}`).toString('base64')}\r\n\r\n`)
     await within(new Promise((res) => { let b = ''; const on = (d) => { b += d.toString('latin1'); if (b.includes('\r\n\r\n')) { socket.removeListener('data', on); assert.match(b, /^HTTP\/1\.1 200 /); res() } }; socket.on('data', on) }), 4000, 'the 200')
   } else { socket = net.connect(enginePort, '127.0.0.1'); socket.on('error', () => {}) }
   assert.equal(await agent(socket), 2, 'both calls were answered')
@@ -101,7 +101,7 @@ test('W14 the same calls through the transparent door and through the ingress: t
   // One run through the ingress, not one per `capture` value: nothing reads meta.capture yet (the todo below), and `strip` removes the field, so a second run
   // with another value would be the same run again and say nothing.
   {
-    const capture = 'vpn-block', via = await run(t, 'ingress', capture)
+    const capture = 'proxy', via = await run(t, 'ingress', capture)
     assert.deepEqual(via.envelopes.map(strip), base.envelopes.map(strip), 'the envelopes, minus ts*, ids, capture, dst, proc.pid, proc.exe')
     assert.deepEqual(via.envelopes.map((e) => e.proc.agent), ['claude-code', 'claude-code'])
     assert.deepEqual(via.envelopes[0].dst, { address: '127.0.0.1', port: via.port, family: 4 }, 'dst is the target the proxy client asked for (a route field: not part of the comparison)')
@@ -112,7 +112,7 @@ test('W14 the same calls through the transparent door and through the ingress: t
     // bytes_down carries the leaf's ECDSA signature, whose DER length varies by a byte or two from handshake to handshake; the 39-byte \`200 Connection established\`
     // the ingress said is far outside that, so a count that included it would show here
     assert.ok(Math.abs(row.bytes_down - baseRow.bytes_down) <= 4, `bytes_down ${row.bytes_down} vs ${baseRow.bytes_down}: the agent's own bytes, not the ingress's answer`)
-    assert.deepEqual([row.ingress, row.pid_source, row.pid_ms, row.upstream], [{ route: 'vb', group: 'claude-code.cli' }, 'socket-table', 4, { kind: 'direct' }])
+    assert.deepEqual([row.ingress, row.pid_source, row.pid_ms, row.upstream], [{ route: 'of', group: 'claude-code.cli' }, 'socket-table', 4, { kind: 'direct' }])
     assert.equal('prelude' in row, false)
     assert.deepEqual(Object.keys(baseRow).filter((k) => ['ingress', 'pid_source', 'pid_ms', 'upstream'].includes(k)), [], 'the transparent row has none of them: Linux rows are unchanged')
   }
@@ -123,8 +123,8 @@ test('W14 the same calls through the transparent door and through the ingress: t
 // `capture`. So today a Windows call is labelled `transparent`: the wrong label, and no other test sees it (`strip` above removes the field). Task 2(b) is those two
 // literals plus `capture: meta.capture` in that `flow`. A todo, not a skip: it runs, fails today, and goes green by itself when 2(b) is in. HARD DEPENDENCY OF TASK 8:
 // the daemon wiring that puts Windows data on disk must not land while this still carries `todo`.
-test('W14 (Task 2(b)) an envelope that came through the ingress carries the capture value its meta says: vpn-block, own-forwarder', { ...T, todo: 'Task 2(b): the envelope builder writes the literal transparent and startTee passes no meta.capture; a hard dependency of Task 8' }, async (t) => {
-  for (const capture of ['vpn-block', 'own-forwarder']) {
+test('W14 (Task 2(b)) an envelope that came through the ingress carries the capture value its meta says: proxy', { ...T, todo: 'Task 2(b): the envelope builder writes the literal transparent and startTee passes no meta.capture; a hard dependency of Task 8' }, async (t) => {
+  for (const capture of ['proxy']) {
     const via = await run(t, 'ingress', capture)
     assert.deepEqual(via.envelopes.map((e) => e.capture), [capture, capture], `${capture}: the envelope says how the call reached the engine`)
   }

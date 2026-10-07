@@ -38,16 +38,16 @@ test('negative cache: forgetPid drops one pid\'s entries and strikes only (the p
 // RFC 4.8 §5.5 · W17: a connection through the proxy ingress whose pid could not be found is keyed by its form ("<route>.<group>"), not by `null`
 test('negative cache: a connection with no pid is keyed by meta.negKey; forms are apart, and forgetKey clears one form (strikes included) and no other', () => {
   const n = createNegativeCache()
-  const a = { pid: null, negKey: 'vb.claude-code.cli', agent: 'claude-code' }, b = { pid: null, negKey: 'of.codex.cli', agent: 'codex' }, p = { pid: 5, agent: 'claude-code' }
-  assert.equal(negKey(a, 'api.test'), 'vb.claude-code.cli|api.test'); assert.equal(negKey(b, 'api.test'), 'of.codex.cli|api.test'); assert.equal(negKey(p, 'api.test'), '5|api.test')
+  const a = { pid: null, negKey: 'of.claude-code.cli', agent: 'claude-code' }, b = { pid: null, negKey: 'of.codex.cli', agent: 'codex' }, p = { pid: 5, agent: 'claude-code' }
+  assert.equal(negKey(a, 'api.test'), 'of.claude-code.cli|api.test'); assert.equal(negKey(b, 'api.test'), 'of.codex.cli|api.test'); assert.equal(negKey(p, 'api.test'), '5|api.test')
   assert.equal(negKey({ pid: null }, 'h'), 'null|h', 'a flow with neither a pid nor a form is what it always was')
   n.mark(negKey(a, 'api.test'), { cause: 'upstream-cert', meta: a, host: 'api.test' })
   n.observe(negKey(a, 'other.test'), { rejected: true, meta: a, host: 'other.test' }) // half-way
   n.mark(negKey(p, 'api.test'), { cause: 'upstream-cert', meta: p, host: 'api.test' })
   assert.equal(n.has(negKey(b, 'api.test')), false, 'the other form is untouched')
-  assert.deepEqual(n.list().map((e) => [e.pid ?? null, e.negKey]), [[null, 'vb.claude-code.cli'], [5, '5']])
+  assert.deepEqual(n.list().map((e) => [e.pid ?? null, e.negKey]), [[null, 'of.claude-code.cli'], [5, '5']])
   assert.equal(n.forgetKey('of.codex.cli'), 0)
-  assert.equal(n.forgetKey('vb.claude-code.cli'), 1); assert.equal(n.strikes(negKey(a, 'other.test')), 0, 'its half-way count goes too')
+  assert.equal(n.forgetKey('of.claude-code.cli'), 1); assert.equal(n.strikes(negKey(a, 'other.test')), 0, 'its half-way count goes too')
   assert.deepEqual(n.list().map((e) => e.negKey), ['5'], 'the pid\'s entry stays')
   assert.equal(n.forgetPid(5), 1)
 })

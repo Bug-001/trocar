@@ -7,14 +7,12 @@
 // tun, no dns section, no geodata download (the geox URLs point at the discard port), a clean environment (no proxy variables: the machine running the test has
 // NO_PROXY set), and the process killed in t.after (all of it in fixtures/real-mihomo.mjs, which mihomo-adapter-contract.test.mjs shares). Requests go through Node's `net` as an explicit proxy client, never through `curl`.
 //
-// The "engine" is the REAL engine and proxy ingress (src/collector/core/engine; test/netenv/fixtures/real-engine.mjs puts a recording tap in
-// front of it): Task 3 swapped the stand-in (engine-fixture.mjs, which the Windows spike still ships) for it, and Task 5 swapped the inline config
-// (inline-block.mjs, which the spike still ships too) for the generators' own output (src/netenv/mihomo/rules.mjs, via fixtures/generated-config.mjs). Shapes (4.8 §3.3):
-//   1. Verge-like: the mixed port is both what agents reach and the re-entry point; the agent stand-in has its own `http` listener (IN-NAME).
-//   2. own-forwarder-like: a form listener with `rule: in-<g>` sub-rules; its own port is the re-entry point.
-// The loopback rule `AND,((DST-PORT,<re-entry>),(IP-CIDR,127.0.0.1/32,no-resolve)),DIRECT` (the core of the §3.3 fallback design) is red-able only against a user whose rules would
-// send the probe to the re-entry point somewhere else: a tail of MATCH,DIRECT or a next hop of 'direct' lets it through by accident (measured: with the rule mutated away both default
-// shapes still passed 8 of 8). So each shape has a variant with a strict user: shape 1 ends its rules in MATCH,REJECT but for the origin, shape 2 has an http next hop (with
+// The "engine" is the REAL engine and proxy ingress (src/collector/core/engine; test/netenv/fixtures/real-engine.mjs puts a recording tap in front of it): Task 3 swapped the stand-in (engine-fixture.mjs, which the
+// Windows spike still ships) for it, and the inline config was swapped (inline-block.mjs, which the spike still ships too) for the generator's own output (src/netenv/mihomo/rules.mjs, via
+// fixtures/generated-config.mjs). One shape since D43 (the Verge-like shape, where the engine's re-entry point was the user's own mixed port, went with the VPN-block route):
+//   own-forwarder-like: a form listener with `rule: in-<g>` sub-rules; its own port is the re-entry point (4.8 §3.3).
+// The loopback rule `AND,((DST-PORT,<re-entry>),(IP-CIDR,127.0.0.1/32,no-resolve)),DIRECT` (the core of the §3.3 fallback design) is red-able only against a user whose rules would send the probe to the re-entry
+// point somewhere else: a next hop of 'direct' lets it through by accident (measured: with the rule mutated away the default shape still passed 8 of 8). So there is a variant with an http next hop (with
 // credentials) that refuses every target but the origin. A real VPN, or a proxy that refuses loopback, is that user.
 // The "verbatim" tests load the generators' text as it is, with a dotted group id like the product's (claude-code.cli): the real core must accept it.
 // The probe bytes mihomo really sent are compared with test/netenv/fixtures/mihomo-probe.bytes (the re-entry port normalised to 18000);
@@ -29,8 +27,8 @@ import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { startRealEngine } from './fixtures/real-engine.mjs'
 import { BIN, gate, freePort, sleep, startMihomo } from './fixtures/real-mihomo.mjs'
-import { vergeLikeConfig, forwarderLikeConfig, groupOf, G, TOKEN, OWN_IMAGES } from './fixtures/generated-config.mjs'
-import { buildBlock, buildForwarderConfig } from '../../src/netenv/mihomo/rules.mjs'
+import { forwarderLikeConfig, groupOf, G, TOKEN } from './fixtures/generated-config.mjs'
+import { buildForwarderConfig, names, processRulesOf, routeFile } from '../../src/netenv/mihomo/rules.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const PROBE_FILE = path.join(HERE, 'fixtures', 'mihomo-probe.bytes')
@@ -99,19 +97,19 @@ function startNextHop(t, { port, origin, user, pass }) {
   return { seen, refused }
 }
 
-async function shape(t, { name, make, unifiedDelay = true, agentAuth, g = G, strictTail = false, nextHop = null }) {
+async function shape(t, { make, unifiedDelay = true, agentAuth, g = G, nextHop = null }) {
   const ports = {}
-  for (const k of ['mixed', 'form', 'agent', 'controller', 'engine', 'blocked', 'origin', 'nexthop']) ports[k] = await freePort()
+  for (const k of ['form', 'controller', 'engine', 'origin', 'nexthop']) ports[k] = await freePort()
   const secret = randomBytes(16).toString('hex') // the generator wants a real secret: 16+ letters and digits
-  const reenter = name === 'verge-like' ? ports.mixed : ports.form
-  const agentPort = name === 'verge-like' ? ports.agent : ports.form
+  const reenter = ports.form // the form's own listener is the re-entry point and where the agent stand-in connects
+  const agentPort = ports.form
   const origin = http.createServer((q, r) => r.end('origin-ok')).listen(ports.origin, '127.0.0.1')
   t.after(() => origin.close())
   let engine = await startRealEngine({ port: ports.engine, token: TOKEN, reenterPort: reenter, group: g })
   t.after(() => engine.close())
   const hop = nextHop ? startNextHop(t, { port: ports.nexthop, origin: ports.origin, user: nextHop.user, pass: nextHop.pass }) : null
   const upstream = nextHop ? { type: 'http', host: '127.0.0.1', port: ports.nexthop, username: nextHop.user, password: nextHop.pass } : undefined
-  const built = make({ ports, secret, unifiedDelay, g, strictTail, ...(upstream ? { upstream } : {}) })
+  const built = make({ ports, secret, unifiedDelay, g, ...(upstream ? { upstream } : {}) })
   const m = await startMihomo(t, { ...built, secret, controller: ports.controller })
   const agent = () => viaProxy(agentPort, `127.0.0.1:${ports.origin}`, { auth: agentAuth })
   const fbUrl = `http://127.0.0.1:${reenter}/asight-health/${g}`
@@ -190,7 +188,6 @@ async function contractSteps(s, opts) {
   // off: PASS falls through to the user's own rules, the engine is not asked
   assert.equal((await m.ctl('PUT', `/proxies/asight-sw-${g}`, { name: 'PASS' })).status, 204)
   const eBefore = s.getEngine().events.filter((e) => e.kind === 'agent-connect').length
-  if (opts.name === 'verge-like') assert.equal((await viaProxy(s.ports.agent, `127.0.0.1:${s.ports.blocked}`)).body, '', 'the user rule (REJECT on a port) still applies when the switch is PASS')
   assert.equal((await s.agent()).body, 'origin-ok')
   assert.equal(s.getEngine().events.filter((e) => e.kind === 'agent-connect').length, eBefore, 'PASS: the engine sees nothing')
 
@@ -213,17 +210,13 @@ async function contractSteps(s, opts) {
   return { version: m.version, flipMs: flipped }
 }
 
-test('W57 shape 1 (Verge-like): both members alive, asight-in chosen; engine dies → asight-re, next request ok; PASS falls through; list ruleCount; 405; loopback only', gate, async (t) => {
-  const r = await runContract(t, { name: 'verge-like', make: vergeLikeConfig, record: true })
+test('W57 the own forwarder\'s shape: a listener with rule: in-<g> sub-rules; both members alive, asight-in chosen; engine dies → asight-re, next request ok; PASS falls through; list ruleCount; 405; loopback only; mihomo sends the committed probe bytes', gate, async (t) => {
+  const r = await runContract(t, { make: forwarderLikeConfig, agentAuth: 'agent:ap', record: true })
   assert.match(r.version, /^v?\d+\.\d+/)
 })
 
-test('W57 shape 2 (own-forwarder-like): listener with rule: in-<g> sub-rules, same assertions', gate, async (t) => {
-  await runContract(t, { name: 'forwarder-like', make: forwarderLikeConfig, agentAuth: 'agent:ap' })
-})
-
 test('W57 unified-delay off: one HEAD in the tunnel, answered, both members alive', gate, async (t) => {
-  await runContract(t, { name: 'verge-like', make: vergeLikeConfig, unifiedDelay: false })
+  await runContract(t, { make: forwarderLikeConfig, agentAuth: 'agent:ap', unifiedDelay: false })
 })
 
 // The window the spec has to state (4.8 §3.3 窗口期): an engine that dies right after a health check. mihomo runs ONE check per second at most (singleDo), so
@@ -232,7 +225,7 @@ test('W57 unified-delay off: one HEAD in the tunnel, answered, both members aliv
 // already answered the agent's CONNECT with 200). The group flips on the next connection after the window (or at the next interval, 30 s, with no traffic): agents
 // retry, so traffic comes. What must hold: with traffic, the flip within 5 s, and a success after it.
 test('W57 engine dies within 1 s of a health check: the first connection may be slow or fail, traffic still flips the group and the next one succeeds', gate, async (t) => {
-  const s = await shape(t, { name: 'verge-like', make: vergeLikeConfig })
+  const s = await shape(t, { make: forwarderLikeConfig, agentAuth: 'agent:ap' })
   const { g } = s
   assert.equal((await s.m.ctl('PUT', `/proxies/asight-sw-${g}`, { name: `asight-fb-${g}` })).status, 204)
   assert.equal((await s.refresh()).status, 200)
@@ -247,24 +240,12 @@ test('W57 engine dies within 1 s of a health check: the first connection may be 
   assert.equal((await s.agent()).body, 'origin-ok', 'the next connection succeeds')
 })
 
-// The product's group ids have dots (claude-code.cli): they are in the listener name, the sub-rule name, every outbound and group name, the provider name, the probe's URL path and the
-// ingress user (vb.claude-code.cli). The whole contract again with one, on both shapes.
-test('W57 shape 1 with a dotted group id (the product\'s kind of id): the whole contract holds', gate, async (t) => {
-  await runContract(t, { name: 'verge-like', make: vergeLikeConfig, g: 'claude-code.cli' })
-})
-
 test('W57 shape 2 with a dotted group id', gate, async (t) => {
-  await runContract(t, { name: 'forwarder-like', make: forwarderLikeConfig, agentAuth: 'agent:ap', g: 'claude-code.cli' })
-})
-
-// The strict users (see the header): what keeps the re-entry point's own probe alive is the loopback rule alone. Without it the probe's CONNECT to 127.0.0.1:<re-entry> is the
-// user's to route: here a REJECT, or a next hop that turns it away, and asight-re is dead. These two went 8 of 8 green with the rule mutated away, so they are what pins it.
-test('W57 shape 1 with a strict user (rules end in MATCH,REJECT but for the origin): the loopback rule is what keeps asight-re alive; the whole contract holds', gate, async (t) => {
-  await runContract(t, { name: 'verge-like', make: vergeLikeConfig, strictTail: true })
+  await runContract(t, { make: forwarderLikeConfig, agentAuth: 'agent:ap', g: 'claude-code.cli' })
 })
 
 test('W57 shape 2 with an http next hop that has credentials and refuses every target but the origin: asight-re stays alive, the credentials reach the hop, no probe leaves through it', gate, async (t) => {
-  await runContract(t, { name: 'forwarder-like', make: forwarderLikeConfig, agentAuth: 'agent:ap', nextHop: { user: 'hop-user', pass: 'hop-pass' } })
+  await runContract(t, { make: forwarderLikeConfig, agentAuth: 'agent:ap', nextHop: { user: 'hop-user', pass: 'hop-pass' } })
 })
 
 // The generators' text, as it is (no overlay): the real core must load it. The engine is not running in these (no tap): they check what the config says about itself and what a
@@ -276,7 +257,7 @@ async function loadVerbatim(t, { on }) {
   const origin = http.createServer((q, r) => r.end('origin-ok')).listen(ports.origin, '127.0.0.1')
   t.after(() => origin.close())
   const text = buildForwarderConfig({ forms: [{ g, port: ports.form, upstream: 'direct' }], enginePort: ports.engine, token: TOKEN, controller: { port: ports.controller, secret }, on })
-  const files = on ? buildBlock({ groups: [groupOf(g)], enginePort: ports.engine, token: TOKEN, reenter: { host: '127.0.0.1', port: ports.form }, ownImages: OWN_IMAGES }).files : {}
+  const files = on ? { [names(g).routeFile]: routeFile(processRulesOf(groupOf(g))) } : {} // the route file the on config's provider reads (4.8 §3.1 today's form; Task 7 puts the rules inline)
   const m = await startMihomo(t, { configText: text, files, secret, controller: ports.controller })
   return { m, ports, g, files }
 }

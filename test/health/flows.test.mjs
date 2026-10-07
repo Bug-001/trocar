@@ -145,16 +145,16 @@ test('foldFlows: negative-cache entries are keyed by (neg_key ?? pid, host): two
   const neg = (extra) => ({ ts: at(8 * H), event: 'failure', where: 'engine', code: 'negative-cache', host: 'h.test', cause: 'client-rejected-leaf', reason: 'r', ...extra })
   const recs = [
     { ts: at(10 * H), event: 'daemon-start', pid: 2 },
-    neg({ pid: null, neg_key: 'vb.claude-code.cli' }), neg({ pid: null, neg_key: 'of.codex.cli' }), neg({ pid: 12, neg_key: '12' }), neg({ pid: 13 }), // the last: a line from before neg_key
+    neg({ pid: null, neg_key: 'of.claude-code.cli' }), neg({ pid: null, neg_key: 'of.codex.cli' }), neg({ pid: 12, neg_key: '12' }), neg({ pid: 13 }), // the last: a line from before neg_key
   ]
   const keys = (r) => foldFlows(r, { now: NOW }).conditions.map((c) => `${c.neg_key ?? c.pid}|${c.host}`).sort()
-  assert.deepEqual(keys(recs), ['12|h.test', '13|h.test', 'of.codex.cli|h.test', 'vb.claude-code.cli|h.test'], 'four entries, none folded into (null, host)')
+  assert.deepEqual(keys(recs), ['12|h.test', '13|h.test', 'of.claude-code.cli|h.test', 'of.codex.cli|h.test'], 'four entries, none folded into (null, host)')
   const cleared = (e) => keys([...recs, { ts: at(5 * H), event: 'negative-cache-cleared', ...e, dropped: 1 }])
-  assert.deepEqual(cleared({ pid: null, neg_key: 'vb.claude-code.cli' }), ['12|h.test', '13|h.test', 'of.codex.cli|h.test'], 'clears by neg_key: only that form')
-  assert.deepEqual(cleared({ pid: 12, neg_key: '12' }), ['13|h.test', 'of.codex.cli|h.test', 'vb.claude-code.cli|h.test'])
-  assert.deepEqual(cleared({ pid: 13 }), ['12|h.test', 'of.codex.cli|h.test', 'vb.claude-code.cli|h.test'], 'an old clearing without neg_key falls back to the pid')
+  assert.deepEqual(cleared({ pid: null, neg_key: 'of.claude-code.cli' }), ['12|h.test', '13|h.test', 'of.codex.cli|h.test'], 'clears by neg_key: only that form')
+  assert.deepEqual(cleared({ pid: 12, neg_key: '12' }), ['13|h.test', 'of.claude-code.cli|h.test', 'of.codex.cli|h.test'])
+  assert.deepEqual(cleared({ pid: 13 }), ['12|h.test', 'of.claude-code.cli|h.test', 'of.codex.cli|h.test'], 'an old clearing without neg_key falls back to the pid')
   const exit = keys([...recs, { ts: at(5 * H), event: 'agent-exit', pid: 12 }])
-  assert.deepEqual(exit, ['13|h.test', 'of.codex.cli|h.test', 'vb.claude-code.cli|h.test'], 'a process exiting clears its own pid\'s entry and no form\'s')
+  assert.deepEqual(exit, ['13|h.test', 'of.claude-code.cli|h.test', 'of.codex.cli|h.test'], 'a process exiting clears its own pid\'s entry and no form\'s')
   assert.equal(foldFlows(recs, { now: NOW }).conditions.find((c) => c.neg_key === 'of.codex.cli').pid, null, 'neg_key survives the metadata whitelist')
 })
 

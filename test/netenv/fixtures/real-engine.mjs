@@ -22,8 +22,8 @@ export async function startRealEngine({ port = 0, host = '127.0.0.1', token, ree
   const emit = (e) => { const ev = { t: Date.now(), ...e }; events.push(ev); onEvent(ev) }
   const redirector = createStaticRedirector()
   const who = ({ target }) => (target.address === '127.0.0.1' && target.port === reenterPort ? { health: true, group }
-    : { pid: null, agent: null, decrypt: false, capture: 'vpn-block', negKey: `vb.${group}`, pid_source: null, pid_ms: null, upstream: { kind: 'direct' } })
-  for (const route of ['vb', 'of']) redirector.setIngress(`${route}.${group}`, who)
+    : { pid: null, agent: null, decrypt: false, capture: 'proxy', negKey: `of.${group}`, pid_source: null, pid_ms: null, upstream: { kind: 'direct' } })
+  redirector.setIngress(`of.${group}`, who)
   const engine = createEngine({
     redirector, issuer: createLeafIssuer(loadCa(createCa())), ingressToken: token,
     store: { envelope() { return true }, flow: (f) => { flows.push(f); return true } },
