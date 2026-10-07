@@ -49,10 +49,10 @@ export function macHome({ block = true, runtime = true, agents = LABELS, steer =
 
 /**
  * launchd, the login environment and the keychain as one fake runner (`run` has the shape of spawnSync's answer). Every call is recorded in `calls` (and in `order`, shared with the Clash core, when given).
- * `list <label>` is 0 for a loaded label (with a PID when it has one) and 113 otherwise; `unload <plist>` takes the label out (after `onUnload(label)`, which a test hangs the MITM's SIGTERM on); `getenv` answers
+ * `list <label>` is 0 for a loaded label (with a PID when it has one) and 113 otherwise; `unload <plist>` takes the label out (after `onUnload(label)`, which a test hangs the MITM's SIGTERM on); `load <plist>` of a label in `failLoad` is refused (exit 5); `getenv` answers
  * `env`; `security find-certificate` is 0 while `keychain` is true and 44 after the delete.
  */
-export function fakeMac({ loaded = LABELS, pids = { 'com.asight.mitm': 4242 }, env = {}, keychain = true, onUnload = () => {}, order = [], failUnload = [] } = {}) {
+export function fakeMac({ loaded = LABELS, pids = { 'com.asight.mitm': 4242 }, env = {}, keychain = true, onUnload = () => {}, order = [], failUnload = [], failLoad = [] } = {}) {
   const calls = []
   const state = { loaded: new Set(loaded), env: { ...env }, keychain }
   const run = (file, args) => {
@@ -70,7 +70,7 @@ export function fakeMac({ loaded = LABELS, pids = { 'com.asight.mitm': 4242 }, e
       if (sub === 'remove') { state.loaded.delete(a); return ok() }
       if (sub === 'getenv') return ok(state.env[a] || '')
       if (sub === 'unsetenv') { delete state.env[a]; return ok() }
-      if (sub === 'load') { state.loaded.add(path.basename(a, '.plist')); return ok() }
+      if (sub === 'load') { const label = path.basename(a, '.plist'); if (failLoad.includes(label)) return { status: 5, stdout: '', stderr: 'Load failed: 5: Input/output error' }; state.loaded.add(label); return ok() }
       if (sub === 'setenv') { state.env[a] = args[2]; return ok() }
     }
     if (file === 'security') {

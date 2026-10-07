@@ -26,6 +26,7 @@ import { sha256 } from '../../src/off/fsutil.mjs'
 import { legacyManifestPath } from '../../src/off/paths.mjs'
 import { fakeIo, snapshot, changedFiles } from './fixtures/on-ctx.mjs'
 import { standalonePath, backupDir } from '../../src/off/paths.mjs'
+import { injectScript } from '../../src/capture/desktop-steer.mjs'
 import { macHome, fakeMac, fakeCore, fakeClock, fakeOpenssl, readEvents, USER_MAIN, NO_OP, CA_CN, LABELS } from './fixtures/legacy-ctx.mjs'
 import { installedHome } from '../off/fixtures/off-ctx.mjs'
 
@@ -469,6 +470,11 @@ test('V12 + V14 + V23: on writes the Clash block (the Script.js backed up first,
     assert.equal(fs.statSync(e.backup).mode & 0o777, 0o600); assert.equal(fs.statSync(backupDir(s.home)).mode & 0o777, 0o700)
     assert.ok(r.changed.some((c) => c.path === s.script && c.backup === e.backup), 'the receipt lists it with its backup')
     assert.equal(core.state.live, true); assert.ok(order.indexOf('PUT /configs') >= 0)
+    // R9: what the route leads to — the MITM and the trust for it — is loaded before the route is attached; the route is the last thing `on` does
+    const at = (re) => order.findIndex((c) => re.test(c))
+    assert.ok(at(/^launchctl load .*com\.asight\.mitm\.plist/) >= 0 && at(/^launchctl load .*com\.asight\.mitm\.plist/) < order.indexOf('PUT /configs'), 'the MITM is loaded before Clash is reloaded')
+    assert.ok(at(/^launchctl load .*com\.asight\.env\.plist/) >= 0 && at(/^launchctl load .*com\.asight\.env\.plist/) < order.indexOf('PUT /configs'), 'and so is the primer')
+    assert.ok(order.indexOf('GET /proxies') > order.indexOf('PUT /configs'), 'and the read-back comes after the reload')
     // the agents
     for (const label of ['com.asight.mitm', 'com.asight.env']) { assert.ok(fs.existsSync(s.plist(label)), label); assert.ok(mac.state.loaded.has(label), `${label} is loaded`) }
     assert.match(fs.readFileSync(s.plist('com.asight.mitm'), 'utf8'), /<key>ExitTimeOut<\/key><integer>15<\/integer>/)
@@ -592,6 +598,87 @@ test('R2: a backup that cannot be written stops the change — Script.js keeps i
     const ev = readEvents(s.home).find((e) => e.code === 'backup-failed')
     assert.ok(ev && ev.event === 'failure' && ev.where === 'install', 'the failure is in the log'); assert.deepEqual(checkRecord(ev), [])
   } finally { await core.close() }
+})
+
+test('R9: the route is attached last — a MITM or primer that does not load leaves Clash alone (no reload, Script.js with its own bytes, the copy of it not kept, nothing about the route in the ledger), exit 1 with the reason; the agents that were written stay and the next on finishes', async () => {
+  for (const label of ['com.asight.mitm', 'com.asight.env']) {
+    const s = freshMac(); const core = await fakeCore({ live: false }); const mac = fakeMac({ loaded: [], keychain: false, failLoad: [label] })
+    try {
+      const original = fs.readFileSync(s.script, 'utf8')
+      const io = fakeIo()
+      assert.equal(await runOnCli(['--yes', '--json'], onCtx(s, io, { core, mac })), 1, `${label}: ${io.text()}`)
+      const r = io.json()
+      assert.equal(r.ok, false); assert.ok(r.notes.some((n) => n.includes(label) && /did NOT load/.test(n)), r.notes.join(' | '))
+      assert.ok(r.notes.some((n) => /Clash 的路由没有挂上/.test(n)), 'and it says the route was not attached')
+      assert.deepEqual([core.state.puts.length, fs.readFileSync(s.script, 'utf8') === original, mac.state.loaded.has(label)], [0, true, false], `${label}: Clash is not reloaded, Script.js is untouched`)
+      assert.equal(fs.existsSync(backupDir(s.home)) && fs.readdirSync(backupDir(s.home)).length > 0, false, 'the copy of Script.js is not kept for a change that did not happen')
+      assert.deepEqual(ledgerOf(s).entries.map((x) => x.kind).sort(), ['legacy-env', 'legacy-launch-agent'], 'the ledger holds the agents that were written and no route')
+      assert.ok(readEvents(s.home).some((e) => e.event === 'failure' && e.code === 'steer-missing'), 'a line in the old capture\'s log')
+      // the next on, with the load working: the agent that is there is only loaded, the route goes in last
+      mac.state.loaded.delete('com.asight.mitm')
+      const again = fakeIo()
+      assert.equal(await runOnCli(['--yes', '--json'], onCtx(s, again, { core, mac: fakeMac({ loaded: [], keychain: false, order: [] }) })), 0, again.text())
+      assert.equal(core.state.live, true); assert.ok(fs.readFileSync(s.script, 'utf8').includes(BLOCK))
+    } finally { await core.close() }
+  }
+})
+
+test('V23 / R11: a reload the core accepted that cannot be read back is 「不知道」 — on is exit 1 with a steer-missing line that says so and no clash-live line; and a core that has no route after an accepted reload (no runtime config to reload) says how to apply it by hand', async () => {
+  const s = freshMac(); const core = await fakeCore({ live: false, breakProxies: true }); const mac = fakeMac({ loaded: [], keychain: false })
+  try {
+    const io = fakeIo()
+    assert.equal(await runOnCli(['--yes', '--json'], onCtx(s, io, { core, mac })), 1, io.text())
+    const r = io.json()
+    assert.equal(r.ok, false); assert.ok(r.notes.some((n) => /^不知道/.test(n) && /读不回/.test(n)), r.notes.join(' | '))
+    assert.ok(core.state.puts.length >= 1, 'the reload was sent and accepted')
+    const ev = readEvents(s.home)
+    assert.equal(ev.some((e) => e.kind === 'clash-live'), false, 'no line claims the route is live')
+    assert.ok(ev.some((e) => e.event === 'failure' && e.code === 'steer-missing' && /不知道/.test(e.reason)))
+  } finally { await core.close() }
+  const t = freshMac(); fs.rmSync(t.runtimePath) // nothing to reload: the durable half goes in, the core is not changed
+  const core2 = await fakeCore({ live: false }); const mac2 = fakeMac({ loaded: [], keychain: false })
+  try {
+    const io = fakeIo()
+    assert.equal(await runOnCli(['--yes', '--json'], onCtx(t, io, { core: core2, mac: mac2 })), 1, io.text())
+    const r = io.json()
+    assert.ok(r.notes.some((n) => /核里没有 atrace-mitm/.test(n) && /reactivate/.test(n)), r.notes.join(' | '))
+    assert.equal(readEvents(t.home).some((e) => e.kind === 'clash-live'), false)
+    assert.ok(fs.readFileSync(t.script, 'utf8').includes(BLOCK), 'the durable half is in, and in the ledger: off takes it out')
+  } finally { await core2.close() }
+})
+
+test('R2 / R8 / 1.6 §4: a block that is in Script.js but not in the core is put into the core again WITH ITS OWN PORT and the file is not rewritten (no copy, no ledger entry) — an old `desktop on --port 9899` keeps its MITM; with the port named in ASIGHT_MITM_PORT the file does change, so it is confirmed, copied first, and listed with its copy', async () => {
+  const OLD = injectScript(USER_MAIN, 9899)
+  const s = macHome({ block: false, runtime: true, agents: [], steer: false, ca: false, userMain: USER_MAIN }); fs.writeFileSync(s.script, OLD)
+  const core = await fakeCore({ live: false }); const mac = fakeMac({ loaded: [], keychain: false })
+  try {
+    const io = fakeIo()
+    assert.equal(await runOnCli(['--yes', '--json'], onCtx(s, io, { core, mac })), 0, io.text())
+    const r = io.json()
+    assert.equal(fs.readFileSync(s.script, 'utf8'), OLD, 'Script.js is not rewritten: its block already says what on would write')
+    assert.match(core.state.puts.at(-1).payload, /port: 9899/, 'the core gets the route with the port the block carries'); assert.equal(core.state.live, true)
+    assert.match(fs.readFileSync(s.plist('com.asight.mitm'), 'utf8'), /<string>9899<\/string>/, 'and the MITM `on` adds listens there')
+    assert.equal(fs.existsSync(backupDir(s.home)) && fs.readdirSync(backupDir(s.home)).length > 0, false, 'no copy: nothing of the user\'s changed')
+    assert.equal(ledgerOf(s).entries.some((x) => x.kind === 'legacy-clash-block'), false)
+    assert.ok(r.notes.some((n) => /指向 MITM :9899/.test(n)), 'and the receipt says whose port it is')
+  } finally { await core.close() }
+  // the operator names another port: the file changes, so it is asked about, copied first and listed
+  const t = macHome({ block: false, runtime: true, agents: [], steer: false, ca: false, userMain: USER_MAIN }); fs.writeFileSync(t.script, OLD)
+  const core2 = await fakeCore({ live: false }); const mac2 = fakeMac({ loaded: [], keychain: false })
+  try {
+    const before = snapshot(t.home)
+    const plan = fakeIo()
+    assert.equal(await runOnCli([], onCtx(t, plan, { core: core2, mac: mac2, env: { ASIGHT_MITM_PORT: '9898' } })), 2, plan.text())
+    assert.ok(plan.text().includes('Script.js') && plan.text().includes('9898'), 'the plan names the file and the port')
+    assert.deepEqual([snapshot(t.home), core2.state.puts.length], [before, 0], 'and nothing was written')
+    const io = fakeIo()
+    assert.equal(await runOnCli(['--yes', '--json'], onCtx(t, io, { core: core2, mac: mac2, env: { ASIGHT_MITM_PORT: '9898' } })), 0, io.text())
+    const e = ledgerOf(t).entries.find((x) => x.kind === 'legacy-clash-block' && x.path === t.script)
+    assert.equal(fs.readFileSync(e.backup, 'utf8'), OLD, 'the copy holds Script.js as it was, with the old block')
+    assert.deepEqual([e.pre_sha256, e.post_sha256], [sha256(OLD), sha256(fs.readFileSync(t.script))]); assert.notEqual(e.pre_sha256, e.post_sha256)
+    assert.match(fs.readFileSync(t.script, 'utf8'), /port: 9898/)
+    assert.ok(io.json().changed.some((c) => c.path === t.script && c.backup === e.backup), 'the receipt lists it with its copy')
+  } finally { await core2.close() }
 })
 
 test('R9 / V23: an old capture that is half there — the block is in Script.js but the core has no route, the agent plists are there but not loaded — is completed: the core gets the route, the agents are loaded, no file is rewritten, and the receipt says it is 「旧命令装的,无备份」', async () => {
