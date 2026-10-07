@@ -21,6 +21,28 @@ function golden(name, actual) {
 
 // ---- W7 ------------------------------------------------------------------------------------------------------------------------------------------
 
+// How mihomo reads a process rule (4.8 §2.3, rules/common/process.go): a regex is case-insensitive and unanchored over the whole image path, a name is compared to the base name.
+const baseName = (p) => p.split(/[\\/]/).pop()
+function matches(line, image) {
+  const i = line.indexOf(',')
+  const type = line.slice(0, i), payload = line.slice(i + 1)
+  if (type === 'PROCESS-PATH-REGEX') return new RegExp(payload, 'i').test(image)
+  if (type === 'PROCESS-NAME') return baseName(image).toLowerCase() === payload.toLowerCase()
+  throw new Error(`not a process rule: ${line}`)
+}
+
+test('W7 routing: the process rules route the agents and no rule matches Claude Desktop or any Code.exe (4.8 §2.3, §3.5)', () => {
+  const lines = STAND_INS.flatMap(processRulesOf)
+  assert.ok(lines.length >= 6)
+  for (const [what, image] of Object.entries({ ccNpm: IMAGES.ccNpm, ccNative: IMAGES.ccNative, codexApp: IMAGES.codexApp, kimi: IMAGES.kimi, hermes: IMAGES.hermes })) {
+    assert.ok(lines.some((l) => matches(l, image)), `${what} is routed (the check below is not vacuous)`)
+  }
+  for (const [what, image] of Object.entries({ claudeDesktop: IMAGES.claudeDesktop, codeUser: IMAGES.codeUser, codeSystem: IMAGES.codeSystem, codeInsiders: IMAGES.codeInsiders })) {
+    assert.deepEqual(lines.filter((l) => matches(l, image)), [], `${what}: no rule matches`)
+  }
+  assert.ok(matches('PROCESS-PATH-REGEX,Microsoft VS Code', IMAGES.codeUser) && !matches('PROCESS-NAME,claude.exe', IMAGES.codeUser), 'the matcher can say yes and no')
+})
+
 test('W7 the generator source names no harness and no lab (static scan, comments included)', () => {
   const src = fs.readFileSync(RULES_SRC, 'utf8')
   assert.deepEqual(src.match(/\b(claude|codex|opencode|kimi|dsh|deepseek|hermes|zcode|z-code)\b/gi) || [], [], `a harness id in ${path.basename(RULES_SRC)} (4.8 §3: it does not know them)`)
