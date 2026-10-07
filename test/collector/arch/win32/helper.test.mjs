@@ -257,6 +257,98 @@ test('W1 helper.ps1 contains no write, run or fetch verb (static scan); the scan
   assert.deepEqual(writeVerbsIn('New-Object System.Text.StringBuilder'), [], 'New-Object builds a .NET object in memory: the one New- the helper uses')
 })
 
+// The native half is where the power is: the C# in the Add-Type here-string can write a file, start a process, kill one or set a registry
+// value with a single line that WRITE_PATTERNS (PowerShell verbs and bracketed calls) never sees. So the native surface is pinned instead:
+// the P/Invoke imports are exactly this list (dll and function), each used the read way, and nothing else that writes, runs or fetches is in the C#.
+const NATIVE_IMPORTS = [
+  'advapi32.dll!GetSidSubAuthority', 'advapi32.dll!GetSidSubAuthorityCount', 'advapi32.dll!GetTokenInformation', 'advapi32.dll!OpenProcessToken',
+  'iphlpapi.dll!GetBestInterface', 'iphlpapi.dll!GetExtendedTcpTable',
+  'kernel32.dll!CloseHandle', 'kernel32.dll!CreateFile', 'kernel32.dll!CreateToolhelp32Snapshot', 'kernel32.dll!GetCurrentProcess', 'kernel32.dll!GetNamedPipeServerProcessId',
+  'kernel32.dll!GetProcessTimes', 'kernel32.dll!OpenProcess', 'kernel32.dll!Process32FirstW', 'kernel32.dll!Process32NextW', 'kernel32.dll!ProcessIdToSessionId',
+  'kernel32.dll!QueryFullProcessImageName',
+]
+const IMPORT_RE = /\[(?:System\.Runtime\.InteropServices\.)?DllImport\(\s*"([^"]+)"([^\]]*)\)\]\s*(?:(?:public|private|internal|static|extern|unsafe)\s+)+[\w.<>[\]]+\s+(\w+)\s*\(/g
+/** What the C# may not contain, wherever it sits (comments too). */
+const CS_BANS = [
+  [/\bSystem\s*\.\s*IO\b|\bFile\s*\.|\bDirectory\s*\./, 'file access'],
+  [/\bProcess\s*\.\s*Start\b|\bProcessStartInfo\b|\.Kill\s*\(|\.CloseMainWindow\b/, 'starting or stopping a process'],
+  [/\bRegistry(Key)?\b/, 'the registry'],
+  [/\bEnvironment\s*\.\s*(Exit|FailFast|SetEnvironmentVariable)\b/, 'ending the process or writing the environment'],
+  [/\bMarshal\s*\.\s*Write/, 'writing memory'],
+  [/\bMarshal\s*\.\s*Copy\s*\((?!row\b)/, 'a Marshal.Copy that is not a read of a table row'],
+  [/\bWebClient\b|\bHttpClient\b|\bHttpWebRequest\b|\bWebRequest\b|\bTcpClient\b|\bSocket\b|\bNamedPipeClientStream\b|\bSystem\s*\.\s*Net\s*\.\s*Sockets\b/, 'the network'],
+  [/\bAssembly\s*\.|GetDelegateForFunctionPointer|GetProcAddress|LoadLibrary|\bActivator\s*\./, 'loading or calling code that is not listed'],
+  [/\bEntryPoint\b/, 'a DllImport whose entry point is not its name'],
+]
+/** What a read-only native half still has to look like at the call sites: the access masks that cannot write, kill or create. */
+function callSiteViolations(cs) {
+  const body = cs.split('\n').filter((l) => !/\bextern\b/.test(l)).join('\n') // the declarations name the parameters; the calls give the values
+  const out = []
+  for (const m of body.matchAll(/\bOpenProcess\(\s*([^,)]*)/g)) if (m[1].trim() !== '0x1000') out.push(`OpenProcess with access ${m[1].trim()}: only PROCESS_QUERY_LIMITED_INFORMATION (0x1000) reads`)
+  for (const m of body.matchAll(/\bOpenProcessToken\(\s*[^,]+,\s*([^,]+),/g)) if (m[1].trim() !== '0x8') out.push(`OpenProcessToken with access ${m[1].trim()}: only TOKEN_QUERY (0x8) reads`)
+  for (const m of body.matchAll(/\bCreateFile\(\s*[^,]+,\s*([^,]+),\s*[^,]+,\s*[^,]+,\s*([^,]+),/g)) {
+    if (m[1].trim() !== '0x80000000') out.push(`CreateFile with access ${m[1].trim()}: only GENERIC_READ (0x80000000) reads`)
+    if (m[2].trim() !== '3') out.push(`CreateFile with disposition ${m[2].trim()}: only OPEN_EXISTING (3) cannot create`)
+  }
+  return out
+}
+/** Everything the native surface of a helper script may not be, as short sentences; [] = it can only read. */
+function nativeViolations(text) {
+  const out = []
+  const code = text.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n') // PowerShell comment lines may mention Add-Type
+  const compiles = code.match(/\bAdd-Type\b/g) || []
+  if (compiles.length !== 1 || !/\bAdd-Type\s+-TypeDefinition\s+\$cs\b/.test(code)) out.push('Add-Type is not exactly one `-TypeDefinition $cs`: native code compiled from somewhere else')
+  if (/\bAssembly\b|-MemberDefinition|\bLoadFile\b|\bLoadFrom\b/.test(code)) out.push('the script loads an assembly or compiles a member definition')
+  const imports = [...text.matchAll(IMPORT_RE)].map((m) => `${m[1].toLowerCase()}!${m[3]}`)
+  if ((text.match(/DllImport/g) || []).length !== imports.length || (text.match(/\bextern\b/g) || []).length !== imports.length) out.push('a DllImport or extern the scan cannot read: every import must be written in the one shape it parses')
+  const extra = imports.filter((i) => !NATIVE_IMPORTS.includes(i))
+  const missing = NATIVE_IMPORTS.filter((i) => !imports.includes(i))
+  if (extra.length) out.push(`imports outside the read-only list: ${extra.join(', ')}`)
+  if (missing.length) out.push(`imports of the list that are gone (update the list): ${missing.join(', ')}`)
+  const natives = [...text.matchAll(/@'\r?\n([\s\S]*?)\r?\n'@/g)].map((m) => m[1]).filter((h) => /\bDllImport\b|\bclass\b/.test(h))
+  if (natives.length !== 1) { out.push(`the native code is ${natives.length} here-strings, not one`); return out }
+  for (const [re, what] of CS_BANS) if (re.test(natives[0])) out.push(`the C# touches ${what}`)
+  return [...out, ...callSiteViolations(natives[0])]
+}
+
+test('W1 the C# in helper.ps1 imports exactly the read-only native functions, uses them the read way, and touches no file, registry value or process', () => {
+  assert.deepEqual(nativeViolations(PS), [])
+  const imports = [...PS.matchAll(IMPORT_RE)].map((m) => `${m[1].toLowerCase()}!${m[3]}`)
+  assert.deepEqual([...imports].sort(), [...NATIVE_IMPORTS].sort())
+  assert.equal(NATIVE_IMPORTS.length, 17)
+})
+
+test('W1 the native scan can fail: each planted write, run, kill or registry change in the C# is caught', () => {
+  const plant = (from, to) => { assert.ok(PS.includes(from), `the plant point moved: ${from}`); return PS.replace(from, to) }
+  const inClass = (member) => plant('  static string N(long v)', `  ${member}\n  static string N(long v)`)
+  const planted = {
+    'a file write': inClass('static void X() { System.IO.File.WriteAllText("a", "b"); }'),
+    'a file delete through a using': inClass('static void X() { Directory.Delete("c:\\\\x", true); }'),
+    'a process start': inClass('static void X() { System.Diagnostics.Process.Start("cmd.exe"); }'),
+    'a Kill': inClass('static void X() { System.Diagnostics.Process.GetCurrentProcess().Kill(); }'),
+    'a registry write': inClass('static void X() { Microsoft.Win32.Registry.CurrentUser.CreateSubKey("x"); }'),
+    'Environment.Exit': inClass('static void X() { Environment.Exit(0); }'),
+    'a memory write': inClass('static void X(IntPtr p) { Marshal.WriteInt32(p, 0, 1); }'),
+    'a Marshal.Copy into native memory': inClass('static void X(byte[] x, IntPtr p) { Marshal.Copy(x, 0, p, 16); }'),
+    'a web client': inClass('static void X() { new System.Net.WebClient().DownloadString("http://x"); }'),
+    'a delegate from a function pointer': inClass('static void X(IntPtr p) { Marshal.GetDelegateForFunctionPointer(p, typeof(Action)); }'),
+    'TerminateProcess imported': plant('  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);', '  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);\n  [DllImport("kernel32.dll")] static extern bool TerminateProcess(IntPtr h, uint code);'),
+    'RegSetValueEx imported': plant('  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);', '  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);\n  [DllImport("advapi32.dll")] static extern int RegSetValueEx(IntPtr k, string n, int r, int t, byte[] d, int c);'),
+    'a listed import redirected with EntryPoint': plant('[DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);', '[DllImport("kernel32.dll", EntryPoint = "TerminateProcess")] static extern bool CloseHandle(IntPtr h);'),
+    'a listed import taken from another dll': plant('[DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);', '[DllImport("evil.dll")] static extern bool CloseHandle(IntPtr h);'),
+    'an import written in a shape the scan cannot read': plant('  static string N(long v)', '  [DllImport("kernel32.dll")]\n  [return: MarshalAs(UnmanagedType.Bool)] static extern bool TerminateProcess(IntPtr h, uint c);\n  static string N(long v)'),
+    'a process opened for termination': plant('OpenProcess(0x1000, false, pid)', 'OpenProcess(0x0001, false, pid)'),
+    'a token opened for writing': plant('OpenProcessToken(proc, 0x8, out tok)', 'OpenProcessToken(proc, 0x20, out tok)'),
+    'a pipe opened for writing': plant('0x80000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero)', '0x40000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero)'),
+    'a pipe opened with CREATE_ALWAYS': plant('0x80000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero)', '0x80000000, 3, IntPtr.Zero, 2, 0, IntPtr.Zero)'),
+    'a second Add-Type': PS + '\nAdd-Type -MemberDefinition \'[DllImport("kernel32.dll")] public static extern bool TerminateProcess(IntPtr h, uint c);\' -Name X -Namespace Y\n',
+    'an assembly loaded': PS + '\n[System.Reflection.Assembly]::LoadFile("c:\\\\x.dll")\n',
+  }
+  for (const [what, text] of Object.entries(planted)) assert.ok(nativeViolations(text).length > 0, `the native scan misses: ${what}`)
+  // and the unplanted text is still clean, so the plants above are what turned it red
+  assert.deepEqual(nativeViolations(PS), [])
+})
+
 test('W1 helper.ps1 opens the registry and the certificate stores read-only', () => {
   const opens = [...PS.matchAll(/OpenSubKey\(([^)]*)\)/g)].map((m) => m[1])
   assert.ok(opens.length > 0)
