@@ -483,6 +483,53 @@ test('W71 a read that fails is a change to 「unreadable」 once, and the way ba
   w2.stop()
 })
 
+test('W71 watchSystemProxy sends no read while a reg-read that timed out is still out at the helper (4.8 §1: the helper is serial, a new one only queues behind it); the first tick after the late answer reads again', async () => {
+  const { reg, helper } = fakeRegistry(VERGE)
+  let out = 0 // what helper.abandoned('reg-read') says: calls that timed out and whose late answer has not come
+  const call = helper.call.bind(helper)
+  helper.call = async (...a) => { try { return await call(...a) } catch (e) { if (e.code === 'helper-timeout') out++; throw e } } // as the real client counts a timed-out call
+  helper.abandoned = (verb) => (verb === 'reg-read' ? out : 0)
+  const clock = fakeTimers()
+  const seen = []
+  const w = watchSystemProxy({ helper, timers: clock.timers })
+  w.on('change', (e) => seen.push(e))
+  await w.ready
+  assert.equal(helper.calls.length, 1, 'the baseline')
+  reg.fail = { code: 'helper-timeout' } // a slow CIM `ps` holds the helper: the read queued behind it times out
+  await clock.tick()
+  assert.equal(helper.calls.length, 2)
+  assert.deepEqual([seen.length, seen[0].after.ok], [1, false], 'this one read did time out: one change to unreadable (the spec\'s own reading of a timeout)')
+  for (let i = 0; i < 4; i++) await clock.tick()
+  assert.equal(helper.calls.length, 2, 'four more ticks while it is out: not one more read queued behind it')
+  assert.equal(await w.poll(), false, 'a poll by hand is skipped too')
+  assert.equal(seen.length, 1, 'and nothing said')
+  reg.internet.ProxyServer = sz('127.0.0.1:7890') // the registry moves meanwhile: nobody can see it yet
+  reg.fail = null
+  out = 0 // the helper answered the late one
+  await clock.tick()
+  assert.equal(helper.calls.length, 3, 'the first free tick reads')
+  assert.equal(seen.length, 2)
+  assert.deepEqual([seen[1].before.ok, seen[1].after.ok, seen[1].after.server], [false, true, '127.0.0.1:7890'], 'the way back, with what it found')
+  // before there is a baseline: nothing is read until the helper is free, and then the baseline is taken (no event)
+  out = 1
+  const w2 = watchSystemProxy({ helper, timers: clock.timers })
+  const early = []
+  w2.on('change', (e) => early.push(e))
+  assert.equal(await w2.ready, false)
+  assert.equal(helper.calls.length, 3, 'no baseline read while one is out')
+  out = 0
+  await clock.tick()
+  assert.equal(w2.last().server, '127.0.0.1:7890', 'the baseline, once the helper is free')
+  assert.equal(early.length, 0, 'a baseline is no event')
+  // a helper with no `abandoned` (the daemon\'s own fakes, an old client) is read as before
+  const plain = fakeRegistry(VERGE)
+  const w3 = watchSystemProxy({ helper: plain.helper, timers: clock.timers })
+  await w3.ready
+  await clock.tick()
+  assert.ok(plain.helper.calls.length >= 2)
+  w.stop(); w2.stop(); w3.stop()
+})
+
 test('W71 watchSystemProxy: a baseline the caller already read is used (a change between its read and the first tick is not lost), stop() ends the reads and the events, a listener that throws costs the others nothing', async () => {
   const { reg, helper } = fakeRegistry(VERGE)
   const clock = fakeTimers()

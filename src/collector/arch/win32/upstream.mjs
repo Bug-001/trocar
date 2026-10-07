@@ -289,7 +289,9 @@ const CHANGED_NAMES = Object.freeze({ enable: 'ProxyEnable', server: 'ProxyServe
  * watchSystemProxy({ helper, everyMs = 5000, initial, read, onError, timers }) → { on('change', fn), off, stop(), poll(), ready, last() }
  * Reads the system proxy at once (the baseline: no event) and every `everyMs`; a change of `ProxyEnable`, `ProxyServer`, `ProxyOverride` or `AutoConfigURL`, or a turn to or from unreadable, is one `change` event
  * `{ before, after, changed: [registry value names] }` (unreadable: all four). The daemon recomputes the followers' upstream with `upstreamFor({ systemProxy: after, last })` and reloads the kernel (4.8 §2.2); this file writes nothing.
- * `initial`: an answer the caller already has, so a change between its read and the first tick is not taken into the baseline. A read still running when the next tick comes is waited for, not repeated. A listener that throws costs the others
+ * `initial`: an answer the caller already has, so a change between its read and the first tick is not taken into the baseline. A read still running when the next tick comes is waited for, not repeated, and a tick is skipped while a `reg-read`
+ * that timed out is still out at the helper (`helper.abandoned('reg-read')`, 4.8 §1): nothing is read, so nothing is said, and the first tick after the late answer reads again (a read that does time out is still one `change` to unreadable, and the way back one more: the
+ * daemon reloads the kernel only when the recomputed answers differ from `last`, 4.8 §2.2). A listener that throws costs the others
  * nothing and is handed to `onError`. After `stop()` nothing is read and nothing is emitted.
  */
 export function watchSystemProxy({ helper, everyMs = 5000, initial = null, read = readSystemProxy, onError = () => {}, timers = { setInterval, clearInterval } } = {}) {
@@ -314,6 +316,8 @@ export function watchSystemProxy({ helper, everyMs = 5000, initial = null, read 
   }
   const poll = () => {
     if (stopped) return Promise.resolve(false)
+    // 4.8 §1: a request that timed out is not followed by a new one of the same verb until the helper (serial) has answered it: it would only queue behind the one that is still being worked on, and time out too. The tick is skipped, as procinfo skips its `ps`
+    if (!busy && helper && typeof helper.abandoned === 'function' && helper.abandoned('reg-read') > 0) return Promise.resolve(false)
     if (!busy) busy = once().finally(() => { busy = null })
     return busy
   }
