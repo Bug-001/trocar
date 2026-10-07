@@ -7,7 +7,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import dsh from '../../../src/collector/harness/deepseek-dsh.mjs'
 import { planTrust } from '../../../src/collector/core/trust/plan.mjs'
-import { installCollector, uninstallCollector } from '../../../src/collector/install.mjs'
+import { installCollector } from '../../../src/collector/install.mjs'
+import { uninstallCollector } from '../../helpers/uninstall.mjs'
 import { sandbox, ctxFor, facts, judge, matchOf, plantMarker, CA, OTHER } from './_ctx.mjs'
 
 const AGENT = ['node', '/usr/local/bin/dsh', '--profile', 'headless', '--json', 'hi']

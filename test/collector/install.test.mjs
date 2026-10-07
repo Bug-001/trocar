@@ -11,7 +11,8 @@ import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { startControlServer, controlRequest } from '../../src/collector/core/control.mjs'
-import { installCollector, uninstallCollector, stopDaemon, freeEnginePort, daemonEnv, turnOn } from '../../src/collector/install.mjs'
+import { installCollector, freeEnginePort, daemonEnv, turnOn } from '../../src/collector/install.mjs'
+import { uninstallCollector } from '../helpers/uninstall.mjs'
 import { startDaemon } from '../../src/collector/daemon.mjs'
 import { readManifest } from '../../src/collector/core/trust/journal.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
@@ -25,6 +26,8 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { onNone } from '../helpers/signature-os.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { fakeSystem, recordingExec, fakeDaemon, ROOTS } from '../cli/fixtures/on-ctx.mjs'
+import { installedHome, ALL_HARNESSES } from '../off/fixtures/off-ctx.mjs'
+import { standalonePath } from '../../src/off/paths.mjs'
 
 function box() {
   const home = tmpDir('asight-inst-')
@@ -170,38 +173,22 @@ test('install and uninstall refuse to run as root (D36)', async () => {
   } finally { process.getuid = real; b.done() }
 })
 
-test('stopDaemon: a stale lock is never killed by; a live pid that answers nowhere stops the uninstall; the lock\'s socket is tried when the runtime one is missing', async () => {
-  const b = box()
-  try {
-    const lockFile = path.join(b.home, 'lock'); const lockSock = path.join(b.home, 'from-lock.sock')
-    fs.writeFileSync(lockFile, JSON.stringify({ pid: 4242, helper_pid: 4243, socket: lockSock }))
-    const killed = []
-    const kill = (pid, sig) => killed.push([pid, sig])
-    const refused = async () => { throw Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }) }
-    assert.equal(await stopDaemon({ socketPath: path.join(b.home, 's.sock'), lockFile, request: refused, kill, alive: () => false }), 'none')
-    assert.deepEqual(killed, [], 'a stale lock is never killed by')
-    await assert.rejects(stopDaemon({ socketPath: null, lockFile, request: refused, kill, alive: (pid) => pid === 4242 }), /may still be running \(pid 4242.*nothing was removed/)
-    assert.deepEqual(killed, [], 'a live pid that answers on no socket is not killed either')
-    await assert.rejects(stopDaemon({ socketPath: path.join(b.home, 's.sock'), lockFile: path.join(b.home, 'none'), request: async () => ({}), kill }), /left no lock file/)
-    assert.deepEqual(killed, [])
-    // XDG_RUNTIME_DIR unset (socketPath null): the daemon is found through the socket its lock names, and stopped
-    let alive = true; const asked = []
-    const r = await stopDaemon({ socketPath: null, lockFile, request: async (q) => { asked.push(q.socketPath); if (q.socketPath !== lockSock) throw Object.assign(new Error('x'), { code: 'ENOENT' }); return {} }, kill: (pid, sig) => { killed.push([pid, sig]); alive = false }, alive: () => alive })
-    assert.deepEqual([r, killed, asked], ['stopped', [[4242, 'SIGTERM']], [lockSock]])
-  } finally { b.done() }
-})
-
-test('uninstall with no runtime dir set finds the daemon through its lock, stops it, then removes (S10)', async () => {
+test('uninstall with no runtime dir set finds the daemon through its lock, asks it to switch off, stops it after checking its identity, then removes (S10)', async () => {
   const b = box()
   const daemon = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }) // stands in for `asight collector start`
   const sock = path.join(tmpDir('as-u-'), 'c.sock')
-  const control = await startControlServer({ socketPath: sock, routes: { 'GET /status': async () => ({ desired: 'on' }) } })
+  const asked = []
+  const control = await startControlServer({ socketPath: sock, routes: { 'GET /status': async () => ({ desired: 'on' }), 'POST /off': async ({ body }) => { asked.push(body); return { desired: 'off', actual: 'off', confirmed: true, relayed: { closing: 0, waiting: 0, cut: 0 }, pid: daemon.pid } } } })
   try {
     await installCollector(base(b))
-    fs.writeFileSync(path.join(b.dir, 'lock'), JSON.stringify({ pid: daemon.pid, socket: sock }))
+    fs.writeFileSync(path.join(b.dir, 'lock'), JSON.stringify({ pid: daemon.pid, start_time: '1', boot_id: 'b', socket: sock }))
     const exited = new Promise((r) => daemon.once('exit', (code, sig) => r(sig)))
-    const r = await uninstallCollector({ home: b.home, env: {} }) // the product default stop, no XDG_RUNTIME_DIR
-    assert.deepEqual([r.daemon, await exited], ['stopped', 'SIGTERM'])
+    const signalled = []
+    // the signal goes to the one process this test started, and only after it was told apart from another by the lock's start time and boot id (src/off/daemon-stop.mjs)
+    const kill = (pid, sig) => { signalled.push([pid === daemon.pid, sig]); process.kill(pid, sig) }
+    const r = await uninstallCollector({ home: b.home, env: {}, deps: { kill, identity: () => ({ start_time: '1', boot_id: 'b' }), isHelper: () => false, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 5))) } }) // the product's own stop; a sleep that lets the exit be seen, no XDG_RUNTIME_DIR
+    assert.deepEqual([r.daemon, await exited, signalled], ['stopped', 'SIGTERM', [[true, 'SIGTERM']]])
+    assert.deepEqual(asked, [{ exit: true }], 'asked to switch off and exit once drained, before anything was signalled')
     assert.ok(!fs.existsSync(path.join(b.dir, 'lock')) && !fs.existsSync(settingsOf(b)))
   } finally { daemon.kill('SIGKILL'); await control.close(); b.done() }
 })
@@ -347,28 +334,16 @@ test('uninstall leaves a settings file that became a symbolic link alone and rec
   } finally { b.done() }
 })
 
-// D-25: a lock whose pid is now another process (start time or boot id differ) is never killed by — even when some
-// daemon answers on the socket (it is not the lock's pid).
-test('stopDaemon: a lock naming a reused pid is stale — never killed by, with or without a daemon answering (D-25)', async () => {
-  const b = box()
-  const lockFile = path.join(b.home, 'lock')
-  fs.writeFileSync(lockFile, JSON.stringify({ pid: 4242, start_time: '100', boot_id: 'b1', socket: path.join(b.home, 's.sock') }))
-  const killed = []
-  const reused = { alive: () => true, identity: () => ({ start_time: '999', boot_id: 'b1' }), kill: (pid) => killed.push(pid) }
-  try {
-    assert.equal(await stopDaemon({ socketPath: null, lockFile, request: async () => { throw Object.assign(new Error('x'), { code: 'ECONNREFUSED' }) }, ...reused }), 'none', 'nobody answers: a stale lock, nothing to stop')
-    await assert.rejects(stopDaemon({ socketPath: null, lockFile, request: async () => ({}), ...reused }), /names a process that is not it \(pid 4242 is another process now/)
-    assert.deepEqual(killed, [], 'the reused pid is never signalled')
-  } finally { b.done() }
-})
-
-test('stopDaemon: an unreadable lock with no daemon answering stops the uninstall, nothing removed', async () => {
+test('uninstall: an unreadable lock with no daemon answering is "not known whether a daemon runs" — nothing is stopped or removed, desired is written off, the receipt says what to do (1.6 R11)', async () => {
   const b = box()
   try {
     await installCollector(base(b))
     fs.writeFileSync(path.join(b.dir, 'lock'), '') // cut short by a power loss
-    await assert.rejects(uninstallCollector({ home: b.home, env: {} }), /lock is unreadable, so whether a collector daemon still runs is unknown.*nothing was removed/)
-    assert.ok(fs.existsSync(path.join(b.dir, 'ca', 'ca.key')) && JSON.parse(fs.readFileSync(settingsOf(b), 'utf8')).env.NODE_EXTRA_CA_CERTS)
+    const r = await uninstallCollector({ home: b.home, env: {} })
+    assert.equal(r.receipt.ok, false)
+    assert.match(r.receipt.problems.join('\n'), /so whether a daemon runs is not known; stop any asight collector daemon by hand, then run asight off again/)
+    assert.ok(fs.existsSync(path.join(b.dir, 'ca', 'ca.key')) && JSON.parse(fs.readFileSync(settingsOf(b), 'utf8')).env.NODE_EXTRA_CA_CERTS, 'nothing was removed or undone')
+    assert.ok(r.exec.calls.every((c) => !/stop|kill/.test(c)))
   } finally { b.done() }
 })
 
@@ -587,7 +562,7 @@ test('uninstall: a replace-semantics entry that cannot be undone keeps its bundl
   } finally { b.done() }
 })
 
-test('install / uninstall: the autostart unit is listed with its env and link, written complete, enabled, then stopped through systemd, disabled and removed with its dirs (S10, review 3 #1 #8 #10)', async () => {
+test('install / uninstall: the autostart unit is listed with its env and link, written complete, enabled; uninstall disables it, stops the daemon, removes the file with its dirs and tells systemd (S10, review 3 #1 #8 #10)', async () => {
   const b = box()
   try {
     const calls = []
@@ -605,13 +580,14 @@ test('install / uninstall: the autostart unit is listed with its env and link, w
     assert.equal(fs.statSync(unitFile).mode & 0o777, 0o644)
     assert.deepEqual(calls, ['enable, manifest complete: true'], 'the daemon the unit starts finds a complete manifest')
     calls.length = 0
-    await uninstallCollector({ home: b.home, env: {}, unit, stop: async () => { calls.push('stopped'); return 'stopped' } })
-    assert.deepEqual(calls, ['stopped', 'disable', 'wants'])
+    const exec = (file, args) => { calls.push([file, ...args].join(' ')); return { status: 0, stdout: '', stderr: '' } }
+    await uninstallCollector({ home: b.home, env: {}, deps: { exec }, stop: async () => { calls.push('stopped'); return 'stopped' } })
+    assert.deepEqual(calls, ['systemctl --user disable asight-collector.service', 'stopped', 'systemctl --user daemon-reload'], 'the autostart is disabled, the daemon stopped, and systemd told the unit file is gone (1.6 §1.4 4, 5)')
     assert.ok(!fs.existsSync(path.join(b.home, '.config')), 'the unit and the directories asight created for it are gone')
   } finally { b.done() }
 })
 
-test('install: a unit systemd refuses to enable is a recorded failure, the install still completes; stopDaemon stops a unit-managed daemon through systemd, a hand-started one by pid', async () => {
+test('install: a unit systemd refuses to enable is a recorded failure, the install still completes', async () => {
   const b = box()
   try {
     const unit = { path: path.join(b.home, '.config', 'systemd', 'user', 'asight-collector.service'), text: () => '[Unit]\n', enable: () => ({ code: 1, err: 'Failed to connect to bus' }), disable: () => ({ code: 0 }), stop: () => {}, removeWants: () => [] }
@@ -620,16 +596,6 @@ test('install: a unit systemd refuses to enable is a recorded failure, the insta
     const { recentFailures } = await import('../../src/collector/core/events.mjs')
     const f = recentFailures(b.dir).find((x) => x.code === 'unit-not-enabled')
     assert.ok(f && /Failed to connect to bus/.test(f.reason) && /asight collector start/.test(f.reason), JSON.stringify(f))
-    // a daemon answering on its socket, managed by the unit: stopped through systemd, never killed by pid
-    const sock = path.join(b.home, 's.sock'); const lock = path.join(b.home, 'lock'); fs.writeFileSync(lock, JSON.stringify({ pid: 4242, helper_pid: 4243 }))
-    const seen = []; let up = true
-    const res = await stopDaemon({ socketPath: sock, lockFile: lock, request: async () => ({}), alive: () => up, kill: () => seen.push('kill'), stopUnit: () => { seen.push('unit-stop'); up = false } })
-    assert.deepEqual([res, seen], ['stopped', ['unit-stop']])
-    // the unit is installed but this daemon was started by hand (the unit could not be enabled): systemd
-    // stops nothing, so it is stopped by pid
-    const seen2 = []; let up2 = true
-    const res2 = await stopDaemon({ socketPath: sock, lockFile: lock, request: async () => ({}), alive: () => up2, kill: (pid, sig) => { seen2.push(`kill ${pid} ${sig}`); up2 = false }, stopUnit: () => seen2.push('unit-stop') })
-    assert.deepEqual([res2, seen2], ['stopped', ['unit-stop', 'kill 4242 SIGTERM']])
   } finally { b.done() }
 })
 
@@ -681,20 +647,25 @@ test('uninstall step 5: only a process that may have read the entry is reported 
 test('install: an autostart unit file already there is refused before anything is written (review 4 #7); uninstall records a disable systemd refused and a link it could not remove (D38, review 4 #9)', async () => {
   const b = box()
   try {
-    const unitFile = path.join(b.home, '.config', 'systemd', 'user', 'asight-collector.service')
+    const unitDir = path.join(b.home, '.config', 'systemd', 'user')
+    const unitFile = path.join(unitDir, 'asight-collector.service')
     fs.mkdirSync(path.dirname(unitFile), { recursive: true }); fs.writeFileSync(unitFile, '[Service]\nExecStart=/usr/bin/false\n')
     let listed = false
-    const unit = { path: unitFile, links: [], text: () => '[Unit]\n', enable: () => ({ code: 0 }), disable: () => ({ code: 1, err: 'Failed to connect to bus' }), stop: () => {}, removeWants: (onError) => { onError('/l/asight-collector.service', new Error('EACCES')); return [] } }
+    const unit = { path: unitFile, links: [], text: () => '[Unit]\n', enable: () => ({ code: 0 }), disable: () => ({ code: 0 }), stop: () => {}, removeWants: () => [] }
     await assert.rejects(installCollector(base(b, { unit, onPlan: () => { listed = true } })), /asight-collector\.service already exists/)
     assert.deepEqual([listed, fs.existsSync(b.dir)], [false, false], 'refused before the plan is printed and before the CA or the manifest exist')
     fs.rmSync(unitFile)
     await installCollector(base(b, { unit }))
-    const r = await uninstallCollector({ home: b.home, env: {}, unit, stop: stopNone })
+    const link = path.join(unitDir, 'default.target.wants', 'asight-collector.service')
+    fs.mkdirSync(path.dirname(link)); fs.symlinkSync(unitFile, link)
+    const refuses = { ...fs, rmSync: (f, o) => { if (f === link) throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); return fs.rmSync(f, o) } }
+    const exec = (file, args) => (args.includes('disable') ? { status: 1, stdout: '', stderr: 'Failed to connect to bus' } : { status: 0, stdout: '', stderr: '' })
+    const r = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, deps: { exec, fs: refuses } })
     assert.ok(!fs.existsSync(unitFile), 'removed all the same')
     const rec = readEvents(b.dir).filter((e) => e.code === 'unit-not-disabled')
     assert.deepEqual(rec.map((e) => e.event), ['failure', 'failure'])
-    assert.match(rec[0].reason, /systemctl --user disable failed \(Failed to connect to bus\)/)
-    assert.match(rec[1].reason, /\/l\/asight-collector\.service, the autostart link, could not be removed: EACCES/)
+    assert.match(rec[0].reason, /systemctl --user disable asight-collector\.service failed \(exit 1: Failed to connect to bus\).*the autostart link .*asight-collector\.service: EACCES/)
+    assert.match(rec[1].reason, /asight-collector\.service, the autostart link, could not be removed: EACCES/)
     assert.deepEqual(r.left, [], 'nothing of the manifest is left')
   } finally { b.done() }
 })
@@ -870,7 +841,7 @@ test('uninstall removes the backup of every entry it undid (zero residue until `
   } finally { b.done() }
 })
 
-test('a manifest of a version this build does not read stops install and uninstall before anything is touched (R3)', async () => {
+test('a manifest of a version this build does not read stops install before anything is touched, and uninstall leaves every entry and every file of asight\'s alone: the routing is still taken off, exit 1, the version is named (R3)', async () => {
   const b = box()
   try {
     fs.mkdirSync(path.join(b.home, '.claude')); fs.writeFileSync(settingsOf(b), '{"model":"x"}\n')
@@ -878,8 +849,13 @@ test('a manifest of a version this build does not read stops install and uninsta
     const snap = () => [fs.readFileSync(settingsOf(b)), fs.readFileSync(path.join(b.dir, 'install-manifest.json'))]
     const first = snap()
     await assert.rejects(installCollector(base(b)), /version 3/)
-    await assert.rejects(uninstallCollector({ home: b.home, env: {}, stop: async () => { throw new Error('the daemon must not be stopped for a manifest this build cannot read') } }), /version 3/)
+    let stopped = 0
+    const r = await uninstallCollector({ home: b.home, env: {}, stop: async () => { stopped++; return 'none' } })
     assert.deepEqual(snap(), first)
+    assert.equal(r.receipt.ok, false)
+    assert.match(r.receipt.problems.join('\n'), /manifest is version 3, which this build does not read; no entry was touched/)
+    assert.equal(stopped, 1, 'what does not need the manifest still happens: the daemon is stopped (1.6 R3)')
+    assert.deepEqual(readEvents(b.dir).filter((e) => e.event === 'uninstall-note' && e.kind === 'result').map((e) => e.outcome), ['failed'], 'and the run ends with a result line')
   } finally { b.done() }
 })
 
@@ -1034,4 +1010,51 @@ test('V16 (unit half): a Claude Code started while its harness was off, then on 
     assert.deepEqual([envs.length, envs[0].proc.pid, envs[0].proc.agent], [1, 4444, 'claude-code'], 'recorded verbatim, from the process that restarted')
     conn2.end()
   } finally { await (d && d.stop()); up.close(); p.done() }
+})
+
+// ---- D39 / 1.6 §1.1, V13: the order of `asight uninstall` ----
+test('V13: uninstall writes desired off, asks the daemon to switch off and exit, stops it through systemd, and only then undoes the first entry; the CA, the unit, the run directory, the backups, asight-off and the manifest come after the last entry, the manifest last; the captures stay; nothing restarts', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] })
+  const entryPaths = new Set(s.manifest().entries.flatMap((e) => [e.path, e.real_path].filter(Boolean)))
+  const unitFile = path.join(s.home, '.config', 'systemd', 'user', 'asight-collector.service')
+  const standalone = standalonePath(s.home); fs.mkdirSync(path.dirname(standalone), { recursive: true }); fs.writeFileSync(standalone, '#!/usr/bin/env node\n') // what `on` leaves there (Task 8)
+  for (const keep of ['capture-2026-10-06.ndjson', 'audit/a.ndjson', 'replays/r.ndjson']) { fs.mkdirSync(path.dirname(path.join(s.dir, keep)), { recursive: true }); fs.writeFileSync(path.join(s.dir, keep), '{"keep":true}\n') }
+  const journal = []
+  const rel = (f) => path.relative(s.home, f)
+  const jfs = {
+    ...fs,
+    renameSync: (a, b) => { journal.push(['write', rel(b)]); return fs.renameSync(a, b) },
+    rmSync: (f, o) => { journal.push(['rm', rel(f)]); return fs.rmSync(f, o) },
+    unlinkSync: (f) => { journal.push(['rm', rel(f)]); return fs.unlinkSync(f) },
+  }
+  const exec = (file, args) => { journal.push(['exec', [file, ...args].join(' ')]); return s.sys.exec.run(file, args) }
+  const request = async (q) => { journal.push(['request', `${q.method} ${q.path}`]); return s.sys.daemon.request(q) }
+  const r = await s.uninstall({ yes: true, deps: { fs: jfs, exec, request } })
+  assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
+  const at = (pred) => journal.findIndex(pred)
+  const last = (pred) => journal.length - 1 - [...journal].reverse().findIndex(pred)
+  const iState = at(([k, x]) => k === 'write' && x === path.join('.asight', 'collector', 'state.json'))
+  const iOff = at(([k, x]) => k === 'request' && x === 'POST /off')
+  const iStop = at(([k, x]) => k === 'exec' && x === 'systemctl --user stop asight-collector.service')
+  const iFirstEntry = at(([k, x]) => k === 'write' && entryPaths.has(path.join(s.home, x)))
+  const iLastEntry = last(([k, x]) => k === 'write' && entryPaths.has(path.join(s.home, x)))
+  assert.ok(iState >= 0 && iOff >= 0 && iStop >= 0 && iFirstEntry >= 0, JSON.stringify(journal))
+  assert.ok(iState < iOff && iOff < iStop && iStop < iFirstEntry, `desired off, then the daemon asked to go, then stopped, then the first entry: ${[iState, iOff, iStop, iFirstEntry]}`)
+  assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"exit":true}'], 'every harness, and the whole daemon: no names')
+  const removed = (suffix) => at(([k, x]) => k === 'rm' && (x === suffix || x.endsWith(path.sep + suffix)))
+  const gone = { unit: removed(rel(unitFile)), caKey: removed(path.join('ca', 'ca.key')), run: removed(path.join('collector', 'run')), standalone: removed(rel(standalone)), manifest: removed('install-manifest.json') }
+  for (const [what, i] of Object.entries(gone)) assert.ok(i > iLastEntry, `${what} is removed after the last entry is undone (${i} > ${iLastEntry})`)
+  assert.ok(gone.unit < gone.caKey, 'the unit before the CA key (4.6)')
+  assert.ok(gone.manifest > Math.max(gone.unit, gone.caKey, gone.run, gone.standalone), 'the manifest after every other file of asight\'s')
+  assert.equal(last(([k]) => k === 'rm'), gone.manifest, 'and nothing is removed after it: a run that stops half way finds the manifest')
+  assert.ok(!fs.existsSync(path.join(s.home, '.asight', 'backup')), '~/.asight/backup/ is gone')
+  assert.deepEqual(['capture-2026-10-06.ndjson', 'audit/a.ndjson', 'replays/r.ndjson'].map((k) => fs.existsSync(path.join(s.dir, k))), [true, true, true], 'the captures stay')
+  assert.ok(fs.readdirSync(path.join(s.dir, 'flows')).length > 0, 'and the records')
+  assert.deepEqual(['ca', 'run', 'state.json', 'install-manifest.json', 'op.lock', 'lock'].filter((n) => fs.existsSync(path.join(s.dir, n))), [], 'nothing else of asight\'s is left in the collector directory')
+  assert.deepEqual([unitFile, standalone, path.dirname(standalone), path.join(s.home, '.config', 'systemd')].filter((f) => fs.existsSync(f)), [], 'the unit, asight-off and the directories made for them')
+  const execs = journal.filter(([k]) => k === 'exec').map(([, x]) => x)
+  assert.deepEqual(execs.filter((c) => /restart|start|enable|kill/.test(c)), [], 'no restart, no start')
+  assert.deepEqual(execs, ['systemctl --user disable asight-collector.service', 'systemctl --user stop asight-collector.service', 'systemctl --user reset-failed asight-collector.service', 'systemctl --user is-active asight-collector.service', 'systemctl --user daemon-reload'])
+  assert.deepEqual(r.receipt.relayed, { closing: 0, waiting: 0, cut: 0 })
+  assert.equal(ALL_HARNESSES.length, 7)
 })
