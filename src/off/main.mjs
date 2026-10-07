@@ -1,13 +1,15 @@
 // main.mjs (src/off) — `asight off [harness…] [--now] [--dry-run] [--yes] [--json] [--remove-ca]` as a command line (RFC 1.6 §2, §3, R4–R7): parses the arguments,
 // refuses root, resolves the harness names, runs runOff and prints its receipt. `asight off` and the standalone `~/.asight/bin/asight-off` run this same file
 // (R3), so it may import nothing outside src/off (0.1 §2) — which is why the §3 name table is written here too (OFF_NAMES) and test/cli/harness-names.test.mjs
-// holds it equal to src/cli/harness-names.mjs. Everything the world gives is a `deps` entry (see orchestrate.mjs), plus `getuid` and `legacyOff`: the hook of a
-// platform without the new collector (macOS, Windows: 1.6 §4; Task 10 fills it). Exit codes (R4): 0 done · 1 not done or a problem · 2 usage error, nothing touched.
+// holds it equal to src/cli/harness-names.mjs. Everything the world gives is a `deps` entry (see orchestrate.mjs), plus `getuid` and `legacyOff`: the replacement of
+// src/off/legacy-cli.mjs `legacyOffCli`, which is what `off` is on a platform without the new collector (macOS, Windows: 1.6 §4). Exit codes (R4): 0 done · 1 not done or a problem · 2 usage error, nothing touched.
 import nodeOs from 'node:os'
 import { runOff } from './orchestrate.mjs'
 import { formatOffReceipt } from './receipt.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, makeIo } from './io.mjs'
+import { hasNewCollector } from './legacy.mjs'
+import { legacyOffCli } from './legacy-cli.mjs'
 
 /** 1.6 §3: the harness code ids (in the order commands list them) and the short names accepted as input. A copy of src/cli/harness-names.mjs. */
 export const OFF_NAMES = Object.freeze({
@@ -49,11 +51,7 @@ export async function runOffCli(argv, { io = makeIo({ stdin: process.stdin, stdo
   const json = flags.has('--json')
   const say = json ? io.err : io.out // stdout holds the one JSON in --json mode (R5): the list and the question go to stderr
   if ((deps.getuid || (typeof process.getuid === 'function' ? () => process.getuid() : () => -1))() === 0) { io.err('asight off: 用你自己的账号跑,不要用 root / sudo(D36)'); return EXIT.incomplete }
-  if (platform !== 'linux') {
-    if (deps.legacyOff) return deps.legacyOff(argv, { io, env, home, platform, deps })
-    io.err(`asight off: 本平台(${platform})没有新采集器;这里 on / off 驱动旧采集(过渡期,1.6 §4),这一步还没接上`)
-    return EXIT.incomplete
-  }
+  if (!hasNewCollector(platform)) return (deps.legacyOff || legacyOffCli)(argv, { io, env, home, platform, deps, ids: named.ids }) // no new collector here: the old capture is what `off` takes out (1.6 §4)
   try {
     const { receipt, exit } = await runOff({ home, env, ids: named.ids, now: flags.has('--now'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: isInteractive(io), io: { ...io, prompt: json ? io.stderr : io.stdout }, say, deps: standalone ? { ...deps, standalone: true } : deps })
     if (flags.has('--remove-ca')) receipt.notes.unshift(REMOVE_CA_NOTE)

@@ -7,14 +7,18 @@
 //   hasNewCollector     the one question that decides which generation `on` / `off` / `status` drive on a platform (1.6 §1.2)
 //   clearCliSteer · uninstallCa · caRemoveArgv      the steer and the CA undo, moved from src/capture/onboard.mjs and trust-store.mjs, which call them: there is one undo, not two
 //   legacyArtifacts     what of the old capture is there (read only)
+//   undoLegacy          the order (§4): the CC steer from its stash → the Clash route stripped, reloaded and READ BACK from the core → the MITM unloaded so launchd sends it SIGTERM, which
+//                       it drains for at most 10 s → com.asight.monitor → com.asight.env (and the login environment's CA variable, only when it is asight's) → the CA → the ledger
+//   legacyUndoHook      undoLegacy as the `legacyUndo` hook of `asight off` / `asight uninstall` on Linux, in the shape of their receipts
 import nodeFs from 'node:fs'
 import nodeOs from 'node:os'
 import path from 'node:path'
 import { execTool } from './exec.mjs'
-import { readOrNull } from './fsutil.mjs'
-import { legacyManifestPath } from './paths.mjs'
-import { readManifestAt } from './manifest.mjs'
-import { makeClash, stripBlock, stripRuntime, stripMergeLegacy, SCRIPT_BEGIN } from './clash.mjs'
+import { sha256, readOrNull } from './fsutil.mjs'
+import { asightHome, legacyManifestPath, legacyPendingPath, legacyEventsFile } from './paths.mjs'
+import { dropBackup } from './backup.mjs'
+import { readManifestAt, saveManifestAt } from './manifest.mjs'
+import { makeClash, stripBlock, stripRuntime, stripMergeLegacy, SCRIPT_BEGIN, PROXY_NAME } from './clash.mjs'
 
 /** Does this platform have the new per-process collector? Only Linux today (4.6; 1.6 §1.2). One function, used everywhere the branch is taken: where it is false `on` / `off` / `status` /
  *  `uninstall` drive the old capture. */
@@ -32,6 +36,8 @@ export const LEGACY_CA_CN = 'atrace local MITM CA'
 /** The NSS nickname the CA has on Linux. */
 export const LEGACY_CA_NICKNAME = 'asight-ca'
 const LEGACY_ENV_VAR = 'NODE_EXTRA_CA_CERTS'
+const CLAUDE_CODE = 'claude-code'
+const CODE_NOT_UNDONE = 'entry-not-undone' // a name of the closed set (src/health/codes.mjs): an item that was not undone
 
 const legacyWhy = (e) => String((e && (e.code || e.message)) || e)
 const legacyMessage = (e) => String((e && e.message) || e)
@@ -227,5 +233,157 @@ export async function legacyArtifacts({ home = nodeOs.homedir(), platform = proc
   // the ledger
   const lf = legacyManifestPath(home)
   try { const m = readManifestAt(lf, fs); out.ledger = m ? { path: lf, manifest: m } : null } catch (e) { out.ledger = { path: lf, error: legacyMessage(e) } }
+  return out
+}
+
+// ── the events of the old capture's log ───────────────────────────────────────────────────────────
+
+function appendLegacyLine(home, rec, { fs, now, log }) {
+  const file = legacyEventsFile(home)
+  const line = { ts: now().toISOString(), ...rec }
+  if (rec.event === 'failure') log(`asight ${rec.where}: ${rec.code}: ${rec.reason}`)
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+    fs.appendFileSync(file, JSON.stringify(line) + '\n', { mode: 0o600 })
+    return true
+  } catch (e) {
+    log(`asight: could not write ${file} (${legacyMessage(e)}) — this event is recorded nowhere else: ${JSON.stringify(line)}`)
+    return false
+  }
+}
+
+// ── undoing it ────────────────────────────────────────────────────────────────────────────────────
+
+const shaOfFile = (fs, file) => { try { return sha256(readOrNull(fs, file)) } catch { return null } }
+
+// ledger entries of one kind (and role) for a path
+const ledgerEntry = (ledger, kind, file) => ((ledger && ledger.manifest && ledger.manifest.entries) || []).find((e) => e && e.kind === kind && e.path === file) || null
+
+function realClock() { return { ms: Date.now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } }
+
+/**
+ * Takes the old capture out (RFC 1.6 §4). `scope` is 'all' (the only one there is). Everything the world gives is a parameter a test replaces (0.1 §3): `exec` (launchctl, security, certutil, ps),
+ * `fs`, `env`, `clock` ({ ms, sleep }: the waits for the MITM are made of it), `now` (a Date), `mihomo` (src/off/clash.mjs's seams: sock, psText,
+ * knownSocks, mihomoReload, probeLive), `log` (stderr).
+ * Order: marker `~/.asight/legacy-off.pending` → CC settings from the stash → Clash: strip the block and the Merge.yaml leftovers, strip the runtime, hot-reload, READ the live proxy list back (also
+ * when the file has no block: the runtime may still hold the route) → only then `launchctl unload com.asight.mitm` (launchd sends SIGTERM; the MITM stops accepting and drains) → com.asight.monitor
+ * → com.asight.env and, when the login environment's CA variable is asight's, `launchctl unsetenv` → the CA → the ledger (a backup goes when the file is back to what it was) → the marker goes.
+ * When the route cannot be confirmed gone the MITM is NOT unloaded (it would leave Desktop pointed at nothing): `ok` is false and the receipt says why.
+ * → { changed, removed, skipped, left, notes, problems, kept_backups, restart, cut: number | 'unknown', cut_reason?, ok, events }
+ */
+export async function undoLegacy({ home = nodeOs.homedir(), platform = process.platform, exec = null, fs = nodeFs, env = process.env, clock = null, now = null, mihomo = {}, log = (m) => { try { process.stderr.write(`${m}\n`) } catch { /* nothing left to tell */ } }, drainMs = 10000, scope = 'all', record = true } = {}) {
+  if (scope !== 'all') throw new RangeError(`undoLegacy: scope ${JSON.stringify(scope)} is not one there is (only 'all')`)
+  const clk = clock || realClock()
+  const nowFn = now || (() => new Date(clk.ms()))
+  const res = { changed: [], removed: [], skipped: [], left: [], notes: [], problems: [], kept_backups: [], restart: [], cut: 0, ok: true, events: [] }
+  const say = (kind, reason, extra = {}) => { const rec = { event: 'off-note', where: 'off', kind, reason, ...extra }; res.events.push(rec); if (record) appendLegacyLine(home, rec, { fs, now: nowFn, log }) }
+  const fail = (code, reason, extra = {}) => {
+    res.ok = false; res.problems.push(reason)
+    const rec = { event: 'failure', where: 'off', code, reason, ...extra }
+    res.events.push(rec); if (record) appendLegacyLine(home, rec, { fs, now: nowFn, log })
+  }
+  const art = await legacyArtifacts({ home, platform, exec, fs, env, mihomo })
+  const p = art.paths
+  const ledger = art.ledger && art.ledger.manifest ? art.ledger : null
+  if (art.ledger && art.ledger.error) res.notes.push(`the ledger ${art.ledger.path} could not be read (${art.ledger.error}): its backups are not dropped; everything is undone by its own marks`)
+  const row = (file, change, result, extra = {}) => res.changed.push({ path: file, change, backup: extra.backup ?? null, result, harness: CLAUDE_CODE, ...extra })
+
+  const onDarwin = platform === 'darwin'
+  const cb = art.clashBlock
+  // evidence that asight ever put a route into Clash: the block, the runtime copy, the Merge.yaml leftovers, the ledger, or the MITM agent it serves. Without any, a Clash that was never asight's is not reloaded.
+  const clashEvidence = onDarwin && cb.verge && (cb.script !== false || cb.runtime !== false || cb.merge !== false || !!ledgerEntry(ledger, 'legacy-clash-block', p.scriptPath) || art.agents.mitm.installed === true)
+  const hasAgents = onDarwin && Object.values(art.agents).some((a) => a.installed === true || a.loaded === true)
+  const anything = art.ccSteer.stash !== null || clashEvidence || hasAgents || (onDarwin && art.envValue.value && ownCaPaths(art, home).has(art.envValue.value)) || art.oldCa.present === true || !!ledger
+  if (!anything) return res
+
+  const marker = legacyPendingPath(home)
+  let marked = false
+  if (onDarwin && (clashEvidence || art.agents.mitm.installed)) {
+    try { fs.mkdirSync(path.dirname(marker), { recursive: true, mode: 0o700 }); fs.writeFileSync(marker, JSON.stringify({ pid: process.pid, at: nowFn().toISOString() }) + '\n', { mode: 0o600 }); marked = true } catch (e) { res.notes.push(`${marker} could not be written (${legacyWhy(e)}): the MITM's steer watch may call the block's going away a failure`) }
+  }
+  try {
+    // 1 · the CC-CLI steer, from its stash (an old command wrote it: no ledger entry, no backup)
+    if (art.ccSteer.stash !== null) {
+      try {
+        clearCliSteer({ settingsPath: p.settingsPath, stashPath: p.stashPath, backup: false, fs })
+        row(p.settingsPath, '去掉 env.HTTPS_PROXY / NO_PROXY(旧 CC-CLI steer,按暂存值还原)', 'old-command', { old_command: true })
+        res.removed.push(p.stashPath)
+        say('cc-steer', `the CC-CLI steer was taken out of ${p.settingsPath} from its stash`, { file: p.settingsPath })
+      } catch (e) {
+        res.left.push({ path: p.settingsPath, harness: CLAUDE_CODE, result: 'error', reason: legacyMessage(e) })
+        fail(CODE_NOT_UNDONE, `the CC-CLI steer is still in ${p.settingsPath}: ${legacyMessage(e)}`, { file: p.settingsPath })
+      }
+    }
+
+    // 2 · the Clash route: stripped, reloaded, and read back from the core
+    let routeGone = true
+    if (onDarwin && (clashEvidence || cb.verge)) {
+      const clash = makeClash({ fs, scriptPath: p.scriptPath, runtimePath: p.runtimePath, mergePath: p.mergePath, exec, env, platform, ...mihomo })
+      let go = clashEvidence
+      if (!go) { // nothing in the files says asight was here: ask the core (read only) — a route it holds is asight's, and is taken out too
+        let l = null; try { l = await clash.probeLive() } catch (e) { legacyRethrowSandbox(e) }
+        go = l === true
+      }
+      if (go) {
+        const before = { script: shaOfFile(fs, p.scriptPath), merge: shaOfFile(fs, p.mergePath) }
+        const r = await clash.off()
+        const after = { script: shaOfFile(fs, p.scriptPath), merge: shaOfFile(fs, p.mergePath) }
+        const entryS = ledgerEntry(ledger, 'legacy-clash-block', p.scriptPath), entryM = ledgerEntry(ledger, 'legacy-clash-block', p.mergePath)
+        // "verified" is the core's own answer (D29 / 1.6 §6): a proxy list that no longer names the route. No Verge runtime to ask at all is nothing to verify.
+        const noCore = !cb.verge || (!fs.existsSync(p.runtimePath) && !(mihomo.sock || env.ASIGHT_MIHOMO_SOCK))
+        const live = r.status ? r.status.live : null
+        const verified = r.ok && (live === false || (live === null && noCore))
+        if (before.script !== after.script) row(p.scriptPath, '去掉 asight 的 Clash 哨兵块', entryS ? 'reverted' : 'old-command', { backup: entryS ? entryS.backup : null, old_command: !entryS })
+        if (before.merge !== after.merge) row(p.mergePath, '去掉旧的 prepend-proxies / prepend-rules 残留', entryM ? 'reverted' : 'old-command', { backup: entryM ? entryM.backup : null, old_command: !entryM })
+        if (verified) say('clash', `the Clash route is gone: stripped from ${p.scriptPath} and the runtime, mihomo reloaded, ${PROXY_NAME} no longer in its live proxy list`, { file: p.scriptPath })
+        else {
+          routeGone = false
+          // the core did not answer (the reload never reached it, or it cannot be asked afterwards): the route is not known to be gone — 「不知道」, never "gone" (1.6 §6)
+          const unknown = (!!r.reload && r.reload.status === 0) || (r.ok && live === null)
+          const tried = ((clash.located() || {}).tried || []).join(', ') || 'none'
+          const why = unknown
+            ? `不知道 · the Clash core did not answer, so whether ${PROXY_NAME} is still routed could not be read back (${(r.reload && r.reload.error) || `no live control socket found (tried: ${tried})`}); is Clash Verge running? Start it and run asight off again`
+            : r.reason
+          fail(CODE_NOT_UNDONE, `the Clash route was not confirmed gone: ${why}`, { file: p.scriptPath })
+          res.left.push({ path: p.scriptPath, harness: CLAUDE_CODE, result: unknown ? 'unknown' : 'error', reason: why })
+          res.clash_unknown = unknown
+        }
+        if (r.mergeCleanup && r.mergeCleanup.ok === false) fail(CODE_NOT_UNDONE, `${r.mergeCleanup.path} could not be cleaned: ${r.mergeCleanup.error}`, { file: r.mergeCleanup.path })
+        // the ledger: a backup goes when the file is back to what it was; one the file no longer matches is kept and listed (R2)
+        if (verified) {
+          for (const [entry, file, sha] of [[entryS, p.scriptPath, after.script], [entryM, p.mergePath, after.merge]]) {
+            if (!entry) continue
+            if (entry.backup && sha === entry.pre_sha256) { try { if (dropBackup(entry.backup, fs)) { const c = res.changed.find((x) => x.path === file); if (c) c.backup_dropped = true } } catch (e) { res.notes.push(`${entry.backup} could not be removed (${legacyWhy(e)})`) } } else if (entry.backup) {
+              res.kept_backups.push({ path: file, backup: entry.backup, reason: sha === entry.pre_sha256 ? 'kept' : 'the file is not byte for byte what it was before asight changed it (asight rewrote the stock no-op main(), or you edited it since): only asight\'s block was taken out', at: nowFn().toISOString() })
+              const c = res.changed.find((x) => x.path === file); if (c) c.result = 'reverted-not-identical'
+            }
+            entry.__done = true
+          }
+        }
+      } else res.skipped.push({ what: p.runtimePath, reason: 'Clash Verge is here, but nothing says asight put a route in it (no block, no ledger entry, not in the live proxy list): it is not reloaded' })
+    }
+
+    // 6 · the ledger: what was undone is struck off; the file goes when nothing is left in it
+    if (ledger) {
+      const m = ledger.manifest
+      m.entries = (m.entries || []).filter((e) => !e.__done)
+      for (const e of m.entries) delete e.__done
+      m.kept_backups = [...(m.kept_backups || []), ...res.kept_backups]
+      try {
+        if (!m.entries.length && !(m.kept_backups || []).length && !(m.files || []).length) { fs.rmSync(ledger.path, { force: true }); res.removed.push(ledger.path) } else saveManifestAt(ledger.path, m, fs)
+      } catch (e) { res.notes.push(`the ledger ${ledger.path} could not be updated (${legacyWhy(e)})`) }
+    }
+    if (!res.changed.length && !res.problems.length && !res.removed.length) say('nothing', 'there was nothing of the old capture to undo')
+    say('result', res.ok ? `the old capture was taken out: ${res.changed.length} change(s), cut ${res.cut}` : `the old capture was not fully taken out: ${res.problems[0]}`, { counts: { changed: res.changed.length, left: res.left.length } })
+  } finally {
+    if (marked) { try { fs.rmSync(marker, { force: true }) } catch { /* a marker nobody's pid is behind is ignored by the watch */ } }
+  }
+  return res
+}
+
+// the paths the login environment's CA variable may point at and still be asight's: the one the env plist sets, and the two CA directories (D27)
+function ownCaPaths(art, home) {
+  const out = new Set([path.join(asightHome(home), 'ca', 'atrace-ca.crt'), path.join(home, '.atrace', 'ca', 'atrace-ca.crt')])
+  if (art.agents && art.agents.env && art.agents.env.caPath) out.add(art.agents.env.caPath)
   return out
 }

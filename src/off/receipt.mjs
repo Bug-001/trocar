@@ -11,6 +11,7 @@ const ROUTING_WORDS = { 'daemon-reply': '守护进程回复了,内核已确认',
 // the status column of one changed file
 function rowStatus(c, t) {
   if (c.result === 'reverted-not-identical') return `已撤销,但不逐字节相同(你之后改过这个文件:只撤了 asight 的部分${c.backup ? `,备份留在 ${t(c.backup)}` : ''})`
+  if (c.result === 'old-command') return `已撤销(旧命令装的,无备份:没有改前版本可回到)`
   if (c.result === 'undone-by-marker') return `按标记撤销(没有安装清单)${c.backup ? `;原值取自 ${t(c.backup)}` : ''}`
   return `已回到改前的样子${c.backup_dropped ? ',备份已删' : ''}`
 }
