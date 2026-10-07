@@ -142,3 +142,122 @@ test('a process the daemon has not judged: no start time is start-time-unknown, 
   assert.deepEqual(j({ pid: 4, startedAt: INSTALLED_AT - 1, trusted: null }, { entryIntact: false }), { pid: 4, captured: false, reason: 'entry-missing' })
   assert.deepEqual(j({ pid: 4, startedAt: new Date(INSTALLED_AT + 5).toISOString(), trusted: null }, { installedAt: new Date(INSTALLED_AT).toISOString() }), { pid: 4, captured: true, reason: null }, 'times as ISO strings too')
 })
+
+// ── the command, over a sandbox HOME in which `asight on` has really run (the real turnOn, a fake systemd, a fake daemon behind the control socket) ────────────────────────────────────────────────
+import fs from 'node:fs'
+import path from 'node:path'
+import { installedHome, SOCK } from '../off/fixtures/off-ctx.mjs'
+import { fakeIo, snapshot } from './fixtures/on-ctx.mjs'
+import { validateReceipt } from '../../src/cli/schema.mjs'
+import { runStatusCli } from '../../src/cli/status.mjs'
+import { tmpDir } from '../helpers/tmp.mjs'
+
+const down = (code = 'ECONNREFUSED') => async () => { throw Object.assign(new Error(code), { code }) }
+// what the daemon's GET /status says (src/collector/daemon.mjs status()): the switch per harness, the kernel, the helper, the agents it watches
+const reply = (o = {}) => ({ desired: 'on', actual: 'on', mismatch: false, recording: true, harnesses: { 'claude-code': { desired: 'on' }, codex: { desired: 'on' } }, helper: { pid: 4243, proto: 1, ok: true, down: null, expected_proto: 1 }, agents: [], negatives: [], relayed: { closing: 0, waiting: 0 }, ...o })
+const asDaemon = (r) => async (q) => { if (q.path === '/status') return r; throw new Error(`unexpected ${q.method} ${q.path}`) }
+const run = async (s, argv = [], { request = down(), procs = async () => [], fs: fsx, io = fakeIo(), deps = {} } = {}) => {
+  const exit = await runStatusCli(argv, { io, home: s.home, platform: 'linux', env: { ...s.sh.env, XDG_RUNTIME_DIR: path.join(s.home, 'run') }, deps: { request, socketPath: SOCK, procs, ...(fsx ? { fs: fsx } : {}), user: 'alice', exec: s.sys.exec.run, ...deps } })
+  return { exit, io, text: io.stdoutText() }
+}
+const claudeProc = (pid, startedAt) => ({ pid, ppid: 1, uid: 1000, startedAt, exe: '/home/u/.local/share/claude/versions/2.1.289', argv: ['claude'], env: () => new Map() })
+
+test('the daemon answers: each agent is captured or says why, and the exit code is 1 while one is not; every agent captured is exit 0', async () => {
+  const s = await installedHome()
+  const agents = [{ pid: 4121, agent: 'claude-code', trusted: true }, { pid: 4388, agent: 'claude-code', trusted: false, reason: 'config-after-start', hint: 'the trust entry was written after this process started; restart it once' }]
+  let r = await run(s, [], { request: asDaemon(reply({ agents })) })
+  assert.equal(r.exit, 1, r.text)
+  assert.match(r.text, /claude-code\s+没有: config-after-start[^\n]*期望 on/)
+  assert.match(r.text, /pid 4121\s+已被采集/)
+  assert.match(r.text, /pid 4388\s+没有: config-after-start — [^\n]*重启后才会被采集/)
+  assert.match(r.text, /codex\s+正在被采集/, 'a harness with no process is judged by the link and the entry')
+  r = await run(s, [], { request: asDaemon(reply({ agents: agents.slice(0, 1) })) })
+  assert.equal(r.exit, 0, r.text)
+  assert.match(r.text, /claude-code\s+正在被采集/)
+  r = await run(s, ['claude'], { request: asDaemon(reply()) })
+  assert.ok(!/codex/.test(r.text.split('\n').filter((l) => /^ {2}\w/.test(l)).join('\n')), 'a name restricts the table (the alias claude is claude-code)')
+  r = await run(s, [], { request: asDaemon(reply({ actual: 'off', mismatch: true })) })
+  assert.match(r.text, /claude-code\s+没有: link-missing/); assert.equal(r.exit, 1)
+  r = await run(s, [], { request: asDaemon(reply({ helper: { pid: null, proto: null, ok: false, down: 'ENOENT', expected_proto: 1 } })) })
+  assert.match(r.text, /没有: helper-missing[^\n]*sudo asight setup-helper/)
+  r = await run(s, [], { request: asDaemon(reply({ agents: [{ pid: 4121, agent: 'claude-code', trusted: true }], negatives: [{ pid: 4121, host: 'api.anthropic.com', cause: 'client-rejected-leaf' }] })) })
+  assert.match(r.text, /pid 4121\s+没有: negative-cache/)
+})
+
+test('the entry on disk decides when no process does: intact when the value is there (the file may have been rewritten), entry-missing when it is gone, entry-changed when it is something else', async () => {
+  const s = await installedHome()
+  const settings = path.join(s.home, '.claude', 'settings.json')
+  const ok = JSON.parse(fs.readFileSync(settings, 'utf8'))
+  fs.writeFileSync(settings, JSON.stringify({ ...ok, theme: 'dark' }, null, 4)) // Claude Code rewrote the file: the key is still there
+  let r = await run(s, ['claude-code'], { request: asDaemon(reply()) })
+  assert.match(r.text, /claude-code\s+正在被采集[^\n]*信任入口完好/); assert.equal(r.exit, 0)
+  const cur = JSON.parse(fs.readFileSync(settings, 'utf8'))
+  fs.writeFileSync(settings, JSON.stringify({ ...cur, env: { ...cur.env, NODE_EXTRA_CA_CERTS: '/elsewhere/ca.pem' } }))
+  r = await run(s, ['claude-code'], { request: asDaemon(reply()) })
+  assert.match(r.text, /claude-code\s+没有: entry-changed[^\n]*信任入口被改过/); assert.equal(r.exit, 1)
+  fs.writeFileSync(settings, JSON.stringify({ theme: 'dark' }))
+  r = await run(s, ['claude-code'], { request: asDaemon(reply()) })
+  assert.match(r.text, /claude-code\s+没有: entry-missing[^\n]*信任入口不在了/)
+  fs.rmSync(settings)
+  r = await run(s, ['claude-code'], { request: asDaemon(reply()) })
+  assert.match(r.text, /entry-missing/)
+})
+
+test('no daemon: nothing is captured (daemon-not-running), read from the disk, with the processes found by the manifest\'s signatures and the ones that started before the entry told to restart', async () => {
+  const s = await installedHome()
+  const old = Date.now() - 3600e3
+  const r = await run(s, [], { procs: async () => [claudeProc(5000, old), claudeProc(5001, Date.now() + 5000)] })
+  assert.equal(r.exit, 1, r.text)
+  assert.match(r.text, /守护进程: 没在跑/)
+  assert.match(r.text, /claude-code\s+没有: daemon-not-running/)
+  assert.match(r.text, /pid 5000\s+没有: daemon-not-running/); assert.match(r.text, /pid 5001\s+没有: daemon-not-running/)
+  assert.match(r.text, /capture health:/, 'and the capture health read from disk follows (the failures of 24 h)')
+})
+
+test('off: every harness is desired-off, exit 0 — nothing is wrong with a switch that is off', async () => {
+  const s = await installedHome()
+  const off = await s.off(); assert.equal(off.exit, 0)
+  const r = await run(s)
+  assert.equal(r.exit, 0, r.text)
+  assert.match(r.text, /claude-code\s+没有: desired-off[^\n]*期望态是 off/); assert.match(r.text, /codex\s+没有: desired-off/)
+})
+
+test('V32: no daemon and state.json unreadable: 不知道 with the file and the errno for every harness, exit 3 — and --json says the same (captured null)', async () => {
+  const s = await installedHome()
+  const stateF = path.join(s.dir, 'state.json')
+  const broken = { ...fs, readFileSync: (f, ...a) => { if (f === stateF) throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } }
+  const r = await run(s, [], { fs: broken })
+  assert.equal(r.exit, 3, r.text)
+  assert.match(r.text, new RegExp(`期望态: 不知道[^\\n]*${stateF.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^\\n]*EACCES`))
+  assert.match(r.text, /claude-code\s+不知道\([^)]*EACCES/)
+  const j = await run(s, ['--json'], { fs: broken })
+  assert.equal(j.exit, 3)
+  const doc = j.io.json()
+  assert.deepEqual(validateReceipt(doc), [])
+  assert.deepEqual([doc.command, doc.ok, doc.harnesses.map((h) => [h.harness, h.captured, h.desired])], ['status', false, [['claude-code', null, 'unknown'], ['codex', null, 'unknown']]])
+})
+
+test('a daemon that does not answer is daemon-not-responding; --json is one document that validates, with the code ids and the restart list', async () => {
+  const s = await installedHome()
+  const r = await run(s, [], { request: down('ETIMEDOUT') })
+  assert.match(r.text, /守护进程: 没响应/); assert.match(r.text, /claude-code\s+没有: daemon-not-responding/); assert.equal(r.exit, 1)
+  const agents = [{ pid: 4388, agent: 'claude-code', trusted: false, reason: 'config-after-start' }]
+  const j = await run(s, ['--json'], { request: asDaemon(reply({ agents })) })
+  const doc = j.io.json()
+  assert.deepEqual(validateReceipt(doc), [])
+  assert.deepEqual(doc.restart, [{ harness: 'claude-code', pid: 4388, reason: 'config-after-start' }])
+  assert.deepEqual(doc.harnesses.map((h) => [h.harness, h.captured, h.reason]), [['claude-code', false, 'config-after-start'], ['codex', true, null]])
+  assert.equal(j.io.stderrText(), '', 'stdout carries the one JSON, nothing leaks to stderr')
+})
+
+test('status writes nothing in the HOME, and usage errors (an unknown harness, an unknown option) exit 2 before anything is read', async () => {
+  const s = await installedHome()
+  const before = snapshot(s.home)
+  await run(s); await run(s, ['--json']); await run(s, [], { request: asDaemon(reply()) })
+  assert.deepEqual(snapshot(s.home), before, 'read-only')
+  let r = await run(s, ['claud']); assert.equal(r.exit, 2); assert.match(r.io.stderrText(), /unknown harness claud[^\n]*claude-code/); assert.equal(r.text, '')
+  r = await run(s, ['--nope']); assert.equal(r.exit, 2); assert.match(r.io.stderrText(), /unknown option --nope/)
+  const fresh = tmpDir('asight-fresh-')
+  const f = await runStatusCli([], { io: fakeIo(), home: fresh, platform: 'linux', env: { HOME: fresh }, deps: { request: down(), socketPath: SOCK, procs: async () => [] } })
+  assert.equal(f, 0); assert.deepEqual(fs.readdirSync(fresh), [], 'on a machine with nothing installed it prints so, exits 0, and creates nothing')
+})

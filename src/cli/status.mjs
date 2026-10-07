@@ -1,13 +1,34 @@
-// status.mjs — `asight status [harness…] [--json]` (RFC 1.6 §2, V32): for every agent, captured now, or not and why. This file holds the judgement (judgeHarness: pure), the facts it is made from
-// (gatherStatus: the daemon when it answers, the disk when it does not) and the command (runStatusCli). Read-only: it asks the daemon `GET /status`, reads files, lists processes.
-// Everything is a `deps` entry a test replaces (0.1 §3). Exit codes (R4): 0 every harness that is on is captured and nothing failed in 24 h · 1 one is not, or something failed ·
-// 3 something that decides it could not be read (never 0: a read that failed is not a good answer).
+// status.mjs — `asight status [harness…] [--json]` (RFC 1.6 §2, V32, V10): for every agent, captured now, or not and why. This file holds the judgement (judgeHarness: pure), the facts it is
+// made of (gatherStatus: the daemon when it answers, the disk when it does not) and the command (runStatusCli). Read-only: it asks the daemon `GET /status`, reads files and lists processes;
+// the one thing it writes is ~/.asight/netenv.json, the cache the board reads (src/netenv). Everything the world gives is a `deps` entry a test replaces (0.1 §3).
+// Exit codes (R4): 0 every harness that is on is captured and nothing failed in 24 h · 1 one is not, or something failed · 3 something that decides it could not be read — never 0: a read that
+// failed is not a good answer (R11: what could not be read is 「不知道」 with the file and the errno, never 0 and never 「无」).
+import nodeFs from 'node:fs'
+import nodeOs from 'node:os'
+import path from 'node:path'
 import { STATUS_REASONS } from '../health/codes.mjs'
+import { EXIT, newReceipt } from './schema.mjs'
+import { HARNESS_IDS, resolveHarnesses } from './harness-names.mjs'
+import { collectorDir, stateFile, asightHome } from '../off/paths.mjs'
+import { readStateFile } from '../off/state.mjs'
+import { readManifest } from '../off/manifest.mjs'
+import { daemonState } from '../off/daemon-stop.mjs'
+import { controlRequest, controlSocketPath } from '../off/control-client.mjs'
+import { listProcs, procIdentity, pidAlive } from '../off/proc.mjs'
+import { matchHarness } from '../off/signature.mjs'
+import { sha256, readOrNull } from '../off/fsutil.mjs'
+import { getPath } from '../off/json-text.mjs'
+import { removeAsightText, SENTINEL } from '../off/text-edit.mjs'
+import { captureHealth } from '../health/read.mjs'
+import { trustReasonText } from '../collector/core/codes.mjs'
+import { formatStatus, formatHealth } from '../collector/cli.mjs'
 
 export { STATUS_REASONS }
 
 const at = (t) => (typeof t === 'string' ? Date.parse(t) : t)
 const verdict = (captured, reason = null) => ({ captured, reason })
+const errText = (e) => String((e && (e.code || e.message)) || e)
+const rethrowSandbox = (e) => { if (e && e.code === 'ESANDBOX') throw e } // a refusal of the test guard is never "the tool failed" (0.1 §3)
 
 /**
  * The verdict on one harness (V32), pure. Inputs, every one of them `null` / 'unknown' when it could not be read:
@@ -52,4 +73,177 @@ export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-mi
   })
   const captured = rows.some((r) => r.captured === false) ? false : rows.some((r) => r.captured === null) ? null : true
   return { captured, rows }
+}
+
+// ── the facts ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+const RESTART = new Set(['config-after-start', 'env-frozen', 'start-time-unknown', 'no-marker', 'kimi-not-via-shim']) // 「重启后才会被采集」(1.6 §1.1): what a restart of the agent fixes
+
+/** One item of the manifest against the disk → { state: 'intact' | 'missing' | 'changed' | 'unknown', why? }. Nothing is written. An entry asight wrote is intact when the file is byte for byte what it
+ *  wrote, or asight's value / text is still in it (Claude Code rewrites settings.json: the file differs, the entry is there); an owned file when its bytes are what the manifest recorded. */
+export function entryState(e, fs = nodeFs) {
+  const file = e.real_path || e.path
+  try {
+    const cur = readOrNull(fs, file)
+    if (cur == null) return { state: 'missing', why: `${file} is gone` }
+    if (e.kind === 'owned-file') {
+      if (e.without_ca) return { state: 'changed', why: `${file} was kept without the asight CA` }
+      return sha256(cur) === e.sha256 ? { state: 'intact' } : { state: 'changed', why: `${file} is not what asight wrote` }
+    }
+    if (e.post_sha256 == null) return { state: 'missing', why: `${file}: the install of this entry did not finish` }
+    if (sha256(cur) === e.post_sha256) return { state: 'intact' }
+    const text = cur.toString('utf8')
+    if (e.kind === 'text') return removeAsightText(text, e.ops || []).found ? { state: 'intact' } : text.includes(SENTINEL) ? { state: 'changed', why: `asight's block in ${file} is not what asight wrote` } : { state: 'missing', why: `asight's text is gone from ${file}` }
+    let value
+    try { value = JSON.parse(text) } catch { return { state: 'changed', why: `${file} no longer parses as JSON` } }
+    const now = getPath(value, e.keys)
+    return now === e.value ? { state: 'intact' } : now === undefined ? { state: 'missing', why: `${e.keys.join('.')} is gone from ${file}` } : { state: 'changed', why: `${e.keys.join('.')} in ${file} is something else now` }
+  } catch (err) { rethrowSandbox(err); return { state: 'unknown', why: `${file}: ${errText(err)}` } }
+}
+const entriesOf = (m, id) => [...(m.entries || []).filter((e) => e.harness === id && (e.kind === 'json-key' || e.kind === 'text' || e.kind === undefined)), ...(m.files || []).filter((f) => f.harness === id && f.kind === 'owned-file')]
+// when the entries the processes read at start were written: the newest of the harness's entries and of its plugin / shim files (a bundle is rewritten every day: its time says nothing)
+const installedAtOf = (m, id) => { const t = [...(m.entries || []).filter((e) => e.harness === id && e.kind !== 'owned-file'), ...(m.files || []).filter((f) => f.harness === id && (f.role === 'plugin' || f.role === 'shim'))].map((x) => Date.parse(x.installed_at)).filter(Number.isFinite); return t.length ? Math.max(...t) : null }
+
+/** The facts `status` is made of. The daemon's `GET /status` when it answers (its view of the switch, the kernel, the processes and the connections), else the disk (state.json, the manifest, the process table
+ *  read with the manifest's `liveness`). → { at, platform, user, daemon: { state, pid, reason, socket, reply }, state: { error? }, manifest: { value, error }, harnesses: [ { id, installed, desired, entry: { state, why },
+ *  installedAt, procs, judged: { captured, rows }, why: [] } ], link, relayed, health }. Anything that could not be read is `null` / `unknown` and says why; nothing is thrown for it. */
+export async function gatherStatus({ home = nodeOs.homedir(), env = process.env, deps = {}, names = null } = {}) {
+  const fs = deps.fs || nodeFs, platform = deps.platform || process.platform
+  const ms = deps.ms || Date.now, request = deps.request || controlRequest, alive = deps.alive || pidAlive, identity = deps.identity || procIdentity
+  const dir = collectorDir(home), stateF = stateFile(home)
+  const socketPath = deps.socketPath !== undefined ? deps.socketPath : (() => { try { return controlSocketPath({ env }) } catch { return null } })()
+  const f = { at: new Date(ms()).toISOString(), platform, user: deps.user || (() => { try { return nodeOs.userInfo().username } catch { return String(env.USER || '') } })(), dir, daemon: { state: 'unknown', pid: null, reason: null, socket: null, reply: null }, harnesses: [] }
+  // the daemon: judged the way `off` judges it (its lock, then whether the control socket answers), then asked for its status
+  const st = await daemonState({ lockFile: path.join(dir, 'lock'), socketPath, request, identity, alive, now: ms, fs, timeoutMs: deps.timeoutMs || 5000 })
+  f.daemon = { state: { none: 'not-running', stale: 'not-running', running: 'running', starting: 'not-responding', unresponsive: 'not-responding', unknown: 'unknown' }[st.state], pid: st.lock ? st.lock.pid : null, reason: st.reason || null, socket: st.socket || null, reply: null, lock: st.lock || null, helper_pid: st.lock ? st.lock.helper_pid ?? null : null }
+  if (st.state === 'running') {
+    try { f.daemon.reply = await request({ socketPath: st.socket, method: 'GET', path: '/status', timeoutMs: deps.timeoutMs || 5000 }) } catch (e) { f.daemon.state = 'not-responding'; f.daemon.reason = `GET /status failed (${errText(e)})` }
+  }
+  const reply = f.daemon.reply
+  // the manifest, then the switch (the manifest names which harnesses are installed: a version 1 state.json is read for them)
+  try { f.manifest = { value: readManifest(dir, fs), error: null } } catch (e) { f.manifest = { value: null, error: `${path.join(dir, 'install-manifest.json')}: ${errText(e)}` } }
+  if (f.manifest.value && f.manifest.value.unsupported) { f.manifest.error = `${path.join(dir, 'install-manifest.json')} is version ${JSON.stringify(f.manifest.value.version)}, which this asight does not read`; f.manifest.value = null }
+  const m = f.manifest.value
+  const installedIds = m ? [...new Set([...(m.entries || []), ...(m.files || [])].map((x) => x.harness).filter((h) => typeof h === 'string'))] : []
+  let state = null
+  try { state = readStateFile(stateF, { fs, installed: installedIds, now: new Date(ms()) }).state } catch (e) { f.state = { error: e && e.code === 'state-unparsable' ? e.message : `${stateF}: ${errText(e)}` } }
+  const fromReply = reply && reply.harnesses && typeof reply.harnesses === 'object' ? reply.harnesses : null
+  const ids = [...new Set([...installedIds, ...Object.keys(state ? state.harnesses : {}), ...Object.keys(fromReply || {}), ...(names || [])])]
+  const order = (id) => (HARNESS_IDS.includes(id) ? HARNESS_IDS.indexOf(id) : HARNESS_IDS.length)
+  const wanted = (names ? ids.filter((id) => names.includes(id)) : ids).sort((a, b) => order(a) - order(b) || a.localeCompare(b))
+  // the kernel and the helper, as the daemon reports them
+  f.link = reply ? { attached: reply.actual === 'on' ? true : reply.actual === 'off' ? false : null, helper: reply.helper && (reply.helper.down || reply.helper.ok === false) ? 'missing' : 'ok', helper_reason: reply.helper && reply.helper.down ? String(reply.helper.down) : reply.helper && reply.helper.ok === false ? `helper protocol ${reply.helper.proto} (this daemon expects ${reply.helper.expected_proto})` : null } : { attached: null, helper: 'ok', helper_reason: null }
+  // the processes: the daemon's rows when it answered, else the process table matched with the manifest's `liveness`
+  let table = null, tableError = null
+  if (!reply) {
+    if (!m) tableError = f.manifest.error || 'there is no install manifest to match the processes with'
+    else {
+      try { table = await (deps.procs ? deps.procs() : listProcs({ exec: deps.exec || null, platform })) } catch (e) { rethrowSandbox(e); tableError = errText(e) }
+    }
+  }
+  const negatives = new Set((reply && Array.isArray(reply.negatives) ? reply.negatives : []).map((n) => n.pid))
+  for (const id of wanted) {
+    const why = []
+    const desired = fromReply && fromReply[id] ? (fromReply[id].desired === 'on' ? 'on' : 'off') : state ? (state.harnesses[id] && state.harnesses[id].desired === 'on' ? 'on' : 'off') : null
+    if (desired === null) why.push(f.state.error)
+    const items = m ? entriesOf(m, id).map((e) => ({ item: e, ...entryState(e, fs) })) : []
+    const bad = items.filter((x) => x.state === 'missing' || x.state === 'changed')
+    const entry = !m ? { state: 'unknown', why: f.manifest.error || `no install manifest in ${dir}` } : !installedIds.includes(id) ? { state: 'unknown', why: 'asight has not installed an entry for it' } : bad.length ? { state: bad.some((x) => x.state === 'missing') ? 'missing' : 'changed', why: bad.map((x) => x.why).join('; ') } : items.find((x) => x.state === 'unknown') ? { state: 'unknown', why: items.filter((x) => x.state === 'unknown').map((x) => x.why).join('; ') } : { state: 'intact' }
+    if (entry.state === 'unknown' && installedIds.includes(id)) why.push(entry.why)
+    let procs
+    if (reply) procs = (Array.isArray(reply.agents) ? reply.agents : []).filter((a) => a.agent === id).map((a) => ({ pid: a.pid, trusted: a.trusted === true, reason: a.reason ?? null, hint: a.hint || null, negative: negatives.has(a.pid), off: a.off === true }))
+    else if (table) procs = table.map((p) => ({ p, h: matchHarness(m.liveness, p) })).filter((x) => x.h === id).map((x) => ({ pid: x.p.pid, startedAt: x.p.startedAt, trusted: null }))
+    else { procs = []; why.push(`the processes could not be listed (${tableError})`) }
+    const installedAt = m ? installedAtOf(m, id) : null
+    const judged = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', linkAttached: f.link.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt })
+    if (f.daemon.state === 'unknown' && desired === 'on') why.push(f.daemon.reason)
+    f.harnesses.push({ id, installed: installedIds.includes(id), desired, entry, installedAt, procs, judged, why: [...new Set(why.filter(Boolean))] })
+  }
+  try { f.health = deps.captureHealth ? deps.captureHealth({ home: asightHome(home) }) : captureHealth({ home: asightHome(home), fs, alive, identity, now: ms() }) } catch (e) { rethrowSandbox(e); f.health = null; f.health_error = errText(e) }
+  return f
+}
+
+// ── what it says ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+const REASON_TEXT = {
+  'desired-off': '期望态是 off(asight on <harness> 才开)', 'entry-missing': '信任入口不在了(asight on 重写它)', 'entry-changed': '信任入口被改成了别的(asight off 再 asight on 重写它)',
+  'link-missing': '期望开,内核里没有本实例的 link(asight on)', 'daemon-not-running': '守护进程没在跑(asight on)', 'daemon-not-responding': '守护进程没响应',
+  'helper-missing': '能力助手缺失或版本不对(sudo asight setup-helper)', 'negative-cache': '进程拒绝了 asight 的证书,那个 host 之后透传(重启这个 agent 再试)',
+  'config-after-start': '它在信任入口写好之前就启动了,重启后才会被采集',
+}
+const reasonText = (r, hint) => REASON_TEXT[r] || hint || trustReasonText(r) || ''
+const reasonOf = (j) => (j.rows.find((r) => r.reason) || {}).reason ?? null // the harness's own reason: the first one a row has
+const said = (j) => (j.captured === true ? '正在被采集' : j.captured === false ? `没有: ${reasonOf(j) ?? '(没给原因)'}` : '不知道')
+
+// the agents a restart fixes (1.6 §1.1: the same list `on` prints), from the rows
+const restartOf = (f) => f.harnesses.flatMap((h) => h.judged.rows.filter((r) => r.pid != null && RESTART.has(r.reason)).map((r) => ({ harness: h.id, pid: r.pid, reason: r.reason })))
+
+/** The lines of `asight status`. */
+export function renderStatus(f, { home = null } = {}) {
+  const d = f.daemon, lines = [`asight 状态(本用户 ${f.user})`]
+  lines.push(d.state === 'running' ? `守护进程: 在跑${d.pid ? `(pid ${d.pid})` : ''}${f.daemon.reply && f.daemon.reply.helper ? (f.link.helper === 'missing' ? `;助手有问题: ${f.link.helper_reason}` : `;助手 pid ${f.daemon.reply.helper.pid}`) : ''}`
+    : d.state === 'not-running' ? `守护进程: 没在跑${d.reason ? `(${d.reason})` : ''}:什么都没有被采集;asight on 拉起它`
+    : d.state === 'not-responding' ? `守护进程: 没响应(${d.reason});新连接已因心跳过期直连,asight off 会停掉它`
+    : `守护进程: 不知道(${d.reason})`)
+  if (f.state && f.state.error) lines.push(`期望态: 不知道(${f.state.error})`)
+  if (f.manifest.error) lines.push(`安装清单: 不知道(${f.manifest.error})`)
+  if (!f.harnesses.length && !(f.state && f.state.error) && !f.manifest.error && f.platform === 'linux') lines.push('还没有装任何 harness 的信任入口;asight on 开始采集。')
+  for (const h of f.harnesses) {
+    const j = h.judged
+    const meta = [h.desired ? `期望 ${h.desired}` : '期望态: 不知道', ...(h.desired === 'on' && d.state === 'running' && f.link.attached !== null ? [`link ${f.link.attached ? '已挂' : '没挂'}`] : []), h.entry.state === 'intact' ? '信任入口完好' : h.entry.state === 'unknown' ? (h.installed ? `信任入口: 不知道(${h.entry.why})` : '没有装入口') : `信任入口${h.entry.state === 'missing' ? '不在了' : '被改过'}(${h.entry.why})`]
+    lines.push(`  ${h.id.padEnd(13)} ${said(j)}${j.captured === false && !j.rows.some((r) => r.pid != null) ? ` — ${reasonText(reasonOf(j))}` : ''}${j.captured === null ? `(${h.why.join('; ') || '读不到'})` : ''}   ${meta.join(' · ')}`)
+    for (const r of j.rows.filter((x) => x.pid != null)) {
+      const p = h.procs.find((x) => x.pid === r.pid)
+      lines.push(`      pid ${r.pid}  ${r.captured === true ? '已被采集' : r.captured === false ? `没有: ${r.reason ?? '(没给原因)'} — ${reasonText(r.reason, p && p.hint)}` : '不知道(守护进程没判过它)'}`)
+    }
+  }
+  const restart = restartOf(f)
+  if (restart.length) lines.push(`需要你做的: ${restart.map((x) => `正在跑的 ${x.harness}(pid ${x.pid})重启后才会被采集`).join(';')};在那之前照常直连`)
+  return lines
+}
+
+// a failure in the last 24 h (D38⑦): of the collector, the old capture or the raw layer — the summary state names only the worst part, and a daemon that is not running outranks a failure
+const failedIn24h = (h) => !!h && [h.collector && h.collector.failures, h.legacy && h.legacy.failures, h.raw && h.raw.failures].some((l) => Array.isArray(l) && l.length > 0)
+
+const USAGE = 'usage: asight status [harness…] [--json]'
+const errMessage = (e) => String((e && e.message) || e)
+
+// A platform without the new collector (macOS, Windows: 1.6 §4): the old capture is what `on` / `off` drive there, and Task 10 gives `status` its per-harness rows (Desktop and CLI of claude-code). Until then `deps.legacyStatus`
+// is that hook, and without it the old capture's own health is what is printed — the same text `asight collector status` printed there before.
+async function legacyStatus(argv, { io, env, home, platform, deps, json }) {
+  if (deps.legacyStatus) return deps.legacyStatus(argv, { io, env, home, platform, deps })
+  let health = null, error = null
+  try { health = deps.captureHealth ? deps.captureHealth({ home: asightHome(home) }) : captureHealth({ home: asightHome(home), fs: deps.fs || nodeFs }) } catch (e) { rethrowSandbox(e); error = errMessage(e) }
+  const exit = error ? EXIT.unknown : failedIn24h(health) ? EXIT.incomplete : EXIT.ok
+  if (json) { io.out(JSON.stringify({ ...newReceipt('status'), ok: exit === EXIT.ok, platform, note: 'this platform has no new collector: the old capture is what on / off drive here', ...(health ? { health } : { health_error: error }) }, null, 2)); return exit }
+  io.out(`本平台(${platform})还没有新采集器:这里 asight on / off 驱动旧采集(过渡期,1.6 §4),逐 harness 的判词不适用。下面是旧采集与原始层的状态:`)
+  for (const l of health ? formatHealth(health) : [`capture health could not be read: ${error}`]) io.out(l)
+  return exit
+}
+/** → the exit code (R4). `argv` is what follows `status`. `io` = { out, err } (src/off/io.mjs makeIo). */
+export async function runStatusCli(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
+  const names = []
+  let json = false
+  for (const a of argv) {
+    if (a === '--json') json = true
+    else if (a.startsWith('-')) { io.err(`asight status: unknown option ${a}\n${USAGE}`); return EXIT.usage }
+    else names.push(a)
+  }
+  const named = resolveHarnesses(names)
+  if (!named.ok) { io.err(`asight status: unknown harness ${named.unknown.join(', ')}; the names are: ${named.known.join(', ')}`); return EXIT.usage }
+  if (platform !== 'linux') return legacyStatus(argv, { io, env, home, platform, deps, json })
+  const f = await gatherStatus({ home, env, deps: { ...deps, platform }, names: named.ids })
+  const wanted = f.harnesses.filter((h) => h.desired === 'on')
+  const unreadable = f.harnesses.some((h) => h.judged.captured === null) || !!(f.state && f.state.error) || !!f.manifest.error || !!f.health_error
+  const failing = wanted.some((h) => h.judged.captured === false) || failedIn24h(f.health)
+  const exit = unreadable ? EXIT.unknown : failing ? EXIT.incomplete : EXIT.ok
+  const restart = restartOf(f)
+  if (json) {
+    const r = { ...newReceipt('status'), ok: exit === EXIT.ok, user: f.user, daemon: { state: f.daemon.state, pid: f.daemon.pid, reason: f.daemon.reason }, harnesses: f.harnesses.map((h) => ({ harness: h.id, desired: h.desired ?? 'unknown', captured: h.judged.captured, reason: reasonOf(h.judged), entry: h.entry.state, rows: h.judged.rows })), restart, log: path.join(f.dir, 'flows') }
+    io.out(JSON.stringify(r, null, 2))
+    return exit
+  }
+  for (const l of renderStatus(f, { home })) io.out(l)
+  if (f.daemon.reply) for (const l of ['', ...formatStatus(f.daemon.reply).split('\n')]) io.out(l)
+  else if (f.health) for (const l of ['', ...formatHealth(f.health)]) io.out(l)
+  else io.out(`\ncapture health could not be read: ${f.health_error}`)
+  return exit
 }
