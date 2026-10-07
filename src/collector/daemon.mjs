@@ -4,6 +4,7 @@
 // engine on loopback, restores the desired switch state, and fails open everywhere: a dead helper means direct
 // connections, never broken ones. It never mints the CA: `asight on` does, inside the manifest.
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import tls from 'node:tls'
 import { asightHome, collectorHome } from '../paths.mjs'
@@ -25,6 +26,7 @@ import { createEngine } from './core/engine/engine.mjs'
 import { appendEvent, createFailureRecorder } from './core/events.mjs'
 import { EVENT, CODE, trustReasonText } from './core/codes.mjs'
 import { procIdentity, captureHealth } from '../health/read.mjs'
+import { driftCheck, newDriftState } from '../netenv/adopt.mjs'
 
 export { loadArch } // the CLI reaches arch only through this file (layering rule 5)
 
@@ -96,8 +98,9 @@ export function healthOnDisk(dir) {
   try { return captureHealth({ home: path.dirname(dir) }) } catch (e) { return { error: `capture health could not be read: ${errText(e)}` } }
 }
 
-async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = procIdentity, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000 }) {
+async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = procIdentity, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null }) {
   const P = collectorPaths(dir)
+  const netHome = home || env.HOME || os.homedir() // whose agents' settings the 5 s check looks at: the user the daemon runs as
   const failure = createFailureRecorder(P.dir, { log })
   let manifest
   try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "asight uninstall", then "asight on"`), { code: 'manifest-unreadable' }) }
@@ -160,7 +163,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     let engine = null // created after the tracker; the tracker's onGone reaches it at call time
     const event = (e) => failure.write({ ...e, ...(e.error != null && e.reason == null ? { reason: String(e.error) } : {}) })
 
-    const { registry, arch: A } = await loadParts({ arch, harnesses, env })
+    const { registry, arch: A, harnesses: harnessList } = await loadParts({ arch, harnesses, env })
     redirector = A.createRedirector({ env })
     // D38: one `agent-untrusted` per pid and reason (code = the resolver's reason, reason = what to do about it); a pid
     // recorded so gets `agent-trusted` once it is trusted and `agent-exit` when it exits, so the condition can clear.
@@ -390,6 +393,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         reason: `the kernel let ${total} connection(s) or event(s) go uncaptured since the last report (${Object.entries(counts).map(([k, n]) => `${k} ${n}`).join(', ')}); those connections went direct` })
       dropsBase = { ...lastDrops }; dropsAt = Date.now()
     }
+    const drift = newDriftState()
     async function check() {
       if (sw.busy()) return
       const reloaded = await reload() // without a heartbeat running (nothing attached) this is what notices that the file turned something off
@@ -411,6 +415,9 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       }
       if (r.drops && typeof r.drops === 'object') { lastDrops = r.drops; noteDrops() }
       await tracker.recheck()
+      // §9.5: the files each harness reads its proxy from, against what `on` found: a change is one `netenv-change` (and one failure when it leaves a harness that is on uncaptured). Read-only: only the operator's
+      // `on` writes an agent's setting (D30). The VPN is not probed here (a probe of the controller every 5 s is not a check); `status` and `doctor` compare it live.
+      driftCheck({ home: netHome, env, harnesses: harnessList, routing: A.routing || 'driver', desired: (h) => (sw.state().harnesses[h] || {}).desired ?? null, appendEvent: (rec) => failure.write(rec), state: drift })
     }
     const checkTimer = setInterval(() => { check().catch((e) => failure('daemon', coded(e, 'check-error'))) }, checkMs)
     checkTimer.unref()

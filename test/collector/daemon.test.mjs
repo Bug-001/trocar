@@ -29,6 +29,8 @@ import { createServer } from '../../src/server.mjs'
 import { serveSource } from '../../src/paths.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
+import { writeNetenv } from '../../src/netenv/index.mjs'
+import { settingSha } from '../../src/netenv/redact.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
@@ -1443,4 +1445,29 @@ test('daemon: a harness that state.json turns off (the CLI writes the file; the 
     assert.equal(st.harnesses['claude-code'].desired, 'off')
     raw.destroy()
   } finally { echo.close(); await d.stop(); p.done(); s.done() }
+})
+
+// §9.5 / V47: the 5 s check stats the files a harness reads its proxy from and compares what it finds with what `on` recorded (`adopted`): one `netenv-change` per change, however many checks, nothing written to the agent's file.
+test('daemon: the 5 s check records a change of the proxy setting once — netenv-change, no failure while the harness is still captured — and never writes the agent\'s file', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const file = path.join(s.home, '.claude', 'settings.json')
+  const setProxy = (v) => { const d = JSON.parse(fs.readFileSync(file, 'utf8')); d.env.HTTPS_PROXY = v; fs.writeFileSync(file, `${JSON.stringify(d, null, 2)}\n`) }
+  setProxy('http://proxy.old:3128')
+  const rec = { at: 'T', routing: 'driver', chain: 'c', source: [], sha256: settingSha('http://proxy.old:3128'), file_sha256: settingSha('http://proxy.old:3128'), proxy: 'http://proxy.old:3128', vpn: null }
+  writeNetenv(s.home, { at: 'T', products: [], unknown: [{ reason: 'a test' }], adopted: { 'claude-code': rec } })
+  const { arch } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home }, checkMs: 20 })
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    await new Promise((r) => setTimeout(r, 150))
+    assert.equal(flowsOf(s).filter((f) => f.event === 'netenv-change').length, 0, 'what `on` found is what is there: nothing to say')
+    setProxy('http://proxy.new:3128')
+    const bytes = fs.readFileSync(file)
+    await until(() => flowsOf(s).some((f) => f.event === 'netenv-change'))
+    await new Promise((r) => setTimeout(r, 200)) // more checks than one
+    const lines = flowsOf(s).filter((f) => f.where === 'netenv' || f.event === 'netenv-change')
+    assert.deepEqual(lines.map((f) => [f.event, f.where, f.code, f.harness, f.from, f.to, f.captured]), [['netenv-change', 'netenv', 'proxy-changed', 'claude-code', 'http://proxy.old:3128', 'http://proxy.new:3128', true]], 'one line, no failure: the eBPF route still steers it')
+    assert.deepEqual(fs.readFileSync(file), bytes, 'the daemon only reads the agent\'s file')
+  } finally { await d.stop(); p.done(); s.done() }
 })
