@@ -125,12 +125,17 @@ export function recordDrift({ drift, h, desired, appendEvent }) {
   if (desired === 'on' && drift.captured === false) appendEvent({ event: 'failure', where: 'netenv', harness: h, code: drift.code, reason })
 }
 
+/** What kind of drift a record has: a record of a routing that owns the proxy field (it says `proxy`, or holds `written_sha256`, the hash of what `on` wrote into the field) is measured against what asight wrote and a
+ *  field that holds anything else bypasses asight; any other is measured against what `on` found, and the harness is still steered whatever it is set to. The record decides, because it is what `on` made under the
+ *  routing of that moment: the daemon has no routing of its own to ask (a platform module declares none). */
+export const driftRoutingOf = (a) => (a && (a.routing === 'proxy' || a.written_sha256 != null) ? 'proxy' : 'driver')
+
 /**
- * The daemon's part of the 5 s check (§9.5): stat the files each adopted harness reads its proxy from; when one changed since the last look, read the setting again and compare with `adopted`. A drift is recorded once
- * (`state.seen`, in memory: a restart of the daemon says it again, which is once per restart, not once per check). Read-only: the files are statted and read, nothing is written but the events through `appendEvent`.
- * → the drifts recorded this time (a test's view).
+ * The daemon's part of the 5 s check (§9.5): stat the files each adopted harness reads its proxy from; when one changed since the last look, read the setting again and compare with `adopted`, by the semantics of
+ * the record (`driftRoutingOf`). A drift is recorded once (`state.seen`, in memory: a restart of the daemon says it again, which is once per restart, not once per check). Read-only: the files are statted and read,
+ * nothing is written but the events through `appendEvent`. → the drifts recorded this time (a test's view).
  */
-export function driftCheck({ home, env = {}, harnesses, routing = 'driver', desired = () => null, appendEvent, state, fs = nodeFs }) {
+export function driftCheck({ home, env = {}, harnesses, desired = () => null, appendEvent, state, fs = nodeFs }) {
   const adopted = readAdopted(home, { fs }), done = []
   if (!adopted) return done
   for (const d of harnesses) {
@@ -139,7 +144,7 @@ export function driftCheck({ home, env = {}, harnesses, routing = 'driver', desi
     if (state.sigs.get(d.name) === sig) continue
     state.sigs.set(d.name, sig)
     const setting = readProxySetting(d, { home, env: {}, fs })
-    for (const drift of detectDrift({ adopted, h: d.name, setting, routing, scope: 'files' })) {
+    for (const drift of detectDrift({ adopted, h: d.name, setting, routing: driftRoutingOf(adopted[d.name]), scope: 'files' })) {
       const key = `${d.name}|${drift.code}|${setting.sha256 ?? 'none'}`
       if (state.seen.has(key)) continue
       state.seen.add(key)

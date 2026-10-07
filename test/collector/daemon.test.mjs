@@ -1471,3 +1471,31 @@ test('daemon: the 5 s check records a change of the proxy setting once — neten
     assert.deepEqual(fs.readFileSync(file), bytes, 'the daemon only reads the agent\'s file')
   } finally { await d.stop(); p.done(); s.done() }
 })
+
+// §9.5: the semantics of a drift belong to the record `on` made, not to a property of the platform module (the Linux one has none, a proxy-mode one need not declare one): a record of a routing that owns the
+// proxy field is measured against what asight wrote there, so the entry asight put in the field is not a change — and the user's own edit of it is, with the harness left uncaptured.
+test('daemon: the 5 s check takes a proxy-mode record\'s own semantics — the field holding what asight wrote says nothing, the user\'s edit of it is one netenv-change (captured false) and one failure — with an arch that declares no routing', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const file = path.join(s.home, '.claude', 'settings.json')
+  const setProxy = (v) => { const d = JSON.parse(fs.readFileSync(file, 'utf8')); d.env.HTTPS_PROXY = v; fs.writeFileSync(file, `${JSON.stringify(d, null, 2)}\n`) }
+  const KERNEL = 'http://127.0.0.1:17991'
+  setProxy(KERNEL) // `on` in proxy mode pointed the agent's proxy at asight's own kernel
+  const rec = { at: 'T', routing: 'proxy', chain: 'c', source: [], sha256: settingSha('http://proxy.old:3128'), file_sha256: settingSha('http://proxy.old:3128'), proxy: 'http://proxy.old:3128', vpn: null, written_sha256: settingSha(KERNEL) }
+  writeNetenv(s.home, { at: 'T', products: [], unknown: [{ reason: 'a test' }], adopted: { 'claude-code': rec } })
+  const { arch } = fakeArch(p)
+  assert.equal(arch.routing, undefined, 'the arch module declares nothing: the record says what kind it is')
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home }, checkMs: 20 })
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    await new Promise((r) => setTimeout(r, 200))
+    assert.deepEqual(flowsOf(s).filter((f) => f.where === 'netenv' || f.event === 'netenv-change'), [], 'what asight wrote is not a change of the user\'s setting')
+    setProxy('http://proxy.new:3128')
+    const bytes = fs.readFileSync(file)
+    await until(() => flowsOf(s).some((f) => f.event === 'failure' && f.where === 'netenv'))
+    await new Promise((r) => setTimeout(r, 200))
+    const lines = flowsOf(s).filter((f) => f.where === 'netenv' || f.event === 'netenv-change')
+    assert.deepEqual(lines.map((f) => [f.event, f.where, f.code, f.harness, f.captured]), [['netenv-change', 'netenv', 'proxy-changed', 'claude-code', false], ['failure', 'netenv', 'proxy-changed', 'claude-code', undefined]])
+    assert.deepEqual(fs.readFileSync(file), bytes)
+  } finally { await d.stop(); p.done(); s.done() }
+})

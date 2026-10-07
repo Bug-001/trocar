@@ -417,7 +417,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       await tracker.recheck()
       // §9.5: the files each harness reads its proxy from, against what `on` found: a change is one `netenv-change` (and one failure when it leaves a harness that is on uncaptured). Read-only: only the operator's
       // `on` writes an agent's setting (D30). The VPN is not probed here (a probe of the controller every 5 s is not a check); `status` and `doctor` compare it live.
-      driftCheck({ home: netHome, env, harnesses: harnessList, routing: A.routing || 'driver', desired: (h) => (sw.state().harnesses[h] || {}).desired ?? null, appendEvent: (rec) => failure.write(rec), state: drift })
+      driftCheck({ home: netHome, env, harnesses: harnessList, desired: (h) => (sw.state().harnesses[h] || {}).desired ?? null, appendEvent: (rec) => failure.write(rec), state: drift })
     }
     const checkTimer = setInterval(() => { check().catch((e) => failure('daemon', coded(e, 'check-error'))) }, checkMs)
     checkTimer.unref()

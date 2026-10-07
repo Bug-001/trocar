@@ -8,7 +8,7 @@ import path from 'node:path'
 import { userUnit } from '../../src/collector/arch/linux/unit.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { linuxNetFacts } from '../../src/collector/arch/linux/netfacts.mjs'
-import { readProxySetting, detectDrift, recordDrift, driftCheck, newDriftState, sameAdoption } from '../../src/netenv/adopt.mjs'
+import { readProxySetting, detectDrift, recordDrift, driftCheck, newDriftState, sameAdoption, driftRoutingOf } from '../../src/netenv/adopt.mjs'
 import { settingSha } from '../../src/netenv/redact.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
@@ -115,7 +115,7 @@ test('V47 the daemon\'s 5 s check: a change of the file is one `netenv-change` (
   const s = sandbox(ENGINE); seedProxy(s)
   await s.run(['on', '--yes'], { deps: FACTS })
   const events = [], state = newDriftState(), before = snapshot(s.home)
-  const check = () => driftCheck({ home: s.home, env: {}, harnesses: descs, routing: 'driver', desired: () => 'on', appendEvent: (e) => events.push(e), state })
+  const check = () => driftCheck({ home: s.home, env: {}, harnesses: descs, desired: () => 'on', appendEvent: (e) => events.push(e), state })
   assert.deepEqual(check(), [], 'nothing changed since `on`')
   assert.deepEqual(snapshot(s.home), before, 'and checking writes nothing')
   setProxy(s, 'http://proxy.new:3128'); fs.writeFileSync(settingsOf(s), `${fs.readFileSync(settingsOf(s), 'utf8')}\n`) // another size and mtime
@@ -137,13 +137,31 @@ test('V47 (b) proxy mode: a field that holds anything but what asight put there 
   assert.equal(written.routing, 'driver', 'the facts here are Linux\'s; the routing hooks are what is injected')
   fs.writeFileSync(field.path, fs.readFileSync(field.path, 'utf8').replace(KERNEL, 'http://proxy.new:3128'))
   const bytes = fs.readFileSync(field.path), events = [], state = newDriftState()
-  const check = () => driftCheck({ home: s.home, env: {}, harnesses: descs, routing: 'proxy', desired: () => 'on', appendEvent: (e) => events.push(e), state })
+  const check = () => driftCheck({ home: s.home, env: {}, harnesses: descs, desired: () => 'on', appendEvent: (e) => events.push(e), state })
   for (let i = 0; i < 3; i++) check()
   assert.deepEqual(events.map((e) => [e.event, e.where, e.code, e.captured]), [['netenv-change', 'netenv', 'proxy-changed', false], ['failure', 'netenv', 'proxy-changed', undefined]])
   for (const e of events) assert.deepEqual(checkRecord(e), [], 'in the closed sets')
   assert.deepEqual(fs.readFileSync(field.path), bytes, 'status, doctor and the daemon only read: the field is the user\'s')
-  const off = []; driftCheck({ home: s.home, env: {}, harnesses: descs, routing: 'proxy', desired: () => 'off', appendEvent: (e) => off.push(e), state: newDriftState() })
+  const off = []; driftCheck({ home: s.home, env: {}, harnesses: descs, desired: () => 'off', appendEvent: (e) => off.push(e), state: newDriftState() })
   assert.deepEqual(off.map((e) => e.event), ['netenv-change'], 'a harness that is off has nothing to lose: no failure')
+})
+
+test('driftCheck takes the semantics of the record `on` made, not a routing handed in: a proxy-mode record (routing proxy, or one that holds `written_sha256`) with the field holding what asight wrote is no drift, and the first edit of it is a drift that bypasses asight; a driver-mode record is measured against what `on` found', () => {
+  const s = sandbox(ENGINE); seedProxy(s, 'http://asight.entry:17991')
+  const base = { at: 'T', chain: 'c', source: [], vpn: null, sha256: settingSha('http://proxy.old:3128'), file_sha256: settingSha('http://proxy.old:3128'), proxy: 'http://proxy.old:3128' }
+  const write = (rec) => { fs.mkdirSync(path.dirname(netenvOf(s)), { recursive: true }); fs.writeFileSync(netenvOf(s), `${JSON.stringify({ at: 'T', adopted: { 'claude-code': rec } })}\n`) }
+  const run = (state = newDriftState()) => { const ev = []; driftCheck({ home: s.home, env: {}, harnesses: descs, desired: () => 'on', appendEvent: (e) => ev.push(e), state }); return ev }
+  const WRITTEN = settingSha('http://asight.entry:17991')
+  assert.deepEqual([driftRoutingOf({ routing: 'proxy' }), driftRoutingOf({ routing: 'driver', written_sha256: WRITTEN }), driftRoutingOf({ routing: 'driver' }), driftRoutingOf(undefined)], ['proxy', 'proxy', 'driver', 'driver'])
+  write({ ...base, routing: 'proxy', written_sha256: WRITTEN })
+  assert.deepEqual(run(), [], 'the field holds what asight wrote: nothing to say, which a driver-mode reading would call a change on the first check after every `on`')
+  setProxy(s, 'http://proxy.new:3128')
+  assert.deepEqual(run().map((e) => [e.event, e.code, e.captured]), [['netenv-change', 'proxy-changed', false], ['failure', 'proxy-changed', undefined]], 'the user\'s edit leaves it uncaptured')
+  write({ ...base, routing: 'driver' })
+  setProxy(s, 'http://proxy.old:3128')
+  assert.deepEqual(run(), [], 'a driver-mode record against the value `on` found')
+  setProxy(s, 'http://proxy.new:3128')
+  assert.deepEqual(run().map((e) => [e.event, e.captured]), [['netenv-change', true]], 'and an edit of it leaves the harness steered: one event, no failure')
 })
 
 const KERNEL = 'http://127.0.0.1:17992'
@@ -175,7 +193,7 @@ test('V46 (b) proxy mode: `adopt` is handed the setting that was there (the valu
   for (const e of events) assert.deepEqual(checkRecord(e), [])
   assert.deepEqual(fs.readFileSync(field.path), bytes)
   // the daemon check of the field: what asight wrote is not drift
-  const quiet = []; driftCheck({ home: s.home, env: {}, harnesses: descs, routing: 'proxy', desired: () => 'on', appendEvent: (e) => quiet.push(e), state: newDriftState() })
+  const quiet = []; driftCheck({ home: s.home, env: {}, harnesses: descs, desired: () => 'on', appendEvent: (e) => quiet.push(e), state: newDriftState() })
   assert.deepEqual(quiet, [])
 })
 
