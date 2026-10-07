@@ -88,6 +88,8 @@ function tail(g, F, hf, setting, follow) {
   const u = g.node({ kind: 'upstream', name: `${host}:443`, addr: host, port: 443 })
   const first = ignored ? { via: 'direct', evidence: [`unsupported-scheme:${setting.scheme}`], ...(hf.behaviour.measured === 'lab' ? {} : { inferred: true }) } : { via: 'direct', evidence: [] } // not measured on this OS: said, not claimed
   if (F.vpn && F.vpn.tun === true) return { ids: [u, g.edge(u, g.node({ kind: 'egress', name: '出口', chosen_by: productName(F.vpn.product) }), 'tun')], first }
+  // the way out is a TUN device and no product was recognised (sing-box, v2rayA …): the hop is there, who chooses the exit is not known
+  if (!F.vpn && F.tun === true) return { ids: [u, g.edge(u, g.node({ kind: 'egress', name: '出口', unknown: { reason: 'absent', detail: 'the default route is a TUN device and no VPN / proxy product was recognised' } }), 'tun')], first, note: '去公网的默认路由走 TUN 设备,但没认出是哪个 VPN 产品,所以出口由谁选不知道' }
   return { ids: [u], first }
 }
 
@@ -122,7 +124,7 @@ function branchNames(hf) {
 const followsOf = (hf, name) => !!(hf.behaviour && hf.behaviour.follows && hf.behaviour.follows[name === 'ws' ? 'ws' : 'http'])
 
 function driverTopology(F, h, hf) {
-  const g = graph(), v = judged(F, h, hf), up = platformUp(F, h)
+  const g = graph(), v = judged(F, h, hf), up = platformUp(F, h), notes = new Set()
   const current = (p) => p.startSetting == null
   const main = hf.procs.find((p) => current(p) && steeredOf(p) === true) || hf.procs.find((p) => current(p)) || null
   const steered = main ? steeredOf(main) : entryIntact(hf)
@@ -132,6 +134,7 @@ function driverTopology(F, h, hf) {
   const evidenceEbpf = [...(F.link.ids || []).slice(0, 1).map((id) => `link:${id}`), ...(main ? [`watch:${main.pid}`] : [])]
   const build = (p, setting, withAsight, follow) => {
     const a = agentOf(g, h, p), t = tail(g, F, hf, setting, follow)
+    if (t.note) notes.add(t.note)
     const path = [a], off = [a, ...t.ids]
     let from = a
     if (withAsight) { const e = engine(); g.edge(a, e, 'ebpf', { evidence: evidenceEbpf }); path.push(e); from = e }
@@ -149,7 +152,10 @@ function driverTopology(F, h, hf) {
     const b = build(p, stale ? p.startSetting : hf.setting, s === true && up === true, followsOf(hf, 'http'))
     running.push({ pid: p.pid, path: b.path, note: stale ? 'start-time-settings' : 'not-steered', reason: (v.rows.find((r) => r.pid === p.pid) || {}).reason ?? null })
   }
-  return { harness: h, at: F.at, routing: F.routing, desired: F.desired[h] ?? null, on_path: branches[0].on_path, captured: v.captured, reason: v.reason, vpn: vpnOf(F), nodes: g.nodes, edges: g.edges, branches, running, notes: [], findings: [] }
+  // NO_PROXY: an agent with a proxy of its own may keep its API host off it. Whether this agent honours the variable is not measured, so the path is drawn by its proxy setting and the note says what may differ.
+  const bypass = main && Array.isArray(main.noProxy) ? main.noProxy : hf.noProxy || []
+  if (bypass.length && hf.setting && hf.setting.value) notes.add(`NO_PROXY 里写了 ${bypass.join('、')}:${h} 对它可能不经代理直连(各 harness 认不认 NO_PROXY 还没逐个测),这里按它的代理设置画`)
+  return { harness: h, at: F.at, routing: F.routing, desired: F.desired[h] ?? null, on_path: branches[0].on_path, captured: v.captured, reason: v.reason, vpn: vpnOf(F), nodes: g.nodes, edges: g.edges, branches, running, notes: [...notes], findings: [] }
 }
 
 /** The VPN / proxy product the machine has, as the topology states it (read-only facts: no node, no rule, no secret): what the one line of `status <h>` about per-process rules needs. */

@@ -5,11 +5,12 @@
 //   NetFacts = { at, platform, routing: 'driver' | 'proxy' | 'legacy' | 'none' | 'unknown',
 //     desired: { <h>: 'on' | 'off' }, daemon: { state, pid, enginePort }, link: { attached: true | false | null, helper: 'ok' | 'missing', ids: [number] },
 //     listeners: [ { addr, port, pid, exe, product } | { addr, port, unknown: { reason, detail } } ],
+//     tun: true | false | null (the way out of the machine is a TUN device — read from the routing table, so it is a fact with no VPN product recognised too),
 //     vpn: null | { product, version, pid, port, mode, tun: true | false | null, unknown? },          // read-only: no rules, no secret, no node (D43)
 //     forwarder: null | { pid, up, forms: { <form>: { h, port, state: 'on' | 'forward-only', upstream, source, clients: [pid] } } },   // proxy mode's own kernel (4.8 §10.1)
 //     harnesses: { <h>: { installed, entry: { state }, installedAt, setting, fileSetting (the same read of the files alone: drift is measured on it), systemProxy: null | { value, pac } | { unknown },
 //                         behaviour: { env, follows: { http, ws }, schemes, unsupported, branches, measured, restart, files, fileKeys }, procs: [ { pid, name, exe, version, startedAt, watched, trusted, reason, negative,
-//                         startSetting: null | setting, elevated } ], negatives: [ { pid, host, reason } ], apiHosts, adopted: null | { at, routing, chain, source, sha256 }, forms: null | [ … ] } },
+//                         startSetting: null | setting, elevated } ], negatives: [ { pid, host, reason } ], apiHosts, noProxy: [the API hosts the NO_PROXY of this shell covers], adopted: null | { at, routing, chain, source, sha256 }, forms: null | [ … ] } },
 //     linger: true | false | null (Linux: does the OS keep the daemon after the last logout), otherRedirector: true | false | null (another connect-rewriter on the machine: a platform that cannot tell says null),
 //     vpnKnown: whether the probe answered (a changed VPN is only judged against an answer),
 //     unknowns: [ { fact, reason, detail } ] }                                                    // a read that failed: said with its reason, never left out (R11)
@@ -18,6 +19,7 @@
 // tun?, unknowns? }`; one that throws (not the test guard's refusal) leaves the routing unknown and says why. A platform without one has routing 'unknown'.
 import nodeFs from 'node:fs'
 import { readProxySetting, proxyFilesOf } from './adopt.mjs'
+import { noProxyNames } from './noproxy.mjs'
 
 const rethrowSandbox = (e) => { if (e && e.code === 'ESANDBOX') throw e } // a refusal of the test guard is never "the read failed" (0.1 §3)
 const errText = (e) => String((e && (e.code || e.message)) || e)
@@ -62,7 +64,7 @@ export async function gatherNetFacts({ platform = process.platform, home, env = 
     desired: Object.fromEntries(status.harnesses.map((h) => [h.id, h.desired === 'on' ? 'on' : h.desired === 'off' ? 'off' : null])),
     daemon: { state: status.daemon.state, pid: status.daemon.pid ?? null, enginePort: (reply && reply.engine && reply.engine.port) ?? (status.daemon.lock && status.daemon.lock.engine_port) ?? null },
     link: { attached: status.link.attached, helper: status.link.helper, ids: reply && Array.isArray(reply.links) ? reply.links.map((l) => l.id).filter((x) => Number.isInteger(x)) : [] },
-    listeners: part.listeners || [], vpn: null, vpnKnown: false, forwarder: part.forwarder || null, harnesses: {}, unknowns: [...(part.unknowns || [])],
+    listeners: part.listeners || [], tun: typeof part.tun === 'boolean' ? part.tun : null, vpn: null, vpnKnown: false, forwarder: part.forwarder || null, harnesses: {}, unknowns: [...(part.unknowns || [])],
     linger: status.linger && typeof status.linger.linger === 'boolean' ? status.linger.linger : null, otherRedirector: typeof part.otherRedirector === 'boolean' ? part.otherRedirector : null,
   }
   f.vpn = vpnOf(netenv, f.unknowns)
@@ -80,7 +82,7 @@ export async function gatherNetFacts({ platform = process.platform, home, env = 
       behaviour: { env: [...pr.env], follows: { ...pr.systemProxy }, schemes: [...pr.schemes], unsupported: { ...pr.unsupported }, branches: [...pr.branches], measured: pr.measured[platform] || 'inferred', restart: { ...pr.restart }, files: proxyFilesOf(d, { home, env }),
         fileKeys: pr.files.map((x) => ({ path: x.path({ home, env }), format: x.format, key: x.format === 'json' ? x.keys[0].join('.') : x.keys[0] })) },
       procs, negatives: reply && Array.isArray(reply.negatives) ? reply.negatives.filter((n) => procs.some((p) => p.pid === n.pid)).map((n) => ({ pid: n.pid, host: n.host, reason: 'negative-cache' })) : [],
-      apiHosts: [...(d.hosts || [])], fakeIp: part.fakeIp && part.fakeIp[h.id] === true ? true : null, adopted: adopted && adopted[h.id] ? adopted[h.id] : null, forms: (part.forms && part.forms[h.id]) || null,
+      apiHosts: [...(d.hosts || [])], noProxy: noProxyNames(env.NO_PROXY || env.no_proxy, d.hosts || []), fakeIp: part.fakeIp && part.fakeIp[h.id] === true ? true : null, adopted: adopted && adopted[h.id] ? adopted[h.id] : null, forms: (part.forms && part.forms[h.id]) || null,
       ...(part.legacy && part.legacy[h.id] ? { legacy: part.legacy[h.id] } : {}),
     }
   }

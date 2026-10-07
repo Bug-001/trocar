@@ -136,3 +136,17 @@ test('gatherNetFacts: the host\'s linger state and another redirector, whether t
   const failed = await gatherNetFacts({ ...base, home, status: status(), netenv: { error: 'boom' }, archFacts: async () => ({ routing: 'driver' }) })
   assert.equal(failed.vpnKnown, false, 'a probe that failed says nothing about whether the VPN changed')
 })
+
+test('gatherNetFacts: the TUN the platform read stays a fact of its own — with no VPN product recognised too — and the NO_PROXY of the shell names the harness\'s API hosts it covers (a domain suffix, the host, `*`)', async () => {
+  const home = tmpDir('asight-gather5-')
+  const f = await gatherNetFacts({ ...base, home, status: status(), archFacts: async () => ({ routing: 'driver', tun: true }) })
+  assert.deepEqual([f.vpn, f.tun], [null, true], 'no product, a TUN device: both are said')
+  const no = await gatherNetFacts({ ...base, home, status: status(), archFacts: async () => ({ routing: 'driver', tun: false }) })
+  assert.equal(no.tun, false)
+  assert.equal((await gatherNetFacts({ ...base, home, status: status(), archFacts: async () => ({ routing: 'driver' }) })).tun, null, 'not read: not said')
+  const env = (v) => gatherNetFacts({ ...base, env: v, home, status: status(), archFacts: async () => ({ routing: 'driver' }) })
+  assert.deepEqual((await env({ NO_PROXY: 'localhost,.anthropic.com' })).harnesses['claude-code'].noProxy, ['api.anthropic.com'])
+  assert.deepEqual((await env({ no_proxy: '*' })).harnesses['claude-code'].noProxy, ['api.anthropic.com'])
+  assert.deepEqual((await env({ NO_PROXY: 'localhost,example.com' })).harnesses['claude-code'].noProxy, [])
+  assert.deepEqual((await env({})).harnesses['claude-code'].noProxy, [])
+})

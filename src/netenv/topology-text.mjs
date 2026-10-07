@@ -26,7 +26,7 @@ function hopText(n, via, detail, inferred = false) {
       return `${who}${detail && n.pid ? ` · pid ${n.pid}` : ''}${detail && n.mode && n.mode !== 'unknown' ? ` · ${MODE[n.mode] || n.mode}` : ''}${paren(n.unknown ? unknownText(n) : n.down ? '没人在听' : null)}`
     }
     case 'upstream': return `${n.name}${via === 'direct' ? `(直连${inferred ? ' · 推断' : ''})` : ''}`
-    case 'egress': return n.unknown ? '?' : `出口${n.chosen_by ? `(${n.chosen_by} 选)` : ''}`
+    case 'egress': return n.unknown ? (via === 'tun' ? `出口(${unknownText(n)})` : '?') : `出口${n.chosen_by ? `(${n.chosen_by} 选)` : ''}`
     default: return `${n.name}${n.unknown ? paren(unknownText(n)) : ''}`
   }
 }
@@ -41,7 +41,7 @@ function edgeLabel(e, from, to, detail) {
   if (e.via === 'tun') return 'TUN'
   if (e.via === 'proxy-http' || e.via === 'proxy-https' || e.via === 'proxy-socks') {
     if (e.entry) return `${e.entry.where} · ${e.entry.opt_in ? '你点名的' : 'asight 写的'}`
-    if (from.asight) return e.via === 'proxy-socks' ? 'SOCKS 前导原样转' : 'CONNECT 原样转'
+    if (from.asight) return e.via === 'proxy-socks' ? 'SOCKS 前导原样转' : e.via === 'proxy-https' ? 'CONNECT 原样转 · https 代理' : 'CONNECT 原样转' // an https proxy of the agent's own: the engine ends its outer TLS first (4.6 §引擎 第 3 步)
     const ev = (e.evidence || [])[0] || ''
     if (ev.startsWith('env:')) return ev.slice(4)
     if (ev.startsWith('file:')) { const [file, key] = ev.slice(5).split('#'); return key ? `${base(file)} ${key}` : base(file) }

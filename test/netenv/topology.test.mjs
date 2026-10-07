@@ -2,7 +2,7 @@
 // leaves the route as it was). Every row of test/netenv/fixtures/rows.mjs is one NetFacts and the topology it must give, written out literally; the facts are injected, nothing here reads the machine.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildTopology, renderCompact } from '../../src/netenv/topology.mjs'
+import { buildTopology, renderCompact, renderDetail } from '../../src/netenv/topology.mjs'
 import { validateTopology, UNKNOWN_REASONS } from '../../src/cli/schema.mjs'
 import { ROWS, facts, harness, proc, proxyOf, none, mihomoVpn, MIHOMO, pfacts, form, fwForm } from './fixtures/rows.mjs'
 
@@ -147,4 +147,44 @@ test('proxy mode verdicts the platform\'s facts can ask for: a form it refused t
     assert.deepEqual([t.on_path, t.captured, t.reason], [false, false, 'not-routed'], state)
     assert.deepEqual(validateTopology({ codex: t }), [], 'a reason in the closed set of status reasons')
   }
+})
+
+// ── what the Linux reads gave and the topology dropped (4.6 「eBPF 模式下的网络拓扑」) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+test('a default route on a TUN device with no VPN product recognised (sing-box, v2rayA …) is a hop, not nothing: [TUN] 出口(不知道 · …) after the API host, and a note says why; with no TUN, or with the product known, the path is as it was', () => {
+  const t = buildTopology(facts('claude-code', { tun: true }))['claude-code']
+  assert.deepEqual(t.branches[0].path.map((id) => kindOf(t, id)), ['agent', 'asight-engine', 'upstream', 'egress'])
+  const egress = t.nodes.find((n) => n.kind === 'egress')
+  assert.ok(egress.unknown && UNKNOWN_REASONS.includes(egress.unknown.reason), 'a hop the facts could not name: unknown, with a reason from the closed set')
+  assert.equal(renderCompact(t)[0], 'claude 4121 → [eBPF] asight 引擎 :47123 → api.anthropic.com:443(直连) → [TUN] 出口(不知道 · absent)')
+  assert.ok(t.notes.some((n) => /TUN/.test(n) && /没认出/.test(n)), t.notes.join('|'))
+  assert.deepEqual(t.branches[0].off_path.map((id) => kindOf(t, id)), ['agent', 'upstream', 'egress'], 'and the way without asight goes the same way')
+  assert.deepEqual(validateTopology({ 'claude-code': t }), [])
+  for (const f of [facts('claude-code', { tun: false }), facts('claude-code', { tun: null }), facts('claude-code')]) assert.equal(renderCompact(buildTopology(f)['claude-code'])[0], 'claude 4121 → [eBPF] asight 引擎 :47123 → api.anthropic.com:443(直连)')
+  assert.match(renderCompact(buildTopology(facts('claude-code', { tun: true, vpn: mihomoVpn({ tun: true }) }))['claude-code'])[0], /\[TUN\] 出口\(mihomo 选\)$/, 'the product named: as before')
+  // a proxy of the agent's own decides the path: the TUN is not a hop of it
+  assert.ok(!/TUN/.test(renderCompact(buildTopology(facts('claude-code', { tun: true, listeners: [MIHOMO], vpn: mihomoVpn() }, { setting: proxyOf('http://127.0.0.1:7890') }))['claude-code'])[0]))
+})
+
+test('NO_PROXY: when the environment names the API host, an agent with a proxy may not use it for that host — said as a note (whether the agent honours NO_PROXY is not measured), from the running process\'s own environment else from the shell\'s; no proxy or no match is no note', () => {
+  const via = { setting: proxyOf('http://127.0.0.1:7890') }
+  const base = { listeners: [MIHOMO], vpn: mihomoVpn() }
+  const noteOf = (f) => buildTopology(f)['claude-code'].notes.filter((n) => /NO_PROXY/.test(n))
+  const fromProc = noteOf(facts('claude-code', base, { ...via, procs: [proc(4121, { noProxy: ['api.anthropic.com'] })] }))
+  assert.equal(fromProc.length, 1)
+  assert.match(fromProc[0], /api\.anthropic\.com/)
+  assert.match(fromProc[0], /还没.*测|没测/, 'whether it honours NO_PROXY: not claimed')
+  assert.equal(noteOf(facts('claude-code', base, { ...via, procs: [proc(4121, { noProxy: [] })], noProxy: ['api.anthropic.com'] })).length, 0, 'the running process\'s own environment is what it does: it names nothing')
+  assert.equal(noteOf(facts('claude-code', base, { ...via, procs: [], noProxy: ['api.anthropic.com'] })).length, 1, 'no process: what the shell that starts one has')
+  assert.equal(noteOf(facts('claude-code', base, { procs: [proc(4121, { noProxy: ['api.anthropic.com'] })] })).length, 0, 'no proxy of its own: nothing to bypass')
+  assert.equal(noteOf(facts('claude-code', base, via)).length, 0)
+  const detail = renderDetail(buildTopology(facts('claude-code', base, { ...via, procs: [proc(4121, { noProxy: ['api.anthropic.com'] })] }))['claude-code']).join('\n')
+  assert.match(detail, /^说明: NO_PROXY/m)
+})
+
+test('an https:// proxy is drawn as one: the engine ends the outer TLS of the agent\'s own https proxy and hands the CONNECT on, so the edge says 「https 代理」; a plain http proxy and a SOCKS one keep their words', () => {
+  const line = (value) => renderCompact(buildTopology(facts('claude-code', { listeners: [{ ...MIHOMO, port: 8443 }], vpn: mihomoVpn({ port: 8443 }) }, { setting: proxyOf(value) }))['claude-code'])[0]
+  assert.match(line('https://127.0.0.1:8443'), /→ \[CONNECT 原样转 · https 代理\] mihomo :8443/)
+  assert.match(line('http://127.0.0.1:8443'), /→ \[CONNECT 原样转\] mihomo :8443/)
+  assert.match(line('socks5://127.0.0.1:8443'), /→ \[SOCKS 前导原样转\] mihomo :8443/)
 })

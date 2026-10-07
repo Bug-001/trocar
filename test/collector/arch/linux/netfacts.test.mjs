@@ -148,3 +148,16 @@ test('linuxNetFacts: a process\'s start-time proxy is read from the keys ITS har
   // no descriptor for the harness → the keys are not known: no claim about what the process was started with
   assert.equal((await linuxNetFacts({ status: { daemon: { state: 'running', reply: { agents: [] } }, harnesses: [{ id: 'claude-code', procs: [row(4121)] }], matched: [{ h: 'claude-code', p: { pid: 4121, exe: '/x', argv: ['claude'], startedAt, env: () => only('HTTPS_PROXY', 'http://a:1') } }] }, settings: { 'claude-code': current() }, harnesses: [] }, { exec: runner(TABLE), procRoot: '/x' })).procs['claude-code'][0].startSetting, null)
 })
+
+test('linuxNetFacts: a process carries which of its harness\'s API hosts its own NO_PROXY covers — [] when none, null when its environment cannot be read (not "none")', async () => {
+  const startedAt = Date.parse('2026-10-07T09:30:00Z')
+  const ask = async (envMap) => {
+    const m = [{ h: 'claude-code', p: { pid: 4121, exe: '/x/claude', argv: ['claude'], startedAt, env: () => envMap } }]
+    return (await linuxNetFacts({ status: statusOf([row(4121)], undefined, m), settings: { 'claude-code': current() }, harnesses: descs }, { exec: runner(TABLE), procRoot: '/x' })).procs['claude-code'][0].noProxy
+  }
+  assert.deepEqual(await ask(new Map([['NO_PROXY', 'localhost,.anthropic.com']])), ['api.anthropic.com'])
+  assert.deepEqual(await ask(new Map([['no_proxy', 'api.anthropic.com']])), ['api.anthropic.com'])
+  assert.deepEqual(await ask(new Map([['NO_PROXY', 'example.com']])), [])
+  assert.deepEqual(await ask(new Map()), [])
+  assert.equal(await ask(null), null, 'an environment of another user\'s process: not known')
+})
