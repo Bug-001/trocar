@@ -22,7 +22,8 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   // Every write into it is a failure event (D-12, 4.6 §记录 负缓存写入): from then on this (pid, host) is spliced, not
   // captured, until the process exits (the daemon calls forgetPid and records the clearing).
   const neg = createNegativeCache()
-  const negWritten = (made, key, o) => { if (made) { const e = neg.get(key); failure({ code: 'negative-cache', pid: e.pid ?? null, agent: e.agent, host: e.host, cause: e.cause, reason: `${e.host} is no longer decrypted for pid ${e.pid} (${e.cause}${e.rejections > 1 ? `, ${e.rejections} times in a row` : ''}); its connections there are passed through until it exits` }) } return made }
+  // neg_key: what the entry is keyed by — "<pid>", or "<route>.<group>" for a connection with no pid (4.8 §5.5)
+  const negWritten = (made, key, o) => { if (made) { const e = neg.get(key); failure({ code: 'negative-cache', pid: e.pid ?? null, neg_key: e.negKey, agent: e.agent, host: e.host, cause: e.cause, reason: `${e.host} is no longer decrypted for ${e.pid != null ? `pid ${e.pid}` : e.negKey} (${e.cause}${e.rejections > 1 ? `, ${e.rejections} times in a row` : ''}); its connections there are passed through until ${e.pid != null ? 'it exits' : 'every process of that form has exited'}` }) } return made }
   const negCache = { ...neg, observe: (key, o) => negWritten(neg.observe(key, o), key, o), mark: (key, o) => negWritten(neg.mark(key, o), key, o) }
   let flowSeq = 0
   const defaultConnect = (dst) => net.connect(dst.port, dst.address)
@@ -136,6 +137,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     return { active: counters.active, total: counters.total, decrypted: counters.decrypted, spliced: counters.spliced, lookupMisses: counters.lookupMisses, storeErrors, notCaptured: { ...counters.notCaptured } }
   }
 
-  // negatives() is for status only; forgetPid(pid) is called by the daemon when that process exits.
-  return { listen, close, stats, negatives: () => neg.list(), forgetPid: (pid) => neg.forgetPid(pid) }
+  // negatives() is for status only; forgetPid(pid) is called by the daemon when that process exits; forgetNegKey(k) when the last process of a
+  // form with no pid to key by has (4.8 §5.5).
+  return { listen, close, stats, negatives: () => neg.list(), forgetPid: (pid) => neg.forgetPid(pid), forgetNegKey: (k) => neg.forgetKey(k) }
 }

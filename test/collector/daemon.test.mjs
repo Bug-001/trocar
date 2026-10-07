@@ -730,7 +730,7 @@ test('daemon: agent-trusted, agent-exit (also found by a rescan) and negative-ca
     const exit = await until(() => flowsOf(s).find((f) => f.event === 'agent-exit' && f.pid === 6262))
     assert.deepEqual([exit.agent, exit.via], ['claude-code', 'exit'])
     assert.deepEqual(forgot, [6262], 'the engine forgets the exited pid (a reused pid inherits nothing)')
-    assert.deepEqual(flowsOf(s).filter((f) => f.event === 'negative-cache-cleared').map((f) => [f.pid, f.dropped]), [[6262, 2]])
+    assert.deepEqual(flowsOf(s).filter((f) => f.event === 'negative-cache-cleared').map((f) => [f.pid, f.dropped, f.neg_key]), [[6262, 2, '6262']], 'the clearing says which key it cleared (4.8 §5.5)')
     fs.rmSync(path.join(p.root, '6262'), { recursive: true })
     p.add(6363, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) })
     await req(s.sock, 'POST', '/off'); await req(s.sock, 'POST', '/on', {}) // the rescan behind `on` picks it up

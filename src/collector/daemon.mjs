@@ -217,7 +217,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         transportNoted.delete(row.pid)
         failure.write({ event: EVENT.agentExit, pid: row.pid, agent: row.agent, via, ...(last != null ? { code: last, reason: 'exited while untrusted' } : {}) })
         const dropped = engine ? engine.forgetPid(row.pid) : 0
-        if (dropped) failure.write({ event: 'negative-cache-cleared', pid: row.pid, dropped })
+        if (dropped) failure.write({ event: 'negative-cache-cleared', pid: row.pid, neg_key: String(row.pid), dropped }) // neg_key: the entries' key, "<pid>" here (4.8 §5.5)
       },
       onUnmatched: (a) => failure('tracker', coded(new Error(`pid ${a.pid} (${a.exe}) matches ${a.candidates.join(' and ')}: claimed by two harness descriptors, so it is judged as neither and never watched; its connections go direct`), 'ambiguous'), { pid: a.pid, candidates: a.candidates }),
       onError: (e, at) => failure('tracker', Object.assign(new Error(`pid ${at.pid} (${at.phase}): ${errText(e)}${at.phase === 'judge' ? '; it is not watched, its connections go direct' : ''}`), { code: (e && e.code) || (at.phase === 'judge' ? 'judge-error' : 'unwatch-error') }), at) })
