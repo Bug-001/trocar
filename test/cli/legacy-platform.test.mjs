@@ -10,6 +10,7 @@ import net from 'node:net'
 import http from 'node:http'
 import { EventEmitter } from 'node:events'
 import { runOffCli } from '../../src/off/main.mjs'
+import { runOnCli } from '../../src/cli/on.mjs'
 import { legacyLifecycle } from '../../src/capture/legacy-run.mjs'
 import { createSteerWatch, legacyOffPending } from '../../src/capture/steer-watch.mjs'
 import { appendLegacyEvent } from '../../src/capture/events.mjs'
@@ -21,7 +22,8 @@ import { writeBackup } from '../../src/off/backup.mjs'
 import { sha256 } from '../../src/off/fsutil.mjs'
 import { legacyManifestPath } from '../../src/off/paths.mjs'
 import { fakeIo, snapshot, changedFiles } from './fixtures/on-ctx.mjs'
-import { macHome, fakeMac, fakeCore, fakeClock, readEvents, USER_MAIN, NO_OP, CA_CN, LABELS } from './fixtures/legacy-ctx.mjs'
+import { standalonePath, backupDir } from '../../src/off/paths.mjs'
+import { macHome, fakeMac, fakeCore, fakeClock, fakeOpenssl, readEvents, USER_MAIN, NO_OP, CA_CN, LABELS } from './fixtures/legacy-ctx.mjs'
 import { installedHome } from '../off/fixtures/off-ctx.mjs'
 
 const BLOCK = 'atrace desktop capture'
@@ -308,4 +310,88 @@ test('1.6 §4 (Linux): off takes out the CC-CLI steer of `monitor on` from its s
   assert.ok(r.changed.some((c) => c.path === settings && c.result === 'old-command'))
   assert.ok(r.changed.some((c) => c.path === nss), 'the receipt names the NSS database')
   assert.equal(fs.existsSync(path.join(s.home, '.asight', 'legacy-off.pending')), false)
+})
+
+// ── on (1.6 §4: the old capture is what `on` drives where there is no new collector) ───────────────────────────────────────────────────────────────────────────────────────────────────
+
+const onCtx = (s, io, { core = null, mac, deps = {}, env = {} } = {}) => ({
+  io, home: s.home, platform: 'darwin',
+  env: { PATH: process.env.PATH, ASIGHT_MIHOMO_SOCK: core ? core.sock : path.join(s.home, 'no-such-mihomo.sock'), ...env },
+  deps: { getuid: () => 501, exec: mac.run, run: fakeOpenssl, netenv: async () => ({ at: '2026-10-07T00:00:00.000Z', products: [], unknown: [{ reason: 'a test: no VPN probe runs here' }] }), now: () => new Date('2026-10-07T03:00:00.000Z'), ...deps },
+})
+const freshMac = (o = {}) => macHome({ block: false, runtime: false, agents: [], steer: false, ca: false, userMain: USER_MAIN, ...o })
+const ledgerOf = (s) => JSON.parse(fs.readFileSync(path.join(s.home, '.asight', 'legacy-manifest.json'), 'utf8'))
+
+test('V12 + V14 + V23: on writes the Clash block (the Script.js backed up first, the entry in the ledger), installs com.asight.mitm and com.asight.env, and says it drives the old capture; the receipt lists every file and names the way back', async () => {
+  const s = freshMac(); const order = []
+  const core = await fakeCore({ live: false, order }); const mac = fakeMac({ loaded: [], keychain: false, order })
+  try {
+    const original = fs.readFileSync(s.script, 'utf8'); const before = snapshot(s.home)
+    const io = fakeIo()
+    assert.equal(await runOnCli(['--yes', '--json'], onCtx(s, io, { core, mac })), 0, io.text())
+    const r = io.json()
+    assert.deepEqual(validateReceipt(r), []); assert.equal(r.command, 'on'); assert.equal(r.legacy, true)
+    assert.equal(io.stderrText().split('\n')[0], LEGACY_NOTE, 'on says first which generation it drives (the one JSON is stdout)')
+    // the route: backup first, then the block, reloaded, live
+    assert.ok(fs.readFileSync(s.script, 'utf8').includes(BLOCK))
+    const e = ledgerOf(s).entries.find((x) => x.kind === 'legacy-clash-block' && x.path === s.script)
+    assert.deepEqual([e.pre_sha256, e.post_sha256], [sha256(original), sha256(fs.readFileSync(s.script))])
+    assert.equal(fs.readFileSync(e.backup, 'utf8'), original, 'the backup holds Script.js as it was before the block')
+    assert.equal(fs.statSync(e.backup).mode & 0o777, 0o600); assert.equal(fs.statSync(backupDir(s.home)).mode & 0o777, 0o700)
+    assert.ok(r.changed.some((c) => c.path === s.script && c.backup === e.backup), 'the receipt lists it with its backup')
+    assert.equal(core.state.live, true); assert.ok(order.indexOf('PUT /configs') >= 0)
+    // the agents
+    for (const label of ['com.asight.mitm', 'com.asight.env']) { assert.ok(fs.existsSync(s.plist(label)), label); assert.ok(mac.state.loaded.has(label), `${label} is loaded`) }
+    assert.match(fs.readFileSync(s.plist('com.asight.mitm'), 'utf8'), /<key>ExitTimeOut<\/key><integer>15<\/integer>/)
+    assert.match(fs.readFileSync(s.plist('com.asight.env'), 'utf8'), new RegExp(`NODE_EXTRA_CA_CERTS</string>\\s*<string>${s.caPath}</string>`))
+    assert.equal(fs.existsSync(s.plist('com.asight.monitor')), false, 'the monitor (the CC-CLI proxy) is `monitor on`\'s, not on\'s')
+    assert.deepEqual(ledgerOf(s).entries.map((x) => x.kind).sort(), ['legacy-clash-block', 'legacy-env', 'legacy-launch-agent'])
+    for (const x of ledgerOf(s).entries) assert.ok(x.undo_by_hand && x.installed_at, `${x.kind} says how to undo it by hand`)
+    // never the old CC-CLI steer (it cannot meet the off guarantee, 1.6 §4)
+    assert.equal(fs.existsSync(s.stash), false); assert.equal(fs.readFileSync(s.settings, 'utf8'), '{"model":"x"}\n', 'settings.json is not touched')
+    assert.equal(mac.has(/security add-certificates/), false, 'on does not put the CA into the keychain: node trusts it through the variable')
+    // every file that changed is in the receipt; the way back is named
+    const listed = new Set([...r.changed.map((c) => c.path), ...r.changed.map((c) => c.backup).filter(Boolean), ...r.created.map((c) => (typeof c === 'string' ? c : c.path))])
+    for (const f of changedFiles(before, snapshot(s.home))) { const abs = path.join(s.home, f); if (abs !== r.log && !listed.has(abs) && ![...listed].some((l) => abs.startsWith(l + path.sep))) assert.fail(`${f} changed and the receipt does not list it`) }
+    assert.ok(r.undo.includes(standalonePath(s.home)) && r.created.includes(standalonePath(s.home)), 'asight-off is written first and named: the way back works without the repository')
+    assert.ok(fs.existsSync(standalonePath(s.home)))
+    assert.ok(ledgerOf(s).confirmed_paths.includes(s.script), 'what the operator confirmed is recorded (the next on asks only about more)')
+  } finally { await core.close() }
+})
+
+test('V23 round trip: on, then off — Script.js is back to the user\'s own bytes, both backups and the ledger are gone, the agents are unloaded, nothing of asight\'s is left on the Mac', async () => {
+  const s = freshMac(); const order = []
+  const core = await fakeCore({ live: false, order }); const mac = fakeMac({ loaded: [], keychain: false, order, pids: {} })
+  try {
+    const original = fs.readFileSync(s.script, 'utf8')
+    assert.equal(await runOnCli(['--yes'], onCtx(s, fakeIo(), { core, mac })), 0)
+    const backups = fs.readdirSync(backupDir(s.home))
+    assert.equal(backups.length, 1)
+    const io = fakeIo()
+    assert.equal(await runOffCli(['--json'], offCtx(s, io, { core, mac, deps: { exec: mac.run } })), 0, io.text())
+    assert.equal(fs.readFileSync(s.script, 'utf8'), original)
+    assert.equal(core.state.live, false)
+    assert.equal(fs.existsSync(path.join(s.home, '.asight', 'legacy-manifest.json')), false)
+    assert.equal(fs.existsSync(backupDir(s.home)) ? fs.readdirSync(backupDir(s.home)).length : 0, 0, 'verified back to its pre_sha256: the backup is dropped')
+    assert.deepEqual(['com.asight.mitm', 'com.asight.env'].map((l) => fs.existsSync(s.plist(l)) || mac.state.loaded.has(l)), [false, false])
+    const r = io.json()
+    assert.ok(r.changed.some((c) => c.path === s.script && c.result === 'reverted' && c.backup_dropped === true), 'asight on wrote it, so it is not 「旧命令装的」 and its backup went')
+    assert.ok(r.changed.filter((c) => c.launch_agent).every((c) => c.result === 'reverted'), 'and the plists it installed are its own too')
+  } finally { await core.close() }
+})
+
+test('R6 / V7: not in a terminal and no --yes, on prints the plan and writes nothing, calls nothing, exits 2; --dry-run exits 0 with the same lines; a terminal is asked once and no says no', async () => {
+  const s = freshMac(); const before = snapshot(s.home)
+  const mac = fakeMac({ loaded: [], keychain: false })
+  const plan = fakeIo()
+  assert.equal(await runOnCli([], onCtx(s, plan, { mac })), 2)
+  for (const word of ['Script.js', 'com.asight.mitm.plist', 'com.asight.env.plist', 'legacy-manifest.json', 'asight-off', '备份', 'Claude Desktop']) assert.ok(plan.text().includes(word), `the plan names ${word}`)
+  assert.deepEqual([snapshot(s.home), mac.calls], [before, []], 'nothing written, nothing asked of launchd')
+  const dry = fakeIo()
+  assert.equal(await runOnCli(['--dry-run'], onCtx(s, dry, { mac })), 0)
+  assert.deepEqual([snapshot(s.home), mac.calls], [before, []])
+  assert.match(dry.text(), /将打开采集/); assert.ok(dry.text().includes('Script.js'))
+  const no = fakeIo({ tty: true, answers: ['n'] })
+  assert.equal(await runOnCli([], onCtx(s, no, { mac })), 1)
+  assert.equal(no.asked.length, 1); assert.deepEqual([snapshot(s.home), mac.calls], [before, []])
 })

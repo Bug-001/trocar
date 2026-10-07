@@ -23,18 +23,19 @@ export const plistText = (label, caPath) => `<?xml version="1.0" encoding="UTF-8
 
 /**
  * A HOME the way the old commands leave a Mac. `block` / `runtime`: asight's route is in Script.js / in the runtime config; `agents`: which LaunchAgents are installed (and loaded); `steer`: the CC-CLI
- * steer with its stash (`displaced` is what it displaced); `userMain`: the user's own global Script under the block.
+ * steer with its stash (`displaced` is what it displaced); `userMain`: the user's own global Script under the block; `ca: false`: no CA yet (`on` generates it); `verge: false`: no Clash Verge at all.
  */
-export function macHome({ block = true, runtime = true, agents = LABELS, steer = true, userMain = NO_OP, displaced = {} } = {}) {
+export function macHome({ block = true, runtime = true, agents = LABELS, steer = true, userMain = NO_OP, displaced = {}, ca = true, verge: withVerge = true } = {}) {
   const home = tmpDir('asight-legacy-platform-')
   const verge = path.join(home, 'Library', 'Application Support', 'io.github.clash-verge-rev.clash-verge-rev')
-  fs.mkdirSync(path.join(verge, 'profiles'), { recursive: true })
-  const script = path.join(verge, 'profiles', 'Script.js')
-  fs.writeFileSync(script, block ? injectScript(userMain, 9898) : userMain)
-  const runtimePath = path.join(verge, 'clash-verge.yaml')
-  fs.writeFileSync(runtimePath, runtime ? RT_REGEN : RT_CLEAN)
+  const script = path.join(verge, 'profiles', 'Script.js'), runtimePath = path.join(verge, 'clash-verge.yaml')
+  if (withVerge) {
+    fs.mkdirSync(path.join(verge, 'profiles'), { recursive: true })
+    fs.writeFileSync(script, block ? injectScript(userMain, 9898) : userMain)
+    fs.writeFileSync(runtimePath, runtime ? RT_REGEN : RT_CLEAN)
+  }
   const caPath = path.join(home, '.asight', 'ca', 'atrace-ca.crt')
-  fs.mkdirSync(path.dirname(caPath), { recursive: true }); fs.writeFileSync(caPath, '-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----\n')
+  if (ca) { fs.mkdirSync(path.dirname(caPath), { recursive: true }); fs.writeFileSync(caPath, '-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----\n') }
   const la = path.join(home, 'Library', 'LaunchAgents'); fs.mkdirSync(la, { recursive: true })
   for (const label of agents) fs.writeFileSync(path.join(la, `${label}.plist`), plistText(label, caPath))
   const settings = path.join(home, '.claude', 'settings.json'), stash = path.join(home, '.atrace', 'steer-backup.json')
@@ -121,6 +122,9 @@ export function fakeClock(start = 1_000_000) {
     elapsed: () => t - start,
   }
 }
+
+/** The runner of `openssl` that `generateCa` takes: writes a stub file where `-out` says, answers 0 (a real RSA-3072 key takes seconds, and this test is about what `on` does with the files). */
+export const fakeOpenssl = (file, args) => { const i = args.indexOf('-out'); if (i >= 0) fs.writeFileSync(args[i + 1], `stub ${file} ${args[0]}\n`); return { status: 0 } }
 
 export const readEvents = (home) => { try { return fs.readFileSync(path.join(home, '.asight', 'logs', 'mitm-events.ndjson'), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) } catch { return [] } }
 export { LABELS }

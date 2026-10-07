@@ -11,7 +11,7 @@ export const tilde = (p, home) => (home && typeof p === 'string' && (p === home 
 
 /** Every file `on` would write or change, before it writes any (4.6; 1.6 §1.6). `p` = what planOn returns (its `files` / `owned` /
  *  `entries` / `unit` are only what would be written, so a later `on` lists only what is new), or what an `onPlan` of the legacy install is handed. */
-export function formatPlan(p, { home = null, autostart = true, netenv = null } = {}) {
+export function formatPlan(p, { home = null, autostart = true, netenv = null, platform = 'linux' } = {}) {
   const t = (x) => tilde(x, home)
   return [
     `asight on 将写或改下面这些文件,除此之外什么都不动${p.first ? '(首次 on:包含 asight 自己要建的)' : '(只列出这次要写的;已在位、没变的不重写)'}:`,
@@ -29,7 +29,7 @@ export function formatPlan(p, { home = null, autostart = true, netenv = null } =
     ...(p.records ? [`  install notes (event log): ${t(p.records)}/`] : p.events ? [`  install notes (appended, for the board): ${t(p.events)}`] : []),
     ...(p.watch || []).map((w) => `  ${w.harness} itself may write ${t(w.path)} (${w.why}); uninstall reports it, never deletes it`),
     ...(p.skipped && p.skipped.length ? [`跳过: ${p.skipped.map((s) => `${t(s.what)}(${s.reason})`).join('  ')}`] : []),
-    ...(netenv ? netenvText(netenv, { ids: p.targets || null }) : []), // §1.6: the plan names the machine's network environment (§6): what asight found, and that it changes none of it
+    ...(netenv ? netenvText(netenv, { ids: p.targets || null, platform }) : []), // §1.6: the plan names the machine's network environment (§6): what asight found, and that it changes none of it
     ...(p.restart && p.restart.length ? [`正在跑的 ${p.restart.map((x) => `${x.harness}(pid ${x.pid})`).join('、')} 重启后才会被采集;在那之前照常直连`] : []),
   ].join('\n')
 }
@@ -40,7 +40,7 @@ export const lingerText = ({ linger, linger_reason: why = null, user = null }) =
 const joinPaths = (list, home) => list.map((x) => tilde(typeof x === 'string' ? x : x.path, home)).join('  ')
 
 /** The receipt of `asight on` as text. `tense`: 'past' | 'future' (the dry run). */
-export function formatOnReceipt(r, { tense = 'past', home = null } = {}) {
+export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'linux' } = {}) {
   const past = tense !== 'future'
   const t = (x) => tilde(x, home)
   // an on that wrote everything but has no daemon to hang the links (--no-unit, nothing answering) is done and exits 0, but captures nothing yet: the header says so
@@ -55,7 +55,7 @@ export function formatOnReceipt(r, { tense = 'past', home = null } = {}) {
   if (r.unchanged && r.unchanged.length) lines.push(`已在位、没有重写: ${joinPaths(r.unchanged, home)}`)
   if (r.skipped.length) lines.push(`跳过: ${r.skipped.map((s) => `${t(s.what)}(${s.reason})`).join('  ')}`)
   if (lingerText(r)) lines.push(lingerText(r))
-  if (r.netenv) lines.push(...netenvText(r.netenv, { ids: r.harnesses || null }))
+  if (r.netenv) lines.push(...netenvText(r.netenv, { ids: r.harnesses || null, platform }))
   if (r.daemon) lines.push(`守护进程: ${r.daemon.state === 'running' ? `在跑${r.daemon.pid ? `(pid ${r.daemon.pid})` : ''}${r.daemon.started ? ',这次拉起的' : ''}` : '没在跑,什么都没有被采集(入口已写好,守护进程起来后才挂引流)'}`)
   if (r.restart.length) lines.push(`需要你做的: ${r.restart.map((x) => `正在跑的 ${x.harness}(pid ${x.pid})重启后才会被采集`).join(';')};在那之前照常直连`)
   for (const n of r.notes || []) lines.push(`${r.ok === false && past ? '问题' : '说明'}: ${n}`)

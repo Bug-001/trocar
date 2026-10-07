@@ -3,7 +3,7 @@
 // the autostart unit, the control socket), decides how a confirmation is asked, and prints the plan and the receipt. Everything the world gives is a
 // `deps` entry a test replaces (0.1 §3): `parts` (the descriptors, `scan`, `match`, the arch), `exec` (the runner of OS tools: spawnSync-shaped),
 // `request` (the control socket), `helperState`, `linger` / `lingerRead`, `now`, `freePort`, `sleep`, `roots`, `user`, `getuid`, `fs`, `script`, and `legacyOn` — the
-// hook of a platform without the new collector (macOS, Windows: 1.6 §4; Task 10 fills it).
+// replacement of what a platform without the new collector (macOS, Windows: 1.6 §4) runs instead: legacyOnCli, src/capture/legacy-on.mjs.
 // Exit codes (R4): 0 done · 1 not done or a problem · 2 usage error / not in a terminal without --yes (nothing touched).
 import os from 'node:os'
 import { resolveHarnesses } from './harness-names.mjs'
@@ -11,6 +11,8 @@ import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
 import { formatOnReceipt, formatPlan } from './receipt.mjs'
 import { probeNetenv } from '../netenv/index.mjs'
+import { hasNewCollector } from '../off/legacy.mjs'
+import { legacyOnCli } from '../capture/legacy-on.mjs'
 
 const USAGE = 'usage: asight on [harness…] [--dry-run] [--yes] [--no-autostart | --no-unit] [--json]'
 const FLAGS = new Set(['--dry-run', '--yes', '--no-autostart', '--no-unit', '--json'])
@@ -33,10 +35,8 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
   if (!named.ok) { io.err(`asight on: unknown harness ${named.unknown.join(', ')}; the names are: ${named.known.join(', ')}`); return EXIT.usage }
   const json = flags.has('--json')
   const say = json ? io.err : io.out // stdout holds the one JSON in --json mode (R5); warnings and the plan go to stderr
-  if (platform !== 'linux') {
-    if (deps.legacyOn) return deps.legacyOn(argv, { io, env, home, platform, deps })
-    io.err(`asight on: 本平台(${platform})没有新采集器;这里 on / off 驱动旧采集(过渡期,1.6 §4),这一步还没接上`)
-    return EXIT.incomplete
+  if (!hasNewCollector(platform)) { // 1.6 §4: no new collector here: `on` drives the old capture (src/capture/legacy-on.mjs)
+    return (deps.legacyOn || legacyOnCli)(argv, { io, env, home, platform, deps, ids: named.ids })
   }
   if ((deps.getuid || processUid)() === 0) { io.err('asight on: 用你自己的账号跑,不要用 root / sudo(D36;只有 `sudo asight setup-helper` 要 root)'); return EXIT.incomplete }
   try {
