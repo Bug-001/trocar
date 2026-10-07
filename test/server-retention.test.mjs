@@ -23,8 +23,11 @@ const call = (port, method, p, { headers = {}, body } = {}) => new Promise((reso
   })
   r.on('error', reject); if (body !== undefined) r.write(body); r.end()
 })
+// GET /control/status (where the tests take the CSRF token from) asks the old capture's status questions: the real ones are `security find-certificate`, `launchctl getenv`
+// and the user's Claude settings file. test/helpers/no-real-os.cjs refuses the tools (D39), and a test that never acknowledges the refusal fails: inject the readers (as test/server-control.test.mjs does)
+const controlDeps = () => ({ settingsPath: path.join(tmpDir('asight-srv-ret-ctl-'), 'settings.json'), onboard: { verifyUserTrustOnly: () => false }, autostart: { platform: 'darwin', status: () => ({ installed: false }) }, getenv: () => null })
 async function serve(opts) {
-  const { server } = await createServer({ sourcePath: null, ...opts })
+  const { server } = await createServer({ sourcePath: null, controlDeps: controlDeps(), ...opts })
   server.listen(0, '127.0.0.1'); await once(server, 'listening')
   return { server, port: server.address().port }
 }
