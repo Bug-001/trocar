@@ -22,7 +22,7 @@ function fresh(randomBytes) {
 /** The endpoint control.json holds, if it is one. → `{ path, token }` | `{ error }` (what is wrong with it). */
 function judge(text) {
   let o
-  try { o = JSON.parse(text) } catch (e) { return { error: `control.json is not JSON (${e.message})` } }
+  try { o = JSON.parse(text) } catch { return { error: 'control.json is not JSON' } } // not the parser's message: it quotes the characters around the error, and a damaged file may have the token in them
   if (!o || typeof o !== 'object' || Array.isArray(o)) return { error: 'control.json is not an object' }
   if (typeof o.path !== 'string' || !PIPE_RE.test(o.path)) return { error: 'control.json has no asight pipe name' }
   if (typeof o.token !== 'string' || !TOKEN_RE.test(o.token)) return { error: 'control.json has no 64-digit token' }

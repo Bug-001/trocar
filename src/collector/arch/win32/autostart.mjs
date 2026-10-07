@@ -94,6 +94,19 @@ export function taskXml({ user, node, asight, conhost = 'conhost.exe' } = {}) {
 
 const schtasks = (args, { run, env }) => execTool('schtasks', args, { run, env })
 
+const TRUST_AND_PROXY = /^(NODE_EXTRA_CA_CERTS|NODE_OPTIONS|NODE_USE_SYSTEM_CA|NODE_USE_ENV_PROXY|NODE_TLS_REJECT_UNAUTHORIZED|SSL_CERT_FILE|SSL_CERT_DIR|(HTTPS?|ALL|NO|FTP|WSS?)_PROXY)$/i // Windows names are not case sensitive
+/**
+ * The environment of a daemon that is started directly (`start()`, the fallback with `now`): the installer shell's, without the variables that change what the daemon trusts or whom it dials (Node's CA, TLS and proxy
+ * switches, OpenSSL's CA file and directory, the `*_PROXY` family, any case). A daemon the task or the Run value starts at login has none of the shell's: a task has no environment of its own (4.8 §7), so a daemon that
+ * got them from `on` would trust and dial differently from the same daemon after the next login. What is not in this list stays: the user-level variables a login task carries (`CODEX_HOME`, `PATH`, `USERPROFILE`) are in
+ * the shell's environment too, and the shell's own extras are harmless; the difference that remains is the user's own `NODE_OPTIONS` and `*_PROXY` at user level, which a login would carry and this does not.
+ */
+export function directStartEnv(env = process.env) {
+  const out = {}
+  for (const [k, v] of Object.entries(env)) if (!TRUST_AND_PROXY.test(k)) out[k] = v
+  return out
+}
+
 /** `schtasks /Create /XML <file> /TN \asight\collector /F` from the task file install wrote. schtasks reads the file as the encoding it declares, which is UTF-16, and install writes text as UTF-8: so a UTF-16LE copy with a byte
  *  order mark (the T0 form) is made beside it, handed over, and removed. → `{ code, out, err }`; a file that cannot be read is `code: null` with the reason and `precondition: true` (schtasks was not asked, so it is not a refusal to fall back from). */
 export function register({ file, run = null, env = process.env, fs = nodeFs } = {}) {
@@ -197,7 +210,8 @@ const settle = (task, k) => ({ code: (task.code !== 0 ? task.code : k.code) ?? 1
  *                    Exactly one login mechanism is left live: by the task, asight's own Run value of an earlier fallback is taken out (`runKey: 'removed' | 'restored'` when it was there: the caller drops the `run-key`
  *                    ledger entry; `enable({ prior })` takes the ledger entry's prior so that the user's own value comes back); by the fallback, an earlier task is switched off (`task: 'disabled'`). Either that cannot be
  *                    done is `warn` (a line for the receipt; `on` does not fail for it, because the supervisor singleton keeps a second start from running a second daemon).
- *   start()          the `--no-autostart` run: this session, nothing at login. A task with a login trigger would be an autostart, so none is registered: the supervised daemon is started directly, detached, with no window.
+ *   start()          the `--no-autostart` run: this session, nothing at login. A task with a login trigger would be an autostart, so none is registered: the supervised daemon is started directly, detached, with no window, with the
+ *                    environment of `directStartEnv(env)` (the shell's, without the trust and proxy variables a login-started daemon would not have).
  *   reload()         nothing to do: a rewritten task is registered again by `enable` (`/F`).
  *   disable({ prior }) a no-argument `off`: the task is switched off (`/Change /DISABLE`; it does not end a running instance, the caller stops the supervisor parent first, 4.8 §4.2) and asight's Run value is taken out, whichever
  *                    of the two an earlier `on` used. → `{ code, out, err, task: 'disabled' | 'absent' | 'failed', runKey }`. `prior` is the Run entry's ledgered prior value.
@@ -208,7 +222,7 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
   const tools = { run, env }
   function startDirect() {
     let child
-    try { child = spawn(conhost, ['--headless', node, script, 'daemon', '--supervise'], { detached: true, stdio: 'ignore', windowsHide: true }) } catch (e) { return { code: null, out: '', err: `${conhost} could not be started (${(e && e.code) || (e && e.message) || e})` } }
+    try { child = spawn(conhost, ['--headless', node, script, 'daemon', '--supervise'], { detached: true, stdio: 'ignore', windowsHide: true, env: directStartEnv(env) }) } catch (e) { return { code: null, out: '', err: `${conhost} could not be started (${(e && e.code) || (e && e.message) || e})` } }
     if (!child || child.pid === undefined) return { code: null, out: '', err: `${conhost} did not start the supervised daemon` }
     if (typeof child.on === 'function') child.on('error', () => {}) // a late spawn error is not an uncaught exception; the daemon that never answers is what `on` reports
     child.unref()

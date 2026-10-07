@@ -11,7 +11,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 import { startHelper } from '../../../../src/collector/arch/win32/helper.mjs'
-import { refuseElevated, nodePreflight, NODE_MIN_MAJOR, taskXml, taskUser, userUnit, register, daemonCommandLine, readRunValue, runKeyFallback, removeRunValue, TASK_NAME, TASK_FILE, RUN_KEY, superviseChild, runSupervisor, lockHolderAlive, supervisorBackoff, SUPERVISOR_LOCK, SUPERVISE_CAP_MS, SUPERVISE_STABLE_MS } from '../../../../src/collector/arch/win32/autostart.mjs'
+import { refuseElevated, nodePreflight, NODE_MIN_MAJOR, taskXml, taskUser, userUnit, directStartEnv, register, daemonCommandLine, readRunValue, runKeyFallback, removeRunValue, TASK_NAME, TASK_FILE, RUN_KEY, superviseChild, runSupervisor, lockHolderAlive, supervisorBackoff, SUPERVISOR_LOCK, SUPERVISE_CAP_MS, SUPERVISE_STABLE_MS } from '../../../../src/collector/arch/win32/autostart.mjs'
 import { elevationByWhoami, refuseElevatedByWhoami } from '../../../../src/off/win32.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
 import { controlEndpoint, readControlEndpoint, CONTROL_FILE, PIPE_PREFIX } from '../../../../src/collector/arch/win32/control-path.mjs'
@@ -45,6 +45,17 @@ test('W26 a reader that finds no control.json says so and writes nothing; a cont
     const e = controlEndpoint({ dir: d })
     assert.match(e.path, /^\\\\\.\\pipe\\asight-[0-9a-f]{16}$/, 'the writer makes a good one')
     assert.deepEqual(readControlEndpoint({ dir: d }), e)
+  }
+})
+
+test('W26 a control.json that is not JSON is reported without any of its text: the parser\'s message quotes the characters around the error, and a damaged file may have the token in them', () => {
+  const d = tmpDir('asight-ctl-')
+  const secret = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90'
+  for (const damaged of [`{"path":"${PIPE_PREFIX}0123456789abcdef","token":${secret}}`, `{"token":"${secret}" "x"}`, `${secret}`, `{"token":"${secret.slice(0, 30)}`]) {
+    fs.writeFileSync(path.join(d, CONTROL_FILE), damaged)
+    const r = readControlEndpoint({ dir: d })
+    assert.deepEqual(r, { error: 'control.json is not JSON' }, 'one fixed sentence')
+    assert.ok(!JSON.stringify(r).includes('a1b2c3'), 'no digit of the file in what a CLI prints')
   }
 })
 
@@ -388,6 +399,22 @@ test('W24 start (the --no-autostart run: this session, nothing at login) starts 
   const thrown = userUnit({ ...o, run, spawn: () => { throw Object.assign(new Error('spawn conhost.exe ENOENT'), { code: 'ENOENT' }) } }).start()
   assert.equal(thrown.code, null)
   assert.match(thrown.err, /ENOENT/)
+})
+
+test('W24 a daemon started directly (start(), the fallback with now) gets the environment a login task would give, not the installer shell\'s trust and proxy variables: the same daemon however it was started', () => {
+  const shell = { PATH: 'C:\\Windows\\System32', SystemRoot: 'C:\\Windows', USERPROFILE: 'C:\\Users\\ada', USERDOMAIN: 'DESKTOP-7Q', USERNAME: 'ada', CODEX_HOME: 'D:\\codex', NODE_EXTRA_CA_CERTS: 'C:\\corp\\ca.pem', NODE_OPTIONS: '--use-system-ca', NODE_USE_SYSTEM_CA: '1', NODE_USE_ENV_PROXY: '1', NODE_TLS_REJECT_UNAUTHORIZED: '0', SSL_CERT_FILE: 'C:\\x.pem', SSL_CERT_DIR: 'C:\\certs', HTTPS_PROXY: 'http://u:p@10.0.0.1:3128', http_proxy: 'http://10.0.0.1:3128', ALL_PROXY: 'socks5://10.0.0.1:1080', no_proxy: 'localhost', Https_Proxy: 'x', WS_PROXY: 'y', wss_proxy: 'z', FTP_PROXY: 'f' }
+  const kept = { PATH: shell.PATH, SystemRoot: shell.SystemRoot, USERPROFILE: shell.USERPROFILE, USERDOMAIN: shell.USERDOMAIN, USERNAME: shell.USERNAME, CODEX_HOME: shell.CODEX_HOME }
+  assert.deepEqual(directStartEnv(shell), kept, 'everything else is kept (user-level variables such as CODEX_HOME are among what a login task carries too); the trust and proxy ones are not, whatever the case of their names')
+  assert.ok(Object.keys(shell).includes('NODE_EXTRA_CA_CERTS'), 'the caller\'s environment is not changed')
+  assert.deepEqual(directStartEnv({}), {})
+  const spawned = []
+  const fakeSpawn = (cmd, args, opts) => { spawned.push(opts); return { pid: 5, unref() {}, on() {} } }
+  assert.equal(userUnit({ ...withHome({ env: shell }), run: fakeTools(), spawn: fakeSpawn }).start().code, 0)
+  assert.deepEqual(spawned[0].env, kept, 'start()')
+  const refused = fakeRegistry()
+  assert.equal(installed(userUnit({ ...withHome({ env: shell }), run: refused, spawn: fakeSpawn })).enable({ now: true }).via, 'run-key')
+  assert.deepEqual(spawned[1].env, kept, 'the fallback with now')
+  assert.deepEqual([spawned[1].detached, spawned[1].windowsHide], [true, true], 'the rest of the spawn is as before')
 })
 
 test('W24 disable (a no-argument off) switches the task off and leaves it registered; remove (uninstall) deletes it; a task that is not there is already as asked, not an error', () => {
