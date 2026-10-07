@@ -1,0 +1,89 @@
+// test/netenv/topology.test.mjs — RFC 1.6 §9.2–§9.4: the path each harness's traffic takes, drawn from facts (V41 the table of §9.3 · V42 each hop concrete, an unreadable one said · V45 the way out of asight
+// leaves the route as it was). Every row of test/netenv/fixtures/rows.mjs is one NetFacts and the topology it must give, written out literally; the facts are injected, nothing here reads the machine.
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { buildTopology } from '../../src/netenv/topology.mjs'
+import { validateTopology, UNKNOWN_REASONS } from '../../src/cli/schema.mjs'
+import { ROWS, facts, harness, proc, proxyOf, none, mihomoVpn, MIHOMO } from './fixtures/rows.mjs'
+
+const kindOf = (t, id) => t.nodes.find((x) => x.id === id).kind
+
+for (const row of ROWS) {
+  test(`V41 row ${row.n}: ${row.title}`, () => {
+    const topo = buildTopology(row.facts), t = topo[row.h]
+    assert.deepEqual(t.branches.map((b) => b.path.map((id) => kindOf(t, id))), row.kinds, 'the kinds of the nodes on each branch')
+    assert.deepEqual([t.on_path, t.captured, t.reason], [row.on_path, row.captured, row.reason], 'the verdict')
+    for (const b of t.branches) assert.deepEqual([b.on_path, b.captured, b.reason], [row.on_path, row.captured, row.reason], 'every branch says the same of the harness')
+    assert.deepEqual(validateTopology(topo), [], 'and the object is one the schema accepts (V43)')
+  })
+}
+
+test('V42: every node has a kind and a name; an agent with a process has its pid; a proxy has its port and says what it is or that it does not know', () => {
+  for (const row of ROWS) {
+    const t = buildTopology(row.facts)[row.h]
+    const running = row.facts.harnesses[row.h].procs.length > 0
+    for (const n of t.nodes) {
+      assert.ok(n.kind && n.name, `row ${row.n}: ${JSON.stringify(n)}`)
+      if (n.kind === 'agent' && running) assert.ok(Number.isInteger(n.pid), `row ${row.n}: the agent has its pid`)
+      if (n.kind === 'proxy') assert.ok(Number.isInteger(n.port) && (n.product || n.unknown || n.remote), `row ${row.n}: ${JSON.stringify(n)}`)
+    }
+  }
+})
+
+test('V42: an owner that cannot be read, a PAC and a controller that cannot be read are nodes with an unknown reason from the closed set, the hop is kept, and nothing says 「无」', () => {
+  const ownerUnreadable = ROWS.find((r) => r.n === 21), pac = ROWS.find((r) => r.n === 22)
+  const controllerDown = facts('claude-code', { listeners: [MIHOMO], vpn: mihomoVpn({ mode: 'unknown', tun: 'unknown', unknown: { reason: 'controller-unreadable', detail: 'ECONNREFUSED' } }) }, { setting: proxyOf('http://127.0.0.1:7890') })
+  for (const [f, h, reason] of [[ownerUnreadable.facts, 'hermes', 'owner-unreadable'], [pac.facts, 'codex', 'pac'], [controllerDown, 'claude-code', 'controller-unreadable']]) {
+    const t = buildTopology(f)[h]
+    const n = t.nodes.find((x) => x.unknown)
+    assert.equal(n.unknown.reason, reason)
+    assert.ok(UNKNOWN_REASONS.includes(reason))
+    assert.ok(t.branches.some((b) => b.path.includes(n.id)), 'the hop is on a path: not left out')
+    assert.deepEqual(validateTopology({ [h]: t }), [])
+  }
+})
+
+test('V42: a listener list that could not be read gives the proxy its reason, and one that was read and holds nobody gives 「没人在听」, never an unknown owner', () => {
+  const setting = proxyOf('http://127.0.0.1:7890')
+  const unread = buildTopology(facts('claude-code', { unknowns: [{ where: 'listeners', reason: 'denied', detail: 'ss: EPERM' }] }, { setting }))['claude-code']
+  assert.deepEqual(unread.nodes.find((n) => n.kind === 'proxy').unknown, { reason: 'denied', detail: 'ss: EPERM' })
+  const nobody = buildTopology(facts('claude-code', {}, { setting }))['claude-code']
+  const p = nobody.nodes.find((n) => n.kind === 'proxy')
+  assert.deepEqual([p.down, p.unknown], [true, undefined])
+})
+
+test('running processes: one that still goes by the setting it started with, or that asight is not on the path of, is listed apart with the chain it really takes; the branch is drawn for the steered current one', () => {
+  const f = facts('claude-code', { listeners: [MIHOMO], vpn: mihomoVpn() }, {
+    setting: proxyOf('http://127.0.0.1:7890'),
+    procs: [proc(4121), proc(3990, { startedAt: '2026-10-07T08:00:00.000Z', watched: 'no-decrypt', trusted: false, reason: 'config-after-start', startSetting: { value: 'http://proxy.corp:8080', scheme: 'http', host: 'proxy.corp', port: 8080, source: [{ kind: 'env', where: 'HTTPS_PROXY' }] } })],
+  })
+  const t = buildTopology(f)['claude-code']
+  assert.deepEqual(t.branches[0].path.map((id) => kindOf(t, id)), ['agent', 'asight-engine', 'proxy', 'egress'])
+  assert.equal(t.nodes.find((n) => n.id === t.branches[0].path[0]).pid, 4121)
+  assert.equal(t.running.length, 1)
+  assert.deepEqual([t.running[0].pid, t.running[0].note, t.running[0].reason], [3990, 'start-time-settings', 'config-after-start'])
+  assert.deepEqual(t.running[0].path.map((id) => kindOf(t, id)), ['agent', 'proxy', 'egress'], 'it never went through asight: its chain has none')
+  assert.equal(t.nodes.find((n) => n.id === t.running[0].path[1]).name, 'proxy.corp:8080', 'and goes to the proxy it started with')
+  assert.deepEqual(validateTopology({ 'claude-code': t }), [])
+  // only stale processes: nothing to draw the branch for, so it is a new process's: no pid, asight on the path
+  const stale = buildTopology(facts('claude-code', {}, { procs: [proc(3990, { startSetting: { value: null, scheme: null, host: null, port: null, source: [] } })] }))['claude-code']
+  assert.equal(stale.nodes.find((n) => n.kind === 'agent' && n.pid === undefined).name, 'claude-code')
+  assert.equal(stale.on_path, true)
+})
+
+test('a harness with no process, no proxy and everything up is on the path, and one whose entry is gone is not (a new process would not be trusted)', () => {
+  const up = buildTopology(facts('kimi-code', {}, { procs: [] }))['kimi-code']
+  assert.deepEqual([up.on_path, up.captured, up.reason], [true, true, null])
+  const gone = buildTopology(facts('kimi-code', {}, { procs: [], entry: { state: 'missing' } }))['kimi-code']
+  assert.deepEqual([gone.on_path, gone.captured, gone.reason], [false, false, 'entry-missing'])
+  assert.deepEqual(gone.branches[0].path.map((id) => kindOf(gone, id)), ['agent', 'upstream'])
+})
+
+test('every value of the NetFacts the builder reads can be null / unknown without it throwing: a topology that cannot be drawn says so and keeps the verdict unknown', () => {
+  const t = buildTopology({ ...facts('claude-code'), harnesses: { 'claude-code': null } })['claude-code']
+  assert.equal(t.captured, null)
+  assert.equal(t.on_path, null)
+  assert.match(t.notes.join(' '), /could not be worked out/)
+  assert.deepEqual(validateTopology({ 'claude-code': t }), [])
+  void harness; void none
+})
