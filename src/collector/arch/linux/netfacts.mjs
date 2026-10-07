@@ -12,14 +12,15 @@ import { settingSha, redactProxyUrl, parseProxyUrl } from '../../../netenv/redac
 import { noProxyNames } from '../../../netenv/noproxy.mjs'
 
 const GENERIC = /^(node|python3?|bun|deno|ruby)$/
+const VERSIONED = /^v?\d+(\.\d+)+([-+.].*)?$/ // the native Claude Code is a file named for its version (`…/claude/versions/2.1.289`): that is not the name of a program
 const base = (p) => String(p).split('/').pop()
 const iso = (t) => (typeof t === 'number' && Number.isFinite(t) ? new Date(t).toISOString() : typeof t === 'string' ? t : null)
 const REASON = (r) => (r.code === null && /ETIMEDOUT|timed out/i.test(r.err) ? 'timeout' : r.code === null && /ENOENT/.test(r.err) ? 'absent' : 'denied')
 
-/** `claude`, `codex app-server`: the name of the program, with its sub-command when it has one (a word, not a path or a flag); a generic runtime (node, python) is named for the harness. */
+/** `claude`, `codex app-server`: the name of the program, with its sub-command when it has one (a word, not a path or a flag); a generic runtime (node, python) and a file named by its version are named for the harness. */
 export function processName(argv, exe, harness) {
   const a0 = base((argv && argv[0]) || exe || harness)
-  const first = GENERIC.test(a0) ? harness : a0
+  const first = GENERIC.test(a0) || VERSIONED.test(a0) ? harness : a0
   const sub = argv && argv[1] && /^[a-z][a-z-]{1,19}$/.test(argv[1]) && !GENERIC.test(first) ? argv[1] : null
   return sub ? `${first} ${sub}` : first
 }

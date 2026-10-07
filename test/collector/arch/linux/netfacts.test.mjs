@@ -6,6 +6,8 @@ import { linuxNetFacts, parseSs, processName, versionOf } from '../../../../src/
 import { settingSha } from '../../../../src/netenv/redact.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { fakeProc } from './fixtures/fake-proc.mjs'
+import { buildTopology, renderCompact } from '../../../../src/netenv/topology.mjs'
+import { facts } from '../../../netenv/fixtures/rows.mjs'
 
 const descs = await loadHarnesses() // the keys a process's proxy is read from are each harness's own (`proxy.env`)
 
@@ -36,6 +38,11 @@ test('processName / versionOf: the program (and its sub-command), a runtime name
   assert.equal(processName(['claude'], '/home/u/.local/share/claude/versions/2.1.291', 'claude-code'), 'claude')
   assert.equal(processName(['codex', 'app-server', '--managed-daemon'], '/x/codex', 'codex'), 'codex app-server')
   assert.equal(processName(['node', '/opt/dsh/cli.js'], '/usr/bin/node', 'deepseek-dsh'), 'deepseek-dsh')
+  // the native Claude Code is a file named by its version: that is not a program's name, so it is named for the harness like a runtime is (never `2.1.289`)
+  assert.equal(processName(['2.1.289'], '/home/u/.local/share/claude/versions/2.1.289', 'claude-code'), 'claude-code')
+  assert.equal(processName(null, '/home/u/.local/share/claude/versions/2.1.289', 'claude-code'), 'claude-code')
+  assert.equal(processName(null, '/opt/codex/releases/0.160.1', 'codex'), 'codex')
+  assert.equal(processName(['claude'], '/home/u/.local/share/claude/versions/2.1.289', 'claude-code'), 'claude', 'a program with a name keeps it')
   assert.equal(versionOf('/home/u/.local/share/claude/versions/2.1.291'), '2.1.291')
   assert.equal(versionOf('/opt/codex/releases/0.160.1/bin/codex'), '0.160.1')
   assert.equal(versionOf('/usr/bin/mihomo'), null)
@@ -87,6 +94,21 @@ test('linuxNetFacts: a process carries the watch table\'s verdict (decrypt / no-
     assert.equal((await ask([row(4121)], null, matched(4121))).procs['claude-code'][0].watched, 'unknown', 'no daemon answer: not known, not "absent"')
     assert.equal((await ask([row(4121, { negative: true, reason: 'negative-cache' })], { agents: [{ pid: 4121, decrypt: true }] }, matched(4121))).procs['claude-code'][0].negative, true)
   } finally { p.done() }
+})
+
+test('linuxNetFacts: a harness that is off — the daemon lists its agent as `off`, the process table may not name the process — still has an agent named for the program or the harness, never for the version-named file it runs from (`claude-code 4121`, not `2.1.289 4121`)', async () => {
+  const exe = '/home/u/.local/share/claude/versions/2.1.289', startedAt = Date.parse('2026-10-07T09:30:00Z')
+  const off = { agents: [{ pid: 4121, off: true, exe }] }
+  const ask = async (matched) => (await linuxNetFacts({ status: statusOf([row(4121)], off, matched), settings: { 'claude-code': current() } }, { exec: runner(TABLE), procRoot: '/x' })).procs['claude-code'][0]
+  const unnamed = await ask([])
+  assert.deepEqual([unnamed.name, unnamed.version, unnamed.watched], ['claude-code', '2.1.289', 'absent'], 'only the daemon\'s row names the file: the harness gives the name, the path gives the version')
+  const byArgv = await ask([{ h: 'claude-code', p: { pid: 4121, exe, argv: ['2.1.289'], startedAt, env: () => new Map() } }])
+  assert.equal(byArgv.name, 'claude-code')
+  const named = await ask([{ h: 'claude-code', p: { pid: 4121, exe, argv: ['claude'], startedAt, env: () => new Map() } }])
+  assert.equal(named.name, 'claude', 'the table names it: unchanged')
+  // and it is that name the topology draws for the harness that is off
+  const t = buildTopology(facts('claude-code', { desired: { 'claude-code': 'off' } }, { procs: [{ ...unnamed, trusted: false }] }))['claude-code']
+  assert.match(renderCompact(t)[0], /^claude-code 4121 → /)
 })
 
 test('linuxNetFacts: the proxy a process was started with is read from its environment and compared with what a new one reads now — the same is null, another is redacted with a hash, none is a null value, an unreadable environment is unknown', async () => {
