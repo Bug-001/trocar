@@ -442,3 +442,261 @@ test('W16 end to end, no pid, every process of the form trusted: the same connec
   assert.deepEqual([E.envelopes[0].proc.agent, E.envelopes[0].proc.pid, E.envelopes[0].proc.exe], ['claude-code', null, null], 'no pid was found: the envelope says so rather than guessing')
   assert.deepEqual(E.failures, [])
 })
+
+// ---------- attach · detach · status (4.8 §2.1, §4.1, §4.2: the kernel first, the proxy entries only after it reads back; W12 order) ----------
+
+const SECRET = 'abcdef0123456789abcdef0123456789'
+const OWN_IMAGES = [IMG.node, String.raw`C:\Users\u\.asight\collector\kernel\asight-forwarder.exe`]
+const readBack = (forms) => ({ ok: forms.every((f) => (f.on ? 'on' : 'off') === (f.state ?? (f.on ? 'on' : 'off'))), forms: Object.fromEntries(forms.map((f) => [f.f, { state: f.state ?? (f.on ? 'on' : 'off') }])) })
+
+/** The kernel as the redirector sees it: reload({build, forms}) builds the config text for a controller and answers what the test says (a list, one per call; then "read back as asked"). `log` is shared with the entries. */
+function kernel(log, { phase = 'running', results = [] } = {}) {
+  const k = {
+    phase, calls: [], checked: null,
+    state: () => ({ phase: k.phase }),
+    async reload({ build, forms }) {
+      const text = build({ port: 18899, secret: SECRET })
+      k.calls.push({ forms, text })
+      log.push('kernel')
+      const r = results.length ? results.shift() : { ok: true, readBack: readBack(forms) }
+      if (r instanceof Error) throw r
+      return r
+    },
+    async check() { return k.checked ?? { ok: true, forms: {} } },
+  }
+  return k
+}
+/** The proxy-entry writer: what it was asked for, in order with the kernel's calls; `fail` makes the n-th write throw (a crash between the read-back and the entries). */
+function entriesLog(log, { writeResult = null, throwOnWrite = 0 } = {}) {
+  let writes = 0
+  const e = {
+    written: [], undone: [], checked: [],
+    async write(list) { log.push('write'); writes++; e.written.push(list); if (writes === throwOnWrite) throw new Error('crashed'); return writeResult ? writeResult(list) : list.map((x) => ({ g: x.g, ok: true })) },
+    async undo(list) { log.push('undo'); e.undone.push(list); return list.map((x) => ({ g: x.g, ok: true })) },
+    async check(list) { e.checked.push(list); return list.map((x) => ({ g: x.g, ok: true })) },
+  }
+  return e
+}
+const ROUTES = () => ({ 'claude-code.settings': route(), 'codex.env': route({ upstream: HTTP_PROXY, bypass: BYPASS }), 'deepseek-dsh.env': route({ on: false, entry: null, reason: 'desired-off' }) })
+function wiredKernel(over = {}) {
+  const log = []
+  const k = kernel(log, over.kernel)
+  const e = entriesLog(log, over.entries)
+  const ctx = bed({ forwarder: k, entries: e, routes: ROUTES, ownImages: OWN_IMAGES, ...over.redirector })
+  return { ...ctx, k, e, log }
+}
+const parse = (text) => JSON.parse(text)
+const listenersOf = (text) => parse(text).listeners.map((l) => l.name)
+
+test('attach(): the kernel gets one config for every planned group (on groups with the engine outbound and a fallback group per form, the off group forward only) and the forms to read back; the login comes from its reference', async () => {
+  const { r, k } = wiredKernel()
+  const out = await r.attach()
+  assert.equal(out.ok, true)
+  assert.deepEqual(k.calls[0].forms, [
+    { f: 'claude-code.cli', on: true }, { f: 'claude-code.vscode', on: true },
+    { f: 'codex.cli', on: true }, { f: 'codex.vscode', on: true }, { f: 'codex.app', on: true },
+    { f: 'deepseek-dsh.cli', on: false }, { f: 'deepseek-dsh.desktop', on: false },
+  ], 'the groups the plan has an answer for: claude-code.desktop and z-code have none, so they are not in the kernel')
+  const cfg = parse(k.calls[0].text)
+  assert.deepEqual(cfg.listeners.map((l) => [l.name, l.port]), [['asight-l-claude-code.settings', 18801], ['asight-l-codex.env', 18802], ['asight-l-deepseek-dsh.env', 18803]])
+  const names = cfg.proxies.map((p) => p.name)
+  assert.ok(names.includes('asight-in-claude-code.cli') && names.includes('asight-in-codex.app'), 'the engine outbound of a form that is on')
+  assert.ok(!names.includes('asight-in-deepseek-dsh.cli'), 'a group that is off has none: the engine is not on its path')
+  const up = cfg.proxies.find((p) => p.name === 'asight-up-codex.env')
+  assert.deepEqual([up.type, up.server, up.port, up.username, up.password], ['http', '127.0.0.1', 7897, 'u1', 'pw-SECRET'], 'the login is written where the kernel needs it, and nowhere else')
+  assert.deepEqual([cfg.proxies.find((p) => p.name === 'asight-in-codex.app').port, cfg.proxies.find((p) => p.name === 'asight-in-codex.app').password], [18790, TOKEN])
+  assert.deepEqual(cfg['external-controller'], '127.0.0.1:18899')
+  const rules = cfg['sub-rules']
+  assert.ok(rules['in-codex.env'].includes('DOMAIN-SUFFIX,corp.example.com,DIRECT') && rules['in-codex.env'].includes('IP-CIDR,10.0.0.0/8,DIRECT,no-resolve'), 'the group\'s own bypass table is in its sub-rule (4.8 §3.1 ⑤)')
+  assert.equal(rules['in-claude-code.settings'].some((l) => /DIRECT/.test(l) && !/DST-PORT/.test(l)), false, 'and not in another group\'s')
+})
+
+test('W12 order: the proxy entries of the groups that are on are written only after the kernel read the forms back as on; the groups the plan says are off have theirs undone after the kernel switched', async () => {
+  const { r, e, log } = wiredKernel()
+  const out = await r.attach()
+  assert.deepEqual(log, ['kernel', 'write', 'undo'])
+  assert.deepEqual(e.written, [[{ g: 'claude-code.settings', harness: 'claude-code', entry: 'auto' }, { g: 'codex.env', harness: 'codex', entry: 'auto' }]])
+  assert.deepEqual(e.undone[0].map((x) => x.g), ['deepseek-dsh.env'], 'only a group the plan names as off: one it knows nothing about keeps whatever entry it has')
+  assert.deepEqual(out.entries.written.map((x) => [x.g, x.ok]), [['claude-code.settings', true], ['codex.env', true]])
+})
+
+test('W12 a kernel that cannot start leaves zero proxy entries: attach() rejects with the forwarder\'s own code and reason, and nothing is written or undone', async () => {
+  for (const [result, code, why] of [
+    [{ ok: false, where: 'forwarder', code: 'forwarder-start-failed', reason: 'port-taken', port: 18801 }, 'forwarder-start-failed', /port-taken/],
+    [{ ok: false, where: 'forwarder', code: 'forwarder-binary-missing', reason: 'package-not-installed' }, 'forwarder-binary-missing', /package-not-installed/],
+    [{ ok: false, where: 'forwarder', code: 'forwarder-digest-mismatch', reason: 'the kernel copy is not the pinned exe', of: 'copy' }, 'forwarder-digest-mismatch', /pinned exe/],
+    [{ ok: false, readBack: null, error: { status: 400, text: 'Body invalid' } }, 'forwarder-start-failed', /refused the new configuration \(status 400\)/],
+  ]) {
+    const { r, e, log } = wiredKernel({ kernel: { results: [result] } })
+    await assert.rejects(r.attach(), (err) => { assert.equal(err.code, code); assert.match(err.message, why); assert.match(err.message, /no proxy entry was written/); return true })
+    assert.deepEqual([log, e.written, e.undone], [['kernel'], [], []], code)
+  }
+})
+
+test('W12 a read-back that does not say on is not on: the engine unreachable (the kernel keeps the re-entry) is fallback-active, anything else it cannot say plainly is not either — no entry in any case', async () => {
+  for (const [states, code] of [
+    [{ 'claude-code.cli': 'fallback' }, 'fallback-active'],
+    [{ 'codex.app': 'missing' }, 'forwarder-start-failed'],
+    [{ 'claude-code.vscode': 'unknown' }, 'forwarder-start-failed'],
+    [{ 'deepseek-dsh.cli': 'still-on' }, 'forwarder-start-failed'],
+  ]) {
+    const mk = (forms) => ({ ok: false, readBack: readBack(forms.map((f) => ({ ...f, state: states[f.f] }))) })
+    const log = []
+    const k = kernel(log); k.reload = async ({ build, forms }) => { build({ port: 18899, secret: SECRET }); log.push('kernel'); return mk(forms) }
+    const e = entriesLog(log)
+    const { r } = bed({ forwarder: k, entries: e, routes: ROUTES, ownImages: OWN_IMAGES })
+    await assert.rejects(r.attach(), (err) => { assert.equal(err.code, code, JSON.stringify(states)); assert.ok(err.readBack && err.readBack.forms, 'the read-back is on the error: the receipt says which form'); return true })
+    assert.deepEqual([log, e.written, e.undone], [['kernel'], [], []])
+  }
+})
+
+test('W12 a crash between the read-back and the entries, then `on` again, completes: the second attach() reloads again and writes the same entries', async () => {
+  const { r, e, log } = wiredKernel({ entries: { throwOnWrite: 1 } })
+  await assert.rejects(r.attach(), /crashed/)
+  assert.deepEqual(log, ['kernel', 'write'])
+  const again = await r.attach()
+  assert.deepEqual([log.slice(2), again.ok], [['kernel', 'write', 'undo'], true])
+  assert.deepEqual(e.written[1], e.written[0], 'the same groups the first time asked for')
+})
+
+test('an entry that could not be written is that group\'s result, not an exception: the kernel and the other groups are as they were, and attach() says which group and why', async () => {
+  const { r } = wiredKernel({ entries: { writeResult: (list) => list.map((x) => (x.g === 'codex.env' ? { g: x.g, ok: false, reason: 'the file cannot be read' } : { g: x.g, ok: true })) } })
+  const out = await r.attach()
+  assert.equal(out.ok, false)
+  assert.deepEqual(out.entries.written.map((x) => [x.g, x.ok, x.reason ?? null]), [['claude-code.settings', true, null], ['codex.env', false, 'the file cannot be read']])
+  assert.equal(out.kernel.ok, true)
+})
+
+test('attach() with nothing planned does not touch the kernel and undoes nothing it was not told is off', async () => {
+  const { r, e, k, log } = wiredKernel({ redirector: { routes: () => ({}) } })
+  const out = await r.attach()
+  assert.deepEqual([log, e.undone, out.ok, out.kernel], [[], [], true, null])
+  assert.equal(k.calls.length, 0)
+})
+
+test('attach() refuses before any write what it cannot build: a login it cannot read, a process rule that would match asight\'s own image (route-loop), and ownImages left out', async () => {
+  const noLogin = wiredKernel({ redirector: { authOf: () => null } })
+  await assert.rejects(noLogin.r.attach(), /prior:codex\.env/)
+  assert.deepEqual([noLogin.log], [[]], 'neither the kernel nor an entry was touched')
+  const loop = wiredKernel({ redirector: { ownImages: [String.raw`C:\Users\u\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe`] } })
+  await assert.rejects(loop.r.attach(), (e) => e.code === 'route-loop')
+  assert.deepEqual(loop.log, [])
+  const bare = wiredKernel({ redirector: { ownImages: undefined } })
+  await assert.rejects(bare.r.attach(), /ownImages is required/)
+  assert.deepEqual(bare.log, [])
+})
+
+test('W12 detach() is the other way: the kernel switched to forward only and read back first (no engine outbound, no fallback group, every form off), then every group\'s proxy entry undone', async () => {
+  const { r, k, e, log } = wiredKernel()
+  const out = await r.detach()
+  assert.deepEqual(log, ['kernel', 'undo'])
+  assert.ok(k.calls[0].forms.every((f) => f.on === false))
+  const cfg = parse(k.calls[0].text)
+  assert.deepEqual([cfg.proxies.some((p) => p.name.startsWith('asight-in-')), (cfg['proxy-groups'] || []).length], [false, 0])
+  assert.deepEqual(listenersOf(k.calls[0].text), ['asight-l-claude-code.settings', 'asight-l-codex.env', 'asight-l-deepseek-dsh.env'], 'the listeners stay: an agent that outlives `off` still points at them')
+  assert.deepEqual(e.undone[0].map((x) => x.g).sort(), ['claude-code.desktop', 'claude-code.settings', 'codex.env', 'deepseek-dsh.env', 'z-code.cli', 'z-code.desktop'], 'every group, planned or not: off undoes what asight wrote, and only that (the writer knows what that is)')
+  assert.equal(out.ok, true)
+})
+
+test('detach() with no kernel running leaves it alone (nothing can point at it) and only undoes the entries; a kernel that cannot be switched, or a plan that cannot be built, still gets every entry undone and then fails', async () => {
+  const stopped = wiredKernel({ kernel: { phase: 'stopped' } })
+  const out = await stopped.r.detach()
+  assert.deepEqual([stopped.log, out.ok, out.kernel], [['undo'], true, null])
+  const stuck = wiredKernel({ kernel: { results: [{ ok: false, readBack: null, error: { status: 500, text: '' } }] } })
+  await assert.rejects(stuck.r.detach(), (err) => { assert.equal(err.code, 'forwarder-start-failed'); assert.match(err.message, /entries were undone/); return true })
+  assert.deepEqual(stuck.log, ['kernel', 'undo'], 'off always undoes by hand: the kernel failing does not keep the entries')
+  const broken = wiredKernel({ redirector: { authOf: () => null } })
+  await assert.rejects(broken.r.detach(), /prior:codex\.env/)
+  assert.deepEqual(broken.log, ['undo'])
+  const threw = wiredKernel({ kernel: { results: [new Error('the controller is gone')] } })
+  await assert.rejects(threw.r.detach(), /controller is gone/)
+  assert.deepEqual(threw.log, ['kernel', 'undo'])
+})
+
+test('status() is the kernel\'s read-back: attached when it says a form is on, the links are those forms, and the entries\' own check rides along', async () => {
+  const { r, k, e } = wiredKernel()
+  k.checked = { ok: true, forms: { 'claude-code.cli': { state: 'on', now: 'asight-in-claude-code.cli' }, 'codex.app': { state: 'on' }, 'deepseek-dsh.cli': { state: 'off' } } }
+  const s = await r.status()
+  assert.deepEqual([s.attached, s.links, s.hb_age_ms, s.drops], [true, [{ name: 'claude-code.cli' }, { name: 'codex.app' }], null, null])
+  assert.deepEqual(e.checked[0].map((x) => x.g), ['claude-code.settings', 'codex.env'], 'the entries that should be there: the groups that are on')
+  assert.deepEqual(s.entries.map((x) => [x.g, x.ok]), [['claude-code.settings', true], ['codex.env', true]])
+  k.checked = { ok: true, forms: { 'claude-code.cli': { state: 'off' } } }
+  assert.equal((await r.status()).attached, false, 'a kernel with nothing on is forward only: not attached')
+  k.checked = { ok: false, forms: { 'claude-code.cli': { state: 'on' }, 'codex.app': { state: 'fallback' } } }
+  assert.equal((await r.status()).attached, false, 'a read-back that is not ok is not on, whichever form says it is')
+  k.checked = { ok: false, forms: {}, reason: 'not-running' }
+  assert.deepEqual([(await r.status()).attached, (await r.status()).kernel.reason], [false, 'not-running'])
+})
+
+// ---------- kernelGroupsOf: the plan as the kernel's config takes it, on the real data of all seven harnesses ----------
+
+test('kernelGroupsOf on the real harness data: every group with a plan, a port and an upstream is carried, its forms with their own process rules, and the whole of it is a config the generator builds', async () => {
+  const { loadHarnesses } = await import('../../../../src/collector/harness/index.mjs')
+  const { kernelGroupsOf } = await import('../../../../src/collector/arch/win32/redirector.mjs')
+  const { buildForwarderConfig, processRulesOf } = await import('../../../../src/netenv/mihomo/rules.mjs')
+  const all = groupsOf(await loadHarnesses())
+  const ids = all.map((x) => x.g)
+  const routes = Object.fromEntries(ids.map((g) => [g, route({ on: g !== 'hermes.cli' })]))
+  const groupPorts = Object.fromEntries(ids.map((g, i) => [g, 18900 + i]))
+  const hostsOf = (f) => ['api.kimi.com', 'relay.example.net']
+  const carried = kernelGroupsOf({ groups: all, routes, groupPorts, authOf: () => CRED, hostsOf })
+  assert.deepEqual(carried.map((x) => x.g), ids, 'all seven harnesses\' groups; hermes.desktop has no group and is in none')
+  const cc = carried.find((x) => x.g === 'claude-code.settings')
+  assert.deepEqual(cc.forms.map((f) => f.f), ['claude-code.cli', 'claude-code.vscode'])
+  assert.deepEqual(cc.forms[0].rules, processRulesOf({ pathPatterns: all.find((x) => x.g === 'claude-code.settings').forms[0].match.path, names: [] }), 'the form\'s own path patterns, no image name (claude.exe is two programs)')
+  const dsh = carried.find((x) => x.g === 'deepseek-dsh.env')
+  assert.deepEqual([dsh.forms[0].f, dsh.forms[0].rules, dsh.forms[1].rules.length > 0], ['deepseek-dsh.cli', [], true], 'the form with no process rule has none: it takes every connection of its port')
+  assert.deepEqual(carried.find((x) => x.g === 'kimi-code.vscode').forms[0].hosts, ['api.kimi.com', 'relay.example.net'], 'a host-tree form carries its host set')
+  assert.deepEqual(carried.map((x) => [x.g, x.auth]).filter(([, a]) => !a), [['claude-code.desktop', false]], 'an entry that takes no login has a port without users')
+  assert.equal(carried.find((x) => x.g === 'hermes.cli').on, false)
+  const ing = { enginePort: 18790, token: TOKEN, listenerToken: INGRESS.listenerToken }
+  assert.doesNotThrow(() => buildForwarderConfig({ groups: carried, ...ing, controller: { port: 18899, secret: SECRET }, ownImages: OWN_IMAGES }))
+})
+
+test('kernelGroupsOf leaves out what the kernel must not carry: no plan, no port, no upstream, no form it can carry, and a login on a port that takes none', async () => {
+  const { kernelGroupsOf } = await import('../../../../src/collector/arch/win32/redirector.mjs')
+  const g = (id) => GROUPS.filter((x) => x.g === id)
+  const run = (over) => kernelGroupsOf({ groups: GROUPS, routes: { 'claude-code.settings': route(), ...over.routes }, groupPorts: { 'claude-code.settings': 18801, ...over.ports }, authOf: () => CRED })
+  assert.deepEqual(run({}).map((x) => x.g), ['claude-code.settings'])
+  assert.deepEqual(kernelGroupsOf({ groups: GROUPS, routes: {}, groupPorts: PORTS }), [], 'no plan yet')
+  assert.deepEqual(kernelGroupsOf({ groups: GROUPS, routes: { 'claude-code.settings': route() }, groupPorts: {} }), [], 'no port: ingress.json has none for it')
+  const nameless = groupsOf([{ name: 'k', win32: { groups: [{ g: 'k.a', proxyEntry: { kind: 'file' }, auth: true }], forms: [{ id: 'k.a', g: 'k.a', match: { image: 'node.exe', path: ['anything'] }, nameRule: true, processRules: false, supported: true }] } }])
+  assert.deepEqual(kernelGroupsOf({ groups: nameless, routes: { 'k.a': route() }, groupPorts: { 'k.a': 18900 } })[0].forms, [{ f: 'k.a', rules: [] }], 'a form with no process rule has none, whatever else its data says')
+  assert.deepEqual(run({ routes: { 'codex.env': route({ upstream: null, on: false }) }, ports: { 'codex.env': 18802 } }).map((x) => x.g), ['claude-code.settings'], 'nothing to forward to: not carried, rather than forwarded direct round the proxy the agent needs')
+  const desktop = { 'claude-code.desktop': route({ upstream: HTTP_PROXY }) }
+  assert.deepEqual(run({ routes: desktop, ports: { 'claude-code.desktop': 18805 } }).map((x) => x.g), ['claude-code.settings'], 'a port with no users and a login in its upstream: any process could use it')
+  const bare = [{ ...g('claude-code.settings')[0], forms: g('claude-code.settings')[0].forms.map((f) => ({ ...f, supported: { reason: 'not-measured' } })) }]
+  assert.deepEqual(kernelGroupsOf({ groups: bare, routes: { 'claude-code.settings': route() }, groupPorts: PORTS }), [], 'no form it can carry')
+  const socks = run({ routes: { 'claude-code.settings': route({ upstream: { kind: 'socks5', host: '10.0.0.2', port: 1080, credentialed: true, auth_ref: 'hkcu-env:HTTPS_PROXY', source: 'agent' } }) } })
+  assert.deepEqual(socks[0].upstream, { type: 'socks5', host: '10.0.0.2', port: 1080, ...CRED })
+  assert.throws(() => kernelGroupsOf({ groups: GROUPS, routes: { 'claude-code.settings': route({ upstream: HTTP_PROXY }) }, groupPorts: PORTS, authOf: () => null }), (e) => e.why === 'upstream-credentials-unavailable')
+  assert.throws(() => kernelGroupsOf({ groups: groupsOf([{ name: 'k', win32: { groups: [{ g: 'k.vs', proxyEntry: { kind: 'file' }, auth: true }], forms: [{ id: 'k.vs', g: 'k.vs', match: { image: 'Code.exe', path: ['x'] }, processRules: true, supported: true, hosts: { defaults: ['a.example'] } }] } }]), routes: { 'k.vs': route() }, groupPorts: { 'k.vs': 18900 }, hostsOf: () => [] }), /host tree/)
+})
+
+// ---------- directCount · what this file may touch ----------
+
+test('directCount(pid): the process\'s established connections that are not to a group\'s listener on loopback; a table that cannot be read is null and why, never 0', async () => {
+  const rowOf = (pid, addr, port, state = 'established') => ({ pid, state, family: 4, localAddr: '127.0.0.1', localPort: 50000, remoteAddr: addr, remotePort: port })
+  let rows = [rowOf(10, '127.0.0.1', 18801), rowOf(10, '104.18.0.1', 443), rowOf(10, '127.0.0.1', 7897), rowOf(10, '::1', 18802), rowOf(10, '1.1.1.1', 443, 'time-wait'), rowOf(11, '1.1.1.1', 443)]
+  const calls = []
+  const helper = { async call(verb, args, opts) { calls.push([verb, args, opts.timeoutMs]); if (rows instanceof Error) throw rows; return rows && { rows } } }
+  const { r } = made({ helper, ingress: () => INGRESS })
+  assert.deepEqual(await r.directCount(10), { count: 2, error: null }, 'the one to the internet and the one to a local proxy; not the two to asight\'s listeners, not the one closing, not another process\'s')
+  assert.deepEqual(calls[0], ['tcp-table', { pids: [10], states: ['established'] }, 2000])
+  rows = new Error('the helper died'); rows.code = 'helper-down'
+  assert.deepEqual(await r.directCount(10), { count: null, error: 'helper-down' })
+  rows = null
+  assert.deepEqual(await r.directCount(10), { count: null, error: 'no-rows' })
+  assert.deepEqual(await made({}).r.directCount(10), { count: null, error: 'no-helper' })
+})
+
+test('what the redirector may do (static): it imports only the modules that read or plan, opens no socket, runs nothing, writes no file or registry key, names no harness, and the user\'s login is read in one place', async () => {
+  const fs = await import('node:fs')
+  const src = fs.readFileSync(new URL('../../../../src/collector/arch/win32/redirector.mjs', import.meta.url), 'utf8')
+  const code = src.replace(/\/\*[^]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\s\/\/ .*$/gm, '')
+  const imports = [...code.matchAll(/^import .* from '([^']+)'/gm)].map((m) => m[1]).sort()
+  assert.deepEqual(imports, ['../../../netenv/mihomo/rules.mjs', './forms.mjs', './helper.mjs', './upstream.mjs', 'node:events'])
+  assert.equal(/\b(writeFile\w*|appendFile\w*|mkdir\w*|rename\w*|unlink\w*|rmSync|spawn\w*|execFile\w*|execSync|fork|createServer|fetch|child_process|process\.platform|reg add|setx)\b|\.connect\(/.test(code), false, 'no write, no process, no socket, no platform branch')
+  assert.equal(/\b(claude|codex|opencode|kimi|dsh|deepseek|hermes|zcode|z-code)\b/i.test(code), false, 'arch names no harness: the groups it is given say it')
+  assert.equal([...code.matchAll(/authOf\(/g)].length, 1, 'the reference to a login is turned into one in a single function')
+})
