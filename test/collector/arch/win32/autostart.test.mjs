@@ -9,7 +9,6 @@ import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { createHash } from 'node:crypto'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 import { startHelper } from '../../../../src/collector/arch/win32/helper.mjs'
 import { refuseElevated, nodePreflight, NODE_MIN_MAJOR, taskXml, taskUser, userUnit, register, daemonCommandLine, readRunValue, runKeyFallback, removeRunValue, TASK_NAME, TASK_FILE, RUN_KEY, superviseChild, runSupervisor, lockHolderAlive, supervisorBackoff, SUPERVISOR_LOCK, SUPERVISE_CAP_MS, SUPERVISE_STABLE_MS } from '../../../../src/collector/arch/win32/autostart.mjs'
@@ -134,20 +133,9 @@ function helperWith(t, verbs) {
   t.after(() => h.close())
   return h
 }
-const sha = (b) => createHash('sha256').update(b).digest('hex')
-const tree = (dir) => { // every file under dir with its bytes' digest: "the sandbox HOME is unchanged byte for byte"
-  const out = {}
-  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else out[path.relative(dir, p)] = sha(fs.readFileSync(p)) } }
-  if (fs.existsSync(dir)) walk(dir)
-  return out
-}
 const TOKEN = (over = {}) => ({ pid: 4242, elevated: false, elevationType: 'limited', integrity: 'medium', system: false, sessionId: 2, ...over })
 
 test('W25 an elevated token and a SYSTEM token are refused by the daemon\'s check, each with the closed-set code, and a plain Medium token is not', async (t) => {
-  const home = tmpDir('asight-home-')
-  fs.mkdirSync(path.join(home, '.asight', 'collector'), { recursive: true })
-  fs.writeFileSync(path.join(home, '.asight', 'collector', 'state.json'), '{"v":2}\n')
-  const before = tree(home)
   const cases = [
     ['elevated (the Administrator token, UAC accepted)', TOKEN({ elevated: true, elevationType: 'full', integrity: 'high' }), true],
     ['SYSTEM', TOKEN({ elevated: true, integrity: 'system', system: true, elevationType: 'default' }), true],
@@ -157,7 +145,10 @@ test('W25 an elevated token and a SYSTEM token are refused by the daemon\'s chec
   ]
   for (const [what, data, refused] of cases) {
     const unknown = []
-    const r = await refuseElevated({ helper: helperWith(t, { token: { data } }), onUnknown: (why) => unknown.push(why) })
+    const real = helperWith(t, { token: { data } })
+    const asked = [] // what the check asks the helper: the one read-only verb, nothing else (the helper's verbs are a closed read-only set, W1; this is the check's side of it)
+    const r = await refuseElevated({ helper: { call: (...a) => { asked.push(a); return real.call(...a) } }, onUnknown: (why) => unknown.push(why) })
+    assert.deepEqual(asked, [['token']], `${what}: one question, the token verb, no arguments`)
     if (!refused) { assert.equal(r, null, what); continue }
     assert.equal(r.code, 'elevated-token', what)
     assert.match(r.reason, /R7/, 'the reason names the rule')
@@ -165,8 +156,16 @@ test('W25 an elevated token and a SYSTEM token are refused by the daemon\'s chec
     assert.deepEqual(checkRecord({ event: 'failure', where: 'start', code: r.code, reason: r.reason }), [], 'a failure record the closed set takes')
     assert.deepEqual(unknown, [])
   }
-  assert.deepEqual(tree(home), before, 'the sandbox HOME is byte for byte as it was: the check writes nothing')
 })
+
+// What W25 owns and this tree cannot run yet: the check is built (above) but `on`, `daemon`, `off` and `uninstall` do not call it here, because the commands live on the CLI branch (src/cli/*, src/off/*; this worktree is
+// at CLI T02). A todo, not a skip: it runs, fails today and says why, and an author who wires the check has the line to turn into a real assertion. Each ends in assert.fail so that it cannot go green by accident.
+const notHere = (what, owner) => { throw new assert.AssertionError({ message: `not wired yet (${owner}): ${what}` }) }
+test('W25 (command level, Task 8(c)) `asight on` with an injected elevated or SYSTEM token refuses with elevated-token before it writes anything: the sandbox HOME is byte for byte as it was', { todo: 'Task 8(c): src/cli/on.mjs (CLI branch) calls arch.refuseElevated before the first write; assert the receipt, the failure record, exit 1 and the HOME tree' }, () => notHere('on', 'Task 8(c)'))
+test('W25 (command level, Task 8(c)) `asight daemon` refuses an elevated or SYSTEM token before it claims the control endpoint: a failure record {where: start, code: elevated-token}, no pipe, no control.json written', { todo: 'Task 8(c): src/collector/daemon.mjs calls arch.refuseElevated before controlEndpoint()' }, () => notHere('daemon', 'Task 8(c)'))
+test('W25 (command level, Task 9(b)) `asight off` and `asight uninstall` with an injected High-integrity or SYSTEM `whoami` refuse before they touch anything (HOME byte for byte unchanged), and with a `whoami` that cannot be read they go on', { todo: 'Task 9(b): the orchestrator calls refuseElevatedByWhoami at its entry on win32; one test per command' }, () => notHere('off, uninstall', 'Task 9(b)'))
+test('W24 (command level, Task 8(c) / CLI rebase) `runDaemonCli([\'--supervise\'])` is accepted and runs the supervisor (arch.runSupervisor through loadArch), any other argument is still refused with exit 2, and Linux has no --supervise', { todo: 'src/cli/daemon.mjs is on the CLI branch; see note 84 seam 1' }, () => notHere('runDaemonCli --supervise', 'the CLI rebase / Task 8(c)'))
+test('W24 (Task 9(b)) the copy of the task and Run-value undo in src/off/win32.mjs (undoWin32) equals the one in autostart.mjs: the same /Query rule (a /Query that did not run is a failure, never absent), the same tail rule for the Run value, the same calls in the same order', { todo: 'Task 9(b): undoWin32 does not exist yet; the equality test is the one Linux has between unit.mjs and src/off/autostart.mjs' }, () => notHere('undoWin32 equals userUnit.disable/remove', 'Task 9(b)'))
 
 test('W25 a token that cannot be read is not a refusal and not a silence: the caller is told why it is unknown (R11)', async (t) => {
   const unknown = []
