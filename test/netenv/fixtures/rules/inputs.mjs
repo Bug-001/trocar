@@ -38,3 +38,11 @@ export function goldenText(b) {
   const map = (o) => Object.entries(o).map(([k, v], i, a) => `${JSON.stringify(k)}: ${JSON.stringify(v)}${i < a.length - 1 ? ',' : ''}`).join('\n')
   return `{\n"proxies": [\n${list(b.proxies)}\n],\n"groups": [\n${list(b.groups)}\n],\n"providers": {\n${map(b.providers)}\n},\n"rules": [\n${list(b.rules)}\n],\n"files": {\n${map(b.files)}\n}\n}\n`
 }
+
+/** The own forwarder's inputs (4.8 §3.1, §4.2): two form listeners, one upstream direct, one an http proxy of the user's; the controller on a made-up port with a made-up secret. */
+export const SECRET = 'abcdef0123456789abcdef0123456789'
+export const FORMS = [
+  { g: 'claude-code.cli', port: 18801, upstream: 'direct' },
+  { g: 'codex.app', port: 18802, upstream: { type: 'http', host: '127.0.0.1', port: 7897 } },
+]
+export const forwarder = (over = {}) => ({ forms: FORMS, enginePort: ENGINE_PORT, token: TOKEN, controller: { port: 18899, secret: SECRET }, on: false, ...over })

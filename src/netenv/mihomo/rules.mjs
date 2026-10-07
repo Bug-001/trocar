@@ -380,3 +380,100 @@ export function insertScriptBlock(text, blockText, sentinel = SCRIPT_SENTINEL) {
   const nl = cleared.text.includes('\r\n') ? '\r\n' : '\n'
   return { ok: true, text: cleared.text + (cleared.text === '' ? '' : nl) + lines.join(nl), replaced: cleared.removed }
 }
+
+// ---- the own forwarder's config (4.8 §3.1 own-mihomo part, §4.2; W12) -------------------------------------------------------------------------------
+// asight's own forward-only mihomo: one loopback listener per form (a form is one kind of agent), each with a sub-rule. A form that is on has the same block as above
+// (the same entries, from the same function) with its own listener as the re-entry point: agent -> listener -> (rule by process) -> engine -> listener again ->
+// the form's next hop. A form that is off, or the whole config when `on` is false, is forward only: MATCH -> the form's next hop, no engine outbound at all.
+// The text is JSON, which is YAML in flow style; the real mihomo reads it (W57 shape 2), and a test can parse it without a library.
+
+const SECRET_RE = /^[A-Za-z0-9_-]{16,128}$/
+const DISCARD = `http://${LOOPBACK}:9/g` // the discard port: a database a rule asks for cannot be fetched from anywhere
+
+// the user's own proxy, or direct: the form's next hop. Its credentials (if it has any) are written here and nowhere else.
+function nextHop(g, up) {
+  const name = names(g).up
+  if (up == null || up === 'direct' || up.type === 'direct') return { name, type: 'direct' }
+  if (typeof up !== 'object' || (up.type !== 'http' && up.type !== 'socks5')) throw new TypeError(`the upstream of ${g} is direct, or an http or socks5 proxy`)
+  if (typeof up.host !== 'string' || up.host === '' || /[\s,]/.test(up.host)) throw new TypeError(`the upstream host of ${g} is a host name or an address`)
+  const out = { name, type: up.type, server: up.host, port: checkPort(up.port, `the upstream port of ${g}`) }
+  if (up.username != null) { out.username = String(up.username); out.password = up.password == null ? '' : String(up.password) }
+  return out
+}
+
+// one key per line, a list or a map of two or more spread one entry per line: reads like a config, diffs by entry, and is still plain JSON
+function layout(cfg) {
+  const one = (x) => JSON.stringify(x)
+  const rows = Object.entries(cfg).map(([k, v]) => {
+    const list = Array.isArray(v)
+    const items = list ? v.map(one) : v !== null && typeof v === 'object' ? Object.entries(v).map(([kk, vv]) => `${one(kk)}: ${one(vv)}`) : null
+    if (!items || items.length < 2) return `${one(k)}: ${one(v)}`
+    return `${one(k)}: ${list ? '[' : '{'}\n${items.map((r) => `  ${r}`).join(',\n')}\n${list ? ']' : '}'}`
+  })
+  return `{\n${rows.join(',\n')}\n}\n`
+}
+
+/**
+ * The config text. `forms`: `[{ g, port, upstream, on? }]`: `port` is the form's loopback listener (also its re-entry point); `upstream` is 'direct' (or absent), or
+ * `{ type: 'http' | 'socks5', host, port, username?, password? }`, the form's own next hop; `on` (default: the top-level one) says whether this form goes through the engine.
+ * `on` false (every form forward only) needs neither the engine port nor the token. `controller`: `{ port, secret }`, both chosen at random by the caller for each run.
+ * The text holds the controller secret, the token and a next hop's credentials: it is written 0600 and never logged.
+ */
+export function buildForwarderConfig({ forms, enginePort, token, controller, on } = {}) {
+  if (typeof on !== 'boolean') throw new TypeError('on must be true or false: the default for the forms (false = forward only)')
+  if (!Array.isArray(forms) || forms.length === 0) throw new TypeError('the forwarder needs at least one form')
+  if (!controller || typeof controller !== 'object') throw new TypeError('the controller is { port, secret }')
+  checkPort(controller.port, 'the controller port')
+  if (typeof controller.secret !== 'string' || !SECRET_RE.test(controller.secret)) throw new TypeError('the controller secret is 16..128 letters, digits, dashes and underscores')
+  const seen = new Set()
+  const prepared = forms.map((f) => {
+    const g = checkId(f?.g)
+    if (seen.has(g)) throw new TypeError(`duplicate form id ${g}`)
+    seen.add(g)
+    if (f.on !== undefined && typeof f.on !== 'boolean') throw new TypeError(`the on of ${g} is true or false`)
+    return { g, port: checkPort(f.port, `the port of ${g}`), up: nextHop(g, f.upstream), on: f.on === undefined ? on : f.on }
+  })
+  if (prepared.some((f) => f.on)) {
+    checkPort(enginePort, 'the engine port')
+    if (typeof token !== 'string' || !TOKEN_RE.test(token)) throw new TypeError('the ingress token is 16..128 letters, digits, dashes and underscores')
+  } else if (enginePort !== undefined) checkPort(enginePort, 'the engine port')
+  const owner = new Map()
+  for (const [port, who] of [[controller.port, 'the controller'], ...(enginePort === undefined ? [] : [[enginePort, 'the engine']]), ...prepared.map((f) => [f.port, `the form ${f.g}`])]) {
+    if (owner.has(port)) throw new TypeError(`port ${port} is used by ${owner.get(port)} and by ${who}`)
+    owner.set(port, who)
+  }
+  const proxies = []
+  const groups = []
+  const providers = {}
+  const subRules = {}
+  for (const f of prepared) {
+    const n = names(f.g)
+    if (f.on) {
+      const e = entriesOf({ g: f.g, route: 'of', enginePort, token, reenter: { host: LOOPBACK, port: f.port } })
+      proxies.push(...e.proxies, f.up)
+      groups.push(...e.groups)
+      providers[n.provider] = e.provider
+      subRules[`in-${f.g}`] = [reenterRule(f.port), `RULE-SET,${n.provider},${n.sw}`, `MATCH,${n.up}`]
+    } else {
+      proxies.push(f.up)
+      subRules[`in-${f.g}`] = [`MATCH,${n.up}`]
+    }
+  }
+  return layout({
+    mode: 'rule',
+    'bind-address': LOOPBACK,
+    'allow-lan': false,
+    'find-process-mode': 'always',
+    'log-level': 'warning',
+    profile: { 'store-selected': false, 'store-fake-ip': false },
+    'geo-auto-update': false,
+    'geox-url': { geoip: DISCARD, geosite: DISCARD, mmdb: DISCARD, asn: DISCARD },
+    'external-controller': `${LOOPBACK}:${controller.port}`,
+    secret: controller.secret,
+    listeners: prepared.map((f) => ({ name: `asight-l-${f.g}`, type: 'mixed', listen: LOOPBACK, port: f.port, rule: `in-${f.g}` })),
+    proxies,
+    ...(groups.length ? { 'proxy-groups': groups, 'rule-providers': providers } : {}),
+    'sub-rules': subRules,
+    rules: ['MATCH,DIRECT'],
+  })
+}
