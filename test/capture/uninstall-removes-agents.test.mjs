@@ -9,11 +9,14 @@ import { execFileSync } from 'node:child_process';
 // THE ORPHAN GUARD MUST BE ON THE COMMAND THE USER RUNS, NOT JUST THE UNIT.
 //
 // The 2026-07-21 incident was two LaunchAgents that `asight uninstall` could not remove. There is a
-// unit test that `removeCaptureAgents` deletes both — but nothing proved the CLI's `uninstall` case
-// actually CALLS it, so deleting that one line in bin/asight.mjs would silently reopen the orphan
-// hole with every test still green. This exercises the real command in a sandboxed HOME with stubbed
-// `launchctl`/`security` (so it never touches the real launchd or keychain) and asserts both agent
-// plists are gone afterward.
+// unit test that `removeCaptureAgents` deletes both — but nothing proved the CLI's `uninstall`
+// actually REACHES that undo (src/off/legacy.mjs, which `uninstall` runs on a platform without the
+// new collector, 1.6 §4), so cutting the call would silently reopen the orphan hole with every test
+// still green. This exercises the real command in a sandboxed HOME with stubbed `launchctl`/`security`
+// (so it never touches the real launchd or keychain) and asserts both agent plists are gone afterward.
+// The stubs answer like a machine where the unload took: `launchctl list` finds no job (113) and the
+// keychain finds no certificate (44) — uninstall reads both back and refuses to call anything undone
+// that it cannot see gone.
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const BIN = path.join(REPO, 'bin', 'asight.mjs');
@@ -31,9 +34,10 @@ function sandbox() {
   // Stub the OS tools so uninstall touches nothing real.
   const bin = path.join(home, 'stubbin');
   fs.mkdirSync(bin, { recursive: true });
-  for (const name of ['launchctl', 'security', 'curl']) {
+  const answers = { launchctl: 'case "$1" in list) exit 113;; *) exit 0;; esac', security: 'case "$1" in find-certificate) exit 44;; *) exit 0;; esac', curl: 'exit 0' };
+  for (const [name, body] of Object.entries(answers)) {
     const p = path.join(bin, name);
-    fs.writeFileSync(p, '#!/bin/sh\nexit 0\n');
+    fs.writeFileSync(p, `#!/bin/sh\n${body}\n`);
     fs.chmodSync(p, 0o755);
   }
   return { home, la, bin };
@@ -59,7 +63,7 @@ test('`asight uninstall` deletes BOTH capture-agent plists (product path, not ju
 
     assert.ok(!fs.existsSync(path.join(la, 'com.asight.mitm.plist')),
       '`asight uninstall` left com.asight.mitm.plist behind — the exact orphan the incident was about; '
-      + 'the removeCaptureAgents() call in bin/asight.mjs uninstall is missing or bypassed');
+      + 'the old capture\'s undo (src/off/legacy.mjs) is not reached by uninstall, or does not remove the agent');
     assert.ok(!fs.existsSync(path.join(la, 'com.asight.env.plist')),
       '`asight uninstall` left com.asight.env.plist behind — NODE_EXTRA_CA_CERTS primer orphaned');
   } finally { fs.rmSync(home, { recursive: true, force: true }); }

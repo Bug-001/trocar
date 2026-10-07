@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { COMMANDS, HIDDEN_ALIASES } from '../src/cli/commands.mjs';
 
 // The stated bar for this README is that it must not TRAP a user: every command it tells someone to
 // run has to exist, and every file it points at has to be there. That is not a style question — the
@@ -15,11 +16,10 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
 const readme = readFileSync(path.join(ROOT, 'README.md'), 'utf8');
-// the commands' bodies sit in bin/asight.mjs and src/cli/legacy-commands.mjs (moved out of the bin unchanged, D39)
-const cli = ['bin/asight.mjs', 'src/cli/legacy-commands.mjs'].map((f) => readFileSync(path.join(ROOT, f), 'utf8')).join('\n');
 const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 
-const implementedVerbs = new Set([...cli.matchAll(/case '([a-z-]+)'/g)].map((m) => m[1]));
+// what bin/asight.mjs dispatches: the table of commands and the first word of each hidden alias (src/cli/commands.mjs, RFC 1.6 §2)
+const implementedVerbs = new Set([...COMMANDS.map((c) => c.name), ...HIDDEN_ALIASES.map((a) => a.argv[0])]);
 
 // Only text the reader would actually TYPE counts as an instruction: fenced code blocks and inline
 // `code` spans. Prose like "asight sits on the wire" is not a command, and the README's own
@@ -35,7 +35,7 @@ test('every `asight <verb>` the README tells you to run actually exists', () => 
   const missing = [...documented].filter((v) => !implementedVerbs.has(v));
   assert.deepEqual(missing, [],
     `README documents commands that do not exist: ${missing.join(', ')}. `
-    + `bin/asight.mjs implements: ${[...implementedVerbs].sort().join(', ')}`);
+    + `the table of src/cli/commands.mjs has: ${[...implementedVerbs].sort().join(', ')}`);
 });
 
 test('every `npm run <script>` the README mentions exists in package.json', () => {
