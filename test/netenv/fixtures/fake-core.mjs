@@ -20,23 +20,10 @@ import path from 'node:path'
 import { parseYaml } from './rules/mini-yaml.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 
-const TYPE = { DOMAIN: 'Domain', 'DOMAIN-SUFFIX': 'DomainSuffix', 'DOMAIN-KEYWORD': 'DomainKeyword', 'PROCESS-NAME': 'ProcessName', 'PROCESS-PATH': 'ProcessPath', 'PROCESS-NAME-REGEX': 'ProcessNameRegex',
-  'PROCESS-PATH-REGEX': 'ProcessPathRegex', 'RULE-SET': 'RuleSet', GEOIP: 'GEOIP', MATCH: 'Match', AND: 'AND', OR: 'OR', NOT: 'NOT', 'DST-PORT': 'DstPort', 'IP-CIDR': 'IPCIDR' }
 const KIND = { select: 'Selector', fallback: 'Fallback', 'url-test': 'URLTest' }
 
-// GET /rules shows a logic rule's payload as the core renders it, not as the config spells it (measured on v1.19.32, the Verge-bundled core, W57):
-//   AND,((PROCESS-NAME,a.exe),(DOMAIN,x))  ->  ((ProcessName,a.exe) && (Domain,x))        OR  ->  the same with ||
-//   NOT,((PROCESS-NAME,a.exe))             ->  (!(ProcessName,a.exe))
-//   a logic rule inside a logic rule       ->  (AND,((..) && (..)))  /  (NOT,(!(..)))     a plain rule's payload is as written.
-const splitTop = (s) => { const out = []; let depth = 0, at = 0; for (let i = 0; i < s.length; i++) { if (s[i] === '(') depth++; else if (s[i] === ')') depth--; else if (s[i] === ',' && depth === 0) { out.push(s.slice(at, i)); at = i + 1 } } out.push(s.slice(at)); return out }
-function renderPayload(kind, payload) {
-  if (!['AND', 'OR', 'NOT'].includes(kind)) return payload
-  const subs = splitTop(payload.slice(1, -1)).map((x) => { const inner = x.slice(1, -1); const at = inner.indexOf(','); const k = inner.slice(0, at); return `(${TYPE[k] || k},${renderPayload(k, inner.slice(at + 1))})` })
-  return kind === 'NOT' ? `(!${subs[0]})` : `(${subs.join(kind === 'AND' ? ' && ' : ' || ')})`
-}
-
 export async function startFakeCore(t, { home, runtimeText = null, listen = 'tcp', secret = null, version = 'v1.19.32', mode = 'rule', findProcessMode = 'strict', tun = false, mixedPort = 7897, storeSelected = true, userProviders = {}, extraConfig = {} } = {}) {
-  const core = { requests: [], engineAlive: true, reAlive: true, mode, findProcessMode, tun, mixedPort, version, storeSelected, lastPayload: null, rejectPayload: null, failures: [], groups: new Map(), providers: new Map(), rules: [], remembered: new Map() }
+  const core = { requests: [], engineAlive: true, reAlive: true, mode, findProcessMode, tun, mixedPort, version, storeSelected, lastPayload: null, rejectPayload: null, failures: [], groups: new Map(), providers: new Map(), remembered: new Map() }
   const providerCount = (name, def) => {
     const file = def && def.path ? path.join(home, def.path) : null
     if (file && fs.existsSync(file)) return fs.readFileSync(file, 'utf8').split('\n').filter((l) => l.trim()).length
@@ -55,11 +42,6 @@ export async function startFakeCore(t, { home, runtimeText = null, listen = 'tcp
       if (!userProviders[n] && !n.startsWith('asight-')) core.providers.set(n, { name: n, ruleCount: 0, vehicleType: 'HTTP', behavior: def.behavior, type: 'Rule' })
       if (n.startsWith('asight-')) core.providers.set(n, { name: n, ruleCount: providerCount(n, def), vehicleType: 'File', behavior: def.behavior, type: 'Rule', def })
     }
-    core.rules = (cfg.rules || []).map((r, index) => {
-      const parts = String(r).split(',')
-      const last = parts.length - 1
-      return { index, type: TYPE[parts[0]] || parts[0], payload: renderPayload(parts[0], parts.slice(1, last).join(',')), proxy: parts[last], size: -1 }
-    })
     core.healthCheck()
   }
   core.healthCheck = (only) => {
@@ -83,7 +65,6 @@ export async function startFakeCore(t, { home, runtimeText = null, listen = 'tcp
     if (fault) return [fault.status, { message: fault.message }]
     if (method === 'GET' && p === '/version') return [200, { meta: true, version: core.version }]
     if (method === 'GET' && p === '/configs') return [200, { port: 0, 'mixed-port': core.mixedPort, 'allow-lan': false, mode: core.mode, 'find-process-mode': core.findProcessMode, tun: { enable: core.tun }, 'log-level': 'info', ...extraConfig }]
-    if (method === 'GET' && p === '/rules') return [200, { rules: core.rules }]
     if (method === 'GET' && p === '/providers/rules') return [200, { providers: Object.fromEntries([...core.providers].map(([n, v]) => [n, { name: n, ruleCount: v.ruleCount, vehicleType: v.vehicleType, behavior: v.behavior, type: v.type, updatedAt: '2026-10-07T00:00:00Z' }])) }]
     if (p.startsWith('/providers/rules/') && method === 'GET') return [405, '']
     let m = /^\/proxies\/(.+)$/.exec(p)

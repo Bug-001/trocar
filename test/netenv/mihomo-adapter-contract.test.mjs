@@ -16,7 +16,7 @@ import { gate, freePort, startMihomo } from './fixtures/real-mihomo.mjs'
 import { loopbackRuntimeText } from './fixtures/rules/runtime.mjs'
 import { block as blockInput, CC_CLI, CODEX_APP } from './fixtures/rules/inputs.mjs'
 import { VERGE_YAML, PROFILES_YAML, SCRIPT_JS, CONFIG_YAML } from './fixtures/verge-world.mjs'
-import { RECORDED_RULES, RECORDED_REFUSALS, RECORDED_FIXED, RECORDED_FORMS, RECORDED_NAMING } from './fixtures/real-rules.mjs'
+import { RECORDED_REFUSALS, RECORDED_FIXED } from './fixtures/real-rules.mjs'
 import { createController } from '../../src/netenv/mihomo/controller.mjs'
 import { createVergeAdapter, VERGE_DIR_NAME } from '../../src/netenv/adapters/clash-verge-rev.mjs'
 import { buildBlock, buildScriptJs, names } from '../../src/netenv/mihomo/rules.mjs'
@@ -56,21 +56,12 @@ const putText = (w, target, text) => new Promise((resolve, reject) => {
   r.end(text)
 })
 
-test('W57 adapter, reads: GET /rules gives the recorded payload strings and processRulesNaming finds a process rule in each; GET /configs and a missing group are as the adapter reads them', gate, async (t) => {
-  const w = await realWorld(t, { rules: RECORDED_RULES.map((r) => r.rule.replace(/,G$/, ',Manual')) })
-  const rules = (await w.ctl.get('/rules')).json.rules
-  assert.deepEqual(rules.map((r) => [r.type, r.payload]), RECORDED_RULES.map((r) => [r.type, r.payload]), 'the real core renders every rule as the table, which the fake core answers')
-  const naming = await w.adapter.processRulesNaming(RECORDED_FORMS)
-  assert.deepEqual([naming.ok, naming.reason], [true, null])
-  assert.deepEqual(naming.rules.map((x) => [x.type, x.forms]), RECORDED_NAMING, 'a process rule is found in AND, OR, NOT, a NOT inside an AND, and a regex with groups')
-  const text = JSON.stringify(naming)
-  for (const leak of ['Manual', 'x.example', 'y.example', '443', 'DIRECT']) assert.ok(!text.includes(leak), `${leak} did not leave processRulesNaming`)
-
-  assert.deepEqual(await w.adapter.readConfigs(), { ok: true, mode: 'rule', mixedPort: w.ports.mixed, tun: false, findProcessMode: 'strict' })
-  assert.deepEqual(await w.adapter.readFindProcessMode(), { mode: 'strict', reason: null })
-
-  // a group that is not in the runtime is a 404 on this core, and every read and write of the adapter takes it for what it is
-  assert.deepEqual(await w.adapter.refreshProbe(CC, { reenterPort: w.ports.mixed }), { ok: false, status: 404, reason: 'unreadable' })
+test('W57 adapter, reads: GET /configs and GET /version of the real core are what the adapter reads (mode, mixed-port, tun, version), and it asks nothing else', gate, async (t) => {
+  const w = await realWorld(t)
+  assert.deepEqual(await w.adapter.readConfigs(), { ok: true, mode: 'rule', mixedPort: w.ports.mixed, tun: false })
+  const f = await w.adapter.facts()
+  assert.match(f.runtime.version, /^v?\d+\.\d+/)
+  assert.deepEqual([f.runtime.mode, f.runtime.mixedPort, f.runtime.tun, f.controller.how], ['rule', w.ports.mixed, false, 'given'])
 })
 
 test('W57 adapter, a core that refuses a config: the adapter keeps the status and a reason class and none of the core\'s words; the recorded refusals and fixed messages are what this core says', gate, async (t) => {

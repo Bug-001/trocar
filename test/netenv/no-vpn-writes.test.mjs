@@ -91,15 +91,14 @@ test('N15 (a) `createController({ own: true })` (a client that may write to a co
   assert.ok(!writesToCore('createController({ endpoint, own: false }); const p = { own: true }'), 'another `own: true` in the same file is another thing')
 })
 
-// The Verge adapter exports no write function: TODAY's are the ones Task 6r deletes, so the list is the debt and shrinks to nothing.
-const WRITE_VERB = /^(write|strip|put|push|remove|install|apply|refresh|reset|insert)/i
-const ADAPTER_WRITERS_TODAY = ['refreshProbe']
+// The Verge adapter exports no write function (4.7 N15): not from the module, and not on the adapter object. A write verb in a name is the tell (the adapter's surface is also pinned to its reads in verge-adapter.test.mjs).
+const WRITE_VERB = /^(write|strip|put|push|remove|install|apply|refresh|reset|insert|delete|patch|post|save|update)/i
 test('N15 (a) the Verge adapter exports no write function (module and adapter object)', async (t) => {
   const mod = await import('../../src/netenv/adapters/clash-verge-rev.mjs')
   const w = await startWorld(t)
-  const names = [...Object.keys(mod), ...Object.keys(w.adapter)].filter((k) => WRITE_VERB.test(k))
-  assert.deepEqual([...new Set(names)].filter((k) => !ADAPTER_WRITERS_TODAY.includes(k)), [], 'a write function that is not on the debt list')
-  assert.deepEqual(ADAPTER_WRITERS_TODAY.filter((k) => !(k in mod) && !(k in w.adapter)), [], 'a function of the debt list that is gone: delete its name from ADAPTER_WRITERS_TODAY')
+  assert.deepEqual([...Object.keys(mod), ...Object.keys(w.adapter)].filter((k) => WRITE_VERB.test(k)), [])
+  assert.ok(Object.keys(w.adapter).length >= 5, 'and the check looks at something: the adapter\'s reads')
+  assert.ok(WRITE_VERB.test('writeScriptBlock') && WRITE_VERB.test('pushPayload') && WRITE_VERB.test('putSelect'), 'and it can see the names the withdrawn route had')
 })
 
 // ---- (b) runtime: a recording fs ---------------------------------------------------------------------------------------------------------------------------
