@@ -71,6 +71,30 @@ test('R12: a stale lock is taken over, not waited for — a dead pid, another st
   old.lock.release()
 })
 
+test('R12: a stale lock that another command replaces with its own live lock between the judgement and the takeover is NOT taken — the live lock stays, no stash is left behind, and the caller is told who holds it', () => {
+  const file = fileOf(); fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, JSON.stringify({ pid: 4242, start_time: '11', boot_id: 'b' })) // a dead holder's
+  const live = JSON.stringify({ pid: 4343, start_time: '22', boot_id: 'b' })
+  let swapped = false
+  const swap = () => { swapped = true; fs.rmSync(file); fs.writeFileSync(file, live) } // the other command takes the stale file away and creates its own, right now
+  const racing = { ...fs, renameSync: (a, b) => { if (a === file && !swapped) swap(); return fs.renameSync(a, b) }, rmSync: (p, o) => { if (p === file && !swapped) swap(); return fs.rmSync(p, o) } }
+  const world = { alive: (pid) => pid === 4343 || pid === process.pid, identity: ident({ 4343: { start_time: '22', boot_id: 'b' } }) }
+  const got = tryOpLock({ file, ...world, fs: racing })
+  assert.ok(swapped, 'the race happened')
+  assert.deepEqual([got.lock, got.holder && got.holder.pid], [null, 4343], 'not ours: the other command\'s lock is live')
+  assert.equal(fs.readFileSync(file, 'utf8'), live, 'and it is still there, whole')
+  assert.deepEqual(fs.readdirSync(path.dirname(file)), ['op.lock'], 'the file that was set aside is gone')
+})
+
+test('R12: a stale lock is taken out of the way without a trace — the directory holds the new lock and nothing else', async () => {
+  const file = fileOf(); fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, JSON.stringify({ pid: 4242, start_time: '11', boot_id: 'b' }))
+  const lock = await acquireOpLock({ file, alive: (pid) => pid === process.pid, identity: ident() })
+  assert.deepEqual(fs.readdirSync(path.dirname(file)), ['op.lock'])
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).pid, process.pid)
+  lock.release()
+})
+
 test('R12: release removes only a lock that is still ours — one taken over in the meantime is left to its new holder', async () => {
   const file = fileOf()
   const lock = await acquireOpLock({ file })
@@ -99,6 +123,7 @@ test('R12: six real processes race for the real file: exactly one wins (O_EXCL),
     let out = ''; c.stdout.on('data', (d) => { out += d }); c.on('close', () => resolve(out.trim()))
   }))
   const results = await Promise.all(runs)
+  // a loser that reads the file between the winner's O_EXCL create and its write sees no pid yet: `held:null` is the legal answer of a holder that is still writing
   assert.equal(results.filter((r) => r === 'won').length, 1, results.join(' '))
-  assert.equal(results.filter((r) => /^held:\d+$/.test(r)).length, 5, results.join(' '))
+  assert.equal(results.filter((r) => /^held:(\d+|null)$/.test(r)).length, 5, results.join(' '))
 })

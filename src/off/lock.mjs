@@ -30,8 +30,22 @@ function readLockHolder({ file, fs, alive, identity, now }) {
   return { holder, stale: false }
 }
 
+// A lock judged stale is taken out of the way ATOMICALLY: renamed to a name only this call knows, then judged once more, there, where nobody else can change it. Removing
+// it by `rmSync(file)` after a second read left a window: another command could take the stale file away and create its own lock in it between this one's read and its
+// unlink, and the unlink then removed THAT lock, so two commands held it. A live lock that was grabbed by mistake (a fresh one that replaced the stale file in the window)
+// is linked back (link fails when the name is taken again, which leaves the grabbed file's holder to find out at its release: it removes only a lock that is still its own).
+function takeOutStale({ file, fs, alive, identity, now, pid }) {
+  const aside = `${file}.stale-${pid}-${Math.random().toString(36).slice(2, 10)}`
+  try { fs.renameSync(file, aside) } catch (e) { if (e && e.code === 'ENOENT') return; throw e } // released or taken out by another command first
+  const grabbed = readLockHolder({ file: aside, fs, alive, identity, now })
+  if (grabbed && !grabbed.stale) { // somebody's live (or still being written) lock: put it back
+    try { fs.linkSync(aside, file) } catch (e) { if (!e || e.code !== 'EEXIST') { try { if (!fs.existsSync(file)) fs.renameSync(aside, file) } catch { /* below */ } } }
+  }
+  fs.rmSync(aside, { force: true })
+}
+
 /** One try, no wait → `{ lock: { release() }, holder: null }` when it is ours, or `{ lock: null, holder }` when someone else's live command holds it
- *  (`holder`: what the file names, or null when it is being written). A stale lock is removed and taken. Throws what the filesystem throws. */
+ *  (`holder`: what the file names, or null when it is being written). A stale lock is taken out of the way and replaced. Throws what the filesystem throws. */
 export function tryOpLock({ file, identity = procIdentity, alive = pidAlive, fs = nodeFs, now = Date.now, pid = process.pid } = {}) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   const me = identity(pid) || {}
@@ -40,11 +54,11 @@ export function tryOpLock({ file, identity = procIdentity, alive = pidAlive, fs 
     let fd
     try { fd = fs.openSync(file, 'wx', 0o600) } catch (e) {
       if (!e || e.code !== 'EEXIST') throw e
-      const seen = readLockHolder({ file, fs, alive, identity, now })
+      const at = now() // one reading of the clock for the judgement and the check after the rename (the file's mtime does not change by being renamed)
+      const seen = readLockHolder({ file, fs, alive, identity, now: () => at })
       if (seen === null) continue // released between the two calls
       if (!seen.stale) return { lock: null, holder: seen.holder }
-      const again = readLockHolder({ file, fs, alive, identity, now }) // judged again right before removing: a fresh lock someone just took is not ours to remove
-      if (again && again.stale) fs.rmSync(file, { force: true })
+      takeOutStale({ file, fs, alive, identity, now: () => at, pid })
       continue
     }
     try { fs.writeSync(fd, JSON.stringify(mine) + '\n'); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
