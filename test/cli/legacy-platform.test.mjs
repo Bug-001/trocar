@@ -820,3 +820,21 @@ test('1.6 §4: Desktop is captured only when every part holds — a MITM that is
     }
   } finally { await core.close() }
 })
+
+// audit rule-b 3, through the product path: the real `asight off` on a Mac (the old capture's lock, ~/.asight/legacy-op.lock) waited 10 s and exited 1 over a lock whose pid another
+// process had taken — "another asight command (pid 1) holds …" — the one command that must always work.
+test('R12 / audit rule-b 3: off on the old capture takes over a lock whose pid is another live process now (its `ps` start time differs), and still waits for one whose start time is the same', async () => {
+  const lockFile = (s) => path.join(s.home, '.asight', 'legacy-op.lock')
+  const make = (start) => { const s = macHome({ block: false, runtime: false, agents: [], steer: false, ca: false }); fs.mkdirSync(path.dirname(lockFile(s)), { recursive: true }); fs.writeFileSync(lockFile(s), JSON.stringify({ pid: 1, start_time: start, boot_id: null }) + '\n'); return s }
+  const stale = make('Wed Jul 1 00:00:00 2026') // fakeMac's ps says every pid started "Wed Oct 7 04:27:00 2026"
+  const mac = fakeMac({ loaded: [] })
+  const io = fakeIo()
+  assert.equal(await runOffCli([], offCtx(stale, io, { mac, deps: { alive: (pid) => pid === 1, lockWaitMs: 200 } })), 0, io.text())
+  assert.ok(!io.text().includes('another asight command'), io.text())
+  assert.ok(!fs.existsSync(lockFile(stale)), 'its own lock was released')
+  const live = make('Wed Oct 7 04:27:00 2026') // the same start time: pid 1 really is the command that wrote it
+  const mac2 = fakeMac({ loaded: [] }); const io2 = fakeIo()
+  assert.equal(await runOffCli(['--json'], offCtx(live, io2, { mac: mac2, deps: { alive: (pid) => pid === 1, lockWaitMs: 60 } })), 1)
+  assert.match(JSON.parse(io2.stdoutText()).problems.join('\n'), /another asight command \(pid 1\) holds .*legacy-op\.lock/)
+  assert.equal(JSON.parse(fs.readFileSync(lockFile(live), 'utf8')).pid, 1, 'and the holder\'s lock is untouched')
+})

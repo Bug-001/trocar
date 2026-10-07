@@ -37,6 +37,9 @@ function sandbox() {
     fs.writeFileSync(path.join(bin, name), '#!/bin/sh\nexit 0\n');
     fs.chmodSync(path.join(bin, name), 0o755);
   }
+  // `ps -o lstart= -p <pid>`: the identity the op lock asks of a process on a Mac (src/off/proc.mjs identityFor) — one fixed start time, so no real ps runs under npm test (0.1 §3)
+  fs.writeFileSync(path.join(bin, 'ps'), '#!/bin/sh\necho "Wed Oct  7 04:27:00 2026"\n');
+  fs.chmodSync(path.join(bin, 'ps'), 0o755);
   return { home, verge, bin, dead: path.join(home, 'no-such-mihomo.sock') };
 }
 const cli = (sb, args, sock) => run(process.execPath, [BIN, ...args], {

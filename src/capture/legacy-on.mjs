@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { EXIT, newReceipt } from '../off/schema.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
+import { identityFor } from '../off/proc.mjs'
 import { asightHome, backupDir, legacyLockPath, legacyManifestPath, legacyEventsFile, standalonePath, oldCaDir } from '../off/paths.mjs'
 import { newManifest, readManifestAt, saveManifestAt } from '../off/manifest.mjs'
 import { writeBackup, dropBackup } from '../off/backup.mjs'
@@ -144,7 +145,7 @@ export async function legacyOn({ home = nodeOs.homedir(), env = process.env, yes
   }
 
   let lock = null
-  try { lock = await acquireOpLock({ file: legacyLockPath(home), waitMs: deps.lockWaitMs ?? 10_000, fs, now: deps.ms || Date.now, sleep: deps.sleep, alive: deps.alive }) } catch (e) {
+  try { lock = await acquireOpLock({ file: legacyLockPath(home), waitMs: deps.lockWaitMs ?? 10_000, fs, now: deps.ms || Date.now, sleep: deps.sleep, alive: deps.alive, identity: deps.identity || identityFor({ platform, exec: deps.exec || null, env }) }) } catch (e) {
     if (!e || e.code !== LOCK_BUSY) throw e
     receipt.ok = false; receipt.notes.push(errMsg(e)); return { receipt, exit: EXIT.incomplete }
   }

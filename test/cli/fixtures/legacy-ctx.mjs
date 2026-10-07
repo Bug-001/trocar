@@ -56,6 +56,9 @@ export function fakeMac({ loaded = LABELS, pids = { 'com.asight.mitm': 4242 }, e
   const calls = []
   const state = { loaded: new Set(loaded), env: { ...env }, keychain }
   const run = (file, args) => {
+    // `ps -o lstart= -p <pid>`: the identity the op lock asks for on a Mac (src/off/proc.mjs identityFor). Not an action of the product: it is neither recorded nor ordered, so a test that
+    // lists the calls of a command lists what the command did to the machine; the answer is one fixed start time, the same for every pid
+    if (file === 'ps' && args[0] === '-o' && args[1] === 'lstart=') return { status: 0, stdout: 'Wed Oct  7 04:27:00 2026\n', stderr: '' }
     const cmd = [file, ...args].join(' ')
     calls.push(cmd); order.push(cmd)
     const ok = (stdout = '') => ({ status: 0, stdout, stderr: '' })

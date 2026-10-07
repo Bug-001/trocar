@@ -7,6 +7,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { acquireOpLock, tryOpLock } from '../../src/off/lock.mjs'
+import { identityFor } from '../../src/off/proc.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const LOCK_MODULE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/off/lock.mjs')
@@ -126,4 +127,37 @@ test('R12: six real processes race for the real file: exactly one wins (O_EXCL),
   // a loser that reads the file between the winner's O_EXCL create and its write sees no pid yet: `held:null` is the legal answer of a holder that is still writing
   assert.equal(results.filter((r) => r === 'won').length, 1, results.join(' '))
   assert.equal(results.filter((r) => /^held:(\d+|null)$/.test(r)).length, 5, results.join(' '))
+})
+
+// audit rule-b 3: on macOS there is no /proc, so a lock recorded no start time and a stale lock whose pid is now ANOTHER live process counted as live: a lock dated 2026-07-01
+// naming pid 1 made the real `asight off` wait 10 s and exit 1 — the way out, blocked (R12: "陈旧锁按 pid 加启动时间判").
+test('R12: on macOS the lock carries the start time `ps` gives, and a lock whose pid is another process now (its start time differs) is taken over — a lock of the same process is not', async () => {
+  const exec = (start) => (file, args) => (args[0] === '-o' ? { status: 0, stdout: `${start}\n`, stderr: '' } : { status: 1, stdout: '', stderr: '' })
+  const file = fileOf()
+  const mine = await acquireOpLock({ file, identity: identityFor({ platform: 'darwin', exec: exec('Wed Oct  7 04:27:00 2026') }) })
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { pid: process.pid, start_time: 'Wed Oct 7 04:27:00 2026', boot_id: null }, 'the start time is in the file now')
+  mine.release()
+  // a holder of July, whose pid a later process has taken: ps says it started in October
+  fs.writeFileSync(file, JSON.stringify({ pid: 1, start_time: 'Wed Jul 1 00:00:00 2026', boot_id: null }))
+  const taken = await acquireOpLock({ file, alive: () => true, identity: identityFor({ platform: 'darwin', exec: exec('Wed Oct  7 04:27:00 2026') }), waitMs: 0 })
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).pid, process.pid, 'taken over, not waited for')
+  taken.release()
+  // the same process (the command is really running): not stale
+  fs.writeFileSync(file, JSON.stringify({ pid: 1, start_time: 'Wed Oct 7 04:27:00 2026', boot_id: null }))
+  await assert.rejects(acquireOpLock({ file, alive: () => true, identity: identityFor({ platform: 'darwin', exec: exec('Wed Oct  7 04:27:00 2026') }), waitMs: 0 }), (e) => e.code === 'locked' && e.holder.pid === 1)
+})
+
+test('R12: a lock that recorded no start time (written before `ps` was asked for it, or where nothing could say) and names a live pid is not trusted for ever — older than any command runs (10 minutes) it is a crash\'s and is taken over; younger it is waited for; one that DID record a start time is judged by it, however old', async () => {
+  const file = fileOf(); fs.mkdirSync(path.dirname(file), { recursive: true })
+  const ageIt = (ms) => { const t = new Date(Date.now() - ms); fs.utimesSync(file, t, t) }
+  const world = { alive: () => true, identity: ident({ 1: { start_time: null, boot_id: null } }) }
+  fs.writeFileSync(file, JSON.stringify({ pid: 1, start_time: null, boot_id: null })); ageIt(9 * 60_000)
+  assert.deepEqual([tryOpLock({ file, ...world }).lock, tryOpLock({ file, ...world }).holder.pid], [null, 1], 'nine minutes: it may be a slow command')
+  ageIt(11 * 60_000)
+  const got = tryOpLock({ file, ...world })
+  assert.ok(got.lock, 'eleven minutes: nothing holds a lock that long')
+  got.lock.release()
+  fs.writeFileSync(file, JSON.stringify({ pid: 1, start_time: '5', boot_id: 'b' })); ageIt(3 * 3600_000)
+  const sure = tryOpLock({ file, alive: () => true, identity: ident({ 1: { start_time: '5', boot_id: 'b' } }) })
+  assert.deepEqual([sure.lock, sure.holder.pid], [null, 1], 'a start time that matches says the same process holds it, whatever the age')
 })

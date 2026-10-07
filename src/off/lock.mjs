@@ -13,6 +13,7 @@ export const LOCK_BUSY = 'locked'
 
 const LOCK_POLL_MS = 25
 const LOCK_WRITE_GRACE_MS = 2000 // a lock file with no pid in it that is younger than this is a holder still writing it, not a crash
+const LOCK_UNVERIFIABLE_STALE_MS = 10 * 60_000 // a lock whose pid is alive but that recorded no start time to tell it from a later process by: older than any command takes, it is a crash's
 
 const lockSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -27,6 +28,9 @@ function readLockHolder({ file, fs, alive, identity, now }) {
   const id = identity(holder.pid) || {}
   if (holder.boot_id != null && id.boot_id != null && String(holder.boot_id) !== id.boot_id) return { holder, stale: true, why: 'the machine has rebooted since (boot id differs)' }
   if (holder.start_time != null && id.start_time != null && String(holder.start_time) !== id.start_time) return { holder, stale: true, why: `pid ${holder.pid} is another process now (start time differs)` }
+  // No start time was recorded (a lock written where it could not be read: macOS before `ps` was asked, a /proc that hides it): the pid being alive says nothing — it may be any
+  // process that took the number after the crash that left this lock, and then `off`, the way out, waits for it to exit. Past the longest a command holds the lock, it is stale.
+  if (holder.start_time == null && now() - mtimeMs > LOCK_UNVERIFIABLE_STALE_MS) return { holder, stale: true, why: `pid ${holder.pid} is alive, but the lock recorded no start time to tell it from another process by, and it is older than any command runs` }
   return { holder, stale: false }
 }
 

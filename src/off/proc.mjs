@@ -90,6 +90,23 @@ export function procIdentity(pid, { root = '/proc', fs = nodeFs } = {}) {
   return { start_time, boot_id }
 }
 
+// `ps` prints dates in the user's language: under LC_ALL=zh_CN.UTF-8 or ja_JP.UTF-8 the five words of `lstart` are no longer "Wed Oct  7 04:27:00 2026" and every row
+// failed to parse — no error, just an empty table, which `off` read as "nobody is alive" (audit rule-b 2). The C locale gives the same words on every machine.
+const psEnv = (env = process.env) => ({ ...env, LC_ALL: 'C' })
+
+/** {start_time, boot_id} of a live process where there is no /proc (macOS): `ps -o lstart= -p <pid>` in the C locale, the blanks collapsed ("Wed Oct 7 04:27:00 2026");
+ *  null when `ps` does not know the pid. No boot id: the start time of a pid that is reused after a reboot differs all the same. `exec` is the injected runner (execTool). */
+export function psIdentity(pid, { exec = null, env = process.env } = {}) {
+  const r = execTool('ps', ['-o', 'lstart=', '-p', String(pid)], { run: exec, env: psEnv(env) })
+  return { start_time: r.code === 0 && /\S/.test(r.out) ? r.out.replace(/\s+/g, ' ').trim() : null, boot_id: null }
+}
+
+/** The reader of a process's identity for a platform: /proc on Linux, `ps` on macOS. Without one a lock can only say "its pid is alive", and a pid that another process has
+ *  taken since (a crash, a reboot) then reads as a command still running — which blocked `asight off`, the way out, for as long as that other process lived (audit rule-b 3). */
+export function identityFor({ platform = process.platform, exec = null, env = process.env, root = '/proc', fs = nodeFs } = {}) {
+  return platform === 'darwin' ? (pid) => psIdentity(pid, { exec, env }) : (pid) => procIdentity(pid, { root, fs })
+}
+
 /** Is the pid a process (signal 0): EPERM is a process of another user. */
 export const pidAlive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' } }
 
@@ -110,27 +127,34 @@ function procsOfLinux({ uid, root }) {
 
 // `ps -Axo pid=,ppid=,uid=,lstart=,command=`: lstart is five words ("Wed Oct  7 04:27:00 2026", local time), the command line joined by spaces — its
 // argument boundaries are lost, so argv is that line split on whitespace (a path with a space in it splits), and the environment of another
-// process cannot be read here at all (null: unknown).
+// process cannot be read here at all (null: unknown). Run in the C locale (psEnv). A table with lines in it of which not one parses is an error, not an empty table:
+// it would read as "nobody is alive" (D38; the same failure as a localized `ps`, whatever else changes the format).
 const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s+(\S.*)$/
-function procsOfPs({ uid, exec }) {
-  const r = execTool('ps', ['-Axo', 'pid=,ppid=,uid=,lstart=,command='], { run: exec })
+function procsOfPs({ uid, exec, env }) {
+  const r = execTool('ps', ['-Axo', 'pid=,ppid=,uid=,lstart=,command='], { run: exec, env: psEnv(env) })
   if (r.code !== 0) throw new Error(`ps failed (${r.code === null ? r.err : `exit ${r.code}: ${r.err}`}), so which agents are alive is not known`)
   const out = []
+  let rows = 0, parsed = 0
   for (const line of r.out.split('\n')) {
+    if (!line.trim()) continue
+    rows++
     const m = PS_ROW.exec(line)
-    if (!m || (uid != null && Number(m[3]) !== uid)) continue
+    if (!m) continue
+    parsed++
+    if (uid != null && Number(m[3]) !== uid) continue
     const argv = m[5].trim().split(/\s+/)
     const at = new Date(m[4].replace(/\s+/g, ' ')).getTime()
     out.push({ pid: Number(m[1]), ppid: Number(m[2]), uid: Number(m[3]), startedAt: Number.isFinite(at) ? at : null, exe: argv[0], argv, env: () => null })
   }
+  if (rows > 0 && parsed === 0) throw new Error(`ps printed ${rows} line(s) and none could be read (the first: ${JSON.stringify(r.out.split('\n').find((l) => l.trim()).slice(0, 80))}), so which agents are alive is not known`)
   return out
 }
 
 /** The live processes of one user: `[{ pid, ppid, uid, startedAt: ms | null, exe, argv, env: () => Map | null }]` — `env` is read when asked for.
  *  `uid` null lists everyone's. Linux reads `root` (/proc); macOS runs `ps` through `exec` (a spawnSync-like runner a test injects; execTool
  *  refuses a real one under npm test). Another platform, or a table that cannot be read, rejects. */
-export async function listProcs({ uid = typeof process.getuid === 'function' ? process.getuid() : null, root = '/proc', platform = process.platform, exec = null } = {}) {
+export async function listProcs({ uid = typeof process.getuid === 'function' ? process.getuid() : null, root = '/proc', platform = process.platform, exec = null, env = process.env } = {}) {
   if (platform === 'linux') return procsOfLinux({ uid, root })
-  if (platform === 'darwin') return procsOfPs({ uid, exec })
+  if (platform === 'darwin') return procsOfPs({ uid, exec, env })
   throw new Error(`there is no process-table reader for ${platform}, so which agents are alive is not known`)
 }

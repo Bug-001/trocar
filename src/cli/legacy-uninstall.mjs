@@ -9,6 +9,7 @@ import path from 'node:path'
 import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
+import { identityFor } from '../off/proc.mjs'
 import { asightHome, backupDir, legacyLockPath, legacyEventsFile, legacyManifestPath, standalonePath } from '../off/paths.mjs'
 import { readManifestAt } from '../off/manifest.mjs'
 import { dropBackup, orphanBackups } from '../off/backup.mjs'
@@ -56,7 +57,7 @@ export async function legacyUninstallCli(argv, { io, env = process.env, home = n
       Object.assign(receipt, { changed: [], removed: [], skipped: [], notes: [], planned: false })
     }
     let lock = null
-    try { lock = await acquireOpLock({ file: legacyLockPath(home), waitMs: deps.lockWaitMs ?? 10_000, alive: deps.alive, fs, now: ms, sleep }) } catch (e) {
+    try { lock = await acquireOpLock({ file: legacyLockPath(home), waitMs: deps.lockWaitMs ?? 10_000, alive: deps.alive, identity: deps.identity || identityFor({ platform, exec: deps.exec || null, env }), fs, now: ms, sleep }) } catch (e) {
       if (!e || e.code !== LOCK_BUSY) throw e
       receipt.ok = false; receipt.problems.push(errText(e)); receipt.relayed = 'unknown'; receipt.relayed_reason = 'nothing was done'; print(receipt); return EXIT.incomplete
     }

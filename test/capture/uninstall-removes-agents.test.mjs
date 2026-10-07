@@ -34,7 +34,7 @@ function sandbox() {
   // Stub the OS tools so uninstall touches nothing real.
   const bin = path.join(home, 'stubbin');
   fs.mkdirSync(bin, { recursive: true });
-  const answers = { launchctl: 'case "$1" in list) exit 113;; *) exit 0;; esac', security: 'case "$1" in find-certificate) exit 44;; *) exit 0;; esac', curl: 'exit 0' };
+  const answers = { launchctl: 'case "$1" in list) exit 113;; *) exit 0;; esac', security: 'case "$1" in find-certificate) exit 44;; *) exit 0;; esac', curl: 'exit 0', ps: 'echo "Wed Oct  7 04:27:00 2026"' }; // ps: the identity the op lock asks of a process on a Mac (src/off/proc.mjs identityFor), one fixed start time, so no real ps runs under npm test (0.1 §3)
   for (const [name, body] of Object.entries(answers)) {
     const p = path.join(bin, name);
     fs.writeFileSync(p, `#!/bin/sh\n${body}\n`);

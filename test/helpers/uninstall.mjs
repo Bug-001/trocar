@@ -13,7 +13,7 @@ export async function uninstallCollector({ home, env = {}, purgeData = false, sc
   const exec = deps.exec ? { run: deps.exec } : recordingExec()
   let how = 'none'
   const d = {
-    exec: exec.run, procs: scan, roots: roots || { node: [...tls.rootCertificates], osText: '' }, sleep: async () => {}, drainMs: 0,
+    exec: exec.run, platform: 'linux', procs: scan, roots: roots || { node: [...tls.rootCertificates], osText: '' }, sleep: async () => {}, drainMs: 0,
     ...(stop ? { daemonState: async () => ({ state: 'none', lock: null }), stopDaemon: async () => { how = await stop(); return { stopped: true, how: how === 'stopped' ? 'signal' : 'none', pid: null, signals: how === 'stopped' ? ['SIGTERM'] : [], helper_pid: null } } } : {}),
     ...deps,
   }

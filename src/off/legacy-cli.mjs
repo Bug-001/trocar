@@ -7,6 +7,7 @@ import nodeFs from 'node:fs'
 import nodeOs from 'node:os'
 import { EXIT, newReceipt } from './schema.mjs'
 import { acquireOpLock, LOCK_BUSY } from './lock.mjs'
+import { identityFor } from './proc.mjs'
 import { legacyLockPath, legacyEventsFile } from './paths.mjs'
 import { formatOffReceipt } from './receipt.mjs'
 import { legacyArtifacts, undoLegacy, LEGACY_NOTE } from './legacy.mjs'
@@ -56,7 +57,7 @@ export async function legacyOffCli(argv, { io, env = process.env, home = nodeOs.
       return EXIT.ok
     }
     let lock = null
-    try { lock = await acquireOpLock({ file: legacyLockPath(home), waitMs: deps.lockWaitMs ?? LEGACY_LOCK_WAIT_MS, alive: deps.alive, fs, now: ms, sleep }) } catch (e) {
+    try { lock = await acquireOpLock({ file: legacyLockPath(home), waitMs: deps.lockWaitMs ?? LEGACY_LOCK_WAIT_MS, alive: deps.alive, identity: deps.identity || identityFor({ platform, exec: deps.exec || null, env }), fs, now: ms, sleep }) } catch (e) {
       if (!e || e.code !== LOCK_BUSY) throw e
       receipt.ok = false; receipt.problems.push(String(e.message)); receipt.relayed = 'unknown'; receipt.relayed_reason = 'nothing was done'
       io.out(json ? JSON.stringify(receipt, null, 2) : formatOffReceipt(receipt, { home }))

@@ -31,7 +31,7 @@ export async function installedHome({ names = ['claude-code', 'codex'], seed = n
   const descs = allDescriptors.filter((d) => names.includes(d.name))
   const unit = () => userUnit({ home, node: '/usr/bin/node', script: '/repo/bin/asight.mjs', run: sys.exec.run })
   const onOpts = (o = {}) => ({ home, env: sh.env, osName: 'linux', harnesses: descs, freePort: async () => 47011, roots: ROOTS, confirm: async () => true, unit: unit(), request: sys.daemon.request, socketPath: SOCK, sleep: async () => {}, linger: () => true, user: 'alice', ...o })
-  const offDeps = (o = {}) => ({ exec: sys.exec.run, request: sys.daemon.request, socketPath: SOCK, procs: async () => [], roots: ROOTS, sleep: tick, ...o })
+  const offDeps = (o = {}) => ({ exec: sys.exec.run, request: sys.daemon.request, socketPath: SOCK, procs: async () => [], roots: ROOTS, sleep: tick, platform: 'linux', ...o }) // the sandbox is a Linux user's: a process's identity is read from /proc, not by running `ps` on whatever the tests run on
   const s = {
     home, sh, dir, sys, descs,
     on: (o) => turnOn(onOpts(o)),

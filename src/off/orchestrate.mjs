@@ -27,7 +27,7 @@ import { planByMarker, undoByMarker } from './marker.mjs'
 import { daemonState, stopDaemon, helperGone, isRedirectorHelper } from './daemon-stop.mjs'
 import { controlRequest, controlSocketPath } from './control-client.mjs'
 import { disableAutostart, unitFilePath } from './autostart.mjs'
-import { listProcs, procIdentity, pidAlive } from './proc.mjs'
+import { listProcs, identityFor, pidAlive } from './proc.mjs'
 import { appendFlowEvent } from './events.mjs'
 import { confirm } from './io.mjs'
 import { describeEntry } from './journal.mjs'
@@ -45,12 +45,12 @@ export function offWorld({ home = nodeOs.homedir(), env = process.env, deps = {}
   const w = {
     home, env, dir, fs: deps.fs || nodeFs, exec: deps.exec || null, request: deps.request || controlRequest,
     clock: deps.now || (() => new Date()), ms: deps.ms || Date.now, sleep: deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
-    alive: deps.alive || pidAlive, identity: deps.identity || procIdentity, isHelper: deps.isHelper || isRedirectorHelper, kill: deps.kill,
+    alive: deps.alive || pidAlive, identity: deps.identity || identityFor({ platform: deps.platform || process.platform, exec: deps.exec || null, env }), isHelper: deps.isHelper || isRedirectorHelper, kill: deps.kill,
     lockFile: path.join(dir, 'lock'), stateF: stateFile(home), deps, standalone: deps.standalone === true, // the single-file asight-off passes `standalone`: it words what it cannot do as "run asight off" (R3, V35)
     socketPath: deps.socketPath !== undefined ? deps.socketPath : (() => { try { return controlSocketPath({ env }) } catch { return null } })(),
   }
   const once = (fn) => { let p; return () => p || (p = Promise.resolve().then(fn)) } // the process table is read once per run
-  w.procs = once(deps.procs || (() => listProcs({ exec: w.exec, platform: deps.platform || process.platform })))
+  w.procs = once(deps.procs || (() => listProcs({ exec: w.exec, platform: deps.platform || process.platform, env })))
   w.daemonState = deps.daemonState || (() => daemonState({ lockFile: w.lockFile, socketPath: w.socketPath, request: w.request, identity: w.identity, alive: w.alive, now: w.ms, fs: w.fs, timeoutMs: OFF_ASK_MS }))
   w.stopDaemon = deps.stopDaemon || ((o = {}) => stopDaemon({ lockFile: w.lockFile, socketPath: w.socketPath, exec: w.exec, kill: w.kill, alive: w.alive, identity: w.identity, isHelper: w.isHelper, sleep: w.sleep, now: w.ms, fs: w.fs, env, ...o }))
   w.unitManaged = () => w.fs.existsSync(unitFilePath(home))
