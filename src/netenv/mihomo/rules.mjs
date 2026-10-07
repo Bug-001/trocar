@@ -246,12 +246,17 @@ function asightApply(config, B) {
   return config;
 }
 
-// what the splice takes from a block (the route files are written separately); every name must start with asight-, or taking the block out again would miss it
+// what the splice takes from a block (the route files are written separately); every name must start with asight-, and every rule must be a shape the strip takes out again
+// (a RULE-SET of ours, or the loopback rule right in front of one), or taking the block out would miss it and the strip would not be the exact inverse
 export function blockData(block) {
   const ok = block && Array.isArray(block.proxies) && Array.isArray(block.groups) && Array.isArray(block.rules) && block.providers && typeof block.providers === 'object'
   if (!ok) throw new TypeError('a block is { proxies, groups, providers, rules } as buildBlock() returns it')
   for (const item of [...block.proxies, ...block.groups]) if (typeof item?.name !== 'string' || !item.name.startsWith(NAME_PREFIX)) throw new TypeError(`every name in a block starts with ${NAME_PREFIX}: ${JSON.stringify(item?.name)}`)
   for (const key of Object.keys(block.providers)) if (!key.startsWith(NAME_PREFIX)) throw new TypeError(`every provider in a block starts with ${NAME_PREFIX}: ${JSON.stringify(key)}`)
+  const ours = (r) => typeof r === 'string' && OUR_RULE.test(r)
+  block.rules.forEach((r, i) => {
+    if (!ours(r) && !(typeof r === 'string' && LOOP_RULE.test(r) && ours(block.rules[i + 1]))) throw new TypeError(`every rule in a block is a RULE-SET of ours, or the loopback rule right in front of one, or the strip would leave it behind: ${JSON.stringify(r)}`)
+  })
   return { proxies: block.proxies, groups: block.groups, providers: block.providers, rules: block.rules }
 }
 const configOf = (runtime) => {

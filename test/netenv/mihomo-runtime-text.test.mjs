@@ -141,6 +141,12 @@ test('the copy the proxy software writes after it ran the global script (block s
   assert.deepEqual(parseYaml(splice(REGENERATED, B1)), spliceRuntime({ runtime: runtimeFixture(), block: B1 }))
 })
 
+test('a block with a rule the strip would not take out again is refused before anything is written (the same guard as the object path)', () => {
+  const odd = { ...B1, rules: [...B1.rules, 'DOMAIN,evil.example.com,asight-sw-claude-code.cli'] }
+  assert.throws(() => spliceRuntimeText({ yaml: runtimeText(), block: odd }), /every rule in a block/)
+  assert.throws(() => spliceRuntimeText({ yaml: runtimeText(), block: { ...B1, rules: [...B1.rules, B1.rules[0]] } }), /every rule in a block/, 'a loopback rule with nothing of ours behind it')
+})
+
 test('what only looks like asight\'s is the user\'s: a nested name inside a node, a node called asightx, a node, a group and a provider with asight- in the MIDDLE of the name, a rule that mentions an asight- name, a loopback-shaped rule of their own', () => {
   const text = `proxies:
 - name: asightx

@@ -296,6 +296,27 @@ test('W9 only asight- names are asight\'s: a user rule that mentions one, a user
   assert.deepEqual(stripRuntime({ runtime: out }), user)
 })
 
+test('W9 a block whose rules are not the two shapes the strip takes out again is refused by the splice and by the script, so the strip stays the exact inverse', () => {
+  const [loop, ...ours] = BLOCK2.rules
+  const odd = (rules) => ({ ...BLOCK2, rules })
+  const refused = [
+    ['a rule that is neither shape', [loop, ours[0], 'DOMAIN,evil.example.com,asight-sw-claude-code.cli']],
+    ['a RULE-SET that does not end in one of our selects', [loop, 'RULE-SET,asight-r-claude-code.cli,Proxy']],
+    ['a RULE-SET of a provider that is not ours', [loop, 'RULE-SET,user-ads,asight-sw-claude-code.cli']],
+    ['the loopback rule at the end, with nothing of ours behind it', [...BLOCK2.rules, loop]],
+    ['the loopback rule twice in front of one RULE-SET', [loop, loop, ours[0]]],
+    ['the loopback rule in front of another rule', [loop, 'MATCH,DIRECT']],
+    ['a rule that is not a string', [loop, ours[0], 7]],
+  ]
+  for (const [what, rules] of refused) {
+    assert.throws(() => spliceRuntime({ runtime: runtimeFixture(), block: odd(rules) }), /every rule in a block/, `${what}: spliceRuntime`)
+    assert.throws(() => buildScriptJs({ block: odd(rules) }), /every rule in a block/, `${what}: buildScriptJs`)
+  }
+  assert.doesNotThrow(() => spliceRuntime({ runtime: runtimeFixture(), block: odd([]) }), 'a block with no rule at all has nothing the strip could miss')
+  assert.doesNotThrow(() => spliceRuntime({ runtime: runtimeFixture(), block: odd(ours) }), 'a RULE-SET of ours needs no loopback rule in front of it')
+  assert.doesNotThrow(() => spliceRuntime({ runtime: runtimeFixture(), block: BLOCK2 }), 'buildBlock\'s own output is always taken out again')
+})
+
 // ---- W10 (the script) and W58: the global script runs in node:vm; the payload path and the script give the same config -------------------------------
 // Verge runs Script.js in its own embedded engine, not in V8 (4.8 §3.1 end): node:vm proves the logic, the syntax scan below keeps the script to what that engine
 // ran, and the first real run of the template is W32 on Windows (the template changes only together with a re-run of it).
@@ -392,7 +413,7 @@ test('W10 a sentinel that is not two different one-line comments, or data that h
   bad({ begin: '// a\nb', end: '// <<< x' }, /comment/)
   bad({ begin: '// same', end: '// same' }, /differ/)
   bad({ begin: '// >>> x', end: 5 }, /sentinel/)
-  const sneaky = { ...BLOCK2, rules: [...BLOCK2.rules, `x ${SCRIPT_SENTINEL.end}`] }
+  const sneaky = { ...BLOCK2, proxies: [...BLOCK2.proxies, { name: 'asight-x', note: `x ${SCRIPT_SENTINEL.end}` }] }
   assert.throws(() => buildScriptJs({ block: sneaky }), /sentinel/)
   assert.throws(() => buildScriptJs({ block: { ...EMPTY, proxies: [{ name: 'node-a' }] } }), /asight-/)
   assert.throws(() => buildScriptJs({}), /block/)
