@@ -1,5 +1,5 @@
 // capture-format.test.mjs — the record is one format whichever way the call reached the engine (the data format is the same on every platform;
-// RFC 4.8 §5.6; acceptance W14 here, W18 — the reader accepts all three `capture` values — with Task 2(b)).
+// RFC 4.8 §5.6; acceptance W14 here and W18: the reader takes both `capture` values, transparent and proxy (D43).
 // The same exchange (a JSON call and an SSE call on one TLS connection, to one origin) goes through the transparent door (what Linux
 // uses) and through the proxy ingress (what the Windows proxy mode uses). The envelopes must be equal except for the
 // fields that are about the route: time, ids, `capture`, `dst`, `proc.pid`, `proc.exe`. The connection rows of a direct upstream must be
@@ -12,6 +12,12 @@ import { createEngine } from '../../../src/collector/core/engine/engine.mjs'
 import { createStaticRedirector } from '../../../src/collector/core/redirector.mjs'
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
+import { buildTransparentEnvelope } from '../../../src/collector/core/record/envelope.mjs'
+import { runEtl } from '../../../src/etl/orchestrator.mjs'
+import { freshConn } from '../../etl/helpers.mjs'
+import { harnessOf, observerEffectsOf } from '../../../src/dissect/harnesses.mjs'
+import { captureLabelsOf } from '../../../src/dissect/capture-labels.mjs'
+import { CAPTURE_KINDS } from '../../../src/health/codes.mjs'
 import { within, closeWithin } from '../../helpers/bounded.mjs'
 
 const T = { timeout: 30_000 }
@@ -98,8 +104,8 @@ test('W14 the same calls through the transparent door and through the ingress: t
   const base = await run(t, 'transparent', 'transparent')
   assert.equal(base.envelopes.length, 2); assert.deepEqual(base.envelopes.map((e) => [e.seq, e.is_llm_call, e.method, e.endpoint]), [[0, true, 'POST', '/v1/messages'], [1, true, 'POST', '/v1/messages']])
   assert.equal(base.envelopes[1].resp.kind, 'sse', 'the SSE call is a real stream, parsed as one'); assert.ok(base.envelopes[0].req_head_raw.startsWith('POST /v1/messages HTTP/1.1\r\n'), 'verbatim heads')
-  // One run through the ingress, not one per `capture` value: nothing reads meta.capture yet (the todo below), and `strip` removes the field, so a second run
-  // with another value would be the same run again and say nothing.
+  // One run through the ingress, not one per `capture` value: `strip` removes the field (this test is about everything else),
+  // and the value itself is asserted by the test below — a second run with another value would be the same run again.
   {
     const capture = 'proxy', via = await run(t, 'ingress', capture)
     assert.deepEqual(via.envelopes.map(strip), base.envelopes.map(strip), 'the envelopes, minus ts*, ids, capture, dst, proc.pid, proc.exe')
@@ -118,15 +124,59 @@ test('W14 the same calls through the transparent door and through the ingress: t
   }
 })
 
-// What the envelope says about how the call reached the engine (4.8 §5.6, invariant 4). The ingress's meta carries `capture`, and nothing reads it yet: the envelope
-// builder writes the literal 'transparent' (collector/core/record/envelope.mjs, two places) and the `flow` that startTee hands the exchange recorder (flow.mjs) has no
-// `capture`. So today a Windows call is labelled `transparent`: the wrong label, and no other test sees it (`strip` above removes the field). Task 2(b) is those two
-// literals plus `capture: meta.capture` in that `flow`. A todo, not a skip: it runs, fails today, and goes green by itself when 2(b) is in. HARD DEPENDENCY OF TASK 8:
-// the daemon wiring that puts Windows data on disk must not land while this still carries `todo`.
-test('W14 (Task 2(b)) an envelope that came through the ingress carries the capture value its meta says: proxy', { ...T, todo: 'Task 2(b): the envelope builder writes the literal transparent and startTee passes no meta.capture; a hard dependency of Task 8' }, async (t) => {
+// What the envelope says about how the call reached the engine (4.8 §5.6, invariant 4). The ingress's meta carries `capture`, `flow.mjs`'s startTee hands it to the
+// exchange recorder inside the flow, and the envelope builder takes it from there (the literal 'transparent' stood before Task 2(b)): a Windows call says `proxy`.
+// HARD DEPENDENCY OF TASK 8: the daemon wiring that puts Windows data on disk must not land while an ingress call is still labelled transparent (plan Task 8,
+// a known seam) — the daemon-path test goes green only through this one.
+test('W14 (Task 2(b)) an envelope that came through the ingress carries the capture value its meta says: proxy', T, async (t) => {
+  assert.deepEqual(CAPTURE_KINDS, ['transparent', 'proxy'], 'the closed set the envelope draws its capture value from (4.1 信封表; codes.test.mjs holds it too)')
   for (const capture of ['proxy']) {
     const via = await run(t, 'ingress', capture)
     assert.deepEqual(via.envelopes.map((e) => e.capture), [capture, capture], `${capture}: the envelope says how the call reached the engine`)
   }
-  assert.deepEqual((await run(t, 'transparent', 'transparent')).envelopes.map((e) => e.capture), ['transparent', 'transparent'], 'and a transparent call still says so')
+  assert.deepEqual((await run(t, 'transparent', 'transparent')).envelopes.map((e) => e.capture), ['transparent', 'transparent'], 'and a transparent call still says so (a meta with no capture keeps the default)')
+})
+
+// W18 (4.8 §5.6 读取侧): the read side of BOTH capture values. The envelopes are built directly (buildTransparentEnvelope,
+// the same builder the engine's tee calls): the engine path is W14 above, this is the reader's half — a proxy envelope with
+// `proc.pid:null` (the no-pid meta of 4.8 §5.2) is one calls row in DuckDB, the observer-effect table applies to proxy as to
+// transparent, and the board labels the routing in place. Nothing in the reader may treat a pid of null or a proxy capture as
+// an error or a missing record (3.4 never splits or joins a session by pid).
+const W18_BODY = JSON.stringify({ model: 'claude-sonnet-4-5', max_tokens: 8, stream: false, messages: [{ role: 'user', content: 'w18' }] })
+const W18_REPLY = JSON.stringify({ id: 'msg_w18', type: 'message', role: 'assistant', content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 2, output_tokens: 1 } })
+function envelopeOf(capture, pid) {
+  const rh = [['Host', 'api.anthropic.com'], ['x-claude-code-session-id', 'sess-w18'], ['user-agent', 'claude-cli/1.0'], ['x-api-key', 'sk-ant-FAKE'], ['Content-Type', 'application/json'], ['Content-Length', String(Buffer.byteLength(W18_BODY))]]
+  const sh = [['content-type', 'application/json'], ['content-length', String(Buffer.byteLength(W18_REPLY))]]
+  return buildTransparentEnvelope({
+    id: `env-${capture}-${pid ?? 'nopid'}`, seq: 0,
+    flow: { id: `flow-${capture}-${pid ?? 'nopid'}`, host: 'api.anthropic.com', scheme: 'https', dst: { address: '93.184.216.34', port: 443, family: 4 }, proc: { pid: pid ?? null, exe: pid != null ? 'C:\\Users\\u\\app\\node.exe' : null, agent: 'claude-code' }, capture },
+    req: { head: { raw: Buffer.from(`POST /v1/messages HTTP/1.1\r\nHost: api.anthropic.com\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(W18_BODY)}\r\n\r\n`, 'latin1'), startLine: 'POST /v1/messages HTTP/1.1', headers: rh, method: 'POST', target: '/v1/messages' },
+      body: Buffer.from(W18_BODY), truncated: false, tsStart: '2026-10-08T00:00:00.000Z' },
+    resp: { head: { raw: Buffer.from(`HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(W18_REPLY)}\r\n\r\n`, 'latin1'), status: 200, headers: sh },
+      body: Buffer.from(W18_REPLY), truncated: false, tsStart: '2026-10-08T00:00:01.000Z', tsEnd: '2026-10-08T00:00:02.000Z' },
+  })
+}
+test('W18 the read side of both capture kinds: a pid-null proxy envelope ETLs to one calls row, the effect table and the routing label cover both', T, async () => {
+  for (const [capture, pid] of [['proxy', null], ['transparent', 4242]]) {
+    const env = envelopeOf(capture, pid)
+    assert.equal(env.capture, capture, 'the builder writes the meta\'s capture value')
+    assert.equal(harnessOf(env).id, 'cc', 'the read-side harness table names the harness from proc.agent alone — a pid of null is no exception')
+    const conn = await freshConn()
+    const stats = await runEtl([env], conn)
+    assert.equal(stats.quarantined, 0, `${capture}: the reader claims the envelope`)
+    const n = Number((await conn.runAndReadAll('SELECT count(*) AS n FROM calls')).getRowObjects()[0].n)
+    assert.equal(n, 1, `${capture}: one calls row in DuckDB (proc.pid ${pid})`)
+  }
+  // the observer-effect table applies to both kinds (4.8 §5.6); a legacy capture stays the control group
+  const cc = (capture) => ({ proc: { pid: 4242, exe: '/x/node', agent: 'claude-code' }, capture })
+  assert.deepEqual(observerEffectsOf(cc('proxy')), observerEffectsOf(cc('transparent')), 'the same effects for a proxy call')
+  assert.deepEqual((observerEffectsOf(cc('proxy')) || []).map((e) => e.id), ['cc-gzip-off'], 'a proxy call carries its effect')
+  assert.equal(observerEffectsOf({ ...cc('proxy'), capture: 'mitm' }), null, 'a legacy capture never does')
+  // the board labels the routing in place (captureLabelsOf): a proxy call says how it reached the engine, the default does not
+  const routing = (rec) => captureLabelsOf(rec).find((l) => l.id === 'capture-routing') || null
+  const label = routing(envelopeOf('proxy', null))
+  assert.ok(label, 'a proxy call carries the routing label')
+  assert.equal(label.label, '经 asight 内核(代理模式)')
+  assert.ok(/kernel/.test(label.text), 'the label says what it means, not only the name')
+  assert.equal(routing(envelopeOf('transparent', 4242)), null, 'the transparent default carries no routing label')
 })

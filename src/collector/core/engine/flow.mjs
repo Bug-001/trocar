@@ -497,7 +497,7 @@ export function handleFlow(client, meta, ctx) {
   // the decrypted call(s) on this connection go to the exchange tee
   const startTee = (host, scheme) => {
     activeTee = createExchangeTee({
-      flow: { id: rec.flow_id, host, scheme, dst: meta.dst, proc: { pid: meta.pid, exe: meta.exe ?? null, agent: meta.agent } },
+      flow: { id: rec.flow_id, host, scheme, dst: meta.dst, proc: { pid: meta.pid, exe: meta.exe ?? null, agent: meta.agent }, capture: meta.capture }, // capture: 4.8 §5.6 — the ingress meta says 'proxy'; without one the envelope keeps 'transparent'
       recordStore: ctx.store, isRecording: () => ctx.isRecording(meta), wsTerminal: meta.wsTerminal ?? null, retention: ctx.retention, onFailure: ctx.failure,
       onTurnEnd: () => { if (gate) gate.onTurnEnd() }, // a WebSocket call closed on its terminal message: the gate closes after this chunk
     })

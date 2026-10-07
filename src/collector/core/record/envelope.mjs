@@ -58,7 +58,8 @@ export function buildTransparentEnvelope({ id, flow, seq, req, resp, error = nul
     reqBody: logged ? null : req.body,
     reqHeaders,
     resp: shaped,
-    capture: 'transparent',
+    // 4.8 §5.6: how the call reached the engine — flow.capture is the meta's capture (proxy on Windows), the default is transparent (Linux and the other per-process captures)
+    capture: flow.capture || 'transparent',
     error: !haveResp,
     host: flow.host, trafficClass, retention: level,
     reqWireBytes: req.wire ?? (req.body ? req.body.length : 0),
@@ -109,7 +110,7 @@ export function buildWsEnvelope({ id, flow, seq, upgrade, call, wsRaw, error = n
     host: flow.host, trafficClass: call.class || null, retention: call.level || 'full',
     reqWireBytes: call.wire ? call.wire.req : 0, respWireBytes: call.wire ? call.wire.resp : 0,
     resp: error ? { status: null, kind: 'error', error: { type: error.type, message: error.message }, partial: messages } : messages,
-    capture: 'transparent', error: !!error,
+    capture: flow.capture || 'transparent', error: !!error, // 4.8 §5.6, as above
   })
   env.req_body = typeof opener === 'string' || (opener && opener.verbatim === false) ? opener : null // keeps its key position
   const ext = (upgrade.resp.head.headers || []).filter(([k]) => k.toLowerCase() === 'sec-websocket-extensions').map(([, v]) => v)

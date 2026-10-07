@@ -22,7 +22,7 @@ export const LEGACY_SESSION_KEYS = [H('x-claude-code-session-id'), H('x-session-
 // then `other`. A harness with no entries is not a loss: its calls are `other`, kept in full (4.1 Edge cases).
 const ROW = { ua: null, parentKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [] };
 const T = (host, cls, pathSource) => ({ host, class: cls, ...(pathSource ? { path: pathSource } : {}) });
-const effect = (id, cause, what) => ({ id, captures: ['transparent'], cause, what });
+const effect = (id, cause, what) => ({ id, captures: ['transparent', 'proxy'], cause, what }); // 4.8 §5.6: injected trust changes the agent the same way in both modes; a legacy MITM / reverse-proxy capture still never carries one
 
 export const HARNESSES = Object.freeze([
   { ...ROW, id: 'cc', agents: ['cc', 'claude-code'], ua: /claude-cli|claude-code/,
