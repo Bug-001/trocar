@@ -349,9 +349,10 @@ const b64 = (s) => Buffer.from(s, 'base64')
 const CRED = { username: 'u1', password: 'pw-SECRET' }
 
 // A TLS origin signed by a private CA behind a recording tap: what each connection to it received (after any proxy prelude), and sent.
-async function origin(t) {
+// `hold` (a promise): the origin answers a request only once it settles; `onRequest()`: called when a request head has arrived (the drain test below needs both)
+async function origin(t, { hold = null, onRequest = null } = {}) {
   const srv = tls.createServer({ SNICallback: (n, cb) => cb(null, privIssuer.secureContextFor(n)), ALPNProtocols: ['http/1.1'] }, (s) => {
-    let seen = ''; s.on('data', (d) => { seen += d.toString('latin1'); if (seen.includes('\r\n\r\n')) { seen = ''; s.write(RESP) } }); s.on('error', () => {})
+    let seen = ''; s.on('data', (d) => { seen += d.toString('latin1'); if (seen.includes('\r\n\r\n')) { seen = ''; if (onRequest) onRequest(); Promise.resolve(hold).then(() => s.write(RESP)) } }); s.on('error', () => {})
   })
   await listen(srv)
   const conns = [], sockets = new Set()
@@ -777,5 +778,30 @@ test('W13 a client that sends more than 256 KiB before the tunnel is open is cut
   assert.deepEqual(checkRecord(L.failures[0]), []); assert.equal(L.flows.length, 0)
 })
 
-// the drain gate (CLI T5, 1.6 §1.3): an ingress flow mid-SSE when the switch goes off closes at the response end, like a transparent one
-test('W15 drain: an ingress flow mid-SSE when the switch goes off ends at the response end (the CLI plan\'s T5 gate)', { skip: 'CLI T5 (`off` drains in-flight calls, `Connection: close`) is not on this branch: the ingress flows go through the same handleFlow, so they will drain the same way; this runs once T5 lands' }, () => {})
+// the drain gate (CLI T5, 1.6 §1.3): the second door goes through the same runFlow, so `off` reaches an ingress flow like a transparent one
+test('W15 drain: `off` lands after an ingress flow\'s request went out and before its response head: the engine asks it to close (closing 1), the response carries the one Connection: close line, the connection ends after it, and drained() resolves', T, async (t) => {
+  let release, asked
+  const hold = new Promise((r) => { release = r }), requested = new Promise((r) => { asked = r })
+  const o = await origin(t, { hold, onRequest: asked })
+  const L = await lab(t, { upstreamCa: privCa.certPem, meta: { decrypt: true } })
+  const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)
+  let got = ''
+  const done = new Promise((resolve) => {
+    const c = tls.connect({ socket: sock, servername: 'upstream.test', ca: asightCa.certPem, ALPNProtocols: ['http/1.1'] }, () => c.write(REQ))
+    c.on('data', (d) => { got += d.toString('latin1') }); c.on('error', () => {}); c.on('close', () => resolve())
+  })
+  await within(requested, 4000, 'the origin to see the request')
+  await sleep(50) // the engine's tee has the request by now
+  assert.deepEqual(L.engine.drain({ agents: new Set(['codex']) }), { closing: 0, waiting: 0, cut: 0 }, 'another harness\'s off does not touch this flow')
+  assert.deepEqual(L.engine.drain({ agents: new Set(['claude-code']) }), { closing: 1, waiting: 0, cut: 0 }, 'the ingress flow is one of the engine\'s flows: the gate is asked and holds the head')
+  assert.deepEqual(L.engine.relayed({ agents: null }), { closing: 1, waiting: 0 })
+  let drained = false; L.engine.drained({ agents: null }).then(() => { drained = true })
+  await sleep(50); assert.equal(drained, false, 'the engine is not drained while the response is still to come')
+  release()
+  await within(done, 6000, 'the connection to end after the response')
+  assert.match(got, /^HTTP\/1\.1 200 OK\r\ncontent-length: 2\r\nconnection: keep-alive\r\nConnection: close\r\n\r\nok$/, 'the origin\'s head, plus the one line before the blank line; the body whole')
+  await L.settled(1)
+  assert.equal(L.envelopes[0].asight_added.join(), 'connection-close', 'recorded as asight\'s own addition, not the agent\'s or the origin\'s bytes')
+  await within(L.engine.drained({ agents: null }), 4000, 'drained()')
+  assert.deepEqual(L.failures, [])
+})
