@@ -34,8 +34,9 @@ export function resolveOffNames(names) {
 }
 
 /** → the exit code. `argv` is what follows `off`. `io` = { out, err, stdin, stdout, stderr } (src/off/io.mjs makeIo; the process's own streams when none is given, which is how the
- *  standalone `asight-off` calls it). */
-export async function runOffCli(argv, { io = makeIo({ stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }), env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
+ *  standalone `asight-off` calls it). `standalone`: this is the single-file copy (src/off/standalone.mjs ends in a call with it): the only difference is the words of what it
+ *  cannot undo — a manifest or an item of a kind it does not know is left alone and the person is sent to `asight off` (R3, V35); the receipt is otherwise the same one. */
+export async function runOffCli(argv, { io = makeIo({ stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }), env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {}, standalone = false } = {}) {
   const flags = new Set(), names = []
   for (const a of argv) {
     if (a.startsWith('-')) {
@@ -54,7 +55,7 @@ export async function runOffCli(argv, { io = makeIo({ stdin: process.stdin, stdo
     return EXIT.incomplete
   }
   try {
-    const { receipt, exit } = await runOff({ home, env, ids: named.ids, now: flags.has('--now'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: isInteractive(io), io: { ...io, prompt: json ? io.stderr : io.stdout }, say, deps })
+    const { receipt, exit } = await runOff({ home, env, ids: named.ids, now: flags.has('--now'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: isInteractive(io), io: { ...io, prompt: json ? io.stderr : io.stdout }, say, deps: standalone ? { ...deps, standalone: true } : deps })
     if (flags.has('--remove-ca')) receipt.notes.unshift(REMOVE_CA_NOTE)
     io.out(json ? JSON.stringify(receipt, null, 2) : formatOffReceipt(receipt, { home }))
     return exit

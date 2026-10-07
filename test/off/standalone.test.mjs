@@ -1,21 +1,41 @@
-// test/off/standalone.test.mjs — the single-file ~/.asight/bin/asight-off (RFC 1.6 R3; plan Task 8): what buildStandalone makes of src/off, what it refuses, and that the file runs (V11);
-// the copy on disk (writeStandalone, checkStandalone: V35's version check), that every `on` writes it, lists it and says when it cannot. The file that comes out is run in a child process,
-// in a directory of its own (no relative import could find the repo), with no NODE_PATH. Nothing here runs a real OS tool or touches a real process.
+// test/off/standalone.test.mjs — the single-file ~/.asight/bin/asight-off (RFC 1.6 R3; plan Task 8). V2: with the repository out of reach it undoes the same entries and prints what
+// `asight off` prints. V11: what is generated imports node:* and nothing else. V35: a manifest or an item it does not know is left alone (exit 1, the hint is `asight off`), `doctor`'s
+// check reports a stale copy, and every `on` rewrites it. A sandbox HOME in which the real `on` has run; the file that `on` wrote is the file that runs, in a child process that is
+// handed a copy in a directory of its own (no relative import could find the repo), a PATH of stubs (the sandbox guard allows those, and nothing else), and no NODE_PATH.
+// Nothing here runs a real OS tool or touches a real process.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
+import http from 'node:http'
 import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { buildStandalone, writeStandalone, checkStandalone } from '../../src/off/standalone.mjs'
-import { OFF_VERSION } from '../../src/off/manifest.mjs'
+import { buildStandalone, writeStandalone, checkStandalone, STANDALONE_ENTRY } from '../../src/off/standalone.mjs'
+import { OFF_VERSION, MANIFEST_VERSION, readManifest, saveManifest, manifestPath } from '../../src/off/manifest.mjs'
 import { standalonePath } from '../../src/off/paths.mjs'
+import { sha256 } from '../../src/off/fsutil.mjs'
+import { runOffCli } from '../../src/off/main.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { formatPlan } from '../../src/cli/receipt.mjs'
 import { fakeIo, onCtx, seedClaude } from '../cli/fixtures/on-ctx.mjs'
 import { installedHome, flowEvents } from './fixtures/off-ctx.mjs'
 
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
+
+// ── running a copy ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// What asight-off calls at the end of the file. The tests that need a Linux answer on any machine, with no real uid and no real process table, replace exactly this call (and assert
+// first that it is there): the platform, the user id and the table's reader are what a person's machine decides, and every other byte of the file is the one `on` wrote.
+const AS_LINUX = `runOffCli(process.argv.slice(2), { standalone: true, platform: 'linux', deps: { platform: 'darwin', getuid: () => 1000 } })` // 'darwin' for the table: the reader runs `ps`, a stub here
+
+function stubBin() {
+  const dir = tmpDir('asight-stub-'), bin = path.join(dir, 'bin'), log = path.join(dir, 'calls.log')
+  fs.mkdirSync(bin)
+  for (const name of ['systemctl', 'ps']) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\nexit 0\n`, { mode: 0o755 }) // answers 0 and says nothing: no unit, no process
+  return { bin, calls: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : []) }
+}
 
 /** Runs `text` as a file called asight-off in a directory of its own; resolves { status, stdout, stderr }. */
 function runCopy(text, argv, { env = {}, nodeArgs = [], sibling = null } = {}) {
@@ -31,6 +51,83 @@ function runCopy(text, argv, { env = {}, nodeArgs = [], sibling = null } = {}) {
     child.on('close', (status) => { clearTimeout(timer); resolve({ status, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8') }) })
   })
 }
+
+/** The file `on` wrote for this sandbox, run with the Linux answer; the sandbox's own HOME and env, the stub PATH. */
+function runWritten(s, argv, { extraEnv = {}, stubs = stubBin() } = {}) {
+  const text = fs.readFileSync(standalonePath(s.home), 'utf8')
+  assert.ok(text.includes(STANDALONE_ENTRY), 'the file ends with the standard entry call')
+  return runCopy(text.replace(STANDALONE_ENTRY, AS_LINUX), argv, { env: { ...s.sh.env, PATH: stubs.bin, ...extraEnv } }).then((r) => ({ ...r, stubs }))
+}
+
+// two sandboxes in the same state never hold the same paths, times or backup names: what a receipt says is compared with those taken out
+const normalize = (obj, home) => JSON.parse(JSON.stringify(obj).split(home).join('<HOME>').replace(/[0-9a-f]{16}-\d{8}T\d{9}Z(-\d+)?/g, '<BACKUP>').replace(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z/g, '<TIME>'))
+const cliCtx = (s, io) => ({ io, home: s.home, env: s.sh.env, platform: 'linux', deps: s.offDeps({ getuid: () => 1000 }) })
+const brokenAsight = async () => { const s = await installedHome({ names: ['claude-code', 'codex'] }); s.sys.daemon.state.up = false; return s } // on has run; nothing answers any more
+const preEntries = (s) => readManifest(s.dir).entries.filter((e) => e.pre_sha256).map((e) => ({ path: e.path, pre: e.pre_sha256 }))
+const backToBefore = (list) => list.filter((e) => !fs.existsSync(e.path) || sha256(fs.readFileSync(e.path)) !== e.pre).map((e) => e.path)
+
+// ── V2 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+test('V2: with the repository out of reach the copy `on` wrote undoes the same entries and prints what `asight off` prints (the daemon gone)', async () => {
+  const a = await brokenAsight(), b = await brokenAsight()
+  const io = fakeIo()
+  const viaCli = await runOffCli(['--json'], cliCtx(a, io))
+  const r = await runWritten(b, ['--json'])
+  assert.equal(r.status, viaCli, r.stderr)
+  assert.equal(viaCli, 0, 'and it is a done off')
+  assert.deepEqual(normalize(JSON.parse(r.stdout), b.home), normalize(io.json(), a.home), 'the same receipt, key for key')
+  assert.deepEqual(backToBefore(preEntries(b)), [], 'every user file byte for byte as before on')
+  assert.ok(JSON.parse(r.stdout).changed.length >= 2, 'a receipt that lists what it undid')
+  assert.deepEqual(readManifest(b.dir).entries, [], 'the manifest was brought up to date')
+  assert.ok(r.stubs.calls().some((c) => /^systemctl --user disable asight-collector\.service/.test(c)), `no names: the autostart was disabled, through the one runner (${r.stubs.calls()})`)
+  assert.equal(r.stderr, '')
+})
+
+test('V2: the text a person reads is the same too, and a per-harness off leaves the other harness alone', async () => {
+  const a = await brokenAsight(), b = await brokenAsight()
+  const io = fakeIo()
+  assert.equal(await runOffCli(['claude'], cliCtx(a, io)), 0)
+  const r = await runWritten(b, ['claude'])
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(r.stdout.split(b.home).join('~').replace(/\n$/, ''), io.stdoutText().split(a.home).join('~').replace(/\n$/, ''), 'the same words')
+  assert.deepEqual(readManifest(b.dir).entries.map((e) => e.harness).filter((h) => h).filter((h, i, all) => all.indexOf(h) === i), ['codex'], 'only claude-code came out')
+})
+
+// a control socket in a short path (a unix socket's path is at most 103 bytes on macOS), answering from a fake daemon
+async function serveControl(daemon) {
+  const run = tmpDir('as-')
+  fs.mkdirSync(path.join(run, 'asight'), { mode: 0o700 })
+  const sock = path.join(run, 'asight', 'collector.sock')
+  if (sock.length > 100) return { skip: `the socket path ${sock} is too long for a unix socket` }
+  const server = http.createServer((req, res) => {
+    const chunks = []
+    req.on('data', (c) => chunks.push(c))
+    req.on('end', async () => {
+      try {
+        const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : null
+        const reply = await daemon.request({ method: req.method, path: req.url, body })
+        res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(reply))
+      } catch (e) { res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: String(e.message) })) }
+    })
+  })
+  await new Promise((resolve) => server.listen(sock, resolve))
+  return { run, server, close: () => new Promise((resolve) => server.close(resolve)) }
+}
+
+test('V2: a daemon that answers is told to switch off by the copy, over the control socket, and the receipt is the same', async (t) => {
+  const a = await installedHome({ names: ['claude-code', 'codex'] }), b = await installedHome({ names: ['claude-code', 'codex'] }) // both daemons up after on
+  const ctl = await serveControl(b.sys.daemon)
+  if (ctl.skip) return t.skip(ctl.skip)
+  try {
+    const io = fakeIo()
+    const viaCli = await runOffCli(['--json'], cliCtx(a, io))
+    const r = await runWritten(b, ['--json'], { extraEnv: { XDG_RUNTIME_DIR: ctl.run } })
+    assert.equal(r.status, viaCli, r.stderr)
+    assert.deepEqual(normalize(JSON.parse(r.stdout), b.home), normalize(io.json(), a.home))
+    assert.deepEqual(b.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), a.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), 'the copy posted the same off request')
+    assert.ok(b.sys.daemon.calls.some((c) => c.startsWith('POST /off') && c.includes('"exit":true')), 'no names: the daemon was asked to go once drained')
+  } finally { await ctl.close() }
+})
 
 // ── what it is made of ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -110,7 +207,54 @@ test('src/off carries OFF_VERSION as an integer, and the unique-name rule the ge
   assert.ok(buildStandalone({ version: OFF_VERSION }).length > 20_000)
 })
 
-// ── V35 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── V35 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+test('V35: an item of a kind the copy does not know is left alone — ok:false, exit 1, the hint is `asight off`; every other entry is undone', async () => {
+  const s = await brokenAsight()
+  const before = preEntries(s)
+  const mystery = path.join(s.home, 'mystery.cfg')
+  fs.writeFileSync(mystery, 'x')
+  const m = readManifest(s.dir)
+  m.entries.push({ harness: 'codex', path: mystery, kind: 'mystery', undo_by_hand: 'rm it' })
+  saveManifest(s.dir, m)
+  const r = await runWritten(s, ['--json'])
+  assert.equal(r.status, 1, r.stderr)
+  const out = JSON.parse(r.stdout)
+  assert.equal(out.ok, false)
+  const left = out.left.find((l) => l.path === mystery)
+  assert.ok(left && /asight off/.test(left.reason) && /mystery/.test(left.reason), `the item and the hint: ${JSON.stringify(out.left)}`)
+  assert.equal(fs.readFileSync(mystery, 'utf8'), 'x', 'the item was not touched')
+  assert.deepEqual(backToBefore(before), [], 'the entries it does know are back as they were')
+  assert.deepEqual(readManifest(s.dir).entries.map((e) => e.kind), ['mystery'], 'and the manifest keeps the one it left, for the asight that knows it')
+  assert.equal(flowEvents(s.dir).at(-1).outcome, 'left')
+  // `asight off` itself says the same thing with its own words: it IS the asight, so it cannot send anyone to itself
+  const t = await brokenAsight()
+  const mt = readManifest(t.dir); const myst2 = path.join(t.home, 'mystery.cfg'); fs.writeFileSync(myst2, 'x')
+  mt.entries.push({ harness: 'codex', path: myst2, kind: 'mystery', undo_by_hand: 'rm it' }); saveManifest(t.dir, mt)
+  const io = fakeIo()
+  assert.equal(await runOffCli(['--json'], cliCtx(t, io)), 1, 'asight off is not done either: an item left is a not-done off')
+  assert.ok(!/asight off/.test(io.json().left.find((l) => l.path === myst2).reason), 'but it does not tell anyone to run itself')
+})
+
+test('V35: a manifest newer than the copy knows is left alone — ok:false, exit 1, the hint is `asight off`; the routing is still taken off', async () => {
+  const s = await brokenAsight()
+  const file = manifestPath(s.dir)
+  const m = JSON.parse(fs.readFileSync(file, 'utf8')); m.version = MANIFEST_VERSION + 1
+  fs.writeFileSync(file, JSON.stringify(m))
+  const userBefore = s.userFiles()
+  const r = await runWritten(s, ['--json'])
+  assert.equal(r.status, 1, r.stderr)
+  const out = JSON.parse(r.stdout)
+  assert.equal(out.ok, false)
+  assert.match(out.problems.join('\n'), new RegExp(`version ${MANIFEST_VERSION + 1}[^\\n]*asight off`), 'the version it does not read, and what to run')
+  assert.deepEqual(s.userFiles(), userBefore, 'no entry was touched')
+  assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ['off', 'off'], 'the desired state is off all the same')
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).version, MANIFEST_VERSION + 1, 'and the manifest is as the newer asight wrote it')
+  const io = fakeIo(), t = await brokenAsight()
+  const f2 = manifestPath(t.dir); const m2 = JSON.parse(fs.readFileSync(f2, 'utf8')); m2.version = MANIFEST_VERSION + 1; fs.writeFileSync(f2, JSON.stringify(m2))
+  assert.equal(await runOffCli(['--json'], cliCtx(t, io)), 1)
+  assert.ok(!/run `asight off`/.test(io.json().problems.join('\n')), '`asight off` does not send anyone to itself')
+})
 
 test('V35: the check reports a copy that is stale, missing or not what src/off generates; writing it makes it equal; a second write changes nothing', async () => {
   const home = tmpDir('asight-chk-')
@@ -142,6 +286,24 @@ test('V35: the check reports a copy that is stale, missing or not what src/off g
   fs.rmSync(file); fs.mkdirSync(file)
   const dir = checkStandalone({ home })
   assert.deepEqual([dir.ok, dir.found], [false, null]); assert.match(dir.reason, /EISDIR|cannot be read/)
+})
+
+test('V35: `asight doctor` has a line for the copy — a ✓ when it is current, a ⚠ that says what is wrong when it is not — and writes nothing', async () => {
+  const s = await installedHome({ names: ['claude-code'] })
+  const dir = tmpDir('asight-stub-'), bin = path.join(dir, 'bin'), log = path.join(dir, 'calls.log')
+  fs.mkdirSync(bin)
+  for (const name of ['which', 'security', 'systemctl', 'launchctl', 'certutil', 'loginctl']) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\nexit 1\n`, { mode: 0o755 }) // doctor's deps probe and its trust check find these, and only these
+  const doctor = () => spawnSync(process.execPath, [path.join(REPO, 'bin', 'asight.mjs'), 'doctor', '--source', tmpDir('asight-src-')], { env: { PATH: bin, HOME: s.home, TMPDIR: os.tmpdir(), ASIGHT_TEST_SANDBOX: '1' }, encoding: 'utf8', timeout: 60_000 })
+  const line = (r) => r.stdout.split('\n').find((l) => l.includes('asight-off(')) || `(no line) ${r.stdout}`
+  const file = standalonePath(s.home)
+  const good = fs.readFileSync(file, 'utf8')
+  assert.match(line(doctor()), new RegExp(`✓ asight-off[^\\n]*${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} · 版本 ${OFF_VERSION}`))
+  fs.writeFileSync(file, good.replace(`// asight-off ${OFF_VERSION} —`, '// asight-off 0 —'))
+  assert.match(line(doctor()), /⚠ asight-off[^\n]*is version 0, this asight writes version 1/)
+  fs.rmSync(file)
+  assert.match(line(doctor()), /⚠ asight-off[^\n]*is not there/)
+  assert.ok(!fs.existsSync(file), 'doctor reads: it does not write the copy')
+  assert.deepEqual((fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '').split('\n').filter((c) => /^(systemctl|launchctl|certutil|loginctl) /.test(c)), [], 'and runs none of the tools that change a machine')
 })
 
 test('V35: every `on` writes the copy again — after the first on it is what src/off generates, and a copy that was changed is put back by the next on', async () => {

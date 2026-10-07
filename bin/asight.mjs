@@ -527,6 +527,12 @@ async function main() {
         console.log('\n按进程采集器(collector, 4.6):');
         try { await runCollector(['status'], { out: (s) => console.log(indent(s)), err: (s) => console.log(indent(s)) }); } catch (e) { console.log(indent(`collector status could not be read: ${e.message}`)); }
         try { for (const l of formatInstallNotes(captureHealth({ home: asightHome() }))) console.log(indent(l)); } catch (e) { console.log(indent(`the last install's notes could not be read: ${e.message}`)); }
+        // 1.6 R3 / V35: the copy of the undo side that needs no source tree is the version this asight writes (read only; `asight on` writes it again)
+        try {
+          const { checkStandalone } = await import(r('src', 'off', 'standalone.mjs'));
+          const c = checkStandalone({ home: os.homedir() });
+          console.log(indent(c.ok ? `✓ asight-off(不依赖源码的撤销副本): ${c.path} · 版本 ${c.found},与当前一致` : `⚠ asight-off(不依赖源码的撤销副本)不是当前版本: ${c.reason}`));
+        } catch (e) { console.log(indent(`⚠ asight-off 副本无法核对: ${e.message}`)); }
       }
       if (res.hardFail) { console.error('\n✗ credential leak detected — the redact firewall MUST be fixed before capturing further.'); process.exit(1); }
       console.log('\n✓ 采集文件仅属主可读;凭据逐字存储 = 设计如此。(①②③④ 供你核对 — 见上方说明)');

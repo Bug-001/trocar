@@ -21,7 +21,7 @@ import { newReceipt, EXIT } from './schema.mjs'
 import { collectorDir, stateFile, opLockFile } from './paths.mjs'
 import { readStateFile, setDesired, writeStateAtomic, emptyState } from './state.mjs'
 import { acquireOpLock, LOCK_BUSY } from './lock.mjs'
-import { readManifest } from './manifest.mjs'
+import { readManifest, MANIFEST_VERSION, OFF_VERSION } from './manifest.mjs'
 import { undoHarnesses } from './undo.mjs'
 import { planByMarker, undoByMarker } from './marker.mjs'
 import { daemonState, stopDaemon, helperGone, isRedirectorHelper } from './daemon-stop.mjs'
@@ -46,7 +46,7 @@ export function offWorld({ home = nodeOs.homedir(), env = process.env, deps = {}
     home, env, dir, fs: deps.fs || nodeFs, exec: deps.exec || null, request: deps.request || controlRequest,
     clock: deps.now || (() => new Date()), ms: deps.ms || Date.now, sleep: deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
     alive: deps.alive || pidAlive, identity: deps.identity || procIdentity, isHelper: deps.isHelper || isRedirectorHelper, kill: deps.kill,
-    lockFile: path.join(dir, 'lock'), stateF: stateFile(home), deps,
+    lockFile: path.join(dir, 'lock'), stateF: stateFile(home), deps, standalone: deps.standalone === true, // the single-file asight-off passes `standalone`: it words what it cannot do as "run asight off" (R3, V35)
     socketPath: deps.socketPath !== undefined ? deps.socketPath : (() => { try { return controlSocketPath({ env }) } catch { return null } })(),
   }
   const once = (fn) => { let p; return () => p || (p = Promise.resolve().then(fn)) } // the process table is read once per run
@@ -167,7 +167,9 @@ export async function undoSide(w, { ids = null, manifest, manifestError = null, 
   const u = { mode: 'none', changed: [], removed: [], skipped: [], left: [], kept_bundles: [], still_trusting: [], residue: [], kept_backups: [], dropped_backups: [], pending: [], orphan_backups: [], problems: [], notes: [], failures: [], events: [], undone_by_marker: false, procs_error: null, stopped: false }
   if (manifest && manifest.unsupported) {
     u.mode = 'unsupported'
-    u.problems.push(`the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read; no entry was touched. Use the asight that wrote it (or the asight-off it wrote)`)
+    u.problems.push(w.standalone
+      ? `the install manifest is version ${JSON.stringify(manifest.version)}, which this asight-off (version ${OFF_VERSION}, it reads manifest versions 1 to ${MANIFEST_VERSION}) does not read; no entry was touched. Run \`asight off\`: the asight that wrote the manifest reads it`
+      : `the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read; no entry was touched. Use the asight that wrote it (or the asight-off it wrote)`)
     return u
   }
   if (manifest) {
@@ -200,7 +202,9 @@ export async function undoSide(w, { ids = null, manifest, manifestError = null, 
       else if (!['restored', 'left-unparsable', 'left-link', 'error'].includes(r.result)) note(SKIP_CODE[r.result] || 'harness-note', { ...withHarness(r.harness), path: r.path }, UNDO_NOTE[r.result] || r.result)
     }
     u.removed.push(...out.removed)
-    u.left = out.left.map((l) => ({ path: l.path, result: l.result, reason: l.reason, ...withHarness(l.harness) }))
+    // an item whose kind this build does not know is left alone; the copy says who knows it (R3, V35)
+    const hint = w.standalone ? ` — this asight-off (version ${OFF_VERSION}) does not know that kind; run \`asight off\`, the asight that wrote the manifest, to take it out` : ''
+    u.left = out.left.map((l) => ({ path: l.path, result: l.result, reason: l.result === 'unknown-kind' ? `${l.reason}${hint}` : l.reason, ...withHarness(l.harness) }))
     for (const l of u.left) u.failures.push({ code: l.result === 'error' || l.result === 'unknown-kind' ? 'entry-not-undone' : l.result, ...withHarness(l.harness), path: l.path, reason: l.reason })
     u.kept_bundles = out.kept_bundles
     for (const k of out.kept_bundles.filter((x) => !x.holds_ca && !x.unjudged && !x.error)) {
@@ -362,7 +366,8 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     for (const p of receipt.user_processes) put({ kind: 'note', reason: `${p.command} (pid ${p.pid}) is still running: ${p.note}; off does not stop it` })
 
     // 6 / 7 · the receipt and its result line
-    receipt.ok = receipt.problems.length === 0
+    receipt.ok = receipt.problems.length === 0 && receipt.left.length === 0 // an item that was not undone is a not-done off (1.6 R3, R4), whatever else went well
+    if (!receipt.ok && !receipt.problems.length) receipt.problems.push(`${receipt.left.length} item(s) were left as they are (listed above, with why); put that right, then run asight off again`)
     const n = { changed: receipt.changed.length, removed: receipt.removed.length, left: receipt.left.length, still_trusting: (receipt.still_trusting || []).length }
     put({ kind: 'result', outcome: receipt.ok ? outcome : outcome === 'off' ? 'failed' : outcome, counts: n, reason: receipt.ok ? `off: ${receipt.harnesses.join(', ') || 'nothing installed'}${outcome === CODE_OFF.undoneByMarker ? ' (undone by their marks: there was no manifest)' : ''}` : `off did not finish: ${receipt.problems[0]}` })
     return { receipt, exit: receipt.ok ? EXIT.ok : EXIT.incomplete }
