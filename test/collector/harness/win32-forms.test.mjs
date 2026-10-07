@@ -28,6 +28,31 @@ const EXPECT = {
     },
     unknown: [raw`D:\tools\claude.exe`],
   },
+  'codex': {
+    groups: { 'codex.env': ['codex.cli', 'codex.vscode', 'codex.app'] },
+    forms: {
+      'codex.cli': { nameRule: false, yes: [`${U}\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe`] },
+      'codex.vscode': { nameRule: false, yes: [`${U}\\.vscode\\extensions\\openai.chatgpt-0.4.1-win32-x64\\bin\\windows-x86_64\\codex.exe`] },
+      'codex.app': { nameRule: false, yes: [`${U}\\AppData\\Local\\OpenAI\\Codex\\bin\\0123456789abcdef\\codex.exe`] },
+    },
+    unknown: [raw`D:\tools\codex.exe`],
+  },
+  'kimi-code': {
+    groups: { 'kimi-code.cli': ['kimi-code.cli'], 'kimi-code.vscode': ['kimi-code.vscode'] },
+    forms: {
+      'kimi-code.cli': { nameRule: true, optIn: true, yes: [`${U}\\.kimi-code\\bin\\kimi.exe`] },
+      'kimi-code.vscode': { nameRule: false, optIn: true, yes: [`${U}\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe`, raw`C:\Program Files\Microsoft VS Code\Code.exe`] },
+    },
+    unknown: [raw`D:\tools\kimi.exe`],
+  },
+  'z-code': {
+    groups: { 'z-code.cli': ['z-code.cli'], 'z-code.desktop': ['z-code.desktop'] },
+    forms: {
+      'z-code.cli': { nameRule: false, yes: [{ exe: `${U}\\AppData\\Local\\Programs\\ZCode\\ZCode.exe`, cmdline: raw`"C:\Users\u\AppData\Local\Programs\ZCode\ZCode.exe" C:\r\resources\glm\zcode.cjs app-server --stdio` }] },
+      'z-code.desktop': { nameRule: false, optIn: true, yes: [{ exe: `${U}\\AppData\\Local\\Programs\\ZCode\\ZCode.exe`, cmdline: raw`"C:\Users\u\AppData\Local\Programs\ZCode\ZCode.exe"` }] },
+    },
+    unknown: [raw`D:\apps\ZCode.exe`],
+  },
 }
 
 // ── the pattern subset (4.8 §2.3): what JavaScript and mihomo's .NET regexp2 read the same way ──
@@ -132,17 +157,53 @@ test('W3: every install path the spike measured is its form, the same image else
     for (const [id, row] of Object.entries(e.forms)) {
       const f = forms.find((x) => x.id === id)
       assert.equal(f.nameRule, row.nameRule, `${id}: nameRule`)
-      for (const exe of row.yes) {
-        assert.deepEqual(matchForm(forms, { exe, cmdline: row.cmdline || null, cmdlineState: row.cmdline ? 'ok' : 'not-asked' }), { kind: 'form', id }, `${id}: ${exe}`)
-        assert.deepEqual(formsOf().filter((x) => x.match.path && x.match.path.some((p) => new RegExp(p, 'i').test(exe))).map((x) => x.id), [id], `${exe}: exactly one form's pattern hits it`)
+      assert.equal(!!(WIN[h].groups.find((g) => g.g === f.g).optIn || []).length, !!row.optIn, `${id}: whether the user must name it`)
+      for (const yes of row.yes) {
+        const { exe, cmdline = null } = typeof yes === 'string' ? { exe: yes } : yes
+        assert.deepEqual(matchForm(forms, { exe, cmdline, cmdlineState: cmdline ? 'ok' : 'not-asked' }), { kind: 'form', id }, `${id}: ${exe}`)
+        const hit = (x) => x.match.path.some((p) => new RegExp(p, 'i').test(exe)) && (!x.match.cmdline || (cmdline != null && x.match.cmdline.some((p) => new RegExp(p, 'i').test(cmdline))))
+        const hits = forms.filter((x) => x.match && x.match.path && hit(x))
+        assert.deepEqual(hits.filter((x) => !WIN[h].forms.includes(x)).map((x) => x.id), [], `${exe}: no other harness's form claims it`)
+        const wider = f.match.cmdline ? WIN[h].forms.filter((x, i) => i > WIN[h].forms.indexOf(f) && x.match && !x.match.cmdline && hit(x)).map((x) => x.id) : [id] // a form that needs the command line comes before the wider one it would be taken for
+        assert.deepEqual(hits.filter((x) => !x.match.cmdline).map((x) => x.id), wider, `${exe}: among the forms that need no command line, only the form itself (or the wider one after it) hits`)
       }
     }
     for (const exe of e.unknown || []) {
       const r = matchForm(forms, { exe, cmdline: null, cmdlineState: 'not-asked' })
       assert.equal(r.kind, 'path-unknown', exe)
-      assert.deepEqual(r.forms.sort(), Object.keys(e.forms).filter((id) => forms.find((x) => x.id === id).match.image.toLowerCase() === path.win32.basename(exe).toLowerCase()).sort())
+      assert.deepEqual(r.forms.sort(), forms.filter((x) => x.match && x.match.reportUnknownPath && x.match.image.toLowerCase() === path.win32.basename(exe).toLowerCase()).map((x) => x.id).sort())
     }
   }
+})
+
+test('W3: Code.exe is only the Kimi extension, node.exe and python.exe are never told by their name, and a node.exe is an agent only with the dsh command line', () => {
+  const forms = formsOf().filter((f) => f.match)
+  assert.deepEqual(forms.filter((f) => /^code\.exe$/i.test(f.match.image)).map((f) => f.id), ['kimi-code.vscode'])
+  for (const f of forms.filter((x) => /^(node|python|code)\.exe$/i.test(x.match.image))) {
+    assert.equal(f.nameRule, false, `${f.id}: a PROCESS-NAME rule on ${f.match.image} would hand every program of that name to this form`)
+    assert.equal(!!f.match.reportUnknownPath, false, `${f.id}: most ${f.match.image} are no agent, so an odd path is not reported`)
+  }
+  for (const f of forms.filter((x) => /^node\.exe$/i.test(x.match.image))) assert.ok(f.match.cmdline && !f.match.path, `${f.id}: node.exe is told by the command line, not by where it is`)
+  const exe = raw`C:\Program Files\nodejs\node.exe`
+  assert.deepEqual(matchForm(forms, { exe, cmdline: 'node.exe build.js', cmdlineState: 'ok' }), { kind: 'none' })
+  assert.deepEqual(matchForm(forms, { exe, cmdline: null, cmdlineState: 'empty' }), { kind: 'none' })
+  for (const exe2 of [raw`C:\Python312\python.exe`, raw`C:\Program Files\Microsoft VS Code Insiders\Code - Insiders.exe`, raw`D:\portable\Code.exe`]) assert.deepEqual(matchForm(forms, { exe: exe2, cmdline: null, cmdlineState: 'not-asked' }), { kind: 'none' }, exe2)
+})
+
+test('W3: the ZCode forms match the whole image and carry no hosts; only the Kimi extension has a host set, and its settings reader finds the base URLs in a config.toml', () => {
+  const forms = formsOf()
+  assert.deepEqual(forms.filter((f) => f.hosts).map((f) => f.id), ['kimi-code.vscode'], 'a host tree is only the editor Kimi lives in (4.8 §3.5); ZCode.exe is the agent\'s own process (OPEN 23)')
+  for (const f of forms.filter((x) => /^zcode\.exe$/i.test(x.match.image))) {
+    assert.ok(f.match.path.every((p) => new RegExp(p, 'i').test(`${U}\\AppData\\Local\\Programs\\ZCode\\ZCode.exe`)), `${f.id}: any ZCode.exe of the install, not only some of its processes`)
+  }
+  const { hosts } = forms.find((f) => f.id === 'kimi-code.vscode')
+  assert.deepEqual(hosts.defaults, ['api.kimi.com', 'api.kimi.ai', 'api.moonshot.ai', 'api.moonshot.cn'])
+  const ctx = (env = {}) => ({ home: U, env: new Map(Object.entries(env)) })
+  assert.equal(hosts.settings.file(ctx()), path.join(U, '.kimi-code', 'config.toml'))
+  assert.equal(hosts.settings.file(ctx({ KIMI_CODE_HOME: raw`D:\kimi` })), path.join(raw`D:\kimi`, 'config.toml'))
+  const toml = '[providers.relay]\nbase_url = "https://relay.example.com/v1"\napi_key = "sk-secret"\n[services]\nweb = { base_url = \'http://10.0.0.5:8080\' }\nMOONSHOT_BASE_URL = "https://api.moonshot.cn"\n# base_url = "https://commented.example.com"\n'
+  assert.deepEqual(hosts.settings.hostsOf(toml), ['relay.example.com', '10.0.0.5', 'api.moonshot.cn'])
+  assert.deepEqual(hosts.settings.hostsOf(''), [])
 })
 
 test('W23: a form that needs naming has an opt-in item and no automatic entry; Claude Desktop takes no credentialed upstream; the process rules of the automatic groups reach neither Claude Desktop nor any Code.exe', () => {
