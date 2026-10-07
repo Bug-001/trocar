@@ -113,6 +113,25 @@ function inject(ctx) {
   }
 }
 
+// How Claude Code reads a proxy (RFC 1.6 §9.7; `asight status` draws its path from this and `asight doctor` takes its instructions from it): HTTPS_PROXY / HTTP_PROXY from its environment, and the same keys in the
+// `env` block of ~/.claude.json and of the user settings (which win over the launch env); once, at start. It does not follow the OS proxy and takes no SOCKS proxy. Project and local settings depend on the
+// directory it was started in: not read here.
+const PROXY_KEYS = [['env', 'HTTPS_PROXY'], ['env', 'HTTP_PROXY']]
+const configDir = ({ home, env }) => env.CLAUDE_CONFIG_DIR || path.join(home, '.claude')
+const proxy = {
+  env: ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy'],
+  files: [
+    { path: (c) => path.join(configDir(c), 'settings.json'), format: 'json', keys: PROXY_KEYS },
+    { path: (c) => (c.env.CLAUDE_CONFIG_DIR ? path.join(c.env.CLAUDE_CONFIG_DIR, '.claude.json') : path.join(c.home, '.claude.json')), format: 'json', keys: PROXY_KEYS },
+  ],
+  systemProxy: { http: false, ws: false },
+  schemes: ['http', 'https'],
+  unsupported: { socks4: 'fails', socks5: 'fails', socks5h: 'fails' },
+  branches: ['all'],
+  measured: { win32: 'lab', linux: 'inferred', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3); elsewhere inferred from it, until measured
+  restart: { hint: '退出这个 Claude Code,再重新启动(它只在启动时读一次代理设置)', processes: 'claude' },
+}
+
 export default {
   name: 'claude-code',
   runtime: 'node', // Bun standalone; NODE_EXTRA_CA_CERTS semantics
@@ -127,6 +146,7 @@ export default {
     },
   },
   hosts: ['api.anthropic.com'],
+  proxy,
   layers,
   inject,
   configHosts: (ctx) => envHosts(ctx.env, BASE_URL_KEYS),

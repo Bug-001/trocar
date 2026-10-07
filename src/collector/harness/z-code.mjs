@@ -124,6 +124,19 @@ function inject(ctx) {
   }
 }
 
+// How Z-Code reads a proxy (RFC 1.6 §9.7): the model fetch follows only ZCODE_HTTP_PROXY / `network.httpProxy` in ~/.zcode/cli/config.json (HTTP(S)_PROXY is web-fetch only); no OS proxy; of the SOCKS
+// forms only `socks5h` is taken (a socks5 / socks4 proxy makes the request fail).
+const proxy = {
+  env: ['ZCODE_HTTP_PROXY'],
+  files: [{ path: ({ home }) => path.join(home, '.zcode', 'cli', 'config.json'), format: 'json', keys: [['network', 'httpProxy']] }],
+  systemProxy: { http: false, ws: false },
+  schemes: ['http', 'https', 'socks5h'],
+  unsupported: { socks4: 'fails', socks5: 'fails' },
+  branches: ['all'],
+  measured: { win32: 'lab', linux: 'inferred', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3); elsewhere inferred from it, until measured
+  restart: { hint: '退出这个 Z-Code(CLI 的 app-server 与桌面应用都要退),再重新启动(它只在启动时读一次代理设置)', processes: 'zcode' },
+}
+
 export default {
   name: 'z-code',
   runtime: 'node',
@@ -146,6 +159,7 @@ export default {
   // the CLI's provider refresh reaches its origin by plain fetch. Another CDN address the origin returns is not known
   // beforehand: under `all` it is decrypted, that refresh fails once, then the (pid, host) negative cache (review 3 #5).
   bypass: (ctx) => [{ host: CDN_HOST, reason: 'not-via-trust-path' }, ...(ctx.argv.some((a) => /^(app|agent)-server$/.test(a)) ? [] : [{ host: originHost(ctx.env), reason: 'not-via-trust-path' }])],
+  proxy,
   proxies: (ctx) => PROXY_SOURCES.filter(([k]) => (ctx.env.get(k) || '') !== '').map(([k, source]) => ({ url: ctx.env.get(k), source })),
   inject,
   trust: {

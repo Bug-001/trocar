@@ -127,6 +127,18 @@ function inject(ctx) {
 
 const REPLACE = (vars) => vars.map((v) => ({ var: v, semantic: 'replace' }))
 
+// How Hermes reads a proxy (RFC 1.6 §9.7): the proxy variables from its environment and from the active home's .env (HERMES_HOME names it; ~/.hermes by default); it follows the OS proxy and takes SOCKS.
+const proxy = {
+  env: ['HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'HTTP_PROXY', 'http_proxy'],
+  files: [{ path: ({ home, env }) => path.join(env.HERMES_HOME || path.join(home, '.hermes'), '.env'), format: 'dotenv', keys: ['HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'HTTP_PROXY', 'http_proxy'] }],
+  systemProxy: { http: true, ws: true },
+  schemes: ['http', 'https', 'socks4', 'socks5', 'socks5h'],
+  unsupported: {},
+  branches: ['all'],
+  measured: { win32: 'lab', linux: 'inferred', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3); elsewhere inferred from it, until measured
+  restart: { hint: '退出这个 Hermes(含 gateway),再重新启动;在它 /reload 之前,.env 里改的代理它已读过的不会变', processes: 'hermes' },
+}
+
 export default {
   name: 'hermes',
   runtime: 'python',
@@ -140,6 +152,7 @@ export default {
     },
   },
   hosts: ['openrouter.ai', 'inference-api.nousresearch.com', 'chatgpt.com', 'api.openai.com', 'api.anthropic.com', 'api.z.ai', 'api.moonshot.ai', 'api.moonshot.cn', 'api.kimi.com', 'api.deepseek.com', 'api.x.ai'],
+  proxy,
   layers,
   configHosts,
   proxies: (ctx) => envProxies(ctx.env, ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']),

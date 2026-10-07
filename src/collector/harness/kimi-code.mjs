@@ -66,6 +66,18 @@ function inject(ctx) {
   }
 }
 
+// How Kimi Code reads a proxy (RFC 1.6 §9.7): the proxy variables of its environment, at start; SOCKS is supported; no config file, no OS proxy (its VS Code extension follows VS Code's own setting, on Windows).
+const proxy = {
+  env: ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY', 'all_proxy', 'ALL_PROXY'],
+  files: [],
+  systemProxy: { http: false, ws: false },
+  schemes: ['http', 'https', 'socks4', 'socks5', 'socks5h'],
+  unsupported: {},
+  branches: ['all'],
+  measured: { win32: 'lab', linux: 'inferred', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3); elsewhere inferred from it, until measured
+  restart: { hint: '退出这个 kimi,在新开的终端里以 `kimi` 重新启动(经 asight 的启动脚本,在那里读代理环境变量)', processes: 'kimi' },
+}
+
 export default {
   name: 'kimi-code',
   runtime: 'node',
@@ -76,6 +88,7 @@ export default {
     },
   },
   hosts: ['api.kimi.com', 'api.kimi.ai', 'api.moonshot.ai', 'api.moonshot.cn'],
+  proxy,
   configHosts,
   proxies: (ctx) => envProxies(ctx.env, ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY', 'all_proxy', 'ALL_PROXY']),
   inject,
