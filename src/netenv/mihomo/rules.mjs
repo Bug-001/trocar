@@ -9,13 +9,14 @@
 // point's own loopback port: the probe never leaves the machine, §3.3), asight-sw-<g> (select, PASS first = off), asight-r-<g> (the rule provider, a file),
 // and the rules: first the loopback AND → DIRECT that lets the re-entry point answer its own probe, then one RULE-SET per group. Every name starts with asight-.
 
+import { NAME_PREFIX, OUR_RULE, LOOP_RULE } from '../../off/runtime-strip.mjs'
 import { SCRIPT_SENTINEL, checkSentinel } from '../../off/script-block.mjs'
 
 // What the undo has to run too lives in src/off (1.6 R3: the standalone `asight-off` imports only node:* and src/off) and is re-exported here, so that every caller has one door and there is one copy:
-// the Script.js block's strip (script-block.mjs: SCRIPT_SENTINEL, scanScript, stripScriptBlock, insertScriptBlock).
+// the Script.js block's strip (script-block.mjs: SCRIPT_SENTINEL, scanScript, stripScriptBlock, insertScriptBlock) and the names and rule shapes the runtime strip recognises (runtime-strip.mjs).
+export { NAME_PREFIX, FILTER_TOKEN, OUR_RULE, LOOP_RULE } from '../../off/runtime-strip.mjs'
 export { SCRIPT_SENTINEL, scanScript, stripScriptBlock, insertScriptBlock } from '../../off/script-block.mjs'
 
-export const NAME_PREFIX = 'asight-'
 export const ROUTES = Object.freeze(['vb', 'of']) // the first half of the engine outbound's user name: <route>.<group> (vb = VPN block, of = own forwarder, 4.8 §3.2)
 const LOOPBACK = '127.0.0.1'
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/ // a group id is part of the Basic user name and of the probe path: no ':' and no space; dots are fine (ingress ROUTE_NAME)
@@ -175,11 +176,8 @@ export function buildBlock({ groups, enginePort, token, reenter, ownImages } = {
 
 // ---- the config splice, for the payload path and the global script (4.8 §3.6, §4.1; W9 W58) -----------------------------------------------------------
 
-export const FILTER_TOKEN = '^asight-'
-// the two rule shapes of ours the splice recognises (the second only when it is right in front of the first); asightApply() carries its own copies of these literals
-// because its source is embedded in the global script, and a test holds the two to the same text
-export const OUR_RULE = /^RULE-SET,asight-r-[^,]+,asight-sw-[^,]+$/
-export const LOOP_RULE = /^AND,\(\(DST-PORT,[0-9]+\),\(IP-CIDR,127\.0\.0\.1\/32,no-resolve\)\),DIRECT$/
+// FILTER_TOKEN, OUR_RULE and LOOP_RULE (exported above, from src/off/runtime-strip.mjs): asightApply() carries its own copies of the two rule shapes and the token because its source is embedded
+// in the global script, and a test holds the copies to the exported text.
 
 // One function does the splice for both paths: spliceRuntime() calls it on a copy of the runtime, and buildScriptJs() writes its source into the global
 // script. So the two cannot drift apart, and W58 (the results are equal) tests the glue around it rather than two hand-kept copies. Because its text is
