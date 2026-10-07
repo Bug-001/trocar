@@ -12,7 +12,8 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..', '..');
 const html = fs.readFileSync(path.join(ROOT, 'src', 'web', 'index.html'), 'utf8');
-const cli = fs.readFileSync(path.join(ROOT, 'bin', 'asight.mjs'), 'utf8');
+// the commands' bodies sit in bin/asight.mjs and src/cli/legacy-commands.mjs (moved out of the bin unchanged, D39)
+const cli = ['bin/asight.mjs', 'src/cli/legacy-commands.mjs'].map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n');
 
 const title = (html.match(/<title>([^<]*)<\/title>/) || [])[1] || '';
 // the default empty-state copy: inline in renderEmpty(…), or (D38, where the empty state can also say that

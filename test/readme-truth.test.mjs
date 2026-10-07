@@ -15,7 +15,8 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
 const readme = readFileSync(path.join(ROOT, 'README.md'), 'utf8');
-const cli = readFileSync(path.join(ROOT, 'bin', 'asight.mjs'), 'utf8');
+// the commands' bodies sit in bin/asight.mjs and src/cli/legacy-commands.mjs (moved out of the bin unchanged, D39)
+const cli = ['bin/asight.mjs', 'src/cli/legacy-commands.mjs'].map((f) => readFileSync(path.join(ROOT, f), 'utf8')).join('\n');
 const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 
 const implementedVerbs = new Set([...cli.matchAll(/case '([a-z-]+)'/g)].map((m) => m[1]));
