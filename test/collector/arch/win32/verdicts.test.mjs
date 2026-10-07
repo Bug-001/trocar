@@ -182,6 +182,15 @@ test('W76 the dsh plugin marker is trusted within the fixed tolerance (it is ms-
   assert.deepEqual([30, 31, 32].map((p) => redirector.verdictOf(p).decrypt), [true, true, true], 'the exact value and both rounding directions trust')
   assert.deepEqual([33, 34].map((p) => redirector.verdictOf(p).decrypt), [false, false], 'a stale marker and none never do')
   assert.equal(MARKER_TOLERANCE_MS > 0, true)
+  // OpenCode is the same mechanism with no layers of its own (the marker is its only trust source), on its own image
+  const o = await sandbox('opencode')
+  const rig = rigged({ descriptors: [o.d], box: o, marker: true })
+  fs.writeFileSync(path.join(o.dir, 'run', 'trust', '35'), String(t))
+  rig.procWatcher.emit('exec', facts(35, IMG.opencode, { startedAt: t + 500, startTicks: String(t + 500) }))
+  fs.writeFileSync(path.join(o.dir, 'run', 'trust', '36'), String(t - 60000))
+  rig.procWatcher.emit('exec', facts(36, IMG.opencodeDesk, { startedAt: t, startTicks: String(t) }))
+  await rig.settle()
+  assert.deepEqual([rig.redirector.verdictOf(35).decrypt, rig.redirector.verdictOf(36).agent, rig.redirector.verdictOf(36).decrypt], [true, 'opencode', false], 'within the tolerance trusts, a recycled pid\'s stale marker does not')
 })
 
 // ── W76 cell 4: facts-update re-judges the same pid (a form told by its command line) ────────────────────────────────────────────────
