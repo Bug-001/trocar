@@ -26,15 +26,45 @@ const targetOf = (authority) => (authority.startsWith('[') && authority.includes
 const DAEMON_CODES = ['not-trust-path', 'untracked', 'untrusted']
 const closedBefore = (side) => ({ type: 'closed_before_decision', message: `the ${side} closed before a routing decision`, side })
 
+// What a connection that came through the proxy ingress adds to its row (4.8 §5.6): who handed it over, how the pid was found, and the
+// upstream it went to — never the credentials, and never a `prelude` (the opener and the proxy prelude are asight's bytes, not the agent's).
+function ingressFields(meta) {
+  if (!meta.ingress) return {}
+  const u = meta.upstream || {}
+  return {
+    ingress: { route: meta.ingress.route, group: meta.ingress.group }, pid_source: meta.pid_source ?? null, pid_ms: meta.pid_ms ?? null,
+    upstream: { kind: u.kind || 'direct', ...(u.host ? { host: u.host } : {}), ...(u.port != null ? { port: u.port } : {}), ...(u.reply != null ? { reply: u.reply } : {}) },
+  }
+}
+// who started this agent (4.6 子进程与嵌套 agent): the board marks a nested agent by parent_agent; parent_pid is whatever
+// started it, an agent or not (review B-4(a))
+const parentsOf = (meta) => ({ ...(meta.parentPid != null ? { parent_pid: meta.parentPid } : {}), ...(meta.parentAgent ? { parent_agent: meta.parentAgent } : {}) })
+
+/**
+ * The row of an ingress connection that never became a flow: the upstream proxy refused it (decision 'tunnel', not_captured
+ * 'proxy-refused', reason 'proxy-status-<n>' / 'socks5-reply-<n>' …) or the upstream could not be reached (decision 'error', with
+ * the error). The agent was answered 502 or the proxy's own refusal; this is the record that it happened (D38).
+ */
+export function writeRefusal(meta, ctx, info) {
+  const rec = {
+    ts: new Date().toISOString(), flow_id: ctx.newFlowId(), pid: meta.pid ?? null, agent: meta.agent ?? null, ...parentsOf(meta),
+    dst: meta.dst, host: meta.dst.address, decision: info.decision, reason: info.reason ?? null, bytes_up: 0, bytes_down: 0, duration_ms: 0,
+    ...ingressFields(meta), not_captured: info.not_captured, ...(info.error ? { error: info.error } : {}),
+  }
+  let ok = true, why = null
+  try { ok = ctx.store.flow(rec) !== false } catch (e) { ok = false; why = e }
+  if (!ok) ctx.failure({ code: 'flow-write-failed', flow_id: rec.flow_id, reason: msgOf(why || ctx.store.lastError || 'the store did not write the flow record') })
+  return rec
+}
+
 export function handleFlow(client, meta, ctx) {
   const t0 = Date.now()
   const rec = {
-    ts: new Date().toISOString(), flow_id: ctx.newFlowId(), pid: meta.pid, agent: meta.agent,
-    // who started this agent (4.6 子进程与嵌套 agent): the board marks a nested agent by parent_agent; parent_pid is whatever
-    // started it, an agent or not (review B-4(a))
-    ...(meta.parentPid != null ? { parent_pid: meta.parentPid } : {}), ...(meta.parentAgent ? { parent_agent: meta.parentAgent } : {}),
-    dst: meta.dst, host: null, decision: null, reason: null, bytes_up: 0, bytes_down: 0, duration_ms: 0,
+    ts: new Date().toISOString(), flow_id: ctx.newFlowId(), pid: meta.pid, agent: meta.agent, ...parentsOf(meta),
+    dst: meta.dst, host: null, decision: null, reason: null, bytes_up: 0, bytes_down: 0, duration_ms: 0, ...ingressFields(meta),
   }
+  // the opener the ingress read and its own answers are on the socket's counters but are not the agent's bytes (§5.6)
+  const wire = meta.wire || { up: 0, down: 0 }
   let resolveFlow
   const flowDone = new Promise((res) => { resolveFlow = res })
 
@@ -99,7 +129,7 @@ export function handleFlow(client, meta, ctx) {
       if (written) return
       written = true
       if (cap) clearTimeout(cap)
-      rec.bytes_up = client.bytesRead; rec.bytes_down = client.bytesWritten
+      rec.bytes_up = client.bytesRead - wire.up; rec.bytes_down = client.bytesWritten - wire.down
       // recording never breaks teardown, and a record that was not written is not silent (D38)
       let ok = true, why = null
       try { ok = ctx.store.flow(rec) !== false } catch (e) { ok = false; why = e }
