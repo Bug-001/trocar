@@ -559,16 +559,18 @@ test('W28 an adopted kernel that dies is respawned like one asight started (the 
 })
 
 /** A fake kernel whose /version answers only when the test lets it: `hold()` before a re-spawn and the supervisor's own attempt stays in flight (spawned, not yet answered) until `open()`. */
-async function slowKernel(t) {
+async function slowKernel(t, { window = [] } = {}) {
   const gate = { p: null, open: () => {}, hold() { this.p = new Promise((r) => { this.open = r }) } }
   const makeController = () => ({ get: async (q) => { if (q === '/version') { if (gate.p) await gate.p; return { ok: true, status: 200, json: { version: 'fake' } } } return { ok: true, status: 200, json: { now: 'asight-in-claude-code.cli' } } }, put: async () => ({ ok: true, status: 204 }) })
   const k = await fakeKernel(t, { fwd: { makeController } })
   await k.start()
+  for (const pid of window) k.alive.add(pid)
+  const drained = window.length ? k.fwd.drain({ pidsInWindow: window }) : null
   k.die(k.children[0]); await settle()
   gate.hold()
   await k.clock.advance(1000) // the re-spawn's timer fires: the second kernel is spawned and its controller does not answer yet
   assert.deepEqual([k.children.length, k.fwd.state().phase], [2, 'starting'], 'the re-spawn is in flight')
-  return { k, gate }
+  return { k, gate, drained }
 }
 
 test('W28 stopNow while a re-spawn is in flight: the kernel the attempt spawned is killed before stopNow answers, nothing is committed (no lock, no pid), and no re-spawn follows', async (t) => {
@@ -623,6 +625,53 @@ test('W28 drain: after an off the kernel stays until the agents that were in the
   assert.deepEqual([e.remaining, await e.done], [0, { stopped: true }], 'nobody in the window: nothing to wait for')
 })
 
+test('W28 `on` while the kernel is draining takes the drain back: reload or start with a form on cancels it (`done` says cancelled, so the daemon does not exit; the window\'s pids leaving later stop nothing); a reload that leaves every form off leaves the drain alone; a second drain joins the first', async (t) => {
+  const a = await fakeKernel(t, { fwd: { watchMs: 1000 } })
+  await a.start()
+  a.alive.add(11); a.alive.add(12)
+  const d = a.fwd.drain({ pidsInWindow: [11] })
+  assert.equal(a.fwd.drain({ pidsInWindow: [12] }).done, d.done, 'one drain, one done: a second `off` adds its pids')
+  assert.deepEqual(a.fwd.remaining(), [11, 12])
+  let settled
+  d.done.then((v) => { settled = v })
+  await a.fwd.reload({ build: a.build, forms: a.forms.map((f) => ({ ...f, on: false })) })
+  await settle()
+  assert.deepEqual([settled, a.fwd.state().draining], [undefined, 2], 'forms that are all off are no `on`: the drain goes on')
+  assert.equal((await a.fwd.reload({ build: a.build, forms: a.forms })).ok, true)
+  await settle()
+  assert.deepEqual([settled, a.fwd.state().draining], [{ stopped: false, cancelled: true }, 0])
+  a.alive.delete(11); a.alive.delete(12)
+  await a.clock.advance(120_000)
+  assert.deepEqual([a.fwd.state().phase, a.alive.has(a.children[0].pid), a.events.states.some((e) => e.event === 'forwarder-stop')], ['running', true, false], 'the last pid left after the `on`: the proxy entries just written still point at a live kernel')
+
+  const b = await fakeKernel(t, { fwd: { watchMs: 1000 } })
+  await b.start()
+  b.alive.add(11)
+  const e = b.fwd.drain({ pidsInWindow: [11] })
+  let got
+  e.done.then((v) => { got = v })
+  b.die(b.children[0]); await settle() // the kernel dies during the drain: a re-spawn is waiting, and `on` starts it itself
+  assert.equal((await b.fwd.start({ build: b.build, forms: b.forms })).ok, true)
+  await settle()
+  assert.deepEqual([got, b.children.length, b.fwd.state().draining], [{ stopped: false, cancelled: true }, 2, 0])
+  b.alive.delete(11)
+  await b.clock.advance(120_000)
+  assert.deepEqual([b.fwd.state().phase, b.alive.has(b.children[1].pid)], ['running', true])
+})
+
+test('W28 the drain\'s last stop that is waiting behind a re-spawn does not stop what an `on` has taken the drain back for: one kernel is spawned and none is stopped', async (t) => {
+  const { k, gate, drained } = await slowKernel(t, { window: [11] })
+  let settled
+  drained.done.then((v) => { settled = v })
+  k.alive.delete(11)
+  await k.clock.advance(1000) // the last agent has gone: the drain's stop queues behind the re-spawn that is still waiting for its kernel
+  const on = k.fwd.reload({ build: k.build, forms: k.forms })
+  gate.open()
+  assert.equal((await on).ok, true)
+  await settle()
+  assert.deepEqual([settled, k.children.length, k.alive.size, k.fwd.state().phase, k.events.states.some((e) => e.event === 'forwarder-stop')], [{ stopped: false, cancelled: true }, 2, 1, 'running', false], 'the stop that was already queued must see that the drain is gone')
+})
+
 test('W28 off --now: the kernel is stopped at once and the pids that were still in the window are listed (they lose their connection)', async (t) => {
   const k = await fakeKernel(t)
   await k.start()
@@ -630,10 +679,11 @@ test('W28 off --now: the kernel is stopped at once and the pids that were still 
   const d = k.fwd.drain({ pidsInWindow: [11, 12, 13] })
   const r = await k.fwd.stopNow()
   assert.deepEqual(r, { pids: [11, 12], stopped: true }, '13 had exited')
-  let done = false
-  d.done.then(() => { done = true })
+  let done = null
+  d.done.then((v) => { done = v })
   await k.clock.advance(60_000)
-  assert.deepEqual([done, k.fwd.state().phase, k.clock.pending()], [false, 'stopped', []], 'the drain is over with it; nothing is left waiting')
+  assert.deepEqual([done, k.fwd.state().phase, k.clock.pending()], [{ stopped: true, now: true }, 'stopped', []], 'the drain is over with it: its promise settles, nothing is left waiting')
+  assert.deepEqual([k.fwd.state().draining, k.fwd.remaining()], [0, []], 'and status does not count agents of a drain that no longer exists')
 })
 
 test('W28 uninstall: the kernel copy, the licence and source beside it, the config and the lock go; a file Windows still holds (a drain is on, the exe is running) stays, and the answer says why', async (t) => {

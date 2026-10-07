@@ -216,9 +216,8 @@ export function createForwarder({
   let downReported = false
   let respawnTimer = null
   let watchTimer = null
-  let drainTimer = null
   let stopping = false
-  let drainPids = null
+  let drainState = null // { pids, timer, done, resolve }: the drain in progress, at most one
 
   // The kernel is changed by one thing at a time: a call of the daemon (start, reload, adopt, stopNow), the supervisor's own re-spawn and a drain's last stop each wait for the one in front. Without it a stopNow
   // returned "stopped" while a re-spawn was still coming up and the attempt then committed a kernel nobody tracked, and a reload during a re-spawn spawned a second kernel. `stopping` is how a call that is waiting
@@ -387,7 +386,7 @@ export function createForwarder({
     return { adopted: true, pid: p.pid, controller: { ...creds } }
   }
 
-  const remaining = () => (drainPids || []).filter((pid) => isAlive(pid))
+  const remaining = () => (drainState ? drainState.pids : []).filter((pid) => isAlive(pid))
 
   // stop the process we hold (or adopted) and wait for it to be gone; `reason` is what the state event says. Only called inside `exclusive`.
   async function stopKernel(reason) {
@@ -407,35 +406,60 @@ export function createForwarder({
 
   /**
    * After an `off` the kernel only forwards, and the agents that started while asight was on keep using it until they exit: `pidsInWindow` are those agents' pids (4.8 §4.2). The kernel is stopped
-   * when the last of them is gone. → `{ remaining, done }`: how many are left now, and a promise that settles `{ stopped }` when the drain ends (the daemon holds its exit on it).
+   * when the last of them is gone. → `{ remaining, done }`: how many are left now, and a promise (the daemon holds its exit on it) that settles when the drain ends:
+   *   `{ stopped }`                   the last pid left and the kernel was stopped (`stopped` false: it did not go within stopWaitMs)
+   *   `{ stopped: false, cancelled }` an `on` took the drain back (start or reload with a form on): the kernel stays and the daemon must not exit
+   *   `{ stopped, now: true }`        stopNow ended it
+   * There is one drain: a second call adds its pids to it and gets the same `done`.
    */
   function drain({ pidsInWindow = [] } = {}) {
-    drainPids = [...pidsInWindow]
-    events.state({ event: 'forwarder-draining', where: 'forwarder', pids: [...drainPids] })
-    const done = new Promise((resolve) => {
-      const tick = async () => {
-        drainTimer = null
-        if (remaining().length > 0) { drainTimer = setTimer(tick, watchMs); drainTimer?.unref?.(); return }
-        resolve({ stopped: await exclusive(() => stopKernel('drained')) })
+    if (drainState) {
+      for (const pid of pidsInWindow) if (!drainState.pids.includes(pid)) drainState.pids.push(pid)
+    } else {
+      const d = { pids: [...pidsInWindow], timer: null, done: null, resolve: null }
+      d.done = new Promise((resolve) => { d.resolve = resolve })
+      drainState = d
+      const tick = () => {
+        d.timer = null
+        if (drainState !== d) return
+        if (remaining().length > 0) { d.timer = setTimer(tick, watchMs); d.timer?.unref?.(); return }
+        exclusive(async () => {
+          if (drainState !== d) return // taken back by an `on`, or ended by stopNow, while this waited its turn
+          const stopped = await stopKernel('drained')
+          if (drainState === d) { drainState = null; d.resolve({ stopped }) }
+        }).catch((e) => { if (drainState === d) { drainState = null; d.resolve({ stopped: false, error: errText(e) }) } })
       }
-      drainTimer = setTimer(tick, 0)
-    })
-    return { remaining: remaining().length, done }
+      d.timer = setTimer(tick, 0)
+    }
+    events.state({ event: 'forwarder-draining', where: 'forwarder', pids: [...drainState.pids] })
+    return { remaining: remaining().length, done: drainState.done }
   }
 
-  /** `off --now` and `uninstall`: stop at once. `pids` are the agents still in the drain window that lose their connection. */
+  // an `on` — a start or reload that asks for any form to be on — is the operator taking the drain back: left running, its last pid would stop the kernel the entries just written point at
+  function cancelDrain() {
+    const d = drainState
+    if (!d) return
+    drainState = null
+    clearTimer(d.timer); d.timer = null
+    d.resolve({ stopped: false, cancelled: true })
+  }
+  const anyOn = (forms) => (forms || []).some((f) => f.on)
+
+  /** `off --now` and `uninstall`: stop at once. `pids` are the agents still in the drain window that lose their connection; the drain is over with it (its `done` settles and status counts nobody). */
   function stopNow() {
     stopping = true // an attempt in flight sees it and gives up; a waiting re-spawn does nothing
     clearTimer(respawnTimer); respawnTimer = null
-    clearTimer(drainTimer); drainTimer = null
+    const d = drainState
+    if (d) { clearTimer(d.timer); d.timer = null }
     return exclusive(async () => {
       const pids = remaining()
       const stopped = await stopKernel('stop-now')
+      if (d && drainState === d) { drainState = null; d.resolve({ stopped, now: true }) }
       return { pids, stopped }
     })
   }
-  const start = (a) => exclusive(() => startNow(a))
-  const reload = (a) => exclusive(() => reloadNow(a))
+  const start = (a) => { if (anyOn(a && a.forms)) cancelDrain(); return exclusive(() => startNow(a)) }
+  const reload = (a) => { if (anyOn(a && a.forms)) cancelDrain(); return exclusive(() => reloadNow(a)) }
   const adopt = () => exclusive(adoptNow)
 
   /** `uninstall`: remove the copy and the files beside it. A file Windows still holds (the kernel is running, a drain is on) stays and `reason` says why (W28). */
