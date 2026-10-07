@@ -184,10 +184,10 @@ function readConfig(text) {
 }
 
 /**
- * createForwarder → the kernel's process: start it, change its config, keep it up, stop it.
+ * createForwarder → the kernel's process: start it, change its config, keep it up, let agents drain from it, stop it.
  *   dir        the collector directory: `forwarder.lock` (`{pid, startedAt, endpoint, config}`) and `forwarder/` (the config, 0600, and the kernel's home) are made in it
  *   bin        the kernel exe (the copy in `kernel\`)
- *   controller `{ port, secret }` for this run, chosen at random by the caller
+ *   controller `{ port, secret }` for this run, chosen at random by the caller; `adopt()` replaces it with that of a kernel that is already running
  *   verifyCopy () → verifyCopy()'s answer for THIS kernel (the caller binds dir, pin and arch): asked before EVERY spawn, the first one and each respawn (W27 ④)
  *   sacOn      () → whether Smart App Control would block an unsigned exe: a start that fails then says so (W74)
  *   isFree     (port) → whether a loopback port can be bound; REQUIRED: this file may not import `node:net` (W27 ⑦). A taken port is not re-chosen here: the form's entry holds it (ingress-config.mjs).
@@ -213,7 +213,9 @@ export function createForwarder({
   let downReported = false
   let respawnTimer = null
   let watchTimer = null
+  let drainTimer = null
   let stopping = false
+  let drainPids = null
 
   const fail = (code, reason, extra = {}) => { const rec = { where: code === 'forwarder-down' ? 'netenv' : 'forwarder', code, reason, ...extra }; events.failure(rec); return { ok: false, ...rec } }
   const rmLock = () => { try { fs.rmSync(P.lock, { force: true }) } catch { /* nothing to remove */ } }
@@ -337,6 +339,36 @@ export function createForwarder({
 
   const check = async () => (proc && cur ? readBack(cur.forms) : { ok: false, forms: {}, reason: 'not-running' })
 
+  // a kernel left by an earlier daemon is kept only when its pid, its start time and its controller all say it is the one the lock names
+  async function adopt() {
+    let lock
+    try { lock = JSON.parse(fs.readFileSync(P.lock, 'utf8')) } catch (e) { return { adopted: false, reason: e && e.code === 'ENOENT' ? 'no-lock' : 'lock-unreadable' } }
+    if (!lock || !Number.isInteger(lock.pid) || typeof lock.config !== 'string') return { adopted: false, reason: 'lock-unreadable' }
+    if (!isAlive(lock.pid)) { rmLock(); return { adopted: false, reason: 'not-running' } }
+    const started = await procStart(lock.pid)
+    if (!Number.isFinite(started) || !Number.isFinite(lock.startedAt)) return { adopted: false, reason: 'start-time-unreadable' }
+    if (Math.abs(started - lock.startedAt) > START_TOLERANCE_MS) return { adopted: false, reason: 'start-time-differs' } // the pid is somebody else's now
+    let text
+    let parsed
+    try { text = fs.readFileSync(lock.config, 'utf8'); parsed = readConfig(text) } catch { return { adopted: false, reason: 'config-unreadable' } }
+    if (lock.endpoint !== `tcp:127.0.0.1:${parsed.controller.port}`) return { adopted: false, reason: 'config-differs' }
+    const probe = makeController(parsed.controller)
+    if (!(await probe.get('/version')).ok) return { adopted: false, reason: 'version-no-answer' }
+    creds = parsed.controller
+    ctl = probe
+    cur = { text, forms: [], ports: parsed.ports, probes: parsed.probes }
+    const p = { pid: lock.pid, startedAt: lock.startedAt, child: null, adopted: true, stable: null }
+    proc = p
+    phase = 'running'
+    stopping = false
+    const watch = () => { watchTimer = setTimer(() => { watchTimer = null; if (proc !== p) return; if (isAlive(p.pid)) watch(); else onExit(p, 'is gone') }, watchMs); watchTimer?.unref?.() }
+    watch()
+    events.state({ event: 'forwarder-start', where: 'forwarder', pid: p.pid, adopted: true })
+    return { adopted: true, pid: p.pid, controller: { ...creds } }
+  }
+
+  const remaining = () => (drainPids || []).filter((pid) => isAlive(pid))
+
   // stop the process we hold (or adopted) and wait for it to be gone; `reason` is what the state event says
   async function stopKernel(reason) {
     stopping = true
@@ -356,12 +388,48 @@ export function createForwarder({
     return true
   }
 
-  /** `off --now` and `uninstall`: stop at once. */
-  async function stopNow() { return { stopped: await stopKernel('stop-now') } }
+  /**
+   * After an `off` the kernel only forwards, and the agents that started while asight was on keep using it until they exit: `pidsInWindow` are those agents' pids (4.8 §4.2). The kernel is stopped
+   * when the last of them is gone. → `{ remaining, done }`: how many are left now, and a promise that settles `{ stopped }` when the drain ends (the daemon holds its exit on it).
+   */
+  function drain({ pidsInWindow = [] } = {}) {
+    drainPids = [...pidsInWindow]
+    events.state({ event: 'forwarder-draining', where: 'forwarder', pids: [...drainPids] })
+    const done = new Promise((resolve) => {
+      const tick = async () => {
+        drainTimer = null
+        if (remaining().length > 0) { drainTimer = setTimer(tick, watchMs); drainTimer?.unref?.(); return }
+        resolve({ stopped: await stopKernel('drained') })
+      }
+      drainTimer = setTimer(tick, 0)
+    })
+    return { remaining: remaining().length, done }
+  }
+
+  /** `off --now` and `uninstall`: stop at once. `pids` are the agents still in the drain window that lose their connection. */
+  async function stopNow() {
+    clearTimer(drainTimer); drainTimer = null
+    const pids = remaining()
+    const stopped = await stopKernel('stop-now')
+    return { pids, stopped }
+  }
+
+  /** `uninstall`: remove the copy and the files beside it. A file Windows still holds (the kernel is running, a drain is on) stays and `reason` says why (W28). */
+  function removeBinary() {
+    try { fs.rmSync(bin, { force: true }) } catch (e) { return { removed: false, reason: (e && e.code) || errText(e) } }
+    for (const name of [KERNEL_LICENSE, KERNEL_SOURCE]) { try { fs.rmSync(path.join(path.dirname(bin), name), { force: true }) } catch { /* the exe is gone: a stray text file is not a lock */ } }
+    try { fs.rmdirSync(path.dirname(bin)) } catch { /* not empty, or gone */ }
+    return { removed: true }
+  }
+  /** `uninstall`: the lock, the config (it holds the controller secret and the tokens) and the kernel's home. */
+  function removeState() {
+    try { fs.rmSync(P.forwarder, { recursive: true, force: true }); fs.rmSync(P.lock, { force: true }) } catch (e) { return { removed: false, reason: (e && e.code) || errText(e) } }
+    return { removed: true }
+  }
 
   return {
-    start, reload, check, stopNow,
+    start, reload, check, adopt, drain, remaining, stopNow, removeBinary, removeState,
     controller: () => ({ ...creds }),
-    state: () => ({ phase, pid: proc ? proc.pid : null, adopted: proc ? proc.adopted : false, streak, down: downReported }),
+    state: () => ({ phase, pid: proc ? proc.pid : null, adopted: proc ? proc.adopted : false, streak, down: downReported, draining: remaining().length }),
   }
 }
