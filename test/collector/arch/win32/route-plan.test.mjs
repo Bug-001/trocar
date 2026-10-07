@@ -181,7 +181,9 @@ test('W5 §2.2 table: Verge with TUN on, v2rayN, another TUN VPN, no VPN: only t
 test('W5 §2.2 table: a PAC is not followed — a follower is not routed, the others go on as they would; `on` never runs a script', () => {
   const pac = sys({ autoConfigUrl: 'http://wpad.corp/proxy.pac' })
   assert.deepEqual(up(CODEX, { systemProxy: pac }), { source: 'system-proxy', reason: 'not-routed', why: 'system-proxy-pac', bypass: [], untranslated: 0, envUnreadable: true })
-  assert.deepEqual(up(HERMES, { systemProxy: sys({ enable: false, autoConfigUrl: 'http://wpad/p.pac' }) }).why, 'system-proxy-pac', 'a PAC counts whether or not the manual proxy is also switched on')
+  // 4.8 §2.2 reads any non-empty AutoConfigURL as a PAC, whatever ProxyEnable says. That is the spec's ASSUMPTION, not a measurement: whether turning the setup script off leaves its old address in the value is unmeasured (4.8 OPEN 27, Task 11).
+  // If it does, a user with the manual proxy on and a stale address would get this answer, which fails closed with a reason that is not the real one.
+  assert.deepEqual(up(HERMES, { systemProxy: sys({ enable: false, autoConfigUrl: 'http://wpad/p.pac' }) }).why, 'system-proxy-pac', 'the rule as written (an assumption, OPEN 27): an address in AutoConfigURL is a PAC whether or not the manual proxy is also switched on')
   assert.equal(up(HERMES, { systemProxy: pac }).reason, 'not-routed')
   assert.deepEqual(up(CLAUDE, { systemProxy: pac }), direct, 'a group that does not follow the system proxy does not care')
   assert.equal(up(CLAUDE, { systemProxy: pac, prior: 'http://proxy.corp:3128' }).source, 'agent')
