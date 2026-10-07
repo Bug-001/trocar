@@ -50,7 +50,7 @@ function proxyNode(g, F, host, port) {
   if (l && l.unknown) return g.node({ kind: 'proxy', name, addr: host, port, unknown: l.unknown })
   if (l) return g.node({ kind: 'proxy', name: l.product ? productName(l.product) : l.exe ? base(l.exe) : name, addr: host, port, product: l.product, version: l.version, pid: l.pid, mode: v ? v.mode : undefined, unknown: v && v.unknown })
   if (v) return g.node({ kind: 'proxy', name: productName(v.product), addr: host, port, product: v.product, version: v.version, pid: v.pid, mode: v.mode, unknown: v.unknown })
-  const gone = F.unknowns.find((u) => u.where === 'listeners') // the listeners could not be read: that is why nobody is named, not that nobody listens
+  const gone = F.unknowns.find((u) => u.fact === 'listeners') // the listeners could not be read: that is why nobody is named, not that nobody listens
   return g.node({ kind: 'proxy', name, addr: host, port, ...(gone ? { unknown: { reason: gone.reason, detail: gone.detail } } : { down: true }) })
 }
 
@@ -69,7 +69,8 @@ const sourceKey = (s) => (s.kind === 'env' ? `env:${s.where}` : s.kind === 'file
  */
 function tail(g, F, hf, setting, follow) {
   if (setting.unknown) return { ids: [g.node({ kind: 'unknown', name: '代理设置', unknown: setting.unknown })], first: { via: 'unknown', evidence: [] } }
-  if (setting.value) {
+  const ignored = setting.value && hf.behaviour && hf.behaviour.unsupported && hf.behaviour.unsupported[setting.scheme] === 'silent-direct' // the agent does not fail on a scheme it cannot speak: it goes straight out
+  if (setting.value && !ignored) {
     const p = proxyNode(g, F, setting.host, setting.port), x = g.edge(p, egressOf(g, p), 'egress')
     return { ids: [p, x], first: { via: VIA[setting.scheme] || 'unknown', evidence: setting.source.map(sourceKey) } }
   }
@@ -85,8 +86,9 @@ function tail(g, F, hf, setting, follow) {
   }
   const host = (hf.apiHosts || [])[0] || 'api'
   const u = g.node({ kind: 'upstream', name: `${host}:443`, addr: host, port: 443 })
-  if (F.vpn && F.vpn.tun === true) return { ids: [u, g.edge(u, g.node({ kind: 'egress', name: '出口', chosen_by: productName(F.vpn.product) }), 'tun')], first: { via: 'direct', evidence: [] } }
-  return { ids: [u], first: { via: 'direct', evidence: [] } }
+  const first = ignored ? { via: 'direct', evidence: [`unsupported-scheme:${setting.scheme}`], ...(hf.behaviour.measured === 'lab' ? {} : { inferred: true }) } : { via: 'direct', evidence: [] } // not measured on this OS: said, not claimed
+  if (F.vpn && F.vpn.tun === true) return { ids: [u, g.edge(u, g.node({ kind: 'egress', name: '出口', chosen_by: productName(F.vpn.product) }), 'tun')], first }
+  return { ids: [u], first }
 }
 
 /** Is asight's side of the platform up for this harness: wanted on, a daemon that answers, a helper, the kernel's links. true / false / null (not known). */
@@ -133,8 +135,8 @@ function driverTopology(F, h, hf) {
     const path = [a], off = [a, ...t.ids]
     let from = a
     if (withAsight) { const e = engine(); g.edge(a, e, 'ebpf', { evidence: evidenceEbpf }); path.push(e); from = e }
-    g.edge(from, t.ids[0], t.first.via, { evidence: t.first.evidence })
-    if (from !== a) g.edge(a, t.ids[0], t.first.via, { evidence: t.first.evidence }) // the off path: the agent's own way to the same first hop
+    g.edge(from, t.ids[0], t.first.via, { evidence: t.first.evidence, inferred: t.first.inferred })
+    if (from !== a) g.edge(a, t.ids[0], t.first.via, { evidence: t.first.evidence, inferred: t.first.inferred }) // the off path: the agent's own way to the same first hop
     return { path: [...path, ...t.ids], off_path: off }
   }
   const branches = branchNames(hf).map((name) => ({ name, ...build(main, hf.setting, asight === true, followsOf(hf, name)), on_path: asight, captured: v.captured, reason: v.reason }))
@@ -201,7 +203,7 @@ function proxyTopology(F, h, hf) {
     for (const name of split ? ['http', 'ws'] : ['all']) {
       const a = agentOf(g, h, main), off = tail(g, F, hfSys, fm.setting, (fm.follows || hf.behaviour.follows)[name === 'ws' ? 'ws' : 'http'])
       let path = [a, ...off.ids]
-      g.edge(a, off.ids[0], off.first.via, { evidence: off.first.evidence })
+      g.edge(a, off.ids[0], off.first.via, { evidence: off.first.evidence, inferred: off.first.inferred })
       if (wired) {
         const forwardOnly = F.desired[h] === 'off' || vd.reason === 'elevated-agent' || !vd.engine && vd.on
         const f = g.node({ kind: 'asight-forwarder', name: 'asight 自带内核', pid: F.forwarder.pid, addr: '127.0.0.1', port: fwf.port, asight: true, mode: vd.reason === 'forwarder-down' ? 'down' : forwardOnly ? 'forward-only' : 'on' })
@@ -211,8 +213,8 @@ function proxyTopology(F, h, hf) {
           const up = upstreamTail(g, F, hfSys, fm, fwf)
           if (vd.engine) {
             const e = g.node({ kind: 'asight-engine', name: 'asight 引擎', pid: F.daemon.pid, addr: '127.0.0.1', port: F.daemon.enginePort, mode: 'decrypt', asight: true })
-            g.edge(f, e, 'forward'); g.edge(e, up.ids[0], up.first.via, { evidence: up.first.evidence }); path = [a, f, e, ...up.ids]
-          } else { g.edge(f, up.ids[0], up.first.via, { evidence: up.first.evidence }); path = [a, f, ...up.ids] }
+            g.edge(f, e, 'forward'); g.edge(e, up.ids[0], up.first.via, { evidence: up.first.evidence, inferred: up.first.inferred }); path = [a, f, e, ...up.ids]
+          } else { g.edge(f, up.ids[0], up.first.via, { evidence: up.first.evidence, inferred: up.first.inferred }); path = [a, f, ...up.ids] }
         }
       }
       branches.push({ name, form: fm.id, path, off_path: [a, ...off.ids], on_path: vd.on, captured: vd.captured, reason: vd.reason })

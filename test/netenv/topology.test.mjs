@@ -2,7 +2,7 @@
 // leaves the route as it was). Every row of test/netenv/fixtures/rows.mjs is one NetFacts and the topology it must give, written out literally; the facts are injected, nothing here reads the machine.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildTopology } from '../../src/netenv/topology.mjs'
+import { buildTopology, renderCompact } from '../../src/netenv/topology.mjs'
 import { validateTopology, UNKNOWN_REASONS } from '../../src/cli/schema.mjs'
 import { ROWS, facts, harness, proc, proxyOf, none, mihomoVpn, MIHOMO } from './fixtures/rows.mjs'
 
@@ -45,7 +45,7 @@ test('V42: an owner that cannot be read, a PAC and a controller that cannot be r
 
 test('V42: a listener list that could not be read gives the proxy its reason, and one that was read and holds nobody gives 「没人在听」, never an unknown owner', () => {
   const setting = proxyOf('http://127.0.0.1:7890')
-  const unread = buildTopology(facts('claude-code', { unknowns: [{ where: 'listeners', reason: 'denied', detail: 'ss: EPERM' }] }, { setting }))['claude-code']
+  const unread = buildTopology(facts('claude-code', { unknowns: [{ fact: 'listeners', reason: 'denied', detail: 'ss: EPERM' }] }, { setting }))['claude-code']
   assert.deepEqual(unread.nodes.find((n) => n.kind === 'proxy').unknown, { reason: 'denied', detail: 'ss: EPERM' })
   const nobody = buildTopology(facts('claude-code', {}, { setting }))['claude-code']
   const p = nobody.nodes.find((n) => n.kind === 'proxy')
@@ -118,4 +118,20 @@ test('the old capture\'s chain is distinct nodes (the VPN twice, as two nodes), 
   const broken = buildTopology({ ...ROWS.find((r) => r.n === 20).facts, harnesses: { 'claude-code': { ...ROWS.find((r) => r.n === 20).facts.harnesses['claude-code'], systemProxy: null } } })['claude-code']
   assert.equal(broken.captured, null)
   assert.match(broken.notes[0], /could not be worked out/)
+})
+
+test('a scheme the agent cannot speak and does not fail on (dsh, SOCKS) is a direct path, with the path the agent would have taken said as inferred unless the behaviour was measured on this OS', () => {
+  const socks = { setting: proxyOf('socks5://127.0.0.1:1080', [{ kind: 'env', where: 'ALL_PROXY' }]) }
+  const t = buildTopology(facts('deepseek-dsh', {}, socks))['deepseek-dsh']
+  assert.deepEqual(t.branches[0].off_path.map((id) => kindOf(t, id)), ['agent', 'upstream'], 'without asight it goes straight out: the proxy is not on its path')
+  assert.ok(!t.nodes.some((n) => n.kind === 'proxy'), 'and no proxy hop is drawn for a value it ignores')
+  const into = t.edges.find((e) => e.to === t.branches[0].off_path[1])
+  assert.deepEqual([into.via, into.inferred, into.evidence], ['direct', true, ['unsupported-scheme:socks5']])
+  assert.match(renderCompact(t)[0], /:443\(直连 · 推断\)$/, 'and the words say it')
+  const lab = buildTopology(facts('deepseek-dsh', {}, { ...socks, behaviour: { ...harness('deepseek-dsh').behaviour, measured: 'lab' } }))['deepseek-dsh']
+  assert.equal(lab.edges.find((e) => e.to === lab.branches[0].off_path[1]).inferred, undefined, 'measured: not said to be inferred')
+  assert.ok(!/推断/.test(renderCompact(lab).join()))
+  const fails = buildTopology(facts('claude-code', { listeners: [MIHOMO], vpn: mihomoVpn() }, { setting: proxyOf('socks5://127.0.0.1:7890', [{ kind: 'env', where: 'ALL_PROXY' }]) }))['claude-code']
+  assert.ok(fails.nodes.some((n) => n.kind === 'proxy'), 'a scheme the agent fails on keeps the hop: it is where the agent tries to go')
+  assert.deepEqual(validateTopology({ 'deepseek-dsh': t }), [])
 })

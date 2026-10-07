@@ -15,7 +15,7 @@ const passText = (n) => (n.passthrough ? `透传 · 负缓存 ${n.passthrough.ho
 const paren = (...parts) => { const p = parts.filter(Boolean); return p.length ? `(${p.join(';')})` : '' }
 
 /** A hop as one short phrase (`detail`: with the pid, version and address a hop-per-line view has room for). `via` is the edge into it. */
-function hopText(n, via, detail) {
+function hopText(n, via, detail, inferred = false) {
   switch (n.kind) {
     case 'agent': return detail ? `${n.name}${n.pid ? ` pid ${n.pid}` : ''}${n.version ? ` · ${n.version}` : ''}${n.elevated ? ' · 提权' : ''}` : `${n.name}${n.pid ? ` ${n.pid}` : ''}${n.elevated ? '(提权)' : ''}`
     case 'asight-engine': return detail ? `${n.name}${n.pid ? ` pid ${n.pid}` : ''} · ${n.addr}:${n.port}${n.mode === 'decrypt' ? ' · 解密' : ''}${paren(passText(n))}` : `${n.name} :${n.port}${paren(passText(n))}`
@@ -25,7 +25,7 @@ function hopText(n, via, detail) {
       const who = n.product ? `${n.name}${detail && n.version ? ` ${n.version}` : ''} :${n.port}` : n.name
       return `${who}${detail && n.pid ? ` · pid ${n.pid}` : ''}${detail && n.mode && n.mode !== 'unknown' ? ` · ${MODE[n.mode] || n.mode}` : ''}${paren(n.unknown ? unknownText(n) : n.down ? '没人在听' : null)}`
     }
-    case 'upstream': return `${n.name}${via === 'direct' ? '(直连)' : ''}`
+    case 'upstream': return `${n.name}${via === 'direct' ? `(直连${inferred ? ' · 推断' : ''})` : ''}`
     case 'egress': return n.unknown ? '?' : `出口${n.chosen_by ? `(${n.chosen_by} 选)` : ''}`
     default: return `${n.name}${n.unknown ? paren(unknownText(n)) : ''}`
   }
@@ -55,7 +55,7 @@ function chain(t, ids, detail = false) {
   return ids.map((id, i) => {
     const n = nodeOf(t, id), e = i ? edgeOf(t, ids[i - 1], id) : null
     const label = i ? edgeLabel(e, nodeOf(t, ids[i - 1]), n, detail) : ''
-    return `${label ? `[${label}] ` : ''}${hopText(n, e && e.via, detail)}`
+    return `${label ? `[${label}] ` : ''}${hopText(n, e && e.via, detail, !!(e && e.inferred))}`
   }).join(' → ')
 }
 
@@ -101,7 +101,7 @@ export function renderDetail(t, { now = null } = {}) {
     b.path.forEach((id, i) => {
       const n = nodeOf(t, id), e = i ? edgeOf(t, b.path[i - 1], id) : null
       const label = i ? edgeLabel(e, nodeOf(t, b.path[i - 1]), n, true) : ''
-      lines.push(i ? `  → ${label ? `[${label}] ` : ''}${hopText(n, e && e.via, true)}` : `  ${hopText(n, null, true)}`)
+      lines.push(i ? `  → ${label ? `[${label}] ` : ''}${hopText(n, e && e.via, true, !!(e && e.inferred))}` : `  ${hopText(n, null, true)}`)
     })
   }
   if (t.branches.some((b) => b.path.some((id) => isAsight(nodeOf(t, id))))) lines.push(`关掉 asight 时的路: ${t.branches.map((b) => `${prefixOf(t, b, 'off_path')}${chain(t, b.off_path)}`).join(' · ')}`)

@@ -186,7 +186,7 @@ row({ n: 22, title: 'the OS proxy is a PAC and the agent follows it for HTTP (no
   compact: ['HTTP codex app-server 5530 → [eBPF] asight 引擎 :47123 → [系统代理] PAC(不知道 · pac)', 'WebSocket codex app-server 5530 → [eBPF] asight 引擎 :47123 → chatgpt.com:443(直连)'], findings: ['system-proxy-pac', 'inferred-behaviour'] })
 
 row({ n: 23, title: 'Windows: a kernel-level filter this user cannot see is said once, and changes no verdict', h: 'claude-code',
-  facts: { ...ROWS.find((r) => r.n === 8).facts, unknowns: [{ where: 'kernel-filter', reason: 'kernel-filter-invisible', detail: 'WFP filters are not readable by a user token' }] },
+  facts: { ...ROWS.find((r) => r.n === 8).facts, unknowns: [{ fact: 'kernel-filter', reason: 'kernel-filter-invisible', detail: 'WFP filters are not readable by a user token' }] },
   kinds: [[...ENGINE_AND_KERNEL, 'upstream']], on_path: true, captured: true, reason: null,
   compact: ['claude 4121 → [settings env.HTTPS_PROXY · asight 写的] asight 自带内核 :17991 → asight 引擎 :17990 → api.anthropic.com:443(直连)'], findings: [], notes: ['WFP 一类的内核过滤器本用户看不见(kernel-filter-invisible),所以路上有没有这样的过滤器不知道'] })
 
