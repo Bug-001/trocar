@@ -75,6 +75,8 @@ test('qUserTrustOnly: verify()=true → ok; false → not onboarded; throw → c
   const off = qUserTrustOnly(() => false);
   assert.equal(off.ok, false);
   assert.match(off.note, /not onboarded|user-level/);
+  assert.match(off.note, /only `asight monitor on`[^;]*puts there; the collector's own CA \(`asight on`\) is in no trust store by design/, 'the item is the old capture\'s CA: `asight on` cannot fix it, so it must not be what the note tells you to run (1.6 §2, §4)');
+  assert.doesNotMatch(off.note, /run: asight on/);
   const boom = qUserTrustOnly(() => { throw new Error('nss missing'); });
   assert.equal(boom.ok, false);
   assert.match(boom.note, /errored: nss missing/);

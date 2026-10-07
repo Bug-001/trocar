@@ -476,7 +476,7 @@ test('uninstall step 2: a combined bundle a live process may have loaded is kept
     assert.deepEqual(fs.readdirSync(path.join(b.dir, 'ca')), ['combined-rep.pem'], 'the CA dir holds only the kept bundle')
     assert.deepEqual(r.left, [], 'kept for a live process is not a failure')
     assert.ok(readManifest(b.dir).pending_bundles)
-    await assert.rejects(installCollector(base(b, { harnesses: [repHarness(b.dir)], roots })), /kept combined bundles that running agents still use/)
+    await assert.rejects(installCollector(base(b, { harnesses: [repHarness(b.dir)], roots })), /kept combined bundles that running agents still use .*; run "asight uninstall" again once they exit$/)
     const again = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, scan: async () => [], roots })
     assert.deepEqual(again.kept_bundles, [])
     assert.ok(!fs.existsSync(path.join(b.dir, 'ca')) && readManifest(b.dir) == null, 'the bundle, the CA dir and the manifest are gone')
@@ -706,7 +706,7 @@ test('install: installed but with an unusable CA is not "already installed" — 
   try {
     await installCollector(base(b))
     fs.writeFileSync(path.join(b.home, '.asight', 'collector', 'ca', 'asight-ca.pem'), 'not a certificate')
-    await assert.rejects(installCollector(base(b)), /installed, but its CA is unusable \(cert: .*run "asight collector uninstall", then "asight collector install"/)
+    await assert.rejects(installCollector(base(b)), /installed, but its CA is unusable \(cert: .*run "asight uninstall", then "asight on"$/)
   } finally { b.done() }
 })
 
@@ -724,7 +724,7 @@ test('uninstall that cannot undo an entry keeps the manifest with only what is l
     assert.deepEqual([m.complete, m.entries.map((e) => [e.path, e.keys.join('.')]), m.files, m.uninstall_left.map((l) => l.result), typeof m.uninstalled_at],
       [false, [[settingsOf(b), 'env.NODE_EXTRA_CA_CERTS']], [], ['left-link'], 'string'], 'the manifest stays, listing only what is left')
     assert.deepEqual([fs.existsSync(path.join(b.dir, 'ca', 'asight-ca.pem')), fs.existsSync(path.join(b.dir, 'ca', 'ca.key'))], [false, false], 'the CA files go all the same (an append-semantics agent only warns about a missing file)')
-    await assert.rejects(installCollector(base(b)), /an earlier uninstall could not undo 1 item\(s\) \(.*settings\.json\); fix them, run "asight collector uninstall" again, then install/)
+    await assert.rejects(installCollector(base(b)), /an earlier uninstall could not undo 1 item\(s\) \(.*settings\.json\); fix them, run "asight uninstall" again, then "asight on"$/)
     fs.rmSync(settingsOf(b)); fs.writeFileSync(settingsOf(b), installed) // the user puts a regular file back
     const again = await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
     assert.deepEqual([again.left, again.entries.map((e) => e.result)], [[], ['restored']])

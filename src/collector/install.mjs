@@ -142,10 +142,10 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
     // installed — but only usable when its CA is (D-4): a CA that cannot be read or used is said, with how to start over
     const c = readCa({ dir: path.join(dir, 'ca'), fs })
     const st = c.error ? { ok: false, which: c.which, reason: c.error } : checkCa(c)
-    if (!st.ok) throw Object.assign(new Error(`the collector is installed, but its CA is unusable (${st.which}: ${st.reason}); run "asight collector uninstall", then "asight collector install"`), { code: 'ca-invalid' })
+    if (!st.ok) throw Object.assign(new Error(`the collector is installed, but its CA is unusable (${st.which}: ${st.reason}); run "asight uninstall", then "asight on"`), { code: 'ca-invalid' })
   }
-  if (prior && prior.pending_bundles) throw new Error(`an earlier uninstall kept combined bundles that running agents still use (${prior.files.filter((f) => f.role === 'bundle' || f.role === 'trust-file').map((f) => f.path).join(', ')}); run "asight collector uninstall" again once they exit`)
-  if (prior && prior.uninstall_left) throw new Error(`an earlier uninstall could not undo ${prior.uninstall_left.length} item(s) (${prior.uninstall_left.map((l) => l.path).join(', ')}); fix them, run "asight collector uninstall" again, then install`)
+  if (prior && prior.pending_bundles) throw new Error(`an earlier uninstall kept combined bundles that running agents still use (${prior.files.filter((f) => f.role === 'bundle' || f.role === 'trust-file').map((f) => f.path).join(', ')}); run "asight uninstall" again once they exit`)
+  if (prior && prior.uninstall_left) throw new Error(`an earlier uninstall could not undo ${prior.uninstall_left.length} item(s) (${prior.uninstall_left.map((l) => l.path).join(', ')}); fix them, run "asight uninstall" again, then "asight on"`)
   const descs = ids ? harnesses.filter((d) => ids.includes(d.name)) : harnesses
   const ca = caPaths(path.join(dir, 'ca'))
   const facts = await scan()
@@ -258,7 +258,7 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   if (m.engine_port == null) m.engine_port = await freePort()
   const final = planTrust({ descriptors: descs, ctxFor, caCertPem: certPem, collectorDir: dir, roots: R })
   if (daemon && daemon.note) { final.notes.push(daemon.note); final.records.push({ code: CODE.unitEnvNotCarried, reason: daemon.note }) }
-  if (JSON.stringify(final.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${final.paths.join(', ')}); only the CA was written; run "asight collector uninstall", then install again`)
+  if (JSON.stringify(final.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${final.paths.join(', ')}); only the CA was written; run "asight uninstall", then "asight on"`)
   m.planned = final.paths
   // what `off` needs to judge, from this manifest alone, which live process may hold what asight wrote for a harness (4.6 撤销顺序): written before any user
   // file changes. Only what is missing is added — a manifest an older asight wrote has none for its harnesses, and `on` is how it gets them (4.6 「判活快照」)

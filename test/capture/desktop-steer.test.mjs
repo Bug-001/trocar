@@ -662,6 +662,7 @@ test('non-darwin: explicit reserved refusal, never a silent no-op (D22)', () => 
   assert.equal(out.ok, false);
   assert.equal(out.reserved, true);
   assert.match(out.reason, /macOS-Desktop-only/);
+  assert.match(out.reason, /`asight on` where the per-process collector exists \(Linux\), or `asight monitor on --no-autostart`/, 'it points at the commands that do the thing now (1.6 §2, §4), not at the old `asight on`');
   assert.equal(steer.status().reserved, true);
 });
 

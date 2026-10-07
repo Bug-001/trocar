@@ -321,7 +321,7 @@ test('daemon: the install-time engine port held by another process → start fai
   try {
     await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [cc], freePort: async () => squat.address().port })
     const { arch, clients } = fakeArch(p)
-    await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }), /recorded at install is held by another process; nothing is steered/)
+    await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }), /recorded at install is held by another process; nothing is steered, agent connections go direct\. Free the port, or run "asight uninstall" and "asight on" to pick a new one$/)
     assert.ok(flowsOf(s).some((f) => f.event === 'failure' && f.where === 'start' && /held by another process/.test(f.reason)), 'the refusal to start is recorded (D38)')
     assert.equal(clients.length, 0, 'the helper was never spawned, so no connection is redirected')
     assert.ok(!fs.existsSync(path.join(s.collector, 'lock')))
@@ -786,6 +786,17 @@ test('daemon: daemon-start carries its identity, version, foreground, upstream_c
   } finally { await d.stop(); p.done(); s.done() }
 })
 
+// 1.6 §2: what the daemon tells a user to run is a command of help, never a hidden alias (`collector install` / `collector uninstall` are only kept for scripts written before D39).
+test('daemon: started where asight is not installed, or where the manifest cannot be read, it says which commands to run — `asight on`, `asight uninstall` (1.6 §2)', async () => {
+  const s = sandbox()
+  try {
+    const arch = { os: 'linux', createRedirector: () => { throw new Error('must not get this far') } }
+    await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }), (e) => e.code === 'not-installed' && /the collector is not installed for this user: run "asight on" first$/.test(e.message))
+    fs.mkdirSync(s.collector, { recursive: true }); fs.writeFileSync(path.join(s.collector, 'install-manifest.json'), '{not json')
+    await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }), (e) => e.code === 'manifest-unreadable' && /is unreadable \(.*\); run "asight uninstall", then "asight on"$/.test(e.message))
+  } finally { s.done() }
+})
+
 // D-31: started as root (sudo -E), it refuses before writing anything else, and the refusal it records in the user's
 // collector directory is given back to the directory's owner — no root-owned file the user's daemon cannot append to.
 test('daemon: started as root it refuses (root-refused), and the record it leaves is chowned to the collector directory owner (D-31)', async () => {
@@ -955,7 +966,7 @@ test('daemon: every check (5 s), with nobody running status — links lost behin
     await clients[0].raw({ op: '__yank' })
     const mm = await until(() => flowsOf(s).find((f) => f.code === 'state-mismatch'))
     assert.deepEqual([mm.event, mm.where, mm.desired, mm.actual, mm.links], ['failure', 'switch', 'on', 'off', []])
-    assert.match(mm.reason, /capture is on but the kernel has not got this instance's links: nothing is steered/)
+    assert.match(mm.reason, /capture is on but the kernel has not got this instance's links: nothing is steered.*; run "asight on" again$/)
     await new Promise((r) => setTimeout(r, 100))
     assert.equal(flowsOf(s).filter((f) => f.code === 'state-mismatch').length, 1, 'once per disagreement, not once per check')
     const switches = () => flowsOf(s).filter((f) => f.event === 'switch')

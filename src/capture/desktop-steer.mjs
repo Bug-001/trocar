@@ -89,7 +89,7 @@ export function spliceRuntime(yaml, port) {
 
 const reserved = (platform) => ({
   platform,
-  on() { return { ok: false, reserved: true, reason: `Clash steer is a macOS-Desktop-only implementation (D22); not applicable on ${platform}. Use \`asight on\` (reverse-proxy) for CC-CLI.` }; },
+  on() { return { ok: false, reserved: true, reason: `Clash steer is a macOS-Desktop-only implementation (D22); not applicable on ${platform}. For CC-CLI use \`asight on\` where the per-process collector exists (Linux), or \`asight monitor on --no-autostart\` (the old CC-CLI steer).` }; },
   off() { return { ok: false, reserved: true, reason: `not applicable on ${platform}` }; },
   status() { return { platform, reserved: true, scriptInstalled: false }; },
 });

@@ -2,7 +2,7 @@
 // wires core + arch + harness (layering.test.mjs names it). It runs as the operator, claims the control socket
 // before anything else (one daemon, one helper per user), spawns the capability helper through arch, serves the
 // engine on loopback, restores the desired switch state, and fails open everywhere: a dead helper means direct
-// connections, never broken ones. It never mints the CA: `asight collector install` does, inside the manifest.
+// connections, never broken ones. It never mints the CA: `asight on` does, inside the manifest.
 import fs from 'node:fs'
 import path from 'node:path'
 import tls from 'node:tls'
@@ -61,7 +61,7 @@ export async function startDaemon(opts = {}) {
   try {
     // as root it would write root-owned 0600 files into the user's flows/ and captures, which the user's own daemon
     // then cannot append to (D36, D-31): refused before anything is written
-    if (getuid() === 0) throw Object.assign(new Error('asight collector start: run it as the user whose agents you capture, not as root (D36)'), { code: 'root-refused' })
+    if (getuid() === 0) throw Object.assign(new Error('asight daemon: run it as the user whose agents you capture, not as root (D36)'), { code: 'root-refused' })
     return await runDaemon({ ...opts, dir, log })
   } catch (e) {
     // the refusal is recorded where status finds it — unless nothing is installed here (no directory to write into)
@@ -92,9 +92,9 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
   const P = collectorPaths(dir)
   const failure = createFailureRecorder(P.dir, { log })
   let manifest
-  try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "asight collector uninstall", then install again`), { code: 'manifest-unreadable' }) }
+  try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "asight uninstall", then "asight on"`), { code: 'manifest-unreadable' }) }
   const ca = manifest && manifest.complete ? readCa({ dir: P.caDir }) : null
-  if (!ca) throw Object.assign(new Error('the collector is not installed for this user: run "asight collector install" first'), { code: 'not-installed' })
+  if (!ca) throw Object.assign(new Error('the collector is not installed for this user: run "asight on" first'), { code: 'not-installed' })
   const sock = socketPath || controlSocketPath({ env })
   let markReady
   const ready = new Promise((r) => { markReady = r })
@@ -283,7 +283,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     const { port } = await engine.listen({ port: want, hosts: ['127.0.0.1'] }).catch((e) => {
       // G3: the port chosen at install is squatted. Nothing is steered (the helper is not spawned yet), so the agents'
       // connections stay direct; say so, and how to get a new port.
-      if (e.code === 'EADDRINUSE') throw Object.assign(new Error(`the engine port 127.0.0.1:${want} recorded at install is held by another process; nothing is steered, agent connections go direct. Free the port, or run "asight collector uninstall" and "asight collector install" to pick a new one`), { code: 'EADDRINUSE' })
+      if (e.code === 'EADDRINUSE') throw Object.assign(new Error(`the engine port 127.0.0.1:${want} recorded at install is held by another process; nothing is steered, agent connections go direct. Free the port, or run "asight uninstall" and "asight on" to pick a new one`), { code: 'EADDRINUSE' })
       throw e
     })
     let v6Held = null // the helper steers IPv6 agent connections to [::1]:port: never attach while someone else holds it (M8)
@@ -395,7 +395,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         if (!mismatch || mismatch.desired !== r.desired || mismatch.actual !== r.actual) {
           mismatch = { desired: r.desired, actual: r.actual }
           failure.write({ event: 'failure', where: 'switch', code: 'state-mismatch', desired: r.desired, actual: r.actual, links: r.links.map((l) => l.name),
-            reason: r.desired === 'on' ? 'capture is on but the kernel has not got this instance\'s links: nothing is steered, agent connections go direct; run "asight collector on" again' : 'capture is off but the kernel still has this instance\'s links' })
+            reason: r.desired === 'on' ? 'capture is on but the kernel has not got this instance\'s links: nothing is steered, agent connections go direct; run "asight on" again' : 'capture is off but the kernel still has this instance\'s links' })
         }
       } else if (!r.degraded && mismatch) {
         mismatch = null

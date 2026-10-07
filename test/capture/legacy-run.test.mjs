@@ -107,8 +107,8 @@ function run(home, args) {
   const e = { ...process.env, HOME: home }
   for (const k of ['HTTPS_PROXY', 'https_proxy', 'ASIGHT_SOURCE', 'ASIGHT_CAPTURE_PORT', 'ASIGHT_MITM_PORT', 'ATRACE_UPSTREAM_PROXY']) delete e[k]
   const p = spawn(process.execPath, [BIN, ...args], { env: e, stdio: ['ignore', 'pipe', 'pipe'] })
-  let err = ''; p.stderr.on('data', (d) => { err += d })
-  return { p, err: () => err }
+  let err = '', out = ''; p.stderr.on('data', (d) => { err += d }); p.stdout.on('data', (d) => { out += d })
+  return { p, err: () => err, out: () => out }
 }
 
 test('`asight capture` (the reverse proxy): mitm-start, a failed write is a sink line while the client gets its answer, SIGTERM is mitm-stop; the health reader reads them', async () => {
@@ -117,11 +117,13 @@ test('`asight capture` (the reverse proxy): mitm-start, a failed write is a sink
   up.listen(0, '127.0.0.1'); await once(up, 'listening')
   const out = path.join(home, 'out-is-a-dir')
   fs.mkdirSync(out) // every envelope write fails: EISDIR
-  const { p, err } = run(home, ['capture', '--port', '0', '--target', `http://127.0.0.1:${up.address().port}`, '--out', out])
+  const { p, err, out: said } = run(home, ['capture', '--port', '0', '--target', `http://127.0.0.1:${up.address().port}`, '--out', out])
   try {
     assert.ok(await until(() => readEvents(home).some((e) => e.event === 'mitm-start')), `mitm-start written (stderr: ${err()})`)
     const start = readEvents(home).find((e) => e.event === 'mitm-start')
     assert.deepEqual([start.source, start.pid, start.out], ['proxy', p.pid, out])
+    assert.ok(await until(() => /point the harness at it/.test(said())), `the banner (stdout: ${said()})`)
+    assert.match(said(), /\(or run: asight monitor on --no-autostart\)/, 'the banner names the command that points Claude Code CLI at the proxy: `asight on` is the collector now (1.6 §2, §4)')
     const body = await new Promise((resolve, reject) => {
       http.request({ host: '127.0.0.1', port: start.port, method: 'POST', path: '/v1/messages', headers: { 'content-type': 'application/json', 'x-api-key': SECRET } }, (res) => { let b = ''; res.on('data', (c) => { b += c }); res.on('end', () => resolve(b)) }).on('error', reject).end('{"model":"m"}')
     })

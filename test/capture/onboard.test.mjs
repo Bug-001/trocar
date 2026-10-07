@@ -358,7 +358,7 @@ test('atraceOn still aborts when the CA is genuinely NOT trusted', () => {
       caDir: path.join(dir, 'ca'), settingsPath, stashPath: path.join(dir, 'stash.json'),
       platform: 'darwin',
       installerOpts: { run: keychainRun({ certPresent: false }), keychain: path.join(dir, 'kc') },
-    }), /ABORTED/, 'a real install failure must still abort rather than steer into a broken TLS path')
+    }), /^Error: asight monitor on ABORTED: .*re-run `asight monitor on` \(or the board's 监测 toggle\)/s, 'a real install failure must still abort rather than steer into a broken TLS path, and say which command to run again: the steer is `monitor on` since D39 (1.6 §2)')
     assert.ok(!fs.existsSync(settingsPath), 'no steer may be written when the CA is absent')
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
