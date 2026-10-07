@@ -378,7 +378,7 @@ test('a netenv.json that could not be written is said: a line in the text, neten
     const mac = tmpDir('asight-st-mac-'); fs.mkdirSync(path.join(mac, '.asight'), { mode: 0o700 }); fs.chmodSync(path.join(mac, '.asight'), 0o500)
     for (const [argv, check] of [[[], (io) => assert.match(io.stdoutText(), /^本机网络环境的副本没写成: [^\n]*netenv\.json: EACCES/m)], [['--json'], (io) => assert.match(io.json().netenv_write_error, /netenv\.json: EACCES$/)]]) {
       const io = fakeIo()
-      await runStatusCli(argv, { io, home: mac, platform: 'darwin', env: {}, deps: { netenv: async () => CLASH() } })
+      await runStatusCli(argv, { io, home: mac, platform: 'darwin', env: {}, deps: { exec: fakeMac({ loaded: [], keychain: false }).run, netenv: async () => CLASH() } })
       check(io)
     }
     fs.chmodSync(path.join(mac, '.asight'), 0o700)
@@ -388,6 +388,7 @@ test('a netenv.json that could not be written is said: a line in the text, neten
 // ── V39: logging out stops the daemon unless linger is on (1.6 §1.1) — `on` and `status` say so, give the command, and never run loginctl (R8) ───────────────────────────────────────────────────
 import { runOnCli } from '../../src/cli/on.mjs'
 import { onCtx, seedClaude, recordingExec } from './fixtures/on-ctx.mjs'
+import { fakeMac } from './fixtures/legacy-ctx.mjs'
 
 test('V39 status: linger off says 登出后停采(未开 linger) and loginctl enable-linger <user>, --json linger false; on says nothing; unreadable says 不知道 with the file and the errno, never 已开', async () => {
   const s = await installedHome()
@@ -428,20 +429,20 @@ test('V39 on: the same lines in the receipt (and in the plan\'s receipt when --j
 })
 
 test('a platform without the new collector (macOS): status prints the old capture\'s health and also what the VPN software is (§6: every platform), without "asight 没有改它" (the old capture does steer Clash there); --json carries the probe; a probe that fails is 不知道 with the reason', async () => {
-  const home = tmpDir('asight-st-mac-')
+  const home = tmpDir('asight-st-mac-'); const exec = fakeMac({ loaded: [], keychain: false }).run // status reads launchd and the keychain there: the runner is the test's
   let io = fakeIo()
-  let exit = await runStatusCli([], { io, home, platform: 'darwin', env: {}, deps: { netenv: async () => CLASH() } })
+  let exit = await runStatusCli([], { io, home, platform: 'darwin', env: {}, deps: { exec, netenv: async () => CLASH() } })
   assert.match(io.stdoutText(), /本平台\(darwin\)还没有新采集器/)
   assert.match(io.stdoutText(), /本机网络环境: Clash Verge\(规则模式,系统代理已开\)/)
   assert.ok(!io.stdoutText().includes('asight 没有改它'), io.stdoutText())
   assert.ok([0, 1, 3].includes(exit))
   io = fakeIo()
-  exit = await runStatusCli(['--json'], { io, home, platform: 'darwin', env: {}, deps: { netenv: async () => CLASH() } })
+  exit = await runStatusCli(['--json'], { io, home, platform: 'darwin', env: {}, deps: { exec, netenv: async () => CLASH() } })
   const v = io.json()
   assert.deepEqual(validateReceipt(v), [])
   assert.equal(v.netenv.products[0].product, 'clash-verge')
   io = fakeIo()
-  await runStatusCli([], { io, home, platform: 'darwin', env: {}, deps: { netenv: async () => { throw new Error('probe broke') } } })
+  await runStatusCli([], { io, home, platform: 'darwin', env: {}, deps: { exec, netenv: async () => { throw new Error('probe broke') } } })
   assert.match(io.stdoutText(), /本机网络环境: 不知道\(probe broke\)/)
   assert.deepEqual(fs.readdirSync(home), [], 'nothing was written: there is no ~/.asight here to keep the board\'s copy in')
 })

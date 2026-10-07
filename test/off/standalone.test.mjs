@@ -322,7 +322,7 @@ test('V35: `asight doctor` has a line for the copy — a ✓ when it is current,
   fs.rmSync(file)
   assert.match(line(doctor()), /⚠ asight-off[^\n]*is not there/)
   assert.ok(!fs.existsSync(file), 'doctor reads: it does not write the copy')
-  assert.deepEqual((fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '').split('\n').filter((c) => /^(systemctl|launchctl|certutil|loginctl) /.test(c)), [], 'and runs none of the tools that change a machine')
+  assert.deepEqual((fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '').split('\n').filter((c) => /^(systemctl|certutil|loginctl) |^launchctl (?!list |getenv )/.test(c)), [], 'and runs none of the tools that change a machine (launchctl list / getenv are questions: status asks them on a Mac)')
 })
 
 test('V35: every `on` writes the copy again — after the first on it is what src/off generates, and a copy that was changed is put back by the next on', async () => {

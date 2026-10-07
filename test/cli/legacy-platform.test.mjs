@@ -11,6 +11,7 @@ import http from 'node:http'
 import { EventEmitter } from 'node:events'
 import { runOffCli } from '../../src/off/main.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
+import { runStatusCli } from '../../src/cli/status.mjs'
 import { asightOffInProcess } from '../../src/capture/control.mjs'
 import { legacyLifecycle } from '../../src/capture/legacy-run.mjs'
 import { createSteerWatch, legacyOffPending } from '../../src/capture/steer-watch.mjs'
@@ -519,3 +520,89 @@ test('V40 (wiring): the web switch\'s own `asight off` — asightOffInProcess �
   const bad = await asightOffInProcess({ home: t.home, env: c2.env, platform: 'darwin', deps: c2.deps })
   assert.equal(bad.exit, 1); assert.equal(bad.receipt.ok, false)
 });
+
+// ── status (1.6 §2, §4: claude-code is Desktop and CLI where the old capture is what on / off drive) ──────────────────────────────────────────────────────────────────────────────────────
+
+const statusCtx = (s, io, { core = null, mac, deps = {}, platform = 'darwin' } = {}) => ({
+  io, home: s.home, platform,
+  env: { PATH: process.env.PATH, ASIGHT_MIHOMO_SOCK: core ? core.sock : path.join(s.home, 'no-such-mihomo.sock') },
+  deps: { exec: mac.run, netenv: async () => ({ at: '2026-10-07T00:00:00.000Z', products: [], unknown: [{ reason: 'a test: no VPN probe runs here' }] }), ...deps },
+})
+const statusJson = async (s, ctx) => { const io = fakeIo(); const exit = await runStatusCli(['--json'], { ...ctx, io }); return { exit, j: io.json() } }
+const NOT_NETENV = (f) => f !== '.asight/netenv.json' // the board's copy of the VPN probe is the one file status may write (src/netenv)
+
+test('V23 / 1.6 §4: status after on — claude-code is two rows: Desktop captured (the block, the core, the MITM, the variable: each with who wrote it and the backup), CLI not captured with 「`on` 不做旧 steer;要采集 CLI 用 `monitor on`」; the ledger is listed; nothing but the VPN copy is written; exit 0', async () => {
+  const s = freshMac(); const core = await fakeCore({ live: false }); const mac = fakeMac({ loaded: [], keychain: false })
+  try {
+    assert.equal(await runOnCli(['--yes'], onCtx(s, fakeIo(), { core, mac })), 0)
+    mac.state.env.NODE_EXTRA_CA_CERTS = s.caPath // what the primer does when launchd runs it
+    const before = snapshot(s.home)
+    const io = fakeIo()
+    assert.equal(await runStatusCli([], statusCtx(s, io, { core, mac })), 0, io.text())
+    const t = io.stdoutText()
+    assert.match(t, /^本平台\(darwin\)还没有新采集器:这里 asight on \/ off 驱动旧采集/m)
+    assert.match(t, /^claude-code$/m); assert.match(t, /^  Desktop: 已采集$/m)
+    assert.match(t, /Script\.js 里有 asight 的块\(asight on 写的,备份 ~\/\.asight\/backup\/[0-9a-f]{16}-/)
+    assert.match(t, /核里:atrace-mitm 在/); assert.match(t, /com\.asight\.mitm: 已加载,在跑\(pid 4242;asight on 写的/); assert.match(t, /NODE_EXTRA_CA_CERTS = ~\/\.asight\/ca\/atrace-ca\.crt\(asight 的 CA\)/)
+    assert.match(t, /^  CLI: 没开$/m); assert.ok(t.includes('`on` 不做旧 steer;要采集 CLI 用 `monitor on`'))
+    assert.match(t, /asight on 的账 ~\/\.asight\/legacy-manifest\.json: 3 项/); assert.match(t, /legacy-clash-block .*Script\.js  备份 /)
+    assert.ok(!t.includes('旧命令装的'), 'everything here was written by on')
+    assert.deepEqual(changedFiles(before, snapshot(s.home)).filter(NOT_NETENV), [], 'status reads')
+    const { exit, j } = await statusJson(s, statusCtx(s, fakeIo(), { core, mac }))
+    assert.equal(exit, 0); assert.deepEqual(validateReceipt(j), [])
+    const h = j.harnesses[0]
+    assert.deepEqual([h.harness, h.desired, h.captured, h.desktop.state, h.cli.state], ['claude-code', 'on', true, 'captured', 'off'])
+    assert.equal(j.legacy.ledger.entries.length, 3)
+  } finally { await core.close() }
+})
+
+test('V23 / R11: a Clash core that does not answer is 「不知道」 and exit 3 — never a pass; a route that is in the file but not in the core is not captured, exit 1, with the reason; the old command\'s block is 「旧命令装的,无备份」', async () => {
+  const s = macHome({ userMain: USER_MAIN, steer: false }); const mac = fakeMac({ keychain: false, env: { NODE_EXTRA_CA_CERTS: s.caPath } })
+  const io = fakeIo()
+  assert.equal(await runStatusCli([], statusCtx(s, io, { mac })), 3, io.text()) // the core is a socket nobody listens on
+  assert.match(io.stdoutText(), /^  Desktop: 不知道\(Clash 的核问不到/m); assert.match(io.stdoutText(), /核里:不知道\(/)
+  assert.ok(io.stdoutText().includes('旧命令装的,无备份'))
+  const core = await fakeCore({ live: false })
+  try {
+    const bad = fakeIo()
+    assert.equal(await runStatusCli([], statusCtx(s, bad, { core, mac })), 1, bad.text())
+    assert.match(bad.stdoutText(), /^  Desktop: 没采集\(Clash 核里没有 atrace-mitm/m); assert.match(bad.stdoutText(), /✗ Clash 路由: .*核里:atrace-mitm 不在/)
+    const { exit, j } = await statusJson(s, statusCtx(s, fakeIo(), { core, mac }))
+    assert.deepEqual([exit, j.harnesses[0].captured, j.harnesses[0].desktop.state], [1, false, 'not-captured'])
+  } finally { await core.close() }
+})
+
+test('1.6 §4: status where nothing of the old capture is there is exit 0 with 没开 for both parts (a Verge that does not answer is nothing to worry about when asight put nothing in it); the CLI steer of `monitor on` makes the CLI row captured while com.asight.monitor runs and not captured when it does not; a name other than claude-code is exit 2; Windows has no Desktop part', async () => {
+  const s = freshMac(); const mac = fakeMac({ loaded: [], keychain: false })
+  const io = fakeIo()
+  assert.equal(await runStatusCli([], statusCtx(s, io, { mac })), 0, io.text())
+  assert.match(io.stdoutText(), /^  Desktop: 没开$/m); assert.match(io.stdoutText(), /^  CLI: 没开$/m); assert.match(io.stdoutText(), /asight on 的账: 没有/)
+  const steered = macHome({ block: false, runtime: false, agents: [] , ca: false })
+  const loaded = fakeMac({ loaded: ['com.asight.monitor'], pids: { 'com.asight.monitor': 77 }, keychain: false })
+  const a = fakeIo()
+  assert.equal(await runStatusCli([], statusCtx(steered, a, { mac: loaded })), 0, a.text())
+  assert.match(a.stdoutText(), /^  CLI: 已采集$/m); assert.match(a.stdoutText(), /旧 steer: 在位:settings\.json 的 env\.HTTPS_PROXY = http:\/\/127\.0\.0\.1:9898\(旧命令装的,无备份\)/); assert.match(a.stdoutText(), /com\.asight\.monitor: 已加载\(pid 77\)/)
+  const b = fakeIo()
+  assert.equal(await runStatusCli([], statusCtx(steered, b, { mac: fakeMac({ loaded: [], keychain: false }) })), 1, b.text())
+  assert.match(b.stdoutText(), /^  CLI: 没采集\(com\.asight\.monitor 没在跑/m)
+  const name = fakeIo()
+  assert.equal(await runStatusCli(['codex'], statusCtx(s, name, { mac })), 2); assert.match(name.stderrText(), /本平台只有 claude-code 的旧采集,没有按 harness 的开关/)
+  const win = fakeIo()
+  assert.equal(await runStatusCli([], statusCtx(freshMac(), win, { mac, platform: 'win32' })), 0, win.text()); assert.match(win.stdoutText(), /Desktop: 没开/); assert.match(win.stdoutText(), /本平台\(win32\)没有旧采集的 Desktop 部分/)
+})
+
+test('1.6 §4: Desktop is captured only when every part holds — a MITM that is loaded but not running, a login variable that is unset or points at another CA, each makes it 没采集 (exit 1) and names the part; with the core live the rest does not matter', async () => {
+  const s = macHome({ userMain: USER_MAIN, steer: false }); const core = await fakeCore({ live: true })
+  try {
+    const cases = [
+      ['loaded, no pid', fakeMac({ pids: {}, env: { NODE_EXTRA_CA_CERTS: s.caPath }, keychain: false }), /✗ com\.asight\.mitm: 已加载,但没在跑/],
+      ['variable unset', fakeMac({ env: {}, keychain: false }), /✗ com\.asight\.env: 已装;登录环境的 NODE_EXTRA_CA_CERTS 没设/],
+      ['variable of another CA', fakeMac({ env: { NODE_EXTRA_CA_CERTS: '/etc/other-ca.pem' }, keychain: false }), /✗ com\.asight\.env: .*= \/etc\/other-ca\.pem\(不是 asight 的 CA\)/],
+    ]
+    for (const [name, mac, line] of cases) {
+      const io = fakeIo()
+      assert.equal(await runStatusCli([], statusCtx(s, io, { core, mac })), 1, `${name}: ${io.text()}`)
+      assert.match(io.stdoutText(), /^  Desktop: 没采集/m, name); assert.match(io.stdoutText(), line, name)
+    }
+  } finally { await core.close() }
+})

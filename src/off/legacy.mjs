@@ -191,7 +191,7 @@ export async function legacyArtifacts({ home = nodeOs.homedir(), platform = proc
     cb.merge = mg.error ? null : mg.text == null ? false : stripBlock(stripMergeLegacy(mg.text)) !== mg.text
     const errs = [sc.error, rt.error, mg.error].filter(Boolean)
     if (errs.length) cb.error = errs.join('; ')
-    if (live) {
+    if (live && cb.verge) { // a Clash that has none of the three files is not one asight put a route into: there is no core to ask
       const clash = makeClash({ fs, scriptPath: p.scriptPath, runtimePath: p.runtimePath, mergePath: p.mergePath, exec, env, platform, ...mihomo })
       let l = null; try { l = await clash.probeLive() } catch (e) { legacyRethrowSandbox(e) }
       cb.live = l
@@ -506,7 +506,7 @@ export async function undoLegacy({ home = nodeOs.homedir(), platform = process.p
 }
 
 // the paths the login environment's CA variable may point at and still be asight's: the one the env plist sets, and the two CA directories (D27)
-function ownCaPaths(art, home) {
+export function ownCaPaths(art, home) {
   const out = new Set([path.join(asightHome(home), 'ca', 'atrace-ca.crt'), path.join(home, '.atrace', 'ca', 'atrace-ca.crt')])
   if (art.agents && art.agents.env && art.agents.env.caPath) out.add(art.agents.env.caPath)
   return out

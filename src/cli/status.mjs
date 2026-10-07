@@ -23,6 +23,9 @@ import { removeAsightText, SENTINEL } from '../off/text-edit.mjs'
 import { userProcessesOf } from '../off/orchestrate.mjs'
 import { probeNetenv, netenvText, netenvFile, writeNetenv } from '../netenv/index.mjs'
 import { captureHealth } from '../health/read.mjs'
+import { legacyArtifacts, hasNewCollector } from '../off/legacy.mjs'
+import { legacyNamesProblem } from '../off/legacy-cli.mjs'
+import { judgeLegacy, legacyStatusLines, legacyStatusJson } from './legacy-status.mjs'
 import { trustReasonText } from '../collector/core/codes.mjs'
 import { formatStatus, formatHealth } from '../collector/cli.mjs'
 
@@ -251,16 +254,22 @@ const failedIn24h = (h) => !!h && [h.collector && h.collector.failures, h.legacy
 
 const USAGE = 'usage: asight status [harness…] [--json]'
 
-// A platform without the new collector (macOS, Windows: 1.6 §4): the old capture is what `on` / `off` drive there, and Task 10 gives `status` its per-harness rows (Desktop and CLI of claude-code). Until then `deps.legacyStatus`
-// is that hook, and without it the old capture's own health is what is printed — the same text `asight collector status` printed there before.
+// A platform without the new collector (macOS, Windows: 1.6 §4): the old capture is what `on` / `off` drive there, and `status` judges it as claude-code's Desktop and CLI rows (src/cli/legacy-status.mjs),
+// then prints the old capture's own health and the VPN software. `deps.legacyStatus` replaces all of it (a test's). A read that failed is 不知道 and exit 3, never a pass (R11).
 async function legacyStatus(argv, { io, env, home, platform, deps, json }) {
   if (deps.legacyStatus) return deps.legacyStatus(argv, { io, env, home, platform, deps })
+  const fs = deps.fs || nodeFs
   let health = null, error = null
-  try { health = deps.captureHealth ? deps.captureHealth({ home: asightHome(home) }) : captureHealth({ home: asightHome(home), fs: deps.fs || nodeFs }) } catch (e) { rethrowSandbox(e); error = errMessage(e) }
-  const exit = error ? EXIT.unknown : failedIn24h(health) ? EXIT.incomplete : EXIT.ok
+  try { health = deps.captureHealth ? deps.captureHealth({ home: asightHome(home) }) : captureHealth({ home: asightHome(home), fs }) } catch (e) { rethrowSandbox(e); error = errMessage(e) }
+  let art = null, artError = null
+  try { art = await legacyArtifacts({ home, platform, exec: deps.exec || null, fs, env, mihomo: deps.mihomo || {}, live: true }) } catch (e) { rethrowSandbox(e); artError = errMessage(e) }
+  const j = art ? judgeLegacy(art, { home }) : null
+  const exit = error || artError || (j && j.unreadable) ? EXIT.unknown : failedIn24h(health) || (j && j.failing) ? EXIT.incomplete : EXIT.ok
   const netenv = await lookAtNetenv({ home, platform, env, deps }) // §6: the VPN software is looked at on every platform, not only where the new collector runs
-  if (json) { io.out(JSON.stringify({ ...newReceipt('status'), ok: exit === EXIT.ok, platform, note: 'this platform has no new collector: the old capture is what on / off drive here', ...(health ? { health } : { health_error: error }), netenv: netenv.result || { error: netenv.error }, ...(netenv.write_error ? { netenv_write_error: netenv.write_error } : {}) }, null, 2)); return exit }
-  io.out(`本平台(${platform})还没有新采集器:这里 asight on / off 驱动旧采集(过渡期,1.6 §4),逐 harness 的判词不适用。下面是旧采集与原始层的状态:`)
+  if (json) { io.out(JSON.stringify({ ...newReceipt('status'), ok: exit === EXIT.ok, platform, note: 'this platform has no new collector: the old capture is what on / off drive here', ...(j ? { harnesses: legacyStatusJson(j), legacy: { ca: j.ca.present, ledger: j.ledger } } : { legacy_error: artError }), ...(health ? { health } : { health_error: error }), netenv: netenv.result || { error: netenv.error }, ...(netenv.write_error ? { netenv_write_error: netenv.write_error } : {}) }, null, 2)); return exit }
+  io.out(`本平台(${platform})还没有新采集器:这里 asight on / off 驱动旧采集(过渡期,1.6 §4)。`)
+  for (const l of j ? legacyStatusLines(j, { home }) : [`旧采集的状态读不出来: 不知道(${artError})`]) io.out(l)
+  io.out('下面是旧采集与原始层的健康:')
   for (const l of health ? formatHealth(health) : [`capture health could not be read: ${error}`]) io.out(l)
   for (const l of [...netenvText(netenv, { platform }), ...netenvWriteText(netenv)]) io.out(l)
   return exit
@@ -276,7 +285,11 @@ export async function runStatusCli(argv, { io, env = process.env, home = nodeOs.
   }
   const named = resolveHarnesses(names)
   if (!named.ok) { io.err(`asight status: unknown harness ${named.unknown.join(', ')}; the names are: ${named.known.join(', ')}`); return EXIT.usage }
-  if (platform !== 'linux') return legacyStatus(argv, { io, env, home, platform, deps, json })
+  if (!hasNewCollector(platform)) { // 1.6 §4: no new collector here; only claude-code has an old capture
+    const problem = legacyNamesProblem(named.ids)
+    if (problem) { io.err(`asight status: ${problem}`); return EXIT.usage }
+    return legacyStatus(argv, { io, env, home, platform, deps, json })
+  }
   const f = await gatherStatus({ home, env, deps: { ...deps, platform }, names: named.ids })
   const wanted = f.harnesses.filter((h) => h.desired === 'on')
   const unreadable = f.harnesses.some((h) => h.judged.captured === null) || !!(f.state && f.state.error) || !!f.manifest.error || !!f.health_error
