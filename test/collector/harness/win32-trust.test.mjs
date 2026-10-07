@@ -9,7 +9,8 @@ import crypto from 'node:crypto'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 import { planTrust } from '../../../src/collector/core/trust/plan.mjs'
 import { installCollector, uninstallCollector } from '../../../src/collector/install.mjs'
-import { readManifest } from '../../../src/collector/core/trust/journal.mjs'
+import { readManifest, installedAt } from '../../../src/collector/core/trust/journal.mjs'
+import { parseDotenv } from '../../../src/collector/core/config-read.mjs'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 
@@ -39,6 +40,14 @@ test('W19 plan: every path an entry writes into an agent config has forward slas
   assert.throws(() => plan({ inject: () => ({ entries: [jsonKey({ keys: ['env', 'NODE_OPTIONS'] })] }) }), /never written/)
 })
 
+test('W19 plan: a dotenv block entry on Windows asks to be written quoted when its value needs it (a profile with a space); on Linux it does not, so the unquoted-only rule stays', () => {
+  const p = plan({ inject: () => ({ entries: [dotenv()], files: [{ path: BUNDLE, bundle: true }] }) })
+  assert.deepEqual([p.entries[0].quote, p.entries[0].vars.SSL_CERT_FILE], [true, 'C:/Users/u/.asight/collector/ca/combined-alpha.pem'], 'the plain forward-slash path stays the entry\'s value')
+  assert.equal(plan({ inject: () => ({ entries: [jsonKey()] }) }).entries[0].quote, undefined, 'a JSON key has no quotes to choose')
+  const lin = planTrust({ descriptors: [{ name: 'alpha', inject: () => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: '/h/.alpha/.env', vars: { SSL_CERT_FILE: '/h/.asight/collector/ca/combined-alpha.pem' }, semantic: 'replace' }], files: [{ path: '/h/.asight/collector/ca/combined-alpha.pem', bundle: true }] }) }], ctxFor: () => ({ os: 'linux', readText: () => null }), caCertPem: CA.certPem, collectorDir: '/h/.asight/collector' })
+  assert.equal(lin.entries[0].quote, undefined)
+})
+
 test('W19 plan: the PowerShell profile is the Windows login environment and is never an entry; a shim lives in the collector\'s bin directory and nowhere else', () => {
   for (const bad of [raw`C:\Users\u\Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1`, raw`C:\Users\u\Documents\PowerShell\profile.ps1`, 'C:/Users/u/Documents/PowerShell/Microsoft.VSCode_profile.ps1']) {
     assert.throws(() => plan({ inject: () => ({ entries: [jsonKey({ path: bad })] }) }), /login-environment/, bad)
@@ -64,8 +73,9 @@ test('W19 plan: only the OS the entries are for is asked — a harness without W
 })
 
 // ── the real data in a sandbox HOME laid out like %USERPROFILE% ──
-function box() {
-  const home = tmpDir('asight-w19-')
+function box(...sub) { // `sub`: segments under the temp directory, e.g. a profile directory with a space in it
+  const home = path.join(tmpDir('asight-w19-'), ...sub)
+  fs.mkdirSync(home, { recursive: true })
   const put = (rel, text) => { const f = path.join(home, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text); return f }
   const snapshot = () => { const out = new Map(); const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, e.name); if (f === path.join(home, '.asight')) continue; if (e.isDirectory()) walk(f); else out.set(f, sha(fs.readFileSync(f))) } }; walk(home); return out }
   return { home, dir: path.join(home, '.asight', 'collector'), put, snapshot }
@@ -145,6 +155,55 @@ test('W19: Hermes — no %LOCALAPPDATA%\\hermes means no entry and a note; HERME
   assert.deepEqual(hermes.groups[0].proxyEntry.files(ctx({ HERMES_HOME: path.join(root, 'profiles', 'work') })), got.entries.map((e) => e.path), 'the proxy entry goes into the files the trust block does')
   assert.deepEqual(hermes.groups[0].proxyEntry.files(ctx()), [], 'not installed: no file')
 })
+
+// ── W19 in the profiles Windows users really have: a space in the profile directory, and files that an editor there wrote with CRLF ──
+// Every harness's user files as one user has them; `eol` is the line ending of the files, `corp` a corporate CA the user's own SSL_CERT_FILE / NODE_EXTRA_CA_CERTS lines name.
+function seedAll(b, eol, corp) {
+  const nl = (t) => t.replace(/\n/g, eol)
+  const corpFile = b.put('corp.pem', corp.certPem)
+  b.put('.claude/settings.json', nl('{\n  "env": {\n    "NODE_EXTRA_CA_CERTS": "' + corpFile.replace(/\\/g, '/') + '"\n  },\n  "theme": "dark"\n}\n'))
+  b.put('.codex/.env', nl(`OPENAI_API_KEY=sk-secret\nSSL_CERT_FILE=${corpFile}\nHTTPS_PROXY=http://corp:3128\n# a comment\n`))
+  b.put('.zcode/cli/config.json', nl('{\n  "network": {\n    "caCertFile": "' + corpFile.replace(/\\/g, '/') + '"\n  }\n}\n'))
+  b.put('.dsh/cordis.patch.yml', nl('- insert: [{ name: other-plugin }]\n'))
+  b.put('.dsh/.env', nl('DEEPSEEK_API_KEY=sk-secret\n'))
+  b.put('AppData/Local/hermes/.env', nl(`OPENROUTER_API_KEY=sk-secret\nSSL_CERT_FILE=${corpFile}\nHTTPS_PROXY=http://corp:3128\n`))
+  b.put('AppData/Local/hermes/hermes-agent/install-stamp.json', '{"tag":"v2026.9.20"}')
+  b.put('.kimi-code/bin/kimi.exe', 'MZ')
+  return corpFile
+}
+const PROFILES = [{ label: 'C:\\Users\\John Smith', sub: ['John Smith'] }, { label: 'OneDrive - Contoso\\John Smith', sub: ['OneDrive - Contoso', 'John Smith'] }]
+const SETS = [['claude-code'], ['codex'], ['hermes'], ['z-code'], ['claude-code', 'codex'], 'all']
+
+for (const eol of ['\n', '\r\n']) for (const prof of PROFILES) {
+  test(`W19 (${eol === '\n' ? 'LF' : 'CRLF'} files, profile ${prof.label}): every harness — alone, Claude Code with Codex, and all seven together — installs, the paths with a space are double-quoted in the .env blocks and read back whole, the user's own same-key lines are out of effect with their prior recorded, and off restores every byte`, async () => {
+    for (const set of SETS) {
+      const b = box(...prof.sub)
+      const corp = createCa({ commonName: 'corp relay CA' })
+      const corpFile = seedAll(b, eol, corp)
+      const before = b.snapshot()
+      const harnesses = set === 'all' ? ALL : ALL.filter((d) => set.includes(d.name))
+      const label = `${set === 'all' ? 'all seven' : set.join('+')}`
+      await install(b, { harnesses })
+      const m = readManifest(b.dir)
+      assert.equal(m.complete, true, label)
+      for (const e of m.entries) assert.ok(!/\\/.test(e.value || Object.values(e.vars || {}).join('')), `${label}: ${e.path}: forward slashes, and the plain path (no quotes) is what the manifest holds`)
+      for (const [name, rel, bundle] of [['codex', '.codex/.env', 'combined-codex.pem'], ['hermes', 'AppData/Local/hermes/.env', 'combined-hermes.pem']].filter(([n]) => set === 'all' || set.includes(n))) {
+        const text = fs.readFileSync(path.join(b.home, rel), 'utf8')
+        const want = path.join(b.dir, 'ca', bundle)
+        assert.ok(text.includes(`SSL_CERT_FILE="${want}"`), `${label}: the value with spaces is written in double quotes: ${text.split(/\r?\n/).slice(0, 4).join(' | ')}`)
+        assert.equal(parseDotenv(text).get('SSL_CERT_FILE'), want, `${label}: what Codex (dotenvy) and Hermes (python-dotenv) read is the whole path`)
+        assert.deepEqual([...parseDotenv(text)].filter(([k]) => k === 'SSL_CERT_FILE').length, 1, `${label}: the user's own SSL_CERT_FILE line is out of effect, not shadowed by order`)
+        if (eol === '\r\n') assert.ok(!/[^\r]\n/.test(text), `${label}: ${name}'s .env stays CRLF`)
+        const entry = m.entries.find((e) => e.path === path.join(b.home, rel))
+        assert.equal(installedAt(m, { file: entry.path, vars: Object.fromEntries(parseDotenv(text)) }), Date.parse(entry.installed_at), `${label}: ${name}: the tracker still recognises asight's own block (the manifest's plain path equals what the reader gets from the quoted one)`)
+        assert.deepEqual(entry.prior_value, { SSL_CERT_FILE: corpFile }, `${label}: ${name}: the user's value is recorded, to be carried into the bundle and put back by off`)
+        assert.ok(fs.readFileSync(want, 'utf8').includes(corp.certPem.trim()), `${label}: ${name}: the CA the user's line named is in the combined bundle`)
+      }
+      await uninstall(b, harnesses)
+      assert.deepEqual([...b.snapshot()], [...before], `${label}: every byte of the user's files is back`)
+    }
+  })
+}
 
 // ── W20: the combined bundle's Windows roots (4.8 §6.2) ──
 import nodeFs from 'node:fs'
@@ -249,9 +308,12 @@ const CASES = [
 ]
 const URL_OF = (g) => `http://${g}:${INGRESS.listenerToken}@127.0.0.1:${INGRESS.port}`
 
-for (const c of CASES) {
-  test(`W19 proxy entry, ${c.g}: pointed at the group's kernel port with the user's proxy recorded as prior_value (the manifest alone), then put back to the byte — with and without a user file`, () => {
-    const b = box()
+// the files as a user on Windows has them: LF, or CRLF (an editor there writes CRLF), in a profile directory that has a space in it (C:\Users\John Smith, OneDrive - Contoso)
+const SHAPES = [{ eol: '\n', sub: [], label: 'LF' }, { eol: '\r\n', sub: [], label: 'CRLF' }, { eol: '\r\n', sub: ['OneDrive - Contoso', 'John Smith'], label: 'CRLF, profile with spaces' }]
+for (const c0 of CASES) for (const shape of SHAPES) {
+  const c = { ...c0, user: c0.user.replace(/\n/g, shape.eol) }
+  test(`W19 proxy entry, ${c.g} (${shape.label}): pointed at the group's kernel port with the user's proxy recorded as prior_value (the manifest alone), then put back to the byte — with and without a user file`, () => {
+    const b = box(...shape.sub)
     const group = only(c.harness)[0].win32.groups.find((g) => g.g === c.g)
     const file = b.put(c.file, c.user)
     const ctx = ctxOf(b)
@@ -263,7 +325,9 @@ for (const c of CASES) {
     const done = e.kind === 'text' ? applyTextEntry({ dir: b.dir, manifest: m, harness: c.harness, file: e.path, edit: e }) : applyJsonKey({ dir: b.dir, manifest: m, harness: c.harness, file: e.path, keys: e.keys, value: e.value })
     const written = fs.readFileSync(file, 'utf8')
     assert.equal(c.value(written), URL_OF(c.g), 'the agent now reads the group\'s port, with the credentials the listener asks for')
-    if (c.block) assert.equal(/NO_PROXY=localhost,127\.0\.0\.1,::1\n/.test(written), c.noProxy !== false, 'the loopback never goes round the kernel (a block that writes NO_PROXY)')
+    if (c.block) assert.equal(/NO_PROXY=localhost,127\.0\.0\.1,::1\r?\n/.test(written), c.noProxy !== false, 'the loopback never goes round the kernel (a block that writes NO_PROXY)')
+    if (c.block) assert.deepEqual([...parseDotenv(written)].filter(([k]) => k === 'HTTPS_PROXY'), [['HTTPS_PROXY', URL_OF(c.g)]], 'what the agent reads: the block\'s URL, the user\'s own line is behind the prefix and out of effect (the last assignment wins)')
+    if (c.block && shape.eol === '\r\n') assert.ok(!/[^\r]\n/.test(written), 'a CRLF file stays CRLF: the block does not mix line endings in')
     assert.ok(JSON.stringify(done.prior_value).includes(USER), 'the user\'s own proxy is what the manifest records, to become the upstream')
     const leaks = []
     const walk = (d) => { for (const n of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, n.name); if (n.isDirectory()) walk(f); else if (fs.readFileSync(f, 'utf8').includes('s3cret')) leaks.push(path.relative(b.home, f)) } }

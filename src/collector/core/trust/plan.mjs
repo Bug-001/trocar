@@ -16,7 +16,8 @@
 // Windows (4.8 §6.1, `ctx.os === 'win32'`): the entries come from the descriptor's `win32.inject(ctx)` (the same contract), automatic ones only — a proxy entry is data
 // (`win32.groups[].proxyEntry`), written after the kernel's read-back, never part of this plan (1.6 R9). A path may be written with either slash and is compared
 // ignoring case; every path an entry writes INTO an agent's config (a key's value, a block's variables) is returned with forward slashes, because dotenvy reads a
-// backslash as an escape and silently drops the value. The PowerShell profile is the Windows login environment: never an entry.
+// backslash as an escape and silently drops the value; a dotenv block's entry also says `quote: true`, so a profile directory with a space (C:\Users\John Smith) is written in double
+// quotes instead of refused (the entry's `vars` keep the plain path). The PowerShell profile is the Windows login environment: never an entry.
 import path from 'node:path'
 import { X509Certificate } from 'node:crypto'
 import { certsOf, composeBundle } from './bundle.mjs'
@@ -62,7 +63,8 @@ export function planTrust({ descriptors, ctxFor, caCertPem, collectorDir, roots 
     const inBin = (p) => (win ? slash(p).split('/').slice(0, -1).join('/').toLowerCase() === binDir.toLowerCase() : path.dirname(p) === binDir)
     const sameFile = (a, b) => (win ? slash(a).toLowerCase() === slash(b).toLowerCase() : a === b)
     const loginEnv = (p) => (win ? WIN_LOGIN_ENV.some((re) => re.test(slash(p))) : LOGIN_ENV.some((re) => re.test(p)))
-    const forward = (e) => (!win ? e : { ...e, ...(typeof e.value === 'string' ? { value: slash(e.value) } : {}), ...(e.vars ? { vars: Object.fromEntries(Object.entries(e.vars).map(([k, v]) => [k, slash(v)])) } : {}) })
+    // a profile directory on Windows often has a space (C:\Users\John Smith): the block may then write its value in double quotes (`quote`, text-edit.mjs); the entry keeps the plain path
+    const forward = (e) => (!win ? e : { ...e, ...(typeof e.value === 'string' ? { value: slash(e.value) } : {}), ...(e.vars ? { vars: Object.fromEntries(Object.entries(e.vars).map(([k, v]) => [k, slash(v)])), ...(e.format === 'dotenv-block' ? { quote: true } : {}) } : {}) })
     const out = inject(ctx) || {}
     // one variable set to one value: the checks every CA setting asight writes must pass (key or block variable)
     const checkVar = (where, key, value, semantic) => {

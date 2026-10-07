@@ -131,7 +131,7 @@ export function applyJsonKey({ dir, manifest, harness, file, keys, value, now = 
   return entry
 }
 
-// A text entry (text-edit.mjs): edit = { format: 'dotenv-block', vars } | { format: 'line', line, after? } |
+// A text entry (text-edit.mjs): edit = { format: 'dotenv-block', vars, quote? } | { format: 'line', line, after? } |
 // { format: 'yaml-list', line }. Text asight already put there under an install this manifest does not list is
 // refused: a second block or row would only be undone once.
 function editText(file, text, edit) {
@@ -139,7 +139,7 @@ function editText(file, text, edit) {
     throw new Error(`${file} already holds asight's text from an install this manifest does not list; take it out, then install again`)
   }
   try {
-    if (edit.format === 'dotenv-block') return dotenvBlock(text, edit.vars)
+    if (edit.format === 'dotenv-block') return dotenvBlock(text, edit.vars, { quote: edit.quote === true })
     if (edit.format === 'line' || edit.format === 'yaml-list') return { ...insertLine(text, { line: edit.line, after: edit.after || null, format: edit.format === 'yaml-list' ? 'yaml-list' : 'lines' }), prior: null }
   } catch (e) { throw new Error(`${file}: ${e.message}`) }
   throw new Error(`${file}: unknown text edit ${edit.format}`)

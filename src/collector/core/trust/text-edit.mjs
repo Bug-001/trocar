@@ -14,28 +14,39 @@ export const OFF_PREFIX = `#${SENTINEL.replace(' ', '-')}-off# `
 export const lineComment = (what) => `# ${SENTINEL}: ${what} (\`asight collector uninstall\` removes this line)`
 
 const SAFE_VALUE = /^[^\s"'`#$\\]+$/ // unquoted dotenv value: an absolute path without spaces, quotes, # or $
+// Inside double quotes a space, a single quote, brackets and # are plain characters; what dotenvy and python-dotenv read as an escape (\), a substitution ($, `) or the end of the line is
+// not. Only an entry that asks for it (`quote`: a Windows profile directory is often `C:/Users/John Smith`) may write a value this way; the default stays the unquoted-only rule.
+const QUOTABLE_VALUE = /^[^"`$\\\r\n]+$/
+const CANNOT_QUOTE = '; this value cannot be written even in double quotes (it holds a double quote, a dollar sign, a backtick, a backslash or a line break)'
 const lineStarts = (text) => { const out = [0]; for (let i = text.indexOf('\n'); i >= 0; i = text.indexOf('\n', i + 1)) if (i + 1 < text.length) out.push(i + 1); return out }
 const unquote = (v) => { const t = v.trim(); const m = /^(["'])(.*)\1/.exec(t); return m ? m[2] : t.replace(/\s+#.*$/, '') }
 
 // The block at offset 0 with every `vars` key; each user line assigning one of them (export or not) gets OFF_PREFIX.
 // prior = the value the agent used to read (the last assignment wins in dotenvy and python-dotenv), or null.
-export function dotenvBlock(text, vars) {
+// The block ends its lines the way the file does (a .env edited on Windows is CRLF: an editor that keeps a file's line ending then never mixes them); a line's own \r is not part of
+// what it assigns. `quote`: a value that cannot stand unquoted (a space in it) is written in double quotes instead of refused; `vars` keeps the plain value, the quotes are only text.
+export function dotenvBlock(text, vars, { quote = false } = {}) {
+  const shown = {}
   for (const [k, v] of Object.entries(vars)) {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) throw new Error(`${k} is not a dotenv key`)
-    if (!SAFE_VALUE.test(v)) throw new Error(`${k}=${v}: asight writes unquoted absolute paths only (no spaces, quotes, # or $)`)
+    if (SAFE_VALUE.test(v)) shown[k] = v
+    else if (quote && QUOTABLE_VALUE.test(v)) shown[k] = `"${v}"`
+    else throw new Error(`${k}=${v}: asight writes unquoted absolute paths only (no spaces, quotes, # or $)${quote ? CANNOT_QUOTE : ''}`)
   }
   const src = text == null ? '' : text
+  const crlf = (src.match(/\r\n/g) || []).length
+  const eol = crlf > (src.match(/\n/g) || []).length - crlf ? '\r\n' : '\n'
   const ops = []
   const prior = {}
   const starts = lineStarts(src)
   for (const at of [...starts].reverse()) { // highest offset first: earlier offsets stay valid as the ops apply in order
-    const line = src.slice(at, src.indexOf('\n', at) < 0 ? src.length : src.indexOf('\n', at))
+    const line = src.slice(at, src.indexOf('\n', at) < 0 ? src.length : src.indexOf('\n', at)).replace(/\r$/, '')
     const m = /^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=(.*)$/.exec(line)
     if (!m || !(m[1] in vars)) continue
     if (!(m[1] in prior)) prior[m[1]] = unquote(m[2])
     ops.push({ offset: at, removed: '', inserted: OFF_PREFIX })
   }
-  const block = [BLOCK_BEGIN, ...Object.entries(vars).map(([k, v]) => `${k}=${v}`), BLOCK_END].join('\n') + '\n' // its own LF
+  const block = [BLOCK_BEGIN, ...Object.entries(shown).map(([k, v]) => `${k}=${v}`), BLOCK_END].join(eol) + eol
   ops.push({ offset: 0, removed: '', inserted: block })
   return { text: applyOps(src, ops), ops, prior: Object.keys(prior).length ? prior : null }
 }
@@ -77,11 +88,11 @@ const one = (src, offset, inserted) => ({ text: applyOps(src, [{ offset, removed
 // (a YAML `[]`) and strip OFF_PREFIX from the user's lines. Everything else stays byte for byte.
 // Returns { text, found } (found: false when none of asight's text is left — nothing was changed).
 const escapeRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-function dropLine(t, line) { // its first whole-line occurrence, with its own newline; null when absent
-  const m = new RegExp(`(^|\n)${escapeRe(line)}(\n|$)`).exec(t)
+function dropLine(t, line) { // its first whole-line occurrence, with its own newline (CRLF or LF, whichever an editor left it with); null when absent
+  const m = new RegExp(`(^|\n)${escapeRe(line)}\r?(\n|$)`).exec(t)
   if (!m) return null
   const at = m.index + m[1].length
-  return t.slice(0, at) + t.slice(at + line.length + m[2].length)
+  return t.slice(0, at) + t.slice(m.index + m[0].length)
 }
 export function removeAsightText(text, ops) {
   let t = text
@@ -93,7 +104,7 @@ export function removeAsightText(text, ops) {
       if (i >= 0) { t = t.slice(0, i) + op.removed + t.slice(i + op.inserted.length); found = true }
       continue
     }
-    for (const line of op.inserted.split('\n').filter((l) => l !== '')) {
+    for (const line of op.inserted.split('\n').map((l) => l.replace(/\r$/, '')).filter((l) => l !== '')) {
       const out = dropLine(t, line)
       if (out != null) { t = out; found = true }
     }
