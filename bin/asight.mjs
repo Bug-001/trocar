@@ -194,16 +194,18 @@ async function main() {
       const { appendLegacyEvent, failureOf } = await import(r('src', 'capture', 'events.mjs'));
       fs.mkdirSync(path.dirname(out), { recursive: true });
       const sink = createCaptureSink(out);
-      const life = legacyLifecycle({ source: 'mitm', port, out });
       let n = 0;
       const server = createMitmProxy({ targetHost, leaf, upstreamProxy, keepRawSse, onEvent: (e) => appendLegacyEvent(e), log: (m) => console.error(m), onEnvelope: (env) => { if (sink.write(env) && ++n % 10 === 0) console.log(`  … ${n} envelopes captured`); } });
+      // given its server, a SIGTERM (what `launchctl unload` makes launchd send) drains: no new connections, the open ones get 10 s to end, then `mitm-stop` says how many were cut (RFC 1.6 §4)
+      const life = legacyLifecycle({ source: 'mitm', port, out, server });
       server.on('error', (e) => { appendLegacyEvent(failureOf('mitm', e, 'start-failed')); if (e.code === 'EADDRINUSE') process.exit(1); });
       // D38 L-12: the Desktop steer this MITM serves is checked at start and every 60 s; losing it is a line
       if (process.platform === 'darwin') {
         const { getDesktopSteer } = await import(r('src', 'capture', 'desktop-steer.mjs'));
-        const { createSteerWatch } = await import(r('src', 'capture', 'steer-watch.mjs'));
+        const { createSteerWatch, legacyOffPending } = await import(r('src', 'capture', 'steer-watch.mjs'));
         const steer = getDesktopSteer();
-        const check = createSteerWatch({ status: () => steer.status() });
+        // while `asight off` is between stripping the block and unloading this MITM (~/.asight/legacy-off.pending names its live pid), the block going away is its doing, not a failure
+        const check = createSteerWatch({ status: () => steer.status(), pending: () => legacyOffPending() });
         check(); setInterval(check, 60000).unref();
       }
       server.listen(port, '127.0.0.1', () => { life.started(server.address().port); console.log(`asight mitm (CONNECT · TLS-terminate ${targetHost}, blind-tunnel rest) → ${out}\n  listening http://127.0.0.1:${port}  · upstream ${upstreamProxy}\n  steer CC-Desktop here via a Clash rule (4.1) — run: asight desktop on --port ${port}`); });

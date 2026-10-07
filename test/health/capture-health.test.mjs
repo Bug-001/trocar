@@ -135,6 +135,18 @@ test('the old capture: running / failing / stopped; no events but a fresh captur
   } finally { b.done() }
 })
 
+// RFC 1.6 §4: the old MITM drains on `asight off` and says how many connections it cut in its stop line; the board's 旧 MITM row carries the count (and never invents one for a stop that had none).
+test('the old MITM\'s last stop carries `cut` when the line has it — and not otherwise', () => {
+  const b = home()
+  try {
+    const ev = (lines) => { fs.mkdirSync(path.join(b.h, 'logs'), { recursive: true }); fs.writeFileSync(path.join(b.h, 'logs', 'mitm-events.ndjson'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n') }
+    ev([{ ts: at(3 * H), event: 'mitm-start', source: 'mitm', pid: 7 }, { ts: at(2 * H), event: 'mitm-stop', source: 'mitm', pid: 7, signal: 'SIGTERM', cut: 2 }])
+    assert.equal(b.health().legacy.sources[0].last_stop.cut, 2)
+    ev([{ ts: at(3 * H), event: 'mitm-start', source: 'mitm', pid: 7 }, { ts: at(2 * H), event: 'mitm-stop', source: 'mitm', pid: 7, signal: 'SIGTERM' }])
+    assert.equal('cut' in b.health().legacy.sources[0].last_stop, false)
+  } finally { b.done() }
+})
+
 // 4.1 落地细节 (3): no start / stop line of any source in what was read is never "stopped" by itself — an events
 // file holding only another line next to a fresh capture file is "no-events"; a start pushed out of the tail read is
 // "unknown".

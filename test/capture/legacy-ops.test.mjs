@@ -6,11 +6,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { getAutostartInstaller } from '../../src/capture/autostart.mjs'
 import { installCaptureAgents } from '../../src/capture/capture-agents.mjs'
 import { monitoringOn, monitoringStatus } from '../../src/capture/control.mjs'
-import { createSteerWatch, uninstallSteer } from '../../src/capture/steer-watch.mjs'
+import { createSteerWatch, uninstallSteer, legacyOffPending } from '../../src/capture/steer-watch.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
@@ -89,6 +90,27 @@ test('L-12: the steer watch writes one line per transition — gone after being 
   await createSteerWatch({ status: async () => { throw new Error('boom') }, record: (r) => thrown.push(r) })()
   assert.deepEqual(thrown.map((r) => r.code), ['steer-unreadable'])
   assert.equal(await createSteerWatch({ status: async () => ({ reserved: true }), record: () => assert.fail() })(), null)
+})
+
+// RFC 1.6 §4: `asight off` writes ~/.asight/legacy-off.pending ({pid}) between stripping the block and unloading the MITM; while that pid lives the block's going away is off's doing, not a failure.
+test('1.6 §4: while an off is pending (the marker names a live pid) the steer watch says nothing about the block being gone; a dead pid\'s marker is stale; with no off pending the same look is a failure', async () => {
+  const recs = []
+  let st = { scriptInstalled: true, live: true, scriptPath: '/v/Script.js', proxyName: 'atrace-mitm' }
+  let pending = false
+  const check = createSteerWatch({ status: async () => st, record: (r) => recs.push(r), pending: () => pending })
+  await check()
+  st = { ...st, scriptInstalled: false }; pending = true
+  assert.equal(await check(), null); assert.deepEqual(recs, [], 'off is taking it out: not a failure')
+  pending = false; await check()
+  assert.deepEqual(recs.map((r) => r.code), ['steer-missing'], 'the watch is not blind: with no off in progress it is')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-pending-'))
+  try {
+    const marker = path.join(dir, '.asight', 'legacy-off.pending')
+    assert.equal(legacyOffPending({ home: dir, alive: () => true }), false, 'no marker, no pending')
+    fs.mkdirSync(path.dirname(marker), { recursive: true }); fs.writeFileSync(marker, JSON.stringify({ pid: 4242, at: 'x' }))
+    assert.deepEqual([legacyOffPending({ home: dir, alive: (p) => p === 4242 }), legacyOffPending({ home: dir, alive: () => false })], [true, false])
+    fs.writeFileSync(marker, '{not json'); assert.equal(legacyOffPending({ home: dir, alive: () => true }), false, 'a marker that cannot be read is no marker')
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
 test('L-11: uninstall prints a steer it could not revert and records it; "n/a" only where there is no steer', async () => {

@@ -68,6 +68,38 @@ test('lifecycle: mitm-start once listening, mitm-stop with the signal, a crash l
   for (const r of recs) assert.deepEqual(checkRecord({ ts: 't', ...r }), [])
 })
 
+// RFC 1.6 §4 「旧 MITM 达到 off 保证的条件」: given its server, a SIGTERM (what `launchctl unload` makes launchd send) stops the MITM accepting, lets the connections already open end by themselves for at most
+// drainMs, cuts what is left and says how many in `mitm-stop`. SIGINT / SIGHUP (a person at the terminal) and a lifecycle with no server stop at once, as before.
+test('1.6 §4: SIGTERM with a server drains — no new connections, the open one ends by itself → cut 0; one that stays is cut after drainMs and counted; SIGINT does not wait', async () => {
+  const mkClock = () => { let t = 0; const hooks = []; return { ms: () => t, sleep: async (n) => { t += n; for (const h of hooks) if (!h.done && t >= h.at) { h.done = true; h.fn() } await new Promise((r) => setTimeout(r, 3)) }, at: (ms, fn) => hooks.push({ at: ms, fn, done: false }) } }
+  const mk = async (signal, { closeAt = null } = {}) => {
+    const recs = [], exits = []
+    const proc = Object.assign(new EventEmitter(), { pid: 77, exit: (c) => exits.push(c) })
+    const server = http.createServer(); await once(server.listen(0, '127.0.0.1'), 'listening')
+    const clock = mkClock()
+    legacyLifecycle({ source: 'mitm', port: server.address().port, out: '/o', record: (r) => recs.push(r), proc, log: () => {}, server, drainMs: 10000, clock }).started()
+    const client = net.connect(server.address().port, '127.0.0.1'); client.on('error', () => {}); await once(client, 'connect')
+    await new Promise((r) => setTimeout(r, 10)) // the server has seen the connection
+    if (closeAt != null) clock.at(closeAt, () => client.destroy())
+    proc.emit(signal)
+    for (let i = 0; i < 300 && !exits.length; i++) await new Promise((r) => setTimeout(r, 10))
+    const listening = server.listening
+    client.destroy(); server.close()
+    return { recs, exits, listening, t: clock.ms() }
+  }
+  const ends = await mk('SIGTERM', { closeAt: 2000 })
+  assert.deepEqual(ends.exits, [0])
+  assert.deepEqual([ends.recs.at(-1).event, ends.recs.at(-1).signal, ends.recs.at(-1).cut], ['mitm-stop', 'SIGTERM', 0])
+  assert.equal(ends.listening, false, 'it stopped accepting')
+  assert.ok(ends.t >= 2000 && ends.t < 10000, `it waited for the connection (${ends.t} ms), not for the whole drain`)
+  const stays = await mk('SIGTERM')
+  assert.equal(stays.recs.at(-1).cut, 1, 'the connection that never ended was cut after the drain, and counted')
+  assert.ok(stays.t >= 10000)
+  const now = await mk('SIGINT')
+  assert.deepEqual([now.recs.at(-1).signal, 'cut' in now.recs.at(-1), now.t], ['SIGINT', false, 0], 'a person at the terminal: stop at once, no count (it is not an `off`)')
+  for (const r of [...ends.recs, ...stays.recs, ...now.recs]) assert.deepEqual(checkRecord({ ts: 't', ...r }), [])
+})
+
 // ── the CLI, end to end, with HOME in a temp dir ────────────────────────────────────────────────────────────────
 const readEvents = (home) => { try { return fs.readFileSync(path.join(home, '.asight', 'logs', 'mitm-events.ndjson'), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) } catch { return [] } }
 async function until(fn, ms = 15000) { const t0 = Date.now(); while (!fn()) { if (Date.now() - t0 > ms) return false; await new Promise((r) => setTimeout(r, 25)) } return true }

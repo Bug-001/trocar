@@ -20,11 +20,13 @@ function xmlEscape(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&
 // ── macOS: a user LaunchAgent (RunAtLoad + KeepAlive), loaded via launchctl ──────────────────────
 function macAutostart({ home = os.homedir(), run = defaultRun, fs = realFs } = {}) {
   const plistPath = (label) => path.join(home, 'Library', 'LaunchAgents', `${label}.plist`);
-  const buildPlist = ({ label, programArguments, workingDirectory, logPath, keepAlive }) => {
+  const buildPlist = ({ label, programArguments, workingDirectory, logPath, keepAlive, exitTimeOut }) => {
     const argsXml = programArguments.map((a) => `    <string>${xmlEscape(a)}</string>`).join('\n');
     // KeepAlive is per-agent: the durable mitm restarts on crash (true), but a one-shot
     // `launchctl setenv` primer exits immediately and MUST NOT be respawn-looped (false).
     const keepAliveXml = keepAlive ? '  <key>KeepAlive</key><true/>\n' : '';
+    // ExitTimeOut: how long launchd waits after SIGTERM before SIGKILL (default 20 s). The MITM drains its open connections for up to 10 s on SIGTERM (RFC 1.6 §4), so it asks for 15.
+    const exitXml = Number.isInteger(exitTimeOut) ? `  <key>ExitTimeOut</key><integer>${exitTimeOut}</integer>\n` : '';
     return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -33,15 +35,15 @@ function macAutostart({ home = os.homedir(), run = defaultRun, fs = realFs } = {
 ${argsXml}
   </array>
   <key>RunAtLoad</key><true/>
-${keepAliveXml}${workingDirectory ? `  <key>WorkingDirectory</key><string>${xmlEscape(workingDirectory)}</string>\n` : ''}${logPath ? `  <key>StandardOutPath</key><string>${xmlEscape(logPath)}</string>\n  <key>StandardErrorPath</key><string>${xmlEscape(logPath)}</string>\n` : ''}</dict></plist>
+${keepAliveXml}${exitXml}${workingDirectory ? `  <key>WorkingDirectory</key><string>${xmlEscape(workingDirectory)}</string>\n` : ''}${logPath ? `  <key>StandardOutPath</key><string>${xmlEscape(logPath)}</string>\n  <key>StandardErrorPath</key><string>${xmlEscape(logPath)}</string>\n` : ''}</dict></plist>
 `;
   };
   return {
     platform: 'darwin',
-    install({ label = MONITOR_LABEL, programArguments, workingDirectory = null, logPath = null, keepAlive = true }) {
+    install({ label = MONITOR_LABEL, programArguments, workingDirectory = null, logPath = null, keepAlive = true, exitTimeOut = null }) {
       const p = plistPath(label);
       fs.mkdirSync(path.dirname(p), { recursive: true });
-      fs.writeFileSync(p, buildPlist({ label, programArguments, workingDirectory, logPath, keepAlive }));
+      fs.writeFileSync(p, buildPlist({ label, programArguments, workingDirectory, logPath, keepAlive, exitTimeOut }));
       try { run('launchctl', ['unload', p]); } catch { /* not loaded yet */ }
       // D38 L-7: a load that fails is said, never `{ok:true}` with nothing running; `launchctl load` can also exit 0
       // without loading, so the label is looked up afterwards (RFC 4.1 落地细节 (5)).
