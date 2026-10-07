@@ -104,3 +104,135 @@ export function bypassHit(bypass, host) {
   }
   return false
 }
+
+// ---- reading a proxy address (4.8 §2.2: the protocols) ---------------------------------------------------------------------------------------------------
+
+const DEFAULT_PORT = { http: 80, socks5: 1080 }
+const SOCKS_LIKE = new Set(['socks5', 'socks5h'])
+const unparseable = { ok: false, why: 'upstream-unparseable' }
+
+function readProxyUrl(text) {
+  const t = typeof text === 'string' ? text.trim() : ''
+  if (t === '' || /[\s\u0000-\u001f\u007f]/.test(t)) return null // a line break would be dropped by the URL parser, which would read half a value
+  const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(t)
+  const proto = scheme ? scheme[1].toLowerCase() : 'http' // a bare host:port is an HTTP proxy, as curl and the Python clients read it
+  let url
+  try { url = new URL(scheme ? t : `http://${t}`) } catch { return null }
+  const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase()
+  const kind = proto === 'http' ? 'http' : 'socks5'
+  const port = url.port === '' ? DEFAULT_PORT[kind] : Number(url.port)
+  if (host === '' || !(port >= 1 && port <= 65535)) return null
+  let username = ''
+  let password = ''
+  try { username = decodeURIComponent(url.username); password = decodeURIComponent(url.password) } catch { return null }
+  return { proto, kind, host, port, username, password, hasLogin: url.username !== '' }
+}
+
+/**
+ * parseProxyText(text) → { ok: true, kind: 'http' | 'socks5', host, port, credentialed } | { ok: false, why: 'upstream-protocol', protocol } | { ok: false, why: 'upstream-unparseable' }
+ * `http://`, `socks5://` and `socks5h://` connect (the last two are one thing: both hand the name to the proxy); a bare `host:port` is HTTP. `https://` (TLS to the proxy), `socks4`, `socks4a`, a bare `socks` and every other scheme
+ * are not routed and say which scheme it was: asight does not swap the user's proxy for another way out (4.8 §2.2). The credentials are not in the answer: `proxyAuthOf` reads them, for whoever resolves a reference.
+ */
+export function parseProxyText(text) {
+  const r = readProxyUrl(text)
+  if (!r) return unparseable
+  if (r.proto !== 'http' && !SOCKS_LIKE.has(r.proto)) return { ok: false, why: 'upstream-protocol', protocol: r.proto }
+  return { ok: true, kind: r.kind, host: r.host, port: r.port, credentialed: r.hasLogin }
+}
+
+/** The login of a proxy address, `{ username, password }` (decoded), or null when it has none or is not an address asight can use. The one place a proxy's credentials are read from its text. */
+export function proxyAuthOf(text) {
+  const r = readProxyUrl(text)
+  if (!r || !r.hasLogin || (r.proto !== 'http' && !SOCKS_LIKE.has(r.proto))) return null
+  return { username: r.username, password: r.password }
+}
+
+const isLoopback = (host) => host === 'localhost' || host === '::1' || host === '0:0:0:0:0:0:0:1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
+
+// ---- the rule (4.8 §2.2) ---------------------------------------------------------------------------------------------------------------------------------
+
+const ENV_PROXY_NAMES = new Set(['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY'])
+const text = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null)
+const reasonOf = (r) => (r && typeof r.reason === 'string' && r.reason !== '' ? r.reason : 'absent')
+
+/** The proxy variable of the login environment this agent would read: the first, in the order its harness file lists them, that is one asight reads (registry value names are not case-sensitive) and is set. */
+function envProxyOf(envNames, values) {
+  for (const n of envNames || []) {
+    const name = String(n).toUpperCase()
+    if (ENV_PROXY_NAMES.has(name) && text(values[name])) return { name, value: text(values[name]) }
+  }
+  return null
+}
+
+/** ProxyServer → the entry an HTTPS request takes: `https=` first, else the one with no protocol. 'none' (WinINET proxies no HTTPS here: neither do we), 'socks' (only a `socks=` entry: not followed), or the entry's text. */
+function serverEntryOf(server) {
+  const parts = String(server ?? '').split(';').map((p) => p.trim()).filter(Boolean).map((p) => { const m = /^([a-z]+)=(.*)$/i.exec(p); return m ? { proto: m[1].toLowerCase(), value: m[2].trim() } : { proto: null, value: p } })
+  const pick = parts.find((p) => p.proto === 'https') ?? parts.find((p) => p.proto === null)
+  if (pick) return { text: pick.value }
+  return parts.some((p) => p.proto === 'socks') ? { socks: true } : { none: true }
+}
+
+/**
+ * upstreamFor({ group, prior, noProxy, systemProxy, hkcuEnv, ownPorts, envNames, branches, last }) → the upstream of one group (4.8 §2.2):
+ *   { kind: 'direct' | 'http' | 'socks5', host?, port?, credentialed?, auth_ref?, source: 'agent' | 'system-proxy' | 'direct', egressDiffers?, hint?,
+ *     reason?: 'not-routed' | 'route-loop', why?, protocol?, detail?, bypass: [row], untranslated: n, envUnreadable: bool, unknown?: [{ what, reason, detail? }] }
+ * Not routed (`reason`) has no `kind`: nothing to dial. `credentialed` is set only when true, and `auth_ref` names where the login lives (`prior:<group>`: the manifest's prior_value of the group's entry, `hkcu-env:<NAME>`);
+ * the login itself is in no answer: `proxyAuthOf` of the resolved text reads it.
+ *   group        { g, followsSystemProxy: { http, ws } }: the harness file's group (`desc.win32.groups[]`);
+ *   prior        the value the group's entry held before `on` (the manifest's prior_value), or null · noProxy the same entry's NO_PROXY, when the harness file names one;
+ *   systemProxy  readSystemProxy()'s answer · hkcuEnv readHkcuEnv()'s;
+ *   ownPorts     asight's own ports (the kernel's listeners, the engine's): an upstream on one is `route-loop`;
+ *   envNames     the harness's `proxy.env` (the variables it reads, in its order) · branches its `proxy.branches` (a `ws` branch is what `egressDiffers` is about; the group's own data does not say);
+ *   last         the group's answer before, once it is on: a system proxy that turned PAC or cannot be read leaves the group on it, with `hint` (4.8 OPEN 17); with none, such a group is not routed.
+ * `envUnreadable` is true unless the upstream is the agent's own proxy: a proxy set only in the user's terminal is invisible (4.8 §2.2, OPEN 20).
+ */
+export function upstreamFor({ group, prior = null, noProxy = null, systemProxy = null, hkcuEnv = null, ownPorts = [], envNames = [], branches = [], last = null } = {}) {
+  if (!group || typeof group !== 'object' || typeof group.g !== 'string') throw new TypeError('upstreamFor needs the group')
+  const follows = !!(group.followsSystemProxy && group.followsSystemProxy.http)
+  const unknown = []
+  const finish = (source, o) => ({ ...o, source, ...(Object.hasOwn(o, 'bypass') ? {} : { bypass: [], untranslated: 0 }), envUnreadable: source !== 'agent', ...(unknown.length ? { unknown } : {}) })
+  const refuse = (source, o) => finish(source, { reason: 'not-routed', ...o })
+  const loops = (p) => isLoopback(p.host) && ownPorts.includes(p.port)
+  const dial = (p, source, ref, table) => finish(source, { kind: p.kind, host: p.host, port: p.port, ...(p.credentialed ? { credentialed: true, auth_ref: ref } : {}), ...table })
+
+  // 1. the agent's own proxy: its entry's value, else the login environment's variable it would read
+  let own = text(prior)
+  let ref = `prior:${group.g}`
+  let ownNoProxy = text(noProxy)
+  if (!own) {
+    if (hkcuEnv && hkcuEnv.ok === false) unknown.push({ what: 'login-environment', reason: reasonOf(hkcuEnv), ...(hkcuEnv.detail ? { detail: hkcuEnv.detail } : {}) })
+    else if (hkcuEnv && hkcuEnv.ok) {
+      const found = envProxyOf(envNames, hkcuEnv.values || {})
+      if (found) { own = found.value; ref = `hkcu-env:${found.name}`; ownNoProxy = ownNoProxy ?? text((hkcuEnv.values || {}).NO_PROXY) }
+    }
+  }
+  if (own) {
+    const p = parseProxyText(own)
+    if (!p.ok) return refuse('agent', { why: p.why, ...(p.protocol ? { protocol: p.protocol } : {}) })
+    if (loops(p)) return finish('agent', { reason: 'route-loop', host: p.host, port: p.port })
+    return dial(p, 'agent', ref, translateBypass(ownNoProxy, 'no-proxy'))
+  }
+
+  // 2. a group that follows the system proxy, with it on
+  if (follows) {
+    const keep = (why, extra = {}) => (last && last.kind ? { ...Object.fromEntries(Object.entries(last).filter(([k]) => k !== 'hint')), hint: why } : refuse('system-proxy', { why, ...extra }))
+    const sp = systemProxy
+    if (!sp || !sp.ok) return keep('system-proxy-unreadable', { detail: reasonOf(sp) })
+    if (text(sp.autoConfigUrl)) return keep('system-proxy-pac') // asight does not run a PAC script (4.8 §2.2)
+    if (sp.enable === true) {
+      const entry = serverEntryOf(sp.server)
+      if (entry.socks) return refuse('system-proxy', { why: 'upstream-protocol', protocol: 'socks' })
+      if (entry.text !== undefined) {
+        const p = parseProxyText(entry.text)
+        if (!p.ok) return refuse('system-proxy', { why: p.why, ...(p.protocol ? { protocol: p.protocol } : {}) })
+        if (p.credentialed) return refuse('system-proxy', { why: 'upstream-unparseable', detail: 'credentials-in-system-proxy' }) // WinINET takes none from this value: a client that read them is not the one that ran before asight
+        if (loops(p)) return finish('system-proxy', { reason: 'route-loop', host: p.host, port: p.port })
+        const differs = group.followsSystemProxy.ws === false && (branches || []).includes('ws')
+        return dial(p, 'system-proxy', null, { ...translateBypass(sp.override, 'wininet'), ...(differs ? { egressDiffers: true } : {}) })
+      }
+    }
+  }
+
+  // 3. direct: a TUN or another layer-3 VPN carries it as it did
+  return finish('direct', { kind: 'direct' })
+}

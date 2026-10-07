@@ -2,8 +2,13 @@
 // Task 6b owns the rules of upstream.mjs; Task 8(a) appends the route plan (planRoutes) that applies them to the groups. Nothing here runs Windows: the helper is an object with a `call`, the clock is injected.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { bypassHit, translateBypass } from '../../../../src/collector/arch/win32/upstream.mjs'
+import { bypassHit, parseProxyText, proxyAuthOf, translateBypass, upstreamFor } from '../../../../src/collector/arch/win32/upstream.mjs'
 import { bypassRuleOf } from '../../../../src/netenv/mihomo/rules.mjs'
+// the groups, as the harness files declare them (arch/ never imports harness/; a test may, to pin the rule to the real data)
+import claudeCode from '../../../../src/collector/harness/win32/claude-code.mjs'
+import codex from '../../../../src/collector/harness/win32/codex.mjs'
+import hermes from '../../../../src/collector/harness/win32/hermes.mjs'
+import zCode from '../../../../src/collector/harness/win32/z-code.mjs'
 
 const W = (text) => translateBypass(text, 'wininet')
 const N = (text) => translateBypass(text, 'no-proxy')
@@ -129,4 +134,185 @@ test('W72 the matcher the redirector uses and the rule text the kernel gets say 
   for (const row of rows) {
     for (const h of hosts) assert.equal(bypassHit([row], h), coreMatches(bypassRuleOf(row), h), `${JSON.stringify(row)} on ${h}: the matcher and the rule ${bypassRuleOf(row)} disagree`)
   }
+})
+
+// ---------- the groups as the harness files declare them ----------
+
+
+const groupOf = (h, g) => h.groups.find((x) => x.g === g)
+const CODEX = { group: groupOf(codex, 'codex.env'), envNames: codex.proxy.env, branches: codex.proxy.branches } // follows the system proxy for HTTP, not for its WebSocket
+const HERMES = { group: groupOf(hermes, 'hermes.cli'), envNames: hermes.proxy.env, branches: hermes.proxy.branches } // follows the system proxy, has no WebSocket branch
+const CLAUDE = { group: groupOf(claudeCode, 'claude-code.settings'), envNames: claudeCode.proxy.env, branches: claudeCode.proxy.branches } // does not follow it
+const DESKTOP = { group: groupOf(claudeCode, 'claude-code.desktop'), envNames: claudeCode.proxy.env, branches: claudeCode.proxy.branches } // follows it, its entry takes no credentials
+const ZCODE = { group: groupOf(zCode, 'z-code.cli'), envNames: zCode.proxy.env, branches: zCode.proxy.branches } // reads a variable of its own, not one of the login environment's
+const OWN = [17990, 17991, 17992]
+const sys = (o = {}) => ({ ok: true, enable: true, server: '127.0.0.1:7897', override: '<local>', autoConfigUrl: null, ...o })
+const direct = { kind: 'direct', source: 'direct', bypass: [], untranslated: 0, envUnreadable: true }
+const via = (host, port, extra = {}) => ({ kind: 'http', host, port, source: 'system-proxy', bypass: [local], untranslated: 0, envUnreadable: true, ...extra })
+const up = (who, o = {}) => upstreamFor({ ...who, ownPorts: OWN, ...o })
+
+// ---------- W5 (upstream half): the table of 4.8 §2.2, every cell as a literal ----------
+
+test('W5 §2.2 table: Verge, system proxy on, TUN off: a follower takes the system proxy, one that does not goes direct, one with its own proxy keeps it', () => {
+  assert.deepEqual(up(CODEX, { systemProxy: sys() }), via('127.0.0.1', 7897, { egressDiffers: true }))
+  assert.deepEqual(up(HERMES, { systemProxy: sys() }), via('127.0.0.1', 7897))
+  assert.deepEqual(up(CLAUDE, { systemProxy: sys() }), direct)
+  assert.deepEqual(up(CLAUDE, { systemProxy: sys(), prior: 'http://proxy.corp:3128' }), { kind: 'http', host: 'proxy.corp', port: 3128, source: 'agent', bypass: [], untranslated: 0, envUnreadable: false })
+  assert.deepEqual(up(CODEX, { systemProxy: sys(), prior: 'http://proxy.corp:3128', noProxy: 'localhost,.corp.com' }), { kind: 'http', host: 'proxy.corp', port: 3128, source: 'agent', bypass: [suf('localhost'), cidr('127.0.0.0/8'), suf('corp.com')], untranslated: 0, envUnreadable: false }, 'its own proxy beats the system proxy, with its own NO_PROXY as the bypass table, not the system proxy\'s ProxyOverride')
+})
+
+test('W5 §2.2 table: Verge with TUN on, v2rayN, another TUN VPN, no VPN: only the system proxy setting decides, never which product it is', () => {
+  // TUN on, the system proxy still on: the same as TUN off; the system proxy off: direct, into the TUN
+  assert.deepEqual(up(HERMES, { systemProxy: sys() }), via('127.0.0.1', 7897))
+  assert.deepEqual(up(HERMES, { systemProxy: sys({ enable: false }) }), direct)
+  assert.deepEqual(up(CLAUDE, { systemProxy: sys({ enable: false }) }), direct)
+  // v2rayN writes the protocols apart: https= is the one an HTTPS request takes
+  assert.deepEqual(up(HERMES, { systemProxy: sys({ server: 'http=127.0.0.1:10809;https=127.0.0.1:10809;socks=127.0.0.1:10808' }) }), via('127.0.0.1', 10809))
+  assert.deepEqual(up(HERMES, { systemProxy: sys({ server: 'socks=127.0.0.1:10808;https=127.0.0.1:10809;http=127.0.0.1:10810' }) }), via('127.0.0.1', 10809), 'https= first, wherever it stands')
+  // another TUN VPN or none: the system proxy is off or absent
+  assert.deepEqual(up(CODEX, { systemProxy: { ok: true, enable: null, server: null, override: null, autoConfigUrl: null } }), direct, 'no value is off')
+  assert.deepEqual(up(CODEX, { systemProxy: sys({ enable: false, server: '127.0.0.1:7897' }) }), direct, 'a server left in the registry while the switch is off is not followed')
+  assert.deepEqual(up(CODEX, { systemProxy: sys({ server: '' }) }), direct, 'switched on with no server is no proxy')
+})
+
+test('W5 §2.2 table: a PAC is not followed — a follower is not routed, the others go on as they would; `on` never runs a script', () => {
+  const pac = sys({ autoConfigUrl: 'http://wpad.corp/proxy.pac' })
+  assert.deepEqual(up(CODEX, { systemProxy: pac }), { source: 'system-proxy', reason: 'not-routed', why: 'system-proxy-pac', bypass: [], untranslated: 0, envUnreadable: true })
+  assert.deepEqual(up(HERMES, { systemProxy: sys({ enable: false, autoConfigUrl: 'http://wpad/p.pac' }) }).why, 'system-proxy-pac', 'a PAC counts whether or not the manual proxy is also switched on')
+  assert.equal(up(HERMES, { systemProxy: pac }).reason, 'not-routed')
+  assert.deepEqual(up(CLAUDE, { systemProxy: pac }), direct, 'a group that does not follow the system proxy does not care')
+  assert.equal(up(CLAUDE, { systemProxy: pac, prior: 'http://proxy.corp:3128' }).source, 'agent')
+  assert.equal(up(CODEX, { systemProxy: pac, prior: 'http://proxy.corp:3128' }).kind, 'http', 'nor does one with a proxy of its own')
+  assert.equal(up(CODEX, { systemProxy: sys({ autoConfigUrl: '   ' }) }).kind, 'http', 'an empty script address is none')
+})
+
+test('W5 a system proxy that cannot be read is 「不知道」 with a reason: a follower is not routed (never a guess at direct), the others are unaffected', () => {
+  const r = up(CODEX, { systemProxy: { ok: false, reason: 'timeout' } })
+  assert.deepEqual(r, { source: 'system-proxy', reason: 'not-routed', why: 'system-proxy-unreadable', detail: 'timeout', bypass: [], untranslated: 0, envUnreadable: true })
+  assert.equal(up(CODEX, { systemProxy: null }).why, 'system-proxy-unreadable', 'not asked is not read either')
+  assert.equal(up(CODEX, { systemProxy: { ok: false } }).detail, 'absent')
+  assert.deepEqual(up(CLAUDE, { systemProxy: { ok: false, reason: 'denied' } }), direct)
+})
+
+test('W5 the ProxyServer string: https= first, then the one entry for every protocol; nothing for HTTPS is direct; a SOCKS entry alone, a TLS proxy or a mess is not routed', () => {
+  assert.deepEqual(up(HERMES, { systemProxy: sys({ server: ' http=a:1 ; 10.0.0.9:3128 ; https=b:2 ' }) }), via('b', 2))
+  assert.deepEqual(up(HERMES, { systemProxy: sys({ server: 'http=a:1;10.0.0.9:3128' }) }), via('10.0.0.9', 3128), 'no https=: the entry that has no protocol')
+  assert.deepEqual(up(HERMES, { systemProxy: sys({ server: 'http://proxy.corp:8080' }) }), via('proxy.corp', 8080), 'a scheme on the entry')
+  assert.deepEqual(up(HERMES, { systemProxy: sys({ server: 'http=a:1;ftp=c:3' }) }), direct, 'WinINET does not proxy an HTTPS request when only http= and ftp= are named: neither does asight')
+  assert.deepEqual(up(HERMES, { systemProxy: sys({ server: 'socks=127.0.0.1:10808' }) }), { source: 'system-proxy', reason: 'not-routed', why: 'upstream-protocol', protocol: 'socks', bypass: [], untranslated: 0, envUnreadable: true })
+  assert.equal(up(HERMES, { systemProxy: sys({ server: 'https=https://proxy:443' }) }).protocol, 'https')
+  assert.equal(up(HERMES, { systemProxy: sys({ server: 'https=host:notaport' }) }).why, 'upstream-unparseable')
+  assert.equal(up(HERMES, { systemProxy: sys({ server: ';;;' }) }).kind, 'direct')
+  const login = up(HERMES, { systemProxy: sys({ server: 'https=u:p@proxy:8080' }) })
+  assert.deepEqual([login.reason, login.why, login.detail], ['not-routed', 'upstream-unparseable', 'credentials-in-system-proxy'], 'WinINET takes no credentials from this value, so a client that read them would not be the one that ran before asight')
+})
+
+test('W5 egress-differs: a follower whose WebSocket did not follow (the harness declares a ws branch) is told its one upstream is now the way out of both; nobody else is', () => {
+  assert.equal(up(CODEX, { systemProxy: sys() }).egressDiffers, true)
+  assert.equal(up(HERMES, { systemProxy: sys() }).egressDiffers, undefined, 'Hermes follows the system proxy and has no WebSocket branch to differ')
+  assert.equal(up(DESKTOP, { systemProxy: sys() }).egressDiffers, undefined)
+  assert.equal(up(CODEX, { systemProxy: sys({ enable: false }) }).egressDiffers, undefined, 'direct for both before and after')
+  assert.equal(up(CODEX, { systemProxy: sys(), prior: 'http://proxy.corp:3128' }).egressDiffers, undefined, 'its own proxy takes both')
+  assert.equal(upstreamFor({ group: CODEX.group, systemProxy: sys(), ownPorts: OWN }).egressDiffers, undefined, 'without the harness\'s branches there is no WebSocket to differ')
+})
+
+test('W5 the agent\'s own proxy: the value its entry held, else the login environment\'s variable the harness names; the value of the entry wins', () => {
+  const env = (values) => ({ ok: true, values })
+  assert.deepEqual(up(CLAUDE, { hkcuEnv: env({ HTTPS_PROXY: 'http://envproxy:8888' }) }), { kind: 'http', host: 'envproxy', port: 8888, source: 'agent', bypass: [], untranslated: 0, envUnreadable: false })
+  assert.equal(up(CLAUDE, { hkcuEnv: env({ HTTPS_PROXY: 'http://envproxy:8888' }), prior: 'http://file:1' }).host, 'file', 'the entry first')
+  assert.equal(up(CLAUDE, { hkcuEnv: env({ HTTP_PROXY: 'http://h:1', ALL_PROXY: 'http://a:2' }) }).host, 'h', 'the harness lists HTTPS_PROXY, then HTTP_PROXY: the first it names that is set')
+  assert.equal(up(CODEX, { hkcuEnv: env({ HTTP_PROXY: 'http://h:1', ALL_PROXY: 'http://a:2' }) }).host, 'a', 'Codex names ALL_PROXY before HTTP_PROXY')
+  assert.equal(up(ZCODE, { hkcuEnv: env({ HTTPS_PROXY: 'http://envproxy:8888' }) }).kind, 'direct', 'a harness that reads a variable of its own (ZCODE_HTTP_PROXY) is not told by the login environment\'s')
+  assert.equal(up(ZCODE, { hkcuEnv: env({ ZCODE_HTTP_PROXY: 'http://zz:1' }) }).kind, 'direct', 'and what asight reads of the login environment is those three proxy variables, whatever a caller hands in')
+  assert.equal(up(CLAUDE, { hkcuEnv: env({ HTTPS_PROXY: '   ' }) }).kind, 'direct', 'a blank variable is none')
+  assert.deepEqual(up(CLAUDE, { hkcuEnv: env({ HTTPS_PROXY: 'http://envproxy:8888', NO_PROXY: '.corp.com' }) }).bypass, [suf('corp.com')], 'the login environment\'s NO_PROXY goes with its proxy')
+  assert.deepEqual(up(CLAUDE, { hkcuEnv: env({ HTTPS_PROXY: 'http://envproxy:8888', NO_PROXY: '.corp.com' }), noProxy: '.file.com' }).bypass, [suf('file.com')], 'and the entry\'s with the entry\'s')
+  assert.equal(up(CLAUDE, { hkcuEnv: env({ HTTPS_PROXY: 'http://envproxy:8888' }), systemProxy: sys() }).source, 'agent')
+  const unread = up(CLAUDE, { hkcuEnv: { ok: false, reason: 'timeout' } })
+  assert.deepEqual(unread, { ...direct, unknown: [{ what: 'login-environment', reason: 'timeout' }] }, 'not read is said, and the rule goes on without it')
+  assert.equal(up(CLAUDE, { hkcuEnv: { ok: false }, prior: 'http://file:1' }).unknown, undefined, 'a proxy the entry names makes the unread login environment not matter')
+})
+
+test('W5 envUnreadable: every group whose upstream is not the agent\'s own proxy says a proxy set only in the user\'s terminal is invisible', () => {
+  for (const [who, o] of [[CLAUDE, {}], [CODEX, { systemProxy: sys() }], [CODEX, { systemProxy: sys({ enable: false }) }], [HERMES, { systemProxy: sys({ autoConfigUrl: 'http://p' }) }], [HERMES, { systemProxy: { ok: false } }]]) assert.equal(up(who, o).envUnreadable, true)
+  assert.equal(up(CLAUDE, { prior: 'http://proxy.corp:3128' }).envUnreadable, false)
+  assert.equal(up(CLAUDE, { hkcuEnv: { ok: true, values: { HTTPS_PROXY: 'http://e:1' } } }).envUnreadable, false)
+  assert.equal(up(CLAUDE, { prior: 'https://proxy.corp:3128' }).envUnreadable, false, 'a proxy the agent has, even one asight cannot use')
+})
+
+// ---------- the protocols (4.8 §2.2, W5) ----------
+
+test('W5 protocols: http, socks5 and socks5h connect (the last two are one thing); https and socks4 are not routed and say which; the proxy is never swapped for another way out', () => {
+  assert.deepEqual(up(CLAUDE, { prior: 'http://proxy.corp:3128' }).kind, 'http')
+  assert.deepEqual(up(CLAUDE, { prior: 'HTTP://Proxy.Corp:3128/' }), { kind: 'http', host: 'proxy.corp', port: 3128, source: 'agent', bypass: [], untranslated: 0, envUnreadable: false })
+  assert.deepEqual(up(CLAUDE, { prior: 'socks5://127.0.0.1:1080' }), { kind: 'socks5', host: '127.0.0.1', port: 1080, source: 'agent', bypass: [], untranslated: 0, envUnreadable: false })
+  assert.deepEqual(up(CLAUDE, { prior: 'socks5h://127.0.0.1:1080' }), { kind: 'socks5', host: '127.0.0.1', port: 1080, source: 'agent', bypass: [], untranslated: 0, envUnreadable: false })
+  assert.deepEqual(up(CLAUDE, { prior: 'proxy.corp:3128' }), { kind: 'http', host: 'proxy.corp', port: 3128, source: 'agent', bypass: [], untranslated: 0, envUnreadable: false }, 'a bare host:port is an HTTP proxy, as curl and the Python clients read it')
+  assert.equal(up(CLAUDE, { prior: 'http://proxy.corp' }).port, 80)
+  assert.equal(up(CLAUDE, { prior: 'socks5://proxy.corp' }).port, 1080)
+  assert.equal(up(CLAUDE, { prior: 'http://[::1]:7890' }).host, '::1', 'an IPv6 address without its brackets, as a socket wants it')
+  for (const [text, protocol] of [['https://proxy.corp:443', 'https'], ['socks4://p:1080', 'socks4'], ['socks4a://p:1080', 'socks4a'], ['socks://p:1080', 'socks'], ['ftp://p:21', 'ftp'], ['HTTPS://p:1', 'https']]) {
+    assert.deepEqual(up(CLAUDE, { prior: text }), { source: 'agent', reason: 'not-routed', why: 'upstream-protocol', protocol, bypass: [], untranslated: 0, envUnreadable: false }, text)
+  }
+  for (const text of ['http://', '://x', 'host:abc', 'http://h:99999', 'http://h:0', 'h port', 'http://h\n:80', 'http://h:80\u0000', 'http://:80', '::::']) assert.equal(up(CLAUDE, { prior: text }).why, 'upstream-unparseable', JSON.stringify(text))
+})
+
+test('W5 credentials are a reference: the upstream names where they live, and neither the name nor the secret is in what status, the plan or a record could print', () => {
+  const r = up(CLAUDE, { prior: 'http://alice:p%40ss%3Aword@proxy.corp:3128/path?x=1' })
+  assert.deepEqual(r, { kind: 'http', host: 'proxy.corp', port: 3128, credentialed: true, auth_ref: 'prior:claude-code.settings', source: 'agent', bypass: [], untranslated: 0, envUnreadable: false })
+  assert.doesNotMatch(JSON.stringify(r), /alice|p%40ss|p@ss|word/)
+  assert.deepEqual(proxyAuthOf('http://alice:p%40ss%3Aword@proxy.corp:3128/path'), { username: 'alice', password: 'p@ss:word' }, 'the one place that reads them, for whoever resolves the reference')
+  assert.deepEqual(proxyAuthOf('socks5://bob@proxy.corp'), { username: 'bob', password: '' })
+  assert.equal(proxyAuthOf('http://proxy.corp:3128'), null)
+  assert.equal(proxyAuthOf('https://alice:x@proxy.corp'), null, 'a proxy asight cannot use has no credentials to lend')
+  assert.equal(proxyAuthOf('nonsense'), null)
+  const e = up(CLAUDE, { hkcuEnv: { ok: true, values: { HTTPS_PROXY: 'http://carol:secret@envproxy:8888' } } })
+  assert.equal(e.auth_ref, 'hkcu-env:HTTPS_PROXY')
+  assert.doesNotMatch(JSON.stringify(e), /carol|secret/)
+  assert.equal(up(CLAUDE, { prior: 'http://proxy.corp:3128' }).credentialed, undefined)
+  assert.equal(up(CLAUDE, { prior: 'http://alice:@proxy.corp:3128' }).credentialed, true, 'a name with an empty password is a login')
+  assert.deepEqual(parseProxyText('http://alice:x@proxy.corp:3128'), { ok: true, kind: 'http', host: 'proxy.corp', port: 3128, credentialed: true })
+})
+
+// ---------- the loop: an upstream that is asight's own port (4.8 §2.2, W8) ----------
+
+test('W8 an upstream that is one of asight\'s own ports is a route loop, whichever way the loopback is written, and not for another host or another port', () => {
+  for (const text of ['http://127.0.0.1:17991', 'http://localhost:17990', 'socks5://[::1]:17992', 'http://127.0.0.2:17991', 'http://LOCALHOST:17991/', 'claude-code.settings:token@127.0.0.1:17991', 'http://claude-code.settings:abcdefabcdefabcd@127.0.0.1:17991']) {
+    const r = up(CLAUDE, { prior: text })
+    assert.deepEqual([r.reason, r.kind], ['route-loop', undefined], text)
+  }
+  assert.equal(up(CLAUDE, { prior: 'http://127.0.0.1:7897' }).kind, 'http', 'another port')
+  assert.equal(up(CLAUDE, { prior: 'http://proxy.corp:17991' }).kind, 'http', 'another machine\'s port')
+    assert.equal(upstreamFor({ group: CLAUDE.group, prior: 'http://127.0.0.1:17991', ownPorts: [] }).kind, 'http', 'no own ports given, none to loop on')
+  const sp = up(HERMES, { systemProxy: sys({ server: '127.0.0.1:17992' }) })
+  assert.deepEqual([sp.reason, sp.source, sp.kind], ['route-loop', 'system-proxy', undefined], 'a system proxy that points at asight\'s own port, which a stale entry left')
+  assert.equal(up(CLAUDE, { hkcuEnv: { ok: true, values: { HTTPS_PROXY: 'http://127.0.0.1:17990' } } }).reason, 'route-loop')
+})
+
+// ---------- W71 (rule half): the system proxy changed, and only its followers follow ----------
+
+test('W71 a changed system proxy gives a follower a new upstream and a new table; a group that does not follow gives the same answer as before', () => {
+  const a = sys({ server: '127.0.0.1:7897', override: 'localhost;<local>' })
+  const b = sys({ server: '127.0.0.1:7890', override: 'localhost;<local>' })
+  const c = sys({ server: '127.0.0.1:7897', override: 'localhost;10.*;<local>' })
+  assert.equal(up(CODEX, { systemProxy: a }).port, 7897)
+  assert.equal(up(CODEX, { systemProxy: b }).port, 7890)
+  assert.deepEqual(up(CODEX, { systemProxy: c }).bypass.map((x) => x.value ?? x.kind), ['localhost', '127.0.0.0/8', '10.0.0.0/8', 'local'], 'a ProxyOverride change alone is a change of the follower\'s table')
+  assert.deepEqual(up(CLAUDE, { systemProxy: a }), up(CLAUDE, { systemProxy: b }), 'it does not follow')
+  const own = { prior: 'http://proxy.corp:3128' }
+  assert.deepEqual(up(CODEX, { ...own, systemProxy: a }), up(CODEX, { ...own, systemProxy: b }), 'one with a proxy of its own does not follow it either')
+})
+
+test('W71 after `on`, a system proxy turned PAC (or unreadable) leaves a follower on the last upstream and says so; before there is one it is not routed (OPEN 17)', () => {
+  const last = up(CODEX, { systemProxy: sys() })
+  const pac = up(CODEX, { systemProxy: sys({ autoConfigUrl: 'http://wpad/p.pac' }), last })
+  assert.deepEqual(pac, { ...last, hint: 'system-proxy-pac' })
+  assert.deepEqual(up(CODEX, { systemProxy: { ok: false, reason: 'timeout' }, last }), { ...last, hint: 'system-proxy-unreadable' })
+  assert.equal(up(CODEX, { systemProxy: sys({ autoConfigUrl: 'http://wpad/p.pac' }), last: pac }).hint, 'system-proxy-pac', 'and again, from the result that already carries the hint')
+  assert.equal(Object.hasOwn(up(CODEX, { systemProxy: sys({ server: '127.0.0.1:7890' }), last: pac }), 'hint'), false, 'a readable, followable system proxy clears it, and the new upstream is the new value')
+  assert.equal(up(CODEX, { systemProxy: sys({ server: '127.0.0.1:7890' }), last: pac }).port, 7890)
+  assert.deepEqual(up(CODEX, { systemProxy: sys({ autoConfigUrl: 'http://wpad/p.pac' }), last: direct }), { ...direct, hint: 'system-proxy-pac' }, 'the last upstream was direct: it stays direct')
+  assert.equal(up(CODEX, { systemProxy: sys({ autoConfigUrl: 'http://wpad/p.pac' }), last: { source: 'system-proxy', reason: 'not-routed', why: 'system-proxy-pac' } }).reason, 'not-routed', 'nothing to keep when the last was no upstream')
+  assert.equal(up(CODEX, { systemProxy: sys({ autoConfigUrl: 'http://wpad/p.pac' }) }).reason, 'not-routed', '`on` itself, with no last: not routed')
+  assert.equal(up(CLAUDE, { systemProxy: sys({ autoConfigUrl: 'http://wpad/p.pac' }), last: direct }).hint, undefined, 'a group that does not follow has nothing to say about a PAC')
 })
