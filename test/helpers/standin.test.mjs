@@ -84,6 +84,26 @@ test('the test rig\'s daemons (a CONNECT proxy that listens and reads stdin) car
   } finally { killAll(childPid, parent.pid) }
 })
 
+// The Windows collector's stand-ins (test/collector/arch/win32/fixtures/): the fake helper that hangs before its ready line and the fake kernel that listens. Both are children of a test that
+// kills them in an `after`; a killed runner leaves no `after`, so each carries the watch itself, and ends within seconds of its parent's death.
+for (const [name, source] of [
+  ['fake Windows helper (hangs before ready)', (dir) => `spawn(process.execPath, [${JSON.stringify(path.join(HERE, '..', 'collector', 'arch', 'win32', 'fixtures', 'fake-helper.mjs'))}, '{"hangBeforeReady":true}'], { stdio: ['pipe', 'ignore', 'ignore'], env: { ...process.env, ASIGHT_FAKE_HELPER: '1' } })`],
+  ['fake kernel (listens on its controller port)', (dir) => `spawn(process.execPath, [${JSON.stringify(path.join(HERE, '..', 'collector', 'arch', 'win32', 'fixtures', 'fake-mihomo.mjs'))}, '-d', ${JSON.stringify(dir)}, '-f', ${JSON.stringify(path.join(dir, 'config.json'))}], { stdio: 'ignore', env: { ...process.env, ASIGHT_FAKE_MIHOMO: '1' } })`],
+]) {
+  test(`the ${name} carries the watch: it ends by itself within seconds of its parent being SIGKILLed`, async () => {
+    const dir = tmpDir('asight-standin-win-')
+    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ 'external-controller': '127.0.0.1:0', secret: 'x', listeners: [] }))
+    const { parent, childPid } = await parentOf(source(dir))
+    try {
+      await sleep(1200)
+      assert.ok(alive(childPid), `the ${name} is up while its parent is`)
+      parent.kill('SIGKILL')
+      await new Promise((r) => parent.once('exit', r))
+      assert.ok(await gone(childPid, 10000), `the ${name} ${childPid} is still alive 10 s after its parent was killed`)
+    } finally { killAll(childPid, parent.pid) }
+  })
+}
+
 test('and the red side of it: without the watch the same child outlives a SIGKILLed parent (so the two tests above are not passing by accident)', async () => {
   const bare = "spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })"
   const { parent, childPid } = await parentOf(bare)

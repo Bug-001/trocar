@@ -10,6 +10,8 @@
 // Test knobs, all in the JSON of FAKE_MIHOMO (environment): `log` (file), `exitAfterMs` + `exitCode` (die by itself), `readyDelayMs` (listen late), `engineDown` (fallback groups select asight-re), `refuseReload` (PUT answers 400),
 // `noController` (never listens on the controller port: a kernel that started and cannot be talked to), `crash` (exit at once with `exitCode`).
 // node --test runs every file under test/: unless the driver sets ASIGHT_FAKE_MIHOMO=1 this exits at once.
+// a stand-in the test starts and kills must not outlive a runner that was killed: the watch of test/helpers/exit-with-parent.mjs ends this process when its parent is gone
+import '../../../../helpers/exit-with-parent.mjs'
 import fs from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'

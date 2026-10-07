@@ -10,6 +10,8 @@
 //   verbs: { <verb>: { data } | { seq: [data, …] } (successive answers, the last repeats) | { error } | { delayMs } | { hang } } }
 // `tcp-table` honours the same filters the real helper does (pids, remotePort, localPort, states) on `data.rows`.
 // node --test runs every file under test/: unless the driver sets ASIGHT_FAKE_HELPER=1 this exits at once.
+// a stand-in the test starts and kills must not outlive a runner that was killed: the watch of test/helpers/exit-with-parent.mjs ends this process when its parent is gone
+import '../../../../helpers/exit-with-parent.mjs'
 import fs from 'node:fs'
 import readline from 'node:readline'
 
