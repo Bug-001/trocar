@@ -16,6 +16,7 @@ export function formatPlan(p, { home = null, autostart = true } = {}) {
     `asight on 将写或改下面这些文件,除此之外什么都不动${p.first ? '(首次 on:包含 asight 自己要建的)' : '(只列出这次要写的;已在位、没变的不重写)'}:`,
     ...(p.manifest ? [`  install manifest: ${t(p.manifest)}`] : []),
     ...(p.state ? [`  state file (which agents are on): ${t(p.state)}`] : []),
+    ...(p.standalone ? [`  asight-off, the undo that works without the source tree or the daemon: ${t(p.standalone)}`] : []),
     ...(p.ca && p.ca.length ? [`  collector CA (in no trust store): ${p.ca.map(t).join(', ')}`] : []),
     ...(p.run ? [`  runtime directory (the plugins' trust markers): ${t(p.run)}/`] : []),
     ...p.files.map((f) => `  ${f.harness}: ${t(f.path)} = ${f.sources.length ? `the certificates of ${f.sources.map(t).join(', ')} + ` : ''}the collector CA`),

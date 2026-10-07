@@ -23,6 +23,8 @@ import { backupDir, opLockFile, standalonePath } from '../off/paths.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readStateFile, emptyState, setDesired, writeStateAtomic } from '../off/state.mjs'
 import { newReceipt } from '../off/schema.mjs'
+import { OFF_VERSION } from '../off/manifest.mjs'
+import { writeStandalone, checkStandalone } from '../off/standalone.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const listDir = (d) => { try { return fs.readdirSync(d) } catch { return [] } }
@@ -365,6 +367,9 @@ export async function turnOn(opts = {}) {
   const lingerNow = () => { try { const v = linger ? linger() : undefined; return v === true || v === false ? { linger: v } : { linger: 'unknown', linger_reason: linger ? 'the linger state could not be read (/var/lib/systemd/linger)' : 'nothing reads it here' } } catch (e) { return { linger: 'unknown', linger_reason: String((e && e.message) || e) } } }
   return recorded(dir, 'install', async (run) => {
     const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, osRootsFile, roots, unit, fs, now })
+    // the copy of the undo side that needs no source tree (R3) is one more file asight writes: listed in the plan and the dry run when it is missing or not what src/off generates now
+    const standaloneCheck = checkStandalone({ home, version: OFF_VERSION, fs })
+    if (!standaloneCheck.ok) { plan.created = [...plan.created, standaloneCheck.path]; plan.standalone = standaloneCheck.path }
     // A version 1 file (what `collector on|off` wrote before D39) is read for the harnesses installed before and the ones this run turns on, the same set
     // the guard below reads it for — and is written back as version 2 here, before the first guard: the guard must never see a file the daemon's reader
     // and this one read differently (1.6 §1.5, R12)
@@ -399,6 +404,12 @@ export async function turnOn(opts = {}) {
     const needNow = plan.targets.filter((id) => !(locked.state.harnesses[id] && locked.state.harnesses[id].desired === 'on'))
     if (needNow.length) writeStateAtomic(stateF, setDesired(locked.state, needNow, 'on', now()), { fs })
     else if (stateWrite) writeStateAtomic(stateF, locked.state, { fs }) // version 1 → 2, nothing turned on: "on since" stays where it was
+    // the undo that needs no source tree is in place before the first thing it undoes (R3): written on every `on`, nothing when it already is what src/off generates. A copy that
+    // cannot be written stops the run here, before one file of the agents' is touched — the way back first, like the backup of a file (R2) — and `recorded` writes the failure (R11)
+    let standalone
+    try { standalone = writeStandalone({ home, version: OFF_VERSION, fs }) } catch (e) {
+      throw Object.assign(new Error(`${standalonePath(home)}, the undo that works without the source tree, could not be written (${String((e && e.message) || e)}); no file of the agents' was changed — put that right, then run asight on again`), { code: e && e.code })
+    }
     const guard = () => {
       let st
       try { st = readState().state } catch (e) { throw stop(`${stateF} cannot be read (${String((e && e.message) || e)}), so it is not known whether an off was asked; stopped (1.6 R12)`) }
@@ -417,7 +428,7 @@ export async function turnOn(opts = {}) {
     const receipt = {
       ...r,
       changed: (written ? written.entries : []).map((e) => ({ path: e.path, change: changeText(e, e.prior_value), backup: e.backup ?? null })),
-      created: [...(plan._.prior ? [] : [manifestPath(dir)]), ...(stateWrite ? [stateF] : []), ...(written && written.caCreated ? plan._.ca ? [plan._.ca.key, plan._.ca.pem] : [] : []), ...(written ? [...written.files, ...written.owned, ...(written.unit && unit ? [unit.path] : [])] : [])],
+      created: [...(plan._.prior ? [] : [manifestPath(dir)]), ...(stateWrite ? [stateF] : []), ...(standalone.written ? [standalone.path] : []), ...(written && written.caCreated ? plan._.ca ? [plan._.ca.key, plan._.ca.pem] : [] : []), ...(written ? [...written.files, ...written.owned, ...(written.unit && unit ? [unit.path] : [])] : [])],
       unchanged: written ? written.intact : [],
     }
     const finish = (outcome, reason) => {

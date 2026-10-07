@@ -1,5 +1,6 @@
-// test/off/standalone.test.mjs — the single-file ~/.asight/bin/asight-off (RFC 1.6 R3; plan Task 8): what buildStandalone makes of src/off, what it refuses, and that the file runs (V11).
-// The file that comes out is run in a child process, in a directory of its own (no relative import could find the repo), with no NODE_PATH. Nothing here runs a real OS tool.
+// test/off/standalone.test.mjs — the single-file ~/.asight/bin/asight-off (RFC 1.6 R3; plan Task 8): what buildStandalone makes of src/off, what it refuses, and that the file runs (V11);
+// the copy on disk (writeStandalone, checkStandalone: V35's version check), that every `on` writes it, lists it and says when it cannot. The file that comes out is run in a child process,
+// in a directory of its own (no relative import could find the repo), with no NODE_PATH. Nothing here runs a real OS tool or touches a real process.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -7,8 +8,13 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { buildStandalone } from '../../src/off/standalone.mjs'
+import { buildStandalone, writeStandalone, checkStandalone } from '../../src/off/standalone.mjs'
 import { OFF_VERSION } from '../../src/off/manifest.mjs'
+import { standalonePath } from '../../src/off/paths.mjs'
+import { runOnCli } from '../../src/cli/on.mjs'
+import { formatPlan } from '../../src/cli/receipt.mjs'
+import { fakeIo, onCtx, seedClaude } from '../cli/fixtures/on-ctx.mjs'
+import { installedHome, flowEvents } from './fixtures/off-ctx.mjs'
 
 
 /** Runs `text` as a file called asight-off in a directory of its own; resolves { status, stdout, stderr }. */
@@ -102,4 +108,89 @@ test('the generator refuses what would make a wrong file: a duplicate top-level 
 test('src/off carries OFF_VERSION as an integer, and the unique-name rule the generator needs holds over the real directory (it builds)', () => {
   assert.ok(Number.isInteger(OFF_VERSION) && OFF_VERSION >= 1)
   assert.ok(buildStandalone({ version: OFF_VERSION }).length > 20_000)
+})
+
+// ── V35 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+test('V35: the check reports a copy that is stale, missing or not what src/off generates; writing it makes it equal; a second write changes nothing', async () => {
+  const home = tmpDir('asight-chk-')
+  const file = standalonePath(home)
+  const missing = checkStandalone({ home, version: OFF_VERSION })
+  assert.deepEqual([missing.ok, missing.path, missing.found, missing.expected], [false, file, null, String(OFF_VERSION)])
+  assert.match(missing.reason, /not there/)
+  const w = writeStandalone({ home, version: OFF_VERSION })
+  assert.deepEqual([w.path, w.written, fs.statSync(file).mode & 0o777, fs.readFileSync(file, 'utf8') === buildStandalone({ version: OFF_VERSION })], [file, true, 0o700, true])
+  assert.deepEqual([checkStandalone({ home, version: OFF_VERSION }).ok, writeStandalone({ home, version: OFF_VERSION }).written], [true, false], 'equal to what is generated: nothing to do')
+  assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700, 'the directory it made is the user\'s alone')
+  // an older copy (its version line says so)
+  fs.writeFileSync(file, '#!/usr/bin/env node\n// asight-off 0 — generated from src/off by asight on; do not edit\n', { mode: 0o700 })
+  const old = checkStandalone({ home, version: OFF_VERSION })
+  assert.deepEqual([old.ok, old.found, old.expected], [false, '0', String(OFF_VERSION)])
+  assert.match(old.reason, /version 0.*version/, 'says which version it is and which is current')
+  // the same version line over other content: still not what `on` writes
+  fs.writeFileSync(file, buildStandalone({ version: OFF_VERSION }) + '// edited\n', { mode: 0o700 })
+  const edited = checkStandalone({ home, version: OFF_VERSION })
+  assert.deepEqual([edited.ok, edited.found], [false, String(OFF_VERSION)])
+  assert.match(edited.reason, /differ/)
+  // a copy somebody made unusable
+  fs.writeFileSync(file, buildStandalone({ version: OFF_VERSION })); fs.chmodSync(file, 0o600)
+  assert.equal(checkStandalone({ home, version: OFF_VERSION }).ok, false, 'not executable')
+  assert.deepEqual([writeStandalone({ home, version: OFF_VERSION }).written, fs.statSync(file).mode & 0o700], [true, 0o700], 'written again, and executable')
+  // the version is a parameter, and OFF_VERSION is the default
+  assert.deepEqual([checkStandalone({ home }).ok, checkStandalone({ home, version: 'other' }).ok], [true, false])
+  // a copy that cannot be read is said, with why
+  fs.rmSync(file); fs.mkdirSync(file)
+  const dir = checkStandalone({ home })
+  assert.deepEqual([dir.ok, dir.found], [false, null]); assert.match(dir.reason, /EISDIR|cannot be read/)
+})
+
+test('V35: every `on` writes the copy again — after the first on it is what src/off generates, and a copy that was changed is put back by the next on', async () => {
+  const s = await installedHome({ names: ['claude-code'] })
+  const file = standalonePath(s.home)
+  assert.equal(fs.readFileSync(file, 'utf8'), buildStandalone({ version: OFF_VERSION }), 'the first on wrote it')
+  assert.equal(fs.statSync(file).mode & 0o777, 0o700)
+  assert.deepEqual(checkStandalone({ home: s.home }), { ok: true, path: file, found: String(OFF_VERSION), expected: String(OFF_VERSION) })
+  fs.writeFileSync(file, '#!/usr/bin/env node\n// asight-off 0 — generated from src/off by asight on; do not edit\n', { mode: 0o700 })
+  const again = await s.on()
+  assert.equal(again.exit, 0)
+  assert.equal(fs.readFileSync(file, 'utf8'), buildStandalone({ version: OFF_VERSION }), 'the next on, with nothing else to do, wrote it again')
+  assert.ok(again.receipt.created.includes(file), 'and the receipt lists it, like every file asight writes')
+  const quiet = await s.on()
+  assert.ok(!quiet.receipt.created.includes(file), 'an on that finds it as it should be does not touch it')
+})
+
+// ── the receipt and the plan ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+test('the first on names the copy, lists it among what it created and in the plan it prints, and the file is there and runs; the dry run lists it too', async () => {
+  const home = tmpDir('asight-on-std-'); seedClaude(home)
+  const io = fakeIo()
+  assert.equal(await runOnCli(['--dry-run', '--json'], onCtx(home, io)), 0)
+  const dry = io.json()
+  assert.ok(dry.created.includes(standalonePath(home)) && !fs.existsSync(standalonePath(home)), 'the dry run says it will be written, and writes nothing')
+  const io2 = fakeIo()
+  assert.equal(await runOnCli(['--yes', '--json'], onCtx(home, io2)), 0)
+  const r = io2.json()
+  assert.ok(r.created.includes(standalonePath(home)) && r.standalone === standalonePath(home) && r.undo.includes(standalonePath(home)))
+  assert.match(io2.stderrText(), /asight-off/, 'the plan printed before the first write names it')
+  assert.deepEqual(r.created.slice().sort(), dry.created.slice().sort(), 'the dry run and the run list the same files')
+  const run = spawnSync(process.execPath, [standalonePath(home), '--bogus'], { env: { ...process.env, NODE_PATH: '' }, cwd: path.dirname(standalonePath(home)), encoding: 'utf8' })
+  assert.deepEqual([run.status, /unknown option --bogus/.test(run.stderr)], [2, true], 'the path the receipt prints is a file that runs')
+  assert.match(formatPlan({ first: true, files: [], entries: [], standalone: '/home/a/.asight/bin/asight-off' }, { home: '/home/a' }), /~\/\.asight\/bin\/asight-off/)
+})
+
+test('a copy that cannot be written stops the on before one file of the agents\' is touched, says why, exits 1 and leaves a failure line in flows/ (R3, R11)', async () => {
+  const home = tmpDir('asight-on-nostd-'); const settings = seedClaude(home)
+  const refuses = new Proxy(fs, { get: (t, k) => (k === 'openSync' ? (p, ...a) => { if (String(p).includes('asight-off')) throw Object.assign(new Error('EACCES: permission denied, open'), { code: 'EACCES' }); return t.openSync(p, ...a) } : typeof t[k] === 'function' ? t[k].bind(t) : t[k]) })
+  const before = fs.readFileSync(settings, 'utf8')
+  const io = fakeIo()
+  assert.equal(await runOnCli(['--yes', '--json'], onCtx(home, io, { deps: { fs: refuses } })), 1)
+  const r = io.json()
+  assert.equal(r.ok, false)
+  assert.match(r.notes.join('\n'), /asight-off[^\n]*the undo that works without the source tree, could not be written \(EACCES[^\n]*no file of the agents' was changed/)
+  assert.equal(r.standalone, undefined, 'the receipt names no path that is not a file')
+  assert.deepEqual([fs.existsSync(standalonePath(home)), fs.readFileSync(settings, 'utf8') === before], [false, true], 'no copy, and the agent\'s settings are as they were')
+  const failure = flowEvents(path.join(home, '.asight', 'collector')).find((e) => e.event === 'failure' && /asight-off/.test(e.reason))
+  assert.ok(failure && failure.where === 'install' && failure.code === 'EACCES', JSON.stringify(failure))
+  const retry = fakeIo()
+  assert.equal(await runOnCli(['--yes', '--json'], onCtx(home, retry)), 0, 'and once that is put right, the same on finishes')
 })

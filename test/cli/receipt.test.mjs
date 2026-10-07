@@ -314,6 +314,7 @@ test('V29: the first on receipt, in the text and in --json, carries the four com
   for (const c of ['asight on', 'asight off', 'asight status', 'asight uninstall']) assert.ok(everything.includes(c), `--json carries ${c}`)
   assert.ok(r.undo.includes(standalonePath(home)) && r.standalone === standalonePath(home), 'the absolute path of asight-off: the undo list and the key')
   assert.ok(path.isAbsolute(r.standalone))
+  assert.ok(fs.statSync(r.standalone).isFile() && (fs.statSync(r.standalone).mode & 0o100), 'and the path is a file asight wrote, executable (test/off/standalone.test.mjs runs it)')
   const io2 = fakeIo(); const home2 = tmpDir('asight-on-v29b-'); seedClaude(home2)
   assert.equal(await runOnCli(['--yes'], onCtx(home2, io2)), 0)
   for (const c of ['asight on', 'asight off', 'asight status', 'asight uninstall', standalonePath(home2)]) assert.ok(io2.stdoutText().includes(c), `the text carries ${c}`)
