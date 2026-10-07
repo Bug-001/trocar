@@ -6,8 +6,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import vm from 'node:vm'
 import { fileURLToPath } from 'node:url'
-import { buildBlock, checkLoops, names, probeUrl, processRulesOf, routeFile, RouteLoopError, spliceRuntime, stripRuntime, FILTER_TOKEN } from '../../src/netenv/mihomo/rules.mjs'
+import { buildBlock, checkLoops, names, probeUrl, processRulesOf, routeFile, RouteLoopError, spliceRuntime, stripRuntime, FILTER_TOKEN, buildScriptJs, SCRIPT_SENTINEL } from '../../src/netenv/mihomo/rules.mjs'
 import { TOKEN, ENGINE_PORT, REENTER, ONE, TWO, THREE, block, IMAGES, goldenText } from './fixtures/rules/inputs.mjs'
 import { runtimeFixture } from './fixtures/rules/runtime.mjs'
 
@@ -292,4 +293,106 @@ test('W9 only asight- names are asight\'s: a user rule that mentions one, a user
   assert.deepEqual(out.rules.slice(BLOCK2.rules.length), user.rules, 'the user\'s own loopback-shaped rule is not followed by a RULE-SET of ours: it is theirs')
   assert.deepEqual(out.proxies[0], user.proxies[0])
   assert.deepEqual(stripRuntime({ runtime: out }), user)
+})
+
+// ---- W10 (the script) and W58: the global script runs in node:vm; the payload path and the script give the same config -------------------------------
+// Verge runs Script.js in its own embedded engine, not in V8 (4.8 §3.1 end): node:vm proves the logic, the syntax scan below keeps the script to what that engine
+// ran, and the first real run of the template is W32 on Windows (the template changes only together with a re-run of it).
+
+const USER_MAIN = 'function main(config, profileName) {\n  return config;\n}\n'
+const plain = (v) => JSON.parse(JSON.stringify(v)) // a value from the vm's realm has another Object.prototype: compare by content
+/** Run `userScript` + the generated block in a fresh context, then evaluate `call` (its `CFG` is `config`, built inside the context). */
+function runScript({ userScript = USER_MAIN, block: b = BLOCK2, config, call = 'main(CFG, "p")' }) {
+  const ctx = vm.createContext({})
+  vm.runInContext(`${userScript}\n${buildScriptJs({ block: b })}`, ctx)
+  vm.runInContext(`var CFG = (${typeof config === 'function' ? config : JSON.stringify(config)})${typeof config === 'function' ? '()' : ''}`, ctx)
+  return vm.runInContext(call, ctx)
+}
+
+test('W58 the payload path and the generated Script.js give the same config (include-all url-test groups, with and without a filter)', () => {
+  for (const [what, b] of [['two groups', BLOCK2], ['four groups', buildBlock(block(THREE))]]) {
+    assert.deepEqual(plain(runScript({ block: b, config: runtimeFixture() })), spliceRuntime({ runtime: runtimeFixture(), block: b }), what)
+  }
+  const bare = { rules: ['MATCH,DIRECT'] }
+  assert.deepEqual(plain(runScript({ config: bare })), spliceRuntime({ runtime: bare, block: BLOCK2 }), 'a config with only rules')
+})
+
+test('W58 the block goes after the user\'s own main: what main changed is kept, and the result equals splicing the changed config', () => {
+  const userScript = "function main(config, profileName) {\n  config.rules.unshift('DOMAIN,mine.example.com,DIRECT');\n  config.proxies.push({ name: 'user-added', type: 'direct' });\n  return config;\n}\n"
+  const changed = runtimeFixture(); changed.rules.unshift('DOMAIN,mine.example.com,DIRECT'); changed.proxies.push({ name: 'user-added', type: 'direct' })
+  const out = plain(runScript({ userScript, config: runtimeFixture() }))
+  assert.deepEqual(out, spliceRuntime({ runtime: changed, block: BLOCK2 }))
+  assert.equal(out.rules[BLOCK2.rules.length], 'DOMAIN,mine.example.com,DIRECT')
+})
+
+test('W10 a block that throws returns the config as it came in: a section that is not a list, a throw after the first section was computed', () => {
+  const input = runtimeFixture()
+  assert.deepEqual(plain(runScript({ config: { ...input, 'proxy-groups': 'oops' } })), { ...input, 'proxy-groups': 'oops' }, 'no proxy-groups list')
+  const half = { ...input, rules: 5 } // proxies and groups are fine, rules is not: nothing may have been assigned yet
+  assert.deepEqual(plain(runScript({ config: half })), half)
+  assert.deepEqual(plain(runScript({ config: { ...input, 'proxy-groups': [{ name: 'g', 'include-all': true, 'exclude-filter': ['x'] }] } })), { ...input, 'proxy-groups': [{ name: 'g', 'include-all': true, 'exclude-filter': ['x'] }] }, 'a filter that is not a string')
+  const throwing = () => { const c = { rules: ['MATCH,g'] }; Object.defineProperty(c, 'proxies', { get() { throw new Error('boom') }, enumerable: true }); return c }
+  assert.deepEqual(plain(runScript({ config: throwing, call: '(function () { var r = main(CFG, "p"); return { rules: r.rules, same: r === CFG } })()' })), { rules: ['MATCH,g'], same: true })
+})
+
+test('W10 the user\'s own main keeps its behaviour: its errors are not swallowed, an async main is awaited, a const main or no main leaves the block inert without a throw', async () => {
+  assert.throws(() => runScript({ userScript: 'function main(config) { throw new Error("user bug") }\n', config: runtimeFixture() }), /user bug/)
+  const awaited = await runScript({ userScript: 'async function main(config) { return config }\n', config: runtimeFixture() })
+  assert.deepEqual(plain(awaited), spliceRuntime({ runtime: runtimeFixture(), block: BLOCK2 }))
+  const rejected = runScript({ userScript: 'async function main(config) { return 5 }\n', config: runtimeFixture() })
+  assert.equal(await rejected, 5, 'a result that is not a config comes back as it was')
+  assert.deepEqual(plain(runScript({ userScript: 'const main = (config) => config;\n', config: runtimeFixture() })), runtimeFixture(), 'const main cannot be reassigned: the block stays inert (verify reports vpn-block-not-live)')
+  assert.equal(runScript({ userScript: '', config: runtimeFixture(), call: 'typeof main' }), 'undefined', 'no main: the script loads without a throw and defines nothing')
+  assert.deepEqual(plain(runScript({ userScript: 'let main = function (config) { return config };\n', config: runtimeFixture() })), spliceRuntime({ runtime: runtimeFixture(), block: BLOCK2 }), 'let main can be')
+})
+
+// What Verge's engine runs (4.8 §3.1 end): ES5, no comments. A scan of the template (an empty block), with planted violations to prove it can fail.
+const BANNED = {
+  'arrow function': /=>/, 'template literal': /`/, 'optional chaining': /\?\./, 'nullish coalescing': /\?\?/, 'let / const / class': /\b(?:let|const|class)\b/,
+  'async / await / yield': /\b(?:async|await|yield)\b/, spread: /\.\.\./, exponent: /\*\*/, 'optional catch binding': /catch\s*\{/, 'import / export': /\b(?:import|export)\b/,
+  'ES2015+ built-ins': /\b(?:Object\.(?:assign|entries|values|fromEntries)|Array\.(?:from|of)|Promise|Symbol|Map|Set|WeakMap|Reflect|Proxy|structuredClone)\b|\.(?:includes|startsWith|endsWith|padStart|padEnd|repeat|find|findIndex|flat|flatMap|at)\(/,
+  'a comment inside the body': /(?:^|\n)\s*\/\/|\/\*/,
+}
+const bannedIn = (src) => Object.entries(BANNED).filter(([, re]) => re.test(src)).map(([k]) => k)
+const EMPTY = { proxies: [], groups: [], providers: {}, rules: [] }
+const bodyOf = (script) => script.split('\n').slice(1, -1).join('\n')
+
+test('W10 the generated script uses only syntax the lab ran inside Verge: ES5, no comments, ASCII; the scan itself can fail', () => {
+  for (const [planted, id] of [['a?.b', 'optional chaining'], ['x ?? y', 'nullish coalescing'], ['(a) => a', 'arrow function'], ['`t`', 'template literal'], ['const x = 1', 'let / const / class'], ['let x', 'let / const / class'],
+    ['f(...a)', 'spread'], ['async function f() {}', 'async / await / yield'], ['class A {}', 'let / const / class'], ['Object.assign({}, a)', 'ES2015+ built-ins'], ['a.includes(b)', 'ES2015+ built-ins'],
+    ['try {} catch {}', 'optional catch binding'], ['// note', 'a comment inside the body'], ['x ** 2', 'exponent'], ['new Map()', 'ES2015+ built-ins']]) assert.ok(bannedIn(planted).includes(id), `the scan misses ${planted}`)
+  const template = bodyOf(buildScriptJs({ block: EMPTY }))
+  assert.deepEqual(bannedIn(template), [], 'the template')
+  assert.deepEqual(bannedIn(bodyOf(buildScriptJs({ block: BLOCK2 }))), [], 'the template with a block in it (the data is JSON)')
+  const script = buildScriptJs({ block: { ...BLOCK2, providers: { 'asight-r-x': { type: 'file', payload: ['DOMAIN,caf\u00e9.example.com', 'DOMAIN,\ud83d\ude00.example.com'] } } } })
+  assert.ok(/^[\x00-\x7f]*$/.test(script), 'ASCII only, whatever the data holds')
+  assert.deepEqual(plain(runScript({ block: { ...BLOCK2, providers: { 'asight-r-x': { payload: ['DOMAIN,caf\u00e9.example.com'] } } }, config: runtimeFixture() })['rule-providers']['asight-r-x']), { payload: ['DOMAIN,caf\u00e9.example.com'] }, 'the escapes read back as the data')
+  assert.doesNotThrow(() => new vm.Script(script), 'it parses')
+})
+
+test('W10 the script is one sentinel-bracketed block: no trailing newline, the 4.7 sentinel by default, the data and no route file in it', () => {
+  assert.deepEqual(SCRIPT_SENTINEL, { begin: '// >>> asight collector (managed by asight on) >>>', end: '// <<< asight collector <<<' })
+  const script = buildScriptJs({ block: BLOCK2 })
+  const lines = script.split('\n')
+  assert.equal(lines[0], SCRIPT_SENTINEL.begin); assert.equal(lines.at(-1), SCRIPT_SENTINEL.end)
+  assert.ok(!script.endsWith('\n') && !script.includes('\r'))
+  assert.equal(lines.filter((l) => l.startsWith('// >>>') || l.startsWith('// <<<')).length, 2)
+  assert.ok(script.includes(TOKEN) && script.includes('asight-fb-kimi-code.cli'))
+  assert.ok(!script.includes('anthropic-ai') && !script.includes('kimi.exe'), 'the process patterns live in the route files, not in the script')
+  golden('script-one.golden', `${buildScriptJs({ block: buildBlock(block(ONE)) })}\n`)
+  const mine = { begin: '// >>> mine >>>', end: '// <<< mine <<<' }
+  const custom = buildScriptJs({ block: BLOCK2, sentinel: mine }).split('\n')
+  assert.equal(custom[0], mine.begin); assert.equal(custom.at(-1), mine.end)
+})
+
+test('W10 a sentinel that is not two different one-line comments, or data that holds a sentinel, is refused; so is a block that is not asight\'s', () => {
+  const bad = (sentinel, re) => assert.throws(() => buildScriptJs({ block: BLOCK2, sentinel }), re)
+  bad({ begin: '>>> x', end: '// <<< x' }, /comment/)
+  bad({ begin: '// a\nb', end: '// <<< x' }, /comment/)
+  bad({ begin: '// same', end: '// same' }, /differ/)
+  bad({ begin: '// >>> x', end: 5 }, /sentinel/)
+  const sneaky = { ...BLOCK2, rules: [...BLOCK2.rules, `x ${SCRIPT_SENTINEL.end}`] }
+  assert.throws(() => buildScriptJs({ block: sneaky }), /sentinel/)
+  assert.throws(() => buildScriptJs({ block: { ...EMPTY, proxies: [{ name: 'node-a' }] } }), /asight-/)
+  assert.throws(() => buildScriptJs({}), /block/)
 })
