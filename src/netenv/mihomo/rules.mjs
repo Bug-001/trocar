@@ -132,10 +132,12 @@ function entriesOf({ g, route, enginePort, token, reenter }) {
 /**
  * The entries of the VPN block. `groups`: `[{ g, route: 'vb', pathPatterns: string[], names: string[] }]`; `reenter`: `{ host: '127.0.0.1', port }`, the proxy
  * software's own mixed port. Returns `{ proxies, groups, providers, rules, files }`; `files` maps a path relative to the proxy software's home to the text of its
- * route file as it is when the group is on (off is routeFile(null)). `ownImages` (optional): when given, a rule that would match one of them refuses the whole
- * block with a RouteLoopError (4.8 §3.4: no block is written).
+ * route file as it is when the group is on (off is routeFile(null)). `ownImages` is required (4.8 §3.4): the engine's and the forwarder's image paths, and a rule that would
+ * match one of them refuses the whole block with a RouteLoopError (no block is written). A caller that forgot it gets a TypeError, not a block with no check; a fixture that has
+ * no engine to loop back to says `ownImages: null` on purpose.
  */
 export function buildBlock({ groups, enginePort, token, reenter, ownImages } = {}) {
+  if (ownImages === undefined) throw new TypeError('ownImages is required: the engine\'s and the forwarder\'s image paths, so that a rule that would match them is refused (4.8 3.4); null only where there is no engine to loop back to')
   checkCommon({ enginePort, token, reenter })
   if (!Array.isArray(groups) || groups.length === 0) throw new TypeError('a block needs at least one group')
   const seen = new Set()
@@ -148,7 +150,7 @@ export function buildBlock({ groups, enginePort, token, reenter, ownImages } = {
     if (lines.length === 0) throw new TypeError(`group ${g} has no process rule: nothing to route`)
     return { g, route: grp.route, lines }
   })
-  if (ownImages !== undefined) {
+  if (ownImages !== null) {
     const loop = checkLoops({ processRules: prepared.flatMap((p) => p.lines), ownImages })
     if (loop) throw new RouteLoopError(loop)
   }

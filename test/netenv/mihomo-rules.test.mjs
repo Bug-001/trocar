@@ -203,7 +203,18 @@ test('W8 buildBlock given the own images refuses to produce a block when a rule 
   const loop = [{ ...ONE[0], names: ['node.exe'] }]
   assert.throws(() => buildBlock(block(loop, { ownImages: OWN })), (e) => e instanceof RouteLoopError && e.code === 'route-loop' && e.rule === 'PROCESS-NAME,node.exe' && e.imageIndex === 0)
   assert.doesNotThrow(() => buildBlock(block(THREE, { ownImages: OWN })))
-  assert.doesNotThrow(() => buildBlock(block(loop)), 'without the images there is nothing to check against (Task 8 always passes them)')
+  assert.throws(() => buildBlock(block(loop)), RouteLoopError, 'the shape tests\' own default images are checked too')
+})
+
+test('W8 ownImages is required: leaving it out is an error, not a block with no check; null is the explicit opt-out for a fixture with no engine to loop back to', () => {
+  const loop = [{ ...ONE[0], names: ['node.exe'] }]
+  for (const [what, over] of [['absent', { ownImages: undefined }], ['an empty list', { ownImages: [] }], ['not a list', { ownImages: IMAGES.engine }]]) {
+    assert.throws(() => buildBlock(block(ONE, over)), /ownImages/, what)
+    assert.throws(() => buildBlock(block(loop, over)), /ownImages/, `${what}: also where a rule would loop`)
+  }
+  const { ownImages, ...left } = block(ONE)
+  assert.ok(ownImages.length > 0); assert.throws(() => buildBlock(left), /ownImages/, 'a caller that never named the key')
+  assert.doesNotThrow(() => buildBlock(block(loop, { ownImages: null })), 'null says so out loud: nothing to check against')
 })
 
 // ---- W9: the include-all groups, and the runtime splice (the payload path) ------------------------------------------------------------------------

@@ -15,6 +15,7 @@ export const TOKEN = '0123456789abcdef0123456789abcdef' // a fixture value, neve
 export const PATTERN = String.raw`\\asight-test-client\.exe` // a stand-in image: the macOS run identifies the stand-in another way, the file is rewritten by the test
 
 export const groupOf = (g = G) => ({ g, route: 'vb', pathPatterns: [PATTERN], names: [] })
+export const OWN_IMAGES = [String.raw`C:\Program Files\nodejs\node.exe`, String.raw`C:\Users\u\.asight\bin\asight-forwarder.exe`] // what buildBlock checks the stand-in's pattern against (4.8 3.4): the engine's and the forwarder's image
 
 const base = ({ controller, secret, unifiedDelay }) => ({
   'allow-lan': false, 'bind-address': '127.0.0.1', mode: 'rule', 'log-level': 'debug', ipv6: false,
@@ -26,7 +27,7 @@ const base = ({ controller, secret, unifiedDelay }) => ({
 
 /** Shape 1: the Verge-like config around buildBlock()'s output. `route` is the provider's own path: the test writes the stand-in's on-lines there. */
 export function vergeLikeConfig({ ports, secret, token = TOKEN, unifiedDelay = true, g = G, strictTail = false }) {
-  const b = buildBlock({ groups: [groupOf(g)], enginePort: ports.engine, token, reenter: { host: '127.0.0.1', port: ports.mixed } })
+  const b = buildBlock({ groups: [groupOf(g)], enginePort: ports.engine, token, reenter: { host: '127.0.0.1', port: ports.mixed }, ownImages: OWN_IMAGES })
   return {
     config: {
       ...base({ controller: ports.controller, secret, unifiedDelay }),

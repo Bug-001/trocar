@@ -15,7 +15,8 @@ export const ONE = [CC_CLI]
 export const TWO = [CC_CLI, KIMI_CLI]
 export const THREE = [CC_CLI, CODEX_APP, KIMI_CLI, HERMES_CLI]
 
-export const block = (groups = ONE, over = {}) => ({ groups, enginePort: ENGINE_PORT, token: TOKEN, reenter: REENTER, ...over })
+// ownImages is required by buildBlock (4.8 §3.4): by default every shape test runs the loop check against the engine's and the forwarder's image paths below, so none of them runs without it
+export const block = (groups = ONE, over = {}) => ({ groups, enginePort: ENGINE_PORT, token: TOKEN, reenter: REENTER, ownImages: [IMAGES.engine, IMAGES.forwarder], ...over })
 
 /** What a path the block must route, and a path it must never touch, look like (4.8 §2.3, §3.5). */
 export const IMAGES = {

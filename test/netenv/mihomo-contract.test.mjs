@@ -30,7 +30,7 @@ import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { startRealEngine } from './fixtures/real-engine.mjs'
-import { vergeLikeConfig, forwarderLikeConfig, groupOf, G, TOKEN } from './fixtures/generated-config.mjs'
+import { vergeLikeConfig, forwarderLikeConfig, groupOf, G, TOKEN, OWN_IMAGES } from './fixtures/generated-config.mjs'
 import { loopbackRuntimeText } from './fixtures/rules/runtime.mjs'
 import { buildBlock, buildForwarderConfig } from '../../src/netenv/mihomo/rules.mjs'
 import { spliceRuntimeText, stripRuntimeText } from '../../src/netenv/mihomo/runtime-text.mjs'
@@ -312,7 +312,7 @@ test('W57 payload: the spliced runtime text is accepted (204); include-all group
   const push = (text) => m.ctl('PUT', '/configs?force=true', { payload: text })
   assert.deepEqual(await members('AUTO-ALL'), ['node-a', 'node-b'], 'before the block: the include-all group lists the two nodes')
 
-  const blk = buildBlock({ groups: [groupOf(g)], enginePort: ports.engine, token: TOKEN, reenter: { host: '127.0.0.1', port: ports.mixed } })
+  const blk = buildBlock({ groups: [groupOf(g)], enginePort: ports.engine, token: TOKEN, reenter: { host: '127.0.0.1', port: ports.mixed }, ownImages: OWN_IMAGES })
   for (const [rel, text] of Object.entries(blk.files)) fs.writeFileSync(path.join(m.home, rel), text) // the route files go first (4.8 §3.1): the provider reads one
   const spliced = spliceRuntimeText({ yaml, block: blk })
   assert.equal(spliced.filtered, 2, 'both include-all groups were given the filter')
@@ -353,7 +353,7 @@ async function loadVerbatim(t, { on }) {
   const origin = http.createServer((q, r) => r.end('origin-ok')).listen(ports.origin, '127.0.0.1')
   t.after(() => origin.close())
   const text = buildForwarderConfig({ forms: [{ g, port: ports.form, upstream: 'direct' }], enginePort: ports.engine, token: TOKEN, controller: { port: ports.controller, secret }, on })
-  const files = on ? buildBlock({ groups: [groupOf(g)], enginePort: ports.engine, token: TOKEN, reenter: { host: '127.0.0.1', port: ports.form } }).files : {}
+  const files = on ? buildBlock({ groups: [groupOf(g)], enginePort: ports.engine, token: TOKEN, reenter: { host: '127.0.0.1', port: ports.form }, ownImages: OWN_IMAGES }).files : {}
   const m = await startMihomo(t, { configText: text, files, secret, controller: ports.controller })
   return { m, ports, g, files }
 }
