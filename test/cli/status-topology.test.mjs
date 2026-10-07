@@ -5,8 +5,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import http from 'node:http'
+import { once } from 'node:events'
 import { validateReceipt, validateTopology, validateFinding } from '../../src/cli/schema.mjs'
 import { captureHealth } from '../../src/health/read.mjs'
+import { createServer } from '../../src/server.mjs'
 import { asightHome } from '../../src/off/paths.mjs'
 import { renderCompact } from '../../src/netenv/topology.mjs'
 import { installedViaCli, snapshot } from './fixtures/dispatch-ctx.mjs'
@@ -25,7 +28,7 @@ test('V43: the 「各 harness 的路」 block follows the table, starts with the
   const s = await installedViaCli(ENGINE)
   const lines = (await status(s)).text.split('\n')
   const head = lines.findIndex((l) => l.startsWith('各 harness 的路('))
-  assert.equal(lines[head], '各 harness 的路(驱动模式(eBPF) · 新连接 · 细节: asight status <harness>)')
+  assert.match(lines[head], /^各 harness 的路\(驱动模式\(eBPF\) · 新连接 · \d+ 秒前探测 · 细节: asight status <harness>\)$/)
   const table = lines.slice(0, head).filter((l) => /^ {2}\S+\s+正在被采集/.test(l)).map((l) => l.trim().split(/\s+/)[0])
   const drawn = lines.slice(head + 1).filter((l) => /^ {2}\S/.test(l)).map((l) => l.trim().split(/\s+/)[0])
   assert.deepEqual(drawn.slice(0, table.length), table, 'the harnesses of the table are the ones drawn, in its order, right after the header')
@@ -63,6 +66,15 @@ test('V43: the board reads the same object — netenv.json holds the topology, a
   assert.deepEqual(file.topology, doc.topology)
   const health = captureHealth({ home: asightHome(s.home) })
   assert.deepEqual(JSON.parse(JSON.stringify(health.netenv.topology)), doc.topology)
+  // and through the route the board fetches (`GET /api/capture-health` over HTTP, from the home `serve` reads): the same object, field for field
+  const { server } = await createServer({ dbPath: '/nonexistent-db', sourcePath: null, healthHome: asightHome(s.home) })
+  server.listen(0, '127.0.0.1'); await once(server, 'listening')
+  try {
+    const body = await new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port: server.address().port, path: '/api/capture-health' }, (res) => {
+      let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve({ status: res.statusCode, b })) }).on('error', reject))
+    assert.equal(body.status, 200)
+    assert.deepEqual(JSON.parse(body.b).netenv.topology, doc.topology, 'the route\'s netenv.topology is what `status --json` printed')
+  } finally { server.close() }
   assert.equal(fs.statSync(path.join(s.home, '.asight', 'netenv.json')).mode & 0o777, 0o600)
   // `status codex` redraws codex only: the others keep what they had
   const before = JSON.parse(fs.readFileSync(path.join(s.home, '.asight', 'netenv.json'), 'utf8')).topology
@@ -89,10 +101,21 @@ test('V44: `status codex` draws the detail — the path a hop to a line, 「关�
   assert.match(one, /^codex · 开 · 驱动模式\(eBPF\) · 被采集: /m)
   assert.match(one, /^关掉 asight 时的路: .*api\.openai\.com/m)
   assert.match(one, /^要换代理: 照常改 codex 的设置/m)
-  assert.match(one, /^新连接的路  /m)
+  assert.match(one, /^新连接的路 · \d+ 秒前探测  /m)
   const all = (await status(s)).text
   assert.doesNotMatch(all, /关掉 asight 时的路|要换代理/)
   assert.doesNotMatch(one, /^\s+→ .*claude-code/m, 'only the named harness is drawn in detail')
+})
+
+test('§9.2 「N 秒前探测」: the header of the block and the first line of the detail say how long ago the paths were probed, by the clock `status` runs on (the example of the spec prints it; no caller used to pass a clock)', async () => {
+  const s = await installedViaCli(ENGINE)
+  let t = Date.parse('2026-10-07T10:00:00Z')
+  const r = await status(s, ['codex'], { ms: () => (t += 1000) }) // a second passes at every read of the clock: the paths are drawn before the text is
+  const head = r.text.split('\n').find((l) => l.startsWith('各 harness 的路('))
+  const n = Number((/ · (\d+) 秒前探测 · /.exec(head) || [])[1])
+  assert.ok(n >= 1, head)
+  assert.match(r.text, new RegExp(`^新连接的路 · ${n} 秒前探测  `, 'm'), 'the detail says the same of the same probe')
+  assert.doesNotMatch((await status(s, ['--json'], { ms: () => (t += 1000) })).text, /秒前探测/, '--json has the topology\'s `at`, and no words')
 })
 
 test('V44: with a VPN product on the machine the detail says the one line about its per-process rules — and only there: not in `status`, not in `on --dry-run`', async () => {

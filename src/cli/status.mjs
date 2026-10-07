@@ -208,7 +208,7 @@ const netenvWriteText = (n) => (n.write_error ? [`本机网络环境的副本没
 const userProcsText = (u) => (u.error ? [`你自己起的 asight 进程: 不知道(${u.error})`] : u.list.length ? [`你自己起的 asight 进程仍在跑: ${u.list.map((p) => `${p.command}(pid ${p.pid},${p.note})`).join('、')}`] : [])
 
 /** The lines of `asight status`. */
-export function renderStatus(f, { home = null, detail = [] } = {}) {
+export function renderStatus(f, { home = null, detail = [], now = null } = {}) {
   const d = f.daemon, lines = [`asight 状态(本用户 ${f.user})`]
   lines.push(d.state === 'running' ? `守护进程: 在跑${d.pid ? `(pid ${d.pid})` : ''}${f.daemon.reply && f.daemon.reply.helper ? (f.link.helper === 'missing' ? `;助手有问题: ${f.link.helper_reason}` : `;助手 pid ${f.daemon.reply.helper.pid}`) : ''}`
     : d.state === 'not-running' ? `守护进程: 没在跑${d.reason ? `(${d.reason})` : ''}:什么都没有被采集;asight on 拉起它`
@@ -227,7 +227,7 @@ export function renderStatus(f, { home = null, detail = [] } = {}) {
       lines.push(`      pid ${r.pid}  ${r.captured === true ? `已被采集${byEntry ? '(守护进程还没判过它,这是按信任入口与启动时间判的)' : ''}` : r.captured === false ? `没有: ${r.reason ?? '(没给原因)'} — ${reasonText(r.reason, p && p.hint)}` : '不知道(守护进程没判过它)'}`)
     }
   }
-  if (f.topology) lines.push(...renderPathBlock(f.topology, { ids: f.harnesses.map((h) => h.id) }), ...detail.filter((id) => f.topology[id]).flatMap((id) => ['', ...renderDetail(f.topology[id])]))
+  if (f.topology) lines.push(...renderPathBlock(f.topology, { ids: f.harnesses.map((h) => h.id), now }), ...detail.filter((id) => f.topology[id]).flatMap((id) => ['', ...renderDetail(f.topology[id], { now })]))
   else if (f.topology_error) lines.push(`各 harness 的路: 不知道(${f.topology_error})`)
   lines.push(relayedText(f), ...(f.linger && lingerText({ ...f.linger, user: f.user }) ? [lingerText({ ...f.linger, user: f.user })] : []), ...netenvText(f.netenv, { ids: f.harnesses.map((h) => h.id), platform: f.platform }), ...netenvWriteText(f.netenv), ...userProcsText(f.userProcs))
   const restart = restartOf(f)
@@ -293,7 +293,7 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
     io.out(JSON.stringify(r, null, 2))
     return { exit, f }
   }
-  for (const l of renderStatus(f, { home, detail: named.ids || [] })) io.out(l)
+  for (const l of renderStatus(f, { home, detail: named.ids || [], now: (deps.ms || Date.now)() })) io.out(l) // `now`: how long ago the paths were probed (§9.2 「N 秒前探测」)
   if (f.daemon.reply) for (const l of ['', ...formatStatus(f.daemon.reply).split('\n')]) io.out(l)
   else if (f.health) for (const l of ['', ...formatHealth(f.health)]) io.out(l)
   else io.out(`\ncapture health could not be read: ${f.health_error}`)
