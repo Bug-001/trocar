@@ -113,6 +113,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const matchError = !reply && !m ? (f.manifest.error || 'there is no install manifest to match the processes with') : tableError
   f.userProcs = table ? { list: userProcessesOf(table) } : { error: tableError }
   const matched = table && m ? table.map((p) => ({ p, h: matchHarness(m.liveness, p) })) : [] // which harness each process of the table is, by the manifest's signatures
+  f.matched = matched // read again by the network facts (src/netenv/facts.mjs): the processes of a harness and their start-time environment
   const negatives = new Set((reply && Array.isArray(reply.negatives) ? reply.negatives : []).map((n) => n.pid))
   for (const id of wanted) {
     const why = []
