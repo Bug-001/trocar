@@ -39,6 +39,14 @@ export async function loadParts({ arch = null, harnesses = null, env = process.e
   return { arch: A, os: A.os, osRootsFile: A.osRootsFile || null, harnesses: list, registry, scan: () => redirector.scan(), match: (f) => registry.match(f), linger: () => (typeof redirector.linger === 'function' ? redirector.linger() : null), lingerRead: () => (typeof redirector.lingerRead === 'function' ? redirector.lingerRead() : { state: null, error: 'this platform has no reader of the linger state' }) }
 }
 
+/** What `asight status` and `doctor` need to draw the network topology (1.6 §9.7): the harness descriptors and this platform's part of the facts. The CLI reaches arch and harness only through this file (layering rule 5);
+ *  nothing here starts a redirector or reads the machine. */
+export async function netFactsDeps({ arch = null, harnesses = null, platform = process.platform } = {}) {
+  let A = arch
+  if (!A) { try { A = await loadArch(platform) } catch { A = null } } // a platform with no collector has no part of its own
+  return { harnesses: harnesses || (await loadHarnesses()), archFacts: A && A.netFacts ? A.netFacts : null }
+}
+
 export const collectorPaths = (dir = collectorHome(asightHome())) => ({ dir, caDir: path.join(dir, 'ca'), state: path.join(dir, 'state.json'), lock: path.join(dir, 'lock'), markers: path.join(dir, 'run', 'trust') })
 const errText = (e) => String((e && e.message) || e)
 const BUNDLE_BUSY_MS = 2000 // a bundle rebuild that found the op lock held (1.6 R12) is tried again after this long ...
