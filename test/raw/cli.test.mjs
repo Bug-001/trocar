@@ -8,12 +8,14 @@ import { tmpDir, conversation, envelope, toLine, writeShard, listFiles } from '.
 import { shardOnce } from '../../src/etl/shard.mjs';
 import { defaultProcessList, shardWatchers } from '../../src/raw/legacy.mjs';
 import { markClosed } from '../../src/raw/closed.mjs';
+import { osStubs } from '../helpers/os-stubs.mjs';
 
 // The operator's path, end to end: the real `bin/asight.mjs`, a sandbox HOME (never the real
 // ~/.asight), the real fd / process probes (they only look at the temp files they are given).
 
 const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'bin', 'asight.mjs');
-const run = (home, ...args) => spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', env: { ...process.env, HOME: home, ASIGHT_SOURCE: '' } });
+const run = (home, ...args) => spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', env: { ...process.env, HOME: home, PATH: OS_PATH, ASIGHT_SOURCE: '' } });
+const OS_PATH = osStubs().path; // on a Mac `doctor`'s status block asks launchd and the keychain (read-only): stubs answer (0.1 §3)
 const SID = 'ffffffff-4444-4444-8444-44444444444f';
 
 test('legacy tree: seal (originals kept) → verify → seal --delete-original → verify → export', async (t) => {
