@@ -12,7 +12,7 @@ const nonEmpty = (s) => typeof s === 'string' && s !== ''
 /** Problems with a descriptor's `proxy` export against the shape of 1.6 §9.7 (`[]` = fine):
  *  `{ env: [names the agent reads, preferred first], files: [{ path: ({ home, env }) => file, format: 'json' | 'dotenv', keys: [key path | name, …] }], systemProxy: { http, ws } (true | false | 'unknown':
  *  does it follow the OS proxy setting, per transport), schemes: [the proxy URL schemes it takes], unsupported: { <scheme>: 'silent-direct' | 'fails' }, branches: ['all'] | ['http', 'ws'],
- *  measured: { win32, linux, darwin }: 'lab' | 'inferred', restart: { hint, processes } }`. A harness with more to say (proxy mode's per-form data, 4.8 §2.3) adds keys; these must be there. */
+ *  measured: { win32, linux, darwin }: 'lab' | 'inferred', restart: { hint, processes, managed? } }` (`managed: true`: the settings live in a process the agent's windows do not end, which `doctor` then names by pid). A harness with more to say (proxy mode's per-form data, 4.8 §2.3) adds keys; these must be there. */
 export function proxyProblems(p) {
   if (!p || typeof p !== 'object') return ['no proxy export']
   const bad = []
@@ -28,6 +28,7 @@ export function proxyProblems(p) {
   if (!(Array.isArray(p.branches) && (p.branches.join() === 'all' || p.branches.join() === 'http,ws'))) bad.push("branches: neither ['all'] nor ['http', 'ws']")
   for (const k of ['win32', 'linux', 'darwin']) if (!MEASURED.includes(p.measured && p.measured[k])) bad.push(`measured.${k}: not lab or inferred`)
   if (!p.restart || !nonEmpty(p.restart.hint) || !nonEmpty(p.restart.processes)) bad.push('restart: needs hint and processes')
+  if (p.restart && p.restart.managed !== undefined && typeof p.restart.managed !== 'boolean') bad.push('restart.managed: not true or false')
   return bad
 }
 

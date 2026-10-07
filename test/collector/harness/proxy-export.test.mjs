@@ -23,6 +23,7 @@ test('every harness file has a proxy export of the 1.6 §9.7 shape, and the load
     [{ ...good, branches: ['http'] }, /branches/],
     [{ ...good, measured: { win32: 'lab', linux: 'guess', darwin: 'inferred' } }, /measured\.linux/],
     [{ ...good, restart: { hint: '' } }, /restart/],
+    [{ ...good, restart: { ...good.restart, managed: 'yes' } }, /restart.managed/],
   ]
   for (const [proxy, re] of bad) assert.match(proxyProblems(proxy).join('; '), re)
 })
@@ -65,4 +66,9 @@ test('every harness says how to get a running agent to read a proxy again, and Z
   }
   assert.equal(by['z-code'].proxy.env[0], 'ZCODE_HTTP_PROXY')
   assert.match(by.codex.proxy.restart.hint, /app-server/, 'Codex keeps the environment of its first TUI in a managed daemon')
+})
+
+test('restart.managed: only a harness whose settings live in a process its windows do not end says so (Codex\'s managed app-server); doctor then names that process by pid', () => {
+  assert.deepEqual(all.filter((d) => d.proxy.restart.managed === true).map((d) => d.name), ['codex'])
+  assert.match(by.codex.proxy.restart.processes, /^codex app-server --managed-daemon$/)
 })

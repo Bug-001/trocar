@@ -44,7 +44,17 @@ function removeAt(h, place) {
   return place.format === 'json' ? `删掉 ${place.path} 里的 ${place.key}` : `删掉 ${place.path} 里的 ${place.key}= 那一行`
 }
 const portCheck = (ctx, port) => os(ctx, { linux: `ss -ltnp 'sport = :${port}'`, darwin: `lsof -nP -iTCP:${port} -sTCP:LISTEN`, win32: `netstat -ano -p TCP | findstr ":${port}"` })
-const restartStep = (ctx) => gui(ctx.hf.behaviour && ctx.hf.behaviour.restart && ctx.hf.behaviour.restart.hint ? ctx.hf.behaviour.restart.hint : `退出 ${ctx.h},再重新启动`)
+/** The steps that make an agent read its settings again: the harness's own words (the application step), and, where the harness keeps its settings in a managed process its windows do not end (`restart.managed`),
+ *  the command that ends it, with the pid the facts hold. A managed process that is not running has nothing to end. */
+function restartSteps(ctx) {
+  const r = (ctx.hf.behaviour && ctx.hf.behaviour.restart) || {}
+  const steps = [gui(r.hint ? r.hint : `退出 ${ctx.h},再重新启动`)]
+  if (r.managed === true && r.processes) {
+    const name = r.processes.split(/\s+/).filter((t) => !t.startsWith('-')).join(' ') // `codex app-server --managed-daemon` → the name a process of it is listed under: `codex app-server`
+    for (const p of ctx.hf.procs) if (p.name === name) steps.push(os(ctx, { linux: `kill ${p.pid}`, darwin: `kill ${p.pid}`, win32: `Stop-Process -Id ${p.pid}` }))
+  }
+  return steps
+}
 const settingOf = (hf) => (hf.setting && !hf.setting.unknown && hf.setting.value ? hf.setting : ((hf.forms || []).map((f) => f.setting).find((s) => s && s.value) || null))
 const deadProxy = (t) => t.nodes.find((n) => n.kind === 'proxy' && n.down === true) || null
 
@@ -57,7 +67,7 @@ export const FINDINGS = {
   'link-missing': { cls: 'failure', asightFirst: true, what: () => '期望开,但内核里没有本实例的 link', why: () => '驱动没挂上,新连接直连', commands: (c) => [asight(c, `asight on ${c.h}`)], verify: () => 'asight status:link 已挂' },
   'entry-missing': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的信任入口不在了`, why: () => '入口(asight 写进它配置的那一项)被删了或还没写', commands: (c) => [asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}:信任入口完好` },
   'entry-changed': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的信任入口被改成了别的`, why: () => '你或别的程序改了 asight 写的那一项', commands: (c) => [asight(c, `asight off ${c.h}`), asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}:信任入口完好` },
-  'negative-cache': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的进程拒绝了 asight 的证书,那个 host 之后透传`, why: () => '这个形态不认 asight 的信任入口;(pid, host) 随进程记着', commands: (c) => [asight(c, `asight status ${c.h}`), restartStep(c)], verify: (c) => `重启后 asight status ${c.h}:「是」` },
+  'negative-cache': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的进程拒绝了 asight 的证书,那个 host 之后透传`, why: () => '这个形态不认 asight 的信任入口;(pid, host) 随进程记着', commands: (c) => [asight(c, `asight status ${c.h}`), ...restartSteps(c)], verify: (c) => `重启后 asight status ${c.h}:「是」` },
   'not-routed': { cls: 'failure', asightFirst: false, what: (c) => `${c.h} 的新连接不经过 asight`, why: (c) => (c.pac ? '它跟随的系统代理是 PAC,asight 不执行 PAC' : '这个形态没有 asight 能用的入口'),
     commands: (c) => (c.pac ? [gui(`把 ${c.h} 的代理设成一个具体地址:${setAt(c.h, placeOf(c.hf, c.setting), c.vpnProxy || unknownValue('你的代理地址', 'pac'))}`), asight(c, `asight on ${c.h}`)] : [gui(`${c.h} 的这个形态没有入口:改用它的 CLI 形态`), asight(c, `asight status ${c.h}`)]), verify: (c) => `asight status ${c.h}:该支「在路径上 · 是」` },
   'route-loop': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的上游又是 asight 自己`, why: () => '算出的上游是 asight 自己的端口:代理字段的原值就是内核端口,或系统代理指着它;on 因此不接这个形态', commands: (c) => [asight(c, `asight off ${c.h}`), gui(`把 ${c.h} 的代理改回你原来的:${setAt(c.h, placeOf(c.hf, c.setting), c.old || unknownValue('原来的代理', 'absent'))}`), asight(c, `asight on ${c.h}`)], verify: () => 'asight doctor:不再报' },
@@ -90,7 +100,7 @@ export const FINDINGS = {
 }
 // the trust reasons not listed above (a variable missing, a file unreadable, …): the daemon's own hint says what to do about this agent
 const TRUST = { cls: (c) => (RESTART_REASONS.includes(c.code) ? 'expected' : 'failure'), asightFirst: false, what: (c) => `${c.h} 的进程没被信任:${c.code}`, why: (c) => c.hint || trustReasonText(c.code) || '入口只在启动时读(§1.1);遮住的原因见 harness 的提示',
-  commands: (c) => (RESTART_REASONS.includes(c.code) ? [restartStep(c)] : [asight(c, `asight status ${c.h}`), gui(c.hint || trustReasonText(c.code) || `按 ${c.h} 的提示改`)]), verify: (c) => `asight status ${c.h}:新 pid「是」` }
+  commands: (c) => (RESTART_REASONS.includes(c.code) ? restartSteps(c) : [asight(c, `asight status ${c.h}`), gui(c.hint || trustReasonText(c.code) || `按 ${c.h} 的提示改`)]), verify: (c) => `asight status ${c.h}:新 pid「是」` }
 export const FINDING_CODES = Object.freeze([...new Set([...Object.keys(FINDINGS), ...TRUST_REASONS])])
 
 // ── which of them the facts call for ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

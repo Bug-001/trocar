@@ -156,6 +156,23 @@ test('V51 what explains the harness is not repeated by it: a failure or an expec
   assert.equal(explained(facts('claude-code')), true, 'and nothing explains a healthy one the user named')
 })
 
+test('V49 where the harness keeps its settings in a managed process its windows do not end (Codex\'s app-server), the restart is the harness\'s step and then `kill <pid>` with the pid the facts hold — not a TUI\'s pid, and nothing for a harness with no such process; on Windows `Stop-Process`', () => {
+  const BEFORE = '2026-10-07T08:00:00.000Z'
+  const stale = { startedAt: BEFORE, watched: 'no-decrypt', trusted: false, reason: 'config-after-start' }
+  const cx = (over = {}) => facts('codex', {}, { procs: [proc(5521, { ...stale, name: 'codex' }), proc(5530, { ...stale, name: 'codex app-server' })], ...over })
+  const steps = (f, code = 'config-after-start') => findingsOf(f, ['codex']).find((x) => x.code === code).commands
+  const c = steps(cx())
+  assert.deepEqual(c.map((x) => x.shell), ['gui', 'sh'])
+  assert.ok(c[0].run.startsWith('关掉所有 codex 窗口'), 'the harness\'s own step first')
+  assert.deepEqual(c[1], { run: 'kill 5530', shell: 'sh' })
+  assert.deepEqual(steps({ ...cx(), platform: 'win32' })[1], { run: 'Stop-Process -Id 5530', shell: 'powershell' })
+  assert.deepEqual(steps(facts('codex', {}, { procs: [proc(5521, { ...stale, name: 'codex' })] })).map((x) => x.shell), ['gui'], 'the managed process is not running: nothing to end')
+  const cc = findingsOf(facts('claude-code', {}, { procs: [proc(4121, stale)] }), ['claude-code']).find((x) => x.code === 'config-after-start').commands
+  assert.deepEqual(cc.map((x) => x.shell), ['gui'], 'a harness with no managed process: the step alone')
+  const neg = steps(facts('codex', { listeners: [] }, { procs: [proc(5530, { name: 'codex app-server', negative: true })], negatives: [{ pid: 5530, host: 'chatgpt.com', reason: 'negative-cache' }] }), 'negative-cache')
+  assert.ok(neg.some((x) => x.run === 'kill 5530'), 'a negative cache lasts as long as the process: ending it is the way out')
+})
+
 test('renderFindings: what and why, each command on a line of its own (shell named when it is not sh; a step in an application has no $), and how to check', () => {
   const lines = renderFindings(findingsOf({ ...SETS['proxy-dead'].facts, platform: 'win32' }).filter((f) => f.code === 'proxy-dead'))
   assert.match(lines[0], /^\[失败\] claude-code · proxy-dead — /)

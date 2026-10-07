@@ -27,7 +27,7 @@ const SOCKS_FAILS = { socks4: 'fails', socks5: 'fails', socks5h: 'fails' }
 const SOCKS_SILENT = { socks4: 'silent-direct', socks5: 'silent-direct', socks5h: 'silent-direct' }
 const BEHAVE = {
   'claude-code': { follows: { http: false, ws: false }, schemes: ['http', 'https'], unsupported: SOCKS_FAILS, branches: ['all'], restart: { hint: '退出这个 Claude Code,再重新启动(它只在启动时读一次代理设置)', processes: 'claude' } },
-  codex: { follows: { http: true, ws: false }, schemes: ['http', 'https'], unsupported: SOCKS_SILENT, branches: ['http', 'ws'], restart: { hint: '关掉所有 codex 窗口,再结束托管的 codex app-server --managed-daemon 进程', processes: 'codex app-server --managed-daemon' } },
+  codex: { follows: { http: true, ws: false }, schemes: ['http', 'https'], unsupported: SOCKS_SILENT, branches: ['http', 'ws'], restart: { hint: '关掉所有 codex 窗口,再结束托管的 codex app-server --managed-daemon 进程', processes: 'codex app-server --managed-daemon', managed: true } },
   hermes: { follows: { http: true, ws: true }, schemes: ['http', 'https', 'socks4', 'socks5', 'socks5h'], unsupported: {}, branches: ['all'], restart: { hint: '退出这个 Hermes,再重新启动', processes: 'hermes' } },
   'kimi-code': { follows: { http: false, ws: false }, schemes: ['http', 'https', 'socks4', 'socks5', 'socks5h'], unsupported: {}, branches: ['all'], restart: { hint: '退出这个 kimi,在新开的终端里重新启动', processes: 'kimi' } },
   'deepseek-dsh': { follows: { http: false, ws: false }, schemes: ['http', 'https'], unsupported: SOCKS_SILENT, branches: ['all'], restart: { hint: '退出这个 dsh,再重新启动', processes: 'dsh' } },

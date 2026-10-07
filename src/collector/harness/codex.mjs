@@ -78,7 +78,7 @@ const proxy = {
   unsupported: { socks4: 'silent-direct', socks5: 'silent-direct', socks5h: 'silent-direct' },
   branches: ['http', 'ws'],
   measured: { win32: 'lab', linux: 'inferred', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3); elsewhere inferred from it, until measured
-  restart: { hint: '关掉所有 codex 窗口,再结束托管的 codex app-server --managed-daemon 进程(它沿用第一个 TUI 的环境),之后新开的 codex 才会重读代理设置', processes: 'codex app-server --managed-daemon' },
+  restart: { hint: '关掉所有 codex 窗口,再结束托管的 codex app-server --managed-daemon 进程(它沿用第一个 TUI 的环境),之后新开的 codex 才会重读代理设置', processes: 'codex app-server --managed-daemon', managed: true },
 }
 
 export default {
