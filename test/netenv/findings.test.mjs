@@ -34,7 +34,7 @@ const SETS = {
   'not-routed': { h: 'codex', facts: row(11).facts, codes: row(11).findings },
   'system-proxy-pac': { h: 'codex', facts: row(22).facts, codes: row(22).findings },
   'route-loop': { h: 'codex', facts: pfacts('codex', form('codex.cli', { routeLoop: true, entry: null, procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992)), codes: ['route-loop'] },
-  'proxy-dead': { h: 'claude-code', facts: facts('claude-code', {}, viaProxy()), codes: ['proxy-dead', 'inferred-behaviour'] },
+  'proxy-dead': { h: 'claude-code', facts: facts('claude-code', {}, viaProxy()), codes: ['proxy-dead'] }, // claude-code's HTTPS_PROXY path is measured on Linux (V54): no hint about inferred data
   'proxy-unsupported': { h: 'deepseek-dsh', facts: facts('deepseek-dsh', mihomoVia, { setting: proxyOf('socks5://127.0.0.1:7890') }), codes: ['proxy-unsupported', 'inferred-behaviour'] },
   'proxy-changed': { h: 'codex', facts: row(17).facts, codes: row(17).findings },
   'netenv-changed': { h: 'claude-code', facts: facts('claude-code', { vpn: mihomoVpn({ tun: true }), vpnKnown: true }, { adopted: { at: 'T', routing: 'driver', chain: 'c', source: [], sha256: null, file_sha256: null, proxy: null, vpn: { product: 'mihomo', version: '1.19.32', port: 7890, tun: false } } }), codes: ['netenv-changed'] },
@@ -49,7 +49,7 @@ const SETS = {
   'linger-off': { h: null, facts: facts('claude-code', { linger: false }), codes: ['linger-off'] },
   'other-redirector': { h: null, facts: facts('claude-code', { otherRedirector: true }), codes: ['other-redirector'] },
   'fake-ip': { h: 'claude-code', facts: facts('claude-code', {}, { fakeIp: true }), codes: ['fake-ip'] },
-  'inferred-behaviour': { h: 'claude-code', facts: row(2).facts, codes: row(2).findings },
+  'inferred-behaviour': { h: 'hermes', facts: row(21).facts, codes: row(21).findings }, // hermes on Linux: inferred from the Windows measurements (claude-code's proxy path is measured there: V54)
   'cause-unknown': { h: 'claude-code', facts: facts('claude-code'), names: ['claude-code'], codes: ['cause-unknown'] },
 }
 const STATUS_REASONS_IN_CATALOGUE = ['config-after-start', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'link-missing', 'entry-missing', 'entry-changed', 'desired-off', 'negative-cache']
@@ -140,8 +140,9 @@ test('V51 a harness the user names with nothing in the facts to explain it: `cau
   assert.match(found.verify, /仍连不上 → 与 asight 无关/)
   assert.deepEqual(validateFinding(found), [])
   // it comes after every other finding: it is what is left when nothing above explains
-  const withHints = findingsOf(row(2).facts, ['claude-code']).map((x) => x.code)
+  const withHints = findingsOf(row(21).facts, ['hermes']).map((x) => x.code)
   assert.deepEqual(withHints, ['inferred-behaviour', 'cause-unknown'], 'a hint about the data does not explain a failure to connect: both are said, the condition last')
+  assert.deepEqual(findingsOf(row(2).facts, ['claude-code']).map((x) => x.code), ['cause-unknown'], 'claude-code behind a proxy of its own on Linux: its behaviour was measured (V54), so there is no hint about inferred data')
 })
 
 test('V51 what explains the harness is not repeated by it: a failure or an expected finding for the harness (not on the path, off, a daemon that is down, a process that started before `on`) means no cause-unknown; nor for a harness that is off, one that is not named, or one that is not installed', () => {

@@ -128,7 +128,7 @@ const proxy = {
   schemes: ['http', 'https'],
   unsupported: { socks4: 'fails', socks5: 'fails', socks5h: 'fails' },
   branches: ['all'],
-  measured: { win32: 'lab', linux: 'inferred', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3); elsewhere inferred from it, until measured
+  measured: { win32: 'lab', linux: 'lab', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3). Linux: V54 ran a real `claude -p` with HTTPS_PROXY in its settings.json env through a CONNECT proxy (the setting is read, the CONNECT comes from claude's pid) — what the path depends on when it has a proxy of its own; SOCKS and the OS proxy are not measured on Linux (it reads none). macOS: inferred, until measured
   restart: { hint: '退出这个 Claude Code,再重新启动(它只在启动时读一次代理设置)', processes: 'claude' },
 }
 

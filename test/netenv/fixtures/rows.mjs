@@ -35,7 +35,7 @@ const BEHAVE = {
   'deepseek-dsh': { follows: { http: false, ws: false }, schemes: ['http', 'https'], unsupported: SOCKS_SILENT, branches: ['all'], restart: { hint: '退出这个 dsh,再重新启动', processes: 'dsh' } },
 }
 export const harness = (h, over = {}) => ({
-  installed: true, entry: { state: 'intact' }, installedAt: ENTRY_AT, setting: none(), systemProxy: null, behaviour: { ...BEHAVE[h], measured: 'inferred' },
+  installed: true, entry: { state: 'intact' }, installedAt: ENTRY_AT, setting: none(), systemProxy: null, behaviour: { ...BEHAVE[h], measured: h === 'claude-code' ? 'lab' : 'inferred' }, // Linux: V54 measured claude-code's HTTPS_PROXY path on a test machine; the others are inferred from the Windows measurements
   procs: [proc(4121)], negatives: [], apiHosts: [API[h]], adopted: null, forms: null, ...over,
 })
 
@@ -59,7 +59,7 @@ row({ n: 1, title: 'no proxy in the agent: eBPF → engine → the API host, dir
 row({ n: 2, title: 'the agent has its own proxy (HTTPS_PROXY → mihomo, rule mode): the engine hands the CONNECT on', h: 'claude-code',
   facts: facts('claude-code', { listeners: [MIHOMO], vpn: mihomoVpn() }, viaMihomo),
   kinds: [['agent', 'asight-engine', 'proxy', 'egress']], on_path: true, captured: true, reason: null,
-  compact: ['claude 4121 → [eBPF] asight 引擎 :47123 → [CONNECT 原样转] mihomo :7890 → 出口(mihomo 选)'], findings: ['inferred-behaviour'] })
+  compact: ['claude 4121 → [eBPF] asight 引擎 :47123 → [CONNECT 原样转] mihomo :7890 → 出口(mihomo 选)'], findings: [] })
 
 row({ n: 3, title: 'the VPN has TUN on and the agent has no proxy: the engine dials the API host as the agent would, into the TUN', h: 'claude-code',
   facts: facts('claude-code', { vpn: mihomoVpn({ product: 'clash-verge', tun: true }) }),
@@ -69,22 +69,22 @@ row({ n: 3, title: 'the VPN has TUN on and the agent has no proxy: the engine di
 row({ n: 4, title: 'asight is off (after `asight off`): the agent goes to its own proxy', h: 'claude-code',
   facts: facts('claude-code', { desired: { 'claude-code': 'off' }, listeners: [MIHOMO], vpn: mihomoVpn() }, { ...viaMihomo, procs: [proc(4121, { watched: 'absent', trusted: false, reason: 'off' })] }),
   kinds: [['agent', 'proxy', 'egress']], on_path: false, captured: false, reason: 'desired-off',
-  compact: ['claude 4121 → [HTTPS_PROXY] mihomo :7890 → 出口(mihomo 选)'], findings: ['desired-off', 'inferred-behaviour'] })
+  compact: ['claude 4121 → [HTTPS_PROXY] mihomo :7890 → 出口(mihomo 选)'], findings: ['desired-off'] })
 
 row({ n: 5, title: 'on, and this process started before `on`: the kernel does not rewrite its connections', h: 'claude-code',
   facts: facts('claude-code', { listeners: [MIHOMO], vpn: mihomoVpn() }, { ...viaMihomo, procs: [proc(4121, { startedAt: BEFORE, watched: 'no-decrypt', trusted: false, reason: 'config-after-start' })] }),
   kinds: [['agent', 'proxy', 'egress']], on_path: false, captured: false, reason: 'config-after-start',
-  compact: ['claude 4121 → [HTTPS_PROXY] mihomo :7890 → 出口(mihomo 选)'], findings: ['config-after-start', 'inferred-behaviour'] })
+  compact: ['claude 4121 → [HTTPS_PROXY] mihomo :7890 → 出口(mihomo 选)'], findings: ['config-after-start'] })
 
 row({ n: 6, title: 'on, and (pid, host) is in the negative cache: the engine is on the path and passes the connection through', h: 'claude-code',
   facts: facts('claude-code', { listeners: [MIHOMO], vpn: mihomoVpn() }, { ...viaMihomo, procs: [proc(4121, { negative: true })], negatives: [{ pid: 4121, host: 'api.anthropic.com', reason: 'negative-cache' }] }),
   kinds: [['agent', 'asight-engine', 'proxy', 'egress']], on_path: true, captured: false, reason: 'negative-cache',
-  compact: ['claude 4121 → [eBPF] asight 引擎 :47123(透传 · 负缓存 api.anthropic.com) → [CONNECT 原样转] mihomo :7890 → 出口(mihomo 选)'], findings: ['negative-cache', 'inferred-behaviour'] })
+  compact: ['claude 4121 → [eBPF] asight 引擎 :47123(透传 · 负缓存 api.anthropic.com) → [CONNECT 原样转] mihomo :7890 → 出口(mihomo 选)'], findings: ['negative-cache'] })
 
 row({ n: 7, title: 'wanted on and the daemon is not running: the links went with the helper, the agent goes to its own proxy', h: 'claude-code',
   facts: facts('claude-code', { daemon: { state: 'not-running', pid: null, enginePort: null }, link: { attached: null, helper: 'ok', ids: [] }, listeners: [MIHOMO], vpn: mihomoVpn() }, { ...viaMihomo, procs: [proc(4121, { watched: 'unknown', trusted: null })] }),
   kinds: [['agent', 'proxy', 'egress']], on_path: false, captured: false, reason: 'daemon-not-running',
-  compact: ['claude 4121 → [HTTPS_PROXY] mihomo :7890 → 出口(mihomo 选)'], findings: ['daemon-not-running', 'inferred-behaviour'] })
+  compact: ['claude 4121 → [HTTPS_PROXY] mihomo :7890 → 出口(mihomo 选)'], findings: ['daemon-not-running'] })
 
 // ── proxy mode (4.8 §10.2; the facts are the Windows branch's to give, here they are injected) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 // A harness has forms; each form has the proxy it would use without asight (`setting`: as of now), the OS proxy, the entry asight wrote, and the kernel's own state for it (`forwarder.forms`).
@@ -198,7 +198,7 @@ export const SCRIPT_PROXY = { addr: '127.0.0.1', port: 38743, pid: 898, exe: '/u
 row({ n: 24, title: 'the proxy port is owned by a process asight can read that is not a VPN product (a script, ssh -D, squid …): the hop is that process with its port, its product is 「不知道 · absent」, and so is the exit', h: 'claude-code',
   facts: facts('claude-code', { listeners: [SCRIPT_PROXY] }, { setting: proxyOf('http://127.0.0.1:38743') }),
   kinds: [['agent', 'asight-engine', 'proxy', 'egress']], on_path: true, captured: true, reason: null,
-  compact: ['claude 4121 → [eBPF] asight 引擎 :47123 → [CONNECT 原样转] node :38743(不知道 · absent) → ?'], findings: ['inferred-behaviour'] })
+  compact: ['claude 4121 → [eBPF] asight 引擎 :47123 → [CONNECT 原样转] node :38743(不知道 · absent) → ?'], findings: [] })
 
 /** The same facts with the OS proxy off / without a VPN product (V45). */
 export const withSystemProxyOff = (f) => ({ ...f, harnesses: Object.fromEntries(Object.entries(f.harnesses).map(([h, x]) => [h, { ...x, systemProxy: x.systemProxy ? { value: null, pac: false } : null, forms: x.forms ? x.forms.map((fm) => ({ ...fm, systemProxy: { value: null, pac: false } })) : null }])) })
