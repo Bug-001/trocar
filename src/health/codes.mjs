@@ -66,6 +66,11 @@ export const OFF_WHERE = Object.freeze(['off'])
 export const OFF_EVENTS = Object.freeze(['off-note']) // a state change (the last one of a run carries kind:'result'), not a failure
 export const OFF_CODES = Object.freeze(['backup-failed', 'backup-kept', 'undone-by-marker'])
 
+// What `asight status` says of an agent that is not captured (RFC 1.6 §2 / V32, 4.6 §记录「事件与码的名字」): one name from this closed set, whatever the reason. asight's own, then every trust
+// reason above (the resolver's and the harnesses' own). A block of its own, as the one above is, so the lists D40 appends to stay edit-free. `negative-cache` is also a code of the engine.
+export const STATUS_OWN_REASONS = Object.freeze(['desired-off', 'entry-missing', 'entry-changed', 'link-missing', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'negative-cache'])
+export const STATUS_REASONS = Object.freeze([...new Set([...STATUS_OWN_REASONS, ...TRUST_REASONS])])
+
 const ERRNO = /^(E[A-Z0-9_]+|Z_[A-Z_]+)$/ // Node's own error codes (errno, ERR_*, zlib's Z_*), written as they are
 const sets = { nc: new Set([...NOT_CAPTURED_FAILURE, ...NOT_CAPTURED_EXPECTED]), ncFail: new Set(NOT_CAPTURED_FAILURE), fail: new Set(FAILURE_EVENTS), event: new Set([...FAILURE_EVENTS, ...STATE_EVENTS, ...OFF_EVENTS]), where: new Set([...WHERE, ...OFF_WHERE]), code: new Set([...CODES, ...OFF_CODES]) }
 
