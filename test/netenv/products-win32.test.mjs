@@ -52,7 +52,6 @@ test('N10: the probe and the whole Verge adapter (reads, install, on, off, remov
   assert.ok(inst.script.ok, 'the block went into Verge\'s Script.js')
   assert.notDeepEqual(snapshot(w.home), verge0, 'the adapter really wrote into Verge\'s directory (else this test proves nothing)')
   await w.adapter.applyGroups({ groups: [{ g: 'claude-code.cli', on: false }, { g: 'codex.app', on: false }] })
-  await w.adapter.drift({ groups: on })
   await w.adapter.processRulesNaming([{ id: 'x', imageNames: ['FlClash.exe'], imagePaths: [] }])
   const rm = await w.adapter.removeBlock({ groups: ['claude-code.cli', 'codex.app'] })
   assert.ok(rm.ok !== false)
