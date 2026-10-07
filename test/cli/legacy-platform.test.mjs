@@ -314,6 +314,15 @@ test('1.6 §4 (Linux): off takes out the CC-CLI steer of `monitor on` from its s
   assert.equal(fs.existsSync(path.join(s.home, '.asight', 'legacy-off.pending')), false)
 })
 
+test('1.6 §4 (Linux): with no old capture there is nothing to undo — off writes no file of the old capture\'s (no log, no marker, no ledger) and runs no certutil', async () => {
+  const s = await installedHome({ names: ['claude-code'] })
+  const calls = s.sys.exec.calls.length
+  const io = fakeIo()
+  assert.equal(await runOffCli([], { io, home: s.home, env: s.sh.env, platform: 'linux', deps: s.offDeps({ getuid: () => 1000 }) }), 0, io.text())
+  assert.equal(s.sys.exec.calls.slice(calls).some((c) => /^certutil /.test(c)), false)
+  for (const f of ['logs/mitm-events.ndjson', 'legacy-off.pending', 'legacy-manifest.json']) assert.equal(fs.existsSync(path.join(s.home, '.asight', f)), false, f)
+})
+
 // ── on (1.6 §4: the old capture is what `on` drives where there is no new collector) ───────────────────────────────────────────────────────────────────────────────────────────────────
 
 const onCtx = (s, io, { core = null, mac, deps = {}, env = {} } = {}) => ({
