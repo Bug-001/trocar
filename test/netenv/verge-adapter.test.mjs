@@ -12,7 +12,7 @@ import { isCode, checkRecord } from '../../src/health/codes.mjs'
 import { stubHelper, vergeProcs, proc, SESSION, VERGE_DIR } from './fixtures/win-facts.mjs'
 import { startWorld, snapshot, sha, LEAKS, USER_PROVIDER, USER_GROUP, USER_DOMAIN, NODE, SUB_URL, VERGE_YAML, PROFILES_YAML, SCRIPT_JS, userRuntime, GROUPS } from './fixtures/verge-world.mjs'
 import { names, buildBlock, buildScriptJs, insertScriptBlock, stripScriptBlock, scanScript } from '../../src/netenv/mihomo/rules.mjs'
-import { RECORDED_RULES, RECORDED_REFUSALS } from './fixtures/real-rules.mjs'
+import { RECORDED_RULES, RECORDED_REFUSALS, RECORDED_FORMS, RECORDED_NAMING } from './fixtures/real-rules.mjs'
 
 // ---- N3 · N4: discovery ----------------------------------------------------------------------------------------------------------------------------------
 
@@ -280,16 +280,8 @@ test('N14 the fake core renders rules as a real v1.19.32 does (the recorded tabl
   const w = await startWorld(t, { runtime: userRuntime(RECORDED_RULES.map((r) => r.rule.replace(/,G$/, `,${USER_GROUP}`)).filter((r) => !r.startsWith('MATCH'))) })
   const seen = (await (await fetch(`http://${w.core.endpoint.slice(4)}/rules`)).json()).rules.slice(2, 2 + RECORDED_RULES.length - 1) // after the user's domain rule and codex.exe
   assert.deepEqual(seen.map((r) => [r.type, r.payload]), RECORDED_RULES.filter((r) => r.type !== 'Match').map((r) => [r.type, r.payload]), 'what the fake says is what the real core said')
-  const forms = [
-    { id: 'plain', imageNames: ['plain.exe'], imagePaths: [] }, { id: 'apps', imageNames: [], imagePaths: [String.raw`C:\Apps\p.exe`] }, { id: 'rex', imageNames: ['rex.exe'], imagePaths: [] },
-    { id: 'claude', imageNames: ['claude.exe'], imagePaths: [] }, { id: 'codex', imageNames: ['codex.exe'], imagePaths: [] }, { id: 'kimi', imageNames: ['kimi.exe'], imagePaths: [] }, { id: 'deep', imageNames: ['deep.exe'], imagePaths: [] },
-    { id: 'nobody', imageNames: ['nobody.exe'], imagePaths: [] },
-  ]
-  const r = await w.adapter.processRulesNaming(forms)
-  assert.deepEqual(r.rules.filter((x) => x.index >= 2).map((x) => [x.type, x.forms]), [
-    ['ProcessName', ['plain']], ['ProcessPath', ['apps']], ['ProcessNameRegex', ['rex']],
-    ['AND', ['claude']], ['OR', ['codex']], ['NOT', ['kimi']], ['AND', ['deep']], ['AND', ['claude', 'codex']], ['OR', ['apps']],
-  ], 'every recorded form of a process rule is found, and only the forms it names')
+  const r = await w.adapter.processRulesNaming(RECORDED_FORMS)
+  assert.deepEqual(r.rules.filter((x) => x.index >= 2).map((x) => [x.type, x.forms]), RECORDED_NAMING, 'every recorded form of a process rule is found, and only the forms it names')
   assert.ok(!r.rules.some((x) => x.forms.includes('nobody')))
   const text = JSON.stringify(r)
   for (const leak of [USER_GROUP, USER_DOMAIN, 'x.example', 'y.example', '443']) assert.ok(!text.includes(leak), `${leak} must not leave`)

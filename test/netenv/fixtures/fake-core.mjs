@@ -1,12 +1,19 @@
 // fake-core.mjs — a stand-in for the proxy core's controller as mihomo v1.19.32 answers it (RFC 4.7 §2 · §3.4, 4.8 §4.1; plan Task 6), on a loopback socket, so the Verge adapter is exercised end to end with a
-// real HTTP round trip and no mihomo. Everything it does is something the real binary does, and W57 (test/netenv/mihomo-contract.test.mjs) holds each of them to the real core:
-//   GET /version · /configs (mode, mixed-port, find-process-mode, tun, plus fields a user has that must never leave the adapter) · /proxies/<name> (404 when there is none) ·
-//   /providers/rules (the LIST, with every user provider and each ruleCount) · GET /providers/rules/<name> is 405 (v1.19.32 has no read of one provider) · /rules (every rule, index and type) ·
-//   /group/<name>/delay?url=&timeout= (a health check of a fallback group) · PUT /proxies/<select> {name} (204; 400 for a member the group does not have) · PUT /providers/rules/<name> (204: re-reads
-//   the route file) · PUT /configs?force=true {payload | path} (204: loads the runtime, selects start at the group's first member unless `storeSelected` remembers one).
-// The runtime it loads is the YAML text Verge writes (read with fixtures/rules/mini-yaml.mjs). A provider's ruleCount is what the real core gives: the number of lines of its route file (0 for an empty
-// one, the inline payload's one line when the file is not there). `home` is the data directory the route files are under. Every request is logged in `requests`; `engineAlive` is whether asight-in-* answers
-// the health check; `failOn(method, pattern, status)` makes matching requests fail (a controller that refuses one write).
+// real HTTP round trip and no mihomo. What it says is held to the real core by W57 — and only what is listed here is:
+//   test/netenv/mihomo-adapter-contract.test.mjs (ASIGHT_MIHOMO_BIN): createController + the adapter on a real core: GET /rules in the core's own rendering of every rule (fixtures/real-rules.mjs, the table this
+//   file answers from), /configs (mode, mixed-port, find-process-mode, tun), /proxies/<name> and the other 404s, the list of providers and each ruleCount, PUT /proxies/<select> (204; a push of the runtime
+//   keeps the select, as `storeSelected`), PUT /providers/rules/<name>, PUT /configs?force=true (204; the five refusals of the table, in the core's words), the fixed messages (Unauthorized, Body invalid,
+//   Resource not found, Selector update error: proxy not exist);  test/netenv/mihomo-contract.test.mjs: GET /providers/rules/<name> is 405, /group/<name>/delay and the fallback group's pick (asight-in while the
+//   engine answers, asight-re when it does not).
+// NOT measured on a real core, so take them as this file's own: a provider whose route file is missing counts its inline payload (what the service copy would do, 4.7 OPEN 5); a PUT /configs body that is neither
+// {payload} nor {path} is 400 here and 204 on the real core (the client refuses such a body before any I/O, so no caller sends one); a rule type outside TYPE below is shown under the name it was written with.
+// Answers: GET /version · /configs (plus fields a user has that must never leave the adapter) · /proxies/<name> (404 when there is none) · /providers/rules (the LIST) · GET /providers/rules/<name> is 405 (v1.19.32 has
+// no read of one provider) · /rules (every rule, index and type, a logic rule's payload as the core renders it) · /group/<name>/delay?url=&timeout= (a health check of a fallback group) · PUT /proxies/<select> {name}
+// (204; 400 for a member the group does not have) · PUT /providers/rules/<name> (204: re-reads the route file) · PUT /configs?force=true {payload | path} (204: loads the runtime, selects start at the group's first
+// member unless `storeSelected` remembers one).
+// The runtime it loads is the YAML text Verge writes (read with fixtures/rules/mini-yaml.mjs). A provider's ruleCount is the number of lines of its route file (0 for an empty one). `home` is the data directory the
+// route files are under. Every request is logged in `requests`; `engineAlive` is whether asight-in-* answers the health check; `failOn(method, pattern, status)` makes matching requests fail (a controller that refuses
+// one write); `rejectPayload` is the message the core refuses a pushed config with (fixtures/real-rules.mjs has what a real one says).
 import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
