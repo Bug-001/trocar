@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 import { startHelper } from '../../../../src/collector/arch/win32/helper.mjs'
-import { refuseElevated, nodePreflight, NODE_MIN_MAJOR } from '../../../../src/collector/arch/win32/autostart.mjs'
+import { refuseElevated, nodePreflight, NODE_MIN_MAJOR, taskXml, taskUser, userUnit, register, TASK_NAME, TASK_FILE } from '../../../../src/collector/arch/win32/autostart.mjs'
 import { elevationByWhoami, refuseElevatedByWhoami } from '../../../../src/off/win32.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
 import { controlEndpoint, readControlEndpoint, CONTROL_FILE, PIPE_PREFIX } from '../../../../src/collector/arch/win32/control-path.mjs'
@@ -218,4 +218,176 @@ test('W24 `on` refuses a Node below the minimum with a doctor line that says wha
     assert.equal(r.ok, false, `an unreadable version (${JSON.stringify(v)}) is not a pass`)
     assert.match(r.doctor, /Node/)
   }
+})
+
+// ---- W24: the task ------------------------------------------------------------------------------------------------------------------------------
+
+const ME = 'DESKTOP-7Q\\ada'
+const NODE = 'C:\\Program Files\\nodejs\\node.exe'
+const SCRIPT = 'C:\\Users\\ada\\AppData\\Roaming\\npm\\node_modules\\asight\\bin\\asight.mjs'
+const xml = () => taskXml({ user: ME, node: NODE, asight: SCRIPT, conhost: 'conhost.exe' })
+const inner = (x, tag) => { const m = new RegExp(`<${tag}(?: [^>]*)?>([\\s\\S]*?)</${tag}>`).exec(x); return m ? m[1] : null }
+/** Is it well formed in the one sense that matters here: every element opened is closed, in order? (There is no XML parser in Node; a typo in a tag name is what this catches.) */
+function balanced(x) {
+  const stack = []
+  for (const m of x.replace(/<\?[\s\S]*?\?>/g, '').matchAll(/<(\/?)([A-Za-z][\w.]*)([^>]*?)(\/?)>/g)) {
+    if (m[4] === '/') continue
+    if (m[1] === '/') { if (stack.pop() !== m[2]) return false } else stack.push(m[2])
+  }
+  return stack.length === 0
+}
+
+test('W24 the task XML has the fields of 4.8 §7: a login trigger of this user, InteractiveToken at LeastPrivilege, restart on failure 1 minute × 999, no time limit, a conhost --headless action that runs the supervised daemon, and no --use-system-ca', () => {
+  const x = xml()
+  assert.ok(x.startsWith('<?xml version="1.0" encoding="UTF-16"?>'), 'the form T0 registered: the file is UTF-16 and says so')
+  assert.ok(balanced(x), 'every element is closed')
+  assert.match(x, /<Task version="1\.4" xmlns="http:\/\/schemas\.microsoft\.com\/windows\/2004\/02\/mit\/task">/)
+  assert.equal(inner(inner(x, 'LogonTrigger'), 'UserId'), ME, 'the trigger is this user\'s login, not anybody\'s')
+  assert.equal(inner(inner(x, 'LogonTrigger'), 'Enabled'), 'true')
+  const principal = inner(x, 'Principal')
+  assert.equal(inner(principal, 'UserId'), ME)
+  assert.equal(inner(principal, 'LogonType'), 'InteractiveToken')
+  assert.equal(inner(principal, 'RunLevel'), 'LeastPrivilege')
+  assert.doesNotMatch(x, /S4U|HighestAvailable|Password/, 'not S4U (High integrity), not elevated, no password')
+  assert.equal(inner(x, 'RestartOnFailure'), '<Interval>PT1M</Interval><Count>999</Count>')
+  assert.equal(inner(x, 'ExecutionTimeLimit'), 'PT0S')
+  assert.equal(inner(x, 'DisallowStartIfOnBatteries'), 'false')
+  assert.equal(inner(x, 'StopIfGoingOnBatteries'), 'false')
+  assert.equal(inner(x, 'MultipleInstancesPolicy'), 'IgnoreNew')
+  assert.equal((x.match(/<Exec>/g) || []).length, 1, 'one action')
+  assert.equal(inner(x, 'Command'), 'conhost.exe')
+  assert.equal(inner(x, 'Arguments'), `--headless "${NODE}" "${SCRIPT}" daemon --supervise`, 'conhost --headless (no window) runs node on asight with the supervisor flag')
+  assert.doesNotMatch(x, /--use-system-ca/, 'that option needs Node 22.15 and would make an older daemon exit at every login')
+  assert.equal(taskXml({ user: ME, node: NODE, asight: SCRIPT }), x, 'conhost.exe is the default command')
+})
+
+test('W24 what goes into the XML is escaped or refused: & < > are escaped, a quote or a control character in a path is a bug of the caller (it would end the quoted argument, or the element)', () => {
+  const x = taskXml({ user: 'A&B\\ada<x>', node: 'C:\\R&D\\node.exe', asight: 'C:\\a>b\\asight.mjs' })
+  assert.ok(balanced(x))
+  assert.equal(inner(inner(x, 'LogonTrigger'), 'UserId'), 'A&amp;B\\ada&lt;x&gt;')
+  assert.equal(inner(x, 'Arguments'), '--headless "C:\\R&amp;D\\node.exe" "C:\\a&gt;b\\asight.mjs" daemon --supervise')
+  assert.match(taskXml({ user: '张三\\ada', node: NODE, asight: 'C:\\用户\\asight.mjs' }), /用户/, 'a profile path in Chinese is carried as it is: UTF-16 holds it')
+  for (const bad of [{ node: 'C:\\no"de.exe' }, { asight: 'C:\\a"b.mjs' }, { node: 'C:\\node\u0007.exe' }, { user: 'ada\u0000' }, { asight: '' }, { node: undefined }, { conhost: 'con"host.exe' }]) {
+    assert.throws(() => taskXml({ user: ME, node: NODE, asight: SCRIPT, ...bad }), TypeError, JSON.stringify(bad))
+  }
+})
+
+test('W24 the task\'s user is DOMAIN\\name from the environment (the form the Task Scheduler wants), or the name alone, or the OS\'s answer when the environment has none', () => {
+  assert.equal(taskUser({ USERDOMAIN: 'DESKTOP-7Q', USERNAME: 'ada' }), 'DESKTOP-7Q\\ada')
+  assert.equal(taskUser({ USERNAME: 'ada' }), 'ada')
+  assert.equal(typeof taskUser({}), 'string')
+  assert.ok(taskUser({}).length > 0)
+})
+
+/** The runner `execTool` is handed: records every call, answers from `answers` (keyed by the first argument or by file + first argument) and lets a hook look at the world while the tool "runs". */
+function fakeTools(answers = {}, hook = () => {}) {
+  const calls = []
+  const run = (file, args) => {
+    calls.push([file, ...args])
+    hook(file, args)
+    const a = answers[`${file} ${args[0]}`] ?? answers[file] ?? { status: 0 }
+    const r = typeof a === 'function' ? a(file, args) : a
+    return { status: 0, stdout: '', stderr: '', ...r }
+  }
+  return Object.assign(run, { calls })
+}
+const withHome = (over = {}) => { const home = tmpDir('asight-unit-'); return { home, node: NODE, script: SCRIPT, env: { USERDOMAIN: 'DESKTOP-7Q', USERNAME: 'ada' }, ...over } }
+/** What `asight on` does before it enables: writes the unit's text where the unit says it lives. */
+const installed = (u) => { fs.mkdirSync(path.dirname(u.path), { recursive: true }); fs.writeFileSync(u.path, u.text({})); return u }
+
+test('W24 userUnit gives the shape turnOn and install consume: a path under the collector directory, no links, the text, and the verbs enable / start / reload / disable / remove', () => {
+  const o = withHome()
+  const u = userUnit({ ...o, run: fakeTools() })
+  assert.equal(u.path, path.join(o.home, '.asight', 'collector', TASK_FILE))
+  assert.equal(TASK_FILE, 'asight-collector.task.xml')
+  assert.deepEqual(u.links, [], 'a task has no wants/ link')
+  assert.equal(u.name, 'asight-collector')
+  assert.equal(u.text({ NODE_EXTRA_CA_CERTS: 'C:\\corp\\ca.pem' }), xml(), 'the text is the XML; a Windows task has no environment of its own, so the daemon environment install offers is not carried (4.8 §7)')
+  for (const verb of ['enable', 'start', 'reload', 'disable', 'remove']) assert.equal(typeof u[verb], 'function', verb)
+  assert.deepEqual(u.reload(), { code: 0, out: '', err: '' }, 'a rewritten task is registered again by the next enable (/F), so there is nothing to reload')
+})
+
+test('W24 enable registers the task from the file install wrote and runs it: /Create /XML <a UTF-16 copy> /TN \\asight\\collector /F, then /Run; the copy is gone afterwards; enable({ now: false }) does not run it', () => {
+  const o = withHome()
+  const seen = {}
+  const run = fakeTools({}, (file, args) => {
+    if (args[0] !== '/Create') return
+    const xmlFile = args[args.indexOf('/XML') + 1]
+    seen.bytes = fs.readFileSync(xmlFile)
+    seen.name = path.basename(xmlFile)
+  })
+  const u = installed(userUnit({ ...o, run }))
+  const r = u.enable({ now: true })
+  assert.deepEqual(r, { code: 0, out: '', err: '', via: 'task' })
+  assert.equal(run.calls.length, 2)
+  assert.deepEqual(run.calls[0].slice(0, 3), ['schtasks', '/Create', '/XML'])
+  assert.deepEqual(run.calls[0].slice(4), ['/TN', TASK_NAME, '/F'])
+  assert.deepEqual(run.calls[1], ['schtasks', '/Run', '/TN', TASK_NAME])
+  assert.equal(TASK_NAME, '\\asight\\collector')
+  assert.deepEqual([...seen.bytes.subarray(0, 2)], [0xff, 0xfe], 'the file schtasks reads is UTF-16LE with a byte order mark, which is the form that registered in the T0 measurement')
+  assert.equal(seen.bytes.subarray(2).toString('utf16le'), u.text({}), 'and it holds the text install wrote')
+  assert.deepEqual(fs.readdirSync(path.dirname(u.path)), [TASK_FILE], 'the UTF-16 copy is removed once schtasks has read it')
+  const later = fakeTools()
+  const u2 = installed(userUnit({ ...o, run: later }))
+  assert.equal(u2.enable({ now: false }).code, 0)
+  assert.deepEqual(later.calls.map((c) => c[1]), ['/Create'], 'enable without now registers and does not start (a daemon is already up: 拉起不是重启)')
+  assert.equal(u2.enable().code, 0)
+  assert.deepEqual(later.calls.map((c) => c[1]).slice(1), ['/Create', '/Run'], 'now is the default')
+})
+
+test('W24 enable says why it failed: a /Create that schtasks refused, a /Run that did not start, a task file that is not there', () => {
+  const o = withHome()
+  const refused = fakeTools({ 'schtasks /Create': { status: 1, stderr: 'ERROR: Access is denied.' } })
+  const a = installed(userUnit({ ...o, run: refused })).enable()
+  assert.deepEqual([a.code, a.err], [1, 'ERROR: Access is denied.'])
+  assert.equal(refused.calls.length, 1, 'a task that was not registered is not run')
+  assert.deepEqual(fs.readdirSync(path.dirname(path.join(o.home, '.asight', 'collector', TASK_FILE))), [TASK_FILE], 'the UTF-16 copy is removed on the failure path too')
+  const notRun = fakeTools({ 'schtasks /Run': { status: 1, stderr: 'ERROR: The system cannot find the file specified.' } })
+  const b = installed(userUnit({ ...withHome(), run: notRun })).enable()
+  assert.deepEqual([b.code, b.via], [1, 'task'])
+  assert.match(b.err, /cannot find/)
+  const none = fakeTools()
+  const c = userUnit({ ...withHome(), run: none }).enable()
+  assert.equal(c.code, null)
+  assert.match(c.err, /task file/)
+  assert.deepEqual(none.calls, [], 'no schtasks without a file to register')
+  assert.equal(register({ file: path.join(o.home, 'nope.xml'), run: none }).code, null)
+})
+
+test('W24 start (the --no-autostart run: this session, nothing at login) starts the supervised daemon itself without registering anything: conhost --headless, detached, no window, and a spawn that did not start is a failure, not a success', () => {
+  const o = withHome()
+  const run = fakeTools()
+  const spawned = []
+  const fakeSpawn = (cmd, args, opts) => { const child = { pid: 321, unrefd: false, unref() { this.unrefd = true }, on() {} }; spawned.push({ cmd, args, opts, child }); return child }
+  const u = userUnit({ ...o, run, spawn: fakeSpawn })
+  assert.deepEqual(u.start(), { code: 0, out: '', err: '', via: 'direct', pid: 321 })
+  assert.deepEqual(run.calls, [], 'no schtasks: a task with a login trigger would be an autostart')
+  assert.equal(spawned.length, 1)
+  assert.deepEqual([spawned[0].cmd, spawned[0].args], ['conhost.exe', ['--headless', NODE, SCRIPT, 'daemon', '--supervise']])
+  assert.deepEqual([spawned[0].opts.detached, spawned[0].opts.stdio, spawned[0].opts.windowsHide], [true, 'ignore', true])
+  assert.equal(spawned[0].child.unrefd, true, 'the daemon is not tied to the process that started it: this one can exit')
+  const dead = userUnit({ ...o, run, spawn: () => ({ pid: undefined, unref() {}, on() {} }) }).start()
+  assert.equal(dead.code, null)
+  assert.match(dead.err, /did not start/)
+  const thrown = userUnit({ ...o, run, spawn: () => { throw Object.assign(new Error('spawn conhost.exe ENOENT'), { code: 'ENOENT' }) } }).start()
+  assert.equal(thrown.code, null)
+  assert.match(thrown.err, /ENOENT/)
+})
+
+test('W24 disable (a no-argument off) switches the task off and leaves it registered; remove (uninstall) deletes it; a task that is not there is already as asked, not an error', () => {
+  const o = withHome()
+  const present = fakeTools({ 'schtasks /Query': { status: 0 } })
+  assert.deepEqual(userUnit({ ...o, run: present }).disable(), { code: 0, out: '', err: '', via: 'task' })
+  assert.deepEqual(present.calls, [['schtasks', '/Query', '/TN', TASK_NAME], ['schtasks', '/Change', '/TN', TASK_NAME, '/DISABLE']])
+  const gone = fakeTools({ 'schtasks /Query': { status: 1, stderr: 'ERROR: The system cannot find the file specified.' } })
+  assert.deepEqual(userUnit({ ...o, run: gone }).disable(), { code: 0, out: '', err: '', absent: true })
+  assert.deepEqual(gone.calls.map((c) => c[1]), ['/Query'], 'nothing is changed or deleted')
+  const rm = fakeTools({ 'schtasks /Query': { status: 0 } })
+  assert.deepEqual(userUnit({ ...o, run: rm }).remove(), { code: 0, out: '', err: '', via: 'task' })
+  assert.deepEqual(rm.calls, [['schtasks', '/Query', '/TN', TASK_NAME], ['schtasks', '/Delete', '/TN', TASK_NAME, '/F']])
+  const rmGone = fakeTools({ 'schtasks /Query': { status: 1 } })
+  assert.equal(userUnit({ ...o, run: rmGone }).remove().absent, true)
+  const stuck = fakeTools({ 'schtasks /Query': { status: 0 }, 'schtasks /Change': { status: 1, stderr: 'ERROR: Access is denied.' } })
+  const f = userUnit({ ...o, run: stuck }).disable()
+  assert.deepEqual([f.code, f.err], [1, 'ERROR: Access is denied.'], 'a task that could not be switched off says so')
 })
