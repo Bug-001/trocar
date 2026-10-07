@@ -21,7 +21,7 @@ import { sha256, readOrNull } from '../off/fsutil.mjs'
 import { getPath } from '../off/json-text.mjs'
 import { removeAsightText, SENTINEL } from '../off/text-edit.mjs'
 import { userProcessesOf } from '../off/orchestrate.mjs'
-import { probeNetenv, netenvText, writeNetenv } from '../netenv/index.mjs'
+import { probeNetenv, netenvText, netenvFile, writeNetenv } from '../netenv/index.mjs'
 import { captureHealth } from '../health/read.mjs'
 import { trustReasonText } from '../collector/core/codes.mjs'
 import { formatStatus, formatHealth } from '../collector/cli.mjs'
@@ -34,11 +34,11 @@ const errText = (e) => String((e && (e.code || e.message)) || e)
 const errMessage = (e) => String((e && e.message) || e)
 const rethrowSandbox = (e) => { if (e && e.code === 'ESANDBOX') throw e } // a refusal of the test guard is never "the tool failed" (0.1 §3)
 
-/** One look at the VPN / proxy software, and the board's copy of what was seen (~/.asight/netenv.json; only where asight already has a home) → probeNetenv's `{ result }` / `{ error }`, plus `write_error` when the copy could not be written. */
+/** One look at the VPN / proxy software, and the board's copy of what was seen (~/.asight/netenv.json; only where asight already has a home) → probeNetenv's `{ result }` / `{ error }`, plus `write_error` (the file and the errno) when the copy could not be written: `status` says it, a copy the board keeps showing stale is not silent (R11). */
 export async function lookAtNetenv({ home, platform, env, proxies = null, deps = {} }) {
   const fs = deps.fs || nodeFs
   const n = await probeNetenv({ home, platform, env, proxies, deps })
-  if (n.result) { try { if (fs.existsSync(asightHome(home))) writeNetenv(home, n.result, { fs }) } catch (e) { rethrowSandbox(e); n.write_error = errText(e) } }
+  if (n.result) { try { if (fs.existsSync(asightHome(home))) writeNetenv(home, n.result, { fs }) } catch (e) { rethrowSandbox(e); n.write_error = `${netenvFile(home)}: ${errText(e)}` } }
   return n
 }
 
@@ -144,8 +144,10 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const ids = [...new Set([...installedIds, ...Object.keys(state ? state.harnesses : {}), ...Object.keys(fromReply || {}), ...(names || [])])]
   const order = (id) => (HARNESS_IDS.includes(id) ? HARNESS_IDS.indexOf(id) : HARNESS_IDS.length)
   const wanted = (names ? ids.filter((id) => names.includes(id)) : ids).sort((a, b) => order(a) - order(b) || a.localeCompare(b))
-  // the kernel and the helper, as the daemon reports them
-  f.link = reply ? { attached: reply.actual === 'on' ? true : reply.actual === 'off' ? false : null, helper: reply.helper && (reply.helper.down || reply.helper.ok === false) ? 'missing' : 'ok', helper_reason: reply.helper && reply.helper.down ? String(reply.helper.down) : reply.helper && reply.helper.ok === false ? `helper protocol ${reply.helper.proto} (this daemon expects ${reply.helper.expected_proto})` : null } : { attached: null, helper: 'ok', helper_reason: null }
+  // the kernel and the helper, as the daemon reports them; a kernel state the daemon could not read keeps its error (the daemon's `actual: 'unknown'` carries `error` and `error_code`: R11 — the reason is not dropped on the way to 不知道)
+  const kernelReason = (r) => (r.actual === 'unknown' ? `the daemon could not read the kernel state: ${r.error || 'it gave no reason'}${r.error_code && !String(r.error || '').includes(r.error_code) ? ` (${r.error_code})` : ''}` : `the daemon's reply does not say whether the kernel has this instance's link (actual: ${JSON.stringify(r.actual ?? null)})`)
+  const attached = reply ? (reply.actual === 'on' ? true : reply.actual === 'off' ? false : null) : null
+  f.link = reply ? { attached, helper: reply.helper && (reply.helper.down || reply.helper.ok === false) ? 'missing' : 'ok', helper_reason: reply.helper && reply.helper.down ? String(reply.helper.down) : reply.helper && reply.helper.ok === false ? `helper protocol ${reply.helper.proto} (this daemon expects ${reply.helper.expected_proto})` : null, reason: attached === null ? kernelReason(reply) : null } : { attached: null, helper: 'ok', helper_reason: null, reason: null }
   // the processes: the daemon's rows when it answered, else the process table matched with the manifest's `liveness`
   let table = null, tableError = null
   if (!reply && !m) tableError = f.manifest.error || 'there is no install manifest to match the processes with'
@@ -153,6 +155,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     try { table = await (deps.procs ? deps.procs() : listProcs({ exec: deps.exec || null, platform })) } catch (e) { rethrowSandbox(e); tableError = errText(e) }
   }
   f.userProcs = table ? { list: userProcessesOf(table) } : { error: tableError }
+  const matched = table && m ? table.map((p) => ({ p, h: matchHarness(m.liveness, p) })) : [] // which harness each process of the table is, by the manifest's signatures
   const negatives = new Set((reply && Array.isArray(reply.negatives) ? reply.negatives : []).map((n) => n.pid))
   for (const id of wanted) {
     const why = []
@@ -163,12 +166,18 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     const entry = !m ? { state: 'unknown', why: f.manifest.error || `no install manifest in ${dir}` } : !installedIds.includes(id) ? { state: 'missing', why: 'the install manifest lists no entry of asight\'s for it' } : bad.length ? { state: bad.some((x) => x.state === 'missing') ? 'missing' : 'changed', why: bad.map((x) => x.why).join('; ') } : items.find((x) => x.state === 'unknown') ? { state: 'unknown', why: items.filter((x) => x.state === 'unknown').map((x) => x.why).join('; ') } : { state: 'intact' }
     if (entry.state === 'unknown') why.push(entry.why)
     let procs
-    if (reply) procs = (Array.isArray(reply.agents) ? reply.agents : []).filter((a) => a.agent === id).map((a) => ({ pid: a.pid, trusted: a.trusted === true, reason: a.reason ?? null, hint: a.hint || null, negative: negatives.has(a.pid), off: a.off === true }))
-    else if (table && m) procs = table.map((p) => ({ p, h: matchHarness(m.liveness, p) })).filter((x) => x.h === id).map((x) => ({ pid: x.p.pid, startedAt: x.p.startedAt, trusted: null }))
+    if (reply) {
+      const rows = Array.isArray(reply.agents) ? reply.agents : []
+      procs = rows.filter((a) => a.agent === id).map((a) => ({ pid: a.pid, trusted: a.trusted === true, reason: a.reason ?? null, hint: a.hint || null, negative: negatives.has(a.pid), off: a.off === true }))
+      // a process of this harness the daemon has not listed (it started since the daemon last looked): not judged by it, so the entry and when it started decide (V32, 4.6 确认信任)
+      const listed = new Set(rows.map((a) => a.pid))
+      for (const x of matched) if (x.h === id && !listed.has(x.p.pid)) procs.push({ pid: x.p.pid, startedAt: x.p.startedAt, trusted: null })
+    } else if (table && m) procs = matched.filter((x) => x.h === id).map((x) => ({ pid: x.p.pid, startedAt: x.p.startedAt, trusted: null }))
     else { procs = []; why.push(`the processes could not be listed (${tableError})`) }
     const installedAt = m ? installedAtOf(m, id) : null
     const judged = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', linkAttached: f.link.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt })
     if (f.daemon.state === 'unknown' && desired === 'on') why.push(f.daemon.reason)
+    if (desired === 'on' && f.daemon.state === 'running' && f.link.helper !== 'missing' && f.link.attached === null) why.push(f.link.reason) // the link is what the verdict waits for, and the daemon could not say
     f.harnesses.push({ id, installed: installedIds.includes(id), desired, entry, installedAt, procs, judged, why: [...new Set(why.filter(Boolean))] })
   }
   // how many connections are still relayed after an off (§1.3): the daemon says; with no daemon there is no engine, so none; with one that does not answer or does not say, not known
@@ -185,7 +194,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   }
   // the VPN / proxy software, 1.6 §6; what each running process is set to use (its environment, Linux) tells which harness goes through it. The URLs are compared with the product's port and dropped.
   const proxies = {}
-  if (table && m) for (const p of table) { const h = matchHarness(m.liveness, p); const env = h && typeof p.env === 'function' ? p.env() : null; if (env) proxies[h] = [...(proxies[h] || []), ...PROXY_VARS.map((k) => env.get(k)).filter(Boolean)] }
+  for (const { p, h } of matched) { const env = h && typeof p.env === 'function' ? p.env() : null; if (env) proxies[h] = [...(proxies[h] || []), ...PROXY_VARS.map((k) => env.get(k)).filter(Boolean)] }
   f.netenv = await lookAtNetenv({ home, platform, env, proxies, deps })
   try { f.health = deps.captureHealth ? deps.captureHealth({ home: asightHome(home) }) : captureHealth({ home: asightHome(home), fs, alive, identity, now: ms() }) } catch (e) { rethrowSandbox(e); f.health = null; f.health_error = errText(e) }
   return f
@@ -208,6 +217,7 @@ const restartOf = (f) => f.harnesses.flatMap((h) => h.judged.rows.filter((r) => 
 const relayedText = (f) => f.relayed === 'unknown' ? `仍经 asight 的连接: 不知道(${f.relayed_reason})`
   : f.relayed.closing + f.relayed.waiting === 0 ? '仍经 asight 的连接: 没有(没有 harness 被关掉后还连着的)'
   : `仍经 asight 的连接: ${f.relayed.closing} 条仍经 asight 中转,本次响应(或本轮)结束后关闭${f.relayed.waiting ? `;另 ${f.relayed.waiting} 条等它自己关闭(asight off --now 立即切断)` : ''}`
+const netenvWriteText = (n) => (n.write_error ? [`本机网络环境的副本没写成: ${n.write_error};看板读的是它,会一直显示旧的`] : [])
 const userProcsText = (u) => (u.error ? [`你自己起的 asight 进程: 不知道(${u.error})`] : u.list.length ? [`你自己起的 asight 进程仍在跑: ${u.list.map((p) => `${p.command}(pid ${p.pid},${p.note})`).join('、')}`] : [])
 
 /** The lines of `asight status`. */
@@ -226,10 +236,11 @@ export function renderStatus(f, { home = null } = {}) {
     lines.push(`  ${h.id.padEnd(13)} ${said(j)}${j.captured === false && !j.rows.some((r) => r.pid != null) ? ` — ${reasonText(reasonOf(j))}` : ''}${j.captured === null ? `(${h.why.join('; ') || '读不到'})` : ''}   ${meta.join(' · ')}`)
     for (const r of j.rows.filter((x) => x.pid != null)) {
       const p = h.procs.find((x) => x.pid === r.pid)
-      lines.push(`      pid ${r.pid}  ${r.captured === true ? '已被采集' : r.captured === false ? `没有: ${r.reason ?? '(没给原因)'} — ${reasonText(r.reason, p && p.hint)}` : '不知道(守护进程没判过它)'}`)
+      const byEntry = p && p.trusted === null // the daemon has not judged this one: the entry and when it started say
+      lines.push(`      pid ${r.pid}  ${r.captured === true ? `已被采集${byEntry ? '(守护进程还没判过它,这是按信任入口与启动时间判的)' : ''}` : r.captured === false ? `没有: ${r.reason ?? '(没给原因)'} — ${reasonText(r.reason, p && p.hint)}` : '不知道(守护进程没判过它)'}`)
     }
   }
-  lines.push(relayedText(f), ...(f.linger && lingerText({ ...f.linger, user: f.user }) ? [lingerText({ ...f.linger, user: f.user })] : []), ...netenvText(f.netenv, { ids: f.harnesses.map((h) => h.id), platform: f.platform }), ...userProcsText(f.userProcs))
+  lines.push(relayedText(f), ...(f.linger && lingerText({ ...f.linger, user: f.user }) ? [lingerText({ ...f.linger, user: f.user })] : []), ...netenvText(f.netenv, { ids: f.harnesses.map((h) => h.id), platform: f.platform }), ...netenvWriteText(f.netenv), ...userProcsText(f.userProcs))
   const restart = restartOf(f)
   if (restart.length) lines.push(`需要你做的: ${restart.map((x) => `正在跑的 ${x.harness}(pid ${x.pid})重启后才会被采集`).join(';')};在那之前照常直连`)
   return lines
@@ -248,10 +259,10 @@ async function legacyStatus(argv, { io, env, home, platform, deps, json }) {
   try { health = deps.captureHealth ? deps.captureHealth({ home: asightHome(home) }) : captureHealth({ home: asightHome(home), fs: deps.fs || nodeFs }) } catch (e) { rethrowSandbox(e); error = errMessage(e) }
   const exit = error ? EXIT.unknown : failedIn24h(health) ? EXIT.incomplete : EXIT.ok
   const netenv = await lookAtNetenv({ home, platform, env, deps }) // §6: the VPN software is looked at on every platform, not only where the new collector runs
-  if (json) { io.out(JSON.stringify({ ...newReceipt('status'), ok: exit === EXIT.ok, platform, note: 'this platform has no new collector: the old capture is what on / off drive here', ...(health ? { health } : { health_error: error }), netenv: netenv.result || { error: netenv.error } }, null, 2)); return exit }
+  if (json) { io.out(JSON.stringify({ ...newReceipt('status'), ok: exit === EXIT.ok, platform, note: 'this platform has no new collector: the old capture is what on / off drive here', ...(health ? { health } : { health_error: error }), netenv: netenv.result || { error: netenv.error }, ...(netenv.write_error ? { netenv_write_error: netenv.write_error } : {}) }, null, 2)); return exit }
   io.out(`本平台(${platform})还没有新采集器:这里 asight on / off 驱动旧采集(过渡期,1.6 §4),逐 harness 的判词不适用。下面是旧采集与原始层的状态:`)
   for (const l of health ? formatHealth(health) : [`capture health could not be read: ${error}`]) io.out(l)
-  for (const l of netenvText(netenv, { platform })) io.out(l)
+  for (const l of [...netenvText(netenv, { platform }), ...netenvWriteText(netenv)]) io.out(l)
   return exit
 }
 /** → the exit code (R4). `argv` is what follows `status`. `io` = { out, err } (src/off/io.mjs makeIo). */
@@ -273,7 +284,7 @@ export async function runStatusCli(argv, { io, env = process.env, home = nodeOs.
   const exit = unreadable ? EXIT.unknown : failing ? EXIT.incomplete : EXIT.ok
   const restart = restartOf(f)
   if (json) {
-    const r = { ...newReceipt('status'), ok: exit === EXIT.ok, user: f.user, ...(f.linger || {}), daemon: { state: f.daemon.state, pid: f.daemon.pid, reason: f.daemon.reason }, harnesses: f.harnesses.map((h) => ({ harness: h.id, desired: h.desired ?? 'unknown', captured: h.judged.captured, reason: reasonOf(h.judged), entry: h.entry.state, rows: h.judged.rows })), restart, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}), netenv: f.netenv.error ? { error: f.netenv.error } : f.netenv.result, user_processes: f.userProcs.error ? 'unknown' : f.userProcs.list, log: path.join(f.dir, 'flows') }
+    const r = { ...newReceipt('status'), ok: exit === EXIT.ok, user: f.user, ...(f.linger || {}), daemon: { state: f.daemon.state, pid: f.daemon.pid, reason: f.daemon.reason }, harnesses: f.harnesses.map((h) => ({ harness: h.id, desired: h.desired ?? 'unknown', captured: h.judged.captured, reason: reasonOf(h.judged), entry: h.entry.state, ...(h.entry.why ? { entry_why: h.entry.why } : {}), why: h.why, rows: h.judged.rows })), ...(f.state && f.state.error ? { state_error: f.state.error } : {}), ...(f.manifest.error ? { manifest_error: f.manifest.error } : {}), ...(f.health_error ? { health_error: f.health_error } : {}), restart, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}), netenv: f.netenv.error ? { error: f.netenv.error } : f.netenv.result, ...(f.netenv.write_error ? { netenv_write_error: f.netenv.write_error } : {}), user_processes: f.userProcs.error ? 'unknown' : f.userProcs.list, log: path.join(f.dir, 'flows') }
     io.out(JSON.stringify(r, null, 2))
     return exit
   }

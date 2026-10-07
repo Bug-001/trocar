@@ -135,6 +135,20 @@ test('the entry says what is wrong with it (missing or changed), a helper that i
   assert.deepEqual(j({ linkAttached: false, procs: [{ pid: 3, trusted: true }] }).rows, [{ pid: 3, captured: false, reason: 'link-missing' }])
 })
 
+test('the order of the reasons is off · daemon · helper · link: a missing helper outranks a link that is not there (a dead helper leaves no link, and the fix is the helper), and is outranked by the switch and by the daemon', async () => {
+  const j = (o) => judgeHarness({ ...ready, helper: 'missing', procs: [{ pid: 3, trusted: true }], ...o })
+  const why = (o) => j(o).rows[0].reason
+  assert.equal(why({ linkAttached: false }), 'helper-missing', 'not link-missing: the user is sent to sudo asight setup-helper, not to asight on')
+  assert.equal(why({ linkAttached: null }), 'helper-missing')
+  assert.equal(why({ linkAttached: true }), 'helper-missing')
+  assert.equal(why({ linkAttached: false, procs: [] }), 'helper-missing', 'the harness\'s own row too')
+  assert.equal(why({ desired: 'off', linkAttached: false }), 'desired-off')
+  assert.equal(why({ daemon: 'not-running', linkAttached: false }), 'daemon-not-running')
+  assert.equal(why({ daemon: 'not-responding', linkAttached: false }), 'daemon-not-responding')
+  assert.deepEqual(j({ daemon: 'unknown', linkAttached: false, procs: [] }), { captured: null, rows: [{ captured: null, reason: null }] }, 'a daemon that is not known: the helper it reports is not known either')
+  assert.equal(judgeHarness({ ...ready, linkAttached: false, procs: [{ pid: 3, trusted: true }] }).rows[0].reason, 'link-missing', 'with a helper that is there, the link is what is missing')
+})
+
 test('a process the daemon has not judged: no start time is start-time-unknown, no installed_at to compare with is 不知道, an entry that is not intact comes first (a restart would not help)', () => {
   const j = (p, o = {}) => judgeHarness({ ...ready, procs: [p], ...o }).rows[0]
   assert.deepEqual(j({ pid: 4, startedAt: null, trusted: null }), { pid: 4, captured: false, reason: 'start-time-unknown' })
@@ -173,6 +187,9 @@ test('the daemon answers: each agent is captured or says why, and the exit code 
   assert.match(r.text, /claude-code\s+没有: link-missing/); assert.equal(r.exit, 1)
   r = await run(s, [], { request: asDaemon(reply({ helper: { pid: null, proto: null, ok: false, down: 'ENOENT', expected_proto: 1 } })) })
   assert.match(r.text, /没有: helper-missing[^\n]*sudo asight setup-helper/)
+  r = await run(s, [], { request: asDaemon(reply({ actual: 'off', mismatch: true, helper: { pid: null, proto: null, ok: false, down: 'ENOENT', expected_proto: 1 } })) })
+  assert.match(r.text, /claude-code\s+没有: helper-missing[^\n]*sudo asight setup-helper/, 'a dead helper leaves the kernel with no link: the reason is the helper, not the link')
+  assert.ok(!/link-missing/.test(r.text), r.text)
   r = await run(s, [], { request: asDaemon(reply({ agents: [{ pid: 4121, agent: 'claude-code', trusted: true }], negatives: [{ pid: 4121, host: 'api.anthropic.com', cause: 'client-rejected-leaf' }] })) })
   assert.match(r.text, /pid 4121\s+没有: negative-cache/)
 })
@@ -196,7 +213,7 @@ test('the entry on disk decides when no process does: intact when the value is t
   assert.match(r.text, /entry-missing/)
 })
 
-test('no daemon: nothing is captured (daemon-not-running), read from the disk, with the processes found by the manifest\'s signatures and the ones that started before the entry told to restart', async () => {
+test('no daemon: nothing is captured (daemon-not-running), read from the disk, with the processes found by the manifest\'s signatures — each one says the daemon is not running, whenever it started (the entry and the start time only come into it once a daemon answers)', async () => {
   const s = await installedHome()
   const old = Date.now() - 3600e3
   const r = await run(s, [], { procs: async () => [claudeProc(5000, old), claudeProc(5001, Date.now() + 5000)] })
@@ -205,6 +222,30 @@ test('no daemon: nothing is captured (daemon-not-running), read from the disk, w
   assert.match(r.text, /claude-code\s+没有: daemon-not-running/)
   assert.match(r.text, /pid 5000\s+没有: daemon-not-running/); assert.match(r.text, /pid 5001\s+没有: daemon-not-running/)
   assert.match(r.text, /capture health:/, 'and the capture health read from disk follows (the failures of 24 h)')
+})
+
+test('the daemon answers but has not listed a process of a harness (it started since the daemon last looked): the entry and when it started decide (V32) — older than the entry: config-after-start and told to restart; newer: captured, and said to be by entry and start time; entry gone: entry-missing; a pid the daemon lists is not added twice', async () => {
+  const s = await installedHome()
+  const old = Date.now() - 3600e3, fresh = Date.now() + 5000
+  const procs = async () => [claudeProc(5000, old), claudeProc(5001, fresh), claudeProc(5002, fresh)]
+  const request = asDaemon(reply({ agents: [{ pid: 5002, agent: 'claude-code', trusted: true }] }))
+  let r = await run(s, [], { procs, request })
+  assert.equal(r.exit, 1, r.text)
+  assert.match(r.text, /pid 5000\s+没有: config-after-start — [^\n]*重启后才会被采集/)
+  assert.match(r.text, /pid 5001\s+已被采集\(守护进程还没判过它,这是按信任入口与启动时间判的\)/)
+  assert.match(r.text, /pid 5002\s+已被采集$/m, 'the daemon\'s own verdict carries no caveat')
+  assert.match(r.text, /需要你做的: 正在跑的 claude-code\(pid 5000\)重启后才会被采集/)
+  const doc = (await run(s, ['--json'], { procs, request })).io.json()
+  const rows = doc.harnesses.find((h) => h.harness === 'claude-code').rows.map((x) => [x.pid, x.captured, x.reason]).sort((a, b) => a[0] - b[0])
+  assert.deepEqual(rows, [[5000, false, 'config-after-start'], [5001, true, null], [5002, true, null]], 'three rows: the listed pid once')
+  assert.deepEqual(doc.restart, [{ harness: 'claude-code', pid: 5000, reason: 'config-after-start' }])
+  // the entry is gone: a restart would not help, so it is the entry that is said — for the one the daemon has not judged only (the daemon turns its own untrusted by itself)
+  fs.rmSync(path.join(s.home, '.claude', 'settings.json'))
+  r = await run(s, [], { procs, request })
+  assert.match(r.text, /pid 5001\s+没有: entry-missing/); assert.match(r.text, /pid 5000\s+没有: entry-missing/); assert.match(r.text, /pid 5002\s+已被采集$/m)
+  // a process of another harness, or one that matches no signature, is not added to this one
+  r = await run(s, ['codex'], { procs, request: asDaemon(reply()) })
+  assert.ok(!/pid 500\d/.test(r.text.split('\n').filter((l) => /^ {2}\w|^ {6}pid/.test(l)).join('\n')), r.text)
 })
 
 test('off: every harness is desired-off, exit 0 — nothing is wrong with a switch that is off', async () => {
@@ -228,6 +269,30 @@ test('V32: no daemon and state.json unreadable: 不知道 with the file and the 
   const doc = j.io.json()
   assert.deepEqual(validateReceipt(doc), [])
   assert.deepEqual([doc.command, doc.ok, doc.harnesses.map((h) => [h.harness, h.captured, h.desired])], ['status', false, [['claude-code', null, 'unknown'], ['codex', null, 'unknown']]])
+  // R11: 不知道 carries its reason in the JSON too — the file and the errno, at the top and for every harness that waits on it
+  assert.ok(doc.state_error.includes(stateF) && doc.state_error.includes('EACCES'), doc.state_error)
+  for (const h of doc.harnesses) assert.ok(h.why.some((w) => w.includes(stateF) && w.includes('EACCES')), `${h.harness}: ${JSON.stringify(h.why)}`)
+  assert.ok(!('manifest_error' in doc) && !('health_error' in doc), 'what could be read has no error key')
+})
+
+test('R11: the daemon answers but could not read the kernel state: every harness that is on is 不知道 with the daemon\'s error and its code — in the text and in --json — exit 3, never 没有 and never 正在被采集', async () => {
+  const s = await installedHome()
+  const bad = (o) => asDaemon(reply({ actual: 'unknown', ...o }))
+  let r = await run(s, [], { request: bad({ error: 'helper socket: connect EACCES /run/asight/helper.sock', error_code: 'EACCES' }) })
+  assert.equal(r.exit, 3, r.text)
+  assert.match(r.text, /claude-code\s+不知道\(the daemon could not read the kernel state: helper socket: connect EACCES \/run\/asight\/helper\.sock\)/)
+  assert.match(r.text, /codex\s+不知道\(the daemon could not read the kernel state/)
+  assert.ok(!/正在被采集|没有: link-missing/.test(r.text.split('\n').filter((l) => /^ {2}(claude-code|codex)/.test(l)).join('\n')), r.text)
+  r = await run(s, ['--json'], { request: bad({ error: 'the helper did not answer', error_code: 'ETIMEDOUT' }) })
+  const doc = r.io.json()
+  assert.equal(r.exit, 3)
+  assert.deepEqual(doc.harnesses.map((h) => [h.harness, h.captured, h.desired]), [['claude-code', null, 'on'], ['codex', null, 'on']])
+  for (const h of doc.harnesses) assert.deepEqual(h.why, ['the daemon could not read the kernel state: the helper did not answer (ETIMEDOUT)'], 'a code the message does not name is added')
+  r = await run(s, ['codex'], { request: bad({}) })
+  assert.match(r.text, /codex\s+不知道\(the daemon could not read the kernel state: it gave no reason\)/)
+  // a reply that carries no kernel state at all is not known either, and says what it carried
+  r = await run(s, ['codex'], { request: asDaemon({ ...reply(), actual: undefined }) })
+  assert.match(r.text, /codex\s+不知道\([^)]*does not say whether the kernel has this instance's link/); assert.equal(r.exit, 3)
 })
 
 test('a daemon that does not answer is daemon-not-responding; --json is one document that validates, with the code ids and the restart list', async () => {
@@ -291,9 +356,38 @@ test('the harnesses\' proxy settings reach the probe from the running processes\
   assert.match(down2.text, /^你自己起的 asight 进程: 不知道\(the process table/m)
 })
 
+// R11 / D38: the copy of the VPN probe the board reads is a cache; that it could not be refreshed is said, not dropped (a board that keeps showing the old one is a silent failure)
+const rootCanWrite = typeof process.getuid === 'function' && process.getuid() === 0 ? 'root can write into a directory with no write bit' : false
+test('a netenv.json that could not be written is said: a line in the text, netenv_write_error (the file and the errno) in --json; the verdicts and the exit code do not change', { skip: rootCanWrite }, async () => {
+  const s = await installedHome()
+  const home = path.join(s.home, '.asight')
+  const control = await run(s, [])
+  assert.ok(!/没写成/.test(control.text), 'written: nothing to say')
+  assert.ok(!('netenv_write_error' in (await run(s, ['--json'])).io.json()))
+  fs.rmSync(path.join(home, 'netenv.json'))
+  fs.chmodSync(home, 0o500)
+  try {
+    const r = await run(s, [])
+    assert.match(r.text, new RegExp(`^本机网络环境的副本没写成: ${path.join(home, 'netenv.json').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}: EACCES;看板读的是它,会一直显示旧的$`, 'm'))
+    assert.equal(r.exit, control.exit)
+    const j = await run(s, ['--json'])
+    assert.equal(j.io.json().netenv_write_error, `${path.join(home, 'netenv.json')}: EACCES`)
+    assert.equal(j.exit, control.exit)
+    assert.deepEqual(validateReceipt(j.io.json()), [])
+    // a platform with no new collector says it too
+    const mac = tmpDir('asight-st-mac-'); fs.mkdirSync(path.join(mac, '.asight'), { mode: 0o700 }); fs.chmodSync(path.join(mac, '.asight'), 0o500)
+    for (const [argv, check] of [[[], (io) => assert.match(io.stdoutText(), /^本机网络环境的副本没写成: [^\n]*netenv\.json: EACCES/m)], [['--json'], (io) => assert.match(io.json().netenv_write_error, /netenv\.json: EACCES$/)]]) {
+      const io = fakeIo()
+      await runStatusCli(argv, { io, home: mac, platform: 'darwin', env: {}, deps: { netenv: async () => CLASH() } })
+      check(io)
+    }
+    fs.chmodSync(path.join(mac, '.asight'), 0o700)
+  } finally { fs.chmodSync(home, 0o700) }
+})
+
 // ── V39: logging out stops the daemon unless linger is on (1.6 §1.1) — `on` and `status` say so, give the command, and never run loginctl (R8) ───────────────────────────────────────────────────
 import { runOnCli } from '../../src/cli/on.mjs'
-import { onCtx, seedClaude } from './fixtures/on-ctx.mjs'
+import { onCtx, seedClaude, recordingExec } from './fixtures/on-ctx.mjs'
 
 test('V39 status: linger off says 登出后停采(未开 linger) and loginctl enable-linger <user>, --json linger false; on says nothing; unreadable says 不知道 with the file and the errno, never 已开', async () => {
   const s = await installedHome()
@@ -316,13 +410,17 @@ test('V39 status: linger off says 登出后停采(未开 linger) and loginctl en
 test('V39 on: the same lines in the receipt (and in the plan\'s receipt when --json: linger is false / true / "unknown" with a reason); nothing runs loginctl', async () => {
   for (const [lingerRead, want] of [[() => ({ state: false }), false], [() => ({ state: true }), true], [() => ({ state: null, error: '/var/lib/systemd/linger/alice: EACCES' }), 'unknown']]) {
     const home = tmpDir('asight-v39-'); seedClaude(home)
-    const io = fakeIo(), ctx = onCtx(home, io, { deps: { lingerRead, linger: undefined } })
+    const io = fakeIo(), exec = recordingExec(), ctx = onCtx(home, io, { exec, deps: { lingerRead, linger: undefined } })
     assert.equal(await runOnCli(['--yes'], ctx), 0, io.text())
     if (want === false) assert.match(io.stdoutText(), /^登出后停采\(未开 linger\): 要登出后继续采集,跑 loginctl enable-linger alice$/m)
     else if (want === true) assert.ok(!/linger|登出/.test(io.stdoutText()))
     else { assert.match(io.stdoutText(), /^登出后停采: 不知道\(\/var\/lib\/systemd\/linger\/alice: EACCES\)$/m); assert.ok(!/已开/.test(io.stdoutText())) }
-    const j = fakeIo(); const home2 = tmpDir('asight-v39-'); seedClaude(home2)
-    assert.equal(await runOnCli(['--yes', '--json'], onCtx(home2, j, { deps: { lingerRead, linger: undefined } })), 0)
+    const j = fakeIo(); const home2 = tmpDir('asight-v39-'); seedClaude(home2); const exec2 = recordingExec()
+    assert.equal(await runOnCli(['--yes', '--json'], onCtx(home2, j, { exec: exec2, deps: { lingerRead, linger: undefined } })), 0)
+    for (const e of [exec, exec2]) {
+      assert.ok(e.calls.length > 0, 'on ran its OS tools through this runner: the check below looks at something')
+      assert.ok(!e.has(/loginctl/), `loginctl is not run by on: asight says how, it does not do it (R8) — ${e.calls.join(' | ')}`)
+    }
     const doc = j.json()
     assert.equal(doc.linger, want)
     if (want === 'unknown') assert.match(doc.linger_reason, /EACCES/)
