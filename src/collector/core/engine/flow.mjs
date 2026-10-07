@@ -334,7 +334,8 @@ export function handleFlow(client, meta, ctx) {
       cSock.once('close', left)
       return fresh.then((u) => {
         cSock.removeListener('close', left)
-        if (gone || cSock.destroyed) { try { u.destroy() } catch { /* ignore */ } return finish('error', { error: closedBefore('client') }) }
+        // the client left while the new handshake ran: nothing was spliced, so the row says error (setDecision('splice') above was a plan, not an outcome)
+        if (gone || cSock.destroyed) { try { u.destroy() } catch { /* ignore */ } rec.decision = 'error'; return finish('error', { error: closedBefore('client') }) }
         u.write(buf); cSock.resume(); relay(cSock, u)
       }, (e) => {
         cSock.removeListener('close', left)

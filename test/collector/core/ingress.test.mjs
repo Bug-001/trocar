@@ -530,6 +530,49 @@ for (const kind of ['direct', 'http (no credentials)', 'socks5 (no credentials)'
   })
 }
 
+// The second dial of a step-aside through an http proxy is a handshake (a Promise), and it can go wrong in two ways the first dial's tests do not reach:
+// the proxy refuses the second prelude, or the client is gone by the time the proxy answers (4.8 §5.2: 重拨失败 → 行 decision:'error',客户端的连接关掉).
+// A proxy that is good for its first CONNECT (it tunnels to the origin) and does `second` for the next one: 'refuse' (403) or 'hold' (no answer until release()).
+async function twoStepProxy(t, originPort, second) {
+  const conns = []
+  const srv = net.createServer((s) => {
+    const rec = { sock: s, n: conns.length + 1, closed: closedOf(s), release: null }; conns.push(rec); s.on('error', () => {})
+    s.once('data', () => {
+      if (rec.n === 1) { const up = net.connect(originPort, '127.0.0.1'); up.on('error', () => s.destroy()); s.on('close', () => up.destroy()); up.once('connect', () => { s.write('HTTP/1.1 200 Connection established\r\n\r\n'); s.pipe(up); up.pipe(s) }); return }
+      if (second === 'refuse') s.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n')
+      else rec.release = () => s.write('HTTP/1.1 200 Connection established\r\n\r\n')
+    })
+  })
+  await listen(srv); t.after(() => { srv.close(); for (const r of conns) r.sock.destroy() })
+  return { port: srv.address().port, conns }
+}
+
+test('W15 step-aside whose second proxy prelude is refused: the agent\'s connection is closed, the row is decision error with the proxy\'s refusal, and no connection to the proxy is left open', T, async (t) => {
+  const o = await origin(t), proxy = await twoStepProxy(t, o.port, 'refuse')
+  const L = await lab(t, { meta: { decrypt: true, upstream: { kind: 'http', host: '127.0.0.1', port: proxy.port } } }) // no upstreamCa: the origin's CA is not trusted, so the engine steps aside
+  const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)
+  assert.equal(await talk(sock, privCa.certPem), 'closed', 'the agent\'s connection is closed: there is nothing left to splice it to'); await L.settled(1)
+  assert.equal(proxy.conns.length, 2, 'the first prelude, and the second that was refused')
+  const [row] = L.flows
+  assert.deepEqual([row.decision, row.not_captured, row.error.type, row.error.side], ['error', 'upstream-cert', 'proxy-refused', 'upstream'])
+  assert.match(row.error.message, /refused the second connection \(proxy-status-403\)/); assert.deepEqual(checkRecord(row), [])
+  await within(Promise.all(proxy.conns.map((c) => c.closed)), 3000, 'every connection to the proxy to be closed'); await o.closed()
+  assert.equal(L.envelopes.length, 0)
+})
+
+test('W15 step-aside whose client is gone when the proxy answers the second prelude: the new upstream is destroyed, nothing is spliced, and the row says the client closed first', T, async (t) => {
+  const o = await origin(t), proxy = await twoStepProxy(t, o.port, 'hold')
+  const L = await lab(t, { meta: { decrypt: true, upstream: { kind: 'http', host: '127.0.0.1', port: proxy.port } } })
+  const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)
+  const agent = talk(sock, privCa.certPem)
+  await until(() => proxy.conns.length === 2 && proxy.conns[1].release, 'the second prelude to reach the proxy', 4000) // the engine is waiting for it: the redial is in flight
+  sock.destroy(); assert.equal(await agent, 'closed')
+  await sleep(100); proxy.conns[1].release() // the proxy says yes, to nobody
+  await within(proxy.conns[1].closed, 3000, 'the connection the redial opened to be destroyed'); await L.settled(1)
+  assert.deepEqual([L.flows[0].decision, L.flows[0].not_captured, L.flows[0].error.type, L.flows[0].error.side], ['error', 'upstream-cert', 'closed_before_decision', 'client'])
+  await o.closed(); assert.equal(o.conns.length, 1, 'the origin saw only the engine\'s dropped handshake: no ClientHello of the agent\'s went anywhere'); assert.equal(L.envelopes.length, 0)
+})
+
 test('W15 step-aside over an upstream that carries the user\'s credentials: the flow is closed, no second credentialed connection is opened', T, async (t) => {
   const o = await origin(t)
   for (const kind of ['connect', 'socks5']) {
