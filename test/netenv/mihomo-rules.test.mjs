@@ -291,3 +291,56 @@ test('W12 pure: the input is not touched, the same input gives the same text, an
   assert.equal(buildForwarderConfig(input), buildForwarderConfig(input))
   JSON.parse(buildForwarderConfig(input)) // valid JSON, so valid YAML
 })
+
+// ---- W70: the listener's credentials (4.8 §3.2) ---------------------------------------------------------------------------------------------------
+
+test('W70 a group that takes no credentials (auth:false) has no users and no re-entry rules; its re-entry outbound carries no login; an upstream with credentials is refused as form-unsupported, one without is fine', () => {
+  const c = config({ groups: [DESKTOP_GROUP] })
+  const l = c.listeners[0]
+  assert.ok(!('users' in l), 'no users: the port takes whoever connects')
+  assert.deepEqual(by(c.proxies, 'asight-re-claude-code.desktop'), { name: 'asight-re-claude-code.desktop', type: 'http', server: '127.0.0.1', port: 18805 })
+  assert.deepEqual(c['sub-rules']['in-claude-code.desktop'].map((r) => r.split(',')[0]), ['AND', 'PROCESS-PATH-REGEX', 'MATCH'], 'no IN-USER rule: nobody can be told apart by a user that does not exist')
+  assert.ok(!JSON.stringify(c).includes(LISTENER_TOKEN), 'and no listener password is written for it')
+  assert.ok(buildForwarderConfig(forwarder({ groups: [DESKTOP_GROUP], listenerToken: undefined })), 'a config whose groups all take no credentials needs no listener token')
+  assert.throws(() => buildForwarderConfig(forwarder({ groups: [{ ...DESKTOP_GROUP, upstream: { type: 'http', host: 'proxy.example.com', port: 8080, username: 'u', password: 'p' } }] })), (e) => e instanceof FormUnsupportedError && e.code === 'form-unsupported')
+  assert.ok(buildForwarderConfig(forwarder({ groups: [{ ...DESKTOP_GROUP, upstream: { type: 'http', host: 'proxy.example.com', port: 8080 } }] })), 'an upstream without credentials is fine')
+  assert.ok(buildForwarderConfig(forwarder({ groups: [{ ...CC_GROUP, upstream: { type: 'http', host: 'proxy.example.com', port: 8080, username: 'u', password: 'p' } }] })), 'a group that takes credentials may have one with them')
+})
+
+test('W70 the host tree: only the named process to the named hosts goes to the engine, per rule per host; the form without a host set is a plain process rule', () => {
+  const sub = config({ groups: [KIMI_GROUP] })['sub-rules']['in-kimi-code.vscode']
+  const rule = KIMI_GROUP.forms[0].rules[0]
+  assert.deepEqual(sub.filter((l) => /asight-fb-/.test(l)), ['api.kimi.com', 'api.moonshot.cn'].map((h) => `AND,((${rule}),(DOMAIN-SUFFIX,${h})),asight-fb-kimi-code.vscode`))
+  assert.equal(sub.at(-1), 'MATCH,asight-up-kimi-code.vscode', 'every other connection of that program is only forwarded')
+  assert.ok(!sub.some((l) => l === `${rule},asight-fb-kimi-code.vscode`), 'the process rule alone never routes to the engine for this form')
+  assert.throws(() => buildForwarderConfig(forwarder({ groups: [{ ...KIMI_GROUP, forms: [{ f: 'kimi-code.vscode', rules: [], hosts: ['api.kimi.com'] }] }] })), /hosts but no process rule/)
+  assert.throws(() => buildForwarderConfig(forwarder({ groups: [{ ...KIMI_GROUP, forms: [{ ...KIMI_GROUP.forms[0], hosts: [] }] }] })), /hosts/)
+  assert.throws(() => buildForwarderConfig(forwarder({ groups: [{ ...KIMI_GROUP, forms: [{ ...KIMI_GROUP.forms[0], hosts: ['a,b'] }] }] })), /hosts/)
+})
+
+test('W7 a form with no process rule takes every connection of its port, last among the group\'s process rules; the group\'s other forms keep theirs before it', () => {
+  const sub = config({ groups: [DSH_GROUP] })['sub-rules']['in-deepseek-dsh.env']
+  assert.deepEqual(sub, ['AND,((DST-PORT,18803),(IP-CIDR,127.0.0.1/32,no-resolve)),DIRECT', 'IN-USER,re.deepseek-dsh.env,asight-up-deepseek-dsh.env', 'PROCESS-NAME,DeepSeek Harness.exe,asight-fb-deepseek-dsh.desktop', 'MATCH,asight-fb-deepseek-dsh.cli', 'MATCH,asight-up-deepseek-dsh.env'])
+})
+
+// ---- W72: the bypass table (4.8 §2.2 · §3.1) -------------------------------------------------------------------------------------------------------
+
+test('W72 each bypass entry kind is one mihomo rule; a bad value is refused, not written', () => {
+  assert.deepEqual(BYPASS.map((e) => bypassRuleOf(e)), ['DOMAIN-REGEX,^[^.]+$', 'DOMAIN-SUFFIX,corp.example.com', 'IP-CIDR,10.0.0.0/8,no-resolve', 'DOMAIN,gateway.internal'], 'inside a logic rule: no target')
+  assert.deepEqual(BYPASS.map((e) => bypassRuleOf(e, 'DIRECT')), ['DOMAIN-REGEX,^[^.]+$,DIRECT', 'DOMAIN-SUFFIX,corp.example.com,DIRECT', 'IP-CIDR,10.0.0.0/8,DIRECT,no-resolve', 'DOMAIN,gateway.internal,DIRECT'], 'as a rule line: the target, then an IP rule\'s no-resolve (the other order is not a rule mihomo reads)')
+  for (const bad of [{ kind: 'domain', value: 'a,b' }, { kind: 'domain-suffix', value: '' }, { kind: 'domain-suffix', value: 'a b' }, { kind: 'ip-cidr', value: '10.0.0.0' }, { kind: 'ip-cidr', value: '300.0.0.0/8' }, { kind: 'ip-cidr', value: '10.0.0.0/33' }, { kind: 'regex', value: 'x' }, null]) {
+    assert.throws(() => bypassRuleOf(bad), TypeError, JSON.stringify(bad))
+  }
+})
+
+test('W72 a bypass entry is in ② and ⑤ of its group, once each, and nowhere in a group without one; the re-entered ones are AND IN-USER; the plain ones are just the rule', () => {
+  const c = config({ groups: [CODEX_GROUP, CC_GROUP] })
+  for (const [i, e] of BYPASS.entries()) {
+    const sub = c['sub-rules']['in-codex.env'], inner = `AND,((IN-USER,re.codex.env),(${bypassRuleOf(e)})),DIRECT`, line = bypassRuleOf(e, 'DIRECT')
+    assert.equal(sub.filter((l) => l === inner).length, 1, `② ${i}`)
+    assert.equal(sub.filter((l) => l === line).length, 1, `⑤ ${i}`)
+    assert.ok(sub.indexOf(inner) < sub.indexOf('IN-USER,re.codex.env,asight-up-codex.env'), '② before ③')
+    assert.ok(sub.indexOf('IN-USER,re.codex.env,asight-up-codex.env') < sub.indexOf(line), '③ before ⑤')
+  }
+  assert.ok(!c['sub-rules']['in-claude-code.settings'].some((l) => /DOMAIN|IP-CIDR,10/.test(l)), 'another group\'s bypass table is not this group\'s')
+})
