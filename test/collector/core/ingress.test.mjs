@@ -6,11 +6,13 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
+import tls from 'node:tls'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { createEngine } from '../../../src/collector/core/engine/engine.mjs'
 import { createStaticRedirector } from '../../../src/collector/core/redirector.mjs'
 import { parseAuthority } from '../../../src/collector/core/engine/ingress.mjs'
+import { startMockProxy } from '../../lab/mock-upstream/proxy.mjs'
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
 import { checkRecord } from '../../../src/health/codes.mjs'
@@ -273,5 +275,209 @@ test('parseAuthority: host:port, [v6]:port and what is not one', () => {
   assert.deepEqual(parseAuthority('127.0.0.1:18000'), { host: '127.0.0.1', port: 18000 })
   assert.deepEqual(parseAuthority('[0:0:0:0:0:0:0:1]:443'), { host: '::1', port: 443 }, 'an IPv6 literal is written compressed, one spelling per host')
   for (const bad of ['', 'host', 'host:', ':443', 'host:0', 'host:65536', 'host:44a', '[::1]', '[::1:443', 'a:b:443', 'ho st:443']) assert.equal(parseAuthority(bad), null, bad)
+})
+
+// ── W15: the upstreams · one dial per flow · the step-aside · the user's credentials ───────────────────────────────────────────────
+const privCa = createCa({ commonName: 'private origin CA' })
+const privIssuer = createLeafIssuer(loadCa(privCa))
+const REQ = 'GET /v1/models HTTP/1.1\r\nhost: upstream.test\r\n\r\n'
+const RESP = 'HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: keep-alive\r\n\r\nok'
+const listen = (srv) => new Promise((r) => srv.listen(0, '127.0.0.1', r))
+const b64 = (s) => Buffer.from(s, 'base64')
+const CRED = { username: 'u1', password: 'pw-SECRET' }
+
+// A TLS origin signed by a private CA behind a recording tap: what each connection to it received (after any proxy prelude), and sent.
+async function origin(t) {
+  const srv = tls.createServer({ SNICallback: (n, cb) => cb(null, privIssuer.secureContextFor(n)), ALPNProtocols: ['http/1.1'] }, (s) => {
+    let seen = ''; s.on('data', (d) => { seen += d.toString('latin1'); if (seen.includes('\r\n\r\n')) { seen = ''; s.write(RESP) } }); s.on('error', () => {})
+  })
+  await listen(srv)
+  const conns = [], sockets = new Set()
+  const front = net.createServer((a) => {
+    const rec = { c: [], s: [], done: new Promise((r) => a.once('close', r)) }; conns.push(rec)
+    const b = net.connect(srv.address().port, '127.0.0.1'); sockets.add(a); sockets.add(b)
+    a.on('data', (d) => { rec.c.push(d); b.write(d) }); b.on('data', (d) => { rec.s.push(d); a.write(d) })
+    for (const [x, y] of [[a, b], [b, a]]) { x.on('end', () => y.end()); x.on('error', () => y.destroy()); x.on('close', () => y.destroy()) }
+  })
+  await listen(front)
+  t.after(() => { for (const s of sockets) s.destroy(); front.close(); srv.close() })
+  return { port: front.address().port, conns, closed: () => within(Promise.all(conns.map((c) => c.done)), 4000, 'the origin\'s connections to close') }
+}
+// CONNECT through the ingress; resolves with the raw socket (no listeners left on it) once the head is read
+function tunnel(port, target, head = connectHead(target)) {
+  const sock = net.connect(port, '127.0.0.1'); sock.on('error', () => {})
+  sock.write(head)
+  return within(new Promise((res) => {
+    let b = Buffer.alloc(0)
+    const on = (d) => { b = Buffer.concat([b, d]); const i = b.indexOf('\r\n\r\n'); if (i >= 0) { sock.removeListener('data', on); res({ sock, head: b.subarray(0, i + 4).toString('latin1'), rest: b.subarray(i + 4) }) } }
+    sock.on('data', on); sock.once('close', () => res({ sock, head: b.toString('latin1'), closed: true }))
+  }), 4000, 'the tunnel head', () => sock.destroy())
+}
+// a TLS client over the tunnel, as an agent would: what the peer's certificate was issued by and what came back
+const talk = (sock, ca) => within(new Promise((resolve) => {
+  let issuer = null, got = ''
+  const c = tls.connect({ socket: sock, servername: 'upstream.test', ca, ALPNProtocols: ['http/1.1'] }, () => { issuer = c.getPeerX509Certificate().issuer; c.write(REQ) })
+  c.on('data', (d) => { got += d.toString('latin1'); if (got.length >= RESP.length) c.end() })
+  c.on('error', () => {}); c.on('close', () => resolve(issuer ? { issuer, got } : 'closed'))
+}), 6000, 'the TLS exchange over the tunnel', () => sock.destroy())
+
+test('W15 a direct upstream, decrypted: one dial for the whole flow (the wrapper hands the ingress\'s connection over once), the call is recorded under the agent\'s pid', T, async (t) => {
+  const o = await origin(t)
+  const L = await lab(t, { upstreamCa: privCa.certPem, meta: { decrypt: true } })
+  const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)
+  const r = await talk(sock, asightCa.certPem)
+  assert.equal(r.got, RESP); assert.match(r.issuer, /asight collector CA/)
+  await L.settled(1)
+  assert.deepEqual(L.dials, [{ address: '127.0.0.1', port: o.port }], 'one upstream dial for one agent connection'); assert.equal(o.conns.length, 1)
+  assert.deepEqual(L.envelopes.map((e) => [e.host, e.proc.pid, e.proc.agent, e.scheme]), [['upstream.test', 4242, 'claude-code', 'https']])
+  assert.deepEqual([L.flows[0].decision, L.flows[0].not_captured ?? null, L.flows[0].upstream, 'prelude' in L.flows[0]], ['decrypt', null, { kind: 'direct' }, false])
+  assert.deepEqual(L.failures, [])
+})
+
+test('W15 an http upstream: the user\'s credentials ride only in asight\'s prelude for the agent\'s connection; the flow is decrypted over one connection to the proxy; the row has neither credentials nor prelude', T, async (t) => {
+  const o = await origin(t)
+  const proxy = await startMockProxy({ kind: 'connect', target: { port: o.port }, auth: CRED }); t.after(() => proxy.close())
+  const L = await lab(t, { upstreamCa: privCa.certPem, meta: { decrypt: true, upstream: { kind: 'http', host: '127.0.0.1', port: proxy.port, auth: CRED } } })
+  const { sock, head } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)
+  assert.match(head, /^HTTP\/1\.1 200 /)
+  const r = await talk(sock, asightCa.certPem); assert.equal(r.got, RESP); await L.settled(1)
+  assert.equal(proxy.log.length, 1, 'one connection to the proxy for one agent connection')
+  assert.equal(proxy.log[0].target, `127.0.0.1:${o.port}`); assert.equal(proxy.log[0].ok, true)
+  assert.ok(b64(proxy.log[0].in_b64).toString('latin1').includes(`Proxy-Authorization: Basic ${Buffer.from('u1:pw-SECRET').toString('base64')}`), 'the credentials are in the prelude to the proxy')
+  assert.deepEqual(L.flows[0].upstream, { kind: 'http', host: '127.0.0.1', port: proxy.port, reply: 200 })
+  assert.equal('prelude' in L.flows[0], false)
+  for (const [what, v] of [['flows/', L.flows], ['envelopes', L.envelopes], ['failures', L.failures]]) {
+    const text = JSON.stringify(v); assert.equal(text.includes('pw-SECRET') || text.includes(Buffer.from('u1:pw-SECRET').toString('base64')), false, `${what} hold no credentials`)
+  }
+})
+
+test('W15 a socks5 upstream: the target goes as a domain or an address, the credentials by RFC 1929; decrypted; the row says upstream.reply 0', T, async (t) => {
+  const o = await origin(t)
+  const proxy = await startMockProxy({ kind: 'socks5', target: { port: o.port }, auth: CRED }); t.after(() => proxy.close())
+  const L = await lab(t, { upstreamCa: privCa.certPem, meta: { decrypt: true, upstream: { kind: 'socks5', host: '127.0.0.1', port: proxy.port, auth: CRED } } })
+  const { sock } = await tunnel(L.ingressPort, 'upstream.test:443') // a name: ATYP 3 (the mock proxy goes to its own target whatever it was asked for)
+  const r = await talk(sock, asightCa.certPem); assert.equal(r.got, RESP); await L.settled(1)
+  assert.equal(proxy.log.length, 1); assert.equal(proxy.log[0].target, 'upstream.test:443'); assert.equal(proxy.log[0].ok, true)
+  assert.deepEqual(L.flows[0].upstream, { kind: 'socks5', host: '127.0.0.1', port: proxy.port, reply: 0 })
+  assert.equal(JSON.stringify(L.flows).includes('pw-SECRET'), false)
+  const p2 = await startMockProxy({ kind: 'socks5', target: { port: o.port } }); t.after(() => p2.close()) // no credentials, an address literal (v4 and v6)
+  const M = await lab(t, { upstreamCa: privCa.certPem, meta: { decrypt: true, upstream: { kind: 'socks5', host: '127.0.0.1', port: p2.port } } })
+  for (const target of [`127.0.0.1:${o.port}`, `[::1]:${o.port}`]) { const x = await tunnel(M.ingressPort, target); assert.match(x.head, /^HTTP\/1\.1 200 /); x.sock.destroy() }
+  assert.deepEqual(p2.log.map((e) => e.target), [`127.0.0.1:${o.port}`, `[0:0:0:0:0:0:0:1]:${o.port}`])
+})
+
+test('W15 the health probe makes zero connections to the user\'s proxy: its credentials are used for agent connections only', T, async (t) => {
+  const proxy = await startMockProxy({ kind: 'connect', target: { port: 9 }, auth: CRED }); t.after(() => proxy.close())
+  const L = await lab(t, { meta: { upstream: { kind: 'http', host: '127.0.0.1', port: proxy.port, auth: CRED } } })
+  const c = L.client(); c.write(PROBE)
+  assert.match(await c.head(), /^HTTP\/1\.1 200 /); for (let i = 0; i < 2; i++) assert.match(await c.head(), /^HTTP\/1\.1 204 /)
+  assert.deepEqual(proxy.log, []); assert.deepEqual(L.dials, []); assert.equal(L.flows.length, 0)
+})
+
+test('W15 the proxy refuses: its own reply goes back verbatim, never a 200 first; the row says proxy-refused with the reply code; no flow', T, async (t) => {
+  const refusing = await startMockProxy({ kind: 'connect', target: { port: 9 }, refuse: true }); t.after(() => refusing.close())
+  const L = await lab(t, { meta: { upstream: { kind: 'http', host: '127.0.0.1', port: refusing.port } } })
+  const c = L.client(); c.write(connectHead('upstream.test:443'))
+  assert.equal(await c.head(), 'HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n', 'the proxy\'s own refusal, byte for byte'); await c.closed(); await L.settled(1)
+  const [row] = L.flows
+  assert.deepEqual([row.decision, row.not_captured, row.reason, row.upstream.reply, row.host, 'inner' in row, 'prelude' in row], ['tunnel', 'proxy-refused', 'proxy-status-403', 403, 'upstream.test', false, false])
+  assert.deepEqual(checkRecord(row), []); assert.equal(L.engine.stats().ingress.refused, 1); assert.equal(L.envelopes.length, 0)
+  // wrong credentials for the proxy: the proxy says 403 itself
+  const strict = await startMockProxy({ kind: 'connect', target: { port: 9 }, auth: CRED }); t.after(() => strict.close())
+  const M = await lab(t, { meta: { upstream: { kind: 'http', host: '127.0.0.1', port: strict.port, auth: { username: 'u1', password: 'wrong' } } } })
+  const d = M.client(); d.write(connectHead('upstream.test:443')); assert.match(await d.head(), /^HTTP\/1\.1 403 /); await M.settled(1)
+  assert.deepEqual([M.flows[0].not_captured, M.flows[0].reason], ['proxy-refused', 'proxy-status-403'])
+  // SOCKS5: the agent's SOCKS5 client gets a failure reply, the row the proxy's reason
+  const s5 = await startMockProxy({ kind: 'socks5', target: { port: 9 }, refuse: true }); t.after(() => s5.close())
+  const S = await lab(t, { meta: { upstream: { kind: 'socks5', host: '127.0.0.1', port: s5.port } } })
+  const e = S.client(); e.write(Buffer.from([5, 1, 2])); await e.bytes(2)
+  e.write(Buffer.concat([Buffer.from([1, USER.length]), Buffer.from(USER), Buffer.from([TOKEN.length]), Buffer.from(TOKEN)])); await e.bytes(2)
+  e.write(Buffer.from([5, 1, 0, 3, 4, ...Buffer.from('a.zz'), 1, 187])); const rep = await e.bytes(10); assert.notEqual(rep[1], 0); await S.settled(1)
+  assert.deepEqual([S.flows[0].not_captured, S.flows[0].reason, S.flows[0].upstream.reply], ['proxy-refused', 'socks5-reply-2', 2])
+  const auth5 = await startMockProxy({ kind: 'socks5', target: { port: 9 }, auth: CRED }); t.after(() => auth5.close())
+  const A = await lab(t, { meta: { upstream: { kind: 'socks5', host: '127.0.0.1', port: auth5.port, auth: { username: 'u1', password: 'nope' } } } })
+  const f = A.client(); f.write(connectHead('a.zz:443')); assert.match(await f.head(), /^HTTP\/1\.1 502 /); await A.settled(1)
+  assert.deepEqual([A.flows[0].not_captured, A.flows[0].reason], ['proxy-refused', 'socks5-auth-failed'])
+})
+
+test('W15 the proxy cannot be reached or hangs up mid-prelude: 502 and a row with the error; the 200 is said only once the proxy has answered', T, async (t) => {
+  const dead = await new Promise((r) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)) }) })
+  const L = await lab(t, { meta: { upstream: { kind: 'http', host: '127.0.0.1', port: dead } } })
+  const c = L.client(); c.write(connectHead('upstream.test:443')); assert.match(await c.head(), /^HTTP\/1\.1 502 /); await L.settled(1)
+  assert.deepEqual([L.flows[0].decision, L.flows[0].error.type, L.flows[0].upstream.kind], ['error', 'ECONNREFUSED', 'http'])
+  // a proxy that takes its time: no byte reaches the agent before the proxy's own answer
+  let release, held = null
+  const slow = net.createServer((s) => { held = s; s.on('error', () => {}); s.once('data', () => { new Promise((r) => { release = r }).then(() => s.write('HTTP/1.1 200 Connection established\r\n\r\n')) }) })
+  await listen(slow); t.after(() => { slow.close(); if (held) held.destroy() })
+  const M = await lab(t, { meta: { upstream: { kind: 'http', host: '127.0.0.1', port: slow.address().port } } })
+  const d = M.client(); d.write(connectHead('upstream.test:443'))
+  await sleep(200); assert.equal(d.buf.length, 0, 'nothing is said to the agent while the proxy has not answered')
+  await within((async () => { while (!release) await sleep(5) })(), 2000, 'the proxy to receive the prelude'); release()
+  assert.match(await d.head(), /^HTTP\/1\.1 200 /)
+  const hang = net.createServer((s) => { s.on('error', () => {}); s.once('data', () => s.destroy()) }); await listen(hang); t.after(() => hang.close())
+  const H = await lab(t, { meta: { upstream: { kind: 'http', host: '127.0.0.1', port: hang.address().port } } })
+  const e = H.client(); e.write(connectHead('upstream.test:443')); assert.match(await e.head(), /^HTTP\/1\.1 502 /); await H.settled(1)
+  assert.equal(H.flows[0].error.type, 'proxy_closed')
+})
+
+test('W15 bytes that reach the agent\'s upstream in the same chunk as the proxy\'s 200 are the upstream speaking first: kept, in order, and labelled', T, async (t) => {
+  const early = net.createServer((s) => { s.on('error', () => {}); s.once('data', () => s.write('HTTP/1.1 200 Connection established\r\n\r\nHELLO')) })
+  await listen(early); t.after(() => early.close())
+  const L = await lab(t, { meta: { upstream: { kind: 'http', host: '127.0.0.1', port: early.address().port } } })
+  const c = L.client(); c.write(connectHead('upstream.test:443'))
+  assert.match(await c.head(), /^HTTP\/1\.1 200 /); assert.equal((await c.bytes(5)).toString(), 'HELLO')
+  c.sock.end(); await L.settled(1)
+  assert.deepEqual([L.flows[0].decision, L.flows[0].not_captured], ['splice', 'upstream-first'])
+})
+
+// The step-aside (4.6 让路): the engine does not trust the origin's CA, the agent does: the engine drops its own handshake and the agent meets the real
+// upstream with its own ClientHello. Through the ingress that second dial is a handshake with the proxy again — unless the proxy is the user's and
+// wants their credentials, which asight does not send twice (invariant 1).
+const front = async (t, port) => { // a tap in front of the ingress: the bytes the agent sent
+  const conns = []; const socks = new Set()
+  const srv = net.createServer((a) => { const rec = []; conns.push(rec); const b = net.connect(port, '127.0.0.1'); socks.add(a); socks.add(b)
+    a.on('data', (d) => { rec.push(d); b.write(d) }); b.on('data', (d) => a.write(d))
+    for (const [x, y] of [[a, b], [b, a]]) { x.on('end', () => y.end()); x.on('error', () => y.destroy()); x.on('close', () => y.destroy()) } })
+  await listen(srv); t.after(() => { for (const s of socks) s.destroy(); srv.close() })
+  return { port: srv.address().port, conns }
+}
+for (const kind of ['direct', 'http (no credentials)', 'socks5 (no credentials)']) {
+  test(`W15 step-aside over a ${kind} upstream: dialled again, the ClientHello arrives byte for byte, the agent's own handshake succeeds`, T, async (t) => {
+    const o = await origin(t)
+    const proxy = kind === 'direct' ? null : await startMockProxy({ kind: kind.startsWith('http') ? 'connect' : 'socks5', target: { port: o.port } })
+    if (proxy) t.after(() => proxy.close())
+    const L = await lab(t, { meta: { decrypt: true, ...(proxy ? { upstream: { kind: kind.startsWith('http') ? 'http' : 'socks5', host: '127.0.0.1', port: proxy.port } } : {}) } }) // no upstreamCa: the origin's CA is not trusted
+    const tap = await front(t, L.ingressPort)
+    const head = connectHead(`127.0.0.1:${o.port}`)
+    const { sock, head: reply } = await tunnel(tap.port, `127.0.0.1:${o.port}`, head)
+    assert.match(reply, /^HTTP\/1\.1 200 /)
+    const r = await talk(sock, privCa.certPem)
+    assert.equal(r.got, RESP); assert.match(r.issuer, /private origin CA/, 'the agent met the real upstream')
+    await L.settled(1); await o.closed()
+    assert.equal(o.conns.length, 2, 'the engine\'s dropped handshake, then the agent\'s own')
+    if (proxy) assert.equal(proxy.log.length, 2, 'two connections to the proxy: the second is a fresh prelude')
+    const sent = Buffer.concat(tap.conns[0]).subarray(Buffer.byteLength(head))
+    assert.ok(sent.equals(Buffer.concat(o.conns[1].c)), 'agent → upstream bytes identical on the second connection')
+    assert.ok(!Buffer.concat(o.conns[0].c).includes(sent.subarray(11, 43)), 'none of the agent\'s bytes (its ClientHello random) went on the unverified connection')
+    assert.deepEqual([L.flows[0].decision, L.flows[0].not_captured], ['splice', 'upstream-cert']); assert.equal(L.envelopes.length, 0)
+    assert.deepEqual(L.flows[0].upstream.kind, kind.split(' ')[0])
+  })
+}
+
+test('W15 step-aside over an upstream that carries the user\'s credentials: the flow is closed, no second credentialed connection is opened', T, async (t) => {
+  const o = await origin(t)
+  for (const kind of ['connect', 'socks5']) {
+    const proxy = await startMockProxy({ kind, target: { port: o.port }, auth: CRED }); t.after(() => proxy.close())
+    const L = await lab(t, { meta: { decrypt: true, upstream: { kind: kind === 'connect' ? 'http' : 'socks5', host: '127.0.0.1', port: proxy.port, auth: CRED } } })
+    const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)
+    assert.equal(await talk(sock, privCa.certPem), 'closed', `${kind}: the agent's connection is closed, not re-dialled`); await L.settled(1)
+    assert.equal(proxy.log.length, 1, `${kind}: one prelude with the user's credentials, no second`)
+    assert.deepEqual([L.flows[0].decision, L.flows[0].not_captured, L.flows[0].error.type], ['error', 'upstream-cert', 'upstream_cert'])
+    assert.equal(JSON.stringify(L.flows).includes('pw-SECRET'), false)
+    // the retry splices at once (negative cache): one more connection, again with the credentials, and the agent meets the real upstream
+    const again = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)
+    assert.equal((await talk(again.sock, privCa.certPem)).got, RESP); await L.settled(2)
+    assert.deepEqual([L.flows[1].decision, L.flows[1].not_captured], ['splice', 'negative-cache']); assert.equal(proxy.log.length, 2)
+  }
 })
 

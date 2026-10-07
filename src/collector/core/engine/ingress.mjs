@@ -112,6 +112,14 @@ export function parseAuthority(a) {
   const port = Number(rest.slice(1))
   return port >= 1 && port <= 65535 ? { host, port } : null
 }
+// a compressed IPv6 literal (URL-normalised: hex groups only) → its 16 bytes
+function ip6bytes(h) {
+  const [a, b] = h.split('::')
+  const left = a ? a.split(':') : [], right = b ? b.split(':') : []
+  const mid = b === undefined ? [] : Array(8 - left.length - right.length).fill('0')
+  return Buffer.from([...left, ...mid, ...right].flatMap((x) => { const n = parseInt(x, 16); return [n >> 8, n & 255] }))
+}
+const authority = (t) => (t.host.includes(':') ? `[${t.host}]:${t.port}` : `${t.host}:${t.port}`)
 function basicOf(headers) {
   const h = headers.find(([k]) => k.toLowerCase() === 'proxy-authorization')
   const m = h && /^basic\s+(\S+)$/i.exec(h[1])
@@ -130,6 +138,52 @@ function whenConnected(s) {
     const off = () => { s.removeListener('connect', ok); s.removeListener('error', bad); s.removeListener('close', bad) }
     s.once('connect', ok); s.once('error', bad); s.once('close', bad)
   })
+}
+
+// The proxy prelude asight writes for an agent's connection, and what comes back. Never for a health probe; the credentials (up.auth) are
+// the user's own proxy's, used for this one agent connection and nowhere else (§5.2, D30).
+async function viaHttp(sock, up, target, deadline) {
+  const au = authority(target)
+  const cred = up.auth ? `Proxy-Authorization: Basic ${Buffer.from(`${up.auth.username}:${up.auth.password}`).toString('base64')}\r\n` : ''
+  const r = reader(sock)
+  sock.write(`CONNECT ${au} HTTP/1.1\r\nHost: ${au}\r\n${cred}\r\n`)
+  const m = await r.take(headOf, deadline)
+  const rest = r.detach()
+  if (m.gone || m.timeout || m.invalid) return { ok: false, kind: 'unreachable', error: { type: m.invalid ? 'bad_proxy_reply' : 'proxy_closed', message: m.invalid || `the proxy ${m.timeout ? 'did not answer' : 'closed the connection'} before its reply to CONNECT` } }
+  const status = parseInt(m.head.startLine.split(' ')[1], 10)
+  if (status >= 200 && status < 300) return { ok: true, sock, reply: status, rest }
+  return { ok: false, kind: 'refused', reason: `proxy-status-${status}`, reply: status, raw: Buffer.concat([m.raw, rest]) }
+}
+async function viaSocks5(sock, up, target, deadline) {
+  const r = reader(sock)
+  const fail = (m, what) => ({ ok: false, kind: 'unreachable', error: { type: m.timeout ? 'proxy_timeout' : 'proxy_closed', message: `the SOCKS5 proxy ${m.timeout ? 'did not answer' : 'closed the connection'} during ${what}` } })
+  const bad = (what, reason) => ({ ok: false, kind: 'refused', reason, reply: null, what })
+  try {
+    sock.write(up.auth ? Buffer.from([5, 2, 0, 2]) : Buffer.from([5, 1, 0]))
+    const m = await r.take((b) => (b.length < 2 ? null : b[0] !== 5 ? { invalid: 'not a SOCKS5 method reply' } : { length: 2, method: b[1] }), deadline)
+    if (m.gone || m.timeout) return fail(m, 'the method exchange')
+    if (m.invalid) return { ok: false, kind: 'unreachable', error: { type: 'bad_proxy_reply', message: m.invalid } }
+    if (m.method === 0xff) return bad('method', 'socks5-no-acceptable-method')
+    if (m.method === 2 && up.auth) {
+      const u = Buffer.from(up.auth.username), p = Buffer.from(up.auth.password)
+      sock.write(Buffer.concat([Buffer.from([1, u.length]), u, Buffer.from([p.length]), p]))
+      const s = await r.take((b) => (b.length < 2 ? null : { length: 2, ok: b[1] === 0 }), deadline)
+      if (s.gone || s.timeout) return fail(s, 'authentication')
+      if (!s.ok) return bad('auth', 'socks5-auth-failed')
+    } else if (m.method !== 0) return bad('method', `socks5-method-${m.method}`)
+    const host = Buffer.from(target.host)
+    const ip = net.isIP(target.host)
+    const addr = ip === 4 ? Buffer.concat([Buffer.from([1]), Buffer.from(target.host.split('.').map(Number))])
+      : ip === 6 ? Buffer.concat([Buffer.from([4]), ip6bytes(target.host)])
+        : Buffer.concat([Buffer.from([3, host.length]), host])
+    sock.write(Buffer.concat([Buffer.from([5, 1, 0]), addr, Buffer.from([target.port >> 8, target.port & 255])]))
+    const q = await r.take(socks5Request, deadline)
+    if (q.gone || q.timeout) return fail(q, 'the CONNECT')
+    if (q.invalid) return { ok: false, kind: 'unreachable', error: { type: 'bad_proxy_reply', message: q.invalid } }
+    const rest = r.detach()
+    if (q.cmd === 0) return { ok: true, sock, reply: 0, rest }
+    return { ok: false, kind: 'refused', reason: `socks5-reply-${q.cmd}`, reply: q.cmd, raw: null }
+  } finally { r.detach() }
 }
 
 /**
@@ -260,21 +314,30 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     if (d.rest.length) d.sock.unshift(d.rest)
     counters.flows++
     const credentialed = !!up.auth
-    // a direct upstream is redialled as the transparent door does it: a connecting socket, at once
-    const redial = credentialed ? undefined : () => connectUpstream({ address: o.target.host, port: o.target.port })
+    // a direct upstream is redialled as the transparent door does it (a connecting socket, at once); a proxy needs its prelude again (a Promise)
+    const redial = credentialed ? undefined : (up.kind || 'direct') === 'direct' ? () => connectUpstream({ address: o.target.host, port: o.target.port }) : async () => {
+      const x = await dialUpstream(up, o.target, () => {})
+      if (!x.ok) throw Object.assign(new Error(x.kind === 'refused' ? `the upstream refused the second connection (${x.reason})` : x.error.message), { code: x.kind === 'refused' ? 'proxy-refused' : x.error.type })
+      if (x.rest.length) x.sock.unshift(x.rest)
+      return x.sock
+    }
     handleFlow(socket, { ...base, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}), credentialed }, wire: { up: w.up, down: w.down } }, { upstream: d.sock, redial })
   }
 
   async function dialUpstream(up, target, track) {
     const kind = up.kind || 'direct'
-    if (kind !== 'direct') return { ok: false, kind: 'unreachable', error: { type: 'unsupported_upstream', message: `the upstream kind ${JSON.stringify(printable(kind))} is not one the ingress dials yet (only direct; http and socks5 come with the next commit)` } }
-    const to = { address: target.host, port: target.port }
+    if (!['direct', 'http', 'socks5'].includes(kind)) return { ok: false, kind: 'unreachable', error: { type: 'unsupported_upstream', message: `the upstream kind ${JSON.stringify(printable(kind))} is not one the ingress dials (direct, http, socks5)` } }
+    const to = kind === 'direct' ? { address: target.host, port: target.port } : { address: up.host, port: up.port }
     let sock
     try { sock = connectUpstream(to) } catch (e) { return { ok: false, kind: 'unreachable', error: { type: e.code || 'upstream_error', message: msgOf(e) } } }
     track(sock)
     sock.on('error', () => {}) // the handshake owns the outcome; a late error must not be uncaught
     try { await whenConnected(sock) } catch (e) { sock.destroy(); return { ok: false, kind: 'unreachable', error: { type: e.code || 'upstream_error', message: msgOf(e) } } }
-    return { ok: true, sock, reply: null, rest: Buffer.alloc(0) }
+    if (kind === 'direct') return { ok: true, sock, reply: null, rest: Buffer.alloc(0) }
+    const deadline = timing.ingressDialMs ? Date.now() + timing.ingressDialMs : Infinity
+    const d = kind === 'socks5' ? await viaSocks5(sock, up, target, deadline) : await viaHttp(sock, up, target, deadline)
+    if (!d.ok) sock.destroy()
+    return d
   }
 
   // a health probe tunnel (4.8 §3.3, §5.1): the group's own re-entry point, answered with what mihomo's http / socks5 outbound looks for

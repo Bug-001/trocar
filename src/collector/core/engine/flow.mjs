@@ -309,7 +309,8 @@ export function handleFlow(client, meta, ctx) {
   // replay the client's buffered bytes (its ClientHello) verbatim and splice — the client then runs its
   // own handshake with the real upstream and judges the certificate itself. Inside a CONNECT / SOCKS
   // tunnel there is no fresh connection to open without re-sending the client's proxy prelude (its
-  // credentials) on our own initiative (invariant 1 / D30), so that one flow is closed; (pid, host) is
+  // credentials) on our own initiative (invariant 1 / D30), so that one flow is closed; the same for a connection the
+  // proxy ingress dialled through a credentialed proxy (4.8 §5.2); (pid, host) is
   // negative at once either way, so later flows (the client's retry) splice without trying.
   //   A leaf we cannot issue (cause 'leaf-error', an internal error) steps aside the same way, but is
   // not negative-cached (asight's fault, not the host's) and is a leaf-error failure event (D38).
@@ -319,12 +320,29 @@ export function handleFlow(client, meta, ctx) {
     if (cause === 'upstream-cert') { ctx.negCache.mark(key, { cause, meta, host }); ctx.counters.notCaptured.upstreamCert++ }
     else { ctx.counters.notCaptured.leafError++; ctx.failure({ code: 'leaf-error', flow_id: rec.flow_id, host, reason: why }) }
     rec.not_captured = cause; rec.reason = why
-    if (isTunnel) {
+    // A credentialed upstream (the user's own proxy, reached through the ingress) is dialled once, for this agent connection: a second
+    // dial would send the user's credentials again on asight's own initiative (invariant 1, 4.8 §5.2), so this flow is closed like a tunnel's.
+    if (isTunnel || meta.upstream?.credentialed) {
       try { cSock.destroy() } catch { /* ignore */ }
-      return finish('tunnel', { host, error: { type: cause.replace('-', '_'), message: why, side: cause === 'upstream-cert' ? 'upstream' : 'engine' } })
+      return finish(isTunnel ? 'tunnel' : 'error', { host, error: { type: cause.replace('-', '_'), message: why, side: cause === 'upstream-cert' ? 'upstream' : 'engine' } })
     }
     setDecision('splice', false)
     const fresh = ctx.connectUpstream(meta.dst)
+    if (fresh && typeof fresh.then === 'function') { // the ingress's upstream is a proxy: the second dial is a handshake, not a connect
+      let gone = false
+      const left = () => { gone = true }
+      cSock.once('close', left)
+      return fresh.then((u) => {
+        cSock.removeListener('close', left)
+        if (gone || cSock.destroyed) { try { u.destroy() } catch { /* ignore */ } return finish('error', { error: closedBefore('client') }) }
+        u.write(buf); cSock.resume(); relay(cSock, u)
+      }, (e) => {
+        cSock.removeListener('close', left)
+        try { cSock.destroy() } catch { /* ignore */ }
+        rec.decision = 'error'
+        finish('error', { error: { type: e.code || 'upstream_error', message: msgOf(e), side: 'upstream' } })
+      })
+    }
     fresh.write(buf)                                    // the ClientHello, byte for byte
     cSock.resume(); relay(cSock, fresh)
   }
