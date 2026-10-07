@@ -224,8 +224,12 @@ test('N15 (b) detect and every read of the Verge adapter run over a recording fs
   assert.deepEqual(writesUnder(log, dirs), [])
   assert.deepEqual(snapshot(roaming), before)
   assert.ok(PRODUCTS_WIN32.some((p) => p.dataDir), 'the table still names a data directory to protect')
-  // Task 8(c) and Task 9(b) add `on`, `off` and `uninstall` (the injected platform) as runs of this same check: they do not exist for Windows yet
 })
+
+// The runs that do not exist for Windows yet, each with its owner in the plan (2026-10-07-win-collector.md): a deferral that is only a comment does not show up in the test output (audit F9).
+test.todo('N15 (b) the `on` run (plan Task 8(c)): with the injected win32 platform, `on` over a recording fs puts no write under a product directory')
+test.todo('N15 (b) the `off` and `uninstall` runs (plan Task 9(b)): with the injected win32 platform, both over a recording fs, `undoWin32` included, put no write under a product directory')
+test.todo('N15 (b) the opt-in runs (plan Task 14): `on --opt-in` for every form and the `off` after it, over a recording fs, put no write under a product directory')
 
 test('N15 (b) the recording fs sees every way to write: sync, callback and promises forms, an `open` with a write flag (a string or a number), a write on its fd, a stream; and not a read', async () => {
   const dir = tmpDir('asight-rec-')
