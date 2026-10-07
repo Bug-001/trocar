@@ -2,6 +2,8 @@
 // Task 6b owns the rules of upstream.mjs; Task 8(a) appends the route plan (planRoutes) that applies them to the groups. Nothing here runs Windows: the helper is an object with a `call`, the clock is injected.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { bypassHit, parseProxyText, proxyAuthOf, readHkcuEnv, readSystemProxy, sameSystemProxy, translateBypass, upstreamFor, watchSystemProxy } from '../../../../src/collector/arch/win32/upstream.mjs'
 import { regReadAllowed } from '../../../../src/collector/arch/win32/helper.mjs'
 import { bypassRuleOf } from '../../../../src/netenv/mihomo/rules.mjs'
@@ -532,4 +534,34 @@ test('W71 end to end: the registry moves its port, the watcher says so, and only
   const pac = up(CODEX, { systemProxy: changes[1].after, last: after.codex })
   assert.deepEqual([pac.port, pac.hint], [7890, 'system-proxy-pac'], 'PAC after `on`: the last upstream stays and it is said')
   w.stop()
+})
+
+// ---------- what upstream.mjs may touch ----------
+
+const UPSTREAM_SRC = fs.readFileSync(fileURLToPath(new URL('../../../../src/collector/arch/win32/upstream.mjs', import.meta.url)), 'utf8')
+/** What the file may not do (it computes and reads the registry through the helper it is given): reach the network, the disk, a process or the OS by itself. */
+function reaches(src) {
+  const code = src.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')
+  const out = []
+  for (const m of code.matchAll(/\bimport\b[^;]*?\bfrom\s*(['"])([^'"]+)\1|\bimport\s*(['"])([^'"]+)\3|\bimport\s*\(\s*(['"])([^'"]+)\5/g)) {
+    const spec = m[2] || m[4] || m[6]
+    if (spec !== '../../../netenv/mihomo/rules.mjs') out.push(`imports ${spec}`)
+  }
+  if (/\brequire\s*\(|\bfetch\s*\(|\bprocess\s*\.|\bchild_process\b|\bwriteFile|\bappendFile|\bunlink|\bspawn\s*\(|\bexecFile(Sync)?\s*\(|\bexecSync\s*\(/.test(code)) out.push('touches the OS, the disk or the network itself')
+  return out
+}
+
+test('upstream.mjs imports only the rule text generator and names no network, disk, process or OS call: its inputs are data and a helper it is handed (W39: loadArch(\'win32\') is importable anywhere)', () => {
+  assert.deepEqual(reaches(UPSTREAM_SRC), [])
+  assert.ok(reaches("import https from 'node:https'\n").length > 0, 'the scan can fail: an import')
+  assert.ok(reaches("import('node:fs')\n").length > 0, 'a dynamic import')
+  assert.ok(reaches('const x = process.platform\n').length > 0, 'the OS')
+  assert.ok(reaches('await fetch(u)\n').length > 0, 'the network')
+  assert.ok(reaches("import fs from 'node:fs'\nfs.writeFileSync(a, b)\n").length > 0, 'the disk')
+})
+
+test('upstreamFor wants a group: a call without one is a bug of the caller, not a direct upstream', () => {
+  assert.throws(() => upstreamFor({}), TypeError)
+  assert.throws(() => upstreamFor(), TypeError)
+  assert.throws(() => upstreamFor({ group: { followsSystemProxy: { http: true } } }), TypeError, 'a group has an id: it names the reference to its stored login')
 })
