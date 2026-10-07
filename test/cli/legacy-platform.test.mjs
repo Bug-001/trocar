@@ -395,3 +395,110 @@ test('R6 / V7: not in a terminal and no --yes, on prints the plan and writes not
   assert.equal(await runOnCli([], onCtx(s, no, { mac })), 1)
   assert.equal(no.asked.length, 1); assert.deepEqual([snapshot(s.home), mac.calls], [before, []])
 })
+
+test('R8 / R9: on over an old capture that is already there (an old `desktop on`) leaves it alone — no unload, no load, no reload, no restart of the running MITM — and the second on writes nothing and asks nothing; what an old command wrote is 「旧命令装的,无备份」', async () => {
+  const s = macHome({ userMain: USER_MAIN, steer: false })
+  const core = await fakeCore({ live: true }); const mac = fakeMac({ keychain: false, env: { NODE_EXTRA_CA_CERTS: s.caPath } })
+  try {
+    const scriptBefore = fs.readFileSync(s.script, 'utf8')
+    const io = fakeIo()
+    assert.equal(await runOnCli(['--yes', '--json'], onCtx(s, io, { core, mac })), 0, io.text())
+    const r = io.json()
+    assert.deepEqual(mac.mutating(), [], 'a running capture is not restarted by on (R8)')
+    assert.equal(core.state.puts.length, 0, 'the route is live: Clash is not reloaded for nothing')
+    assert.equal(fs.readFileSync(s.script, 'utf8'), scriptBefore, 'Script.js is not rewritten')
+    assert.equal(fs.existsSync(path.join(s.home, '.asight', 'legacy-manifest.json')), false, 'nothing was written by this on: nothing to put in the ledger')
+    assert.ok((r.unchanged || []).includes(s.script) && (r.unchanged || []).includes(s.plist('com.asight.mitm')), 'the receipt says what was already in place')
+    assert.ok(r.notes.some((n) => n.includes('旧命令装的,无备份')), 'and who wrote it')
+    // the second on: no plan, no question, no file
+    const mid = snapshot(s.home)
+    const again = fakeIo({ tty: true })
+    assert.equal(await runOnCli([], onCtx(s, again, { core, mac })), 0, again.text())
+    assert.deepEqual([again.asked, snapshot(s.home), mac.mutating()], [[], mid, []], 'on, on: nothing asked, nothing written, nothing run')
+  } finally { await core.close() }
+})
+
+test('V12 (on): a harness other than claude-code, --no-autostart and --no-unit are exit 2 with nothing touched; Windows has no old capture to turn on: 本平台未实现, exit 1; on as root is refused', async () => {
+  const s = freshMac(); const before = snapshot(s.home); const mac = fakeMac({ loaded: [], keychain: false })
+  for (const argv of [['codex'], ['claude-code', 'hermes'], ['--no-autostart'], ['--no-unit']]) {
+    const io = fakeIo()
+    assert.equal(await runOnCli(['--yes', ...argv], onCtx(s, io, { mac })), 2, argv.join(' '))
+  }
+  const names = fakeIo(); await runOnCli(['--yes', 'codex'], onCtx(s, names, { mac }))
+  assert.match(names.text(), /本平台只有 claude-code 的旧采集,没有按 harness 的开关/)
+  const win = fakeIo()
+  assert.equal(await runOnCli(['--yes'], { ...onCtx(s, win, { mac }), platform: 'win32' }), 1)
+  assert.match(win.text(), /本平台未实现/)
+  const root = fakeIo()
+  assert.equal(await runOnCli(['--yes'], onCtx(s, root, { mac, deps: { getuid: () => 0 } })), 1)
+  assert.match(root.text(), /root/)
+  assert.deepEqual([snapshot(s.home), mac.calls], [before, []])
+})
+
+test('V23: a core that does not take the route is exit 1 — the durable half is in (Script.js, the ledger: off can take it out), the receipt says why and how to apply it by hand; no Clash Verge on the machine is exit 1 with nothing written', async () => {
+  const s = freshMac(); const mac = fakeMac({ loaded: [], keychain: false })
+  const io = fakeIo()
+  assert.equal(await runOnCli(['--yes', '--json'], onCtx(s, io, { mac })), 1) // the core is a socket nobody listens on
+  const r = io.json()
+  assert.equal(r.ok, false); assert.ok(r.notes.some((p) => /NOT live now/.test(p) && /reactivate/.test(p)), r.notes.join(' | '))
+  assert.ok(fs.readFileSync(s.script, 'utf8').includes(BLOCK)); assert.equal(ledgerOf(s).entries.some((x) => x.kind === 'legacy-clash-block'), true, 'it is in the ledger: off takes it out')
+  const bare = macHome({ block: false, runtime: false, agents: [], steer: false, ca: false, verge: false }); const b = snapshot(bare.home)
+  const io2 = fakeIo()
+  assert.equal(await runOnCli(['--yes'], onCtx(bare, io2, { mac: fakeMac({ loaded: [], keychain: false }) })), 1)
+  assert.match(io2.text(), /Clash Verge/)
+  assert.deepEqual(snapshot(bare.home), b, 'no Verge: not even its directories were made')
+})
+
+test('R2: a backup that cannot be written stops the change — Script.js keeps its bytes, nothing is reloaded, no agent is installed, the failure is exit 1 with its reason and a backup-failed line in the old capture\'s log', async () => {
+  const s = freshMac(); const core = await fakeCore({ live: false }); const mac = fakeMac({ loaded: [], keychain: false })
+  try {
+    fs.mkdirSync(path.join(s.home, '.asight'), { recursive: true }); fs.writeFileSync(backupDir(s.home), 'a file where the backup directory should be')
+    const original = fs.readFileSync(s.script, 'utf8')
+    const io = fakeIo()
+    assert.equal(await runOnCli(['--yes', '--json'], onCtx(s, io, { core, mac })), 1, io.text())
+    const r = io.json()
+    assert.equal(r.ok, false); assert.ok(r.notes.some((n) => /backup/.test(n) && /was not changed/.test(n)), r.notes.join(' | '))
+    assert.equal(fs.readFileSync(s.script, 'utf8'), original); assert.equal(core.state.puts.length, 0)
+    assert.deepEqual([fs.existsSync(s.plist('com.asight.mitm')), mac.mutating()], [false, []])
+    const ev = readEvents(s.home).find((e) => e.code === 'backup-failed')
+    assert.ok(ev && ev.event === 'failure' && ev.where === 'install', 'the failure is in the log'); assert.deepEqual(checkRecord(ev), [])
+  } finally { await core.close() }
+})
+
+test('R9 / V23: an old capture that is half there — the block is in Script.js but the core has no route, the agent plists are there but not loaded — is completed: the core gets the route, the agents are loaded, no file is rewritten, and the receipt says it is 「旧命令装的,无备份」', async () => {
+  const s = macHome({ userMain: USER_MAIN, steer: false, runtime: true }); const core = await fakeCore({ live: false }); const mac = fakeMac({ loaded: [], keychain: false })
+  try {
+    const before = snapshot(s.home)
+    const io = fakeIo()
+    assert.equal(await runOnCli(['--yes', '--json'], onCtx(s, io, { core, mac })), 0, io.text())
+    const r = io.json()
+    assert.equal(core.state.live, true, 'the route is in the core now')
+    assert.deepEqual(['com.asight.mitm', 'com.asight.env'].map((l) => mac.state.loaded.has(l)), [true, true])
+    assert.equal(mac.has(/launchctl unload/), false, 'an agent that is there is loaded, never unloaded and loaded again')
+    for (const f of [s.plist('com.asight.mitm'), s.plist('com.asight.env')]) assert.ok(!changedFiles(before, snapshot(s.home)).includes(path.relative(s.home, f)), `${f} was not rewritten`)
+    assert.ok(r.changed.some((c) => c.path === s.plist('com.asight.mitm') && /launchctl load/.test(c.change)))
+    assert.ok(r.notes.some((n) => n.includes('旧命令装的,无备份')))
+    assert.equal(fs.existsSync(backupDir(s.home)) && fs.readdirSync(backupDir(s.home)).length > 0, false, 'nothing of the user\'s was changed, so nothing was backed up')
+  } finally { await core.close() }
+})
+
+test('R6: what the operator confirmed is not asked again — after an on --yes, Verge regenerates Script.js without the block, and the next on (no terminal, no --yes) writes the block back without a question; a file that was never confirmed still stops at the plan', async () => {
+  const s = freshMac(); const core = await fakeCore({ live: false }); const mac = fakeMac({ loaded: [], keychain: false })
+  try {
+    assert.equal(await runOnCli(['--yes'], onCtx(s, fakeIo(), { core, mac })), 0)
+    fs.writeFileSync(s.script, USER_MAIN) // a regen of the profile: the block is gone
+    const io = fakeIo()
+    assert.equal(await runOnCli(['--json'], onCtx(s, io, { core, mac })), 0, io.text())
+    assert.ok(fs.readFileSync(s.script, 'utf8').includes(BLOCK))
+    assert.equal(ledgerOf(s).entries.filter((x) => x.kind === 'legacy-clash-block' && x.path === s.script).length, 2, 'each write has its own entry and its own backup')
+    fs.writeFileSync(s.merge, 'prepend-proxies:\n  - name: atrace-mitm\n    type: http\n    server: 127.0.0.1\n    port: 9898\n') // a file `on` has not been confirmed for
+    const plan = fakeIo()
+    assert.equal(await runOnCli([], onCtx(s, plan, { core, mac })), 2)
+    assert.ok(plan.text().includes('Merge.yaml'))
+    // off settles both writes: Script.js is back to the user's own bytes, so both backups go and the ledger with them
+    fs.rmSync(s.merge)
+    assert.equal(await runOffCli(['--json'], offCtx(s, fakeIo(), { core, mac, deps: { exec: mac.run } })), 0)
+    assert.equal(fs.readFileSync(s.script, 'utf8'), USER_MAIN)
+    assert.deepEqual([fs.existsSync(legacyManifestPath(s.home)), fs.existsSync(backupDir(s.home)) ? fs.readdirSync(backupDir(s.home)) : []], [false, []])
+  } finally { await core.close() }
+})

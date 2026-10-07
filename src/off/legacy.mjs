@@ -277,7 +277,8 @@ function legacyEventsTail(home, fs) {
 const shaOfFile = (fs, file) => { try { return sha256(readOrNull(fs, file)) } catch { return null } }
 
 // ledger entries of one kind (and role) for a path
-const ledgerEntry = (ledger, kind, file) => ((ledger && ledger.manifest && ledger.manifest.entries) || []).find((e) => e && e.kind === kind && e.path === file) || null
+const ledgerEntries = (ledger, kind, file) => ((ledger && ledger.manifest && ledger.manifest.entries) || []).filter((e) => e && e.kind === kind && e.path === file)
+const ledgerEntry = (ledger, kind, file) => ledgerEntries(ledger, kind, file)[0] || null
 
 function realClock() { return { ms: Date.now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } }
 
@@ -351,7 +352,9 @@ export async function undoLegacy({ home = nodeOs.homedir(), platform = process.p
         const before = { script: shaOfFile(fs, p.scriptPath), merge: shaOfFile(fs, p.mergePath) }
         const r = await clash.off()
         const after = { script: shaOfFile(fs, p.scriptPath), merge: shaOfFile(fs, p.mergePath) }
-        const entryS = ledgerEntry(ledger, 'legacy-clash-block', p.scriptPath), entryM = ledgerEntry(ledger, 'legacy-clash-block', p.mergePath)
+        // a file `on` changed twice (Verge regenerated Script.js between two `on`s) has an entry for each write, each with its own backup: all are settled, the newest names the receipt's row
+        const entriesS = ledgerEntries(ledger, 'legacy-clash-block', p.scriptPath), entriesM = ledgerEntries(ledger, 'legacy-clash-block', p.mergePath)
+        const entryS = entriesS[entriesS.length - 1] || null, entryM = entriesM[entriesM.length - 1] || null
         // "verified" is the core's own answer (D29 / 1.6 §6): a proxy list that no longer names the route. No Verge runtime to ask at all is nothing to verify.
         const noCore = !cb.verge || (!fs.existsSync(p.runtimePath) && !(mihomo.sock || env.ASIGHT_MIHOMO_SOCK))
         const live = r.status ? r.status.live : null
@@ -374,8 +377,7 @@ export async function undoLegacy({ home = nodeOs.homedir(), platform = process.p
         if (r.mergeCleanup && r.mergeCleanup.ok === false) fail(CODE_NOT_UNDONE, `${r.mergeCleanup.path} could not be cleaned: ${r.mergeCleanup.error}`, { file: r.mergeCleanup.path })
         // the ledger: a backup goes when the file is back to what it was; one the file no longer matches is kept and listed (R2)
         if (verified) {
-          for (const [entry, file, sha] of [[entryS, p.scriptPath, after.script], [entryM, p.mergePath, after.merge]]) {
-            if (!entry) continue
+          for (const [entry, file, sha] of [...entriesS.map((e) => [e, p.scriptPath, after.script]), ...entriesM.map((e) => [e, p.mergePath, after.merge])]) {
             if (entry.backup && sha === entry.pre_sha256) { try { if (dropBackup(entry.backup, fs)) { const c = res.changed.find((x) => x.path === file); if (c) c.backup_dropped = true } } catch (e) { res.notes.push(`${entry.backup} could not be removed (${legacyWhy(e)})`) } } else if (entry.backup) {
               res.kept_backups.push({ path: file, backup: entry.backup, reason: sha === entry.pre_sha256 ? 'kept' : 'the file is not byte for byte what it was before asight changed it (asight rewrote the stock no-op main(), or you edited it since): only asight\'s block was taken out', at: nowFn().toISOString() })
               const c = res.changed.find((x) => x.path === file); if (c) c.result = 'reverted-not-identical'
