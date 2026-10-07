@@ -5,7 +5,8 @@
 // start time (or, when the start time cannot be read, another image path) is an exit followed by an exec — Windows reuses pids quickly.
 //
 // ProcFacts here = the Linux contract (core/redirector.mjs) as far as Windows has the fields: { os:'win32', pid, ppid, name, exe, argv,
-// cmdline, env:null (envError 'env-unreadable': another process's environment is never read, 4.8 §10.1), cwd:null, startedAt (ms since the
+// cmdline, env:null (envError 'env-unreadable': another process's environment is never read, 4.8 §10.1) with envRead:false — the OS's rule,
+// not a failure to read, so the tracker judges by the entry files instead of vetoing (4.8 §5.4, Task 8(v)) —, cwd:null, startedAt (ms since the
 // epoch, or null), startTicks (startedAt as a string: the identity a per-pid marker would carry; null with it), sessionId, integrity,
 // tokenDenied, elevated, elevationInferred, cmdlineState, source:'exec'|'scan'|'update' }. `cmdline` is the raw command line (the one lossless form on
 // Windows; `argv` is it split like CommandLineToArgvW). It may hold secrets: callers keep it in memory and never write it to a record. `cmdline: null` is
@@ -88,7 +89,7 @@ function factsOf(row, source) {
   const { elevated, inferred } = elevationOf(row)
   const facts = {
     os: 'win32', pid: row.pid, ppid: row.ppid ?? null, name: row.name ?? null, exe: row.exe, argv: splitCommandLine(row.cmdline), cmdline: row.cmdline ?? null,
-    env: null, cwd: null, startedAt: row.startedAt ?? null, startTicks: row.startedAt != null ? String(row.startedAt) : null,
+    env: null, envRead: false, cwd: null, startedAt: row.startedAt ?? null, startTicks: row.startedAt != null ? String(row.startedAt) : null,
     sessionId: row.sessionId ?? null, integrity: row.integrity ?? null, tokenDenied: !!row.tokenDenied, elevated, elevationInferred: inferred, source, cmdlineState: cmdStateOf(row),
   }
   Object.defineProperty(facts, 'envError', { enumerable: false, value: 'env-unreadable' })

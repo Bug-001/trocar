@@ -78,7 +78,12 @@ const statKeyOf = (f) => { try { const st = fs.statSync(f); return `${st.ino}:${
 // readFile: how config files are read; an error other than "absent" is kept on the row (readErrors) for the daemon.
 // recheck() (the daemon's 5 s check, D-26) judges again every trusted agent whose trust file changed since it was
 // judged; the row then carries cause 'entry-changed'. It only ever takes trust away: an untrusted row is never rechecked.
-export function createTracker({ redirector, registry, trust, home = os.homedir(), readFile = (f) => fs.readFileSync(f, 'utf8'), mtimeOf = mtimeOfFile, listDir = listDirNames, statKey = statKeyOf, now = () => Date.now(), onVerdict = () => {}, onError = () => {}, installedAt = () => null, onGone = () => {}, onOff = () => {}, onUnmatched = () => {}, markerDir = null, caPem = null, watchDir = watchDirNames, markerGraceMs = 10_000, setTimer = setTimeout, runtimeVersion = nodeReleaseVersion, collectorDir = null, alive = pidAlive }) {
+export function createTracker({ redirector, registry, trust, home = os.homedir(), readFile = (f) => fs.readFileSync(f, 'utf8'), mtimeOf = mtimeOfFile, listDir = listDirNames, statKey = statKeyOf, now = () => Date.now(), onVerdict = () => {}, onError = () => {}, installedAt = () => null, onGone = () => {}, onOff = () => {}, onUnmatched = () => {}, markerDir = null, caPem = null, watchDir = watchDirNames, markerGraceMs = 10_000, setTimer = setTimeout, runtimeVersion = nodeReleaseVersion, collectorDir = null, alive = pidAlive,
+  // osLayers[os](descriptor) → the layer function to judge that OS's processes by (4.8 §5.4): the daemon hands the win32
+  // one, which prefers the descriptor's `win32.layers` (Hermes keeps its .env under %LOCALAPPDATA%, not ~/.hermes); without
+  // an entry for the OS the descriptor's own `layers` run. markerToleranceMs (0 = byte-exact, the Linux /proc rule) is the
+  // fixed tolerance the Windows plugin markers are compared with (confirm.mjs MARKER_TOLERANCE_MS).
+  osLayers = null, markerToleranceMs = 0 }) {
   const table = new Map() // pid → AgentRow (agents only)
   const ambiguous = new Map() // pid → {pid, exe, candidates}
   const factsOf = new Map() // pid → the ProcFacts it was judged on (re-judged when its marker appears or its grace ends)
@@ -119,7 +124,10 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     ambiguous.delete(facts.pid)
     if (!isOn(m.agent)) return park(facts, m.agent, prev)
     const d = m.descriptor
-    const envUnreadable = facts.env === null // the launch environment could not be read (D-20): never judged trusted on a guess
+    // the launch environment could not be read (D-20): never judged trusted on a guess. `envRead: false` (an OS whose
+    // procinfo never reads another process's environment, 4.8 §10.1) is the OS's rule, not a failure: the verdict then
+    // comes from the entry files, installed_at, the plugin marker and the like (4.8 §5.4).
+    const envUnreadable = facts.env === null && facts.envRead !== false
     const environ = facts.env || new Map()
     const row = { pid: facts.pid, ppid: facts.ppid ?? null, agent: m.agent, exe: facts.exe ?? null, argv0: (facts.argv || [])[0] ?? null, source: facts.source, since: prev ? prev.since : now(), judged: ++judgedSeq, readErrors: [], parseErrors: [] }
     const readText = (f) => { try { return readFile(f) } catch (e) { if (!ABSENT.has(e && e.code)) row.readErrors.push(`${f}: ${(e && e.code) || e}`); return null } }
@@ -129,14 +137,26 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     const readTextOrError = (f) => { try { return { text: readFile(f), error: null } } catch (e) { return NOT_THERE.has(e && e.code) ? { text: null, error: null } : { text: null, error: { code: (e && e.code) || null, message: String((e && e.message) || e) } } } }
     const ctx = { os: facts.os, environ, env: environ, home: environ.get('HOME') || home, cwd: facts.cwd || '/', argv: facts.argv || [], startedAt: facts.startedAt ?? null, readText, readTextOrError, mtimeOf, listDir, unparsable }
     factsOf.set(facts.pid, facts)
-    const layers = call(d.layers, ctx, row).filter(Boolean)
+    const layerFn = osLayers && typeof osLayers[facts.os] === 'function' ? osLayers[facts.os](d) : d.layers
+    const layers = call(layerFn, ctx, row).filter(Boolean)
     for (const l of layers) if (l.live === false) { const t = installedAt(l); if (t != null) l.since = t } // review 2 #5
-    const marker = usesMarker(d) && markerDir && caPem ? markerLayer({ dir: markerDir, pid: facts.pid, startTicks: facts.startTicks ?? null, caPem, readText }) : null
+    const marker = usesMarker(d) && markerDir && caPem ? markerLayer({ dir: markerDir, pid: facts.pid, startTicks: facts.startTicks ?? null, caPem, readText, toleranceMs: markerToleranceMs }) : null
     if (marker) layers.push(marker)
     // what a harness's refine may look at besides argv and env: the exe's runtime release (lazily), its own files
     // (through the same reader, so an unreadable one is reported) and asight's collector dir (a launch shim lives there)
     let t = envUnreadable ? { trusted: false, reason: 'environ-unreadable', var: null, via: facts.envError ?? null } : trust.check(d.trust, { environ, layers, cwd: ctx.cwd, startedAt: ctx.startedAt, argv: ctx.argv, extra: { runtimeVersion: () => runtimeVersion(facts.exe), readText, collectorDir, exe: facts.exe ?? null } })
     if (!t.trusted && t.reason === 'var-missing' && registry.isLongLived(d, facts)) t = { ...t, reason: 'env-frozen' }
+    // The launch environment is never read on this OS (envRead: false, 4.8 §5.4's decision): a fill-mode layer only fills
+    // names the process's own environment lacks, and whether it lacks them cannot be seen, so a trust that needs a fill
+    // layer to be in effect is a guess — untrusted. Every Windows trust entry is an override/block write (the agent applies
+    // the file over its launch env), so this costs nothing today; it is the fail-safe answer where the cost is capture, never
+    // a broken connection.
+    if (facts.env === null && facts.envRead === false && t.trusted) {
+      const solid = layers.filter((l) => !l || l.mode !== 'fill')
+      if (solid.length !== layers.length && !trust.check(d.trust, { environ, layers: solid, cwd: ctx.cwd, startedAt: ctx.startedAt, argv: ctx.argv, extra: { runtimeVersion: () => runtimeVersion(facts.exe), readText, collectorDir, exe: facts.exe ?? null } }).trusted) {
+        t = { trusted: false, reason: 'env-unreadable-fill', var: null, via: null, file: null }
+      }
+    }
     // a plugin reports after exec: until its marker appears, at most markerGraceMs from start, the process is pending
     const t0 = facts.startedAt ?? row.since
     if (!t.trusted && t.reason === 'no-marker' && !marker && now() < t0 + markerGraceMs) {
@@ -238,7 +258,8 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
       const onE = (f) => { onExec(f).catch((e) => onError(e, { pid: f.pid, phase: 'judge' })) }
       const onX = (x) => { onExit(x).catch((e) => onError(e, { pid: x.pid, phase: 'exit' })) }
       redirector.on('exec', onE); redirector.on('exit', onX)
-      subs.push(() => { redirector.off('exec', onE); redirector.off('exit', onX) })
+      redirector.on('facts-update', onE) // a form told by its command line (4.8 §1): the same pid is judged again, watch pushed again
+      subs.push(() => { redirector.off('exec', onE); redirector.off('exit', onX); redirector.off('facts-update', onE) })
       if (markerDir) {
         try {
           subs.push(watchDir(markerDir, (name) => { // a marker appeared (or changed): re-judge that process now

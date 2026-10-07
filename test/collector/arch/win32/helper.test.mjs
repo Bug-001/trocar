@@ -651,10 +651,11 @@ test('W2 a new pid is an exec, a vanished one an exit; the first snapshot is the
   assert.deepEqual(ev[0][1], { pid: 10, startedAt: 1010 })
   const facts = ev[1][1]
   assert.deepEqual({ ...facts }, {
-    os: 'win32', pid: 12, ppid: 1, name: 'p12.exe', exe: 'C:\\apps\\p12.exe', argv: ['C:\\apps\\p12.exe', '--x'], cmdline: '"C:\\apps\\p12.exe" --x', env: null, cwd: null,
+    os: 'win32', pid: 12, ppid: 1, name: 'p12.exe', exe: 'C:\\apps\\p12.exe', argv: ['C:\\apps\\p12.exe', '--x'], cmdline: '"C:\\apps\\p12.exe" --x', env: null, envRead: false, cwd: null,
     startedAt: 1012, startTicks: '1012', sessionId: 2, integrity: 'medium', tokenDenied: false, elevated: false, elevationInferred: false, source: 'exec', cmdlineState: 'ok',
   })
   assert.equal(facts.envError, 'env-unreadable', 'another process\'s environment is never read on Windows (4.8 §10.1): null with the reason, not an empty one')
+  assert.equal(facts.envRead, false, 'and it says so (envRead: false): the tracker treats env null as the OS\'s rule, not a failure to read (4.8 §5.4, Task 8(v))')
   await w.poll()
   assert.equal(ev.length, 2, 'an unchanged snapshot is silent')
 })
