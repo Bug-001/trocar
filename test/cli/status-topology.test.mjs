@@ -120,6 +120,24 @@ test('a failure to build the topology is said in the text and in --json (`topolo
   assert.deepEqual(doc.harnesses.map((h) => h.captured), (await status(s, ['--json'])).json().harnesses.map((h) => h.captured))
 })
 
+test('V42: one hop that cannot be read changes no exit code and no verdict — it is said in the line (「不知道 · owner-unreadable」, then 「?」) and in --json, and `captured` stays what the rest of the facts say', async () => {
+  const s = await installedViaCli(ENGINE)
+  const before = await status(s)
+  assert.equal(before.exit, 0)
+  // claude-code's own proxy is on a port whose owner `ss` cannot name (another user's listener)
+  const file = path.join(s.home, '.claude', 'settings.json'), doc = JSON.parse(fs.readFileSync(file, 'utf8'))
+  fs.writeFileSync(file, JSON.stringify({ ...doc, env: { ...doc.env, HTTPS_PROXY: 'http://127.0.0.1:7891' } }, null, 2))
+  const nobody = (f, args, o) => (f === 'ss' ? { status: 0, stdout: 'LISTEN 0 4096 127.0.0.1:7891 0.0.0.0:*', stderr: '' } : s.sys.exec.run(f, args, o))
+  const r = await status(s, [], { exec: nobody })
+  assert.match(r.text, /^ {2}claude-code\s+claude-code → \[eBPF\] asight 引擎 :47123 → \[CONNECT 原样转\] 127\.0\.0\.1:7891\(不知道 · owner-unreadable\) → \?\s+在路径上 · 是$/m)
+  assert.equal(r.exit, before.exit, 'a hop that cannot be read is not a verdict that cannot be given: only `captured` null exits 3 (1.6 §2)')
+  const j = (await status(s, ['--json'], { exec: nobody })).json()
+  assert.deepEqual([j.topology['claude-code'].captured, j.topology['claude-code'].on_path], [true, true])
+  assert.equal(j.topology['claude-code'].nodes.find((n) => n.kind === 'proxy').unknown.reason, 'owner-unreadable')
+  assert.equal(j.harnesses.find((h) => h.harness === 'claude-code').captured, true, 'and the table says the same')
+  assert.equal((await status(s, ['--json'], { exec: nobody })).exit, before.exit)
+})
+
 test('status writes ~/.asight/netenv.json once per run, with the probe and the topology in the same file (the board never sees one without the other)', async () => {
   const s = await installedViaCli(ENGINE)
   const renamed = []
