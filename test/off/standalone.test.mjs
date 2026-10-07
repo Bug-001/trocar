@@ -93,6 +93,24 @@ test('V2: the text a person reads is the same too, and a per-harness off leaves 
   assert.deepEqual(readManifest(b.dir).entries.map((e) => e.harness).filter((h) => h).filter((h, i, all) => all.indexOf(h) === i), ['codex'], 'only claude-code came out')
 })
 
+test('V2: with the install manifest lost the copy undoes by asight\'s own marks, after a yes, and prints what `asight off --yes` prints', async () => {
+  const a = await brokenAsight(), b = await brokenAsight()
+  const before = preEntries(b)
+  for (const s of [a, b]) fs.rmSync(manifestPath(s.dir))
+  const io = fakeIo()
+  const viaCli = await runOffCli(['--yes', '--json'], cliCtx(a, io))
+  const r = await runWritten(b, ['--yes', '--json'])
+  assert.equal(r.status, viaCli, r.stderr)
+  assert.equal(viaCli, 0, io.text())
+  const out = JSON.parse(r.stdout)
+  assert.deepEqual(normalize(out, b.home), normalize(io.json(), a.home))
+  assert.equal(out.undone_by_marker, true)
+  for (const e of before) assert.ok(!fs.readFileSync(e.path, 'utf8').includes(path.join(b.home, '.asight')), `${e.path} no longer points into ~/.asight (by marks the file is not promised byte for byte: nothing says what was there before)`)
+  const nobody = await runWritten(await brokenAsight().then((s) => { fs.rmSync(manifestPath(s.dir)); return s }), ['--json'])
+  assert.equal(nobody.status, 1, 'not in a terminal and no --yes: it lists, and stops')
+  assert.equal(JSON.parse(nobody.stdout).pending.length >= 2, true)
+})
+
 // a control socket in a short path (a unix socket's path is at most 103 bytes on macOS), answering from a fake daemon
 async function serveControl(daemon) {
   const run = tmpDir('as-')
