@@ -11,12 +11,15 @@ import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
 import { formatOnReceipt, formatPlan } from './receipt.mjs'
 import { probeNetenv } from '../netenv/index.mjs'
+import { renderCompact } from '../netenv/topology-text.mjs'
 import { hasNewCollector } from '../off/legacy.mjs'
 import { legacyOnCli } from '../capture/legacy-on.mjs'
+import { prepareAdoption, editedFields, recordAdoption } from './on-adopt.mjs'
 
 const USAGE = 'usage: asight on [harness…] [--dry-run] [--yes] [--no-autostart | --no-unit] [--json]'
 const FLAGS = new Set(['--dry-run', '--yes', '--no-autostart', '--no-unit', '--json'])
 const PROXY_HINT = 'D39 之前的 `asight on --proxy` 现在是 `asight monitor on --no-autostart`(旧 CC-CLI steer 仍在 monitor 下;新的 on 不做它,它做不到 off 保证,1.6 §4)'
+const chainText = (t) => renderCompact(t).join(' ; ')
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 
 /** → the exit code. `argv` is what follows `on`. `io` = { out, err, stdin, stdout, stderr } (src/off/io.mjs makeIo). */
@@ -55,13 +58,25 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     // the machine's VPN / proxy software (§6): looked at once, named in the plan and in the receipt; asight changes none of it. The cache ~/.asight/netenv.json is `status`'s and `doctor`'s to write, not `on`'s:
     // the receipt lists exactly the files `on` wrote (V3), and a second `on` writes nothing (R9)
     const netenv = await probeNetenv({ home, platform, env, deps })
-    const { receipt, exit } = await install.turnOn({
+    const adoption = await prepareAdoption({ home, env, platform, deps, parts, netenv, now: deps.now ? () => deps.now().getTime() : Date.now }) // §9.5: the proxy each agent already uses, and the chain once asight is on
+    const routing = deps.routing || null
+    let { receipt, exit } = await install.turnOn({
       home, env, ids: named.ids, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, osRootsFile: parts.osRootsFile || null,
       roots: deps.roots || null, unit, autostart, freePort: deps.freePort, dryRun: flags.has('--dry-run'), confirm,
-      onPlan: (plan) => say(formatPlan(plan, { home, autostart, netenv })),
+      networkEdited: async (targets) => editedFields({ adoption, routing, targets, home, env, fs: deps.fs }),
+      onPlan: (plan) => say(formatPlan({ ...plan, adopted: adoption && !adoption.error ? Object.entries(adoption.chains(plan.targets)).filter(([h]) => plan.targets.includes(h)).map(([h, t]) => ({ harness: h, chain: chainText(t) })) : [] }, { home, autostart, netenv })),
       request: deps.request, now: deps.now, getuid: deps.getuid, helperState, linger: deps.linger || parts.linger || null, lingerRead: deps.lingerRead || (deps.linger ? null : parts.lingerRead || null), sleep: deps.sleep, user: deps.user, fs: deps.fs,
     })
     receipt.netenv = netenv.error ? { error: netenv.error } : netenv.result
+    if (adoption && adoption.error) receipt.notes.push(adoption.error)
+    else if (adoption && receipt.harnesses && receipt.harnesses.length && receipt.ok !== false && !receipt.dry_run && !receipt.planned && !receipt.declined) {
+      const rec = await recordAdoption({ adoption, routing, targets: receipt.harnesses, home, env, now: deps.now ? () => deps.now().getTime() : Date.now, netenv, fs: deps.fs })
+      receipt.adopted = rec.adopted
+      if (rec.wrote) receipt.created.push(rec.wrote)
+      for (const h of rec.failed) receipt.ok = false
+      receipt.notes.push(...rec.notes)
+      if (rec.failed.length) exit = EXIT.incomplete
+    } else if (adoption && receipt.dry_run) receipt.adopted = Object.fromEntries(Object.entries(adoption.chains(receipt.harnesses || [])).filter(([h]) => (receipt.harnesses || []).includes(h)).map(([h, t]) => [h, { chain: chainText(t), dry_run: true }]))
     if (json) io.out(JSON.stringify(receipt, null, 2))
     else if (receipt.planned) for (const n of receipt.notes) io.err(n) // the plan was printed; what is left to say is why nothing was done (R6)
     else io.out(formatOnReceipt(receipt, { tense: receipt.dry_run ? 'future' : 'past', home }))
