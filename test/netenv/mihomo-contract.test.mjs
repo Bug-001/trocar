@@ -7,12 +7,13 @@
 // tun, no dns section, no geodata download (the geox URLs point at the discard port), a clean environment (no proxy variables: the machine running the test has
 // NO_PROXY set), and the process killed in t.after. Requests go through Node's `net` as an explicit proxy client, never through `curl`.
 //
-// Until Task 3 (the real ingress) and Task 5 (`buildBlock` / `buildForwarderConfig`) land, the "engine" is test/netenv/fixtures/engine-fixture.mjs
-// and the config is test/netenv/fixtures/inline-block.mjs; each swap is one commit in its task. Shapes (4.8 §3.3):
+// The "engine" is the REAL engine and proxy ingress (src/collector/core/engine; test/netenv/fixtures/real-engine.mjs puts a recording tap in
+// front of it): Task 3 swapped the stand-in (engine-fixture.mjs, which the Windows spike still ships) for it. Until Task 5 lands
+// `buildBlock` / `buildForwarderConfig`, the config is test/netenv/fixtures/inline-block.mjs; that swap is one commit in Task 5. Shapes (4.8 §3.3):
 //   1. Verge-like: the mixed port is both what agents reach and the re-entry point; the agent stand-in has its own `http` listener (IN-NAME).
 //   2. own-forwarder-like: a form listener with `rule: in-<g>` sub-rules; its own port is the re-entry point.
 // The probe bytes mihomo really sent are compared with test/netenv/fixtures/mihomo-probe.bytes (the re-entry port normalised to 18000);
-// ASIGHT_RECORD_PROBE=1 rewrites that file from this run. Task 3's W13 replays it into the real ingress.
+// ASIGHT_RECORD_PROBE=1 rewrites that file from this run. W13 (test/collector/core/ingress.test.mjs) replays it into the real ingress.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -22,7 +23,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { startEngineFixture } from './fixtures/engine-fixture.mjs'
+import { startRealEngine } from './fixtures/real-engine.mjs'
 import { vergeLikeConfig, forwarderLikeConfig, G, TOKEN } from './fixtures/inline-block.mjs'
 
 const BIN = process.env.ASIGHT_MIHOMO_BIN
@@ -98,7 +99,7 @@ async function shape(t, { name, make, unifiedDelay = true, agentAuth }) {
   const agentPort = name === 'verge-like' ? ports.agent : ports.form
   const origin = http.createServer((q, r) => r.end('origin-ok')).listen(ports.origin, '127.0.0.1')
   t.after(() => origin.close())
-  let engine = await startEngineFixture({ port: ports.engine, token: TOKEN, reenterPort: reenter })
+  let engine = await startRealEngine({ port: ports.engine, token: TOKEN, reenterPort: reenter })
   t.after(() => engine.close())
   const built = make({ ports, secret, unifiedDelay })
   const m = await startMihomo(t, { ...built, secret, controller: ports.controller })
@@ -108,7 +109,7 @@ async function shape(t, { name, make, unifiedDelay = true, agentAuth }) {
   const alive = async (n) => (await m.ctl('GET', `/proxies/${n}`)).json().alive
   const refresh = () => m.ctl('GET', `/group/asight-fb-${G}/delay?url=${encodeURIComponent(fbUrl)}&timeout=2000`)
   const agentConnects = () => engine.events.filter((e) => e.kind === 'agent-connect').length
-  return { ports, m, agent, nowOf, alive, refresh, agentConnects, reenter, getEngine: () => engine, restartEngine: async () => { engine = await startEngineFixture({ port: ports.engine, token: TOKEN, reenterPort: reenter }); t.after(() => engine.close()); return engine }, origin: ports.origin }
+  return { ports, m, agent, nowOf, alive, refresh, agentConnects, reenter, getEngine: () => engine, restartEngine: async () => { engine = await startRealEngine({ port: ports.engine, token: TOKEN, reenterPort: reenter }); t.after(() => engine.close()); return engine }, origin: ports.origin }
 }
 
 async function runContract(t, opts) {
@@ -147,6 +148,9 @@ async function contractSteps(s, opts) {
     assert.equal(canonical(raw), canonical(fs.readFileSync(PROBE_FILE, 'latin1')), 'mihomo sends the committed probe bytes (re-entry port normalised, header order aside)')
   }
   assert.equal(s.getEngine().events.filter((e) => e.kind === 'agent-dial-failed' || e.kind === 'unknown' || e.kind === 'auth-failed').length, 0)
+  // the real ingress's own view: it answered the probes itself (no flow, no upstream), and wrote no failure for any of mihomo's connections
+  assert.deepEqual(s.getEngine().failures, [], 'the ingress recorded no failure for what the real mihomo sent')
+  assert.ok(s.getEngine().engine.stats().ingress.health >= 2, 'the probes were answered as probes')
 
   // provider reads (4.8 §4.1): the LIST carries ruleCount; the single-provider GET does not exist (405)
   const list = (await m.ctl('GET', '/providers/rules')).json().providers
