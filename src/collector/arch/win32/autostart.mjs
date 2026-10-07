@@ -213,3 +213,94 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
     remove: ({ prior = null } = {}) => undo(['/Delete', '/TN', TASK_NAME, '/F'], 'removed', prior),
   }
 }
+
+
+// ---- the supervisor parent (4.8 §7) -------------------------------------------------------------------------------------------------------------------
+
+export const SUPERVISOR_LOCK = 'supervisor.lock'
+export const SUPERVISE_CAP_MS = 60_000 // the longest wait between two starts of the daemon (4.8 §7: 1, 2, 4 … 60 s)
+export const SUPERVISE_STABLE_MS = 60_000 // a daemon that ran this long before it died starts the backoff over: it was not crash-looping (4.8 §7, Task 9(a))
+/** The wait before the restart after `attempt` failures in a row (0 = the first): 1, 2, 4, 8, 16, 32, then 60 s. */
+export const supervisorBackoff = (attempt) => Math.min(SUPERVISE_CAP_MS, 1000 * 2 ** attempt)
+
+const realSleep = (ms, { signal } = {}) => new Promise((resolve) => {
+  if (signal && signal.aborted) return resolve()
+  const t = setTimeout(done, ms)
+  function done() { clearTimeout(t); if (signal) signal.removeEventListener('abort', done); resolve() }
+  if (signal) signal.addEventListener('abort', done, { once: true })
+})
+
+/**
+ * The supervisor parent (4.8 §7): `asight daemon --supervise` runs the real daemon, `node <asight> daemon`, as its child and starts it again with the backoff above ONLY when it exits with a code other than 0 or is killed.
+ * A daemon that exits 0 was asked to stop (`off` once it drained, `uninstall`, `off --now`): the parent exits too, so that after `off` no asight process is left and `off` is not undone by its own parent. The task that starts this
+ * parent does not restart a dead daemon (the T0 measurement), so this is where the restarting is. It writes `supervisor.lock` (`{ pid, startedAt }`: what `off` checks before it stops this process first, §4.2) and holds nothing else.
+ *   command  { node, args }: the child, which MUST NOT carry `--supervise` (a child that did would be a supervisor of its own)
+ *   dir      the collector directory (the lock goes there)
+ *   spawn · now · sleep(ms, { signal }) · fs · pid · startedAt · log(line)   what the world gives; a test passes fakes. `startedAt` defaults to this process's start (now minus its uptime).
+ * → { done: Promise<exit code of the supervisor: 0>, stop(): Promise (asked to stop: the child is ended, nothing restarts, the lock goes), lockFile }
+ */
+export function superviseChild({ spawn = nodeSpawn, command, dir, now = Date.now, sleep = realSleep, fs = nodeFs, pid = process.pid, startedAt = Math.round(Date.now() - process.uptime() * 1000), log = () => {} } = {}) {
+  if (!command || typeof command.node !== 'string' || !Array.isArray(command.args)) throw new TypeError('superviseChild needs command: { node, args }')
+  if (command.args.includes('--supervise')) throw new TypeError('the supervised command must not carry --supervise: it would start a supervisor of its own')
+  const lockFile = path.join(dir, SUPERVISOR_LOCK)
+  try {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+    fs.writeFileSync(lockFile, `${JSON.stringify({ pid, startedAt })}\n`, { mode: 0o600 })
+  } catch (e) { log(`${SUPERVISOR_LOCK} could not be written (${(e && e.code) || (e && e.message) || e}); the daemon is supervised all the same, but \`asight off\` cannot find this process by it`) }
+  const removeLock = () => { // only our own: a newer supervisor's lock is not ours to delete
+    try { if (JSON.parse(fs.readFileSync(lockFile, 'utf8')).pid === pid) fs.rmSync(lockFile, { force: true }) } catch { /* no lock, or not readable: nothing of ours */ }
+  }
+  const abort = new AbortController()
+  let child = null
+  let stopping = false
+
+  /** One run of the daemon → { code, signal } when it ended, { error } when it could not be started. */
+  const runOnce = () => new Promise((resolve) => {
+    let c
+    try { c = spawn(command.node, command.args, { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true }) } catch (e) { return resolve({ error: e }) }
+    child = c
+    c.once('exit', (code, signal) => resolve({ code, signal }))
+    // 'error' before any pid is a spawn that failed (no exit follows). With a pid it is a kill or a message that failed while the process lives: its exit is still to come, and starting a second daemon now would be wrong
+    c.on('error', (e) => { if (c.pid === undefined) resolve({ error: e }); else log(`the daemon (pid ${c.pid}): ${(e && e.message) || e}`) })
+  })
+
+  const done = (async () => {
+    let failures = 0
+    try {
+      for (;;) {
+        const began = now()
+        const r = await runOnce()
+        child = null
+        if (stopping) return 0
+        if (!r.error && r.code === 0 && !r.signal) return 0 // asked to stop
+        if (now() - began >= SUPERVISE_STABLE_MS) failures = 0
+        const wait = supervisorBackoff(failures++)
+        const what = r.error ? `could not be started (${(r.error && r.error.code) || ''} ${(r.error && r.error.message) || r.error})`.replace(/\s+/g, ' ') : r.signal ? `was killed (${r.signal})` : `exited with code ${r.code}`
+        log(`the daemon ${what}; restarting in ${wait / 1000} s`)
+        await sleep(wait, { signal: abort.signal })
+        if (stopping) return 0
+      }
+    } finally { removeLock() }
+  })()
+
+  async function stop() {
+    stopping = true
+    abort.abort()
+    if (child && child.exitCode == null && child.signalCode == null) { try { child.kill() } catch (e) { log(`the daemon could not be stopped: ${(e && e.message) || e}`) } }
+    return done
+  }
+  return { done, stop, lockFile }
+}
+
+/**
+ * `asight daemon --supervise` (src/cli/daemon.mjs calls this): supervises `node <asight> daemon` until the daemon exits 0 or a stop signal arrives (SIGINT, SIGTERM, SIGHUP: a console closing). → the exit code.
+ * `asight` is the script the daemon child runs (the CLI passes its own `process.argv[1]`); `dir` is the collector directory.
+ */
+export async function runSupervisor({ node = process.execPath, asight, dir, proc = process, log = (line) => { try { proc.stderr.write(`asight daemon --supervise: ${line}\n`) } catch { /* no console to write to */ } }, deps = {} } = {}) {
+  if (typeof asight !== 'string' || asight === '') throw new TypeError('runSupervisor needs the asight script the daemon child runs')
+  const sup = superviseChild({ command: { node, args: [asight, 'daemon'] }, dir, log, ...deps })
+  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP']
+  const onSignal = () => { sup.stop() }
+  for (const s of signals) proc.on(s, onSignal)
+  try { return await sup.done } finally { for (const s of signals) proc.removeListener(s, onSignal) }
+}

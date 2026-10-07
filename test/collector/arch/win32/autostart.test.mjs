@@ -5,13 +5,14 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import http from 'node:http'
+import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 import { startHelper } from '../../../../src/collector/arch/win32/helper.mjs'
-import { refuseElevated, nodePreflight, NODE_MIN_MAJOR, taskXml, taskUser, userUnit, register, daemonCommandLine, readRunValue, runKeyFallback, removeRunValue, TASK_NAME, TASK_FILE, RUN_KEY } from '../../../../src/collector/arch/win32/autostart.mjs'
+import { refuseElevated, nodePreflight, NODE_MIN_MAJOR, taskXml, taskUser, userUnit, register, daemonCommandLine, readRunValue, runKeyFallback, removeRunValue, TASK_NAME, TASK_FILE, RUN_KEY, superviseChild, runSupervisor, supervisorBackoff, SUPERVISOR_LOCK, SUPERVISE_CAP_MS, SUPERVISE_STABLE_MS } from '../../../../src/collector/arch/win32/autostart.mjs'
 import { elevationByWhoami, refuseElevatedByWhoami } from '../../../../src/off/win32.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
 import { controlEndpoint, readControlEndpoint, CONTROL_FILE, PIPE_PREFIX } from '../../../../src/collector/arch/win32/control-path.mjs'
@@ -528,4 +529,161 @@ test('W24 daemonCommandLine is the task\'s action as one line, and removeRunValu
   const r = fakeRegistry({ kind: 'REG_SZ', value: COMMAND })
   assert.equal(removeRunValue({ run: r }).runKey, 'removed')
   assert.equal(runKeyFallback({ command: COMMAND, run: fakeRegistry() }).ok, true, 'and the fallback writes it through the same reader')
+})
+
+// ---- W24: the supervisor parent ---------------------------------------------------------------------------------------------------------------------
+
+/** `promise`, or a failure after `ms`: a supervisor that never ends (a mutation that restarts for ever) is a red test in seconds, not a hang. */
+const within = (promise, what, ms = 3000) => Promise.race([promise, new Promise((_, reject) => { const t = setTimeout(() => reject(new Error(`${what}: did not finish within ${ms} ms`)), ms); t.unref?.() })])
+/** A counter for a clock: `sleep` advances it by what it was asked to wait, and a child that "ran" for a while advances it too. */
+const clock = (t = 1_700_000_000_000) => ({ now: () => t, advance: (ms) => { t += ms } })
+/**
+ * Scripted children. `script[i]` says how the i-th child ends: `{ code }` / `{ signal }` (default: exit 0), `ranMs` (how long it ran: the clock moves by it first), `hang: true` (it ends only when killed), `throws` (the spawn itself throws
+ * that errno), `error` (the child emits 'error' and never exits). The recorder keeps every spawn and every kill.
+ */
+function fakeSpawner(script, clk) {
+  const spawns = []
+  const kills = []
+  let n = 0 // the step for this start: a spawn that throws is a start all the same
+  const spawn = (cmd, args, opts) => {
+    const step = n > 60 ? { hang: true } : (script[n++] ?? { code: 0 }) // past 60 starts the supervisor is running away: the children stop ending, and `within` says so
+    if (step.throws) throw Object.assign(new Error(`spawn ${cmd} ${step.throws}`), { code: step.throws })
+    const child = Object.assign(new EventEmitter(), { pid: step.error ? undefined : 5000 + spawns.length, exitCode: null, signalCode: null }) // a child that could not be spawned has no pid
+    const finish = (code, signal) => { child.exitCode = code; child.signalCode = signal; child.emit('exit', code, signal); child.emit('close', code, signal) }
+    child.kill = (sig = 'SIGTERM') => { kills.push([child.pid, sig]); setImmediate(() => finish(null, sig)); return true }
+    spawns.push({ cmd, args, opts, child })
+    if (step.error) setImmediate(() => child.emit('error', Object.assign(new Error(`child ${step.error}`), { code: step.error })))
+    else if (!step.hang) setImmediate(() => { clk.advance(step.ranMs ?? 0); finish(step.code ?? null, step.signal ?? null) })
+    return child
+  }
+  return Object.assign(spawn, { spawns, kills })
+}
+const sleeper = (clk) => { const delays = []; const sleep = async (ms) => { delays.push(ms); clk.advance(ms) }; return Object.assign(sleep, { delays }) }
+const COMMAND_OF_DAEMON = { node: NODE, args: [SCRIPT, 'daemon'] }
+const supervise = (over = {}) => {
+  const clk = over.clk || clock()
+  const spawn = over.spawn || fakeSpawner(over.script || [], clk)
+  const sleep = over.sleep || sleeper(clk)
+  const dir = over.dir || tmpDir('asight-sup-')
+  const logs = []
+  const sup = superviseChild({ spawn, command: COMMAND_OF_DAEMON, dir, now: clk.now, sleep, pid: 4321, startedAt: 1234567890123, log: (l) => logs.push(l), ...over.opts })
+  return { sup, spawn, sleep, dir, logs, clk }
+}
+
+test('W24 the supervisor brings the daemon back after a non-zero exit or a kill, waiting 1, 2, 4, 8, 16, 32, then 60 s at most; it runs the daemon itself, never --supervise again', async () => {
+  const w = supervise({ script: [{ code: 1 }, { code: 3 }, { code: null, signal: 'SIGKILL' }, { code: 70 }, { code: 1 }, { code: 255 }, { code: 2 }, { code: 1 }, { code: 0 }] })
+  assert.equal(await within(w.sup.done, 'the supervisor'), 0)
+  assert.deepEqual(w.sleep.delays, [1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000])
+  assert.equal(w.spawn.spawns.length, 9)
+  for (const { cmd, args, opts } of w.spawn.spawns) {
+    assert.deepEqual([cmd, args], [NODE, [SCRIPT, 'daemon']], 'node asight daemon: a child that carried --supervise would start a supervisor of its own, for ever')
+    assert.equal(opts.windowsHide, true)
+  }
+  assert.deepEqual([0, 1, 2, 6, 7, 20].map(supervisorBackoff), [1000, 2000, 4000, 60000, 60000, 60000])
+  assert.equal(SUPERVISE_CAP_MS, 60000)
+})
+
+test('W24 a daemon that exits 0 was asked to stop (off drained, uninstall, off --now): the supervisor exits too, at once, and does not start another', async () => {
+  const w = supervise({ script: [{ code: 0 }] })
+  assert.equal(await within(w.sup.done, 'the supervisor'), 0)
+  assert.equal(w.spawn.spawns.length, 1)
+  assert.deepEqual(w.sleep.delays, [], 'no waiting, no second start')
+  const later = supervise({ script: [{ code: 1 }, { code: 0 }] })
+  assert.equal(await within(later.sup.done, 'the supervisor'), 0, 'a crash first and a clean stop after it: one restart, then the supervisor is done')
+  assert.deepEqual([later.spawn.spawns.length, later.sleep.delays], [2, [1000]])
+})
+
+test('W24 the supervisor writes supervisor.lock with its pid and start time before it starts anything, holds nothing else, and removes only its own lock when it ends', async () => {
+  const dir = tmpDir('asight-sup-')
+  let seen = null
+  const clk = clock()
+  const spawn = fakeSpawner([{ code: 1 }, { code: 0 }], clk)
+  const watching = (...a) => { if (!seen) seen = { lock: JSON.parse(fs.readFileSync(path.join(dir, SUPERVISOR_LOCK), 'utf8')), files: fs.readdirSync(dir) }; return spawn(...a) }
+  const w = supervise({ dir, clk, spawn: Object.assign(watching, { spawns: spawn.spawns }) })
+  assert.equal(SUPERVISOR_LOCK, 'supervisor.lock')
+  await within(w.sup.done, 'the supervisor')
+  assert.deepEqual(seen.lock, { pid: 4321, startedAt: 1234567890123 }, 'what `off` checks before it stops the process: the pid and when it started')
+  assert.deepEqual(seen.files, [SUPERVISOR_LOCK], 'the lock is the only thing it keeps: no capture state')
+  assert.deepEqual(fs.readdirSync(dir), [], 'the lock goes with the supervisor')
+  // another supervisor's lock (a newer one) is not ours to delete
+  const other = tmpDir('asight-sup-')
+  const spawn2 = fakeSpawner([{ code: 0 }], clock())
+  const hijack = (...a) => { fs.writeFileSync(path.join(other, SUPERVISOR_LOCK), JSON.stringify({ pid: 9, startedAt: 1 })); return spawn2(...a) }
+  await within(supervise({ dir: other, spawn: Object.assign(hijack, { spawns: spawn2.spawns }) }).sup.done, 'the supervisor')
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(other, SUPERVISOR_LOCK), 'utf8')), { pid: 9, startedAt: 1 })
+})
+
+test('W24 the default start time of the lock is when this process started (now minus its uptime), the form the process list gives for the identity check', async () => {
+  const dir = tmpDir('asight-sup-')
+  const spawn = fakeSpawner([{ code: 0 }], clock())
+  const seen = []
+  const sup = superviseChild({ spawn: (...a) => { seen.push(JSON.parse(fs.readFileSync(path.join(dir, SUPERVISOR_LOCK), 'utf8'))); return spawn(...a) }, command: COMMAND_OF_DAEMON, dir, sleep: async () => {} })
+  await within(sup.done, 'the supervisor')
+  assert.equal(seen[0].pid, process.pid)
+  assert.ok(Math.abs(seen[0].startedAt - (Date.now() - process.uptime() * 1000)) < 2000)
+})
+
+test('W24 a daemon that ran for a minute before it died starts the backoff over; one that ran a second less does not', async () => {
+  assert.equal(SUPERVISE_STABLE_MS, 60000)
+  const a = supervise({ script: [{ code: 1 }, { code: 1, ranMs: 60000 }, { code: 1 }, { code: 0 }] })
+  await within(a.sup.done, 'the supervisor')
+  assert.deepEqual(a.sleep.delays, [1000, 1000, 2000])
+  const b = supervise({ script: [{ code: 1 }, { code: 1, ranMs: 59999 }, { code: 0 }] })
+  await within(b.sup.done, 'the supervisor')
+  assert.deepEqual(b.sleep.delays, [1000, 2000])
+})
+
+test('W24 stop() ends the daemon and the supervisor without a restart, also while it waits to restart, and a second stop is harmless', async () => {
+  const running = supervise({ script: [{ hang: true }, { code: 0 }] })
+  await new Promise((r) => setImmediate(r))
+  assert.equal(running.spawn.spawns.length, 1)
+  const result = await within(running.sup.stop(), 'stop()')
+  assert.equal(result, 0, 'asked to stop: a clean exit')
+  assert.equal(running.spawn.kills.length, 1)
+  assert.equal(running.spawn.spawns.length, 1, 'the exit that the kill caused is not a crash to restart from')
+  assert.deepEqual(running.sleep.delays, [])
+  assert.deepEqual(fs.readdirSync(running.dir), [])
+  assert.equal(await within(running.sup.stop(), 'a second stop()'), 0)
+  // while it waits out a backoff
+  const clk = clock()
+  const sleeps = []
+  const waiting = supervise({ clk, script: [{ code: 1 }, { code: 0 }], sleep: (ms, { signal }) => { sleeps.push(ms); return new Promise((r) => signal.addEventListener('abort', r, { once: true })) } })
+  await until(() => sleeps.length === 1)
+  assert.equal(await within(waiting.sup.stop(), 'stop() during the backoff'), 0)
+  assert.equal(waiting.spawn.spawns.length, 1, 'the restart it was waiting for did not happen')
+})
+const until = async (fn, ms = 3000) => { const end = Date.now() + ms; for (;;) { const v = fn(); if (v) return v; if (Date.now() > end) throw new Error('until: timed out'); await new Promise((r) => setTimeout(r, 5)) } }
+
+test('W24 a daemon that cannot even be started is a failure to back off from, said in the log, not a crash of the supervisor and not a loop without a pause', async () => {
+  const w = supervise({ script: [{ throws: 'ENOENT' }, { error: 'EACCES' }, { code: 0 }] })
+  assert.equal(await within(w.sup.done, 'the supervisor'), 0)
+  assert.deepEqual(w.sleep.delays, [1000, 2000])
+  assert.ok(w.logs.some((l) => /ENOENT/.test(l)))
+  assert.ok(w.logs.some((l) => /EACCES/.test(l)))
+  assert.ok(w.logs.some((l) => /restart/.test(l) && /1 s/.test(l)), 'each restart is said, with the wait')
+})
+
+test('W24 a lock that cannot be written does not stop the supervision: it is said in the log, and the daemon is still brought back', async () => {
+  const dir = path.join(tmpDir('asight-sup-'), 'file-not-dir')
+  fs.writeFileSync(dir, 'x')
+  const w = supervise({ dir, script: [{ code: 1 }, { code: 0 }] })
+  assert.equal(await within(w.sup.done, 'the supervisor'), 0)
+  assert.ok(w.logs.some((l) => /supervisor\.lock/.test(l)))
+  assert.deepEqual(w.sleep.delays, [1000])
+})
+
+test('W24 runSupervisor is what `asight daemon --supervise` calls: it supervises node <asight> daemon, stops its child on SIGINT, SIGTERM or SIGHUP, and leaves no handler behind', async () => {
+  const clk = clock()
+  const spawn = fakeSpawner([{ hang: true }], clk)
+  const proc = new EventEmitter()
+  const dir = tmpDir('asight-sup-')
+  const p = runSupervisor({ node: NODE, asight: SCRIPT, dir, proc, deps: { spawn, now: clk.now, sleep: sleeper(clk) } })
+  await until(() => spawn.spawns.length === 1)
+  assert.deepEqual([spawn.spawns[0].cmd, spawn.spawns[0].args], [NODE, [SCRIPT, 'daemon']])
+  assert.deepEqual(['SIGHUP', 'SIGINT', 'SIGTERM'].map((s) => proc.listenerCount(s)), [1, 1, 1])
+  proc.emit('SIGTERM')
+  assert.equal(await within(p, 'runSupervisor after SIGTERM'), 0)
+  assert.equal(spawn.kills.length, 1)
+  assert.deepEqual(['SIGHUP', 'SIGINT', 'SIGTERM'].map((s) => proc.listenerCount(s)), [0, 0, 0])
+  await assert.rejects(async () => runSupervisor({ node: NODE, dir, proc }), TypeError, 'without the script it would supervise nothing')
 })
