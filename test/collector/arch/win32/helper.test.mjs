@@ -30,6 +30,8 @@ function started(t, fixture, opts = {}) {
   t.after(() => h.close())
   return Object.assign(h, seen)
 }
+/** Polls `fn` until it returns something truthy (a slow machine gets the whole second), instead of sleeping for a guess. */
+const until = async (fn, ms = 3000) => { const end = Date.now() + ms; for (;;) { const v = fn(); if (v) return v; if (Date.now() > end) throw new Error('until: timed out'); await new Promise((r) => setTimeout(r, 10)) } }
 const lines = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [])
 const rejects = (p, code) => assert.rejects(p, (e) => { assert.equal(e.code, code, e.message); return true })
 
@@ -97,9 +99,9 @@ test('W1 a verb the helper fails is a rejection with its message, and the helper
 })
 
 test('W1 a slow verb times out without taking the helper down; its late answer is dropped', async (t) => {
-  const h = started(t, { verbs: { ps: { delayMs: 120, data: {} } } })
+  const h = started(t, { verbs: { ps: { delayMs: 400, data: {} } } })
   await rejects(h.call('ps', {}, { timeoutMs: 30 }), 'helper-timeout')
-  await new Promise((r) => setTimeout(r, 150)) // the late reply arrives for an id nobody waits for
+  await new Promise((r) => setTimeout(r, 450)) // the late reply arrives for an id nobody waits for
   assert.equal((await h.call('version')).proto, 1)
   assert.equal(h.failures.length, 0)
 })
@@ -150,7 +152,7 @@ test('W1 killing the helper rejects every pending call and writes one helper-dow
 test('W1 an exit with a code after the helper was ready is helper-down with that code and its last stderr lines', async (t) => {
   const h = started(t, { stderr: ['Add-Type : policy', 'at line 3'], exitAfter: 1, exitCode: 3 })
   await h.call('version')
-  await new Promise((r) => setTimeout(r, 100))
+  await until(() => h.failures.length)
   assert.equal(h.failures.length, 1)
   const [f] = h.failures
   assert.equal(f.event, 'helper-down')
@@ -205,7 +207,7 @@ test('W1 a helper that goes down by two routes at once (error, then close) is st
   const failures = []
   const h = startHelper({ spawn: () => ghostChild((c) => { c.emit('error', Object.assign(new Error('spawn x ENOENT'), { code: 'ENOENT' })); c.emit('close', 1, null); c.emit('error', new Error('again')) }), onFailure: (r) => failures.push(r) })
   await assert.rejects(h.ready)
-  await new Promise((r) => setTimeout(r, 20))
+  await new Promise((r) => setTimeout(r, 50))
   assert.equal(failures.length, 1)
 })
 
@@ -435,10 +437,10 @@ test('W2 start() polls at once and on the interval; a poll still in flight is no
   w.start()
   assert.equal(tick.ms, 77)
   tick.fn() // a tick while the first poll is still in flight: skipped
-  await new Promise((r) => setTimeout(r, 80))
+  await until(() => w.stats().polls === 1)
   assert.equal(h.calls.length, 1)
   tick.fn()
-  await new Promise((r) => setTimeout(r, 80))
+  await until(() => ev.length)
   assert.deepEqual(brief(ev), [['exec', 11]])
   w.stop()
   assert.equal(cleared, 1)
@@ -528,10 +530,10 @@ test('W4 the answer does not depend on the helper having filtered: rows of other
 
 test('W4 a table that answers after 250 ms is null with ms >= 250, and not a failure', async () => {
   const failures = []
-  const r = await ownerOf({ helper: tableHelper([trow(10, 7897)], { delayMs: 300 }), hop: HOP, candidates: [10, 11], onFailure: (f) => failures.push(f) })
+  const r = await ownerOf({ helper: tableHelper([trow(10, 7897)], { delayMs: 1500 }), hop: HOP, candidates: [10, 11], onFailure: (f) => failures.push(f) })
   assert.deepEqual({ pid: r.pid, source: r.source }, { pid: null, source: null })
   assert.ok(r.ms >= 250, `ms ${r.ms}`)
-  assert.ok(r.ms < 290, `it did not wait for the late answer: ${r.ms}`)
+  assert.ok(r.ms < 1200, `it did not wait for the late answer: ${r.ms}`)
   assert.deepEqual(failures, [])
   // the budget is a parameter, and the helper's own timeout is the same budget
   const h = tableHelper([trow(10, 7897)])
