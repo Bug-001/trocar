@@ -168,6 +168,10 @@ export function buildBlock({ groups, enginePort, token, reenter, ownImages } = {
 // ---- the config splice, for the payload path and the global script (4.8 §3.6, §4.1; W9 W58) -----------------------------------------------------------
 
 export const FILTER_TOKEN = '^asight-'
+// the two rule shapes of ours the splice recognises (the second only when it is right in front of the first); asightApply() carries its own copies of these literals
+// because its source is embedded in the global script, and a test holds the two to the same text
+export const OUR_RULE = /^RULE-SET,asight-r-[^,]+,asight-sw-[^,]+$/
+export const LOOP_RULE = /^AND,\(\(DST-PORT,[0-9]+\),\(IP-CIDR,127\.0\.0\.1\/32,no-resolve\)\),DIRECT$/
 
 // One function does the splice for both paths: spliceRuntime() calls it on a copy of the runtime, and buildScriptJs() writes its source into the global
 // script. So the two cannot drift apart, and W58 (the results are equal) tests the glue around it rather than two hand-kept copies. Because its text is
@@ -243,7 +247,7 @@ function asightApply(config, B) {
 }
 
 // what the splice takes from a block (the route files are written separately); every name must start with asight-, or taking the block out again would miss it
-function dataOf(block) {
+export function blockData(block) {
   const ok = block && Array.isArray(block.proxies) && Array.isArray(block.groups) && Array.isArray(block.rules) && block.providers && typeof block.providers === 'object'
   if (!ok) throw new TypeError('a block is { proxies, groups, providers, rules } as buildBlock() returns it')
   for (const item of [...block.proxies, ...block.groups]) if (typeof item?.name !== 'string' || !item.name.startsWith(NAME_PREFIX)) throw new TypeError(`every name in a block starts with ${NAME_PREFIX}: ${JSON.stringify(item?.name)}`)
@@ -257,7 +261,7 @@ const configOf = (runtime) => {
 
 /** The runtime config with the block spliced in (what the payload path pushes): a new object, the input is not touched. Splicing twice is splicing once. */
 export function spliceRuntime({ runtime, block }) {
-  return asightApply(configOf(runtime), dataOf(block))
+  return asightApply(configOf(runtime), blockData(block))
 }
 /** The runtime config with everything of asight's taken out, the include-all filters back as they were: a new object. */
 export function stripRuntime({ runtime }) {
@@ -296,7 +300,7 @@ function dataLiteral(d) {
  */
 export function buildScriptJs({ block, sentinel = SCRIPT_SENTINEL } = {}) {
   checkSentinel(sentinel)
-  const data = dataOf(block)
+  const data = blockData(block)
   const indentTail = (text) => text.split('\n').join('\n  ')
   const body = [
     ';(function () {',
