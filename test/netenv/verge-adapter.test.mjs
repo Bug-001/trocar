@@ -452,6 +452,46 @@ test('the script is written through a temp file and a rename; a rename that fail
   assert.equal(w.ledger.find('vpn-script-block', file), null)
 })
 
+test('R2 no orphan backup of the user\'s script: a write that fails drops the copy it made (and keeps the one the entry names); a strip that finds the block already gone by hand deletes the backup when the file is as it was, and keeps it, listed, when it is not', async (t) => {
+  const w = await startWorld(t)
+  const file = w.file('profiles/Script.js')
+  const busy = { ...fs, renameSync: () => { throw Object.assign(new Error('busy'), { code: 'EBUSY' }) } }
+  const mk = (fsImpl) => createVergeAdapter({ home: w.home, fs: fsImpl, controller: null, ledger: w.ledger })
+  // (a) the first write fails after three tries: the file is as it was, no entry, and no copy of it in the backup directory
+  const failed = await mk(busy).writeScriptBlock({ blockText: blockTextOf(w) })
+  assert.deepEqual([failed.ok, failed.code, w.ledger.entries().length, w.ledger.backups().length], [false, 'EBUSY', 0, 0])
+  // ... and again while the user's editor holds the file: still none, however often
+  await mk(busy).writeScriptBlock({ blockText: blockTextOf(w) })
+  assert.equal(w.ledger.backups().length, 0)
+  // a write that fails when the entry has a backup of its own keeps that one: the user changed the script, so the new copy is dropped and the old one stands
+  const ok = await mk(fs).writeScriptBlock({ blockText: blockTextOf(w) })
+  fs.appendFileSync(file, '// the user added a line\n')
+  const again = await mk(busy).writeScriptBlock({ blockText: blockTextOf(w) })
+  assert.equal(again.ok, false)
+  assert.deepEqual(w.ledger.backups(), [ok.entry.backup], 'only the backup the ledger entry names')
+
+  // (b) the user took the block out by hand and put the script back as it was before asight: `off` finds no block, forgets the entry and deletes the backup
+  const w2 = await startWorld(t)
+  const file2 = w2.file('profiles/Script.js')
+  const original = fs.readFileSync(file2)
+  const wrote = await w2.adapter.writeScriptBlock({ blockText: blockTextOf(w2) })
+  assert.equal(w2.ledger.backups().length, 1)
+  fs.writeFileSync(file2, original)
+  const out = await w2.adapter.stripScriptBlock()
+  assert.deepEqual([out.ok, out.changed, out.identical, w2.ledger.entries().length, w2.ledger.backups().length, w2.ledger.kept().length], [true, false, true, 0, 0, 0], 'already restored: nothing left to keep')
+  assert.equal(fs.existsSync(wrote.entry.backup), false)
+
+  // (c) the block is gone by hand but the file is not as it was before asight: the backup is the only copy of what it was, so it stays, and the ledger lists it as kept
+  const w3 = await startWorld(t)
+  const file3 = w3.file('profiles/Script.js')
+  const w3Wrote = await w3.adapter.writeScriptBlock({ blockText: blockTextOf(w3) })
+  fs.writeFileSync(file3, SCRIPT_JS + '// the user rewrote the script by hand\n')
+  const kept = await w3.adapter.stripScriptBlock()
+  assert.deepEqual([kept.ok, kept.changed, kept.identical, w3.ledger.entries().length], [true, false, false, 0])
+  assert.deepEqual(w3.ledger.backups(), [w3Wrote.entry.backup])
+  assert.deepEqual(w3.ledger.kept().map((k) => [k.path, k.backup, k.reason]), [[file3, w3Wrote.entry.backup, 'edited-after']])
+})
+
 // ---- the rule files, the select, the provider refresh --------------------------------------------------------------------------------------------------------------------
 
 test('asight\'s route file: written whole (patterns when on, empty when off), an entry of asight\'s own (no backup), written again only when it changes, removed with its directory', async (t) => {

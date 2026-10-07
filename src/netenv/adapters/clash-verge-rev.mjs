@@ -306,8 +306,9 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     const without = sha256(bytesOf(stripScriptText(cur.text).text)) // the file as the user left it, our block aside
     if (ins.text === cur.text && was) return { ok: true, changed: false, receipt: null, entry: was }
     let backup = was && was.pre_sha256 === without ? was.backup : null // the first backup still stands while nothing outside the block changed
-    if (backup === null) { const b = backupOf(led, file, bytesOf(cur.text)); if (b.failed) return b.failed; backup = b.path }
-    if (ins.text !== cur.text) { const code = await writeAtomic(file, bytesOf(ins.text), null); if (code) return { ok: false, code, reason: `${path.basename(file)} could not be written (${code})`, changed: false } }
+    let made = null // the copy this call took, to be dropped again if the write does not happen: a failed `on` (an editor or a scanner holds the file) must not leave one more copy each time
+    if (backup === null) { const b = backupOf(led, file, bytesOf(cur.text)); if (b.failed) return b.failed; backup = made = b.path }
+    if (ins.text !== cur.text) { const code = await writeAtomic(file, bytesOf(ins.text), null); if (code) { if (made) led.dropBackup(made); return { ok: false, code, reason: `${path.basename(file)} could not be written (${code})`, changed: false } } }
     const entry = { kind: 'vpn-script-block', key: file, path: file, existed_before: true, pre_sha256: without, post_sha256: sha256(bytesOf(ins.text)), backup, block_sha256: sha256(scanScript(ins.text).blocks[0].text), sentinel: SCRIPT_SENTINEL.begin, installed_at: stamp(),
       undo_by_hand: `edit ${file}: delete the lines from "${SCRIPT_SENTINEL.begin}" to "${SCRIPT_SENTINEL.end}", and the line break just before them` }
     led.record(entry)
@@ -327,7 +328,12 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     if (cur.text === null) { led.forget('vpn-script-block', file); return { ok: true, changed: false, identical: null, receipt: null, reason: 'script-missing' } }
     const out = stripScriptText(cur.text)
     if (!out.ok) return { ok: false, reason: 'sentinel-damaged', detail: out.reason, changed: false, backup: was ? was.backup : null }
-    if (out.removed === 0) { led.forget('vpn-script-block', file); return { ok: true, changed: false, identical: null, receipt: null } }
+    if (out.removed === 0) { // the block is already gone (the user took it out by hand): nothing to strip, but the entry's backup must not be left behind
+      const identical = was ? sha256(bytesOf(cur.text)) === was.pre_sha256 : null
+      if (was && was.backup) { if (identical === true) led.dropBackup(was.backup); else led.keepBackup({ path: file, backup: was.backup, reason: 'edited-after', at: stamp() }) } // as it was before asight: R2's "already restored", delete; else it is the only copy of what the file was
+      led.forget('vpn-script-block', file)
+      return { ok: true, changed: false, identical, receipt: null }
+    }
     const b = backupOf(led, file, bytesOf(cur.text))
     if (b.failed) return b.failed
     const code = await writeAtomic(file, bytesOf(out.text), null)
