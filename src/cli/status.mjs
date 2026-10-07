@@ -8,6 +8,7 @@ import nodeOs from 'node:os'
 import path from 'node:path'
 import { STATUS_REASONS } from '../health/codes.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
+import { lingerText } from './receipt.mjs'
 import { HARNESS_IDS, resolveHarnesses } from './harness-names.mjs'
 import { collectorDir, stateFile, asightHome } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
@@ -20,7 +21,7 @@ import { sha256, readOrNull } from '../off/fsutil.mjs'
 import { getPath } from '../off/json-text.mjs'
 import { removeAsightText, SENTINEL } from '../off/text-edit.mjs'
 import { userProcessesOf } from '../off/orchestrate.mjs'
-import { detectNetenv, writeNetenv } from '../netenv/index.mjs'
+import { probeNetenv, netenvText, writeNetenv } from '../netenv/index.mjs'
 import { captureHealth } from '../health/read.mjs'
 import { trustReasonText } from '../collector/core/codes.mjs'
 import { formatStatus, formatHealth } from '../collector/cli.mjs'
@@ -166,14 +167,19 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const rc = reply && reply.relayed
   f.relayed = d_isCounts(rc) ? { closing: rc.closing, waiting: rc.waiting, cut: 0 } : f.daemon.state === 'not-running' ? { closing: 0, waiting: 0, cut: 0 } : 'unknown'
   if (f.relayed === 'unknown') f.relayed_reason = f.daemon.state === 'running' ? 'the daemon\'s reply does not carry the connection counts' : f.daemon.state === 'not-responding' ? `the daemon does not answer (${f.daemon.reason})` : `whether a daemon runs is not known (${f.daemon.reason})`
+  // logging out (§1.1, Linux): does the OS keep the daemon after the user's last logout? A file is looked at (`/var/lib/systemd/linger/<user>`), `loginctl` never runs (R8): asight says how, it does not do it
+  if (platform === 'linux') {
+    let read
+    try {
+      read = deps.lingerRead ? await deps.lingerRead() : deps.linger ? { state: await deps.linger() } : (await (deps.parts || await (await (deps.daemon || import('../collector/daemon.mjs'))).loadParts({ env }))).lingerRead()
+    } catch (e) { rethrowSandbox(e); read = { state: null, error: errMessage(e) } }
+    f.linger = read.state === true || read.state === false ? { linger: read.state } : { linger: 'unknown', linger_reason: read.error || 'the linger state could not be read' }
+  }
   // the VPN / proxy software, 1.6 §6; what each running process is set to use (its environment, Linux) tells which harness goes through it. The URLs are compared with the product's port and dropped.
   const proxies = {}
   if (table && m) for (const p of table) { const h = matchHarness(m.liveness, p); const env = h && typeof p.env === 'function' ? p.env() : null; if (env) proxies[h] = [...(proxies[h] || []), ...PROXY_VARS.map((k) => env.get(k)).filter(Boolean)] }
-  try {
-    const result = deps.netenv ? await deps.netenv({ proxies }) : await detectNetenv({ home, platform, exec: deps.exec || null, env, proxies, readFile: deps.readFile, request: deps.mihomoRequest, knownSocks: deps.knownSocks, statSock: deps.statSock })
-    f.netenv = { result }
-    try { if (fs.existsSync(asightHome(home))) writeNetenv(home, result, { fs }) } catch (e) { rethrowSandbox(e); f.netenv.write_error = errText(e) } // the board's copy; only where asight already has a home
-  } catch (e) { rethrowSandbox(e); f.netenv = { error: errMessage(e) } }
+  f.netenv = await probeNetenv({ home, platform, env, proxies, deps })
+  if (f.netenv.result) { try { if (fs.existsSync(asightHome(home))) writeNetenv(home, f.netenv.result, { fs }) } catch (e) { rethrowSandbox(e); f.netenv.write_error = errText(e) } } // the board's copy; only where asight already has a home
   try { f.health = deps.captureHealth ? deps.captureHealth({ home: asightHome(home) }) : captureHealth({ home: asightHome(home), fs, alive, identity, now: ms() }) } catch (e) { rethrowSandbox(e); f.health = null; f.health_error = errText(e) }
   return f
 }
@@ -197,22 +203,6 @@ const relayedText = (f) => f.relayed === 'unknown' ? `仍经 asight 的连接: �
   : `仍经 asight 的连接: ${f.relayed.closing} 条仍经 asight 中转,本次响应(或本轮)结束后关闭${f.relayed.waiting ? `;另 ${f.relayed.waiting} 条等它自己关闭(asight off --now 立即切断)` : ''}`
 const userProcsText = (u) => (u.error ? [`你自己起的 asight 进程: 不知道(${u.error})`] : u.list.length ? [`你自己起的 asight 进程仍在跑: ${u.list.map((p) => `${p.command}(pid ${p.pid},${p.note})`).join('、')}`] : [])
 
-const PRODUCT = { 'clash-verge': 'Clash Verge', mihomo: 'mihomo' }
-const MODE = { rule: '规则模式', global: '全局模式', direct: '直连模式', tun: 'TUN 模式', 'system-proxy': '系统代理模式', unknown: '模式不知道' }
-/** The line(s) about the VPN / proxy software (§6; `on` prints them too). `n` = `{ result }` or `{ error }`: what could not be read is 不知道 with the reason, never 「无」. `ids`: the harnesses to say anything about. */
-export function netenvText(n, { ids = null, platform = 'linux' } = {}) {
-  if (n.error) return [`本机网络环境: 不知道(${n.error})`]
-  const { products, unknown } = n.result
-  if (!products.length) return [`本机网络环境: 不知道(${unknown.map((u) => u.reason).join('; ')})`]
-  return products.flatMap((p) => {
-    const flags = [p.tun === true ? 'TUN 已开' : p.tun === 'unknown' ? 'TUN 开没开不知道' : null, p.system_proxy === true ? '系统代理已开' : null].filter(Boolean)
-    const via = Object.entries(p.via || {}).filter(([h]) => !ids || ids.includes(h))
-    const group = (v) => via.filter(([, x]) => x === v).map(([h]) => h)
-    const says = [group(true).length ? `${group(true).join('、')} 的流量经过它` : null, group(false).length ? `${group(false).join('、')} 不经过它` : null, group('unknown').length ? `${group('unknown').join('、')}: 是否经过它不知道` : null, platform === 'linux' ? 'asight 没有改它' : null].filter(Boolean)
-    return [`本机网络环境: ${PRODUCT[p.product] || p.product}(${[MODE[p.mode] || p.mode, ...flags, ...(p.live ? [] : ['没问到它的控制接口'])].join(',')})${says.length ? `;${says.join(';')}` : ''}`, ...(p.reason ? [`  说明: ${p.reason}`] : [])]
-  })
-}
-
 /** The lines of `asight status`. */
 export function renderStatus(f, { home = null } = {}) {
   const d = f.daemon, lines = [`asight 状态(本用户 ${f.user})`]
@@ -232,7 +222,7 @@ export function renderStatus(f, { home = null } = {}) {
       lines.push(`      pid ${r.pid}  ${r.captured === true ? '已被采集' : r.captured === false ? `没有: ${r.reason ?? '(没给原因)'} — ${reasonText(r.reason, p && p.hint)}` : '不知道(守护进程没判过它)'}`)
     }
   }
-  lines.push(relayedText(f), ...netenvText(f.netenv, { ids: f.harnesses.map((h) => h.id), platform: f.platform }), ...userProcsText(f.userProcs))
+  lines.push(relayedText(f), ...(f.linger && lingerText({ ...f.linger, user: f.user }) ? [lingerText({ ...f.linger, user: f.user })] : []), ...netenvText(f.netenv, { ids: f.harnesses.map((h) => h.id), platform: f.platform }), ...userProcsText(f.userProcs))
   const restart = restartOf(f)
   if (restart.length) lines.push(`需要你做的: ${restart.map((x) => `正在跑的 ${x.harness}(pid ${x.pid})重启后才会被采集`).join(';')};在那之前照常直连`)
   return lines
@@ -274,7 +264,7 @@ export async function runStatusCli(argv, { io, env = process.env, home = nodeOs.
   const exit = unreadable ? EXIT.unknown : failing ? EXIT.incomplete : EXIT.ok
   const restart = restartOf(f)
   if (json) {
-    const r = { ...newReceipt('status'), ok: exit === EXIT.ok, user: f.user, daemon: { state: f.daemon.state, pid: f.daemon.pid, reason: f.daemon.reason }, harnesses: f.harnesses.map((h) => ({ harness: h.id, desired: h.desired ?? 'unknown', captured: h.judged.captured, reason: reasonOf(h.judged), entry: h.entry.state, rows: h.judged.rows })), restart, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}), netenv: f.netenv.error ? { error: f.netenv.error } : f.netenv.result, user_processes: f.userProcs.error ? 'unknown' : f.userProcs.list, log: path.join(f.dir, 'flows') }
+    const r = { ...newReceipt('status'), ok: exit === EXIT.ok, user: f.user, ...(f.linger || {}), daemon: { state: f.daemon.state, pid: f.daemon.pid, reason: f.daemon.reason }, harnesses: f.harnesses.map((h) => ({ harness: h.id, desired: h.desired ?? 'unknown', captured: h.judged.captured, reason: reasonOf(h.judged), entry: h.entry.state, rows: h.judged.rows })), restart, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}), netenv: f.netenv.error ? { error: f.netenv.error } : f.netenv.result, user_processes: f.userProcs.error ? 'unknown' : f.userProcs.list, log: path.join(f.dir, 'flows') }
     io.out(JSON.stringify(r, null, 2))
     return exit
   }

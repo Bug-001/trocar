@@ -346,7 +346,7 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
 }
 
 /** `asight on` (1.6 §1.1, §1.6, R1, R6, R9, R12): plan → confirm → desired state first → write → unit → daemon → receipt. Library form of the command: `runOnCli`
- *  (src/cli/on.mjs) parses the arguments and prints; everything the world gives is injected (`fs`, `request`, `now`, `getuid`, `helperState`, `linger`,
+ *  (src/cli/on.mjs) parses the arguments and prints; everything the world gives is injected (`fs`, `request`, `now`, `getuid`, `helperState`, `linger` / `lingerRead`,
  *  `sleep`), so a test runs it in a sandbox HOME. Refuses root by throwing (R7); everything else is a receipt: `exit` 0 done · 1 not done or a problem ·
  *  2 not in a terminal without a yes (the plan is in the receipt, nothing was written).
  *    ids        harness code ids, or null for every one found   confirm(plan) → true | false | null (null: nobody can be asked)   onPlan(plan): print it
@@ -354,7 +354,7 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
  *    request    the control socket's client (default: controlRequest at $XDG_RUNTIME_DIR/asight/collector.sock, or `socketPath`)
  *  → { receipt, manifest, plan, exit }. */
 export async function turnOn(opts = {}) {
-  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, osRootsFile = null, roots = null, unit = null, autostart = true, freePort = freeEnginePort, onPlan = () => {}, confirm = null, dryRun = false, request = controlRequest, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, socketPath = null, sleep: pause = sleep, user = null } = opts
+  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, osRootsFile = null, roots = null, unit = null, autostart = true, freePort = freeEnginePort, onPlan = () => {}, confirm = null, dryRun = false, request = controlRequest, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null } = opts
   refuseRoot('on', getuid)
   const dir = collectorHome(path.join(home, '.asight'))
   const stateF = path.join(dir, 'state.json')
@@ -364,7 +364,12 @@ export async function turnOn(opts = {}) {
     const h = await helperState()
     if (h && h.ok === false) return { receipt: { ...fresh(), ok: false, notes: [`the capability helper is missing or not the right version (${h.reason || 'not usable'}); nothing was changed. Run: sudo asight setup-helper`] }, manifest: null, plan: null, exit: 1 }
   }
-  const lingerNow = () => { try { const v = linger ? linger() : undefined; return v === true || v === false ? { linger: v } : { linger: 'unknown', linger_reason: linger ? 'the linger state could not be read (/var/lib/systemd/linger)' : 'nothing reads it here' } } catch (e) { return { linger: 'unknown', linger_reason: String((e && e.message) || e) } } }
+  // `lingerRead()` → { state, error? } (src/collector/arch/linux/redirector.mjs) says why when it cannot be read; `linger()` → true | false | null is the older form
+  const lingerNow = () => { try {
+    if (lingerRead) { const r = lingerRead(); return r.state === true || r.state === false ? { linger: r.state } : { linger: 'unknown', linger_reason: r.error || 'the linger state could not be read' } }
+    const v = linger ? linger() : undefined
+    return v === true || v === false ? { linger: v } : { linger: 'unknown', linger_reason: linger ? 'the linger state could not be read (/var/lib/systemd/linger)' : 'nothing reads it here' }
+  } catch (e) { return { linger: 'unknown', linger_reason: String((e && e.message) || e) } } }
   return recorded(dir, 'install', async (run) => {
     const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, osRootsFile, roots, unit, fs, now })
     // the copy of the undo side that needs no source tree (R3) is one more file asight writes: listed in the plan and the dry run when it is missing or not what src/off generates now

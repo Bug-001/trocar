@@ -93,7 +93,7 @@ export function onCtx(home, io, { exec = recordingExec(), daemon = fakeDaemon(),
   return {
     io, home, platform: 'linux',
     env: { HOME: home, XDG_RUNTIME_DIR: path.join(home, 'run'), ...env },
-    deps: { parts, exec: exec.run, request: daemon.request, helperState: () => ({ ok: true }), linger: () => true, roots: ROOTS, freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: async () => {}, user: 'alice', getuid: () => 1000, ...deps },
+    deps: { parts, exec: exec.run, request: daemon.request, helperState: () => ({ ok: true }), linger: () => true, netenv: async () => ({ at: '2026-10-07T00:00:00.000Z', products: [], unknown: [{ reason: 'a test: no VPN probe runs here' }] }), roots: ROOTS, freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: async () => {}, user: 'alice', getuid: () => 1000, ...deps },
   }
 }
 

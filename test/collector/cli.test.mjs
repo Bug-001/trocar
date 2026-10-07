@@ -133,7 +133,7 @@ test('cli: install / on go to the one `asight on` (src/cli/on.mjs) with the desc
       return { receipt: { ...newReceipt('on'), user: 'u', relayed: { closing: 0, waiting: 0, cut: 0 }, linger: true, changed: [{ path: '/h/s.json', change: '加 env.K', backup: null }], undo: ['asight off'], log: '/h/.asight/collector/flows' }, exit: 0 }
     },
   }
-  const base = { home: '/h', daemon, install, script: '/repo/bin/asight.mjs', platform: 'linux' }
+  const base = { home: '/h', daemon, install, script: '/repo/bin/asight.mjs', platform: 'linux', onDeps: { netenv: NO_PROBE } } // `on` looks at the VPN software too (1.6 §6): never for real in a test
   let t = io(); assert.equal(await runCollector(['install', '--yes'], { ...base, ...t }), 0)
   assert.equal(t.o.length, 2, 'the plan, then the receipt (src/cli/receipt.mjs)')
   assert.match(t.o[0], /^asight on 将写或改下面这些文件/); assert.match(t.o[1], /^asight 已打开采集/)
@@ -147,7 +147,7 @@ test('cli: install / on go to the one `asight on` (src/cli/on.mjs) with the desc
     ['on', 'linux', parts.harnesses, true, '/h', '/os/roots.pem', ['/h/.config/systemd/user/asight-collector.service', ['/h/.config/systemd/user/default.target.wants/asight-collector.service'], `{"NODE_EXTRA_CA_CERTS":"/corp/ca.pem"} ExecStart="${process.execPath}" "/repo/bin/asight.mjs" collector start`], true, true],
   ])
   seen.length = 0
-  t = io(); assert.equal(await runCollector(['install'], { ...base, install: { turnOn: async () => { throw new Error('boom') } }, ...t, onDeps: {} }), 1, 'a throw is exit 1, said once')
+  t = io(); assert.equal(await runCollector(['install'], { ...base, install: { turnOn: async () => { throw new Error('boom') } }, ...t }), 1, 'a throw is exit 1, said once')
   assert.match(t.e.join('\n'), /boom/)
   t = io(); assert.equal(await runCollector(['install', '--yes'], { ...base, platform: 'darwin', ...t }), 1, 'a platform without the new collector is not given the Linux install')
   const argvs = []

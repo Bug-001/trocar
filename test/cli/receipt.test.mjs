@@ -360,3 +360,24 @@ test('V10: status says 不知道 with the reason for connections the daemon did 
   assert.deepEqual(validateReceipt(doc), [])
   assert.deepEqual([doc.relayed, typeof doc.relayed_reason, doc.netenv, doc.daemon.state], ['unknown', 'string', { error: 'probe failed' }, 'unknown'])
 })
+
+// 1.6 §1.6 / §6 / §7: the plan and the receipt of `on` name the machine's VPN / proxy software — what was found, which of the harnesses being turned on go through it, that asight changes none of it — and
+// say 不知道 with the reason when the probe cannot tell. `on` does not write the board's cache ~/.asight/netenv.json (the receipt lists exactly the files `on` wrote, V3; a second `on` writes nothing, R9).
+test('on names the network environment in the plan and in the receipt (text and --json), 不知道 with the reason when the probe failed, and writes no netenv.json', async () => {
+  const { CLASH } = await import('./fixtures/status-ctx.mjs')
+  const home = tmpDir('asight-ne-on-'); seedClaude(home)
+  const io = fakeIo()
+  assert.equal(await runOnCli(['--yes'], onCtx(home, io, { deps: { netenv: async () => CLASH() } })), 0, io.text())
+  const lines = io.stdoutText().split('\n').filter((l) => l.startsWith('本机网络环境'))
+  assert.deepEqual(lines, ['本机网络环境: Clash Verge(规则模式,系统代理已开);claude-code 的流量经过它;asight 没有改它', '本机网络环境: Clash Verge(规则模式,系统代理已开);claude-code 的流量经过它;asight 没有改它'], 'once in the plan, once in the receipt — only the harness being turned on')
+  assert.ok(!fs.existsSync(path.join(home, '.asight', 'netenv.json')), 'on does not write the board\'s cache')
+  const j = fakeIo(); const home2 = tmpDir('asight-ne-on-'); seedClaude(home2)
+  assert.equal(await runOnCli(['--yes', '--json'], onCtx(home2, j, { deps: { netenv: async () => CLASH() } })), 0)
+  assert.equal(j.json().netenv.products[0].product, 'clash-verge')
+  const bad = fakeIo(); const home3 = tmpDir('asight-ne-on-'); seedClaude(home3)
+  assert.equal(await runOnCli(['--yes'], onCtx(home3, bad, { deps: { netenv: async () => { throw new Error('EACCES: permission denied, open verge.yaml') } } })), 0, 'a probe that fails does not stop the on')
+  assert.equal(bad.stdoutText().split('\n').filter((l) => l === '本机网络环境: 不知道(EACCES: permission denied, open verge.yaml)').length, 2)
+  const dry = fakeIo(); const home4 = tmpDir('asight-ne-on-'); seedClaude(home4); const before = snapshot(home4)
+  assert.equal(await runOnCli(['--dry-run'], onCtx(home4, dry, { deps: { netenv: async () => CLASH() } })), 0)
+  assert.match(dry.stdoutText(), /^本机网络环境: Clash Verge/m); assert.deepEqual(changedFiles(before, snapshot(home4)), [], '--dry-run writes nothing')
+})

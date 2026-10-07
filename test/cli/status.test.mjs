@@ -290,3 +290,41 @@ test('the harnesses\' proxy settings reach the probe from the running processes\
   const down2 = await run(s, [], { procs: async () => { throw new Error('the process table /proc cannot be read (EACCES)') } })
   assert.match(down2.text, /^你自己起的 asight 进程: 不知道\(the process table/m)
 })
+
+// ── V39: logging out stops the daemon unless linger is on (1.6 §1.1) — `on` and `status` say so, give the command, and never run loginctl (R8) ───────────────────────────────────────────────────
+import { runOnCli } from '../../src/cli/on.mjs'
+import { onCtx, seedClaude } from './fixtures/on-ctx.mjs'
+
+test('V39 status: linger off says 登出后停采(未开 linger) and loginctl enable-linger <user>, --json linger false; on says nothing; unreadable says 不知道 with the file and the errno, never 已开', async () => {
+  const s = await installedHome()
+  const noLoginctl = () => assert.ok(!s.sys.exec.calls.some((c) => /loginctl/.test(c)), 'loginctl is not run: asight says how, it does not do it')
+  let r = await run(s, [], { lingerRead: () => ({ state: false }) })
+  assert.match(r.text, /^登出后停采\(未开 linger\): 要登出后继续采集,跑 loginctl enable-linger alice$/m)
+  assert.equal((await run(s, ['--json'], { lingerRead: () => ({ state: false }) })).io.json().linger, false)
+  r = await run(s, [], { lingerRead: () => ({ state: true }) })
+  assert.ok(!/linger|登出/.test(r.text), 'on: no line')
+  assert.equal((await run(s, ['--json'], { lingerRead: () => ({ state: true }) })).io.json().linger, true)
+  r = await run(s, [], { lingerRead: () => ({ state: null, error: '/var/lib/systemd/linger/alice: EACCES' }) })
+  assert.match(r.text, /^登出后停采: 不知道\(\/var\/lib\/systemd\/linger\/alice: EACCES\)$/m); assert.ok(!/已开/.test(r.text))
+  const j = (await run(s, ['--json'], { lingerRead: () => ({ state: null, error: 'EACCES' }) })).io.json()
+  assert.deepEqual([j.linger, validateReceipt(j)], ['unknown', []])
+  r = await run(s, [], { lingerRead: () => { throw new Error('the reader broke') } })
+  assert.match(r.text, /^登出后停采: 不知道\(the reader broke\)$/m)
+  noLoginctl()
+})
+
+test('V39 on: the same lines in the receipt (and in the plan\'s receipt when --json: linger is false / true / "unknown" with a reason); nothing runs loginctl', async () => {
+  for (const [lingerRead, want] of [[() => ({ state: false }), false], [() => ({ state: true }), true], [() => ({ state: null, error: '/var/lib/systemd/linger/alice: EACCES' }), 'unknown']]) {
+    const home = tmpDir('asight-v39-'); seedClaude(home)
+    const io = fakeIo(), ctx = onCtx(home, io, { deps: { lingerRead, linger: undefined } })
+    assert.equal(await runOnCli(['--yes'], ctx), 0, io.text())
+    if (want === false) assert.match(io.stdoutText(), /^登出后停采\(未开 linger\): 要登出后继续采集,跑 loginctl enable-linger alice$/m)
+    else if (want === true) assert.ok(!/linger|登出/.test(io.stdoutText()))
+    else { assert.match(io.stdoutText(), /^登出后停采: 不知道\(\/var\/lib\/systemd\/linger\/alice: EACCES\)$/m); assert.ok(!/已开/.test(io.stdoutText())) }
+    const j = fakeIo(); const home2 = tmpDir('asight-v39-'); seedClaude(home2)
+    assert.equal(await runOnCli(['--yes', '--json'], onCtx(home2, j, { deps: { lingerRead, linger: undefined } })), 0)
+    const doc = j.json()
+    assert.equal(doc.linger, want)
+    if (want === 'unknown') assert.match(doc.linger_reason, /EACCES/)
+  }
+})

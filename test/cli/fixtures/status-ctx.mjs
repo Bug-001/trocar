@@ -17,8 +17,8 @@ export const claudeProc = (pid, startedAt, env = new Map()) => ({ pid, ppid: 1, 
 export const NO_VPN = { at: '2026-10-07T00:00:00.000Z', products: [], unknown: [{ reason: 'no Clash Verge directory (/h/.local/share/io.github.clash-verge-rev.clash-verge-rev) and no mihomo control socket answered' }] }
 export const CLASH = (o = {}) => ({ at: '2026-10-07T00:00:00.000Z', products: [{ product: 'clash-verge', mode: 'rule', tun: false, system_proxy: true, mixed_port: 7897, live: true, via: { 'claude-code': true, codex: true, hermes: 'unknown' }, ...o }], unknown: [] })
 
-/** `asight status argv` over the sandbox `s` (an installedHome()) → { exit, io, text }. `request` is the control socket, `procs` the process table, `netenv` the probe (a function that may throw), `fs` replaces the file system the command reads. */
-export async function runStatus(s, argv = [], { request = down(), procs = async () => [], netenv = async () => NO_VPN, fs: fsx, io = fakeIo(), deps = {} } = {}) {
-  const exit = await runStatusCli(argv, { io, home: s.home, platform: 'linux', env: { ...s.sh.env, XDG_RUNTIME_DIR: path.join(s.home, 'run') }, deps: { request, socketPath: SOCK, procs, netenv, ...(fsx ? { fs: fsx } : {}), user: 'alice', exec: s.sys.exec.run, ...deps } })
+/** `asight status argv` over the sandbox `s` (an installedHome()) → { exit, io, text }. `request` is the control socket, `procs` the process table, `netenv` the probe (a function that may throw), `lingerRead` what logind says (default: linger is on, so there is no line about it), `fs` replaces the file system the command reads. */
+export async function runStatus(s, argv = [], { request = down(), procs = async () => [], netenv = async () => NO_VPN, lingerRead = () => ({ state: true }), fs: fsx, io = fakeIo(), deps = {} } = {}) {
+  const exit = await runStatusCli(argv, { io, home: s.home, platform: 'linux', env: { ...s.sh.env, XDG_RUNTIME_DIR: path.join(s.home, 'run') }, deps: { request, socketPath: SOCK, procs, netenv, lingerRead, ...(fsx ? { fs: fsx } : {}), user: 'alice', exec: s.sys.exec.run, ...deps } })
   return { exit, io, text: io.stdoutText() }
 }

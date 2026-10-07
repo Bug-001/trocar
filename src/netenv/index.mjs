@@ -36,3 +36,30 @@ export function writeNetenv(home, result, { fs = nodeFs } = {}) {
   } catch (e) { try { fs.rmSync(tmp, { force: true }) } catch { /* the failure that matters is e */ } throw e }
   return { path: file }
 }
+
+/** One look at the VPN / proxy software for a command: `{ result }`, or `{ error }` when the probe itself failed (a failed probe is 不知道 with its reason, never 「无」). `deps.netenv({ proxies })` replaces
+ *  the probe (a test's); `deps.exec` / `readFile` / `mihomoRequest` / `knownSocks` / `statSock` are detectNetenv's. A refusal of the test guard (ESANDBOX) is not a failed probe: it is thrown. */
+export async function probeNetenv({ home, platform, env, proxies = null, deps = {} }) {
+  try { return { result: deps.netenv ? await deps.netenv({ proxies }) : await detectNetenv({ home, platform, exec: deps.exec || null, env, proxies, readFile: deps.readFile, request: deps.mihomoRequest, knownSocks: deps.knownSocks, statSock: deps.statSock }) } } catch (e) {
+    if (e && e.code === 'ESANDBOX') throw e
+    return { error: String((e && e.message) || e) }
+  }
+}
+
+const PRODUCT = { 'clash-verge': 'Clash Verge', mihomo: 'mihomo' }
+const MODE = { rule: '规则模式', global: '全局模式', direct: '直连模式', tun: 'TUN 模式', 'system-proxy': '系统代理模式', unknown: '模式不知道' }
+/** The line(s) about the VPN / proxy software (§6; `status` and `on` print them). `n` = what probeNetenv returns (`{ result }` / `{ error }`) or the same unwrapped (the receipt's `netenv`: a result, or `{ error }`):
+ *  what could not be read is 不知道 with the reason, never 「无」. `ids`: the harnesses to say anything about. */
+export function netenvText(n, { ids = null, platform = 'linux' } = {}) {
+  if (n.error) return [`本机网络环境: 不知道(${n.error})`]
+  const { products, unknown } = n.result || n
+  if (!products.length) return [`本机网络环境: 不知道(${unknown.map((u) => u.reason).join('; ')})`]
+  return products.flatMap((p) => {
+    const flags = [p.tun === true ? 'TUN 已开' : p.tun === 'unknown' ? 'TUN 开没开不知道' : null, p.system_proxy === true ? '系统代理已开' : null].filter(Boolean)
+    const via = Object.entries(p.via || {}).filter(([h]) => !ids || ids.includes(h))
+    const group = (v) => via.filter(([, x]) => x === v).map(([h]) => h)
+    const says = [group(true).length ? `${group(true).join('、')} 的流量经过它` : null, group(false).length ? `${group(false).join('、')} 不经过它` : null, group('unknown').length ? `${group('unknown').join('、')}: 是否经过它不知道` : null, platform === 'linux' ? 'asight 没有改它' : null].filter(Boolean)
+    return [`本机网络环境: ${PRODUCT[p.product] || p.product}(${[MODE[p.mode] || p.mode, ...flags, ...(p.live ? [] : ['没问到它的控制接口'])].join(',')})${says.length ? `;${says.join(';')}` : ''}`, ...(p.reason ? [`  说明: ${p.reason}`] : [])]
+  })
+}
+

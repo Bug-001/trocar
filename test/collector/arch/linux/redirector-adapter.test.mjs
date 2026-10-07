@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
 import { createRedirectorClient } from '../../../../src/collector/arch/linux/redirector-client.mjs'
-import { createLinuxRedirector } from '../../../../src/collector/arch/linux/redirector.mjs'
+import { createLinuxRedirector, lingerRead, lingerState } from '../../../../src/collector/arch/linux/redirector.mjs'
 import { loadArch } from '../../../../src/collector/arch/index.mjs'
 import { fakeProc } from './fixtures/fake-proc.mjs'
 
@@ -98,6 +98,14 @@ test('adapter: linger() is true with the logind marker, false without, null when
     fs.writeFileSync(path.join(dir, 'u'), '')
     assert.equal(r({ userName: () => 'u' }).linger(), true)
     assert.equal(r({ lingerDir: path.join(dir, 'u', 'x'), userName: () => 'u' }).linger(), null, 'ENOTDIR: unknown, not "off"')
+    // 1.6 §1.1 / V39: the same reading as plain functions (what `asight on` and `asight status` call), and a null that says why: the file and the errno
+    assert.deepEqual([lingerState({ user: 'u', dir }), lingerState({ user: 'nobody', dir })], [true, false])
+    assert.deepEqual(lingerRead({ user: 'u', dir }), { state: true })
+    const unreadable = lingerRead({ user: 'u', dir: path.join(dir, 'u', 'x') })
+    assert.equal(unreadable.state, null); assert.match(unreadable.error, new RegExp(`${path.join(dir, 'u', 'x', 'u').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}: ENOTDIR`))
+    assert.equal(lingerState({ user: 'u', dir: path.join(dir, 'u', 'x') }), null)
+    assert.equal(r({ userName: () => 'u' }).lingerRead().state, true, 'the adapter has it too (the daemon\'s own redirector is what asight on asks)')
+    assert.match(r({ userName: () => { throw new Error('no passwd entry') } }).lingerRead().error, /no passwd entry/, 'a user name that cannot be read is unknown, with the reason')
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
