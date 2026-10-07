@@ -5,6 +5,8 @@
 // (`forms.mjs`): the harness is on, the user named an opt-in form, the upstream is something asight can dial. It reads, through the ctx it is given, the files the agents read; it writes nothing, opens no socket
 // and names no harness: the groups and forms it is given are the harness files' data (arch/ never imports harness/, the daemon hands them in).
 import { parseDotenv, parseJsonc } from '../../core/config-read.mjs'
+import { entryGate } from './forms.mjs'
+import { upstreamFor } from './upstream.mjs'
 
 /** The Windows groups of the harness descriptors (`loadHarnesses()`), flat: `[{ g, harness, group, forms, proxy }]` — `group` is the harness file's group (entry, auth, optIn, followsSystemProxy), `forms` the forms in it,
  *  `proxy` the harness's proxy behaviour (the variables it reads, its branches). A form with no group (one that was not measured) is in none. A descriptor with no Windows data gives none. */
@@ -83,4 +85,81 @@ export function priorOf({ group, ctx, manifest = null } = {}) {
     if (got.value) return { value: got.value, noProxy: got.noProxy, source: rec ? 'manifest' : 'file', ...(unknown.length ? { unknown } : {}) }
   }
   return { ...none, source, ...(unknown.length ? { unknown } : {}) }
+}
+
+// ---- the plan (4.8 §2.1 · §2.2 · §2.3) -------------------------------------------------------------------------------------------------------------------
+
+/** The part of an upstream answer that says where it dials, with no `hint` and no table: what the daemon compares with the group's previous one, and what `status` draws. No credentials: `auth_ref` says where they live. */
+const dialOf = (a) => (a.kind ? Object.fromEntries(['kind', 'host', 'port', 'credentialed', 'auth_ref', 'source'].filter((k) => a[k] !== undefined).map((k) => [k, a[k]])) : null)
+
+/** What the running processes say about the forms: `procs` is `[{ pid, match, elevated }]`, `match` the answer of `matchForm` for that process. An elevated process of a known form is a fact about that form (the kernel cannot tell it
+ *  from another process of the same user and only forwards it, 4.8 §10.2 row h); a process of an image only an agent has, at a path nobody measured, could be any form of that image, so each of them carries its path shape (already
+ *  masked of the user's name by `matchForm`). A form whose command line is not known yet (`pending`) and a process that is no agent are nothing yet. `elevated` that is not `true` (null: not readable) is not counted. */
+function observe(procs) {
+  const seen = new Map()
+  const at = (id) => { if (!seen.has(id)) seen.set(id, { elevated: new Set(), unknown: new Set() }); return seen.get(id) }
+  for (const p of procs || []) {
+    const m = p && p.match
+    if (!m) continue
+    if (m.kind === 'form' && p.elevated === true && Number.isInteger(p.pid)) at(m.id).elevated.add(p.pid)
+    else if (m.kind === 'path-unknown') for (const id of m.forms || []) at(id).unknown.add(m.shape)
+  }
+  return seen
+}
+
+/**
+ * planRoutes({ netenv, groups, desired, optIns, manifest, ctx, procs, last }) → { [group id]: result } (4.8 §2.2, §2.3; W5)
+ *   netenv    the network as it was read now: `{ systemProxy, hkcuEnv, ownPorts }` — `readSystemProxy()`'s answer, `readHkcuEnv()`'s, and asight's own ports (the kernel's listeners, the engine's, the controller's: an
+ *             upstream on one is a loop; REQUIRED, a plan that cannot see a loop is not a plan). Not 4.7's `netenv.json`: that does not copy `ProxyOverride`, and the bypass table is made of it.
+ *   groups    `groupsOf(descriptors)` · desired  `state.json` v2's `harnesses` (`{ <harness>: { desired: 'on' | 'off' } }`, or the string): a harness not in it is off
+ *   optIns    the groups or forms the user named (`--opt-in`) and asight has the record of · manifest the install manifest (`priorOf`) · ctx where the files are (`priorOf`)
+ *   procs     what is running, `[{ pid, match, elevated }]` (`observe`) · last `{ [group id]: the group's `answer` before }`: what a system proxy that became a PAC or unreadable leaves a follower on (4.8 OPEN 17)
+ * A group's result: `{ g, harness, entry, on, reason, code?, why?, detail?, protocol?, upstream, bypass, untranslated, envUnreadable, egressDiffers?, hint?, unknown?, forms, answer }`
+ *   entry     'auto' (asight writes it: a file of the agent's own), 'opt-in' (the user named it), or null (no entry: `reason` says why) · on  the group's forms go through the engine (entry is not null), which is what the kernel's
+ *             `on` is · reason  the first that holds of `desired-off` · `opt-in-needed` · `not-routed` (`why`: `system-proxy-pac` · `system-proxy-unreadable` · `upstream-protocol` (`protocol`) · `upstream-unparseable`) · `route-loop`
+ *             (`detail`: the address) · `form-unsupported`; null when the group is connected. `code` is the doctor's name for it (`proxy-unsupported` for an `upstream-protocol`).
+ *   upstream  where the group's connections go on from, `{ kind, host?, port?, credentialed?, auth_ref?, source }`, or null when there is none to dial. It is worked out for a group that is off as well: the kernel forwards to it
+ *             what an agent that outlives `off` sends. `bypass` the targets that hop is left direct for, `untranslated` how many entries asight could not read, `egressDiffers` (a connected group whose WebSocket did not follow the
+ *             system proxy), `hint` (`system-proxy-pac` / `system-proxy-unreadable`: kept on the last upstream), `unknown` what could not be read (1.6 §9.4's reasons), `envUnreadable` (a proxy in the user's terminal alone is invisible).
+ *   forms     `{ [form id]: { reason, elevatedPids?, unknownPaths? } }` — the group's reason for each form, else `elevated-agent` or `form-path-unknown` when a process says so
+ *   answer    the raw `upstreamFor` answer, with the bypass table and without any login: what the next call takes as `last[g]`, and what is compared to know whether the system proxy moved the group's upstream
+ * Nothing here writes. The order of the reasons is the order in which a user can act: switch the harness on, name the item, fix the proxy, and only then the entry that takes no login.
+ */
+export function planRoutes({ netenv, groups, desired = null, optIns = [], manifest = null, ctx, procs = [], last = null } = {}) {
+  if (!Array.isArray(groups)) throw new TypeError('planRoutes needs the groups (groupsOf)')
+  if (!netenv || typeof netenv !== 'object') throw new TypeError('planRoutes needs the network as it was read: { systemProxy, hkcuEnv, ownPorts }')
+  if (!Array.isArray(netenv.ownPorts)) throw new TypeError("planRoutes needs asight's own ports (netenv.ownPorts): without them a loop cannot be seen")
+  if (!ctx) throw new TypeError('planRoutes needs the ctx that says where the files are')
+  const named = new Set(optIns || [])
+  const wanted = (h) => { const d = desired && desired[h]; return (typeof d === 'string' ? d : d && d.desired) === 'on' }
+  const seen = observe(procs)
+  const out = {}
+  for (const { g, harness, group, forms, proxy } of groups) {
+    const prior = priorOf({ group, ctx, manifest })
+    const answer = upstreamFor({ group, prior: prior.value, noProxy: prior.noProxy, systemProxy: netenv.systemProxy, hkcuEnv: netenv.hkcuEnv, ownPorts: netenv.ownPorts, envNames: (proxy && proxy.env) || [], branches: (proxy && proxy.branches) || [], last: (last && last[g]) || null })
+    const gate = entryGate(group, { optedIn: named.has(g) || forms.some((f) => named.has(f.id)), upstreamCredentialed: answer.credentialed === true })
+    let reason = null
+    let why = {}
+    if (!wanted(harness)) reason = 'desired-off'
+    else if (!gate.ok && gate.reason === 'opt-in-needed') reason = 'opt-in-needed'
+    else if (answer.reason) {
+      reason = answer.reason
+      why = answer.reason === 'route-loop' ? { detail: `${answer.host}:${answer.port}` } : Object.fromEntries(['why', 'detail', 'protocol'].filter((k) => answer[k] !== undefined).map((k) => [k, answer[k]]))
+    } else if (!gate.ok) reason = gate.reason
+    const entry = reason ? null : group.optIn && group.optIn.length ? 'opt-in' : 'auto'
+    const unknown = [...(answer.unknown || []), ...(prior.unknown || [])]
+    out[g] = {
+      g, harness, entry, on: entry !== null, reason,
+      ...(reason ? { code: reason === 'not-routed' && why.why === 'upstream-protocol' ? 'proxy-unsupported' : reason } : {}), ...why,
+      upstream: dialOf(answer), bypass: answer.bypass, untranslated: answer.untranslated, envUnreadable: answer.envUnreadable,
+      ...(answer.egressDiffers && entry !== null ? { egressDiffers: true } : {}), ...(answer.hint ? { hint: answer.hint } : {}), ...(unknown.length ? { unknown } : {}),
+      forms: Object.fromEntries(forms.map((f) => {
+        const s = seen.get(f.id)
+        const own = s && s.elevated.size ? 'elevated-agent' : s && s.unknown.size ? 'form-path-unknown' : null
+        return [f.id, { reason: reason ?? own, ...(s && s.elevated.size ? { elevatedPids: [...s.elevated].sort((a, b) => a - b) } : {}), ...(s && s.unknown.size ? { unknownPaths: [...s.unknown].sort() } : {}) }]
+      })),
+      answer,
+    }
+  }
+  return out
 }

@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { bypassHit, parseProxyText, proxyAuthOf, readHkcuEnv, readSystemProxy, sameSystemProxy, translateBypass, upstreamFor, watchSystemProxy } from '../../../../src/collector/arch/win32/upstream.mjs'
 import { regReadAllowed } from '../../../../src/collector/arch/win32/helper.mjs'
 import { bypassRuleOf } from '../../../../src/netenv/mihomo/rules.mjs'
-import { groupsOf, priorOf } from '../../../../src/collector/arch/win32/route-plan.mjs'
+import { groupsOf, planRoutes, priorOf } from '../../../../src/collector/arch/win32/route-plan.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { applyJsonKey, applyTextEntry, newManifest } from '../../../../src/collector/core/trust/journal.mjs'
 import { proxyEntries } from '../../../../src/collector/arch/win32/forms.mjs'
@@ -599,12 +599,12 @@ test('W71 end to end: the registry moves its port, the watcher says so, and only
 
 const UPSTREAM_SRC = fs.readFileSync(fileURLToPath(new URL('../../../../src/collector/arch/win32/upstream.mjs', import.meta.url)), 'utf8')
 /** What the file may not do (it computes and reads the registry through the helper it is given): reach the network, the disk, a process or the OS by itself. */
-function reaches(src) {
-  const code = src.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')
+function reaches(src, allowed = ['../../../netenv/mihomo/rules.mjs']) {
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n') // prose in a comment is not a call
   const out = []
   for (const m of code.matchAll(/\bimport\b[^;]*?\bfrom\s*(['"])([^'"]+)\1|\bimport\s*(['"])([^'"]+)\3|\bimport\s*\(\s*(['"])([^'"]+)\5/g)) {
     const spec = m[2] || m[4] || m[6]
-    if (spec !== '../../../netenv/mihomo/rules.mjs') out.push(`imports ${spec}`)
+    if (!allowed.includes(spec)) out.push(`imports ${spec}`)
   }
   if (/\brequire\s*\(|\bfetch\s*\(|\bprocess\s*\.|\bchild_process\b|\bwriteFile|\bappendFile|\bunlink|\bspawn\s*\(|\bexecFile(Sync)?\s*\(|\bexecSync\s*\(/.test(code)) out.push('touches the OS, the disk or the network itself')
   return out
@@ -784,4 +784,235 @@ test('priorOf wants a group and a ctx; the secret in a user\'s proxy is in its a
   b.put('.claude/settings.json', `{"env": {"HTTPS_PROXY": "${USER_PROXY}"`)
   const r = priorOf({ group: gdata('claude-code.settings').group, ctx: b.ctx() })
   assert.equal(JSON.stringify(r).includes('s3cret'), false, 'a file that does not parse is not quoted')
+})
+
+// ---------- planRoutes: the entries and upstreams of all groups at once (W5, the plan half) ----------
+
+const HARNESSES = ALL.filter((d) => d.win32).map((d) => d.name)
+const NETENV = (o = {}) => ({ systemProxy: sys(), hkcuEnv: { ok: true, values: {} }, ownPorts: OWN, ...o })
+const ALL_ON = Object.fromEntries(HARNESSES.map((h) => [h, { desired: 'on', updated_at: null }])) // `state.json` v2's `harnesses`, as it is
+/** planRoutes with every harness on and nobody named; the group's result by group id. */
+const plan = (b, over = {}) => planRoutes({ netenv: NETENV(), groups: GROUPS, desired: ALL_ON, optIns: [], manifest: null, ctx: b.ctx(), procs: [], last: {}, ...over })
+/** What a cell of the table says about a group, as the table writes it. */
+const view = (p) => ({ entry: p.entry, on: p.on, reason: p.reason, upstream: p.upstream, ...(p.egressDiffers ? { egressDiffers: true } : {}), envUnreadable: p.envUnreadable })
+const AUTO = ['claude-code.settings', 'codex.env', 'deepseek-dsh.env', 'hermes.cli', 'z-code.cli']
+const NAMED = ['claude-code.desktop', 'kimi-code.cli', 'kimi-code.vscode', 'opencode.cli', 'opencode.desktop', 'z-code.desktop']
+const PROXY = (host, port) => ({ kind: 'http', host, port, source: 'system-proxy' })
+const DIRECT = { kind: 'direct', source: 'direct' }
+const ON = { entry: 'auto', on: true, reason: null }
+const ownProxy = (u) => ({ ...u, source: 'agent' })
+
+test('W5 §2.2 table, group by group: Verge with the system proxy on (TUN on or off: the same), v2rayN, another TUN VPN or none, a PAC — what each automatic group gets, written out literally', () => {
+  const b = box()
+  const dsh = { entry: 'auto', on: true, reason: null, upstream: DIRECT, envUnreadable: true } // dsh follows nothing and has no proxy of its own
+  // 1. Verge, system proxy on, TUN off — and with the TUN on (the system proxy still on): the followers take the system proxy, the others go direct
+  const verge = plan(b)
+  assert.deepEqual(AUTO.map((g) => [g, view(verge[g])]), [
+    ['claude-code.settings', { ...ON, upstream: DIRECT, envUnreadable: true }],
+    ['codex.env', { ...ON, upstream: PROXY('127.0.0.1', 7897), egressDiffers: true, envUnreadable: true }],
+    ['deepseek-dsh.env', dsh],
+    ['hermes.cli', { ...ON, upstream: PROXY('127.0.0.1', 7897), envUnreadable: true }],
+    ['z-code.cli', { ...ON, upstream: DIRECT, envUnreadable: true }],
+  ])
+  // 2. Verge with the TUN on and the system proxy off, another TUN VPN, no VPN: the switch is off (or the value absent): everyone direct, and the TUN (if any) carries it as before
+  for (const sp of [sys({ enable: false }), { ok: true, enable: null, server: null, override: null, autoConfigUrl: null }, sys({ enable: true, server: '' })]) {
+    const off = plan(b, { netenv: NETENV({ systemProxy: sp }) })
+    assert.deepEqual(AUTO.map((g) => view(off[g])), AUTO.map(() => ({ ...ON, upstream: DIRECT, envUnreadable: true })), JSON.stringify(sp))
+  }
+  // 3. v2rayN writes the protocols apart: the https= entry is the one an HTTPS request takes
+  const v2 = plan(b, { netenv: NETENV({ systemProxy: sys({ server: 'http=127.0.0.1:10809;https=127.0.0.1:10810;socks=127.0.0.1:10808' }) }) })
+  assert.deepEqual([v2['codex.env'].upstream, v2['hermes.cli'].upstream, v2['claude-code.settings'].upstream], [PROXY('127.0.0.1', 10810), PROXY('127.0.0.1', 10810), DIRECT])
+  // 4. a PAC: the followers are not routed (asight does not run a script), the others are as before
+  const pac = plan(b, { netenv: NETENV({ systemProxy: sys({ autoConfigUrl: 'http://wpad.corp/proxy.pac' }) }) })
+  const notRouted = { entry: null, on: false, reason: 'not-routed', upstream: null, envUnreadable: true }
+  assert.deepEqual(AUTO.map((g) => view(pac[g])), [{ ...ON, upstream: DIRECT, envUnreadable: true }, notRouted, dsh, notRouted, { ...ON, upstream: DIRECT, envUnreadable: true }])
+  assert.deepEqual([pac['codex.env'].code, pac['codex.env'].why, pac['hermes.cli'].why], ['not-routed', 'system-proxy-pac', 'system-proxy-pac'])
+  // 5. a system proxy nobody could read is 「不知道」: the followers are not routed with the reason, never a guess at direct
+  const blind = plan(b, { netenv: NETENV({ systemProxy: { ok: false, reason: 'timeout', detail: 'helper-timeout' } }) })
+  assert.deepEqual([blind['codex.env'].reason, blind['codex.env'].why, blind['codex.env'].detail, blind['claude-code.settings'].entry], ['not-routed', 'system-proxy-unreadable', 'timeout', 'auto'])
+})
+
+test('W5 §2.2 ①: an agent with a proxy of its own keeps it as the upstream — read from its file before `on`, from the manifest after — and the plan names where the login is, never the login', () => {
+  const b = box()
+  b.put('.claude/settings.json', `{"env": {"HTTPS_PROXY": "${USER_PROXY}"}}`)
+  b.put('.codex/.env', 'HTTPS_PROXY=http://corp.example:3128\nNO_PROXY=localhost,.corp.com\n')
+  const p = plan(b)
+  const claude = { kind: 'http', host: 'corp.example', port: 3128, credentialed: true, auth_ref: 'prior:claude-code.settings', source: 'agent' }
+  assert.deepEqual(view(p['claude-code.settings']), { ...ON, upstream: claude, envUnreadable: false })
+  assert.deepEqual(view(p['codex.env']), { ...ON, upstream: ownProxy({ kind: 'http', host: 'corp.example', port: 3128 }), envUnreadable: false }, 'Codex follows the system proxy only when it has none of its own; its WebSocket then goes the same way as its HTTP, so there is nothing to tell')
+  assert.deepEqual([p['codex.env'].bypass, p['codex.env'].untranslated], [[suf('localhost'), cidr('127.0.0.0/8'), suf('corp.com')], 0], 'the NO_PROXY it set is its own bypass table, with the loopback range `localhost` stands for')
+  const json = JSON.stringify(p)
+  for (const secret of ['s3cret', 'alice']) assert.equal(json.includes(secret), false, `${secret} is in no part of the plan: the credentials stay where the user put them, and the kernel config and the dial read them from there`)
+  // after `on` the file holds asight's address and the manifest holds the user's: the same plan
+  const m = newManifest()
+  const e = proxyEntries(gdata('claude-code.settings').group, b.ctx(), { port: 17991, listenerToken: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' })[0]
+  applyJsonKey({ dir: b.dir, manifest: m, harness: 'claude-code', file: e.path, keys: e.keys, value: e.value })
+  const after = plan(b, { manifest: m })
+  assert.deepEqual(after['claude-code.settings'], p['claude-code.settings'])
+  const blind = plan(b)
+  assert.equal(blind['claude-code.settings'].reason, 'route-loop', 'without the manifest, the file says asight\'s own address: a loop, said so, nothing dialled')
+})
+
+test('W5 §2.2 protocols: http, socks5 and socks5h connect (the last two are one thing); https and socks4 are not routed and say which, with the doctor code; nothing is swapped for another way out', () => {
+  const b = box()
+  const up = (text) => { b.put('.claude/settings.json', JSON.stringify({ env: { HTTPS_PROXY: text } })); return plan(b)['claude-code.settings'] }
+  const shown = (r) => [r.entry, r.reason, r.code, r.why ?? null, r.protocol ?? null, r.upstream && r.upstream.kind]
+  assert.deepEqual(shown(up('http://p.example:3128')), ['auto', null, undefined, null, null, 'http'])
+  assert.deepEqual(shown(up('p.example:3128')), ['auto', null, undefined, null, null, 'http'], 'a bare host:port is an HTTP proxy')
+  assert.deepEqual(shown(up('socks5://p.example:1080')), ['auto', null, undefined, null, null, 'socks5'])
+  assert.deepEqual(shown(up('socks5h://p.example:1080')), ['auto', null, undefined, null, null, 'socks5'])
+  assert.deepEqual(shown(up('https://p.example:3128')), [null, 'not-routed', 'proxy-unsupported', 'upstream-protocol', 'https', null])
+  assert.deepEqual(shown(up('socks4://p.example:1080')), [null, 'not-routed', 'proxy-unsupported', 'upstream-protocol', 'socks4', null])
+  assert.deepEqual(shown(up('ftp://p.example:21')), [null, 'not-routed', 'proxy-unsupported', 'upstream-protocol', 'ftp', null])
+  assert.deepEqual(shown(up('http://p.example:3128\nx')), [null, 'not-routed', 'not-routed', 'upstream-unparseable', null, null], 'a value with a line break in it is not read: that is the group\'s reason, not a throw')
+})
+
+test('W8 / W5: an upstream that is asight\'s own port is a route loop — the group is not routed, and the plan says which address', () => {
+  const b = box()
+  b.put('.claude/settings.json', '{"env": {"HTTPS_PROXY": "http://127.0.0.1:17991"}}')
+  const r = plan(b)['claude-code.settings']
+  assert.deepEqual([r.entry, r.on, r.reason, r.code, r.detail, r.upstream], [null, false, 'route-loop', 'route-loop', '127.0.0.1:17991', null])
+  assert.equal(plan(b, { netenv: NETENV({ ownPorts: [] }) })['claude-code.settings'].entry, 'auto', 'it is only a loop because that port is one of asight\'s')
+})
+
+test('W5 an entry is written only for a group the user named when it is an opt-in item (opt-in-needed otherwise), and only for a harness that is on (desired-off otherwise); the first reason that holds is the one said', () => {
+  const b = box()
+  const p = plan(b)
+  for (const g of NAMED) assert.deepEqual([g, p[g].entry, p[g].on, p[g].reason, p[g].code], [g, null, false, 'opt-in-needed', 'opt-in-needed'], `${g} is not the automatic kind: it waits to be named, and nothing is written for it`)
+  assert.deepEqual(NAMED.flatMap((g) => gdata(g).forms.map((f) => p[g].forms[f.id].reason)), NAMED.flatMap((g) => gdata(g).forms.map(() => 'opt-in-needed')), 'and every form of it says so')
+  const named = plan(b, { optIns: ['kimi-code.cli', 'claude-code.desktop', 'z-code.desktop'] })
+  assert.deepEqual(['kimi-code.cli', 'claude-code.desktop', 'z-code.desktop', 'kimi-code.vscode'].map((g) => [g, named[g].entry, named[g].on, named[g].reason]), [['kimi-code.cli', 'opt-in', true, null], ['claude-code.desktop', 'opt-in', true, null], ['z-code.desktop', 'opt-in', true, null], ['kimi-code.vscode', null, false, 'opt-in-needed']], 'only what was named')
+  // a form of the group may be the name: a group with two forms is named by either
+  const two = { g: 'x', harness: 'xh', group: { g: 'x', proxyEntry: { kind: 'file', format: 'json-key', files: () => [], key: ['k'] }, auth: true, followsSystemProxy: { http: false, ws: false }, optIn: [{ item: 'i', scope: 'user', impact: 'y' }] }, forms: [{ id: 'x.a' }, { id: 'x.b' }], proxy: { env: [], branches: ['all'] } }
+  assert.deepEqual([planRoutes({ netenv: NETENV(), groups: [two], desired: { xh: 'on' }, optIns: ['x.b'], ctx: b.ctx() }).x.entry, planRoutes({ netenv: NETENV(), groups: [two], desired: { xh: 'on' }, optIns: ['x.zzz'], ctx: b.ctx() }).x.reason], ['opt-in', 'opt-in-needed'])
+  // off: no entry; the upstream is still computed (what the kernel forwards to for a process that outlives `off`)
+  const off = plan(b, { desired: { codex: { desired: 'off' }, hermes: 'off', 'claude-code': 'on' } })
+  assert.deepEqual(['codex.env', 'hermes.cli', 'claude-code.settings', 'z-code.cli'].map((g) => [g, off[g].entry, off[g].on, off[g].reason]), [['codex.env', null, false, 'desired-off'], ['hermes.cli', null, false, 'desired-off'], ['claude-code.settings', 'auto', true, null], ['z-code.cli', null, false, 'desired-off']], 'a harness with no word in `desired` is off')
+  assert.deepEqual(off['codex.env'].upstream, PROXY('127.0.0.1', 7897), 'forward-only needs the upstream')
+  assert.equal(off['codex.env'].egressDiffers, undefined, 'nothing is connected to tell it about')
+  assert.deepEqual(plan(b, { desired: null })['codex.env'].reason, 'desired-off')
+  // the order: off first, then not named, then the upstream, then the entry that takes no login
+  const worst = plan(b, { desired: {}, netenv: NETENV({ systemProxy: sys({ autoConfigUrl: 'http://x/p.pac' }) }) })
+  assert.equal(worst['kimi-code.vscode'].reason, 'desired-off')
+  const unnamedPac = plan(b, { netenv: NETENV({ systemProxy: sys({ autoConfigUrl: 'http://x/p.pac' }) }) })
+  assert.equal(unnamedPac['kimi-code.vscode'].reason, 'opt-in-needed', 'it follows the system proxy, which is a PAC; it is the naming that is missing first')
+  const namedPac = plan(b, { optIns: ['kimi-code.vscode'], netenv: NETENV({ systemProxy: sys({ autoConfigUrl: 'http://x/p.pac' }) }) })
+  assert.deepEqual([namedPac['kimi-code.vscode'].reason, namedPac['kimi-code.vscode'].why], ['not-routed', 'system-proxy-pac'])
+})
+
+test('W5 / W23: an entry that takes no login (Claude Desktop\'s policy value) is not routed to an upstream that needs one — form-unsupported; one with an upstream that needs none is', () => {
+  const b = box()
+  b.put('.x/c.json', `{"p": "${USER_PROXY}"}`)
+  const entryless = { g: 'nologin', harness: 'xh', group: { g: 'nologin', proxyEntry: { kind: 'file', format: 'json-key', files: (ctx) => [path.join(ctx.home, '.x', 'c.json')], key: ['p'] }, auth: false, followsSystemProxy: { http: false, ws: false } }, forms: [{ id: 'nologin.a' }], proxy: { env: [], branches: ['all'] } }
+  const r = planRoutes({ netenv: NETENV(), groups: [entryless], desired: { xh: 'on' }, ctx: b.ctx() }).nologin
+  assert.deepEqual([r.entry, r.on, r.reason, r.upstream.credentialed, r.forms['nologin.a'].reason], [null, false, 'form-unsupported', true, 'form-unsupported'])
+  b.put('.x/c.json', '{"p": "http://corp.example:3128"}')
+  assert.equal(planRoutes({ netenv: NETENV(), groups: [entryless], desired: { xh: 'on' }, ctx: b.ctx() }).nologin.entry, 'auto')
+  // the real one: Claude Desktop follows the system proxy, and a system proxy with a login in it is not read at all (WinINET takes none from it)
+  const desktop = plan(b, { optIns: ['claude-code.desktop'], netenv: NETENV({ systemProxy: sys({ server: 'alice:s3cret@corp.example:3128' }) }) })['claude-code.desktop']
+  assert.deepEqual([desktop.reason, desktop.why, desktop.detail], ['not-routed', 'upstream-unparseable', 'credentials-in-system-proxy'])
+  assert.equal(plan(b, { optIns: ['claude-code.desktop'] })['claude-code.desktop'].entry, 'opt-in')
+})
+
+test('W5 egress-differs: a group connected through the system proxy whose WebSocket did not follow it is told so, once it is connected; a group that was not connected, or whose harness has no such branch, is not', () => {
+  const b = box()
+  const p = plan(b)
+  assert.deepEqual(['codex.env', 'hermes.cli', 'claude-code.settings'].map((g) => p[g].egressDiffers === true), [true, false, false], 'Codex has an HTTP and a WebSocket branch, Hermes follows the system proxy but has only one')
+  assert.equal(plan(b, { desired: { codex: 'off' } })['codex.env'].egressDiffers, undefined)
+})
+
+test('W5 the bypass table: a follower\'s is the system proxy\'s ProxyOverride, an agent\'s own proxy takes its NO_PROXY, a group going direct has none to leave direct, and what asight cannot read is counted — each group its own', () => {
+  const b = box()
+  b.put('.codex/.env', 'OPENAI_API_KEY=k\n')
+  const override = '<local>;*.corp.com;10.*;intranet.corp.com;a*b.com'
+  const p = plan(b, { netenv: NETENV({ systemProxy: sys({ override }) }) })
+  assert.deepEqual([p['codex.env'].bypass, p['codex.env'].untranslated], [[local, suf('corp.com'), cidr('10.0.0.0/8'), dom('intranet.corp.com')], 1])
+  assert.deepEqual([p['hermes.cli'].bypass, p['hermes.cli'].untranslated], [p['codex.env'].bypass, 1], 'both follow the same ProxyOverride')
+  assert.notEqual(p['hermes.cli'].bypass, p['codex.env'].bypass, 'but not one table between two groups')
+  assert.deepEqual([p['claude-code.settings'].bypass, p['claude-code.settings'].untranslated], [[], 0], 'direct has nothing to leave direct')
+  const own = plan(b, { netenv: NETENV({ systemProxy: sys({ override }) }), manifest: { entries: [] } }) // no change: the manifest has no record
+  assert.deepEqual(own['codex.env'].bypass, p['codex.env'].bypass)
+  b.put('.codex/.env', 'HTTPS_PROXY=http://corp.example:3128\nNO_PROXY=.corp.com,10.0.0.0/8,[::1]\n')
+  const withOwn = plan(b, { netenv: NETENV({ systemProxy: sys({ override }) }) })
+  assert.deepEqual([withOwn['codex.env'].bypass, withOwn['codex.env'].untranslated], [[suf('corp.com'), cidr('10.0.0.0/8')], 1], 'the NO_PROXY of the proxy it uses, not the system\'s list for another proxy')
+  assert.deepEqual(withOwn['hermes.cli'].bypass, p['hermes.cli'].bypass, 'and another group\'s table is its own')
+})
+
+test('W5 the login environment: a harness that reads a proxy variable of the login environment has it as its upstream when its entry holds none; one that cannot be read is 「不知道」 beside the answer, not a guess', () => {
+  const b = box()
+  const env = { ok: true, values: { HTTPS_PROXY: 'http://login.example:8080', NO_PROXY: 'localhost' } }
+  const p = plan(b, { netenv: NETENV({ hkcuEnv: env }) })
+  assert.deepEqual([p['claude-code.settings'].upstream, p['claude-code.settings'].envUnreadable], [{ kind: 'http', host: 'login.example', port: 8080, source: 'agent' }, false])
+  assert.deepEqual(p['z-code.cli'].upstream, DIRECT, 'Z-Code reads a variable of its own, not the login environment\'s')
+  const blind = plan(b, { netenv: NETENV({ hkcuEnv: { ok: false, reason: 'timeout' } }) })
+  assert.deepEqual(blind['claude-code.settings'].unknown, [{ what: 'login-environment', reason: 'timeout' }])
+  assert.equal(blind['claude-code.settings'].entry, 'auto', 'the rules go on: it is direct, and the plan says what it could not read')
+  assert.deepEqual(blind['z-code.cli'].unknown, [{ what: 'login-environment', reason: 'timeout' }])
+  const denied = plan(b, { ctx: b.ctx({}, { readTextOrError: () => ({ text: null, error: { code: 'EACCES', message: 'x' } }) }) })
+  assert.deepEqual(denied['claude-code.settings'].unknown, [{ what: 'agent-proxy', reason: 'denied', detail: 'EACCES' }], 'an entry file that cannot be read is said too')
+})
+
+test('W5 the form results: an elevated process of a form and a process whose path nobody measured are said on the forms; they do not change what the group gets, and a group\'s own reason says the same for all its forms', () => {
+  const b = box()
+  const procs = [
+    { pid: 7712, match: { kind: 'form', id: 'claude-code.cli' }, elevated: true },
+    { pid: 7713, match: { kind: 'form', id: 'claude-code.cli' }, elevated: true },
+    { pid: 7714, match: { kind: 'form', id: 'claude-code.vscode' }, elevated: false },
+    { pid: 5530, match: { kind: 'form', id: 'codex.app' }, elevated: null },
+    { pid: 9001, match: { kind: 'path-unknown', forms: ['claude-code.cli', 'claude-code.vscode', 'claude-code.desktop'], shape: 'D:\\tools\\claude.exe' }, elevated: false },
+    { pid: 9002, match: { kind: 'path-unknown', forms: ['codex.cli', 'codex.vscode', 'codex.app'], shape: 'C:\\Users\\<user>\\x\\codex.exe' } },
+    { pid: 4000, match: { kind: 'pending', forms: ['deepseek-dsh.cli'] } },
+    { pid: 4001, match: { kind: 'none' }, elevated: true },
+    { pid: 4002, match: { kind: 'form', id: 'no.such.form' }, elevated: true },
+  ]
+  const p = plan(b, { procs })
+  const f = p['claude-code.settings'].forms
+  assert.deepEqual(f['claude-code.cli'], { reason: 'elevated-agent', elevatedPids: [7712, 7713], unknownPaths: ['D:\\tools\\claude.exe'] }, 'the elevated pids are a fact about a known form, and the first thing said about it')
+  assert.deepEqual(f['claude-code.vscode'], { reason: 'form-path-unknown', unknownPaths: ['D:\\tools\\claude.exe'] }, 'a path that tells which form it is does not exist: every form of that image carries it')
+  assert.deepEqual(p['codex.env'].forms['codex.app'], { reason: 'form-path-unknown', unknownPaths: ['C:\\Users\\<user>\\x\\codex.exe'] }, 'an elevation nobody could read (null) is not an elevation')
+  assert.deepEqual(p['deepseek-dsh.env'].forms, { 'deepseek-dsh.cli': { reason: null }, 'deepseek-dsh.desktop': { reason: null } }, 'a form whose command line is not known yet, and one that is no agent, are nothing yet')
+  assert.deepEqual(['entry', 'on', 'reason'].map((k) => p['claude-code.settings'][k]), ['auto', true, null], 'the group is connected: the elevated process is the one that is not captured')
+  assert.deepEqual(p['claude-code.desktop'].forms['claude-code.desktop'], { reason: 'opt-in-needed', unknownPaths: ['D:\\tools\\claude.exe'] }, 'the group\'s reason is first')
+  assert.deepEqual(plan(b)['claude-code.settings'].forms, { 'claude-code.cli': { reason: null }, 'claude-code.vscode': { reason: null } }, 'nothing seen, nothing said')
+})
+
+test('W71 (plan half): fed its own answers as `last`, a system proxy that turned PAC or could not be read leaves the followers on the upstream and the bypass table they had, with a hint; a group that was not routed before stays not routed', () => {
+  const b = box()
+  const before = plan(b, { netenv: NETENV({ systemProxy: sys({ override: '<local>;*.corp.com' }) }) })
+  const last = Object.fromEntries(Object.values(before).map((r) => [r.g, r.answer]))
+  for (const [why, sp] of [['system-proxy-pac', sys({ autoConfigUrl: 'http://wpad/p.pac' })], ['system-proxy-unreadable', { ok: false, reason: 'timeout' }]]) {
+    const after = plan(b, { netenv: NETENV({ systemProxy: sp }), last })
+    assert.deepEqual([after['codex.env'].entry, after['codex.env'].on, after['codex.env'].reason, after['codex.env'].hint], ['auto', true, null, why])
+    assert.deepEqual([after['codex.env'].upstream, after['codex.env'].bypass, after['codex.env'].egressDiffers], [before['codex.env'].upstream, before['codex.env'].bypass, true], 'where it was, with the table it had')
+    assert.deepEqual(after['claude-code.settings'], before['claude-code.settings'], 'a group that does not follow the system proxy is not touched')
+    assert.equal(plan(b, { netenv: NETENV({ systemProxy: sp }) })['codex.env'].reason, 'not-routed', 'with no last answer there is nothing to stay on')
+  }
+  const same = plan(b, { netenv: NETENV({ systemProxy: sys({ override: '<local>;*.corp.com' }) }), last })
+  assert.deepEqual(Object.values(same).map((r) => r.answer), Object.values(before).map((r) => r.answer), 'an unchanged system proxy gives the answers it gave: the daemon compares these and reloads nothing')
+  assert.ok(Object.values(before).every((r) => !('hint' in r.answer) && JSON.stringify(r.answer).length > 0))
+})
+
+test('planRoutes wants its inputs: the groups, the network as it was read, asight\'s own ports (without them no loop could be seen), and the ctx that says where the files are', () => {
+  const b = box()
+  const ok = { netenv: NETENV(), groups: GROUPS, desired: ALL_ON, ctx: b.ctx() }
+  assert.equal(typeof planRoutes(ok), 'object')
+  assert.throws(() => planRoutes({ ...ok, groups: undefined }), { name: 'TypeError', message: /needs the groups/ })
+  assert.throws(() => planRoutes({ ...ok, netenv: undefined }), { name: 'TypeError', message: /needs the network/ })
+  assert.throws(() => planRoutes({ ...ok, netenv: { systemProxy: sys(), hkcuEnv: { ok: true, values: {} } } }), { name: 'TypeError', message: /own ports/ }, 'a plan that cannot see a loop is not a plan')
+  assert.throws(() => planRoutes({ ...ok, ctx: undefined }), { name: 'TypeError', message: /needs the ctx/ })
+  assert.throws(() => planRoutes({ ...ok, groups: [], ctx: undefined }), { name: 'TypeError', message: /needs the ctx/ }, 'whether or not there is a group to read a file for')
+  assert.throws(() => planRoutes(), TypeError)
+  assert.deepEqual(Object.keys(planRoutes({ ...ok, groups: [] })), [])
+})
+
+// ---------- what route-plan.mjs may touch ----------
+
+const PLAN_SRC = fs.readFileSync(fileURLToPath(new URL('../../../../src/collector/arch/win32/route-plan.mjs', import.meta.url)), 'utf8')
+
+test('route-plan.mjs imports only the config readers, forms.mjs and upstream.mjs, touches no disk, process, network or OS by itself (the files it reads come through the ctx it is given), and names no harness: its groups are data (W39)', () => {
+  assert.deepEqual(reaches(PLAN_SRC, ['../../core/config-read.mjs', './forms.mjs', './upstream.mjs']), [])
+  assert.ok(reaches("import fs from 'node:fs'\n", ['./forms.mjs']).length > 0, 'the scan can fail')
+  assert.ok(reaches("/** the process. */\nconst x = process.platform\n", []).length > 0 && reaches('/** the process. */\nconst x = 1\n', []).length === 0, 'a call is found, prose in a comment is not')
+  const code = PLAN_SRC.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')
+  assert.deepEqual(code.match(/\b(claude|codex|opencode|kimi|dsh|deepseek|hermes|zcode|z-code)\b/gi), null, 'the code names no harness (the harness files are the only place that does)')
 })
