@@ -1,5 +1,5 @@
-// test/netenv/topology.test.mjs — RFC 1.6 §9.2–§9.4: the path each harness's traffic takes, drawn from facts (V41 the table of §9.3 · V42 each hop concrete, an unreadable one said · V45 the way out of asight
-// leaves the route as it was). Every row of test/netenv/fixtures/rows.mjs is one NetFacts and the topology it must give, written out literally; the facts are injected, nothing here reads the machine.
+// test/netenv/topology.test.mjs — RFC 1.6 §9.2–§9.4: the path each harness's traffic takes, drawn from facts (V41 the table of §9.3 · V42 each hop concrete, an unreadable one said; V45, the way out of asight
+// leaves the route as it was, is in topology-text.test.mjs with the words). Every row of test/netenv/fixtures/rows.mjs is one NetFacts and the topology it must give, written out literally; the facts are injected, nothing here reads the machine.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildTopology, renderCompact, renderDetail } from '../../src/netenv/topology.mjs'
