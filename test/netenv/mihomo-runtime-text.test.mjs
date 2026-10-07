@@ -141,9 +141,11 @@ test('the copy the proxy software writes after it ran the global script (block s
   assert.deepEqual(parseYaml(splice(REGENERATED, B1)), spliceRuntime({ runtime: runtimeFixture(), block: B1 }))
 })
 
-test('what only looks like asight\'s is the user\'s: a nested name inside a node, a node called asightx, a rule that mentions an asight- name, a loopback-shaped rule of their own', () => {
+test('what only looks like asight\'s is the user\'s: a nested name inside a node, a node called asightx, a node, a group and a provider with asight- in the MIDDLE of the name, a rule that mentions an asight- name, a loopback-shaped rule of their own', () => {
   const text = `proxies:
 - name: asightx
+  type: direct
+- name: my-asight-vpn
   type: direct
 - name: node-a
   type: ss
@@ -159,11 +161,20 @@ proxy-groups:
   type: select
   proxies:
   - DIRECT
+  - my-asight-vpn
+- name: my-asight-grp
+  type: select
+  proxies:
+  - my-asight-vpn
 rule-providers:
   mine:
     type: inline
     payload:
     - DOMAIN,x.example.com
+  x-asight-r:
+    type: inline
+    payload:
+    - DOMAIN,y.example.com
 rules:
 - DOMAIN,asight-in-foo.example.com,DIRECT
 - DOMAIN,asight-r-foo.example.com,DIRECT
@@ -174,6 +185,11 @@ rules:
   assert.deepEqual(parseYaml(splice(text, B1)), spliceRuntime({ runtime: parseYaml(text), block: B1 }))
   assert.equal(strip(splice(text, B1)), text)
   assert.equal(strip(text), text)
+  // by name, and not only by the oracle: only a name that STARTS with asight- is ours (a node named my-asight-vpn deleted from the pushed runtime breaks the groups that list it)
+  const out = parseYaml(splice(text, B1))
+  assert.ok(out.proxies.some((p) => p.name === 'my-asight-vpn'), 'a node with asight- inside its name is the user\'s')
+  assert.ok(out['proxy-groups'].some((g) => g.name === 'my-asight-grp'), 'a group with asight- inside its name is the user\'s')
+  assert.ok('x-asight-r' in out['rule-providers'], 'a provider with asight- inside its key is the user\'s')
 })
 
 test('quoted names and flow items of ours are recognised; a quoted key and a single-quoted rule too', () => {
