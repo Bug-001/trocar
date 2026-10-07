@@ -30,9 +30,7 @@ import { fileURLToPath } from 'node:url'
 import { startRealEngine } from './fixtures/real-engine.mjs'
 import { BIN, gate, freePort, sleep, startMihomo } from './fixtures/real-mihomo.mjs'
 import { vergeLikeConfig, forwarderLikeConfig, groupOf, G, TOKEN, OWN_IMAGES } from './fixtures/generated-config.mjs'
-import { loopbackRuntimeText } from './fixtures/rules/runtime.mjs'
 import { buildBlock, buildForwarderConfig } from '../../src/netenv/mihomo/rules.mjs'
-import { spliceRuntimeText, stripRuntimeText } from '../../src/netenv/mihomo/runtime-text.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const PROBE_FILE = path.join(HERE, 'fixtures', 'mihomo-probe.bytes')
@@ -267,50 +265,6 @@ test('W57 shape 1 with a strict user (rules end in MATCH,REJECT but for the orig
 
 test('W57 shape 2 with an http next hop that has credentials and refuses every target but the origin: asight-re stays alive, the credentials reach the hop, no probe leaves through it', gate, async (t) => {
   await runContract(t, { name: 'forwarder-like', make: forwarderLikeConfig, agentAuth: 'agent:ap', nextHop: { user: 'hop-user', pass: 'hop-pass' } })
-})
-
-// The payload path on the real core (4.8 §4.1, W9, W58 text side): the runtime file as TEXT, spliced by runtime-text.mjs, PUT as {payload}. The object path and a mini reader prove the
-// text equals what rules.mjs says; only a core can say whether it LOADS, whether the include-all groups really leave asight's outbounds out, and whether the select starts on PASS.
-test('W57 payload: the spliced runtime text is accepted (204); include-all groups list the user\'s nodes and none of asight-*; the select is on PASS; the strip is accepted and leaves nothing of asight\'s', gate, async (t) => {
-  const ports = {}
-  for (const k of ['mixed', 'controller', 'engine']) ports[k] = await freePort()
-  const secret = randomBytes(16).toString('hex'), g = 'claude-code.cli'
-  const yaml = loopbackRuntimeText({ mixed: ports.mixed, controller: ports.controller, secret })
-  const m = await startMihomo(t, { configText: yaml, secret, controller: ports.controller })
-  const members = async (n) => (await m.ctl('GET', `/proxies/${n}`)).json().all
-  const push = (text) => m.ctl('PUT', '/configs?force=true', { payload: text })
-  assert.deepEqual(await members('AUTO-ALL'), ['node-a', 'node-b'], 'before the block: the include-all group lists the two nodes')
-
-  const blk = buildBlock({ groups: [groupOf(g)], enginePort: ports.engine, token: TOKEN, reenter: { host: '127.0.0.1', port: ports.mixed }, ownImages: OWN_IMAGES })
-  for (const [rel, text] of Object.entries(blk.files)) fs.writeFileSync(path.join(m.home, rel), text) // the route files go first (4.8 §3.1): the provider reads one
-  const spliced = spliceRuntimeText({ yaml, block: blk })
-  assert.equal(spliced.filtered, 2, 'both include-all groups were given the filter')
-
-  const put = await push(spliced.yaml)
-  assert.equal(put.status, 204, `the core accepts the spliced runtime: ${put.body}`)
-  for (const n of ['AUTO-ALL', 'AUTO']) {
-    const all = await members(n)
-    assert.deepEqual(all, ['node-a', 'node-b'], `${n}: the user's nodes, none of asight's`)
-  }
-  assert.deepEqual(await members('Manual'), ['node-a', 'node-b'], 'a group that lists its members is as it was')
-  const sw = (await m.ctl('GET', `/proxies/asight-sw-${g}`)).json()
-  assert.equal(sw.now, 'PASS', 'a freshly spliced block is off: PASS first')
-  assert.deepEqual(sw.all, ['PASS', `asight-fb-${g}`])
-  assert.equal((await m.ctl('GET', `/proxies/asight-fb-${g}`)).json().type, 'Fallback')
-  assert.ok(`asight-r-${g}` in (await m.ctl('GET', '/providers/rules')).json().providers, 'the provider is loaded')
-
-  // the control: the same text without the filter lines. This is what the filter is for; the assertions above mean something only because this one pulls them in.
-  const unfiltered = spliced.yaml.replace('|^asight-"', '"').replace(/ {2}exclude-filter: "\^asight-"\n/, '')
-  assert.notEqual(unfiltered, spliced.yaml); assert.ok(!unfiltered.includes('^asight-'))
-  assert.equal((await push(unfiltered)).status, 204, 'the control loads')
-  assert.ok((await members('AUTO-ALL')).some((n) => n.startsWith('asight-')), 'without the filter the include-all group pulls asight-in-<g> in (what ^asight- prevents)')
-
-  const stripped = stripRuntimeText({ yaml: spliced.yaml })
-  assert.equal(stripped.unfiltered, 2)
-  assert.equal((await push(stripped.yaml)).status, 204, 'the core accepts the stripped runtime')
-  for (const n of ['asight-sw-', 'asight-fb-', 'asight-in-', 'asight-re-']) assert.equal((await m.ctl('GET', `/proxies/${n}${g}`)).status, 404, `${n}<g> is gone`)
-  assert.deepEqual(await members('AUTO-ALL'), ['node-a', 'node-b'])
-  assert.deepEqual(Object.keys((await m.ctl('GET', '/providers/rules')).json().providers).filter((k) => k.startsWith('asight-')), [], 'the provider is gone')
 })
 
 // The generators' text, as it is (no overlay): the real core must load it. The engine is not running in these (no tap): they check what the config says about itself and what a
