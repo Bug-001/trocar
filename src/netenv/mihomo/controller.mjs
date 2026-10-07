@@ -87,10 +87,11 @@ export function parseEndpoint(spec) {
 export const maskEndpoint = (spec) => String(spec ?? '').replace(/[0-9a-f]{8,}/gi, '<k>')
 
 /**
- * The only core messages a failed request's `text` may carry, as the real v1.19.32 prints them (W57 holds this list to it): a bad Bearer, a body that is not JSON, a path or a name that is not there, a select
- * to a member the group does not have. Anything else is the core quoting the user's config back and is withheld.
+ * The only core messages a failed request's `text` may carry, as the real v1.19.32 prints them (W57 holds this list to it): a bad Bearer, and a path or a name that is not there (`GET /proxies/asight-*` for a
+ * group that is gone). Those are the two this client can provoke. `Body invalid` (a body that is not JSON) and `Selector update error` (a select to a member the group does not have) come from requests it never
+ * sends: it sends JSON it wrote itself, and `PUT /proxies/*` is not on its allow-list. Anything else is the core quoting the user's config back and is withheld.
  */
-export const FIXED_MESSAGES = Object.freeze(new Set(['Unauthorized', 'Body invalid', 'Resource not found', 'Selector update error: proxy not exist']))
+export const FIXED_MESSAGES = Object.freeze(new Set(['Unauthorized', 'Resource not found']))
 
 /** What this client itself says about a failed transport (node's own message, the endpoint already masked): every quoted string -> <q>, at most 120 characters. */
 export function redact(text) {

@@ -7,7 +7,7 @@ import http from 'node:http'
 import path from 'node:path'
 import { EventEmitter } from 'node:events'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { createController, ControllerRefused, refusal, parseEndpoint, maskEndpoint, redact } from '../../src/netenv/mihomo/controller.mjs'
+import { createController, ControllerRefused, refusal, parseEndpoint, maskEndpoint, redact, FIXED_MESSAGES } from '../../src/netenv/mihomo/controller.mjs'
 import { RECORDED_REFUSALS, RECORDED_FIXED } from './fixtures/real-rules.mjs'
 
 const G = 'claude-code.cli'
@@ -168,6 +168,16 @@ test('an error answer carries a message only when it is one of the core\'s fixed
   assert.equal((await createController({ endpoint: `tcp:127.0.0.1:${plain.port}` }).get('/version')).text, '', 'a body that is not the core\'s JSON message is withheld too')
   assert.equal(redact('a "b" c'), 'a <q> c', 'redact stays for what this client says about the transport itself')
   assert.equal(redact(undefined), '')
+})
+
+test('the core\'s fixed messages are the ones this client can provoke: a wrong Bearer and a path the core does not have; what only PUT /proxies/* says is not handed on, the client never sends it', async (t) => {
+  assert.deepEqual([...FIXED_MESSAGES].sort(), ['Resource not found', 'Unauthorized'])
+  assert.deepEqual([...RECORDED_FIXED].sort(), [...FIXED_MESSAGES].sort(), 'the recorded table and the allow-list are the same two')
+  for (const message of ['Body invalid', 'Selector update error: proxy not exist']) {
+    const s = await stub(t, () => [400, { message }])
+    const r = await createController({ endpoint: `tcp:127.0.0.1:${s.port}`, own: true }).put('/configs?force=true', { payload: 'mixed-port: 7897\n' })
+    assert.deepEqual([r.status, r.ok, r.text, r.json], [400, false, '', null], `${message}: the status is kept, the words are not`)
+  }
 })
 
 test('a controller that is not there, or does not answer, is a result (status 0 and the errno), not an exception; nothing identifying is in its text', async (t) => {

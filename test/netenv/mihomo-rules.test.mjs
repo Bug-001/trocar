@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { checkLoops, names, processRulesOf, routeFile, buildForwarderConfig } from '../../src/netenv/mihomo/rules.mjs'
+import { checkLoops, RouteLoopError, names, processRulesOf, routeFile, buildForwarderConfig } from '../../src/netenv/mihomo/rules.mjs'
 import { TOKEN, ENGINE_PORT, STAND_INS, IMAGES, FORMS, SECRET, forwarder } from './fixtures/rules/inputs.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -88,6 +88,16 @@ test('W8 a name rule is by base name, a path rule by the path; other rule types 
   none(['DOMAIN,node.exe', 'DOMAIN-SUFFIX,nodejs', 'IP-CIDR,127.0.0.1/32'])
   assert.equal(checkLoops({ processRules: ['PROCESS-NAME,node.exe,SomeGroup'], ownImages: OWN })?.code, 'route-loop', 'a rule written with its target is still read')
   none([]) // nothing to check is fine; having no images to check against is not (below)
+})
+
+test('W8 RouteLoopError (what Task 7\'s buildForwarderConfig throws on a hit) carries the code, the rule and which image; its words say that no config is written', () => {
+  const hit = checkLoops({ processRules: ['PROCESS-NAME,node.exe'], ownImages: OWN })
+  const e = new RouteLoopError(hit)
+  assert.ok(e instanceof Error)
+  assert.deepEqual([e.name, e.code, e.rule, e.imageIndex], ['RouteLoopError', 'route-loop', 'PROCESS-NAME,node.exe', 0])
+  assert.match(e.message, /PROCESS-NAME,node\.exe/)
+  assert.match(e.message, /no config is written/)
+  assert.doesNotMatch(e.message, /block/, 'the VPN block is gone (D43)')
 })
 
 test('W8 the check cannot be vacuous: no images, a non-string image, or a regex JS cannot compile all throw', () => {

@@ -37,17 +37,6 @@ async function realWorld(t) {
   const adapter = createVergeAdapter({ home, controller: ctl, running: () => true })
   return { ports, secret, sandbox, home, m, ctl, own, adapter, file: (rel) => path.join(home, rel) }
 }
-/** A PUT whose body is the text as it is (the client and `m.ctl` both send JSON), with the controller's own secret: what the core says to a body that is not JSON. */
-const putText = (w, target, text) => new Promise((resolve, reject) => {
-  const r = http.request({ host: '127.0.0.1', port: w.ports.controller, method: 'PUT', path: target, agent: false, headers: { authorization: `Bearer ${w.secret}`, 'content-type': 'application/json' } }, (rs) => {
-    let b = ''
-    rs.on('data', (d) => { b += d })
-    rs.on('end', () => resolve({ status: rs.statusCode, message: JSON.parse(b).message }))
-  })
-  r.on('error', reject)
-  r.end(text)
-})
-
 test('W57 adapter, reads: GET /configs and GET /version of the real core are what the adapter reads (mode, mixed-port, tun, version), and it asks nothing else', gate, async (t) => {
   const w = await realWorld(t)
   assert.deepEqual(await w.adapter.readConfigs(), { ok: true, mode: 'rule', mixedPort: w.ports.mixed, tun: false })
@@ -85,12 +74,8 @@ test('W57 a core that refuses a config (the own kernel\'s client): the client ke
   seen.set(bearer.text, bearer.status)
   const missing = await w.own.get('/proxies/asight-nope')
   seen.set(missing.text, missing.status)
-  const body = await putText(w, '/proxies/Manual', 'not json')
-  seen.set(body.message, body.status)
-  const sel = await w.m.ctl('PUT', '/proxies/Manual', { name: 'no-such-member' })
-  seen.set(sel.json().message, sel.status)
-  assert.deepEqual([...seen.keys()].sort(), [...RECORDED_FIXED].sort(), 'the four fixed messages of the allow-list, each seen from this core')
-  assert.deepEqual([...seen.values()].sort(), [400, 400, 401, 404])
+  assert.deepEqual([...seen.keys()].sort(), [...RECORDED_FIXED].sort(), 'the two fixed messages of the allow-list, each seen from this core (what only PUT /proxies/* says is not on it: the client never sends that)')
+  assert.deepEqual([...seen.values()].sort(), [401, 404])
 })
 
 test('W57 N9 on the real core: the user\'s-VPN client (own: false) reads /version and /configs; /rules, the node list, a group and every write method are refused before a byte is sent', gate, async (t) => {

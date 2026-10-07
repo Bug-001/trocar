@@ -10,4 +10,4 @@ export const RECORDED_REFUSALS = [
   { why: 'a config that is a string: the core echoes its first characters', status: 400, message: 'yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `this: i...` into config.RawConfig' },
   { why: 'broken yaml', status: 400, message: 'yaml: did not find expected key' },
 ]
-export const RECORDED_FIXED = ['Unauthorized', 'Body invalid', 'Resource not found', 'Selector update error: proxy not exist'] // the messages of a core that carry nothing of the user's
+export const RECORDED_FIXED = ['Unauthorized', 'Resource not found'] // the messages of a core that carry nothing of the user's and that this client can provoke (a wrong Bearer; GET /proxies/asight-<gone>): 4.8 W57 sees each once

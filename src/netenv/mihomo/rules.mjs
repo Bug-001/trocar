@@ -59,9 +59,11 @@ export function routeFile(lines) {
 
 // ---- the loop check (4.8 §3.4) ---------------------------------------------------------------------------------------------------------------------
 
+/** What `buildForwarderConfig` throws (Task 7) when checkLoops finds a hit: `new RouteLoopError(checkLoops(...))`. The caller writes no config and records `route-loop`. */
 export class RouteLoopError extends Error {
   constructor({ rule, imageIndex }) {
-    super(`a process rule would match asight's own program (${rule}): no block is written`)
+    super(`a process rule would match asight's own program (${rule}): no config is written`)
+    this.name = 'RouteLoopError'
     this.code = 'route-loop'
     this.rule = rule
     this.imageIndex = imageIndex
