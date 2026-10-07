@@ -3,8 +3,12 @@
 // helper's shapes (fixtures/win-facts.mjs). Everything runs in a sandbox: Verge's data directory is a temp directory, nothing of the user's is read or written.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import crypto from 'node:crypto'
+import fs from 'node:fs'
 import { discover, maskEndpoint } from '../../src/netenv/mihomo/controller.mjs'
 import { stubHelper, vergeProcs, proc, SESSION, VERGE_DIR } from './fixtures/win-facts.mjs'
+import { startWorld, snapshot, LEAKS, VERGE_YAML, PROFILES_YAML, SCRIPT_JS, userRuntime } from './fixtures/verge-world.mjs'
+import { buildScriptJs, insertScriptBlock, scanScript } from '../../src/netenv/mihomo/rules.mjs'
 
 // ---- N3 · N4: discovery ----------------------------------------------------------------------------------------------------------------------------------
 
@@ -148,3 +152,70 @@ test('N4 Verge\'s own core is trusted: the sidecar as this user\'s process, the 
   assert.equal(viaDir.how, 'enumerate')
   void SESSION
 })
+
+// ---- 4.7 §3.2: the fields, and only those ------------------------------------------------------------------------------------------------------------------------
+
+test('readFields gives 4.7 §3.2\'s fields and nothing else; no secret, subscription, node or name of the user\'s is in it; nothing is written', async (t) => {
+  const w = await startWorld(t)
+  const before = snapshot(w.sandbox)
+  const f = await w.adapter.readFields()
+  assert.deepEqual(f, {
+    tun: false, systemProxy: true, serviceMode: false, mixedPort: 7897, mode: 'rule', findProcessMode: 'strict',
+    controllerKeys: { pipe: true, tcp: false }, currentProfile: crypto.createHash('sha256').update('Rabc123xyz').digest('hex').slice(0, 8),
+    script: { file: 'Script.js', exists: true, writable: true, blocks: 0, problems: 0, blockSha256: null }, unreadable: [],
+  })
+  const text = JSON.stringify(f)
+  for (const leak of LEAKS) assert.ok(!text.includes(leak), `${leak} must not be in the fields`)
+  assert.deepEqual(snapshot(w.sandbox), before, 'a read writes nothing')
+  assert.deepEqual(w.core.requests, [], 'and asks the core nothing')
+})
+
+test('readFields: the runtime outranks config.yaml, the global script is the one profiles.yaml names, the block in it is counted and hashed, a file it cannot read is listed with its errno', async (t) => {
+  const block = buildScriptJs({ block: (await startWorld(t)).block() })
+  const w = await startWorld(t, { script: insertScriptBlock(SCRIPT_JS, block).text, verge: VERGE_YAML('enable_tun_mode: true\n').replace('enable_tun_mode: false\n', ''), runtime: userRuntime().replace('mixed-port: 7897', 'mixed-port: 7899').replace('find-process-mode: strict', 'find-process-mode: always') })
+  fs.writeFileSync(w.file('config.yaml'), 'mixed-port: 1111\nmode: global\nsecret: s3cr3t\n')
+  fs.rmSync(w.file('verge.yaml'))
+  const f = await w.adapter.readFields()
+  assert.deepEqual([f.mixedPort, f.findProcessMode, f.mode, f.tun, f.serviceMode], [7899, 'always', 'rule', null, null], 'the runtime wins; verge.yaml is gone: tun and service mode are not known')
+  assert.deepEqual(f.unreadable, [{ file: 'verge.yaml', reason: 'ENOENT' }])
+  assert.deepEqual([f.script.blocks, f.script.problems, f.script.blockSha256], [1, 0, crypto.createHash('sha256').update(scanScript(fs.readFileSync(w.file('profiles/Script.js'), 'latin1')).blocks[0].text).digest('hex')])
+  fs.writeFileSync(w.file('profiles.yaml'), PROFILES_YAML.replace('file: Script.js', 'file: global.js'))
+  fs.renameSync(w.file('profiles/Script.js'), w.file('profiles/global.js'))
+  assert.equal((await w.adapter.readFields()).script.file, 'global.js')
+  for (const evil of ['../../x.js', '/etc/passwd', 'a/b.js', '.hidden', 'a b.js']) {
+    fs.writeFileSync(w.file('profiles.yaml'), PROFILES_YAML.replace('file: Script.js', `file: "${evil}"`))
+    assert.equal((await w.adapter.readFields()).script.file, 'Script.js', `${evil} is not a file name in the profiles directory`)
+  }
+  fs.rmSync(w.file('profiles.yaml'))
+  fs.rmSync(w.file('clash-verge.yaml'))
+  const bare = await w.adapter.readFields()
+  assert.deepEqual([bare.mixedPort, bare.mode, bare.currentProfile], [1111, 'global', null], 'with no runtime, config.yaml is read')
+  assert.ok(bare.unreadable.some((u) => u.file === 'clash-verge.yaml') && bare.unreadable.some((u) => u.file === 'profiles.yaml'))
+  assert.deepEqual([bare.script.exists, bare.script.writable], [false, false], 'the script moved: not found, so not writable')
+  if (process.platform !== 'win32' && process.getuid && process.getuid() !== 0) {
+    fs.renameSync(w.file('profiles/global.js'), w.file('profiles/Script.js'))
+    fs.chmodSync(w.file('profiles/Script.js'), 0o444)
+    assert.equal((await w.adapter.readFields()).script.writable, false, 'a read-only script cannot take the block')
+  }
+})
+
+// ---- N13 ---------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+test('N13 find-process-mode is read from GET /configs: off, strict, always; a field that cannot be read is unknown; asight has no write for it', async (t) => {
+  for (const mode of ['off', 'strict', 'always']) {
+    const w = await startWorld(t, { core: { findProcessMode: mode } })
+    assert.deepEqual(await w.adapter.readFindProcessMode(), { mode, reason: null })
+    assert.deepEqual(w.core.writes(), [], 'zero PATCH and zero PUT')
+    assert.deepEqual(Object.keys(w.adapter).filter((k) => /find|process/i.test(k)), ['readFindProcessMode'], 'a reader: no setter')
+  }
+  const odd = await startWorld(t, { core: { findProcessMode: 'sometimes' } })
+  assert.deepEqual(await odd.adapter.readFindProcessMode(), { mode: null, reason: 'unreadable' })
+  const sick = await startWorld(t)
+  sick.core.failOn('GET', /^\/configs$/, 500)
+  assert.deepEqual(await sick.adapter.readFindProcessMode(), { mode: null, reason: 'unreadable' }, 'the core answered, with an error')
+  assert.deepEqual(await sick.adapter.readConfigs(), { ok: false, reason: 'unreadable' })
+  const gone = await startWorld(t)
+  await gone.core.stop()
+  assert.deepEqual(await gone.adapter.readFindProcessMode(), { mode: null, reason: 'controller-unreadable' })
+})
+
