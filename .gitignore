@@ -19,3 +19,7 @@ public/
 
 # frontend build artifact (rebuildable via npm run build)
 src/web/dist/
+
+# the own kernel's build output (scripts/kernel-payload.mjs): the exe and the generated platform packages are never committed (4.8 §8, W75)
+dist/
+*.exe
