@@ -10,7 +10,7 @@ import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { HELPER_PROTO, HELPER_VERBS, HELPER_PS1, REG_READ_ALLOW, startHelper } from '../../../../src/collector/arch/win32/helper.mjs'
-import { PS_TIMEOUT_MS, createProcWatcher, elevationOf, splitCommandLine } from '../../../../src/collector/arch/win32/procinfo.mjs'
+import { CMDLINE_STATES, PS_TIMEOUT_MS, createProcWatcher, elevationOf, splitCommandLine } from '../../../../src/collector/arch/win32/procinfo.mjs'
 import { ownerOf } from '../../../../src/collector/arch/win32/socktable.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
@@ -455,7 +455,7 @@ function psHelper(snapshots, { delayMs = 0 } = {}) {
     },
   }
 }
-function collect(w) { const ev = []; for (const n of ['exec', 'exit', 'facts-error', 'poll-error']) w.on(n, (x) => ev.push([n, x])); return ev }
+function collect(w) { const ev = []; for (const n of ['exec', 'exit', 'facts-update', 'facts-error', 'poll-error']) w.on(n, (x) => ev.push([n, x])); return ev }
 const brief = (ev) => ev.map(([n, x]) => [n, x.pid])
 
 test('W2 a new pid is an exec, a vanished one an exit; the first snapshot is the baseline and says nothing', async () => {
@@ -469,7 +469,7 @@ test('W2 a new pid is an exec, a vanished one an exit; the first snapshot is the
   const facts = ev[1][1]
   assert.deepEqual({ ...facts }, {
     os: 'win32', pid: 12, ppid: 1, name: 'p12.exe', exe: 'C:\\apps\\p12.exe', argv: ['C:\\apps\\p12.exe', '--x'], cmdline: '"C:\\apps\\p12.exe" --x', env: null, cwd: null,
-    startedAt: 1012, startTicks: '1012', sessionId: 2, integrity: 'medium', tokenDenied: false, elevated: false, elevationInferred: false, source: 'exec',
+    startedAt: 1012, startTicks: '1012', sessionId: 2, integrity: 'medium', tokenDenied: false, elevated: false, elevationInferred: false, source: 'exec', cmdlineState: 'ok',
   })
   assert.equal(facts.envError, 'env-unreadable', 'another process\'s environment is never read on Windows (4.8 §10.1): null with the reason, not an empty one')
   await w.poll()
@@ -543,6 +543,77 @@ test('W2 start() returns the baseline poll\'s promise, and a second start() the 
   assert.equal(await first, true)
   assert.equal(w.stats().polls, 1, 'the baseline was taken when the promise settled')
   assert.equal(w.start(), first, 'a second start() does not poll again')
+})
+
+// ---------- W2: a command line that is not there yet is told, not lost (4.8 §1 `ps`) ----------
+
+/** A ps row whose command line the helper has no answer for (yet). */
+const noCmd = (pid, state, extra = {}) => row(pid, { cmdline: null, cmdlineState: state, ...extra })
+
+test('W2 an exec whose command line is not known yet says so (cmdlineState), and the command line arriving later is a facts-update; nothing is lost to "first sight"', async () => {
+  // forms recognised by command line (node.exe + dsh, W3) would otherwise be missed for good: `exec` is told once, at first sight.
+  const w = createProcWatcher({ helper: psHelper([
+    [row(10)], // the baseline
+    [row(10), noCmd(11, 'pending')], // pid 11 is new; CIM has not given its command line yet
+    [row(10), noCmd(11, 'cim-backoff')], // CIM failed: not asked again for 30 s. Not known, still
+    [row(10), row(11, { cmdline: '"C:\\node\\node.exe" "C:\\npm\\@deepseek-ai\\dsh\\bin.js"' })], // it arrives
+    [row(10), row(11, { cmdline: '"C:\\node\\node.exe" "C:\\npm\\@deepseek-ai\\dsh\\bin.js"' })],
+  ]) })
+  const ev = collect(w)
+  await w.poll()
+  await w.poll()
+  assert.deepEqual(brief(ev), [['exec', 11]])
+  assert.deepEqual([ev[0][1].cmdline, ev[0][1].argv, ev[0][1].cmdlineState, ev[0][1].source], [null, [], 'pending', 'exec'], 'no command line is told as "not yet", not as "none"')
+  await w.poll()
+  assert.equal(ev.length, 1, 'still not known: nothing to add')
+  await w.poll()
+  assert.deepEqual(brief(ev), [['exec', 11], ['facts-update', 11]])
+  const up = ev[1][1]
+  assert.deepEqual([up.cmdline, up.argv, up.cmdlineState, up.source], ['"C:\\node\\node.exe" "C:\\npm\\@deepseek-ai\\dsh\\bin.js"', ['C:\\node\\node.exe', 'C:\\npm\\@deepseek-ai\\dsh\\bin.js'], 'ok', 'update'])
+  assert.deepEqual([up.pid, up.exe, up.startedAt, up.elevated], [11, 'C:\\apps\\p11.exe', 1011, false], 'the same facts, the command line filled in')
+  await w.poll()
+  assert.equal(ev.length, 2, 'told once')
+})
+
+test('W2 a command line that CIM gave up on (empty three times) is a facts-update too: "no command line, ever" is not "not yet"', async () => {
+  const w = createProcWatcher({ helper: psHelper([[row(10)], [row(10), noCmd(11, 'pending')], [row(10), noCmd(11, 'pending')], [row(10), noCmd(11, 'empty')], [row(10), noCmd(11, 'empty')]]) })
+  const ev = collect(w)
+  for (let i = 0; i < 5; i++) await w.poll()
+  assert.deepEqual(ev.map(([n, x]) => [n, x.pid, x.cmdlineState, x.cmdline]), [['exec', 11, 'pending', null], ['facts-update', 11, 'empty', null]])
+})
+
+test('W2 a final state at first sight (ok, empty, not-asked) never gets an update', async () => {
+  const w = createProcWatcher({ helper: psHelper([[row(10)], [row(10), row(11), noCmd(12, 'empty'), noCmd(13, 'not-asked')], [row(10), row(11), noCmd(12, 'empty'), noCmd(13, 'not-asked')]]) })
+  const ev = collect(w)
+  await w.poll(); await w.poll(); await w.poll()
+  assert.deepEqual(ev.map(([n, x]) => [n, x.pid, x.cmdlineState]), [['exec', 11, 'ok'], ['exec', 12, 'empty'], ['exec', 13, 'not-asked']])
+})
+
+test('W2 a process in the baseline whose command line was pending is updated too (a scan told the consumer it was pending); one that exits first, or is replaced under the same pid, is not', async () => {
+  const w = createProcWatcher({ helper: psHelper([
+    [noCmd(10, 'pending'), noCmd(11, 'pending'), noCmd(12, 'pending')], // baseline: silent
+    [noCmd(10, 'pending'), row(12), row(11, { cmdline: null, cmdlineState: 'pending', startedAt: 9999 })], // 10 still pending; 12 arrives; 11 was replaced under the same pid (pending)
+    [row(10), row(11, { startedAt: 9999 })], // 10 arrives; 12 exited; 11's new life arrives
+  ]) })
+  const ev = collect(w)
+  await w.poll(); await w.poll(); await w.poll()
+  assert.deepEqual(ev.map(([n, x]) => [n, x.pid]), [['exit', 11], ['exec', 11], ['facts-update', 12], ['exit', 12], ['facts-update', 10], ['facts-update', 11]])
+  assert.deepEqual(ev.filter(([n]) => n === 'facts-update').map(([, x]) => x.startedAt), [1012, 1010, 9999], 'the update of pid 11 is its second life, not the first')
+})
+
+test('W2 a helper that does not say cmdlineState: a command line is "ok", none is "empty" (final: no update will come); the facts of a scan carry the state', async () => {
+  const w = createProcWatcher({ helper: psHelper([[row(10), row(11, { cmdline: null }), noCmd(12, 'pending')]]) })
+  const facts = await w.scan()
+  assert.deepEqual(facts.map((f) => [f.pid, f.cmdlineState]), [[10, 'ok'], [11, 'empty'], [12, 'pending']])
+  assert.deepEqual(facts.map((f) => f.source), ['scan', 'scan', 'scan'])
+})
+
+test('W2 helper.ps1 gives each ps row a cmdlineState from exactly the set the watcher knows, and the C# writes it', () => {
+  const states = [...PS.matchAll(/\$state\[\$p\.Pid\]\s*=\s*'([a-z-]+)'/g)].map((m) => m[1])
+  assert.deepEqual([...new Set(states)].sort(), [...CMDLINE_STATES].sort())
+  assert.ok(/ProcsJson\(\$list, \$dict, \$state\)/.test(PS), 'the verb hands the states to the JSON builder')
+  assert.ok(/\\"cmdlineState\\":/.test(PS), 'the JSON builder writes the field')
+  assert.deepEqual([...CMDLINE_STATES], ['ok', 'pending', 'cim-backoff', 'empty', 'not-asked'])
 })
 
 test('W2 elevation: integrity High or above is elevated; a token that cannot be opened while the image path can is elevated, marked inferred (4.8 §10.1)', () => {

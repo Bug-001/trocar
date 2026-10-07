@@ -7,14 +7,24 @@
 // ProcFacts here = the Linux contract (core/redirector.mjs) as far as Windows has the fields: { os:'win32', pid, ppid, name, exe, argv,
 // cmdline, env:null (envError 'env-unreadable': another process's environment is never read, 4.8 §10.1), cwd:null, startedAt (ms since the
 // epoch, or null), startTicks (startedAt as a string: the identity a per-pid marker would carry; null with it), sessionId, integrity,
-// tokenDenied, elevated, elevationInferred, source:'exec'|'scan' }. `cmdline` is the raw command line (the one lossless form on Windows;
-// `argv` is it split like CommandLineToArgvW). It may hold secrets: callers keep it in memory and never write it to a record.
+// tokenDenied, elevated, elevationInferred, cmdlineState, source:'exec'|'scan'|'update' }. `cmdline` is the raw command line (the one lossless form on
+// Windows; `argv` is it split like CommandLineToArgvW). It may hold secrets: callers keep it in memory and never write it to a record. `cmdline: null` is
+// two different things, told by `cmdlineState`: not known YET (`pending`, `cim-backoff`: the helper asks CIM per process, three tries, a 30 s back-off after a
+// CIM failure) or not there (`empty`, `not-asked`). A consumer that judges by command line (node.exe + dsh) must wait on the first and judges again on the
+// watcher's 'facts-update', which is told when a command line that was not known yet arrives or is given up on; a form known by its image path need not.
 // Only this session's processes are asked for (the helper's default): a process of another session is not this user's agent.
 import { EventEmitter } from 'node:events'
 
 /** How long the watcher waits for one `ps` answer, a poll or a scan. The first ps after the helper starts has an empty command-line cache: more than 40 processes
  *  take a full Win32_Process enumeration through CIM (plus the module load), which on a cold or busy machine is more than the 2 s a table read gets. */
 export const PS_TIMEOUT_MS = 10000
+/** What a ps row's `cmdlineState` can say (helper.ps1 decides; a test keeps the two lists equal): `ok` the command line is there · `pending` asked, no answer
+ *  yet, asked again next poll · `cim-backoff` CIM failed, not asked again for 30 s · `empty` asked three times and CIM has none (a process without one, or one CIM
+ *  does not show) · `not-asked` the caller said `cmdline:false`. `pending` and `cim-backoff` are NOT "no command line": it may still come. */
+export const CMDLINE_STATES = Object.freeze(['ok', 'pending', 'cim-backoff', 'empty', 'not-asked'])
+const NOT_YET = new Set(['pending', 'cim-backoff'])
+/** The state of a row's command line; a helper that does not say (an older one, a fixture): a command line is `ok`, none is `empty` (final: nothing will come). */
+const cmdStateOf = (row) => (typeof row.cmdlineState === 'string' ? row.cmdlineState : row.cmdline != null ? 'ok' : 'empty')
 
 const ELEVATED = new Set(['high', 'system', 'protected'])
 
@@ -79,7 +89,7 @@ function factsOf(row, source) {
   const facts = {
     os: 'win32', pid: row.pid, ppid: row.ppid ?? null, name: row.name ?? null, exe: row.exe, argv: splitCommandLine(row.cmdline), cmdline: row.cmdline ?? null,
     env: null, cwd: null, startedAt: row.startedAt ?? null, startTicks: row.startedAt != null ? String(row.startedAt) : null,
-    sessionId: row.sessionId ?? null, integrity: row.integrity ?? null, tokenDenied: !!row.tokenDenied, elevated, elevationInferred: inferred, source,
+    sessionId: row.sessionId ?? null, integrity: row.integrity ?? null, tokenDenied: !!row.tokenDenied, elevated, elevationInferred: inferred, source, cmdlineState: cmdStateOf(row),
   }
   Object.defineProperty(facts, 'envError', { enumerable: false, value: 'env-unreadable' })
   return facts
@@ -88,7 +98,8 @@ function factsOf(row, source) {
 const identity = (row) => `${row.startedAt ?? '?'}|${row.exe ?? ''}`
 
 /** createProcWatcher({ helper, intervalMs, psTimeoutMs, now, all, timers }) → EventEmitter with start() · stop() · poll() · scan() · unreadable() · stats().
- *  Events: 'exec' ProcFacts (source 'exec') · 'exit' {pid, startedAt} · 'facts-error' {os, pid, comm, argv, code, reason} (a process whose image path
+ *  Events: 'exec' ProcFacts (source 'exec') · 'exit' {pid, startedAt} · 'facts-update' ProcFacts (source 'update': the same process, told when its command
+ *  line that was `pending` / `cim-backoff` at the exec (or in the baseline) is now `ok` or `empty`; once, never for a state that was final) · 'facts-error' {os, pid, comm, argv, code, reason} (a process whose image path
  *  cannot be read: never judged, told once) · 'poll-error' {code:'helper-error', cause, reason, …} (something went wrong in a poll, told once per run of
  *  the same failure, never thrown: `cause` = the client's error code when the helper failed, 'listener-threw' {event, pid} when a listener of another
  *  event threw — that event is not retried, the rest of the poll is still announced — and 'malformed-rows' {count} when the helper's answer held rows
@@ -101,7 +112,7 @@ const identity = (row) => `${row.startedAt ?? '?'}|${row.exe ?? ''}`
  *  finds a timed-out ps still being worked on (`helper.abandoned('ps') > 0`) is skipped and counted in stats().deferred, not queued behind it. */
 export function createProcWatcher({ helper, intervalMs = 2000, psTimeoutMs = PS_TIMEOUT_MS, now = Date.now, all = false, timers = { setInterval, clearInterval } } = {}) {
   const ev = new EventEmitter()
-  const known = new Map() // pid → { identity, startedAt } of the processes already reported (or in the baseline)
+  const known = new Map() // pid → { identity, startedAt, cmdState } of the processes already reported (or in the baseline); cmdState = what the consumer was last told about the command line
   const unreadable = new Map()
   let primed = false
   let inflight = null // the poll being run, so a scan can wait for the baseline instead of racing it
@@ -159,18 +170,25 @@ export function createProcWatcher({ helper, intervalMs = 2000, psTimeoutMs = PS_
     const present = new Set(rows.map((r) => r.pid))
     const exits = []
     const execs = []
+    const updates = []
     for (const [pid, prev] of known) if (!present.has(pid)) { exits.push({ pid, startedAt: prev.startedAt }); known.delete(pid) }
     for (const r of rows) {
       if (r.exe == null) continue
       const prev = known.get(r.pid)
-      if (prev && prev.identity === identity(r)) continue
+      const st = cmdStateOf(r)
+      if (prev && prev.identity === identity(r)) {
+        // a command line that was not known yet (pending, cim-backoff) and now is, or is given up on: the facts a consumer judged by are stale
+        if (NOT_YET.has(prev.cmdState) && st !== prev.cmdState) { prev.cmdState = st; if (!NOT_YET.has(st)) updates.push(r) }
+        continue
+      }
       if (prev) exits.push({ pid: r.pid, startedAt: prev.startedAt })
-      known.set(r.pid, { identity: identity(r), startedAt: r.startedAt ?? null })
+      known.set(r.pid, { identity: identity(r), startedAt: r.startedAt ?? null, cmdState: st })
       execs.push(r)
     }
     if (primed) {
       for (const x of exits) tell('exit', x)
       for (const r of execs) tell('exec', factsOf(r, 'exec'))
+      for (const r of updates) tell('facts-update', factsOf(r, 'update'))
     }
     primed = true
   }

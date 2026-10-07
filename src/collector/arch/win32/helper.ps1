@@ -134,15 +134,19 @@ public static class AsightWin {
     return res;
   }
 
-  public static string ProcsJson(List<AsightProc> list, Dictionary<int, string> cmd) {
+  // cmd = the command line of each pid (CIM), state = what is known about it: ok | pending | cim-backoff | empty | not-asked (Verb-Ps decides)
+  public static string ProcsJson(List<AsightProc> list, Dictionary<int, string> cmd, Dictionary<int, string> state) {
     StringBuilder b = new StringBuilder("{\"sessionId\":" + N(OwnSession()) + ",\"procs\":[");
     foreach (AsightProc p in list) {
       string c = null;
       if (cmd != null) cmd.TryGetValue(p.Pid, out c);
+      string cstate = null;
+      if (state != null) state.TryGetValue(p.Pid, out cstate);
       if (b[b.Length - 1] != '[') b.Append(',');
       b.Append("{\"pid\":" + N(p.Pid) + ",\"ppid\":" + N(p.Ppid) + ",\"name\":"); Q(b, p.Name);
       b.Append(",\"exe\":"); Q(b, p.Exe);
       b.Append(",\"cmdline\":"); Q(b, c);
+      b.Append(",\"cmdlineState\":"); Q(b, cstate);
       b.Append(",\"startedAt\":" + (p.StartedMs >= 0 ? N(p.StartedMs) : "null") + ",\"sessionId\":" + (p.Session >= 0 ? N(p.Session) : "null") + ",\"integrity\":"); Q(b, IntegrityNameOf(p.Rid));
       b.Append(",\"tokenDenied\":" + (p.Exe != null && p.TokenDenied ? "true" : "false") + "}");
     }
@@ -277,9 +281,20 @@ function Verb-Ps($a) {
       }
     } catch { $script:cimRetryAt = [DateTime]::UtcNow.AddSeconds(30) }
   }
+  # what the consumer may conclude from a missing command line: ok (here) | not-asked (the caller said cmdline:false) | empty (asked 3 times, CIM has none:
+  # a process without one, or one CIM may not show) | cim-backoff (CIM failed, not asked again yet) | pending (asked, no answer yet, will be asked again)
+  $state = New-Object 'System.Collections.Generic.Dictionary[int,string]'
+  foreach ($p in $list) {
+    $k = "$($p.Pid):$($p.StartedMs)"
+    if ($dict.ContainsKey($p.Pid)) { $state[$p.Pid] = 'ok' }
+    elseif (-not $want) { $state[$p.Pid] = 'not-asked' }
+    elseif ([int]$script:cmdTries[$k] -ge 3) { $state[$p.Pid] = 'empty' }
+    elseif ([DateTime]::UtcNow -lt $script:cimRetryAt) { $state[$p.Pid] = 'cim-backoff' }
+    else { $state[$p.Pid] = 'pending' }
+  }
   foreach ($k in @($script:cmdCache.Keys)) { if (-not $live.ContainsKey($k)) { $script:cmdCache.Remove($k) } }
   foreach ($k in @($script:cmdTries.Keys)) { if (-not $live.ContainsKey($k)) { $script:cmdTries.Remove($k) } }
-  return @{ __raw = [AsightWin]::ProcsJson($list, $dict) }
+  return @{ __raw = [AsightWin]::ProcsJson($list, $dict, $state) }
 }
 
 function Verb-TcpTable($a) {
