@@ -10,6 +10,7 @@ import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { HELPER_PROTO, HELPER_VERBS, HELPER_PS1, REG_READ_ALLOW, startHelper } from '../../../../src/collector/arch/win32/helper.mjs'
+import { createProcWatcher, elevationOf, splitCommandLine } from '../../../../src/collector/arch/win32/procinfo.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 
@@ -291,4 +292,166 @@ test('W1 helper.ps1 and the C# inside it have balanced delimiters', () => {
 test('W1 helper.ps1 is ASCII only (Windows PowerShell 5.1 reads a script without a BOM in the ANSI code page)', () => {
   assert.equal([...PS].filter((ch) => ch.charCodeAt(0) > 126).length, 0)
   assert.ok(!PS.startsWith('\uFEFF'))
+})
+
+// ---------- W2: process facts and exec / exit by snapshot difference ----------
+
+const row = (pid, extra = {}) => ({ pid, ppid: 1, name: `p${pid}.exe`, exe: `C:\\apps\\p${pid}.exe`, cmdline: `"C:\\apps\\p${pid}.exe" --x`, startedAt: 1000 + pid, sessionId: 2, integrity: 'medium', tokenDenied: false, ...extra })
+/** An in-process helper whose `ps` answers the given snapshots in turn (the last repeats); an Error in the list is thrown. */
+function psHelper(snapshots, { delayMs = 0 } = {}) {
+  let i = 0
+  return {
+    calls: [],
+    async call(verb, args) {
+      this.calls.push({ verb, args })
+      if (verb !== 'ps') throw new Error(`unexpected verb ${verb}`)
+      const procs = snapshots[Math.min(i++, snapshots.length - 1)]
+      if (delayMs) await new Promise((r) => setTimeout(r, delayMs))
+      if (procs instanceof Error) throw procs
+      return { sessionId: 2, procs }
+    },
+  }
+}
+function collect(w) { const ev = []; for (const n of ['exec', 'exit', 'facts-error', 'poll-error']) w.on(n, (x) => ev.push([n, x])); return ev }
+const brief = (ev) => ev.map(([n, x]) => [n, x.pid])
+
+test('W2 a new pid is an exec, a vanished one an exit; the first snapshot is the baseline and says nothing', async () => {
+  const w = createProcWatcher({ helper: psHelper([[row(10), row(11)], [row(11), row(12)], [row(11), row(12)]]) })
+  const ev = collect(w)
+  await w.poll()
+  assert.deepEqual(ev, [], 'what was already running is scan()\'s, not an exec')
+  await w.poll()
+  assert.deepEqual(brief(ev), [['exit', 10], ['exec', 12]])
+  assert.deepEqual(ev[0][1], { pid: 10, startedAt: 1010 })
+  const facts = ev[1][1]
+  assert.deepEqual({ ...facts }, {
+    os: 'win32', pid: 12, ppid: 1, name: 'p12.exe', exe: 'C:\\apps\\p12.exe', argv: ['C:\\apps\\p12.exe', '--x'], cmdline: '"C:\\apps\\p12.exe" --x', env: null, cwd: null,
+    startedAt: 1012, startTicks: '1012', sessionId: 2, integrity: 'medium', tokenDenied: false, elevated: false, elevationInferred: false, source: 'exec',
+  })
+  assert.equal(facts.envError, 'env-unreadable', 'another process\'s environment is never read on Windows (4.8 §10.1): null with the reason, not an empty one')
+  await w.poll()
+  assert.equal(ev.length, 2, 'an unchanged snapshot is silent')
+})
+
+test('W2 the same pid with another start time is an exit and then an exec (pid reuse), also when the program is the same', async () => {
+  const w = createProcWatcher({ helper: psHelper([[row(10)], [row(10, { startedAt: 5000 })], [row(10, { startedAt: 6000, exe: 'C:\\other\\o.exe' })]]) })
+  const ev = collect(w)
+  await w.poll()
+  await w.poll()
+  assert.deepEqual(ev.map(([n, x]) => [n, x.pid, x.startedAt]), [['exit', 10, 1010], ['exec', 10, 5000]])
+  await w.poll()
+  assert.deepEqual(ev.slice(2).map(([n, x]) => [n, x.pid, x.startedAt]), [['exit', 10, 5000], ['exec', 10, 6000]])
+})
+
+test('W2 a start time that cannot be read falls back to the image path to tell a reused pid', async () => {
+  const w = createProcWatcher({ helper: psHelper([[row(10, { startedAt: null })], [row(10, { startedAt: null })], [row(10, { startedAt: null, exe: 'C:\\other\\o.exe' })]]) })
+  const ev = collect(w)
+  await w.poll(); await w.poll()
+  assert.deepEqual(ev, [])
+  await w.poll()
+  assert.deepEqual(brief(ev), [['exit', 10], ['exec', 10]])
+  assert.equal(ev[1][1].startTicks, null, 'no start time: no marker identity either')
+})
+
+test('W2 scan() lists the live processes as facts (source scan) and changes nothing the diff knows', async () => {
+  const h = psHelper([[row(10), row(11)], [row(11), row(12)]])
+  const w = createProcWatcher({ helper: h })
+  const ev = collect(w)
+  const first = await w.scan()
+  assert.deepEqual(first.map((f) => [f.pid, f.source]), [[10, 'scan'], [11, 'scan']])
+  assert.deepEqual(ev, [])
+  await w.poll() // the baseline is the second snapshot; scan() did not take it
+  assert.deepEqual(ev, [])
+  assert.deepEqual(h.calls.map((c) => c.args), [{}, {}], 'this session only (the helper default)')
+  const all = createProcWatcher({ helper: h, all: true })
+  await all.scan()
+  assert.deepEqual(h.calls.at(-1).args, { all: true })
+})
+
+test('W2 elevation: integrity High or above is elevated; a token that cannot be opened while the image path can is elevated, marked inferred (4.8 §10.1)', () => {
+  assert.deepEqual(elevationOf({ integrity: 'high', tokenDenied: false, exe: 'C:\\a.exe' }), { elevated: true, inferred: false })
+  assert.deepEqual(elevationOf({ integrity: 'system', exe: 'C:\\a.exe' }), { elevated: true, inferred: false })
+  assert.deepEqual(elevationOf({ integrity: 'medium', exe: 'C:\\a.exe' }), { elevated: false, inferred: false })
+  assert.deepEqual(elevationOf({ integrity: 'low', exe: 'C:\\a.exe' }), { elevated: false, inferred: false })
+  assert.deepEqual(elevationOf({ integrity: null, tokenDenied: true, exe: 'C:\\a.exe' }), { elevated: true, inferred: true })
+  assert.deepEqual(elevationOf({ integrity: null, tokenDenied: true, exe: null }), { elevated: null, inferred: false }, 'neither token nor image: not known')
+  assert.deepEqual(elevationOf({ integrity: null, tokenDenied: false, exe: 'C:\\a.exe' }), { elevated: null, inferred: false })
+})
+
+test('W2 a fixture process with tokenDenied and a readable image comes out of scan() elevated and inferred', async () => {
+  const w = createProcWatcher({ helper: psHelper([[row(20, { integrity: null, tokenDenied: true }), row(21, { integrity: 'high' })]]) })
+  const [a, b] = await w.scan()
+  assert.deepEqual([a.elevated, a.elevationInferred, a.tokenDenied], [true, true, true])
+  assert.deepEqual([b.elevated, b.elevationInferred], [true, false])
+})
+
+test('W2 a process whose image cannot be read is never an exec: one facts-error with what is still readable, listed in unreadable()', async () => {
+  const bad = row(30, { exe: null, name: 'svc.exe', cmdline: 'svc.exe --serve' })
+  const w = createProcWatcher({ helper: psHelper([[row(10), bad], [row(10), bad], [row(10)]]) })
+  const ev = collect(w)
+  await w.poll()
+  await w.poll()
+  assert.deepEqual(ev.map(([n]) => n), ['facts-error'], 'told once, not on every snapshot')
+  assert.deepEqual(ev[0][1], { os: 'win32', pid: 30, comm: 'svc.exe', argv: ['svc.exe', '--serve'], code: null, reason: ev[0][1].reason })
+  assert.match(ev[0][1].reason, /svc\.exe.*image path.*never judged/)
+  assert.deepEqual(w.unreadable(), [{ pid: 30, comm: 'svc.exe', errno: null, argv: ['svc.exe', '--serve'] }])
+  assert.deepEqual((await w.scan()).map((f) => f.pid), [10], 'scan() lists the readable ones only; this snapshot no longer has pid 30')
+  assert.deepEqual(w.unreadable(), [], 'gone again')
+})
+
+test('W2 a helper that fails is one poll-error per run of failures, never a throw; after a good poll it tells again', async () => {
+  const down = Object.assign(new Error('helper is down: killed'), { code: 'helper-down' })
+  const w = createProcWatcher({ helper: psHelper([[row(10)], down, down, [row(10)], down]) })
+  const ev = collect(w)
+  assert.equal(await w.poll(), true)
+  await w.poll(); await w.poll()
+  assert.deepEqual(ev.map(([n, x]) => [n, x.code, x.cause]), [['poll-error', 'helper-error', 'helper-down']], 'the code is the closed set\'s helper-error; what the client said is the cause')
+  await w.poll(); await w.poll()
+  assert.equal(ev.length, 2)
+  assert.match(ev[1][1].reason, /down/)
+})
+
+test('W2 start() polls at once and on the interval; a poll still in flight is not started twice; stop() clears the timer', async () => {
+  const h = psHelper([[row(10)], [row(10), row(11)]], { delayMs: 30 })
+  let tick; let cleared = 0
+  const w = createProcWatcher({ helper: h, intervalMs: 77, timers: { setInterval: (fn, ms) => { tick = { fn, ms }; return 'T' }, clearInterval: (t) => { if (t === 'T') cleared++ } } })
+  const ev = collect(w)
+  w.start()
+  assert.equal(tick.ms, 77)
+  tick.fn() // a tick while the first poll is still in flight: skipped
+  await new Promise((r) => setTimeout(r, 80))
+  assert.equal(h.calls.length, 1)
+  tick.fn()
+  await new Promise((r) => setTimeout(r, 80))
+  assert.deepEqual(brief(ev), [['exec', 11]])
+  w.stop()
+  assert.equal(cleared, 1)
+})
+
+test('W2 through the real client and the fake helper: a ps answer becomes facts', async (t) => {
+  const h = started(t, { verbs: { ps: { seq: [{ sessionId: 2, procs: [row(10)] }, { sessionId: 2, procs: [row(10), row(11)] }] } } })
+  const w = createProcWatcher({ helper: h })
+  const ev = collect(w)
+  await w.poll(); await w.poll()
+  assert.deepEqual(brief(ev), [['exec', 11]])
+})
+
+test('W2 a command line is split the way CommandLineToArgvW does (the documented cases), and a missing one is no arguments', () => {
+  // the documented argument rules, after a program name (the first token has rules of its own, below)
+  const args = [
+    ['"abc" d e', ['abc', 'd', 'e']],
+    ['a\\\\\\b d"e f"g h', ['a\\\\\\b', 'de fg', 'h']], // backslashes not before a quote are literal
+    ['a\\\\\\"b c d', ['a\\"b', 'c', 'd']], // 3 backslashes and a quote: one backslash, a literal quote
+    ['a\\\\\\\\"b c" d e', ['a\\\\b c', 'd', 'e']], // 4 backslashes and a quote: two backslashes, and the quote opens a string
+    ['"""CallMeIshmael"""  b  c', ['"CallMeIshmael"', 'b', 'c']], // "" inside a quoted string is a quote
+    ['"C:\\a b\\x.mjs" --flag="v w" c:\\p\\', ['C:\\a b\\x.mjs', '--flag=v w', 'c:\\p\\']],
+    ['x ""', ['x', '']],
+    ['a\tb', ['a', 'b']],
+  ]
+  for (const [input, want] of args) assert.deepEqual(splitCommandLine('p.exe ' + input), ['p.exe', ...want], input)
+  assert.deepEqual(splitCommandLine('"C:\\Program Files\\nodejs\\node.exe" "C:\\a b\\x.mjs"'), ['C:\\Program Files\\nodejs\\node.exe', 'C:\\a b\\x.mjs'])
+  assert.deepEqual(splitCommandLine('"C:\\dir with space\\" next'), ['C:\\dir with space\\', 'next'], 'the program name takes no backslash escapes')
+  assert.deepEqual(splitCommandLine('C:\\x\\a.exe'), ['C:\\x\\a.exe'])
+  assert.deepEqual(splitCommandLine('node.exe  \t x'), ['node.exe', 'x'])
+  for (const none of ['   ', '', null, undefined, 7]) assert.deepEqual(splitCommandLine(none), [], String(none))
 })

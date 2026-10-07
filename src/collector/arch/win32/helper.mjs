@@ -30,7 +30,7 @@ export const REG_READ_ALLOW = Object.freeze([
   { hive: 'HKLM', key: 'SYSTEM\\CurrentControlSet\\Control\\CI\\Policy', names: Object.freeze(['VerifiedAndReputablePolicyState']) },
 ].map(Object.freeze))
 
-const STDERR_TAIL = 8
+const STDERR_TAIL = 20 // the last lines of its stderr that helper-down carries (4.6 §记录: 20, as the Linux helper)
 const normKey = (k) => String(k).replaceAll('/', '\\').replace(/\\+$/, '').toLowerCase()
 
 /** The allow-list entry a reg-read request falls under, or null. A request with no names asks for everything: refused. */
