@@ -76,6 +76,8 @@ test('uninstall that cannot confirm the Clash route: exit 1, the old capture is 
     assert.equal(await runUninstallCli(['--json'], ctx(s, silent, { mac })), 1, silent.text()) // the core is a socket nobody listens on
     const r = silent.json()
     assert.equal(r.ok, false); assert.ok(r.problems.some((p) => /left in place/.test(p)), r.problems.join(' | '))
+    assert.equal(r.relayed, 'unknown', 'the MITM was left running: the receipt does not claim 0 connections'); assert.match(r.relayed_reason, /not confirmed gone/)
+    assert.deepEqual(['com.asight.mitm', 'com.asight.env'].map((l) => fs.existsSync(s.plist(l))), [true, true], 'the MITM and the trust for it are still there, so a Desktop started now is not broken')
     for (const kept of [legacyManifestPath(s.home), standalonePath(s.home), path.join(s.home, '.asight', 'ca')]) assert.ok(fs.existsSync(kept), `${kept} stays`)
     assert.equal(tree(backupDir(s.home)).length, 1)
     assert.equal(readEvents(s.home).at(-1).outcome, 'failed')

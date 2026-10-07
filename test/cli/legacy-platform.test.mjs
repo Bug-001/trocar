@@ -123,7 +123,11 @@ test('V23: a core that does not answer is exit 1 and 「不知道」 — the blo
   assert.equal(mac.has(/launchctl unload .*com\.asight\.mitm/), false, 'the MITM keeps running while the route may still lead to it')
   assert.equal(fs.existsSync(s.plist('com.asight.mitm')), true)
   assert.ok(r.skipped.some((x) => x.what === 'com.asight.mitm' && /not confirmed gone/.test(x.reason)))
+  assert.equal(r.relayed, 'unknown', 'the MITM keeps serving: how many connections it still relays is 「不知道」, never a count of 0 (R5, R11)')
+  assert.match(r.relayed_reason, /Clash route was not confirmed gone, so the MITM was left running/)
   assert.ok(readEvents(s.home).some((e) => e.event === 'failure' && e.where === 'off'), 'R11: a failure is a line in the old capture\'s log')
+  const text = fakeIo(); await runOffCli([], offCtx(s, text, { mac }))
+  assert.match(text.text(), /仍经 asight 的连接数: 不知道\(the Clash route was not confirmed gone/, 'and the printed receipt says so too')
 })
 
 test('V23: a reload the core accepted is not proof — when the proxy list cannot be read back, the route is 「不知道」 (exit 1) and the MITM is left running; a rejected reload is a failure of its own', async () => {
@@ -135,6 +139,7 @@ test('V23: a reload the core accepted is not proof — when the proxy list canno
     const r = io.json()
     assert.ok(core.state.puts.length >= 1 && r.problems.some((p) => /不知道/.test(p)), r.problems.join(' | '))
     assert.equal(mac.has(/unload .*com\.asight\.mitm/), false)
+    assert.equal(r.relayed, 'unknown'); assert.ok(r.relayed_reason)
   } finally { await core.close() }
   const s2 = macHome({ agents: ['com.asight.mitm'], steer: false }); const mac2 = fakeMac({ loaded: ['com.asight.mitm'], pids: {}, keychain: false })
   const core2 = await fakeCore({ rejectAll: 'rules[3] [NOPE] error' })
@@ -144,6 +149,53 @@ test('V23: a reload the core accepted is not proof — when the proxy list canno
     const r = io.json()
     assert.ok(r.problems.some((p) => /rules\[3\] \[NOPE\] error/.test(p) && !/不知道/.test(p)), 'mihomo\'s own message, and not "unknown": the core answered, it said no')
     assert.equal(mac2.has(/unload .*com\.asight\.mitm/), false)
+    assert.equal(r.relayed, 'unknown', 'a rejected reload leaves the MITM serving too: not a count of 0'); assert.match(r.relayed_reason, /not confirmed gone/)
+  } finally { await core2.close() }
+})
+
+test('V23: while the route is not confirmed gone the MITM keeps running and so does the trust for its certificate — the primer plist, the login variable and the CA stay (a Desktop started now would meet the MITM without it), each is listed as skipped with the reason, the monitor still goes; the next off with the core answering takes them all out', async () => {
+  const s = macHome({ userMain: USER_MAIN, steer: false }) // block, runtime, the three LaunchAgents
+  const mac = fakeMac({ env: { NODE_EXTRA_CA_CERTS: s.caPath }, pids: {} })
+  const io = fakeIo()
+  assert.equal(await runOffCli(['--json'], offCtx(s, io, { mac })), 1, io.text()) // the core is a socket nobody listens on
+  const r = io.json()
+  assert.equal(fs.existsSync(s.plist('com.asight.monitor')), false, 'the monitor is the CC-CLI proxy\'s: it is not held by the Clash route')
+  assert.deepEqual(['com.asight.mitm', 'com.asight.env'].map((l) => [fs.existsSync(s.plist(l)), mac.state.loaded.has(l)]), [[true, true], [true, true]], 'the MITM and the primer are as they were')
+  assert.deepEqual([mac.has(/^launchctl unsetenv/), mac.has(/^security delete-certificate/), mac.has(/^launchctl unload .*com\.asight\.(mitm|env)/)], [false, false, false])
+  assert.equal(mac.state.env.NODE_EXTRA_CA_CERTS, s.caPath); assert.equal(mac.state.keychain, true)
+  for (const what of ['com.asight.mitm', 'com.asight.env', 'launchctl setenv NODE_EXTRA_CA_CERTS', s.keychain]) assert.ok(r.skipped.some((x) => x.what === what && /not confirmed gone/.test(x.reason)), `${what} is listed as skipped, with the reason`)
+  assert.equal(r.relayed, 'unknown')
+  const core = await fakeCore({ live: true })
+  try {
+    const again = fakeIo()
+    assert.equal(await runOffCli(['--json'], offCtx(s, again, { core, mac })), 0, again.text())
+    assert.deepEqual(['com.asight.mitm', 'com.asight.env'].map((l) => fs.existsSync(s.plist(l)) || mac.state.loaded.has(l)), [false, false])
+    assert.deepEqual([mac.state.env.NODE_EXTRA_CA_CERTS, mac.state.keychain, core.state.live], [undefined, false, false], 'the second off finishes what the first held back')
+    assert.deepEqual(again.json().skipped.filter((x) => /not confirmed gone/.test(x.reason)), [])
+  } finally { await core.close() }
+})
+
+test('V31: `launchctl unload` of the MITM blocks until the job has exited, so it is given the drain — drainMs + 10 s (20 s by default), not the tool\'s default 10 s; the other tools keep the default; a MITM that is gone when the unload was cut off is read from `launchctl list`, not from the exit code', async () => {
+  const s = macHome({ agents: ['com.asight.mitm', 'com.asight.monitor'], steer: false, userMain: USER_MAIN })
+  const core = await fakeCore(); const mac = fakeMac({ loaded: ['com.asight.mitm', 'com.asight.monitor'], pids: {}, keychain: false })
+  const seen = []
+  const run = (file, args, o) => { seen.push({ cmd: [file, ...args].join(' '), timeout: o && o.timeout }); return mac.run(file, args) }
+  try {
+    const io = fakeIo()
+    assert.equal(await runOffCli(['--json'], offCtx(s, io, { core, mac, deps: { exec: run } })), 0, io.text())
+    const timeoutOf = (re) => seen.filter((x) => re.test(x.cmd)).map((x) => x.timeout)
+    assert.deepEqual(timeoutOf(/^launchctl unload .*com\.asight\.mitm/), [20000], 'the whole drain, the grace after it, and 5 s more')
+    assert.deepEqual(timeoutOf(/^launchctl unload .*com\.asight\.monitor/), [10000], 'the default for a job that does not drain')
+    assert.ok(timeoutOf(/^launchctl list/).every((t) => t === 10000))
+  } finally { await core.close() }
+  // the unload ran into its limit (exit code none) but the job is gone: that is what `launchctl list` says, and that is what counts
+  const t = macHome({ agents: ['com.asight.mitm'], steer: false, userMain: USER_MAIN })
+  const core2 = await fakeCore(); const mac2 = fakeMac({ loaded: ['com.asight.mitm'], pids: {}, keychain: false })
+  const cutOff = (file, args, o) => { const r = mac2.run(file, args, o); return file === 'launchctl' && args[0] === 'unload' ? { status: null, stdout: '', stderr: '', error: new Error('spawnSync launchctl ETIMEDOUT') } : r }
+  try {
+    const io = fakeIo()
+    assert.equal(await runOffCli(['--json', '--now'], offCtx(t, io, { core: core2, mac: mac2, deps: { exec: cutOff, drainMs: 0 } })), 0, io.text())
+    assert.equal(fs.existsSync(t.plist('com.asight.mitm')), false)
   } finally { await core2.close() }
 })
 

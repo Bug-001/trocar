@@ -39,7 +39,10 @@ export const LEGACY_CA_NICKNAME = 'asight-ca'
 const LEGACY_ENV_VAR = 'NODE_EXTRA_CA_CERTS'
 const CLAUDE_CODE = 'claude-code'
 const MITM_STOP_GRACE_MS = 5000 // launchd kills a job ExitTimeOut (15 s) after its SIGTERM: the 10 s drain and this much more
+const MITM_UNLOAD_SLACK_MS = 5000 // `launchctl unload` of a running job waits for the job to exit: the tool is given the whole drain, the grace and this much more before it is cut off
 const CODE_NOT_UNDONE = 'entry-not-undone' // a name of the closed set (src/health/codes.mjs): an item that was not undone
+// what the receipt says of the trust the MITM needs (the env primer, the login variable, the CA) while the route is not confirmed gone: the MITM keeps running, and a Desktop started now would meet its certificate without the trust for it
+const TRUST_HELD = 'the Clash route was not confirmed gone, so the MITM keeps running and the trust for its certificate stays; the next asight off, once the route is confirmed gone, takes it out'
 
 const legacyWhy = (e) => String((e && (e.code || e.message)) || e)
 const legacyMessage = (e) => String((e && e.message) || e)
@@ -364,6 +367,9 @@ export async function undoLegacy({ home = nodeOs.homedir(), platform = process.p
         if (verified) say('clash', `the Clash route is gone: stripped from ${p.scriptPath} and the runtime, mihomo reloaded, ${PROXY_NAME} no longer in its live proxy list`, { file: p.scriptPath })
         else {
           routeGone = false
+          // the MITM stays up (below), so what it still relays is not known: 「不知道」, never a count of 0 (1.6 §4, R5, R11)
+          res.cut = 'unknown'
+          res.cut_reason = `the Clash route was not confirmed gone, so ${art.agents.mitm.installed === true || art.agents.mitm.loaded === true ? 'the MITM was left running and ' : ''}the connections that still reach it are not known`
           // the core did not answer (the reload never reached it, or it cannot be asked afterwards): the route is not known to be gone — 「不知道」, never "gone" (1.6 §6)
           const unknown = (!!r.reload && r.reload.status === 0) || (r.ok && live === null)
           const tried = ((clash.located() || {}).tried || []).join(', ') || 'none'
@@ -390,8 +396,10 @@ export async function undoLegacy({ home = nodeOs.homedir(), platform = process.p
 
     // 3 · the LaunchAgents: the MITM first (launchd sends it SIGTERM; it drains), then the monitor, then the environment primer
     if (onDarwin) {
-      const unload = (a) => {
-        const r = a.installed ? execTool('launchctl', ['unload', a.plistPath], { run: exec, env }) : execTool('launchctl', ['remove', a.label], { run: exec, env }) // loaded with no plist: only its label is left to name it
+      // `timeoutMs`: how long the tool may run. `launchctl unload` of a running job blocks until the job has exited (SIGTERM, then up to ExitTimeOut), so the MITM's unload gets the drain; whether the job is gone is
+      // read from `launchctl list` after it, never from the exit code of a tool that may have been cut off
+      const unload = (a, timeoutMs = 10000) => {
+        const r = a.installed ? execTool('launchctl', ['unload', a.plistPath], { run: exec, env, timeoutMs }) : execTool('launchctl', ['remove', a.label], { run: exec, env, timeoutMs }) // loaded with no plist: only its label is left to name it
         const l = execTool('launchctl', ['list', a.label], { run: exec, env })
         const gone = l.code === null ? r.code === 0 : l.code !== 0 // launchctl list <label> exits non-zero for a label that is not loaded
         return { gone, why: gone ? null : `launchctl unload ${a.plistPath} did not take ${a.label} out (${r.err || `exit ${r.code}`})` }
@@ -412,7 +420,7 @@ export async function undoLegacy({ home = nodeOs.homedir(), platform = process.p
           const lastStart = [...tail.recs].reverse().find((r) => r.event === 'mitm-start' && (r.source || 'mitm') === 'mitm')
           const pid = mitm.pid ?? (lastStart && Number.isInteger(lastStart.pid) && alive(lastStart.pid) ? lastStart.pid : null)
           const stoppedAfter = nowFn().toISOString()
-          const u = unload(mitm)
+          const u = unload(mitm, drainMs + MITM_STOP_GRACE_MS + MITM_UNLOAD_SLACK_MS)
           if (!u.gone) { fail(CODE_NOT_UNDONE, u.why, { file: mitm.plistPath }); res.left.push({ path: mitm.plistPath, harness: CLAUDE_CODE, result: 'error', reason: u.why }); res.cut = 'unknown'; res.cut_reason = u.why } else {
             if (pid == null) { res.cut = mitm.loaded === false || mitm.loaded === true ? 0 : 'unknown' } else {
               // the MITM drains: it stops accepting, waits for open connections for at most drainMs, writes `mitm-stop` with `cut`, exits. Wait for that line.
@@ -441,6 +449,7 @@ export async function undoLegacy({ home = nodeOs.homedir(), platform = process.p
       for (const key of ['monitor', 'env']) {
         const a = art.agents[key]
         if (!present(a)) continue
+        if (key === 'env' && !routeGone) { res.skipped.push({ what: a.label, reason: TRUST_HELD }); continue }
         const u = unload(a)
         if (!u.gone) { fail(CODE_NOT_UNDONE, u.why, { file: a.plistPath }); res.left.push({ path: a.plistPath, harness: CLAUDE_CODE, result: 'error', reason: u.why }); continue }
         if (dropPlist(a, null)) {
@@ -451,7 +460,8 @@ export async function undoLegacy({ home = nodeOs.homedir(), platform = process.p
       }
       // the login environment's CA variable: asight's own value only
       const mine = ownCaPaths(art, home)
-      if (art.envValue.value && mine.has(art.envValue.value)) {
+      if (!routeGone && art.envValue.value && mine.has(art.envValue.value)) res.skipped.push({ what: `launchctl setenv ${LEGACY_ENV_VAR}`, reason: TRUST_HELD })
+      else if (art.envValue.value && mine.has(art.envValue.value)) {
         const r = execTool('launchctl', ['unsetenv', LEGACY_ENV_VAR], { run: exec, env })
         if (r.code === 0) { row('launchctl', `unsetenv ${LEGACY_ENV_VAR}(登录环境里它指向 asight 的 CA)`, 'old-command', { old_command: true, environment: true }); say('login-env', `${LEGACY_ENV_VAR} was unset in the login environment (it pointed at asight's CA)`) } else fail(CODE_NOT_UNDONE, `launchctl unsetenv ${LEGACY_ENV_VAR} failed (${r.err || `exit ${r.code}`}): the login environment still points at asight's CA`)
       } else if (art.envValue.value) res.notes.push(`${LEGACY_ENV_VAR} in the login environment is ${art.envValue.value}, not asight's CA: left as it is`)
@@ -459,7 +469,8 @@ export async function undoLegacy({ home = nodeOs.homedir(), platform = process.p
     }
 
     // 4 · the old CA in the user-level trust store
-    if (art.oldCa.where && art.oldCa.present !== false && (platform === 'darwin' || platform === 'linux')) {
+    if (!routeGone && art.oldCa.where && art.oldCa.present !== false) res.skipped.push({ what: platform === 'darwin' ? p.keychain : p.nssdb, reason: TRUST_HELD }) // present or not known: not touched
+    else if (art.oldCa.where && art.oldCa.present !== false && (platform === 'darwin' || platform === 'linux')) {
       let last = null, chk = null
       const f = caFindArgv({ platform, home })
       const missing = (c) => c.code === 44 || /could not be found|could not find/i.test(`${c.err}${c.out}`)
