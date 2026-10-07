@@ -1,11 +1,12 @@
-// controller.mjs — the client of a mihomo controller: Clash Verge's named pipe, or the own forwarder's loopback port (RFC 4.7 §3.4 the allow-list, 4.8 §3.3 · §4.1 · §5.3; acceptance N9).
+// controller.mjs — the client of a mihomo controller: Clash Verge's named pipe (the user's VPN: read-only), or the own forwarder's loopback port (asight's own kernel) (RFC 4.7 §3.4 the allow-list, 4.8 §3.3 · §4.1 · §5.3; acceptance N9).
 //
-// ONE small client with a path allow-list that is checked BEFORE a byte is sent: a request that is not on the list throws ControllerRefused and nothing touches the network (N9). The list is 4.7 §2's
-// runtime row for reads and §3.4's named writes:
-//   GET  /version · /configs · /providers/rules (the LIST: v1.19.32 has no GET of a single provider, it answers 405) · /rules · /proxies/asight-* · /group/asight-*/delay?url=<loopback>&timeout=<ms>
-//   PUT  /proxies/asight-sw-<g> {name: PASS | asight-fb-<g>} · /providers/rules/asight-* · /configs?force=true {payload}   (the forwarder's own client may also reload by {path}: `reloadByPath`)
-// Never /connections, /logs, /traffic, /proxies (the list: the user's node names), /providers/proxies (subscription names): not for Verge's controller and not for the own forwarder's (4.8 §5.3).
-// A name the client writes starts with asight-; a core's answers are handed to the caller as parsed JSON and nothing else (the caller keeps what it needs and drops the rest in memory: 4.7 §2).
+// ONE small client with a path allow-list that is checked BEFORE a byte is sent: a request that is not on the list throws ControllerRefused and nothing touches the network (N9). D43: asight writes nothing
+// into a VPN, so the client has two forms, by `own`:
+//   own:false (the user's VPN, the default)   GET /version · /configs. Nothing else: every other path and every write method (PUT PATCH POST DELETE) is refused (4.7 §2's runtime row).
+//   own:true (asight's own kernel; its endpoint comes only from forwarder.lock, 4.8 §1)   the two reads, and GET /proxies/asight-* · /group/asight-*/delay?url=<loopback>&timeout=<ms> ·
+//                                             PUT /configs?force=true {payload} or {path} (the forwarder reloads its own config, by text or by file).
+// Never /rules, /providers/*, /connections, /logs, /traffic, /proxies (the list: the user's node names): not for Verge's controller and not for the own forwarder's (4.8 §5.3).
+// A core's answers are handed to the caller as parsed JSON and nothing else (the caller keeps what it needs and drops the rest in memory: 4.7 §2).
 // What a core says about a failed request is handed on only when it is one of the core's FIXED messages (FIXED_MESSAGES: they name nobody). Every other message, and the JSON body that holds it, is withheld:
 // a real core's refusal of a pushed config prints the user's own group, node and rule, quoted or not (`rules[0] [DOMAIN,x.example,My Group] error: proxy [My Group] not found`, measured on v1.19.32, W57),
 // and no quoting rule catches that. The caller has the status and decides the reason class. The pipe's random suffix is masked in what this client says of the transport.
@@ -27,23 +28,24 @@ export class ControllerRefused extends Error {
 
 const OURS = 'asight-[A-Za-z0-9_.-]{1,128}'
 const PROXY_PATH = new RegExp(`^/proxies/(${OURS})$`)
-const SWITCH_PATH = /^\/proxies\/(asight-sw-([A-Za-z0-9_.-]{1,128}))$/
-const PROVIDER_PATH = new RegExp(`^/providers/rules/(${OURS})$`)
 const DELAY_PATH = new RegExp(`^/group/(${OURS})/delay\\?url=([^&]+)&timeout=(\\d{3,5})$`)
-const PLAIN_READS = new Set(['/version', '/configs', '/providers/rules', '/rules'])
+const PLAIN_READS = new Set(['/version', '/configs'])
 const PROBE_URL = /^http:\/\/127\.0\.0\.1:\d{1,5}\/[A-Za-z0-9_./-]{0,80}$/ // a group's probe is its own loopback re-entry point (4.8 §3.3), never a public address
 const onlyKey = (b, k) => b !== null && typeof b === 'object' && !Array.isArray(b) && Object.keys(b).length === 1 && k in b
 
 /**
  * Why `method target body` is not allowed, or null when it is. Pure; createController() runs it before it opens anything.
- * `reloadByPath`: the own forwarder's client reloads its config by `{path}`; Verge's never does (a path would load some other config into the user's core).
+ * `own`: true only for asight's own kernel (4.8 §1); the user's VPN is never `own` and never written (D43, N9).
  */
-export function refusal(method, target, body = null, { reloadByPath = false } = {}) {
+export function refusal(method, target, body = null, { own = false } = {}) {
   if (typeof target !== 'string' || !target.startsWith('/')) return 'not a path'
   const shown = target.slice(0, 60)
+  const mine = own === true
   if (method === 'GET') {
     if (body != null) return 'a read carries no body'
-    if (PLAIN_READS.has(target) || PROXY_PATH.test(target)) return null
+    if (PLAIN_READS.has(target)) return null
+    if (!mine) return `GET ${shown} is not on the read allow-list of the user's VPN (only /version and /configs)`
+    if (PROXY_PATH.test(target)) return null
     const d = DELAY_PATH.exec(target)
     if (d) {
       let url = null
@@ -52,23 +54,15 @@ export function refusal(method, target, body = null, { reloadByPath = false } = 
       if (Number(d[3]) < 100 || Number(d[3]) > 30000) return 'a group probe timeout is 100..30000 ms'
       return null
     }
-    if (/^\/providers\/rules\/./.test(target)) return `GET ${shown}: v1.19.32 has no read of a single provider, only the list`
     return `GET ${shown} is not on the read allow-list`
   }
-  if (method === 'PUT') {
-    const sw = SWITCH_PATH.exec(target)
-    if (sw) {
-      if (!onlyKey(body, 'name')) return 'a switch takes {name} and nothing else'
-      return body.name === 'PASS' || body.name === `asight-fb-${sw[2]}` ? null : `a switch is set to PASS or to its own asight-fb-<group>`
-    }
-    if (PROVIDER_PATH.test(target)) return body == null ? null : 'a provider refresh takes no body'
-    if (target === '/configs?force=true') {
-      if (onlyKey(body, 'payload') && typeof body.payload === 'string' && body.payload !== '') return null
-      if (reloadByPath && onlyKey(body, 'path') && typeof body.path === 'string' && body.path !== '') return null
-      return reloadByPath ? 'a reload takes {payload} or {path}' : 'a reload takes {payload}'
-    }
-    return `PUT ${shown} is not on the write allow-list`
+  if (!mine) return `${String(method).slice(0, 12)} ${shown}: the user's VPN is read-only, asight writes nothing into it`
+  if (method === 'PUT' && target === '/configs?force=true') {
+    if (onlyKey(body, 'payload') && typeof body.payload === 'string' && body.payload !== '') return null
+    if (onlyKey(body, 'path') && typeof body.path === 'string' && body.path !== '') return null
+    return 'a reload takes {payload} or {path}'
   }
+  if (method === 'PUT') return `PUT ${shown} is not on the write allow-list`
   return `${String(method).slice(0, 12)} is not an allowed method`
 }
 
@@ -109,13 +103,13 @@ export function redact(text) {
 const MAX_BODY = 32 * 1024 * 1024 // a runtime's rule list is megabytes; a controller that sends more is not one
 
 /**
- * createController({ endpoint, secret = null, timeoutMs = 8000, reloadByPath = false, transport }) → { get(path), put(path, body = null), endpoint }
+ * createController({ endpoint, secret = null, timeoutMs = 8000, own = false, transport }) → { get(path), put(path, body = null), endpoint, own }
  * Both resolve `{ status, ok, json, text, ms, error? }` and never reject for a network or HTTP failure (status 0 + `error` = the errno, `text` the masked message of the transport; a non-2xx answer has
  * `json: null` and a `text` that is one of FIXED_MESSAGES or ''); they throw ControllerRefused, before any I/O, for a request off the allow-list. `json` is the parsed body of a 2xx answer that was JSON, else
  * null. `endpoint` is the masked spec.
- * `secret` goes only into the Authorization header; Verge's pipe needs none. `transport` (tests) replaces node:http.
+ * `own` is true only for asight's own kernel (see the top); `put` on a client that is not `own` always throws. `secret` goes only into the Authorization header; Verge's pipe needs none. `transport` (tests) replaces node:http.
  */
-export function createController({ endpoint, secret = null, timeoutMs = 8000, reloadByPath = false, transport = nodeHttp } = {}) {
+export function createController({ endpoint, secret = null, timeoutMs = 8000, own = false, transport = nodeHttp } = {}) {
   const target = parseEndpoint(endpoint)
   const shown = maskEndpoint(endpoint)
   const scrub = (t) => {
@@ -124,7 +118,7 @@ export function createController({ endpoint, secret = null, timeoutMs = 8000, re
     return redact(maskEndpoint(s))
   }
   function send(method, path, body) {
-    const why = refusal(method, path, body, { reloadByPath })
+    const why = refusal(method, path, body, { own })
     if (why) throw new ControllerRefused(`${method} ${String(path).slice(0, 60)}: ${why}`)
     const payload = body == null ? null : JSON.stringify(body)
     const t0 = Date.now()
@@ -155,7 +149,7 @@ export function createController({ endpoint, secret = null, timeoutMs = 8000, re
       req.end(payload)
     })
   }
-  return { get: (path) => send('GET', path, null), put: (path, body = null) => send('PUT', path, body), endpoint: shown }
+  return { get: (path) => send('GET', path, null), put: (path, body = null) => send('PUT', path, body), endpoint: shown, own: own === true }
 }
 
 // ---- finding Verge's controller, and only trusting it when it is Verge's (RFC 4.7 §3.3; N3 N4) ---------------------------------------------------------------
@@ -170,7 +164,7 @@ const no = (why) => ({ ok: false, why })
 /**
  * Whether the process that serves a controller is Verge's own core: a `verge-mihomo*.exe` in the install directory of the running Verge (the GUI's or the service's), and either this user's own
  * process (same session, its token opens) or the service's SYSTEM core (session 0, `clash-verge-service.exe` running). Anything else is another user's, or somebody else's program under that name:
- * the `payload` write sends the whole runtime config, nodes and subscription credentials included, so a controller that is not Verge's is never talked to (N4).
+ * the controller's secret goes in the Authorization header of every request, so a controller that is not Verge's is never talked to (N4).
  * `ps`: the helper's `ps` answer for every session. → `{ ok: true, how: 'own' | 'service' }` or `{ ok: false, why }`, why ∈ owner-unreadable · not-verge · other-user.
  */
 export function judgeServer({ ps, serverPid, installDirs = [] }) {
@@ -223,7 +217,7 @@ export async function discover({ listPipes = async () => [], helper = null, read
       try { pid = await ownerPid(spec); judged = pid === 'no-such-pipe' ? no('no-such-pipe') : judgeServer({ ps: await ps(false), serverPid: pid, installDirs }) } catch { judged = no('owner-unreadable') }
       if (!judged.ok) { tried.push({ how, why: judged.why }); return null }
     }
-    const answer = await makeClient({ endpoint: spec, secret, timeoutMs: 2000 }).get('/version')
+    const answer = await makeClient({ endpoint: spec, secret, timeoutMs: 2000, own: false }).get('/version')
     if (!(answer.status === 200 && answer.json && typeof answer.json.version === 'string')) { tried.push({ how, why: 'no-answer' }); return null }
     const found = { endpoint: spec, how, version: answer.json.version }
     Object.defineProperty(found, 'secret', { value: secret ?? null, enumerable: false })

@@ -41,7 +41,7 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     if (found && (found.ctl || now().getTime() - foundAt < unknownTtlMs)) return found.ctl ?? null
     const r = await discoverController({ listPipes, helper, readRuntime: async () => rd(P.runtime).text, env, makeClient, installDirs })
     foundAt = now().getTime()
-    found = r.unknown ? { unknown: r.unknown } : { ctl: makeClient({ endpoint: r.endpoint, secret: r.secret, timeoutMs: 8000 }), how: r.how, version: r.version, endpoint: maskEndpoint(r.endpoint) }
+    found = r.unknown ? { unknown: r.unknown } : { ctl: makeClient({ endpoint: r.endpoint, secret: r.secret, timeoutMs: 8000, own: false }), how: r.how, version: r.version, endpoint: maskEndpoint(r.endpoint) }
     return found.ctl ?? null
   }
   async function get(target) {

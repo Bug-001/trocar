@@ -32,25 +32,30 @@ function stub(t, answer) {
   }))
 }
 
-const ALLOWED = [
-  ['GET', '/version'], ['GET', '/configs'], ['GET', '/providers/rules'], ['GET', '/rules'],
-  ['GET', `/proxies/asight-sw-${G}`], ['GET', `/proxies/asight-fb-${G}`],
+// 4.7 §2's runtime row (the user's VPN, own:false) and 4.8 §5.3's (asight's own kernel, own:true)
+const READS = [['GET', '/version'], ['GET', '/configs']]
+const OWN_ONLY = [
+  ['GET', `/proxies/asight-in-${G}`], ['GET', `/proxies/asight-fb-${G}`],
   ['GET', `/group/asight-fb-${G}/delay?url=${PROBE}&timeout=2000`],
-  ['PUT', `/proxies/asight-sw-${G}`, { name: 'PASS' }], ['PUT', `/proxies/asight-sw-${G}`, { name: `asight-fb-${G}` }],
-  ['PUT', `/providers/rules/asight-r-${G}`, null],
-  ['PUT', '/configs?force=true', { payload: 'mixed-port: 7897\n' }],
+  ['PUT', '/configs?force=true', { payload: 'mixed-port: 7897\n' }], ['PUT', '/configs?force=true', { path: 'C:/x/config.yaml' }],
 ]
+const own = { own: true }
 
-test('N9 every request 4.7 §2 and §3.4 name is allowed', () => {
-  for (const [method, target, body] of ALLOWED) assert.equal(refusal(method, target, body ?? null), null, `${method} ${target}`)
+test('N9 the user\'s VPN (own:false, the default): GET /version and GET /configs are all that pass', () => {
+  for (const [method, target, body] of READS) { assert.equal(refusal(method, target, body ?? null), null, `${method} ${target}`); assert.equal(refusal(method, target, null, { own: false }), null, `own:false ${target}`) }
+  for (const [method, target, body] of OWN_ONLY) assert.ok(refusal(method, target, body ?? null, { own: false }), `${method} ${target} is the own kernel's, not the VPN's`)
 })
 
-test('N9 everything else is refused: the connection table, the logs, the node list, a single provider, any other method, a write that names something that is not ours', () => {
+test('N9 the own kernel (own:true): the two reads, GET /proxies/asight-*, GET /group/asight-*/delay and PUT /configs?force=true', () => {
+  for (const [method, target, body] of [...READS, ...OWN_ONLY]) assert.equal(refusal(method, target, body ?? null, own), null, `${method} ${target}`)
+})
+
+test('N9 refused for both: the connection table, the logs, the node list, the rules, the providers, a group that is not ours, any other write', () => {
   const NO = [
     ['GET', '/connections'], ['GET', '/connections/1'], ['GET', '/logs'], ['GET', '/traffic'], ['GET', '/memory'], ['GET', '/proxies'], ['GET', '/providers/proxies'], ['GET', '/dns/query?name=x'],
+    ['GET', '/rules'], ['GET', '/rules?x=1'], ['GET', '/providers/rules'], ['GET', `/providers/rules/asight-x-${G}`], // /rules: asight never reads the user's rules (4.8 OPEN 24)
     ['GET', '/proxies/Proxy'], ['GET', '/proxies/node-a'], ['GET', '/proxies/asight'], ['GET', '/proxies/asight-'],
-    ['GET', `/providers/rules/asight-r-${G}`], // v1.19.32 has no read of one provider: only the list (N9)
-    ['GET', '/rules?x=1'], ['GET', '/version/'], ['GET', '//version'], ['GET', '/proxies/asight-x/../../connections'], ['GET', '/proxies/asight-%2e%2e'], ['GET', 'version'],
+    ['GET', '/version/'], ['GET', '//version'], ['GET', '/proxies/asight-x/../../connections'], ['GET', '/proxies/asight-%2e%2e'], ['GET', 'version'], ['GET', '/configs?x=1'],
     ['GET', '/version', {}], // a read carries no body
     ['GET', '/group/Proxy/delay?url=' + PROBE + '&timeout=2000'], // not ours
     ['GET', `/group/asight-fb-${G}/delay?url=${encodeURIComponent('https://www.gstatic.com/generate_204')}&timeout=2000`], // a public probe
@@ -58,32 +63,34 @@ test('N9 everything else is refused: the connection table, the logs, the node li
     ['GET', `/group/asight-fb-${G}/delay?url=${encodeURIComponent('http://10.0.0.5:7897/x')}&timeout=2000`],
     ['GET', `/group/asight-fb-${G}/delay?url=${PROBE}`], ['GET', `/group/asight-fb-${G}/delay?url=${PROBE}&timeout=2000&extra=1`], ['GET', `/group/asight-fb-${G}/delay?url=${PROBE}&timeout=5`], ['GET', `/group/asight-fb-${G}/delay?url=${PROBE}&timeout=099`], ['GET', `/group/asight-fb-${G}/delay?url=${PROBE}&timeout=30001`], ['GET', `/group/asight-fb-${G}/delay?url=${PROBE}&timeout=99999`],
     ['GET', `/group/asight-fb-${G}/delay?timeout=2000&url=${PROBE}`], ['GET', `/group/asight-fb-${G}/delay?url=%ZZ&timeout=2000`],
-    ['PUT', '/proxies/Proxy', { name: 'DIRECT' }], ['PUT', `/proxies/asight-fb-${G}`, { name: 'PASS' }], ['PUT', `/proxies/asight-in-${G}`, { name: 'PASS' }],
-    ['PUT', `/proxies/asight-sw-${G}`, { name: 'DIRECT' }], ['PUT', `/proxies/asight-sw-${G}`, { name: 'node-a' }], ['PUT', `/proxies/asight-sw-${G}`, { name: 'asight-fb-other' }], ['PUT', `/proxies/asight-sw-${G}`, { name: `asight-in-${G}` }],
-    ['PUT', `/proxies/asight-sw-${G}`, { name: 'PASS', extra: 1 }], ['PUT', `/proxies/asight-sw-${G}`, null], ['PUT', `/proxies/asight-sw-${G}`, {}], ['PUT', `/proxies/asight-sw-${G}`, [{ name: 'PASS' }]],
-    ['PUT', '/providers/rules/user-ads', null], ['PUT', `/providers/rules/asight-r-${G}`, { x: 1 }],
-    ['PUT', '/configs', { payload: 'x' }], ['PUT', '/configs?force=true', null], ['PUT', '/configs?force=true', {}], ['PUT', '/configs?force=true', { payload: '' }], ['PUT', '/configs?force=true', { payload: 1 }],
-    ['PUT', '/configs?force=true', { payload: 'x', path: '/etc' }], ['PUT', '/configs?force=true', { path: '/some/other/config.yaml' }], ['PUT', '/configs?force=false', { payload: 'x' }],
-    ['PATCH', '/configs', { mode: 'rule' }], ['PATCH', '/configs', { 'find-process-mode': 'strict' }], ['POST', '/restart', {}], ['DELETE', `/proxies/asight-sw-${G}`], ['HEAD', '/version'], [undefined, '/version'],
+    ['PUT', '/proxies/Proxy', { name: 'DIRECT' }], ['PUT', `/proxies/asight-in-${G}`, { name: 'PASS' }], ['PUT', `/proxies/asight-fb-${G}`, { name: 'PASS' }], // a group's selection is never set
+    ['PUT', '/providers/rules/user-ads', null], ['PUT', `/providers/rules/asight-x-${G}`, null],
+    ['PUT', '/configs', { payload: 'x' }], ['PUT', '/configs?force=true', null], ['PUT', '/configs?force=true', {}], ['PUT', '/configs?force=true', { payload: '' }], ['PUT', '/configs?force=true', { payload: 1 }], ['PUT', '/configs?force=true', { path: '' }],
+    ['PUT', '/configs?force=true', { payload: 'x', path: '/etc' }], ['PUT', '/configs?force=true', { path: 'a', payload: 'b' }], ['PUT', '/configs?force=false', { payload: 'x' }],
+    ['PATCH', '/configs', { mode: 'rule' }], ['PATCH', '/configs', { 'find-process-mode': 'strict' }], ['POST', '/restart', {}], ['DELETE', `/proxies/asight-in-${G}`], ['HEAD', '/version'], [undefined, '/version'],
   ]
-  for (const [method, target, body] of NO) assert.ok(refusal(method, target, body ?? null), `${method} ${target} ${JSON.stringify(body)}`)
-  assert.match(refusal('GET', `/providers/rules/asight-r-${G}`), /no read of a single provider/, 'the reason names the v1.19.32 fact')
+  for (const [method, target, body] of NO) for (const o of [{ own: false }, own]) assert.ok(refusal(method, target, body ?? null, o), `${JSON.stringify(o)} ${method} ${target} ${JSON.stringify(body)}`)
+  assert.ok(refusal('GET', '/version', null, { own: 'yes' }) === null && refusal('PUT', '/configs?force=true', { payload: 'x' }, { own: 'yes' }), 'own is `true` and nothing else: a truthy string does not open the writes')
 })
 
-test('N9 the own forwarder\'s client may reload by {path}; Verge\'s may not', () => {
-  assert.equal(refusal('PUT', '/configs?force=true', { path: 'C:/x/config.yaml' }, { reloadByPath: true }), null)
-  assert.ok(refusal('PUT', '/configs?force=true', { path: 'C:/x/config.yaml' }, { reloadByPath: false }))
-  assert.ok(refusal('PUT', '/configs?force=true', { path: '' }, { reloadByPath: true }))
-  assert.ok(refusal('PUT', '/configs?force=true', { path: 'a', payload: 'b' }, { reloadByPath: true }))
+test('N9 the user\'s VPN: every write method is refused whatever the path, with the reason that asight writes nothing into it', () => {
+  for (const method of ['PUT', 'PATCH', 'POST', 'DELETE']) for (const target of ['/configs?force=true', '/configs', '/proxies/Proxy', `/proxies/asight-in-${G}`, '/restart', '/version']) {
+    assert.match(refusal(method, target, { payload: 'x' }), /read-only/, `${method} ${target}`)
+  }
 })
 
 test('N9 a refused request throws ControllerRefused and the transport is never called (zero I/O)', async () => {
   let calls = 0
   const transport = { request() { calls++; throw new Error('the network must not be touched') } }
   const ctl = createController({ endpoint: 'pipe:verge-mihomo-0123456789abcdef', transport })
-  for (const f of [() => ctl.get('/connections'), () => ctl.get('/proxies'), () => ctl.get(`/providers/rules/asight-r-${G}`), () => ctl.put(`/proxies/asight-sw-${G}`, { name: 'DIRECT' }), () => ctl.put('/configs?force=true', { path: 'x' }), () => ctl.get('/logs')]) {
+  assert.equal(ctl.own, false, 'the default is the user\'s VPN')
+  for (const f of [() => ctl.get('/connections'), () => ctl.get('/proxies'), () => ctl.get('/rules'), () => ctl.get('/providers/rules'), () => ctl.get('/proxies/asight-in-x'), () => ctl.put(`/proxies/asight-in-${G}`, { name: 'DIRECT' }),
+    () => ctl.put('/configs?force=true', { payload: 'mixed-port: 1\n' }), () => ctl.put('/configs?force=true', { path: 'x' }), () => ctl.put('/providers/rules/asight-x'), () => ctl.get('/logs')]) {
     assert.throws(f, (e) => e instanceof ControllerRefused && e.code === 'controller-refused')
   }
+  const mine = createController({ endpoint: 'tcp:127.0.0.1:19090', own: true, transport })
+  assert.equal(mine.own, true)
+  for (const f of [() => mine.get('/connections'), () => mine.get('/rules'), () => mine.put('/proxies/asight-in-x', { name: 'PASS' }), () => mine.put('/configs?force=true', { payload: '' })]) assert.throws(f, ControllerRefused)
   assert.equal(calls, 0)
 })
 
@@ -98,18 +105,20 @@ test('the endpoint: a pipe maps to \\\\.\\pipe\\<name>, the secret goes only int
     },
   }
   const pipe = createController({ endpoint: 'pipe:verge-mihomo-0123456789abcdef', transport })
-  const r = await pipe.put(`/proxies/asight-sw-${G}`, { name: 'PASS' })
+  const r = await pipe.get('/version')
   assert.deepEqual([r.status, r.ok, r.json, r.text], [204, true, null, ''])
   assert.equal(sent[0].socketPath, '\\\\.\\pipe\\verge-mihomo-0123456789abcdef')
   assert.equal(sent[0].headers.Authorization, undefined, 'a pipe needs no secret and none is sent')
-  assert.equal(sent[0].payload, '{"name":"PASS"}')
-  assert.equal(sent[0].headers['Content-Length'], 15)
+  assert.equal(sent[0].payload, null)
   assert.equal(sent[0].agent, false)
   assert.equal(pipe.endpoint, 'pipe:verge-mihomo-<k>', 'the random suffix never leaves the client')
-  const tcp = createController({ endpoint: 'tcp:127.0.0.1:19090', secret: 'sekret-value-1234', transport })
+  const tcp = createController({ endpoint: 'tcp:127.0.0.1:19090', secret: 'sekret-value-1234', own: true, transport })
   await tcp.get('/version')
   assert.deepEqual([sent[1].host, sent[1].port, sent[1].headers.Authorization], ['127.0.0.1', 19090, 'Bearer sekret-value-1234'])
   assert.equal(sent[1].payload, null)
+  await tcp.put('/configs?force=true', { payload: 'mixed-port: 7897\n' })
+  assert.equal(sent[2].payload, '{"payload":"mixed-port: 7897\\n"}', 'a body is JSON')
+  assert.equal(sent[2].headers['Content-Length'], Buffer.byteLength(sent[2].payload))
 })
 
 test('an endpoint must be a pipe with a plain name, or this machine\'s loopback; anything else is refused when the client is made', () => {
@@ -122,15 +131,15 @@ test('an endpoint must be a pipe with a plain name, or this machine\'s loopback;
   assert.equal(parseEndpoint('unix:/tmp/x.sock').req.socketPath, '/tmp/x.sock')
 })
 
-test('over a real loopback socket: reads and writes round-trip, a 2xx gives json and no text, the secret arrives as a Bearer', async (t) => {
-  const s = await stub(t, (m, url) => (m === 'GET' && url === '/version' ? [200, { meta: true, version: 'v1.19.32' }] : m === 'PUT' && url.startsWith('/proxies/') ? [204] : [200, { ok: 1 }]))
-  const ctl = createController({ endpoint: `tcp:127.0.0.1:${s.port}`, secret: 'abcd1234abcd1234' })
+test('over a real loopback socket: reads and (own kernel) a reload round-trip, a 2xx gives json and no text, the secret arrives as a Bearer', async (t) => {
+  const s = await stub(t, (m, url) => (m === 'GET' && url === '/version' ? [200, { meta: true, version: 'v1.19.32' }] : m === 'PUT' && url === '/configs?force=true' ? [204] : [200, { ok: 1 }]))
+  const ctl = createController({ endpoint: `tcp:127.0.0.1:${s.port}`, secret: 'abcd1234abcd1234', own: true })
   const v = await ctl.get('/version')
   assert.deepEqual([v.status, v.ok, v.json, v.text], [200, true, { meta: true, version: 'v1.19.32' }, ''])
-  const p = await ctl.put(`/proxies/asight-sw-${G}`, { name: `asight-fb-${G}` })
+  const p = await ctl.put('/configs?force=true', { path: 'C:/x/config.yaml' })
   assert.deepEqual([p.status, p.ok, p.json], [204, true, null])
-  assert.deepEqual(s.seen.map((r) => [r.method, r.url, r.auth]), [['GET', '/version', 'Bearer abcd1234abcd1234'], ['PUT', `/proxies/asight-sw-${G}`, 'Bearer abcd1234abcd1234']])
-  assert.deepEqual(s.seen[1].body, { name: `asight-fb-${G}` })
+  assert.deepEqual(s.seen.map((r) => [r.method, r.url, r.auth]), [['GET', '/version', 'Bearer abcd1234abcd1234'], ['PUT', '/configs?force=true', 'Bearer abcd1234abcd1234']])
+  assert.deepEqual(s.seen[1].body, { path: 'C:/x/config.yaml' })
 })
 
 test('over a unix socket (tests, a pinned endpoint)', async (t) => {
@@ -146,7 +155,7 @@ test('over a unix socket (tests, a pinned endpoint)', async (t) => {
 test('an error answer carries a message only when it is one of the core\'s fixed ones; every other message, and the json that holds it, is withheld (a real core prints the user\'s own names, quoted or not)', async (t) => {
   for (const { why, status, message } of RECORDED_REFUSALS) {
     const s = await stub(t, () => [status, { message }])
-    const r = await createController({ endpoint: `tcp:127.0.0.1:${s.port}` }).put('/configs?force=true', { payload: 'mixed-port: 7897\n' })
+    const r = await createController({ endpoint: `tcp:127.0.0.1:${s.port}`, own: true }).put('/configs?force=true', { payload: 'mixed-port: 7897\n' })
     assert.deepEqual([r.status, r.ok, r.text, r.json], [status, false, '', null], `${why}: nothing of "${message.slice(0, 30)}…" is handed on`)
     assert.ok(!JSON.stringify(r).includes('Private') && !JSON.stringify(r).includes('Secret Node') && !JSON.stringify(r).includes('x.example'), why)
   }
@@ -186,7 +195,7 @@ test('a body larger than 32 MiB is not read: the answer is a failure result', as
       return req
     },
   }
-  const r = await createController({ endpoint: 'pipe:verge-mihomo-x', transport }).get('/rules')
+  const r = await createController({ endpoint: 'pipe:verge-mihomo-x', transport }).get('/configs')
   assert.deepEqual([r.status, r.error], [0, 'ERESPONSE_TOO_LARGE'])
 })
 
