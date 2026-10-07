@@ -147,7 +147,7 @@ test('on --no-unit with no daemon answering: everything is written and it exits 
   assert.match(io.stdoutText(), /^asight 已写好入口与期望态,但守护进程没在跑/m)
   assert.doesNotMatch(io.stdoutText(), /已打开采集/)
   assert.match(io.stdoutText(), /守护进程: 没在跑,什么都没有被采集/)
-  assert.match(io.stdoutText(), /asight collector start/, 'and how to start it')
+  assert.match(io.stdoutText(), /asight daemon/, 'and how to start it')
   const j = fakeIo()
   assert.equal(await runOnCli(['--no-unit', '--json'], onCtx(home, j, { daemon: fakeDaemon({ up: false }) })), 0)
   assert.equal(j.json().daemon.state, 'not-running', '--json says the same, as a field')

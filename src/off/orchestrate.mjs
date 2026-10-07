@@ -122,7 +122,7 @@ export async function switchRoutingOff(w, { ids = null, now = false, exit = fals
     for (const end = w.ms() + 2000; lock && !helperGoneNow() && w.ms() < end;) await w.sleep(25) // a helper that is only now noticing its daemon died
     if (lock && !helperGoneNow()) await stopIt('is not running, but its helper still is')
     else { r.confirmed = true; r.how = 'no-daemon'; r.daemon = { pid: null, state: 'none' } }
-  } else fail('control-error', `${st.reason || 'whether a daemon runs is not known'}; the entries are left as they are. If no asight daemon runs (pgrep -f 'collector start' finds none), delete ${w.lockFile} and run asight off again; if one does, stop it by hand first`)
+  } else fail('control-error', `${st.reason || 'whether a daemon runs is not known'}; the entries are left as they are. If no asight daemon runs (pgrep -f 'asight.* (daemon|collector start)' finds none), delete ${w.lockFile} and run asight off again; if one does, stop it by hand first`)
   return r
 }
 

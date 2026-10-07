@@ -115,7 +115,7 @@ const processUid = () => (typeof process.getuid === 'function' ? process.getuid(
 const act = (a) => a !== 'skip-intact' && a !== 'skip-user-changed'
 const shortLine = (l) => String(l).split(' # ')[0].trim()
 const RESTART_REASONS = new Set(['config-after-start', 'env-frozen', 'start-time-unknown', 'no-marker', 'kimi-not-via-shim']) // 「重启后才会被采集」(1.6 §1.1)
-const DAEMON_CMD = 'asight collector start' // 1.6 §2 renames it `asight daemon`; the autostart unit's ExecStart is this command until then
+const DAEMON_CMD = 'asight daemon' // 1.6 §2: the autostart unit's ExecStart is this command (units written before the rename run its alias `collector start`)
 
 /** What the receipt says an entry did, in one phrase — the same words in the dry run (from the preview) and in the real run (from the entry). */
 export function changeText(e, prior = null) {
@@ -335,7 +335,7 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
     let unitFailed = null
     if (opts.unit) {
       const r = opts.unit.enable()
-      if (r.code !== 0) unitFailed = `${opts.unit.path} is written but "systemctl --user enable --now" failed (${r.err || `exit ${r.code}`}); start the daemon with "asight collector start", or enable the unit once systemd --user runs`
+      if (r.code !== 0) unitFailed = `${opts.unit.path} is written but "systemctl --user enable --now" failed (${r.err || `exit ${r.code}`}); start the daemon with "${DAEMON_CMD}", or enable the unit once systemd --user runs`
     }
     const put = noteRun({ dir, run, final, written, notes: final.notes, fs })
     if (unitFailed) { final.notes.push(unitFailed); put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed }) }

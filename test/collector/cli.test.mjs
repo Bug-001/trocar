@@ -148,7 +148,7 @@ test('cli: start returns when the daemon has stopped itself (off), exit 0, witho
 
 test('cli: install / on go to the one `asight on` (src/cli/on.mjs) with the descriptors, OS and process table from daemon.loadParts; uninstall is the one `asight uninstall` (src/cli/uninstall.mjs)', async () => {
   const seen = []
-  const mkU = () => ({ UNIT_NAME: 'asight-collector.service', userUnit: ({ home, node, script, run }) => ({ path: `${home}/.config/systemd/user/asight-collector.service`, links: [`${home}/.config/systemd/user/default.target.wants/asight-collector.service`], text: (env) => `${JSON.stringify(env)} ExecStart="${node}" "${script}" collector start`, ran: run }), unitPath: (h) => `${h}/.config/systemd/user/asight-collector.service`, wantsLink: (h) => `${h}/.config/systemd/user/default.target.wants/asight-collector.service`, unitText: ({ node, script, env }) => `${JSON.stringify(env)} ExecStart="${node}" "${script}" collector start`, systemctl: () => ({ code: 0 }), removeWantsLinks: () => [] })
+  const mkU = () => ({ UNIT_NAME: 'asight-collector.service', userUnit: ({ home, node, script, run }) => ({ path: `${home}/.config/systemd/user/asight-collector.service`, links: [`${home}/.config/systemd/user/default.target.wants/asight-collector.service`], text: (env) => `${JSON.stringify(env)} ExecStart="${node}" "${script}" daemon`, ran: run }), unitPath: (h) => `${h}/.config/systemd/user/asight-collector.service`, wantsLink: (h) => `${h}/.config/systemd/user/default.target.wants/asight-collector.service`, unitText: ({ node, script, env }) => `${JSON.stringify(env)} ExecStart="${node}" "${script}" daemon`, systemctl: () => ({ code: 0 }), removeWantsLinks: () => [] })
   const parts = { os: 'linux', osRootsFile: '/os/roots.pem', arch: { unit: mkU() }, harnesses: [{ name: 'h' }], scan: async () => [], match: () => ({ agent: null }) }
   const daemon = { loadParts: async () => parts }
   const { newReceipt } = await import('../../src/cli/schema.mjs')
@@ -167,10 +167,10 @@ test('cli: install / on go to the one `asight on` (src/cli/on.mjs) with the desc
   t = io(); assert.equal(await runCollector(['install', '--yes', '--no-autostart'], { ...base, ...t }), 0)
   t = io(); assert.equal(await runCollector(['install', '--dry-run'], { ...base, ...t }), 0)
   assert.deepEqual(seen, [
-    ['on', 'linux', parts.harnesses, true, '/h', '/os/roots.pem', ['/h/.config/systemd/user/asight-collector.service', ['/h/.config/systemd/user/default.target.wants/asight-collector.service'], `{"NODE_EXTRA_CA_CERTS":"/corp/ca.pem"} ExecStart="${process.execPath}" "/repo/bin/asight.mjs" collector start`], false, true],
+    ['on', 'linux', parts.harnesses, true, '/h', '/os/roots.pem', ['/h/.config/systemd/user/asight-collector.service', ['/h/.config/systemd/user/default.target.wants/asight-collector.service'], `{"NODE_EXTRA_CA_CERTS":"/corp/ca.pem"} ExecStart="${process.execPath}" "/repo/bin/asight.mjs" daemon`], false, true],
     ['on', 'linux', parts.harnesses, true, '/h', '/os/roots.pem', null, false, true],
-    ['on', 'linux', parts.harnesses, true, '/h', '/os/roots.pem', ['/h/.config/systemd/user/asight-collector.service', ['/h/.config/systemd/user/default.target.wants/asight-collector.service'], `{"NODE_EXTRA_CA_CERTS":"/corp/ca.pem"} ExecStart="${process.execPath}" "/repo/bin/asight.mjs" collector start`], false, false],
-    ['on', 'linux', parts.harnesses, true, '/h', '/os/roots.pem', ['/h/.config/systemd/user/asight-collector.service', ['/h/.config/systemd/user/default.target.wants/asight-collector.service'], `{"NODE_EXTRA_CA_CERTS":"/corp/ca.pem"} ExecStart="${process.execPath}" "/repo/bin/asight.mjs" collector start`], true, true],
+    ['on', 'linux', parts.harnesses, true, '/h', '/os/roots.pem', ['/h/.config/systemd/user/asight-collector.service', ['/h/.config/systemd/user/default.target.wants/asight-collector.service'], `{"NODE_EXTRA_CA_CERTS":"/corp/ca.pem"} ExecStart="${process.execPath}" "/repo/bin/asight.mjs" daemon`], false, false],
+    ['on', 'linux', parts.harnesses, true, '/h', '/os/roots.pem', ['/h/.config/systemd/user/asight-collector.service', ['/h/.config/systemd/user/default.target.wants/asight-collector.service'], `{"NODE_EXTRA_CA_CERTS":"/corp/ca.pem"} ExecStart="${process.execPath}" "/repo/bin/asight.mjs" daemon`], true, true],
   ])
   seen.length = 0
   t = io(); assert.equal(await runCollector(['install'], { ...base, install: { turnOn: async () => { throw new Error('boom') } }, ...t }), 1, 'a throw is exit 1, said once')

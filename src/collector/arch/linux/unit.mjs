@@ -20,7 +20,7 @@ export function unitText({ node, script, env = {} }) {
   return [
     '[Unit]', 'Description=asight transparent collector (per user)', '',
     '[Service]', 'Type=simple', ...Object.entries(env).map(([k, v]) => `Environment="${esc(`${k}=${v}`)}"`),
-    `ExecStart=${quoteExec(node)} ${quoteExec(script)} collector start`, 'Restart=on-failure', 'RestartSec=2', '',
+    `ExecStart=${quoteExec(node)} ${quoteExec(script)} daemon`, 'Restart=on-failure', 'RestartSec=2', '',
     '[Install]', 'WantedBy=default.target', '',
   ].join('\n')
 }

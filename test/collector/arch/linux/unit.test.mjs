@@ -5,20 +5,30 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { unitText, unitPath, wantsLink, removeWantsLinks, systemctl, UNIT_NAME } from '../../../../src/collector/arch/linux/unit.mjs'
+import { commandNamed, resolveAlias } from '../../../../src/cli/commands.mjs'
 
 test('unit: absolute quoted ExecStart, restart on failure, no capability-stripping directives', () => {
   const t = unitText({ node: '/usr/bin/node', script: '/opt/my "asight"/bin/asight.mjs' })
-  assert.match(t, /^ExecStart="\/usr\/bin\/node" "\/opt\/my \\"asight\\"\/bin\/asight\.mjs" collector start$/m)
+  assert.match(t, /^ExecStart="\/usr\/bin\/node" "\/opt\/my \\"asight\\"\/bin\/asight\.mjs" daemon$/m)
   assert.match(t, /^Restart=on-failure$/m)
   assert.match(t, /^WantedBy=default\.target$/m)
   assert.doesNotMatch(t, /NoNewPrivileges|CapabilityBoundingSet/)
   assert.doesNotMatch(t, /^Environment=/m, 'nothing to carry, no Environment line')
 })
 
+test('unit: ExecStart runs a command of the table that refuses root (asight daemon), and a unit written before the rename (`collector start`) still reaches it through the hidden alias (1.6 §2)', () => {
+  const words = (text) => (/^ExecStart=(.*)$/m.exec(text)[1].match(/"(?:[^"\\]|\\.)*"|\S+/g) || []).map((w) => w.replace(/^"|"$/g, ''))
+  const [, , ...argv] = words(unitText({ node: '/usr/bin/node', script: '/opt/asight/bin/asight.mjs' }))
+  assert.deepEqual(argv, ['daemon'])
+  assert.ok(commandNamed(argv[0]) && commandNamed(argv[0]).mutates, 'the unit runs a command that is in the table, and it is one the daemon user runs, not root')
+  const old = unitText({ node: '/usr/bin/node', script: '/opt/asight/bin/asight.mjs' }).replace(/ daemon$/m, ' collector start')
+  assert.deepEqual(resolveAlias(words(old).slice(2)).argv, ['daemon'], 'an installed unit keeps starting the daemon, not stopping the capture silently')
+})
+
 test('unit: the daemon\'s own environment as quoted Environment= lines; % and $ cannot expand into something else (review 3 #1)', () => {
   const t = unitText({ node: '/opt/n$v/node', script: '/s/asight.mjs', env: { NODE_EXTRA_CA_CERTS: '/corp/"ca" 100%.pem' } })
   assert.match(t, /^\[Service\]\nType=simple\nEnvironment="NODE_EXTRA_CA_CERTS=\/corp\/\\"ca\\" 100%%\.pem"\nExecStart=/m, 'in [Service], before ExecStart')
-  assert.match(t, /^ExecStart="\/opt\/n\$\$v\/node" "\/s\/asight\.mjs" collector start$/m)
+  assert.match(t, /^ExecStart="\/opt\/n\$\$v\/node" "\/s\/asight\.mjs" daemon$/m)
   assert.equal(wantsLink('/h'), '/h/.config/systemd/user/default.target.wants/asight-collector.service')
 })
 
