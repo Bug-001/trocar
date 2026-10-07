@@ -6,7 +6,7 @@
 //   ready: false            → exit before the ready line (a helper that could not start); `readyDelayMs`, `hangBeforeReady`
 //   stderr: ['line', …]     → written to stderr first      exitCode: 3 → the code `exitAfter` / `ready:false` exit with
 //   exitAfter: n            → exit once n requests were answered        log: '<file>' → every received line is appended
-//   noise: ['text', …]      → non-JSON lines on stdout before the ready line
+//   noise: ['text', …]      → non-JSON lines on stdout before the ready line     native: false, nativeError: '…' → the ready line says the native code did not compile
 //   verbs: { <verb>: { data } | { seq: [data, …] } (successive answers, the last repeats) | { error } | { delayMs } | { hang } } }
 // `tcp-table` honours the same filters the real helper does (pids, remotePort, localPort, states) on `data.rows`.
 // node --test runs every file under test/: unless the driver sets ASIGHT_FAKE_HELPER=1 this exits at once.
@@ -23,7 +23,7 @@ for (const l of fx.noise || []) process.stdout.write(l + '\n')
 if (fx.ready === false) setTimeout(() => process.exit(fx.exitCode ?? 1), 10)
 else if (fx.hangBeforeReady) setInterval(() => {}, 1000)
 else setTimeout(() => {
-  out({ ready: true, proto: fx.proto ?? 1, pid: process.pid, ps: 'fake', native: fx.native !== false })
+  out({ ready: true, proto: fx.proto ?? 1, pid: process.pid, ps: 'fake', native: fx.native !== false, ...(fx.nativeError ? { nativeError: fx.nativeError } : {}) })
   listen()
 }, fx.readyDelayMs || 0)
 

@@ -170,6 +170,21 @@ test('W1 a helper that exits before it is ready is helper-start-failed (policy b
   assert.deepEqual(checkRecord(f), [])
 })
 
+test('W1 a helper whose native code did not compile is up but is helper-start-failed once; the verbs that need no native code still answer', async (t) => {
+  const h = started(t, { native: false, nativeError: 'csc.exe is blocked by policy', verbs: { 'net-if': { data: { interfaces: [] } }, ps: { error: 'native-unavailable: csc.exe is blocked by policy' } } })
+  const info = await h.ready
+  assert.equal(info.native, false)
+  assert.equal(h.failures.length, 1)
+  const [f] = h.failures
+  assert.deepEqual([f.event, f.where, f.code, f.nativeError], ['failure', 'helper', 'helper-start-failed', 'csc.exe is blocked by policy'])
+  assert.match(f.reason, /native code did not compile.*csc\.exe is blocked/)
+  assert.deepEqual(checkRecord(f), [])
+  assert.deepEqual(await h.call('net-if'), { interfaces: [] })
+  await assert.rejects(h.call('ps'), (e) => e.code === 'helper-verb-error' && /native-unavailable/.test(e.message))
+  assert.equal(h.failures.length, 1, 'the verbs that fail afterwards are their callers\' to record, not another helper-start-failed')
+  assert.equal(h.exits.length, 0, 'the helper is still there')
+})
+
 test('W1 a spawn that fails (the program is not there, or spawn throws) is helper-start-failed', async () => {
   for (const spawnFn of [
     () => ghostChild((c) => c.emit('error', Object.assign(new Error('spawn powershell.exe ENOENT'), { code: 'ENOENT' }))),

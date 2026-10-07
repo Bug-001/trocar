@@ -8,7 +8,8 @@
 // the test file keeps the two lists equal). Node built-ins only; this file imports nothing of asight (0.1 §2).
 //
 // Failures (D38) go to `onFailure(record)` shaped for the collector's recorder, and each is reported once:
-//   • the helper cannot start — the spawn fails, it exits or never says ready, it speaks another protocol → {event:'failure',
+//   • the helper cannot start — the spawn fails, it exits or never says ready, it speaks another protocol, or its native code did not compile
+//     (it then stays up for the verbs that need none) → {event:'failure',
 //     where:'helper', code:'helper-start-failed', reason, errno?, exit?, stderr?};
 //   • it dies after it was ready → {event:'helper-down', reason, exit?, stderr?} (the Linux client's shape);
 //   • close() is neither: an operator's stop is not a failure.
@@ -87,7 +88,12 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
       clearTimeout(readyTimer)
       if (msg.proto !== HELPER_PROTO) return fail(`the helper speaks protocol ${msg.proto}, this build expects ${HELPER_PROTO}`)
       readyInfo = msg
-      return resolveReady(msg)
+      resolveReady(msg)
+      // the native code (Add-Type: the process list, the TCP table, the token) did not compile — a policy, a blocked compiler, an unwritable temp dir.
+      // The helper is up and answers the verbs that need none (registry, interfaces, roots), but the collector cannot see processes: that is a
+      // helper that did not start properly, and never silent (4.8 §12)
+      if (msg.native === false && !closing) onFailure({ event: 'failure', where: 'helper', code: 'helper-start-failed', reason: `the helper's native code did not compile (${msg.nativeError || 'no reason given'}): the process list, the TCP table and the token are unavailable; the registry, interface and root reads still work`, nativeError: msg.nativeError ?? null })
+      return
     }
     const p = pending.get(msg.id)
     if (!p) return // a late answer to a call that already timed out
