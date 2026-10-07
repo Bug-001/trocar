@@ -20,14 +20,10 @@ import path from 'node:path';
 import http from 'node:http';
 import { execFileSync } from 'node:child_process';
 import * as realFs from 'node:fs';
+import { PROXY_NAME, DESKTOP_RULE, MARK_BEGIN, MARK_END, stripBlock, stripRuntime, stripMergeLegacy } from '../off/clash.mjs';
 
-export const PROXY_NAME = 'atrace-mitm';
-export const DESKTOP_RULE = `AND,((PROCESS-PATH-REGEX,(?i)Application Support/Claude/claude-code),(DOMAIN,api.anthropic.com)),${PROXY_NAME}`;
-// sentinel INNER text is comment-syntax-agnostic; JS uses `//`, YAML uses `#` (a `//` line is NOT a
-// YAML comment → it would break the runtime config parse). stripBlock matches the inner text so it
-// removes either form.
-const MARK_BEGIN = '>>> atrace desktop capture (managed by asight desktop) >>>';
-const MARK_END = '<<< atrace desktop capture <<<';
+// The pure strip transforms live in src/off/clash.mjs (RFC 1.6 §4: `asight off` and `desktop off` run one undo); the names tests and other modules import from here stay.
+export { PROXY_NAME, DESKTOP_RULE, stripBlock, stripRuntime, stripMergeLegacy };
 const BEGIN = `// ${MARK_BEGIN}`;  // Script.js (JavaScript)
 const END = `// ${MARK_END}`;
 const YBEGIN = `# ${MARK_BEGIN}`;  // clash-verge.yaml (YAML)
@@ -50,13 +46,6 @@ export function scriptBlock(port) {
     '  if (config.rules.indexOf(__atraceRule) === -1) config.rules.unshift(__atraceRule);',
     `  ${END}`,
   ].join('\n');
-}
-
-// strip any prior atrace block (between the sentinels, inclusive of its own line) from JS OR YAML —
-// matches on the inner marker text so it catches both the `//`-prefixed and `#`-prefixed forms.
-export function stripBlock(text) {
-  const re = new RegExp(`\\n?[^\\n]*${escapeRe(MARK_BEGIN)}[\\s\\S]*?${escapeRe(MARK_END)}[^\\n]*`, 'g');
-  return text.replace(re, '');
 }
 
 // A trivial (no-op) main — `function main(...) { return config; }`, with any whitespace/comments —
@@ -94,46 +83,6 @@ export function spliceRuntime(yaml, port) {
   }
   return { yaml: out.join('\n'), splicedProxies: didP, splicedRules: didR };
 }
-
-// Remove EVERY atrace route from a runtime yaml: our sentinel-marked splice, AND the unmarked copy
-// the durable Script.js puts there at each Verge regen (serde_yaml block style, `- name: atrace-mitm`
-// + `- <DESKTOP_RULE>`). Stripping only the sentinel form was D29's bug: after any regen, on()
-// spliced a second proxy of the same name (mihomo 400 "duplicate name") and off() pushed a config
-// that still routed into the MITM. Only the top-level `proxies:` items named EXACTLY atrace-mitm and
-// `rules:` items equal to DESKTOP_RULE go; every other byte stays.
-export function stripRuntime(yaml) {
-  const lines = stripBlock(yaml).split('\n');
-  const tail = lines.at(-1) === '' ? lines.pop() : null; // keep the final newline out of any item
-  const out = [];
-  let section = null, listIndent = null, item = null;
-  // the item's OWN `name` only (the dash line, or a key at the item's key column) — never a nested
-  // `name:` deeper inside some other proxy (e.g. plugin-opts), which would delete the user's proxy
-  const nameIs = `name:\\s*(['"]?)${escapeRe(PROXY_NAME)}\\1\\s*(?:[,}]|$)`;
-  const isOurProxy = ([head, ...rest]) => {
-    if (new RegExp(`^\\s*-\\s+(?:\\{\\s*)?${nameIs}`).test(head)) return true;
-    const inline = /^(\s*-\s+)\S/.exec(head); // `- key: v` → keys sit where `key` starts
-    const keyCol = inline ? inline[1].length : (rest.find((l) => l.trim()) || '').search(/\S/); // bare `-`
-    return rest.some((l) => l.length - l.trimStart().length === keyCol && new RegExp(`^\\s*${nameIs}`).test(l));
-  };
-  const isOurRule = (l) => new RegExp(`^\\s*-\\s+(['"]?)${escapeRe(DESKTOP_RULE)}\\1\\s*$`).test(l);
-  const flush = () => { if (item && !isOurProxy(item)) out.push(...item); item = null; };
-  for (const ln of lines) {
-    const top = /^[^\s#-][^:]*:/.test(ln);
-    if (top) { flush(); section = ln.split(':')[0]; listIndent = null; out.push(ln); continue; }
-    const dash = /^(\s*)-(?:\s|$)/.exec(ln);
-    if (dash && listIndent === null) listIndent = dash[1].length;
-    if (section === 'proxies') {
-      if (dash && dash[1].length === listIndent) { flush(); item = [ln]; continue; }
-      if (item) { item.push(ln); continue; }
-    } else if (section === 'rules' && dash && dash[1].length === listIndent && isOurRule(ln)) continue;
-    out.push(ln);
-  }
-  flush();
-  if (tail !== null) out.push(tail);
-  return out.join('\n');
-}
-
-function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 // ── the mihomo control socket: discovered, never hard-coded (D29) ─────────────────────────────
 // Where the live core listens depends on how Verge runs it: 2.5.x service mode = clash-verge-service
@@ -408,12 +357,4 @@ export function getDesktopSteer(platform = process.platform, deps = {}) {
   }
 
   return { platform, on, off, status };
-}
-
-// The demo's atrace-desktop wrote `prepend-proxies:`/`prepend-rules:` blocks into Merge.yaml (inert
-// on Verge 2.5.1). Strip that legacy shape too, so `desktop on/off` leaves a clean Merge.yaml.
-export function stripMergeLegacy(yaml) {
-  return yaml
-    .replace(/\n?prepend-proxies:\n(?:[ \t]*-[^\n]*\n?)+/g, '\n')
-    .replace(/\n?prepend-rules:\n(?:[ \t]*-[^\n]*\n?)+/g, '\n');
 }
