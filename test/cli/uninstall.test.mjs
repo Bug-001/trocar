@@ -330,7 +330,7 @@ test('D38: every line uninstall writes is in the closed sets, one run has one `r
   assert.deepEqual([last.event, last.kind, last.outcome], ['uninstall-note', 'result', 'uninstalled'])
 })
 
-test('uninstall: the arguments — a harness name, an unknown option, root and a platform without the new collector (R4, R7, 1.6 §4)', async () => {
+test('uninstall: the arguments — a harness name, an unknown option, root and a platform without the new collector hands over to the hook (R4, R7, 1.6 §4)', async () => {
   const s = await installedHome({ names: ['claude-code'] }); const snap = snapshot(s.home)
   const name = await cli(s, ['claude-code'])
   assert.deepEqual([name.exit, snapshot(s.home)], [2, snap])
@@ -342,8 +342,7 @@ test('uninstall: the arguments — a harness name, an unknown option, root and a
   const hooked = []
   const mac = await cli(s, ['--yes'], { platform: 'darwin', deps: { legacyUninstall: async (argv) => { hooked.push(argv); return 4 } } })
   assert.deepEqual([mac.exit, hooked, snapshot(s.home)], [4, [['--yes']], snap])
-  const none = await cli(s, [], { platform: 'darwin' })
-  assert.deepEqual([none.exit, snapshot(s.home)], [1, snap]); assert.match(none.io.stderrText(), /本平台\(darwin\)没有新采集器/)
+  // without the hook a platform without the new collector runs the old capture's own uninstall: test/cli/legacy-uninstall.test.mjs
 })
 
 test('formatUninstallReceipt: not done says so and what to do; the entries left and the problems are named; a kept bundle is said', () => {

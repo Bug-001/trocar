@@ -21,6 +21,8 @@ import { execTool } from '../off/exec.mjs'
 import { confirm, isInteractive } from '../off/io.mjs'
 import { CODE_OFF } from '../off/names.mjs'
 import { formatUninstallReceipt } from './receipt.mjs'
+import { hasNewCollector } from '../off/legacy.mjs'
+import { legacyUninstallCli } from './legacy-uninstall.mjs'
 
 const DRAIN_MS = 30_000 // 1.6 §1.1: how long the daemon is given to close the connections it can see the end of
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
@@ -240,11 +242,7 @@ export async function runUninstallCli(argv, { io, env = process.env, home = node
   }
   const json = flags.has('--json')
   if ((deps.getuid || processUid)() === 0) { io.err('asight uninstall: 用你自己的账号跑,不要用 root / sudo(D36)'); return EXIT.incomplete }
-  if (platform !== 'linux') {
-    if (deps.legacyUninstall) return deps.legacyUninstall(argv, { io, env, home, platform, deps })
-    io.err(`asight uninstall: 本平台(${platform})没有新采集器;这里 uninstall 要补全旧采集的撤销(过渡期,1.6 §4),这一步还没接上`)
-    return EXIT.incomplete
-  }
+  if (!hasNewCollector(platform)) return (deps.legacyUninstall || legacyUninstallCli)(argv, { io, env, home, platform, deps }) // 1.6 §4: no new collector here: uninstall completes the undo of the old capture
   try {
     const { receipt, exit } = await runUninstall({ home, env, purgeData: flags.has('--purge-data'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: isInteractive(io), io: { ...io, prompt: json ? io.stderr : io.stdout }, say: json ? io.err : io.out, deps })
     if (json) io.out(JSON.stringify(receipt, null, 2))
