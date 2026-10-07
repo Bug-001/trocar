@@ -8,7 +8,7 @@ import { EventEmitter } from 'node:events'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { runCli } from '../../src/cli/main.mjs'
-import { COMMANDS, HIDDEN_ALIASES, helpText } from '../../src/cli/commands.mjs'
+import { COMMANDS, HIDDEN_ALIASES, helpText, commandNamed } from '../../src/cli/commands.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { sandbox, installedViaCli, fakeIo, snapshot } from './fixtures/dispatch-ctx.mjs'
@@ -18,6 +18,16 @@ const PACKAGE = JSON.parse(fs.readFileSync(fileURLToPath(new URL('../../package.
 /** The context of a run where every command is a spy that records `[name, ...argv]` and answers 0: what the dispatch did, not what the commands do. */
 const spying = (seen) => ({ io: fakeIo(), uid: 1000, platform: 'linux', deps: { commands: Object.fromEntries(COMMANDS.map((c) => [c.name, async (argv) => { seen.push([c.name, ...argv]); return 0 }])) } })
 const commandsOf = (text) => new Set(text.split('\n').map((l) => l.match(/^ {2}(?:sudo )?asight ([a-z-]+)/)).filter(Boolean).map((m) => m[1]))
+
+test('V19: every command help lists is dispatched to by name — as root for setup-helper, as a user for the rest — and nothing else is: the spy sees the one command and its arguments as typed', async () => {
+  const listed = [...commandsOf(helpText(undefined, { platform: 'linux' }))]
+  assert.deepEqual(listed.sort(), COMMANDS.map((c) => c.name).sort())
+  for (const name of listed) {
+    const seen = [], c = spying(seen); c.uid = commandNamed(name).needsRoot ? 0 : 1000
+    assert.equal(await runCli([name, 'x', '--y'], c), 0, name)
+    assert.deepEqual(seen, [[name, 'x', '--y']], `${name}: dispatched with its arguments as typed, and nothing else`)
+  }
+})
 
 test('V19: every hidden alias dispatches to the command it claims, the rest of the arguments follow, and `collector` with anything else is a usage error', async () => {
   for (const a of HIDDEN_ALIASES) {
