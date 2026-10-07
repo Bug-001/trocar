@@ -37,6 +37,14 @@ const EXPECT = {
     },
     unknown: [raw`D:\tools\codex.exe`],
   },
+  'hermes': {
+    groups: { 'hermes.cli': ['hermes.cli'] },
+    forms: {
+      'hermes.cli': { nameRule: false, yes: [`${U}\\AppData\\Local\\hermes\\tools\\python-3.12.4\\python.exe`] },
+      'hermes.desktop': { nameRule: false, yes: [], unmeasured: true },
+    },
+    unknown: [],
+  },
   'kimi-code': {
     groups: { 'kimi-code.cli': ['kimi-code.cli'], 'kimi-code.vscode': ['kimi-code.vscode'] },
     forms: {
@@ -120,10 +128,13 @@ test('every win32 data file has the shape the later tasks read: groups, forms, t
       assert.ok(!ids.has(f.id), `${f.id} once`)
       ids.add(f.id)
       assert.ok(f.id.startsWith(`${h}.`), f.id)
-      assert.ok(gids.has(f.g), `${f.id}: its group ${f.g} exists`)
       assert.equal(typeof f.nameRule, 'boolean')
       assert.equal(typeof f.processRules, 'boolean')
-      assert.equal(f.supported, true, `${f.id}: a supported form`)
+      if (f.supported !== true) { // a form nobody could install: listed so status says "unknown · not measured", with nothing to match and no group (4.8 §2.3, §6.4)
+        assert.deepEqual([f.supported, f.g, f.match, f.processRules], [{ reason: 'not-measured' }, null, null, false], f.id)
+        continue
+      }
+      assert.ok(gids.has(f.g), `${f.id}: its group ${f.g} exists`)
       assert.match(f.match.image, /^[^\\/]+\.exe$/i, `${f.id}: an image name`)
       for (const p of [...(f.match.path || []), ...(f.match.cmdline || [])]) {
         assert.deepEqual(lintPattern(p), [], `${f.id}: ${p}`)
@@ -151,12 +162,14 @@ test('the group table: the three shared groups hold their forms, every other for
 })
 
 test('W3: every install path the spike measured is its form, the same image elsewhere is form-path-unknown, and no form claims another form\'s path', () => {
-  const forms = formsOf()
+  const formsAll = formsOf()
+  const forms = formsAll.filter((f) => f.match)
   for (const [h, e] of Object.entries(EXPECT)) {
     assert.deepEqual(WIN[h].forms.map((f) => f.id).sort(), Object.keys(e.forms).sort(), `${h}: the forms of 4.8 §2.3`)
     for (const [id, row] of Object.entries(e.forms)) {
-      const f = forms.find((x) => x.id === id)
+      const f = formsAll.find((x) => x.id === id)
       assert.equal(f.nameRule, row.nameRule, `${id}: nameRule`)
+      if (row.unmeasured) { assert.equal(f.supported.reason, 'not-measured', id); continue }
       assert.equal(!!(WIN[h].groups.find((g) => g.g === f.g).optIn || []).length, !!row.optIn, `${id}: whether the user must name it`)
       for (const yes of row.yes) {
         const { exe, cmdline = null } = typeof yes === 'string' ? { exe: yes } : yes
@@ -193,7 +206,7 @@ test('W3: Code.exe is only the Kimi extension, node.exe and python.exe are never
 test('W3: the ZCode forms match the whole image and carry no hosts; only the Kimi extension has a host set, and its settings reader finds the base URLs in a config.toml', () => {
   const forms = formsOf()
   assert.deepEqual(forms.filter((f) => f.hosts).map((f) => f.id), ['kimi-code.vscode'], 'a host tree is only the editor Kimi lives in (4.8 §3.5); ZCode.exe is the agent\'s own process (OPEN 23)')
-  for (const f of forms.filter((x) => /^zcode\.exe$/i.test(x.match.image))) {
+  for (const f of forms.filter((x) => x.match && /^zcode\.exe$/i.test(x.match.image))) {
     assert.ok(f.match.path.every((p) => new RegExp(p, 'i').test(`${U}\\AppData\\Local\\Programs\\ZCode\\ZCode.exe`)), `${f.id}: any ZCode.exe of the install, not only some of its processes`)
   }
   const { hosts } = forms.find((f) => f.id === 'kimi-code.vscode')

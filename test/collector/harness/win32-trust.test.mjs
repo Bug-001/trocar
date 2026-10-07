@@ -72,7 +72,7 @@ function box() {
 }
 const names = ['claude-code', 'codex', 'kimi-code', 'z-code']
 const install = (b, over = {}) => installCollector({ home: b.home, env: { HOME: b.home, USERPROFILE: b.home }, osName: 'win32', harnesses: ALL.filter((d) => names.includes(d.name)), freePort: async () => 47011, roots: { node: [], osText: '' }, ...over })
-const uninstall = (b) => uninstallCollector({ home: b.home, env: {}, stop: async () => 'none', harnesses: ALL.filter((d) => names.includes(d.name)), roots: { node: [], osText: '' } })
+const uninstall = (b, harnesses = ALL.filter((d) => names.includes(d.name))) => uninstallCollector({ home: b.home, env: {}, stop: async () => 'none', harnesses, roots: { node: [], osText: '' } })
 
 test('W19: on writes each automatic trust entry and off puts every file back to its pre_sha256; nothing outside the plan is touched, nothing a user has to name is written', async () => {
   const b = box()
@@ -107,4 +107,41 @@ test('W19: on writes each automatic trust entry and off puts every file back to 
   await uninstall(b)
   assert.deepEqual([...b.snapshot()], [...before], 'the user\'s files are back to the bytes they had (their pre_sha256)')
   assert.deepEqual(fs.readdirSync(b.dir), ['flows'], 'only the records of what install and uninstall said remain of the collector directory')
+})
+
+const only = (name) => ALL.filter((d) => d.name === name)
+test('W19: Hermes — the block goes into the .env of %LOCALAPPDATA%\\hermes and of each profile, with HERMES_CA_BUNDLE for a release up to v2026.9.24, the user\'s CA is carried into the bundle, and off restores every byte', async () => {
+  const b = box()
+  const corp = createCa({ commonName: 'corp relay CA' })
+  const corpFile = b.put('corp.pem', corp.certPem)
+  const rootEnv = b.put('AppData/Local/hermes/.env', `OPENROUTER_API_KEY=sk-secret\nSSL_CERT_FILE=${corpFile}\n`)
+  b.put('AppData/Local/hermes/hermes-agent/install-stamp.json', '{"tag":"v2026.9.20"}')
+  b.put('AppData/Local/hermes/hermes-agent/.env', 'FOO=1\n')
+  b.put('AppData/Local/hermes/profiles/work/config.yaml', 'model: x\n')
+  const before = b.snapshot()
+  const r = await install(b, { harnesses: only('hermes') })
+  const profileEnv = path.join(b.home, 'AppData', 'Local', 'hermes', 'profiles', 'work', '.env')
+  const bundle = path.join(b.dir, 'ca', 'combined-hermes.pem')
+  assert.deepEqual([...readManifest(b.dir).planned].sort(), [bundle, profileEnv, rootEnv].sort())
+  for (const f of [rootEnv, profileEnv]) assert.match(fs.readFileSync(f, 'utf8'), new RegExp(`SSL_CERT_FILE=${bundle.replace(/[.\\]/g, '\\$&')}\\nHERMES_CA_BUNDLE=${bundle.replace(/[.\\]/g, '\\$&')}\\n`), `${f}: both variables (a release of that date reads the first of HERMES_CA_BUNDLE / SSL_CERT_FILE)`)
+  assert.match(fs.readFileSync(rootEnv, 'utf8'), /OPENROUTER_API_KEY=sk-secret/, 'the user\'s other lines are untouched')
+  assert.ok(fs.readFileSync(bundle, 'utf8').includes(corp.certPem.trim()), 'the CA the user\'s SSL_CERT_FILE named is carried into the bundle')
+  assert.ok(r.plan.notes.some((n) => /does not exist, so asight creates it.*as a fill instead of an override/.test(n)), 'creating the profile\'s .env turns the checkout .env into a fill: said')
+  await uninstall(b, only('hermes'))
+  assert.deepEqual([...b.snapshot()], [...before])
+})
+
+test('W19: Hermes — no %LOCALAPPDATA%\\hermes means no entry and a note; HERMES_HOME naming a profile finds the root above it; a newer release gets only SSL_CERT_FILE', () => {
+  const hermes = only('hermes')[0].win32
+  const b = box()
+  const ctx = (env = {}, over = {}) => ({ os: 'win32', home: b.home, env: new Map(Object.entries(env)), running: [], collectorDir: b.dir, caPem: path.join(b.dir, 'ca', 'asight-ca.pem'), readText: (f) => { try { return fs.readFileSync(f, 'utf8') } catch { return null } }, listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } }, ...over })
+  const none = hermes.inject(ctx())
+  assert.deepEqual([none.entries, none.notes.map((n) => n.code)], [undefined, ['harness-note']])
+  const root = path.join(b.home, 'D', 'hermes')
+  b.put('D/hermes/profiles/work/config.yaml', 'x: 1\n')
+  b.put('D/hermes/hermes-agent/install-stamp.json', '{"tag":"v2026.10.2"}')
+  const got = hermes.inject(ctx({ HERMES_HOME: path.join(root, 'profiles', 'work') }))
+  assert.deepEqual(got.entries.map((e) => [e.path, Object.keys(e.vars)]), [[path.join(root, '.env'), ['SSL_CERT_FILE']], [path.join(root, 'profiles', 'work', '.env'), ['SSL_CERT_FILE']]])
+  assert.deepEqual(hermes.groups[0].proxyEntry.files(ctx({ HERMES_HOME: path.join(root, 'profiles', 'work') })), got.entries.map((e) => e.path), 'the proxy entry goes into the files the trust block does')
+  assert.deepEqual(hermes.groups[0].proxyEntry.files(ctx()), [], 'not installed: no file')
 })
