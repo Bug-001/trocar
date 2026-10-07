@@ -108,7 +108,15 @@ export function register({ file, run = null, env = process.env, fs = nodeFs } = 
 }
 
 const ok = { code: 0, out: '', err: '' }
-const taskExists = ({ run, env }) => schtasks(['/Query', '/TN', TASK_NAME], { run, env }).code === 0
+/** Is the task registered? `/Query /TN` is the question (never a localised error text): exit 0 = there; any other exit = not there (the one ambiguity left, which `schtasks` itself does not break: exit 1 is "not found" and
+ *  also "the service is down"); a query that did not run at all (timeout, blocked, no schtasks: code null) is NOT "not there": nothing was asked of the task, so an undo that took it for gone would report success while the
+ *  task stays registered and starts asight at the next login. → `{ state: 'present' }` · `{ state: 'absent' }` · `{ state: 'unknown', err }`. */
+const taskState = ({ run, env }) => {
+  const r = schtasks(['/Query', '/TN', TASK_NAME], { run, env })
+  if (r.code === 0) return { state: 'present' }
+  if (r.code === null) return { state: 'unknown', err: `schtasks /Query did not run (${r.err || 'no reason given'})` }
+  return { state: 'absent' }
+}
 const errOf = (r) => r.err || (r.code === null ? 'it did not run' : `exit ${r.code}`)
 const ours = (value) => /\bdaemon --supervise\s*$/.test(value) // what an earlier `on` of asight wrote: the supervised daemon command
 
@@ -157,7 +165,8 @@ export function removeRunValue({ run = null, env = process.env, prior = null } =
   return { code: r.code, out: '', err: r.err, runKey: r.code === 0 ? (prior ? 'restored' : 'removed') : 'failed' } // reg's "The operation completed successfully." is not worth carrying
 }
 
-const settle = (task, k) => ({ code: task.code !== 0 ? task.code : k.code, out: [task.out, k.out].filter(Boolean).join('\n'), err: [task.err, k.err].filter(Boolean).join('; '), task: task.state, runKey: k.runKey })
+// the two parts of an undo as one answer; a tool that did not run (code null) is code 1, a failure that a caller's `if (r.code)` sees
+const settle = (task, k) => ({ code: (task.code !== 0 ? task.code : k.code) ?? 1, out: [task.out, k.out].filter(Boolean).join('\n'), err: [task.err, k.err].filter(Boolean).join('; '), task: task.state, runKey: k.runKey })
 
 /**
  * The per-user autostart as `asight on` (src/cli/on.mjs) and install.mjs consume it, the same shape as arch/linux/unit.mjs `userUnit`: `{ name, path, links, text(env), enable({ now }), start(), reload(), disable(), remove() }`, each verb
@@ -171,7 +180,7 @@ const settle = (task, k) => ({ code: task.code !== 0 ? task.code : k.code, out: 
  *   reload()         nothing to do: a rewritten task is registered again by `enable` (`/F`).
  *   disable({ prior }) a no-argument `off`: the task is switched off (`/Change /DISABLE`; it does not end a running instance, the caller stops the supervisor parent first, 4.8 §4.2) and asight's Run value is taken out, whichever
  *                    of the two an earlier `on` used. → `{ code, out, err, task: 'disabled' | 'absent' | 'failed', runKey }`. `prior` is the Run entry's ledgered prior value.
- *   remove({ prior }) `uninstall`: the task is deleted (`/Delete /F`) and the Run value taken out the same way. A task that is not there is already as asked (found with `/Query`, never by parsing a localised error text).
+ *   remove({ prior }) `uninstall`: the task is deleted (`/Delete /F`) and the Run value taken out the same way. A task that is not there is already as asked (found with `/Query`, never by parsing a localised error text); a `/Query` that did not run at all is not "not there": it is a failure (`task: 'failed'`, code 1) and nothing is changed on a guess.
  */
 export function userUnit({ home, node, script, run = null, env = process.env, fs = nodeFs, spawn = nodeSpawn, user = null, conhost = 'conhost.exe' } = {}) {
   const file = path.join(collectorHome(path.join(home, '.asight')), TASK_FILE)
@@ -186,7 +195,10 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
   }
   // the task is changed or deleted when it is there, and asight's Run value is taken out; each says what it did
   const undo = (args, done, prior) => {
-    const t = taskExists(tools) ? (() => { const r = schtasks(args, tools); return { ...r, state: r.code === 0 ? done : 'failed' } })() : { ...ok, state: 'absent' }
+    const q = taskState(tools)
+    const t = q.state === 'present' ? (() => { const r = schtasks(args, tools); return { ...r, state: r.code === 0 ? done : 'failed' } })()
+      : q.state === 'absent' ? { ...ok, state: 'absent' }
+      : { code: 1, out: '', err: q.err, state: 'failed' } // not known to be gone: a failure, and nothing is changed on a guess; the Run value below is a separate part and still goes
     return settle(t, removeRunValue({ run, env, prior }))
   }
   return {

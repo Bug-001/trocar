@@ -406,6 +406,32 @@ test('W24 disable (a no-argument off) switches the task off and leaves it regist
   assert.deepEqual([f.code, f.err, f.task], [1, 'ERROR: Access is denied.', 'failed'], 'a task that could not be switched off says so')
 })
 
+test('W24 a /Query that did not run (timeout, blocked, no schtasks) is a failure for disable and remove, never "absent": nothing was asked of the task, so it is not known to be gone; the Run value is still taken out', () => {
+  const didNot = [
+    ['timed out', { status: null, error: Object.assign(new Error('spawnSync schtasks ETIMEDOUT'), { code: 'ETIMEDOUT' }) }],
+    ['could not start', { status: null, error: Object.assign(new Error('spawn schtasks ENOENT'), { code: 'ENOENT' }) }],
+    ['killed without a reason', { status: null }],
+  ]
+  for (const [what, query] of didNot) {
+    for (const verb of ['disable', 'remove']) {
+      const run = fakeRegistry({ kind: 'REG_SZ', value: COMMAND })
+      const asked = (file, args) => (file === 'schtasks' && args[0] === '/Query' ? { stdout: '', stderr: '', ...query } : null)
+      const calls = []
+      const r = userUnit({ ...withHome(), run: (file, args, opts) => { calls.push([file, ...args]); return asked(file, args) || run(file, args, opts) } })[verb]()
+      assert.equal(r.task, 'failed', `${verb}, ${what}: the task is not reported absent`)
+      assert.equal(typeof r.code, 'number', `${verb}, ${what}: a code a caller's \`if (r.code)\` sees`)
+      assert.notEqual(r.code, 0, `${verb}, ${what}`)
+      assert.match(r.err, /\/Query/, `${verb}, ${what}: it says which call did not run`)
+      assert.deepEqual(calls.filter((c) => c[0] === 'schtasks').map((c) => c[1]), ['/Query'], `${verb}, ${what}: nothing is changed or deleted on a guess`)
+      assert.equal(r.runKey, 'removed', `${verb}, ${what}: the Run value is a separate part of the undo and still goes`)
+    }
+  }
+  // a /Change or /Delete that did not run is a failure with a code too
+  const lost = fakeTools({ 'schtasks /Query': { status: 0 }, 'schtasks /Delete': { status: null, error: new Error('spawnSync schtasks ETIMEDOUT') }, 'reg query': { status: 1 } })
+  const d = userUnit({ ...withHome(), run: lost }).remove()
+  assert.deepEqual([d.task, typeof d.code, d.code !== 0], ['failed', 'number', true])
+})
+
 // ---- W24: the Run-key fallback -------------------------------------------------------------------------------------------------------------------
 
 const RUN_PATH = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
