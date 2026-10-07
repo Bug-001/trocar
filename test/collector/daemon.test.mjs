@@ -644,6 +644,34 @@ test('daemon: the daily bundle rebuild never writes the asight CA back into a bu
   } finally { await d.stop(); p.done(); s.done() }
 })
 
+// 1.6 R12: the daemon's rebuild reads the manifest, rewrites bundles and saves the manifest — the same files `on`, `off` and `uninstall` change — so it does that under the op lock.
+test('daemon: the bundle rebuild runs under the op lock (1.6 R12) — while another command holds it nothing is rewritten and the manifest is not read-modified-saved; a round after it lets go does the rebuild; a stale lock is taken over and released', async () => {
+  const s = sandbox(); const p = fakeProc()
+  const { createCa } = await import('../../src/collector/core/tls/ca.mjs')
+  const osRoots = path.join(s.root, 'os-roots.pem'); fs.writeFileSync(osRoots, '')
+  const dir = s.collector
+  const rep = { name: 'rep', runtime: 'rust', hosts: [], signatures: { linux: { match: [{ exe: /\/rep$/ }] } }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
+    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [], role: 'bundle' }] }) }
+  await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, osRootsFile: osRoots })
+  writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['rep'], 'on'))
+  const bundle = path.join(dir, 'ca', 'combined-rep.pem'), lock = path.join(dir, 'op.lock')
+  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, start_time: null, boot_id: null }) + '\n') // another command is running: this process stands in for it
+  const root1 = createCa({ commonName: 'an OS root' }); fs.writeFileSync(osRoots, root1.certPem)
+  const d = await startDaemon({ dir, socketPath: s.sock, arch: { ...fakeArch(p).arch, osRootsFile: osRoots }, harnesses: [rep], bundleMs: 30 })
+  try {
+    await new Promise((r) => setTimeout(r, 250)) // several rounds at 30 ms
+    assert.ok(!fs.readFileSync(bundle, 'utf8').includes(root1.certPem.trim()), 'nothing was rewritten while the lock was held')
+    assert.ok(fs.readFileSync(lock, 'utf8').includes(String(process.pid)), 'and the holder\'s lock is still its own')
+    fs.rmSync(lock) // the command is done
+    await until(() => fs.readFileSync(bundle, 'utf8').includes(root1.certPem.trim()))
+    assert.ok(!fs.existsSync(lock), 'the daemon let go of the lock after its rebuild')
+    const root2 = createCa({ commonName: 'another OS root' }); fs.writeFileSync(osRoots, root2.certPem)
+    fs.writeFileSync(lock, JSON.stringify({ pid: 2 ** 22 + 7, start_time: '1', boot_id: 'b' }) + '\n') // the lock of a command that died
+    await until(() => fs.readFileSync(bundle, 'utf8').includes(root2.certPem.trim()))
+    assert.ok(!fs.existsSync(lock), 'a stale lock is taken over, and released')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
 // The daemon hands the engine each process's harness data (plan 3c §2 describe): Codex's WebSocket terminators reach the
 // recorder, so a call is cut at response.completed and is on disk while the connection stays open (W10 through the
 // product path); without them it waits for the next message or the close. The same FlowExtras carry its own proxies.

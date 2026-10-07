@@ -17,6 +17,7 @@ import { createTracker } from './core/tracker.mjs'
 import { createSwitch, readState } from './core/switch.mjs'
 import { startControlServer, controlSocketPath } from './core/control.mjs'
 import { readCa } from './core/tls/ca-store.mjs'
+import { tryOpLock } from '../off/lock.mjs'
 import { loadCa, checkCa } from './core/tls/ca.mjs'
 import { createLeafIssuer } from './core/tls/leaf.mjs'
 import { createRecordStore } from './core/record/store.mjs'
@@ -40,6 +41,8 @@ export async function loadParts({ arch = null, harnesses = null, env = process.e
 
 export const collectorPaths = (dir = collectorHome(asightHome())) => ({ dir, caDir: path.join(dir, 'ca'), state: path.join(dir, 'state.json'), lock: path.join(dir, 'lock'), markers: path.join(dir, 'run', 'trust') })
 const errText = (e) => String((e && e.message) || e)
+const BUNDLE_BUSY_MS = 2000 // a bundle rebuild that found the op lock held (1.6 R12) is tried again after this long ...
+const BUNDLE_BUSY_RETRIES = 30 // ... at most this many times; the daily round is the next chance after that
 const OFF_HINT = 'capture is switched off for this harness (its desired state is off); it is not judged, not watched and not counted as untrusted'
 const VERSION = (() => { try { return JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version } catch { return null } })() // null: said as unknown in daemon-start
 // Every failure record carries a code (asight's name from src/health/codes.mjs, or the errno): the fold key (D-3).
@@ -193,9 +196,20 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     // It works on the manifest as the disk has it NOW, not the one read at start: `asight off <harness>` runs while this daemon does, and a bundle it
     // removed (or kept without the asight CA) must not come back with the CA, nor the manifest it saved be written over by this one's copy. And only for
     // the harnesses whose desired state is `on` (4.6 「合并包」, D39): one `off` has taken out is not this daemon's to rebuild.
+    // The read-modify-write of the manifest and the bundles is done under the op lock (1.6 R12): `on`, `off` and `uninstall` change the same files. A lock another
+    // command holds means this round waits for it (it ends in seconds, and the roots are read again then); a rebuild after the command is done sees what it left.
+    let bundleRetry = null, bundleBusy = 0
     const refreshBundles = () => {
+      clearTimeout(bundleRetry)
       const report = { rebuilt: [], failed: [], lost: [] }
+      let held = null
       try {
+        held = tryOpLock({ file: path.join(P.dir, 'op.lock') })
+        if (!held.lock) {
+          if (bundleBusy++ < BUNDLE_BUSY_RETRIES) { bundleRetry = setTimeout(refreshBundles, BUNDLE_BUSY_MS); bundleRetry.unref() }
+          return
+        }
+        bundleBusy = 0
         const fresh = readManifest(P.dir)
         if (fresh && !fresh.unsupported) {
           const installedIds = [...new Set([...(fresh.entries || []), ...(fresh.files || [])].map((x) => x.harness).filter(Boolean))]
@@ -205,7 +219,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
           if (A.osRootsFile) { try { osText = fs.readFileSync(A.osRootsFile, 'utf8') } catch (e) { if (e.code !== 'ENOENT') throw e } }
           rewriteBundles({ dir: P.dir, manifest: fresh, nodeRoots: tls.rootCertificates, osRootsText: osText, caPem: ca.certPem, report, only: on })
         }
-      } catch (e) { failure('bundle', Object.assign(new Error(`rebuilding the combined bundles failed: ${errText(e)}; they keep their previous roots`), { code: e && e.code })) }
+      } catch (e) { failure('bundle', Object.assign(new Error(`rebuilding the combined bundles failed: ${errText(e)}; they keep their previous roots`), { code: e && e.code })) } finally { if (held && held.lock) held.lock.release() }
       const changed = report.rebuilt.filter((r) => r.why === 'roots-changed').map((r) => r.path)
       if (changed.length) note({ event: 'bundles-rebuilt', code: 'roots-changed', reason: `the trusted roots changed; rebuilt ${changed.join(', ')}` })
       for (const r of report.rebuilt.filter((x) => x.why !== 'roots-changed')) {
@@ -480,7 +494,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       ready.then(() => new Promise((r) => setTimeout(r, 50))).then(() => { if (mine === exitAsked && !sw.anyOn()) return stop({ reason: 'off' }) }).catch((e) => failure('daemon', coded(e, 'stop-failed')))
     }
     async function doStop({ signal = null, reason = null } = {}) {
-      clearInterval(lockTimer); clearInterval(caTimer); clearInterval(checkTimer)
+      clearInterval(lockTimer); clearInterval(caTimer); clearInterval(checkTimer); clearTimeout(bundleRetry)
       if (!helperDown) { try { const s = await redirector.status(); if (s && s.drops) lastDrops = s.drops } catch { /* the helper is going: what was last read is written */ } }
       noteDrops({ force: true }) // drops not yet reported are written, not lost
       failure.flush() // folded counts are written, not lost
