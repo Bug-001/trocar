@@ -21,22 +21,26 @@ $script:Proto = 1
 $RegAllowJson = @'
 [{"hive":"HKCU","key":"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings","names":["ProxyEnable","ProxyServer","ProxyOverride","AutoConfigURL"]},{"hive":"HKCU","key":"Environment","names":["Path","HTTPS_PROXY","HTTP_PROXY","ALL_PROXY","NO_PROXY"]},{"hive":"HKLM","key":"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment","names":["Path"]},{"hive":"HKLM","key":"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy","names":["VerifiedAndReputablePolicyState"]}]
 '@
-$script:RegAllow = @(ConvertFrom-Json -InputObject $RegAllowJson)
+# Windows PowerShell 5.1 hands a JSON array on as ONE object (PowerShell 7 enumerates it), and @( ) does not unwrap that: @(ConvertFrom-Json '[a,b]') is a list of one list there. So
+# every list built from JSON below is a foreach over the parenthesised call, which enumerates the same way under both (a test pins that no ConvertFrom-Json of a list is wrapped in @( )).
+$script:RegAllow = New-Object 'System.Collections.Generic.List[object]'
+foreach ($r in (ConvertFrom-Json -InputObject $RegAllowJson)) { [void]$script:RegAllow.Add($r) }
 
 # Besides that list: the policy keys a harness file declares (4.8 section 2.4). helper.mjs checked them before it started this script; they are checked again here, with the
 # same two patterns as POLICY_KEY_PATTERN and POLICY_NAME_PATTERN in helper.mjs. A key that is not under Software\Policies is not a declaration: the script does not start.
 $PolicyKeyPattern = '^Software\\Policies(\\[A-Za-z0-9][A-Za-z0-9 _.-]*)+$'
 $PolicyNamePattern = '^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$'
 if ($ExtraRegAllowB64.Length -gt 0) {
-  $extra = @(ConvertFrom-Json -InputObject ([System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($ExtraRegAllowB64))))
-  foreach ($e in $extra) {
+  $extraJson = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($ExtraRegAllowB64))
+  foreach ($e in (ConvertFrom-Json -InputObject $extraJson)) {
     $eh = [string]$e.hive
     $ek = ([string]$e.key).Replace('/', '\').TrimEnd('\')
     $en = @($e.names | ForEach-Object { [string]$_ })
     $namesOk = ($en.Count -gt 0)
-    foreach ($n in $en) { if ($n -notmatch $PolicyNamePattern) { $namesOk = $false } }
+    # .NET's $ also matches before a final line feed (JavaScript's does not), so a name that ends in one passes the pattern: the control-character test is what refuses it, for the key and for each name alike
+    foreach ($n in $en) { if (($n -notmatch $PolicyNamePattern) -or ($n -match '[\x00-\x1f]')) { $namesOk = $false } }
     if ((($eh -ieq 'HKCU') -or ($eh -ieq 'HKLM')) -and ($ek -match $PolicyKeyPattern) -and ($ek -notmatch '[\x00-\x1f]') -and $namesOk) {
-      $script:RegAllow += [pscustomobject]@{ hive = $eh; key = $ek; names = $en }
+      [void]$script:RegAllow.Add([pscustomobject]@{ hive = $eh; key = $ek; names = $en })
     } else {
       throw ('extra reg-read entry refused: ' + $eh + '\' + $ek)
     }

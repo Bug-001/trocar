@@ -493,23 +493,59 @@ test('W1 helper.ps1 takes the declared policy keys as its one parameter, first, 
   assert.ok(/-match \$PolicyKeyPattern/.test(code) && /-match \$PolicyNamePattern|-notmatch \$PolicyNamePattern/.test(code), 'both patterns are applied')
   assert.ok(/\(\$eh -ieq 'HKCU'\) -or \(\$eh -ieq 'HKLM'\)/.test(code), 'only the two hives')
   assert.ok(/throw \('extra reg-read entry refused/.test(code), 'an entry that fails is a start failure, never silently dropped or accepted')
-  // the extra entries join the list only through that check: the one line that appends to it is inside it
-  const adds = code.split('\n').filter((l) => /\$script:RegAllow\s*\+=/.test(l))
-  assert.equal(adds.length, 1)
-  assert.ok(code.indexOf(adds[0]) > code.indexOf('-match $PolicyKeyPattern'), 'after the check')
+  // the extra entries join the list only through that check: of the two lines that append to it, the first loads the fixed list, and the second is inside the check
+  assert.ok(!/\$script:RegAllow\s*\+=/.test(code), 'no `+=`: it would need the list to be an array, and the list is a List')
+  const adds = code.split('\n').filter((l) => /\$script:RegAllow\.Add\(/.test(l))
+  assert.equal(adds.length, 2)
+  assert.ok(code.indexOf(adds[0]) < code.indexOf('$PolicyKeyPattern ='), 'the first loads the fixed list')
+  assert.ok(code.indexOf(adds[1]) > code.indexOf('-match $PolicyKeyPattern'), 'the second is after the check')
 })
 
-test('W1 the policy key pattern: what the script accepts is what helper.mjs accepts, on a table (the .NET and the JavaScript regular expression read it alike)', () => {
+/** Every place the script turns JSON into a list must enumerate it the way that holds in Windows PowerShell 5.1 AND in PowerShell 7. 5.1 sends an array out of ConvertFrom-Json as ONE object (7 enumerates it), and
+ *  @( ) does not unwrap that: @(ConvertFrom-Json '[a,b]') is a list holding one list, and `$r.hive -ieq $h -and $r.key -ieq $k` then reads 「some entry has this hive and some entry has this key」. A foreach over the parenthesised
+ *  call enumerates the same under both. The only other use is the request line, which is one object (a request is never a list). Returns the lines that break the rule. */
+function jsonListViolations(text) {
+  const out = []
+  for (const l of text.split('\n').filter((x) => !/^\s*#/.test(x) && /ConvertFrom-Json/.test(x))) {
+    if (/@\(\s*ConvertFrom-Json/.test(l) || /@\([^)]*\(\s*ConvertFrom-Json/.test(l)) out.push(`wrapped in @( ): ${l.trim()}`)
+    else if (!/\bforeach\s*\(\$\w+\s+in\s+\(ConvertFrom-Json\s+-InputObject\s+\$\w+\)\)/.test(l) && !/^\s*\$req\s*=\s*ConvertFrom-Json\s+-InputObject\s+\$line\s*$/.test(l)) out.push(`not a foreach over the parenthesised call: ${l.trim()}`)
+  }
+  return out
+}
+
+test('W1 helper.ps1 enumerates every JSON list through a foreach over the parenthesised call, never through @( ) (Windows PowerShell 5.1 sends an array out as one object); the scan can fail', () => {
+  assert.deepEqual(jsonListViolations(PS), [])
+  const uses = PS.split('\n').filter((x) => !/^\s*#/.test(x) && /ConvertFrom-Json/.test(x))
+  assert.equal(uses.length, 3, 'the fixed list, the declared keys and the request line: a new use has to be looked at')
+  // what it was: a list of one list under 5.1, which let a request the JS side refuses pass the script's own check, and made two declared keys throw
+  assert.equal(jsonListViolations('$script:RegAllow = @(ConvertFrom-Json -InputObject $RegAllowJson)').length, 1)
+  assert.equal(jsonListViolations('  $extra = @(ConvertFrom-Json -InputObject ([System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($ExtraRegAllowB64))))').length, 1)
+  assert.equal(jsonListViolations('$list = ConvertFrom-Json -InputObject $RegAllowJson').length, 1, 'a bare assignment is no better to rely on once a one-entry array arrives from PowerShell 7')
+  assert.equal(jsonListViolations('foreach ($r in @(ConvertFrom-Json -InputObject $x)) { }').length, 1)
+  assert.deepEqual(jsonListViolations('foreach ($e in (ConvertFrom-Json -InputObject $extraJson)) {'), [])
+})
+
+test('W1 helper.ps1 refuses a declared key AND each declared value name that holds a control character: .NET\'s `$` also matches before a final line feed, JavaScript\'s does not, so the pattern alone is not the same check', () => {
+  const code = PS.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
+  assert.ok(/\$ek -notmatch '\[\\x00-\\x1f\]'/.test(code), 'the key')
+  assert.ok(/foreach \(\$n in \$en\) \{ if \(\(\$n -notmatch \$PolicyNamePattern\) -or \(\$n -match '\[\\x00-\\x1f\]'\)\) \{ \$namesOk = \$false \} \}/.test(code), 'each name, in the same test as its pattern')
+  // the JavaScript side: a trailing line feed is no declaration (so the lines above stay unreachable from helper.mjs, and the script is only the second check)
+  for (const bad of [{ key: 'Software\\Policies\\Claude\n', names: ['x'] }, { key: 'Software\\Policies\\Claude', names: ['x\n'] }, { key: 'Software\\Policies\\Claude', names: ['x', 'y\u0001'] }]) {
+    assert.throws(() => declaredRegAllow([{ hive: 'HKCU', ...bad }]), TypeError, JSON.stringify(bad))
+  }
+})
+
+test('W1 the policy key pattern: helper.mjs accepts exactly what the table says (the script carries the same text; that .NET reads it the same way, trailing line feed aside, is checked on a real PowerShell in Task 11)', () => {
   const key = new RegExp(POLICY_KEY_PATTERN, 'i')
   const name = new RegExp(POLICY_NAME_PATTERN)
-  const keys = { 'Software\\Policies\\Claude': true, 'SOFTWARE\\Policies\\Claude\\Sub Key': true, 'software\\policies\\A.B-C_D': true, 'Software\\Policies': false, 'Software': false, 'Software\\Policies\\': false, 'Software\\Policies\\..': false, 'Software\\Policies\\.x': false, 'Software\\PoliciesX\\a': false, 'Software\\Microsoft\\Run': false, 'Environment': false, '': false, 'Software\\Policies\\a\\\\b': false, 'Software\\Policies\\a\nb': false }
+  const keys = { 'Software\\Policies\\Claude': true, 'SOFTWARE\\Policies\\Claude\\Sub Key': true, 'software\\policies\\A.B-C_D': true, 'Software\\Policies': false, 'Software': false, 'Software\\Policies\\': false, 'Software\\Policies\\..': false, 'Software\\Policies\\.x': false, 'Software\\PoliciesX\\a': false, 'Software\\Microsoft\\Run': false, 'Environment': false, '': false, 'Software\\Policies\\a\\\\b': false, 'Software\\Policies\\a\nb': false, 'Software\\Policies\\a\n': false }
   for (const [k, want] of Object.entries(keys)) {
     assert.equal(key.test(k), want, JSON.stringify(k))
     let accepted = true
     try { declaredRegAllow([{ hive: 'HKCU', key: k, names: ['x'] }]) } catch { accepted = false }
     assert.equal(accepted, want, `declaredRegAllow: ${JSON.stringify(k)}`)
   }
-  const names = { egressProxyUrl: true, 'a b': true, 'A_b-1.2': true, '': false, '.x': false, 'a\\b': false, 'a"b': false, 'a\nb': false, [`x${'y'.repeat(64)}`]: false }
+  const names = { egressProxyUrl: true, 'a b': true, 'A_b-1.2': true, '': false, '.x': false, 'a\\b': false, 'a"b': false, 'a\nb': false, 'a\n': false, [`x${'y'.repeat(64)}`]: false }
   for (const [n, want] of Object.entries(names)) assert.equal(name.test(n), want, JSON.stringify(n))
 })
 
