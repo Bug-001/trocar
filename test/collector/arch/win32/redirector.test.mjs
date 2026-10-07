@@ -527,7 +527,7 @@ function wiredKernel(over = {}) {
   const log = []
   const k = kernel(log, over.kernel)
   const e = entriesLog(log, over.entries)
-  const ctx = bed({ forwarder: k, entries: e, routes: ROUTES, ownImages: OWN_IMAGES, ...over.redirector })
+  const ctx = bed({ forwarder: k, entries: e, routes: ROUTES, ownImages: OWN_IMAGES, gate: () => ({ ok: true }), ...over.redirector })
   return { ...ctx, k, e, log }
 }
 const parse = (text) => JSON.parse(text)
@@ -589,7 +589,7 @@ test('W12 a read-back that does not say on is not on: the engine unreachable (th
     const log = []
     const k = kernel(log); k.reload = async ({ build, forms }) => { build({ port: 18899, secret: SECRET }); log.push('kernel'); return mk(forms) }
     const e = entriesLog(log)
-    const { r } = bed({ forwarder: k, entries: e, routes: ROUTES, ownImages: OWN_IMAGES })
+    const { r } = bed({ forwarder: k, entries: e, routes: ROUTES, ownImages: OWN_IMAGES, gate: () => ({ ok: true }) })
     await assert.rejects(r.attach(), (err) => { assert.equal(err.code, code, JSON.stringify(states)); assert.ok(err.readBack && err.readBack.forms, 'the read-back is on the error: the receipt says which form'); return true })
     assert.deepEqual([log, e.written, e.undone], [['kernel'], [], []])
   }
@@ -671,6 +671,58 @@ test('status() is the kernel\'s read-back: attached when it says a form is on, t
   assert.equal((await r.status()).attached, false, 'a read-back that is not ok is not on, whichever form says it is')
   k.checked = { ok: false, forms: {}, reason: 'not-running' }
   assert.deepEqual([(await r.status()).attached, (await r.status()).kernel.reason], [false, 'not-running'])
+})
+
+// ---------- the gate on the entries, and the groups the plan has on that nothing carries (review 2026-10-08) ----------
+
+test('W19 gate: attach() asks `gate` for each group about to be written and does not hand a refused one to the writer — the kernel is on, the refused group says why, and the others are written; without a gate attach() does not run', async () => {
+  const refuse = (e) => (e.harness === 'codex' ? { ok: false, reason: 'the proxy line cannot join the trust block yet (4.8 W19)' } : { ok: true })
+  const { r, e, k, log } = wiredKernel({ redirector: { gate: refuse } })
+  const out = await r.attach()
+  assert.deepEqual(e.written, [[{ g: 'claude-code.settings', harness: 'claude-code', entry: 'auto' }]], 'codex is not handed to the writer')
+  assert.deepEqual(out.entries.written, [{ g: 'claude-code.settings', ok: true }, { g: 'codex.env', ok: false, gated: true, reason: 'the proxy line cannot join the trust block yet (4.8 W19)' }])
+  assert.deepEqual([out.ok, out.kernel.ok, k.calls.length, log], [false, true, 1, ['kernel', 'write', 'undo']], 'the kernel stands and `ok` says a group is not pointed at it')
+  const asked = []
+  const spy = wiredKernel({ redirector: { gate: (x) => { asked.push(x); return { ok: true } } } })
+  await spy.r.attach()
+  assert.deepEqual(asked, [{ g: 'claude-code.settings', harness: 'claude-code', entry: 'auto' }, { g: 'codex.env', harness: 'codex', entry: 'auto' }], 'asked for the groups that are on, with the entry the plan chose; not for the one that is off')
+  const all = wiredKernel({ redirector: { gate: () => ({ ok: false, reason: 'closed' }) } })
+  const none = await all.r.attach()
+  assert.deepEqual([all.e.written, none.entries.written.map((x) => x.g), none.ok], [[], ['claude-code.settings', 'codex.env'], false], 'a gate that refuses everything: no write call at all')
+  const thrown = wiredKernel({ redirector: { gate: () => { throw new Error('the journal cannot join a block') } } })
+  const t = await thrown.r.attach()
+  assert.deepEqual([thrown.e.written, t.ok, /the journal cannot join a block/.test(t.entries.written[0].reason)], [[], false, true], 'a gate that throws is a refusal, never a write')
+  const bare = wiredKernel({ redirector: { gate: undefined } })
+  await assert.rejects(bare.r.attach(), /needs the gate/)
+  assert.deepEqual(bare.log, [], 'neither the kernel nor an entry was touched: the wiring has to say which groups may be written')
+})
+
+test('an entry list says `entry` only for a group that is on: null for the groups the plan has off (undo and check lists)', async () => {
+  const { r, e } = wiredKernel()
+  await r.attach()
+  assert.deepEqual(e.undone[0], [{ g: 'deepseek-dsh.env', harness: 'deepseek-dsh', entry: null }])
+  await r.status()
+  assert.deepEqual(e.checked[0].map((x) => [x.g, x.entry]), [['claude-code.settings', 'auto'], ['codex.env', 'auto']])
+})
+
+test('D38 a group the plan has on that the kernel does not carry is said, not skipped: `entries.skipped` names it with why, `ok` is false, the others are as they were — no port, no supported form, no upstream, a login on a port that takes none', async () => {
+  const one = (over) => wiredKernel({ redirector: over })
+  const noPort = one({ ingress: () => ({ ...INGRESS, groupPorts: { 'codex.env': 18802 } }) })
+  const a = await noPort.r.attach()
+  assert.deepEqual([a.ok, a.entries.skipped], [false, [{ g: 'claude-code.settings', reason: 'no-port' }]])
+  assert.deepEqual(noPort.e.written[0].map((x) => x.g), ['codex.env'], 'the carried group is written; the one nothing carries is not asked of the writer')
+  const unsupported = GROUPS.map((x) => (x.g === 'claude-code.settings' ? { ...x, forms: x.forms.map((f) => ({ ...f, supported: { reason: 'not-measured' } })) } : x))
+  const b = await one({ groups: unsupported }).r.attach()
+  assert.deepEqual([b.ok, b.entries.skipped], [false, [{ g: 'claude-code.settings', reason: 'no-supported-form' }]])
+  const c = await one({ routes: () => ({ ...ROUTES(), 'claude-code.settings': route({ upstream: null }) }) }).r.attach()
+  assert.deepEqual([c.ok, c.entries.skipped], [false, [{ g: 'claude-code.settings', reason: 'no-upstream' }]])
+  const open = GROUPS.map((x) => (x.g === 'claude-code.settings' ? { ...x, group: { ...x.group, auth: false } } : x))
+  const d = await one({ groups: open, routes: () => ({ ...ROUTES(), 'claude-code.settings': route({ upstream: HTTP_PROXY }) }) }).r.attach()
+  assert.deepEqual([d.ok, d.entries.skipped], [false, [{ g: 'claude-code.settings', reason: 'login-on-open-port' }]])
+  const fine = await one({}).r.attach()
+  assert.deepEqual([fine.ok, fine.entries.skipped], [true, []], 'nothing skipped, nothing said')
+  const off = await one({ ingress: () => ({ ...INGRESS, groupPorts: { 'claude-code.settings': 18801, 'codex.env': 18802 } }) }).r.attach()
+  assert.deepEqual(off.entries.skipped, [], 'a group the plan has off and nothing carries (deepseek-dsh.env has no port here) is not a gap: nobody asked for it')
 })
 
 // ---------- kernelGroupsOf: the plan as the kernel's config takes it, on the real data of all seven harnesses ----------

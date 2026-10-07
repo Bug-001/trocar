@@ -34,19 +34,22 @@ function kernelForm(f, hostsOf) {
 }
 
 /**
- * kernelGroupsOf({ groups, routes, groupPorts, authOf, hostsOf }) → the `groups` of `buildForwarderConfig` (rules.mjs, 4.8 §3.1): `[{ g, port, on, upstream, bypass, auth, forms: [{ f, rules, hosts? }] }]`.
+ * kernelGroupsOf({ groups, routes, groupPorts, authOf, hostsOf, skipped }) → the `groups` of `buildForwarderConfig` (rules.mjs, 4.8 §3.1): `[{ g, port, on, upstream, bypass, auth, forms: [{ f, rules, hosts? }] }]`.
  * `groups` is `groupsOf(descriptors)`, `routes` planRoutes' result, `groupPorts` ingress.json's. A group is in the kernel when the plan has an answer for it, it has a port, it has a form that can be carried (`supported`) and there is an upstream to
  * forward to — a group with none has no hop to forward an agent that outlives `off` to, and sending it direct would go round the proxy the user's agent needs; and not when its entry takes no login (`auth: false`) while its upstream
  * needs one (a port any process could use must not carry the user's login, 4.8 §3.2). `on` is the plan's. The login of a credentialed upstream is resolved here, by `authOf`, into the config: the one place besides the manifest it is written.
+ * `skipped` (an array, optional): every group the plan has an answer for and the kernel does not carry is pushed as `{ g, reason }` (`no-upstream` · `no-port` · `no-supported-form` · `login-on-open-port`), so that a group left out is said by whoever
+ * asked (`attach()`), never silently.
  */
-export function kernelGroupsOf({ groups, routes, groupPorts, authOf = () => null, hostsOf = () => null } = {}) {
+export function kernelGroupsOf({ groups, routes, groupPorts, authOf = () => null, hostsOf = () => null, skipped = [] } = {}) {
   const out = []
   for (const { g, group, forms } of groups) {
     const r = routes && routes[g]
     const port = groupPorts && groupPorts[g]
     const carried = forms.filter((f) => f.supported === true && f.match)
-    if (!r || !r.upstream || !Number.isInteger(port) || carried.length === 0) continue
-    if (group.auth === false && r.upstream.credentialed) continue
+    if (!r) continue // the plan has no answer yet: nothing to carry and nothing to say
+    const why = !r.upstream ? 'no-upstream' : !Number.isInteger(port) ? 'no-port' : carried.length === 0 ? 'no-supported-form' : group.auth === false && r.upstream.credentialed ? 'login-on-open-port' : null
+    if (why) { skipped.push({ g, reason: why }); continue }
     const up = r.upstream
     const upstream = up.kind === 'direct' ? 'direct' : { type: up.kind, host: up.host, port: up.port, ...(up.credentialed ? loginOf(g, up, authOf) : {}) }
     out.push({ g, port, on: r.on === true, upstream, bypass: r.bypass || [], auth: group.auth !== false, forms: carried.map((f) => kernelForm(f, hostsOf)) })
@@ -67,7 +70,7 @@ function refusalOf(r) {
 }
 
 /**
- * createWin32Redirector({ helper, procWatcher, groups, home, ownerOf, routes, ingress, authOf, onFailure, forwarder, entries, ownImages, hostsOf }) → the Redirector (an EventEmitter)
+ * createWin32Redirector({ helper, procWatcher, groups, home, ownerOf, routes, ingress, authOf, onFailure, forwarder, entries, gate, ownImages, hostsOf }) → the Redirector (an EventEmitter)
  *   helper       the started helper client (helper.mjs `startHelper`): its `ready` line and `pid` answer `start()` / `helperInfo()`, and `close()` closes it
  *   procWatcher  `createProcWatcher()`: the redirector subscribes to its events in this call, so none is lost between the two
  *   groups       `groupsOf(descriptors)` (route-plan.mjs): `[{ g, harness, group, forms, proxy }]`, the harness files' Windows data
@@ -79,14 +82,17 @@ function refusalOf(r) {
  *   authOf       `(auth_ref) → { username, password } | null`: the login a reference names (`prior:<group>`, `hkcu-env:<NAME>`); only this call turns a reference into a login, and only for one connection that is dialled through the proxy
  *   onFailure    the failure sink (the daemon's recorder): a record shaped `{ event: 'failure', where, code, reason }`
  *   forwarder    `createForwarder()` (forwarder.mjs): `reload({ build, forms })` → `{ ok, readBack, code?, reason? }`, `check()`, `state()`; the kernel's process, config and read-back are its
- *   entries      the proxy entries of the agents, which only this file's order decides WHEN: `write(groups)` / `undo(groups)` → `[{ g, ok, reason? }]`, `check(groups)` → the same; a group is `{ g, harness, entry }` (`entry`: 'auto' or 'opt-in').
- *                The daemon's writer is the one place the gate on Codex's and Hermes's entries lives (they join a block the trust entry wrote: 4.8 W19)
+ *   entries      the proxy entries of the agents, which only this file's order decides WHEN: `write(groups)` / `undo(groups)` → `[{ g, ok, reason? }]`, `check(groups)` → the same; a group is `{ g, harness, entry }` (`entry`: 'auto' or 'opt-in' for a group
+ *                that is on, which is what `write` gets; null in the `undo` and `check` lists of a group the plan has off)
+ *   gate         `({ g, harness, entry }) → { ok: true } | { ok: false, reason }`, required by `attach()` (a TypeError without it): asked for each group about to be written; a group it refuses is not handed to `entries.write` and is that group's
+ *                `{ g, ok: false, gated: true, reason }` in `entries.written`; one that throws is a refusal. Codex's and Hermes's proxy lines join a block the trust entry wrote and may not be written before 4.8 W19's four conditions hold (plan Task 8): the wiring
+ *                (daemon.mjs, the one place that knows the harnesses and what the journal can do) says so here, and `entries` is a writer that does not have to know it
  *   ownImages    asight's own images (the engine's node.exe, the kernel's exe), for the loop check of the config (rules.mjs: required, `undefined` is a TypeError) · hostsOf  `(form) → [host]`: the host set of a host-tree form (route-plan.mjs `hostSetOf`)
  * Events: 'exec' ProcFacts · 'exit' {pid, startedAt} · 'facts-update' ProcFacts (a command line that was not known yet is, or was given up on) · 'facts-error' (a process whose image cannot be read) — the watcher's, passed on after
  *   the table has taken them in, so a listener that asks the table finds the process there · 'helper-error' {reason, code, …} (the watcher's `poll-error`: the helper failed, or a listener threw) ·
  *   'form-exit' {form, neg_key} (the last process of a form is gone: the engine forgets that form's negative-cache entries, 4.8 §5.5).
  */
-export function createWin32Redirector({ helper, procWatcher, groups, home = null, ownerOf = null, routes = () => ({}), ingress = () => ({}), authOf = () => null, onFailure = () => {}, forwarder = null, entries = null, ownImages, hostsOf = () => null } = {}) {
+export function createWin32Redirector({ helper, procWatcher, groups, home = null, ownerOf = null, routes = () => ({}), ingress = () => ({}), authOf = () => null, onFailure = () => {}, forwarder = null, entries = null, gate = null, ownImages, hostsOf = () => null } = {}) {
   if (!procWatcher || typeof procWatcher.on !== 'function') throw new TypeError('createWin32Redirector needs the process watcher (procinfo.mjs createProcWatcher)')
   if (!Array.isArray(groups)) throw new TypeError('createWin32Redirector needs the groups (route-plan.mjs groupsOf)')
   const ev = new EventEmitter()
@@ -170,8 +176,9 @@ export function createWin32Redirector({ helper, procWatcher, groups, home = null
   /** The kernel's side of the plan as it is now: the groups it carries, and which of their forms are on. */
   function kernelPlan() {
     const ing = ingress() || {}
-    const planned = kernelGroupsOf({ groups, routes: routes() || {}, groupPorts: ing.groupPorts, authOf, hostsOf })
-    return { ing, groups: planned, forms: planned.flatMap((x) => x.forms.map((f) => ({ f: f.f, on: x.on }))) }
+    const skipped = []
+    const planned = kernelGroupsOf({ groups, routes: routes() || {}, groupPorts: ing.groupPorts, authOf, hostsOf, skipped })
+    return { ing, groups: planned, skipped, forms: planned.flatMap((x) => x.forms.map((f) => ({ f: f.f, on: x.on }))) }
   }
   const configOf = (planned, ing, controller) => buildForwarderConfig({ groups: planned, enginePort: ing.enginePort, token: ing.ingressToken, listenerToken: ing.listenerToken, controller, ownImages })
   const entryOf = (g) => ({ g, harness: harnessOf.get(g), entry: ((routes() || {})[g] || {}).entry ?? null })
@@ -203,10 +210,12 @@ export function createWin32Redirector({ helper, procWatcher, groups, home = null
     /** `on`: the kernel gets the whole config for the plan as it is now (the groups that are on with the engine outbound and a fallback group per form, the others forward only) and the read-back says whether each form is on; ONLY THEN are the
      *  proxy entries of the groups that are on written, and the entries of the groups the plan says are off undone (the entry is the pointing itself: written before the kernel is on, an agent would point at a port with nothing behind it, 4.8 §2.1).
      *  A kernel that cannot start or does not read back as asked: rejects with its code (`forwarder-start-failed` · `forwarder-binary-missing` · `forwarder-digest-mismatch` · `fallback-active`) and `readBack`, and not one entry was
-     *  written or undone. A crash between the read-back and the entries is `on` again: the same reload, the same entries (the writer is idempotent). Resolves `{ ok, kernel, entries: { written, undone } }`; an entry that could not be written is
-     *  that group's `{ ok: false, reason }`, not an exception: the kernel and the other groups stand. A group the plan has no answer for is neither written nor undone: a plan that is not there yet must not take entries away. */
+     *  written or undone. A crash between the read-back and the entries is `on` again: the same reload, the same entries (the writer is idempotent). Resolves `{ ok, kernel, entries: { written, undone, skipped } }`; an entry that could not be written is
+     *  that group's `{ ok: false, reason }`, not an exception: the kernel and the other groups stand. A group the plan has no answer for is neither written nor undone: a plan that is not there yet must not take entries away; a group the plan has ON that the kernel does not carry (no port, no form it can carry, no
+     *  upstream, a login on a port that takes none) is not written either, and is said: `entries.skipped: [{ g, reason }]` and `ok: false`. */
     async attach() {
       if (!forwarder || !entries) throw new TypeError('attach needs the forwarder and the entries')
+      if (typeof gate !== 'function') throw new TypeError('attach needs the gate: which groups may have their proxy entry written is the wiring\'s to say, and not saying is not "all of them" (a proxy line that joins a block the trust entry wrote may not be written before the W19 conditions of 4.8 hold)')
       const plan = kernelPlan()
       const table = routes() || {}
       let kernel = null
@@ -214,11 +223,19 @@ export function createWin32Redirector({ helper, procWatcher, groups, home = null
         kernel = await forwarder.reload({ build: (controller) => configOf(plan.groups, plan.ing, controller), forms: plan.forms })
         if (!kernel.ok) { const why = refusalOf(kernel); throw Object.assign(new Error(`${why.reason}; no proxy entry was written`), { code: why.code, readBack: kernel.readBack ?? null }) }
       }
-      const on = plan.groups.filter((x) => x.on).map((x) => entryOf(x.g))
+      const open = []
+      const refused = []
+      for (const e of plan.groups.filter((x) => x.on).map((x) => entryOf(x.g))) {
+        let v
+        try { v = await gate(e) } catch (err) { v = { ok: false, reason: `the gate could not say: ${msgOf(err)}` } }
+        if (v && v.ok === true) open.push(e)
+        else refused.push({ g: e.g, ok: false, gated: true, reason: (v && v.reason) || 'the gate did not allow it' })
+      }
       const off = groups.filter((x) => table[x.g] && table[x.g].on !== true).map((x) => entryOf(x.g))
-      const written = on.length ? (await entries.write(on)) || [] : []
+      const written = [...(open.length ? (await entries.write(open)) || [] : []), ...refused]
       const undone = off.length ? (await entries.undo(off)) || [] : []
-      return { ok: [...written, ...undone].every((x) => x.ok !== false), kernel, entries: { written, undone } }
+      const left = plan.skipped.filter((x) => (table[x.g] || {}).on === true) // the plan says on, nothing carries it: not written, not undone, and said (D38)
+      return { ok: [...written, ...undone].every((x) => x.ok !== false) && left.length === 0, kernel, entries: { written, undone, skipped: left } }
     },
     /** `off`, the other way (4.8 §4.1): the kernel switched to forward only and read back, THEN every group's proxy entry undone — the planned or not, the writer undoes only what asight wrote. A kernel that is not running is left alone (nothing
      *  can point at it); one that cannot be switched, or a plan that cannot be built, does not keep the entries: they are undone anyway and then this rejects with the kernel's code (`off` always undoes by hand, 4.3). */
