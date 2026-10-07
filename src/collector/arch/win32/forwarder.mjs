@@ -191,7 +191,9 @@ function readConfig(text) {
  *   verifyCopy () → verifyCopy()'s answer for THIS kernel (the caller binds dir, pin and arch): asked before EVERY spawn, the first one and each respawn (W27 ④)
  *   sacOn      () → whether Smart App Control would block an unsigned exe: a start that fails then says so (W74)
  *   isFree     (port) → whether a loopback port can be bound; REQUIRED: this file may not import `node:net` (W27 ⑦). A taken port is not re-chosen here: the form's entry holds it (ingress-config.mjs).
- *   spawn · makeController · now · setTimer · clearTimer · isAlive · kill · procStart (pid → start time, ms, or null) · fs   the OS and the clock, injected
+ *   procStart  (pid) → the process's start time in ms, or null; REQUIRED (the helper's `ps`, the one source the lock and the adopt rule both read). A helper that rejects or answers nothing is null: the kernel is still tracked and
+ *              its lock is written with `startedAt: null`, which no later daemon will adopt (4.8 §8: no readable start time, no adoption)
+ *   spawn · makeController · now · setTimer · clearTimer · isAlive · kill · fs   the OS and the clock, injected
  *   events     `{ failure(rec), state(rec) }`: the §12 records, to the daemon's recorder
  * `build(controller)` → the config text for the controller the forwarder is really talking to (so the text and the client cannot disagree); `forms` is `[{ f, on }]`, the forms whose fallback group should be there
  * (on) or not (off), which the read-back checks (§4.1: an entry is written only after it says on).
@@ -199,10 +201,11 @@ function readConfig(text) {
 export function createForwarder({
   dir, bin, controller, spawn = nodeSpawn, makeController = ({ port, secret }) => createController({ endpoint: `tcp:127.0.0.1:${port}`, secret, own: true }),
   now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, events = { failure() {}, state() {} }, sacOn = async () => false, verifyCopy: verify = async () => ({ ok: true }), isFree,
-  isAlive = pidAlive, kill = (pid) => process.kill(pid), procStart = async () => null, fs = nodeFs,
+  isAlive = pidAlive, kill = (pid) => process.kill(pid), procStart, fs = nodeFs,
   pollMs = 50, startTimeoutMs = 10_000, stableMs = 30_000, stopWaitMs = 5_000, watchMs = 1000, backoffMs = BACKOFF_MS,
 } = {}) {
   if (typeof isFree !== 'function') throw new TypeError('createForwarder needs isFree(port)')
+  if (typeof procStart !== 'function') throw new TypeError('createForwarder needs procStart(pid): the lock and the adopt rule read the same clock, and a wiring that forgot it writes locks nobody can adopt')
   const P = { lock: path.join(dir, 'forwarder.lock'), config: path.join(dir, 'forwarder', 'config.json'), home: path.join(dir, 'forwarder', 'home'), forwarder: path.join(dir, 'forwarder') }
   let creds = { ...controller }
   let ctl = makeController(creds)
@@ -218,6 +221,7 @@ export function createForwarder({
   let drainPids = null
 
   const fail = (code, reason, extra = {}) => { const rec = { where: code === 'forwarder-down' ? 'netenv' : 'forwarder', code, reason, ...extra }; events.failure(rec); return { ok: false, ...rec } }
+  const startOf = async (pid) => { try { const v = await procStart(pid); return Number.isFinite(v) ? v : null } catch { return null } }
   const rmLock = () => { try { fs.rmSync(P.lock, { force: true }) } catch { /* nothing to remove */ } }
 
   // a start that did not come up is Smart App Control's when it is on (or evaluating): that is the reason an operator can act on (W74)
@@ -252,7 +256,7 @@ export function createForwarder({
       await sleep(pollMs)
     }
     child.unref?.()
-    p.startedAt = await procStart(p.pid)
+    p.startedAt = await startOf(p.pid)
     writeAtomic(fs, P.lock, `${JSON.stringify({ pid: p.pid, startedAt: p.startedAt, endpoint: `tcp:127.0.0.1:${creds.port}`, config: P.config })}\n`)
     proc = p
     phase = 'running'
@@ -345,7 +349,7 @@ export function createForwarder({
     try { lock = JSON.parse(fs.readFileSync(P.lock, 'utf8')) } catch (e) { return { adopted: false, reason: e && e.code === 'ENOENT' ? 'no-lock' : 'lock-unreadable' } }
     if (!lock || !Number.isInteger(lock.pid) || typeof lock.config !== 'string') return { adopted: false, reason: 'lock-unreadable' }
     if (!isAlive(lock.pid)) { rmLock(); return { adopted: false, reason: 'not-running' } }
-    const started = await procStart(lock.pid)
+    const started = await startOf(lock.pid)
     if (!Number.isFinite(started) || !Number.isFinite(lock.startedAt)) return { adopted: false, reason: 'start-time-unreadable' }
     if (Math.abs(started - lock.startedAt) > START_TOLERANCE_MS) return { adopted: false, reason: 'start-time-differs' } // the pid is somebody else's now
     let text

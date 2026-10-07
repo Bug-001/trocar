@@ -223,7 +223,7 @@ async function kernelWorld(t, { fake = {}, groups = [CC_GROUP, CODEX_GROUP], ...
   const verify = () => verifyCopy({ dir: path.dirname(bin), pin: world(t).pin, arch: 'x64', hash: async (f) => { hashed.push(f); return hashFile(f) } })
   const secret = '0123456789abcdef0123456789abcdef'
   const build = (controller, set = groups) => buildForwarderConfig(ruleInputs({ groups: set.map((g) => ({ ...g, port: ports[g.g] })), enginePort: ports.engine, controller }))
-  const fwd = createForwarder({ dir, bin, controller: { port: ports.controller, secret }, spawn, events, isFree, verifyCopy: verify, pollMs: 10, startTimeoutMs: 1500, ...over })
+  const fwd = createForwarder({ dir, bin, controller: { port: ports.controller, secret }, spawn, events, isFree, verifyCopy: verify, procStart: async () => null, pollMs: 10, startTimeoutMs: 1500, ...over })
   t.after(() => fwd.stopNow())
   return { fwd, dir, bin, ports, log, spawned, events, hashed, build, secret, root, P: { config: path.join(dir, 'forwarder', 'config.json'), lock: path.join(dir, 'forwarder.lock') } }
 }
@@ -324,7 +324,7 @@ test('W28 the read-back is what the kernel says: the engine down is fallback (no
   const odd = await kernelWorld(t, { makeController: ({ port, secret }) => { const real = createController({ endpoint: `tcp:127.0.0.1:${port}`, secret, own: true }); return { ...real, get: async (q) => (q === '/proxies/asight-fb-codex.app' ? { status: 500, ok: false, json: null, text: '' } : q === '/proxies/asight-fb-claude-code.cli' ? { status: 200, ok: true, json: { now: 'somebody-else' }, text: '' } : real.get(q)) } } })
   await odd.fwd.start({ build: odd.build, forms: [] })
   assert.deepEqual((await odd.fwd.reload({ build: odd.build, forms: FORMS })).readBack.forms, { 'claude-code.cli': { state: 'unknown', reason: 'unexpected-now' }, 'claude-code.vscode': { state: 'on', now: 'asight-in-claude-code.vscode' }, 'codex.app': { state: 'unknown', reason: 'status-500' } })
-  assert.deepEqual(await createForwarder({ dir: k.dir, bin: k.bin, controller: { port: 1, secret: 'x' }, isFree }).check(), { ok: false, forms: {}, reason: 'not-running' })
+  assert.deepEqual(await createForwarder({ dir: k.dir, bin: k.bin, controller: { port: 1, secret: 'x' }, isFree, procStart: async () => null }).check(), { ok: false, forms: {}, reason: 'not-running' })
 })
 
 // ---- W28 supervision: a fake clock, fake children and a fake controller, so the backoff is read off the clock and not waited for --------------------------------------------------------------------------------------
@@ -365,7 +365,7 @@ async function fakeKernel(t, over = {}) {
   const makeController = () => ({ get: async (q) => (q === '/version' ? { ok: true, status: 200, json: { version: 'fake' } } : { ok: true, status: 200, json: { now: 'asight-in-claude-code.cli' } }), put: async () => ({ ok: true, status: 204 }) })
   const secret = '0123456789abcdef0123456789abcdef'
   const build = () => buildForwarderConfig(ruleInputs({ groups: [{ ...CC_GROUP, port: 18801 }], enginePort: 18790, controller: { port: 18899, secret } }))
-  const fwd = createForwarder({ dir, bin: path.join(dir, 'kernel', KERNEL_EXE), controller: { port: 18899, secret }, spawn, makeController, events, isFree: async () => true, verifyCopy, isAlive: (pid) => alive.has(pid), now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer, pollMs: 1, ...over.fwd })
+  const fwd = createForwarder({ dir, bin: path.join(dir, 'kernel', KERNEL_EXE), controller: { port: 18899, secret }, spawn, makeController, events, isFree: async () => true, verifyCopy, procStart: async () => null, isAlive: (pid) => alive.has(pid), now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer, pollMs: 1, ...over.fwd })
   const forms = [{ f: 'claude-code.cli', on: true }]
   return { fwd, clock, children, alive, die, events, verified, build, forms, dir, start: () => fwd.start({ build, forms }) }
 }
@@ -517,6 +517,29 @@ test('W28 adopt refuses what is not the kernel the lock names: no lock, a garble
   mute.alive.add(777); fs.cpSync(k.dir, mute.dir, { recursive: true })
   assert.equal(await reason(mute.fwd), 'version-no-answer')
   assert.equal(k.children.length + other.children.length + blind.children.length + mute.children.length, 0, 'adopting never spawns')
+})
+
+test('W28 a helper that cannot say when a process started (timeout, helper down) does not break the kernel: it is tracked and stoppable, the lock says startedAt null (so a later daemon will not adopt it), a respawn is not a failure; adopt answers start-time-unreadable instead of throwing; procStart is not optional', async (t) => {
+  const late = async () => { throw Object.assign(new Error('late'), { code: 'helper-timeout' }) }
+  const k = await kernelWorld(t, { procStart: late })
+  const r = await k.fwd.start({ build: k.build, forms: FORMS })
+  assert.deepEqual([r.ok, k.fwd.state().phase, k.fwd.state().pid], [true, 'running', r.pid], 'the kernel answered: a start time that cannot be read is not a failed start')
+  assert.deepEqual(JSON.parse(fs.readFileSync(k.P.lock, 'utf8')), { pid: r.pid, startedAt: null, endpoint: `tcp:127.0.0.1:${k.ports.controller}`, config: k.P.config })
+  assert.deepEqual(k.events.failures, [])
+  assert.deepEqual(await k.fwd.stopNow(), { pids: [], stopped: true }, 'and it can be stopped: nothing is left holding its ports')
+  assert.equal(await isFree(k.ports.controller), true)
+  const f = await fakeKernel(t, { fwd: { procStart: late } })
+  assert.equal((await f.start()).ok, true)
+  f.die(f.children[0]); await settle()
+  await f.clock.advance(1000)
+  assert.deepEqual([f.children.length, f.fwd.state().phase, restarts(f), f.events.failures.some((e) => e.code === 'forwarder-down')], [2, 'running', [1000], false], 'a respawn whose start time cannot be read is a respawn')
+  const g = await fakeKernel(t, { fwd: { procStart: late } })
+  const config = path.join(g.dir, 'forwarder', 'config.json')
+  fs.mkdirSync(path.dirname(config), { recursive: true }); fs.writeFileSync(config, g.build())
+  fs.writeFileSync(path.join(g.dir, 'forwarder.lock'), JSON.stringify({ pid: 777, startedAt: START, endpoint: 'tcp:127.0.0.1:18899', config }))
+  g.alive.add(777)
+  assert.deepEqual(await g.fwd.adopt(), { adopted: false, reason: 'start-time-unreadable' }, 'a rejecting helper is "cannot read", the same as null')
+  assert.throws(() => createForwarder({ dir: g.dir, bin: path.join(g.dir, 'kernel', KERNEL_EXE), controller: { port: 1, secret: 'x' }, isFree }), TypeError, 'procStart is required: a wiring that forgot it would write locks nobody can adopt')
 })
 
 test('W28 an adopted kernel that dies is respawned like one asight started (the config it left on disk, the copy checked first)', async (t) => {
