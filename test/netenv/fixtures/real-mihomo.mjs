@@ -18,12 +18,10 @@ export const freePort = () => new Promise((res) => { const s = net.createServer(
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 /** Start the binary on `configText` (or `config`, JSON being YAML) in `home` as `configName`; `ctl(method, path, body)` is a raw call with the controller's own secret, `logs` the process's output. */
-export async function startMihomo(t, { config, configText, files = {}, routeFile, route, onLines, secret, controller, home = tmpDir('asight-mihomo-'), configName = 'config.yaml' }) {
+export async function startMihomo(t, { config, configText, files = {}, secret, controller, home = tmpDir('asight-mihomo-'), configName = 'config.yaml' }) {
   fs.writeFileSync(path.join(home, configName), configText ?? JSON.stringify(config)) // JSON is YAML
   fs.mkdirSync(path.join(home, 'asight'), { recursive: true })
-  for (const [rel, text] of Object.entries(files)) fs.writeFileSync(path.join(home, rel), text) // route files the generator wrote, as they are
-  const routePath = route ? path.join(home, route.replace(/^\.\//, '')) : null
-  if (routePath) fs.writeFileSync(routePath, routeFile(onLines))
+  for (const [rel, text] of Object.entries(files)) fs.writeFileSync(path.join(home, rel), text) // any other file a test wants beside the config
   const proc = spawn(BIN, ['-d', home, '-f', path.join(home, configName)], { env: { PATH: '/usr/bin:/bin', HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] })
   const killIt = () => { try { proc.kill('SIGKILL') } catch { /* gone */ } }
   process.once('exit', killIt)
@@ -39,5 +37,5 @@ export async function startMihomo(t, { config, configText, files = {}, routeFile
   for (let i = 0; i < 100; i++) { try { if ((await ctl('GET', '/version')).status === 200) break } catch { /* not up yet */ } await sleep(50) }
   const v = await ctl('GET', '/version')
   assert.equal(v.status, 200, `mihomo did not come up: ${logs.slice(-3).join(' | ')}`)
-  return { ctl, logs, home, routePath, version: v.json().version }
+  return { ctl, logs, home, version: v.json().version }
 }
