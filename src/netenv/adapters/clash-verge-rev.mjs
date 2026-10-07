@@ -364,7 +364,7 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     const led = need()
     const n = names(g)
     const r = await put(`/proxies/${n.sw}`, { name })
-    if (!r.ok) return { ok: false, status: r.status, reason: r.status === 0 ? 'controller-unreadable' : 'refused', text: r.text }
+    if (!r.ok) return { ok: false, status: r.status, reason: r.status === 0 ? 'controller-unreadable' : 'refused', text: r.text } // `text`: one of the core's fixed messages, or ''
     const entry = { kind: 'vpn-runtime-select', key: n.sw, target: n.sw, value: name, installed_at: stamp(), undo_by_hand: REACTIVATE }
     led.record(entry)
     return { ok: true, status: r.status, receipt: { kind: entry.kind, key: n.sw, change: name === 'PASS' ? 'off' : 'on', backup: null }, entry }
@@ -378,7 +378,8 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
   /**
    * `PUT /configs?force=true {payload}`: the runtime file's text with the block spliced in (`block`, from buildBlock) or all of asight's entries taken out (`strip: true`), pushed to the core (D29; 204 in 64-78 ms, [T0]).
    * The text is read from the runtime file, spliced in memory and sent: it holds the user's nodes and the subscription, so it is never written, logged or returned. A shape of the runtime the text splice does not read
-   * (RuntimeShapeError) is `reason: 'runtime-shape'`: nothing is sent and the caller falls back to the next strategy. → { ok, receipt } | { ok: false, reason, ... }
+   * (RuntimeShapeError) is `reason: 'runtime-shape'`: nothing is sent and the caller falls back to the next strategy. → { ok, receipt } | { ok: false, reason, status?, detail? }; a refused push is `{ status, reason: 'refused' }` and
+   * nothing else, because what the core says about a refused config names the user's own group, node and rule (N14, 4.7 §3.4).
    */
   async function pushPayload({ block = null, strip = false } = {}) {
     const led = need()
@@ -387,7 +388,7 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     let yaml
     try { yaml = strip ? stripRuntimeText({ yaml: rt.text }).yaml : spliceRuntimeText({ yaml: rt.text, block }).yaml } catch (e) { if (e instanceof RuntimeShapeError) return { ok: false, reason: 'runtime-shape', detail: e.message }; throw e }
     const r = await put('/configs?force=true', { payload: yaml })
-    if (!r.ok) return { ok: false, status: r.status, reason: r.status === 0 ? 'controller-unreadable' : 'refused', text: r.text }
+    if (!r.ok) return { ok: false, status: r.status, reason: r.status === 0 ? 'controller-unreadable' : 'refused' } // never the core's words: a refused config is quoted back with the user's group, node and rule in it
     if (strip) { led.forget('vpn-runtime-block', 'runtime'); return { ok: true, receipt: { kind: 'vpn-runtime-block', key: 'runtime', change: 'removed', backup: null } } }
     const entry = { kind: 'vpn-runtime-block', key: 'runtime', installed_at: stamp(), undo_by_hand: REACTIVATE }
     led.record(entry)

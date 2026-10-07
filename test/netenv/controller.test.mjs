@@ -8,6 +8,7 @@ import path from 'node:path'
 import { EventEmitter } from 'node:events'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { createController, ControllerRefused, refusal, parseEndpoint, maskEndpoint, redact } from '../../src/netenv/mihomo/controller.mjs'
+import { RECORDED_REFUSALS, RECORDED_FIXED } from './fixtures/real-rules.mjs'
 
 const G = 'claude-code.cli'
 const PROBE = encodeURIComponent('http://127.0.0.1:7897/asight-health/claude-code.cli')
@@ -142,14 +143,21 @@ test('over a unix socket (tests, a pinned endpoint)', async (t) => {
   assert.deepEqual([r.status, r.json.version], [200, 'v1.19.32'])
 })
 
-test('an error answer keeps only a redacted message: quoted names are <q>, at most 120 characters', async (t) => {
-  const s = await stub(t, () => [400, { message: 'proxy "my-secret-node" not in group \'Home Group\' ' + 'x'.repeat(200) }])
-  const r = await createController({ endpoint: `tcp:127.0.0.1:${s.port}` }).put(`/proxies/asight-sw-${G}`, { name: 'PASS' })
-  assert.deepEqual([r.status, r.ok], [400, false])
-  assert.ok(!/my-secret-node|Home Group/.test(r.text))
-  assert.match(r.text, /^proxy <q> not in group <q> x+$/)
-  assert.equal(r.text.length, 120)
-  assert.equal(redact('a "b" c'), 'a <q> c')
+test('an error answer carries a message only when it is one of the core\'s fixed ones; every other message, and the json that holds it, is withheld (a real core prints the user\'s own names, quoted or not)', async (t) => {
+  for (const { why, status, message } of RECORDED_REFUSALS) {
+    const s = await stub(t, () => [status, { message }])
+    const r = await createController({ endpoint: `tcp:127.0.0.1:${s.port}` }).put('/configs?force=true', { payload: 'mixed-port: 7897\n' })
+    assert.deepEqual([r.status, r.ok, r.text, r.json], [status, false, '', null], `${why}: nothing of "${message.slice(0, 30)}…" is handed on`)
+    assert.ok(!JSON.stringify(r).includes('Private') && !JSON.stringify(r).includes('Secret Node') && !JSON.stringify(r).includes('x.example'), why)
+  }
+  for (const message of RECORDED_FIXED) {
+    const s = await stub(t, () => [message === 'Unauthorized' ? 401 : message === 'Resource not found' ? 404 : 400, { message }])
+    const r = await createController({ endpoint: `tcp:127.0.0.1:${s.port}` }).get('/version')
+    assert.deepEqual([r.ok, r.text, r.json], [false, message, null], 'a fixed message of the core is kept: it says what happened and names nobody')
+  }
+  const plain = await stub(t, () => [500, 'x'.repeat(300) + ' "my-secret-node"'])
+  assert.equal((await createController({ endpoint: `tcp:127.0.0.1:${plain.port}` }).get('/version')).text, '', 'a body that is not the core\'s JSON message is withheld too')
+  assert.equal(redact('a "b" c'), 'a <q> c', 'redact stays for what this client says about the transport itself')
   assert.equal(redact(undefined), '')
 })
 

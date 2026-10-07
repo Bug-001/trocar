@@ -12,7 +12,7 @@ import { isCode, checkRecord } from '../../src/health/codes.mjs'
 import { stubHelper, vergeProcs, proc, SESSION, VERGE_DIR } from './fixtures/win-facts.mjs'
 import { startWorld, snapshot, sha, LEAKS, USER_PROVIDER, USER_GROUP, USER_DOMAIN, NODE, SUB_URL, VERGE_YAML, PROFILES_YAML, SCRIPT_JS, userRuntime, GROUPS } from './fixtures/verge-world.mjs'
 import { names, buildBlock, buildScriptJs, insertScriptBlock, stripScriptBlock, scanScript } from '../../src/netenv/mihomo/rules.mjs'
-import { RECORDED_RULES } from './fixtures/real-rules.mjs'
+import { RECORDED_RULES, RECORDED_REFUSALS } from './fixtures/real-rules.mjs'
 
 // ---- N3 · N4: discovery ----------------------------------------------------------------------------------------------------------------------------------
 
@@ -501,9 +501,14 @@ test('putSelect sets the switch to PASS or its own fallback group and records it
   await assert.rejects(w.adapter.putSelect(g, 'DIRECT'), ControllerRefused)
   await assert.rejects(w.adapter.putSelect(g, names('codex.app').fb), ControllerRefused)
   assert.equal(w.core.requests.length, before, 'zero requests for a refused write')
-  w.core.failOn('PUT', /^\/proxies\//, 500, 'select "boom" failed')
+  w.core.failOn('PUT', /^\/proxies\//, 500, 'select boom for Home Group failed')
   const bad = await w.adapter.putSelect(g, n.fb)
-  assert.deepEqual([bad.ok, bad.status, bad.reason, bad.text], [false, 500, 'refused', 'select <q> failed'])
+  assert.deepEqual([bad.ok, bad.status, bad.reason, bad.text], [false, 500, 'refused', ''], 'a message that is not one of the core\'s fixed ones is not passed on')
+  w.core.failures.length = 0
+  w.core.failOn('PUT', /^\/proxies\//, 400, 'Selector update error: proxy not exist')
+  assert.equal((await w.adapter.putSelect(g, n.fb)).text, 'Selector update error: proxy not exist', 'a fixed message of the core is')
+  w.core.failures.length = 0
+  w.core.failOn('PUT', /^\/proxies\//, 500, 'select boom for Home Group failed')
   assert.equal(w.ledger.find('vpn-runtime-select', n.sw).value, 'PASS', 'a write that failed is not recorded')
   w.core.failures.length = 0
   const none = await w.adapter.putSelect('no-such-group', 'PASS')
@@ -550,9 +555,9 @@ test('pushPayload: a runtime shape the text splice does not read sends nothing (
   assert.deepEqual([shape.ok, shape.reason], [false, 'runtime-shape'])
   assert.match(shape.detail, /inline/)
   fs.writeFileSync(w.file('clash-verge.yaml'), userRuntime())
-  w.core.rejectPayload = 'cannot load "config": bad'
+  w.core.rejectPayload = RECORDED_REFUSALS[0].message
   const refused = await w.adapter.pushPayload({ block: b })
-  assert.deepEqual([refused.ok, refused.status, refused.reason, refused.text], [false, 400, 'refused', 'cannot load <q>: bad'])
+  assert.deepEqual(refused, { ok: false, status: 400, reason: 'refused' }, 'the status and a fixed reason class: the core\'s own words are not kept')
   assert.equal(w.core.writes().length, 1, 'only the refused push was sent')
   assert.equal(w.ledger.find('vpn-runtime-block', 'runtime'), null, 'a push that did not happen is not recorded')
   fs.rmSync(w.file('clash-verge.yaml'))
@@ -560,6 +565,18 @@ test('pushPayload: a runtime shape the text splice does not read sends nothing (
   fs.writeFileSync(w.file('clash-verge.yaml'), userRuntime())
   await w.core.stop()
   assert.deepEqual([(await w.adapter.pushPayload({ block: b })).reason, (await w.adapter.refreshProvider('claude-code.cli')).reason, (await w.adapter.putSelect('claude-code.cli', 'PASS')).reason], ['controller-unreadable', 'controller-unreadable', 'controller-unreadable'])
+})
+
+test('N14 N9 a real core refuses a pushed config in words that name the user\'s own group, node and rule: none of it comes back from pushPayload, applyGroups or installBlock', async (t) => {
+  for (const { why, message } of RECORDED_REFUSALS) {
+    const w = await startWorld(t, { script: SCRIPT_JS })
+    w.core.rejectPayload = message.replace('My Private Group', USER_GROUP).replace('Secret Node', NODE).replace('x.example', USER_DOMAIN)
+    const b = w.block()
+    const results = [await w.adapter.pushPayload({ block: b }), await w.adapter.applyGroups({ groups: GROUPS.map((x) => ({ g: x.g, on: true, lines: ['PROCESS-NAME,claude.exe'] })), block: b }), await w.adapter.installBlock({ block: b, blockText: buildScriptJs({ block: b }), groups: GROUPS.map((x) => ({ g: x.g, on: true, lines: [] })) })]
+    const text = JSON.stringify([results, w.ledger.entries(), w.ledger.kept()])
+    for (const leak of [...LEAKS, 'Private', 'Secret Node', 'Zzz', 'duplicate', 'AUTO-ALL', 'unmarshal']) assert.ok(!text.includes(leak), `${why}: "${leak}" must not be in a result, an entry or a receipt`)
+    assert.deepEqual([results[0].ok, results[0].status, results[0].reason], [false, 400, 'refused'])
+  }
 })
 
 test('N8 the runtime goes to the core and nowhere else: nothing under ~/.asight, no ledger entry, no result holds the subscription address or a node', async (t) => {

@@ -6,7 +6,9 @@
 //   PUT  /proxies/asight-sw-<g> {name: PASS | asight-fb-<g>} · /providers/rules/asight-* · /configs?force=true {payload}   (the forwarder's own client may also reload by {path}: `reloadByPath`)
 // Never /connections, /logs, /traffic, /proxies (the list: the user's node names), /providers/proxies (subscription names): not for Verge's controller and not for the own forwarder's (4.8 §5.3).
 // A name the client writes starts with asight-; a core's answers are handed to the caller as parsed JSON and nothing else (the caller keeps what it needs and drops the rest in memory: 4.7 §2).
-// The controller's error text is redacted before it goes anywhere (every quoted string -> <q>, cut to 120 characters), and the pipe's random suffix is masked.
+// What a core says about a failed request is handed on only when it is one of the core's FIXED messages (FIXED_MESSAGES: they name nobody). Every other message, and the JSON body that holds it, is withheld:
+// a real core's refusal of a pushed config prints the user's own group, node and rule, quoted or not (`rules[0] [DOMAIN,x.example,My Group] error: proxy [My Group] not found`, measured on v1.19.32, W57),
+// and no quoting rule catches that. The caller has the status and decides the reason class. The pipe's random suffix is masked in what this client says of the transport.
 // Transports: `pipe:<name>` (Windows named pipe), `tcp:<loopback host:port>` (the own forwarder; the secret is read in memory by the caller and never printed), `unix:<path>` (tests, a pinned socket).
 // Node built-ins only.
 
@@ -90,7 +92,13 @@ export function parseEndpoint(spec) {
 /** The endpoint as it may be logged or written to netenv.json: a long hex run (the random part of Verge's pipe name, a temp directory's) is `<k>`. */
 export const maskEndpoint = (spec) => String(spec ?? '').replace(/[0-9a-f]{8,}/gi, '<k>')
 
-/** A core's error text, safe to keep: every quoted string (a node, a group, a profile) -> <q>, at most 120 characters. */
+/**
+ * The only core messages a failed request's `text` may carry, as the real v1.19.32 prints them (W57 holds this list to it): a bad Bearer, a body that is not JSON, a path or a name that is not there, a select
+ * to a member the group does not have. Anything else is the core quoting the user's config back and is withheld.
+ */
+export const FIXED_MESSAGES = Object.freeze(new Set(['Unauthorized', 'Body invalid', 'Resource not found', 'Selector update error: proxy not exist']))
+
+/** What this client itself says about a failed transport (node's own message, the endpoint already masked): every quoted string -> <q>, at most 120 characters. */
 export function redact(text) {
   const s = String(text ?? '').replace(/"[^"]*"/g, '<q>').replace(/'[^']*'/g, '<q>')
   return s.length > 120 ? s.slice(0, 120) : s
@@ -102,8 +110,9 @@ const MAX_BODY = 32 * 1024 * 1024 // a runtime's rule list is megabytes; a contr
 
 /**
  * createController({ endpoint, secret = null, timeoutMs = 8000, reloadByPath = false, transport }) → { get(path), put(path, body = null), endpoint }
- * Both resolve `{ status, ok, json, text, ms, error? }` and never reject for a network or HTTP failure (status 0 + `error` = the errno; `text` is the redacted message of a non-2xx answer);
- * they throw ControllerRefused, before any I/O, for a request off the allow-list. `json` is the parsed body of an answer that was JSON, else null. `endpoint` is the masked spec.
+ * Both resolve `{ status, ok, json, text, ms, error? }` and never reject for a network or HTTP failure (status 0 + `error` = the errno, `text` the masked message of the transport; a non-2xx answer has
+ * `json: null` and a `text` that is one of FIXED_MESSAGES or ''); they throw ControllerRefused, before any I/O, for a request off the allow-list. `json` is the parsed body of a 2xx answer that was JSON, else
+ * null. `endpoint` is the masked spec.
  * `secret` goes only into the Authorization header; Verge's pipe needs none. `transport` (tests) replaces node:http.
  */
 export function createController({ endpoint, secret = null, timeoutMs = 8000, reloadByPath = false, transport = nodeHttp } = {}) {
@@ -137,7 +146,8 @@ export function createController({ endpoint, secret = null, timeoutMs = 8000, re
           let json = null
           try { json = JSON.parse(text) } catch { /* not JSON: an empty 204, or a plain-text error */ }
           const ok = res.statusCode >= 200 && res.statusCode < 300
-          done({ status: res.statusCode, ok, json, text: ok ? '' : scrub((json && json.message) || text) })
+          const said = String((json && typeof json.message === 'string' && json.message) || text).trim()
+          done({ status: res.statusCode, ok, json: ok ? json : null, text: ok || !FIXED_MESSAGES.has(said) ? '' : said })
         })
       })
       req.on('timeout', () => req.destroy(Object.assign(new Error('the controller did not answer in time'), { code: 'ETIMEDOUT' })))

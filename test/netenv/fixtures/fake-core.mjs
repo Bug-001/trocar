@@ -80,21 +80,21 @@ export async function startFakeCore(t, { home, runtimeText = null, listen = 'tcp
     if (method === 'GET' && p === '/providers/rules') return [200, { providers: Object.fromEntries([...core.providers].map(([n, v]) => [n, { name: n, ruleCount: v.ruleCount, vehicleType: v.vehicleType, behavior: v.behavior, type: v.type, updatedAt: '2026-10-07T00:00:00Z' }])) }]
     if (p.startsWith('/providers/rules/') && method === 'GET') return [405, '']
     let m = /^\/proxies\/(.+)$/.exec(p)
-    if (m && method === 'GET') { const g = core.groups.get(decodeURIComponent(m[1])); return g ? [200, { name: g.name, type: g.type, now: g.now, all: g.all }] : [404, { message: 'resource not found' }] }
+    if (m && method === 'GET') { const g = core.groups.get(decodeURIComponent(m[1])); return g ? [200, { name: g.name, type: g.type, now: g.now, all: g.all }] : [404, { message: 'Resource not found' }] }
     if (m && method === 'PUT') {
       const g = core.groups.get(decodeURIComponent(m[1]))
-      if (!g) return [404, { message: 'resource not found' }]
-      if (g.kind !== 'select' || !g.all.includes(body && body.name)) return [400, { message: `Selector update error: "${body && body.name}" not found` }]
+      if (!g) return [404, { message: 'Resource not found' }]
+      if (g.kind !== 'select' || !g.all.includes(body && body.name)) return [400, { message: 'Selector update error: proxy not exist' }]
       g.now = body.name
       core.remembered.set(g.name, body.name)
       return [204]
     }
     m = /^\/providers\/rules\/(.+)$/.exec(p)
-    if (m && method === 'PUT') { const n = decodeURIComponent(m[1]); if (!core.providers.has(n)) return [404, { message: 'resource not found' }]; core.reloadProvider(n); return [204] }
+    if (m && method === 'PUT') { const n = decodeURIComponent(m[1]); if (!core.providers.has(n)) return [404, { message: 'Resource not found' }]; core.reloadProvider(n); return [204] }
     m = /^\/group\/(.+)\/delay$/.exec(p)
     if (m && method === 'GET') {
       const g = core.groups.get(decodeURIComponent(m[1]))
-      if (!g) return [404, { message: 'resource not found' }]
+      if (!g) return [404, { message: 'Resource not found' }]
       core.healthCheck(g.name)
       return [200, Object.fromEntries(g.all.filter((n) => (n.startsWith('asight-in-') ? core.engineAlive : true)).map((n) => [n, 3]))]
     }
@@ -102,9 +102,9 @@ export async function startFakeCore(t, { home, runtimeText = null, listen = 'tcp
       if (core.rejectPayload) return [400, { message: core.rejectPayload }]
       if (body && typeof body.payload === 'string') { core.lastPayload = body.payload; load(body.payload); return [204] }
       if (body && typeof body.path === 'string') { load(fs.readFileSync(body.path, 'utf8')); return [204] }
-      return [400, { message: 'bad payload' }]
+      return [400, { message: 'Body invalid' }]
     }
-    return [404, { message: 'not found' }]
+    return [404, { message: 'Resource not found' }]
   }
   const server = http.createServer((req, res) => {
     let raw = ''
