@@ -1,5 +1,5 @@
 // test/cli/receipt.test.mjs — what `asight on` prints and writes: the plan, the confirmation, the receipt (RFC 1.6 §1.6, R1, R5, R6; V7).
-// V3 / V10 / V29 of the same file belong to the `off` and `status` tasks and are added there. Every case runs in a sandbox HOME with
+// V3 / V29 of the same file belong to the `off` task and V10 (what `status` says when it cannot read) to the `status` task; they are added there. Every case runs in a sandbox HOME with
 // the OS tools and the control socket injected; nothing touches the machine the test runs on (0.1 §3).
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -18,6 +18,7 @@ import codex from '../../src/collector/harness/codex.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { fakeIo, onCtx, snapshot, changedFiles, seedClaude, fakeSystem, fakeDaemon } from './fixtures/on-ctx.mjs'
 import { installedHome, flowEvents } from '../off/fixtures/off-ctx.mjs'
+import { runStatus, down, reply, asDaemon, NO_VPN } from './fixtures/status-ctx.mjs'
 
 const settingsOf = (home) => path.join(home, '.claude', 'settings.json')
 
@@ -331,4 +332,31 @@ test('V29: the first on receipt, in the text and in --json, carries the four com
     assert.ok(runs.length >= 1, `${name} has a run`)
     for (const run of runs) assert.equal(events.filter((e) => e.event === name && e.run === run).at(-1).kind, 'result', `${name} ${run} ends with a result line`)
   }
+})
+
+// V10 (1.6 R11, §6): what `status` could not read is 「不知道」 with the reason — the connections still relayed (a daemon whose reply carries no count), the VPN probe (a file it could not read, nothing it found), the
+// daemon itself (a lock that cannot be read) — and never `0 条` or 「无」, in the text and in --json
+test('V10: status says 不知道 with the reason for connections the daemon did not count, a VPN probe that could not read, and a lock that could not be read — never 0 条 or 无', async () => {
+  const s = await installedHome()
+  // the daemon answers, but its reply has no `relayed`
+  let r = await runStatus(s, [], { request: asDaemon(reply({ relayed: undefined })), netenv: async () => { throw new Error("EACCES: permission denied, open '/h/.local/share/io.github.clash-verge-rev.clash-verge-rev/verge.yaml'") } })
+  const line = (text, head) => text.split('\n').find((l) => l.startsWith(head)) || ''
+  assert.match(line(r.text, '仍经 asight 的连接'), /^仍经 asight 的连接: 不知道\(the daemon's reply does not carry the connection counts\)$/)
+  assert.match(line(r.text, '本机网络环境'), /^本机网络环境: 不知道\(EACCES[^)]*verge\.yaml/)
+  for (const head of ['仍经 asight 的连接', '本机网络环境']) { assert.ok(!/0 条|无/.test(line(r.text, head)), `${head}: never 0 条 or 无`) }
+  // a probe that found nothing is not 「无」 either
+  r = await runStatus(s, [], { request: asDaemon(reply()), netenv: async () => NO_VPN })
+  assert.match(line(r.text, '本机网络环境'), /^本机网络环境: 不知道\(no Clash Verge directory/); assert.ok(!/无/.test(line(r.text, '本机网络环境')))
+  // the lock cannot be read and nothing answers
+  const lock = path.join(s.dir, 'lock'); fs.writeFileSync(lock, '{}')
+  const broken = { ...fs, readFileSync: (f, ...a) => { if (f === lock) throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } }
+  r = await runStatus(s, [], { request: down(), fs: broken })
+  assert.match(line(r.text, '守护进程'), new RegExp(`^守护进程: 不知道\\([^\\n]*${lock.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^\\n]*EACCES`))
+  assert.match(line(r.text, '仍经 asight 的连接'), /^仍经 asight 的连接: 不知道\(whether a daemon runs is not known/)
+  assert.ok(!/0 条|无/.test(line(r.text, '仍经 asight 的连接'))); assert.equal(r.exit, 3, 'and the agents it cannot judge make it 3')
+  // --json: the same, as data
+  const j = await runStatus(s, ['--json'], { request: down(), fs: broken, netenv: async () => { throw new Error('probe failed') } })
+  const doc = j.io.json()
+  assert.deepEqual(validateReceipt(doc), [])
+  assert.deepEqual([doc.relayed, typeof doc.relayed_reason, doc.netenv, doc.daemon.state], ['unknown', 'string', { error: 'probe failed' }, 'unknown'])
 })

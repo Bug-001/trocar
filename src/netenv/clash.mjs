@@ -89,12 +89,17 @@ export async function readClash({ home, platform, env = {}, exec = null, readFil
   let live = null
   if (platform === 'win32') reasons.push('the core\'s control channel on Windows is a named pipe, which is not read yet: the mode is the file\'s')
   else {
-    let psText = ''
-    const ps = (() => { try { return execTool('ps', ['-axww', '-o', 'command='], { run: exec }) } catch (e) { if (e && e.code === 'ESANDBOX') throw e; return { code: null, out: '', err: errText(e) } } })()
-    if (ps.code === 0) psText = ps.out; else reasons.push(`ps could not be run (${ps.err || `exit ${ps.code}`}), so the core's process was not looked at`)
-    // the places a core usually listens (/var/run/clash-verge-service/…, /tmp/verge/…): real paths of this machine, so under `npm test` a caller must say which it means (0.1 §3)
-    if (knownSocks === undefined && process.env.ASIGHT_TEST_SANDBOX === '1') throw Object.assign(new Error('refusing to look for a real mihomo socket under npm test (0.1 §3): inject knownSocks'), { code: 'ESANDBOX' })
-    const candidates = [...new Set([...(env.ASIGHT_MIHOMO_SOCK ? [env.ASIGHT_MIHOMO_SOCK] : []), ...mihomoSockCandidates({ psText, runtimeYaml: runtime.text || '', known: knownSocks ?? knownMihomoSocks(uid) })])]
+    // ASIGHT_MIHOMO_SOCK pins the core's socket (unusual installs, and tests of the commands: a sandboxed run can never reach the developer's own core): nothing else is looked for then
+    let candidates
+    if (env.ASIGHT_MIHOMO_SOCK) candidates = [env.ASIGHT_MIHOMO_SOCK]
+    else {
+      let psText = ''
+      const ps = (() => { try { return execTool('ps', ['-axww', '-o', 'command='], { run: exec }) } catch (e) { if (e && e.code === 'ESANDBOX') throw e; return { code: null, out: '', err: errText(e) } } })()
+      if (ps.code === 0) psText = ps.out; else reasons.push(`ps could not be run (${ps.err || `exit ${ps.code}`}), so the core's process was not looked at`)
+      // the places a core usually listens (/var/run/clash-verge-service/…, /tmp/verge/…): real paths of this machine, so under `npm test` a caller must say which it means (0.1 §3)
+      if (knownSocks === undefined && process.env.ASIGHT_TEST_SANDBOX === '1') throw Object.assign(new Error('refusing to look for a real mihomo socket under npm test (0.1 §3): inject knownSocks, or pin the socket with ASIGHT_MIHOMO_SOCK'), { code: 'ESANDBOX' })
+      candidates = [...new Set(mihomoSockCandidates({ psText, runtimeYaml: runtime.text || '', known: knownSocks ?? knownMihomoSocks(uid) }))]
+    }
     const probe = async (sock) => {
       try { const st = statSock(sock); if (!st.isSocket() || (st.uid !== 0 && st.uid !== uid)) return false } catch { return false } // only root's or ours: a socket another user planted is not asked
       const r = await request({ socketPath: sock, path: '/version' })

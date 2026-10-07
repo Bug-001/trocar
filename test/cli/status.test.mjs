@@ -146,21 +146,14 @@ test('a process the daemon has not judged: no start time is start-time-unknown, 
 // ── the command, over a sandbox HOME in which `asight on` has really run (the real turnOn, a fake systemd, a fake daemon behind the control socket) ────────────────────────────────────────────────
 import fs from 'node:fs'
 import path from 'node:path'
-import { installedHome, SOCK } from '../off/fixtures/off-ctx.mjs'
-import { fakeIo, snapshot } from './fixtures/on-ctx.mjs'
+import { installedHome } from '../off/fixtures/off-ctx.mjs'
+import { snapshot, changedFiles, fakeIo } from './fixtures/on-ctx.mjs'
+import { runStatus, down, reply, asDaemon, claudeProc, NO_VPN, CLASH, SOCK } from './fixtures/status-ctx.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { runStatusCli } from '../../src/cli/status.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
-const down = (code = 'ECONNREFUSED') => async () => { throw Object.assign(new Error(code), { code }) }
-// what the daemon's GET /status says (src/collector/daemon.mjs status()): the switch per harness, the kernel, the helper, the agents it watches
-const reply = (o = {}) => ({ desired: 'on', actual: 'on', mismatch: false, recording: true, harnesses: { 'claude-code': { desired: 'on' }, codex: { desired: 'on' } }, helper: { pid: 4243, proto: 1, ok: true, down: null, expected_proto: 1 }, agents: [], negatives: [], relayed: { closing: 0, waiting: 0 }, ...o })
-const asDaemon = (r) => async (q) => { if (q.path === '/status') return r; throw new Error(`unexpected ${q.method} ${q.path}`) }
-const run = async (s, argv = [], { request = down(), procs = async () => [], fs: fsx, io = fakeIo(), deps = {} } = {}) => {
-  const exit = await runStatusCli(argv, { io, home: s.home, platform: 'linux', env: { ...s.sh.env, XDG_RUNTIME_DIR: path.join(s.home, 'run') }, deps: { request, socketPath: SOCK, procs, ...(fsx ? { fs: fsx } : {}), user: 'alice', exec: s.sys.exec.run, ...deps } })
-  return { exit, io, text: io.stdoutText() }
-}
-const claudeProc = (pid, startedAt) => ({ pid, ppid: 1, uid: 1000, startedAt, exe: '/home/u/.local/share/claude/versions/2.1.289', argv: ['claude'], env: () => new Map() })
+const run = runStatus
 
 test('the daemon answers: each agent is captured or says why, and the exit code is 1 while one is not; every agent captured is exit 0', async () => {
   const s = await installedHome()
@@ -250,14 +243,50 @@ test('a daemon that does not answer is daemon-not-responding; --json is one docu
   assert.equal(j.io.stderrText(), '', 'stdout carries the one JSON, nothing leaks to stderr')
 })
 
-test('status writes nothing in the HOME, and usage errors (an unknown harness, an unknown option) exit 2 before anything is read', async () => {
+test('status changes nothing in the HOME but ~/.asight/netenv.json (the board\'s copy of the VPN probe, 0600), and usage errors (an unknown harness, an unknown option) exit 2 before anything is read', async () => {
   const s = await installedHome()
   const before = snapshot(s.home)
   await run(s); await run(s, ['--json']); await run(s, [], { request: asDaemon(reply()) })
-  assert.deepEqual(snapshot(s.home), before, 'read-only')
+  assert.deepEqual(changedFiles(before, snapshot(s.home)), [path.join('.asight', 'netenv.json')], 'read-only, but for the one cache')
+  assert.equal(fs.statSync(path.join(s.home, '.asight', 'netenv.json')).mode & 0o777, 0o600)
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(s.home, '.asight', 'netenv.json'), 'utf8')).unknown, NO_VPN.unknown)
   let r = await run(s, ['claud']); assert.equal(r.exit, 2); assert.match(r.io.stderrText(), /unknown harness claud[^\n]*claude-code/); assert.equal(r.text, '')
   r = await run(s, ['--nope']); assert.equal(r.exit, 2); assert.match(r.io.stderrText(), /unknown option --nope/)
   const fresh = tmpDir('asight-fresh-')
-  const f = await runStatusCli([], { io: fakeIo(), home: fresh, platform: 'linux', env: { HOME: fresh }, deps: { request: down(), socketPath: SOCK, procs: async () => [] } })
+  const f = await runStatusCli([], { io: fakeIo(), home: fresh, platform: 'linux', env: { HOME: fresh }, deps: { request: down(), socketPath: SOCK, procs: async () => [], netenv: async () => NO_VPN } })
   assert.equal(f, 0); assert.deepEqual(fs.readdirSync(fresh), [], 'on a machine with nothing installed it prints so, exits 0, and creates nothing')
+})
+
+test('connections still relayed after an off: N closing and M waiting, in the text and in --json (cut is 0: only off --now cuts); none is said as none, with no daemon there is no engine', async () => {
+  const s = await installedHome()
+  let r = await run(s, [], { request: asDaemon(reply({ relayed: { closing: 2, waiting: 1 } })) })
+  assert.match(r.text, /^仍经 asight 的连接: 2 条仍经 asight 中转,本次响应\(或本轮\)结束后关闭;另 1 条等它自己关闭\(asight off --now 立即切断\)$/m)
+  assert.deepEqual((await run(s, ['--json'], { request: asDaemon(reply({ relayed: { closing: 2, waiting: 1 } })) })).io.json().relayed, { closing: 2, waiting: 1, cut: 0 })
+  r = await run(s, [], { request: asDaemon(reply()) })
+  assert.match(r.text, /^仍经 asight 的连接: 没有/m)
+  assert.deepEqual((await run(s, ['--json'])).io.json().relayed, { closing: 0, waiting: 0, cut: 0 }, 'no daemon: no engine, so none — a known zero')
+})
+
+test('the VPN line: the product, its mode, TUN and the system proxy, which harnesses go through it (only the ones asked about), and what is not known; on Linux asight says it did not change it', async () => {
+  const s = await installedHome()
+  let r = await run(s, [], { netenv: async () => CLASH({ tun: true, mode: 'global', live: false, reason: 'no core answered' }) })
+  assert.match(r.text, /^本机网络环境: Clash Verge\(全局模式,TUN 已开,系统代理已开,没问到它的控制接口\);claude-code、codex 的流量经过它;asight 没有改它$/m)
+  assert.match(r.text, /^ {2}说明: no core answered$/m)
+  assert.ok(!/hermes/.test(r.text.split('\n').filter((l) => l.startsWith('本机网络环境')).join('\n')), 'only the harnesses in the table')
+  r = await run(s, ['codex'], { netenv: async () => CLASH({ via: { 'claude-code': true, codex: false, hermes: 'unknown' } }) })
+  assert.match(r.text, /^本机网络环境: Clash Verge\(规则模式,系统代理已开\);codex 不经过它;asight 没有改它$/m)
+  const j = (await run(s, ['--json'], { netenv: async () => CLASH() })).io.json()
+  assert.equal(j.netenv.products[0].product, 'clash-verge')
+})
+
+test('the harnesses\' proxy settings reach the probe from the running processes\' environment (the URLs are the probe\'s to compare and drop: never printed); an asight serve you started is listed, not killed', async () => {
+  const s = await installedHome()
+  let seen = null
+  const procs = async () => [claudeProc(5000, Date.now() + 5000, new Map([['HTTPS_PROXY', 'http://alice:pw@127.0.0.1:7897']])), { pid: 5310, ppid: 1, uid: 1000, startedAt: 1, exe: '/usr/bin/node', argv: ['node', '/repo/bin/asight.mjs', 'serve'], env: () => new Map() }]
+  const r = await run(s, [], { procs, request: asDaemon(reply()), netenv: async ({ proxies }) => { seen = proxies; return NO_VPN } })
+  assert.deepEqual(seen, { 'claude-code': ['http://alice:pw@127.0.0.1:7897'] })
+  assert.ok(!r.text.includes('alice:pw'))
+  assert.match(r.text, /^你自己起的 asight 进程仍在跑: asight serve\(pid 5310,只读看板,不在 agent 路径上\)$/m)
+  const down2 = await run(s, [], { procs: async () => { throw new Error('the process table /proc cannot be read (EACCES)') } })
+  assert.match(down2.text, /^你自己起的 asight 进程: 不知道\(the process table/m)
 })
