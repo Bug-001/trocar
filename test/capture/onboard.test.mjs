@@ -36,6 +36,26 @@ test('generateCa produces a real CA + leaf (openssl), CA subject carries the CN'
   assert.equal(generateCa({ caDir }).existed, true) // idempotent short-circuit
 })
 
+// audit rule-b 4: the system LibreSSL of macOS wrote the -CAcreateserial file to <HOME>/.srl (it reads the staging dir's `.asight-tmp-…` as an extension), outside ~/.asight: not in the
+// receipt, not removed by uninstall (零残留). The tests that inject a fake openssl never saw it; this one runs the real one in a HOME of the product's shape.
+test('generateCa writes nothing outside ~/.asight with the real openssl — the serial file is named, and lands with the other byproducts in the CA directory', () => {
+  const home = tmp('asight-ca-home-')
+  const caDir = path.join(home, '.asight', 'ca')
+  const out = generateCa({ caDir })
+  assert.equal(out.existed, false)
+  const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]))
+  const outside = walk(home).map((f) => path.relative(home, f)).filter((f) => !f.startsWith(`.asight${path.sep}ca${path.sep}`))
+  assert.deepEqual(outside, [], 'no file outside ~/.asight/ca: not <HOME>/.srl, not a staging directory left behind')
+  assert.ok(fs.existsSync(path.join(caDir, 'atrace-ca.srl')), 'the serial file is the one CA_SPILL moves along')
+  assert.deepEqual(fs.readdirSync(path.dirname(caDir)).sort(), ['ca'], 'and the staging directory is gone')
+  // the call itself names the file, whatever openssl a machine has
+  const calls = []
+  const fake = (file, args) => { calls.push(args); const i = args.indexOf('-out'); if (i >= 0) fs.writeFileSync(args[i + 1], 'stub\n'); return { status: 0 } }
+  generateCa({ caDir: path.join(tmp('asight-ca-'), 'ca'), run: fake })
+  const x509 = calls.find((a) => a[0] === 'x509')
+  assert.ok(x509.includes('-CAcreateserial') && /atrace-ca\.srl$/.test(x509[x509.indexOf('-CAserial') + 1]), `-CAserial <stage>/atrace-ca.srl: ${x509.join(' ')}`)
+})
+
 test('generateCa keys are 0600 (private material not world-readable)', () => {
   const caDir = path.join(tmp('asight-ca-'), 'ca')
   const out = generateCa({ caDir })

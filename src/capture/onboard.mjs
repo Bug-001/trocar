@@ -84,7 +84,9 @@ export function generateCa({ caDir = DEFAULT_CA_DIR, hosts = [LEAF_HOST], force 
     run('openssl', ['genrsa', '-out', S('leaf.key'), '2048'])
     run('openssl', ['req', '-new', '-key', S('leaf.key'), '-subj', `/CN=${wanted[0]}`, '-out', S('leaf.csr')])
     writeFileSync(S('leaf.ext'), `subjectAltName=${wanted.map((h) => `DNS:${h}`).join(',')}\nextendedKeyUsage=serverAuth\nkeyUsage=digitalSignature,keyEncipherment\n`)
-    run('openssl', ['x509', '-req', '-in', S('leaf.csr'), '-CA', S('atrace-ca.crt'), '-CAkey', S('atrace-ca.key'), '-CAcreateserial', '-days', '3650', '-sha256', '-extfile', S('leaf.ext'), '-out', S('leaf.crt')])
+    // `-CAserial` names the serial file: without it openssl derives the name from the CA's path, and the system LibreSSL of macOS reads the staging dir's `.asight-tmp-…` as the extension
+    // and writes `<HOME>/.srl` — a file outside ~/.asight that no receipt lists and no uninstall removes (audit rule-b 4). CA_SPILL moves the right one along with the rest.
+    run('openssl', ['x509', '-req', '-in', S('leaf.csr'), '-CA', S('atrace-ca.crt'), '-CAkey', S('atrace-ca.key'), '-CAserial', S('atrace-ca.srl'), '-CAcreateserial', '-days', '3650', '-sha256', '-extfile', S('leaf.ext'), '-out', S('leaf.crt')])
     for (const f of CA_ARTIFACTS) if (!existsSync(S(f))) throw new Error(`asight CA generation produced no ${f} (openssl failed silently?) — nothing was installed into ${caDir}`)
     writeFileSync(S(HOSTS_FILE), JSON.stringify(wanted) + '\n') // what this leaf can authorize
     for (const k of ['atrace-ca.key', 'leaf.key']) { try { chmodSync(S(k), 0o600) } catch { /* best-effort */ } }
