@@ -9,11 +9,13 @@
 import path from 'node:path'
 import { expandHome, parseDotenv } from '../../core/config-read.mjs'
 import { CODE } from '../../core/codes.mjs'
-import { isOwnPath } from '../_common.mjs'
+import { isOwnPath, argAfter, dotenvLayer } from '../_common.mjs'
 import { localAppData } from './_paths.mjs'
 
 const raw = String.raw
 const COVERED = ['SSL_CERT_FILE', 'HERMES_CA_BUNDLE'] // what the block sets over the launch env and the user's lines
+const FALSEY = /^(false|0|no|off)$/i
+const OLD_RELEASE = 'hermes:release-ca-bundle' // pseudo-variable: this process may be a release ≤ v2026.9.24
 
 // HERMES_HOME may name a profile under the root; the root is where the profiles directory lives.
 function hermesRoot(ctx) {
@@ -62,6 +64,54 @@ function inject(ctx) {
   }
 }
 
+// The active home of a process (its .env is the one asight's block was written into): the --profile flag, HERMES_HOME
+// (another process's environment is never read on Windows, so the variable is only what the daemon's own ctx carries),
+// else the sticky active_profile of the root — the Linux descriptor's resolution over the Windows root.
+function hermesHome(ctx) {
+  const root = hermesRoot(ctx)
+  const at = (name) => (name === 'default' ? root : path.join(root, 'profiles', name))
+  const flag = argAfter(ctx.argv, ['--profile', '-p'])
+  if (flag) return at(flag.trim().toLowerCase())
+  const sticky = (ctx.readText(path.join(root, 'active_profile')) || '').trim()
+  return sticky ? at(sticky) : root
+}
+// The checkout the bootstrap puts on sys.path; the default under the Windows root.
+function checkout(ctx) {
+  const root = hermesRoot(ctx)
+  const m = /sys\.path\.insert\(\s*0\s*,\s*(['"])([A-Za-z]:[^'"]+)\1/.exec(ctx.argv[3] || '')
+  return m ? m[2] : path.join(root, 'hermes-agent')
+}
+// Per-route TLS keys in the active home's config.yaml, as the Linux descriptor reads them.
+function tlsKeys(ctx, home) {
+  const file = path.join(home, 'config.yaml')
+  const text = ctx.readText(file)
+  if (text == null) return null
+  const vars = {}
+  const cas = new Set()
+  for (const m of text.matchAll(/^[ \t-]*ssl_ca_cert[ \t]*:[ \t]*["']?([^"'#\n]*?)["']?[ \t]*(?:#.*)?$/gm)) if (m[1]) cas.add(expandHome(m[1], ctx.home))
+  if (cas.size) vars['hermes:ssl_ca_cert'] = [...cas].join('\n')
+  for (const m of text.matchAll(/^[ \t-]*ssl_verify[ \t]*:[ \t]*["']?([^"'#\s]+)/gm)) if (FALSEY.test(m[1])) vars['hermes:ssl_verify'] = 'false'
+  return Object.keys(vars).length ? { name: `${file} (ssl_ca_cert / ssl_verify)`, file, mode: 'override', vars, live: true, mtimeMs: ctx.mtimeOf(file) } : null
+}
+
+// The tracker's Windows layers (4.8 §5.4, Task 8(v)): the Linux descriptor's with the Windows root — Hermes keeps its
+// data in %LOCALAPPDATA%\hermes, not ~/.hermes. The launch environment is never read (every env-named guard below sees
+// nothing), so the verdict rests on the entry files and installed_at, and the .op.env / checkout fill layers can only
+// shadow, never grant. The managed .env is read only for a HERMES_MANAGED_DIR the daemon's ctx names (4.8 §6.1: Linux's
+// default /etc/hermes has no measured Windows counterpart).
+function layers(ctx) {
+  const home = hermesHome(ctx)
+  const user = dotenvLayer(ctx, path.join(home, '.env'), { name: path.join(home, '.env') })
+  const out = [user]
+  if (!ctx.environ.get('OP_SERVICE_ACCOUNT_TOKEN')) out.push(dotenvLayer(ctx, path.join(home, '.op.env'), { name: path.join(home, '.op.env'), mode: 'fill' }))
+  out.push(dotenvLayer(ctx, path.join(checkout(ctx), '.env'), { name: 'hermes checkout .env', mode: user ? 'fill' : 'override' }))
+  const managed = ctx.environ.get('HERMES_MANAGED_DIR')
+  if (managed) out.push(dotenvLayer(ctx, path.join(managed, '.env'), { name: path.join(managed, '.env') }))
+  out.push(tlsKeys(ctx, home))
+  if (oldRelease(ctx.readText, checkout(ctx)) !== false) out.push({ name: `${checkout(ctx)}/install-stamp.json (release ≤ v2026.9.24, or no stamp)`, mode: 'override', vars: { [OLD_RELEASE]: '1' }, live: true })
+  return out.filter(Boolean)
+}
+
 export default {
   groups: [{
     g: 'hermes.cli',
@@ -76,6 +126,7 @@ export default {
     { id: 'hermes.desktop', g: null, match: null, nameRule: false, processRules: false, supported: { reason: 'not-measured' } },
   ],
   inject,
+  layers,
   proxy: {
     env: ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'],
     files: [{ path: '%LOCALAPPDATA%\\hermes\\.env', key: 'HTTPS_PROXY', format: 'dotenv' }],

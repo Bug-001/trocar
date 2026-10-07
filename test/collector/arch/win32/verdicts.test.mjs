@@ -1,69 +1,268 @@
 // test/collector/arch/win32/verdicts.test.mjs — the verdict producer on Windows (RFC 4.8 §5.4 「谁产生判定」, acceptance W76; plan Task 8(v)).
-// The redirector's verdict table is filled by `watch(pid, { decrypt, agent })`, and the one that pushes is the tracker. Written down after the Task 8(b) review: on Windows nothing can produce a `decrypt:true` verdict yet.
-//   (a) `registry.match` keys on `descriptor.signatures[facts.os]` and no harness has `signatures.win32` (`desc.win32` is not given to `createRegistry`): a real Windows Claude Code is `no-match`;
-//   (b) the tracker vetoes every process whose `facts.env === null` (`environ-unreadable`), and every Windows process has `env: null` (4.8 §10.1: no other process's environment is read), so the entry-file and
-//       `installed_at` layers that §5.4 and §6.1 name are never asked.
-// The table then stays empty and everything is spliced: fail-safe, and no Windows connection is ever decrypted. This file is Task 8(v)'s acceptance, run now and expected to fail: it is `todo` (node:test does not count a
-// todo's failure), and the `todo` is taken off when the producer is built (8(v) extends it to all seven harnesses' Windows entries, the plugin marker's tolerance and `facts-update`). A test that only says "todo" with no body
-// would never notice the day it starts to pass.
+// The redirector's verdict table is filled by `watch(pid, { decrypt, agent })`, and the one that pushes is the tracker. Until Task 8(v) nothing could produce a `decrypt:true`
+// verdict on Windows: `registry.match` keyed on `descriptor.signatures[facts.os]` and no harness had `signatures.win32`, and the tracker vetoed every process with
+// `facts.env === null` (`environ-unreadable`) while every Windows process has `env: null` (4.8 §10.1). Built (2026-10-08):
+//   the daemon hands `matchForm` to the registry (`createRegistry(descriptors, { osMatch: { win32 } })`: one rule for which form, no copy of the patterns),
+//   `procinfo` facts carry `envRead: false` so `env: null` is the OS's rule and not a failure to read, the tracker judges by the harness's Windows entry files
+//   (`desc.win32.layers` where the files move — Hermes's root is %LOCALAPPDATA%\hermes; the Linux layers otherwise, they read the same files), the plugin marker
+//   is compared with a fixed tolerance (`MARKER_TOLERANCE_MS`: the marker is ms-rounded `performance.timeOrigin`, the helper gives ms), and the tracker listens to
+//   `facts-update` as well (a form told by its command line is judged again when it arrives). Still fail-safe: a pid nobody pushed a verdict for is untrusted.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import tls from 'node:tls'
 import { createWin32Redirector } from '../../../../src/collector/arch/win32/redirector.mjs'
 import { matchForm } from '../../../../src/collector/arch/win32/forms.mjs'
 import { groupsOf } from '../../../../src/collector/arch/win32/route-plan.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { createRegistry } from '../../../../src/collector/core/registry.mjs'
 import { createTracker } from '../../../../src/collector/core/tracker.mjs'
-import { createTrustChecker } from '../../../../src/collector/core/trust/confirm.mjs'
-import { createCa } from '../../../../src/collector/core/tls/ca.mjs'
+import { createTrustChecker, MARKER_TOLERANCE_MS } from '../../../../src/collector/core/trust/confirm.mjs'
+import { createEngine } from '../../../../src/collector/core/engine/engine.mjs'
+import { createCa, loadCa } from '../../../../src/collector/core/tls/ca.mjs'
+import { createLeafIssuer } from '../../../../src/collector/core/tls/leaf.mjs'
+import { installCollector } from '../../../../src/collector/install.mjs'
+import { readManifest, installedAt } from '../../../../src/collector/core/trust/journal.mjs'
+import { within, closeWithin } from '../../../helpers/bounded.mjs'
+import { tmpDir } from '../../../helpers/tmp.mjs'
 
 const HOME = String.raw`C:\Users\u`
 const IMG = {
   ccCli: String.raw`C:\Users\u\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe`,
   ccVscode: String.raw`C:\Users\u\.vscode\extensions\anthropic.claude-code-2.1.289-win32-x64\resources\native-binary\claude.exe`,
+  ccDesktop: String.raw`C:\Program Files\WindowsApps\Claude_1.0.0.0_x64__abc\app\claude.exe`,
+  codexNpm: String.raw`C:\Users\u\AppData\Roaming\npm\node_modules\@openai\codex\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\bin\codex.exe`,
   codexApp: String.raw`C:\Users\u\AppData\Local\OpenAI\Codex\bin\0123456789abcdef\codex.exe`,
+  hermesPy: String.raw`C:\Users\u\AppData\Local\hermes\tools\python-3.12.6\python.exe`,
+  kimi: String.raw`C:\Users\u\.kimi-code\bin\kimi.exe`,
   node: String.raw`C:\Program Files\nodejs\node.exe`,
+  dshDesktop: String.raw`C:\Users\u\AppData\Local\Programs\DeepSeek Harness\DeepSeek Harness.exe`,
+  opencode: String.raw`C:\Users\u\AppData\Roaming\npm\node_modules\opencode-ai\bin\opencode.exe`,
+  opencodeDesk: String.raw`C:\Users\u\AppData\Local\@opencode-aidesktop\OpenCode.exe`,
+  zcode: String.raw`C:\Users\u\AppData\Local\Programs\ZCode\ZCode.exe`,
+  svchost: String.raw`C:\Windows\System32\svchost.exe`,
 }
 const DSH_CMD = String.raw`"C:\Program Files\nodejs\node.exe" C:\Users\u\AppData\Roaming\npm\node_modules\@deepseek-ai\dsh\bin\dsh.js`
+const ZCODE_CMD = String.raw`"C:\Users\u\AppData\Local\Programs\ZCode\ZCode.exe" C:\Users\u\AppData\Local\Programs\ZCode\resources\glm\zcode.cjs app-server --stdio`
 
-/** What the Windows procinfo gives, with the one field Task 8(v) adds: `envRead: false` says "this OS never reads another process's environment", so `env: null` is the rule here and not a failure to read. */
-const facts = (pid, exe, extra = {}) => ({ os: 'win32', pid, ppid: 1, name: exe.split('\\').pop(), exe, argv: [], cmdline: `"${exe}"`, env: null, envError: 'env-unreadable', envRead: false, cwd: null, startedAt: 1000 + pid, startTicks: String(1000 + pid), cmdlineState: 'ok', elevated: false, source: 'exec', ...extra })
+/** What the Windows procinfo gives, with the field Task 8(v) added: `envRead: false` says "this OS never reads another process's environment", so `env: null` is the rule here and not a failure to read. */
+const facts = (pid, exe, extra = {}) => ({ os: 'win32', pid, ppid: 1, name: exe.split('\\').pop(), exe, argv: [], cmdline: `"${exe}"`, env: null, envRead: false, cwd: null, startedAt: 1700000000000 + pid, startTicks: String(1700000000000 + pid), cmdlineState: 'ok', elevated: false, source: 'exec', ...extra })
 
-const TODO = 'Task 8(v) (note 84 seam 1): registry.match has no Windows signatures and the tracker vetoes `env: null`; nothing produces decrypt:true on Windows yet'
+const ALL = await loadHarnesses()
+const one = (name) => ALL.find((d) => d.name === name)
+const GROUPS = groupsOf(ALL)
+const FORMS = GROUPS.flatMap((g) => g.forms)
+const HARNESS_OF_FORM = new Map(GROUPS.flatMap((g) => g.forms.map((f) => [f.id, g.harness])))
 
-test('W76 the registry the tracker judges by finds the same harness as matchForm for a process of each Windows form', { todo: TODO }, async () => {
-  const hs = await loadHarnesses()
-  const registry = createRegistry(hs)
-  const forms = groupsOf(hs).flatMap((g) => g.forms)
-  for (const [pid, exe, extra, harness] of [[10, IMG.ccCli, {}, 'claude-code'], [11, IMG.ccVscode, {}, 'claude-code'], [12, IMG.codexApp, {}, 'codex'], [13, IMG.node, { cmdline: DSH_CMD }, 'deepseek-dsh']]) {
-    const f = facts(pid, exe, extra)
-    const form = matchForm(forms, f, { home: HOME })
-    assert.equal(form.kind, 'form', `matchForm knows ${exe}`)
-    assert.equal(registry.match(f).agent, harness, `the registry finds ${harness} for ${exe}, as the redirector's form ${form.id} says`)
+/** The registry as the daemon wires it (8(c)): `matchForm` over the same form data the redirector routes by, handed to the registry — the tracker and the redirector share one rule for which form a process is. */
+function winRegistry(descriptors = ALL) {
+  const win = (f) => { const m = matchForm(FORMS, f, { home: HOME }); return m.kind === 'form' ? HARNESS_OF_FORM.get(m.id) : null }
+  return createRegistry(descriptors, { osMatch: { win32: win } })
+}
+
+/** A sandbox %USERPROFILE% with one harness's trust entries really installed (`on`'s own writer), the manifest, the CA and its paths. */
+async function sandbox(harnessName, rels = []) {
+  const home = tmpDir('asight-verdicts-')
+  for (const [rel, text = ''] of rels) { const f = path.join(home, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text) }
+  const d = one(harnessName)
+  await installCollector({ home, env: { HOME: home, USERPROFILE: home }, osName: 'win32', harnesses: [d], freePort: async () => 47011, roots: { node: [], osText: '' } })
+  const dir = path.join(home, '.asight', 'collector')
+  const m = readManifest(dir)
+  const ca = { certPem: fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'), 'utf8'), keyPem: fs.readFileSync(path.join(dir, 'ca', 'ca.key'), 'utf8') }
+  return { home, dir, m, pem: ca.certPem, ca, d, t0: Math.max(...m.entries.map((e) => Date.parse(e.installed_at))) }
+}
+
+/** The watcher stand-in and the tracker over a real win32 redirector, wired the way the daemon wires it (the osMatch rule, the win32 layers, the manifest's installed_at, the marker's tolerance). `over` reaches the redirector. */
+function rigged({ descriptors, box: b, marker = false, over = {} }) {
+  const procWatcher = Object.assign(new EventEmitter(), { scan: async () => [], start: async () => true, stop() {}, poll: async () => false, unreadable: () => [] })
+  const redirector = createWin32Redirector({ procWatcher, groups: groupsOf(descriptors), home: HOME, ...over })
+  const tracker = createTracker({
+    redirector, registry: winRegistry(descriptors), trust: createTrustChecker({ caCertPem: b.pem }), home: b.home, alive: () => false, collectorDir: b.dir,
+    installedAt: (l) => installedAt(b.m, l),
+    osLayers: { win32: (d) => (d.win32 && d.win32.layers) || d.layers },
+    ...(marker ? { markerDir: path.join(b.dir, 'run', 'trust'), caPem: path.join(b.dir, 'ca', 'asight-ca.pem'), markerToleranceMs: MARKER_TOLERANCE_MS } : {}),
+  })
+  tracker.start()
+  const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)) }
+  return { procWatcher, redirector, tracker, settle }
+}
+
+// ── W76 cell 1: one rule for which form ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+test('W76 the registry the tracker judges by finds the same harness as matchForm for a process of each Windows form; there is no second rule (no signatures.win32 anywhere)', async () => {
+  const registry = winRegistry()
+  const rows = [
+    [IMG.ccCli, {}, 'claude-code'], [IMG.ccVscode, {}, 'claude-code'], [IMG.ccDesktop, {}, 'claude-code'],
+    [IMG.codexNpm, {}, 'codex'], [IMG.codexApp, {}, 'codex'],
+    [IMG.hermesPy, {}, 'hermes'], [IMG.kimi, {}, 'kimi-code'],
+    [IMG.node, { cmdline: DSH_CMD }, 'deepseek-dsh'], [IMG.dshDesktop, {}, 'deepseek-dsh'],
+    [IMG.opencode, {}, 'opencode'], [IMG.opencodeDesk, {}, 'opencode'],
+    [IMG.zcode, { cmdline: ZCODE_CMD }, 'z-code'], [IMG.zcode, {}, 'z-code'],
+  ]
+  for (const [exe, extra, harness] of rows) {
+    const f = facts(10, exe, extra)
+    const form = matchForm(FORMS, f, { home: HOME })
+    assert.equal(form.kind, 'form', `${exe} is a form`)
+    assert.equal(HARNESS_OF_FORM.get(form.id), harness)
+    assert.deepEqual(registry.match(f), { agent: harness, descriptor: one(harness), reason: 'match' }, `${exe}: the registry finds ${harness}, as the redirector's form ${form.id} says`)
+  }
+  assert.equal(registry.match(facts(11, IMG.svchost)).agent, null, 'a process of no form is no agent')
+  const pending = registry.match(facts(12, IMG.node, { cmdline: null, argv: [], cmdlineState: 'pending' }))
+  assert.equal(pending.agent, null, 'a command line not known yet judges nothing: the facts-update re-judges it (below)')
+  // no copy of the patterns as `signatures.win32`: the form data is the one rule, and the win32 files carry no signatures
+  const dir = new URL('../../../../src/collector/harness/win32/', import.meta.url)
+  for (const name of fs.readdirSync(dir)) {
+    if (!name.endsWith('.mjs') || name.startsWith('_')) continue
+    const src = fs.readFileSync(new URL(name, dir), 'utf8')
+    assert.equal(src.includes('signatures'), false, `${name} carries no signatures: the registry is told matchForm, not a second pattern set`)
+  }
+  for (const d of ALL) assert.ok(d.signatures && d.signatures.linux && !d.signatures.win32, `${d.name}: the descriptor keeps its Linux signatures and gains no win32 ones`)
+})
+
+// ── W76 cell 2: per harness, on its Windows files (planTrust's entries really installed; `installed_at` from the manifest) ─────────────
+
+test('W76 a process started after its harness\'s Windows trust entry is judged trusted although its environment is not read; one started before it is config-after-start — the Linux entry files read the same ones on a Windows-shaped home (claude-code, codex, z-code)', async () => {
+  for (const [harness, exe, rels, extra] of [
+    ['claude-code', IMG.ccCli, [], {}],
+    ['codex', IMG.codexApp, [['.codex/config.toml']], {}],
+    ['z-code', IMG.zcode, [['.zcode/cli/config.json', '{}']], { cmdline: ZCODE_CMD }],
+  ]) {
+    const b = await sandbox(harness, rels)
+    const { procWatcher, redirector, settle } = rigged({ descriptors: [b.d], box: b })
+    procWatcher.emit('exec', facts(20, exe, { ...extra, startedAt: b.t0 + 5000 }))
+    procWatcher.emit('exec', facts(21, exe, { ...extra, startedAt: b.t0 - 5000 }))
+    await settle()
+    const after = redirector.verdictOf(20), before = redirector.verdictOf(21)
+    assert.deepEqual([after.decrypt, after.agent], [true, harness], `${harness}: started after the entry → watch(pid, {decrypt:true})`)
+    assert.equal(before.decrypt, false, `${harness}: started before it → the entry was not in effect when it started`)
+    assert.equal(redirector.verdictOf(21).agent, harness)
   }
 })
 
-test('W76 a Windows process started after its entry is judged trusted although its environment is not read, and one started before it is not: the tracker pushes watch(pid, {decrypt}) to the redirector', { todo: TODO }, async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-verdicts-'))
-  try {
-    const ca = createCa()
-    const pem = path.join(dir, 'asight-ca.pem'); fs.writeFileSync(pem, ca.certPem)
-    fs.mkdirSync(path.join(dir, '.claude'))
-    fs.writeFileSync(path.join(dir, '.claude', 'settings.json'), JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: pem } })) // the trust entry `on` wrote (4.8 §6.1)
-    const T0 = Date.now() // when `on` wrote it: the manifest's installed_at
-    const hs = await loadHarnesses()
-    const procWatcher = Object.assign(new EventEmitter(), { scan: async () => [], start: async () => true, stop() {}, unreadable: () => [] })
-    const redirector = createWin32Redirector({ procWatcher, groups: groupsOf(hs), home: HOME })
-    const tracker = createTracker({ redirector, registry: createRegistry(hs), trust: createTrustChecker({ caCertPem: ca.certPem }), home: dir, installedAt: () => T0, alive: () => false })
-    tracker.start()
-    procWatcher.emit('exec', facts(20, IMG.ccCli, { startedAt: T0 + 5000 }))
-    procWatcher.emit('exec', facts(21, IMG.ccCli, { startedAt: T0 - 5000 }))
-    await new Promise((r) => setTimeout(r, 50))
-    assert.deepEqual([redirector.verdictOf(20), redirector.verdictOf(21)].map((v) => v && v.decrypt), [true, false], 'after the entry: trusted; before it: the entry was not in effect when it started (config-after-start)')
-    assert.equal(redirector.verdictOf(20).agent, 'claude-code')
-  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+test('W76 Hermes is judged on its Windows files (%LOCALAPPDATA%\\hermes, desc.win32.layers): trusted after its .env block, config-after-start before it', async () => {
+  const b = await sandbox('hermes', [['AppData/Local/hermes/config.yaml']])
+  const { procWatcher, redirector, settle } = rigged({ descriptors: [b.d], box: b })
+  assert.equal(typeof b.d.win32.layers, 'function', 'the Windows data carries its own layers: the Linux ones read ~/.hermes, which is not where Windows Hermes keeps its .env')
+  procWatcher.emit('exec', facts(20, IMG.hermesPy, { startedAt: b.t0 + 5000 }))
+  procWatcher.emit('exec', facts(21, IMG.hermesPy, { startedAt: b.t0 - 5000 }))
+  await settle()
+  assert.deepEqual([redirector.verdictOf(20).decrypt, redirector.verdictOf(20).agent], [true, 'hermes'])
+  assert.equal(redirector.verdictOf(21).decrypt, false)
+})
+
+test('W76 Kimi has no automatic Windows trust entry (its shim is an opt-in item, Task 14): the process is judged and stays untrusted — fail-safe, never a broken connection', async () => {
+  const b = await sandbox('kimi-code')
+  assert.deepEqual(b.m.entries.filter((e) => e.harness === 'kimi-code'), [], 'planTrust writes nothing for Kimi on Windows')
+  const { procWatcher, redirector, tracker, settle } = rigged({ descriptors: [b.d], box: b })
+  procWatcher.emit('exec', facts(20, IMG.kimi, { startedAt: b.t0 + 5000 }))
+  await settle()
+  assert.deepEqual(redirector.verdictOf(20), { decrypt: false, agent: 'kimi-code' }, 'a row is pushed and it says not trusted')
+  assert.equal(tracker.describe(20).reason, 'shim-not-on-path', 'the reason names what is missing (the shim), not a silent "not an agent"')
+})
+
+// ── W76 cell 3: the plugin marker's tolerance (dsh, 4.8 §6.1) ──────────────────────────────────────────────────────────────────────────
+
+test('W76 the dsh plugin marker is trusted within the fixed tolerance (it is ms-rounded performance.timeOrigin against the helper\'s ms) and a marker an earlier process with the same pid left stays stale', async () => {
+  const b = await sandbox('deepseek-dsh')
+  const { procWatcher, redirector, settle } = rigged({ descriptors: [b.d], box: b, marker: true })
+  const markerDir = path.join(b.dir, 'run', 'trust')
+  const marker = (pid, at) => fs.writeFileSync(path.join(markerDir, String(pid)), String(at))
+  const t = 1700000005000
+  const dshAt = (pid, markerAt) => { marker(pid, markerAt); procWatcher.emit('exec', facts(pid, IMG.node, { cmdline: DSH_CMD, startedAt: t, startTicks: String(t) })) }
+  dshAt(30, t) // the exact value
+  dshAt(31, t - (MARKER_TOLERANCE_MS - 1)) // rounded down, still the same start
+  dshAt(32, t + (MARKER_TOLERANCE_MS - 1)) // rounded up
+  dshAt(33, t - 60000) // an earlier process of a recycled pid
+  procWatcher.emit('exec', facts(34, IMG.node, { cmdline: DSH_CMD, startedAt: t, startTicks: String(t) })) // no marker at all
+  await settle()
+  assert.deepEqual([30, 31, 32].map((p) => redirector.verdictOf(p).decrypt), [true, true, true], 'the exact value and both rounding directions trust')
+  assert.deepEqual([33, 34].map((p) => redirector.verdictOf(p).decrypt), [false, false], 'a stale marker and none never do')
+  assert.equal(MARKER_TOLERANCE_MS > 0, true)
+})
+
+// ── W76 cell 4: facts-update re-judges the same pid (a form told by its command line) ────────────────────────────────────────────────
+
+test('W76 a form told by its command line is not judged "not an agent" while the command line is unknown: the facts-update judges the same pid again and pushes watch again', async () => {
+  const b = await sandbox('deepseek-dsh')
+  const { procWatcher, redirector, tracker, settle } = rigged({ descriptors: [b.d], box: b, marker: true })
+  const t = 1700000005000
+  procWatcher.emit('exec', facts(40, IMG.node, { cmdline: null, argv: [], cmdlineState: 'pending', startedAt: t, startTicks: String(t) }))
+  await settle()
+  assert.equal(redirector.verdictOf(40), null, 'nothing was pushed: pending is not "not an agent" and not a form either')
+  assert.equal(tracker.describe(40), null)
+  fs.writeFileSync(path.join(b.dir, 'run', 'trust', '40'), String(t)) // the plugin reports while the command line is still on its way
+  procWatcher.emit('facts-update', facts(40, IMG.node, { cmdline: DSH_CMD, cmdlineState: 'ok', source: 'update', startedAt: t, startTicks: String(t) }))
+  await settle()
+  assert.deepEqual(redirector.verdictOf(40), { decrypt: true, agent: 'deepseek-dsh' }, 'judged again on the update, and the marker it left trusts')
+})
+
+// ── W76 cell 5: the whole path — the real redirector, tracker, registry and a real ingress ─────────────────────────────────────────────
+
+const REQ = 'GET /v1/models HTTP/1.1\r\nhost: upstream.test\r\n\r\n'
+const RESP = 'HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: keep-alive\r\n\r\nok'
+const TOKEN = '0123456789abcdef0123456789abcdef'
+
+test('W76 end to end: a Windows connection of a trusted process is decrypted and its envelope says capture:"proxy", an untrusted one is spliced with its row, and a pid whose watch was never pushed is a splice — a gate that cannot break an agent', async (t) => {
+  const b = await sandbox('claude-code')
+  const answers = [{ pid: 20, source: 'socket-table', ms: 4 }, { pid: 21, source: 'socket-table', ms: 4 }, { pid: 55, source: 'socket-table', ms: 4 }]
+  const ownerOf = async () => answers.shift() || { pid: null, source: null, ms: 1 }
+  const { procWatcher, redirector, tracker, settle } = rigged({
+    descriptors: [b.d], box: b,
+    over: { ownerOf, routes: () => ({ 'claude-code.settings': { entry: 'auto', on: true, reason: null, upstream: { kind: 'direct', source: 'direct' }, bypass: [] } }), ingress: () => ({ enginePort: 18790, groupPorts: { 'claude-code.settings': 18801 }, ingressToken: TOKEN, listenerToken: 'fedcba9876543210fedcba9876543210' }) },
+  })
+  procWatcher.emit('exec', facts(20, IMG.ccCli, { startedAt: b.t0 + 5000 }))
+  procWatcher.emit('exec', facts(21, IMG.ccCli, { startedAt: b.t0 - 5000 }))
+  procWatcher.emit('exec', facts(55, IMG.svchost, { startedAt: b.t0 + 5000 })) // in the table, but the tracker judges it no agent: its watch is never pushed
+  await settle()
+
+  const privCa = createCa({ commonName: 'private origin CA' })
+  const originIssuer = createLeafIssuer(loadCa(privCa))
+  const origin = tls.createServer({ SNICallback: (n, cb) => cb(null, originIssuer.secureContextFor(n)), ALPNProtocols: ['http/1.1'] }, (s) => { s.on('data', () => s.write(RESP)); s.on('error', () => {}) })
+  await new Promise((r) => origin.listen(0, '127.0.0.1', r))
+  const flows = [], envelopes = []
+  const engine = createEngine({
+    redirector, issuer: createLeafIssuer(loadCa(b.ca)), upstreamCa: privCa.certPem, ingressToken: TOKEN,
+    policy: (meta) => (meta.decrypt ? true : meta.skip ?? tracker.policy(meta, 'upstream.test')), // the daemon's policy: the meta's skip, else the tracker's row
+    store: { envelope: (e) => { envelopes.push(e); return true }, flow: (f) => { flows.push(structuredClone(f)); return true } }, onFailure: () => {},
+  })
+  const { ingressPort } = await engine.listen({ ingress: { port: 0 } })
+  t.after(async () => { origin.close(); await closeWithin(engine) })
+  const settled = async ({ envelope = false } = {}) => { for (let i = 0; i < 400 && (flows.length < 1 || (envelope && envelopes.length < 1)); i++) await new Promise((x) => setTimeout(x, 10)) }
+  /** An agent's connection as the kernel hands it over (CONNECT as `of.<form>`), then TLS to the origin trusting `ca`. */
+  async function agent(ca) {
+    const sock = net.connect(ingressPort, '127.0.0.1'); sock.on('error', () => {})
+    sock.write(`CONNECT 127.0.0.1:${origin.address().port} HTTP/1.1\r\nHost: x\r\nProxy-Authorization: Basic ${Buffer.from(`of.claude-code.cli:${TOKEN}`).toString('base64')}\r\n\r\n`)
+    await within(new Promise((res) => { let got = ''; const on = (d) => { got += d.toString('latin1'); if (got.includes('\r\n\r\n')) { sock.removeListener('data', on); res() } }; sock.on('data', on) }), 4000, 'the 200', () => sock.destroy())
+    return within(new Promise((resolve) => {
+      let issuerOf = null, got = ''
+      const c = tls.connect({ socket: sock, servername: 'upstream.test', ca, ALPNProtocols: ['http/1.1'] }, () => { issuerOf = c.getPeerX509Certificate().issuer; c.write(REQ) })
+      c.on('data', (d) => { got += d.toString('latin1'); if (got.length >= RESP.length) c.end() })
+      c.on('error', () => {}); c.on('close', () => resolve(issuerOf ? { issuer: issuerOf, got } : 'closed'))
+    }), 6000, 'the TLS exchange', () => sock.destroy())
+  }
+
+  const trusted = await agent(b.pem)
+  assert.equal(trusted.got, RESP)
+  assert.match(trusted.issuer, /asight/i, 'decrypted: the leaf the agent sees is asight\'s')
+  await settled({ envelope: true })
+  assert.equal(envelopes[0].capture, 'proxy', 'the envelope names the mode (Task 2(b)\'s reader, now on the daemon path W76 ends on)')
+  assert.deepEqual([envelopes[0].proc.agent, envelopes[0].proc.pid], ['claude-code', 20])
+  flows.length = 0; envelopes.length = 0
+
+  const before = await agent(privCa.certPem) // pid 21: started before the entry, untrusted
+  assert.equal(before.got, RESP, 'the agent got its answer: nothing is broken')
+  assert.match(before.issuer, /private origin CA/, 'spliced: the origin\'s own certificate')
+  await settled()
+  assert.deepEqual([flows[0].decision, flows[0].not_captured, flows[0].reason, flows[0].pid], ['splice', 'untrusted', 'config-after-start', 21])
+  flows.length = 0
+
+  const never = await agent(privCa.certPem) // pid 55: in the process table, no verdict ever pushed for it
+  assert.equal(never.got, RESP)
+  assert.match(never.issuer, /private origin CA/)
+  await settled()
+  assert.deepEqual([flows[0].decision, flows[0].not_captured, flows[0].reason ?? null], ['splice', 'untracked', null], 'the tracker has no row to say why: the splice is what a missing gate looks like, never a broken connection')
 })
