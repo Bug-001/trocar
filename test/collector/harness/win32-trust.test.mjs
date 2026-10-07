@@ -244,6 +244,7 @@ const CASES = [
   { harness: 'claude-code', g: 'claude-code.settings', file: '.claude/settings.json', user: `{\n  "env": {\n    "HTTPS_PROXY": "${USER}",\n    "ANTHROPIC_BASE_URL": "https://relay.example.com"\n  }\n}\n`, value: (t) => JSON.parse(t).env.HTTPS_PROXY },
   { harness: 'z-code', g: 'z-code.cli', file: '.zcode/cli/config.json', user: `{"network": {"httpProxy": "${USER}", "caCertFile": ""}}\n`, value: (t) => JSON.parse(t).network.httpProxy },
   { harness: 'codex', g: 'codex.env', file: '.codex/.env', user: `OPENAI_API_KEY=sk-secret\nHTTPS_PROXY=${USER}\nNO_PROXY=intranet.example,10.0.0.0/8\n`, value: (t) => /^HTTPS_PROXY=(.*)$/m.exec(t)[1], block: true },
+  { harness: 'deepseek-dsh', g: 'deepseek-dsh.env', file: '.dsh/.env', user: `DEEPSEEK_API_KEY=sk-secret\nHTTPS_PROXY=${USER}\n`, value: (t) => /^HTTPS_PROXY=(.*)$/m.exec(t)[1], block: true, noProxy: false }, // dsh's trust entry is the patch file, so its .env holds the proxy block alone
   { harness: 'hermes', g: 'hermes.cli', file: 'AppData/Local/hermes/.env', user: `OPENROUTER_API_KEY=sk-secret\nHTTPS_PROXY=${USER}\n`, value: (t) => /^HTTPS_PROXY=(.*)$/m.exec(t)[1], block: true },
 ]
 const URL_OF = (g) => `http://${g}:${INGRESS.listenerToken}@127.0.0.1:${INGRESS.port}`
@@ -262,7 +263,7 @@ for (const c of CASES) {
     const done = e.kind === 'text' ? applyTextEntry({ dir: b.dir, manifest: m, harness: c.harness, file: e.path, edit: e }) : applyJsonKey({ dir: b.dir, manifest: m, harness: c.harness, file: e.path, keys: e.keys, value: e.value })
     const written = fs.readFileSync(file, 'utf8')
     assert.equal(c.value(written), URL_OF(c.g), 'the agent now reads the group\'s port, with the credentials the listener asks for')
-    if (c.block) assert.match(written, /NO_PROXY=localhost,127\.0\.0\.1,::1\n/, 'the loopback never goes round the kernel')
+    if (c.block) assert.equal(/NO_PROXY=localhost,127\.0\.0\.1,::1\n/.test(written), c.noProxy !== false, 'the loopback never goes round the kernel (a block that writes NO_PROXY)')
     assert.ok(JSON.stringify(done.prior_value).includes(USER), 'the user\'s own proxy is what the manifest records, to become the upstream')
     const leaks = []
     const walk = (d) => { for (const n of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, n.name); if (n.isDirectory()) walk(f); else if (fs.readFileSync(f, 'utf8').includes('s3cret')) leaks.push(path.relative(b.home, f)) } }
@@ -304,3 +305,84 @@ test('W19 proxy entry: Claude Code and Z-Code write the proxy key beside the tru
 // The same file for Codex and Hermes is one sentinel block holding the trust variable and the proxy lines, entered separately (4.8 §2.3). The journal today refuses a second block in a file
 // that already has asight's (journal.mjs editText), so the proxy lines cannot join the trust block yet: Task 8(c) extends text-edit / journal for it, and this turns green there.
 test.todo('W19 proxy entry: Codex and Hermes — the proxy lines join the sentinel block the trust entry wrote, and off undoes the two in the opposite order to the original bytes (Task 8(c): the journal joins an existing block)')
+
+// ── W22: dsh and OpenCode (the plugin sources themselves: win32-plugins.test.mjs) ──
+const ROW = '- insert: [{id: asight-ca, name: ./asight-ca.mjs}]'
+const fwdJson = (p) => JSON.stringify(p.replace(/\\/g, '/')) // a path as the plugin source holds it: a string literal with forward slashes
+test('W22 dsh: the patch row is the one lab L1 measured, with the sentinel comment; the plugin file sits beside cordis.patch.yml; off takes the row and the file out (the patch file asight created goes with them)', async () => {
+  for (const existing of [true, false]) {
+    const b = box()
+    const patch = path.join(b.home, '.dsh', 'cordis.patch.yml')
+    if (existing) b.put('.dsh/cordis.patch.yml', '- insert: [{ name: other-plugin }]\n')
+    b.put('.dsh/.env', 'DEEPSEEK_API_KEY=sk\n')
+    const before = b.snapshot()
+    await install(b, { harnesses: only('deepseek-dsh') })
+    const plugin = path.join(b.home, '.dsh', 'asight-ca.mjs')
+    const rows = fs.readFileSync(patch, 'utf8').split('\n').filter((l) => l.includes('asight-ca'))
+    assert.equal(rows.length, 1)
+    assert.ok(rows[0].startsWith(`${ROW} # asight collector: `), `the row, then the sentinel comment: ${rows[0]}`)
+    assert.ok(!/\\/.test(rows[0]), 'a relative path with forward slashes: the form that loaded on Windows')
+    assert.equal(path.dirname(plugin), path.dirname(patch), 'beside the patch file: a relative name finds it')
+    const text = fs.readFileSync(plugin, 'utf8')
+    assert.ok(text.startsWith('// asight collector: trust plugin for DeepSeek dsh on Windows') && text.includes(fwdJson(path.join(b.dir, 'ca', 'asight-ca.pem'))), 'the plugin with this user\'s CA file filled in')
+    assert.deepEqual(readManifest(b.dir).files.filter((f) => f.role === 'plugin').map((f) => f.path), [plugin], 'ledgered, so off removes it')
+    assert.deepEqual(readManifest(b.dir).entries.map((e) => [e.path, e.line.startsWith(ROW)]), [[patch, true]])
+    await uninstall(b, only('deepseek-dsh'))
+    assert.deepEqual([...b.snapshot()], [...before], `${existing ? 'the user\'s patch file' : 'no patch file'} and no plugin after off`)
+  }
+})
+
+test('W22 dsh: DSH_HOME moves both the patch file and the plugin, and a patch file that is not a list is refused before anything is written', async () => {
+  const b = box()
+  b.put('D/dsh/cordis.patch.yml', 'name: not a list\n')
+  await assert.rejects(install(b, { harnesses: only('deepseek-dsh'), env: { HOME: b.home, USERPROFILE: b.home, DSH_HOME: path.join(b.home, 'D', 'dsh') } }), /not a block-style YAML list/)
+  assert.ok(!fs.existsSync(path.join(b.home, 'D', 'dsh', 'asight-ca.mjs')), 'nothing was written')
+  fs.writeFileSync(path.join(b.home, 'D', 'dsh', 'cordis.patch.yml'), '')
+  await install(b, { harnesses: only('deepseek-dsh'), env: { HOME: b.home, USERPROFILE: b.home, DSH_HOME: path.join(b.home, 'D', 'dsh') } })
+  assert.ok(fs.existsSync(path.join(b.home, 'D', 'dsh', 'asight-ca.mjs')) && fs.readFileSync(path.join(b.home, 'D', 'dsh', 'cordis.patch.yml'), 'utf8').includes(ROW))
+})
+
+test('W22 OpenCode: the plugin is OpenCode\'s own asight-ca.js with the Windows source (a Node sidecar or Bun), the watch list and notes of the Linux harness stay, and off removes the file and the directories asight made', async () => {
+  const b = box()
+  const dir = path.join(b.home, '.config', 'opencode')
+  const before = b.snapshot()
+  const r = await install(b, { harnesses: only('opencode') })
+  const plugin = path.join(dir, 'plugins', 'asight-ca.js')
+  const text = fs.readFileSync(plugin, 'utf8')
+  assert.ok(text.startsWith('// asight collector: trust plugin for OpenCode on Windows') && text.includes('tls.setDefaultCACertificates') && text.includes('globalThis.fetch'), 'both ways in the one file')
+  assert.ok(text.includes(fwdJson(path.join(b.dir, 'ca', 'asight-ca.pem'))) && text.includes(fwdJson(path.join(b.dir, 'run', 'trust'))), 'this user\'s CA file and marker directory')
+  assert.deepEqual(readManifest(b.dir).planned, [plugin], 'the plugin is the only automatic item of an opt-in harness: no shim, no launcher, no PATH')
+  assert.ok(r.plan.notes.some((n) => /@opencode-ai\/plugin/.test(n)), 'the note about its first run stays')
+  await uninstall(b, only('opencode'))
+  assert.deepEqual([...b.snapshot()], [...before])
+  assert.ok(!fs.existsSync(dir), 'the plugins directory asight created is gone')
+})
+
+test('W22: the paths a plugin file holds are forward-slashed whatever the host\'s separator (a Windows collector directory), for dsh and for OpenCode alike', () => {
+  const ctx = { os: 'win32', home: raw`C:\Users\u`, env: new Map(), running: [], collectorDir: raw`C:\Users\u\.asight\collector`, caPem: raw`C:\Users\u\.asight\collector\ca\asight-ca.pem`, readText: () => null, listDir: () => [] }
+  for (const h of ['deepseek-dsh', 'opencode']) {
+    const [plugin] = only(h)[0].win32.inject(ctx).owned
+    assert.match(plugin.data, /const CA_FILE = "C:\/Users\/u\/\.asight\/collector\/ca\/asight-ca\.pem"/, h)
+    assert.match(plugin.data, /const MARKER_DIR = "C:\/Users\/u\/\.asight\/collector\/run\/trust"/, h)
+    assert.ok(!/\\\\/.test(plugin.data.split('\n').filter((l) => /^const (CA_FILE|MARKER_DIR)/.test(l)).join('\n')), `${h}: no backslash in the two literals`)
+  }
+})
+
+test('W19 + W23: all seven harnesses installed together — only the automatic files change, every file an opt-in item owns stays byte for byte, and off puts everything back', async () => {
+  const b = box()
+  const owned = [ // what a user has and an opt-in item would change: nothing here may move
+    b.put('.kimi-code/bin/kimi.exe', 'MZ'), b.put('AppData/Roaming/Code/User/settings.json', '{"http.proxy": "http://corp:3128"}\n'), b.put('.zcode/v2/setting.json', '{"httpProxy": ""}\n'),
+    b.put('AppData/Roaming/Microsoft/Windows/Start Menu/Programs/OpenCode.lnk', 'LNK'), b.put('AppData/Local/Programs/@opencode-aidesktop/OpenCode.exe', 'MZ'),
+  ]
+  const user = [b.put('.claude/settings.json', '{"env": {}}\n'), b.put('.codex/.env', 'K=1\n'), b.put('.zcode/cli/config.json', '{}\n'), b.put('.dsh/cordis.patch.yml', '- insert: [{ name: p }]\n'), b.put('.dsh/.env', 'K=1\n'), b.put('AppData/Local/hermes/.env', 'K=1\n')]
+  const before = b.snapshot()
+  const all = ALL
+  await install(b, { harnesses: all })
+  const changed = [...b.snapshot()].filter(([f, h]) => before.get(f) !== h).map(([f]) => f)
+  const planned = readManifest(b.dir).planned.filter((p) => !p.startsWith(b.dir))
+  assert.deepEqual(changed.sort(), [user[0], user[1], user[2], user[3], user[5], path.join(b.home, '.dsh', 'asight-ca.mjs'), path.join(b.home, '.config', 'opencode', 'plugins', 'asight-ca.js')].sort(), 'the trust entries and the two plugins; .dsh/.env waits for the proxy entry (Task 8)')
+  assert.deepEqual([...planned].sort(), changed.sort(), 'the manifest lists exactly what changed')
+  for (const f of owned) assert.equal(b.snapshot().get(f), before.get(f), `${path.relative(b.home, f)} is untouched`)
+  await uninstall(b, all)
+  assert.deepEqual([...b.snapshot()], [...before])
+})

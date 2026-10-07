@@ -37,6 +37,23 @@ const EXPECT = {
     },
     unknown: [raw`D:\tools\codex.exe`],
   },
+  'opencode': {
+    groups: { 'opencode.cli': ['opencode.cli'], 'opencode.desktop': ['opencode.desktop'] },
+    forms: {
+      // opencode.exe and OpenCode.exe are one image name to Windows: the path alone tells the CLI (npm) from the desktop app
+      'opencode.cli': { nameRule: false, optIn: true, yes: [`${U}\\AppData\\Roaming\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe`] },
+      'opencode.desktop': { nameRule: false, optIn: true, yes: [`${U}\\AppData\\Local\\Programs\\@opencode-aidesktop\\OpenCode.exe`] },
+    },
+    unknown: [raw`D:\tools\opencode.exe`],
+  },
+  'deepseek-dsh': {
+    groups: { 'deepseek-dsh.env': ['deepseek-dsh.cli', 'deepseek-dsh.desktop'] },
+    forms: {
+      'deepseek-dsh.cli': { nameRule: false, yes: [{ exe: raw`C:\Program Files\nodejs\node.exe`, cmdline: raw`"C:\Program Files\nodejs\node.exe" C:\Users\u\AppData\Roaming\npm\node_modules\@deepseek-ai\dsh\lib\bin.js` }] },
+      'deepseek-dsh.desktop': { nameRule: true, yes: [`${U}\\AppData\\Local\\Programs\\DeepSeek Harness\\DeepSeek Harness.exe`] },
+    },
+    unknown: [raw`D:\apps\DeepSeek Harness.exe`],
+  },
   'hermes': {
     groups: { 'hermes.cli': ['hermes.cli'] },
     forms: {
@@ -82,6 +99,13 @@ export function lintPattern(p) {
   if (depth !== 0) bad.push('unbalanced (')
   return bad
 }
+
+test('all seven harnesses have Windows data, and the table above covers every one of them', () => {
+  const seven = ['claude-code', 'codex', 'deepseek-dsh', 'hermes', 'kimi-code', 'opencode', 'z-code']
+  assert.deepEqual(Object.keys(WIN).sort(), seven)
+  assert.deepEqual(Object.keys(EXPECT).sort(), seven)
+  assert.equal(formsOf().length, 16, 'the 16 forms of 4.8 §2.3 (hermes.desktop among them, unmeasured)')
+})
 
 test('the pattern lint accepts the subset and rejects what JavaScript and .NET read differently, so the real data passing it means something', () => {
   for (const ok of [raw`\\bin\\claude\.exe`, raw`\\Claude_[^\\]*\\app`, raw`\\a(b|c)\\.*x`, raw`@scope\\tool`]) assert.deepEqual(lintPattern(ok), [], ok)
@@ -206,6 +230,10 @@ test('W3: Code.exe is only the Kimi extension, node.exe and python.exe are never
   assert.deepEqual(matchForm(forms, { exe, cmdline: 'node.exe build.js', cmdlineState: 'ok' }), { kind: 'none' })
   assert.deepEqual(matchForm(forms, { exe, cmdline: null, cmdlineState: 'empty' }), { kind: 'none' })
   for (const exe2 of [raw`C:\Python312\python.exe`, raw`C:\Program Files\Microsoft VS Code Insiders\Code - Insiders.exe`, raw`D:\portable\Code.exe`]) assert.deepEqual(matchForm(forms, { exe: exe2, cmdline: null, cmdlineState: 'not-asked' }), { kind: 'none' }, exe2)
+})
+
+test('W3: only the dsh CLI has no process rule in the kernel (node.exe is every Node program: the engine judges it by pid on its port, 4.8 §3.5); every other supported form has one', () => {
+  assert.deepEqual(formsOf().filter((f) => f.supported === true && !f.processRules).map((f) => f.id), ['deepseek-dsh.cli'])
 })
 
 test('W3: the ZCode forms match the whole image and carry no hosts; only the Kimi extension has a host set, and its settings reader finds the base URLs in a config.toml', () => {
