@@ -441,14 +441,14 @@ const RUN_PATH = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
 const REG_OUT = (kind, data) => `\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\n    asight-collector    ${kind}    ${data}\n`
 const COMMAND = `conhost.exe --headless "${NODE}" "${SCRIPT}" daemon --supervise`
 /** A registry that a fake `reg` reads and writes: the one Run value of ours (null = absent). `add` and `delete` are recorded as they come. */
-function fakeRegistry(initial = null, { addFails = false, deleteFails = false, dropWrites = false } = {}) {
+function fakeRegistry(initial = null, { addFails = false, deleteFails = false, dropWrites = false, storeAs = null } = {}) {
   const reg = { value: initial }
   const run = fakeTools({
     'schtasks /Create': { status: 1, stderr: 'ERROR: Access is denied.' },
     'schtasks /Query': { status: 1 },
     reg: (file, args) => {
       if (args[0] === 'query') return reg.value ? { status: 0, stdout: REG_OUT(reg.value.kind, reg.value.value) } : { status: 1, stderr: 'ERROR: The system was unable to find the specified registry key or value.' }
-      if (args[0] === 'add') { if (addFails) return { status: 1, stderr: 'ERROR: Access is denied.' }; if (!dropWrites) reg.value = { kind: args[args.indexOf('/t') + 1], value: args[args.indexOf('/d') + 1] }; return { status: 0, stdout: 'The operation completed successfully.' } }
+      if (args[0] === 'add') { if (addFails) return { status: 1, stderr: 'ERROR: Access is denied.' }; if (!dropWrites) reg.value = { kind: args[args.indexOf('/t') + 1], value: storeAs ? storeAs(args[args.indexOf('/d') + 1]) : args[args.indexOf('/d') + 1] }; return { status: 0, stdout: 'The operation completed successfully.' } }
       if (args[0] === 'delete') { if (deleteFails) return { status: 1, stderr: 'ERROR: Access is denied.' }; reg.value = null; return { status: 0 } }
       return { status: 1 }
     },
@@ -526,6 +526,25 @@ test('W24 a fallback that did not take is a failure with both reasons: reg add r
   const b = installed(userUnit({ ...withHome(), run: fakeRegistry(null, { dropWrites: true }) })).enable({ now: false })
   assert.notEqual(b.code, 0)
   assert.match(b.err, /read back|did not take/)
+  assert.ok(b.ledger, 'a write that read back as absent is still ledgered: the undo is idempotent, and the entry says what was tried')
+  assert.equal(b.ledger.value, COMMAND)
+  // a value that is there but not the one written is a failure too (a read-back that only asks "is something there" would pass it)
+  const skewReg = fakeRegistry(null, { storeAs: (v) => `${v} --other` })
+  const skew = installed(userUnit({ ...withHome(), run: skewReg })).enable({ now: false })
+  assert.notEqual(skew.code, 0)
+  assert.match(skew.err, /did not take/)
+  assert.match(skew.err, /--other/, 'it says what the registry holds instead')
+  assert.deepEqual(skew.ledger, { kind: 'run-key', hive: 'HKCU', key: RUN_KEY.key, name: 'asight-collector', value: COMMAND, prior: null }, 'ledgered all the same')
+  assert.equal(skew.event.code, 'task-register-failed')
+  const direct = runKeyFallback({ command: COMMAND, run: fakeRegistry(null, { storeAs: (v) => `${v} --other` }) })
+  assert.deepEqual([direct.ok, typeof direct.entry, direct.reason.includes('did not take')], [false, 'object', true], 'runKeyFallback itself: not ok, entry for the ledger, the reason')
+  // what is ledgered undoes, by the same rule as any undo: a value that is not asight's by its tail is left (`--other` is somebody's); one that is (here only differently spelled) is taken out
+  assert.deepEqual([userUnit({ ...withHome(), run: skewReg }).disable({ prior: skew.ledger.prior }).runKey, skewReg.reg.value.value], ['left', `${COMMAND} --other`])
+  const spelledReg = fakeRegistry(null, { storeAs: (v) => v.replace('conhost.exe', 'CONHOST.EXE') })
+  const spelled = installed(userUnit({ ...withHome(), run: spelledReg })).enable({ now: false })
+  assert.notEqual(spelled.code, 0, 'a read-back that is not byte for byte what was written is a failure')
+  assert.equal(spelled.ledger.prior, null)
+  assert.deepEqual([userUnit({ ...withHome(), run: spelledReg }).disable({ prior: spelled.ledger.prior }).runKey, spelledReg.reg.value], ['removed', null], 'and the entry it handed back undoes it')
   const c = installed(userUnit({ ...withHome(), run: fakeRegistry(), spawn: () => ({ pid: undefined, unref() {}, on() {} }) })).enable({ now: true })
   assert.notEqual(c.code, 0, 'the entry is written but nothing runs now: that is not a success')
   assert.match(c.err, /did not start/)
@@ -621,6 +640,14 @@ test('W24 exactly one login mechanism is live: enable by the task takes asight\'
   assert.match(i.warn, /\/Query/, 'a task that cannot be looked up is said, not assumed gone')
 })
 
+test('W24 which Run value is asight\'s is decided by its tail: the supervised daemon command at the end of the value (blanks after it do not matter); the same words with something after them, or glued to another word, are somebody else\'s and are left', () => {
+  for (const [value, runKey] of [[COMMAND, 'removed'], [`${COMMAND}   `, 'removed'], [`"C:\\Other\\launcher.exe" node asight daemon --supervise`, 'removed'], [`${COMMAND} --extra`, 'left'], [`${COMMAND} && del x`, 'left'], ['mydaemon --supervise', 'left'], ['"C:\\Tools\\mine.exe" --daemon --supervise-all', 'left'], ['daemon', 'left']]) {
+    const r = fakeRegistry({ kind: 'REG_SZ', value })
+    assert.equal(removeRunValue({ run: r }).runKey, runKey, JSON.stringify(value))
+    assert.equal(r.reg.value === null, runKey === 'removed', `${JSON.stringify(value)}: ${runKey === 'removed' ? 'deleted' : 'still there'}`)
+  }
+})
+
 test('W24 daemonCommandLine is the task\'s action as one line, and removeRunValue is the same undo the unit uses', () => {
   assert.equal(daemonCommandLine({ node: NODE, asight: SCRIPT }), COMMAND)
   assert.equal(daemonCommandLine({ node: NODE, asight: SCRIPT, conhost: 'C:\\Windows\\System32\\conhost.exe' }), `C:\\Windows\\System32\\conhost.exe --headless "${NODE}" "${SCRIPT}" daemon --supervise`)
@@ -638,7 +665,7 @@ const within = (promise, what, ms = 3000) => Promise.race([promise, new Promise(
 const clock = (t = 1_700_000_000_000) => ({ now: () => t, advance: (ms) => { t += ms } })
 /**
  * Scripted children. `script[i]` says how the i-th child ends: `{ code }` / `{ signal }` (default: exit 0), `ranMs` (how long it ran: the clock moves by it first), `hang: true` (it ends only when killed), `throws` (the spawn itself throws
- * that errno), `error` (the child emits 'error' and never exits). The recorder keeps every spawn and every kill.
+ * that errno), `error` (the child emits 'error' and never exits, and has no pid: a spawn that failed), `errorWithPid` (the child is running, emits 'error' (a kill or a message that failed), and then exits as `code` / `signal` says). The recorder keeps every spawn and every kill.
  */
 function fakeSpawner(script, clk) {
   const spawns = []
@@ -652,6 +679,7 @@ function fakeSpawner(script, clk) {
     child.kill = (sig = 'SIGTERM') => { kills.push([child.pid, sig]); setImmediate(() => finish(null, sig)); return true }
     spawns.push({ cmd, args, opts, child })
     if (step.error) setImmediate(() => child.emit('error', Object.assign(new Error(`child ${step.error}`), { code: step.error })))
+    else if (step.errorWithPid) { setImmediate(() => child.emit('error', Object.assign(new Error(`child ${step.errorWithPid}`), { code: step.errorWithPid }))); setTimeout(() => finish(step.code ?? null, step.signal ?? null), 10) }
     else if (!step.hang) setImmediate(() => { clk.advance(step.ranMs ?? 0); finish(step.code ?? null, step.signal ?? null) })
     return child
   }
@@ -760,6 +788,17 @@ test('W24 a daemon that cannot even be started is a failure to back off from, sa
   assert.ok(w.logs.some((l) => /ENOENT/.test(l)))
   assert.ok(w.logs.some((l) => /EACCES/.test(l)))
   assert.ok(w.logs.some((l) => /restart/.test(l) && /1 s/.test(l)), 'each restart is said, with the wait')
+})
+
+test('W24 an error of a child that is running (it has a pid: a kill that failed, a message that could not be sent) is not an exit: the supervisor waits for the exit and does not start a second daemon beside it', async () => {
+  const w = supervise({ script: [{ errorWithPid: 'EPERM', code: 0 }, { code: 0 }] })
+  assert.equal(await within(w.sup.done, 'the supervisor'), 0)
+  assert.equal(w.spawn.spawns.length, 1, 'one daemon: the one that was running when the error came; its exit 0 is the stop')
+  assert.deepEqual(w.sleep.delays, [], 'and nothing was restarted or waited for')
+  assert.ok(w.logs.some((l) => /EPERM/.test(l) && /5000/.test(l)), 'the error is said, with the pid')
+  const crash = supervise({ script: [{ errorWithPid: 'EPERM', code: 1 }, { code: 0 }] })
+  assert.equal(await within(crash.sup.done, 'the supervisor'), 0)
+  assert.deepEqual([crash.spawn.spawns.length, crash.sleep.delays], [2, [1000]], 'when it then dies with 1 it is the exit that restarts, once')
 })
 
 test('W24 a lock that cannot be written does not stop the supervision: it is said in the log, and the daemon is still brought back', async () => {
