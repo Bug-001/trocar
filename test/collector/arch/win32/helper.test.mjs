@@ -34,6 +34,8 @@ function started(t, fixture, opts = {}) {
 const until = async (fn, ms = 3000) => { const end = Date.now() + ms; for (;;) { const v = fn(); if (v) return v; if (Date.now() > end) throw new Error('until: timed out'); await new Promise((r) => setTimeout(r, 10)) } }
 const lines = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [])
 const rejects = (p, code) => assert.rejects(p, (e) => { assert.equal(e.code, code, e.message); return true })
+/** Is the process still there? signal 0 only asks (ESRCH = gone; EPERM = there, not ours to signal). */
+const alive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code !== 'ESRCH' } }
 
 // ---------- W1: the helper is read-only, and its verb set is closed ----------
 
@@ -124,10 +126,12 @@ test('W1 the helper is ready before the first verb is written, and a call made a
 
 test('W1 a helper that speaks another protocol is a failed start, and says so', async (t) => {
   const h = started(t, { proto: 9 })
+  const pid = h.pid
   await assert.rejects(h.ready)
   assert.equal(h.failures.length, 1)
   assert.equal(h.failures[0].code, 'helper-start-failed')
   assert.match(h.failures[0].reason, /protocol 9/)
+  await until(() => !alive(pid)) // a helper we gave up on does not linger: on Windows that is a powershell.exe nobody owns, its stdin open for as long as the daemon lives
 })
 
 // ---------- W1: a helper that dies is a rejection of every pending call, plus ONE helper-down; a start that fails is helper-start-failed ----------
@@ -213,9 +217,12 @@ test('W1 a helper that goes down by two routes at once (error, then close) is st
 
 test('W1 a helper that never says ready is killed and is helper-start-failed', async (t) => {
   const h = started(t, { hangBeforeReady: true }, { readyTimeoutMs: 100 })
+  const pid = h.pid
+  assert.ok(alive(pid), 'the fake is up and silent')
   await rejects(h.call('version'), 'helper-start-failed')
   assert.equal(h.failures.length, 1)
   assert.match(h.failures[0].reason, /not ready within 100 ms/)
+  await until(() => !alive(pid)) // killed, not just forgotten
 })
 
 test('W1 close() is not a failure: no helper-down, the child is gone, later calls are refused', async (t) => {
@@ -558,6 +565,22 @@ test('W4 a table that cannot be read is null and one socktable-unavailable (a re
   const failures = []
   await ownerOf({ helper: { call: async () => ({ nonsense: true }) }, hop: HOP, candidates: [10, 11], onFailure: (f) => failures.push(f) })
   assert.equal(failures.length, 1, 'an answer with no rows is an unreadable table, not an empty one')
+})
+
+test('W4 a lookup in flight when the helper is closed is null and NOT a failure: an operator\'s stop (off, stop) is not an unreadable table', async (t) => {
+  const failures = []
+  const h = started(t, { verbs: { 'tcp-table': { delayMs: 300, data: { rows: [trow(10, 7897)] } } } })
+  await h.ready
+  const asked = ownerOf({ helper: h, hop: HOP, candidates: [10, 11], budgetMs: 2000, onFailure: (f) => failures.push(f) })
+  await new Promise((r) => setTimeout(r, 20))
+  await h.close()
+  const r = await asked
+  assert.deepEqual({ pid: r.pid, source: r.source }, { pid: null, source: null })
+  assert.deepEqual(failures, [], 'helper-closed is the daemon stopping its own helper')
+  // the helper being closed before the question is asked is the same
+  assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [10, 11], onFailure: (f) => failures.push(f) })).pid, null)
+  assert.deepEqual(failures, [])
+  // while a helper that DIED under the question is still a failure (W4's unreadable case, above)
 })
 
 test('W4 through the real client and the fake helper: the verb filters, the answer is the same; a failing verb is the failure record', async (t) => {

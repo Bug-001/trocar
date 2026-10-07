@@ -13,7 +13,8 @@ const OVER = Symbol('over budget')
  *  source = 'single-process' (one candidate: no table read) · 'socket-table' · null (pid null). `ms` is what the question cost; a table that is
  *  not back inside the budget gives null with ms ≥ budgetMs and is not a failure (it is slow, not unavailable; the call is not waited for).
  *  A table that cannot be read at all — the helper is down, the native code is blocked, the answer is not a table — gives null and ONE
- *  `socktable-unavailable` failure record per call (4.8 §12) to `onFailure`; the recorder folds repeats. `hop.address`, when the caller knows
+ *  `socktable-unavailable` failure record per call (4.8 §12) to `onFailure`; the recorder folds repeats. A helper the daemon closed itself
+ *  (`helper-closed`: a lookup in flight when `off` or a stop closed it) is null and no record: an operator's close is not a failure. `hop.address`, when the caller knows
  *  it, narrows the rows to that remote address; without it the remote port alone decides (the real owner's row is always in the table, so a
  *  stray row can only make the answer ambiguous, never wrong). The helper is asked for the candidates' rows only, and the answer is filtered
  *  again here, so a helper that ignores the filter changes nothing. */
@@ -32,6 +33,7 @@ export async function ownerOf({ helper, hop, candidates, budgetMs = 250, now = D
   let answer
   try { answer = await Promise.race([asked, over]) } catch (e) {
     if (e && e.code === 'helper-timeout') answer = OVER
+    else if (e && e.code === 'helper-closed') return none() // the daemon stopped its own helper (off, stop): not an unreadable table, nothing to record
     else return unavailable(e && e.message ? e.message : String(e))
   } finally { clearTimeout(timer) }
   if (answer === OVER) return none(Math.max(budgetMs, now() - t0))
