@@ -1203,7 +1203,8 @@ test('daemon: an unwatch the helper cannot do is a tracker failure and /off says
     assert.deepEqual([retry.unwatched, retry.confirmed, Object.keys(await watched(clients[0]))], [[4545], true, ['4242']])
     // the CLI writes claude-code off; nothing beats (autoHeartbeatMs 0), so only the check can see it
     rewriteState(s, (st) => { st.harnesses['claude-code'].desired = 'off' })
-    const st = await until(async () => { const x = await req(s.sock, 'GET', '/status'); return x.harnesses['claude-code'].desired === 'off' && x })
+    // the check reads the file (desired turns off), then takes the table, then the links: `actual` is the last of them, so it is what says the check is done
+    const st = await until(async () => { const x = await req(s.sock, 'GET', '/status'); return x.harnesses['claude-code'].desired === 'off' && x.actual === 'off' && x })
     assert.deepEqual([st.desired, st.actual, st.links, st.agents.map((a) => !!a.off), await watched(clients[0])], ['off', 'off', [], [true, true], {}], 'taken away by the check: the table, then the links')
   } finally { await d.stop(); p.done(); s.done() }
 })
