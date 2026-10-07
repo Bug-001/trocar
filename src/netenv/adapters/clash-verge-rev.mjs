@@ -13,7 +13,7 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { createController, discover as discoverController, maskEndpoint } from '../mihomo/controller.mjs'
-import { names, probeUrl, SCRIPT_SENTINEL, scanScript } from '../mihomo/rules.mjs'
+import { names, probeUrl, SCRIPT_SENTINEL, scanScript, insertScriptBlock, stripScriptBlock as stripScriptText } from '../mihomo/rules.mjs'
 import { topKey, topBool, topInt } from '../mihomo/yaml-top.mjs'
 
 export { discoverController as discover }
@@ -201,6 +201,79 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     return { ok: true, rules: out, reason: null }
   }
 
+  // ---- the named writes (4.7 §3.4): each one recorded in the ledger, the file kinds backed up first (R2) ----------------------------------------------------------------------------
+  const need = () => { if (!ledger) throw new TypeError('a write needs the ledger: asight records every change it makes to a VPN (4.7 §4, 1.6 R1)'); return ledger }
+  const bytesOf = (text) => Buffer.from(text, 'latin1')
+  const stamp = () => now().toISOString()
+  const scriptPath = () => path.join(P.profilesDir, scriptFileOf(rd(P.profiles).text) ?? 'Script.js')
+  const RETRY = new Set(['EPERM', 'EBUSY', 'EACCES']) // Windows: an indexer or a virus scanner holds the file for a moment
+
+  // a temp file next to it, then a rename: a reader (Verge, the core) never sees half a file
+  async function writeAtomic(file, data, enc) {
+    const tmp = `${file}.asight-tmp-${process.pid}`
+    let mode = 0o644
+    try { mode = fs.statSync(file).mode & 0o777 } catch { /* a new file */ }
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      fs.writeFileSync(tmp, data, { encoding: enc, mode })
+      for (let attempt = 1; ; attempt++) {
+        try { fs.renameSync(tmp, file); return null } catch (e) { if (attempt >= 3 || !RETRY.has(e && e.code)) throw e; await new Promise((r) => setTimeout(r, 40)) }
+      }
+    } catch (e) {
+      try { fs.rmSync(tmp, { force: true }) } catch { /* the failure that matters is e */ }
+      return (e && e.code) || 'error'
+    }
+  }
+  const backupOf = (led, file, data) => { try { return { path: led.backup(file, data) } } catch (e) { return { failed: { ok: false, code: 'backup-failed', reason: `no backup could be written, so ${path.basename(file)} was left as it was (${(e && e.code) || 'error'})`, changed: false } } } }
+
+  /**
+   * Put the block (the text buildScriptJs() made) into the global script: after one line end, the sentinel lines around it, nothing else of the file touched (D28). Never creates the script; a script whose sentinel
+   * lines were damaged is not touched (ok:false, reason 'sentinel-damaged'); the backup (R2) is the file as it was before asight's first change, kept as long as the user has changed nothing else.
+   * → { ok, changed, receipt, entry } | { ok: false, reason | code, changed: false }. The script is read and written as latin1: every byte, whatever the user's encoding, comes back as it was.
+   */
+  async function writeScriptBlock({ blockText }) {
+    const led = need()
+    const file = scriptPath()
+    const cur = rd(file, 'latin1')
+    if (cur.text === null) return { ok: false, reason: 'script-missing', detail: cur.error, changed: false }
+    const ins = insertScriptBlock(cur.text, blockText)
+    if (!ins.ok) return { ok: false, reason: 'sentinel-damaged', detail: ins.reason, changed: false }
+    const was = led.find('vpn-script-block', file)
+    const without = sha256(bytesOf(stripScriptText(cur.text).text)) // the file as the user left it, our block aside
+    if (ins.text === cur.text && was) return { ok: true, changed: false, receipt: null, entry: was }
+    let backup = was && was.pre_sha256 === without ? was.backup : null // the first backup still stands while nothing outside the block changed
+    if (backup === null) { const b = backupOf(led, file, bytesOf(cur.text)); if (b.failed) return b.failed; backup = b.path }
+    if (ins.text !== cur.text) { const code = await writeAtomic(file, bytesOf(ins.text), null); if (code) return { ok: false, code, reason: `${path.basename(file)} could not be written (${code})`, changed: false } }
+    const entry = { kind: 'vpn-script-block', key: file, path: file, existed_before: true, pre_sha256: without, post_sha256: sha256(bytesOf(ins.text)), backup, block_sha256: sha256(scanScript(ins.text).blocks[0].text), sentinel: SCRIPT_SENTINEL.begin, installed_at: stamp(),
+      undo_by_hand: `edit ${file}: delete the lines from "${SCRIPT_SENTINEL.begin}" to "${SCRIPT_SENTINEL.end}", and the line break just before them` }
+    led.record(entry)
+    if (was && was.backup && was.backup !== backup) led.dropBackup(was.backup) // the user changed something else since: the new backup is the file as it is now
+    return { ok: true, changed: ins.text !== cur.text, receipt: { kind: entry.kind, key: file, change: was ? 'replaced' : 'inserted', backup }, entry }
+  }
+
+  /**
+   * Take the block out (D28: only the block, and the line break in front of it). → { ok, changed, identical, receipt } with `identical`: the file is as it was before asight (the ledger's pre_sha256): true / false
+   * (the user changed something else too: 「已撤销,但不逐字节相同」, the pre-strip backup is kept) / null (no ledger entry to compare with). A damaged sentinel: ok:false, the file is not touched.
+   */
+  async function stripScriptBlock() {
+    const led = need()
+    const file = scriptPath()
+    const was = led.find('vpn-script-block', file)
+    const cur = rd(file, 'latin1')
+    if (cur.text === null) { led.forget('vpn-script-block', file); return { ok: true, changed: false, identical: null, receipt: null, reason: 'script-missing' } }
+    const out = stripScriptText(cur.text)
+    if (!out.ok) return { ok: false, reason: 'sentinel-damaged', detail: out.reason, changed: false, backup: was ? was.backup : null }
+    if (out.removed === 0) { led.forget('vpn-script-block', file); return { ok: true, changed: false, identical: null, receipt: null } }
+    const b = backupOf(led, file, bytesOf(cur.text))
+    if (b.failed) return b.failed
+    const code = await writeAtomic(file, bytesOf(out.text), null)
+    if (code) { led.dropBackup(b.path); return { ok: false, code, reason: `${path.basename(file)} could not be written (${code})`, changed: false } }
+    const identical = was ? sha256(bytesOf(out.text)) === was.pre_sha256 : null
+    if (identical === true) { led.dropBackup(b.path); if (was.backup) led.dropBackup(was.backup) } else { led.keepBackup({ path: file, backup: b.path, reason: identical === false ? 'edited-after' : 'no-manifest', at: stamp() }); if (was && was.backup && was.backup !== b.path) led.dropBackup(was.backup) }
+    led.forget('vpn-script-block', file)
+    return { ok: true, changed: true, identical, receipt: { kind: 'vpn-script-block', key: file, change: 'removed', backup: identical === true ? null : b.path } }
+  }
+
   /** What the probe (src/netenv/probe.mjs detect) is given about Verge: the file fields, the runtime's few fields, how the controller was found (masked), and whether it is running. */
   async function facts() {
     const fields = await readFields()
@@ -215,5 +288,5 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     }
   }
 
-  return { home, paths: P, readFields, readConfigs, readFindProcessMode, verify, refreshProbe, processRulesNaming, facts, controllerInfo, reset: () => { found = null }, sentinel: SCRIPT_SENTINEL }
+  return { home, paths: P, readFields, readConfigs, readFindProcessMode, verify, refreshProbe, processRulesNaming, facts, controllerInfo, writeScriptBlock, stripScriptBlock, reset: () => { found = null }, sentinel: SCRIPT_SENTINEL }
 }

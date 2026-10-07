@@ -5,10 +5,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import path from 'node:path'
 import { discover, maskEndpoint } from '../../src/netenv/mihomo/controller.mjs'
+import { createVergeAdapter } from '../../src/netenv/adapters/clash-verge-rev.mjs'
 import { stubHelper, vergeProcs, proc, SESSION, VERGE_DIR } from './fixtures/win-facts.mjs'
-import { startWorld, snapshot, LEAKS, USER_PROVIDER, USER_GROUP, USER_DOMAIN, NODE, VERGE_YAML, PROFILES_YAML, SCRIPT_JS, userRuntime, GROUPS } from './fixtures/verge-world.mjs'
-import { names, buildScriptJs, insertScriptBlock, scanScript } from '../../src/netenv/mihomo/rules.mjs'
+import { startWorld, snapshot, sha, LEAKS, USER_PROVIDER, USER_GROUP, USER_DOMAIN, NODE, VERGE_YAML, PROFILES_YAML, SCRIPT_JS, userRuntime, GROUPS } from './fixtures/verge-world.mjs'
+import { names, buildScriptJs, insertScriptBlock, stripScriptBlock, scanScript } from '../../src/netenv/mihomo/rules.mjs'
 
 // ---- N3 · N4: discovery ----------------------------------------------------------------------------------------------------------------------------------
 
@@ -301,4 +303,138 @@ test('facts() is what the probe is given: the §3.2 fields, the runtime\'s few, 
   await w.core.stop()
   const down = await w.adapter.facts()
   assert.deepEqual(down.runtime, { unknown: { reason: 'controller-unreadable' } })
+})
+
+// ---- N5: the sentinel block in the global script, and its backup ---------------------------------------------------------------------------------------------------------
+
+const blockTextOf = (w) => buildScriptJs({ block: w.block() })
+const SHAPES = {
+  'a plain file': SCRIPT_JS,
+  'CRLF line ends': Buffer.from(SCRIPT_JS.replace(/\n/g, '\r\n')),
+  'no final newline': Buffer.from(SCRIPT_JS.trimEnd()),
+  'a BOM and UTF-8 text': Buffer.from('﻿// 中文注释 · naïve\n' + SCRIPT_JS),
+  'bytes that are not UTF-8 at all': Buffer.concat([Buffer.from('// x\n'), Buffer.from([0xff, 0xfe, 0xc3, 0x28, 0x0a]), Buffer.from(SCRIPT_JS)]),
+  'an empty file': '',
+}
+test('N5 insert then strip: Script.js is byte for byte what it was, whatever its encoding, line ends or BOM; the backup is deleted once the file is verified back (D28, R2)', async (t) => {
+  for (const [what, content] of Object.entries(SHAPES)) {
+    const w = await startWorld(t, { script: content })
+    const file = w.file('profiles/Script.js')
+    const before = sha(file)
+    const put = await w.adapter.writeScriptBlock({ blockText: blockTextOf(w) })
+    assert.deepEqual([put.ok, put.changed, put.receipt.change], [true, true, 'inserted'], what)
+    assert.notEqual(sha(file), before)
+    assert.equal(scanScript(fs.readFileSync(file, 'latin1')).blocks.length, 1)
+    const entry = w.ledger.find('vpn-script-block', file)
+    assert.equal(entry.pre_sha256, before, `${what}: pre_sha256 is the file before asight`)
+    assert.equal(fs.readFileSync(entry.backup).equals(Buffer.from(content)), true, `${what}: the backup is the file as it was`)
+    const out = await w.adapter.stripScriptBlock()
+    assert.deepEqual([out.ok, out.changed, out.identical], [true, true, true], what)
+    assert.equal(sha(file), before, `${what}: byte for byte`)
+    assert.deepEqual([w.ledger.entries().length, w.ledger.backups().length, w.ledger.kept().length], [0, 0, 0], `${what}: verified back, so the backups go`)
+  }
+})
+
+test('N5 inserting twice is inserting once: no second write, no second backup, the ledger entry stays', async (t) => {
+  const w = await startWorld(t)
+  const file = w.file('profiles/Script.js')
+  const a = await w.adapter.writeScriptBlock({ blockText: blockTextOf(w) })
+  const once = fs.readFileSync(file)
+  const b = await w.adapter.writeScriptBlock({ blockText: blockTextOf(w) })
+  assert.deepEqual([b.ok, b.changed, b.receipt], [true, false, null])
+  assert.equal(fs.readFileSync(file).equals(once), true)
+  assert.deepEqual([w.ledger.entries().length, w.ledger.backups().length], [1, 1])
+  assert.equal(b.entry.backup, a.entry.backup)
+})
+
+test('N5 a line the user wrote outside the block is still there after the strip; the result is reported as not identical and the backup is kept (D28, R2)', async (t) => {
+  const w = await startWorld(t)
+  const file = w.file('profiles/Script.js')
+  await w.adapter.writeScriptBlock({ blockText: blockTextOf(w) })
+  fs.appendFileSync(file, "\nconsole.log('mine');\n")
+  const wrote = fs.readFileSync(file, 'utf8')
+  const out = await w.adapter.stripScriptBlock()
+  assert.deepEqual([out.ok, out.changed, out.identical], [true, true, false])
+  const after = fs.readFileSync(file, 'utf8')
+  assert.ok(after.includes("console.log('mine');") && !after.includes('asight') && after.startsWith(SCRIPT_JS))
+  const kept = w.ledger.kept()
+  assert.deepEqual(kept.map((k) => [k.path, k.reason]), [[file, 'edited-after']])
+  assert.equal(fs.readFileSync(kept[0].backup, 'utf8'), wrote, 'the kept backup is the file as it was when asight changed it again')
+  assert.deepEqual([w.ledger.entries().length, w.ledger.backups().length], [0, 1], 'only the kept backup is left')
+  assert.equal(out.receipt.backup, kept[0].backup)
+})
+
+test('N5 a damaged sentinel is not guessed at: ok:false, the file and the ledger are not touched, no backup is made, for the insert and for the strip', async (t) => {
+  const w = await startWorld(t)
+  const file = w.file('profiles/Script.js')
+  await w.adapter.writeScriptBlock({ blockText: blockTextOf(w) })
+  fs.writeFileSync(file, fs.readFileSync(file, 'latin1').replace('// >>> asight collector (managed by asight on) >>>', '// >>> asight collector (managed by asight on) >>> '), 'latin1')
+  const before = [sha(file), w.ledger.entries().length, w.ledger.backups().length]
+  const ins = await w.adapter.writeScriptBlock({ blockText: blockTextOf(w) })
+  const str = await w.adapter.stripScriptBlock()
+  assert.deepEqual([ins.ok, ins.reason, ins.changed], [false, 'sentinel-damaged', false])
+  assert.deepEqual([str.ok, str.reason, str.changed], [false, 'sentinel-damaged', false])
+  assert.match(str.detail, /sentinel/)
+  assert.ok(str.backup, 'the backup from the insert is named, for the by-hand recovery')
+  assert.deepEqual([sha(file), w.ledger.entries().length, w.ledger.backups().length], before)
+})
+
+test('N5 a changed block keeps the first backup while the user changed nothing else; when they did, the next insert takes a fresh backup of the file as it is and the older one goes', async (t) => {
+  const w = await startWorld(t)
+  const file = w.file('profiles/Script.js')
+  const original = fs.readFileSync(file)
+  const small = buildScriptJs({ block: w.block([GROUPS[0]]) })
+  const a = await w.adapter.writeScriptBlock({ blockText: small })
+  const b = await w.adapter.writeScriptBlock({ blockText: blockTextOf(w) }) // another block text (a second group): the block is replaced
+  assert.deepEqual([b.changed, b.receipt.change, b.entry.backup === a.entry.backup, fs.readFileSync(b.entry.backup).equals(original), w.ledger.backups().length], [true, 'replaced', true, true, 1], 'the file outside the block is what it was: the first backup stands')
+  fs.writeFileSync(file, fs.readFileSync(file, 'latin1').replace('return config;', 'return config; // edited'), 'latin1')
+  const edited = fs.readFileSync(file)
+  const c = await w.adapter.writeScriptBlock({ blockText: small })
+  assert.deepEqual([c.changed, c.entry.backup === a.entry.backup, fs.readFileSync(c.entry.backup).equals(edited), w.ledger.backups()], [true, false, true, [c.entry.backup]], 'the user changed the file: a fresh backup of it as it is, and the older one is gone')
+  assert.equal(c.entry.pre_sha256, crypto.createHash('sha256').update(Buffer.from(stripScriptBlock(edited.toString('latin1')).text, 'latin1')).digest('hex'), 'pre_sha256 is the file as the user left it, the block aside')
+  const out = await w.adapter.stripScriptBlock()
+  assert.deepEqual([out.ok, out.identical, w.ledger.backups().length], [true, true, 0], 'what the strip gives back is the file as the user left it: identical to the entry, the backups go')
+  assert.ok(fs.readFileSync(file, 'utf8').includes('// edited'))
+})
+
+test('N5 backup-failed: the file is left byte for byte, no entry is recorded, for the insert and for the strip', async (t) => {
+  const w = await startWorld(t)
+  const file = w.file('profiles/Script.js')
+  const before = sha(file)
+  w.ledger.failBackups = true
+  assert.deepEqual(await w.adapter.writeScriptBlock({ blockText: blockTextOf(w) }), { ok: false, code: 'backup-failed', reason: 'no backup could be written, so Script.js was left as it was (EACCES)', changed: false })
+  assert.deepEqual([sha(file), w.ledger.entries().length], [before, 0])
+  w.ledger.failBackups = false
+  await w.adapter.writeScriptBlock({ blockText: blockTextOf(w) })
+  const withBlock = sha(file)
+  w.ledger.failBackups = true
+  const str = await w.adapter.stripScriptBlock()
+  assert.deepEqual([str.ok, str.code, str.changed], [false, 'backup-failed', false])
+  assert.equal(sha(file), withBlock)
+})
+
+test('N5 the script is never created: no Script.js means the block cannot be put anywhere', async (t) => {
+  const w = await startWorld(t, { script: null })
+  const r = await w.adapter.writeScriptBlock({ blockText: blockTextOf(w) })
+  assert.deepEqual([r.ok, r.reason, r.changed], [false, 'script-missing', false])
+  assert.equal(fs.existsSync(w.file('profiles/Script.js')), false)
+  assert.deepEqual(await w.adapter.stripScriptBlock(), { ok: true, changed: false, identical: null, receipt: null, reason: 'script-missing' })
+})
+
+test('the script is written through a temp file and a rename; a rename that fails for a moment (a virus scanner) is retried, one that keeps failing is a failure with its errno and leaves nothing behind', async (t) => {
+  const w = await startWorld(t)
+  const file = w.file('profiles/Script.js')
+  const before = sha(file)
+  let fails = 2
+  const flaky = { ...fs, renameSync: (a, b) => { if (fails-- > 0) throw Object.assign(new Error('busy'), { code: 'EBUSY' }); return fs.renameSync(a, b) } }
+  const mk = (fsImpl) => createVergeAdapter({ home: w.home, fs: fsImpl, controller: null, ledger: w.ledger })
+  assert.equal((await mk(flaky).writeScriptBlock({ blockText: blockTextOf(w) })).ok, true, 'two EBUSY, then it goes through')
+  await mk(fs).stripScriptBlock()
+  assert.equal(sha(file), before)
+  fails = 99
+  const r = await mk(flaky).writeScriptBlock({ blockText: blockTextOf(w) })
+  assert.deepEqual([r.ok, r.code, r.changed], [false, 'EBUSY', false])
+  assert.equal(sha(file), before)
+  assert.deepEqual(fs.readdirSync(w.file('profiles')), ['Script.js'], 'no temp file is left')
+  assert.equal(w.ledger.find('vpn-script-block', file), null)
 })

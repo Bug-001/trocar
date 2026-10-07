@@ -29,7 +29,7 @@ export const SCRIPT_JS = '// Define main function (script entry)\n\nfunction mai
 
 /** The runtime Verge writes, with the user's own things in it: a controller pipe and secret, a node and group and domain rule, a process rule for codex.exe. */
 export const userRuntime = (extraRules = []) => `external-controller-pipe: \\\\.\\pipe\\verge-mihomo-0123456789abcdef\nsecret: ${SECRET}\n${runtimeText()
-  .replace('- name: node-a', `- name: ${NODE}`).replace('- name: Manual', `- name: ${USER_GROUP}`)
+  .replace('https://example.invalid/ads.txt', SUB_URL).replace('- name: node-a', `- name: ${NODE}`).replace('- name: Manual', `- name: ${USER_GROUP}`)
   .replace('- DOMAIN-SUFFIX,example.com,Proxy', `- DOMAIN-SUFFIX,${USER_DOMAIN},${USER_GROUP}\n- PROCESS-NAME,codex.exe,${USER_GROUP}\n${extraRules.map((r) => `- ${r}`).join('\n')}${extraRules.length ? '\n' : ''}- DOMAIN-SUFFIX,example.com,Proxy`)}`
 
 export const GROUPS = [CC_CLI, CODEX_APP]
