@@ -55,6 +55,13 @@ export function undoByHand(e) {
   return `${where}: this item is of kind ${JSON.stringify(e.kind ?? null)}, which this build does not know; use the asight that wrote it ("asight off"), or look at ${where} and the manifest's entry for it`
 }
 
+/** The command that puts a file back as it was before asight, from the backup of it (R2), and what it costs; null when there is no backup (asight made the file). Plain `cp`: an
+ *  existing file keeps its own mode and owner, and the user chooses to run it — asight never writes a backup over a user's file by itself (D28). */
+export function restoreByHand(e) {
+  if (!e || typeof e.backup !== 'string' || e.backup === '') return null
+  return { backup: e.backup, command: `cp ${shellWord(e.backup)} ${shellWord(e.real_path || e.path)}`, loses: 'puts the whole file back as it was before asight, so every change made to it since is lost' }
+}
+
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 
 // every item has a kind and an undo_by_hand, every manifest the v2 top-level fields; what is there is never replaced

@@ -51,8 +51,8 @@ function blocksIn(t, root) {
   for (let i = 0; i < ls.length; i++) {
     if (!ls[i].line.startsWith(BLOCK_OPEN)) continue
     let j = i + 1
-    while (j < ls.length && ls[j].line !== BLOCK_CLOSE && /^[A-Za-z_]\w*=/.test(ls[j].line) && under(ls[j].line.slice(ls[j].line.indexOf('=') + 1), root)) j++
-    out.push({ from: ls[i].at, to: j < ls.length && ls[j].line === BLOCK_CLOSE ? ls[j].next : (ls[j - 1] || ls[i]).next })
+    while (j < ls.length && ls[j].line.trimEnd() !== BLOCK_CLOSE && /^[A-Za-z_]\w*=/.test(ls[j].line) && under(ls[j].line.slice(ls[j].line.indexOf('=') + 1).trimEnd(), root)) j++ // trimEnd: a CRLF file's lines end in \r
+    out.push({ from: ls[i].at, to: j < ls.length && ls[j].line.trimEnd() === BLOCK_CLOSE ? ls[j].next : (ls[j - 1] || ls[i]).next })
     i = j
   }
   return out

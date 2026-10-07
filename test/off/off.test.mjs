@@ -492,3 +492,35 @@ test('R12: while `on` holds the op lock (it waits for its daemon to come up) an 
   assert.equal(off.exit, 0, JSON.stringify(off.receipt.problems))
   assert.ok(!fs.readFileSync(settings, 'utf8').includes('NODE_EXTRA_CA_CERTS'), 'and then the entry is out')
 })
+
+// The audit's HIGH finding (semantics 1), through the real `on` and the real `off`: Codex and Hermes read ONE trust bundle through their .env (4.6 §身份与信任, "replace"
+// semantics). A .env that still names `combined-<h>.pem` when the file is gone leaves the agent with no CA at all — it cannot reach its real upstream either.
+for (const [harness, rel] of [['codex', '.codex/.env'], ['hermes', '.hermes/.env']]) {
+  test(`V15 (semantics 1): on, then the user's editor makes ${rel} CRLF, then off — the entry is undone, the bundle is removed with it, exit 0; an entry that survives (a form the removal cannot read) keeps the bundle, exit 1, nothing dangles`, async () => {
+    const s = await installedHome({ names: ['claude-code', harness] })
+    s.sys.daemon.state.up = false
+    const env = path.join(s.home, rel), bundle = path.join(s.dir, 'ca', `combined-${harness}.pem`)
+    assert.ok(fs.readFileSync(env, 'utf8').includes(bundle) && fs.existsSync(bundle), 'on wrote the entry and the bundle')
+    fs.writeFileSync(env, fs.readFileSync(env, 'utf8').replace(/\n/g, '\r\n'))
+    const r = await s.off()
+    assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
+    assert.deepEqual([fs.readFileSync(env, 'utf8').includes(`combined-${harness}.pem`), fs.existsSync(bundle)], [false, false], 'no entry names the bundle and the bundle is gone')
+    assert.deepEqual(r.receipt.changed.filter((c) => c.path === env).map((c) => c.result), ['reverted-not-identical'])
+    assert.ok(!r.receipt.skipped.some((x) => x.what === env), 'not "asight\'s text is no longer in this file"')
+    // the same on a form the removal does not read: the file is left as it is, the bundle is kept (stripped of the CA), the entry stays for the next run
+    const t = await installedHome({ names: ['claude-code', harness] })
+    t.sys.daemon.state.up = false
+    const env2 = path.join(t.home, rel), bundle2 = path.join(t.dir, 'ca', `combined-${harness}.pem`)
+    const odd = fs.readFileSync(env2, 'utf8').replace(/^(SSL_CERT_FILE=.*)$/m, '$1;')
+    fs.writeFileSync(env2, odd)
+    const q = await t.off()
+    assert.equal(q.exit, 1, 'an entry that is not undone is a not-done off (R3)')
+    assert.equal(fs.readFileSync(env2, 'utf8'), odd, 'the file is as the user left it')
+    assert.ok(fs.existsSync(bundle2), 'and the bundle it names is still there')
+    assert.deepEqual(q.receipt.left.filter((l) => l.result === 'left-text').map((l) => l.path), [env2])
+    assert.ok(q.receipt.left.find((l) => l.path === env2).restore.startsWith('cp '), 'with the command that puts the file back from the backup')
+    assert.deepEqual(t.manifest().entries.filter((e) => e.harness === harness).map((e) => e.path), [env2], 'the entry stays in the manifest')
+    assert.ok(flowEvents(t.dir).some((e) => e.event === 'failure' && e.code === 'entry-not-undone' && e.path === env2), 'and a failure event names it, in the closed set')
+    for (const line of flowEvents(t.dir)) assert.deepEqual(checkRecord(line), [], JSON.stringify(line))
+  })
+}

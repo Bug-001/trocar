@@ -9,7 +9,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { installCollector } from '../../src/collector/install.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
-import { readManifest } from '../../src/off/manifest.mjs'
+import { readManifest, restoreByHand } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { sha256 } from '../../src/off/fsutil.mjs'
 import { certBlocks, composeBundle } from '../../src/off/pem.mjs'
@@ -326,4 +326,91 @@ test('uninstall twice with a process still holding a kept bundle: the second run
   assert.deepEqual(edited.left.map((l) => [l.harness, l.result]), [['aa', 'error']])
   const gone = await s.run({ procs: async () => [], dropCa: true })
   assert.deepEqual([gone.kept_bundles, gone.left, files.some((f) => fs.existsSync(f))], [[], [], false], 'nobody holds them now: both go')
+})
+
+// The audit's HIGH finding (semantics 1): `off` deleted the bundle a .env still named, reporting success, because the removal read only the bytes asight wrote.
+// A dangling SSL_CERT_FILE replaces the agent's whole trust store with a file that is not there: an agent with no network at all (1.6 §1.1: the reason `off` removes entries).
+const NAMES = (s, n) => fs.readFileSync(s.user[n], 'utf8').includes(path.basename(s.b.ca('combined-aa.pem')))
+for (const [form, edit] of [
+  ['CRLF', (t) => t.replace(/\n/g, '\r\n')],
+  ['trailing blanks', (t) => t.replace(/\n/g, '  \n')],
+  ['indented', (t) => t.replace(/^(?=.)/gm, '\t')],
+  ['export prefix', (t) => t.replace(/^SSL_CERT_FILE=/m, 'export SSL_CERT_FILE=')],
+  ['spaces around =', (t) => t.replace(/^SSL_CERT_FILE=/m, 'SSL_CERT_FILE = ')],
+  ['quoted value', (t) => t.replace(/^SSL_CERT_FILE=(.*)$/m, 'SSL_CERT_FILE="$1"')],
+]) {
+  test(`a dotenv block an editor has rewritten (${form}) is still found: the entry is undone, not "already removed", and the bundle goes only with it — never an entry that names a bundle that is gone`, async () => {
+    const s = await setup((b) => [repH(b, 'aa'), repH(b, 'bb')])
+    fs.writeFileSync(s.user[0], edit(fs.readFileSync(s.user[0], 'utf8')))
+    const r = await s.run()
+    const row = r.results.find((x) => x.path === s.user[0])
+    assert.equal(row.result, 'reverted-not-identical', 'the asight text was found and taken out')
+    assert.deepEqual([r.left, NAMES(s, 0), fs.existsSync(s.b.ca('combined-aa.pem'))], [[], false, false], 'no entry left, none names the bundle, so the bundle is removed')
+    assert.equal(fs.readFileSync(s.user[0], 'utf8').replace(/\r/g, '').trim(), 'KEY_A=sk-a', 'the user\'s own line is all that is left')
+  })
+}
+
+test('asight\'s text in a shape the removal cannot read is NOT "already removed": the file is not touched, the entry is left (left-text, exit 1 through the receipt), and the bundle it names is kept without the CA, with the line numbers and the command that puts the file back from its backup (R2)', async () => {
+  const s = await setup((b) => [repH(b, 'aa'), repH(b, 'bb')])
+  const bundle = s.b.ca('combined-aa.pem')
+  const asightFp = certBlocks(fs.readFileSync(s.b.ca('asight-ca.pem'), 'utf8'))[0].fp
+  const m = readManifest(s.b.dir)
+  const backup = m.entries.find((e) => e.path === s.user[0]).backup
+  const edited = fs.readFileSync(s.user[0], 'utf8').replace(/^SSL_CERT_FILE=(.*)$/m, 'SSL_CERT_FILE=$1;') // a trailing `;`: not a form the removal reads
+  fs.writeFileSync(s.user[0], edited)
+  const r = await s.run({ manifest: m })
+  assert.equal(r.results.find((x) => x.path === s.user[0]).result, 'left-text')
+  assert.equal(fs.readFileSync(s.user[0], 'utf8'), edited, 'not one byte of the file was changed')
+  assert.deepEqual(r.left.filter((l) => l.result === 'left-text').map((l) => [l.path, l.harness]), [[s.user[0], 'aa']])
+  const l = r.left[0]
+  assert.match(l.reason, /still names asight's block with SSL_CERT_FILE=.* on line 2,/)
+  assert.equal(l.backup, backup)
+  assert.equal(l.restore, `cp ${backup} ${s.user[0]}`, 'the command that puts the file back as it was, from its backup')
+  assert.match(l.reason, /by hand: cp .* \(puts the whole file back as it was before asight, so every change made to it since is lost\)/)
+  assert.equal(fs.existsSync(backup), true, 'the backup stays')
+  assert.ok(fs.existsSync(bundle) && !fpsOf(bundle).includes(asightFp), 'the bundle is kept, without the asight CA: the .env still points at it')
+  assert.deepEqual(r.kept_bundles.map((k) => [k.path, k.entry_left]), [[bundle, [s.user[0]]]])
+  assert.deepEqual(r.manifest.entries.map((e) => e.path), [s.user[0]], 'the entry stays in the manifest, for the next run')
+  // fixed by hand: the next run undoes it and the bundle goes
+  fs.writeFileSync(s.user[0], edited.replace(`;\n`, '\n').replace(/^.*(?:asight collector).*\n/gm, '').replace(/^SSL_CERT_FILE=.*\n/m, ''))
+  const done = await s.run({ manifest: r.manifest })
+  assert.deepEqual([done.left, fs.existsSync(bundle)], [[], false])
+})
+
+test('before a bundle is removed the entry files of its harness are read again: an entry reported as the user\'s own value whose file still names the bundle (the key was moved) keeps it — without the CA, the entry put back among the ones left', async () => {
+  const repJson = (b, name) => ({
+    name, runtime: 'rust', signatures: { none: { match: [{ exe: new RegExp(`/${name}$`) }] } }, hosts: [], trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
+    inject: (ctx) => ({ entries: [{ kind: 'json-key', path: path.join(ctx.home, `.${name}`, 'settings.json'), keys: ['env', 'SSL_CERT_FILE'], value: b.ca(`combined-${name}.pem`), semantic: 'replace' }], files: [{ path: b.ca(`combined-${name}.pem`), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }] }),
+  })
+  const b = box()
+  write(b, 'corp.pem', CORP.certPem); write(b, '.jr/settings.json', '{\n  "model": "m"\n}\n')
+  await installCollector({ home: b.home, env: { HOME: b.home }, osName: 'none', harnesses: [repJson(b, 'jr')], freePort: async () => 47011, roots })
+  const file = path.join(b.home, '.jr', 'settings.json'), bundle = b.ca('combined-jr.pem')
+  const moved = JSON.stringify({ model: 'm', SSL_CERT_FILE: bundle, env: {} }, null, 2) + '\n' // the key is not where asight put it: its value there is "the user's"
+  fs.writeFileSync(file, moved)
+  const r = await undoHarnesses({ dir: b.dir, home: b.home, manifest: readManifest(b.dir), ids: null, procs: async () => [], roots })
+  assert.equal(r.results.find((x) => x.path === file).result, 'left-user-value', 'step 1 took the key for the user\'s')
+  assert.equal(fs.readFileSync(file, 'utf8'), moved)
+  assert.ok(fs.existsSync(bundle), 'the bundle is not taken away from under a file that names it')
+  assert.deepEqual(r.kept_bundles.map((k) => [k.path, k.entry_left]), [[bundle, [file]]])
+  assert.deepEqual(r.left.map((l) => [l.path, l.result]), [[file, 'left-text'], [bundle, 'error']].filter(([p]) => p === file || p === bundle))
+  assert.match(r.left[0].reason, /still names .*combined-jr\.pem, the bundle asight made for jr, though its entry was reported as undone/)
+  assert.deepEqual(r.manifest.entries.map((e) => e.path), [file], 'the entry is put back for the next run')
+})
+
+test('an entry that cannot be undone gives its backup and the cp command that puts the file back, and what that loses (R2) — in `reason` and as `backup` / `restore`; one without a backup (asight made the file) gives neither', async () => {
+  const s = await setup((b) => [repH(b, 'aa'), jsonH(b)])
+  const m = readManifest(s.b.dir)
+  const backup = m.entries.find((e) => e.path === s.user[2]).backup
+  fs.writeFileSync(s.user[2], fs.readFileSync(s.user[2], 'utf8') + ' trailing garbage')
+  const r = await s.run({ manifest: m })
+  const l = r.left.find((x) => x.path === s.user[2])
+  assert.deepEqual([l.result, l.backup, l.restore], ['left-unparsable', backup, `cp ${backup} ${s.user[2]}`])
+  assert.match(l.reason, new RegExp(`no longer valid JSON; asight's env\\.NODE_EXTRA_CA_CERTS.*kept at ${backup.replace(/[.\\]/g, '\\$&')}.*by hand: cp .*every change made to it since is lost`))
+  // a path with a space is quoted so the line can be pasted
+  const q = restoreByHand({ backup: '/h/.asight/backup/x y', path: "/h/it's here/settings.json" })
+  assert.equal(q.command, `cp '/h/.asight/backup/x y' '/h/it'\\''s here/settings.json'`)
+  assert.equal(restoreByHand({ backup: null, path: '/p' }), null, 'a file asight created has no backup: nothing to put back')
+  // through a symlink the file asight changed is the real one
+  assert.equal(restoreByHand({ backup: '/b', path: '/link', real_path: '/real' }).command, 'cp /b /real')
 })

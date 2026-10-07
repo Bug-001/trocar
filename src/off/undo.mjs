@@ -23,14 +23,14 @@
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { undoEntry, removeOwnedFile, describeEntry } from './journal.mjs'
-import { saveManifest, KNOWN_KINDS, undoByHand } from './manifest.mjs'
+import { saveManifest, KNOWN_KINDS, undoByHand, restoreByHand } from './manifest.mjs'
 import { dropBackup } from './backup.mjs'
 import { backupDir } from './paths.mjs'
 import { removeEmptyDirs, sweepTemps, writeDurable, sha256 } from './fsutil.mjs'
 import { matchHarness } from './signature.mjs'
 import { certBlocks, stripCert, composeBundle, certsOf } from './pem.mjs'
 
-const UNDO_LEFT = new Set(['left-unparsable', 'left-link', 'error']) // an entry that could not be undone stays in the manifest
+const UNDO_LEFT = new Set(['left-unparsable', 'left-link', 'left-text', 'error']) // an entry that could not be undone stays in the manifest
 const UNDO_AT_PRE = new Set(['restored', 'already-restored']) // the file is at its pre_sha256: its backup goes
 const KEPT_BECAUSE = {
   'reverted-not-identical': (e) => `${e.path} was edited after asight changed it: only asight's ${describeEntry(e)} was taken out, so it is not what it was before; the backup is that file as it was`,
@@ -78,6 +78,12 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   const leftEntries = [] // the entries step 1 could not undo: they stay in the manifest and still name what they named
   const rm = (p) => { sweepTemps(p, fs); if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); out.removed.push(p) } }
   const fail = (item, reason) => { out.left.push({ path: item.path, harness: item.harness ?? null, result: 'error', reason }) }
+  // an entry that could not be undone: why, and — when asight kept a copy of the file as it was — the one command that puts it back and what that costs (R2:
+  // "给出备份路径、手动 cp 命令和会丢掉什么"); the receipt prints `reason`, `--json` also carries `backup` and `restore`
+  const leftRow = (e, why, result) => {
+    const back = restoreByHand(e)
+    return { path: e.path, harness: e.harness, result, reason: back ? `${why}. The file as it was before asight is kept at ${back.backup}; by hand: ${back.command} (${back.loses})` : why, ...(back ? { backup: back.backup, restore: back.command } : {}) }
+  }
 
   // ── 1 and 4: entries ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
   const undoOne = (e) => {
@@ -87,7 +93,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     out.results.push(row)
     if (UNDO_LEFT.has(r.result)) { // stays in the manifest, with its backup: the only copy of what the user had
       leftEntries.push(e)
-      out.left.push({ path: e.path, harness: e.harness, result: r.result, reason: r.result === 'left-unparsable' ? `${e.path} is no longer valid JSON; asight's ${describeEntry(e)} may still be in it` : r.reason })
+      out.left.push(leftRow(e, r.result === 'left-unparsable' ? `${e.path} is no longer valid JSON; asight's ${describeEntry(e)} may still be in it` : r.reason, r.result))
       if (e.backup) row.backup_kept = e.backup
       return
     }
@@ -99,6 +105,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   }
   const entries = [...manifest.entries].reverse().filter((e) => inScope(e.harness) && (e.kind === 'json-key' || e.kind === 'text'))
   const config = (e) => !(e.kind === 'text' && e.format !== 'dotenv-block') // step 1; the rest are step 4's
+  const originals = entries.filter(config) // step 1's, as they are now: undoing takes them out of the manifest, and a bundle is judged after that
   for (const e of entries) if (config(e)) undoOne(e)
   // an item this build cannot undo is said, here and not by each caller: an entry or a file of an unknown kind (it is not touched, whatever its role),
   // or an entry that names no harness (no harness's `off` takes it). It stays in the manifest and `off` exits 1 for it (1.6 R3). The old capture's
@@ -170,7 +177,20 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
       }
     }
     // does an entry step 1 could not undo still name this file? a JSON entry by its value, a dotenv block by one of its variables
-    const naming = (f) => leftEntries.filter((e) => e.harness === f.harness && [e.value, ...Object.values(e.vars || {})].some((v) => typeof v === 'string' && path.resolve(v) === path.resolve(f.path))).map((e) => e.path)
+    const viaLeft = (f) => leftEntries.filter((e) => e.harness === f.harness && [e.value, ...Object.values(e.vars || {})].some((v) => typeof v === 'string' && path.resolve(v) === path.resolve(f.path))).map((e) => e.path)
+    // ...and the file itself is read again, whatever step 1 said of the entry: an entry reported as undone, or as the user's own value, whose file still holds the
+    // path (a key the user moved, text in a form the removal did not read) leaves the agent with no network once the bundle goes. Such an entry is put back among
+    // the ones left (it stays in the manifest), so the next run looks at it again and this one exits 1.
+    const namesFile = (e, p) => { try { return fs.readFileSync(e.path, 'utf8').split('\n').some((l) => !/^\s*#/.test(l) && l.includes(p)) } catch { return false } }
+    const naming = (f) => {
+      for (const e of originals) {
+        if (e.harness !== f.harness || leftEntries.includes(e) || !namesFile(e, f.path)) continue
+        leftEntries.push(e)
+        if (!manifest.entries.includes(e)) manifest.entries.push(e)
+        out.left.push(leftRow(e, `${e.path} still names ${f.path}, the bundle asight made for ${f.harness}, though its entry was reported as undone; asight did not take the bundle away under it: edit the file so it no longer names it`, 'left-text'))
+      }
+      return viaLeft(f)
+    }
     const one = (f, byHarness) => {
       const h = holders(f, byHarness)
       // a replace-semantics bundle the entry of which is still in place is in use by the next start of its agent, whether or not a process holds

@@ -4,7 +4,7 @@
 // `asight off` and the standalone `~/.asight/bin/asight-off` can run it from node:* alone (0.1 §2).
 import nodeFs from 'node:fs'
 import { setKey, removeKey, reverseOps, getPath } from './json-text.mjs'
-import { removeAsightText, onlySkeleton } from './text-edit.mjs'
+import { removeAsightText, asightResidue, onlySkeleton } from './text-edit.mjs'
 import { sha256, readOrNull, writeDurable, removeEmptyDirs, sweepTemps } from './fsutil.mjs'
 
 // Remove a file asight owns, then the directories its write created when they are empty. `changed`: the file was
@@ -66,6 +66,10 @@ export function undoEntry(entry, { fs = nodeFs } = {}) {
   }
   if (entry.kind === 'text') { // edited since: only asight's block / line goes, the user's commented line comes back
     const out = removeAsightText(text, entry.ops)
+    // "already removed" is only true when nothing of asight's is left. A line that still names asight's file in a shape the removal could not read is not
+    // gone: the file is not touched, and the entry stays (`left-text`), so what it points at is not taken away under it (4.6 安装 / 卸载不静默)
+    const residue = asightResidue(out.text, entry, text) // numbered as the user sees them in the file
+    if (residue.length) return done('left-text', { reason: `${file} still names asight's ${describeEntry(entry)} on line ${residue.join(', ')}, in a form asight cannot tell from your own text; asight did not touch the file: delete ${residue.length === 1 ? 'that line' : 'those lines'} by hand` })
     if (!out.found) return done('already-removed')
     if (!entry.existed_before && onlySkeleton(out.text, entry.format)) { fs.rmSync(file, { force: true }); removeEmptyDirs(entry.created_dirs, fs); return done('reverted-not-identical', { deleted: true }) }
     writeDurable(file, out.text, fs.statSync(file).mode & 0o777, fs)
