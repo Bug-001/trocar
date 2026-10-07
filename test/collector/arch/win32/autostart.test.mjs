@@ -463,8 +463,8 @@ test('W24 a /Query that did not run (timeout, blocked, no schtasks) is a failure
 // ---- W24: the Run-key fallback -------------------------------------------------------------------------------------------------------------------
 
 const RUN_PATH = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
-/** What `reg query HKCU\…\Run /v asight-collector` prints when the value is there. */
-const REG_OUT = (kind, data) => `\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\n    asight-collector    ${kind}    ${data}\n`
+/** What `reg query HKCU\…\Run /v asight-collector` prints when the value is there: CRLF line ends, as reg.exe writes them (the fixture once used \n; the parse is pinned to the real shape). */
+const REG_OUT = (kind, data) => `\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\r\n    asight-collector    ${kind}    ${data}\r\n`
 const COMMAND = `conhost.exe --headless "${NODE}" "${SCRIPT}" daemon --supervise`
 /** What `reg query` text looks like to code that decodes it as UTF-8 when reg.exe wrote it in the console's code page (cp936 on a zh-CN Windows): a character outside ASCII is two bytes that are no UTF-8, each one a U+FFFD. */
 const asDecodedByUtf8 = (v) => v.replace(/[^\x00-\x7f]/gu, '\uFFFD\uFFFD')
