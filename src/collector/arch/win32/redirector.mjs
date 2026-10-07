@@ -13,6 +13,12 @@ import { bypassHit } from './upstream.mjs'
 import { buildForwarderConfig, processRulesOf } from '../../../netenv/mihomo/rules.mjs'
 
 const FORM_USER = /^of\.(.+)$/ // the name the kernel's outbound to the engine authenticates as (4.8 §3.1): `of.<form id>`
+
+/** The on-demand table refresh before the `no-process-of-form` splice (4.8 §5.3 · §5.4): at most one demand poll in this many ms (the watcher's own interval is 2 s), so a burst of connections
+ *  from processes nobody has seen cannot hammer the helper. */
+export const DEMAND_POLL_MIN_MS = 1000
+/** How long a lookup waits for that demand poll: one that does not answer in time changes nothing — the answer is the stale table's, never a guess. */
+export const DEMAND_POLL_WAIT_MS = 1000
 const untracked = (reason) => ({ not_captured: 'untracked', reason }) // the row's code for a connection whose process is not one the table can vouch for (what the tracker says for a pid it does not hold)
 const msgOf = (e) => String((e && e.message) || e)
 
@@ -92,7 +98,7 @@ function refusalOf(r) {
  *   the table has taken them in, so a listener that asks the table finds the process there · 'helper-error' {reason, code, …} (the watcher's `poll-error`: the helper failed, or a listener threw) ·
  *   'form-exit' {form, neg_key} (the last process of a form is gone: the engine forgets that form's negative-cache entries, 4.8 §5.5).
  */
-export function createWin32Redirector({ helper, procWatcher, groups, home = null, ownerOf = null, routes = () => ({}), ingress = () => ({}), authOf = () => null, onFailure = () => {}, forwarder = null, entries = null, gate = null, ownImages, hostsOf = () => null } = {}) {
+export function createWin32Redirector({ helper, procWatcher, groups, home = null, ownerOf = null, routes = () => ({}), ingress = () => ({}), authOf = () => null, onFailure = () => {}, forwarder = null, entries = null, gate = null, ownImages, hostsOf = () => null, now = Date.now } = {}) {
   if (!procWatcher || typeof procWatcher.on !== 'function') throw new TypeError('createWin32Redirector needs the process watcher (procinfo.mjs createProcWatcher)')
   if (!Array.isArray(groups)) throw new TypeError('createWin32Redirector needs the groups (route-plan.mjs groupsOf)')
   const ev = new EventEmitter()
@@ -158,6 +164,25 @@ export function createWin32Redirector({ helper, procWatcher, groups, home = null
     }
   }
 
+  /** One on-demand table refresh before the `no-process-of-form` splice (4.8 §5.3 · §5.4): a process that started after the last poll would otherwise be spliced untracked on its FIRST connection. It
+   *  asks the watcher for one poll — the same difference step the 2 s timer runs, so the new process is taken in and re-told as `exec`, and a listener that judges (the tracker) judges it now, not on the
+   *  next tick. At most one demand poll a second; the lookup waits for it at most DEMAND_POLL_WAIT_MS. A watcher with no `poll`, a poll already in flight (it says false), one that does not answer in
+   *  time, or one that finds nobody changes nothing: the answer is what the stale table says, as it was before. */
+  let lastDemandPollAt = -Infinity
+  async function refreshTable() {
+    if (now() - lastDemandPollAt < DEMAND_POLL_MIN_MS) return false
+    lastDemandPollAt = now()
+    if (typeof procWatcher.poll !== 'function') return false
+    try {
+      return (await Promise.race([
+        Promise.resolve(procWatcher.poll()).then(() => true, () => false),
+        new Promise((resolve) => setTimeout(resolve, DEMAND_POLL_WAIT_MS, false)), // ref'd on purpose: the lookup that asked for the poll waits for it, and nothing else may drain the loop out from under that wait
+      ])) === true
+    } catch {
+      return false
+    }
+  }
+
   /** Whether the connection is decrypted (4.8 §5.4), and the code its row carries when it is not and the tracker cannot say it by pid. */
   function judge(form, pid, candidates) {
     const trusted = (p) => { const v = verdicts.get(p); return !!v && v.decrypt === true }
@@ -204,7 +229,8 @@ export function createWin32Redirector({ helper, procWatcher, groups, home = null
       }
       if (probe) return { health: true, group: hit.form.id }
       const upstream = upstreamFor(hit.g, route, target.address) // before the table is asked: a connection that cannot be dialled should not wait on it
-      const candidates = hit.form.processRules !== false ? maybeOf(hit.form.id) : takenBy(hit)
+      let candidates = hit.form.processRules !== false ? maybeOf(hit.form.id) : takenBy(hit)
+      if (hit.form.processRules !== false && candidates.length === 0 && (await refreshTable())) candidates = maybeOf(hit.form.id) // the process may have started after the last poll: ask once before splicing it
       const { pid, source, ms } = await owningPid(candidates, port)
       const { decrypt, skip } = judge(hit.form, pid, candidates)
       return {

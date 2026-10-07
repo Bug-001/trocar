@@ -40,8 +40,9 @@ const facts = (pid, exe, extra = {}) => ({ os: 'win32', pid, ppid: 1, name: exe.
 /** A stand-in for createProcWatcher(): the events the redirector subscribes to, and a scan the test sets. */
 function watcher() {
   const w = Object.assign(new EventEmitter(), {
-    live: [], stopped: false, started: false,
+    live: [], stopped: false, started: false, polled: 0,
     scan() { return Promise.resolve(typeof w.live === 'function' ? w.live() : w.live) },
+    poll() { w.polled++; return Promise.resolve(true) }, // a difference step with no news: no events (the on-demand refresh of 4.8 §5.3 lands nothing)
     start() { w.started = true; return Promise.resolve(true) },
     stop() { w.stopped = true },
     unreadable: () => [{ pid: 99, comm: 'x.exe', errno: null, argv: [] }],
@@ -280,9 +281,39 @@ test('W16 with no pid, the form is judged as a whole: all of its processes trust
   assert.equal((await ask(r, 'of.claude-code.cli')).skip.reason, 'pid-unresolved-mixed', 'claude.exe needs no command line: it is a form at once, and until the tracker has judged it the form is not all trusted')
   trust(r, 15)
   assert.equal((await ask(r, 'of.claude-code.cli')).decrypt, true)
+  const pollsBefore = w.polled
   w.emit('exit', { pid: 13, startedAt: 1013 }) // codex.app's only process is gone
   const none = await ask(r, 'of.codex.app')
   assert.deepEqual([none.decrypt, none.skip], [false, { not_captured: 'untracked', reason: 'no-process-of-form' }], 'a connection from a process the table has not seen (it started less than a poll ago): spliced and recorded, not guessed at')
+  assert.ok(w.polled > pollsBefore, 'the splice was not answered from a stale table: one on-demand poll was asked first (it found nobody — the process is not there yet)')
+})
+
+test('4.8 §5.3 · §5.4 the on-demand refresh: a process that started after the last poll is taken in by ONE demand poll before the `no-process-of-form` splice, so its first connection is judged — and the poll is asked at most once a second, a rejection or silence changes nothing', async () => {
+  const clock = { t: 10_000 }
+  const w = watcher()
+  w.poll = () => { w.polled++; w.emit('exec', facts(16, IMG.ccCli)); return Promise.resolve(true) } // the difference step the timer runs: the new process is told as exec
+  const { r } = made({ procWatcher: w, routes: () => ({ 'claude-code.settings': route(), 'codex.env': route() }), ingress: () => INGRESS, ownerOf: owner({ pid: 16, source: 'socket-table', ms: 4 }), now: () => clock.t })
+  const seen = []
+  r.on('exec', (f) => { seen.push(f.pid); r.watch(f.pid, { decrypt: true, agent: 'claude-code' }) }) // the tracker's seat: it judges what the table tells it
+  const first = await ask(r, 'of.claude-code.cli')
+  assert.deepEqual([first.pid, first.decrypt, first.skip], [16, true, undefined], 'the poll landed the process and the tracker judged it: decrypted on the first connection, not spliced untracked')
+  assert.deepEqual(seen, [16], 'the process was re-told as exec, so a listener that judges heard it')
+  await ask(r, 'of.claude-code.cli')
+  assert.equal(w.polled, 1, 'a form with a process in the table never asks for a poll')
+  clock.t += 1500
+  const none = await ask(r, 'of.codex.app') // codex.app's table is empty: a poll was asked and found nobody
+  assert.deepEqual(none.skip, { not_captured: 'untracked', reason: 'no-process-of-form' })
+  assert.equal(w.polled, 2)
+  await ask(r, 'of.codex.app')
+  assert.equal(w.polled, 2, 'debounced: at most one demand poll a second')
+  clock.t += 2000
+  w.poll = () => { w.polled++; return Promise.reject(new Error('the helper died')) }
+  const refused = await ask(r, 'of.codex.app')
+  assert.deepEqual([w.polled, refused.skip], [3, { not_captured: 'untracked', reason: 'no-process-of-form' }], 'a poll that rejects changes nothing: the answer is the stale table\'s')
+  clock.t += 2000
+  w.poll = () => { w.polled++; return new Promise(() => {}) } // one that never answers
+  const slow = await ask(r, 'of.codex.app')
+  assert.deepEqual([w.polled, slow.skip], [4, { not_captured: 'untracked', reason: 'no-process-of-form' }], 'and the lookup does not wait past DEMAND_POLL_WAIT_MS for it')
 })
 
 test('W16 two forms of one group (`of.claude-code.cli`, `of.claude-code.vscode`) resolve to their own forms with no pid: each its own processes, its own negative-cache key, its own verdict', async () => {
