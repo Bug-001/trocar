@@ -24,8 +24,8 @@ test('N1: a Verge whose files hold a secret, a subscription, a node and a group 
   const w = await startWorld(t)
   const r = detect(base({ verge: await w.adapter.facts(), focusPorts: [7897] }))
   assert.deepEqual(r.products, [{
-    id: 'clash-verge-rev', name: 'Clash Verge Rev', writable: true, running: true, version: 'v1.19.32', mode: 'rule', findProcessMode: 'strict', tun: false, systemProxy: true,
-    mixedPort: 7897, controller: 'writable', scriptWritable: true, serviceMode: false,
+    id: 'clash-verge-rev', name: 'Clash Verge Rev', adapted: true, running: true, version: 'v1.19.32', mode: 'rule', tun: false, systemProxy: true,
+    mixedPort: 7897, controller: 'readable', serviceMode: false,
   }])
   assert.deepEqual(r.systemProxy, { enabled: true, host: '127.0.0.1', port: 7897, pac: false })
   assert.deepEqual(r.listeners, [{ port: 7897, product: 'clash-verge-rev', image: 'verge-mihomo.exe' }])
@@ -40,19 +40,17 @@ test('N1: only the keys of the §2 table leave a product entry (a field a reader
   f.fields.subscriptionUrl = 'https://sub.example/xyz?token=abc' // a reader that over-reaches
   f.runtime.proxies = ['node-hk-01']
   const r = detect(base({ verge: f }))
-  assert.deepEqual(Object.keys(r.products[0]).sort(), ['controller', 'findProcessMode', 'id', 'mixedPort', 'mode', 'name', 'running', 'scriptWritable', 'serviceMode', 'systemProxy', 'tun', 'version', 'writable'])
+  assert.deepEqual(Object.keys(r.products[0]).sort(), ['adapted', 'controller', 'id', 'mixedPort', 'mode', 'name', 'running', 'serviceMode', 'systemProxy', 'tun', 'version'])
   assert.ok(!JSON.stringify(r).includes('sub.example') && !JSON.stringify(r).includes('node-hk-01'))
 })
 
-test('N1: the fields follow the facts (service mode, TUN, a controller that is not readable, a Script.js the user cannot write)', async (t) => {
-  fs.chmodSync // (the writable check below is by the file mode; Windows ACLs are 4.8 W-checks)
-  const w = await startWorld(t, { verge: VERGE_YAML('').replace('enable_tun_mode: false', 'enable_tun_mode: true').replace('enable_service_mode: false', 'enable_service_mode: true').replace('enable_system_proxy: true', 'enable_system_proxy: false'), core: { tun: true, mode: 'global', findProcessMode: 'off', mixedPort: 7899 } })
-  fs.chmodSync(w.file('profiles/Script.js'), 0o444)
+test('N1: the fields follow the facts (service mode, TUN, a controller that is not readable)', async (t) => {
+  const w = await startWorld(t, { verge: VERGE_YAML('').replace('enable_tun_mode: false', 'enable_tun_mode: true').replace('enable_service_mode: false', 'enable_service_mode: true').replace('enable_system_proxy: true', 'enable_system_proxy: false'), core: { tun: true, mode: 'global', mixedPort: 7899 } })
   const f = await w.adapter.facts()
   const r = detect(base({ verge: f, procs: ok(vergeProcs({ service: true })) }))
   const v = r.products[0]
-  assert.equal(v.tun, true); assert.equal(v.mode, 'global'); assert.equal(v.findProcessMode, 'off'); assert.equal(v.mixedPort, 7899); assert.equal(v.serviceMode, true)
-  assert.equal(v.systemProxy, false); assert.equal(v.scriptWritable, false); assert.equal(v.controller, 'writable')
+  assert.equal(v.tun, true); assert.equal(v.mode, 'global'); assert.equal(v.mixedPort, 7899); assert.equal(v.serviceMode, true)
+  assert.equal(v.systemProxy, false); assert.equal(v.controller, 'readable')
   // the controller cannot be read: the runtime fields are the files', the controller is `unreadable`, and the probe says so
   const down = await startWorld(t, {})
   await down.core.stop()
@@ -96,7 +94,7 @@ test('products: a recognised read-only product is named, with 「未适配」 fo
     interfaces: ok([{ name: 'FlClash', description: 'FlClash Tunnel', up: true }, { name: 'Ethernet', description: 'Intel', up: true }], { defaultIface: 'FlClash' }),
   }))
   assert.equal(r.products.length, 1)
-  assert.deepEqual({ id: r.products[0].id, writable: r.products[0].writable, tun: r.products[0].tun, controller: r.products[0].controller, scriptWritable: r.products[0].scriptWritable }, { id: 'flclash', writable: false, tun: true, controller: 'not-applicable', scriptWritable: null })
+  assert.deepEqual({ id: r.products[0].id, adapted: r.products[0].adapted, tun: r.products[0].tun, controller: r.products[0].controller }, { id: 'flclash', adapted: false, tun: true, controller: 'not-applicable' })
   assert.deepEqual(unknownOf(r, 'product-settings'), [{ what: 'product-settings', product: 'flclash', reason: 'not-adapted' }])
   assert.deepEqual(r.listeners, [{ port: 7890, product: 'flclash', image: 'FlClashCore.exe' }])
   // the adapter is there but the default route does not take it: not TUN
@@ -158,7 +156,7 @@ test('a TUN that neither the product nor the adapter list says is unknown with t
 test('every reason the probe emits is in the closed set of 1.6 §9.4 (plus not-adapted), and the facts it is given are not changed', async (t) => {
   assert.deepEqual([...PROBE_UNKNOWN_REASONS].filter((x) => !CLOSED_1_6.includes(x)), [])
   const w = await startWorld(t)
-  fs.rmSync(w.file('config.yaml')); fs.rmSync(w.file('profiles.yaml'))
+  fs.rmSync(w.file('config.yaml'))
   const facts = base({ verge: await w.adapter.facts(), procs: ok([...vergeProcs(), proc({ pid: 5000, name: 'mystery.exe' })]), listeners: ok([{ pid: 5000, port: 9000 }]), focusPorts: [9000], systemProxy: { ok: true, enable: true, server: '', autoConfigUrl: 'x' } })
   const before = JSON.stringify(facts)
   const r = detect(facts)

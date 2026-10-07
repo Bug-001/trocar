@@ -1,5 +1,5 @@
-// The Windows product table (RFC 4.7 §6; plan Task 6 (c)). N10: only Clash Verge Rev is written to. A read-only product's data directory is byte-for-byte what it was after every reader of src/netenv has run
-// over it, and the one adapter the code has is Verge's. The table is data: nothing in it is read from the machine.
+// The Windows product table (RFC 4.7 §6; plan Task 6 (c)). N10: no product is written to (D43). Every product's data directory, Verge's included, is byte-for-byte what it was after every reader of src/netenv
+// has run over it, and the one adapter the code has is Verge's (a reader of its settings). The table is data: nothing in it is read from the machine.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -10,8 +10,8 @@ import * as verge from '../../src/netenv/adapters/clash-verge-rev.mjs'
 import { snapshot, startWorld } from './fixtures/verge-world.mjs'
 import { proc, vergeProcs } from './fixtures/win-facts.mjs'
 
-test('the table is 4.7 §6: five products, the images each is told by, and Verge alone writable', () => {
-  assert.deepEqual(PRODUCTS_WIN32.map((p) => [p.id, p.writable]), [['clash-verge-rev', true], ['clash-party', false], ['flclash', false], ['gui-for-singbox', false], ['v2rayn', false]])
+test('the table is 4.7 §6: five products, the images each is told by, and Verge alone adapted (it has a reader of its own settings)', () => {
+  assert.deepEqual(PRODUCTS_WIN32.map((p) => [p.id, p.adapted]), [['clash-verge-rev', true], ['clash-party', false], ['flclash', false], ['gui-for-singbox', false], ['v2rayn', false]])
   const images = Object.fromEntries(PRODUCTS_WIN32.map((p) => [p.id, [...p.images, ...p.shared]]))
   assert.deepEqual(images['clash-verge-rev'], ['clash-verge.exe', 'verge-mihomo.exe', 'verge-mihomo-alpha.exe', 'clash-verge-service.exe'])
   assert.deepEqual(images['clash-party'], ['mihomo-party.exe'])
@@ -43,13 +43,13 @@ test('N10: the probe and every read of the Verge adapter leave the data director
   const facts = async () => ({ procs: { ok: true, rows: procs }, listeners: { ok: true, rows: procs.map((p) => ({ pid: p.pid, port: 8000 + p.pid % 100 })) }, systemProxy: { ok: true, enable: true, server: '127.0.0.1:7897', autoConfigUrl: '' }, interfaces: { ok: true, rows: [], defaultIface: 'Ethernet' }, focusPorts: procs.map((p) => 8000 + p.pid % 100), verge: await w.adapter.facts() })
   const r = detect(await facts())
   assert.deepEqual(r.products.map((p) => p.id).sort(), ['clash-party', 'clash-verge-rev', 'flclash', 'gui-for-singbox', 'v2rayn'])
-  assert.deepEqual(r.products.filter((p) => !p.writable).map((p) => p.controller), ['not-applicable', 'not-applicable', 'not-applicable', 'not-applicable'])
+  assert.deepEqual(r.products.filter((p) => !p.adapted).map((p) => p.controller), ['not-applicable', 'not-applicable', 'not-applicable', 'not-applicable'])
   await w.adapter.readFields()
   await w.adapter.readConfigs()
   assert.deepEqual(snapshot(roaming), before, 'nothing under %APPDATA% changed: a read leaves no trace, not even in Verge\'s directory')
   // the one adapter the code has is Verge's: no factory for another product, and no other data directory in the table
   assert.deepEqual(Object.keys(verge).filter((k) => /^create.*Adapter$/.test(k)), ['createVergeAdapter'])
-  assert.deepEqual(PRODUCTS_WIN32.filter((p) => !p.writable && p.dataDir), [])
+  assert.deepEqual(PRODUCTS_WIN32.filter((p) => !p.adapted && p.dataDir), [])
   const sources = fs.readdirSync(new URL('../../src/netenv', import.meta.url), { recursive: true }).filter((f) => f.endsWith('.mjs')).map((f) => String(f).replaceAll('\\', '/'))
   assert.deepEqual(sources.filter((f) => f.startsWith('adapters/')), ['adapters/clash-verge-rev.mjs'])
 })

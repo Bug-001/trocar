@@ -11,7 +11,7 @@
 //   interfaces:   { ok: true, rows: [{ name, description, up }], defaultIface } | { ok: false, reason }    `net-if` and `route` (the interface the default route takes)
 //   focusPorts:   [port]                                                                         ports whose owner matters (an agent's proxy setting names them); the system proxy's port always does
 //   verge:        the Verge adapter's facts() | null                                               { fields, running, runtime, controller }
-//   productFacts: { <product id>: { mode, mixedPort, tun, findProcessMode } }                      optional: what a reader of another product found
+//   productFacts: { <product id>: { mode, mixedPort, tun } }                                         optional: what a reader of another product found
 // }
 import { PRODUCTS_WIN32, productsOfImage } from './products-win32.mjs'
 
@@ -76,21 +76,19 @@ export function detect(facts = {}, { products = PRODUCTS_WIN32 } = {}) {
     const fl = v && v.fields ? v.fields : {}
     const other = (facts.productFacts && facts.productFacts[id]) || {}
     const entry = {
-      id, name: p.name, writable: p.writable, running: true,
+      id, name: p.name, adapted: p.adapted, running: true,
       version: rt.version ?? null,
       mode: rt.mode ?? fl.mode ?? other.mode ?? null,
-      findProcessMode: rt.findProcessMode ?? fl.findProcessMode ?? other.findProcessMode ?? null,
       tun: rt.tun ?? fl.tun ?? other.tun ?? tunOf(p),
       systemProxy: bool(fl.systemProxy), // the product's own setting (Verge's `enable_system_proxy`); a product nobody reads has none here, and the system's own is `systemProxy` of the result
       mixedPort: rt.mixedPort ?? fl.mixedPort ?? other.mixedPort ?? null,
-      controller: p.writable ? (v && v.runtime && !v.runtime.unknown ? 'writable' : 'unreadable') : 'not-applicable',
-      scriptWritable: p.writable && fl.script ? (fl.script.exists ? fl.script.writable === true : false) : null,
-      serviceMode: p.writable ? bool(fl.serviceMode) : null,
+      controller: p.adapted ? (v && v.runtime && !v.runtime.unknown ? 'readable' : 'unreadable') : 'not-applicable',
+      serviceMode: p.adapted ? bool(fl.serviceMode) : null,
     }
     if (entry.tun === null) unknown.push(why('tun', facts.interfaces, { product: id })) // neither the product's word nor the adapter list says
-    if (p.writable && v && v.runtime && v.runtime.unknown) unknown.push(why('controller', { reason: v.runtime.unknown.reason ?? 'controller-unreadable' }, { product: id }))
-    if (p.writable && v && v.fields) for (const u of v.fields.unreadable || []) unknown.push({ what: 'product-file', product: id, reason: fileReason(u.reason), detail: u.file })
-    if (!p.writable && !facts.productFacts?.[id]) unknown.push({ what: 'product-settings', product: id, reason: 'not-adapted' }) // recognised, and nobody reads its settings yet
+    if (p.adapted && v && v.runtime && v.runtime.unknown) unknown.push(why('controller', { reason: v.runtime.unknown.reason ?? 'controller-unreadable' }, { product: id }))
+    if (p.adapted && v && v.fields) for (const u of v.fields.unreadable || []) unknown.push({ what: 'product-file', product: id, reason: fileReason(u.reason), detail: u.file })
+    if (!p.adapted && !facts.productFacts?.[id]) unknown.push({ what: 'product-settings', product: id, reason: 'not-adapted' }) // recognised, and nobody reads its settings yet
     out.push(entry)
   }
   for (const a of ambiguous) unknown.push({ what: 'product', reason: 'not-adapted', detail: a.image, candidates: a.ids })
