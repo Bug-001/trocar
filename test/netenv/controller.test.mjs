@@ -1,0 +1,189 @@
+// controller.test.mjs — the mihomo controller client (src/netenv/mihomo/controller.mjs; RFC 4.7 §3.4; acceptance N9, the controller half). The allow-list is checked before a byte is sent:
+// a refused request throws ControllerRefused and the transport is never called. What a real mihomo answers to each allowed request is W57's (test/netenv/mihomo-contract.test.mjs); the
+// adapter's use of the client is test/netenv/verge-adapter.test.mjs.
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import http from 'node:http'
+import path from 'node:path'
+import { EventEmitter } from 'node:events'
+import { tmpDir } from '../helpers/tmp.mjs'
+import { createController, ControllerRefused, refusal, parseEndpoint, maskEndpoint, redact } from '../../src/netenv/mihomo/controller.mjs'
+
+const G = 'claude-code.cli'
+const PROBE = encodeURIComponent('http://127.0.0.1:7897/asight-health/claude-code.cli')
+
+// a stub controller on loopback: records every request, answers from `answer(method, url, body)`
+function stub(t, answer) {
+  const seen = []
+  const srv = http.createServer((req, res) => {
+    let b = ''
+    req.on('data', (d) => { b += d })
+    req.on('end', () => {
+      seen.push({ method: req.method, url: req.url, auth: req.headers.authorization ?? null, body: b ? JSON.parse(b) : null })
+      const [status, body] = answer(req.method, req.url, b ? JSON.parse(b) : null)
+      res.writeHead(status, { 'content-type': 'application/json' })
+      res.end(body === undefined ? '' : JSON.stringify(body))
+    })
+  })
+  return new Promise((resolve) => srv.listen(0, '127.0.0.1', () => {
+    t.after(() => srv.close())
+    resolve({ seen, port: srv.address().port, srv })
+  }))
+}
+
+const ALLOWED = [
+  ['GET', '/version'], ['GET', '/configs'], ['GET', '/providers/rules'], ['GET', '/rules'],
+  ['GET', `/proxies/asight-sw-${G}`], ['GET', `/proxies/asight-fb-${G}`],
+  ['GET', `/group/asight-fb-${G}/delay?url=${PROBE}&timeout=2000`],
+  ['PUT', `/proxies/asight-sw-${G}`, { name: 'PASS' }], ['PUT', `/proxies/asight-sw-${G}`, { name: `asight-fb-${G}` }],
+  ['PUT', `/providers/rules/asight-r-${G}`, null],
+  ['PUT', '/configs?force=true', { payload: 'mixed-port: 7897\n' }],
+]
+
+test('N9 every request 4.7 §2 and §3.4 name is allowed', () => {
+  for (const [method, target, body] of ALLOWED) assert.equal(refusal(method, target, body ?? null), null, `${method} ${target}`)
+})
+
+test('N9 everything else is refused: the connection table, the logs, the node list, a single provider, any other method, a write that names something that is not ours', () => {
+  const NO = [
+    ['GET', '/connections'], ['GET', '/connections/1'], ['GET', '/logs'], ['GET', '/traffic'], ['GET', '/memory'], ['GET', '/proxies'], ['GET', '/providers/proxies'], ['GET', '/dns/query?name=x'],
+    ['GET', '/proxies/Proxy'], ['GET', '/proxies/node-a'], ['GET', '/proxies/asight'], ['GET', '/proxies/asight-'],
+    ['GET', `/providers/rules/asight-r-${G}`], // v1.19.32 has no read of one provider: only the list (N9)
+    ['GET', '/rules?x=1'], ['GET', '/version/'], ['GET', '//version'], ['GET', '/proxies/asight-x/../../connections'], ['GET', '/proxies/asight-%2e%2e'], ['GET', 'version'],
+    ['GET', '/version', {}], // a read carries no body
+    ['GET', '/group/Proxy/delay?url=' + PROBE + '&timeout=2000'], // not ours
+    ['GET', `/group/asight-fb-${G}/delay?url=${encodeURIComponent('https://www.gstatic.com/generate_204')}&timeout=2000`], // a public probe
+    ['GET', `/group/asight-fb-${G}/delay?url=${encodeURIComponent('http://127.0.0.1.evil.example:7897/x')}&timeout=2000`],
+    ['GET', `/group/asight-fb-${G}/delay?url=${encodeURIComponent('http://10.0.0.5:7897/x')}&timeout=2000`],
+    ['GET', `/group/asight-fb-${G}/delay?url=${PROBE}`], ['GET', `/group/asight-fb-${G}/delay?url=${PROBE}&timeout=2000&extra=1`], ['GET', `/group/asight-fb-${G}/delay?url=${PROBE}&timeout=5`], ['GET', `/group/asight-fb-${G}/delay?url=${PROBE}&timeout=099`], ['GET', `/group/asight-fb-${G}/delay?url=${PROBE}&timeout=30001`], ['GET', `/group/asight-fb-${G}/delay?url=${PROBE}&timeout=99999`],
+    ['GET', `/group/asight-fb-${G}/delay?timeout=2000&url=${PROBE}`], ['GET', `/group/asight-fb-${G}/delay?url=%ZZ&timeout=2000`],
+    ['PUT', '/proxies/Proxy', { name: 'DIRECT' }], ['PUT', `/proxies/asight-fb-${G}`, { name: 'PASS' }], ['PUT', `/proxies/asight-in-${G}`, { name: 'PASS' }],
+    ['PUT', `/proxies/asight-sw-${G}`, { name: 'DIRECT' }], ['PUT', `/proxies/asight-sw-${G}`, { name: 'node-a' }], ['PUT', `/proxies/asight-sw-${G}`, { name: 'asight-fb-other' }], ['PUT', `/proxies/asight-sw-${G}`, { name: `asight-in-${G}` }],
+    ['PUT', `/proxies/asight-sw-${G}`, { name: 'PASS', extra: 1 }], ['PUT', `/proxies/asight-sw-${G}`, null], ['PUT', `/proxies/asight-sw-${G}`, {}], ['PUT', `/proxies/asight-sw-${G}`, [{ name: 'PASS' }]],
+    ['PUT', '/providers/rules/user-ads', null], ['PUT', `/providers/rules/asight-r-${G}`, { x: 1 }],
+    ['PUT', '/configs', { payload: 'x' }], ['PUT', '/configs?force=true', null], ['PUT', '/configs?force=true', {}], ['PUT', '/configs?force=true', { payload: '' }], ['PUT', '/configs?force=true', { payload: 1 }],
+    ['PUT', '/configs?force=true', { payload: 'x', path: '/etc' }], ['PUT', '/configs?force=true', { path: '/some/other/config.yaml' }], ['PUT', '/configs?force=false', { payload: 'x' }],
+    ['PATCH', '/configs', { mode: 'rule' }], ['PATCH', '/configs', { 'find-process-mode': 'strict' }], ['POST', '/restart', {}], ['DELETE', `/proxies/asight-sw-${G}`], ['HEAD', '/version'], [undefined, '/version'],
+  ]
+  for (const [method, target, body] of NO) assert.ok(refusal(method, target, body ?? null), `${method} ${target} ${JSON.stringify(body)}`)
+  assert.match(refusal('GET', `/providers/rules/asight-r-${G}`), /no read of a single provider/, 'the reason names the v1.19.32 fact')
+})
+
+test('N9 the own forwarder\'s client may reload by {path}; Verge\'s may not', () => {
+  assert.equal(refusal('PUT', '/configs?force=true', { path: 'C:/x/config.yaml' }, { reloadByPath: true }), null)
+  assert.ok(refusal('PUT', '/configs?force=true', { path: 'C:/x/config.yaml' }, { reloadByPath: false }))
+  assert.ok(refusal('PUT', '/configs?force=true', { path: '' }, { reloadByPath: true }))
+  assert.ok(refusal('PUT', '/configs?force=true', { path: 'a', payload: 'b' }, { reloadByPath: true }))
+})
+
+test('N9 a refused request throws ControllerRefused and the transport is never called (zero I/O)', async () => {
+  let calls = 0
+  const transport = { request() { calls++; throw new Error('the network must not be touched') } }
+  const ctl = createController({ endpoint: 'pipe:verge-mihomo-0123456789abcdef', transport })
+  for (const f of [() => ctl.get('/connections'), () => ctl.get('/proxies'), () => ctl.get(`/providers/rules/asight-r-${G}`), () => ctl.put(`/proxies/asight-sw-${G}`, { name: 'DIRECT' }), () => ctl.put('/configs?force=true', { path: 'x' }), () => ctl.get('/logs')]) {
+    assert.throws(f, (e) => e instanceof ControllerRefused && e.code === 'controller-refused')
+  }
+  assert.equal(calls, 0)
+})
+
+test('the endpoint: a pipe maps to \\\\.\\pipe\\<name>, the secret goes only into Authorization, a body is JSON with its length', async () => {
+  const sent = []
+  const transport = {
+    request(opts, cb) {
+      sent.push(opts)
+      const req = new EventEmitter()
+      req.end = (payload) => { sent.at(-1).payload = payload; const res = new EventEmitter(); res.statusCode = 204; cb(res); res.emit('end') }
+      return req
+    },
+  }
+  const pipe = createController({ endpoint: 'pipe:verge-mihomo-0123456789abcdef', transport })
+  const r = await pipe.put(`/proxies/asight-sw-${G}`, { name: 'PASS' })
+  assert.deepEqual([r.status, r.ok, r.json, r.text], [204, true, null, ''])
+  assert.equal(sent[0].socketPath, '\\\\.\\pipe\\verge-mihomo-0123456789abcdef')
+  assert.equal(sent[0].headers.Authorization, undefined, 'a pipe needs no secret and none is sent')
+  assert.equal(sent[0].payload, '{"name":"PASS"}')
+  assert.equal(sent[0].headers['Content-Length'], 15)
+  assert.equal(sent[0].agent, false)
+  assert.equal(pipe.endpoint, 'pipe:verge-mihomo-<k>', 'the random suffix never leaves the client')
+  const tcp = createController({ endpoint: 'tcp:127.0.0.1:19090', secret: 'sekret-value-1234', transport })
+  await tcp.get('/version')
+  assert.deepEqual([sent[1].host, sent[1].port, sent[1].headers.Authorization], ['127.0.0.1', 19090, 'Bearer sekret-value-1234'])
+  assert.equal(sent[1].payload, null)
+})
+
+test('an endpoint must be a pipe with a plain name, or this machine\'s loopback; anything else is refused when the client is made', () => {
+  for (const bad of ['', 'verge-mihomo', 'pipe:', 'pipe:a\\b', 'pipe:..\\x', 'pipe:a/b', 'tcp:10.0.0.5:9090', 'tcp:example.com:9090', 'tcp:127.0.0.1', 'tcp:127.0.0.1:0', 'tcp:127.0.0.1:70000', 'tcp:127.0.0.1.evil.com:9090', 'http://127.0.0.1:9090', null, undefined]) {
+    assert.throws(() => parseEndpoint(bad), ControllerRefused, String(bad))
+    assert.throws(() => createController({ endpoint: bad }), ControllerRefused, String(bad))
+  }
+  assert.deepEqual(parseEndpoint('tcp:[::1]:9090').req, { host: '::1', port: 9090 })
+  assert.deepEqual(parseEndpoint('tcp:localhost:9090').req, { host: 'localhost', port: 9090 })
+  assert.equal(parseEndpoint('unix:/tmp/x.sock').req.socketPath, '/tmp/x.sock')
+})
+
+test('over a real loopback socket: reads and writes round-trip, a 2xx gives json and no text, the secret arrives as a Bearer', async (t) => {
+  const s = await stub(t, (m, url) => (m === 'GET' && url === '/version' ? [200, { meta: true, version: 'v1.19.32' }] : m === 'PUT' && url.startsWith('/proxies/') ? [204] : [200, { ok: 1 }]))
+  const ctl = createController({ endpoint: `tcp:127.0.0.1:${s.port}`, secret: 'abcd1234abcd1234' })
+  const v = await ctl.get('/version')
+  assert.deepEqual([v.status, v.ok, v.json, v.text], [200, true, { meta: true, version: 'v1.19.32' }, ''])
+  const p = await ctl.put(`/proxies/asight-sw-${G}`, { name: `asight-fb-${G}` })
+  assert.deepEqual([p.status, p.ok, p.json], [204, true, null])
+  assert.deepEqual(s.seen.map((r) => [r.method, r.url, r.auth]), [['GET', '/version', 'Bearer abcd1234abcd1234'], ['PUT', `/proxies/asight-sw-${G}`, 'Bearer abcd1234abcd1234']])
+  assert.deepEqual(s.seen[1].body, { name: `asight-fb-${G}` })
+})
+
+test('over a unix socket (tests, a pinned endpoint)', async (t) => {
+  const dir = tmpDir('asight-ctl-')
+  const sock = path.join(dir, 'c.sock')
+  const srv = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"version":"v1.19.32"}') })
+  await new Promise((r) => srv.listen(sock, r))
+  t.after(() => srv.close())
+  const r = await createController({ endpoint: `unix:${sock}` }).get('/version')
+  assert.deepEqual([r.status, r.json.version], [200, 'v1.19.32'])
+})
+
+test('an error answer keeps only a redacted message: quoted names are <q>, at most 120 characters', async (t) => {
+  const s = await stub(t, () => [400, { message: 'proxy "my-secret-node" not in group \'Home Group\' ' + 'x'.repeat(200) }])
+  const r = await createController({ endpoint: `tcp:127.0.0.1:${s.port}` }).put(`/proxies/asight-sw-${G}`, { name: 'PASS' })
+  assert.deepEqual([r.status, r.ok], [400, false])
+  assert.ok(!/my-secret-node|Home Group/.test(r.text))
+  assert.match(r.text, /^proxy <q> not in group <q> x+$/)
+  assert.equal(r.text.length, 120)
+  assert.equal(redact('a "b" c'), 'a <q> c')
+  assert.equal(redact(undefined), '')
+})
+
+test('a controller that is not there, or does not answer, is a result (status 0 and the errno), not an exception; nothing identifying is in its text', async (t) => {
+  const s = await stub(t, () => [200, {}])
+  const port = s.port
+  await new Promise((r) => s.srv.close(r))
+  const down = await createController({ endpoint: `tcp:127.0.0.1:${port}`, secret: 'abcd1234abcd1234' }).get('/version')
+  assert.deepEqual([down.status, down.ok, down.error], [0, false, 'ECONNREFUSED'])
+  assert.ok(!down.text.includes(String(port)), 'the endpoint is masked in the message')
+  const hung = http.createServer(() => {})
+  await new Promise((r) => hung.listen(0, '127.0.0.1', r))
+  t.after(() => { hung.closeAllConnections?.(); hung.close() })
+  const slow = await createController({ endpoint: `tcp:127.0.0.1:${hung.address().port}`, timeoutMs: 120 }).get('/version')
+  assert.deepEqual([slow.status, slow.error], [0, 'ETIMEDOUT'])
+  const gone = await createController({ endpoint: 'pipe:verge-mihomo-0123456789abcdef' }).get('/version') // no such pipe here (not Windows, or no Verge)
+  assert.equal(gone.status, 0)
+  assert.ok(!/0123456789abcdef/.test(gone.text), 'the pipe\'s random suffix is not in the text')
+})
+
+test('a body larger than 32 MiB is not read: the answer is a failure result', async () => {
+  const transport = {
+    request(opts, cb) {
+      const req = new EventEmitter()
+      req.end = () => { const res = new EventEmitter(); res.statusCode = 200; res.destroy = () => {}; cb(res); res.emit('data', Buffer.alloc(33 * 1024 * 1024)) }
+      return req
+    },
+  }
+  const r = await createController({ endpoint: 'pipe:verge-mihomo-x', transport }).get('/rules')
+  assert.deepEqual([r.status, r.error], [0, 'ERESPONSE_TOO_LARGE'])
+})
+
+test('maskEndpoint hides the random part of a pipe name and nothing else', () => {
+  assert.equal(maskEndpoint('pipe:verge-mihomo-0123456789abcdef'), 'pipe:verge-mihomo-<k>')
+  assert.equal(maskEndpoint('tcp:127.0.0.1:9097'), 'tcp:127.0.0.1:9097')
+  assert.equal(maskEndpoint('pipe:verge-mihomo'), 'pipe:verge-mihomo')
+})
