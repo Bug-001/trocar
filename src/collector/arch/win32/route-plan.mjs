@@ -163,3 +163,48 @@ export function planRoutes({ netenv, groups, desired = null, optIns = [], manife
   }
   return out
 }
+
+// ---- the host set of a host-tree form (4.8 §3.5, OPEN 22) -------------------------------------------------------------------------------------------------
+
+// What the kernel's rule text takes as a host: the generator's own check (rules.mjs), held equal to it by a test that judges a table of names with both. A numeric dotted quad (an address, or something that cannot be a name) is
+// left out: the rule is DOMAIN-SUFFIX, which never matches a connection to an address literal, so it would be a rule that looks like capture and is none.
+const HOST_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$/
+const NUMERIC_QUAD = /^\d+(\.\d+){3}$/
+
+/**
+ * hostSetOf({ form, readSettings, extraHosts }) → { hosts: [name], settings: 'read' | 'absent' | { unreadable: { reason, detail? } }, dropped: [name] }
+ * The hosts whose connections a host-tree form (an editor that carries many extensions, whose proxy setting sends them all to the form's port) hands to the engine; every other connection of the editor is only forwarded (4.8 §3.5).
+ * The set is the form's default hosts (its harness file), then the base-URL hosts found in the extension's own settings (`form.hosts.settings.hostsOf` over the text `readSettings()` gives: `{ text, error }`, the shape of the
+ * ctx's `readTextOrError`; read-only, `on` and `status` both call this), then `extraHosts` (the operator's, state.json): each name once, lower case, in that order. A settings file that is not there is `'absent'` (nothing configured: not a failure);
+ * one that cannot be read or parsed is `{ unreadable: { reason } }` (`denied` · `unparseable`, 1.6 §9.4; `detail` the errno, never a path) and the set is then the other two sources, which the caller says (D38).
+ * `dropped` are the names that cannot go in the kernel's rule (an address literal, a wildcard, a port, a character the generator refuses): said, never written, never thrown — no input of the user's makes `on` fail.
+ */
+export function hostSetOf({ form, readSettings, extraHosts = [] } = {}) {
+  const spec = form && form.hosts
+  if (!spec || !Array.isArray(spec.defaults)) throw new TypeError('hostSetOf needs a form with a host set (hosts.defaults)')
+  if (spec.settings && typeof readSettings !== 'function') throw new TypeError('hostSetOf needs readSettings for a form whose own settings it reads')
+  let settings = 'absent'
+  let found = []
+  if (spec.settings) {
+    let r
+    try { r = readSettings() } catch (e) { r = { text: null, error: { code: e && e.code } } }
+    if (r && r.error) settings = { unreadable: { reason: 'denied', ...(r.error.code ? { detail: String(r.error.code) } : {}) } }
+    else if (r && typeof r.text === 'string') {
+      try {
+        const list = spec.settings.hostsOf(r.text)
+        if (!Array.isArray(list)) throw new TypeError('hostsOf gave no list')
+        found = list
+        settings = 'read'
+      } catch { settings = { unreadable: { reason: 'unparseable' } } }
+    }
+  }
+  const hosts = []
+  const dropped = []
+  for (const h of [...spec.defaults, ...found, ...(extraHosts || [])]) {
+    const name = typeof h === 'string' ? h.trim().toLowerCase() : ''
+    if (name === '') continue
+    const into = HOST_NAME.test(name) && !NUMERIC_QUAD.test(name) ? hosts : dropped
+    if (!into.includes(name)) into.push(name)
+  }
+  return { hosts, settings, dropped }
+}
