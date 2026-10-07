@@ -1,0 +1,307 @@
+// ingress.mjs — the engine's proxy ingress (RFC 4.8 §5.1, §5.2). Where the transparent listener takes connections a
+// kernel steered, this takes the ones a proxy client hands over on purpose: mihomo (Verge's block, or asight's own
+// forwarder) sends each agent connection here as `CONNECT host:port` with `Proxy-Authorization: Basic <route>.<group>:<token>`,
+// or as a SOCKS5 CONNECT with RFC 1929 credentials. The ingress answers like the proxy it is, dials the upstream,
+// and only then says yes; the bytes after that are an agent's, and go to handleFlow exactly as a transparent flow's do.
+//
+// Order per connection (§5.1):
+//   1. read the opener — CONNECT or SOCKS5; anything else (an absolute-URI GET included, mihomo never probes that way) is closed,
+//      `ingress-unknown`;
+//   2. check the token, in constant time — 407 / SOCKS auth failure and `ingress-auth-failed`, zero upstream connections;
+//   3. lookupIngress({peer, user, target}) → the flow's meta, or {health:true, group}, or null (an unknown user: also an auth failure);
+//   4. a health probe (the target is the group's re-entry point itself, §3.3): 200, then 204 to every `HEAD`/`GET /asight-health/<g>`
+//      on the kept-alive tunnel; no upstream, no flows/ row, no envelope. It never leaves the machine (invariant 1);
+//   5. dial the upstream — direct, or the proxy prelude asight writes (http / socks5; the user's proxy credentials ride only here) —
+//      and say 200 only once it is up: a failure is `502`, or the proxy's own refusal, never a success first;
+//   6. handleFlow(socket, meta, {upstream, redial}); the row carries ingress / pid_source / pid_ms / upstream, no `prelude`
+//      (the opener and the proxy prelude are asight's bytes, not the agent's: invariant 4, §5.6).
+// The ingress never records an envelope itself and never forwards a byte it has not been asked to.
+import crypto from 'node:crypto'
+import net from 'node:net'
+import { parseHead } from './sniff.mjs'
+import { socks5Greeting, socks5Request } from './socks.mjs'
+
+const HEAD_MAX = 16 * 1024        // no opener or proxy reply head is longer
+const HOLD_MAX = 256 * 1024       // what a client may send while the upstream is being dialled
+const sha = (s) => crypto.createHash('sha256').update(s).digest()
+const printable = (s, n = 80) => String(s).replace(/[^\x20-\x7e]/g, '?').slice(0, n)
+const msgOf = (e) => String((e && e.message) || e)
+
+const SOCKS_OK = Buffer.from([5, 0, 0, 1, 0, 0, 0, 0, 0, 0])
+const socksReply = (rep) => Buffer.from([5, rep, 0, 1, 0, 0, 0, 0, 0, 0])
+const socksRepOf = (code) => (code === 'ECONNREFUSED' ? 5 : code === 'ENETUNREACH' ? 3 : ['EHOSTUNREACH', 'ENOTFOUND', 'EAI_AGAIN'].includes(code) ? 4 : 1)
+
+// ── the byte reader the handshakes use ─────────────────────────────────────────────────────────────────────────
+// take(parser, deadline): parser(buf) → null (need more) | {invalid} | {length, …}; resolves with the message (and its `raw`), `{invalid}`,
+// `{gone}` (the peer closed, ended or errored first) or `{timeout}`. detach() returns the bytes held beyond the last message and lets go
+// of the socket, which goes on flowing for whoever attaches next, synchronously (handleFlow does).
+function reader(sock, { onTooMuch = null, holdMax = HOLD_MAX } = {}) {
+  let buf = Buffer.alloc(0), wake = null, gone = null
+  let watchers = []
+  const poke = () => { const w = wake; wake = null; if (w) w() }
+  const onData = (d) => { buf = Buffer.concat([buf, d]); if (onTooMuch && buf.length > holdMax) { onTooMuch(); return } poke() }
+  const goneBy = (why) => (e) => {
+    if (!gone) gone = { why, error: e instanceof Error ? e : null }
+    for (const f of watchers.splice(0)) f()
+    poke()
+  }
+  const onEnd = goneBy('end'), onClose = goneBy('close'), onError = goneBy('error')
+  sock.on('data', onData); sock.on('end', onEnd); sock.on('close', onClose); sock.on('error', onError)
+  return {
+    isGone: () => gone !== null,
+    /** fn() runs once if the peer goes before detach() */
+    whenGone(fn) { if (gone) fn(); else watchers.push(fn) },
+    async take(parser, deadline = Infinity) {
+      for (;;) {
+        const m = parser(buf)
+        if (m) { if (m.invalid) return m; const raw = buf.subarray(0, m.length); buf = buf.subarray(m.length); return { ...m, raw } }
+        if (gone) return { gone: gone.why }
+        const left = deadline - Date.now()
+        if (left <= 0) return { timeout: true }
+        await new Promise((res) => {
+          let t = null
+          wake = () => { if (t) clearTimeout(t); res() }
+          if (deadline !== Infinity) { t = setTimeout(poke, left); if (t.unref) t.unref() }
+        })
+      }
+    },
+    detach() {
+      sock.removeListener('data', onData); sock.removeListener('end', onEnd); sock.removeListener('close', onClose); sock.removeListener('error', onError)
+      watchers = []
+      const b = buf; buf = Buffer.alloc(0); return b
+    },
+  }
+}
+
+// ── parsers ─────────────────────────────────────────────────────────────────────────────────────────────────────
+// the first bytes: CONNECT, or SOCKS5. `length: 0`: nothing is consumed, the next parser reads from the start.
+function sniffOpener(buf) {
+  if (!buf.length) return null
+  if (buf[0] === 0x05) return { kind: 'socks5', length: 0 }
+  const s = buf.toString('latin1', 0, 8)
+  if (s.startsWith('CONNECT ')) return { kind: 'connect', length: 0 }
+  if (buf.length < 8 && 'CONNECT '.startsWith(s)) return null
+  const m = /^([A-Z]{3,7}) /.exec(buf.toString('latin1', 0, 12))
+  return { invalid: m ? `an HTTP request that is not CONNECT (${m[1]}): the ingress takes CONNECT and SOCKS5 only` : `first byte 0x${buf.subarray(0, 1).toString('hex')}: neither CONNECT nor SOCKS5` }
+}
+function headOf(buf) {
+  const h = parseHead(buf)
+  if (!h) return buf.length > HEAD_MAX ? { invalid: 'a head longer than 16 KiB' } : null
+  return { length: h.headLength, head: h }
+}
+function userPass(buf) { // RFC 1929: VER=1 ULEN UNAME PLEN PASSWD
+  if (buf.length < 2) return null
+  if (buf[0] !== 1) return { invalid: 'bad RFC 1929 version' }
+  const ul = buf[1]; if (buf.length < 3 + ul) return null
+  const pl = buf[2 + ul]; if (buf.length < 3 + ul + pl) return null
+  return { length: 3 + ul + pl, user: buf.toString('utf8', 2, 2 + ul), pass: buf.toString('utf8', 3 + ul, 3 + ul + pl) }
+}
+/** "host:port" / "[v6]:port" → {host, port} (an IPv6 literal compressed, no brackets) or null */
+export function parseAuthority(a) {
+  let host, rest
+  if (a.startsWith('[')) {
+    const i = a.indexOf(']'); if (i < 0) return null
+    rest = a.slice(i + 1)
+    try { host = new URL(`http://${a.slice(0, i + 1)}`).hostname.slice(1, -1) } catch { return null }
+  } else {
+    const i = a.lastIndexOf(':'); if (i < 0) return null
+    host = a.slice(0, i); rest = a.slice(i)
+    if (host.includes(':')) return null
+  }
+  if (!/^:\d{1,5}$/.test(rest) || !/^[\x21-\x7e]+$/.test(host)) return null
+  const port = Number(rest.slice(1))
+  return port >= 1 && port <= 65535 ? { host, port } : null
+}
+function basicOf(headers) {
+  const h = headers.find(([k]) => k.toLowerCase() === 'proxy-authorization')
+  const m = h && /^basic\s+(\S+)$/i.exec(h[1])
+  if (!m) return null
+  const text = Buffer.from(m[1], 'base64').toString('utf8'), i = text.indexOf(':')
+  return i < 0 ? { user: text, pass: '' } : { user: text.slice(0, i), pass: text.slice(i + 1) }
+}
+
+// ── the upstream ────────────────────────────────────────────────────────────────────────────────────────────────
+function whenConnected(s) {
+  return new Promise((resolve, reject) => {
+    if (s.destroyed) return reject(Object.assign(new Error('the upstream socket was closed'), { code: 'ECONNRESET' }))
+    if (!s.connecting) return resolve()
+    const ok = () => { off(); resolve() }
+    const bad = (e) => { off(); reject(e || Object.assign(new Error('closed before connecting'), { code: 'ECONNRESET' })) }
+    const off = () => { s.removeListener('connect', ok); s.removeListener('error', bad); s.removeListener('close', bad) }
+    s.once('connect', ok); s.once('error', bad); s.once('close', bad)
+  })
+}
+
+/**
+ * createIngress({ token, lookupIngress, handleFlow, connectUpstream, failure, timing, refuse }) → { attach(server), handle(socket), stats(), closeIdle() }
+ *   token            the install's ingress token (4.8 §3.2); a connection that does not present it gets 407 / auth failure
+ *   lookupIngress    async ({peer, user, target:{address, port, family?}}) → IngressMeta | {health:true, group} | null (an unknown user)
+ *   handleFlow       (socket, meta, {upstream, redial}) — the engine's flow starter; `redial` re-dials through the same upstream when the
+ *                    upstream carries no credentials (4.6 让路), else undefined
+ *   connectUpstream  ({address, port}) → a connecting net.Socket (the engine's; tests inject)
+ *   failure          (rec) the engine's failure sink; the ingress writes where:'ingress' records through it
+ *   refuse           (meta, info) — the flows/ row of a connection the upstream refused or could not be reached (no flow started)
+ *   timing           {ingressOpenerMs = 10000, ingressHealthIdleMs = 30000, ingressDialMs = 0 (no limit)}
+ */
+export function createIngress({ token, lookupIngress, handleFlow, connectUpstream, failure, timing = {}, refuse = () => {} }) {
+  if (typeof token !== 'string' || token.length < 16) throw new TypeError('the ingress needs the install\'s token (a string of at least 16 characters)')
+  for (const [n, f] of Object.entries({ lookupIngress, handleFlow, connectUpstream, failure })) if (typeof f !== 'function') throw new TypeError(`createIngress: ${n} is required`)
+  const tokenHash = sha(token)
+  const tokenOk = (given) => crypto.timingSafeEqual(sha(String(given)), tokenHash)
+  const openerMs = timing.ingressOpenerMs ?? 10_000, healthIdleMs = timing.ingressHealthIdleMs ?? 30_000
+  const counters = { connections: 0, flows: 0, health: 0, authFailed: 0, unknown: 0, refused: 0, unreachable: 0 }
+  const idle = new Set() // sockets that are not a flow: still in the handshake, or a health tunnel (closeIdle ends them; flows finish on their own)
+
+  async function handle(socket) {
+    counters.connections++
+    idle.add(socket); socket.once('close', () => idle.delete(socket))
+    socket.on('error', () => {}) // ours from accept: a reset while we answer is this connection's end, never an uncaught exception (handleFlow adds its own once it owns the socket)
+    const peer = { address: socket.remoteAddress, port: socket.remotePort }
+    const unknown = (reason) => { counters.unknown++; failure({ where: 'ingress', code: 'ingress-unknown', peer, reason }) }
+    const authFailed = (user, reason) => { counters.authFailed++; failure({ where: 'ingress', code: 'ingress-auth-failed', peer, user: printable(user), reason }) }
+    const r = reader(socket, { onTooMuch: () => { unknown('the client sent more than 256 KiB before the tunnel was open'); socket.destroy() } })
+    const w = { up: 0, down: 0 } // the opener's bytes in, and asight's answers out: not the agent's (§5.6)
+    const say = (b) => { w.down += b.length; if (!socket.destroyed) socket.write(b) }
+    try { await serve(socket, r, peer, w, say, unknown, authFailed) } catch (e) {
+      socket.destroy()
+      failure({ code: 'engine-error', peer, reason: `the proxy ingress failed on a connection: ${msgOf(e)}` })
+    }
+  }
+
+  async function serve(socket, r, peer, w, say, unknown, authFailed) {
+    const deadline = Date.now() + openerMs
+    const first = await r.take(sniffOpener, deadline)
+    if (first.gone) return void r.detach()
+    if (first.timeout || first.invalid) { unknown(first.invalid || `no opener within ${openerMs} ms`); r.detach(); return socket.destroy() }
+    // what the client asked, in its own dialect: who, for where, and how each answer is spoken
+    let o
+    if (first.kind === 'connect') {
+      const m = await r.take(headOf, deadline)
+      if (m.gone) return void r.detach()
+      if (m.timeout || m.invalid) { unknown(m.invalid || `no complete CONNECT within ${openerMs} ms`); r.detach(); return socket.destroy() }
+      w.up += m.length
+      const line = /^CONNECT (\S+) HTTP\/1\.[01]$/.exec(m.head.startLine)
+      const target = line && parseAuthority(line[1])
+      if (!target) { unknown('a CONNECT whose target is not host:port'); r.detach(); return socket.destroy() }
+      const c = basicOf(m.head.headers)
+      o = {
+        target, user: c ? c.user : '', pass: c ? c.pass : null, authed: false,
+        ok: () => say('HTTP/1.1 200 Connection established\r\n\r\n'),
+        denied: () => { say('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="asight"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); socket.end() },
+        badGateway: () => { say('HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); socket.end() },
+        refusedBy: (d) => { if (d.raw) { say(d.raw); socket.end() } else o.badGateway() },
+      }
+    } else {
+      const g = await r.take(socks5Greeting, deadline)
+      if (g.gone) return void r.detach()
+      if (g.timeout || g.invalid) { unknown(g.invalid || `no complete SOCKS5 greeting within ${openerMs} ms`); r.detach(); return socket.destroy() }
+      w.up += g.length
+      if (!g.methods.includes(2)) { say(Buffer.from([5, 0xff])); authFailed('', 'no username/password method offered'); r.detach(); return socket.end() }
+      say(Buffer.from([5, 2]))
+      const a = await r.take(userPass, deadline)
+      if (a.gone) return void r.detach()
+      if (a.timeout || a.invalid) { unknown(a.invalid || `no complete SOCKS5 credentials within ${openerMs} ms`); r.detach(); return socket.destroy() }
+      w.up += a.length
+      if (!tokenOk(a.pass)) { say(Buffer.from([1, 1])); authFailed(a.user, 'token mismatch'); r.detach(); return socket.end() }
+      say(Buffer.from([1, 0]))
+      const q = await r.take(socks5Request, deadline)
+      if (q.gone) return void r.detach()
+      if (q.timeout || q.invalid) { unknown(q.invalid || `no complete SOCKS5 request within ${openerMs} ms`); r.detach(); return socket.destroy() }
+      w.up += q.length
+      if (q.cmd !== 1) { say(socksReply(7)); unknown(`SOCKS5 command ${q.cmd} is not CONNECT`); r.detach(); return socket.end() }
+      if (!/^[\x21-\x7e]+$/.test(q.host) || q.port < 1) { say(socksReply(8)); unknown('a SOCKS5 target that is not a host name or an address'); r.detach(); return socket.end() } // the name goes into the proxy prelude: no control bytes
+      o = {
+        target: { host: q.host, port: q.port }, user: a.user, pass: a.pass, authed: true,
+        ok: () => say(SOCKS_OK),
+        denied: () => { say(socksReply(2)); socket.end() },
+        badGateway: (code) => { say(socksReply(socksRepOf(code))); socket.end() },
+        refusedBy: () => { say(socksReply(2)); socket.end() },
+      }
+    }
+
+    // 2. the token, in constant time; a connection that did not present one never gets as far as a lookup
+    if (!o.authed && (o.pass === null || !tokenOk(o.pass))) { authFailed(o.user, o.pass === null ? 'no Proxy-Authorization' : 'token mismatch'); r.detach(); return o.denied() }
+    // 3. who is this
+    const dst = { address: o.target.host, port: o.target.port, ...(net.isIP(o.target.host) ? { family: net.isIP(o.target.host) } : {}) }
+    let meta
+    try { meta = await lookupIngress({ peer, user: o.user, target: dst }) } catch (e) {
+      const code = e && e.code === 'loader-timeout' ? 'loader-timeout' : 'loader-down'
+      failure({ code, peer, reason: `looking up the ingress connection of ${printable(o.user)} for ${o.target.host}:${o.target.port} failed (${msgOf(e)}); it was refused with a 502` })
+      r.detach(); return o.badGateway('lookup')
+    }
+    if (!meta) { authFailed(o.user, 'unknown user'); r.detach(); return o.denied() }
+
+    // 4. a health probe: answered here, nothing leaves the machine
+    if (meta.health) return healthTunnel(socket, r, o, meta.group, unknown)
+
+    // 5. the upstream
+    const i = o.user.indexOf('.')
+    const route = i < 0 ? o.user : o.user.slice(0, i), group = i < 0 ? '' : o.user.slice(i + 1)
+    const up = meta.upstream || { kind: 'direct' }
+    let current = null
+    r.whenGone(() => { if (current) current.destroy() })
+    const dial = () => dialUpstream(up, o.target, (s) => { current = s })
+    const d = await dial()
+    current = null
+    if (r.isGone()) { if (d.ok) d.sock.destroy(); r.detach(); return } // the client left while the upstream was dialled: no flow existed, nothing was lost
+    const shown = { kind: up.kind || 'direct', ...(up.host ? { host: up.host } : {}), ...(up.port != null ? { port: up.port } : {}) }
+    const base = { ...meta, dst: meta.dst ?? dst, ingress: meta.ingress ?? { route, group } }
+    if (!d.ok) {
+      r.detach()
+      if (d.kind === 'refused') { counters.refused++; refuse({ ...base, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}) } }, { decision: 'tunnel', not_captured: 'proxy-refused', reason: d.reason }); return o.refusedBy(d) }
+      counters.unreachable++
+      refuse({ ...base, upstream: shown }, { decision: 'error', not_captured: 'error', error: { type: d.error.type, message: d.error.message, side: 'upstream' } })
+      return o.badGateway(d.error.type)
+    }
+    o.ok()
+    // 6. an agent's flow from here on. The credentials stay in this closure; the flow only knows whether the upstream has some.
+    const rest = r.detach(); idle.delete(socket)
+    if (rest.length) socket.unshift(rest)
+    if (d.rest.length) d.sock.unshift(d.rest)
+    counters.flows++
+    const credentialed = !!up.auth
+    // a direct upstream is redialled as the transparent door does it: a connecting socket, at once
+    const redial = credentialed ? undefined : () => connectUpstream({ address: o.target.host, port: o.target.port })
+    handleFlow(socket, { ...base, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}), credentialed }, wire: { up: w.up, down: w.down } }, { upstream: d.sock, redial })
+  }
+
+  async function dialUpstream(up, target, track) {
+    const kind = up.kind || 'direct'
+    if (kind !== 'direct') return { ok: false, kind: 'unreachable', error: { type: 'unsupported_upstream', message: `the upstream kind ${JSON.stringify(printable(kind))} is not one the ingress dials yet (only direct; http and socks5 come with the next commit)` } }
+    const to = { address: target.host, port: target.port }
+    let sock
+    try { sock = connectUpstream(to) } catch (e) { return { ok: false, kind: 'unreachable', error: { type: e.code || 'upstream_error', message: msgOf(e) } } }
+    track(sock)
+    sock.on('error', () => {}) // the handshake owns the outcome; a late error must not be uncaught
+    try { await whenConnected(sock) } catch (e) { sock.destroy(); return { ok: false, kind: 'unreachable', error: { type: e.code || 'upstream_error', message: msgOf(e) } } }
+    return { ok: true, sock, reply: null, rest: Buffer.alloc(0) }
+  }
+
+  // a health probe tunnel (4.8 §3.3, §5.1): the group's own re-entry point, answered with what mihomo's http / socks5 outbound looks for
+  async function healthTunnel(socket, r, o, group, unknown) {
+    counters.health++
+    o.ok()
+    for (;;) {
+      const m = await r.take(headOf, Date.now() + healthIdleMs)
+      if (m.gone) return void r.detach()
+      if (m.timeout) { r.detach(); return socket.destroy() }
+      const line = !m.invalid && /^(HEAD|GET) (\S+) HTTP\/1\.[01]$/.exec(m.head.startLine)
+      if (!line || line[2].split('?')[0] !== `/asight-health/${group}`) {
+        unknown(`a request that is not the health probe inside the health tunnel (${m.invalid || printable(m.head.startLine.split(' ').slice(0, 2).join(' '))})`)
+        r.detach(); return socket.destroy()
+      }
+      socket.write('HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n')
+    }
+  }
+
+  // the 'connection' listener: handle() reports its own failures; this is only the last resort, so a throw never goes unhandled
+  const connection = (s) => { handle(s).catch((e) => { s.destroy(); failure({ code: 'engine-error', reason: `the proxy ingress failed: ${msgOf(e)}` }) }) }
+  return {
+    attach(server) { server.on('connection', connection) },
+    connection,
+    handle,
+    stats: () => ({ ...counters }),
+    /** end what is not a flow (handshakes, health tunnels): engine.close() waits for flows, never for these */
+    closeIdle() { for (const s of [...idle]) s.destroy() },
+  }
+}
