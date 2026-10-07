@@ -122,7 +122,8 @@ const ours = (value) => /\bdaemon --supervise\s*$/.test(value) // what an earlie
 
 /**
  * The Run value, read: `reg query HKCU\...\Run /v asight-collector` → `{ present: true, kind, value }` · `{ present: false }` · `{ error }` (reg did not run, or answered with something that is no value).
- * One fixed query of one value: asight reads no other value of that key.
+ * One fixed query of one value: asight reads no other value of that key. reg.exe writes a redirected stdout in the console's code page (cp936 on a zh-CN Windows) and execTool decodes UTF-8, so a character outside ASCII
+ * comes back as U+FFFD: then `lossy: true` is there, and the value is not what the registry holds, byte for byte (the blanks at the start and end of a value are lost too, as execTool trims; a command line does not mind).
  */
 export function readRunValue({ run = null, env = process.env } = {}) {
   const r = execTool('reg', ['query', RUN_PATH, '/v', RUN_KEY.name], { run, env })
@@ -130,7 +131,23 @@ export function readRunValue({ run = null, env = process.env } = {}) {
   if (r.code !== 0) return { present: false }
   const m = new RegExp(`^[ \\t]+${RUN_KEY.name}[ \\t]+(REG_[A-Z_]+)(?:[ \\t]+(.*))?$`, 'mi').exec(r.out)
   if (!m) return { error: `reg query answered, but not with the value ${RUN_KEY.name}` }
-  return { present: true, kind: m[1].toUpperCase(), value: m[2] ?? '' }
+  const value = m[2] ?? ''
+  return { present: true, kind: m[1].toUpperCase(), value, ...(value.includes('\uFFFD') ? { lossy: true } : {}) }
+}
+
+/**
+ * Is what `reg query` printed the value that was written? Byte for byte; and, when what was written has characters outside ASCII (a profile path in Chinese), through the console code page of reg.exe (see readRunValue):
+ * the ASCII has to match exactly and each run of non-ASCII characters is whatever it came back as (U+FFFD, `?`, other characters). A lossy channel proves less, and it proves what it can.
+ */
+function sameValue(read, wanted) {
+  if (read === wanted) return true
+  if (!/[^\x00-\x7f]/.test(wanted)) return false
+  let pattern = ''
+  let run = false
+  for (const ch of wanted) {
+    if (ch.codePointAt(0) > 0x7f) { if (!run) pattern += '(?:[^\\x00-\\x7f]|\\?)+'; run = true } else { run = false; pattern += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') }
+  }
+  return new RegExp(`^${pattern}$`, 'u').test(read)
 }
 
 /**
@@ -144,11 +161,12 @@ export function runKeyFallback({ command, run = null, env = process.env } = {}) 
   if (before.error) return { ok: false, reason: before.error }
   const mine = before.present && ours(before.value)
   if (before.present && !mine && !['REG_SZ', 'REG_EXPAND_SZ'].includes(before.kind)) return { ok: false, reason: `${RUN_PATH}\\${RUN_KEY.name} already exists as ${before.kind}, not a string, and asight does not overwrite what it cannot put back` }
+  if (before.present && !mine && before.lossy) return { ok: false, reason: `${RUN_PATH}\\${RUN_KEY.name} already exists and has characters that reg.exe printed in a console code page, not UTF-8 (U+FFFD): asight cannot put it back byte for byte, so it does not overwrite it` }
   const entry = { kind: 'run-key', hive: RUN_KEY.hive, key: RUN_KEY.key, name: RUN_KEY.name, value: command, prior: before.present && !mine ? { kind: before.kind, value: before.value } : null }
   const w = execTool('reg', ['add', RUN_PATH, '/v', RUN_KEY.name, '/t', 'REG_SZ', '/d', command, '/f'], { run, env })
   if (w.code !== 0) return { ok: false, reason: `reg add failed (${errOf(w)})` }
   const after = readRunValue({ run, env })
-  if (after.error || !after.present || after.value !== command) return { ok: false, entry, reason: `the Run value did not take: read back as ${after.error ? after.error : after.present ? JSON.stringify(after.value) : 'absent'}` }
+  if (after.error || !after.present || !sameValue(after.value, command)) return { ok: false, entry, reason: `the Run value did not take: read back as ${after.error ? after.error : after.present ? JSON.stringify(after.value) : 'absent'}` }
   return { ok: true, ours: mine, entry }
 }
 

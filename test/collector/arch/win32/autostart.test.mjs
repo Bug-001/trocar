@@ -439,14 +439,16 @@ const RUN_PATH = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
 /** What `reg query HKCU\…\Run /v asight-collector` prints when the value is there. */
 const REG_OUT = (kind, data) => `\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\n    asight-collector    ${kind}    ${data}\n`
 const COMMAND = `conhost.exe --headless "${NODE}" "${SCRIPT}" daemon --supervise`
+/** What `reg query` text looks like to code that decodes it as UTF-8 when reg.exe wrote it in the console's code page (cp936 on a zh-CN Windows): a character outside ASCII is two bytes that are no UTF-8, each one a U+FFFD. */
+const asDecodedByUtf8 = (v) => v.replace(/[^\x00-\x7f]/gu, '\uFFFD\uFFFD')
 /** A registry that a fake `reg` reads and writes: the one Run value of ours (null = absent). `add` and `delete` are recorded as they come. */
-function fakeRegistry(initial = null, { addFails = false, deleteFails = false, dropWrites = false, storeAs = null } = {}) {
+function fakeRegistry(initial = null, { addFails = false, deleteFails = false, dropWrites = false, storeAs = null, codePage = false } = {}) {
   const reg = { value: initial }
   const run = fakeTools({
     'schtasks /Create': { status: 1, stderr: 'ERROR: Access is denied.' },
     'schtasks /Query': { status: 1 },
     reg: (file, args) => {
-      if (args[0] === 'query') return reg.value ? { status: 0, stdout: REG_OUT(reg.value.kind, reg.value.value) } : { status: 1, stderr: 'ERROR: The system was unable to find the specified registry key or value.' }
+      if (args[0] === 'query') return reg.value ? { status: 0, stdout: REG_OUT(reg.value.kind, codePage ? asDecodedByUtf8(reg.value.value) : reg.value.value) } : { status: 1, stderr: 'ERROR: The system was unable to find the specified registry key or value.' }
       if (args[0] === 'add') { if (addFails) return { status: 1, stderr: 'ERROR: Access is denied.' }; if (!dropWrites) reg.value = { kind: args[args.indexOf('/t') + 1], value: storeAs ? storeAs(args[args.indexOf('/d') + 1]) : args[args.indexOf('/d') + 1] }; return { status: 0, stdout: 'The operation completed successfully.' } }
       if (args[0] === 'delete') { if (deleteFails) return { status: 1, stderr: 'ERROR: Access is denied.' }; reg.value = null; return { status: 0 } }
       return { status: 1 }
@@ -553,6 +555,45 @@ test('W24 a fallback that did not take is a failure with both reasons: reg add r
   const d = userUnit({ ...withHome(), run: missing }).enable() // no task file: a precondition, not a refusal
   assert.equal(d.code, null)
   assert.deepEqual(missing.calls, [], 'no schtasks and no reg for a file that is not there')
+})
+
+test('W24 reg.exe prints in the console code page, which the runner decodes as UTF-8: a value with characters outside ASCII is read back through that and is not "did not take" (the ASCII of it must match), and a prior that cannot be read faithfully is never overwritten', () => {
+  const zh = `conhost.exe --headless "C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\张三\\AppData\\Roaming\\npm\\node_modules\\asight\\bin\\asight.mjs" daemon --supervise`
+  // 1. a correct write of a command with a Chinese profile path, read through a console code page: the fallback took
+  const reg = fakeRegistry(null, { codePage: true })
+  const r = runKeyFallback({ command: zh, run: reg })
+  assert.equal(r.ok, true, r.reason)
+  assert.equal(r.entry.value, zh, 'the ledger has what was written, not what came back')
+  assert.equal(reg.reg.value.value, zh, 'and the registry holds it exactly (the fake stores the argument as it was passed)')
+  // 2. the ASCII of the value is still compared: a different ASCII part is a failure, and so is a missing or a wrongly placed non-ASCII run
+  for (const [what, stored] of [['another path', zh.replace('nodejs', 'node-js')], ['one letter of the ASCII', zh.replace('Roaming', 'Roamimg')], ['the tail cut', zh.replace(' daemon --supervise', '')], ['no Chinese at all', zh.replace('张三', 'user')], ['a run where there is none', zh.replace('npm', '用户')]]) {
+    const bad = runKeyFallback({ command: zh, run: fakeRegistry(null, { codePage: true, storeAs: () => stored }) })
+    assert.equal(bad.ok, false, what)
+    assert.match(bad.reason, /did not take/, what)
+    assert.ok(bad.entry, `${what}: still ledgered`)
+  }
+  // 3. without non-ASCII characters in what was written the comparison stays byte for byte, code page or not
+  assert.equal(runKeyFallback({ command: COMMAND, run: fakeRegistry(null, { codePage: true, storeAs: (v) => v.replace('node.exe', 'Node.exe') }) }).ok, false)
+  assert.equal(runKeyFallback({ command: COMMAND, run: fakeRegistry(null, { codePage: true }) }).ok, true)
+  // 4. readRunValue says when the text is no UTF-8 any more (U+FFFD); a clean value carries no such key
+  const lossy = readRunValue({ run: fakeRegistry({ kind: 'REG_SZ', value: '"C:\\用户\\mine.exe"' }, { codePage: true }) })
+  assert.deepEqual([lossy.present, lossy.lossy], [true, true])
+  assert.deepEqual(readRunValue({ run: fakeRegistry({ kind: 'REG_SZ', value: '"C:\\Tools\\mine.exe"' }, { codePage: true }) }), { present: true, kind: 'REG_SZ', value: '"C:\\Tools\\mine.exe"' })
+  // 5. the user's own Run value that cannot be read faithfully cannot be put back, so it is not overwritten: not one write, and `on` says why
+  const theirs = fakeRegistry({ kind: 'REG_SZ', value: '"C:\\用户\\mine.exe" --quiet' }, { codePage: true })
+  const f = runKeyFallback({ command: COMMAND, run: theirs })
+  assert.equal(f.ok, false)
+  assert.match(f.reason, /code page|UTF-8|U\+FFFD/i)
+  assert.equal(f.entry, undefined, 'nothing was written, nothing to ledger')
+  assert.deepEqual(theirs.calls.filter((c) => c[0] === 'reg').map((c) => c[1]), ['query'], 'not one write')
+  const u = installed(userUnit({ ...withHome(), run: theirs })).enable({ now: false })
+  assert.notEqual(u.code, 0)
+  assert.match(u.err, /code page|UTF-8|U\+FFFD/i)
+  assert.equal(u.event.code, 'task-register-failed')
+  assert.equal(theirs.reg.value.value, '"C:\\用户\\mine.exe" --quiet', 'the user\'s value is as it was')
+  // one of asight's own, read through the code page, is still asight's (the tail is ASCII) and is taken out
+  const mine = fakeRegistry({ kind: 'REG_SZ', value: zh }, { codePage: true })
+  assert.equal(removeRunValue({ run: mine }).runKey, 'removed')
 })
 
 test('W24 off and uninstall remove only the Run value: ours with no prior is deleted, ours over a prior puts the prior back with its kind, one that is not ours is left, and nothing but that one value is named', () => {
