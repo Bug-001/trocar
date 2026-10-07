@@ -735,6 +735,25 @@ test('directCount(pid): the process\'s established connections that are not to a
   assert.deepEqual(await made({}).r.directCount(10), { count: null, error: 'no-helper' })
 })
 
+// ---------- the Redirector contract the callers hold it to ----------
+
+test('the Windows redirector has every call the daemon, the tracker and the switch make on a Redirector (core/redirector.mjs): one it lacks is a TypeError at the first `on`, and a method the daemon calls only behind a `typeof` guard is optional', async () => {
+  const fs = await import('node:fs')
+  const strip = (f) => fs.readFileSync(new URL(`../../../../src/collector/${f}`, import.meta.url), 'utf8').replace(/\/\*[^]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\s\/\/ .*$/gm, '')
+  const sources = ['daemon.mjs', 'core/tracker.mjs', 'core/switch.mjs'].map(strip)
+  const called = new Set(sources.flatMap((code) => [...code.matchAll(/\bredirector\.([A-Za-z]+)/g)].map((m) => m[1])))
+  const guarded = (name) => sources.some((code) => code.includes(`typeof redirector.${name}`))
+  // what Windows does not have, and why: the daemon opens no transparent listener there (4.8 §1: no transparent rewrite), so the engine never calls `lookup`; Task 8(c) takes the call out of the daemon's
+  // transparent path. An entry here that the callers stop making is a stale entry, and this test says so.
+  const NOT_ON_WINDOWS = { lookup: 'Windows has no transparent rewrite: Task 8(c) makes the daemon open no transparent listener there' }
+  const { r } = made({})
+  const missing = [...called].filter((name) => !guarded(name) && !(name in r) && !(name in NOT_ON_WINDOWS))
+  assert.deepEqual(missing, [], `the callers need ${missing.join(', ')} of a Redirector and createWin32Redirector gives none`)
+  for (const name of Object.keys(NOT_ON_WINDOWS)) assert.ok(called.has(name) && !(name in r), `${name} is still called and still absent on Windows: ${NOT_ON_WINDOWS[name]}`)
+  for (const name of ['configure', 'directCount']) assert.ok(called.has(name) && typeof r[name] === 'function', `the two calls the review found missing or synchronous: ${name}`)
+  assert.equal(await r.configure(18790), undefined, 'configure is accepted and tells the kernel nothing: its config has the engine port from ingress.json')
+})
+
 test('what the redirector may do (static): it imports only the modules that read or plan, opens no socket, runs nothing, writes no file or registry key, names no harness, and the user\'s login is read in one place', async () => {
   const fs = await import('node:fs')
   const src = fs.readFileSync(new URL('../../../../src/collector/arch/win32/redirector.mjs', import.meta.url), 'utf8')

@@ -260,6 +260,9 @@ export function createWin32Redirector({ helper, procWatcher, groups, home = null
       } catch (e) { return { count: null, error: (e && e.code) || msgOf(e) } }
     },
 
+    /** The daemon's `redirector.configure(enginePort)` (core/redirector.mjs): the port the engine listens on. The kernel's config gets it from `ingress()` (ingress.json: `enginePort`, which the daemon listens on), so there is nothing to tell the
+     *  kernel here; accepted so that the daemon's call is not a TypeError at the first `on`. */
+    async configure() {},
     /** Waits for the helper's ready line (its protocol, its PowerShell), then takes the process baseline. Rejects when the helper never starts: that failure is already recorded by the helper's own sink. */
     async start() {
       const ready = helper && helper.ready ? await helper.ready : null

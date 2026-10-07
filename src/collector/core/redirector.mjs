@@ -41,10 +41,12 @@
 // What the daemon (src/collector/daemon.mjs, Plan 3a) also needs from an arch adapter — the Linux one is
 // arch/linux/redirector.mjs; a later OS implements the same names:
 //   start() / close()              — spawn / stop the OS helper; close() leaves agent traffic direct.
-//   configure(enginePort)          — the port the kernel steers decrypt-verdict connections to.
+//   configure(enginePort)          — the port the kernel steers decrypt-verdict connections to (Windows: nothing to do, the kernel's config
+//                                    carries the engine's port from ingress.json; the call is accepted and ignored).
 //   scan(): Promise<ProcFacts[]>   — this user's live processes (startup and every `on`).
-//   directCount(pid): {count, error} — the process's connections still going direct (status only); count null +
-//                                    the errno when it cannot be told (never 0, D-17).
+//   directCount(pid): {count, error} | Promise<{count, error}> — the process's connections still going direct (status only); count null +
+//                                    the errno when it cannot be told (never 0, D-17). Linux answers at once; Windows reads its connection
+//                                    table through the helper, so it is a Promise there: the caller `await`s it either way.
 //   'facts-error' {os, pid, code, comm, argv, reason} — a process of this user whose exe could not be read, so never judged
 //                                    (D-30); comm and argv are what is still readable, for "could this be an agent".
 //   unreadable(): [{pid, comm, errno, argv}] — those of this user still there since the last scan (not the helper's own).

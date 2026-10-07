@@ -347,10 +347,10 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
 
     async function status() {
       // every running-but-untrusted agent says why and what to do (4.6 §确认信任, R4); hosts it never decrypts say why too
-      const agents = tracker.agents().map((r) => {
-        const d = redirector.directCount(r.pid) // {count, error}: unknown is said, never 0 (D-17)
+      const agents = await Promise.all(tracker.agents().map(async (r) => {
+        const d = await redirector.directCount(r.pid) // {count, error}, or a Promise of it (Windows reads its connection table through the helper): unknown is said, never 0 (D-17)
         return { pid: r.pid, agent: r.agent, exe: r.exe, trusted: r.trusted, reason: r.reason, ...(r.trusted ? {} : { hint: hintFor(r.agent, r.reason) }), trust_var: r.trustVar, trust_via: r.trustVia, decrypt: r.decrypt, hosts: r.hosts, not_via_trust_path: r.bypass, unreachable: r.unreachable ?? [], parent_pid: r.ppid ?? null, parent_agent: r.parentAgent ?? null, source: r.source, direct: d.count, ...(d.error ? { direct_error: d.error } : {}) }
-      })
+      }))
       const { pid, proto, build, unparsable = 0, timeouts = 0 } = redirector.helperInfo()
       // processes of this user whose exe cannot be read and whose command line fits no harness: seen, not judged (4.6 exe-unreadable)
       const unjudged = (typeof redirector.unreadable === 'function' ? redirector.unreadable() : []).filter((u) => !registry.couldMatch({ os: A.os, exe: null, env: null, argv: u.argv, comm: u.comm }).length)

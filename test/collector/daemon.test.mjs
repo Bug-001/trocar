@@ -174,6 +174,27 @@ test('daemon: the same program without the CA is only observed; its direct conne
   } finally { await d.stop(); p.done(); s.done() }
 })
 
+// A redirector whose directCount is a Promise (the Windows one reads the connection table through its helper): status awaits it. The daemon used to read `.count` off the Promise,
+// so every agent showed `direct: undefined` and "still going direct" was silently empty (4.6 §开关语义, D-17: unknown is said, never nothing).
+test('daemon: status awaits the redirector\'s directCount — an arch whose answer is a Promise still gives each agent its `direct` count, and a count it cannot tell stays null with its error', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const { arch } = fakeArch(p)
+  const calls = []
+  const asynchronous = { os: arch.os, createRedirector: (o) => { const r = arch.createRedirector(o); const real = r.directCount.bind(r); r.directCount = async (pid) => { calls.push(pid); return pid === 5252 ? { count: null, error: 'helper-down' } : real(pid) }; return r } }
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: asynchronous, harnesses: [cc], env: { ...process.env, HOME: s.home } })
+  try {
+    p.add(5151, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) })
+    p.add(5252, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) })
+    await req(s.sock, 'POST', '/on', {})
+    const agents = (await req(s.sock, 'GET', '/status')).agents
+    const by = Object.fromEntries(agents.map((a) => [a.pid, a]))
+    assert.deepEqual([by[5151].direct, by[5151].direct_error ?? null], [0, null], 'the count the Promise resolved to, not undefined')
+    assert.deepEqual([by[5252].direct, by[5252].direct_error], [null, 'helper-down'], 'a count nobody could read is null with the reason')
+    assert.ok(calls.includes(5151) && calls.includes(5252))
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
 // Review B-4(a) (4.6 子进程与嵌套 agent): "嵌套关系记在 flows/ 的 parent_pid / parent_agent 里" — the engine's rows and the
 // metadata row of a connection that went direct carry them, and status lists them with the agent.
 test('daemon: an agent started by another agent is recorded with parent_pid and parent_agent in flows/ and status (B-4a)', async () => {
