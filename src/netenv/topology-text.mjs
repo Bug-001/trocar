@@ -6,7 +6,7 @@ const MODE = { rule: '规则模式', global: '全局模式', direct: '直连模�
 export const ROUTING_TEXT = Object.freeze({ driver: '驱动模式(eBPF)', proxy: '代理模式', legacy: '旧采集', none: '没有采集', unknown: '引流模式不知道' })
 const BRANCH_TEXT = { http: 'HTTP', ws: 'WebSocket' }
 const tri = (v, yes = '是', no = '否') => (v === true ? yes : v === false ? no : '不知道')
-const base = (p) => String(p).split('/').pop()
+const base = (p) => String(p).split(/[\\/]/).pop()
 
 const nodeOf = (t, id) => t.nodes.find((n) => n.id === id)
 const edgeOf = (t, from, to) => t.edges.find((e) => e.from === from && e.to === to) || null
@@ -35,6 +35,7 @@ function hopText(n, via, detail) {
 function edgeLabel(e, from, to, detail) {
   if (!e) return ''
   if (to.kind === 'legacy-mitm') return '旧块 · 旧采集' // the old capture's block in the VPN's script routes the connection into its MITM (1.6 §4)
+  if (from.kind === 'legacy-mitm') return ''
   if (e.via === 'ebpf') return detail && (e.evidence || []).find((x) => x.startsWith('link:')) ? `eBPF · link ${e.evidence.find((x) => x.startsWith('link:')).slice(5)}` : 'eBPF'
   if (e.via === 'system-proxy') return '系统代理'
   if (e.via === 'tun') return 'TUN'
@@ -58,10 +59,14 @@ function chain(t, ids, detail = false) {
   }).join(' → ')
 }
 
-const prefixOf = (t, b) => (b.form ? `${b.form} ` : t.branches.length > 1 && BRANCH_TEXT[b.name] ? `${BRANCH_TEXT[b.name]} ` : '')
+// Which words a branch's line needs in front: its form when the harness has more than one, HTTP / WebSocket when the branches of its form do not all go the same way (`key`: the path with asight, or without).
+const sameWay = (t, b, key) => new Set(t.branches.filter((x) => x.form === b.form).map((x) => x[key].join())).size === 1
+const prefixOf = (t, b, key = 'path') => [new Set(t.branches.map((x) => x.form).filter(Boolean)).size > 1 ? b.form : null, sameWay(t, b, key) ? null : BRANCH_TEXT[b.name]].filter(Boolean).map((x) => `${x} `).join('')
+// the branches that go the same way (same form, same path) are one line
+const distinct = (t) => t.branches.filter((b, i) => t.branches.findIndex((x) => x.form === b.form && x.path.join() === b.path.join()) === i)
 
-/** One line per branch: the path with asight on it. */
-export const renderCompact = (t) => t.branches.map((b) => `${prefixOf(t, b)}${chain(t, b.path)}`)
+/** One line per way a harness's traffic goes: the path with asight on it (HTTP and WebSocket that take the same path are one line). */
+export const renderCompact = (t) => distinct(t).map((b) => `${prefixOf(t, b)}${chain(t, b.path)}`)
 
 /** What `status` says after a branch's chain: 「在路径上 · 是」 / 「不在 · 否 · desired-off」 — whether asight is on the path, whether the harness is captured, and why not. */
 export const verdictText = (b) => `${b.on_path === true ? '在路径上' : b.on_path === false ? '不在' : '在不在路径上不知道'} · ${tri(b.captured)}${b.reason ? ` · ${b.reason}` : ''}`
@@ -91,7 +96,7 @@ export function renderDetail(t, { now = null } = {}) {
   const head = `${t.harness} · ${t.desired === 'on' ? '开' : t.desired === 'off' ? '关' : '期望态不知道'} · ${ROUTING_TEXT[t.routing]} · 被采集: ${t.captured === true ? '是' : t.captured === false ? `否${t.reason ? `(${t.reason})` : ''}` : '不知道'}`
   const ago = now != null && Number.isFinite(Date.parse(t.at)) ? ` · ${Math.max(0, Math.round((now - Date.parse(t.at)) / 1000))} 秒前探测` : ''
   const lines = [head]
-  for (const b of t.branches) {
+  for (const b of distinct(t)) {
     lines.push(`新连接的路${prefixOf(t, b) ? `(${prefixOf(t, b).trim()})` : ''}${ago}  ${verdictText(b)}`)
     b.path.forEach((id, i) => {
       const n = nodeOf(t, id), e = i ? edgeOf(t, b.path[i - 1], id) : null
@@ -99,7 +104,7 @@ export function renderDetail(t, { now = null } = {}) {
       lines.push(i ? `  → ${label ? `[${label}] ` : ''}${hopText(n, e && e.via, true)}` : `  ${hopText(n, null, true)}`)
     })
   }
-  if (t.branches.some((b) => b.path.some((id) => isAsight(nodeOf(t, id))))) lines.push(`关掉 asight 时的路: ${t.branches.map((b) => `${prefixOf(t, b)}${chain(t, b.off_path)}`).join(' · ')}`)
+  if (t.branches.some((b) => b.path.some((id) => isAsight(nodeOf(t, id))))) lines.push(`关掉 asight 时的路: ${t.branches.map((b) => `${prefixOf(t, b, 'off_path')}${chain(t, b.off_path)}`).join(' · ')}`)
   for (const r of t.running || []) lines.push(r.note === 'start-time-settings' ? `pid ${r.pid} 仍按启动时的设置:${chain(t, r.path)};重启后按上面的路` : `pid ${r.pid} 没有经过 asight${r.reason ? `(${r.reason})` : ''}:${chain(t, r.path)};重启后被采集`)
   for (const n of t.notes || []) lines.push(`说明: ${n}`)
   if (t.vpn && t.on_path === true) lines.push(`你的 VPN 按进程分流时,看到的来源是 asight,不是 ${t.harness}`)

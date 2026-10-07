@@ -87,3 +87,35 @@ test('every value of the NetFacts the builder reads can be null / unknown withou
   assert.deepEqual(validateTopology({ 'claude-code': t }), [])
   void harness; void none
 })
+
+test('rows with a note: what the chain cannot say by itself (the agents still on the kernel after `off`, the entry to ask for, the filters nobody can see) is a note of the topology, rendered under 「说明」', () => {
+  const noted = ROWS.filter((r) => r.notes)
+  assert.deepEqual(noted.map((r) => r.n), [14, 15, 23])
+  for (const r of noted) assert.deepEqual(buildTopology(r.facts)[r.h].notes, r.notes, `row ${r.n}`)
+  for (const r of ROWS.filter((x) => !x.notes)) assert.deepEqual(buildTopology(r.facts)[r.h].notes, [], `row ${r.n} has nothing to add`)
+})
+
+test('proxy mode: one branch per form, a form with HTTP and WebSocket apart gets two that share the path with asight and differ in the way out (Codex, the OS proxy on)', () => {
+  const row = ROWS.find((r) => r.n === 9), t = buildTopology(row.facts).codex
+  assert.deepEqual(t.branches.map((b) => [b.name, b.form]), [['http', 'codex.cli'], ['ws', 'codex.cli']])
+  assert.deepEqual(t.branches[0].path, t.branches[1].path)
+  assert.notDeepEqual(t.branches[0].off_path, t.branches[1].off_path)
+  assert.deepEqual(t.branches[0].off_path.map((id) => kindOf(t, id)), ['agent', 'proxy', 'egress'], 'HTTP goes through the OS proxy without asight')
+  assert.deepEqual(t.branches[1].off_path.map((id) => kindOf(t, id)), ['agent', 'upstream'], 'the WebSocket goes direct')
+  const entry = t.edges.find((e) => e.entry)
+  assert.deepEqual([entry.via, entry.asight, entry.entry], ['proxy-http', true, { where: '.env HTTPS_PROXY', opt_in: false }], 'the entry edge says who wrote it')
+  const off = buildTopology(ROWS.find((r) => r.n === 14).facts).codex.edges.find((e) => e.entry)
+  assert.equal(off.entry.opt_in, false)
+})
+
+test('the old capture\'s chain is distinct nodes (the VPN twice, as two nodes), and a harness the facts cannot be drawn from says why instead of throwing', () => {
+  const t = buildTopology(ROWS.find((r) => r.n === 20).facts)['claude-code']
+  const vpn = t.nodes.filter((n) => n.kind === 'proxy')
+  assert.equal(vpn.length, 2)
+  assert.deepEqual(vpn.map((n) => n.port), [7897, 7897])
+  assert.equal(new Set(t.branches[0].path).size, 5)
+  assert.equal(t.branches[0].off_path.length, 3, 'without the capture: Claude → the VPN → out')
+  const broken = buildTopology({ ...ROWS.find((r) => r.n === 20).facts, harnesses: { 'claude-code': { ...ROWS.find((r) => r.n === 20).facts.harnesses['claude-code'], systemProxy: null } } })['claude-code']
+  assert.equal(broken.captured, null)
+  assert.match(broken.notes[0], /could not be worked out/)
+})
