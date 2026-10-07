@@ -1,20 +1,19 @@
-// rules.mjs — the mihomo rule block and the own forwarder's config, as pure functions of data (RFC 4.8 §3 · §4.2 · §3.4, 4.7 §3.4; acceptance W7 W8 W9 W10 W12 W58).
+// rules.mjs — the own kernel's config and the loop check, as pure functions of data (RFC 4.8 §3 · §3.4; acceptance W7 W8 W12; D43: this is the only mihomo config asight writes, the user's VPN gets none).
 //
-// What goes in is data only: groups (an id, a route, process patterns, image names), ports, the ingress token. What comes out is data or text: the entries
-// of the block, the route files, a global script, a config. Nothing here reads a file, opens a socket or knows which programs the groups are for (4.8 §3: the
-// generator does not know the harnesses; test/netenv/mihomo-rules.test.mjs scans this file's source for their ids). Writing the output, switching it on
-// and checking that it took effect is the Verge adapter's and the forwarder's job (Tasks 6 and 7).
+// What goes in is data only: forms (an id, a loopback port, a next hop), ports, the ingress token, the controller's port and secret. What comes out is text or data: the kernel's config, the names of a form's entries,
+// the loop check's answer. Nothing here reads a file, opens a socket or knows which programs the forms are for (4.8 §3: the generator does not know the harnesses; test/netenv/mihomo-rules.test.mjs scans this
+// file's source for their ids). Writing the output, loading it and checking that it took effect is the forwarder's job (Task 7), which also rewrites buildForwarderConfig for per-group listeners with
+// authentication, bypass rows and inline process rules (4.8 §3.1) and deletes what only today's config uses (the route file, the select and the file provider).
 //
-// The block, per group <g> (4.8 §3.1): asight-in-<g> (the engine), asight-re-<g> (the re-entry point), asight-fb-<g> (fallback over both, probing the re-entry
-// point's own loopback port: the probe never leaves the machine, §3.3), asight-sw-<g> (select, PASS first = off), asight-r-<g> (the rule provider, a file),
-// and the rules: first the loopback AND → DIRECT that lets the re-entry point answer its own probe, then one RULE-SET per group. Every name starts with asight-.
+// A form that is on has, per form <g> (4.8 §3.1): asight-in-<g> (the engine), asight-re-<g> (the re-entry point), asight-fb-<g> (fallback over both, probing the re-entry point's own loopback port: the probe
+// never leaves the machine, §3.3), asight-sw-<g> (select, PASS first = off), asight-r-<g> (the rule provider, a file). Every name starts with asight-.
 
-export const ROUTES = Object.freeze(['vb', 'of']) // the first half of the engine outbound's user name: <route>.<group> (vb = VPN block, of = own forwarder, 4.8 §3.2)
+export const ROUTES = Object.freeze(['of']) // the first half of the engine outbound's user name: <route>.<group> (of = the own forwarder; the withdrawn VPN block's `vb` is gone, D43, 4.8 §3.2)
 const LOOPBACK = '127.0.0.1'
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/ // a group id is part of the Basic user name and of the probe path: no ':' and no space; dots are fine (ingress ROUTE_NAME)
 const TOKEN_RE = /^[A-Za-z0-9_-]{16,128}$/
 
-/** Every name the block uses for group `g`, in one place so the adapters never re-derive them. `routeFile` is relative to the proxy core's home directory. */
+/** Every name the kernel's config uses for form `g`, in one place so no caller re-derives them. `routeFile` is relative to the proxy core's home directory. */
 export function names(g) {
   return { in: `asight-in-${g}`, re: `asight-re-${g}`, fb: `asight-fb-${g}`, sw: `asight-sw-${g}`, provider: `asight-r-${g}`, up: `asight-up-${g}`, routeFile: `asight/route-${g}.txt` }
 }
@@ -102,17 +101,8 @@ export function checkLoops({ processRules, ownImages } = {}) {
   return null
 }
 
-// ---- the block (4.8 §3.1) --------------------------------------------------------------------------------------------------------------------------
-
-function checkCommon({ enginePort, token, reenter }) {
-  checkPort(enginePort, 'the engine port')
-  if (typeof token !== 'string' || !TOKEN_RE.test(token)) throw new TypeError('the ingress token is 16..128 letters, digits, dashes and underscores')
-  if (!reenter || reenter.host !== LOOPBACK) throw new TypeError(`the re-entry host must be ${LOOPBACK}: the health probe never leaves the machine`)
-  checkPort(reenter.port, 'the re-entry port')
-  if (enginePort === reenter.port) throw new TypeError('the engine port and the re-entry port must differ')
-}
-
-// proxies, groups and the provider of one group: shared by the block and by the forwarder's config (the same code, 4.8 §3)
+// ---- the entries of a form that is on (4.8 §3.1) ---------------------------------------------------------------------------------------------------
+// proxies, groups and the provider of one form
 function entriesOf({ g, route, enginePort, token, reenter }) {
   const n = names(g)
   return {
@@ -128,47 +118,9 @@ function entriesOf({ g, route, enginePort, token, reenter }) {
   }
 }
 
-/**
- * The entries of the VPN block. `groups`: `[{ g, route: 'vb', pathPatterns: string[], names: string[] }]`; `reenter`: `{ host: '127.0.0.1', port }`, the proxy
- * software's own mixed port. Returns `{ proxies, groups, providers, rules, files }`; `files` maps a path relative to the proxy software's home to the text of its
- * route file as it is when the group is on (off is routeFile(null)). `ownImages` is required (4.8 §3.4): the engine's and the forwarder's image paths, and a rule that would
- * match one of them refuses the whole block with a RouteLoopError (no block is written). A caller that forgot it gets a TypeError, not a block with no check; a fixture that has
- * no engine to loop back to says `ownImages: null` on purpose.
- */
-export function buildBlock({ groups, enginePort, token, reenter, ownImages } = {}) {
-  if (ownImages === undefined) throw new TypeError('ownImages is required: the engine\'s and the forwarder\'s image paths, so that a rule that would match them is refused (4.8 3.4); null only where there is no engine to loop back to')
-  checkCommon({ enginePort, token, reenter })
-  if (!Array.isArray(groups) || groups.length === 0) throw new TypeError('a block needs at least one group')
-  const seen = new Set()
-  const prepared = groups.map((grp) => {
-    const g = checkId(grp.g)
-    if (seen.has(g)) throw new TypeError(`duplicate group id ${g}`)
-    seen.add(g)
-    if (!ROUTES.includes(grp.route)) throw new TypeError(`route must be one of ${ROUTES.join(', ')}, got ${JSON.stringify(grp.route)}`)
-    const lines = processRulesOf(grp)
-    if (lines.length === 0) throw new TypeError(`group ${g} has no process rule: nothing to route`)
-    return { g, route: grp.route, lines }
-  })
-  if (ownImages !== null) {
-    const loop = checkLoops({ processRules: prepared.flatMap((p) => p.lines), ownImages })
-    if (loop) throw new RouteLoopError(loop)
-  }
-  const out = { proxies: [], groups: [], providers: {}, rules: [reenterRule(reenter.port)], files: {} }
-  for (const p of prepared) {
-    const e = entriesOf({ g: p.g, route: p.route, enginePort, token, reenter })
-    const n = names(p.g)
-    out.proxies.push(...e.proxies)
-    out.groups.push(...e.groups)
-    out.providers[n.provider] = e.provider
-    out.rules.push(`RULE-SET,${n.provider},${n.sw}`)
-    out.files[n.routeFile] = routeFile(p.lines)
-  }
-  return out
-}
-
 // ---- the own forwarder's config (4.8 §3.1 own-mihomo part, §4.2; W12) -------------------------------------------------------------------------------
-// asight's own forward-only mihomo: one loopback listener per form (a form is one kind of agent), each with a sub-rule. A form that is on has the same block as above
-// (the same entries, from the same function) with its own listener as the re-entry point: agent -> listener -> (rule by process) -> engine -> listener again ->
+// asight's own forward-only mihomo: one loopback listener per form (a form is one kind of agent), each with a sub-rule. A form that is on has the entries above
+// with its own listener as the re-entry point: agent -> listener -> (rule by process) -> engine -> listener again ->
 // the form's next hop. A form that is off, or the whole config when `on` is false, is forward only: MATCH -> the form's next hop, no engine outbound at all.
 // The text is JSON, which is YAML in flow style; the real mihomo reads it (W57 shape 2), and a test can parse it without a library.
 
