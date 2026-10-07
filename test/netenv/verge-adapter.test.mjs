@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { discover, maskEndpoint, ControllerRefused } from '../../src/netenv/mihomo/controller.mjs'
+import { discover, maskEndpoint, createController, ControllerRefused } from '../../src/netenv/mihomo/controller.mjs'
 import { createVergeAdapter } from '../../src/netenv/adapters/clash-verge-rev.mjs'
 import { stubHelper, vergeProcs, proc, SESSION, VERGE_DIR } from './fixtures/win-facts.mjs'
 import { startWorld, snapshot, sha, LEAKS, USER_PROVIDER, USER_GROUP, USER_DOMAIN, NODE, SUB_URL, VERGE_YAML, PROFILES_YAML, SCRIPT_JS, userRuntime, GROUPS } from './fixtures/verge-world.mjs'
@@ -592,4 +592,30 @@ test('a write without a ledger is refused; the reads need none', async (t) => {
   await assert.rejects(w.adapter.stripScriptBlock(), TypeError)
   assert.deepEqual(w.core.writes(), [])
   assert.equal((await w.adapter.readFields()).tun, false)
+})
+
+// ---- a controller that went away and came back under another name -----------------------------------------------------------------------------------------------------------
+
+test('a found controller is looked for again when it stops answering: Verge restarted and its pipe has a new name (the call that finds out is repeated against the new one)', async (t) => {
+  const a = await startWorld(t)
+  a.live(GROUPS, { on: ['claude-code.cli'] })
+  const b = await startWorld(t) // Verge after its restart: the same data directory is the test's business, the core is a new one with the block, nothing selected
+  b.live(GROUPS)
+  const pipes = { current: 'verge-mihomo-aaaa1111aaaa1111' }
+  const ends = { 'pipe:verge-mihomo-aaaa1111aaaa1111': a.core, 'pipe:verge-mihomo-bbbb2222bbbb2222': b.core }
+  const procs = vergeProcs()
+  const helper = stubHelper({ procs, pipes: { 'verge-mihomo-aaaa1111aaaa1111': { serverPid: 4101 }, 'verge-mihomo-bbbb2222bbbb2222': { serverPid: 4101 } } })
+  const ad = createVergeAdapter({ home: a.home, helper, listPipes: async () => [pipes.current], makeClient: ({ endpoint, ...rest }) => createController({ endpoint: ends[endpoint].endpoint, ...rest }), ledger: a.ledger })
+  assert.equal((await ad.verify('claude-code.cli')).live, true)
+  assert.deepEqual([ad.controllerInfo().how, ad.controllerInfo().endpoint], ['enumerate', 'pipe:verge-mihomo-<k>'])
+  await a.core.stop()
+  pipes.current = 'verge-mihomo-bbbb2222bbbb2222'
+  assert.equal((await ad.verify('claude-code.cli')).live, false, 'the new core answered: the switch there is on PASS')
+  assert.ok(b.core.requests.some((q) => q.path === '/proxies/asight-sw-claude-code.cli'))
+  await b.core.stop()
+  const gone = await ad.verify('claude-code.cli')
+  assert.deepEqual([gone.live, gone.reason], [null, 'controller-unreadable'])
+  const asked = helper.calls.length
+  await ad.verify('claude-code.cli')
+  assert.equal(helper.calls.length, asked, 'a controller that is not found is not searched for again at every call (a few seconds\' memory)')
 })

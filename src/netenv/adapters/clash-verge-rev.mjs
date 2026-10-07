@@ -46,13 +46,36 @@ function scriptFileOf(profiles) {
 }
 
 /**
+ * Which way a group's switch is carried out (4.8 §4.1; the input names are this function's, written back into 4.8). Pure.
+ *   blockInRuntime    asight's groups are in the core's runtime (Verge activated a Script.js that has the block, or a payload put it there)
+ *   serviceMode       Verge runs its core as the SYSTEM service: the service may copy the route file into its own directory, after which refreshing asight's provider reads the copy ([L4b] S5: not measured)
+ *   controllerWritable  the controller was found and trusted (4.7 §3.3); false / null: nothing can be told to the core
+ *   payloadAccepted   a push of the runtime has been accepted (true), was refused or could not be read (false), or was not tried yet (null: try it)
+ * → { on: [...], off: [...] }, the keys in the order they are turned: 'select' (PUT the group's switch) and 'provider' (write the route file and refresh the provider), 'payload' (push the runtime with the block
+ * spliced in), 'none' (only the files are written: 已写入,未生效 · 去 Clash Verge → 订阅,点当前订阅重新激活). With the block live: on needs BOTH keys to land and off only ONE (PASS, or an empty provider, both mean off).
+ * Service mode leaves the provider out of both. Without the block in the runtime there is nothing to switch off (the route files are all there is) and `on` pushes the payload, unless it was refused before.
+ */
+export function pickApply({ blockInRuntime, serviceMode, controllerWritable, payloadAccepted } = {}) {
+  if (controllerWritable !== true) return { on: ['none'], off: ['none'] }
+  if (blockInRuntime === true) { const keys = serviceMode === true ? ['select'] : ['select', 'provider']; return { on: [...keys], off: [...keys] } }
+  return { on: payloadAccepted === false ? ['none'] : ['payload'], off: ['none'] }
+}
+
+const NONE_TEXT = '已写入,未生效 · 去 Clash Verge → 订阅,点当前订阅重新激活'
+const MAYBE_STILL_TEXT = 'asight 可能仍在 Clash 的路径上,去 Clash Verge 重新激活'
+const RESIDUE = Object.freeze([
+  { kind: 'runtime-block', text: 'Clash 运行时里留着不起作用的 asight 块,到你下次在 Clash Verge 里重新激活订阅时消失' },
+  { kind: 'cache-db-select', text: 'Clash 的 cache.db 留着一条 asight-sw-* 的选择记录(无害,asight 不改它的数据库)' },
+])
+
+/**
  * createVergeAdapter({ home, fs, controller, listPipes, helper, env, makeClient, installDirs, ledger, running, daemonAlive, now })
  *  home        Verge's data directory (vergeHomeOf). Required.
  *  controller  an already-found controller ({ get, put }); without one the adapter finds it (discover(): listPipes, helper, env, installDirs) and trusts only Verge's own core (N4).
  *  ledger      the install manifest's door for the writes (4.7 §4): { backup(file, data) → path, record(entry), forget(kind, key), keepBackup(info), dropBackup(path), find(kind, key) }; without one nothing is written.
- *  running     () → true | false | null: whether Verge is running (null: cannot tell). daemonAlive () → true | false | undefined: whether asight's daemon is alive (undefined: not claimed).
+ *  running     () → true | false | null: whether Verge is running (null: cannot tell). serviceRunning: the same for clash-verge-service. daemonAlive () → true | false | undefined: whether asight's daemon is alive (undefined: not claimed).
  */
-export function createVergeAdapter({ home, fs = nodeFs, controller = null, listPipes, helper = null, env = process.env, makeClient = createController, installDirs = [], ledger = null, running = () => null, daemonAlive = () => undefined, now = () => new Date(), unknownTtlMs = 5000 } = {}) {
+export function createVergeAdapter({ home, fs = nodeFs, controller = null, listPipes, helper = null, env = process.env, makeClient = createController, installDirs = [], ledger = null, running = () => null, serviceRunning = () => null, daemonAlive = () => undefined, now = () => new Date(), unknownTtlMs = 5000 } = {}) {
   if (typeof home !== 'string' || home === '') throw new TypeError('the adapter needs Verge\'s data directory')
   const P = { verge: path.join(home, 'verge.yaml'), config: path.join(home, 'config.yaml'), runtime: path.join(home, 'clash-verge.yaml'), profiles: path.join(home, 'profiles.yaml'), profilesDir: path.join(home, 'profiles'), asightDir: path.join(home, 'asight') }
   const rd = (file, enc = 'utf8') => { try { return { text: fs.readFileSync(file, enc) } } catch (e) { return { text: null, error: (e && e.code) || 'error' } } }
@@ -71,9 +94,12 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
   async function call(method, target, body) {
     const ctl = await live()
     if (!ctl) return UNREADABLE
-    const r = method === 'GET' ? await ctl.get(target) : await ctl.put(target, body)
-    if (r.status === 0 && !controller) found = null // it went away: the next call looks again
-    return r
+    const send = (c) => (method === 'GET' ? c.get(target) : c.put(target, body))
+    const r = await send(ctl)
+    if (r.status !== 0 || controller) return r
+    found = null // it went away (Verge restarted, and its pipe has a new name): look again, once
+    const again = await live()
+    return again ? send(again) : r
   }
   const get = (target) => call('GET', target)
   const put = (target, body = null) => call('PUT', target, body)
@@ -332,6 +358,110 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     return { ok: true, receipt: { kind: entry.kind, key: 'runtime', change: 'pushed', backup: null }, entry }
   }
 
+  // ---- switching groups: the strategy, the writes, and the read-back (4.8 §4.1 §4.3 §4.4; W11 W55 W56) ----------------------------------------------------------------------------
+  let payloadAccepted = null // true / false once a push was accepted / refused; null: not tried
+
+  /**
+   * Turn groups on or off: `groups` = `[{ g, on, lines }]` (`lines`: the group's process rules, used when it is on; `block`: buildBlock()'s output, needed only when the block is not in the runtime yet and has to be
+   * pushed). Only the named groups are touched (W55): their select, their route file, their provider; another group's switch, the script and the runtime are not. Each row is read back (verify): on is verified when
+   * the select is on the fallback group AND the provider has rules, off when ONE key landed. With `find-process-mode: off` nothing is written for an `on` (the block's process rules would do nothing: row reason
+   * find-process-off). No controller: only the files are written; Verge not running = the runtime is not there and off is done (exit 0), Verge running = 「不知道」 (exit 1, asight may still be on Clash's path).
+   * → { ok, exit, rows: [{ g, want, strategy, steps, live, now, fbNow, ruleCount, reason, state }], receipts, lines }; state ∈ verified · not-live · unknown · refused.
+   */
+  async function applyGroups({ groups, block = null }) {
+    need()
+    const rows = groups.map(({ g, on }) => ({ g, want: on ? 'on' : 'off', strategy: [], steps: [], live: null, now: null, fbNow: null, ruleCount: null, reason: null, state: 'unknown' }))
+    const lines = []
+    const receipts = []
+    const rowOf = (g) => rows.find((r) => r.g === g)
+    const wanted = (g) => groups.find((x) => x.g === g)
+    const step = (row, name, r) => { row.steps.push({ step: name, ok: r.ok === true, ...(r.status === undefined ? {} : { status: r.status }), ...(r.code ? { code: r.code } : {}), ...(r.reason ? { reason: r.reason } : {}) }); if (r.receipt) receipts.push(r.receipt); return r }
+    const writeFiles = (row) => (async () => step(row, 'file', await writeRuleFile(row.g, row.want === 'on' ? wanted(row.g).lines ?? null : null)))()
+    const finish = () => { const ok = rows.every((r) => r.state === 'verified'); return { ok, exit: ok ? 0 : 1, rows, receipts, lines } }
+    let ctl = await live()
+    if (ctl && (await get('/version')).status === 0) ctl = controller ? null : await live() // it answered once and does not now: Verge went away or restarted (a found controller is looked for again, a given one is not)
+    if (!ctl) {
+      const gone = running() === false // Verge has exited: there is no runtime to leave asight in
+      for (const row of rows) {
+        row.strategy = ['none']
+        await writeFiles(row)
+        row.reason = gone ? 'verge-not-running' : 'controller-unreadable'
+        row.state = row.want === 'off' ? (gone ? 'verified' : 'unknown') : 'not-live'
+        row.live = row.want === 'off' && gone ? false : null
+      }
+      if (rows.some((r) => r.want === 'on')) lines.push(NONE_TEXT)
+      if (rows.some((r) => r.want === 'off' && r.state === 'unknown')) lines.push(MAYBE_STILL_TEXT)
+      return finish()
+    }
+    const fp = await readFindProcessMode()
+    const before = new Map()
+    for (const row of rows) before.set(row.g, await verify(row.g))
+    const inRuntime = (g) => before.get(g).reason !== 'block-not-in-runtime'
+    const fields = await readFields()
+    const service = fields.serviceMode === true || (fields.serviceMode === null && serviceRunning() === true)
+    const pickFor = (blockInRuntime) => pickApply({ blockInRuntime, serviceMode: service, controllerWritable: true, payloadAccepted })
+    const pick = pickFor(rows.every((r) => inRuntime(r.g))) // `on` pushes the whole block when any group is missing from the runtime; `off` is per group: a group that is there is switched, one that is not has only its file
+    for (const row of rows.filter((r) => r.want === 'on' && fp.mode === 'off')) { row.state = 'refused'; row.reason = 'find-process-off' }
+    const active = rows.filter((r) => r.state !== 'refused')
+    // off first: a group that must stop is stopped before another is started
+    for (const row of active.filter((r) => r.want === 'off')) {
+      row.strategy = pickFor(inRuntime(row.g)).off
+      if (row.strategy.includes('select')) step(row, 'select', await putSelect(row.g, 'PASS'))
+      await writeFiles(row)
+      if (row.strategy.includes('provider')) step(row, 'provider', await refreshProvider(row.g))
+    }
+    const on = active.filter((r) => r.want === 'on')
+    if (on.length && pick.on[0] === 'payload') {
+      for (const row of active) { row.strategy = row.want === 'on' ? ['payload'] : row.strategy; if (row.want === 'on') await writeFiles(row) } // the provider loads the files when the runtime does
+      const pushed = block ? await pushPayload({ block }) : { ok: false, reason: 'block-needed' }
+      for (const row of on) step(row, 'payload', pushed)
+      if (pushed.ok) { payloadAccepted = true; for (const row of on) step(row, 'select', await putSelect(row.g, names(row.g).fb)) } else { if (block) payloadAccepted = false; for (const row of on) row.strategy.push('none') }
+    } else {
+      for (const row of on) {
+        row.strategy = pick.on
+        await writeFiles(row)
+        if (row.strategy.includes('provider')) step(row, 'provider', await refreshProvider(row.g))
+        if (row.strategy.includes('select')) step(row, 'select', await putSelect(row.g, names(row.g).fb))
+      }
+    }
+    for (const row of rows) {
+      const v = await verify(row.g)
+      Object.assign(row, { live: v.live, now: v.now, fbNow: v.fbNow, ruleCount: v.ruleCount })
+      if (row.state === 'refused') continue
+      row.reason = v.reason
+      row.state = v.live === null ? 'unknown' : v.live === (row.want === 'on') ? 'verified' : 'not-live'
+    }
+    if (rows.some((r) => r.strategy.includes('none') && r.want === 'on')) lines.push(NONE_TEXT)
+    return finish()
+  }
+
+  /** The first `on`: the block into the global script, asight's route files, and the groups on or off (the payload when the block is not in the runtime yet). `blockText` = buildScriptJs(); `groups` as applyGroups(). */
+  async function installBlock({ block, blockText, groups }) {
+    const script = await writeScriptBlock({ blockText })
+    if (!script.ok) return { ok: false, exit: 1, script, rows: [], receipts: [], lines: [] }
+    const r = await applyGroups({ block, groups })
+    return { ...r, script, receipts: [...(script.receipt ? [script.receipt] : []), ...r.receipts] }
+  }
+
+  /**
+   * The no-argument `off`: every group off (read back), the block out of the global script (D28), the route files deleted. `groups`: the group ids (asight's rule files in the ledger are removed too). The runtime
+   * keeps asight's inert block and the core's cache.db one selection until Verge next regenerates the runtime: listed in `residue`, not a failure (4.8 §4.3). exit 1 when a group could not be read back, or the strip refused.
+   */
+  async function removeBlock({ groups }) {
+    const led = need()
+    const ids = [...new Set([...groups, ...led.entries().filter((e) => e.kind === 'vpn-rule-file').map((e) => e.group)])]
+    let blockWasLive = false
+    if (await live()) for (const g of ids) { const v = await verify(g); if (v.reason !== 'block-not-in-runtime' && v.live !== null) blockWasLive = true }
+    const off = await applyGroups({ groups: ids.map((g) => ({ g, on: false })) })
+    const script = await stripScriptBlock()
+    for (const g of ids) await removeRuleFile(g)
+    const lines = [...off.lines]
+    if (script.ok && script.identical === false) lines.push('Script.js 已撤销,但不逐字节相同(你改过块外的内容),备份留着')
+    if (!script.ok) lines.push(`Script.js 里的哨兵被改坏,没有动它(${script.detail || script.code || script.reason})`)
+    const ok = off.ok && script.ok
+    return { ok, exit: ok ? 0 : 1, rows: off.rows, script, receipts: [...off.receipts, ...(script.receipt ? [script.receipt] : [])], residue: blockWasLive ? RESIDUE.map((r) => ({ ...r })) : [], lines }
+  }
+
   /** What the probe (src/netenv/probe.mjs detect) is given about Verge: the file fields, the runtime's few fields, how the controller was found (masked), and whether it is running. */
   async function facts() {
     const fields = await readFields()
@@ -346,5 +476,5 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     }
   }
 
-  return { home, paths: P, readFields, readConfigs, readFindProcessMode, verify, refreshProbe, processRulesNaming, facts, controllerInfo, writeScriptBlock, stripScriptBlock, writeRuleFile, removeRuleFile, putSelect, refreshProvider, pushPayload, reset: () => { found = null }, sentinel: SCRIPT_SENTINEL }
+  return { home, paths: P, readFields, readConfigs, readFindProcessMode, verify, refreshProbe, processRulesNaming, facts, controllerInfo, writeScriptBlock, stripScriptBlock, writeRuleFile, removeRuleFile, putSelect, refreshProvider, pushPayload, pickApply, applyGroups, installBlock, removeBlock, reset: () => { found = null; payloadAccepted = null }, sentinel: SCRIPT_SENTINEL }
 }
