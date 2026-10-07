@@ -18,11 +18,30 @@ const os = (ctx, byPlatform) => ({ run: byPlatform[ctx.platform] || byPlatform.l
 const gui = (run) => ({ run, shell: 'gui' })
 const unknownValue = (what, reason) => `不知道 · ${reason}(${what})`
 
-/** The line to put in a harness's settings for a proxy: the file and the one line, or the variable to set in the shell that starts it. */
-function settingLine(hf, value) {
-  const k = ((hf.behaviour && hf.behaviour.fileKeys) || [])[0]
-  if (!k) return `在启动它的终端里 export HTTPS_PROXY=${value}`
-  return k.format === 'json' ? `${k.path} 里 ${k.key} 写成 "${value}"` : `${k.path} 里加一行 ${k.key}=${value}`
+/**
+ * Where a proxy setting lives, for a command that names the line to edit: the place the facts read it from (`setting.source[0]`: a variable of the shell that starts the agent, or a key of one of its files;
+ * a value from the second file is that file, a value from the shell is not in any file), else, for a setting that is not there yet, the first file the harness reads one from, else the variable it reads.
+ */
+function placeOf(hf, setting) {
+  const b = hf.behaviour || {}, files = b.fileKeys || []
+  const s = setting && Array.isArray(setting.source) ? setting.source[0] : null
+  if (s && s.kind === 'env') return { kind: 'env', name: s.where }
+  if (s && s.kind === 'file') { const f = files.find((x) => x.path === s.where); return { kind: 'file', path: s.where, key: s.key || (f && f.key) || '', format: f ? f.format : /\./.test(s.key || '') ? 'json' : 'dotenv' } }
+  if (s) return { kind: 'system' }
+  if (files[0]) return { kind: 'file', ...files[0] }
+  return { kind: 'env', name: (b.env && b.env[0]) || 'HTTPS_PROXY' }
+}
+/** The step that puts `value` where the setting lives. */
+function setAt(h, place, value) {
+  if (place.kind === 'env') return `在启动 ${h} 的终端里 export ${place.name}=${value}`
+  if (place.kind === 'system') return `在系统代理设置里把它改成 ${value}`
+  return place.format === 'json' ? `${place.path} 里的 ${place.key} 写成 "${value}"` : `${place.path} 里写一行 ${place.key}=${value}`
+}
+/** The step that takes the setting away from where it lives. */
+function removeAt(h, place) {
+  if (place.kind === 'env') return `在启动 ${h} 的终端里 unset ${place.name}`
+  if (place.kind === 'system') return '在系统代理设置里关掉它'
+  return place.format === 'json' ? `删掉 ${place.path} 里的 ${place.key}` : `删掉 ${place.path} 里的 ${place.key}= 那一行`
 }
 const portCheck = (ctx, port) => os(ctx, { linux: `ss -ltnp 'sport = :${port}'`, darwin: `lsof -nP -iTCP:${port} -sTCP:LISTEN`, win32: `netstat -ano -p TCP | findstr ":${port}"` })
 const restartStep = (ctx) => gui(ctx.hf.behaviour && ctx.hf.behaviour.restart && ctx.hf.behaviour.restart.hint ? ctx.hf.behaviour.restart.hint : `退出 ${ctx.h},再重新启动`)
@@ -40,12 +59,12 @@ export const FINDINGS = {
   'entry-changed': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的信任入口被改成了别的`, why: () => '你或别的程序改了 asight 写的那一项', commands: (c) => [asight(c, `asight off ${c.h}`), asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}:信任入口完好` },
   'negative-cache': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的进程拒绝了 asight 的证书,那个 host 之后透传`, why: () => '这个形态不认 asight 的信任入口;(pid, host) 随进程记着', commands: (c) => [asight(c, `asight status ${c.h}`), restartStep(c)], verify: (c) => `重启后 asight status ${c.h}:「是」` },
   'not-routed': { cls: 'failure', asightFirst: false, what: (c) => `${c.h} 的新连接不经过 asight`, why: (c) => (c.pac ? '它跟随的系统代理是 PAC,asight 不执行 PAC' : '这个形态没有 asight 能用的入口'),
-    commands: (c) => (c.pac ? [gui(`把 ${c.h} 的代理设成一个具体地址:${settingLine(c.hf, c.vpnProxy || unknownValue('你的代理地址', 'pac'))}`), asight(c, `asight on ${c.h}`)] : [gui(`${c.h} 的这个形态没有入口:改用它的 CLI 形态`), asight(c, `asight status ${c.h}`)]), verify: (c) => `asight status ${c.h}:该支「在路径上 · 是」` },
-  'route-loop': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的上游又是 asight 自己`, why: () => '算出的上游是 asight 自己的端口:代理字段的原值就是内核端口,或系统代理指着它;on 因此不接这个形态', commands: (c) => [asight(c, `asight off ${c.h}`), gui(`把 ${c.h} 的代理改回你原来的:${settingLine(c.hf, c.old || unknownValue('原来的代理', 'absent'))}`), asight(c, `asight on ${c.h}`)], verify: () => 'asight doctor:不再报' },
+    commands: (c) => (c.pac ? [gui(`把 ${c.h} 的代理设成一个具体地址:${setAt(c.h, placeOf(c.hf, c.setting), c.vpnProxy || unknownValue('你的代理地址', 'pac'))}`), asight(c, `asight on ${c.h}`)] : [gui(`${c.h} 的这个形态没有入口:改用它的 CLI 形态`), asight(c, `asight status ${c.h}`)]), verify: (c) => `asight status ${c.h}:该支「在路径上 · 是」` },
+  'route-loop': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的上游又是 asight 自己`, why: () => '算出的上游是 asight 自己的端口:代理字段的原值就是内核端口,或系统代理指着它;on 因此不接这个形态', commands: (c) => [asight(c, `asight off ${c.h}`), gui(`把 ${c.h} 的代理改回你原来的:${setAt(c.h, placeOf(c.hf, c.setting), c.old || unknownValue('原来的代理', 'absent'))}`), asight(c, `asight on ${c.h}`)], verify: () => 'asight doctor:不再报' },
   'proxy-dead': { cls: 'failure', asightFirst: false, what: (c) => `${c.h} 配的代理 ${c.dead.addr}:${c.dead.port} 没人在听`, why: () => '你的代理软件没开;这个设置不是 asight 写的',
-    commands: (c) => [gui(`打开你的代理软件(它应该监听 ${c.dead.addr}:${c.dead.port})`), gui(`或者删掉这个设置:${c.setting ? settingLine(c.hf, c.setting.value) : unknownValue('这个设置', 'absent')}`), portCheck(c, c.dead.port)], verify: (c) => `同一条命令看到监听;asight status ${c.h} 那一跳有属主` },
+    commands: (c) => [gui(`打开你的代理软件(它应该监听 ${c.dead.addr}:${c.dead.port})`), gui(`或者删掉这个设置:${c.setting ? removeAt(c.h, placeOf(c.hf, c.setting)) : unknownValue('这个设置', 'absent')}`), portCheck(c, c.dead.port)], verify: (c) => `同一条命令看到监听;asight status ${c.h} 那一跳有属主` },
   'proxy-unsupported': { cls: 'failure', asightFirst: false, what: (c) => `${c.h} 配了它不支持的代理协议(${c.setting.scheme})`, why: (c) => (c.silent ? `${c.h} 不支持 ${c.setting.scheme},会静默直连,代理形同虚设` : `${c.h} 不支持 ${c.setting.scheme}`),
-    commands: (c) => [gui(`改成 http://…:${settingLine(c.hf, c.setting.host && c.setting.port ? `http://${c.setting.host}:${c.setting.port}` : unknownValue('代理地址', 'absent'))}`)], verify: (c) => `asight status ${c.h}:那条边是 proxy-http` },
+    commands: (c) => [gui(`把它改成 HTTP 代理:${setAt(c.h, placeOf(c.hf, c.setting), c.setting.host && c.setting.port ? `http://${c.setting.host}:${c.setting.port}` : unknownValue('代理地址', 'absent'))}`)], verify: (c) => `asight status ${c.h}:那条边是 proxy-http` },
   'proxy-changed': { cls: (c) => (c.F.routing === 'proxy' ? 'failure' : 'expected'), asightFirst: true, what: (c) => `${c.h} 的代理设置与上次 on 接上的不同`, why: () => '你改了它',
     commands: (c) => (c.F.routing === 'proxy' ? [asight(c, `asight on ${c.h}`), asight(c, `asight off ${c.h}`)] : [asight(c, `asight status ${c.h}`)]), verify: (c) => `asight status ${c.h}` },
   'netenv-changed': { cls: 'hint', asightFirst: true, what: () => '本机网络环境与上次 on 时不同', why: () => '(VPN 新装、退出、换模式)别的变化不改 asight 的路,只改拓扑', commands: (c) => [asight(c, 'asight status')], verify: () => 'asight status' },

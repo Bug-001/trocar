@@ -7,6 +7,12 @@ import { diagnose, FINDINGS, FINDING_CODES, renderFindings } from '../../src/net
 import { validateFinding } from '../../src/cli/schema.mjs'
 import { NET_CODES, TRUST_REASONS } from '../../src/health/codes.mjs'
 import { ROWS, facts, proc, proxyOf, form, fwForm, pfacts, MIHOMO, mihomoVpn } from './fixtures/rows.mjs'
+import { loadHarnesses } from '../../src/collector/harness/index.mjs'
+import { linuxNetFacts } from '../../src/collector/arch/linux/netfacts.mjs'
+import { installedViaCli } from '../cli/fixtures/dispatch-ctx.mjs'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
 const row = (n) => ROWS.find((r) => r.n === n)
 const codesOf = (f, h, names = null) => diagnose({ facts: f, topology: buildTopology(f), harnesses: names, user: 'alice' }).filter((x) => !x.harness || x.harness === h).map((x) => x.code).sort()
@@ -139,4 +145,82 @@ test('renderFindings: what and why, each command on a line of its own (shell nam
   assert.ok(lines.some((l) => /\$ netstat -ano -p TCP \| findstr ":7890"  \(PowerShell\)$/.test(l)))
   assert.ok(lines.some((l) => /^ {2}怎么做: 打开你的代理软件/.test(l)))
   assert.match(lines[lines.length - 1], /^ {2}怎么验证: /)
+})
+
+// ── where the line to edit is (V49): the setting's own source, not the first key of the first file ────────────────────────────────────────────────────────────────────────────────────────────────────
+const CC_FILES = [{ path: '/h/.claude/settings.json', format: 'json', key: 'env.HTTPS_PROXY' }, { path: '/h/.claude.json', format: 'json', key: 'env.HTTPS_PROXY' }]
+const CODEX_FILES = [{ path: '/h/.codex/.env', format: 'dotenv', key: 'HTTPS_PROXY' }, { path: '/h/.codex/config.toml', format: 'dotenv', key: 'x' }]
+const behaviourOf = (h, fileKeys, over = {}) => ({ ...facts(h).harnesses[h].behaviour, env: h === 'codex' ? ['HTTPS_PROXY', 'https_proxy', 'ALL_PROXY'] : ['HTTPS_PROXY', 'https_proxy'], fileKeys, ...over })
+const SRC_ENV = { kind: 'env', where: 'HTTPS_PROXY' }
+const SRC_F1 = { kind: 'file', where: '/h/.claude/settings.json', key: 'env.HTTPS_PROXY' }
+const SRC_F2 = { kind: 'file', where: '/h/.claude.json', key: 'env.https_proxy' }
+const gui = (fs, code) => fs.find((f) => f.code === code).commands.filter((c) => c.shell === 'gui').map((c) => c.run).join('\n')
+const deadFacts = (source) => facts('claude-code', {}, { setting: proxyOf('http://127.0.0.1:7890', [source]), behaviour: behaviourOf('claude-code', CC_FILES) })
+
+test('V49 the place a command names for the setting is where the setting came from (its `source`): the shell\'s variable is `unset` in the shell, a value from the second file names the second file and the key that held it — and a step reads as one sentence', () => {
+  const at = (source) => gui(findingsOf(deadFacts(source)), 'proxy-dead')
+  assert.match(at(SRC_ENV), /unset HTTPS_PROXY/)
+  assert.doesNotMatch(at(SRC_ENV), /settings\.json|\.claude\.json/, 'the setting is not in a file')
+  assert.match(at(SRC_F1), /\/h\/\.claude\/settings\.json 里的 env\.HTTPS_PROXY/)
+  assert.doesNotMatch(at(SRC_F1), /\.claude\.json/)
+  assert.match(at(SRC_F2), /\/h\/\.claude\.json 里的 env\.https_proxy/, 'the second file, and the key that really held it')
+  assert.doesNotMatch(at(SRC_F2), /settings\.json/)
+  for (const source of [SRC_ENV, SRC_F1, SRC_F2]) {
+    const text = at(source)
+    assert.doesNotMatch(text, /删掉[^\n]*写成|写成[^\n]*删掉/, 'one verb for one step')
+    assert.match(text, /^或者(删掉|去掉)这个设置:/m)
+  }
+  // a dotenv file: the line is `KEY=`
+  const codex = facts('codex', { listeners: [] }, { setting: proxyOf('http://127.0.0.1:7890', [{ kind: 'file', where: '/h/.codex/.env', key: 'HTTPS_PROXY' }]), behaviour: behaviourOf('codex', CODEX_FILES) })
+  assert.match(gui(findingsOf(codex), 'proxy-dead'), /\/h\/\.codex\/\.env 里的 HTTPS_PROXY= 那一行/)
+  assert.doesNotMatch(gui(findingsOf(codex), 'proxy-dead'), /config\.toml/)
+})
+
+test('V49 proxy-unsupported names the place of the setting and the value to put there, as one sentence (no 「http://…:」 left stuck to the next phrase)', () => {
+  const dsh = (source) => facts('deepseek-dsh', { listeners: [MIHOMO], vpn: mihomoVpn() }, { setting: proxyOf('socks5://127.0.0.1:7890', [source]), behaviour: behaviourOf('deepseek-dsh', [{ path: '/h/.dsh/config.json', format: 'json', key: 'proxy' }], { unsupported: { socks5: 'silent-direct' }, schemes: ['http', 'https'] }) })
+  const env = gui(findingsOf(dsh(SRC_ENV)), 'proxy-unsupported')
+  assert.match(env, /export HTTPS_PROXY=http:\/\/127\.0\.0\.1:7890/)
+  assert.doesNotMatch(env, /\.dsh\/config\.json/, 'not the first file of the descriptor: the setting came from the shell')
+  const file = gui(findingsOf(dsh({ kind: 'file', where: '/h/.dsh/config.json', key: 'proxy' })), 'proxy-unsupported')
+  assert.match(file, /\/h\/\.dsh\/config\.json 里的 proxy 写成 "http:\/\/127\.0\.0\.1:7890"/)
+  for (const t of [env, file]) assert.doesNotMatch(t, /…:/, 'no garble')
+})
+
+test('V49 route-loop names where the setting that loops lives; a harness with no setting of its own gets the place a new one goes (the first file it reads, else the variable it reads)', () => {
+  const loop = (setting, behaviour) => pfacts('codex', form('codex.cli', { routeLoop: true, entry: null, setting, procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992), {})
+  const f = loop(proxyOf('http://127.0.0.1:17992', [{ kind: 'file', where: '/h/.codex/.env', key: 'HTTPS_PROXY' }]))
+  f.harnesses.codex.behaviour = behaviourOf('codex', CODEX_FILES, { measured: 'lab' })
+  assert.match(gui(findingsOf(f), 'route-loop'), /\/h\/\.codex\/\.env 里写一行 HTTPS_PROXY=/)
+  const g = loop(proxyOf('http://127.0.0.1:17992', [SRC_ENV]))
+  g.harnesses.codex.behaviour = behaviourOf('codex', CODEX_FILES, { measured: 'lab' })
+  assert.match(gui(findingsOf(g), 'route-loop'), /export HTTPS_PROXY=/)
+  assert.doesNotMatch(gui(findingsOf(g), 'route-loop'), /\.codex\/\.env/)
+  // no setting: the PAC step of not-routed says where a new one goes
+  const pac = ROWS.find((r) => r.n === 11).facts
+  pac.harnesses.codex.behaviour = behaviourOf('codex', CODEX_FILES, { measured: 'lab' })
+  assert.match(gui(findingsOf(pac), 'not-routed'), /\/h\/\.codex\/\.env 里写一行 HTTPS_PROXY=/)
+  pac.harnesses.codex.behaviour = behaviourOf('codex', [], { measured: 'lab', env: ['ZCODE_HTTP_PROXY'] })
+  assert.match(gui(findingsOf(pac), 'not-routed'), /export ZCODE_HTTP_PROXY=/, 'the variable the harness reads, not always HTTPS_PROXY')
+})
+
+test('V49 end to end, with the real descriptors: a proxy that came from the invoking shell\'s HTTPS_PROXY is `unset` there and no file is named; one from ~/.claude.json names that file', async () => {
+  const descs = await loadHarnesses()
+  const s = await installedViaCli({ status: { engine: { port: 47123 } } })
+  const deps = { netFactsDeps: async () => ({ harnesses: descs, archFacts: linuxNetFacts }) }
+  const SRC = path.join(os.tmpdir(), 'none')
+  const base = s.ctx().env
+  const dead = async (env) => {
+    const r = await s.run(['doctor', 'claude-code', '--json', '--source', SRC], { env: { ...base, ...env }, deps })
+    const f = r.io.json().findings.find((x) => x.code === 'proxy-dead')
+    return { f, text: f ? f.commands.filter((c) => c.shell === 'gui').map((c) => c.run).join('\n') : '' }
+  }
+  const fromShell = await dead({ HTTPS_PROXY: 'http://127.0.0.1:7890' })
+  assert.ok(fromShell.f, 'nobody listens on 7890: proxy-dead')
+  assert.match(fromShell.text, /unset HTTPS_PROXY/)
+  assert.doesNotMatch(fromShell.text, /settings\.json|\.claude\.json/)
+  const second = path.join(s.home, '.claude.json')
+  fs.writeFileSync(second, `${JSON.stringify({ env: { HTTPS_PROXY: 'http://127.0.0.1:7890' } })}\n`)
+  const fromFile = await dead({})
+  assert.ok(fromFile.text.includes(`${second} 里的 env.HTTPS_PROXY`), fromFile.text)
+  assert.ok(!fromFile.text.includes('settings.json'))
 })

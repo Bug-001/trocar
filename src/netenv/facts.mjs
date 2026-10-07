@@ -8,7 +8,7 @@
 //     vpn: null | { product, version, pid, port, mode, tun: true | false | null, unknown? },          // read-only: no rules, no secret, no node (D43)
 //     forwarder: null | { pid, up, forms: { <form>: { h, port, state: 'on' | 'forward-only', upstream, source, clients: [pid] } } },   // proxy mode's own kernel (4.8 §10.1)
 //     harnesses: { <h>: { installed, entry: { state }, installedAt, setting, systemProxy: null | { value, pac } | { unknown },
-//                         behaviour: { follows: { http, ws }, schemes, unsupported, branches, measured, restart, files }, procs: [ { pid, name, exe, version, startedAt, watched, trusted, reason, negative,
+//                         behaviour: { env, follows: { http, ws }, schemes, unsupported, branches, measured, restart, files, fileKeys }, procs: [ { pid, name, exe, version, startedAt, watched, trusted, reason, negative,
 //                         startSetting: null | setting, elevated } ], negatives: [ { pid, host, reason } ], apiHosts, adopted: null | { at, routing, chain, source, sha256 }, forms: null | [ … ] } },
 //     linger: true | false | null (Linux: does the OS keep the daemon after the last logout), otherRedirector: true | false | null (another connect-rewriter on the machine: a platform that cannot tell says null),
 //     vpnKnown: whether the probe answered (a changed VPN is only judged against an answer),
@@ -74,7 +74,7 @@ export async function gatherNetFacts({ platform = process.platform, home, env = 
     f.harnesses[h.id] = {
       installed: h.installed, entry: { state: h.entry.state }, installedAt: iso(h.installedAt), setting,
       systemProxy: part.systemProxy && (pr.systemProxy.http !== false || pr.systemProxy.ws !== false) ? part.systemProxy : null,
-      behaviour: { follows: { ...pr.systemProxy }, schemes: [...pr.schemes], unsupported: { ...pr.unsupported }, branches: [...pr.branches], measured: pr.measured[platform] || 'inferred', restart: { ...pr.restart }, files: proxyFilesOf(d, { home, env }),
+      behaviour: { env: [...pr.env], follows: { ...pr.systemProxy }, schemes: [...pr.schemes], unsupported: { ...pr.unsupported }, branches: [...pr.branches], measured: pr.measured[platform] || 'inferred', restart: { ...pr.restart }, files: proxyFilesOf(d, { home, env }),
         fileKeys: pr.files.map((x) => ({ path: x.path({ home, env }), format: x.format, key: x.format === 'json' ? x.keys[0].join('.') : x.keys[0] })) },
       procs, negatives: reply && Array.isArray(reply.negatives) ? reply.negatives.filter((n) => procs.some((p) => p.pid === n.pid)).map((n) => ({ pid: n.pid, host: n.host, reason: 'negative-cache' })) : [],
       apiHosts: [...(d.hosts || [])], fakeIp: part.fakeIp && part.fakeIp[h.id] === true ? true : null, adopted: adopted && adopted[h.id] ? adopted[h.id] : null, forms: (part.forms && part.forms[h.id]) || null,
