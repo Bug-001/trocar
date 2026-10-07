@@ -104,3 +104,11 @@ test('R6 · R5: with --json a question about the marks goes to stderr and stdout
   assert.deepEqual([r.ok, r.pending.map((p) => path.basename(p.path)), validateReceipt(r)], [false, ['.env'], []])
   assert.equal(flowEvents(s.dir).at(-1).outcome, 'partial')
 })
+
+test('the standalone asight-off passes no io: the process\'s own stdout and stderr are what it prints on', async () => {
+  const written = []
+  const real = process.stderr.write
+  process.stderr.write = (chunk) => { written.push(String(chunk)); return true }
+  try { assert.equal(await runOffCli(['--bogus']), 2) } finally { process.stderr.write = real }
+  assert.match(written.join(''), /asight off: unknown option --bogus/)
+})

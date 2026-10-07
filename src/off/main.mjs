@@ -7,7 +7,7 @@ import nodeOs from 'node:os'
 import { runOff } from './orchestrate.mjs'
 import { formatOffReceipt } from './receipt.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
-import { isInteractive } from './io.mjs'
+import { isInteractive, makeIo } from './io.mjs'
 
 /** 1.6 §3: the harness code ids (in the order commands list them) and the short names accepted as input. A copy of src/cli/harness-names.mjs. */
 export const OFF_NAMES = Object.freeze({
@@ -33,8 +33,9 @@ export function resolveOffNames(names) {
   return { ok: true, ids: OFF_NAMES.ids.filter((id) => chosen.has(id)) }
 }
 
-/** → the exit code. `argv` is what follows `off`. `io` = { out, err, stdin, stdout, stderr } (src/off/io.mjs makeIo). */
-export async function runOffCli(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
+/** → the exit code. `argv` is what follows `off`. `io` = { out, err, stdin, stdout, stderr } (src/off/io.mjs makeIo; the process's own streams when none is given, which is how the
+ *  standalone `asight-off` calls it). */
+export async function runOffCli(argv, { io = makeIo({ stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }), env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
   const flags = new Set(), names = []
   for (const a of argv) {
     if (a.startsWith('-')) {
