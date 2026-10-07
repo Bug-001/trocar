@@ -5,6 +5,7 @@
 // NO_PROXY set), and the process killed in t.after.
 import fs from 'node:fs'
 import http from 'node:http'
+import dgram from 'node:dgram'
 import net from 'node:net'
 import path from 'node:path'
 import assert from 'node:assert/strict'
@@ -38,4 +39,24 @@ export async function startMihomo(t, { config, configText, files = {}, secret, c
   const v = await ctl('GET', '/version')
   assert.equal(v.status, 200, `mihomo did not come up: ${logs.slice(-3).join(' | ')}`)
   return { ctl, logs, home, version: v.json().version }
+}
+
+/**
+ * A DNS server on 127.0.0.1 that answers every A query with 127.0.0.1 and every other type with no answer. A test that wants mihomo to dial a NAME directly (DIRECT) points the core's `dns.nameserver` at it, so
+ * the name resolves without a packet leaving the machine (a name no resolver knows would be asked of the machine's real DNS servers). Test only: the product's config has no `dns` section.
+ */
+export async function startStubDns(t) {
+  const sock = dgram.createSocket('udp4')
+  sock.on('message', (q, rinfo) => {
+    let i = 12
+    while (i < q.length && q[i] !== 0) i += q[i] + 1
+    const question = q.subarray(12, i + 5) // the name, its end byte, type and class
+    const type = q.readUInt16BE(i + 1)
+    const answer = type === 1 ? Buffer.concat([Buffer.from([0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4]), Buffer.from([127, 0, 0, 1])]) : Buffer.alloc(0)
+    const head = Buffer.from([q[0], q[1], 0x81, 0x80, 0, 1, 0, type === 1 ? 1 : 0, 0, 0, 0, 0])
+    sock.send(Buffer.concat([head, question, answer]), rinfo.port, rinfo.address)
+  })
+  await new Promise((res, rej) => { sock.once('error', rej); sock.bind(0, '127.0.0.1', res) })
+  t.after(() => sock.close())
+  return sock.address().port
 }

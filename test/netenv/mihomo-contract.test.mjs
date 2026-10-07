@@ -26,7 +26,7 @@ import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { startRealEngine } from './fixtures/real-engine.mjs'
-import { BIN, gate, freePort, sleep, startMihomo } from './fixtures/real-mihomo.mjs'
+import { BIN, gate, freePort, sleep, startMihomo, startStubDns } from './fixtures/real-mihomo.mjs'
 import { forwarderLikeConfig, groupOf, textOf, overlay, G, TOKEN, LISTENER_TOKEN } from './fixtures/generated-config.mjs'
 import { buildForwarderConfig, processRulesOf } from '../../src/netenv/mihomo/rules.mjs'
 
@@ -103,7 +103,7 @@ const SLOW = 'x'.repeat(15)
 const slowOrigin = (port) => http.createServer((q, r) => { r.writeHead(200, { 'Content-Length': SLOW.length }); let n = 0; const iv = setInterval(() => { r.write('x'); if (++n === SLOW.length) { clearInterval(iv); r.end() } }, 100) }).listen(port, '127.0.0.1')
 const servesOrigin = (t, port, body = 'origin-ok') => { const s = http.createServer((q, r) => r.end(body)).listen(port, '127.0.0.1'); t.after(() => s.close()); return s }
 
-async function shape(t, { make = forwarderLikeConfig, unifiedDelay = true, g = G, upstream: hop = null, bypass = [], extraOrigins = [] }) {
+async function shape(t, { make = forwarderLikeConfig, unifiedDelay = true, g = G, upstream: hop = null, bypass = [], extraOrigins = [], dns = false }) {
   const ports = {}
   for (const k of ['form', 'controller', 'engine', 'origin', 'upstream']) ports[k] = await freePort()
   const secret = randomBytes(16).toString('hex') // the generator wants a real secret: 16+ letters and digits
@@ -116,6 +116,7 @@ async function shape(t, { make = forwarderLikeConfig, unifiedDelay = true, g = G
   const upstreamProxy = hop ? startUpstream(t, { port: ports.upstream, origins: [ports.origin, ...others], user: hop.user, pass: hop.pass }) : null
   const upstream = hop ? { type: 'http', host: '127.0.0.1', port: ports.upstream, username: hop.user, password: hop.pass } : undefined
   const built = make({ ports, secret, unifiedDelay, g, bypass, ...(upstream ? { upstream } : {}) })
+  if (dns) { const at = `127.0.0.1:${await startStubDns(t)}`; built.config.dns = { enable: true, ipv6: false, nameserver: [at], 'default-nameserver': [at] } } // test only: names resolve to 127.0.0.1 and no query leaves the machine
   const m = await startMihomo(t, { config: built.config, secret, controller: ports.controller })
   const agent = (target = `127.0.0.1:${ports.origin}`, auth = built.agentAuth) => viaProxy(ports.form, target, { auth })
   const fbUrl = `http://127.0.0.1:${reenter}/asight-health/${g}`
@@ -251,4 +252,175 @@ test('W70 a CONNECT to the listener with no credentials, or the wrong ones, is a
   assert.equal(direct.body, 'origin-ok', 'the re-entry user is let in too')
   assert.equal(s.agentConnects(), 1, 'but it does not go to the engine again: IN-USER sends it to the upstream')
   assert.deepEqual(s.hop.seen, [`127.0.0.1:${s.origin}`], 'it went through the user\'s upstream, once')
+})
+
+// ---- W72: the bypass table (4.8 §2.2 · §3.1) -------------------------------------------------------------------------------------------------------
+// Targets that the user's own proxy setting leaves direct are dialled DIRECT by the kernel, never through the upstream: the forward-only path (⑤), and the re-entry from the fallback (②). A target the table
+// does not name goes to the upstream. The hit target is `localhost:<port>` (a name, resolved by the system) or `127.0.0.1:<port>`; the upstream refuses all but the origins it was given.
+
+async function bypassScenario(t, { bypass, hit = null, miss = null }) {
+  const s = await shape(t, { upstream: { user: 'hop-user', pass: 'hop-pass' }, bypass })
+  const { g } = s
+  // forward only (every group off): ⑤ and ⑥
+  const off = JSON.parse(textOf({ groups: [groupOf({ g, port: s.ports.form, on: false, upstream: s.upstream, bypass })], ports: s.ports, secret: s.built.config.secret }))
+  assert.equal((await s.reload(off)).status, 204)
+  const login = `${g}:${LISTENER_TOKEN}`
+  if (hit) {
+    const before = s.hop.seen.length
+    assert.equal((await s.agent(hit(s), login)).body, 'origin-ok', 'forward only: a bypass target is reached')
+    assert.equal(s.hop.seen.length, before, 'directly: the upstream saw nothing')
+  }
+  if (miss) {
+    const before = s.hop.seen.length
+    assert.equal((await s.agent(miss(s), login)).body, 'origin-ok')
+    assert.equal(s.hop.seen.length, before + 1, 'a target the table does not name goes to the upstream')
+  }
+  assert.deepEqual(s.hop.refused, [])
+}
+
+const byName = { hit: (s) => `localhost:${s.origin}`, miss: (s) => `127.0.0.1:${s.origin}` }
+test('W72 <local> (DOMAIN-REGEX ^[^.]+$): a name without a dot goes direct, an IP does not, in forward-only', gate, async (t) => { await bypassScenario(t, { bypass: [{ kind: 'local' }], ...byName }) })
+test('W72 a domain suffix goes direct, an IP does not', gate, async (t) => { await bypassScenario(t, { bypass: [{ kind: 'domain-suffix', value: 'localhost' }], ...byName }) })
+test('W72 an exact domain goes direct, an IP does not', gate, async (t) => { await bypassScenario(t, { bypass: [{ kind: 'domain', value: 'localhost' }], ...byName }) })
+test('W72 an IP range goes direct; a range that does not name the target does not', gate, async (t) => {
+  await bypassScenario(t, { bypass: [{ kind: 'ip-cidr', value: '127.0.0.0/8' }], hit: (s) => `127.0.0.1:${s.origin}` })
+  await bypassScenario(t, { bypass: [{ kind: 'ip-cidr', value: '10.0.0.0/8' }], miss: (s) => `127.0.0.1:${s.origin}` })
+})
+
+// Names, not `localhost`: mihomo maps that one itself (a built-in hosts entry), and a re-entered CONNECT to it then carries the address 127.0.0.1, which a name rule does not hit (measured; 4.8 §3.1). The names
+// here resolve through a stub DNS on loopback (test only), so the DIRECT dial of a bypass hit stays on this machine. The upstream stand-in dials its origin whatever the name.
+test('W72 the re-entry from the fallback keeps the bypass: with the engine down, a bypass name is taken by ② (AND IN-USER) and goes DIRECT, any other goes to the upstream (③) with its name', gate, async (t) => {
+  const s = await shape(t, { upstream: { user: 'hop-user', pass: 'hop-pass' }, bypass: [{ kind: 'local' }, { kind: 'domain-suffix', value: 'bypass.test' }], dns: true })
+  const { g } = s
+  assert.equal((await s.agent(`127.0.0.1:${s.origin}`)).body, 'origin-ok'); assert.equal(s.agentConnects(), 1)
+  await sleep(1300)
+  await s.getEngine().close()
+  assert.equal((await s.agent(`127.0.0.1:${s.origin}`)).body, 'origin-ok', 'the first connection after the engine died')
+  for (let i = 0; i < 50 && (await s.nowOf()) !== `asight-re-${g}`; i++) { await s.agent(`127.0.0.1:${s.origin}`); await sleep(100) }
+  assert.equal(await s.nowOf(), `asight-re-${g}`)
+  const seen = s.hop.seen.length
+  for (const name of [`a.bypass.test:${s.origin}`, `intranet:${s.origin}`]) assert.equal((await s.agent(name)).body, 'origin-ok', name)
+  assert.equal(s.hop.seen.length, seen, 'a bypass name, re-entered: not through the upstream')
+  const taken = s.m.logs.filter((l) => /--> (a\.bypass\.test|intranet):\d+ match AND\(.*InUser,re\.spike.*\) using DIRECT/.test(l))
+  assert.equal(taken.length, 2, 'both were matched by the re-entered bypass rule (AND with IN-USER and a domain rule), and sent DIRECT')
+  assert.equal((await s.agent(`other.example:${s.origin}`)).body, 'origin-ok')
+  assert.deepEqual(s.hop.seen.slice(seen), [`other.example:${s.origin}`], 'any other name, re-entered: the upstream, with its name')
+  assert.deepEqual(s.hop.refused, [])
+})
+
+// ---- W12 / W55 on a real core: one PUT /configs?force=true switches a group; the others stay -------------------------------------------------------
+
+test('W12 one PUT /configs?force=true takes a group from on to forward-only and back: asight-fb-<f> is there and selects asight-in, then absent, then there again; a response in flight across the reload is not cut', gate, async (t) => {
+  const s = await shape(t, {})
+  const { g } = s
+  assert.equal((await s.agent()).body, 'origin-ok'); assert.equal((await s.refresh()).status, 200)
+  assert.equal(await s.nowOf(), `asight-in-${g}`)
+  // a slow response, started before the reload
+  const slowPort = await freePort()
+  const slow = slowOrigin(slowPort)
+  t.after(() => slow.close())
+  const long = s.agent(`127.0.0.1:${slowPort}`)
+  await sleep(300)
+  const off = JSON.parse(textOf({ groups: [groupOf({ g, port: s.ports.form, on: false })], ports: s.ports, secret: s.built.config.secret }))
+  const t0 = Date.now()
+  assert.equal((await s.reload(off)).status, 204, 'the reload is accepted')
+  assert.equal((await s.m.ctl('GET', `/proxies/asight-fb-${g}`)).status, 404, 'forward only: the form\'s fallback group is gone')
+  const eBefore = s.agentConnects()
+  assert.equal((await s.agent(undefined, `${g}:${LISTENER_TOKEN}`)).body, 'origin-ok', 'a new connection is forwarded')
+  assert.equal(s.agentConnects(), eBefore, 'not through the engine')
+  t.diagnostic(`reload and the first new connection: ${Date.now() - t0} ms`)
+  const body = (await long).body
+  assert.equal(body, SLOW, 'the response that was in flight when the config was reloaded ran to its end')
+  const on = forwarderLikeConfig({ ports: s.ports, secret: s.built.config.secret, g })
+  assert.equal((await s.reload(on.config)).status, 204)
+  assert.equal((await s.refresh()).status, 200)
+  assert.equal(await s.nowOf(), `asight-in-${g}`, 'on again')
+  assert.equal((await s.agent()).body, 'origin-ok'); assert.equal(s.agentConnects(), eBefore + 1)
+})
+
+test('W55 two groups: one goes forward-only by a reload, the other\'s listener keeps serving, its engine path unchanged', gate, async (t) => {
+  const ports = {}
+  for (const k of ['a', 'b', 'controller', 'engine', 'origin']) ports[k] = await freePort()
+  const secret = randomBytes(16).toString('hex')
+  servesOrigin(t, ports.origin)
+  const engine = await startRealEngine({ port: ports.engine, token: TOKEN, reenterPort: ports.b, group: 'beta' }); t.after(() => engine.close())
+  const mk = (aOn) => forwarderLikeConfigMulti({ ports, secret, aOn })
+  const m = await startMihomo(t, { config: mk(true), secret, controller: ports.controller })
+  const via = (port, g) => viaProxy(port, `127.0.0.1:${ports.origin}`, { auth: `${g}:${LISTENER_TOKEN}` })
+  const connects = () => engine.events.filter((e) => e.kind === 'agent-connect').length
+  assert.equal((await via(ports.b, 'beta')).body, 'origin-ok'); assert.equal(connects(), 1)
+  const slowPort = await freePort()
+  const slow = slowOrigin(slowPort); t.after(() => slow.close())
+  const long = viaProxy(ports.b, `127.0.0.1:${slowPort}`, { auth: `beta:${LISTENER_TOKEN}` })
+  await sleep(300)
+  assert.equal(connects(), 2, 'the long response is a second connection through the engine')
+  assert.equal((await m.ctl('PUT', '/configs?force=true', { payload: JSON.stringify(mk(false)) })).status, 204)
+  assert.equal((await m.ctl('GET', '/proxies/asight-fb-alpha')).status, 404)
+  assert.equal((await m.ctl('GET', '/proxies/asight-fb-beta')).status, 200, 'the other group\'s fallback is untouched')
+  assert.equal((await via(ports.a, 'alpha')).body, 'origin-ok')
+  assert.equal(connects(), 2, 'alpha is forwarded now: not through the engine')
+  assert.equal((await via(ports.b, 'beta')).body, 'origin-ok'); assert.equal(connects(), 3, 'beta still goes through the engine')
+  assert.equal((await long).body, SLOW, 'beta\'s response that was in flight is not cut')
+})
+
+function forwarderLikeConfigMulti({ ports, secret, aOn }) {
+  return overlay(textOf({ groups: [groupOf({ g: 'alpha', port: ports.a, on: aOn }), groupOf({ g: 'beta', port: ports.b, on: true })], ports, secret }))
+}
+
+// ---- the generator's text, as it is (no overlay): the real core must load it ------------------------------------------------------------------------
+// The engine is not running in these (no tap): they check what the config says about itself and what a loopback client can see, which is the part a fake would get wrong. The groups are the product's
+// shapes: two forms in a group, a form with no process rule, a host tree (AND with a process regex), a group that takes no credentials, a bypass table with every kind of entry.
+
+function verbatim(ports, { on }) {
+  const raw = String.raw
+  const groups = [
+    { g: 'claude-code.settings', port: ports.a, on, upstream: 'direct', bypass: [{ kind: 'local' }, { kind: 'domain-suffix', value: 'corp.example.com' }, { kind: 'ip-cidr', value: '10.0.0.0/8' }, { kind: 'domain', value: 'gateway.internal' }], auth: true,
+      forms: [{ f: 'claude-code.cli', rules: processRulesOf({ pathPatterns: [raw`\\@anthropic-ai\\claude-code\\bin\\claude\.exe`] }) }, { f: 'claude-code.vscode', rules: processRulesOf({ pathPatterns: [raw`\\\.vscode\\extensions\\anthropic\.claude-code-[^\\]*\\resources\\native-binary\\claude\.exe`] }) }] },
+    { g: 'deepseek-dsh.env', port: ports.b, on, upstream: 'direct', bypass: [], auth: true, forms: [{ f: 'deepseek-dsh.cli', rules: [] }] },
+    { g: 'kimi-code.vscode', port: ports.c, on, upstream: 'direct', bypass: [], auth: true, forms: [{ f: 'kimi-code.vscode', rules: processRulesOf({ pathPatterns: [raw`\\Microsoft VS Code[^\\]*\\Code[^\\]*\.exe`] }), hosts: ['api.kimi.com', 'api.moonshot.cn'] }] },
+    { g: 'claude-code.desktop', port: ports.d, on, upstream: 'direct', bypass: [], auth: false, forms: [{ f: 'claude-code.desktop', rules: processRulesOf({ pathPatterns: [raw`\\WindowsApps\\Claude_[^\\]*\\app\\claude\.exe`] }) }] },
+  ]
+  return groups
+}
+
+async function loadVerbatim(t, { on }) {
+  const ports = {}
+  for (const k of ['a', 'b', 'c', 'd', 'controller', 'engine', 'origin']) ports[k] = await freePort()
+  const secret = randomBytes(16).toString('hex')
+  servesOrigin(t, ports.origin)
+  const text = buildForwarderConfig({ groups: verbatim(ports, { on }), enginePort: ports.engine, token: TOKEN, listenerToken: LISTENER_TOKEN, controller: { port: ports.controller, secret }, ownImages: [process.execPath] })
+  const m = await startMihomo(t, { configText: text, secret, controller: ports.controller })
+  return { m, ports, text }
+}
+
+test('W72 the forward-only config text, verbatim: the core loads it (AND with IN-USER and DOMAIN-REGEX included); every listener forwards to its upstream with its login; the engine is not in the path; nothing is downloaded', gate, async (t) => {
+  const { m, ports } = await loadVerbatim(t, { on: false })
+  assert.equal((await viaProxy(ports.a, `127.0.0.1:${ports.origin}`, { auth: `claude-code.settings:${LISTENER_TOKEN}` })).body, 'origin-ok', 'MATCH -> asight-up-<g> (direct)')
+  assert.equal((await viaProxy(ports.a, `127.0.0.1:${ports.origin}`)).connect, '407', 'a listener with users wants the login')
+  assert.equal((await viaProxy(ports.d, `127.0.0.1:${ports.origin}`)).body, 'origin-ok', 'the group that takes no credentials lets whoever connects through')
+  assert.equal((await m.ctl('GET', '/proxies/asight-up-claude-code.settings')).status, 200)
+  assert.equal((await m.ctl('GET', '/proxies/asight-in-claude-code.cli')).status, 404, 'the engine is not in the path')
+  assert.equal((await m.ctl('GET', '/proxies/asight-fb-claude-code.cli')).status, 404)
+  assert.deepEqual(fs.readdirSync(m.home).sort().filter((f) => !['asight', 'cache.db', 'config.yaml'].includes(f)), [], 'no geodata or other file appeared in the home')
+})
+
+test('W72 the on config text, verbatim, dotted ids: the core loads it; each form has its fallback group over the engine and the re-entry point; the host tree\'s AND with a process regex loads; the group with a form of no process rule falls back to the re-entry with the engine down', gate, async (t) => {
+  const { m, ports } = await loadVerbatim(t, { on: true })
+  for (const f of ['claude-code.cli', 'claude-code.vscode', 'deepseek-dsh.cli', 'kimi-code.vscode', 'claude-code.desktop']) {
+    const fb = (await m.ctl('GET', `/proxies/asight-fb-${f}`)).json()
+    assert.equal(fb.type, 'Fallback', f)
+    assert.deepEqual(fb.all, [`asight-in-${f}`, fb.all[1]], f)
+    assert.match(fb.all[1], /^asight-re-/)
+  }
+  assert.equal((await viaProxy(ports.a, `127.0.0.1:${ports.origin}`, { auth: `claude-code.settings:${LISTENER_TOKEN}` })).body, 'origin-ok', 'a process that is not the agent goes on to ⑥, the upstream')
+  assert.equal((await viaProxy(ports.c, `127.0.0.1:${ports.origin}`, { auth: `kimi-code.vscode:${LISTENER_TOKEN}` })).body, 'origin-ok', 'the host tree: not Code.exe to a Kimi host: only forwarded')
+  // dsh: the form with no process rule takes every connection of the port; with the engine down the fallback lands on the re-entry point, which forwards it. The daemon refreshes a group's probe after a
+  // reload (4.8 §3.3): a first connection that races the core's own first check can find the tunnel closed after the 200, so the test does what the product does.
+  const url = `http://127.0.0.1:${ports.b}/asight-health/deepseek-dsh.cli`
+  assert.equal((await m.ctl('GET', `/group/asight-fb-deepseek-dsh.cli/delay?url=${encodeURIComponent(url)}&timeout=2000`)).status, 200)
+  assert.equal((await m.ctl('GET', '/proxies/asight-fb-deepseek-dsh.cli')).json().now, 'asight-re-deepseek-dsh.env')
+  const dsh = await viaProxy(ports.b, `127.0.0.1:${ports.origin}`, { auth: `deepseek-dsh.env:${LISTENER_TOKEN}` })
+  assert.equal(dsh.body, 'origin-ok', `the engine is not there; the connection succeeds through asight-re (${dsh.connect})`)
+  assert.equal((await m.ctl('GET', '/proxies/asight-re-deepseek-dsh.env')).json().alive, true)
+  assert.equal((await m.ctl('GET', '/proxies/asight-in-deepseek-dsh.cli')).json().alive, false, 'nothing listens on the engine port')
 })
