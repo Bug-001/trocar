@@ -26,7 +26,8 @@ import { undoHarnesses } from './undo.mjs'
 import { planByMarker, undoByMarker } from './marker.mjs'
 import { daemonState, stopDaemon, helperGone, isRedirectorHelper } from './daemon-stop.mjs'
 import { controlRequest, controlSocketPath } from './control-client.mjs'
-import { disableAutostart, unitFilePath } from './autostart.mjs'
+import { disableAutostart, unitFilePath, UNIT_FILE_NAME } from './autostart.mjs'
+import { execTool } from './exec.mjs'
 import { listProcs, identityFor, pidAlive } from './proc.mjs'
 import { runEventWriter } from './events.mjs'
 import { confirm } from './io.mjs'
@@ -56,6 +57,13 @@ export function offWorld({ home = nodeOs.homedir(), env = process.env, deps = {}
   w.unitManaged = () => w.fs.existsSync(unitFilePath(home))
   return w
 }
+
+/** What the user does when a daemon that answers cannot be made to confirm that its routing is off (1.6 §1.5 「确认不了就不撤」 leaves the entries alone, so the way out is said, audit semantics 5):
+ *  stopping the daemon takes its helper and the links with it, and then the command is run again. */
+const wayOut = (w, pid) => `To go on, stop the daemon (${w.unitManaged() ? 'systemctl --user stop asight-collector.service' : Number.isInteger(pid) ? `kill ${pid}` : "no pid is on record: find it with pgrep -f 'asight.* (daemon|collector start)'"}), which takes its links off with it, then run the command again`
+
+/** Is the autostart unit active or activating (a `Restart=on-failure` restart waiting out its RestartSec is `activating`)? A tool that cannot be asked says no: the lock decides. */
+const unitIsUp = (w) => { const a = execTool('systemctl', ['--user', 'is-active', UNIT_FILE_NAME], { run: w.exec, env: w.env }); return a.out === 'active' || a.out === 'activating' || a.out === 'reloading' }
 
 /** The harness ids a manifest names (entries and files). */
 export const harnessIdsOf = (m) => [...new Set([...((m && m.entries) || []), ...((m && m.files) || [])].map((x) => x.harness).filter((h) => typeof h === 'string'))]
@@ -109,9 +117,9 @@ export async function switchRoutingOff(w, { ids = null, now = false, exit = fals
       r.daemon = { pid: Number.isInteger(reply && reply.pid) ? reply.pid : (lock && lock.pid) ?? null, state: exit ? 'draining' : 'running' }
       r.confirmed = exit ? reply.actual === 'off' && reply.confirmed !== false : reply.confirmed === true
       r.how = 'daemon-reply'
-      if (!r.confirmed) fail('state-mismatch', `the daemon did not confirm that the kernel's watch table${exit ? ' and links' : ''} are off (actual: ${reply && reply.actual}, confirmed: ${reply && reply.confirmed}); the entries are left as they are`)
+      if (!r.confirmed) fail('state-mismatch', `the daemon did not confirm that the kernel's watch table${exit ? ' and links' : ''} are off (actual: ${reply && reply.actual}, confirmed: ${reply && reply.confirmed}); the entries are left as they are. ${wayOut(w, r.daemon.pid)}`)
     } catch (e) {
-      if (e && e.status) fail('control-error', `the daemon refused the off request (${errMessage(e)}); the entries are left as they are`)
+      if (e && e.status) fail('control-error', `the daemon refused the off request (${errMessage(e)}); the entries are left as they are. ${wayOut(w, lock && lock.pid)}`)
       else await stopIt(`did not answer the off request (${errMessage(e)})`)
     }
   } else if (st.state === 'unresponsive' || st.state === 'starting') await stopIt(st.reason || 'does not answer')
@@ -121,7 +129,13 @@ export async function switchRoutingOff(w, { ids = null, now = false, exit = fals
     const helperGoneNow = () => helperGone(lock, { alive: w.alive, isHelper: w.isHelper })
     for (const end = w.ms() + 2000; lock && !helperGoneNow() && w.ms() < end;) await w.sleep(25) // a helper that is only now noticing its daemon died
     if (lock && !helperGoneNow()) await stopIt('is not running, but its helper still is')
-    else { r.confirmed = true; r.how = 'no-daemon'; r.daemon = { pid: null, state: 'none' } }
+    else if (exit && w.unitManaged() && unitIsUp(w)) { // a killed daemon is brought back by systemd after RestartSec (Restart=on-failure), and `disable` does not cancel that: it is stopped, as `uninstall` does (§1.4 第 5 步, audit semantics 4)
+      const s = await w.stopDaemon({ unitManaged: true })
+      r.stop = s; r.how = s.how
+      r.events.push({ kind: 'daemon-stop', how: s.how, signals: s.signals, stopped: s.stopped, pid: s.pid, reason: `no daemon is running, but the autostart unit is up or about to restart one (systemd Restart=on-failure); ${s.stopped ? 'stopped (systemctl stop, reset-failed)' : `NOT stopped${s.error ? `: ${s.error}` : ''}`}` })
+      if (s.stopped) { r.confirmed = true; r.daemon = { pid: null, state: 'none' } } // there was no engine: nothing was relayed, and what the stop did is on `stop`
+      else { r.unstoppable = true; fail('stop-failed', `systemd keeps the autostart unit up or restarting${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, but a daemon may come back with nothing attached; stop it: systemctl --user stop asight-collector.service, then run asight off again`) }
+    } else { r.confirmed = true; r.how = 'no-daemon'; r.daemon = { pid: null, state: 'none' } }
   } else fail('control-error', `${st.reason || 'whether a daemon runs is not known'}; the entries are left as they are. If no asight daemon runs (pgrep -f 'asight.* (daemon|collector start)' finds none), delete ${w.lockFile} and run asight off again; if one does, stop it by hand first`)
   return r
 }
@@ -299,6 +313,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
   let { manifest, manifestError } = read() // what the plan and the first desired-off go by; read AGAIN under the lock: an `on` that held it has written to the manifest since
   let installed = harnessIdsOf(manifest)
   if (ids === null) receipt.harnesses = installed
+  const hadAnything = w.fs.existsSync(w.dir) || w.unitManaged() || manifest != null || manifestError != null // no collector directory, no unit, no manifest: asight was never installed here (or is uninstalled, and purged)
   if (dryRun) { // R6: the same receipt in the future tense, nothing written, nothing asked of the daemon, exit 0
     const mine = (x) => ids == null || ids.includes(x.harness)
     const items = manifest && !manifest.unsupported ? manifest : { entries: [], files: [] }
@@ -312,6 +327,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     for (const id of ids || []) if (manifest && !installed.includes(id)) receipt.skipped.push({ what: id, reason: `${id} 没有 asight 的入口(没装过,或早已撤掉)` })
     receipt.autostart = ids === null ? { planned: true } : null
     receipt.daemon = { pid: null, state: ids === null ? 'draining' : 'running' }
+    if (!hadAnything && !receipt.changed.length && !receipt.removed.length) { receipt.nothing_installed = true; receipt.log = null } // said as it is (audit semantics 7); nothing would be written, so there is no log to point at
     return { receipt, exit: EXIT.ok }
   }
 
@@ -382,6 +398,8 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     for (const p of receipt.user_processes) put({ kind: 'note', reason: `${p.command} (pid ${p.pid}) is still running: ${p.note}; off does not stop it` })
 
     // 6 / 7 · the receipt and its result line
+    if (!w.fs.existsSync(w.dir)) receipt.log = null // nothing was written to flows/: there is no log to point at (R1)
+    if (!hadAnything && !receipt.changed.length && !receipt.removed.length && !receipt.left.length && !receipt.problems.length && !(receipt.pending || []).length && !((receipt.autostart && receipt.autostart.removed) || []).length) receipt.nothing_installed = true // an `off` of a machine asight is not on: it says so, instead of "asight 已关闭采集" (audit semantics 7)
     receipt.ok = receipt.problems.length === 0 && receipt.left.length === 0 // an item that was not undone is a not-done off (1.6 R3, R4), whatever else went well
     if (!receipt.ok && !receipt.problems.length) receipt.problems.push(`${receipt.left.length} item(s) were left as they are (listed above, with why); put that right, then run asight off again`)
     const n = { changed: receipt.changed.length, removed: receipt.removed.length, left: receipt.left.length, still_trusting: (receipt.still_trusting || []).length }

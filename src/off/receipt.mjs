@@ -47,6 +47,14 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   const t = (x) => offTilde(x, home)
   const scope = r.all ? '' : `${(r.harnesses || []).join('、')} 的`
   const lines = [header ? header : !past ? `asight 将关闭${scope}采集。` : r.ok === false ? `asight 没有做完${r.routing && r.routing.confirmed ? '(引流已摘,其余原因在下面)' : '(原因在下面)'}。` : `asight 已关闭${scope}采集。`]
+  if (r.nothing_installed) { // asight is not on this machine: said first and alone, not "closed" with a list of nothing (R1; audit semantics 7)
+    const out = [header || '这台机器上没有 asight 的安装(没装过,或已经 uninstall),没有东西要关。']
+    if ((r.skipped || []).length) out.push(`跳过: ${r.skipped.map((s) => `${t(s.what)}(${s.reason})`).join('  ')}`)
+    if ((r.user_processes || []).length) out.push(`你自己起的 asight 进程仍在跑: ${r.user_processes.map((p) => `${p.command}(pid ${p.pid},${p.note})`).join('、')}`)
+    for (const n of r.notes || []) out.push(`说明: ${n}`)
+    out.push(...extra, footer || '开采集  asight on')
+    return out.join('\n')
+  }
   const changed = r.changed || [], removed = r.removed || []
   if (changed.length) {
     lines.push(past ? '撤掉了:' : '将撤掉:')

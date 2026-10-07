@@ -9,9 +9,10 @@ import crypto from 'node:crypto'
 import { installCollector } from '../../src/collector/install.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
-import { readManifest } from '../../src/off/manifest.mjs'
+import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
-import { undoSide, offWorld } from '../../src/off/orchestrate.mjs'
+import { undoSide, offWorld, runOff } from '../../src/off/orchestrate.mjs'
+import { formatOffReceipt } from '../../src/off/receipt.mjs'
 import { certBlocks } from '../../src/off/pem.mjs'
 import { HARNESS_IDS } from '../../src/cli/harness-names.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -121,10 +122,134 @@ test('V1: off with the daemon gone (its lock left, its helper dead): every entry
   for (const e of entries) assert.equal(e.existed_before ? shaOf(e.path) : fs.existsSync(e.path), e.existed_before ? e.pre_sha256 : false, `${e.path} is back as it was before asight`)
   assert.deepEqual(receipt.routing, { confirmed: true, state: 'stale', how: 'no-daemon' })
   assert.deepEqual([receipt.daemon, receipt.relayed], [{ pid: null, state: 'none' }, { closing: 0, waiting: 0, cut: 0 }], 'no daemon: nothing is relayed, said as a fact')
-  assert.deepEqual(execFrom(s, calls), ['systemctl --user disable asight-collector.service'], 'the only OS tool run is the autostart disable: no start, no restart')
+  assert.deepEqual(execFrom(s, calls), ['systemctl --user is-active asight-collector.service', 'systemctl --user disable asight-collector.service'], 'the only OS tools run are the question whether systemd is about to restart the daemon (it says inactive here) and the autostart disable: no start, no stop, no restart')
   assert.deepEqual(s.sys.daemon.calls.slice(asked).filter((c) => c.startsWith('POST')), [], 'and no daemon was asked for anything, let alone started')
   assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ALL_HARNESSES.map(() => 'off'), 'every harness is off in state.json')
   assert.equal(readManifest(s.dir).entries.length, 0, 'and out of the manifest')
+})
+
+// a systemd that answers like the real one for a daemon that was killed: `activating` (auto-restart) until `stop` is run, then `inactive`; `stubborn` keeps it activating
+function restartingSystemd(s, { stubborn = false } = {}) {
+  const state = { unit: 'activating' }
+  const run = (file, args, o) => {
+    const cmd = [file, ...args].join(' ')
+    if (/ is-active /.test(cmd)) { s.sys.exec.calls.push(cmd); return { status: state.unit === 'inactive' ? 3 : 0, stdout: `${state.unit}\n`, stderr: '' } }
+    if (/ stop /.test(cmd) && !stubborn) state.unit = 'inactive'
+    return s.sys.exec.run(file, args, o)
+  }
+  return { run, state }
+}
+
+test('semantics 4 / 1.6 §1.4: a killed daemon that systemd is about to restart (Restart=on-failure) is stopped by an off with no names — stop, reset-failed, is-active BEFORE the entries are undone, so no daemon comes back; nothing is relayed, exit 0', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] })
+  s.sys.daemon.state.up = false
+  writeDaemonLock(s)
+  const sd = restartingSystemd(s)
+  const from = s.sys.exec.calls.length
+  const { receipt, exit } = await s.off({ deps: { alive: () => false, exec: sd.run } })
+  assert.equal(exit, 0, JSON.stringify(receipt.problems))
+  const cmds = execFrom(s, from)
+  assert.deepEqual(cmds.filter((c) => !/ is-active /.test(c)), ['systemctl --user stop asight-collector.service', 'systemctl --user reset-failed asight-collector.service', 'systemctl --user disable asight-collector.service'], 'the unit is stopped and its failed state cleared, then the autostart is disabled')
+  assert.ok(cmds.indexOf('systemctl --user stop asight-collector.service') < cmds.indexOf('systemctl --user disable asight-collector.service'), 'the restart is cancelled before the autostart goes')
+  assert.deepEqual(receipt.relayed, { closing: 0, waiting: 0, cut: 0 }, 'there was no engine: nothing was relayed')
+  assert.deepEqual(receipt.daemon, { pid: null, state: 'none' })
+  assert.equal(receipt.routing.confirmed, true)
+  assert.deepEqual(validateReceipt(receipt), [])
+  assert.equal(readManifest(s.dir).entries.length, 0, 'and the entries are undone')
+  const events = flowEvents(s.dir)
+  assert.ok(events.some((e) => e.kind === 'daemon-stop' && e.stopped === true && /about to restart/.test(e.reason)), 'the stop is on the record')
+})
+
+test('semantics 4: a unit systemd keeps up after the stop is not "off": exit 1 with the command to run, and the entries are undone all the same', async () => {
+  const s = await installedHome({ names: ['claude-code'] })
+  s.sys.daemon.state.up = false
+  const sd = restartingSystemd(s, { stubborn: true })
+  const { receipt, exit } = await s.off({ deps: { alive: () => false, exec: sd.run } })
+  assert.equal(exit, 1)
+  assert.match(receipt.problems.join('\n'), /systemctl --user stop asight-collector\.service/)
+  assert.equal(readManifest(s.dir).entries.length, 0, 'the entries are undone: a daemon that comes back has nothing attached (desired is off)')
+})
+
+test('semantics 4: off with names does not touch the unit — only an off with no names takes the daemon away', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] })
+  s.sys.daemon.state.up = false
+  const sd = restartingSystemd(s)
+  const from = s.sys.exec.calls.length
+  const { exit } = await s.off({ ids: ['codex'], deps: { alive: () => false, exec: sd.run } })
+  assert.equal(exit, 0)
+  assert.deepEqual(execFrom(s, from).filter((c) => / (stop|disable|reset-failed|is-active) /.test(c)), [], 'no systemctl question or command for a named off')
+})
+
+test('semantics 5: with no autostart unit managing it the way out names the pid to kill (the daemon\'s own reply, else the lock\'s); with none on record, how to find it', async () => {
+  const s = await installedHome({ names: ['claude-code'], daemon: { pid: 4242 } })
+  fs.rmSync(path.join(s.home, '.config', 'systemd', 'user', 'asight-collector.service'))
+  const r = await s.off({ deps: { request: async (q) => (q.path === '/off' ? { actual: 'on', confirmed: false, relayed: { closing: 0, waiting: 0, cut: 0 }, pid: 5151 } : s.sys.daemon.request(q)) } })
+  assert.equal(r.exit, 1)
+  assert.match(r.receipt.problems[0], /To go on, stop the daemon \(kill 5151\), which takes its links off with it/)
+  const t = await installedHome({ names: ['claude-code'] })
+  fs.rmSync(path.join(t.home, '.config', 'systemd', 'user', 'asight-collector.service'))
+  const none = await t.off({ deps: { request: async (q) => (q.path === '/off' ? { actual: 'on', confirmed: false, relayed: { closing: 0, waiting: 0, cut: 0 } } : t.sys.daemon.request(q)) } })
+  assert.match(none.receipt.problems[0], /no pid is on record: find it with pgrep -f 'asight\.\* \(daemon\|collector start\)'/)
+})
+
+// a manifest that names a file asight never made (damaged, hand-edited, or from a bug) must not take the user's data with it: what `off` / `uninstall` remove, rewrite or
+// rebuild at a path the manifest gives has to be inside ~/.asight (audit semantics 6)
+function victims(s) {
+  const dirV = path.join(s.home, 'Documents', 'precious'), fileV = path.join(s.home, 'Documents', 'notes.txt'), keyV = path.join(s.home, '.ssh', 'id_test')
+  fs.mkdirSync(dirV, { recursive: true }); fs.writeFileSync(path.join(dirV, 'thesis.txt'), 'years of work\n')
+  fs.writeFileSync(fileV, 'my notes\n'); fs.mkdirSync(path.dirname(keyV), { recursive: true }); fs.writeFileSync(keyV, 'PRIVATE\n')
+  return { dirV, fileV, keyV, intact: () => [fs.readFileSync(path.join(dirV, 'thesis.txt'), 'utf8'), fs.readFileSync(fileV, 'utf8'), fs.readFileSync(keyV, 'utf8')] }
+}
+
+test('semantics 6: a manifest that names a path outside ~/.asight as a bundle, the CA certificate or the CA key is not followed — off and uninstall leave that path alone, say why, exit 1', async () => {
+  const s = await installedHome({ names: ['codex'] })
+  const v = victims(s), before = v.intact()
+  const m = s.manifest()
+  m.files.find((f) => f.role === 'bundle').path = v.dirV // a directory: `rm -r` would take everything in it
+  m.files.find((f) => f.role === 'ca-cert').path = v.fileV
+  m.files.find((f) => f.role === 'ca-key').path = v.keyV
+  saveManifest(s.dir, m)
+  const off = await s.off()
+  assert.equal(off.exit, 1)
+  assert.deepEqual(v.intact(), before, 'off removed, rewrote and rebuilt nothing outside ~/.asight')
+  assert.ok(fs.existsSync(path.join(v.dirV, 'thesis.txt')))
+  assert.match(off.receipt.left.map((l) => l.reason).join('\n'), /is not inside .*\.asight.*not asight's to remove/s)
+  const un = await s.uninstall({ yes: true })
+  assert.equal(un.exit, 1)
+  assert.deepEqual(v.intact(), before, 'uninstall too: the CA certificate and the CA key it was told to remove are not those files')
+  assert.match(un.receipt.left.concat(un.receipt.problems.map((reason) => ({ reason }))).map((l) => l.reason).join('\n'), /is not inside .*\.asight/s)
+})
+
+test('semantics 6: a path inside ~/.asight is still removed — the fence is for what is outside it', async () => {
+  const s = await installedHome({ names: ['codex'] })
+  const un = await s.uninstall({ yes: true })
+  assert.equal(un.exit, 0, JSON.stringify(un.receipt.problems))
+  assert.equal(fs.existsSync(path.join(s.dir, 'ca')), false)
+})
+
+test('semantics 7: off on a machine asight was never installed on says so first — nothing to close, not 「asight 已关闭采集」 — touches nothing, points at no log, and names no autostart it did not disable', async () => {
+  const home = tmpDir('asight-pristine-')
+  const calls = []
+  const run = (file, args) => { calls.push([file, ...args].join(' ')); return { status: 0, stdout: '', stderr: '' } }
+  const { receipt, exit } = await runOff({ home, env: { HOME: home }, deps: { exec: run, platform: 'linux', procs: async () => [], sleep: async () => {} } })
+  assert.equal(exit, 0)
+  assert.equal(receipt.nothing_installed, true)
+  assert.equal(receipt.log, null, 'nothing was written, so there is no log to point at (R1)')
+  assert.deepEqual(validateReceipt(receipt), [])
+  const text = formatOffReceipt(receipt, { home })
+  assert.match(text, /这台机器上没有 asight 的安装\(没装过,或已经 uninstall\),没有东西要关/)
+  assert.doesNotMatch(text, /已关闭|自启已停用|引流/)
+  assert.deepEqual(fs.readdirSync(home), [], 'and nothing was made in HOME')
+  assert.deepEqual(calls, [], 'no OS tool was run: there is no unit to disable')
+  const dry = await runOff({ home, env: { HOME: home }, dryRun: true, deps: { exec: run, platform: 'linux' } })
+  assert.equal(dry.receipt.nothing_installed, true); assert.equal(dry.exit, 0)
+  // an off of an installed asight is not that
+  const s = await installedHome({ names: ['claude-code'] })
+  const real = await s.off()
+  assert.equal(real.receipt.nothing_installed, undefined)
+  assert.match(formatOffReceipt(real.receipt, { home: s.home }), /asight 已关闭/)
+  const again = await s.off() // the collector directory is still there: asight was installed, and is off
+  assert.equal(again.receipt.nothing_installed, undefined)
 })
 
 test('V5: off claude-code undoes only Claude Code: the other harness\'s file is byte for byte, it stays on in state.json and attached in the daemon, /off was posted with the name only and no exit', async () => {
@@ -176,6 +301,7 @@ test('1.6 §1.5: the routing is confirmed BEFORE one entry is touched — a daem
   assert.equal(r.exit, 1)
   assert.deepEqual(r.receipt.routing, { confirmed: false, state: 'running', how: 'daemon-reply' })
   assert.match(r.receipt.problems[0], /did not confirm that the kernel's watch table and links are off/)
+  assert.match(r.receipt.problems[0], /To go on, stop the daemon \(systemctl --user stop asight-collector\.service\), which takes its links off with it, then run the command again/, 'semantics 5: the way out is said, not only the refusal')
   assert.deepEqual(s.userFiles(), before, 'no user file moved')
   assert.equal(shaOf(path.join(s.dir, 'ca', 'combined-codex.pem')), bundle)
   assert.ok(readManifest(s.dir).entries.length >= 2, 'and the manifest still lists the entries')
@@ -198,6 +324,7 @@ test('1.6 §1.4 第 2 步: an off with no names asks the daemon to exit once dra
   const u = await installedHome({ names: ['claude-code'] }); const before = u.userFiles()
   const bad = await u.off({ deps: { request: async (q) => { if (q.path === '/off') throw Object.assign(new Error('400: unknown harness: nope'), { status: 400 }); return u.sys.daemon.request(q) } } })
   assert.equal(bad.exit, 1); assert.match(bad.receipt.problems[0], /refused the off request/)
+  assert.match(bad.receipt.problems[0], /To go on, stop the daemon \(systemctl --user stop asight-collector\.service\)/, 'semantics 5: and what to do about it')
   assert.deepEqual(u.userFiles(), before)
   assert.ok(u.sys.exec.calls.every((c) => !/stop|kill/.test(c)), 'an answering daemon is never stopped')
 })

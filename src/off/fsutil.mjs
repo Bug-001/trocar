@@ -25,6 +25,14 @@ export function writeDurable(file, data, mode, fs = nodeFs) {
   fsyncDir(fs, path.dirname(file))
 }
 
+// Is `p` strictly inside `root`? `..` and a symlinked parent directory are followed (a path that only looks like it is inside is not); `root` itself is not inside. What `off` /
+// `uninstall` remove at a path the install manifest gives is checked with this first: a manifest that is damaged, edited, or written by a bug must not take the user's files with it.
+export function strictlyInside(root, p, fs = nodeFs) {
+  const real = (x) => { try { return fs.realpathSync(x) } catch { return path.resolve(x) } }
+  const abs = path.resolve(p)
+  return path.join(real(path.dirname(abs)), path.basename(abs)).startsWith(real(root) + path.sep)
+}
+
 // The directories that do not exist yet on the way to `dir`, outermost first.
 export function missingDirs(dir, fs = nodeFs) {
   const out = []

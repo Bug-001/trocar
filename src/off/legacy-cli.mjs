@@ -72,7 +72,7 @@ export async function legacyOffCli(argv, { io, env = process.env, home = nodeOs.
       if (typeof r.cut === 'number') receipt.relayed = { closing: 0, waiting: 0, cut: r.cut }
       else { receipt.relayed = 'unknown'; receipt.relayed_reason = r.cut_reason || '读不到' }
       if (flags.has('--now')) receipt.notes.push('--now 在旧采集上没有用:旧 MITM 收到 SIGTERM 后自己排空,在途连接最多等 10 s,余下的切断并计数')
-      if (!r.changed.length && !r.removed.length && r.ok) receipt.notes.push('没有旧采集的东西可撤:这台机器上没有 asight 的旧 steer、Clash 块、LaunchAgent 或旧 CA')
+      if (!r.changed.length && !r.removed.length && r.ok) { receipt.notes.push('没有旧采集的东西可撤:这台机器上没有 asight 的旧 steer、Clash 块、LaunchAgent 或旧 CA'); receipt.nothing_installed = true } // and says it first, not "asight 已关闭采集" (audit semantics 7)
     } finally { lock.release(); if (!homeThere) removeEmptyDirs([asightHome(home)], fs) }
     io.out(json ? JSON.stringify(receipt, null, 2) : formatOffReceipt(receipt, { home, cutNote: '(旧 MITM:在途连接最多等 10 s,余下的随卸载切断)' }))
     return receipt.ok ? EXIT.ok : EXIT.incomplete

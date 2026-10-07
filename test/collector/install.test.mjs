@@ -602,7 +602,7 @@ test('install / uninstall: the autostart unit is listed with its env and link, w
     calls.length = 0
     const exec = (file, args) => { calls.push([file, ...args].join(' ')); return { status: 0, stdout: '', stderr: '' } }
     await uninstallCollector({ home: b.home, env: {}, deps: { exec }, stop: async () => { calls.push('stopped'); return 'stopped' } })
-    assert.deepEqual(calls, ['systemctl --user disable asight-collector.service', 'stopped', 'systemctl --user daemon-reload'], 'the autostart is disabled, the daemon stopped, and systemd told the unit file is gone (1.6 §1.4 4, 5)')
+    assert.deepEqual(calls, ['systemctl --user is-active asight-collector.service', 'systemctl --user disable asight-collector.service', 'stopped', 'systemctl --user daemon-reload'], 'systemd is asked whether it is about to restart a daemon (it says nothing here), the autostart is disabled, the daemon stopped, and systemd told the unit file is gone (1.6 §1.4 4, 5)')
     assert.ok(!fs.existsSync(path.join(b.home, '.config')), 'the unit and the directories asight created for it are gone')
   } finally { b.done() }
 })

@@ -146,3 +146,14 @@ test('old capture: off on a machine that never had asight leaves no ~/.asight; u
   assert.equal((await uninstallRun(u)).exit, 0)
   assert.deepEqual(fs.readdirSync(path.join(u.home, '.asight')).sort(), ['capture-2026-10-06.ndjson', 'logs'], 'the captures are the user\'s, and so stay with the log')
 })
+
+test('semantics 7 (old capture): off on a Mac asight was never on says so first — nothing to close, not 「asight 已关闭采集」 — in the text and in --json', async () => {
+  const bare = () => macHome({ block: false, runtime: false, agents: [], steer: false, ca: false })
+  const run = async (argv) => { const s = bare(); const io = fakeIo(); return { exit: await runOffCli(argv, ctx(s, io, { mac: fakeMac({ loaded: [], keychain: false }) })), io } }
+  const off = await run([])
+  assert.equal(off.exit, 0, off.io.text())
+  assert.match(off.io.text(), /这台机器上没有 asight 的安装\(没装过,或已经 uninstall\),没有东西要关/)
+  assert.doesNotMatch(off.io.text(), /asight 已关闭/)
+  const json = await run(['--json'])
+  assert.equal(json.io.json().nothing_installed, true)
+})

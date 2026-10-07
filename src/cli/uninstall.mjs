@@ -17,7 +17,7 @@ import { standalonePath, backupDir, opLockFile, asightHome } from '../off/paths.
 import { netenvFile } from '../netenv/index.mjs'
 import { dropBackup, orphanBackups } from '../off/backup.mjs'
 import { removeOwnedFile } from '../off/journal.mjs'
-import { removeEmptyDirs, sweepTemps } from '../off/fsutil.mjs'
+import { removeEmptyDirs, sweepTemps, strictlyInside } from '../off/fsutil.mjs'
 import { execTool } from '../off/exec.mjs'
 import { confirm, isInteractive } from '../off/io.mjs'
 import { CODE_OFF } from '../off/names.mjs'
@@ -181,7 +181,12 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
         receipt.removed.push(...removeWantsLinks(home, { onError: (p, err) => failed.push({ code: 'unit-not-disabled', path: p, reason: `${p}, the autostart link, could not be removed: ${errText(err)}` }), fs }))
       }
       // the CA, the runtime state (with the plugins' trust markers), the lock files, the single-file undo program
-      for (const f of m && !m.unsupported ? m.files.filter((x) => x.role === 'ca-key') : []) rm(f.path)
+      for (const f of m && !m.unsupported ? m.files.filter((x) => x.role === 'ca-key') : []) {
+        if (!strictlyInside(asightHome(home), f.path, fs)) { // a manifest that names the CA key somewhere else is damaged or edited: that file is not asight's (audit semantics 6)
+          const reason = `${f.path}, named as the CA key, is not inside ${asightHome(home)}, so it is not asight's to remove; correct that item in ${manifestPath(w.dir)} by hand`
+          receipt.left.push({ path: f.path, result: 'error', reason }); failed.push({ code: 'entry-not-undone', path: f.path, reason })
+        } else rm(f.path)
+      }
       if (!m) rm(path.join(w.dir, 'ca'))
       const runtime = env.XDG_RUNTIME_DIR ? path.join(env.XDG_RUNTIME_DIR, 'asight') : null
       // `netenv.json` is what `status`, `doctor` and `on` last read of the VPN software, for the board: asight's own file, written outside collector/, so zero residue is not met without it (audit rule-b 8)

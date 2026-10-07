@@ -25,8 +25,8 @@ import path from 'node:path'
 import { undoEntry, removeOwnedFile, describeEntry } from './journal.mjs'
 import { saveManifest, KNOWN_KINDS, undoByHand, restoreByHand } from './manifest.mjs'
 import { dropBackup } from './backup.mjs'
-import { backupDir } from './paths.mjs'
-import { removeEmptyDirs, sweepTemps, writeDurable, sha256 } from './fsutil.mjs'
+import { backupDir, asightHome } from './paths.mjs'
+import { removeEmptyDirs, sweepTemps, writeDurable, sha256, strictlyInside } from './fsutil.mjs'
 import { matchHarness } from './signature.mjs'
 import { certBlocks, stripCert, composeBundle, certsOf } from './pem.mjs'
 
@@ -78,6 +78,9 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   const leftEntries = [] // the entries step 1 could not undo: they stay in the manifest and still name what they named
   const rm = (p) => { sweepTemps(p, fs); if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); out.removed.push(p) } }
   const fail = (item, reason) => { out.left.push({ path: item.path, harness: item.harness ?? null, result: 'error', reason }) }
+  // What is removed, rewritten or rebuilt at a path the manifest names is inside ~/.asight, where asight puts its bundles, trust files and CA: a manifest that names another
+  // path is damaged or was edited, and following it would take the user's files (audit semantics 6). The item stays in the manifest, so the next run says it again.
+  const outside = (f) => (strictlyInside(asightHome(home), f.path, fs) ? null : `${f.path} is not inside ${asightHome(home)}, so it is not asight's to remove or rewrite (the install manifest names a file asight does not make there: it is damaged or was edited); it is left as it is — correct that item in ${path.join(dir, 'install-manifest.json')} by hand, then run it again`)
   // an entry that could not be undone: why, and — when asight kept a copy of the file as it was — the one command that puts it back and what that costs (R2:
   // "给出备份路径、手动 cp 命令和会丢掉什么"); the receipt prints `reason`, `--json` also carries `backup` and `restore`
   const leftRow = (e, why, result) => {
@@ -192,6 +195,8 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
       return viaLeft(f)
     }
     const one = (f, byHarness) => {
+      const away = outside(f)
+      if (away) { fail(f, away); return }
       const h = holders(f, byHarness)
       // a replace-semantics bundle the entry of which is still in place is in use by the next start of its agent, whether or not a process holds
       // it now: removing it leaves an agent with no network (4.6 安装 / 卸载不静默); an extra file is only warned about by Node when it is gone
@@ -221,7 +226,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     for (const f of bundles) one(f, true)
     for (const f of extras) one(f, false)
   }
-  if (dropCa) for (const f of manifest.files.filter((x) => x.role === 'ca-cert' && known(x))) { try { rm(f.path); without(manifest.files, f) } catch (e) { fail(f, `${f.path} could not be removed (${errText(e)})`) } } // uninstall only (4.6 第 3 步)
+  if (dropCa) for (const f of manifest.files.filter((x) => x.role === 'ca-cert' && known(x))) { const away = outside(f); if (away) { fail(f, away); continue }; try { rm(f.path); without(manifest.files, f) } catch (e) { fail(f, `${f.path} could not be removed (${errText(e)})`) } } // uninstall only (4.6 第 3 步)
 
   // ── 4: rc lines and patch rows, then plugins and the shim ─────────────────────────────────────────────────────────────────────────
   for (const e of entries) if (!config(e)) undoOne(e)

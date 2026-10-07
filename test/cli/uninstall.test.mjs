@@ -214,9 +214,30 @@ test('1.6 §1.5: a daemon that does not confirm the routing off leaves every ent
   const r = await s.uninstall({ yes: true })
   assert.equal(r.exit, 1)
   assert.match(r.receipt.problems[0], /did not confirm/)
+  assert.match(r.receipt.problems[0], /To go on, stop the daemon \(systemctl --user stop asight-collector\.service\).*then run the command again/, 'semantics 5: an uninstall that stops here says how to get past it')
   assert.deepEqual([s.userFiles(), asightFiles(s).includes('install-manifest.json')], [before, true])
   assert.deepEqual(flowEvents(s.dir).filter((e) => e.event === 'failure').map((e) => e.code), ['state-mismatch'])
   assert.deepEqual([flowEvents(s.dir).at(-1).kind, flowEvents(s.dir).at(-1).outcome], ['result', 'failed'])
+})
+
+test('semantics 4: an uninstall over a killed daemon that systemd is about to restart stops the unit once (stop, reset-failed) before the unit file goes — exit 0, no daemon, and nothing is stopped twice', async () => {
+  const s = await installedHome({ names: ['claude-code'] })
+  s.sys.daemon.state.up = false
+  writeDaemonLock(s)
+  let unit = 'activating'
+  const run = (file, args, o) => {
+    const cmd = [file, ...args].join(' ')
+    if (/ is-active /.test(cmd)) { s.sys.exec.calls.push(cmd); return { status: unit === 'inactive' ? 3 : 0, stdout: `${unit}\n`, stderr: '' } }
+    if (/ stop /.test(cmd)) unit = 'inactive'
+    return s.sys.exec.run(file, args, o)
+  }
+  const from = s.sys.exec.calls.length
+  const r = await s.uninstall({ yes: true, deps: { alive: () => false, exec: run } })
+  assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
+  const stops = s.sys.exec.calls.slice(from).filter((c) => / stop /.test(c))
+  assert.deepEqual(stops, ['systemctl --user stop asight-collector.service'], 'the unit is stopped once, by the routing step, and not again by the daemon step')
+  assert.deepEqual(r.receipt.daemon, { pid: null, state: 'none' })
+  assert.equal(fs.existsSync(path.join(s.home, '.config', 'systemd', 'user', 'asight-collector.service')), false, 'and the unit file is gone')
 })
 
 test('R12: an uninstall that cannot get the op lock has written desired off first and says which command holds it; nothing else is touched, exit 1', async () => {
