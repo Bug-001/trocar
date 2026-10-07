@@ -4,8 +4,8 @@
 // the helper reads (GetExtendedTcpTable: no CIM, no elevation, ~5 ms [E6]): of the processes the form can have, the ones that hold a
 // connection (any state, any age) whose remote port is the hop's. Exactly one → it. Never a guess: a wrong pid makes the engine decrypt a
 // process that does not trust asight's CA and breaks it, so more than one, none, a slow table or an unreadable one all give null, and the
-// caller judges by form (4.8 §5.4). There is no "unclaimed" bookkeeping: a connection opened before `on`, or while the switch was `PASS`,
-// would never be claimed and the judgement would go stale (review 2026-10-07). Node built-ins only; imports nothing of asight.
+// caller judges by form (4.8 §5.4). There is no "unclaimed" bookkeeping: a connection opened before `on` would never be claimed and the
+// judgement would go stale (review 2026-10-07). Node built-ins only; imports nothing of asight.
 
 const OVER = Symbol('over budget')
 
