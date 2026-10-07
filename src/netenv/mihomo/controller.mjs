@@ -11,6 +11,7 @@
 // Node built-ins only.
 
 import nodeHttp from 'node:http'
+import path from 'node:path'
 
 /** Thrown, with nothing sent, for a request the allow-list does not name. */
 export class ControllerRefused extends Error {
@@ -144,4 +145,105 @@ export function createController({ endpoint, secret = null, timeoutMs = 8000, re
     })
   }
   return { get: (path) => send('GET', path, null), put: (path, body = null) => send('PUT', path, body), endpoint: shown }
+}
+
+// ---- finding Verge's controller, and only trusting it when it is Verge's (RFC 4.7 §3.3; N3 N4) ---------------------------------------------------------------
+
+const VERGE_CORE = /^verge-mihomo(-alpha)?\.exe$/i
+const VERGE_GUI = /^clash-verge\.exe$/i
+const VERGE_SERVICE = /^clash-verge-service\.exe$/i
+const dirNorm = (d) => String(d).replaceAll('/', '\\').replace(/\\+$/, '').toLowerCase()
+const dirKey = (file) => dirNorm(path.win32.dirname(String(file).replaceAll('/', '\\')))
+const no = (why) => ({ ok: false, why })
+
+/**
+ * Whether the process that serves a controller is Verge's own core: a `verge-mihomo*.exe` in the install directory of the running Verge (the GUI's or the service's), and either this user's own
+ * process (same session, its token opens) or the service's SYSTEM core (session 0, `clash-verge-service.exe` running). Anything else is another user's, or somebody else's program under that name:
+ * the `payload` write sends the whole runtime config, nodes and subscription credentials included, so a controller that is not Verge's is never talked to (N4).
+ * `ps`: the helper's `ps` answer for every session. → `{ ok: true, how: 'own' | 'service' }` or `{ ok: false, why }`, why ∈ owner-unreadable · not-verge · other-user.
+ */
+export function judgeServer({ ps, serverPid, installDirs = [] }) {
+  const procs = Array.isArray(ps && ps.procs) ? ps.procs : []
+  const proc = Number.isInteger(serverPid) ? procs.find((p) => p && p.pid === serverPid) : null
+  if (!proc) return no('owner-unreadable')
+  if (!VERGE_CORE.test(String(proc.name ?? ''))) return no('not-verge')
+  const dirs = new Set([...installDirs.map(dirNorm), ...procs.filter((p) => p && p.exe && (VERGE_GUI.test(p.name) || VERGE_SERVICE.test(p.name))).map((p) => dirKey(p.exe))])
+  const inDirs = proc.exe ? dirs.has(dirKey(proc.exe)) : null // null: the image path is not readable (a SYSTEM process at Medium integrity)
+  if (proc.sessionId === ps.sessionId && proc.tokenDenied !== true) return inDirs === true ? { ok: true, how: 'own' } : no('not-verge')
+  if (proc.sessionId === 0 && inDirs !== false && procs.some((p) => p && VERGE_SERVICE.test(p.name))) return { ok: true, how: 'service' }
+  return no('other-user')
+}
+
+const topKey = (text, key) => { // a top-level scalar of a YAML file, read in memory: the file holds the secret and the subscription, so nothing else of it is looked at
+  const m = new RegExp(`^${key}:[ \\t]*(.*?)[ \\t]*$`, 'm').exec(text)
+  if (!m) return null
+  let v = m[1]
+  if (v.startsWith('"')) { const e = /^"((?:[^"\\]|\\.)*)"/.exec(v); v = e ? e[1].replace(/\\(.)/g, '$1') : v } else if (v.startsWith("'")) { const e = /^'((?:[^']|'')*)'/.exec(v); v = e ? e[1].replace(/''/g, "'") : v } else v = v.replace(/[ \t]+#.*$/, '')
+  return v === '' ? null : v
+}
+const pipeNameOf = (v) => (v == null ? null : (/(?:^|\\)pipe\\([A-Za-z0-9._-]{1,128})\s*$/.exec(String(v)) || /^([A-Za-z0-9._-]{1,128})$/.exec(String(v)) || [])[1] ?? null)
+const specOf = (v) => (/^(pipe|tcp|unix):/.test(String(v)) ? String(v) : `pipe:${pipeNameOf(v) ?? ''}`)
+
+/**
+ * discover({ listPipes, helper, readRuntime, env, makeClient, installDirs }) → { endpoint, how, version } | { unknown: { reason: 'controller-unreadable', tried: [{ how, why }] } }
+ * 4.7 §3.3's order: ① the pipes named verge-mihomo* (`listPipes()`: a list of names) → ② the running core's `-ext-ctl-pipe` (the helper's `ps` with command lines; a SYSTEM core's is not readable) →
+ * ③ the runtime file's `external-controller-pipe` → ④ its `external-controller` (tcp, loopback only, with its `secret`, which stays in memory). The first that is Verge's (judgeServer, BEFORE any request is sent)
+ * and answers `GET /version` wins. `ASIGHT_MIHOMO_PIPE` (a pipe name, or `pipe:`/`tcp:`/`unix:` spec) pins one endpoint and skips the rest (tests; never Verge's). The result's `secret` (a tcp controller's) is
+ * not enumerable, so a result that is logged or serialised never carries it; `endpoint` carries the pipe's random suffix, so a caller shows `maskEndpoint(endpoint)`, never the endpoint.
+ * `why` ∈ no-pipes · unreadable · no-field · duplicate (the same endpoint an earlier source gave) · non-loopback · no-such-pipe · owner-unreadable · not-verge · other-user · no-answer.
+ */
+export async function discover({ listPipes = async () => [], helper = null, readRuntime = async () => null, env = process.env, makeClient = createController, installDirs = [] } = {}) {
+  const tried = []
+  const seen = new Set()
+  let psCache = null
+  const ps = async (cmdline) => {
+    if (psCache && (psCache.cmdline || !cmdline)) return psCache.answer
+    psCache = { cmdline, answer: await helper.call('ps', { all: true, cmdline }, { timeoutMs: 10000 }) }
+    return psCache.answer
+  }
+  async function ownerPid(spec) {
+    const t = parseEndpoint(spec)
+    if (t.kind === 'pipe') { const r = await helper.call('pipe-server', { name: spec.slice(5) }); return r && r.exists === false ? 'no-such-pipe' : r && r.serverPid }
+    const rows = ((await helper.call('tcp-table', { localPort: t.req.port, states: ['listen'] }, { timeoutMs: 5000 })) || {}).rows || []
+    const pids = [...new Set(rows.filter((r) => r && ['127.0.0.1', '::1', '0.0.0.0', '::'].includes(r.localAddr)).map((r) => r.pid))]
+    return pids.length === 1 ? pids[0] : null // more than one owner, or none: nobody to trust
+  }
+  async function attempt(how, spec, secret) {
+    if (seen.has(spec)) { tried.push({ how, why: 'duplicate' }); return null }
+    seen.add(spec)
+    try { parseEndpoint(spec) } catch { tried.push({ how, why: /^tcp:/.test(spec) ? 'non-loopback' : 'no-field' }); return null }
+    if (how !== 'pinned') {
+      if (!helper) { tried.push({ how, why: 'owner-unreadable' }); return null }
+      let pid
+      let judged
+      try { pid = await ownerPid(spec); judged = pid === 'no-such-pipe' ? no('no-such-pipe') : judgeServer({ ps: await ps(false), serverPid: pid, installDirs }) } catch { judged = no('owner-unreadable') }
+      if (!judged.ok) { tried.push({ how, why: judged.why }); return null }
+    }
+    const answer = await makeClient({ endpoint: spec, secret, timeoutMs: 2000 }).get('/version')
+    if (!(answer.status === 200 && answer.json && typeof answer.json.version === 'string')) { tried.push({ how, why: 'no-answer' }); return null }
+    const found = { endpoint: spec, how, version: answer.json.version }
+    Object.defineProperty(found, 'secret', { value: secret ?? null, enumerable: false })
+    return found
+  }
+  const pinned = env && env.ASIGHT_MIHOMO_PIPE
+  if (pinned) return (await attempt('pinned', specOf(pinned), null)) || { unknown: { reason: 'controller-unreadable', tried } }
+  let runtime
+  let runtimeRead = false
+  const runtimeText = async () => { if (!runtimeRead) { runtimeRead = true; try { runtime = await readRuntime() } catch { runtime = undefined } } return runtime }
+  const sources = [
+    ['enumerate', async () => { const n = await listPipes(); return (n || []).filter((x) => /^verge-mihomo/.test(x)).map((x) => `pipe:${x}`) }, 'no-pipes'],
+    ['cmdline', async () => ((await ps(true)).procs || []).filter((p) => p && VERGE_CORE.test(p.name ?? '')).map((p) => pipeNameOf((/-ext-ctl-pipe\s+("?)([^"\s]+)\1/i.exec(p.cmdline ?? '') || [])[2])).filter(Boolean).map((x) => `pipe:${x}`), 'no-field'],
+    ['runtime-pipe', async () => { const t = await runtimeText(); const n = typeof t === 'string' ? pipeNameOf(topKey(t, 'external-controller-pipe')) : null; if (typeof t !== 'string') throw new Error('unreadable'); return n ? [`pipe:${n}`] : [] }, 'no-field'],
+    ['runtime-tcp', async () => { const t = await runtimeText(); if (typeof t !== 'string') throw new Error('unreadable'); const v = topKey(t, 'external-controller'); return v ? [{ spec: `tcp:${v}`, secret: topKey(t, 'secret') }] : [] }, 'no-field'],
+  ]
+  for (const [how, candidates, empty] of sources) {
+    let list
+    try { list = await candidates() } catch { tried.push({ how, why: 'unreadable' }); continue }
+    if (list.length === 0) { tried.push({ how, why: empty }); continue }
+    for (const c of list) {
+      const found = typeof c === 'string' ? await attempt(how, c, null) : await attempt(how, c.spec, c.secret)
+      if (found) return found
+    }
+  }
+  return { unknown: { reason: 'controller-unreadable', tried } }
 }
