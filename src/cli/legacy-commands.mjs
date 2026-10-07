@@ -1,6 +1,7 @@
 // legacy-commands.mjs — the commands that keep the bodies they had when bin/asight.mjs held them all (RFC 1.6 §2, D39): `serve`, `etl`, `raw` and the transitional `capture`, `mitm`,
-// `desktop`, `monitor`, `shard`. The bodies are moved here unchanged; the table of src/cli/commands.mjs calls `runLegacyCommand(name, rest)`. They print with console.* and
-// set process.exitCode, as they always did.
+// `desktop`, `monitor`, `shard`. The bodies were moved here unchanged; the table of src/cli/commands.mjs calls `runLegacyCommand(name, rest)`. They print with console.* and
+// set process.exitCode, as they always did; runLegacyCommand hands that code back as its result (and leaves process.exitCode as it found it), so the dispatch can return it like every other
+// command. `verifyOldCa` is the old `asight verify`, which lives on as `asight doctor --only old-ca` (the hidden alias of §2) until the old capture retires.
 import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -13,8 +14,28 @@ const r = (...p) => path.join(ROOT, ...p)
 
 export const LEGACY_COMMANDS = new Set(['serve', 'monitor', 'etl', 'shard', 'capture', 'mitm', 'desktop', 'raw'])
 
-/** Runs one of LEGACY_COMMANDS with the arguments after its name; false when `cmd` is not one of them. */
+/** Runs one of LEGACY_COMMANDS with the arguments after its name → the exit code the body set (0 when it set none). */
 export async function runLegacyCommand(cmd, rest) {
+  if (!LEGACY_COMMANDS.has(cmd)) throw new RangeError(`not a command of src/cli/legacy-commands.mjs: ${cmd}`)
+  const prior = process.exitCode
+  process.exitCode = undefined
+  let code = 0
+  try { await body(cmd, rest) } finally { code = Number(process.exitCode) || 0; process.exitCode = prior }
+  return code
+}
+
+/** The old `asight verify` (now `asight doctor --only old-ca`): is the old capture's CA in the user-level trust store and in no machine-wide one. Exit 0 either way it is answered; 1 when the store could not be asked
+ *  (never 「not installed」 for 「could not check」). `deps.verify()` replaces the question (a test's); otherwise this home's keychain / NSS database is asked, never the real one of whoever runs a test. */
+export async function verifyOldCa({ io, home, platform, deps = {} }) {
+  let v
+  try {
+    v = deps.verify ? deps.verify() : (await import('../capture/onboard.mjs')).verifyUserTrustOnly({ platform, installerOpts: { keychain: path.join(home, 'Library', 'Keychains', 'login.keychain-db'), nssdb: path.join(home, '.pki', 'nssdb') } })
+  } catch (e) { io.out(`CA trust ? ${e.message}`); return 1 }
+  io.out(v ? 'CA present in user-level trust store, no machine-wide trust ✓' : 'CA not installed ✗ (run: asight monitor on)')
+  return 0
+}
+
+async function body(cmd, rest) {
   // Parsing lives in src/cli-args.mjs so it can be tested: `positional()` used to return the first
   // non-flag-NAME argument, i.e. the VALUE of any valued flag (`--interval 10` → "10" as the file).
   const args = parseArgs(rest)
@@ -393,8 +414,5 @@ export async function runLegacyCommand(cmd, rest) {
       die(usage);
       break;
     }
-    default:
-      return false
   }
-  return true
 }

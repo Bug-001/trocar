@@ -1,0 +1,135 @@
+// commands.mjs — the table of commands, the hidden aliases and the help (RFC 1.6 §2, R10): the one list help prints, src/cli/main.mjs dispatches and test/cli/dispatch.test.mjs (V19) holds equal.
+//   COMMANDS         [{ name, section: 'common' | 'data' | 'maintenance' | 'legacy', usage, summary, notes?, also?, mutates, needsRoot?, run(argv, ctx) → exit }]. `usage` is one or more lines (each begins
+//                    with `asight <name>`, or `sudo asight <name>`); `also` puts more lines of the same command under another section (`raw` is in two). `mutates`: R7 — the per-user commands
+//                    that change state refuse root (on off uninstall daemon). `needsRoot`: setup-helper, the only command that must be root. `run` gets the argv after the name and the context
+//                    of runCli: { io, env, home, platform, uid, deps }; each takes what it needs from `deps` (0.1 §3).
+//   HIDDEN_ALIASES  [{ argv, to }]: not in help, dispatched like the command they name; what follows the alias is passed on as typed.
+//   helpText        the help: four sections; one command when named.
+import { hasNewCollector } from '../off/legacy.mjs'
+
+const SECTIONS = Object.freeze([['common', '常用'], ['data', '数据'], ['maintenance', '维护'], ['legacy', '旧采集(过渡期)']])
+const via = (file, fn) => async (argv, c) => (await import(file))[fn](argv, c)
+const legacy = (name) => async (argv) => (await import('./legacy-commands.mjs')).runLegacyCommand(name, argv)
+
+/** `asight doctor`; `doctor --only old-ca` is the hidden target of the alias `verify` (the old CA is in the user trust store, and only there). */
+async function doctor(argv, c) {
+  if (argv.length === 2 && argv[0] === '--only' && argv[1] === 'old-ca') return (await import('./legacy-commands.mjs')).verifyOldCa(c)
+  return (await import('./doctor.mjs')).runDoctor(argv, c)
+}
+
+async function setupHelper(argv, c) {
+  const { runSetupHelper } = await import('../collector/cli.mjs')
+  return runSetupHelper(argv, { out: c.io.out, err: c.io.err, ...(c.deps.arch ? { arch: c.deps.arch } : {}) })
+}
+
+async function help(argv, c) {
+  if (argv.length > 1) { c.io.err('usage: asight help [命令]'); return 2 }
+  if (argv.length === 1 && !commandNamed(argv[0])) { c.io.err(`asight help: 没有这个命令 ${argv[0]}\n${helpText(undefined, { platform: c.platform })}`); return 2 }
+  c.io.out(helpText(argv[0], { platform: c.platform }))
+  return 0
+}
+
+export const COMMANDS = Object.freeze([
+  { name: 'on', section: 'common', mutates: true, run: via('./on.mjs', 'runOnCli'),
+    usage: 'asight on [harness…] [--dry-run] [--yes] [--no-autostart | --no-unit] [--json]',
+    summary: '开始采集。第一次 on 就是安装:先列出要改的每个文件,等你确认;之后的 on 只补缺的。',
+    notes: ['--dry-run  只打印将要做的,什么都不写', '--yes  不在终端里时代替确认(没有它,不在终端里只打印计划、退出 2)', '--no-autostart  装单元但不 enable,本次只 start', '--no-unit  不装单元(没有 systemd --user 的机器、测试用)', 'on 不重启任何 agent、桌面程序或在跑的采集;要重启的进程在回执里列出',
+      '旧的 `asight on --proxy` 现在是 `asight monitor on --no-autostart`'] },
+  { name: 'off', section: 'common', mutates: true, run: via('../off/main.mjs', 'runOffCli'),
+    usage: 'asight off [harness…] [--now] [--dry-run] [--yes] [--json]',
+    summary: '撤掉 asight 对这些 agent 的全部影响,新旧两代都撤;asight 自己坏了也能用(~/.asight/bin/asight-off)。',
+    notes: ['不带名字:全部 harness,并让守护进程排空后退出、停用自启', '--now  不等在途连接,立即切断', '--yes  只在清单丢失、按标记撤销时用', '--remove-ca  照收(旧的 `monitor off --remove-ca`),off 本来就撤旧 CA'] },
+  { name: 'status', section: 'common', mutates: false, run: via('./status.mjs', 'runStatusCli'),
+    usage: 'asight status [harness…] [--json]',
+    summary: '每个 agent 有没有被采集、为什么;守护进程、助手、仍经 asight 的连接、最近 24 h 的失败、本机网络环境、旧采集留下的东西。',
+    notes: ['退出码:0 都在被采集 · 1 有的没有 · 3 读不到、无法判定'] },
+  { name: 'uninstall', section: 'common', mutates: true, run: via('./uninstall.mjs', 'runUninstallCli'),
+    usage: 'asight uninstall [--purge-data] [--dry-run] [--yes] [--json]',
+    summary: '先做 off 的全部,再删 asight 自己的文件(CA、清单、备份、单元)。采集数据留着,--purge-data 才删(要确认)。' },
+  { name: 'doctor', section: 'common', mutates: false, run: doctor,
+    usage: 'asight doctor [harness…] [--source <ndjson|dir>] [--json]',
+    summary: '自检:是否真在抓、抓得对不对、凭据没漏、没弱化全机 TLS、采集文件仅属主可读;核对 asight-off 副本。',
+    notes: ['退出码:0 · 1 采集文件可被他人读取 · 3 无法判定(零条记录不是通过)'] },
+  { name: 'serve', section: 'data', mutates: false, run: legacy('serve'),
+    usage: 'asight serve [--port 9800] [--db <path>] [--source <ndjson|dir>] [--control]',
+    summary: '只读看板(只绑环回);不带 --source 读默认的采集目录。' },
+  { name: 'etl', section: 'data', mutates: false, run: legacy('etl'),
+    usage: 'asight etl <ndjson|sealed|dir> [--db <path>] [--rebuild]',
+    summary: '把采集装进 DuckDB(派生层,可由原始文件重建)。' },
+  { name: 'raw', section: 'data', mutates: false, run: legacy('raw'),
+    usage: 'asight raw export <session-id|file.sealed> [--sessions <dir>] [--out <dir|file>]\nasight raw journal [--tail <n>]',
+    summary: '封存文件还原成 NDJSON;封存、校验、比对的拒绝、失败与删除的记录。',
+    also: [{ section: 'maintenance', usage: 'asight raw seal <closed-shard> [--sessions <dir>]\nasight raw seal --legacy <file|dir> [--dry-run] [--delete-original] [--quiet <s>]\nasight raw verify <sealed|dir> [--against <original>]\nasight raw compare <dir> [--list]',
+      summary: '原始层封存(D35):无损重编码成 .sealed,字节核对通过才删原件。' }] },
+  { name: 'setup-helper', section: 'maintenance', mutates: false, needsRoot: true, run: setupHelper,
+    usage: 'sudo asight setup-helper [--binary <path>] [--remove]',
+    summary: '唯一要 sudo 的命令:本机一次,给能力助手(eBPF)加能力位、放进 root 所有的路径。Linux。' },
+  { name: 'daemon', section: 'maintenance', mutates: true, run: via('./daemon.mjs', 'runDaemonCli'),
+    usage: 'asight daemon',
+    summary: '前台跑守护进程;自启单元跑的就是它。Linux。' },
+  { name: 'help', section: 'maintenance', mutates: false, run: help,
+    usage: 'asight help [命令] · --help · -h · --version · -v',
+    summary: '`asight help <命令>` 或 `asight <命令> --help` 看一个命令。' },
+  { name: 'capture', section: 'legacy', mutates: false, run: legacy('capture'),
+    usage: 'asight capture [--port 8899] [--target <url>] [--out <ndjson>] [--upstream <proxy>] [--raw-sse]',
+    summary: '过渡期。前台 base_url 反代 tee:原样转发、旁路记录。OpenAI 形的线路必须加 --raw-sse。' },
+  { name: 'mitm', section: 'legacy', mutates: false, run: legacy('mitm'),
+    usage: 'asight mitm [--port 9899] [--host api.anthropic.com] [--out <ndjson>] [--upstream <proxy>] [--raw-sse]',
+    summary: '过渡期。CC-Desktop 的 MITM 采集源:只解密目标 host,其余盲隧道。' },
+  { name: 'desktop', section: 'legacy', mutates: false, run: legacy('desktop'),
+    usage: 'asight desktop {on|off|status} [--port 9898]',
+    summary: '过渡期。macOS + Clash Verge:把 CC-Desktop 的 claude-code → api.anthropic.com 引进 MITM(持久、可撤);`on` 一并装常驻的 MITM 与 CA 环境变量代理。' },
+  { name: 'monitor', section: 'legacy', mutates: false, run: legacy('monitor'),
+    usage: 'asight monitor {on|off|status} [--proxy <url>] [--capture-target <url>] [--no-autostart] [--remove-ca]',
+    summary: '过渡期。旧的 CC-CLI steer(settings 里的 HTTPS_PROXY)与网页开关用的采集。D39 之前的 `asight on [--proxy]` 就是 `monitor on --no-autostart`。' },
+  { name: 'shard', section: 'legacy', mutates: false, run: legacy('shard'),
+    usage: 'asight shard [<ndjson>] [--out <dir>] [--watch] [--interval <s>] [--rebuild-meta | --resplit]',
+    summary: '过渡期。把采集流按 session 分片。' },
+])
+
+/** The command called `name`, or undefined. */
+export const commandNamed = (name) => COMMANDS.find((c) => c.name === name)
+
+// What each old way of writing a command is now (1.6 §2 「隐藏别名」): not in help, dispatched like the command it names. `verify` is the item of `doctor` that was `verify`.
+export const HIDDEN_ALIASES = Object.freeze([
+  { argv: ['install'], to: ['on'] },
+  { argv: ['collector', 'install'], to: ['on'] },
+  { argv: ['collector', 'on'], to: ['on'] },
+  { argv: ['collector', 'off'], to: ['off'] },
+  { argv: ['collector', 'status'], to: ['status'] },
+  { argv: ['collector', 'uninstall'], to: ['uninstall'] },
+  { argv: ['collector', 'start'], to: ['daemon'] },
+  { argv: ['verify'], to: ['doctor', '--only', 'old-ca'] },
+])
+
+/** `argv` with a hidden alias at its head replaced by what it names; the rest follows as typed → { argv, alias } (`alias` is null when none matched). */
+export function resolveAlias(argv) {
+  const hit = HIDDEN_ALIASES.filter((a) => a.argv.every((w, i) => argv[i] === w)).sort((a, b) => b.argv.length - a.argv.length)[0]
+  return hit ? { argv: [...hit.to, ...argv.slice(hit.argv.length)], alias: hit } : { argv, alias: null }
+}
+
+const generation = (platform) => (hasNewCollector(platform) ? `本平台(${platform}):on / off 驱动按进程采集器(4.6);旧采集的命令在最后一段。`
+  : platform === 'darwin' ? `本平台(${platform})没有按进程采集器:on / off 驱动旧采集(过渡期,1.6 §4)。`
+    : `本平台(${platform})没有按进程采集器:on 报「本平台未实现」,off 撤本机有的旧采集的部分(1.6 §4)。`)
+const lines = (usage, summary) => [...usage.split('\n').map((l) => `  ${l}`), `      ${summary}`]
+
+/** The help: `helpText()` is the four sections (the first screen says on, off and status, and which generation they drive on `platform`); `helpText('off')` is that one command. */
+export function helpText(cmd, { platform = process.platform } = {}) {
+  if (cmd !== undefined) {
+    const c = commandNamed(cmd)
+    if (!c) throw new RangeError(`no command named ${cmd}`)
+    return [...c.usage.split('\n'), ...(c.also || []).flatMap((a) => a.usage.split('\n')), '', c.summary, ...(c.notes || []).map((n) => `  ${n}`)].join('\n')
+  }
+  const out = ['asight — 看 agent 真正发给大模型的每一比特:透明采集、逐字存原始 bytes、回放与拆解', '',
+    '开 asight on · 关 asight off · 状态 asight status', generation(platform), '']
+  for (const [id, title] of SECTIONS) {
+    out.push(title)
+    for (const c of COMMANDS) {
+      if (c.section === id) out.push(...lines(c.usage, c.summary))
+      for (const a of c.also || []) if (a.section === id) out.push(...lines(a.usage, a.summary))
+    }
+    out.push('')
+  }
+  out.push('asight help <命令> 看一个命令;--version 看版本。')
+  return out.join('\n')
+}

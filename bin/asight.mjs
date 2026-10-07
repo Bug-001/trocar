@@ -10,7 +10,7 @@
 import path from 'node:path'
 import { asightHome, captureOut, mitmOut, serveSource } from '../src/paths.mjs';
 import { parseArgs } from '../src/cli-args.mjs';
-import { runLegacyCommand } from '../src/cli/legacy-commands.mjs';
+import { runLegacyCommand, LEGACY_COMMANDS } from '../src/cli/legacy-commands.mjs';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -29,7 +29,7 @@ async function main() {
     console.log(JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version);
     return;
   }
-  if (await runLegacyCommand(cmd, rest)) return; // the commands whose bodies moved to src/cli/legacy-commands.mjs, unchanged
+  if (LEGACY_COMMANDS.has(cmd)) { process.exitCode = await runLegacyCommand(cmd, rest); return; } // the commands whose bodies moved to src/cli/legacy-commands.mjs, unchanged
   switch (cmd) {
     case 'collector': { // per-user transparent collector (RFC 4.6, D36): install / start / on / off / status / uninstall
       const { runCollector } = await import(r('src', 'collector', 'cli.mjs'));
