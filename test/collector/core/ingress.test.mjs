@@ -481,3 +481,43 @@ test('W15 step-aside over an upstream that carries the user\'s credentials: the 
   }
 })
 
+// ── W17: the negative cache has a key of its own for a connection with no pid (4.8 §5.5) ─────────────────────────────────────────────
+test('W17 two forms with no pid: one that rejects the leaf does not poison the other\'s same host; clearing by form clears only that form; every event carries neg_key', T, async (t) => {
+  const o = await origin(t)
+  const L = await lab(t, { upstreamCa: privCa.certPem })
+  const pidless = (negKey) => ({ pid: null, agent: 'claude-code', decrypt: true, capture: 'vpn-block', form: negKey, pid_source: null, pid_ms: 3, negKey, upstream: { kind: 'direct' } })
+  L.redirector.setIngress('vb.claude-code.cli', pidless('vb.claude-code.cli')); L.redirector.setIngress('vb.codex.app', pidless('vb.codex.app'))
+  const go = async (user, ca) => { const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`, connectHead(`127.0.0.1:${o.port}`, { user })); return talk(sock, ca) }
+  let n = 0; const next = async () => { await L.settled(++n) }
+  // form A's client does not trust the asight CA: it rejects the leaf, twice in a row → (A, host) is negative
+  assert.equal(await go('vb.claude-code.cli', privCa.certPem), 'closed'); await next()
+  assert.equal(L.engine.negatives().length, 0, 'one rejection is not enough')
+  assert.equal(await go('vb.claude-code.cli', privCa.certPem), 'closed'); await next()
+  assert.deepEqual(L.engine.negatives().map((e) => [e.pid, e.negKey, e.host, e.cause, e.rejections]), [[null, 'vb.claude-code.cli', 'upstream.test', 'client-rejected-leaf', 2]])
+  const neg = L.failures.filter((f) => f.code === 'negative-cache')
+  assert.deepEqual(neg.map((f) => [f.where, f.pid, f.neg_key, f.host, f.cause]), [['engine', null, 'vb.claude-code.cli', 'upstream.test', 'client-rejected-leaf']], 'the write is a failure event, once, with its neg_key')
+  assert.match(neg[0].reason, /vb\.claude-code\.cli/); assert.deepEqual(checkRecord(neg[0]), [])
+  // form A's next connection to that host is spliced; form B's connection to the SAME host is still decrypted
+  const spliced = await go('vb.claude-code.cli', privCa.certPem); await next()
+  assert.deepEqual([spliced.got, spliced.issuer.includes('private origin CA')], [RESP, true]); assert.deepEqual([L.flows[2].decision, L.flows[2].not_captured], ['splice', 'negative-cache'])
+  const other = await go('vb.codex.app', asightCa.certPem); await next()
+  assert.match(other.issuer, /asight collector CA/, 'the other form is untouched'); assert.deepEqual([L.flows[3].decision, L.flows[3].not_captured ?? null], ['decrypt', null])
+  assert.deepEqual(L.failures.filter((f) => f.code === 'negative-cache').length, 1)
+  // the last process of form A has gone: clear by form; B's entries (none here) and a pid's are not touched
+  assert.equal(L.engine.forgetPid(4242), 0, 'a pid is not a form key')
+  assert.equal(L.engine.forgetNegKey('vb.codex.app'), 0); assert.equal(L.engine.negatives().length, 1)
+  assert.equal(L.engine.forgetNegKey('vb.claude-code.cli'), 1); assert.deepEqual(L.engine.negatives(), [])
+  const again = await go('vb.claude-code.cli', asightCa.certPem); await next()
+  assert.match(again.issuer, /asight collector CA/, 'decrypted again after the clearing')
+})
+
+test('W17 a connection whose pid is known keeps the (pid, host) key: neg_key is "<pid>"', T, async (t) => {
+  const o = await origin(t)
+  const L = await lab(t, { upstreamCa: privCa.certPem, meta: { decrypt: true, pid: 77, negKey: '77' } })
+  for (let i = 1; i <= 2; i++) { const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`); assert.equal(await talk(sock, privCa.certPem), 'closed'); await L.settled(i) }
+  assert.deepEqual(L.failures.filter((f) => f.code === 'negative-cache').map((f) => [f.pid, f.neg_key]), [[77, '77']])
+  assert.equal(L.engine.forgetPid(77), 1)
+})
+
+// the drain gate (CLI T5, 1.6 §1.3): an ingress flow mid-SSE when the switch goes off closes at the response end, like a transparent one
+test('W15 drain: an ingress flow mid-SSE when the switch goes off ends at the response end (the CLI plan\'s T5 gate)', { skip: 'CLI T5 (`off` drains in-flight calls, `Connection: close`) is not on this branch: the ingress flows go through the same handleFlow, so they will drain the same way; this runs once T5 lands' }, () => {})
