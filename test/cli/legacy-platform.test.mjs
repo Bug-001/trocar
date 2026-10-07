@@ -12,6 +12,7 @@ import { EventEmitter } from 'node:events'
 import { runOffCli } from '../../src/off/main.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { runStatusCli } from '../../src/cli/status.mjs'
+import { runUninstallCli } from '../../src/cli/uninstall.mjs'
 import { asightOffInProcess } from '../../src/capture/control.mjs'
 import { legacyLifecycle } from '../../src/capture/legacy-run.mjs'
 import { createSteerWatch, legacyOffPending } from '../../src/capture/steer-watch.mjs'
@@ -284,8 +285,9 @@ test('V31: no steer-missing between the strip and the unload — the marker name
 
 // ── Linux: the new collector is there, and `off` still takes out what an old command left on this machine (1.6 §4 table, row Linux) ───────────────────────────────────────────────────────────────
 
-test('1.6 §4 (Linux): off takes out the CC-CLI steer of `monitor on` from its stash and the old CA from the user NSS database, besides the new capture — no launchctl; off codex leaves them (they are claude-code\'s)', async () => {
-  const s = await installedHome({ names: ['claude-code', 'codex'] })
+/** What `monitor on` and a `desktop`-era install leave on a Linux machine that has the new collector: the CC-CLI steer (HTTPS_PROXY in settings.json, the displaced value in its stash) and the old CA in the
+ *  user NSS database. `exec` answers `certutil` the way the real one does and hands everything else to the sandbox's runner; `certutil` lists what it was asked. */
+function linuxOldCapture(s) {
   const settings = path.join(s.home, '.claude', 'settings.json'), stash = path.join(s.home, '.atrace', 'steer-backup.json'), nss = path.join(s.home, '.pki', 'nssdb')
   const j = JSON.parse(fs.readFileSync(settings, 'utf8'))
   fs.writeFileSync(settings, JSON.stringify({ ...j, env: { ...(j.env || {}), HTTPS_PROXY: 'http://127.0.0.1:8899', NO_PROXY: '127.0.0.1,localhost' } }, null, 2) + '\n')
@@ -298,6 +300,12 @@ test('1.6 §4 (Linux): off takes out the CC-CLI steer of `monitor on` from its s
     if (args[0] === '-D') { caInNss = false; return { status: 0, stdout: '', stderr: '' } }
     return caInNss ? { status: 0, stdout: 'Certificate Nickname', stderr: '' } : { status: 255, stdout: '', stderr: 'certutil: Could not find cert: asight-ca' }
   }
+  return { settings, stash, nss, certutil, exec }
+}
+
+test('1.6 §4 (Linux): off takes out the CC-CLI steer of `monitor on` from its stash and the old CA from the user NSS database, besides the new capture — no launchctl; off codex leaves them (they are claude-code\'s)', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] })
+  const { settings, stash, nss, certutil, exec } = linuxOldCapture(s)
   const ctx = (io, deps) => ({ io, home: s.home, env: s.sh.env, platform: 'linux', deps: s.offDeps({ getuid: () => 1000, exec, ...deps }) })
   assert.equal(await runOffCli(['codex'], ctx(fakeIo())), 0)
   assert.equal(fs.existsSync(stash), true, 'off codex: the old steer is claude-code\'s, it stays')
@@ -312,6 +320,28 @@ test('1.6 §4 (Linux): off takes out the CC-CLI steer of `monitor on` from its s
   assert.ok(r.changed.some((c) => c.path === settings && c.result === 'old-command'))
   assert.ok(r.changed.some((c) => c.path === nss), 'the receipt names the NSS database')
   assert.equal(fs.existsSync(path.join(s.home, '.asight', 'legacy-off.pending')), false)
+})
+
+test('1.6 §1.1, §4 (Linux): uninstall takes out the same leftovers `off` does — the CC-CLI steer from its stash and the old CA from the NSS database — so no HTTPS_PROXY is left pointing at a dead local port (zero residue); a failure of that undo is exit 1 and says so', async () => {
+  const s = await installedHome({ names: ['claude-code'] })
+  const { settings, stash, nss, certutil, exec } = linuxOldCapture(s)
+  const io = fakeIo()
+  const exit = await runUninstallCli(['--json'], { io, env: s.sh.env, home: s.home, platform: 'linux', deps: s.offDeps({ getuid: () => 1000, exec }) })
+  assert.equal(exit, 0, io.text())
+  const r = io.json()
+  assert.deepEqual(validateReceipt(r), [])
+  assert.equal(JSON.parse(fs.readFileSync(settings, 'utf8')).env?.HTTPS_PROXY, 'http://corp:3128', 'the value the steer displaced is back, and the dead port is gone from settings.json')
+  assert.equal(fs.existsSync(stash), false, 'the stash goes with the steer')
+  assert.deepEqual(certutil, [`-L -d sql:${nss} -n asight-ca`, `-D -d sql:${nss} -n asight-ca`, `-L -d sql:${nss} -n asight-ca`], 'the old CA is asked about, deleted, asked about again')
+  assert.ok(r.changed.some((c) => c.path === settings && c.result === 'old-command') && r.changed.some((c) => c.path === nss), 'the receipt names both')
+  assert.equal(s.sys.exec.calls.some((c) => /^(launchctl|security) /.test(c)), false, 'Linux has no launchd and no keychain')
+  // a delete that fails is not "uninstalled": the CA is still trusted, so the run is exit 1 with the reason, and asight's own files stay for the next run
+  const t = await installedHome({ names: ['claude-code'] })
+  const bad = linuxOldCapture(t)
+  const stuck = (file, args, o) => (file === 'certutil' && args[0] !== '-L' ? { status: 255, stdout: '', stderr: 'certutil: unable to open the database' } : bad.exec(file, args, o))
+  const io2 = fakeIo()
+  assert.equal(await runUninstallCli(['--json'], { io: io2, env: t.sh.env, home: t.home, platform: 'linux', deps: t.offDeps({ getuid: () => 1000, exec: stuck }) }), 1, io2.text())
+  assert.equal(io2.json().ok, false); assert.ok(io2.json().problems.some((p) => /old CA is still/.test(p)), io2.json().problems.join(' | '))
 })
 
 test('1.6 §4 (Linux): with no old capture there is nothing to undo — off writes no file of the old capture\'s (no log, no marker, no ledger) and runs no certutil', async () => {

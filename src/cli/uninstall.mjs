@@ -21,7 +21,7 @@ import { execTool } from '../off/exec.mjs'
 import { confirm, isInteractive } from '../off/io.mjs'
 import { CODE_OFF } from '../off/names.mjs'
 import { formatUninstallReceipt } from './receipt.mjs'
-import { hasNewCollector } from '../off/legacy.mjs'
+import { hasNewCollector, legacyUndoHook } from '../off/legacy.mjs'
 import { legacyUninstallCli } from './legacy-uninstall.mjs'
 
 const DRAIN_MS = 30_000 // 1.6 §1.1: how long the daemon is given to close the connections it can see the end of
@@ -244,7 +244,7 @@ export async function runUninstallCli(argv, { io, env = process.env, home = node
   if ((deps.getuid || processUid)() === 0) { io.err('asight uninstall: 用你自己的账号跑,不要用 root / sudo(D36)'); return EXIT.incomplete }
   if (!hasNewCollector(platform)) return (deps.legacyUninstall || legacyUninstallCli)(argv, { io, env, home, platform, deps }) // 1.6 §4: no new collector here: uninstall completes the undo of the old capture
   try {
-    const { receipt, exit } = await runUninstall({ home, env, purgeData: flags.has('--purge-data'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: isInteractive(io), io: { ...io, prompt: json ? io.stderr : io.stdout }, say: json ? io.err : io.out, deps })
+    const { receipt, exit } = await runUninstall({ home, env, purgeData: flags.has('--purge-data'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: isInteractive(io), io: { ...io, prompt: json ? io.stderr : io.stdout }, say: json ? io.err : io.out, deps: { ...deps, legacyUndo: deps.legacyUndo === undefined ? legacyUndoHook : deps.legacyUndo } }) // the old capture's leftovers go with the rest, as in `off` (src/off/main.mjs): zero residue (1.6 §1.1, §4)
     if (json) io.out(JSON.stringify(receipt, null, 2))
     else if (receipt.needs_yes || receipt.declined) { io.out(formatUninstallReceipt({ ...receipt, notes: [] }, { home, tense: 'future' })); for (const n of receipt.notes) io.err(n) } // the plan, then why nothing was done (R6)
     else io.out(formatUninstallReceipt(receipt, { home }))
