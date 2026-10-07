@@ -172,6 +172,24 @@ test('text-edit: a value with a space is written double-quoted only when the ent
 // D39③ / task 3: the text asight put into users' files before this build must stay recognisable (the sentinel is how an install the
 // manifest has lost, or a standalone asight-off, finds its own block and line — 1.6 R3). Pinned as literals: a test that imports the
 // constants would follow a changed constant and stay green.
+// Windows (4.8 §2.3): a profile directory with a space makes the block's value a double-quoted one (`quote: true`). The removal that reads every assignment of asight's path
+// (D39 R3) must read that line back to the plain path: a copy the user pasted, with `export` or single quotes, goes too, and the user's own same-key line stays.
+test('text-edit: a block written double-quoted (a profile with a space) is removed with every copy of its path, in whichever form, and the user\'s own value of the key is not touched', () => {
+  const W = 'C:/Users/John Smith/.asight/collector/ca/combined-x.pem'
+  const user = 'KEY=sk-secret\r\nSSL_CERT_FILE=C:/corp/ca.pem\r\n'
+  const r = dotenvBlock(user, { SSL_CERT_FILE: W }, { quote: true })
+  assert.ok(r.text.includes(`SSL_CERT_FILE="${W}"`), 'the block holds the quoted form')
+  const alone = removeAsightText(r.text, r.ops)
+  assert.deepEqual(alone, { text: user, found: true }, 'untouched: back to the user\'s bytes')
+  const copies = `${r.text}export SSL_CERT_FILE='${W}'\r\nSSL_CERT_FILE = "${W}" # pasted\r\nSSL_CERT_FILE="${W}.mine"\r\n`
+  const out = removeAsightText(copies, r.ops)
+  assert.equal(out.found, true)
+  assert.ok(!out.text.includes(`"${W}"`) && !out.text.includes(`'${W}'`) && !out.text.includes(BLOCK_BEGIN), `no copy of asight's path is left: ${JSON.stringify(out.text)}`)
+  assert.ok(out.text.includes(`SSL_CERT_FILE="${W}.mine"`), 'another value of the key is the user\'s')
+  const noMine = removeAsightText(copies.replace(/SSL_CERT_FILE="[^"]*\.mine"\r\n/, ''), r.ops)
+  assert.deepEqual(asightResidue(noMine.text, { vars: { SSL_CERT_FILE: W } }), [], 'and nothing of asight\'s path is reported as left behind')
+})
+
 test('text-edit: the sentinel text written into users\' files is exactly what earlier builds wrote', () => {
   assert.equal(SENTINEL, 'asight collector')
   assert.equal(BLOCK_BEGIN, '# >>> asight collector >>> written by `asight collector install`; `asight collector uninstall` removes this block')

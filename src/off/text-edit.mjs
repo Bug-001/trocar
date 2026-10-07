@@ -119,7 +119,7 @@ export function removeAsightText(text, ops) {
       if (i >= 0) { t = t.slice(0, i) + op.removed + t.slice(i + op.inserted.length); found = true }
       continue
     }
-    for (const line of op.inserted.split('\n').filter((l) => l !== '')) {
+    for (const line of op.inserted.split('\n').map((l) => l.replace(/\r$/, '')).filter((l) => l !== '')) { // a block written in a CRLF file ends its lines with \r\n (dotenvBlock): the \r is not part of what it assigns
       const kv = /^([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"]+)"|(\S+))$/.exec(line) // a dotenv assignment of the block (a `quote` entry wrote its value in double quotes: the value is what is inside)
       if (kv) { const r = dropAssignments(t, kv[1], kv[2] ?? kv[3]); if (r.n) { t = r.text; found = true } continue }
       const out = dropLine(t, line)
