@@ -146,7 +146,8 @@ export function checkLoops({ processRules, ownImages } = {}) {
 // (W57), and a test can parse it without a library.
 
 // the user's own proxy, or direct: the group's upstream. Its credentials (if it has any) are written here and nowhere else.
-function upstreamOf(g, up) {
+// Exported so that whoever reads a proxy address out of the user's settings (upstream.mjs) asks THIS function whether the generator would take it, instead of keeping a copy of its checks: an address it throws on is not an upstream.
+export function upstreamOf(g, up) {
   const name = names(g).up
   if (up == null || up === 'direct' || up.type === 'direct') return { name, type: 'direct' }
   if (typeof up !== 'object' || (up.type !== 'http' && up.type !== 'socks5')) throw new TypeError(`the upstream of ${g} is direct, or an http or socks5 proxy`)

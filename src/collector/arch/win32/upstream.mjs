@@ -6,7 +6,7 @@
 //   2. else, for a group that follows the system proxy and with the system proxy on: its `ProxyServer`, with `ProxyOverride` as the bypass table; a PAC is not followed (`not-routed`);
 //   3. else direct (a TUN or another layer-3 VPN carries it as it did).
 // What the agent reached directly before asight (the system proxy's `ProxyOverride`, the agent's own `NO_PROXY`) is the group's bypass table, so it still is.
-import { bypassRuleOf } from '../../../netenv/mihomo/rules.mjs'
+import { bypassRuleOf, upstreamOf } from '../../../netenv/mihomo/rules.mjs'
 
 const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/
 
@@ -122,6 +122,7 @@ function readProxyUrl(text) {
   const kind = proto === 'http' ? 'http' : 'socks5'
   const port = url.port === '' ? DEFAULT_PORT[kind] : Number(url.port)
   if (host === '' || !(port >= 1 && port <= 65535)) return null
+  try { upstreamOf('upstream', { type: kind, host, port }) } catch { return null } // the generator is the judge of what it can write (as `translateBypass` asks `bypassRuleOf`): a host with a comma passes the URL parser, and the kernel config would throw on it for every `on` and reload
   let username = ''
   let password = ''
   try { username = decodeURIComponent(url.username); password = decodeURIComponent(url.password) } catch { return null }
@@ -132,6 +133,7 @@ function readProxyUrl(text) {
  * parseProxyText(text) → { ok: true, kind: 'http' | 'socks5', host, port, credentialed } | { ok: false, why: 'upstream-protocol', protocol } | { ok: false, why: 'upstream-unparseable' }
  * `http://`, `socks5://` and `socks5h://` connect (the last two are one thing: both hand the name to the proxy); a bare `host:port` is HTTP. `https://` (TLS to the proxy), `socks4`, `socks4a`, a bare `socks` and every other scheme
  * are not routed and say which scheme it was: asight does not swap the user's proxy for another way out (4.8 §2.2). The credentials are not in the answer: `proxyAuthOf` reads them, for whoever resolves a reference.
+ * An address the kernel config generator would refuse (`upstreamOf`: a host with a comma, a port outside 1..65535) is `upstream-unparseable` too, so no proxy text of the user's can make `on` or a reload throw.
  */
 export function parseProxyText(text) {
   const r = readProxyUrl(text)

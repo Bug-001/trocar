@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { bypassHit, parseProxyText, proxyAuthOf, readHkcuEnv, readSystemProxy, sameSystemProxy, translateBypass, upstreamFor, watchSystemProxy } from '../../../../src/collector/arch/win32/upstream.mjs'
 import { regReadAllowed } from '../../../../src/collector/arch/win32/helper.mjs'
 import { bypassRuleOf, buildForwarderConfig } from '../../../../src/netenv/mihomo/rules.mjs'
-import { forwarder, KIMI_GROUP } from '../../../netenv/fixtures/rules/inputs.mjs'
+import { forwarder, CC_GROUP, KIMI_GROUP } from '../../../netenv/fixtures/rules/inputs.mjs'
 import { groupsOf, hostSetOf, planRoutes, priorOf } from '../../../../src/collector/arch/win32/route-plan.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { applyJsonKey, applyTextEntry, newManifest } from '../../../../src/collector/core/trust/journal.mjs'
@@ -926,6 +926,36 @@ test('W5 §2.2 protocols: http, socks5 and socks5h connect (the last two are one
   assert.deepEqual(shown(up('socks4://p.example:1080')), [null, 'not-routed', 'proxy-unsupported', 'upstream-protocol', 'socks4', null])
   assert.deepEqual(shown(up('ftp://p.example:21')), [null, 'not-routed', 'proxy-unsupported', 'upstream-protocol', 'ftp', null])
   assert.deepEqual(shown(up('http://p.example:3128\nx')), [null, 'not-routed', 'not-routed', 'upstream-unparseable', null, null], 'a value with a line break in it is not read: that is the group\'s reason, not a throw')
+})
+
+test('W5 whatever upstream the plan hands out, the kernel\'s config generator accepts: no proxy text of the user\'s — in the agent\'s file, the login environment or the system proxy — can make `on` or a reload throw', () => {
+  const b = box()
+  const nasty = ['http://a,b:3128', 'socks5://a,b:1080', 'a,b:3128', 'http://a，b:3128', 'http://a%2Cb:3128', 'socks5://a%2Cb:1080', 'http://u:p@a,b:3128', 'http://[::1]:3128', 'http://例え.jp:3128', 'socks5://ünï:1080', 'http://x:0', 'http://x:99999',
+    'http://:3128', 'http://', 'http://a b:1', 'http://a\u0000b:1', 'https://a,b:1', 'socks4://a,b:1', 'ftp://x:1', 'http://us%3Aer:p%40ss@host:3128', 'host', 'HOST:3128', '  http://padded:3128  ', 'http://127.0.0.1:7897', 'socks5h://corp.example']
+  const commas = new Set(['http://a,b:3128', 'socks5://a,b:1080', 'a,b:3128', 'http://a，b:3128', 'http://a%2Cb:3128', 'http://u:p@a,b:3128'])
+  const gets = (r, text) => ({ type: r.upstream.kind, host: r.upstream.host, port: r.upstream.port, ...(r.upstream.credentialed ? proxyAuthOf(text) : {}) })
+  let connected = 0
+  const viaGenerator = (r, text, how) => {
+    if (!r.upstream || !r.upstream.kind) return
+    const upstream = r.upstream.kind === 'direct' ? 'direct' : gets(r, text)
+    assert.doesNotThrow(() => buildForwarderConfig(forwarder({ groups: [{ ...CC_GROUP, g: r.g, on: r.on, upstream, bypass: r.bypass }] })), `${how}: ${JSON.stringify(text)} gave ${JSON.stringify(r.upstream)}`)
+    if (r.upstream.kind !== 'direct') connected++
+  }
+  for (const text of nasty) {
+    b.put('.claude/settings.json', JSON.stringify({ env: { HTTPS_PROXY: text } }))
+    const agent = plan(b)['claude-code.settings']
+    viaGenerator(agent, text, 'the agent\'s file')
+    const system = plan(b, { netenv: NETENV({ systemProxy: sys({ server: text }) }) })
+    for (const g of ['codex.env', 'hermes.cli']) viaGenerator(system[g], text, `the system proxy, ${g}`)
+    const login = plan(b, { netenv: NETENV({ hkcuEnv: { ok: true, values: { HTTPS_PROXY: text } } }) })
+    for (const g of AUTO) viaGenerator(login[g], text, `the login environment, ${g}`)
+    if (commas.has(text)) {
+      for (const r of [agent, system['codex.env'], login['hermes.cli']]) assert.deepEqual([r.entry, r.reason, r.why, r.upstream], [null, 'not-routed', 'upstream-unparseable', null], `${JSON.stringify(text)}: an address the kernel's config cannot hold is not an upstream, and is said so`)
+    }
+  }
+  assert.ok(connected > 20, `the table has addresses that do connect (${connected}): the check is not empty`)
+  assert.equal(parseProxyText('http://a,b:3128').ok, false)
+  assert.equal(proxyAuthOf('http://u:p@a,b:3128'), null, 'an address that is not one has no login to hand to anybody')
 })
 
 test('W8 / W5: an upstream that is asight\'s own port is a route loop — the group is not routed, and the plan says which address', () => {
