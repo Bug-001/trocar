@@ -64,13 +64,22 @@ test('renderDetail: the header, a hop to a line with the edge words, the way out
 })
 
 test('V42 (text): a hop that could not be read says 「不知道 · <reason>」 in the compact line and in the detail, and no hop says 「无」', () => {
-  for (const [n, h, reason] of [[21, 'hermes', 'owner-unreadable'], [22, 'codex', 'pac']]) {
+  for (const [n, h, reason] of [[21, 'hermes', 'owner-unreadable'], [22, 'codex', 'pac'], [24, 'claude-code', 'absent']]) {
     const t = buildTopology(ROWS.find((r) => r.n === n).facts)[h]
     for (const text of [renderCompact(t).join('\n'), renderDetail(t).join('\n')]) {
       assert.match(text, new RegExp(`不知道 · ${reason}`), `row ${n}`)
       assert.doesNotMatch(text, /(^|\s)无(\s|$)/)
     }
   }
+})
+
+test('V42 (text): a proxy hop always has its port — a hop named by its process too, in the compact line and the detail (the pid after it) — and a hop already named host:port says the port once', () => {
+  const script = buildTopology(ROWS.find((r) => r.n === 24).facts)['claude-code']
+  assert.match(renderCompact(script)[0], /\[CONNECT 原样转\] node :38743\(不知道 · absent\) → \?$/)
+  assert.ok(renderDetail(script).includes('  → [CONNECT 原样转] node :38743 · pid 898(不知道 · absent)'), renderDetail(script).join('\n'))
+  const unreadable = buildTopology(ROWS.find((r) => r.n === 21).facts).hermes
+  assert.ok(renderCompact(unreadable)[0].includes('127.0.0.1:7891(不知道'), 'named by its address: the port is not said twice')
+  assert.ok(!renderCompact(unreadable)[0].includes('7891:7891') && !/:7891 :7891/.test(renderCompact(unreadable)[0]))
 })
 
 test('V43 (text): every hop of the compact line is a node of the object it was drawn from', () => {

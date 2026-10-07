@@ -22,7 +22,8 @@ function hopText(n, via, detail, inferred = false) {
     case 'asight-forwarder': return `${n.name} :${n.port}${paren(n.mode === 'forward-only' ? '只转发' : n.mode === 'down' ? '没人在听' : null)}`
     case 'legacy-mitm': return `${n.name} :${n.port}`
     case 'proxy': {
-      const who = n.product ? `${n.name}${detail && n.version ? ` ${n.version}` : ''} :${n.port}` : n.name
+      const at = n.port && !String(n.name).endsWith(`:${n.port}`) ? ` :${n.port}` : '' // every proxy hop has its port; a hop already named `host:port` says it once
+      const who = `${n.name}${n.product && detail && n.version ? ` ${n.version}` : ''}${at}`
       return `${who}${detail && n.pid ? ` · pid ${n.pid}` : ''}${detail && n.mode && n.mode !== 'unknown' ? ` · ${MODE[n.mode] || n.mode}` : ''}${paren(n.unknown ? unknownText(n) : n.down ? '没人在听' : null)}`
     }
     case 'upstream': return `${n.name}${via === 'direct' ? `(直连${inferred ? ' · 推断' : ''})` : ''}`

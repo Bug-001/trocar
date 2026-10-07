@@ -48,7 +48,12 @@ function proxyNode(g, F, host, port) {
   const v = F.vpn && F.vpn.port === port ? F.vpn : null
   const name = `${host}:${port}`
   if (l && l.unknown) return g.node({ kind: 'proxy', name, addr: host, port, unknown: l.unknown })
-  if (l) return g.node({ kind: 'proxy', name: l.product ? productName(l.product) : l.exe ? base(l.exe) : name, addr: host, port, product: l.product, version: l.version, pid: l.pid, mode: v ? v.mode : undefined, unknown: v && v.unknown })
+  if (l) {
+    // V42: a proxy hop says which product it is or that it does not know. The owner of the port was read but is no product asight recognises (a script, ssh -D, squid …): the hop is that process, and its product is not known (`absent`: the
+    // reason the TUN's exit uses for the same thing); a listener with a pid and nothing to name it by is an owner that could not be read.
+    const noProduct = l.product || v ? undefined : l.exe ? { reason: 'absent', detail: `${base(l.exe)} (pid ${l.pid}) listens on ${host}:${port}; it is not a VPN / proxy product asight recognises` } : { reason: 'owner-unreadable', detail: `pid ${l.pid} listens on ${host}:${port} and its executable could not be read` }
+    return g.node({ kind: 'proxy', name: l.product ? productName(l.product) : l.exe ? base(l.exe) : name, addr: host, port, product: l.product, version: l.version, pid: l.pid, mode: v ? v.mode : undefined, unknown: (v && v.unknown) || noProduct })
+  }
   if (v) return g.node({ kind: 'proxy', name: productName(v.product), addr: host, port, product: v.product, version: v.version, pid: v.pid, mode: v.mode, unknown: v.unknown })
   const gone = F.unknowns.find((u) => u.fact === 'listeners') // the listeners could not be read: that is why nobody is named, not that nobody listens
   return g.node({ kind: 'proxy', name, addr: host, port, ...(gone ? { unknown: { reason: gone.reason, detail: gone.detail } } : { down: true }) })

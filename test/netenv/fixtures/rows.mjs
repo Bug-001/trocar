@@ -190,6 +190,14 @@ row({ n: 23, title: 'Windows: a kernel-level filter this user cannot see is said
   kinds: [[...ENGINE_AND_KERNEL, 'upstream']], on_path: true, captured: true, reason: null,
   compact: ['claude 4121 → [settings env.HTTPS_PROXY · asight 写的] asight 自带内核 :17991 → asight 引擎 :17990 → api.anthropic.com:443(直连)'], findings: [], notes: ['WFP 一类的内核过滤器本用户看不见(kernel-filter-invisible),所以路上有没有这样的过滤器不知道'] })
 
+// Row 24 is not in the spec's table of §9.3 as an example of its own: it is the case the table's rows left out, found by running the real binary (a proxy whose owner is a readable process that is no VPN product). V42: the hop
+// keeps its port and says it does not know the product, the exit after it is not known either.
+export const SCRIPT_PROXY = { addr: '127.0.0.1', port: 38743, pid: 898, exe: '/usr/bin/node' }
+row({ n: 24, title: 'the proxy port is owned by a process asight can read that is not a VPN product (a script, ssh -D, squid …): the hop is that process with its port, its product is 「不知道 · absent」, and so is the exit', h: 'claude-code',
+  facts: facts('claude-code', { listeners: [SCRIPT_PROXY] }, { setting: proxyOf('http://127.0.0.1:38743') }),
+  kinds: [['agent', 'asight-engine', 'proxy', 'egress']], on_path: true, captured: true, reason: null,
+  compact: ['claude 4121 → [eBPF] asight 引擎 :47123 → [CONNECT 原样转] node :38743(不知道 · absent) → ?'], findings: ['inferred-behaviour'] })
+
 /** The same facts with the OS proxy off / without a VPN product (V45). */
 export const withSystemProxyOff = (f) => ({ ...f, harnesses: Object.fromEntries(Object.entries(f.harnesses).map(([h, x]) => [h, { ...x, systemProxy: x.systemProxy ? { value: null, pac: false } : null, forms: x.forms ? x.forms.map((fm) => ({ ...fm, systemProxy: { value: null, pac: false } })) : null }])) })
 export const withoutVpn = (f) => ({ ...f, vpn: null })

@@ -43,6 +43,20 @@ test('V42: an owner that cannot be read, a PAC and a controller that cannot be r
   }
 })
 
+test('V42: a proxy whose owner is a readable process that is no VPN product (row 24) is that process with its port and an unknown product (`absent`, with who it is in `detail`), the exit after it is unknown; a listener with a pid and no name to read is `owner-unreadable`; a product is neither', () => {
+  const t = buildTopology(ROWS.find((r) => r.n === 24).facts)['claude-code']
+  const p = t.nodes.find((n) => n.kind === 'proxy')
+  assert.deepEqual([p.name, p.port, p.pid, p.product, p.unknown.reason], ['node', 38743, 898, undefined, 'absent'])
+  assert.match(p.unknown.detail, /node/)
+  assert.match(p.unknown.detail, /898/)
+  assert.deepEqual(t.nodes.find((n) => n.kind === 'egress').unknown, p.unknown, 'where it leads is not known either')
+  assert.deepEqual(validateTopology({ 'claude-code': t }), [])
+  const nameless = buildTopology(facts('claude-code', { listeners: [{ addr: '127.0.0.1', port: 38743, pid: 898 }] }, { setting: proxyOf('http://127.0.0.1:38743') }))['claude-code']
+  assert.equal(nameless.nodes.find((n) => n.kind === 'proxy').unknown.reason, 'owner-unreadable')
+  const product = buildTopology(ROWS.find((r) => r.n === 2).facts)['claude-code']
+  assert.equal(product.nodes.find((n) => n.kind === 'proxy').unknown, undefined, 'a recognised product is not said to be unknown')
+})
+
 test('V42: a listener list that could not be read gives the proxy its reason, and one that was read and holds nobody gives 「没人在听」, never an unknown owner', () => {
   const setting = proxyOf('http://127.0.0.1:7890')
   const unread = buildTopology(facts('claude-code', { unknowns: [{ fact: 'listeners', reason: 'denied', detail: 'ss: EPERM' }] }, { setting }))['claude-code']
