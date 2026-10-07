@@ -10,6 +10,7 @@
 import { judgeHarness } from './verdict.mjs'
 import { parseProxyUrl } from './redact.mjs'
 
+export { renderCompact, renderDetail, verdictText, firstHopAfterAsight, firstHopOff, hopKey, ROUTING_TEXT } from './topology-text.mjs' // the words of the topology, rendered from the object below
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', 'localhost'])
 const VIA = { http: 'proxy-http', https: 'proxy-https', socks4: 'proxy-socks', socks5: 'proxy-socks', socks5h: 'proxy-socks' }
