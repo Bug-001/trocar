@@ -1,6 +1,7 @@
 // verge-world.mjs — a sandbox Clash Verge for the adapter tests (RFC 4.7; plan Task 6): Verge's data directory (verge.yaml, config.yaml, the runtime clash-verge.yaml, profiles.yaml, profiles/Script.js) in a
-// temp directory, a fake core (fixtures/fake-core.mjs) that loads the runtime from the same files, an adapter pointed at it, and the facts a test flips (Verge running, the daemon alive). Every secret-looking
-// value in it (the controller secret, the subscription's address, a node, a group and a domain the user has) is a made-up one the tests scan for: none of them may leave the adapter (N1 N8 N9 N14).
+// temp directory, a fake core (fixtures/fake-core.mjs), an adapter pointed at it, and the fact a test flips (Verge running). The adapter reads three of those files; profiles.yaml and Script.js are in the directory
+// because Verge has them (N10: the whole directory must come out byte for byte as it went in). Every secret-looking value in it (the controller secret, the subscription's address, a node, a group and a domain the
+// user has) is a made-up one the tests scan for: none of them may leave the adapter (N1 N9).
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
@@ -8,10 +9,7 @@ import { tmpDir } from '../../helpers/tmp.mjs'
 import { startFakeCore } from './fake-core.mjs'
 import { createController } from '../../../src/netenv/mihomo/controller.mjs'
 import { createVergeAdapter, VERGE_DIR_NAME } from '../../../src/netenv/adapters/clash-verge-rev.mjs'
-import { buildBlock, routeFile, names } from '../../../src/netenv/mihomo/rules.mjs'
-import { spliceRuntimeText } from '../../../src/netenv/mihomo/runtime-text.mjs'
 import { runtimeText } from './rules/runtime.mjs'
-import { block as blockInput, CC_CLI, CODEX_APP } from './rules/inputs.mjs'
 
 export const SECRET = 's3cr3t' // the controller's secret
 export const SUB_URL = 'https://sub.example/xyz?token=abc'
@@ -31,7 +29,6 @@ export const userRuntime = (extraRules = []) => `external-controller-pipe: \\\\.
   .replace('https://example.invalid/ads.txt', SUB_URL).replace('- name: node-a', `- name: ${NODE}`).replace('- name: Manual', `- name: ${USER_GROUP}`)
   .replace('- DOMAIN-SUFFIX,example.com,Proxy', `- DOMAIN-SUFFIX,${USER_DOMAIN},${USER_GROUP}\n- PROCESS-NAME,codex.exe,${USER_GROUP}\n${extraRules.map((r) => `- ${r}`).join('\n')}${extraRules.length ? '\n' : ''}- DOMAIN-SUFFIX,example.com,Proxy`)}`
 
-export const GROUPS = [CC_CLI, CODEX_APP]
 export const sha = (file) => (fs.existsSync(file) ? crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') : null)
 
 /** Every file under `dir` → sha256, to compare before and after (the zero-write and the byte-for-byte assertions). */
@@ -43,10 +40,10 @@ export function snapshot(dir) {
 }
 
 /**
- * startWorld(t, { script, runtime, verge, core, adapter, block }) → { sandbox, home, core, adapter, state, file(name), block, live(groups) }
- * `block` ({ groups }) loads the block into the fake core's runtime at start, as it is after Verge activated a Script.js that has it (the route files are written, every select is on PASS).
+ * startWorld(t, { script, runtime, verge, core, adapter, files }) → { sandbox, home, core, adapter, state, file(name), asightHome }
+ * `core` is the fake core's options (mode, tun, mixedPort, ...), `adapter` the adapter's (fs, helper, makeClient, ...), `files` more files of Verge's directory.
  */
-export async function startWorld(t, { script = SCRIPT_JS, runtime = userRuntime(), verge = VERGE_YAML(), core: coreOpts = {}, adapter: adapterOpts = {}, block = null, files = {} } = {}) {
+export async function startWorld(t, { script = SCRIPT_JS, runtime = userRuntime(), verge = VERGE_YAML(), core: coreOpts = {}, adapter: adapterOpts = {}, files = {} } = {}) {
   const sandbox = tmpDir('asight-world-')
   const home = path.join(sandbox, 'AppData', 'Roaming', VERGE_DIR_NAME)
   fs.mkdirSync(path.join(home, 'profiles'), { recursive: true })
@@ -54,20 +51,8 @@ export async function startWorld(t, { script = SCRIPT_JS, runtime = userRuntime(
   put('verge.yaml', verge); put('config.yaml', CONFIG_YAML); put('clash-verge.yaml', runtime); put('profiles.yaml', PROFILES_YAML)
   if (script !== null) put(path.join('profiles', 'Script.js'), script)
   for (const [rel, text] of Object.entries(files)) put(rel, text)
-  const core = await startFakeCore(t, { home, runtimeText: runtime, userProviders: { [USER_PROVIDER]: 7 }, ...coreOpts })
+  const core = await startFakeCore(t, coreOpts)
   const state = { running: true }
   const adapter = createVergeAdapter({ home, controller: createController({ endpoint: core.endpoint }), running: () => state.running, ...adapterOpts })
-  const world = { sandbox, home, core, adapter, state, file: (rel) => path.join(home, rel), asightHome: path.join(sandbox, '.asight') }
-  world.block = (groups = GROUPS) => buildBlock(blockInput(groups))
-  /** The block as the core has it: spliced into the runtime, loaded, the route files written (on = patterns, off = empty). */
-  world.live = (groups = GROUPS, { on = [] } = {}) => {
-    const b = world.block(groups)
-    fs.mkdirSync(path.join(home, 'asight'), { recursive: true })
-    for (const g of groups) fs.writeFileSync(path.join(home, names(g.g).routeFile), on.includes(g.g) ? b.files[names(g.g).routeFile] : routeFile(null))
-    core.load(spliceRuntimeText({ yaml: fs.readFileSync(path.join(home, 'clash-verge.yaml'), 'utf8'), block: b }).yaml)
-    for (const g of on) core.select(names(g).sw, names(g).fb)
-    return b
-  }
-  if (block) world.live(block.groups, block)
-  return world
+  return { sandbox, home, core, adapter, state, file: (rel) => path.join(home, rel), asightHome: path.join(sandbox, '.asight') }
 }
