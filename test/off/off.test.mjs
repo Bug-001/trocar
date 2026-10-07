@@ -1,6 +1,6 @@
-// test/off/off.test.mjs — what `asight off` does to the user's machine, from a real install of all seven harnesses (RFC 1.6 V15 · V25; the
-// parts of V1 · V5 · V8 · V21 · V24 · V27 · V34 that the orchestration of Task 7 adds are in this file later). Every case installs through the
-// real installCollector into a sandbox HOME and undoes through undoHarnesses with the process table handed in; nothing runs a real OS tool.
+// test/off/off.test.mjs — what `asight off` does to the user's machine. V15 · V25: a real install of all seven harnesses, undone through undoHarnesses with
+// the process table handed in. V1 · V5 · V8 · V21 · V24 · V27 · V34 (T07): the orchestration — runOff over a sandbox HOME in which the real `on` has run, with
+// the daemon, systemd, the process table and the clock injected. Nothing in this file runs a real OS tool or touches a real process.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -15,6 +15,10 @@ import { certBlocks } from '../../src/off/pem.mjs'
 import { HARNESS_IDS } from '../../src/cli/harness-names.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { sevenHomes, USER_CA } from './fixtures/seven-homes.mjs'
+import { readStateFile } from '../../src/off/state.mjs'
+import { checkRecord } from '../../src/health/codes.mjs'
+import { validateReceipt } from '../../src/cli/schema.mjs'
+import { installedHome, writeDaemonLock, flowEvents, ALL_HARNESSES, ROOTS } from './fixtures/off-ctx.mjs'
 
 const ROOT = createCa({ commonName: 'off root' })
 const roots = { node: [ROOT.certPem], osText: '' }
@@ -97,4 +101,174 @@ test('V25: off codex undoes ~/.codex/.env and its bundle and nothing else — as
   assert.deepEqual([others('combined-hermes.pem') === hermesBefore, certBlocks(others('combined-codex.pem')).length > 0], [true, true])
   assert.ok(!certBlocks(others('combined-codex.pem')).some((c) => c.fp === certBlocks(others('asight-ca.pem'))[0].fp))
   assert.deepEqual(k.still_trusting, [{ pid: 4242, harness: 'codex', until: 'next-connection' }])
+})
+
+// ── T07: the orchestration ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+const shaOf = (f) => crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex')
+const execFrom = (s, from) => s.sys.exec.calls.slice(from)
+
+test('V1: off with the daemon gone (its lock left, its helper dead): every entry of all seven harnesses is back at its pre_sha256, exit 0, and nothing starts a daemon', async () => {
+  const s = await installedHome({ names: ALL_HARNESSES })
+  const entries = s.manifest().entries
+  assert.ok(entries.length >= 5, 'seven harnesses have entries to undo')
+  s.sys.daemon.state.up = false // killed: nothing answers
+  writeDaemonLock(s) // and its lock is left behind, naming a pid that is gone
+  const calls = s.sys.exec.calls.length, asked = s.sys.daemon.calls.length
+  const { receipt, exit } = await s.off({ deps: { alive: () => false } })
+  assert.equal(exit, 0, JSON.stringify(receipt.problems))
+  assert.deepEqual(validateReceipt(receipt), [])
+  for (const e of entries) assert.equal(e.existed_before ? shaOf(e.path) : fs.existsSync(e.path), e.existed_before ? e.pre_sha256 : false, `${e.path} is back as it was before asight`)
+  assert.deepEqual(receipt.routing, { confirmed: true, state: 'stale', how: 'no-daemon' })
+  assert.deepEqual([receipt.daemon, receipt.relayed], [{ pid: null, state: 'none' }, { closing: 0, waiting: 0, cut: 0 }], 'no daemon: nothing is relayed, said as a fact')
+  assert.deepEqual(execFrom(s, calls), ['systemctl --user disable asight-collector.service'], 'the only OS tool run is the autostart disable: no start, no restart')
+  assert.deepEqual(s.sys.daemon.calls.slice(asked).filter((c) => c.startsWith('POST')), [], 'and no daemon was asked for anything, let alone started')
+  assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ALL_HARNESSES.map(() => 'off'), 'every harness is off in state.json')
+  assert.equal(readManifest(s.dir).entries.length, 0, 'and out of the manifest')
+})
+
+test('V5: off claude-code undoes only Claude Code: the other harness\'s file is byte for byte, it stays on in state.json and attached in the daemon, /off was posted with the name only and no exit', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] })
+  const codexEnv = path.join(s.home, '.codex', '.env'), settings = path.join(s.home, '.claude', 'settings.json')
+  const codexBefore = shaOf(codexEnv)
+  assert.deepEqual([...s.sys.daemon.state.on].sort(), ['claude-code', 'codex'])
+  const { receipt, exit } = await s.off({ ids: ['claude-code'] })
+  assert.equal(exit, 0, JSON.stringify(receipt.problems))
+  assert.deepEqual(validateReceipt(receipt), [])
+  assert.equal(shaOf(codexEnv), codexBefore, 'codex\'s .env byte for byte')
+  assert.ok(!fs.readFileSync(settings, 'utf8').includes('asight'), 'claude-code\'s entry is out')
+  assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"harnesses":["claude-code"]}'], 'by name; no exit: the daemon stays for codex')
+  assert.deepEqual([s.state().harnesses['claude-code'].desired, s.state().harnesses.codex.desired], ['off', 'on'])
+  assert.deepEqual([s.sys.daemon.isRecording('claude-code'), s.sys.daemon.isRecording('codex')], [false, true], 'the daemon still has codex attached')
+  assert.deepEqual([receipt.harnesses, receipt.all, receipt.daemon.state], [['claude-code'], false, 'running'])
+  assert.deepEqual(receipt.changed.map((c) => [path.relative(s.home, c.path), c.harness]).concat(receipt.removed.map((p) => [path.relative(s.home, p), null])), [['.claude/settings.json', 'claude-code']].concat(receipt.removed.map((p) => [path.relative(s.home, p), null])))
+  assert.ok(s.sys.exec.calls.every((c) => !/disable/.test(c)), 'a named off leaves the autostart alone')
+  assert.ok(readManifest(s.dir).entries.some((e) => e.harness === 'codex'), 'codex is still installed')
+})
+
+test('V21: off,off changes nothing — the second run leaves state.json, the manifest and every user file as they were; per-harness: the daemon unwatches the harness before its bundle is rewritten', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] })
+  const bundle = path.join(s.dir, 'ca', 'combined-codex.pem')
+  const caFp = certBlocks(fs.readFileSync(path.join(s.dir, 'ca', 'asight-ca.pem'), 'utf8'))[0].fp
+  let seen = null
+  const beforeBundle = fs.readFileSync(bundle, 'utf8')
+  const first = await s.off({ ids: ['codex'], deps: { request: (q) => (q.path === '/off' ? (seen = { bundle: fs.readFileSync(bundle, 'utf8'), env: fs.readFileSync(path.join(s.home, '.codex', '.env'), 'utf8') }, s.sys.daemon.request(q)) : s.sys.daemon.request(q)) } })
+  assert.equal(first.exit, 0, JSON.stringify(first.receipt.problems))
+  assert.equal(seen.bundle, beforeBundle, 'when the daemon was asked to unwatch codex, its bundle still held the CA and its .env still named it')
+  assert.ok(certBlocks(seen.bundle).some((c) => c.fp === caFp) && /asight collector/.test(seen.env))
+  assert.ok(!fs.existsSync(bundle) || !certBlocks(fs.readFileSync(bundle, 'utf8')).some((c) => c.fp === caFp), 'afterwards the bundle is gone, or without the CA')
+  const after = () => ({ user: s.userFiles(), manifest: fs.readFileSync(path.join(s.dir, 'install-manifest.json'), 'utf8'), state: fs.readFileSync(path.join(s.dir, 'state.json'), 'utf8') })
+  const all = await s.off()
+  assert.equal(all.exit, 0, JSON.stringify(all.receipt.problems))
+  const snap = after()
+  const again = await s.off()
+  assert.equal(again.exit, 0, JSON.stringify(again.receipt.problems))
+  assert.deepEqual(after(), snap, 'a second off: not one byte of state.json, the manifest or a user file moves')
+  assert.deepEqual([again.receipt.changed, again.receipt.removed], [[], []])
+  const second = await s.off({ ids: ['codex'] })
+  assert.deepEqual([second.exit, second.receipt.changed, second.receipt.skipped.map((x) => x.what)], [0, [], ['codex']], 'off codex again: nothing to do, and it says so')
+})
+
+test('1.6 §1.5: the routing is confirmed BEFORE one entry is touched — a daemon that does not confirm leaves every entry and bundle as it is, exit 1, and a state.json that already says off', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] })
+  const before = s.userFiles(), bundle = shaOf(path.join(s.dir, 'ca', 'combined-codex.pem'))
+  const r = await s.off({ deps: { request: async (q) => (q.path === '/off' ? { actual: 'on', confirmed: false, relayed: { closing: 0, waiting: 0, cut: 0 }, pid: 4242 } : s.sys.daemon.request(q)) } })
+  assert.equal(r.exit, 1)
+  assert.deepEqual(r.receipt.routing, { confirmed: false, state: 'running', how: 'daemon-reply' })
+  assert.match(r.receipt.problems[0], /did not confirm that the kernel's watch table and links are off/)
+  assert.deepEqual(s.userFiles(), before, 'no user file moved')
+  assert.equal(shaOf(path.join(s.dir, 'ca', 'combined-codex.pem')), bundle)
+  assert.ok(readManifest(s.dir).entries.length >= 2, 'and the manifest still lists the entries')
+  assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ['off', 'off'], 'desired off was written first: the daemon\'s next heartbeat reads it')
+  const failure = flowEvents(s.dir).find((e) => e.event === 'failure')
+  assert.deepEqual([failure.where, failure.code], ['off', 'state-mismatch'])
+  assert.deepEqual(flowEvents(s.dir).at(-1).kind, 'result')
+})
+
+test('1.6 §1.4 第 2 步: an off with no names asks the daemon to exit once drained and reports what is left of the connections; --now is passed on; an error answer (a 400) is a failure, not a stuck daemon', async () => {
+  const s = await installedHome({ names: ['claude-code'], daemon: { relayed: { closing: 2, waiting: 1, cut: 0 }, exitOnOff: false } })
+  const r = await s.off({ now: false })
+  assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
+  assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"exit":true}'])
+  assert.deepEqual([r.receipt.relayed, r.receipt.daemon], [{ closing: 2, waiting: 1, cut: 0 }, { pid: 4242, state: 'draining' }])
+  const t = await installedHome({ names: ['claude-code'], daemon: { relayed: { closing: 0, waiting: 0, cut: 3 }, exitOnOff: false } })
+  const cut = await t.off({ now: true })
+  assert.deepEqual(t.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"now":true,"exit":true}'])
+  assert.equal(cut.receipt.relayed.cut, 3)
+  const u = await installedHome({ names: ['claude-code'] }); const before = u.userFiles()
+  const bad = await u.off({ deps: { request: async (q) => { if (q.path === '/off') throw Object.assign(new Error('400: unknown harness: nope'), { status: 400 }); return u.sys.daemon.request(q) } } })
+  assert.equal(bad.exit, 1); assert.match(bad.receipt.problems[0], /refused the off request/)
+  assert.deepEqual(u.userFiles(), before)
+  assert.ok(u.sys.exec.calls.every((c) => !/stop|kill/.test(c)), 'an answering daemon is never stopped')
+})
+
+// a fake process table: pid → identity; `ignore`: signals a pid survives (a stopped or wedged process); every signal is recorded
+function procTable(rows, { survives = {} } = {}) {
+  const live = new Map(Object.entries(rows).map(([pid, id]) => [Number(pid), id]))
+  const sent = []
+  return {
+    live, sent, alive: (pid) => live.has(pid), identity: (pid) => live.get(pid) || { start_time: null, boot_id: null }, isHelper: (pid) => pid === 4243,
+    kill: (pid, sig) => { sent.push([pid, sig]); if (!(survives[pid] || []).includes(sig)) live.delete(pid) },
+  }
+}
+const fakeClock = () => { let t = 10_000_000; return { ms: () => t, sleep: async (ms) => { t += ms } } }
+const DAEMON_ROWS = { 4242: { start_time: '111', boot_id: 'boot-1' }, 4243: { start_time: '112', boot_id: 'boot-1' } }
+const hangsOnStatus = (s) => async (q) => { if (q.path === '/status') throw Object.assign(new Error('control request timed out'), { code: 'ETIMEDOUT' }); return s.sys.daemon.request(q) }
+
+test('1.6 §1.4 第 2 / 5 步 · 「守护进程卡死」: a stuck daemon is stopped FIRST (systemctl stop, then SIGTERM), its helper with it, and only then is the first entry undone; the receipt says so', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] })
+  writeDaemonLock(s)
+  const t = procTable(DAEMON_ROWS, { survives: { 4242: ['SIGTERM'] } }); const c = fakeClock()
+  const settings = path.join(s.home, '.claude', 'settings.json'); const seen = []
+  const exec = (file, args) => { const cmd = [file, ...args].join(' '); seen.push([cmd, fs.readFileSync(settings, 'utf8').includes('NODE_EXTRA_CA_CERTS')]); return s.sys.exec.run(file, args) }
+  const r = await s.off({ deps: { exec, request: hangsOnStatus(s), alive: t.alive, identity: t.identity, kill: t.kill, isHelper: t.isHelper, ...c } })
+  assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
+  assert.equal(seen.find(([cmd]) => / stop /.test(cmd))[1], true, 'when systemd was told to stop the daemon, the entry was still in place')
+  assert.deepEqual(t.sent, [[4242, 'SIGTERM'], [4242, 'SIGKILL'], [4243, 'SIGTERM']], 'SIGTERM, then SIGKILL after the wait; the helper after the daemon; nothing else is signalled')
+  assert.deepEqual([r.receipt.routing.state, r.receipt.routing.how, r.receipt.daemon.state, r.receipt.relayed], ['unresponsive', 'signal', 'stopped', 'unknown'])
+  assert.match(r.receipt.relayed_reason, /could not say how many connections/)
+  assert.ok(!fs.readFileSync(settings, 'utf8').includes('asight'), 'and the entry is out after it')
+  const stop = flowEvents(s.dir).find((e) => e.kind === 'daemon-stop')
+  assert.deepEqual([stop.event, stop.where, stop.signals], ['off-note', 'off', ['systemctl-stop', 'SIGTERM', 'SIGKILL', 'SIGTERM']], 'the stop is on record (V30\'s stop event)')
+})
+
+test('a stuck daemon and `off codex`: it is stopped all the same (the others were not being captured by a stuck daemon), codex is undone, claude-code stays installed, exit 0 (V30 unit half, named form)', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] })
+  writeDaemonLock(s)
+  const t = procTable(DAEMON_ROWS); const c = fakeClock(); const claudeBefore = shaOf(path.join(s.home, '.claude', 'settings.json'))
+  const r = await s.off({ ids: ['codex'], deps: { request: hangsOnStatus(s), alive: t.alive, identity: t.identity, kill: t.kill, isHelper: t.isHelper, ...c } })
+  assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
+  assert.equal(r.receipt.daemon.state, 'stopped')
+  assert.equal(shaOf(path.join(s.home, '.claude', 'settings.json')), claudeBefore)
+  assert.deepEqual([s.state().harnesses.codex.desired, s.state().harnesses['claude-code'].desired], ['off', 'on'])
+  assert.ok(s.sys.exec.calls.every((c2) => !/disable/.test(c2)), 'a named off never disables the autostart')
+})
+
+test('a daemon that cannot be stopped: the entries are undone all the same, exit 1, and the receipt gives the pid and kill -9; one that is only starting is stopped like a stuck one', async () => {
+  const s = await installedHome({ names: ['claude-code'] })
+  writeDaemonLock(s)
+  const t = procTable(DAEMON_ROWS, { survives: { 4242: ['SIGTERM', 'SIGKILL'] } }); const c = fakeClock()
+  const r = await s.off({ deps: { request: hangsOnStatus(s), alive: t.alive, identity: t.identity, kill: t.kill, isHelper: t.isHelper, ...c } })
+  assert.equal(r.exit, 1)
+  assert.match(r.receipt.problems.join('\n'), /pid 4242.*could not be stopped.*kill -9 4242/)
+  assert.deepEqual([r.receipt.daemon.state, r.receipt.routing.confirmed], ['unresponsive', false])
+  assert.ok(!fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('asight'), 'the entry is out all the same')
+  assert.deepEqual(flowEvents(s.dir).filter((e) => e.event === 'failure').map((e) => [e.where, e.code]), [['off', 'stop-failed']])
+  const starting = await installedHome({ names: ['claude-code'] }); writeDaemonLock(starting)
+  const t2 = procTable(DAEMON_ROWS); const c2 = fakeClock()
+  const refuses = async (q) => { if (q.path === '/status') throw Object.assign(new Error('connect ENOENT'), { code: 'ENOENT' }); return starting.sys.daemon.request(q) }
+  const r2 = await starting.off({ deps: { request: refuses, alive: t2.alive, identity: t2.identity, kill: t2.kill, isHelper: t2.isHelper, ...c2 } })
+  assert.deepEqual([r2.exit, r2.receipt.routing.state, r2.receipt.daemon.state], [0, 'starting', 'stopped'])
+})
+
+test('a lock that cannot be read, and a daemon that does not answer: whether one runs is not known — nothing is stopped, no entry touched, exit 1; a stale lock with a live helper has the helper stopped', async () => {
+  const s = await installedHome({ names: ['claude-code'] }); const before = s.userFiles()
+  fs.writeFileSync(path.join(s.dir, 'lock'), '{"pid":')
+  const refuses = async (q) => { if (q.path === '/status') throw Object.assign(new Error('connect ENOENT'), { code: 'ENOENT' }); return s.sys.daemon.request(q) }
+  const t = procTable({}); const r = await s.off({ deps: { request: refuses, alive: t.alive, identity: t.identity, kill: t.kill, ...fakeClock() } })
+  assert.equal(r.exit, 1); assert.match(r.receipt.problems[0], /not valid JSON.*not known/)
+  assert.deepEqual([s.userFiles(), t.sent], [before, []])
+  const h = await installedHome({ names: ['claude-code'] }); writeDaemonLock(h)
+  const live = procTable({ 4243: { start_time: '112', boot_id: 'boot-1' } }) // the daemon is dead, its helper lingers
+  const r2 = await h.off({ deps: { request: async (q) => { if (q.path === '/status') throw Object.assign(new Error('x'), { code: 'ENOENT' }); return h.sys.daemon.request(q) }, alive: live.alive, identity: live.identity, kill: live.kill, isHelper: live.isHelper, ...fakeClock() } })
+  assert.deepEqual([r2.exit, live.sent, r2.receipt.daemon.state], [0, [[4243, 'SIGTERM']], 'stopped'])
 })

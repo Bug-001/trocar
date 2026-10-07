@@ -63,17 +63,28 @@ export function recordingExec({ fail = () => null, onRun = () => {} } = {}) {
   return { run, calls, has: (re) => calls.some((c) => re.test(c)) }
 }
 
-/** The control socket of a daemon: `up` says whether one answers; POST /on answers the way the daemon does (agents are what `agents` holds). */
-export function fakeDaemon({ up = true, agents = [], actual = 'on', onOn = null } = {}) {
+/** The control socket of a daemon: `up` says whether one answers; POST /on answers the way the daemon does (agents are what `agents` holds). POST /off
+ *  answers like the daemon too (src/collector/daemon.mjs): `{…status, confirmed, relayed, pid}`, `actual` is `off` unless a harness is still on; a request with
+ *  `exit` makes the daemon go away afterwards (`exitOnOff: false` keeps it: connections that wait). `state.on` is the set of harnesses it has attached;
+ *  `isRecording(h)` asks it. `onOff(q, state)` runs first (a test looks at the world at that instant, or changes the reply by returning one). */
+export function fakeDaemon({ up = true, agents = [], actual = 'on', onOn = null, onOff = null, relayed = { closing: 0, waiting: 0, cut: 0 }, exitOnOff = true, pid = 4242 } = {}) {
   const calls = []
-  const state = { up }
+  const state = { up, on: new Set() }
   const request = async (q) => {
     calls.push(`${q.method} ${q.path}${q.body ? ` ${JSON.stringify(q.body)}` : ''}`)
     if (!state.up) throw Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' })
     if (q.path === '/on' && onOn) await onOn(q)
+    if (q.path === '/on') for (const h of (q.body && q.body.harnesses) || ['claude-code']) state.on.add(h)
+    if (q.path === '/off') {
+      const body = q.body || {}
+      const custom = onOff ? await onOff(q, state) : null
+      if (body.harnesses) for (const h of body.harnesses) state.on.delete(h); else state.on.clear()
+      if (body.exit && exitOnOff) state.up = false
+      return custom || { desired: state.on.size ? 'on' : 'off', actual: state.on.size ? 'on' : 'off', recording: state.on.size > 0, confirmed: true, relayed, pid, unwatched: [], agents: [], helper: { ok: true } }
+    }
     return { desired: 'on', actual, recording: true, agents, helper: { ok: true } }
   }
-  return { request, calls, state }
+  return { request, calls, state, isRecording: (h) => state.on.has(h) }
 }
 
 /** The second argument of runOnCli, for a sandbox HOME. `deps` overrides what a test wants to see. */
@@ -87,8 +98,8 @@ export function onCtx(home, io, { exec = recordingExec(), daemon = fakeDaemon(),
 }
 
 /** A runner and a control socket wired the way systemd and the daemon are: starting the unit brings the daemon up. */
-export function fakeSystem({ agents = [], actual = 'on', up = false } = {}) {
-  const daemon = fakeDaemon({ up, agents, actual })
+export function fakeSystem({ agents = [], actual = 'on', up = false, ...daemonOpts } = {}) {
+  const daemon = fakeDaemon({ up, agents, actual, ...daemonOpts })
   const exec = recordingExec({ onRun: (cmd) => { if (/ (start|enable --now) asight-collector\.service$/.test(cmd)) daemon.state.up = true } })
   return { exec, daemon }
 }
