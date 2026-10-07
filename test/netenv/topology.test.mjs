@@ -188,3 +188,14 @@ test('an https:// proxy is drawn as one: the engine ends the outer TLS of the ag
   assert.match(line('http://127.0.0.1:8443'), /→ \[CONNECT 原样转\] mihomo :8443/)
   assert.match(line('socks5://127.0.0.1:8443'), /→ \[SOCKS 前导原样转\] mihomo :8443/)
 })
+
+test('on_path is false — not true, not unknown — when asight cannot be on the path: wanted off with no process to read the watch table of, and wanted on with the kernel holding no link of this instance', () => {
+  const off = buildTopology(facts('claude-code', { desired: { 'claude-code': 'off' } }, { procs: [] }))['claude-code']
+  assert.deepEqual([off.on_path, off.captured, off.reason], [false, false, 'desired-off'])
+  assert.deepEqual(off.branches[0].path.map((id) => kindOf(off, id)), ['agent', 'upstream'], 'no engine on the path')
+  const noLink = buildTopology(facts('claude-code', { link: { attached: false, helper: 'ok', ids: [] } }, { procs: [] }))['claude-code']
+  assert.deepEqual([noLink.on_path, noLink.captured, noLink.reason], [false, false, 'link-missing'])
+  assert.deepEqual(noLink.branches[0].path.map((id) => kindOf(noLink, id)), ['agent', 'upstream'])
+  const unread = buildTopology(facts('claude-code', { link: { attached: null, helper: 'ok', ids: [] } }, { procs: [] }))['claude-code']
+  assert.equal(unread.on_path, null, 'a link that could not be read is not known, and not "no link"')
+})

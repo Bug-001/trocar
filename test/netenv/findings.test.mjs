@@ -89,7 +89,7 @@ test('V49 each finding: what, why and verify say something; a failure or an expe
     assert.ok(f.what && f.why && f.verify, at)
     if (f.class !== 'hint') assert.ok(f.commands.length >= 1, at)
     for (const c of f.commands) assert.ok(!/<[^>]+>/.test(c.run) && ['sh', 'powershell', 'gui'].includes(c.shell), `${at}: ${c.run}`)
-    if (FINDINGS[f.code] && FINDINGS[f.code].asightFirst) assert.ok(f.commands[0].run.startsWith('asight '), `${at}: the first command is asight's`)
+    if (FINDINGS[f.code] && FINDINGS[f.code].asightFirst && f.commands.some((c) => c.shell !== 'gui')) assert.ok(f.commands[0].run.startsWith('asight '), `${at}: the first command is asight's`) // a finding that says nothing needs doing (driver-mode proxy-changed) has no command to run
     if (FINDINGS[f.code] && f.class === 'failure' && !FINDINGS[f.code].asightFirst) assert.ok(f.commands.length >= 1)
     seen.add(f.code)
   }
@@ -171,6 +171,24 @@ test('V49 where the harness keeps its settings in a managed process its windows 
   assert.deepEqual(cc.map((x) => x.shell), ['gui'], 'a harness with no managed process: the step alone')
   const neg = steps(facts('codex', { listeners: [] }, { procs: [proc(5530, { name: 'codex app-server', negative: true })], negatives: [{ pid: 5530, host: 'chatgpt.com', reason: 'negative-cache' }] }), 'negative-cache')
   assert.ok(neg.some((x) => x.run === 'kill 5530'), 'a negative cache lasts as long as the process: ending it is the way out')
+})
+
+test('V47 (a) / V49 proxy-changed in driver mode: the harness is still steered, so it is `expected` and nothing needs doing — no command to run (a step that says so), the way to look is `verify`; in proxy mode the same drift is a failure whose first command is `asight on <h>`', () => {
+  const rec = { at: 'T', routing: 'driver', chain: 'c', source: [SRC_F1], sha256: 'sha-http://proxy.old:3128', file_sha256: 'sha-http://proxy.old:3128', proxy: 'http://proxy.old:3128', vpn: null }
+  const changed = proxyOf('http://proxy.new:3128', [SRC_F1])
+  const f = facts('claude-code', { listeners: [], vpn: null }, { setting: changed, fileSetting: changed, adopted: rec, behaviour: behaviourOf('claude-code', CC_FILES) })
+  const found = findingsOf(f, ['claude-code']).find((x) => x.code === 'proxy-changed')
+  assert.ok(found, 'the file now holds another proxy than `on` found: the finding is there')
+  assert.equal(found.class, 'expected')
+  assert.deepEqual(found.commands.filter((c) => c.shell !== 'gui'), [], 'nothing to run')
+  assert.ok(!found.commands.some((c) => /^asight /.test(c.run)))
+  assert.match(found.commands[0].run, /无需操作/)
+  assert.match(found.verify, /asight status claude-code/)
+  assert.deepEqual(validateFinding(found), [])
+  assert.ok(!findingsOf({ ...f, harnesses: { 'claude-code': { ...f.harnesses['claude-code'], adopted: { ...rec, file_sha256: changed.sha256, sha256: changed.sha256 } } } }, ['claude-code']).some((x) => x.code === 'proxy-changed'), 'the same setting as `on` found: no finding')
+  const proxyMode = findingsOf(row(17).facts, ['codex']).find((x) => x.code === 'proxy-changed')
+  assert.equal(proxyMode.class, 'failure')
+  assert.equal(proxyMode.commands[0].run, 'asight on codex')
 })
 
 test('renderFindings: what and why, each command on a line of its own (shell named when it is not sh; a step in an application has no $), and how to check', () => {

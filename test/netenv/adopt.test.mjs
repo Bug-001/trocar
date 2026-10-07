@@ -127,6 +127,10 @@ test('V47 the daemon\'s 5 s check: a change of the file is one `netenv-change` (
   assert.deepEqual([events[0].from, events[0].to], ['http://***@proxy.corp:8080', 'http://proxy.new:3128'])
   for (const e of events) assert.deepEqual(checkRecord(e), [], 'every record is in the closed sets (V53)')
   assert.equal(fs.readFileSync(settingsOf(s), 'utf8'), settingsBytes, 'the agent\'s file is byte for byte what the user left')
+  // another key of the same file changes the file (its size and mtime) and not the setting: what was said is not said again
+  const d2 = readJson(settingsOf(s)); d2.model = 'another-model'; fs.writeFileSync(settingsOf(s), `${JSON.stringify(d2, null, 2)}\n`)
+  check(); check()
+  assert.equal(events.length, 1, 'the drift is recorded once, whatever else happens to the file')
   setProxy(s, 'http://proxy.third:1'); check()
   assert.equal(events.length, 2, 'a further change is one more')
 })
