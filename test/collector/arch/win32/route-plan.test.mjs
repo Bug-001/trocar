@@ -1,12 +1,18 @@
 // test/collector/arch/win32/route-plan.test.mjs — RFC 4.8 §2.2: what a group's upstream is and which targets its agent reached directly before asight (W5 upstream half, W71 rule half, W72 translation half).
-// Task 6b owns the rules of upstream.mjs; Task 8(a) appends the route plan (planRoutes) that applies them to the groups. Nothing here runs Windows: the helper is an object with a `call`, the clock is injected.
+// Task 6b owns the rules of upstream.mjs; Task 8(a) appends the route plan (planRoutes, priorOf, hostSetOf) that applies them to the groups. Nothing here runs Windows: the helper is an object with a `call`, the clock is injected.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { bypassHit, parseProxyText, proxyAuthOf, readHkcuEnv, readSystemProxy, sameSystemProxy, translateBypass, upstreamFor, watchSystemProxy } from '../../../../src/collector/arch/win32/upstream.mjs'
 import { regReadAllowed } from '../../../../src/collector/arch/win32/helper.mjs'
 import { bypassRuleOf } from '../../../../src/netenv/mihomo/rules.mjs'
+import { groupsOf, priorOf } from '../../../../src/collector/arch/win32/route-plan.mjs'
+import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
+import { applyJsonKey, applyTextEntry, newManifest } from '../../../../src/collector/core/trust/journal.mjs'
+import { proxyEntries } from '../../../../src/collector/arch/win32/forms.mjs'
+import { tmpDir } from '../../../helpers/tmp.mjs'
 // the groups, as the harness files declare them (arch/ never imports harness/; a test may, to pin the rule to the real data)
 import claudeCode from '../../../../src/collector/harness/win32/claude-code.mjs'
 import codex from '../../../../src/collector/harness/win32/codex.mjs'
@@ -617,4 +623,165 @@ test('upstreamFor wants a group: a call without one is a bug of the caller, not 
   assert.throws(() => upstreamFor({}), TypeError)
   assert.throws(() => upstreamFor(), TypeError)
   assert.throws(() => upstreamFor({ group: { followsSystemProxy: { http: true } } }), TypeError, 'a group has an id: it names the reference to its stored login')
+})
+
+// ======================================================================================================================================
+// Task 8(a): the route plan — which groups get an entry, what each one's upstream and bypass table are (4.8 §2.2, §2.3, §3.5; W5, W72)
+// The groups here are the REAL data of all seven harnesses (`loadHarnesses`), laid out in a sandbox profile directory the way %USERPROFILE% is.
+// ======================================================================================================================================
+
+const ALL = await loadHarnesses()
+const GROUPS = groupsOf(ALL)
+
+/** A sandbox profile: files go in under it, and `ctx` is what the install gives a harness's `files(ctx)` (the one the trust tests use). */
+function box(...sub) {
+  const home = path.join(tmpDir('asight-rp-'), ...sub)
+  fs.mkdirSync(home, { recursive: true })
+  const put = (rel, text) => { const f = path.join(home, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text); return f }
+  const ctx = (env = {}, over = {}) => ({
+    os: 'win32', home, env: new Map([['USERPROFILE', home], ...Object.entries(env)]), running: [], collectorDir: path.join(home, '.asight', 'collector'), caPem: path.join(home, '.asight', 'collector', 'ca', 'asight-ca.pem'),
+    readText: (f) => { try { return fs.readFileSync(f, 'utf8') } catch { return null } },
+    readTextOrError: (f) => { try { return { text: fs.readFileSync(f, 'utf8'), error: null } } catch (e) { return { text: null, error: e.code === 'ENOENT' || e.code === 'ENOTDIR' ? null : { code: e.code, message: e.message } } } },
+    readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } },
+    listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } },
+    ...over,
+  })
+  return { home, put, ctx, dir: path.join(home, '.asight', 'collector') }
+}
+const gdata = (g) => GROUPS.find((x) => x.g === g)
+const USER_PROXY = 'http://alice:s3cret@corp.example:3128'
+
+test('groupsOf: the Windows groups of the harness descriptors, each with its harness, its forms and the harness\'s proxy behaviour; a form with no group (not measured) is in none', () => {
+  assert.deepEqual(GROUPS.map((x) => [x.harness, x.g, x.forms.map((f) => f.id)]), [
+    ['claude-code', 'claude-code.settings', ['claude-code.cli', 'claude-code.vscode']],
+    ['claude-code', 'claude-code.desktop', ['claude-code.desktop']],
+    ['codex', 'codex.env', ['codex.cli', 'codex.vscode', 'codex.app']],
+    ['deepseek-dsh', 'deepseek-dsh.env', ['deepseek-dsh.cli', 'deepseek-dsh.desktop']],
+    ['hermes', 'hermes.cli', ['hermes.cli']],
+    ['kimi-code', 'kimi-code.cli', ['kimi-code.cli']],
+    ['kimi-code', 'kimi-code.vscode', ['kimi-code.vscode']],
+    ['opencode', 'opencode.cli', ['opencode.cli']],
+    ['opencode', 'opencode.desktop', ['opencode.desktop']],
+    ['z-code', 'z-code.cli', ['z-code.cli']],
+    ['z-code', 'z-code.desktop', ['z-code.desktop']],
+  ])
+  assert.ok(GROUPS.every((x) => x.group.g === x.g && x.proxy && Array.isArray(x.proxy.env) && Array.isArray(x.proxy.branches)), 'the group data and the harness\'s `proxy` (the variables it reads, its branches) are what upstreamFor is given')
+  assert.equal(GROUPS.flatMap((x) => x.forms).some((f) => f.id === 'hermes.desktop'), false, 'hermes.desktop has no group: nothing can be routed for it')
+  assert.deepEqual(groupsOf([{ name: 'linux-only' }, null]), [], 'a harness with no Windows data has no group on Windows')
+})
+
+// ---------- priorOf: the user's own proxy for a group, from the manifest when asight has written the entry, else from the file the agent reads (4.8 §2.2 ①) ----------
+
+test('priorOf reads what an agent has in its entry file before asight: the JSON key, or the dotenv variables (and the NO_PROXY the group names), in whatever way the file writes them', () => {
+  const b = box()
+  b.put('.claude/settings.json', `{\n  // the corporate proxy\n  "env": { "HTTPS_PROXY": "${USER_PROXY}", "ANTHROPIC_BASE_URL": "https://relay.example.com" },\n}\n`)
+  assert.deepEqual(priorOf({ group: gdata('claude-code.settings').group, ctx: b.ctx() }), { value: USER_PROXY, noProxy: null, source: 'file' }, 'JSON with a comment and a trailing comma is what Claude Code reads')
+  b.put('.codex/.env', `# mine\nOPENAI_API_KEY=sk-1\nexport HTTPS_PROXY="${USER_PROXY}"\nNO_PROXY='localhost, .corp.com'\n`)
+  assert.deepEqual(priorOf({ group: gdata('codex.env').group, ctx: b.ctx() }), { value: USER_PROXY, noProxy: 'localhost, .corp.com', source: 'file' })
+  assert.deepEqual(priorOf({ group: gdata('claude-code.settings').group, ctx: box().ctx() }), { value: null, noProxy: null, source: null }, 'no file: the agent has no proxy of its own')
+  b.put('.claude/settings.json', '{"env": {"ANTHROPIC_BASE_URL": "https://relay.example.com"}}')
+  assert.deepEqual(priorOf({ group: gdata('claude-code.settings').group, ctx: b.ctx() }), { value: null, noProxy: null, source: null }, 'a file without the key')
+  b.put('.claude/settings.json', '{"env": {"HTTPS_PROXY": 3128}}')
+  assert.equal(priorOf({ group: gdata('claude-code.settings').group, ctx: b.ctx() }).value, null, 'a value that is no text is no proxy')
+  b.put('.claude/settings.json', '{"env": {"HTTPS_PROXY": "  "}}')
+  assert.equal(priorOf({ group: gdata('claude-code.settings').group, ctx: b.ctx() }).value, null, 'an empty value is none')
+})
+
+test('priorOf: once asight has written the entry, the user\'s proxy is the manifest\'s prior_value (the file now holds asight\'s own address); an entry whose prior is null means the user had none, and the file is not read for it', () => {
+  const b = box()
+  const ingress = { port: 17991, listenerToken: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' }
+  const cases = [
+    ['claude-code', 'claude-code.settings', '.claude/settings.json', `{"env": {"HTTPS_PROXY": "${USER_PROXY}"}}\n`, null],
+    ['codex', 'codex.env', '.codex/.env', `HTTPS_PROXY=${USER_PROXY}\nNO_PROXY=intranet.example,10.0.0.0/8\n`, 'intranet.example,10.0.0.0/8'],
+  ]
+  for (const [harness, g, rel, user, noProxy] of cases) {
+    const group = gdata(g).group
+    const file = b.put(rel, user)
+    const m = newManifest()
+    for (const e of proxyEntries(group, b.ctx(), ingress)) {
+      if (e.kind === 'text') applyTextEntry({ dir: b.dir, manifest: m, harness, file: e.path, edit: e })
+      else applyJsonKey({ dir: b.dir, manifest: m, harness, file: e.path, keys: e.keys, value: e.value })
+    }
+    assert.ok(fs.readFileSync(file, 'utf8').includes('127.0.0.1:17991'), `${g}: the file holds asight's address now`)
+    assert.deepEqual(priorOf({ group, ctx: b.ctx(), manifest: m }), { value: USER_PROXY, noProxy, source: 'manifest' }, `${g}: the user's proxy, not asight's address`)
+    assert.deepEqual(priorOf({ group, ctx: b.ctx() }).source, 'file', `${g}: without the manifest the file is all there is to read`)
+    assert.equal(priorOf({ group, ctx: b.ctx() }).value.includes('127.0.0.1:17991'), true, `${g}: and it holds asight's own address (the upstream rule calls that a route loop)`)
+  }
+  // an agent that had no proxy: the manifest says so, and asight's own address in the file is not mistaken for the user's
+  const group = gdata('claude-code.settings').group
+  const file = b.put('.claude/settings.json', '{"env": {"ANTHROPIC_BASE_URL": "https://relay.example.com"}}\n')
+  const m = newManifest()
+  const e = proxyEntries(group, b.ctx(), ingress)[0]
+  applyJsonKey({ dir: b.dir, manifest: m, harness: 'claude-code', file: e.path, keys: e.keys, value: e.value })
+  assert.deepEqual(priorOf({ group, ctx: b.ctx(), manifest: m }), { value: null, noProxy: null, source: 'manifest' })
+  assert.ok(fs.readFileSync(file, 'utf8').includes('127.0.0.1:17991'))
+  // the entries of other groups, and the trust entry of the same file, are not this group's
+  assert.deepEqual(priorOf({ group: gdata('z-code.cli').group, ctx: b.ctx(), manifest: m }), { value: null, noProxy: null, source: null }, 'another group\'s entry is no record for this one')
+  const trust = { ...m.entries[0], keys: ['env', 'NODE_EXTRA_CA_CERTS'], prior_value: 'C:/corp/ca.pem' }
+  const viaTrust = priorOf({ group, ctx: b.ctx(), manifest: { entries: [trust] } })
+  assert.equal(viaTrust.source, 'file', 'the trust key of the same file is not the proxy key: its record says nothing about the proxy entry, so the file is read (and holds asight\'s own address here)')
+  assert.notEqual(viaTrust.value, 'C:/corp/ca.pem')
+  // the same for a dotenv file: the block the trust entry wrote (SSL_CERT_FILE) is no record of the proxy lines
+  const envFile = b.put('.codex/.env', `HTTPS_PROXY=${USER_PROXY}\n`)
+  const codexGroup = gdata('codex.env').group
+  const trustBlock = { kind: 'text', format: 'dotenv-block', path: envFile, vars: { SSL_CERT_FILE: 'C:/x/combined-codex.pem' }, prior_value: { SSL_CERT_FILE: 'C:/corp/ca.pem' } }
+  assert.deepEqual(priorOf({ group: codexGroup, ctx: b.ctx(), manifest: { entries: [trustBlock] } }), { value: USER_PROXY, noProxy: null, source: 'file' }, 'the trust block of the same file does not stand in for the proxy entry')
+  // Windows paths: the record names the file in the other slash and in capitals, and is still the record of this file
+  const proxyBlock = { kind: 'text', format: 'dotenv-block', path: envFile.toUpperCase().replace(/\//g, '\\'), vars: { HTTPS_PROXY: 'http://codex.env:x@127.0.0.1:1', NO_PROXY: 'localhost' }, prior_value: { HTTPS_PROXY: 'http://other:1' } }
+  assert.equal(priorOf({ group: codexGroup, ctx: b.ctx(), manifest: { entries: [proxyBlock] } }).source, 'manifest', 'C:\\Users\\u and c:/users/u are one file')
+})
+
+test('priorOf: a group with several entry files takes the first that holds a proxy, in the order the files are listed; a file asight wrote answers from the manifest, the others from themselves', () => {
+  const b = box()
+  const group = gdata('hermes.cli').group
+  const root = 'AppData/Local/hermes'
+  b.put(`${root}/.env`, 'OPENROUTER_API_KEY=k\n')
+  b.put(`${root}/profiles/work/config.yaml`, 'model: x\n')
+  const second = b.put(`${root}/profiles/work/.env`, `HTTPS_PROXY=http://work-proxy:8080\n`)
+  const ctx = b.ctx()
+  assert.deepEqual(group.proxyEntry.files(ctx).map((f) => path.relative(b.home, f)), [path.join(root, '.env'), path.join(root, 'profiles', 'work', '.env')])
+  assert.deepEqual(priorOf({ group, ctx }), { value: 'http://work-proxy:8080', noProxy: null, source: 'file' }, 'the root has none: the profile\'s is the group\'s')
+  b.put(`${root}/.env`, 'HTTPS_PROXY=http://root-proxy:8080\n')
+  assert.equal(priorOf({ group, ctx }).value, 'http://root-proxy:8080', 'the first file that has one')
+  // the root's entry written by asight with no proxy before it: nothing there; the profile is read from itself
+  const m = { entries: [{ kind: 'text', format: 'dotenv-block', path: group.proxyEntry.files(ctx)[0], vars: { HTTPS_PROXY: 'http://hermes.cli:x@127.0.0.1:17995', NO_PROXY: 'localhost' }, prior_value: null }] }
+  assert.deepEqual(priorOf({ group, ctx, manifest: m }), { value: 'http://work-proxy:8080', noProxy: null, source: 'file' })
+  assert.ok(second)
+})
+
+test('priorOf: a file it cannot read or understand is 「不知道」 with a reason from the closed set — never a guess at "no proxy" — and the other files are still read', () => {
+  const b = box()
+  const group = gdata('claude-code.settings').group
+  const denied = b.ctx({}, { readTextOrError: () => ({ text: null, error: { code: 'EACCES', message: 'permission denied, open C:\\Users\\alice\\.claude\\settings.json' } }) })
+  const r = priorOf({ group, ctx: denied })
+  assert.deepEqual([r.value, r.noProxy, r.source], [null, null, null])
+  assert.deepEqual(r.unknown, [{ what: 'agent-proxy', reason: 'denied', detail: 'EACCES' }], 'the errno, and no path (a user name may be in it)')
+  b.put('.claude/settings.json', '{"env": {"HTTPS_PROXY": ')
+  assert.deepEqual(priorOf({ group, ctx: b.ctx() }).unknown, [{ what: 'agent-proxy', reason: 'unparseable' }], 'JSON that does not parse says so, and does not quote the file')
+  b.put('.claude/settings.json', '[1, 2]')
+  assert.equal(priorOf({ group, ctx: b.ctx() }).unknown, undefined, 'JSON that is no object has no such key: that is a read, and there is none')
+  const hermes = gdata('hermes.cli').group
+  const b2 = box()
+  b2.put('AppData/Local/hermes/.env', 'X=1\n')
+  b2.put('AppData/Local/hermes/profiles/p/config.yaml', 'x: 1\n')
+  b2.put('AppData/Local/hermes/profiles/p/.env', 'HTTPS_PROXY=http://p:1\n')
+  const flaky = b2.ctx({}, { readTextOrError: (f) => (f.endsWith(path.join('hermes', '.env')) ? { text: null, error: { code: 'EPERM', message: 'x' } } : { text: fs.readFileSync(f, 'utf8'), error: null }) })
+  const r2 = priorOf({ group: hermes, ctx: flaky })
+  assert.equal(r2.value, 'http://p:1', 'one file that cannot be read does not hide another that can')
+  assert.deepEqual(r2.unknown, [{ what: 'agent-proxy', reason: 'denied', detail: 'EPERM' }])
+})
+
+test('priorOf: a group whose entry is not a file asight writes (a policy value, a shim, a launcher, an app setting) has no prior here — the opt-in step that writes it records it (Task 14)', () => {
+  for (const g of ['claude-code.desktop', 'kimi-code.cli', 'kimi-code.vscode', 'opencode.cli', 'opencode.desktop', 'z-code.desktop']) {
+    assert.deepEqual(priorOf({ group: gdata(g).group, ctx: box().ctx() }), { value: null, noProxy: null, source: null }, g)
+  }
+})
+
+test('priorOf wants a group and a ctx; the secret in a user\'s proxy is in its answer and in no error', () => {
+  assert.throws(() => priorOf({}), TypeError)
+  assert.throws(() => priorOf({ group: gdata('codex.env').group }), TypeError, 'a read needs the ctx that says where the home is')
+  const b = box()
+  b.put('.claude/settings.json', `{"env": {"HTTPS_PROXY": "${USER_PROXY}"`)
+  const r = priorOf({ group: gdata('claude-code.settings').group, ctx: b.ctx() })
+  assert.equal(JSON.stringify(r).includes('s3cret'), false, 'a file that does not parse is not quoted')
 })
