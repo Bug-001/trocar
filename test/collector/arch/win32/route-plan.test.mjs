@@ -9,7 +9,7 @@ import { bypassHit, parseProxyText, proxyAuthOf, readHkcuEnv, readSystemProxy, s
 import { regReadAllowed } from '../../../../src/collector/arch/win32/helper.mjs'
 import { bypassRuleOf, buildForwarderConfig } from '../../../../src/netenv/mihomo/rules.mjs'
 import { forwarder, CC_GROUP, KIMI_GROUP } from '../../../netenv/fixtures/rules/inputs.mjs'
-import { groupsOf, hostSetOf, planRoutes, priorOf } from '../../../../src/collector/arch/win32/route-plan.mjs'
+import { groupsOf, hostSetOf, planRoutes, priorOf, resolveLogin } from '../../../../src/collector/arch/win32/route-plan.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { applyJsonKey, applyTextEntry, newManifest } from '../../../../src/collector/core/trust/journal.mjs'
 import { proxyEntries } from '../../../../src/collector/arch/win32/forms.mjs'
@@ -845,6 +845,43 @@ test('priorOf wants a group and a ctx; the secret in a user\'s proxy is in its a
   b.put('.claude/settings.json', `{"env": {"HTTPS_PROXY": "${USER_PROXY}"`)
   const r = priorOf({ ...of('claude-code.settings'), ctx: b.ctx() })
   assert.equal(JSON.stringify(r).includes('s3cret'), false, 'a file that does not parse is not quoted')
+})
+
+// ---------- resolveLogin: the login an upstream answer's `auth_ref` names (4.8 §2.2; W72 lookup half, the login of a dialled connection) ----------
+
+test('resolveLogin: `prior:<group>` is the login in the user\'s proxy of that group — the manifest\'s prior_value once asight wrote the entry, the file before — and `hkcu-env:<NAME>` the login in that value of the login environment', () => {
+  const b = box()
+  const ingress = { port: 17991, listenerToken: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' }
+  const group = gdata('claude-code.settings').group
+  const file = b.put('.claude/settings.json', `{"env": {"HTTPS_PROXY": "http://al%40ice:s3%3Acret@corp.example:3128"}}\n`)
+  const ctx = b.ctx()
+  assert.deepEqual(resolveLogin('prior:claude-code.settings', { groups: GROUPS, ctx }), { username: 'al@ice', password: 's3:cret' }, 'the file before asight: the login is decoded')
+  const m = newManifest()
+  const e = proxyEntries(group, ctx, ingress)[0]
+  applyJsonKey({ dir: b.dir, manifest: m, harness: 'claude-code', file: e.path, keys: e.keys, value: e.value })
+  assert.ok(fs.readFileSync(file, 'utf8').includes('127.0.0.1:17991'), 'the file holds asight\'s address now, and has no login')
+  assert.deepEqual(resolveLogin('prior:claude-code.settings', { groups: GROUPS, ctx, manifest: m }), { username: 'al@ice', password: 's3:cret' }, 'after asight wrote the entry the manifest is what answers: the same login, not the one of asight\'s own address')
+  const env = { ok: true, values: { HTTPS_PROXY: 'socks5://bob:pw@proxy.example:1080', ALL_PROXY: 'http://plain.example:3128' } }
+  assert.deepEqual(resolveLogin('hkcu-env:HTTPS_PROXY', { groups: GROUPS, ctx, hkcuEnv: env }), { username: 'bob', password: 'pw' })
+  assert.equal(resolveLogin('hkcu-env:ALL_PROXY', { groups: GROUPS, ctx, hkcuEnv: env }), null, 'a text with no login has none')
+})
+
+test('resolveLogin: every way of not finding it is null — a reference of another shape, a group that is not there, a variable that is not set, an environment that was not read, a file that is not there — and never a throw or a guess', () => {
+  const b = box()
+  const ctx = b.ctx()
+  for (const ref of [undefined, null, '', 7, 'prior', 'prior:', 'hkcu-env:', 'system:x', 'env:HTTPS_PROXY', 'prior-claude-code.settings']) assert.equal(resolveLogin(ref, { groups: GROUPS, ctx, hkcuEnv: { ok: true, values: { HTTPS_PROXY: 'http://u:p@h:1' } } }), null, `${String(ref)}`)
+  assert.equal(resolveLogin('prior:no-such-group', { groups: GROUPS, ctx }), null, 'a group the plan does not know')
+  assert.equal(resolveLogin('prior:claude-code.settings', { groups: GROUPS, ctx }), null, 'no file: the user had no proxy')
+  assert.equal(resolveLogin('prior:claude-code.settings', { groups: GROUPS }), null, 'no ctx to read with is not a throw')
+  assert.equal(resolveLogin('prior:claude-code.settings'), null, 'no groups')
+  b.put('.claude/settings.json', '{"env": {"HTTPS_PROXY": "http://u:p@h:1"')
+  assert.equal(resolveLogin('prior:claude-code.settings', { groups: GROUPS, ctx }), null, 'a file that does not parse is not read for a login')
+  assert.equal(resolveLogin('hkcu-env:HTTPS_PROXY', { groups: GROUPS, ctx, hkcuEnv: { ok: true, values: {} } }), null, 'a variable that is not set')
+  assert.equal(resolveLogin('hkcu-env:HTTPS_PROXY', { groups: GROUPS, ctx, hkcuEnv: { ok: false, reason: 'registry-unreadable', values: { HTTPS_PROXY: 'http://u:p@h:1' } } }), null, 'an environment that was not read says nothing, even if something were left in it')
+  assert.equal(resolveLogin('hkcu-env:HTTPS_PROXY', { groups: GROUPS, ctx }), null, 'none given')
+  assert.equal(resolveLogin('hkcu-env:HTTPS_PROXY', { groups: GROUPS, ctx, hkcuEnv: { ok: true, values: { HTTPS_PROXY: 3128 } } }), null, 'a value that is no text')
+  assert.equal(resolveLogin('hkcu-env:HTTPS_PROXY', { groups: GROUPS, ctx, hkcuEnv: { ok: true, values: { HTTPS_PROXY: 'ftp://u:p@h:21' } } }), null, 'a scheme asight cannot dial has no login to hand out')
+  assert.equal(resolveLogin('prior:codex.env', { groups: GROUPS, ctx, hkcuEnv: { ok: true, values: { HTTPS_PROXY: 'http://u:p@h:1' } } }), null, 'a group\'s reference does not read the login environment')
 })
 
 // ---------- planRoutes: the entries and upstreams of all groups at once (W5, the plan half) ----------

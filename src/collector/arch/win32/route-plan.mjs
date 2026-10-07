@@ -7,7 +7,7 @@
 import { parseDotenv, parseJsonc } from '../../core/config-read.mjs'
 import { bypassRuleOf } from '../../../netenv/mihomo/rules.mjs'
 import { entryGate } from './forms.mjs'
-import { upstreamFor } from './upstream.mjs'
+import { proxyAuthOf, upstreamFor } from './upstream.mjs'
 
 /** The Windows groups of the harness descriptors (`loadHarnesses()`), flat: `[{ g, harness, group, forms, proxy }]` — `group` is the harness file's group (entry, auth, optIn, followsSystemProxy), `forms` the forms in it,
  *  `proxy` the harness's proxy behaviour (the variables it reads, its branches). A form with no group (one that was not measured) is in none. A descriptor with no Windows data gives none. */
@@ -95,6 +95,24 @@ export function priorOf({ harness, group, ctx, manifest = null } = {}) {
     if (got.value) return { value: got.value, noProxy: got.noProxy, source: rec ? 'manifest' : 'file', ...(unknown.length ? { unknown } : {}) }
   }
   return { ...none, source, ...(unknown.length ? { unknown } : {}) }
+}
+
+/**
+ * resolveLogin(ref, { groups, ctx, manifest, hkcuEnv }) → `{ username, password }` | null: the login an upstream answer's `auth_ref` names (4.8 §2.2). `prior:<group>` is the user's proxy text of that group
+ * (`priorOf`, the manifest's prior_value once asight has written the entry, so the first `on` and every later one give one answer); `hkcu-env:<NAME>` is that value of the login environment as it was
+ * read (`readHkcuEnv`). The text goes through `proxyAuthOf`, the one place a proxy's credentials are read from. null is every way of not finding it (a reference of another shape, a group that is not
+ * there, a file that cannot be read, a text with no login): the caller decides what that means, and it is never a guess. The result is a secret: for the kernel config and for nothing that prints or records.
+ */
+export function resolveLogin(ref, { groups = [], ctx, manifest = null, hkcuEnv = null } = {}) {
+  const m = /^(prior|hkcu-env):(.+)$/.exec(typeof ref === 'string' ? ref : '')
+  if (!m) return null
+  let text = null
+  if (m[1] === 'prior') {
+    const x = groups.find((y) => y.g === m[2])
+    if (!x) return null
+    try { text = priorOf({ harness: x.harness, group: x.group, ctx, manifest }).value } catch { return null }
+  } else if (hkcuEnv && hkcuEnv.ok && hkcuEnv.values) text = hkcuEnv.values[m[2]]
+  return typeof text === 'string' ? proxyAuthOf(text) : null
 }
 
 // ---- the plan (4.8 §2.1 · §2.2 · §2.3) -------------------------------------------------------------------------------------------------------------------
