@@ -10,7 +10,7 @@ import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { HELPER_PROTO, HELPER_VERBS, HELPER_PS1, REG_READ_ALLOW, startHelper } from '../../../../src/collector/arch/win32/helper.mjs'
-import { createProcWatcher, elevationOf, splitCommandLine } from '../../../../src/collector/arch/win32/procinfo.mjs'
+import { PS_TIMEOUT_MS, createProcWatcher, elevationOf, splitCommandLine } from '../../../../src/collector/arch/win32/procinfo.mjs'
 import { ownerOf } from '../../../../src/collector/arch/win32/socktable.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
@@ -106,6 +106,20 @@ test('W1 a slow verb times out without taking the helper down; its late answer i
   await new Promise((r) => setTimeout(r, 450)) // the late reply arrives for an id nobody waits for
   assert.equal((await h.call('version')).proto, 1)
   assert.equal(h.failures.length, 0)
+})
+
+test('W1 a timed-out call is abandoned until its late answer arrives; a closed helper has none', async (t) => {
+  const h = started(t, { verbs: { ps: { delayMs: 500, data: { procs: [] } } } }) // late enough that a stalled test runner still sees it outstanding
+  assert.equal(h.abandoned('ps'), 0)
+  await rejects(h.call('ps', {}, { timeoutMs: 20 }), 'helper-timeout')
+  assert.equal(h.abandoned('ps'), 1, 'the helper is still working on it: it is single-threaded, so anything sent now waits behind it')
+  assert.equal(h.abandoned('route'), 0, 'counted by verb')
+  await until(() => h.abandoned('ps') === 0) // the late answer came, was dropped, and the helper is free again
+  const hung = started(t, { verbs: { ps: { hang: true } } })
+  await rejects(hung.call('ps', {}, { timeoutMs: 20 }), 'helper-timeout')
+  assert.equal(hung.abandoned('ps'), 1, 'an answer that never comes stays abandoned')
+  await hung.close()
+  assert.equal(hung.abandoned('ps'), 0, 'a helper that is gone has nothing left to wait for')
 })
 
 test('W1 stdout noise that is not a reply is skipped', async (t) => {
@@ -358,6 +372,18 @@ test('W1 helper.ps1 opens the registry and the certificate stores read-only', ()
   for (const a of stores) assert.match(a, /OpenFlags\]::ReadOnly/, `X509Store.Open(${a}) is not read-only`)
 })
 
+test('W1 every Get-CimInstance in helper.ps1 has an operation timeout shorter than the client\'s, so a stuck WMI cannot hold the single-threaded helper for ever', () => {
+  const cim = (text) => text.split('\n').filter((l) => /^[^#]*\bGet-CimInstance\b/.test(l))
+  const calls = cim(PS)
+  assert.ok(calls.length >= 2, 'the filtered query and the full enumeration')
+  for (const c of calls) {
+    const m = /-OperationTimeoutSec\s+(\d+)/.exec(c)
+    assert.ok(m, `no -OperationTimeoutSec: ${c.trim()}`)
+    assert.ok(Number(m[1]) * 1000 < PS_TIMEOUT_MS, `CIM must give up (${m[1]} s) before the client does (${PS_TIMEOUT_MS} ms): its answer is then an error, not silence`)
+  }
+  assert.equal(cim('$rows = @(Get-CimInstance -ClassName Win32_Process -Property ProcessId)').filter((l) => !/-OperationTimeoutSec/.test(l)).length, 1, 'the check can fail')
+})
+
 test('W1 helper.ps1 answers exactly the verbs the JS side allows, and reads exactly the registry names the JS side allows', () => {
   const verbs = [...PS.matchAll(/^\s*'([a-z-]+)'\s*\{/gm)].map((m) => m[1])
   assert.deepEqual([...verbs].sort(), [...HELPER_VERBS].sort())
@@ -419,8 +445,8 @@ function psHelper(snapshots, { delayMs = 0 } = {}) {
   let i = 0
   return {
     calls: [],
-    async call(verb, args) {
-      this.calls.push({ verb, args })
+    async call(verb, args, opts) {
+      this.calls.push({ verb, args, opts })
       if (verb !== 'ps') throw new Error(`unexpected verb ${verb}`)
       const procs = snapshots[Math.min(i++, snapshots.length - 1)]
       if (delayMs) await new Promise((r) => setTimeout(r, delayMs))
@@ -627,6 +653,36 @@ test('W2 start() and the interval never leave an unhandled rejection, whatever a
     await new Promise((r) => setTimeout(r, 30)) // an unhandled rejection is reported after the microtasks drain
     assert.deepEqual(unhandled, [])
   } finally { process.off('unhandledRejection', on) }
+})
+
+test('W2 ps gets a generous timeout for the poll and the scan (10 s, psTimeoutMs to change it): the first ps after start reads every command line through CIM', async () => {
+  assert.equal(PS_TIMEOUT_MS, 10000)
+  const h = psHelper([[row(10)]])
+  const w = createProcWatcher({ helper: h })
+  await w.poll(); await w.scan()
+  assert.deepEqual(h.calls.map((c) => c.opts), [{ timeoutMs: 10000 }, { timeoutMs: 10000 }], 'not the 2 s default of a verb that reads a table')
+  const h2 = psHelper([[row(10)]])
+  const w2 = createProcWatcher({ helper: h2, psTimeoutMs: 1234 })
+  await w2.poll(); await w2.scan()
+  assert.deepEqual(h2.calls.map((c) => c.opts), [{ timeoutMs: 1234 }, { timeoutMs: 1234 }])
+})
+
+test('W2 a new ps is not sent while a timed-out one is still being worked on: no backlog behind a slow helper', async (t) => {
+  const log = path.join(tmpDir('asight-helper-'), 'in.log')
+  const h = started(t, { log, verbs: { ps: { delayMs: 500, data: { sessionId: 2, procs: [row(10)] } } } })
+  await h.ready
+  const psSent = () => lines(log).filter((l) => l.verb === 'ps').length
+  const w = createProcWatcher({ helper: h, psTimeoutMs: 30 })
+  const ev = collect(w)
+  await w.poll()
+  assert.deepEqual(ev.map(([n, x]) => [n, x.cause]), [['poll-error', 'helper-timeout']], 'told once')
+  assert.equal(await w.poll(), false, 'the helper is still on the first one: nothing is queued behind it')
+  assert.equal(psSent(), 1)
+  assert.equal(w.stats().deferred, 1)
+  await until(() => h.abandoned('ps') === 0)
+  assert.equal(await w.poll(), true, 'free again: the next poll goes out')
+  assert.equal(psSent(), 2)
+  assert.equal(ev.length, 1, 'the run of failures is still the one that was told')
 })
 
 test('W2 start() polls at once and on the interval; a poll still in flight is not started twice; stop() clears the timer', async () => {

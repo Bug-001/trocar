@@ -12,6 +12,10 @@
 // Only this session's processes are asked for (the helper's default): a process of another session is not this user's agent.
 import { EventEmitter } from 'node:events'
 
+/** How long the watcher waits for one `ps` answer, a poll or a scan. The first ps after the helper starts has an empty command-line cache: more than 40 processes
+ *  take a full Win32_Process enumeration through CIM (plus the module load), which on a cold or busy machine is more than the 2 s a table read gets. */
+export const PS_TIMEOUT_MS = 10000
+
 const ELEVATED = new Set(['high', 'system', 'protected'])
 
 /** Is the process elevated? { elevated: true | false | null, inferred }. Integrity High or above is elevated. A token that cannot be opened while the
@@ -83,7 +87,7 @@ function factsOf(row, source) {
 
 const identity = (row) => `${row.startedAt ?? '?'}|${row.exe ?? ''}`
 
-/** createProcWatcher({ helper, intervalMs, now, all, timers }) → EventEmitter with start() · stop() · poll() · scan() · unreadable() · stats().
+/** createProcWatcher({ helper, intervalMs, psTimeoutMs, now, all, timers }) → EventEmitter with start() · stop() · poll() · scan() · unreadable() · stats().
  *  Events: 'exec' ProcFacts (source 'exec') · 'exit' {pid, startedAt} · 'facts-error' {os, pid, comm, argv, code, reason} (a process whose image path
  *  cannot be read: never judged, told once) · 'poll-error' {code:'helper-error', cause, reason, …} (something went wrong in a poll, told once per run of
  *  the same failure, never thrown: `cause` = the client's error code when the helper failed, 'listener-threw' {event, pid} when a listener of another
@@ -93,8 +97,9 @@ const identity = (row) => `${row.startedAt ?? '?'}|${row.exe ?? ''}`
  *  changes after it. scan() takes the baseline itself when none was taken (so scan-then-start and start-then-scan are both safe: a process created
  *  between the two is an exec, never in neither), then lists the live processes as facts and moves nothing the diff knows. start() returns the baseline's
  *  promise. scan() throws what the helper throws — a daemon that cannot list processes must say so. `all` asks for every session.
- *  poll() never rejects and never throws into a timer: every failure of a poll is a 'poll-error'. */
-export function createProcWatcher({ helper, intervalMs = 2000, now = Date.now, all = false, timers = { setInterval, clearInterval } } = {}) {
+ *  poll() never rejects and never throws into a timer: every failure of a poll is a 'poll-error'. Every ps waits up to `psTimeoutMs` (10 s); a poll that
+ *  finds a timed-out ps still being worked on (`helper.abandoned('ps') > 0`) is skipped and counted in stats().deferred, not queued behind it. */
+export function createProcWatcher({ helper, intervalMs = 2000, psTimeoutMs = PS_TIMEOUT_MS, now = Date.now, all = false, timers = { setInterval, clearInterval } } = {}) {
   const ev = new EventEmitter()
   const known = new Map() // pid → { identity, startedAt } of the processes already reported (or in the baseline)
   const unreadable = new Map()
@@ -104,7 +109,7 @@ export function createProcWatcher({ helper, intervalMs = 2000, now = Date.now, a
   let failing = false
   let malformed = false
   let timer = null
-  const counters = { polls: 0, lastPollAt: null, listenerErrors: 0 }
+  const counters = { polls: 0, lastPollAt: null, listenerErrors: 0, deferred: 0 }
 
   /** Announces one event so that a listener that throws cannot take the rest of the poll (or the timer) with it: the throw becomes a poll-error,
    *  and a poll-error listener that throws has nobody left to tell. */
@@ -117,7 +122,7 @@ export function createProcWatcher({ helper, intervalMs = 2000, now = Date.now, a
   }
 
   async function snapshot() {
-    const r = await helper.call('ps', all ? { all: true } : {})
+    const r = await helper.call('ps', all ? { all: true } : {}, { timeoutMs: psTimeoutMs })
     if (!r || !Array.isArray(r.procs)) throw new Error('the helper\'s ps answer has no process list')
     const rows = r.procs.filter((x) => x && typeof x === 'object' && Number.isInteger(x.pid))
     if (rows.length !== r.procs.length) {
@@ -173,6 +178,8 @@ export function createProcWatcher({ helper, intervalMs = 2000, now = Date.now, a
   /** One difference step. Resolves true when it ran, false when the previous one was still in flight. Never rejects. */
   function poll() {
     if (inflight) return Promise.resolve(false)
+    // a ps that timed out is still being worked on (the helper is single-threaded): asking again only queues another behind it
+    if (typeof helper.abandoned === 'function' && helper.abandoned('ps') > 0) { counters.deferred++; return Promise.resolve(false) }
     inflight = (async () => {
       try { await step() } catch (e) {
         tell('poll-error', { code: 'helper-error', cause: 'poll-threw', reason: `a poll threw: ${String((e && e.message) || e).slice(0, 200)}` })

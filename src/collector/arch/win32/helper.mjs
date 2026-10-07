@@ -31,6 +31,7 @@ export const REG_READ_ALLOW = Object.freeze([
   { hive: 'HKLM', key: 'SYSTEM\\CurrentControlSet\\Control\\CI\\Policy', names: Object.freeze(['VerifiedAndReputablePolicyState']) },
 ].map(Object.freeze))
 
+const ABANDONED_CAP = 256
 const STDERR_TAIL = 20 // the last lines of its stderr that helper-down carries (4.6 §记录: 20, as the Linux helper)
 const normKey = (k) => String(k).replaceAll('/', '\\').replace(/\\+$/, '').toLowerCase()
 
@@ -45,7 +46,7 @@ export function regReadAllowed(args) {
 
 const err = (message, code, extra = {}) => Object.assign(new Error(message), { code }, extra)
 
-/** startHelper({ spawn, exe, args, env, onExit, onFailure, readyTimeoutMs }) → { call(verb, args, { timeoutMs = 2000 }), close(), pid, ready }
+/** startHelper({ spawn, exe, args, env, onExit, onFailure, readyTimeoutMs }) → { call(verb, args, { timeoutMs = 2000 }), abandoned(verb), close(), pid, ready }
  *  `ready` resolves with the helper's ready line, or rejects when it never starts. `onExit({ reason, exit?, stderr?, ready, closed })` is
  *  told once when the helper is gone, however it went. */
 export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', HELPER_PS1], env = process.env, onExit = () => {}, onFailure = () => {}, readyTimeoutMs = 15000 } = {}) {
@@ -59,6 +60,7 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
   let closed = null
   const stderrTail = []
   const pending = new Map() // id → { resolve, reject, timer, verb }
+  const abandoned = new Map() // id → verb of the calls that timed out and whose late answer has not come yet (capped: a helper that hangs for good must not grow it)
   let resolveReady
   let rejectReady
   const ready = new Promise((res, rej) => { resolveReady = res; rejectReady = rej })
@@ -73,6 +75,7 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
     const tail = stderrTail.length ? { stderr: [...stderrTail] } : {}
     for (const p of pending.values()) { clearTimeout(p.timer); p.reject(err(`helper ${wasReady ? 'down' : 'did not start'}: ${reason}`, down.code)) }
     pending.clear()
+    abandoned.clear()
     rejectReady(err(`helper did not start: ${reason}`, 'helper-start-failed'))
     if (child && child.exitCode == null && child.signalCode == null) { try { child.kill() } catch { /* already gone */ } } // a helper we gave up on does not linger
     if (!closing) onFailure(wasReady ? { event: 'helper-down', reason, ...extra, ...tail } : { event: 'failure', where: 'helper', code: 'helper-start-failed', reason, ...extra, ...tail })
@@ -96,7 +99,7 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
       return
     }
     const p = pending.get(msg.id)
-    if (!p) return // a late answer to a call that already timed out
+    if (!p) { abandoned.delete(msg.id); return } // a late answer to a call that already timed out: the helper is free of it now
     pending.delete(msg.id)
     clearTimeout(p.timer)
     if (msg.ok === true) p.resolve(msg.data)
@@ -135,17 +138,31 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
     if (down) throw err(`helper is down: ${down.reason}`, down.code)
     return new Promise((resolve, reject) => {
       const id = ++seq
-      const timer = setTimeout(() => { pending.delete(id); reject(err(`helper ${verb} timed out after ${timeoutMs} ms`, 'helper-timeout', { verb })) }, timeoutMs)
+      const timer = setTimeout(() => {
+        pending.delete(id)
+        abandoned.set(id, verb)
+        if (abandoned.size > ABANDONED_CAP) abandoned.delete(abandoned.keys().next().value)
+        reject(err(`helper ${verb} timed out after ${timeoutMs} ms`, 'helper-timeout', { verb }))
+      }, timeoutMs)
       timer.unref?.()
       pending.set(id, { resolve, reject, timer, verb })
       child.stdin.write(JSON.stringify({ id, verb, args: callArgs }) + '\n')
     })
   }
 
+  /** How many calls of this verb timed out and are still being worked on: the helper is single-threaded, so a request sent now waits behind them (and
+   *  their late answers are dropped). 0 when the helper is gone. A caller that polls (procinfo's `ps`) does not send another while this is above 0. */
+  function abandonedCount(verb) {
+    let n = 0
+    for (const v of abandoned.values()) if (v === verb) n++
+    return n
+  }
+
   /** Stops the helper: EOF on its stdin ends its loop; a helper still there after a second is killed. Not a failure; idempotent. */
   function close() {
     if (closed) return closed
     closing = true
+    abandoned.clear()
     closed = new Promise((resolve) => {
       for (const p of pending.values()) { clearTimeout(p.timer); p.reject(err('the helper was closed', 'helper-closed')) }
       pending.clear()
@@ -159,5 +176,5 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
     return closed
   }
 
-  return { call, close, ready, get pid() { return child ? child.pid : undefined } }
+  return { call, close, ready, abandoned: abandonedCount, get pid() { return child ? child.pid : undefined } }
 }

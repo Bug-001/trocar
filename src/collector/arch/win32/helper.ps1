@@ -231,6 +231,8 @@ function Need-Native { if (-not $script:native) { throw ('native-unavailable: ' 
 
 # command lines come from CIM Win32_Process (readable at Medium for the user's own processes). Asked once per process (key = pid:start), at most three
 # times when the answer is empty (a process this young may not have one yet); after a CIM failure not again for 30 s.
+# Every CIM call gives up after 8 s (-OperationTimeoutSec; the client's ps timeout is 10 s): a stuck WMI would otherwise hold this single-threaded loop, and
+# tcp-table with it, for as long as it likes. A timeout is a CIM failure like any other: the 30 s back-off.
 $script:cmdCache = @{}
 $script:cmdTries = @{}
 $script:cimRetryAt = [DateTime]::MinValue
@@ -260,9 +262,9 @@ function Verb-Ps($a) {
     try {
       if ($need.Count -le 40) {
         $f = (($need | ForEach-Object { 'ProcessId=' + $_ }) -join ' or ')
-        $rows = @(Get-CimInstance -ClassName Win32_Process -Filter $f -Property ProcessId, CommandLine)
+        $rows = @(Get-CimInstance -ClassName Win32_Process -Filter $f -Property ProcessId, CommandLine -OperationTimeoutSec 8)
       } else {
-        $rows = @(Get-CimInstance -ClassName Win32_Process -Property ProcessId, CommandLine)
+        $rows = @(Get-CimInstance -ClassName Win32_Process -Property ProcessId, CommandLine -OperationTimeoutSec 8)
       }
       $got = @{}
       foreach ($r in $rows) { $got[[int]$r.ProcessId] = $r.CommandLine }
