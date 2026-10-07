@@ -6,7 +6,8 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { appendEvent } from '../../src/collector/core/events.mjs'
 import { fileURLToPath } from 'node:url'
-import { runCollector, runSetupHelper, formatStatus } from '../../src/collector/cli.mjs'
+import { runCollector, runSetupHelper, formatStatus, collectorHint } from '../../src/collector/cli.mjs'
+import { runDaemonCli } from '../../src/cli/daemon.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { osStubs } from '../helpers/os-stubs.mjs' // on a Mac the real bin's status asks launchd and the keychain (read-only): stubs answer, 0.1 §3
 
@@ -45,6 +46,8 @@ test('cli: `collector status` is the one `asight status` (src/cli/status.mjs: it
   t = io(); assert.equal(await runCollector(['status'], { env: {}, home, request, ...status, ...t }), 0); assert.deepEqual(t.e, [])
   fs.rmSync(home, { recursive: true, force: true })
   t = io(); assert.equal(await runCollector(['bogus'], { env, request, ...t }), 2)
+  assert.match(t.e.join('\n'), /asight collector: .*'bogus'.*asight on \/ off \/ status \/ uninstall \/ daemon/, 'the old verbs are not a usage text any more: they are named as the aliases they are')
+  assert.equal(t.e.join('\n'), collectorHint('bogus')); assert.match(collectorHint(undefined), /asight collector: 缺子命令/)
 })
 
 // D-2: whenever no daemon answers — none running, no runtime dir, or one that does not reply — status still reads
@@ -88,21 +91,43 @@ test('cli: start stops on SIGHUP like SIGTERM, passes the signal to stop, exits 
     const daemon = { startDaemon: async (o) => ({ port: 1, socketPath: '/s', foreground: o.foreground, stop: async (x) => { stops.push(x); return { failed } } }) }
     const proc = new EventEmitter()
     let t = io()
-    const running = runCollector(['start'], { home, env: {}, daemon, proc, exit: () => {}, ...t }) // the real signal wait
+    const running = runCollector(['start'], { home, env: {}, daemon, proc, exit: () => {}, platform: 'linux', getuid: () => 1000, ...t }) // the real signal wait
     await new Promise((r) => setImmediate(r))
     process.emit('SIGHUP')
     assert.equal(await running, 0)
     assert.deepEqual(stops, [{ signal: 'SIGHUP' }])
     failed = ['helper']
-    t = io(); assert.equal(await runCollector(['start'], { home, env: {}, daemon, proc, exit: () => {}, waitForStop: async () => 'SIGTERM', ...t }), 1, 'a stop step failed: non-zero')
+    t = io(); assert.equal(await runCollector(['start'], { home, env: {}, daemon, proc, exit: () => {}, platform: 'linux', getuid: () => 1000, waitForStop: async () => 'SIGTERM', ...t }), 1, 'a stop step failed: non-zero')
     assert.match(t.e.join('\n'), /helper failed while stopping/)
     const exits = []
-    t = io(); await runCollector(['start'], { home, env: {}, daemon, proc: (proc.removeAllListeners(), proc), exit: (c) => exits.push(c), waitForStop: async () => 'SIGTERM', ...t })
+    t = io(); await runCollector(['start'], { home, env: {}, daemon, proc: (proc.removeAllListeners(), proc), exit: (c) => exits.push(c), platform: 'linux', getuid: () => 1000, waitForStop: async () => 'SIGTERM', ...t })
     proc.emit('uncaughtException', new TypeError('boom in a timer'))
     assert.deepEqual(exits, [70])
     const f = JSON.parse(fs.readFileSync(path.join(home, '.asight', 'collector', 'flows', fs.readdirSync(path.join(home, '.asight', 'collector', 'flows'))[0]), 'utf8').trim())
     assert.deepEqual([f.where, f.code, /TypeError: boom in a timer/.test(f.reason)], ['daemon', 'crash', true])
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
+})
+
+// `collector start` is `asight daemon` (1.6 §2 hidden alias; the autostart units written before the rename run it): refused as root and where the new collector does not exist, before the daemon is asked for anything
+test('cli: `collector start` is `asight daemon` (src/cli/daemon.mjs): it refuses root, a platform without the new collector (本平台未实现) and any argument, and starts nothing then (R4, R7)', async () => {
+  const home = tmpDir('asight-cli-daemon-')
+  const started = []
+  const daemon = { startDaemon: async () => { started.push(1); return { port: 1, socketPath: '/s', stop: async () => ({ failed: [] }) } } }
+  const run = (verb, o = {}) => { const t = io(); return runCollector(verb, { home, env: {}, daemon, proc: { on() {} }, platform: 'linux', getuid: () => 1000, waitForStop: async () => 'SIGTERM', ...o, ...t }).then((exit) => ({ exit, t })) }
+  let r = await run(['start'], { getuid: () => 0 })
+  assert.equal(r.exit, 1); assert.match(r.t.e.join('\n'), /用你自己的账号跑/)
+  for (const platform of ['darwin', 'win32']) {
+    r = await run(['start'], { platform })
+    assert.equal(r.exit, 1, platform); assert.match(r.t.e.join('\n'), new RegExp(`本平台未实现\\(${platform}\\)`))
+  }
+  r = await run(['start', '--now'])
+  assert.equal(r.exit, 2); assert.match(r.t.e.join('\n'), /takes no arguments \(--now\)\nusage: asight daemon/)
+  assert.deepEqual(started, [], 'none of those got as far as the daemon')
+  r = await run(['start'])
+  assert.equal(r.exit, 0); assert.deepEqual(started, [1]); assert.match(r.t.o.join('\n'), /^asight collector: engine 127\.0\.0\.1:1, control \/s$/, 'the readiness line the lab rig waits for')
+  const t = io(); const direct = await runDaemonCli([], { io: t, home, env: {}, platform: 'linux', deps: { daemon, proc: { on() {} }, getuid: () => 1000, waitForStop: async () => 'SIGTERM' } })
+  assert.equal(direct, 0, '`asight daemon` itself is the same run')
+  fs.rmSync(home, { recursive: true, force: true })
 })
 
 // 1.6 §1.4 5: after `off` with no names the daemon stops itself once nothing is relayed; `start` then returns 0 without any signal, so the unit exits
@@ -114,10 +139,10 @@ test('cli: start returns when the daemon has stopped itself (off), exit 0, witho
     const stops = []
     const daemon = { startDaemon: async () => ({ port: 1, socketPath: '/s', exited: Promise.resolve(result), stop: async (x) => { stops.push(x); return result } }) }
     let t = io()
-    assert.equal(await runCollector(['start'], { home, env: {}, daemon, proc: { on() {} }, waitForStop: () => new Promise(() => {}), ...t }), 0, 'no signal ever came')
+    assert.equal(await runCollector(['start'], { home, env: {}, daemon, proc: { on() {} }, platform: 'linux', getuid: () => 1000, waitForStop: () => new Promise(() => {}), ...t }), 0, 'no signal ever came')
     assert.deepEqual(stops, [{ signal: null }])
     result = { failed: ['helper'] }
-    t = io(); assert.equal(await runCollector(['start'], { home, env: {}, daemon, proc: { on() {} }, waitForStop: () => new Promise(() => {}), ...t }), 1, 'a step of its own stop failed')
+    t = io(); assert.equal(await runCollector(['start'], { home, env: {}, daemon, proc: { on() {} }, platform: 'linux', getuid: () => 1000, waitForStop: () => new Promise(() => {}), ...t }), 1, 'a step of its own stop failed')
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })
 

@@ -1,25 +1,18 @@
-// cli.mjs — `asight collector …` and `asight setup-helper` (RFC 4.6 §控制面, §安装清单与卸载, D36). `start` runs the
-// daemon in the foreground until SIGTERM/SIGINT; install / on / off / status / uninstall are the old names of `asight on | off | status | uninstall`
-// (src/cli/on.mjs, src/off/main.mjs, src/cli/status.mjs, src/cli/uninstall.mjs: the per-user half, no sudo); setup-helper is the machine-wide half (sudo, once). This file keeps the text of what the
-// daemon and the disk say (formatStatus, formatHealth, formatInstallNotes) that `status` and `doctor` print. Exit codes: 0 ok · 1 the kernel did not reach the asked state, or the step
-// failed (for `start`: refused, or a step of the stop failed) · 2 usage · 3 `status` could not judge (1.6 R4) · 70 the daemon crashed (an uncaught exception, recorded as `crash` first).
+// cli.mjs — `asight collector …` (the old names, hidden aliases of the commands of 1.6 §2) and `asight setup-helper` (RFC 4.6 §控制面, §安装清单与卸载, D36). `collector start` is `asight daemon`
+// (src/cli/daemon.mjs); install / on / off / status / uninstall are the old names of `asight on | off | status | uninstall` (src/cli/on.mjs, src/off/main.mjs, src/cli/status.mjs, src/cli/uninstall.mjs:
+// the per-user half, no sudo); setup-helper is the machine-wide half (sudo, once). This file keeps the text of what the daemon and the disk say (formatStatus, formatHealth, formatInstallNotes) that
+// `status` and `doctor` print, and `runCollector`, the entry the aliases had before src/cli/main.mjs resolved them (its seams — `daemon`, `install`, `onDeps`, `offDeps`, `statusDeps` — are what the tests
+// of the verbs drive). Exit codes: 0 ok · 1 the kernel did not reach the asked state, or the step failed · 2 usage · 3 `status` could not judge (1.6 R4) · 70 the daemon crashed (src/cli/daemon.mjs).
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { controlRequest } from './core/control.mjs'
-import { appendEvent } from './core/events.mjs'
-import { collectorHome } from '../paths.mjs'
+import { runDaemonCli } from '../cli/daemon.mjs'
+
+/** What `asight collector <verb>` says when `verb` is none of the old ones (1.6 §2: they are hidden aliases now, src/cli/commands.mjs HIDDEN_ALIASES). */
+export const collectorHint = (verb) => `asight collector: ${verb ? `没有这个子命令 '${verb}'` : '缺子命令'}。这一组命令已改名,直接用 asight on / off / status / uninstall / daemon`
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
-
-export const USAGE = [
-  'usage: asight collector on | install [harness…] [--dry-run] [--yes] [--no-autostart | --no-unit] [--json]   (= asight on: per user, no sudo; the first one installs: CA, trust entries, systemd --user unit)',
-  '       asight collector start               (run the daemon in the foreground; the unit runs exactly this)',
-  '       asight collector off [harness…] [--now] [--dry-run] [--yes] [--json]   (= asight off)',
-  '       asight collector status [harness…] [--json]   (= asight status)',
-  '       asight collector uninstall [--purge-data] [--dry-run] [--yes] [--json]   (= asight uninstall)',
-  '       sudo asight setup-helper [--binary <path>] [--remove]',
-].join('\n')
 
 export function formatStatus(s) {
   const lines = [`collector: desired ${s.desired}, kernel ${s.actual}${s.recording ? ', recording' : ''}${s.degraded ? ` · degraded: ${s.degraded.reason}` : ''}`]
@@ -103,24 +96,6 @@ export function formatInstallNotes(h) {
 // collector's callers have always found it.
 export { formatPlan } from '../cli/receipt.mjs'
 
-// SIGHUP (the terminal closed, SSH dropped, logout) and SIGQUIT stop it cleanly like SIGTERM / SIGINT — Node's default
-// for SIGHUP is to exit at once, leaving the lock behind and the next start recording a crash that never was (D-27).
-export const STOP_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT']
-const waitForSignal = () => new Promise((resolve) => {
-  const on = (sig) => { for (const s of STOP_SIGNALS) process.removeListener(s, handlers[s]); resolve(sig) }
-  const handlers = Object.fromEntries(STOP_SIGNALS.map((s) => [s, () => on(s)]))
-  for (const s of STOP_SIGNALS) process.once(s, handlers[s])
-})
-// An uncaught exception or rejection in the daemon: one `crash` record with the first line of the stack, then a
-// non-zero exit — the next start's "no clean stop" then has a reason on disk (D-5).
-function onCrash(dir, err, exit) {
-  return (e) => {
-    const first = String((e && e.stack) || e).split('\n').slice(0, 2).join(' | ')
-    try { appendEvent(dir, { event: 'failure', where: 'daemon', code: 'crash', reason: first }) } catch (w) { err(`[events] ${String((w && w.message) || w)}`) }
-    err(`asight collector: crashed: ${first}`)
-    exit(70)
-  }
-}
 const loadDaemon = () => import('./daemon.mjs')
 
 export async function runSetupHelper(argv, { arch = null, out = (s) => console.log(s), err = (s) => console.error(s), packageRoot = PACKAGE_ROOT } = {}) {
@@ -138,22 +113,11 @@ export async function runSetupHelper(argv, { arch = null, out = (s) => console.l
   } catch (e) { err(e.message); return 1 }
 }
 
-export async function runCollector(argv, { env = process.env, home = os.homedir(), out = (s) => console.log(s), err = (s) => console.error(s), request = controlRequest, daemon = null, install = null, waitForStop = waitForSignal, script = process.argv[1], proc = process, exit = (c) => process.exit(c), platform = process.platform, onDeps = {}, offDeps = {}, statusDeps = {} } = {}) {
+export async function runCollector(argv, { env = process.env, home = os.homedir(), out = (s) => console.log(s), err = (s) => console.error(s), request = controlRequest, daemon = null, install = null, waitForStop = null, script = process.argv[1], proc = process, exit = (c) => process.exit(c), platform = process.platform, getuid = null, onDeps = {}, offDeps = {}, statusDeps = {} } = {}) {
   const [verb, ...rest] = argv
   const D = () => daemon || loadDaemon()
-  if (verb === 'start') {
-    const dir = collectorHome(path.join(home, '.asight'))
-    const crash = onCrash(dir, err, exit)
-    proc.on('uncaughtException', crash); proc.on('unhandledRejection', crash)
-    const foreground = !env.INVOCATION_ID && !!(proc.stdin && proc.stdin.isTTY) // not under systemd, at a terminal: closing it stops the daemon
-    let d
-    try { d = await (await D()).startDaemon({ dir, env, foreground, log: (where, e) => err(`[${where}] ${e && e.message ? e.message : e}`) }) } catch (e) { err(`asight collector start: ${e.message}`); return 1 }
-    out(`asight collector: engine 127.0.0.1:${d.port}, control ${d.socketPath}`)
-    // a signal, or the daemon stopping itself (after `off` with no names, once nothing is relayed: 1.6 §1.4 5; exit 0 so systemd does not restart it)
-    const signal = await Promise.race([waitForStop(), d.exited ? d.exited.then(() => null) : new Promise(() => {})])
-    const r = await d.stop({ signal: typeof signal === 'string' ? signal : null }) // stops once: when the daemon has stopped itself this is its result
-    if (r && r.failed && r.failed.length) { err(`asight collector: stopped, but ${r.failed.join(', ')} failed while stopping (recorded in flows/)`); return 1 }
-    return 0
+  if (verb === 'start') { // the old name of `asight daemon` (§2 hidden alias): the autostart units written before the rename run it
+    return runDaemonCli(rest, { io: { out, err }, env, home, platform, deps: { daemon: daemon || undefined, proc, exit, ...(getuid ? { getuid } : {}), ...(waitForStop ? { waitForStop } : {}) } })
   }
   if (verb === 'install' || verb === 'on') { // the first `on` is the install (1.6 §1.6); `collector install` is its old name (§2 hidden alias)
     const { runOnCli } = await import('../cli/on.mjs')
@@ -164,7 +128,7 @@ export async function runCollector(argv, { env = process.env, home = os.homedir(
     const run = verb === 'off' ? (await import('../off/main.mjs')).runOffCli : (await import('../cli/uninstall.mjs')).runUninstallCli
     return run(rest, { io, env, home, platform, deps: { request, ...offDeps } })
   }
-  if (verb !== 'status') { err(USAGE); return 2 }
+  if (verb !== 'status') { err(collectorHint(verb)); return 2 }
   // the old name of `asight status` (§2 hidden alias): the daemon when it answers, else the disk — one judgement per harness (src/cli/status.mjs)
   const { runStatusCli } = await import('../cli/status.mjs')
   return runStatusCli(rest, { io: { out, err, stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }, env, home, platform, deps: { request, ...statusDeps } })
