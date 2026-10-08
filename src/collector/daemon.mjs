@@ -130,7 +130,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       throw e
     }
   }
-  const control = await startControlServer({ socketPath: sock, routes: { 'GET /status': gate('status'), 'POST /on': gate('on'), 'POST /off': gate('off') } }) // throws if another daemon answers
+  const control = await startControlServer({ socketPath: sock, token: macCtl ? macCtl.token : null, routes: { 'GET /status': gate('status'), 'POST /on': gate('on'), 'POST /off': gate('off') } }) // throws if another daemon answers
 
   let redirector = null
   try {
@@ -299,14 +299,21 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     let helperDown = null
     let sw = null
 
+    // darwin's bag (the wiring's), read before the engine is made: the proxy ingress's port and its token are the engine's own listen arguments on darwin (4.8 §5.1, carried by 4.9 §5)
+    const macBag = redirector && typeof redirector.darwin === 'object' && redirector.darwin ? redirector.darwin : null
+    const macIng = macBag && typeof macBag.ingress === 'function' ? macBag.ingress() : null
     engine = createEngine({
       redirector: {
-        async lookup(peer) { // the kernel knows {dst, pid, decrypt}; the tracker adds what the envelope's proc carries
-          if (typeof redirector.lookup !== 'function') return null // a redirector without lookup gets no transparent listener (core/redirector.mjs): darwin is proxy mode only (4.9 §5)
-          const m = await redirector.lookup(peer)
-          const x = m && m.pid != null ? tracker.metaFor(m.pid) : null
-          return m && x ? { ...m, ...x, agent: m.agent ?? x.agent } : m
-        },
+        // the transparent `lookup` exists only when the redirector has one (Linux): without it the engine gets no transparent listener (core/redirector.mjs) — darwin is proxy mode only (4.9 §5), its door is the ingress below
+        ...(typeof redirector.lookup === 'function' ? {
+          async lookup(peer) { // the kernel knows {dst, pid, decrypt}; the tracker adds what the envelope's proc carries
+            const m = await redirector.lookup(peer)
+            const x = m && m.pid != null ? tracker.metaFor(m.pid) : null
+            return m && x ? { ...m, ...x, agent: m.agent ?? x.agent } : m
+          },
+        } : {}),
+        // the proxy ingress's own answer (4.8 §5.1): the kernel's CONNECT arrives with of.<form> as the user; the redirector's lookupIngress resolves it (a flow's meta, a health probe, or null = refused)
+        ...(typeof redirector.lookupIngress === 'function' ? { lookupIngress: (q) => redirector.lookupIngress(q) } : {}),
       },
       // FlowExtras (plan 3c §2): the harness's WebSocket terminators and this process's own proxies. A throw: the
       // connection goes on without them, the engine records it, and flows/ gets it under its code (4.6 §记录)
@@ -316,24 +323,31 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
         }
       },
       issuer, store, upstreamCa,
+      ...(macIng ? { ingressToken: macIng.ingressToken } : {}), // the kernel's CONNECT authenticates to the ingress with of.<form>:this token (4.8 §3.2); listen({ingress}) refuses without it
       policy: (meta, host) => tracker.policy(meta, host),
       isRecording: (meta) => sw.isRecording(meta && meta.agent), // sampled per request, per harness (4.6 §开关): a request after off is never recorded
       retention: (meta, host, method, path) => keep.decide({ harness: harnessIdOfAgent(meta && meta.agent), host, method, endpoint: path }), // sampled with it (D40)
       onFailure: (rec) => failure.event(rec), // the engine's and the WebSocket recorder's failures: flows/, folded
       onError: (e) => log('engine', e), // stderr only: every one of them is also a record through onFailure
     })
+    // The engine's doors (4.8 §5.1): Linux listens transparently on the port the install recorded; darwin has no transparent listener at all — its one door is the proxy ingress on
+    // ingress.json's enginePort, the port the kernel's config names (a transparent listener bound on that port made every kernel CONNECT a lookup-miss — the CONNECT carries a destination,
+    // not an original one to look up — and every form read back 'fallback'; found live by the lab smoke, 2026-10-09). `port` is whichever door this platform has: darwin's engine port IS the ingress's.
     const want = enginePort ?? manifest.engine_port ?? 0
-    const { port } = await engine.listen({ port: want, hosts: ['127.0.0.1'] }).catch((e) => {
-      // G3: the port chosen at install is squatted. Nothing is steered (the helper is not spawned yet), so the agents'
-      // connections stay direct; say so, and how to get a new port.
-      if (e.code === 'EADDRINUSE') throw Object.assign(new Error(`the engine port 127.0.0.1:${want} recorded at install is held by another process; nothing is steered, agent connections go direct. Free the port, or run "asight uninstall" and "asight on" to pick a new one`), { code: 'EADDRINUSE' })
+    const first = await engine.listen({ port: want, hosts: ['127.0.0.1'], ...(macIng ? { ingress: { port: macIng.enginePort } } : {}) }).catch((e) => {
+      // G3: the port is squatted (Linux: chosen at install; darwin: ingress.json's, chosen at daemon start). Nothing is steered
+      // (the helper is not spawned yet), so the agents' connections stay direct; say so, and how to get a new port.
+      if (e.code === 'EADDRINUSE') throw Object.assign(new Error(macIng
+        ? `the engine's proxy ingress port 127.0.0.1:${macIng.enginePort} (ingress.json) is held by another process; nothing is steered, agent connections go direct. Free the port and start the daemon again`
+        : `the engine port 127.0.0.1:${want} recorded at install is held by another process; nothing is steered, agent connections go direct. Free the port, or run "asight uninstall" and "asight on" to pick a new one`), { code: 'EADDRINUSE' })
       throw e
     })
-    let v6Held = null // the helper steers IPv6 agent connections to [::1]:port: never attach while someone else holds it (M8)
+    const port = macIng ? first.ingressPort ?? null : first.port
+    let v6Held = null // the helper steers IPv6 agent connections to [::1]:port: never attach while someone else holds it (M8; darwin has no helper — its agents point at 127.0.0.1 by the entry)
     let v6Error = null // any [::1] failure: status never reports [::1] as listening then (D-10)
-    try { await engine.listen({ port, hosts: ['::1'] }) } catch (e) {
+    try { await engine.listen({ port: first.port, hosts: ['::1'], ...(first.ingressPort ? { ingress: { port: first.ingressPort } } : {}) }) } catch (e) {
       v6Error = `[::1]:${port}: ${errText(e)}`
-      if (e.code === 'EADDRINUSE') v6Held = `[::1]:${port} is held by another process`
+      if (!macIng && e.code === 'EADDRINUSE') v6Held = `[::1]:${port} is held by another process`
       failure('engine', Object.assign(new Error(`[::1]:${port} unavailable: ${errText(e)}; ${v6Held ? 'on will refuse to attach (M8)' : 'IPv6 agent connections go direct'}`), { code: e.code }))
     }
 

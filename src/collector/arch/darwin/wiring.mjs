@@ -167,6 +167,14 @@ export async function createDarwinCollector({ env = process.env, dir = null, hom
   const innerClose = redirector.close
   redirector.close = async (...a) => { if (netenvWatcher) netenvWatcher.stop(); return innerClose(...a) }
 
+  // The switch's `on`/`off` call attach()/detach() right after they commit the new desired state — and `routes` answers the plan this wiring last computed, so a stale one
+  // (the start's, all-off) builds an empty kernel plan and the first `on` after boot does nothing (found live by the lab smoke, 2026-10-09). Both are wrapped to re-plan first;
+  // the netenv-change path's replan({ reload: true }) reaches the same wrapper (one extra pure recompute, the same answers) and stays non-reentrant (reload is false in here).
+  const innerAttach = redirector.attach
+  redirector.attach = async (...a) => { await replan(); return innerAttach(...a) }
+  const innerDetach = redirector.detach
+  redirector.detach = async (...a) => { await replan(); return innerDetach(...a) }
+
   redirector.darwin = {
     forwarder, ingress, replan, groups,
     netenv: () => ({ systemProxy, ownPorts: ownPorts() }),
