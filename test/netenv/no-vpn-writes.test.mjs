@@ -152,11 +152,11 @@ test('N15 (a) planted counter-example: a write through any receiver or an alias 
   assert.deepEqual(at("import { writeFileSync as wf } from 'node:fs'\nexport function writeNetenv(p) { wf(p, 'x') }\n"), [], 'and the allowlisted helper may write through an alias too')
 })
 
-// the one place that makes a controller client that may write to a core: the own kernel's supervisor (4.7 §3.4). Other `own: true` in the tree (the tracker's proxy settings) are another thing.
+// the one place that makes a controller client that may write to a core: the own kernel's supervisor (4.7 §3.4) — win32's and darwin's forwarder are the one writer per platform. Other `own: true` in the tree (the tracker's proxy settings) are another thing.
 const writesToCore = (src) => callArgs(src, ['createController', 'makeClient']).some((a) => /\bown\s*:\s*true\b/.test(a))
 test('N15 (a) `createController({ own: true })` (a client that may write to a core) appears only in forwarder.mjs', () => {
   const users = SOURCES.filter((f) => writesToCore(fs.readFileSync(f, 'utf8'))).map(rel)
-  assert.deepEqual(users.filter((f) => f !== 'src/collector/arch/win32/forwarder.mjs'), [])
+  assert.deepEqual(users.filter((f) => f !== 'src/collector/arch/win32/forwarder.mjs' && f !== 'src/collector/arch/darwin/forwarder.mjs'), [])
   assert.ok(writesToCore('const c = createController({ endpoint, secret, own: true })'), 'and the check can see one')
   assert.ok(writesToCore('makeClient({\n  endpoint,\n  own:true,\n})'))
   assert.ok(!writesToCore('createController({ endpoint, own: false }); const p = { own: true }'), 'another `own: true` in the same file is another thing')
