@@ -1,0 +1,26 @@
+{
+  "version": "v1.19.32",
+  "assets": {
+    "x64": {
+      "variant": "darwin-amd64-compatible",
+      "package": "asight-kernel-darwin-x64",
+      "name": "mihomo-darwin-amd64-compatible-v1.19.32.gz",
+      "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-darwin-amd64-compatible-v1.19.32.gz",
+      "size": 22302953,
+      "sha256": "18b382df77bded2ad0fb3db27db5636cb15b20729d5ba995a357eeb9b46bf507",
+      "exe": { "name": "asight-forwarder", "size": 60891184, "sha256": "c666c4dd92a2c27c24ff56c9fe42e115f7de94467d45b1eb8caf88f6235e2e7b" }
+    },
+    "arm64": {
+      "variant": "darwin-arm64",
+      "package": "asight-kernel-darwin-arm64",
+      "name": "mihomo-darwin-arm64-v1.19.32.gz",
+      "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-darwin-arm64-v1.19.32.gz",
+      "size": 20756622,
+      "sha256": "3312a6780652c622890fd4357c6a853bbf865464fd047ac7b7f52dab8de18652",
+      "exe": { "name": "asight-forwarder", "size": 56775458, "sha256": "94a386ec0149080deadd86b1f667363bde3c70f7489dba3258e52c56fc9a6d66" }
+    }
+  },
+  "license": "GPL-3.0-only",
+  "licenseFile": { "name": "LICENSE-mihomo.txt", "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986" },
+  "source": "https://github.com/MetaCubeX/mihomo/tree/v1.19.32"
+}
