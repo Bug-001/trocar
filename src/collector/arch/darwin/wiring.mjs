@@ -26,6 +26,7 @@ import { createDarwinRedirector } from './redirector.mjs'
 import { createProxyEntries } from './entries.mjs'
 import { readSystemProxy, watchSystemProxy } from './upstream.mjs'
 import { readText, readTextOrError } from '../../core/config-read.mjs'
+import { execTool } from '../../../off/exec.mjs'
 import { readManifest } from '../../core/trust/journal.mjs'
 import { MARKER_TOLERANCE_MS } from '../../core/trust/confirm.mjs'
 import { matchForm } from './forms.mjs'
@@ -65,9 +66,14 @@ export async function createDarwinCollector({ env = process.env, dir = null, hom
   const manifestNow = () => { try { return (typeof manifest === 'function' ? manifest() : manifest) || readManifest(dir, fs) } catch { return null } }
 
   // the watcher and the owner question — no helper anywhere (4.9 §1): ps and lsof run on demand, through the one injected runner
-  const exec = deps.exec ?? null // execTool's `run` (spawnSync-shaped); null = the real thing
+  const exec = deps.exec ?? null // execTool's `run` (spawnSync-shaped); a test injects one, and without one execTool spawns the real command itself
+  // The execTool-shaped runner the lsof questions take (socktable's ownerOf · the redirector's directCount: `exec('lsof', args, { timeoutMs })` → { code, out, err }).
+  // It is always a runner — the injected one wrapped, execTool's own spawn otherwise. An early build had ownerOf built WITHOUT any (the old
+  // `exec != null ? { exec } : {}` spread left the key absent and every owner question threw "exec is not a function"): every agent connection was
+  // judged untracked and spliced, nothing captured (found live by the smoke, 2026-10-09, results 20261008T221132).
+  const execOf = (file, args, o = {}) => execTool(file, args, { ...o, ...(exec != null ? { run: exec } : {}) })
   const procWatcher = deps.procWatcher || createProcWatcher({ ...(exec != null ? { exec } : {}), ...(deps.now ? { now: deps.now } : {}), ...(deps.timers ? { timers: deps.timers } : {}) })
-  const ownerOf = deps.ownerOf || ((q) => askOwnerOf({ ...(exec != null ? { exec } : {}), ...q, onFailure: (rec) => event(rec) }))
+  const ownerOf = deps.ownerOf || ((q) => askOwnerOf({ exec: execOf, ...q, onFailure: (rec) => event(rec) }))
 
   // ingress.json, the controller, the kernel's forwarder and the entries writer: built only when the caller brought the dir (the daemon); the shell has none of them, and attach()
   // says so with its own TypeError (redirector.mjs) — a read-only command cannot reach for any of this.
@@ -128,7 +134,7 @@ export async function createDarwinCollector({ env = process.env, dir = null, hom
   }
 
   redirector = createDarwinRedirector({
-    procWatcher, groups, home, ownerOf, ...(exec != null ? { exec } : {}),
+    procWatcher, groups, home, ownerOf, exec: execOf, // the redirector's exec is the lsof shape (socktable's, its docstring): the execTool wrapper, not the spawnSync-shaped run the old spread passed — with a test's deps.exec injected it was the wrong shape, and without one it was absent and directCount degraded to no-exec
     routes: () => plan, ingress,
     authOf: (ref) => resolveLogin(ref, { groups, ctx, manifest: manifestNow() }),
     onFailure: (rec) => event(rec), forwarder, entries, gate: w19Gate,
