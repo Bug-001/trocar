@@ -12,6 +12,7 @@ import { groupsOf } from '../../../../src/collector/arch/darwin/route-plan.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { installCollector } from '../../../../src/collector/install.mjs'
 import { readManifest } from '../../../../src/collector/core/trust/journal.mjs'
+import { MARKER_TOLERANCE_MS } from '../../../../src/collector/core/trust/confirm.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 
 const ALL = await loadHarnesses()
@@ -226,4 +227,26 @@ test('W71 the watcher stops with the collector: close() stops it (no timer left)
   r.box.dict.HTTPSPort = '1'
   await r.timers.tick()
   assert.equal(r.events.filter((e) => e.event === 'netenv-change').length, 0)
+})
+
+// ---------- the two seams the close-out review found dead (F1, F2) — these tests run them through the REAL callers ----------
+
+test('review F1: the daemon\'s own loadParts on darwin lands the shell whole — osMatch alive through the registry, not a Promise behind the guard (the pre-fix line awaited nothing)', { skip: process.platform !== 'darwin' }, async () => {
+  const { loadParts } = await import('../../../../src/collector/daemon.mjs')
+  const parts = await loadParts({ env: { HOME: '/Users/x' }, harnesses: ALL })
+  assert.equal(parts.os, 'darwin')
+  assert.equal(parts.match({ os: 'darwin', pid: 10, exe: '/Users/x/.local/bin/claude', cmdline: '/Users/x/.local/bin/claude' }).agent, 'claude-code',
+    'the registry judged darwin facts through osMatch: with the Promise, redirector.darwin read undefined, osMatch fell to null and this answer was null — nothing on macOS matched anything')
+  assert.equal(parts.match({ os: 'darwin', pid: 11, exe: '/usr/bin/curl', cmdline: 'curl https://example.com' }).agent, null, 'and a non-agent still matches nothing')
+})
+
+test('review F2: start() claims a kernel a previous daemon left running BEFORE it reads the network or plans — a KeepAlive-restarted daemon adopts, it does not run into port-taken', async () => {
+  const calls = []
+  const kernel = fakeKernel()
+  const withAdopt = Object.assign(kernel.forwarder, { async adopt() { calls.push('adopt'); return { adopted: false } } })
+  const scutil = fakeScutil(VERGE)
+  const exec = (file, args) => { if (file === 'scutil' && args[0] === '--proxy') calls.push('scutil'); return scutil.exec(file, args) }
+  await rigged(['claude-code'], { desired: { 'claude-code': { desired: 'on' } }, over: { deps: { forwarder: withAdopt, exec } } })
+  assert.equal(calls[0], 'adopt', 'the claim comes first')
+  assert.ok(calls.indexOf('scutil') > calls.indexOf('adopt'), 'then the network is read and the first plan is made')
 })

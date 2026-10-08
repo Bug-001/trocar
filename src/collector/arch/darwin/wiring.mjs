@@ -27,6 +27,7 @@ import { createProxyEntries } from './entries.mjs'
 import { readSystemProxy, watchSystemProxy } from './upstream.mjs'
 import { readText, readTextOrError } from '../../core/config-read.mjs'
 import { readManifest } from '../../core/trust/journal.mjs'
+import { MARKER_TOLERANCE_MS } from '../../core/trust/confirm.mjs'
 import { matchForm } from './forms.mjs'
 
 const CONTROLLER_RANGE = [19000, 19999] // the kernel's own controller, its own free port (the win32 value; the generator refuses one it has already seen)
@@ -45,8 +46,8 @@ const movedRoute = (a, b) => !a || !b || a.on !== b.on || JSON.stringify(a.upstr
 
 /**
  * createDarwinCollector({ env, dir, home, harnesses, failure, event, manifest, desired, optIns, deps }) → the Redirector (4.9 §1), carrying a `darwin` bag of what only the daemon
- *   reaches: `{ forwarder, ingress, replan, groups, netenv, appliedHosts, controller, kernelExe, osMatch, osLayers, close }` (the win32 bag's shape; osMatch is the registry's
- *   second key, 4.8 §5.4). Everything is injected through `deps` for a test. `dir` absent = the lazy shell (the header's LAZY RULE).
+ *   reaches: `{ forwarder, ingress, replan, groups, netenv, appliedHosts, controller, kernelExe, osMatch, osLayers, markerToleranceMs, close }` (the win32 bag's shape; osMatch is the registry's
+ *   second key, 4.8 §5.4; markerToleranceMs is the plugin marker's fixed tolerance — the daemon hands it to the tracker, confirm.mjs's value). Everything is injected through `deps` for a test. `dir` absent = the lazy shell (the header's LAZY RULE).
  *   failure (where, error, extra)  the daemon's failure recorder · event (record)  its event writer (netenv-change, the watcher's own records)
  *   manifest  () → the manifest as it is NOW (the daemon re-reads it; null reads it here) · desired  () → state.json's `harnesses` (`{ <id>: { desired, extra_hosts } }`)
  *   optIns    () → the groups or forms the user named and asight has the record of (the win line's Task 14; today there is none, so the default is none)
@@ -137,13 +138,15 @@ export async function createDarwinCollector({ env = process.env, dir = null, hom
     ...(deps.now ? { now: deps.now } : {}),
   })
 
-  // start(): the redirector's own (the watcher's baseline) plus this wiring's netenv half — the first scutil read, the first plan and the 5 s watcher. The shell (no dir) starts the
-  // watcher only; the daemon calls start() once, and the kernel itself still comes with the first attach (4.8 §4.1). close() is the mirror: the netenv watcher stops first.
+  // start(): the redirector's own (the watcher's baseline) plus this wiring's netenv half — claim any kernel a previous daemon left running (W28's 认领, review F2), then the first scutil
+  // read, the first plan and the 5 s watcher. The shell (no dir) starts the watcher only; the daemon calls start() once, and a kernel that was not there still comes with the first attach
+  // (4.8 §4.1) — adopt() only claims a lock-named kernel whose pid, start time and controller all answer, and claims nothing when there is no lock. close() is the mirror: the netenv watcher stops first.
   let netenvWatcher = null
   const innerStart = redirector.start
   redirector.start = async (...a) => {
     const r = await innerStart(...a)
     if (dir) {
+      if (forwarder && typeof forwarder.adopt === 'function') await forwarder.adopt() // a daemon the LaunchAgent's KeepAlive restarted claims the kernel the old one left running (its lock names it; 4.8 §4.1): without this the first attach sees port-taken and capture is dead until a hand kills the kernel — the agents keep flowing either way, the kernel forwards-only upstream (review F2)
       systemProxy = await (deps.readSystemProxy || readSystemProxy)(...(exec != null ? [{ exec }] : []))
       await replan()
       if (deps.watchSystemProxy !== false) {
@@ -171,6 +174,7 @@ export async function createDarwinCollector({ env = process.env, dir = null, hom
     ...(controller ? { controller } : {}), ...(kernelExe ? { kernelExe } : {}),
     osMatch: { darwin: (f) => { const m = matchForm(forms, f, { home }); return m.kind === 'form' ? harnessOfForm.get(m.id) ?? null : null } }, // one rule for which form (4.8 §5.4, carried by 4.9 §5.4): the registry judges by the same matchForm the redirector routes by
     osLayers: { darwin: (d) => (d.darwin && d.darwin.layers) || d.layers }, // a harness with macOS layers of its own declares them; the rest read the same files as on Linux
+    markerToleranceMs: MARKER_TOLERANCE_MS, // the darwin plugin twins write performance.timeOrigin (sub-millisecond) against ps's second-granular lstart (startTicks): the tracker gets the same fixed tolerance the win line's markers are compared with (confirm.mjs; review F4)
     close: () => { if (netenvWatcher) netenvWatcher.stop() },
   }
   return redirector

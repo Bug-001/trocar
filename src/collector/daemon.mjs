@@ -41,7 +41,7 @@ export async function loadParts({ arch = null, harnesses = null, env = process.e
   // 4.8 §5.4 / 4.9 §5.4 osMatch: a platform whose process facts are not the /proc set needs the registry's second key. The darwin collector carries it in its bag and its LAZY
   // construction (4.9 §1 接线) makes building one here safe: with { env, harnesses } only, it is the shell — the descriptors' forms for osMatch, a watcher `scan` can use, no
   // ingress.json created, nothing started. Linux ignores the extra argument; the win32 collector's construction is the win line's own open seam (it wants the dir).
-  const redirector = A.createRedirector({ env, harnesses: list })
+  const redirector = await A.createRedirector({ env, harnesses: list }) // the await is the point: darwin's collector is async (4.9 §1), and without it `redirector` here is a Promise — osMatch dead-ends to null and `scan()` throws TypeError (review F1, reproduced on the real call before this line); Linux's and win32's sync returns pass through the await untouched
   const osMatch = redirector && typeof redirector.darwin === 'object' && redirector.darwin && redirector.darwin.osMatch ? redirector.darwin.osMatch : null
   const registry = createRegistry(list, { osMatch })
   // linger: whether the OS keeps this user's daemon after logout (true / false; null = not readable) — `asight on` says so (1.6 §1.1), it never enables it (R8)
@@ -231,7 +231,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     // The read-modify-write of the manifest and the bundles is done under the op lock (1.6 R12): `on`, `off` and `uninstall` change the same files. A lock another
     // command holds means this round waits for it (it ends in seconds, and the roots are read again then); a rebuild after the command is done sees what it left.
     let bundleRetry = null, bundleBusy = 0
-    const refreshBundles = () => {
+    const refreshBundles = async () => { // async: darwin's roots are read, not one file (A.osRoots below)
       clearTimeout(bundleRetry)
       const report = { rebuilt: [], failed: [], lost: [] }
       let held = null
@@ -249,6 +249,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
           const on = new Set(Object.entries(st.harnesses).filter(([, h]) => h.desired === 'on').map(([id]) => id))
           let osText = ''
           if (A.osRootsFile) { try { osText = fs.readFileSync(A.osRootsFile, 'utf8') } catch (e) { if (e.code !== 'ENOENT') throw e } }
+          else if (A.osRoots) { osText = (await A.osRoots()).pem } // darwin (4.9 §6.2, review F3): the OS roots are the union the arch reads — keychain-administered anchors ∪ Node's bundled ∪ Apple's SystemRootCertificates — not one file; without this arm the combined bundles carry no enterprise root and a replace-semantics entry (Codex's SSL_CERT_FILE) silently cuts the agent off its relay. A read that fails entirely reaches the catch below: the bundles keep their previous roots and the failure is said (D38)
           rewriteBundles({ dir: P.dir, manifest: fresh, nodeRoots: tls.rootCertificates, osRootsText: osText, caPem: ca.certPem, report, only: on })
         }
       } catch (e) { failure('bundle', Object.assign(new Error(`rebuilding the combined bundles failed: ${errText(e)}; they keep their previous roots`), { code: e && e.code })) } finally { if (held && held.lock) held.lock.release() }
@@ -271,6 +272,8 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     // plugins (dsh, OpenCode) write their per-pid marker here; it exists while the daemon runs (0700, the operator's)
     fs.mkdirSync(P.markers, { recursive: true, mode: 0o700 })
     const tracker = createTracker({ redirector, registry, trust, onVerdict, markerDir: P.markers, caPem: ca.paths.pem, collectorDir: P.dir,
+      osLayers: redirector && typeof redirector.darwin === 'object' && redirector.darwin ? redirector.darwin.osLayers : null, // the darwin bag (4.9 §1): a harness's own macOS layers, judged by them (4.8 §5.4's shape)
+      markerToleranceMs: redirector && typeof redirector.darwin === 'object' && redirector.darwin && redirector.darwin.markerToleranceMs || 0, // the bag again (review F4): the plugin writes performance.timeOrigin (sub-millisecond) against ps's second-granular lstart — without the fixed tolerance every dsh/opencode marker reads stale and is never decrypted; 0 stays the Linux byte-exact rule
       installedAt: (l) => installedAt(manifest, l), // config-after-start is judged against when asight wrote the value
       onGone: (row, via) => { // D-24, D-12: the agent and every condition it held are gone; so are its negative-cache entries
         const last = recordedUntrusted.get(row.pid); recordedUntrusted.delete(row.pid) // the reason it was recorded untrusted for ends here
