@@ -67,11 +67,12 @@ export async function createDarwinCollector({ env = process.env, dir = null, hom
 
   // the watcher and the owner question — no helper anywhere (4.9 §1): ps and lsof run on demand, through the one injected runner
   const exec = deps.exec ?? null // execTool's `run` (spawnSync-shaped); a test injects one, and without one execTool spawns the real command itself
-  // The execTool-shaped runner the lsof questions take (socktable's ownerOf · the redirector's directCount: `exec('lsof', args, { timeoutMs })` → { code, out, err }).
-  // It is always a runner — the injected one wrapped, execTool's own spawn otherwise. An early build had ownerOf built WITHOUT any (the old
-  // `exec != null ? { exec } : {}` spread left the key absent and every owner question threw "exec is not a function"): every agent connection was
-  // judged untracked and spliced, nothing captured (found live by the smoke, 2026-10-09, results 20261008T221132).
-  const execOf = (file, args, o = {}) => execTool(file, args, { ...o, ...(exec != null ? { run: exec } : {}) })
+  // The execTool-shaped runner the lsof questions take (socktable's ownerOf · the redirector's directCount: `exec('lsof', args, { timeoutMs })` → Promise<{ code, out, err }> —
+  // ownerOf races it against a budget timer and calls .catch on it, so it must be a PROMISE even though execTool itself is synchronous). It is always a runner — the injected one
+  // wrapped, execTool's own spawn otherwise. An early build had ownerOf built WITHOUT any (the old `exec != null ? { exec } : {}` spread left the key absent and every owner
+  // question threw "exec is not a function"); the second had it synchronous and every question threw "asked.catch is not a function" — both left every agent connection judged
+  // untracked and spliced, nothing captured (found live by the smoke, 2026-10-09, results 20261008T221132 · 20261008T223245).
+  const execOf = async (file, args, o = {}) => execTool(file, args, { ...o, ...(exec != null ? { run: exec } : {}) })
   const procWatcher = deps.procWatcher || createProcWatcher({ ...(exec != null ? { exec } : {}), ...(deps.now ? { now: deps.now } : {}), ...(deps.timers ? { timers: deps.timers } : {}) })
   const ownerOf = deps.ownerOf || ((q) => askOwnerOf({ exec: execOf, ...q, onFailure: (rec) => event(rec) }))
 
