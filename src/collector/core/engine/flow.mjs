@@ -427,7 +427,10 @@ export function handleFlow(client, meta, ctx) {
     // 'secureConnect' is a network / protocol failure (the client is closed); a 'secureConnect' that is
     // not `authorized` (Node still checks chain and hostname) is a certificate that did not verify
     // (stepAside). Nothing is ever written on an unverified connection (§引擎 5).
-    const upTls = tls.connect({ socket: uSock, servername: sni || undefined, ALPNProtocols: ['http/1.1'], secureContext: ctx.upstreamTrust.secureContext, rejectUnauthorized: false })
+    // `host` is the verification identity when the client sent no SNI — an IP-literal destination never does (RFC 6066: SNI is DNS names only), so without it Node
+    // verifies against its own default ('localhost') and every IP-literal upstream read ERR_TLS_CERT_ALTNAME_INVALID whatever the certificate (found live by the macOS test machine's
+    // smoke, 2026-10-09; proven on node 22 against the mock upstream: no host → ALTNAME_INVALID, host = the address → authorized — and an IP in `servername` throws instead).
+    const upTls = tls.connect({ socket: uSock, servername: sni || undefined, host, ALPNProtocols: ['http/1.1'], secureContext: ctx.upstreamTrust.secureContext, rejectUnauthorized: false })
     let clientTls = null
     waitFor('tls', host)
     // While we wait for the upstream, the client socket keeps flowing into `held`: a paused socket never
