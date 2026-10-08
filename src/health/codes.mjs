@@ -85,10 +85,13 @@ export const ROUTE_CODES = Object.freeze([
   'ingress-auth-failed', 'ingress-unknown', 'engine-port-taken', 'upstream-unavailable', // ingress (`upstream-unavailable`: the group's upstream cannot be dialled at all, no login to dial it with or none to dial: the lookup refused, the agent got a 502)
   'fallback-active', // routing
   'forwarder-start-failed', 'forwarder-restart', 'forwarder-digest-mismatch', 'forwarder-binary-missing', // forwarder: the kernel comes in a platform package and `on` never downloads it (4.8 §8), so there is no download failure to name
+  'gatekeeper', // forwarder, darwin: the kernel's precheck half that is not the digest (4.9 §3) — a quarantine attribute that could not be self-healed off, or a binary the system still refuses to run; the receipt carries the reinstall command
   'optin-failed', // optin: an item the user named was not done (a refused prompt, a script error); a refused UAC is not this: it is `pending-admin` (1.6 §1.7)
   'socktable-unavailable', 'helper-start-failed', // helper
   'task-register-failed', // install: `on` still succeeds, through the HKCU Run fallback (4.8 §7)
+  'launchd-register-failed', // install, darwin: the LaunchAgent would not register (4.9 §4) — launchd is the only autostart, so `on`'s receipt says it; no fallback exists to succeed through
   'elevated-token', // start
+  'root-token', // start, darwin: `elevated-token`'s refusal under the darwin name — the daemon runs as the user and root is refused (4.9 §12)
 ])
 /** The codes of ROUTE_CODES a writer puts on a `failure` event. Today that is all of them; a later notice-class code goes into ROUTE_CODES only. */
 export const ROUTE_FAILURE_CODES = Object.freeze([...ROUTE_CODES])
