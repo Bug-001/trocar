@@ -18,6 +18,8 @@ const at = (exe, extra = {}) => matchForm(FORMS, { exe, cmdline: null, ...extra 
 test('matchForm: the image decides which forms are looked at, the path decides which one; case never matters (APFS is case-insensitive by default), and the path is tested unanchored', () => {
   assert.deepEqual(at('/Users/u/bin/agent'), { kind: 'form', id: 'a.cli' })
   assert.deepEqual(at('/USERS/U/BIN/AGENT'), { kind: 'form', id: 'a.cli' }, 'mihomo ignores case')
+  assert.deepEqual(at('/opt/homebrew/lib/node_modules/x/claude-code/bin/claude.exe'), { kind: 'none' }, 'not one of this file\'s made-up forms (a shared-image check)')
+  assert.equal(matchForm([{ id: 'c.cli', match: { image: 'claude', path: [String.raw`\/node_modules\/@anthropic-ai\/claude-code\/bin\/claude`] } }], { exe: '/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe', cmdline: null }).kind, 'form', 'MA4\'s measured fact (on a macOS test machine): npm ships bin/claude.exe on macOS too — the image drops the vestigial .exe, the unanchored path pattern still hits')
   assert.deepEqual(at('/Applications/Agent/1.2/agent'), { kind: 'form', id: 'a.app' }, 'the same image name, told by the path')
   assert.deepEqual(at('/opt/x/bin/agent/more'), { kind: 'none' }, 'a different image (the path only names a directory): the pattern is not what decides')
   assert.deepEqual(at('/usr/bin/less'), { kind: 'none' })

@@ -42,7 +42,7 @@ export function formPathShape(exe, { home = null } = {}) {
  *  directory, so the `shape` of a `path-unknown` has no user name in it wherever the home is (see formPathShape). */
 export function matchForm(forms, proc, { home = null } = {}) {
   const exe = proc && typeof proc.exe === 'string' ? proc.exe : ''
-  const image = baseName(exe).toLowerCase()
+  const image = baseName(exe).toLowerCase().replace(/\.exe$/, '') // MA4's first measured fact (on a macOS test machine): npm's claude-code ships `bin/claude.exe` on macOS too — the file name carries a vestigial .exe, the form's image does not; a path pattern that names the binary without the suffix still hits it (the patterns are unanchored)
   const same = exe === '' ? [] : forms.filter((f) => f.match && f.match.image.toLowerCase() === image)
   for (const f of same) {
     const m = f.match
