@@ -113,7 +113,13 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
   try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "asight uninstall", then "asight on"`), { code: 'manifest-unreadable' }) }
   const ca = manifest && manifest.complete ? readCa({ dir: P.caDir }) : null
   if (!ca) throw Object.assign(new Error('the collector is not installed for this user: run "asight on" first'), { code: 'not-installed' })
-  const sock = socketPath || controlSocketPath({ env })
+  // The control socket: darwin's control.json — a random name under the user's $TMPDIR, 0600, and a token every request carries (arch/darwin/control-path.mjs, 4.9 §7;
+  // the same file the CLI's `off` reads). The other platforms keep core/control.mjs's $XDG_RUNTIME_DIR/asight/collector.sock, whose file modes guard it (no token there).
+  // Found live by the lab smoke (2026-10-09): without this arm the darwin daemon died on the Linux path's XDG_RUNTIME_DIR demand before it ever listened.
+  let A0 = arch || null
+  if (!A0 && !socketPath) { try { A0 = await loadArch() } catch { A0 = null } }
+  const macCtl = A0 && A0.os === 'darwin' && !socketPath ? A0.controlEndpoint({ dir: P.dir }) : null
+  const sock = socketPath || (macCtl ? macCtl.path : controlSocketPath({ env }))
   let markReady
   const ready = new Promise((r) => { markReady = r })
   const impl = {} // filled once wiring is done; requests that arrive earlier wait for it
