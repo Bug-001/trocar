@@ -23,5 +23,21 @@ export async function loadArch(platform = process.platform) {
       prepare,
     }
   }
+  if (platform === 'darwin') {
+    // 4.9 §1: no machine-wide helper either (install: null — nothing on darwin needs privilege: ps / lsof / scutil / security are plain CLIs, run on demand); the autostart unit is
+    // the launchd module (§4); the OS roots are read (darwinRoots: the keychain-administered anchors + bundled + SystemRootCertificates, 4.9 §6.2), so osRootsFile stays away;
+    // netFacts is darwinNetFacts (1.6 §9.7's archFacts). createRedirector is the whole darwin collector (wiring.mjs) — built lazy (4.9 §1 接线): the daemon's construction (with
+    // dir and the sinks) builds everything and starts nothing, loadParts' {env}-only one gets the shell; prepare is the read-only hook `asight on` calls before it writes.
+    const [{ createDarwinCollector, prepare }, unit, { controlEndpoint }, { darwinRoots }, { darwinNetFacts }] = await Promise.all([import('./darwin/wiring.mjs'), import('./darwin/autostart.mjs'), import('./darwin/control-path.mjs'), import('./darwin/roots.mjs'), import('./darwin/netfacts.mjs')])
+    return {
+      os: 'darwin', install: null, unit,
+      controlEndpoint,
+      refuseElevated: unit.refuseElevated, nodePreflight: unit.nodePreflight,
+      osRoots: () => darwinRoots(),
+      netFacts: darwinNetFacts,
+      createRedirector: (opts = {}) => createDarwinCollector(opts),
+      prepare,
+    }
+  }
   throw new Error(`asight collector: ${platform} is not supported yet (Linux first; RFC 4.6 §结构)`)
 }

@@ -38,8 +38,12 @@ export { loadArch } // the CLI reaches arch only through this file (layering rul
 export async function loadParts({ arch = null, harnesses = null, env = process.env } = {}) {
   const A = arch || (await loadArch())
   const list = harnesses || (await loadHarnesses())
-  const registry = createRegistry(list)
-  const redirector = A.createRedirector({ env })
+  // 4.8 §5.4 / 4.9 §5.4 osMatch: a platform whose process facts are not the /proc set needs the registry's second key. The darwin collector carries it in its bag and its LAZY
+  // construction (4.9 §1 接线) makes building one here safe: with { env, harnesses } only, it is the shell — the descriptors' forms for osMatch, a watcher `scan` can use, no
+  // ingress.json created, nothing started. Linux ignores the extra argument; the win32 collector's construction is the win line's own open seam (it wants the dir).
+  const redirector = A.createRedirector({ env, harnesses: list })
+  const osMatch = redirector && typeof redirector.darwin === 'object' && redirector.darwin && redirector.darwin.osMatch ? redirector.darwin.osMatch : null
+  const registry = createRegistry(list, { osMatch })
   // linger: whether the OS keeps this user's daemon after logout (true / false; null = not readable) — `asight on` says so (1.6 §1.1), it never enables it (R8)
   return { arch: A, os: A.os, osRootsFile: A.osRootsFile || null, harnesses: list, registry, scan: () => redirector.scan(), match: (f) => registry.match(f), linger: () => (typeof redirector.linger === 'function' ? redirector.linger() : null), lingerRead: () => (typeof redirector.lingerRead === 'function' ? redirector.lingerRead() : { state: null, error: 'this platform has no reader of the linger state' }) }
 }
@@ -177,7 +181,11 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     const event = (e) => failure.write({ ...e, ...(e.error != null && e.reason == null ? { reason: String(e.error) } : {}) })
 
     const { registry, arch: A, harnesses: harnessList } = await loadParts({ arch, harnesses, env })
-    redirector = A.createRedirector({ env })
+    // 4.9 §1 接线: the darwin collector needs the collector dir and this daemon's sinks (the win32 one does too — that seam is the win line's open task); it is built here, started
+    // below, and the kernel itself comes with the first attach (4.8 §4.1). `desired` reads state.json as it is NOW: the switch changes it while this daemon runs.
+    redirector = A.os === 'darwin'
+      ? await A.createRedirector({ env, dir, home: netHome, harnesses: harnessList, failure, event, manifest: () => readManifest(P.dir), desired: () => { const st = readState(P.state, () => {}, {}); return st.harnesses || {} } })
+      : A.createRedirector({ env })
     // D38: one `agent-untrusted` per pid and reason (code = the resolver's reason, reason = what to do about it); a pid
     // recorded so gets `agent-trusted` once it is trusted and `agent-exit` when it exits, so the condition can clear.
     const recordedUntrusted = new Map() // pid → the reason code last recorded
@@ -285,6 +293,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     engine = createEngine({
       redirector: {
         async lookup(peer) { // the kernel knows {dst, pid, decrypt}; the tracker adds what the envelope's proc carries
+          if (typeof redirector.lookup !== 'function') return null // a redirector without lookup gets no transparent listener (core/redirector.mjs): darwin is proxy mode only (4.9 §5)
           const m = await redirector.lookup(peer)
           const x = m && m.pid != null ? tracker.metaFor(m.pid) : null
           return m && x ? { ...m, ...x, agent: m.agent ?? x.agent } : m
