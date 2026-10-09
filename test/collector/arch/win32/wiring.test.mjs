@@ -115,7 +115,7 @@ test('W39 loadArch("win32") returns the Windows arch on any OS (imported and bui
   assert.equal(typeof A.prepare, 'function', 'the read-only hook `asight on` calls (W27 ⑥, W74)')
   assert.equal(typeof A.osRoots, 'function')
   assert.equal(typeof A.createRedirector, 'function')
-  assert.equal(A.netFacts ?? null, null, 'netFacts is Task 10\'s to add; its absence reads as "no part of its own" today')
+  assert.equal(typeof A.netFacts, 'function', 'the platform\'s part of the network facts (Task 10(a), 4.8 §10.1): gatherNetFacts reaches it as archFacts, it reads the collector dir\'s files and the resident helper — no second daemon API')
   const linux = await loadArch('linux')
   assert.equal(linux.prepare, undefined, 'the Linux arch has no prepare and its on is unchanged')
 })

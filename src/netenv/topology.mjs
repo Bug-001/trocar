@@ -16,7 +16,7 @@ export { renderCompact, renderDetail, renderPathBlock, verdictText, firstHopAfte
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', 'localhost'])
 const VIA = { http: 'proxy-http', https: 'proxy-https', socks4: 'proxy-socks', socks5: 'proxy-socks', socks5h: 'proxy-socks' }
-const PRODUCT_NAME = { 'clash-verge': 'Clash Verge Rev', mihomo: 'mihomo' }
+const PRODUCT_NAME = { 'clash-verge': 'Clash Verge Rev', mihomo: 'mihomo', 'clash-verge-rev': 'Clash Verge Rev', 'clash-party': 'Clash Party', flclash: 'FlClash', 'gui-for-singbox': 'GUI.for.SingBox', v2rayn: 'v2rayN' }
 export const productName = (p) => PRODUCT_NAME[p] || p
 const ID_PREFIX = { agent: 'a', 'asight-engine': 'e', 'asight-forwarder': 'f', 'legacy-mitm': 'm', proxy: 'p', upstream: 'u', egress: 'x', unknown: 'q' }
 const drop = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== null))
@@ -73,7 +73,7 @@ const sourceKey = (s) => (s.kind === 'env' ? `env:${s.where}` : s.kind === 'file
  * → { ids: [node ids in order], first: { via, evidence } } — the edge into `ids[0]` is the caller's, since it comes from the agent or from asight. The edges between the hops are made here.
  */
 function tail(g, F, hf, setting, follow) {
-  if (setting.unknown) return { ids: [g.node({ kind: 'unknown', name: '代理设置', unknown: setting.unknown })], first: { via: 'unknown', evidence: [] } }
+  if (setting.unknown) return { ids: [g.node({ kind: 'unknown', name: '代理设置', unknown: setting.unknown, ...(setting.inferred === true ? { inferred: true } : {}) })], first: { via: 'unknown', evidence: [] } }
   const ignored = setting.value && hf.behaviour && hf.behaviour.unsupported && hf.behaviour.unsupported[setting.scheme] === 'silent-direct' // the agent does not fail on a scheme it cannot speak: it goes straight out
   if (setting.value && !ignored) {
     const p = proxyNode(g, F, setting.host, setting.port), x = g.edge(p, egressOf(g, p), 'egress')
@@ -119,7 +119,7 @@ function judged(F, h, hf) {
   return { captured: j.captured, reason: (j.rows.find((r) => r.reason) || {}).reason ?? null, rows: j.rows }
 }
 
-const agentOf = (g, h, p) => g.node({ kind: 'agent', name: p ? p.name : h, pid: p ? p.pid : undefined, version: p ? p.version : undefined, path: p ? p.exe : undefined, elevated: p && p.elevated === true ? true : undefined })
+const agentOf = (g, h, p) => g.node({ kind: 'agent', name: p ? p.name : h, pid: p ? p.pid : undefined, version: p ? p.version : undefined, path: p ? p.exe : undefined, elevated: p && p.elevated === true ? true : undefined, ...(p && p.elevated === true && p.elevatedInferred === true ? { elevatedInferred: true } : {}) })
 
 /** The branches a harness has: HTTP and WebSocket apart when it reads the OS proxy for one and not the other and there is an OS proxy to read (the path of each differs), else one. */
 function branchNames(hf) {
@@ -186,6 +186,7 @@ function formVerdict(F, h, hf, fm, fwf) {
   if (fm.entry.intact === false) return none(false, false, 'proxy-changed')
   if (F.desired[h] === 'off') return none(!!(fwf && fwf.clients && fwf.clients.length), false, 'desired-off')
   if (!F.forwarder || F.forwarder.up === false || !fwf) return none(true, false, 'forwarder-down')
+  if (fm.reason === 'form-path-unknown') return none(false, false, 'form-path-unknown') // the platform's plan saw a process whose image it knows and whose install path it has not measured (4.8 §2.2): the form is not claimed
   if (main) return none(true, false, 'elevated-agent')
   if (F.daemon.state === 'not-running' || F.daemon.state === 'not-responding') return none(true, false, `daemon-${F.daemon.state}`)
   if (fwf.upstream_error) return { on: true, captured: false, reason: 'upstream-unreachable', engine: true } // the engine could not dial the upstream (the platform's last 60 s of it)
@@ -208,11 +209,13 @@ function proxyTopology(F, h, hf) {
     const fwf = F.forwarder && F.forwarder.forms ? F.forwarder.forms[fm.id] : null
     const vd = formVerdict(F, h, hf, fm, fwf)
     const main = fm.procs.find((p) => p.elevated === true) || fm.procs[0] || null
-    const wired = !!(fm.entry && fm.entry.intact === true && (!fm.optIn || fm.optIn.state === 'done') && fwf && (F.desired[h] !== 'off' || (fwf.clients || []).length))
+    const wired = !!(fm.entry && fm.entry.intact === true && (!fm.optIn || fm.optIn.state === 'done') && fwf && (F.desired[h] !== 'off' || (fwf.clients || []).length)) && fm.reason !== 'form-path-unknown'
     const hfSys = { ...hf, systemProxy: fm.systemProxy }
     const split = (hf.behaviour.branches || []).join() === 'http,ws' && fm.systemProxy
     if (vd.reason === 'desired-off' && fwf && (fwf.clients || []).length) notes.push(`还有 ${fwf.clients.length} 个 agent 连着 asight 的内核,重启它们之后 asight 就完全退出`)
     if (fm.optIn && fm.optIn.state === 'needed' && fm.optIn.enable) notes.push(`要采它: ${fm.optIn.enable}`)
+    if (fm.reason === 'form-path-unknown') notes.push(`这个安装方式的路径 asight 还不认识(${(fm.unknownPaths || []).join('; ') || 'path shape not read'});把它报给 asight`)
+    if (fm.hosts && wired) notes.push('宿主程序别的连接经 asight 的内核(只转发),只有到这个形态的 host 集的连接进引擎')
     for (const name of split ? ['http', 'ws'] : ['all']) {
       const a = agentOf(g, h, main), off = tail(g, F, hfSys, fm.setting, (fm.follows || hf.behaviour.follows)[name === 'ws' ? 'ws' : 'http'])
       let path = [a, ...off.ids]

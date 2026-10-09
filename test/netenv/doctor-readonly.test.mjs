@@ -89,7 +89,7 @@ test('V50 the code: what the network facts run is named in a list of readers (ss
   // src/netenv/mihomo/controller.mjs connects to a controller and, for asight's OWN kernel only (own:true, 4.8 §3.3), writes: its allow-list is held by test/netenv/controller.test.mjs (N9),
   // so it is not scanned for verbs here. What this test holds is that the status / doctor side (src/netenv, src/cli, src/off) only ever asks it as the user's VPN: no `own: true` outside it.
   const CONTROLLER = path.join('src/netenv/mihomo', 'controller.mjs')
-  const files = [...walkFiles('src/netenv').filter((f) => f !== CONTROLLER), 'src/collector/arch/linux/netfacts.mjs']
+  const files = [...walkFiles('src/netenv').filter((f) => f !== CONTROLLER), 'src/collector/arch/linux/netfacts.mjs', 'src/collector/arch/win32/netfacts.mjs']
   assert.ok(files.length > 10 && files.includes(path.join('src/netenv', 'clash.mjs')), 'the scan sees src/netenv, its subdirectories too')
   const ownCallers = [...walkFiles('src/netenv'), ...walkFiles('src/cli'), ...walkFiles('src/off')].filter((f) => f !== CONTROLLER && /\bown:\s*true\b/.test(fs.readFileSync(path.join(REPO, f), 'utf8').replace(/^\s*\/\/.*$/gm, '')))
   assert.deepEqual(ownCallers, [], 'no status / doctor file asks a controller as asight\'s own kernel (the writing form): only arch/win32/forwarder.mjs does')

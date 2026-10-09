@@ -16,7 +16,9 @@
 //     unknowns: [ { fact, reason, detail } ] }                                                    // a read that failed: said with its reason, never left out (R11)
 //
 // `archFacts(ctx)` is the platform's part, `ctx = { status, harnesses, settings, netenv, env, home, deps }` → `{ routing, listeners?, procs?: { <h>: [proc] }, forwarder?, forms?: { <h>: [form] }, systemProxy?,
-// tun?, unknowns? }`; one that throws (not the test guard's refusal) leaves the routing unknown and says why. A platform without one has routing 'unknown'.
+// tun?, vpn?, unknowns? }`; one that throws (not the test guard's refusal) leaves the routing unknown and says why. A platform without one has routing 'unknown'. `vpn` (the platform's own probe of the
+// VPN / proxy software — Windows 4.7's detect through the resident helper, 4.8 §10.1) is taken over the CLI-side probe's answer when both have one; `ctx.deps` carries the platform's own readers (the
+// Windows helper, the Verge adapter) — the CLI injects no platform reader of its own.
 import nodeFs from 'node:fs'
 import { readProxySetting, proxyFilesOf } from './adopt.mjs'
 import { noProxyNames } from './noproxy.mjs'
@@ -67,7 +69,7 @@ export async function gatherNetFacts({ platform = process.platform, home, env = 
     listeners: part.listeners || [], tun: typeof part.tun === 'boolean' ? part.tun : null, vpn: null, vpnKnown: false, forwarder: part.forwarder || null, harnesses: {}, unknowns: [...(part.unknowns || [])],
     linger: status.linger && typeof status.linger.linger === 'boolean' ? status.linger.linger : null, otherRedirector: typeof part.otherRedirector === 'boolean' ? part.otherRedirector : null,
   }
-  f.vpn = vpnOf(netenv, f.unknowns)
+  f.vpn = part.vpn || vpnOf(netenv, f.unknowns) // the platform's own probe (Windows) first: it is the one that knows this machine's products
   f.vpnKnown = !!netenv && !netenv.error // a probe that did not run, or failed, says nothing about whether the VPN changed
   if (f.vpn && f.vpn.tun === null && typeof part.tun === 'boolean') f.vpn.tun = part.tun // the product did not say; the routing table did
   for (const l of f.listeners) if (!l.unknown && !l.product && f.vpn && f.vpn.port === l.port) l.product = f.vpn.product

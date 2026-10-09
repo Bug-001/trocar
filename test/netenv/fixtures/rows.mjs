@@ -6,7 +6,7 @@
 // and are noted where they are.
 export const squash = (s) => String(s).replace(/\s+/g, '')
 
-const API = { 'claude-code': 'api.anthropic.com', codex: 'chatgpt.com', hermes: 'api.openai.com', 'kimi-code': 'api.moonshot.cn' }
+const API = { 'claude-code': 'api.anthropic.com', codex: 'chatgpt.com', hermes: 'api.openai.com', 'kimi-code': 'api.moonshot.cn', opencode: 'api.anthropic.com' }
 const NOW = '2026-10-07T10:02:12.000Z'
 const ENTRY_AT = '2026-10-07T09:00:00.000Z'
 const BEFORE = '2026-10-07T08:00:00.000Z' // a process that started before `on` wrote its entry
@@ -33,6 +33,7 @@ const BEHAVE = {
   hermes: { follows: { http: true, ws: true }, schemes: ['http', 'https', 'socks4', 'socks5', 'socks5h'], unsupported: {}, branches: ['all'], restart: { hint: '退出这个 Hermes,再重新启动', processes: 'hermes' } },
   'kimi-code': { follows: { http: false, ws: false }, schemes: ['http', 'https', 'socks4', 'socks5', 'socks5h'], unsupported: {}, branches: ['all'], restart: { hint: '退出这个 kimi,在新开的终端里重新启动', processes: 'kimi' } },
   'deepseek-dsh': { follows: { http: false, ws: false }, schemes: ['http', 'https'], unsupported: SOCKS_SILENT, branches: ['all'], restart: { hint: '退出这个 dsh,再重新启动', processes: 'dsh' } },
+  opencode: { follows: { http: false, ws: false }, schemes: ['http', 'https'], unsupported: SOCKS_FAILS, branches: ['all'], restart: { hint: '退出这个 OpenCode(含 serve / web),在设好代理环境变量的终端里重新启动', processes: 'opencode' } },
 }
 export const harness = (h, over = {}) => ({
   installed: true, entry: { state: 'intact' }, installedAt: ENTRY_AT, setting: none(), systemProxy: null, behaviour: { ...BEHAVE[h], measured: h === 'claude-code' ? 'lab' : 'inferred' }, // Linux: V54 measured claude-code's HTTPS_PROXY path on a test machine; the others are inferred from the Windows measurements

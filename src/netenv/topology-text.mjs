@@ -17,7 +17,7 @@ const paren = (...parts) => { const p = parts.filter(Boolean); return p.length ?
 /** A hop as one short phrase (`detail`: with the pid, version and address a hop-per-line view has room for). `via` is the edge into it. */
 function hopText(n, via, detail, inferred = false) {
   switch (n.kind) {
-    case 'agent': return detail ? `${n.name}${n.pid ? ` pid ${n.pid}` : ''}${n.version ? ` · ${n.version}` : ''}${n.elevated ? ' · 提权' : ''}` : `${n.name}${n.pid ? ` ${n.pid}` : ''}${n.elevated ? '(提权)' : ''}`
+    case 'agent': return detail ? `${n.name}${n.pid ? ` pid ${n.pid}` : ''}${n.version ? ` · ${n.version}` : ''}${n.elevated ? ` · 提权${n.elevatedInferred ? '(推断)' : ''}` : ''}` : `${n.name}${n.pid ? ` ${n.pid}` : ''}${n.elevated ? `(提权${n.elevatedInferred ? ' · 推断' : ''})` : ''}`
     case 'asight-engine': return detail ? `${n.name}${n.pid ? ` pid ${n.pid}` : ''}${n.port ? ` · ${n.addr}:${n.port}` : ''}${n.mode === 'decrypt' ? ' · 解密' : ''}${paren(passText(n))}` : `${n.name}${n.port ? ` :${n.port}` : ''}${paren(passText(n))}` // a daemon that did not say its port is drawn without one: no `:undefined`
     case 'asight-forwarder': return `${n.name} :${n.port}${paren(n.mode === 'forward-only' ? '只转发' : n.mode === 'down' ? '没人在听' : null)}`
     case 'legacy-mitm': return `${n.name} :${n.port}`
@@ -28,7 +28,7 @@ function hopText(n, via, detail, inferred = false) {
     }
     case 'upstream': return `${n.name}${via === 'direct' ? `(直连${inferred ? ' · 推断' : ''})` : ''}`
     case 'egress': return n.unknown ? (via === 'tun' ? `出口(${unknownText(n)})` : '?') : `出口${n.chosen_by ? `(${n.chosen_by} 选)` : ''}`
-    default: return `${n.name}${n.unknown ? paren(unknownText(n)) : ''}`
+    default: return `${n.name}${n.unknown ? paren(`${unknownText(n)}${n.inferred === true ? ' · 推断' : ''}`) : ''}`
   }
 }
 

@@ -11,12 +11,13 @@ export async function loadArch(platform = process.platform) {
   if (platform === 'win32') {
     // 4.8 §1: no machine-wide helper (install: null — the per-user one is a PowerShell process, not a root service); the autostart unit is
     // the scheduled-task module (Task 9(a)); the OS roots are read (not a file: windowsRoots, 4.8 §6.2), so osRootsFile stays away; netFacts
-    // is Task 10's. createRedirector is the whole Windows collector (wiring.mjs): it needs the collector dir and the daemon's sinks, so only
+    // is this platform's part of the network facts (1.6 §9.7, 4.8 §10.1, Task 10): status / doctor / on's adopt reach it through
+    // src/netenv/facts.mjs, and it reads the collector dir's files and the resident helper — no second daemon API. createRedirector is the whole Windows collector (wiring.mjs): it needs the collector dir and the daemon's sinks, so only
     // daemon.mjs calls it (loadParts makes no redirector on win32); prepare is the read-only hook `asight on` calls before it writes (W27 ⑥, W74);
     // routing is the proxy-mode routing object 1.6 §9.5's `on` consumes (Task 8(c)): a FACTORY runOnCli builds with its own shell's environment.
     // optIn is 4.8 §2.4's half the CLI reaches (1.6 §1.7): `forms` (what --opt-in may name) and `plan` (the rows of the plan's 「要你点名的」 section);
     // `apply` (one named item, ledgered) and `check` (W68) join from their own commits of Task 14.
-    const [{ createWin32Collector, prepare, win32Routing }, unit, { controlEndpoint }, { windowsRoots }, { planOptIns, optinFormsOf, applyOptIn }] = await Promise.all([import('./win32/wiring.mjs'), import('./win32/autostart.mjs'), import('./win32/control-path.mjs'), import('./win32/roots.mjs'), import('./win32/optin.mjs')])
+    const [{ createWin32Collector, prepare, win32Routing }, unit, { controlEndpoint }, { windowsRoots }, { planOptIns, optinFormsOf, applyOptIn }, { gatherWin32Facts }] = await Promise.all([import('./win32/wiring.mjs'), import('./win32/autostart.mjs'), import('./win32/control-path.mjs'), import('./win32/roots.mjs'), import('./win32/optin.mjs'), import('./win32/netfacts.mjs')])
     const { groupsOf } = await import('./win32/route-plan.mjs')
     const of = (harnesses, ids = null) => groupsOf(harnesses).filter((x) => !ids || ids.includes(x.harness))
     return {
@@ -27,6 +28,7 @@ export async function loadArch(platform = process.platform) {
       createRedirector: (opts = {}) => createWin32Collector(opts),
       prepare,
       routing: win32Routing,
+      netFacts: gatherWin32Facts,
       optIn: {
         forms: ({ harnesses: h, ids = null } = {}) => optinFormsOf(of(h, ids)),
         plan: ({ harnesses: h, ids = null, optIn = [], manifest = null, resolve = null } = {}) => planOptIns({ groups: of(h, ids), optIns: optIn, manifest, resolve }),

@@ -26,8 +26,9 @@ const why = (what, f, extra = {}) => { const r = reasonOf(f); return CLOSED.has(
 const fileReason = (code) => (code === 'ENOENT' ? 'absent' : code === 'EACCES' || code === 'EPERM' || code === 'EBUSY' ? 'denied' : 'unparseable')
 const bool = (v) => (typeof v === 'boolean' ? v : null)
 
-// "127.0.0.1:7897", or "http=127.0.0.1:7897;https=127.0.0.1:7897;socks=127.0.0.1:7898": the address of the http(s) entry, else the first one
-function proxyAddress(server) {
+// "127.0.0.1:7897", or "http=127.0.0.1:7897;https=127.0.0.1:7897;socks=127.0.0.1:7898": the address of the http(s) entry, else the first one (also how a ProxyServer value is read for the
+// system-proxy hop of the topology, 4.8 §2.2 / §10.1 — the platform's network facts use it)
+export function proxyAddress(server) {
   if (typeof server !== 'string' || server.trim() === '') return null
   const parts = server.split(';').map((x) => x.trim()).filter(Boolean)
   const pick = parts.find((x) => /^https?=/i.test(x)) ?? parts[0]
