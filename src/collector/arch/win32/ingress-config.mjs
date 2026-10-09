@@ -97,6 +97,22 @@ export async function loadIngressConfig({ dir, groups, isFree = freeOnLoopback, 
   return { enginePort: next.enginePort, groupPorts: next.groupPorts, ingressToken: next.ingressToken, listenerToken: next.listenerToken, created, added, regenerated }
 }
 
+/** The file as a read-only answer (Task 14's opt-in apply): `{ enginePort, groupPorts, ingressToken, listenerToken }` when it is what we
+ *  wrote and can be trusted (the same `validate`), `{ missing: true }` when there is none, `{ error }` otherwise. Nothing is written, no port
+ *  is picked, no secret is made — the opt-in apply needs the group's port and the listener token to build a shim's proxy URL, and a file it
+ *  cannot trust is an error it refuses on, never one it regenerates (that is `loadIngressConfig`'s side of the street). */
+export function readIngressConfig({ dir, fs = nodeFs } = {}) {
+  let raw = null
+  try { raw = fs.readFileSync(path.join(dir, INGRESS_FILE), 'utf8') } catch (e) {
+    if (e && e.code === 'ENOENT') return { missing: true }
+    return { error: `ingress.json could not be read (${(e && e.code) || e})` }
+  }
+  let parsed = null
+  try { parsed = JSON.parse(raw) } catch { return { error: 'ingress.json is not JSON' } }
+  const bad = validate(parsed)
+  return bad ? { error: `ingress.json is not what asight writes (${bad})` } : { enginePort: parsed.enginePort, groupPorts: parsed.groupPorts, ingressToken: parsed.ingressToken, listenerToken: parsed.listenerToken }
+}
+
 /** A bare `off` and `uninstall`: the file goes (the ports and the secrets are chosen again at the next `on`). → `{ removed: true, existed }`, or `{ removed: false, reason }` when it could not be removed. */
 export function removeIngressConfig({ dir, fs = nodeFs } = {}) {
   const file = path.join(dir, INGRESS_FILE)

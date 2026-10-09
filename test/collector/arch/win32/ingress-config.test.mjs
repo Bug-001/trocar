@@ -5,7 +5,7 @@ import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { tmpDir } from '../../../helpers/tmp.mjs'
-import { loadIngressConfig, removeIngressConfig, freeOnLoopback, INGRESS_FILE, ENGINE_RANGE, GROUP_RANGE } from '../../../../src/collector/arch/win32/ingress-config.mjs'
+import { loadIngressConfig, removeIngressConfig, readIngressConfig, freeOnLoopback, INGRESS_FILE, ENGINE_RANGE, GROUP_RANGE } from '../../../../src/collector/arch/win32/ingress-config.mjs'
 
 const dirOf = () => path.join(tmpDir('asight-ingress-'), 'collector')
 const zeros = (n) => Buffer.alloc(n) // the random source that always starts at the bottom of a range (and gives the same secret twice: the file still has two)
@@ -100,6 +100,22 @@ test('uninstall and a bare off take the file away; a second time is not an error
   const again = await loadIngressConfig({ dir, groups: ['a'], isFree: noneTaken })
   assert.equal(again.created, true, 'the next on chooses again (4.8 §5.1)')
   assert.deepEqual(removeIngressConfig({ dir, fs: { ...fs, rmSync: () => { throw Object.assign(new Error('busy'), { code: 'EBUSY' }) } } }), { removed: false, reason: 'EBUSY' })
+})
+
+test('readIngressConfig (the opt-in apply\'s read, Task 14): a good file answers its ports and secrets; no file is missing, not JSON; a file that cannot be trusted is an error — never a silent regeneration and never a guess', async () => {
+  const good = { enginePort: 18000, groupPorts: { a: 18001, b: 18002 }, ingressToken: 'a'.repeat(32), listenerToken: 'b'.repeat(32) }
+  const dir = dirOf()
+  fs.mkdirSync(dir, { recursive: true })
+  assert.deepEqual(readIngressConfig({ dir }), { missing: true }, 'no file yet: the opt-in apply says so, it does not pick ports of its own')
+  fs.writeFileSync(path.join(dir, INGRESS_FILE), JSON.stringify(good))
+  const mtime = fs.statSync(path.join(dir, INGRESS_FILE)).mtimeMs
+  assert.deepEqual(readIngressConfig({ dir }), good)
+  assert.equal(fs.statSync(path.join(dir, INGRESS_FILE)).mtimeMs, mtime, 'a read that changed nothing writes nothing')
+  for (const [text, why] of [['{broken', 'not JSON'], [JSON.stringify({ ...good, enginePort: 70000 }), 'not what asight writes (bad-port)'], [JSON.stringify({ ...good, listenerToken: good.ingressToken }), 'not what asight writes (bad-token)']]) {
+    fs.writeFileSync(path.join(dir, INGRESS_FILE), text)
+    const r = readIngressConfig({ dir })
+    assert.ok(r.error && r.error.includes(why), `${text}: the untrusted file is an error, not a rebuild (${r.error})`)
+  }
 })
 
 test('freeOnLoopback: a port somebody listens on is not free, a free one is', async (t) => {
