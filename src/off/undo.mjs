@@ -23,7 +23,8 @@
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { undoEntry, removeOwnedFile, describeEntry } from './journal.mjs'
-import { saveManifest, KNOWN_KINDS, undoByHand, restoreByHand } from './manifest.mjs'
+import { saveManifest, KNOWN_KINDS, FILE_ENTRY_KINDS, undoByHand, restoreByHand } from './manifest.mjs'
+import { undoRunKey, undoScheduledTask } from './win32.mjs'
 import { dropBackup } from './backup.mjs'
 import { backupDir, asightHome } from './paths.mjs'
 import { removeEmptyDirs, sweepTemps, writeDurable, sha256, strictlyInside } from './fsutil.mjs'
@@ -54,14 +55,14 @@ const mayHaveRead = (p, l, since) => !!(l && l.rereads) || p.startedAt == null |
  *  part-way (the last write of the manifest: ENOSPC, EACCES, a failed rename) is thrown with `partial` on it: the same object, as far as it got — the files that were
  *  changed or removed by then are in it, because a receipt that said "nothing was changed" over a settings.json that was put back would be untrue (1.6 R1, V3). */
 export async function undoHarnesses(args) {
-  const out = { results: [], kept_bundles: [], removed: [], still_trusting: [], left: [], residue: [], changed: [], procs_error: null, manifest: args.manifest }
+  const out = { results: [], kept_bundles: [], removed: [], still_trusting: [], left: [], residue: [], changed: [], notes: [], procs_error: null, manifest: args.manifest }
   try { return await undoInto(args, out) } catch (e) {
     if (e && typeof e === 'object') e.partial = out
     throw e
   }
 }
 
-async function undoInto({ dir, home, manifest, ids = null, procs = async () => [], roots = null, now = new Date(), dropCa = false, fs = nodeFs }, out) {
+async function undoInto({ dir, home, manifest, ids = null, procs = async () => [], roots = null, now = new Date(), dropCa = false, fs = nodeFs, exec = null, env = process.env }, out) {
   if (manifest.unsupported) throw new Error(`the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read; nothing was changed`)
   const inScope = (h) => typeof h === 'string' && (ids == null || ids.includes(h))
   const liveness = manifest.liveness && typeof manifest.liveness === 'object' ? manifest.liveness : (manifest.liveness = {})
@@ -89,9 +90,29 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   }
 
   // ── 1 and 4: entries ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  // A file entry (json-key, text, proxy-entry, trust-entry) goes by the file rule; the Windows collector's tool entries by their own verbs
+  // (src/off/win32.mjs — the same questions the arch module asks, held equal by test). The kernel's copy is a file asight owns with a rule
+  // of its own: `off` keeps it while it drains (removing it would cut agents mid-connection; a later run takes it when the drain is over),
+  // `uninstall` removes it, and a Windows that holds it (EBUSY / EPERM: it is running) is reported, not papered over (4.8 §4.2).
+  const undoWinItem = (e) => {
+    if (FILE_ENTRY_KINDS.includes(e.kind)) return undoEntry(e, { fs })
+    if (e.kind === 'run-key') {
+      const r = undoRunKey({ prior: e.prior ?? null, run: exec, env })
+      return { path: `${e.hive ?? 'HKCU'}\\${e.key ?? ''}\\${e.name ?? ''}`, harness: e.harness, result: r.ok ? (r.result === 'absent' ? 'already-restored' : 'restored') : 'error', ...(r.result === 'left' ? { result: 'left-user-value' } : {}), ...(r.ok ? {} : { reason: r.reason }) }
+    }
+    if (e.kind === 'scheduled-task') {
+      const r = undoScheduledTask({ uninstall: dropCa, prior: e.prior ?? null, run: exec, env })
+      return { path: e.path ?? '\\asight\\collector', harness: e.harness, result: r.ok ? (r.task === 'absent' ? 'already-restored' : 'restored') : 'error', ...(r.ok ? {} : { reason: [r.reason, r.runKeyReason].filter(Boolean).join('; ') }) }
+    }
+    if (e.kind === 'forwarder-binary') { // uninstall only (the entries filter keeps it out of an `off`)
+      const file = e.path || e.real_path
+      try { if (fs.existsSync(file)) fs.rmSync(file, { force: true }); return { path: file, harness: e.harness, result: 'restored' } } catch (err) { return { path: file, harness: e.harness, result: 'error', reason: `${file} could not be removed (${errText(err)}); a kernel still running holds it — stop it (asight off --now), then run this again` } }
+    }
+    return { path: e.path, harness: e.harness, result: 'error', reason: `${e.path} is of kind ${JSON.stringify(e.kind)}, which this build does not undo` }
+  }
   const undoOne = (e) => {
     let r
-    try { r = undoEntry(e, { fs }) } catch (err) { r = { path: e.path, harness: e.harness, result: 'error', reason: String((err && err.message) || err) } }
+    try { r = undoWinItem(e) } catch (err) { r = { path: e.path, harness: e.harness, result: 'error', reason: String((err && err.message) || err) } }
     const row = { ...r, backup: e.backup ?? null, what: describeEntry(e) } // `what`: what asight put there (the key and value, the block, the line), for a message
     out.results.push(row)
     if (UNDO_LEFT.has(r.result)) { // stays in the manifest, with its backup: the only copy of what the user had
@@ -106,8 +127,10 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     if (!UNDO_AT_PRE.has(r.result)) return keep((KEPT_BECAUSE[r.result] || (() => `${e.path}: ${r.result}`))(e))
     try { dropBackup(e.backup, fs) } catch (err) { row.backup_error = errText(err); keep(`${e.backup}, the backup of ${e.path}, could not be removed (${errText(err)}); remove it by hand`) }
   }
-  const entries = [...manifest.entries].reverse().filter((e) => inScope(e.harness) && (e.kind === 'json-key' || e.kind === 'text'))
-  const config = (e) => !(e.kind === 'text' && e.format !== 'dotenv-block') // step 1; the rest are step 4's
+  const kernelCopies = manifest.entries.filter((e) => inScope(e.harness) && e.kind === 'forwarder-binary')
+  if (!dropCa && kernelCopies.length) out.notes.push(`the kernel's copy (${kernelCopies.map((e) => e.path).join(', ')}) is kept while connections drain from it: it is not undone by \`off\`, \`asight uninstall\` removes it, \`asight off --now\` stops the drain`)
+  const entries = [...manifest.entries].reverse().filter((e) => inScope(e.harness) && (FILE_ENTRY_KINDS.includes(e.kind) || e.kind === 'run-key' || e.kind === 'scheduled-task' || (e.kind === 'forwarder-binary' && dropCa)))
+  const config = (e) => !((e.kind === 'text' || e.kind === 'trust-entry') && e.format !== 'dotenv-block') // step 1; the rest are step 4's (json-key and proxy-entry are config, a text/trust block is config only as dotenv)
   const originals = entries.filter(config) // step 1's, as they are now: undoing takes them out of the manifest, and a bundle is judged after that
   for (const e of entries) if (config(e)) undoOne(e)
   // an item this build cannot undo is said, here and not by each caller: an entry or a file of an unknown kind (it is not touched, whatever its role),

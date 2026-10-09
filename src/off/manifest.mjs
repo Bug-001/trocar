@@ -15,22 +15,31 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import { readOrNull, writeDurable } from './fsutil.mjs'
 import { SENTINEL, OFF_PREFIX } from './text-edit.mjs'
+import { TASK_NAME, RUN_KEY } from './win32.mjs' // the undo-by-hand sentences name the same task and Run value the undo touches (the equality is test/off/win32.test.mjs's)
 
 export const MANIFEST = 'install-manifest.json'
 export const manifestPath = (dir) => path.join(dir, MANIFEST)
 export const MANIFEST_VERSION = 2
 /** The version of the undo side: bumped whenever the manifest's shape or the rules of undoing change (a new item kind, a new step). It is the number in the first lines of the
  *  generated ~/.asight/bin/asight-off, which `asight doctor` compares with the current one (1.6 R3, V35); every `on` writes the copy again, so a bump costs nothing. */
-export const OFF_VERSION = 3 // 3: entries carry `scope` ('agent' | 'user' | 'machine', 1.6 §1.7) and the Windows opt-in kinds of 4.8 §2.4 — a copy written by 2 undoes none of them.
-// (The plan gives Task 9(b) the collector's five kinds and this file's first bump, and Task 14 the `scope` field with the opt-in kinds; whichever of the two branches lands first, their merge takes the higher number.)
+export const OFF_VERSION = 3 // 3: the copy undoes BOTH the Windows collector's items (run-key, scheduled-task, forwarder-binary, proxy-entry, trust-entry — 4.8 §4.2, plan 9(b), audit F3) and the opt-in items with their `scope` ('agent' | 'user' | 'machine', 1.6 §1.7, plan 14) — a copy written by 2 undoes none of them
+// (The plan gave Task 9(b) the collector's kinds and Task 14 the `scope` field with the opt-in kinds; the two branches landed side by side and both bumped to 3, so their merge is the union at 3.)
 
-/** The kinds of item this build can undo (the `legacy-*` ones are the old capture's ledger, 1.6 §4, written by `on` on a platform without the
- *  new collector; the `optin-*` ones are the Windows opt-in items of 4.8 §2.4, written by applyOptIn with `scope`, undone inline by
- *  src/off/win32-optin.mjs's UNDO_BY_KIND — except the machine-level ones: their undo is the elevated step, `off` hands back the command).
- *  An item of any other kind is left alone by `off` and listed (unknownItems). */
+/** The kinds of item this build can undo. The `legacy-*` ones are the old capture's ledger (1.6 §4, written by `on` on a platform without the
+ *  new collector). The Windows collector's kinds (plan 9(b), audit F3 — they land WITH or BEFORE the flip so every entry a flipped `on` writes
+ *  is a kind `off` undoes):
+ *    proxy-entry · trust-entry   file edits (an agent's proxy field, a trust bundle entry): undone by the same file rule as json-key / text
+ *    run-key                     the HKCU Run fallback: undone by the reg dance (src/off/win32.mjs undoRunKey)
+ *    scheduled-task              the \asight\collector task: disabled by `off`, deleted by `uninstall` (undoScheduledTask)
+ *    forwarder-binary            the copied kernel exe: kept while it drains (`off`), removed by `uninstall`
+ *  The `optin-*` ones are the Windows opt-in items of 4.8 §2.4, written by applyOptIn with `scope`, undone inline by
+ *  src/off/win32-optin.mjs's UNDO_BY_KIND — except the machine-level ones: their undo is the elevated step, `off` hands back the command.
+ *  An item of any other kind is left alone by `off` and listed (unknownItems). No vpn-* kinds (D43). */
 export const KNOWN_KINDS = Object.freeze(['json-key', 'text', 'owned-file', 'legacy-clash-block', 'legacy-launch-agent', 'legacy-env', 'legacy-ca', 'legacy-cc-steer',
+  'proxy-entry', 'trust-entry', 'forwarder-binary', 'scheduled-task', 'run-key',
   'optin-user-path', 'optin-shortcut', 'optin-cert-user', 'optin-vscode', 'optin-zcode', 'optin-claude-policy', 'optin-machine-path', 'optin-machine-shortcut', 'optin-cert-machine'])
-
+/** The kinds undone by the file rule (journal.mjs undoEntry): they carry the same shape as json-key / text (path, pre_sha256, ops). */
+export const FILE_ENTRY_KINDS = Object.freeze(['json-key', 'text', 'proxy-entry', 'trust-entry'])
 /** The opt-in kinds alone (4.8 §2.4): ledgered with `scope` ('user' | 'machine'); the undo of each is UNDO_BY_KIND's, and `undo_by_hand` never
  *  names a per-entry command — the agent's switch is the only undo there is (1.6 §1.7, V64). The machine-level three (4.8 §2.4's last column)
  *  are the ones whose undo is an elevated step, never inline. */
@@ -60,6 +69,12 @@ export function undoByHand(e) {
     return `edit ${where}: delete the line ${JSON.stringify(e.line)}${e.format === 'yaml-list' ? ' (write [] after the key if the list is empty then)' : ''}${created}`
   }
   if (e.kind === 'owned-file') return `rm ${shellWord(where)}`
+  if (e.kind === 'run-key') {
+    const at = `${e.hive ?? RUN_KEY.hive}\\${e.key ?? RUN_KEY.key}\\${e.name ?? RUN_KEY.name}`
+    return e.prior ? `run: reg add ${at} /t ${e.prior.kind} /d ${JSON.stringify(e.prior.value)} /f (put your own value back, the one asight recorded)` : `run: reg delete ${at} /f`
+  }
+  if (e.kind === 'scheduled-task') return `run: schtasks /Change /TN ${TASK_NAME} /DISABLE (an uninstall deletes it: schtasks /Delete /TN ${TASK_NAME} /F)`
+  if (e.kind === 'forwarder-binary') return `rm ${shellWord(where)} (a kernel still draining holds it: it goes when the drain ends; stop it with asight off --now)`
   if (OPTIN_KINDS.includes(e.kind)) return `${where}: an opt-in item (${e.kind}); the undo is the agent's switch — "asight off ${e.harness ?? '<harness>'}" takes it out (there is no per-entry undo, 1.6 §1.7)`
   if (typeof e.undo_by_hand === 'string' && e.undo_by_hand) return e.undo_by_hand
   if (KNOWN_KINDS.includes(e.kind)) return `${where}: change asight made for the old capture (${e.kind}); undo it with "asight off"`
