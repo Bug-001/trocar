@@ -20,6 +20,8 @@ import { readSystemProxy, readHkcuEnv, watchSystemProxy } from './upstream.mjs'
 import { readText, readTextOrError } from '../../core/config-read.mjs'
 import { readManifest } from '../../core/trust/journal.mjs'
 import { matchForm } from './forms.mjs'
+import { names, probeUrl } from '../../../netenv/mihomo/rules.mjs'
+import { createController } from '../../../netenv/mihomo/controller.mjs'
 
 const CONTROLLER_RANGE = [19000, 19999] // the kernel's own controller, its own free port (the generator refuses one it has already seen)
 const randomPort = (random) => CONTROLLER_RANGE[0] + (random(4).readUInt32BE(0) % (CONTROLLER_RANGE[1] - CONTROLLER_RANGE[0] + 1))
@@ -138,8 +140,32 @@ export async function createWin32Collector({ env = process.env, dir, home = env.
     })
   }
 
+  /** One probe refresh after the engine (re)starts (4.8 §3.3, the 「窗口期」 paragraph): a group that had fallen back stays on its re-entry
+   *  point until its next interval (up to 30 s, not captured meanwhile), so the daemon asks the kernel's own controller to health-test every
+   *  on-form's fallback group NOW, with the same loopback probe address the config carries (mihomo remembers health per address, so the url
+   *  must be the group's own). The own-controller allowlist checks the path and the url (controller.mjs); a kernel that is not running or has
+   *  no controller is said, not thrown. */
+  async function refreshProbes() {
+    const st = typeof forwarder.state === 'function' ? forwarder.state() : null
+    if (st && st.phase && st.phase !== 'running') return { ok: false, reason: 'no kernel' }
+    const creds = forwarder.controller()
+    if (!creds || !Number.isInteger(creds.port)) return { ok: false, reason: 'no kernel' }
+    const ctl = (deps.probeController || ((c) => createController({ endpoint: `tcp:127.0.0.1:${c.port}`, secret: c.secret, own: true })))(creds)
+    const asked = []
+    for (const x of groups) {
+      if (((plan || {})[x.g] || {}).on !== true) continue
+      const port = ing.groupPorts[x.g]
+      for (const f of x.forms) {
+        if (f.supported !== true || !f.match || !Number.isInteger(port)) continue
+        const r = await ctl.get(`/group/${names(f.id).fb}/delay?url=${encodeURIComponent(probeUrl(port, f.id))}&timeout=2000`)
+        asked.push({ f: f.id, ok: r.ok === true, status: r.status })
+      }
+    }
+    return { ok: true, asked }
+  }
+
   redirector.win32 = {
-    helper, forwarder, ingress, replan, groups,
+    helper, forwarder, ingress, replan, groups, refreshProbes,
     netenv: () => ({ systemProxy, hkcuEnv, ownPorts: ownPorts() }),
     appliedHosts: () => Object.fromEntries(appliedHosts),
     controller, kernelExe,
@@ -151,20 +177,22 @@ export async function createWin32Collector({ env = process.env, dir, home = env.
 }
 
 /**
- * prepare({ plan, helper, locate, sac, arch, fs }) → { notes: [line], refuse?: { code, reason, commands } } — the read-only hook `asight on` calls before it
+ * prepare({ helper, locate, sac, arch, fs }) → { notes: [line], refuse?: { code, reason, of?, commands } } — the read-only hook `asight on` calls before it
  * writes anything (4.8 §8 ⑥ and the Smart App Control preflight; W27 ⑥, W74): the kernel line (`locateKernel`: found and verified, with its package and digest)
  * and, when Smart App Control is on or evaluating, its warning line; a missing or mismatched kernel is a REFUSAL with the two reinstall commands — no download
  * to wait for, a settled precondition, so `on` exits 1 before the first write (the event and the receipt are the caller's). `helper` is sacState's reader; one
- * is started and closed here when none is given. Nothing is written, nothing is started.
+ * is started and closed here when none is given (an injected `sac` gets the helper it was given, none if none). Nothing is written, nothing is started.
  */
 export async function prepare({ helper = null, locate = locateKernel, sac = sacState, arch = process.arch, fs = nodeFs, start = startHelper, env = process.env } = {}) {
   const k = await locate({ ...(arch ? { arch } : {}), ...(fs ? { fs } : {}) })
   if (k.missing || k.mismatch) {
-    const commands = (k.missing || k.mismatch).commands
+    const raw = (k.missing || k.mismatch).commands
+    const commands = raw ? (Array.isArray(raw) ? raw : Object.values(raw)) : null // reinstallCommands gives {npm, release}; the receipt wants the two lines
     return {
       refuse: {
         code: k.missing ? 'forwarder-binary-missing' : 'forwarder-digest-mismatch',
-        reason: k.missing ? `the pinned kernel package was not found (${k.missing.reason}); nothing was changed` : 'the pinned kernel package holds an exe whose digest is not the pin\'s',
+        reason: k.missing ? `the pinned kernel package was not found (${k.missing.reason})` : "the pinned kernel package holds an exe whose digest is not the pin's",
+        ...(k.mismatch && k.mismatch.of ? { of: k.mismatch.of } : {}),
         ...(commands ? { commands } : {}),
       },
     }
@@ -172,9 +200,9 @@ export async function prepare({ helper = null, locate = locateKernel, sac = sacS
   const notes = [`asight's kernel: found and verified (${k.found.sha256.slice(0, 12)}… in ${k.found.packageDir})`]
   let own = false
   let h = helper
-  if (!h) { try { h = start({ env }); own = true } catch { h = null } }
+  if (!h && sac === sacState) { try { h = start({ env }); own = true } catch { h = null } } // only the real reader needs a helper of its own
   try {
-    const state = h ? await sac({ helper: h }) : { unknown: { reason: 'denied', detail: 'no helper' } }
+    const state = h || sac !== sacState ? await sac({ helper: h }) : { unknown: { reason: 'denied', detail: 'no helper' } }
     if (state === 'on' || state === 'evaluation') notes.push('Smart App Control 开着:未签名的 asight-forwarder.exe 很可能起不来,代理模式用不了(仍会去试;失败时会记下原因,一个代理入口也不写)')
     else if (state !== 'off') notes.push(`Smart App Control 的状态读不到(${state.unknown.reason}${state.unknown.detail ? `:${state.unknown.detail}` : ''}):不知道,按上面的计划继续`)
   } finally { if (own && h && typeof h.close === 'function') await h.close() }

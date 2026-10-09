@@ -79,7 +79,7 @@ export const OFF_CODES = Object.freeze(['backup-failed', 'backup-kept', 'undone-
 // another branch appends to stay edit-free here; `sets` below adds the blocks. test/health/codes.test.mjs holds each against the
 // RFC's table written out by hand (W38).
 export const ROUTE_WHERE = Object.freeze(['routing', 'forwarder', 'ingress', 'optin']) // the choice and effect of a routing · asight's own mihomo · the engine's proxy ingress · the doing of an opt-in item
-export const ROUTE_EVENTS = Object.freeze(['route-applied', 'forwarder-start', 'forwarder-stop', 'forwarder-draining', 'optin-applied', 'optin-removed']) // state changes, not failures
+export const ROUTE_EVENTS = Object.freeze(['route-applied', 'forwarder-start', 'forwarder-stop', 'forwarder-draining', 'probes-refreshed', 'optin-applied', 'optin-removed']) // state changes, not failures; `probes-refreshed` is the daemon's one probe refresh after the engine (re)starts (4.8 §3.3), `{forms: [{f, ok, status}]}`
 /** `code` of a failure event, by the `where` the §12 table gives it. Every row of the table is the class 失败, so the next list is this one. */
 export const ROUTE_CODES = Object.freeze([
   'ingress-auth-failed', 'ingress-unknown', 'engine-port-taken', 'upstream-unavailable', // ingress (`upstream-unavailable`: the group's upstream cannot be dialled at all, no login to dial it with or none to dial: the lookup refused, the agent got a 502)
