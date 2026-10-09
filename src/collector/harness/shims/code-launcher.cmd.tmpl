@@ -1,0 +1,8 @@
+@echo off
+rem asight collector: launcher for VS Code on Windows (RFC 4.8 s2.4), written by the VS Code opt-in item of
+rem `asight on kimi-code --opt-in kimi-code.vscode`. Your VS Code shortcut starts this instead of Code.exe: it sets
+rem the CA file Node reads (the asight CA, plus any CA you already gave Kimi Code) for every extension of the
+rem editor and runs the real Code.exe. The proxy itself is VS Code's own http.proxy setting, not this environment.
+rem `asight off kimi-code` removes it.
+set "NODE_EXTRA_CA_CERTS=__ASIGHT_CA_FILE__"
+"__ASIGHT_REAL_BINARY__" %*
