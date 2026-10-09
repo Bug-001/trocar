@@ -120,10 +120,10 @@ test('resolveCommand follows Windows\' order — the machine PATH first, then th
   const files = new Set(['C:\\Windows\\system32\\kimi.com', 'C:\\Program Files\\kimi\\kimi.exe', 'C:\\Users\\alice\\AppData\\Roaming\\npm\\opencode.cmd', 'C:\\Users\\alice\\.asight\\collector\\bin\\opencode.cmd'])
   const exists = (p) => files.has(p)
   const reg = { userPath: 'C:\\Users\\alice\\.asight\\collector\\bin;C:\\Users\\alice\\AppData\\Roaming\\npm', machinePath: 'C:\\Windows\\system32;C:\\Program Files\\kimi' }
-  assert.deepEqual(resolveCommand('kimi', { run: fakeWin({ reg }).run, env: ENV, exists }), { where: 'machine', path: 'C:\\Windows\\system32\\kimi.com' }, '.COM before .EXE, machine before user')
+  assert.deepEqual(resolveCommand('kimi', { run: fakeWin({ reg }).run, env: ENV, exists }), { at: 'machine', path: 'C:\\Windows\\system32\\kimi.com' }, '.COM before .EXE, machine before user')
   const npmOnly = fakeWin({ reg: { ...reg, machinePath: 'C:\\Windows\\system32' } })
-  assert.deepEqual(resolveCommand('opencode', { run: npmOnly.run, env: ENV, exists }), { where: 'user', path: 'C:\\Users\\alice\\.asight\\collector\\bin\\opencode.cmd' }, 'asight\'s own shim is an honest answer: this is the 「is the entry in effect」 read')
-  assert.deepEqual(resolveCommand('opencode', { run: npmOnly.run, env: ENV, exists, skip: ['c:\\users\\alice\\.asight\\collector\\bin'] }), { where: 'user', path: 'C:\\Users\\alice\\AppData\\Roaming\\npm\\opencode.cmd' }, 'the real-binary lookup skips asight\'s bin (a shim of an earlier opt-in is not the real binary)')
+  assert.deepEqual(resolveCommand('opencode', { run: npmOnly.run, env: ENV, exists }), { at: 'user', path: 'C:\\Users\\alice\\.asight\\collector\\bin\\opencode.cmd' }, 'asight\'s own shim is an honest answer: this is the 「is the entry in effect」 read')
+  assert.deepEqual(resolveCommand('opencode', { run: npmOnly.run, env: ENV, exists, skip: ['c:\\users\\alice\\.asight\\collector\\bin'] }), { at: 'user', path: 'C:\\Users\\alice\\AppData\\Roaming\\npm\\opencode.cmd' }, 'the real-binary lookup skips asight\'s bin (a shim of an earlier opt-in is not the real binary)')
   assert.equal(resolveCommand('nope', { run: npmOnly.run, env: ENV, exists }), null)
   assert.equal(resolveCommand('bad name', { run: npmOnly.run, env: ENV, exists }), null, 'a command name is a word')
   const base = fakeWin({ reg: { userPath: 'C:\\npm', machinePath: 'C:\\Windows\\system32' } })

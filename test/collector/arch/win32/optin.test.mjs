@@ -197,7 +197,7 @@ test('W66 / V57 (the on half) applyOptIn of a machine item: ledgered pending-adm
     const manifest = { entries: [] }
     const events = [], notes = [], failures = []
     const deps = {
-      resolveCommand: (name) => ({ where: 'machine', path: `C:\\Program Files\\${name}\\${name}.exe` }),
+      resolveCommand: (name) => ({ at: 'machine', path: `C:\\Program Files\\${name}\\${name}.exe` }),
       readMachinePath: () => 'C:\\Windows',
       machineCheck: () => true,
       launch: () => ({ ok: true }),

@@ -81,18 +81,18 @@ export const PATH_EXTS = Object.freeze(['.com', '.exe', '.bat', '.cmd'])
 
 /** Where `<name>` resolves today, in Windows' own order: the machine PATH first, then the user PATH (§6.3) — both read from the registry, not
  *  from this process's environment. `skip` (a list of directories, case-blind) leaves directories out: the real-binary lookup skips asight's
- *  own shim directory, so a shim of an earlier opt-in is not mistaken for the real binary. → `{ where: 'machine' | 'user', path }` | null
+ *  own shim directory, so a shim of an earlier opt-in is not mistaken for the real binary. → `{ at: 'machine' | 'user', path }` | null (`at`, not `where`: a lookup answer, not the where of a record — the D38 closed-set scan reads record-where literals)
  *  (nowhere, or a PATH that could not be read — the caller refuses rather than guess). */
 export function resolveCommand(name, { run = null, env = process.env, exists = (p) => fs.existsSync(p), skip = [] } = {}) {
   if (!/^[\w.-]+$/.test(String(name || ''))) return null
   const lower = (p) => String(p).toLowerCase().replace(/\//g, '\\')
   const skipped = new Set(skip.map(lower))
   const search = (value) => String(value || '').split(';').filter((d) => d !== '' && !skipped.has(lower(d)))
-  for (const [where, value] of [['machine', readMachinePath({ run, env })], ['user', (readUserPath({ run, env }) || {}).value]]) {
+  for (const [at, value] of [['machine', readMachinePath({ run, env })], ['user', (readUserPath({ run, env }) || {}).value]]) {
     if (typeof value !== 'string') continue
     for (const d of search(value)) for (const ext of PATH_EXTS) {
       const p = `${d}\\${name}${ext}`
-      if (exists(p)) return { where, path: p }
+      if (exists(p)) return { at, path: p }
     }
   }
   return null

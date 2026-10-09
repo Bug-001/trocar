@@ -239,7 +239,7 @@ async function userValuesOf(a) {
     if (ku.error) return { error: ku.error }
     const sac = deps.sac ? deps.sac() : sacOf({ run, env })
     if (sacBlocksShims(sac)) return { refuse: { code: 'smart-app-control', reason: 'Smart App Control is on, so asight installs no shim: a blocked shim at the front of your PATH would stop the command from starting (fail-closed, 4.8 §6.3)' } }
-    if (command === 'kimi' && !exists(path.win32.join(home, '.kimi-code', 'bin', 'kimi.exe'))) return { refuse: { code: 'kimi-not-native', reason: 'Kimi Code is not the native install (%USERPROFILE%\\.kimi-code\\bin\\kimi.exe is not there), so asight installs no kimi shim (4.8 §6.3)' } }
+    if (command === 'kimi' && !exists(path.win32.join(home, '.kimi-code', 'bin', 'kimi.exe'))) return { refuse: { reason: 'Kimi Code is not the native install (%USERPROFILE%\\.kimi-code\\bin\\kimi.exe is not there), so asight installs no kimi shim (4.8 §6.3)' } }
     const real = deps.resolveCommand ? deps.resolveCommand(command) : resolveCommand(command, { run, env, exists, skip: [dirs.bin] })
     if (!real || !real.path) return { error: `the real binary of ${command} did not resolve on the PATH (Windows reads the machine PATH first, then the user PATH), so there is nothing for a shim to forward to` }
     const shim = renderCmdTemplate(command === 'kimi' ? 'kimi.cmd.tmpl' : 'opencode.cmd.tmpl', { proxy: ku.url, ...(command === 'kimi' ? { caFile: kimiCaFile(dirs.ca, fs) } : {}), realBinary: real.path })
@@ -477,7 +477,7 @@ async function machineValuesOf({ row, groups = [], deps = {} }) {
     if (!command) return { error: `the form ${row.form} has no shim command, so there is no dispatcher to build` }
     if (typeof deps.resolveCommand !== 'function') return { error: 'no command resolver is wired in (the machine PATH item cannot be built)' }
     const real = deps.resolveCommand(command)
-    if (!real || real.where !== 'machine' || !real.path) return { error: `the real binary of ${command} did not resolve on the machine PATH (the user-level shim item is the right one here)` }
+    if (!real || real.at !== 'machine' || !real.path) return { error: `the real binary of ${command} did not resolve on the machine PATH (the user-level shim item is the right one here)` }
     if (typeof deps.readMachinePath !== 'function') return { error: 'the machine PATH could not be read (no reader wired in)' }
     const machinePath = deps.readMachinePath()
     if (machinePath == null) return { error: 'the machine PATH could not be read, so the elevated step cannot be built (nothing was changed)' }
