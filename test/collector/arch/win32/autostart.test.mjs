@@ -169,10 +169,13 @@ test('W25 an elevated token and a SYSTEM token are refused by the daemon\'s chec
   }
 })
 
-// What W25 owns and this tree cannot run yet: the check is built (above) but `on`, `daemon`, `off` and `uninstall` do not call it here, because the commands live on the CLI branch (src/cli/*, src/off/*; this worktree is
-// at CLI T02). A todo, not a skip: it runs, fails today and says why, and an author who wires the check has the line to turn into a real assertion. Each ends in assert.fail so that it cannot go green by accident.
-const notHere = (what, owner) => { throw new assert.AssertionError({ message: `not wired yet (${owner}): ${what}` }) }
-test('W25 (command level, Task 8(c)) `asight on` with an injected elevated or SYSTEM token refuses with elevated-token before it writes anything: the sandbox HOME is byte for byte as it was', { todo: 'Task 8(c): src/cli/on.mjs (CLI branch) calls arch.refuseElevated before the first write; assert the receipt, the failure record, exit 1 and the HOME tree' }, () => notHere('on', 'Task 8(c)'))
+// W25's command halves are all LANDED now (the todo pins that lived here — each ending in assert.fail so it could not go green by accident — became
+// pointers as the commands got their wiring): on is on-elevated.test.mjs's (2026-10-10, Task 8(c) 收尾), the daemon's is daemon.test.mjs's (Task 8(c)),
+// off / uninstall's is win32-kernel.test.mjs's (Task 9(b), lane B).
+// W25's on half is LANDED (Task 8(c) 收尾, 2026-10-10): `on` asks parts.arch.refuseElevated at its entry — before turnOn (its only writer), before the
+// netenv probe and the adoption read — and refuses an elevated or SYSTEM token with the §12 record (where 'start') where a collector directory exists,
+// the receipt carrying it either way; a token that cannot be read is not a refusal (R11) — 已由 test/collector/arch/win32/on-elevated.test.mjs 覆盖
+// (the receipt, the one record, exit 1, the HOME otherwise byte for byte, turnOn never asked, and the unreadable case proceeding).
 // W25's daemon half is LANDED (Task 8(c)): runDaemon calls arch.refuseElevated before it claims its endpoint, and the win32 endpoint itself
 // (controlEndpoint's pipe + token) is wired beside it — 已由 test/collector/daemon.test.mjs::`W25 the win32 daemon refuses an elevated or SYSTEM token
 // before it claims its endpoint …` 覆盖 (the record, no socket, no control.json, the unreadable-not-a-refusal half, and the endpoint with its token).

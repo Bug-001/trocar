@@ -79,6 +79,35 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
         return EXIT.usage
       }
     }
+    const fs = deps.fs || nodeFs
+    // The Node floor (4.8 §7, W24: the daemon is pulled up by THIS Node at every login, so an older one cannot run the collector): the arch's own read of
+    // process.versions, asked first because it is free — ok:false refuses with the doctor line, before anything is touched. No flows record: the receipt
+    // is it (nothing of asight's may exist yet, and the closed sets hold no code for this). Linux's arch has no nodePreflight and nothing here changes.
+    if (parts.arch && typeof parts.arch.nodePreflight === 'function') {
+      const pf = parts.arch.nodePreflight()
+      if (pf && pf.ok === false) {
+        const receipt = { ...newReceipt('on'), ok: false, harnesses: named.ids, notes: [pf.doctor] }
+        if (json) io.out(JSON.stringify(receipt, null, 2))
+        else io.out(formatOnReceipt(receipt, { tense: 'past', home }))
+        return EXIT.incomplete
+      }
+    }
+    // R7 (4.8 §7): `on` never runs with an elevated or SYSTEM token — the arch's own question (the helper's `token` verb, self-started and closed by
+    // refuseElevated), asked before anything is touched: turnOn is `on`'s only writer, so this stops it before its first write, and the netenv probe and
+    // the adoption read never run under an elevated shell either. A token that cannot be read is not a refusal (R11: an on that stopped on a broken
+    // question is not an on). Linux's arch has no refuseElevated and nothing here changes. The record's `where` is the §12 table's 'start' — that code
+    // lives there whichever command asked (checkRecord's closed set); with no collector directory yet the receipt is the record (4.6 §记录).
+    if (parts.arch && typeof parts.arch.refuseElevated === 'function') {
+      const refusal = await parts.arch.refuseElevated({ env, onUnknown: (why) => io.err(`[elevated] ${why}`) })
+      if (refusal) {
+        const receipt = { ...newReceipt('on'), ok: false, harnesses: named.ids, notes: [refusal.reason] }
+        const cdir = path.join(home, '.asight', 'collector')
+        try { if (fs.existsSync(cdir)) appendEvent(cdir, { event: 'failure', where: 'start', code: refusal.code, reason: refusal.reason }) } catch { /* the receipt is the record then (R11) */ }
+        if (json) io.out(JSON.stringify(receipt, null, 2))
+        else io.out(formatOnReceipt(receipt, { tense: 'past', home }))
+        return EXIT.incomplete
+      }
+    }
     const script = deps.script || process.argv[1]
     const unit = flags.has('--no-unit') || !parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script, run: deps.exec || null, env })
     const helperState = deps.helperState || (parts.arch && parts.arch.install && parts.arch.install.helperState ? () => parts.arch.install.helperState() : null)
@@ -103,7 +132,6 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     // The arch's read-only preflight (4.8 §8 ⑥, W27 ⑥, W74; Windows: the kernel line and the Smart App Control line), run BEFORE turnOn so a refusal
     // stops `on` before its first write — a settled precondition with nothing to roll back. The Linux arch has no `prepare` and nothing here changes.
     // The refusal's event and receipt are on's to write; with no collector directory yet (nothing installed) the receipt is the record (4.6 §记录).
-    const fs = deps.fs || nodeFs
     const archPrepare = parts.arch && typeof parts.arch.prepare === 'function' ? parts.arch.prepare : null
     const prep = archPrepare ? await archPrepare({ env }) : null
     if (prep && prep.refuse) {
