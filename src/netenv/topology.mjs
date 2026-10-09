@@ -187,7 +187,6 @@ function formVerdict(F, h, hf, fm, fwf) {
   if (!fm.entry) return none(false, false, 'not-routed')
   if (fm.entry.intact === null) return none(null, null, null)
   if (fm.entry.intact === false) return none(false, false, 'proxy-changed')
-  if (F.desired[h] === 'off') return none(!!(fwf && fwf.clients && fwf.clients.length), false, 'desired-off')
   if (!F.forwarder || F.forwarder.up === false || !fwf) return none(true, false, 'forwarder-down')
   if (fm.reason === 'form-path-unknown') return none(false, false, 'form-path-unknown') // the platform's plan saw a process whose image it knows and whose install path it has not measured (4.8 §2.2): the form is not claimed
   if (main) return none(true, false, 'elevated-agent')
