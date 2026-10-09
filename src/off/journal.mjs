@@ -18,10 +18,15 @@ export function removeOwnedFile(item, fs = nodeFs) {
   return { path: item.path, result: 'removed', ...(item.sha256 && sha256(cur) !== item.sha256 ? { changed: true } : {}) }
 }
 
-// What an entry put where, for messages: the key and value of a JSON entry, the variables of a block, the line.
-export const describeEntry = (e) => (e.kind === 'text'
-  ? (e.vars ? `block with ${Object.entries(e.vars).map(([k, v]) => `${k}=${v}`).join(', ')}` : `line ${JSON.stringify(e.line)}`)
-  : `${e.keys.join('.')} = ${e.value}`)
+// What an entry put where, for messages: the key and value of a JSON entry, the variables of a block, the line; the Windows collector's
+// tool entries name what they registered instead (a Run value, a task, the kernel's copy — 4.8 §4.2).
+export const describeEntry = (e) => {
+  if (e.kind === 'text' || (e.kind === 'trust-entry' && e.vars)) return e.vars ? `block with ${Object.entries(e.vars).map(([k, v]) => `${k}=${v}`).join(', ')}` : `line ${JSON.stringify(e.line)}`
+  if (e.kind === 'run-key') return `the Run value ${e.name ?? 'asight-collector'} (${e.hive ?? 'HKCU'}\\${e.key ?? ''})`
+  if (e.kind === 'scheduled-task') return `the scheduled task ${e.task ?? '\\asight\\collector'}`
+  if (e.kind === 'forwarder-binary') return `the kernel's copy ${e.path ?? ''}`
+  return `${e.keys.join('.')} = ${e.value}`
+}
 
 
 // Undo one entry by the 4.6 rules: untouched since install → byte-identical; already back → say so; edited since →

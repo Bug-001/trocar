@@ -1,8 +1,8 @@
 // proc.mjs (src/off) — the process table `off` reads for itself, and the identity of one process (RFC 4.6 §安装清单与卸载「撤销顺序」第 2 / 5 步,
 // §控制面 `lock`, 1.6 R3). `off` has to know which agents are alive after the daemon is stopped and the entries are undone, with no daemon to ask
-// and no collector code (the standalone `asight-off` is made of src/off alone, 0.1 §2): Linux reads /proc, macOS runs `ps` through execTool.
-// The /proc readers moved here from src/collector/arch/linux/procinfo.mjs, which re-exports them; procIdentity / pidAlive from
-// src/health/read.mjs, which re-exports procIdentity. A table that cannot be read throws: an empty one would read as "nobody is alive" (D38).
+// and no collector code (the standalone `asight-off` is made of src/off alone, 0.1 §2): Linux reads /proc, macOS runs `ps`, Windows asks one fixed
+// powershell question (4.8 §7) — both through execTool. The /proc readers moved here from src/collector/arch/linux/procinfo.mjs, which re-exports them; procIdentity /
+// pidAlive from src/health/read.mjs, which re-exports procIdentity. A table that cannot be read throws: an empty one would read as "nobody is alive" (D38).
 // Every reader takes an injectable `root` (default '/proc'), so a test points it at a synthetic tree. Imports only node:* and src/off.
 import nodeFs from 'node:fs'
 import path from 'node:path'
@@ -78,8 +78,12 @@ export function readStartTime(pid, { root = '/proc', hz = 100, now = Date.now } 
   return btime ? (Number(btime[1]) + ticks / hz) * 1000 : null
 }
 
-/** {start_time, boot_id} of a live process (strings), each null when it cannot be read (no /proc, gone, EACCES). */
-export function procIdentity(pid, { root = '/proc', fs = nodeFs } = {}) {
+/** {start_time, boot_id} of a live process (strings), each null when it cannot be read (no /proc, gone, EACCES). On win32 the answer comes
+ *  from `winIdentity` (pid + creation time + the machine's boot time, RFC 4.8 §7): the daemon's own lock identity is this function's default,
+ *  so the win32 arm here is what puts the Windows identity into the daemon's lock without a daemon.mjs change — an unverified lock (the
+ *  /proc shape, nulls) reads a reused pid as "running" and then "starting", which `off` would wait on or mis-stop. */
+export function procIdentity(pid, { root = '/proc', fs = nodeFs, platform = null, run = null, env = process.env } = {}) {
+  if ((platform || process.platform) === 'win32') return winIdentity(pid, { run, env })
   let start_time = null, boot_id = null
   try {
     const stat = fs.readFileSync(path.join(root, String(pid), 'stat'), 'utf8')
@@ -88,6 +92,19 @@ export function procIdentity(pid, { root = '/proc', fs = nodeFs } = {}) {
   } catch { /* gone or no /proc: start_time stays null, and the judge says so */ }
   try { boot_id = fs.readFileSync(path.join(root, 'sys', 'kernel', 'random', 'boot_id'), 'utf8').trim() || null } catch { /* no /proc */ }
   return { start_time, boot_id }
+}
+
+// The one fixed question of a process's identity on Windows (4.8 §7): its creation time and the machine's boot time, both as Unix
+// milliseconds — boot_id is the system start time, start_time the process's own, so a reused pid and a reboot are told apart exactly
+// as /proc's pair is. One Get-CimInstance for the pid and one for the OS per call; the calls are rare (a daemon start, an off's checks).
+const WIN_IDENTITY_SCRIPT = (pid) => `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if (-not $p) { 'gone' } else { $o = Get-CimInstance Win32_OperatingSystem; [pscustomobject]@{ s = [DateTimeOffset]::new($p.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds(); b = [DateTimeOffset]::new($o.LastBootUpTime.ToUniversalTime()).ToUnixTimeMilliseconds() } | ConvertTo-Json -Compress }`
+/** {start_time, boot_id} of one live process on Windows (strings of Unix ms), each null when it cannot be read — the same contract as the
+ *  /proc reader: never a throw, never a guess (a dead powershell, or an answer that is neither 'gone' nor the JSON object, is "not known").
+ *  `run` is the injected runner (execTool's). */
+export function winIdentity(pid, { run = null, env = process.env } = {}) {
+  const r = execTool('powershell', ['-NoProfile', '-NonInteractive', '-Command', WIN_IDENTITY_SCRIPT(pid)], { run, env })
+  if (r.code !== 0 || r.out === 'gone') return { start_time: null, boot_id: null }
+  try { const o = JSON.parse(r.out); return { start_time: Number.isFinite(o.s) ? String(o.s) : null, boot_id: Number.isFinite(o.b) ? String(o.b) : null } } catch { return { start_time: null, boot_id: null } }
 }
 
 // `ps` prints dates in the user's language: under LC_ALL=zh_CN.UTF-8 or ja_JP.UTF-8 the five words of `lstart` are no longer "Wed Oct  7 04:27:00 2026" and every row
@@ -101,9 +118,11 @@ export function psIdentity(pid, { exec = null, env = process.env } = {}) {
   return { start_time: r.code === 0 && /\S/.test(r.out) ? r.out.replace(/\s+/g, ' ').trim() : null, boot_id: null }
 }
 
-/** The reader of a process's identity for a platform: /proc on Linux, `ps` on macOS. Without one a lock can only say "its pid is alive", and a pid that another process has
- *  taken since (a crash, a reboot) then reads as a command still running — which blocked `asight off`, the way out, for as long as that other process lived (audit rule-b 3). */
+/** The reader of a process's identity for a platform: /proc on Linux, `ps` on macOS, one Get-CimInstance question on Windows. Without one a
+ *  lock can only say "its pid is alive", and a pid that another process has taken since (a crash, a reboot) then reads as a command still
+ *  running — which blocked `asight off`, the way out, for as long as that other process lived (audit rule-b 3). */
 export function identityFor({ platform = process.platform, exec = null, env = process.env, root = '/proc', fs = nodeFs } = {}) {
+  if (platform === 'win32') return (pid) => winIdentity(pid, { run: exec, env })
   return platform === 'darwin' ? (pid) => psIdentity(pid, { exec, env }) : (pid) => procIdentity(pid, { root, fs })
 }
 
@@ -151,10 +170,33 @@ function procsOfPs({ uid, exec, env }) {
 }
 
 /** The live processes of one user: `[{ pid, ppid, uid, startedAt: ms | null, exe, argv, env: () => Map | null }]` — `env` is read when asked for.
- *  `uid` null lists everyone's. Linux reads `root` (/proc); macOS runs `ps` through `exec` (a spawnSync-like runner a test injects; execTool
- *  refuses a real one under npm test). Another platform, or a table that cannot be read, rejects. */
+ *  `uid` null lists everyone's. Linux reads `root` (/proc); macOS runs `ps` and Windows one fixed Get-CimInstance question, both through `exec`
+ *  (a spawnSync-like runner a test injects; execTool refuses a real one under npm test). Another platform, or a table that cannot be read, rejects. */
 export async function listProcs({ uid = typeof process.getuid === 'function' ? process.getuid() : null, root = '/proc', platform = process.platform, exec = null, env = process.env } = {}) {
   if (platform === 'linux') return procsOfLinux({ uid, root })
   if (platform === 'darwin') return procsOfPs({ uid, exec, env })
+  if (platform === 'win32') return procsOfWin({ exec, env })
   throw new Error(`there is no process-table reader for ${platform}, so which agents are alive is not known`)
+}
+
+// The one fixed question of the whole process table on Windows (4.8 §7): one Get-CimInstance over Win32_Process, every field this file's
+// row shape wants, as JSON — one question for the whole machine, not one per process. Windows has no uid (null: the row says whose it is
+// not), the command line comes joined by spaces (argv is it split on whitespace, its argument boundaries lost — the same as macOS's `ps`),
+// and another process's environment cannot be read at all (null). A question that died, or an answer that is not JSON, is an error, never
+// an empty table: an empty one would say "nobody holds the bundle" and delete it (D38, the rule of the other two readers).
+const WIN_TABLE_SCRIPT = 'Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ p = $_.ProcessId; pp = $_.ParentProcessId; n = $_.Name; x = $_.ExecutablePath; s = $(try { [DateTimeOffset]::new($_.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds() } catch { $null }); c = $_.CommandLine } } | ConvertTo-Json -Compress'
+function procsOfWin({ exec, env }) {
+  const r = execTool('powershell', ['-NoProfile', '-NonInteractive', '-Command', WIN_TABLE_SCRIPT], { run: exec, env })
+  const what = `the Windows process table (one Get-CimInstance question) ${r.code === null ? `did not run (${r.err || 'no reason given'})` : `failed (exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''})`}, so which agents are alive is not known`
+  if (r.code !== 0) throw new Error(what)
+  if (r.out === '') return [] // a table that printed nothing is an empty table (the same reading as `ps` printing nothing)
+  let rows
+  try { rows = JSON.parse(r.out) } catch { throw new Error(what.replace('did not run', 'answered something that is not JSON')) }
+  const out = []
+  for (const row of Array.isArray(rows) ? rows : [rows]) { // one process on the machine: PowerShell's JSON is an object, not a list
+    if (row === null || typeof row !== 'object' || !Number.isFinite(row.p)) continue
+    const name = typeof row.n === 'string' && row.n !== '' ? row.n : null
+    out.push({ pid: Number(row.p), ppid: Number.isFinite(row.pp) ? Number(row.pp) : null, uid: null, startedAt: Number.isFinite(row.s) ? Number(row.s) : null, exe: typeof row.x === 'string' && row.x !== '' ? row.x : name, argv: (typeof row.c === 'string' && row.c !== '' ? row.c : name || '').split(/\s+/).filter((s) => s !== ''), env: () => null })
+  }
+  return out
 }

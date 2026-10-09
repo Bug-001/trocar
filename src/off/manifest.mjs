@@ -15,17 +15,26 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import { readOrNull, writeDurable } from './fsutil.mjs'
 import { SENTINEL, OFF_PREFIX } from './text-edit.mjs'
+import { TASK_NAME, RUN_KEY } from './win32.mjs' // the undo-by-hand sentences name the same task and Run value the undo touches (the equality is test/off/win32.test.mjs's)
 
 export const MANIFEST = 'install-manifest.json'
 export const manifestPath = (dir) => path.join(dir, MANIFEST)
 export const MANIFEST_VERSION = 2
 /** The version of the undo side: bumped whenever the manifest's shape or the rules of undoing change (a new item kind, a new step). It is the number in the first lines of the
  *  generated ~/.asight/bin/asight-off, which `asight doctor` compares with the current one (1.6 R3, V35); every `on` writes the copy again, so a bump costs nothing. */
-export const OFF_VERSION = 2 // 2: the copy also takes out the old capture (src/off/legacy.mjs, 1.6 §4): a copy written by version 1 does not know it
+export const OFF_VERSION = 3 // 3: the copy also undoes the Windows collector's items (run-key, scheduled-task, forwarder-binary, proxy-entry, trust-entry — 4.8 §4.2, plan 9(b), audit F3): a copy written by version 2 leaves them
 
 /** The kinds of item this build can undo (the `legacy-*` ones are the old capture's ledger, 1.6 §4, written by `on` on a platform without the
- *  new collector). An item of any other kind is left alone by `off` and listed (unknownItems). */
-export const KNOWN_KINDS = Object.freeze(['json-key', 'text', 'owned-file', 'legacy-clash-block', 'legacy-launch-agent', 'legacy-env', 'legacy-ca', 'legacy-cc-steer'])
+ *  new collector). An item of any other kind is left alone by `off` and listed (unknownItems).
+ *  The Windows collector's kinds (plan 9(b), audit F3 — they land WITH or BEFORE the flip so every entry a flipped `on` writes is a kind `off` undoes):
+ *    proxy-entry · trust-entry   file edits (an agent's proxy field, a trust bundle entry): undone by the same file rule as json-key / text
+ *    run-key                     the HKCU Run fallback: undone by the reg dance (src/off/win32.mjs undoRunKey)
+ *    scheduled-task              the \asight\collector task: disabled by `off`, deleted by `uninstall` (undoScheduledTask)
+ *    forwarder-binary            the copied kernel exe: kept while it drains (`off`), removed by `uninstall`
+ *  No vpn-* kinds (D43). */
+export const KNOWN_KINDS = Object.freeze(['json-key', 'text', 'owned-file', 'legacy-clash-block', 'legacy-launch-agent', 'legacy-env', 'legacy-ca', 'legacy-cc-steer', 'proxy-entry', 'trust-entry', 'forwarder-binary', 'scheduled-task', 'run-key'])
+/** The kinds undone by the file rule (journal.mjs undoEntry): they carry the same shape as json-key / text (path, pre_sha256, ops). */
+export const FILE_ENTRY_KINDS = Object.freeze(['json-key', 'text', 'proxy-entry', 'trust-entry'])
 
 export const newManifest = (now = new Date()) => ({ version: MANIFEST_VERSION, created_at: now.toISOString(), complete: false, engine_port: null, planned: [], confirmed_paths: [], kept_backups: [], liveness: {}, dirs: [], files: [], entries: [] })
 
@@ -50,6 +59,12 @@ export function undoByHand(e) {
     return `edit ${where}: delete the line ${JSON.stringify(e.line)}${e.format === 'yaml-list' ? ' (write [] after the key if the list is empty then)' : ''}${created}`
   }
   if (e.kind === 'owned-file') return `rm ${shellWord(where)}`
+  if (e.kind === 'run-key') {
+    const at = `${e.hive ?? RUN_KEY.hive}\\${e.key ?? RUN_KEY.key}\\${e.name ?? RUN_KEY.name}`
+    return e.prior ? `run: reg add ${at} /t ${e.prior.kind} /d ${JSON.stringify(e.prior.value)} /f (put your own value back, the one asight recorded)` : `run: reg delete ${at} /f`
+  }
+  if (e.kind === 'scheduled-task') return `run: schtasks /Change /TN ${TASK_NAME} /DISABLE (an uninstall deletes it: schtasks /Delete /TN ${TASK_NAME} /F)`
+  if (e.kind === 'forwarder-binary') return `rm ${shellWord(where)} (a kernel still draining holds it: it goes when the drain ends; stop it with asight off --now)`
   if (typeof e.undo_by_hand === 'string' && e.undo_by_hand) return e.undo_by_hand
   if (KNOWN_KINDS.includes(e.kind)) return `${where}: change asight made for the old capture (${e.kind}); undo it with "asight off"`
   return `${where}: this item is of kind ${JSON.stringify(e.kind ?? null)}, which this build does not know; use the asight that wrote it ("asight off"), or look at ${where} and the manifest's entry for it`
