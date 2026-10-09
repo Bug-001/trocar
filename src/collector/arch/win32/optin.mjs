@@ -86,3 +86,83 @@ const commandOf = (x) => (x.group && x.group.proxyEntry && x.group.proxyEntry.ki
 
 /** → every form id that has opt-in items in `groups` (the `--opt-in` usage error lists them; naming anything else is a usage error, not a skip). */
 export const optinFormsOf = (groups) => [...new Set(planOptIns({ groups }).map((r) => r.form))]
+
+// ── the doing of a named item ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// applyOptIn({ row, manifest, dir, home, env, fs, now, save, note, failure, state, deps }) → { state: 'done' | 'pending-admin' | 'needs-admin' | 'failed', reason?,
+// elevated_command? }. Everything it touches is injected: the runner of OS tools (`deps.run`, execTool's), the UAC launcher (`deps.launch`), whether a
+// prompt can be shown (`deps.canPrompt`), the readers of the PATH (`deps.readMachinePath`, `deps.resolveCommand`) and the user-level script runner
+// (`deps.exec`, commit B). The ledger entries it pushes through `manifest.entries` + `save()` carry `scope`, the prior state (`prior_value` / `backup`
+// / `pre_sha256`) and `undo_by_hand`; a machine-level item is ledgered `pending_admin` FIRST and only cleared by the read-back after the OS's own
+// prompt was consented to (4.8 §2.4: 先入账 pending-admin;核对到了才记成已做). `state(rec)` writes the §12 state events (optin-applied), `note(rec)`
+// an install-note of this run, `failure(rec)` a failure record.
+
+const ledgerEntry = ({ kind, harness, form, item, scope, path, ...rest }) => ({ kind, harness, form, item, scope, path: path ?? `${form}:${item}`, undo_by_hand: `${form} 的点名项(${kind}):撤销是 asight off ${harness}`, installed_at: new Date().toISOString(), ...rest })
+
+/** The machine half: ONE self-contained elevated step (elevate.mjs; the OS's own prompt, never a password of asight's). Outcomes with their codes
+ *  (each is recorded: the note carries the attempt, the ledger entry the state): ok + read-back → done; the consent box declined, or the step ran
+ *  but the read-back did not confirm → pending-admin (NOT optin-failed); no prompt can be shown → needs-admin with the command (the fallback); a
+ *  command that could not be built (the machine PATH unreadable) → failed, nothing attempted. */
+async function applyMachineOne({ row, values, manifest, save, note, failure, state, deps }) {
+  const { elevatedCommand, runElevated, MACHINE_BIN } = await import('./elevate.mjs')
+  const entry = ledgerEntry({ kind: row.kinds[0], harness: row.harness, form: row.form, item: row.item, scope: 'machine', values, pending_admin: true })
+  manifest.entries.push(entry)
+  let command = null
+  try { command = elevatedCommand({ item: row.item, op: 'apply', values }).command } catch (e) {
+    entry.undo_by_hand += `;(这一步没做成:${String((e && e.message) || e)})`
+    save()
+    note({ kind: 'optin-elevated', form: row.form, item: row.item, outcome: 'not-built', reason: `the elevated step could not be built: ${String((e && e.message) || e)}` })
+    failure({ code: 'optin-failed', form: row.form, item: row.item, scope: 'machine', reason: `the elevated step could not be built: ${String((e && e.message) || e)}` })
+    return { state: 'failed', reason: String((e && e.message) || e) }
+  }
+  save()
+  const ask = runElevated({ command, launch: deps.launch, canPrompt: deps.canPrompt })
+  if (ask.noPrompt) {
+    note({ kind: 'optin-elevated', form: row.form, item: row.item, outcome: 'no-prompt', reason: ask.reason })
+    return { state: 'needs-admin', reason: ask.reason, elevated_command: command }
+  }
+  if (ask.refused) {
+    note({ kind: 'optin-elevated', form: row.form, item: row.item, outcome: ask.outcome, reason: ask.reason })
+    return { state: 'pending-admin', reason: ask.reason }
+  }
+  // the step ran with the user's consent: confirm it read-only before calling it done (a step nobody confirmed is not done)
+  const confirmed = deps.machineCheck ? await deps.machineCheck({ item: row.item, values }) : true
+  if (!confirmed) {
+    note({ kind: 'optin-elevated', form: row.form, item: row.item, outcome: 'unconfirmed', reason: 'the elevated step ran, but the read-back did not confirm the change' })
+    return { state: 'pending-admin', reason: 'the elevated step ran, but the read-back did not confirm the change' }
+  }
+  entry.pending_admin = false
+  save()
+  note({ kind: 'optin-elevated', form: row.form, item: row.item, outcome: 'ok', reason: `the machine-level item was done through the OS's own prompt (${MACHINE_BIN})` })
+  state({ event: 'optin-applied', where: 'optin', form: row.form, item: row.item, scope: 'machine' })
+  return { state: 'done' }
+}
+
+/** One named item (turnOn calls this per chosen row, inside the op lock, after the install's own writes). The user-level half (the fixed scripts)
+ *  lands with its own commit; until then a user-level row is an honest failure, never a silent skip. */
+export async function applyOptIn(args) {
+  const { row } = args
+  const def = OPTIN_ITEMS[row.item]
+  if (!def) return { state: 'failed', reason: `unknown opt-in item ${row.item}` }
+  if (def.scope !== 'machine') return { state: 'failed', reason: `the user-level apply of ${row.item} is not built yet (Task 14's script commit)` }
+  const values = await machineValuesOf(args)
+  if (values.error) { (args.failure || (() => {}))({ code: 'optin-failed', form: row.form, item: row.item, scope: 'machine', reason: values.error }); return { state: 'failed', reason: values.error } }
+  return applyMachineOne({ ...args, values })
+}
+
+/** What a machine item's step needs: the command name (the group's shim entry), the real binary's path (the resolver's answer) and the machine
+ *  PATH as read now. Every piece injected, so a test answers and nothing here runs a tool for real. */
+async function machineValuesOf({ row, groups = [], deps = {} }) {
+  if (row.item === 'machine-path-dispatcher') {
+    const g = groups.find((x) => x.forms.some((f) => f.id === row.form)) || null
+    const command = g && g.group && g.group.proxyEntry && g.group.proxyEntry.kind === 'shim' ? g.group.proxyEntry.command : null
+    if (!command) return { error: `the form ${row.form} has no shim command, so there is no dispatcher to build` }
+    if (typeof deps.resolveCommand !== 'function') return { error: 'no command resolver is wired in (the machine PATH item cannot be built)' }
+    const real = deps.resolveCommand(command)
+    if (!real || real.where !== 'machine' || !real.path) return { error: `the real binary of ${command} did not resolve on the machine PATH (the user-level shim item is the right one here)` }
+    if (typeof deps.readMachinePath !== 'function') return { error: 'the machine PATH could not be read (no reader wired in)' }
+    const machinePath = deps.readMachinePath()
+    if (machinePath == null) return { error: 'the machine PATH could not be read, so the elevated step cannot be built (nothing was changed)' }
+    return { command, realBinary: real.path, machinePath }
+  }
+  return { error: `the machine item ${row.item} is not built yet (Task 14's later commits)` }
+}

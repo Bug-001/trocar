@@ -466,7 +466,7 @@ export async function turnOn(opts = {}) {
       } else for (const row of optInTodo) {
         let out = null
         try {
-          out = await applyOne({ row, manifest: m, dir, home, env, fs, now, save: () => saveManifest(dir, m, fs),
+          out = await applyOne({ row, manifest: m, dir, home, env, harnesses, ids, fs, now, save: () => saveManifest(dir, m, fs),
             note: (rec) => put({ event: EVENT.installNote, where: 'install', ...rec }),
             failure: (rec) => put({ event: EVENT.failure, where: 'optin', ...rec }),
             state: (rec) => put(rec) })

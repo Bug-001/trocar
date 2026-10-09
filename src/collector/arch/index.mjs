@@ -15,8 +15,9 @@ export async function loadArch(platform = process.platform) {
     // daemon.mjs calls it (loadParts makes no redirector on win32); prepare is the read-only hook `asight on` calls before it writes (W27 ⑥, W74).
     // optIn is 4.8 §2.4's half the CLI reaches (1.6 §1.7): `forms` (what --opt-in may name) and `plan` (the rows of the plan's 「要你点名的」 section);
     // `apply` (one named item, ledgered) and `check` (W68) join from their own commits of Task 14.
-    const [{ createWin32Collector, prepare }, unit, { controlEndpoint }, { windowsRoots }, { planOptIns, optinFormsOf }] = await Promise.all([import('./win32/wiring.mjs'), import('./win32/autostart.mjs'), import('./win32/control-path.mjs'), import('./win32/roots.mjs'), import('./win32/optin.mjs')])
+    const [{ createWin32Collector, prepare }, unit, { controlEndpoint }, { windowsRoots }, { planOptIns, optinFormsOf, applyOptIn }] = await Promise.all([import('./win32/wiring.mjs'), import('./win32/autostart.mjs'), import('./win32/control-path.mjs'), import('./win32/roots.mjs'), import('./win32/optin.mjs')])
     const { groupsOf } = await import('./win32/route-plan.mjs')
+    const of = (harnesses, ids = null) => groupsOf(harnesses).filter((x) => !ids || ids.includes(x.harness))
     return {
       os: 'win32', install: null, unit,
       controlEndpoint,
@@ -25,8 +26,9 @@ export async function loadArch(platform = process.platform) {
       createRedirector: (opts = {}) => createWin32Collector(opts),
       prepare,
       optIn: {
-        forms: ({ harnesses, ids = null } = {}) => optinFormsOf(groupsOf(harnesses).filter((x) => !ids || ids.includes(x.harness))),
-        plan: ({ harnesses, ids = null, optIn = [], manifest = null, resolve = null } = {}) => planOptIns({ groups: groupsOf(harnesses).filter((x) => !ids || ids.includes(x.harness)), optIns: optIn, manifest, resolve }),
+        forms: ({ harnesses: h, ids = null } = {}) => optinFormsOf(of(h, ids)),
+        plan: ({ harnesses: h, ids = null, optIn = [], manifest = null, resolve = null } = {}) => planOptIns({ groups: of(h, ids), optIns: optIn, manifest, resolve }),
+        apply: ({ harnesses: h, ids = null, ...rest }) => applyOptIn({ ...rest, groups: of(h, ids) }),
       },
     }
   }

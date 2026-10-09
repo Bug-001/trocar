@@ -118,3 +118,139 @@ test('SCRIPTS_DIR is the fixed scripts directory of the arch (applyOptIn names t
   assert.equal(path.basename(SCRIPTS_DIR), 'optin')
   assert.equal(path.basename(path.dirname(SCRIPTS_DIR)), 'win32')
 })
+
+// ── the machine half: ONE self-contained elevated step, the OS's own prompt (W65, W66, V57, V63; elevate.mjs) ─────────────────────────────────────────────────────────────
+import { dispatcherText, elevatedCommand, runElevated, readMachinePath, withPathItem, withoutPathItem, MACHINE_BIN, MACHINE_PATH_KEY } from '../../../../src/collector/arch/win32/elevate.mjs'
+
+test('W65 the dispatcher (§6.3): no credential, one rule — the running user\'s own shim first when it exists, else the real binary recorded at opt-in; other users and services never go through this kernel', () => {
+  const d = dispatcherText({ command: 'kimi', realBinary: 'C:\\Program Files\\kimi\\kimi.exe' })
+  assert.equal(d.includes('HTTPS_PROXY') || d.includes('NODE_EXTRA_CA_CERTS'), false, 'the dispatcher holds no credential (the user\'s own shim has it, not the machine one)')
+  assert.match(d, /if exist "%USERPROFILE%\\\.asight\\collector\\bin\\kimi\.cmd" \(/)
+  assert.match(d, /call "%USERPROFILE%\\\.asight\\collector\\bin\\kimi\.cmd" %\*/)
+  assert.match(d, /"C:\\Program Files\\kimi\\kimi\.exe" %\*/)
+  assert.throws(() => dispatcherText({ command: 'kimi ../x', realBinary: 'C:\\a.exe' }), /needs a command name/)
+  assert.throws(() => dispatcherText({ command: 'kimi' }), /real binary/)
+})
+
+test('W65 the machine-PATH step: one self-contained line — the admin-only directory with its three grants, the dispatcher inline, the PATH value with the directory first and never twice; nothing the step runs sits under a user-writable path', () => {
+  const machinePath = 'C:\\Windows\\system32;C:\\Windows;%ProgramData%\\asight\\machine-bin;C:\\tools'
+  const { command } = elevatedCommand({ item: 'machine-path-dispatcher', op: 'apply', values: { command: 'opencode', realBinary: 'C:\\Users\\bob\\AppData\\Roaming\\npm\\opencode.exe', machinePath } })
+  assert.ok(!command.includes('\n'), 'one line')
+  assert.match(command, /icacls "\$env:ProgramData\\asight\\machine-bin" \/inheritance:r \/grant 'SYSTEM:\(OI\)\(CI\)F' \/grant 'Administrators:\(OI\)\(CI\)F' \/grant 'Users:\(OI\)\(CI\)RX'/)
+  assert.match(command, /Set-Content -Path "\$env:ProgramData\\asight\\machine-bin\\opencode\.cmd"/, 'the dispatcher is written from inline content')
+  const written = /reg add 'HKLM[^']*' \/v Path \/t REG_EXPAND_SZ \/d '([^']*)' \/f/.exec(command)[1]
+  assert.equal(written, `${MACHINE_BIN};C:\\Windows\\system32;C:\\Windows;C:\\tools`, 'the directory goes first, the existing entries keep their order, and it is not added twice')
+  // the step references no script or executable under a user-writable directory: %APPDATA% / %LOCALAPPDATA% / %TEMP% never appear, and
+  // %USERPROFILE% appears only inside the dispatcher's own runtime rule (the running user's shim, §6.3) — never as a file the step runs or reads
+  assert.ok(!command.includes('%APPDATA%') && !command.includes('%LOCALAPPDATA%') && !command.includes('%TEMP%'), command)
+  assert.equal((command.match(/%USERPROFILE%/g) || []).length, 2, 'the only %USERPROFILE% mentions are the dispatcher\'s own runtime lookup (if exist / call)')
+  assert.ok(!/-File /.test(command) && !/Invoke-(Item|Expression)/.test(command), 'the step runs no script file: everything it does is inline')
+  // the value is built on the PATH as read now, never on a guess
+  assert.throws(() => elevatedCommand({ item: 'machine-path-dispatcher', op: 'apply', values: { command: 'kimi', realBinary: 'C:\\a', machinePath: null } }), /machine PATH could not be read/)
+  assert.equal(withPathItem(null, 'x'), null)
+  assert.equal(withPathItem('a;b', 'b'), 'b;a', 'only our entry moves; adding it twice is a no-op')
+  assert.equal(withoutPathItem('a;b;A', 'a'), 'b', 'the drop is case-blind (a registry value holds one case, the compare must not care)')
+})
+
+test('W65 the undo steps: the dispatcher goes, the PATH item with it, and the directory only with the last one; the all-users launcher restores the recorded real binary; the machine certificate\'s bytes are inline, never a file under the user\'s home', () => {
+  const machinePath = `${MACHINE_BIN};C:\\Windows`
+  const last = elevatedCommand({ item: 'machine-path-dispatcher', op: 'undo', values: { command: 'opencode', machinePath, last: true } }).command
+  assert.match(last, /reg add .*\/d 'C:\\Windows'/, 'the PATH item is dropped from the CURRENT value, never the pre-asight one written back wholesale (D28)')
+  assert.match(last, /Remove-Item -Path "\$env:ProgramData\\asight\\machine-bin\\opencode\.cmd" -Force/)
+  assert.match(last, /Remove-Item -Path "\$env:ProgramData\\asight\\machine-bin" -Recurse -Force/, 'with the last dispatcher the directory goes too')
+  const notLast = elevatedCommand({ item: 'machine-path-dispatcher', op: 'undo', values: { command: 'opencode', machinePath, last: false } }).command
+  assert.ok(!notLast.includes('-Recurse'), 'another item still holds the directory')
+  const launcher = elevatedCommand({ item: 'all-users-launcher', op: 'apply', values: { command: 'opencode', realBinary: 'C:\\x\\OpenCode.exe', shortcuts: ['C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\OpenCode.lnk'] } }).command
+  assert.match(launcher, /\$s\.TargetPath="\$env:ProgramData\\asight\\machine-bin\\asight-opencode\.cmd"/)
+  const undoLauncher = elevatedCommand({ item: 'all-users-launcher', op: 'undo', values: { command: 'opencode', realBinary: 'C:\\x\\OpenCode.exe', shortcuts: ['C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\OpenCode.lnk'] } }).command
+  assert.match(undoLauncher, /\$s\.TargetPath='C:\\x\\OpenCode\.exe'/, 'the all-users shortcuts point back at the real binary')
+  const cert = elevatedCommand({ item: 'machine-cert', op: 'apply', values: { certB64: 'AAECAw==' } }).command
+  assert.match(cert, /FromBase64String\('AAECAw=='\)/, 'the certificate bytes are inline (a file under the user\'s home could be swapped between the confirmation and the UAC click)')
+  assert.ok(!cert.includes('-FilePath \'C:\\Users'), 'the import reads only the copy the step itself wrote into the admin-only directory')
+  assert.match(elevatedCommand({ item: 'machine-cert', op: 'undo', values: { thumbprint: 'ab12' } }).command, /certutil -delstore Root 'ab12'/)
+  assert.throws(() => elevatedCommand({ item: 'no-such' }), /knows no machine item/)
+  assert.throws(() => elevatedCommand({ item: 'machine-cert', op: 'apply', values: {} }), /certB64/)
+})
+
+test('V63 runElevated hands the step to the OS\'s own prompt: Start-Process -Verb RunAs through the injected launcher, nothing of asight\'s is a password, no prompt means the command is NOT launched', () => {
+  const seen = []
+  const launch = (file, args) => { seen.push([file, args]); return { ok: true } }
+  assert.deepEqual(runElevated({ command: "Set-Content -Path 'x' -Value 'y'", launch }), { ok: true })
+  assert.equal(seen.length, 1)
+  assert.equal(seen[0][0], 'powershell', 'the prompt is PowerShell\'s own elevation, UAC under it')
+  assert.equal(seen[0][1].some((a) => a.includes('Start-Process -Verb RunAs')), true, 'the OS\'s own prompt, exactly once per step')
+  assert.equal(seen[0][1].some((a) => a.includes('-Command')), true)
+  assert.equal(seen[0][1].join(' ').includes('password'), false, 'no password argument anywhere')
+  assert.equal(seen[0][1].join(' ').includes('read-host'), false, 'and no prompt of asight\'s own (no password field, V63)')
+  assert.deepEqual(runElevated({ command: 'x', launch: () => ({ declined: true }) }), { refused: true, outcome: 'uac-declined', reason: 'the UAC consent box was declined' })
+  assert.equal(runElevated({ command: 'x', launch: () => ({ out: 'The operation was canceled by the user.' }) }).outcome, 'uac-declined')
+  assert.equal(runElevated({ command: 'x', launch: () => ({ out: '', err: '' }) }).outcome, 'elevate-error', 'an answer that says neither yes nor no is not a success (a step nobody confirmed is not done)')
+  const notLaunched = []
+  assert.equal(runElevated({ command: 'x', launch: (f, a) => { notLaunched.push([f, a]); return { ok: true } }, canPrompt: () => false }).outcome, 'no-prompt')
+  assert.deepEqual(notLaunched, [], 'no prompt can be shown: the command is not launched at all — the fallback is the caller printing it')
+  assert.throws(() => runElevated({ command: 'x' }), /injected launcher/)
+})
+
+test('W66 / V57 (the on half) applyOptIn of a machine item: ledgered pending-admin FIRST, done only after the OS\'s prompt and the read-back; declined stays pending-admin; no prompt is needs-admin with the command; an unbuilt step fails without attempting anything', async () => {
+  const { applyOptIn } = await import('../../../../src/collector/arch/win32/optin.mjs')
+  const rig = (over = {}) => {
+    const manifest = { entries: [] }
+    const events = [], notes = [], failures = []
+    const deps = {
+      resolveCommand: (name) => ({ where: 'machine', path: `C:\\Program Files\\${name}\\${name}.exe` }),
+      readMachinePath: () => 'C:\\Windows',
+      machineCheck: () => true,
+      launch: () => ({ ok: true }),
+      canPrompt: () => true,
+      ...over.deps,
+    }
+    const row = { form: 'opencode.cli', harness: 'opencode', item: 'machine-path-dispatcher', kinds: ['optin-machine-path'], scope: 'machine', admin: true, chosen: true, applicable: true, state: 'needed' }
+    const groups = GROUPS.filter((x) => x.g === 'opencode.cli')
+    const apply = () => applyOptIn({ row, groups, manifest, deps, save: () => {}, note: (r) => notes.push(r), failure: (r) => failures.push(r), state: (r) => events.push(r) })
+    return { manifest, events, notes, failures, apply }
+  }
+  const ok = rig()
+  assert.deepEqual(await ok.apply(), { state: 'done' })
+  const e = ok.manifest.entries[0]
+  assert.deepEqual([e.kind, e.harness, e.form, e.item, e.scope, e.pending_admin], ['optin-machine-path', 'opencode', 'opencode.cli', 'machine-path-dispatcher', 'machine', false], 'ledgered with scope machine and cleared by the read-back (pending_admin false)')
+  assert.match(e.undo_by_hand, /asight off opencode/, 'the undo is the agent\'s switch (V64)')
+  assert.deepEqual(e.values, { command: 'opencode', realBinary: 'C:\\Program Files\\opencode\\opencode.exe', machinePath: 'C:\\Windows' })
+  assert.deepEqual(ok.events, [{ event: 'optin-applied', where: 'optin', form: 'opencode.cli', item: 'machine-path-dispatcher', scope: 'machine' }])
+  assert.deepEqual(ok.failures, [])
+  assert.ok(ok.notes.some((n) => n.outcome === 'ok'), 'the attempt and its outcome are recorded (D38)')
+
+  const declined = rig({ deps: { launch: () => ({ declined: true }) } })
+  assert.equal((await declined.apply()).state, 'pending-admin')
+  assert.equal(declined.manifest.entries[0].pending_admin, true, 'a declined UAC leaves the entry pending-admin, offered again next time')
+  assert.deepEqual(declined.events, [], 'not optin-applied')
+  assert.deepEqual(declined.failures, [], 'and NOT optin-failed: a refused UAC is pending-admin, not a failure (§12)')
+
+  const noPrompt = rig({ deps: { canPrompt: () => false } })
+  const np = await noPrompt.apply()
+  assert.equal(np.state, 'needs-admin')
+  assert.match(np.elevated_command, /Start-Process|reg add/, 'the fallback carries the whole self-contained command')
+  assert.equal(noPrompt.manifest.entries[0].pending_admin, true)
+
+  const unconfirmed = rig({ deps: { machineCheck: () => false } })
+  assert.equal((await unconfirmed.apply()).state, 'pending-admin')
+  assert.equal(unconfirmed.manifest.entries[0].pending_admin, true, 'the step ran, the read-back did not confirm: still pending, said, not done')
+
+  const unreadable = rig({ deps: { readMachinePath: () => null } })
+  const r = await unreadable.apply()
+  assert.equal(r.state, 'failed')
+  assert.match(r.reason, /machine PATH could not be read/)
+  assert.deepEqual(unreadable.manifest.entries, [], 'nothing was ledgered and nothing attempted (a step built on a guess is not built)')
+  assert.ok(unreadable.failures.length === 1 && unreadable.failures[0].code === 'optin-failed')
+})
+
+
+test('readMachinePath reads the one value through execTool\'s injected runner and says null rather than guessing (reg.exe\'s own output shape)', () => {
+  const regOut = (v) => ({ status: 0, stdout: `\r\nHKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\r\n    Path    REG_EXPAND_SZ    ${v}\r\n\r\n`, stderr: '' })
+  const calls = []
+  const run = (file, args) => { calls.push([file, ...args]); return regOut('C:\\Windows\\system32;C:\\Windows') }
+  assert.equal(readMachinePath({ run }), 'C:\\Windows\\system32;C:\\Windows')
+  assert.deepEqual(calls, [['reg', 'query', MACHINE_PATH_KEY, '/v', 'Path']], 'one read-only query of the one value')
+  assert.equal(readMachinePath({ run: () => regOut('%SystemRoot%\\system32') }), '%SystemRoot%\\system32', 'the %…% form is kept: it is a REG_EXPAND_SZ, expanded by whatever reads it')
+  assert.equal(readMachinePath({ run: () => ({ status: 1, stdout: '', stderr: 'ERROR: The system was unable to find the specified registry key or value.' }) }), null)
+  assert.equal(readMachinePath({ run: () => ({ status: 0, stdout: 'garbage', stderr: '' }) }), null, 'an answer that is not the value is null, never a guess')
+})
