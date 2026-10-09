@@ -29,7 +29,7 @@ import { controlRequest, controlSocketPath, controlEndpointOf } from './control-
 import { disableAutostart, unitFilePath, UNIT_FILE_NAME } from './autostart.mjs'
 import { execTool } from './exec.mjs'
 import { listProcs, identityFor, pidAlive } from './proc.mjs'
-import { kernelForwardOnly } from './win32.mjs'
+import { kernelForwardOnly, refuseElevatedByWhoami } from './win32.mjs'
 import { undoOptIns } from './win32-optin.mjs'
 import { runEventWriter } from './events.mjs'
 import { confirm } from './io.mjs'
@@ -332,6 +332,12 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
   const run = w.clock().toISOString()
   const receipt = { ...newReceipt('off'), harnesses: ids || [], all: ids === null, now, undo: ['asight on'], log: path.join(w.dir, 'flows'), left: [], kept_bundles: [], still_trusting: [], residue: [], kept_backups: [], orphan_backups: [], pending: [], user_processes: [], notes: [], problems: [] }
   const put = flowWriter(w, run, receipt.notes)
+  // R7 on Windows (4.8 §7): off never runs with an elevated token — asked before anything is touched, and a token that cannot be read is
+  // not a refusal (an undo that stopped on a broken whoami is not an undo).
+  if ((deps.platform || process.platform) === 'win32') {
+    const refusal = refuseElevatedByWhoami({ run: w.exec, env })
+    if (refusal) { receipt.problems.push(refusal.reason); receipt.ok = false; put({ event: 'failure', ...refusal }); return { receipt, exit: EXIT.incomplete } }
+  }
   const read = () => { try { return { manifest: readManifest(w.dir, w.fs), manifestError: null } } catch (e) { return { manifest: null, manifestError: e } } }
   let { manifest, manifestError } = read() // what the plan and the first desired-off go by; read AGAIN under the lock: an `on` that held it has written to the manifest since
   let installed = harnessIdsOf(manifest)

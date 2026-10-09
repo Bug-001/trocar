@@ -9,6 +9,7 @@ import path from 'node:path'
 import { kernelForwardOnly, kernelControllerOf, readForwarderLock } from '../../src/off/win32.mjs'
 import { undoOptIns } from '../../src/off/win32-optin.mjs'
 import { runOff } from '../../src/off/orchestrate.mjs'
+import { runUninstall } from '../../src/cli/uninstall.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const KERNEL_AT = 1_740_000_000_000 // the kernel's start time, Unix ms
@@ -110,4 +111,45 @@ test('the opt-in registry: user-level items by kind through UNDO_BY_KIND, machin
     const scoped = await undoOptIns({ manifest, ids: ['codex'] })
     assert.deepEqual(scoped.results.map((r) => r.kind), ['optin-future'], 'ids limits the harnesses, as everywhere')
   } finally { delete UNDO_BY_KIND['optin-registry'] }
+})
+
+// ── W25's command-level half: the R7 refusal at the entry of off and uninstall (4.8 §7) ────────────────────────────────────────
+/** whoami as a recording fake: `elevated` High-integrity / Medium / unreadable, everything else fails. */
+function whoami({ elevated = 'medium' } = {}) {
+  const calls = []
+  const run = (file, args) => {
+    calls.push([file, ...args].join(' '))
+    if (file !== 'whoami') return { status: 1, stdout: '', stderr: `not whoami: ${file}` }
+    if (elevated === 'unreadable') return { status: null, stdout: '', stderr: 'did not run' }
+    const label = elevated === 'high' ? 'S-1-16-12288' : 'S-1-16-8192'
+    return { status: 0, stdout: `Everyone,S-1-5-32-545;Mandatory Label\\${label}",,n/a\n`, stderr: '' }
+  }
+  return { run, calls }
+}
+const snapshotOf = (dir) => { const out = {}; const walk = (p, rel) => { for (const n of fs.readdirSync(p)) { const f = path.join(p, n), r = rel ? `${rel}/${n}` : n; const st = fs.lstatSync(f); out[r] = st.isDirectory() ? 'dir' : fs.readFileSync(f).toString('utf8') } }; walk(dir, ''); return out }
+
+test('W25: off and uninstall on win32 refuse an elevated token at the entry — the sandbox HOME byte for byte unchanged — and a whoami that cannot be read is not a refusal', async () => {
+  const home = tmpDir('asight-w32-r7-')
+  for (const [name, runIt] of [['off', (o) => runOff(o)], ['uninstall', (o) => runUninstall(o)]]) {
+    const before = snapshotOf(home)
+    const who = whoami({ elevated: 'high' })
+    const r = await runIt({ home, env: { ASIGHT_TEST_SANDBOX: '1' }, deps: { platform: 'win32', exec: who.run, procs: async () => [], daemonState: async () => ({ state: 'none' }), lockWaitMs: 0 } })
+    assert.equal(r.exit, 1, `${name}: refused`)
+    assert.ok(r.receipt.problems.some((p) => p.includes('提升的令牌') || p.includes('高完整性')), `${name}: the receipt says why`)
+    assert.ok(who.calls.some((c) => c.startsWith('whoami /groups')), `${name}: the token was asked for before anything was touched`)
+    assert.deepEqual(snapshotOf(home), before, `${name}: nothing was written anywhere in the HOME`)
+  }
+  // a token that cannot be read is not a refusal (an undo that stopped on a broken whoami is not an undo): off proceeds
+  const { runOff: off2 } = await import('../../src/off/orchestrate.mjs')
+  const r2 = await off2({ home, env: { ASIGHT_TEST_SANDBOX: '1' }, ids: null, deps: { platform: 'win32', exec: whoami({ elevated: 'unreadable' }).run, procs: async () => [], daemonState: async () => ({ state: 'none' }), lockWaitMs: 0 } })
+  assert.notEqual(r2.exit, 1, 'not the elevated refusal')
+  assert.equal(r2.receipt.nothing_installed, true, 'it ran to its normal answer: nothing is installed here')
+})
+
+test('the standalone copy carries the Windows pieces: the built text names them, and running it over a win32 manifest answers what `asight off` answers', async () => {
+  const { buildStandalone } = await import('../../src/off/standalone.mjs')
+  const { OFF_VERSION } = await import('../../src/off/manifest.mjs')
+  const text = buildStandalone({ version: OFF_VERSION })
+  for (const name of ['kernelForwardOnly', 'undoRunKey', 'undoScheduledTask', 'controlEndpointOf', 'winIdentity']) assert.ok(text.includes(name), `the copy bundles ${name}`)
+  assert.ok(text.includes('asight-off '), 'the version line is on the first lines')
 })
