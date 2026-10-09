@@ -25,7 +25,7 @@ import { readManifest, MANIFEST_VERSION, OFF_VERSION } from './manifest.mjs'
 import { undoHarnesses } from './undo.mjs'
 import { planByMarker, undoByMarker } from './marker.mjs'
 import { daemonState, stopDaemon, helperGone, isRedirectorHelper } from './daemon-stop.mjs'
-import { controlRequest, controlSocketPath } from './control-client.mjs'
+import { controlRequest, controlSocketPath, controlEndpointOf } from './control-client.mjs'
 import { disableAutostart, unitFilePath, UNIT_FILE_NAME } from './autostart.mjs'
 import { execTool } from './exec.mjs'
 import { listProcs, identityFor, pidAlive } from './proc.mjs'
@@ -43,17 +43,24 @@ const errMessage = (e) => String((e && e.message) || e)
 /** The world one run of `off` / `uninstall` sees, every part of it replaceable by `deps`. */
 export function offWorld({ home = nodeOs.homedir(), env = process.env, deps = {} } = {}) {
   const dir = collectorDir(home)
+  const platform = deps.platform || process.platform
+  // Windows finds the daemon's control endpoint in <collector>\control.json — the pipe name AND the token every request must carry
+  // (4.8 §7 控制面); Linux keeps the $XDG_RUNTIME_DIR unix socket, which the file modes keep to the operator. An off on win32 with
+  // no control.json (or one that names no endpoint) has no socket path of its own: daemonState still asks the one the daemon's
+  // lock names, unauthenticated — a POST /off that 401s is then the control-error the receipt shows, not a silent miss.
+  const endpoint = platform === 'win32' && deps.socketPath === undefined ? controlEndpointOf({ dir, fs: deps.fs || nodeFs }) : null
   const w = {
-    home, env, dir, fs: deps.fs || nodeFs, exec: deps.exec || null, request: deps.request || controlRequest,
+    home, env, dir, fs: deps.fs || nodeFs, exec: deps.exec || null,
+    request: deps.request || (endpoint && endpoint.token ? ((o) => controlRequest({ ...o, token: endpoint.token })) : controlRequest),
     clock: deps.now || (() => new Date()), ms: deps.ms || Date.now, sleep: deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
-    alive: deps.alive || pidAlive, identity: deps.identity || identityFor({ platform: deps.platform || process.platform, exec: deps.exec || null, env }), isHelper: deps.isHelper || isRedirectorHelper, kill: deps.kill,
+    alive: deps.alive || pidAlive, identity: deps.identity || identityFor({ platform, exec: deps.exec || null, env }), isHelper: deps.isHelper || isRedirectorHelper, kill: deps.kill,
     lockFile: path.join(dir, 'lock'), stateF: stateFile(home), deps, standalone: deps.standalone === true, // the single-file asight-off passes `standalone`: it words what it cannot do as "run asight off" (R3, V35)
-    socketPath: deps.socketPath !== undefined ? deps.socketPath : (() => { try { return controlSocketPath({ env }) } catch { return null } })(),
+    socketPath: deps.socketPath !== undefined ? deps.socketPath : (endpoint && endpoint.path) || (() => { try { return controlSocketPath({ env }) } catch { return null } })(),
   }
   const once = (fn) => { let p; return () => p || (p = Promise.resolve().then(fn)) } // the process table is read once per run
-  w.procs = once(deps.procs || (() => listProcs({ exec: w.exec, platform: deps.platform || process.platform, env })))
+  w.procs = once(deps.procs || (() => listProcs({ exec: w.exec, platform, env })))
   w.daemonState = deps.daemonState || (() => daemonState({ lockFile: w.lockFile, socketPath: w.socketPath, request: w.request, identity: w.identity, alive: w.alive, now: w.ms, fs: w.fs, timeoutMs: OFF_ASK_MS }))
-  w.stopDaemon = deps.stopDaemon || ((o = {}) => stopDaemon({ lockFile: w.lockFile, socketPath: w.socketPath, exec: w.exec, kill: w.kill, alive: w.alive, identity: w.identity, isHelper: w.isHelper, sleep: w.sleep, now: w.ms, fs: w.fs, env, ...o }))
+  w.stopDaemon = deps.stopDaemon || ((o = {}) => stopDaemon({ lockFile: w.lockFile, socketPath: w.socketPath, exec: w.exec, kill: w.kill, alive: w.alive, identity: w.identity, isHelper: w.isHelper, sleep: w.sleep, now: w.ms, fs: w.fs, env, platform, ...o }))
   w.unitManaged = () => w.fs.existsSync(unitFilePath(home))
   return w
 }
