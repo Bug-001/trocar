@@ -228,6 +228,18 @@ test('refreshProbes (4.8 §3.3 「引擎(重)启动之后」): every on-form\'s 
   assert.deepEqual(await down.redirector.win32.refreshProbes(), { ok: false, reason: 'no kernel' })
   const bare = await rigged(['codex'], { desired: { codex: { desired: 'on' } }, over: { deps: { forwarder: { state: () => ({ phase: 'running' }), controller: () => null } } } })
   assert.deepEqual(await bare.redirector.win32.refreshProbes(), { ok: false, reason: 'no kernel' })
+  // the production path borrows the forwarder's ONE client (N15 (a): createController({own:true}) lives in forwarder.mjs alone; the wiring must not make its own)
+  const borrowed = []
+  const own = await rigged(['codex'], {
+    desired: { codex: { desired: 'on' } },
+    over: { deps: { forwarder: { state: () => ({ phase: 'running' }), controller: () => ({ port: 19001, secret: 's' }), client: () => ({ async get(p) { borrowed.push(p); return { ok: true, status: 200 } } }) } } },
+  })
+  const ownR = await own.redirector.win32.refreshProbes()
+  assert.equal(ownR.ok, true)
+  assert.equal(ownR.asked.length, 3)
+  assert.ok(borrowed.length === 3 && borrowed.every((p) => p.startsWith('/group/asight-fb-codex.')), 'every ask went through the forwarder\'s client, none anywhere else')
+  const noClient = await rigged(['codex'], { desired: { codex: { desired: 'on' } }, over: { deps: { forwarder: { state: () => ({ phase: 'running' }), controller: () => ({ port: 19001, secret: 's' }) } } } })
+  assert.deepEqual(await noClient.redirector.win32.refreshProbes(), { ok: false, reason: 'no kernel' }, 'a forwarder without a client is an answer, not a crash')
 })
 
 test('prepare (W27 ⑥): a missing or mismatched kernel is a refusal whose commands are the two reinstall lines (reinstallCommands gives {npm, release}; an array passes through) and whose mismatch says `of`; without commands there is no key', async () => {

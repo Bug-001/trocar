@@ -21,7 +21,6 @@ import { readText, readTextOrError } from '../../core/config-read.mjs'
 import { readManifest } from '../../core/trust/journal.mjs'
 import { matchForm } from './forms.mjs'
 import { names, probeUrl } from '../../../netenv/mihomo/rules.mjs'
-import { createController } from '../../../netenv/mihomo/controller.mjs'
 
 const CONTROLLER_RANGE = [19000, 19999] // the kernel's own controller, its own free port (the generator refuses one it has already seen)
 const randomPort = (random) => CONTROLLER_RANGE[0] + (random(4).readUInt32BE(0) % (CONTROLLER_RANGE[1] - CONTROLLER_RANGE[0] + 1))
@@ -144,13 +143,15 @@ export async function createWin32Collector({ env = process.env, dir, home = env.
    *  point until its next interval (up to 30 s, not captured meanwhile), so the daemon asks the kernel's own controller to health-test every
    *  on-form's fallback group NOW, with the same loopback probe address the config carries (mihomo remembers health per address, so the url
    *  must be the group's own). The own-controller allowlist checks the path and the url (controller.mjs); a kernel that is not running or has
-   *  no controller is said, not thrown. */
+   *  no controller is said, not thrown. The client is the forwarder's own (N15 (a): a client that may write to a core is made in forwarder.mjs
+   *  alone; an injected `deps.probeController` replaces it for tests, and a forwarder without one — an older shape — is simply no kernel). */
   async function refreshProbes() {
     const st = typeof forwarder.state === 'function' ? forwarder.state() : null
     if (st && st.phase && st.phase !== 'running') return { ok: false, reason: 'no kernel' }
     const creds = forwarder.controller()
     if (!creds || !Number.isInteger(creds.port)) return { ok: false, reason: 'no kernel' }
-    const ctl = (deps.probeController || ((c) => createController({ endpoint: `tcp:127.0.0.1:${c.port}`, secret: c.secret, own: true })))(creds)
+    const ctl = deps.probeController ? deps.probeController(creds) : (typeof forwarder.client === 'function' ? forwarder.client() : null)
+    if (!ctl) return { ok: false, reason: 'no kernel' }
     const asked = []
     for (const x of groups) {
       if (((plan || {})[x.g] || {}).on !== true) continue
