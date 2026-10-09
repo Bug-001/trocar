@@ -60,7 +60,7 @@ export const CODES_BY_PART = Object.freeze({
   switch: ['state-mismatch', 'state-unparsable'],
   kernel: ['kernel-drops'],
   ca: ['ca-invalid'],
-  install: ['install-error', 'uninstall-error', 'left-unparsable', 'left-link', 'entry-not-undone', 'reverted-not-identical', 'already-restored', 'missing', 'left-user-value', 'still-trusting', 'bundle-kept', 'residue-not-removed', 'unit-not-enabled', 'unit-not-disabled'],
+  install: ['install-error', 'uninstall-error', 'left-unparsable', 'left-link', 'entry-not-undone', 'reverted-not-identical', 'already-restored', 'missing', 'left-user-value', 'still-trusting', 'bundle-kept', 'residue-not-removed', 'unit-not-enabled', 'unit-not-disabled', 'kernel-not-off', 'optin-not-undone', 'needs-admin'], // the last three: the Windows collector's off-side — a kernel that could not be taken off the routing path, an opt-in item that could not be undone, a machine-level item left for the operator's elevated command (4.8 §4.2)
   legacy: ['tls-client-error', 'client-rejected-leaf', 'upstream-aborted', 'decode-failed', 'autostart-load-failed', 'steer-unreadable', 'steer-missing', 'shard-failed'],
 })
 export const CODES = Object.freeze([...new Set(Object.values(CODES_BY_PART).flat())])

@@ -29,6 +29,8 @@ import { controlRequest, controlSocketPath, controlEndpointOf } from './control-
 import { disableAutostart, unitFilePath, UNIT_FILE_NAME } from './autostart.mjs'
 import { execTool } from './exec.mjs'
 import { listProcs, identityFor, pidAlive } from './proc.mjs'
+import { kernelForwardOnly } from './win32.mjs'
+import { undoOptIns } from './win32-optin.mjs'
 import { runEventWriter } from './events.mjs'
 import { confirm } from './io.mjs'
 import { describeEntry } from './journal.mjs'
@@ -262,6 +264,19 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     for (const k of u.kept_backups.filter((x) => x.at === at.toISOString())) note(CODE_OFF.backupKept, { path: k.path, backup: k.backup }, `${k.path}: ${k.reason}`)
     u.orphan_backups = orphanBackups({ home: w.home, manifest, fs: w.fs })
     if (u.orphan_backups.length) u.notes.push(`backups that no manifest entry names (leave them, or delete them if you do not need them): ${u.orphan_backups.join(', ')}`)
+    // the opt-in items (4.8 §2.4): user-level ones undone inline by kind (win32-optin.mjs's registry), machine-level ones named for the
+    // operator — asight never elevates on its own, and an item left is a not-done off (1.6 R3)
+    if (manifest.entries.some((e) => e && e.scope)) {
+      const o = await (w.deps.undoOptIns || undoOptIns)({ manifest, ids, exec: w.exec, env: w.env, fs: w.fs, home: w.home })
+      for (const r of o.results) {
+        if (r.result === 'needs-admin') { u.left.push({ path: r.path, result: 'needs-admin', reason: `${r.reason}${r.command ? `: ${r.command}` : ''}` }); u.failures.push({ code: 'needs-admin', path: r.path, reason: r.reason }) }
+        else if (r.result === 'undone') u.changed.push({ path: r.path, change: `点名项(${r.kind})已撤`, result: 'restored' })
+        else if (r.result === 'absent') u.skipped.push({ what: r.path, reason: `点名项(${r.kind})已不在` })
+        else { u.left.push({ path: r.path, result: r.result, reason: r.reason || r.result }); u.failures.push({ code: 'optin-not-undone', path: r.path, reason: r.reason || r.result }) }
+        note('optin', { path: r.path, kind: r.kind, scope: r.scope }, `${r.path} (${r.kind}, ${r.scope}): ${r.result}${r.reason ? ` — ${r.reason}` : ''}`)
+      }
+      for (const x of o.unknown) u.left.push({ path: x.path, result: 'unknown-kind', reason: `${x.path} is an opt-in item of kind ${JSON.stringify(x.kind)}, which this build has no undo for; use the asight that wrote it` })
+    }
     if (stopped) {
       u.stopped = true
       u.problems.push(`undoing the entries stopped: ${errMessage(stopped)}; what it did before is listed above, but the install manifest on disk still names those entries: run it again (an entry that is back as it was reads as already restored)`)
@@ -377,6 +392,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
 
     // 4 · the entries — only when the routing is confirmed (or the daemon could not be stopped)
     let outcome = 'off'
+    if ((deps.platform || process.platform) === 'win32' && routing.state !== 'running') receipt.notes.push('没有守护进程替它排空:内核自己等到最后一条连接结束才退;要现在断,跑 asight off --now')
     if (routing.confirmed || routing.unstoppable) {
       const u = await undoSide(w, { ids, manifest, manifestError, yes, interactive, io, say })
       for (const k of ['changed', 'removed', 'skipped', 'left']) receipt[k].push(...u[k])
@@ -393,11 +409,23 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
         const l = await w.deps.legacyUndo({ home, env, ids, yes, interactive, io, say, dryRun: false, exec: w.exec, fs: w.fs, now: w.clock, request: w.request })
         if (l) { for (const k of ['changed', 'removed', 'skipped', 'left']) receipt[k].push(...(l[k] || [])); receipt.problems.push(...(l.problems || [])); receipt.notes.push(...(l.notes || [])); if (l.ok === false && !(l.problems || []).length) receipt.problems.push('the old capture could not be fully undone') }
       }
-      // 5 · no names: the autostart goes too (the daemon was asked to exit once drained in step 3)
+      // Windows (4.8 §4.2): a daemon that did not answer leaves the kernel preferring its dead engine — it is made forward-only (or
+      // stopped) before the entries go, so a new connection runs direct even before its entry is undone. A daemon that answered
+      // manages its own kernel on the way out; this is only the daemon-less half.
+      if ((deps.platform || process.platform) === 'win32' && routing.how !== 'daemon-reply') {
+        const k = await (w.deps.kernelForwardOnly || ((o) => kernelForwardOnly(o)))({ dir: w.dir, fs: w.fs, run: w.exec, env })
+        put({ kind: 'kernel', state: k.done, reason: `the kernel ${k.done === 'forward-only' ? 'made forward-only (its listeners stay, everything runs direct)' : k.done === 'stopped' ? 'stopped' : k.done === 'none' ? 'is not on record' : 'could not be dealt with'}${k.reason ? ` (${k.reason})` : ''}${Number.isInteger(k.kernel_pid) ? `; pid ${k.kernel_pid}` : ''}` })
+        if (k.done === 'failed') { receipt.problems.push(`the kernel could not be taken off the routing path (${k.reason}); agents may still be steered through it until it is stopped`); put({ event: 'failure', code: 'kernel-not-off', reason: k.reason }) }
+      }
+      // 5 · no names: the autostart goes too (the daemon was asked to exit once drained in step 3). Windows has no unit to disable
+      // here: the task and the Run value are manifest entries, undone with the rest in step 4 (undoScheduledTask / undoRunKey).
       if (ids === null) {
-        receipt.autostart = disableAutostart({ home, exec: w.exec, env, fs: w.fs })
-        put({ kind: 'autostart', disabled: receipt.autostart.disabled, reason: `autostart ${receipt.autostart.disabled ? 'disabled' : 'NOT disabled'}${receipt.autostart.error ? ` (${receipt.autostart.error})` : ''}` })
-        if (receipt.autostart.error) { receipt.notes.push(receipt.autostart.error); put({ event: 'failure', code: 'unit-not-disabled', reason: receipt.autostart.error }) }
+        if ((deps.platform || process.platform) === 'win32') receipt.autostart = { disabled: true, removed: [], note: 'the task and the Run value are ledger entries, undone with the rest (4.8 §4.2)' }
+        else {
+          receipt.autostart = disableAutostart({ home, exec: w.exec, env, fs: w.fs })
+          put({ kind: 'autostart', disabled: receipt.autostart.disabled, reason: `autostart ${receipt.autostart.disabled ? 'disabled' : 'NOT disabled'}${receipt.autostart.error ? ` (${receipt.autostart.error})` : ''}` })
+          if (receipt.autostart.error) { receipt.notes.push(receipt.autostart.error); put({ event: 'failure', code: 'unit-not-disabled', reason: receipt.autostart.error }) }
+        }
       }
     } else outcome = 'failed'
     let list = []
