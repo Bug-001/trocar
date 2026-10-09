@@ -24,3 +24,62 @@ export function refuseElevatedByWhoami(opts = {}) {
   if (e.elevated !== true) return null
   return { code: 'elevated-token', reason: `用你自己的账号跑,不要「以管理员身份运行」,也不要用 SYSTEM(R7:asight 不以提升的令牌运行;这个令牌是${e.why === 'system' ? ' SYSTEM' : '高完整性级别'})` }
 }
+
+// ── the collector's undo pieces (plan Task 9(b); RFC 4.8 §4.2, §7) ───────────────────────────────────────────────────────────
+// src/off cannot import arch/, so the task and Run-value undo are inlined here with the SAME fixed questions, the SAME verbs and the
+// SAME "never on a guess" rules as arch/win32/autostart.mjs's own (test/off/win32.test.mjs holds the two equal, the way Linux's
+// unit.mjs and src/off/autostart.mjs are held). The names and paths are written here too; the equality test holds them.
+
+/** The scheduled task's name and the Run value's place — the same literals as arch/win32/autostart.mjs's TASK_NAME and RUN_KEY (the test holds them equal). */
+export const TASK_NAME = '\\asight\\collector'
+export const RUN_KEY = Object.freeze({ hive: 'HKCU', key: 'Software\\Microsoft\\Windows\\CurrentVersion\\Run', name: 'asight-collector' })
+const RUN_PATH = `${RUN_KEY.hive}\\${RUN_KEY.key}`
+const ours = (value) => /\bdaemon --supervise\s*$/.test(value) // what an earlier `on` of asight wrote: the supervised daemon command
+
+/** The Run value, read (arch's readRunValue, inlined): `{ present: true, kind, value, lossy? }` · `{ present: false }` · `{ error }`. */
+export function readRunValue({ run = null, env = process.env } = {}) {
+  const r = execTool('reg', ['query', RUN_PATH, '/v', RUN_KEY.name], { run, env })
+  if (r.code === null) return { error: `reg query did not run (${r.err || 'no reason given'})` }
+  if (r.code !== 0) return { present: false }
+  const m = new RegExp(`^[ \\t]+${RUN_KEY.name}[ \\t]+(REG_[A-Z_]+)(?:[ \\t]+(.*))?$`, 'mi').exec(r.out)
+  if (!m) return { error: `reg query answered, but not with the value ${RUN_KEY.name}` }
+  const value = m[2] ?? ''
+  return { present: true, kind: m[1].toUpperCase(), value, ...(value.includes('�') ? { lossy: true } : {}) }
+}
+
+/** Takes asight's Run value out, and only that value (arch's removeRunValue, inlined): ours with no prior deleted, ours over a prior
+ *  restored with its kind, a value that is not ours left, an absent one already as asked. → `{ ok, result: 'removed'|'restored'|'left'|'absent'|'failed', reason? }`. */
+export function undoRunKey({ prior = null, run = null, env = process.env } = {}) {
+  const cur = readRunValue({ run, env })
+  if (cur.error) return { ok: false, result: 'failed', reason: cur.error }
+  if (!cur.present) return { ok: true, result: 'absent' }
+  if (!ours(cur.value)) return { ok: true, result: 'left' }
+  const r = prior ? execTool('reg', ['add', RUN_PATH, '/v', RUN_KEY.name, '/t', prior.kind, '/d', prior.value, '/f'], { run, env }) : execTool('reg', ['delete', RUN_PATH, '/v', RUN_KEY.name, '/f'], { run, env })
+  return r.code === 0 ? { ok: true, result: prior ? 'restored' : 'removed' } : { ok: false, result: 'failed', reason: `reg ${prior ? 'add' : 'delete'} failed (exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''})` }
+}
+
+/** Is the scheduled task there? `/Query`'s exit code answers (0 there, 1 not) — never a localised error text; a query that did not run at
+ *  all is NOT "not there" (arch's taskState, inlined): → 'present' | 'absent' | { state: 'unknown', err }. */
+export function taskState({ run = null, env = process.env } = {}) {
+  const r = execTool('schtasks', ['/Query', '/TN', TASK_NAME], { run, env })
+  if (r.code === 0) return { state: 'present' }
+  if (r.code === null) return { state: 'unknown', err: `schtasks /Query did not run (${r.err || 'no reason given'})` }
+  if (r.code === 1) return { state: 'absent' }
+  return { state: 'unknown', err: `schtasks /Query exited ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''}: whether the task ${TASK_NAME} is registered is not known` }
+}
+
+/** The task off the login path: `/Change /DISABLE` for an `off` (it does not end a running instance — the supervisor is stopped first,
+ *  4.8 §4.2), `/Delete /F` for an `uninstall`. A task that is not there is already as asked; a query that cannot tell changes nothing on a
+ *  guess. → `{ ok, task: 'disabled'|'deleted'|'absent'|'failed', reason? }`; the Run value goes with it (undoRunKey), the two are one
+ *  undo whatever an earlier `on` used (§7: exactly one login mechanism is left live). */
+export function undoScheduledTask({ uninstall = false, prior = null, run = null, env = process.env } = {}) {
+  const q = taskState({ run, env })
+  let t
+  if (q.state === 'present') {
+    const r = execTool('schtasks', [uninstall ? '/Delete' : '/Change', '/TN', TASK_NAME, ...(uninstall ? ['/F'] : ['/DISABLE'])], { run, env })
+    t = r.code === 0 ? { ok: true, task: uninstall ? 'deleted' : 'disabled' } : { ok: false, task: 'failed', reason: `schtasks ${uninstall ? '/Delete' : '/Change /DISABLE'} failed (exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''})` }
+  } else if (q.state === 'absent') t = { ok: true, task: 'absent' }
+  else t = { ok: false, task: 'failed', reason: `${q.err}; nothing was changed on a guess` }
+  const k = undoRunKey({ prior, run, env })
+  return { ok: t.ok && k.ok, ...t, runKey: k.result, ...(k.ok ? {} : { runKeyReason: k.reason }) }
+}

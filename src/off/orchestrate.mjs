@@ -215,7 +215,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     let out, stopped = null
     try {
       const roots = w.deps.roots || (manifest.files.some((f) => f.role === 'bundle') ? defaultRoots(w.fs) : null)
-      out = await undoHarnesses({ dir: w.dir, home: w.home, manifest, ids, procs: w.procs, roots, now: at, dropCa, fs: w.fs })
+      out = await undoHarnesses({ dir: w.dir, home: w.home, manifest, ids, procs: w.procs, roots, now: at, dropCa, fs: w.fs, exec: w.exec, env: w.env })
     } catch (e) {
       if (!e || !e.partial) { // it stopped before one entry was touched
         u.stopped = true; u.problems.push(`undoing the entries stopped: ${errMessage(e)}`); u.failures.push({ code: 'entry-not-undone', reason: errMessage(e) })
@@ -226,6 +226,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     const note = (code, extra, reason) => u.events.push({ kind: code, code, ...extra, reason }) // `kind` = `code`: one line per thing the operator should know (4.6 安装 / 卸载不静默)
     u.raw = out // what the undo did, for a receipt if what follows throws (undoSide)
     u.results = out.results
+    u.notes.push(...(out.notes || [])) // the undo's own notes (e.g. a kernel copy kept while it drains)
     for (const r of out.results) {
       const e = before.get(`${r.harness}\0${r.path}\0${r.what}`)
       if (r.backup && !r.backup_kept) u.dropped_backups.push(r.backup)
