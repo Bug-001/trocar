@@ -116,10 +116,12 @@ export function sacOf({ run = null, env = process.env } = {}) {
 export const sacBlocksShims = (state) => state === 'on' || state === 'evaluation'
 
 /** A .lnk's target, read through the one fixed read-only PowerShell line (the COM object WScript.Shell). → `{ target }` (an empty target is a
- *  real answer) · `{ error }`. The WRITE of a shortcut is shortcut.ps1's; this is the read applyOptIn's read-back and W68's check share. */
+ *  real answer) · `{ error }`. The WRITE of a shortcut is shortcut.ps1's; this is the read applyOptIn's read-back and W68's check share.
+ *  `readShortcutArgs` is the argv, exported so test/off/win32-optin.test.mjs can hold the src/off inline copy to the same bytes. */
+export const readShortcutArgs = (shortcut) => ['-NoProfile', '-NonInteractive', '-Command',
+  `$s = (New-Object -ComObject WScript.Shell).CreateShortcut('${String(shortcut).replace(/'/g, "''")}'); [Console]::Out.Write($s.TargetPath)`]
 export function readShortcutTarget({ shortcut, run = null, env = process.env } = {}) {
-  const sq = String(shortcut).replace(/'/g, "''")
-  const r = execTool('powershell', ['-NoProfile', '-NonInteractive', '-Command', `$s = (New-Object -ComObject WScript.Shell).CreateShortcut('${sq}'); [Console]::Out.Write($s.TargetPath)`], { run, env })
+  const r = execTool('powershell', readShortcutArgs(shortcut), { run, env })
   if (r.code !== 0) return { error: `the shortcut ${shortcut} could not be read (exit ${r.code ?? 'none'}${r.err ? `: ${r.err.slice(0, 200)}` : ''})` }
   return { target: r.out }
 }
