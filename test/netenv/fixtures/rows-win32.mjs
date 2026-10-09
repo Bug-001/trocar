@@ -69,10 +69,13 @@ row({ n: 'j', title: 'the kernel is not running: nobody listens on the port the 
   kinds: [['agent', 'asight-forwarder']], forms: ['codex.app'], names: ['all'], on_path: true, captured: false, reason: 'forwarder-down', vpnLine: false,
   compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 自带内核 :17992(没人在听)'] })
 
+// row k's facts are the shape a REAL `off` leaves: the entry record is gone from the manifest (undo.mjs takes it out) and the file holds the user's own value again, so `entry` is null — what says
+// the agent is still on the kernel is its live connection to the group's port (`clients`). The shape with `entry.intact: true` under `desired: 'off'` (rows.mjs row 14, the cross-platform twin)
+// is the mid-off / failed-undo window, a different moment; the two must not be conflated (review 2026-10-10, finding 2).
 row({ n: 'k', title: 'after off, an agent started while it was on is still connected to the kernel, which only forwards', h: 'codex',
-  facts: pfacts('codex', form('codex.app', { procs: [proc(5530, CODEX_PROC)], systemProxy: sysProxy(), follows: { http: true, ws: false } }), fwForm(17992, { state: 'forward-only', upstream: 'http://127.0.0.1:7897', source: 'system-proxy', clients: [5530] }), { desired: { codex: 'off' }, ...viaSystemProxy() }),
+  facts: pfacts('codex', form('codex.app', { procs: [proc(5530, CODEX_PROC)], systemProxy: sysProxy(), follows: { http: true, ws: false }, entry: null }), fwForm(17992, { state: 'forward-only', upstream: 'http://127.0.0.1:7897', source: 'system-proxy', clients: [5530] }), { desired: { codex: 'off' }, ...viaSystemProxy() }),
   kinds: [['agent', 'asight-forwarder', 'proxy', 'egress'], ['agent', 'asight-forwarder', 'proxy', 'egress']], forms: ['codex.app', 'codex.app'], names: ['http', 'ws'], on_path: true, captured: false, reason: 'desired-off', vpnLine: true,
-  compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 自带内核 :17992(只转发) → [系统代理] Clash Verge Rev :7897 → 出口(Clash Verge Rev 选)'], notes: ['还有 1 个 agent 连着 asight 的内核,重启它们之后 asight 就完全退出'] })
+  compact: ['codex app-server 5530 → asight 自带内核 :17992(只转发) → [系统代理] Clash Verge Rev :7897 → 出口(Clash Verge Rev 选)'], notes: ['还有 1 个 agent 连着 asight 的内核,重启它们之后 asight 就完全退出'] })
 
 row({ n: 'l', title: 'the user changed the agent\'s own proxy: it no longer points at the kernel and goes where the setting says', h: 'codex',
   facts: pfacts('codex', form('codex.app', { procs: [proc(5530, CODEX_PROC)], setting: proxyOf('http://proxy.new:3128', [{ kind: 'file', where: 'C:\\Users\\u\\.codex\\.env', key: 'HTTPS_PROXY' }]), entry: { where: ENV, asight: true, opt_in: false, intact: false } }), fwForm(17992, { upstream: 'http://proxy.corp:8080', source: 'agent' })),

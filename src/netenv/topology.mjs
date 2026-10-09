@@ -181,6 +181,9 @@ function formVerdict(F, h, hf, fm, fwf) {
     return none(false, false, fm.optIn.state === 'broken' ? fm.optIn.code : NOT_ROUTED[fm.optIn.state])
   }
   if (fm.routeLoop === true) return none(false, false, 'route-loop') // the platform refused to wire a form whose upstream would be asight itself (4.8 §2.2)
+  // before the entry checks, like judgeHarness's own order: after a real `off` the entry record is gone from the manifest and the file holds the user's own value again, so the entry checks would
+  // answer not-routed and the drain window would never be drawn (4.8 §10.2 row k / 1.6 §9.3 row 14) — what says the agent is still on the kernel is its live connection to the group's port.
+  if (F.desired[h] === 'off') return none(!!(fwf && fwf.clients && fwf.clients.length), false, 'desired-off')
   if (!fm.entry) return none(false, false, 'not-routed')
   if (fm.entry.intact === null) return none(null, null, null)
   if (fm.entry.intact === false) return none(false, false, 'proxy-changed')
@@ -209,7 +212,11 @@ function proxyTopology(F, h, hf) {
     const fwf = F.forwarder && F.forwarder.forms ? F.forwarder.forms[fm.id] : null
     const vd = formVerdict(F, h, hf, fm, fwf)
     const main = fm.procs.find((p) => p.elevated === true) || fm.procs[0] || null
-    const wired = !!(fm.entry && fm.entry.intact === true && (!fm.optIn || fm.optIn.state === 'done') && fwf && (F.desired[h] !== 'off' || (fwf.clients || []).length)) && fm.reason !== 'form-path-unknown'
+    // what wires the kernel hop: the entry holding the kernel's address (the form is on), or — in the post-off drain window, where a real `off` has taken the record out of the manifest and the
+    // file is the user's own again — the agent's live connection to the group's port (row k). In the drain the edge names no entry: the file no longer points here; the agent holds the address it
+    // read at startup, and the note says what restart ends it.
+    const wired = !!(fwf && fm.reason !== 'form-path-unknown' && (!fm.optIn || fm.optIn.state === 'done')
+      && (F.desired[h] === 'off' ? (fwf.clients || []).length > 0 : fm.entry && fm.entry.intact === true))
     const hfSys = { ...hf, systemProxy: fm.systemProxy }
     const split = (hf.behaviour.branches || []).join() === 'http,ws' && fm.systemProxy
     if (vd.reason === 'desired-off' && fwf && (fwf.clients || []).length) notes.push(`还有 ${fwf.clients.length} 个 agent 连着 asight 的内核,重启它们之后 asight 就完全退出`)
@@ -223,7 +230,7 @@ function proxyTopology(F, h, hf) {
       if (wired) {
         const forwardOnly = F.desired[h] === 'off' || vd.reason === 'elevated-agent' || !vd.engine && vd.on
         const f = g.node({ kind: 'asight-forwarder', name: 'asight 自带内核', pid: F.forwarder.pid, addr: '127.0.0.1', port: fwf.port, asight: true, mode: vd.reason === 'forwarder-down' ? 'down' : forwardOnly ? 'forward-only' : 'on' })
-        g.edge(a, f, 'proxy-http', { asight: true, entry: { where: fm.entry.where, opt_in: fm.entry.opt_in === true } })
+        g.edge(a, f, 'proxy-http', { asight: true, ...(fm.entry ? { entry: { where: fm.entry.where, opt_in: fm.entry.opt_in === true } } : {}) })
         if (vd.reason === 'forwarder-down') path = [a, f]
         else {
           const up = upstreamTail(g, F, hfSys, fm, fwf)

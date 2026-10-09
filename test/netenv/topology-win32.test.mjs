@@ -13,6 +13,8 @@ import { gatherNetFacts } from '../../src/netenv/facts.mjs'
 import { gatherWin32Facts } from '../../src/collector/arch/win32/netfacts.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { newManifest, applyJsonKey } from '../../src/collector/core/trust/journal.mjs'
+import { undoHarnesses } from '../../src/off/undo.mjs'
+import { readManifest } from '../../src/off/manifest.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { ROWS } from './fixtures/rows-win32.mjs'
 import { squash } from './fixtures/rows.mjs'
@@ -77,13 +79,13 @@ const helperOf = ({ procs = [], listen = [], established = [], ifaces = [{ name:
     close: async () => {},
   }
 }
-const statusOf = (ids, { agents = [] } = {}) => ({
+const statusOf = (ids, { agents = [], desired = 'on' } = {}) => ({
   daemon: { state: 'running', pid: 4121, reply: { engine: { port: 17990 }, links: [], negatives: [], agents }, lock: { engine_port: 17990 } },
   link: { attached: null, helper: 'ok', ids: [] },
-  harnesses: ids.map((id) => ({ id, installed: true, desired: 'on', entry: { state: 'intact' }, installedAt: '2026-10-09T09:00:00.000Z', procs: [] })),
+  harnesses: ids.map((id) => ({ id, installed: true, desired, entry: { state: 'intact' }, installedAt: '2026-10-09T09:00:00.000Z', procs: [] })),
 })
-const gather = (home, { helper, ids = ['claude-code'], env = {}, agents = [], manifest = null, netenv = { result: { products: [], unknown: [] } } } = {}) =>
-  gatherNetFacts({ platform: 'win32', home, env, harnesses: all, status: { ...statusOf(ids, { agents }), ...(manifest ? { manifest: { value: manifest, error: null } } : {}) }, netenv, archFacts: gatherWin32Facts, adopted: null, now: () => NOW, deps: { helper } })
+const gather = (home, { helper, ids = ['claude-code'], env = {}, agents = [], desired = 'on', manifest = null, netenv = { result: { products: [], unknown: [] } } } = {}) =>
+  gatherNetFacts({ platform: 'win32', home, env, harnesses: all, status: { ...statusOf(ids, { agents, desired }), ...(manifest ? { manifest: { value: manifest, error: null } } : {}) }, netenv, archFacts: gatherWin32Facts, adopted: null, now: () => NOW, deps: { helper } })
 const KERNEL_URL = 'http://claude-code.settings:s3-listener-token@127.0.0.1:17991'
 /** The collector dir of an installed proxy mode: the kernel's lock, the ports of ingress.json, and the manifest's record of the entry that was written over the user's own proxy. */
 function collectorOf(home, { url = KERNEL_URL, prior = 'http://proxy.corp:8080' } = {}) {
@@ -127,6 +129,39 @@ test('gatherNetFacts on win32: the entry edge comes from the manifest\'s record 
   const changed = await gather(home, { helper })
   assert.deepEqual(changed.harnesses['claude-code'].forms[0].entry, { where: 'settings env.HTTPS_PROXY', asight: true, opt_in: false, intact: false })
   assert.equal(buildTopology(changed)['claude-code'].reason, 'proxy-changed', 'the row l verdict, from the real facts path')
+})
+
+test('the post-off drain window (row k), through the REAL facts path: a real undoHarnesses takes the entry record out of the manifest and puts the user\'s own proxy back, so the entry honestly says null — the agent\'s live connection to the kernel\'s port is what wires the hop, the verdict is desired-off and the note says how asight finally leaves', async () => {
+  const home = tmpDir('asight-wf-drain-')
+  const { dir, settings } = collectorOf(home)
+  // what `asight off claude-code` leaves behind while the kernel drains: the file work is the real off side's (undo.mjs), the kernel's lock and ingress.json stay
+  const undone = await undoHarnesses({ dir, home, manifest: readManifest(dir, fs), ids: ['claude-code'], procs: async () => [], env: {}, fs })
+  assert.ok(undone.results.some((r) => r.result === 'restored'), 'the real off side restored the entry file')
+  assert.equal(JSON.parse(fs.readFileSync(settings, 'utf8')).env.HTTPS_PROXY, 'http://proxy.corp:8080', 'the user\'s own proxy is back in it')
+  assert.equal(readManifest(dir, fs).entries.length, 0, 'and the entry record is gone from the manifest')
+  const helper = helperOf({
+    procs: [KERNEL_ROW, claudeRow(4121)],
+    listen: [{ pid: 6120, state: 'listen', localAddr: '127.0.0.1', localPort: 17991, remoteAddr: '0.0.0.0', remotePort: 0 }],
+    established: [{ pid: 4121, state: 'established', localAddr: '127.0.0.1', localPort: 51234, remoteAddr: '127.0.0.1', remotePort: 17991 }],
+  })
+  const f = await gather(home, { helper, desired: 'off', agents: [{ pid: 4121, agent: 'claude-code', trusted: false, decrypt: false, off: true, reason: 'off' }] })
+  const fm = f.harnesses['claude-code'].forms[0]
+  assert.equal(fm.entry, null, 'no manifest record: the entry edge says the form is not wired through a file')
+  assert.deepEqual(f.forwarder.forms['claude-code.cli'].clients, [4121], 'the agent started while on is still connected to the kernel\'s port')
+  assert.equal(f.forwarder.forms['claude-code.cli'].state, 'forward-only', 'and the kernel only forwards for it')
+  const t = buildTopology(f)['claude-code']
+  assert.deepEqual([t.on_path, t.captured, t.reason], [true, false, 'desired-off'], 'the row k verdict, from the facts a real off produces (before the 2026-10-10 fix the entry check fired first and this said not-routed)')
+  assert.ok(t.notes.includes('还有 1 个 agent 连着 asight 的内核,重启它们之后 asight 就完全退出'), t.notes.join(' / '))
+  const lines = renderCompact(t)
+  assert.ok(lines.some((l) => l.includes('claude 4121 → asight 自带内核 :17991(只转发) →')), lines.join(' / '))
+  assert.ok(!lines.some((l) => l.includes('asight 写的') || l.includes('你点名的')), 'the hop\'s edge names no entry: the file no longer points at the kernel (the agent holds the address it read at startup)')
+  assert.ok(lines.some((l) => l.includes('proxy.corp:8080')), 'the kernel forwards to the user\'s own proxy, the upstream re-planned for the drain')
+  assert.deepEqual(validateTopology({ 'claude-code': t }), [], 'and the object is one the schema accepts (V43)')
+  // the drain over: no client on the port, the same off leaves nothing on the path (1.6 §9.2's 「不在 · 否 · desired-off」 shape)
+  const gone = await gather(home, { helper: helperOf({ procs: [KERNEL_ROW, claudeRow(4121)], listen: [{ pid: 6120, state: 'listen', localAddr: '127.0.0.1', localPort: 17991, remoteAddr: '0.0.0.0', remotePort: 0 }] }), desired: 'off' })
+  const t2 = buildTopology(gone)['claude-code']
+  assert.deepEqual([t2.on_path, t2.captured, t2.reason], [false, false, 'desired-off'], 'no live connection: asight is not on the path, said with the same reason')
+  assert.ok(!t2.notes.some((n) => /连着 asight 的内核/.test(n)), 'and the drain note is gone (the opt-in form\'s 「要采它」 note stays: it is that form\'s own, not the drain\'s)')
 })
 
 test('the elevated detector (4.8 §10.1): integrity ≥ High is elevated; a token that will not open while the image path reads is elevated and marked inferred; neither is null, and the words say so', async () => {
