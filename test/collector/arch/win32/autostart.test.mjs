@@ -179,7 +179,11 @@ test('W25 (command level, Task 8(c)) `asight on` with an injected elevated or SY
 // W25's off/uninstall half is LANDED (Task 9(b), lane B): src/off/orchestrate.mjs and src/cli/uninstall.mjs call refuseElevatedByWhoami at their entry
 // on win32 — 已由 test/off/win32-kernel.test.mjs::`W25: off and uninstall on win32 refuse an elevated token at the entry …` 覆盖 (both commands, the byte-identical
 // HOME, and the unreadable-whoami-not-a-refusal half).
-test('W24 (command level, Task 8(c) / CLI rebase) `runDaemonCli([\'--supervise\'])` is accepted and runs the supervisor (arch.runSupervisor through loadArch), any other argument is still refused with exit 2, and Linux has no --supervise', { todo: 'src/cli/daemon.mjs is on the CLI branch; see note 84 seam 1' }, () => notHere('runDaemonCli --supervise', 'the CLI rebase / Task 8(c)'))
+// W24's command half is LANDED (Task 8(c) / CLI rebase): `runDaemonCli(['--supervise'])` hands the lone flag to arch.runSupervisor through
+// daemon.mjs's loadArch (the CLI never imports arch/ itself, layering rule 5) with its own script and the collector dir; any other argument is
+// still exit 2, root and a platform without the new collector are refused first, and an arch with no runSupervisor (linux's) is a usage error —
+// 已由 test/collector/cli.test.mjs::`cli: daemon --supervise (4.8 §7, W24) …` 覆盖。The supervisor itself is the tests above (the backoff, the
+// lock, the singleton, the signals — W24's own list).
 // W24's undoWin32-equality half is LANDED (Task 9(b), lane B): src/off/win32.mjs carries its own taskState/undoScheduledTask/undoRunValue beside this
 // module's — 已由 test/off/win32-undo.test.mjs::`the names the undo touches are the arch module's own (the inlined pieces cannot drift)` 覆盖: TASK_NAME and
 // RUN_KEY equal this module's exports, the shape Linux's unit.mjs ↔ src/off/autostart.mjs test has; each side's call sequence is its own file's tests.

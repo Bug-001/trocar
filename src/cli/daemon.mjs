@@ -1,5 +1,6 @@
 // daemon.mjs — `asight daemon` (RFC 1.6 §2, R4, R7; 4.6 §控制面): the per-user collector daemon in the foreground until SIGTERM / SIGINT / SIGHUP / SIGQUIT, or until it has stopped itself (after an `off` with no
-// names, once nothing is relayed). The autostart unit's ExecStart is this command; `asight collector start` is its old name (a hidden alias, §2: units already installed run it). Exit codes (R4): 0 stopped
+// names, once nothing is relayed). `--supervise` (win32, 4.8 §7) is the other mode: the scheduled task runs it — the supervisor parent that pulls the real `node <asight> daemon` and re-pulls it on a non-zero
+// exit; it owns no crash records (stderr only), so that mode returns as soon as arch.runSupervisor does. The autostart unit's ExecStart is this command; `asight collector start` is its old name (a hidden alias, §2: units already installed run it). Exit codes (R4): 0 stopped
 // cleanly · 1 refused (as root, on a platform without the new collector, the daemon would not start) or a step of the stop failed · 2 a usage error · 70 an uncaught exception or rejection, recorded as a
 // `crash` first. Everything the world gives is a `deps` entry a test replaces (0.1 §3): `daemon` (the module with `startDaemon`; the real one is src/collector/daemon.mjs) or `startDaemon` itself, `waitForStop`,
 // `proc` (the process whose uncaught errors are caught), `exit`, `getuid`.
@@ -10,7 +11,7 @@ import { appendEvent } from '../collector/core/events.mjs'
 import { collectorHome } from '../paths.mjs'
 import { hasNewCollector } from '../off/legacy.mjs'
 
-const USAGE = 'usage: asight daemon'
+const USAGE = 'usage: asight daemon [--supervise]'
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 
 // SIGHUP (the terminal closed, SSH dropped, logout) and SIGQUIT stop it cleanly like SIGTERM / SIGINT — Node's default
@@ -24,11 +25,20 @@ const waitForSignal = () => new Promise((resolve) => {
 
 /** → the exit code. `argv` is what follows `daemon`; `io` = { out, err } (src/off/io.mjs makeIo). */
 export async function runDaemonCli(argv, { io, env = process.env, home = os.homedir(), platform = process.platform, deps = {} } = {}) {
-  if (argv.length) { io.err(`asight daemon: takes no arguments (${argv.join(' ')})\n${USAGE}`); return EXIT.usage }
+  // `--supervise` (4.8 §7): the scheduled task starts THIS supervisor parent, which runs the real `node <asight> daemon` and re-pulls it on a
+  // non-zero exit. Exactly the lone flag — a second one would be a second parent; anything else is still a usage error.
+  const supervise = argv.length === 1 && argv[0] === '--supervise'
+  if (argv.length && !supervise) { io.err(`asight daemon: takes no arguments (${argv.join(' ')})\n${USAGE}`); return EXIT.usage }
   if ((deps.getuid || processUid)() === 0) { io.err('asight daemon: 用你自己的账号跑,不要用 root / sudo(D36)'); return EXIT.incomplete }
-  if (!hasNewCollector(platform)) { io.err(`asight daemon: 本平台未实现(${platform}):按进程采集器只有 Linux 有(4.6);本平台的 on / off 驱动旧采集(1.6 §4)`); return EXIT.incomplete }
+  if (!(deps.hasNewCollector || hasNewCollector)(platform)) { io.err(`asight daemon: 本平台未实现(${platform}):按进程采集器只有 Linux 有(4.6);本平台的 on / off 驱动旧采集(1.6 §4)`); return EXIT.incomplete }
   const proc = deps.proc || process
   const dir = collectorHome(path.join(home, '.asight'))
+  if (supervise) { // the supervisor owns no crash records of its own (4.8 §7: stderr only — under conhost --headless, nowhere), so the branch below is untouched
+    const D = deps.daemon || (await import('../collector/daemon.mjs')) // the CLI reaches arch only through daemon.mjs (layering rule 5)
+    const run = (await D.loadArch(platform)).runSupervisor // a platform whose arch has no supervisor (linux) refuses here, so the CLI holds no platform list
+    if (typeof run !== 'function') { io.err(`asight daemon: --supervise 是 Windows 监管父进程的事(4.8 §7);本平台(${platform})的 arch 没有它\n${USAGE}`); return EXIT.usage }
+    return run({ asight: deps.script || process.argv[1], dir, proc, env, log: (line) => io.err(`[supervise] ${line}`) })
+  }
   let crashed
   const crashedFirst = new Promise((resolve) => { crashed = resolve })
   // An uncaught exception or rejection: one `crash` record with the first line of the stack, then a non-zero exit — the next start's "no clean stop" then has a reason on disk (D-5).

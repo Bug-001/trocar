@@ -147,6 +147,42 @@ test('cli: start returns when the daemon has stopped itself (off), exit 0, witho
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })
 
+// `--supervise` (4.8 §7): the scheduled task runs this supervisor parent, which pulls the real `node <asight> daemon` and re-pulls it on a non-zero
+// exit. The CLI hands it to arch.runSupervisor through daemon.mjs's loadArch (layering rule 5: it never imports arch/ itself) with its own entry
+// script and the collector dir — and holds no platform list: a platform whose arch has no runSupervisor refuses, so "Linux has no --supervise" is
+// the linux arch's shape, not an if in the CLI. The supervisor itself (the backoff, the lock, the signals) is autostart.test.mjs's, W24 there.
+test('cli: `daemon --supervise` (4.8 §7, W24): the lone flag goes to arch.runSupervisor through daemon.mjs\'s loadArch with its own script and the collector dir; other arguments stay exit 2, root and a platform without the new collector are refused first, and an arch with no runSupervisor is a usage error', async () => {
+  const home = tmpDir('asight-cli-supervise-')
+  try {
+    const ran = []
+    const supervisor = async (o) => { ran.push([o.asight, o.dir, typeof o.proc.on === 'function']); try { o.log('up') } catch { /* a log sink that is not one */ } return 7 }
+    const daemon = { loadArch: async (p) => (p === 'win32' ? { runSupervisor: supervisor } : {}) } // linux's arch carries none — the CLI must ask, not assume
+    const run = (argv, o = {}) => { const t = io(); return runDaemonCli(argv, { io: t, home, env: {}, platform: o.platform || 'win32', deps: { daemon, hasNewCollector: () => true, getuid: () => 1000, proc: { on() {} }, script: '/repo/bin/asight.mjs', ...o.deps } }).then((exit) => ({ exit, t })) }
+    let r = await run(['--supervise'])
+    assert.equal(r.exit, 7, 'the supervisor\'s exit code is the command\'s')
+    assert.deepEqual(ran, [['/repo/bin/asight.mjs', path.join(home, '.asight', 'collector'), true]], 'its own script, the collector dir, the proc to take signals on')
+    assert.match(r.t.e.join('\n'), /^\[supervise\] up$/, 'the supervisor\'s log lines reach the terminal with their prefix')
+    ran.length = 0
+    for (const argv of [['--supervise', '--now'], ['--supervize']]) {
+      r = await run(argv)
+      assert.equal(r.exit, 2); assert.match(r.t.e.join('\n'), /takes no arguments \(/); assert.match(r.t.e.join('\n'), /usage: asight daemon \[--supervise\]/)
+    }
+    r = await run(['--supervise'], { deps: { getuid: () => 0 } })
+    assert.equal(r.exit, 1); assert.match(r.t.e.join('\n'), /用你自己的账号跑/); assert.deepEqual(ran, [], 'root is refused before the supervisor is asked for')
+    r = await run(['--supervise'], { deps: { hasNewCollector: () => false } })
+    assert.equal(r.exit, 1); assert.match(r.t.e.join('\n'), /本平台未实现\(win32\)/); assert.deepEqual(ran, [], 'a platform without the new collector (pre-flip win32) does not run the supervisor either')
+    r = await run(['--supervise'], { platform: 'linux' })
+    assert.equal(r.exit, 2); assert.match(r.t.e.join('\n'), /--supervise 是 Windows 监管父进程的事/); assert.deepEqual(ran, [], 'the linux arch has no runSupervisor, so the flag is refused there')
+    // the `collector start` alias carries its script through (the supervisor child is `node <script> daemon`); a "linux" arch WITH a runSupervisor
+    // runs it — the platform name is not what decides, the arch's shape is
+    ran.length = 0
+    const daemonWithSupervisor = { loadArch: async () => ({ runSupervisor: supervisor }) }
+    let t = io()
+    assert.equal(await runCollector(['start', '--supervise'], { home, env: {}, daemon: daemonWithSupervisor, proc: { on() {} }, platform: 'linux', getuid: () => 1000, script: '/repo/bin/asight.mjs', ...t }), 7)
+    assert.deepEqual(ran, [['/repo/bin/asight.mjs', path.join(home, '.asight', 'collector'), true]], 'the wrapper passes the script the supervisor child runs')
+  } finally { fs.rmSync(home, { recursive: true, force: true }) }
+})
+
 test('cli: install / on go to the one `asight on` (src/cli/on.mjs) with the descriptors, OS and process table from daemon.loadParts; uninstall is the one `asight uninstall` (src/cli/uninstall.mjs)', async () => {
   const seen = []
   const mkU = () => ({ UNIT_NAME: 'asight-collector.service', userUnit: ({ home, node, script, run }) => ({ path: `${home}/.config/systemd/user/asight-collector.service`, links: [`${home}/.config/systemd/user/default.target.wants/asight-collector.service`], text: (env) => `${JSON.stringify(env)} ExecStart="${node}" "${script}" daemon`, ran: run }), unitPath: (h) => `${h}/.config/systemd/user/asight-collector.service`, wantsLink: (h) => `${h}/.config/systemd/user/default.target.wants/asight-collector.service`, unitText: ({ node, script, env }) => `${JSON.stringify(env)} ExecStart="${node}" "${script}" daemon`, systemctl: () => ({ code: 0 }), removeWantsLinks: () => [] })
