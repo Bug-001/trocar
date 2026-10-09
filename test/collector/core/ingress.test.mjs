@@ -397,6 +397,32 @@ test('W15 a direct upstream, decrypted: one dial for the whole flow (the wrapper
   assert.deepEqual(L.failures, [])
 })
 
+test('W15 an IP-literal target with an IP-SAN certificate is decrypted: no SNI exists for an IP (RFC 6066), so the upstream is verified against the address — not against Node\'s own \'localhost\' default (the macOS smoke run\'s live find, 2026-10-09)', T, async (t) => {
+  // the origin answers on loopback with a leaf issued FOR the address (leaf.mjs puts an IP SAN on it); the agent speaks TLS with no servername — exactly
+  // what every real client does to an IP-literal destination, and exactly what used to fail: without the host handed to tls.connect, Node verified the
+  // upstream against 'localhost' and the flow was spliced away with not_captured 'upstream-cert' / ERR_TLS_CERT_ALTNAME_INVALID whatever the certificate
+  const ipCa = createCa({ commonName: 'ip origin CA' })
+  const ipLeaf = createLeafIssuer(loadCa(ipCa)).issue('127.0.0.1')
+  const originSockets = new Set()
+  const ipOrigin = tls.createServer({ key: ipLeaf.keyPem, cert: ipLeaf.certPem, ALPNProtocols: ['http/1.1'] }, (s) => { originSockets.add(s); s.on('error', () => {}); let seen = ''; s.on('data', (d) => { seen += d.toString('latin1'); if (seen.includes('\r\n\r\n')) s.write(RESP) }) })
+  await listen(ipOrigin)
+  t.after(() => { for (const x of originSockets) x.destroy(); ipOrigin.close() })
+  const L = await lab(t, { upstreamCa: ipCa.certPem, meta: { decrypt: true } })
+  const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${ipOrigin.address().port}`)
+  const got = await within(new Promise((resolve) => {
+    let out = ''
+    const agent = tls.connect({ socket: sock, rejectUnauthorized: false, ALPNProtocols: ['http/1.1'] }, () => agent.write(REQ.replace('upstream.test', '127.0.0.1')))
+    agent.on('data', (d) => { out += d.toString('latin1'); if (out.length >= RESP.length) agent.end() })
+    agent.on('error', () => {}); agent.on('close', () => resolve(out))
+  }), 6000, 'the agent\'s TLS over the tunnel to the IP-literal origin', () => sock.destroy())
+  assert.equal(got, RESP, 'the agent\'s call was answered')
+  await L.settled(1)
+  assert.equal(L.flows[0].decision, 'decrypt', 'the upstream verified against its address: the flow is captured, not stepped aside')
+  assert.equal(L.flows[0].not_captured ?? null, null)
+  assert.equal(L.envelopes[0].host, '127.0.0.1')
+  assert.deepEqual(L.failures, [])
+})
+
 test('W15 an http upstream: the user\'s credentials ride only in asight\'s prelude for the agent\'s connection; the flow is decrypted over one connection to the proxy; the row has neither credentials nor prelude', T, async (t) => {
   const o = await origin(t)
   const proxy = await startMockProxy({ kind: 'connect', target: { port: o.port }, auth: CRED }); t.after(() => proxy.close())
