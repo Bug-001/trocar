@@ -358,7 +358,7 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
  *    request    the control socket's client (default: controlRequest at $XDG_RUNTIME_DIR/asight/collector.sock, or `socketPath`)
  *  → { receipt, manifest, plan, exit }. */
 export async function turnOn(opts = {}) {
-  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, osRootsFile = null, roots = null, unit = null, autostart = true, freePort = freeEnginePort, onPlan = () => {}, confirm = null, dryRun = false, networkEdited = null, request = controlRequest, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS } = opts
+  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, osRootsFile = null, roots = null, unit = null, autostart = true, freePort = freeEnginePort, onPlan = () => {}, confirm = null, dryRun = false, networkEdited = null, optIn = [], optInHooks = null, request = controlRequest, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS } = opts
   refuseRoot('on', getuid)
   const dir = collectorHome(path.join(home, '.asight'))
   const stateF = path.join(dir, 'state.json')
@@ -383,6 +383,13 @@ export async function turnOn(opts = {}) {
   } catch (e) { return { linger: 'unknown', linger_reason: String((e && e.message) || e) } } }
   return recorded(dir, 'install', async (run) => {
     const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, osRootsFile, roots, unit, fs, now })
+    // the opt-in rows (1.6 §1.7, 4.8 §2.4): the arch that has opt-in items computes them from the same descriptors and manifest; `plan.optIn` is what
+    // the plan prints (every applicable row of the target forms, chosen or not — the section says what each implies and the exact command) and what
+    // `status --json`'s opt_in is later built from. An arch with no optIn hook and an empty optIn list writes no key at all.
+    if (optInHooks && typeof optInHooks.plan === 'function') {
+      plan.optIn = await optInHooks.plan({ ids, harnesses, optIn, manifest: plan._.prior, env })
+    }
+    const optInTodo = (plan.optIn || []).filter((r) => r.chosen && r.applicable && r.state === 'needed')
     // the copy of the undo side that needs no source tree (R3) is one more file asight writes: listed in the plan and the dry run when it is missing or not what src/off generates now
     const standaloneCheck = checkStandalone({ home, version: OFF_VERSION, fs })
     if (!standaloneCheck.ok) { plan.created = [...plan.created, standaloneCheck.path]; plan.standalone = standaloneCheck.path }
@@ -401,9 +408,9 @@ export async function turnOn(opts = {}) {
     // the proxy fields the user edited since the last `on` (1.6 §9.5): asked about like an extra file (R6); a routing that owns none has none
     const edited = networkEdited && plan.targets.length ? await networkEdited(plan.targets) : []
     if (edited.length) r.notes.push(...edited.map((e) => `你改过的代理设置: ${e.harness} 的 ${e.where || '代理字段'} 现在是 ${e.now ?? '空'}(asight 上次接上时是 ${e.was ?? '空'});on 会把它接成新的上游,再指回 asight`))
-    if (dryRun) return { receipt: { ...r, dry_run: true, ok: !named, ...(helperBlock ? { blocked: helperBlock, notes: [...r.notes, `${helperBlock.replace('nothing was changed. ', '')} (a real asight on stops there)`] } : {}) }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
-    if (plan.writing || stateWrite || edited.length) onPlan({ ...plan, state: stateWrite ? stateF : null, edited })
-    if (plan.first || plan.newPaths.length || edited.length) {
+    if (dryRun) return { receipt: { ...r, dry_run: true, ...(optIn.length ? { opt_in: (plan.optIn || []).map((x) => ({ form: x.form, item: x.item, scope: x.scope, state: x.chosen && x.applicable ? 'will-do' : x.state })) } : {}), ok: !named, ...(helperBlock ? { blocked: helperBlock, notes: [...r.notes, `${helperBlock.replace('nothing was changed. ', '')} (a real asight on stops there)`] } : {}) }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
+    if (plan.writing || stateWrite || edited.length || optInTodo.length) onPlan({ ...plan, state: stateWrite ? stateF : null, edited })
+    if (plan.first || plan.newPaths.length || edited.length || optIn.length) { // R6: an `on` that carries --opt-in always confirms, machine item or not
       const verdict = confirm ? await confirm(plan) : null
       if (verdict == null) return { receipt: { ...r, ok: false, planned: true, needs_yes: true, notes: [...r.notes, '不在终端里,没有 --yes:只打印了计划,什么都没改。看过计划之后加 --yes 再跑一次'] }, manifest: plan._.prior, plan, exit: 2 }
       if (verdict === false) return { receipt: { ...r, ok: false, planned: true, declined: true, notes: [...r.notes, '没有确认:什么都没改'] }, manifest: plan._.prior, plan, exit: 1 }
@@ -444,8 +451,39 @@ export async function turnOn(opts = {}) {
       problems.push(e.message)
     }
     const put = noteRun({ dir, run, final: final || { records: [] }, written: written || { entries: [] }, notes, fs, log: opts.log })
+    // the named opt-in items (1.6 §1.7, 4.8 §2.4) — after the install's own writes, still inside the lock and before the daemon is asked anything. The
+    // arch's apply does each item (its fixed script, or the ONE elevated step for a machine item) and ledgers it; `off` and the standalone undo take
+    // them out. A refused UAC is `pending-admin` (the ledger keeps it; the item is offered again), a step that could not run at all is `needs-admin`
+    // (the elevated command is printed, the fallback alone); both leave the run not-done and exit 1. Neither is `optin-failed` (that is a script
+    // error or a refused prompt of the user's own, e.g. the certificate dialog).
+    const optInOut = []
+    if (optInTodo.length) {
+      const applyOne = optInHooks && typeof optInHooks.apply === 'function' ? optInHooks.apply : null
+      if (!applyOne) {
+        const why = `--opt-in named ${optInTodo.map((x) => `${x.form}:${x.item}`).join(', ')}, but this build has no opt-in apply (the platform's arch did not provide one); nothing was opted in`
+        problems.push(why)
+        put({ event: EVENT.failure, where: 'optin', code: 'optin-failed', reason: why })
+      } else for (const row of optInTodo) {
+        let out = null
+        try {
+          out = await applyOne({ row, manifest: m, dir, home, env, fs, now, save: () => saveManifest(dir, m, fs),
+            note: (rec) => put({ event: EVENT.installNote, where: 'install', ...rec }),
+            failure: (rec) => put({ event: EVENT.failure, where: 'optin', ...rec }),
+            state: (rec) => put(rec) })
+        } catch (e) {
+          out = { state: 'failed', reason: String((e && e.message) || e) }
+          put({ event: EVENT.failure, where: 'optin', code: 'optin-failed', reason: out.reason })
+        }
+        optInOut.push({ form: row.form, item: row.item, scope: row.scope, state: out.state, ...(out.reason ? { reason: out.reason } : {}), ...(out.elevated_command ? { elevated_command: out.elevated_command } : {}) })
+        if (out.state === 'done') continue
+        if (out.state === 'pending-admin') { notes.push(`你点名的 ${row.form} 的机器级改动还在等管理员权限(提权框被拒或没弹成):${out.reason || '它保持在 pending-admin,下次 on 或 status 还会列着'}`); problems.push(`opt-in ${row.form}:${row.item} is pending-admin`) }
+        else if (out.state === 'needs-admin') { notes.push(`你点名的 ${row.form} 的机器级改动没有提示可弹,退回给你自己跑:${out.elevated_command || out.reason}`); problems.push(`opt-in ${row.form}:${row.item} needs an administrator`) }
+        else { notes.push(`你点名的 ${row.form} 的改动没有做成:${out.reason || 'optin-failed'}`); problems.push(`opt-in ${row.form}:${row.item} failed`) }
+      }
+    }
     const receipt = {
       ...r,
+      ...(optInOut.length ? { opt_in: optInOut } : {}),
       changed: (written ? written.entries : []).map((e) => ({ path: e.path, change: changeText(e, e.prior_value), backup: e.backup ?? null })),
       created: [...(plan._.prior ? [] : [manifestPath(dir)]), ...(stateWrite ? [stateF] : []), ...(standalone.written ? [standalone.path] : []), ...(written && written.caCreated ? plan._.ca ? [plan._.ca.key, plan._.ca.pem] : [] : []), ...(written ? [...written.files, ...written.owned, ...(written.unit && unit ? [unit.path] : [])] : [])],
       unchanged: written ? written.intact : [],

@@ -19,14 +19,33 @@ import { legacyOnCli } from '../capture/legacy-on.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { prepareAdoption, editedFields, recordAdoption } from './on-adopt.mjs'
 
-const USAGE = 'usage: asight on [harness…] [--dry-run] [--yes] [--no-autostart | --no-unit] [--json]'
+const USAGE = 'usage: asight on [harness…] [--dry-run] [--yes] [--opt-in <形态>[,<形态>…]] [--no-autostart | --no-unit] [--json]'
 const FLAGS = new Set(['--dry-run', '--yes', '--no-autostart', '--no-unit', '--json'])
 const PROXY_HINT = 'D39 之前的 `asight on --proxy` 现在是 `asight monitor on --no-autostart`(旧 CC-CLI steer 仍在 monitor 下;新的 on 不做它,它做不到 off 保证,1.6 §4)'
 const chainText = (t) => renderCompact(t).join(' ; ')
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 
+/** The forms of `--opt-in` out of `argv`: repeatable, comma-separated, `--opt-in a` and `--opt-in=a,b` both read (1.6 §1.7). → { optIn, rest } —
+ *  `rest` is argv without the flag and its values, so the plain flag loop never sees a form id; a `--opt-in` without a value is a usage error. */
+function splitOptIn(argv) {
+  const optIn = [], rest = []
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
+    if (a === '--opt-in') {
+      if (i + 1 >= argv.length) return { error: '--opt-in needs a form id after it (repeatable, comma-separated)' }
+      for (const f of String(argv[++i]).split(',')) if (f !== '') optIn.push(f)
+    } else if (a.startsWith('--opt-in=')) { for (const f of a.slice('--opt-in='.length).split(',')) if (f !== '') optIn.push(f) }
+    else rest.push(a)
+  }
+  return { optIn, rest }
+}
+
 /** → the exit code. `argv` is what follows `on`. `io` = { out, err, stdin, stdout, stderr } (src/off/io.mjs makeIo). */
 export async function runOnCli(argv, { io, env = process.env, home = os.homedir(), platform = process.platform, deps = {} } = {}) {
+  const picked = splitOptIn(argv)
+  if (picked.error) { io.err(`asight on: ${picked.error}\n${USAGE}`); return EXIT.usage }
+  const { optIn } = picked
+  argv = picked.rest
   const flags = new Set(), names = []
   for (const a of argv) {
     if (a === '--proxy' || a.startsWith('--proxy=')) { io.err(`asight on: ${PROXY_HINT}`); return EXIT.usage }
@@ -42,21 +61,39 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
   const json = flags.has('--json')
   const say = json ? io.err : io.out // stdout holds the one JSON in --json mode (R5); warnings and the plan go to stderr
   if (!hasNewCollector(platform)) { // 1.6 §4: no new collector here: `on` drives the old capture (src/capture/legacy-on.mjs)
+    if (optIn.length) { io.err('asight on: --opt-in needs the new collector; on this platform `on` drives the old capture, which has no opt-in items (1.6 §4)'); return EXIT.usage }
     return (deps.legacyOn || legacyOnCli)(argv, { io, env, home, platform, deps, ids: named.ids })
   }
   if ((deps.getuid || processUid)() === 0) { io.err('asight on: 用你自己的账号跑,不要用 root / sudo(D36;只有 `sudo asight setup-helper` 要 root)'); return EXIT.incomplete }
   try {
     const parts = deps.parts || await (await (deps.daemon || import('../collector/daemon.mjs'))).loadParts({ env })
     const install = deps.install || await import('../collector/install.mjs')
+    // the opt-in half (1.6 §1.7): the arch that has opt-in items (Windows, 4.8 §2.4) hands `forms` (the ids --opt-in may name), `plan` (the rows)
+    // and `apply`; an arch with none (Linux today) makes every --opt-in name a usage error, never a silent skip
+    const optInHooks = deps.optIn || (parts.arch && parts.arch.optIn) || null
+    if (optIn.length) {
+      const known = optInHooks && typeof optInHooks.forms === 'function' ? optInHooks.forms({ harnesses: parts.harnesses, ids: named.ids }) : []
+      const unknown = [...new Set(optIn)].filter((f) => !known.includes(f))
+      if (unknown.length) {
+        io.err(`asight on: --opt-in 名了不认识的形态 ${unknown.join(', ')}${known.length ? `;可以点名的形态是: ${known.join(', ')}` : ';这个平台没有要点名的形态(1.6 §1.7)'}`)
+        return EXIT.usage
+      }
+    }
     const script = deps.script || process.argv[1]
     const unit = flags.has('--no-unit') || !parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script, run: deps.exec || null, env })
     const helperState = deps.helperState || (parts.arch && parts.arch.install && parts.arch.install.helperState ? () => parts.arch.install.helperState() : null)
     const autostart = !flags.has('--no-autostart')
     const yes = flags.has('--yes')
-    const confirm = async () => {
+    const confirm = async (plan) => {
       if (yes) return true
       if (!isInteractive(io)) return null // not a terminal: the plan is all we print (R6)
-      return ask({ ...io, prompt: json ? io.stderr : io.stdout }, 'asight 将按上面的清单写或改这些文件。继续?')
+      // the one confirmation of an admin-level opt-in item names what changes and why it needs the administrator (V63): after this yes, the OS's own
+      // prompt (UAC) carries the step — asight never draws a password field of its own
+      const admin = ((plan && plan.optIn) || []).filter((r) => r.chosen && r.applicable && r.scope === 'machine')
+      const prompt = admin.length
+        ? `asight 将按上面的清单写或改这些文件,并做 ${admin.length} 个你点名的机器级改动(要管理员权限;你确认后 Windows 弹它自己的提权框,密码只进那个框)。继续?`
+        : 'asight 将按上面的清单写或改这些文件。继续?'
+      return ask({ ...io, prompt: json ? io.stderr : io.stdout }, prompt)
     }
     // the machine's VPN / proxy software (§6): looked at once, named in the plan and in the receipt; asight changes none of it. The cache ~/.asight/netenv.json is `status`'s and `doctor`'s to write, not `on`'s:
     // the receipt lists exactly the files `on` wrote (V3), and a second `on` writes nothing (R9)
@@ -86,6 +123,7 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     let { receipt, exit } = await install.turnOn({
       home, env, ids: named.ids, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, osRootsFile: parts.osRootsFile || null,
       roots: deps.roots || null, unit, autostart, freePort: deps.freePort, dryRun: flags.has('--dry-run'), confirm,
+      optIn, optInHooks,
       networkEdited: async (targets) => editedFields({ adoption, routing, targets, home, env, fs: deps.fs }),
       onPlan: (plan) => say([formatPlan({ ...plan, adopted: adoption && !adoption.error ? Object.entries(adoption.chains(plan.targets)).filter(([h]) => plan.targets.includes(h)).map(([h, t]) => ({ harness: h, chain: chainText(t) })) : [] }, { home, autostart, netenv }), ...(prep && prep.notes && prep.notes.length ? ['', ...prep.notes] : [])].join('\n')),
       request: deps.request, now: deps.now, getuid: deps.getuid, helperState, linger: deps.linger || parts.linger || null, lingerRead: deps.lingerRead || (deps.linger ? null : parts.lingerRead || null), sleep: deps.sleep, user: deps.user, fs: deps.fs,

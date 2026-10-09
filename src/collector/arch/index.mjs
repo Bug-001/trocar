@@ -13,7 +13,10 @@ export async function loadArch(platform = process.platform) {
     // the scheduled-task module (Task 9(a)); the OS roots are read (not a file: windowsRoots, 4.8 §6.2), so osRootsFile stays away; netFacts
     // is Task 10's. createRedirector is the whole Windows collector (wiring.mjs): it needs the collector dir and the daemon's sinks, so only
     // daemon.mjs calls it (loadParts makes no redirector on win32); prepare is the read-only hook `asight on` calls before it writes (W27 ⑥, W74).
-    const [{ createWin32Collector, prepare }, unit, { controlEndpoint }, { windowsRoots }] = await Promise.all([import('./win32/wiring.mjs'), import('./win32/autostart.mjs'), import('./win32/control-path.mjs'), import('./win32/roots.mjs')])
+    // optIn is 4.8 §2.4's half the CLI reaches (1.6 §1.7): `forms` (what --opt-in may name) and `plan` (the rows of the plan's 「要你点名的」 section);
+    // `apply` (one named item, ledgered) and `check` (W68) join from their own commits of Task 14.
+    const [{ createWin32Collector, prepare }, unit, { controlEndpoint }, { windowsRoots }, { planOptIns, optinFormsOf }] = await Promise.all([import('./win32/wiring.mjs'), import('./win32/autostart.mjs'), import('./win32/control-path.mjs'), import('./win32/roots.mjs'), import('./win32/optin.mjs')])
+    const { groupsOf } = await import('./win32/route-plan.mjs')
     return {
       os: 'win32', install: null, unit,
       controlEndpoint,
@@ -21,6 +24,10 @@ export async function loadArch(platform = process.platform) {
       osRoots: ({ helper = null } = {}) => windowsRoots({ helper }),
       createRedirector: (opts = {}) => createWin32Collector(opts),
       prepare,
+      optIn: {
+        forms: ({ harnesses, ids = null } = {}) => optinFormsOf(groupsOf(harnesses).filter((x) => !ids || ids.includes(x.harness))),
+        plan: ({ harnesses, ids = null, optIn = [], manifest = null, resolve = null } = {}) => planOptIns({ groups: groupsOf(harnesses).filter((x) => !ids || ids.includes(x.harness)), optIns: optIn, manifest, resolve }),
+      },
     }
   }
   throw new Error(`asight collector: ${platform} is not supported yet (Linux first; RFC 4.6 §结构)`)
