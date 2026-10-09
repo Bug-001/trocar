@@ -6,6 +6,8 @@
 // replacement of what a platform without the new collector (macOS, Windows: 1.6 §4) runs instead: legacyOnCli, src/capture/legacy-on.mjs.
 // Exit codes (R4): 0 done · 1 not done or a problem · 2 usage error / not in a terminal without --yes (nothing touched).
 import os from 'node:os'
+import nodeFs from 'node:fs'
+import path from 'node:path'
 import { resolveHarnesses } from './harness-names.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
@@ -14,6 +16,7 @@ import { probeNetenv } from '../netenv/index.mjs'
 import { renderCompact } from '../netenv/topology-text.mjs'
 import { hasNewCollector } from '../off/legacy.mjs'
 import { legacyOnCli } from '../capture/legacy-on.mjs'
+import { appendEvent } from '../collector/core/events.mjs'
 import { prepareAdoption, editedFields, recordAdoption } from './on-adopt.mjs'
 
 const USAGE = 'usage: asight on [harness…] [--dry-run] [--yes] [--no-autostart | --no-unit] [--json]'
@@ -60,14 +63,36 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     const netenv = await probeNetenv({ home, platform, env, deps })
     const adoption = await prepareAdoption({ home, env, platform, deps, parts, netenv, now: deps.now ? () => deps.now().getTime() : Date.now }) // §9.5: the proxy each agent already uses, and the chain once asight is on
     const routing = deps.routing || null
+    // The arch's read-only preflight (4.8 §8 ⑥, W27 ⑥, W74; Windows: the kernel line and the Smart App Control line), run BEFORE turnOn so a refusal
+    // stops `on` before its first write — a settled precondition with nothing to roll back. The Linux arch has no `prepare` and nothing here changes.
+    // The refusal's event and receipt are on's to write; with no collector directory yet (nothing installed) the receipt is the record (4.6 §记录).
+    const fs = deps.fs || nodeFs
+    const archPrepare = parts.arch && typeof parts.arch.prepare === 'function' ? parts.arch.prepare : null
+    const prep = archPrepare ? await archPrepare({ env }) : null
+    if (prep && prep.refuse) {
+      const rf = prep.refuse
+      const line = `${rf.reason}${Array.isArray(rf.commands) && rf.commands.length ? `。重装: ${rf.commands.join(' 或 ')}` : ''}`
+      if (!flags.has('--dry-run')) {
+        const receipt = { ...newReceipt('on'), ok: false, harnesses: named.ids, notes: [line] }
+        const cdir = path.join(home, '.asight', 'collector')
+        try { if (fs.existsSync(cdir)) appendEvent(cdir, { event: 'failure', where: 'forwarder', code: rf.code, ...(rf.of ? { of: rf.of } : {}), reason: line }) } catch { /* the receipt is the record then (R11) */ }
+        if (json) io.out(JSON.stringify(receipt, null, 2))
+        else io.out(formatOnReceipt(receipt, { tense: 'past', home }))
+        return EXIT.incomplete
+      }
+      // a dry run prints the plan and exits 0; the stop a real run would meet is in the receipt (R6, V7)
+      prep.blocked = line
+    }
     let { receipt, exit } = await install.turnOn({
       home, env, ids: named.ids, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, osRootsFile: parts.osRootsFile || null,
       roots: deps.roots || null, unit, autostart, freePort: deps.freePort, dryRun: flags.has('--dry-run'), confirm,
       networkEdited: async (targets) => editedFields({ adoption, routing, targets, home, env, fs: deps.fs }),
-      onPlan: (plan) => say(formatPlan({ ...plan, adopted: adoption && !adoption.error ? Object.entries(adoption.chains(plan.targets)).filter(([h]) => plan.targets.includes(h)).map(([h, t]) => ({ harness: h, chain: chainText(t) })) : [] }, { home, autostart, netenv })),
+      onPlan: (plan) => say([formatPlan({ ...plan, adopted: adoption && !adoption.error ? Object.entries(adoption.chains(plan.targets)).filter(([h]) => plan.targets.includes(h)).map(([h, t]) => ({ harness: h, chain: chainText(t) })) : [] }, { home, autostart, netenv }), ...(prep && prep.notes && prep.notes.length ? ['', ...prep.notes] : [])].join('\n')),
       request: deps.request, now: deps.now, getuid: deps.getuid, helperState, linger: deps.linger || parts.linger || null, lingerRead: deps.lingerRead || (deps.linger ? null : parts.lingerRead || null), sleep: deps.sleep, user: deps.user, fs: deps.fs,
     })
     receipt.netenv = netenv.error ? { error: netenv.error } : netenv.result
+    if (prep && prep.notes && prep.notes.length) receipt.notes.push(...prep.notes) // the preflight's lines ride along (the plan showed them above)
+    if (prep && prep.blocked) { receipt.blocked = prep.blocked; receipt.notes.push(`${prep.blocked} (a real asight on stops there)`) }
     if (adoption && adoption.error) receipt.notes.push(adoption.error)
     else if (adoption && receipt.harnesses && receipt.harnesses.length && receipt.ok !== false && !receipt.dry_run && !receipt.planned && !receipt.declined) {
       const rec = await recordAdoption({ adoption, routing, targets: receipt.harnesses, home, env, now: deps.now ? () => deps.now().getTime() : Date.now, netenv, fs: deps.fs })

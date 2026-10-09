@@ -15,6 +15,8 @@ import { readStateFile } from '../../src/off/state.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
 import cc from '../../src/collector/harness/claude-code.mjs'
 import codex from '../../src/collector/harness/codex.mjs'
+import * as unit from '../../src/collector/arch/linux/unit.mjs'
+import { checkRecord } from '../../src/health/codes.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { fakeIo, onCtx, snapshot, changedFiles, seedClaude, fakeSystem, fakeDaemon } from './fixtures/on-ctx.mjs'
 import { installedHome, flowEvents } from '../off/fixtures/off-ctx.mjs'
@@ -50,6 +52,73 @@ test('V7: a first on outside a terminal without --yes prints the plan, writes no
   assert.deepEqual(daemon.calls.filter((c) => c.startsWith('POST')), ['POST /on {"harnesses":["claude-code"]}'], 'and the daemon is asked to attach, by name')
   assert.deepEqual(b.relayed, { closing: 0, waiting: 0, cut: 0 }, 'on relays nothing: zeros on purpose, not "unknown"')
   assert.equal(b.linger, true)
+})
+
+// W27 ⑥ / W74 (4.8 §8): the arch's read-only `prepare` hook. Its lines are plan lines and receipt notes; a refusal stops `on` before turnOn's first write
+// (exit 1, one failure event where a collector directory exists — with none the receipt is the record, 4.6 §记录 — and the HOME byte-identical); a dry run
+// shows the stop as `blocked` (R6, V7); a hook that throws is the outer catch's; the Linux arch has no hook and the existing runs above are its guard.
+test('W27 ⑥: the arch prepare hook — its lines print with the plan and ride in the receipt; a refusal exits 1 before any write with one failure event; a dry run says blocked; a throw is the outer catch', async () => {
+  const withPrepare = (answer) => {
+    const calls = []
+    const parts = { os: 'none', osRootsFile: null, harnesses: [cc], scan: async () => [], match: () => ({ agent: null }), arch: { unit, prepare: async (a) => { calls.push(a); return answer } } }
+    return { calls, ctx: (home, io, extra = {}) => onCtx(home, io, { ...extra, deps: { ...extra.deps, parts } }) }
+  }
+  // the notes (the kernel line, the Smart App Control line) print with the plan of a real on and ride in its receipt
+  const notes = [`asight's kernel: found and verified (abc123def456… in C:\\npm\\asight-kernel-win32-x64)`, 'Smart App Control 开着:未签名的 asight-forwarder.exe 很可能起不来']
+  const home1 = tmpDir('asight-w27a-'); seedClaude(home1)
+  const { exec: ex, daemon } = fakeSystem()
+  const ok = withPrepare({ notes })
+  const io = fakeIo({ tty: false })
+  assert.equal(await runOnCli(['--yes', '--json'], ok.ctx(home1, io, { exec: ex, daemon })), 0)
+  assert.equal(ok.calls.length, 1, 'the hook runs once, before turnOn')
+  assert.equal(ok.calls[0].env.HOME, home1, 'with the environment on runs in')
+  assert.match(io.stderrText(), /asight's kernel: found and verified/, 'the kernel line prints with the plan')
+  assert.match(io.stderrText(), /Smart App Control 开着/, 'the Smart App Control line too')
+  assert.deepEqual([io.json().notes.includes(notes[0]), io.json().notes.includes(notes[1])], [true, true], 'and both are receipt notes')
+
+  // a refusal on nothing-installed: exit 1 before turnOn (nothing written), the reason with the reinstall commands, the receipt the only record
+  const home2 = tmpDir('asight-w27b-'); seedClaude(home2)
+  const before = snapshot(home2)
+  const refuse = { code: 'forwarder-binary-missing', reason: 'the pinned kernel package was not found (package-not-installed)', commands: ['npm install --global asight@0.0.0 --include=optional', 'npm install --global asight-0.0.0.tgz asight-kernel-win32-x64-0.0.0.tgz'] }
+  const bad = withPrepare({ refuse })
+  const io2 = fakeIo({ tty: false })
+  assert.equal(await runOnCli(['--yes', '--json'], bad.ctx(home2, io2, { exec: ex, daemon })), 1)
+  const doc = io2.json()
+  assert.equal(doc.ok, false)
+  assert.deepEqual(validateReceipt(doc), [])
+  assert.match(doc.notes.join('\n'), /the pinned kernel package was not found \(package-not-installed\)/)
+  assert.match(doc.notes.join('\n'), /重装: npm install --global asight@0\.0\.0 --include=optional 或 npm install --global asight-0\.0\.0\.tgz asight-kernel-win32-x64-0\.0\.0\.tgz/)
+  assert.deepEqual(snapshot(home2), before, 'a refusal writes nothing: turnOn never ran (the receipt is the record, 4.6 §记录)')
+
+  // a dry run over the same refusal: exit 0, the stop is `blocked` (R6, V7), nothing written
+  const io3 = fakeIo({ tty: false })
+  assert.equal(await runOnCli(['--dry-run', '--json'], bad.ctx(home2, io3)), 0)
+  const dry = io3.json()
+  assert.match(dry.blocked, /the pinned kernel package was not found/)
+  assert.match(dry.notes.join('\n'), /\(a real asight on stops there\)/)
+  assert.deepEqual(snapshot(home2), before)
+
+  // with a collector directory present (a first on succeeded), the refusal is one failure event in flows/ (D38)
+  const io4 = fakeIo({ tty: false })
+  assert.equal(await runOnCli(['--yes', '--json'], onCtx(home2, io4, { exec: ex, daemon })), 0, 'a plain on without the hook still works (the Linux arch shape)')
+  const bad2 = withPrepare({ refuse: { ...refuse, code: 'forwarder-digest-mismatch', of: 'package', reason: "the pinned kernel package holds an exe whose digest is not the pin's" } })
+  const io5 = fakeIo({ tty: false })
+  assert.equal(await runOnCli(['--yes', '--json'], bad2.ctx(home2, io5, { exec: ex, daemon })), 1)
+  const flows = path.join(home2, '.asight', 'collector', 'flows')
+  const lines = fs.readdirSync(flows).flatMap((n) => fs.readFileSync(path.join(flows, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)))
+  const mine = lines.filter((l) => l.event === 'failure' && l.code === 'forwarder-digest-mismatch')
+  assert.equal(mine.length, 1, 'one failure event, on\'s to write')
+  assert.equal(mine[0].where, 'forwarder')
+  assert.equal(mine[0].of, 'package')
+  assert.match(mine[0].reason, /digest is not the pin's/)
+  assert.deepEqual(checkRecord(mine[0]), [])
+
+  // a hook that throws is the outer catch's: exit 1, the message, no event of it
+  const home3 = tmpDir('asight-w27c-'); seedClaude(home3)
+  const io6 = fakeIo({ tty: false })
+  const boomParts = { os: 'none', osRootsFile: null, harnesses: [cc], scan: async () => [], match: () => ({ agent: null }), arch: { unit, prepare: async () => { throw new Error('the helper cannot be started') } } }
+  assert.equal(await runOnCli(['--yes', '--json'], onCtx(home3, io6, { exec: ex, daemon, deps: { parts: boomParts } })), 1)
+  assert.match(io6.json().notes.join('\n'), /the helper cannot be started/)
 })
 
 test('V7: a terminal asks once, only the first time; "n" writes nothing and exits 1; "y" goes on; a later on that changes no new file does not ask', async () => {
