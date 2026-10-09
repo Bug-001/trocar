@@ -1,6 +1,6 @@
 // darwin/claude-code.mjs — Claude Code on macOS (RFC 4.9 §2.3 · §2.4 · §6.4; the entry group, the one-file-two-entries rule and the opt-in item are 4.8 §2.3 · §2.4 · §6.1, acceptance
-//   W3 W23): data, no behaviour — the darwin twin of win32/claude-code.mjs, no cell of it lab-measured on macOS yet (measured.darwin is inferred everywhere; MA4 is the run that
-//   turns the cells into facts). Three forms in two entry groups:
+//   W3 W23): data, no behaviour — the darwin twin of win32/claude-code.mjs. The npm CLI's two doors (the settings trust entry and the HTTPS_PROXY proxy entry) are lab-measured
+//   live by the 4.9 smoke on a macOS test machine; everything else rides the twin until MA4. Three forms in two entry groups:
 //   claude-code.cli · claude-code.vscode   `claude`, told apart by path; both read one file, ~/.claude/settings.json (or $CLAUDE_CONFIG_DIR), so they share one group, one port and
 //                                         one listener, and the engine tells them apart by their own user name `of.<form>` (§2.3 入口组). The native install's real binary is the
 //                                         version-named file under ~/.local/share/claude/versions/ (what ~/.local/bin/claude points at — the same shape measured on Linux);
@@ -63,7 +63,7 @@ export default {
     schemes: ['http'],
     unsupported: { socks5: 'fails' },
     branches: ['all'],
-    measured: { darwin: 'inferred' },
+    measured: { darwin: 'lab' }, // the trust door (settings env) and the proxy door (HTTPS_PROXY) of the npm CLI are measured live on a macOS test machine
     restart: { hint: 'a running Claude Code reads its proxy once, at start: restart it (the desktop shell has no measured proxy door on macOS)', processes: ['claude', 'Claude'] },
   },
 }

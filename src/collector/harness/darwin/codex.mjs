@@ -1,5 +1,6 @@
 // darwin/codex.mjs — Codex on macOS (RFC 4.9 §2.3 · §6.1; the sentinel block, joinBlock and the entry group are 4.8 §2.3 · §6.1 — the Windows labs L1–L3 measured the shapes, the
-//   the .env facts): data, no behaviour — the darwin twin of win32/codex.mjs, inferred everywhere until MA4. One form, one entry group: `codex.cli` covers every codex
+//   the .env facts): data, no behaviour — the darwin twin of win32/codex.mjs. The cli form's two doors (the .env SSL_CERT_FILE trust entry and the HTTPS_PROXY + credentials proxy entry) are
+//   measured live by the 4.9 smoke on a macOS test machine; everything else rides the twin until MA4. One form, one entry group: `codex.cli` covers every codex
 //   binary of an npm-style install — the vendor binary the node launcher spawns (…/node_modules/@openai/codex/node_modules/@openai/codex-<plat>-<arch>/vendor/<target>/bin/codex;
 //   Homebrew's codex is the same launcher and the same binary underneath), and the managed app-server daemon under $CODEX_HOME that the interactive TUI hands its model calls to
 //   (and that outlives it) — all of them read $CODEX_HOME/.env (default ~/.codex/.env), one group, one port and one listener. The desktop app and the editor extension are NOT
@@ -38,7 +39,7 @@ export default {
     schemes: ['http'],
     unsupported: { socks5: 'silent-direct' }, // the model's HTTP client ignores SOCKS
     branches: ['http', 'ws'],
-    measured: { darwin: 'inferred' },
+    measured: { darwin: 'lab' }, // the trust door (.env SSL_CERT_FILE) and the proxy door (HTTPS_PROXY + credentials) of the native binary are measured live on a macOS test machine
     restart: { hint: 'Codex reads its .env once, at start: restart the CLI (the managed app-server keeps the first TUI\'s environment and outlives it); the desktop app and the editor extension are not measured on macOS', processes: ['codex'] },
   },
 }

@@ -1,6 +1,6 @@
 // test/collector/harness/darwin-forms.test.mjs — the macOS forms of the harnesses (RFC 4.9 §2.3 · §2.4; the case list, the group table and the kernel-facing checks inherit 4.8 §2.3 · §2.4 · §3.5,
-// acceptance W3, W23). Table-driven from 4.9 §2.3 and the install shapes the darwin data files carry (user directory made up; no cell of them is lab-measured on macOS yet — measured.darwin is
-// 'inferred' everywhere, and MA4 is the run that turns the cells into facts). The mechanics of matching live in src/collector/arch/darwin/forms.mjs, exercised on made-up inputs by the arch tests;
+// acceptance W3, W23). Table-driven from 4.9 §2.3 and the install shapes the darwin data files carry (user directory made up; claude-code and codex are lab-measured by the 4.9 smoke,
+// 2026-10-09, the other five are inferred from the Linux/Windows labs until MA4 turns their cells into facts). The mechanics of matching live in src/collector/arch/darwin/forms.mjs, exercised on made-up inputs by the arch tests;
 // here the REAL data is. The darwin port of test/collector/harness/win32-forms.test.mjs.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -185,7 +185,9 @@ test('every darwin data file has the shape the later tasks read: groups, forms, 
     }
     const proxy = w.proxy
     assert.deepEqual(Object.keys(proxy).sort(), ['branches', 'env', 'files', 'measured', 'restart', 'schemes', 'systemProxy', 'unsupported'], `${h}: the proxy export has the 1.6 §9.7 fields`)
-    assert.deepEqual(proxy.measured, { darwin: 'inferred' }, `${h}: nothing of this harness is lab-measured on macOS yet (MA4)`)
+    // cc and codex measured live on macOS (the 4.9 smoke: the trust door written, the agent's CONNECT through the pinned kernel, the decrypted flow row); the other
+    // five still ride the Linux/Windows labs' rows read through the darwin doors — nothing of them is measured on macOS yet (MA4)
+    assert.deepEqual(proxy.measured, { darwin: h === 'claude-code' || h === 'codex' ? 'lab' : 'inferred' }, `${h}: measured on macOS only where the lab smoke ran it`)
   }
 })
 
