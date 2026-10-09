@@ -1,5 +1,5 @@
-// test/collector/harness/win32-shims.test.mjs — the Windows .cmd shims and launchers of the opt-in items (4.8 §6.3 /
-// §2.4; plan Task 14, W21's shim cells): `kimi.cmd` sets NODE_EXTRA_CA_CERTS and HTTPS_PROXY, `opencode.cmd` sets
+// test/collector/arch/win32/shims.test.mjs — the Windows .cmd shims and launchers of the opt-in items (4.8 §6.3 /
+// §2.4; plan Task 14, W21's shim cells; arch/win32's own — the layering rules keep arch/ off harness/): `kimi.cmd` sets NODE_EXTRA_CA_CERTS and HTTPS_PROXY, `opencode.cmd` sets
 // HTTPS_PROXY only (its trust is the in-process plugin), an HTTPS_PROXY the shell already set is never overridden
 // (OPEN 16), the real binary is called in place. The templates are DATA here — this machine never runs a .cmd; the
 // renderer's output contract (CRLF, ASCII, every slot filled, nothing that would break the set line) is what the
@@ -7,7 +7,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import { renderCmdTemplate, SHIM_SOURCES } from '../../../src/collector/harness/_plugins.mjs'
+import { renderCmdTemplate, SHIM_SOURCES } from '../../../../src/collector/arch/win32/shims.mjs'
 
 const read = (name) => fs.readFileSync(new URL(name, SHIM_SOURCES), 'utf8')
 const PROXY = 'http://kimi-code.cli:0123456789abcdef0123456789abcdef@127.0.0.1:18042'

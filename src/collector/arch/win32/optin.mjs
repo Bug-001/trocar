@@ -15,7 +15,7 @@ import { execTool } from '../../../off/exec.mjs'
 import { writeBackup } from '../../../off/backup.mjs'
 import { setKey } from '../../../off/json-text.mjs'
 import { proxyUrl } from './forms.mjs'
-import { renderCmdTemplate } from '../../harness/_plugins.mjs'
+import { renderCmdTemplate } from './shims.mjs'
 import { readIngressConfig } from './ingress-config.mjs'
 import { readUserPath, prependUserPath, resolveCommand, sacOf, sacBlocksShims, readShortcutTarget, shortcutPlaces } from './userpath.mjs'
 
