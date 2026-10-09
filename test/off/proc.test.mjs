@@ -33,7 +33,9 @@ test('listProcs on a /proc tree: this uid\'s processes with pid, start time, exe
 
 test('listProcs fails loudly when the table cannot be read, and on a platform it has no reader for', async () => {
   await assert.rejects(listProcs({ uid: 1000, root: path.join(fakeProc().root, 'nowhere'), platform: 'linux' }), /nowhere/)
-  await assert.rejects(listProcs({ uid: 1000, platform: 'win32' }), /win32/)
+  await assert.rejects(listProcs({ uid: 1000, platform: 'win32' }), { code: 'ESANDBOX' }, 'win32 has a reader now (test/off/win32.test.mjs): without an injected runner the sandbox refuses the real powershell, exactly as macOS\'s `ps`')
+  takeRefusals() // ours, acknowledged here: the ledger below must not see it
+  await assert.rejects(listProcs({ uid: 1000, platform: 'freebsd' }), /freebsd/)
 })
 
 test('listProcs on macOS reads `ps` through the injected runner: pid, parent, uid, start time and the command line; its environment is unknown', async () => {

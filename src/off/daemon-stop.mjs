@@ -98,10 +98,89 @@ const refuseRealKill = () => {
 }
 const defaultKill = (pid, signal) => { if (process.env.ASIGHT_TEST_SANDBOX === '1') refuseRealKill(); process.kill(pid, signal) }
 
-/** Stops the daemon of this user and its helper → `{ stopped, how: 'systemctl' | 'signal' | 'none', pid, helper_pid, signals: [...], error? }`.
+// ── the Windows stop (RFC 4.8 §4.2, §7; plan Task 9(b)) ──────────────────────────────────────────────────────────────────────
+// `process.kill` on Windows is a hard kill with no drain and no kernel switch, and the supervised daemon would be re-spawned by its parent,
+// so: the supervisor goes FIRST (supervisor.lock names its pid and start time, both checked before anything is signalled), then the daemon
+// (from `lock`, identity checked as on the other platforms), each through `taskkill /PID <pid> /F` — this is the stuck-daemon path of 1.6
+// §1.4 第 5 步, the hard kill is the point (a daemon that answers is asked through its control pipe by the caller, never by this).
+
+/** The supervisor's lock, beside the daemon's (`<collector>/supervisor.lock`, written by arch/win32/autostart.mjs superviseChild).
+ *  The test holds the name equal to the arch module's, which cannot be imported here (src/off imports only node:* and src/off, 0.1 §2). */
+export const SUPERVISOR_LOCK = 'supervisor.lock'
+/** The same 2 s as the arch module's LOCK_START_TOLERANCE_MS (the lock's start time is "now minus uptime", the OS's is the creation
+ *  time: the same process agrees to within this). The test holds the two equal. */
+export const SUPERVISOR_START_TOLERANCE_MS = 2000
+
+/** Does the process a supervisor.lock names still run (4.8 §7)? The same fixed question, the same tolerance and the same answers as the arch
+ *  module's `lockHolderAlive` (the test runs both against the same fake answers): `Get-Process -Id <pid>` → the start time as Unix ms, 'gone'
+ *  for a pid that is not there. → true · false (gone, or another process now); throws when it cannot be told — and a caller that catches a
+ *  throw kills nothing on a guess. A pid that is not a positive integer is a TypeError: it never reaches a command. */
+export function supervisorHolderAlive({ pid, startedAt } = {}, { run = null, env = process.env, toleranceMs = SUPERVISOR_START_TOLERANCE_MS } = {}) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new TypeError(`supervisorHolderAlive needs a positive integer pid, got ${JSON.stringify(pid)}`)
+  const script = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if (-not $p) { 'gone' } else { try { [DateTimeOffset]::new($p.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds() } catch { 'unreadable' } }`
+  const r = execTool('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { run, env })
+  if (r.code !== 0) throw new Error(`the start time of pid ${pid} could not be asked: powershell ${r.code === null ? 'did not run' : `exited ${r.code}`}${r.err ? ` (${r.err.slice(0, 200)})` : ''}`)
+  if (r.out === 'gone') return false
+  if (!/^\d{10,}$/.test(r.out)) throw new Error(`the start time of pid ${pid} could not be read: powershell answered ${JSON.stringify(r.out.slice(0, 60))}`)
+  return Math.abs(Number(r.out) - startedAt) <= toleranceMs
+}
+
+/** supervisor.lock read as superviseChild wrote it: `{ pid, startedAt }`, or null when it is not there or names nothing usable (a lock cut
+ *  short by a crash reads as absent; the caller says so and kills nothing on a guess). */
+function readSupervisorLock({ file, fs = nodeFs } = {}) {
+  try {
+    const o = JSON.parse(fs.readFileSync(file, 'utf8'))
+    return Number.isSafeInteger(o.pid) && o.pid > 0 && Number.isFinite(o.startedAt) ? { pid: o.pid, startedAt: o.startedAt } : null
+  } catch { return null }
+}
+
+/** The Windows half of stopping: the supervisor parent first, then the daemon, both through taskkill (see the block comment above).
+ *  `exec` runs taskkill and the powershell questions (a test injects it; execTool refuses the real ones under npm test). → the same shape
+ *  stopDaemon gives: `{ stopped, how: 'taskkill' | 'none', pid, helper_pid, signals, error? }`. */
+async function stopDaemonWin32({ lockFile, exec = null, alive = pidAlive, identity = procIdentity, fs = nodeFs, env = process.env, sleep = stopSleep, now = Date.now, termWaitMs = 10000 }) {
+  const L = readDaemonLock({ file: lockFile, now: now(), alive, identity, fs })
+  const lock = L.lock || null
+  const problems = []
+  const signals = []
+  let how = 'none'
+  const waitGone = async (test, ms) => { for (const end = now() + ms; test() && now() < end;) await sleep(25) }
+  const taskkill = (pid, what) => { // one process, never a tree: the kernel draining under the daemon is not the stuck daemon's to lose
+    execTool('taskkill', ['/PID', String(pid), '/F'], { run: exec, env })
+    signals.push(`taskkill-${what}`); how = 'taskkill'
+  }
+
+  const supFile = path.join(path.dirname(lockFile), SUPERVISOR_LOCK)
+  const sup = readSupervisorLock({ file: supFile, fs })
+  if (sup) {
+    let holder
+    try { holder = supervisorHolderAlive(sup, { run: exec, env }) } catch (e) { problems.push(`the supervisor (pid ${sup.pid}) could not be told from another process (${String((e && e.message) || e)}), so it is not killed: it may re-spawn the daemon; stop it by hand`) }
+    if (holder === true) taskkill(sup.pid, 'supervisor')
+    else if (holder === false) { /* a stale lock, or a reused pid: nothing to kill, the daemon goes next */ }
+  } else if (fs.existsSync(supFile)) problems.push(`${supFile} cannot be read as a supervisor lock, so the supervisor is not killed: it may re-spawn the daemon; stop it by hand`)
+
+  const same = (pid) => {
+    const id = identity(pid) || {}
+    if (lock.start_time == null || lock.boot_id == null || id.start_time == null || id.boot_id == null) return 'unknown'
+    return String(lock.boot_id) === id.boot_id && String(lock.start_time) === id.start_time ? 'same' : 'other'
+  }
+  const daemonUp = () => !!lock && Number.isInteger(lock.pid) && alive(lock.pid) && same(lock.pid) !== 'other'
+  if (daemonUp()) {
+    if (same(lock.pid) === 'unknown') problems.push(`pid ${lock.pid} cannot be told from another process (the lock has no start time, or the identity could not be read), so it is not signalled`)
+    else { taskkill(lock.pid, 'daemon'); await waitGone(daemonUp, Math.min(termWaitMs, 3000)) }
+  }
+  const daemonStill = lock != null && alive(lock.pid) && same(lock.pid) !== 'other'
+  if (daemonStill) problems.push(`pid ${lock && lock.pid} is still running after ${signals.join(', ') || 'nothing was signalled'}`)
+  if (L.state === 'unknown') problems.push(`${L.error}, so which process to stop is not known`)
+  const stopped = !daemonStill
+  return { stopped, how, pid: lock ? lock.pid : null, helper_pid: lock && Number.isInteger(lock.helper_pid) ? lock.helper_pid : null, signals, ...(problems.length ? { error: problems.join('; ') } : {}) }
+}
+
+/** Stops the daemon of this user and its helper → `{ stopped, how: 'systemctl' | 'signal' | 'taskkill' | 'none', pid, helper_pid, signals: [...], error? }`.
  *  `stopped` is true when the daemon and its helper are gone and the unit is neither active nor activating. A pid the lock names is signalled only
- *  after its identity matched the lock (a lock without start_time, or an unreadable /proc, is "cannot tell": nothing is signalled, `error` says so). */
-export async function stopDaemon({ lockFile, socketPath = null, exec = null, kill = defaultKill, alive = pidAlive, identity = procIdentity, isHelper = isRedirectorHelper, unitManaged = false, termWaitMs = 10000, sleep = stopSleep, now = Date.now, fs = nodeFs, env = process.env } = {}) {
+ *  after its identity matched the lock (a lock without start_time, or an unreadable /proc, is "cannot tell": nothing is signalled, `error` says so).
+ *  On win32 (`platform: 'win32'`): the supervisor parent first, then the daemon, through taskkill — see stopDaemonWin32. */
+export async function stopDaemon({ lockFile, socketPath = null, exec = null, kill = defaultKill, alive = pidAlive, identity = procIdentity, isHelper = isRedirectorHelper, unitManaged = false, termWaitMs = 10000, sleep = stopSleep, now = Date.now, fs = nodeFs, env = process.env, platform = process.platform } = {}) {
+  if (platform === 'win32') return stopDaemonWin32({ lockFile, exec, alive, identity, fs, env, sleep, now, termWaitMs })
   const L = readDaemonLock({ file: lockFile, now: now(), alive, identity, fs })
   const lock = L.lock || null
   const signals = []
