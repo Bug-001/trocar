@@ -2,30 +2,31 @@
 // One fake Windows per rig: a fake registry and certificate store behind one injected `run`, and the six fixed scripts SIMULATED by it —
 // the simulation is each script's own logic read off its source (write the base64 bytes, repoint the shortcut, add the certificate to the
 // store), applied to a real sandbox HOME, so the read-backs run against the same world the "script" changed. No real tool is spawned on this
-// Mac (0.1 §3): powershell, reg and certutil are all the one fake. Windows paths are opaque strings here (backslashes and all), created and
-// read back consistently; the backups land under the sandbox HOME's real POSIX paths.
+// Mac (0.1 §3): powershell, reg and certutil are all the one fake. The world lives under a Windows-shaped home (`C:\Users\alice…`, per rig)
+// carried into the sandbox by the fixture's path-mapping fs, so every Windows path is an opaque string here (backslashes and all) created and
+// read back consistently through `r.wfs` — and nothing a test writes can land outside the sandbox.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { applyOptIn, planOptIns, optinFormsOf, OPTIN_NEVER } from '../../../../src/collector/arch/win32/optin.mjs'
-import { GROUPS, POLICY_KEY, rig, nativeKimi, writeShortcut, sha1Thumb } from './fixtures/optin-world.mjs'
+import { GROUPS, POLICY_KEY, rig, nativeKimi, realCmd, writeShortcut, sha1Thumb } from './fixtures/optin-world.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 
 test('W64 the PATH item: through its fixed .ps1 and read back — the shim file with the proxy and the CA, the directory first on the user PATH, ledgered with scope, prior and undo_by_hand (W21: one broadcast, zero setx, the type kept)', async () => {
   const r = await rig({ form: 'kimi-code.cli', item: 'user-path-shim' })
-  nativeKimi(r.home)
-  fs.writeFileSync(`${path.win32.join(r.home, 'npm')}\\kimi.cmd`, 'the real one') // the real binary, on the user PATH (npm style)
+  nativeKimi(r)
+  realCmd(r, 'kimi', 'the real one') // the real binary, on the user PATH (npm style)
   const out = await r.apply()
   assert.deepEqual(out, { state: 'done' })
   const binDir = path.win32.join(r.dir, 'bin')
-  const shim = fs.readFileSync(path.win32.join(binDir, 'kimi.cmd'), 'utf8')
+  const npmDir = path.win32.join(r.winHome, 'npm')
+  const shim = r.wfs.readFileSync(path.win32.join(binDir, 'kimi.cmd'), 'utf8')
   const port = r.ingress.groupPorts['kimi-code.cli']
   assert.match(shim, new RegExp(`if not defined HTTPS_PROXY set "HTTPS_PROXY=http://kimi-code\\.cli:${r.ingress.listenerToken}@127\\.0\\.0\\.1:${port}"`), 'the proxy is this form\'s kernel listener, with credentials (§6.3)')
   assert.match(shim, new RegExp(`set "NODE_EXTRA_CA_CERTS=.*asight-ca\\.pem"`), 'the CA file Node reads (the extra-kimi.pem rule: the extra bundle when there is one, else the collector CA)')
-  assert.ok(shim.includes(`"${path.win32.join(r.home, 'npm', 'kimi.cmd')}" %*`), 'the real binary forwards the arguments')
-  assert.equal(r.w.state['HKCU\\Environment'].Path.value, `${binDir};${path.win32.join(r.home, 'npm')}`, 'the directory is first, the rest keeps its order')
+  assert.ok(shim.includes(`"${path.win32.join(npmDir, 'kimi.cmd')}" %*`), 'the real binary forwards the arguments')
+  assert.equal(r.w.state['HKCU\\Environment'].Path.value, `${binDir};${npmDir}`, 'the directory is first, the rest keeps its order')
   assert.equal(r.w.state['HKCU\\Environment'].Path.kind, 'REG_EXPAND_SZ', 'the type is kept')
   assert.equal(r.w.broadcasts.length, 1, 'ONE WM_SETTINGCHANGE')
   assert.equal(r.w.calls.some((c) => c[0] === 'setx'), false, 'never setx')
@@ -34,7 +35,7 @@ test('W64 the PATH item: through its fixed .ps1 and read back — the shim file 
   assert.equal(r.w.scripts[0].params['-Command'][0], 'kimi')
   const e = r.manifest.entries[0]
   assert.deepEqual([e.kind, e.scope, e.harness, e.form, e.item, e.confirmed], ['optin-user-path', 'user', 'kimi-code', 'kimi-code.cli', 'user-path-shim', true])
-  assert.deepEqual(e.prior_value, { kind: 'REG_EXPAND_SZ', value: path.win32.join(r.home, 'npm') }, 'the prior is what the ledger records')
+  assert.deepEqual(e.prior_value, { kind: 'REG_EXPAND_SZ', value: npmDir }, 'the prior is what the ledger records')
   assert.match(e.undo_by_hand, /asight off kimi-code/, 'the undo is the agent\'s switch (V64)')
   assert.deepEqual([e.values.command, e.values.binDir], ['kimi', binDir])
   assert.deepEqual(r.events, [{ event: 'optin-applied', where: 'optin', form: 'kimi-code.cli', item: 'user-path-shim', scope: 'user' }])
@@ -43,14 +44,14 @@ test('W64 the PATH item: through its fixed .ps1 and read back — the shim file 
 
 test('W21 Smart App Control on → no shim, reason smart-app-control; Kimi not the native install → no shim; nothing written in either case', async () => {
   const sac = await rig({ form: 'kimi-code.cli', item: 'user-path-shim', win: { sac: 1 } })
-  nativeKimi(sac.home)
-  fs.writeFileSync(`${path.win32.join(sac.home, 'npm')}\\kimi.cmd`, 'x')
+  nativeKimi(sac)
+  realCmd(sac, 'kimi')
   const out = await sac.apply()
   assert.equal(out.state, 'failed')
   assert.match(out.reason, /Smart App Control is on/)
-  assert.deepEqual([sac.w.scripts.length, sac.w.broadcasts.length, sac.manifest.entries.length, fs.existsSync(path.win32.join(sac.dir, 'bin'))], [0, 0, 0, false], 'zero writes, zero entries')
+  assert.deepEqual([sac.w.scripts.length, sac.w.broadcasts.length, sac.manifest.entries.length, sac.wfs.existsSync(path.win32.join(sac.dir, 'bin'))], [0, 0, 0, false], 'zero writes, zero entries')
   const npmOnly = await rig({ form: 'kimi-code.cli', item: 'user-path-shim' }) // kimi via npm: no native install
-  fs.writeFileSync(`${path.win32.join(npmOnly.home, 'npm')}\\kimi.cmd`, 'x')
+  realCmd(npmOnly, 'kimi')
   const out2 = await npmOnly.apply()
   assert.equal(out2.state, 'failed')
   assert.match(out2.reason, /not the native install/)
@@ -59,14 +60,14 @@ test('W21 Smart App Control on → no shim, reason smart-app-control; Kimi not t
 
 test('a real binary that resolves nowhere is an honest error with zero writes (a shim forwards to it, so without it there is nothing to forward to)', async () => {
   const r = await rig({ form: 'kimi-code.cli', item: 'user-path-shim', win: { userPath: 'C:\\somewhere-else' } })
-  nativeKimi(r.home)
+  nativeKimi(r)
   const out = await r.apply()
   assert.equal(out.state, 'failed')
   assert.match(out.reason, /did not resolve on the PATH/)
   assert.deepEqual([r.w.scripts.length, r.manifest.entries.length], [0, 0])
   const noIngress = await rig({ form: 'kimi-code.cli', item: 'user-path-shim', over: { deps: { ingress: { missing: true } } } })
-  nativeKimi(noIngress.home)
-  fs.writeFileSync(`${path.win32.join(noIngress.home, 'npm')}\\kimi.cmd`, 'x')
+  nativeKimi(noIngress)
+  realCmd(noIngress, 'kimi')
   const out2 = await noIngress.apply()
   assert.equal(out2.state, 'failed')
   assert.match(out2.reason, /ingress config could not be read/)
@@ -75,23 +76,23 @@ test('a real binary that resolves nowhere is an honest error with zero writes (a
 
 test('W64 the shortcuts item: asight\'s launcher written, every shortcut repointed and read back, a backup of each before the change, the prior target recorded', async () => {
   const r = await rig({ form: 'opencode.desktop', item: 'start-menu-launcher' })
-  const exe = path.win32.join(r.home, 'AppData', 'Local', 'Programs', 'OpenCode', 'OpenCode.exe')
-  const places = [path.win32.join(r.env.APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'OpenCode.lnk'), path.win32.join(r.home, 'Desktop', 'OpenCode.lnk')]
-  for (const p of places) writeShortcut(p, exe)
+  const exe = path.win32.join(r.winHome, 'AppData', 'Local', 'Programs', 'OpenCode', 'OpenCode.exe')
+  const places = [path.win32.join(r.env.APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'OpenCode.lnk'), path.win32.join(r.winHome, 'Desktop', 'OpenCode.lnk')]
+  for (const p of places) writeShortcut(r, p, exe)
   const out = await r.apply()
   assert.deepEqual(out, { state: 'done' })
   const launcher = path.win32.join(r.dir, 'launchers', 'asight-opencode.cmd')
-  const text = fs.readFileSync(launcher, 'utf8')
+  const text = r.wfs.readFileSync(launcher, 'utf8')
   assert.match(text, new RegExp(`if not defined HTTPS_PROXY set "HTTPS_PROXY=http://opencode\\.desktop:${r.ingress.listenerToken}@127\\.0\\.0\\.1:${r.ingress.groupPorts['opencode.desktop']}"`))
   assert.ok(text.includes(`"${exe}" %*`), 'the launcher forwards to the app the shortcut pointed at')
-  for (const p of places) assert.equal(fs.readFileSync(p, 'utf8'), launcher, 'repointed, and the read-back confirmed it')
+  for (const p of places) assert.equal(r.wfs.readFileSync(p, 'utf8'), launcher, 'repointed, and the read-back confirmed it')
   const e = r.manifest.entries[0]
   assert.deepEqual([e.kind, e.scope, e.confirmed], ['optin-shortcut', 'user', true])
   assert.deepEqual(e.values.shortcuts.map((s) => s.path), places)
   assert.equal(e.values.realBinary, exe)
   for (const s of e.values.shortcuts) {
-    assert.ok(fs.existsSync(s.backup), `the backup of ${path.win32.basename(s.path)} exists`)
-    assert.equal(fs.readFileSync(s.backup, 'utf8'), exe, 'and holds the original bytes')
+    assert.ok(r.wfs.existsSync(s.backup), `the backup of ${path.win32.basename(s.path)} exists`)
+    assert.equal(r.wfs.readFileSync(s.backup, 'utf8'), exe, 'and holds the original bytes')
   }
 })
 
@@ -129,44 +130,44 @@ test('W64 the VS Code item: the two settings keys through a minimal text edit (t
   const r = await rig({ form: 'kimi-code.vscode', item: 'vscode-settings-and-launcher' })
   const settings = path.join(r.env.APPDATA, 'Code', 'User', 'settings.json') // exactly what the harness data's file(ctx) builds
   const userText = '{\n  "editor.fontSize": 13,\n  "http.proxy": "http://user-proxy:8080",\n  "workbench.colorTheme": "dark"\n}\n'
-  fs.mkdirSync(path.win32.dirname(settings), { recursive: true })
-  fs.writeFileSync(settings, userText)
-  const code = path.win32.join(r.home, 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'Code.exe')
+  r.wfs.mkdirSync(path.dirname(settings), { recursive: true })
+  r.wfs.writeFileSync(settings, userText)
+  const code = path.win32.join(r.winHome, 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'Code.exe')
   const lnk = path.win32.join(r.env.APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Visual Studio Code.lnk') // shortcutPlaces builds it win32-joined
-  writeShortcut(lnk, code)
+  writeShortcut(r, lnk, code)
   const out = await r.apply()
   assert.deepEqual(out, { state: 'done' })
-  const after = fs.readFileSync(settings, 'utf8')
+  const after = r.wfs.readFileSync(settings, 'utf8')
   assert.ok(after.includes('"editor.fontSize": 13,'), 'the user\'s own keys keep their bytes and order')
   assert.ok(after.includes(`"http.proxy": "http://kimi-code.vscode:${r.ingress.listenerToken}@127.0.0.1:${r.ingress.groupPorts['kimi-code.vscode']}"`), 'the proxy at this form\'s kernel listener, with credentials')
   assert.ok(after.includes('"http.systemCertificates": false'), 'a boolean, spelled without quotes')
   const launcher = path.win32.join(r.dir, 'launchers', 'asight-code.cmd')
-  assert.match(fs.readFileSync(launcher, 'utf8'), /set "NODE_EXTRA_CA_CERTS=/)
-  assert.equal(fs.readFileSync(lnk, 'utf8'), launcher)
+  assert.match(r.wfs.readFileSync(launcher, 'utf8'), /set "NODE_EXTRA_CA_CERTS=/)
+  assert.equal(r.wfs.readFileSync(lnk, 'utf8'), launcher)
   const e = r.manifest.entries[0]
   assert.deepEqual([e.kind, e.scope, e.confirmed], ['optin-vscode', 'user', true])
   assert.deepEqual(e.values.prior, { 'http.proxy': 'http://user-proxy:8080', 'http.systemCertificates': null })
   assert.equal(e.pre_sha256, crypto.createHash('sha256').update(userText).digest('hex'))
   assert.equal(e.post_sha256, crypto.createHash('sha256').update(after).digest('hex'))
   assert.ok(e.ops.length >= 2, 'the ops of both keys, for the inline undo\'s byte-exact reversal')
-  assert.equal(fs.readFileSync(e.backup, 'utf8'), userText, 'the settings backup holds the original')
+  assert.equal(r.wfs.readFileSync(e.backup, 'utf8'), userText, 'the settings backup holds the original')
 })
 
 test('W64 the Z-Code Desktop item: the two keys of its own settings file, the CA key at the combined bundle (replacement semantics — never an asight-only file)', async () => {
   const r = await rig({ form: 'z-code.desktop', item: 'zcode-app-settings' })
-  const setting = path.join(r.home, '.zcode', 'v2', 'setting.json') // the harness data's own path.join
-  fs.mkdirSync(path.win32.dirname(setting), { recursive: true })
-  fs.writeFileSync(setting, '{\n  "theme": "dark"\n}\n')
+  const setting = path.join(r.winHome, '.zcode', 'v2', 'setting.json') // the harness data's own path.join
+  r.wfs.mkdirSync(path.dirname(setting), { recursive: true })
+  r.wfs.writeFileSync(setting, '{\n  "theme": "dark"\n}\n')
   const missingBundle = await r.apply()
   assert.equal(missingBundle.state, 'failed')
   assert.match(missingBundle.reason, /combined-z-code\.pem is not there/, 'the CLI form\'s trust entry builds the bundle; without it this item is not done')
   assert.deepEqual([r.w.scripts.length, r.manifest.entries.length], [0, 0])
 
   const bundle = path.win32.join(r.dir, 'ca', 'combined-z-code.pem')
-  fs.writeFileSync(bundle, r.ca.certPem)
+  r.wfs.writeFileSync(bundle, r.ca.certPem)
   const out = await r.apply()
   assert.deepEqual(out, { state: 'done' })
-  const after = JSON.parse(fs.readFileSync(setting, 'utf8'))
+  const after = JSON.parse(r.wfs.readFileSync(setting, 'utf8'))
   assert.equal(after.httpProxy, `http://z-code.desktop:${r.ingress.listenerToken}@127.0.0.1:${r.ingress.groupPorts['z-code.desktop']}`)
   assert.equal(after.httpProxyCaCertPath, bundle, 'the combined bundle, not the asight-only CA')
   assert.equal(after.theme, 'dark')
@@ -186,12 +187,12 @@ test('an injected form that would need a login-env HTTPS_PROXY gets a plan note 
   assert.match(never.note, /never writes HTTPS_PROXY/)
   assert.deepEqual(optinFormsOf(groups), ['lab.cli'], 'the form stays nameable (its real item is); the never item is not a thing to name')
   assert.ok(!OPTIN_NEVER['user-path-shim'], 'the category holds only the declared-never items')
-  // the apply refuses it even if a future wiring hands it in: zero writes, an honest failure
+  // the apply refuses it even if a future wiring hands it in: zero writes, an honest failure (the never branch answers before any read)
   const home = tmpDir('asight-optin-never-')
   const manifest = { entries: [] }
   const failures = []
   const refused = await applyOptIn({ row: { form: 'lab.cli', harness: 'lab', item: 'login-env-proxy', kinds: [], scope: 'never', admin: false, chosen: true, applicable: false, state: 'never' },
-    groups: GROUPS, manifest, dir: path.win32.join(home, '.asight', 'collector'), home, env: {}, fs, save: () => {}, note: () => {}, failure: (x) => failures.push(x), state: () => {} })
+    groups: GROUPS, manifest, dir: path.win32.join(home, '.asight', 'collector'), home, env: {}, save: () => {}, note: () => {}, failure: (x) => failures.push(x), state: () => {} })
   assert.equal(refused.state, 'failed')
   assert.match(refused.reason, /never writes HTTPS_PROXY/)
   assert.deepEqual([manifest.entries.length, failures.length], [0, 1], 'zero entries, one honest failure record')
