@@ -41,6 +41,11 @@ export function formatPlan(p, { home = null, autostart = true, netenv = null, pl
       ...(p.optIn || []).filter((x) => x.applicable && !x.chosen && x.state !== 'done').map((x) => `  ${x.form}: ${x.item}${x.scope === 'machine' ? '(要管理员)' : ''} — ${x.impact}`),
       ...(p.optIn || []).filter((x) => x.applicable && !x.chosen && x.state !== 'done').map((x) => `    点名: ${x.command}`),
     ] : []),
+    // 「点名也不做」(1.6 §1.7): a form's data may declare that its capture would additionally need one of these; the plan says WHY asight
+    // never does it (an explanation only — no command, not nameable, zero writes)
+    ...((p.optIn || []).some((x) => x.state === 'never') ? [
+      ...(p.optIn || []).filter((x) => x.state === 'never').map((x) => `  ${x.form}: ${x.item} 点名也不做 — ${x.note}`),
+    ] : []),
     ...(p.edited || []).map((e) => `你改过的代理设置: ${e.harness} 的 ${e.where || '代理字段'} 现在是 ${e.now ?? '空'}(asight 上次接上时是 ${e.was ?? '空'});继续会把它接成新的上游,再指回 asight`),
     ...(p.adopted || []).map((x) => adoptedLine(x.harness, x)), // §9.5: where a new connection of the agent goes once asight is on, credentials masked
     ...(netenv ? netenvText(netenv, { ids: p.targets || null, platform }) : []), // §1.6: the plan names the machine's network environment (§6): what asight found, and that it changes none of it
