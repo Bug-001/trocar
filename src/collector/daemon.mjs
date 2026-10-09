@@ -109,7 +109,15 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
   try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "asight uninstall", then "asight on"`), { code: 'manifest-unreadable' }) }
   const ca = manifest && manifest.complete ? readCa({ dir: P.caDir }) : null
   if (!ca) throw Object.assign(new Error('the collector is not installed for this user: run "asight on" first'), { code: 'not-installed' })
-  const sock = socketPath || controlSocketPath({ env })
+  // The arch is loaded once, here at the entry (loadParts below takes it back): the platform's start gates and endpoint come before anything is claimed.
+  let A0 = arch
+  if (!A0) { try { A0 = await loadArch() } catch { A0 = null } } // a platform with no collector has no part of its own (netFactsDeps' pattern)
+  if (A0 && typeof A0.refuseElevated === 'function') { // win32 (4.8 §7, W25, R7): the daemon does not run on an elevated or SYSTEM token
+    const r = await A0.refuseElevated({ env, onUnknown: (why) => log('daemon', new Error(why)) }) // a token that cannot be read is not a refusal (R11): said, and the start goes on
+    if (r) throw Object.assign(new Error(r.reason), { code: r.code }) // startDaemon's catch writes the {where:'start', code:'elevated-token'} record; nothing was claimed
+  }
+  const ep = A0 && typeof A0.controlEndpoint === 'function' && !socketPath ? A0.controlEndpoint({ dir: P.dir }) : null // win32: the named pipe and the token of <collector>\control.json (4.8 §7)
+  const sock = socketPath || (ep ? ep.path : controlSocketPath({ env }))
   let markReady
   const ready = new Promise((r) => { markReady = r })
   const impl = {} // filled once wiring is done; requests that arrive earlier wait for it
@@ -120,7 +128,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       throw e
     }
   }
-  const control = await startControlServer({ socketPath: sock, routes: { 'GET /status': gate('status'), 'POST /on': gate('on'), 'POST /off': gate('off') } }) // throws if another daemon answers
+  const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: { 'GET /status': gate('status'), 'POST /on': gate('on'), 'POST /off': gate('off') } }) // throws if another daemon answers
 
   let redirector = null
   try {
@@ -176,7 +184,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     let engine = null // created after the tracker; the tracker's onGone reaches it at call time
     const event = (e) => failure.write({ ...e, ...(e.error != null && e.reason == null ? { reason: String(e.error) } : {}) })
 
-    const { registry, arch: A, harnesses: harnessList } = await loadParts({ arch, harnesses, env })
+    const { registry, arch: A, harnesses: harnessList } = await loadParts({ arch: A0 ?? arch, harnesses, env })
     redirector = A.createRedirector({ env })
     // D38: one `agent-untrusted` per pid and reason (code = the resolver's reason, reason = what to do about it); a pid
     // recorded so gets `agent-trusted` once it is trusted and `agent-exit` when it exits, so the condition can clear.

@@ -332,6 +332,34 @@ test('daemon: a process whose exe cannot be read is a failure only if its comman
   } finally { await d.stop(); p.done(); s.done() }
 })
 
+test('W25 the win32 daemon refuses an elevated or SYSTEM token before it claims its endpoint: one {start, elevated-token} record, no socket, no control.json; a token that cannot be read is not a refusal (4.8 §7, R7/R11)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const asked = []
+  const endpoints = []
+  const winish = (answer) => ({ ...fakeArch(p).arch, refuseElevated: async (o) => { asked.push(o); return answer }, controlEndpoint: ({ dir }) => { endpoints.push(dir); return { path: s.sock, token: 't'.repeat(64) } } })
+  const winish2 = (note, answer) => ({ ...winish(answer), refuseElevated: async (o) => { asked.push(o); note(o); return answer } })
+  // the elevated token: refused, the record is startDaemon's own catch, and neither the endpoint nor its control.json was touched
+  await assert.rejects(startDaemon({ dir: s.collector, arch: winish({ code: 'elevated-token', reason: '用你自己的账号跑,不要「以管理员身份运行」(R7)', token: { elevated: true, system: false, integrity: 'high' } }), harnesses: [cc] }), /R7/)
+  const w25 = flowsOf(s).filter((l) => l.event === 'failure' && l.where === 'start')
+  assert.deepEqual(w25.map((x) => x.code), ['elevated-token'], 'one record of the refusal, where the pin says')
+  assert.deepEqual(w25.map((x) => checkRecord(x)), [[]], 'a record the closed set takes')
+  assert.equal(fs.existsSync(s.sock), false, 'no endpoint was claimed')
+  assert.deepEqual(endpoints, [], 'the arch\'s controlEndpoint was never asked')
+  assert.equal(fs.existsSync(path.join(s.collector, 'control.json')), false, 'no control.json was written')
+  // a token that cannot be read is not a refusal: the daemon goes on (R11), the unknown said through its log — and its endpoint is the arch's, with the token
+  const unknown = []
+  const d = await startDaemon({ dir: s.collector, arch: winish2((o) => { if (o.onUnknown) o.onUnknown('the token could not be read: the helper did not answer') }, null), harnesses: [cc], log: (w, e) => unknown.push([w, String(e)]) })
+  try {
+    assert.equal(asked.length, 2, 'the check ran again')
+    assert.ok(unknown.some(([, m]) => /could not be read/.test(m)), 'the unreadable answer was said, not silent (R11)')
+    assert.deepEqual(endpoints, [s.collector], 'the daemon asked the arch for its endpoint (the collector dir, 4.8 §7)')
+    await assert.rejects(controlRequest({ socketPath: s.sock, method: 'GET', path: '/status' }), (e) => e.status === 401, 'a request without the token is refused at the door')
+    const tok = await controlRequest({ socketPath: s.sock, method: 'GET', path: '/status', token: 't'.repeat(64) })
+    assert.equal(typeof tok.actual, 'string', 'one with it passes (the status answer itself)')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
 test('daemon: refuses to start uninstalled; desired state survives a restart; on/off idempotent (S6, S9 unit)', async () => {
   const s = sandbox(); const p = fakeProc()
   try {

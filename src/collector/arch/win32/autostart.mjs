@@ -7,6 +7,7 @@ import path from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { execTool } from '../../../off/exec.mjs'
 import { collectorHome } from '../../../paths.mjs'
+import { startHelper } from './helper.mjs'
 
 export const TASK_NAME = '\\asight\\collector' // the scheduled task, in the \asight folder of the Task Scheduler
 export const TASK_FILE = 'asight-collector.task.xml' // the task's XML, an owned file of the install manifest, beside the collector's other files
@@ -32,18 +33,27 @@ export function nodePreflight({ versions = process.versions } = {}) {
 /**
  * R7 on Windows (4.8 §7): asight never runs with an elevated token or as SYSTEM. → `null` (go on) or `{ code: 'elevated-token', reason, token }`, which `on` and `daemon` turn into the refusal and the `start` failure record.
  * The check is the helper's own token (`token` verb: `{elevated, elevationType, integrity, system}`; `elevated` is "integrity High or above"). A token that cannot be read (the helper is down, native code did not compile, an answer
- * that is not booleans) is NOT a refusal (the helper's own failure is recorded where it happens); `onUnknown(reason)` says why it is unknown (R11).
+ * that is not booleans) is NOT a refusal (the helper's own failure is recorded where it happens); `onUnknown(reason)` says why it is unknown (R11). No `helper` given → one is started for the question and closed after
+ * (the `prepare` pattern: `on` and the daemon have none of their own at their entry — the daemon's own comes later, with the redirector).
  */
-export async function refuseElevated({ helper, onUnknown = () => {} } = {}) {
-  let t
-  try { t = await helper.call('token') } catch (e) { onUnknown(`the token could not be read: ${(e && e.code) || ''} ${(e && e.message) || e}`.replace(/\s+/g, ' ').trim()); return null }
-  if (!t || typeof t !== 'object' || typeof t.elevated !== 'boolean' || typeof t.system !== 'boolean') { onUnknown(`the token answer is not {elevated, system} booleans: ${JSON.stringify(t)}`.slice(0, 300)); return null }
-  if (!t.elevated && !t.system) return null
-  return {
-    code: 'elevated-token',
-    reason: `用你自己的账号跑,不要「以管理员身份运行」,也不要用 SYSTEM(R7:asight 不以提升的令牌运行;这个令牌是${t.system ? ' SYSTEM' : '高完整性级别'})`,
-    token: { elevated: t.elevated, system: t.system, integrity: t.integrity ?? null },
+export async function refuseElevated({ helper = null, start = startHelper, env = process.env, onUnknown = () => {} } = {}) {
+  let own = null
+  let h = helper
+  if (!h) { // the caller's helper, or one started for this question alone
+    try { own = start({ env }) } catch (e) { onUnknown(`the helper could not be started: ${(e && e.code) || ''} ${(e && e.message) || e}`.replace(/\s+/g, ' ').trim()); return null }
+    h = own
   }
+  try {
+    let t
+    try { t = await h.call('token') } catch (e) { onUnknown(`the token could not be read: ${(e && e.code) || ''} ${(e && e.message) || e}`.replace(/\s+/g, ' ').trim()); return null }
+    if (!t || typeof t !== 'object' || typeof t.elevated !== 'boolean' || typeof t.system !== 'boolean') { onUnknown(`the token answer is not {elevated, system} booleans: ${JSON.stringify(t)}`.slice(0, 300)); return null }
+    if (!t.elevated && !t.system) return null
+    return {
+      code: 'elevated-token',
+      reason: `用你自己的账号跑,不要「以管理员身份运行」,也不要用 SYSTEM(R7:asight 不以提升的令牌运行;这个令牌是${t.system ? ' SYSTEM' : '高完整性级别'})`,
+      token: { elevated: t.elevated, system: t.system, integrity: t.integrity ?? null },
+    }
+  } finally { if (own) { try { own.close() } catch { /* the question is answered either way */ } } }
 }
 
 const CONTROL_CHAR = /[\u0000-\u001f\u007f]/
