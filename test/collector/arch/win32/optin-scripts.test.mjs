@@ -44,6 +44,12 @@ export function violationsOf(name, rawSrc, plan = WRITE_PLAN[name] || null, allo
   const src = codeOf(rawSrc)
   if (src.includes('$ErrorActionPreference') === false || /ErrorActionPreference\s*=\s*'Stop'/.test(src) === false) out.push('no $ErrorActionPreference = \'Stop\' (a script that limps on is worse than one that stops)')
   for (const bad of FORBIDDEN) if (src.includes(bad)) out.push(`forbidden text in code: ${bad}`)
+  // Write channels the lists above cannot see (each planted below): PowerShell redirection (`>` / `>>` — PowerShell compares with the word
+  // operators -gt/-lt, so a bare `>` in code is always a redirect), a New-Item that is not a directory (one with `-ItemType File` or `-Value`
+  // writes content), and a .NET writer OBJECT — its `::new` is a construction, not one of the Write verbs the .NET check names, and the
+  // WriteLine that follows is a method on a variable a static scan cannot follow; the object itself is the write channel, so it is red at birth.
+  if (/>/.test(src)) out.push('a write through redirection (PowerShell compares with -gt/-lt words: a bare > in code is a redirect)')
+  if (/StreamWriter|FileStream|BinaryWriter|TextWriter/.test(src) || /\[[A-Za-z.]*IO[A-Za-z.]*\]::new\(/.test(src)) out.push('a .NET writer object (a stream/writer is a write channel of its own; the fixed scripts write only through [IO.File]::WriteAllBytes)')
   const certutilCalls = [...src.matchAll(/certutil[^\r\n]*/g)].map((m) => m[0].trim())
   const allowedCert = plan.certutil.map((c) => `certutil ${c}`)
   for (const c of certutilCalls) if (!allowedCert.includes(c)) out.push(`a certutil call outside its own item: ${c}`)
@@ -57,6 +63,7 @@ export function violationsOf(name, rawSrc, plan = WRITE_PLAN[name] || null, allo
   for (const w of [...src.matchAll(/\[[A-Za-z.]+\]::(Write(?!AllBytes)|Append|Copy|Move|Delete)\w*\(/g)].map((m) => m[0])) out.push(`a .NET write verb outside WriteAllBytes: ${w}`)
   const newItems = [...src.matchAll(/New-Item[^\r\n]*/g)].map((m) => m[0].trim())
   for (const n of newItems) if (!plan.newItems.some((a) => n.includes(a))) out.push(`a directory created outside its own paths: ${n}`)
+  for (const n of newItems) if (!/-ItemType\s+Directory/.test(n)) out.push(`a New-Item that is not a directory (a file or its content is WriteAllBytes' own channel): ${n}`)
   const repoints = (src.match(/\$lnk\.TargetPath = /g) || []).length
   if (repoints !== plan.repoints) out.push(`expected ${plan.repoints} shortcut repoint(s), found ${repoints}`)
   if (/TargetPath = (?! \$Launcher)/.test(src.replace('$lnk.TargetPath = $Launcher', ''))) out.push('a shortcut repointed somewhere other than the script\'s own launcher')
@@ -96,6 +103,11 @@ test('the scanner is not a rubber stamp: a planted violation in each category is
   assert.ok(violationsOf('user-path.ps1', planted("[IO.File]::WriteAllBytes('C:\\Windows\\evil.dll', [Convert]::FromBase64String($ShimB64))")).some((v) => /file write outside/.test(v)), 'a write outside its own paths')
   assert.ok(violationsOf('user-path.ps1', planted('certutil -user -addstore TrustedPublisher $CertFile')).some((v) => /certutil/.test(v)), 'a store outside its own item')
   assert.ok(violationsOf('user-path.ps1', planted('setx HTTPS_PROXY http://x')).some((v) => /setx/.test(v)), 'setx is forbidden outright')
+  assert.ok(violationsOf('user-path.ps1', planted('Write-Output $ShimB64 > C:\\Windows\\evil.txt')).some((v) => /redirection/.test(v)), 'a write through > redirection (a channel the verb lists cannot see)')
+  assert.ok(violationsOf('user-path.ps1', planted('Get-Content $BinDir >> C:\\Windows\\evil.log')).some((v) => /redirection/.test(v)), 'and through >>')
+  assert.ok(violationsOf('user-path.ps1', planted("New-Item -ItemType File -Path $BinDir\\evil.cmd -Value 'start'")).some((v) => /not a directory/.test(v)), 'a New-Item that writes a file with content (its -Path is the plan\'s own: only the channel check catches it)')
+  assert.ok(violationsOf('user-path.ps1', planted("[IO.StreamWriter]::new('C:\\Windows\\evil.txt')")).some((v) => /writer object/.test(v)), 'a .NET writer object')
+  assert.ok(violationsOf('user-path.ps1', planted("New-Object System.IO.StreamWriter('C:\\Windows\\evil2.txt')")).some((v) => /writer object/.test(v)), 'the PowerShell-way construction of the same writer')
   assert.ok(violationsOf('shortcut.ps1', textOf('shortcut.ps1').replace('WriteAllBytes($Launcher,', "WriteAllBytes($Env:TEMP + '\\x',")).some((v) => /file write outside/.test(v)), 'a rewritten target argument is a violation')
   assert.deepEqual(violationsOf('zcode-desktop.ps1', textOf('zcode-desktop.ps1'), WRITE_PLAN['zcode-desktop.ps1'], []), [], 'the untouched file stays clean (the mutations above really were what went red)')
   assert.deepEqual(violationsOf('no-such.ps1', ''), ['no write plan for no-such.ps1 (a new script without a scan is not a script)'], 'a script without a plan is itself a violation')
