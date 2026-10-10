@@ -32,7 +32,7 @@ export async function verifyOldCa({ io, home, platform, deps = {} }) {
   try {
     v = deps.verify ? deps.verify() : (await import('../capture/onboard.mjs')).verifyUserTrustOnly({ platform, installerOpts: { keychain: path.join(home, 'Library', 'Keychains', 'login.keychain-db'), nssdb: path.join(home, '.pki', 'nssdb') } })
   } catch (e) { io.out(`CA trust ? ${e.message}`); return 1 }
-  io.out(v ? 'CA present in user-level trust store, no machine-wide trust ✓' : 'CA not installed ✗ (run: asight monitor on)')
+  io.out(v ? 'CA present in user-level trust store, no machine-wide trust ✓' : 'CA not installed ✗ (the board\'s 监测 toggle installs it; the CLI face is retired)')
   return 0
 }
 

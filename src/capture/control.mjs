@@ -1,5 +1,6 @@
-// src/capture/control.mjs — transparent-monitoring control logic (D26). Maps the web/CLI on/off
-// DIRECTLY onto the existing OBSERVE onboard commands (atraceOn/atraceOff, D22) + user-level autostart
+// src/capture/control.mjs — the board's 监测 toggle (D26), the only face the old capture has left (its CLI face
+// `monitor` went with the old capture, D39⑥ 2026-10-11). Maps the web on/off onto the OBSERVE onboard commands
+// (atraceOn/atraceOff, D22) + user-level autostart
 // (autostart.mjs). OBSERVE-only: this only ARRANGES capture (CA + steer + boot item) — it never
 // originates or injects. All side-effecting deps (onboard / autostart / settings path) are injectable
 // so tests exercise the wiring without installing a real CA or LaunchAgent.
@@ -59,7 +60,7 @@ export function monitoringStatus({
   };
 }
 
-// Turn monitoring ON — DIRECTLY the underlying `asight on`: generate CA + import-only user-level trust
+// Turn monitoring ON: generate CA + import-only user-level trust
 // (D22) + steer CC-CLI; optionally add a user-level boot item that runs the capture (D26 · never
 // machine-wide). Returns the onboard + autostart results and the fresh status.
 export function monitoringOn({
@@ -70,6 +71,9 @@ export function monitoringOn({
   const ob = onboard.atraceOn({ proxyUrl, settingsPath });
   let auto = null;
   if (withAutostart) {
+    // the program is the retired `asight capture` verb — the boot item it writes no longer runs; the
+    // toggle's own install is kept for the machines that still have one (removal still works) — the
+    // transitional gap is written up in docs/release-notes/2026-10-11.md
     const args = [asightBin || defaultAsightBin(), 'capture', '--port', String(safePort(proxyUrl)), '--target', captureTarget, '--out', capturePath, '--raw-sse'];
     auto = autostart.install({ label: MONITOR_LABEL, programArguments: [nodeBin, ...args], logPath: path.join(HOME, '.asight', 'logs', 'monitor.log') });
     // D38 L-7: the boot item did not load → not ok, and a line (the caller passes appendLegacyEvent; tests never write home)
@@ -78,7 +82,7 @@ export function monitoringOn({
   return { ok: !(auto && auto.ok === false && !auto.reserved), onboard: ob, autostart: auto, status: monitoringStatus({ settingsPath, captureTarget, proxyUrl, onboard, autostart, getenv }) };
 }
 
-// Turn monitoring OFF — DIRECTLY `asight off`: revert steer (+ optional CA removal) + remove the boot
+// Turn monitoring OFF: revert steer (+ optional CA removal) + remove the boot
 // item. Symmetric & reversible (采集安全 Risk/回滚).
 export function monitoringOff({
   settingsPath = DEFAULT_SETTINGS, removeCa = false, captureTarget = null, proxyUrl = 'http://127.0.0.1:8899',

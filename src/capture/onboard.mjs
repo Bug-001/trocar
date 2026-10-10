@@ -205,9 +205,9 @@ export function atraceOn({ caDir, proxyUrl = 'http://127.0.0.1:8899', settingsPa
   if (!trusted) {
     const detail = install.result?.stderr?.trim() || install.result?.stdout?.trim() || `exit status ${install.result?.status}`
     const e = new Error(
-      `asight monitor on ABORTED: installing the capture CA into the ${install.platform} user trust store FAILED (${detail}). ` +
+      `\`monitoring on\` ABORTED: installing the capture CA into the ${install.platform} user trust store FAILED (${detail}). ` +
       `NOTHING was steered — ${settingsPath || DEFAULT_SETTINGS_PATH} is unchanged and the harness still talks to the API directly. ` +
-      `The CA itself was generated at ${ca.caCrt}; trust it (or fix the installer) and re-run \`asight monitor on\` (or the board's 监测 toggle). ` +
+      `The CA itself was generated at ${ca.caCrt}; trust it (or fix the installer) and re-run the board's 监测 toggle. ` +
       `Steering the harness at the capture proxy without a trusted CA would break every request with a TLS error.`,
     )
     e.ca = ca
