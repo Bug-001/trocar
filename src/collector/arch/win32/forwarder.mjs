@@ -485,6 +485,10 @@ export function createForwarder({
   return {
     start, reload, check, adopt, drain, remaining, stopNow, removeBinary, removeState,
     controller: () => ({ ...creds }),
+    // the ONE client of the own kernel (N15 (a): createController({own:true}) may appear in this file alone — everyone else who needs to ask the kernel's
+    // controller borrows this one, so a client that may write to a core is made in exactly one place). It is the live client: adopt() replaces it with the
+    // adopted kernel's own, so a caller gets the kernel this forwarder is really talking to, not one built from possibly stale creds.
+    client: () => ctl,
     state: () => ({ phase, pid: proc ? proc.pid : null, adopted: proc ? proc.adopted : false, streak, down: downReported, draining: remaining().length }),
   }
 }

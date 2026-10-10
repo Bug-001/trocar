@@ -7,7 +7,7 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
 import { loadArch } from '../../../../src/collector/arch/index.mjs'
-import { createWin32Collector } from '../../../../src/collector/arch/win32/wiring.mjs'
+import { createWin32Collector, prepare } from '../../../../src/collector/arch/win32/wiring.mjs'
 import { groupsOf } from '../../../../src/collector/arch/win32/route-plan.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { installCollector } from '../../../../src/collector/install.mjs'
@@ -62,6 +62,7 @@ function fakeKernel() {
       async reload({ build, forms }) { reloads.push({ forms: JSON.parse(JSON.stringify(forms)), text: build ? build({ port: 19001, secret: 'control-secret-0123456789' }) : null }); return { ok: true, readBack: { forms: {} } } },
       async check() { return { ok: true, forms: {} } },
       state: () => ({ phase: 'running' }),
+      controller: () => ({ port: 19001, secret: 'control-secret-0123456789' }),
       async drain() { return { stopped: false, cancelled: false } },
       async stopNow() { return { stopped: true, now: true } },
     },
@@ -114,7 +115,7 @@ test('W39 loadArch("win32") returns the Windows arch on any OS (imported and bui
   assert.equal(typeof A.prepare, 'function', 'the read-only hook `asight on` calls (W27 ⑥, W74)')
   assert.equal(typeof A.osRoots, 'function')
   assert.equal(typeof A.createRedirector, 'function')
-  assert.equal(A.netFacts ?? null, null, 'netFacts is Task 10\'s to add; its absence reads as "no part of its own" today')
+  assert.equal(typeof A.netFacts, 'function', 'the platform\'s part of the network facts (Task 10(a), 4.8 §10.1): gatherNetFacts reaches it as archFacts, it reads the collector dir\'s files and the resident helper — no second daemon API')
   const linux = await loadArch('linux')
   assert.equal(linux.prepare, undefined, 'the Linux arch has no prepare and its on is unchanged')
 })
@@ -198,4 +199,95 @@ test('W71 the watcher stops with the collector: close() stops it (no timer left)
   r.box.reg.internet.ProxyServer = sz('127.0.0.1:1')
   await r.timers.tick()
   assert.equal(r.events.filter((e) => e.event === 'netenv-change').length, 0)
+})
+
+test('refreshProbes (4.8 §3.3 「引擎(重)启动之后」): every on-form\'s fallback group is health-tested NOW through the kernel\'s own controller, with the group\'s own probe address (mihomo remembers health per address); nobody else is asked, and a kernel that is not running is said, not thrown', async () => {
+  const asked = []
+  const r = await rigged(['claude-code', 'codex', 'hermes'], {
+    desired: { 'claude-code': { desired: 'on' }, codex: { desired: 'on' }, hermes: { desired: 'off' } },
+    over: { deps: { probeController: (creds) => ({ async get(p) { asked.push([creds, p]); return /codex/.test(p) ? { ok: false, status: 0 } : { ok: true, status: 200 } } }) } },
+  })
+  assert.deepEqual(await r.redirector.win32.refreshProbes(), { ok: true, asked: [
+    { f: 'claude-code.cli', ok: true, status: 200 },
+    { f: 'claude-code.vscode', ok: true, status: 200 },
+    { f: 'codex.cli', ok: false, status: 0 },
+    { f: 'codex.vscode', ok: false, status: 0 },
+    { f: 'codex.app', ok: false, status: 0 },
+  ] }, 'each on-form\'s answer is carried, the failed ones included (the daemon records them)')
+  const ports = r.redirector.win32.ingress().groupPorts
+  const want = (f, g) => `/group/asight-fb-${f}/delay?url=${encodeURIComponent(`http://127.0.0.1:${ports[g]}/asight-health/${f}`)}&timeout=2000`
+  assert.deepEqual(asked, [
+    [{ port: 19001, secret: 'control-secret-0123456789' }, want('claude-code.cli', 'claude-code.settings')],
+    [{ port: 19001, secret: 'control-secret-0123456789' }, want('claude-code.vscode', 'claude-code.settings')],
+    [{ port: 19001, secret: 'control-secret-0123456789' }, want('codex.cli', 'codex.env')],
+    [{ port: 19001, secret: 'control-secret-0123456789' }, want('codex.vscode', 'codex.env')],
+    [{ port: 19001, secret: 'control-secret-0123456789' }, want('codex.app', 'codex.env')],
+  ], 'the kernel\'s own controller (its credentials), every supported form of an on group and nobody else: hermes is off, an opt-in group is not on without its record')
+  // a kernel that is not running (its supervisor between attempts), or a forwarder with no controller, is an answer — never a throw
+  const down = await rigged(['codex'], { desired: { codex: { desired: 'on' } }, over: { deps: { forwarder: { state: () => ({ phase: 'backoff' }), controller: () => ({ port: 19001, secret: 's' }) } } } })
+  assert.deepEqual(await down.redirector.win32.refreshProbes(), { ok: false, reason: 'no kernel' })
+  const bare = await rigged(['codex'], { desired: { codex: { desired: 'on' } }, over: { deps: { forwarder: { state: () => ({ phase: 'running' }), controller: () => null } } } })
+  assert.deepEqual(await bare.redirector.win32.refreshProbes(), { ok: false, reason: 'no kernel' })
+  // the production path borrows the forwarder's ONE client (N15 (a): createController({own:true}) lives in forwarder.mjs alone; the wiring must not make its own)
+  const borrowed = []
+  const own = await rigged(['codex'], {
+    desired: { codex: { desired: 'on' } },
+    over: { deps: { forwarder: { state: () => ({ phase: 'running' }), controller: () => ({ port: 19001, secret: 's' }), client: () => ({ async get(p) { borrowed.push(p); return { ok: true, status: 200 } } }) } } },
+  })
+  const ownR = await own.redirector.win32.refreshProbes()
+  assert.equal(ownR.ok, true)
+  assert.equal(ownR.asked.length, 3)
+  assert.ok(borrowed.length === 3 && borrowed.every((p) => p.startsWith('/group/asight-fb-codex.')), 'every ask went through the forwarder\'s client, none anywhere else')
+  const noClient = await rigged(['codex'], { desired: { codex: { desired: 'on' } }, over: { deps: { forwarder: { state: () => ({ phase: 'running' }), controller: () => ({ port: 19001, secret: 's' }) } } } })
+  assert.deepEqual(await noClient.redirector.win32.refreshProbes(), { ok: false, reason: 'no kernel' }, 'a forwarder without a client is an answer, not a crash')
+})
+
+test('prepare (W27 ⑥): a missing or mismatched kernel is a refusal whose commands are the two reinstall lines (reinstallCommands gives {npm, release}; an array passes through) and whose mismatch says `of`; without commands there is no key', async () => {
+  const cmds = { npm: 'npm install --global asight@0.0.0 --include=optional', release: 'npm install --global asight-0.0.0.tgz asight-kernel-win32-x64-0.0.0.tgz' }
+  const off = async () => 'off'
+  assert.deepEqual(await prepare({ locate: async () => ({ missing: { reason: 'package-not-installed', commands: cmds } }), sac: off }), {
+    refuse: { code: 'forwarder-binary-missing', reason: 'the pinned kernel package was not found (package-not-installed)', commands: [cmds.npm, cmds.release] },
+  })
+  assert.deepEqual(await prepare({ locate: async () => ({ mismatch: { of: 'package', commands: cmds } }), sac: off }), {
+    refuse: { code: 'forwarder-digest-mismatch', reason: "the pinned kernel package holds an exe whose digest is not the pin's", of: 'package', commands: [cmds.npm, cmds.release] },
+  })
+  assert.deepEqual(await prepare({ locate: async () => ({ missing: { reason: 'not-pinned', commands: ['one line'] } }), sac: off }), {
+    refuse: { code: 'forwarder-binary-missing', reason: 'the pinned kernel package was not found (not-pinned)', commands: ['one line'] },
+  }, 'an array of commands passes through as it is')
+  const bare = await prepare({ locate: async () => ({ missing: { reason: 'unsupported-arch' } }), sac: off })
+  assert.equal('commands' in bare.refuse, false)
+})
+
+test('prepare (W74): the kernel line, and the Smart App Control line only when it is on or evaluating (off lacks it, unknown says so with its reason); an injected sac gets the helper it was given (none if none), the real reader starts a helper of its own only when none is given', async () => {
+  const found = () => ({ found: { sha256: 'a'.repeat(64), packageDir: 'C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\asight-kernel-win32-x64' } })
+  const kernelLine = `asight's kernel: found and verified (${'a'.repeat(12)}… in ${found().found.packageDir})`
+  const starts = []
+  const start = (o) => { starts.push(o); return { async call() { return { keyExists: true, values: { VerifiedAndReputablePolicyState: { kind: 'REG_DWORD', value: 2 } } } }, async close() {} } }
+  const seen = []
+  const sacOf = (state) => async (a) => { seen.push(a); return state }
+  // the same two reads as data, for the Windows plan's own kernel and Smart App Control lines (4.8 §11): the pin this build carries (version and the platform package of the architecture asked) and the digest that was verified
+  const KERNEL64 = { version: 'v1.19.32', package: 'asight-kernel-win32-x64', exe: 'asight-forwarder.exe', sha256: 'a'.repeat(64) }
+  // an injected sac: no helper of its own is started for it — it gets the helper it was given, none if none
+  const p1 = await prepare({ locate: found, sac: sacOf('off'), start, arch: 'x64' })
+  assert.deepEqual(starts, [])
+  assert.deepEqual(seen, [{ helper: null }])
+  assert.deepEqual(p1, { notes: [kernelLine], kernel: KERNEL64, sac: 'off' }, 'Smart App Control off: no line of it')
+  const p2 = await prepare({ locate: found, sac: sacOf('evaluation'), start, arch: 'x64' })
+  assert.equal(p2.notes.length, 2)
+  assert.match(p2.notes[1], /^Smart App Control 开着/)
+  assert.deepEqual([p2.kernel, p2.sac], [KERNEL64, 'evaluation'], 'the data of the two lines the plan draws')
+  const unknown = await prepare({ locate: found, sac: sacOf({ unknown: { reason: 'timeout' } }), start, arch: 'x64' })
+  assert.match(unknown.notes[1], /^Smart App Control 的状态读不到\(timeout\)/, 'an unreadable state says 不知道, not a guess')
+  assert.deepEqual(unknown.sac, { unknown: { reason: 'timeout' } }, 'and the data says it the same way')
+  const h = { async call() { return { keyExists: false, values: {} } }, async close() {} }
+  await prepare({ helper: h, locate: found, sac: sacOf('on'), start, arch: 'x64' })
+  assert.deepEqual(seen[seen.length - 1], { helper: h }, 'a helper passed in reaches the injected sac as it was given')
+  assert.deepEqual(starts, [], 'and asight still started none for it')
+  // the real reader (sacState): a helper of its own is started when none is given, and closed after
+  const real = await prepare({ locate: found, start, arch: 'x64' })
+  assert.equal(starts.length, 1, 'the real reader gets a helper of its own')
+  assert.equal(real.notes.length, 2)
+  assert.match(real.notes[1], /^Smart App Control 开着/, 'the fake helper answers evaluation (2)')
+  const broken = await prepare({ locate: found, start: () => { throw new Error('policy blocked the script') }, arch: 'x64' })
+  assert.match(broken.notes[1], /^Smart App Control 的状态读不到\(denied:no helper\)/, 'a helper that cannot be started is said, not thrown')
 })

@@ -109,23 +109,24 @@ test('cli: start stops on SIGHUP like SIGTERM, passes the signal to stop, exits 
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })
 
-// `collector start` is `asight daemon` (1.6 §2 hidden alias; the autostart units written before the rename run it): refused as root and where the new collector does not exist, before the daemon is asked for anything
-test('cli: `collector start` is `asight daemon` (src/cli/daemon.mjs): it refuses root, a platform without the new collector (本平台未实现) and any argument, and starts nothing then (R4, R7)', async () => {
+// `collector start` is `asight daemon` (1.6 §2 hidden alias; the autostart units written before the rename run it): refused as root and where the new collector does not exist (now neither linux nor win32: darwin), before the daemon is asked for anything
+test('cli: `collector start` is `asight daemon` (src/cli/daemon.mjs): it refuses root and a platform without the new collector (本平台未实现) and any argument, starts nothing then, and — the flip (plan 9(b)) — win32 passes the gate and starts the daemon (R4, R7)', async () => {
   const home = tmpDir('asight-cli-daemon-')
   const started = []
   const daemon = { startDaemon: async () => { started.push(1); return { port: 1, socketPath: '/s', stop: async () => ({ failed: [] }) } } }
   const run = (verb, o = {}) => { const t = io(); return runCollector(verb, { home, env: {}, daemon, proc: { on() {} }, platform: 'linux', getuid: () => 1000, waitForStop: async () => 'SIGTERM', ...o, ...t }).then((exit) => ({ exit, t })) }
   let r = await run(['start'], { getuid: () => 0 })
   assert.equal(r.exit, 1); assert.match(r.t.e.join('\n'), /用你自己的账号跑/)
-  for (const platform of ['darwin', 'win32']) {
-    r = await run(['start'], { platform })
-    assert.equal(r.exit, 1, platform); assert.match(r.t.e.join('\n'), new RegExp(`本平台未实现\\(${platform}\\)`))
-  }
+  r = await run(['start'], { platform: 'darwin' })
+  assert.equal(r.exit, 1); assert.match(r.t.e.join('\n'), /本平台未实现\(darwin\)/)
   r = await run(['start', '--now'])
   assert.equal(r.exit, 2); assert.match(r.t.e.join('\n'), /takes no arguments \(--now\)\nusage: asight daemon/)
   assert.deepEqual(started, [], 'none of those got as far as the daemon')
+  r = await run(['start'], { platform: 'win32' })
+  assert.equal(r.exit, 0, 'the flip (plan 9(b)): win32 passes the hasNewCollector gate')
+  assert.deepEqual(started, [1], 'win32 reached startDaemon — the refusal is not win32\'s any more')
   r = await run(['start'])
-  assert.equal(r.exit, 0); assert.deepEqual(started, [1]); assert.match(r.t.o.join('\n'), /^asight collector: engine 127\.0\.0\.1:1, control \/s$/, 'the readiness line the lab rig waits for')
+  assert.equal(r.exit, 0); assert.deepEqual(started, [1, 1]); assert.match(r.t.o.join('\n'), /^asight collector: engine 127\.0\.0\.1:1, control \/s$/, 'the readiness line the lab rig waits for')
   const t = io(); const direct = await runDaemonCli([], { io: t, home, env: {}, platform: 'linux', deps: { daemon, proc: { on() {} }, getuid: () => 1000, waitForStop: async () => 'SIGTERM' } })
   assert.equal(direct, 0, '`asight daemon` itself is the same run')
   fs.rmSync(home, { recursive: true, force: true })
@@ -144,6 +145,42 @@ test('cli: start returns when the daemon has stopped itself (off), exit 0, witho
     assert.deepEqual(stops, [{ signal: null }])
     result = { failed: ['helper'] }
     t = io(); assert.equal(await runCollector(['start'], { home, env: {}, daemon, proc: { on() {} }, platform: 'linux', getuid: () => 1000, waitForStop: () => new Promise(() => {}), ...t }), 1, 'a step of its own stop failed')
+  } finally { fs.rmSync(home, { recursive: true, force: true }) }
+})
+
+// `--supervise` (4.8 §7): the scheduled task runs this supervisor parent, which pulls the real `node <asight> daemon` and re-pulls it on a non-zero
+// exit. The CLI hands it to arch.runSupervisor through daemon.mjs's loadArch (layering rule 5: it never imports arch/ itself) with its own entry
+// script and the collector dir — and holds no platform list: a platform whose arch has no runSupervisor refuses, so "Linux has no --supervise" is
+// the linux arch's shape, not an if in the CLI. The supervisor itself (the backoff, the lock, the signals) is autostart.test.mjs's, W24 there.
+test('cli: `daemon --supervise` (4.8 §7, W24): the lone flag goes to arch.runSupervisor through daemon.mjs\'s loadArch with its own script and the collector dir; other arguments stay exit 2, root and a platform without the new collector are refused first, and an arch with no runSupervisor is a usage error', async () => {
+  const home = tmpDir('asight-cli-supervise-')
+  try {
+    const ran = []
+    const supervisor = async (o) => { ran.push([o.asight, o.dir, typeof o.proc.on === 'function']); try { o.log('up') } catch { /* a log sink that is not one */ } return 7 }
+    const daemon = { loadArch: async (p) => (p === 'win32' ? { runSupervisor: supervisor } : {}) } // linux's arch carries none — the CLI must ask, not assume
+    const run = (argv, o = {}) => { const t = io(); return runDaemonCli(argv, { io: t, home, env: {}, platform: o.platform || 'win32', deps: { daemon, hasNewCollector: () => true, getuid: () => 1000, proc: { on() {} }, script: '/repo/bin/asight.mjs', ...o.deps } }).then((exit) => ({ exit, t })) }
+    let r = await run(['--supervise'])
+    assert.equal(r.exit, 7, 'the supervisor\'s exit code is the command\'s')
+    assert.deepEqual(ran, [['/repo/bin/asight.mjs', path.join(home, '.asight', 'collector'), true]], 'its own script, the collector dir, the proc to take signals on')
+    assert.match(r.t.e.join('\n'), /^\[supervise\] up$/, 'the supervisor\'s log lines reach the terminal with their prefix')
+    ran.length = 0
+    for (const argv of [['--supervise', '--now'], ['--supervize']]) {
+      r = await run(argv)
+      assert.equal(r.exit, 2); assert.match(r.t.e.join('\n'), /takes no arguments \(/); assert.match(r.t.e.join('\n'), /usage: asight daemon \[--supervise\]/)
+    }
+    r = await run(['--supervise'], { deps: { getuid: () => 0 } })
+    assert.equal(r.exit, 1); assert.match(r.t.e.join('\n'), /用你自己的账号跑/); assert.deepEqual(ran, [], 'root is refused before the supervisor is asked for')
+    r = await run(['--supervise'], { deps: { hasNewCollector: () => false } })
+    assert.equal(r.exit, 1); assert.match(r.t.e.join('\n'), /本平台未实现\(win32\)/); assert.deepEqual(ran, [], 'a platform the seam says has no new collector does not run the supervisor either')
+    r = await run(['--supervise'], { platform: 'linux' })
+    assert.equal(r.exit, 2); assert.match(r.t.e.join('\n'), /--supervise 是 Windows 监管父进程的事/); assert.deepEqual(ran, [], 'the linux arch has no runSupervisor, so the flag is refused there')
+    // the `collector start` alias carries its script through (the supervisor child is `node <script> daemon`); a "linux" arch WITH a runSupervisor
+    // runs it — the platform name is not what decides, the arch's shape is
+    ran.length = 0
+    const daemonWithSupervisor = { loadArch: async () => ({ runSupervisor: supervisor }) }
+    let t = io()
+    assert.equal(await runCollector(['start', '--supervise'], { home, env: {}, daemon: daemonWithSupervisor, proc: { on() {} }, platform: 'linux', getuid: () => 1000, script: '/repo/bin/asight.mjs', ...t }), 7)
+    assert.deepEqual(ran, [['/repo/bin/asight.mjs', path.join(home, '.asight', 'collector'), true]], 'the wrapper passes the script the supervisor child runs')
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })
 

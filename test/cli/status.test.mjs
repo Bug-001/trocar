@@ -322,6 +322,24 @@ test('status changes nothing in the HOME but ~/.asight/netenv.json (the board\'s
   assert.equal(f, 0); assert.deepEqual(fs.readdirSync(fresh), [], 'on a machine with nothing installed it prints so, exits 0, and creates nothing')
 })
 
+// the flip (plan Task 9(b), 1.6 §4): hasNewCollector('win32') is true, so win32's status is the NEW status — the win32 arm of gatherStatus asks the arch's opt-in hook,
+// and the only-claude-code old-capture branch (status.mjs's legacyStatus) is not taken: no legacy banner, and a harness name other than claude-code is accepted.
+test('the flip (9(b), 1.6 §4): win32 status is the NEW status — the win32 arch hooks are asked, the old-capture branch is not taken, and a harness name other than claude-code is no longer exit 2', async () => {
+  const fresh = tmpDir('asight-fresh-')
+  const asked = []
+  const parts = { os: 'win32', harnesses: [], scan: async () => [], match: () => ({ agent: null }), arch: { optIn: { plan: (q) => { asked.push(q); return [] } } } }
+  const deps = { request: down(), socketPath: SOCK, procs: async () => [], netenv: async () => NO_VPN, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts, user: 'alice' }
+  const io = fakeIo()
+  const exit = await runStatusCli([], { io, home: fresh, platform: 'win32', env: { HOME: fresh, USERPROFILE: fresh }, deps })
+  assert.equal(exit, 0, io.stdoutText())
+  assert.equal(asked.length, 1, 'the win32 arch\'s opt-in hook was asked (gatherStatus\'s win32 arm)')
+  assert.ok(!/还没有新采集器|旧采集/.test(io.stdoutText()), 'not the only-claude-code old-capture branch')
+  const named = fakeIo()
+  assert.equal(await runStatusCli(['codex'], { io: named, home: fresh, platform: 'win32', env: { HOME: fresh, USERPROFILE: fresh }, deps }), 0, named.stdoutText() + named.stderrText())
+  assert.ok(!/本平台只有 claude-code 的旧采集/.test(named.stderrText()), 'a name other than claude-code is a harness like any other on the new path')
+  assert.deepEqual(fs.readdirSync(fresh), [], 'read-only: nothing created')
+})
+
 test('connections still relayed after an off: N closing and M waiting, in the text and in --json (cut is 0: only off --now cuts); none is said as none, with no daemon there is no engine', async () => {
   const s = await installedHome()
   let r = await run(s, [], { request: asDaemon(reply({ relayed: { closing: 2, waiting: 1 } })) })

@@ -113,13 +113,19 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
   try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "asight uninstall", then "asight on"`), { code: 'manifest-unreadable' }) }
   const ca = manifest && manifest.complete ? readCa({ dir: P.caDir }) : null
   if (!ca) throw Object.assign(new Error('the collector is not installed for this user: run "asight on" first'), { code: 'not-installed' })
-  // The control socket: darwin's control.json — a random name under the user's $TMPDIR, 0600, and a token every request carries (arch/darwin/control-path.mjs, 4.9 §7;
-  // the same file the CLI's `off` reads). The other platforms keep core/control.mjs's $XDG_RUNTIME_DIR/asight/collector.sock, whose file modes guard it (no token there).
-  // Found live by the lab smoke (2026-10-09): without this arm the darwin daemon died on the Linux path's XDG_RUNTIME_DIR demand before it ever listened.
-  let A0 = arch || null
-  if (!A0 && !socketPath) { try { A0 = await loadArch() } catch { A0 = null } }
-  const macCtl = A0 && A0.os === 'darwin' && !socketPath ? A0.controlEndpoint({ dir: P.dir }) : null
-  const sock = socketPath || (macCtl ? macCtl.path : controlSocketPath({ env }))
+  // The arch is loaded once, here at the entry (loadParts below takes it back): the platform's start gates and endpoint come before anything is claimed.
+  // The endpoint is any arch that has one: darwin's control.json — a random name under the user's $TMPDIR, 0600, with a token every request carries
+  // (arch/darwin/control-path.mjs, 4.9 §7; the same file the CLI's `off` reads; found live by a smoke run 2026-10-09: without this arm the darwin daemon
+  // died on the Linux path's XDG_RUNTIME_DIR demand before it ever listened) — and win32's named pipe with the token of <collector>\control.json (4.8 §7).
+  // The other platforms keep core/control.mjs's $XDG_RUNTIME_DIR/asight/collector.sock, whose file modes guard it (no token there).
+  let A0 = arch
+  if (!A0) { try { A0 = await loadArch() } catch { A0 = null } } // a platform with no collector has no part of its own (netFactsDeps' pattern)
+  if (A0 && typeof A0.refuseElevated === 'function') { // win32 (4.8 §7, W25, R7): the daemon does not run on an elevated or SYSTEM token
+    const r = await A0.refuseElevated({ env, onUnknown: (why) => log('daemon', new Error(why)) }) // a token that cannot be read is not a refusal (R11): said, and the start goes on
+    if (r) throw Object.assign(new Error(r.reason), { code: r.code }) // startDaemon's catch writes the {where:'start', code:'elevated-token'} record; nothing was claimed
+  }
+  const ep = A0 && typeof A0.controlEndpoint === 'function' && !socketPath ? A0.controlEndpoint({ dir: P.dir }) : null
+  const sock = socketPath || (ep ? ep.path : controlSocketPath({ env }))
   let markReady
   const ready = new Promise((r) => { markReady = r })
   const impl = {} // filled once wiring is done; requests that arrive earlier wait for it
@@ -130,7 +136,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       throw e
     }
   }
-  const control = await startControlServer({ socketPath: sock, token: macCtl ? macCtl.token : null, routes: { 'GET /status': gate('status'), 'POST /on': gate('on'), 'POST /off': gate('off') } }) // throws if another daemon answers
+  const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: { 'GET /status': gate('status'), 'POST /on': gate('on'), 'POST /off': gate('off') } }) // throws if another daemon answers
 
   let redirector = null
   try {
@@ -186,9 +192,10 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     let engine = null // created after the tracker; the tracker's onGone reaches it at call time
     const event = (e) => failure.write({ ...e, ...(e.error != null && e.reason == null ? { reason: String(e.error) } : {}) })
 
-    const { registry, arch: A, harnesses: harnessList } = await loadParts({ arch, harnesses, env })
-    // 4.9 §1 接线: the darwin collector needs the collector dir and this daemon's sinks (the win32 one does too — that seam is the win line's open task); it is built here, started
-    // below, and the kernel itself comes with the first attach (4.8 §4.1). `desired` reads state.json as it is NOW: the switch changes it while this daemon runs.
+    const { registry, arch: A, harnesses: harnessList } = await loadParts({ arch: A0 ?? arch, harnesses, env })
+    // 4.9 §1 wiring: the darwin collector needs the collector dir and this daemon's sinks, so it is built here with them (started below; the kernel itself
+    // comes with the first attach, 4.8 §4.1) — `desired` reads state.json as it is NOW: the switch changes it while this daemon runs. The win32 collector gets
+    // its own construction elsewhere in this file (8(c) landed it: loadParts makes no redirector on win32); Linux keeps the plain core redirector.
     redirector = A.os === 'darwin'
       ? await A.createRedirector({ env, dir, home: netHome, harnesses: harnessList, failure, event, manifest: () => readManifest(P.dir), desired: () => { const st = readState(P.state, () => {}, {}); return st.harnesses || {} } })
       : A.createRedirector({ env })
@@ -350,6 +357,22 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       if (!macIng && e.code === 'EADDRINUSE') v6Held = `[::1]:${port} is held by another process`
       failure('engine', Object.assign(new Error(`[::1]:${port} unavailable: ${errText(e)}; ${v6Held ? 'on will refuse to attach (M8)' : 'IPv6 agent connections go direct'}`), { code: e.code }))
     }
+    // 4.8 §3.3 「引擎(重)启动之后」: a group that had fallen back stays on its re-entry point until its next probe interval (up to 30 s, not captured
+    // meanwhile), so the daemon asks the kernel's own controller to health-test every on-form's fallback group NOW. The asking is the Windows wiring's
+    // (`redirector.win32.refreshProbes`); a platform without it (Linux: no kernel of its own) has nothing to do here. The answer is one state record
+    // (§12 `probes-refreshed`) — D38: not stderr, not silence — and never stops the daemon: the refresh only shortens a window the interval closes anyway.
+    let probeRefresh = null
+    if (redirector && redirector.win32 && typeof redirector.win32.refreshProbes === 'function') {
+      try {
+        probeRefresh = await redirector.win32.refreshProbes()
+      } catch (e) {
+        failure('engine', coded(e, 'engine-error')) // the wiring says a kernel that is not running is answered, not thrown: a throw is a bug of it
+      }
+      if (probeRefresh) event({ event: 'probes-refreshed', where: 'forwarder', reason: probeRefresh.ok === false
+        ? `the engine came up and the fallback probes could not be refreshed (${probeRefresh.reason}); groups that had fallen back stay on their re-entry point until their next probe interval (4.8 §3.3)`
+        : `the engine came up: the kernel was asked to health-test every on-form's fallback group now (4.8 §3.3)`,
+      ...(Array.isArray(probeRefresh.asked) ? { forms: probeRefresh.asked } : {}) })
+    }
 
     async function ensureReady() {
       syncTracker() // which harnesses are on, and their policy, before the live processes are judged
@@ -440,6 +463,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       dropsBase = { ...lastDrops }; dropsAt = Date.now()
     }
     const drift = newDriftState()
+    const entrySeen = { seen: new Set() } // the entry check's once-per-occurrence memory (driftCheck's state.seen shape): in memory, so a daemon restart says a still-broken entry again once
     async function check() {
       if (sw.busy()) return
       const reloaded = await reload() // without a heartbeat running (nothing attached) this is what notices that the file turned something off
@@ -464,6 +488,22 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       // §9.5: the files each harness reads its proxy from, against what `on` found: a change is one `netenv-change` (and one failure when it leaves a harness that is on uncaptured). Read-only: only the operator's
       // `on` writes an agent's setting (D30). The VPN is not probed here (a probe of the controller every 5 s is not a check); `status` and `doctor` compare it live.
       driftCheck({ home: netHome, env, harnesses: harnessList, desired: (h) => (sw.state().harnesses[h] || {}).desired ?? null, appendEvent: (rec) => failure.write(rec), state: drift })
+      // 4.8 §2.4「入口还有没有效」+ W68, the daemon's half of the same check: nobody has to run `status` for a displaced shim or an agent started around
+      // the entry to reach flows/ (the 5 s check's own rule). The same check status folds into its rows, through the same arch hook — the manifest as the
+      // disk has it NOW (an `off` that ran under this daemon undid entries; the copy read at start is stale), and the process table this collector itself
+      // lists (parents included: the check's agents half matches them to the forms itself). Only a manifest that holds opt-in entries pays for the scan — a
+      // machine that never named one checks nothing; `record` keeps a finding once per occurrence (driftCheck's state shape) and writes only §9.7's netenv
+      // failure codes (shim-not-on-path, not-via-entry) — an entry-changed or could-not-tell finding reaches status / doctor's rows alone, not the event
+      // log. A platform with no opt-in half (Linux) checks nothing, and a manifest that cannot be read leaves nothing in effect to check (the daemon's own
+      // reload paths say why when they need the manifest). A thrown check lands in the timer's own catch, like every other step of check().
+      const optHook = A.optIn
+      if (optHook && typeof optHook.check === 'function' && typeof optHook.record === 'function') {
+        let m = null
+        try { m = readManifest(P.dir) } catch { /* no entries can be known: nothing is in effect to check */ }
+        if (m && Array.isArray(m.entries) && m.entries.some((e) => e && typeof e.kind === 'string' && e.kind.startsWith('optin-'))) {
+          optHook.record({ findings: await optHook.check({ harnesses: harnessList, manifest: m, procs: await redirector.scan() }), state: entrySeen, appendEvent: (rec) => failure.write(rec) })
+        }
+      }
     }
     const checkTimer = setInterval(() => { check().catch((e) => failure('daemon', coded(e, 'check-error'))) }, checkMs)
     checkTimer.unref()
@@ -491,6 +531,9 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
         helper: { pid, proto, build, expected_proto: redirector.expectedProto, ok: proto === redirector.expectedProto, down: helperDown, unparsable_lines: unparsable, timeouts },
         agents, running_untrusted: agents.filter((a) => !a.trusted && !a.off).length,
         unjudged: { count: unjudged.length, sample: unjudged.slice(0, 10).map((u) => ({ pid: u.pid, comm: u.comm, errno: u.errno })) },
+        // the host sets the plan last applied per host-tree form (4.8 §3.5, W69): the reply is where `status`'s facts reach them (the wiring's win32 bag keeps them);
+        // `status` compares them with a fresh read and says when the kernel's set is old — read-only, a platform without the bag (Linux) simply says nothing here
+        ...(redirector.win32 && typeof redirector.win32.appliedHosts === 'function' ? { applied_hosts: redirector.win32.appliedHosts() } : {}),
         health: healthOnDisk(P.dir),
         events: failure.health(), // event lines lost (D-1): stderr had each, the next written line is a log-gap
       }

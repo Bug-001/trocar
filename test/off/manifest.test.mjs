@@ -35,7 +35,7 @@ const V1 = () => ({
   ],
 })
 
-test('R3: a version 1 manifest on disk reads as version 2: every entry has kind and a non-empty undo_by_hand, nothing else changes, the file is not rewritten', () => {
+test('R3: a version 1 manifest on disk reads as version 2: every entry has kind, a non-empty undo_by_hand and scope (the OFF_VERSION 3 fill; an automatic item reads as agent), nothing else changes, the file is not rewritten', () => {
   const { dir } = dirOf(); const v1 = V1(); writeRaw(dir, v1)
   const before = fs.readFileSync(manifestPath(dir))
   const m = readManifest(dir)
@@ -47,7 +47,7 @@ test('R3: a version 1 manifest on disk reads as version 2: every entry has kind 
   for (const f of m.files) { assert.equal(f.kind, 'owned-file', f.path); assert.match(f.undo_by_hand, new RegExp(f.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))) }
   assert.deepEqual([m.confirmed_paths, m.kept_backups, m.liveness], [[], [], {}], 'the v2 top-level fields exist, empty')
   // everything v1 held is still there, as it was
-  const strip = (o) => { const { kind, backup, undo_by_hand, ...rest } = o; return rest }
+  const strip = (o) => { const { kind, backup, undo_by_hand, scope, ...rest } = o; return rest }
   assert.deepEqual(m.entries.map(strip), v1.entries.map(strip))
   assert.deepEqual(m.files.map(strip), v1.files.map(strip))
   assert.deepEqual([m.planned, m.dirs, m.watched, m.engine_port, m.complete, m.created_at], [v1.planned, v1.dirs, v1.watched, v1.engine_port, v1.complete, v1.created_at])

@@ -26,6 +26,7 @@ import { judgeHarness } from '../netenv/verdict.mjs'
 import { gatherNetFacts } from '../netenv/facts.mjs'
 import { readAdopted } from '../netenv/adopt.mjs'
 import { buildTopology, renderPathBlock, renderDetail } from '../netenv/topology.mjs'
+import { optInOf, applyEntryCheck } from './schema.mjs'
 import { diagnose } from '../netenv/findings.mjs'
 import { captureHealth } from '../health/read.mjs'
 import { legacyArtifacts, hasNewCollector } from '../off/legacy.mjs'
@@ -146,6 +147,25 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const rc = reply && reply.relayed
   f.relayed = d_isCounts(rc) ? { closing: rc.closing, waiting: rc.waiting, cut: 0 } : f.daemon.state === 'not-running' ? { closing: 0, waiting: 0, cut: 0 } : 'unknown'
   if (f.relayed === 'unknown') f.relayed_reason = f.daemon.state === 'running' ? 'the daemon\'s reply does not carry the connection counts' : f.daemon.state === 'not-responding' ? `the daemon does not answer (${f.daemon.reason})` : `whether a daemon runs is not known (${f.daemon.reason})`
+  // the opt-in items (1.6 §1.7, §9.4): the same rows `on`'s plan prints, from the same arch hook — `status` renders what it is given and adds no
+  // second truth. Windows always asks (its arch has the hook); another platform asks only when the manifest itself holds opt-in records (the
+  // records are the truth wherever they were written); an arch with no opt-in half (Linux today) leaves no key at all, and a parts that cannot be
+  // loaded is said (R11).
+  const hasOptinRecords = !!(m && Array.isArray(m.entries) && m.entries.some((e) => e && typeof e.kind === 'string' && e.kind.startsWith('optin-')))
+  if (platform === 'win32' || hasOptinRecords || deps.parts) {
+    try {
+      const parts = deps.parts || await (deps.daemon || await import('../collector/daemon.mjs')).loadParts({ env })
+      const hook = parts && parts.arch && parts.arch.optIn
+      let rows = hook && typeof hook.plan === 'function' ? hook.plan({ harnesses: parts.harnesses, manifest: m }) : []
+      // 「入口还有没有效」(1.6 §1.7, W68): the same hook's check re-verifies, read-only, the entries that are in effect — its findings fold
+      // into the very same rows (a broken entry is `broken` with its code, a check that could not be told is `unknown`); the process table it
+      // sees is the one this status already read (the agents half of the check matches it to the forms itself).
+      if (hook && typeof hook.check === 'function' && hasOptinRecords) {
+        rows = applyEntryCheck(rows, hook.check({ harnesses: parts.harnesses, manifest: m, procs: table || [] }))
+      }
+      f.optInRows = rows
+    } catch (e) { rethrowSandbox(e); f.opt_in_error = errText(e) }
+  }
   // logging out (§1.1, Linux): does the OS keep the daemon after the user's last logout? A file is looked at (`/var/lib/systemd/linger/<user>`), `loginctl` never runs (R8): asight says how, it does not do it
   if (platform === 'linux') {
     let read
@@ -240,7 +260,7 @@ const failedIn24h = (h) => !!h && [h.collector && h.collector.failures, h.legacy
 
 const USAGE = 'usage: asight status [harness…] [--json]'
 
-// A platform without the new collector (macOS, Windows: 1.6 §4): the old capture is what `on` / `off` drive there, and `status` judges it as claude-code's Desktop and CLI rows (src/cli/legacy-status.mjs),
+// A platform without the new collector (macOS: 1.6 §4): the old capture is what `on` / `off` drive there, and `status` judges it as claude-code's Desktop and CLI rows (src/cli/legacy-status.mjs),
 // then prints the old capture's own health and the VPN software. `deps.legacyStatus` replaces all of it (a test's). A read that failed is 不知道 and exit 3, never a pass (R11).
 async function legacyStatus(argv, { io, env, home, platform, deps, json }) {
   if (deps.legacyStatus) return deps.legacyStatus(argv, { io, env, home, platform, deps })
@@ -289,7 +309,7 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
   const exit = unreadable ? EXIT.unknown : failing ? EXIT.incomplete : EXIT.ok
   const restart = restartOf(f)
   if (json) {
-    const r = { ...newReceipt('status'), ok: exit === EXIT.ok, user: f.user, ...(f.linger || {}), daemon: { state: f.daemon.state, pid: f.daemon.pid, reason: f.daemon.reason }, harnesses: f.harnesses.map((h) => ({ harness: h.id, desired: h.desired ?? 'unknown', captured: h.judged.captured, reason: reasonOf(h.judged), entry: h.entry.state, ...(h.entry.why ? { entry_why: h.entry.why } : {}), why: h.why, rows: h.judged.rows })), ...(f.state && f.state.error ? { state_error: f.state.error } : {}), ...(f.manifest.error ? { manifest_error: f.manifest.error } : {}), ...(f.health_error ? { health_error: f.health_error } : {}), restart, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}), netenv: f.netenv.error ? { error: f.netenv.error } : f.netenv.result, ...(f.netenv.write_error ? { netenv_write_error: f.netenv.write_error } : {}), ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}), user_processes: f.userProcs.error ? 'unknown' : f.userProcs.list, log: path.join(f.dir, 'flows') }
+    const r = { ...newReceipt('status'), ok: exit === EXIT.ok, user: f.user, ...(f.linger || {}), daemon: { state: f.daemon.state, pid: f.daemon.pid, reason: f.daemon.reason }, harnesses: f.harnesses.map((h) => ({ harness: h.id, desired: h.desired ?? 'unknown', captured: h.judged.captured, reason: reasonOf(h.judged), entry: h.entry.state, ...(h.entry.why ? { entry_why: h.entry.why } : {}), why: h.why, rows: h.judged.rows })), ...(f.state && f.state.error ? { state_error: f.state.error } : {}), ...(f.manifest.error ? { manifest_error: f.manifest.error } : {}), ...(f.health_error ? { health_error: f.health_error } : {}), restart, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}), netenv: f.netenv.error ? { error: f.netenv.error } : f.netenv.result, ...(f.netenv.write_error ? { netenv_write_error: f.netenv.write_error } : {}), ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}), ...(f.optInRows ? { opt_in: optInOf(f.optInRows) } : {}), ...(f.opt_in_error ? { opt_in_error: f.opt_in_error } : {}), user_processes: f.userProcs.error ? 'unknown' : f.userProcs.list, log: path.join(f.dir, 'flows') }
     io.out(JSON.stringify(r, null, 2))
     return { exit, f }
   }

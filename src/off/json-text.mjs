@@ -1,7 +1,9 @@
-// json-text.mjs — set or remove one string key of a JSON document AS TEXT (RFC 4.6 §身份与信任「标记与安装」:
-// JSON 按文本插入键,rename 前先解析校验). The edit is a minimal splice: no reordering, no reformatting,
-// every byte outside it unchanged. Each edit is returned as {offset, removed, inserted} for the install
-// journal (§安装清单与卸载「日志」); reverseOps undoes it and refuses when the text no longer matches.
+// json-text.mjs — set or remove one key of a JSON document AS TEXT (RFC 4.6 §身份与信任「标记与安装」:
+// JSON 按文本插入键,rename 前先解析校验; the value is a string, or a boolean / null where an app's own
+// setting is one — VS Code's `http.systemCertificates: false` of 4.8 §2.4 spells it without quotes). The
+// edit is a minimal splice: no reordering, no reformatting, every byte outside it unchanged. Each edit is
+// returned as {offset, removed, inserted} for the install journal (§安装清单与卸载「日志」); reverseOps
+// undoes it and refuses when the text no longer matches.
 import { isDeepStrictEqual } from 'node:util'
 
 const SCALAR = /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null/y
@@ -86,8 +88,11 @@ export function reverseOps(text, ops) {
   return t
 }
 
-const nest = (keys, value) => keys.reduceRight((inner, k) => `{ ${JSON.stringify(k)}: ${inner} }`, JSON.stringify(value))
-const member = (keys, value) => `${JSON.stringify(keys[0])}: ${keys.length > 1 ? nest(keys.slice(1), value) : JSON.stringify(value)}`
+// The JSON spelling of a value asight writes: a string in quotes, a boolean or null as itself (4.8 §2.4's VS Code item).
+const literal = (v) => (typeof v === 'string' ? JSON.stringify(v) : String(v))
+
+const nest = (keys, value) => keys.reduceRight((inner, k) => `{ ${JSON.stringify(k)}: ${inner} }`, literal(value))
+const member = (keys, value) => `${JSON.stringify(keys[0])}: ${keys.length > 1 ? nest(keys.slice(1), value) : literal(value)}`
 
 // Insert a member as the FIRST member of object o, copying the whitespace in front of its current first member.
 function insertFirst(text, o, keys, value) {
@@ -96,13 +101,14 @@ function insertFirst(text, o, keys, value) {
   return { offset: o.start + 1, removed: '', inserted: `${lead}${member(keys, value)},` }
 }
 
-// setKey(text|null, keys, value) → { text, ops, prior, existingDepth }. `text` null = the file does not exist.
-// prior = the string the key held before (null when absent); existingDepth = how many leading keys already
-// existed as objects (the rest were created by this edit). Throws on non-JSON or a non-object on the path.
+// setKey(text|null, keys, value) → { text, ops, prior, existingDepth }. `text` null = the file does not exist; `value` a string, a boolean
+// or null (VS Code's `http.systemCertificates: false` is a boolean, 4.8 §2.4). prior = the value the key held before (null when absent);
+// existingDepth = how many leading keys already existed as objects (the rest were created by this edit). Throws on non-JSON or a non-object
+// on the path.
 export function setKey(text, keys, value) {
-  if (typeof value !== 'string') throw new Error('setKey: value must be a string')
+  if (typeof value !== 'string' && typeof value !== 'boolean' && value !== null) throw new Error('setKey: value must be a string, a boolean or null')
   if (text == null) {
-    const inserted = `{\n${keys.map((k, d) => `${'  '.repeat(d + 1)}${JSON.stringify(k)}: ${d === keys.length - 1 ? JSON.stringify(value) : '{'}`).join('\n')}\n${keys.slice(0, -1).map((_, d) => `${'  '.repeat(keys.length - 1 - d)}}`).join('\n')}${keys.length > 1 ? '\n' : ''}}\n`
+    const inserted = `{\n${keys.map((k, d) => `${'  '.repeat(d + 1)}${JSON.stringify(k)}: ${d === keys.length - 1 ? literal(value) : '{'}`).join('\n')}\n${keys.slice(0, -1).map((_, d) => `${'  '.repeat(keys.length - 1 - d)}}`).join('\n')}${keys.length > 1 ? '\n' : ''}}\n`
     return check(null, { text: inserted, ops: [{ offset: 0, removed: '', inserted }], prior: null, existingDepth: 0 }, keys, value)
   }
   let node = scanJson(text)
@@ -114,9 +120,10 @@ export function setKey(text, keys, value) {
       return check(text, { text: applyOps(text, [op]), ops: [op], prior: null, existingDepth: d }, keys, value)
     }
     if (d === keys.length - 1) {
-      if (m.value.type !== 'string') throw new Error(`setKey: ${keys.join('.')} is not a string`)
-      const op = { offset: m.value.start, removed: text.slice(m.value.start, m.value.end), inserted: JSON.stringify(value) }
-      return check(text, { text: applyOps(text, [op]), ops: [op], prior: m.value.value, existingDepth: d }, keys, value)
+      if (m.value.type !== 'string' && m.value.type !== 'scalar') throw new Error(`setKey: ${keys.join('.')} is not a value asight can replace`)
+      const op = { offset: m.value.start, removed: text.slice(m.value.start, m.value.end), inserted: literal(value) }
+      const prior = m.value.type === 'string' ? m.value.value : JSON.parse(text.slice(m.value.start, m.value.end))
+      return check(text, { text: applyOps(text, [op]), ops: [op], prior, existingDepth: d }, keys, value)
     }
     if (m.value.type !== 'object') throw new Error(`setKey: ${keys.slice(0, d + 1).join('.')} is not an object`)
     node = m.value

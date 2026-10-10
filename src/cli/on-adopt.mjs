@@ -12,7 +12,9 @@ import nodeFs from 'node:fs'
 const errText = (e) => String((e && (e.code || e.message)) || e)
 const rethrowSandbox = (e) => { if (e && e.code === 'ESANDBOX') throw e }
 
-/** The facts and chains `on` needs, for every harness the platform has descriptors for → `{ facts, chains, descriptors, adopted }`; `null` when this platform has no network facts to read (then `on` adopts nothing); or `{ error }`. */
+/** The facts and chains `on` needs, for every harness the platform has descriptors for → `{ facts, chains, descriptors, adopted }`; `null` when this platform has no network facts to read (then `on` adopts nothing); or `{ error }`.
+ *  `deps.netFactsDeps()` may also answer `deps` — the platform reader's own injections (a test's fake helper): they ride into `gatherNetFacts` untouched. The production one does not (the Windows
+ *  facts start the resident helper of their own); it is the seam a sandbox reaches the real `gatherWin32Facts` through, the same seam `status`'s direct calls have. */
 export async function prepareAdoption({ home, env, platform, deps, parts, netenv, now = Date.now }) {
   try {
     const fs = deps.fs || nodeFs
@@ -21,7 +23,7 @@ export async function prepareAdoption({ home, env, platform, deps, parts, netenv
     const status = { daemon: { state: 'unknown', pid: null, reply: null, lock: null }, link: { attached: null, helper: 'ok' }, matched: [],
       harnesses: nd.harnesses.map((d) => ({ id: d.name, installed: true, desired: 'on', entry: { state: 'intact' }, installedAt: null, procs: [] })) }
     const adopted = readAdopted(home, { fs })
-    const facts = await gatherNetFacts({ platform, home, env, harnesses: nd.harnesses, status, netenv, archFacts: nd.archFacts, adopted, now, fs, deps: { exec: deps.exec || null, ...(deps.procRoot ? { procRoot: deps.procRoot } : {}) } })
+    const facts = await gatherNetFacts({ platform, home, env, harnesses: nd.harnesses, status, netenv, archFacts: nd.archFacts, adopted, now, fs, deps: { exec: deps.exec || null, ...(deps.procRoot ? { procRoot: deps.procRoot } : {}), ...((nd && nd.deps) || {}) } })
     if (facts.routing === 'unknown') return null
     return { facts, descriptors: nd.harnesses, adopted: adopted || {}, chains: (ids) => chainsAfterOn(facts, ids) }
   } catch (e) { rethrowSandbox(e); return { error: `the network settings could not be read (${errText(e)})` } }

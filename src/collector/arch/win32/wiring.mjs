@@ -19,7 +19,9 @@ import { createProxyEntries } from './entries.mjs'
 import { readSystemProxy, readHkcuEnv, watchSystemProxy } from './upstream.mjs'
 import { readText, readTextOrError } from '../../core/config-read.mjs'
 import { readManifest } from '../../core/trust/journal.mjs'
+import { collectorDir } from '../../../off/paths.mjs'
 import { matchForm } from './forms.mjs'
+import { names, probeUrl } from '../../../netenv/mihomo/rules.mjs'
 
 const CONTROLLER_RANGE = [19000, 19999] // the kernel's own controller, its own free port (the generator refuses one it has already seen)
 const randomPort = (random) => CONTROLLER_RANGE[0] + (random(4).readUInt32BE(0) % (CONTROLLER_RANGE[1] - CONTROLLER_RANGE[0] + 1))
@@ -138,8 +140,34 @@ export async function createWin32Collector({ env = process.env, dir, home = env.
     })
   }
 
+  /** One probe refresh after the engine (re)starts (4.8 §3.3, the 「窗口期」 paragraph): a group that had fallen back stays on its re-entry
+   *  point until its next interval (up to 30 s, not captured meanwhile), so the daemon asks the kernel's own controller to health-test every
+   *  on-form's fallback group NOW, with the same loopback probe address the config carries (mihomo remembers health per address, so the url
+   *  must be the group's own). The own-controller allowlist checks the path and the url (controller.mjs); a kernel that is not running or has
+   *  no controller is said, not thrown. The client is the forwarder's own (N15 (a): a client that may write to a core is made in forwarder.mjs
+   *  alone; an injected `deps.probeController` replaces it for tests, and a forwarder without one — an older shape — is simply no kernel). */
+  async function refreshProbes() {
+    const st = typeof forwarder.state === 'function' ? forwarder.state() : null
+    if (st && st.phase && st.phase !== 'running') return { ok: false, reason: 'no kernel' }
+    const creds = forwarder.controller()
+    if (!creds || !Number.isInteger(creds.port)) return { ok: false, reason: 'no kernel' }
+    const ctl = deps.probeController ? deps.probeController(creds) : (typeof forwarder.client === 'function' ? forwarder.client() : null)
+    if (!ctl) return { ok: false, reason: 'no kernel' }
+    const asked = []
+    for (const x of groups) {
+      if (((plan || {})[x.g] || {}).on !== true) continue
+      const port = ing.groupPorts[x.g]
+      for (const f of x.forms) {
+        if (f.supported !== true || !f.match || !Number.isInteger(port)) continue
+        const r = await ctl.get(`/group/${names(f.id).fb}/delay?url=${encodeURIComponent(probeUrl(port, f.id))}&timeout=2000`)
+        asked.push({ f: f.id, ok: r.ok === true, status: r.status })
+      }
+    }
+    return { ok: true, asked }
+  }
+
   redirector.win32 = {
-    helper, forwarder, ingress, replan, groups,
+    helper, forwarder, ingress, replan, groups, refreshProbes,
     netenv: () => ({ systemProxy, hkcuEnv, ownPorts: ownPorts() }),
     appliedHosts: () => Object.fromEntries(appliedHosts),
     controller, kernelExe,
@@ -150,35 +178,97 @@ export async function createWin32Collector({ env = process.env, dir, home = env.
   return redirector
 }
 
+const msgOf = (e) => String((e && e.message) || e)
+
 /**
- * prepare({ plan, helper, locate, sac, arch, fs }) → { notes: [line], refuse?: { code, reason, commands } } — the read-only hook `asight on` calls before it
+ * win32Routing({ harnesses, home, env, fs }) → `{ ownsProxyField(h), fieldOf(h), adopt(h, setting) }` — the routing object of 1.6 §9.5's contract, what
+ * `asight on` consumes in proxy mode (plan Task 8(c)); it sits beside `prepare` in loadArch's win32 arm, and runOnCli builds it with ITS environment (the same
+ * shell that names CLAUDE_CONFIG_DIR and CODEX_HOME). On Windows both halves of the contract are the daemon's, done inside the very `on` request this follows:
+ * the kernel's upstream comes out of the daemon's own read of the same files (`priorOf`, before the entry replaced the value), and the field is written through
+ * the same journal `off` undoes by (`createProxyEntries`, the redirector's writer). So this side's `adopt` is the VERIFIER of that write — a group whose entry is
+ * in the ledger must hold the kernel's address, or the on did not finish (a throw is exit 1, the harness named, no adopted record, V47); `setting` is not re-handed
+ * (the kernel already has it from the same read, and no daemon API takes one — its control socket speaks only status/on/off). A group with no record is the user's
+ * own field as it was: nothing to verify, and no second writer lives here.
+ */
+export function win32Routing({ harnesses = [], home, env = process.env, fs = nodeFs } = {}) {
+  if (!home) throw new TypeError('win32Routing needs the HOME the entries were written into')
+  const groups = groupsOf(harnesses)
+  const dir = collectorDir(home)
+  const ctx = { // the CLI's own ctx, the same shape the daemon's wiring builds: its env is the shell that ran on
+    os: 'win32', home, env: new Map(Object.entries(env || {}).filter(([, v]) => typeof v === 'string')), running: [],
+    readText: (f) => readText(f), readTextOrError: (f) => readTextOrError(f), listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } }, collectorDir: dir, caPem: null,
+  }
+  const fileGroupsOf = (h) => groups.filter((x) => x.harness === h && x.group.proxyEntry && x.group.proxyEntry.kind === 'file')
+  return {
+    ownsProxyField: () => true, // proxy mode always owns the entry (1.6 §9.5; the kernel is the only route, D43)
+    /** The harness's first file entry as a place to name (the 「你改过的代理设置」 line): the first of the group's files that is there, else the first listed; null where it has no file. */
+    fieldOf: (h) => {
+      const xs = fileGroupsOf(h)
+      if (!xs.length) return null
+      const e = xs[0].group.proxyEntry
+      const files = e.files(ctx)
+      const file = files.find((f) => { const r = ctx.readTextOrError(f); return r.error == null && r.text != null }) || files[0]
+      return file ? { path: file, key: e.format === 'json-key' ? e.key.join('.') : e.block.urlVar } : null
+    },
+    /** Verifies the daemon's half of the on: every group of `h` whose entry is in the ledger holds the kernel's address. Rejects (never a vacuous pass, D38) when what that needs cannot be read. */
+    adopt: async (h, _setting) => {
+      const xs = fileGroupsOf(h)
+      if (!xs.length) return // the entry is a policy value or a shim (Task 14's): no file of the agent's is asight's to point
+      let manifest = null
+      try { manifest = readManifest(dir, fs) } catch (e) { throw new Error(`the install manifest could not be read (${msgOf(e)}): whether ${h}'s field is asight's cannot be told`) }
+      if (!manifest) throw new Error(`the install manifest is not there, so whether ${h}'s field is asight's cannot be told`)
+      const onRecord = xs.filter((x) => proxyRecordsOf(manifest, x.group, h).length > 0)
+      if (!onRecord.length) return // asight wrote no field of this harness (the group was not routed, or not on): the user's own setting is correct as it is
+      let ing = null
+      try { ing = JSON.parse(fs.readFileSync(path.join(dir, 'ingress.json'), 'utf8')) } catch (e) { throw new Error(`ingress.json could not be read (${(e && e.code) || 'unreadable'}): the kernel's ports are not known, so ${h}'s field cannot be verified`) }
+      if (!ing || typeof ing !== 'object' || !onRecord.every((x) => Number.isInteger((ing.groupPorts || {})[x.g]))) throw new Error(`ingress.json holds no port for ${onRecord.map((x) => x.g).join(', ')}: the kernel's address cannot be named, so ${h}'s field cannot be verified`)
+      const checker = createProxyEntries({ dir, home, groups, ctx, ingress: () => ing, manifest: () => manifest, fs })
+      const bad = checker.check(onRecord.map((x) => ({ g: x.g, harness: h, entry: 'auto' }))).filter((r) => r && r.ok === false)
+      if (bad.length) throw new Error(`the proxy entry of ${bad.map((r) => r.g).join(', ')} is in the ledger but the field does not hold the kernel's address: the on that wrote it did not finish (run asight doctor ${h})`)
+    },
+  }
+}
+
+/**
+ * prepare({ helper, locate, sac, arch, fs }) → { notes: [line], kernel?, sac?, refuse?: { code, reason, of?, commands } } — the read-only hook `asight on` calls before it
  * writes anything (4.8 §8 ⑥ and the Smart App Control preflight; W27 ⑥, W74): the kernel line (`locateKernel`: found and verified, with its package and digest)
  * and, when Smart App Control is on or evaluating, its warning line; a missing or mismatched kernel is a REFUSAL with the two reinstall commands — no download
  * to wait for, a settled precondition, so `on` exits 1 before the first write (the event and the receipt are the caller's). `helper` is sacState's reader; one
- * is started and closed here when none is given. Nothing is written, nothing is started.
+ * is started and closed here when none is given (an injected `sac` gets the helper it was given, none if none). Nothing is written, nothing is started.
+ * `kernel: { version, package, exe, sha256 }` (of the pin this build carries, the run path's file name and the digest that was verified) and `sac: 'off' | 'on' |
+ * 'evaluation' | { unknown: { reason, detail? } }` are the same two reads as the notes, as data — the Windows plan of 4.8 §11 draws its kernel line and its Smart
+ * App Control line from them (the receipt keeps the notes, 1.6 §7).
  */
 export async function prepare({ helper = null, locate = locateKernel, sac = sacState, arch = process.arch, fs = nodeFs, start = startHelper, env = process.env } = {}) {
   const k = await locate({ ...(arch ? { arch } : {}), ...(fs ? { fs } : {}) })
   if (k.missing || k.mismatch) {
-    const commands = (k.missing || k.mismatch).commands
+    const raw = (k.missing || k.mismatch).commands
+    const commands = raw ? (Array.isArray(raw) ? raw : Object.values(raw)) : null // reinstallCommands gives {npm, release}; the receipt wants the two lines
     return {
       refuse: {
         code: k.missing ? 'forwarder-binary-missing' : 'forwarder-digest-mismatch',
-        reason: k.missing ? `the pinned kernel package was not found (${k.missing.reason}); nothing was changed` : 'the pinned kernel package holds an exe whose digest is not the pin\'s',
+        reason: k.missing ? `the pinned kernel package was not found (${k.missing.reason})` : "the pinned kernel package holds an exe whose digest is not the pin's",
+        ...(k.mismatch && k.mismatch.of ? { of: k.mismatch.of } : {}),
         ...(commands ? { commands } : {}),
       },
     }
   }
+  // what the plan's own §11 kernel line names: the pin this build carries (the version and the platform package of the architecture asked — loadPin's own file, never one of the caller's)
+  // and the digest that was verified — the run path (`%USERPROFILE%\.asight\collector\kernel\…`) is the caller's to compose, it is the one that knows the home
+  let kernel = null
+  try { const pin = loadPin(); const a = (pin.assets || {})[arch]; if (a && a.package) kernel = { version: pin.version, package: a.package, exe: KERNEL_EXE, sha256: k.found.sha256 } } catch { kernel = null }
   const notes = [`asight's kernel: found and verified (${k.found.sha256.slice(0, 12)}… in ${k.found.packageDir})`]
   let own = false
   let h = helper
-  if (!h) { try { h = start({ env }); own = true } catch { h = null } }
+  if (!h && sac === sacState) { try { h = start({ env }); own = true } catch { h = null } } // only the real reader needs a helper of its own
+  let sacStateOut = null
   try {
-    const state = h ? await sac({ helper: h }) : { unknown: { reason: 'denied', detail: 'no helper' } }
+    const state = h || sac !== sacState ? await sac({ helper: h }) : { unknown: { reason: 'denied', detail: 'no helper' } }
+    sacStateOut = state
     if (state === 'on' || state === 'evaluation') notes.push('Smart App Control 开着:未签名的 asight-forwarder.exe 很可能起不来,代理模式用不了(仍会去试;失败时会记下原因,一个代理入口也不写)')
     else if (state !== 'off') notes.push(`Smart App Control 的状态读不到(${state.unknown.reason}${state.unknown.detail ? `:${state.unknown.detail}` : ''}):不知道,按上面的计划继续`)
   } finally { if (own && h && typeof h.close === 'function') await h.close() }
-  return { notes }
+  return { notes, ...(kernel ? { kernel } : {}), sac: sacStateOut }
 }
 
 export { CONTROLLER_RANGE, reinstallCommands }

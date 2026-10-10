@@ -169,14 +169,41 @@ test('W25 an elevated token and a SYSTEM token are refused by the daemon\'s chec
   }
 })
 
-// What W25 owns and this tree cannot run yet: the check is built (above) but `on`, `daemon`, `off` and `uninstall` do not call it here, because the commands live on the CLI branch (src/cli/*, src/off/*; this worktree is
-// at CLI T02). A todo, not a skip: it runs, fails today and says why, and an author who wires the check has the line to turn into a real assertion. Each ends in assert.fail so that it cannot go green by accident.
-const notHere = (what, owner) => { throw new assert.AssertionError({ message: `not wired yet (${owner}): ${what}` }) }
-test('W25 (command level, Task 8(c)) `asight on` with an injected elevated or SYSTEM token refuses with elevated-token before it writes anything: the sandbox HOME is byte for byte as it was', { todo: 'Task 8(c): src/cli/on.mjs (CLI branch) calls arch.refuseElevated before the first write; assert the receipt, the failure record, exit 1 and the HOME tree' }, () => notHere('on', 'Task 8(c)'))
-test('W25 (command level, Task 8(c)) `asight daemon` refuses an elevated or SYSTEM token before it claims the control endpoint: a failure record {where: start, code: elevated-token}, no pipe, no control.json written', { todo: 'Task 8(c): src/collector/daemon.mjs calls arch.refuseElevated before controlEndpoint()' }, () => notHere('daemon', 'Task 8(c)'))
-test('W25 (command level, Task 9(b)) `asight off` and `asight uninstall` with an injected High-integrity or SYSTEM `whoami` refuse before they touch anything (HOME byte for byte unchanged), and with a `whoami` that cannot be read they go on', { todo: 'Task 9(b): the orchestrator calls refuseElevatedByWhoami at its entry on win32; one test per command' }, () => notHere('off, uninstall', 'Task 9(b)'))
-test('W24 (command level, Task 8(c) / CLI rebase) `runDaemonCli([\'--supervise\'])` is accepted and runs the supervisor (arch.runSupervisor through loadArch), any other argument is still refused with exit 2, and Linux has no --supervise', { todo: 'src/cli/daemon.mjs is on the CLI branch; see note 84 seam 1' }, () => notHere('runDaemonCli --supervise', 'the CLI rebase / Task 8(c)'))
-test('W24 (Task 9(b)) the copy of the task and Run-value undo in src/off/win32.mjs (undoWin32) equals the one in autostart.mjs: the same /Query rule (a /Query that did not run is a failure, never absent), the same tail rule for the Run value, the same calls in the same order', { todo: 'Task 9(b): undoWin32 does not exist yet; the equality test is the one Linux has between unit.mjs and src/off/autostart.mjs' }, () => notHere('undoWin32 equals userUnit.disable/remove', 'Task 9(b)'))
+// W25's command halves are all LANDED now (the todo pins that lived here — each ending in assert.fail so it could not go green by accident — became
+// pointers as the commands got their wiring): on is on-elevated.test.mjs's (2026-10-10, Task 8(c) 收尾), the daemon's is daemon.test.mjs's (Task 8(c)),
+// off / uninstall's is win32-kernel.test.mjs's (Task 9(b), lane B).
+// W25's on half is LANDED (Task 8(c) 收尾, 2026-10-10): `on` asks parts.arch.refuseElevated at its entry — before turnOn (its only writer), before the
+// netenv probe and the adoption read — and refuses an elevated or SYSTEM token with the §12 record (where 'start') where a collector directory exists,
+// the receipt carrying it either way; a token that cannot be read is not a refusal (R11) — 已由 test/collector/arch/win32/on-elevated.test.mjs 覆盖
+// (the receipt, the one record, exit 1, the HOME otherwise byte for byte, turnOn never asked, and the unreadable case proceeding).
+// W25's daemon half is LANDED (Task 8(c)): runDaemon calls arch.refuseElevated before it claims its endpoint, and the win32 endpoint itself
+// (controlEndpoint's pipe + token) is wired beside it — 已由 test/collector/daemon.test.mjs::`W25 the win32 daemon refuses an elevated or SYSTEM token
+// before it claims its endpoint …` 覆盖 (the record, no socket, no control.json, the unreadable-not-a-refusal half, and the endpoint with its token).
+// W25's off/uninstall half is LANDED (Task 9(b), lane B): src/off/orchestrate.mjs and src/cli/uninstall.mjs call refuseElevatedByWhoami at their entry
+// on win32 — 已由 test/off/win32-kernel.test.mjs::`W25: off and uninstall on win32 refuse an elevated token at the entry …` 覆盖 (both commands, the byte-identical
+// HOME, and the unreadable-whoami-not-a-refusal half).
+// W24's command half is LANDED (Task 8(c) / CLI rebase): `runDaemonCli(['--supervise'])` hands the lone flag to arch.runSupervisor through
+// daemon.mjs's loadArch (the CLI never imports arch/ itself, layering rule 5) with its own script and the collector dir; any other argument is
+// still exit 2, root and a platform without the new collector are refused first, and an arch with no runSupervisor (linux's) is a usage error —
+// 已由 test/collector/cli.test.mjs::`cli: daemon --supervise (4.8 §7, W24) …` 覆盖。The supervisor itself is the tests above (the backoff, the
+// lock, the singleton, the signals — W24's own list).
+// W24's undoWin32-equality half is LANDED (Task 9(b), lane B): src/off/win32.mjs carries its own taskState/undoScheduledTask/undoRunValue beside this
+// module's — 已由 test/off/win32-undo.test.mjs::`the names the undo touches are the arch module's own (the inlined pieces cannot drift)` 覆盖: TASK_NAME and
+// RUN_KEY equal this module's exports, the shape Linux's unit.mjs ↔ src/off/autostart.mjs test has; each side's call sequence is its own file's tests.
+
+test('W25 refuseElevated starts its own helper when none is given and closes it after — the daemon has none at its entry (4.8 §7; a helper that cannot start is the unknown case, not a refusal)', async () => {
+  const events = []
+  const fake = (answer, broken = false) => ({ call: async (verb) => { events.push(`ask:${verb}`); if (broken) throw Object.assign(new Error('native-unavailable'), { code: 'native-unavailable' }); return answer }, close: () => events.push('close') })
+  const start = (o) => { events.push(`start:${o && o.env && o.env.ASIGHT_TEST ? 'env' : 'no-env'}`); return fake(TOKEN({ elevated: true, elevationType: 'full', integrity: 'high' })) }
+  const r = await refuseElevated({ start, env: { ASIGHT_TEST: '1' } })
+  assert.equal(r && r.code, 'elevated-token', 'the question went through the helper it started')
+  assert.deepEqual(events, ['start:env', 'ask:token', 'close'], 'started with the environment, one question, closed after')
+  // a helper that cannot start is the unknown case: said, not a refusal (an unreadable token must not stop an undo-able daemon, R11)
+  const unknown = []
+  const r2 = await refuseElevated({ start: () => { throw Object.assign(new Error('powershell.exe not found'), { code: 'ENOENT' }) }, onUnknown: (why) => unknown.push(why) })
+  assert.equal(r2, null)
+  assert.match(unknown.join('\n'), /could not be started/)
+})
 
 test('W25 a token that cannot be read is not a refusal and not a silence: the caller is told why it is unknown (R11)', async (t) => {
   const unknown = []

@@ -160,7 +160,7 @@ pasted into a chat land on disk in the clear. Treat `~/.asight/**` as sensitive;
 `chmod -R go-rwx ~/.asight`. The dashboard binds loopback and enforces a Host/Origin allowlist, so a
 website you visit cannot reach it.
 
-### `asight on` / `off` / `status` / `uninstall`, and the per-user process collector (Linux, preview)
+### `asight on` / `off` / `status` / `uninstall`, and the per-user process collector (Linux · Windows, preview)
 
 `asight on` starts capture (the first `on` is the install); `asight off` takes every trace of asight off your
 agents' path; `asight status` says, per agent, whether it is captured and why not; `asight uninstall` also
@@ -174,10 +174,21 @@ to switch only that one.
 On Linux the capture is a process collector (RFC 4.6, D31) — Claude Code, Codex (its WebSocket transport is
 recorded call by call), OpenCode, DeepSeek `dsh`, Kimi Code, Hermes and Z-Code. An
 eBPF helper steers only the connections of agent processes you run to a loopback engine, which decrypts
-only for agents that trust the collector CA. Everything else, including other users, goes direct. On macOS
-there is no collector yet: `asight on` / `off` drive the old capture (the Claude Desktop Clash rule and MITM of
-the section below), and `asight daemon` says 本平台未实现. On Windows `on` says so too, and `off` takes out
-whatever the old capture left.
+only for agents that trust the collector CA. Everything else, including other users, goes direct. On
+Windows (RFC 4.8) the same harnesses are captured in proxy mode — Kimi Code only through its opt-in shims.
+`asight on` prints its plan first: the bundled kernel it will run (`asight-forwarder.exe`, from the
+`asight-kernel-win32-x64` package; it listens on loopback only — no TUN, never the system proxy, nothing
+written into your VPN), one row per agent group with the upstream the kernel will dial for it, Codex's
+WebSocket, Smart App Control, and the autostart task; then it writes the proxy and trust entries in the
+agents' own config files (your prior values recorded, `off` restores them). The forms that reach further
+are opt-in, each named with what it touches — `asight on <harness> --opt-in <form>`: Claude Desktop's
+user-level certificate store, the Kimi / OpenCode PATH shims, the Kimi VS Code extension capture, the
+OpenCode and Z-Code desktop launchers and app settings (the machine-level ones run in the administrator
+step asight shows, never with a password field of its own). `asight off` runs the same undo as on Linux:
+the supervisor, daemon and kernel stopped, every entry and opt-in item taken out — and, as the plan says
+up front, an agent started while it was on still passes through the kernel (forwarded untouched) until
+you restart it. On macOS there is no collector yet: `asight on` / `off` drive the old capture (the Claude
+Desktop Clash rule and MITM of the section below), and `asight daemon` says 本平台未实现.
 
 What it keeps (D40): for a trusted agent it decrypts **every** host it talks to by default (policy `all`), not just the
 model API, and stores every call verbatim — telemetry, uploads, account calls, session sync, downloads — so you can see

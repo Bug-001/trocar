@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { monitoringStatus, monitoringOn, monitoringOff } from '../../src/capture/control.mjs';
+import { monitoringStatus, monitoringOn, monitoringOff, offIsAsightOff } from '../../src/capture/control.mjs';
 import { tmpDir } from '../helpers/tmp.mjs';
 
 // D26 — the monitoring on/off/status logic maps DIRECTLY onto the onboard commands + user-level
@@ -75,4 +75,14 @@ test('monitoringStatus is inert when nothing is arranged', () => {
   assert.equal(st.active, false);
   assert.equal(st.caTrusted, false);
   assert.equal(st.steerProxy, null);
+});
+
+// 1.6 §4 / V40, the flip (plan 9(b)): offIsAsightOff is the inverted hasNewCollector — the web switch's "off" is `asight off` only where there is no new collector.
+// win32 flipped from true to false: it HAS the collector now, so the switch's off is the old atraceOff, and GET /control/status labels it 「只管旧 CC-CLI steer」
+// (OFF_NOTE_STEER_ONLY; server.mjs takes neither endpoint from this). darwin keeps the CLI's off.
+test('the flip (9(b), 1.6 §4 / V40): offIsAsightOff — win32 is false now (the switch\'s off is the old atraceOff, labeled steer-only), darwin still true, and the deps seam still overrides', () => {
+  assert.equal(offIsAsightOff({}, 'win32'), false, 'win32 has the new collector: the switch\'s off is not `asight off`');
+  assert.equal(offIsAsightOff({}, 'linux'), false);
+  assert.equal(offIsAsightOff({}, 'darwin'), true, 'darwin has no new collector: the switch\'s off is still the CLI\'s');
+  assert.equal(offIsAsightOff({ hasNewCollector: () => false }, 'win32'), true, 'the injected seam decides (test/server-control.test.mjs runs both ways through it)');
 });

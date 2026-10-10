@@ -29,6 +29,7 @@ export default {
     {
       g: 'kimi-code.vscode',
       proxyEntry: { kind: 'app-setting', file: (ctx) => path.join(appData(ctx), 'Code', 'User', 'settings.json'), keys: ['http.proxy', 'http.systemCertificates'] },
+      launcher: { shortcut: 'Visual Studio Code.lnk' }, // the opt-in item's launcher half (4.8 s2.4): the editor's Start-menu / desktop shortcut is repointed at it, so the CA file reaches the extension host
       auth: true,
       followsSystemProxy: { http: true, ws: false }, // through VS Code
       optIn: [{
@@ -44,6 +45,8 @@ export default {
       match: { image: 'Code.exe', path: [raw`\\Microsoft VS Code\\Code\.exe`] },
       nameRule: false, processRules: true, supported: true,
       hosts: {
+        // `program` / `extension` name the two sides of the host-tree line of 4.8 §3.5: the host program whose other connections only forward, and the extension whose own settings carry the relay
+        program: 'VS Code', extension: 'Kimi',
         defaults: [...linux.hosts], // Kimi's known API hosts: one list, the Linux descriptor's
         // Where the extension's own settings live, and how a base URL is read out of them. NOT MEASURED on Windows (4.8 §3.5「预期」, W62): this is the file the Linux harness reads,
         // $KIMI_CODE_HOME/config.toml; whether the Windows extension reads it or keeps keys of its own is checked by the lab's W62 run.
