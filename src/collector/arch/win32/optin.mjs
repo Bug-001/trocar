@@ -13,11 +13,12 @@ import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { execTool } from '../../../off/exec.mjs'
 import { writeBackup } from '../../../off/backup.mjs'
-import { setKey } from '../../../off/json-text.mjs'
-import { proxyUrl } from './forms.mjs'
+import { setKey, getPath } from '../../../off/json-text.mjs'
+import { proxyUrl, matchForm } from './forms.mjs'
 import { renderCmdTemplate } from './shims.mjs'
 import { readIngressConfig } from './ingress-config.mjs'
 import { readUserPath, prependUserPath, resolveCommand, sacOf, sacBlocksShims, readShortcutTarget, shortcutPlaces } from './userpath.mjs'
+import { readMachinePath, MACHINE_BIN } from './elevate.mjs'
 
 const nodeFs = fs
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -484,4 +485,138 @@ async function machineValuesOf({ row, groups = [], deps = {} }) {
     return { command, realBinary: real.path, machinePath }
   }
   return { error: `the machine item ${row.item} is not built yet (Task 14's later commits)` }
+}
+
+// ── the check of what is still in effect (W68; 4.8 §2.4「入口还有没有效」, 1.6 §1.7) ────────────────────────────────────────────────────────────────────────────────────────
+// The ledger says an item was done; the world says whether it still holds. `status` runs this every time it is asked (1.6 §1.7) and the daemon's
+// 5 s check runs it through the wiring (below, recordEntryFindings): the command still resolving to asight's shim first, the shortcuts still at
+// asight's launcher, the settings keys still what asight wrote, the agents still started through the entry. Everything read-only (D30: only the
+// operator's `on` writes an agent's setting), everything injected (no tool runs for real on a dev machine).
+
+/** The manifest kinds checkEntries has an arm for: exactly the kinds the apply can produce — every user part of OPTIN_ITEMS plus the machine kind
+ *  machineValuesOf builds (`optin-machine-path`; `optin-machine-shortcut` and `optin-cert-machine` have no producer yet, so no entry of theirs can
+ *  be in a manifest this build reads). test/collector/arch/win32/optin-check.test.mjs pins this list against both producers (the W54 loop-guard
+ *  pattern): a kind gained on either side without a check arm is red. */
+export const CHECK_KINDS = Object.freeze(['optin-user-path', 'optin-machine-path', 'optin-shortcut', 'optin-cert-user', 'optin-claude-policy', 'optin-vscode', 'optin-zcode'])
+
+/**
+ * checkEntries({ groups, manifest, procs, deps }) → [{ form, item, harness, code, detail }] — the read-only re-check that asight's opt-in
+ * entries are still the ones used. `groups` is route-plan's groupsOf shape (the forms, for matching the running processes); `manifest` the
+ * install manifest as it is; `procs` the process table (`[{ pid, ppid, exe, cmdline? , argv? }]` — listProcs' own rows or the redirector's
+ * full table); `deps: { run, env, fs }` the injections (every OS read goes through them). A ledger entry that is in effect (not
+ * `pending_admin`, not a `confirmed: false` apply) is checked by its kind:
+ *   optin-user-path / optin-machine-path  the command still resolves, in Windows' own order (the machine PATH first, §6.3), to asight's shim
+ *                                         or dispatcher — anything else first is `shim-not-on-path`, the detail naming the PATH entry that wins;
+ *                                         the dispatcher's recorded real binary still there (gone → `entry-changed`);
+ *   optin-shortcut / optin-vscode         every shortcut still points at asight's launcher, the launcher itself still there (anything
+ *                                         else → `entry-changed`);
+ *   optin-vscode / optin-zcode            the settings file still holds what asight wrote in its keys (→ `entry-changed`);
+ *   optin-claude-policy                   the policy value is still asight's URL (→ `entry-changed`);
+ *   optin-cert-user                       the certificate is still in CurrentUser\Root (→ `entry-changed`).
+ * Then, for each form whose entries are all still in effect and that has an entry things are started through (a shim, the dispatcher, a
+ * launcher), a running agent of that form whose parent is neither one of those (by image, or by the parent's command line naming it — a .cmd
+ * is interpreted by cmd.exe, so the parent of a shim-launched agent is the cmd.exe whose command line carries the path; the shapes are the
+ * lab's W68 run to measure) nor a process of the same form (an agent's own children are not the entry's question) is `not-via-entry`.
+ * Nothing broken → nothing reported (W68). A read that failed is never a verdict: it comes back as an `unknown` finding (`code: null` with a
+ * `reason` of 1.6 §9.4's closed set), not a guess (R11, D38).
+ */
+export function checkEntries({ groups = [], manifest = null, procs = [], deps = {} } = {}) {
+  const run = deps.run || null, env = deps.env || process.env, fs = deps.fs || nodeFs
+  const expand = (p) => String(p).replace(/%([^%]+)%/g, (m, k) => (env[k] != null ? String(env[k]) : m))
+  const exists = (p) => { try { return fs.existsSync(p) || fs.existsSync(expand(p)) } catch { return false } } // where.exe expands %Environment% names of a REG_EXPAND_SZ PATH; fs.existsSync does not
+  const samePath = (a, b) => String(a).toLowerCase().replace(/\//g, '\\') === String(b).toLowerCase().replace(/\//g, '\\')
+  const findings = []
+  const add = (e, code, detail) => findings.push({ form: e.form, item: e.item, harness: e.harness, code, detail })
+  const unknown = (e, reason, detail) => findings.push({ form: e.form, item: e.item, harness: e.harness, code: null, reason, detail })
+  const entries = (manifest && Array.isArray(manifest.entries) ? manifest.entries : []).filter((e) => e && isOptinKind(e.kind) && !e.pending_admin && e.confirmed !== false)
+  const v = (e) => (e && typeof e.values === 'object' && e.values) || {}
+
+  // the PATH half — what `where.exe <command>` answers first must be one of asight's own entries for that command (read only when there is
+  // one to check: `status` runs this on every ask, and a manifest without a PATH entry owes no registry read)
+  const pathEntries = entries.filter((e) => e.kind === 'optin-user-path' || e.kind === 'optin-machine-path')
+  const userPath = pathEntries.length ? readUserPath({ run, env }) : null
+  const machinePath = pathEntries.length ? readMachinePath({ run, env }) : null
+  const targetsOf = new Map() // command → asight's own first-hit paths (the shim, the dispatcher)
+  for (const e of entries) {
+    if (e.kind !== 'optin-user-path' && e.kind !== 'optin-machine-path') continue
+    const t = e.kind === 'optin-user-path' ? path.win32.join(v(e).binDir || '', `${v(e).command}.cmd`) : `${MACHINE_BIN}\\${v(e).command}.cmd`
+    if (!v(e).command) continue
+    ;(targetsOf.get(v(e).command) || targetsOf.set(v(e).command, []).get(v(e).command)).push(t)
+  }
+  const checkPathOf = (e) => {
+    if ((userPath && userPath.error) || machinePath == null) {
+      unknown(e, 'denied', `${e.values.command}'s entry could not be checked: the ${userPath && userPath.error ? `user PATH could not be read (${userPath.error})` : 'machine PATH could not be read'}`)
+      return
+    }
+    const mine = targetsOf.get(e.values.command) || []
+    const hit = resolveCommand(e.values.command, { run, env, exists })
+    if (hit && mine.some((t) => samePath(t, hit.path))) { /* the command still goes through one of asight's own entries */ }
+    else if (hit) add(e, 'shim-not-on-path', `${e.values.command} resolves first to ${hit.path} — the ${hit.at} PATH's ${path.win32.dirname(hit.path)} — not asight's ${e.kind === 'optin-user-path' ? `shim ${mine[0]}` : `dispatcher ${mine[0]}`}`)
+    else {
+      const file = e.kind === 'optin-user-path' ? path.win32.join(e.values.binDir, `${e.values.command}.cmd`) : `${MACHINE_BIN}\\${e.values.command}.cmd`
+      add(e, 'shim-not-on-path', `${e.values.command} no longer resolves anywhere on the PATH (${exists(file) ? `asight's ${e.kind === 'optin-user-path' ? 'shim' : 'dispatcher'} ${file} is there, but the directory is not on the PATH anymore` : `asight's ${e.kind === 'optin-user-path' ? 'shim' : 'dispatcher'} ${file} is gone`})`)
+    }
+    if (e.kind === 'optin-machine-path' && !exists(e.values.realBinary)) add(e, 'entry-changed', `the real binary the dispatcher falls back to (${e.values.realBinary}) is gone`)
+  }
+
+  // the shortcuts / launcher half (the shortcut item and the VS Code item's shortcut half): every shortcut still at asight's launcher, the
+  // launcher itself still there. (The app a launcher forwards to is NOT existence-checked: the plan has that check for the machine dispatcher's
+  // recorded binary alone, where nothing else would notice; a launcher's target is the user's own install, whose absence is not asight's entry
+  // having changed.)
+  const checkShortcutsOf = (e) => {
+    for (const s of Array.isArray(v(e).shortcuts) ? v(e).shortcuts : []) {
+      if (!exists(s.path)) { add(e, 'entry-changed', `the shortcut ${path.win32.basename(s.path)} is gone`); continue }
+      const t = readShortcutTarget({ shortcut: s.path, run, env })
+      if (t.error) { unknown(e, 'denied', `the shortcut ${s.path} could not be read: ${t.error}`); continue }
+      if (!samePath(t.target || '', v(e).launcher)) add(e, 'entry-changed', `the shortcut ${path.win32.basename(s.path)} now starts ${t.target || '(nothing)'}, not asight's launcher ${v(e).launcher}`)
+    }
+    if (v(e).launcher && !exists(v(e).launcher)) add(e, 'entry-changed', `asight's launcher ${v(e).launcher} is gone`)
+  }
+
+  // the settings keys half (VS Code's and Z-Code Desktop's own files): what asight wrote must still be what they hold. The expected value
+  // comes from the entry's own ops — the replace branch's `inserted` is the value's JSON literal; the insert branch's is the member text
+  // `"key": <literal>` (json-text's member()), so the literal is lifted out of it. A user edit OUTSIDE asight's keys is not a change of the
+  // entry (the undo side's own rule: only asight's keys are asight's to answer for).
+  const opValue = (op) => {
+    if (!op || typeof op.inserted !== 'string') return null
+    if (op.removed !== '') return op.inserted
+    const m = /^[\s\S]*?"(?:[^"\\]|\\.)*":\s*([\s\S]*?)\s*,?\s*$/.exec(op.inserted)
+    return m ? m[1] : null
+  }
+  const checkSettingsOf = (e) => {
+    if (!exists(e.path)) { add(e, 'entry-changed', `the settings file ${e.path} is gone`); return }
+    let doc = null
+    try { doc = JSON.parse(fs.readFileSync(e.path, 'utf8')) } catch { add(e, 'entry-changed', `${e.path} is no longer JSON, so the entry cannot be in effect`); return }
+    const keys = (Array.isArray(v(e).keys) ? v(e).keys : []).map((k) => (Array.isArray(k) ? k : [k]))
+    const ops = Array.isArray(e.ops) ? e.ops : []
+    keys.forEach((k, i) => {
+      const literal = opValue(ops[i])
+      if (literal == null) return // an entry without a readable op for a key cannot be value-checked; the apply records one op per key
+      let expected
+      try { expected = JSON.parse(literal) } catch { return }
+      const now = getPath(doc, k)
+      if (now !== expected) add(e, 'entry-changed', `${k.join('.')} in ${e.path} now holds ${now === undefined ? 'nothing' : JSON.stringify(now)}, not what asight wrote (${JSON.stringify(expected)})`)
+    })
+  }
+
+  for (const e of entries) {
+    if (!CHECK_KINDS.includes(e.kind)) { // unreachable from a manifest this build reads (KNOWN_KINDS gates at read time); never silent anyway (D38)
+      unknown(e, 'unparseable', `no check is built for the opt-in kind ${e.kind}`)
+      continue
+    }
+    if (e.kind === 'optin-user-path' || e.kind === 'optin-machine-path') checkPathOf(e)
+    else if (e.kind === 'optin-shortcut' || e.kind === 'optin-vscode') checkShortcutsOf(e)
+    else if (e.kind === 'optin-claude-policy') {
+      const now = readRegValue({ hive: e.values.hive, key: e.values.key, name: e.values.name, run, env })
+      if (now.error) unknown(e, 'denied', `the policy value ${e.values.hive}\\${e.values.key}\\${e.values.name} could not be read: ${now.error}`)
+      else if (now.absent || now.value !== e.values.url) add(e, 'entry-changed', `the policy value ${e.values.name} now holds ${now.absent ? 'nothing' : now.value}, not asight's ${e.values.url}`)
+    } else if (e.kind === 'optin-cert-user') {
+      const back = execTool('certutil', ['-user', '-store', 'Root', v(e).thumbprint], { run, env })
+      if (back.code === 1) add(e, 'entry-changed', `the certificate ${v(e).thumbprint} is no longer in CurrentUser\\Root`)
+      else if (back.code !== 0) unknown(e, 'denied', `CurrentUser\\Root could not be read (certutil exited ${back.code ?? 'none'}${back.err ? `: ${back.err.slice(0, 200)}` : ''})`)
+    }
+    if (e.kind === 'optin-vscode' || e.kind === 'optin-zcode') checkSettingsOf(e)
+  }
+
+  return findings
 }

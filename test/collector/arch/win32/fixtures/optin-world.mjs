@@ -13,7 +13,7 @@ import { groupsOf } from '../../../../../src/collector/arch/win32/route-plan.mjs
 import { MACHINE_PATH_KEY } from '../../../../../src/collector/arch/win32/elevate.mjs'
 import { SAC_KEY } from '../../../../../src/collector/arch/win32/userpath.mjs'
 import { createCa } from '../../../../../src/collector/core/tls/ca.mjs'
-import { applyOptIn } from '../../../../../src/collector/arch/win32/optin.mjs'
+import { applyOptIn, checkEntries } from '../../../../../src/collector/arch/win32/optin.mjs'
 import { tmpDir } from '../../../../helpers/tmp.mjs'
 
 export const GROUPS = groupsOf(await loadHarnesses())
@@ -124,7 +124,10 @@ export async function rig({ form, item, forms = null, over = {}, win = {} } = {}
   const deps = { run: w.run, sac: () => (win.sac === null ? 'off' : win.sac === 1 ? 'on' : win.sac === 2 ? 'evaluation' : 'off'), ...over.deps }
   const applyAs = (f, i) => { const gg = GROUPS.find((x) => x.forms.some((y) => y.id === f)); return applyOptIn({ row: { form: f, harness: gg.harness, item: i, kinds: [], scope: 'user', admin: false, chosen: true, applicable: true, state: 'needed' }, groups: GROUPS, manifest, dir, home: winHome, env, fs: wfs, deps, save: () => {}, note: (r) => notes.push(r), failure: (r) => failures.push(r), state: (r) => events.push(r) }) }
   const apply = () => applyAs(form, item)
-  return { home, winHome, dir, ca, g, ingress, env, w, wfs, manifest, notes, events, failures, deps, apply, applyAs }
+  /** checkEntries over this rig's world (the manifest the apply filled, the fake registry / store / scripts behind `w.run`): `procs` is the
+   *  process table the agents half sees; `over.deps` rides checkEntries' own deps. */
+  const check = (procs = [], over = {}) => checkEntries({ groups: GROUPS, manifest, procs, deps: { run: w.run, env, fs: wfs, ...(over.deps || {}) } })
+  return { home, winHome, dir, ca, g, ingress, env, w, wfs, manifest, notes, events, failures, deps, apply, applyAs, check }
 }
 export const nativeKimi = (r) => { const p = path.win32.join(r.winHome, '.kimi-code', 'bin', 'kimi.exe'); r.wfs.mkdirSync(path.win32.dirname(p), { recursive: true }); r.wfs.writeFileSync(p, 'exe') }
 /** The real `<command>.cmd` on the user PATH (npm style): `<winHome>\npm\<command>.cmd`, the directory made. */
