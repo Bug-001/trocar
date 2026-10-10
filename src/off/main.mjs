@@ -2,7 +2,7 @@
 // refuses root, resolves the harness names, runs runOff and prints its receipt. `asight off` and the standalone `~/.asight/bin/asight-off` run this same file
 // (R3), so it may import nothing outside src/off (0.1 §2) — which is why the §3 name table is written here too (OFF_NAMES) and test/cli/harness-names.test.mjs
 // holds it equal to src/cli/harness-names.mjs. Everything the world gives is a `deps` entry (see orchestrate.mjs), plus `getuid` and `legacyOff`: the replacement of
-// src/off/legacy-cli.mjs `legacyOffCli`, which is what `off` is on a platform without the new collector (macOS, Windows: 1.6 §4); `legacyUndo`, the old capture's leftovers on Linux, defaults to src/off/legacy.mjs. Exit codes (R4): 0 done · 1 not done or a problem · 2 usage error, nothing touched.
+// src/off/legacy-cli.mjs `legacyOffCli`, which is what `off` is on a platform without the new collector (macOS: 1.6 §4); `legacyUndo`, the old capture's leftovers on Linux, defaults to src/off/legacy.mjs. Exit codes (R4): 0 done · 1 not done or a problem · 2 usage error, nothing touched.
 import nodeOs from 'node:os'
 import { runOff } from './orchestrate.mjs'
 import { formatOffReceipt } from './receipt.mjs'

@@ -12,14 +12,16 @@
 // (harness WS terminal patterns, the process's own proxies), merged into the flow's meta. Core knows no
 // harness; it only reads that data.
 import net from 'node:net'
-import { handleFlow } from './flow.mjs'
+import { handleFlow, writeRefusal } from './flow.mjs'
+import { createIngress } from './ingress.mjs'
 import { createNegativeCache } from './negcache.mjs'
 import { createUpstreamTrust, systemRoots } from '../tls/roots.mjs'
 
 // upstreamCa: extra CAs the engine trusts upstream (test seam); systemCa: stands in for the OS store
 // (tests; undefined = read it): PEM text / array, or a systemRoots()-shaped {certs, errors}. The upstream trust set is built once (RFC 4.6 §引擎 5, tls/roots.mjs).
 // timing (tests): {firstByteTimeoutMs, upstreamSlowMs, preludeStallMs} — the engine's waits, 5 s each by default.
-export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, retention = null, describe = () => ({}), onError = () => {}, onFailure = null, timing = {}, drainTimeoutMs }) {
+// ingressToken: the install's ingress token (4.8 §3.2), required for listen({ingress}).
+export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, retention = null, describe = () => ({}), onError = () => {}, onFailure = null, timing = {}, drainTimeoutMs, ingressToken = null }) {
   const counters = { active: 0, total: 0, decrypted: 0, spliced: 0, lookupMisses: 0, notCaptured: { h2: 0, httpsProxy: 0, upstreamCert: 0, negative: 0, leafError: 0 } }
   const servers = []
   const active = new Set()
@@ -31,7 +33,8 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   // Every write into it is a failure event (D-12, 4.6 §记录 负缓存写入): from then on this (pid, host) is spliced, not
   // captured, until the process exits (the daemon calls forgetPid and records the clearing).
   const neg = createNegativeCache()
-  const negWritten = (made, key, o) => { if (made) { const e = neg.get(key); failure({ code: 'negative-cache', pid: e.pid ?? null, agent: e.agent, host: e.host, cause: e.cause, reason: `${e.host} is no longer decrypted for pid ${e.pid} (${e.cause}${e.rejections > 1 ? `, ${e.rejections} times in a row` : ''}); its connections there are passed through until it exits` }) } return made }
+  // neg_key: what the entry is keyed by — "<pid>", or "<route>.<group>" for a connection with no pid (4.8 §5.5)
+  const negWritten = (made, key, o) => { if (made) { const e = neg.get(key); failure({ code: 'negative-cache', pid: e.pid ?? null, neg_key: e.negKey, agent: e.agent, host: e.host, cause: e.cause, reason: `${e.host} is no longer decrypted for ${e.pid != null ? `pid ${e.pid}` : e.negKey} (${e.cause}${e.rejections > 1 ? `, ${e.rejections} times in a row` : ''}); its connections there are passed through until ${e.pid != null ? 'it exits' : 'every process of that form has exited'}` }) } return made }
   const negCache = { ...neg, observe: (key, o) => negWritten(neg.observe(key, o), key, o), mark: (key, o) => negWritten(neg.mark(key, o), key, o) }
   let flowSeq = 0
   const defaultConnect = (dst) => net.connect(dst.port, dst.address)
@@ -88,18 +91,29 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
       onError(Object.assign(new Error(reason), { code: 'lookup-miss' }))
       return
     }
-    // FlowExtras from the daemon. A throw must not cost the agent its connection: the flow goes on with
-    // none (fail-open: no WS patterns → fallback cut), and the throw is recorded (D38).
-    try { meta = { ...meta, ...(describe(meta) || {}) } } catch (e) {
+    runFlow(socket, meta, connectUpstream || defaultConnect, duringLookup)
+  }
+
+  // FlowExtras from the daemon, merged into the meta. A throw must not cost the agent its connection: the flow goes on with
+  // none (fail-open: no WS patterns → fallback cut), and the throw is recorded (D38).
+  function withExtras(meta) {
+    try { return { ...meta, ...(describe(meta) || {}) } } catch (e) {
       onError(e)
       failure({ code: 'describe-error', pid: meta.pid ?? null, agent: meta.agent ?? null, dst: meta.dst, reason: String((e && e.message) || e) })
+      return meta
     }
+  }
+  const flowCtx = (connect) => ({
+    ...timing, drainTimeoutMs, issuer, store, upstreamCa, upstreamTrust, policy, isRecording, retention, negCache, counters, failure,
+    connectUpstream: connect,
+    newFlowId: () => `flow_${String(++flowSeq).padStart(6, '0')}`,
+  })
+  // The one flow starter both doors use. `connect(dst)` is how this flow reaches its upstream (the transparent door: the
+  // engine's; the ingress: its pre-dialled socket first, a re-dial after).
+  function runFlow(socket, meta0, connect, duringLookup = null) {
+    const meta = withExtras(meta0)
     counters.active++
-    const ctx = {
-      ...timing, drainTimeoutMs, issuer, store, upstreamCa, upstreamTrust, policy, isRecording, retention, negCache, counters, failure,
-      connectUpstream: connectUpstream || defaultConnect,
-      newFlowId: () => `flow_${String(++flowSeq).padStart(6, '0')}`,
-    }
+    const ctx = flowCtx(connect)
     const entry = { agent: meta.agent ?? null, handle: null }
     flows.add(entry)
     ctx.register = (h) => { entry.handle = h }
@@ -114,39 +128,71 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
       else if (rec && rec.decision === 'splice') counters.spliced++
     }).catch((e) => { failure({ code: 'engine-error', pid: meta.pid ?? null, dst: meta.dst, reason: `handling the connection failed: ${String((e && e.message) || e)}` }); onError(e) }).finally(() => { active.delete(done); counters.active--; gone() })
     active.add(done)
-    socket.removeListener('error', duringLookup) // handleFlow's own listener has taken over
+    if (duringLookup) socket.removeListener('error', duringLookup) // handleFlow's own listener has taken over
   }
 
-  function listen({ port = 0, hosts = ['127.0.0.1'] } = {}) {
-    // Bind the first host on `port` (0 → OS picks), then reuse the resolved port for the rest, so
-    // Plan 2 can listen on 127.0.0.1 and ::1 at the same port.
-    return new Promise((resolve, reject) => {
-      let boundPort = port
+  // The proxy ingress (4.8 §5.1): created on first listen({ingress}), where the token and the redirector's lookupIngress are known.
+  let ingress = null
+  function ingressDoor() {
+    if (ingress) return ingress
+    if (typeof redirector.lookupIngress !== 'function') throw new TypeError('listen({ingress}): this redirector has no lookupIngress')
+    ingress = createIngress({
+      token: ingressToken, timing,
+      lookupIngress: (q) => redirector.lookupIngress(q),
+      connectUpstream: (dst) => (connectUpstream || defaultConnect)(dst),
+      failure,
+      // an ingress connection whose upstream refused or could not be reached never became a flow: its flows/ row is written here
+      refuse: (meta, info) => writeRefusal(meta, flowCtx(connectUpstream || defaultConnect), info),
+      handleFlow: (socket, meta, { upstream, redial }) => {
+        // one upstream dial per agent connection: the ingress's pre-dialled socket the first time flow.mjs asks, a re-dial after that
+        // (the 让路; none when the upstream carries credentials: flow.mjs closes the flow instead of sending them a second time)
+        let first = true
+        runFlow(socket, meta, () => { if (first) { first = false; return upstream } if (!redial) throw new Error('the upstream carries credentials: it is not dialled a second time'); return redial() })
+      },
+    })
+    return ingress
+  }
+
+  // listen({port, hosts, ingress: {port}|null}) → {port, ingressPort}
+  //   port    the transparent listener (0 → the OS picks); skipped when the redirector has no `lookup` (Windows: no transparent rewrite)
+  //   ingress the proxy ingress's own port, on the same hosts (4.8 §5.1); needs the redirector's lookupIngress and createEngine's ingressToken
+  // The first host binds first, then the rest reuse the resolved port, so 127.0.0.1 and ::1 share one.
+  async function listen({ port = 0, hosts = ['127.0.0.1'], ingress: ing = null } = {}) {
+    const transparent = typeof redirector.lookup === 'function'
+    if (!transparent && !ing) throw new TypeError('listen: this redirector has no lookup and no ingress was asked for: nothing to listen on')
+    const door = ing ? ingressDoor() : null
+    const bind = (handler, wanted, label) => new Promise((resolve, reject) => {
+      let boundPort = wanted
       let i = 0
       const bindNext = () => {
-        if (i >= hosts.length) { resolve({ port: boundPort }); return }
+        if (i >= hosts.length) { resolve(boundPort); return }
         const host = hosts[i++]
-        const srv = net.createServer(onConnection)
+        const srv = net.createServer(handler)
         srv.once('error', reject)
         srv.listen(boundPort, host, () => {
           srv.removeListener('error', reject)
           // after listen (e.g. EMFILE on accept): recorded and reported, never an uncaught exception
-          srv.on('error', (e) => { failure({ code: (e && e.code) || 'engine-error', reason: `the engine's listener on ${host}: ${String((e && e.message) || e)}` }); onError(e) })
+          srv.on('error', (e) => { failure({ code: (e && e.code) || 'engine-error', reason: `the engine's ${label}listener on ${host}: ${String((e && e.message) || e)}` }); onError(e) })
           boundPort = srv.address().port; servers.push(srv); bindNext()
         })
       }
       bindNext()
     })
+    const out = { port: transparent ? await bind(onConnection, port, '') : null }
+    if (door) out.ingressPort = await bind(door.connection, ing.port ?? 0, 'ingress ')
+    return out
   }
 
   async function close() {
-    await Promise.all(servers.map((s) => new Promise((res) => s.close(res))))
+    const closing = Promise.all(servers.map((s) => new Promise((res) => s.close(res))))
+    if (ingress) ingress.closeIdle() // handshakes and health tunnels are not flows: nothing of an agent's is lost, and they would hold close() for their idle timeout
+    await closing
     await Promise.allSettled([...active]) // let in-flight flows finish; never destroy them
   }
 
   function stats() {
     const storeErrors = store && typeof store.errors === 'number' ? store.errors : 0
-    return { active: counters.active, total: counters.total, decrypted: counters.decrypted, spliced: counters.spliced, lookupMisses: counters.lookupMisses, storeErrors, notCaptured: { ...counters.notCaptured } }
+    return { active: counters.active, total: counters.total, decrypted: counters.decrypted, spliced: counters.spliced, lookupMisses: counters.lookupMisses, storeErrors, notCaptured: { ...counters.notCaptured }, ...(ingress ? { ingress: ingress.stats() } : {}) }
   }
 
   // `off` (RFC 1.6 §1.3): every connection of `agents` (null = all) that is still relayed is asked to close where the engine can
@@ -182,6 +228,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     })
   }
 
-  // negatives() is for status only; forgetPid(pid) is called by the daemon when that process exits.
-  return { listen, close, stats, drain, relayed, drained, negatives: () => neg.list(), forgetPid: (pid) => neg.forgetPid(pid) }
+  // negatives() is for status only; forgetPid(pid) is called by the daemon when that process exits; forgetNegKey(k) when the last process of a
+  // form with no pid to key by has (4.8 §5.5).
+  return { listen, close, stats, drain, relayed, drained, negatives: () => neg.list(), forgetPid: (pid) => neg.forgetPid(pid), forgetNegKey: (k) => neg.forgetKey(k) }
 }

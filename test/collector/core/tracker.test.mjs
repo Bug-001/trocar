@@ -337,6 +337,71 @@ test('tracker: a harness reports a config file that does not parse; the row carr
   assert.deepEqual(tracker.agents()[0].parseErrors, ['/cfg/a.json'])
 })
 
+// ── the Windows verdict producer's core seams (4.8 §5.4 「谁产生判定」, W76; plan Task 8(v)) ──────────────────────────────────────────
+test('tracker: envRead:false says the OS never reads another process\'s environment — env null then judges by the layers instead of vetoing; a fill-mode layer (its value may be kept out of effect by a var the launch env holds, which cannot be checked) grants no trust', async () => {
+  const layered = (mode) => ({ ...agent, name: 'omega', layers: () => [{ name: `the ${mode} layer`, file: path.join(dir, 'settings.env'), mode, vars: { EXTRA_CA: PEM }, live: true, mtimeMs: 1 }] })
+  const rigLayer = (mode) => {
+    const redirector = fakeRedirector()
+    const tracker = createTracker({ redirector, registry: createRegistry([layered(mode)]), trust: createTrustChecker({ caCertPem: ca.certPem }), home: dir, alive: () => false })
+    tracker.start()
+    return { redirector, tracker }
+  }
+  const override = rigLayer('override')
+  override.redirector.emit('exec', facts(400, { env: null, envRead: false })); await settle()
+  assert.deepEqual([override.tracker.describe(400).trusted, override.tracker.describe(400).reason], [true, 'ok'], 'an override layer — what every Windows trust entry is (the agent applies the file over its launch env) — judges as on Linux')
+  const fill = rigLayer('fill')
+  fill.redirector.emit('exec', facts(401, { env: null, envRead: false })); await settle()
+  assert.deepEqual([fill.tracker.describe(401).trusted, fill.tracker.describe(401).decrypt, fill.tracker.describe(401).reason], [false, false, 'env-unreadable-fill'], 'a fill layer\'s value cannot be told from "in effect": not trusted, so the cost is capture, never a broken connection')
+  const linuxFill = rigLayer('fill')
+  linuxFill.redirector.emit('exec', facts(402, { env: new Map([['EXTRA_CA', '/own/ca.pem']]) })); await settle()
+  assert.equal(linuxFill.tracker.describe(402).trusted, false, 'on Linux the same fill is checked against the environ that was read: the var the process holds wins, ca-not-in-file')
+})
+
+test('tracker: the marker comparison carries the tolerance the wiring gives (a Windows marker is ms-rounded performance.timeOrigin against the helper\'s ms startedAt); without one it stays byte-exact, and a marker from an earlier process of the same pid stays stale', async () => {
+  const rigAt = (markerToleranceMs) => markerRig(markerToleranceMs ? { markerToleranceMs } : {})
+  const loose = rigAt(2000)
+  loose.redirector.emit('exec', facts(410, { exe: '/opt/beta', argv: ['beta'], startTicks: '5000', startedAt: loose.clock })); await settle()
+  await loose.appear(410, 6500)
+  assert.equal(loose.tracker.describe(410).trusted, true, 'rounded, within the tolerance: the same start')
+  await loose.appear(410, 2999)
+  assert.equal(loose.tracker.describe(410).trusted, false, 'outside it on the other side: stale again')
+  await loose.appear(410, 20000)
+  assert.deepEqual([loose.tracker.describe(410).trusted, loose.tracker.describe(410).reason], [false, 'marker-stale'], 'a marker an earlier process of the same pid left (a pid reused much later) never trusts')
+  const exact = rigAt(0)
+  exact.redirector.emit('exec', facts(411, { exe: '/opt/beta', argv: ['beta'], startTicks: '5000', startedAt: exact.clock })); await settle()
+  await exact.appear(411, 5001)
+  assert.equal(exact.tracker.describe(411).trusted, false, 'no tolerance (Linux /proc ticks): byte-exact or stale')
+  await exact.appear(411, 5000)
+  assert.equal(exact.tracker.describe(411).trusted, true)
+})
+
+test('tracker: facts-update re-judges the same pid and pushes watch again (a form told by its command line, 4.8 §1)', async () => {
+  const { redirector, tracker } = rig()
+  redirector.emit('facts-update', { ...facts(420, { env: new Map([['EXTRA_CA', PEM]]) }), source: 'update' }); await settle()
+  assert.deepEqual(redirector.calls, [['watch', 420, true]], 'the update is judged like an exec')
+  redirector.emit('facts-update', { ...facts(420, { env: new Map() }), source: 'update' }); await settle()
+  assert.deepEqual(redirector.calls.at(-1), ['watch', 420, false], 'and judged again when the facts under the pid change')
+})
+
+test('tracker: the wiring\'s osLayers pick a descriptor\'s platform layers (the daemon hands the win32 ones, 4.8 §5.4); without them the descriptor\'s own layers run', async () => {
+  const d = { ...agent, name: 'delta', signatures: { linux: { match: [{ exe: /\/delta$/ }] } },
+    layers: () => [{ name: 'the linux layers', file: path.join(dir, 'l.env'), mode: 'override', vars: {}, live: true, mtimeMs: 1 }],
+    win32: { layers: () => [{ name: 'the win32 layers', file: path.join(dir, 'w.env'), mode: 'override', vars: { EXTRA_CA: PEM }, live: true, mtimeMs: 1 }] } }
+  const os = async (osName, o = {}) => {
+    const redirector = fakeRedirector()
+    const registry = createRegistry([d], osName === 'win32' ? { osMatch: { win32: () => 'delta' } } : {}) // the seam under test here is the layers; the form rule is osMatch's (above)
+    const tracker = createTracker({ redirector, registry, trust: createTrustChecker({ caCertPem: ca.certPem }), home: dir, alive: () => false, osLayers: { win32: (x) => x.win32.layers }, ...o })
+    tracker.start()
+    redirector.emit('exec', facts(430, { os: osName, exe: '/opt/delta', argv: ['delta'], env: null, envRead: false }))
+    await settle()
+    return tracker
+  }
+  assert.equal((await os('win32')).describe(430).trusted, true, 'the win32 layers named the CA file')
+  const linux = await os('linux')
+  assert.deepEqual([linux.describe(430).trusted, linux.describe(430).reason], [false, 'var-missing'], 'the descriptor\'s own layers ran: no win32 data was invented')
+  assert.equal((await os('win32', { osLayers: null })).describe(430).trusted, false, 'without the wiring the descriptor\'s own layers run: the seam is the daemon\'s to wire')
+})
+
 // D-20: an environment that cannot be read is never judged on a guess: untrusted, with the reason and the errno.
 test('tracker: an unreadable environment is untrusted as environ-unreadable, never var-missing and never trusted', async () => {
   const { redirector, tracker } = rig()

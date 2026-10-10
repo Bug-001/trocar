@@ -37,15 +37,45 @@ const refusedByUpstream = (err) => UPSTREAM_REFUSAL.test(String((err && err.code
 const refusalWhy = (err, clientMoved) => `${err.code}: the upstream refused the engine's TLS handshake (a host that wants a client certificate does); ` +
   (clientMoved ? 'this connection is closed and the next one to the host is passed through' : "passed through, so the agent's own handshake reaches the host")
 
+// What a connection that came through the proxy ingress adds to its row (4.8 §5.6): who handed it over, how the pid was found, and the
+// upstream it went to — never the credentials, and never a `prelude` (the opener and the proxy prelude are asight's bytes, not the agent's).
+function ingressFields(meta) {
+  if (!meta.ingress) return {}
+  const u = meta.upstream || {}
+  return {
+    ingress: { route: meta.ingress.route, group: meta.ingress.group }, pid_source: meta.pid_source ?? null, pid_ms: meta.pid_ms ?? null,
+    upstream: { kind: u.kind || 'direct', ...(u.host ? { host: u.host } : {}), ...(u.port != null ? { port: u.port } : {}), ...(u.reply != null ? { reply: u.reply } : {}) },
+  }
+}
+// who started this agent (4.6 子进程与嵌套 agent): the board marks a nested agent by parent_agent; parent_pid is whatever
+// started it, an agent or not (review B-4(a))
+const parentsOf = (meta) => ({ ...(meta.parentPid != null ? { parent_pid: meta.parentPid } : {}), ...(meta.parentAgent ? { parent_agent: meta.parentAgent } : {}) })
+
+/**
+ * The row of an ingress connection that never became a flow: the upstream proxy refused it (decision 'tunnel', not_captured
+ * 'proxy-refused', reason 'proxy-status-<n>' / 'socks5-reply-<n>' …) or the upstream could not be reached (decision 'error', with
+ * the error). The agent was answered 502 or the proxy's own refusal; this is the record that it happened (D38).
+ */
+export function writeRefusal(meta, ctx, info) {
+  const rec = {
+    ts: new Date().toISOString(), flow_id: ctx.newFlowId(), pid: meta.pid ?? null, agent: meta.agent ?? null, ...parentsOf(meta),
+    dst: meta.dst, host: meta.dst.address, decision: info.decision, reason: info.reason ?? null, bytes_up: 0, bytes_down: 0, duration_ms: 0,
+    ...ingressFields(meta), not_captured: info.not_captured, ...(info.error ? { error: info.error } : {}),
+  }
+  let ok = true, why = null
+  try { ok = ctx.store.flow(rec) !== false } catch (e) { ok = false; why = e }
+  if (!ok) ctx.failure({ code: 'flow-write-failed', flow_id: rec.flow_id, reason: msgOf(why || ctx.store.lastError || 'the store did not write the flow record') })
+  return rec
+}
+
 export function handleFlow(client, meta, ctx) {
   const t0 = Date.now()
   const rec = {
-    ts: new Date().toISOString(), flow_id: ctx.newFlowId(), pid: meta.pid, agent: meta.agent,
-    // who started this agent (4.6 子进程与嵌套 agent): the board marks a nested agent by parent_agent; parent_pid is whatever
-    // started it, an agent or not (review B-4(a))
-    ...(meta.parentPid != null ? { parent_pid: meta.parentPid } : {}), ...(meta.parentAgent ? { parent_agent: meta.parentAgent } : {}),
-    dst: meta.dst, host: null, decision: null, reason: null, bytes_up: 0, bytes_down: 0, duration_ms: 0,
+    ts: new Date().toISOString(), flow_id: ctx.newFlowId(), pid: meta.pid, agent: meta.agent, ...parentsOf(meta),
+    dst: meta.dst, host: null, decision: null, reason: null, bytes_up: 0, bytes_down: 0, duration_ms: 0, ...ingressFields(meta),
   }
+  // the opener the ingress read and its own answers are on the socket's counters but are not the agent's bytes (§5.6)
+  const wire = meta.wire || { up: 0, down: 0 }
   let resolveFlow
   const flowDone = new Promise((res) => { resolveFlow = res })
 
@@ -123,7 +153,7 @@ export function handleFlow(client, meta, ctx) {
       if (written) return
       written = true
       if (cap) clearTimeout(cap)
-      rec.bytes_up = client.bytesRead; rec.bytes_down = client.bytesWritten
+      rec.bytes_up = client.bytesRead - wire.up; rec.bytes_down = client.bytesWritten - wire.down
       // recording never breaks teardown, and a record that was not written is not silent (D38)
       let ok = true, why = null
       try { ok = ctx.store.flow(rec) !== false } catch (e) { ok = false; why = e }
@@ -346,7 +376,8 @@ export function handleFlow(client, meta, ctx) {
   // replay the client's buffered bytes (its ClientHello) verbatim and splice — the client then runs its
   // own handshake with the real upstream and judges the certificate itself. Inside a CONNECT / SOCKS
   // tunnel there is no fresh connection to open without re-sending the client's proxy prelude (its
-  // credentials) on our own initiative (invariant 1 / D30), so that one flow is closed; (pid, host) is
+  // credentials) on our own initiative (invariant 1 / D30), so that one flow is closed; the same for a connection the
+  // proxy ingress dialled through a credentialed proxy (4.8 §5.2); (pid, host) is
   // negative at once either way, so later flows (the client's retry) splice without trying.
   //   A leaf we cannot issue (cause 'leaf-error', an internal error) steps aside the same way, but is
   // not negative-cached (asight's fault, not the host's) and is a leaf-error failure event (D38).
@@ -357,12 +388,30 @@ export function handleFlow(client, meta, ctx) {
     else if (cause === 'upstream-cert') { ctx.negCache.mark(key, { cause, meta, host }); ctx.counters.notCaptured.upstreamCert++ }
     else { ctx.counters.notCaptured.leafError++; ctx.failure({ code: 'leaf-error', flow_id: rec.flow_id, host, reason: why }) }
     rec.not_captured = cause; rec.reason = why
-    if (isTunnel) {
+    // A credentialed upstream (the user's own proxy, reached through the ingress) is dialled once, for this agent connection: a second
+    // dial would send the user's credentials again on asight's own initiative (invariant 1, 4.8 §5.2), so this flow is closed like a tunnel's.
+    if (isTunnel || meta.upstream?.credentialed) {
       try { cSock.destroy() } catch { /* ignore */ }
-      return finish('tunnel', { host, error: { type: cause.replace('-', '_'), message: why, side: cause === 'leaf-error' ? 'engine' : 'upstream' } })
+      return finish(isTunnel ? 'tunnel' : 'error', { host, error: { type: cause.replace('-', '_'), message: why, side: cause === 'leaf-error' ? 'engine' : 'upstream' } })
     }
     setDecision('splice', false)
     const fresh = ctx.connectUpstream(meta.dst)
+    if (fresh && typeof fresh.then === 'function') { // the ingress's upstream is a proxy: the second dial is a handshake, not a connect
+      let gone = false
+      const left = () => { gone = true }
+      cSock.once('close', left)
+      return fresh.then((u) => {
+        cSock.removeListener('close', left)
+        // the client left while the new handshake ran: nothing was spliced, so the row says error (setDecision('splice') above was a plan, not an outcome)
+        if (gone || cSock.destroyed) { try { u.destroy() } catch { /* ignore */ } rec.decision = 'error'; return finish('error', { error: closedBefore('client') }) }
+        u.write(buf); cSock.resume(); relay(cSock, u)
+      }, (e) => {
+        cSock.removeListener('close', left)
+        try { cSock.destroy() } catch { /* ignore */ }
+        rec.decision = 'error'
+        finish('error', { error: { type: e.code || 'upstream_error', message: msgOf(e), side: 'upstream' } })
+      })
+    }
     fresh.write(buf)                                    // the ClientHello, byte for byte
     cSock.resume(); relay(cSock, fresh)
   }
@@ -378,7 +427,10 @@ export function handleFlow(client, meta, ctx) {
     // 'secureConnect' is a network / protocol failure (the client is closed); a 'secureConnect' that is
     // not `authorized` (Node still checks chain and hostname) is a certificate that did not verify
     // (stepAside). Nothing is ever written on an unverified connection (§引擎 5).
-    const upTls = tls.connect({ socket: uSock, servername: sni || undefined, ALPNProtocols: ['http/1.1'], secureContext: ctx.upstreamTrust.secureContext, rejectUnauthorized: false })
+    // `host` is the verification identity when the client sent no SNI — an IP-literal destination never does (RFC 6066: SNI is DNS names only), so without it Node
+    // verifies against its own default ('localhost') and every IP-literal upstream read ERR_TLS_CERT_ALTNAME_INVALID whatever the certificate (found live by the macOS test machine's
+    // smoke, 2026-10-09; proven on node 22 against the mock upstream: no host → ALTNAME_INVALID, host = the address → authorized — and an IP in `servername` throws instead).
+    const upTls = tls.connect({ socket: uSock, servername: sni || undefined, host, ALPNProtocols: ['http/1.1'], secureContext: ctx.upstreamTrust.secureContext, rejectUnauthorized: false })
     let clientTls = null
     waitFor('tls', host)
     // While we wait for the upstream, the client socket keeps flowing into `held`: a paused socket never
@@ -448,7 +500,7 @@ export function handleFlow(client, meta, ctx) {
   // the decrypted call(s) on this connection go to the exchange tee
   const startTee = (host, scheme) => {
     activeTee = createExchangeTee({
-      flow: { id: rec.flow_id, host, scheme, dst: meta.dst, proc: { pid: meta.pid, exe: meta.exe ?? null, agent: meta.agent } },
+      flow: { id: rec.flow_id, host, scheme, dst: meta.dst, proc: { pid: meta.pid, exe: meta.exe ?? null, agent: meta.agent }, capture: meta.capture }, // capture: 4.8 §5.6 — the ingress meta says 'proxy'; without one the envelope keeps 'transparent'
       recordStore: ctx.store, isRecording: () => ctx.isRecording(meta), wsTerminal: meta.wsTerminal ?? null, retention: ctx.retention, onFailure: ctx.failure,
       onTurnEnd: () => { if (gate) gate.onTurnEnd() }, // a WebSocket call closed on its terminal message: the gate closes after this chunk
     })

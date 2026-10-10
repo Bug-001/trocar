@@ -6,7 +6,8 @@ import { detectDrift } from './adopt.mjs'
 import { hopKey, firstHopAfterAsight, firstHopOff } from './topology-text.mjs'
 import { parseProxyUrl } from './redact.mjs'
 import { trustReasonText } from '../collector/core/codes.mjs'
-import { TRUST_REASONS } from '../health/codes.mjs'
+import { TRUST_REASONS, ROUTE_TRUST_REASONS } from '../health/codes.mjs'
+import { FINDINGS_WIN32 } from './findings-win32.mjs'
 
 const RESTART_REASONS = ['config-after-start', 'env-frozen', 'start-time-unknown', 'no-marker', 'kimi-not-via-shim'] // what restarting the agent fixes (1.6 §1.1)
 const BY_CLASS = { failure: 0, expected: 1, hint: 2 }
@@ -101,14 +102,21 @@ export const FINDINGS = {
 // the trust reasons not listed above (a variable missing, a file unreadable, …): the daemon's own hint says what to do about this agent
 const TRUST = { cls: (c) => (RESTART_REASONS.includes(c.code) ? 'expected' : 'failure'), asightFirst: false, what: (c) => `${c.h} 的进程没被信任:${c.code}`, why: (c) => c.hint || trustReasonText(c.code) || '入口只在启动时读(§1.1);遮住的原因见 harness 的提示',
   commands: (c) => (RESTART_REASONS.includes(c.code) ? restartSteps(c) : [asight(c, `asight status ${c.h}`), gui(c.hint || trustReasonText(c.code) || `按 ${c.h} 的提示改`)]), verify: (c) => `asight status ${c.h}:新 pid「是」` }
-export const FINDING_CODES = Object.freeze([...new Set([...Object.keys(FINDINGS), ...TRUST_REASONS])])
+/** Every code a finding may carry: the cross-platform catalogue's, the Windows table's (4.8 §10.4) and the trust reasons' — the Windows collector's own trust reasons (ROUTE_TRUST_REASONS, 4.8 §12) included,
+ *  for the same reason TRUST_REASONS is: they are the codes of `agent-untrusted` a form's verdict can carry. The schema validates against this list. */
+export const FINDING_CODES = Object.freeze([...new Set([...Object.keys(FINDINGS), ...Object.keys(FINDINGS_WIN32), ...TRUST_REASONS, ...ROUTE_TRUST_REASONS])])
 
 // ── which of them the facts call for ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/** One finding: on win32 the Windows table (4.8 §10.4) takes precedence, field by field — an entry there may override only the commands (or the why), and one for a code the cross-platform catalogue
+ *  does not have defines every field itself. A code neither catalogue names falls to the trust entry: the reasons the tracker can set are data, not caller bugs (the closed sets live in
+ *  health/codes.mjs, held by its tests — a runtime throw here would take `doctor` down with a Windows state like `env-unreadable-fill`). */
 function make(code, ctx) {
+  const w = ctx.platform === 'win32' ? FINDINGS_WIN32[code] : null
   const def = FINDINGS[code] || TRUST
   const c = { ...ctx, code }
-  const cls = typeof def.cls === 'function' ? def.cls(c) : def.cls
-  return { code, class: cls, ...(ctx.h ? { harness: ctx.h } : {}), what: def.what(c), why: def.why(c), commands: def.commands(c), verify: def.verify(c) }
+  const clsOf = (d) => (typeof d.cls === 'function' ? d.cls(c) : d.cls)
+  const at = (f) => (w && w[f] ? w[f](c) : def[f](c))
+  return { code, class: w && w.cls !== undefined ? clsOf(w) : clsOf(def), ...(ctx.h ? { harness: ctx.h } : {}), what: at('what'), why: at('why'), commands: at('commands'), verify: at('verify') }
 }
 
 /** Does what the path depends on come from behaviour data that was measured on another platform? Only where the data decides the path: the agent has a proxy of its own, or follows an OS proxy that is there. */
@@ -132,13 +140,17 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     if (!hf || !t) continue
     const base = { F, h, hf, t, user, sh, platform: F.platform, setting: settingOf(hf), vpnProxy: F.vpn && F.vpn.port ? `http://127.0.0.1:${F.vpn.port}` : null }
     const found = new Map(), add = (code, extra = {}) => { if (!found.has(code)) found.set(code, make(code, { ...base, ...extra })) }
+    const formOf = (r) => { const b = (t.branches || []).find((x) => x.reason === r); return (b && (hf.forms || []).find((f) => f.id === b.form)) || null } // the form facts of the branch that carries the reason (its route / entryPlace, the doctor's Windows rows read them, 4.8 §10.4)
     const reasons = [...new Set([t.reason, ...t.branches.map((b) => b.reason)].filter(Boolean))]
     const row = hf.procs.find((p) => p.reason && reasons.includes(p.reason))
     const optIn = (hf.forms || []).map((f) => f.optIn).find((o) => o && o.state !== 'done' && o.state !== 'unknown')
     const sysPac = !!((hf.systemProxy && hf.systemProxy.pac) || (hf.forms || []).some((f) => f.systemProxy && f.systemProxy.pac))
     const adminOpt = optIn && ['pending-admin', 'needs-admin'].includes(optIn.state)
     const upstream = Object.values((F.forwarder && F.forwarder.forms) || {}).map((x) => x.upstream).find((u) => u && u !== 'DIRECT')
-    for (const r of reasons.filter((x) => !(adminOpt && x === 'not-routed'))) add(r, { upPort: upstream ? (parseProxyUrl(upstream) || {}).port : undefined, hint: row && row.reason === r ? row.hint : undefined, pac: sysPac, enable: optIn && optIn.enable, form: optIn && optIn.form })
+    // the doctor's own name for a protocol the upstream cannot take replaces the branch's not-routed (4.8 §10.4: upstream-protocol sits on the proxy-unsupported row)
+    const protoForm = (hf.forms || []).find((f) => f.route && f.route.code === 'proxy-unsupported') || null
+    for (const r of reasons.filter((x) => !((adminOpt || (protoForm && x === 'not-routed')) && x === 'not-routed'))) add(r, { upPort: upstream ? (parseProxyUrl(upstream) || {}).port : undefined, hint: row && row.reason === r ? row.hint : undefined, pac: sysPac, enable: optIn && optIn.enable, form: optIn && optIn.form, fm: formOf(r) })
+    if (protoForm) add('proxy-unsupported', { protocol: protoForm.route.protocol, fm: protoForm })
     if (adminOpt) add('needs-admin', { elevated: optIn.elevated })
     const dead = deadProxy(t)
     if (dead) add('proxy-dead', { dead })

@@ -46,14 +46,16 @@ test('R7: off as root is refused, nothing is written, nothing is asked of the da
   assert.deepEqual([snapshot(s.home), s.sys.exec.calls.length, s.sys.daemon.calls.filter((c) => c.startsWith('POST /off'))], [before, calls, []])
 })
 
-test('1.6 §4: a platform with no new collector goes to the legacy replacement with the arguments and the resolved names; with none, `off` is src/off/legacy-cli.mjs — on Windows it says so first, takes out what exists (here: nothing) and exits 0', async () => {
-  const s = await installedHome({ names: ['claude-code'] }); const before = snapshot(s.home)
+test('1.6 §4: a platform with no new collector goes to the legacy replacement with the arguments and the resolved names; win32 (the flip, plan 9(b)) runs the NEW off — the undo arms, never legacyOffCli', async () => {
+  const s = await installedHome({ names: ['claude-code'] })
   const seen = []
   assert.equal(await runOffCli(['--now', 'claude'], ctx(s, fakeIo(), { platform: 'darwin', deps: { legacyOff: async (argv, c) => { seen.push([argv, c.ids]); return 0 } } })), 0)
   assert.deepEqual(seen, [[['--now', 'claude'], ['claude-code']]])
   const io = fakeIo()
-  assert.equal(await runOffCli([], ctx(s, io, { platform: 'win32' })), 0); assert.match(io.text(), /^本平台 on \/ off 驱动旧采集\(过渡期\)/)
-  assert.deepEqual(snapshot(s.home), before, 'nothing of the old capture was there, so not a byte moved')
+  assert.equal(await runOffCli([], ctx(s, io, { platform: 'win32', deps: { legacyOff: async () => { throw new Error('win32 must not run the legacy off any more') } } })), 0, io.text())
+  assert.match(io.stdoutText(), /^asight 已关闭采集。/, 'the NEW off ran and printed its receipt')
+  assert.match(io.stdoutText(), /~\/\.claude\/settings\.json +去掉 env\.NODE_EXTRA_CA_CERTS/, 'the undo arms ran: the entry came out of the user\'s file')
+  assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"exit":true}'], 'an arm only the new off has: the daemon was told to drain and exit')
 })
 
 test('R6: --dry-run writes nothing — not a byte, not a flows/ line, nothing asked of the daemon — exits 0, prints the same files in the future tense as the real run then changes; --now is passed on; --remove-ca is accepted with one note', async () => {

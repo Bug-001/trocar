@@ -122,7 +122,7 @@ export function readDay({ dir, date, fs = nodeFs, maxBytes = 1 << 20 } = {}) {
 const KEEP = ['ts', 'event', 'where', 'code', 'reason', 'suppressed', 'folded', 'pid', 'agent', 'host', 'dst', 'peer',
   'flow_id', 'seq', 'd', 'i', 'pattern', 'candidates', 'cause', 'via', 'hint', 'which', 'file', 'harness', 'path', 'kind',
   'type', 'index', 'desired', 'actual', 'links', 'counts', 'from', 'to', 'lost', 'exit', 'stderr', 'signal', 'failed',
-  'version', 'foreground', 'linger', 'upstream_ca', 'dropped', 'errno', 'route', 'phase', 'decision', 'inner',
+  'version', 'foreground', 'linger', 'upstream_ca', 'dropped', 'neg_key', 'errno', 'route', 'phase', 'decision', 'inner',
   'not_captured', 'write_failed', 'transport', 'port', 'out', 'servername', 'op', 'outcome', 'records', 'originalKept', 'reader', 'target', 'source', 'id', 'run']
 const CLIP = 1000
 const clip = (v) => (typeof v === 'string' && v.length > CLIP ? `${v.slice(0, CLIP)}… (${v.length} chars)` : v)
@@ -197,19 +197,22 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
     if (r.event === 'failure' && r.code === 'unclean-stop') break
   }
   const untrusted = new Map(), neg = new Map()
+  // a negative-cache pair is (neg_key ?? pid, host): "<pid>", or "<route>.<group>" for a connection with no pid (4.8 §5.5, W17), so two forms with
+  // no pid are listed apart, and a clearing removes only its own key
+  const clearNeg = (who) => { for (const k of [...neg.keys()]) if (k.slice(0, k.indexOf('\u0000')) === who) neg.delete(k) }
   let degraded = null, version = null, mismatch = null, ca = null, retention = null
   for (let i = from; i < records.length; i++) {
     const r = records[i]
     if (r.event === 'daemon-stop') out.last_stop = pick(r)
     else if (r.event === 'agent-untrusted') untrusted.set(r.pid, { kind: 'untrusted', ...pick(r), since: r.ts })
     else if (r.event === 'agent-trusted') untrusted.delete(r.pid)
-    else if (r.event === 'agent-exit') { untrusted.delete(r.pid); for (const k of [...neg.keys()]) if (neg.get(k).pid === r.pid) neg.delete(k) }
-    else if (r.event === 'negative-cache-cleared') { for (const k of [...neg.keys()]) if (neg.get(k).pid === r.pid) neg.delete(k) }
+    else if (r.event === 'agent-exit') { untrusted.delete(r.pid); clearNeg(String(r.pid)) }
+    else if (r.event === 'negative-cache-cleared') clearNeg(String(r.neg_key ?? r.pid))
     else if (r.event === 'helper-down') degraded = { kind: 'degraded', ...pick(r), since: r.ts }
     else if (r.event === 'helper-version-mismatch') version = { kind: 'helper-version', ...pick(r), since: r.ts }
     else if (r.event === 'switch') mismatch = r.actual && r.actual !== 'unknown' && r.desired !== r.actual ? { kind: 'state-mismatch', ...pick(r), since: r.ts } : null
     else if (r.event === 'failure' && r.code === 'state-mismatch') mismatch = { kind: 'state-mismatch', ...pick(r), since: r.ts }
-    else if (r.event === 'failure' && r.code === 'negative-cache') neg.set(`${r.pid}\u0000${r.host}`, { kind: 'negative-cache', ...pick(r), since: r.ts })
+    else if (r.event === 'failure' && r.code === 'negative-cache') neg.set(`${r.neg_key ?? r.pid}\u0000${r.host}`, { kind: 'negative-cache', ...pick(r), since: r.ts })
     else if (r.event === 'failure' && r.code === 'ca-invalid') ca = { kind: 'ca-invalid', ...pick(r), since: r.ts }
     else if (r.event === 'ca-ok') ca = null // the daemon found the CA usable again and rebuilt what it signs with (D1-2)
     // D40: ~/.asight/retention.json cannot be read or parsed (or holds a bad cell): every call is kept in full meanwhile,

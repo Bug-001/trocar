@@ -6,7 +6,7 @@
 // and are noted where they are.
 export const squash = (s) => String(s).replace(/\s+/g, '')
 
-const API = { 'claude-code': 'api.anthropic.com', codex: 'chatgpt.com', hermes: 'api.openai.com', 'kimi-code': 'api.moonshot.cn' }
+const API = { 'claude-code': 'api.anthropic.com', codex: 'chatgpt.com', hermes: 'api.openai.com', 'kimi-code': 'api.moonshot.cn', opencode: 'api.anthropic.com' }
 const NOW = '2026-10-07T10:02:12.000Z'
 const ENTRY_AT = '2026-10-07T09:00:00.000Z'
 const BEFORE = '2026-10-07T08:00:00.000Z' // a process that started before `on` wrote its entry
@@ -33,6 +33,7 @@ const BEHAVE = {
   hermes: { follows: { http: true, ws: true }, schemes: ['http', 'https', 'socks4', 'socks5', 'socks5h'], unsupported: {}, branches: ['all'], restart: { hint: '退出这个 Hermes,再重新启动', processes: 'hermes' } },
   'kimi-code': { follows: { http: false, ws: false }, schemes: ['http', 'https', 'socks4', 'socks5', 'socks5h'], unsupported: {}, branches: ['all'], restart: { hint: '退出这个 kimi,在新开的终端里重新启动', processes: 'kimi' } },
   'deepseek-dsh': { follows: { http: false, ws: false }, schemes: ['http', 'https'], unsupported: SOCKS_SILENT, branches: ['all'], restart: { hint: '退出这个 dsh,再重新启动', processes: 'dsh' } },
+  opencode: { follows: { http: false, ws: false }, schemes: ['http', 'https'], unsupported: SOCKS_FAILS, branches: ['all'], restart: { hint: '退出这个 OpenCode(含 serve / web),在设好代理环境变量的终端里重新启动', processes: 'opencode' } },
 }
 export const harness = (h, over = {}) => ({
   installed: true, entry: { state: 'intact' }, installedAt: ENTRY_AT, setting: none(), systemProxy: null, behaviour: { ...BEHAVE[h], measured: h === 'claude-code' ? 'lab' : 'inferred' }, // Linux: V54 measured claude-code's HTTPS_PROXY path on a test machine; the others are inferred from the Windows measurements
@@ -154,7 +155,7 @@ row({ n: 16, title: 'proxy mode: the entry is bypassed (a same-named command on 
 row({ n: 17, title: 'proxy mode: the user changed the agent\'s own proxy: it no longer points at the kernel and goes where the setting says', h: 'codex',
   facts: pfacts('codex', codexForm({ setting: proxyOf('http://proxy.new:3128', [{ kind: 'file', where: 'C:\\Users\\u\\.codex\\.env', key: 'HTTPS_PROXY' }]), entry: { where: ENV, asight: true, opt_in: false, intact: false } }), fwForm(17992, { upstream: 'http://proxy.corp:8080', source: 'agent' })),
   kinds: [['agent', 'proxy', 'egress']], on_path: false, captured: false, reason: 'proxy-changed',
-  compact: ['codex app-server 5530 → [.env HTTPS_PROXY] proxy.new:3128 → 出口'], findings: ['proxy-changed'] })
+  compact: ['codex app-server 5530 → [.env HTTPS_PROXY] proxy.new:3128 → 出口'], findings: ['proxy-changed'], notes: ['接上: asight on codex'] })
 
 row({ n: 18, title: 'proxy mode: the OS proxy changed its port: the kernel was reloaded, the agent\'s own setting did not change', h: 'codex',
   facts: pfacts('codex', codexForm({ systemProxy: sysProxy(7898), follows: { http: true, ws: false } }), fwForm(17992, { upstream: 'http://127.0.0.1:7898', source: 'system-proxy' }), viaSystemProxy(7898)),

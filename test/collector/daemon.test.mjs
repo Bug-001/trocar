@@ -31,6 +31,8 @@ import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { writeNetenv } from '../../src/netenv/index.mjs'
 import { settingSha } from '../../src/netenv/redact.mjs'
+import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
+import { recordEntryFindings } from '../../src/collector/arch/win32/optin.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
@@ -195,6 +197,93 @@ test('daemon: the same program without the CA is only observed; its direct conne
   } finally { await d.stop(); p.done(); s.done() }
 })
 
+// A redirector whose directCount is a Promise (the Windows one reads the connection table through its helper): status awaits it. The daemon used to read `.count` off the Promise,
+// so every agent showed `direct: undefined` and "still going direct" was silently empty (4.6 §开关语义, D-17: unknown is said, never nothing).
+test('daemon: status awaits the redirector\'s directCount — an arch whose answer is a Promise still gives each agent its `direct` count, and a count it cannot tell stays null with its error', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const { arch } = fakeArch(p)
+  const calls = []
+  const asynchronous = { os: arch.os, createRedirector: (o) => { const r = arch.createRedirector(o); const real = r.directCount.bind(r); r.directCount = async (pid) => { calls.push(pid); return pid === 5252 ? { count: null, error: 'helper-down' } : real(pid) }; return r } }
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: asynchronous, harnesses: [cc], env: { ...process.env, HOME: s.home } })
+  try {
+    p.add(5151, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) })
+    p.add(5252, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) })
+    await req(s.sock, 'POST', '/on', {})
+    const agents = (await req(s.sock, 'GET', '/status')).agents
+    const by = Object.fromEntries(agents.map((a) => [a.pid, a]))
+    assert.deepEqual([by[5151].direct, by[5151].direct_error ?? null], [0, null], 'the count the Promise resolved to, not undefined')
+    assert.deepEqual([by[5252].direct, by[5252].direct_error], [null, 'helper-down'], 'a count nobody could read is null with the reason')
+    assert.ok(calls.includes(5151) && calls.includes(5252))
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+// 4.8 §3.3 「引擎(重)启动之后」: the daemon asks the kernel's own controller to health-test every on-form's fallback group NOW (a group that had
+// fallen back stays on its re-entry point until the next interval otherwise), once per (re)start, and records the answer as one `probes-refreshed`
+// state event (§12) — never stderr, never silence (D38) — and never stops the daemon over it. The Windows wiring owns the asking; a platform whose
+// redirector has no `win32` bag (Linux: no kernel of its own) has nothing to do here.
+test('daemon: after the engine comes up the win32 probe refresh runs once and its answer is one probes-refreshed record; a throw is a failure record and the daemon still starts; a platform without the hook writes none', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const { arch } = fakeArch(p)
+  const calls = []
+  const withWin32 = (answer, onCall) => ({ os: arch.os, createRedirector: (o) => { const r = arch.createRedirector(o); r.win32 = { refreshProbes: async () => { calls.push(1); if (onCall) onCall(); return answer } }; return r } })
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: withWin32({ ok: true, asked: [{ f: 'codex.app', ok: true, status: 200 }, { f: 'codex.app', ok: false, status: 0 }] }), harnesses: [cc], env: { ...process.env, HOME: s.home } })
+  try {
+    await req(s.sock, 'GET', '/status') // wired and answering
+    assert.equal(calls.length, 1, 'once per (re)start, not per request')
+    const probes = flowsOf(s).filter((l) => l.event === 'probes-refreshed')
+    assert.equal(probes.length, 1)
+    assert.equal(probes[0].where, 'forwarder')
+    assert.deepEqual(probes[0].forms, [{ f: 'codex.app', ok: true, status: 200 }, { f: 'codex.app', ok: false, status: 0 }], 'the answer, the failed probes included')
+    assert.match(probes[0].reason, /health-test every on-form's fallback group now/)
+  } finally { await d.stop(); p.done(); s.done() }
+
+  const s2 = sandbox(); const p2 = fakeProc()
+  await install(s2)
+  const plain2 = fakeArch(p2)
+  const boom = { os: 'linux', createRedirector: (o) => { const r = plain2.arch.createRedirector(o); r.win32 = { refreshProbes: async () => { throw new Error('the controller endpoint is gone') } }; return r } }
+  const d2 = await startDaemon({ dir: s2.collector, socketPath: s2.sock, arch: boom, harnesses: [cc], env: { ...process.env, HOME: s2.home } })
+  try {
+    await req(s2.sock, 'GET', '/status')
+    const failures = flowsOf(s2).filter((l) => l.event === 'failure' && l.code === 'engine-error' && /controller endpoint is gone/.test(l.reason || ''))
+    assert.equal(failures.length, 1, 'a throw is one engine failure record, and the daemon still started (the status above answered)')
+    assert.equal(failures[0].where, 'engine')
+  } finally { await d2.stop(); p2.done(); s2.done() }
+
+  const s3 = sandbox(); const p3 = fakeProc()
+  await install(s3)
+  const d3 = await startDaemon({ dir: s3.collector, socketPath: s3.sock, arch: fakeArch(p3).arch, harnesses: [cc], env: { ...process.env, HOME: s3.home } })
+  try {
+    await req(s3.sock, 'GET', '/status')
+    assert.equal(flowsOf(s3).filter((l) => l.event === 'probes-refreshed').length, 0, 'a redirector without the hook (Linux) writes none')
+  } finally { await d3.stop(); p3.done(); s3.done() }
+})
+
+// 4.8 §3.5 (W69): the daemon's /status reply carries the host sets the plan last applied per host-tree form (`applied_hosts`, the wiring's win32 bag),
+// which is where `status`'s facts reach them to compare with a fresh read and say when the kernel's set is old. A platform whose redirector has no
+// `win32` bag (Linux) simply says nothing there — no key, never a vacuous one.
+test('daemon: /status relays the win32 bag\'s applied host sets; a redirector without the bag carries no applied_hosts key', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const { arch } = fakeArch(p)
+  const APPLIED = { 'kimi-code.vscode': { hosts: ['api.moonshot.cn', 'relay.corp.example'], settings: 'read', dropped: [] } }
+  const withBag = { os: arch.os, createRedirector: (o) => { const r = arch.createRedirector(o); r.win32 = { appliedHosts: () => APPLIED }; return r } }
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: withBag, harnesses: [cc], env: { ...process.env, HOME: s.home } })
+  try {
+    const st = await req(s.sock, 'GET', '/status')
+    assert.deepEqual(st.applied_hosts, APPLIED, 'the applied sets, as the wiring keeps them')
+  } finally { await d.stop(); p.done(); s.done() }
+  const s2 = sandbox(); const p2 = fakeProc()
+  await install(s2)
+  const plain = fakeArch(p2)
+  const d2 = await startDaemon({ dir: s2.collector, socketPath: s2.sock, arch: plain.arch, harnesses: [cc], env: { ...process.env, HOME: s2.home } })
+  try {
+    const st = await req(s2.sock, 'GET', '/status')
+    assert.equal('applied_hosts' in st, false, 'no bag, no key: a Linux reply is exactly what it was')
+  } finally { await d2.stop(); p2.done(); s2.done() }
+})
+
 // Review B-4(a) (4.6 子进程与嵌套 agent): "嵌套关系记在 flows/ 的 parent_pid / parent_agent 里" — the engine's rows and the
 // metadata row of a connection that went direct carry them, and status lists them with the agent.
 test('daemon: an agent started by another agent is recorded with parent_pid and parent_agent in flows/ and status (B-4a)', async () => {
@@ -266,6 +355,34 @@ test('daemon: a process whose exe cannot be read is a failure only if its comman
     st = await req(s.sock, 'GET', '/status')
     assert.equal(st.unjudged.count, 2, 'the candidate is the failure, not part of the count')
     assert.equal(statusFailures(st).filter((x) => x.code === 'exe-unreadable').length, 1)
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+test('W25 the win32 daemon refuses an elevated or SYSTEM token before it claims its endpoint: one {start, elevated-token} record, no socket, no control.json; a token that cannot be read is not a refusal (4.8 §7, R7/R11)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const asked = []
+  const endpoints = []
+  const winish = (answer) => ({ ...fakeArch(p).arch, refuseElevated: async (o) => { asked.push(o); return answer }, controlEndpoint: ({ dir }) => { endpoints.push(dir); return { path: s.sock, token: 't'.repeat(64) } } })
+  const winish2 = (note, answer) => ({ ...winish(answer), refuseElevated: async (o) => { asked.push(o); note(o); return answer } })
+  // the elevated token: refused, the record is startDaemon's own catch, and neither the endpoint nor its control.json was touched
+  await assert.rejects(startDaemon({ dir: s.collector, arch: winish({ code: 'elevated-token', reason: '用你自己的账号跑,不要「以管理员身份运行」(R7)', token: { elevated: true, system: false, integrity: 'high' } }), harnesses: [cc] }), /R7/)
+  const w25 = flowsOf(s).filter((l) => l.event === 'failure' && l.where === 'start')
+  assert.deepEqual(w25.map((x) => x.code), ['elevated-token'], 'one record of the refusal, where the pin says')
+  assert.deepEqual(w25.map((x) => checkRecord(x)), [[]], 'a record the closed set takes')
+  assert.equal(fs.existsSync(s.sock), false, 'no endpoint was claimed')
+  assert.deepEqual(endpoints, [], 'the arch\'s controlEndpoint was never asked')
+  assert.equal(fs.existsSync(path.join(s.collector, 'control.json')), false, 'no control.json was written')
+  // a token that cannot be read is not a refusal: the daemon goes on (R11), the unknown said through its log — and its endpoint is the arch's, with the token
+  const unknown = []
+  const d = await startDaemon({ dir: s.collector, arch: winish2((o) => { if (o.onUnknown) o.onUnknown('the token could not be read: the helper did not answer') }, null), harnesses: [cc], log: (w, e) => unknown.push([w, String(e)]) })
+  try {
+    assert.equal(asked.length, 2, 'the check ran again')
+    assert.ok(unknown.some(([, m]) => /could not be read/.test(m)), 'the unreadable answer was said, not silent (R11)')
+    assert.deepEqual(endpoints, [s.collector], 'the daemon asked the arch for its endpoint (the collector dir, 4.8 §7)')
+    await assert.rejects(controlRequest({ socketPath: s.sock, method: 'GET', path: '/status' }), (e) => e.status === 401, 'a request without the token is refused at the door')
+    const tok = await controlRequest({ socketPath: s.sock, method: 'GET', path: '/status', token: 't'.repeat(64) })
+    assert.equal(typeof tok.actual, 'string', 'one with it passes (the status answer itself)')
   } finally { await d.stop(); p.done(); s.done() }
 })
 
@@ -834,7 +951,7 @@ test('daemon: agent-trusted, agent-exit (also found by a rescan) and negative-ca
     const exit = await until(() => flowsOf(s).find((f) => f.event === 'agent-exit' && f.pid === 6262))
     assert.deepEqual([exit.agent, exit.via], ['claude-code', 'exit'])
     assert.deepEqual(forgot, [6262], 'the engine forgets the exited pid (a reused pid inherits nothing)')
-    assert.deepEqual(flowsOf(s).filter((f) => f.event === 'negative-cache-cleared').map((f) => [f.pid, f.dropped]), [[6262, 2]])
+    assert.deepEqual(flowsOf(s).filter((f) => f.event === 'negative-cache-cleared').map((f) => [f.pid, f.dropped, f.neg_key]), [[6262, 2, '6262']], 'the clearing says which key it cleared (4.8 §5.5)')
     fs.rmSync(path.join(p.root, '6262'), { recursive: true })
     p.add(6363, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.root, env: { HOME: s.home }, startTicks: nowTicks(p) })
     await req(s.sock, 'POST', '/off'); await req(s.sock, 'POST', '/on', {}) // the rescan behind `on` picks it up
@@ -1498,5 +1615,63 @@ test('daemon: the 5 s check takes a proxy-mode record\'s own semantics — the f
     const lines = flowsOf(s).filter((f) => f.where === 'netenv' || f.event === 'netenv-change')
     assert.deepEqual(lines.map((f) => [f.event, f.where, f.code, f.harness, f.captured]), [['netenv-change', 'netenv', 'proxy-changed', 'claude-code', false], ['failure', 'netenv', 'proxy-changed', 'claude-code', undefined]])
     assert.deepEqual(fs.readFileSync(file), bytes)
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+// 4.8 §2.4「入口还有没有效」+ W68, the daemon's half: the 5 s check runs the same arch hook status folds into its rows. The check itself has
+// its own cells over the real Windows world (optin-check.test.mjs); what is pinned here is the WIRING — the manifest read as the disk has it
+// on every tick (an entry added after the start is seen: the copy read at start is not the truth), the process table of this collector's own
+// scan (a parent row included), the real record (once per occurrence, only §9.7's netenv failure codes — entry-changed is no event), and a
+// manifest without opt-in entries paying for none of it (no check, no scan).
+test('daemon: the 5 s check re-verifies the opt-in entries (W68) — the fresh manifest and the scan\'s own table into the arch hook\'s check, one netenv failure per finding, entry-changed no event, and no check at all without opt-in entries', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  p.add(600, { uid: UID, ppid: 599, exe: '/opt/tools/launcher.exe', argv: ['/opt/tools/launcher.exe'] }) // not an agent: the table's rows are the check's to match, not the tracker's
+  const { arch: base } = fakeArch(p)
+  const asked = []
+  let scans = 0
+  let answer = []
+  const arch = {
+    os: base.os,
+    createRedirector: (o) => { const r = base.createRedirector(o); const real = r.scan.bind(r); r.scan = async (...a) => { scans++; return real(...a) }; return r },
+    optIn: { check: (q) => { asked.push(q); return answer }, record: recordEntryFindings },
+  }
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home }, checkMs: 20 })
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    await new Promise((r) => setTimeout(r, 150))
+    assert.equal(asked.length, 0, 'the install manifest holds no opt-in entry: the check does not run')
+    const scansBefore = scans
+    // what `on --opt-in` leaves behind: the manifest on disk gains the entry while this daemon runs — the copy read at start never knew it
+    const m = readManifest(s.collector)
+    m.entries.push({ kind: 'optin-user-path', harness: 'claude-code', form: 'claude-code.cli', item: 'user-path-shim', scope: 'user', confirmed: true, values: { command: 'claude', binDir: 'C:\\b', realBinary: 'C:\\r.exe' } })
+    saveManifest(s.collector, m)
+    answer = [
+      { form: 'claude-code.cli', item: 'user-path-shim', harness: 'claude-code', code: 'shim-not-on-path', detail: 'claude resolves first to C:\\npm\\claude.cmd — the machine PATH\'s C:\\npm' },
+      { form: 'claude-code.cli', item: 'user-path-shim', harness: 'claude-code', code: 'entry-changed', detail: 'the real binary the dispatcher falls back to (C:\\r.exe) is gone' },
+      { form: 'claude-code.cli', item: 'user-path-shim', harness: 'claude-code', code: 'not-via-entry', detail: '1 running claude-code process(es) were not started through the entry' },
+    ]
+    await until(() => asked.length > 0)
+    assert.equal(asked[0].manifest.entries.filter((e) => e.kind === 'optin-user-path').length, 1, 'the manifest as the disk has it NOW, not the copy read at start')
+    assert.deepEqual(asked[0].harnesses, [cc], 'the same harness list the plan is asked of')
+    assert.ok(asked[0].procs.some((x) => x.pid === 600 && x.ppid === 599), 'the process table of this collector\'s own scan, a parent row included')
+    assert.ok(scans > scansBefore, 'the scan is paid for only now that there is an entry in effect')
+    await until(() => flowsOf(s).some((f) => f.event === 'failure' && f.where === 'netenv'))
+    await new Promise((r) => setTimeout(r, 200)) // more checks than one
+    const netFailures = () => flowsOf(s).filter((f) => f.event === 'failure' && f.where === 'netenv')
+    assert.deepEqual(netFailures().map((f) => [f.code, f.harness, f.form, f.item]), [['shim-not-on-path', 'claude-code', 'claude-code.cli', 'user-path-shim'], ['not-via-entry', 'claude-code', 'claude-code.cli', 'user-path-shim']], 'one line per coded finding however many checks ran; entry-changed is no event')
+    assert.ok(asked.length > 3, `the check ran on many ticks (${asked.length})`)
+    // the same finding moved fires once more; the unchanged one stays at one line (recordEntryFindings' own rule, through the daemon's state)
+    answer = [{ ...answer[0], detail: 'claude resolves first to D:\\tools\\claude.cmd — the machine PATH\'s D:\\tools' }]
+    await until(() => netFailures().length === 3)
+    await new Promise((r) => setTimeout(r, 120))
+    assert.equal(netFailures().length, 3, 'a changed finding fires once more, the unchanged ones stay at their one line')
+    // the entry undone on disk (what `off` leaves behind): nothing in effect any more, so no check and no scan
+    const m2 = readManifest(s.collector)
+    m2.entries = m2.entries.filter((e) => e.kind !== 'optin-user-path')
+    saveManifest(s.collector, m2)
+    const askedAt = asked.length; const scansAt = scans
+    await new Promise((r) => setTimeout(r, 200))
+    assert.deepEqual([asked.length, scans], [askedAt, scansAt], 'no opt-in entry in effect any more: neither the check nor the scan runs')
   } finally { await d.stop(); p.done(); s.done() }
 })

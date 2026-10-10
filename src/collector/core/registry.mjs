@@ -1,7 +1,10 @@
-// registry.mjs — match a running process against harness descriptors (RFC 4.6 §身份与信任, D31②, D37).
+// registry.mjs — match a running process against harness descriptors (RFC 4.6 §身份与信任, D31②, D37; 4.8 §5.4 for osMatch).
 // It knows no harness and no OS. Each descriptor in src/collector/harness/ carries its process
 // signatures as DATA keyed by OS (`signatures.linux` today, `signatures.darwin` later); the OS-neutral
-// facts object built by arch/<os>/procinfo says which key applies (`facts.os`). A process is judged on
+// facts object built by arch/<os>/procinfo says which key applies (`facts.os`). An OS whose facts are not
+// the Linux /proc set (Windows: the image path and a command line that arrives late) does not copy its
+// patterns into `signatures.<os>`: the daemon hands the matcher in `osMatch` (createRegistry's second
+// argument), the same `matchForm` the redirector routes by. A process is judged on
 // its own facts at exec time, never by its parent (§子进程与嵌套 agent). Unknown or ambiguous means no
 // agent: an unrecognised process is never folded into a known identity (0.1 §5, D25).
 //
@@ -67,7 +70,7 @@ export function livenessOf(d, osName) {
   }
 }
 
-export function createRegistry(descriptors) {
+export function createRegistry(descriptors, { osMatch = null } = {}) {
   const byName = new Map()
   for (const d of descriptors) {
     validateDescriptor(d)
@@ -75,7 +78,23 @@ export function createRegistry(descriptors) {
     byName.set(d.name, d)
   }
 
+  // `osMatch[os]` (facts) → the harness name or null: how an OS whose process facts are not the Linux /proc set is
+  // matched. The daemon hands the same function the redirector routes by (Windows: `matchForm` over the harness files'
+  // form data, 4.8 §5.4 「谁产生判定」), so the tracker and the redirector share ONE rule for which form a process is —
+  // no copy of the patterns as `signatures.win32`. The function names a registered harness or null (a form whose
+  // command line is not known yet is null: the tracker re-judges on `facts-update`); a name that is no registered
+  // harness throws rather than passing as "no agent" (the wiring is ours, a wrong name is a bug to hear about, D38).
+  const matcherOf = (facts) => (osMatch && typeof osMatch[facts.os] === 'function' ? osMatch[facts.os] : null)
+
   function match(facts) {
+    const byFn = matcherOf(facts)
+    if (byFn) {
+      const agent = byFn(facts)
+      if (agent == null) return { agent: null, descriptor: null, reason: 'no-match' }
+      const d = byName.get(agent)
+      if (!d) throw new Error(`the ${facts.os} matcher named ${JSON.stringify(agent)}, which is no registered harness; nothing was judged`)
+      return { agent, descriptor: d, reason: 'match' }
+    }
     const candidates = []
     let excluded = false
     for (const d of byName.values()) {

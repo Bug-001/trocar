@@ -34,12 +34,18 @@ test('json-text: duplicate keys follow JSON.parse (last wins); escapes in string
   assert.equal(JSON.parse(r.text).env.CA_FILE, '/c')
 })
 
-test('json-text: refuses non-JSON, a non-object document, a non-object parent and a non-string value', () => {
+test('json-text: refuses non-JSON, a non-object document, a non-object parent and a non-writable value; a scalar the key already held is replaced (4.8 s2.4 spells booleans without quotes)', () => {
   assert.throws(() => setKey('{ nope', K, '/v'), /not valid JSON/)
   assert.throws(() => setKey('{"a":1} x', K, '/v'), /not valid JSON/)
   assert.throws(() => setKey('[1]', K, '/v'), /not a JSON object/)
   assert.throws(() => setKey('{"env":"x"}', K, '/v'), /env is not an object/)
-  assert.throws(() => setKey('{"env":{"CA_FILE":3}}', K, '/v'), /not a string/)
+  assert.throws(() => setKey('{"env":{"CA_FILE":{"deep":1}}}', K, '/v'), /not a value asight can replace/)
+  assert.throws(() => setKey('{"env":{}}', K, 3), /must be a string, a boolean or null/)
+  const num = setKey('{"env":{"CA_FILE":3}}', K, '/v')
+  assert.deepEqual([num.prior, JSON.parse(num.text).env.CA_FILE], [3, '/v'], 'a number the key held is replaced, and the prior comes back as the number it was')
+  const bool = setKey('{"http": {"systemCertificates": true}}', ['http', 'systemCertificates'], false)
+  assert.equal(bool.text, '{"http": {"systemCertificates": false}}', 'a boolean is spelled without quotes, a minimal splice')
+  assert.equal(bool.prior, true)
 })
 
 test('json-text: removeKey drops the member and one comma; first, middle, last and only member', () => {

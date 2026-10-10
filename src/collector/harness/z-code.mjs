@@ -19,7 +19,7 @@
 import path from 'node:path'
 import { parseJsonc, hostOf } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
-import { urlHostsDeep, dotenvLayer } from './_common.mjs'
+import { urlHostsDeep, dotenvLayer, isOwnPath } from './_common.mjs'
 
 const ZEXE = /(^|\/)zcode( \(deleted\))?$/
 const NODE = /(^|\/)node( \(deleted\))?$/
@@ -108,7 +108,7 @@ function inject(ctx) {
   const cfg = path.join(zdir, 'cli', 'config.json')
   const bundle = path.join(ctx.collectorDir, 'ca', 'combined-z-code.pem')
   const seen = new Set()
-  const see = (v) => { if (typeof v === 'string' && v.trim() !== '' && !v.startsWith(ctx.collectorDir + path.sep)) seen.add(v.trim()) }
+  const see = (v) => { if (typeof v === 'string' && v.trim() !== '' && !isOwnPath(ctx, v.trim())) seen.add(v.trim()) }
   see(((jsonAt(ctx, cfg) || {}).network || {}).caCertFile)
   const deskFile = desktopSettings(ctx.env, ctx.home)
   const desk = (jsonAt(ctx, deskFile) || {}).httpProxyCaCertPath

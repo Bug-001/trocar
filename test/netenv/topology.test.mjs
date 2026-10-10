@@ -102,9 +102,9 @@ test('every value of the NetFacts the builder reads can be null / unknown withou
   void harness; void none
 })
 
-test('rows with a note: what the chain cannot say by itself (the agents still on the kernel after `off`, the entry to ask for, the filters nobody can see) is a note of the topology, rendered under 「说明」', () => {
+test('rows with a note: what the chain cannot say by itself (the agents still on the kernel after `off`, the entry to ask for, the command that re-adopts a drifted field, the filters nobody can see) is a note of the topology, rendered under 「说明」', () => {
   const noted = ROWS.filter((r) => r.notes)
-  assert.deepEqual(noted.map((r) => r.n), [14, 15, 23])
+  assert.deepEqual(noted.map((r) => r.n), [14, 15, 17, 23])
   for (const r of noted) assert.deepEqual(buildTopology(r.facts)[r.h].notes, r.notes, `row ${r.n}`)
   for (const r of ROWS.filter((x) => !x.notes)) assert.deepEqual(buildTopology(r.facts)[r.h].notes, [], `row ${r.n} has nothing to add`)
 })

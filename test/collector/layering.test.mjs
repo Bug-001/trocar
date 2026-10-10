@@ -1,10 +1,13 @@
 // test/collector/layering.test.mjs — automatic guard for the collector's three-way split (RFC 4.6
-// §结构: a new OS touches only arch/<os>/, a new harness touches only harness/). Rules:
+// §结构: a new OS touches only arch/<os>/, a new harness touches only harness/) and the netenv half of
+// 4.8 W39. Rules:
 //   1. core/ never branches on process.platform (comments ignored)
 //   2. core/ never names a harness (comments ignored; word boundaries, so "handshake" is not "dsh")
 //   3. arch/ never imports harness/
 //   4. harness/ never imports arch/ or core/engine/
 //   5. core/ never imports arch/ or harness/; outside arch/ and harness/, only WIRING_ENTRY may import them
+//   6. src/netenv/ never imports arch/ or harness/ (W39: the netenv side knows neither; core's plain
+//      modules it may read — findings.mjs reads core/codes.mjs)
 // The checker runs on the real tree AND on a planted tree with one violation per rule, so every run
 // also proves the guard can still fail.
 import test from 'node:test'
@@ -79,12 +82,14 @@ function importsOf(code, file, root) {
 
 function areaOf(rel) {
   const m = /^src\/collector\/(core|arch|harness)\//.exec(rel)
-  return m ? m[1] : 'other'
+  if (m) return m[1]
+  return rel.startsWith('src/netenv/') ? 'netenv' : 'other'
 }
 
 function checkLayering(root) {
   const bad = []
-  for (const file of walk(path.join(root, 'src', 'collector')).filter((f) => /\.(m|c)?js$/.test(f))) {
+  const files = [...walk(path.join(root, 'src', 'collector')), ...walk(path.join(root, 'src', 'netenv'))].filter((f) => /\.(m|c)?js$/.test(f))
+  for (const file of files) {
     const rel = path.relative(root, file).split(path.sep).join('/')
     const area = areaOf(rel)
     const code = stripComments(fs.readFileSync(file, 'utf8'))
@@ -99,13 +104,16 @@ function checkLayering(root) {
       if (area === 'harness' && (t === 'arch' || target.startsWith('src/collector/core/engine/'))) bad.push(`rule4 ${rel} -> ${target}`)
       if (area === 'core' && (t === 'arch' || t === 'harness')) bad.push(`rule5 ${rel} -> ${target}`)
       if (area === 'other' && (t === 'arch' || t === 'harness') && rel !== WIRING_ENTRY) bad.push(`rule5 ${rel} -> ${target}`)
+      if (area === 'netenv' && (t === 'arch' || t === 'harness')) bad.push(`rule6 ${rel} -> ${target}`)
     }
   }
   return bad.sort()
 }
 
-test('collector layering: the real tree has no violations', () => {
+test('layering: the real tree has no violations, and the walk sees src/netenv (W39: not a tree the scan misses)', () => {
   assert.deepEqual(checkLayering(REPO), [])
+  const netenv = walk(path.join(REPO, 'src', 'netenv')).filter((f) => /\.(m|c)?js$/.test(f)).map((f) => path.relative(REPO, f))
+  assert.ok(netenv.length >= 10, `the netenv half is walked (${netenv.length} files)`)
 })
 
 test('collector layering: a planted tree trips every rule and ignores comments and "handshake"', () => {
@@ -120,6 +128,7 @@ test('collector layering: a planted tree trips every rule and ignores comments a
     put('src/collector/core/i.mjs', "export { default } from '../harness/h.mjs'\n")
     put('src/collector/other.mjs', "const m = await import('./arch/x/a.mjs')\nexport default m\n")
     put('src/collector/daemon.mjs', "import a from './arch/x/a.mjs'\nimport h from './harness/h.mjs'\nexport { a, h }\n")
+    put('src/netenv/x.mjs', "import a from '../collector/arch/x/a.mjs'\nexport default a\n")
     assert.deepEqual(checkLayering(root), [
       'rule1 src/collector/core/p.mjs',
       'rule2 src/collector/core/n.mjs (codex)',
@@ -128,6 +137,7 @@ test('collector layering: a planted tree trips every rule and ignores comments a
       'rule4 src/collector/harness/h.mjs -> src/collector/core/engine/engine.mjs',
       'rule5 src/collector/core/i.mjs -> src/collector/harness/h.mjs',
       'rule5 src/collector/other.mjs -> src/collector/arch/x/a.mjs',
+      'rule6 src/netenv/x.mjs -> src/collector/arch/x/a.mjs',
     ])
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })

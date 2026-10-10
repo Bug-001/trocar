@@ -17,6 +17,17 @@
 //       The ONLY method the engine calls. Given the accepted socket's remote {address, port}
 //       (the client source), return the flow's metadata, or null if the peer is unknown
 //       (the engine then closes the socket — it was redirected by mistake or raced).
+//   lookupIngress({peer, user, target}): Promise<IngressMeta|{health:true, group}|null>
+//       Optional; the Windows redirector's (RFC 4.8 §5.2). The proxy ingress (engine/ingress.mjs) calls it for a connection a proxy
+//       client handed over on purpose: `user` is the "<route>.<group>" the client authenticated as (the token has been checked
+//       already), `target` = {address, port, family?} what it asked to reach. Answers the flow's meta; or {health:true, group} when the
+//       target is the group's own re-entry point (the health probe: the ingress answers it without an upstream and records nothing);
+//       or null for an unknown user (the ingress refuses it as an auth failure). IngressMeta = FlowMeta (dst may be left out: the
+//       ingress fills it from the target) & { capture, form, upstream: {kind:'direct'|'http'|'socks5', host?, port?, auth?:{username,
+//       password}}, pid_source, pid_ms, negKey, exe?, skip? }. `skip` = {not_captured, reason} is for a connection that is not decrypted and whose pid the tracker holds no row for (no pid, or one that is not the form's own): the code
+//       the daemon's policy hands the engine for the row (4.8 §5.4). `upstream.auth` is the user's own proxy's credentials, used for this one
+//       connection's prelude and then dropped (the flow only learns whether there were some). A redirector without `lookup` gets no
+//       transparent listener (Windows has no transparent rewrite).
 //   attach(): Promise<void>        — load kernel programs / start the OS redirector (Plan 2).
 //   detach(): Promise<void>        — unload them; fail-open leaves agent traffic direct (Plan 2).
 //   status(): Promise<object>      — expected vs actual kernel state (RFC 4.6 §开关语义) (Plan 2).
@@ -30,10 +41,12 @@
 // What the daemon (src/collector/daemon.mjs, Plan 3a) also needs from an arch adapter — the Linux one is
 // arch/linux/redirector.mjs; a later OS implements the same names:
 //   start() / close()              — spawn / stop the OS helper; close() leaves agent traffic direct.
-//   configure(enginePort)          — the port the kernel steers decrypt-verdict connections to.
+//   configure(enginePort)          — the port the kernel steers decrypt-verdict connections to (Windows: nothing to do, the kernel's config
+//                                    carries the engine's port from ingress.json; the call is accepted and ignored).
 //   scan(): Promise<ProcFacts[]>   — this user's live processes (startup and every `on`).
-//   directCount(pid): {count, error} — the process's connections still going direct (status only); count null +
-//                                    the errno when it cannot be told (never 0, D-17).
+//   directCount(pid): {count, error} | Promise<{count, error}> — the process's connections still going direct (status only); count null +
+//                                    the errno when it cannot be told (never 0, D-17). Linux answers at once; Windows reads its connection
+//                                    table through the helper, so it is a Promise there: the caller `await`s it either way.
 //   'facts-error' {os, pid, code, comm, argv, reason} — a process of this user whose exe could not be read, so never judged
 //                                    (D-30); comm and argv are what is still readable, for "could this be an agent".
 //   unreadable(): [{pid, comm, errno, argv}] — those of this user still there since the last scan (not the helper's own).
@@ -47,7 +60,8 @@
 //
 // createStaticRedirector is the test/dev implementation: no kernel, metadata set by hand and
 // keyed by the client source port (the Linux redirector keys by source port too — sockops writes
-// the by_port entry before accept() returns).
+// the by_port entry before accept() returns). Its setIngress(user, meta | fn) / lookupIngress is the ingress's side: by the
+// "<route>.<group>" user, or a function ({peer, user, target}) → meta | {health:true, group} | null.
 
 /**
  * @typedef {Object} FlowMeta
@@ -66,14 +80,23 @@
  * port to appear before giving up; a configured defaultMeta is returned immediately (no wait).
  *
  * @param {FlowMeta|null} [defaultMeta] fallback returned when a peer's port has no override.
- * @returns {{ lookup: (peer: {address: string, port: number}) => Promise<FlowMeta|null>, set: (port: number, meta: FlowMeta) => void, lookups: number }}
+ * @returns {{ lookup: (peer: {address: string, port: number}) => Promise<FlowMeta|null>, set: (port: number, meta: FlowMeta) => void, lookups: number,
+ *   lookupIngress: (q: {peer, user: string, target}) => Promise<object|null>, setIngress: (user: string, meta: object|Function) => void, ingressLookups: number }}
  */
 export function createStaticRedirector(defaultMeta = null, { waitMs = 200, pollMs = 5 } = {}) {
   const byPort = new Map()
+  const byUser = new Map()
   const r = {
     lookups: 0,
+    ingressLookups: 0,
     setBeatGate() {}, // no kernel, no beats
     set(port, meta) { byPort.set(port, meta) },
+    setIngress(user, meta) { byUser.set(user, meta) },
+    async lookupIngress(q) {
+      r.ingressLookups++
+      const m = byUser.get(q.user)
+      return typeof m === 'function' ? m(q) : m ?? null
+    },
     async lookup({ port }) {
       r.lookups++
       if (byPort.has(port)) return byPort.get(port)

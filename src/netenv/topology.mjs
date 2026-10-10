@@ -16,7 +16,7 @@ export { renderCompact, renderDetail, renderPathBlock, verdictText, firstHopAfte
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', 'localhost'])
 const VIA = { http: 'proxy-http', https: 'proxy-https', socks4: 'proxy-socks', socks5: 'proxy-socks', socks5h: 'proxy-socks' }
-const PRODUCT_NAME = { 'clash-verge': 'Clash Verge Rev', mihomo: 'mihomo' }
+const PRODUCT_NAME = { 'clash-verge': 'Clash Verge Rev', mihomo: 'mihomo', 'clash-verge-rev': 'Clash Verge Rev', 'clash-party': 'Clash Party', flclash: 'FlClash', 'gui-for-singbox': 'GUI.for.SingBox', v2rayn: 'v2rayN' }
 export const productName = (p) => PRODUCT_NAME[p] || p
 const ID_PREFIX = { agent: 'a', 'asight-engine': 'e', 'asight-forwarder': 'f', 'legacy-mitm': 'm', proxy: 'p', upstream: 'u', egress: 'x', unknown: 'q' }
 const drop = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== null))
@@ -73,7 +73,7 @@ const sourceKey = (s) => (s.kind === 'env' ? `env:${s.where}` : s.kind === 'file
  * → { ids: [node ids in order], first: { via, evidence } } — the edge into `ids[0]` is the caller's, since it comes from the agent or from asight. The edges between the hops are made here.
  */
 function tail(g, F, hf, setting, follow) {
-  if (setting.unknown) return { ids: [g.node({ kind: 'unknown', name: '代理设置', unknown: setting.unknown })], first: { via: 'unknown', evidence: [] } }
+  if (setting.unknown) return { ids: [g.node({ kind: 'unknown', name: '代理设置', unknown: setting.unknown, ...(setting.inferred === true ? { inferred: true } : {}) })], first: { via: 'unknown', evidence: [] } }
   const ignored = setting.value && hf.behaviour && hf.behaviour.unsupported && hf.behaviour.unsupported[setting.scheme] === 'silent-direct' // the agent does not fail on a scheme it cannot speak: it goes straight out
   if (setting.value && !ignored) {
     const p = proxyNode(g, F, setting.host, setting.port), x = g.edge(p, egressOf(g, p), 'egress')
@@ -119,7 +119,7 @@ function judged(F, h, hf) {
   return { captured: j.captured, reason: (j.rows.find((r) => r.reason) || {}).reason ?? null, rows: j.rows }
 }
 
-const agentOf = (g, h, p) => g.node({ kind: 'agent', name: p ? p.name : h, pid: p ? p.pid : undefined, version: p ? p.version : undefined, path: p ? p.exe : undefined, elevated: p && p.elevated === true ? true : undefined })
+const agentOf = (g, h, p) => g.node({ kind: 'agent', name: p ? p.name : h, pid: p ? p.pid : undefined, version: p ? p.version : undefined, path: p ? p.exe : undefined, elevated: p && p.elevated === true ? true : undefined, ...(p && p.elevated === true && p.elevatedInferred === true ? { elevatedInferred: true } : {}) })
 
 /** The branches a harness has: HTTP and WebSocket apart when it reads the OS proxy for one and not the other and there is an OS proxy to read (the path of each differs), else one. */
 function branchNames(hf) {
@@ -168,7 +168,8 @@ const vpnOf = (F) => (F.vpn ? drop({ product: F.vpn.product, version: F.vpn.vers
 
 // ── proxy mode (D43; 4.8 §10): agent → [its proxy entry, written by asight] asight's own kernel → asight's engine → the upstream the agent would have had without asight ─────────────────────────────────────────────
 // A form is one way of running a harness (codex.cli, claude-code.vscode, …). Per form the facts say: `setting` (the proxy the agent would use without asight, as of now), `systemProxy`, the `entry` it was
-// wired through ({ where, asight, opt_in, intact }) or null when it is not, `optIn` (§1.7: { state, code, enable }), `procs`; and the kernel's own `forwarder.forms[id]` ({ port, state: 'on' | 'forward-only',
+// wired through ({ where, asight, opt_in, intact }) or null when it is not, `optIn` (§1.7: { state, code, enable }), `procs`, `route` (the group's own plan: why it was left unwired — `form-unsupported`
+// is a verdict of its own, 4.8 §2.2) and `entryPlace` (where the entry lives, filled in — the doctor's commands that name the place read it, 4.8 §10.4); and the kernel's own `forwarder.forms[id]` ({ port, state: 'on' | 'forward-only',
 // upstream, source, clients, upstream_error? }) and `routeLoop` on a form it refused to wire. The upstream is what the kernel and the engine dial: the agent's own proxy, else the OS proxy a form that follows it has, else the API host direct (4.8 §2.2).
 const NOT_ROUTED = { needed: 'opt-in-needed', 'pending-admin': 'not-routed', 'needs-admin': 'not-routed' } // an opt-in waiting for the user's administrator rights leaves the form not routed; `needs-admin` is the finding that says what to run
 
@@ -181,11 +182,18 @@ function formVerdict(F, h, hf, fm, fwf) {
     return none(false, false, fm.optIn.state === 'broken' ? fm.optIn.code : NOT_ROUTED[fm.optIn.state])
   }
   if (fm.routeLoop === true) return none(false, false, 'route-loop') // the platform refused to wire a form whose upstream would be asight itself (4.8 §2.2)
-  if (!fm.entry) return none(false, false, 'not-routed')
+  // before the entry checks, like judgeHarness's own order: after a real `off` the entry record is gone from the manifest and the file holds the user's own value again, so the entry checks would
+  // answer not-routed and the drain window would never be drawn (4.8 §10.2 row k / 1.6 §9.3 row 14) — what says the agent is still on the kernel is its live connection to the group's port.
+  if (F.desired[h] === 'off') return none(!!(fwf && fwf.clients && fwf.clients.length), false, 'desired-off')
+  // the plan's own word for a group it left unwired — the entry that takes no login given a credentialed upstream (4.8 §2.2 · §6.4) — before the entry checks, like desired-off above: a named group
+  // the plan gated off still has its ledger records, and the entry edge they give it (`intact` unknown until checkEntries lands, Task 14) would mask the verdict the same way the entry checks used to
+  // mask the drain window — through the real facts path the form-unsupported verdict was unreachable and `doctor` could never emit its row.
+  if (fm.route && fm.route.reason === 'form-unsupported') return none(false, false, 'form-unsupported')
+  if (!fm.entry) return none(false, false, 'not-routed') // anything else the plan left unwired is not-routed, the why on the form's `route`
   if (fm.entry.intact === null) return none(null, null, null)
   if (fm.entry.intact === false) return none(false, false, 'proxy-changed')
-  if (F.desired[h] === 'off') return none(!!(fwf && fwf.clients && fwf.clients.length), false, 'desired-off')
   if (!F.forwarder || F.forwarder.up === false || !fwf) return none(true, false, 'forwarder-down')
+  if (fm.reason === 'form-path-unknown') return none(false, false, 'form-path-unknown') // the platform's plan saw a process whose image it knows and whose install path it has not measured (4.8 §2.2): the form is not claimed
   if (main) return none(true, false, 'elevated-agent')
   if (F.daemon.state === 'not-running' || F.daemon.state === 'not-responding') return none(true, false, `daemon-${F.daemon.state}`)
   if (fwf.upstream_error) return { on: true, captured: false, reason: 'upstream-unreachable', engine: true } // the engine could not dial the upstream (the platform's last 60 s of it)
@@ -208,11 +216,30 @@ function proxyTopology(F, h, hf) {
     const fwf = F.forwarder && F.forwarder.forms ? F.forwarder.forms[fm.id] : null
     const vd = formVerdict(F, h, hf, fm, fwf)
     const main = fm.procs.find((p) => p.elevated === true) || fm.procs[0] || null
-    const wired = !!(fm.entry && fm.entry.intact === true && (!fm.optIn || fm.optIn.state === 'done') && fwf && (F.desired[h] !== 'off' || (fwf.clients || []).length))
+    // what wires the kernel hop: the entry holding the kernel's address (the form is on), or — in the post-off drain window, where a real `off` has taken the record out of the manifest and the
+    // file is the user's own again — the agent's live connection to the group's port (row k). In the drain the edge names no entry: the file no longer points here; the agent holds the address it
+    // read at startup, and the note says what restart ends it.
+    const wired = !!(fwf && fm.reason !== 'form-path-unknown' && (!fm.optIn || fm.optIn.state === 'done')
+      && (F.desired[h] === 'off' ? (fwf.clients || []).length > 0 : fm.entry && fm.entry.intact === true))
     const hfSys = { ...hf, systemProxy: fm.systemProxy }
     const split = (hf.behaviour.branches || []).join() === 'http,ws' && fm.systemProxy
     if (vd.reason === 'desired-off' && fwf && (fwf.clients || []).length) notes.push(`还有 ${fwf.clients.length} 个 agent 连着 asight 的内核,重启它们之后 asight 就完全退出`)
     if (fm.optIn && fm.optIn.state === 'needed' && fm.optIn.enable) notes.push(`要采它: ${fm.optIn.enable}`)
+    if (fm.reason === 'form-path-unknown') notes.push(`这个安装方式的路径 asight 还不认识(${(fm.unknownPaths || []).join('; ') || 'path shape not read'});把它报给 asight`)
+    if (fm.hosts && wired) {
+      // the host-tree lines of 4.8 §3.5 (W69): the host program's other connections only forward, only the form's host set reaches the engine; the extension's own settings, when they
+      // cannot be read, leave the set at the defaults and extra_hosts (said, never silent); and a fresh read that differs from what the daemon reports as applied means the kernel's
+      // set is old — the line names the command that recomputes it, `status` itself changes nothing (read-only).
+      const program = fm.hosts.program || '宿主程序', extension = fm.hosts.extension || '这个形态'
+      notes.push(`${program} 别的连接经 asight 的内核(只转发),只有到 ${extension} 的 host 集的连接进引擎`)
+      if (fm.hosts.settings && fm.hosts.settings.unreadable) {
+        const u = fm.hosts.settings.unreadable
+        notes.push(`读不到 ${extension} 扩展的设置(${u.reason}${u.detail ? `:${u.detail}` : ''}):只采默认 host(${(fm.hosts.defaults || []).join('、')})与 extra_hosts;到你在那里配的中转站 host 的连接不采`)
+      }
+      if (Array.isArray(fm.hosts.applied) && [...fm.hosts.applied].sort().join('|') !== [...fm.hosts.hosts].sort().join('|')) {
+        notes.push(`内核里的 host 集是旧的(你 on 之后改过 ${extension} 的设置): 跑 asight on ${h} 重算集、重载内核;status 只读,不改任何东西`)
+      }
+    }
     for (const name of split ? ['http', 'ws'] : ['all']) {
       const a = agentOf(g, h, main), off = tail(g, F, hfSys, fm.setting, (fm.follows || hf.behaviour.follows)[name === 'ws' ? 'ws' : 'http'])
       let path = [a, ...off.ids]
@@ -220,7 +247,7 @@ function proxyTopology(F, h, hf) {
       if (wired) {
         const forwardOnly = F.desired[h] === 'off' || vd.reason === 'elevated-agent' || !vd.engine && vd.on
         const f = g.node({ kind: 'asight-forwarder', name: 'asight 自带内核', pid: F.forwarder.pid, addr: '127.0.0.1', port: fwf.port, asight: true, mode: vd.reason === 'forwarder-down' ? 'down' : forwardOnly ? 'forward-only' : 'on' })
-        g.edge(a, f, 'proxy-http', { asight: true, entry: { where: fm.entry.where, opt_in: fm.entry.opt_in === true } })
+        g.edge(a, f, 'proxy-http', { asight: true, ...(fm.entry ? { entry: { where: fm.entry.where, opt_in: fm.entry.opt_in === true } } : {}) })
         if (vd.reason === 'forwarder-down') path = [a, f]
         else {
           const up = upstreamTail(g, F, hfSys, fm, fwf)
@@ -234,6 +261,9 @@ function proxyTopology(F, h, hf) {
     }
   }
   if (!branches.length) throw new Error('the harness has no form to draw')
+  // the drift of a field asight owns (4.8 §10.3): the user changed the entry's key, asight is bypassed — the line names the one command that re-adopts it. Driver mode's proxy-changed is
+  // expected (the kernel steers whatever the setting says; 1.6 §9.6 gives it no command), so the note is this drawing's, said once per harness however many forms share the group.
+  if (branches.some((x) => x.reason === 'proxy-changed')) notes.push(`接上: asight on ${h}`)
   for (const u of F.unknowns.filter((x) => x.reason === 'kernel-filter-invisible')) notes.push(`WFP 一类的内核过滤器本用户看不见(${u.reason}),所以路上有没有这样的过滤器不知道`)
   const b = branches[0]
   return { harness: h, at: F.at, routing: F.routing, desired: F.desired[h] ?? null, on_path: b.on_path, captured: b.captured, reason: b.reason, vpn: vpnOf(F), nodes: g.nodes, edges: g.edges, branches, running: [], notes: [...new Set(notes)], findings: [] }

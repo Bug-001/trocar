@@ -4,6 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { applyOps, reverseOps } from '../../src/off/json-text.mjs'
 import { dotenvBlock, insertLine, removeAsightText, asightResidue, onlySkeleton, BLOCK_BEGIN, BLOCK_END, OFF_PREFIX, SENTINEL, lineComment } from '../../src/off/text-edit.mjs'
+import { parseDotenv } from '../../src/collector/core/config-read.mjs'
 
 const B = '/h/.asight/collector/ca/combined-x.pem'
 
@@ -129,9 +130,66 @@ test('text-edit: what counts as only asight\'s skeleton — blank for every form
   assert.equal(onlySkeleton('- set: {}\n', 'yaml-list'), false)
 })
 
+// ── CRLF files (a .env edited on Windows) and a value with a space (a profile directory like C:\Users\John Smith) ──
+test('text-edit: a CRLF file — the user\'s same-key lines are put out of effect and priors recorded, the block uses the file\'s line ending, and undo is byte for byte', () => {
+  const user = 'OPENAI_API_KEY=sk-secret\r\nexport SSL_CERT_FILE="C:/corp/ca.pem" # mine\r\nHTTPS_PROXY=http://corp:3128\r\n# a comment\r\n'
+  const r = dotenvBlock(user, { SSL_CERT_FILE: B, HTTPS_PROXY: 'http://g:tok@127.0.0.1:17991' })
+  assert.deepEqual(r.prior, { SSL_CERT_FILE: 'C:/corp/ca.pem', HTTPS_PROXY: 'http://corp:3128' }, 'the \\r at the end of a line does not hide the assignment')
+  assert.ok(r.text.includes(`\r\n${OFF_PREFIX}export SSL_CERT_FILE="C:/corp/ca.pem" # mine\r\n`) && r.text.includes(`\r\n${OFF_PREFIX}HTTPS_PROXY=http://corp:3128\r\n`), 'both user lines are behind the prefix, every byte kept')
+  assert.ok(r.text.startsWith(`${BLOCK_BEGIN}\r\nSSL_CERT_FILE=${B}\r\nHTTPS_PROXY=http://g:tok@127.0.0.1:17991\r\n${BLOCK_END}\r\n`), 'the block is CRLF like the file')
+  assert.ok(!/[^\r]\n/.test(r.text), 'no bare LF anywhere: an editor that keeps a file\'s line ending does not mix it')
+  assert.equal(reverseOps(r.text, r.ops), user, 'untouched → byte-identical undo')
+  assert.ok(r.ops.every((o) => o.removed === ''))
+  // a file of bare LF stays LF, a file with no line ending at all gets LF, a mixed file follows the line ending most of its lines have
+  assert.ok(!dotenvBlock('A=1\nB=2\n', { SSL_CERT_FILE: B }).text.includes('\r'))
+  assert.ok(!dotenvBlock('A=1', { SSL_CERT_FILE: B }).text.includes('\r'))
+  assert.ok(dotenvBlock('A=1\r\nB=2\r\nC=3\n', { SSL_CERT_FILE: B }).text.startsWith(`${BLOCK_BEGIN}\r\n`))
+  assert.ok(dotenvBlock('A=1\nB=2\r\nC=3\n', { SSL_CERT_FILE: B }).text.startsWith(`${BLOCK_BEGIN}\nSSL`))
+})
+
+test('text-edit: after the user edited the file, asight\'s block is found whichever line ending an editor left it with, and the user\'s line comes back', () => {
+  const user = 'K=1\r\nSSL_CERT_FILE=C:/corp/ca.pem\r\n'
+  const r = dotenvBlock(user, { SSL_CERT_FILE: B })
+  const edited = `# the user's note\r\n${r.text}NEW=2\r\n`
+  assert.deepEqual(removeAsightText(edited, r.ops), { text: `# the user's note\r\n${user}NEW=2\r\n`, found: true }, 'CRLF block, CRLF file')
+  assert.deepEqual(removeAsightText(edited.replace(/\r\n/g, '\n'), r.ops), { text: `# the user's note\nK=1\nSSL_CERT_FILE=C:/corp/ca.pem\nNEW=2\n`, found: true }, 'an editor that rewrote the whole file with LF: the block still goes, the rest is as the editor left it')
+  const lf = dotenvBlock('K=1\nSSL_CERT_FILE=/corp/ca.pem\n', { SSL_CERT_FILE: B })
+  assert.deepEqual(removeAsightText(lf.text.replace(/\n/g, '\r\n'), lf.ops), { text: 'K=1\r\nSSL_CERT_FILE=/corp/ca.pem\r\n', found: true }, 'an LF block in a file an editor made CRLF')
+})
+
+test('text-edit: a value with a space is written double-quoted only when the entry asks for it (Windows profiles); a value that needs no quote stays unquoted; what a quoted value cannot hold is still refused', () => {
+  const W = 'C:/Users/John Smith/.asight/collector/ca/combined-x.pem'
+  assert.throws(() => dotenvBlock('', { SSL_CERT_FILE: W }), /unquoted absolute paths only/, 'the default is the unquoted-only rule, as on Linux')
+  const r = dotenvBlock('K=1\n', { SSL_CERT_FILE: W, HTTPS_PROXY: 'http://g:t@127.0.0.1:1' }, { quote: true })
+  assert.ok(r.text.startsWith(`${BLOCK_BEGIN}\nSSL_CERT_FILE="${W}"\nHTTPS_PROXY=http://g:t@127.0.0.1:1\n${BLOCK_END}\nK=1\n`), 'only the value that has a space is quoted')
+  assert.equal(reverseOps(r.text, r.ops), 'K=1\n')
+  assert.equal(parseDotenv(r.text).get('SSL_CERT_FILE'), W, 'the reader gets the path back without the quotes')
+  assert.equal(dotenvBlock('', { SSL_CERT_FILE: B }, { quote: true }).text, `${BLOCK_BEGIN}\nSSL_CERT_FILE=${B}\n${BLOCK_END}\n`, 'nothing to quote: byte for byte the unquoted block')
+  for (const bad of ['C:/a "b"/c.pem', 'C:/a b/$HOME.pem', 'C:/a b/`x`.pem', 'C:\\a b\\c.pem', 'C:/a b/c.pem\nX=1', 'C:/a b/c.pem\r']) assert.throws(() => dotenvBlock('', { SSL_CERT_FILE: bad }, { quote: true }), /cannot be written|unquoted absolute paths only/, JSON.stringify(bad))
+  assert.equal(dotenvBlock('', { SSL_CERT_FILE: "C:/Users/O'Brien (x86)/ca.pem" }, { quote: true }).text.split('\n')[1], `SSL_CERT_FILE="C:/Users/O'Brien (x86)/ca.pem"`, 'a single quote and brackets are fine inside double quotes')
+})
+
 // D39③ / task 3: the text asight put into users' files before this build must stay recognisable (the sentinel is how an install the
 // manifest has lost, or a standalone asight-off, finds its own block and line — 1.6 R3). Pinned as literals: a test that imports the
 // constants would follow a changed constant and stay green.
+// Windows (4.8 §2.3): a profile directory with a space makes the block's value a double-quoted one (`quote: true`). The removal that reads every assignment of asight's path
+// (D39 R3) must read that line back to the plain path: a copy the user pasted, with `export` or single quotes, goes too, and the user's own same-key line stays.
+test('text-edit: a block written double-quoted (a profile with a space) is removed with every copy of its path, in whichever form, and the user\'s own value of the key is not touched', () => {
+  const W = 'C:/Users/John Smith/.asight/collector/ca/combined-x.pem'
+  const user = 'KEY=sk-secret\r\nSSL_CERT_FILE=C:/corp/ca.pem\r\n'
+  const r = dotenvBlock(user, { SSL_CERT_FILE: W }, { quote: true })
+  assert.ok(r.text.includes(`SSL_CERT_FILE="${W}"`), 'the block holds the quoted form')
+  const alone = removeAsightText(r.text, r.ops)
+  assert.deepEqual(alone, { text: user, found: true }, 'untouched: back to the user\'s bytes')
+  const copies = `${r.text}export SSL_CERT_FILE='${W}'\r\nSSL_CERT_FILE = "${W}" # pasted\r\nSSL_CERT_FILE="${W}.mine"\r\n`
+  const out = removeAsightText(copies, r.ops)
+  assert.equal(out.found, true)
+  assert.ok(!out.text.includes(`"${W}"`) && !out.text.includes(`'${W}'`) && !out.text.includes(BLOCK_BEGIN), `no copy of asight's path is left: ${JSON.stringify(out.text)}`)
+  assert.ok(out.text.includes(`SSL_CERT_FILE="${W}.mine"`), 'another value of the key is the user\'s')
+  const noMine = removeAsightText(copies.replace(/SSL_CERT_FILE="[^"]*\.mine"\r\n/, ''), r.ops)
+  assert.deepEqual(asightResidue(noMine.text, { vars: { SSL_CERT_FILE: W } }), [], 'and nothing of asight\'s path is reported as left behind')
+})
+
 test('text-edit: the sentinel text written into users\' files is exactly what earlier builds wrote', () => {
   assert.equal(SENTINEL, 'asight collector')
   assert.equal(BLOCK_BEGIN, '# >>> asight collector >>> written by `asight collector install`; `asight collector uninstall` removes this block')

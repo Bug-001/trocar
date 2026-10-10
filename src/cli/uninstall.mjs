@@ -23,6 +23,7 @@ import { confirm, isInteractive } from '../off/io.mjs'
 import { CODE_OFF } from '../off/names.mjs'
 import { formatUninstallReceipt } from './receipt.mjs'
 import { hasNewCollector, legacyUndoHook } from '../off/legacy.mjs'
+import { refuseElevatedByWhoami } from '../off/win32.mjs'
 import { legacyUninstallCli } from './legacy-uninstall.mjs'
 
 const DRAIN_MS = 30_000 // 1.6 §1.1: how long the daemon is given to close the connections it can see the end of
@@ -65,6 +66,11 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   const run = w.clock().toISOString()
   const receipt = { ...newReceipt('uninstall'), all: true, harnesses: [], purge_data: purgeData, kept_captures: !purgeData, undo: ['asight on'], log: path.join(w.dir, 'flows'), left: [], kept_bundles: [], still_trusting: [], residue: [], dropped_backups: [], non_identical: [], entries: [], pending: [], user_processes: [], notes: [], problems: [] }
   const put = flowWriter(w, run, receipt.notes, { event: 'uninstall-note', where: 'uninstall' })
+  // R7 on Windows (4.8 §7), the same refusal `off` has, before anything is touched; a token that cannot be read is not a refusal.
+  if ((deps.platform || process.platform) === 'win32') {
+    const refusal = refuseElevatedByWhoami({ run: w.exec, env })
+    if (refusal) { receipt.problems.push(refusal.reason); receipt.ok = false; put({ event: 'failure', ...refusal }); return { receipt, exit: EXIT.incomplete } }
+  }
   const read = () => { try { return { m: readManifest(w.dir, fs), merr: null } } catch (e) { return { m: null, merr: e } } }
   let { m, merr } = read()
   receipt.harnesses = harnessIdsOf(m)

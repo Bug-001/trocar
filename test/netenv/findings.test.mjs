@@ -4,8 +4,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildTopology } from '../../src/netenv/topology.mjs'
 import { diagnose, FINDINGS, FINDING_CODES, renderFindings } from '../../src/netenv/findings.mjs'
-import { validateFinding } from '../../src/cli/schema.mjs'
-import { NET_CODES, TRUST_REASONS } from '../../src/health/codes.mjs'
+import { validateFinding, validateTopology } from '../../src/cli/schema.mjs'
+import { NET_CODES, ROUTE_CODES, ROUTE_TRUST_REASONS, STATUS_REASONS, TRUST_REASONS } from '../../src/health/codes.mjs'
+import { FINDINGS_WIN32 } from '../../src/netenv/findings-win32.mjs'
 import { ROWS, facts, proc, proxyOf, form, fwForm, pfacts, MIHOMO, mihomoVpn } from './fixtures/rows.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { linuxNetFacts } from '../../src/collector/arch/linux/netfacts.mjs'
@@ -69,6 +70,31 @@ test('V49 both directions: every code of the closed sets (§9.7 net codes, the s
   assert.deepEqual(Object.keys(SETS).filter((c) => !closed.has(c)), [], 'and no fact set is for a code nobody defined')
 })
 
+// The Windows half (1.6 §9.7 / 4.8 §10.4): its codes are in the closed sets too — the net codes, the status reasons (which already hold form-unsupported, fallback-active, form-path-unknown),
+// the route codes (engine-port-taken, forwarder-start-failed, forwarder-binary-missing, forwarder-digest-mismatch, socktable-unavailable) and the trust reasons — and FINDING_CODES, what
+// schema.mjs checks a finding against, is exactly the union of the two catalogues and the trust reasons (the literal per-row shape of FINDINGS_WIN32 is held by topology-win32.test.mjs, W36).
+test('V49 both directions, the Windows half: FINDINGS_WIN32 defines no code outside the closed sets (net codes, status reasons, route codes, trust reasons), and FINDING_CODES is exactly FINDINGS ∪ FINDINGS_WIN32 ∪ the trust reasons (the Windows collector\'s own trust reasons included)', () => {
+  const closed = new Set([...NET_CODES, ...STATUS_REASONS, ...ROUTE_CODES, ...TRUST_REASONS])
+  assert.ok(Object.keys(FINDINGS_WIN32).length === 23, 'the §10.4 rows (held row-by-row by topology-win32.test.mjs)')
+  for (const code of Object.keys(FINDINGS_WIN32)) assert.ok(closed.has(code), `${code} is in a closed set`)
+  assert.deepEqual([...FINDING_CODES].sort(), [...new Set([...Object.keys(FINDINGS), ...Object.keys(FINDINGS_WIN32), ...TRUST_REASONS, ...ROUTE_TRUST_REASONS])].sort(), 'the union, nothing defined that the doctor cannot name')
+})
+
+// 4.8 §5.4's fill-layer verdict (`env-unreadable-fill`) is a trust reason the Windows tracker can really set — a form's every connection judged by a layer whose value Windows cannot tell from
+// 「in effect」. Its verdict must be a status reason and its finding must be inside the code list the schema checks: the verdict landed with 8(v), its ROUTE_TRUST_REASONS entry lands here
+// (Task 10(b)); before it, `status --json` would reject both and a throwing `make` would take `doctor` down with the state.
+test('V49 the Windows trust reasons the tracker can set are findings and status reasons the schema accepts (env-unreadable-fill, 4.8 §5.4 fill layer)', () => {
+  const F = pfacts('hermes', form('hermes.cli', { procs: [proc(8121, { trusted: false, reason: 'env-unreadable-fill', hint: 'the trust would rest on a fill layer, which Windows cannot tell from「in effect」' })] }), fwForm(17993))
+  const t = buildTopology(F)['hermes']
+  assert.equal(t.reason, 'env-unreadable-fill', 'the branch carries the verdict (judgeHarness passes an untrusted proc\'s reason through)')
+  assert.deepEqual(validateTopology({ hermes: t }), [], 'and the schema knows it as a status reason')
+  const found = diagnose({ facts: F, topology: { hermes: t }, harnesses: ['hermes'], user: 'u' }).find((f) => f.code === 'env-unreadable-fill')
+  assert.ok(found, 'the finding exists (the trust entry renders it)')
+  assert.equal(found.class, 'failure')
+  assert.match(found.what, /没被信任:env-unreadable-fill/)
+  assert.deepEqual(validateFinding(found), [], 'the schema accepts it')
+})
+
 test('V49 every trust reason is a finding (the restart ones expected, the rest failures), says what and why, and gives a command', () => {
   for (const reason of TRUST_REASONS) {
     const f = facts('claude-code', {}, { procs: [proc(4121, { watched: 'no-decrypt', trusted: false, reason, hint: reason === 'var-missing' ? 'the NODE_EXTRA_CA_CERTS variable is not set' : undefined })] })
@@ -108,8 +134,9 @@ test('V49 the commands are filled with the values of the facts: the port to look
   const nameless = diagnose({ facts: SETS['linger-off'].facts, topology: buildTopology(SETS['linger-off'].facts), harnesses: null, user: null })[0]
   assert.equal(nameless.commands[0].run, 'loginctl enable-linger "$(id -un)"', 'a name that is not known is read by the shell, not left as a placeholder')
   const admin = findingsOf(SETS['needs-admin'].facts).find((f) => f.code === 'needs-admin')
-  assert.equal(admin.commands[0].run, 'Start-Process powershell -Verb RunAs -ArgumentList "asight-admin.ps1"')
-  assert.equal(admin.commands[0].shell, 'powershell')
+  assert.equal(admin.commands[0].shell, 'gui', 'on Windows the normal path comes first: UAC, not a pasted admin line')
+  assert.equal(admin.commands[1].run, 'Start-Process powershell -Verb RunAs -ArgumentList "asight-admin.ps1"', 'the elevated line is still there, verbatim')
+  assert.equal(admin.commands[1].shell, 'powershell')
   const pac = findingsOf(SETS['not-routed'].facts).find((f) => f.code === 'not-routed')
   assert.ok(pac.commands.some((c) => c.run.includes('不知道 · pac')), 'the PAC\'s address is not known: said, not guessed')
   const bpf = findingsOf(SETS['other-redirector'].facts)[0]
@@ -196,7 +223,7 @@ test('renderFindings: what and why, each command on a line of its own (shell nam
   const lines = renderFindings(findingsOf({ ...SETS['proxy-dead'].facts, platform: 'win32' }).filter((f) => f.code === 'proxy-dead'))
   assert.match(lines[0], /^\[失败\] claude-code · proxy-dead — /)
   assert.ok(lines.some((l) => /\$ netstat -ano -p TCP \| findstr ":7890"  \(PowerShell\)$/.test(l)))
-  assert.ok(lines.some((l) => /^ {2}怎么做: 打开你的代理软件/.test(l)))
+  assert.ok(lines.some((l) => /^ {10}打开你的代理软件/.test(l)), 'the step in an application is a line of its own, no $')
   assert.match(lines[lines.length - 1], /^ {2}怎么验证: /)
 })
 
@@ -248,12 +275,18 @@ test('V49 route-loop names where the setting that loops lives; a harness with no
   g.harnesses.codex.behaviour = behaviourOf('codex', CODEX_FILES, { measured: 'lab' })
   assert.match(gui(findingsOf(g), 'route-loop'), /export HTTPS_PROXY=/)
   assert.doesNotMatch(gui(findingsOf(g), 'route-loop'), /\.codex\/\.env/)
-  // no setting: the PAC step of not-routed says where a new one goes
+  // a loop with no source of its own: the place comes from the behaviour — the first file it reads, else the variable it reads (not always HTTPS_PROXY)
+  const nosrc = loop(proxyOf('http://127.0.0.1:17992', []))
+  nosrc.harnesses.codex.behaviour = behaviourOf('codex', [], { measured: 'lab', env: ['ZCODE_HTTP_PROXY'] })
+  assert.match(gui(findingsOf(nosrc), 'route-loop'), /export ZCODE_HTTP_PROXY=/)
+  const nosrcFile = loop(proxyOf('http://127.0.0.1:17992', []))
+  nosrcFile.harnesses.codex.behaviour = behaviourOf('codex', CODEX_FILES, { measured: 'lab' })
+  assert.match(gui(findingsOf(nosrcFile), 'route-loop'), /\/h\/\.codex\/\.env 里写一行 HTTPS_PROXY=/)
+  // no setting: the PAC step of not-routed says where a new one goes — on Windows from the entry place the facts carry (gatherWin32Facts fills it for every form; the hand-built form models the real one)
   const pac = ROWS.find((r) => r.n === 11).facts
   pac.harnesses.codex.behaviour = behaviourOf('codex', CODEX_FILES, { measured: 'lab' })
+  pac.harnesses.codex.forms[0].entryPlace = { kind: 'file', file: '/h/.codex/.env', format: 'dotenv', key: 'HTTPS_PROXY' }
   assert.match(gui(findingsOf(pac), 'not-routed'), /\/h\/\.codex\/\.env 里写一行 HTTPS_PROXY=/)
-  pac.harnesses.codex.behaviour = behaviourOf('codex', [], { measured: 'lab', env: ['ZCODE_HTTP_PROXY'] })
-  assert.match(gui(findingsOf(pac), 'not-routed'), /export ZCODE_HTTP_PROXY=/, 'the variable the harness reads, not always HTTPS_PROXY')
 })
 
 test('V49 end to end, with the real descriptors: a proxy that came from the invoking shell\'s HTTPS_PROXY is `unset` there and no file is named; one from ~/.claude.json names that file', async () => {

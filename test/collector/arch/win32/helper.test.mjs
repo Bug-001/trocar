@@ -1,0 +1,1117 @@
+// test/collector/arch/win32/helper.test.mjs — RFC 4.8 §1, §5.3, §10.1: the resident read-only helper's client, the process watcher
+// and the socket-table pid lookup (W1, W2, W4). Nothing here runs Windows or a real powershell: the helper is the Node child
+// in fixtures/fake-helper.mjs speaking the same JSON-lines protocol, or an in-process object with the same `call()`.
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+import { spawn } from 'node:child_process'
+import { EventEmitter } from 'node:events'
+import { PassThrough } from 'node:stream'
+import { fileURLToPath } from 'node:url'
+import { HELPER_PROTO, HELPER_VERBS, HELPER_PS1, REG_KIND_NAMES, REG_READ_ALLOW, POLICY_KEY_PATTERN, POLICY_NAME_PATTERN, declaredRegAllow, policyAllowOf, regKindsOf, startHelper } from '../../../../src/collector/arch/win32/helper.mjs'
+import { readSystemProxy } from '../../../../src/collector/arch/win32/upstream.mjs'
+import { CMDLINE_STATES, PS_TIMEOUT_MS, createProcWatcher, elevationOf, splitCommandLine } from '../../../../src/collector/arch/win32/procinfo.mjs'
+import { ownerOf } from '../../../../src/collector/arch/win32/socktable.mjs'
+import { checkRecord } from '../../../../src/health/codes.mjs'
+import { tmpDir } from '../../../helpers/tmp.mjs'
+
+const FAKE = fileURLToPath(new URL('./fixtures/fake-helper.mjs', import.meta.url))
+const fakeSpawn = (fixture) => (exe, args, opts) => spawn(process.execPath, [FAKE, JSON.stringify(fixture)], { ...opts, env: { ...process.env, ASIGHT_FAKE_HELPER: '1' } })
+/** A child that never ran: what `spawn` hands back when the program is not there (it emits 'error' next tick). */
+function ghostChild(emit) {
+  const c = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), pid: undefined, kill: () => true })
+  process.nextTick(() => emit(c))
+  return c
+}
+/** startHelper over the fake; every failure record and every exit is kept for the assertions; closed when the test ends. */
+function started(t, fixture, opts = {}) {
+  const seen = { failures: [], exits: [] }
+  const h = startHelper({ spawn: fakeSpawn(fixture), onFailure: (r) => seen.failures.push(r), onExit: (x) => seen.exits.push(x), ...opts })
+  t.after(() => h.close())
+  return Object.assign(h, seen)
+}
+/** Polls `fn` until it returns something truthy (a slow machine gets the whole second), instead of sleeping for a guess. */
+const until = async (fn, ms = 3000) => { const end = Date.now() + ms; for (;;) { const v = fn(); if (v) return v; if (Date.now() > end) throw new Error('until: timed out'); await new Promise((r) => setTimeout(r, 10)) } }
+const lines = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [])
+const rejects = (p, code) => assert.rejects(p, (e) => { assert.equal(e.code, code, e.message); return true })
+/** Is the process still there? signal 0 only asks (ESRCH = gone; EPERM = there, not ours to signal). */
+const alive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code !== 'ESRCH' } }
+
+// ---------- W1: the helper is read-only, and its verb set is closed ----------
+
+test('W1 the verb set is the closed list, frozen', () => {
+  assert.deepEqual([...HELPER_VERBS], ['ps', 'tcp-table', 'reg-read', 'net-if', 'route', 'token', 'roots', 'pipe-server', 'version'])
+  assert.ok(Object.isFrozen(HELPER_VERBS))
+  assert.ok(HELPER_PS1.endsWith('helper.ps1'))
+})
+
+// helper.ps1 reads each value's kind as `$k.GetValueKind($n).ToString()`, which is .NET's RegistryValueKind (DWord, String, ExpandString, ...), and 4.8 §1 gives kinds as the registry names them (`REG_EXPAND_SZ`). The readers and
+// the fakes of every other test say REG_*; the client is where the two meet, so that a reader that asks for a DWORD does not get `DWord` from the real helper and find nothing.
+test('W1 reg-read answers give each value\'s kind in the registry\'s own names, whichever spelling the script wrote (the eight kinds .NET has); nothing else in the answer moves', async (t) => {
+  const net = { Unknown: 'REG_UNKNOWN', String: 'REG_SZ', ExpandString: 'REG_EXPAND_SZ', Binary: 'REG_BINARY', DWord: 'REG_DWORD', MultiString: 'REG_MULTI_SZ', QWord: 'REG_QWORD', None: 'REG_NONE' }
+  assert.deepEqual(Object.fromEntries(Object.keys(net).map((k) => [k, REG_KIND_NAMES[k.toLowerCase()]])), net, 'the table is exactly the eight names of [Microsoft.Win32.RegistryValueKind]')
+  assert.ok(Object.isFrozen(REG_KIND_NAMES))
+  const answer = { keyExists: true, values: { ProxyEnable: { kind: 'DWord', value: 1 }, ProxyServer: { kind: 'String', value: '127.0.0.1:7897' }, Path: { kind: 'ExpandString', value: '%X%;C:\\a' }, Blob: { kind: 'Binary', value: 'AQID' }, Already: { kind: 'REG_SZ', value: 'x' }, Odd: { kind: 'Weird', value: 1 }, Bare: 5 } }
+  assert.deepEqual(regKindsOf(answer), { keyExists: true, values: { ProxyEnable: { kind: 'REG_DWORD', value: 1 }, ProxyServer: { kind: 'REG_SZ', value: '127.0.0.1:7897' }, Path: { kind: 'REG_EXPAND_SZ', value: '%X%;C:\\a' }, Blob: { kind: 'REG_BINARY', value: 'AQID' }, Already: { kind: 'REG_SZ', value: 'x' }, Odd: { kind: 'Weird', value: 1 }, Bare: 5 } })
+  assert.equal(answer.values.ProxyEnable.kind, 'DWord', 'the answer it was given is not changed')
+  for (const x of [null, undefined, 'garbage', 7, [], { keyExists: false }, { values: 'no' }]) assert.deepEqual(regKindsOf(x), x, `not a registry read, returned as it is: ${JSON.stringify(x)}`)
+  // through the client, over the real line protocol: only reg-read is touched
+  const h = started(t, { verbs: { 'reg-read': { data: answer }, version: { data: { values: { A: { kind: 'DWord', value: 1 } } } } } })
+  const got = await h.call('reg-read', { hive: 'HKCU', key: 'Environment', names: ['Path'] })
+  assert.equal(got.values.Path.kind, 'REG_EXPAND_SZ')
+  assert.equal(got.values.ProxyEnable.kind, 'REG_DWORD')
+  assert.equal((await h.call('version')).values.A.kind, 'DWord', 'another verb\'s answer is not a registry read')
+})
+
+test('W71 the system proxy through the real client: a `DWord` ProxyEnable of 1 from the script is ON, a `String` one is not (the reader and the helper agree on the kind\'s name)', async (t) => {
+  const reg = (kind) => ({ keyExists: true, values: { ProxyEnable: { kind, value: kind === 'String' ? '1' : 1 }, ProxyServer: { kind: 'String', value: '127.0.0.1:7897' } } })
+  const dword = started(t, { verbs: { 'reg-read': { data: reg('DWord') } } })
+  assert.deepEqual(await readSystemProxy({ helper: dword }), { ok: true, enable: true, server: '127.0.0.1:7897', override: null, autoConfigUrl: null })
+  const text = started(t, { verbs: { 'reg-read': { data: reg('String') } } })
+  assert.equal((await readSystemProxy({ helper: text })).enable, null, 'text "1" is no DWORD 1 (4.8 §2.2)')
+})
+
+test('W1 an unknown verb is rejected in JS: no line reaches the helper', async (t) => {
+  const log = path.join(tmpDir('asight-helper-'), 'in.log')
+  const h = started(t, { log })
+  await h.call('version')
+  for (const verb of ['rm', 'Set-ItemProperty', 'toString', '__proto__', '', undefined, 7, 'ps ']) await rejects(h.call(verb), 'helper-unknown-verb')
+  assert.deepEqual(lines(log).map((l) => l.verb), ['version'], 'only the allowed verb was written')
+  assert.equal(h.failures.length, 0, 'a refused verb is the caller\'s mistake, not a helper failure')
+})
+
+test('W1 reg-read: only the allowed keys and their names go through, checked in JS before any write', async (t) => {
+  const log = path.join(tmpDir('asight-helper-'), 'in.log')
+  const h = started(t, { log, verbs: { 'reg-read': { data: { keyExists: true, values: {} } } } })
+  const IS = 'Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'
+  const SAC = 'SYSTEM\\CurrentControlSet\\Control\\CI\\Policy'
+  const SME = 'SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment'
+  const ok = [
+    { hive: 'HKCU', key: IS, names: ['ProxyEnable', 'ProxyServer', 'ProxyOverride', 'AutoConfigURL'] },
+    { hive: 'hkcu', key: IS.toLowerCase() + '\\', names: ['proxyserver'] }, // case and a trailing backslash are not a way round the list
+    { hive: 'HKCU', key: 'Software/Microsoft/Windows/CurrentVersion/Internet Settings', names: ['ProxyServer'] },
+    { hive: 'HKCU', key: 'Environment', names: ['Path'] },
+    { hive: 'HKCU', key: 'Environment', names: ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY'] }, // the login environment's proxy variables, which 4.8 §2.2 reads for the agent's own proxy
+    { hive: 'HKCU', key: 'Environment', names: ['https_proxy', 'no_proxy'] }, // registry value names are not case-sensitive
+    { hive: 'HKLM', key: SME, names: ['Path'] }, // the machine PATH, which Windows reads before the user's (4.8 §6.3)
+    { hive: 'HKLM', key: SAC, names: ['VerifiedAndReputablePolicyState'] },
+  ]
+  for (const a of ok) await h.call('reg-read', a)
+  const bad = [
+    { hive: 'HKCU', key: 'Software\\Microsoft\\Windows\\CurrentVersion\\Run', names: ['x'] },
+    { hive: 'HKCU', key: 'Environment', names: ['TEMP'] }, // the proxy variables and Path of Environment: not the CA variables, not the whole block
+    { hive: 'HKCU', key: 'Environment', names: ['Path', 'NODE_EXTRA_CA_CERTS'] },
+    { hive: 'HKCU', key: 'Environment', names: ['HTTPS_PROXY', 'SSL_CERT_FILE'] }, // one name outside the list refuses the whole request
+    { hive: 'HKCU', key: 'Environment', names: ['HTTPS_PROXY_X'] },
+    { hive: 'HKCU', key: 'Environment', names: [] }, // no names = everything: refused
+    { hive: 'HKLM', key: 'Environment', names: ['Path'] },
+    { hive: 'HKLM', key: SME, names: ['TEMP'] }, // the machine environment: Path only
+    { hive: 'HKLM', key: SME, names: ['Path', 'ComSpec'] },
+    { hive: 'HKLM', key: SME, names: ['HTTPS_PROXY'] }, // the proxy variables are the user's key's, not the machine's
+    { hive: 'HKCU', key: SME, names: ['Path'] }, // the machine key is HKLM's
+    { hive: 'HKLM', key: 'SYSTEM\\CurrentControlSet\\Control\\Session Manager', names: ['Path'] },
+    { hive: 'HKLM', key: SME + '\\Sub', names: ['Path'] },
+    { hive: 'HKCU', key: SAC, names: ['VerifiedAndReputablePolicyState'] },
+    { hive: 'HKLM', key: IS, names: ['ProxyServer'] },
+    { hive: 'HKU', key: 'Environment', names: ['Path'] },
+    { hive: 'HKCU', key: IS + '\\Connections', names: ['ProxyServer'] },
+    { hive: 'HKCU', key: 'Environment\\..\\Software', names: ['Path'] },
+    { hive: 'HKCU', key: 'Software\\Policies\\Claude', names: ['egressProxyUrl'] }, // a policy key is readable only when a harness file declared it (below)
+    {}, null, undefined,
+  ]
+  for (const a of bad) await rejects(h.call('reg-read', a), 'helper-forbidden-key')
+  assert.equal(lines(log).filter((l) => l.verb === 'reg-read').length, ok.length, 'nothing refused was written')
+  assert.deepEqual(REG_READ_ALLOW.map((r) => `${r.hive}\\${r.key}`).sort(), ['HKCU\\Environment', `HKCU\\${IS}`, `HKLM\\${SAC}`, `HKLM\\${SME}`].sort())
+})
+
+const POLICY = { hive: 'HKCU', key: 'SOFTWARE\\Policies\\Claude', names: ['egressProxyUrl'] } // what Claude Desktop's harness file declares (win32/claude-code.mjs)
+
+test('W1 a policy key a harness file declares is readable, and only that key and name: checked in JS before any write, and handed to the script', async (t) => {
+  const log = path.join(tmpDir('asight-helper-'), 'in.log')
+  const spawned = []
+  const h = started(t, { log, verbs: { 'reg-read': { data: { keyExists: true, values: {} } } } }, { regAllow: [POLICY], spawn: (exe, args, opts) => { spawned.push(args); return fakeSpawn({ log, verbs: { 'reg-read': { data: { keyExists: true, values: {} } } } })(exe, args, opts) } })
+  await h.call('reg-read', POLICY)
+  await h.call('reg-read', { hive: 'hkcu', key: 'software/policies/claude/', names: ['EGRESSPROXYURL'] }) // case, slashes and a trailing backslash are not a way round it
+  for (const a of [
+    { hive: 'HKCU', key: POLICY.key, names: ['egressProxyUrl', 'other'] },
+    { hive: 'HKCU', key: POLICY.key, names: ['other'] },
+    { hive: 'HKCU', key: 'SOFTWARE\\Policies\\Other', names: ['egressProxyUrl'] },
+    { hive: 'HKCU', key: 'SOFTWARE\\Policies', names: ['egressProxyUrl'] },
+    { hive: 'HKCU', key: POLICY.key + '\\Sub', names: ['egressProxyUrl'] },
+    { hive: 'HKLM', key: POLICY.key, names: ['egressProxyUrl'] }, // the hive is part of the declaration
+    { hive: 'HKCU', key: POLICY.key, names: [] },
+  ]) await rejects(h.call('reg-read', a), 'helper-forbidden-key')
+  assert.equal(lines(log).filter((l) => l.verb === 'reg-read').length, 2, 'only the two declared reads were written')
+  // the script gets the same declaration, base64 of JSON, as the one parameter it takes; it checks it again (below)
+  assert.equal(spawned.length, 1)
+  const i = spawned[0].indexOf('-ExtraRegAllowB64')
+  assert.ok(i > 0 && i === spawned[0].length - 2, 'the parameter is the last pair: -ExtraRegAllowB64 <base64>')
+  assert.deepEqual(JSON.parse(Buffer.from(spawned[0][i + 1], 'base64').toString('utf8')), [{ hive: 'HKCU', key: 'SOFTWARE\\Policies\\Claude', names: ['egressProxyUrl'] }])
+  assert.deepEqual(spawned[0].slice(0, i), ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', HELPER_PS1], 'the rest of the command line is what it was')
+})
+
+test('W1 without a declaration the helper is started as it was: no extra parameter, nothing beyond the list', async (t) => {
+  const spawned = []
+  const h = started(t, { verbs: { 'reg-read': { data: { keyExists: true, values: {} } } } }, { spawn: (exe, args, opts) => { spawned.push(args); return fakeSpawn({})(exe, args, opts) } })
+  await h.call('version')
+  assert.ok(!spawned[0].includes('-ExtraRegAllowB64'))
+  await rejects(h.call('reg-read', POLICY), 'helper-forbidden-key')
+})
+
+test('W1 a declaration that is not a policy key is refused when the helper is started, before any process: the declaration cannot widen what the helper reads', () => {
+  const spawned = []
+  const spawn = () => { spawned.push(1); throw new Error('must not start') }
+  const bad = {
+    'a key that is not under Policies': [{ hive: 'HKCU', key: 'Software\\Microsoft\\Windows\\CurrentVersion\\Run', names: ['x'] }],
+    'the login environment': [{ hive: 'HKCU', key: 'Environment', names: ['NODE_EXTRA_CA_CERTS'] }],
+    'a parent of Policies': [{ hive: 'HKCU', key: 'Software', names: ['Policies'] }],
+    'Policies itself': [{ hive: 'HKCU', key: 'Software\\Policies', names: ['x'] }],
+    'a dot-dot segment': [{ hive: 'HKCU', key: 'Software\\Policies\\..\\..\\Microsoft', names: ['x'] }],
+    'a dot segment': [{ hive: 'HKCU', key: 'Software\\Policies\\.', names: ['x'] }],
+    'another hive': [{ hive: 'HKU', key: 'Software\\Policies\\Claude', names: ['x'] }],
+    'a class root': [{ hive: 'HKCR', key: 'Software\\Policies\\Claude', names: ['x'] }],
+    'no names': [{ hive: 'HKCU', key: 'Software\\Policies\\Claude', names: [] }],
+    'a name with a backslash': [{ hive: 'HKCU', key: 'Software\\Policies\\Claude', names: ['a\\b'] }],
+    'a name with a quote': [{ hive: 'HKCU', key: 'Software\\Policies\\Claude', names: ['a"b'] }],
+    'an empty name': [{ hive: 'HKCU', key: 'Software\\Policies\\Claude', names: [''] }],
+    'a name that is not a string': [{ hive: 'HKCU', key: 'Software\\Policies\\Claude', names: [7] }],
+    'a key with a control character': [{ hive: 'HKCU', key: 'Software\\Policies\\Cla\nude', names: ['x'] }],
+    'not a list': { hive: 'HKCU', key: 'Software\\Policies\\Claude', names: ['x'] },
+    'an entry that is not an object': ['HKCU'],
+    'more entries than any harness has': Array.from({ length: 17 }, (_, i) => ({ hive: 'HKCU', key: `Software\\Policies\\V${i}`, names: ['x'] })),
+  }
+  for (const [what, list] of Object.entries(bad)) {
+    assert.throws(() => startHelper({ spawn, regAllow: list }), TypeError, what)
+    assert.throws(() => declaredRegAllow(list), TypeError, what)
+  }
+  assert.equal(spawned.length, 0, 'none of them started a process')
+  assert.deepEqual(declaredRegAllow(undefined), [])
+  assert.deepEqual(declaredRegAllow([]), [])
+  const good = declaredRegAllow([{ hive: 'hkcu', key: 'software/policies/Claude Desktop/', names: ['egressProxyUrl'] }, { hive: 'HKLM', key: 'SOFTWARE\\Policies\\Kimi\\Code', names: ['a', 'B_c-1.2'] }])
+  assert.deepEqual(good, [{ hive: 'HKCU', key: 'software\\policies\\Claude Desktop', names: ['egressProxyUrl'] }, { hive: 'HKLM', key: 'SOFTWARE\\Policies\\Kimi\\Code', names: ['a', 'B_c-1.2'] }], 'hive upper-cased, key with backslashes and no trailing one, names as given')
+})
+
+test('W1 the policy keys the harness files declare (their proxyEntry of kind policy) are what policyAllowOf gives, and the helper accepts them', async () => {
+  const { default: claude } = await import('../../../../src/collector/harness/win32/claude-code.mjs')
+  const { default: codex } = await import('../../../../src/collector/harness/win32/codex.mjs')
+  assert.deepEqual(policyAllowOf([...claude.groups, ...codex.groups]), [{ hive: 'HKCU', key: 'SOFTWARE\\Policies\\Claude', names: ['egressProxyUrl'] }], 'the groups that keep their entry in a file declare nothing')
+  assert.deepEqual(policyAllowOf([]), [])
+  assert.deepEqual(policyAllowOf([{ proxyEntry: { kind: 'policy', hive: 'HKCU', key: 'SOFTWARE\\Policies\\A', name: 'x' } }, { proxyEntry: { kind: 'policy', hive: 'HKCU', key: 'SOFTWARE\\Policies\\A', name: 'y' } }]), [{ hive: 'HKCU', key: 'SOFTWARE\\Policies\\A', names: ['x', 'y'] }], 'two names of one key are one entry')
+  assert.doesNotThrow(() => declaredRegAllow(policyAllowOf([...claude.groups]))) // the real declaration passes the same check the helper applies
+})
+
+test('W1 a reply is matched to its request by id, whatever the order it comes back in', async (t) => {
+  const h = started(t, { verbs: { ps: { delayMs: 80, data: { procs: ['slow'] } }, route: { data: { dest: 'fast' } } } })
+  const slow = h.call('ps')
+  const fast = h.call('route')
+  assert.deepEqual(await fast, { dest: 'fast' })
+  assert.deepEqual(await slow, { procs: ['slow'] })
+})
+
+test('W1 a verb the helper fails is a rejection with its message, and the helper stays up', async (t) => {
+  const h = started(t, { verbs: { 'tcp-table': { error: 'native-unavailable: Add-Type blocked' } } })
+  await assert.rejects(h.call('tcp-table', {}), (e) => e.code === 'helper-verb-error' && /Add-Type blocked/.test(e.message) && e.verb === 'tcp-table')
+  assert.equal((await h.call('version')).proto, 1)
+  assert.equal(h.failures.length, 0)
+})
+
+test('W1 a slow verb times out without taking the helper down; its late answer is dropped', async (t) => {
+  const h = started(t, { verbs: { ps: { delayMs: 400, data: {} } } })
+  await rejects(h.call('ps', {}, { timeoutMs: 30 }), 'helper-timeout')
+  await new Promise((r) => setTimeout(r, 450)) // the late reply arrives for an id nobody waits for
+  assert.equal((await h.call('version')).proto, 1)
+  assert.equal(h.failures.length, 0)
+})
+
+test('W1 a timed-out call is abandoned until its late answer arrives; a closed helper has none', async (t) => {
+  const h = started(t, { verbs: { ps: { delayMs: 500, data: { procs: [] } } } }) // late enough that a stalled test runner still sees it outstanding
+  assert.equal(h.abandoned('ps'), 0)
+  await rejects(h.call('ps', {}, { timeoutMs: 20 }), 'helper-timeout')
+  assert.equal(h.abandoned('ps'), 1, 'the helper is still working on it: it is single-threaded, so anything sent now waits behind it')
+  assert.equal(h.abandoned('route'), 0, 'counted by verb')
+  await until(() => h.abandoned('ps') === 0) // the late answer came, was dropped, and the helper is free again
+  const hung = started(t, { verbs: { ps: { hang: true } } })
+  await rejects(hung.call('ps', {}, { timeoutMs: 20 }), 'helper-timeout')
+  assert.equal(hung.abandoned('ps'), 1, 'an answer that never comes stays abandoned')
+  await hung.close()
+  assert.equal(hung.abandoned('ps'), 0, 'a helper that is gone has nothing left to wait for')
+})
+
+test('W1 stdout noise that is not a reply is skipped', async (t) => {
+  const h = started(t, { noise: ['WARNING: something a shell printed', '{"not":"a reply"}'] })
+  assert.equal((await h.call('version')).proto, 1)
+})
+
+test('W1 the helper is ready before the first verb is written, and a call made at once waits for it', async (t) => {
+  const log = path.join(tmpDir('asight-helper-'), 'in.log')
+  const h = started(t, { log, readyDelayMs: 120 }) // Add-Type compiles for a while on a cold machine
+  const first = h.call('version', {}, { timeoutMs: 50 }) // the timeout counts from the write, not from the call
+  const info = await h.ready
+  assert.equal(info.proto, 1)
+  assert.equal(info.native, true)
+  assert.equal((await first).proto, 1)
+  assert.equal(lines(log).length, 1)
+})
+
+test('W1 a helper that speaks another protocol is a failed start, and says so', async (t) => {
+  const h = started(t, { proto: 9 })
+  const pid = h.pid
+  await assert.rejects(h.ready)
+  assert.equal(h.failures.length, 1)
+  assert.equal(h.failures[0].code, 'helper-start-failed')
+  assert.match(h.failures[0].reason, /protocol 9/)
+  await until(() => !alive(pid)) // a helper we gave up on does not linger: on Windows that is a powershell.exe nobody owns, its stdin open for as long as the daemon lives
+})
+
+// ---------- W1: a helper that dies is a rejection of every pending call, plus ONE helper-down; a start that fails is helper-start-failed ----------
+
+test('W1 killing the helper rejects every pending call and writes one helper-down', async (t) => {
+  const h = started(t, { verbs: { ps: { hang: true }, 'tcp-table': { hang: true } } })
+  await h.ready
+  const pending = [h.call('ps'), h.call('tcp-table', {})]
+  const settled = Promise.allSettled(pending)
+  await new Promise((r) => setTimeout(r, 30))
+  process.kill(h.pid, 'SIGKILL')
+  for (const r of await settled) { assert.equal(r.status, 'rejected'); assert.equal(r.reason.code, 'helper-down') }
+  await rejects(h.call('version'), 'helper-down') // and later calls fail at once, instead of waiting out their timeout
+  assert.equal(h.failures.length, 1, 'one helper-down, not one per pending call')
+  assert.equal(h.failures[0].event, 'helper-down')
+  assert.match(h.failures[0].reason, /SIGKILL/)
+  assert.equal(h.failures[0].exit, 'SIGKILL')
+  assert.deepEqual(checkRecord(h.failures[0]), [])
+  assert.equal(h.exits.length, 1)
+})
+
+test('W1 an exit with a code after the helper was ready is helper-down with that code and its last stderr lines', async (t) => {
+  const h = started(t, { stderr: ['Add-Type : policy', 'at line 3'], exitAfter: 1, exitCode: 3 })
+  await h.call('version')
+  await until(() => h.failures.length)
+  assert.equal(h.failures.length, 1)
+  const [f] = h.failures
+  assert.equal(f.event, 'helper-down')
+  assert.equal(f.exit, 'code 3')
+  assert.deepEqual(f.stderr, ['Add-Type : policy', 'at line 3'])
+  assert.deepEqual(checkRecord(f), [])
+})
+
+test('W1 a helper that exits before it is ready is helper-start-failed (policy blocking Add-Type, no PowerShell)', async (t) => {
+  const h = started(t, { ready: false, exitCode: 1, stderr: ['Cannot invoke method. Method invocation is supported only on core types in this language mode.'] })
+  await rejects(h.call('version'), 'helper-start-failed')
+  await assert.rejects(h.ready)
+  assert.equal(h.failures.length, 1)
+  const [f] = h.failures
+  assert.deepEqual([f.event, f.where, f.code], ['failure', 'helper', 'helper-start-failed'])
+  assert.match(f.stderr[0], /language mode/)
+  assert.deepEqual(checkRecord(f), [])
+})
+
+test('W1 a helper whose native code did not compile is up but is helper-start-failed once; the verbs that need no native code still answer', async (t) => {
+  const h = started(t, { native: false, nativeError: 'csc.exe is blocked by policy', verbs: { 'net-if': { data: { interfaces: [] } }, ps: { error: 'native-unavailable: csc.exe is blocked by policy' } } })
+  const info = await h.ready
+  assert.equal(info.native, false)
+  assert.equal(h.failures.length, 1)
+  const [f] = h.failures
+  assert.deepEqual([f.event, f.where, f.code, f.nativeError], ['failure', 'helper', 'helper-start-failed', 'csc.exe is blocked by policy'])
+  assert.match(f.reason, /native code did not compile.*csc\.exe is blocked/)
+  assert.deepEqual(checkRecord(f), [])
+  assert.deepEqual(await h.call('net-if'), { interfaces: [] })
+  await assert.rejects(h.call('ps'), (e) => e.code === 'helper-verb-error' && /native-unavailable/.test(e.message))
+  assert.equal(h.failures.length, 1, 'the verbs that fail afterwards are their callers\' to record, not another helper-start-failed')
+  assert.equal(h.exits.length, 0, 'the helper is still there')
+})
+
+test('W1 a spawn that fails (the program is not there, or spawn throws) is helper-start-failed', async () => {
+  for (const spawnFn of [
+    () => ghostChild((c) => c.emit('error', Object.assign(new Error('spawn powershell.exe ENOENT'), { code: 'ENOENT' }))),
+    () => { throw Object.assign(new Error('spawn EACCES'), { code: 'EACCES' }) },
+  ]) {
+    const failures = []
+    const h = startHelper({ spawn: spawnFn, onFailure: (r) => failures.push(r) })
+    await assert.rejects(h.call('ps'), (e) => e.code === 'helper-start-failed')
+    assert.equal(failures.length, 1)
+    assert.deepEqual([failures[0].event, failures[0].where, failures[0].code], ['failure', 'helper', 'helper-start-failed'])
+    assert.match(failures[0].errno, /^E(NOENT|ACCES)$/)
+    assert.deepEqual(checkRecord(failures[0]), [])
+    h.close()
+  }
+})
+
+test('W1 a helper that goes down by two routes at once (error, then close) is still ONE record', async () => {
+  const failures = []
+  const h = startHelper({ spawn: () => ghostChild((c) => { c.emit('error', Object.assign(new Error('spawn x ENOENT'), { code: 'ENOENT' })); c.emit('close', 1, null); c.emit('error', new Error('again')) }), onFailure: (r) => failures.push(r) })
+  await assert.rejects(h.ready)
+  await new Promise((r) => setTimeout(r, 50))
+  assert.equal(failures.length, 1)
+})
+
+test('W1 a helper that never says ready is killed and is helper-start-failed', async (t) => {
+  const h = started(t, { hangBeforeReady: true }, { readyTimeoutMs: 100 })
+  const pid = h.pid
+  assert.ok(alive(pid), 'the fake is up and silent')
+  await rejects(h.call('version'), 'helper-start-failed')
+  assert.equal(h.failures.length, 1)
+  assert.match(h.failures[0].reason, /not ready within 100 ms/)
+  await until(() => !alive(pid)) // killed, not just forgotten
+})
+
+test('W1 close() is not a failure: no helper-down, the child is gone, later calls are refused', async (t) => {
+  const h = started(t, {})
+  await h.call('version')
+  await h.close()
+  await rejects(h.call('version'), 'helper-closed')
+  assert.equal(h.failures.length, 0)
+  assert.equal(h.exits.length, 1)
+  assert.equal(h.exits[0].closed, true)
+})
+
+// ---------- W1: helper.ps1 has no write verb (static scan), and says what the JS side says ----------
+
+const PS = fs.readFileSync(HELPER_PS1, 'utf8')
+/** What a read-only helper must never contain: the spec's list (Set-ItemProperty New-Item Remove- netsh schtasks setx Register-) and the other
+ *  ways to write, run, fetch or stop something. The scan reads the whole file, comments included, so a comment cannot hide one either. */
+const WRITE_PATTERNS = [
+  /\bSet-[A-Za-z]+/, /\bNew-(?!Object\b)[A-Za-z]+/, /\b(Remove|Register|Unregister|Clear|Export|Import|Enable|Disable|Install|Uninstall|Restart|Rename|Move|Copy)-[A-Za-z]*/,
+  /\bOut-File\b/, /\bAdd-Content\b/, /\b(Start|Stop)-(Process|Service|Job|Sleep)\b/, /\bInvoke-[A-Za-z]+/, /\b(iex|iwr|irm|sc\.exe|reg\.exe)\b/i,
+  /\bnetsh\b/i, /\bschtasks\b/i, /\bsetx\b/i, /\breg\s+(add|delete|import|copy|save|load|restore)\b/i,
+  /\[(System\.)?IO\.(File|Directory)\]::(Write|Append|Create|Delete|Move|Copy|Open|Replace|SetAttributes)/i, /\.(SetValue|DeleteValue|DeleteSubKey|DeleteSubKeyTree|CreateSubKey|Kill|Terminate)\(/,
+  /\bWebClient\b|\bHttpClient\b|\bTcpClient\b|\bSocket\b|\bNamedPipeClientStream\b/,
+]
+const writeVerbsIn = (text) => WRITE_PATTERNS.filter((re) => re.test(text)).map(String)
+
+test('W1 helper.ps1 contains no write, run or fetch verb (static scan); the scan can fail', () => {
+  assert.deepEqual(writeVerbsIn(PS), [])
+  for (const planted of ['Set-ItemProperty -Path x', 'New-Item y', 'Remove-Item z', 'netsh winhttp', 'schtasks /Create', 'setx A B', 'Register-ScheduledTask', 'Set-Content f', 'Out-File f', '[IO.File]::WriteAllText($f,$t)', '$k.SetValue("a",1)', 'Start-Process x', 'Invoke-Expression $x', 'reg add HKCU\\x']) {
+    assert.ok(writeVerbsIn(planted).length > 0, `the scan misses: ${planted}`)
+  }
+  assert.deepEqual(writeVerbsIn('New-Object System.Text.StringBuilder'), [], 'New-Object builds a .NET object in memory: the one New- the helper uses')
+})
+
+// The native half is where the power is: the C# in the Add-Type here-string can write a file, start a process, kill one or set a registry
+// value with a single line that WRITE_PATTERNS (PowerShell verbs and bracketed calls) never sees. So the native surface is pinned instead:
+// the P/Invoke imports are exactly this list (dll and function), each used the read way, and nothing else that writes, runs or fetches is in the C#.
+const NATIVE_IMPORTS = [
+  'advapi32.dll!GetSidSubAuthority', 'advapi32.dll!GetSidSubAuthorityCount', 'advapi32.dll!GetTokenInformation', 'advapi32.dll!OpenProcessToken',
+  'iphlpapi.dll!GetBestInterface', 'iphlpapi.dll!GetExtendedTcpTable',
+  'kernel32.dll!CloseHandle', 'kernel32.dll!CreateFile', 'kernel32.dll!CreateToolhelp32Snapshot', 'kernel32.dll!GetCurrentProcess', 'kernel32.dll!GetNamedPipeServerProcessId',
+  'kernel32.dll!GetProcessTimes', 'kernel32.dll!OpenProcess', 'kernel32.dll!Process32FirstW', 'kernel32.dll!Process32NextW', 'kernel32.dll!ProcessIdToSessionId',
+  'kernel32.dll!QueryFullProcessImageName',
+]
+const IMPORT_RE = /\[(?:System\.Runtime\.InteropServices\.)?DllImport\(\s*"([^"]+)"([^\]]*)\)\]\s*(?:(?:public|private|internal|static|extern|unsafe)\s+)+[\w.<>[\]]+\s+(\w+)\s*\(/g
+/** What the C# may not contain, wherever it sits (comments too). */
+const CS_BANS = [
+  [/\bSystem\s*\.\s*IO\b|\bFile\s*\.|\bDirectory\s*\./, 'file access'],
+  [/\bProcess\s*\.\s*Start\b|\bProcessStartInfo\b|\.Kill\s*\(|\.CloseMainWindow\b/, 'starting or stopping a process'],
+  [/\bRegistry(Key)?\b/, 'the registry'],
+  [/\bEnvironment\s*\.\s*(Exit|FailFast|SetEnvironmentVariable)\b/, 'ending the process or writing the environment'],
+  [/\bMarshal\s*\.\s*Write/, 'writing memory'],
+  [/\bMarshal\s*\.\s*Copy\s*\((?!row\b)/, 'a Marshal.Copy that is not a read of a table row'],
+  [/\bWebClient\b|\bHttpClient\b|\bHttpWebRequest\b|\bWebRequest\b|\bTcpClient\b|\bSocket\b|\bNamedPipeClientStream\b|\bSystem\s*\.\s*Net\s*\.\s*Sockets\b/, 'the network'],
+  [/\bAssembly\s*\.|GetDelegateForFunctionPointer|GetProcAddress|LoadLibrary|\bActivator\s*\./, 'loading or calling code that is not listed'],
+  [/\bEntryPoint\b/, 'a DllImport whose entry point is not its name'],
+]
+/** What a read-only native half still has to look like at the call sites: the access masks that cannot write, kill or create. */
+function callSiteViolations(cs) {
+  const body = cs.split('\n').filter((l) => !/\bextern\b/.test(l)).join('\n') // the declarations name the parameters; the calls give the values
+  const out = []
+  for (const m of body.matchAll(/\bOpenProcess\(\s*([^,)]*)/g)) if (m[1].trim() !== '0x1000') out.push(`OpenProcess with access ${m[1].trim()}: only PROCESS_QUERY_LIMITED_INFORMATION (0x1000) reads`)
+  for (const m of body.matchAll(/\bOpenProcessToken\(\s*[^,]+,\s*([^,]+),/g)) if (m[1].trim() !== '0x8') out.push(`OpenProcessToken with access ${m[1].trim()}: only TOKEN_QUERY (0x8) reads`)
+  for (const m of body.matchAll(/\bCreateFile\(\s*[^,]+,\s*([^,]+),\s*[^,]+,\s*[^,]+,\s*([^,]+),/g)) {
+    if (m[1].trim() !== '0x80000000') out.push(`CreateFile with access ${m[1].trim()}: only GENERIC_READ (0x80000000) reads`)
+    if (m[2].trim() !== '3') out.push(`CreateFile with disposition ${m[2].trim()}: only OPEN_EXISTING (3) cannot create`)
+  }
+  return out
+}
+/** Everything the native surface of a helper script may not be, as short sentences; [] = it can only read. */
+function nativeViolations(text) {
+  const out = []
+  const code = text.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n') // PowerShell comment lines may mention Add-Type
+  const compiles = code.match(/\bAdd-Type\b/g) || []
+  if (compiles.length !== 1 || !/\bAdd-Type\s+-TypeDefinition\s+\$cs\b/.test(code)) out.push('Add-Type is not exactly one `-TypeDefinition $cs`: native code compiled from somewhere else')
+  if (/\bAssembly\b|-MemberDefinition|\bLoadFile\b|\bLoadFrom\b/.test(code)) out.push('the script loads an assembly or compiles a member definition')
+  const imports = [...text.matchAll(IMPORT_RE)].map((m) => `${m[1].toLowerCase()}!${m[3]}`)
+  if ((text.match(/DllImport/g) || []).length !== imports.length || (text.match(/\bextern\b/g) || []).length !== imports.length) out.push('a DllImport or extern the scan cannot read: every import must be written in the one shape it parses')
+  const extra = imports.filter((i) => !NATIVE_IMPORTS.includes(i))
+  const missing = NATIVE_IMPORTS.filter((i) => !imports.includes(i))
+  if (extra.length) out.push(`imports outside the read-only list: ${extra.join(', ')}`)
+  if (missing.length) out.push(`imports of the list that are gone (update the list): ${missing.join(', ')}`)
+  const natives = [...text.matchAll(/@'\r?\n([\s\S]*?)\r?\n'@/g)].map((m) => m[1]).filter((h) => /\bDllImport\b|\bclass\b/.test(h))
+  if (natives.length !== 1) { out.push(`the native code is ${natives.length} here-strings, not one`); return out }
+  for (const [re, what] of CS_BANS) if (re.test(natives[0])) out.push(`the C# touches ${what}`)
+  return [...out, ...callSiteViolations(natives[0])]
+}
+
+test('W1 the C# in helper.ps1 imports exactly the read-only native functions, uses them the read way, and touches no file, registry value or process', () => {
+  assert.deepEqual(nativeViolations(PS), [])
+  const imports = [...PS.matchAll(IMPORT_RE)].map((m) => `${m[1].toLowerCase()}!${m[3]}`)
+  assert.deepEqual([...imports].sort(), [...NATIVE_IMPORTS].sort())
+  assert.equal(NATIVE_IMPORTS.length, 17)
+})
+
+test('W1 the native scan can fail: each planted write, run, kill or registry change in the C# is caught', () => {
+  const plant = (from, to) => { assert.ok(PS.includes(from), `the plant point moved: ${from}`); return PS.replace(from, to) }
+  const inClass = (member) => plant('  static string N(long v)', `  ${member}\n  static string N(long v)`)
+  const planted = {
+    'a file write': inClass('static void X() { System.IO.File.WriteAllText("a", "b"); }'),
+    'a file delete through a using': inClass('static void X() { Directory.Delete("c:\\\\x", true); }'),
+    'a process start': inClass('static void X() { System.Diagnostics.Process.Start("cmd.exe"); }'),
+    'a Kill': inClass('static void X() { System.Diagnostics.Process.GetCurrentProcess().Kill(); }'),
+    'a registry write': inClass('static void X() { Microsoft.Win32.Registry.CurrentUser.CreateSubKey("x"); }'),
+    'Environment.Exit': inClass('static void X() { Environment.Exit(0); }'),
+    'a memory write': inClass('static void X(IntPtr p) { Marshal.WriteInt32(p, 0, 1); }'),
+    'a Marshal.Copy into native memory': inClass('static void X(byte[] x, IntPtr p) { Marshal.Copy(x, 0, p, 16); }'),
+    'a web client': inClass('static void X() { new System.Net.WebClient().DownloadString("http://x"); }'),
+    'a delegate from a function pointer': inClass('static void X(IntPtr p) { Marshal.GetDelegateForFunctionPointer(p, typeof(Action)); }'),
+    'TerminateProcess imported': plant('  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);', '  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);\n  [DllImport("kernel32.dll")] static extern bool TerminateProcess(IntPtr h, uint code);'),
+    'RegSetValueEx imported': plant('  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);', '  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);\n  [DllImport("advapi32.dll")] static extern int RegSetValueEx(IntPtr k, string n, int r, int t, byte[] d, int c);'),
+    'a listed import redirected with EntryPoint': plant('[DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);', '[DllImport("kernel32.dll", EntryPoint = "TerminateProcess")] static extern bool CloseHandle(IntPtr h);'),
+    'a listed import taken from another dll': plant('[DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);', '[DllImport("evil.dll")] static extern bool CloseHandle(IntPtr h);'),
+    'an import written in a shape the scan cannot read': plant('  static string N(long v)', '  [DllImport("kernel32.dll")]\n  [return: MarshalAs(UnmanagedType.Bool)] static extern bool TerminateProcess(IntPtr h, uint c);\n  static string N(long v)'),
+    'a process opened for termination': plant('OpenProcess(0x1000, false, pid)', 'OpenProcess(0x0001, false, pid)'),
+    'a token opened for writing': plant('OpenProcessToken(proc, 0x8, out tok)', 'OpenProcessToken(proc, 0x20, out tok)'),
+    'a pipe opened for writing': plant('0x80000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero)', '0x40000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero)'),
+    'a pipe opened with CREATE_ALWAYS': plant('0x80000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero)', '0x80000000, 3, IntPtr.Zero, 2, 0, IntPtr.Zero)'),
+    'a second Add-Type': PS + '\nAdd-Type -MemberDefinition \'[DllImport("kernel32.dll")] public static extern bool TerminateProcess(IntPtr h, uint c);\' -Name X -Namespace Y\n',
+    'an assembly loaded': PS + '\n[System.Reflection.Assembly]::LoadFile("c:\\\\x.dll")\n',
+  }
+  for (const [what, text] of Object.entries(planted)) assert.ok(nativeViolations(text).length > 0, `the native scan misses: ${what}`)
+  // and the unplanted text is still clean, so the plants above are what turned it red
+  assert.deepEqual(nativeViolations(PS), [])
+})
+
+test('W1 helper.ps1 opens the registry and the certificate stores read-only', () => {
+  const opens = [...PS.matchAll(/OpenSubKey\(([^)]*)\)/g)].map((m) => m[1])
+  assert.ok(opens.length > 0)
+  for (const a of opens) assert.match(a, /,\s*\$false\s*$/, `OpenSubKey(${a}) is not read-only`)
+  const stores = [...PS.matchAll(/\.Open\(([^)]*)\)/g)].map((m) => m[1])
+  assert.ok(stores.length > 0)
+  for (const a of stores) assert.match(a, /OpenFlags\]::ReadOnly/, `X509Store.Open(${a}) is not read-only`)
+})
+
+test('W1 every Get-CimInstance in helper.ps1 has an operation timeout shorter than the client\'s, so a stuck WMI cannot hold the single-threaded helper for ever', () => {
+  const cim = (text) => text.split('\n').filter((l) => /^[^#]*\bGet-CimInstance\b/.test(l))
+  const calls = cim(PS)
+  assert.ok(calls.length >= 2, 'the filtered query and the full enumeration')
+  for (const c of calls) {
+    const m = /-OperationTimeoutSec\s+(\d+)/.exec(c)
+    assert.ok(m, `no -OperationTimeoutSec: ${c.trim()}`)
+    assert.ok(Number(m[1]) * 1000 < PS_TIMEOUT_MS, `CIM must give up (${m[1]} s) before the client does (${PS_TIMEOUT_MS} ms): its answer is then an error, not silence`)
+  }
+  assert.equal(cim('$rows = @(Get-CimInstance -ClassName Win32_Process -Property ProcessId)').filter((l) => !/-OperationTimeoutSec/.test(l)).length, 1, 'the check can fail')
+})
+
+test('W1 helper.ps1 answers exactly the verbs the JS side allows, and reads exactly the registry names the JS side allows', () => {
+  const verbs = [...PS.matchAll(/^\s*'([a-z-]+)'\s*\{/gm)].map((m) => m[1])
+  assert.deepEqual([...verbs].sort(), [...HELPER_VERBS].sort())
+  assert.equal(Number(/\$script:Proto\s*=\s*(\d+)/.exec(PS)[1]), HELPER_PROTO, 'the protocol number in the ready line')
+  const m = /\$RegAllowJson\s*=\s*@'\r?\n([\s\S]*?)\r?\n'@/.exec(PS)
+  assert.ok(m, 'the allow-list literal is there')
+  assert.deepEqual(JSON.parse(m[1]), JSON.parse(JSON.stringify(REG_READ_ALLOW)))
+})
+
+test('W1 helper.ps1 takes the declared policy keys as its one parameter, first, checks each against the same patterns as helper.mjs, and refuses to start on one that fails', () => {
+  const code = PS.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
+  assert.ok(/^\s*param\(\[string\]\$ExtraRegAllowB64 = ''\)\s*$/m.test(code), 'the parameter')
+  assert.ok(code.indexOf('param(') < code.indexOf('$ErrorActionPreference'), 'a param block must be the first statement of a script')
+  assert.equal((code.match(/\$ExtraRegAllowB64/g) || []).length, 3, 'the parameter is declared, tested and decoded, and used nowhere else')
+  // the patterns the script checks with are the ones helper.mjs exports: one text, so the two cannot drift
+  assert.ok(PS.includes(`$PolicyKeyPattern = '${POLICY_KEY_PATTERN}'`), 'the key pattern of the script is POLICY_KEY_PATTERN')
+  assert.ok(PS.includes(`$PolicyNamePattern = '${POLICY_NAME_PATTERN}'`), 'the name pattern of the script is POLICY_NAME_PATTERN')
+  assert.ok(/-match \$PolicyKeyPattern/.test(code) && /-match \$PolicyNamePattern|-notmatch \$PolicyNamePattern/.test(code), 'both patterns are applied')
+  assert.ok(/\(\$eh -ieq 'HKCU'\) -or \(\$eh -ieq 'HKLM'\)/.test(code), 'only the two hives')
+  assert.ok(/throw \('extra reg-read entry refused/.test(code), 'an entry that fails is a start failure, never silently dropped or accepted')
+  // the extra entries join the list only through that check: of the two lines that append to it, the first loads the fixed list, and the second is inside the check
+  assert.ok(!/\$script:RegAllow\s*\+=/.test(code), 'no `+=`: it would need the list to be an array, and the list is a List')
+  const adds = code.split('\n').filter((l) => /\$script:RegAllow\.Add\(/.test(l))
+  assert.equal(adds.length, 2)
+  assert.ok(code.indexOf(adds[0]) < code.indexOf('$PolicyKeyPattern ='), 'the first loads the fixed list')
+  assert.ok(code.indexOf(adds[1]) > code.indexOf('-match $PolicyKeyPattern'), 'the second is after the check')
+})
+
+/** Every place the script turns JSON into a list must enumerate it the way that holds in Windows PowerShell 5.1 AND in PowerShell 7. 5.1 sends an array out of ConvertFrom-Json as ONE object (7 enumerates it), and
+ *  @( ) does not unwrap that: @(ConvertFrom-Json '[a,b]') is a list holding one list, and `$r.hive -ieq $h -and $r.key -ieq $k` then reads 「some entry has this hive and some entry has this key」. A foreach over the parenthesised
+ *  call enumerates the same under both. The only other use is the request line, which is one object (a request is never a list). Returns the lines that break the rule. */
+function jsonListViolations(text) {
+  const out = []
+  for (const l of text.split('\n').filter((x) => !/^\s*#/.test(x) && /ConvertFrom-Json/.test(x))) {
+    if (/@\(\s*ConvertFrom-Json/.test(l) || /@\([^)]*\(\s*ConvertFrom-Json/.test(l)) out.push(`wrapped in @( ): ${l.trim()}`)
+    else if (!/\bforeach\s*\(\$\w+\s+in\s+\(ConvertFrom-Json\s+-InputObject\s+\$\w+\)\)/.test(l) && !/^\s*\$req\s*=\s*ConvertFrom-Json\s+-InputObject\s+\$line\s*$/.test(l)) out.push(`not a foreach over the parenthesised call: ${l.trim()}`)
+  }
+  return out
+}
+
+test('W1 helper.ps1 enumerates every JSON list through a foreach over the parenthesised call, never through @( ) (Windows PowerShell 5.1 sends an array out as one object); the scan can fail', () => {
+  assert.deepEqual(jsonListViolations(PS), [])
+  const uses = PS.split('\n').filter((x) => !/^\s*#/.test(x) && /ConvertFrom-Json/.test(x))
+  assert.equal(uses.length, 3, 'the fixed list, the declared keys and the request line: a new use has to be looked at')
+  // what it was: a list of one list under 5.1, which let a request the JS side refuses pass the script's own check, and made two declared keys throw
+  assert.equal(jsonListViolations('$script:RegAllow = @(ConvertFrom-Json -InputObject $RegAllowJson)').length, 1)
+  assert.equal(jsonListViolations('  $extra = @(ConvertFrom-Json -InputObject ([System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($ExtraRegAllowB64))))').length, 1)
+  assert.equal(jsonListViolations('$list = ConvertFrom-Json -InputObject $RegAllowJson').length, 1, 'a bare assignment is no better to rely on once a one-entry array arrives from PowerShell 7')
+  assert.equal(jsonListViolations('foreach ($r in @(ConvertFrom-Json -InputObject $x)) { }').length, 1)
+  assert.deepEqual(jsonListViolations('foreach ($e in (ConvertFrom-Json -InputObject $extraJson)) {'), [])
+})
+
+test('W1 helper.ps1 refuses a declared key AND each declared value name that holds a control character: .NET\'s `$` also matches before a final line feed, JavaScript\'s does not, so the pattern alone is not the same check', () => {
+  const code = PS.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
+  assert.ok(/\$ek -notmatch '\[\\x00-\\x1f\]'/.test(code), 'the key')
+  assert.ok(/foreach \(\$n in \$en\) \{ if \(\(\$n -notmatch \$PolicyNamePattern\) -or \(\$n -match '\[\\x00-\\x1f\]'\)\) \{ \$namesOk = \$false \} \}/.test(code), 'each name, in the same test as its pattern')
+  // the JavaScript side: a trailing line feed is no declaration (so the lines above stay unreachable from helper.mjs, and the script is only the second check)
+  for (const bad of [{ key: 'Software\\Policies\\Claude\n', names: ['x'] }, { key: 'Software\\Policies\\Claude', names: ['x\n'] }, { key: 'Software\\Policies\\Claude', names: ['x', 'y\u0001'] }]) {
+    assert.throws(() => declaredRegAllow([{ hive: 'HKCU', ...bad }]), TypeError, JSON.stringify(bad))
+  }
+})
+
+test('W1 the policy key pattern: helper.mjs accepts exactly what the table says (the script carries the same text; that .NET reads it the same way, trailing line feed aside, is checked on a real PowerShell in Task 11)', () => {
+  const key = new RegExp(POLICY_KEY_PATTERN, 'i')
+  const name = new RegExp(POLICY_NAME_PATTERN)
+  const keys = { 'Software\\Policies\\Claude': true, 'SOFTWARE\\Policies\\Claude\\Sub Key': true, 'software\\policies\\A.B-C_D': true, 'Software\\Policies': false, 'Software': false, 'Software\\Policies\\': false, 'Software\\Policies\\..': false, 'Software\\Policies\\.x': false, 'Software\\PoliciesX\\a': false, 'Software\\Microsoft\\Run': false, 'Environment': false, '': false, 'Software\\Policies\\a\\\\b': false, 'Software\\Policies\\a\nb': false, 'Software\\Policies\\a\n': false }
+  for (const [k, want] of Object.entries(keys)) {
+    assert.equal(key.test(k), want, JSON.stringify(k))
+    let accepted = true
+    try { declaredRegAllow([{ hive: 'HKCU', key: k, names: ['x'] }]) } catch { accepted = false }
+    assert.equal(accepted, want, `declaredRegAllow: ${JSON.stringify(k)}`)
+  }
+  const names = { egressProxyUrl: true, 'a b': true, 'A_b-1.2': true, '': false, '.x': false, 'a\\b': false, 'a"b': false, 'a\nb': false, 'a\n': false, [`x${'y'.repeat(64)}`]: false }
+  for (const [n, want] of Object.entries(names)) assert.equal(name.test(n), want, JSON.stringify(n))
+})
+
+/** Delimiters balance outside comments, strings and here-strings: the cheapest guard against a typo in code no CI here can run. */
+function balanced(src, { comment }) {
+  const stack = []
+  const pairs = { ')': '(', ']': '[', '}': '{' }
+  const ps = comment === '#'
+  let i = 0
+  while (i < src.length) {
+    const c = src[i]
+    if ((ps && c === '#') || (!ps && c === '/' && src[i + 1] === '/')) { while (i < src.length && src[i] !== '\n') i++; continue }
+    if (c === '\'' || c === '"') {
+      i++
+      while (i < src.length) {
+        if (ps && c === '\'' && src[i] === '\'' && src[i + 1] === '\'') { i += 2; continue } // '' inside a PowerShell single-quoted string
+        if (src[i] === c) break
+        if ((ps && c === '"' && src[i] === '`') || (!ps && src[i] === '\\')) i++
+        i++
+      }
+      i++
+      continue
+    }
+    if ('([{'.includes(c)) stack.push(c)
+    else if (pairs[c]) { if (stack.pop() !== pairs[c]) return `unbalanced ${c} near offset ${i}` }
+    i++
+  }
+  return stack.length ? `unclosed ${stack.join('')}` : null
+}
+
+test('W1 helper.ps1 and the C# inside it have balanced delimiters', () => {
+  const hereStrings = [...PS.matchAll(/@'\r?\n([\s\S]*?)\r?\n'@/g)].map((m) => m[1])
+  assert.ok(hereStrings.length >= 2, 'the C# and the allow-list are here-strings')
+  const cs = hereStrings.find((h) => h.includes('DllImport'))
+  assert.ok(cs, 'the native code is a here-string')
+  assert.equal(balanced(cs, { comment: '//' }), null)
+  const rest = PS.replace(/@'\r?\n[\s\S]*?\r?\n'@/g, '')
+  assert.equal(balanced(rest, { comment: '#' }), null)
+  assert.equal(balanced('function f { if ($a) { 1 }', { comment: '#' }), 'unclosed {', 'the checker itself can fail')
+  assert.equal(balanced("$x = 'it''s (' # }", { comment: '#' }), null, "a doubled quote stays inside the string")
+})
+
+test('W1 helper.ps1 is ASCII only (Windows PowerShell 5.1 reads a script without a BOM in the ANSI code page)', () => {
+  assert.equal([...PS].filter((ch) => ch.charCodeAt(0) > 126).length, 0)
+  assert.ok(!PS.startsWith('\uFEFF'))
+})
+
+// ---------- W2: process facts and exec / exit by snapshot difference ----------
+
+const row = (pid, extra = {}) => ({ pid, ppid: 1, name: `p${pid}.exe`, exe: `C:\\apps\\p${pid}.exe`, cmdline: `"C:\\apps\\p${pid}.exe" --x`, startedAt: 1000 + pid, sessionId: 2, integrity: 'medium', tokenDenied: false, ...extra })
+/** An in-process helper whose `ps` answers the given snapshots in turn (the last repeats); an Error in the list is thrown. */
+function psHelper(snapshots, { delayMs = 0 } = {}) {
+  let i = 0
+  return {
+    calls: [],
+    async call(verb, args, opts) {
+      this.calls.push({ verb, args, opts })
+      if (verb !== 'ps') throw new Error(`unexpected verb ${verb}`)
+      const procs = snapshots[Math.min(i++, snapshots.length - 1)]
+      if (delayMs) await new Promise((r) => setTimeout(r, delayMs))
+      if (procs instanceof Error) throw procs
+      return { sessionId: 2, procs }
+    },
+  }
+}
+function collect(w) { const ev = []; for (const n of ['exec', 'exit', 'facts-update', 'facts-error', 'poll-error']) w.on(n, (x) => ev.push([n, x])); return ev }
+const brief = (ev) => ev.map(([n, x]) => [n, x.pid])
+
+test('W2 a new pid is an exec, a vanished one an exit; the first snapshot is the baseline and says nothing', async () => {
+  const w = createProcWatcher({ helper: psHelper([[row(10), row(11)], [row(11), row(12)], [row(11), row(12)]]) })
+  const ev = collect(w)
+  await w.poll()
+  assert.deepEqual(ev, [], 'what was already running is scan()\'s, not an exec')
+  await w.poll()
+  assert.deepEqual(brief(ev), [['exit', 10], ['exec', 12]])
+  assert.deepEqual(ev[0][1], { pid: 10, startedAt: 1010 })
+  const facts = ev[1][1]
+  assert.deepEqual({ ...facts }, {
+    os: 'win32', pid: 12, ppid: 1, name: 'p12.exe', exe: 'C:\\apps\\p12.exe', argv: ['C:\\apps\\p12.exe', '--x'], cmdline: '"C:\\apps\\p12.exe" --x', env: null, envRead: false, cwd: null,
+    startedAt: 1012, startTicks: '1012', sessionId: 2, integrity: 'medium', tokenDenied: false, elevated: false, elevationInferred: false, source: 'exec', cmdlineState: 'ok',
+  })
+  assert.equal(facts.envError, 'env-unreadable', 'another process\'s environment is never read on Windows (4.8 §10.1): null with the reason, not an empty one')
+  assert.equal(facts.envRead, false, 'and it says so (envRead: false): the tracker treats env null as the OS\'s rule, not a failure to read (4.8 §5.4, Task 8(v))')
+  await w.poll()
+  assert.equal(ev.length, 2, 'an unchanged snapshot is silent')
+})
+
+test('W2 the same pid with another start time is an exit and then an exec (pid reuse), also when the program is the same', async () => {
+  const w = createProcWatcher({ helper: psHelper([[row(10)], [row(10, { startedAt: 5000 })], [row(10, { startedAt: 6000, exe: 'C:\\other\\o.exe' })]]) })
+  const ev = collect(w)
+  await w.poll()
+  await w.poll()
+  assert.deepEqual(ev.map(([n, x]) => [n, x.pid, x.startedAt]), [['exit', 10, 1010], ['exec', 10, 5000]])
+  await w.poll()
+  assert.deepEqual(ev.slice(2).map(([n, x]) => [n, x.pid, x.startedAt]), [['exit', 10, 5000], ['exec', 10, 6000]])
+})
+
+test('W2 a start time that cannot be read falls back to the image path to tell a reused pid', async () => {
+  const w = createProcWatcher({ helper: psHelper([[row(10, { startedAt: null })], [row(10, { startedAt: null })], [row(10, { startedAt: null, exe: 'C:\\other\\o.exe' })]]) })
+  const ev = collect(w)
+  await w.poll(); await w.poll()
+  assert.deepEqual(ev, [])
+  await w.poll()
+  assert.deepEqual(brief(ev), [['exit', 10], ['exec', 10]])
+  assert.equal(ev[1][1].startTicks, null, 'no start time: no marker identity either')
+})
+
+test('W2 scan() lists the live processes as facts (source scan), announces nothing, and never moves what the diff knows', async () => {
+  const h = psHelper([[row(10), row(11)], [row(11), row(12)], [row(11), row(12)]])
+  const w = createProcWatcher({ helper: h })
+  const ev = collect(w)
+  const first = await w.scan() // the baseline is taken first (snapshot 0, silent), then the scan's own snapshot (1)
+  assert.deepEqual(first.map((f) => [f.pid, f.source]), [[11, 'scan'], [12, 'scan']])
+  assert.deepEqual(ev, [], 'a scan announces nothing')
+  await w.poll() // snapshot 2 = snapshot 1: scan() did not move the diff, so pid 10 is gone and pid 12 is new to it (pid 12 was also in the scan: a duplicate, never a gap)
+  assert.deepEqual(brief(ev), [['exit', 10], ['exec', 12]])
+  assert.deepEqual(h.calls.map((c) => c.args), [{}, {}, {}], 'this session only (the helper default)')
+  const all = createProcWatcher({ helper: h, all: true })
+  await all.scan()
+  assert.deepEqual(h.calls.at(-1).args, { all: true })
+})
+
+test('W2 a process created between scan() and start() is an exec, not swallowed by the baseline: scan-then-start and start-then-scan are both safe', async () => {
+  // The daemon scans at startup and at every `on`, and starts the watcher once. A baseline poll taken AFTER the scan would take the process
+  // created in between into the baseline silently: in no scan, in no exec. scan() takes the baseline itself when none exists yet, so the order does not matter.
+  const snaps = () => [[row(10)], [row(10), row(11)], [row(10), row(11)], [row(10), row(11), row(12)]]
+  for (const order of ['scan then start', 'start then scan', 'start, not awaited, then scan']) {
+    const w = createProcWatcher({ helper: psHelper(snaps()), intervalMs: 5, timers: { setInterval: () => 'T', clearInterval() {} } })
+    const ev = collect(w)
+    let facts
+    if (order === 'scan then start') { facts = await w.scan(); await w.start() } else if (order === 'start then scan') { await w.start(); facts = await w.scan() } else { w.start(); facts = await w.scan() }
+    assert.ok(facts.some((f) => f.pid === 10), order)
+    await w.poll(); await w.poll()
+    const execs = ev.filter(([n]) => n === 'exec').map(([, x]) => x.pid)
+    assert.ok(execs.includes(11) || facts.some((f) => f.pid === 11), `${order}: pid 11 is in the scan or announced`)
+    assert.ok(execs.includes(12), `${order}: pid 12, created last, is announced`)
+    w.stop()
+  }
+  // the gap, exactly: scan sees [10], the baseline would have seen [10, 11]
+  const w = createProcWatcher({ helper: psHelper([[10], [10, 11], [10, 11]].map((l) => l.map((p) => row(p)))) })
+  const ev = collect(w)
+  await w.scan()
+  await w.start()
+  await until(() => w.stats().polls >= 2)
+  assert.deepEqual(brief(ev), [['exec', 11]], 'pid 11 appeared after the scan began its snapshot: it must be announced')
+})
+
+test('W2 start() returns the baseline poll\'s promise, and a second start() the same one', async () => {
+  const w = createProcWatcher({ helper: psHelper([[row(10)]]), timers: { setInterval: () => 'T', clearInterval() {} } })
+  const first = w.start()
+  assert.ok(first && typeof first.then === 'function')
+  assert.equal(await first, true)
+  assert.equal(w.stats().polls, 1, 'the baseline was taken when the promise settled')
+  assert.equal(w.start(), first, 'a second start() does not poll again')
+})
+
+// ---------- W2: a command line that is not there yet is told, not lost (4.8 §1 `ps`) ----------
+
+/** A ps row whose command line the helper has no answer for (yet). */
+const noCmd = (pid, state, extra = {}) => row(pid, { cmdline: null, cmdlineState: state, ...extra })
+
+test('W2 an exec whose command line is not known yet says so (cmdlineState), and the command line arriving later is a facts-update; nothing is lost to "first sight"', async () => {
+  // forms recognised by command line (node.exe + dsh, W3) would otherwise be missed for good: `exec` is told once, at first sight.
+  const w = createProcWatcher({ helper: psHelper([
+    [row(10)], // the baseline
+    [row(10), noCmd(11, 'pending')], // pid 11 is new; CIM has not given its command line yet
+    [row(10), noCmd(11, 'cim-backoff')], // CIM failed: not asked again for 30 s. Not known, still
+    [row(10), row(11, { cmdline: '"C:\\node\\node.exe" "C:\\npm\\@deepseek-ai\\dsh\\bin.js"' })], // it arrives
+    [row(10), row(11, { cmdline: '"C:\\node\\node.exe" "C:\\npm\\@deepseek-ai\\dsh\\bin.js"' })],
+  ]) })
+  const ev = collect(w)
+  await w.poll()
+  await w.poll()
+  assert.deepEqual(brief(ev), [['exec', 11]])
+  assert.deepEqual([ev[0][1].cmdline, ev[0][1].argv, ev[0][1].cmdlineState, ev[0][1].source], [null, [], 'pending', 'exec'], 'no command line is told as "not yet", not as "none"')
+  await w.poll()
+  assert.equal(ev.length, 1, 'still not known: nothing to add')
+  await w.poll()
+  assert.deepEqual(brief(ev), [['exec', 11], ['facts-update', 11]])
+  const up = ev[1][1]
+  assert.deepEqual([up.cmdline, up.argv, up.cmdlineState, up.source], ['"C:\\node\\node.exe" "C:\\npm\\@deepseek-ai\\dsh\\bin.js"', ['C:\\node\\node.exe', 'C:\\npm\\@deepseek-ai\\dsh\\bin.js'], 'ok', 'update'])
+  assert.deepEqual([up.pid, up.exe, up.startedAt, up.elevated], [11, 'C:\\apps\\p11.exe', 1011, false], 'the same facts, the command line filled in')
+  await w.poll()
+  assert.equal(ev.length, 2, 'told once')
+})
+
+test('W2 a command line that CIM gave up on (empty three times) is a facts-update too: "no command line, ever" is not "not yet"', async () => {
+  const w = createProcWatcher({ helper: psHelper([[row(10)], [row(10), noCmd(11, 'pending')], [row(10), noCmd(11, 'pending')], [row(10), noCmd(11, 'empty')], [row(10), noCmd(11, 'empty')]]) })
+  const ev = collect(w)
+  for (let i = 0; i < 5; i++) await w.poll()
+  assert.deepEqual(ev.map(([n, x]) => [n, x.pid, x.cmdlineState, x.cmdline]), [['exec', 11, 'pending', null], ['facts-update', 11, 'empty', null]])
+})
+
+test('W2 a final state at first sight (ok, empty, not-asked) never gets an update', async () => {
+  const w = createProcWatcher({ helper: psHelper([[row(10)], [row(10), row(11), noCmd(12, 'empty'), noCmd(13, 'not-asked')], [row(10), row(11), noCmd(12, 'empty'), noCmd(13, 'not-asked')]]) })
+  const ev = collect(w)
+  await w.poll(); await w.poll(); await w.poll()
+  assert.deepEqual(ev.map(([n, x]) => [n, x.pid, x.cmdlineState]), [['exec', 11, 'ok'], ['exec', 12, 'empty'], ['exec', 13, 'not-asked']])
+})
+
+test('W2 a process in the baseline whose command line was pending is updated too (a scan told the consumer it was pending); one that exits first, or is replaced under the same pid, is not', async () => {
+  const w = createProcWatcher({ helper: psHelper([
+    [noCmd(10, 'pending'), noCmd(11, 'pending'), noCmd(12, 'pending')], // baseline: silent
+    [noCmd(10, 'pending'), row(12), row(11, { cmdline: null, cmdlineState: 'pending', startedAt: 9999 })], // 10 still pending; 12 arrives; 11 was replaced under the same pid (pending)
+    [row(10), row(11, { startedAt: 9999 })], // 10 arrives; 12 exited; 11's new life arrives
+  ]) })
+  const ev = collect(w)
+  await w.poll(); await w.poll(); await w.poll()
+  assert.deepEqual(ev.map(([n, x]) => [n, x.pid]), [['exit', 11], ['exec', 11], ['facts-update', 12], ['exit', 12], ['facts-update', 10], ['facts-update', 11]])
+  assert.deepEqual(ev.filter(([n]) => n === 'facts-update').map(([, x]) => x.startedAt), [1012, 1010, 9999], 'the update of pid 11 is its second life, not the first')
+})
+
+test('W2 a helper that does not say cmdlineState: a command line is "ok", none is "empty" (final: no update will come); the facts of a scan carry the state', async () => {
+  const w = createProcWatcher({ helper: psHelper([[row(10), row(11, { cmdline: null }), noCmd(12, 'pending')]]) })
+  const facts = await w.scan()
+  assert.deepEqual(facts.map((f) => [f.pid, f.cmdlineState]), [[10, 'ok'], [11, 'empty'], [12, 'pending']])
+  assert.deepEqual(facts.map((f) => f.source), ['scan', 'scan', 'scan'])
+})
+
+test('W2 helper.ps1 gives each ps row a cmdlineState from exactly the set the watcher knows, and the C# writes it', () => {
+  const states = [...PS.matchAll(/\$state\[\$p\.Pid\]\s*=\s*'([a-z-]+)'/g)].map((m) => m[1])
+  assert.deepEqual([...new Set(states)].sort(), [...CMDLINE_STATES].sort())
+  assert.ok(/ProcsJson\(\$list, \$dict, \$state\)/.test(PS), 'the verb hands the states to the JSON builder')
+  assert.ok(/\\"cmdlineState\\":/.test(PS), 'the JSON builder writes the field')
+  assert.deepEqual([...CMDLINE_STATES], ['ok', 'pending', 'cim-backoff', 'empty', 'not-asked'])
+})
+
+test('W2 elevation: integrity High or above is elevated; a token that cannot be opened while the image path can is elevated, marked inferred (4.8 §10.1)', () => {
+  assert.deepEqual(elevationOf({ integrity: 'high', tokenDenied: false, exe: 'C:\\a.exe' }), { elevated: true, inferred: false })
+  assert.deepEqual(elevationOf({ integrity: 'system', exe: 'C:\\a.exe' }), { elevated: true, inferred: false })
+  assert.deepEqual(elevationOf({ integrity: 'medium', exe: 'C:\\a.exe' }), { elevated: false, inferred: false })
+  assert.deepEqual(elevationOf({ integrity: 'low', exe: 'C:\\a.exe' }), { elevated: false, inferred: false })
+  assert.deepEqual(elevationOf({ integrity: null, tokenDenied: true, exe: 'C:\\a.exe' }), { elevated: true, inferred: true })
+  assert.deepEqual(elevationOf({ integrity: null, tokenDenied: true, exe: null }), { elevated: null, inferred: false }, 'neither token nor image: not known')
+  assert.deepEqual(elevationOf({ integrity: null, tokenDenied: false, exe: 'C:\\a.exe' }), { elevated: null, inferred: false })
+})
+
+test('W2 a fixture process with tokenDenied and a readable image comes out of scan() elevated and inferred', async () => {
+  const w = createProcWatcher({ helper: psHelper([[row(20, { integrity: null, tokenDenied: true }), row(21, { integrity: 'high' })]]) })
+  const [a, b] = await w.scan()
+  assert.deepEqual([a.elevated, a.elevationInferred, a.tokenDenied], [true, true, true])
+  assert.deepEqual([b.elevated, b.elevationInferred], [true, false])
+})
+
+test('W2 a process whose image cannot be read is never an exec: one facts-error with what is still readable, listed in unreadable()', async () => {
+  const bad = row(30, { exe: null, name: 'svc.exe', cmdline: 'svc.exe --serve' })
+  const w = createProcWatcher({ helper: psHelper([[row(10), bad], [row(10), bad], [row(10)]]) })
+  const ev = collect(w)
+  await w.poll()
+  await w.poll()
+  assert.deepEqual(ev.map(([n]) => n), ['facts-error'], 'told once, not on every snapshot')
+  assert.deepEqual(ev[0][1], { os: 'win32', pid: 30, comm: 'svc.exe', argv: ['svc.exe', '--serve'], code: null, reason: ev[0][1].reason })
+  assert.match(ev[0][1].reason, /svc\.exe.*image path.*never judged/)
+  assert.deepEqual(w.unreadable(), [{ pid: 30, comm: 'svc.exe', errno: null, argv: ['svc.exe', '--serve'] }])
+  assert.deepEqual((await w.scan()).map((f) => f.pid), [10], 'scan() lists the readable ones only; this snapshot no longer has pid 30')
+  assert.deepEqual(w.unreadable(), [], 'gone again')
+})
+
+test('W2 a helper that fails is one poll-error per run of failures, never a throw; after a good poll it tells again', async () => {
+  const down = Object.assign(new Error('helper is down: killed'), { code: 'helper-down' })
+  const w = createProcWatcher({ helper: psHelper([[row(10)], down, down, [row(10)], down]) })
+  const ev = collect(w)
+  assert.equal(await w.poll(), true)
+  await w.poll(); await w.poll()
+  assert.deepEqual(ev.map(([n, x]) => [n, x.code, x.cause]), [['poll-error', 'helper-error', 'helper-down']], 'the code is the closed set\'s helper-error; what the client said is the cause')
+  await w.poll(); await w.poll()
+  assert.equal(ev.length, 2)
+  assert.match(ev[1][1].reason, /down/)
+})
+
+test('W2 a listener that throws loses nothing: the rest of the poll is announced, and the throw is one poll-error with the event and the pid', async () => {
+  const w = createProcWatcher({ helper: psHelper([[row(1)], [row(1), row(2), row(3), row(4)], [row(1), row(2), row(3), row(4)]]) })
+  const seen = []
+  w.on('exec', (f) => { seen.push(f.pid); if (f.pid === 2) throw new Error('listener bug') })
+  const errs = []
+  w.on('poll-error', (x) => errs.push(x))
+  await w.poll()
+  assert.equal(await w.poll(), true, 'a poll whose listener threw still ran')
+  assert.deepEqual(seen, [2, 3, 4], 'pids 3 and 4 were not lost to the throw on pid 2')
+  assert.deepEqual(errs.map((e) => [e.code, e.cause, e.event, e.pid]), [['helper-error', 'listener-threw', 'exec', 2]])
+  assert.match(errs[0].reason, /exec.*listener bug/)
+  await w.poll()
+  assert.deepEqual(seen, [2, 3, 4], 'the event that threw is told once: it is not announced again every poll')
+  assert.equal(errs.length, 1)
+  assert.equal(w.stats().listenerErrors, 1)
+})
+
+test('W2 a throwing exit, facts-error or poll-error listener is survived the same way, and a poll-error listener that throws cannot loop', async () => {
+  const bad = row(30, { exe: null, name: 'svc.exe' })
+  const w = createProcWatcher({ helper: psHelper([[row(1), row(2)], [row(3), bad], [row(3), bad]]) })
+  const ev = []
+  w.on('exit', (x) => { ev.push(['exit', x.pid]); throw new Error('exit listener bug') })
+  w.on('facts-error', (x) => { ev.push(['facts-error', x.pid]); throw new Error('facts-error listener bug') })
+  w.on('exec', (x) => ev.push(['exec', x.pid]))
+  const errs = []
+  w.on('poll-error', (x) => { errs.push(x.cause + ':' + x.event); throw new Error('poll-error listener bug') })
+  await w.poll()
+  await w.poll()
+  assert.deepEqual(ev.map(([n, pid]) => `${n}:${pid}`).sort(), ['exec:3', 'exit:1', 'exit:2', 'facts-error:30'], 'every announcement was made')
+  assert.deepEqual([...errs].sort(), ['listener-threw:exit', 'listener-threw:exit', 'listener-threw:facts-error'])
+})
+
+test('W2 a malformed row in the helper\'s answer is skipped and told once per run; the rest of the snapshot is used', async () => {
+  const w = createProcWatcher({ helper: psHelper([[row(10)], [row(10), null, 'x', { name: 'no pid' }, { pid: '12' }, row(11)], [row(10), null, row(11)], [row(10), row(11)], [row(10), row(11), 7]]) })
+  const ev = collect(w)
+  await w.poll()
+  assert.equal(await w.poll(), true, 'a null in the list is not an exception')
+  assert.deepEqual(brief(ev), [['poll-error', undefined], ['exec', 11]], 'told while the answer is read, then the diff: pid 11 was not lost to the rows around it')
+  assert.deepEqual([ev[0][1].code, ev[0][1].cause, ev[0][1].count], ['helper-error', 'malformed-rows', 4])
+  await w.poll()
+  assert.equal(ev.length, 2, 'the next malformed snapshot is the same run: not told again')
+  await w.poll() // a clean one ends the run
+  await w.poll()
+  assert.deepEqual(ev.slice(2).map(([n, x]) => [n, x.cause, x.count]), [['poll-error', 'malformed-rows', 1]])
+  assert.deepEqual((await w.scan()).map((f) => f.pid), [10, 11], 'scan() skips them too')
+})
+
+test('W2 start() and the interval never leave an unhandled rejection, whatever a listener or the helper\'s answer does', async () => {
+  const unhandled = []
+  const on = (e) => unhandled.push(e)
+  process.on('unhandledRejection', on)
+  try {
+    let tick
+    const w = createProcWatcher({ helper: psHelper([[row(1)], [row(1), null, row(2)], [row(1), null, row(2), row(3)]]), intervalMs: 5, timers: { setInterval: (fn) => { tick = fn; return 'T' }, clearInterval() {} } })
+    w.on('exec', () => { throw new Error('listener bug') })
+    w.on('poll-error', () => { throw new Error('and this one') })
+    w.start()
+    await until(() => w.stats().polls === 1)
+    tick()
+    await until(() => w.stats().polls === 2) // a tick while the previous poll is in flight is skipped: wait for each
+    tick()
+    await until(() => w.stats().polls === 3)
+    await new Promise((r) => setTimeout(r, 30)) // an unhandled rejection is reported after the microtasks drain
+    assert.deepEqual(unhandled, [])
+  } finally { process.off('unhandledRejection', on) }
+})
+
+test('W2 ps gets a generous timeout for the poll and the scan (10 s, psTimeoutMs to change it): the first ps after start reads every command line through CIM', async () => {
+  assert.equal(PS_TIMEOUT_MS, 10000)
+  const h = psHelper([[row(10)]])
+  const w = createProcWatcher({ helper: h })
+  await w.poll(); await w.scan()
+  assert.deepEqual(h.calls.map((c) => c.opts), [{ timeoutMs: 10000 }, { timeoutMs: 10000 }], 'not the 2 s default of a verb that reads a table')
+  const h2 = psHelper([[row(10)]])
+  const w2 = createProcWatcher({ helper: h2, psTimeoutMs: 1234 })
+  await w2.poll(); await w2.scan()
+  assert.deepEqual(h2.calls.map((c) => c.opts), [{ timeoutMs: 1234 }, { timeoutMs: 1234 }])
+})
+
+test('W2 a new ps is not sent while a timed-out one is still being worked on: no backlog behind a slow helper', async (t) => {
+  const log = path.join(tmpDir('asight-helper-'), 'in.log')
+  const h = started(t, { log, verbs: { ps: { delayMs: 500, data: { sessionId: 2, procs: [row(10)] } } } })
+  await h.ready
+  const psSent = () => lines(log).filter((l) => l.verb === 'ps').length
+  const w = createProcWatcher({ helper: h, psTimeoutMs: 30 })
+  const ev = collect(w)
+  await w.poll()
+  assert.deepEqual(ev.map(([n, x]) => [n, x.cause]), [['poll-error', 'helper-timeout']], 'told once')
+  assert.equal(await w.poll(), false, 'the helper is still on the first one: nothing is queued behind it')
+  assert.equal(psSent(), 1)
+  assert.equal(w.stats().deferred, 1)
+  await until(() => h.abandoned('ps') === 0)
+  assert.equal(await w.poll(), true, 'free again: the next poll goes out')
+  assert.equal(psSent(), 2)
+  assert.equal(ev.length, 1, 'the run of failures is still the one that was told')
+})
+
+test('W2 start() polls at once and on the interval; a poll still in flight is not started twice; stop() clears the timer', async () => {
+  const h = psHelper([[row(10)], [row(10), row(11)]], { delayMs: 30 })
+  let tick; let cleared = 0
+  const w = createProcWatcher({ helper: h, intervalMs: 77, timers: { setInterval: (fn, ms) => { tick = { fn, ms }; return 'T' }, clearInterval: (t) => { if (t === 'T') cleared++ } } })
+  const ev = collect(w)
+  w.start()
+  assert.equal(tick.ms, 77)
+  tick.fn() // a tick while the first poll is still in flight: skipped
+  await until(() => w.stats().polls === 1)
+  assert.equal(h.calls.length, 1)
+  tick.fn()
+  await until(() => ev.length)
+  assert.deepEqual(brief(ev), [['exec', 11]])
+  w.stop()
+  assert.equal(cleared, 1)
+})
+
+test('W2 through the real client and the fake helper: a ps answer becomes facts', async (t) => {
+  const h = started(t, { verbs: { ps: { seq: [{ sessionId: 2, procs: [row(10)] }, { sessionId: 2, procs: [row(10), row(11)] }] } } })
+  const w = createProcWatcher({ helper: h })
+  const ev = collect(w)
+  await w.poll(); await w.poll()
+  assert.deepEqual(brief(ev), [['exec', 11]])
+})
+
+test('W2 a command line is split the way CommandLineToArgvW does (the documented cases), and a missing one is no arguments', () => {
+  // the documented argument rules, after a program name (the first token has rules of its own, below)
+  const args = [
+    ['"abc" d e', ['abc', 'd', 'e']],
+    ['a\\\\\\b d"e f"g h', ['a\\\\\\b', 'de fg', 'h']], // backslashes not before a quote are literal
+    ['a\\\\\\"b c d', ['a\\"b', 'c', 'd']], // 3 backslashes and a quote: one backslash, a literal quote
+    ['a\\\\\\\\"b c" d e', ['a\\\\b c', 'd', 'e']], // 4 backslashes and a quote: two backslashes, and the quote opens a string
+    ['"""CallMeIshmael"""  b  c', ['"CallMeIshmael"', 'b', 'c']], // "" inside a quoted string is a quote
+    ['"C:\\a b\\x.mjs" --flag="v w" c:\\p\\', ['C:\\a b\\x.mjs', '--flag=v w', 'c:\\p\\']],
+    ['x ""', ['x', '']],
+    ['a\tb', ['a', 'b']],
+  ]
+  for (const [input, want] of args) assert.deepEqual(splitCommandLine('p.exe ' + input), ['p.exe', ...want], input)
+  assert.deepEqual(splitCommandLine('"C:\\Program Files\\nodejs\\node.exe" "C:\\a b\\x.mjs"'), ['C:\\Program Files\\nodejs\\node.exe', 'C:\\a b\\x.mjs'])
+  assert.deepEqual(splitCommandLine('"C:\\dir with space\\" next'), ['C:\\dir with space\\', 'next'], 'the program name takes no backslash escapes')
+  assert.deepEqual(splitCommandLine('C:\\x\\a.exe'), ['C:\\x\\a.exe'])
+  assert.deepEqual(splitCommandLine('node.exe  \t x'), ['node.exe', 'x'])
+  for (const none of ['   ', '', null, undefined, 7]) assert.deepEqual(splitCommandLine(none), [], String(none))
+})
+
+// ---------- W4: which of the form's processes holds the connection to the hop (4.8 §5.3) ----------
+
+const trow = (pid, remotePort, extra = {}) => ({ pid, state: 'established', family: 4, localAddr: '127.0.0.1', localPort: 50000 + pid, remoteAddr: '127.0.0.1', remotePort, ...extra })
+/** An in-process helper whose tcp-table answers the given rows as they are (no filtering: ownerOf must not rely on the helper's). */
+function tableHelper(rows, { error = null, delayMs = 0 } = {}) {
+  return {
+    calls: [],
+    async call(verb, args, opts) {
+      this.calls.push({ verb, args, opts })
+      if (delayMs) await new Promise((r) => setTimeout(r, delayMs))
+      if (error) throw error
+      return { rows }
+    },
+  }
+}
+const HOP = { port: 7897 }
+
+test('W4 exactly one of the form\'s processes holds a connection to the hop (any state): its pid, from the socket table', async () => {
+  const h = tableHelper([trow(10, 7897), trow(11, 443), trow(11, 8080)])
+  const r = await ownerOf({ helper: h, hop: HOP, candidates: [10, 11] })
+  assert.deepEqual({ pid: r.pid, source: r.source }, { pid: 10, source: 'socket-table' })
+  assert.equal(typeof r.ms, 'number')
+  assert.deepEqual(h.calls.map((c) => [c.verb, c.args.pids, c.args.remotePort]), [['tcp-table', undefined, 7897]], 'the helper is asked for every holder of the port, not for the candidates\' rows: a process the caller has not seen shows only in the whole answer')
+})
+
+test('W4 two processes of the form hold one: null, never a guess', async () => {
+  const r = await ownerOf({ helper: tableHelper([trow(10, 7897), trow(11, 7897)]), hop: HOP, candidates: [10, 11] })
+  assert.deepEqual({ pid: r.pid, source: r.source }, { pid: null, source: null })
+  assert.equal((await ownerOf({ helper: tableHelper([trow(10, 443)]), hop: HOP, candidates: [10, 11] })).pid, null, 'none holds one')
+})
+
+test('W4 a long-lived connection opened before `on` counts like any other, and nothing is ever "claimed": the same table gives the same answer every time', async () => {
+  const old = trow(10, 7897, { state: 'close-wait', localPort: 40000 }) // older than the switch, half closed: any state, any age
+  const h = tableHelper([old])
+  for (let i = 0; i < 3; i++) assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [10, 11] })).pid, 10)
+  // a second process opens a connection later: now it is ambiguous, however old the first one is
+  assert.equal((await ownerOf({ helper: tableHelper([old, trow(11, 7897)]), hop: HOP, candidates: [10, 11] })).pid, null)
+})
+
+test('W4 one candidate is the answer when it holds the connection and nobody else does (single-process); a pid listed twice is one candidate; no candidate, no answer and no table read', async () => {
+  const h = tableHelper([trow(10, 7897)])
+  const r = await ownerOf({ helper: h, hop: HOP, candidates: [10] })
+  assert.deepEqual({ pid: r.pid, source: r.source }, { pid: 10, source: 'single-process' })
+  assert.equal(h.calls.length, 1, 'one table read: the process is the form\'s only one the caller knows, not necessarily the only one there is')
+  assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [10, 10] })).source, 'single-process', 'a pid listed twice is one candidate')
+  assert.equal((await ownerOf({ helper: tableHelper([trow(10, 443)]), hop: HOP, candidates: [10] })).pid, null, 'the one candidate holds nothing to the hop: nothing says the connection is its')
+  const none = tableHelper([trow(10, 7897)])
+  assert.equal((await ownerOf({ helper: none, hop: HOP, candidates: [] })).pid, null)
+  assert.equal(none.calls.length, 0, 'no candidate: no table read')
+})
+
+test('W4 a holder the caller has no row for is a process nobody has seen, and it may own the connection: null, however many known processes hold one (the 2 s the process table lags)', async () => {
+  // a second terminal starts while the first runs: both are claude.exe, only 10 is known, and the first connection of the new one comes within a second
+  assert.equal((await ownerOf({ helper: tableHelper([trow(10, 7897), trow(99, 7897)]), hop: HOP, candidates: [10, 11] })).pid, null, 'two known processes, one holding an old tunnel, an unseen one connecting: not 10')
+  assert.equal((await ownerOf({ helper: tableHelper([trow(99, 7897)]), hop: HOP, candidates: [10] })).pid, null, 'one known process, an unseen one connecting: not "the only process"')
+  assert.equal((await ownerOf({ helper: tableHelper([trow(10, 7897), trow(99, 7897)]), hop: HOP, candidates: [10] })).pid, null, 'the known one holds a connection too: still not it')
+  // `known` says which processes the caller can account for: a known process that is not a candidate is another form's, and cannot be this form's connection
+  const r = await ownerOf({ helper: tableHelper([trow(12, 7897), trow(11, 7897)]), hop: HOP, candidates: [10, 11], known: [10, 11, 12] })
+  assert.deepEqual({ pid: r.pid, source: r.source }, { pid: 11, source: 'socket-table' }, 'pid 12 is the VS Code form\'s, known: it shares the group\'s port and holds a connection, and is not the cli\'s')
+  assert.equal((await ownerOf({ helper: tableHelper([trow(12, 7897), trow(99, 7897), trow(11, 7897)]), hop: HOP, candidates: [10, 11], known: [10, 11, 12] })).pid, null, 'a holder outside `known` is unseen')
+  // a TIME_WAIT row has no owner (Windows reports pid 0): the end of some earlier connection, not a process that is connecting now
+  assert.equal((await ownerOf({ helper: tableHelper([trow(11, 7897), trow(0, 7897, { state: 'time-wait' })]), hop: HOP, candidates: [10, 11] })).pid, 11)
+  assert.equal((await ownerOf({ helper: tableHelper([trow(11, 7897), trow(99, 7897, { remoteAddr: '10.1.2.3' })]), hop: { port: 7897, address: '127.0.0.1' }, candidates: [10, 11] })).pid, 11, 'with the address named, a row to another host is not a holder')
+})
+
+test('W4 the answer does not depend on the helper having filtered: rows of other ports are ignored here too', async () => {
+  const rows = [trow(999, 9999), trow(10, 9999), trow(11, 7897, { remoteAddr: '10.1.2.3' }), trow(12, 7897)]
+  assert.equal((await ownerOf({ helper: tableHelper(rows), hop: HOP, candidates: [10, 11, 12] })).pid, null, 'pid 11 also holds a row to that port, on another host: still ambiguous')
+  assert.equal((await ownerOf({ helper: tableHelper(rows), hop: { port: 7897, address: '127.0.0.1' }, candidates: [10, 11, 12] })).pid, 12, 'a hop that names its address narrows the rows')
+})
+
+test('W4 a table that answers after 250 ms is null with ms >= 250, and not a failure', async () => {
+  const failures = []
+  const r = await ownerOf({ helper: tableHelper([trow(10, 7897)], { delayMs: 1500 }), hop: HOP, candidates: [10, 11], onFailure: (f) => failures.push(f) })
+  assert.deepEqual({ pid: r.pid, source: r.source }, { pid: null, source: null })
+  assert.ok(r.ms >= 250, `ms ${r.ms}`)
+  assert.ok(r.ms < 1200, `it did not wait for the late answer: ${r.ms}`)
+  assert.deepEqual(failures, [])
+  // the budget is a parameter, and the helper's own timeout is the same budget
+  const h = tableHelper([trow(10, 7897)])
+  await ownerOf({ helper: h, hop: HOP, candidates: [10, 11], budgetMs: 80 })
+  assert.equal(h.calls[0].opts.timeoutMs, 80)
+  const slow = Object.assign(new Error('helper tcp-table timed out after 80 ms'), { code: 'helper-timeout' })
+  const t = await ownerOf({ helper: tableHelper([], { error: slow }), hop: HOP, candidates: [10, 11], budgetMs: 80, onFailure: (f) => failures.push(f) })
+  assert.ok(t.pid === null && t.ms >= 80)
+  assert.deepEqual(failures, [], 'a helper-side timeout is over budget too')
+})
+
+test('W4 a table that cannot be read is null and one socktable-unavailable (a record the closed set knows)', async () => {
+  for (const error of [Object.assign(new Error('native-unavailable: Add-Type blocked'), { code: 'helper-verb-error' }), Object.assign(new Error('helper is down: killed'), { code: 'helper-down' })]) {
+    const failures = []
+    const r = await ownerOf({ helper: tableHelper([], { error }), hop: HOP, candidates: [10, 11], onFailure: (f) => failures.push(f) })
+    assert.deepEqual({ pid: r.pid, source: r.source }, { pid: null, source: null })
+    assert.equal(failures.length, 1)
+    assert.deepEqual([failures[0].event, failures[0].where, failures[0].code], ['failure', 'helper', 'socktable-unavailable'])
+    assert.ok(failures[0].reason.includes(error.message))
+    assert.deepEqual(checkRecord(failures[0]), [])
+  }
+  const failures = []
+  await ownerOf({ helper: { call: async () => ({ nonsense: true }) }, hop: HOP, candidates: [10, 11], onFailure: (f) => failures.push(f) })
+  assert.equal(failures.length, 1, 'an answer with no rows is an unreadable table, not an empty one')
+})
+
+test('W4 a lookup in flight when the helper is closed is null and NOT a failure: an operator\'s stop (off, stop) is not an unreadable table', async (t) => {
+  const failures = []
+  const h = started(t, { verbs: { 'tcp-table': { delayMs: 300, data: { rows: [trow(10, 7897)] } } } })
+  await h.ready
+  const asked = ownerOf({ helper: h, hop: HOP, candidates: [10, 11], budgetMs: 2000, onFailure: (f) => failures.push(f) })
+  await new Promise((r) => setTimeout(r, 20))
+  await h.close()
+  const r = await asked
+  assert.deepEqual({ pid: r.pid, source: r.source }, { pid: null, source: null })
+  assert.deepEqual(failures, [], 'helper-closed is the daemon stopping its own helper')
+  // the helper being closed before the question is asked is the same
+  assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [10, 11], onFailure: (f) => failures.push(f) })).pid, null)
+  assert.deepEqual(failures, [])
+  // while a helper that DIED under the question is still a failure (W4's unreadable case, above)
+})
+
+test('W4 through the real client and the fake helper: the verb answers the rows of the hop, the rest is the same; a failing verb is the failure record', async (t) => {
+  const rows = [trow(10, 7897), trow(11, 443), trow(12, 7897, { family: 6, localAddr: '::1', remoteAddr: '::1' })]
+  const h = started(t, { verbs: { 'tcp-table': { data: { rows } } } })
+  assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [10, 11], known: [10, 11, 12] })).pid, 10)
+  assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [10, 12] })).pid, null)
+  assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [10, 11] })).pid, null, 'pid 12 holds a row to the hop and nobody has seen it')
+  const bad = started(t, { verbs: { 'tcp-table': { error: 'GetExtendedTcpTable af=23 rc=50' } } })
+  const failures = []
+  assert.equal((await ownerOf({ helper: bad, hop: HOP, candidates: [10, 11], onFailure: (f) => failures.push(f) })).pid, null)
+  assert.match(failures[0].reason, /rc=50/)
+})

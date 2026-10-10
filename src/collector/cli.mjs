@@ -117,7 +117,7 @@ export async function runCollector(argv, { env = process.env, home = os.homedir(
   const [verb, ...rest] = argv
   const D = () => daemon || loadDaemon()
   if (verb === 'start') { // the old name of `asight daemon` (§2 hidden alias): the autostart units written before the rename run it
-    return runDaemonCli(rest, { io: { out, err }, env, home, platform, deps: { daemon: daemon || undefined, proc, exit, ...(getuid ? { getuid } : {}), ...(waitForStop ? { waitForStop } : {}) } })
+    return runDaemonCli(rest, { io: { out, err }, env, home, platform, deps: { daemon: daemon || undefined, proc, exit, script, ...(getuid ? { getuid } : {}), ...(waitForStop ? { waitForStop } : {}) } })
   }
   if (verb === 'install' || verb === 'on') { // the first `on` is the install (1.6 §1.6); `collector install` is its old name (§2 hidden alias)
     const { runOnCli } = await import('../cli/on.mjs')

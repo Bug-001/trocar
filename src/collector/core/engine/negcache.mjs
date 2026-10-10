@@ -10,14 +10,25 @@
 //   mark — the upstream's certificate did not verify (cause 'upstream-cert'): negative at once.
 // Entries live in memory only, with no TTL. forgetPid drops a process's entries and half-way counts
 // when it exits (the daemon calls engine.forgetPid on the exit event), so a reused pid inherits nothing.
-export const negKey = (meta, host) => `${meta.pid}|${host}`
+// The key is (who, host). Who is the pid; a connection that came through the proxy ingress and whose pid could not be found says
+// "<route>.<group>" itself, in meta.negKey (4.8 §5.5, W17): two forms with no pid never poison each other's hosts, and forgetKey drops
+// one form's entries when the last process of it has gone.
+const whoOf = (meta) => String(meta.negKey ?? meta.pid)
+export const negKey = (meta, host) => `${whoOf(meta)}|${host}`
 
 export function createNegativeCache({ threshold = 2, now = () => Date.now() } = {}) {
-  const strikes = new Map()   // key → {pid, n}: consecutive rejections so far
-  const negative = new Map()  // key → {pid, agent, host, key, cause, rejections, at}
+  const strikes = new Map()   // key → {negKey, n}: consecutive rejections so far
+  const negative = new Map()  // key → {pid, negKey, agent, host, key, cause, rejections, at}
   const add = (key, cause, meta, host, rejections) => {
-    negative.set(key, { pid: meta.pid, agent: meta.agent ?? null, host, key, cause, rejections, at: now() })
+    negative.set(key, { pid: meta.pid, negKey: whoOf(meta), agent: meta.agent ?? null, host, key, cause, rejections, at: now() })
     return true
+  }
+  function forgetKey(who) {
+    who = String(who)
+    let dropped = 0
+    for (const [k, e] of negative) if (e.negKey === who) { negative.delete(k); dropped++ }
+    for (const [k, st] of strikes) if (st.negKey === who) strikes.delete(k)
+    return dropped
   }
   return {
     has: (key) => negative.has(key),
@@ -26,7 +37,7 @@ export function createNegativeCache({ threshold = 2, now = () => Date.now() } = 
     observe(key, { rejected, meta, host }) {
       if (!rejected) { strikes.delete(key); return false }
       const n = (strikes.get(key)?.n || 0) + 1
-      strikes.set(key, { pid: meta.pid, n })
+      strikes.set(key, { negKey: whoOf(meta), n })
       if (n < threshold || negative.has(key)) return false
       return add(key, 'client-rejected-leaf', meta, host, n)
     },
@@ -35,13 +46,10 @@ export function createNegativeCache({ threshold = 2, now = () => Date.now() } = 
       if (negative.has(key)) return false
       return add(key, cause, meta, host, 1)
     },
+    /** forgetKey(who) → how many negative entries were dropped (that key's half-way counts go too). `who` is "<pid>" or "<route>.<group>". */
+    forgetKey,
     /** forgetPid(pid) → how many negative entries were dropped (that pid's half-way counts go too). */
-    forgetPid(pid) {
-      let dropped = 0
-      for (const [k, e] of negative) if (e.pid === pid) { negative.delete(k); dropped++ }
-      for (const [k, s] of strikes) if (s.pid === pid) strikes.delete(k)
-      return dropped
-    },
+    forgetPid: (pid) => forgetKey(pid),
     list: () => [...negative.values()],
     strikes: (key) => strikes.get(key)?.n || 0,
   }
