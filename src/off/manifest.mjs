@@ -37,7 +37,8 @@ export const OFF_VERSION = 4 // 4: the copy's off knows darwin — the autostart
  *  An item of any other kind is left alone by `off` and listed (unknownItems). No vpn-* kinds (D43). */
 export const KNOWN_KINDS = Object.freeze(['json-key', 'text', 'owned-file', 'legacy-clash-block', 'legacy-launch-agent', 'legacy-env', 'legacy-ca', 'legacy-cc-steer',
   'proxy-entry', 'trust-entry', 'forwarder-binary', 'scheduled-task', 'run-key',
-  'optin-user-path', 'optin-shortcut', 'optin-cert-user', 'optin-vscode', 'optin-zcode', 'optin-claude-policy', 'optin-machine-path', 'optin-machine-shortcut', 'optin-cert-machine'])
+  'optin-user-path', 'optin-shortcut', 'optin-cert-user', 'optin-vscode', 'optin-zcode', 'optin-claude-policy', 'optin-machine-path', 'optin-machine-shortcut', 'optin-cert-machine',
+  'optin-rc-path']) // the darwin opt-in kinds (4.9 §2.4): the rc PATH line + the launch shim, reference-counted — undone inline by src/off/darwin-optin.mjs's DARWIN_UNDO_BY_KIND
 /** The kinds undone by the file rule (journal.mjs undoEntry): they carry the same shape as json-key / text (path, pre_sha256, ops). */
 export const FILE_ENTRY_KINDS = Object.freeze(['json-key', 'text', 'proxy-entry', 'trust-entry'])
 /** The opt-in kinds alone (4.8 §2.4): ledgered with `scope` ('user' | 'machine'); the undo of each is UNDO_BY_KIND's, and `undo_by_hand` never

@@ -1,0 +1,7 @@
+#!/bin/sh
+# asight collector: launch shim for OpenCode on macOS (RFC 4.9 s2.4 / s6.3 — the POSIX twin of win32's
+# opencode.cmd), written by the user-path opt-in item of `asight on opencode --opt-in opencode.cli`. Trust is
+# OpenCode's own in-process plugin, so only the proxy is set here; an HTTPS_PROXY the shell already set is your
+# choice for that run and is not overridden (that run is not captured). `asight off opencode` removes it.
+if [ -z "${HTTPS_PROXY:-}" ]; then HTTPS_PROXY='__ASIGHT_PROXY__'; export HTTPS_PROXY; fi
+exec '__ASIGHT_REAL_BINARY__' "$@"

@@ -100,6 +100,20 @@ export async function loadIngressConfig({ dir, groups, isFree = freeOnLoopback, 
   return { enginePort: next.enginePort, groupPorts: next.groupPorts, ingressToken: next.ingressToken, listenerToken: next.listenerToken, created, added, regenerated }
 }
 
+/** The read-only half (the twin's readIngressConfig, same logic — the opt-in apply reads what the daemon wrote at ITS start; nothing here
+ *  creates the file): → `{ enginePort, groupPorts, ingressToken, listenerToken }` · `{ missing: true }` · `{ error }`. */
+export function readIngressConfig({ dir, fs = nodeFs } = {}) {
+  let raw = null
+  try { raw = fs.readFileSync(path.join(dir, INGRESS_FILE), 'utf8') } catch (e) {
+    if (e && e.code === 'ENOENT') return { missing: true }
+    return { error: `ingress.json could not be read (${(e && e.code) || e})` }
+  }
+  let parsed = null
+  try { parsed = JSON.parse(raw) } catch { return { error: 'ingress.json is not JSON' } }
+  const bad = validate(parsed)
+  return bad ? { error: `ingress.json is not what asight writes (${bad})` } : { enginePort: parsed.enginePort, groupPorts: parsed.groupPorts, ingressToken: parsed.ingressToken, listenerToken: parsed.listenerToken }
+}
+
 /** A bare `off` and `uninstall`: the file goes (the ports and the secrets are chosen again at the next `on`). → `{ removed: true, existed }`, or `{ removed: false, reason }` when it could not be removed. */
 export function removeIngressConfig({ dir, fs = nodeFs } = {}) {
   const file = path.join(dir, INGRESS_FILE)

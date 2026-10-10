@@ -47,7 +47,12 @@ export async function loadArch(platform = process.platform) {
     // the launchd module (§4); the OS roots are read (darwinRoots: the keychain-administered anchors + bundled + SystemRootCertificates, 4.9 §6.2), so osRootsFile stays away;
     // netFacts is darwinNetFacts (1.6 §9.7's archFacts). createRedirector is the whole darwin collector (wiring.mjs) — built lazy (4.9 §1 接线): the daemon's construction (with
     // dir and the sinks) builds everything and starts nothing, loadParts' {env}-only one gets the shell; prepare is the read-only hook `asight on` calls before it writes.
-    const [{ createDarwinCollector, prepare }, unit, { controlEndpoint }, { darwinRoots }, { darwinNetFacts }] = await Promise.all([import('./darwin/wiring.mjs'), import('./darwin/autostart.mjs'), import('./darwin/control-path.mjs'), import('./darwin/roots.mjs'), import('./darwin/netfacts.mjs')])
+    // optIn is 4.9 §2.4's half the CLI and status reach (1.6 §1.7; the flip checklist ④, the win32 twin's shape): `forms` (what --opt-in may name), `plan` (the rows of the plan's
+    // 「要你点名的」 section) and `apply` (one named item, ledgered with scope). The check half (the read-only re-check that the entries are still the ones used, W68) is the
+    // status-side work of MA4's row — not this arm; the daemon's own opt-in check is guarded by the hook's absence and checks nothing.
+    const [{ createDarwinCollector, prepare }, unit, { controlEndpoint }, { darwinRoots }, { darwinNetFacts }, { planOptIns, optinFormsOf, applyOptIn }] = await Promise.all([import('./darwin/wiring.mjs'), import('./darwin/autostart.mjs'), import('./darwin/control-path.mjs'), import('./darwin/roots.mjs'), import('./darwin/netfacts.mjs'), import('./darwin/optin.mjs')])
+    const { groupsOf } = await import('./darwin/route-plan.mjs')
+    const of = (harnesses, ids = null) => groupsOf(harnesses).filter((x) => !ids || ids.includes(x.harness))
     return {
       os: 'darwin', install: null, unit,
       controlEndpoint,
@@ -56,6 +61,11 @@ export async function loadArch(platform = process.platform) {
       netFacts: darwinNetFacts,
       createRedirector: (opts = {}) => createDarwinCollector(opts),
       prepare,
+      optIn: {
+        forms: ({ harnesses: h, ids = null } = {}) => optinFormsOf(of(h, ids)),
+        plan: ({ harnesses: h, ids = null, optIn = [], manifest = null } = {}) => planOptIns({ groups: of(h, ids), optIns: optIn, manifest }),
+        apply: ({ harnesses: h, ids = null, ...rest }) => applyOptIn({ ...rest, groups: of(h, ids) }),
+      },
     }
   }
   throw new Error(`asight collector: ${platform} is not supported yet (Linux first; RFC 4.6 §结构)`)

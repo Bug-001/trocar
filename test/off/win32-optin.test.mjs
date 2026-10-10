@@ -9,6 +9,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import { UNDO_BY_KIND, undoOptIns, readUserPathArgs as inlineReadArgs, setUserPathArgs as inlineSetArgs, BROADCAST_ARGS as inlineBroadcast, readShortcutArgs as inlineShortcutArgs } from '../../src/off/win32-optin.mjs'
+import { DARWIN_UNDO_BY_KIND } from '../../src/off/darwin-optin.mjs'
 import { readUserPathArgs, setUserPathArgs, BROADCAST_ARGS, readShortcutArgs, USER_PATH_VALUE } from '../../src/collector/arch/win32/userpath.mjs'
 import { OPTIN_KINDS, OPTIN_MACHINE_KINDS } from '../../src/off/manifest.mjs'
 import { runOff } from '../../src/off/orchestrate.mjs'
@@ -24,8 +25,11 @@ test('the inline argv are the same bytes as arch/win32/userpath.mjs\'s (the stan
 })
 
 test('W54-style loop guard: every user-level opt-in kind has an undo — a kind with no undo is red (the standalone walks Object.keys(UNDO_BY_KIND))', async () => {
-  assert.deepEqual([...Object.keys(UNDO_BY_KIND)].sort(), [...OPTIN_KINDS.filter((k) => !OPTIN_MACHINE_KINDS.includes(k))].sort(),
-    'the registry covers exactly the user-level kinds; adding a kind to KNOWN_KINDS without its inline undo is red here first')
+  // the registries are per-platform (the win32 one and the darwin one), so the guard is the UNION: a kind in KNOWN_KINDS that neither registry
+  // undoes is still red here first, whichever platform's apply produced it
+  const userKinds = [...OPTIN_KINDS.filter((k) => !OPTIN_MACHINE_KINDS.includes(k))]
+  assert.deepEqual([...Object.keys(UNDO_BY_KIND), ...Object.keys(DARWIN_UNDO_BY_KIND)].sort(), userKinds.sort(),
+    'the registries cover exactly the user-level kinds; adding a kind to KNOWN_KINDS without its inline undo is red here first')
   // and the loop itself: a kind present in the manifest but not in the registry is unknown-kind, never a guess (the existing kernel test
   // lends a fake kind; here it is the real shape — a machine kind is never in the registry, it is needs-admin instead)
   const m = { entries: [{ kind: 'optin-machine-path', scope: 'machine', harness: 'opencode', path: 'HKLM\\x', elevated_command: 'the one line' }] }

@@ -33,6 +33,7 @@ import { execTool } from './exec.mjs'
 import { listProcs, identityFor, pidAlive } from './proc.mjs'
 import { kernelForwardOnly, refuseElevatedByWhoami } from './win32.mjs'
 import { undoOptIns } from './win32-optin.mjs'
+import { undoDarwinOptIns } from './darwin-optin.mjs'
 import { runEventWriter } from './events.mjs'
 import { confirm } from './io.mjs'
 import { describeEntry } from './journal.mjs'
@@ -280,7 +281,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     // the opt-in items (4.8 §2.4): user-level ones undone inline by kind (win32-optin.mjs's registry), machine-level ones named for the
     // operator — asight never elevates on its own, and an item left is a not-done off (1.6 R3)
     if (manifest.entries.some((e) => e && e.scope && e.scope !== 'agent')) {
-      const o = await (w.deps.undoOptIns || undoOptIns)({ manifest, ids, exec: w.exec, env: w.env, fs: w.fs, home: w.home })
+      const o = await (w.deps.undoOptIns || (w.platform === 'darwin' ? undoDarwinOptIns : undoOptIns))({ manifest, ids, exec: w.exec, env: w.env, fs: w.fs, home: w.home })
       for (const r of o.results) {
         if (r.result === 'needs-admin') { u.left.push({ path: r.path, result: 'needs-admin', reason: `${r.reason}${r.command ? `: ${r.command}` : ''}` }); u.failures.push({ code: 'needs-admin', path: r.path, reason: r.reason }) }
         else if (r.result === 'undone') {
