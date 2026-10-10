@@ -61,9 +61,9 @@ test('the flag: repeatable, comma-separated and `--opt-in=a,b`; a name the platf
   const none = fakeIo({ tty: false })
   assert.equal(await runOnCli(['--opt-in', 'x.two-items', '--yes'], onCtx(home, none)), 2)
   assert.match(none.text(), /这个平台没有要点名的形态/)
-  // and a platform without the new collector (1.6 §4: `on` drives the old capture) has no opt-in items either
+  // and a platform without the new collector (1.6 §4: `on` drives the old capture) has no opt-in items either — freebsd since the darwin flip (4.9 §4)
   const legacy = fakeIo({ tty: false })
-  assert.equal(await runOnCli(['--opt-in', 'x.two-items', '--yes'], { ...onCtx(home, legacy), platform: 'darwin' }), 2)
+  assert.equal(await runOnCli(['--opt-in', 'x.two-items', '--yes'], { ...onCtx(home, legacy), platform: 'freebsd' }), 2)
   assert.match(legacy.text(), /--opt-in needs the new collector/)
 })
 

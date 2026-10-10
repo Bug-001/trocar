@@ -88,7 +88,8 @@ test('help through the dispatch: no command, `help`, `--help`, `help <command>` 
     const { exit, c } = await say(argv)
     assert.equal(exit, 0, argv.join(' ')); assert.equal(c.io.stdoutText().trim(), helpText(undefined, { platform: 'linux' })); assert.equal(c.io.stderrText(), '')
   }
-  assert.match((await say(['help'], 'darwin')).c.io.stdoutText(), /本平台\(darwin\)没有按进程采集器/, 'the platform it runs on is the one help names')
+  assert.match((await say(['help'], 'darwin')).c.io.stdoutText(), /本平台\(darwin\):on \/ off 驱动按进程采集器/, 'the platform it runs on is the one help names (the flip, 4.9 §4)')
+  assert.match((await say(['help'], 'freebsd')).c.io.stdoutText(), /本平台\(freebsd\)没有按进程采集器/, 'a platform that still has no collector keeps the not-implemented line')
   for (const argv of [['help', 'off'], ['off', '--help'], ['off', '-h'], ['off', '--yes', '--help'], ['serve', '--help']]) {
     const { exit, c } = await say(argv)
     assert.equal(exit, 0, argv.join(' ')); assert.equal(c.io.stdoutText().trim(), helpText(argv.includes('serve') ? 'serve' : 'off')); assert.ok(!/asight uninstall/.test(c.io.stdoutText()), 'one command only')

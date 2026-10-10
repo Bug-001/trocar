@@ -115,8 +115,7 @@ export function resolveAlias(argv) {
 }
 
 const generation = (platform) => (hasNewCollector(platform) ? `本平台(${platform}):on / off 驱动按进程采集器(4.6);旧采集的命令在最后一段。`
-  : platform === 'darwin' ? `本平台(${platform})没有按进程采集器:on / off 驱动旧采集(过渡期,1.6 §4)。`
-    : `本平台(${platform})没有按进程采集器:on 报「本平台未实现」,off 撤本机有的旧采集的部分(1.6 §4)。`)
+  : `本平台(${platform})没有按进程采集器:on 报「本平台未实现」,off 撤本机有的旧采集的部分(1.6 §4)。`) // the darwin 旧采集(过渡期) branch went with the flip (4.9 §4): darwin generates the new-collector line now
 const lines = (usage, summary) => [...usage.split('\n').map((l) => `  ${l}`), `      ${summary}`]
 
 /** The help: `helpText()` is the four sections (the first screen says on, off and status, and which generation they drive on `platform`); `helpText('off')` is that one command. */

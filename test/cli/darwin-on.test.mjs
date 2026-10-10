@@ -28,15 +28,16 @@ function darwinWorld({ osRoots } = {}) {
     osRoots: async () => { asked.push(1); if (osRoots === undefined) return { pem: FAKE_OS.certPem }; return osRoots() },
   }
   const parts = { os: 'darwin', osRootsFile: null, harnesses: [codex], scan: async () => [], match: () => ({ agent: null }), arch }
-  const run = async (argv) => {
+  const run = async (argv, { platform = 'linux', deps: extraDeps = {} } = {}) => {
     const io = fakeIo()
     const exit = await runOnCli(argv, {
-      io, home, platform: 'linux', // the CLI's platform stays linux until the gate flips (Part 2); parts is the seam the flip lands on, the same split the win flip used
+      io, home, platform, // 'linux' + parts.os 'darwin' was the pre-flip seam (the same split the win flip used); Part 2 sends 'darwin' straight through
       env: { HOME: home, XDG_RUNTIME_DIR: path.join(home, 'run') },
       deps: {
         parts, request: fakeDaemon().request, helperState: () => ({ ok: true }), linger: () => true,
         netenv: async () => ({ at: '2026-10-11T00:00:00.000Z', products: [], unknown: [{ reason: 'a test: no VPN probe runs here' }] }),
         freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: async () => {}, user: 'alice', getuid: () => 1000, fs,
+        ...extraDeps,
       },
     })
     return { exit, io, text: io.text() }
@@ -116,4 +117,17 @@ test('the flip ② (4.9 §4): an arch that names a file (Linux) is not asked for
   })
   assert.equal(exit, 0, io.text())
   assert.deepEqual(asked, [], 'deps.roots given: the arch hook is not asked (the same override the win tests use)')
+})
+
+// the flip (4.9 §4 末 · Part 2, 1.6 §4 / §2): hasNewCollector('darwin') is true, so `on` on a Mac is the NEW collector's on — the darwin arch
+// hooks draw the plan — and the legacy dispatch (src/capture/legacy-on.mjs) is not what runs. The win twin of this cell is test/cli/win-plan.test.mjs's flip test.
+test('the flip (Part 2, 1.6 §4): `on` with platform darwin runs the new collector — the darwin arch hooks are asked and the plan is drawn, and the legacy-on dispatch never runs', async () => {
+  const w = darwinWorld()
+  const legacy = []
+  const r = await w.run(['--dry-run'], { platform: 'darwin', deps: { legacyOn: async (argv) => { legacy.push(argv); return 0 } } })
+  assert.equal(r.exit, 0, r.text)
+  assert.deepEqual(legacy, [], 'darwin does not run legacyOnCli (src/capture/legacy-on.mjs) any more')
+  assert.match(r.text, /^asight 将打开采集/, 'the NEW collector\'s plan is what a Mac gets')
+  assert.match(r.text, /\.codex\/\.env/, 'drawn from the darwin arch\'s own world (the codex trust entry)')
+  assert.ok(!/驱动旧采集|本平台未实现/.test(r.text), 'and no word of the old capture remains in what `on` says first')
 })

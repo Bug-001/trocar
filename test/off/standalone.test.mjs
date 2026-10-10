@@ -316,6 +316,7 @@ test('V35: `asight doctor` has a line for the copy — a ✓ when it is current,
   const dir = tmpDir('asight-stub-'), bin = path.join(dir, 'bin'), log = path.join(dir, 'calls.log')
   fs.mkdirSync(bin)
   for (const name of ['security', 'systemctl', 'launchctl', 'certutil', 'loginctl', 'ss', 'ip']) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\nexit 1\n`, { mode: 0o755 }) // doctor's trust check finds these, and only these (`ss` and `ip` are the reads of its network facts, which only read) (its dependency probe looks at files on PATH, it starts no `which`)
+  for (const name of ['ps', 'lsof', 'route', 'ifconfig', 'scutil']) fs.writeFileSync(path.join(bin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 }) // the flip (4.9 §4): the doctor's status block on a Mac is the NEW status now — it reads the process table and the darwin network facts, all read-only, all stubbed to the empty world
   const doctor = () => spawnSync(process.execPath, [path.join(REPO, 'bin', 'asight.mjs'), 'doctor', '--source', tmpDir('asight-src-')], { env: { PATH: bin, HOME: s.home, TMPDIR: os.tmpdir(), ASIGHT_TEST_SANDBOX: '1', ASIGHT_MIHOMO_SOCK: path.join(dir, 'none.sock') }, encoding: 'utf8', timeout: 60_000 }) // the VPN probe is pinned to a socket nobody listens on, so it asks no `ps` and can never reach the developer's own core
   const line = (r) => r.stdout.split('\n').find((l) => l.includes('asight-off(')) || `(no line) ${r.stdout}`
   const file = standalonePath(s.home)
@@ -405,7 +406,7 @@ test('1.6 §4: on a platform with no new collector the copy is `asight off` for 
   fs.writeFileSync(path.join(bin, 'security'), `#!/bin/sh\necho "security $*" >> "${log}"\ncase "$1" in find-certificate) exit 44;; *) exit 0;; esac\n`, { mode: 0o755 })
   const text = buildStandalone({ version: OFF_VERSION })
   assert.ok(text.includes('undoLegacy') && text.includes('legacyOffCli'), 'the generated file carries the old capture\'s undo')
-  const AS_MAC = `runOffCli(process.argv.slice(2), { standalone: true, platform: 'darwin', deps: { getuid: () => 501 } })`
+  const AS_MAC = `runOffCli(process.argv.slice(2), { standalone: true, platform: 'darwin', deps: { getuid: () => 501, hasNewCollector: () => false } })` // the seam (4.9 §4 flip): the copy still knows how to undo the old capture on a Mac — the old capture stays live until D39⑥ retires it
   const r = await runCopy(text.replace(STANDALONE_ENTRY, AS_MAC), ['--json'], { env: { HOME: s.home, PATH: bin, ASIGHT_MIHOMO_SOCK: path.join(s.home, 'no-such-mihomo.sock') } })
   assert.equal(r.status, 0, r.stderr + r.stdout)
   assert.equal(r.stderr.split('\n')[0], '本平台 on / off 驱动旧采集(过渡期)', 'in --json the note goes to stderr, stdout is the one JSON')

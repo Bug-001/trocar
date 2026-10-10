@@ -433,7 +433,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
       else if (u.left.length || u.mode === 'unsupported') outcome = 'left'
       if (u.mode !== 'marker') for (const id of ids || []) if (!installed.includes(id)) receipt.skipped.push({ what: id, reason: `${id} 没有 asight 的入口(没装过,或早已撤掉)` })
       if (w.deps.legacyUndo && (ids === null || ids.includes('claude-code'))) { // the old capture's leftovers (Task 10)
-        const l = await w.deps.legacyUndo({ home, env, ids, yes, interactive, io, say, dryRun: false, exec: w.exec, fs: w.fs, now: w.clock, request: w.request })
+        const l = await w.deps.legacyUndo({ home, env, platform: w.platform, ids, yes, interactive, io, say, dryRun: false, exec: w.exec, fs: w.fs, now: w.clock, request: w.request })
         if (l) { for (const k of ['changed', 'removed', 'skipped', 'left']) receipt[k].push(...(l[k] || [])); receipt.problems.push(...(l.problems || [])); receipt.notes.push(...(l.notes || [])); if (l.ok === false && !(l.problems || []).length) receipt.problems.push('the old capture could not be fully undone') }
       }
       // Windows (4.8 §4.2): a daemon that did not answer leaves the kernel preferring its dead engine — it is made forward-only (or

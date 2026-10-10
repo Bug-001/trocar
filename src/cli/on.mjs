@@ -3,7 +3,7 @@
 // the autostart unit, the control socket), decides how a confirmation is asked, and prints the plan and the receipt. Everything the world gives is a
 // `deps` entry a test replaces (0.1 §3): `parts` (the descriptors, `scan`, `match`, the arch), `exec` (the runner of OS tools: spawnSync-shaped),
 // `request` (the control socket), `helperState`, `linger` / `lingerRead`, `now`, `freePort`, `sleep`, `roots`, `user`, `getuid`, `fs`, `script`, and `legacyOn` — the
-// replacement of what a platform without the new collector (macOS: 1.6 §4) runs instead: legacyOnCli, src/capture/legacy-on.mjs.
+// replacement of what a platform without the new collector (freebsd and the rest: 1.6 §4) runs instead: legacyOnCli, src/capture/legacy-on.mjs.
 // Exit codes (R4): 0 done · 1 not done or a problem · 2 usage error / not in a terminal without --yes (nothing touched).
 import os from 'node:os'
 import tls from 'node:tls'
@@ -61,7 +61,7 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
   if (!named.ok) { io.err(`asight on: unknown harness ${named.unknown.join(', ')}; the names are: ${named.known.join(', ')}`); return EXIT.usage }
   const json = flags.has('--json')
   const say = json ? io.err : io.out // stdout holds the one JSON in --json mode (R5); warnings and the plan go to stderr
-  if (!hasNewCollector(platform)) { // 1.6 §4: no new collector here: `on` drives the old capture (src/capture/legacy-on.mjs)
+  if (!(deps.hasNewCollector || hasNewCollector)(platform)) { // 1.6 §4: no new collector here: `on` drives the old capture (src/capture/legacy-on.mjs); deps.hasNewCollector is the seam the old capture's own tests inject (the darwin flip, 4.9 §4)
     if (optIn.length) { io.err('asight on: --opt-in needs the new collector; on this platform `on` drives the old capture, which has no opt-in items (1.6 §4)'); return EXIT.usage }
     return (deps.legacyOn || legacyOnCli)(argv, { io, env, home, platform, deps, ids: named.ids })
   }

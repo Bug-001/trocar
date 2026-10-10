@@ -11,9 +11,9 @@ import { snapshot } from '../cli/fixtures/on-ctx.mjs'
 import * as onboard from '../../src/capture/onboard.mjs'
 import { getTrustStoreInstaller, CA_CN, CA_NICKNAME } from '../../src/capture/trust-store.mjs'
 
-test('hasNewCollector: Linux and Windows — the one question every command asks to pick the generation it drives', () => {
-  assert.deepEqual(['linux', 'darwin', 'win32', 'freebsd'].map((p) => hasNewCollector(p)), [true, false, true, false])
-  assert.equal(hasNewCollector(), process.platform === 'linux' || process.platform === 'win32')
+test('hasNewCollector: Linux, Windows and macOS — the one question every command asks to pick the generation it drives', () => {
+  assert.deepEqual(['linux', 'darwin', 'win32', 'freebsd'].map((p) => hasNewCollector(p)), [true, true, true, false])
+  assert.equal(hasNewCollector(), process.platform === 'linux' || process.platform === 'win32' || process.platform === 'darwin')
 })
 
 test('the CA is taken out of the USER-level store only: the login keychain by CN on macOS, the user NSS database by nickname on Linux — and the trust-store installers use these same argv', () => {

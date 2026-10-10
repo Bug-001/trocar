@@ -340,6 +340,24 @@ test('the flip (9(b), 1.6 §4): win32 status is the NEW status — the win32 arc
   assert.deepEqual(fs.readdirSync(fresh), [], 'read-only: nothing created')
 })
 
+// the flip (4.9 §4, 1.6 §4): hasNewCollector('darwin') is true, so a Mac's status is the NEW status — the darwin arm of gatherStatus asks its arch's
+// opt-in hook (the plan half; the check half is MA4's row and stays away), and the only-claude-code old-capture branch (legacyStatus) is not taken.
+test('the flip (4.9 §4, 1.6 §4): darwin status is the NEW status — the darwin arch hooks are asked, the old-capture branch is not taken, and a harness name other than claude-code is no longer exit 2', async () => {
+  const fresh = tmpDir('asight-fresh-')
+  const asked = []
+  const parts = { os: 'darwin', harnesses: [], scan: async () => [], match: () => ({ agent: null }), arch: { optIn: { plan: (q) => { asked.push(q); return [] } } } }
+  const deps = { request: down(), socketPath: SOCK, procs: async () => [], netenv: async () => NO_VPN, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts, user: 'alice' }
+  const io = fakeIo()
+  const exit = await runStatusCli([], { io, home: fresh, platform: 'darwin', env: { HOME: fresh }, deps })
+  assert.equal(exit, 0, io.stdoutText())
+  assert.equal(asked.length, 1, 'the darwin arch\'s opt-in hook was asked (gatherStatus\'s darwin arm, the same ask win32 gets)')
+  assert.ok(!/还没有新采集器|旧采集/.test(io.stdoutText()), 'not the only-claude-code old-capture branch')
+  const named = fakeIo()
+  assert.equal(await runStatusCli(['codex'], { io: named, home: fresh, platform: 'darwin', env: { HOME: fresh }, deps }), 0, named.stdoutText() + named.stderrText())
+  assert.ok(!/本平台只有 claude-code 的旧采集/.test(named.stderrText()), 'a name other than claude-code is a harness like any other on the new path')
+  assert.deepEqual(fs.readdirSync(fresh), [], 'read-only: nothing created')
+})
+
 test('connections still relayed after an off: N closing and M waiting, in the text and in --json (cut is 0: only off --now cuts); none is said as none, with no daemon there is no engine', async () => {
   const s = await installedHome()
   let r = await run(s, [], { request: asDaemon(reply({ relayed: { closing: 2, waiting: 1 } })) })
@@ -396,7 +414,7 @@ test('a netenv.json that could not be written is said: a line in the text, neten
     const mac = tmpDir('asight-st-mac-'); fs.mkdirSync(path.join(mac, '.asight'), { mode: 0o700 }); fs.chmodSync(path.join(mac, '.asight'), 0o500)
     for (const [argv, check] of [[[], (io) => assert.match(io.stdoutText(), /^本机网络环境的副本没写成: [^\n]*netenv\.json: EACCES/m)], [['--json'], (io) => assert.match(io.json().netenv_write_error, /netenv\.json: EACCES$/)]]) {
       const io = fakeIo()
-      await runStatusCli(argv, { io, home: mac, platform: 'darwin', env: {}, deps: { exec: fakeMac({ loaded: [], keychain: false }).run, netenv: async () => CLASH() } })
+      await runStatusCli(argv, { io, home: mac, platform: 'darwin', env: {}, deps: { hasNewCollector: () => false, exec: fakeMac({ loaded: [], keychain: false }).run, netenv: async () => CLASH() } }) // the seam keeps this on the old capture's status (it stays live until D39⑥)
       check(io)
     }
     fs.chmodSync(path.join(mac, '.asight'), 0o700)
@@ -446,21 +464,21 @@ test('V39 on: the same lines in the receipt (and in the plan\'s receipt when --j
   }
 })
 
-test('a platform without the new collector (macOS): status prints the old capture\'s health and also what the VPN software is (§6: every platform), without "asight 没有改它" (the old capture does steer Clash there); --json carries the probe; a probe that fails is 不知道 with the reason', async () => {
+test('the old capture\'s status (kept on darwin through the flip\'s seam — the old capture stays live until D39⑥ retires it): it prints the old capture\'s health and also what the VPN software is (§6: every platform), without "asight 没有改它" (the old capture does steer Clash there); --json carries the probe; a probe that fails is 不知道 with the reason', async () => {
   const home = tmpDir('asight-st-mac-'); const exec = fakeMac({ loaded: [], keychain: false }).run // status reads launchd and the keychain there: the runner is the test's
   let io = fakeIo()
-  let exit = await runStatusCli([], { io, home, platform: 'darwin', env: {}, deps: { exec, netenv: async () => CLASH() } })
+  let exit = await runStatusCli([], { io, home, platform: 'darwin', env: {}, deps: { hasNewCollector: () => false, exec, netenv: async () => CLASH() } })
   assert.match(io.stdoutText(), /本平台\(darwin\)还没有新采集器/)
   assert.match(io.stdoutText(), /本机网络环境: Clash Verge\(规则模式,系统代理已开\)/)
   assert.ok(!io.stdoutText().includes('asight 没有改它'), io.stdoutText())
   assert.ok([0, 1, 3].includes(exit))
   io = fakeIo()
-  exit = await runStatusCli(['--json'], { io, home, platform: 'darwin', env: {}, deps: { exec, netenv: async () => CLASH() } })
+  exit = await runStatusCli(['--json'], { io, home, platform: 'darwin', env: {}, deps: { hasNewCollector: () => false, exec, netenv: async () => CLASH() } })
   const v = io.json()
   assert.deepEqual(validateReceipt(v), [])
   assert.equal(v.netenv.products[0].product, 'clash-verge')
   io = fakeIo()
-  await runStatusCli([], { io, home, platform: 'darwin', env: {}, deps: { exec, netenv: async () => { throw new Error('probe broke') } } })
+  await runStatusCli([], { io, home, platform: 'darwin', env: {}, deps: { hasNewCollector: () => false, exec, netenv: async () => { throw new Error('probe broke') } } })
   assert.match(io.stdoutText(), /本机网络环境: 不知道\(probe broke\)/)
   assert.deepEqual(fs.readdirSync(home), [], 'nothing was written: there is no ~/.asight here to keep the board\'s copy in')
 })

@@ -150,7 +150,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     receipt.problems.push(...u.problems); receipt.notes.push(...u.notes)
     for (const f of u.failures) failed.push(f)
     if (w.deps.legacyUndo) { // the old capture's leftovers (Task 10)
-      const l = await w.deps.legacyUndo({ home, env, ids: null, yes, interactive, io, say, dryRun: false, exec: w.exec, fs, now: w.clock, request: w.request })
+      const l = await w.deps.legacyUndo({ home, env, platform: w.platform, ids: null, yes, interactive, io, say, dryRun: false, exec: w.exec, fs, now: w.clock, request: w.request })
       if (l) { for (const k of ['changed', 'removed', 'skipped', 'left']) receipt[k].push(...(l[k] || [])); receipt.problems.push(...(l.problems || [])); receipt.notes.push(...(l.notes || [])); if (l.ok === false && !(l.problems || []).length) receipt.problems.push('the old capture could not be fully undone') }
     }
     const noted = u.events.filter((e) => e.kind !== CODE_OFF.backupKept) // the backup an edited file kept is dropped below, listed in the receipt as non-identical: "kept" would be untrue
@@ -256,9 +256,9 @@ export async function runUninstallCli(argv, { io, env = process.env, home = node
   }
   const json = flags.has('--json')
   if ((deps.getuid || processUid)() === 0) { io.err('asight uninstall: 用你自己的账号跑,不要用 root / sudo(D36)'); return EXIT.incomplete }
-  if (!hasNewCollector(platform)) return (deps.legacyUninstall || legacyUninstallCli)(argv, { io, env, home, platform, deps }) // 1.6 §4: no new collector here: uninstall completes the undo of the old capture
+  if (!(deps.hasNewCollector || hasNewCollector)(platform)) return (deps.legacyUninstall || legacyUninstallCli)(argv, { io, env, home, platform, deps }) // 1.6 §4: no new collector here: uninstall completes the undo of the old capture; deps.hasNewCollector is the seam the old capture's own tests inject (the darwin flip, 4.9 §4)
   try {
-    const { receipt, exit } = await runUninstall({ home, env, purgeData: flags.has('--purge-data'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: isInteractive(io), io: { ...io, prompt: json ? io.stderr : io.stdout }, say: json ? io.err : io.out, deps: { ...deps, legacyUndo: deps.legacyUndo === undefined ? legacyUndoHook : deps.legacyUndo } }) // the old capture's leftovers go with the rest, as in `off` (src/off/main.mjs): zero residue (1.6 §1.1, §4)
+    const { receipt, exit } = await runUninstall({ home, env, purgeData: flags.has('--purge-data'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: isInteractive(io), io: { ...io, prompt: json ? io.stderr : io.stdout }, say: json ? io.err : io.out, deps: { platform, ...deps, legacyUndo: deps.legacyUndo === undefined ? legacyUndoHook : deps.legacyUndo } }) // the old capture's leftovers go with the rest, as in `off` (src/off/main.mjs): zero residue (1.6 §1.1, §4); the CLI's platform is offWorld's default (deps.platform of a test's still wins) — the same seam `off` has
     if (json) io.out(JSON.stringify(receipt, null, 2))
     else if (receipt.needs_yes || receipt.declined) { io.out(formatUninstallReceipt({ ...receipt, notes: [] }, { home, tense: 'future' })); for (const n of receipt.notes) io.err(n) } // the plan, then why nothing was done (R6)
     else io.out(formatUninstallReceipt(receipt, { home }))

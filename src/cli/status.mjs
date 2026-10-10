@@ -152,7 +152,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   // records are the truth wherever they were written); an arch with no opt-in half (Linux today) leaves no key at all, and a parts that cannot be
   // loaded is said (R11).
   const hasOptinRecords = !!(m && Array.isArray(m.entries) && m.entries.some((e) => e && typeof e.kind === 'string' && e.kind.startsWith('optin-')))
-  if (platform === 'win32' || hasOptinRecords || deps.parts) {
+  if (platform === 'win32' || platform === 'darwin' || hasOptinRecords || deps.parts) {
     try {
       const parts = deps.parts || await (deps.daemon || await import('../collector/daemon.mjs')).loadParts({ env })
       const hook = parts && parts.arch && parts.arch.optIn
@@ -260,7 +260,7 @@ const failedIn24h = (h) => !!h && [h.collector && h.collector.failures, h.legacy
 
 const USAGE = 'usage: asight status [harness…] [--json]'
 
-// A platform without the new collector (macOS: 1.6 §4): the old capture is what `on` / `off` drive there, and `status` judges it as claude-code's Desktop and CLI rows (src/cli/legacy-status.mjs),
+// A platform without the new collector (freebsd and the rest: 1.6 §4): the old capture is what `on` / `off` drive there, and `status` judges it as claude-code's Desktop and CLI rows (src/cli/legacy-status.mjs),
 // then prints the old capture's own health and the VPN software. `deps.legacyStatus` replaces all of it (a test's). A read that failed is 不知道 and exit 3, never a pass (R11).
 async function legacyStatus(argv, { io, env, home, platform, deps, json }) {
   if (deps.legacyStatus) return deps.legacyStatus(argv, { io, env, home, platform, deps })
@@ -295,7 +295,7 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
   }
   const named = resolveHarnesses(names)
   if (!named.ok) { io.err(`asight status: unknown harness ${named.unknown.join(', ')}; the names are: ${named.known.join(', ')}`); return { exit: EXIT.usage, f: null } }
-  if (!hasNewCollector(platform)) { // 1.6 §4: no new collector here; only claude-code has an old capture
+  if (!(deps.hasNewCollector || hasNewCollector)(platform)) { // 1.6 §4: no new collector here; only claude-code has an old capture; deps.hasNewCollector is the seam the old capture's own tests inject (the darwin flip, 4.9 §4)
     const problem = legacyNamesProblem(named.ids)
     if (problem) { io.err(`asight status: ${problem}`); return { exit: EXIT.usage, f: null } }
     return { exit: await legacyStatus(argv, { io, env, home, platform, deps, json }), f: null }
