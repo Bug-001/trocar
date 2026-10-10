@@ -30,12 +30,15 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
 // What asight-off calls at the end of the file. The tests that need a Linux answer on any machine, with no real uid and no real process table, replace exactly this call (and assert
 // first that it is there): the platform, the user id and the table's reader are what a person's machine decides, and every other byte of the file is the one `on` wrote.
-const AS_LINUX = `runOffCli(process.argv.slice(2), { standalone: true, platform: 'linux', deps: { platform: 'darwin', getuid: () => 1000 } })` // 'darwin' for the table: the reader runs `ps`, a stub here
+// The whole world is linux now — before the flip checklist ① (4.9 §4) `deps.platform: 'darwin'` was a free way to make the table's reader use the `ps` stub, but the off HAS a
+// darwin arm today (the LaunchAgent undo), so a darwin platform in deps would send the copy down it. The table is injected instead (a function literal — this entry is source the
+// test writes), the same empty table cliCtx's offDeps injects, so the copy needs no /proc on whatever machine runs the tests and the receipts still compare key for key.
+const AS_LINUX = `runOffCli(process.argv.slice(2), { standalone: true, platform: 'linux', deps: { platform: 'linux', procs: async () => [], getuid: () => 1000 } })`
 
 function stubBin() {
   const dir = tmpDir('asight-stub-'), bin = path.join(dir, 'bin'), log = path.join(dir, 'calls.log')
   fs.mkdirSync(bin)
-  for (const name of ['systemctl', 'ps']) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\nexit 0\n`, { mode: 0o755 }) // answers 0 and says nothing: no unit, no process
+  for (const name of ['systemctl']) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\nexit 0\n`, { mode: 0o755 }) // answers 0 and says nothing: no unit; the process table is injected, so no `ps` is asked
   return { bin, calls: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : []) }
 }
 

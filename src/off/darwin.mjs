@@ -32,8 +32,9 @@ export function refuseElevatedByUid({ getuid = processUid, geteuid = processUid 
 }
 
 /** Is the agent loaded in this user's session? The arch module's rule (never a localised error text): `launchctl print gui/<uid>/<label>` — exit 0 = there, any other exit = not there,
- *  a print that did not run at all (code null) is NOT "not there": nothing was asked of launchd, and an undo that took it for gone would report success while the agent stays loaded. */
-function agentState({ exec, env, uid }) {
+ *  a print that did not run at all (code null) is NOT "not there": nothing was asked of launchd, and an undo that took it for gone would report success while the agent stays loaded.
+ *  Exported for the off orchestration's own questions (daemon-stop.mjs's stop, orchestrate.mjs's unitIsUp — the flip checklist ①, 4.9 §4): the same three answers, one rule. */
+export function agentState({ exec, env, uid }) {
   const r = execTool('launchctl', ['print', `gui/${uid}`, AGENT_LABEL], { run: exec, env })
   if (r.code === 0) return { state: 'present' }
   if (r.code === null) return { state: 'unknown', err: `launchctl print did not run (${r.err || 'no reason given'})` }

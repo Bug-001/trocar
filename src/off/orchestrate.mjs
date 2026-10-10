@@ -8,7 +8,8 @@
 //      that cannot be stopped: its entries are undone all the same (the new connections are direct by its stale heartbeat), exit 1, the pid is given
 //   4  the entries: by the manifest (undoHarnesses), or, with no readable manifest, by asight's own marks (planByMarker) after a yes (R3); the old capture's
 //      leftovers of claude-code through `deps.legacyUndo` (Task 10); 5.1's held requests through `deps.releaseHeld` (5.1 is not built: a seam)
-//   5  with no names: the autostart is disabled and the daemon was asked to exit once drained
+//   5  with no names: the autostart is disabled and the daemon was asked to exit once drained — systemd's disable on Linux (src/off/autostart.mjs), the LaunchAgent's undo on
+//      darwin (src/off/darwin.mjs undoAutostart, 4.9 §4: bootout first, then the plist), nothing on win32 (the task and Run value are manifest entries)
 //   6  the receipt (R1) and the `off-note` lines of `flows/`, the last of them `kind:'result'`; exit 0 only when the routing is confirmed off and every
 //      entry is undone (connections that are still draining do not count against it)
 // Everything the world gives is a `deps` entry a test replaces (0.1 §3): `fs` `exec` `request` `socketPath` `alive` `identity` `kill` `isHelper` `sleep` `ms`
@@ -27,6 +28,7 @@ import { planByMarker, undoByMarker } from './marker.mjs'
 import { daemonState, stopDaemon, helperGone, isRedirectorHelper } from './daemon-stop.mjs'
 import { controlRequest, controlSocketPath, controlEndpointOf } from './control-client.mjs'
 import { disableAutostart, unitFilePath, UNIT_FILE_NAME } from './autostart.mjs'
+import { plistFilePath, AGENT_LABEL, agentState, undoAutostart } from './darwin.mjs'
 import { execTool } from './exec.mjs'
 import { listProcs, identityFor, pidAlive } from './proc.mjs'
 import { kernelForwardOnly, refuseElevatedByWhoami } from './win32.mjs'
@@ -52,7 +54,7 @@ export function offWorld({ home = nodeOs.homedir(), env = process.env, deps = {}
   // lock names, unauthenticated — a POST /off that 401s is then the control-error the receipt shows, not a silent miss.
   const endpoint = platform === 'win32' && deps.socketPath === undefined ? controlEndpointOf({ dir, fs: deps.fs || nodeFs }) : null
   const w = {
-    home, env, dir, fs: deps.fs || nodeFs, exec: deps.exec || null,
+    home, env, dir, fs: deps.fs || nodeFs, exec: deps.exec || null, platform,
     request: deps.request || (endpoint && endpoint.token ? ((o) => controlRequest({ ...o, token: endpoint.token })) : controlRequest),
     clock: deps.now || (() => new Date()), ms: deps.ms || Date.now, sleep: deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
     alive: deps.alive || pidAlive, identity: deps.identity || identityFor({ platform, exec: deps.exec || null, env }), isHelper: deps.isHelper || isRedirectorHelper, kill: deps.kill,
@@ -63,16 +65,27 @@ export function offWorld({ home = nodeOs.homedir(), env = process.env, deps = {}
   w.procs = once(deps.procs || (() => listProcs({ exec: w.exec, platform, env })))
   w.daemonState = deps.daemonState || (() => daemonState({ lockFile: w.lockFile, socketPath: w.socketPath, request: w.request, identity: w.identity, alive: w.alive, now: w.ms, fs: w.fs, timeoutMs: OFF_ASK_MS }))
   w.stopDaemon = deps.stopDaemon || ((o = {}) => stopDaemon({ lockFile: w.lockFile, socketPath: w.socketPath, exec: w.exec, kill: w.kill, alive: w.alive, identity: w.identity, isHelper: w.isHelper, sleep: w.sleep, now: w.ms, fs: w.fs, env, platform, ...o }))
-  w.unitManaged = () => w.fs.existsSync(unitFilePath(home))
+  // The autostart the off-side knows: Linux's systemd unit, or darwin's LaunchAgent plist (4.9 §4; the flip checklist ① — before it, step 5 asked systemd
+  // on darwin unconditionally). win32 has none to ask about: its task and Run value are manifest entries, undone with the rest (4.8 §4.2).
+  w.unitManaged = () => w.fs.existsSync(platform === 'darwin' ? plistFilePath(home) : unitFilePath(home))
   return w
 }
 
 /** What the user does when a daemon that answers cannot be made to confirm that its routing is off (1.6 §1.5 「确认不了就不撤」 leaves the entries alone, so the way out is said, audit semantics 5):
- *  stopping the daemon takes its helper and the links with it, and then the command is run again. */
-const wayOut = (w, pid) => `To go on, stop the daemon (${w.unitManaged() ? 'systemctl --user stop asight-collector.service' : Number.isInteger(pid) ? `kill ${pid}` : "no pid is on record: find it with pgrep -f 'asight.* (daemon|collector start)'"}), which takes its links off with it, then run the command again`
+ *  stopping the daemon takes its helper and the links with it, and then the command is run again. On darwin the agent is booted out first — a daemon stopped under a loaded LaunchAgent is pulled right back by KeepAlive (4.9 §4). */
+const wayOut = (w, pid) => w.unitManaged()
+  ? (w.platform === 'darwin' ? `launchctl bootout gui/${typeof process.getuid === 'function' ? process.getuid() : -1}/${AGENT_LABEL} (摘自启,launchd 才不会把守护进程拉回来), then run the command again` : `To go on, stop the daemon (systemctl --user stop asight-collector.service), which takes its links off with it, then run the command again`)
+  : `To go on, stop the daemon (${Number.isInteger(pid) ? `kill ${pid}` : "no pid is on record: find it with pgrep -f 'asight.* (daemon|collector start)'"}), which takes its links off with it, then run the command again`
 
-/** Is the autostart unit active or activating (a `Restart=on-failure` restart waiting out its RestartSec is `activating`)? A tool that cannot be asked says no: the lock decides. */
-const unitIsUp = (w) => { const a = execTool('systemctl', ['--user', 'is-active', UNIT_FILE_NAME], { run: w.exec, env: w.env }); return a.out === 'active' || a.out === 'activating' || a.out === 'reloading' }
+/** Is the autostart going to bring the daemon back the moment it is stopped — systemd's Restart=on-failure mid-wait, or launchd's KeepAlive with the agent still loaded (4.9 §4)? A tool that cannot be asked says no: the lock decides. */
+const unitIsUp = (w) => {
+  if (w.platform === 'darwin') {
+    const q = agentState({ exec: w.exec, env: w.env, uid: typeof process.getuid === 'function' ? process.getuid() : -1 })
+    return q.state === 'present'
+  }
+  const a = execTool('systemctl', ['--user', 'is-active', UNIT_FILE_NAME], { run: w.exec, env: w.env })
+  return a.out === 'active' || a.out === 'activating' || a.out === 'reloading'
+}
 
 /** The harness ids a manifest names (entries and files). */
 export const harnessIdsOf = (m) => [...new Set([...((m && m.entries) || []), ...((m && m.files) || [])].map((x) => x.harness).filter((h) => typeof h === 'string'))]
@@ -138,12 +151,12 @@ export async function switchRoutingOff(w, { ids = null, now = false, exit = fals
     const helperGoneNow = () => helperGone(lock, { alive: w.alive, isHelper: w.isHelper })
     for (const end = w.ms() + 2000; lock && !helperGoneNow() && w.ms() < end;) await w.sleep(25) // a helper that is only now noticing its daemon died
     if (lock && !helperGoneNow()) await stopIt('is not running, but its helper still is')
-    else if (exit && w.unitManaged() && unitIsUp(w)) { // a killed daemon is brought back by systemd after RestartSec (Restart=on-failure), and `disable` does not cancel that: it is stopped, as `uninstall` does (§1.4 第 5 步, audit semantics 4)
+    else if (exit && w.unitManaged() && unitIsUp(w)) { // the autostart would bring a daemon back the moment this ends — systemd after RestartSec (Restart=on-failure), launchd at once (KeepAlive, the agent still loaded, 4.9 §4) — so it is stopped, as `uninstall` does (§1.4 第 5 步, audit semantics 4)
       const s = await w.stopDaemon({ unitManaged: true })
       r.stop = s; r.how = s.how
-      r.events.push({ kind: 'daemon-stop', how: s.how, signals: s.signals, stopped: s.stopped, pid: s.pid, reason: `no daemon is running, but the autostart unit is up or about to restart one (systemd Restart=on-failure); ${s.stopped ? 'stopped (systemctl stop, reset-failed)' : `NOT stopped${s.error ? `: ${s.error}` : ''}`}` })
+      r.events.push({ kind: 'daemon-stop', how: s.how, signals: s.signals, stopped: s.stopped, pid: s.pid, reason: `no daemon is running, but the autostart would bring one back (${w.platform === 'darwin' ? 'the LaunchAgent is loaded: launchd KeepAlive' : 'the unit is up or about to restart: systemd Restart=on-failure'}); ${s.stopped ? (w.platform === 'darwin' ? 'booted out (launchctl bootout)' : 'stopped (systemctl stop, reset-failed)') : `NOT stopped${s.error ? `: ${s.error}` : ''}`}` })
       if (s.stopped) { r.confirmed = true; r.daemon = { pid: null, state: 'none' } } // there was no engine: nothing was relayed, and what the stop did is on `stop`
-      else { r.unstoppable = true; fail('stop-failed', `systemd keeps the autostart unit up or restarting${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, but a daemon may come back with nothing attached; stop it: systemctl --user stop asight-collector.service, then run asight off again`) }
+      else { r.unstoppable = true; fail('stop-failed', w.platform === 'darwin' ? `the LaunchAgent could not be booted out${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, but launchd may bring a daemon back with nothing attached; run: launchctl bootout gui/${typeof process.getuid === 'function' ? process.getuid() : -1}/${AGENT_LABEL}, then run asight off again` : `systemd keeps the autostart unit up or restarting${s.error ? ` (${s.error})` : ''}; the entries are undone all the same, but a daemon may come back with nothing attached; stop it: systemctl --user stop asight-collector.service, then run asight off again`) }
     } else { r.confirmed = true; r.how = 'no-daemon'; r.daemon = { pid: null, state: 'none' } }
   } else fail('control-error', `${st.reason || 'whether a daemon runs is not known'}; the entries are left as they are. If no asight daemon runs (pgrep -f 'asight.* (daemon|collector start)' finds none), delete ${w.lockFile} and run asight off again; if one does, stop it by hand first`)
   return r
@@ -431,9 +444,17 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
         if (k.done === 'failed') { receipt.problems.push(`the kernel could not be taken off the routing path (${k.reason}); agents may still be steered through it until it is stopped`); put({ event: 'failure', code: 'kernel-not-off', reason: k.reason }) }
       }
       // 5 · no names: the autostart goes too (the daemon was asked to exit once drained in step 3). Windows has no unit to disable
-      // here: the task and the Run value are manifest entries, undone with the rest in step 4 (undoScheduledTask / undoRunKey).
+      // here: the task and the Run value are manifest entries, undone with the rest in step 4 (undoScheduledTask / undoRunKey). darwin's
+      // LaunchAgent is undone through the launchd arm (the flip checklist ①, 4.9 §4): the agent booted out FIRST (KeepAlive does not pull
+      // the daemon back), then the plist out of ~/Library/LaunchAgents (launchd scans it at every login: a file left there undoes the off).
       if (ids === null) {
         if ((deps.platform || process.platform) === 'win32') receipt.autostart = { disabled: true, removed: [], note: 'the task and the Run value are ledger entries, undone with the rest (4.8 §4.2)' }
+        else if ((deps.platform || process.platform) === 'darwin') {
+          const u = undoAutostart({ home, exec: w.exec, env, fs: w.fs })
+          receipt.autostart = { disabled: u.code === 0, removed: u.plist === 'removed' ? [plistFilePath(home)] : [], ...(u.code !== 0 ? { error: u.err || `the LaunchAgent was ${u.agent} and the plist ${u.plist}` } : {}) }
+          put({ kind: 'autostart', disabled: receipt.autostart.disabled, reason: `autostart ${receipt.autostart.disabled ? 'disabled' : 'NOT disabled'} (launchd: agent ${u.agent}, plist ${u.plist})${u.err ? ` (${u.err})` : ''}` })
+          if (receipt.autostart.error) { receipt.notes.push(receipt.autostart.error); put({ event: 'failure', code: 'unit-not-disabled', reason: receipt.autostart.error }) }
+        }
         else {
           receipt.autostart = disableAutostart({ home, exec: w.exec, env, fs: w.fs })
           put({ kind: 'autostart', disabled: receipt.autostart.disabled, reason: `autostart ${receipt.autostart.disabled ? 'disabled' : 'NOT disabled'}${receipt.autostart.error ? ` (${receipt.autostart.error})` : ''}` })
