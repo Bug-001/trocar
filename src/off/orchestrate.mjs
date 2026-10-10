@@ -270,10 +270,17 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
       const o = await (w.deps.undoOptIns || undoOptIns)({ manifest, ids, exec: w.exec, env: w.env, fs: w.fs, home: w.home })
       for (const r of o.results) {
         if (r.result === 'needs-admin') { u.left.push({ path: r.path, result: 'needs-admin', reason: `${r.reason}${r.command ? `: ${r.command}` : ''}` }); u.failures.push({ code: 'needs-admin', path: r.path, reason: r.reason }) }
-        else if (r.result === 'undone') u.changed.push({ path: r.path, change: `点名项(${r.kind})已撤`, result: 'restored' })
+        else if (r.result === 'undone') {
+          u.changed.push({ path: r.path, change: `点名项(${r.kind})已撤`, result: 'restored' })
+          // the removal is a state change, not only an install-note: the §12 twin of the apply side's optin-applied (optin.mjs), so a surface
+          // that watches state events sees the item go — an opt-in item's removal must not be silent anywhere (D38; 4.8 §12's optin-removed {form, item, scope})
+          u.events.push({ event: 'optin-removed', where: 'optin', ...(r.form != null && r.item != null ? { form: r.form, item: r.item } : {}), scope: r.scope })
+        }
         else if (r.result === 'absent') u.skipped.push({ what: r.path, reason: `点名项(${r.kind})已不在` })
         else { u.left.push({ path: r.path, result: r.result, reason: r.reason || r.result }); u.failures.push({ code: 'optin-not-undone', path: r.path, reason: r.reason || r.result }) }
-        note('optin', { path: r.path, kind: r.kind, scope: r.scope }, `${r.path} (${r.kind}, ${r.scope}): ${r.result}${r.reason ? ` — ${r.reason}` : ''}`)
+        // the off-note of a row: no `code` — there is no registered code for "an opt-in item's undo went" (D38: the closed sets are the only codes; the
+        // row's kind, path, form/item and reason say it, and the failures above carry the registered codes where one exists, optin-not-undone / needs-admin)
+        u.events.push({ kind: r.kind, path: r.path, scope: r.scope, ...(r.form != null && r.item != null ? { form: r.form, item: r.item } : {}), reason: `${r.path} (${r.kind}, ${r.scope}): ${r.result}${r.reason ? ` — ${r.reason}` : ''}` })
       }
       for (const x of o.unknown) u.left.push({ path: x.path, result: 'unknown-kind', reason: `${x.path} is an opt-in item of kind ${JSON.stringify(x.kind)}, which this build has no undo for; use the asight that wrote it` })
     }

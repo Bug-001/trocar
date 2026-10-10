@@ -29,6 +29,7 @@ export default {
     {
       g: 'kimi-code.vscode',
       proxyEntry: { kind: 'app-setting', file: (ctx) => path.join(appData(ctx), 'Code', 'User', 'settings.json'), keys: ['http.proxy', 'http.systemCertificates'] },
+      launcher: { shortcut: 'Visual Studio Code.lnk' }, // the opt-in item's launcher half (4.8 s2.4): the editor's Start-menu / desktop shortcut is repointed at it, so the CA file reaches the extension host
       auth: true,
       followsSystemProxy: { http: true, ws: false }, // through VS Code
       optIn: [{

@@ -31,6 +31,8 @@ import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { writeNetenv } from '../../src/netenv/index.mjs'
 import { settingSha } from '../../src/netenv/redact.mjs'
+import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
+import { recordEntryFindings } from '../../src/collector/arch/win32/optin.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
@@ -1589,5 +1591,63 @@ test('daemon: the 5 s check takes a proxy-mode record\'s own semantics — the f
     const lines = flowsOf(s).filter((f) => f.where === 'netenv' || f.event === 'netenv-change')
     assert.deepEqual(lines.map((f) => [f.event, f.where, f.code, f.harness, f.captured]), [['netenv-change', 'netenv', 'proxy-changed', 'claude-code', false], ['failure', 'netenv', 'proxy-changed', 'claude-code', undefined]])
     assert.deepEqual(fs.readFileSync(file), bytes)
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+// 4.8 §2.4「入口还有没有效」+ W68, the daemon's half: the 5 s check runs the same arch hook status folds into its rows. The check itself has
+// its own cells over the real Windows world (optin-check.test.mjs); what is pinned here is the WIRING — the manifest read as the disk has it
+// on every tick (an entry added after the start is seen: the copy read at start is not the truth), the process table of this collector's own
+// scan (a parent row included), the real record (once per occurrence, only §9.7's netenv failure codes — entry-changed is no event), and a
+// manifest without opt-in entries paying for none of it (no check, no scan).
+test('daemon: the 5 s check re-verifies the opt-in entries (W68) — the fresh manifest and the scan\'s own table into the arch hook\'s check, one netenv failure per finding, entry-changed no event, and no check at all without opt-in entries', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  p.add(600, { uid: UID, ppid: 599, exe: '/opt/tools/launcher.exe', argv: ['/opt/tools/launcher.exe'] }) // not an agent: the table's rows are the check's to match, not the tracker's
+  const { arch: base } = fakeArch(p)
+  const asked = []
+  let scans = 0
+  let answer = []
+  const arch = {
+    os: base.os,
+    createRedirector: (o) => { const r = base.createRedirector(o); const real = r.scan.bind(r); r.scan = async (...a) => { scans++; return real(...a) }; return r },
+    optIn: { check: (q) => { asked.push(q); return answer }, record: recordEntryFindings },
+  }
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home }, checkMs: 20 })
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    await new Promise((r) => setTimeout(r, 150))
+    assert.equal(asked.length, 0, 'the install manifest holds no opt-in entry: the check does not run')
+    const scansBefore = scans
+    // what `on --opt-in` leaves behind: the manifest on disk gains the entry while this daemon runs — the copy read at start never knew it
+    const m = readManifest(s.collector)
+    m.entries.push({ kind: 'optin-user-path', harness: 'claude-code', form: 'claude-code.cli', item: 'user-path-shim', scope: 'user', confirmed: true, values: { command: 'claude', binDir: 'C:\\b', realBinary: 'C:\\r.exe' } })
+    saveManifest(s.collector, m)
+    answer = [
+      { form: 'claude-code.cli', item: 'user-path-shim', harness: 'claude-code', code: 'shim-not-on-path', detail: 'claude resolves first to C:\\npm\\claude.cmd — the machine PATH\'s C:\\npm' },
+      { form: 'claude-code.cli', item: 'user-path-shim', harness: 'claude-code', code: 'entry-changed', detail: 'the real binary the dispatcher falls back to (C:\\r.exe) is gone' },
+      { form: 'claude-code.cli', item: 'user-path-shim', harness: 'claude-code', code: 'not-via-entry', detail: '1 running claude-code process(es) were not started through the entry' },
+    ]
+    await until(() => asked.length > 0)
+    assert.equal(asked[0].manifest.entries.filter((e) => e.kind === 'optin-user-path').length, 1, 'the manifest as the disk has it NOW, not the copy read at start')
+    assert.deepEqual(asked[0].harnesses, [cc], 'the same harness list the plan is asked of')
+    assert.ok(asked[0].procs.some((x) => x.pid === 600 && x.ppid === 599), 'the process table of this collector\'s own scan, a parent row included')
+    assert.ok(scans > scansBefore, 'the scan is paid for only now that there is an entry in effect')
+    await until(() => flowsOf(s).some((f) => f.event === 'failure' && f.where === 'netenv'))
+    await new Promise((r) => setTimeout(r, 200)) // more checks than one
+    const netFailures = () => flowsOf(s).filter((f) => f.event === 'failure' && f.where === 'netenv')
+    assert.deepEqual(netFailures().map((f) => [f.code, f.harness, f.form, f.item]), [['shim-not-on-path', 'claude-code', 'claude-code.cli', 'user-path-shim'], ['not-via-entry', 'claude-code', 'claude-code.cli', 'user-path-shim']], 'one line per coded finding however many checks ran; entry-changed is no event')
+    assert.ok(asked.length > 3, `the check ran on many ticks (${asked.length})`)
+    // the same finding moved fires once more; the unchanged one stays at one line (recordEntryFindings' own rule, through the daemon's state)
+    answer = [{ ...answer[0], detail: 'claude resolves first to D:\\tools\\claude.cmd — the machine PATH\'s D:\\tools' }]
+    await until(() => netFailures().length === 3)
+    await new Promise((r) => setTimeout(r, 120))
+    assert.equal(netFailures().length, 3, 'a changed finding fires once more, the unchanged ones stay at their one line')
+    // the entry undone on disk (what `off` leaves behind): nothing in effect any more, so no check and no scan
+    const m2 = readManifest(s.collector)
+    m2.entries = m2.entries.filter((e) => e.kind !== 'optin-user-path')
+    saveManifest(s.collector, m2)
+    const askedAt = asked.length; const scansAt = scans
+    await new Promise((r) => setTimeout(r, 200))
+    assert.deepEqual([asked.length, scans], [askedAt, scansAt], 'no opt-in entry in effect any more: neither the check nor the scan runs')
   } finally { await d.stop(); p.done(); s.done() }
 })

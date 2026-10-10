@@ -156,7 +156,7 @@ test('turnOn (the library form, V56\'s re-run rule): an on without --opt-in afte
 // ── `status --json`'s opt_in (V56's second half, V64; 1.6 §9.4) ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 import { runStatus } from './fixtures/status-ctx.mjs'
 import { installedHome } from '../off/fixtures/off-ctx.mjs'
-import { validateOptIn, optInOf, OPTIN_STATES } from '../../src/cli/schema.mjs'
+import { validateOptIn, optInOf, applyEntryCheck, OPTIN_STATES } from '../../src/cli/schema.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 
@@ -191,6 +191,50 @@ test('V56/V64: status --json carries opt_in — every field of §9.4, the states
   // the inapplicable machine item (the resolver says the real binary is not on the machine PATH) is not a thing to name
   const userOnly = optInOf(planOptIns({ groups: groupsOf(DESCS.filter((d) => d.name === 'kimi-code')), resolve: () => 'user' }))
   assert.deepEqual(userOnly['kimi-code'].map((x) => x.kind), ['optin-user-path', 'optin-vscode'], 'the dispatcher row is gone when its when does not hold; the rest stays (the kimi descriptors hold one user-PATH form and the VS Code one)')
+})
+
+test('W68 / §1.7「入口还有没有效」: status folds the entry check\'s findings into the same opt_in rows — a broken entry is broken with its code, a check that could not be told is unknown with a reason, a needed row takes no finding; the check is the SAME hook\'s, fed the manifest and the process table this status already read', async () => {
+  const s = await installedHome({ names: ['kimi-code'] })
+  await s.on({ harnesses: DESCS.filter((d) => d.name === 'kimi-code') })
+  const manifest = readManifest(s.dir)
+  manifest.entries.push({ kind: 'optin-user-path', harness: 'kimi-code', form: 'kimi-code.cli', item: 'user-path-shim', scope: 'user', confirmed: true, values: { command: 'kimi', binDir: 'C:\\b', realBinary: 'C:\\r.exe' } })
+  manifest.entries.push({ kind: 'optin-vscode', harness: 'kimi-code', form: 'kimi-code.vscode', item: 'vscode-settings-and-launcher', scope: 'user', confirmed: true, values: {} })
+  const { writeDurable } = await import('../../src/off/fsutil.mjs')
+  const { manifestPath } = await import('../../src/off/manifest.mjs')
+  writeDurable(manifestPath(s.dir), JSON.stringify(manifest, null, 2), 0o600)
+  const { planOptIns } = await import('../../src/collector/arch/win32/optin.mjs')
+  const { groupsOf } = await import('../../src/collector/arch/win32/route-plan.mjs')
+  const rows = planOptIns({ groups: groupsOf(DESCS.filter((d) => d.name === 'kimi-code')), manifest: readManifest(s.dir) })
+  const checked = [], planned = []
+  const parts = { os: 'win32', harnesses: DESCS.filter((d) => d.name === 'kimi-code'), arch: { optIn: { plan: (q) => { planned.push(q); return rows }, check: (q) => {
+    checked.push(q)
+    return [
+      { form: 'kimi-code.cli', item: 'user-path-shim', harness: 'kimi-code', code: 'shim-not-on-path', detail: "kimi resolves first to C:\\npm\\kimi.cmd — the machine PATH's C:\\npm" },
+      { form: 'kimi-code.vscode', item: 'vscode-settings-and-launcher', harness: 'kimi-code', code: null, reason: 'denied', detail: 'the settings file could not be read' },
+      { form: 'kimi-code.cli', item: 'machine-path-dispatcher', harness: 'kimi-code', code: 'not-via-entry', detail: 'not in effect, so no finding of mine may reach this row' },
+    ]
+  } } } }
+  const procs = [{ pid: 11, ppid: 10, exe: 'C:\\Users\\a\\.kimi-code\\bin\\kimi.exe', argv: ['kimi'] }]
+  const r = await runStatus(s, ['--json'], { procs: async () => procs, deps: { parts } })
+  const j = JSON.parse(r.io.stdoutText())
+  assert.deepEqual(validateOptIn(j.opt_in), [], 'the folded rows are still §9.4\'s shape, closed sets included')
+  const list = j.opt_in['kimi-code']
+  assert.deepEqual([list.find((x) => x.kind === 'optin-user-path').state, list.find((x) => x.kind === 'optin-user-path').code], ['broken', 'shim-not-on-path'], 'a done entry the check found displaced')
+  assert.deepEqual(Object.entries(list.find((x) => x.kind === 'optin-vscode')).filter(([k]) => ['state', 'code', 'reason'].includes(k)), [['state', 'unknown'], ['code', null], ['reason', 'denied']], 'a check that could not be told')
+  assert.deepEqual([list.find((x) => x.kind === 'optin-machine-path').state, list.find((x) => x.kind === 'optin-machine-path').code], ['needed', 'opt-in-needed'], 'a needed row is not in effect: no finding of the check may reach it')
+  assert.equal(checked.length, 1, 'the check ran once, through the same hook as the plan')
+  assert.equal(planned.length, 1, 'the plan ran once too')
+  assert.equal(checked[0].manifest, planned[0].manifest, 'the check was fed the very manifest object this status read for the plan — not a second read of its own')
+  assert.deepEqual(checked[0].manifest, readManifest(s.dir), 'and that manifest is the one on disk')
+  assert.deepEqual(checked[0].procs, procs, 'and the process table this status already read')
+
+  // the fold itself (schema.mjs): broken outranks unknown for the same (form, item); rows that are not done keep their state
+  const row = (item, state) => ({ form: 'kimi-code.cli', harness: 'kimi-code', item, kinds: ['optin-user-path'], scope: 'user', admin: false, impact: 'i', command: 'asight on kimi-code --opt-in kimi-code.cli', chosen: false, applicable: true, state })
+  assert.deepEqual(applyEntryCheck([row('user-path-shim', 'done')], [{ form: 'kimi-code.cli', item: 'user-path-shim', harness: 'kimi-code', code: null, reason: 'denied', detail: 'd' }, { form: 'kimi-code.cli', item: 'user-path-shim', harness: 'kimi-code', code: 'entry-changed', detail: 'e' }]),
+    [row('user-path-shim', 'done'), ...[]].slice(0, 1).map(() => ({ ...row('user-path-shim', 'done'), state: 'broken', code: 'entry-changed', detail: 'e' })), 'a broken finding outranks an unknown one')
+  assert.deepEqual(applyEntryCheck([row('user-path-shim', 'needed')], [{ form: 'kimi-code.cli', item: 'user-path-shim', harness: 'kimi-code', code: 'shim-not-on-path', detail: 'd' }]),
+    [row('user-path-shim', 'needed')], 'not in effect: untouched')
+  assert.deepEqual(applyEntryCheck([row('user-path-shim', 'done')], []), [row('user-path-shim', 'done')], 'no findings: the rows as the plan gave them')
 })
 
 test('validateOptIn rejects the shapes §9.4 does not allow (the check can fail: states, codes, the per-entry undo, the enable line, admin/scope)', () => {
