@@ -265,25 +265,29 @@ test('prepare (W74): the kernel line, and the Smart App Control line only when i
   const start = (o) => { starts.push(o); return { async call() { return { keyExists: true, values: { VerifiedAndReputablePolicyState: { kind: 'REG_DWORD', value: 2 } } } }, async close() {} } }
   const seen = []
   const sacOf = (state) => async (a) => { seen.push(a); return state }
+  // the same two reads as data, for the Windows plan's own kernel and Smart App Control lines (4.8 §11): the pin this build carries (version and the platform package of the architecture asked) and the digest that was verified
+  const KERNEL64 = { version: 'v1.19.32', package: 'asight-kernel-win32-x64', exe: 'asight-forwarder.exe', sha256: 'a'.repeat(64) }
   // an injected sac: no helper of its own is started for it — it gets the helper it was given, none if none
-  const p1 = await prepare({ locate: found, sac: sacOf('off'), start })
+  const p1 = await prepare({ locate: found, sac: sacOf('off'), start, arch: 'x64' })
   assert.deepEqual(starts, [])
   assert.deepEqual(seen, [{ helper: null }])
-  assert.deepEqual(p1, { notes: [kernelLine] }, 'Smart App Control off: no line of it')
-  const p2 = await prepare({ locate: found, sac: sacOf('evaluation'), start })
+  assert.deepEqual(p1, { notes: [kernelLine], kernel: KERNEL64, sac: 'off' }, 'Smart App Control off: no line of it')
+  const p2 = await prepare({ locate: found, sac: sacOf('evaluation'), start, arch: 'x64' })
   assert.equal(p2.notes.length, 2)
   assert.match(p2.notes[1], /^Smart App Control 开着/)
-  const unknown = await prepare({ locate: found, sac: sacOf({ unknown: { reason: 'timeout' } }), start })
+  assert.deepEqual([p2.kernel, p2.sac], [KERNEL64, 'evaluation'], 'the data of the two lines the plan draws')
+  const unknown = await prepare({ locate: found, sac: sacOf({ unknown: { reason: 'timeout' } }), start, arch: 'x64' })
   assert.match(unknown.notes[1], /^Smart App Control 的状态读不到\(timeout\)/, 'an unreadable state says 不知道, not a guess')
+  assert.deepEqual(unknown.sac, { unknown: { reason: 'timeout' } }, 'and the data says it the same way')
   const h = { async call() { return { keyExists: false, values: {} } }, async close() {} }
-  await prepare({ helper: h, locate: found, sac: sacOf('on'), start })
+  await prepare({ helper: h, locate: found, sac: sacOf('on'), start, arch: 'x64' })
   assert.deepEqual(seen[seen.length - 1], { helper: h }, 'a helper passed in reaches the injected sac as it was given')
   assert.deepEqual(starts, [], 'and asight still started none for it')
   // the real reader (sacState): a helper of its own is started when none is given, and closed after
-  const real = await prepare({ locate: found, start })
+  const real = await prepare({ locate: found, start, arch: 'x64' })
   assert.equal(starts.length, 1, 'the real reader gets a helper of its own')
   assert.equal(real.notes.length, 2)
   assert.match(real.notes[1], /^Smart App Control 开着/, 'the fake helper answers evaluation (2)')
-  const broken = await prepare({ locate: found, start: () => { throw new Error('policy blocked the script') } })
+  const broken = await prepare({ locate: found, start: () => { throw new Error('policy blocked the script') }, arch: 'x64' })
   assert.match(broken.notes[1], /^Smart App Control 的状态读不到\(denied:no helper\)/, 'a helper that cannot be started is said, not thrown')
 })
