@@ -207,6 +207,28 @@ export function optInOf(rows) {
   return out
 }
 
+/** The entry check's findings folded into the plan's own rows (1.6 §1.7「入口还有没有效」: `status` re-verifies the entries every time it is
+ *  asked, and these are the same rows — no second truth). A finding with a code turns its (form, item) row `broken` with that code; one without
+ *  (a check that could not be told) turns it `unknown` with a reason of the closed set above; a broken finding outranks an unknown one. Only
+ *  `done` rows take a finding — needed, pending-admin and never are not in effect, and a `done` row whose entry the check saw nothing wrong with
+ *  stays `done`. The row also carries the finding's `detail` (which PATH entry won, which shortcut now starts what, which pids went around the
+ *  entry) for the facts' own readers — doctor's steps of §9.6 are exactly that sentence; `optInOf` keeps the §9.4 object to the spec's fields. */
+export function applyEntryCheck(rows, findings) {
+  if (!Array.isArray(rows) || !Array.isArray(findings) || !findings.length) return rows
+  const at = new Map()
+  for (const f of findings) {
+    if (!f || !f.form || !f.item) continue
+    const prev = at.get(`${f.form}|${f.item}`)
+    if (!prev || (!prev.code && f.code)) at.set(`${f.form}|${f.item}`, f) // broken outranks unknown
+  }
+  if (!at.size) return rows
+  return rows.map((r) => {
+    const f = r && at.get(`${r.form}|${r.item}`)
+    if (!f || r.state !== 'done') return r
+    return { ...r, ...(f.code ? { state: 'broken', code: f.code } : { state: 'unknown', code: null, reason: f.reason }), detail: f.detail }
+  })
+}
+
 /** Problems with the `opt_in` object of `status --json` (`{ <harness>: [item] }`) against 1.6 §9.4 (`[]` = valid): closed sets, the code that goes
  *  with the state, admin exactly when the scope is machine, the enable line whole (it names the form), the undo the agent's switch and nothing else. */
 export function validateOptIn(o) {

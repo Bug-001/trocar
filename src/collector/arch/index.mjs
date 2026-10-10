@@ -14,9 +14,10 @@ export async function loadArch(platform = process.platform) {
     // is Task 10's. createRedirector is the whole Windows collector (wiring.mjs): it needs the collector dir and the daemon's sinks, so only
     // daemon.mjs calls it (loadParts makes no redirector on win32); prepare is the read-only hook `asight on` calls before it writes (W27 ⑥, W74);
     // routing is the proxy-mode routing object 1.6 §9.5's `on` consumes (Task 8(c)): a FACTORY runOnCli builds with its own shell's environment.
-    // optIn is 4.8 §2.4's half the CLI reaches (1.6 §1.7): `forms` (what --opt-in may name) and `plan` (the rows of the plan's 「要你点名的」 section);
-    // `apply` (one named item, ledgered) and `check` (W68) join from their own commits of Task 14.
-    const [{ createWin32Collector, prepare, win32Routing }, unit, { controlEndpoint }, { windowsRoots }, { planOptIns, optinFormsOf, applyOptIn }] = await Promise.all([import('./win32/wiring.mjs'), import('./win32/autostart.mjs'), import('./win32/control-path.mjs'), import('./win32/roots.mjs'), import('./win32/optin.mjs')])
+    // optIn is 4.8 §2.4's half the CLI reaches (1.6 §1.7): `forms` (what --opt-in may name), `plan` (the rows of the plan's 「要你点名的」 section),
+    // `apply` (one named item, ledgered) and `check` (W68: the read-only re-check that the entries are still the ones used — status folds its
+    // findings into the same rows). `procs` is the caller's process table (listProcs' rows: the check matches them to the forms itself).
+    const [{ createWin32Collector, prepare, win32Routing }, unit, { controlEndpoint }, { windowsRoots }, { planOptIns, optinFormsOf, applyOptIn, checkEntries }] = await Promise.all([import('./win32/wiring.mjs'), import('./win32/autostart.mjs'), import('./win32/control-path.mjs'), import('./win32/roots.mjs'), import('./win32/optin.mjs')])
     const { groupsOf } = await import('./win32/route-plan.mjs')
     const of = (harnesses, ids = null) => groupsOf(harnesses).filter((x) => !ids || ids.includes(x.harness))
     return {
@@ -31,6 +32,7 @@ export async function loadArch(platform = process.platform) {
         forms: ({ harnesses: h, ids = null } = {}) => optinFormsOf(of(h, ids)),
         plan: ({ harnesses: h, ids = null, optIn = [], manifest = null, resolve = null } = {}) => planOptIns({ groups: of(h, ids), optIns: optIn, manifest, resolve }),
         apply: ({ harnesses: h, ids = null, ...rest }) => applyOptIn({ ...rest, groups: of(h, ids) }),
+        check: ({ harnesses: h, ids = null, procs = [], ...rest }) => checkEntries({ ...rest, groups: of(h, ids), procs }),
       },
     }
   }

@@ -26,7 +26,7 @@ import { judgeHarness } from '../netenv/verdict.mjs'
 import { gatherNetFacts } from '../netenv/facts.mjs'
 import { readAdopted } from '../netenv/adopt.mjs'
 import { buildTopology, renderPathBlock, renderDetail } from '../netenv/topology.mjs'
-import { optInOf } from './schema.mjs'
+import { optInOf, applyEntryCheck } from './schema.mjs'
 import { diagnose } from '../netenv/findings.mjs'
 import { captureHealth } from '../health/read.mjs'
 import { legacyArtifacts, hasNewCollector } from '../off/legacy.mjs'
@@ -156,7 +156,14 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     try {
       const parts = deps.parts || await (deps.daemon || await import('../collector/daemon.mjs')).loadParts({ env })
       const hook = parts && parts.arch && parts.arch.optIn
-      f.optInRows = hook && typeof hook.plan === 'function' ? hook.plan({ harnesses: parts.harnesses, manifest: m }) : []
+      let rows = hook && typeof hook.plan === 'function' ? hook.plan({ harnesses: parts.harnesses, manifest: m }) : []
+      // 「入口还有没有效」(1.6 §1.7, W68): the same hook's check re-verifies, read-only, the entries that are in effect — its findings fold
+      // into the very same rows (a broken entry is `broken` with its code, a check that could not be told is `unknown`); the process table it
+      // sees is the one this status already read (the agents half of the check matches it to the forms itself).
+      if (hook && typeof hook.check === 'function' && hasOptinRecords) {
+        rows = applyEntryCheck(rows, hook.check({ harnesses: parts.harnesses, manifest: m, procs: table || [] }))
+      }
+      f.optInRows = rows
     } catch (e) { rethrowSandbox(e); f.opt_in_error = errText(e) }
   }
   // logging out (§1.1, Linux): does the OS keep the daemon after the user's last logout? A file is looked at (`/var/lib/systemd/linger/<user>`), `loginctl` never runs (R8): asight says how, it does not do it
