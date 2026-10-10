@@ -260,7 +260,7 @@ const failedIn24h = (h) => !!h && [h.collector && h.collector.failures, h.legacy
 
 const USAGE = 'usage: asight status [harness…] [--json]'
 
-// A platform without the new collector (macOS, Windows: 1.6 §4): the old capture is what `on` / `off` drive there, and `status` judges it as claude-code's Desktop and CLI rows (src/cli/legacy-status.mjs),
+// A platform without the new collector (macOS: 1.6 §4): the old capture is what `on` / `off` drive there, and `status` judges it as claude-code's Desktop and CLI rows (src/cli/legacy-status.mjs),
 // then prints the old capture's own health and the VPN software. `deps.legacyStatus` replaces all of it (a test's). A read that failed is 不知道 and exit 3, never a pass (R11).
 async function legacyStatus(argv, { io, env, home, platform, deps, json }) {
   if (deps.legacyStatus) return deps.legacyStatus(argv, { io, env, home, platform, deps })

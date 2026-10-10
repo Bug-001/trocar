@@ -3,7 +3,7 @@
 // the autostart unit, the control socket), decides how a confirmation is asked, and prints the plan and the receipt. Everything the world gives is a
 // `deps` entry a test replaces (0.1 §3): `parts` (the descriptors, `scan`, `match`, the arch), `exec` (the runner of OS tools: spawnSync-shaped),
 // `request` (the control socket), `helperState`, `linger` / `lingerRead`, `now`, `freePort`, `sleep`, `roots`, `user`, `getuid`, `fs`, `script`, and `legacyOn` — the
-// replacement of what a platform without the new collector (macOS, Windows: 1.6 §4) runs instead: legacyOnCli, src/capture/legacy-on.mjs.
+// replacement of what a platform without the new collector (macOS: 1.6 §4) runs instead: legacyOnCli, src/capture/legacy-on.mjs.
 // Exit codes (R4): 0 done · 1 not done or a problem · 2 usage error / not in a terminal without --yes (nothing touched).
 import os from 'node:os'
 import nodeFs from 'node:fs'

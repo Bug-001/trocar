@@ -1,8 +1,8 @@
 // test/netenv/adopt-win32.test.mjs — the proxy-mode halves of V46/V47/V48 over the REAL Windows facts and entries (4.8 §10.3 W37, plan Task 10(c)): the drift
 // machinery's platform-neutral core is adopt.test.mjs's (an injected routing); these are the Windows sides — the real gatherWin32Facts behind an injected helper
 // (nothing on the machine is asked), the real win32Routing (adopt as the VERIFIER of the daemon's write), and the real entry writer the daemon's half of `on` is
-// (createProxyEntries, the same journal `off` undoes by). The `on` runs with platform 'linux' and parts.os 'win32' (hasNewCollector's win32 flip is 9(b)'s lane;
-// parts is the seam it lands on). What is deliberately NOT here: V47(b)'s 「带 --yes re-adopts」 half — that re-adopt depends on the real daemon's write behavior
+// (createProxyEntries, the same journal `off` undoes by). The `on` runs with platform 'linux' and parts.os 'win32' (win32 is a new-collector platform since the flip (9(b)); parts carries the win32 arch
+// either way). What is deliberately NOT here: V47(b)'s 「带 --yes re-adopts」 half — that re-adopt depends on the real daemon's write behavior
 // (8(c)'s unlanded remainder), so its contract stays in adopt.test.mjs's injected platform; V48's json-key half ('left-user-value') is src/off's win32-undo tests.
 import test from 'node:test'
 import assert from 'node:assert/strict'

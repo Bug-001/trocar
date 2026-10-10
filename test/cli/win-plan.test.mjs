@@ -78,6 +78,18 @@ test('§11: the plan\'s rows carry the three things the task names apart from th
   assert.ok(shell.some((l) => squash(l) === squash('(这个终端里设了 HTTPS_PROXY(值打码):agent 若从这个终端起,它的上游可能不是下面写的)')), '§2.2 rule 1\'s note names the shell\'s own variable')
 })
 
+// the flip (plan Task 9(b), 1.6 §4 / §2): hasNewCollector('win32') is true, so `on` on win32 is the NEW collector's on — the win32 arch hooks draw the plan — and the
+// legacy dispatch (src/capture/legacy-on.mjs) is not what runs. The same winWorld seam as the plan tests above, only the CLI's platform is win32.
+test('the flip (9(b), 1.6 §4): `on` with platform win32 runs the new collector — the win32 arch hooks are asked and the §11 plan is drawn, and the legacy-on dispatch never runs', async () => {
+  const w = winWorld()
+  const legacy = []
+  const r = await w.run(['--dry-run'], { platform: 'win32', deps: { legacyOn: async (argv) => { legacy.push(argv); return 0 } } })
+  assert.equal(r.exit, 0, r.text)
+  assert.deepEqual(legacy, [], 'win32 does not run legacyOnCli (src/capture/legacy-on.mjs) any more')
+  assert.match(r.stdout(), /^asight 要做的/, 'the §11 plan of the NEW collector is what win32 gets')
+  assert.match(r.stdout(), /自带内核/, 'drawn from the win32 arch\'s own prepare answer (the kernel line)')
+})
+
 test('§11: a named opt-in item moves out of 「要你点名的」 into the plan\'s own changes (「你点名的(这次做,off 时一起撤掉)」), its 影响 carried along', async () => {
   const w = winWorld({ internet: SYSPROXY })
   const r = await w.run(['--dry-run', '--opt-in', 'kimi-code.vscode'])

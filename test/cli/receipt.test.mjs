@@ -204,8 +204,11 @@ test('on: refused as root (R7), with the helper missing it writes nothing and sa
   const seen = []
   io = fakeIo(); const ctx = onCtx(home, io, { deps: { legacyOn: async (argv) => { seen.push(argv); return 0 } } }); ctx.platform = 'darwin'
   assert.equal(await runOnCli(['--yes'], ctx), 0); assert.deepEqual(seen, [['--yes']])
+  // the flip (plan 9(b)): win32 is a new-collector platform — with no hook and no terminal the NEW on runs: its plan, then a yes is needed; nothing is touched
   io = fakeIo(); const bare = onCtx(home, io); bare.platform = 'win32'; delete bare.deps.legacyOn
-  assert.equal(await runOnCli([], bare), 1); assert.match(io.text(), /win32|本平台/)
+  assert.equal(await runOnCli([], bare), 2)
+  assert.match(io.text(), /asight on 将写或改下面这些文件/, 'the new collector\'s plan, not a refusal')
+  assert.ok(!/本平台未实现|驱动旧采集/.test(io.text()), 'win32 is not told it has no collector any more')
   assert.deepEqual(snapshot(home), before)
 })
 

@@ -21,9 +21,9 @@ import { readManifestAt, saveManifestAt } from './manifest.mjs'
 import { listProcs, pidAlive } from './proc.mjs'
 import { makeClash, stripBlock, stripRuntime, stripMergeLegacy, SCRIPT_BEGIN, PROXY_NAME } from './clash.mjs'
 
-/** Does this platform have the new per-process collector? Only Linux today (4.6; 1.6 §1.2). One function, used everywhere the branch is taken: where it is false `on` / `off` / `status` /
- *  `uninstall` drive the old capture. */
-export const hasNewCollector = (platform = process.platform) => platform === 'linux'
+/** Does this platform have the new per-process collector? Linux (4.6) and Windows (4.8; the flip of plan Task 9(b)). One function, used everywhere the branch is taken: where it is false `on` / `off` /
+ *  `status` / `uninstall` drive the old capture. */
+export const hasNewCollector = (platform = process.platform) => platform === 'linux' || platform === 'win32'
 
 /** The line `on` and `off` print first where they drive the old capture (1.6 §4). */
 export const LEGACY_NOTE = '本平台 on / off 驱动旧采集(过渡期)'

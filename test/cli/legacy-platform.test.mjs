@@ -19,7 +19,7 @@ import { createSteerWatch, legacyOffPending } from '../../src/capture/steer-watc
 import { appendLegacyEvent } from '../../src/capture/events.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
-import { LEGACY_NOTE } from '../../src/off/legacy.mjs'
+import { LEGACY_NOTE, legacyArtifacts } from '../../src/off/legacy.mjs'
 import { newManifest, saveManifestAt } from '../../src/off/manifest.mjs'
 import { writeBackup } from '../../src/off/backup.mjs'
 import { sha256 } from '../../src/off/fsutil.mjs'
@@ -554,7 +554,7 @@ test('R8 / R9: on over an old capture that is already there (an old `desktop on`
   } finally { await core.close() }
 })
 
-test('V12 (on): a harness other than claude-code, --no-autostart and --no-unit are exit 2 with nothing touched; Windows has no old capture to turn on: 本平台未实现, exit 1; on as root is refused', async () => {
+test('V12 (on): a harness other than claude-code, --no-autostart and --no-unit are exit 2 with nothing touched; a legacy platform with no old capture (freebsd) is refused: 本平台未实现, exit 1; on as root is refused', async () => {
   const s = freshMac(); const before = snapshot(s.home); const mac = fakeMac({ loaded: [], keychain: false })
   for (const argv of [['codex'], ['claude-code', 'hermes'], ['--no-autostart'], ['--no-unit']]) {
     const io = fakeIo()
@@ -562,9 +562,11 @@ test('V12 (on): a harness other than claude-code, --no-autostart and --no-unit a
   }
   const names = fakeIo(); await runOnCli(['--yes', 'codex'], onCtx(s, names, { mac }))
   assert.match(names.text(), /本平台只有 claude-code 的旧采集,没有按 harness 的开关/)
-  const win = fakeIo()
-  assert.equal(await runOnCli(['--yes'], { ...onCtx(s, win, { mac }), platform: 'win32' }), 1)
-  assert.match(win.text(), /本平台未实现/)
+  // the flip (plan 9(b)) moved this row from win32 (a new-collector platform now, its dispatch is test/cli/win-plan.test.mjs's) to freebsd: a platform that still
+  // reaches the legacy on and has no old capture there — the refusal is legacy-on.mjs's own, not the new collector's
+  const bsd = fakeIo()
+  assert.equal(await runOnCli(['--yes'], { ...onCtx(s, bsd, { mac }), platform: 'freebsd' }), 1)
+  assert.match(bsd.text(), /本平台未实现\(freebsd\)/)
   const root = fakeIo()
   assert.equal(await runOnCli(['--yes'], onCtx(s, root, { mac, deps: { getuid: () => 0 } })), 1)
   assert.match(root.text(), /root/)
@@ -787,7 +789,7 @@ test('V23 / R11: a Clash core that does not answer is 「不知道」 and exit 3
   } finally { await core.close() }
 })
 
-test('1.6 §4: status where nothing of the old capture is there is exit 0 with 没开 for both parts (a Verge that does not answer is nothing to worry about when asight put nothing in it); the CLI steer of `monitor on` makes the CLI row captured while com.asight.monitor runs and not captured when it does not; a name other than claude-code is exit 2; Windows has no Desktop part', async () => {
+test('1.6 §4: status where nothing of the old capture is there is exit 0 with 没开 for both parts (a Verge that does not answer is nothing to worry about when asight put nothing in it); the CLI steer of `monitor on` makes the CLI row captured while com.asight.monitor runs and not captured when it does not; a name other than claude-code is exit 2; a legacy platform that is not macOS has no Desktop part', async () => {
   const s = freshMac(); const mac = fakeMac({ loaded: [], keychain: false })
   const io = fakeIo()
   assert.equal(await runStatusCli([], statusCtx(s, io, { mac })), 0, io.text())
@@ -802,8 +804,10 @@ test('1.6 §4: status where nothing of the old capture is there is exit 0 with �
   assert.match(b.stdoutText(), /^  CLI: 没采集\(com\.asight\.monitor 没在跑/m)
   const name = fakeIo()
   assert.equal(await runStatusCli(['codex'], statusCtx(s, name, { mac })), 2); assert.match(name.stderrText(), /本平台只有 claude-code 的旧采集,没有按 harness 的开关/)
-  const win = fakeIo()
-  assert.equal(await runStatusCli([], statusCtx(freshMac(), win, { mac, platform: 'win32' })), 0, win.text()); assert.match(win.stdoutText(), /Desktop: 没开/); assert.match(win.stdoutText(), /本平台\(win32\)没有旧采集的 Desktop 部分/)
+  // the flip (plan 9(b)) moved this row from win32 (a new-collector platform now: its status is test/cli/status.test.mjs's) to freebsd — a platform that still
+  // reaches the legacy status and has no Desktop part of the old capture there
+  const bsd = fakeIo()
+  assert.equal(await runStatusCli([], statusCtx(freshMac(), bsd, { mac, platform: 'freebsd' })), 0, bsd.text()); assert.match(bsd.stdoutText(), /Desktop: 没开/); assert.match(bsd.stdoutText(), /本平台\(freebsd\)没有旧采集的 Desktop 部分/)
 })
 
 test('1.6 §4: Desktop is captured only when every part holds — a MITM that is loaded but not running, a login variable that is unset or points at another CA, each makes it 没采集 (exit 1) and names the part; with the core live the rest does not matter', async () => {
@@ -867,17 +871,21 @@ test('R1: the receipt prints the old capture\'s log as the file it is, and the n
   assert.match(formatOnReceipt({ ...base, log: `${home}/.asight/collector/flows` }, { home }), /记录: 看板「采集健康」 \/ ~\/\.asight\/collector\/flows\/$/m, 'a directory: with it')
 })
 
-// audit rule-b 10 (R11, V10): on win32 nothing reads a user trust store, and status said 「旧 CA: 不在用户级信任库里」; and `status --json` on a Mac gave `relayed: 'unknown'` with no reason, where V10 asks
-// every 不知道 to carry its why in the JSON too.
-test('R11 / V10: win32 has no store this code can read, so the old CA is 不知道 with that said — never 「不在用户级信任库里」; a Mac and a Linux that were asked still say 在 / 不在; --json carries relayed_reason', async () => {
+// audit rule-b 10 (R11, V10): a platform nothing reads a user trust store on, and status said 「旧 CA: 不在用户级信任库里」; and `status --json` on a Mac gave `relayed: 'unknown'` with no reason, where V10 asks
+// every 不知道 to carry its why in the JSON too. The flip (plan 9(b)) took win32 out of the legacy status branch (win32's status is the new one, test/cli/status.test.mjs), so the CLI-level rows run on
+// freebsd — a platform that still reaches them and has no store either — and the win32-shaped fact is pinned straight on legacyArtifacts: the old-CA reading is platform-shaped, not gated.
+test('R11 / V10: a platform with no store this code can read (freebsd through the still-legacy status, win32 straight on legacyArtifacts) says 不知道 with that said — never 「不在用户级信任库里」; a Mac and a Linux that were asked still say 在 / 不在; --json carries relayed_reason', async () => {
   const mac = fakeMac({ loaded: [], keychain: false })
-  const win = fakeIo()
-  assert.equal(await runStatusCli([], statusCtx(freshMac(), win, { mac, platform: 'win32' })), 0, win.text())
-  assert.match(win.stdoutText(), /^旧 CA\(.*\): 不知道\(本平台\(win32\)没有读用户级信任库的办法/m)
-  assert.ok(!/不在用户级信任库里/.test(win.stdoutText()), 'a store that was not read is not "not in it"')
+  const bsd = fakeIo()
+  assert.equal(await runStatusCli([], statusCtx(freshMac(), bsd, { mac, platform: 'freebsd' })), 0, bsd.text())
+  assert.match(bsd.stdoutText(), /^旧 CA\(.*\): 不知道\(本平台\(freebsd\)没有读用户级信任库的办法/m)
+  assert.ok(!/不在用户级信任库里/.test(bsd.stdoutText()), 'a store that was not read is not "not in it"')
   assert.ok(!mac.calls.some((c) => /^(security|certutil) /.test(c)), 'and none was asked')
-  const jw = await statusJson(freshMac(), statusCtx(freshMac(), fakeIo(), { mac: fakeMac({ loaded: [], keychain: false }), platform: 'win32' }))
+  const jw = await statusJson(freshMac(), statusCtx(freshMac(), fakeIo(), { mac: fakeMac({ loaded: [], keychain: false }), platform: 'freebsd' }))
   assert.equal(jw.j.legacy.ca, null, 'JSON: null, not false')
+  // the platform-shaped half on win32 itself: the flip changed which status renders it, not the reading — a store nothing can ask is 不知道 there too
+  const art = await legacyArtifacts({ home: freshMac().home, platform: 'win32', exec: mac.run, env: {} })
+  assert.deepEqual(art.oldCa, { where: null, present: null, error: '本平台(win32)没有读用户级信任库的办法,旧 CA 在不在不知道' })
   // a Mac whose keychain was asked and does not hold it still says so
   const dar = fakeIo()
   assert.equal(await runStatusCli([], statusCtx(freshMac(), dar, { mac: fakeMac({ loaded: [], keychain: false }) })), 0, dar.text())

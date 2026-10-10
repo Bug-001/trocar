@@ -2,8 +2,8 @@
 // (loadArch('win32'): the scheduled-task unit, the opt-in plan, win32Routing), the REAL gatherWin32Facts behind an injected helper (nothing on the machine is asked:
 // no powershell, no schtasks, no registry — the runner of OS tools is the recording one), and a fake daemon that answers on the control socket and does the daemon's half
 // of an `on` the way wiring.mjs's redirector will once 8(c)'s remainder lands: it writes the entry through the REAL writer (createProxyEntries, the same journal `off`
-// undoes by). `on` runs with platform 'linux' and parts.os 'win32': hasNewCollector decides old-vs-new per platform and the win32 flip is 9(b)'s lane, not this one;
-// parts is the seam that flip lands on (the same split the W27 prepare-hook tests use).
+// undoes by). `on` runs with parts.os 'win32' — the win32 arch — and `over.platform` picks the CLI's platform (default 'linux'; since the flip (plan 9(b)) win32 is a
+// new-collector platform itself, and the dispatch test runs `on` on win32 through this same seam).
 import fs from 'node:fs'
 import path from 'node:path'
 import { runOnCli } from '../../../src/cli/on.mjs'
@@ -92,7 +92,7 @@ export function winWorld({ internet = { ProxyEnable: { kind: 'REG_DWORD', value:
   })
   const run = async (argv, over = {}) => {
     const io = fakeIo()
-    const exit = await runOnCli(argv, { io, env: { HOME: home, USERPROFILE: home, XDG_RUNTIME_DIR: path.join(home, 'run'), ...(over.env || {}) }, home, platform: 'linux', deps: deps(over.deps) })
+    const exit = await runOnCli(argv, { io, env: { HOME: home, USERPROFILE: home, XDG_RUNTIME_DIR: path.join(home, 'run'), ...(over.env || {}) }, home, platform: over.platform || 'linux', deps: deps(over.deps) })
     return { exit, io, text: io.text(), stdout: () => io.stdoutText(), stderr: () => io.stderrText(), json: () => JSON.parse(io.stdoutText()) }
   }
   const statusOf = (ids = descs.map((d) => d.name)) => ({ daemon: { state: 'running', pid: 4121, reply: { engine: { port: 17990 }, links: [], negatives: [], agents: [] }, lock: { engine_port: 17990 } },
