@@ -160,7 +160,7 @@ pasted into a chat land on disk in the clear. Treat `~/.asight/**` as sensitive;
 `chmod -R go-rwx ~/.asight`. The dashboard binds loopback and enforces a Host/Origin allowlist, so a
 website you visit cannot reach it.
 
-### `asight on` / `off` / `status` / `uninstall`, and the per-user process collector (Linux · Windows, preview)
+### `asight on` / `off` / `status` / `uninstall`, and the per-user process collector (Linux · Windows · macOS, preview)
 
 `asight on` starts capture (the first `on` is the install); `asight off` takes every trace of asight off your
 agents' path; `asight status` says, per agent, whether it is captured and why not; `asight uninstall` also
@@ -187,8 +187,24 @@ OpenCode and Z-Code desktop launchers and app settings (the machine-level ones r
 step asight shows, never with a password field of its own). `asight off` runs the same undo as on Linux:
 the supervisor, daemon and kernel stopped, every entry and opt-in item taken out — and, as the plan says
 up front, an agent started while it was on still passes through the kernel (forwarded untouched) until
-you restart it. On macOS there is no collector yet: `asight on` / `off` drive the old capture (the Claude
-Desktop Clash rule and MITM of the section below), and `asight daemon` says 本平台未实现.
+you restart it. On macOS (RFC 4.9) the same harnesses are captured in proxy mode, with darwin's own
+shape: `asight on` prints its plan first — the bundled kernel it will run (`asight-forwarder`, from the
+`asight-kernel-darwin-x64` / `-arm64` package; loopback only, no TUN, never the system proxy, nothing
+written into your VPN), one row per agent group with its upstream, Codex's WebSocket, the Gatekeeper
+precheck, and the autostart LaunchAgent (`com.asight.collector` in `~/Library/LaunchAgents`, `RunAtLoad`
++ `KeepAlive` — logout stops it; no linger on macOS); then it writes the proxy and trust entries in the
+agents' own config files (your prior values recorded, `off` restores them; the first install's combined
+bundles carry the keychain-administered roots, so an enterprise proxy's upstream still verifies on day
+one). The forms that reach further are opt-in, each named with what it touches — `asight on <harness>
+--opt-in <form>`: Kimi / OpenCode's launch shims and their one marked PATH line in the zsh rc files
+(reference-counted: `off kimi-code` does not break opencode), and Claude Desktop's certificate in the
+login keychain (`security add-trusted-cert` in the user domain — the OS's own authorization dialog
+carries the consent; found and removed by its SHA-256 fingerprint, never the common name). `asight off`
+runs the same undo: the LaunchAgent booted out before the daemon is stopped (launchd's `KeepAlive`
+really does pull a killed daemon back), every entry and opt-in item taken out — and also whatever the
+old capture left on the machine, which `off` now takes out through the same legacy arm Linux has. The
+old capture's own commands (`desktop`, `monitor`, `capture`, `mitm`) keep working for the transition;
+when the new collector passes its acceptance on your machine, the old one retires.
 
 What it keeps (D40): for a trusted agent it decrypts **every** host it talks to by default (policy `all`), not just the
 model API, and stores every call verbatim — telemetry, uploads, account calls, session sync, downloads — so you can see
