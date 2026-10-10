@@ -1,14 +1,14 @@
 // test/collector/arch/win32/optin-check.test.mjs — checkEntries, the read-only re-check that asight's opt-in entries are still the ones used
 // (4.8 §2.4「入口还有没有效」, W68's unit cells; 1.6 §1.7). The plan's cells: a machine-PATH `kimi` → shim-not-on-path naming the entry; a
-// rewritten shortcut or VS Code setting → entry-changed; none of them → nothing. Plus the machine-bin dispatcher's recorded real binary (gone →
-// entry-changed), the unknown verdicts a failed read earns instead of a guess, and the loop guard over the checkable kinds. The not-via-entry
-// half (the running agents) and recordEntryFindings (the daemon's 5 s side of the same check) join from their own commit.
+// rewritten shortcut or VS Code setting → entry-changed; a running agent whose parent is not the shim or launcher → not-via-entry; none of
+// them → nothing. Plus the machine-bin dispatcher's recorded real binary (gone → entry-changed), the unknown verdicts a failed read earns
+// instead of a guess, the loop guard over the checkable kinds, and recordEntryFindings (the daemon's 5 s half of the same check).
 // The world is the apply tests' own rig (fixtures/optin-world.mjs): one fake Windows per test, the manifest filled by a REAL applyOptIn, the
 // check reading the same world through the same injected `run`. No tool is spawned on this machine.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
-import { checkEntries, CHECK_KINDS, OPTIN_ITEMS, OPTIN_MACHINE_KINDS } from '../../../../src/collector/arch/win32/optin.mjs'
+import { checkEntries, recordEntryFindings, CHECK_KINDS, OPTIN_ITEMS, OPTIN_MACHINE_KINDS } from '../../../../src/collector/arch/win32/optin.mjs'
 import { MACHINE_PATH_KEY } from '../../../../src/collector/arch/win32/elevate.mjs'
 import { rig, nativeKimi, realCmd, writeShortcut, POLICY_KEY } from './fixtures/optin-world.mjs'
 
@@ -165,6 +165,43 @@ test('W68 a changed VS Code setting → entry-changed naming the key and what it
   assert.match(cf.find((x) => /policy/.test(x.detail)).detail, /the policy value egressProxyUrl now holds http:\/\/elsewhere:3/)
 })
 
+test('W68 not-via-entry: a running agent whose parent is the shim (by command line), the launcher, or a process of its own form is nothing to report; any other parent — explorer, a gone parent — is not-via-entry, one finding naming the pids', async () => {
+  const r = await rig({ form: 'kimi-code.cli', item: 'user-path-shim' })
+  nativeKimi(r)
+  realCmd(r, 'kimi')
+  assert.equal((await r.apply()).state, 'done')
+  const shim = winJoin(r.dir, 'bin', 'kimi.cmd')
+  const kimiExe = winJoin(r.winHome, '.kimi-code', 'bin', 'kimi.exe')
+  const via = [
+    { pid: 10, ppid: 2, exe: 'C:\\Windows\\System32\\cmd.exe', cmdline: `cmd /c "${shim}"` }, // the cmd.exe the .cmd runs in
+    { pid: 11, ppid: 10, exe: kimiExe }, // started through it
+    { pid: 30, ppid: 11, exe: kimiExe }, // a child of the agent itself: the entry question is the top process's
+  ]
+  assert.deepEqual(r.check(via), [], 'the entry used, and the agent\'s own children: nothing to report')
+
+  const around = [
+    ...via,
+    { pid: 20, ppid: 4, exe: 'C:\\Windows\\explorer.exe' },
+    { pid: 21, ppid: 20, exe: kimiExe }, // a taskbar pin / login autostart: started by the shell, not the entry
+    { pid: 40, ppid: 99, exe: kimiExe }, // its parent is gone (the entry's cmd.exe lives as long as the agent it started)
+  ]
+  const f = r.check(around)
+  assert.equal(f.length, 1)
+  assert.deepEqual([f[0].form, f[0].item, f[0].code], ['kimi-code.cli', 'user-path-shim', 'not-via-entry'])
+  assert.match(f[0].detail, /2 running kimi-code\.cli process\(es\) were not started through the entry/)
+  assert.match(f[0].detail, /pid 21 \(parent .*explorer\.exe\)/)
+  assert.match(f[0].detail, /pid 40 \(parent no longer running\)/)
+
+  // the entry itself displaced: the parent question is noise next to that (the finding of the PATH half is the one row the item gets)
+  const mdir = winJoin(r.winHome, 'mt')
+  r.wfs.mkdirSync(mdir, { recursive: true })
+  r.wfs.writeFileSync(winJoin(mdir, 'kimi.cmd'), 'machine one')
+  machinePathValue(r, `${mdir};C:\\Windows\\system32;C:\\Windows`)
+  const f2 = r.check(around)
+  assert.equal(f2.length, 1)
+  assert.equal(f2[0].code, 'shim-not-on-path', 'the entry\'s own displacement wins the row; not-via-entry is not piled on top')
+})
+
 test('a read that failed is an unknown finding (a reason of 1.6 §9.4\'s closed set), never a guess and never silence: an unreadable user PATH is not "the shim is off the PATH"', async () => {
   const r = await rig({ form: 'kimi-code.cli', item: 'user-path-shim' })
   nativeKimi(r)
@@ -183,6 +220,29 @@ test('the loop guard: CHECK_KINDS is exactly the kinds the apply can produce —
   for (const k of producible) assert.ok(CHECK_KINDS.includes(k), `${k} (a user item's part) has a check arm`)
   assert.deepEqual(CHECK_KINDS.filter((k) => OPTIN_MACHINE_KINDS.includes(k)), ['optin-machine-path'], 'of the machine kinds, the one machineValuesOf builds has an arm; machine-shortcut and machine-cert have no producer yet (no entry of theirs can be in a manifest, pinned in optin.test.mjs)')
   assert.deepEqual([...producible].sort(), ['optin-cert-user', 'optin-claude-policy', 'optin-shortcut', 'optin-user-path', 'optin-vscode', 'optin-zcode'], 'the user items\' parts, spelled out (a new part without an arm fails the loop above)')
+})
+
+test('recordEntryFindings: one failure record per finding not already reported, only for 1.6 §9.7\'s netenv codes (shim-not-on-path, not-via-entry); entry-changed and unknown findings are no event; the same finding twice fires once, a changed one fires again', () => {
+  const events = []
+  const state = { seen: new Set() }
+  const findings = [
+    { form: 'kimi-code.cli', item: 'user-path-shim', harness: 'kimi-code', code: 'shim-not-on-path', detail: 'kimi resolves first to C:\\npm\\kimi.cmd — the machine PATH\'s C:\\npm' },
+    { form: 'opencode.desktop', item: 'start-menu-launcher', harness: 'opencode', code: 'entry-changed', detail: 'the shortcut OpenCode.lnk now starts the app' },
+    { form: 'kimi-code.cli', item: 'user-path-shim', harness: 'kimi-code', code: null, reason: 'denied', detail: 'the user PATH could not be read' },
+    { form: 'kimi-code.cli', item: 'user-path-shim', harness: 'kimi-code', code: 'not-via-entry', detail: '1 running kimi-code.cli process(es) were not started through the entry' },
+  ]
+  const first = recordEntryFindings({ findings, state, appendEvent: (rec) => events.push(rec) })
+  assert.equal(first.length, 4, 'every finding is "recorded this time" (the caller\'s view); only two become events')
+  assert.deepEqual(events, [
+    { event: 'failure', where: 'netenv', harness: 'kimi-code', code: 'shim-not-on-path', form: 'kimi-code.cli', item: 'user-path-shim', reason: 'kimi resolves first to C:\\npm\\kimi.cmd — the machine PATH\'s C:\\npm' },
+    { event: 'failure', where: 'netenv', harness: 'kimi-code', code: 'not-via-entry', form: 'kimi-code.cli', item: 'user-path-shim', reason: '1 running kimi-code.cli process(es) were not started through the entry' },
+  ], 'the two codes 1.6 §9.7 lists as where:"netenv" failures, with the detail as the reason (it names the PATH entry / the pids)')
+  events.length = 0
+  assert.deepEqual(recordEntryFindings({ findings, state, appendEvent: (rec) => events.push(rec) }), [], 'the same findings again: nothing new (driftCheck\'s once-per-occurrence)')
+  assert.deepEqual(events, [])
+  const moved = recordEntryFindings({ findings: [{ ...findings[0], detail: 'kimi resolves first to D:\\tools\\kimi.cmd — the machine PATH\'s D:\\tools' }], state, appendEvent: (rec) => events.push(rec) })
+  assert.equal(moved.length, 1)
+  assert.equal(events.length, 1, 'a finding that CHANGED (a different entry now wins) is one new record, once')
 })
 
 test('checkEntries with nothing in effect answers nothing: no manifest, no entries, a pending-admin machine entry and a confirmed:false apply are all outside the check', async () => {

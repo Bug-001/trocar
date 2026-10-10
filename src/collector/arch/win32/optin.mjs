@@ -618,5 +618,59 @@ export function checkEntries({ groups = [], manifest = null, procs = [], deps = 
     if (e.kind === 'optin-vscode' || e.kind === 'optin-zcode') checkSettingsOf(e)
   }
 
+  // the agents half: for each form with an entry things are started through, a running agent must have been started through it
+  const startTargetsOf = new Map() // form id → the paths a parent is identified by (raw and %expanded%: the ledger and PATH hold the raw, a shell's command line the expanded)
+  const launchEntryOf = new Map() // form id → the entry to attribute a not-via-entry finding to (the first PATH entry, else the first launcher one)
+  const noteStart = (e, t) => { if (!t) return; const l = startTargetsOf.get(e.form) || startTargetsOf.set(e.form, []).get(e.form); l.push(t, expand(t)); if (!launchEntryOf.has(e.form)) launchEntryOf.set(e.form, e) }
+  for (const e of entries) {
+    if (e.kind === 'optin-user-path') noteStart(e, path.win32.join(v(e).binDir || '', `${v(e).command}.cmd`))
+    else if (e.kind === 'optin-machine-path') noteStart(e, `${MACHINE_BIN}\\${v(e).command}.cmd`)
+    else if (e.kind === 'optin-shortcut' || e.kind === 'optin-vscode') noteStart(e, v(e).launcher)
+    else continue
+    if (e.kind === 'optin-user-path' || e.kind === 'optin-machine-path') launchEntryOf.set(e.form, e) // a PATH entry outranks a launcher one for the attribution
+  }
+  if (startTargetsOf.size && Array.isArray(procs) && procs.length) {
+    const formsList = groups.flatMap((x) => x.forms)
+    const rows = procs.map((p) => ({ pid: p && p.pid, ppid: p && p.ppid, exe: p && p.exe, cmdline: p && p.cmdline != null ? String(p.cmdline) : Array.isArray(p && p.argv) ? p.argv.join(' ') : null }))
+    const formOf = new Map()
+    for (const p of rows) {
+      if (p.exe == null) continue
+      const m = matchForm(formsList, { exe: p.exe, cmdline: p.cmdline, cmdlineState: p.cmdline ? 'ok' : 'empty' }, {})
+      if (m.kind === 'form') formOf.set(p.pid, m.id)
+    }
+    for (const [form, targets] of startTargetsOf) {
+      if (findings.some((f) => f.form === form && f.code)) continue // the entry itself is already the finding; which process went around it is noise next to that
+      const bad = []
+      for (const p of rows) {
+        if (formOf.get(p.pid) !== form || p.ppid == null) continue
+        const parent = rows.find((r) => r.pid === p.ppid)
+        if (parent && targets.some((t) => (parent.exe != null && samePath(parent.exe, t)) || (parent.cmdline != null && parent.cmdline.toLowerCase().includes(String(t).toLowerCase())))) continue
+        if (parent && formOf.get(parent.pid) === form) continue // a child of the agent itself (an editor's extension host): the entry question is the top process's
+        bad.push(`pid ${p.pid} (parent ${parent && parent.exe ? parent.exe : 'no longer running'})`)
+      }
+      if (bad.length) {
+        const e = launchEntryOf.get(form)
+        findings.push({ form, item: e.item, harness: e.harness, code: 'not-via-entry', detail: `${bad.length} running ${form} process(es) were not started through the entry (${targets[0]}): ${bad.join(', ')}` })
+      }
+    }
+  }
   return findings
+}
+
+/** What the daemon's 5 s check does with the findings: one failure record per finding not already reported (driftCheck's `state.seen` shape —
+ *  in memory, so a daemon restart says it again once), and only for the codes 1.6 §9.7 names as `where:'netenv'` failures (shim-not-on-path,
+ *  not-via-entry); an `entry-changed` finding and an `unknown` one are no event (the same list: the rest reach `status` / `doctor` alone, whose
+ *  opt_in rows carry them). → the findings recorded this time (a test's view). */
+export function recordEntryFindings({ findings = [], state = null, appendEvent }) {
+  const done = []
+  for (const f of findings || []) {
+    const key = `${f.form}|${f.item}|${f.code || 'unknown'}|${f.reason || ''}|${f.detail}`
+    if (state && state.seen && state.seen.has(key)) continue
+    if (state && state.seen) state.seen.add(key)
+    if (f.code === 'shim-not-on-path' || f.code === 'not-via-entry') {
+      appendEvent({ event: 'failure', where: 'netenv', harness: f.harness, code: f.code, form: f.form, item: f.item, reason: f.detail })
+    }
+    done.push(f)
+  }
+  return done
 }
