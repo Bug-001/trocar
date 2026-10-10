@@ -485,6 +485,30 @@ test('W36 not-routed by why, through the REAL facts path: a PAC, a registry the 
   assert.ok(!JSON.stringify(credFacts).includes('alice') && !JSON.stringify(credFacts).includes(':pw@'), 'nor are they anywhere in the facts')
 })
 
+test('W36 upstream-protocol through the REAL facts path: a socks4 prior in the entry file leaves the group unwired (the branch still says not-routed — upstream-protocol is not a status reason of its own), and diagnose swaps that not-routed for the one proxy-unsupported finding with the protocol filled (4.8 §10.4)', async () => {
+  const home = tmpDir('asight-w36-proto-')
+  put(path.join(home, '.dsh', '.env'), 'HTTPS_PROXY=socks4://proxy.corp:1080\n') // never a manifest record: `on` refuses to wire the group, so there is nothing to record
+  const f = await gather(home, { helper: helperOf({ procs: [KERNEL_ROW] }), ids: ['deepseek-dsh'] })
+  const fm = f.harnesses['deepseek-dsh'].forms[0]
+  assert.deepEqual(fm.route, { reason: 'not-routed', code: 'proxy-unsupported', why: 'upstream-protocol', protocol: 'socks4' }, "the plan's own words on the form (planRoutes → routeOf): the doctor's name for the reason, the protocol it refused")
+  const t = buildTopology(f)['deepseek-dsh']
+  assert.deepEqual([t.on_path, t.captured, t.reason], [false, false, 'not-routed'], "the verdict stays not-routed: upstream-protocol is not in the status reasons' closed set — the doctor's table is where the protocol is said")
+  const found = diagnose({ facts: f, topology: buildTopology(f), harnesses: ['deepseek-dsh'], user: 'u' })
+  assert.ok(!found.some((x) => x.code === 'not-routed'), 'the not-routed the swap replaces is not also said (before this test, replacing diagnose\'s protoForm with null kept every suite green)')
+  const one = found.find((x) => x.code === 'proxy-unsupported')
+  assert.ok(one, 'the proxy-unsupported finding')
+  assert.equal(one.what, 'deepseek-dsh 的代理协议接不上(socks4)', 'the protocol, filled from the plan')
+  assert.equal(one.why, '这个形态原来的代理是 socks4 的,asight 的上游还不支持,on 因此不接这个形态', "the upstream-side why — not the agent's own unsupported-scheme words")
+  assert.deepEqual(one.commands, [
+    { run: '把它改成 http://host:port 或 socks5://host:port 的写法', shell: 'gui' },
+    { run: `${path.join(home, '.dsh', '.env')} 里写一行 HTTPS_PROXY=不知道 · absent(你的代理地址)`, shell: 'gui' },
+    { run: 'asight on deepseek-dsh', shell: 'powershell' },
+    { run: 'asight off deepseek-dsh', shell: 'powershell' },
+  ], 'the step names the group\'s own entry file and the line to write (no VPN on this machine: the value to write is said unknown, never a placeholder)')
+  assert.equal(one.verify, 'asight status deepseek-dsh:那一支「在路径上 · 是」')
+  assert.deepEqual(validateFinding(one), [])
+})
+
 test('W36 form-unsupported: the plan\'s own reason is the branch\'s verdict (a status reason), and the finding says which form to use instead', () => {
   const f = pfacts('claude-code', form('claude-code.desktop', { entry: null, route: { reason: 'form-unsupported' }, procs: [proc(8801, { name: 'Claude', exe: 'C:\\Program Files\\Claude\\Claude.exe', version: null })] }), fwForm(17996))
   const t = buildTopology(f)['claude-code']
