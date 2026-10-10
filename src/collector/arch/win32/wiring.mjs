@@ -230,11 +230,14 @@ export function win32Routing({ harnesses = [], home, env = process.env, fs = nod
 }
 
 /**
- * prepare({ helper, locate, sac, arch, fs }) → { notes: [line], refuse?: { code, reason, of?, commands } } — the read-only hook `asight on` calls before it
+ * prepare({ helper, locate, sac, arch, fs }) → { notes: [line], kernel?, sac?, refuse?: { code, reason, of?, commands } } — the read-only hook `asight on` calls before it
  * writes anything (4.8 §8 ⑥ and the Smart App Control preflight; W27 ⑥, W74): the kernel line (`locateKernel`: found and verified, with its package and digest)
  * and, when Smart App Control is on or evaluating, its warning line; a missing or mismatched kernel is a REFUSAL with the two reinstall commands — no download
  * to wait for, a settled precondition, so `on` exits 1 before the first write (the event and the receipt are the caller's). `helper` is sacState's reader; one
  * is started and closed here when none is given (an injected `sac` gets the helper it was given, none if none). Nothing is written, nothing is started.
+ * `kernel: { version, package, exe, sha256 }` (of the pin this build carries, the run path's file name and the digest that was verified) and `sac: 'off' | 'on' |
+ * 'evaluation' | { unknown: { reason, detail? } }` are the same two reads as the notes, as data — the Windows plan of 4.8 §11 draws its kernel line and its Smart
+ * App Control line from them (the receipt keeps the notes, 1.6 §7).
  */
 export async function prepare({ helper = null, locate = locateKernel, sac = sacState, arch = process.arch, fs = nodeFs, start = startHelper, env = process.env } = {}) {
   const k = await locate({ ...(arch ? { arch } : {}), ...(fs ? { fs } : {}) })
@@ -250,16 +253,22 @@ export async function prepare({ helper = null, locate = locateKernel, sac = sacS
       },
     }
   }
+  // what the plan's own §11 kernel line names: the pin this build carries (the version and the platform package of the architecture asked — loadPin's own file, never one of the caller's)
+  // and the digest that was verified — the run path (`%USERPROFILE%\.asight\collector\kernel\…`) is the caller's to compose, it is the one that knows the home
+  let kernel = null
+  try { const pin = loadPin(); const a = (pin.assets || {})[arch]; if (a && a.package) kernel = { version: pin.version, package: a.package, exe: KERNEL_EXE, sha256: k.found.sha256 } } catch { kernel = null }
   const notes = [`asight's kernel: found and verified (${k.found.sha256.slice(0, 12)}… in ${k.found.packageDir})`]
   let own = false
   let h = helper
   if (!h && sac === sacState) { try { h = start({ env }); own = true } catch { h = null } } // only the real reader needs a helper of its own
+  let sacStateOut = null
   try {
     const state = h || sac !== sacState ? await sac({ helper: h }) : { unknown: { reason: 'denied', detail: 'no helper' } }
+    sacStateOut = state
     if (state === 'on' || state === 'evaluation') notes.push('Smart App Control 开着:未签名的 asight-forwarder.exe 很可能起不来,代理模式用不了(仍会去试;失败时会记下原因,一个代理入口也不写)')
     else if (state !== 'off') notes.push(`Smart App Control 的状态读不到(${state.unknown.reason}${state.unknown.detail ? `:${state.unknown.detail}` : ''}):不知道,按上面的计划继续`)
   } finally { if (own && h && typeof h.close === 'function') await h.close() }
-  return { notes }
+  return { notes, ...(kernel ? { kernel } : {}), sac: sacStateOut }
 }
 
 export { CONTROLLER_RANGE, reinstallCommands }

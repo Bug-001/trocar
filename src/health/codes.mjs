@@ -92,9 +92,10 @@ export const ROUTE_CODES = Object.freeze([
 ])
 /** The codes of ROUTE_CODES a writer puts on a `failure` event. Today that is all of them; a later notice-class code goes into ROUTE_CODES only. */
 export const ROUTE_FAILURE_CODES = Object.freeze([...ROUTE_CODES])
-/** Reasons a running agent is not trusted that the Windows collector adds (4.8 §5.4, §6.3): the `code` of `agent-untrusted`, as TRUST_REASONS' are.
+/** Reasons a running agent is not trusted that the Windows collector adds (4.8 §5.4, §6.3): the `code` of `agent-untrusted`, as TRUST_REASONS' are. `env-unreadable-fill` is the tracker's fill-layer
+ *  verdict of 4.8 §5.4 (landed with 8(v) without its list entry; named here by Task 10(b), whose finding-code list and status reasons both read this block).
  *  Listed apart from TRUST_REASONS (a list D40's neighbours read); test/health/codes.test.mjs counts both when it checks a harness's own. */
-export const ROUTE_TRUST_REASONS = Object.freeze(['pid-unresolved-mixed', 'smart-app-control'])
+export const ROUTE_TRUST_REASONS = Object.freeze(['pid-unresolved-mixed', 'smart-app-control', 'env-unreadable-fill'])
 /** What `status` says when a form is not captured, that the Windows collector adds (4.8 §2.3, §12). The status reason set itself is the CLI's
  *  (1.6 §2); its list takes these in. `fallback-active` is also a ROUTE_CODES code: the same name, the failure event and the status reason. */
 export const ROUTE_STATUS_REASONS = Object.freeze(['form-unsupported', 'fallback-active', 'form-path-unknown'])

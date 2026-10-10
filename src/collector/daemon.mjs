@@ -500,6 +500,9 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
         helper: { pid, proto, build, expected_proto: redirector.expectedProto, ok: proto === redirector.expectedProto, down: helperDown, unparsable_lines: unparsable, timeouts },
         agents, running_untrusted: agents.filter((a) => !a.trusted && !a.off).length,
         unjudged: { count: unjudged.length, sample: unjudged.slice(0, 10).map((u) => ({ pid: u.pid, comm: u.comm, errno: u.errno })) },
+        // the host sets the plan last applied per host-tree form (4.8 §3.5, W69): the reply is where `status`'s facts reach them (the wiring's win32 bag keeps them);
+        // `status` compares them with a fresh read and says when the kernel's set is old — read-only, a platform without the bag (Linux) simply says nothing here
+        ...(redirector.win32 && typeof redirector.win32.appliedHosts === 'function' ? { applied_hosts: redirector.win32.appliedHosts() } : {}),
         health: healthOnDisk(P.dir),
         events: failure.health(), // event lines lost (D-1): stderr had each, the next written line is a log-gap
       }

@@ -187,7 +187,7 @@ test('W38 every §12 code is a code, and a failure event naming it with its wher
 test('W38 the where / state events / trust reasons / status reasons / capture kinds are the §12 lists', () => {
   assert.deepEqual(ROUTE_WHERE, ['routing', 'forwarder', 'ingress', 'optin'])
   assert.deepEqual(ROUTE_EVENTS, ['route-applied', 'forwarder-start', 'forwarder-stop', 'forwarder-draining', 'probes-refreshed', 'optin-applied', 'optin-removed'])
-  assert.deepEqual(ROUTE_TRUST_REASONS, ['pid-unresolved-mixed', 'smart-app-control'])
+  assert.deepEqual(ROUTE_TRUST_REASONS, ['pid-unresolved-mixed', 'smart-app-control', 'env-unreadable-fill'])
   assert.deepEqual(ROUTE_STATUS_REASONS, ['form-unsupported', 'fallback-active', 'form-path-unknown'])
   assert.deepEqual(CAPTURE_KINDS, ['transparent', 'proxy'], 'the envelope `capture` closed set (4.8 §5.6, 4.1 信封表): Windows has the one proxy mode (D43)')
   for (const l of [ROUTE_WHERE, ROUTE_EVENTS, ROUTE_CODES, ROUTE_FAILURE_CODES, ROUTE_TRUST_REASONS, ROUTE_STATUS_REASONS, CAPTURE_KINDS, NET_WHERE, NET_CODES, NET_FAILURE_CODES]) assert.ok(Object.isFrozen(l))

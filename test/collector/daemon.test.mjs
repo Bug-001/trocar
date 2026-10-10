@@ -260,6 +260,30 @@ test('daemon: after the engine comes up the win32 probe refresh runs once and it
   } finally { await d3.stop(); p3.done(); s3.done() }
 })
 
+// 4.8 §3.5 (W69): the daemon's /status reply carries the host sets the plan last applied per host-tree form (`applied_hosts`, the wiring's win32 bag),
+// which is where `status`'s facts reach them to compare with a fresh read and say when the kernel's set is old. A platform whose redirector has no
+// `win32` bag (Linux) simply says nothing there — no key, never a vacuous one.
+test('daemon: /status relays the win32 bag\'s applied host sets; a redirector without the bag carries no applied_hosts key', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const { arch } = fakeArch(p)
+  const APPLIED = { 'kimi-code.vscode': { hosts: ['api.moonshot.cn', 'relay.corp.example'], settings: 'read', dropped: [] } }
+  const withBag = { os: arch.os, createRedirector: (o) => { const r = arch.createRedirector(o); r.win32 = { appliedHosts: () => APPLIED }; return r } }
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: withBag, harnesses: [cc], env: { ...process.env, HOME: s.home } })
+  try {
+    const st = await req(s.sock, 'GET', '/status')
+    assert.deepEqual(st.applied_hosts, APPLIED, 'the applied sets, as the wiring keeps them')
+  } finally { await d.stop(); p.done(); s.done() }
+  const s2 = sandbox(); const p2 = fakeProc()
+  await install(s2)
+  const plain = fakeArch(p2)
+  const d2 = await startDaemon({ dir: s2.collector, socketPath: s2.sock, arch: plain.arch, harnesses: [cc], env: { ...process.env, HOME: s2.home } })
+  try {
+    const st = await req(s2.sock, 'GET', '/status')
+    assert.equal('applied_hosts' in st, false, 'no bag, no key: a Linux reply is exactly what it was')
+  } finally { await d2.stop(); p2.done(); s2.done() }
+})
+
 // Review B-4(a) (4.6 子进程与嵌套 agent): "嵌套关系记在 flows/ 的 parent_pid / parent_agent 里" — the engine's rows and the
 // metadata row of a connection that went direct carry them, and status lists them with the agent.
 test('daemon: an agent started by another agent is recorded with parent_pid and parent_agent in flows/ and status (B-4a)', async () => {

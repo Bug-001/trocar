@@ -3,6 +3,7 @@
 import { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, newReceipt } from '../off/schema.mjs'
 import { HARNESS_IDS } from './harness-names.mjs'
 import { STATUS_REASONS, NET_CODES } from '../health/codes.mjs'
+import { FINDING_CODES } from '../netenv/findings.mjs' // the finding codes' own closed list: the cross-platform catalogue's, the Windows table's (4.8 §10.4) and the trust reasons' — one list, one place
 
 export { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, newReceipt }
 
@@ -141,7 +142,7 @@ export function validateTopology(t) {
       for (const k of ['on_path', 'captured']) if (isObject(b) && !TRI.includes(b[k])) bad.push(`${w}.${k}: not true, false or null`)
       if (isObject(b) && !(b.reason === null || STATUS_REASONS.includes(b.reason))) bad.push(`${w}.reason: ${JSON.stringify(b.reason)} is not null or a status reason`)
     })
-    if (x.findings !== undefined && !(Array.isArray(x.findings) && x.findings.every((c) => NET_CODES.includes(c) || STATUS_REASONS.includes(c)))) bad.push(`${at}.findings: not a list of finding codes`)
+    if (x.findings !== undefined && !(Array.isArray(x.findings) && x.findings.every((c) => FINDING_CODES.includes(c)))) bad.push(`${at}.findings: not a list of finding codes`) // FINDING_CODES, findings.mjs's own one list: the cross-platform catalogue ∪ the Windows table (4.8 §10.4) ∪ the trust reasons (the Windows collector's ROUTE_TRUST_REASONS included)
     if (x.running !== undefined) {
       if (!Array.isArray(x.running)) bad.push(`${at}.running: not a list`)
       else x.running.forEach((r, i) => {
@@ -160,7 +161,7 @@ export const SHELLS = Object.freeze(['sh', 'powershell', 'gui'])
 export function validateFinding(f) {
   if (!isObject(f)) return ['finding: not an object']
   const bad = []
-  if (!(NET_CODES.includes(f.code) || STATUS_REASONS.includes(f.code))) bad.push(`code: ${JSON.stringify(f.code)} is not a finding code`)
+  if (!FINDING_CODES.includes(f.code)) bad.push(`code: ${JSON.stringify(f.code)} is not a finding code`) // the same list the topology's findings use (findings.mjs's FINDING_CODES, 4.8 §10.4's codes in it)
   if (!FINDING_CLASSES.includes(f.class)) bad.push(`class: ${JSON.stringify(f.class)} is not one of ${FINDING_CLASSES.join(' ')}`)
   if (f.harness !== undefined && !HARNESS_IDS.includes(f.harness)) bad.push(`harness: ${JSON.stringify(f.harness)} is not a harness id`)
   for (const k of ['what', 'why', 'verify']) if (!isString(f[k]) || f[k].trim() === '') bad.push(`${k}: empty`)
