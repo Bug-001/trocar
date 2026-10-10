@@ -11,9 +11,10 @@
 //                    item, reference-counted as 4.8 §6.3 counts the Windows PATH entry: the lines and the shim directory go when the
 //                    last shim in them is removed, so `off kimi-code` does not break opencode; `shim-not-on-path` is judged by the order
 //                    of `which -a` (the status-side check, MA4's row — not this file).
-//   keychain-login   claude-code.desktop — the login keychain's trust settings, `security add-trusted-cert` in the USER domain, the OS's
-//                    own authorization dialog carrying the consent (1.6:107); found and removed by fingerprint (§6.4). The apply is
-//                    Task 14's later commit — this file knows the item (the plan may offer it) but names it not-built when asked to do it.
+//   keychain-login   claude-code.desktop — the login keychain's trust settings, `security add-trusted-cert` in the USER domain (never the
+//                    `-r trustRoot` form, 1.6's forbidden row), the OS's own authorization dialog carrying the consent (1.6:107; a decline
+//                    is the user's own no, the win32 cert twin's wording); found and removed by fingerprint (§6.4, V56's shape) — the read
+//                    back and the undo both key on the certificate's SHA-256, never on the common name.
 // Pure data and injected-exec functions (the win32 twin's rule): no socket, no process, no keychain of its own; a test runs everything
 // against a sandbox HOME and a recording runner. The planOptIns / optinFormsOf core is the win32 twin's same-logic copy (4.9's
 // development boundary: the hoist into core/ is the merge-period coordination, OPEN 3) — if you change what it means, change both.
@@ -22,6 +23,8 @@ import fs from 'node:fs'
 import crypto from 'node:crypto'
 import { writeBackup } from '../../../off/backup.mjs'
 import { insertLine, lineComment } from '../../../off/text-edit.mjs'
+import { execTool } from '../../../off/exec.mjs'
+import { certBlocks } from '../../../off/pem.mjs'
 import { readIngressConfig } from './ingress-config.mjs'
 import { proxyUrl } from './forms.mjs'
 import { renderShTemplate } from './shims.mjs'
@@ -163,7 +166,46 @@ export async function applyOptIn(args) {
   if (!def) return { state: 'failed', reason: `unknown opt-in item ${row.item}` }
   if (def.scope === 'machine') return { state: 'failed', reason: `the machine-level item ${row.item} has no darwin form in v1 (4.9 §2.4)` }
   if (row.item === 'user-path-shim') return applyUserOne(args, rcPathValues)
-  return { state: 'failed', reason: `the user item ${row.item} is not built yet (Task 14's later commits)` } // keychain-login: the next commit of this lane
+  if (row.item === 'keychain-login') return applyUserOne(args, keychainValues)
+  return { state: 'failed', reason: `the user item ${row.item} is not built yet` }
+}
+
+// the login keychain the CC-Desktop item's certificate goes into (4.9 §2.4's keychain row): the USER domain — the machine-level anchor
+// /Library/Keychains/System.keychain is the admin path darwin v1 has no form needing
+const loginKeychainOf = (home) => path.join(home, 'Library', 'Keychains', 'login.keychain-db')
+// the authorization dialog is the user typing their password into the OS's own prompt — 10 s would time it out mid-sentence, so the
+// mutating security calls carry a human-scale timeout (the read-backs keep the default)
+const DIALOG_MS = 120000
+
+/** Everything the keychain item needs, read BEFORE anything is written — the win32 twin's certValuesOf shape: `{ parts }` (the ledger
+ *  entry + its `do()`), `{ error }`. The CA's SHA-256 fingerprint (node's `AB:CD:…` form, pem.mjs's fp) is the identity the ledger, the
+ *  read-back and the undo all key on — a second certificate of the same common name never matches it. `deps.run` is the injected runner
+ *  of the security tool (execTool's); without it the sandbox refuses to run security for real. */
+function keychainValues(a) {
+  const { row, dir = null, home, env = process.env, fs: f = nodeFs, deps = {} } = a
+  if (!dir) return { error: 'no collector directory is wired in (the keychain item cannot be built)' }
+  const caFile = path.join(dir, 'ca', 'asight-ca.pem')
+  if (!f.existsSync(caFile)) return { error: `the collector CA (${caFile}) is not there; run asight on first` }
+  let fp256 = null
+  try { fp256 = new crypto.X509Certificate(f.readFileSync(caFile, 'utf8')).fingerprint256 } catch (e) {
+    return { error: `the collector CA could not be read as a certificate: ${String((e && e.message) || e)}` }
+  }
+  const keychain = loginKeychainOf(home)
+  if (!f.existsSync(keychain)) return { error: `the login keychain (${keychain}) is not there` }
+  return { parts: [{
+    kind: 'optin-keychain-cert',
+    entry: ledgerEntry({ kind: 'optin-keychain-cert', harness: row.harness, form: row.form, item: row.item, scope: 'user', path: `login-keychain:${fp256}`,
+      values: { keychain, fp256, certFile: caFile } }),
+    do: () => {
+      // the user-domain form: add-trusted-cert -k <login keychain> <CA>, NEVER `-r trustRoot` (1.6's forbidden row — the old MITM's form)
+      const s = execTool('security', ['add-trusted-cert', '-k', keychain, caFile], { run: deps.run, env, timeoutMs: DIALOG_MS })
+      if (s.code !== 0) return { ok: false, reason: `the macOS authorization dialog for the certificate was declined, or the import failed (exit ${s.code ?? 'none'}${s.err ? `: ${s.err.slice(0, 200)}` : ''}); this is your own no, not a step waiting for an administrator` }
+      const back = execTool('security', ['find-certificate', '-a', '-p', keychain], { run: deps.run, env })
+      if (back.code !== 0) return { ok: false, reason: 'the import ran, but the read-back could not read the login keychain' }
+      if (!certBlocks(back.out).some((c) => c.fp === fp256)) return { ok: false, reason: 'the import ran, but the read-back did not find the certificate in the login keychain' }
+      return { ok: true }
+    },
+  }], summary: `the collector CA trusted in the login keychain (${fp256.slice(0, 23)}…), found back by its SHA-256 fingerprint` }
 }
 
 /** The user half's driver — the win32 twin's applyUserOne, same logic: refuse / error → nothing written; the part is ledgered BEFORE its

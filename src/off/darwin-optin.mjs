@@ -9,10 +9,13 @@
 // The count is by shim files that still exist, not by manifest entries — both harnesses' entries are in the manifest while one `off`
 // walks them. The line itself is dropped from the CURRENT text (D28: never the pre-asight file written back wholesale); a file the user
 // has not touched since the apply is restored from its backup byte for byte (R2's copy, the win32 settings twin's rule).
+// The keychain certificate is keyed by its SHA-256 fingerprint end to end (V56: 点名后按指纹可查、按指纹撤销) — see its undo below.
 import path from 'node:path'
 import crypto from 'node:crypto'
 import nodeFs from 'node:fs'
 import { removeAsightText, lineComment } from './text-edit.mjs'
+import { execTool } from './exec.mjs'
+import { certBlocks } from './pem.mjs'
 
 const rcSha256 = (text) => crypto.createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex')
 const rcOk = (result, reason) => (reason === undefined ? { ok: true, result } : { ok: true, result, reason })
@@ -57,6 +60,34 @@ export const DARWIN_UNDO_BY_KIND = {
     }
     try { fs.rmdirSync(v.binDir) } catch { /* not empty (another file of the user's) or already gone: said by the files themselves */ }
     return rcOk('undone', notes.length ? notes.join('; ') : undefined)
+  },
+
+  // the keychain certificate: found, taken out and re-checked by its SHA-256 fingerprint (V56's shape — never the common name, a second
+  // certificate of the same name never matches). remove-trusted-cert takes the TRUST setting away (the certificate block the keychain
+  // itself holds is dumped by find-certificate, written to one temp file under ~/.asight, removed after), delete-certificate -Z the cert.
+  // The temp file is under ~/.asight (which holds the manifest being walked), not TMPDIR — off cleans it in a finally, and a crash there
+  // leaves asight's own directory holding one asight-owned file, not the system temp.
+  'optin-keychain-cert': async ({ entry, exec = null, env = process.env, fs = nodeFs, home = null }) => {
+    const v = entry.values || {}
+    if (!v.fp256 || !v.keychain || !home) return { ok: false, result: 'failed', reason: `${entry.path}: the entry holds no fingerprint or keychain to undo by` }
+    const dump = execTool('security', ['find-certificate', '-a', '-p', v.keychain], { run: exec, env })
+    if (dump.code !== 0) return { ok: false, result: 'failed', reason: `security find-certificate failed (exit ${dump.code ?? 'none'}${dump.err ? `: ${dump.err.slice(0, 200)}` : ''})` }
+    const mine = certBlocks(dump.out).find((c) => c.fp === v.fp256)
+    if (!mine) return rcOk('absent', 'the certificate is not in the login keychain (already gone)')
+    const sha1 = crypto.createHash('sha1').update(new crypto.X509Certificate(mine.pem).raw).digest('hex').toUpperCase()
+    const tmp = path.join(home, '.asight', 'collector', 'optin-tmp-cert.pem')
+    try {
+      fs.mkdirSync(path.dirname(tmp), { recursive: true, mode: 0o700 })
+      fs.writeFileSync(tmp, mine.pem, { mode: 0o600 })
+      const t = execTool('security', ['remove-trusted-cert', tmp], { run: exec, env, timeoutMs: 120000 }) // the dialog may ask again
+      if (t.code !== 0) return { ok: false, result: 'failed', reason: `security remove-trusted-cert failed (exit ${t.code ?? 'none'}${t.err ? `: ${t.err.slice(0, 200)}` : ''})` }
+      const d = execTool('security', ['delete-certificate', '-Z', sha1, v.keychain], { run: exec, env, timeoutMs: 120000 })
+      if (d.code !== 0) return { ok: false, result: 'failed', reason: `security delete-certificate -Z failed (exit ${d.code ?? 'none'}${d.err ? `: ${d.err.slice(0, 200)}` : ''})` }
+      const back = execTool('security', ['find-certificate', '-a', '-p', v.keychain], { run: exec, env })
+      if (back.code === 0 && certBlocks(back.out).some((c) => c.fp === v.fp256)) return { ok: false, result: 'failed', reason: 'the removal ran, but the certificate is still in the login keychain' }
+      if (back.code !== 0) return rcOk('undone', `the removal ran; the re-check could not read the login keychain (exit ${back.code ?? 'none'})`)
+      return rcOk('undone')
+    } finally { try { fs.rmSync(tmp, { force: true }) } catch { /* the next run's write replaces it */ } }
   },
 }
 

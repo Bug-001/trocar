@@ -7,6 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { loadArch } from '../../../../src/collector/arch/index.mjs'
 import { planOptIns, optinFormsOf, applyOptIn, rcLineOf, OPTIN_ITEMS } from '../../../../src/collector/arch/darwin/optin.mjs'
@@ -14,6 +15,7 @@ import { groupsOf } from '../../../../src/collector/arch/darwin/route-plan.mjs'
 import { DARWIN_UNDO_BY_KIND, undoDarwinOptIns, rcLineOf as rcLineOfOff } from '../../../../src/off/darwin-optin.mjs'
 import { KNOWN_KINDS } from '../../../../src/off/manifest.mjs'
 import { readManifest, saveManifest, newManifest } from '../../../../src/off/manifest.mjs'
+import { certBlocks } from '../../../../src/off/pem.mjs'
 import { createCa } from '../../../../src/collector/core/tls/ca.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 
@@ -50,7 +52,7 @@ test('the catalog: the darwin harness data\'s three opt-in items surface as plan
 })
 
 // one sandbox the apply runs in: the native kimi binary, two of the four zsh rc files (.zshrc holds the Kimi installer's own PATH line,
-// .zshenv does not — the two anchors), the collector's ingress.json and CA
+// .zshenv does not — the two anchors), the collector's ingress.json and CA, and the login keychain file the CC-Desktop item needs
 function world({ commands = ['kimi'] } = {}) {
   const home = tmpDir('asight-darwin-optin-')
   const dir = path.join(home, '.asight', 'collector')
@@ -64,15 +66,18 @@ function world({ commands = ['kimi'] } = {}) {
   fs.writeFileSync(path.join(home, '.opencode', 'bin', 'opencode'), '#!/bin/sh\nexec the-real-opencode "$@"\n', { mode: 0o755 })
   fs.writeFileSync(path.join(home, '.zshrc'), 'export PATH="$HOME/.kimi-code/bin:$PATH"\nalias ll=ls\n')
   fs.writeFileSync(path.join(home, '.zshenv'), 'export EDITOR=vim\n')
+  fs.mkdirSync(path.join(home, 'Library', 'Keychains'), { recursive: true })
+  fs.writeFileSync(path.join(home, 'Library', 'Keychains', 'login.keychain-db'), '')
   const manifest = newManifest(new Date())
   const wrote = { notes: [], failures: [], states: [] }
-  const apply = async (harness, form, item) => {
+  const apply = async (harness, form, item, deps = {}) => {
     const row = { form, harness, item, scope: 'user' }
     const out = await applyOptIn({
       row, groups: groupsOf([byName(harness)]), manifest, dir, home, env: { HOME: home }, fs,
       now: () => new Date('2026-10-11T00:00:00Z'),
       save: () => saveManifest(dir, manifest, fs),
       note: (rec) => wrote.notes.push(rec), failure: (rec) => wrote.failures.push(rec), state: (rec) => wrote.states.push(rec),
+      deps,
     })
     return { out, entry: manifest.entries.at(-1) }
   }
@@ -137,7 +142,7 @@ test('the rc-path undo: a file the user edited since keeps their edits — only 
   assert.equal(fs.readFileSync(file, 'utf8'), '# my own note\nexport EDITOR=vim\n', 'the note stays, the line goes, nothing else moved')
 })
 
-test('the rc-path apply refuses what it must, writing nothing: no native binary; and the not-yet-built item says so', async () => {
+test('the rc-path apply refuses what it must, writing nothing: no native binary', async () => {
   const w = world()
   fs.rmSync(path.join(w.home, '.kimi-code', 'bin', 'kimi'))
   const a = await w.apply('kimi-code', 'kimi-code.cli', 'user-path-shim')
@@ -146,15 +151,99 @@ test('the rc-path apply refuses what it must, writing nothing: no native binary;
   assert.ok(!fs.existsSync(path.join(w.dir, 'bin')), 'no shim was written')
   assert.equal(fs.readFileSync(path.join(w.home, '.zshrc'), 'utf8'), 'export PATH="$HOME/.kimi-code/bin:$PATH"\nalias ll=ls\n', 'no rc file was touched')
   assert.ok(w.wrote.failures.some((f) => f.code === 'optin-failed'), 'the failure is recorded, not silent (D38)')
-  // the keychain item is known to the catalog but its apply is Task 14's next commit — naming it fails loudly, not silently
-  const k = await w.apply('claude-code', 'claude-code.desktop', 'keychain-login')
-  assert.deepEqual([k.out.state, k.out.reason], ['failed', 'the user item keychain-login is not built yet (Task 14\'s later commits)'])
+})
+
+// the keychain item's recording runner: `security` argv in, what the tool would print out. Stateful the way the keychain is: after
+// remove-trusted-cert the dump no longer holds ours (the re-check is honest), before it does. `removeSaw` captures what the temp file
+// held at the moment of the call (the undo's finally deletes it right after).
+function securityRunner({ caPem, otherPem = '', addExit = 0, addErr = '', removeExit = 0, deleteExit = 0, readBackHas = true } = {}) {
+  const calls = []
+  let removeSaw = null
+  let trusted = true
+  const run = (file, args) => {
+    calls.push([file, ...args])
+    if (file !== 'security') return { status: 127, stdout: '', stderr: `no such tool ${file}` }
+    const a = args.join(' ')
+    if (a.startsWith('add-trusted-cert')) return { status: addExit, stdout: '', stderr: addErr }
+    if (a.startsWith('find-certificate')) return { status: 0, stdout: (trusted && readBackHas ? caPem : '') + otherPem, stderr: '' }
+    if (a.startsWith('remove-trusted-cert')) { trusted = false; try { removeSaw = fs.readFileSync(args[1], 'utf8') } catch { removeSaw = null } return { status: removeExit, stdout: '', stderr: '' } }
+    if (a.startsWith('delete-certificate')) return { status: deleteExit, stdout: '', stderr: '' }
+    return { status: 1, stdout: '', stderr: `unexpected security call: ${a}` }
+  }
+  return { run, calls, removeSaw: () => removeSaw }
+}
+
+test('the keychain apply: the user-domain add-trusted-cert (never -r trustRoot), the read-back by SHA-256, the ledger keyed on the fingerprint', async () => {
+  const w = world()
+  const other = createCa({ commonName: 'an unrelated keychain certificate' })
+  const r = securityRunner({ caPem: w.ca.certPem, otherPem: other.certPem })
+  const { out, entry } = await w.apply('claude-code', 'claude-code.desktop', 'keychain-login', { run: r.run })
+  assert.deepEqual([out.state, out.reason], ['done', undefined], JSON.stringify(out))
+  const add = r.calls.find((c) => c[1] === 'add-trusted-cert')
+  assert.ok(add, 'add-trusted-cert ran')
+  assert.deepEqual(add.slice(0, 2), ['security', 'add-trusted-cert'])
+  assert.equal(add[2], '-k', 'the user-domain form: -k <login keychain>')
+  assert.equal(add[3], path.join(w.home, 'Library', 'Keychains', 'login.keychain-db'))
+  assert.equal(add[4], path.join(w.dir, 'ca', 'asight-ca.pem'))
+  assert.ok(!r.calls.some((c) => c.includes('-r') || c.includes('trustRoot')), 'NEVER the old MITM\'s forbidden form (1.6:279)')
+  const find = r.calls.find((c) => c[1] === 'find-certificate')
+  assert.deepEqual([find[2], find[3]], ['-a', '-p'], 'the read-back dumps every certificate as PEM')
+  // the ledger: the fingerprint (not the common name) is the identity, the entry is confirmed by the read-back
+  const fp = new crypto.X509Certificate(w.ca.certPem).fingerprint256
+  assert.deepEqual([entry.kind, entry.scope, entry.form, entry.item, entry.confirmed], ['optin-keychain-cert', 'user', 'claude-code.desktop', 'keychain-login', true])
+  assert.deepEqual(entry.values, { keychain: path.join(w.home, 'Library', 'Keychains', 'login.keychain-db'), fp256: fp, certFile: path.join(w.dir, 'ca', 'asight-ca.pem') })
+  assert.equal(entry.path, `login-keychain:${fp}`)
+  assert.ok(w.wrote.states.some((s) => s.event === 'optin-applied' && s.item === 'keychain-login'))
+  assert.ok(!fs.existsSync(path.join(w.home, '.asight', 'collector', 'optin-tmp-cert.pem')), 'the apply wrote no temp file (the undo\'s own file)')
+})
+
+test('the keychain apply: a declined authorization dialog is the user\'s own no (wording, exit, the entry stays undoable); a read-back miss fails too', async () => {
+  const w = world()
+  const decline = securityRunner({ caPem: w.ca.certPem, addExit: 51, addErr: 'security: SecKeychainAddAuthorization() failed' })
+  const a = await w.apply('claude-code', 'claude-code.desktop', 'keychain-login', { run: decline.run })
+  assert.equal(a.out.state, 'failed')
+  assert.match(a.out.reason, /authorization dialog .* was declined.*your own no, not a step waiting for an administrator/s)
+  assert.equal(a.entry.confirmed, false, 'the entry stays in the ledger — what ran is undoable, never a mystery')
+  assert.ok(w.wrote.failures.some((f) => f.code === 'optin-failed' && f.item === 'keychain-login'), 'the failure is recorded (D38)')
+  assert.ok(!decline.calls.some((c) => c[1] === 'find-certificate'), 'no read-back after a declined import')
+  // the import runs, the read-back does not find it (a dump without ours): failed, not done
+  const w2 = world()
+  const miss = securityRunner({ caPem: w2.ca.certPem, readBackHas: false })
+  const b = await w2.apply('claude-code', 'claude-code.desktop', 'keychain-login', { run: miss.run })
+  assert.equal(b.out.state, 'failed')
+  assert.match(b.out.reason, /the read-back did not find the certificate/)
+  assert.equal(b.entry.confirmed, false)
+})
+
+test('the keychain undo: by fingerprint out and back — remove-trusted-cert carries the certificate block itself, delete-certificate -Z its SHA-1, the temp file goes', async () => {
+  const w = world()
+  const r = securityRunner({ caPem: w.ca.certPem })
+  const { out } = await w.apply('claude-code', 'claude-code.desktop', 'keychain-login', { run: r.run })
+  assert.equal(out.state, 'done')
+  const undoRun = securityRunner({ caPem: w.ca.certPem })
+  const u = await undoDarwinOptIns({ manifest: w.manifest, ids: ['claude-code'], exec: undoRun.run, env: { HOME: w.home }, fs, home: w.home })
+  assert.deepEqual([u.results[0].kind, u.results[0].result], ['optin-keychain-cert', 'undone'], JSON.stringify(u))
+  assert.equal(u.unknown.length, 0)
+  const remove = undoRun.calls.find((c) => c[1] === 'remove-trusted-cert')
+  const tmpFile = remove[2]
+  assert.ok(/optin-tmp-cert\.pem$/.test(tmpFile), `the trust setting is taken away with the certificate block itself (${tmpFile})`)
+  assert.equal(undoRun.removeSaw(), certBlocks(w.ca.certPem)[0].pem, 'the temp file held exactly the certificate block the keychain was dumped as (byte for byte, the block pem.mjs carves)')
+  assert.ok(!fs.existsSync(tmpFile), 'the temp file went with the finally')
+  const del = undoRun.calls.find((c) => c[1] === 'delete-certificate')
+  const sha1 = crypto.createHash('sha1').update(new crypto.X509Certificate(w.ca.certPem).raw).digest('hex').toUpperCase()
+  assert.deepEqual([del[2], del[3]], ['-Z', sha1], 'the certificate deleted by its SHA-1, the form security\'s -Z takes')
+  assert.equal(del[4], path.join(w.home, 'Library', 'Keychains', 'login.keychain-db'))
+  assert.ok(undoRun.calls.filter((c) => c[1] === 'find-certificate').length >= 2, 'found by fingerprint before, re-checked after')
+  // a second undo: the certificate is gone from the keychain — absent, said, nothing guessed
+  const again = securityRunner({ caPem: '' })
+  const u2 = await undoDarwinOptIns({ manifest: w.manifest, ids: ['claude-code'], exec: again.run, env: { HOME: w.home }, fs, home: w.home })
+  assert.equal(u2.results[0].result, 'absent')
 })
 
 // the inline-copy contract: the arch side's line and the off side's are one text, and every kind the apply can produce has an undo
 test('the copies: the off side\'s rcLineOf is the arch side\'s, and DARWIN_UNDO_BY_KIND covers exactly the kinds the apply produces', () => {
   assert.equal(rcLineOfOff('/x/bin'), rcLineOf('/x/bin'), 'the line the apply writes is the line the undo takes out')
-  const producible = Object.values(OPTIN_ITEMS).flatMap((d) => d.parts.map((p) => p.kind)).filter((k) => k !== 'optin-keychain-cert') // the keychain apply lands with its own commit; until then no manifest can hold the kind
+  const producible = Object.values(OPTIN_ITEMS).flatMap((d) => d.parts.map((p) => p.kind))
   assert.deepEqual(Object.keys(DARWIN_UNDO_BY_KIND), producible, 'a kind without its undo is red (the win32 twin\'s rule)')
   assert.deepEqual(producible.filter((k) => !KNOWN_KINDS.includes(k)), [], 'and the manifest reader knows each one')
 })

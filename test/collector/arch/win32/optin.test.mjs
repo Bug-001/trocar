@@ -97,7 +97,7 @@ test('a group whose data names an item the catalog does not know is a TypeError,
 })
 
 test('the manifest side (1.6 §1.7, Task 14(e)): the opt-in kinds are known, scope rides on entries, and OFF_VERSION moved past the copy that knows none of it', async () => {
-  assert.deepEqual(OPTIN_KINDS, ['optin-user-path', 'optin-shortcut', 'optin-cert-user', 'optin-vscode', 'optin-zcode', 'optin-claude-policy', 'optin-machine-path', 'optin-machine-shortcut', 'optin-cert-machine', 'optin-rc-path'], 'the win32 nine and the darwin rc PATH item (4.9 §2.4) — one KNOWN_KINDS, per-platform registries')
+  assert.deepEqual(OPTIN_KINDS, ['optin-user-path', 'optin-shortcut', 'optin-cert-user', 'optin-vscode', 'optin-zcode', 'optin-claude-policy', 'optin-machine-path', 'optin-machine-shortcut', 'optin-cert-machine', 'optin-rc-path', 'optin-keychain-cert'], 'the win32 nine and the darwin two (4.9 §2.4) — one KNOWN_KINDS, per-platform registries')
   for (const k of OPTIN_KINDS) assert.ok(KNOWN_KINDS.includes(k), `${k} is in KNOWN_KINDS: an entry of it is undone, not left as unknown`)
   assert.ok(OFF_VERSION >= 3, 'the bump that carries scope and the opt-in kinds (a copy written by 2 undoes none of them)')
   // a round trip through the real manifest file: parse keeps scope and fills it for a manifest of before the field, machine kinds read machine
