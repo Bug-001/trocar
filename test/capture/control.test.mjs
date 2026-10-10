@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { monitoringStatus, monitoringOn, monitoringOff, offIsAsightOff } from '../../src/capture/control.mjs';
+import { monitoringStatus, monitoringOn, monitoringOff } from '../../src/capture/control.mjs';
 import { tmpDir } from '../helpers/tmp.mjs';
 
 // D26 — the monitoring on/off/status logic maps DIRECTLY onto the onboard commands + user-level
@@ -77,13 +77,6 @@ test('monitoringStatus is inert when nothing is arranged', () => {
   assert.equal(st.steerProxy, null);
 });
 
-// 1.6 §4 / V40, the flips (plan 9(b), then 4.9 §4): offIsAsightOff is the inverted hasNewCollector — the web switch's "off" is `asight off` only where there is no new collector.
-// win32 and darwin flipped from true to false: each HAS the collector now, so the switch's off is the old atraceOff, and GET /control/status labels it 「只管旧 CC-CLI steer」
-// (OFF_NOTE_STEER_ONLY; server.mjs takes neither endpoint from this). freebsd keeps the CLI's off.
-test('the flips (9(b), 4.9 §4, 1.6 §4 / V40): offIsAsightOff — win32 and darwin are false now (the switch\'s off is the old atraceOff, labeled steer-only), freebsd still true, and the deps seam still overrides', () => {
-  assert.equal(offIsAsightOff({}, 'win32'), false, 'win32 has the new collector: the switch\'s off is not `asight off`');
-  assert.equal(offIsAsightOff({}, 'linux'), false);
-  assert.equal(offIsAsightOff({}, 'darwin'), false, 'the darwin flip (4.9 §4): darwin has the new collector too — the switch\'s off is no longer the CLI\'s');
-  assert.equal(offIsAsightOff({}, 'freebsd'), true, 'freebsd has no new collector: the switch\'s off is still the CLI\'s');
-  assert.equal(offIsAsightOff({ hasNewCollector: () => false }, 'win32'), true, 'the injected seam decides (test/server-control.test.mjs runs both ways through it)');
-});
+// 1.6 §4 / V40 (D39⑥ executed 2026-10-11): offIsAsightOff went with the old capture — every platform the CLI answers
+// on has the new collector, so the switch's off is always the old atraceOff (labeled steer-only by GET /control/status;
+// test/server-control.test.mjs covers the endpoint pair).

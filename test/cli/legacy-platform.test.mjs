@@ -15,7 +15,6 @@ import { runOffCli } from '../../src/off/main.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { runStatusCli } from '../../src/cli/status.mjs'
 import { runUninstallCli } from '../../src/cli/uninstall.mjs'
-import { asightOffInProcess } from '../../src/capture/control.mjs'
 import { legacyLifecycle } from '../../src/capture/legacy-run.mjs'
 import { createSteerWatch, legacyOffPending } from '../../src/capture/steer-watch.mjs'
 import { appendLegacyEvent } from '../../src/capture/events.mjs'
@@ -726,21 +725,8 @@ test('R6: what the operator confirmed is not asked again — after an on --yes, 
   } finally { await core.close() }
 })
 
-test('V40 (wiring): the web switch\'s own `asight off` — asightOffInProcess — is the CLI run in this process: on a sandbox Mac it takes the old capture out and answers with the CLI\'s receipt and exit; a core that does not confirm is exit 1 and the receipt says so', async () => {
-  const s = macHome({ userMain: USER_MAIN, steer: false }); const order = []
-  const core = await fakeCore({ order }); const mac = fakeMac({ env: { NODE_EXTRA_CA_CERTS: s.caPath }, order, pids: {} })
-  try {
-    const c = offCtx(s, fakeIo(), { core, mac })
-    const r = await asightOffInProcess({ home: s.home, env: c.env, platform: 'darwin', deps: c.deps })
-    assert.equal(r.exit, 0, r.stderr); assert.deepEqual(validateReceipt(r.receipt), []); assert.equal(r.receipt.command, 'off'); assert.equal(r.receipt.ok, true)
-    assert.ok(r.receipt.changed.some((x) => x.path === s.script), 'the receipt is the CLI\'s'); assert.equal(fs.readFileSync(s.script, 'utf8'), USER_MAIN)
-    assert.match(r.stderr, /驱动旧采集/, 'what the CLI says on stderr comes back as well')
-  } finally { await core.close() }
-  const t = macHome({ userMain: USER_MAIN, steer: false }); const silent = fakeMac({ env: {}, pids: {} })
-  const c2 = offCtx(t, fakeIo(), { mac: silent }) // no core answering: the route cannot be confirmed
-  const bad = await asightOffInProcess({ home: t.home, env: c2.env, platform: 'darwin', deps: c2.deps })
-  assert.equal(bad.exit, 1); assert.equal(bad.receipt.ok, false)
-});
+// V40 (wiring) went with the old capture's retirement (D39⑥ executed 2026-10-11): the web switch no longer runs
+// `asight off` in this process on any platform — its off is the old atraceOff everywhere (test/server-control.test.mjs).
 
 // ── status (1.6 §2, §4: claude-code is Desktop and CLI where the old capture is what on / off drive) ──────────────────────────────────────────────────────────────────────────────────────
 
