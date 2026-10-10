@@ -185,7 +185,11 @@ function formVerdict(F, h, hf, fm, fwf) {
   // before the entry checks, like judgeHarness's own order: after a real `off` the entry record is gone from the manifest and the file holds the user's own value again, so the entry checks would
   // answer not-routed and the drain window would never be drawn (4.8 §10.2 row k / 1.6 §9.3 row 14) — what says the agent is still on the kernel is its live connection to the group's port.
   if (F.desired[h] === 'off') return none(!!(fwf && fwf.clients && fwf.clients.length), false, 'desired-off')
-  if (!fm.entry) return none(false, false, fm.route && fm.route.reason === 'form-unsupported' ? 'form-unsupported' : 'not-routed') // the plan's own reason names the door that would not take the group's credentialed upstream (4.8 §2.2); anything else it left unwired is not-routed, the why on the form's `route`
+  // the plan's own word for a group it left unwired — the entry that takes no login given a credentialed upstream (4.8 §2.2 · §6.4) — before the entry checks, like desired-off above: a named group
+  // the plan gated off still has its ledger records, and the entry edge they give it (`intact` unknown until checkEntries lands, Task 14) would mask the verdict the same way the entry checks used to
+  // mask the drain window — through the real facts path the form-unsupported verdict was unreachable and `doctor` could never emit its row.
+  if (fm.route && fm.route.reason === 'form-unsupported') return none(false, false, 'form-unsupported')
+  if (!fm.entry) return none(false, false, 'not-routed') // anything else the plan left unwired is not-routed, the why on the form's `route`
   if (fm.entry.intact === null) return none(null, null, null)
   if (fm.entry.intact === false) return none(false, false, 'proxy-changed')
   if (!F.forwarder || F.forwarder.up === false || !fwf) return none(true, false, 'forwarder-down')

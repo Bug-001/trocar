@@ -14,7 +14,7 @@ import { gatherWin32Facts } from '../../src/collector/arch/win32/netfacts.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { newManifest, applyJsonKey } from '../../src/collector/core/trust/journal.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
-import { readManifest } from '../../src/off/manifest.mjs'
+import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { ROWS } from './fixtures/rows-win32.mjs'
 import { squash, pfacts, form, fwForm, proc } from './fixtures/rows.mjs'
@@ -88,10 +88,10 @@ const gather = (home, { helper, ids = ['claude-code'], env = {}, agents = [], de
   gatherNetFacts({ platform: 'win32', home, env, harnesses: all, status: { ...statusOf(ids, { agents, desired }), ...(manifest ? { manifest: { value: manifest, error: null } } : {}) }, netenv, archFacts: gatherWin32Facts, adopted: null, now: () => NOW, deps: { helper } })
 const KERNEL_URL = 'http://claude-code.settings:s3-listener-token@127.0.0.1:17991'
 /** The collector dir of an installed proxy mode: the kernel's lock, the ports of ingress.json, and the manifest's record of the entry that was written over the user's own proxy. */
-function collectorOf(home, { url = KERNEL_URL, prior = 'http://proxy.corp:8080' } = {}) {
+function collectorOf(home, { url = KERNEL_URL, prior = 'http://proxy.corp:8080', groupPorts = { 'claude-code.settings': 17991 } } = {}) {
   const dir = path.join(home, '.asight', 'collector')
   put(path.join(dir, 'forwarder.lock'), `${JSON.stringify({ pid: 6120, startedAt: 1760000000000, endpoint: 'tcp:127.0.0.1:19001', config: path.join(dir, 'forwarder', 'config.json') })}\n`)
-  put(path.join(dir, 'ingress.json'), `${JSON.stringify({ enginePort: 17990, groupPorts: { 'claude-code.settings': 17991 }, ingressToken: 'a'.repeat(32), listenerToken: 's3-listener-token' })}\n`)
+  put(path.join(dir, 'ingress.json'), `${JSON.stringify({ enginePort: 17990, groupPorts, ingressToken: 'a'.repeat(32), listenerToken: 's3-listener-token' })}\n`)
   const settings = path.join(home, '.claude', 'settings.json')
   if (prior != null) put(settings, `${JSON.stringify({ env: { HTTPS_PROXY: prior } }, null, 2)}\n`)
   const manifest = newManifest()
@@ -517,6 +517,34 @@ test('W36 form-unsupported: the plan\'s own reason is the branch\'s verdict (a s
   const found = diagnose({ facts: f, topology: { 'claude-code': t }, harnesses: ['claude-code'], user: 'u' }).find((x) => x.code === 'form-unsupported')
   assert.equal(found.what, 'claude-code 的形态 claude-code.desktop 收不了带凭据的上游')
   assert.deepEqual(found.commands, [{ run: '改用 claude-code 的 CLI 或编辑器扩展形态', shell: 'gui' }])
+})
+
+test('W36 form-unsupported through the REAL facts path: a named Claude Desktop (its ledger records) with a credentialed login-environment proxy — planRoutes leaves the group unwired, routeOf carries the reason on the form, the verdict says it (not the unknown of an unchecked policy entry) and diagnose emits the row; the settings group of the same harness stays wired (4.8 §2.2 · §6.4)', async () => {
+  const home = tmpDir('asight-w36-form-')
+  const { dir } = collectorOf(home, { groupPorts: { 'claude-code.settings': 17991, 'claude-code.desktop': 17996 } })
+  // what a real `on --opt-in claude-code.desktop` leaves in the ledger: the item's two records (the certificate and the policy value — Task 14's apply writes both)
+  const manifest = readManifest(dir, fs)
+  for (const kind of ['optin-cert-user', 'optin-claude-policy']) manifest.entries.push({ kind, harness: 'claude-code', form: 'claude-code.desktop', item: 'cert-store-current-user', scope: 'user', path: 'claude-code.desktop:cert-store-current-user' })
+  saveManifest(dir, manifest, fs)
+  // the desktop group's upstream: the login environment's proxy with the user's login in it — the policy value takes an address only (auth:false, 4.8 §3.2)
+  const f = await gather(home, { helper: helperOf({ procs: [KERNEL_ROW], loginEnv: { HTTPS_PROXY: { kind: 'REG_SZ', value: 'http://alice:pw@corp.example:3128' } } }), ids: ['claude-code'] })
+  const desktop = f.harnesses['claude-code'].forms.find((x) => x.id === 'claude-code.desktop')
+  assert.deepEqual(desktop.route, { reason: 'form-unsupported', code: 'form-unsupported' }, "the plan's own reason on the form (planRoutes → routeOf)")
+  assert.equal(desktop.optIn.state, 'done', 'the ledger says the item was applied')
+  assert.deepEqual(desktop.entry, { where: '策略 egressProxyUrl', asight: true, opt_in: true, intact: null }, "the entry edge is the ledger's word — the policy value's read-back is checkEntries' (Task 14), so intact is unknown")
+  assert.equal(desktop.setting.value, 'http://***@corp.example:3128', 'the upstream the plan refused is the login environment\'s proxy, redacted of the login')
+  const t = buildTopology(f)['claude-code']
+  const branch = t.branches.find((b) => b.form === 'claude-code.desktop')
+  assert.deepEqual([branch.on_path, branch.captured, branch.reason], [false, false, 'form-unsupported'], "the verdict names the plan's reason (before the fix the unknown-intact entry masked it and this said [null, null, null], so the doctor could never emit the row)")
+  assert.deepEqual(branch.path.map((id) => kindOf(t, id)), ['agent', 'proxy', 'egress'], 'the gated group draws no kernel hop — the agent and the proxy it would have used')
+  assert.ok(t.branches.find((b) => b.form === 'claude-code.cli').path.some((id) => kindOf(t, id) === 'asight-forwarder'), 'the settings group of the same harness is wired: the gate is this group\'s own, not the harness\'s')
+  assert.deepEqual(validateTopology({ 'claude-code': t }), [], 'form-unsupported is a status reason the schema accepts (1.6 §9.6)')
+  const found = diagnose({ facts: f, topology: buildTopology(f), harnesses: ['claude-code'], user: 'u' }).find((x) => x.code === 'form-unsupported')
+  assert.ok(found, 'the doctor row (before the fix, diagnose read the reason off the branches and no branch carried it)')
+  assert.equal(found.what, 'claude-code 的形态 claude-code.desktop 收不了带凭据的上游')
+  assert.deepEqual(found.commands, [{ run: '改用 claude-code 的 CLI 或编辑器扩展形态', shell: 'gui' }])
+  assert.ok(!JSON.stringify(f).includes('alice') && !JSON.stringify(f).includes(':pw@'), 'the login of the login-environment proxy is nowhere in the facts')
+  assert.ok(!JSON.stringify(found).includes('alice'), 'nor in the finding')
 })
 
 test('W36 the static scans (W74\'s clause; 4.8 E6): findings-win32.mjs has no command that changes Smart App Control, and the port check is always the netstat + findstr form', () => {
