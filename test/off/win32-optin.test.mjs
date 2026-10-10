@@ -11,6 +11,8 @@ import path from 'node:path'
 import { UNDO_BY_KIND, undoOptIns, readUserPathArgs as inlineReadArgs, setUserPathArgs as inlineSetArgs, BROADCAST_ARGS as inlineBroadcast, readShortcutArgs as inlineShortcutArgs } from '../../src/off/win32-optin.mjs'
 import { readUserPathArgs, setUserPathArgs, BROADCAST_ARGS, readShortcutArgs, USER_PATH_VALUE } from '../../src/collector/arch/win32/userpath.mjs'
 import { OPTIN_KINDS, OPTIN_MACHINE_KINDS } from '../../src/off/manifest.mjs'
+import { runOff } from '../../src/off/orchestrate.mjs'
+import { checkRecord } from '../../src/health/codes.mjs'
 import { GROUPS, POLICY_KEY, rig, nativeKimi, realCmd, writeShortcut } from '../collector/arch/win32/fixtures/optin-world.mjs'
 
 test('the inline argv are the same bytes as arch/win32/userpath.mjs\'s (the standalone cannot import the arch module; the copies ARE the contract)', () => {
@@ -213,4 +215,26 @@ test('an entry without its values, or an undo that throws, is a failed row, neve
   const o2 = await undoOptIns({ manifest: boom, exec: () => ({ status: 0, stdout: '', stderr: '' }), fs: { existsSync: () => true, readFileSync: () => 'not json at all', writeFileSync: () => {}, rmSync: () => {}, rmdirSync: () => {} } })
   assert.equal(o2.results[0].result, 'left')
   assert.match(o2.results[0].reason, /no longer JSON/)
+})
+
+test('W64/W54 command-level: `asight off` over a rig-produced opt-in manifest — the receipt row, exit 0, and one optin-removed state event per undone item (D38)', async () => {
+  const r = await rig({ form: 'kimi-code.cli', item: 'user-path-shim' })
+  nativeKimi(r)
+  realCmd(r, 'kimi')
+  assert.deepEqual(await r.apply(), { state: 'done' })
+  // the manifest ON DISK, as on's ledger leaves it: runOff reads it back from <collector>\install-manifest.json, not from the rig's memory
+  r.wfs.writeFileSync(path.win32.join(r.dir, 'install-manifest.json'), JSON.stringify({ version: 2, complete: true, created_at: '2026-10-10T00:00:00Z', confirmed_paths: [], kept_backups: [], liveness: {}, dirs: [], files: [], entries: r.manifest.entries }))
+  const at = new Date('2026-10-10T12:00:00Z')
+  const { receipt, exit } = await runOff({ home: r.winHome, env: { ...r.env, ASIGHT_TEST_SANDBOX: '1' }, ids: null,
+    deps: { platform: 'win32', exec: r.w.run, fs: r.wfs, procs: async () => [], daemonState: async () => ({ state: 'none' }), lockWaitMs: 0, now: () => new Date(at) } })
+  assert.equal(exit, 0, `a done off${receipt.problems.length ? ` (${receipt.problems[0]})` : ''}`)
+  assert.deepEqual(receipt.left, [], 'nothing left: an undone item is not a failure')
+  assert.ok(receipt.changed.some((c) => c.result === 'restored' && /点名项\(optin-user-path\)已撤/.test(c.change)), 'the receipt row says which item went')
+  assert.equal(r.wfs.existsSync(path.win32.join(r.dir, 'bin', 'kimi.cmd')), false, 'the shim itself is gone — command level, not just the registry function')
+  assert.equal(r.w.state['HKCU\\Environment'].Path.value, path.win32.join(r.winHome, 'npm'), 'the PATH value back to what it held')
+  // the removal is a state change, not only an off-note: one optin-removed {form, item, scope} per undone item (4.8 §12, the twin of optin-applied)
+  const lines = r.wfs.readFileSync(path.win32.join(r.dir, 'flows', '2026-10-10.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+  assert.deepEqual(lines.filter((l) => l.event === 'optin-removed'), [{ ts: at.toISOString(), event: 'optin-removed', where: 'optin', run: at.toISOString(), form: 'kimi-code.cli', item: 'user-path-shim', scope: 'user' }], 'exactly one, naming the item by form/item, not by a path to decode')
+  assert.ok(lines.some((l) => l.kind === 'optin-user-path' && l.form === 'kimi-code.cli' && l.item === 'user-path-shim'), 'the off-note names the item by form/item too (with no code: there is no registered one for a row that went well, D38)')
+  for (const l of lines) assert.deepEqual(checkRecord(l), [], `every flows line of the run is inside the closed sets (${l.event}/${l.code ?? l.kind})`)
 })

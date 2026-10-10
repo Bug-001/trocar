@@ -150,6 +150,6 @@ test('the standalone copy carries the Windows pieces: the built text names them,
   const { buildStandalone } = await import('../../src/off/standalone.mjs')
   const { OFF_VERSION } = await import('../../src/off/manifest.mjs')
   const text = buildStandalone({ version: OFF_VERSION })
-  for (const name of ['kernelForwardOnly', 'undoRunKey', 'undoScheduledTask', 'controlEndpointOf', 'winIdentity']) assert.ok(text.includes(name), `the copy bundles ${name}`)
+  for (const name of ['kernelForwardOnly', 'undoRunKey', 'undoScheduledTask', 'controlEndpointOf', 'winIdentity', 'undoOptIns', 'UNDO_BY_KIND']) assert.ok(text.includes(name), `the copy bundles ${name}`)
   assert.ok(text.includes('asight-off '), 'the version line is on the first lines')
 })

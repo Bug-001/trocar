@@ -206,14 +206,16 @@ export const UNDO_BY_KIND = {
 }
 
 /** The user-level opt-in items of `manifest`, undone by kind through the registry; the machine-level remainder named for the operator.
- *  → `{ results: [{ path, kind, scope, result, reason? }], needsAdmin: [{ path, kind, command? }], unknown: [{ path, kind }] }`; nothing
- *  throws — an item that could not be undone is a result, and the caller decides the exit. `ids` limits the harnesses, as everywhere. */
+ *  → `{ results: [{ path, kind, scope, form?, item?, result, reason? }], needsAdmin: [{ path, kind, command? }], unknown: [{ path, kind }] }`;
+ *  `form` / `item` ride along from the manifest entry (applyOptIn's ledger always writes them) so the caller can say WHICH item a row is —
+ *  orchestrate's optin-removed state event names the item by them, not by a path a human has to decode. Nothing throws — an item that could
+ *  not be undone is a result, and the caller decides the exit. `ids` limits the harnesses, as everywhere. */
 export async function undoOptIns({ manifest, ids = null, exec = null, env = process.env, fs = null, home = null } = {}) {
   const out = { results: [], needsAdmin: [], unknown: [] }
   const inScope = (h) => typeof h === 'string' && (ids == null || ids.includes(h))
   for (const e of (manifest && Array.isArray(manifest.entries) ? manifest.entries : [])) {
     if (!e || !e.scope || e.scope === 'agent' || !inScope(e.harness)) continue // the opt-in ones are scope 'user' / 'machine'; an 'agent' entry is the harness undo's own (parseManifest defaults every entry's scope, so the field alone no longer tells an opt-in item — §1.7「自动写的项」)
-    const row = (r) => out.results.push({ path: e.path, kind: e.kind, scope: e.scope, ...r })
+    const row = (r) => out.results.push({ path: e.path, kind: e.kind, scope: e.scope, ...(e.form != null && e.item != null ? { form: e.form, item: e.item } : {}), ...r })
     if (e.scope === 'machine') { out.needsAdmin.push({ path: e.path, kind: e.kind, ...(typeof e.elevated_command === 'string' ? { command: e.elevated_command } : {}) }); row({ result: 'needs-admin', reason: 'a machine-level item: run the elevated command above, asight does not elevate on its own (R7)' }); continue }
     const undo = UNDO_BY_KIND[e.kind]
     if (!undo) { out.unknown.push({ path: e.path, kind: e.kind }); row({ result: 'unknown-kind', reason: `${e.path} is an opt-in item of kind ${JSON.stringify(e.kind)}, which this build has no undo for; use the asight that wrote it` }); continue }

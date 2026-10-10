@@ -34,7 +34,7 @@ export function mappedFs(winHome, sandbox) {
   }
   const wrap = {}
   const TWO_PATHS = new Set(['renameSync', 'copyFileSync']) // these take two paths; both must be carried into the sandbox
-  for (const name of ['existsSync', 'readFileSync', 'writeFileSync', 'mkdirSync', 'rmSync', 'rmdirSync', 'copyFileSync', 'openSync', 'statSync', 'lstatSync', 'chmodSync', 'renameSync', 'unlinkSync']) {
+  for (const name of ['existsSync', 'readFileSync', 'writeFileSync', 'appendFileSync', 'mkdirSync', 'rmSync', 'rmdirSync', 'copyFileSync', 'openSync', 'statSync', 'lstatSync', 'chmodSync', 'renameSync', 'unlinkSync']) {
     if (typeof fs[name] !== 'function') continue
     wrap[name] = TWO_PATHS.has(name) ? (a, b, ...rest) => fs[name](map(a), map(b), ...rest) : (p, ...a) => fs[name](map(p), ...a)
   }
