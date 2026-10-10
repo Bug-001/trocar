@@ -193,6 +193,9 @@ export async function gatherWin32Facts(ctx, deps = {}) {
     const reply = status.daemon && status.daemon.reply
     const linksKnown = !!(reply && Array.isArray(reply.links))
     const liveForms = new Set((linksKnown ? reply.links : []).map((l) => l && l.name).filter(Boolean))
+    // the host set the daemon's plan last applied to a host-tree form (4.8 §3.5, W69): the reply's `applied_hosts` (the wiring's win32 bag, relayed by /status) — what `status` compares
+    // its own fresh `hostSetOf` read with, to say when the kernel's set is old. A daemon that did not answer, or one without the bag, leaves nothing to compare: no vacuous line.
+    const appliedSetOf = (id) => { const a = reply && reply.applied_hosts && typeof reply.applied_hosts === 'object' ? reply.applied_hosts[id] : null; return a && Array.isArray(a.hosts) ? [...a.hosts] : null }
     const desired = Object.fromEntries((status.harnesses || []).map((h) => [h.id, h.desired === 'on' ? 'on' : 'off']))
     const optinRows = planOptIns({ groups, manifest })
     const optIns = new Set(optinRows.filter((r) => r.state !== 'needed').map((r) => r.form))
@@ -262,7 +265,13 @@ export async function gatherWin32Facts(ctx, deps = {}) {
           ...(routeOf(r) ? { route: routeOf(r) } : {}), // the group's own plan: why it was left unwired, the doctor's name for it (4.8 §10.4)
           ...(fr && fr.reason === 'form-path-unknown' ? { reason: 'form-path-unknown', unknownPaths: fr.unknownPaths || [] } : {}),
           ...(fr && fr.reason === 'elevated-agent' ? { reason: 'elevated-agent', elevatedPids: fr.elevatedPids || [] } : {}),
-          ...(f.hosts ? { hosts: hostSetOf({ form: f, readSettings: () => winCtx.readTextOrError(f.hosts.settings.file(winCtx)), extraHosts: (extraHosts[x.harness] || {}).extra_hosts || [] }) } : {}),
+          ...(f.hosts ? { hosts: {
+            ...(f.hosts.program ? { program: f.hosts.program } : {}), // the names the status lines of §3.5 are written with: the host program, the extension
+            ...(f.hosts.extension ? { extension: f.hosts.extension } : {}),
+            defaults: [...f.hosts.defaults], // what the「只采默认 host(…)」 line lists, whatever the settings and extra_hosts added
+            ...hostSetOf({ form: f, readSettings: () => winCtx.readTextOrError(f.hosts.settings.file(winCtx)), extraHosts: (extraHosts[x.harness] || {}).extra_hosts || [] }),
+            ...(appliedSetOf(f.id) ? { applied: appliedSetOf(f.id) } : {}), // the kernel's own set as the daemon reports it (absent: nothing to compare, no vacuous line)
+          } } : {}),
         })
       }
     }

@@ -79,13 +79,13 @@ const helperOf = ({ procs = [], listen = [], established = [], ifaces = [{ name:
     close: async () => {},
   }
 }
-const statusOf = (ids, { agents = [], desired = 'on' } = {}) => ({
-  daemon: { state: 'running', pid: 4121, reply: { engine: { port: 17990 }, links: [], negatives: [], agents }, lock: { engine_port: 17990 } },
+const statusOf = (ids, { agents = [], desired = 'on', appliedHosts = null } = {}) => ({
+  daemon: { state: 'running', pid: 4121, reply: { engine: { port: 17990 }, links: [], negatives: [], agents, ...(appliedHosts ? { applied_hosts: appliedHosts } : {}) }, lock: { engine_port: 17990 } },
   link: { attached: null, helper: 'ok', ids: [] },
   harnesses: ids.map((id) => ({ id, installed: true, desired, entry: { state: 'intact' }, installedAt: '2026-10-09T09:00:00.000Z', procs: [] })),
 })
-const gather = (home, { helper, ids = ['claude-code'], env = {}, agents = [], desired = 'on', manifest = null, netenv = { result: { products: [], unknown: [] } } } = {}) =>
-  gatherNetFacts({ platform: 'win32', home, env, harnesses: all, status: { ...statusOf(ids, { agents, desired }), ...(manifest ? { manifest: { value: manifest, error: null } } : {}) }, netenv, archFacts: gatherWin32Facts, adopted: null, now: () => NOW, deps: { helper } })
+const gather = (home, { helper, ids = ['claude-code'], env = {}, agents = [], desired = 'on', manifest = null, appliedHosts = null, netenv = { result: { products: [], unknown: [] } } } = {}) =>
+  gatherNetFacts({ platform: 'win32', home, env, harnesses: all, status: { ...statusOf(ids, { agents, desired, appliedHosts }), ...(manifest ? { manifest: { value: manifest, error: null } } : {}) }, netenv, archFacts: gatherWin32Facts, adopted: null, now: () => NOW, deps: { helper } })
 const KERNEL_URL = 'http://claude-code.settings:s3-listener-token@127.0.0.1:17991'
 /** The collector dir of an installed proxy mode: the kernel's lock, the ports of ingress.json, and the manifest's record of the entry that was written over the user's own proxy. */
 function collectorOf(home, { url = KERNEL_URL, prior = 'http://proxy.corp:8080', groupPorts = { 'claude-code.settings': 17991 } } = {}) {
@@ -242,6 +242,53 @@ test('the host set of an opted-in Kimi VS Code extension (4.8 §3.5, read-only):
     assert.deepEqual(d.settings, { unreadable: { reason: 'denied', detail: 'EACCES' } })
     assert.ok(!d.hosts.includes('relay.corp.example'), 'only the defaults and extra_hosts remain')
   } finally { fs.chmodSync(toml(), 0o644); assert.equal(fs.readFileSync(toml(), 'utf8'), before, 'nothing was written or taken away') }
+})
+
+test('W69 the operator\'s extra_hosts reach the set through the REAL facts path (state.json\'s per-harness list), and the daemon\'s reply carries the set it applied: `status` compares the two — and the read changes nothing (the settings file and the kernel\'s config are byte for byte what they were)', async () => {
+  const home = tmpDir('asight-w69-extra-')
+  put(path.join(home, '.asight', 'collector', 'ingress.json'), `${JSON.stringify({ enginePort: 17990, groupPorts: { 'kimi-code.vscode': 17995 }, ingressToken: 'a'.repeat(32), listenerToken: 's3-listener-token' })}\n`)
+  const kernelConfig = path.join(home, '.asight', 'collector', 'forwarder', 'config.json')
+  put(kernelConfig, '{"rules":[]}\n') // the kernel's own config, as forwarder.lock names it
+  put(path.join(home, '.asight', 'collector', 'forwarder.lock'), `${JSON.stringify({ pid: 6120, startedAt: 1760000000000, endpoint: 'tcp:127.0.0.1:19001', config: kernelConfig })}\n`)
+  put(path.join(home, '.asight', 'collector', 'state.json'), `${JSON.stringify({ version: 2, updated_at: '2026-10-09T09:00:00.000Z', harnesses: { 'kimi-code': { desired: 'on', extra_hosts: ['relay.extra.example'], updated_at: '2026-10-09T09:00:00.000Z' } } })}\n`)
+  const toml = path.join(home, '.kimi-code', 'config.toml')
+  put(toml, 'base_url = "https://relay.corp.example/api"\n')
+  const before = { toml: fs.readFileSync(toml), config: fs.readFileSync(kernelConfig) }
+  const helper = helperOf({ procs: [KERNEL_ROW] })
+  const of = (f) => f.harnesses['kimi-code'].forms.find((x) => x.id === 'kimi-code.vscode')
+  const bare = await gather(home, { helper, ids: ['kimi-code'] })
+  const b = of(bare)
+  assert.equal(b.hosts.settings, 'read')
+  assert.ok(b.hosts.hosts.includes('relay.corp.example'), 'the relay of the extension\'s own settings')
+  assert.ok(b.hosts.hosts.includes('relay.extra.example'), 'the operator\'s extra_hosts, from state.json\'s per-harness list — the one source the machine test of (a) did not carry')
+  assert.equal(b.hosts.applied, undefined, 'no daemon answer here: nothing to compare, and no vacuous「旧的」 line either')
+  // the daemon reports the set it applied — one the fresh read does not give back (the user added the relay after `on`)
+  const withApplied = await gather(home, { helper, ids: ['kimi-code'], appliedHosts: { 'kimi-code.vscode': { hosts: ['api.kimi.com', 'api.kimi.ai', 'api.moonshot.ai', 'api.moonshot.cn', 'relay.extra.example'], settings: 'read', dropped: [] } } })
+  assert.deepEqual(of(withApplied).hosts.applied, ['api.kimi.com', 'api.kimi.ai', 'api.moonshot.ai', 'api.moonshot.cn', 'relay.extra.example'], 'the applied set, as the reply carries it (the wiring\'s win32 bag, relayed by /status)')
+  assert.deepEqual(fs.readFileSync(toml), before.toml, 'the settings file is byte for byte what it was')
+  assert.deepEqual(fs.readFileSync(kernelConfig), before.config, 'and so is the kernel\'s own config: the read, the compare and the line change nothing')
+})
+
+test('W69 the host-set lines of `status` (4.8 §3.5): the host program\'s other connections only forward and only the form\'s host set reaches the engine; settings that cannot be read leave the set at the defaults and extra_hosts, said with the reason and the hosts that are still captured; a fresh read that differs from the applied set says the kernel\'s is old and names the command — three notes of the detail view, none when the set is current and reads', () => {
+  const hostForm = (hosts) => form('kimi-code.vscode', { entry: { where: 'settings.json http.proxy', asight: true, opt_in: true, intact: true }, optIn: { state: 'done' }, procs: [proc(8100, { name: 'Code', exe: 'C:\\Program Files\\Microsoft VS Code\\Code.exe', version: null })], hosts })
+  const DEFAULTS = ['api.kimi.com', 'api.kimi.ai', 'api.moonshot.ai', 'api.moonshot.cn']
+  const tree = 'VS Code 别的连接经 asight 的内核(只转发),只有到 Kimi 的 host 集的连接进引擎'
+  // a read that agrees with the applied set: only the host-tree line
+  const current = buildTopology(pfacts('kimi-code', hostForm({ program: 'VS Code', extension: 'Kimi', defaults: [...DEFAULTS], hosts: [...DEFAULTS, 'relay.corp.example'], settings: 'read', dropped: [], applied: [...DEFAULTS, 'relay.corp.example'] }), fwForm(17995)))['kimi-code']
+  assert.deepEqual(current.notes, [tree], 'the set is current: no line of「旧的」')
+  // the settings changed after `on`: the kernel's set is old, the command that recomputes it is named — `status` itself changes nothing
+  const stale = buildTopology(pfacts('kimi-code', hostForm({ program: 'VS Code', extension: 'Kimi', defaults: [...DEFAULTS], hosts: [...DEFAULTS, 'relay.corp.example'], settings: 'read', dropped: [], applied: [...DEFAULTS] }), fwForm(17995)))['kimi-code']
+  assert.deepEqual(stale.notes, [tree, '内核里的 host 集是旧的(你 on 之后改过 Kimi 的设置): 跑 asight on kimi-code 重算集、重载内核;status 只读,不改任何东西'])
+  const staleDetail = renderDetail(stale, { now: NOW }).join('\n')
+  assert.ok(staleDetail.includes('内核里的 host 集是旧的') && staleDetail.includes('asight on kimi-code'), 'the detail view prints it, with the command')
+  // the settings cannot be read: only the defaults and extra_hosts are captured — said with the reason and the hosts that are, never silent
+  const unreadable = buildTopology(pfacts('kimi-code', hostForm({ program: 'VS Code', extension: 'Kimi', defaults: [...DEFAULTS], hosts: [...DEFAULTS, 'relay.extra.example'], settings: { unreadable: { reason: 'denied', detail: 'EACCES' } }, dropped: [] }), fwForm(17995)))['kimi-code']
+  assert.deepEqual(unreadable.notes, [tree, `读不到 Kimi 扩展的设置(denied:EACCES):只采默认 host(${DEFAULTS.join('、')})与 extra_hosts;到你在那里配的中转站 host 的连接不采`])
+  const detail = renderDetail(unreadable, { now: NOW }).join('\n')
+  assert.ok(detail.includes('读不到 Kimi 扩展的设置(denied:EACCES)') && detail.includes(DEFAULTS.join('、')), 'the detail view prints the reason and the hosts that are still captured')
+  // a settings file that is simply not there: nothing configured, not a failure — no line of「读不到」
+  const absent = buildTopology(pfacts('kimi-code', hostForm({ program: 'VS Code', extension: 'Kimi', defaults: [...DEFAULTS], hosts: [...DEFAULTS], settings: 'absent', dropped: [] }), fwForm(17995)))['kimi-code']
+  assert.deepEqual(absent.notes, [tree], 'absent is not unreadable: no line')
 })
 
 test('a helper that cannot be started, and one that answers nothing: every read it owned is an unknown with its reason, the routing stays proxy and nothing is invented (R11)', async () => {

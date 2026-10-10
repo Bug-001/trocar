@@ -103,10 +103,10 @@ row({ n: 'p', title: 'OpenCode Desktop started from a taskbar pin: not through a
   compact: ['OpenCode 9100 → api.anthropic.com:443(直连)'] })
 
 row({ n: 'q', title: 'Kimi\'s VS Code extension, named: the editor\'s setting points at the kernel, only Kimi\'s host set goes to the engine', h: 'kimi-code',
-  facts: pfacts('kimi-code', form('kimi-code.vscode', { entry: { where: VSCODE, asight: true, opt_in: true, intact: true }, optIn: { state: 'done' }, procs: [proc(8100, { name: 'Code', exe: 'C:\\Program Files\\Microsoft VS Code\\Code.exe', version: null })], hosts: { hosts: ['api.moonshot.cn', 'relay.corp.example'], settings: 'read', dropped: [] } }), fwForm(17995)),
+  facts: pfacts('kimi-code', form('kimi-code.vscode', { entry: { where: VSCODE, asight: true, opt_in: true, intact: true }, optIn: { state: 'done' }, procs: [proc(8100, { name: 'Code', exe: 'C:\\Program Files\\Microsoft VS Code\\Code.exe', version: null })], hosts: { program: 'VS Code', extension: 'Kimi', defaults: ['api.kimi.com', 'api.kimi.ai', 'api.moonshot.ai', 'api.moonshot.cn'], hosts: ['api.moonshot.cn', 'relay.corp.example'], settings: 'read', dropped: [] } }), fwForm(17995)),
   kinds: [[...ENGINE_AND_KERNEL, 'upstream']], forms: ['kimi-code.vscode'], names: ['all'], on_path: true, captured: true, reason: null, vpnLine: false,
   compact: ['Code 8100 → [settings.json http.proxy · 你点名的] asight 自带内核 :17995 → asight 引擎 :17990 → api.moonshot.cn:443(直连)'],
-  notes: ['宿主程序别的连接经 asight 的内核(只转发),只有到这个形态的 host 集的连接进引擎'] })
+  notes: ['VS Code 别的连接经 asight 的内核(只转发),只有到 Kimi 的 host 集的连接进引擎'] })
 
 row({ n: 'r', title: 'Claude Desktop, named: the policy value points at the kernel\'s own port, the upstream is the system proxy', h: 'claude-code',
   facts: pfacts('claude-code', form('claude-code.desktop', { entry: { where: POLICY, asight: true, opt_in: true, intact: true }, optIn: { state: 'done' }, systemProxy: sysProxy(), follows: { http: true, ws: false }, procs: [proc(8801, { name: 'Claude', exe: 'C:\\Program Files\\Claude\\Claude.exe', version: null })] }), fwForm(17996, { upstream: 'http://127.0.0.1:7897', source: 'system-proxy' }), viaSystemProxy()),

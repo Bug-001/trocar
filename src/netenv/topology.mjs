@@ -226,7 +226,20 @@ function proxyTopology(F, h, hf) {
     if (vd.reason === 'desired-off' && fwf && (fwf.clients || []).length) notes.push(`还有 ${fwf.clients.length} 个 agent 连着 asight 的内核,重启它们之后 asight 就完全退出`)
     if (fm.optIn && fm.optIn.state === 'needed' && fm.optIn.enable) notes.push(`要采它: ${fm.optIn.enable}`)
     if (fm.reason === 'form-path-unknown') notes.push(`这个安装方式的路径 asight 还不认识(${(fm.unknownPaths || []).join('; ') || 'path shape not read'});把它报给 asight`)
-    if (fm.hosts && wired) notes.push('宿主程序别的连接经 asight 的内核(只转发),只有到这个形态的 host 集的连接进引擎')
+    if (fm.hosts && wired) {
+      // the host-tree lines of 4.8 §3.5 (W69): the host program's other connections only forward, only the form's host set reaches the engine; the extension's own settings, when they
+      // cannot be read, leave the set at the defaults and extra_hosts (said, never silent); and a fresh read that differs from what the daemon reports as applied means the kernel's
+      // set is old — the line names the command that recomputes it, `status` itself changes nothing (read-only).
+      const program = fm.hosts.program || '宿主程序', extension = fm.hosts.extension || '这个形态'
+      notes.push(`${program} 别的连接经 asight 的内核(只转发),只有到 ${extension} 的 host 集的连接进引擎`)
+      if (fm.hosts.settings && fm.hosts.settings.unreadable) {
+        const u = fm.hosts.settings.unreadable
+        notes.push(`读不到 ${extension} 扩展的设置(${u.reason}${u.detail ? `:${u.detail}` : ''}):只采默认 host(${(fm.hosts.defaults || []).join('、')})与 extra_hosts;到你在那里配的中转站 host 的连接不采`)
+      }
+      if (Array.isArray(fm.hosts.applied) && [...fm.hosts.applied].sort().join('|') !== [...fm.hosts.hosts].sort().join('|')) {
+        notes.push(`内核里的 host 集是旧的(你 on 之后改过 ${extension} 的设置): 跑 asight on ${h} 重算集、重载内核;status 只读,不改任何东西`)
+      }
+    }
     for (const name of split ? ['http', 'ws'] : ['all']) {
       const a = agentOf(g, h, main), off = tail(g, F, hfSys, fm.setting, (fm.follows || hf.behaviour.follows)[name === 'ws' ? 'ws' : 'http'])
       let path = [a, ...off.ids]
