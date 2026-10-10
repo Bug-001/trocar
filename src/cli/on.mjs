@@ -11,7 +11,7 @@ import path from 'node:path'
 import { resolveHarnesses } from './harness-names.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
-import { formatOnReceipt, formatPlan } from './receipt.mjs'
+import { formatOnReceipt, formatPlan, formatWinPlan } from './receipt.mjs'
 import { probeNetenv } from '../netenv/index.mjs'
 import { renderCompact } from '../netenv/topology-text.mjs'
 import { hasNewCollector } from '../off/legacy.mjs'
@@ -106,6 +106,15 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     const fs = deps.fs || nodeFs
     const archPrepare = parts.arch && typeof parts.arch.prepare === 'function' ? parts.arch.prepare : null
     const prep = archPrepare ? await archPrepare({ env }) : null
+    // the plan of 4.8 §11: Windows draws its own (the kernel line, one row per entry group with the upstream, the named opt-in items, Smart App Control, the drain note) — fed by the same
+    // `on`'s facts (adoption) and the arch hook's answer (prep). The Linux plan and the hook's own notes stay as they are.
+    const winPlan = parts.os === 'win32'
+    const planText = (raw) => {
+      const adopted = adoption && !adoption.error ? Object.entries(adoption.chains(raw.targets)).filter(([h]) => raw.targets.includes(h)).map(([h, t]) => ({ harness: h, chain: chainText(t) })) : []
+      return winPlan
+        ? formatWinPlan(raw, { home, autostart, netenv, env, adoption: adoption && !adoption.error ? adoption : null, prep })
+        : [formatPlan({ ...raw, adopted }, { home, autostart, netenv }), ...(prep && prep.notes && prep.notes.length ? ['', ...prep.notes] : [])].join('\n')
+    }
     if (prep && prep.refuse) {
       const rf = prep.refuse
       const line = `${rf.reason}${Array.isArray(rf.commands) && rf.commands.length ? `。重装: ${rf.commands.join(' 或 ')}` : ''}`
@@ -120,12 +129,12 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
       // a dry run prints the plan and exits 0; the stop a real run would meet is in the receipt (R6, V7)
       prep.blocked = line
     }
-    let { receipt, exit } = await install.turnOn({
+    let { receipt, exit, plan } = await install.turnOn({
       home, env, ids: named.ids, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, osRootsFile: parts.osRootsFile || null,
       roots: deps.roots || null, unit, autostart, freePort: deps.freePort, dryRun: flags.has('--dry-run'), confirm,
       optIn, optInHooks,
       networkEdited: async (targets) => editedFields({ adoption, routing, targets, home, env, fs: deps.fs }),
-      onPlan: (plan) => say([formatPlan({ ...plan, adopted: adoption && !adoption.error ? Object.entries(adoption.chains(plan.targets)).filter(([h]) => plan.targets.includes(h)).map(([h, t]) => ({ harness: h, chain: chainText(t) })) : [] }, { home, autostart, netenv }), ...(prep && prep.notes && prep.notes.length ? ['', ...prep.notes] : [])].join('\n')),
+      onPlan: (p) => say(planText(p)),
       request: deps.request, now: deps.now, getuid: deps.getuid, helperState, linger: deps.linger || parts.linger || null, lingerRead: deps.lingerRead || (deps.linger ? null : parts.lingerRead || null), sleep: deps.sleep, user: deps.user, fs: deps.fs,
     })
     receipt.netenv = netenv.error ? { error: netenv.error } : netenv.result
@@ -142,6 +151,7 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     } else if (adoption && receipt.dry_run) receipt.adopted = Object.fromEntries(Object.entries(adoption.chains(receipt.harnesses || [])).filter(([h]) => (receipt.harnesses || []).includes(h)).map(([h, t]) => [h, { chain: chainText(t), dry_run: true }]))
     if (json) io.out(JSON.stringify(receipt, null, 2))
     else if (receipt.planned) for (const n of receipt.notes) io.err(n) // the plan was printed; what is left to say is why nothing was done (R6)
+    else if (winPlan && receipt.dry_run && plan) io.out(`${planText(plan)}\n\n${formatOnReceipt(receipt, { tense: 'future', home })}`) // a Windows dry run prints the §11 plan as well: it is what a user reads before deciding (turnOn's onPlan does not run for one)
     else io.out(formatOnReceipt(receipt, { tense: receipt.dry_run ? 'future' : 'past', home }))
     return exit
   } catch (e) {

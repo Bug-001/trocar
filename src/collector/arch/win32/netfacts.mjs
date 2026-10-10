@@ -85,8 +85,11 @@ const routeOf = (r) => (!r || !r.reason ? null : { reason: r.reason, ...(r.code 
 
 /** The proxy a form's agent would use without asight, as of now: the prior value of its entry (the manifest's record once asight wrote it, else the file), else the login environment's
  *  variable it reads; a proxy that lives only in a variable of the terminal that started the agent is 「不知道 · env-unreadable」 (Windows reads no other process's environment), inferred. */
-function settingOf({ harness, group, proxy, ctx, manifest, hkcuEnv, shellSetting }) {
-  const prior = priorOf({ harness, group, ctx, manifest })
+function settingOf({ harness, group, proxy, ctx, manifest, hkcuEnv, shellSetting, intact = null }) {
+  // the agent's own proxy setting. While asight's entry is intact the file holds the kernel's address, so the answer is the prior the record kept (the
+  // way without asight — the same value the kernel dials). A DRIFT (intact === false: the user changed the field, 4.8 §10.3) makes the file the truth
+  // again — the prior is then only the kernel's dial, and `status` has to draw the NEW path (W37). intact null (no record to check against) keeps the prior.
+  const use = intact === false ? priorOf({ harness, group, ctx, manifest: null }) : priorOf({ harness, group, ctx, manifest })
   const fileSource = () => {
     const e = group.proxyEntry
     const file = (e.files(ctx) || [])[0] || ''
@@ -96,8 +99,8 @@ function settingOf({ harness, group, proxy, ctx, manifest, hkcuEnv, shellSetting
     const u = parseProxyUrl(raw)
     return u ? { value: redactProxyUrl(raw), ...u, source, sha256: settingSha(raw) } : { unknown: { reason: 'unparseable', detail: 'the agent\'s own proxy setting is not an address asight can read' } }
   }
-  if (prior && Array.isArray(prior.unknown) && prior.unknown.length) return { unknown: { reason: prior.unknown[0].reason, ...(prior.unknown[0].detail ? { detail: String(prior.unknown[0].detail) } : {}) } }
-  if (prior && prior.value) return ofValue(prior.value, fileSource())
+  if (use && Array.isArray(use.unknown) && use.unknown.length) return { unknown: { reason: use.unknown[0].reason, ...(use.unknown[0].detail ? { detail: String(use.unknown[0].detail) } : {}) } }
+  if (use && use.value) return ofValue(use.value, fileSource())
   if (hkcuEnv && hkcuEnv.ok) {
     for (const name of (proxy && proxy.env) || []) {
       const raw = (hkcuEnv.values || {})[name]
@@ -257,7 +260,12 @@ export async function gatherWin32Facts(ctx, deps = {}) {
         }
         ;(forms[x.harness] = forms[x.harness] || []).push({
           id: f.id,
-          setting: settingOf({ harness: x.harness, group: x.group, proxy: x.proxy, ctx: winCtx, manifest, hkcuEnv, shellSetting: settings[x.harness] }),
+          g: x.g, // the group the form's entry lives in: `on`'s Windows plan (4.8 §11) draws one row per group, its forms together
+          // the group's own plan, for `on`'s Windows plan (4.8 §11): the upstream the kernel will dial for it (the same pure read the daemon re-runs — at plan time no port exists yet, so this is where it
+          // is had) and the two flags of its line — `envUnreadable` (the upstream was worked out from the system proxy or direct: a proxy set only in the user's terminal is invisible, §2.2's note) and
+          // `egressDiffers` (ways that went apart before now share the one upstream, Codex's WebSocket)
+          ...(r && r.upstream ? { upstream: r.upstream } : {}), ...(r && r.envUnreadable ? { envUnreadable: true } : {}), ...(r && r.egressDiffers ? { egressDiffers: true } : {}),
+          setting: settingOf({ harness: x.harness, group: x.group, proxy: x.proxy, ctx: winCtx, manifest, hkcuEnv, shellSetting: settings[x.harness], intact: entry ? entry.intact : null }),
           systemProxy: (x.group.followsSystemProxy && (x.group.followsSystemProxy.http || x.group.followsSystemProxy.ws)) ? sysFact : null,
           ...(x.group.followsSystemProxy ? { follows: { ...x.group.followsSystemProxy } } : {}),
           procs: mine, entry, optIn,
