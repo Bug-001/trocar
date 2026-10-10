@@ -80,7 +80,7 @@ row({ n: 'k', title: 'after off, an agent started while it was on is still conne
 row({ n: 'l', title: 'the user changed the agent\'s own proxy: it no longer points at the kernel and goes where the setting says', h: 'codex',
   facts: pfacts('codex', form('codex.app', { procs: [proc(5530, CODEX_PROC)], setting: proxyOf('http://proxy.new:3128', [{ kind: 'file', where: 'C:\\Users\\u\\.codex\\.env', key: 'HTTPS_PROXY' }]), entry: { where: ENV, asight: true, opt_in: false, intact: false } }), fwForm(17992, { upstream: 'http://proxy.corp:8080', source: 'agent' })),
   kinds: [['agent', 'proxy', 'egress']], forms: ['codex.app'], names: ['all'], on_path: false, captured: false, reason: 'proxy-changed', vpnLine: false,
-  compact: ['codex app-server 5530 → [.env HTTPS_PROXY] proxy.new:3128 → 出口'] })
+  compact: ['codex app-server 5530 → [.env HTTPS_PROXY] proxy.new:3128 → 出口'], notes: ['接上: asight on codex'] })
 
 row({ n: 'm', title: 'the system proxy changed its port: the kernel was reloaded, the agent\'s own setting did not change', h: 'codex',
   facts: pfacts('codex', form('codex.app', { procs: [proc(5530, CODEX_PROC)], systemProxy: sysProxy(7898), follows: { http: true, ws: false } }), fwForm(17992, { upstream: 'http://127.0.0.1:7898', source: 'system-proxy' }), viaSystemProxy(7898)),

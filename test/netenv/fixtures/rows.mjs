@@ -155,7 +155,7 @@ row({ n: 16, title: 'proxy mode: the entry is bypassed (a same-named command on 
 row({ n: 17, title: 'proxy mode: the user changed the agent\'s own proxy: it no longer points at the kernel and goes where the setting says', h: 'codex',
   facts: pfacts('codex', codexForm({ setting: proxyOf('http://proxy.new:3128', [{ kind: 'file', where: 'C:\\Users\\u\\.codex\\.env', key: 'HTTPS_PROXY' }]), entry: { where: ENV, asight: true, opt_in: false, intact: false } }), fwForm(17992, { upstream: 'http://proxy.corp:8080', source: 'agent' })),
   kinds: [['agent', 'proxy', 'egress']], on_path: false, captured: false, reason: 'proxy-changed',
-  compact: ['codex app-server 5530 → [.env HTTPS_PROXY] proxy.new:3128 → 出口'], findings: ['proxy-changed'] })
+  compact: ['codex app-server 5530 → [.env HTTPS_PROXY] proxy.new:3128 → 出口'], findings: ['proxy-changed'], notes: ['接上: asight on codex'] })
 
 row({ n: 18, title: 'proxy mode: the OS proxy changed its port: the kernel was reloaded, the agent\'s own setting did not change', h: 'codex',
   facts: pfacts('codex', codexForm({ systemProxy: sysProxy(7898), follows: { http: true, ws: false } }), fwForm(17992, { upstream: 'http://127.0.0.1:7898', source: 'system-proxy' }), viaSystemProxy(7898)),
