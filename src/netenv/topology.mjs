@@ -168,7 +168,8 @@ const vpnOf = (F) => (F.vpn ? drop({ product: F.vpn.product, version: F.vpn.vers
 
 // ── proxy mode (D43; 4.8 §10): agent → [its proxy entry, written by asight] asight's own kernel → asight's engine → the upstream the agent would have had without asight ─────────────────────────────────────────────
 // A form is one way of running a harness (codex.cli, claude-code.vscode, …). Per form the facts say: `setting` (the proxy the agent would use without asight, as of now), `systemProxy`, the `entry` it was
-// wired through ({ where, asight, opt_in, intact }) or null when it is not, `optIn` (§1.7: { state, code, enable }), `procs`; and the kernel's own `forwarder.forms[id]` ({ port, state: 'on' | 'forward-only',
+// wired through ({ where, asight, opt_in, intact }) or null when it is not, `optIn` (§1.7: { state, code, enable }), `procs`, `route` (the group's own plan: why it was left unwired — `form-unsupported`
+// is a verdict of its own, 4.8 §2.2) and `entryPlace` (where the entry lives, filled in — the doctor's commands that name the place read it, 4.8 §10.4); and the kernel's own `forwarder.forms[id]` ({ port, state: 'on' | 'forward-only',
 // upstream, source, clients, upstream_error? }) and `routeLoop` on a form it refused to wire. The upstream is what the kernel and the engine dial: the agent's own proxy, else the OS proxy a form that follows it has, else the API host direct (4.8 §2.2).
 const NOT_ROUTED = { needed: 'opt-in-needed', 'pending-admin': 'not-routed', 'needs-admin': 'not-routed' } // an opt-in waiting for the user's administrator rights leaves the form not routed; `needs-admin` is the finding that says what to run
 
@@ -184,7 +185,7 @@ function formVerdict(F, h, hf, fm, fwf) {
   // before the entry checks, like judgeHarness's own order: after a real `off` the entry record is gone from the manifest and the file holds the user's own value again, so the entry checks would
   // answer not-routed and the drain window would never be drawn (4.8 §10.2 row k / 1.6 §9.3 row 14) — what says the agent is still on the kernel is its live connection to the group's port.
   if (F.desired[h] === 'off') return none(!!(fwf && fwf.clients && fwf.clients.length), false, 'desired-off')
-  if (!fm.entry) return none(false, false, 'not-routed')
+  if (!fm.entry) return none(false, false, fm.route && fm.route.reason === 'form-unsupported' ? 'form-unsupported' : 'not-routed') // the plan's own reason names the door that would not take the group's credentialed upstream (4.8 §2.2); anything else it left unwired is not-routed, the why on the form's `route`
   if (fm.entry.intact === null) return none(null, null, null)
   if (fm.entry.intact === false) return none(false, false, 'proxy-changed')
   if (!F.forwarder || F.forwarder.up === false || !fwf) return none(true, false, 'forwarder-down')

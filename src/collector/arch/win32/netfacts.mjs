@@ -10,7 +10,8 @@
 //     the login environment, and「不知道 · env-unreadable」when the only place it is set is a variable of the terminal that started the agent — Windows reads no other process's
 //     environment, 4.8 §10.1), the OS proxy a follower reads, the entry edge ({ where, asight: true, opt_in } — intact while the file still holds the kernel's address, the same
 //     read-back `entries.check` is), the opt-in state (planOptIns' rows over the manifest) and, for a host-tree form, the host set of 4.8 §3.5 (hostSetOf over the extension's own
-//     settings — read-only);
+//     settings — read-only); plus `entryPlace` (where the group's proxy entry lives, filled in: the doctor's commands that name the place read it, 4.8 §10.4) and `route` (what the
+//     group's own plan says of it — the `why`/`detail` of a `not-routed`, the doctor's `code` for a refused protocol, `form-unsupported`: the doctor's rows split by them, 4.8 §10.4);
 //   · the processes: the helper's `ps` matched with `matchForm` (the same rule the daemon routes by), each with the elevated verdict of `elevationOf` (integrity ≥ High, or a token
 //     that will not open while the image path reads — the latter marked inferred);
 //   · the listeners: the helper's `tcp-table` LISTEN rows with their owner pid named by the snapshot; TUN: `net-if` + `route` (the interface the default route takes);
@@ -27,6 +28,7 @@ import { groupsOf, planRoutes, priorOf, hostSetOf, proxyRecordsOf } from './rout
 import { createProxyEntries } from './entries.mjs'
 import { readSystemProxy, readHkcuEnv } from './upstream.mjs'
 import { planOptIns } from './optin.mjs'
+import { reinstallCommands, mainPackage, loadPin } from './forwarder.mjs'
 import { readText, readTextOrError } from '../../core/config-read.mjs'
 import { readManifest } from '../../core/trust/journal.mjs'
 import { readStateFile } from '../../../off/state.mjs'
@@ -61,6 +63,25 @@ function entryWhereOf(group, ctx) {
   if (e.kind === 'launcher') return `开始菜单 ${e.shortcut}`
   return group.g
 }
+
+/** Where a group's proxy entry lives, filled in for a command that names the place (1.6 §9.6's 「给出入口文件与整行」; 4.8 §10.4's first row is generated from it): the file and its key for a file entry
+ * (JSON keyed or a dotenv block), the policy value, the app's own setting, the shim's command, the launcher's shortcut. Every group of the seven harness files has one, so the doctor's step never misses a place. */
+export function entryPlaceOf(group, ctx) {
+  const e = group.proxyEntry || {}
+  if (e.kind === 'file') {
+    const file = (e.files(ctx) || [])[0] || ''
+    return e.format === 'json-key' ? { kind: 'file', file, format: 'json', key: e.key.join('.') } : { kind: 'file', file, format: 'dotenv', key: e.block.urlVar }
+  }
+  if (e.kind === 'shim') return { kind: 'shim', command: e.command }
+  if (e.kind === 'policy') return { kind: 'policy', path: `${e.hive}\\${e.key}`, name: e.name }
+  if (e.kind === 'app-setting') return { kind: 'file', file: e.file(ctx), format: 'json', key: e.keys[0] }
+  if (e.kind === 'launcher') return { kind: 'launcher', shortcut: e.shortcut }
+  return { kind: group.g }
+}
+
+/** What a group's own plan says of it, for the doctor's rows (4.8 §10.4): the reason it was left unwired (`not-routed` with its `why` and `detail`, `route-loop`, `form-unsupported`), `code` the doctor's
+ *  name for it (`proxy-unsupported` for an `upstream-protocol`), `protocol` the protocol that was refused. `null` when the group is connected — nothing to say. */
+const routeOf = (r) => (!r || !r.reason ? null : { reason: r.reason, ...(r.code ? { code: r.code } : {}), ...(r.why ? { why: r.why } : {}), ...(r.detail ? { detail: r.detail } : {}), ...(r.protocol ? { protocol: r.protocol } : {}) })
 
 /** The proxy a form's agent would use without asight, as of now: the prior value of its entry (the manifest's record once asight wrote it, else the file), else the login environment's
  *  variable it reads; a proxy that lives only in a variable of the terminal that started the agent is 「不知道 · env-unreadable」 (Windows reads no other process's environment), inferred. */
@@ -237,6 +258,8 @@ export async function gatherWin32Facts(ctx, deps = {}) {
           systemProxy: (x.group.followsSystemProxy && (x.group.followsSystemProxy.http || x.group.followsSystemProxy.ws)) ? sysFact : null,
           ...(x.group.followsSystemProxy ? { follows: { ...x.group.followsSystemProxy } } : {}),
           procs: mine, entry, optIn,
+          entryPlace: entryPlaceOf(x.group, winCtx), // where the entry lives, filled in (the doctor's 「把 <h> 的代理设成…」 step names it; always there, wired or not)
+          ...(routeOf(r) ? { route: routeOf(r) } : {}), // the group's own plan: why it was left unwired, the doctor's name for it (4.8 §10.4)
           ...(fr && fr.reason === 'form-path-unknown' ? { reason: 'form-path-unknown', unknownPaths: fr.unknownPaths || [] } : {}),
           ...(fr && fr.reason === 'elevated-agent' ? { reason: 'elevated-agent', elevatedPids: fr.elevatedPids || [] } : {}),
           ...(f.hosts ? { hosts: hostSetOf({ form: f, readSettings: () => winCtx.readTextOrError(f.hosts.settings.file(winCtx)), extraHosts: (extraHosts[x.harness] || {}).extra_hosts || [] }) } : {}),
@@ -264,7 +287,11 @@ export async function gatherWin32Facts(ctx, deps = {}) {
     const forwarder = { pid: lock ? lock.pid : null, up: !lock ? false : psRows ? psByPid.has(lock.pid) : null, forms: fwForms }
 
     const listeners = (listenRows || []).map((r) => ({ addr: r.localAddr, port: r.localPort, pid: r.pid, exe: (psByPid.get(r.pid) || {}).exe ?? null }))
-    return { routing: 'proxy', listeners, procs, forwarder, forms, systemProxy: sysFact, tun, ...(vpn ? { vpn } : {}), unknowns }
+    // ---- the kernel's reinstall commands (4.8 §10.4): forwarder.mjs's own literals, computed here on the arch side from THIS build's pin — the doctor prints them, nothing runs them. The
+    // facts carry them because src/netenv reads no arch module (1.6 §9.7 / 4.8 W39's rule 6); an architecture the pin has no package for carries null (said, not guessed).
+    let reinstall = null
+    try { const a = (loadPin().assets || {})[process.arch]; if (a && a.package) reinstall = reinstallCommands({ main: mainPackage(), platformPackage: a.package }) } catch { reinstall = null }
+    return { routing: 'proxy', listeners, procs, forwarder, forms, systemProxy: sysFact, tun, ...(vpn ? { vpn } : {}), reinstall, unknowns }
   } finally {
     if (own && helper) await helper.close()
   }

@@ -10,6 +10,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { linuxNetFacts } from '../../src/collector/arch/linux/netfacts.mjs'
+import { HELPER_VERBS } from '../../src/collector/arch/win32/helper.mjs'
 import { installedViaCli, snapshot } from '../cli/fixtures/dispatch-ctx.mjs'
 import { changedFiles } from '../cli/fixtures/on-ctx.mjs'
 import { driftCheck, newDriftState } from '../../src/netenv/adopt.mjs'
@@ -21,6 +22,11 @@ const SECRETS = ['alice:pw', 's3cr3t', 'sub.example', 'HK-01']
 const ENGINE = { status: { engine: { port: 47123 } } }
 // what a status or a doctor may run: queries that only read (1.6 V50). Anything else in a run is a failure of the test.
 const READ_ONLY = new Set(['ps', 'ss', 'ip', 'gsettings', 'scutil', 'lsof', 'netstat', 'reg', 'schtasks', 'where.exe'])
+// the Windows half of the allowlist (1.6 §9.7 / 4.8 §10.4: netstat, reg query, schtasks /Query, where.exe — the OS tools the printed commands name — plus the resident helper's read verbs).
+// What `doctor` itself executes on Windows goes through the helper, so the static form of the check is: the files that talk to it on the status / doctor path only ever ask its read verbs (the verb
+// closed set itself is 4.8 §1's, held by helper.test.mjs; the adapter reaches the helper through controller.mjs's discover). `netsh`, printed for the user, is held by the live test above (never run).
+const HELPER_READ_VERBS = new Set(['version', 'ps', 'tcp-table', 'reg-read', 'net-if', 'route', 'token', 'roots', 'pipe-server'])
+const WIN_HELPER_FILES = ['src/collector/arch/win32/netfacts.mjs', 'src/collector/arch/win32/upstream.mjs', 'src/netenv/mihomo/controller.mjs']
 
 function seedVerge(home, sock) {
   const dir = path.join(home, '.local', 'share', 'io.github.clash-verge-rev.clash-verge-rev')
@@ -99,6 +105,20 @@ test('V50 the code: what the network facts run is named in a list of readers (ss
     assert.ok(!/Get-NetTCPConnection/.test(src.replace(/^\s*\/\/.*$/gm, '')), `${rel}: Get-NetTCPConnection is denied to a restricted token (4.8 E6)`)
     if (!rel.endsWith('clash.mjs')) assert.ok(!/from 'node:(net|http|https|dgram|dns|tls)'/.test(src), `${rel}: no connection of its own`)
     assert.ok(!/method:\s*'(POST|PUT|PATCH|DELETE)'/.test(src) && !/\/connections|\/logs/.test(src.replace(/^\s*\/\/.*$/gm, '')), `${rel}: no write to a controller, no /connections or /logs`)
+  }
+})
+
+test('V50 the Windows half of the allowlist, as a static scan: the resident helper is asked only its read verbs (the OS tools the Windows doctor rows print — netstat + findstr, reg query, where.exe, the PAC read — are held literal by W36 in topology-win32.test.mjs, and none of them is executed by anything here)', () => {
+  assert.deepEqual(HELPER_READ_VERBS, new Set(HELPER_VERBS), 'the scan lists exactly the helper\'s own closed verb set (helper.mjs\'s HELPER_VERBS): everything the helper accepts is a read verb (W1), so doctor-asks ⊆ read verbs')
+  for (const rel of WIN_HELPER_FILES) {
+    const src = fs.readFileSync(path.join(REPO, rel), 'utf8')
+    // `call('verb'` — the direct form (`.call('ps'`) and netfacts.mjs's local `call('ps'` closure alike, so the file that asks the most is not the one the scan sees the least of
+    for (const m of src.matchAll(/call\(\s*'([^']+)'/g)) assert.ok(HELPER_READ_VERBS.has(m[1]), `${rel}: the helper is asked '${m[1]}', which is not one of its read verbs`)
+    assert.ok(src.match(/call\(\s*'[^']+'/) !== null, `${rel}: the scan sees this file's asks (a file that reaches the helper only through a variable verb would be invisible to it)`)
+  }
+  for (const rel of ['src/netenv/findings-win32.mjs', ...WIN_HELPER_FILES]) {
+    const src = fs.readFileSync(path.join(REPO, rel), 'utf8')
+    assert.ok(!/execTool\(/.test(src), `${rel}: the Windows doctor path runs no OS tool of its own — everything goes through the helper`)
   }
 })
 
