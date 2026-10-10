@@ -42,7 +42,7 @@ test('V19: every old body (LEGACY_COMMANDS) is reached through the real `run` of
     assert.deepEqual(asked, [[name, 'x', '--y']], `${name} asks for the old body of that name`)
   }
   const failing = { io: fakeIo(), uid: 1000, platform: 'linux', deps: { runLegacy: async () => 1 } }
-  assert.equal(await runCli(['monitor', 'status'], failing), 1, 'and the exit code the body gave is the one the command leaves with')
+  assert.equal(await runCli(['serve', 'status'], failing), 1, 'and the exit code the body gave is the one the command leaves with')
 })
 
 test('V19: the names the table passes to legacy() are exactly LEGACY_COMMANDS (once each), and each has a case in the switch of legacy-commands.mjs', () => {
@@ -88,8 +88,8 @@ test('help through the dispatch: no command, `help`, `--help`, `help <command>` 
     const { exit, c } = await say(argv)
     assert.equal(exit, 0, argv.join(' ')); assert.equal(c.io.stdoutText().trim(), helpText(undefined, { platform: 'linux' })); assert.equal(c.io.stderrText(), '')
   }
-  assert.match((await say(['help'], 'darwin')).c.io.stdoutText(), /本平台\(darwin\):on \/ off 驱动按进程采集器/, 'the platform it runs on is the one help names (the flip, 4.9 §4)')
-  assert.match((await say(['help'], 'freebsd')).c.io.stdoutText(), /本平台\(freebsd\)没有按进程采集器/, 'a platform that still has no collector keeps the not-implemented line')
+  assert.match((await say(['help'], 'darwin')).c.io.stdoutText(), /本平台\(darwin\):on \/ off 驱动按进程采集器/, 'the platform it runs on is the one help names')
+  assert.match((await say(['help'], 'freebsd')).c.io.stdoutText(), /本平台\(freebsd\):on \/ off 驱动按进程采集器/, 'one wording for every platform now — a platform without a collector is named by loadArch\'s own refusal, not the help (D39⑥)')
   for (const argv of [['help', 'off'], ['off', '--help'], ['off', '-h'], ['off', '--yes', '--help'], ['serve', '--help']]) {
     const { exit, c } = await say(argv)
     assert.equal(exit, 0, argv.join(' ')); assert.equal(c.io.stdoutText().trim(), helpText(argv.includes('serve') ? 'serve' : 'off')); assert.ok(!/asight uninstall/.test(c.io.stdoutText()), 'one command only')
@@ -113,7 +113,7 @@ test('V6: an unknown command, an unknown harness, the old --proxy flag and the g
   }
   const s = sandbox(); const { io } = await s.run(['nope'])
   assert.match(io.stderrText(), /nope/); assert.match(io.stderrText(), /asight help/, 'and where the commands are listed')
-  assert.match((await sandbox().run(['on', '--proxy', 'http://127.0.0.1:8899'])).io.stderrText(), /monitor on --no-autostart/, 'the old flag gets its replacement')
+  assert.match((await sandbox().run(['on', '--proxy', 'http://127.0.0.1:8899'])).io.stderrText(), /按进程采集器不需要它/, 'the old flag is refused with its retirement said')
 })
 
 test('V20: on / off / uninstall / daemon refuse root and write nothing, the aliases too; setup-helper refuses anyone but root; help and version work as root (R7)', async () => {

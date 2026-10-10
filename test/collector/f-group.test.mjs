@@ -647,8 +647,8 @@ test('F5 WebSocket labels and the top bar, by D38 class: a call cut at the cap i
 //       class) is the F5 WebSocket test above. Response-body labels: test/web/resp-incomplete.test.mjs.
 //   F4 (the capture file itself unwritable on the daemon's path): test/collector/daemon.test.mjs "an envelope that cannot be
 //       written is a durable failure record" — record/EISDIR in flows/, and the agent still gets its reply.
-//   F8: test/capture/legacy-failures.test.mjs, legacy-run.test.mjs, legacy-ops.test.mjs (4.1 #6b); "old MITM only is not
-//       「未安装」": test/health/capture-health.test.mjs "the old capture: …".
+//   F8: the old capture's own failure events went with it (D39⑥ executed 2026-10-11); the reader half still is
+//       test/health/capture-health.test.mjs "the old capture: …" ("old MITM only is not 「未安装」").
 //   F9: test/server-capture-health.test.mjs (503, installed:false, metadata only, Host / Origin) and
 //       test/web/cap-health.test.mjs ("未刷新 · 截至 T" within 2 cycles with live unchecked).
 //   F3(c), F3(i): test/collector/arch/linux/redirector-client.unit.test.mjs (heartbeat gap, monotonic timing),

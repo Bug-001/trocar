@@ -1,25 +1,20 @@
-// test/capture/non-llm-verbatim.test.mjs — D40 through BOTH old capture paths, end to end (spec 4.1 验收 #3b / #3d / #3e /
-// #3f / #7): what an agent does besides calling the model — a telemetry batch, a file upload, a non-LLM event stream —
-// is stored verbatim, like an inference call; the bytes forwarded either way are unchanged; the cap and the log level
-// say so in the envelope. The reverse proxy talks plain HTTP to a mock upstream; the MITM terminates TLS for
-// api.anthropic.com in front of one. Same assertions, run on each.
+// test/capture/non-llm-verbatim.test.mjs — D40 end to end through the old capture path that still has a runner (spec 4.1
+// 验收 #3b / #3d / #3e / #3f / #7): what an agent does besides calling the model — a telemetry batch, a file upload, a
+// non-LLM event stream — is stored verbatim, like an inference call; the bytes forwarded either way are unchanged; the
+// cap and the log level say so in the envelope. The reverse proxy talks plain HTTP to a mock upstream. The MITM leg went
+// with src/capture/mitm.mjs (D39⑥ executed 2026-10-11) — the same envelope contract, one surviving source.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
-import https from 'node:https'
-import net from 'node:net'
-import tls from 'node:tls'
 import zlib from 'node:zlib'
 import fs from 'node:fs'
 import path from 'node:path'
 import { once } from 'node:events'
 import { createReverseProxy } from '../../src/capture/reverse-proxy.mjs'
-import { createMitmProxy } from '../../src/capture/mitm.mjs'
 import { createRetention } from '../../src/capture/retention.mjs'
 import { endpointClass } from '../../src/capture/envelope.mjs'
 import { makeClassifier } from '../../src/dissect/traffic.mjs'
 import { retentionFile } from '../../src/paths.mjs'
-import { makeCerts } from '../helpers/mitm-certs.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const listen = async (server) => { server.listen(0, '127.0.0.1'); await once(server, 'listening'); return server.address().port }
@@ -55,35 +50,7 @@ async function reverseProxyPath(opts = {}) {
   })
   return { send, envelopes, seen: up.seen, host: '127.0.0.1', capture: 'reverse-proxy', stop: () => { proxy.close(); upstream.close() } }
 }
-async function mitmPath(opts = {}) {
-  const { caCert, leaf } = makeCerts('api.anthropic.com')
-  const up = mockUpstream(); const upstream = https.createServer({ key: leaf.key, cert: leaf.cert }, up.handler); const upPort = await listen(upstream)
-  const envelopes = []
-  const proxy = createMitmProxy({ targetHost: 'api.anthropic.com', leaf, onEnvelope: (e) => envelopes.push(e),
-    connectUpstream: (_o, cb) => { const s = tls.connect({ host: '127.0.0.1', port: upPort, servername: 'api.anthropic.com', ca: caCert }, () => cb(null, s)); s.on('error', cb) },
-    blindTunnel: () => assert.fail('only the target host is decrypted'), ...opts })
-  const px = await listen(proxy)
-  const send = ({ method = 'POST', path: p, headers = {}, body }) => new Promise((resolve, reject) => {
-    const sock = net.connect(px, '127.0.0.1', () => sock.write('CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n'))
-    sock.once('data', () => {
-      const t = tls.connect({ socket: sock, servername: 'api.anthropic.com', ca: caCert }, () => {
-        const b = body === undefined ? Buffer.alloc(0) : Buffer.from(body)
-        t.write(Buffer.concat([Buffer.from(`${method} ${p} HTTP/1.1\r\nHost: api.anthropic.com\r\ncontent-length: ${b.length}\r\nconnection: close\r\n${Object.entries(headers).map(([k, v]) => `${k}: ${v}\r\n`).join('')}\r\n`), b]))
-      })
-      const cs = []; t.on('data', (d) => cs.push(d)); t.on('error', reject)
-      t.on('end', () => {
-        const raw = Buffer.concat(cs); const i = raw.indexOf('\r\n\r\n'); const head = raw.subarray(0, i).toString('latin1')
-        const status = Number(head.split(' ')[1]); const hs = Object.fromEntries(head.split('\r\n').slice(1).map((l) => { const k = l.indexOf(':'); return [l.slice(0, k).toLowerCase(), l.slice(k + 1).trim()] }))
-        let body2 = raw.subarray(i + 4)
-        if (hs['transfer-encoding'] === 'chunked') { const parts = []; let p2 = body2; while (p2.length) { const j = p2.indexOf('\r\n'); const n = parseInt(p2.subarray(0, j).toString(), 16); if (!n) break; parts.push(p2.subarray(j + 2, j + 2 + n)); p2 = p2.subarray(j + 2 + n + 2) } body2 = Buffer.concat(parts) }
-        resolve({ status, headers: hs, body: body2 })
-      })
-    })
-    sock.on('error', reject)
-  })
-  return { send, envelopes, seen: up.seen, host: 'api.anthropic.com', capture: 'mitm', stop: () => { proxy.close(); upstream.close() } }
-}
-const PATHS = [['reverse proxy', reverseProxyPath], ['MITM', mitmPath]]
+const PATHS = [['reverse proxy', reverseProxyPath]]
 const settle = () => new Promise((r) => setTimeout(r, 60))
 
 for (const [name, start] of PATHS) {
@@ -174,11 +141,14 @@ for (const [name, start] of PATHS) {
   })
 }
 
-test('MITM · K2 end to end with the real settings file: cc · telemetry = log applies to the calls that start after the edit, one second at most (D40 · K2 / K3)', async () => {
+test('K2 end to end with the real settings file: cc · telemetry = log applies to the calls that start after the edit, one second at most (D40 · K2 / K3)', async () => {
   const home = tmpDir('asight-k2-'); const file = retentionFile(home)
   let t = 10_000_000
-  const keep = createRetention({ file, now: () => t, classify: makeClassifier({ endpointClass }) })
-  const p = await mitmPath({ retention: ({ host, method, endpoint }) => keep.decide({ harness: 'cc', host, method, endpoint }) })
+  // the cc telemetry pattern is host-keyed (api.anthropic.com, src/dissect/harnesses.mjs) — a host the MITM leg produced and the
+  // reverse proxy (upstream 127.0.0.1) does not; the class is named at the seam so the cell stays about what it tests: the hot reload
+  const classify = ({ host, endpoint }) => (endpoint.startsWith('/api/event_logging') ? 'telemetry' : makeClassifier({ endpointClass })({ harness: 'cc', host, endpoint }))
+  const keep = createRetention({ file, now: () => t, classify })
+  const p = await reverseProxyPath({ retention: ({ host, method, endpoint }) => keep.decide({ harness: 'cc', host, method, endpoint }) })
   try {
     const call = async () => { await p.send({ path: '/api/event_logging/v2/batch', body: '{"e":1}' }); await settle(); return p.envelopes.at(-1) }
     const before = await call()
@@ -189,6 +159,5 @@ test('MITM · K2 end to end with the real settings file: cc · telemetry = log a
     assert.deepEqual([after.body_retention, after.req_body], ['log', { raw_chars: 7, verbatim: false }])
     await p.send({ path: '/v1/messages', body: '{"model":"m"}' }); await settle()
     assert.equal(p.envelopes.at(-1).req_body, '{"model":"m"}', 'another class keeps its body')
-    assert.equal(p.envelopes.at(-1).host, 'api.anthropic.com')
   } finally { p.stop() }
 })

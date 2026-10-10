@@ -9,12 +9,13 @@
 // mistakes the absence of a Windows installer for coverage — same discipline as relay-tee's X.
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
-import { LEGACY_CA_CN, LEGACY_CA_NICKNAME, caRemoveArgv } from '../off/legacy.mjs'
 
-// CA subject CN — "/CN=atrace local MITM CA". (The name and the removal command live in src/off/legacy.mjs: `asight off` removes the CA with the same argv.)
-export const CA_CN = LEGACY_CA_CN
+// CA subject CN — "/CN=atrace local MITM CA" (a legacy name, not to be renamed: a root
+// already in a keychain is found by it). The names and the removal argv lived in src/off/legacy.mjs from Task 10 until the
+// old capture retired (D39⑥ executed 2026-10-11); they came back here, beside the installers that use them.
+export const CA_CN = 'atrace local MITM CA'
 // NSS nickname the CA is registered under (Linux).
-export const CA_NICKNAME = LEGACY_CA_NICKNAME
+export const CA_NICKNAME = 'asight-ca'
 
 // Default runner: run a command, capture status/stdout/stderr, NEVER throw on nonzero exit (a nonzero exit is data
 // for the caller). A command that could not be run at all (ENOENT: not on PATH) has status null and its `error` code.
@@ -53,7 +54,7 @@ export function darwinInstaller({ run = defaultRun, keychain } = {}) {
   const kc = keychain || path.join(process.env.HOME || '', 'Library/Keychains/login.keychain-db')
   const installArgv = (caPath) => ({ file: 'security', args: ['add-certificates', '-k', kc, caPath] })
   const verifyArgv = () => ({ file: 'security', args: ['find-certificate', '-c', CA_CN, kc] })
-  const uninstallArgv = () => caRemoveArgv({ platform: 'darwin', keychain: kc })
+  const uninstallArgv = () => ({ file: 'security', args: ['delete-certificate', '-c', CA_CN, kc] })
   return {
     platform: 'darwin', keychain: kc,
     installArgv, verifyArgv, uninstallArgv,
@@ -72,7 +73,7 @@ export function linuxInstaller({ run = defaultRun, nssdb } = {}) {
   const D = `sql:${db}`
   const installArgv = (caPath) => ({ file: 'certutil', args: ['-A', '-d', D, '-n', CA_NICKNAME, '-t', 'C,,', '-i', caPath] })
   const verifyArgv = () => ({ file: 'certutil', args: ['-L', '-d', D, '-n', CA_NICKNAME] })
-  const uninstallArgv = () => caRemoveArgv({ platform: 'linux', nssdb: db })
+  const uninstallArgv = () => ({ file: 'certutil', args: ['-D', '-d', D, '-n', CA_NICKNAME] })
   return {
     platform: 'linux', nssdb: db,
     installArgv, verifyArgv, uninstallArgv,

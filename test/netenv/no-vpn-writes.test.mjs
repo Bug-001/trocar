@@ -78,8 +78,8 @@ test('N15 (a) a module that names a product data directory, or sits in src/neten
   assert.ok(SOURCES.filter((f) => !isOldCapture(rel(f))).length > 50, 'and the exemption is the old capture\'s, not the tree\'s: the scan still sees the rest of src/')
 })
 
-// What the CLI branch's two writers look like (src/off/legacy.mjs: the old capture's undo, which names Verge's data directory; src/netenv/index.mjs: the one writer of ~/.asight/netenv.json). Excerpts, so this
-// branch pins the rule before the files arrive with the merge (Order step 11): the names, the receivers and the directory string are theirs.
+// What the old capture's undo looked like (the shape src/off/legacy.mjs had: it names Verge's data directory; the file went with the old capture, D39⑥ executed 2026-10-11 —
+// the excerpt stays as the shape the exemption must cover in the files that remain) and what the one writer of ~/.asight/netenv.json looks like (src/netenv/index.mjs).
 const OLD_UNDO = [
   "import nodeFs from 'node:fs'",
   'export function legacyPaths({ home }) {',
@@ -108,21 +108,19 @@ const NETENV_WRITER = [
   '}',
 ].join('\n')
 
-test('N15 (a) the CLI branch\'s two writers are known: the old capture\'s undo is exempt as a file of the old capture, `writeNetenv` is the one named helper of src/netenv, and neither opens a door elsewhere', () => {
-  assert.deepEqual(violations('src/off/legacy.mjs', OLD_UNDO), [], 'src/off/legacy.mjs names Verge\'s directory and writes: the old capture\'s own (D43, 4.7 §4: its Clash block is booked by 1.6 §4 and §6)')
-  assert.deepEqual(violations('src/off/legacy-cli.mjs', OLD_UNDO), [])
-  assert.deepEqual(violations('src/capture/desktop-steer.mjs', OLD_UNDO), [])
+test('N15 (a) the writers are known: the old capture\'s remaining files are exempt as files of the old capture, `writeNetenv` is the one named helper of src/netenv, and neither opens a door elsewhere', () => {
+  assert.deepEqual(violations('src/capture/desktop-steer.mjs', OLD_UNDO), [], 'src/capture/desktop-steer.mjs names Verge\'s directory and writes: the old capture\'s own (D43, 4.7 §4; the src/off/legacy*.mjs leg of the exemption went with those files, D39⑥ executed 2026-10-11)')
   assert.equal(violations('src/off/win32.mjs', OLD_UNDO).length, 3, 'the same text in a new module is three writes')
   assert.equal(violations('src/collector/arch/win32/forwarder.mjs', OLD_UNDO).length, 3)
   assert.deepEqual(violations('src/netenv/index.mjs', NETENV_WRITER), [], 'the CLI\'s writer of ~/.asight/netenv.json is `writeNetenv` (4.7 N15 names it)')
   assert.equal(violations('src/netenv/index.mjs', NETENV_WRITER.replace('writeNetenv', 'persist')).length, 5, 'any other name is five writes in src/netenv')
 })
 
-test('N15 (a) the old-capture exemption is a pinned list of two: src/capture/ and the src/off/legacy*.mjs files, and nothing that only looks like them', () => {
-  assert.equal(OLD_CAPTURE.length, 2, 'one more entry is a decision, taken here and in 4.7 N15, not a drive-by')
-  for (const f of ['src/capture/desktop-steer.mjs', 'src/capture/deep/x.mjs', 'src/off/legacy.mjs', 'src/off/legacy-cli.mjs']) assert.ok(isOldCapture(f), f)
-  for (const f of ['src/off/clash.mjs', 'src/off/win32.mjs', 'src/off/win32-optin.mjs', 'src/off/legacy/x.mjs', 'src/off/legacy.mjs.bak', 'src/off/xlegacy.mjs', 'src/netenv/legacy.mjs', 'src/netenv/index.mjs',
-    'src/capturer/x.mjs', 'src/collector/capture/x.mjs', 'src/collector/arch/win32/forwarder.mjs', 'test/off/legacy.mjs']) assert.ok(!isOldCapture(f), f)
+test('N15 (a) the old-capture exemption is a pinned list of one — src/capture/ — and nothing that only looks like it (the src/off/legacy*.mjs leg went with the files, D39⑥ executed 2026-10-11)', () => {
+  assert.equal(OLD_CAPTURE.length, 1, 'one more entry is a decision, taken here and in 4.7 N15, not a drive-by')
+  for (const f of ['src/capture/desktop-steer.mjs', 'src/capture/deep/x.mjs']) assert.ok(isOldCapture(f), f)
+  for (const f of ['src/off/clash.mjs', 'src/off/win32.mjs', 'src/off/win32-optin.mjs', 'src/off/legacy.mjs', 'src/off/legacy-cli.mjs', 'src/off/legacy/x.mjs', 'src/off/legacy.mjs.bak', 'src/off/xlegacy.mjs', 'src/netenv/legacy.mjs', 'src/netenv/index.mjs',
+    'src/capturer/x.mjs', 'src/collector/capture/x.mjs', 'src/collector/arch/win32/forwarder.mjs', 'test/off/legacy.mjs']) assert.ok(!isOldCapture(f), `${f}: a future file of that name is scanned, not exempted by a glob whose files are gone`)
 })
 
 test('N15 (a) planted counter-example: a module that writes a Verge path is red; so is a write in any other helper of src/netenv, and the same code in an allowlisted helper is not', () => {

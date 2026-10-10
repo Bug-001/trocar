@@ -2,7 +2,7 @@
 // what the collector stores of a call that is NOT an inference call, and what the retention level does to it. The unit
 // halves are in exchange.test.mjs (sampling, wire counts, the cap), record.test.mjs and ws-recorder.test.mjs; this file proves
 // the wiring: handleFlow hands ctx.retention to the tee, the bytes forwarded are untouched, and the envelope that lands is
-// the shape the old capture paths write for the same call (4.1 #3d, 4.6 T16 / W16 / K2).
+// the shape the old capture path that survives writes for the same call (4.1 #3d, 4.6 T16 / W16 / K2).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import net from 'node:net'; import tls from 'node:tls'
@@ -74,29 +74,6 @@ test('K2 through the engine: the class and level the daemon\'s callback names ar
   assert.deepEqual([b.req_body, 'body_retention' in b, b.traffic_class, b.resp.body], ['{"keep":1}', false, 'other', { accepted: true }])
 })
 
-test('K2 parity: the collector and the old MITM write the same shape for the same call at the log level (only `capture` and the collector\'s own fields differ)', async () => {
-  const { createMitmProxy } = await import('../../../src/capture/mitm.mjs')
-  const { makeCerts } = await import('../../helpers/mitm-certs.mjs')
-  const { caCert, leaf } = makeCerts('api.anthropic.com')
-  const body = JSON.stringify({ events: ['z'.repeat(100)] })
-  const asTelemetry = () => ({ class: 'telemetry', level: 'log' })
-  // the collector
-  const h = await rig({ respond: resp200, retention: asTelemetry })
-  await h.call(req('/api/event_logging/v2/batch', body, 'Authorization: Bearer k\r\n')); await h.close()
-  // the old MITM, in front of an https upstream that answers the same bytes
-  const up = (await import('node:https')).createServer({ key: leaf.key, cert: leaf.cert }, (rq, rs) => { rq.resume(); rq.on('end', () => { rs.writeHead(200, { 'content-type': 'application/json', 'request-id': 'rid_7' }); rs.end(JSON_RESP) }) })
-  const upPort = await listen(up)
-  const old = []
-  const mitm = createMitmProxy({ targetHost: 'api.anthropic.com', leaf, retention: asTelemetry, onEnvelope: (e) => old.push(e), blindTunnel: () => {},
-    connectUpstream: (_o, cb) => { const s = tls.connect({ host: '127.0.0.1', port: upPort, servername: 'api.anthropic.com', ca: caCert }, () => cb(null, s)); s.on('error', cb) } })
-  const px = await listen(mitm)
-  await new Promise((resolve, reject) => {
-    const sock = net.connect(px, '127.0.0.1', () => sock.write('CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n'))
-    sock.once('data', () => { const t = tls.connect({ socket: sock, servername: 'api.anthropic.com', ca: caCert }, () => t.write(req('/api/event_logging/v2/batch', body, 'Authorization: Bearer k\r\n').toString('latin1').replace('telemetry.example.test', 'api.anthropic.com'))); t.on('data', () => {}); t.on('end', resolve); t.on('error', reject) })
-  })
-  await new Promise((r) => setTimeout(r, 60)); mitm.close(); up.close()
-  const [c] = h.envelopes, [m] = old
-  const comparable = (e) => ({ keys: Object.keys(e).filter((k) => !['scheme', 'dst', 'proc', 'flow_id', 'seq', 'req_head_raw', 'resp_head_raw', 'host'].includes(k)).sort(), req_body: e.req_body, body_retention: e.body_retention, traffic_class: e.traffic_class, body_wire_bytes: e.body_wire_bytes,
-    resp: { ...e.resp, headers: Object.fromEntries(Object.entries(e.resp.headers).filter(([k]) => ['content-type', 'request-id'].includes(k))) } })
-  assert.deepEqual(comparable(c), comparable(m))
-})
+// K2 parity with the old MITM went with src/capture/mitm.mjs (D39⑥ executed 2026-10-11): the second leg of the
+// comparison is gone, and the collector's own shape is what the cells above pin. The parity that still matters — the old
+// capture path that survives writes the same envelope contract — is test/capture/non-llm-verbatim.test.mjs.

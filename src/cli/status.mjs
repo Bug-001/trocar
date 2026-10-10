@@ -29,9 +29,6 @@ import { buildTopology, renderPathBlock, renderDetail } from '../netenv/topology
 import { optInOf, applyEntryCheck } from './schema.mjs'
 import { diagnose } from '../netenv/findings.mjs'
 import { captureHealth } from '../health/read.mjs'
-import { legacyArtifacts, hasNewCollector } from '../off/legacy.mjs'
-import { legacyNamesProblem } from '../off/legacy-cli.mjs'
-import { judgeLegacy, legacyStatusLines, legacyStatusJson } from './legacy-status.mjs'
 import { trustReasonText } from '../collector/core/codes.mjs'
 import { formatStatus, formatHealth } from '../collector/cli.mjs'
 
@@ -260,30 +257,15 @@ const failedIn24h = (h) => !!h && [h.collector && h.collector.failures, h.legacy
 
 const USAGE = 'usage: asight status [harness…] [--json]'
 
-// A platform without the new collector (freebsd and the rest: 1.6 §4): the old capture is what `on` / `off` drive there, and `status` judges it as claude-code's Desktop and CLI rows (src/cli/legacy-status.mjs),
-// then prints the old capture's own health and the VPN software. `deps.legacyStatus` replaces all of it (a test's). A read that failed is 不知道 and exit 3, never a pass (R11).
-async function legacyStatus(argv, { io, env, home, platform, deps, json }) {
-  if (deps.legacyStatus) return deps.legacyStatus(argv, { io, env, home, platform, deps })
-  const fs = deps.fs || nodeFs
-  let health = null, error = null
-  try { health = deps.captureHealth ? deps.captureHealth({ home: asightHome(home) }) : captureHealth({ home: asightHome(home), fs }) } catch (e) { rethrowSandbox(e); error = errMessage(e) }
-  let art = null, artError = null
-  try { art = await legacyArtifacts({ home, platform, exec: deps.exec || null, fs, env, mihomo: deps.mihomo || {}, live: true }) } catch (e) { rethrowSandbox(e); artError = errMessage(e) }
-  const j = art ? judgeLegacy(art, { home }) : null
-  const exit = error || artError || (j && j.unreadable) ? EXIT.unknown : failedIn24h(health) || (j && j.failing) ? EXIT.incomplete : EXIT.ok
-  const netenv = await lookAtNetenv({ home, platform, env, deps }) // §6: the VPN software is looked at on every platform, not only where the new collector runs
-  if (json) { io.out(JSON.stringify({ ...newReceipt('status'), ok: exit === EXIT.ok, platform, note: 'this platform has no new collector: the old capture is what on / off drive here', relayed_reason: 'the old capture does not report how many connections still go through its MITM: it counts them when it stops (the mitm-stop line), not while it runs', ...(j ? { harnesses: legacyStatusJson(j), legacy: { ca: j.ca.present, ledger: j.ledger } } : { legacy_error: artError }), ...(health ? { health } : { health_error: error }), netenv: netenv.result || { error: netenv.error }, ...(netenv.write_error ? { netenv_write_error: netenv.write_error } : {}) }, null, 2)); return exit }
-  io.out(`本平台(${platform})还没有新采集器:这里 asight on / off 驱动旧采集(过渡期,1.6 §4)。`)
-  for (const l of j ? legacyStatusLines(j, { home }) : [`旧采集的状态读不出来: 不知道(${artError})`]) io.out(l)
-  io.out('下面是旧采集与原始层的健康:')
-  for (const l of health ? formatHealth(health) : [`capture health could not be read: ${error}`]) io.out(l)
-  for (const l of [...netenvText(netenv, { platform }), ...netenvWriteText(netenv)]) io.out(l)
-  return exit
-}
+// The old capture's own status branch — the platform gate and the claude-code Desktop/CLI rows of src/cli/legacy-status.mjs — went
+// with the old capture (D39⑥ executed 2026-10-11). Every platform runs the collector's status; a platform without a collector
+// reads the same facts and finds nothing installed. What the old capture left on a machine still shows in the health rows
+// (src/health/read.mjs reads ~/.asight/logs/mitm-events.ndjson) and is cleaned by hand (README).
+
 /** → the exit code (R4). `argv` is what follows `status`. `io` = { out, err } (src/off/io.mjs makeIo). */
 export async function runStatusCli(argv, ctx = {}) { return (await statusRun(argv, ctx)).exit }
 
-/** `runStatusCli` that also hands back what it read: `{ exit, f }` (`f`: the facts of gatherStatus with `facts` / `topology` on them; null where the old capture is judged instead). `doctor` reads the same facts for its findings, so the daemon
+/** `runStatusCli` that also hands back what it read: `{ exit, f }` (`f`: the facts of gatherStatus with `facts` / `topology` on them). `doctor` reads the same facts for its findings, so the daemon
  *  is asked once and the topology it prints and the one it diagnoses are the same object. */
 export async function statusRun(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
   const names = []
@@ -295,11 +277,6 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
   }
   const named = resolveHarnesses(names)
   if (!named.ok) { io.err(`asight status: unknown harness ${named.unknown.join(', ')}; the names are: ${named.known.join(', ')}`); return { exit: EXIT.usage, f: null } }
-  if (!(deps.hasNewCollector || hasNewCollector)(platform)) { // 1.6 §4: no new collector here; only claude-code has an old capture; deps.hasNewCollector is the seam the old capture's own tests inject (the darwin flip, 4.9 §4)
-    const problem = legacyNamesProblem(named.ids)
-    if (problem) { io.err(`asight status: ${problem}`); return { exit: EXIT.usage, f: null } }
-    return { exit: await legacyStatus(argv, { io, env, home, platform, deps, json }), f: null }
-  }
   const f = await gatherStatus({ home, env, deps: { ...deps, platform }, names: named.ids, record: false })
   Object.assign(f, await gatherTopology(f, { home, env, platform, deps }))
   recordNetenv(f, { home, deps })

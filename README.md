@@ -54,19 +54,17 @@ npm install
 ln -sf "$PWD/bin/asight.mjs" ~/.local/bin/asight    # or: npm link
 ```
 
-**1. Start the tap** — a plain local HTTP server that forwards to the real API and records a side-copy:
+**1. Start the tap** — the per-user process collector (Linux · Windows · macOS; the plan is printed first, and the first `on` asks before it changes anything):
 
 ```sh
-asight capture --port 8899          # writes into ~/.asight/, where the board looks by default
-# OpenAI-shaped wire (Codex / OpenCode) — --raw-sse is REQUIRED or the streamed reply is lost:
-asight capture --port 8899 --target https://api.openai.com --raw-sse
+asight on                    # writes into ~/.asight/collector/, where the board looks by default
+asight on --no-unit          # no autostart: run the daemon yourself with `asight daemon`
 ```
 
-**2. Point one agent at it.** For Codex / OpenCode, set the provider's base URL to
-`http://127.0.0.1:8899` — no CA, no proxy manager, no system change, nothing outside that one config
-file. For Claude Code CLI, `asight monitor on --no-autostart` writes the steer for you (see *What it touches* below).
+On Linux `on` is the install plus one `sudo asight setup-helper` per machine (see *What it touches*
+below). Agents started before `on` keep going direct until you restart them — `status` names them.
 
-**3. Look at it.**
+**2. Look at it.**
 
 ```sh
 asight serve          # → http://127.0.0.1:9800
@@ -77,8 +75,10 @@ Everything asight writes lives under `~/.asight/`. Captures made before 2026-07-
 session (the older `atrace` name was this project's v0 prototype).
 
 No ETL, no database, no build step — the board reads the NDJSON directly. With no `--source` it reads
-the capture directory every tap writes into, so **Claude Code, Codex and OpenCode sessions appear side
-by side on one board**. It also reads the per-user process collector's `~/.asight/collector/capture-*.ndjson`
+the capture directory, so **Claude Code, Codex and OpenCode sessions appear side
+by side on one board** (`asight shard` groups the older capture streams by session into
+`~/.asight/sessions/`, which the board and `asight raw seal` also read). It also reads the per-user
+process collector's `~/.asight/collector/capture-*.ndjson`
 when that directory exists (its `flows/`, `audit/` and `replays/` are not envelopes and are not shown).
 Pass `--source <file|dir>` to look somewhere else.
 
@@ -137,16 +137,10 @@ cross-session SQL. The board works fine without it.
 
 ## What it touches, and what lands on disk
 
-`asight monitor on` (the Claude Code CLI steer of the old capture; before D39 this was `asight on`) arranges a
-local, observe-only tap **on your user account only**. It never changes your system proxy, never adds
-machine-wide trust, never needs root. Exactly four things:
-
-| what | where | undo |
-|---|---|---|
-| capture CA (generated once) | `~/.asight/ca/` | `monitor off --remove-ca` takes the trust entry below out; the files stay (a Mac's `asight uninstall` deletes the directory) |
-| CA trust, **user-level only** | macOS login keychain / Linux `~/.pki/nssdb` — never the machine store | `monitor off --remove-ca` (symmetric removal) |
-| CC-CLI steer | `HTTPS_PROXY` + `NO_PROXY` in `~/.claude/settings.json` | `monitor off` clears it |
-| autostart (optional) | user LaunchAgent `com.asight.monitor` — never a machine daemon | `monitor off` unloads + deletes it |
+`asight on` arranges a local, observe-only tap **on your user account only**. It never changes your
+system proxy, never adds machine-wide trust, never needs root (Linux's one-time `setup-helper` is the
+only `sudo`, and it only sets capability bits on one root-owned file). What it changes, file by file,
+is in the table further down; `off` takes every entry back out.
 
 `asight doctor` answers four questions: am I capturing, is it correct, did credentials leak, is machine
 TLS intact — the last one is what `verify` used to be (the CA is user-level only, with zero machine-wide trust).
@@ -201,10 +195,8 @@ one). The forms that reach further are opt-in, each named with what it touches �
 login keychain (`security add-trusted-cert` in the user domain — the OS's own authorization dialog
 carries the consent; found and removed by its SHA-256 fingerprint, never the common name). `asight off`
 runs the same undo: the LaunchAgent booted out before the daemon is stopped (launchd's `KeepAlive`
-really does pull a killed daemon back), every entry and opt-in item taken out — and also whatever the
-old capture left on the machine, which `off` now takes out through the same legacy arm Linux has. The
-old capture's own commands (`desktop`, `monitor`, `capture`, `mitm`) keep working for the transition;
-when the new collector passes its acceptance on your machine, the old one retires.
+really does pull a killed daemon back), every entry and opt-in item taken out. The old capture's own
+commands (`desktop`, `monitor`, `capture`, `mitm`) are gone — see *The old capture is retired* below.
 
 What it keeps (D40): for a trusted agent it decrypts **every** host it talks to by default (policy `all`), not just the
 model API, and stores every call verbatim — telemetry, uploads, account calls, session sync, downloads — so you can see
@@ -291,23 +283,42 @@ plaintext and credentials as the capture and are created owner-only (0600); `asi
 
 ## Claude Desktop — the one environment-dependent case
 
-Desktop force-overwrites its base URL and ignores `settings.json`, so it cannot be steered by config.
-Its capture rides a single scoped rule in **Clash Verge on macOS** routing only
-`claude-code → api.anthropic.com` into a local MITM that TLS-terminates that one host and
-blind-tunnels every other:
+Desktop ignores `settings.json`, so its trust does not ride the CLI's entry. On macOS the collector
+reaches it through the opt-in form that puts the collector's certificate in your **login keychain**
+(user domain, `security add-trusted-cert`; the OS's own dialog carries the consent, asight never draws
+a password field), and its connections are captured like any other agent's — no VPN software is
+involved:
 
 ```sh
-asight on                      # macOS: splice the scoped Clash rule, install the resident MITM (:9898) and its CA-trust primer — it lists them, backs Script.js up first and asks
-asight off                     # takes all of it out again (and the Claude Code CLI steer and the old CA, if they are there)
+asight on claude-code --opt-in desktop-keychain   # named in the plan with what it touches; off takes it out again by fingerprint
 ```
 
-`asight desktop on` / `off` are the old commands for the same arrangement (no plan, no backup copy). The MITM that
-`desktop on` installs listens on :9898 as a LaunchAgent; `asight mitm` (default :9899) is the one you start by
-hand, and needs the same `--port` as `desktop on` if the rule is to point at it.
+(The retired route — a Clash Verge rule into a local MITM — is described in *The old capture is
+retired* below; machines it is still installed on are cleaned by hand.)
 
-This **requires that you already run Clash Verge**. If you don't, Desktop capture is not available on
-your machine — every path above still is. `asight off` takes the rule's block, the MITM and the primer out
-again — the block only: the rest of your Script.js stays as it is.
+## The old capture is retired (2026-10-11)
+
+The v0→product transition capture — the base_url reverse proxy, the MITM, the Clash Verge steer,
+and the CC-CLI steer (the `capture` / `mitm` / `desktop` / `monitor` commands) —
+is gone: the per-process collector serves Linux, Windows and macOS, and every `asight on` / `off` /
+`status` / `uninstall` drives it. Captures those tools wrote are **still read** (they are the source
+truth; the board lists them beside the collector's), and the board's 监测 toggle keeps steering only
+the old CC-CLI steer until the 4.4 control plane is reworked — it is labelled 「只管旧 CC-CLI steer」.
+
+`asight off` and `asight uninstall` no longer undo what the old capture left on a machine. If an old
+capture is still installed there, take it out by hand (check with `asight doctor --only old-ca` and
+`asight status`; `~/.asight/logs/mitm-events.ndjson` is its log):
+
+```sh
+launchctl bootout gui/$(id -u)/com.asight.mitm   # the resident MITM; likewise com.asight.monitor and com.asight.env
+security delete-certificate -c 'atrace local MITM CA' ~/Library/Keychains/login.keychain-db   # the old CA (by its legacy name)
+launchctl unsetenv NODE_EXTRA_CA_CERTS           # the login-environment CA variable the env primer set
+```
+
+On Linux the old CA sits in your NSS database: `certutil -D -d sql:$HOME/.pki/nssdb -n asight-ca`.
+The old CC-CLI steer (`HTTPS_PROXY` / `NO_PROXY` in `~/.claude/settings.json`) and the Clash block in
+Verge's `Script.js` are yours to revert the same way they were written; v0 leftovers
+(`com.atrace.serve`, `~/.local/share/atrace`, `.atrace-bak`) are only ever reported, never touched.
 
 ## Limits
 
@@ -342,7 +353,7 @@ again — the block only: the rest of your Script.js stays as it is.
 
 ## Commands
 
-`asight help` prints the same, in four sections; `asight help <command>` says one command.
+`asight help` prints the same, in three sections; `asight help <command>` says one command.
 
 ```sh
 # common
@@ -355,6 +366,7 @@ asight doctor [harness…] [--source <ndjson|dir>] [--json]
 # data
 asight serve [--port 9800] [--source <ndjson|dir>] [--db <path>] [--control]
 asight etl <ndjson|sealed|dir> [--db <path>] [--rebuild]
+asight shard [<ndjson>] [--out <dir>] [--watch] [--interval <s>]   # group a capture stream by session into ~/.asight/sessions/
 asight keep [<harness|all> <class|all> <full|log>] [--db <store>] [--json]   # what is kept of each call: show the levels and sizes, or set one (no daemon needed)
 asight raw export <session-id|file.sealed> [--out <dir|file>] | journal [--tail <n>]
 
@@ -364,13 +376,6 @@ asight raw verify <sealed|dir> [--against <original>] | compare <dir> [--list]
 sudo asight setup-helper [--binary <path>] [--remove]   # Linux, once per machine
 asight daemon                                           # the daemon in the foreground; the autostart unit runs it
 asight help [command]
-
-# the old capture (transitional; each is on its way out)
-asight capture [--port 8899] [--target <url>] [--out <ndjson>] [--upstream <proxy>] [--raw-sse]
-asight mitm [--port 9899] [--host api.anthropic.com]
-asight desktop {on|off|status} [--port 9898]        # macOS + Clash Verge
-asight monitor {on|off|status}                      # the Claude Code CLI steer; on --no-autostart, off --remove-ca
-asight shard [<ndjson>] [--out <dir>] [--watch]
 ```
 
 Exit codes: 0 done · 1 not done, or a problem was found · 2 a usage error (nothing was touched) · 3 `status` /

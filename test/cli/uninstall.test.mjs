@@ -180,10 +180,6 @@ test('uninstall: the result line follows the exit code — a state.json that can
   const lastA = flowEvents(a.dir).at(-1)
   assert.deepEqual([lastA.kind, lastA.outcome], ['result', 'failed'])
   assert.match(lastA.reason, /uninstall did not finish: state\.json could not be written/)
-  const b = await installedHome({ names: ['claude-code'] })
-  const rb = await b.uninstall({ yes: true, deps: { legacyUndo: async () => ({ problems: ['the old capture\'s Clash block could not be removed'] }) } })
-  assert.equal(rb.exit, 1)
-  assert.equal(flowEvents(b.dir).at(-1).outcome, 'failed')
   const c = await installedHome({ names: ['claude-code'] })
   assert.equal((await c.uninstall({ yes: true })).exit, 0)
   assert.equal(flowEvents(c.dir).at(-1).outcome, 'uninstalled')
@@ -361,14 +357,11 @@ test('uninstall: the arguments — a harness name, an unknown option, root and a
   assert.deepEqual([flag.exit, snapshot(s.home)], [2, snap]); assert.match(flag.io.stderrText(), /unknown option --now/)
   const root = await cli(s, [], { deps: { getuid: () => 0 } })
   assert.deepEqual([root.exit, snapshot(s.home)], [1, snap]); assert.match(root.io.stderrText(), /不要用 root \/ sudo/)
-  const hooked = []
-  const bsd = await cli(s, ['--yes'], { platform: 'freebsd', deps: { legacyUninstall: async (argv) => { hooked.push(argv); return 4 } } })
-  assert.deepEqual([bsd.exit, hooked, snapshot(s.home)], [4, [['--yes']], snap])
-  // without the hook a platform without the new collector runs the old capture's own uninstall: test/cli/legacy-uninstall.test.mjs
-  // the flips (plan 9(b), then 4.9 §4): win32 and darwin no longer go there — each runs the NEW uninstall (the receipt is the new one's), and the legacy hook is not what runs
-  for (const platform of ['win32', 'darwin']) {
+  // D39⑥ executed 2026-10-11: the old capture's own uninstall went with it — every platform (win32 and darwin included, and a
+  // platform with no collector at all) runs the NEW uninstall; there is no legacy hook any more.
+  for (const platform of ['win32', 'darwin', 'freebsd']) {
     const w = await installedHome({ names: ['claude-code'] })
-    const r = await cli(w, ['--yes'], { platform, deps: { legacyUninstall: async () => { throw new Error(`${platform} must not run the legacy uninstall any more`) } } })
+    const r = await cli(w, ['--yes'], { platform })
     assert.equal(r.exit, 0, `${platform}: ${r.io.text()}`)
     assert.match(r.io.stdoutText(), /^asight 已卸载\(本用户\)。/, `${platform}: the NEW uninstall ran`)
     assert.equal(fs.existsSync(path.join(w.dir, 'install-manifest.json')), false, `${platform}: and finished: asight\'s own files are gone`)

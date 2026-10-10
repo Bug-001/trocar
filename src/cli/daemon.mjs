@@ -1,7 +1,7 @@
 // daemon.mjs — `asight daemon` (RFC 1.6 §2, R4, R7; 4.6 §控制面): the per-user collector daemon in the foreground until SIGTERM / SIGINT / SIGHUP / SIGQUIT, or until it has stopped itself (after an `off` with no
 // names, once nothing is relayed). `--supervise` (win32, 4.8 §7) is the other mode: the scheduled task runs it — the supervisor parent that pulls the real `node <asight> daemon` and re-pulls it on a non-zero
 // exit; it owns no crash records (stderr only), so that mode returns as soon as arch.runSupervisor does. The autostart unit's ExecStart is this command; `asight collector start` is its old name (a hidden alias, §2: units already installed run it). Exit codes (R4): 0 stopped
-// cleanly · 1 refused (as root, on a platform without the new collector, the daemon would not start) or a step of the stop failed · 2 a usage error · 70 an uncaught exception or rejection, recorded as a
+// cleanly · 1 refused (as root) or a step of the stop failed · 2 a usage error · 70 an uncaught exception or rejection, recorded as a
 // `crash` first. Everything the world gives is a `deps` entry a test replaces (0.1 §3): `daemon` (the module with `startDaemon`; the real one is src/collector/daemon.mjs) or `startDaemon` itself, `waitForStop`,
 // `proc` (the process whose uncaught errors are caught), `exit`, `getuid`.
 import os from 'node:os'
@@ -9,7 +9,6 @@ import path from 'node:path'
 import { EXIT } from './schema.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { collectorHome } from '../paths.mjs'
-import { hasNewCollector } from '../off/legacy.mjs'
 
 const USAGE = 'usage: asight daemon [--supervise]'
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
@@ -30,7 +29,6 @@ export async function runDaemonCli(argv, { io, env = process.env, home = os.home
   const supervise = argv.length === 1 && argv[0] === '--supervise'
   if (argv.length && !supervise) { io.err(`asight daemon: takes no arguments (${argv.join(' ')})\n${USAGE}`); return EXIT.usage }
   if ((deps.getuid || processUid)() === 0) { io.err('asight daemon: 用你自己的账号跑,不要用 root / sudo(D36)'); return EXIT.incomplete }
-  if (!(deps.hasNewCollector || hasNewCollector)(platform)) { io.err(`asight daemon: 本平台未实现(${platform}):按进程采集器只有 Linux(4.6)、Windows(4.8)和 macOS(4.9)有;本平台旧采集的 on / off 照旧(1.6 §4)`); return EXIT.incomplete }
   const proc = deps.proc || process
   const dir = collectorHome(path.join(home, '.asight'))
   if (supervise) { // the supervisor owns no crash records of its own (4.8 §7: stderr only — under conhost --headless, nowhere), so the branch below is untouched

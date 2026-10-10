@@ -6,14 +6,14 @@
 //      would be refused, §1.5): a daemon that answers is told `POST /off` and its reply is the confirmation; a stuck or starting one is stopped first (step
 //      5 of §1.4) and the helper is checked gone; an absent one needs its helper gone. Unconfirmed → the entries are left alone, exit 1 — except a daemon
 //      that cannot be stopped: its entries are undone all the same (the new connections are direct by its stale heartbeat), exit 1, the pid is given
-//   4  the entries: by the manifest (undoHarnesses), or, with no readable manifest, by asight's own marks (planByMarker) after a yes (R3); the old capture's
-//      leftovers of claude-code through `deps.legacyUndo` (Task 10); 5.1's held requests through `deps.releaseHeld` (5.1 is not built: a seam)
+//   4  the entries: by the manifest (undoHarnesses), or, with no readable manifest, by asight's own marks (planByMarker) after a yes (R3);
+//      5.1's held requests through `deps.releaseHeld` (5.1 is not built: a seam)
 //   5  with no names: the autostart is disabled and the daemon was asked to exit once drained — systemd's disable on Linux (src/off/autostart.mjs), the LaunchAgent's undo on
 //      darwin (src/off/darwin.mjs undoAutostart, 4.9 §4: bootout first, then the plist), nothing on win32 (the task and Run value are manifest entries)
 //   6  the receipt (R1) and the `off-note` lines of `flows/`, the last of them `kind:'result'`; exit 0 only when the routing is confirmed off and every
 //      entry is undone (connections that are still draining do not count against it)
 // Everything the world gives is a `deps` entry a test replaces (0.1 §3): `fs` `exec` `request` `socketPath` `alive` `identity` `kill` `isHelper` `sleep` `ms`
-// `now` `procs` `roots` `daemonState` `stopDaemon` `lockWaitMs` `legacyUndo` `releaseHeld`. Imports only node:* and src/off.
+// `now` `procs` `roots` `daemonState` `stopDaemon` `lockWaitMs` `releaseHeld`. Imports only node:* and src/off.
 import nodeFs from 'node:fs'
 import nodeOs from 'node:os'
 import nodeTls from 'node:tls'
@@ -432,10 +432,6 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
       if (u.pending.length) outcome = 'partial'
       else if (u.left.length || u.mode === 'unsupported') outcome = 'left'
       if (u.mode !== 'marker') for (const id of ids || []) if (!installed.includes(id)) receipt.skipped.push({ what: id, reason: `${id} 没有 asight 的入口(没装过,或早已撤掉)` })
-      if (w.deps.legacyUndo && (ids === null || ids.includes('claude-code'))) { // the old capture's leftovers (Task 10)
-        const l = await w.deps.legacyUndo({ home, env, platform: w.platform, ids, yes, interactive, io, say, dryRun: false, exec: w.exec, fs: w.fs, now: w.clock, request: w.request })
-        if (l) { for (const k of ['changed', 'removed', 'skipped', 'left']) receipt[k].push(...(l[k] || [])); receipt.problems.push(...(l.problems || [])); receipt.notes.push(...(l.notes || [])); if (l.ok === false && !(l.problems || []).length) receipt.problems.push('the old capture could not be fully undone') }
-      }
       // Windows (4.8 §4.2): a daemon that did not answer leaves the kernel preferring its dead engine — it is made forward-only (or
       // stopped) before the entries go, so a new connection runs direct even before its entry is undone. A daemon that answered
       // manages its own kernel on the way out; this is only the daemon-less half.

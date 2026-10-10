@@ -1,15 +1,14 @@
 // main.mjs (src/off) — `asight off [harness…] [--now] [--dry-run] [--yes] [--json] [--remove-ca]` as a command line (RFC 1.6 §2, §3, R4–R7): parses the arguments,
 // refuses root, resolves the harness names, runs runOff and prints its receipt. `asight off` and the standalone `~/.asight/bin/asight-off` run this same file
 // (R3), so it may import nothing outside src/off (0.1 §2) — which is why the §3 name table is written here too (OFF_NAMES) and test/cli/harness-names.test.mjs
-// holds it equal to src/cli/harness-names.mjs. Everything the world gives is a `deps` entry (see orchestrate.mjs), plus `getuid` and `legacyOff`: the replacement of
-// src/off/legacy-cli.mjs `legacyOffCli`, which is what `off` is on a platform without the new collector (freebsd and the rest: 1.6 §4); `legacyUndo`, the old capture's leftovers on Linux, defaults to src/off/legacy.mjs. Exit codes (R4): 0 done · 1 not done or a problem · 2 usage error, nothing touched.
+// holds it equal to src/cli/harness-names.mjs. Everything the world gives is a `deps` entry (see orchestrate.mjs), plus `getuid`. A platform without a collector
+// finds nothing to undo and says so (D39⑥ executed 2026-10-11: the old capture's off went with it; what it left on a machine is cleaned by hand, README).
+// Exit codes (R4): 0 done · 1 not done or a problem · 2 usage error, nothing touched.
 import nodeOs from 'node:os'
 import { runOff } from './orchestrate.mjs'
 import { formatOffReceipt } from './receipt.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, makeIo } from './io.mjs'
-import { hasNewCollector, legacyUndoHook } from './legacy.mjs'
-import { legacyOffCli } from './legacy-cli.mjs'
 
 /** 1.6 §3: the harness code ids (in the order commands list them) and the short names accepted as input. A copy of src/cli/harness-names.mjs. */
 export const OFF_NAMES = Object.freeze({
@@ -19,7 +18,7 @@ export const OFF_NAMES = Object.freeze({
 
 const OFF_USAGE = 'usage: asight off [harness…] [--now] [--dry-run] [--yes] [--json]'
 const OFF_FLAGS = new Set(['--now', '--dry-run', '--yes', '--json', '--remove-ca'])
-const REMOVE_CA_NOTE = '--remove-ca 照收,可以不写:off 本来就撤旧采集的 CA(旧的 monitor off --remove-ca 就是这个意思)'
+const REMOVE_CA_NOTE = '--remove-ca 照收,已没有作用:off 不再动旧采集的 CA(旧采集已退役,D39⑥;它留在机器上的东西按 README 手动清理)'
 
 /** `[harness…]` as typed → `{ ok: true, ids }` (null = none named = all; else code ids in table order, a repeat once) or `{ ok: false, unknown, known }`. Case is not folded. */
 export function resolveOffNames(names) {
@@ -51,9 +50,8 @@ export async function runOffCli(argv, { io = makeIo({ stdin: process.stdin, stdo
   const json = flags.has('--json')
   const say = json ? io.err : io.out // stdout holds the one JSON in --json mode (R5): the list and the question go to stderr
   if ((deps.getuid || (typeof process.getuid === 'function' ? () => process.getuid() : () => -1))() === 0) { io.err('asight off: 用你自己的账号跑,不要用 root / sudo(D36)'); return EXIT.incomplete }
-  if (!(deps.hasNewCollector || hasNewCollector)(platform)) return (deps.legacyOff || legacyOffCli)(argv, { io, env, home, platform, deps, ids: named.ids }) // no new collector here: the old capture is what `off` takes out (1.6 §4); deps.hasNewCollector is the seam the old capture's own tests inject (the darwin flip, 4.9 §4)
   try {
-    const { receipt, exit } = await runOff({ home, env, ids: named.ids, now: flags.has('--now'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: isInteractive(io), io: { ...io, prompt: json ? io.stderr : io.stdout }, say, deps: { platform, ...deps, ...(standalone ? { standalone: true } : {}), legacyUndo: deps.legacyUndo === undefined ? legacyUndoHook : deps.legacyUndo } }) // the CLI's platform is offWorld's default (deps.platform of a test's still wins): before the darwin flip a linux sandbox on a Mac host silently ran the darwin arms
+    const { receipt, exit } = await runOff({ home, env, ids: named.ids, now: flags.has('--now'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: isInteractive(io), io: { ...io, prompt: json ? io.stderr : io.stdout }, say, deps: { platform, ...deps, ...(standalone ? { standalone: true } : {}) } }) // the CLI's platform is offWorld's default (deps.platform of a test's still wins): before the darwin flip a linux sandbox on a Mac host silently ran the darwin arms
     if (flags.has('--remove-ca')) receipt.notes.unshift(REMOVE_CA_NOTE)
     io.out(json ? JSON.stringify(receipt, null, 2) : formatOffReceipt(receipt, { home }))
     return exit
