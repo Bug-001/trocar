@@ -29,6 +29,10 @@ const ROUTES = [
   { re: /\/chat\/completions$/, methods: ['POST'], kind: 'model', dialect: openai.chat },
   { re: /^\/api\/hello$/, methods: ['HEAD', 'GET'], kind: 'hello', dialect: anthropic },
   { re: /\/models$/, methods: ['GET'], kind: 'models' },
+  // non-LLM aux pair (D40: the collector stores these verbatim like any LLM call): a status probe and
+  // a telemetry sink. No session identity, never a marker/script step, answer a pure function of the bytes.
+  { re: /^\/nonllm\/status$/, methods: ['HEAD', 'GET'], kind: 'aux', aux: () => jsonReply(200, { ok: true, service: 'asight-mock-upstream' }) },
+  { re: /^\/nonllm\/telemetry$/, methods: ['POST'], kind: 'aux', aux: (req) => jsonReply(202, { accepted: true, bytes: req.body.length }) },
 ]
 
 // One list both SDK families accept: Anthropic reads type/display_name, OpenAI reads object/owned_by.
@@ -54,6 +58,7 @@ async function dispatch(req, io, state) {
   else if (sc.status) res = errorFor(sc, dialect)
   else if (!route) res = dialect.errorReply(404, `mock-upstream: no route for ${req.method} ${p}`)
   else if (route.kind === 'model') res = route.dialect.reply(parseJson(req.body), req.body, sc, { cache: state.cache, headers: req.headers })
+  else if (route.kind === 'aux') res = route.aux(req)
   else if (route.kind === 'count') res = jsonReply(200, { input_tokens: countTokens(req.body) })
   else if (route.kind === 'models') res = jsonReply(200, MODELS)
   else if (route.kind === 'ws') {
