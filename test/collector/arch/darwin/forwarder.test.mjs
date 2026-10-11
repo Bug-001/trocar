@@ -872,13 +872,16 @@ test('W28 off --now: the kernel is stopped at once and the pids that were still 
   assert.deepEqual([k.fwd.state().draining, k.fwd.remaining()], [0, []], 'and status does not count agents of a drain that no longer exists')
 })
 
-test('W28 uninstall: the kernel copy, the licence and source beside it, the config and the lock go; a removal that fails stays, and the answer says why', async (t) => {
+test('W28 uninstall: the kernel copy, the licence and source beside it, the archive cache (D44 ②), the config and the lock go; a removal that fails stays, and the answer says why', async (t) => {
   const k = await kernelWorld(t, {})
   for (const name of [KERNEL_LICENSE, KERNEL_SOURCE]) fs.writeFileSync(path.join(path.dirname(k.bin), name), 'x')
+  const cache = path.join(path.dirname(path.dirname(k.bin)), 'kernel-archive')
+  fs.mkdirSync(cache, { recursive: true }); fs.writeFileSync(path.join(cache, 'mihomo-darwin-arm64-v1.19.32.gz'), 'the verified archive')
   await k.fwd.start({ build: k.build, forms: FORMS })
   await k.fwd.stopNow()
   assert.deepEqual(k.fwd.removeBinary(), { removed: true })
   assert.ok(!fs.existsSync(path.dirname(k.bin)), 'the kernel directory is gone with them')
+  assert.ok(!fs.existsSync(cache), 'the verified-archive cache goes with the copy (D44 ②: uninstall deletes it, not just kernel/)')
   assert.deepEqual(k.fwd.removeState(), { removed: true })
   assert.ok(!fs.existsSync(path.join(k.dir, 'forwarder')) && !fs.existsSync(k.P.lock), 'no config (it holds the secret and the tokens), no home, no lock')
   const busy = await kernelWorld(t, { fs: { ...fs, rmSync: () => { throw Object.assign(new Error('the process cannot access the file'), { code: 'EBUSY' }) } } })

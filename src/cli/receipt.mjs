@@ -98,11 +98,18 @@ export function formatWinPlan(p, { home = null, autostart = true, netenv = null,
   const t = (x) => winShown(x, home)
   const lines = ['asight 要做的(本用户,不需要管理员):']
   if (prep && prep.refuse) {
-    lines.push(`  自带内核  没找到或与钉死的 sha256 不符:${prep.refuse.reason};所以 on 不开始`)
-    if (Array.isArray(prep.refuse.commands) && prep.refuse.commands.length) lines.push(`    重装(asight 不替你跑):${prep.refuse.commands.join(' 或 ')}`)
+    lines.push('  自带内核  没拿到:下载失败或摘要不符(原因与手动替代见回执),所以 on 不开始')
+    if (Array.isArray(prep.refuse.commands) && prep.refuse.commands.length) lines.push(`    手动替代(asight 不替你跑):${prep.refuse.commands.join(' 或 ')}`)
     return lines.join('\n')
   }
-  if (prep && prep.kernel && home) lines.push(`  自带内核  ${t(path.join(collectorDir(home), 'kernel', prep.kernel.exe))}(mihomo ${prep.kernel.version},取自包 ${prep.kernel.package},sha256 已核对;只听 127.0.0.1,不开 TUN,不当系统代理)`)
+  // the kernel line's shapes (4.8 §8 ⑥ / §11, D44): ready (the run location holds the pinned one — or the verified archive cache does, and it will be placed
+  // from there, no network) or will-download (the plan's download line: version, the archive's size, the pinned sha256, the url's host — the download itself
+  // happens only after the confirmation, in the write phase, and never in a dry run)
+  if (prep && prep.kernel && home) {
+    const k = prep.kernel
+    if (k.state === 'will-download') lines.push(`  自带内核  将下载内核 mihomo ${k.version}(压缩包 ${(k.size / 1048576).toFixed(1)} MB,sha256 钉死,来自 ${k.host}),确认后开始`)
+    else lines.push(`  自带内核  ${t(path.join(collectorDir(home), 'kernel', k.exe))}(mihomo ${k.version};${k.at === 'cache' ? '将从缓存就位' : '已就位'},sha256 已核对;只听 127.0.0.1,不开 TUN,不当系统代理)`)
+  }
   const facts = adoption && !adoption.error ? adoption.facts : null
   // what asight builds or changes itself (1.6 §1.6): the manifest and the CA on the first on, the bundles it writes for a harness, the undo copy, the plugins' directory, the notes
   const own = [

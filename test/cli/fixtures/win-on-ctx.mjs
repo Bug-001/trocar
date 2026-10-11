@@ -59,10 +59,12 @@ export const seedSeven = (put, { codexProxy = null } = {}) => {
 }
 
 /** A Windows `on` world. `internet` / `loginEnv` feed the fake helper (the system proxy, HKCU\Environment); `envSeed` lays the agent files out (the default gives every
- *  harness a file to change, codex's holding the user's own proxy). `prep` is what the arch prepare hook answers (the default: the kernel found and verified, SAC off).
+ *  harness a file to change, codex's holding the user's own proxy). `prep` is what the arch prepare hook answers (the default: the kernel found and verified, SAC off);
+ *  `ensureKernel` is what the same arch's write-phase hook answers (the default: the kernel was already the pinned one, nothing done — the REAL hook would download,
+ *  and no test here may reach a network). `over.deps.parts` can still replace the whole arch.
  *  → { home, dir, envFile, put, helper, run, facts, writeEntry } — `run(argv, over)` runs the real `on` CLI in it, `facts(over)` gathers the real netFacts over what
  *  the world holds now, `writeEntry(g)` is the daemon's half of an `on` (the real writer). */
-export function winWorld({ internet = { ProxyEnable: { kind: 'REG_DWORD', value: 0 } }, loginEnv = {}, envSeed = null, prep = { notes: ['the kernel line'], kernel: { version: 'v1.19.32', package: 'asight-kernel-win32-x64', exe: 'asight-forwarder.exe', sha256: 'a'.repeat(64) }, sac: 'off' } } = {}) {
+export function winWorld({ internet = { ProxyEnable: { kind: 'REG_DWORD', value: 0 } }, loginEnv = {}, envSeed = null, prep = { notes: ['the kernel line'], kernel: { version: 'v1.19.32', exe: 'asight-forwarder.exe', sha256: 'a'.repeat(64), state: 'ready', at: 'run' }, sac: 'off' }, ensureKernel = async () => ({ ok: true, path: 'kernel\\asight-forwarder.exe', sha256: 'a'.repeat(64), from: 'run', copied: false, note: null }) } = {}) {
   const home = tmpDir('asight-win-ctx-')
   const dir = path.join(home, '.asight', 'collector')
   const put = (rel, text) => { const f = path.join(home, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text); return f }
@@ -75,7 +77,7 @@ export function winWorld({ internet = { ProxyEnable: { kind: 'REG_DWORD', value:
     readTextOrError: (f) => { try { return { text: fs.readFileSync(f, 'utf8'), error: null } } catch (e) { return { text: null, error: { code: e.code } } } },
     listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } }, collectorDir: dir, caPem: null })
   const writeEntry = (g) => createProxyEntries({ dir, home, groups, ctx: winCtx(), ingress: () => JSON.parse(fs.readFileSync(path.join(dir, 'ingress.json'), 'utf8')), manifest: () => readManifest(dir, fs), fs }).write([{ g, harness: (groups.find((x) => x.g === g) || {}).harness, entry: 'auto' }])
-  const parts = { os: 'win32', osRootsFile: null, harnesses: descs, scan: async () => [], match: () => ({ agent: null }), arch: { ...arch, prepare: async () => prep } }
+  const parts = { os: 'win32', osRootsFile: null, harnesses: descs, scan: async () => [], match: () => ({ agent: null }), arch: { ...arch, prepare: async () => prep, ensureKernel } }
   const deps = (over = {}) => ({
     parts, request: async (q) => { // the fake daemon: /on does the daemon's half (the real writer, the groups this world routes), the rest answers like a daemon at rest
       if (q.method === 'POST' && q.path === '/on') {

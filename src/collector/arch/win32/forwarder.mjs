@@ -484,11 +484,13 @@ export function createForwarder({
   const reload = (a) => { if (anyOn(a && a.forms)) cancelDrain(); return exclusive(() => reloadNow(a)) }
   const adopt = () => exclusive(adoptNow)
 
-  /** `uninstall`: remove the copy and the files beside it. A file Windows still holds (the kernel is running, a drain is on) stays and `reason` says why (W28). */
+  /** `uninstall`: remove the copy and the files beside it, and the verified-archive cache with them (D44 ②: it is asight's own downloaded file). A file Windows
+   * still holds (the kernel is running, a drain is on) stays and `reason` says why (W28). */
   function removeBinary() {
     try { fs.rmSync(bin, { force: true }) } catch (e) { return { removed: false, reason: (e && e.code) || errText(e) } }
     for (const name of [KERNEL_LICENSE, KERNEL_SOURCE]) { try { fs.rmSync(path.join(path.dirname(bin), name), { force: true }) } catch { /* the exe is gone: a stray text file is not a lock */ } }
     try { fs.rmdirSync(path.dirname(bin)) } catch { /* not empty, or gone */ }
+    try { fs.rmSync(path.join(path.dirname(path.dirname(bin)), 'kernel-archive'), { recursive: true, force: true }) } catch (e) { return { removed: false, reason: (e && e.code) || errText(e) } }
     return { removed: true }
   }
   /** `uninstall`: the lock, the config (it holds the controller secret and the tokens) and the kernel's home. */

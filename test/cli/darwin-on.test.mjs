@@ -17,15 +17,18 @@ import { tmpDir } from '../helpers/tmp.mjs'
 const descs = await loadHarnesses()
 const codex = descs.find((d) => d.name === 'codex')
 
-/** One darwin `on` world: the codex .env a user has, the arch hooks of the flip's seam (`osRoots` a spy over a generated certificate), a daemon that answers. */
-function darwinWorld({ osRoots } = {}) {
+/** One darwin `on` world: the codex .env a user has, the arch hooks of the flip's seam (`osRoots` a spy over a generated certificate), a daemon that answers.
+ *  `prep` / `ensureKernel` are the D44 hooks (read-only preflight, write-phase kernel ensuring) — fakes the same way, so no test here reaches a network. */
+function darwinWorld({ osRoots, prep = null, ensureKernel = null } = {}) {
   const home = tmpDir('asight-darwin-on-')
   fs.mkdirSync(path.join(home, '.codex'), { recursive: true })
   fs.writeFileSync(path.join(home, '.codex', '.env'), 'OPENAI_API_KEY=sk-test\n')
   const asked = []
   const arch = {
-    // the read-only hooks runOnCli asks of an arch (on.mjs): only osRoots matters here — prepare / refuseElevated / nodePreflight / unit / routing are absent and skipped
+    // the read-only hooks runOnCli asks of an arch (on.mjs): only osRoots matters here — refuseElevated / nodePreflight / unit / routing are absent and skipped
     osRoots: async () => { asked.push(1); if (osRoots === undefined) return { pem: FAKE_OS.certPem }; return osRoots() },
+    ...(prep ? { prepare: async () => prep } : {}), // prepare / ensureKernel are the kernel's own hooks (D44); a world that passes none keeps the absent-and-skipped shape
+    ...(ensureKernel ? { ensureKernel } : {}),
   }
   const parts = { os: 'darwin', osRootsFile: null, harnesses: [codex], scan: async () => [], match: () => ({ agent: null }), arch }
   const run = async (argv, { platform = 'linux', deps: extraDeps = {} } = {}) => {
@@ -128,4 +131,25 @@ test('`on` with platform darwin runs the new collector — the darwin arch hooks
   assert.match(r.text, /^asight 将打开采集/, 'the NEW collector\'s plan is what a Mac gets')
   assert.match(r.text, /\.codex\/\.env/, 'drawn from the darwin arch\'s own world (the codex trust entry)')
   assert.ok(!/驱动旧采集|本平台未实现/.test(r.text), 'and no word of the old capture remains in what `on` says first')
+})
+
+// D44 (4.8 §8 ① ⑥, the darwin half; 4.9 §8 / 验收 3): the missing kernel is the download line in the plan (the darwin plan is the plain one plus the arch's
+// notes — the note says version, size, sha256, host), and the write-phase hook runs once, only in a REAL on — a dry run downloads nothing. The win twins of
+// this cell are test/cli/win-plan.test.mjs's two D44 tests; the hook's own cells (gunzip, both digests, the manual alternative) are the wiring tests'.
+test('D44 (darwin): the missing kernel is a download line in the plan, and the write-phase hook runs once — only in a real on', async () => {
+  const note = 'asight\'s kernel: not there yet — mihomo v1.19.32 will be downloaded (archive 19.8 MB, sha256 pinned, from github.com) once you confirm'
+  const calls = []
+  const w = darwinWorld({
+    prep: { notes: [note], kernel: { version: 'v1.19.32', exe: 'asight-forwarder', sha256: '3312a6780652c622890fd4357c6a853bbf865464fd047ac7b7f52dab8de18652', state: 'will-download', size: 20756622, url: 'https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-darwin-arm64-v1.19.32.gz', host: 'github.com' } },
+    ensureKernel: async (a) => { calls.push(a); return { ok: true, path: 'kernel/asight-forwarder', sha256: 'a'.repeat(64), from: 'download', copied: true, note: 'the kernel was downloaded and both digests verified (sha256 aaaaaaaaaaaa…)' } },
+  })
+  const dry = await w.run(['--dry-run'])
+  assert.equal(dry.exit, 0, dry.text)
+  assert.match(dry.text, new RegExp(note.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), 'the plan\'s download line: version, the archive\'s size, the pinned sha256, the host')
+  assert.deepEqual(calls, [], 'a dry run downloads nothing (R6)')
+  const real = await w.run(['--yes'])
+  assert.equal(real.exit, 0, real.text)
+  assert.equal(calls.length, 1, 'the write-phase hook ran exactly once, after the confirmation')
+  assert.equal(calls[0].home, w.home, 'with the home the on runs in')
+  assert.match(real.text, /the kernel was downloaded and both digests verified/, 'the receipt carries the download\'s own line')
 })

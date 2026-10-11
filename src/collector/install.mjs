@@ -363,7 +363,7 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
  *    request    the control socket's client (default: controlRequest at $XDG_RUNTIME_DIR/asight/collector.sock, or `socketPath`)
  *  → { receipt, manifest, plan, exit }. */
 export async function turnOn(opts = {}) {
-  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, osRootsFile = null, roots = null, unit = null, autostart = true, freePort = freeEnginePort, onPlan = () => {}, confirm = null, dryRun = false, networkEdited = null, optIn = [], optInHooks = null, request = controlRequest, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS } = opts
+  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, osRootsFile = null, roots = null, unit = null, autostart = true, freePort = freeEnginePort, onPlan = () => {}, confirm = null, afterConfirm = null, dryRun = false, networkEdited = null, optIn = [], optInHooks = null, request = controlRequest, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS } = opts
   refuseRoot('on', getuid)
   const dir = collectorHome(path.join(home, '.asight'))
   const stateF = path.join(dir, 'state.json')
@@ -419,6 +419,17 @@ export async function turnOn(opts = {}) {
       const verdict = confirm ? await confirm(plan) : null
       if (verdict == null) return { receipt: { ...r, ok: false, planned: true, needs_yes: true, notes: [...r.notes, '不在终端里,没有 --yes:只打印了计划,什么都没改。看过计划之后加 --yes 再跑一次'] }, manifest: plan._.prior, plan, exit: 2 }
       if (verdict === false) return { receipt: { ...r, ok: false, planned: true, declined: true, notes: [...r.notes, '没有确认:什么都没改'] }, manifest: plan._.prior, plan, exit: 1 }
+    }
+    // D44 — the kernel's download, verify and placement, the CLI's one online step, is the FIRST write-phase action: after the confirmation (the plan already
+    // showed the download line), before the op lock and any agent file — a failed download leaves zero agent files written (the precondition's nature
+    // unchanged, 4.8 §8 ① ⑥). `null` = the arch has no kernel to ensure (Linux's driver mode). A not-ok answer stops the run here with an unwritten receipt
+    // (exit 1); the hook's own records (the download's started / ok / failed, the missing / mismatch failures) are already in flows/ by the time it answers
+    // (R11 — `recorded` writes nothing for a clean answer, and a stop here is not a throw). The hook runs before the lock on purpose: the download can take
+    // a while, and `off` / `uninstall` must not wait behind it (the kernel is asight's own file; concurrent `on`s each verify their own copy).
+    if (afterConfirm) {
+      const k = await afterConfirm()
+      if (!k || k.ok === false) return { receipt: unwritten({ ...r, ok: false, notes: [...r.notes, (k && k.reason) || 'the kernel could not be ensured; nothing was changed'] }), manifest: plan._.prior, plan, exit: 1 }
+      if (k.note) r.notes.push(k.note) // the receipt's own line of where the kernel came from (downloaded / from the cache)
     }
 
     // ── confirmed: from here on, writes — one state-changing command at a time (R12): the lock is held to the end of this callback (the try below), and
