@@ -19,7 +19,7 @@ export function qCapturing(records, srcMeta) {
   const n = records.length;
   const ok = !!(srcMeta && srcMeta.exists && n > 0);
   return { ok, n, bytes: (srcMeta && srcMeta.bytes) || 0, mtimeMs: (srcMeta && srcMeta.mtimeMs) || null,
-    note: !srcMeta || !srcMeta.exists ? 'no capture source found — run `asight capture`, then a CC-CLI session'
+    note: !srcMeta || !srcMeta.exists ? 'no capture source found — run `asight on`, then an agent session'
       : n === 0 ? 'source exists but holds 0 records (nothing captured yet)'
       : `${n} record(s) captured` };
 }

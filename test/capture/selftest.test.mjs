@@ -25,6 +25,7 @@ test('checkDeps: openssl always required; certutil only on linux; missing → in
 // ① 是否真在抓
 test('qCapturing: no source → not ok; source with records → ok', () => {
   assert.equal(qCapturing([], null).ok, false);
+  assert.match(qCapturing([], null).note, /run `asight on`/, 'the note names a command that exists (D39⑥: `asight capture` went with the old capture)');
   assert.equal(qCapturing([], { exists: false }).ok, false);
   assert.equal(qCapturing([], { exists: true, bytes: 0 }).ok, false); // exists but empty
   const ok = qCapturing([{}, {}], { exists: true, bytes: 100, mtimeMs: 1 });
