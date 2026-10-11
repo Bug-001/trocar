@@ -50,10 +50,12 @@ export function offWorld({ home = nodeOs.homedir(), env = process.env, deps = {}
   const dir = collectorDir(home)
   const platform = deps.platform || process.platform
   // Windows finds the daemon's control endpoint in <collector>\control.json — the pipe name AND the token every request must carry
-  // (4.8 §7 控制面); Linux keeps the $XDG_RUNTIME_DIR unix socket, which the file modes keep to the operator. An off on win32 with
-  // no control.json (or one that names no endpoint) has no socket path of its own: daemonState still asks the one the daemon's
-  // lock names, unauthenticated — a POST /off that 401s is then the control-error the receipt shows, not a silent miss.
-  const endpoint = platform === 'win32' && deps.socketPath === undefined ? controlEndpointOf({ dir, fs: deps.fs || nodeFs }) : null
+  // (4.8 §7 控制面); darwin's daemon writes the same control.json (a random socket under $TMPDIR plus the token, 4.9 §7 — the mac flip
+  // missed adding it here, so every `off`/`status` on a real mac was a 401); Linux keeps the $XDG_RUNTIME_DIR unix socket, which the
+  // file modes keep to the operator. An off on win32/darwin with no control.json (or one that names no endpoint) has no socket path of
+  // its own: daemonState still asks the one the daemon's lock names, unauthenticated — a POST /off that 401s is then the control-error
+  // the receipt shows, not a silent miss.
+  const endpoint = (platform === 'win32' || platform === 'darwin') && deps.socketPath === undefined ? controlEndpointOf({ dir, fs: deps.fs || nodeFs }) : null
   const w = {
     home, env, dir, fs: deps.fs || nodeFs, exec: deps.exec || null, platform,
     request: deps.request || (endpoint && endpoint.token ? ((o) => controlRequest({ ...o, token: endpoint.token })) : controlRequest),

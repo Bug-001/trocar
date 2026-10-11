@@ -14,7 +14,7 @@ import { collectorDir, stateFile, asightHome } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
 import { readManifest } from '../off/manifest.mjs'
 import { daemonState } from '../off/daemon-stop.mjs'
-import { controlRequest, controlSocketPath } from '../off/control-client.mjs'
+import { controlRequest, controlSocketPath, controlEndpointOf } from '../off/control-client.mjs'
 import { listProcs, procIdentity, pidAlive } from '../off/proc.mjs'
 import { matchHarness } from '../off/signature.mjs'
 import { sha256, readOrNull } from '../off/fsutil.mjs'
@@ -81,9 +81,14 @@ const installedAtOf = (m, id) => { const t = [...(m.entries || []).filter((e) =>
  *  installedAt, procs, judged: { captured, rows }, why: [] } ], link, relayed, health }. Anything that could not be read is `null` / `unknown` and says why; nothing is thrown for it. */
 export async function gatherStatus({ home = nodeOs.homedir(), env = process.env, deps = {}, names = null, record = true } = {}) {
   const fs = deps.fs || nodeFs, platform = deps.platform || process.platform
-  const ms = deps.ms || Date.now, request = deps.request || controlRequest, alive = deps.alive || pidAlive, identity = deps.identity || procIdentity
+  const ms = deps.ms || Date.now, alive = deps.alive || pidAlive, identity = deps.identity || procIdentity
   const dir = collectorDir(home), stateF = stateFile(home)
-  const socketPath = deps.socketPath !== undefined ? deps.socketPath : (() => { try { return controlSocketPath({ env }) } catch { return null } })()
+  // the daemon's endpoint: win32/darwin name it in control.json (socket/pipe path + the token every request must carry — on darwin
+  // a random socket under $TMPDIR, 4.9 §7; the mac flip missed this, so `status` on a real mac was a 401); Linux keeps the
+  // $XDG_RUNTIME_DIR unix socket, which the file modes keep to the operator (no token).
+  const endpoint = (platform === 'win32' || platform === 'darwin') && deps.socketPath === undefined ? controlEndpointOf({ dir, fs }) : null
+  const request = deps.request || (endpoint && endpoint.token ? ((o) => controlRequest({ ...o, token: endpoint.token })) : controlRequest)
+  const socketPath = deps.socketPath !== undefined ? deps.socketPath : (endpoint && endpoint.path) || (() => { try { return controlSocketPath({ env }) } catch { return null } })()
   const f = { at: new Date(ms()).toISOString(), platform, user: deps.user || (() => { try { return nodeOs.userInfo().username } catch { return String(env.USER || '') } })(), dir, daemon: { state: 'unknown', pid: null, reason: null, socket: null, reply: null }, harnesses: [] }
   // the daemon: judged the way `off` judges it (its lock, then whether the control socket answers), then asked for its status
   const st = await daemonState({ lockFile: path.join(dir, 'lock'), socketPath, request, identity, alive, now: ms, fs, timeoutMs: deps.timeoutMs || 5000 })
