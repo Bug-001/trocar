@@ -13,6 +13,7 @@ import { resolveHarnesses } from './harness-names.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
 import { formatOnReceipt, formatPlan, formatWinPlan } from './receipt.mjs'
+import { colors, noColor } from './color.mjs'
 import { probeNetenv } from '../netenv/index.mjs'
 import { renderCompact } from '../netenv/topology-text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
@@ -59,6 +60,7 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
   if (!named.ok) { io.err(`asight on: unknown harness ${named.unknown.join(', ')}; the names are: ${named.known.join(', ')}`); return EXIT.usage }
   const json = flags.has('--json')
   const say = json ? io.err : io.out // stdout holds the one JSON in --json mode (R5); warnings and the plan go to stderr
+  const c = json ? noColor() : colors(io) // --json never colours (D46); a non-TTY or NO_COLOR run colours nothing anywhere
   if ((deps.getuid || processUid)() === 0) { io.err('asight on: 用你自己的账号跑,不要用 root / sudo(D36;只有 `sudo asight setup-helper` 要 root)'); return EXIT.incomplete }
   try {
     const parts = deps.parts || await (await (deps.daemon || import('../collector/daemon.mjs'))).loadParts({ env })
@@ -138,10 +140,10 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     // `on`'s facts (adoption) and the arch hook's answer (prep). The Linux plan and the hook's own notes stay as they are.
     const winPlan = parts.os === 'win32'
     const planText = (raw) => {
-      const adopted = adoption && !adoption.error ? Object.entries(adoption.chains(raw.targets)).filter(([h]) => raw.targets.includes(h)).map(([h, t]) => ({ harness: h, chain: chainText(t) })) : []
+      const adopted = adoption && !adoption.error ? Object.entries(adoption.chains(raw.targets)).filter(([h]) => raw.targets.includes(h)).map(([h, t]) => ({ harness: h, chain: chainText(t) })).filter((x) => /\s→\s/.test(x.chain) || false) : [] // D46: the degenerate one-hop chain says nothing and is not printed
       return winPlan
-        ? formatWinPlan(raw, { home, autostart, netenv, env, adoption: adoption && !adoption.error ? adoption : null, prep })
-        : [formatPlan({ ...raw, adopted }, { home, autostart, netenv }), ...(prep && prep.notes && prep.notes.length ? ['', ...prep.notes] : [])].join('\n')
+        ? formatWinPlan(raw, { home, autostart, netenv, env, adoption: adoption && !adoption.error ? adoption : null, prep, colors: c })
+        : [formatPlan({ ...raw, adopted }, { home, autostart, netenv, platform, colors: c }), ...(prep && prep.notes && prep.notes.length ? ['', ...prep.notes] : [])].join('\n')
     }
     if (prep && prep.refuse) {
       const rf = prep.refuse
@@ -185,8 +187,12 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     } else if (adoption && receipt.dry_run) receipt.adopted = Object.fromEntries(Object.entries(adoption.chains(receipt.harnesses || [])).filter(([h]) => (receipt.harnesses || []).includes(h)).map(([h, t]) => [h, { chain: chainText(t), dry_run: true }]))
     if (json) io.out(JSON.stringify(receipt, null, 2))
     else if (receipt.planned) for (const n of receipt.notes) io.err(n) // the plan was printed; what is left to say is why nothing was done (R6)
-    else if (winPlan && receipt.dry_run && plan) io.out(`${planText(plan)}\n\n${formatOnReceipt(receipt, { tense: 'future', home })}`) // a Windows dry run prints the §11 plan as well: it is what a user reads before deciding (turnOn's onPlan does not run for one)
-    else io.out(formatOnReceipt(receipt, { tense: receipt.dry_run ? 'future' : 'past', home }))
+    else if (winPlan && receipt.dry_run && plan) io.out(`${planText(plan)}\n\n${formatOnReceipt(receipt, { tense: 'future', home, platform, colors: c })}`) // a Windows dry run prints the §11 plan as well: it is what a user reads before deciding (turnOn's onPlan does not run for one)
+    else {
+      // D46: the harnesses THIS run newly wired (their one-time 说明 notes print; a harness wired before keeps its notes in doctor and --json — the receipt object is untouched, R5/R11)
+      const fresh = plan ? new Set((plan.targets || []).filter((id) => !(plan.installed || []).includes(id))) : null
+      io.out(formatOnReceipt(receipt, { tense: receipt.dry_run ? 'future' : 'past', home, platform, fresh, colors: c }))
+    }
     return exit
   } catch (e) {
     const message = String((e && e.message) || e)

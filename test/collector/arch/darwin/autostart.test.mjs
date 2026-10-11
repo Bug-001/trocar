@@ -14,6 +14,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 import { refuseElevated, nodePreflight, NODE_MIN_MAJOR, plistXml, plistPath, userUnit, directStartEnv, AGENT_LABEL, PLIST_FILE } from '../../../../src/collector/arch/darwin/autostart.mjs'
+import { daemonLogPaths } from '../../../../src/collector/arch/daemon-logs.mjs'
 import { controlEndpoint, readControlEndpoint, CONTROL_FILE, SOCKET_PREFIX, SOCKET_SUFFIX } from '../../../../src/collector/arch/darwin/control-path.mjs'
 import * as offDarwin from '../../../../src/off/darwin.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
@@ -272,7 +273,10 @@ test('W24 userUnit gives the shape turnOn and install consume: the plist\'s path
   assert.equal(u.path, path.join(o.home, 'Library', 'LaunchAgents', PLIST_FILE))
   assert.deepEqual(u.links, [], 'a LaunchAgent has no wants/ link — the file in LaunchAgents is the whole registration')
   assert.equal(u.name, 'com.asight.collector')
-  assert.equal(u.text({}), plist(), 'the text is the plist; an empty daemon env is no EnvironmentVariables key')
+  const sinks = daemonLogPaths(o.home)
+  assert.equal(u.text({}), plistXml({ node: NODE, asight: SCRIPT, logs: sinks }), 'the text is the plist; an empty daemon env is no EnvironmentVariables key')
+  assert.match(u.text({}), new RegExp('<key>StandardOutPath</key>\n  <string>' + sinks.out.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '</string>'), 'D46: the daemon console is the log file under ~/.asight/collector/logs')
+  assert.match(u.text({}), new RegExp('<key>StandardErrorPath</key>\n  <string>' + sinks.err.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '</string>'))
   assert.notEqual(u.text({ NODE_EXTRA_CA_CERTS: '/usr/local/etc/corp-ca.pem' }), plist(), 'the daemon env install offers is carried (unlike the win32 task, 4.8 §7)')
   for (const verb of ['enable', 'start', 'reload', 'disable', 'remove']) assert.equal(typeof u[verb], 'function', verb)
   assert.deepEqual(u.reload(), { code: 0, out: '', err: '' }, 'a rewritten plist is replaced by the next enable (bootout + bootstrap), so there is nothing to reload')

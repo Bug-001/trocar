@@ -2,9 +2,11 @@
 // 单元」, D36). Listed in the install manifest like every other file asight writes; enabled with --now so the
 // daemon starts at once and at every login. MUST NOT set NoNewPrivileges or CapabilityBoundingSet: the helper is a
 // file-capability exec and either would strip its capabilities.
+import nodeFs from 'node:fs'
 import path from 'node:path'
 import { execTool } from '../../../off/exec.mjs'
 import { removeWantsLinks } from '../../../off/autostart.mjs'
+import { daemonLogPaths, ensureDaemonLogs } from '../daemon-logs.mjs'
 
 export const UNIT_NAME = 'asight-collector.service'
 export const unitPath = (home) => path.join(home, '.config', 'systemd', 'user', UNIT_NAME)
@@ -16,11 +18,17 @@ export const wantsLink = (home) => path.join(path.dirname(unitPath(home)), 'defa
 
 // env: what the daemon's own environment needs that systemd --user does not give it (install decides: the install
 // shell's NODE_EXTRA_CA_CERTS, 4.6 §引擎 5) — the daemon's only, never the login environment.
-export function unitText({ node, script, env = {} }) {
+// logs (D46, given by userUnit): StandardOutput / StandardError = append: the two files under ~/.asight/collector/logs/
+// — the daemon's own console, a journald-free face an `ssh` in can read (systemd creates the file on first write; the
+// directory and the two empty 0600 files are made at unit-write time by ensureDaemonLogs). `%` in a path is a specifier
+// there too, so it is doubled.
+export function unitText({ node, script, env = {}, logs = null }) {
   return [
     '[Unit]', 'Description=asight transparent collector (per user)', '',
     '[Service]', 'Type=simple', ...Object.entries(env).map(([k, v]) => `Environment="${esc(`${k}=${v}`)}"`),
-    `ExecStart=${quoteExec(node)} ${quoteExec(script)} daemon`, 'Restart=on-failure', 'RestartSec=2', '',
+    `ExecStart=${quoteExec(node)} ${quoteExec(script)} daemon`,
+    ...(logs ? [`StandardOutput=append:${logs.out.replace(/%/g, '%%')}`, `StandardError=append:${logs.err.replace(/%/g, '%%')}`] : []),
+    'Restart=on-failure', 'RestartSec=2', '',
     '[Install]', 'WantedBy=default.target', '',
   ].join('\n')
 }
@@ -42,7 +50,10 @@ export function userUnit({ home, node, script, run = null, env = process.env }) 
   const sc = (args) => systemctl(args, { run, env })
   return {
     name: UNIT_NAME, path: unitPath(home), links: [wantsLink(home)],
-    text: (e) => unitText({ node, script, env: e }),
+    text: (e) => unitText({ node, script, env: e, logs: daemonLogPaths(home) }),
+    // D46: the daemon's log files, made at unit-write time and listed in the manifest (install calls these); never rewritten by a later on
+    logFiles: () => { const { out, err } = daemonLogPaths(home); return [{ path: out }, { path: err }] },
+    ensureLogs: () => ensureDaemonLogs(home, { fs: nodeFs }),
     enable: ({ now = true } = {}) => sc(now ? ['enable', '--now', UNIT_NAME] : ['enable', UNIT_NAME]),
     start: () => sc(['start', UNIT_NAME]),
     reload: () => sc(['daemon-reload']),

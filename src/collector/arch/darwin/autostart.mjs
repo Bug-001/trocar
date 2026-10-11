@@ -11,6 +11,7 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { execTool } from '../../../off/exec.mjs'
+import { daemonLogPaths, ensureDaemonLogs } from '../daemon-logs.mjs'
 
 export const AGENT_LABEL = 'com.asight.collector' // the launchd job's label
 export const PLIST_FILE = 'com.asight.collector.plist' // the plist's name in the user's LaunchAgents directory
@@ -63,9 +64,11 @@ const xmlText = (v) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>
  * RunAtLoad + KeepAlive both true, and KeepAlive is the reason there is no supervisor (launchd brings a killed daemon back) and the reason `off` boots the agent out BEFORE it stops the
  * daemon. `env` is the daemon's own environment (install's daemonEnv: NODE_EXTRA_CA_CERTS of the install shell, an absolute path), written as EnvironmentVariables — a launchd job starts
  * with none of the shell's exports, so what install wants the daemon to have must be in the plist (the linux unit's `Environment=`, 4.6 §引擎 5; a Windows task cannot carry any, 4.8 §7).
- * A quote in a path is harmless here (plist element content, not a command line): only & < > are escaped, and a control character or a non-string is a bug of the caller.
+ * `logs` (D46, given by userUnit) adds StandardOutPath / StandardErrorPath under ~/.asight/collector/logs/ — the daemon's own stdout / stderr, a launchd-started daemon's only console:
+ * without them a daemon that dies at every login does so with an error nobody sees. A quote in a path is harmless here (plist element content, not a command line): only & < > are escaped,
+ * and a control character or a non-string is a bug of the caller.
  */
-export function plistXml({ node, asight, env = {} } = {}) {
+export function plistXml({ node, asight, env = {}, logs = null } = {}) {
   const n = plain('node', node)
   const a = plain('asight', asight)
   if (!env || typeof env !== 'object' || Array.isArray(env)) throw new TypeError(`plist: env is an object of variable names to strings, got ${JSON.stringify(env)}`)
@@ -74,6 +77,7 @@ export function plistXml({ node, asight, env = {} } = {}) {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) throw new TypeError(`plist: env key ${JSON.stringify(k)} is not a variable name`)
     plain(`env ${k}`, v)
   }
+  const sinks = logs ? [['StandardOutPath', plain('logs.out', logs.out)], ['StandardErrorPath', plain('logs.err', logs.err)]] : []
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
@@ -88,6 +92,7 @@ export function plistXml({ node, asight, env = {} } = {}) {
     '    <string>daemon</string>',
     '  </array>',
     ...(vars.length ? ['  <key>EnvironmentVariables</key>', '  <dict>', ...vars.map(([k, v]) => `    <key>${xmlText(k)}</key>\n    <string>${xmlText(v)}</string>`), '  </dict>'] : []),
+    ...sinks.flatMap(([key, file]) => ['  <key>' + key + '</key>', `  <string>${xmlText(file)}</string>`]),
     '  <key>RunAtLoad</key>',
     '  <true/>',
     '  <key>KeepAlive</key>',
@@ -180,9 +185,13 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
   }
   return {
     name: AGENT_LABEL, path: file, links: [],
-    text: (e = {}) => plistXml({ node, asight: script, env: e }),
+    text: (e = {}) => plistXml({ node, asight: script, env: e, logs: daemonLogPaths(home) }),
+    // D46: the daemon's log files, made at unit-write time and listed in the manifest (install calls these); never rewritten by a later on
+    logFiles: () => { const { out, err } = daemonLogPaths(home); return [{ path: out }, { path: err }] },
+    ensureLogs: () => ensureDaemonLogs(home, { fs }),
     enable({ now = true } = {}) {
       if (!fs.existsSync(file)) return { code: null, out: '', err: `the plist ${file} is not there: launchd is not asked (install writes it first)`, precondition: true } // not a refusal of launchctl: nothing was asked of it
+      this.ensureLogs() // the sinks the plist names exist whatever wrote the plist (one upgraded from before D46 included)
       if (!now) return { ...ok }
       launchctl(['bootout', domainOf(tools.uid), AGENT_LABEL], tools) // an earlier copy of the job goes out first (the /F analog); a job that is not loaded answers with an error that is not ours to fail on — the bootstrap below is the answer
       const r = launchctl(['bootstrap', domainOf(tools.uid), file], tools)

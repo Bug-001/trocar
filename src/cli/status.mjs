@@ -21,7 +21,7 @@ import { sha256, readOrNull } from '../off/fsutil.mjs'
 import { getPath } from '../off/json-text.mjs'
 import { removeAsightText, SENTINEL } from '../off/text-edit.mjs'
 import { userProcessesOf } from '../off/orchestrate.mjs'
-import { probeNetenv, netenvText, netenvFile, writeNetenv } from '../netenv/index.mjs'
+import { probeNetenv, netenvText, netenvFile, writeNetenv, PRODUCT_TEXT, MODE_TEXT } from '../netenv/index.mjs'
 import { judgeHarness } from '../netenv/verdict.mjs'
 import { gatherNetFacts } from '../netenv/facts.mjs'
 import { readAdopted } from '../netenv/adopt.mjs'
@@ -31,6 +31,9 @@ import { diagnose } from '../netenv/findings.mjs'
 import { captureHealth } from '../health/read.mjs'
 import { trustReasonText } from '../collector/core/codes.mjs'
 import { formatStatus, formatHealth } from '../collector/cli.mjs'
+import { colors, noColor } from './color.mjs'
+import { failureBrief } from './words.mjs'
+import { tilde } from './receipt.mjs'
 
 export { STATUS_REASONS, judgeHarness } // judgeHarness lives in src/netenv/verdict.mjs: the topology (1.6 §9) judges `captured` and `reason` with the same function, so the two cannot disagree
 
@@ -229,9 +232,10 @@ const relayedText = (f) => f.relayed === 'unknown' ? `仍经 asight 的连接: �
 const netenvWriteText = (n) => (n.write_error ? [`本机网络环境的副本没写成: ${n.write_error};看板读的是它,会一直显示旧的`] : [])
 const userProcsText = (u) => (u.error ? [`你自己起的 asight 进程: 不知道(${u.error})`] : u.list.length ? [`你自己起的 asight 进程仍在跑: ${u.list.map((p) => `${p.command}(pid ${p.pid},${p.note})`).join('、')}`] : [])
 
-/** The lines of `asight status`. */
-export function renderStatus(f, { home = null, detail = [], now = null } = {}) {
-  const d = f.daemon, lines = [`asight 状态(本用户 ${f.user})`]
+/** The lines of `asight status <harness…>` — the detail view: every named harness's own row, its pid rows, its path detail. `colors` is the TTY palette
+ *  (src/cli/color.mjs); the pure call keeps it off. The unnamed `asight status` prints `renderStatusDigest` instead (D46). */
+export function renderStatus(f, { home = null, detail = [], now = null, colors: c = noColor() } = {}) {
+  const d = f.daemon, lines = [c.bold(`asight 状态(本用户 ${f.user})`)]
   lines.push(d.state === 'running' ? `守护进程: 在跑${d.pid ? `(pid ${d.pid})` : ''}${f.daemon.reply && f.daemon.reply.helper ? (f.link.helper === 'missing' ? `;助手有问题: ${f.link.helper_reason}` : `;助手 pid ${f.daemon.reply.helper.pid}`) : ''}`
     : d.state === 'not-running' ? `守护进程: 没在跑${d.reason ? `(${d.reason})` : ''}:什么都没有被采集;asight on 拉起它`
     : d.state === 'not-responding' ? `守护进程: 没响应(${d.reason});新连接已因心跳过期直连,asight off 会停掉它`
@@ -257,10 +261,121 @@ export function renderStatus(f, { home = null, detail = [], now = null } = {}) {
   return lines
 }
 
+// ── the digest of the unnamed `asight status` (D46: one screen of conclusions) ──────────────────────────────────────────────────────────────────────────────
+// The long tail moved, not away: the failure wall is `--failures`, the per-pid rows and the per-harness path detail are `status <harness>`, the English
+// reasons and every field are `--json`, the install notes are `doctor` (R11: relocated with a pointer, never dropped).
+
+/** A topology branch that carries information: more than the agent's own node on its path (or the path with asight taken out). The one-node topology
+ *  `buildTopology`'s catch leaves is drawn as 「不知道」, not as a chain that says nothing (spec 1.6 §9.2: a build that failed prints one line). */
+const hasPathInfo = (t) => !!(t && Array.isArray(t.branches) && t.branches.some((b) => ((b.path || []).length > 1) || ((b.off_path || []).length > 1)))
+const baseName = (p) => String(p || '').split(/[\\/]/).pop()
+
+/** The harness's own annotation on the 在采 row: its (first, trusted first) process, with the process's name when the table gave one — `(Desktop pid 25880)`,
+ *  `(claude pid 4121)` — and nothing when no process of it runs. */
+function procLabel(f, h) {
+  const pids = (h.procs || []).filter((p) => p && p.pid != null)
+  if (!pids.length) return ''
+  const p = pids.find((x) => x.trusted === true) || pids[0]
+  const row = (f.matched || []).find((x) => x.h === h.id && x.p && x.p.pid === p.pid)
+  const name = row ? baseName(row.p.argv && row.p.argv[0]) || baseName(row.p.exe) : ''
+  return `(${name ? `${name} ` : ''}pid ${p.pid})`
+}
+
+/** The 「路径」 line: the VPN / proxy software the probe found (product and mode) and which of the harnesses in the table go through it — all unknown is
+ *  ONE collapsed clause, the five identical 「在不在路径上不知道 · 不知道」 rows it replaces (spec 1.6 §9.2). */
+export function pathLine(f) {
+  const n = f.netenv
+  if (!n || n.error) return `路径    不知道(${(n && n.error) || '探测没跑'})`
+  const ids = f.harnesses.map((h) => h.id)
+  const { products, unknown } = n.result || {}
+  if (!products || !products.length) return `路径    不知道(${(unknown || []).map((u) => u.reason).join('; ')})`
+  return products.map((p) => {
+    const via = Object.entries(p.via || {}).filter(([h]) => ids.includes(h))
+    const yes = via.filter(([, v]) => v === true).map(([h]) => h), no = via.filter(([, v]) => v === false).map(([h]) => h), rest = via.filter(([, v]) => v === 'unknown').map(([h]) => h)
+    const says = [
+      ...(yes.length ? [`${yes.join('、')} 经过它`] : []),
+      ...(no.length ? [`${no.join('、')} 不经过它`] : []),
+      ...(rest.length ? [yes.length || no.length ? `其余(${rest.join('、')}): 是否经过它不知道` : '各 harness 是否经它:不知道(未读到它们的代理设置)'] : []),
+      ...(f.platform === 'linux' ? ['asight 没有改它'] : []),
+    ]
+    return `路径    ${PRODUCT_TEXT[p.product] || p.product}(${MODE_TEXT[p.mode] || p.mode})${says.length ? ` · ${says.join(' · ')}` : ''}`
+  }).join('\n')
+}
+
+/** The health the digest judges from: the daemon's own read when it answered (`reply.health`, what the old wall printed), else the disk's. A reply whose
+ *  read failed carries `{ error }` — that is a health that could not be read, never "no failures". */
+const effectiveHealth = (f) => (f.daemon && f.daemon.reply && f.daemon.reply.health ? { health: f.daemon.reply.health.error ? null : f.daemon.reply.health, error: f.daemon.reply.health.error || null } : { health: f.health, error: f.health_error })
+
+/** 采集健康 as one or two lines: the state, the 24 h failure count by kind, the newest failure as ONE squashed brief (src/cli/words.mjs) — and where the
+ *  whole wall lives. Zero failures is a ✓ line; a health that could not be read keeps its error verbatim (R11). */
+export function healthSummary(f, c = noColor()) {
+  const eff = effectiveHealth(f), h = eff.health
+  if (!h) return [`采集健康 ${c.red('?')} 读不到(capture health could not be read: ${eff.error})`] // the reader's own phrase, kept verbatim (R11)
+  const s = h.summary || {}
+  const groups = [...((h.collector && h.collector.failures) || []), ...((h.legacy && h.legacy.failures) || []), ...((h.raw && h.raw.failures) || [])]
+  const n = groups.reduce((k, g) => k + (g.count || 1), 0)
+  const mark = { ok: c.green('✓'), off: '○', stopped: '○', failing: c.yellow('⚠'), 'not-running': c.red('✗'), 'not-responding': c.red('✗'), unknown: '?', 'no-events': '?', residue: '–', 'not-installed': '–' }[s.state] || '?'
+  const word = { ok: null, off: '采集关着', stopped: '旧采集已停', failing: null, 'not-running': '守护进程没在跑', 'not-responding': '守护进程没响应', unknown: `状态不知道(${s.reason || '读不到'})`, 'no-events': '旧采集没有事件文件', residue: '没卸净(有残留)', 'not-installed': '没装' }[s.state] ?? String(s.state)
+  const unread = s.read_errors ? ` · 读不全(${s.read_errors} 个文件,明细: --json)` : ''
+  const hint = `        ${c.dim('全部明细: asight status --failures · 看板「采集健康」')}`
+  if (s.state === 'ok' && !n) return [`采集健康 ${mark}(24 h 内无失败)${unread}`]
+  if (n) {
+    let latest = groups[0]; for (const g of groups.slice(1)) if (String(g.last_ts || '') >= String(latest.last_ts || '')) latest = g // >= : on an equal timestamp the group whose record came last wins (the fold's own order)
+    const head = [`采集健康 ${mark} 24h 内 ${n} 条失败(${groups.length} 类) — 最新: ${failureBrief(latest)} ×${latest.count || 1}`, hint]
+    if (s.state !== 'failing') head[0] = `采集健康 ${mark} ${word} · 24h 内 ${n} 条失败(${groups.length} 类) — 最新: ${failureBrief(latest)} ×${latest.count || 1}`
+    head[0] += unread
+    return head
+  }
+  return [`采集健康 ${mark} ${word}${unread}`, ...(s.state === 'off' || s.state === 'stopped' || s.state === 'not-installed' ? [] : [hint])]
+}
+
+/** The unnamed `asight status`: ≤10 lines in the steady world, one screen of conclusions (D46). The rare warning lines (relayed connections, restarts,
+ *  linger, your own asight processes) still print — they are things to act on, not decoration. */
+export function renderStatusDigest(f, { home = null, now = null, colors: c = noColor() } = {}) {
+  const d = f.daemon, reply = d.reply
+  const captured = f.harnesses.filter((h) => h.judged.captured === true)
+  const daemonBit = d.state === 'running'
+    ? `守护进程${d.pid ? ` pid ${d.pid}` : ' 在跑'}`
+    : d.state === 'not-running' ? `守护进程 没在跑${d.reason ? `(${d.reason})` : ''} · 什么都没有被采集(asight on 拉起它)`
+      : d.state === 'not-responding' ? `守护进程 没响应(${d.reason})`
+        : `守护进程 不知道(${d.reason})`
+  const engineBit = reply && reply.engine ? ` · 引擎 ${reply.engine.port}(${reply.engine.decrypted ?? 0} 解密, ${reply.engine.spliced ?? 0} 透传)` : ''
+  const lines = [c.bold(`asight · 在采 ${captured.length}/${HARNESS_IDS.length || f.harnesses.length} · ${daemonBit}${engineBit}`)]
+  if (captured.length) lines.push(`  ${c.green('在采')}   ${captured.map((h) => `${h.id}${procLabel(f, h)}`).join(' · ')}`)
+  const closed = f.harnesses.filter((h) => h.desired === 'off' && h.judged.captured === false)
+  if (closed.length) lines.push(`  ${c.dim('已关')}   ${closed.map((h) => h.id).join(' · ')}(期望态 off,asight on <harness> 才开)`)
+  const missing = f.harnesses.filter((h) => h.judged.captured === false && h.desired !== 'off')
+  if (missing.length) lines.push(`  ${c.yellow('没采')}   ${missing.map((h) => `${h.id}(${reasonText(reasonOf(h.judged)) || '没给原因'})`).join(' · ')}`)
+  const unknown = f.harnesses.filter((h) => h.judged.captured === null)
+  if (unknown.length) lines.push(`  ${c.yellow('不知道')} ${unknown.map((h) => `${h.id}(${h.why.join('; ') || '读不到'})`).join(' · ')}`)
+  const notInstalled = HARNESS_IDS.filter((id) => !f.harnesses.some((h) => h.id === id && h.installed))
+  if (notInstalled.length) lines.push(`  ${c.dim('未装')}   ${notInstalled.join(' · ')}`)
+  if (f.state && f.state.error) lines.push(`期望态: 不知道(${f.state.error})`)
+  if (f.manifest.error) lines.push(`安装清单: 不知道(${f.manifest.error})`)
+  lines.push(pathLine(f))
+  if (f.topology_error) lines.push(`各 harness 的路: 不知道(${f.topology_error})`)
+  else if (f.topology) {
+    const ids = f.harnesses.map((h) => h.id)
+    const drawn = ids.filter((id) => hasPathInfo(f.topology[id]))
+    const rest = ids.filter((id) => f.topology[id] && !hasPathInfo(f.topology[id]))
+    if (drawn.length) lines.push(...renderPathBlock(f.topology, { ids: drawn, now }).slice(1)) // the rows; the block's own header is the 路径 line's job
+    if (rest.length) lines.push(`各 harness 的路: 不知道(${[...new Set(rest.flatMap((id) => f.topology[id].notes || []))].join('; ') || '画不出来(读不到足够的事实)'};细节: asight status <harness>)`)
+  }
+  lines.push(...healthSummary(f, c))
+  lines.push(`日志     ${c.dim(tilde(path.join(f.dir, 'logs'), home))} · 记录 ${c.dim(tilde(path.dirname(f.dir), home))} · 关闭 asight off`)
+  if (f.relayed !== 'unknown' && f.relayed.closing + f.relayed.waiting > 0) lines.push(relayedText(f))
+  if (f.relayed === 'unknown') lines.push(relayedText(f))
+  const restart = restartOf(f)
+  if (restart.length) lines.push(`需要你做的: ${restart.map((x) => `正在跑的 ${x.harness}(pid ${x.pid})重启后才会被采集`).join(';')};在那之前照常直连`)
+  if (f.linger && lingerText({ ...f.linger, user: f.user })) lines.push(lingerText({ ...f.linger, user: f.user }))
+  lines.push(...netenvWriteText(f.netenv), ...userProcsText(f.userProcs))
+  return lines
+}
+
 // a failure in the last 24 h (D38⑦): of the collector, the old capture or the raw layer — the summary state names only the worst part, and a daemon that is not running outranks a failure
 const failedIn24h = (h) => !!h && [h.collector && h.collector.failures, h.legacy && h.legacy.failures, h.raw && h.raw.failures].some((l) => Array.isArray(l) && l.length > 0)
 
-const USAGE = 'usage: asight status [harness…] [--json]'
+const USAGE = 'usage: asight status [harness…] [--json] [--failures]'
 
 // The old capture's own status branch — the platform gate and the claude-code Desktop/CLI rows of src/cli/legacy-status.mjs — went
 // with the old capture (D39⑥ executed 2026-10-11). Every platform runs the collector's status; a platform without a collector
@@ -274,9 +389,10 @@ export async function runStatusCli(argv, ctx = {}) { return (await statusRun(arg
  *  is asked once and the topology it prints and the one it diagnoses are the same object. */
 export async function statusRun(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
   const names = []
-  let json = false
+  let json = false, failures = false
   for (const a of argv) {
     if (a === '--json') json = true
+    else if (a === '--failures') failures = true // D46: the whole failure wall, the format it always had (the digest prints count + newest only)
     else if (a.startsWith('-')) { io.err(`asight status: unknown option ${a}\n${USAGE}`); return { exit: EXIT.usage, f: null } }
     else names.push(a)
   }
@@ -295,9 +411,17 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
     io.out(JSON.stringify(r, null, 2))
     return { exit, f }
   }
-  for (const l of renderStatus(f, { home, detail: named.ids || [], now: (deps.ms || Date.now)() })) io.out(l) // `now`: how long ago the paths were probed (§9.2 「N 秒前探测」)
-  if (f.daemon.reply) for (const l of ['', ...formatStatus(f.daemon.reply).split('\n')]) io.out(l)
-  else if (f.health) for (const l of ['', ...formatHealth(f.health)]) io.out(l)
-  else io.out(`\ncapture health could not be read: ${f.health_error}`)
+  const c = colors(io) // zero ANSI bytes when stdout is not a TTY or NO_COLOR is set; --json never gets here (src/cli/color.mjs, D46)
+  const now = (deps.ms || Date.now)()
+  const detail = named.ids || []
+  if (detail.length) for (const l of renderStatus(f, { home, detail, now, colors: c })) io.out(l) // `now`: how long ago the paths were probed (§9.2 「N 秒前探测」)
+  else for (const l of renderStatusDigest(f, { home, now, colors: c })) io.out(l)
+  if (detail.length && !failures) for (const l of healthSummary(f, c)) io.out(l)
+  if (failures) {
+    // the whole wall, the format it always had (R11: the digest's count + newest points here)
+    if (f.daemon.reply) for (const l of ['', ...formatStatus(f.daemon.reply).split('\n')]) io.out(l)
+    else if (f.health) for (const l of ['', ...formatHealth(f.health)]) io.out(l)
+    else io.out(`\ncapture health could not be read: ${f.health_error}`)
+  }
   return { exit, f }
 }

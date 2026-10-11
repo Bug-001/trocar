@@ -147,7 +147,7 @@ test('V9: status, off, on, doctor and uninstall with --json print one JSON value
     assert.ok([0, 1, 3].includes(exit), `${argv.join(' ')}: exit ${exit}`)
   }
   const plan = await sandbox().run(['on', '--json']) // not in a terminal and no --yes: the plan is stderr, stdout is still one JSON (or nothing), exit 2
-  assert.equal(plan.exit, 2); assert.match(plan.io.stderrText(), /将写或改下面这些文件/); assert.ok(plan.io.stdoutText() === '' || JSON.parse(plan.io.stdoutText()).command === 'on')
+  assert.equal(plan.exit, 2); assert.match(plan.io.stderrText(), /asight on · 将写 \d+ 个文件/); assert.ok(plan.io.stdoutText() === '' || JSON.parse(plan.io.stdoutText()).command === 'on')
 })
 
 test('V26: one case per exit code — 0 done, 1 not done, 2 usage, 3 status cannot judge, 70 the daemon crashed', async () => {

@@ -33,7 +33,9 @@ test('cli: `collector status` is the one `asight status` (src/cli/status.mjs: it
   const named = []
   const t2 = io(); assert.equal(await runCollector(['off', '--bogus'], { env, request, platform: 'linux', ...t2 }), 2, 'and its usage errors are `asight off`\'s: exit 2')
   assert.match(t2.e.join('\n'), /asight off: unknown option --bogus/)
-  const all = t.o.join('\n') // what the daemon says follows the per-harness rows, the text `formatStatus` has always printed
+  assert.match(t.o.join('\n'), /引擎 4711\(2 解密, 1 透传\)/, 'the digest carries the engine summary the daemon reports')
+  const tf = io(); await runCollector(['status', '--failures'], { env, home, request, ...status, ...tf })
+  const all = tf.o.join('\n') // the whole wall behind --failures: what the daemon says, the text `formatStatus` has always printed (D46)
   assert.match(all, /2 decrypted/); assert.match(all, /untrusted: var-missing · 2 direct/)
   assert.match(all, /  12 opencode \(started by claude-code\) decrypt \(asight:marker via plugin marker\) · 0 direct\n    not captured \(not via the trust path\): models\.dev \(before-plugin\)/)
   assert.match(all, /  14 claude-code decrypt .*\n    not captured \(transport the engine cannot reach\): af-unix \(ANTHROPIC_UNIX_SOCKET\), quic \(BUN_OPTIONS\)/, 'the agent line lists them (B-4b)')
@@ -41,7 +43,7 @@ test('cli: `collector status` is the one `asight status` (src/cli/status.mjs: it
   assert.match(all, /  13 deepseek-dsh untrusted: dsh-node-too-old — this dsh runs on a Node older than 22\.19\.0 · 1 direct/)
   // R4: 3 is for "could not judge", not for "no daemon": with nothing installed and no daemon there is nothing wrong (0); no runtime dir is no usage error either (the lock names the socket when there is one)
   t = io(); assert.equal(await runCollector(['status'], { env, home, request: async () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }) }, ...status, ...t }), 0)
-  assert.match(t.o.join('\n'), /守护进程: 没在跑/)
+  assert.match(t.o.join('\n'), /守护进程 没在跑/)
   t = io(); assert.equal(await runCollector(['status'], { env: {}, home, request, ...status, ...t }), 0); assert.deepEqual(t.e, [])
   fs.rmSync(home, { recursive: true, force: true })
   t = io(); assert.equal(await runCollector(['bogus'], { env, request, ...t }), 2)
@@ -60,19 +62,22 @@ test('cli: with no daemon answering (not running, no runtime dir, stuck) status 
     const env = { XDG_RUNTIME_DIR: '/run/user/1000' }
     const status = { platform: 'linux', statusDeps: { procs: async () => [], netenv: NO_PROBE, exec: NO_EXEC } }
     let t = io(); assert.equal(await runCollector(['status'], { env: {}, home, ...status, ...t }), 1)
-    assert.deepEqual(t.e, [], 'no runtime dir is not an error of the caller\'s: there is just no control socket to ask'); assert.match(t.o.join('\n'), /failure \(start\/EADDRINUSE\): the engine port is held by another process/)
+    assert.deepEqual(t.e, [], 'no runtime dir is not an error of the caller\'s: there is just no control socket to ask')
+    assert.match(t.o.join('\n'), /采集健康 ✗ 守护进程没在跑 · 24h 内 1 条失败\(1 类\) — 最新: EADDRINUSE the engine port is held by another process ×1/, 'the digest brief: errno head, squashed reason, ×count (D46)')
+    const wall = io(); await runCollector(['status', '--failures'], { env: {}, home, ...status, ...wall })
+    assert.match(wall.o.join('\n'), /failure \(start\/EADDRINUSE\): the engine port is held by another process/, 'the whole wall is one --failures away')
     t = io(); assert.equal(await runCollector(['status'], { env, home, request: async () => { throw Object.assign(new Error('timed out after 2000 ms'), { code: 'ETIMEDOUT' }) }, ...status, ...t }), 1)
-    assert.match(t.o.join('\n'), /守护进程: 没响应\([^\n]*timed out/); assert.match(t.o.join('\n'), /failure \(start\/EADDRINUSE\)/)
+    assert.match(t.o.join('\n'), /守护进程 没响应\([^\n]*timed out/); assert.match(t.o.join('\n'), /EADDRINUSE the engine port is held/)
     fs.rmSync(path.join(dir, 'flows'), { recursive: true }); fs.writeFileSync(path.join(dir, 'flows'), 'x')
     t = io(); assert.equal(await runCollector(['status'], { env, home, request: async () => { throw Object.assign(new Error('x'), { code: 'ECONNREFUSED' }) }, ...status, ...t }), 3)
     assert.match(t.o.join('\n'), /capture health could not be read: .*flows: ENOTDIR/)
-    assert.match(t.o.join('\n'), /守护进程: 没在跑/, 'no lock')
+    assert.match(t.o.join('\n'), /守护进程 没在跑/, 'no lock')
     fs.writeFileSync(path.join(dir, 'lock'), JSON.stringify({ pid: 2 ** 22 + 7, start_time: '1', boot_id: 'b', socket: '/x' })) // a pid nothing runs as
     t = io(); await runCollector(['status'], { env, home, request: async () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }) }, ...status, ...t })
-    assert.match(t.o.join('\n'), /守护进程: 没在跑\(pid \d+ is not running\)/, 'kill -9: said from the lock alone')
+    assert.match(t.o.join('\n'), /守护进程 没在跑\(pid \d+ is not running\)/, 'kill -9: said from the lock alone')
     fs.writeFileSync(path.join(dir, 'lock'), JSON.stringify({ pid: process.pid, socket: '/x' })); const old = new Date(Date.now() - 30_000); fs.utimesSync(path.join(dir, 'lock'), old, old)
     t = io(); await runCollector(['status'], { env, home, request: async () => { throw Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }) }, ...status, ...t })
-    assert.match(t.o.join('\n'), /守护进程: 没响应\([^\n]*was not refreshed for 3\d s/, 'a stuck daemon')
+    assert.match(t.o.join('\n'), /守护进程 没响应\([^\n]*was not refreshed for 3\d s/, 'a stuck daemon')
     const health = { generated_at: 'T', summary: { state: 'ok', since: 'T0', read_errors: 1 }, collector: { installed: true, daemon: { state: 'running' }, conditions: [], failures: [], expected: { policy: 3 } }, legacy: { present: false }, raw: { problems: [] }, read: { errors: [{ file: '/f', error: 'EACCES' }], truncated: true } }
     assert.match(formatStatus({ ...STATUS, health, events: { lost: 2 } }), /capture health: ✓ capturing since T0 · 读不全[^\n]*\nnot captured by design \(last 24 h\): policy 3\ncould not read \/f: EACCES\n\(older records were left out[^\n]*\nevent log: 2 line\(s\) could not be written/)
     assert.match(formatStatus({ ...STATUS, health: { error: 'capture health could not be read: /x/flows: EACCES' } }), /capture health could not be read: \/x\/flows: EACCES/)
@@ -197,7 +202,7 @@ test('cli: install / on go to the one `asight on` (src/cli/on.mjs) with the desc
   const base = { home: '/h', daemon, install, script: '/repo/bin/asight.mjs', platform: 'linux', onDeps: { netenv: NO_PROBE } } // `on` looks at the VPN software too (1.6 §6): never for real in a test
   let t = io(); assert.equal(await runCollector(['install', '--yes'], { ...base, ...t }), 0)
   assert.equal(t.o.length, 2, 'the plan, then the receipt (src/cli/receipt.mjs)')
-  assert.match(t.o[0], /^asight on 将写或改下面这些文件/); assert.match(t.o[1], /^asight 已打开采集/)
+  assert.match(t.o[0], /^asight on · 将写 \d+ 个文件/); assert.match(t.o[1], /^✔ 入口已写/)
   t = io(); assert.equal(await runCollector(['on', '--yes', '--no-unit'], { ...base, ...t }), 0, '`collector on` is `on` too: the daemon-only POST /on path is gone')
   t = io(); assert.equal(await runCollector(['install', '--yes', '--no-autostart'], { ...base, ...t }), 0)
   t = io(); assert.equal(await runCollector(['install', '--dry-run'], { ...base, ...t }), 0)
@@ -240,7 +245,7 @@ test('cli: the real bin dispatches `collector` (usage → 2) and `collector stat
   const env = { ...process.env, HOME: home, PATH: osStubs().path, ASIGHT_MIHOMO_SOCK: path.join(home, 'none.sock') }; delete env.XDG_RUNTIME_DIR // status reads the disk: never the operator's own; the VPN probe is pinned to a socket nobody listens on, so it can never reach the operator's core
   assert.equal(spawnSync(process.execPath, [BIN, 'collector', 'nope'], { env, encoding: 'utf8' }).status, 2)
   const r = spawnSync(process.execPath, [BIN, 'collector', 'status'], { env, encoding: 'utf8' })
-  assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /asight 状态|本平台/); assert.equal(r.stderr, '')
+  assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /^asight · 在采 0\/7 · 守护进程 没在跑/); assert.equal(r.stderr, '')
   assert.deepEqual(fs.readdirSync(home), [], 'read-only')
   assert.ok(formatStatus({ ...STATUS, agents: [] }).includes('agents: none running'))
   const groups = [{ key: 'agent-untrusted:config-after-start', count: 1, last_ts: 'T1', last: { ts: 'T1', event: 'agent-untrusted', pid: 11, agent: 'claude-code', code: 'config-after-start', reason: 'restart it' } },

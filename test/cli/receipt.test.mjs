@@ -205,7 +205,7 @@ test('on: refused as root (R7), with the helper missing it writes nothing and sa
   for (const platform of ['win32', 'darwin', 'freebsd']) {
     io = fakeIo(); const bare = onCtx(home, io); bare.platform = platform
     assert.equal(await runOnCli([], bare), 2, `${platform}: ${io.text()}`)
-    assert.match(io.text(), /asight on 将写或改下面这些文件/, `${platform}: the new collector's plan, not a refusal`)
+    assert.match(io.text(), /asight on · 将写 \d+ 个文件/, `${platform}: the new collector's plan, not a refusal`)
     assert.ok(!/本平台未实现|驱动旧采集/.test(io.text()), `${platform} is not told it has no collector any more`)
   }
   assert.deepEqual(snapshot(home), before)
@@ -251,11 +251,11 @@ test('formatOnReceipt: past and future tense, the four commands, the restart lis
     undo: ['asight off'], log: '/home/alice/.asight/collector/flows',
   }
   const past = formatOnReceipt(r, { tense: 'past', home })
-  assert.match(past, /^asight 已打开采集/)
+  assert.match(past, /^✔ 入口已写/)
   assert.match(past, /~\/\.claude\/settings\.json +加 env\.NODE_EXTRA_CA_CERTS +备份 ~\/\.asight\/backup\/aa-bb/)
   assert.match(past, /跳过: hermes\(~\/\.hermes 不存在\)/)
   assert.match(past, /登出后停采\(未开 linger\)[^\n]*loginctl enable-linger alice/)
-  assert.match(past, /claude-code\(pid 4121\)重启后才会被采集/)
+  assert.match(past, /claude-code\(pid 4121,启动早于信任入口\)/)
   for (const c of ['asight on', 'asight off', 'asight status', 'asight uninstall']) assert.ok(past.includes(c), c)
   const future = formatOnReceipt({ ...r, dry_run: true }, { tense: 'future', home })
   assert.match(future, /^asight 将打开采集/); assert.match(future, /将改这些文件/)
@@ -268,7 +268,7 @@ test('formatOnReceipt: past and future tense, the four commands, the restart lis
   assert.match(idle, /^asight 已写好入口与期望态,但守护进程没在跑[^\n]*什么都不会被采集/)
   assert.doesNotMatch(idle, /已打开采集/)
   assert.match(idle, /守护进程: 没在跑,什么都没有被采集/)
-  assert.match(formatOnReceipt({ ...r, ok: true, daemon: { state: 'running', pid: 77, started: true } }, { home }), /^asight 已打开采集[\s\S]*守护进程: 在跑\(pid 77\),这次拉起的/, 'a daemon that runs: as before')
+  assert.match(formatOnReceipt({ ...r, ok: true, daemon: { state: 'running', pid: 77, started: true } }, { home }), /^✔ 入口已写 · 守护进程在跑\(pid 77\),这次拉起的/, 'a daemon that runs: the verdict line says it')
 })
 
 test('formatPlan: every file the first on will write is listed before any is written — the CA, the trust file and whose certificates it carries, a link by the file that really changes, an owned file by its role, a text entry by what it adds, the unit and its env, the event log, what the agent may write itself', () => {
@@ -413,16 +413,16 @@ test('V10: status says 不知道 with the reason for connections the daemon did 
   let r = await runStatus(s, [], { request: asDaemon(reply({ relayed: undefined })), netenv: async () => { throw new Error("EACCES: permission denied, open '/h/.local/share/io.github.clash-verge-rev.clash-verge-rev/verge.yaml'") } })
   const line = (text, head) => text.split('\n').find((l) => l.startsWith(head)) || ''
   assert.match(line(r.text, '仍经 asight 的连接'), /^仍经 asight 的连接: 不知道\(the daemon's reply does not carry the connection counts\)$/)
-  assert.match(line(r.text, '本机网络环境'), /^本机网络环境: 不知道\(EACCES[^)]*verge\.yaml/)
-  for (const head of ['仍经 asight 的连接', '本机网络环境']) { assert.ok(!/0 条|无/.test(line(r.text, head)), `${head}: never 0 条 or 无`) }
+  assert.match(line(r.text, '路径'), /^路径    不知道\(EACCES[^)]*verge\.yaml/)
+  for (const head of ['仍经 asight 的连接', '路径']) { assert.ok(!/0 条|无/.test(line(r.text, head)), `${head}: never 0 条 or 无`) }
   // a probe that found nothing is not 「无」 either
   r = await runStatus(s, [], { request: asDaemon(reply()), netenv: async () => NO_VPN })
-  assert.match(line(r.text, '本机网络环境'), /^本机网络环境: 不知道\(no Clash Verge directory/); assert.ok(!/无/.test(line(r.text, '本机网络环境')))
+  assert.match(line(r.text, '路径'), /^路径    不知道\(no Clash Verge directory/); assert.ok(!/无/.test(line(r.text, '路径')))
   // the lock cannot be read and nothing answers
   const lock = path.join(s.dir, 'lock'); fs.writeFileSync(lock, '{}')
   const broken = { ...fs, readFileSync: (f, ...a) => { if (f === lock) throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } }
   r = await runStatus(s, [], { request: down(), fs: broken })
-  assert.match(line(r.text, '守护进程'), new RegExp(`^守护进程: 不知道\\([^\\n]*${lock.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^\\n]*EACCES`))
+  assert.match(r.text, new RegExp(`守护进程 不知道\\([^\\n]*${lock.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}[^\\n]*EACCES`))
   assert.match(line(r.text, '仍经 asight 的连接'), /^仍经 asight 的连接: 不知道\(whether a daemon runs is not known/)
   assert.ok(!/0 条|无/.test(line(r.text, '仍经 asight 的连接'))); assert.equal(r.exit, 3, 'and the agents it cannot judge make it 3')
   // --json: the same, as data

@@ -207,10 +207,12 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   const day = now().toISOString().slice(0, 10)
   const caNew = !(fs.existsSync(ca.key) && fs.existsSync(ca.pem))
   const runDir = path.join(dir, 'run', 'trust')
+  // D46: the daemon's log files the unit's write makes (a dry run names them too — the receipt lists every file the real run writes, V3); once they exist a later on lists none of them
+  const logs = unit && typeof unit.logFiles === 'function' ? unit.logFiles().filter((f) => !fs.existsSync(f.path)).map((f) => f.path) : []
   return {
     first, newPaths, steps, targets, skipped, restart, writing, installed: [...installed],
     changed: draft.entries.map((e, i) => ({ e, j: entryJ[i], i })).filter((x) => act(x.j.action)).map((x) => ({ path: x.e.path, change: changeText(x.e, x.j.entry ? x.j.entry.prior_value : preview[x.i].prior), backup: null })),
-    created: [...(prior ? [] : [manifestPath(dir)]), ...(caNew ? [ca.key, ca.pem] : []), ...steps.filter((s) => act(s.action) && s.kind !== 'entry').map((s) => s.path)],
+    created: [...(prior ? [] : [manifestPath(dir)]), ...(caNew ? [ca.key, ca.pem] : []), ...steps.filter((s) => act(s.action) && s.kind !== 'entry').map((s) => s.path), ...logs],
     unchanged: steps.filter((s) => s.action === 'skip-intact').map((s) => s.path),
     // what onPlan prints (formatPlan): every file this run would write or change, and nothing it would leave alone — the manifest only when it is
     // written (the first on, or an on that writes something), the CA only when it is not there yet, the runtime directory only when it is made, the backup
@@ -223,6 +225,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
     owned: draft.owned.filter((o, i) => act(ownedJ[i].action)).map((o) => ({ harness: o.harness, path: o.path, role: o.role })),
     entries: draft.entries.map((e, i) => [e, i]).filter(([, i]) => act(entryJ[i].action)).map(([e, i]) => entryRow(e, i)),
     ...(unit && act(unitJ.action) ? { unit: { path: unit.path, env: daemon.env, links: unit.links || [] } } : {}),
+    ...(logs.length ? { logs } : {}), // D46: named in the plan's own listing (every file, R3), written by the unit's write step
     watch: draft.watch,
     notes: draft.notes,
     records: path.join(dir, 'flows'), // install notes are kept here as install-note events (D38)
@@ -303,6 +306,12 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
     const text = unit.text(daemon.env)
     const j = judgeOwned({ manifest: m, file: unit.path, planned: sha256(Buffer.from(text)), fs })
     if (j.action !== 'skip-intact') { guard(); writeOwnedFile({ dir, manifest: m, role: 'unit', file: unit.path, data: text, mode: 0o644, exclusive: j.action === 'write', now: now(), fs }); written.unit = j.action }
+    // D46: the daemon's own log sinks the unit names — directory 0700, two files 0600, made here at unit-write time and listed in the manifest like
+    // every file asight owns; NEVER rewritten afterwards (a later on only lists what the manifest does not know yet, so no log line is ever truncated)
+    if (typeof unit.ensureLogs === 'function') { guard(); unit.ensureLogs() }
+    if (typeof unit.logFiles === 'function') for (const lf of unit.logFiles()) {
+      if (!(m.files || []).some((x) => x.path === lf.path)) { writeOwnedFile({ dir, manifest: m, role: 'daemon-log', file: lf.path, data: '', mode: 0o600, now: now(), fs }); written.files.push(lf.path) }
+    }
   }
   m.complete = true
   if (confirmed) m.confirmed_paths = [...new Set([...(m.confirmed_paths || []), ...final.paths, ...(unit ? [unit.path] : [])])] // what the operator was shown and said yes to (1.6 §1.6)

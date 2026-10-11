@@ -7,9 +7,23 @@ import { formatOffReceipt } from '../off/receipt.mjs'
 import { netenvText } from '../netenv/index.mjs'
 import { productName } from '../netenv/topology.mjs'
 import { collectorDir } from '../off/paths.mjs'
+import { noColor } from './color.mjs'
+import { HARNESS_IDS } from './harness-names.mjs'
 
 /** One harness's chain after `on` (§9.5): where a new connection goes, then the proxy setting it was drawn from (credentials masked: the record holds the redacted value) and the file or variable that setting is in. */
 const adoptedLine = (h, x) => `接上后 ${h} 的路: ${x.chain}${x.proxy ? `(它的代理设置 ${x.proxy},读自 ${(x.source || []).map((s) => (s.kind === 'file' ? `${s.where}${s.key ? ` ${s.key}` : ''}` : s.where)).join('、') || '它的设置'})` : ''}`
+
+/** D46: a chain that is the harness's own name and nothing else (the degenerate topology `buildTopology`'s catch leaves on a machine whose facts
+ *  cannot be read) says nothing — a 「接上后 X 的路: X」 line is noise, and it is not printed. A chain with a hop (or a proxy setting named) is real. */
+const saysSomething = (x) => !!x && (/\s→\s/.test(String(x.chain || '')) || !!x.proxy)
+
+/** One line per (harness, reason) of a plan's watch entries, the files named together — D46: the same fact in four entries (OpenCode's package.json
+ *  family) is one line, not four. The caller indents it (the plan's own two spaces, the Windows §11 block's four). */
+function watchLines(watch, t) {
+  const by = new Map()
+  for (const w of watch || []) { const k = { harness: w.harness, why: w.why }; const hit = [...by.keys()].find((x) => x.harness === w.harness && x.why === w.why) || (by.set(k, []), k); by.get(hit).push(t(w.path)) }
+  return [...by].map(([{ harness, why }, files]) => `${harness} itself may write ${files.length > 1 ? `${files[0]} (+${files.length - 1} more: ${files.slice(1).map((f) => String(f).split(/[\\/]/).pop()).join(', ')})` : files[0]} (${why}); uninstall reports it, never deletes it`)
+}
 
 /** `/home/alice/.claude/x` → `~/.claude/x` when `p` is under `home`. */
 export const tilde = (p, home) => (home && typeof p === 'string' && (p === home || p.startsWith(home + path.sep)) ? `~${p.slice(home.length)}` : p)
@@ -94,9 +108,9 @@ function winGroupRows(p, facts, t) {
  * first write, there is nothing else to plan. `adoption` = what prepareAdoption returned (the facts, with each form's group plan), `prep` = the arch hook's answer (the kernel and Smart App
  * Control data). Pure: everything is handed in.
  */
-export function formatWinPlan(p, { home = null, autostart = true, netenv = null, env = process.env, adoption = null, prep = null } = {}) {
+export function formatWinPlan(p, { home = null, autostart = true, netenv = null, env = process.env, adoption = null, prep = null, colors: c = noColor() } = {}) {
   const t = (x) => winShown(x, home)
-  const lines = ['asight 要做的(本用户,不需要管理员):']
+  const lines = [c.bold('asight 要做的(本用户,不需要管理员):')]
   if (prep && prep.refuse) {
     lines.push('  自带内核  没拿到:下载失败或摘要不符(原因与手动替代见回执),所以 on 不开始')
     if (Array.isArray(prep.refuse.commands) && prep.refuse.commands.length) lines.push(`    手动替代(asight 不替你跑):${prep.refuse.commands.join(' 或 ')}`)
@@ -122,7 +136,7 @@ export function formatWinPlan(p, { home = null, autostart = true, netenv = null,
     ...(p.owned || []).map((o) => `${o.harness}: ${t(o.path)} (asight's ${o.role})`),
     ...(p.backups ? [`backups, a copy of each of those files that exists, made before it is changed: ${t(p.backups)}/`] : []),
     ...(p.records ? [`install notes (event log): ${t(p.records)}/`] : []),
-    ...(p.watch || []).map((w) => `${w.harness} itself may write ${t(w.path)} (${w.why}); uninstall reports it, never deletes it`),
+    ...watchLines(p.watch, t),
   ]
   if (own.length) lines.push('  asight 自己建或改的:', ...own.map((l) => `    ${l}`))
   lines.push('  各形态(代理入口与信任入口;只改 agent 自己的文件,原值记下,off 时还原)')
@@ -154,11 +168,18 @@ export function formatWinPlan(p, { home = null, autostart = true, netenv = null,
 }
 
 /** Every file `on` would write or change, before it writes any (4.6; 1.6 §1.6). `p` = what planOn returns (its `files` / `owned` /
- *  `entries` / `unit` are only what would be written, so a later `on` lists only what is new), or what an `onPlan` of the legacy install is handed. */
-export function formatPlan(p, { home = null, autostart = true, netenv = null, platform = 'linux' } = {}) {
+ *  `entries` / `unit` are only what would be written, so a later `on` lists only what is new), or what an `onPlan` of the legacy install is handed.
+ *  D46: the header says the count first (one line of conclusions), the listing below is still every file — the confirmation's object (R3/R6). The
+ *  autostart line names the real mechanism of `platform` (launchd on darwin, systemd --user on linux; the hardcoded systemd wording went). */
+export function formatPlan(p, { home = null, autostart = true, netenv = null, platform = 'linux', colors: c = noColor() } = {}) {
   const t = (x) => tilde(x, home)
+  const count = (p.manifest ? 1 : 0) + (p.state ? 1 : 0) + (p.standalone ? 1 : 0) + ((p.ca || []).length) + ((p.files || []).length) + ((p.owned || []).length) + ((p.entries || []).length)
+    + ((p.optIn || []).filter((x) => x.chosen && x.applicable && x.state === 'needed').length) + (p.unit ? 1 : 0) + ((p.logs || []).length) + (p.records || p.events ? 1 : 0)
+  const unitWord = platform === 'darwin'
+    ? `autostart unit (launchd, RunAtLoad + KeepAlive)` // launchd is the only autostart there (4.9 §4): a LaunchAgent plist, never a systemd unit
+    : `autostart unit (systemd --user, ${autostart ? 'enabled --now' : 'started, not enabled'})`
   return [
-    `asight on 将写或改下面这些文件,除此之外什么都不动${p.first ? '(首次 on:包含 asight 自己要建的)' : '(只列出这次要写的;已在位、没变的不重写)'}:`,
+    c.bold(`asight on · 将写 ${count} 个文件${p.first ? '(首次确认时逐个列出' : '(已在位、没变的不重写,下面只列这次要写的'};备份进 ${t(p.backups || path.join(home || '~', '.asight', 'backup'))}/):`),
     ...(p.manifest ? [`  install manifest: ${t(p.manifest)}`] : []),
     ...(p.state ? [`  state file (which agents are on): ${t(p.state)}`] : []),
     ...(p.standalone ? [`  asight-off, the undo that works without the source tree or the daemon: ${t(p.standalone)}`] : []),
@@ -170,10 +191,11 @@ export function formatPlan(p, { home = null, autostart = true, netenv = null, pl
     // the named opt-in items are part of what this run changes (1.6 §1.7): each with its one 「影响」 line, admin said where it is needed
     ...(p.optIn || []).filter((x) => x.chosen && x.applicable && x.state === 'needed').map((x) => `  ${x.form} (你点名的${x.scope === 'machine' ? ',要管理员,Windows 会弹它自己的提权框' : ''}): ${x.item} — 影响: ${x.impact}`),
     ...(p.backups ? [`  backups, a copy of each of those files that exists, made before it is changed: ${t(p.backups)}/`] : []),
-    ...(p.unit ? [`  autostart unit (systemd --user, ${autostart ? 'enabled --now' : 'started, not enabled'}): ${t(p.unit.path)}${Object.keys(p.unit.env).length ? ` with ${Object.entries(p.unit.env).map(([k, v]) => `${k}=${v}`).join(' ')} for the daemon alone (it checks a relay's certificate with it)` : ''}`,
-      ...(autostart ? p.unit.links.map((l) => `  autostart link (made by systemctl --user enable): ${t(l)}`) : [])] : []),
+    ...(p.unit ? [`  ${unitWord}: ${t(p.unit.path)}${Object.keys(p.unit.env).length ? ` with ${Object.entries(p.unit.env).map(([k, v]) => `${k}=${v}`).join(' ')} for the daemon alone (it checks a relay's certificate with it)` : ''}`,
+      ...(autostart && platform !== 'darwin' ? p.unit.links.map((l) => `  autostart link (made by systemctl --user enable): ${t(l)}`) : [])] : []),
     ...(p.records ? [`  install notes (event log): ${t(p.records)}/`] : p.events ? [`  install notes (appended, for the board): ${t(p.events)}`] : []),
-    ...(p.watch || []).map((w) => `  ${w.harness} itself may write ${t(w.path)} (${w.why}); uninstall reports it, never deletes it`),
+    ...((p.logs || []).length ? [`  daemon logs (created once, never rewritten): ${(p.logs).map(t).join(', ')}`] : []),
+    ...watchLines(p.watch, t).map((l) => `  ${l}`),
     ...(p.skipped && p.skipped.length ? [`跳过: ${p.skipped.map((s) => `${t(s.what)}(${s.reason})`).join('  ')}`] : []),
     // 「要你点名的(默认不做)」(1.6 §1.7): every applicable item this run is NOT doing, one line each — what it implies, whether it needs the
     // administrator, and the exact command that names it. The list is what `status`'s `opt-in-needed` rows say; `--yes` never stands in for it.
@@ -188,7 +210,7 @@ export function formatPlan(p, { home = null, autostart = true, netenv = null, pl
       ...(p.optIn || []).filter((x) => x.state === 'never').map((x) => `  ${x.form}: ${x.item} 点名也不做 — ${x.note}`),
     ] : []),
     ...(p.edited || []).map((e) => `你改过的代理设置: ${e.harness} 的 ${e.where || '代理字段'} 现在是 ${e.now ?? '空'}(asight 上次接上时是 ${e.was ?? '空'});继续会把它接成新的上游,再指回 asight`),
-    ...(p.adopted || []).map((x) => adoptedLine(x.harness, x)), // §9.5: where a new connection of the agent goes once asight is on, credentials masked
+    ...(p.adopted || []).filter(saysSomething).map((x) => adoptedLine(x.harness, x)), // §9.5: where a new connection of the agent goes once asight is on, credentials masked — only when the chain says something (D46)
     ...(netenv ? netenvText(netenv, { ids: p.targets || null, platform }) : []), // §1.6: the plan names the machine's network environment (§6): what asight found, and that it changes none of it
     ...(p.restart && p.restart.length ? [`正在跑的 ${p.restart.map((x) => `${x.harness}(pid ${x.pid})`).join('、')} 重启后才会被采集;在那之前照常直连`] : []),
   ].join('\n')
@@ -199,30 +221,47 @@ export const lingerText = ({ linger, linger_reason: why = null, user = null }) =
 
 const joinPaths = (list, home) => list.map((x) => tilde(typeof x === 'string' ? x : x.path, home)).join('  ')
 
-/** The receipt of `asight on` as text. `tense`: 'past' | 'future' (the dry run). */
-export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'linux' } = {}) {
+/** The receipt of `asight on` as text (D46: the verdict first, the changes it lists in full — R1 — the long tail pointed at). `tense`: 'past' | 'future'
+ *  (the dry run). `fresh` = the set of harnesses THIS run newly wired (their one-time notes print; the rest live in `doctor` and `--json` — the notes
+ *  themselves stay in the receipt object untouched, R5/R11); null prints every note (the pure call). */
+export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'linux', fresh = null, colors: c = noColor() } = {}) {
   const past = tense !== 'future'
   const t = (x) => tilde(x, home)
   // an on that wrote everything but has no daemon to hang the links (--no-unit, nothing answering) is done and exits 0, but captures nothing yet: the header says so
   const idle = past && r.ok !== false && r.daemon && r.daemon.state !== 'running'
-  const lines = [r.ok === false && past ? 'asight 没有做完(原因在下面)。' : idle ? 'asight 已写好入口与期望态,但守护进程没在跑:在它跑起来之前什么都不会被采集(本用户,未用 sudo)。' : past ? 'asight 已打开采集(本用户,未用 sudo)。' : 'asight 将打开采集(本用户,不用 sudo)。']
+  const daemonBit = r.daemon && r.daemon.state === 'running' ? `守护进程在跑${r.daemon.pid ? `(pid ${r.daemon.pid})` : ''}${r.daemon.started ? ',这次拉起的' : ''}` : null
+  const kernelBit = r.capture && r.capture.actual === 'on' ? ' · 内核已挂' : ''
+  const lines = [
+    r.ok === false && past ? `${c.red('✗')} asight 没有做完(原因在下面)。`
+      : idle ? 'asight 已写好入口与期望态,但守护进程没在跑:在它跑起来之前什么都不会被采集(本用户,未用 sudo)。'
+        : past ? `${c.green('✔')} 入口已写 · ${daemonBit || '守护进程: 不知道'}${kernelBit}`
+          : 'asight 将打开采集(本用户,不用 sudo)。',
+  ]
   if (r.changed.length) {
     lines.push(past ? '改了这些文件:' : '将改这些文件:')
-    const w = Math.max(...r.changed.map((c) => t(c.path).length)), v = Math.max(...r.changed.map((c) => c.change.length))
-    for (const c of r.changed) lines.push(`  ${t(c.path).padEnd(w)}  ${c.change.padEnd(v)}  ${c.backup ? `备份 ${t(c.backup)}` : past ? '(asight 新建的文件,没有改前版本可备份)' : '备份 改前先存进 ~/.asight/backup/'}`)
+    const w = Math.max(...r.changed.map((x) => t(x.path).length)), v = Math.max(...r.changed.map((x) => x.change.length))
+    for (const x of r.changed) lines.push(`  ${t(x.path).padEnd(w)}  ${x.change.padEnd(v)}  ${x.backup ? `备份 ${t(x.backup)}` : past ? '(asight 新建的文件,没有改前版本可备份)' : '备份 改前先存进 ~/.asight/backup/'}`)
   } else lines.push(past ? '没有改任何用户文件。' : '不会改任何用户文件。')
   if (r.created.length) lines.push(`${past ? 'asight 自己建的' : 'asight 将自己建'}: ${joinPaths(r.created, home)}`)
-  if (r.unchanged && r.unchanged.length) lines.push(`已在位、没有重写: ${joinPaths(r.unchanged, home)}`)
+  if (r.unchanged && r.unchanged.length) { // the display caps at three names; the whole list is the receipt's `unchanged` (R5) — none of them is rewritten by a second on (R9)
+    const shown = joinPaths(r.unchanged.slice(0, 3), home)
+    lines.push(`已在位、没有重写: ${shown}${r.unchanged.length > 3 ? `  …等 ${r.unchanged.length} 个(全部: --json)` : ''}`)
+  }
   if (r.skipped.length) lines.push(`跳过: ${r.skipped.map((s) => `${t(s.what)}(${s.reason})`).join('  ')}`)
   if (lingerText(r)) lines.push(lingerText(r))
   if (r.netenv) lines.push(...netenvText(r.netenv, { ids: r.harnesses || null, platform }))
-  for (const [h, x] of Object.entries(r.adopted || {})) lines.push(adoptedLine(h, x))
-  if (r.daemon) lines.push(`守护进程: ${r.daemon.state === 'running' ? `在跑${r.daemon.pid ? `(pid ${r.daemon.pid})` : ''}${r.daemon.started ? ',这次拉起的' : ''}` : '没在跑,什么都没有被采集(入口已写好,守护进程起来后才挂引流)'}`)
-  if (r.restart.length) lines.push(`需要你做的: ${r.restart.map((x) => `正在跑的 ${x.harness}(pid ${x.pid})重启后才会被采集`).join(';')};在那之前照常直连`)
-  for (const n of r.notes || []) lines.push(`${r.ok === false && past ? '问题' : '说明'}: ${n}`)
-  lines.push(`关采集、撤掉 asight 的全部影响  asight off${r.standalone ? `      asight 坏了也能用: ${r.standalone}` : ''}`) // `standalone`: the single-file asight-off, once the run has written it (Task 8)
-  lines.push('开采集  asight on      看状态  asight status      完全删掉 asight  asight uninstall(采集数据默认保留)')
-  if (r.log) lines.push(`记录: 看板「采集健康」 / ${t(r.log)}${/\.\w+$/.test(path.basename(r.log)) ? '' : '/'}`) // the new collector's is a directory (flows/); the old capture's is one file (mitm-events.ndjson)
+  for (const [h, x] of Object.entries(r.adopted || {})) if (saysSomething(x)) lines.push(adoptedLine(h, x)) // D46: a chain that says nothing is not printed
+  if (r.daemon && !daemonBit) lines.push(`守护进程: 没在跑,什么都没有被采集(入口已写好,守护进程起来后才挂引流)`)
+  if (r.restart.length) lines.push(`  ${c.yellow('⚠')} 重启后才被采: ${r.restart.map((x) => `${x.harness}(pid ${x.pid},启动早于信任入口)`).join('、')};在那之前照常直连`)
+  const nothingNew = fresh && fresh.size === 0 && !(r.changed || []).length && !(r.created || []).length
+  for (const n of r.notes || []) {
+    const h = HARNESS_IDS.find((id) => n.startsWith(`${id}: `))
+    if (h && fresh && !fresh.has(h)) continue // the one-time note of a harness wired before (D46): doctor and --json carry it from here
+    if (!h && nothingNew) continue // a machine-level note with nothing new done (the kernel's "found and verified" on an idempotent on)
+    lines.push(`${r.ok === false && past ? '问题' : '说明'}: ${n}`)
+  }
+  lines.push(`撤销: asight off${r.standalone ? ` · asight 坏了也能用: ${c.dim(r.standalone)}` : ''} · 回执: --json`) // `standalone`: the single-file asight-off, once the run has written it (Task 8) — the ABSOLUTE path (R3: the undo works without the source tree)
+  lines.push(c.dim(`开采集  asight on      看状态  asight status      完全删掉 asight uninstall(采集数据默认保留)${r.log ? `      记录: 看板「采集健康」 / ${t(r.log)}${/\.\w+$/.test(path.basename(r.log)) ? '' : '/'}` : ''}`)) // the new collector's log is a directory (flows/); the old capture's is one file (mitm-events.ndjson)
   return lines.join('\n')
 }
 

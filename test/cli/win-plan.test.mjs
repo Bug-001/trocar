@@ -27,10 +27,7 @@ const PLAN = `asight 要做的(本用户,不需要管理员):
     opencode: %USERPROFILE%\\.config\\opencode\\plugins\\asight-ca.js (asight's plugin)
     backups, a copy of each of those files that exists, made before it is changed: %USERPROFILE%\\.asight\\backup/
     install notes (event log): %USERPROFILE%\\.asight\\collector\\flows/
-    opencode itself may write %USERPROFILE%\\.config\\opencode\\package.json (OpenCode installs @opencode-ai/plugin there on its first run with any plugin); uninstall reports it, never deletes it
-    opencode itself may write %USERPROFILE%\\.config\\opencode\\package-lock.json (OpenCode installs @opencode-ai/plugin there on its first run with any plugin); uninstall reports it, never deletes it
-    opencode itself may write %USERPROFILE%\\.config\\opencode\\bun.lock (OpenCode installs @opencode-ai/plugin there on its first run with any plugin); uninstall reports it, never deletes it
-    opencode itself may write %USERPROFILE%\\.config\\opencode\\node_modules (OpenCode installs @opencode-ai/plugin there on its first run with any plugin); uninstall reports it, never deletes it
+    opencode itself may write %USERPROFILE%\\.config\\opencode\\package.json (+3 more: package-lock.json, bun.lock, node_modules) (OpenCode installs @opencode-ai/plugin there on its first run with any plugin); uninstall reports it, never deletes it
   各形态(代理入口与信任入口;只改 agent 自己的文件,原值记下,off 时还原)
   claude-code.cli · claude-code.vscode  %USERPROFILE%\\.claude\\settings.json  env.HTTPS_PROXY · env.NODE_EXTRA_CA_CERTS  上游: 直连(读不到你终端里的 HTTPS_PROXY)
   codex.cli · codex.vscode · codex.app  %USERPROFILE%\\.codex\\.env  顶部 asight 哨兵块  上游: 系统代理 127.0.0.1:7897(读不到你终端里的 HTTPS_PROXY)

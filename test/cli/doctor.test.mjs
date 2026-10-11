@@ -182,14 +182,13 @@ test('the collector section is `asight status` for the same harnesses (the daemo
   const before = s.sys.exec.calls.length
   const r = await doctor(s, ['--source', src], { deps: { request: asDaemon(reply({ agents })), netenv: async () => CLASH() } })
   assert.equal(r.exit, 0, `status would say 1 here (an agent is not captured); doctor's exit is the capture's:\n${r.text}`)
-  assert.match(r.out, /按进程采集器[\s\S]*claude-code\s+没有: config-after-start/)
-  assert.match(r.out, /pid 4388\s+没有: config-after-start — [^\n]*重启后才会被采集/)
-  assert.match(r.out, /本机网络环境: Clash Verge\(规则模式/, 'the VPN software, from the same probe as status')
+  assert.match(r.out, /按进程采集器[\s\S]*没采\s+claude-code\([^)]*重启后才会被采集\)/, 'the embedded status is the digest: the verdict row with its reason')
+  assert.match(r.out, /路径\s+Clash Verge\(规则模式/, 'the VPN software, from the same probe as status')
   assert.match(r.out, /✓ asight-off\(不依赖源码的撤销副本\):/, 'on wrote the standalone copy and it is the version this asight writes')
   assert.deepEqual(ranBesides(s, before), [], 'doctor ran no OS tool but the reads of the network facts: it reads, and it asks the daemon over its socket (R8)')
   // a probe that fails is 不知道 with the reason, and still not an exit code
   const f = await doctor(s, ['--source', src], { deps: { netenv: async () => { throw new Error('boom: probe') } } })
-  assert.match(f.out, /本机网络环境: 不知道\(boom: probe\)/); assert.equal(f.exit, 0)
+  assert.match(f.out, /路径\s+不知道\(boom: probe\)/); assert.equal(f.exit, 0)
   // names restrict the harness table, as in status
   const one = await doctor(s, ['--source', src, 'claude'], { deps: { request: asDaemon(reply()) } })
   const table = one.out.split('按进程采集器')[1].split('\n').filter((l) => /^ {4}\w/.test(l)).join('\n')
@@ -204,7 +203,7 @@ test('a stale standalone copy is a ⚠ line with its reason, and an install that
   assert.match(r.out, /⚠ asight-off\(不依赖源码的撤销副本\)不是当前版本/); assert.equal(r.exit, 0)
   const n = plain(); const nsrc = path.join(n.home, 'src'); capture(nsrc)
   r = await doctor(n, ['--source', nsrc])
-  assert.match(r.out, /按进程采集器[\s\S]*not installed/)
+  assert.match(r.out, /按进程采集器[\s\S]*采集健康 – 没装/, 'the digest says nothing is installed')
   assert.match(r.out, /⚠ asight-off[^\n]*is not there/)
   assert.equal(r.exit, 0)
 })
