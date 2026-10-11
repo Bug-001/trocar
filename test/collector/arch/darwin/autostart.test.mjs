@@ -100,8 +100,10 @@ const call = (socketPath, headers = {}, p = '/status') => new Promise((resolve, 
 })
 
 test('W26 a request without the token is refused and never reaches a route; a wrong one too; the right one is answered — the token is checked first, on the unix socket as on the pipe', async () => {
-  const dir = tmpDir('as-'); const t = tmpDir('as-tmp-')
-  const { path: socketPath, token } = controlEndpoint({ dir, tmp: t })
+  const dir = tmpDir('as-')
+  // the socket goes directly under the user's tmp directory — the product's own shape (4.9 §7), and the only one that fits darwin's 104-byte sun_path:
+  // a deeper test-only nest leaks the guard's asight-run-<run> level into the path, macOS bind() silently truncates the name, and the server's chmod misses (ENOENT)
+  const { path: socketPath, token } = controlEndpoint({ dir })
   const reached = []
   const srv = await startControlServer({ socketPath, token, routes: { 'GET /status': async () => { reached.push('status'); return { ok: 1 } }, 'POST /off': async () => { reached.push('off'); return {} } } })
   try {
@@ -133,8 +135,9 @@ test('W26 the unix socket the daemon serves is 0600 where the mode is real (darw
 })
 
 test('W26 a second server on a live endpoint is refused, and the first one is not harmed', async () => {
-  const dir = tmpDir('as-'); const t = tmpDir('as-tmp-')
-  const { path: socketPath, token } = controlEndpoint({ dir, tmp: t })
+  const dir = tmpDir('as-')
+  // directly under the user's tmp directory like the product's own daemon (see the token test above: darwin's sun_path is 104 bytes)
+  const { path: socketPath, token } = controlEndpoint({ dir })
   const a = await startControlServer({ socketPath, token, routes: { 'GET /status': async () => ({ who: 'a' }) } })
   try {
     await assert.rejects(startControlServer({ socketPath, token, routes: {} }), /another collector daemon/)
