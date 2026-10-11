@@ -79,12 +79,12 @@ export const OFF_CODES = Object.freeze(['backup-failed', 'backup-kept', 'undone-
 // another branch appends to stay edit-free here; `sets` below adds the blocks. test/health/codes.test.mjs holds each against the
 // RFC's table written out by hand (W38).
 export const ROUTE_WHERE = Object.freeze(['routing', 'forwarder', 'ingress', 'optin']) // the choice and effect of a routing · asight's own mihomo · the engine's proxy ingress · the doing of an opt-in item
-export const ROUTE_EVENTS = Object.freeze(['route-applied', 'forwarder-start', 'forwarder-stop', 'forwarder-draining', 'probes-refreshed', 'optin-applied', 'optin-removed']) // state changes, not failures; `probes-refreshed` is the daemon's one probe refresh after the engine (re)starts (4.8 §3.3), `{forms: [{f, ok, status}]}`
+export const ROUTE_EVENTS = Object.freeze(['route-applied', 'forwarder-start', 'forwarder-stop', 'forwarder-draining', 'probes-refreshed', 'optin-applied', 'optin-removed', 'forwarder-download-started', 'forwarder-download-ok']) // state changes, not failures; `probes-refreshed` is the daemon's one probe refresh after the engine (re)starts (4.8 §3.3), `{forms: [{f, ok, status}]}`; the download pair is the CLI's `on` writing what its one online step did (D44, 4.8 §8: the started line carries the url, the expected size and curl's command line; the ok line the two digests)
 /** `code` of a failure event, by the `where` the §12 table gives it. Every row of the table is the class 失败, so the next list is this one. */
 export const ROUTE_CODES = Object.freeze([
   'ingress-auth-failed', 'ingress-unknown', 'engine-port-taken', 'upstream-unavailable', // ingress (`upstream-unavailable`: the group's upstream cannot be dialled at all, no login to dial it with or none to dial: the lookup refused, the agent got a 502)
   'fallback-active', // routing
-  'forwarder-start-failed', 'forwarder-restart', 'forwarder-digest-mismatch', 'forwarder-binary-missing', // forwarder: the kernel comes in a platform package and `on` never downloads it (4.8 §8), so there is no download failure to name
+  'forwarder-start-failed', 'forwarder-restart', 'forwarder-digest-mismatch', 'forwarder-binary-missing', 'forwarder-download-failed', // forwarder: the kernel is missing and the `on` that downloads it failed at some step of that — curl absent or failed, or the archive or the unpacked exe is not the pinned one (D44, 4.8 §8 ①: the security boundary is the digest check after the download, never curl's exit code alone)
   'gatekeeper', // forwarder, darwin: the kernel's precheck half that is not the digest (4.9 §3) — a quarantine attribute that could not be self-healed off, or a binary the system still refuses to run; the receipt carries the reinstall command
   'optin-failed', // optin: an item the user named was not done (a refused prompt, a script error); a refused UAC is not this: it is `pending-admin` (1.6 §1.7)
   'socktable-unavailable', 'helper-start-failed', // helper
