@@ -286,7 +286,7 @@ test('W24 enable bootstraps the job into the user\'s GUI session domain (gui/<ui
   const run = fakeTools()
   const u = installed(userUnit({ ...withHome(), run, uid: 501 }))
   assert.deepEqual(u.enable({ now: true }), { code: 0, out: '', err: '' })
-  assert.deepEqual(run.calls, [['launchctl', 'bootout', 'gui/501', 'com.asight.collector'], ['launchctl', 'bootstrap', 'gui/501', u.path]])
+  assert.deepEqual(run.calls, [['launchctl', 'bootout', 'gui/501/com.asight.collector'], ['launchctl', 'bootstrap', 'gui/501', u.path]])
   assert.deepEqual(u.enable(), { code: 0, out: '', err: '' }, 'now is the default')
   assert.equal(run.calls.filter((c) => c[1] === 'bootstrap').length, 2)
   // a bootout that answers "no such job" (a fresh install) is not a failure: the bootstrap below is the answer
@@ -361,12 +361,12 @@ test('W24 disable (a no-argument off) and remove (an uninstall) are the same und
   const present = fakeTools({ 'launchctl print': { status: 0, stdout: 'com.asight.collector = {"state": "running", "pid": 4242}' } })
   const u = installed(userUnit({ ...withHome(), run: present, uid: 501 }))
   assert.deepEqual(u.disable(), { code: 0, out: '', err: '', agent: 'booted-out', plist: 'removed' })
-  assert.deepEqual(present.calls, [['launchctl', 'print', 'gui/501', 'com.asight.collector'], ['launchctl', 'bootout', 'gui/501', 'com.asight.collector']])
+  assert.deepEqual(present.calls, [['launchctl', 'print', 'gui/501/com.asight.collector'], ['launchctl', 'bootout', 'gui/501/com.asight.collector']])
   assert.ok(!fs.existsSync(u.path), 'the plist is gone: the next login has nothing to load')
   const again = fakeTools({ 'launchctl print': { status: 0, stdout: '' } })
   const u2 = installed(userUnit({ ...withHome(), run: again, uid: 501 }))
   assert.deepEqual(u2.remove(), { code: 0, out: '', err: '', agent: 'booted-out', plist: 'removed' }, 'remove makes the same calls as disable')
-  assert.deepEqual(again.calls, [['launchctl', 'print', 'gui/501', 'com.asight.collector'], ['launchctl', 'bootout', 'gui/501', 'com.asight.collector']])
+  assert.deepEqual(again.calls, [['launchctl', 'print', 'gui/501/com.asight.collector'], ['launchctl', 'bootout', 'gui/501/com.asight.collector']])
 })
 
 test('W24 an agent that is not loaded is already as asked, not an error — and the plist still leaves, or the next login would load it; a print that did not run is a failure for the launchd half, never "absent", and the file still goes (a separate part of the undo)', () => {

@@ -35,11 +35,18 @@ export function refuseElevatedByUid({ getuid = processUid, geteuid = processUid 
  *  a print that did not run at all (code null) is NOT "not there": nothing was asked of launchd, and an undo that took it for gone would report success while the agent stays loaded.
  *  Exported for the off orchestration's own questions (daemon-stop.mjs's stop, orchestrate.mjs's unitIsUp — the flip checklist ①, 4.9 §4): the same three answers, one rule. */
 export function agentState({ exec, env, uid }) {
-  const r = execTool('launchctl', ['print', `gui/${uid}`, AGENT_LABEL], { run: exec, env })
+  const r = launchctl(['print', `gui/${uid}/${AGENT_LABEL}`], { run: exec, env })
   if (r.code === 0) return { state: 'present' }
   if (r.code === null) return { state: 'unknown', err: `launchctl print did not run (${r.err || 'no reason given'})` }
   return { state: 'absent' }
 }
+
+/** `launchctl <args>`, with the ONE argument-shape rule this macOS forces (measured on macOS 26.6.2 arm64, 2026-10-11,
+ *  measured against a plain dummy KeepAlive agent too): `bootout gui/<uid> <label>` — the domain and the label as two
+ *  arguments — answers `Boot-out failed: 5: Input/output error` and leaves the job loaded, while the slash form
+ *  `bootout gui/<uid>/<label>` takes it out; `print` behaves either way. So every target here is the slash form, and an
+ *  `asight off` that quietly left the daemon to KeepAlive (exit 0, a fresh pid seconds later) is what this rule ends. */
+export const launchctl = (args, { run, env } = {}) => execTool('launchctl', args, { run, env })
 
 // the two parts of an undo as one answer; a tool that did not run (code null) is code 1, a failure that a caller's `if (r.code)` sees (the same rule as the arch module's)
 const settle = (agent, plist) => ({ code: (agent.code !== 0 ? agent.code : plist.code) ?? 1, out: [agent.out, plist.out].filter(Boolean).join('\n'), err: [agent.err, plist.err].filter(Boolean).join('; '), agent: agent.state, plist: plist.state })
@@ -52,8 +59,11 @@ const settle = (agent, plist) => ({ code: (agent.code !== 0 ? agent.code : plist
 export function undoAutostart({ home, exec = null, env = process.env, fs = nodeFs, uid = null } = {}) {
   const tools = { exec, env, uid: uid ?? processUid() }
   const file = plistFilePath(home)
+  // No retry: the original failure this undo could not survive was NOT launchd flakiness but the directly-spawned-bootout
+  // I/O error (see `launchctl` above) — the sh route fixes it at the source, and a same-calls-every-time undo is what the
+  // standalone/arch equality test holds (a retry loop made the two sequences diverge for no remaining reason).
   const q = agentState(tools)
-  const a = q.state === 'present' ? (() => { const r = execTool('launchctl', ['bootout', `gui/${tools.uid}`, AGENT_LABEL], { run: exec, env }); return { ...r, state: r.code === 0 ? 'booted-out' : 'failed' } })()
+  const a = q.state === 'present' ? (() => { const r = launchctl(['bootout', `gui/${tools.uid}/${AGENT_LABEL}`], { run: exec, env }); return { ...r, state: r.code === 0 ? 'booted-out' : 'failed' } })()
     : q.state === 'absent' ? { code: 0, out: '', err: '', state: 'absent' }
     : { code: 1, out: '', err: q.err, state: 'failed' } // not known to be gone: a failure, and nothing is changed on a guess
   let p

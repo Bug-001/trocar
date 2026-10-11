@@ -100,3 +100,35 @@ test('on (darwin, fresh): with no control.json the receipt says so in darwin wor
     assert.ok(!r.receipt.notes.some((n) => /XDG_RUNTIME_DIR/.test(n)), 'the linux fallback never runs on darwin')
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
+
+// The FIRST-install race: control.json does not exist when `on` starts planning — the daemon writes it
+// at its first start, i.e. DURING the poll. The unit's enable() here stands for the real LaunchAgent: it writes control.json (the real
+// daemon's own first-start act) only when called — synchronously, the contract turnOn calls it under (it is not awaited). Pre-fix, sock
+// was resolved once (null) and the whole 15 s poll kept probing nothing: every first `on` on a real Mac ended "no daemon answers on
+// null", exit 1, start-failed in flows/ — with the daemon up.
+test('on (darwin, first install): control.json appears only when the unit starts the daemon — the poll re-resolves, finds it, and no start-failed is written', async () => {
+  const root = tmpDir('as-ep-race-')
+  try {
+    const home = claudeHome(root)
+    const dir = path.join(home, '.asight', 'collector')
+    const sock = path.join(root, 'asight-fedcba9876543210.sock')
+    const token = 'b'.repeat(64)
+    fs.mkdirSync(dir, { recursive: true })
+    const d = daemon({ sock, token })
+    await d.start // the daemon process is up (its socket listening) but control.json does not exist yet — the first-install state
+    const unitThatStartsDaemon = {
+      path: path.join(home, 'com.asight.collector.plist'),
+      text: () => '# starts a daemon, as the real LaunchAgent does',
+      // the real world, one synchronous step: enabling the unit starts the daemon, which writes control.json at its first start
+      enable: () => { fs.writeFileSync(path.join(dir, 'control.json'), JSON.stringify({ path: sock, token }) + '\n', { mode: 0o600 }); return { code: 0 } },
+      start: () => ({ code: 0 }),
+      reload: () => {},
+    }
+    const r = await turnOn({ home, env: { HOME: home }, osName: 'darwin', harnesses: [cc], freePort: async () => 47011, roots: ROOTS, confirm: async () => true, unit: unitThatStartsDaemon, sleep: async () => {} })
+    assert.equal(r.exit, 0, JSON.stringify(r.receipt.notes))
+    assert.equal(r.receipt.daemon.state, 'running', 'the re-resolving poll found the daemon control.json names')
+    assert.ok(!r.receipt.notes.some((n) => /no daemon answers on null/.test(n)), 'the null-socket line never appears')
+    assert.equal(eventsOf(dir).some((e) => e.code === 'start-failed'), false, 'no false start-failed on a first install')
+    await d.close()
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})

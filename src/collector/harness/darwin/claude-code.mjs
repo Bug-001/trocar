@@ -49,7 +49,10 @@ export default {
   ],
   forms: [
     // native: ~/.local/share/claude/versions/<v> (the version-named binary) · ~/.local/bin/claude (the symlink, as invoked) · npm: …/node_modules/@anthropic-ai/claude-code/bin/claude(.exe)
-    { id: 'claude-code.cli', g: 'claude-code.settings', match: { image: 'claude', path: [raw`\/claude\/versions\/[^/]*`, raw`\/\.local\/bin\/claude`, raw`\/node_modules\/@anthropic-ai\/claude-code\/bin\/claude`], reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
+    // · Homebrew's npm-global prefix (measured: `npm i -g` under Homebrew node puts the invoked symlink at /opt/homebrew/bin/claude —
+    //   ps shows the path AS INVOKED, the resolved node_modules target never appears, and without these two a Homebrew claude was form-path-unknown
+    //   on every connection: spliced, nothing captured; /usr/local is Homebrew on Intel and npm's own default prefix besides)
+    { id: 'claude-code.cli', g: 'claude-code.settings', match: { image: 'claude', path: [raw`\/claude\/versions\/[^/]*`, raw`\/\.local\/bin\/claude`, raw`\/node_modules\/@anthropic-ai\/claude-code\/bin\/claude`, raw`\/opt\/homebrew\/bin\/claude`, raw`\/usr\/local\/bin\/claude`], reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
     // ~/.vscode/extensions/anthropic.claude-code-<version>-darwin-<arch>/resources/native-binary/claude
     { id: 'claude-code.vscode', g: 'claude-code.settings', match: { image: 'claude', path: [raw`\/\.vscode\/extensions\/anthropic\.claude-code-[^/]*\/resources\/native-binary\/claude`], reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
     // /Applications/Claude.app/Contents/MacOS/Claude (and ~/Applications/…: the pattern meets both, it is not anchored)

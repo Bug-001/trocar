@@ -27,7 +27,8 @@ export default {
   }],
   forms: [
     // npm: …/node_modules/@openai/…/vendor/<target>/bin/codex · the managed daemon: $CODEX_HOME/packages/app-server-daemon/releases/<v>/bin/codex
-    { id: 'codex.cli', g: 'codex.env', match: { image: 'codex', path: [raw`\/node_modules\/@openai\/.*\/bin\/codex`, raw`\/app-server-daemon\/releases\/.*\/bin\/codex`], reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
+    // · Homebrew's npm-global prefix, as invoked (the same lab fact as claude-code's: ps shows /opt/homebrew/bin/codex, never the resolved target)
+    { id: 'codex.cli', g: 'codex.env', match: { image: 'codex', path: [raw`\/node_modules\/@openai\/.*\/bin\/codex`, raw`\/app-server-daemon\/releases\/.*\/bin\/codex`, raw`\/opt\/homebrew\/bin\/codex`, raw`\/usr\/local\/bin\/codex`], reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
     { id: 'codex.vscode', g: null, match: null, nameRule: false, processRules: false, supported: { reason: 'not-measured' } }, // the editor extension's codex (4.6 OPEN ①)
     { id: 'codex.app', g: null, match: null, nameRule: false, processRules: false, supported: { reason: 'not-measured' } }, // the desktop app's codex (4.6 OPEN ①)
   ],

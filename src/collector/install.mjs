@@ -439,7 +439,14 @@ export async function turnOn(opts = {}) {
     if (afterConfirm) {
       const k = await afterConfirm()
       if (!k || k.ok === false) return { receipt: unwritten({ ...r, ok: false, notes: [...r.notes, (k && k.reason) || 'the kernel could not be ensured; nothing was changed'] }), manifest: plan._.prior, plan, exit: 1 }
-      if (k.note) r.notes.push(k.note) // the receipt's own line of where the kernel came from (downloaded / from the cache)
+      if (k.note) {
+        r.notes.push(k.note) // the receipt's own line of where the kernel came from (downloaded / from the cache)
+        // …and the plan's own kernel line goes: it describes the pre-run state ("not there yet — will be downloaded … once you confirm" /
+        // "found and verified"), and kept beside the outcome it contradicts it — a failed first install printed BOTH as problems
+        // (seen on a macOS test machine, 2026-10-11). The plan view (--dry-run, the confirm prompt) still shows it; only the outcome receipt drops it.
+        const at = r.notes.findIndex((n, i) => i < r.notes.length - 1 && typeof n === 'string' && n.startsWith("asight's kernel: "))
+        if (at >= 0) r.notes.splice(at, 1)
+      }
       kernelLedger = k.ledger || null
     }
 
@@ -532,6 +539,8 @@ export async function turnOn(opts = {}) {
       const counts = { entries: m.entries.length, changed: receipt.changed.length, notes: notes.length + problems.length }
       put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome, counts, reason }) // before the notes are taken: a result line that cannot be written adds its own "not recorded" (R11)
       receipt.notes = [...notes, ...problems]
+      receipt.problems = problems // the renderer labels exactly these 问题: — a failed run's SUCCESS notes (the kernel's "downloaded and both digests
+      // verified") must not wear the problem label, which is what a whole-receipt ok===false test did (seen on a macOS test machine, 2026-10-11)
       return { receipt, manifest: m, plan, exit: receipt.ok ? 0 : 1 }
     }
     if (halt) { put({ event: EVENT.failure, where: 'install', code: 'install-error', reason: problems[0] }); return finish('stopped', `on stopped: ${problems[0]}`) }
@@ -540,10 +549,16 @@ export async function turnOn(opts = {}) {
     // The endpoint is resolved the one way every caller resolves it (4.8 §7 / 4.9 §7: darwin / win32 find the daemon through control.json and every
     // request carries its token; Linux through $XDG_RUNTIME_DIR). This was the 2026-10-11 incident's seam: a Linux-only fallback here made every
     // `asight on` on a real Mac a false start-failed while the daemon was up.
-    const endpoint = controlEndpointFor({ platform: osName, dir, env, fs })
-    const sock = socketPath || endpoint.socketPath
-    const ask = request || endpoint.request
+    // Second seam of the same incident (caught on a macOS test machine, 2026-10-11): on darwin / win32 control.json is written by the daemon AT ITS
+    // FIRST START, so a FIRST install has no endpoint to resolve before the unit runs — resolving once up here kept sock null through the whole
+    // poll and every first `on` ended "no daemon answers on null", exit 1, while the daemon was up and healthy. The probe re-resolves while
+    // there is no socket; Linux's XDG-derived path is stable, so re-resolving is a no-op there.
+    const resolveEndpoint = () => controlEndpointFor({ platform: osName, dir, env, fs })
+    let endpoint = resolveEndpoint()
+    let sock = socketPath || endpoint.socketPath
+    let ask = request || endpoint.request
     const probe = async () => {
+      if (!sock && !socketPath) { endpoint = resolveEndpoint(); sock = endpoint.socketPath; ask = request || endpoint.request }
       if (!sock) return { up: false, why: endpoint.why || 'no control socket to ask' }
       try { await ask({ socketPath: sock, method: 'GET', path: '/status', timeoutMs: 2000 }); return { up: true } } catch (e) {
         if (e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED')) return { up: false }

@@ -254,11 +254,17 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
   if (r.daemon && !daemonBit) lines.push(`守护进程: 没在跑,什么都没有被采集(入口已写好,守护进程起来后才挂引流)`)
   if (r.restart.length) lines.push(`  ${c.yellow('⚠')} 重启后才被采: ${r.restart.map((x) => `${x.harness}(pid ${x.pid},启动早于信任入口)`).join('、')};在那之前照常直连`)
   const nothingNew = fresh && fresh.size === 0 && !(r.changed || []).length && !(r.created || []).length
+  // A note is a 问题 exactly when the run's own `problems` list names it — never merely because the whole run failed: a failed first
+  // install otherwise labelled its own SUCCESS line ("the kernel was downloaded and both digests verified") as a problem
+  // (seen on a macOS test machine, 2026-10-11). turnOn sets receipt.problems since that run; older / synthetic receipts without it keep the
+  // outcome-based label (their notes carry no kernel success lines).
+  const problemNotes = r.problems ? new Set(r.problems) : null
   for (const n of r.notes || []) {
     const h = HARNESS_IDS.find((id) => n.startsWith(`${id}: `))
     if (h && fresh && !fresh.has(h)) continue // the one-time note of a harness wired before (D46): doctor and --json carry it from here
     if (!h && nothingNew) continue // a machine-level note with nothing new done (the kernel's "found and verified" on an idempotent on)
-    lines.push(`${r.ok === false && past ? '问题' : '说明'}: ${n}`)
+    const isProblem = problemNotes ? problemNotes.has(n) : r.ok === false && past
+    lines.push(`${isProblem ? '问题' : '说明'}: ${n}`)
   }
   lines.push(`撤销: asight off${r.standalone ? ` · asight 坏了也能用: ${c.dim(r.standalone)}` : ''} · 回执: --json`) // `standalone`: the single-file asight-off, once the run has written it (Task 8) — the ABSOLUTE path (R3: the undo works without the source tree)
   lines.push(c.dim(`开采集  asight on      看状态  asight status      完全删掉 asight uninstall(采集数据默认保留)${r.log ? `      记录: 看板「采集健康」 / ${t(r.log)}${/\.\w+$/.test(path.basename(r.log)) ? '' : '/'}` : ''}`)) // the new collector's log is a directory (flows/); the old capture's is one file (mitm-events.ndjson)

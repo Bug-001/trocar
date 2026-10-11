@@ -103,6 +103,9 @@ export function plistXml({ node, asight, env = {}, logs = null } = {}) {
   ].join('\n')
 }
 
+// The slash form for bootout's target (`gui/<uid>/<label>`, ONE argument — the rule src/off/darwin.mjs's `launchctl` carries,
+// measured on a macOS test machine, 2026-10-11): the two-argument form answers `Boot-out failed: 5: Input/output error` on every
+// job and leaves it loaded — an `on` over a loaded job and every uninstall would then report launchd failures of their own making.
 const launchctl = (args, { run, env }) => execTool('launchctl', args, { run, env })
 /** The user's GUI session domain, launchd's per-user target (`bootstrap` / `bootout` take it): `gui/<uid>`, this process's own uid. */
 const domainOf = (uid) => `gui/${uid}`
@@ -112,7 +115,7 @@ const ok = { code: 0, out: '', err: '' }
  *  that did not run at all (timeout, blocked, no launchctl: code null) is NOT "not there" — nothing was asked of launchd, so an undo that took it for gone would report success while the
  *  agent stays loaded and pulls the daemon back. → `{ state: 'present' }` · `{ state: 'absent' }` · `{ state: 'unknown', err }`. (The win32 taskState's rule, W24.) */
 const agentState = ({ run, env, uid }) => {
-  const r = launchctl(['print', domainOf(uid), AGENT_LABEL], { run, env })
+  const r = launchctl(['print', `${domainOf(uid)}/${AGENT_LABEL}`], { run, env })
   if (r.code === 0) return { state: 'present' }
   if (r.code === null) return { state: 'unknown', err: `launchctl print did not run (${r.err || 'no reason given'})` }
   return { state: 'absent' }
@@ -173,7 +176,7 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
   // the agent is booted out of the session and the plist out of LaunchAgents, in that order (see the userUnit header); each half says what it did
   const undo = () => {
     const q = agentState(tools)
-    const a = q.state === 'present' ? (() => { const r = launchctl(['bootout', domainOf(tools.uid), AGENT_LABEL], tools); return { ...r, state: r.code === 0 ? 'booted-out' : 'failed' } })()
+    const a = q.state === 'present' ? (() => { const r = launchctl(['bootout', `${domainOf(tools.uid)}/${AGENT_LABEL}`], tools); return { ...r, state: r.code === 0 ? 'booted-out' : 'failed' } })()
       : q.state === 'absent' ? { ...ok, state: 'absent' }
       : { code: 1, out: '', err: q.err, state: 'failed' } // not known to be gone: a failure, and nothing is changed on a guess; the plist below is a separate part and still goes
     let p
@@ -193,7 +196,7 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
       if (!fs.existsSync(file)) return { code: null, out: '', err: `the plist ${file} is not there: launchd is not asked (install writes it first)`, precondition: true } // not a refusal of launchctl: nothing was asked of it
       this.ensureLogs() // the sinks the plist names exist whatever wrote the plist (one upgraded from before D46 included)
       if (!now) return { ...ok }
-      launchctl(['bootout', domainOf(tools.uid), AGENT_LABEL], tools) // an earlier copy of the job goes out first (the /F analog); a job that is not loaded answers with an error that is not ours to fail on — the bootstrap below is the answer
+      launchctl(['bootout', `${domainOf(tools.uid)}/${AGENT_LABEL}`], tools) // an earlier copy of the job goes out first (the /F analog); a job that is not loaded answers with an error that is not ours to fail on — the bootstrap below is the answer
       const r = launchctl(['bootstrap', domainOf(tools.uid), file], tools)
       if (r.code === 0) return r
       return { ...r, code: r.code ?? 1, event: { event: 'failure', where: 'install', code: 'launchd-register-failed', reason: `launchctl bootstrap was refused (${r.code === null ? 'it did not run' : `exit ${r.code}`}${r.err ? `: ${r.err}` : ''}); launchd is the only autostart, so asight does not start at login` } }

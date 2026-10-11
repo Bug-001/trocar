@@ -45,11 +45,12 @@ thinking / tool_use / tool_result), so you see *which* part grew and when.
 
 ## Install
 
-From source (Node ≥ 20):
+From source (Node ≥ 20). The package is private — there is no global `asight` on your PATH, so run
+it through the repo (or `npx --no-install asight …`):
 
 ```sh
-git clone <this repo> && cd asight && npm install
-asight on
+git clone <this repo> && cd <the repo> && npm install
+node bin/asight.mjs on          # or: npx --no-install asight on
 ```
 
 The first `asight on` lists the files it will touch and the kernel it will download (mihomo, version

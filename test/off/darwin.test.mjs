@@ -31,8 +31,8 @@ function fakeLaunchd(order = null) {
     if (order) order.push(cmd)
     if (file !== 'launchctl') return { status: 1, stdout: '', stderr: `not launchctl: ${cmd}` }
     const a = args.join(' ')
-    if (a === `print ${DOMAIN} ${LABEL}`) return loaded ? { status: 0, stdout: '…', stderr: '' } : { status: 1, stdout: '', stderr: `Could not find service "${LABEL}" in domain for system` }
-    if (a === `bootout ${DOMAIN} ${LABEL}`) { loaded = false; return { status: 0, stdout: '', stderr: '' } }
+    if (a === `print ${DOMAIN}/${LABEL}`) return loaded ? { status: 0, stdout: '…', stderr: '' } : { status: 1, stdout: '', stderr: `Could not find service "${LABEL}" in domain for system` }
+    if (a === `bootout ${DOMAIN}/${LABEL}`) { loaded = false; return { status: 0, stdout: '', stderr: '' } } // the slash form: the two-argument bootout answers I/O error 5 on macOS 26 (the rule darwin.mjs's launchctl carries)
     return { status: 1, stdout: '', stderr: `not in the fake: ${cmd}` }
   }
   return { run, calls, has: (re) => calls.some((c) => re.test(c)) }
@@ -49,7 +49,7 @@ test('the flip ① (4.9 §4): a no-names off on darwin boots the LaunchAgent out
   const launchd = fakeLaunchd()
   const { receipt, exit } = await runOff({ home, env: { HOME: home }, deps: { platform: 'darwin', exec: launchd.run, procs: async () => [], sleep: async () => {} } })
   assert.equal(exit, 0, JSON.stringify(receipt.problems))
-  assert.ok(launchd.has(new RegExp(`^launchctl bootout ${DOMAIN} ${LABEL}$`)), 'the agent was booted out of the session')
+  assert.ok(launchd.has(new RegExp(`^launchctl bootout ${DOMAIN}/${LABEL}$`)), 'the agent was booted out of the session (the slash form — the two-argument form fails with I/O error 5 on macOS 26)')
   assert.ok(!launchd.has(/systemctl/), 'no systemd verb runs on darwin — the old step-5 ran `systemctl --user disable` unconditionally (the audit 2026-10-08 note)')
   assert.ok(!fs.existsSync(plist), 'the plist left ~/Library/LaunchAgents: launchd scans that directory at every login')
   assert.equal(receipt.autostart.disabled, true, JSON.stringify(receipt.autostart))
@@ -98,7 +98,7 @@ test('the flip ① (4.9 §4): a stuck daemon on darwin is stopped launchd-first 
     },
   })
   assert.equal(exit, 0, JSON.stringify(receipt.problems))
-  const bootoutAt = order.findIndex((x) => x === `launchctl bootout ${DOMAIN} ${LABEL}`)
+  const bootoutAt = order.findIndex((x) => x === `launchctl bootout ${DOMAIN}/${LABEL}`)
   const firstSignalAt = order.findIndex((x) => /^kill /.test(x))
   assert.ok(bootoutAt >= 0 && firstSignalAt >= 0 && bootoutAt < firstSignalAt, `the bootout precedes the first signal (4.9 §4's order): ${JSON.stringify(order)}`)
   assert.ok(!launchd.has(/systemctl/), 'and still no systemd verb')

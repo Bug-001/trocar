@@ -15,7 +15,7 @@ import { execTool } from './exec.mjs'
 import { controlRequest } from './control-client.mjs'
 import { procIdentity, pidAlive, readArgv, readExe } from './proc.mjs'
 import { UNIT_FILE_NAME } from './autostart.mjs'
-import { AGENT_LABEL, agentState } from './darwin.mjs'
+import { AGENT_LABEL, agentState, launchctl } from './darwin.mjs'
 
 /** A lock not refreshed for this long belongs to a daemon that does not run its timers: unresponsive (4.6 §Linux 机制, same as src/health LOCK_FRESH_MS). */
 export const DAEMON_LOCK_FRESH_MS = 5000
@@ -205,7 +205,10 @@ export async function stopDaemon({ lockFile, socketPath = null, exec = null, kil
     const uid = typeof process.getuid === 'function' ? process.getuid() : -1
     const q = agentState({ exec, env, uid })
     if (q.state === 'present') {
-      const r = execTool('launchctl', ['bootout', `gui/${uid}`, AGENT_LABEL], { run: exec, env })
+      // the SLASH form (`gui/<uid>/<label>`, one argument — the rule `launchctl` in darwin.mjs carries): the two-argument
+      // form answered I/O error 5 on every job (measured on a macOS test machine, 2026-10-11) and KeepAlive pulled the drained daemon back —
+      // an `off` that said it stopped it while a fresh pid came up seconds later
+      const r = launchctl(['bootout', `gui/${uid}/${AGENT_LABEL}`], { run: exec, env })
       if (r.code === 0) { signals.push('launchctl-bootout'); how = 'launchctl' }
       else { agentStillManaged = true; problems.push(`launchctl bootout of ${AGENT_LABEL} failed (${r.code === null ? r.err || 'it did not run' : `exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''}`}); launchd's KeepAlive may bring the daemon back`) }
     } else if (q.state === 'unknown') { agentStillManaged = true; problems.push(`whether the LaunchAgent is loaded is not known (${q.err}); nothing was booted out on a guess, and launchd's KeepAlive may bring the daemon back`) }
