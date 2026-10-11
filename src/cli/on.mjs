@@ -2,8 +2,8 @@
 // turnOn (src/collector/install.mjs). It parses the arguments, builds what turnOn needs from the platform (the descriptors, the process table,
 // the autostart unit, the control socket), decides how a confirmation is asked, and prints the plan and the receipt. Everything the world gives is a
 // `deps` entry a test replaces (0.1 §3): `parts` (the descriptors, `scan`, `match`, the arch), `exec` (the runner of OS tools: spawnSync-shaped),
-// `request` (the control socket), `helperState`, `linger` / `lingerRead`, `now`, `freePort`, `sleep`, `roots`, `user`, `getuid`, `fs`, `script`, and `legacyOn` — the
-// replacement of what a platform without the new collector (freebsd and the rest: 1.6 §4) runs instead: legacyOnCli, src/capture/legacy-on.mjs.
+// `request` (the control socket), `helperState`, `linger` / `lingerRead`, `now`, `freePort`, `sleep`, `roots`, `user`, `getuid`, `fs`, `script`.
+// A platform without a collector is refused by loadArch's own error (D39⑥ executed 2026-10-11: the old capture's on went with it).
 // Exit codes (R4): 0 done · 1 not done or a problem · 2 usage error / not in a terminal without --yes (nothing touched).
 import os from 'node:os'
 import tls from 'node:tls'
@@ -15,14 +15,12 @@ import { isInteractive, confirm as ask } from '../off/io.mjs'
 import { formatOnReceipt, formatPlan, formatWinPlan } from './receipt.mjs'
 import { probeNetenv } from '../netenv/index.mjs'
 import { renderCompact } from '../netenv/topology-text.mjs'
-import { hasNewCollector } from '../off/legacy.mjs'
-import { legacyOnCli } from '../capture/legacy-on.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { prepareAdoption, editedFields, recordAdoption } from './on-adopt.mjs'
 
 const USAGE = 'usage: asight on [harness…] [--dry-run] [--yes] [--opt-in <形态>[,<形态>…]] [--no-autostart | --no-unit] [--json]'
 const FLAGS = new Set(['--dry-run', '--yes', '--no-autostart', '--no-unit', '--json'])
-const PROXY_HINT = 'D39 之前的 `asight on --proxy` 现在是 `asight monitor on --no-autostart`(旧 CC-CLI steer 仍在 monitor 下;新的 on 不做它,它做不到 off 保证,1.6 §4)'
+const PROXY_HINT = 'asight on 不认 --proxy:按进程采集器不需要它(D39 之前的 --proxy 是旧 CC-CLI steer 的口子,已随旧采集退役,D39⑥)'
 const chainText = (t) => renderCompact(t).join(' ; ')
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 
@@ -61,10 +59,6 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
   if (!named.ok) { io.err(`asight on: unknown harness ${named.unknown.join(', ')}; the names are: ${named.known.join(', ')}`); return EXIT.usage }
   const json = flags.has('--json')
   const say = json ? io.err : io.out // stdout holds the one JSON in --json mode (R5); warnings and the plan go to stderr
-  if (!(deps.hasNewCollector || hasNewCollector)(platform)) { // 1.6 §4: no new collector here: `on` drives the old capture (src/capture/legacy-on.mjs); deps.hasNewCollector is the seam the old capture's own tests inject (the darwin flip, 4.9 §4)
-    if (optIn.length) { io.err('asight on: --opt-in needs the new collector; on this platform `on` drives the old capture, which has no opt-in items (1.6 §4)'); return EXIT.usage }
-    return (deps.legacyOn || legacyOnCli)(argv, { io, env, home, platform, deps, ids: named.ids })
-  }
   if ((deps.getuid || processUid)() === 0) { io.err('asight on: 用你自己的账号跑,不要用 root / sudo(D36;只有 `sudo asight setup-helper` 要 root)'); return EXIT.incomplete }
   try {
     const parts = deps.parts || await (await (deps.daemon || import('../collector/daemon.mjs'))).loadParts({ env })

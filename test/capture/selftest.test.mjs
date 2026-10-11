@@ -25,6 +25,7 @@ test('checkDeps: openssl always required; certutil only on linux; missing → in
 // ① 是否真在抓
 test('qCapturing: no source → not ok; source with records → ok', () => {
   assert.equal(qCapturing([], null).ok, false);
+  assert.match(qCapturing([], null).note, /run `asight on`/, 'the note names a command that exists (D39⑥: `asight capture` went with the old capture)');
   assert.equal(qCapturing([], { exists: false }).ok, false);
   assert.equal(qCapturing([], { exists: true, bytes: 0 }).ok, false); // exists but empty
   const ok = qCapturing([{}, {}], { exists: true, bytes: 100, mtimeMs: 1 });
@@ -75,7 +76,7 @@ test('qUserTrustOnly: verify()=true → ok; false → not onboarded; throw → c
   const off = qUserTrustOnly(() => false);
   assert.equal(off.ok, false);
   assert.match(off.note, /not onboarded|user-level/);
-  assert.match(off.note, /only `asight monitor on`[^;]*puts there; the collector's own CA \(`asight on`\) is in no trust store by design/, 'the item is the old capture\'s CA: `asight on` cannot fix it, so it must not be what the note tells you to run (1.6 §2, §4)');
+  assert.match(off.note, /only the board's 监测 toggle puts there any more[^;]*; the collector's own CA \(`asight on`\) is in no trust store by design/, 'the item is the old capture\'s CA: `asight on` cannot fix it, so it must not be what the note tells you to run (1.6 §2, §4)');
   assert.doesNotMatch(off.note, /run: asight on/);
   const boom = qUserTrustOnly(() => { throw new Error('nss missing'); });
   assert.equal(boom.ok, false);

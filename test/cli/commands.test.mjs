@@ -6,9 +6,9 @@ import { COMMANDS, HIDDEN_ALIASES, helpText, resolveAlias, commandNamed } from '
 
 const commandsOf = (text) => new Set(text.split('\n').map((l) => l.match(/^ {2}(?:sudo )?asight ([a-z-]+)/)).filter(Boolean).map((m) => m[1]))
 
-test('V19: the commands in help are the commands of the table (1.6 §2 lists these seventeen), none twice a command, and no hidden alias or `test` is among them', () => {
+test('V19: the commands in help are the commands of the table (1.6 §2 lists these thirteen — the old capture\'s four went with it, D39⑥ executed 2026-10-11; shard stayed and moved to data), none twice a command, and no hidden alias or `test` is among them', () => {
   const names = COMMANDS.map((c) => c.name)
-  assert.deepEqual([...names].sort(), ['capture', 'daemon', 'desktop', 'doctor', 'etl', 'help', 'keep', 'mitm', 'monitor', 'off', 'on', 'raw', 'serve', 'setup-helper', 'shard', 'status', 'uninstall'])
+  assert.deepEqual([...names].sort(), ['daemon', 'doctor', 'etl', 'help', 'keep', 'off', 'on', 'raw', 'serve', 'setup-helper', 'shard', 'status', 'uninstall'])
   assert.equal(new Set(names).size, names.length, 'a name once')
   for (const platform of ['linux', 'darwin', 'win32']) assert.deepEqual([...commandsOf(helpText(undefined, { platform }))].sort(), [...names].sort(), platform)
   assert.deepEqual([...commandsOf(helpText())].sort(), [...names].sort(), 'with no platform given: this one')
@@ -16,7 +16,7 @@ test('V19: the commands in help are the commands of the table (1.6 §2 lists the
   assert.deepEqual([...hidden].sort(), ['collector', 'install', 'verify'])
   for (const h of [...hidden, 'test']) assert.ok(!commandsOf(helpText()).has(h), `${h} is not in help`)
   assert.ok(!names.includes('test'), '`asight test` is gone: it was doctor\'s alias and the name npm test already has (1.6 §2)')
-  for (const c of COMMANDS) assert.ok(typeof c.run === 'function' && c.usage && c.summary && ['common', 'data', 'maintenance', 'legacy'].includes(c.section), c.name)
+  for (const c of COMMANDS) assert.ok(typeof c.run === 'function' && c.usage && c.summary && ['common', 'data', 'maintenance'].includes(c.section), c.name)
 })
 
 test('the hidden aliases are the table of 1.6 §2, and resolveAlias puts what an alias names in its place and keeps the rest of the arguments as typed (the longest alias wins)', () => {
@@ -36,24 +36,21 @@ test('R7: exactly the per-user commands that change state refuse root (on off un
   assert.deepEqual(COMMANDS.filter((c) => c.needsRoot).map((c) => c.name), ['setup-helper'])
 })
 
-test('help: the first screen says on, off and status and which generation they drive here; the four sections are in order, the old capture marked 过渡期; helpText(name) is one command, and a name that is none throws', () => {
+test('help: the first screen says on, off and status and that they drive the per-process collector here; the three sections are in order (the 旧采集 section went with the old capture, D39⑥ executed 2026-10-11); helpText(name) is one command, and a name that is none throws', () => {
   const lines = (platform) => helpText(undefined, { platform }).split('\n')
   assert.match(lines('linux').slice(0, 6).join('\n'), /开 asight on · 关 asight off · 状态 asight status/)
   assert.match(lines('linux').slice(0, 8).join('\n'), /本平台\(linux\):on \/ off 驱动按进程采集器/)
-  assert.match(lines('darwin').slice(0, 8).join('\n'), /本平台\(darwin\):on \/ off 驱动按进程采集器/, 'the flip (4.9 §4): darwin is a new-collector platform — the same line as linux\'s')
-  assert.match(lines('win32').slice(0, 8).join('\n'), /本平台\(win32\):on \/ off 驱动按进程采集器/, 'the flip (plan 9(b)): win32 is a new-collector platform — the same line as linux\'s')
-  assert.match(lines('freebsd').slice(0, 8).join('\n'), /本平台\(freebsd\)没有按进程采集器:on 报「本平台未实现」,off 撤本机有的旧采集/, 'a platform that is none of linux / win32 / darwin keeps the not-implemented line')
+  assert.match(lines('darwin').slice(0, 8).join('\n'), /本平台\(darwin\):on \/ off 驱动按进程采集器/, 'darwin prints the same line as linux\'s')
+  assert.match(lines('win32').slice(0, 8).join('\n'), /本平台\(win32\):on \/ off 驱动按进程采集器/, 'win32 prints the same line as linux\'s')
+  assert.match(lines('freebsd').slice(0, 8).join('\n'), /本平台\(freebsd\):on \/ off 驱动按进程采集器/, 'one wording for every platform: a platform without a collector is loadArch\'s refusal, not the help\'s')
   const text = helpText(undefined, { platform: 'linux' })
-  const at = ['常用', '数据', '维护', '旧采集(过渡期)'].map((h) => text.split('\n').findIndex((l) => l.startsWith(h)))
-  assert.ok(at.every((i) => i > 0) && [...at].sort((a, b) => a - b).join() === at.join(), `the four sections in order: ${at}`)
-  const legacy = text.split('\n').slice(at[3])
-  for (const c of ['capture', 'mitm', 'desktop', 'monitor', 'shard']) {
-    const i = legacy.findIndex((l) => new RegExp(`^ {2}asight ${c}\\b`).test(l))
-    assert.ok(i > 0 && /过渡期/.test(legacy[i + 1]), `${c} is under 旧采集, and its description says 过渡期`)
-  }
+  const at = ['常用', '数据', '维护'].map((h) => text.split('\n').findIndex((l) => l.startsWith(h)))
+  assert.ok(at.every((i) => i > 0) && [...at].sort((a, b) => a - b).join() === at.join(), `the three sections in order: ${at}`)
+  assert.ok(!/旧采集|过渡期/.test(text), 'the old capture\'s section and its mark are gone')
+  for (const c of ['capture', 'mitm', 'desktop', 'monitor']) assert.ok(!new RegExp(`^ {2}asight ${c}\\b`, 'm').test(text), `${c} is not a command any more`)
   const section = (from, to) => commandsOf(text.split('\n').slice(at[from], at[to]).join('\n'))
   assert.deepEqual([...section(0, 1)].sort(), ['doctor', 'off', 'on', 'status', 'uninstall'])
-  assert.deepEqual([...section(1, 2)].sort(), ['etl', 'keep', 'raw', 'serve'], 'raw export | journal are data; keep (D40) is what is kept of the data')
+  assert.deepEqual([...section(1, 2)].sort(), ['etl', 'keep', 'raw', 'serve', 'shard'], 'raw export | journal are data; keep (D40) is what is kept of the data; shard (the sessions ingestion) moved here from the retired section')
   assert.deepEqual([...section(2, 3)].sort(), ['daemon', 'help', 'raw', 'setup-helper'], 'raw seal | verify | compare are maintenance')
   const one = helpText('off')
   assert.match(one, /asight off \[harness…\] \[--now\] \[--dry-run\] \[--yes\] \[--json\]/)

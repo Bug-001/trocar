@@ -34,7 +34,7 @@ export function fixtureGate(p = CC_SESSION_REAL) {
   return {
     skip: `requires ${path.relative(path.join(HERE, '..', '..'), p)}, a REAL captured session that is `
       + 'gitignored (it contains absolute home paths and live conversation content, so it cannot be '
-      + 'published). Capture your own with `asight monitor on`, or run `npm run demo` to see the '
+      + 'published). Capture your own with `asight on`, or run `npm run demo` to see the '
       + 'product against the synthetic sample.',
   };
 }

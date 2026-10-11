@@ -1,13 +1,11 @@
 // commands.mjs — the table of commands, the hidden aliases and the help (RFC 1.6 §2, R10): the one list help prints, src/cli/main.mjs dispatches and test/cli/dispatch.test.mjs (V19) holds equal.
-//   COMMANDS         [{ name, section: 'common' | 'data' | 'maintenance' | 'legacy', usage, summary, notes?, also?, mutates, needsRoot?, run(argv, ctx) → exit }]. `usage` is one or more lines (each begins
+//   COMMANDS         [{ name, section: 'common' | 'data' | 'maintenance', usage, summary, notes?, also?, mutates, needsRoot?, run(argv, ctx) → exit }]. `usage` is one or more lines (each begins
 //                    with `asight <name>`, or `sudo asight <name>`); `also` puts more lines of the same command under another section (`raw` is in two). `mutates`: R7 — the per-user commands
 //                    that change state refuse root (on off uninstall daemon). `needsRoot`: setup-helper, the only command that must be root. `run` gets the argv after the name and the context
 //                    of runCli: { io, env, home, platform, uid, deps }; each takes what it needs from `deps` (0.1 §3): the old bodies `runLegacy`, `setup-helper` `arch`.
 //   HIDDEN_ALIASES  [{ argv, to }]: not in help, dispatched like the command they name; what follows the alias is passed on as typed.
-//   helpText        the help: four sections; one command when named.
-import { hasNewCollector } from '../off/legacy.mjs'
-
-const SECTIONS = Object.freeze([['common', '常用'], ['data', '数据'], ['maintenance', '维护'], ['legacy', '旧采集(过渡期)']])
+//   helpText        the help: three sections (the old capture's 「旧采集(过渡期)」 went with the old capture, D39⑥ executed 2026-10-11); one command when named.
+const SECTIONS = Object.freeze([['common', '常用'], ['data', '数据'], ['maintenance', '维护']])
 const via = (file, fn) => async (argv, c) => (await import(file))[fn](argv, c)
 // `deps.runLegacy(name, argv)` replaces the runner of the old bodies: a test asks which body a command reaches, not what it does (those read and write the machine)
 const legacy = (name) => async (argv, c) => ((c && c.deps && c.deps.runLegacy) || (await import('./legacy-commands.mjs')).runLegacyCommand)(name, argv)
@@ -34,15 +32,14 @@ export const COMMANDS = Object.freeze([
   { name: 'on', section: 'common', mutates: true, run: via('./on.mjs', 'runOnCli'),
     usage: 'asight on [harness…] [--dry-run] [--yes] [--no-autostart | --no-unit] [--json]',
     summary: '开始采集。第一次 on 就是安装:先列出要改的每个文件,等你确认;之后的 on 只补缺的。',
-    notes: ['--dry-run  只打印将要做的,什么都不写', '--yes  不在终端里时代替确认(没有它,不在终端里只打印计划、退出 2)', '--no-autostart  装单元但不 enable,本次只 start', '--no-unit  不装单元(没有 systemd --user 的机器、测试用)', 'on 不重启任何 agent、桌面程序或在跑的采集;要重启的进程在回执里列出',
-      '旧的 `asight on --proxy` 现在是 `asight monitor on --no-autostart`'] },
+    notes: ['--dry-run  只打印将要做的,什么都不写', '--yes  不在终端里时代替确认(没有它,不在终端里只打印计划、退出 2)', '--no-autostart  装单元但不 enable,本次只 start', '--no-unit  不装单元(没有 systemd --user 的机器、测试用)', 'on 不重启任何 agent、桌面程序或在跑的采集;要重启的进程在回执里列出'] },
   { name: 'off', section: 'common', mutates: true, run: via('../off/main.mjs', 'runOffCli'),
     usage: 'asight off [harness…] [--now] [--dry-run] [--yes] [--json]',
-    summary: '撤掉 asight 对这些 agent 的全部影响,新旧两代都撤;asight 自己坏了也能用(~/.asight/bin/asight-off)。',
-    notes: ['不带名字:全部 harness,并让守护进程排空后退出、停用自启', '--now  不等在途连接,立即切断', '--yes  只在清单丢失、按标记撤销时用', '--remove-ca  照收(旧的 `monitor off --remove-ca`),off 本来就撤旧 CA'] },
+    summary: '撤掉 asight 对这些 agent 的全部影响;asight 自己坏了也能用(~/.asight/bin/asight-off)。',
+    notes: ['不带名字:全部 harness,并让守护进程排空后退出、停用自启', '--now  不等在途连接,立即切断', '--yes  只在清单丢失、按标记撤销时用', '--remove-ca  照收,已无作用(旧采集已退役;它留下的东西按 README 手动清理)'] },
   { name: 'status', section: 'common', mutates: false, run: via('./status.mjs', 'runStatusCli'),
     usage: 'asight status [harness…] [--json]',
-    summary: '每个 agent 有没有被采集、为什么;守护进程、助手、仍经 asight 的连接、最近 24 h 的失败、本机网络环境、旧采集留下的东西。',
+    summary: '每个 agent 有没有被采集、为什么;守护进程、助手、仍经 asight 的连接、最近 24 h 的失败、本机网络环境。',
     notes: ['退出码:0 都在被采集 · 1 有的没有 · 3 读不到、无法判定'] },
   { name: 'uninstall', section: 'common', mutates: true, run: via('./uninstall.mjs', 'runUninstallCli'),
     usage: 'asight uninstall [--purge-data] [--dry-run] [--yes] [--json]',
@@ -57,6 +54,9 @@ export const COMMANDS = Object.freeze([
   { name: 'etl', section: 'data', mutates: false, run: legacy('etl'),
     usage: 'asight etl <ndjson|sealed|dir> [--db <path>] [--rebuild]',
     summary: '把采集装进 DuckDB(派生层,可由原始文件重建)。' },
+  { name: 'shard', section: 'data', mutates: false, run: legacy('shard'),
+    usage: 'asight shard [<ndjson>] [--out <dir>] [--watch] [--interval <s>] [--rebuild-meta | --resplit]',
+    summary: '把采集流按 session 分片(ETL 的第一步:看板与封存读的都是分片目录)。' },
   { name: 'keep', section: 'data', mutates: true, run: via('./keep.mjs', 'runKeepCli'),
     usage: 'asight keep [<harness|all> <class|all> <full|log>] [--db <store>] [--json]',
     summary: '每个 harness × 流量类别存多少:不带参数显示设置与各类占的大小;三个词是设置(full = 体逐字存,log = 只记头与大小)。不需要守护进程;只管之后开始的调用,已存的不动。',
@@ -76,21 +76,6 @@ export const COMMANDS = Object.freeze([
   { name: 'help', section: 'maintenance', mutates: false, run: help,
     usage: 'asight help [命令] · --help · -h · --version · -v',
     summary: '`asight help <命令>` 或 `asight <命令> --help` 看一个命令。' },
-  { name: 'capture', section: 'legacy', mutates: false, run: legacy('capture'),
-    usage: 'asight capture [--port 8899] [--target <url>] [--out <ndjson>] [--upstream <proxy>] [--raw-sse]',
-    summary: '过渡期。前台 base_url 反代 tee:原样转发、旁路记录。OpenAI 形的线路必须加 --raw-sse。' },
-  { name: 'mitm', section: 'legacy', mutates: false, run: legacy('mitm'),
-    usage: 'asight mitm [--port 9899] [--host api.anthropic.com] [--out <ndjson>] [--upstream <proxy>] [--raw-sse]',
-    summary: '过渡期。CC-Desktop 的 MITM 采集源:只解密目标 host,其余盲隧道。' },
-  { name: 'desktop', section: 'legacy', mutates: false, run: legacy('desktop'),
-    usage: 'asight desktop {on|off|status} [--port 9898]',
-    summary: '过渡期。macOS + Clash Verge:把 CC-Desktop 的 claude-code → api.anthropic.com 引进 MITM(持久、可撤);`on` 一并装常驻的 MITM 与 CA 环境变量代理。' },
-  { name: 'monitor', section: 'legacy', mutates: false, run: legacy('monitor'),
-    usage: 'asight monitor {on|off|status} [--proxy <url>] [--capture-target <url>] [--no-autostart] [--remove-ca]',
-    summary: '过渡期。旧的 CC-CLI steer(settings 里的 HTTPS_PROXY)与网页开关用的采集。D39 之前的 `asight on [--proxy]` 就是 `monitor on --no-autostart`。' },
-  { name: 'shard', section: 'legacy', mutates: false, run: legacy('shard'),
-    usage: 'asight shard [<ndjson>] [--out <dir>] [--watch] [--interval <s>] [--rebuild-meta | --resplit]',
-    summary: '过渡期。把采集流按 session 分片。' },
 ])
 
 /** The command called `name`, or undefined. */
@@ -114,11 +99,11 @@ export function resolveAlias(argv) {
   return hit ? { argv: [...hit.to, ...argv.slice(hit.argv.length)], alias: hit } : { argv, alias: null }
 }
 
-const generation = (platform) => (hasNewCollector(platform) ? `本平台(${platform}):on / off 驱动按进程采集器(4.6);旧采集的命令在最后一段。`
-  : `本平台(${platform})没有按进程采集器:on 报「本平台未实现」,off 撤本机有的旧采集的部分(1.6 §4)。`) // the darwin 旧采集(过渡期) branch went with the flip (4.9 §4): darwin generates the new-collector line now
+// one wording for every platform (D39⑥ executed 2026-10-11): linux / win32 / darwin have the per-process collector; a platform without one is refused by loadArch in `on` / `daemon` — the old capture's platform split went with it
+const generation = (platform) => `本平台(${platform}):on / off 驱动按进程采集器(4.6);还没有采集器的平台由 on / daemon 自己报「not supported yet」。`
 const lines = (usage, summary) => [...usage.split('\n').map((l) => `  ${l}`), `      ${summary}`]
 
-/** The help: `helpText()` is the four sections (the first screen says on, off and status, and which generation they drive on `platform`); `helpText('off')` is that one command. */
+/** The help: `helpText()` is the three sections (the first screen says on, off and status, and that they drive the per-process collector on `platform`); `helpText('off')` is that one command. */
 export function helpText(cmd, { platform = process.platform } = {}) {
   if (cmd !== undefined) {
     const c = commandNamed(cmd)

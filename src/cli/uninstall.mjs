@@ -1,7 +1,7 @@
 // uninstall.mjs — `asight uninstall [--purge-data] [--dry-run] [--yes] [--json]` (RFC 1.6 §1.1, R3, R6, R12; 4.6 §安装清单与卸载 1–5, V13): `off` for every harness, then asight's own
 // files. The order is the spec's: (1) desired off for all, written under the op lock; (2) the daemon is told to exit once drained (`POST /off {exit:true}`) and is waited for
 // while it closes the connections it can see the end of — 30 s at most (§1.3); (3) the autostart is disabled and the daemon stopped by systemd (SIGTERM, then SIGKILL, when it
-// is not systemd's), which cuts the connections that never end by themselves and counts them; (4) the link is confirmed gone; (5) the entries are undone, both generations, by
+// is not systemd's), which cuts the connections that never end by themselves and counts them; (4) the link is confirmed gone; (5) the entries are undone, by
 // the manifest or by asight's marks (src/off/orchestrate.mjs undoSide, the same code `off` runs); (6) asight's own files: the unit, the CA key and certificate, the runtime
 // directory, state.json, every backup (the ones kept because the user edited the file too, each listed), `~/.asight/bin/asight-off`, and the manifest LAST. The captures
 // stay (4.6 §安装清单与卸载 3) unless `--purge-data`. A daemon that cannot be stopped, a manifest this build does not read and marks that nobody confirmed remove nothing of
@@ -22,9 +22,7 @@ import { execTool } from '../off/exec.mjs'
 import { confirm, isInteractive } from '../off/io.mjs'
 import { CODE_OFF } from '../off/names.mjs'
 import { formatUninstallReceipt } from './receipt.mjs'
-import { hasNewCollector, legacyUndoHook } from '../off/legacy.mjs'
 import { refuseElevatedByWhoami } from '../off/win32.mjs'
-import { legacyUninstallCli } from './legacy-uninstall.mjs'
 
 const DRAIN_MS = 30_000 // 1.6 §1.1: how long the daemon is given to close the connections it can see the end of
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
@@ -143,16 +141,12 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       return { receipt, exit: EXIT.incomplete }
     }
 
-    // 5 · the entries, both generations
+    // 5 · the entries
     const u = await undoSide(w, { ids: null, manifest: m, manifestError: merr, yes, interactive, io, say, dropCa: true })
     for (const k of ['changed', 'removed', 'skipped', 'left']) receipt[k].push(...u[k])
     Object.assign(receipt, { kept_bundles: u.kept_bundles, still_trusting: u.still_trusting, residue: u.residue, pending: u.pending, entries: u.results || [] })
     receipt.problems.push(...u.problems); receipt.notes.push(...u.notes)
     for (const f of u.failures) failed.push(f)
-    if (w.deps.legacyUndo) { // the old capture's leftovers (Task 10)
-      const l = await w.deps.legacyUndo({ home, env, platform: w.platform, ids: null, yes, interactive, io, say, dryRun: false, exec: w.exec, fs, now: w.clock, request: w.request })
-      if (l) { for (const k of ['changed', 'removed', 'skipped', 'left']) receipt[k].push(...(l[k] || [])); receipt.problems.push(...(l.problems || [])); receipt.notes.push(...(l.notes || [])); if (l.ok === false && !(l.problems || []).length) receipt.problems.push('the old capture could not be fully undone') }
-    }
     const noted = u.events.filter((e) => e.kind !== CODE_OFF.backupKept) // the backup an edited file kept is dropped below, listed in the receipt as non-identical: "kept" would be untrue
     const blocked = !gone || u.mode === 'unsupported' || u.pending.length > 0 || u.stopped // `stopped`: the manifest on disk is not what the entries now are: it and the CA stay
     if (blocked) receipt.problems.push(gone ? 'asight\'s own files were left in place (the entries above are not all undone): run asight uninstall again' : 'asight\'s own files were left in place: the daemon is still running')
@@ -209,7 +203,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     for (const f of failed) put({ event: 'failure', ...f })
     const left = receipt.left.length
     // the outcome follows the exit code (as `off`'s does): an item that could not be undone is 'left'; any other problem — a blocked run, a state.json that could not be
-    // written, the old capture's leftovers — is 'failed'; 'uninstalled' only when the run is clean
+    // written — is 'failed'; 'uninstalled' only when the run is clean
     const failedRun = blocked || (receipt.problems.length > 0 && !left)
     if (!(purgeData && !left && !blocked && !receipt.problems.length)) {
       for (const n of noted) put(n)
@@ -256,9 +250,9 @@ export async function runUninstallCli(argv, { io, env = process.env, home = node
   }
   const json = flags.has('--json')
   if ((deps.getuid || processUid)() === 0) { io.err('asight uninstall: 用你自己的账号跑,不要用 root / sudo(D36)'); return EXIT.incomplete }
-  if (!(deps.hasNewCollector || hasNewCollector)(platform)) return (deps.legacyUninstall || legacyUninstallCli)(argv, { io, env, home, platform, deps }) // 1.6 §4: no new collector here: uninstall completes the undo of the old capture; deps.hasNewCollector is the seam the old capture's own tests inject (the darwin flip, 4.9 §4)
   try {
-    const { receipt, exit } = await runUninstall({ home, env, purgeData: flags.has('--purge-data'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: isInteractive(io), io: { ...io, prompt: json ? io.stderr : io.stdout }, say: json ? io.err : io.out, deps: { platform, ...deps, legacyUndo: deps.legacyUndo === undefined ? legacyUndoHook : deps.legacyUndo } }) // the old capture's leftovers go with the rest, as in `off` (src/off/main.mjs): zero residue (1.6 §1.1, §4); the CLI's platform is offWorld's default (deps.platform of a test's still wins) — the same seam `off` has
+    // a platform without a collector reaches runUninstall the same way and finds nothing to undo (D39⑥ executed 2026-10-11: the old capture's own uninstall went with it)
+    const { receipt, exit } = await runUninstall({ home, env, purgeData: flags.has('--purge-data'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: isInteractive(io), io: { ...io, prompt: json ? io.stderr : io.stdout }, say: json ? io.err : io.out, deps: { platform, ...deps } }) // the CLI's platform is offWorld's default (deps.platform of a test's still wins) — the same seam `off` has
     if (json) io.out(JSON.stringify(receipt, null, 2))
     else if (receipt.needs_yes || receipt.declined) { io.out(formatUninstallReceipt({ ...receipt, notes: [] }, { home, tense: 'future' })); for (const n of receipt.notes) io.err(n) } // the plan, then why nothing was done (R6)
     else io.out(formatUninstallReceipt(receipt, { home }))

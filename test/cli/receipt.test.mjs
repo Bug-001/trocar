@@ -183,30 +183,27 @@ test('V7: --json keeps stdout for the one JSON; the plan of a terminal run goes 
   assert.match(io.stderrText(), /~\/\.claude\/settings\.json/)
 })
 
-test('on: usage errors exit 2 and touch nothing — an unknown harness lists the names, the old --proxy points at monitor, --no-autostart with --no-unit, an unknown flag', async () => {
+test('on: usage errors exit 2 and touch nothing — an unknown harness lists the names, the old --proxy is refused with its retirement said, --no-autostart with --no-unit, an unknown flag', async () => {
   const home = tmpDir('asight-on-usage-'); seedClaude(home); const before = snapshot(home)
   let io = fakeIo(); assert.equal(await runOnCli(['clade'], onCtx(home, io)), 2)
   assert.match(io.text(), /clade/); assert.match(io.text(), /claude-code/); assert.match(io.text(), /dsh/)
   io = fakeIo(); assert.equal(await runOnCli(['--proxy', 'http://127.0.0.1:8899'], onCtx(home, io)), 2)
-  assert.match(io.text(), /asight monitor on --no-autostart/)
+  assert.match(io.text(), /按进程采集器不需要它/)
   io = fakeIo(); assert.equal(await runOnCli(['--no-autostart', '--no-unit', '--yes'], onCtx(home, io)), 2)
   io = fakeIo(); assert.equal(await runOnCli(['--yess'], onCtx(home, io)), 2)
   assert.deepEqual(snapshot(home), before)
 })
 
-test('on: refused as root (R7), with the helper missing it writes nothing and says sudo asight setup-helper, and a platform without the new collector goes to the legacy hook', async () => {
+test('on: refused as root (R7), with the helper missing it writes nothing and says sudo asight setup-helper', async () => {
   const home = tmpDir('asight-on-refuse-'); seedClaude(home); const before = snapshot(home)
   let io = fakeIo(); assert.equal(await runOnCli(['--yes'], onCtx(home, io, { deps: { getuid: () => 0 } })), 1)
   assert.match(io.text(), /root/)
   io = fakeIo(); assert.equal(await runOnCli(['--yes'], onCtx(home, io, { deps: { helperState: () => ({ ok: false, reason: 'no helper at /usr/local/libexec/asight/asight-redirector' }) } })), 1)
   assert.match(io.text(), /sudo asight setup-helper/)
   assert.deepEqual(snapshot(home), before, 'nothing written, not even the manifest')
-  const seen = []
-  io = fakeIo(); const ctx = onCtx(home, io, { deps: { legacyOn: async (argv) => { seen.push(argv); return 0 } } }); ctx.platform = 'freebsd'
-  assert.equal(await runOnCli(['--yes'], ctx), 0); assert.deepEqual(seen, [['--yes']])
-  // the flips (plan 9(b), then 4.9 §4): win32 and darwin are new-collector platforms — with no hook and no terminal the NEW on runs: its plan, then a yes is needed; nothing is touched
-  for (const platform of ['win32', 'darwin']) {
-    io = fakeIo(); const bare = onCtx(home, io); bare.platform = platform; delete bare.deps.legacyOn
+  // D39⑥ executed 2026-10-11: the legacy-on hook went with the old capture — every platform runs the NEW on: its plan, then a yes is needed; nothing is touched
+  for (const platform of ['win32', 'darwin', 'freebsd']) {
+    io = fakeIo(); const bare = onCtx(home, io); bare.platform = platform
     assert.equal(await runOnCli([], bare), 2, `${platform}: ${io.text()}`)
     assert.match(io.text(), /asight on 将写或改下面这些文件/, `${platform}: the new collector's plan, not a refusal`)
     assert.ok(!/本平台未实现|驱动旧采集/.test(io.text()), `${platform} is not told it has no collector any more`)

@@ -83,7 +83,6 @@ test('D43 planted counter-example: each half is red where it belongs, and the ex
     ['launchctl setenv', "execTool('launchctl', ['setenv', 'HTTPS_PROXY', 'x'])", 'proxy variable into an environment store'],
   ]) assert.match(violations('src/collector/x.mjs', `import { spawnSync, execTool } from 'node:child_process'\nexport function a() { ${call} }\n`).join(), new RegExp(word || why.split(' ')[0], 'i'), why)
   assert.deepEqual(violations('src/capture/desktop-steer.mjs', sys), [], 'the old capture is exempt as a whole (the shared pinned list)')
-  assert.deepEqual(violations('src/off/legacy.mjs', sys), [])
   assert.deepEqual(violations(ELEVATE_FILE, "import { spawnSync, execTool } from 'node:child_process'\nexport function uac() { spawnSync('powershell', ['-Command', 'Start-Process -Verb RunAs -FilePath x']) }\n"), [], 'the one named place may launch UAC (runas); it does not exist yet')
   assert.match(violations(ELEVATE_FILE, "import { spawnSync, execTool } from 'node:child_process'\nexport function no() { execTool('sudo', ['x']) }\n").join(), /sudo/, 'and even there, only runas')
   assert.deepEqual(violations('src/collector/arch/win32/upstream.mjs', "// the reader names the registry values it asks the helper to read\nexport const NAMES = ['ProxyEnable', 'ProxyServer', 'AutoConfigURL', 'ProxyOverride']\nexport const KEY = 'Internet Settings'\n"), [], 'the reading side is data it hands the helper, not an exec call: no allowlist needed for it')

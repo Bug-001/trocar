@@ -51,8 +51,8 @@ test('the README teaches no hidden alias (`install`, `collector …`, `verify`) 
 });
 
 test('the README no longer says what D39 and the code made false: the steer of `asight on`, <redacted> credentials, "observe-only: never rewrite", a test count', () => {
-  assert.doesNotMatch(readme, /`asight on` writes the steer/, '`asight on` is the collector now; the steer is `asight monitor on --no-autostart`');
-  assert.match(readme, /`asight monitor on --no-autostart`/);
+  assert.doesNotMatch(readme, /`asight on` writes the steer/, '`asight on` is the collector now');
+  assert.doesNotMatch(readme, /`asight (monitor|desktop|capture|mitm) /, 'the old capture\'s commands are retired (D39⑥ executed 2026-10-11): the README must not teach them');
   assert.doesNotMatch(readme, /replaced with `<redacted>`/, 'credential headers are stored verbatim (files 0600; asight doctor checks them)');
   assert.doesNotMatch(readme, /never inject or\s+rewrite traffic/, 'D30: a request is changed or re-sent only by the operator, and the one `Connection: close` line is asight\'s');
   assert.doesNotMatch(readme, /\b\d+ passing\b/, 'a hard-coded test count is stale the day after');

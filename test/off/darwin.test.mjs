@@ -11,9 +11,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { runOff } from '../../src/off/orchestrate.mjs'
-import { legacyUndoHook } from '../../src/off/legacy.mjs'
 import { flowEvents } from './fixtures/off-ctx.mjs'
-import { macHome } from '../cli/fixtures/legacy-ctx.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
@@ -108,30 +106,5 @@ test('the flip ① (4.9 §4): a stuck daemon on darwin is stopped launchd-first 
   assert.equal(receipt.autostart, undefined, 'no autostart row on a named off, as on Linux (the key is absent, not null)')
 })
 
-// the flip (4.9 §4), the leftovers arm: on a flipped Mac `asight off` also takes the OLD capture's remains out — through the same legacyUndo hook Linux
-// has always used (orchestrate's step 7), which pre-flip never ran on darwin (the legacy off did that work instead) and whose hook hard-coded Linux's
-// paths. The artifact that makes the platform matter: the old capture's own LaunchAgents, a darwin thing the Linux arm cannot even see.
-test('the flip (4.9 §4): off on darwin takes the old capture\'s leftovers out too — the legacyUndo hook gets the platform, not Linux\'s paths', async () => {
-  const world = macHome({ block: false, runtime: false, agents: ['com.asight.mitm', 'com.asight.monitor'], steer: false, ca: false })
-  const home = world.home
-  const mitmPlist = world.plist('com.asight.mitm')
-  assert.ok(fs.existsSync(mitmPlist), 'the old capture\'s agent is there to be taken out')
-  const launchd = fakeLaunchd()
-  const legacy = []
-  const run = (file, args) => {
-    const cmd = [file, ...args].join(' ')
-    if (file === 'launchctl' && (args[0] === 'print' || args[0] === 'bootout') && cmd.includes(LABEL)) return launchd.run(file, args) // the collector's own agent
-    if (file === 'launchctl') { legacy.push(cmd); return args[0] === 'list' ? { status: 113, stdout: '', stderr: 'Could not find service' } : { status: 0, stdout: '', stderr: '' } } // the old capture\'s questions: nothing is loaded
-    if (file === 'security') { legacy.push(cmd); return { status: 44, stdout: '', stderr: 'could not be found in the keychain' } } // no old CA anywhere
-    return { status: 1, stdout: '', stderr: `not in the fake: ${cmd}` }
-  }
-  // the mihomo sock is pinned to a socket nobody listens on: the route cannot be confirmed gone, so the MITM's own agent stays (V31: it is unloaded
-  // only after the route is confirmed) and the receipt says so — exit 1, never a silent pass. What proves the platform pass-through is the monitor's
-  // agent: the darwin arm took it out, where the hook's old hard-coded Linux paths would have left BOTH (that is what this cell is red against).
-  const { receipt, exit } = await runOff({ home, env: { HOME: home, ASIGHT_MIHOMO_SOCK: path.join(home, 'no-such-mihomo.sock') }, deps: { platform: 'darwin', exec: run, procs: async () => [], sleep: async () => {}, legacyUndo: legacyUndoHook } }) // the hook the CLI injects (off/main.mjs); runOff alone defaults none — naming it is what this cell tests
-  assert.equal(exit, 1, 'the route could not be confirmed, so this off is not done (the receipt names it)')
-  assert.ok(receipt.problems.some((x) => /not confirmed gone/.test(x)), JSON.stringify(receipt.problems))
-  assert.ok(!fs.existsSync(world.plist('com.asight.monitor')), 'the monitor\'s agent plist is GONE — the darwin arm of undoLegacy ran')
-  assert.ok(fs.existsSync(mitmPlist), 'the MITM\'s agent stays until the route is confirmed gone (V31) — surfaced, never silently claimed done')
-  assert.ok(receipt.removed.includes(world.plist('com.asight.monitor')), 'the receipt carries what the legacy undo did')
-})
+// the leftovers arm (4.9 §4) went with the old capture (D39⑥ executed 2026-10-11): `asight off` no longer takes the old capture's
+// remains out — what it left on a machine is cleaned by hand (README); the new off undoes the collector's own entries only.

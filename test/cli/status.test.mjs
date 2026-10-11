@@ -322,8 +322,8 @@ test('status changes nothing in the HOME but ~/.asight/netenv.json (the board\'s
   assert.equal(f, 0); assert.deepEqual(fs.readdirSync(fresh), [], 'on a machine with nothing installed it prints so, exits 0, and creates nothing')
 })
 
-// the flip (plan Task 9(b), 1.6 §4): hasNewCollector('win32') is true, so win32's status is the NEW status — the win32 arm of gatherStatus asks the arch's opt-in hook,
-// and the only-claude-code old-capture branch (status.mjs's legacyStatus) is not taken: no legacy banner, and a harness name other than claude-code is accepted.
+// every platform prints the collector's status (the old-capture branch went with it, D39⑥ executed 2026-10-11): the win32 arm of
+// gatherStatus asks the arch's opt-in hook, and a harness name other than claude-code is a harness like any other.
 test('the flip (9(b), 1.6 §4): win32 status is the NEW status — the win32 arch hooks are asked, the old-capture branch is not taken, and a harness name other than claude-code is no longer exit 2', async () => {
   const fresh = tmpDir('asight-fresh-')
   const asked = []
@@ -340,8 +340,8 @@ test('the flip (9(b), 1.6 §4): win32 status is the NEW status — the win32 arc
   assert.deepEqual(fs.readdirSync(fresh), [], 'read-only: nothing created')
 })
 
-// the flip (4.9 §4, 1.6 §4): hasNewCollector('darwin') is true, so a Mac's status is the NEW status — the darwin arm of gatherStatus asks its arch's
-// opt-in hook (the plan half; the check half is MA4's row and stays away), and the only-claude-code old-capture branch (legacyStatus) is not taken.
+// a Mac's status is the collector's status (the old-capture branch went with it, D39⑥ executed 2026-10-11): the darwin arm of
+// gatherStatus asks its arch's opt-in hook (the plan half; the check half is MA4's row and stays away).
 test('the flip (4.9 §4, 1.6 §4): darwin status is the NEW status — the darwin arch hooks are asked, the old-capture branch is not taken, and a harness name other than claude-code is no longer exit 2', async () => {
   const fresh = tmpDir('asight-fresh-')
   const asked = []
@@ -410,21 +410,12 @@ test('a netenv.json that could not be written is said: a line in the text, neten
     assert.equal(j.io.json().netenv_write_error, `${path.join(home, 'netenv.json')}: EACCES`)
     assert.equal(j.exit, control.exit)
     assert.deepEqual(validateReceipt(j.io.json()), [])
-    // a platform with no new collector says it too
-    const mac = tmpDir('asight-st-mac-'); fs.mkdirSync(path.join(mac, '.asight'), { mode: 0o700 }); fs.chmodSync(path.join(mac, '.asight'), 0o500)
-    for (const [argv, check] of [[[], (io) => assert.match(io.stdoutText(), /^本机网络环境的副本没写成: [^\n]*netenv\.json: EACCES/m)], [['--json'], (io) => assert.match(io.json().netenv_write_error, /netenv\.json: EACCES$/)]]) {
-      const io = fakeIo()
-      await runStatusCli(argv, { io, home: mac, platform: 'darwin', env: {}, deps: { hasNewCollector: () => false, exec: fakeMac({ loaded: [], keychain: false }).run, netenv: async () => CLASH() } }) // the seam keeps this on the old capture's status (it stays live until D39⑥)
-      check(io)
-    }
-    fs.chmodSync(path.join(mac, '.asight'), 0o700)
   } finally { fs.chmodSync(home, 0o700) }
 })
 
 // ── V39: logging out stops the daemon unless linger is on (1.6 §1.1) — `on` and `status` say so, give the command, and never run loginctl (R8) ───────────────────────────────────────────────────
 import { runOnCli } from '../../src/cli/on.mjs'
 import { onCtx, seedClaude, recordingExec } from './fixtures/on-ctx.mjs'
-import { fakeMac } from './fixtures/legacy-ctx.mjs'
 
 test('V39 status: linger off says 登出后停采(未开 linger) and loginctl enable-linger <user>, --json linger false; on says nothing; unreadable says 不知道 with the file and the errno, never 已开', async () => {
   const s = await installedHome()
@@ -464,25 +455,8 @@ test('V39 on: the same lines in the receipt (and in the plan\'s receipt when --j
   }
 })
 
-test('the old capture\'s status (kept on darwin through the flip\'s seam — the old capture stays live until D39⑥ retires it): it prints the old capture\'s health and also what the VPN software is (§6: every platform), without "asight 没有改它" (the old capture does steer Clash there); --json carries the probe; a probe that fails is 不知道 with the reason', async () => {
-  const home = tmpDir('asight-st-mac-'); const exec = fakeMac({ loaded: [], keychain: false }).run // status reads launchd and the keychain there: the runner is the test's
-  let io = fakeIo()
-  let exit = await runStatusCli([], { io, home, platform: 'darwin', env: {}, deps: { hasNewCollector: () => false, exec, netenv: async () => CLASH() } })
-  assert.match(io.stdoutText(), /本平台\(darwin\)还没有新采集器/)
-  assert.match(io.stdoutText(), /本机网络环境: Clash Verge\(规则模式,系统代理已开\)/)
-  assert.ok(!io.stdoutText().includes('asight 没有改它'), io.stdoutText())
-  assert.ok([0, 1, 3].includes(exit))
-  io = fakeIo()
-  exit = await runStatusCli(['--json'], { io, home, platform: 'darwin', env: {}, deps: { hasNewCollector: () => false, exec, netenv: async () => CLASH() } })
-  const v = io.json()
-  assert.deepEqual(validateReceipt(v), [])
-  assert.equal(v.netenv.products[0].product, 'clash-verge')
-  io = fakeIo()
-  await runStatusCli([], { io, home, platform: 'darwin', env: {}, deps: { hasNewCollector: () => false, exec, netenv: async () => { throw new Error('probe broke') } } })
-  assert.match(io.stdoutText(), /本机网络环境: 不知道\(probe broke\)/)
-  assert.deepEqual(fs.readdirSync(home), [], 'nothing was written: there is no ~/.asight here to keep the board\'s copy in')
-})
-
+// the old capture's own status test went with it (D39⑥ executed 2026-10-11): status.mjs no longer has the legacy
+// branch; every platform prints the collector's status, and the VPN lines it prints are the same cells above and below.
 test('semantics 2: an install manifest that parses but is not a manifest ({"version":2}, entries as an object) is 不知道 with the file and the reason — exit 3, no stack trace, never "没有装入口" — in the text and in --json', async () => {
   for (const body of ['{"version":2}', (m) => ({ ...m, entries: { a: 1 } })]) {
     const s = await installedHome()

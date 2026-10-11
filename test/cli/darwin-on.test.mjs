@@ -119,14 +119,12 @@ test('the flip ② (4.9 §4): an arch that names a file (Linux) is not asked for
   assert.deepEqual(asked, [], 'deps.roots given: the arch hook is not asked (the same override the win tests use)')
 })
 
-// the flip (4.9 §4 末 · Part 2, 1.6 §4 / §2): hasNewCollector('darwin') is true, so `on` on a Mac is the NEW collector's on — the darwin arch
-// hooks draw the plan — and the legacy dispatch (src/capture/legacy-on.mjs) is not what runs. The win twin of this cell is test/cli/win-plan.test.mjs's flip test.
-test('the flip (Part 2, 1.6 §4): `on` with platform darwin runs the new collector — the darwin arch hooks are asked and the plan is drawn, and the legacy-on dispatch never runs', async () => {
+// the flip (4.9 §4 末 · Part 2, 1.6 §4 / §2) settled into the only path there is (D39⑥ executed 2026-10-11: the legacy-on dispatch went with the old capture):
+// `on` with platform darwin runs the darwin arch's own plan. The win twin of this cell is test/cli/win-plan.test.mjs's flip test.
+test('`on` with platform darwin runs the new collector — the darwin arch hooks are asked and the plan is drawn', async () => {
   const w = darwinWorld()
-  const legacy = []
-  const r = await w.run(['--dry-run'], { platform: 'darwin', deps: { legacyOn: async (argv) => { legacy.push(argv); return 0 } } })
+  const r = await w.run(['--dry-run'], { platform: 'darwin' })
   assert.equal(r.exit, 0, r.text)
-  assert.deepEqual(legacy, [], 'darwin does not run legacyOnCli (src/capture/legacy-on.mjs) any more')
   assert.match(r.text, /^asight 将打开采集/, 'the NEW collector\'s plan is what a Mac gets')
   assert.match(r.text, /\.codex\/\.env/, 'drawn from the darwin arch\'s own world (the codex trust entry)')
   assert.ok(!/驱动旧采集|本平台未实现/.test(r.text), 'and no word of the old capture remains in what `on` says first')

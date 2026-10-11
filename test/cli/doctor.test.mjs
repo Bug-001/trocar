@@ -146,7 +146,7 @@ test('the old `verify` is ④: the CA is in the user trust store (✓), is not (
   let r = await doctor(s, ['--source', src], { deps: { verify: () => true } })
   assert.match(r.out, /✓ ④ 没弱化全机 TLS[^\n]*CA present in the USER trust store/); assert.equal(r.exit, 0)
   r = await doctor(s, ['--source', src], { deps: { verify: () => false } })
-  assert.match(r.out, /⚠ ④ 没弱化全机 TLS[^\n]*not found in the user trust store[^\n]*`asight monitor on`[^\n]*collector's own CA \(`asight on`\) is in no trust store/); assert.doesNotMatch(r.out, /run: asight on/); assert.equal(r.exit, 0)
+  assert.match(r.out, /⚠ ④ 没弱化全机 TLS[^\n]*not found in the user trust store[^\n]*监测 toggle[^\n]*collector's own CA \(`asight on`\) is in no trust store/); assert.doesNotMatch(r.out, /run: asight on/); assert.equal(r.exit, 0)
   r = await doctor(s, ['--source', src], { deps: { verify: () => { throw new Error('security: the keychain could not be opened') } } })
   assert.match(r.out, /⚠ ④ 没弱化全机 TLS[^\n]*trust check errored: security: the keychain could not be opened/); assert.equal(r.exit, 0)
   assert.deepEqual(ranBesides(s), [], 'with the trust-store check, the process table and the VPN probe injected, no OS tool ran at all')

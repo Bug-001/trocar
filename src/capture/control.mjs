@@ -1,5 +1,6 @@
-// src/capture/control.mjs — transparent-monitoring control logic (D26). Maps the web/CLI on/off
-// DIRECTLY onto the existing OBSERVE onboard commands (atraceOn/atraceOff, D22) + user-level autostart
+// src/capture/control.mjs — the board's 监测 toggle (D26), the only face the old capture has left (its CLI face
+// `monitor` went with the old capture, D39⑥ 2026-10-11). Maps the web on/off onto the OBSERVE onboard commands
+// (atraceOn/atraceOff, D22) + user-level autostart
 // (autostart.mjs). OBSERVE-only: this only ARRANGES capture (CA + steer + boot item) — it never
 // originates or injects. All side-effecting deps (onboard / autostart / settings path) are injectable
 // so tests exercise the wiring without installing a real CA or LaunchAgent.
@@ -11,8 +12,6 @@ import { fileURLToPath } from 'node:url';
 import { caDir } from '../paths.mjs';
 import * as onboardReal from './onboard.mjs';
 import { getAutostartInstaller, MONITOR_LABEL } from './autostart.mjs';
-import { runOffCli } from '../off/main.mjs';
-import { hasNewCollector } from '../off/legacy.mjs';
 
 const HOME = os.homedir();
 const DEFAULT_SETTINGS = path.join(HOME, '.claude', 'settings.json');
@@ -61,7 +60,7 @@ export function monitoringStatus({
   };
 }
 
-// Turn monitoring ON — DIRECTLY the underlying `asight on`: generate CA + import-only user-level trust
+// Turn monitoring ON: generate CA + import-only user-level trust
 // (D22) + steer CC-CLI; optionally add a user-level boot item that runs the capture (D26 · never
 // machine-wide). Returns the onboard + autostart results and the fresh status.
 export function monitoringOn({
@@ -72,6 +71,9 @@ export function monitoringOn({
   const ob = onboard.atraceOn({ proxyUrl, settingsPath });
   let auto = null;
   if (withAutostart) {
+    // the program is the retired `asight capture` verb — the boot item it writes no longer runs; the
+    // toggle's own install is kept for the machines that still have one (removal still works) — the
+    // transitional gap is written up in docs/release-notes/2026-10-11.md
     const args = [asightBin || defaultAsightBin(), 'capture', '--port', String(safePort(proxyUrl)), '--target', captureTarget, '--out', capturePath, '--raw-sse'];
     auto = autostart.install({ label: MONITOR_LABEL, programArguments: [nodeBin, ...args], logPath: path.join(HOME, '.asight', 'logs', 'monitor.log') });
     // D38 L-7: the boot item did not load → not ok, and a line (the caller passes appendLegacyEvent; tests never write home)
@@ -80,7 +82,7 @@ export function monitoringOn({
   return { ok: !(auto && auto.ok === false && !auto.reserved), onboard: ob, autostart: auto, status: monitoringStatus({ settingsPath, captureTarget, proxyUrl, onboard, autostart, getenv }) };
 }
 
-// Turn monitoring OFF — DIRECTLY `asight off`: revert steer (+ optional CA removal) + remove the boot
+// Turn monitoring OFF: revert steer (+ optional CA removal) + remove the boot
 // item. Symmetric & reversible (采集安全 Risk/回滚).
 export function monitoringOff({
   settingsPath = DEFAULT_SETTINGS, removeCa = false, captureTarget = null, proxyUrl = 'http://127.0.0.1:8899',
@@ -91,17 +93,8 @@ export function monitoringOff({
   return { ok: true, onboard: ob, autostart: auto, status: monitoringStatus({ settingsPath, captureTarget, proxyUrl, onboard, autostart, getenv }) };
 }
 
-// ── the switch on a platform without the new collector (RFC 1.6 §4, D26 transitional, V40) ──────────────────────────────────────────────────────────────────────────────────────────
-// There the web "off" is `asight off` (no names: both generations of the capture, the receipt and the exit code are the CLI's), not only `atraceOff`. The "on" stays what it was
-// (atraceOn + com.asight.monitor: the old `monitor on`). Where the new collector exists both endpoints are unchanged, and the status says what "off" does there.
+// ── the switch's wording (RFC 1.6 §4, V40, D39⑥ executed 2026-10-11) ────────────────────────────────────────────────────────────────────────────────────────────────────────
+// Every platform the CLI still answers on has the new collector, so the switch's "off" is the old atraceOff everywhere: it takes the old CC-CLI steer out and is not `asight off` — the status
+// says so. (The platforms without a collector are refused by loadArch in `asight on` / `asight daemon`; the switch never reaches them.) The old capture retired per D39⑥; what it left on a
+// machine is cleaned by hand (README).
 export const OFF_NOTE_STEER_ONLY = '只管旧 CC-CLI steer,不等于 `asight off`';
-/** Does the switch's "off" run `asight off`? `deps.hasNewCollector(platform)` replaces the answer (a test's). */
-export const offIsAsightOff = (deps = {}, platform = process.platform) => !(deps.hasNewCollector || hasNewCollector)(platform);
-/** `asight off --json` run in this process (the same code the CLI runs; no child process) → { exit, receipt, stderr }: `receipt` is the parsed JSON, or null when the command printed none. */
-export async function asightOffInProcess({ home = os.homedir(), env = process.env, platform = process.platform, deps = {} } = {}) {
-  const out = [], err = [];
-  const io = { out: (l) => out.push(l), err: (l) => err.push(l), stdin: null, stdout: null, stderr: null };
-  const exit = await runOffCli(['--json', '--yes'], { io, env, home, platform, deps });
-  let receipt = null; try { receipt = JSON.parse(out.join('\n')); } catch { /* the command printed no receipt: stderr says why */ }
-  return { exit, receipt, stderr: err.join('\n') };
-}

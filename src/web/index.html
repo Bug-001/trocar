@@ -958,7 +958,7 @@ function openControlDetail(cls,i){
 // failures by reason (24 h), the ledger what holds now, each agent's last capture and last failure, the daemon, the
 // last install / uninstall; a row opens its metadata in #detail. Not a session: the data is capture metadata, not
 // normalized rows. Every name shown (agent, where, code) comes from the payload: no harness or provider is named here.
-const NO_SESSIONS='No sessions captured yet. Start a tap with `asight monitor on` (Claude Code CLI) or `asight desktop on` (Claude Desktop, macOS + Clash Verge), then run your agent. Check what is arranged with `asight monitor status`.'
+const NO_SESSIONS='No sessions captured yet. Start the collector with `asight on` (it lists every file it will change and asks first), then run your agent. Check what is arranged with `asight status`.'
 let boardEmpty=false, capHSig=null, capHRows=[]
 // an empty board while capture fails or the collector is not running says so (0.1 §0 #5), never "not started yet"
 function emptyMessage(){

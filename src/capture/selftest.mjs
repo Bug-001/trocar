@@ -19,7 +19,7 @@ export function qCapturing(records, srcMeta) {
   const n = records.length;
   const ok = !!(srcMeta && srcMeta.exists && n > 0);
   return { ok, n, bytes: (srcMeta && srcMeta.bytes) || 0, mtimeMs: (srcMeta && srcMeta.mtimeMs) || null,
-    note: !srcMeta || !srcMeta.exists ? 'no capture source found — run `asight capture`, then a CC-CLI session'
+    note: !srcMeta || !srcMeta.exists ? 'no capture source found — run `asight on`, then an agent session'
       : n === 0 ? 'source exists but holds 0 records (nothing captured yet)'
       : `${n} record(s) captured` };
 }
@@ -108,7 +108,7 @@ export function qUserTrustOnly(verify) {
   return { ok, err,
     note: ok ? 'CA present in the USER trust store; asight never writes machine-wide trust (import-only, D22)'
       : err ? 'trust check errored: ' + err
-      : 'CA not found in the user trust store — this item is about the old capture\'s CA, which only `asight monitor on` (or the board\'s 监测 toggle) puts there; the collector\'s own CA (`asight on`) is in no trust store by design, so this is expected when you use `asight on` alone. asight only ever installs user-level.' };
+      : 'CA not found in the user trust store — this item is about the old capture\'s CA, which only the board\'s 监测 toggle puts there any more (its CLI face `monitor` went with the old capture); the collector\'s own CA (`asight on`) is in no trust store by design, so this is expected when you use `asight on` alone. asight only ever installs user-level.' };
 }
 
 // 组装四问 + 依赖探测为一个结构化结果。三个结局(R4),不混:

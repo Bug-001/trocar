@@ -35,7 +35,7 @@ function fakeOptIn(out = { state: 'done' }) {
   }
 }
 
-test('the flag: repeatable, comma-separated and `--opt-in=a,b`; a name the platform does not offer is a usage error that lists them; a valueless flag and a legacy platform are too', async () => {
+test('the flag: repeatable, comma-separated and `--opt-in=a,b`; a name the platform does not offer is a usage error that lists them; a valueless flag is too', async () => {
   const home = tmpDir('asight-optin-flag-'); seedClaude(home)
   const f = fakeOptIn()
   const cases = [
@@ -61,10 +61,8 @@ test('the flag: repeatable, comma-separated and `--opt-in=a,b`; a name the platf
   const none = fakeIo({ tty: false })
   assert.equal(await runOnCli(['--opt-in', 'x.two-items', '--yes'], onCtx(home, none)), 2)
   assert.match(none.text(), /这个平台没有要点名的形态/)
-  // and a platform without the new collector (1.6 §4: `on` drives the old capture) has no opt-in items either — freebsd since the darwin flip (4.9 §4)
-  const legacy = fakeIo({ tty: false })
-  assert.equal(await runOnCli(['--opt-in', 'x.two-items', '--yes'], { ...onCtx(home, legacy), platform: 'freebsd' }), 2)
-  assert.match(legacy.text(), /--opt-in needs the new collector/)
+  // (the legacy-platform sub-cell — no opt-in items where `on` drove the old capture — went with the old capture, D39⑥ executed 2026-10-11;
+  // every platform reaches the arch's own forms now, and an arch with none is the usage error above)
 })
 
 test('V56 (the plan half): without --opt-in nothing is applied and the plan carries 「要你点名的(默认不做)」 — one line per item with its 影响, admin where it is, and the exact command; --yes does not stand in for the naming', async () => {
