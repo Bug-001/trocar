@@ -28,7 +28,7 @@ import { groupsOf, planRoutes, priorOf, hostSetOf, proxyRecordsOf } from './rout
 import { createProxyEntries } from './entries.mjs'
 import { readSystemProxy, readHkcuEnv } from './upstream.mjs'
 import { planOptIns } from './optin.mjs'
-import { reinstallCommands, mainPackage, loadPin } from './forwarder.mjs'
+import { reinstallCommands, loadPin } from './forwarder.mjs'
 import { readText, readTextOrError } from '../../core/config-read.mjs'
 import { readManifest } from '../../core/trust/journal.mjs'
 import { readStateFile } from '../../../off/state.mjs'
@@ -304,10 +304,10 @@ export async function gatherWin32Facts(ctx, deps = {}) {
     const forwarder = { pid: lock ? lock.pid : null, up: !lock ? false : psRows ? psByPid.has(lock.pid) : null, forms: fwForms }
 
     const listeners = (listenRows || []).map((r) => ({ addr: r.localAddr, port: r.localPort, pid: r.pid, exe: (psByPid.get(r.pid) || {}).exe ?? null }))
-    // ---- the kernel's reinstall commands (4.8 §10.4): forwarder.mjs's own literals, computed here on the arch side from THIS build's pin — the doctor prints them, nothing runs them. The
-    // facts carry them because src/netenv reads no arch module (1.6 §9.7 / 4.8 W39's rule 6); an architecture the pin has no package for carries null (said, not guessed).
+    // ---- the kernel's manual alternative (4.8 §10.4 · D44): forwarder.mjs's own literal, computed here on the arch side from THIS build's pin — the doctor prints it, nothing runs it. The
+    // facts carry it because src/netenv reads no arch module (1.6 §9.7 / 4.8 W39's rule 6); an architecture the pin has no archive for carries null (said, not guessed).
     let reinstall = null
-    try { const a = (loadPin().assets || {})[process.arch]; if (a && a.package) reinstall = reinstallCommands({ main: mainPackage(), platformPackage: a.package }) } catch { reinstall = null }
+    try { const a = (loadPin().assets || {})[process.arch]; if (a && a.name) reinstall = reinstallCommands(a) } catch { reinstall = null }
     return { routing: 'proxy', listeners, procs, forwarder, forms, systemProxy: sysFact, tun, ...(vpn ? { vpn } : {}), reinstall, unknowns }
   } finally {
     if (own && helper) await helper.close()

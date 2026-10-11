@@ -12,12 +12,13 @@ import { startHelper, policyAllowOf } from './helper.mjs'
 import { createProcWatcher } from './procinfo.mjs'
 import { ownerOf as askOwnerOf } from './socktable.mjs'
 import { loadIngressConfig, freeOnLoopback } from './ingress-config.mjs'
-import { createForwarder, loadPin, verifyCopy, sacState, sacBlocks, locateKernel, reinstallCommands, KERNEL_EXE } from './forwarder.mjs'
+import { createForwarder, loadPin, verifyCopy, sacState, sacBlocks, locateKernel, ensureBinary, reinstallCommands, KERNEL_EXE } from './forwarder.mjs'
 import { groupsOf, planRoutes, resolveLogin, hostSetOf, proxyRecordsOf } from './route-plan.mjs'
 import { createWin32Redirector } from './redirector.mjs'
 import { createProxyEntries } from './entries.mjs'
 import { readSystemProxy, readHkcuEnv, watchSystemProxy } from './upstream.mjs'
 import { readText, readTextOrError } from '../../core/config-read.mjs'
+import { appendEvent } from '../../core/events.mjs'
 import { readManifest } from '../../core/trust/journal.mjs'
 import { collectorDir } from '../../../off/paths.mjs'
 import { matchForm } from './forms.mjs'
@@ -229,35 +230,42 @@ export function win32Routing({ harnesses = [], home, env = process.env, fs = nod
   }
 }
 
+/** What a `missing` answer of locateKernel / ensureBinary means in words (the receipt and the refusal say it the same way both sides of the write phase). */
+const missingWhy = (missing, arch) => missing.reason === 'not-pinned' ? 'the pin carries no exe digest, so nothing can be verified against it' : `this machine's architecture (${arch}) is not in the pinned list`
+
 /**
- * prepare({ helper, locate, sac, arch, fs }) → { notes: [line], kernel?, sac?, refuse?: { code, reason, of?, commands } } — the read-only hook `asight on` calls before it
- * writes anything (4.8 §8 ⑥ and the Smart App Control preflight; W27 ⑥, W74): the kernel line (`locateKernel`: found and verified, with its package and digest)
- * and, when Smart App Control is on or evaluating, its warning line; a missing or mismatched kernel is a REFUSAL with the two reinstall commands — no download
- * to wait for, a settled precondition, so `on` exits 1 before the first write (the event and the receipt are the caller's). `helper` is sacState's reader; one
- * is started and closed here when none is given (an injected `sac` gets the helper it was given, none if none). Nothing is written, nothing is started.
- * `kernel: { version, package, exe, sha256 }` (of the pin this build carries, the run path's file name and the digest that was verified) and `sac: 'off' | 'on' |
- * 'evaluation' | { unknown: { reason, detail? } }` are the same two reads as the notes, as data — the Windows plan of 4.8 §11 draws its kernel line and its Smart
- * App Control line from them (the receipt keeps the notes, 1.6 §7).
+ * prepare({ helper, locate, sac, arch, fs, home }) → { notes: [line], kernel?, sac?, refuse?: { code, reason, commands? } } — the read-only hook `asight on` calls before it
+ * writes anything (4.8 §8 ⑥ and the Smart App Control preflight; W27 ⑥, W74). The kernel line is in one of §8 ⑥'s three states: READY (the run location `kernel\` or the verified-archive
+ * cache satisfies the pin — nothing to download), WILL-DOWNLOAD (neither is there — the plan's download line: version, the archive's size, the pinned sha256, the url's host; the download itself
+ * happens AFTER the confirmation, in ensureKernel, D44) or a REFUSAL (an architecture the pin does not know, a pin with no exe digest — nothing downstream can fix either; `commands` carries the
+ * manual alternative). `home` is where the collector dir lives (the run location and the cache are read under it). The pin is ALWAYS locateKernel's own (this build's), never a caller's injection
+ * defaulting to nothing — the unsupported-arch-on-every-real-on bug was a caller forgetting to pass one, and this shape kills the class. `helper` is sacState's reader; one is started and closed
+ * here when none is given (an injected `sac` gets the helper it was given, none if none). Nothing is written, nothing is started, nothing is downloaded.
+ * `kernel: { version, exe, sha256, state: 'ready' | 'will-download', size?, url?, host? }` (the two lines' data — ready carries the verified sha256, will-download the archive's size and sha256,
+ * the url and its host) and `sac: 'off' | 'on' | 'evaluation' | { unknown: { reason, detail? } }` are the same reads as the notes, as data — the Windows plan of 4.8 §11 draws its kernel line
+ * and its Smart App Control line from them (the receipt keeps the notes, 1.6 §7).
  */
-export async function prepare({ helper = null, locate = locateKernel, sac = sacState, arch = process.arch, fs = nodeFs, start = startHelper, env = process.env } = {}) {
-  const k = await locate({ ...(arch ? { arch } : {}), ...(fs ? { fs } : {}) })
-  if (k.missing || k.mismatch) {
-    const raw = (k.missing || k.mismatch).commands
-    const commands = raw ? (Array.isArray(raw) ? raw : Object.values(raw)) : null // reinstallCommands gives {npm, release}; the receipt wants the two lines
+export async function prepare({ helper = null, locate = locateKernel, sac = sacState, arch = process.arch, fs = nodeFs, home = null, start = startHelper, env = process.env } = {}) {
+  if (!home) throw new TypeError('prepare needs home: the kernel line reads the run location and the cache under ~/.asight/collector/')
+  const kernelDir = path.join(collectorDir(home), 'kernel')
+  const k = await locate({ arch, dir: kernelDir, fs })
+  if (k.missing) {
+    const raw = k.missing.alternative
     return {
       refuse: {
-        code: k.missing ? 'forwarder-binary-missing' : 'forwarder-digest-mismatch',
-        reason: k.missing ? `the pinned kernel package was not found (${k.missing.reason})` : "the pinned kernel package holds an exe whose digest is not the pin's",
-        ...(k.mismatch && k.mismatch.of ? { of: k.mismatch.of } : {}),
-        ...(commands ? { commands } : {}),
+        code: 'forwarder-binary-missing',
+        reason: missingWhy(k.missing, arch),
+        ...(raw ? { commands: [raw] } : {}),
       },
     }
   }
-  // what the plan's own §11 kernel line names: the pin this build carries (the version and the platform package of the architecture asked — loadPin's own file, never one of the caller's)
-  // and the digest that was verified — the run path (`%USERPROFILE%\.asight\collector\kernel\…`) is the caller's to compose, it is the one that knows the home
-  let kernel = null
-  try { const pin = loadPin(); const a = (pin.assets || {})[arch]; if (a && a.package) kernel = { version: pin.version, package: a.package, exe: KERNEL_EXE, sha256: k.found.sha256 } } catch { kernel = null }
-  const notes = [`asight's kernel: found and verified (${k.found.sha256.slice(0, 12)}… in ${k.found.packageDir})`]
+  // the kernel line's two shapes: ready (the run location or the cache satisfies the pin) and will-download (the plan shows the download line; the download happens after the confirmation, D44)
+  const kernel = k.found
+    ? { version: loadPin().version, exe: KERNEL_EXE, sha256: k.found.sha256, state: 'ready', at: k.found.at }
+    : { version: k.download.version, exe: k.download.exe, sha256: k.download.sha256, size: k.download.size, url: k.download.url, host: k.download.host, state: 'will-download' }
+  const notes = [k.found
+    ? `asight's kernel: found and verified (${k.found.sha256.slice(0, 12)}… ${k.found.at === 'cache' ? 'in the archive cache' : 'in kernel\\'})`
+    : `asight's kernel: not there yet — mihomo ${k.download.version} will be downloaded (archive ${(k.download.size / 1048576).toFixed(1)} MB, sha256 pinned, from ${k.download.host}) once you confirm`]
   let own = false
   let h = helper
   if (!h && sac === sacState) { try { h = start({ env }); own = true } catch { h = null } } // only the real reader needs a helper of its own
@@ -268,7 +276,36 @@ export async function prepare({ helper = null, locate = locateKernel, sac = sacS
     if (state === 'on' || state === 'evaluation') notes.push('Smart App Control 开着:未签名的 asight-forwarder.exe 很可能起不来,代理模式用不了(仍会去试;失败时会记下原因,一个代理入口也不写)')
     else if (state !== 'off') notes.push(`Smart App Control 的状态读不到(${state.unknown.reason}${state.unknown.detail ? `:${state.unknown.detail}` : ''}):不知道,按上面的计划继续`)
   } finally { if (own && h && typeof h.close === 'function') await h.close() }
-  return { notes, ...(kernel ? { kernel } : {}), sac: sacStateOut }
+  return { notes, kernel, sac: sacStateOut }
+}
+
+/**
+ * ensureKernel({ home, arch, env, fs, execFile }) → `{ ok: true, path, sha256, from, copied, note }` · `{ ok: false, reason }` — the FIRST write-phase step of a real `on` (D44): the kernel's
+ * download, verify and placement, asked AFTER the confirmation and BEFORE any agent file is touched, so a failed download leaves zero agent files written (the precondition's nature unchanged,
+ * 4.8 §8 ①). `from` says where the kernel came from — 'run' (it was already the pinned one: nothing done, no network), 'cache' (the verified archive, no network) or 'download' (the CLI's one
+ * online step) — and `note` is the receipt's line of that. The download's three records (started / ok / failed) go to the collector dir's flows/ through the same appendEvent every forwarder
+ * record uses (D38; kernel-download.mjs writes them); a `missing` or `mismatch` answer gets its failure event here. A `blocked` placement (the old exe is running or draining and Windows will not
+ * let it be replaced, W27 ⑨) stops the on with the wait-or-`off --now` line and NO event: nothing was written, so the receipt is the record (R11) — a blocked replace is also the answer of the
+ * daemon's own later attempts, whose records are the §12 table's. `execFile` is node's own by default and a test's recorder otherwise (0.1 §3: no test reaches a real curl).
+ */
+export async function ensureKernel({ home, arch = process.arch, pin = null, env = process.env, fs = nodeFs, execFile } = {}) {
+  if (!home) throw new TypeError('ensureKernel needs home: the kernel lives under ~/.asight/collector/')
+  const dir = collectorDir(home)
+  const event = (rec) => { try { appendEvent(dir, rec) } catch { /* the receipt is the record when flows/ cannot be written (R11) */ } }
+  const r = await ensureBinary({ ...(pin ? { pin } : {}), arch, dir: path.join(dir, 'kernel'), fs, ...(execFile ? { execFile } : {}), env, event })
+  if (r.missing) {
+    event({ event: 'failure', where: 'forwarder', code: 'forwarder-binary-missing', reason: missingWhy(r.missing, arch) })
+    return { ok: false, reason: `${missingWhy(r.missing, arch)}; nothing was changed` }
+  }
+  if (r.failed) return { ok: false, reason: `${r.failed.reason}; nothing was changed. 手动替代(asight 不替你跑): ${r.failed.alternative}` }
+  if (r.mismatch) {
+    const line = `the kernel that was placed is not the pinned one; nothing was changed. 手动替代(asight 不替你跑): ${r.mismatch.alternative}`
+    event({ event: 'failure', where: 'forwarder', code: 'forwarder-digest-mismatch', reason: line, of: 'copy' })
+    return { ok: false, reason: line, of: 'copy' }
+  }
+  if (r.blocked) return { ok: false, reason: `the kernel in kernel\\ could not be replaced (${r.blocked.step}: ${r.blocked.reason}): it is running or draining, and asight does not stop it by itself; nothing was changed. Wait for the drain to end, or run asight off --now (it disconnects the agents still draining), then asight on` }
+  return { ok: true, path: r.path, sha256: r.sha256, from: r.from, copied: r.copied,
+    note: r.from === 'download' ? `the kernel was downloaded and both digests verified (sha256 ${r.sha256.slice(0, 12)}…)` : r.from === 'cache' ? 'the kernel was placed from the verified archive cache (no network)' : null }
 }
 
 export { CONTROLLER_RANGE, reinstallCommands }
