@@ -21,7 +21,7 @@ export async function loadArch(platform = process.platform) {
     // itself). `record` is what the daemon's 5 s check does with the findings (once per occurrence, only §9.7's netenv failure codes) — on the arch object
     // so the daemon, the one file allowed to wire arch in, stays platform-neutral about it. netFacts (Task 10(a)) is this platform's half of the network
     // facts: topology rows, doctor findings, the §11 plan and the drift checks all draw from it through src/netenv/facts.mjs.
-    const [{ createWin32Collector, prepare, win32Routing }, unit, { controlEndpoint }, { windowsRoots }, { planOptIns, optinFormsOf, applyOptIn, checkEntries, recordEntryFindings }, { gatherWin32Facts }] = await Promise.all([import('./win32/wiring.mjs'), import('./win32/autostart.mjs'), import('./win32/control-path.mjs'), import('./win32/roots.mjs'), import('./win32/optin.mjs'), import('./win32/netfacts.mjs')])
+    const [{ createWin32Collector, prepare, ensureKernel, win32Routing }, unit, { controlEndpoint }, { windowsRoots }, { planOptIns, optinFormsOf, applyOptIn, checkEntries, recordEntryFindings }, { gatherWin32Facts }] = await Promise.all([import('./win32/wiring.mjs'), import('./win32/autostart.mjs'), import('./win32/control-path.mjs'), import('./win32/roots.mjs'), import('./win32/optin.mjs'), import('./win32/netfacts.mjs')])
     const { groupsOf } = await import('./win32/route-plan.mjs')
     const of = (harnesses, ids = null) => groupsOf(harnesses).filter((x) => !ids || ids.includes(x.harness))
     return {
@@ -31,6 +31,7 @@ export async function loadArch(platform = process.platform) {
       osRoots: ({ helper = null } = {}) => windowsRoots({ helper }),
       createRedirector: (opts = {}) => createWin32Collector(opts),
       prepare,
+      ensureKernel, // D44: the kernel's download+verify+place — the FIRST write-phase step of a real `on` (after the confirmation, before any agent file is touched); Linux's driver mode needs no kernel and has none
       routing: win32Routing,
       netFacts: gatherWin32Facts,
       optIn: {
@@ -50,7 +51,7 @@ export async function loadArch(platform = process.platform) {
     // optIn is 4.9 §2.4's half the CLI and status reach (1.6 §1.7; the flip checklist ④, the win32 twin's shape): `forms` (what --opt-in may name), `plan` (the rows of the plan's
     // 「要你点名的」 section) and `apply` (one named item, ledgered with scope). The check half (the read-only re-check that the entries are still the ones used, W68) is the
     // status-side work of MA4's row — not this arm; the daemon's own opt-in check is guarded by the hook's absence and checks nothing.
-    const [{ createDarwinCollector, prepare }, unit, { controlEndpoint }, { darwinRoots }, { darwinNetFacts }, { planOptIns, optinFormsOf, applyOptIn }] = await Promise.all([import('./darwin/wiring.mjs'), import('./darwin/autostart.mjs'), import('./darwin/control-path.mjs'), import('./darwin/roots.mjs'), import('./darwin/netfacts.mjs'), import('./darwin/optin.mjs')])
+    const [{ createDarwinCollector, prepare, ensureKernel }, unit, { controlEndpoint }, { darwinRoots }, { darwinNetFacts }, { planOptIns, optinFormsOf, applyOptIn }] = await Promise.all([import('./darwin/wiring.mjs'), import('./darwin/autostart.mjs'), import('./darwin/control-path.mjs'), import('./darwin/roots.mjs'), import('./darwin/netfacts.mjs'), import('./darwin/optin.mjs')])
     const { groupsOf } = await import('./darwin/route-plan.mjs')
     const of = (harnesses, ids = null) => groupsOf(harnesses).filter((x) => !ids || ids.includes(x.harness))
     return {
@@ -61,6 +62,7 @@ export async function loadArch(platform = process.platform) {
       netFacts: darwinNetFacts,
       createRedirector: (opts = {}) => createDarwinCollector(opts),
       prepare,
+      ensureKernel, // D44's darwin half (4.9 §8): the same first write-phase step as win32's
       optIn: {
         forms: ({ harnesses: h, ids = null } = {}) => optinFormsOf(of(h, ids)),
         plan: ({ harnesses: h, ids = null, optIn = [], manifest = null } = {}) => planOptIns({ groups: of(h, ids), optIns: optIn, manifest }),

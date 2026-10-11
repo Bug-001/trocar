@@ -2,56 +2,50 @@
 //
 // This is the darwin port of `arch/win32/forwarder.mjs` — a near-verbatim copy (4.9 §1's row for this file): the kernel's lifecycle is carried as it is, the exclusive queue, the adopt triple-check,
 // draining, the 1,2,4…30 s backoff, five straight failures to `forwarder-down`, `forwarder.lock`. The three deltas of 4.9 §3:
-//   ① the binary is `asight-forwarder`, no `.exe`: the official darwin release is a `.gz` single binary (not a `.zip`), unpacked at package build time — the runtime here reads the unpacked binary in
-//     the platform package (the pin holds the .gz digest and the unpacked exe digest as two separate fields, §8; the unpacking is the package-build seam's (scripts/, the win line's, 4.9 OPEN 3), not this file's)
+//   ① the binary is `asight-forwarder`, no `.exe`: the official darwin release is a `.gz` single binary (not a `.zip`), and since D44 it comes with NO package at all — `on` downloads it from the pin's
+//     official release URL (kernel-download.mjs, the CLI's one online step; darwin's unpack is node:zlib), this file never goes online itself (no http, https, dns, net, tls or fetch, and no curl exec
+//     either — W27 ⑦ scans this file's source)
 //   ② the Smart App Control check is replaced by the Gatekeeper precheck (§3 ②, the section below): before EVERY launch, beside the digest check, the own copy's com.apple.quarantine is read
-//     (`xattr -p`) and, when it is there, lifted (`xattr -d`) with one flows/ event; what cannot be lifted is the `gatekeeper` code, whose receipt carries the reinstall commands. [本机] experiment ③
+//     (`xattr -p`) and, when it is there, lifted (`xattr -d`) with one flows/ event; what cannot be lifted is the `gatekeeper` code, whose receipt carries the manual alternative. [本机] experiment ③
 //     is why this is a light check, not a wall: the official binary is adhoc linker-signed, curl and npm downloads carry no quarantine attribute, it runs with and without a simulated one, and
 //     `spctl --assess` rejects (exit 3) only .app double-clicks, not CLI exec — so nothing here assesses signatures
 //   ③ the copy under `kernel/` stays (a copy of asight's own, so an upgrade does not dangle and `uninstall` can remove it, 4.8 §8; the Windows reason for it — a running exe cannot be replaced —
 //     does not hold on darwin, and a replacement that fails is still an answer, not an exception)
 //
-// The kernel is a pinned mihomo, shipped as `asight-forwarder` in a per-platform npm package that comes with asight (4.8 §8: `on` never downloads). This file finds that package,
-// checks the binary against the pin, copies it to the user's `kernel/` directory and checks the copy again before EVERY start (the first and each re-spawn of the backoff). Nothing here goes online:
-// no http, https, dns or fetch (W27 ⑦ scans this file's source and records every connection a test makes), and the user's proxy software is never read or written (D43).
+// What this file does with the kernel: `ensureBinary()` resolves it (the run location `kernel/` first, then the verified-archive cache `kernel-archive/`, then the download — D44 ③'s order), places it
+// under a temp name that is hashed before it takes the name, and checks the copy again before EVERY start (the first and each re-spawn of the backoff). The pin is ALWAYS this file's own `loadPin()`
+// unless a caller injects one: the old seam where `prepare()` called `locate()` without a pin and every real-machine `on` refused `unsupported-arch` is the bug class this rewrite exists to kill. The
+// user's proxy software is never read or written (D43).
 //
-// Every function takes what it touches (`fs`, `hash`, `resolvePackage`, the spawn, the clock, the controller, the xattr runner) so a test on any OS runs it against a temp directory and a fake kernel process.
+// Every function takes what it touches (`fs`, `hash`, the download's `execFile` and `event` sink, the spawn, the clock, the controller, the xattr runner) so a test on any OS runs it against a temp directory and a fake curl and kernel process.
 
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { execTool } from '../../../off/exec.mjs'
 import { createController } from '../../../netenv/mihomo/controller.mjs'
+import { acquireKernel, licenseText, sourceText } from './kernel-download.mjs'
 
 export const KERNEL_EXE = 'asight-forwarder'
 export const KERNEL_LICENSE = 'LICENSE-mihomo.txt'
 export const KERNEL_SOURCE = 'SOURCE-mihomo.txt'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 
-/** The pin (mihomo-pin.json): the pinned version and, per architecture, the platform package and the sha256 of the .gz release and of the unpacked binary in it (two separate fields, §8: the runtime
- * reads the unpacked one). Read once, synchronously: it is a few hundred bytes next to this file. */
+/** The pin (mihomo-pin.json): the pinned version and, per architecture, the official release's url, the .gz archive's sha256 and size and the unpacked binary's — two digests, both checked (D44). Read
+ * once, synchronously: it is a few hundred bytes next to this file. */
 export function loadPin() {
   return JSON.parse(nodeFs.readFileSync(path.join(HERE, 'mihomo-pin.json'), 'utf8'))
 }
 
-/** The main package's name and version, which the reinstall commands name. */
-export function mainPackage() {
-  const { name, version } = JSON.parse(nodeFs.readFileSync(path.join(HERE, '..', '..', '..', '..', 'package.json'), 'utf8'))
-  return { name, version }
-}
-
 /**
- * The two ways to put the kernel back, as literals (4.8 §8 ⑤, §10.4): asight cannot tell how it was installed, so both are printed, and it never runs either (1.6 R8). There is no download address in them:
- * the second is the Release's tarballs, installed together (`npm pack` names a tarball <name>-<version>.tgz).
+ * The MANUAL ALTERNATIVE, as a literal (4.8 §8 ⑤, §10.4; D44): what the receipt and the doctor print when the kernel is missing or failed its pinned digest, and what asight never runs (1.6 R8). It names the pin's
+ * own archive file — the offline machine's kernel is the operator putting exactly that file into the cache directory by hand — and the network way, with the proxy variable curl reads. Null for an architecture the
+ * pin does not know: no archive of theirs exists to place.
  */
-export function reinstallCommands({ main, platformPackage }) {
-  return {
-    npm: `npm install --global ${main.name}@${main.version} --include=optional`,
-    release: `npm install --global ${main.name}-${main.version}.tgz ${platformPackage}-${main.version}.tgz`,
-  }
+export function reinstallCommands(asset) {
+  return asset && asset.name ? `把 ${asset.name} 放进 ~/.asight/collector/kernel-archive/ 再跑 asight on,或修好网络 / 代理(HTTPS_PROXY)后重跑` : null
 }
 
 /** The sha256 and the size of a file, streamed (the binary is tens of megabytes). */
@@ -66,83 +60,101 @@ export function hashFile(file, { fs = nodeFs } = {}) {
   })
 }
 
-/** The directory of the installed platform package, found from asight's own install location (the package is an optionalDependency, so npm puts it where `require` finds it), or null. */
-export function defaultResolvePackage(name) {
-  try { return path.dirname(createRequire(import.meta.url).resolve(`${name}/package.json`)) } catch { return null }
-}
-
 const isFile = (fs, p) => { try { return fs.statSync(p).isFile() } catch { return false } }
 const same = (got, want) => got.sha256 === want.sha256 && (want.size == null || got.size === want.size)
+const hashQuiet = async (hash, f) => { try { return await hash(f) } catch { return null } }
 
 /**
- * Where the kernel is and whether it is the pinned one: read-only, no network, no write, and it never touches the package directory (that is npm's).
- * → `{ found: { packageDir, exe, sha256, size } }` · `{ missing: { reason, commands } }` (reason: `unsupported-arch` the pin has no package for this architecture · `not-pinned` the pin's exe digest is null (the release was
- * built without it) · `package-not-installed` the package is not there, or has no binary: `npm i --omit=optional` does this) · `{ mismatch: { of: 'package', commands } }` (the binary in the package is not the pinned one).
- * `commands` = `reinstallCommands(...)` (null for an architecture the pin does not know: reinstalling cannot help).
- * `resolvePackage(name)` → the package's directory or null; `hash(file)` → `{ size, sha256 }`; `arch` is `x64` or `arm64`.
+ * Where the kernel is and whether it satisfies the pin: read-only, no network, no write (4.8 §8 ⑥'s three plan states are this answer). The pin is this file's own unless one is injected.
+ * → `{ found: { at: 'run', exe, sha256, size } }`         the copy in `kernel/` is the pinned binary — ready (就位)
+ * · `{ found: { at: 'cache', archive, sha256, size } }`   the cache holds the pinned archive — ready without a network (the placement happens in the write phase)
+ * · `{ download: { version, exe, name, url, host, size, sha256 } }` neither is there — the plan's download line (将下载: version, archive size, pinned sha256, the url's host)
+ * · `{ missing: { reason, alternative } }`                    `unsupported-arch` (the pin has no entry for this architecture; `alternative` null) · `not-pinned` (the pin's exe digest is null: nothing can be verified)
+ * A copy or cache entry with the WRONG digest is not an answer of its own: it is repairable (ensureBinary replaces it from the cache or the download), so the answer falls through to `download`.
+ * `dir` is the run location (`kernel/`), `cacheDir` the archive cache (`kernel-archive/`, its sibling by default); `hash(file)` → `{ size, sha256 }`; `arch` is `x64` or `arm64`.
  */
-export async function locateKernel({ pin, arch, resolvePackage = defaultResolvePackage, fs = nodeFs, hash = (f) => hashFile(f, { fs }), main = mainPackage() } = {}) {
+export async function locateKernel({ pin = loadPin(), arch, dir, cacheDir = dir ? path.join(path.dirname(dir), 'kernel-archive') : null, fs = nodeFs, hash = (f) => hashFile(f, { fs }) } = {}) {
+  if (!dir) throw new TypeError('locateKernel needs dir: the kernel\'s run location (kernel/), the run-location-first resolution reads it')
   const asset = pin && pin.assets && pin.assets[arch]
-  if (!asset) return { missing: { reason: 'unsupported-arch', commands: null } }
-  const commands = reinstallCommands({ main, platformPackage: asset.package })
-  if (!asset.exe || typeof asset.exe.sha256 !== 'string') return { missing: { reason: 'not-pinned', commands } }
-  const packageDir = await resolvePackage(asset.package)
-  const exe = packageDir ? path.join(packageDir, asset.exe.name) : null
-  if (!exe || !isFile(fs, exe)) return { missing: { reason: 'package-not-installed', commands } }
-  const got = await hash(exe)
-  if (!same(got, asset.exe)) return { mismatch: { of: 'package', commands } }
-  return { found: { packageDir, exe, sha256: got.sha256, size: got.size } }
+  if (!asset) return { missing: { reason: 'unsupported-arch', alternative: null } }
+  if (!asset.exe || typeof asset.exe.sha256 !== 'string') return { missing: { reason: 'not-pinned', alternative: reinstallCommands(asset) } }
+  const target = path.join(dir, KERNEL_EXE)
+  if (isFile(fs, target)) {
+    const got = await hashQuiet(hash, target)
+    if (got && same(got, asset.exe)) return { found: { at: 'run', exe: target, sha256: got.sha256, size: got.size } }
+  }
+  const archive = path.join(cacheDir, asset.name)
+  if (isFile(fs, archive)) {
+    const got = await hashQuiet(hash, archive)
+    if (got && same(got, asset)) return { found: { at: 'cache', archive, sha256: got.sha256, size: got.size } }
+  }
+  return { download: { version: pin.version, exe: KERNEL_EXE, name: asset.name, url: asset.url, host: new URL(asset.url).host, size: asset.size, sha256: asset.sha256 } }
 }
 
 /**
- * Find the kernel (locateKernel), then put it where it runs from: `dir` is `~/.asight/collector/kernel/`, the binary and the licence and source files beside it. A copy, not a run from the package: the
- * copy is asight's own, so an upgrade does not dangle and `uninstall` can remove it (4.9 §3 ③ keeps 4.8 §8's reasons; the Windows one — a running exe cannot be replaced — does not hold on darwin).
- * The copy goes to a temp name, is hashed, and only then takes the name; a target that is already there with the right digest is left alone (its mtime does not move).
- * → `{ path, sha256, copied }` · `{ missing }` · `{ mismatch: { of: 'package' | 'copy', commands } }` · `{ blocked: { step: 'copy' | 'replace', reason } }` (`reason`: the errno, or its text). `replace` is the
- * upgrade that meets a target it cannot replace (EPERM / EBUSY / EACCES: the kernel is running or draining, `kernel/` holds the old binary): the old binary is untouched and no temp file is left; `on`
- * does not stop that kernel by itself (it may have agents attached), so it exits 1 and says: wait for the drain, or `asight off --now`, then `asight on` (4.8 §8). The copy is ledgered as
- * `forwarder-binary` (path and sha256) by the caller (the wiring's `on`); `uninstall` removes it.
+ * Put the pinned kernel where it runs from (4.8 §8 D44's darwin half, 4.9 §8): `dir` is `~/.asight/collector/kernel/`, the binary and the licence and source files beside it. The resolution is D44 ③'s order — the run
+ * location first (the pinned binary already there: done, nothing copied, no network — a second `on` answers here, R9), then kernel-download.mjs's `acquireKernel` (the verified-archive cache `kernel-archive/` — no
+ * network, darwin's .gz unpacked by node:zlib — else the download, the CLI's one online step). What acquireKernel hands back is a DIGEST-CHECKED binary in a work directory; placing it keeps the discipline the
+ * package days had: a copy to a temp name, the copy hashed (a disk that corrupts bytes between the check and the name is caught here), and only then the rename; a target that is already there with the right
+ * digest is left alone (its mtime does not move).
+ * → `{ path, sha256, copied, from: 'run' | 'cache' | 'download' }` · `{ missing }` (unsupported-arch / not-pinned, as locateKernel's) · `{ failed: { reason, alternative } }` (the download failed at some step: the
+ * `forwarder-download-failed` event is already written by kernel-download, `alternative` is the manual step for the receipt and the doctor) · `{ mismatch: { of: 'copy', alternative } }` (the placed copy's digest is
+ * not the pin's: not started) · `{ blocked: { step: 'copy' | 'replace', reason } }` (`reason`: the errno, or its text). `replace` is the upgrade that meets a target it cannot replace (EPERM / EBUSY / EACCES: the
+ * kernel is running or draining, `kernel/` holds the old binary — Windows's reason, carried here because a replacement that fails is still an answer): the old binary is untouched and no temp file is left; `on`
+ * does not stop that kernel by itself (it may have agents attached), so it exits 1 and says: wait for the drain, or `asight off --now`, then `asight on` (4.8 §8). The copy is ledgered as `forwarder-binary` (path
+ * and sha256) by the caller (the wiring's `on`); `uninstall` removes it (the cache with it, D44 ③).
  */
-export async function ensureBinary({ pin, arch, dir, resolvePackage, fs = nodeFs, hash = (f) => hashFile(f, { fs }), main = mainPackage() } = {}) {
-  const located = await locateKernel({ pin, arch, resolvePackage, fs, hash, main })
-  if (!located.found) return located
-  const { packageDir, exe } = located.found
-  const want = pin.assets[arch].exe
+export async function ensureBinary({ pin = loadPin(), arch, dir, cacheDir = path.join(path.dirname(dir), 'kernel-archive'), fs = nodeFs, hash = (f) => hashFile(f, { fs }), execFile, env = process.env, event = () => {} } = {}) {
+  const asset = pin && pin.assets && pin.assets[arch]
+  if (!asset) return { missing: { reason: 'unsupported-arch', alternative: null } }
+  if (!asset.exe || typeof asset.exe.sha256 !== 'string') return { missing: { reason: 'not-pinned', alternative: reinstallCommands(asset) } }
+  const want = asset.exe
   const target = path.join(dir, KERNEL_EXE)
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
-  let copied = false
-  let have = null
-  if (isFile(fs, target)) { try { have = await hash(target) } catch { have = null } }
-  if (!have || !same(have, want)) {
+  // ① the run location: the pinned binary is already there
+  if (isFile(fs, target)) {
+    const have = await hashQuiet(hash, target)
+    if (have && same(have, want)) return { path: target, sha256: want.sha256, copied: false, from: 'run' }
+  }
+  // ② the cache, ③ the download — kernel-download.mjs's acquireKernel (a checked binary in a work directory it hands us, or a failure whose event is already written)
+  const got = await acquireKernel({ asset, cacheDir, fs, hash, execFile, env, event })
+  if (got.failed) return { failed: { reason: got.failed.reason, alternative: reinstallCommands(asset) } }
+  let placed = null
+  try {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+    let copied = false
     const tmp = `${target}.tmp-${process.pid}`
     let step = 'copy'
     try {
-      fs.copyFileSync(exe, tmp)
-      if (!same(await hash(tmp), want)) { fs.rmSync(tmp, { force: true }); return { mismatch: { of: 'copy', commands: reinstallCommands({ main, platformPackage: pin.assets[arch].package }) } } }
-      step = 'replace'
-      fs.renameSync(tmp, target)
+      fs.copyFileSync(got.exe, tmp)
+      if (!same(await hash(tmp), want)) { fs.rmSync(tmp, { force: true }); placed = { mismatch: { of: 'copy', alternative: reinstallCommands(asset) } } }
+      else {
+        step = 'replace'
+        fs.renameSync(tmp, target)
+        copied = true
+      }
     } catch (e) {
       try { fs.rmSync(tmp, { force: true }) } catch { /* the next run overwrites a stray temp name of the same pid; another pid's is the user's to clear */ }
-      return { blocked: { step, reason: (e && e.code) || errText(e) } }
+      placed = { blocked: { step, reason: (e && e.code) || errText(e) } }
     }
-    copied = true
-  }
-  for (const name of [KERNEL_LICENSE, KERNEL_SOURCE]) { // the licence text and the source address travel with the binary (GPL-3.0-only)
-    const from = path.join(packageDir, name)
-    const to = path.join(dir, name)
-    if (!isFile(fs, from)) continue
-    const text = fs.readFileSync(from)
-    if (!isFile(fs, to) || !fs.readFileSync(to).equals(text)) fs.writeFileSync(to, text)
-  }
-  return { path: target, sha256: want.sha256, copied }
+    if (!placed) { // the licence text and the source address travel with the binary (GPL-3.0-only): the repo's own copy of the text, the pin's own words — never the download's
+      const beside = [[KERNEL_LICENSE, licenseText({ fs })], [KERNEL_SOURCE, Buffer.from(sourceText({ pin, arch }))]]
+      for (const [name, text] of beside) {
+        if (!text) continue
+        const to = path.join(dir, name)
+        if (!isFile(fs, to) || !fs.readFileSync(to).equals(text)) fs.writeFileSync(to, text)
+      }
+      placed = { path: target, sha256: want.sha256, copied, from: got.from }
+    }
+  } finally { fs.rmSync(got.work, { recursive: true, force: true }) } // the work directory is ours now: it goes whether the placement worked or not (zero leftovers, W27 ③)
+  return placed
 }
 
 /**
- * What the forwarder calls before EVERY spawn (the first start and each re-spawn of the backoff): is the copy in `dir` still the pinned binary? It never copies from the package again: the copy is
+ * What the forwarder calls before EVERY spawn (the first start and each re-spawn of the backoff): is the copy in `dir` still the pinned binary? It never copies from the cache or downloads again: the copy is
  * what ran, and a copy that was changed or deleted is a failure to report (`on` repairs it, 4.8 §8 ④).
  * → `{ ok: true, sha256 }` · `{ missing: { reason: 'file-missing' | 'not-pinned' | 'unsupported-arch' } }` · `{ mismatch: { of: 'copy' } }`.
  */
-export async function verifyCopy({ dir, pin, arch, fs = nodeFs, hash = (f) => hashFile(f, { fs }) } = {}) {
+export async function verifyCopy({ dir, pin = loadPin(), arch, fs = nodeFs, hash = (f) => hashFile(f, { fs }) } = {}) {
   const asset = pin && pin.assets && pin.assets[arch]
   if (!asset) return { missing: { reason: 'unsupported-arch' } }
   if (!asset.exe || typeof asset.exe.sha256 !== 'string') return { missing: { reason: 'not-pinned' } }
@@ -163,11 +175,11 @@ const QUARANTINE = 'com.apple.quarantine'
  * said the file is there — the order is what tells them apart).
  * → `{ ok: true }` the copy carries no com.apple.quarantine: nothing to do · `{ ok: true, healed: true, value }` it carried one, `xattr -d` lifted it and the re-read says it is gone: ONE flows/ event
  *   records the heal (an `install-note` on the kernel copy, an install artifact — the closed sets have no forwarder notice event, and `gatekeeper` stays the failure code of what could not be healed) ·
- *   `{ blocked: { reason, commands } }` it is still there after the heal, or the heal cannot be confirmed: the `gatekeeper` code, and the receipt's reinstall commands (`commands` is null for an
+ *   `{ blocked: { reason, alternative } }` it is still there after the heal, or the heal cannot be confirmed: the `gatekeeper` code, and the receipt's manual alternative (`alternative` is null for an
  *   architecture the pin does not know, as everywhere else) · `{ unknown: { reason } }` xattr could not say: never a guess, and never a blocked launch — the check is light, not a wall.
  * `run` is execTool's injected runner (a test's fake); without one this runs the real `xattr`, which under `npm test` the sandbox refuses (0.1 §3: a test must inject it).
  */
-export async function gatekeeperCheck({ bin, run = null, env = process.env, event = () => {}, pin = null, arch = null, main = mainPackage() } = {}) {
+export async function gatekeeperCheck({ bin, run = null, env = process.env, event = () => {}, pin = null, arch = null } = {}) {
   const read = execTool('xattr', ['-p', QUARANTINE, bin], { run, env })
   if (read.code === 1) return { ok: true }
   if (read.code !== 0) return { unknown: { reason: read.err || `xattr -p exited ${read.code}` } }
@@ -179,10 +191,10 @@ export async function gatekeeperCheck({ bin, run = null, env = process.env, even
     return { ok: true, healed: true, value }
   }
   const asset = pin && pin.assets && pin.assets[arch]
-  const commands = asset ? reinstallCommands({ main, platformPackage: asset.package }) : null
+  const alternative = asset ? reinstallCommands(asset) : null
   return { blocked: { reason: again.code === 0
     ? `the copy still carries ${QUARANTINE} after xattr -d${del.code === 0 ? '' : ` (xattr -d failed: ${del.err || del.code})`}`
-    : `the heal cannot be confirmed: xattr -p answered ${again.err || `exit ${again.code}`}`, commands } }
+    : `the heal cannot be confirmed: xattr -p answered ${again.err || `exit ${again.code}`}`, alternative } }
 }
 
 // ---- the running kernel (4.9 §3 · §4 · §8; the mechanism is 4.8 §3.3 · §4 · §8, W12 W28 W55 W74) ----------------------------------------------------------------------------
@@ -283,7 +295,7 @@ export function createForwarder({
     if (v && v.mismatch) return fail('forwarder-digest-mismatch', 'the kernel copy in kernel/ is not the pinned binary (its sha256 differs): it is not started, `asight on` puts the pinned one back', { of: v.mismatch.of || 'copy' })
     if (v && v.missing) return fail('forwarder-binary-missing', v.missing.reason || 'file-missing')
     const g = await gatekeeper() // the precheck's other half (4.9 §3 ②), beside the digest check and before every spawn
-    if (g && g.blocked) return fail('gatekeeper', g.blocked.reason || `the kernel copy still carries ${QUARANTINE}`, g.blocked.commands ? { commands: g.blocked.commands } : {})
+    if (g && g.blocked) return fail('gatekeeper', g.blocked.reason || `the kernel copy still carries ${QUARANTINE}`, g.blocked.alternative ? { alternative: g.blocked.alternative } : {})
     for (const port of next.ports) if (!(await isFree(port))) return fail('forwarder-start-failed', 'port-taken', { port })
     writeAtomic(fs, P.config, text)
     fs.mkdirSync(P.home, { recursive: true, mode: 0o700 })
