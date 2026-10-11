@@ -7,6 +7,7 @@ import { createHash, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
+import os from 'node:os'
 import path from 'node:path'
 
 // The client side (controlSocketPath, controlRequest) is src/off/control-client.mjs: `asight off` asks the daemon without this directory (1.6 R3).
@@ -32,7 +33,10 @@ const send = (res, status, obj) => { const b = JSON.stringify(obj); res.writeHea
 // pipe: the socket path is a Windows named pipe (the default says so from the path): no directory to make, no file mode to set, no file to remove. A unix socket path may be given with `pipe: true` by a test.
 export async function startControlServer({ socketPath, routes, maxBody = 64 * 1024, token = null, pipe = isPipePath(socketPath) }) {
   if (token !== null && (typeof token !== 'string' || token.length < 16)) throw new TypeError('the control token is a string of at least 16 characters, or null')
-  if (!pipe) {
+  if (!pipe && path.dirname(socketPath) !== os.tmpdir().replace(/\/+$/, '')) {
+    // The directory is asight's own (Linux's $XDG_RUNTIME_DIR/asight): made 0700 and hardened again on every start. A socket directly under the
+    // OS-managed per-user $TMPDIR (darwin's shape, 4.9 §7 — macOS keeps it 0700 itself) is the one directory we must NOT chmod: the system refuses it
+    // (EPERM), which killed the launchd-spawned daemon on a real machine (2026-10-11; the regression cell is control.test.mjs's tmpdir test).
     fs.mkdirSync(path.dirname(socketPath), { recursive: true, mode: 0o700 })
     fs.chmodSync(path.dirname(socketPath), 0o700)
   }
