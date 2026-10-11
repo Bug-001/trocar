@@ -12,10 +12,11 @@ import net from 'node:net'
 import { EventEmitter } from 'node:events'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { gzipSync } from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 import { recordNetwork, nonLoopback } from './fixtures/no-network.mjs'
-import { locateKernel, ensureBinary, verifyCopy, hashFile, loadPin, mainPackage, reinstallCommands, gatekeeperCheck, createForwarder, BACKOFF_MS, KERNEL_EXE, KERNEL_LICENSE, KERNEL_SOURCE } from '../../../../src/collector/arch/darwin/forwarder.mjs'
+import { locateKernel, ensureBinary, verifyCopy, hashFile, loadPin, reinstallCommands, gatekeeperCheck, createForwarder, BACKOFF_MS, KERNEL_EXE, KERNEL_LICENSE, KERNEL_SOURCE } from '../../../../src/collector/arch/darwin/forwarder.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
 import { buildForwarderConfig } from '../../../../src/netenv/mihomo/rules.mjs'
 import { createController } from '../../../../src/netenv/mihomo/controller.mjs'
@@ -25,26 +26,31 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 const FORWARDER_SRC = path.join(HERE, '..', '..', '..', '..', 'src', 'collector', 'arch', 'darwin', 'forwarder.mjs')
 const QUARANTINE = 'com.apple.quarantine'
 const sha = (b) => createHash('sha256').update(b).digest('hex')
-const MAIN = { name: 'asight', version: '0.0.0' }
 // 'feedface' stands where the win32 file's 'MZ' stood: the Mach-O magic's nickname, in a text stand-in
 const EXE = Buffer.from('feedface fake asight-forwarder, sixty kilobytes of nothing '.repeat(8))
-const LICENSE = Buffer.from('GNU GENERAL PUBLIC LICENSE\nVersion 3, 29 June 2007\n')
-const SOURCE = Buffer.from('https://github.com/MetaCubeX/mihomo/tree/v1.19.32\n')
+const GZ = gzipSync(EXE) // the official darwin release is a .gz single binary: what the downloader gets and node:zlib unpacks for real
 
-/** A test copy of the pin whose exe digest is that of EXE, and a platform package directory holding it (with the licence and source files). */
-function world(t, { exe = EXE, pinned = true } = {}) {
+/** A test world (D44's shape): the collector dir's `kernel/` and `kernel-archive/` under a temp root, a pin copy that pins the fake .gz and binary, and an injected execFile — the fake curl
+ * writes the archive bytes where curl's `-o` points (darwin's unpack is zlib, so the ONLY thing it is ever asked to run is curl). `curl` is 'absent' for ENOENT, a number for a non-zero exit.
+ * `pinned: false` makes the pin's exe digest null (the not-pinned cell). */
+function world(t, { exe = EXE, archive = GZ, delivers = archive, curl = true, pinned = true } = {}) {
   const root = tmpDir('asight-kernel-')
-  const pkg = path.join(root, 'node_modules', 'asight-kernel-darwin-x64')
-  fs.mkdirSync(pkg, { recursive: true })
-  fs.writeFileSync(path.join(pkg, KERNEL_EXE), exe)
-  fs.writeFileSync(path.join(pkg, KERNEL_LICENSE), LICENSE)
-  fs.writeFileSync(path.join(pkg, KERNEL_SOURCE), SOURCE)
-  fs.writeFileSync(path.join(pkg, 'package.json'), '{"name":"asight-kernel-darwin-x64"}\n')
   const pin = JSON.parse(JSON.stringify(loadPin()))
-  pin.assets.x64.exe = pinned ? { name: KERNEL_EXE, size: EXE.length, sha256: sha(EXE) } : { name: KERNEL_EXE, size: null, sha256: null }
+  const a = pin.assets.x64
+  a.sha256 = sha(archive); a.size = archive.length
+  a.exe = pinned ? { name: KERNEL_EXE, size: exe.length, sha256: sha(exe) } : { name: KERNEL_EXE, size: null, sha256: null }
   const dir = path.join(root, '.asight', 'collector', 'kernel')
-  const resolvePackage = (name) => (name === 'asight-kernel-darwin-x64' ? pkg : null)
-  return { root, pkg, pin, dir, resolvePackage, arch: 'x64', main: MAIN }
+  const cacheDir = path.join(root, '.asight', 'collector', 'kernel-archive')
+  const calls = { curl: [] }
+  const execFile = (cmd, args, opts, cb) => {
+    if (cmd !== 'curl') return cb(new Error(`not in the fake: ${cmd}`))
+    calls.curl.push([...args])
+    if (args[0] === '--version') return curl === 'absent' ? cb(Object.assign(new Error('spawn curl ENOENT'), { code: 'ENOENT' })) : cb(null, 'curl 8.7.1', '')
+    if (typeof curl === 'number') return cb(Object.assign(new Error(`Command failed: curl ${curl}`), { code: curl }), '', `curl: (${curl}) boom`)
+    fs.writeFileSync(args[args.indexOf('-o') + 1], delivers)
+    return cb(null, '', '')
+  }
+  return { root, pin, dir, cacheDir, calls, execFile, arch: 'x64' }
 }
 const tree = (dir) => { // every file under dir with its bytes' digest, for "byte-identical afterwards"
   const out = {}
@@ -53,83 +59,113 @@ const tree = (dir) => { // every file under dir with its bytes' digest, for "byt
   return out
 }
 const flip = (buf) => { const b = Buffer.from(buf); b[10] ^= 0xff; return b }
-const COMMANDS_X64 = { npm: 'npm install --global asight@0.0.0 --include=optional', release: 'npm install --global asight-0.0.0.tgz asight-kernel-darwin-x64-0.0.0.tgz' }
+const MANUAL_X64 = '把 mihomo-darwin-amd64-compatible-v1.19.32.gz 放进 ~/.asight/collector/kernel-archive/ 再跑 asight on,或修好网络 / 代理(HTTPS_PROXY)后重跑'
 
-// ---- W27: the kernel's source, no network ----------------------------------------------------------------------------------------------------------
+// ---- W27: the kernel's source — run location, cache, download (D44) ----------------------------------------------------------------------------------
 
-test('W27 ① the package is found and verified: the copy lands in kernel/ with the licence and the source address beside it, its digest is the pin\'s; a second run does not rewrite it (mtime unchanged)', async (t) => {
-  const w = world(t)
-  const r = await ensureBinary(w)
-  assert.deepEqual([r.path, r.sha256, r.copied], [path.join(w.dir, KERNEL_EXE), sha(EXE), true])
-  assert.equal(sha(fs.readFileSync(r.path)), w.pin.assets.x64.exe.sha256, 'the copy has the pin\'s digest')
-  assert.deepEqual(fs.readdirSync(w.dir).sort(), [KERNEL_EXE, KERNEL_LICENSE, KERNEL_SOURCE].sort(), 'the binary, the licence and the source address, and no temp file')
-  assert.deepEqual([fs.readFileSync(path.join(w.dir, KERNEL_LICENSE)), fs.readFileSync(path.join(w.dir, KERNEL_SOURCE))], [LICENSE, SOURCE])
+test('W27 ① the three-stage resolution: the run location (zero curl) → the verified-archive cache (zero curl) → the download (exactly one curl against the pinned URL); the placed binary carries the pin\'s digest and its executable bit, the licence and the source address land beside it, and a second run does not rewrite it', async (t) => {
+  const run = world(t)
+  fs.mkdirSync(run.dir, { recursive: true })
+  fs.writeFileSync(path.join(run.dir, KERNEL_EXE), EXE)
+  const r0 = await ensureBinary(run)
+  assert.deepEqual([r0.path, r0.sha256, r0.copied, r0.from], [path.join(run.dir, KERNEL_EXE), sha(EXE), false, 'run'])
+  assert.deepEqual(run.calls.curl, [], 'the run location satisfies the pin: zero curl')
+  // the cache: no run copy, the archive cache holds the pinned .gz — the offline machine's kernel is that file, placed there by hand
+  const cached = world(t)
+  fs.mkdirSync(cached.cacheDir, { recursive: true, mode: 0o700 })
+  fs.writeFileSync(path.join(cached.cacheDir, cached.pin.assets.x64.name), GZ)
+  const r1 = await ensureBinary(cached)
+  assert.deepEqual([r1.from, r1.copied, sha(fs.readFileSync(r1.path))], ['cache', true, sha(EXE)], 'placed from the cache, no network — the .gz gunzipped by node:zlib, not an exec')
+  assert.deepEqual(cached.calls.curl, [], 'zero curl: the cache is as good as a download')
+  assert.deepEqual(fs.readdirSync(cached.dir).sort(), [KERNEL_EXE, KERNEL_LICENSE, KERNEL_SOURCE].sort(), 'the binary, the licence and the source address, and no temp file')
+  assert.equal(fs.statSync(r1.path).mode & 0o777, 0o755, 'the placed binary is executable (the gunzip wrote 0755, the copy preserved it)')
+  assert.equal(sha(fs.readFileSync(path.join(cached.dir, KERNEL_LICENSE))), sha(fs.readFileSync(path.join(HERE, '..', '..', '..', '..', 'LICENSE-mihomo.txt'))), 'the licence beside it is the repo\'s own copy')
+  assert.match(fs.readFileSync(path.join(cached.dir, KERNEL_SOURCE), 'utf8'), /^asight-forwarder is mihomo v1\.19\.32 \(darwin-amd64-compatible\), as its authors build it, renamed\./)
+  // the download: neither is there — exactly one curl, the two events, the verified archive cached
+  const dl = world(t)
+  const events = []
+  const r2 = await ensureBinary({ ...dl, event: (rec) => events.push(rec) })
+  assert.deepEqual([r2.from, r2.copied, r2.sha256], ['download', true, sha(EXE)])
+  const dlCalls = dl.calls.curl.filter((a) => a.includes(dl.pin.assets.x64.url))
+  assert.equal(dlCalls.length, 1, 'exactly one curl against the pinned URL (the --version preflight is the only other exec)')
+  assert.deepEqual(dlCalls[0].slice(0, 4), ['-fsSL', '--retry', '2', '-o'], 'the pinned command line, redirects curl\'s own business')
+  assert.deepEqual(events.map((e) => e.event), ['forwarder-download-started', 'forwarder-download-ok'])
+  assert.equal(sha(fs.readFileSync(path.join(dl.cacheDir, dl.pin.assets.x64.name))), sha(GZ), 'the VERIFIED archive is the cache now')
   const old = new Date('2020-01-01T00:00:00Z')
-  fs.utimesSync(r.path, old, old)
-  const again = await ensureBinary(w)
-  assert.deepEqual([again.copied, again.sha256], [false, sha(EXE)])
-  assert.equal(fs.statSync(r.path).mtimeMs, old.getTime(), 'a target that is there with the right digest is not rewritten')
-  const located = await locateKernel(w)
-  assert.deepEqual([located.found.packageDir, located.found.exe, located.found.sha256, located.found.size], [w.pkg, path.join(w.pkg, KERNEL_EXE), sha(EXE), EXE.length])
+  fs.utimesSync(r2.path, old, old)
+  const again = await ensureBinary(dl)
+  assert.deepEqual([again.from, again.copied], ['run', false], 'the next `on` answers from the run location')
+  assert.equal(fs.statSync(r2.path).mtimeMs, old.getTime(), 'a target that is there with the right digest is not rewritten')
+  const located = await locateKernel(dl)
+  assert.deepEqual([located.found.at, located.found.exe, located.found.sha256, located.found.size], ['run', path.join(dl.dir, KERNEL_EXE), sha(EXE), EXE.length])
 })
 
-test('W27 ① a copy that was changed is replaced by the one in the package (that is `on` repairing it); the package is not touched', async (t) => {
+test('W27 ① a copy that was changed is replaced by the pinned one (that is `on` repairing it) — from the cache, no network; with nothing cached the repair downloads; the cache is not touched by either', async (t) => {
   const w = world(t)
-  await ensureBinary(w)
+  fs.mkdirSync(w.dir, { recursive: true })
   fs.writeFileSync(path.join(w.dir, KERNEL_EXE), flip(EXE))
-  const before = tree(w.pkg)
+  fs.mkdirSync(w.cacheDir, { recursive: true, mode: 0o700 })
+  fs.writeFileSync(path.join(w.cacheDir, w.pin.assets.x64.name), GZ)
+  const before = tree(w.cacheDir)
   const r = await ensureBinary(w)
-  assert.equal(r.copied, true)
-  assert.equal(sha(fs.readFileSync(r.path)), sha(EXE))
-  assert.deepEqual(tree(w.pkg), before)
+  assert.deepEqual([r.from, sha(fs.readFileSync(r.path))], ['cache', sha(EXE)])
+  assert.deepEqual(w.calls.curl, [])
+  assert.deepEqual(tree(w.cacheDir), before, 'the cache is the input, not the output: untouched by the repair')
+  const bare = world(t)
+  fs.mkdirSync(bare.dir, { recursive: true })
+  fs.writeFileSync(path.join(bare.dir, KERNEL_EXE), flip(EXE))
+  assert.equal((await ensureBinary(bare)).from, 'download', 'nothing cached: the repair downloads')
 })
 
-test('W27 ③ a copy that cannot be made, cannot take the name (the upgrade met a kernel that is running) or arrives wrong is an answer, not an exception, and leaves no temp file behind; the binary that is there is untouched', async (t) => {
+test('W27 ③ a copy that cannot be made, cannot take the name (the upgrade met a kernel that is running) or arrives wrong is an answer, not an exception, and leaves no temp file behind; the binary that is there is untouched, and the work directory is gone', async (t) => {
   const w = world(t)
-  await ensureBinary(w)
-  const old = path.join(w.dir, KERNEL_EXE)
-  fs.writeFileSync(old, flip(EXE)) // the kernel of the version before the pin moved: another digest, and running, so the system will not let it be replaced
+  fs.mkdirSync(w.dir, { recursive: true })
+  fs.writeFileSync(path.join(w.dir, KERNEL_EXE), flip(EXE)) // the kernel of the version before the pin moved: another digest, and running, so the system will not let it be replaced
+  fs.mkdirSync(w.cacheDir, { recursive: true, mode: 0o700 })
+  fs.writeFileSync(path.join(w.cacheDir, w.pin.assets.x64.name), GZ)
   const held = () => { throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' }) }
   assert.deepEqual(await ensureBinary({ ...w, fs: { ...fs, renameSync: held } }), { blocked: { step: 'replace', reason: 'EPERM' } })
-  assert.deepEqual(fs.readdirSync(w.dir).sort(), [KERNEL_EXE, KERNEL_LICENSE, KERNEL_SOURCE].sort(), 'no temp file: a stray 60 MB file would also make removeBinary\'s rmdir fail')
-  assert.equal(sha(fs.readFileSync(old)), sha(flip(EXE)), 'the binary that is running is not touched')
-  assert.deepEqual([(await ensureBinary(w)).copied, sha(fs.readFileSync(old))], [true, sha(EXE)], 'and once nothing holds it, the next `on` replaces it')
+  assert.deepEqual(fs.readdirSync(w.dir), [KERNEL_EXE], 'no temp file: a stray 60 MB file would also make removeBinary\'s rmdir fail')
+  assert.equal(sha(fs.readFileSync(path.join(w.dir, KERNEL_EXE))), sha(flip(EXE)), 'the binary that is running is not touched')
+  assert.deepEqual(fs.readdirSync(w.cacheDir), [w.pin.assets.x64.name], 'and the cache is untouched')
+  assert.deepEqual([(await ensureBinary(w)).from, sha(fs.readFileSync(path.join(w.dir, KERNEL_EXE)))], ['cache', sha(EXE)], 'and once nothing holds it, the next `on` replaces it')
   const full = world(t)
+  fs.mkdirSync(full.cacheDir, { recursive: true, mode: 0o700 })
+  fs.writeFileSync(path.join(full.cacheDir, full.pin.assets.x64.name), GZ)
   const half = (from, to) => { fs.writeFileSync(to, 'partial'); throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }) }
   assert.deepEqual(await ensureBinary({ ...full, fs: { ...fs, copyFileSync: half } }), { blocked: { step: 'copy', reason: 'ENOSPC' } })
   assert.deepEqual(fs.readdirSync(full.dir), [], 'the half-written copy is removed')
+  assert.deepEqual(fs.readdirSync(full.cacheDir), [full.pin.assets.x64.name], 'and the work directory with it')
   const bent = world(t)
+  fs.mkdirSync(bent.cacheDir, { recursive: true, mode: 0o700 })
+  fs.writeFileSync(path.join(bent.cacheDir, bent.pin.assets.x64.name), GZ)
   const wrong = await ensureBinary({ ...bent, fs: { ...fs, copyFileSync: (from, to) => fs.writeFileSync(to, flip(fs.readFileSync(from))) } })
-  assert.deepEqual(wrong, { mismatch: { of: 'copy', commands: COMMANDS_X64 } }, 'the copy is hashed before it takes the name (W27 ① "its digest is the pin\'s")')
+  assert.deepEqual(wrong, { mismatch: { of: 'copy', alternative: MANUAL_X64 } }, 'the copy is hashed before it takes the name (W27 ① "its digest is the pin\'s")')
   assert.deepEqual(fs.readdirSync(bent.dir), [], 'neither the binary nor a temp file: nothing was renamed')
 })
 
-test('W27 ② no package, a package with no binary, an architecture the pin does not have, a pin with no exe digest: forwarder-binary-missing with the reason, and the reinstall commands (except for an architecture nobody builds)', async (t) => {
+test('W27 ② an architecture the pin does not have, a pin with no exe digest: forwarder-binary-missing with the reason and the manual alternative (none for an architecture nobody pins); a download that cannot run — curl absent, curl\'s non-zero exit, wrong bytes, a .gz that will not gunzip — is a failure whose reason says which, with the alternative; nothing is placed by any of them', async (t) => {
   const w = world(t)
-  const gone = await locateKernel({ ...w, resolvePackage: () => null })
-  assert.deepEqual(gone, { missing: { reason: 'package-not-installed', commands: COMMANDS_X64 } })
-  fs.rmSync(path.join(w.pkg, KERNEL_EXE))
-  assert.deepEqual(await locateKernel(w), { missing: { reason: 'package-not-installed', commands: COMMANDS_X64 } }, 'a package that lost its binary is not installed')
-  assert.deepEqual(await locateKernel({ ...w, arch: 'ia32' }), { missing: { reason: 'unsupported-arch', commands: null } })
+  assert.deepEqual(await locateKernel({ ...w, arch: 'ia32' }), { missing: { reason: 'unsupported-arch', alternative: null } })
+  assert.deepEqual(await ensureBinary({ ...w, arch: 'ia32' }), { missing: { reason: 'unsupported-arch', alternative: null } })
   const unpinned = world(t, { pinned: false })
-  assert.deepEqual(await locateKernel(unpinned), { missing: { reason: 'not-pinned', commands: COMMANDS_X64 } })
-  for (const bad of [gone, await ensureBinary({ ...w, resolvePackage: () => null }), await ensureBinary(unpinned)]) assert.ok(bad.missing && !fs.existsSync(unpinned.dir), 'nothing was copied')
+  assert.deepEqual(await locateKernel(unpinned), { missing: { reason: 'not-pinned', alternative: MANUAL_X64 } })
+  assert.deepEqual(await ensureBinary(unpinned), { missing: { reason: 'not-pinned', alternative: MANUAL_X64 } })
+  const noCurl = world(t, { curl: 'absent' })
+  const dead = await ensureBinary(noCurl)
+  assert.deepEqual(dead, { failed: { reason: 'curl is not on this machine (the download needs the system curl; macOS and Windows 10 1803+ carry one)', alternative: MANUAL_X64 } })
+  const broke = world(t, { curl: 22 })
+  assert.match((await ensureBinary(broke)).failed.reason, /^curl exited 22.*boom/, 'curl\'s own words ride along')
+  const bentBytes = world(t, { delivers: flip(GZ) })
+  const bent = await ensureBinary(bentBytes)
+  assert.match(bent.failed.reason, /the download is not the pinned archive \(sha256 [0-9a-f]{64}, \d+ bytes; the pin's is [0-9a-f]{64}, \d+ bytes\)/, 'the reason names both digests')
+  const notGzip = world(t, { archive: Buffer.from('not a gzip, but the pin pins it') }) // a digest that satisfies the pin yet will not unpack: the pin is at fault — refused
+  assert.match((await ensureBinary(notGzip)).failed.reason, /will not gunzip/, 'the gunzip failure is said, never guessed around')
+  for (const x of [w, unpinned, noCurl, broke, bentBytes, notGzip]) assert.ok(!fs.existsSync(path.join(x.dir, KERNEL_EXE)), 'nothing in kernel/')
+  for (const x of [noCurl, broke, bentBytes, notGzip]) assert.deepEqual((fs.existsSync(x.cacheDir) ? fs.readdirSync(x.cacheDir) : []).filter((n) => n !== x.pin.assets.x64.name), [], 'and no work directory is left (the no-curl refusal stopped before one was made)')
 })
 
-test('W27 ③ one byte changed in the package\'s binary: forwarder-digest-mismatch of the package; kernel/ has no file, the package directory is byte-identical afterwards', async (t) => {
-  const w = world(t, { exe: EXE })
-  fs.writeFileSync(path.join(w.pkg, KERNEL_EXE), flip(EXE))
-  const before = tree(w.pkg)
-  assert.deepEqual(await locateKernel(w), { mismatch: { of: 'package', commands: COMMANDS_X64 } })
-  assert.deepEqual(await ensureBinary(w), { mismatch: { of: 'package', commands: COMMANDS_X64 } })
-  assert.ok(!fs.existsSync(w.dir) || fs.readdirSync(w.dir).length === 0, 'nothing in kernel/')
-  assert.deepEqual(tree(w.pkg), before, 'the package directory is npm\'s: not touched')
-  const sizeOff = world(t)
-  sizeOff.pin.assets.x64.exe.size += 1
-  assert.ok((await locateKernel(sizeOff)).mismatch, 'the size is compared too, when the pin has one')
-})
-
-test('W27 ④ before a start the copy is checked against the pin: right, one byte changed (of copy, not re-copied from the package), deleted (file-missing); a pin with no digest cannot be checked', async (t) => {
+test('W27 ④ before a start the copy is checked against the pin: right, one byte changed (of copy, not re-copied from the cache or downloaded), deleted (file-missing); a pin with no digest cannot be checked', async (t) => {
   const w = world(t)
   await ensureBinary(w)
   const v = () => verifyCopy({ dir: w.dir, pin: w.pin, arch: 'x64' })
@@ -139,30 +175,34 @@ test('W27 ④ before a start the copy is checked against the pin: right, one byt
   assert.equal(sha(fs.readFileSync(path.join(w.dir, KERNEL_EXE))), sha(flip(EXE)), 'a changed copy is reported, not repaired')
   fs.rmSync(path.join(w.dir, KERNEL_EXE))
   assert.deepEqual(await v(), { missing: { reason: 'file-missing' } })
-  assert.ok(!fs.existsSync(path.join(w.dir, KERNEL_EXE)), 'and not re-copied from the package')
+  assert.ok(!fs.existsSync(path.join(w.dir, KERNEL_EXE)), 'and not re-copied from the cache or downloaded: the repair is `on`\'s')
   assert.deepEqual(await verifyCopy({ dir: w.dir, pin: world(t, { pinned: false }).pin, arch: 'x64' }), { missing: { reason: 'not-pinned' } })
   assert.deepEqual(await verifyCopy({ dir: w.dir, pin: w.pin, arch: 'ia32' }), { missing: { reason: 'unsupported-arch' } })
 })
 
-test('W27 ⑤ the reinstall commands are the two literals of 4.8 §8 and §10.4, filled with the main package and the platform package, and have no URL in them', () => {
-  assert.deepEqual(reinstallCommands({ main: MAIN, platformPackage: 'asight-kernel-darwin-x64' }), COMMANDS_X64)
-  assert.deepEqual(reinstallCommands({ main: { name: 'asight', version: '1.2.3' }, platformPackage: 'asight-kernel-darwin-arm64' }), { npm: 'npm install --global asight@1.2.3 --include=optional', release: 'npm install --global asight-1.2.3.tgz asight-kernel-darwin-arm64-1.2.3.tgz' })
-  for (const c of Object.values(COMMANDS_X64)) assert.ok(!/https?:|github|\.gz/i.test(c), c)
-  assert.deepEqual(mainPackage(), { name: 'asight', version: JSON.parse(fs.readFileSync(path.join(HERE, '..', '..', '..', '..', 'package.json'), 'utf8')).version }, 'the main package is this one')
+test('W27 ⑤ the manual alternative is the one literal of 4.8 §8 ⑤ and §10.4, filled with the pin\'s own archive file name, and carries no download address; an architecture the pin does not know gets null', () => {
+  assert.equal(reinstallCommands(loadPin().assets.x64), MANUAL_X64)
+  assert.equal(reinstallCommands(loadPin().assets.arm64), '把 mihomo-darwin-arm64-v1.19.32.gz 放进 ~/.asight/collector/kernel-archive/ 再跑 asight on,或修好网络 / 代理(HTTPS_PROXY)后重跑')
+  assert.ok(!/https?:|github/i.test(MANUAL_X64), MANUAL_X64)
+  assert.equal(reinstallCommands(null), null, 'no asset, no alternative')
 })
 
-test('W27 ⑦ no network: every path above (found, copied, missing, mismatch, verified, prechecked, healed) makes no connection, no name lookup and no fetch; the recorder itself can see one', async (t) => {
-  const w = world(t)
-  const bad = world(t)
-  fs.writeFileSync(path.join(bad.pkg, KERNEL_EXE), flip(EXE))
+test('W27 ⑦ no network of its own: every path above (run, cache, download, missing, failed, verified, prechecked, healed) makes no connection, no name lookup and no fetch — the download\'s network is curl\'s, a child process the caller injected; the recorder itself can see one', async (t) => {
+  const run = world(t)
+  fs.mkdirSync(run.dir, { recursive: true })
+  fs.writeFileSync(path.join(run.dir, KERNEL_EXE), EXE)
+  const cached = world(t)
+  fs.mkdirSync(cached.cacheDir, { recursive: true, mode: 0o700 })
+  fs.writeFileSync(path.join(cached.cacheDir, cached.pin.assets.x64.name), GZ)
+  const dl = world(t)
+  const bad = world(t, { curl: 22 })
   const x = fakeXattr([{ status: 0, out: '0081;66f5a2b1;Safari;https://example.invalid/mihomo.gz' }, { status: 0 }, { status: 1 }])
   const heals = []
   const attempts = await recordNetwork(async () => {
-    await ensureBinary(w); await ensureBinary(w)
-    await locateKernel({ ...w, resolvePackage: () => null }); await locateKernel({ ...w, arch: 'arm64' })
-    await locateKernel(bad); await ensureBinary(bad)
-    await verifyCopy({ dir: w.dir, pin: w.pin, arch: 'x64' })
-    await gatekeeperCheck({ bin: path.join(w.dir, KERNEL_EXE), run: x.run, event: (r) => heals.push(r) })
+    await ensureBinary(run); await ensureBinary(cached); await ensureBinary(dl)
+    await ensureBinary(bad); await locateKernel({ ...dl, arch: 'ia32' }); await locateKernel(dl)
+    await verifyCopy({ dir: run.dir, pin: run.pin, arch: 'x64' })
+    await gatekeeperCheck({ bin: path.join(run.dir, KERNEL_EXE), run: x.run, event: (r) => heals.push(r) })
   })
   assert.deepEqual(nonLoopback(attempts), [])
   assert.deepEqual(attempts, [], 'not even a loopback one: this file does not talk to anything')
@@ -174,33 +214,34 @@ test('W27 ⑦ no network: every path above (found, copied, missing, mismatch, ve
 /** Scan a module's source (comments and strings kept out of the way is not needed: an import or a call shows as code) for the network modules W27 ⑦ forbids. */
 const NETWORK = /(?:from\s+|import\s*\(?\s*|require\(\s*)['"](?:node:)?(?:http|https|http2|dns|dns\/promises|net|tls|dgram)['"]|\bfetch\s*\(|\bXMLHttpRequest\b|\bWebSocket\b/
 const withoutComments = (src) => src.replace(/\/\*[^]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/([^:'"`])\/\/[^\n]*$/gm, '$1')
-test('W27 ⑦ static: forwarder.mjs imports no network module and calls no fetch; a planted import turns the scan red', () => {
+test('W27 ⑦ static: forwarder.mjs imports no network module and calls no fetch (the download lives in kernel-download.mjs, whose own scan that file\'s test holds); a planted import turns the scan red', () => {
   const src = withoutComments(fs.readFileSync(FORWARDER_SRC, 'utf8'))
   assert.deepEqual(src.match(new RegExp(NETWORK.source, 'g')) || [], [], 'no http, https, http2, dns, net, tls, dgram, fetch in forwarder.mjs')
   for (const planted of ["import https from 'node:https'", "import('node:http')", "const dns = require('dns')", "await fetch('https://x')", "import net from 'node:net'"]) assert.ok(NETWORK.test(planted), planted)
-  assert.ok(!NETWORK.test("import { createHash } from 'node:crypto'\nimport nodeFs from 'node:fs'"), 'the scan does not cry wolf at the modules this file does use')
+  assert.ok(!NETWORK.test("import { createHash } from 'node:crypto'\nimport nodeFs from 'node:fs'\nimport { acquireKernel } from './kernel-download.mjs'"), 'the scan does not cry wolf at the modules this file does use — the downloader included, it is not a network module')
 })
 
-test('W27 the pin as shipped: version, the package names, the .gz digests the spec pins (the darwin release is a .gz single binary, not a .zip), the unpacked exe digest beside it, the licence digest', async (t) => {
+test('W27 the pin as shipped: version, the archive names and digests the spec pins (the darwin release is a .gz single binary, not a .zip), the unpacked exe digest beside it, the licence digest', async (t) => {
   const pin = loadPin()
   assert.equal(pin.version, 'v1.19.32')
   assert.deepEqual(Object.keys(pin.assets), ['x64', 'arm64'])
-  assert.deepEqual([pin.assets.x64.package, pin.assets.arm64.package], ['asight-kernel-darwin-x64', 'asight-kernel-darwin-arm64'])
   assert.deepEqual([pin.assets.x64.variant, pin.assets.arm64.variant], ['darwin-amd64-compatible', 'darwin-arm64'])
   assert.deepEqual([pin.assets.x64.name, pin.assets.arm64.name], ['mihomo-darwin-amd64-compatible-v1.19.32.gz', 'mihomo-darwin-arm64-v1.19.32.gz'])
   assert.deepEqual([pin.assets.x64.sha256, pin.assets.x64.size], ['18b382df77bded2ad0fb3db27db5636cb15b20729d5ba995a357eeb9b46bf507', 22302953])
   assert.deepEqual([pin.assets.arm64.sha256, pin.assets.arm64.size], ['3312a6780652c622890fd4357c6a853bbf865464fd047ac7b7f52dab8de18652', 20756622])
+  assert.deepEqual([pin.assets.x64.url, pin.assets.arm64.url], ['https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-darwin-amd64-compatible-v1.19.32.gz', 'https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-darwin-arm64-v1.19.32.gz'], 'the official release page, pinned (D44: `on` downloads from exactly here)')
   assert.equal(pin.assets.x64.exe.name, KERNEL_EXE)
   assert.equal(pin.license, 'GPL-3.0-only')
   assert.equal(pin.licenseFile.sha256, (await hashFile(path.join(HERE, '..', '..', '..', '..', 'LICENSE-mihomo.txt'))).sha256, 'licenseFile.sha256 is the digest of the committed LICENSE-mihomo.txt')
   assert.match(fs.readFileSync(path.join(HERE, '..', '..', '..', '..', 'LICENSE-mihomo.txt'), 'utf8'), /^\s*GNU GENERAL PUBLIC LICENSE\s+Version 3, 29 June 2007/)
+  const empty = tmpDir('asight-kernel-')
   for (const arch of ['x64', 'arm64']) {
     const e = pin.assets[arch].exe
     assert.ok(/^[0-9a-f]{64}$/.test(e.sha256), `${arch}: the darwin pin is complete — the unpacked binary's digest is committed beside the .gz digest (two separate fields, 4.9 §8), not null as win32's was before its operator ran the pin step`)
     assert.ok(Number.isInteger(e.size), `${arch}: the unpacked binary's size is committed too`)
-    assert.equal((await locateKernel({ pin, arch, resolvePackage: () => null })).missing.reason, 'package-not-installed', `${arch}: a complete pin and no package is package-not-installed (the not-pinned answer is the null-digest pin's, covered in W27 ②)`)
+    assert.deepEqual(await locateKernel({ pin, arch, dir: path.join(empty, 'kernel') }), { download: { version: pin.version, exe: KERNEL_EXE, name: pin.assets[arch].name, url: pin.assets[arch].url, host: 'github.com', size: pin.assets[arch].size, sha256: pin.assets[arch].sha256 } }, `${arch}: a complete pin and nothing on disk answers the download line (D44 — not a refusal: the download is the point)`)
   }
-  t.todo('the darwin half of scripts/kernel-payload.mjs (zlib .gz unpacking, chmod 755, the platform manifest, the pin path) is the win line\'s seam and lands at merge (4.9 OPEN 3); until then the platform package is built by hand')
+  t.todo('the exe digests are re-filled by `node scripts/kernel-payload.mjs --pin` (two independent downloads per arch), which needs the operator\'s approval')
 })
 
 // ---- Gatekeeper (4.9 §3 ②, the darwin half of W74) ----------------------------------------------------------------------------------------------------------------------------------
@@ -228,12 +269,12 @@ test('W74 gatekeeperCheck: no attribute is nothing to do; one that is there is l
   assert.deepEqual(heals.flatMap(checkRecord), [], 'W38: the heal record is in the closed sets — a notice, not a failure: it does not turn the board\'s indicator')
   const stuck = fakeXattr([{ status: 0, out: '0082;66f5a2b1;Chrome;' }, { status: 1, err: 'xattr: Operation not permitted' }, { status: 0, out: '0082;66f5a2b1;Chrome;' }])
   const blocked = await gatekeeperCheck({ bin, run: stuck.run, pin, arch: 'x64', event: (r) => heals.push(r) })
-  assert.deepEqual(blocked.blocked.commands, COMMANDS_X64, 'the receipt carries the reinstall commands')
+  assert.deepEqual(blocked.blocked.alternative, MANUAL_X64, 'the receipt carries the manual alternative')
   assert.match(blocked.blocked.reason, /still carries com\.apple\.quarantine after xattr -d/)
   const unsure = fakeXattr([{ status: 0, out: '0083;66f5a2b1;Safari;' }, { status: 0 }, { status: 3, err: 'xattr: something else' }])
   assert.match((await gatekeeperCheck({ bin, run: unsure.run })).blocked.reason, /cannot be confirmed/)
   const bare = await gatekeeperCheck({ bin, run: fakeXattr([{ status: 0, out: 'x' }, { status: 1, err: 'refused' }, { status: 0, out: 'x' }]).run })
-  assert.equal(bare.blocked.commands, null, 'no pin, no arch: reinstalling cannot be named, as everywhere else')
+  assert.equal(bare.blocked.alternative, null, 'no pin, no arch: no manual alternative can be named, as everywhere else')
   const broken = await gatekeeperCheck({ bin, run: fakeXattr([{ status: 127, err: 'xattr: command not found' }]).run })
   assert.deepEqual(broken, { unknown: { reason: 'xattr: command not found' } }, 'a runner that cannot say is unknown, with its reason')
   assert.equal(heals.length, 1, 'nothing was healed in the blocked and unknown cases: no event for them')
@@ -242,9 +283,9 @@ test('W74 gatekeeperCheck: no attribute is nothing to do; one that is there is l
 test('W74 only a blocked answer stops the kernel: an unknown one is not a reason to refuse a launch ([本机] a quarantined copy runs; the digest check in front says whose bytes they are)', async (t) => {
   const k = await kernelWorld(t, { gatekeeper: async () => ({ unknown: { reason: 'xattr did not answer' } }) })
   assert.deepEqual([(await k.fwd.start({ build: k.build, forms: FORMS })).ok, k.spawned.length, k.events.failures], [true, 1, []], 'the precheck could not say, and the kernel ran')
-  const q = await kernelWorld(t, { gatekeeper: async () => ({ blocked: { reason: `the copy still carries ${QUARANTINE} after xattr -d`, commands: COMMANDS_X64 } }) })
+  const q = await kernelWorld(t, { gatekeeper: async () => ({ blocked: { reason: `the copy still carries ${QUARANTINE} after xattr -d`, alternative: MANUAL_X64 } }) })
   const bad = await q.fwd.start({ build: q.build, forms: FORMS })
-  assert.deepEqual([bad.ok, bad.code, bad.reason, bad.commands], [false, 'gatekeeper', `the copy still carries ${QUARANTINE} after xattr -d`, COMMANDS_X64])
+  assert.deepEqual([bad.ok, bad.code, bad.reason, bad.alternative], [false, 'gatekeeper', `the copy still carries ${QUARANTINE} after xattr -d`, MANUAL_X64])
   assert.equal(q.spawned.length, 0, 'the precheck is a gate: a copy whose quarantine cannot be lifted is not started')
   assert.deepEqual(q.events.failures.map((f) => [f.where, f.code]), [['forwarder', 'gatekeeper']])
   assert.deepEqual(inClosedSets(q.events), [], 'W38: the gatekeeper failure is in the closed sets')
@@ -527,15 +568,15 @@ test('W28 a re-spawn the Gatekeeper precheck refuses does not happen: the failur
   let gk = null
   const k = await fakeKernel(t, { gatekeeper: () => gk })
   await k.start()
-  gk = { blocked: { reason: `the copy still carries ${QUARANTINE} after xattr -d`, commands: COMMANDS_X64 } }
+  gk = { blocked: { reason: `the copy still carries ${QUARANTINE} after xattr -d`, alternative: MANUAL_X64 } }
   k.die(k.children[0]); await settle()
   for (let n = 0; n < 4; n++) await k.clock.advance(k.clock.pending()[0])
   assert.equal(k.children.length, 1, 'never spawned')
-  assert.deepEqual(k.events.failures.filter((f) => f.code === 'gatekeeper').map((f) => [f.where, f.reason, f.commands]), [
-    ['forwarder', `the copy still carries ${QUARANTINE} after xattr -d`, COMMANDS_X64],
-    ['forwarder', `the copy still carries ${QUARANTINE} after xattr -d`, COMMANDS_X64],
-    ['forwarder', `the copy still carries ${QUARANTINE} after xattr -d`, COMMANDS_X64],
-    ['forwarder', `the copy still carries ${QUARANTINE} after xattr -d`, COMMANDS_X64],
+  assert.deepEqual(k.events.failures.filter((f) => f.code === 'gatekeeper').map((f) => [f.where, f.reason, f.alternative]), [
+    ['forwarder', `the copy still carries ${QUARANTINE} after xattr -d`, MANUAL_X64],
+    ['forwarder', `the copy still carries ${QUARANTINE} after xattr -d`, MANUAL_X64],
+    ['forwarder', `the copy still carries ${QUARANTINE} after xattr -d`, MANUAL_X64],
+    ['forwarder', `the copy still carries ${QUARANTINE} after xattr -d`, MANUAL_X64],
   ])
   assert.deepEqual(k.events.failures.filter((f) => f.code === 'forwarder-down').map((f) => f.attempts), [5], 'a refused precheck is a straight failure: the fifth is forwarder-down')
   assert.deepEqual(inClosedSets(k.events), [], 'W38: the gatekeeper failures are in the closed sets')
