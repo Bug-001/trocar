@@ -61,7 +61,7 @@ From a Release: not published yet.
 ## Uninstall
 
 ```sh
-asight uninstall               # removes everything asight changed, keeps captures
+asight uninstall               # removes all of asight's changes, keeps captures
 asight uninstall --purge-data  # also deletes capture data (asks first)
 ```
 
