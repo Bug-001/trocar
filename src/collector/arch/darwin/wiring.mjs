@@ -254,7 +254,11 @@ export async function ensureKernel({ home, arch = process.arch, pin = null, env 
     return { ok: false, reason: line, of: 'copy' }
   }
   if (r.blocked) return { ok: false, reason: `the kernel in kernel/ could not be replaced (${r.blocked.step}: ${r.blocked.reason}); nothing was changed. Wait for the drain to end, or run asight off --now (it disconnects the agents still draining), then asight on` }
+  // `ledger` (only when THIS run placed the copy — `copied`): what turnOn writes into the install manifest's files, so `uninstall` removes the kernel and
+  // the archive cache with it (4.8 §531 · §4.2; D44 ②). turnOn owns the manifest machinery — the kernel sits on disk before the manifest exists (the hook
+  // runs before the lock, the manifest is opened inside it), so the entry is written there, not here.
   return { ok: true, path: r.path, sha256: r.sha256, from: r.from, copied: r.copied,
+    ...(r.copied ? { ledger: { path: r.path, sha256: r.sha256, dir: path.dirname(r.path) } } : {}),
     note: r.from === 'download' ? `the kernel was downloaded and both digests verified (sha256 ${r.sha256.slice(0, 12)}…)` : r.from === 'cache' ? 'the kernel was placed from the verified archive cache (no network)' : null }
 }
 
