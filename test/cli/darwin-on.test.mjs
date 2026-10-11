@@ -21,6 +21,9 @@ const codex = descs.find((d) => d.name === 'codex')
  *  `prep` / `ensureKernel` are the D44 hooks (read-only preflight, write-phase kernel ensuring) — fakes the same way, so no test here reaches a network. */
 function darwinWorld({ osRoots, prep = null, ensureKernel = null } = {}) {
   const home = tmpDir('asight-darwin-on-')
+  // a darwin machine finds the daemon through control.json (4.9 §7); XDG_RUNTIME_DIR is a shape no real mac presents (the 2026-10-11 blind spot)
+  fs.mkdirSync(path.join(home, '.asight', 'collector'), { recursive: true })
+  fs.writeFileSync(path.join(home, '.asight', 'collector', 'control.json'), JSON.stringify({ path: path.join(home, 'asight-0123456789abcdef.sock'), token: 'f'.repeat(64) }) + '\n')
   fs.mkdirSync(path.join(home, '.codex'), { recursive: true })
   fs.writeFileSync(path.join(home, '.codex', '.env'), 'OPENAI_API_KEY=sk-test\n')
   const asked = []
@@ -35,7 +38,7 @@ function darwinWorld({ osRoots, prep = null, ensureKernel = null } = {}) {
     const io = fakeIo()
     const exit = await runOnCli(argv, {
       io, home, platform, // 'linux' + parts.os 'darwin' was the pre-flip seam (the same split the win flip used); Part 2 sends 'darwin' straight through
-      env: { HOME: home, XDG_RUNTIME_DIR: path.join(home, 'run') },
+      env: { HOME: home },
       deps: {
         parts, request: fakeDaemon().request, helperState: () => ({ ok: true }), linger: () => true,
         netenv: async () => ({ at: '2026-10-11T00:00:00.000Z', products: [], unknown: [{ reason: 'a test: no VPN probe runs here' }] }),

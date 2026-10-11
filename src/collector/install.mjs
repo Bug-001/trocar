@@ -16,7 +16,7 @@ import { planTrust } from './core/trust/plan.mjs'
 import { livenessOf } from './core/registry.mjs'
 import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256 } from './core/trust/journal.mjs'
 import { EVENT, CODE } from './core/codes.mjs'
-import { controlRequest, controlSocketPath } from './core/control.mjs'
+import { controlRequest, controlEndpointFor } from './core/control.mjs'
 import { readText, readTextOrError } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
 import { runEventWriter } from '../off/events.mjs'
@@ -363,7 +363,7 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
  *    request    the control socket's client (default: controlRequest at $XDG_RUNTIME_DIR/asight/collector.sock, or `socketPath`)
  *  → { receipt, manifest, plan, exit }. */
 export async function turnOn(opts = {}) {
-  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, osRootsFile = null, roots = null, unit = null, autostart = true, freePort = freeEnginePort, onPlan = () => {}, confirm = null, afterConfirm = null, dryRun = false, networkEdited = null, optIn = [], optInHooks = null, request = controlRequest, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS } = opts
+  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, osRootsFile = null, roots = null, unit = null, autostart = true, freePort = freeEnginePort, onPlan = () => {}, confirm = null, afterConfirm = null, dryRun = false, networkEdited = null, optIn = [], optInHooks = null, request = null, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS } = opts
   refuseRoot('on', getuid)
   const dir = collectorHome(path.join(home, '.asight'))
   const stateF = path.join(dir, 'state.json')
@@ -406,7 +406,7 @@ export async function turnOn(opts = {}) {
     const stateRead = (() => { try { return { ...readState(), error: null } } catch (e) { return { state: emptyState(), from: null, error: e } } })()
     const need = plan.targets.filter((id) => !(stateRead.state.harnesses[id] && stateRead.state.harnesses[id].desired === 'on'))
     const stateWrite = need.length > 0 || stateRead.from === 1 // an unreadable file is `need` too: every target is not on
-    const r = { ...fresh(), ...lingerNow(), harnesses: plan.targets, changed: plan.changed, created: [...plan.created, ...(stateWrite ? [stateF] : [])], skipped: [...plan.skipped], restart: plan.restart, unchanged: plan.unchanged, notes: [...plan.notes] }
+    const r = { ...fresh(), ...(osName === 'win32' || osName === 'darwin' ? {} : lingerNow()), harnesses: plan.targets, changed: plan.changed, created: [...plan.created, ...(stateWrite ? [stateF] : [])], skipped: [...plan.skipped], restart: plan.restart, unchanged: plan.unchanged, notes: [...plan.notes] }
     if (stateRead.error) r.notes.push(`${stateF} could not be read (${String(stateRead.error.message || stateRead.error)}); it is written again`)
     if (!plan.targets.length) return { receipt: unwritten({ ...r, ok: false, notes: [...r.notes, 'no agent asight can capture was found: nothing was changed. Install one, then run asight on again'] }), manifest: plan._.prior, plan, exit: 1 }
     const named = !!ids && plan.skipped.some((s) => ids.includes(s.what)) // a harness asked for by name that has nothing to install: not done
@@ -528,10 +528,15 @@ export async function turnOn(opts = {}) {
     if (halt) { put({ event: EVENT.failure, where: 'install', code: 'install-error', reason: problems[0] }); return finish('stopped', `on stopped: ${problems[0]}`) }
 
     // ── the unit and the daemon: started when nothing answers, never started a second time (拉起不是重启, R8) ──
-    const sock = socketPath || (() => { try { return controlSocketPath({ env }) } catch { return null } })()
+    // The endpoint is resolved the one way every caller resolves it (4.8 §7 / 4.9 §7: darwin / win32 find the daemon through control.json and every
+    // request carries its token; Linux through $XDG_RUNTIME_DIR). This was the 2026-10-11 incident's seam: a Linux-only fallback here made every
+    // `asight on` on a real Mac a false start-failed while the daemon was up.
+    const endpoint = controlEndpointFor({ platform: osName, dir, env, fs })
+    const sock = socketPath || endpoint.socketPath
+    const ask = request || endpoint.request
     const probe = async () => {
-      if (!sock) return { up: false, why: 'XDG_RUNTIME_DIR is not set, so there is no control socket to ask' }
-      try { await request({ socketPath: sock, method: 'GET', path: '/status', timeoutMs: 2000 }); return { up: true } } catch (e) {
+      if (!sock) return { up: false, why: endpoint.why || 'no control socket to ask' }
+      try { await ask({ socketPath: sock, method: 'GET', path: '/status', timeoutMs: 2000 }); return { up: true } } catch (e) {
         if (e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED')) return { up: false }
         return { up: false, stuck: String((e && e.message) || e) }
       }
@@ -571,7 +576,7 @@ export async function turnOn(opts = {}) {
     if (up && !halt) checked(() => guard())
     if (up && !halt) {
       let status = null
-      try { status = await request({ socketPath: sock, method: 'POST', path: '/on', body: { harnesses: plan.targets } }) } catch (e) {
+      try { status = await ask({ socketPath: sock, method: 'POST', path: '/on', body: { harnesses: plan.targets } }) } catch (e) {
         const why = `the daemon did not take the on request (${String((e && e.message) || e)})`
         problems.push(why); put({ event: EVENT.failure, where: 'control', code: 'control-error', reason: why })
       }

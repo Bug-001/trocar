@@ -10,8 +10,8 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 
-// The client side (controlSocketPath, controlRequest) is src/off/control-client.mjs: `asight off` asks the daemon without this directory (1.6 R3).
-export { controlSocketPath, controlRequest } from '../../off/control-client.mjs'
+// The client side (controlSocketPath, controlRequest, controlEndpointFor) is src/off/control-client.mjs: `asight off` asks the daemon without this directory (1.6 R3).
+export { controlSocketPath, controlRequest, controlEndpointFor } from '../../off/control-client.mjs'
 
 function probe(socketPath) {
   return new Promise((resolve) => {

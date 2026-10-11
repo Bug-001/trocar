@@ -26,7 +26,7 @@ import { readManifest, MANIFEST_VERSION, OFF_VERSION } from './manifest.mjs'
 import { undoHarnesses } from './undo.mjs'
 import { planByMarker, undoByMarker } from './marker.mjs'
 import { daemonState, stopDaemon, helperGone, isRedirectorHelper } from './daemon-stop.mjs'
-import { controlRequest, controlSocketPath, controlEndpointOf } from './control-client.mjs'
+import { controlRequest, controlSocketPath, controlEndpointFor } from './control-client.mjs'
 import { disableAutostart, unitFilePath, UNIT_FILE_NAME } from './autostart.mjs'
 import { plistFilePath, AGENT_LABEL, agentState, undoAutostart } from './darwin.mjs'
 import { execTool } from './exec.mjs'
@@ -49,20 +49,19 @@ const errMessage = (e) => String((e && e.message) || e)
 export function offWorld({ home = nodeOs.homedir(), env = process.env, deps = {} } = {}) {
   const dir = collectorDir(home)
   const platform = deps.platform || process.platform
-  // Windows finds the daemon's control endpoint in <collector>\control.json — the pipe name AND the token every request must carry
-  // (4.8 §7 控制面); darwin's daemon writes the same control.json (a random socket under $TMPDIR plus the token, 4.9 §7 — the mac flip
-  // missed adding it here, so every `off`/`status` on a real mac was a 401); Linux keeps the $XDG_RUNTIME_DIR unix socket, which the
-  // file modes keep to the operator. An off on win32/darwin with no control.json (or one that names no endpoint) has no socket path of
-  // its own: daemonState still asks the one the daemon's lock names, unauthenticated — a POST /off that 401s is then the control-error
-  // the receipt shows, not a silent miss.
-  const endpoint = (platform === 'win32' || platform === 'darwin') && deps.socketPath === undefined ? controlEndpointOf({ dir, fs: deps.fs || nodeFs }) : null
+  // The daemon's endpoint, resolved the one way every caller resolves it (controlEndpointFor): Windows finds it in <collector>\control.json —
+  // the pipe name AND the token every request must carry (4.8 §7 控制面); darwin's daemon writes the same control.json (a random socket under
+  // $TMPDIR plus the token, 4.9 §7); Linux keeps the $XDG_RUNTIME_DIR unix socket, which the file modes keep to the operator. An off on
+  // win32/darwin with no control.json (or one that names no endpoint) has no socket path of its own: daemonState still asks the one the
+  // daemon's lock names, unauthenticated — a POST /off that 401s is then the control-error the receipt shows, not a silent miss.
+  const endpoint = deps.socketPath === undefined ? controlEndpointFor({ platform, dir, env, fs: deps.fs || nodeFs }) : null
   const w = {
     home, env, dir, fs: deps.fs || nodeFs, exec: deps.exec || null, platform,
-    request: deps.request || (endpoint && endpoint.token ? ((o) => controlRequest({ ...o, token: endpoint.token })) : controlRequest),
+    request: deps.request || (endpoint && endpoint.request) || controlRequest,
     clock: deps.now || (() => new Date()), ms: deps.ms || Date.now, sleep: deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
     alive: deps.alive || pidAlive, identity: deps.identity || identityFor({ platform, exec: deps.exec || null, env }), isHelper: deps.isHelper || isRedirectorHelper, kill: deps.kill,
     lockFile: path.join(dir, 'lock'), stateF: stateFile(home), deps, standalone: deps.standalone === true, // the single-file asight-off passes `standalone`: it words what it cannot do as "run asight off" (R3, V35)
-    socketPath: deps.socketPath !== undefined ? deps.socketPath : (endpoint && endpoint.path) || (() => { try { return controlSocketPath({ env }) } catch { return null } })(),
+    socketPath: deps.socketPath !== undefined ? deps.socketPath : (endpoint && endpoint.socketPath) || (() => { try { return controlSocketPath({ env }) } catch { return null } })(),
   }
   const once = (fn) => { let p; return () => p || (p = Promise.resolve().then(fn)) } // the process table is read once per run
   w.procs = once(deps.procs || (() => listProcs({ exec: w.exec, platform, env })))

@@ -943,7 +943,7 @@ test('a descriptor whose afterUninstall is a string that is no known "until" is 
 })
 
 // ── asight on: the unit, and a harness turned on again (1.6 §1.6 · §1.1; V33, V16 unit half) ───────────────────────────────────────────────
-const onBase = (b, o = {}) => ({ home: b.home, env: { HOME: b.home }, osName: 'none', harnesses: [cc], freePort: async () => 47011, roots: ROOTS, confirm: async () => true, socketPath: '/x/c.sock', sleep: async () => {}, linger: () => true, ...o })
+const onBase = (b, o = {}) => ({ home: b.home, env: { HOME: b.home, XDG_RUNTIME_DIR: path.join(b.home, 'run') }, osName: 'none', harnesses: [cc], freePort: async () => 47011, roots: ROOTS, confirm: async () => true, sleep: async () => {}, linger: () => true, ...o })
 const unitOf = (b, run) => userUnit({ home: b.home, node: '/usr/bin/node', script: '/repo/bin/asight.mjs', run })
 
 test('V33: on --no-autostart writes the unit and starts it without enable, the daemon is then running; on --no-unit writes no unit and the manifest lists none', async () => {

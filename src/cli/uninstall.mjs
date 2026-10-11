@@ -13,6 +13,7 @@ import { offWorld, desiredOff, switchRoutingOff, undoSide, harnessIdsOf, flowWri
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readManifest, saveManifest, manifestPath } from '../off/manifest.mjs'
 import { disableAutostart, unitFilePath, removeWantsLinks } from '../off/autostart.mjs'
+import { undoAutostart, plistFilePath } from '../off/darwin.mjs'
 import { standalonePath, backupDir, opLockFile, asightHome } from '../off/paths.mjs'
 import { netenvFile } from '../netenv/index.mjs'
 import { dropBackup, orphanBackups } from '../off/backup.mjs'
@@ -117,7 +118,14 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     for (const f of routing.failures) failed.push(f)
     let drained = null
     if (routing.confirmed && routing.how === 'daemon-reply') drained = await waitForDrain(w, routing.relayed, deps.drainMs ?? DRAIN_MS, routing.socket) // the socket that answered: w.socketPath is null with XDG_RUNTIME_DIR unset
-    receipt.autostart = disableAutostart({ home, exec: w.exec, env, fs })
+    // the platform's own way out: darwin boots the LaunchAgent out and removes the plist (the same arm `off` uses, 4.9 §4 flip checklist ①),
+    // Windows' task and Run value are ledger entries undone with the rest, Linux disables the systemd unit
+    if (w.platform === 'win32') receipt.autostart = { disabled: true, removed: [], note: 'the task and the Run value are ledger entries, undone with the rest (4.8 §4.2)' }
+    else if (w.platform === 'darwin') {
+      const u = undoAutostart({ home, exec: w.exec, env, fs })
+      receipt.autostart = { disabled: u.code === 0, removed: u.plist === 'removed' ? [plistFilePath(home)] : [], ...(u.code !== 0 ? { error: u.err || `the LaunchAgent was ${u.agent} and the plist ${u.plist}` } : {}) }
+    }
+    else receipt.autostart = disableAutostart({ home, exec: w.exec, env, fs })
     receipt.removed.push(...(receipt.autostart.removed || []))
     if (!receipt.autostart.note || receipt.autostart.error) put({ kind: 'autostart', disabled: receipt.autostart.disabled, reason: `autostart ${receipt.autostart.disabled ? 'disabled' : 'NOT disabled'}${receipt.autostart.error ? ` (${receipt.autostart.error})` : ''}` }) // nothing to say when there was no unit
     if (receipt.autostart.error) { receipt.notes.push(receipt.autostart.error); failed.push({ code: 'unit-not-disabled', reason: receipt.autostart.error }) }
@@ -172,8 +180,11 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
         try {
           if (removeOwnedFile(file, fs).result === 'removed') {
             receipt.removed.push(file.path)
-            const r = execTool('systemctl', ['--user', 'daemon-reload'], { run: w.exec, env })
-            if (r.code !== 0) receipt.notes.push(`systemctl --user daemon-reload failed (${r.err || `exit ${r.code}`}); run it once systemd --user runs`)
+            // systemd is told the unit file is gone; darwin's launchd scans ~/Library/LaunchAgents at login and needs no reload
+            if (w.platform !== 'win32' && w.platform !== 'darwin') {
+              const r = execTool('systemctl', ['--user', 'daemon-reload'], { run: w.exec, env })
+              if (r.code !== 0) receipt.notes.push(`systemctl --user daemon-reload failed (${r.err || `exit ${r.code}`}); run it once systemd --user runs`)
+            }
           }
         } catch (err) {
           unitLeft = true; receipt.left.push({ path: file.path, result: 'error', reason: `${file.path} could not be removed: ${errText(err)}` }); failed.push({ code: 'entry-not-undone', path: file.path, reason: `${file.path} could not be removed: ${errText(err)}` })
