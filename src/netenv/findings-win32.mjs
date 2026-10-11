@@ -5,7 +5,7 @@
 // (`system-proxy-pac` · `system-proxy-unreadable` · `upstream-unparseable`, whose `credentials-in-system-proxy` detail says WinINET takes no login from that value); `upstream-protocol` has no row of
 // its own — it is the `proxy-unsupported` row. Nothing here runs anything (R8) and nothing here changes a system setting: the Smart App Control branch of `forwarder-start-failed` gives the three
 // choices and no command that touches the setting (W74). `Get-NetTCPConnection` never appears — a restricted token is refused it (4.8 E6) — the port check is always `netstat -ano -p TCP | findstr
-// ":<port>"`. A JSON edit is a `gui` step worded as 记事本 (a PowerShell one-liner would reorder the user's JSON); the reinstall commands are forwarder.mjs's own literals (carried by the facts, computed on the Windows side), with no download address.
+// ":<port>"`. A JSON edit is a `gui` step worded as 记事本 (a PowerShell one-liner would reorder the user's JSON); the kernel's manual alternative is forwarder.mjs's own literal (carried by the facts, computed on the Windows side), an instruction with no download address.
 
 const asight = (c, run) => ({ run, shell: c.sh })
 const ps = (run) => ({ run, shell: 'powershell' })
@@ -40,12 +40,12 @@ function setProxyText(h, place, value) {
   return `把 ${h} 的代理设成 ${value}`
 }
 
-/** The two reinstall commands of the kernel (4.8 §8 ⑤ / §10.4): forwarder.mjs's own literals, carried by the facts (`reinstall`, computed on the Windows side from THIS build's pin — src/netenv
- *  reads no arch module, 4.8 W39's rule 6). Both ways are printed because asight cannot tell how it was installed, and neither carries a download address (there is none to give: `on` never
- *  downloads). The pin has no package for this machine's architecture → the facts carry null: said, not guessed. */
+/** The kernel's MANUAL ALTERNATIVE (4.8 §8 ⑤ · §10.4; D44): forwarder.mjs's own literal, carried by the facts (`reinstall`, computed on the Windows side from THIS build's pin — src/netenv
+ *  reads no arch module, 4.8 W39's rule 6). It is an instruction, not a command: putting the pinned archive into the cache directory by hand, or fixing the network — a `gui` step, and asight never
+ *  runs it. The pin has no archive for this machine's architecture → the facts carry null: said, not guessed. */
 const reinstallSteps = (c) => {
-  const lines = c.F && c.F.reinstall
-  return lines ? [ps(lines.npm), ps(lines.release)] : [gui('这台机器的架构在钉死的清单里没有平台包:重装帮不上,把这一行报给 asight')]
+  const line = c.F && c.F.reinstall
+  return line ? [gui(line)] : [gui('这台机器的架构在钉死的清单里没有:手动放置帮不上,把这一行报给 asight')]
 }
 
 /** The catalogue (4.8 §10.4, one entry per code row). Commands only, unless the Windows row says its own thing about what or why. */
@@ -160,14 +160,21 @@ export const FINDINGS_WIN32 = {
   'forwarder-binary-missing': {
     cls: 'failure', asightFirst: false,
     what: () => 'asight 的内核没装上,所以没有拉起它',
-    why: (c) => `内核随平台包一起装,on 不下载它(${c.reason || '包没装上'});重装 asight 不替你跑`,
+    why: (c) => `内核不在运行位,缓存里也没有(${c.reason || 'file-missing'});on 会自己下载(D44),asight 不替你跑手动步骤`,
     commands: (c) => [...reinstallSteps(c), asight(c, 'asight on')],
     verify: () => 'asight on 退出 0',
   },
   'forwarder-digest-mismatch': {
     cls: 'failure', asightFirst: false,
     what: () => 'asight 的内核与钉死的 sha256 不符,所以没有拉起它',
-    why: (c) => `装的那份(${c.of || '包里的'})的摘要不是 pin 的那个;重装 asight 不替你跑`,
+    why: (c) => `在位的那份(${c.of || '运行位的'})的摘要不是 pin 的那个;on 会重新下载钉死的版本(D44),asight 不替你跑手动步骤`,
+    commands: (c) => [...reinstallSteps(c), asight(c, 'asight on')],
+    verify: () => 'asight on 退出 0',
+  },
+  'forwarder-download-failed': {
+    cls: 'failure', asightFirst: false,
+    what: () => 'asight 的内核下载不成,所以 on 没有开始',
+    why: (c) => `内核缺失时 on 从 pin 钉死的官方发布页下载(curl),这一步失败了(${c.reason || '原因读不到'});失败发生在写任何 agent 文件之前`,
     commands: (c) => [...reinstallSteps(c), asight(c, 'asight on')],
     verify: () => 'asight on 退出 0',
   },

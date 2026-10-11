@@ -311,7 +311,7 @@ test('a helper that cannot be started, and one that answers nothing: every read 
 import { diagnose, FINDINGS, FINDING_CODES } from '../../src/netenv/findings.mjs'
 import { FINDINGS_WIN32 } from '../../src/netenv/findings-win32.mjs'
 import { validateFinding } from '../../src/cli/schema.mjs'
-import { reinstallCommands, mainPackage, loadPin } from '../../src/collector/arch/win32/forwarder.mjs'
+import { reinstallCommands, loadPin } from '../../src/collector/arch/win32/forwarder.mjs'
 import { groupsOf } from '../../src/collector/arch/win32/route-plan.mjs'
 import { fileURLToPath } from 'node:url'
 
@@ -320,14 +320,14 @@ const SEVEN = ['claude-code', 'codex', 'hermes', 'kimi-code', 'opencode', 'deeps
 /** A finding's context, filled the way `diagnose` fills it (`fm` = the form facts of the branch that carries the reason, `vpnProxy` the VPN's own port, the extras what the daemon's records will hand over). */
 const CTX = (over = {}) => ({ F: {}, h: 'codex', hf: null, t: null, user: 'u', sh: 'powershell', platform: 'win32', setting: null, vpnProxy: 'http://127.0.0.1:7897', ...over })
 const cmd = (run, shell = 'powershell') => ({ run, shell })
-/** forwarder.mjs's own reinstall lines for x64 — what the Windows facts carry in `reinstall` (the pin's package for THIS machine's architecture when it is x64). */
-const REINSTALL_X64 = reinstallCommands({ main: mainPackage(), platformPackage: loadPin().assets.x64.package })
+/** forwarder.mjs's own manual alternative for x64 — what the Windows facts carry in `reinstall` (the pin's archive for THIS machine's architecture when it is x64, D44). */
+const REINSTALL_X64 = reinstallCommands(loadPin().assets.x64)
 const A = (run) => cmd(run) // asight's own, in the platform's shell
 
 test('W36 one entry per code row of §10.4 — no more, no less — and each entry\'s own output is a finding the schema accepts (a win-only code defines every field; no run holds a placeholder)', () => {
   assert.deepEqual(Object.keys(FINDINGS_WIN32), [
     'not-routed', 'opt-in-needed', 'shim-not-on-path', 'not-via-entry', 'entry-changed', 'needs-admin', 'egress-differs', 'form-path-unknown', 'fallback-active', 'elevated-agent', 'proxy-dead',
-    'upstream-unreachable', 'engine-port-taken', 'forwarder-down', 'form-unsupported', 'proxy-unsupported', 'forwarder-start-failed', 'forwarder-binary-missing', 'forwarder-digest-mismatch',
+    'upstream-unreachable', 'engine-port-taken', 'forwarder-down', 'form-unsupported', 'proxy-unsupported', 'forwarder-start-failed', 'forwarder-binary-missing', 'forwarder-digest-mismatch', 'forwarder-download-failed',
     'system-proxy-pac', 'other-redirector', 'socktable-unavailable', 'cause-unknown',
   ])
   for (const [code, entry] of Object.entries(FINDINGS_WIN32)) {
@@ -409,12 +409,18 @@ const LITERALS = {
       why: '内核的端口被占了(:17992)',
       commands: [cmd('netstat -ano -p TCP | findstr ":17992"'), A('asight off'), A('asight on')], verify: 'asight on 退出 0' },
   },
-  'forwarder-binary-missing': { ctx: CTX({ h: 'codex', reason: 'package-not-installed', F: { reinstall: REINSTALL_X64 } }),
+  'forwarder-binary-missing': { ctx: CTX({ h: 'codex', reason: 'file-missing', F: { reinstall: REINSTALL_X64 } }),
     what: 'asight 的内核没装上,所以没有拉起它',
-    commands: [cmd('npm install --global asight@0.0.0 --include=optional'), cmd('npm install --global asight-0.0.0.tgz asight-kernel-win32-x64-0.0.0.tgz'), A('asight on')], verify: 'asight on 退出 0' },
+    why: '内核不在运行位,缓存里也没有(file-missing);on 会自己下载(D44),asight 不替你跑手动步骤',
+    commands: [cmd(REINSTALL_X64, 'gui'), A('asight on')], verify: 'asight on 退出 0' },
   'forwarder-digest-mismatch': { ctx: CTX({ h: 'codex', of: 'copy', F: { reinstall: REINSTALL_X64 } }),
     what: 'asight 的内核与钉死的 sha256 不符,所以没有拉起它',
-    commands: [cmd('npm install --global asight@0.0.0 --include=optional'), cmd('npm install --global asight-0.0.0.tgz asight-kernel-win32-x64-0.0.0.tgz'), A('asight on')], verify: 'asight on 退出 0' },
+    why: '在位的那份(copy)的摘要不是 pin 的那个;on 会重新下载钉死的版本(D44),asight 不替你跑手动步骤',
+    commands: [cmd(REINSTALL_X64, 'gui'), A('asight on')], verify: 'asight on 退出 0' },
+  'forwarder-download-failed': { ctx: CTX({ h: 'codex', reason: 'curl is not on this machine', F: { reinstall: REINSTALL_X64 } }),
+    what: 'asight 的内核下载不成,所以 on 没有开始',
+    why: '内核缺失时 on 从 pin 钉死的官方发布页下载(curl),这一步失败了(curl is not on this machine);失败发生在写任何 agent 文件之前',
+    commands: [cmd(REINSTALL_X64, 'gui'), A('asight on')], verify: 'asight on 退出 0' },
   'system-proxy-pac': { ctx: CTX({}),
     commands: [cmd("Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' -Name AutoConfigURL")], verify: '—' },
   'other-redirector': { ctx: CTX({}), commands: [cmd('netsh winsock show catalog')], verify: '—' },
@@ -438,14 +444,14 @@ test('W36 each §10.4 command equals its literal (the values filled: the entry f
       one(variant === 'ctx' ? code : `${code}(${variant})`, half, entry, { ...half.ctx, ...(code === 'forwarder-start-failed' ? { reason: variant } : {}) })
     }
   }
-  // the reinstall commands are forwarder.mjs's own literals, with the pin's platform package, and carry no address to download from
-  const main = mainPackage()
-  for (const code of ['forwarder-binary-missing', 'forwarder-digest-mismatch']) {
+  // the manual alternative is forwarder.mjs's own literal, carried by the facts verbatim, and carries no address to download from (W36, D44)
+  for (const code of ['forwarder-binary-missing', 'forwarder-digest-mismatch', 'forwarder-download-failed']) {
     const runs = FINDINGS_WIN32[code].commands(LITERALS[code].ctx).map((c) => c.run)
-    assert.deepEqual(runs.slice(0, 2), Object.values(REINSTALL_X64), `${code}: reinstallCommands' own two lines, carried by the facts verbatim`)
+    assert.equal(runs[0], REINSTALL_X64, `${code}: reinstallCommands' own literal, carried by the facts verbatim`)
     assert.ok(runs.every((r) => !/https?:\/\//.test(r)), `${code}: no download address`)
-    assert.ok(runs[0].endsWith(`${main.name}@${main.version} --include=optional`), `${code}: the npm way, --include=optional`)
   }
+  // the download failure's own row: the reason rides the why, the failure happened before any agent file was touched
+  assert.equal(FINDINGS_WIN32['forwarder-download-failed'].what(LITERALS['forwarder-download-failed'].ctx), 'asight 的内核下载不成,所以 on 没有开始')
 })
 
 test('W36 the not-routed 「set it to your proxy app\'s port」 step is table-driven over every groups[].proxyEntry of the seven harnesses, none missing (4.8 §10.4 row 1)', async () => {
@@ -495,9 +501,9 @@ test('W36 not-routed by why, through the REAL facts path: a PAC, a registry the 
     deps: { helper: pacHelper, adapter: { fields: {}, running: true, runtime: { version: '2.5.7', mode: 'rule', mixedPort: 7897, tun: false }, controller: {} } } })
   const fm = pacFacts.harnesses.codex.forms.find((x) => x.id === 'codex.app')
   assert.deepEqual(fm.route, { reason: 'not-routed', code: 'not-routed', why: 'system-proxy-pac' }, 'the group\'s plan, on the form (the doctor rows read it)')
-  // the reinstall lines ride the facts (4.8 §8 ⑤ / §10.4): computed on the arch side from THIS build's pin, for this machine's architecture — src/netenv imports no arch module (W39's rule 6)
+  // the manual alternative rides the facts (4.8 §8 ⑤ / §10.4, D44): computed on the arch side from THIS build's pin, for this machine's architecture — src/netenv imports no arch module (W39's rule 6)
   const mine = loadPin().assets[process.arch]
-  assert.deepEqual(pacFacts.reinstall, mine && mine.package ? reinstallCommands({ main: mainPackage(), platformPackage: mine.package }) : null, 'forwarder.mjs\'s own two lines, carried by the facts')
+  assert.deepEqual(pacFacts.reinstall, mine && mine.name ? reinstallCommands(mine) : null, 'forwarder.mjs\'s own literal, carried by the facts')
   const pac = diagnose({ facts: pacFacts, topology: buildTopology(pacFacts), harnesses: ['codex'], user: 'u' }).find((x) => x.code === 'not-routed')
   assert.match(pac.why, /PAC/)
   assert.deepEqual(pac.commands, [
