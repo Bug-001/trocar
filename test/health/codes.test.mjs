@@ -154,6 +154,7 @@ const SPEC_12_FAILURES = [
   ['ingress-auth-failed', 'ingress'], ['ingress-unknown', 'ingress'], ['engine-port-taken', 'ingress'], ['upstream-unavailable', 'ingress'],
   ['fallback-active', 'routing'],
   ['forwarder-start-failed', 'forwarder'], ['forwarder-restart', 'forwarder'], ['forwarder-digest-mismatch', 'forwarder'], ['forwarder-binary-missing', 'forwarder'],
+  ['forwarder-download-failed', 'forwarder'], // D44 (4.8 §8 ①): the kernel is missing and the `on` that downloads it failed — restored after the 2026-10-07 withdrawal
   ['gatekeeper', 'forwarder'], // 4.9 §12: the darwin kernel precheck's non-digest half
   ['optin-failed', 'optin'],
   ['socktable-unavailable', 'helper'], ['helper-start-failed', 'helper'],
@@ -179,16 +180,17 @@ test('W38 every §12 code is a code, and a failure event naming it with its wher
   }
   // the case the plan names
   assert.deepEqual(checkRecord({ event: 'failure', where: 'ingress', code: 'ingress-auth-failed', reason: 'token mismatch' }), [])
-  // `on` never downloads the kernel (4.8 §8, 1.6 R8): there is no download failure to name, and no module or test writes one
-  assert.ok(!ROUTE_CODES.includes('forwarder-download-failed') && !isCode('forwarder-download-failed'), 'forwarder-download-failed is withdrawn')
-  assert.deepEqual(checkRecord({ event: 'failure', where: 'forwarder', code: 'forwarder-download-failed', reason: 'x' }), ['code "forwarder-download-failed"'])
+  // the download failure D44 restored (4.8 §8 ①): the code is in the set, a failure event naming it passes checkRecord, and the withdrawal's reverse assertion is gone
+  assert.ok(ROUTE_CODES.includes('forwarder-download-failed') && isCode('forwarder-download-failed'), 'forwarder-download-failed is restored (D44)')
+  assert.deepEqual(checkRecord({ event: 'failure', where: 'forwarder', code: 'forwarder-download-failed', reason: 'x' }), [])
+  assert.equal(isFailure({ event: 'failure', where: 'forwarder', code: 'forwarder-download-failed', reason: 'x' }), true)
   // Windows codes sit beside the Linux ones, not inside the lists D40 edits
   for (const c of ROUTE_CODES) assert.ok(!CODES.includes(c), `${c} is defined once: ROUTE_CODES, not also CODES`)
 })
 
 test('W38 the where / state events / trust reasons / status reasons / capture kinds are the §12 lists', () => {
   assert.deepEqual(ROUTE_WHERE, ['routing', 'forwarder', 'ingress', 'optin'])
-  assert.deepEqual(ROUTE_EVENTS, ['route-applied', 'forwarder-start', 'forwarder-stop', 'forwarder-draining', 'probes-refreshed', 'optin-applied', 'optin-removed'])
+  assert.deepEqual(ROUTE_EVENTS, ['route-applied', 'forwarder-start', 'forwarder-stop', 'forwarder-draining', 'probes-refreshed', 'optin-applied', 'optin-removed', 'forwarder-download-started', 'forwarder-download-ok'])
   assert.deepEqual(ROUTE_TRUST_REASONS, ['pid-unresolved-mixed', 'smart-app-control', 'env-unreadable-fill'])
   assert.deepEqual(ROUTE_STATUS_REASONS, ['form-unsupported', 'fallback-active', 'form-path-unknown'])
   assert.deepEqual(CAPTURE_KINDS, ['transparent', 'proxy'], 'the envelope `capture` closed set (4.8 §5.6, 4.1 信封表): Windows has the one proxy mode (D43)')
@@ -210,6 +212,8 @@ test('W38 the route events are state changes: they pass checkRecord with their f
     { event: 'probes-refreshed', where: 'forwarder', reason: 'the engine came up: the kernel was asked to health-test every on-form\'s fallback group now (4.8 §3.3)', forms: [{ f: 'codex.app', ok: true, status: 200 }] },
     { event: 'optin-applied', where: 'optin', form: 'codex.app', item: 'cert-store', scope: 'user' },
     { event: 'optin-removed', where: 'optin', form: 'codex.app', item: 'cert-store', scope: 'user' },
+    { event: 'forwarder-download-started', where: 'forwarder', url: 'https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-windows-amd64-compatible-v1.19.32.zip', size: 22525067, command: 'curl -fsSL --retry 2 -o /tmp/asight-kernel-x/mihomo-windows-amd64-compatible-v1.19.32.zip https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-windows-amd64-compatible-v1.19.32.zip' },
+    { event: 'forwarder-download-ok', where: 'forwarder', url: 'https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-windows-amd64-compatible-v1.19.32.zip', archive_sha256: 'a'.repeat(64), exe_sha256: 'b'.repeat(64) },
   ]
   assert.deepEqual(recs.map((r) => r.event), ROUTE_EVENTS)
   for (const r of recs) {

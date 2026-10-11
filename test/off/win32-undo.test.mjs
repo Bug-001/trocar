@@ -122,6 +122,8 @@ test('a forwarder-binary entry: an off keeps it (draining) and the entry STAYS f
   r = await run(true)
   assert.deepEqual(r.out.results.map((x) => x.result), ['restored'], 'the uninstall removes it')
   assert.ok(!fs.existsSync(exe))
+  assert.ok(!fs.existsSync(path.dirname(exe)), 'D44: the uninstall takes the kernel directory too')
+  fs.mkdirSync(path.dirname(exe), { recursive: true })
   fs.writeFileSync(exe, 'held')
   const broken = { ...fs, rmSync: (p, o) => { throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' }) }, existsSync: fs.existsSync }
   const m = { version: 2, entries: [entry], files: [], liveness: {}, kept_backups: [], dirs: [], confirmed_paths: [] }

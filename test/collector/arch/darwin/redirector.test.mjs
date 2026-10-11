@@ -648,7 +648,7 @@ test('W12 order: the proxy entries of the groups that are on are written only af
 test('W12 a kernel that cannot start leaves zero proxy entries: attach() rejects with the forwarder\'s own code and reason, and nothing is written or undone', async () => {
   for (const [result, code, why] of [
     [{ ok: false, where: 'forwarder', code: 'forwarder-start-failed', reason: 'port-taken', port: 18801 }, 'forwarder-start-failed', /port-taken/],
-    [{ ok: false, where: 'forwarder', code: 'forwarder-binary-missing', reason: 'package-not-installed' }, 'forwarder-binary-missing', /package-not-installed/],
+    [{ ok: false, where: 'forwarder', code: 'forwarder-binary-missing', reason: 'file-missing' }, 'forwarder-binary-missing', /file-missing/],
     [{ ok: false, where: 'forwarder', code: 'forwarder-digest-mismatch', reason: 'the kernel copy is not the pinned binary', of: 'copy' }, 'forwarder-digest-mismatch', /pinned binary/],
     [{ ok: false, readBack: null, error: { status: 400, text: 'Body invalid' } }, 'forwarder-start-failed', /refused the new configuration \(status 400\)/],
   ]) {

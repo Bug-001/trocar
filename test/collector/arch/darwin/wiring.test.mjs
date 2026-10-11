@@ -7,7 +7,9 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
 import { loadArch } from '../../../../src/collector/arch/index.mjs'
-import { createDarwinCollector } from '../../../../src/collector/arch/darwin/wiring.mjs'
+import { createDarwinCollector, prepare, ensureKernel } from '../../../../src/collector/arch/darwin/wiring.mjs'
+import { loadPin, KERNEL_EXE } from '../../../../src/collector/arch/darwin/forwarder.mjs'
+import { checkRecord } from '../../../../src/health/codes.mjs'
 import { groupsOf } from '../../../../src/collector/arch/darwin/route-plan.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { installCollector } from '../../../../src/collector/install.mjs'
@@ -17,6 +19,11 @@ import { tmpDir } from '../../../helpers/tmp.mjs'
 
 const ALL = await loadHarnesses()
 const one = (name) => ALL.find((d) => d.name === name)
+import { createHash } from 'node:crypto'
+import { gzipSync } from 'node:zlib'
+const sha = (b) => createHash('sha256').update(b).digest('hex')
+const EXE = Buffer.from('feedface fake asight-forwarder, sixty kilobytes of nothing '.repeat(8))
+const GZ = gzipSync(EXE) // the darwin release's shape: a .gz single binary, unpacked by node:zlib for real
 const GROUPS = groupsOf(ALL)
 /** The scutil dictionary of a machine whose https traffic follows a local proxy (the VERGE of the win32 test, in scutil's own key names). */
 const VERGE = { HTTPSEnable: '1', HTTPSProxy: '127.0.0.1', HTTPSPort: '7897', HTTPEnable: '0', HTTPProxy: '', HTTPPort: '0', SOCKSEnable: '0', SOCKSProxy: '', SOCKSPort: '0', ProxyAutoConfigEnable: '0', ExceptionsList: ['localhost', '<local>'] }
@@ -107,12 +114,72 @@ test('W39 loadArch("darwin") returns the darwin arch on any OS, with the pieces 
   assert.equal(typeof A.refuseElevated, 'function')
   assert.equal(typeof A.nodePreflight, 'function')
   assert.equal(typeof A.prepare, 'function', 'the read-only hook `asight on` calls (W27 ⑥, W74)')
+  assert.equal(typeof A.ensureKernel, 'function', 'D44: the kernel\'s download+verify+place, the first write-phase step of a real `on`')
   assert.equal(typeof A.osRoots, 'function')
   assert.equal(typeof A.createRedirector, 'function')
   assert.equal(typeof A.netFacts, 'function', 'darwin\'s netFacts is this unit\'s (1.6 §9.7 archFacts, 4.9 §10) — not the win line\'s open Task 10')
   assert.equal(A.runSupervisor, undefined, 'launchd KeepAlive really respawns: no supervisor parent on darwin (4.9 §4)')
   const linux = await loadArch('linux')
   assert.equal(linux.prepare, undefined, 'the Linux arch has no prepare and its on is unchanged')
+  assert.equal(linux.ensureKernel, undefined, 'and no kernel to download: driver mode (D44)')
+})
+
+test('prepare (W27 ⑥, D44, darwin\'s half — the pin is ALWAYS its own): the three states on an empty HOME — the download line, never the unsupported-arch refusal the missing-pin bug gave every real-machine on; the refusal states carry the manual alternative (none for an architecture nobody pins)', async () => {
+  const home = tmpDir('asight-prepare-')
+  const p = await prepare({ home, arch: process.arch === 'arm64' || process.arch === 'x64' ? process.arch : 'arm64' })
+  if (p.refuse) {
+    assert.equal(p.refuse.code, 'forwarder-binary-missing')
+    assert.doesNotMatch(p.refuse.reason, /architecture/, 'the real machine\'s architecture is in the pin: not the unsupported-arch refusal the missing-pin bug gave')
+    return // a pin whose exe digest is null is a legitimate not-pinned refusal
+  }
+  assert.equal(p.kernel.state, 'will-download', 'an empty HOME holds no kernel and no cache: the download line')
+  assert.match(p.kernel.host, /^github\.com$/)
+  assert.match(p.notes[0], /^asight's kernel: not there yet — mihomo v1\.19\.32 will be downloaded \(archive \d+(\.\d+)? MB, sha256 pinned, from github\.com\) once you confirm/)
+  // the run location and the cache are READY; a refusal carries the alternative
+  const ready = await prepare({ home, locate: async () => ({ found: { at: 'run', exe: path.join(home, 'kernel', KERNEL_EXE), sha256: 'a'.repeat(64), size: 1 } }), arch: 'arm64' })
+  assert.deepEqual([ready.kernel.state, ready.kernel.at], ['ready', 'run'])
+  assert.match(ready.notes[0], /in kernel\//)
+  const cached = await prepare({ home, locate: async () => ({ found: { at: 'cache', archive: 'x', sha256: 'b'.repeat(64), size: 2 } }), arch: 'arm64' })
+  assert.match(cached.notes[0], /in the archive cache/)
+  const missing = await prepare({ home, locate: async () => ({ missing: { reason: 'not-pinned', alternative: '把 x 放进 kernel-archive/ 再跑 asight on' } }), arch: 'arm64' })
+  assert.deepEqual(missing, { refuse: { code: 'forwarder-binary-missing', reason: 'the pin carries no exe digest, so nothing can be verified against it', commands: ['把 x 放进 kernel-archive/ 再跑 asight on'] } })
+  const bare = await prepare({ home, locate: async () => ({ missing: { reason: 'unsupported-arch', alternative: null } }), arch: 'ia32' })
+  assert.equal('commands' in bare.refuse, false)
+  await assert.rejects(() => prepare({ locate: async () => ({ found: { at: 'run', exe: 'x', sha256: 'a'.repeat(64), size: 1 } }), arch: 'arm64' }), /prepare needs home/)
+})
+
+test('ensureKernel (D44, darwin\'s half): download (one curl, the .gz gunzipped by zlib, the two events in flows/), run (nothing done), failure (not-ok with the manual alternative, the failure event on disk)', async () => {
+  const pin = JSON.parse(JSON.stringify(loadPin()))
+  pin.assets.arm64.sha256 = sha(GZ); pin.assets.arm64.size = GZ.length
+  pin.assets.arm64.exe = { name: KERNEL_EXE, size: EXE.length, sha256: sha(EXE) }
+  const mk = ({ curl = true } = {}) => {
+    const home = tmpDir('asight-ensure-')
+    const calls = []
+    const execFile = (cmd, args, opts, cb) => {
+      calls.push([cmd, ...args])
+      if (cmd !== 'curl') return cb(new Error(`not in the fake: ${cmd}`)) // darwin's unpack is zlib: curl is the only exec
+      if (args[0] === '--version') return cb(null, 'curl 8.7.1', '')
+      if (typeof curl === 'number') return cb(Object.assign(new Error('x'), { code: curl }), '', 'boom')
+      fs.writeFileSync(args[args.indexOf('-o') + 1], GZ)
+      cb(null, '', '')
+    }
+    return { home, calls, execFile }
+  }
+  const dl = mk()
+  const r0 = await ensureKernel({ home: dl.home, arch: 'arm64', execFile: dl.execFile, pin })
+  assert.deepEqual([r0.ok, r0.from, r0.sha256], [true, 'download', sha(EXE)])
+  assert.equal(dl.calls.filter((c) => c[0] === 'curl' && c.includes(pin.assets.arm64.url)).length, 1, 'exactly one curl against the pinned URL')
+  assert.equal(fs.statSync(r0.path).mode & 0o777, 0o755, 'the placed binary is executable')
+  const recordsOf = (home) => fs.readdirSync(path.join(home, '.asight', 'collector', 'flows')).flatMap((f) => fs.readFileSync(path.join(home, '.asight', 'collector', 'flows', f), 'utf8').trim().split('\n').map((l) => JSON.parse(l)))
+  assert.deepEqual(recordsOf(dl.home).map((r) => r.event), ['forwarder-download-started', 'forwarder-download-ok'], 'the download\'s records are in flows/ (D38)')
+  assert.deepEqual(recordsOf(dl.home).flatMap(checkRecord), [], 'and they are in the closed sets')
+  const again = await ensureKernel({ home: dl.home, arch: 'arm64', execFile: dl.execFile, pin })
+  assert.deepEqual([again.ok, again.from, again.note], [true, 'run', null], 'no note: nothing happened an operator must be told')
+  const bad = mk({ curl: 22 })
+  const r1 = await ensureKernel({ home: bad.home, arch: 'arm64', execFile: bad.execFile, pin })
+  assert.equal(r1.ok, false)
+  assert.match(r1.reason, /^curl exited 22: boom; nothing was changed\. 手动替代\(asight 不替你跑\): 把 mihomo-darwin-arm64-v1\.19\.32\.gz 放进 /)
+  assert.deepEqual(recordsOf(bad.home).map((r) => [r.event, r.code ?? null]), [['forwarder-download-started', null], ['failure', 'forwarder-download-failed']], 'the failure is on disk, not only in the receipt (D38)')
 })
 
 test('the lazy rule: a construction without the dir (loadParts\' { env } one) builds the shell and touches nothing — no ingress.json anywhere, scan works, attach refuses, osMatch judges', async () => {

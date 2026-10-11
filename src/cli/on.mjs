@@ -128,7 +128,12 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     // stops `on` before its first write — a settled precondition with nothing to roll back. The Linux arch has no `prepare` and nothing here changes.
     // The refusal's event and receipt are on's to write; with no collector directory yet (nothing installed) the receipt is the record (4.6 §记录).
     const archPrepare = parts.arch && typeof parts.arch.prepare === 'function' ? parts.arch.prepare : null
-    const prep = archPrepare ? await archPrepare({ env }) : null
+    const prep = archPrepare ? await archPrepare({ env, home }) : null
+    // D44: the same arch's ensureKernel hook, run by turnOn as the FIRST write-phase action — after the confirmation, before any agent file — so a failed
+    // download leaves zero agent files written (the plan above already showed the download line; a dry run returns before turnOn reaches the hook). An arch
+    // without one (Linux's driver mode, or the kernel already ensured and nothing to do) hands no hook and nothing changes.
+    const ensureKernelHook = parts.arch && typeof parts.arch.ensureKernel === 'function' ? parts.arch.ensureKernel : null
+    const afterConfirm = ensureKernelHook ? () => ensureKernelHook({ home, env }) : null
     // the plan of 4.8 §11: Windows draws its own (the kernel line, one row per entry group with the upstream, the named opt-in items, Smart App Control, the drain note) — fed by the same
     // `on`'s facts (adoption) and the arch hook's answer (prep). The Linux plan and the hook's own notes stay as they are.
     const winPlan = parts.os === 'win32'
@@ -140,7 +145,7 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     }
     if (prep && prep.refuse) {
       const rf = prep.refuse
-      const line = `${rf.reason}${Array.isArray(rf.commands) && rf.commands.length ? `。重装: ${rf.commands.join(' 或 ')}` : ''}`
+      const line = `${rf.reason}${Array.isArray(rf.commands) && rf.commands.length ? `。手动替代(asight 不替你跑): ${rf.commands.join(' 或 ')}` : ''}`
       if (!flags.has('--dry-run')) {
         const receipt = { ...newReceipt('on'), ok: false, harnesses: named.ids, notes: [line] }
         const cdir = path.join(home, '.asight', 'collector')
@@ -161,7 +166,7 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     let { receipt, exit, plan } = await install.turnOn({
       home, env, ids: named.ids, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, osRootsFile: parts.osRootsFile || null,
       roots: deps.roots || (archOsRoots ? { node: [...tls.rootCertificates], osText: archOsRoots.pem } : null), unit, autostart, freePort: deps.freePort, dryRun: flags.has('--dry-run'), confirm,
-      optIn, optInHooks,
+      optIn, optInHooks, afterConfirm,
       networkEdited: async (targets) => editedFields({ adoption, routing, targets, home, env, fs: deps.fs }),
       onPlan: (p) => say(planText(p)),
       request: deps.request, now: deps.now, getuid: deps.getuid, helperState, linger: deps.linger || parts.linger || null, lingerRead: deps.lingerRead || (deps.linger ? null : parts.lingerRead || null), sleep: deps.sleep, user: deps.user, fs: deps.fs,

@@ -20,12 +20,13 @@ import { randomBytes } from 'node:crypto'
 import { createProcWatcher, startedAtOf } from './procinfo.mjs'
 import { ownerOf as askOwnerOf } from './socktable.mjs'
 import { loadIngressConfig, freeOnLoopback } from './ingress-config.mjs'
-import { createForwarder, loadPin, verifyCopy, gatekeeperCheck, locateKernel, reinstallCommands, KERNEL_EXE } from './forwarder.mjs'
+import { createForwarder, loadPin, verifyCopy, gatekeeperCheck, locateKernel, ensureBinary, reinstallCommands, KERNEL_EXE } from './forwarder.mjs'
 import { groupsOf, planRoutes, resolveLogin, hostSetOf, proxyRecordsOf } from './route-plan.mjs'
 import { createDarwinRedirector } from './redirector.mjs'
 import { createProxyEntries } from './entries.mjs'
 import { readSystemProxy, watchSystemProxy } from './upstream.mjs'
 import { readText, readTextOrError } from '../../core/config-read.mjs'
+import { appendEvent } from '../../core/events.mjs'
 import { execTool } from '../../../off/exec.mjs'
 import { readManifest } from '../../core/trust/journal.mjs'
 import { MARKER_TOLERANCE_MS } from '../../core/trust/confirm.mjs'
@@ -195,26 +196,70 @@ export async function createDarwinCollector({ env = process.env, dir = null, hom
   return redirector
 }
 
+/** What a `missing` answer of locateKernel / ensureBinary means in words (the receipt and the refusal say it the same way both sides of the write phase). */
+const missingWhy = (missing, arch) => missing.reason === 'not-pinned' ? 'the pin carries no exe digest, so nothing can be verified against it' : `this machine's architecture (${arch}) is not in the pinned list`
+
 /**
- * prepare({ locate, arch, fs }) → { notes: [line], refuse?: { code, reason, commands } } — the read-only hook `asight on` calls before it writes anything (4.8 §8 ⑥'s shape, W27 ⑥,
- * W74; the SAC preflight's darwin half is 4.9 §3 ②): the kernel line (`locateKernel`: found and verified, with its package and digest); a missing or mismatched kernel is a REFUSAL
- * with the two reinstall commands — no download to wait for, a settled precondition, so `on` exits 1 before the first write (the event and the receipt are the caller's). The
- * Gatekeeper line of 4.8's prepare has nothing to ask here: the quarantine attribute is checked at every launch and self-heals (§3 ②), so no state exists to read before the first
- * one — there is no second line. Nothing is written, nothing is started.
+ * prepare({ locate, arch, fs, home }) → { notes: [line], kernel?, refuse?: { code, reason, commands? } } — the read-only hook `asight on` calls before it writes anything (4.8 §8 ⑥'s shape carried
+ * by 4.9, W27 ⑥, W74): the kernel line in one of §8 ⑥'s three states — READY (the run location `kernel/` or the verified-archive cache satisfies the pin), WILL-DOWNLOAD (neither is there: the
+ * plan's download line — version, the archive's size, the pinned sha256, the url's host; the download happens AFTER the confirmation, in ensureKernel, D44) or a REFUSAL (an architecture the pin
+ * does not know, a pin with no exe digest; `commands` carries the manual alternative). `home` is where the collector dir lives. The pin is ALWAYS locateKernel's own (this build's), never a
+ * caller's injection defaulting to nothing — the unsupported-arch-on-every-real-on bug was a caller forgetting to pass one, and this shape kills the class.
+ * The Gatekeeper line of 4.8's prepare has nothing to ask here: the quarantine attribute is checked at every launch and self-heals (§3 ②), so no state exists to read before the first one — there
+ * is no second line. Nothing is written, nothing is started, nothing is downloaded.
  */
-export async function prepare({ locate = locateKernel, arch = process.arch, fs = nodeFs } = {}) {
-  const k = await locate({ ...(arch ? { arch } : {}), ...(fs ? { fs } : {}) })
-  if (k.missing || k.mismatch) {
-    const commands = (k.missing || k.mismatch).commands
+export async function prepare({ locate = locateKernel, arch = process.arch, fs = nodeFs, home = null } = {}) {
+  if (!home) throw new TypeError('prepare needs home: the kernel line reads the run location and the cache under ~/.asight/collector/')
+  const k = await locate({ arch, dir: path.join(home, '.asight', 'collector', 'kernel'), fs })
+  if (k.missing) {
+    const raw = k.missing.alternative
     return {
       refuse: {
-        code: k.missing ? 'forwarder-binary-missing' : 'forwarder-digest-mismatch',
-        reason: k.missing ? `the pinned kernel package was not found (${k.missing.reason}); nothing was changed` : 'the pinned kernel package holds a binary whose digest is not the pin\'s',
-        ...(commands ? { commands } : {}),
+        code: 'forwarder-binary-missing',
+        reason: missingWhy(k.missing, arch),
+        ...(raw ? { commands: [raw] } : {}),
       },
     }
   }
-  return { notes: [`asight's kernel: found and verified (${k.found.sha256.slice(0, 12)}… in ${k.found.packageDir})`] }
+  const kernel = k.found
+    ? { version: loadPin().version, exe: KERNEL_EXE, sha256: k.found.sha256, state: 'ready', at: k.found.at }
+    : { version: k.download.version, exe: k.download.exe, sha256: k.download.sha256, size: k.download.size, url: k.download.url, host: k.download.host, state: 'will-download' }
+  const notes = [k.found
+    ? `asight's kernel: found and verified (${k.found.sha256.slice(0, 12)}… ${k.found.at === 'cache' ? 'in the archive cache' : 'in kernel/'})`
+    : `asight's kernel: not there yet — mihomo ${k.download.version} will be downloaded (archive ${(k.download.size / 1048576).toFixed(1)} MB, sha256 pinned, from ${k.download.host}) once you confirm`]
+  return { notes, kernel }
+}
+
+/**
+ * ensureKernel({ home, arch, env, fs, execFile }) → `{ ok: true, path, sha256, from, copied, note }` · `{ ok: false, reason }` — the FIRST write-phase step of a real `on` (D44's darwin half,
+ * 4.9 §8): the kernel's download (curl), verify (both digests), gunzip and placement, asked AFTER the confirmation and BEFORE any agent file is touched, so a failed download leaves zero agent
+ * files written. `from` says where the kernel came from — 'run' (already the pinned one: nothing done), 'cache' (the verified archive, no network) or 'download' (the CLI's one online step) — and
+ * `note` is the receipt's line of that. The download's three records go to the collector dir's flows/ through the same appendEvent every forwarder record uses (D38); a `missing` or `mismatch`
+ * answer gets its failure event here. A `blocked` placement stops the on with the wait-or-`off --now` line and NO event: nothing was written, the receipt is the record (R11).
+ * `execFile` is node's own by default and a test's recorder otherwise (0.1 §3: no test reaches a real curl).
+ */
+export async function ensureKernel({ home, arch = process.arch, pin = null, env = process.env, fs = nodeFs, execFile } = {}) {
+  if (!home) throw new TypeError('ensureKernel needs home: the kernel lives under ~/.asight/collector/')
+  const dir = path.join(home, '.asight', 'collector')
+  const event = (rec) => { try { appendEvent(dir, rec) } catch { /* the receipt is the record when flows/ cannot be written (R11) */ } }
+  const r = await ensureBinary({ ...(pin ? { pin } : {}), arch, dir: path.join(dir, 'kernel'), fs, ...(execFile ? { execFile } : {}), env, event })
+  if (r.missing) {
+    event({ event: 'failure', where: 'forwarder', code: 'forwarder-binary-missing', reason: missingWhy(r.missing, arch) })
+    return { ok: false, reason: `${missingWhy(r.missing, arch)}; nothing was changed` }
+  }
+  if (r.failed) return { ok: false, reason: `${r.failed.reason}; nothing was changed. 手动替代(asight 不替你跑): ${r.failed.alternative}` }
+  if (r.mismatch) {
+    const line = `the kernel that was placed is not the pinned one; nothing was changed. 手动替代(asight 不替你跑): ${r.mismatch.alternative}`
+    event({ event: 'failure', where: 'forwarder', code: 'forwarder-digest-mismatch', reason: line, of: 'copy' })
+    return { ok: false, reason: line, of: 'copy' }
+  }
+  if (r.blocked) return { ok: false, reason: `the kernel in kernel/ could not be replaced (${r.blocked.step}: ${r.blocked.reason}); nothing was changed. Wait for the drain to end, or run asight off --now (it disconnects the agents still draining), then asight on` }
+  // `ledger` (only when THIS run placed the copy — `copied`): what turnOn writes into the install manifest's files, so `uninstall` removes the kernel and
+  // the archive cache with it (4.8 §531 · §4.2; D44 ②). turnOn owns the manifest machinery — the kernel sits on disk before the manifest exists (the hook
+  // runs before the lock, the manifest is opened inside it), so the entry is written there, not here.
+  return { ok: true, path: r.path, sha256: r.sha256, from: r.from, copied: r.copied,
+    ...(r.copied ? { ledger: { path: r.path, sha256: r.sha256, dir: path.dirname(r.path) } } : {}),
+    note: r.from === 'download' ? `the kernel was downloaded and both digests verified (sha256 ${r.sha256.slice(0, 12)}…)` : r.from === 'cache' ? 'the kernel was placed from the verified archive cache (no network)' : null }
 }
 
 export { CONTROLLER_RANGE, reinstallCommands }

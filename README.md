@@ -43,46 +43,37 @@ system, tools, every message block, in order, as bytes. Not a log line about it.
 **"What is eating my context?"** A per-call breakdown by section (tools / system / user / assistant /
 thinking / tool_use / tool_result), so you see *which* part grew and when.
 
-## Quickstart
+## Install
 
-Node ≥ 20. One runtime dependency (`@duckdb/node-api`). The frontend is a single self-contained HTML
-file — no bundler, no build step.
-
-```sh
-git clone <this repo> && cd Agent-Context-Sentinel
-npm install
-ln -sf "$PWD/bin/asight.mjs" ~/.local/bin/asight    # or: npm link
-```
-
-**1. Start the tap** — the per-user process collector (Linux · Windows · macOS; the plan is printed first, and the first `on` asks before it changes anything):
+From source (Node ≥ 20):
 
 ```sh
-asight on                    # writes into ~/.asight/collector/, where the board looks by default
-asight on --no-unit          # no autostart: run the daemon yourself with `asight daemon`
+git clone <this repo> && cd asight && npm install
+asight on
 ```
 
-On Linux `on` is the install plus one `sudo asight setup-helper` per machine (see *What it touches*
-below). Agents started before `on` keep going direct until you restart them — `status` names them.
+The first `asight on` lists the files it will touch and the kernel it will download (mihomo, version
+and sha256 pinned in the repo), and starts after you confirm. Then: `asight status` to see state,
+`asight off` to take every trace of asight off your agents' path.
 
-**2. Look at it.**
+From a Release: not published yet.
+
+## Uninstall
 
 ```sh
-asight serve          # → http://127.0.0.1:9800
+asight uninstall               # removes all of asight's changes, keeps captures
+asight uninstall --purge-data  # also deletes capture data (asks first)
 ```
-
-Everything asight writes lives under `~/.asight/`. Captures made before 2026-07-20 sit under
-`~/.atrace/asight/` and are **still read** — the board lists both, so upgrading never costs you a
-session (the older `atrace` name was this project's v0 prototype).
-
-No ETL, no database, no build step — the board reads the NDJSON directly. With no `--source` it reads
-the capture directory, so **Claude Code, Codex and OpenCode sessions appear side
-by side on one board** (`asight shard` groups the older capture streams by session into
-`~/.asight/sessions/`, which the board and `asight raw seal` also read). It also reads the per-user
-process collector's `~/.asight/collector/capture-*.ndjson`
-when that directory exists (its `flows/`, `audit/` and `replays/` are not envelopes and are not shown).
-Pass `--source <file|dir>` to look somewhere else.
 
 ## What you see
+
+No ETL, no database, no build step — the board reads the NDJSON directly (`asight serve` →
+http://127.0.0.1:9800). With no `--source` it reads the capture directory, so **Claude Code, Codex
+and OpenCode sessions appear side by side on one board** (`asight shard` groups the older capture
+streams by session into `~/.asight/sessions/`, which the board and `asight raw seal` also read). It
+also reads the per-user process collector's `~/.asight/collector/capture-*.ndjson` when that
+directory exists (its `flows/`, `audit/` and `replays/` are not envelopes and are not shown). Pass
+`--source <file|dir>` to look somewhere else.
 
 Per call, on one board: **context replay** (the full assembled request, block by block, plus the raw
 wire body) · **cache overlay** (real `cache_read` / `cache_write` counts, the marked break, its cause
@@ -137,6 +128,10 @@ cross-session SQL. The board works fine without it.
 
 ## What it touches, and what lands on disk
 
+Everything asight writes lives under `~/.asight/`. Captures made before 2026-07-20 sit under
+`~/.atrace/asight/` and are **still read** — the board lists both, so upgrading never costs you a
+session (the older `atrace` name was this project's v0 prototype).
+
 `asight on` arranges a local, observe-only tap **on your user account only**. It never changes your
 system proxy, never adds machine-wide trust, never needs root (Linux's one-time `setup-helper` is the
 only `sudo`, and it only sets capability bits on one root-owned file). What it changes, file by file,
@@ -170,8 +165,9 @@ recorded call by call), OpenCode, DeepSeek `dsh`, Kimi Code, Hermes and Z-Code. 
 eBPF helper steers only the connections of agent processes you run to a loopback engine, which decrypts
 only for agents that trust the collector CA. Everything else, including other users, goes direct. On
 Windows (RFC 4.8) the same harnesses are captured in proxy mode — Kimi Code only through its opt-in shims.
-`asight on` prints its plan first: the bundled kernel it will run (`asight-forwarder.exe`, from the
-`asight-kernel-win32-x64` package; it listens on loopback only — no TUN, never the system proxy, nothing
+`asight on` prints its plan first: the kernel it will run (`asight-forwarder.exe`, mihomo with the
+version and both sha256s pinned in the repo — downloaded by that first `on` when missing, from the
+pinned official release page; it listens on loopback only — no TUN, never the system proxy, nothing
 written into your VPN), one row per agent group with the upstream the kernel will dial for it, Codex's
 WebSocket, Smart App Control, and the autostart task; then it writes the proxy and trust entries in the
 agents' own config files (your prior values recorded, `off` restores them). The forms that reach further
@@ -182,9 +178,9 @@ step asight shows, never with a password field of its own). `asight off` runs th
 the supervisor, daemon and kernel stopped, every entry and opt-in item taken out — and, as the plan says
 up front, an agent started while it was on still passes through the kernel (forwarded untouched) until
 you restart it. On macOS (RFC 4.9) the same harnesses are captured in proxy mode, with darwin's own
-shape: `asight on` prints its plan first — the bundled kernel it will run (`asight-forwarder`, from the
-`asight-kernel-darwin-x64` / `-arm64` package; loopback only, no TUN, never the system proxy, nothing
-written into your VPN), one row per agent group with its upstream, Codex's WebSocket, the Gatekeeper
+shape: `asight on` prints its plan first — the kernel it will run (`asight-forwarder`, mihomo pinned
+the same way and downloaded by that first `on` when missing; loopback only, no TUN, never the system
+proxy, nothing written into your VPN), one row per agent group with its upstream, Codex's WebSocket, the Gatekeeper
 precheck, and the autostart LaunchAgent (`com.asight.collector` in `~/Library/LaunchAgents`, `RunAtLoad`
 + `KeepAlive` — logout stops it; no linger on macOS); then it writes the proxy and trust entries in the
 agents' own config files (your prior values recorded, `off` restores them; the first install's combined

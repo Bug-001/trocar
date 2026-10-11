@@ -62,6 +62,22 @@ export async function undoHarnesses(args) {
   }
 }
 
+/** `uninstall`'s kernel removal (4.8 §531 · §4.2; D44 ②): the exe, `LICENSE-mihomo.txt` and `SOURCE-mihomo.txt` beside it, the kernel directory, and the
+ * verified-archive cache (`kernel-archive/`) — the whole thing asight's `on` placed or downloaded. A file the system still holds (the kernel is running, a
+ * drain is on) stays and the reason says so: asight does not stop it by itself (W28, the entries-kind branch's rule from day one). */
+const removeKernelCopy = (exe, fs) => {
+  const dir = path.dirname(exe)
+  try {
+    fs.rmSync(exe, { force: true })
+    for (const name of ['LICENSE-mihomo.txt', 'SOURCE-mihomo.txt']) { try { fs.rmSync(path.join(dir, name), { force: true }) } catch { /* the exe is gone: a stray text file is not a lock */ } }
+    try { fs.rmdirSync(dir) } catch { /* not empty, or gone */ }
+    try { fs.rmSync(path.join(path.dirname(dir), 'kernel-archive'), { recursive: true, force: true }) } catch (e) { return { ok: false, reason: `${exe} was removed, but the verified-archive cache beside it could not be (${errText(e)}); remove it by hand` } }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, reason: `${exe} could not be removed (${errText(e)}); a kernel still running holds it — stop it (asight off --now), then run this again` }
+  }
+}
+
 async function undoInto({ dir, home, manifest, ids = null, procs = async () => [], roots = null, now = new Date(), dropCa = false, fs = nodeFs, exec = null, env = process.env }, out) {
   if (manifest.unsupported) throw new Error(`the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read; nothing was changed`)
   const inScope = (h) => typeof h === 'string' && (ids == null || ids.includes(h))
@@ -106,7 +122,8 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     }
     if (e.kind === 'forwarder-binary') { // uninstall only (the entries filter keeps it out of an `off`)
       const file = e.path || e.real_path
-      try { if (fs.existsSync(file)) fs.rmSync(file, { force: true }); return { path: file, harness: e.harness, result: 'restored' } } catch (err) { return { path: file, harness: e.harness, result: 'error', reason: `${file} could not be removed (${errText(err)}); a kernel still running holds it — stop it (asight off --now), then run this again` } }
+      const r = removeKernelCopy(file, fs)
+      return { path: file, harness: e.harness, result: r.ok ? 'restored' : 'error', ...(r.ok ? {} : { reason: r.reason }) }
     }
     return { path: e.path, harness: e.harness, result: 'error', reason: `${e.path} is of kind ${JSON.stringify(e.kind)}, which this build does not undo` }
   }

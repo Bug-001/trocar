@@ -76,25 +76,25 @@ test('W27 ⑥: the arch prepare hook — its lines print with the plan and ride 
   assert.match(io.stderrText(), /Smart App Control 开着/, 'the Smart App Control line too')
   assert.deepEqual([io.json().notes.includes(notes[0]), io.json().notes.includes(notes[1])], [true, true], 'and both are receipt notes')
 
-  // a refusal on nothing-installed: exit 1 before turnOn (nothing written), the reason with the reinstall commands, the receipt the only record
+  // a refusal on nothing-installed: exit 1 before turnOn (nothing written), the reason with the manual alternative (D44: no reinstall commands any more), the receipt the only record
   const home2 = tmpDir('asight-w27b-'); seedClaude(home2)
   const before = snapshot(home2)
-  const refuse = { code: 'forwarder-binary-missing', reason: 'the pinned kernel package was not found (package-not-installed)', commands: ['npm install --global asight@0.0.0 --include=optional', 'npm install --global asight-0.0.0.tgz asight-kernel-win32-x64-0.0.0.tgz'] }
+  const refuse = { code: 'forwarder-digest-mismatch', reason: "the exe in kernel\\ is not the pin's", commands: ['把 mihomo-linux-amd64-v1.19.32.gz 放进 ~/.asight/collector/kernel-archive/ 再跑 asight on,或修好网络 / 代理(HTTPS_PROXY)后重跑'] }
   const bad = withPrepare({ refuse })
   const io2 = fakeIo({ tty: false })
   assert.equal(await runOnCli(['--yes', '--json'], bad.ctx(home2, io2, { exec: ex, daemon })), 1)
   const doc = io2.json()
   assert.equal(doc.ok, false)
   assert.deepEqual(validateReceipt(doc), [])
-  assert.match(doc.notes.join('\n'), /the pinned kernel package was not found \(package-not-installed\)/)
-  assert.match(doc.notes.join('\n'), /重装: npm install --global asight@0\.0\.0 --include=optional 或 npm install --global asight-0\.0\.0\.tgz asight-kernel-win32-x64-0\.0\.0\.tgz/)
+  assert.match(doc.notes.join('\n'), /the exe in kernel\\ is not the pin's/)
+  assert.match(doc.notes.join('\n'), /手动替代\(asight 不替你跑\): 把 mihomo-linux-amd64-v1\.19\.32\.gz 放进 ~\/\.asight\/collector\/kernel-archive\/ 再跑 asight on,或修好网络 \/ 代理\(HTTPS_PROXY\)后重跑/)
   assert.deepEqual(snapshot(home2), before, 'a refusal writes nothing: turnOn never ran (the receipt is the record, 4.6 §记录)')
 
   // a dry run over the same refusal: exit 0, the stop is `blocked` (R6, V7), nothing written
   const io3 = fakeIo({ tty: false })
   assert.equal(await runOnCli(['--dry-run', '--json'], bad.ctx(home2, io3)), 0)
   const dry = io3.json()
-  assert.match(dry.blocked, /the pinned kernel package was not found/)
+  assert.match(dry.blocked, /the exe in kernel\\ is not the pin's/)
   assert.match(dry.notes.join('\n'), /\(a real asight on stops there\)/)
   assert.deepEqual(snapshot(home2), before)
 

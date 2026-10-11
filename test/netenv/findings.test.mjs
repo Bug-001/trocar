@@ -71,11 +71,11 @@ test('V49 both directions: every code of the closed sets (§9.7 net codes, the s
 })
 
 // The Windows half (1.6 §9.7 / 4.8 §10.4): its codes are in the closed sets too — the net codes, the status reasons (which already hold form-unsupported, fallback-active, form-path-unknown),
-// the route codes (engine-port-taken, forwarder-start-failed, forwarder-binary-missing, forwarder-digest-mismatch, socktable-unavailable) and the trust reasons — and FINDING_CODES, what
+// the route codes (engine-port-taken, forwarder-start-failed, forwarder-binary-missing, forwarder-digest-mismatch, forwarder-download-failed (D44), socktable-unavailable) and the trust reasons — and FINDING_CODES, what
 // schema.mjs checks a finding against, is exactly the union of the two catalogues and the trust reasons (the literal per-row shape of FINDINGS_WIN32 is held by topology-win32.test.mjs, W36).
 test('V49 both directions, the Windows half: FINDINGS_WIN32 defines no code outside the closed sets (net codes, status reasons, route codes, trust reasons), and FINDING_CODES is exactly FINDINGS ∪ FINDINGS_WIN32 ∪ the trust reasons (the Windows collector\'s own trust reasons included)', () => {
   const closed = new Set([...NET_CODES, ...STATUS_REASONS, ...ROUTE_CODES, ...TRUST_REASONS])
-  assert.ok(Object.keys(FINDINGS_WIN32).length === 23, 'the §10.4 rows (held row-by-row by topology-win32.test.mjs)')
+  assert.ok(Object.keys(FINDINGS_WIN32).length === 24, 'the §10.4 rows (held row-by-row by topology-win32.test.mjs; forwarder-download-failed joined with D44)')
   for (const code of Object.keys(FINDINGS_WIN32)) assert.ok(closed.has(code), `${code} is in a closed set`)
   assert.deepEqual([...FINDING_CODES].sort(), [...new Set([...Object.keys(FINDINGS), ...Object.keys(FINDINGS_WIN32), ...TRUST_REASONS, ...ROUTE_TRUST_REASONS])].sort(), 'the union, nothing defined that the doctor cannot name')
 })
