@@ -336,13 +336,18 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
     onPlan(plan)
     const m = openManifest({ dir, plan, now, fs })
     const { manifest, final, written } = await writeInstall({ dir, home, plan, m, osName: opts.osName, harnesses: opts.harnesses, freePort: opts.freePort || freeEnginePort, now, fs })
-    let unitFailed = null
+    let unitFailed = null, unitEvent = null
     if (opts.unit) {
       const r = opts.unit.enable()
-      if (r.code !== 0) unitFailed = `${opts.unit.path} is written but "systemctl --user enable --now" failed (${r.err || `exit ${r.code}`}); start the daemon with "${DAEMON_CMD}", or enable the unit once systemd --user runs`
+      if (r.code !== 0) {
+        // the flip checklist ③ (4.9 §4 末): an arch whose enable() carries its own failure record (the darwin LaunchAgent: `launchd-register-failed`, launchctl wording —
+        // launchd is the only autostart there, 4.9 §12) has THAT recorded verbatim, not the systemd-shaped remediation below replacing it.
+        if (r.event) { unitEvent = r.event; unitFailed = r.event.reason }
+        else unitFailed = `${opts.unit.path} is written but "systemctl --user enable --now" failed (${r.err || `exit ${r.code}`}); start the daemon with "${DAEMON_CMD}", or enable the unit once systemd --user runs`
+      }
     }
     const put = noteRun({ dir, run, final, written, notes: final.notes, fs })
-    if (unitFailed) { final.notes.push(unitFailed); put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed }) }
+    if (unitFailed) { final.notes.push(unitFailed); put(unitEvent || { event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed }) }
     const counts = { entries: manifest.entries.length, files: manifest.files.filter((f) => f.role === 'trust-file').length, notes: final.notes.length }
     put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome: 'installed', counts, reason: `installed: ${counts.entries} trust entr${counts.entries === 1 ? 'y' : 'ies'} and ${counts.files} trust file(s) written, ${counts.notes} note(s)` })
     return { already: false, manifest, plan: final }
@@ -517,12 +522,18 @@ export async function turnOn(opts = {}) {
         const rr = autostart ? unit.enable({ now: !was.up }) : (was.up ? null : unit.start())
         started = !was.up
         if (rr && rr.code !== 0) {
-          unitFailed = `${unit.path} is written but "systemctl --user ${autostart ? `enable${was.up ? '' : ' --now'}` : 'start'}" failed (${rr.err || `exit ${rr.code}`}); start the daemon with "${DAEMON_CMD}", or enable the unit once systemd --user runs`
-          notes.push(unitFailed); problems.push(unitFailed); put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed })
+          // the flip checklist ③ (4.9 §4 末): the arch's own failure record, verbatim, when enable() carries one (the darwin LaunchAgent's `launchd-register-failed` —
+          // launchd is the only autostart there, 4.9 §12); the systemd wording below is the answer of an arch that has none.
+          if (rr.event) { unitFailed = rr.event.reason; notes.push(unitFailed); problems.push(unitFailed); put(rr.event) }
+          else {
+            unitFailed = `${unit.path} is written but "systemctl --user ${autostart ? `enable${was.up ? '' : ' --now'}` : 'start'}" failed (${rr.err || `exit ${rr.code}`}); start the daemon with "${DAEMON_CMD}", or enable the unit once systemd --user runs`
+            notes.push(unitFailed); problems.push(unitFailed); put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed })
+          }
         } else if (!was.up) {
           for (let i = 0; i < 60 && !up && !halt; i++) { up = (await probe()).up; if (!up) { await pause(250); checked(() => guard()) } } // an off that lands while the daemon starts is seen within a poll, not after 15 s (R12)
           if (!up && !halt) {
-            const why = `the unit was ${autostart ? 'enabled and started' : 'started'}, but no daemon answers on ${sock}; look at "systemctl --user status ${UNIT_NAME_HINT}" and the board's capture health`
+            const where = osName === 'darwin' ? 'launchctl print gui/$(id -u)/com.asight.collector' : `systemctl --user status ${UNIT_NAME_HINT}` // the autostart's own status question, in the platform's words (4.9 §4: the LaunchAgent, not a systemd unit)
+            const why = `the unit was ${autostart ? 'enabled and started' : 'started'}, but no daemon answers on ${sock}; look at "${where}" and the board's capture health`
             problems.push(why); put({ event: EVENT.failure, where: 'start', code: 'start-failed', reason: why })
           }
         }

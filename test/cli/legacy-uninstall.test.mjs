@@ -19,7 +19,8 @@ const BLOCK = 'atrace desktop capture'
 const ctx = (s, io, { core = null, mac, clock = fakeClock(), deps = {} } = {}) => ({
   io, home: s.home, platform: 'darwin',
   env: { PATH: process.env.PATH, ASIGHT_MIHOMO_SOCK: core ? core.sock : path.join(s.home, 'no-such-mihomo.sock') },
-  deps: { getuid: () => 501, exec: mac.run, run: fakeOpenssl, alive: () => false, procs: async () => [], ms: clock.ms, sleep: clock.sleep, now: () => new Date(clock.ms()), netenv: async () => ({ at: '2026-10-07T00:00:00.000Z', products: [], unknown: [{ reason: 'a test' }] }), ...deps },
+  // hasNewCollector: () => false — the darwin flip (4.9 §4) put darwin on the NEW collector; the old capture's uninstall keeps its tests through the seam (as legacy-platform.test.mjs does)
+  deps: { hasNewCollector: () => false, getuid: () => 501, exec: mac.run, run: fakeOpenssl, alive: () => false, procs: async () => [], ms: clock.ms, sleep: clock.sleep, now: () => new Date(clock.ms()), netenv: async () => ({ at: '2026-10-07T00:00:00.000Z', products: [], unknown: [{ reason: 'a test' }] }), ...deps },
 })
 const freshMac = () => macHome({ block: false, runtime: false, agents: [], steer: false, ca: false, userMain: USER_MAIN })
 const on = async (s, core, mac) => { assert.equal(await runOnCli(['--yes'], ctx(s, fakeIo(), { core, mac })), 0) }

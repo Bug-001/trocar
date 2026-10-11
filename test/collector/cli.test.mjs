@@ -31,7 +31,7 @@ test('cli: `collector status` is the one `asight status` (src/cli/status.mjs: it
   let t = io(); assert.equal(await runCollector(['status'], { env, home, request, ...status, ...t }), 0)
   assert.ok(calls.length >= 1 && calls.every((c) => c[0] === 'GET' && c[1] === '/status' && c[2] === '/run/user/1000/asight/collector.sock'), '`on` and `off` are not here: they run src/cli/on.mjs and src/off/main.mjs, which plan, confirm and write before they ask the daemon anything; status only reads')
   const named = []
-  const t1 = io(); assert.equal(await runCollector(['off', 'claude', '--now'], { env, request, platform: 'darwin', offDeps: { legacyOff: async (argv) => { named.push(argv); return 7 } }, ...t1 }), 7, '`collector off` is `asight off`: the platform without the new collector goes to the legacy hook, with the arguments as typed')
+  const t1 = io(); assert.equal(await runCollector(['off', 'claude', '--now'], { env, request, platform: 'freebsd', offDeps: { legacyOff: async (argv) => { named.push(argv); return 7 } }, ...t1 }), 7, '`collector off` is `asight off`: the platform without the new collector goes to the legacy hook, with the arguments as typed (darwin ran the new off since the 4.9 §4 flip)')
   assert.deepEqual(named, [['claude', '--now']])
   const t2 = io(); assert.equal(await runCollector(['off', '--bogus'], { env, request, platform: 'linux', ...t2 }), 2, 'and its usage errors are `asight off`\'s: exit 2')
   assert.match(t2.e.join('\n'), /asight off: unknown option --bogus/)
@@ -109,24 +109,27 @@ test('cli: start stops on SIGHUP like SIGTERM, passes the signal to stop, exits 
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })
 
-// `collector start` is `asight daemon` (1.6 §2 hidden alias; the autostart units written before the rename run it): refused as root and where the new collector does not exist (now neither linux nor win32: darwin), before the daemon is asked for anything
-test('cli: `collector start` is `asight daemon` (src/cli/daemon.mjs): it refuses root and a platform without the new collector (本平台未实现) and any argument, starts nothing then, and — the flip (plan 9(b)) — win32 passes the gate and starts the daemon (R4, R7)', async () => {
+// `collector start` is `asight daemon` (1.6 §2 hidden alias; the autostart units written before the rename run it): refused as root and where the new collector does not exist (now neither linux, win32 nor darwin: freebsd), before the daemon is asked for anything
+test('cli: `collector start` is `asight daemon` (src/cli/daemon.mjs): it refuses root and a platform without the new collector (本平台未实现) and any argument, starts nothing then, and — the flips (plan 9(b), then 4.9 §4) — win32 and darwin pass the gate and start the daemon (R4, R7)', async () => {
   const home = tmpDir('asight-cli-daemon-')
   const started = []
   const daemon = { startDaemon: async () => { started.push(1); return { port: 1, socketPath: '/s', stop: async () => ({ failed: [] }) } } }
   const run = (verb, o = {}) => { const t = io(); return runCollector(verb, { home, env: {}, daemon, proc: { on() {} }, platform: 'linux', getuid: () => 1000, waitForStop: async () => 'SIGTERM', ...o, ...t }).then((exit) => ({ exit, t })) }
   let r = await run(['start'], { getuid: () => 0 })
   assert.equal(r.exit, 1); assert.match(r.t.e.join('\n'), /用你自己的账号跑/)
-  r = await run(['start'], { platform: 'darwin' })
-  assert.equal(r.exit, 1); assert.match(r.t.e.join('\n'), /本平台未实现\(darwin\)/)
+  r = await run(['start'], { platform: 'freebsd' })
+  assert.equal(r.exit, 1); assert.match(r.t.e.join('\n'), /本平台未实现\(freebsd\)/)
   r = await run(['start', '--now'])
   assert.equal(r.exit, 2); assert.match(r.t.e.join('\n'), /takes no arguments \(--now\)\nusage: asight daemon/)
   assert.deepEqual(started, [], 'none of those got as far as the daemon')
   r = await run(['start'], { platform: 'win32' })
   assert.equal(r.exit, 0, 'the flip (plan 9(b)): win32 passes the hasNewCollector gate')
   assert.deepEqual(started, [1], 'win32 reached startDaemon — the refusal is not win32\'s any more')
+  r = await run(['start'], { platform: 'darwin' })
+  assert.equal(r.exit, 0, 'the flip (4.9 §4): darwin passes the hasNewCollector gate too')
+  assert.deepEqual(started, [1, 1], 'darwin reached startDaemon — the refusal is not darwin\'s any more either')
   r = await run(['start'])
-  assert.equal(r.exit, 0); assert.deepEqual(started, [1, 1]); assert.match(r.t.o.join('\n'), /^asight collector: engine 127\.0\.0\.1:1, control \/s$/, 'the readiness line the lab rig waits for')
+  assert.equal(r.exit, 0); assert.deepEqual(started, [1, 1, 1]); assert.match(r.t.o.join('\n'), /^asight collector: engine 127\.0\.0\.1:1, control \/s$/, 'the readiness line the lab rig waits for')
   const t = io(); const direct = await runDaemonCli([], { io: t, home, env: {}, platform: 'linux', deps: { daemon, proc: { on() {} }, getuid: () => 1000, waitForStop: async () => 'SIGTERM' } })
   assert.equal(direct, 0, '`asight daemon` itself is the same run')
   fs.rmSync(home, { recursive: true, force: true })
@@ -213,9 +216,9 @@ test('cli: install / on go to the one `asight on` (src/cli/on.mjs) with the desc
   seen.length = 0
   t = io(); assert.equal(await runCollector(['install'], { ...base, install: { turnOn: async () => { throw new Error('boom') } }, ...t }), 1, 'a throw is exit 1, said once')
   assert.match(t.e.join('\n'), /boom/)
-  t = io(); assert.equal(await runCollector(['install', '--yes'], { ...base, platform: 'darwin', ...t }), 1, 'a platform without the new collector is not given the Linux install')
+  t = io(); assert.equal(await runCollector(['install', '--yes'], { ...base, platform: 'freebsd', ...t }), 1, 'a platform without the new collector is not given the Linux install')
   const argvs = []
-  const uninstalled = { platform: 'darwin', offDeps: { legacyUninstall: async (argv) => { argvs.push(argv); return 5 } } }
+  const uninstalled = { platform: 'freebsd', offDeps: { legacyUninstall: async (argv) => { argvs.push(argv); return 5 } } }
   t = io(); assert.equal(await runCollector(['uninstall', '--purge-data', '--yes'], { home: '/h', ...uninstalled, ...t }), 5, '`collector uninstall` is `asight uninstall`: the same entry point, the arguments as typed')
   assert.deepEqual(argvs, [['--purge-data', '--yes']])
   t = io(); assert.equal(await runCollector(['uninstall', 'claude-code'], { home: '/h', platform: 'linux', ...t }), 2, 'a harness name is a usage error: uninstall removes asight for every harness')

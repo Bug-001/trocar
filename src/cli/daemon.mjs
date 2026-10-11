@@ -30,7 +30,7 @@ export async function runDaemonCli(argv, { io, env = process.env, home = os.home
   const supervise = argv.length === 1 && argv[0] === '--supervise'
   if (argv.length && !supervise) { io.err(`asight daemon: takes no arguments (${argv.join(' ')})\n${USAGE}`); return EXIT.usage }
   if ((deps.getuid || processUid)() === 0) { io.err('asight daemon: 用你自己的账号跑,不要用 root / sudo(D36)'); return EXIT.incomplete }
-  if (!(deps.hasNewCollector || hasNewCollector)(platform)) { io.err(`asight daemon: 本平台未实现(${platform}):按进程采集器只有 Linux(4.6)和 Windows(4.8)有;本平台旧采集的 on / off 照旧(1.6 §4)`); return EXIT.incomplete }
+  if (!(deps.hasNewCollector || hasNewCollector)(platform)) { io.err(`asight daemon: 本平台未实现(${platform}):按进程采集器只有 Linux(4.6)、Windows(4.8)和 macOS(4.9)有;本平台旧采集的 on / off 照旧(1.6 §4)`); return EXIT.incomplete }
   const proc = deps.proc || process
   const dir = collectorHome(path.join(home, '.asight'))
   if (supervise) { // the supervisor owns no crash records of its own (4.8 §7: stderr only — under conhost --headless, nowhere), so the branch below is untouched

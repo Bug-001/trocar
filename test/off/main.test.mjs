@@ -4,11 +4,14 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import http from 'node:http'
+import os from 'node:os'
 import { runOffCli, resolveOffNames } from '../../src/off/main.mjs'
 import { formatOffReceipt } from '../../src/off/receipt.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { fakeIo, snapshot } from '../cli/fixtures/on-ctx.mjs'
 import { installedHome, flowEvents } from './fixtures/off-ctx.mjs'
+import { tmpDir } from '../helpers/tmp.mjs'
 
 const ctx = (s, io, { deps = {}, platform = 'linux' } = {}) => ({ io, home: s.home, env: s.sh.env, platform, deps: s.offDeps({ getuid: () => 1000, ...deps }) })
 const changedRel = (s, r) => r.changed.map((c) => path.relative(s.home, c.path)).sort()
@@ -46,13 +49,13 @@ test('R7: off as root is refused, nothing is written, nothing is asked of the da
   assert.deepEqual([snapshot(s.home), s.sys.exec.calls.length, s.sys.daemon.calls.filter((c) => c.startsWith('POST /off'))], [before, calls, []])
 })
 
-test('1.6 §4: a platform with no new collector goes to the legacy replacement with the arguments and the resolved names; win32 (the flip, plan 9(b)) runs the NEW off — the undo arms, never legacyOffCli', async () => {
+test('1.6 §4: a platform with no new collector (freebsd now) goes to the legacy replacement with the arguments and the resolved names; darwin (the flip, 4.9 §4) runs the NEW off — the undo arms, never legacyOffCli', async () => {
   const s = await installedHome({ names: ['claude-code'] })
   const seen = []
-  assert.equal(await runOffCli(['--now', 'claude'], ctx(s, fakeIo(), { platform: 'darwin', deps: { legacyOff: async (argv, c) => { seen.push([argv, c.ids]); return 0 } } })), 0)
+  assert.equal(await runOffCli(['--now', 'claude'], ctx(s, fakeIo(), { platform: 'freebsd', deps: { legacyOff: async (argv, c) => { seen.push([argv, c.ids]); return 0 } } })), 0)
   assert.deepEqual(seen, [[['--now', 'claude'], ['claude-code']]])
   const io = fakeIo()
-  assert.equal(await runOffCli([], ctx(s, io, { platform: 'win32', deps: { legacyOff: async () => { throw new Error('win32 must not run the legacy off any more') } } })), 0, io.text())
+  assert.equal(await runOffCli([], ctx(s, io, { platform: 'darwin', deps: { legacyOff: async () => { throw new Error('darwin must not run the legacy off any more') } } })), 0, io.text())
   assert.match(io.stdoutText(), /^asight 已关闭采集。/, 'the NEW off ran and printed its receipt')
   assert.match(io.stdoutText(), /~\/\.claude\/settings\.json +去掉 env\.NODE_EXTRA_CA_CERTS/, 'the undo arms ran: the entry came out of the user\'s file')
   assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"exit":true}'], 'an arm only the new off has: the daemon was told to drain and exit')
@@ -113,4 +116,36 @@ test('the standalone asight-off passes no io: the process\'s own stdout and stde
   process.stderr.write = (chunk) => { written.push(String(chunk)); return true }
   try { assert.equal(await runOffCli(['--bogus']), 2) } finally { process.stderr.write = real }
   assert.match(written.join(''), /asight off: unknown option --bogus/)
+})
+
+// the flip's seam 2 (4.9 §4): runOffCli threads ITS platform into runOff's deps, so offWorld runs the arm the CLI was told — not the host's. Pre-flip a Linux
+// sandbox on a Mac host silently ran the darwin arms (the gap surfaced when the darwin arm started asking launchctl). The observable that pins it on ANY
+// host: win32's control.json — its socket AND its token are a win32-arm thing (offWorld reads control.json only there); without the threading the host's
+// arm asks the lock's socket with no token at all.
+test('the flip\'s platform threading: runOffCli\'s platform is offWorld\'s — the win32 arm (control.json\'s socket and token), not the host\'s', async () => {
+  const home = tmpDir('asight-off-cli-plat-')
+  const dir = path.join(home, '.asight', 'collector')
+  fs.mkdirSync(dir, { recursive: true })
+  // the socket lives in its own SHORT directory: a unix socket path must stay under macOS's 104-byte sun_path, and the run-private TMPDIR is deep
+  const shortDir = fs.mkdtempSync(path.join(os.tmpdir(), 'a-'))
+  const sock = path.join(shortDir, 'sock')
+  const token = 'e'.repeat(64)
+  const asked = []
+  const server = http.createServer((req, res) => { asked.push([req.method, req.url, req.headers['x-asight-token']]); res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ pid: 4242, confirmed: true })) })
+  try {
+    await new Promise((resolve) => server.listen(sock, resolve))
+    fs.writeFileSync(path.join(dir, 'control.json'), JSON.stringify({ path: sock, token }))
+    const lockFile = path.join(dir, 'lock')
+    fs.writeFileSync(lockFile, JSON.stringify({ pid: 4242, start_time: '111', boot_id: 'boot-1', socket: sock, engine_port: 47123 }) + '\n')
+    // one installed harness, so the off actually runs its steps (the routing switch is where the daemon is asked)
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true })
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), '{"env":{"NODE_EXTRA_CA_CERTS":"/x/asight.pem"}}\n')
+    fs.writeFileSync(path.join(dir, 'install-manifest.json'), JSON.stringify({ version: 2, entries: [{ kind: 'json-key', harness: 'claude-code', path: path.join(home, '.claude', 'settings.json'), keys: ['env', 'NODE_EXTRA_CA_CERTS'], backup: null }], files: [] }) + '\n')
+    const io = fakeIo()
+    // deps carries NO platform of its own — the CLI's platform must be what offWorld uses (a test's deps.platform still wins; that half is every other test here)
+    const exit = await runOffCli(['claude-code'], { io, home, env: { HOME: home }, platform: 'win32', deps: { getuid: () => 1000, procs: async () => [], alive: () => false, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), sleep: async () => {}, fs, exec: (file) => ({ status: 0, stdout: file === 'whoami' ? 'alice' : '', stderr: '' }) } }) // exec answers the arm's own reads (whoami); nothing it stubs ever runs for real
+    assert.ok(asked.length > 0, 'the daemon was asked through the socket control.json names')
+    assert.ok(asked.every(([, , t]) => t === token), `every request carried control.json's token — the win32 arm ran (${JSON.stringify(asked)})`)
+    assert.ok([0, 1].includes(exit), `the off ran to its end: ${io.text()}`)
+  } finally { await new Promise((resolve) => server.close(resolve)); fs.rmSync(shortDir, { recursive: true, force: true }) }
 })

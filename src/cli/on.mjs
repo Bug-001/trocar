@@ -3,9 +3,10 @@
 // the autostart unit, the control socket), decides how a confirmation is asked, and prints the plan and the receipt. Everything the world gives is a
 // `deps` entry a test replaces (0.1 §3): `parts` (the descriptors, `scan`, `match`, the arch), `exec` (the runner of OS tools: spawnSync-shaped),
 // `request` (the control socket), `helperState`, `linger` / `lingerRead`, `now`, `freePort`, `sleep`, `roots`, `user`, `getuid`, `fs`, `script`, and `legacyOn` — the
-// replacement of what a platform without the new collector (macOS: 1.6 §4) runs instead: legacyOnCli, src/capture/legacy-on.mjs.
+// replacement of what a platform without the new collector (freebsd and the rest: 1.6 §4) runs instead: legacyOnCli, src/capture/legacy-on.mjs.
 // Exit codes (R4): 0 done · 1 not done or a problem · 2 usage error / not in a terminal without --yes (nothing touched).
 import os from 'node:os'
+import tls from 'node:tls'
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { resolveHarnesses } from './harness-names.mjs'
@@ -60,7 +61,7 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
   if (!named.ok) { io.err(`asight on: unknown harness ${named.unknown.join(', ')}; the names are: ${named.known.join(', ')}`); return EXIT.usage }
   const json = flags.has('--json')
   const say = json ? io.err : io.out // stdout holds the one JSON in --json mode (R5); warnings and the plan go to stderr
-  if (!hasNewCollector(platform)) { // 1.6 §4: no new collector here: `on` drives the old capture (src/capture/legacy-on.mjs)
+  if (!(deps.hasNewCollector || hasNewCollector)(platform)) { // 1.6 §4: no new collector here: `on` drives the old capture (src/capture/legacy-on.mjs); deps.hasNewCollector is the seam the old capture's own tests inject (the darwin flip, 4.9 §4)
     if (optIn.length) { io.err('asight on: --opt-in needs the new collector; on this platform `on` drives the old capture, which has no opt-in items (1.6 §4)'); return EXIT.usage }
     return (deps.legacyOn || legacyOnCli)(argv, { io, env, home, platform, deps, ids: named.ids })
   }
@@ -157,9 +158,15 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
       // a dry run prints the plan and exits 0; the stop a real run would meet is in the receipt (R6, V7)
       prep.blocked = line
     }
+    // The OS roots of an arch that READS them instead of naming one file (the flip checklist ②, 4.9 §4 末 — daemon.mjs's daily rebuild has its arm already): without this the
+    // FIRST install's combined bundles are composed with an empty `osText`, and a replace-semantics entry (Codex's SSL_CERT_FILE) silently cuts the agent off its relay until the
+    // next daily rebuild. The arm is not darwin's alone: it is any arch with `osRoots` set and `osRootsFile` unset (today only darwin, whose union is the keychain-administered
+    // anchors ∪ Node's bundled ∪ Apple's SystemRootCertificates, 4.9 §6.2) — another arch reaching here gets the same service for free. A read that fails entirely stops the on
+    // before one file of the agents' is touched (D38: a bundle quietly missing the enterprise roots is the bug this wiring exists to close); `deps.roots` overrides it, as ever.
+    const archOsRoots = !deps.roots && !parts.osRootsFile && parts.arch && typeof parts.arch.osRoots === 'function' ? await parts.arch.osRoots() : null
     let { receipt, exit, plan } = await install.turnOn({
       home, env, ids: named.ids, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, osRootsFile: parts.osRootsFile || null,
-      roots: deps.roots || null, unit, autostart, freePort: deps.freePort, dryRun: flags.has('--dry-run'), confirm,
+      roots: deps.roots || (archOsRoots ? { node: [...tls.rootCertificates], osText: archOsRoots.pem } : null), unit, autostart, freePort: deps.freePort, dryRun: flags.has('--dry-run'), confirm,
       optIn, optInHooks,
       networkEdited: async (targets) => editedFields({ adoption, routing, targets, home, env, fs: deps.fs }),
       onPlan: (p) => say(planText(p)),

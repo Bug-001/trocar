@@ -202,13 +202,15 @@ test('on: refused as root (R7), with the helper missing it writes nothing and sa
   assert.match(io.text(), /sudo asight setup-helper/)
   assert.deepEqual(snapshot(home), before, 'nothing written, not even the manifest')
   const seen = []
-  io = fakeIo(); const ctx = onCtx(home, io, { deps: { legacyOn: async (argv) => { seen.push(argv); return 0 } } }); ctx.platform = 'darwin'
+  io = fakeIo(); const ctx = onCtx(home, io, { deps: { legacyOn: async (argv) => { seen.push(argv); return 0 } } }); ctx.platform = 'freebsd'
   assert.equal(await runOnCli(['--yes'], ctx), 0); assert.deepEqual(seen, [['--yes']])
-  // the flip (plan 9(b)): win32 is a new-collector platform — with no hook and no terminal the NEW on runs: its plan, then a yes is needed; nothing is touched
-  io = fakeIo(); const bare = onCtx(home, io); bare.platform = 'win32'; delete bare.deps.legacyOn
-  assert.equal(await runOnCli([], bare), 2)
-  assert.match(io.text(), /asight on 将写或改下面这些文件/, 'the new collector\'s plan, not a refusal')
-  assert.ok(!/本平台未实现|驱动旧采集/.test(io.text()), 'win32 is not told it has no collector any more')
+  // the flips (plan 9(b), then 4.9 §4): win32 and darwin are new-collector platforms — with no hook and no terminal the NEW on runs: its plan, then a yes is needed; nothing is touched
+  for (const platform of ['win32', 'darwin']) {
+    io = fakeIo(); const bare = onCtx(home, io); bare.platform = platform; delete bare.deps.legacyOn
+    assert.equal(await runOnCli([], bare), 2, `${platform}: ${io.text()}`)
+    assert.match(io.text(), /asight on 将写或改下面这些文件/, `${platform}: the new collector's plan, not a refusal`)
+    assert.ok(!/本平台未实现|驱动旧采集/.test(io.text()), `${platform} is not told it has no collector any more`)
+  }
   assert.deepEqual(snapshot(home), before)
 })
 

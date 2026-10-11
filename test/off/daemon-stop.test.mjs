@@ -99,7 +99,7 @@ test('daemonState tries the socket the lock names when the runtime directory has
 test('stopDaemon with a unit: systemctl stop first, which stops it; then reset-failed and is-active; no signal is sent', async () => {
   const t = table(UP); const c = clock()
   const sd = systemd({ onStop: () => { t.live.delete(4242); t.live.delete(4243) } })
-  const r = await stopDaemon({ lockFile: lockAt(DAEMON), exec: sd.run, kill: t.kill, alive: t.alive, identity: t.identity, isHelper: t.isHelper, unitManaged: true, now: c.now, sleep: c.sleep })
+  const r = await stopDaemon({ lockFile: lockAt(DAEMON), exec: sd.run, kill: t.kill, alive: t.alive, identity: t.identity, isHelper: t.isHelper, unitManaged: true, platform: 'linux', now: c.now, sleep: c.sleep }) // platform said out loud: the default is the machine's own, and on a Mac that is darwin — a platform with its own arm since the flip checklist ① (4.9 §4)
   assert.deepEqual(sd.calls, ['systemctl --user stop asight-collector.service', 'systemctl --user reset-failed asight-collector.service', 'systemctl --user is-active asight-collector.service'])
   assert.deepEqual([r.stopped, r.how, r.pid, r.signals, t.sent], [true, 'systemctl', 4242, ['systemctl-stop'], []])
 })
@@ -118,7 +118,7 @@ test('stopDaemon with no unit: SIGTERM, and when it ignores it SIGKILL after ter
 test('a unit that cannot stop a stuck daemon (systemctl stop times out): the signals follow; the lock\'s pid is stopped by SIGTERM and SIGKILL after the wait (V30\'s stopped daemon)', async () => {
   const t = table(UP, { ignoreTerm: [4242] }); const c = clock()
   const sd = systemd({ stopTimesOut: true })
-  const r = await stopDaemon({ lockFile: lockAt(DAEMON), exec: sd.run, kill: t.kill, alive: t.alive, identity: t.identity, isHelper: t.isHelper, unitManaged: true, now: c.now, sleep: c.sleep })
+  const r = await stopDaemon({ lockFile: lockAt(DAEMON), exec: sd.run, kill: t.kill, alive: t.alive, identity: t.identity, isHelper: t.isHelper, unitManaged: true, platform: 'linux', now: c.now, sleep: c.sleep })
   assert.deepEqual(r.signals, ['systemctl-stop', 'SIGTERM', 'SIGKILL', 'SIGTERM'])
   assert.deepEqual([r.stopped, r.how], [true, 'signal'])
   assert.equal(sd.calls.at(-1), 'systemctl --user is-active asight-collector.service')
@@ -150,7 +150,7 @@ test('a daemon that cannot be told from another process (the lock has no start t
 test('a unit systemd still reports active or activating is not "stopped", and a daemon that survives SIGKILL is said with the signals tried', async () => {
   const t = table(UP); const c = clock()
   const sd = systemd({ active: 'activating', onStop: () => { t.live.delete(4242); t.live.delete(4243) } })
-  const r = await stopDaemon({ lockFile: lockAt(DAEMON), exec: sd.run, kill: t.kill, alive: t.alive, identity: t.identity, isHelper: t.isHelper, unitManaged: true, now: c.now, sleep: c.sleep })
+  const r = await stopDaemon({ lockFile: lockAt(DAEMON), exec: sd.run, kill: t.kill, alive: t.alive, identity: t.identity, isHelper: t.isHelper, unitManaged: true, platform: 'linux', now: c.now, sleep: c.sleep })
   assert.equal(r.stopped, false); assert.match(r.error, /is-active asight-collector\.service says activating/)
   const wedged = { ...table(UP), kill: (pid, sig) => wedged.sent.push([pid, sig]) } // survives everything (D state)
   wedged.sent = []; const c2 = clock()

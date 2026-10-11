@@ -2,9 +2,10 @@
 // 4.6 §控制面 `lock`). `asight off`, `asight uninstall` and the standalone `asight-off` ask first and stop only a daemon that does not answer
 // (off) or has to go (uninstall); a daemon that answers is asked to switch off through its control socket instead (orchestrate.mjs).
 //   daemonState   judges from the `lock` file (written at start, its mtime refreshed every second) and the control socket
-//   stopDaemon    `systemctl --user stop asight-collector` when the autostart unit manages it, else SIGTERM, then SIGKILL after `termWaitMs`; the pid's
-//                 identity (the lock's start_time and boot_id) is checked before EVERY signal, so a lock that names a reused pid kills nothing; the
-//                 helper (lock.helper_pid) goes with it when it is still there and is the helper; then `reset-failed` and `is-active`
+//   stopDaemon    `systemctl --user stop asight-collector` when the autostart unit manages it (Linux), else SIGTERM, then SIGKILL after `termWaitMs`; on darwin the LaunchAgent is
+//                 booted out FIRST when the plist manages it (launchd's KeepAlive would pull a stopped daemon right back, 4.9 §4), then the signals; on win32 the supervisor
+//                 parent first, then the daemon, through taskkill. The pid's identity (the lock's start_time and boot_id) is checked before EVERY signal, so a lock that names a
+//                 reused pid kills nothing; the helper (lock.helper_pid) goes with it when it is still there and is the helper; then `reset-failed` and `is-active` (Linux)
 //   helperGone    the link of this instance is the helper's (unpinned when it exits): "the helper is gone" is "no link"
 // The lock reader is src/health/read.mjs lockState, written here too (src/off imports nothing outside itself, 0.1 §2); test/off/daemon-stop.test.mjs
 // holds the two to the same answers. Imports only node:* and src/off.
@@ -14,6 +15,7 @@ import { execTool } from './exec.mjs'
 import { controlRequest } from './control-client.mjs'
 import { procIdentity, pidAlive, readArgv, readExe } from './proc.mjs'
 import { UNIT_FILE_NAME } from './autostart.mjs'
+import { AGENT_LABEL, agentState } from './darwin.mjs'
 
 /** A lock not refreshed for this long belongs to a daemon that does not run its timers: unresponsive (4.6 §Linux 机制, same as src/health LOCK_FRESH_MS). */
 export const DAEMON_LOCK_FRESH_MS = 5000
@@ -186,6 +188,7 @@ export async function stopDaemon({ lockFile, socketPath = null, exec = null, kil
   const signals = []
   const problems = []
   let how = 'none'
+  let agentStillManaged = false // darwin: the bootout did not happen or failed, so launchd's KeepAlive may still restart the daemon
   if (L.state === 'unknown') problems.push(`${L.error}, so which process to stop is not known`)
   const same = (pid) => { // the lock's pid is still the process the lock was written for?
     const id = identity(pid) || {}
@@ -196,7 +199,18 @@ export async function stopDaemon({ lockFile, socketPath = null, exec = null, kil
   const send = (pid, signal) => { try { kill(pid, signal) } catch (e) { if (e && e.code === 'ESANDBOX') throw e; if (!e || e.code !== 'ESRCH') problems.push(`${signal} to pid ${pid} failed (${String((e && e.code) || (e && e.message) || e)})`) } signals.push(signal) }
   const daemonUp = () => !!lock && Number.isInteger(lock.pid) && alive(lock.pid) && same(lock.pid) !== 'other'
 
-  if (unitManaged) { // systemd then knows it is meant to be down and does not bring it back (Restart=on-failure)
+  if (unitManaged && platform === 'darwin') { // launchd owns the restart (KeepAlive really does pull a killed daemon back, 4.9 §4): the agent is booted out of the session
+    // BEFORE any signal, so what is stopped stays stopped. The plist stays in ~/Library/LaunchAgents — the next login brings the job back, the same temporary
+    // stop `systemctl --user stop` is on Linux; the full undo (bootout AND the plist) is a no-names off's step 5 (src/off/darwin.mjs undoAutostart).
+    const uid = typeof process.getuid === 'function' ? process.getuid() : -1
+    const q = agentState({ exec, env, uid })
+    if (q.state === 'present') {
+      const r = execTool('launchctl', ['bootout', `gui/${uid}`, AGENT_LABEL], { run: exec, env })
+      if (r.code === 0) { signals.push('launchctl-bootout'); how = 'launchctl' }
+      else { agentStillManaged = true; problems.push(`launchctl bootout of ${AGENT_LABEL} failed (${r.code === null ? r.err || 'it did not run' : `exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''}`}); launchd's KeepAlive may bring the daemon back`) }
+    } else if (q.state === 'unknown') { agentStillManaged = true; problems.push(`whether the LaunchAgent is loaded is not known (${q.err}); nothing was booted out on a guess, and launchd's KeepAlive may bring the daemon back`) }
+    // absent: nothing to boot out — the daemon was not started by the agent (a `--no-autostart` run, or the session ended)
+  } else if (unitManaged) { // systemd then knows it is meant to be down and does not bring it back (Restart=on-failure)
     execTool('systemctl', ['--user', 'stop', UNIT_FILE_NAME], { run: exec, env, timeoutMs: termWaitMs })
     signals.push('systemctl-stop'); how = 'systemctl'
   }
@@ -217,7 +231,8 @@ export async function stopDaemon({ lockFile, socketPath = null, exec = null, kil
     if (up()) { send(lock.helper_pid, 'SIGKILL'); await waitGone(up, 2000) }
   }
   let unitUp = false
-  if (unitManaged) {
+  if (unitManaged && platform === 'darwin') unitUp = agentStillManaged
+  else if (unitManaged) {
     execTool('systemctl', ['--user', 'reset-failed', UNIT_FILE_NAME], { run: exec, env })
     const a = execTool('systemctl', ['--user', 'is-active', UNIT_FILE_NAME], { run: exec, env })
     unitUp = a.out === 'active' || a.out === 'activating'

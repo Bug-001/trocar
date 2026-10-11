@@ -1,4 +1,6 @@
-// test/cli/legacy-platform.test.mjs — `asight on | off | status` where there is no new collector (RFC 1.6 §4 「旧采集(过渡期)」; macOS today): the old capture is what they drive. V12 (com.asight.env goes with
+// test/cli/legacy-platform.test.mjs — the OLD CAPTURE's `asight on | off | status` (RFC 1.6 §4 「旧采集(过渡期)」). Pre-flip this was every darwin run; the darwin flip (4.9 §4) put
+// darwin on the NEW collector, so this suite drives the old capture through the hasNewCollector: () => false seam of its ctx builders — the old capture stays live on real Macs until
+// D39⑥ retires it (the machine's MA group first), so its behaviors keep their tests. V12 (com.asight.env goes with
 // the old capture, and only its own value of the login environment), V14 (the note, the macOS row of §4 call for call), V23 (the Clash route: ledgered, stripped, READ BACK from the core — also when only
 // the runtime holds it; a core that does not answer is exit 1 and 「不知道」; a block an old command wrote is 「旧命令装的,无备份」), V31 (the MITM is unloaded only after the route is confirmed gone, and drains).
 // A sandbox HOME, a fake launchd / login environment / keychain, a Clash core on a real unix socket (test/cli/fixtures/legacy-ctx.mjs); nothing reaches the machine the tests run on (0.1 §3).
@@ -35,7 +37,7 @@ const BLOCK = 'atrace desktop capture'
 const offCtx = (s, io, { core = null, mac, clock = fakeClock(), deps = {}, env = {} } = {}) => ({
   io, home: s.home, platform: 'darwin',
   env: { PATH: process.env.PATH, ASIGHT_MIHOMO_SOCK: core ? core.sock : path.join(s.home, 'no-such-mihomo.sock'), ...env },
-  deps: { getuid: () => 501, exec: mac.run, alive: () => false, procs: async () => [], ms: clock.ms, sleep: clock.sleep, now: () => new Date(clock.ms()), ...deps },
+  deps: { hasNewCollector: () => false, getuid: () => 501, exec: mac.run, alive: () => false, procs: async () => [], ms: clock.ms, sleep: clock.sleep, now: () => new Date(clock.ms()), ...deps }, // the seam, as onCtx's (the darwin flip, 4.9 §4)
 })
 const launchCalls = (mac) => mac.calls.filter((c) => /^(launchctl|security) /.test(c))
 
@@ -448,7 +450,9 @@ test('1.6 §4 (Linux): with no old capture there is nothing to undo — off writ
 const onCtx = (s, io, { core = null, mac, deps = {}, env = {} } = {}) => ({
   io, home: s.home, platform: 'darwin',
   env: { PATH: process.env.PATH, ASIGHT_MIHOMO_SOCK: core ? core.sock : path.join(s.home, 'no-such-mihomo.sock'), ...env },
-  deps: { getuid: () => 501, exec: mac.run, run: fakeOpenssl, netenv: async () => ({ at: '2026-10-07T00:00:00.000Z', products: [], unknown: [{ reason: 'a test: no VPN probe runs here' }] }), now: () => new Date('2026-10-07T03:00:00.000Z'), ...deps },
+  // hasNewCollector: () => false — the darwin flip (4.9 §4) put darwin on the NEW collector, so the old capture's own tests drive it through the seam
+  // (daemon.mjs's pattern); the old capture stays live on real Macs until D39⑥ retires it, the machine's MA group first, so this suite keeps its teeth.
+  deps: { hasNewCollector: () => false, getuid: () => 501, exec: mac.run, run: fakeOpenssl, netenv: async () => ({ at: '2026-10-07T00:00:00.000Z', products: [], unknown: [{ reason: 'a test: no VPN probe runs here' }] }), now: () => new Date('2026-10-07T03:00:00.000Z'), ...deps },
 })
 const freshMac = (o = {}) => macHome({ block: false, runtime: false, agents: [], steer: false, ca: false, userMain: USER_MAIN, ...o })
 const ledgerOf = (s) => JSON.parse(fs.readFileSync(path.join(s.home, '.asight', 'legacy-manifest.json'), 'utf8'))
@@ -743,7 +747,7 @@ test('V40 (wiring): the web switch\'s own `asight off` — asightOffInProcess �
 const statusCtx = (s, io, { core = null, mac, deps = {}, platform = 'darwin' } = {}) => ({
   io, home: s.home, platform,
   env: { PATH: process.env.PATH, ASIGHT_MIHOMO_SOCK: core ? core.sock : path.join(s.home, 'no-such-mihomo.sock') },
-  deps: { exec: mac.run, netenv: async () => ({ at: '2026-10-07T00:00:00.000Z', products: [], unknown: [{ reason: 'a test: no VPN probe runs here' }] }), ...deps },
+  deps: { hasNewCollector: () => false, exec: mac.run, netenv: async () => ({ at: '2026-10-07T00:00:00.000Z', products: [], unknown: [{ reason: 'a test: no VPN probe runs here' }] }), ...deps }, // the seam, as onCtx's (the darwin flip, 4.9 §4)
 })
 const statusJson = async (s, ctx) => { const io = fakeIo(); const exit = await runStatusCli(['--json'], { ...ctx, io }); return { exit, j: io.json() } }
 const NOT_NETENV = (f) => f !== '.asight/netenv.json' // the board's copy of the VPN probe is the one file status may write (src/netenv)

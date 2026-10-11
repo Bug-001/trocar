@@ -154,9 +154,11 @@ const SPEC_12_FAILURES = [
   ['ingress-auth-failed', 'ingress'], ['ingress-unknown', 'ingress'], ['engine-port-taken', 'ingress'], ['upstream-unavailable', 'ingress'],
   ['fallback-active', 'routing'],
   ['forwarder-start-failed', 'forwarder'], ['forwarder-restart', 'forwarder'], ['forwarder-digest-mismatch', 'forwarder'], ['forwarder-binary-missing', 'forwarder'],
+  ['gatekeeper', 'forwarder'], // 4.9 §12: the darwin kernel precheck's non-digest half
   ['optin-failed', 'optin'],
   ['socktable-unavailable', 'helper'], ['helper-start-failed', 'helper'],
-  ['task-register-failed', 'install'], ['elevated-token', 'start'],
+  ['task-register-failed', 'install'], ['launchd-register-failed', 'install'], // the darwin autostart (4.9 §12)
+  ['elevated-token', 'start'], ['root-token', 'start'], // elevated-token's darwin name (4.9 §12)
 ] // every row of the §12 table is the class 失败
 // the names §12 says it does not define again: 1.6 §9.7 (`NET_*`) and 4.7 §5 own them (D43 withdrew the other 4.7 §5 names)
 const SHARED_WITH_NET = ['forwarder-down', 'egress-differs', 'route-loop']

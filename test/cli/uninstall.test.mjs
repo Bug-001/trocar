@@ -352,7 +352,7 @@ test('D38: every line uninstall writes is in the closed sets, one run has one `r
   assert.deepEqual([last.event, last.kind, last.outcome], ['uninstall-note', 'result', 'uninstalled'])
 })
 
-test('uninstall: the arguments — a harness name, an unknown option, root and a platform without the new collector hands over to the hook (R4, R7, 1.6 §4); win32 (the flip, plan 9(b)) runs the NEW uninstall instead', async () => {
+test('uninstall: the arguments — a harness name, an unknown option, root and a platform without the new collector (freebsd now) hands over to the hook (R4, R7, 1.6 §4); win32 and darwin (the flips, plan 9(b) / 4.9 §4) run the NEW uninstall instead', async () => {
   const s = await installedHome({ names: ['claude-code'] }); const snap = snapshot(s.home)
   const name = await cli(s, ['claude-code'])
   assert.deepEqual([name.exit, snapshot(s.home)], [2, snap])
@@ -362,15 +362,17 @@ test('uninstall: the arguments — a harness name, an unknown option, root and a
   const root = await cli(s, [], { deps: { getuid: () => 0 } })
   assert.deepEqual([root.exit, snapshot(s.home)], [1, snap]); assert.match(root.io.stderrText(), /不要用 root \/ sudo/)
   const hooked = []
-  const mac = await cli(s, ['--yes'], { platform: 'darwin', deps: { legacyUninstall: async (argv) => { hooked.push(argv); return 4 } } })
-  assert.deepEqual([mac.exit, hooked, snapshot(s.home)], [4, [['--yes']], snap])
+  const bsd = await cli(s, ['--yes'], { platform: 'freebsd', deps: { legacyUninstall: async (argv) => { hooked.push(argv); return 4 } } })
+  assert.deepEqual([bsd.exit, hooked, snapshot(s.home)], [4, [['--yes']], snap])
   // without the hook a platform without the new collector runs the old capture's own uninstall: test/cli/legacy-uninstall.test.mjs
-  // the flip (plan 9(b), 1.6 §4): win32 no longer goes there — it runs the NEW uninstall (the receipt is the new one's), and the legacy hook is not what runs
-  const w = await installedHome({ names: ['claude-code'] })
-  const win = await cli(w, ['--yes'], { platform: 'win32', deps: { legacyUninstall: async () => { throw new Error('win32 must not run the legacy uninstall any more') } } })
-  assert.equal(win.exit, 0, win.io.text())
-  assert.match(win.io.stdoutText(), /^asight 已卸载\(本用户\)。/, 'the NEW uninstall ran')
-  assert.equal(fs.existsSync(path.join(w.dir, 'install-manifest.json')), false, 'and finished: asight\'s own files are gone')
+  // the flips (plan 9(b), then 4.9 §4): win32 and darwin no longer go there — each runs the NEW uninstall (the receipt is the new one's), and the legacy hook is not what runs
+  for (const platform of ['win32', 'darwin']) {
+    const w = await installedHome({ names: ['claude-code'] })
+    const r = await cli(w, ['--yes'], { platform, deps: { legacyUninstall: async () => { throw new Error(`${platform} must not run the legacy uninstall any more`) } } })
+    assert.equal(r.exit, 0, `${platform}: ${r.io.text()}`)
+    assert.match(r.io.stdoutText(), /^asight 已卸载\(本用户\)。/, `${platform}: the NEW uninstall ran`)
+    assert.equal(fs.existsSync(path.join(w.dir, 'install-manifest.json')), false, `${platform}: and finished: asight\'s own files are gone`)
+  }
 })
 
 test('formatUninstallReceipt: not done says so and what to do; the entries left and the problems are named; a kept bundle is said', () => {

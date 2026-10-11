@@ -21,9 +21,9 @@ import { readManifestAt, saveManifestAt } from './manifest.mjs'
 import { listProcs, pidAlive } from './proc.mjs'
 import { makeClash, stripBlock, stripRuntime, stripMergeLegacy, SCRIPT_BEGIN, PROXY_NAME } from './clash.mjs'
 
-/** Does this platform have the new per-process collector? Linux (4.6) and Windows (4.8; the flip of plan Task 9(b)). One function, used everywhere the branch is taken: where it is false `on` / `off` /
+/** Does this platform have the new per-process collector? Linux (4.6), Windows (4.8) and macOS (4.9; the flip checklist of 4.9 §4 — the old capture retires per D39⑥, the machine's MA group first). One function, used everywhere the branch is taken: where it is false `on` / `off` /
  *  `status` / `uninstall` drive the old capture. */
-export const hasNewCollector = (platform = process.platform) => platform === 'linux' || platform === 'win32'
+export const hasNewCollector = (platform = process.platform) => platform === 'linux' || platform === 'win32' || platform === 'darwin'
 
 /** The line `on` and `off` print first where they drive the old capture (1.6 §4). */
 export const LEGACY_NOTE = '本平台 on / off 驱动旧采集(过渡期)'
@@ -527,7 +527,10 @@ export function ownCaPaths(art, home) {
 /** `undoLegacy` as the `legacyUndo` hook of `asight off` / `asight uninstall` on Linux, in the shape of their receipts (src/off/orchestrate.mjs, src/cli/uninstall.mjs): the CC steer and the NSS CA
  *  that an old command left there. It writes nothing when there is nothing (a run of `off` that has no old capture to undo must not leave a file). */
 export async function legacyUndoHook(ctx = {}) {
-  const r = await undoLegacy({ home: ctx.home, platform: 'linux', exec: ctx.exec || null, fs: ctx.fs || nodeFs, env: ctx.env || process.env, now: ctx.now || null })
+  // the platform comes from the caller (off / uninstall pass their own, which a test's deps.platform gives): pre-flip this hook only ever
+  // ran on Linux, but the darwin flip (4.9 §4) made darwin an `off` / `uninstall` platform too — and its old capture (the Clash block, the
+  // LaunchAgents, the keychain CA) is undone by the darwin arms, not the Linux ones. Falls back to the process's own, as undoLegacy does.
+  const r = await undoLegacy({ home: ctx.home, platform: ctx.platform || process.platform, exec: ctx.exec || null, fs: ctx.fs || nodeFs, env: ctx.env || process.env, now: ctx.now || null })
   return { changed: r.changed, removed: r.removed, skipped: r.skipped, left: r.left, problems: r.problems, notes: r.notes, ok: r.ok }
 }
 
