@@ -6,7 +6,7 @@ import { COMMANDS, HIDDEN_ALIASES, helpText, resolveAlias, commandNamed } from '
 
 const commandsOf = (text) => new Set(text.split('\n').map((l) => l.match(/^ {2}(?:sudo )?asight ([a-z-]+)/)).filter(Boolean).map((m) => m[1]))
 
-test('V19: the commands in help are the commands of the table (1.6 §2 lists these twelve — the old capture\'s five went with it, D39⑥ executed 2026-10-11; shard stayed and moved to data), none twice a command, and no hidden alias or `test` is among them', () => {
+test('V19: the commands in help are the commands of the table (1.6 §2 lists these thirteen — the old capture\'s four went with it, D39⑥ executed 2026-10-11; shard stayed and moved to data), none twice a command, and no hidden alias or `test` is among them', () => {
   const names = COMMANDS.map((c) => c.name)
   assert.deepEqual([...names].sort(), ['daemon', 'doctor', 'etl', 'help', 'keep', 'off', 'on', 'raw', 'serve', 'setup-helper', 'shard', 'status', 'uninstall'])
   assert.equal(new Set(names).size, names.length, 'a name once')
