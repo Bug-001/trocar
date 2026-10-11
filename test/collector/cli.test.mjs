@@ -255,3 +255,24 @@ test('cli: the real bin dispatches `collector` (usage → 2) and `collector stat
   assert.ok(path.isAbsolute(BIN))
   fs.rmSync(home, { recursive: true, force: true })
 })
+
+// the preflight's kernel plan-state line ("asight's kernel: not there yet — … once you confirm") must not ride the FINAL receipt of a run whose
+// ensureKernel already said what became of the kernel — on.mjs re-appended prep.notes after install.mjs had withdrawn its copy, so the Windows run's
+// first `on` printed BOTH the outcome and the superseded plan line (2026-10-11). A dry run keeps it: there it is the truth.
+test('cli: the kernel plan-state note is dropped from a real receipt that already carries the kernel outcome; a dry run keeps it', async () => {
+  const mkU = () => ({ path: '/h/.config/systemd/user/asight-collector.service', links: [], text: () => 'ExecStart=node daemon', enable: () => ({ code: 0 }), start: () => ({ code: 0 }), reload: () => {} })
+  const stale = "asight's kernel: not there yet — mihomo v1.19.32 will be downloaded (archive 21.5 MB, sha256 pinned, from github.com) once you confirm"
+  const sac = 'Smart App Control: off (read-only; with it on, the unsigned kernel most likely will not come up)'
+  const arch = { prepare: async () => ({ notes: [stale, sac] }), ensureKernel: async () => ({ ok: true, note: 'the kernel was downloaded and both digests verified (sha256 0123456789ab…)' }) }
+  const parts = { os: 'win32', osRootsFile: null, arch: { unit: mkU(), ...arch }, harnesses: [{ name: 'h' }], scan: async () => [], match: () => ({ agent: null }) }
+  const { newReceipt } = await import('../../src/cli/schema.mjs')
+  const outcome = { ...newReceipt('on'), user: 'u', harnesses: ['h'], changed: [], created: [], notes: ['the kernel was downloaded and both digests verified (sha256 0123456789ab…)'], log: null, exit: 0 }
+  const install = { turnOn: async (o) => { o.onPlan({ manifest: '/h/.asight/collector/install-manifest.json', notes: [], files: [], entries: [] }); return { receipt: outcome, exit: 0 } } }
+  const base = { home: '/h', daemon: { loadParts: async () => parts }, install, script: '/repo/bin/asight.mjs', platform: 'win32', onDeps: { netenv: NO_PROBE } }
+  let t = io(); assert.equal(await runCollector(['install', '--yes'], { ...base, ...t }), 0)
+  const real = t.o.join('\n')
+  assert.ok(!real.includes("asight's kernel: not there yet"), `the superseded plan line is not in the real receipt:\n${real}`)
+  assert.match(real, /the kernel was downloaded and both digests verified/)
+  assert.match(real, /Smart App Control/, 'the preflight\'s other notes still ride along')
+  t = io(); assert.equal(await runCollector(['install', '--dry-run'], { ...base, ...t }), 0, "the win §11 dry-run plan still prints (its kernel row is the plan's own Chinese 自带内核 line, not the receipt note)")
+})

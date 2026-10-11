@@ -174,7 +174,13 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
       request: deps.request, now: deps.now, getuid: deps.getuid, helperState, linger: deps.linger || parts.linger || null, lingerRead: deps.lingerRead || (deps.linger ? null : parts.lingerRead || null), sleep: deps.sleep, user: deps.user, fs: deps.fs,
     })
     receipt.netenv = netenv.error ? { error: netenv.error } : netenv.result
-    if (prep && prep.notes && prep.notes.length) receipt.notes.push(...prep.notes) // the preflight's lines ride along (the plan showed them above)
+    // the preflight's lines ride along (the plan showed them above) — EXCEPT the kernel's plan-state line on a run that went past the confirmation:
+    // ensureKernel's own outcome note ("the kernel was downloaded…" / "placed from the verified archive cache") is already in the receipt, and the
+    // plan-state "asight's kernel: not there yet — … once you confirm" kept beside it contradicts itself (install.mjs withdraws the copy turnOn's
+    // receipt held; this append re-added it after the fact — the receipt printed BOTH). A dry run and a refusal keep it: there
+    // it is the truth (nothing was downloaded yet).
+    const kernelOutcome = Array.isArray(receipt.notes) && receipt.notes.some((n) => typeof n === 'string' && n.startsWith('the kernel was '))
+    if (prep && prep.notes && prep.notes.length) receipt.notes.push(...(kernelOutcome ? prep.notes.filter((n) => !(typeof n === 'string' && n.startsWith("asight's kernel: "))) : prep.notes))
     if (prep && prep.blocked) { receipt.blocked = prep.blocked; receipt.notes.push(`${prep.blocked} (a real asight on stops there)`) }
     if (adoption && adoption.error) receipt.notes.push(adoption.error)
     else if (adoption && receipt.harnesses && receipt.harnesses.length && receipt.ok !== false && !receipt.dry_run && !receipt.planned && !receipt.declined) {
