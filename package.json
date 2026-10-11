@@ -13,6 +13,7 @@
   "files": [
     "src/",
     "bin/",
+    "LICENSE-mihomo.txt",
     "README.md"
   ],
   "scripts": {
