@@ -79,14 +79,14 @@ test('W27 ⑥: the arch prepare hook — its lines print with the plan and ride 
   // a refusal on nothing-installed: exit 1 before turnOn (nothing written), the reason with the manual alternative (D44: no reinstall commands any more), the receipt the only record
   const home2 = tmpDir('asight-w27b-'); seedClaude(home2)
   const before = snapshot(home2)
-  const refuse = { code: 'forwarder-digest-mismatch', reason: "the exe in kernel\\ is not the pin's", commands: ['把 mihomo-linux-amd64-v1.19.32.gz 放进 ~/.asight/collector/kernel-archive/ 再跑 asight on,或修好网络 / 代理(HTTPS_PROXY)后重跑'] }
+  const refuse = { code: 'EPRECONDITION', reason: 'a settled precondition the arch named', commands: ['把 mihomo-linux-amd64-v1.19.32.gz 放进 ~/.asight/collector/kernel-archive/ 再跑 asight on,或修好网络 / 代理(HTTPS_PROXY)后重跑'] }
   const bad = withPrepare({ refuse })
   const io2 = fakeIo({ tty: false })
   assert.equal(await runOnCli(['--yes', '--json'], bad.ctx(home2, io2, { exec: ex, daemon })), 1)
   const doc = io2.json()
   assert.equal(doc.ok, false)
   assert.deepEqual(validateReceipt(doc), [])
-  assert.match(doc.notes.join('\n'), /the exe in kernel\\ is not the pin's/)
+  assert.match(doc.notes.join('\n'), /a settled precondition the arch named/)
   assert.match(doc.notes.join('\n'), /手动替代\(asight 不替你跑\): 把 mihomo-linux-amd64-v1\.19\.32\.gz 放进 ~\/\.asight\/collector\/kernel-archive\/ 再跑 asight on,或修好网络 \/ 代理\(HTTPS_PROXY\)后重跑/)
   assert.deepEqual(snapshot(home2), before, 'a refusal writes nothing: turnOn never ran (the receipt is the record, 4.6 §记录)')
 
@@ -94,23 +94,23 @@ test('W27 ⑥: the arch prepare hook — its lines print with the plan and ride 
   const io3 = fakeIo({ tty: false })
   assert.equal(await runOnCli(['--dry-run', '--json'], bad.ctx(home2, io3)), 0)
   const dry = io3.json()
-  assert.match(dry.blocked, /the exe in kernel\\ is not the pin's/)
+  assert.match(dry.blocked, /a settled precondition the arch named/)
   assert.match(dry.notes.join('\n'), /\(a real asight on stops there\)/)
   assert.deepEqual(snapshot(home2), before)
 
   // with a collector directory present (a first on succeeded), the refusal is one failure event in flows/ (D38)
   const io4 = fakeIo({ tty: false })
   assert.equal(await runOnCli(['--yes', '--json'], onCtx(home2, io4, { exec: ex, daemon })), 0, 'a plain on without the hook still works (the Linux arch shape)')
-  const bad2 = withPrepare({ refuse: { ...refuse, code: 'forwarder-digest-mismatch', of: 'package', reason: "the pinned kernel package holds an exe whose digest is not the pin's" } })
+  const bad2 = withPrepare({ refuse: { ...refuse, code: 'EPRECONDITION', of: 'package', reason: 'a settled precondition the arch named, twice' } })
   const io5 = fakeIo({ tty: false })
   assert.equal(await runOnCli(['--yes', '--json'], bad2.ctx(home2, io5, { exec: ex, daemon })), 1)
   const flows = path.join(home2, '.asight', 'collector', 'flows')
   const lines = fs.readdirSync(flows).flatMap((n) => fs.readFileSync(path.join(flows, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)))
-  const mine = lines.filter((l) => l.event === 'failure' && l.code === 'forwarder-digest-mismatch')
+  const mine = lines.filter((l) => l.event === 'failure' && l.code === 'EPRECONDITION')
   assert.equal(mine.length, 1, 'one failure event, on\'s to write')
-  assert.equal(mine[0].where, 'forwarder')
+  assert.equal(mine[0].where, 'routing')
   assert.equal(mine[0].of, 'package')
-  assert.match(mine[0].reason, /digest is not the pin's/)
+  assert.match(mine[0].reason, /a settled precondition the arch named, twice/)
   assert.deepEqual(checkRecord(mine[0]), [])
 
   // a hook that throws is the outer catch's: exit 1, the message, no event of it

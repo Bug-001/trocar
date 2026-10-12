@@ -60,7 +60,7 @@ export const CODES_BY_PART = Object.freeze({
   switch: ['state-mismatch', 'state-unparsable'],
   kernel: ['kernel-drops'],
   ca: ['ca-invalid'],
-  install: ['install-error', 'uninstall-error', 'left-unparsable', 'left-link', 'entry-not-undone', 'reverted-not-identical', 'already-restored', 'missing', 'left-user-value', 'still-trusting', 'bundle-kept', 'residue-not-removed', 'unit-not-enabled', 'unit-not-disabled', 'kernel-not-off', 'optin-not-undone', 'needs-admin'], // the last three: the Windows collector's off-side — a kernel that could not be taken off the routing path, an opt-in item that could not be undone, a machine-level item left for the operator's elevated command (4.8 §4.2)
+  install: ['install-error', 'uninstall-error', 'left-unparsable', 'left-link', 'entry-not-undone', 'reverted-not-identical', 'already-restored', 'missing', 'left-user-value', 'still-trusting', 'bundle-kept', 'residue-not-removed', 'unit-not-enabled', 'unit-not-disabled', 'optin-not-undone', 'needs-admin'], // the last two: the Windows collector's off-side — an opt-in item that could not be undone, a machine-level item left for the operator's elevated command (4.8 §4.2; the kernel-not-off row retired with the kernel, D47's twin)
   legacy: ['tls-client-error', 'client-rejected-leaf', 'upstream-aborted', 'decode-failed', 'autostart-load-failed', 'steer-unreadable', 'steer-missing', 'shard-failed'],
 })
 export const CODES = Object.freeze([...new Set(Object.values(CODES_BY_PART).flat())])
@@ -74,17 +74,16 @@ export const OFF_WHERE = Object.freeze(['off'])
 export const OFF_EVENTS = Object.freeze(['off-note']) // a state change (the last one of a run carries kind:'result'), not a failure
 export const OFF_CODES = Object.freeze(['backup-failed', 'backup-kept', 'undone-by-marker'])
 
-// What the Windows collector writes (RFC 4.8 §12, D42) and the names it shares with the netenv side (4.7 §5, D41; read-only since D43) and the CLI (1.6 §9.7).
+// What the Windows collector writes (RFC 4.8 §12, D42; the kernel-era rows retired with the kernel — D47's darwin conversion and its win32 twin: the forwarder-* family, the download pair,
+// the probe refresh and the fallback verdict have no producer on any arch now) and the names it shares with the netenv side (4.7 §5, D41; read-only since D43) and the CLI (1.6 §9.7).
 // Blocks of their own, below OFF_*, for the reason OFF_* is: D40 edits WHERE / STATE_EVENTS / CODES_BY_PART, and the lists that
 // another branch appends to stay edit-free here; `sets` below adds the blocks. test/health/codes.test.mjs holds each against the
 // RFC's table written out by hand (W38).
-export const ROUTE_WHERE = Object.freeze(['routing', 'forwarder', 'ingress', 'optin']) // the choice and effect of a routing · asight's own mihomo · the engine's proxy ingress · the doing of an opt-in item
-export const ROUTE_EVENTS = Object.freeze(['route-applied', 'forwarder-start', 'forwarder-stop', 'forwarder-draining', 'probes-refreshed', 'optin-applied', 'optin-removed', 'forwarder-download-started', 'forwarder-download-ok']) // state changes, not failures; `probes-refreshed` is the daemon's one probe refresh after the engine (re)starts (4.8 §3.3), `{forms: [{f, ok, status}]}`; the download pair is the CLI's `on` writing what its one online step did (D44, 4.8 §8: the started line carries the url, the expected size and curl's command line; the ok line the two digests)
+export const ROUTE_WHERE = Object.freeze(['routing', 'ingress', 'optin']) // the choice and effect of a routing · the engine's proxy ingress (its per-group doors are the only local proxy) · the doing of an opt-in item
+export const ROUTE_EVENTS = Object.freeze(['route-applied', 'optin-applied', 'optin-removed']) // state changes, not failures
 /** `code` of a failure event, by the `where` the §12 table gives it. Every row of the table is the class 失败, so the next list is this one. */
 export const ROUTE_CODES = Object.freeze([
   'ingress-auth-failed', 'ingress-unknown', 'engine-port-taken', 'upstream-unavailable', // ingress (`upstream-unavailable`: the group's upstream cannot be dialled at all, no login to dial it with or none to dial: the lookup refused, the agent got a 502)
-  'fallback-active', // routing
-  'forwarder-start-failed', 'forwarder-restart', 'forwarder-digest-mismatch', 'forwarder-binary-missing', 'forwarder-download-failed', // forwarder, win32 (4.8 §12 is its table): the kernel is missing and the `on` that downloads it failed at some step of that — curl absent or failed, or the archive or the unpacked exe is not the pinned one (D44, 4.8 §8 ①: the security boundary is the digest check after the download, never curl's exit code alone). darwin produces none of these (D47: no kernel); its `gatekeeper` precheck code went with the darwin forwarder itself.
   'optin-failed', // optin: an item the user named was not done (a refused prompt, a script error); a refused UAC is not this: it is `pending-admin` (1.6 §1.7)
   'socktable-unavailable', 'helper-start-failed', // helper
   'task-register-failed', // install: `on` still succeeds, through the HKCU Run fallback (4.8 §7)
@@ -95,12 +94,13 @@ export const ROUTE_CODES = Object.freeze([
 /** The codes of ROUTE_CODES a writer puts on a `failure` event. Today that is all of them; a later notice-class code goes into ROUTE_CODES only. */
 export const ROUTE_FAILURE_CODES = Object.freeze([...ROUTE_CODES])
 /** Reasons a running agent is not trusted that the Windows collector adds (4.8 §5.4, §6.3): the `code` of `agent-untrusted`, as TRUST_REASONS' are. `env-unreadable-fill` is the tracker's fill-layer
- *  verdict of 4.8 §5.4 (landed with 8(v) without its list entry; named here by Task 10(b), whose finding-code list and status reasons both read this block).
+ *  verdict of 4.8 §5.4 (landed with 8(v) without its list entry; named here by Task 10(b), whose finding-code list and status reasons both read this block); `smart-app-control` is the
+ *  opt-in shim step's own refusal (4.8 §6.3, fail-closed).
  *  Listed apart from TRUST_REASONS (a list D40's neighbours read); test/health/codes.test.mjs counts both when it checks a harness's own. */
-export const ROUTE_TRUST_REASONS = Object.freeze(['pid-unresolved-mixed', 'smart-app-control', 'env-unreadable-fill'])
+export const ROUTE_TRUST_REASONS = Object.freeze(['smart-app-control', 'env-unreadable-fill'])
 /** What `status` says when a form is not captured, that the Windows collector adds (4.8 §2.3, §12). The status reason set itself is the CLI's
- *  (1.6 §2); its list takes these in. `fallback-active` is also a ROUTE_CODES code: the same name, the failure event and the status reason. */
-export const ROUTE_STATUS_REASONS = Object.freeze(['form-unsupported', 'fallback-active', 'form-path-unknown'])
+ *  (1.6 §2); its list takes these in. */
+export const ROUTE_STATUS_REASONS = Object.freeze(['form-unsupported', 'form-path-unknown'])
 /** The envelope's `capture`: how the call reached the engine (4.1 信封表, 4.8 §5.6): `transparent` (Linux, and the other per-process captures) or `proxy` (Windows: the call came through asight's own kernel, D43). */
 export const CAPTURE_KINDS = Object.freeze(['transparent', 'proxy'])
 

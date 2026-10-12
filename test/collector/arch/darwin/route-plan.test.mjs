@@ -11,11 +11,10 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { groupsOf, hostSetOf, planRoutes, priorOf, resolveLogin } from '../../../../src/collector/arch/darwin/route-plan.mjs'
 import { parseProxyText, proxyAuthOf } from '../../../../src/collector/arch/darwin/upstream.mjs'
+import { bypassRuleOf, upstreamOf } from '../../../../src/collector/core/upstream-shape.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { applyJsonKey, applyTextEntry, newManifest } from '../../../../src/collector/core/trust/journal.mjs'
 import { proxyEntries } from '../../../../src/collector/arch/darwin/forms.mjs'
-import { forwarder, CC_GROUP, KIMI_GROUP } from '../../../netenv/fixtures/rules/inputs.mjs'
-import { buildForwarderConfig } from '../../../../src/netenv/mihomo/rules.mjs'
 import { hostOf } from '../../../../src/collector/core/config-read.mjs'
 import kimiBase from '../../../../src/collector/harness/kimi-code.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
@@ -371,7 +370,7 @@ test('W5 whatever upstream the plan hands out, the kernel\'s config generator ac
   const viaGenerator = (r, text, how) => {
     if (!r.upstream || !r.upstream.kind) return
     const upstream = r.upstream.kind === 'direct' ? 'direct' : gets(r, text)
-    assert.doesNotThrow(() => buildForwarderConfig(forwarder({ groups: [{ ...CC_GROUP, g: r.g, on: r.on, upstream, bypass: r.bypass }] })), `${how}: ${JSON.stringify(text)} gave ${JSON.stringify(r.upstream)}`)
+    assert.doesNotThrow(() => { if (upstream !== 'direct') upstreamOf(r.g, upstream); for (const b of r.bypass || []) bypassRuleOf(b) }, `${how}: ${JSON.stringify(text)} gave ${JSON.stringify(r.upstream)}`)
     if (r.upstream.kind !== 'direct') connected++
   }
   for (const text of nasty) {
@@ -621,11 +620,11 @@ test('W69 hostSetOf: only a name the kernel\'s DOMAIN-SUFFIX rule can match is i
   // the rule that is applied is the generator's own: a table of candidates, judged by the generator and by hostSetOf
   const candidates = ['api.kimi.com', 'a-b.c_d.example', '1.example.com', 'x'.repeat(253), 'x'.repeat(254), 'a,b', 'a b', '*.corp.com', '-x.com', '.x.com', 'a..b', 'ünï.com', '10.0.0.5', '1.2.3.4', '999.1.1.1', 'localhost', 'Mixed.Case.Example', 'a\nb', 'a\u0000b', 'a*b.com', 'a:80', 'a/b', 'a+b.com', 'a\\b', 'a=b', 'a;b', 'a@b.com', 'a_b-c.d']
   for (const c of candidates) {
-    const accepted = (() => { try { buildForwarderConfig(forwarder({ groups: [{ ...KIMI_GROUP, forms: [{ ...KIMI_GROUP.forms[0], hosts: [c.toLowerCase()] }] }] })); return true } catch { return false } })()
+    const accepted = (() => { try { bypassRuleOf({ kind: 'domain-suffix', value: c.toLowerCase() }); return true } catch { return false } })()
     const inSet = hostSetOf({ form: { hosts: { defaults: [] } }, extraHosts: [c] }).hosts.length === 1
     assert.equal(inSet, accepted && !/^\d+(\.\d+){3}$/.test(c) && c !== 'localhost', `${JSON.stringify(c)}: in the set ${inSet}, generator accepts ${accepted}; an address literal and the name \`localhost\` are the two the generator takes and the rule never meets`)
   }
-  assert.doesNotThrow(() => buildForwarderConfig(forwarder({ groups: [{ ...KIMI_GROUP, forms: [{ ...KIMI_GROUP.forms[0], hosts: r.hosts }] }] })), 'whatever the user wrote, `on` gets a set the config accepts')
+  for (const h of r.hosts) assert.doesNotThrow(() => bypassRuleOf({ kind: 'domain-suffix', value: h }), `whatever the user wrote, \`on\` gets a set the matcher accepts: ${h}`)
 })
 
 test('W69 / OPEN 28 hostSetOf: the name `localhost` is said, not counted as captured — the kernel\'s own hosts table has made it 127.0.0.1 before the rules run, so DOMAIN-SUFFIX,localhost never meets it (a relay on this machine by name)', () => {
@@ -634,7 +633,7 @@ test('W69 / OPEN 28 hostSetOf: the name `localhost` is said, not counted as capt
   const r = hostSetOf({ form: KIMI_HOSTS_FORM, readSettings: settingsOf(b.ctx()), extraHosts: ['LocalHost', 'localhost.', 'relay.localhost', 'localhost.example', 'mylocalhost'] })
   assert.deepEqual(r.hosts, [...KIMI_DEFAULTS, 'relay.localhost', 'localhost.example', 'mylocalhost'], 'only the exact name is the one the hosts table turns into an address: a name under it, or beside it, is a name')
   assert.deepEqual(r.dropped, ['localhost', 'localhost.'], 'the name from Kimi\'s settings, said once; the root-dot spelling of it too')
-  assert.doesNotThrow(() => buildForwarderConfig(forwarder({ groups: [{ ...KIMI_GROUP, forms: [{ ...KIMI_GROUP.forms[0], hosts: r.hosts }] }] })))
+  for (const h of r.hosts) assert.doesNotThrow(() => bypassRuleOf({ kind: 'domain-suffix', value: h }))
   assert.deepEqual(hostSetOf({ form: { hosts: { defaults: ['localhost', 'a.example'] } } }), { hosts: ['a.example'], settings: 'absent', dropped: ['localhost'] }, 'a default host is judged the same way')
 })
 
@@ -650,7 +649,7 @@ test('hostSetOf wants a form with a host set, and a reader when the form has set
 const PLAN_SRC = fs.readFileSync(fileURLToPath(new URL('../../../../src/collector/arch/darwin/route-plan.mjs', import.meta.url)), 'utf8')
 
 /** What the file may not do (it computes and reads the files through the ctx it is given): reach the network, the disk, a process or the OS by itself. */
-function reaches(src, allowed = ['../../../netenv/mihomo/rules.mjs']) {
+function reaches(src, allowed = ['../../core/upstream-shape.mjs']) {
   const code = src.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n') // prose in a comment is not a call
   const out = []
   for (const m of code.matchAll(/\bimport\b[^;]*?\bfrom\s*(['"])([^'"]+)\1|\bimport\s*(['"])([^'"]+)\3|\bimport\s*\(\s*(['"])([^'"]+)\5/g)) {
@@ -662,7 +661,7 @@ function reaches(src, allowed = ['../../../netenv/mihomo/rules.mjs']) {
 }
 
 test('route-plan.mjs imports only the config readers, forms.mjs, upstream.mjs and the rule text generator (the judge of a host name), touches no disk, process, network or OS by itself (the files it reads come through the ctx it is given), and names no harness: its groups are data (W39, MA9)', () => {
-  assert.deepEqual(reaches(PLAN_SRC, ['../../core/config-read.mjs', './forms.mjs', './upstream.mjs', '../../../netenv/mihomo/rules.mjs']), [])
+  assert.deepEqual(reaches(PLAN_SRC, ['../../core/config-read.mjs', '../../core/upstream-shape.mjs', './forms.mjs', './upstream.mjs']), [])
   assert.ok(reaches("import fs from 'node:fs'\n", ['./forms.mjs']).length > 0, 'the scan can fail')
   assert.ok(reaches("/** the process. */\nconst x = process.platform\n", []).length > 0 && reaches('/** the process. */\nconst x = 1\n', []).length === 0, 'a call is found, prose in a comment is not')
   const code = PLAN_SRC.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')

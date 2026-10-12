@@ -127,18 +127,16 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     const netenv = await probeNetenv({ home, platform, env, deps })
     const adoption = await prepareAdoption({ home, env, platform, deps, parts, netenv, now: deps.now ? () => deps.now().getTime() : Date.now }) // §9.5: the proxy each agent already uses, and the chain once asight is on
     const routing = deps.routing || (parts.arch && typeof parts.arch.routing === 'function' ? parts.arch.routing({ harnesses: parts.harnesses, home, env, fs: deps.fs }) : null) // §9.5's proxy-mode routing: the platform supplies it beside prepare (win32, Task 8(c)); a platform without one (Linux's driver mode) adopts nothing extra and every existing on is its guard
-    // The arch's read-only preflight (4.8 §8 ⑥, W27 ⑥, W74; Windows: the kernel line and the Smart App Control line), run BEFORE turnOn so a refusal
-    // stops `on` before its first write — a settled precondition with nothing to roll back. The Linux arch has no `prepare` and nothing here changes.
-    // The refusal's event and receipt are on's to write; with no collector directory yet (nothing installed) the receipt is the record (4.6 §记录).
+    // The arch's read-only preflight (4.8 §8 ⑥, W27 ⑥, W74; historically the Windows kernel line and the Smart App Control line), run BEFORE turnOn so a
+    // refusal stops `on` before its first write — a settled precondition with nothing to roll back. No arch carries one since the engines became the
+    // proxies (D47 and its win32 twin: darwin never had one, win32's went with the kernel — wiring.mjs exports neither `prepare` nor `ensureKernel`);
+    // the seam stays because a future arch's settled precondition belongs exactly here, and with no collector directory yet (nothing installed) the
+    // receipt is the record (4.6 §记录).
     const archPrepare = parts.arch && typeof parts.arch.prepare === 'function' ? parts.arch.prepare : null
     const prep = archPrepare ? await archPrepare({ env, home }) : null
-    // D44: the same arch's ensureKernel hook, run by turnOn as the FIRST write-phase action — after the confirmation, before any agent file — so a failed
-    // download leaves zero agent files written (the plan above already showed the download line; a dry run returns before turnOn reaches the hook). An arch
-    // without one (Linux's driver mode, or the kernel already ensured and nothing to do) hands no hook and nothing changes.
-    const ensureKernelHook = parts.arch && typeof parts.arch.ensureKernel === 'function' ? parts.arch.ensureKernel : null
-    const afterConfirm = ensureKernelHook ? () => ensureKernelHook({ home, env }) : null
-    // the plan of 4.8 §11: Windows draws its own (the kernel line, one row per entry group with the upstream, the named opt-in items, Smart App Control, the drain note) — fed by the same
-    // `on`'s facts (adoption) and the arch hook's answer (prep). The Linux plan and the hook's own notes stay as they are.
+    const afterConfirm = null // D44's kernel-ensure hook retired with the kernel: no arch's first write-phase step downloads anything now (the engine IS the proxy, and its first write is the CA)
+    // the plan of 4.8 §11: Windows draws its own (one row per entry group with the upstream, the named opt-in items, the drain note) — fed by the same
+    // `on`'s facts (adoption). The Linux plan and the hook's own notes stay as they are.
     const winPlan = parts.os === 'win32'
     const planText = (raw) => {
       const adopted = adoption && !adoption.error ? Object.entries(adoption.chains(raw.targets)).filter(([h]) => raw.targets.includes(h)).map(([h, t]) => ({ harness: h, chain: chainText(t) })).filter((x) => /\s→\s/.test(x.chain) || false) : [] // D46: the degenerate one-hop chain says nothing and is not printed
@@ -156,7 +154,7 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
       if (!flags.has('--dry-run')) {
         const receipt = { ...newReceipt('on'), ok: false, harnesses: named.ids, notes: [line] }
         const cdir = path.join(home, '.asight', 'collector')
-        try { if (fs.existsSync(cdir)) appendEvent(cdir, { event: 'failure', where: 'forwarder', code: rf.code, ...(rf.of ? { of: rf.of } : {}), reason: line }) } catch { /* the receipt is the record then (R11) */ }
+        try { if (fs.existsSync(cdir)) appendEvent(cdir, { event: 'failure', where: 'routing', code: rf.code, ...(rf.of ? { of: rf.of } : {}), reason: line }) } catch { /* the receipt is the record then (R11) */ }
         if (json) io.out(JSON.stringify(receipt, null, 2))
         else io.out(formatOnReceipt(receipt, { tense: 'past', home }))
         return EXIT.incomplete
@@ -179,13 +177,9 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
       request: deps.request, now: deps.now, getuid: deps.getuid, helperState, linger: deps.linger || parts.linger || null, lingerRead: deps.lingerRead || (deps.linger ? null : parts.lingerRead || null), sleep: deps.sleep, user: deps.user, fs: deps.fs,
     })
     receipt.netenv = netenv.error ? { error: netenv.error } : netenv.result
-    // the preflight's lines ride along (the plan showed them above) — EXCEPT the kernel's plan-state line on a run that went past the confirmation:
-    // ensureKernel's own outcome note ("the kernel was downloaded…" / "placed from the verified archive cache") is already in the receipt, and the
-    // plan-state "asight's kernel: not there yet — … once you confirm" kept beside it contradicts itself (install.mjs withdraws the copy turnOn's
-    // receipt held; this append re-added it after the fact — the receipt printed BOTH). A dry run and a refusal keep it: there
-    // it is the truth (nothing was downloaded yet).
-    const kernelOutcome = Array.isArray(receipt.notes) && receipt.notes.some((n) => typeof n === 'string' && n.startsWith('the kernel was '))
-    if (prep && prep.notes && prep.notes.length) receipt.notes.push(...(kernelOutcome ? prep.notes.filter((n) => !(typeof n === 'string' && n.startsWith("asight's kernel: "))) : prep.notes))
+    // the preflight's lines ride along (the plan showed them above). No arch carries a preflight today (the kernel line went with the kernel, D47's twin);
+    // a future one that does keeps this append as its own.
+    if (prep && prep.notes && prep.notes.length) receipt.notes.push(...prep.notes)
     if (prep && prep.blocked) { receipt.blocked = prep.blocked; receipt.notes.push(`${prep.blocked} (a real asight on stops there)`) }
     if (adoption && adoption.error) receipt.notes.push(adoption.error)
     else if (adoption && receipt.harnesses && receipt.harnesses.length && receipt.ok !== false && !receipt.dry_run && !receipt.planned && !receipt.declined) {

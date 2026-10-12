@@ -23,9 +23,8 @@ export const FAILURE_WORDS = Object.freeze({
   'switch/state-mismatch': '内核没确认引流', 'switch/state-unparsable': '期望态文件读不了',
   // install / unit
   'install/launchd-register-failed': '自启单元没注册上(launchd 是唯一的自启)', 'install/unit-not-enabled': '自启单元没启用', 'install/install-error': '安装出错',
-  // the proxy-mode kernel (4.8; win32 only since D47 — darwin's engine is its own proxy)
-  'forwarder/forwarder-start-failed': '自带内核没起来', 'forwarder/forwarder-restart': '自带内核被拉起过', 'forwarder/forwarder-digest-mismatch': '内核摘要不符(pin 没对上)', 'forwarder/forwarder-binary-missing': '内核文件不在',
-  'forwarder/upstream-unavailable': '上游拨不出去', 'ingress/ingress-auth-failed': '代理入口没答上', 'ingress/engine-port-taken': '引擎端口被占',
+  // the proxy-mode ingress (4.8; the engines are their own proxies since D47 and its win32 twin — the kernel's words went with it)
+  'ingress/ingress-auth-failed': '代理入口没答上', 'ingress/engine-port-taken': '引擎端口被占', 'ingress/upstream-unavailable': '上游拨不出去',
 })
 
 /** The short Chinese reason of a `(where, code)` pair, or null when the table does not know it (errno and unknown codes keep their raw shape). */

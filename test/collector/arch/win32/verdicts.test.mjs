@@ -76,10 +76,12 @@ async function sandbox(harnessName, rels = []) {
   return { home, dir, m, pem: ca.certPem, ca, d, t0: Math.max(...m.entries.map((e) => Date.parse(e.installed_at))) }
 }
 
-/** The watcher stand-in and the tracker over a real win32 redirector, wired the way the daemon wires it (the osMatch rule, the win32 layers, the manifest's installed_at, the marker's tolerance). `over` reaches the redirector. */
+/** The tracker over a real win32 redirector, wired the way the daemon wires it (the osMatch rule, the win32 layers, the manifest's installed_at, the marker's tolerance).
+ *  The door model has no watcher: the redirector itself tells 'exec' when a connection meets a pid (D47's twin), so the test emits that event the way
+ *  a lookup would. `over` reaches the redirector. */
 function rigged({ descriptors, box: b, marker = false, over = {} }) {
-  const procWatcher = Object.assign(new EventEmitter(), { scan: async () => [], start: async () => true, stop() {}, poll: async () => false, unreadable: () => [] })
-  const redirector = createWin32Redirector({ procWatcher, groups: groupsOf(descriptors), home: HOME, ...over })
+  const helper = { ready: Promise.resolve({ ready: true, proto: 1, pid: 55, native: true }), pid: 55, async call() { throw new Error('no verb in the rig') }, async close() {} }
+  const redirector = createWin32Redirector({ helper, groups: groupsOf(descriptors), home: HOME, ...over })
   const tracker = createTracker({
     redirector, registry: winRegistry(descriptors), trust: createTrustChecker({ caCertPem: b.pem }), home: b.home, alive: () => false, collectorDir: b.dir,
     installedAt: (l) => installedAt(b.m, l),
@@ -88,7 +90,7 @@ function rigged({ descriptors, box: b, marker = false, over = {} }) {
   })
   tracker.start()
   const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)) }
-  return { procWatcher, redirector, tracker, settle }
+  return { redirector, tracker, settle }
 }
 
 // ── W76 cell 1: one rule for which form ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -132,9 +134,9 @@ test('W76 a process started after its harness\'s Windows trust entry is judged t
     ['z-code', IMG.zcode, [['.zcode/cli/config.json', '{}']], { cmdline: ZCODE_CMD }],
   ]) {
     const b = await sandbox(harness, rels)
-    const { procWatcher, redirector, settle } = rigged({ descriptors: [b.d], box: b })
-    procWatcher.emit('exec', facts(20, exe, { ...extra, startedAt: b.t0 + 5000 }))
-    procWatcher.emit('exec', facts(21, exe, { ...extra, startedAt: b.t0 - 5000 }))
+    const { redirector, settle } = rigged({ descriptors: [b.d], box: b })
+    redirector.emit('exec', facts(20, exe, { ...extra, startedAt: b.t0 + 5000 }))
+    redirector.emit('exec', facts(21, exe, { ...extra, startedAt: b.t0 - 5000 }))
     await settle()
     const after = redirector.verdictOf(20), before = redirector.verdictOf(21)
     assert.deepEqual([after.decrypt, after.agent], [true, harness], `${harness}: started after the entry → watch(pid, {decrypt:true})`)
@@ -145,10 +147,10 @@ test('W76 a process started after its harness\'s Windows trust entry is judged t
 
 test('W76 Hermes is judged on its Windows files (%LOCALAPPDATA%\\hermes, desc.win32.layers): trusted after its .env block, config-after-start before it', async () => {
   const b = await sandbox('hermes', [['AppData/Local/hermes/config.yaml']])
-  const { procWatcher, redirector, settle } = rigged({ descriptors: [b.d], box: b })
+  const { redirector, settle } = rigged({ descriptors: [b.d], box: b })
   assert.equal(typeof b.d.win32.layers, 'function', 'the Windows data carries its own layers: the Linux ones read ~/.hermes, which is not where Windows Hermes keeps its .env')
-  procWatcher.emit('exec', facts(20, IMG.hermesPy, { startedAt: b.t0 + 5000 }))
-  procWatcher.emit('exec', facts(21, IMG.hermesPy, { startedAt: b.t0 - 5000 }))
+  redirector.emit('exec', facts(20, IMG.hermesPy, { startedAt: b.t0 + 5000 }))
+  redirector.emit('exec', facts(21, IMG.hermesPy, { startedAt: b.t0 - 5000 }))
   await settle()
   assert.deepEqual([redirector.verdictOf(20).decrypt, redirector.verdictOf(20).agent], [true, 'hermes'])
   assert.equal(redirector.verdictOf(21).decrypt, false)
@@ -157,8 +159,8 @@ test('W76 Hermes is judged on its Windows files (%LOCALAPPDATA%\\hermes, desc.wi
 test('W76 Kimi has no automatic Windows trust entry (its shim is an opt-in item, Task 14): the process is judged and stays untrusted — fail-safe, never a broken connection', async () => {
   const b = await sandbox('kimi-code')
   assert.deepEqual(b.m.entries.filter((e) => e.harness === 'kimi-code'), [], 'planTrust writes nothing for Kimi on Windows')
-  const { procWatcher, redirector, tracker, settle } = rigged({ descriptors: [b.d], box: b })
-  procWatcher.emit('exec', facts(20, IMG.kimi, { startedAt: b.t0 + 5000 }))
+  const { redirector, tracker, settle } = rigged({ descriptors: [b.d], box: b })
+  redirector.emit('exec', facts(20, IMG.kimi, { startedAt: b.t0 + 5000 }))
   await settle()
   assert.deepEqual(redirector.verdictOf(20), { decrypt: false, agent: 'kimi-code' }, 'a row is pushed and it says not trusted')
   assert.equal(tracker.describe(20).reason, 'shim-not-on-path', 'the reason names what is missing (the shim), not a silent "not an agent"')
@@ -168,16 +170,16 @@ test('W76 Kimi has no automatic Windows trust entry (its shim is an opt-in item,
 
 test('W76 the dsh plugin marker is trusted within the fixed tolerance (it is ms-rounded performance.timeOrigin against the helper\'s ms) and a marker an earlier process with the same pid left stays stale', async () => {
   const b = await sandbox('deepseek-dsh')
-  const { procWatcher, redirector, settle } = rigged({ descriptors: [b.d], box: b, marker: true })
+  const { redirector, settle } = rigged({ descriptors: [b.d], box: b, marker: true })
   const markerDir = path.join(b.dir, 'run', 'trust')
   const marker = (pid, at) => fs.writeFileSync(path.join(markerDir, String(pid)), String(at))
   const t = 1700000005000
-  const dshAt = (pid, markerAt) => { marker(pid, markerAt); procWatcher.emit('exec', facts(pid, IMG.node, { cmdline: DSH_CMD, startedAt: t, startTicks: String(t) })) }
+  const dshAt = (pid, markerAt) => { marker(pid, markerAt); redirector.emit('exec', facts(pid, IMG.node, { cmdline: DSH_CMD, startedAt: t, startTicks: String(t) })) }
   dshAt(30, t) // the exact value
   dshAt(31, t - (MARKER_TOLERANCE_MS - 1)) // rounded down, still the same start
   dshAt(32, t + (MARKER_TOLERANCE_MS - 1)) // rounded up
   dshAt(33, t - 60000) // an earlier process of a recycled pid
-  procWatcher.emit('exec', facts(34, IMG.node, { cmdline: DSH_CMD, startedAt: t, startTicks: String(t) })) // no marker at all
+  redirector.emit('exec', facts(34, IMG.node, { cmdline: DSH_CMD, startedAt: t, startTicks: String(t) })) // no marker at all
   await settle()
   assert.deepEqual([30, 31, 32].map((p) => redirector.verdictOf(p).decrypt), [true, true, true], 'the exact value and both rounding directions trust')
   assert.deepEqual([33, 34].map((p) => redirector.verdictOf(p).decrypt), [false, false], 'a stale marker and none never do')
@@ -186,9 +188,9 @@ test('W76 the dsh plugin marker is trusted within the fixed tolerance (it is ms-
   const o = await sandbox('opencode')
   const rig = rigged({ descriptors: [o.d], box: o, marker: true })
   fs.writeFileSync(path.join(o.dir, 'run', 'trust', '35'), String(t))
-  rig.procWatcher.emit('exec', facts(35, IMG.opencode, { startedAt: t + 500, startTicks: String(t + 500) }))
+  rig.redirector.emit('exec', facts(35, IMG.opencode, { startedAt: t + 500, startTicks: String(t + 500) }))
   fs.writeFileSync(path.join(o.dir, 'run', 'trust', '36'), String(t - 60000))
-  rig.procWatcher.emit('exec', facts(36, IMG.opencodeDesk, { startedAt: t, startTicks: String(t) }))
+  rig.redirector.emit('exec', facts(36, IMG.opencodeDesk, { startedAt: t, startTicks: String(t) }))
   await rig.settle()
   assert.deepEqual([rig.redirector.verdictOf(35).decrypt, rig.redirector.verdictOf(36).agent, rig.redirector.verdictOf(36).decrypt], [true, 'opencode', false], 'within the tolerance trusts, a recycled pid\'s stale marker does not')
 })
@@ -197,14 +199,14 @@ test('W76 the dsh plugin marker is trusted within the fixed tolerance (it is ms-
 
 test('W76 a form told by its command line is not judged "not an agent" while the command line is unknown: the facts-update judges the same pid again and pushes watch again', async () => {
   const b = await sandbox('deepseek-dsh')
-  const { procWatcher, redirector, tracker, settle } = rigged({ descriptors: [b.d], box: b, marker: true })
+  const { redirector, tracker, settle } = rigged({ descriptors: [b.d], box: b, marker: true })
   const t = 1700000005000
-  procWatcher.emit('exec', facts(40, IMG.node, { cmdline: null, argv: [], cmdlineState: 'pending', startedAt: t, startTicks: String(t) }))
+  redirector.emit('exec', facts(40, IMG.node, { cmdline: null, argv: [], cmdlineState: 'pending', startedAt: t, startTicks: String(t) }))
   await settle()
   assert.equal(redirector.verdictOf(40), null, 'nothing was pushed: pending is not "not an agent" and not a form either')
   assert.equal(tracker.describe(40), null)
   fs.writeFileSync(path.join(b.dir, 'run', 'trust', '40'), String(t)) // the plugin reports while the command line is still on its way
-  procWatcher.emit('facts-update', facts(40, IMG.node, { cmdline: DSH_CMD, cmdlineState: 'ok', source: 'update', startedAt: t, startTicks: String(t) }))
+  redirector.emit('exec', facts(40, IMG.node, { cmdline: DSH_CMD, cmdlineState: 'ok', source: 'accept', startedAt: t, startTicks: String(t) })) // the next connection's ask carries the arrived command line (the door re-asks per connection, never a cached row)
   await settle()
   assert.deepEqual(redirector.verdictOf(40), { decrypt: true, agent: 'deepseek-dsh' }, 'judged again on the update, and the marker it left trusts')
 })
@@ -219,13 +221,14 @@ test('W76 end to end: a Windows connection of a trusted process is decrypted and
   const b = await sandbox('claude-code')
   const answers = [{ pid: 20, source: 'socket-table', ms: 4 }, { pid: 21, source: 'socket-table', ms: 4 }, { pid: 55, source: 'socket-table', ms: 4 }]
   const ownerOf = async () => answers.shift() || { pid: null, source: null, ms: 1 }
-  const { procWatcher, redirector, tracker, settle } = rigged({
+  const factsOf = async (pid) => ({ 20: facts(20, IMG.ccCli, { startedAt: b.t0 + 5000 }), 21: facts(21, IMG.ccCli, { startedAt: b.t0 - 5000 }), 55: facts(55, IMG.svchost, { startedAt: b.t0 + 5000 }) }[pid] ?? null) // the accept-time facts question, answered per connection
+  const { redirector, tracker, settle } = rigged({
     descriptors: [b.d], box: b,
-    over: { ownerOf, routes: () => ({ 'claude-code.settings': { entry: 'auto', on: true, reason: null, upstream: { kind: 'direct', source: 'direct' }, bypass: [] } }), ingress: () => ({ enginePort: 18790, groupPorts: { 'claude-code.settings': 18801 }, ingressToken: TOKEN, listenerToken: 'fedcba9876543210fedcba9876543210' }) },
+    over: { ownerOf, factsOf, routes: () => ({ 'claude-code.settings': { entry: 'auto', on: true, reason: null, upstream: { kind: 'direct', source: 'direct' }, bypass: [] } }), ingress: () => ({ enginePort: 18790, groupPorts: { 'claude-code.settings': 18801 }, ingressToken: TOKEN, listenerToken: 'fedcba9876543210fedcba9876543210' }) },
   })
-  procWatcher.emit('exec', facts(20, IMG.ccCli, { startedAt: b.t0 + 5000 }))
-  procWatcher.emit('exec', facts(21, IMG.ccCli, { startedAt: b.t0 - 5000 }))
-  procWatcher.emit('exec', facts(55, IMG.svchost, { startedAt: b.t0 + 5000 })) // in the table, but the tracker judges it no agent: its watch is never pushed
+  redirector.emit('exec', facts(20, IMG.ccCli, { startedAt: b.t0 + 5000 }))
+  redirector.emit('exec', facts(21, IMG.ccCli, { startedAt: b.t0 - 5000 }))
+  redirector.emit('exec', facts(55, IMG.svchost, { startedAt: b.t0 + 5000 })) // in the table, but the tracker judges it no agent: its watch is never pushed
   await settle()
 
   const privCa = createCa({ commonName: 'private origin CA' })
@@ -238,13 +241,14 @@ test('W76 end to end: a Windows connection of a trusted process is decrypted and
     policy: (meta) => (meta.decrypt ? true : meta.skip ?? tracker.policy(meta, 'upstream.test')), // the daemon's policy: the meta's skip, else the tracker's row
     store: { envelope: (e) => { envelopes.push(e); return true }, flow: (f) => { flows.push(structuredClone(f)); return true } }, onFailure: () => {},
   })
-  const { ingressPort } = await engine.listen({ ingress: { port: 0 } })
+  const { groupPorts } = await engine.listen({ groups: [{ id: 'claude-code.settings', port: 18801, auth: true, token: 'fedcba9876543210fedcba9876543210' }] })
+  const ingressPort = groupPorts['claude-code.settings'] // the door: the daemon binds the wiring's slot to the engine's listen({groups})
   t.after(async () => { origin.close(); await closeWithin(engine) })
   const settled = async ({ envelope = false } = {}) => { for (let i = 0; i < 400 && (flows.length < 1 || (envelope && envelopes.length < 1)); i++) await new Promise((x) => setTimeout(x, 10)) }
-  /** An agent's connection as the kernel hands it over (CONNECT as `of.<form>`), then TLS to the origin trusting `ca`. */
+  /** An agent's connection to the DOOR (CONNECT with the group's credentials), then TLS to the origin trusting `ca`. */
   async function agent(ca) {
     const sock = net.connect(ingressPort, '127.0.0.1'); sock.on('error', () => {})
-    sock.write(`CONNECT 127.0.0.1:${origin.address().port} HTTP/1.1\r\nHost: x\r\nProxy-Authorization: Basic ${Buffer.from(`of.claude-code.cli:${TOKEN}`).toString('base64')}\r\n\r\n`)
+    sock.write(`CONNECT 127.0.0.1:${origin.address().port} HTTP/1.1\r\nHost: x\r\nProxy-Authorization: Basic ${Buffer.from(`claude-code.settings:fedcba9876543210fedcba9876543210`).toString('base64')}\r\n\r\n`) // the door's credentials: the group id and the listener token, as the written entry holds
     await within(new Promise((res) => { let got = ''; const on = (d) => { got += d.toString('latin1'); if (got.includes('\r\n\r\n')) { sock.removeListener('data', on); res() } }; sock.on('data', on) }), 4000, 'the 200', () => sock.destroy())
     return within(new Promise((resolve) => {
       let issuerOf = null, got = ''
@@ -273,5 +277,5 @@ test('W76 end to end: a Windows connection of a trusted process is decrypted and
   assert.equal(never.got, RESP)
   assert.match(never.issuer, /private origin CA/)
   await settled()
-  assert.deepEqual([flows[0].decision, flows[0].not_captured, flows[0].reason ?? null], ['splice', 'untracked', null], 'the tracker has no row to say why: the splice is what a missing gate looks like, never a broken connection')
+  assert.deepEqual([flows[0].decision, flows[0].not_captured, flows[0].reason ?? null], ['splice', 'untracked', 'not-a-process-of-form'], 'a pid whose process is not this door\'s own form (svchost at the claude door): the splice says so — the missing gate is what it looks like, never a broken connection')
 })

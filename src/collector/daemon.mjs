@@ -376,23 +376,6 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       if (!macIng && e.code === 'EADDRINUSE') v6Held = `[::1]:${port} is held by another process`
       failure('engine', Object.assign(new Error(`[::1]:${port} unavailable: ${errText(e)}; ${v6Held ? 'on will refuse to attach (M8)' : 'IPv6 agent connections go direct'}`), { code: e.code }))
     }
-    // 4.8 §3.3 「引擎(重)启动之后」: a group that had fallen back stays on its re-entry point until its next probe interval (up to 30 s, not captured
-    // meanwhile), so the daemon asks the kernel's own controller to health-test every on-form's fallback group NOW. The asking is the Windows wiring's
-    // (`redirector.win32.refreshProbes`); a platform without it (Linux: no kernel of its own) has nothing to do here. The answer is one state record
-    // (§12 `probes-refreshed`) — D38: not stderr, not silence — and never stops the daemon: the refresh only shortens a window the interval closes anyway.
-    let probeRefresh = null
-    if (redirector && redirector.win32 && typeof redirector.win32.refreshProbes === 'function') {
-      try {
-        probeRefresh = await redirector.win32.refreshProbes()
-      } catch (e) {
-        failure('engine', coded(e, 'engine-error')) // the wiring says a kernel that is not running is answered, not thrown: a throw is a bug of it
-      }
-      if (probeRefresh) event({ event: 'probes-refreshed', where: 'forwarder', reason: probeRefresh.ok === false
-        ? `the engine came up and the fallback probes could not be refreshed (${probeRefresh.reason}); groups that had fallen back stay on their re-entry point until their next probe interval (4.8 §3.3)`
-        : `the engine came up: the kernel was asked to health-test every on-form's fallback group now (4.8 §3.3)`,
-      ...(Array.isArray(probeRefresh.asked) ? { forms: probeRefresh.asked } : {}) })
-    }
-
     async function ensureReady() {
       syncTracker() // which harnesses are on, and their policy, before the live processes are judged
       if (!caState.ok) throw new Error(`the collector CA is unusable (${caState.which}: ${caState.reason}); not attaching, agent connections go direct`)

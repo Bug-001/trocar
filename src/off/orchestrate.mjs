@@ -31,7 +31,7 @@ import { disableAutostart, unitFilePath, UNIT_FILE_NAME } from './autostart.mjs'
 import { plistFilePath, AGENT_LABEL, agentState, undoAutostart } from './darwin.mjs'
 import { execTool } from './exec.mjs'
 import { listProcs, identityFor, pidAlive } from './proc.mjs'
-import { kernelForwardOnly, refuseElevatedByWhoami, disableScheduledTask } from './win32.mjs'
+import { refuseElevatedByWhoami, disableScheduledTask } from './win32.mjs'
 import { undoOptIns } from './win32-optin.mjs'
 import { undoDarwinOptIns } from './darwin-optin.mjs'
 import { runEventWriter } from './events.mjs'
@@ -433,14 +433,9 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
       if (u.pending.length) outcome = 'partial'
       else if (u.left.length || u.mode === 'unsupported') outcome = 'left'
       if (u.mode !== 'marker') for (const id of ids || []) if (!installed.includes(id)) receipt.skipped.push({ what: id, reason: `${id} 没有 asight 的入口(没装过,或早已撤掉)` })
-      // Windows (4.8 §4.2): a daemon that did not answer leaves the kernel preferring its dead engine — it is made forward-only (or
-      // stopped) before the entries go, so a new connection runs direct even before its entry is undone. A daemon that answered
-      // manages its own kernel on the way out; this is only the daemon-less half.
-      if ((deps.platform || process.platform) === 'win32' && routing.how !== 'daemon-reply') {
-        const k = await (w.deps.kernelForwardOnly || ((o) => kernelForwardOnly(o)))({ dir: w.dir, fs: w.fs, run: w.exec, env })
-        put({ kind: 'kernel', state: k.done, reason: `the kernel ${k.done === 'forward-only' ? 'made forward-only (its listeners stay, everything runs direct)' : k.done === 'stopped' ? 'stopped' : k.done === 'none' ? 'is not on record' : 'could not be dealt with'}${k.reason ? ` (${k.reason})` : ''}${Number.isInteger(k.kernel_pid) ? `; pid ${k.kernel_pid}` : ''}` })
-        if (k.done === 'failed') { receipt.problems.push(`the kernel could not be taken off the routing path (${k.reason}); agents may still be steered through it until it is stopped`); put({ event: 'failure', code: 'kernel-not-off', reason: k.reason }) }
-      }
+      // (The Windows kernel arm that stood here — a daemon that did not answer left the kernel preferring its dead engine, so the standalone off made it
+      // forward-only or stopped it through its controller — went with the kernel itself, D47's win32 twin: the engine's doors die with the daemon, nothing
+      // outlives them to be steered, and uninstall's purge list still cleans kernel-era residue: kernel\, kernel-archive\, forwarder\.)
       // 5 · no names: the autostart goes too (the daemon was asked to exit once drained in step 3). Windows' task is disabled HERE, by the off itself — the
       // registration survives any manifest (an on whose ledger is gone, a task registered from asight's file by hand), so claiming "disabled" without asking
       // schtasks left the task enabled at every login while the receipt said otherwise; the Run value stays a manifest entry and goes with the rest in step 4

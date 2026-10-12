@@ -8,7 +8,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
 import { matchForm, entryGate, imagesOf } from '../../../src/collector/arch/darwin/forms.mjs'
-import { processRulesOf } from '../../../src/netenv/mihomo/rules.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 
 const raw = String.raw
@@ -276,10 +275,9 @@ test('W23: a form that needs naming has an opt-in item and no automatic entry; t
   for (const w of Object.values(MAC)) {
     for (const g of w.groups.filter((x) => !(x.optIn && x.optIn.length))) {
       const own = w.forms.filter((f) => f.g === g.g && f.processRules)
-      const rules = processRulesOf({ pathPatterns: own.flatMap((f) => f.match.path || []), names: own.filter((f) => f.nameRule).map((f) => f.match.image) })
+      const rules = [...own.flatMap((f) => f.match.path || []), ...own.filter((f) => f.nameRule).map((f) => f.match.image)]
       for (const exe of IMAGES) for (const r of rules) {
-        const [type, payload] = r.split(/,(.*)/s)
-        const hit = type === 'PROCESS-NAME' ? payload.toLowerCase() === path.posix.basename(exe).toLowerCase() : new RegExp(payload, 'i').test(exe)
+        const hit = r.includes('/') ? new RegExp(r, 'i').test(exe) : r.toLowerCase() === path.posix.basename(exe).toLowerCase()
         assert.ok(!hit, `${g.g}: ${r} must not reach ${exe}`)
       }
     }
@@ -288,8 +286,8 @@ test('W23: a form that needs naming has an opt-in item and no automatic entry; t
 
 test('W3/§6.4: the desktop form\'s OWN kernel process rules meet the Chromium Helper family — the measured owner of the model sockets (`Claude Helper --type=utility`: the Helper fell to MATCH→upstream and the owningPid candidates never held it → untracked splice) — and stay inside Claude.app', () => {
   const f = MAC['claude-code'].forms.find((x) => x.id === 'claude-code.desktop')
-  const rules = processRulesOf({ pathPatterns: f.match.path || [], names: f.nameRule ? [].concat(f.match.image) : [] })
-  const payload = (r) => /PROCESS-PATH-REGEX,(.*)/s.exec(r)[1]
+  const rules = [...(f.match.path || []), ...(f.nameRule ? [].concat(f.match.image) : [])]
+  const payload = (r) => r
   const family = [
     '/Applications/Claude.app/Contents/MacOS/Claude',
     `${U}/Applications/Claude.app/Contents/MacOS/Claude`,
@@ -298,7 +296,7 @@ test('W3/§6.4: the desktop form\'s OWN kernel process rules meet the Chromium H
     '/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)',
     '/Applications/Claude.app/Contents/Frameworks/Claude Helper (GPU).app/Contents/MacOS/Claude Helper (GPU)',
   ]
-  for (const exe of family) assert.ok(rules.some((r) => new RegExp(payload(r), 'i').test(exe)), `${exe}: a PROCESS-PATH-REGEX of claude-code.desktop meets it (the kernel hands it to asight-fb-claude-code.desktop, the decrypt half\'s per-process arm)`)
+  for (const exe of family) assert.ok(rules.some((r) => r.includes('/') && new RegExp(r, 'i').test(exe)), `${exe}: a path pattern of claude-code.desktop meets it (matchForm claims it at the door, the decrypt half\'s per-process arm)`)
   for (const elsewhere of ['/opt/tools/Claude Helper', '/Applications/Other.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper']) {
     assert.ok(!rules.some((r) => new RegExp(payload(r), 'i').test(elsewhere)), `${elsewhere}: a Helper of another app is not Claude Desktop`)
   }

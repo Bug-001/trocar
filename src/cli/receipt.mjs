@@ -103,11 +103,10 @@ function winGroupRows(p, facts, t) {
 }
 
 /**
- * The plan `asight on` prints on Windows (4.8 §11): the kernel line, one row per entry group with the upstream the kernel will dial, the named opt-in items, the items that wait for a naming,
- * Smart App Control, the autostart and the drain note, closed by what asight never does — around them the same things every plan carries (1.6 §1.6: every file, what asight builds itself, the
- * skipped, the edited proxy fields, the machine's network, what to restart). A kernel that is missing or fails its pinned digest is the WHOLE plan (§11's second block): `on` stops before its
- * first write, there is nothing else to plan. `adoption` = what prepareAdoption returned (the facts, with each form's group plan), `prep` = the arch hook's answer (the kernel and Smart App
- * Control data). Pure: everything is handed in.
+ * The plan `asight on` prints on Windows (4.8 §11): one row per entry group with the upstream the engine's door will dial for it, the named opt-in items, the items that wait for a naming,
+ * the autostart and the drain note, closed by what asight never does — around them the same things every plan carries (1.6 §1.6: every file, what asight builds itself, the skipped, the edited
+ * proxy fields, the machine's network, what to restart). There is no kernel line (D47's twin: the engine is the only local proxy, `on` downloads nothing); `adoption` = what prepareAdoption
+ * returned (the facts, with each form's group plan), `prep` = the arch hook's answer when an arch has one (none does today). Pure: everything is handed in.
  */
 export function formatWinPlan(p, { home = null, autostart = true, netenv = null, env = process.env, adoption = null, prep = null, colors: c = noColor() } = {}) {
   const t = (x) => winShown(x, home)
@@ -156,15 +155,10 @@ export function formatWinPlan(p, { home = null, autostart = true, netenv = null,
     lines.push('  要你点名的(默认不做;点名: asight on <harness> --opt-in <形态>)')
     for (const x of offered) lines.push(`    ${x.form}  ${x.item}${x.scope === 'machine' ? '(要管理员)' : ''}    影响: ${x.impact}`)
   }
-  {
-    const s = prep && prep.sac
-    const word = s === 'off' ? '关' : s === 'on' || s === 'evaluation' ? '开' : `不知道(${s && s.unknown ? `${s.unknown.reason}${s.unknown.detail ? `:${s.unknown.detail}` : ''}` : '没读到'})`
-    lines.push(`  Smart App Control: ${word}(只读;开着时未签名的内核很可能起不来)`)
-  }
   if (p.unit) lines.push(`  自启: 计划任务 \\asight\\collector(本用户,${autostart ? '登录时' : '本次启动,登录时不自动起'})`)
   if (p.skipped && p.skipped.length) lines.push(`  跳过: ${p.skipped.map((s) => `${t(s.what)}(${s.reason})`).join('  ')}`)
   lines.push(...(p.edited || []).map((e) => `  你改过的代理设置: ${e.harness} 的 ${e.where || '代理字段'} 现在是 ${e.now ?? '空'}(asight 上次接上时是 ${e.was ?? '空'});继续会把它接成新的上游,再指回 asight`))
-  lines.push('  注意: on 期间启动的 agent,off 之后、重启之前仍经 asight 的内核(只转发)')
+  lines.push('  注意: on 期间启动的 agent,off 之后、重启之前仍连着 asight 的门(只转发)')
   if (p.restart && p.restart.length) lines.push(`  正在跑的 ${p.restart.map((x) => `${x.harness}(pid ${x.pid})`).join('、')} 重启后才会被采集;在那之前照常直连`)
   lines.push(...(netenv ? netenvText(netenv, { ids: p.targets || null, platform: 'win32' }) : []))
   lines.push('asight 不会: 开 TUN、改系统代理、往你的 VPN 里写东西、往登录环境写代理变量')
@@ -234,7 +228,7 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
   // an on that wrote everything but has no daemon to hang the links (--no-unit, nothing answering) is done and exits 0, but captures nothing yet: the header says so
   const idle = past && r.ok !== false && r.daemon && r.daemon.state !== 'running'
   const daemonBit = r.daemon && r.daemon.state === 'running' ? `守护进程在跑${r.daemon.pid ? `(pid ${r.daemon.pid})` : ''}${r.daemon.started ? ',这次拉起的' : ''}` : null
-  const kernelBit = r.capture && r.capture.actual === 'on' ? ' · 内核已挂' : ''
+  const kernelBit = r.capture && r.capture.actual === 'on' ? ' · 采集已接上' : '' // the capture switch's attached bit: the doors of the on groups are open (the engine is the proxy)
   const lines = [
     r.ok === false && past ? `${c.red('✗')} asight 没有做完(原因在下面)。`
       : idle ? 'asight 已写好入口与期望态,但守护进程没在跑:在它跑起来之前什么都不会被采集(本用户,未用 sudo)。'

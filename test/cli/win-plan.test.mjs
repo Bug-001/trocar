@@ -1,6 +1,6 @@
 // test/cli/win-plan.test.mjs — the plan `asight on` prints on Windows (4.8 §11, plan Task 10(c)): the kernel line, one row per automatic entry group with the upstream
 // the kernel will dial (the 「读不到你终端里的 HTTPS_PROXY」 note on the §2.2 rule-2/-3 cells — the agent's own prior needs no note, the system proxy and the direct
-// fallback do), Codex's WebSocket line, the 「要你点名的」 section with one 影响 per item, Smart App Control, the off exception, and 「asight 不会」 — and NOT the
+// fallback do), Codex's WebSocket line, the 「要你点名的」 section with one 影响 per item, the off exception, and 「asight 不会」 — and NOT the
 // per-process VPN line (V45: that one is `status <h>`'s; a plan says what `on` will do). A kernel that is missing or fails its pinned digest is the WHOLE plan (§11's
 // second block): `on` stops before its first write. Everything runs in the win-on-ctx sandbox — the real arch hooks, the real facts behind an injected helper, a fake
 // daemon — with the system proxy on, so the rows show both §2.2 rules the plan's example shows (claude-code direct, codex through the system proxy).
@@ -49,10 +49,9 @@ const PLAN = `asight 要做的(本用户,不需要管理员):
     opencode.desktop  start-menu-launcher    影响: your Start-menu and desktop shortcuts for OpenCode start it through an asight launcher; the taskbar pin, start at login and deep links do not go through it
     opencode.desktop  all-users-launcher(要管理员)    影响: needs administrator rights: the all-users shortcuts point at a launcher in a directory only SYSTEM and Administrators can write
     z-code.desktop  zcode-app-settings    影响: the whole Z-Code Desktop app (shell, renderers, the embedded browser) sends its connections through asight's kernel, where they are decrypted and recorded, and trusts asight's CA; this is the app's own settings file, nothing outside it
-  Smart App Control: 关(只读;开着时未签名的内核很可能起不来)
   自启: 计划任务 \\asight\\collector(本用户,登录时)
   跳过: kimi-code(no kimi-code configuration was found on this machine: nothing to change for it)
-  注意: on 期间启动的 agent,off 之后、重启之前仍经 asight 的内核(只转发)
+  注意: on 期间启动的 agent,off 之后、重启之前仍连着 asight 的门(只转发)
 本机网络环境: 不知道(a test: no VPN probe runs here)
 asight 不会: 开 TUN、改系统代理、往你的 VPN 里写东西、往登录环境写代理变量`
 
@@ -67,7 +66,7 @@ test('§11: on --dry-run prints the plan — the kernel line, every automatic gr
 test('§11: the plan\'s rows carry the three things the task names apart from the golden block — one 影响 per offered item, NOT the per-process VPN line (V45), and the shell-proxy note when the terminal itself has one', async () => {
   const w = winWorld({ internet: SYSPROXY })
   const plain = (await w.run(['--dry-run'])).stdout().split('\n\n')[0].split('\n')
-  const from = plain.findIndex((l) => l.includes('要你点名的')), to = plain.findIndex((l) => l.includes('Smart App Control'))
+  const from = plain.findIndex((l) => l.includes('要你点名的')), to = plain.findIndex((l) => l.includes('自启:'))
   assert.ok(from > 0 && to > from)
   assert.equal(to - from - 1, 9, 'nine offered items in 4.8 §2.4\'s order')
   for (const l of plain.slice(from + 1, to)) assert.match(l, /影响: /, 'one 影响 per offered item')
@@ -84,7 +83,6 @@ test('`on` with platform win32 runs the new collector — the win32 arch hooks a
   const r = await w.run(['--dry-run'], { platform: 'win32' })
   assert.equal(r.exit, 0, r.text)
   assert.match(r.stdout(), /^asight 要做的/, 'the §11 plan of the NEW collector is what win32 gets')
-  assert.match(r.stdout(), /自带内核/, 'drawn from the win32 arch\'s own prepare answer (the kernel line)')
 })
 
 test('§11: a named opt-in item moves out of 「要你点名的」 into the plan\'s own changes (「你点名的(这次做,off 时一起撤掉)」), its 影响 carried along', async () => {
@@ -95,61 +93,15 @@ test('§11: a named opt-in item moves out of 「要你点名的」 into the plan
   const chosen = plan.split('\n').filter((l) => l.includes('你点名的(这次做'))
   assert.equal(chosen.length, 1, 'the section exists once')
   assert.match(plan.split('\n')[plan.split('\n').indexOf(chosen[0]) + 1], /^    kimi-code\.vscode  vscode-settings-and-launcher    影响: /, 'the named item with its 影响, under the section head')
-  assert.ok(!/    kimi-code\.vscode  vscode-settings-and-launcher/.test((plan.split('要你点名的(默认不做')[1] || '').split('Smart App Control')[0]), 'and the offered section no longer lists it')
+  assert.ok(!/    kimi-code\.vscode  vscode-settings-and-launcher/.test((plan.split('要你点名的(默认不做')[1] || '').split('自启:')[0]), 'and the offered section no longer lists it')
 })
 
-test('§11: a kernel that is missing or fails its pinned digest is the WHOLE plan — the refusal line and the manual alternative, nothing else; a real `on` stops before its first write (exit 1, a failure event in flows/, no manifest)', async () => {
-  const refuse = { reason: 'asight-forwarder.exe 的 sha256 与 mihomo-pin.json 不符', code: 'kernel-digest', commands: ['把 mihomo-windows-amd64-compatible-v1.19.32.zip 放进 %USERPROFILE%\\.asight\\collector\\kernel-archive\\ 再跑 asight on,或修好网络 / 代理(HTTPS_PROXY)后重跑'] }
-  const w = winWorld({ prep: { refuse } })
-  const dry = await w.run(['--dry-run'])
-  assert.equal(dry.exit, 0)
-  assert.deepEqual(dry.stdout().split('\n\n')[0].split('\n').map(squash), [
-    'asight 要做的(本用户,不需要管理员):',
-    '  自带内核  没拿到:下载失败或摘要不符(原因与手动替代见回执),所以 on 不开始',
-    `    手动替代(asight 不替你跑):${refuse.commands.join(' 或 ')}`,
-  ].map(squash), '§11\'s second block is the whole plan')
-  assert.match(dry.stdout(), /\(a real asight on stops there\)/, 'the dry-run receipt says the stop a real run would meet (R6)')
-  const real = await w.run(['--yes'])
-  assert.equal(real.exit, 1, 'EXIT.incomplete: on stopped at the refusal')
-  assert.ok(!fs.existsSync(path.join(w.dir, 'install-manifest.json')), 'nothing was written: the plan never ran')
-  const flows = fs.readdirSync(path.join(w.dir, 'flows')).filter((f) => f.endsWith('.ndjson'))
-  const events = flows.flatMap((f) => fs.readFileSync(path.join(w.dir, 'flows', f), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)))
-  assert.ok(events.some((e) => e.event === 'failure' && e.where === 'forwarder' && e.code === 'kernel-digest'), 'the stop is on disk, not only in the receipt (D38)')
-})
 
 // D44 (4.8 §8 ① ⑥): the kernel is neither in `kernel\` nor in the cache → the plan's download line (version, the archive's size, the pinned sha256, the host),
 // and the download itself happens only in the write phase of a REAL on — never in a dry run, never before the confirmation.
-test('D44: the missing kernel is a download line in the plan — and the write-phase hook runs once, only in a real on (a dry run downloads nothing)', async () => {
-  const prep = { notes: ['the kernel line'], kernel: { version: 'v1.19.32', exe: 'asight-forwarder.exe', sha256: '974a4d7ad69aed27aa2e8f91d61113573c14dadb14562c63e58effabf59816f0', state: 'will-download', size: 22525067, url: 'https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-windows-amd64-compatible-v1.19.32.zip', host: 'github.com' } }
-  const calls = []
-  const w = winWorld({ internet: SYSPROXY, prep, ensureKernel: async (a) => { calls.push(a); return { ok: true, path: 'kernel\\asight-forwarder.exe', sha256: 'a'.repeat(64), from: 'download', copied: true, note: 'the kernel was downloaded and both digests verified (sha256 aaaaaaaaaaaa…)' } } })
-  const dry = await w.run(['--dry-run'])
-  assert.equal(dry.exit, 0)
-  const plan = dry.stdout().split('\n\n')[0].split('\n')
-  assert.ok(plan.some((l) => squash(l) === squash('  自带内核  将下载内核 mihomo v1.19.32(压缩包 21.5 MB,sha256 钉死,来自 github.com),确认后开始')), 'the download line: version, the archive\'s size, the pinned sha256, the host (4.8 §8 ①)')
-  assert.deepEqual(calls, [], 'a dry run downloads nothing (R6)')
-  const real = await w.run(['--yes'])
-  assert.equal(real.exit, 0, real.text)
-  assert.equal(calls.length, 1, 'the write-phase hook ran exactly once (the CLI\'s one online step)')
-  assert.equal(calls[0].home, w.home, 'with the home the on runs in')
-  assert.match(real.stdout(), /the kernel was downloaded and both digests verified/, 'the receipt carries the download\'s own line (from the hook\'s note)')
-})
 
 // D44 (4.8 §8 ①): a failed download stops the on AFTER the confirmation and BEFORE any agent file — the sandbox HOME is byte-identical to what it was, and
 // the unwritten receipt carries the reason with the manual alternative (the hook's own failure event is the wiring test's cell; here the hook is a fake).
-test('D44: a failed download stops the on before any agent file — the world byte-identical, an unwritten receipt with the reason, nothing else written', async () => {
-  const prep = { notes: ['the kernel line'], kernel: { version: 'v1.19.32', exe: 'asight-forwarder.exe', sha256: '974a4d7ad69aed27aa2e8f91d61113573c14dadb14562c63e58effabf59816f0', state: 'will-download', size: 22525067, url: 'https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-windows-amd64-compatible-v1.19.32.zip', host: 'github.com' } }
-  const w = winWorld({ internet: SYSPROXY, prep, ensureKernel: async () => ({ ok: false, reason: 'the download of mihomo-windows-amd64-compatible-v1.19.32.zip failed (curl: exit 22); nothing was changed. 手动替代(asight 不替你跑): 把 mihomo-windows-amd64-compatible-v1.19.32.zip 放进 %USERPROFILE%\\.asight\\collector\\kernel-archive\\ 再跑 asight on,或修好网络 / 代理(HTTPS_PROXY)后重跑' }) })
-  const before = snapshot(w.home)
-  const r = await w.run(['--yes', '--json'])
-  assert.equal(r.exit, 1, 'EXIT.incomplete: on stopped at the failed download')
-  assert.deepEqual(snapshot(w.home), before, 'a failed download writes nothing: not one agent file, not even the collector\'s own (the receipt is the record)')
-  const doc = r.json()
-  assert.equal(doc.ok, false)
-  assert.deepEqual(doc.changed, [], 'unwritten receipt: no change listed')
-  assert.match(doc.notes.join('\n'), /curl: exit 22/, 'the failure\'s reason rides in the receipt')
-  assert.match(doc.notes.join('\n'), /手动替代\(asight 不替你跑\)/, 'with the manual alternative (W27 ⑤)')
-})
 
 /** every file and its bytes under the home — a refusal or a failed download must leave all of it untouched (W27 ⑥ / D44). */
 function snapshot(home) {

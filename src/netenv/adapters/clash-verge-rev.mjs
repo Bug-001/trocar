@@ -1,6 +1,6 @@
 // clash-verge-rev.mjs — the read-only adapter for Clash Verge Rev on Windows (RFC 4.7 §3; acceptance N3 N4 N9 N15). D43: asight writes nothing into a VPN, so this module has no write function at all. It finds
 // Verge's controller and trusts only Verge's own core (N4), reads the few fields of 4.7 §3.2 from verge.yaml, config.yaml and the runtime clash-verge.yaml, and asks the core GET /version and GET /configs through
-// a controller client that cannot write (createController own:false, N9). The runtime file holds the subscription's address and the user's nodes, groups and rules, and the controller's secret: only the keys of
+// a controller client that cannot write (createController's read-only allow-list, N9; the own-kernel mode went with the kernel, D47's twin). The runtime file holds the subscription's address and the user's nodes, groups and rules, and the controller's secret: only the keys of
 // §3.2 are taken from it, in memory, and nothing else of it is kept, returned or logged (N1). It does not read profiles.yaml or Script.js: those were read for the VPN block that D43 withdrew.
 //
 // The module is pure of the machine: the Verge data directory, the filesystem, the controller (or the helper and the pipe lister that find it) and whether Verge is running come in as arguments, so a test runs it
@@ -41,7 +41,7 @@ export function createVergeAdapter({ home, fs = nodeFs, controller = null, listP
     if (found && (found.ctl || now().getTime() - foundAt < unknownTtlMs)) return found.ctl ?? null
     const r = await discoverController({ listPipes, helper, readRuntime: async () => rd(P.runtime).text, env, makeClient, installDirs })
     foundAt = now().getTime()
-    found = r.unknown ? { unknown: r.unknown } : { ctl: makeClient({ endpoint: r.endpoint, secret: r.secret, timeoutMs: 8000, own: false }), how: r.how, version: r.version, endpoint: maskEndpoint(r.endpoint) }
+    found = r.unknown ? { unknown: r.unknown } : { ctl: makeClient({ endpoint: r.endpoint, secret: r.secret, timeoutMs: 8000 }), how: r.how, version: r.version, endpoint: maskEndpoint(r.endpoint) }
     return found.ctl ?? null
   }
   async function get(target) {

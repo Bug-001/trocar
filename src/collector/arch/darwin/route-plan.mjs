@@ -11,7 +11,7 @@
 // (`forms.mjs`): the harness is on, the user named an opt-in form, the upstream is something asight can dial. It reads, through the ctx it is given, the files the agents read; it writes nothing, opens no socket
 // and names no harness: the groups and forms it is given are the harness files' data (arch/ never imports harness/, the daemon hands them in).
 import { parseDotenv, parseJsonc } from '../../core/config-read.mjs'
-import { bypassRuleOf } from '../../../netenv/mihomo/rules.mjs'
+import { bypassRuleOf } from '../../core/upstream-shape.mjs'
 import { entryGate } from './forms.mjs'
 import { proxyAuthOf, upstreamFor } from './upstream.mjs'
 
