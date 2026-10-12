@@ -27,6 +27,7 @@ import { createProxyEntries } from './entries.mjs'
 import { readSystemProxy, readHkcuEnv, watchSystemProxy } from './upstream.mjs'
 import { readText, readTextOrError } from '../../core/config-read.mjs'
 import { readManifest } from '../../core/trust/journal.mjs'
+import { MARKER_TOLERANCE_MS } from '../../core/trust/confirm.mjs'
 import { collectorDir } from '../../../off/paths.mjs'
 import { matchForm } from './forms.mjs'
 
@@ -45,7 +46,7 @@ const movedRoute = (a, b) => !a || !b || a.on !== b.on || JSON.stringify(a.upstr
 
 /**
  * createWin32Collector({ env, dir, home, harnesses, failure, event, manifest, desired, optIns, deps }) → the Redirector (4.9 §1), carrying a `win32` bag of
- *   what only the daemon reaches: `{ helper, bindDoors, ingress, replan, groups, netenv, appliedHosts, osMatch, osLayers, close }` (the darwin bag's shape;
+ *   what only the daemon reaches: `{ helper, bindDoors, ingress, replan, groups, netenv, appliedHosts, osMatch, osLayers, markerToleranceMs, close }` (the darwin bag's shape;
  *   osMatch is the registry's second key, 4.8 §5.4). Everything is injected through `deps` for a test.
  *   failure (where, error, extra)  the daemon's failure recorder · event (record)  its event writer (netenv-change, the helper's own records)
  *   manifest  () → the manifest as it is NOW (the daemon re-reads it; null reads it here) · desired  () → state.json's `harnesses` (`{ <id>: { desired, extra_hosts } }`)
@@ -187,6 +188,7 @@ export async function createWin32Collector({ env = process.env, dir, home = env.
     appliedHosts: () => Object.fromEntries(appliedHosts),
     osMatch: { win32: (f) => { const m = matchForm(forms, f, { home }); return m.kind === 'form' ? harnessOfForm.get(m.id) ?? null : null } }, // one rule for which form (4.8 §5.4): the registry judges by the same matchForm the doors' lookups route by
     osLayers: { win32: (d) => (d.win32 && d.win32.layers) || d.layers }, // Hermes declares its own Windows layers; the rest read the same files as on Linux
+    markerToleranceMs: MARKER_TOLERANCE_MS, // the Windows plugin twins (dsh, OpenCode) write Math.round(performance.timeOrigin) against the process table's own ms-epoch startedAt (procinfo.mjs): the byte-exact 0 default (daemon.mjs's `|| 0`) read every one of them `marker-stale` → untrusted → spliced, traffic relayed with no llm_call (measured live on a Windows test machine; darwin's bag has carried the same confirm.mjs tolerance since review F4 — the win line simply never wired it)
     close: () => { if (netenvWatcher) netenvWatcher.stop() }, // the helper and the watcher stop with the redirector's own close()
   }
   return redirector
