@@ -60,6 +60,20 @@ test('uninstall --dry-run writes nothing and asks the daemon nothing: the same r
   assert.ok(json.removed.includes(standalonePath(s.home)) && json.removed.includes(path.join(s.dir, 'install-manifest.json')))
 })
 
+test('R6: --purge-data takes the collector machine with the data — kernel/, kernel-archive/, forwarder/ and control.json / ingress.json (the pinned kernel copy and cache, the kernel config with its secret, the daemon control endpoint) — while a plain uninstall leaves them for the next on', async () => {
+  const leftovers = (s) => { for (const k of ['kernel/asight-forwarder.exe', 'kernel-archive/mihomo.zip', 'forwarder/config.json', 'forwarder/home/db.sql', 'control.json', 'ingress.json']) { const f = path.join(s.dir, k); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, '{"left":true}\n') } }
+  const names = ['kernel', 'kernel-archive', 'forwarder', 'control.json', 'ingress.json']
+  const there = (s) => names.map((n) => fs.existsSync(path.join(s.dir, n)))
+  const purged = await installedHome({ names: ['claude-code'] }); keep(purged); leftovers(purged)
+  const r = await cli(purged, ['--purge-data', '--yes'])
+  assert.equal(r.exit, 0, r.io.text())
+  assert.deepEqual(there(purged), [false, false, false, false, false], 'the kernel, its cache, the forwarder state and the two endpoint files go with the data')
+  const plain = await installedHome({ names: ['claude-code'] }); keep(plain); leftovers(plain)
+  const p = await cli(plain, ['--yes'])
+  assert.equal(p.exit, 0, p.io.text())
+  assert.deepEqual(there(plain), [true, true, true, true, true], 'a plain uninstall keeps them (the kernel may be draining; the next on reuses the cache)')
+})
+
 test('R6: --purge-data deletes what nothing brings back, so a yes is asked for — no terminal and no --yes prints the plan and exits 2 with nothing done; a terminal asks once (n: nothing, exit 1); --yes goes; a plain uninstall never asks', async () => {
   const s = await installedHome({ names: ['claude-code'] }); keep(s)
   const snap = snapshot(s.home), ran = s.sys.exec.calls.length

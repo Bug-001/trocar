@@ -104,6 +104,32 @@ export function taskXml({ user, node, asight, conhost = 'conhost.exe' } = {}) {
 
 const schtasks = (args, { run, env }) => execTool('schtasks', args, { run, env })
 
+/** What a task that did not start looks like in its own answer: SCHED_S_TASK_HAS_NOT_RUN (267011 = 0x41303). A `/Run` with no interactive session for the task answers exit 0
+ *  SUCCESS and starts NOTHING — the only word that tells is this value, probe-verified on a Windows test machine (2026-10-12): after such a /Run, `schtasks /Query /V` shows LastTaskResult
+ *  267011 and no daemon ever comes up (`on` then spent its 15 s probing and failed with `start-failed`). */
+export const TASK_NOT_YET_RUN = 267011
+
+/** The task's LastTaskResult, read from `schtasks /Query /TN <task> /V /FO CSV` (the one question whose answer says whether a /Run that said SUCCESS actually started anything).
+ *  The column is found by its header — `Last Result` in the en locale, `上次运行结果` on zh-CN, the two this build has seen — and the value may be decimal or 0x-prefixed. A header the
+ *  parser does not know falls back to looking for the not-yet-run VALUE itself in the row (it is a number no other column carries). → the number, or null when the query failed, was
+ *  killed, or answered nothing readable (null is "no verdict": the caller falls back on nothing and changes nothing). */
+function lastTaskResult({ run, env }) {
+  const r = schtasks(['/Query', '/TN', TASK_NAME, '/V', '/FO', 'CSV'], { run, env })
+  if (r.code !== 0 || !r.out) return null
+  const lines = String(r.out).split(/\r?\n/).filter((l) => l.trim() !== '')
+  if (lines.length < 2) return null
+  const cells = (line) => [...line.matchAll(/"([^"]*)"/g)].map((m) => m[1])
+  const head = cells(lines[0])
+  const row = cells(lines[1])
+  if (row.length === 0) return null
+  let at = head.findIndex((h) => /^last([ _]run)?[ _]?result$/i.test(h.trim()) || /上次运行结果/.test(h))
+  if (at < 0 || at >= row.length) at = row.findIndex((v) => /^(267011|0x41303)$/i.test(v.trim()))
+  if (at < 0) return null
+  const v = row[at].trim()
+  const n = /^0x[0-9a-f]+$/i.test(v) ? parseInt(v, 16) : /^-?\d+$/.test(v) ? Number(v) : NaN
+  return Number.isInteger(n) ? n : null
+}
+
 const TRUST_AND_PROXY = /^(NODE_EXTRA_CA_CERTS|NODE_OPTIONS|NODE_USE_SYSTEM_CA|NODE_USE_ENV_PROXY|NODE_TLS_REJECT_UNAUTHORIZED|SSL_CERT_FILE|SSL_CERT_DIR|(HTTPS?|ALL|NO|FTP|WSS?)_PROXY)$/i // Windows names are not case sensitive
 /**
  * The environment of a daemon that is started directly (`start()`, the fallback with `now`): the installer shell's, without the variables that change what the daemon trusts or whom it dials (Node's CA, TLS and proxy
@@ -214,6 +240,10 @@ const settle = (task, k) => ({ code: (task.code !== 0 ? task.code : k.code) ?? 1
  * returning `{ code, out, err }`. `path` is the task's XML, an owned file the install manifest lists; `links` is empty (a task has no wants/ link); `text(env)` is the XML (a Windows task has no environment of its own, so the
  * daemon environment install offers is not carried: a daemon the task starts trusts the system store, 4.8 §6.2). Nothing is registered until `enable`.
  *   enable({ now })  registers the task (`/Create /XML … /F`, which also switches a disabled one on) and, with `now` (the default; install passes false when a daemon already answers), runs it (`/Run`) → `via: 'task'`.
+ *                    A `/Run` that answered SUCCESS is not trusted on its word: the task's LastTaskResult is read back (`/Query /V /FO CSV`), and 267011 — the task has not run, what a /Run with no
+ *                    interactive session for the task answers while starting nothing (probe-verified on a Windows test machine, 2026-10-12) — starts the daemon DIRECTLY this run (`start()`'s spawn; on's probe
+ *                    of the control socket is the "no daemon answers" check here) with `warn` saying exactly that ('started directly this run; the task will start it at next login'); the task keeps
+ *                    the login either way. A result that cannot be read changes nothing: the /Run's own answer stands.
  *                    When schtasks REFUSES the registration, the Run-key fallback takes over (4.8 §7): `via: 'run-key'`, code 0 (`on` does not fail because the Task Scheduler said no), `reason` (why), `ledger` (the manifest entry,
  *                    runKeyFallback's), `ours`, `event` (the `task-register-failed` failure record for the caller to write: it carries the reason and names the entry used instead), and with `now` the supervised daemon is started
  *                    directly (the Run value only runs at the next login). When the fallback fails too, code is not 0 and `err` has both reasons.
@@ -255,7 +285,17 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
         // the task is the one start at login now: an earlier fallback's Run value would start a second supervisor at every login, so it goes (the user's own prior value, the ledger's, comes back)
         const gone = removeRunValue({ run, env, prior })
         const note = gone.runKey === 'failed' ? { warn: `the HKCU Run entry ${RUN_KEY.name} of an earlier \`on\` could not be taken out (${gone.err || 'no reason given'}): both it and the task start asight at login (one supervisor runs, the other leaves at once); \`asight off\` removes both` } : {}
-        return { ...(now ? schtasks(['/Run', '/TN', TASK_NAME], tools) : c), via: 'task', ...(gone.runKey !== 'absent' ? { runKey: gone.runKey } : {}), ...note }
+        const base = { via: 'task', ...(gone.runKey !== 'absent' ? { runKey: gone.runKey } : {}), ...note }
+        if (!now) return { ...c, ...base }
+        const ran = schtasks(['/Run', '/TN', TASK_NAME], tools)
+        if (ran.code === 0 && lastTaskResult(tools) === TASK_NOT_YET_RUN) {
+          // /Run answered SUCCESS and started nothing (no interactive session for the task, 267011): start the daemon directly THIS run — on's own probe of the control socket is the
+          // "is a daemon answering" check here — and say so; the task keeps the login and will start it there (first `on` after an SSH install, the lab's shape)
+          const started = startDirect()
+          const warn = `schtasks /Run answered success but the task has not run (LastTaskResult 267011, no interactive session for it): the daemon was started directly this run; the task will start it at next login`
+          return started.code !== 0 ? { code: started.code ?? 1, out: '', err: started.err, ...base, warn } : { ...ok, ...base, ...(started.pid != null ? { pid: started.pid } : {}), warn }
+        }
+        return { ...ran, ...base }
       }
       if (c.precondition) return { ...c, via: 'task' }
       const why = errOf(c)

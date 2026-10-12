@@ -48,3 +48,8 @@ export function failureBrief(g) {
   const head = [l.where, l.code].filter(Boolean).join('/')
   return [head || String(l.event || g.key || '记录'), reason].filter(Boolean).join(' ') // a row the fold knows only by its key still says which it was (R11)
 }
+
+/** The codex WebSocket hint (measured on a Windows test machine): Codex's WebSocket client on Windows does not read the `.env` block's `SSL_CERT_FILE`, so the
+ *  WebSocket's TLS is not decrypted through the block asight writes — the door that works is the NAMED `cert-store-current-user` item (the CA into `CurrentUser\\Root`, Windows's own confirm
+ *  dialog, never installed without the name). `on`'s plan and `doctor` print this line exactly while codex is a target on win32 and the item is not in the ledger; NOTHING is ever installed by it. */
+export const CODEX_WS_CERT_HINT = 'Windows 上采 Codex 的 WebSocket 需要点名装证书: asight on codex --opt-in cert-store-current-user(会弹 Windows 自己的确认框,不弹不装)'

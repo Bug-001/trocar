@@ -178,6 +178,42 @@ test('the round trip (audit F3): an off over a manifest of every collector kind 
   assert.ok(receipt.notes.some((n) => n.includes('drain')), 'the receipt says why')
 })
 
+test('off step 5 disables the scheduled task ITSELF, whatever the manifest holds (a manifest without a scheduled-task entry — or none at all — used to leave the task ENABLED while the receipt said `autostart: disabled`): schtasks /Change /DISABLE runs, the receipt says what happened, and a refusal is a failure, not a silent claim', async () => {
+  const home = tmpDir('asight-w32-step5-')
+  const dir = path.join(home, '.asight', 'collector')
+  fs.mkdirSync(dir, { recursive: true })
+  const settings = path.join(home, 'settings.json')
+  fs.writeFileSync(settings, JSON.stringify({ other: true }, null, 2) + '\n')
+  const m = newManifest(new Date())
+  applyJsonKey({ dir, manifest: m, harness: 'claude-code', file: settings, keys: ['proxy'], value: 'http://127.0.0.1:17999', home, now: new Date(), fs })
+  m.entries[0].kind = 'proxy-entry'
+  saveCoreManifest(dir, m) // no scheduled-task entry in the ledger: the task was registered by an on whose manifest is gone, or by hand from asight's file
+  const st = schtasks()
+  const { receipt, exit } = await runOff({ home, env: { ASIGHT_TEST_SANDBOX: '1' }, ids: null, yes: true, deps: {
+    platform: 'win32',
+    exec: execOf(reg({ value: 'gone' }), st),
+    procs: async () => [],
+    daemonState: async () => ({ state: 'none' }),
+    lockWaitMs: 0,
+  } })
+  assert.equal(exit, 0, `off finished${receipt.problems.length ? `: ${receipt.problems[0]}` : ''}`)
+  assert.ok(st.calls.some((c) => c.includes('/Change') && c.includes('/DISABLE')), 'the task was ACTUALLY disabled (schtasks /Change /TN \\asight\\collector /DISABLE ran)')
+  assert.deepEqual(receipt.autostart, { disabled: true, removed: [], note: 'the task is disabled now; the Run value is a ledger entry, undone with the rest (4.8 §4.2)' })
+  // a task that cannot be disabled: the receipt says so and the off is not clean
+  const bad = schtasks({ fail: ['/Change'] })
+  const f = await runOff({ home: (() => { const h = tmpDir('asight-w32-step5f-'); const d = path.join(h, '.asight', 'collector'); fs.mkdirSync(d, { recursive: true }); const sf = path.join(h, 'settings.json'); fs.writeFileSync(sf, JSON.stringify({ other: true }, null, 2) + '\n'); const mm = newManifest(new Date()); applyJsonKey({ dir: d, manifest: mm, harness: 'claude-code', file: sf, keys: ['proxy'], value: 'http://127.0.0.1:17999', home: h, now: new Date(), fs }); mm.entries[0].kind = 'proxy-entry'; saveCoreManifest(d, mm); return h })(), env: { ASIGHT_TEST_SANDBOX: '1' }, ids: null, yes: true, deps: {
+    platform: 'win32',
+    exec: execOf(reg({ value: 'gone' }), bad),
+    procs: async () => [],
+    daemonState: async () => ({ state: 'none' }),
+    lockWaitMs: 0,
+  } })
+  assert.equal(f.exit, 0, 'the entries were undone; the autostart failure is the receipt\'s own line (as on darwin and linux), not the off\'s exit')
+  assert.equal(f.receipt.autostart.disabled, false, 'the receipt says NOT disabled, it does not claim it')
+  assert.match(f.receipt.autostart.error, /did not run|failed/)
+  assert.ok(f.receipt.notes.some((n) => /did not run|failed/.test(n)), 'the failure is said in the notes')
+})
+
 test('the names the undo touches are the arch module\'s own (the inlined pieces cannot drift)', () => {
   assert.equal(TASK_NAME, ARCH_TASK_NAME)
   assert.deepEqual(RUN_KEY, ARCH_RUN_KEY)

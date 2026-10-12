@@ -23,6 +23,7 @@ import { readManifest } from '../../core/trust/journal.mjs'
 import { collectorDir } from '../../../off/paths.mjs'
 import { matchForm } from './forms.mjs'
 import { names, probeUrl } from '../../../netenv/mihomo/rules.mjs'
+import { execTool } from '../../../off/exec.mjs'
 
 const CONTROLLER_RANGE = [19000, 19999] // the kernel's own controller, its own free port (the generator refuses one it has already seen)
 const randomPort = (random) => CONTROLLER_RANGE[0] + (random(4).readUInt32BE(0) % (CONTROLLER_RANGE[1] - CONTROLLER_RANGE[0] + 1))
@@ -76,13 +77,41 @@ export async function createWin32Collector({ env = process.env, dir, home = env.
   const kernelExe = path.join(kernelDir, KERNEL_EXE)
   const pin = deps.pin || loadPin({ fs })
   const procStart = deps.procStart || (async (pid) => { try { const r = await helper.call('ps', {}, { timeoutMs: 10000 }); const row = ((r && r.rows) || []).find((x) => x.pid === pid); return row && row.startedAt != null ? row.startedAt : null } catch { return null } })
+  // the orphan seat's OS questions (forwarder.mjs portHolders / killPid): netstat -ano -p TCP for the listeners of the config's ports (E6's tool — never Get-NetTCPConnection), tasklist
+  // for each holder's image, and the one hard kill (`taskkill /PID <pid> /F`). Only a holder whose image is the kernel's own is ever killed (the forwarder's rule, not this wiring's).
+  const askPortHolders = async (ports) => {
+    const want = new Set(ports)
+    const net = execTool('netstat', ['-ano', '-p', 'TCP'], { ...(deps.exec != null ? { run: deps.exec } : {}), env, timeoutMs: 5000 })
+    if (net.code !== 0) return []
+    const pids = new Map() // pid → the ports it listens on
+    for (const line of String(net.out).split('\n')) {
+      const t = line.trim().split(/\s+/)
+      if (t[0] !== 'TCP' || t[3] !== 'LISTENING') continue
+      const m = /^(?:[\d.]+|\[::1?\]):(\d+)$/.exec(t[1] || '')
+      const port = m ? Number(m[1]) : null
+      const pid = Number(t[4])
+      if (port != null && want.has(port) && Number.isInteger(pid) && pid > 0) { if (!pids.has(pid)) pids.set(pid, []); pids.get(pid).push(port) }
+    }
+    const out = []
+    for (const [pid, held] of pids) {
+      const img = execTool('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { ...(deps.exec != null ? { run: deps.exec } : {}), env, timeoutMs: 5000 })
+      if (img.code !== 0) continue // the pid may be gone between the two questions: no image, no verdict, no kill
+      const cells = [...String(img.out).split('\n')[0].matchAll(/"([^"]*)"/g)].map((x) => x[1])
+      if (cells.length >= 2 && Number(cells[1]) === pid) for (const port of held) out.push({ port, pid, image: cells[0] })
+    }
+    return out
+  }
+  const taskkill = (pid) => {
+    const r = execTool('taskkill', ['/PID', String(pid), '/F'], { ...(deps.exec != null ? { run: deps.exec } : {}), env, timeoutMs: 5000 })
+    if (r.code !== 0) throw new Error(`taskkill /PID ${pid} /F ${r.code === null ? `did not run (${r.err || 'no reason given'})` : `failed (exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''})`}`)
+  }
   const forwarder = deps.forwarder || createForwarder({
     dir, bin: kernelExe, controller, ...(deps.spawn ? { spawn: deps.spawn } : {}), ...(deps.makeController ? { makeController: deps.makeController } : {}),
     ...(deps.now ? { now: deps.now } : {}), ...(deps.setTimer ? { setTimer: deps.setTimer } : {}), ...(deps.clearTimer ? { clearTimer: deps.clearTimer } : {}),
     events: { failure: (rec) => event(rec), state: (rec) => event(rec) },
     sacOn: async () => sacBlocks(await sacState({ helper })),
     verifyCopy: () => verifyCopy({ dir: kernelDir, pin, arch: process.arch, ...(deps.fs ? { fs } : {}) }),
-    isFree: deps.isFree || freeOnLoopback, procStart, fs,
+    isFree: deps.isFree || freeOnLoopback, portHolders: askPortHolders, killPid: taskkill, procStart, fs,
   })
   const entries = deps.entries || createProxyEntries({ dir, home, groups, ctx, ingress, manifest: manifestNow, fs })
 
@@ -126,6 +155,16 @@ export async function createWin32Collector({ env = process.env, dir, home = env.
     carried: () => [...carriedOf()],
     ...(deps.now ? { now: deps.now } : {}),
   })
+
+  // start(): beside the redirector's own (the helper's ready line, the process baseline), claim what an earlier daemon left — a HEALTHY kernel the lock names is adopted
+  // (4.8 §4.1, W28's 认领; without this the first attach sees port-taken and capture is dead until a hand kills the kernel — darwin's review F2, the same seam), and
+  // a kernel the dead lock lost track of (the lock names a gone pid, a live kernel holds the ports) is killed by the orphan seat before anything attaches.
+  const innerStart = redirector.start
+  redirector.start = async (...a) => {
+    const r = await innerStart(...a)
+    if (forwarder && typeof forwarder.adopt === 'function') { try { await forwarder.adopt() } catch (e) { failure('forwarder', e) } } // adopt answers, never throws; a throw here is a bug, said and survived
+    return r
+  }
   await readNetenv()
   await replan()
 

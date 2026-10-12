@@ -199,6 +199,14 @@ test('W71 a system-proxy change (ProxyServer, or ProxyOverride alone) gives one 
   assert.deepEqual(r.failures, [])
 })
 
+test('start() claims what an earlier daemon left: the forwarder\'s adopt() is called once at the daemon\'s start (a healthy kernel the lock names is adopted, a kernel the dead lock lost track of is killed by the orphan seat — 4.8 §4.1, darwin review F2\'s seam); a forwarder without adopt (an older shape) starts all the same', async () => {
+  const adopted = []
+  const r = await rigged(['codex'], { over: { deps: { forwarder: { async adopt() { adopted.push(1); return { adopted: false, reason: 'no-lock' } }, async reload() { return { ok: true, readBack: { forms: {} } } }, async check() { return { ok: true, forms: {} } }, state: () => ({ phase: 'stopped' }), controller: () => ({ port: 19001, secret: 's' }) } } } })
+  await r.redirector.start()
+  assert.deepEqual(adopted, [1], 'the claim ran with the start, not at the first attach (by then the ports are taken)')
+  await r.redirector.close()
+})
+
 test('W71 the watcher stops with the collector: close() stops it (no timer left)', async () => {
   const r = await rigged(['codex'], { desired: { codex: { desired: 'on' } } })
   await r.redirector.win32.close()

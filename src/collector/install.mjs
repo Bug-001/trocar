@@ -348,6 +348,7 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
     let unitFailed = null, unitEvent = null
     if (opts.unit) {
       const r = opts.unit.enable()
+      if (r.code === 0 && r.warn) final.notes.push(r.warn) // enable's own `warn` reaches the receipt (4.8 §7: what it could not do is the caller's to say)
       if (r.code !== 0) {
         // the flip checklist ③ (4.9 §4 末): an arch whose enable() carries its own failure record (the darwin LaunchAgent: `launchd-register-failed`, launchctl wording —
         // launchd is the only autostart there, 4.9 §12) has THAT recorded verbatim, not the systemd-shaped remediation below replacing it.
@@ -575,6 +576,7 @@ export async function turnOn(opts = {}) {
         if (written.unit === 'rewrite' && typeof unit.reload === 'function') unit.reload() // a unit file rewritten under a loaded unit
         const rr = autostart ? unit.enable({ now: !was.up }) : (was.up ? null : unit.start())
         started = !was.up
+        if (rr && rr.code === 0 && rr.warn) notes.push(rr.warn) // enable's own `warn` reaches the receipt (4.8 §7: what it could not do is the caller's to say) — the Run-value it could not take out, the daemon it started directly because /Run's SUCCESS was a lie
         if (rr && rr.code !== 0) {
           // the flip checklist ③ (4.9 §4 末): the arch's own failure record, verbatim, when enable() carries one (the darwin LaunchAgent's `launchd-register-failed` —
           // launchd is the only autostart there, 4.9 §12); the systemd wording below is the answer of an arch that has none.

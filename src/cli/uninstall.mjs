@@ -23,7 +23,7 @@ import { execTool } from '../off/exec.mjs'
 import { confirm, isInteractive } from '../off/io.mjs'
 import { CODE_OFF } from '../off/names.mjs'
 import { formatUninstallReceipt } from './receipt.mjs'
-import { refuseElevatedByWhoami } from '../off/win32.mjs'
+import { refuseElevatedByWhoami, disableScheduledTask } from '../off/win32.mjs'
 
 const DRAIN_MS = 30_000 // 1.6 §1.1: how long the daemon is given to close the connections it can see the end of
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
@@ -119,8 +119,12 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     let drained = null
     if (routing.confirmed && routing.how === 'daemon-reply') drained = await waitForDrain(w, routing.relayed, deps.drainMs ?? DRAIN_MS, routing.socket) // the socket that answered: w.socketPath is null with XDG_RUNTIME_DIR unset
     // the platform's own way out: darwin boots the LaunchAgent out and removes the plist (the same arm `off` uses, 4.9 §4 flip checklist ①),
-    // Windows' task and Run value are ledger entries undone with the rest, Linux disables the systemd unit
-    if (w.platform === 'win32') receipt.autostart = { disabled: true, removed: [], note: 'the task and the Run value are ledger entries, undone with the rest (4.8 §4.2)' }
+    // Windows' task is DELETED here by the uninstall itself (the registration survives any manifest, so claiming it without asking schtasks left
+    // the task registered at every login while the receipt said otherwise; the Run value stays a ledger entry), Linux disables the systemd unit
+    if (w.platform === 'win32') {
+      const t = disableScheduledTask({ uninstall: true, run: w.exec, env })
+      receipt.autostart = { disabled: t.ok, removed: [], ...(t.ok ? {} : { error: t.reason || `the task is ${t.task}` }) }
+    }
     else if (w.platform === 'darwin') {
       const u = undoAutostart({ home, exec: w.exec, env, fs })
       receipt.autostart = { disabled: u.code === 0, removed: u.plist === 'removed' ? [plistFilePath(home)] : [], ...(u.code !== 0 ? { error: u.err || `the LaunchAgent was ${u.agent} and the plist ${u.plist}` } : {}) }
@@ -209,10 +213,14 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       removeEmptyDirs([path.dirname(standalonePath(home))], fs)
     }
     for (const n of noted) if (!receipt.notes.includes(n.reason)) receipt.notes.push(n.reason) // the command prints every one of them
-    // then the data the operator asked to drop — also after an earlier plain uninstall left the captures behind
+    // then the data the operator asked to drop — also after an earlier plain uninstall left the captures behind. `--purge-data` is "nothing of the captures stays", so the
+    // collector's own machine goes with it: the kernel's copy (kernel/) and its verified-archive cache (kernel-archive/), the kernel's config and home with the controller
+    // secret and tokens (forwarder/), and the two endpoint files (control.json: the daemon's control endpoint; ingress.json: the ingress ports and tokens) — a plain uninstall
+    // keeps them (a kernel may still be draining; the next on reuses the cache), the purge leaves the collector directory empty of everything asight can rebuild nothing of.
     if (purgeData) {
       for (const n of (() => { try { return fs.readdirSync(w.dir) } catch { return [] } })()) if (/^capture-.*\.ndjson$/.test(n)) rm(path.join(w.dir, n))
-      for (const sub of ['flows', 'audit', 'replays']) rm(path.join(w.dir, sub))
+      for (const sub of ['flows', 'audit', 'replays', 'kernel', 'kernel-archive', 'forwarder']) rm(path.join(w.dir, sub))
+      for (const f of ['control.json', 'ingress.json']) rm(path.join(w.dir, f))
     }
     // after the purge, so --purge-data never deletes what this run could not undo; a line that cannot be written is said in the output, never dropped, and never stops the uninstall
     for (const f of failed) put({ event: 'failure', ...f })

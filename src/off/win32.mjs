@@ -62,6 +62,20 @@ export function undoRunKey({ prior = null, run = null, env = process.env } = {})
   return r.code === 0 ? { ok: true, result: prior ? 'restored' : 'removed' } : { ok: false, result: 'failed', reason: `reg ${prior ? 'add' : 'delete'} failed (exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''})` }
 }
 
+/** The task off the login path — the TASK alone, before the ledger's entries go (an `off`'s step 5 and `uninstall`'s own step call this; the Run value is a
+ *  manifest entry and goes with the rest): `/Change /DISABLE` for an `off` (it does not end a running instance — the supervisor is stopped first, 4.8 §4.2),
+ *  `/Delete /F` for an `uninstall`. A task that is not there is already as asked; a query that cannot tell changes nothing on a guess. → `{ ok, task:
+ *  'disabled'|'deleted'|'absent'|'failed', reason? }`. */
+export function disableScheduledTask({ uninstall = false, run = null, env = process.env } = {}) {
+  const q = taskState({ run, env })
+  if (q.state === 'present') {
+    const r = execTool('schtasks', [uninstall ? '/Delete' : '/Change', '/TN', TASK_NAME, ...(uninstall ? ['/F'] : ['/DISABLE'])], { run, env })
+    return r.code === 0 ? { ok: true, task: uninstall ? 'deleted' : 'disabled' } : { ok: false, task: 'failed', reason: `schtasks ${uninstall ? '/Delete' : '/Change /DISABLE'} failed (${r.code === null ? `did not run (${r.err || 'no reason given'})` : `exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''}`})` }
+  }
+  if (q.state === 'absent') return { ok: true, task: 'absent' }
+  return { ok: false, task: 'failed', reason: `${q.err}; nothing was changed on a guess` }
+}
+
 /** Is the scheduled task there? `/Query`'s exit code answers (0 there, 1 not) — never a localised error text; a query that did not run at
  *  all is NOT "not there" (arch's taskState, inlined): → 'present' | 'absent' | { state: 'unknown', err }. */
 export function taskState({ run = null, env = process.env } = {}) {
@@ -72,18 +86,11 @@ export function taskState({ run = null, env = process.env } = {}) {
   return { state: 'unknown', err: `schtasks /Query exited ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''}: whether the task ${TASK_NAME} is registered is not known` }
 }
 
-/** The task off the login path: `/Change /DISABLE` for an `off` (it does not end a running instance — the supervisor is stopped first,
- *  4.8 §4.2), `/Delete /F` for an `uninstall`. A task that is not there is already as asked; a query that cannot tell changes nothing on a
- *  guess. → `{ ok, task: 'disabled'|'deleted'|'absent'|'failed', reason? }`; the Run value goes with it (undoRunKey), the two are one
- *  undo whatever an earlier `on` used (§7: exactly one login mechanism is left live). */
+/** The task off the login path AND asight's Run value taken out, the two as one undo whatever an earlier `on` used (§7: exactly one login mechanism is
+ *  left live; arch's undoScheduledTask, the Run value half inlined with it): `/Change /DISABLE` for an `off`, `/Delete /F` for an `uninstall`. →
+ *  `{ ok, task: 'disabled'|'deleted'|'absent'|'failed', runKey: 'removed'|'restored'|'left'|'absent'|'failed', reason?, runKeyReason? }`. */
 export function undoScheduledTask({ uninstall = false, prior = null, run = null, env = process.env } = {}) {
-  const q = taskState({ run, env })
-  let t
-  if (q.state === 'present') {
-    const r = execTool('schtasks', [uninstall ? '/Delete' : '/Change', '/TN', TASK_NAME, ...(uninstall ? ['/F'] : ['/DISABLE'])], { run, env })
-    t = r.code === 0 ? { ok: true, task: uninstall ? 'deleted' : 'disabled' } : { ok: false, task: 'failed', reason: `schtasks ${uninstall ? '/Delete' : '/Change /DISABLE'} failed (exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''})` }
-  } else if (q.state === 'absent') t = { ok: true, task: 'absent' }
-  else t = { ok: false, task: 'failed', reason: `${q.err}; nothing was changed on a guess` }
+  const t = disableScheduledTask({ uninstall, run, env })
   const k = undoRunKey({ prior, run, env })
   return { ok: t.ok && k.ok, ...t, runKey: k.result, ...(k.ok ? {} : { runKeyReason: k.reason }) }
 }

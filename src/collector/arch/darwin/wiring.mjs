@@ -74,7 +74,9 @@ export async function createDarwinCollector({ env = process.env, dir = null, hom
   // question threw "exec is not a function"); the second had it synchronous and every question threw "asked.catch is not a function" — both left every agent connection judged
   // untracked and spliced, nothing captured (found live by the smoke, 2026-10-09, results 20261008T221132 · 20261008T223245).
   const execOf = async (file, args, o = {}) => execTool(file, args, { ...o, ...(exec != null ? { run: exec } : {}) })
-  const procWatcher = deps.procWatcher || createProcWatcher({ ...(exec != null ? { exec } : {}), ...(deps.now ? { now: deps.now } : {}), ...(deps.timers ? { timers: deps.timers } : {}) })
+  // the images a PATH-launched row (bare argv[0]) is worth one lsof for: the forms own (procinfo.mjs askFor — the real executable of such a row comes only from lsof's txt record, measured 2026-10-12; the wiring names the images because arch/ imports no harness)
+  const askFor = [...new Set(forms.filter((f) => f.match && f.match.image).map((f) => f.match.image))]
+  const procWatcher = deps.procWatcher || createProcWatcher({ ...(exec != null ? { exec } : {}), ...(deps.now ? { now: deps.now } : {}), ...(deps.timers ? { timers: deps.timers } : {}), askFor })
   const ownerOf = deps.ownerOf || ((q) => askOwnerOf({ exec: execOf, ...q, onFailure: (rec) => event(rec) }))
 
   // ingress.json, the controller, the kernel's forwarder and the entries writer: built only when the caller brought the dir (the daemon); the shell has none of them, and attach()

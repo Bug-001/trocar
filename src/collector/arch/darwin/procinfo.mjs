@@ -99,9 +99,39 @@ function factsOf(row, source) {
 
 const identity = (row) => `${row.startedAt ?? '?'}|${row.exe ?? ''}`
 
-/** createProcWatcher({ exec, env, uid, intervalMs, psTimeoutMs, now, all, timers }) → EventEmitter with start() · stop() · poll() · scan() · unreadable() · stats().
+// ── the real executable of a PATH-launched process (4.9 §1; measured on a macOS test machine) ───────────────────────────────────────────────────────────────
+// A process whose argv[0] was a bare command (node's spawn('claude'), npm scripts, env(1): the command as typed, resolved by PATH) has NO path in its row — `ps`'s `args` repeats that bare word and
+// `comm` is the kernel's accounting name, at most 16 characters (MAXCOMLEN), never the resolved path (`claude -p hi` → comm `claude`). A form whose patterns live in the path (every darwin form but the
+// command-line ones) can never match such a row as `ps` gives it: the kernel routes the connection (mihomo resolves the real path itself), the ingress table cannot, and the agent is spliced untracked for
+// its whole life. The one source that answers the real executable is `lsof -p <pid> -Fn`: its record stream carries each file with `f` (the descriptor; the program text is `ftxt`) and `n` (the name), and
+// the FIRST txt record is the main executable (measured; the interpreter's files follow). One ask is ~15 ms (measured), and only rows worth it are asked — an image the forms name — once per process life.
+
+/** The first `ftxt` record's name of `lsof -p <pid> -Fn` — the real executable of a PATH-launched process, the one source that answers it (see above; measured 2026-10-12). → the path, or null when lsof
+ *  failed, was killed at its timeout, or answered no txt record (the process can be gone between the `ps` that listed it and this ask: that is not an error, the row keeps ps's bare word). */
+export function realExeOf(pid, { exec = null, env = process.env, psTimeoutMs = PS_TIMEOUT_MS } = {}) {
+  const r = execTool('lsof', ['-p', String(pid), '-Fn'], { run: exec, env: psEnv(env), timeoutMs: psTimeoutMs })
+  if (r.code !== 0) return null
+  let wantName = false
+  for (const line of String(r.out).split('\n')) {
+    if (line === 'ftxt') { wantName = true; continue }
+    if (wantName && line.startsWith('n')) {
+      const p = line.slice(1)
+      if (p.startsWith('/')) return p
+      wantName = false // a txt name that is no path (a deleted file, a device): keep looking
+    }
+  }
+  return null
+}
+
+/** The image of a row as matchForm normalizes it (forms.mjs: the basename, lower-case, a vestigial `.exe` off) — the key `askFor` holds. */
+const imageOf = (exe) => String(exe).split('/').pop().toLowerCase().replace(/\.exe$/, '')
+
+/** createProcWatcher({ exec, env, uid, intervalMs, psTimeoutMs, now, all, timers, askFor }) → EventEmitter with start() · stop() · poll() · scan() · unreadable() · stats().
  *  `exec` is the runner of the one `ps` command (spawnSync-shaped, execTool's `run` — injected; nothing is spawned when a test gives one), `env` the environment `ps` runs in
- *  (LC_ALL=C is added here), `uid` the user whose processes are kept (default: this process's own — a test passes one, or `all: true` to keep every user's rows).
+ *  (LC_ALL=C is added here), `uid` the user whose processes are kept (default: this process's own — a test passes one, or `all: true` to keep every user's rows), `askFor` the
+ *  image names (an iterable; matchForm's normalization, `.exe` off) a row whose argv[0] has no slash is worth ONE `lsof -p <pid> -Fn` for — the forms' own images, handed by the
+ *  caller that knows them (the daemon hands the forms in; arch/ imports no harness): a PATH-launched agent (node's spawn, npm scripts) has no path in its row and only lsof's
+ *  first txt record answers the real executable. None given: no lsof is ever run (today's behaviour for every image).
  *  Events: 'exec' ProcFacts (source 'exec') · 'exit' {pid, startedAt} · 'facts-update' ProcFacts (source 'update': the same process, told when its command line that was `pending`
  *  / `cim-backoff` at the exec — or in the baseline — is now `ok` or `empty`; no not-yet state exists on darwin, so this never fires today; the shape stays, see the file header)
  *  · 'facts-error' {os, pid, comm, argv, code, reason} (a process with no command line, so no image path: never judged, told once) · 'poll-error' {code:'helper-error', cause,
@@ -116,10 +146,12 @@ const identity = (row) => `${row.startedAt ?? '?'}|${row.exe ?? ''}`
  *  poll() never rejects and never throws into a timer: every failure of a poll is a 'poll-error' — except ESANDBOX (exec.mjs's rule: a test that forgot to inject the runner is
  *  a bug to fail on, not a machine condition to report). Every ps waits up to `psTimeoutMs` (10 s); a poll whose `ps` is killed by that timeout is answered (execTool's timeout
  *  kills the process), and the next poll asks again — each poll is its own `ps` process, there is no serial helper to queue behind, so nothing is deferred. */
-export function createProcWatcher({ exec = null, env = process.env, uid = (typeof process.getuid === 'function' ? process.getuid() : null), intervalMs = 2000, psTimeoutMs = PS_TIMEOUT_MS, now = Date.now, all = false, timers = { setInterval, clearInterval } } = {}) {
+export function createProcWatcher({ exec = null, env = process.env, uid = (typeof process.getuid === 'function' ? process.getuid() : null), intervalMs = 2000, psTimeoutMs = PS_TIMEOUT_MS, now = Date.now, all = false, timers = { setInterval, clearInterval }, askFor = null } = {}) {
   const ev = new EventEmitter()
   const known = new Map() // pid → { identity, startedAt, cmdState } of the processes already reported (or in the baseline); cmdState = what the consumer was last told about the command line
   const unreadable = new Map()
+  const worthAsking = askFor ? new Set([...askFor].map((x) => String(x).toLowerCase())) : null // the images a bare argv[0] is worth one lsof for (the forms' own images, handed by the caller — arch/ knows no harness)
+  const resolved = new Map() // pid → { id: the identity the answer belonged to, exe } — a PATH-launched process is asked ONCE for its life, and a wrapped pid (another life) is asked again
   let primed = false
   let inflight = null // the poll being run, so a scan can wait for the baseline instead of racing it
   let first = null // start()'s baseline poll
@@ -181,6 +213,25 @@ export function createProcWatcher({ exec = null, env = process.env, uid = (typeo
     for (const pid of [...unreadable.keys()]) if (!here.has(pid)) unreadable.delete(pid)
   }
 
+  /** Gives the rows worth it (a bare argv[0] whose image the caller named in `askFor`) their real executable, from `lsof`'s first txt record — once per process life (the cache), before the diff
+   *  sees them, so the identity (`startedAt|exe`) is the resolved one from the process's first appearance and stays stable across polls. A process that is gone between the `ps` and the `lsof`
+   *  keeps ps's bare word: it will leave the table at the next diff anyway, and a fail-safe bare word matches no form, never a wrong one. */
+  function enrich(rows) {
+    if (!worthAsking) return rows
+    for (const r of rows) {
+      if (r.exe == null || r.exe.includes('/')) continue
+      const id = identity(r)
+      const had = resolved.get(r.pid)
+      if (had && had.id === id && had.exe != null) { r.exe = had.exe; continue } // asked and answered for this life
+      if (had && had.id === id) continue // asked, no answer (lsof failed): ps's word stands, and this life is not asked again
+      if (!worthAsking.has(imageOf(r.exe))) { resolved.set(r.pid, { id, exe: null }); continue } // not an image any form names: recorded as asked-and-no, so it is never reconsidered
+      const real = realExeOf(r.pid, { exec, env, psTimeoutMs })
+      resolved.set(r.pid, { id, exe: real })
+      if (real != null) r.exe = real
+    }
+    return rows
+  }
+
   async function step() {
     let rows
     try { rows = await snapshot() } catch (e) {
@@ -191,12 +242,13 @@ export function createProcWatcher({ exec = null, env = process.env, uid = (typeo
     failing = false
     counters.polls++
     counters.lastPollAt = now()
+    enrich(rows)
     noteUnreadable(rows)
     const present = new Set(rows.map((r) => r.pid))
     const exits = []
     const execs = []
     const updates = []
-    for (const [pid, prev] of known) if (!present.has(pid)) { exits.push({ pid, startedAt: prev.startedAt }); known.delete(pid) }
+    for (const [pid, prev] of known) if (!present.has(pid)) { exits.push({ pid, startedAt: prev.startedAt }); known.delete(pid); resolved.delete(pid) }
     for (const r of rows) {
       if (r.exe == null) continue
       const prev = known.get(r.pid)
@@ -237,7 +289,7 @@ export function createProcWatcher({ exec = null, env = process.env, uid = (typeo
    *  created after the scan's own snapshot is then an `exec` — possibly one the scan already listed: a duplicate, never a gap (the tracker judges a pid again). */
   async function scan() {
     if (!primed) { if (inflight) await inflight; else await poll() }
-    const rows = await snapshot()
+    const rows = enrich(await snapshot())
     noteUnreadable(rows)
     return rows.filter((r) => r.exe != null).map((r) => factsOf(r, 'scan'))
   }

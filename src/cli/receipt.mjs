@@ -9,6 +9,7 @@ import { productName } from '../netenv/topology.mjs'
 import { collectorDir } from '../off/paths.mjs'
 import { noColor } from './color.mjs'
 import { HARNESS_IDS } from './harness-names.mjs'
+import { CODEX_WS_CERT_HINT } from './words.mjs'
 
 /** One harness's chain after `on` (§9.5): where a new connection goes, then the proxy setting it was drawn from (credentials masked: the record holds the redacted value) and the file or variable that setting is in. */
 const adoptedLine = (h, x) => `接上后 ${h} 的路: ${x.chain}${x.proxy ? `(它的代理设置 ${x.proxy},读自 ${(x.source || []).map((s) => (s.kind === 'file' ? `${s.where}${s.key ? ` ${s.key}` : ''}` : s.where)).join('、') || '它的设置'})` : ''}`
@@ -145,6 +146,9 @@ export function formatWinPlan(p, { home = null, autostart = true, netenv = null,
   lines.push(...groups.more)
   if (groups.chosen.length) lines.push('  你点名的(这次做,off 时一起撤掉):', ...groups.chosen)
   if (groups.rows.some((r) => r.includes(ENV_NOTE))) lines.push(`  (标「${ENV_NOTE}」的形态:你若在终端里设了代理再从那个终端起它,它原本走的是那个代理)`)
+  // the codex WebSocket hint (measured on a Windows test machine): the WS client does not read the .env block's SSL_CERT_FILE, so the WS's TLS needs the NAMED cert-store item — said exactly while
+  // codex is a target and the item is not in the ledger (an optIn row with state 'done'); nothing is ever installed by a hint
+  if ((p.targets || []).includes('codex') && !(p.optIn || []).some((x) => x && x.item === 'cert-store-current-user' && x.state === 'done')) lines.push(`  ${CODEX_WS_CERT_HINT}`)
   const inShell = PROXY_VARS.flatMap((n) => [n, n.toLowerCase()]).filter((n) => typeof env[n] === 'string' && env[n].trim() !== '')
   if (inShell.length) lines.push(`  (这个终端里设了 ${inShell.join('、')}(值打码):agent 若从这个终端起,它的上游可能不是下面写的)`)
   const offered = (p.optIn || []).filter((x) => x.applicable && !x.chosen && x.state !== 'done')

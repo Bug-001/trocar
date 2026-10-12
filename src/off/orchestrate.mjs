@@ -31,7 +31,7 @@ import { disableAutostart, unitFilePath, UNIT_FILE_NAME } from './autostart.mjs'
 import { plistFilePath, AGENT_LABEL, agentState, undoAutostart } from './darwin.mjs'
 import { execTool } from './exec.mjs'
 import { listProcs, identityFor, pidAlive } from './proc.mjs'
-import { kernelForwardOnly, refuseElevatedByWhoami } from './win32.mjs'
+import { kernelForwardOnly, refuseElevatedByWhoami, disableScheduledTask } from './win32.mjs'
 import { undoOptIns } from './win32-optin.mjs'
 import { undoDarwinOptIns } from './darwin-optin.mjs'
 import { runEventWriter } from './events.mjs'
@@ -441,12 +441,18 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
         put({ kind: 'kernel', state: k.done, reason: `the kernel ${k.done === 'forward-only' ? 'made forward-only (its listeners stay, everything runs direct)' : k.done === 'stopped' ? 'stopped' : k.done === 'none' ? 'is not on record' : 'could not be dealt with'}${k.reason ? ` (${k.reason})` : ''}${Number.isInteger(k.kernel_pid) ? `; pid ${k.kernel_pid}` : ''}` })
         if (k.done === 'failed') { receipt.problems.push(`the kernel could not be taken off the routing path (${k.reason}); agents may still be steered through it until it is stopped`); put({ event: 'failure', code: 'kernel-not-off', reason: k.reason }) }
       }
-      // 5 · no names: the autostart goes too (the daemon was asked to exit once drained in step 3). Windows has no unit to disable
-      // here: the task and the Run value are manifest entries, undone with the rest in step 4 (undoScheduledTask / undoRunKey). darwin's
-      // LaunchAgent is undone through the launchd arm (the flip checklist ①, 4.9 §4): the agent booted out FIRST (KeepAlive does not pull
+      // 5 · no names: the autostart goes too (the daemon was asked to exit once drained in step 3). Windows' task is disabled HERE, by the off itself — the
+      // registration survives any manifest (an on whose ledger is gone, a task registered from asight's file by hand), so claiming "disabled" without asking
+      // schtasks left the task enabled at every login while the receipt said otherwise; the Run value stays a manifest entry and goes with the rest in step 4
+      // (undoRunKey). darwin's LaunchAgent is undone through the launchd arm (the flip checklist ①, 4.9 §4): the agent booted out FIRST (KeepAlive does not pull
       // the daemon back), then the plist out of ~/Library/LaunchAgents (launchd scans it at every login: a file left there undoes the off).
       if (ids === null) {
-        if ((deps.platform || process.platform) === 'win32') receipt.autostart = { disabled: true, removed: [], note: 'the task and the Run value are ledger entries, undone with the rest (4.8 §4.2)' }
+        if ((deps.platform || process.platform) === 'win32') {
+          const t = disableScheduledTask({ run: w.exec, env })
+          receipt.autostart = { disabled: t.ok, removed: [], ...(t.ok ? { note: 'the task is disabled now; the Run value is a ledger entry, undone with the rest (4.8 §4.2)' } : { error: t.reason || `the task is ${t.task}` }) }
+          put({ kind: 'autostart', disabled: t.ok, reason: `autostart ${t.ok ? 'disabled' : 'NOT disabled'} (schtasks: the task is ${t.task})${t.reason ? ` (${t.reason})` : ''}` })
+          if (receipt.autostart.error) { receipt.notes.push(receipt.autostart.error); put({ event: 'failure', code: 'unit-not-disabled', reason: receipt.autostart.error }) }
+        }
         else if ((deps.platform || process.platform) === 'darwin') {
           const u = undoAutostart({ home, exec: w.exec, env, fs: w.fs })
           receipt.autostart = { disabled: u.code === 0, removed: u.plist === 'removed' ? [plistFilePath(home)] : [], ...(u.code !== 0 ? { error: u.err || `the LaunchAgent was ${u.agent} and the plist ${u.plist}` } : {}) }

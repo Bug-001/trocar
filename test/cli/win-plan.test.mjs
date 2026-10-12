@@ -9,6 +9,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { winWorld } from './fixtures/win-on-ctx.mjs'
+import { formatWinPlan } from '../../src/cli/receipt.mjs'
 
 const SYSPROXY = { ProxyEnable: { kind: 'REG_DWORD', value: 1 }, ProxyServer: { kind: 'REG_SZ', value: '127.0.0.1:7897' } }
 const squash = (s) => String(s).replace(/\s+/g, '')
@@ -37,6 +38,7 @@ const PLAN = `asight 要做的(本用户,不需要管理员):
   hermes.cli  %LOCALAPPDATA%\\hermes\\.env  顶部 asight 哨兵块  上游: 系统代理 127.0.0.1:7897(读不到你终端里的 HTTPS_PROXY)
   z-code.cli  %USERPROFILE%\\.zcode\\cli\\config.json  network.httpProxy · network.caCertFile  上游: 直连(读不到你终端里的 HTTPS_PROXY)
   (标「读不到你终端里的 HTTPS_PROXY」的形态:你若在终端里设了代理再从那个终端起它,它原本走的是那个代理)
+  Windows 上采 Codex 的 WebSocket 需要点名装证书: asight on codex --opt-in cert-store-current-user(会弹 Windows 自己的确认框,不弹不装)
   要你点名的(默认不做;点名: asight on <harness> --opt-in <形态>)
     claude-code.desktop  cert-store-current-user    影响: asight's CA is installed in your certificate store (CurrentUser\\Root), so all your programs trust it, and its private key can be read by your own processes; Windows asks you to confirm. The policy value only affects Claude Desktop
     kimi-code.cli  user-path-shim    影响: the order of the PATH every one of your programs sees changes (asight's shim directory first); only commands named like the shim (\`kimi\`) resolve to it
@@ -156,3 +158,14 @@ function snapshot(home) {
   walk(home)
   return out
 }
+
+
+// the codex WebSocket hint (measured on a Windows test machine): Codex's WebSocket client does not read the .env block's SSL_CERT_FILE, so the WS's TLS is not decrypted through the block; the door that works is the NAMED cert-store item. The plan says so — exactly when codex is a target and the item is not recorded; never installed automatically.
+const HINT = 'Windows 上采 Codex 的 WebSocket 需要点名装证书: asight on codex --opt-in cert-store-current-user(会弹 Windows 自己的确认框,不弹不装)'
+test('the codex WebSocket cert hint: in the plan exactly when codex is a target and the cert-store opt-in is not recorded — not for other targets, not once the item is done, and never an install', () => {
+  const plan = (over = {}) => ({ targets: ['codex'], optIn: [], ...over })
+  assert.ok(formatWinPlan(plan()).includes(HINT), 'codex targeted, nothing recorded: the hint is there')
+  assert.ok(!formatWinPlan(plan({ targets: ['claude-code'] })).includes(HINT), 'codex not a target: no hint')
+  assert.ok(!formatWinPlan(plan({ optIn: [{ form: 'claude-code.desktop', item: 'cert-store-current-user', state: 'done' }] })).includes(HINT), 'the cert-store item is recorded (done): the hint has done its job and goes')
+  assert.equal(formatWinPlan(plan()).split(HINT).length - 1, 1, 'exactly once')
+})

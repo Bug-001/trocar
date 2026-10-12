@@ -179,6 +179,47 @@ test('with the real process watcher: a snapshot the injected ps answers reaches 
   assert.deepEqual(r.pidsOf('deepseek-dsh.cli'), [777])
 })
 
+// A PATH-launched agent (its argv[0] has no slash — node's spawn('claude') and npm scripts pass the command as typed; measured on macOS, pid 98951:
+// `ps -o args=` says `claude -p hi`, `ps -o comm=` says `claude` — the accounting name, NOT the resolved path (16-char MAXCOMLEN; the table's comm column is no fuller), and
+// `lsof -p <pid> -Fn`'s FIRST txt record is the real executable). Such a row can never hit a form's path patterns as ps gives it, so the watcher resolves the real exe by
+// lsof for the rows worth it (an image the forms name), once per process, and the table matches the form from the first poll.
+test('a PATH-launched agent (bare argv[0]) is matched: one lsof ask resolves the real executable, and the form\'s path patterns hit it — comm is not the path, so the txt record is the source', async () => {
+  const real = '/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe' // what lsof answers: the npm install's bin file (a vestigial .exe on macOS too, MA4)
+  const psLine = `   777     1   501 claude Tue Oct  6 17:58:06 2026     claude -p hi\n`
+  const lsofAnswer = `p777\nfcwd\nn/Users/alice\nftxt\nn${real}\nftxt\nn/usr/lib/dyld\n`
+  const asks = []
+  let seen = false
+  const exec = (file, args) => {
+    asks.push([file, args])
+    if (file === 'ps') { const out = seen ? psLine : ''; seen = true; return { status: 0, stdout: out, stderr: '' } } // the baseline is empty; every later look has the agent in it
+    if (file === 'lsof') return { status: 0, stdout: lsofAnswer, stderr: '' }
+    return { status: 1, stdout: '', stderr: `unexpected ${file}` }
+  }
+  const procWatcher = createProcWatcher({ exec, uid: 501, askFor: ['claude'], timers: { setInterval: () => 0, clearInterval() {} } })
+  const r = createDarwinRedirector({ procWatcher, groups: GROUPS, home: HOME })
+  await procWatcher.start() // the baseline (the daemon starts before the agent does)
+  assert.deepEqual(r.procs(), [], 'nothing is told to the table by the baseline')
+  const got = collect(r, ['exec'])
+  await procWatcher.poll() // the difference step: the PATH-launched agent appears, resolved before the diff
+  assert.deepEqual(r.procs().map((p) => [p.pid, p.match.kind, p.match.id]), [[777, 'form', 'claude-code.cli']], 'the PATH-launched claude is the cli form, not path-unknown')
+  assert.deepEqual(got.map(([, x]) => x.exe), [real], 'the facts the tracker judges by carry the real executable')
+  await procWatcher.scan() // the scan path resolves too, and the process is asked ONCE for its life
+  assert.deepEqual(r.pidsOf('claude-code.cli'), [777])
+  assert.deepEqual(asks.filter(([f]) => f === 'lsof'), [['lsof', ['-p', '777', '-Fn']]], 'one lsof per process: the second look is served by the cache, not by the OS')
+  // an image no form names is never asked for, and a row whose argv[0] is a path resolves nothing (it already is one)
+  const bare = []
+  const exec2 = (file, args) => {
+    if (file === 'lsof') bare.push(args)
+    return { status: 0, stdout: file === 'ps' ? `   778     1   501 curl Tue Oct  6 17:58:07 2026     curl -sS example.com\n   779     1   501 node Tue Oct  6 17:58:08 2026     ${DSH_CMD}\n` : '', stderr: '' }
+  }
+  const w2 = createProcWatcher({ exec: exec2, uid: 501, askFor: ['claude'], timers: { setInterval: () => 0, clearInterval() {} } })
+  const r2 = createDarwinRedirector({ procWatcher: w2, groups: GROUPS, home: HOME })
+  await w2.start()
+  await r2.scan()
+  assert.deepEqual(bare, [], 'curl is no form\'s image and the node row carries its path in argv[0]: neither is worth an lsof')
+  assert.deepEqual(r2.procs().map((p) => [p.pid, p.match.kind]), [[779, 'form']], 'the dsh node matches as before; the curl row is none')
+})
+
 test('the redirector asks for what it needs: the watcher and the groups', () => {
   assert.throws(() => createDarwinRedirector({ groups: GROUPS }), /process watcher/)
   assert.throws(() => createDarwinRedirector({ procWatcher: watcher() }), /groups/)
@@ -290,7 +331,9 @@ test('4.8 §5.3 · §5.4 the on-demand refresh: a process that started after the
   const clock = { t: 10_000 }
   const w = watcher()
   w.poll = () => { w.polled++; w.emit('exec', facts(16, IMG.ccCli)); return Promise.resolve(true) } // the difference step the timer runs: the new process is told as exec
-  const { r } = made({ procWatcher: w, routes: () => ({ 'claude-code.settings': route(), 'codex.env': route() }), ingress: () => INGRESS, ownerOf: owner({ pid: 16, source: 'socket-table', ms: 4 }), now: () => clock.t })
+  const holder = owner({ pid: 16, source: 'socket-table', ms: 4 })
+  const ownerOf = async (q) => { const a = await holder(q); return a.pid != null ? a : { pid: 16, source: 'socket-table', ms: 4 } } // the socket table keeps naming the holder it named first: with the pidless seat, a null answer would ask for a poll, and this test pins the EMPTY seat alone
+  const { r } = made({ procWatcher: w, routes: () => ({ 'claude-code.settings': route(), 'codex.env': route() }), ingress: () => INGRESS, ownerOf, now: () => clock.t })
   const seen = []
   r.on('exec', (f) => { seen.push(f.pid); r.watch(f.pid, { decrypt: true, agent: 'claude-code' }) }) // the tracker's seat: it judges what the table tells it
   const first = await ask(r, 'of.claude-code.cli')
@@ -312,6 +355,30 @@ test('4.8 §5.3 · §5.4 the on-demand refresh: a process that started after the
   w.poll = () => { w.polled++; return new Promise(() => {}) } // one that never answers
   const slow = await ask(r, 'of.codex.cli')
   assert.deepEqual([w.polled, slow.skip], [4, { not_captured: 'untracked', reason: 'no-process-of-form' }], 'and the lookup does not wait past DEMAND_POLL_WAIT_MS for it')
+})
+
+test('4.8 §5.3 · §5.4 the on-demand refresh, second seat: the socket table answered NO pid because the holder is a process the table has not seen (it started less than a poll ago, and another of the same form is already in the table) — one demand poll lands it, the owner question is asked AGAIN, and the first connection is judged by its pid: not spliced pid-unresolved-mixed on the stale table\'s word, and not decrypted on the old process\'s trust either', async () => {
+  const clock = { t: 10_000 }
+  const w = watcher()
+  const o = owner({ pid: null, source: null, ms: 3 }, { pid: 16, source: 'socket-table', ms: 5 }) // the first ask: the holder is outside the table, so nobody; the second, after the poll landed it: its pid
+  const { r } = made({ procWatcher: w, routes: () => ({ 'claude-code.settings': route() }), ingress: () => INGRESS, ownerOf: o, now: () => clock.t })
+  w.emit('exec', facts(10, IMG.ccCli)) // the long-lived session of the same form, already in the table
+  distrust(r, 10) // the sub-2s agent must not inherit its verdict — nor be spliced because of it
+  w.poll = () => { w.polled++; w.emit('exec', facts(16, IMG.ccCli)); return Promise.resolve(true) }
+  r.on('exec', (f) => { r.watch(f.pid, { decrypt: true, agent: 'claude-code' }) }) // the tracker's seat: the new process is judged the moment the poll re-tells it
+  const m = await ask(r, 'of.claude-code.cli')
+  assert.deepEqual([m.pid, m.decrypt, m.skip, m.negKey, m.pid_source], [16, true, undefined, '16', 'socket-table'], 'judged by the landed process\'s own pid and verdict, on its FIRST connection')
+  assert.deepEqual(o.calls.map((c) => c.candidates), [[10], [10, 16]], 'the owner question was asked twice: once on the stale table, once with the landed process in it')
+  // a poll that lands nobody changes nothing: the owner question is not asked again for the same table
+  clock.t += 2000
+  const w2 = watcher()
+  const o2 = owner({ pid: null, source: null, ms: 3 })
+  const bed2 = made({ procWatcher: w2, routes: () => ({ 'claude-code.settings': route() }), ingress: () => INGRESS, ownerOf: o2, now: () => clock.t })
+  w2.emit('exec', facts(10, IMG.ccCli)) // on the watcher the redirector actually listens to (made()'s own default w is not w2)
+  distrust(bed2.r, 10)
+  const stale = await ask(bed2.r, 'of.claude-code.cli')
+  assert.deepEqual([stale.pid, stale.skip], [null, { not_captured: 'untrusted', reason: 'pid-unresolved-mixed' }], 'the answer is what the unchanged table says, as before the second seat existed')
+  assert.deepEqual(o2.calls.map((c) => c.candidates), [[10]], 'the poll found nobody new, so the question was not asked again')
 })
 
 test('W16 two forms of one group (`of.claude-code.cli`, `of.claude-code.vscode`) resolve to their own forms with no pid: each its own processes, its own negative-cache key, its own verdict', async () => {

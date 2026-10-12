@@ -596,6 +596,60 @@ test('W28 adopt refuses what is not the kernel the lock names: no lock, a garble
   assert.equal(k.children.length + other.children.length + blind.children.length + mute.children.length, 0, 'adopting never spawns')
 })
 
+test('W28 adopt, orphan seat: the lock names a pid that is gone, but a LIVE kernel of ours holds the group ports (a re-spawn whose lock write never landed) — it is killed (a hard taskkill) before anything attaches, so the next start does not meet port-taken; a holder that is not our image, a config that cannot be read, a portHolders that was not given or throws: nobody is touched, the lock is cleaned either way', async (t) => {
+  const killed = []
+  const holdersOf = (rows) => async (ports) => rows.filter((r) => ports.includes(r.port))
+  const world = async (rows, over = {}) => {
+    const k = await fakeKernel(t, { fwd: { procStart: async () => START, ...(over.fwd || {}) } })
+    fs.mkdirSync(path.join(k.dir, 'forwarder'), { recursive: true })
+    const config = path.join(k.dir, 'forwarder', 'config.json')
+    fs.writeFileSync(config, k.build())
+    fs.writeFileSync(path.join(k.dir, 'forwarder.lock'), JSON.stringify({ pid: 777, startedAt: START, endpoint: 'tcp:127.0.0.1:18899', config }))
+    k.alive.clear() // the lock's pid is gone: the daemon that wrote the lock died before it could write the re-spawn's
+    return k
+  }
+  // a live kernel of ours holds the listener port: killed, said as a forwarder-stop, the lock cleaned
+  {
+    const k = await fakeKernel(t, { fwd: { procStart: async () => START, portHolders: holdersOf([{ port: 18801, pid: 555, image: 'asight-forwarder.exe' }]), killPid: (pid) => killed.push(pid) } })
+    fs.mkdirSync(path.join(k.dir, 'forwarder'), { recursive: true })
+    const config = path.join(k.dir, 'forwarder', 'config.json')
+    fs.writeFileSync(config, k.build())
+    fs.writeFileSync(path.join(k.dir, 'forwarder.lock'), JSON.stringify({ pid: 777, startedAt: START, endpoint: 'tcp:127.0.0.1:18899', config }))
+    k.alive.clear()
+    const a = await k.fwd.adopt()
+    assert.deepEqual([a.adopted, a.reason, a.orphan_killed], [false, 'not-running', { pid: 555, ports: [18801] }], 'not adopted (its lock named a dead pid), and the orphan is said')
+    assert.deepEqual(killed, [555], 'the orphan was killed, hard')
+    assert.ok(!fs.existsSync(path.join(k.dir, 'forwarder.lock')), 'the stale lock is cleaned')
+    assert.deepEqual(k.events.states.at(-1), { event: 'forwarder-stop', where: 'forwarder', pid: 555, reason: 'orphan-killed: the lock named a dead pid and a live kernel of ours held its ports' })
+    assert.deepEqual(inClosedSets(k.events), [], 'W38: the orphan record is in the closed sets')
+    assert.equal(k.children.length, 0, 'adopting never spawns')
+  }
+  // a holder that is not our image is somebody else's port-holder: never touched
+  {
+    const k = await world([{ port: 18801, pid: 556, image: 'someone-else.exe' }], { fwd: { killPid: (pid) => killed.push(pid) } })
+    const fwd2 = createForwarder({ dir: k.dir, bin: path.join(k.dir, 'kernel', KERNEL_EXE), controller: { port: 18899, secret: 'x' }, isFree: async () => true, procStart: async () => START, isAlive: () => false, events: k.events, portHolders: holdersOf([{ port: 18801, pid: 556, image: 'someone-else.exe' }]), killPid: (pid) => killed.push(pid) })
+    const a = await fwd2.adopt()
+    assert.deepEqual([a.adopted, a.reason, a.orphan_killed, killed], [false, 'not-running', undefined, [555]], 'a port holder that is not the kernel\'s image is not ours to kill')
+    assert.ok(!fs.existsSync(path.join(k.dir, 'forwarder.lock')))
+  }
+  // no portHolders given (the darwin wiring today): the old behaviour, lock cleaned, nobody touched
+  {
+    const k = await world([], { fwd: { killPid: (pid) => killed.push(pid) } })
+    const fwd3 = createForwarder({ dir: k.dir, bin: path.join(k.dir, 'kernel', KERNEL_EXE), controller: { port: 18899, secret: 'x' }, isFree: async () => true, procStart: async () => START, isAlive: () => false, events: k.events, killPid: (pid) => killed.push(pid) })
+    assert.deepEqual(await fwd3.adopt(), { adopted: false, reason: 'not-running' })
+    assert.ok(!fs.existsSync(path.join(k.dir, 'forwarder.lock')), 'the lock goes either way')
+    assert.deepEqual(killed, [555], 'nobody was killed')
+  }
+  // a portHolders that throws: not a verdict, nothing is killed, the adopt still answers
+  {
+    const k = await world([], {})
+    const fwd4 = createForwarder({ dir: k.dir, bin: path.join(k.dir, 'kernel', KERNEL_EXE), controller: { port: 18899, secret: 'x' }, isFree: async () => true, procStart: async () => START, isAlive: () => false, events: k.events, portHolders: async () => { throw new Error('netstat is not answering') }, killPid: (pid) => killed.push(pid) })
+    assert.deepEqual(await fwd4.adopt(), { adopted: false, reason: 'not-running' })
+    assert.deepEqual(killed, [555])
+    assert.deepEqual(k.events.failures.filter((f) => f.code === 'forwarder-start-failed').map((f) => f.reason), ['netstat is not answering; whether an orphan kernel holds the group ports could not be told, and a later start may meet port-taken'], 'the question that could not be asked is said, not swallowed')
+  }
+})
+
 test('W28 a helper that cannot say when a process started (timeout, helper down) does not break the kernel: it is tracked and stoppable, the lock says startedAt null (so a later daemon will not adopt it), a respawn is not a failure; adopt answers start-time-unreadable instead of throwing; procStart is not optional', async (t) => {
   const late = async () => { throw Object.assign(new Error('late'), { code: 'helper-timeout' }) }
   const k = await kernelWorld(t, { procStart: late })

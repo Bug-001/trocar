@@ -292,7 +292,9 @@ test('4.8 §5.3 · §5.4 the on-demand refresh: a process that started after the
   const clock = { t: 10_000 }
   const w = watcher()
   w.poll = () => { w.polled++; w.emit('exec', facts(16, IMG.ccCli)); return Promise.resolve(true) } // the difference step the timer runs: the new process is told as exec
-  const { r } = made({ procWatcher: w, routes: () => ({ 'claude-code.settings': route(), 'codex.env': route() }), ingress: () => INGRESS, ownerOf: owner({ pid: 16, source: 'socket-table', ms: 4 }), now: () => clock.t })
+  const holder = owner({ pid: 16, source: 'socket-table', ms: 4 })
+  const ownerOf = async (q) => { const a = await holder(q); return a.pid != null ? a : { pid: 16, source: 'socket-table', ms: 4 } } // the socket table keeps naming the holder it named first: with the pidless seat, a null answer would ask for a poll, and this test pins the EMPTY seat alone
+  const { r } = made({ procWatcher: w, routes: () => ({ 'claude-code.settings': route(), 'codex.env': route() }), ingress: () => INGRESS, ownerOf, now: () => clock.t })
   const seen = []
   r.on('exec', (f) => { seen.push(f.pid); r.watch(f.pid, { decrypt: true, agent: 'claude-code' }) }) // the tracker's seat: it judges what the table tells it
   const first = await ask(r, 'of.claude-code.cli')
@@ -314,6 +316,30 @@ test('4.8 §5.3 · §5.4 the on-demand refresh: a process that started after the
   w.poll = () => { w.polled++; return new Promise(() => {}) } // one that never answers
   const slow = await ask(r, 'of.codex.app')
   assert.deepEqual([w.polled, slow.skip], [4, { not_captured: 'untracked', reason: 'no-process-of-form' }], 'and the lookup does not wait past DEMAND_POLL_WAIT_MS for it')
+})
+
+test('4.8 §5.3 · §5.4 the on-demand refresh, second seat: the socket table answered NO pid because the holder is a process the table has not seen (it started less than a poll ago, and another of the same form is already in the table) — one demand poll lands it, the owner question is asked AGAIN, and the first connection is judged by its pid: not spliced pid-unresolved-mixed on the stale table\'s word, and not decrypted on the old process\'s trust either', async () => {
+  const clock = { t: 10_000 }
+  const w = watcher()
+  const o = owner({ pid: null, source: null, ms: 3 }, { pid: 16, source: 'socket-table', ms: 5 }) // the first ask: the holder is outside the table, so nobody; the second, after the poll landed it: its pid
+  const { r } = made({ procWatcher: w, routes: () => ({ 'claude-code.settings': route() }), ingress: () => INGRESS, ownerOf: o, now: () => clock.t })
+  w.emit('exec', facts(10, IMG.ccCli)) // the long-lived session of the same form, already in the table
+  distrust(r, 10) // the sub-2s agent must not inherit its verdict — nor be spliced because of it
+  w.poll = () => { w.polled++; w.emit('exec', facts(16, IMG.ccCli)); return Promise.resolve(true) }
+  r.on('exec', (f) => { r.watch(f.pid, { decrypt: true, agent: 'claude-code' }) }) // the tracker's seat: the new process is judged the moment the poll re-tells it
+  const m = await ask(r, 'of.claude-code.cli')
+  assert.deepEqual([m.pid, m.decrypt, m.skip, m.negKey, m.pid_source], [16, true, undefined, '16', 'socket-table'], 'judged by the landed process\'s own pid and verdict, on its FIRST connection')
+  assert.deepEqual(o.calls.map((c) => c.candidates), [[10], [10, 16]], 'the owner question was asked twice: once on the stale table, once with the landed process in it')
+  // a poll that lands nobody changes nothing: the owner question is not asked again for the same table
+  clock.t += 2000
+  const w2 = watcher()
+  const o2 = owner({ pid: null, source: null, ms: 3 })
+  const bed2 = made({ procWatcher: w2, routes: () => ({ 'claude-code.settings': route() }), ingress: () => INGRESS, ownerOf: o2, now: () => clock.t })
+  w2.emit('exec', facts(10, IMG.ccCli)) // on the watcher the redirector actually listens to (made()'s own default w is not w2)
+  distrust(bed2.r, 10)
+  const stale = await ask(bed2.r, 'of.claude-code.cli')
+  assert.deepEqual([stale.pid, stale.skip], [null, { not_captured: 'untrusted', reason: 'pid-unresolved-mixed' }], 'the answer is what the unchanged table says, as before the second seat existed')
+  assert.deepEqual(o2.calls.map((c) => c.candidates), [[10]], 'the poll found nobody new, so the question was not asked again')
 })
 
 test('W16 two forms of one group (`of.claude-code.cli`, `of.claude-code.vscode`) resolve to their own forms with no pid: each its own processes, its own negative-cache key, its own verdict', async () => {

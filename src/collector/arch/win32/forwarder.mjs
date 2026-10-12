@@ -213,6 +213,9 @@ function readConfig(text) {
  *   verifyCopy () → verifyCopy()'s answer for THIS kernel (the caller binds dir, pin and arch): asked before EVERY spawn, the first one and each respawn (W27 ④)
  *   sacOn      () → whether Smart App Control would block an unsigned exe: a start that fails then says so (W74)
  *   isFree     (port) → whether a loopback port can be bound; REQUIRED: this file may not import `node:net` (W27 ⑦). A taken port is not re-chosen here: the form's entry holds it (ingress-config.mjs).
+ *   portHolders (ports) → Promise of [{ port, pid, image }] — the read-only OS question "which pids LISTEN on these ports, and what is their image" (the wiring builds it from netstat -ano +
+ *              tasklist; never asked here, W27 ⑦'s discipline): what adopt()'s orphan seat needs to find a kernel the dead lock's daemon lost track of. None given (the default): the orphan
+ *              seat asks nothing and kills nobody. killPid  (pid) → the orphan's killer (a hard `taskkill /PID`); default: `kill`
  *   procStart  (pid) → the process's start time in ms, or null; REQUIRED (the helper's `ps`, the one source the lock and the adopt rule both read). A helper that rejects or answers nothing is null: the kernel is still tracked and
  *              its lock is written with `startedAt: null`, which no later daemon will adopt (4.8 §8: no readable start time, no adoption)
  *   spawn · makeController · now · setTimer · clearTimer · isAlive · kill · fs   the OS and the clock, injected
@@ -223,7 +226,7 @@ function readConfig(text) {
 export function createForwarder({
   dir, bin, controller, spawn = nodeSpawn, makeController = ({ port, secret }) => createController({ endpoint: `tcp:127.0.0.1:${port}`, secret, own: true }),
   now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, events = { failure() {}, state() {} }, sacOn = async () => false, verifyCopy: verify = async () => ({ ok: true }), isFree,
-  isAlive = pidAlive, kill = (pid) => process.kill(pid), procStart, fs = nodeFs,
+  isAlive = pidAlive, kill = (pid) => process.kill(pid), killPid = null, portHolders = null, procStart, fs = nodeFs,
   pollMs = 50, startTimeoutMs = 10_000, stableMs = 30_000, stopWaitMs = 5_000, watchMs = 1000, backoffMs = BACKOFF_MS,
 } = {}) {
   if (typeof isFree !== 'function') throw new TypeError('createForwarder needs isFree(port)')
@@ -381,11 +384,46 @@ export function createForwarder({
   const check = async () => (proc && cur ? readBack(cur.forms) : { ok: false, forms: {}, reason: 'not-running' })
 
   // a kernel left by an earlier daemon is kept only when its pid, its start time and its controller all say it is the one the lock names
+  /** A kernel the dead lock's daemon lost track of: the lock names a pid that is gone, but a LIVE kernel of ours holds the config's ports (a re-spawn whose lock write never landed, a
+   *  crash between the spawn and the lock). Left alone it is `port-taken` for every later start — capture dead until a hand kills it — so it is killed HERE, before anything attaches.
+   *  Only a holder whose image is the kernel's own is touched (a pid that merely holds a port is somebody's, never ours to kill), and only when the wiring gave `portHolders` (the
+   *  read-only netstat/tasklist question; this file asks no OS question itself): no wiring, no question, no kill. → `{ pid, ports }` (what was killed, on which ports) | null. */
+  async function killOrphan(lock) {
+    if (typeof portHolders !== 'function') return null
+    let ports = []
+    try { ports = [...readConfig(fs.readFileSync(lock.config, 'utf8')).ports] } catch { return null } // no readable config: no ports to speak of, nothing to act on
+    if (ports.length === 0) return null
+    let holders = []
+    try { holders = await portHolders(ports) } catch (e) {
+      events.failure({ where: 'forwarder', code: 'forwarder-start-failed', reason: `${errText(e)}; whether an orphan kernel holds the group ports could not be told, and a later start may meet port-taken` })
+      return null
+    }
+    const own = KERNEL_EXE.replace(/\.exe$/i, '').toLowerCase()
+    const out = []
+    for (const h of Array.isArray(holders) ? holders : []) {
+      if (!h || !Number.isInteger(h.pid) || h.pid === lock.pid) continue // the lock's own pid: `isAlive` already said it is gone
+      const image = String(h.image || '').replace(/\.exe$/i, '').toLowerCase()
+      if (image !== own) continue
+      const held = ports.filter((p) => p === h.port)
+      try { (killPid || kill)(h.pid) } catch (e) {
+        events.failure({ where: 'forwarder', code: 'forwarder-start-failed', reason: `the orphan kernel (pid ${h.pid}, holding ${held.join(', ')}) could not be killed (${errText(e)}); a later start may meet port-taken` })
+        continue
+      }
+      events.state({ event: 'forwarder-stop', where: 'forwarder', pid: h.pid, reason: 'orphan-killed: the lock named a dead pid and a live kernel of ours held its ports' })
+      out.push({ pid: h.pid, ...(held.length ? { ports: held } : {}) })
+    }
+    return out.length ? (out.length === 1 ? out[0] : out) : null
+  }
+
   async function adoptNow() {
     let lock
     try { lock = JSON.parse(fs.readFileSync(P.lock, 'utf8')) } catch (e) { return { adopted: false, reason: e && e.code === 'ENOENT' ? 'no-lock' : 'lock-unreadable' } }
     if (!lock || !Number.isInteger(lock.pid) || typeof lock.config !== 'string') return { adopted: false, reason: 'lock-unreadable' }
-    if (!isAlive(lock.pid)) { rmLock(); return { adopted: false, reason: 'not-running' } }
+    if (!isAlive(lock.pid)) {
+      const orphan = await killOrphan(lock) // a re-spawn the dead daemon never locked: kill it before it is port-taken for the next start
+      rmLock()
+      return { adopted: false, reason: 'not-running', ...(orphan ? { orphan_killed: orphan } : {}) }
+    }
     const started = await startOf(lock.pid)
     if (!Number.isFinite(started) || !Number.isFinite(lock.startedAt)) return { adopted: false, reason: 'start-time-unreadable' }
     if (Math.abs(started - lock.startedAt) > START_TOLERANCE_MS) return { adopted: false, reason: 'start-time-differs' } // the pid is somebody else's now

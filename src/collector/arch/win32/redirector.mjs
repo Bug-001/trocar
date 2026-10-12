@@ -171,14 +171,17 @@ export function createWin32Redirector({ helper, procWatcher, groups, home = null
     }
   }
 
-  /** One on-demand table refresh before the `no-process-of-form` splice (4.8 §5.3 · §5.4): a process that started after the last poll would otherwise be spliced untracked on its FIRST connection. It
-   *  asks the watcher for one poll — the same difference step the 2 s timer runs, so the new process is taken in and re-told as `exec`, and a listener that judges (the tracker) judges it now, not on the
-   *  next tick. At most one demand poll a second; the lookup waits for it at most DEMAND_POLL_WAIT_MS. A watcher with no `poll`, a poll already in flight (it says false), one that does not answer in
-   *  time, or one that finds nobody changes nothing: the answer is what the stale table says, as it was before. */
-  let lastDemandPollAt = -Infinity
-  async function refreshTable() {
-    if (now() - lastDemandPollAt < DEMAND_POLL_MIN_MS) return false
-    lastDemandPollAt = now()
+  /** One on-demand table refresh before a judgement that would otherwise be made without the pid (4.8 §5.3 · §5.4, two seats, each debounced on its own): the `no-process-of-form` splice (no
+   *  candidate at all, audit F6 — seat `'empty'`) and the pid-less answer of the socket table (the holder is a process the table has not seen — it started less than a poll ago, typically a
+   *  one-shot agent beside a long-lived session of the same form; judge()'s form-whole rule would then splice it `pid-unresolved-mixed`, or worse decrypt it on the OLD processes' trust — seat
+   *  `'pidless'`). It asks the watcher for one poll — the same difference step the 2 s timer runs, so the new process is taken in and re-told as `exec`, and a listener that judges (the tracker)
+   *  judges it now, not on the next tick — and the caller asks the owner question AGAIN when the poll changed the candidate set. At most one demand poll a second PER SEAT (a lookup of one seat
+   *  never spends the other's); the lookup waits for it at most DEMAND_POLL_WAIT_MS. A watcher with no `poll`, a poll already in flight (it says false), one that does not answer in time, or one
+   *  that finds nobody changes nothing: the answer is what the stale table says, as it was before. */
+  const demandPolledAt = { empty: -Infinity, pidless: -Infinity }
+  async function refreshTable(seat) {
+    if (now() - demandPolledAt[seat] < DEMAND_POLL_MIN_MS) return false
+    demandPolledAt[seat] = now()
     if (typeof procWatcher.poll !== 'function') return false
     try {
       return (await Promise.race([
@@ -237,8 +240,16 @@ export function createWin32Redirector({ helper, procWatcher, groups, home = null
       if (probe) return { health: true, group: hit.form.id }
       const upstream = upstreamFor(hit.g, route, target.address) // before the table is asked: a connection that cannot be dialled should not wait on it
       let candidates = hit.form.processRules !== false ? maybeOf(hit.form.id) : takenBy(hit)
-      if (hit.form.processRules !== false && candidates.length === 0 && (await refreshTable())) candidates = maybeOf(hit.form.id) // the process may have started after the last poll: ask once before splicing it
-      const { pid, source, ms } = await owningPid(candidates, port)
+      if (hit.form.processRules !== false && candidates.length === 0 && (await refreshTable('empty'))) candidates = maybeOf(hit.form.id) // the process may have started after the last poll: ask once before splicing it
+      let { pid, source, ms } = await owningPid(candidates, port)
+      if (pid == null && candidates.length > 0 && (await refreshTable('pidless'))) { // a null pid may be a holder the table has not seen (it started less than a poll ago): one poll, and the question again when it changed the candidates
+        const again = hit.form.processRules !== false ? maybeOf(hit.form.id) : takenBy(hit)
+        if (again.length !== candidates.length || again.some((p, i) => p !== candidates[i])) {
+          const r2 = await owningPid(again, port)
+          candidates = again
+          ;({ pid, source, ms } = r2)
+        }
+      }
       const { decrypt, skip } = judge(hit.form, pid, candidates)
       return {
         pid, agent: hit.harness, decrypt, capture: 'proxy', form: hit.form.id, exe: pid != null && procs.has(pid) ? procs.get(pid).exe : null,

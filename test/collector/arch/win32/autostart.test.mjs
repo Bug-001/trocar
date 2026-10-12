@@ -373,10 +373,11 @@ test('W24 enable registers the task from the file install wrote and runs it: /Cr
   const u = installed(userUnit({ ...o, run }))
   const r = u.enable({ now: true })
   assert.deepEqual(r, { code: 0, out: '', err: '', via: 'task' })
-  assert.deepEqual(run.calls.map((c) => c.slice(0, 2).join(' ')), ['schtasks /Create', 'reg query', 'schtasks /Run'], 'create, look whether an earlier on left a Run value (one mechanism at login), run')
+  assert.deepEqual(run.calls.map((c) => c.slice(0, 2).join(' ')), ['schtasks /Create', 'reg query', 'schtasks /Run', 'schtasks /Query'], 'create, look whether an earlier on left a Run value (one mechanism at login), run, read the task\'s LastTaskResult back (a /Run that says SUCCESS is not trusted on its word)')
   assert.deepEqual(run.calls[0].slice(0, 3), ['schtasks', '/Create', '/XML'])
   assert.deepEqual(run.calls[0].slice(4), ['/TN', TASK_NAME, '/F'])
   assert.deepEqual(run.calls[2], ['schtasks', '/Run', '/TN', TASK_NAME])
+  assert.deepEqual(run.calls[3], ['schtasks', '/Query', '/TN', TASK_NAME, '/V', '/FO', 'CSV'], 'the one question whose answer says whether the /Run started anything')
   assert.equal(TASK_NAME, '\\asight\\collector')
   assert.deepEqual([...seen.bytes.subarray(0, 2)], [0xff, 0xfe], 'the file schtasks reads is UTF-16LE with a byte order mark, which is the form that registered in the T0 measurement')
   assert.equal(seen.bytes.subarray(2).toString('utf16le'), u.text({}), 'and it holds the text install wrote')
@@ -386,7 +387,7 @@ test('W24 enable registers the task from the file install wrote and runs it: /Cr
   assert.equal(u2.enable({ now: false }).code, 0)
   assert.deepEqual(later.calls.map((c) => c[1]).filter((a) => a !== 'query'), ['/Create'], 'enable without now registers and does not start (a daemon is already up: 拉起不是重启)')
   assert.equal(u2.enable().code, 0)
-  assert.deepEqual(later.calls.map((c) => c[1]).filter((a) => a !== 'query').slice(1), ['/Create', '/Run'], 'now is the default')
+  assert.deepEqual(later.calls.map((c) => c[1]).filter((a) => a !== 'query').slice(1), ['/Create', '/Run', '/Query'], 'now is the default (and the /Run\'s word is checked)')
 })
 
 test('W24 enable says why it failed: a /Run that did not start, a task file that is not there, and (below) a /Create that was refused', () => {
@@ -732,6 +733,39 @@ test('W24 exactly one login mechanism is live: enable by the task takes asight\'
   const i = u.enable({ now: false })
   assert.deepEqual([i.code, i.via], [0, 'run-key'])
   assert.match(i.warn, /\/Query/, 'a task that cannot be looked up is said, not assumed gone')
+})
+
+test('W24 a /Run that answered success but started nothing (LastTaskResult 267011, no interactive session for the task — probe-verified on a Windows test machine, 2026-10-12): the daemon is started DIRECTLY, the receipt says exactly that, and the task keeps the login; a task that did run is left alone', () => {
+  // the verbose CSV schtasks answers for the task: the Last Result column is found by its header (en), and the value may be decimal or 0x-prefixed
+  const head = '"HostName","TaskName","Next Run Time","Status","Last Run Time","Last Result","Creation Date","Task To Run"'
+  const csv = (last) => ({ status: 0, stdout: `\r\n${head}\r\n"HOST","\\asight\\collector","2026/10/12 10:00:00","Ready","2026/10/12 10:00:00","${last}","2026/10/11 09:00:00","conhost.exe"\r\n`, stderr: '' })
+  const zhHead = '"\u4e3b\u673a\u540d","\u4efb\u52a1\u540d","\u4e0b\u6b21\u8fd0\u884c\u65f6\u95f4","\u6a21\u5f0f","\u4e0a\u6b21\u8fd0\u884c\u65f6\u95f4","\u4e0a\u6b21\u8fd0\u884c\u7ed3\u679c","\u521b\u5efa\u65f6\u95f4","\u8981\u8fd0\u884c\u7684\u4efb\u52a1"'
+  const zhCsv = (last) => ({ status: 0, stdout: `\r\n${zhHead}\r\n"HOST","\\asight\\collector","2026/10/12 10:00:00","\u5c31\u7eea","2026/10/12 10:00:00","${last}","2026/10/11 09:00:00","conhost.exe"\r\n`, stderr: '' })
+  const none = fakeRegistry()
+  // 267011 decimal, 0x41303, and the zh-CN header all read as "has not run": the daemon is started directly, honestly said
+  for (const [name, result] of [['decimal 267011', csv('267011')], ['hex 0x41303', csv('0x41303')], ['the zh-CN header, decimal', zhCsv('267011')]]) {
+    const spawned = []
+    const fakeSpawn = (cmd, args) => { spawned.push([cmd, ...args]); return { pid: 4242, unref() {}, on() {} } }
+    const runner = (file, args, opts) => (file === 'schtasks' && (args[0] === '/Create' || args[0] === '/Run') ? { status: 0, stdout: '', stderr: '' } : file === 'schtasks' && args[0] === '/Query' && args.includes('/V') ? result : none(file, args, opts))
+    const u = installed(userUnit({ ...withHome(), run: runner, spawn: fakeSpawn }))
+    const r = u.enable({ now: true })
+    assert.equal(r.code, 0, `${name}: on does not fail`)
+    assert.equal(r.via, 'task', `${name}: the task is still the login mechanism`)
+    assert.equal(spawned.length, 1, `${name}: the daemon was started directly`)
+    assert.match(spawned[0].join(' '), /daemon --supervise/)
+    assert.equal(r.pid, 4242, `${name}: the receipt names the started pid`)
+    assert.match(r.warn, /LastTaskResult 267011/, `${name}: the receipt says what the task said`)
+    assert.match(r.warn, /started directly this run; the task will start it at next login/, `${name}: the receipt is honest about what happened`)
+  }
+  // a task that did run (Last Result 0), one whose result cannot be read, and now: false: no direct start, no warn
+  for (const [name, result, now] of [['Last Result 0 (it ran)', csv('0'), true], ['a /V query that failed', { status: 1, stdout: '', stderr: 'ERROR: Access is denied.' }, true], ['a /V query that did not run', { status: null, stdout: '', stderr: '' }, true], ['no /Run at all', null, false]]) {
+    const spawned = []
+    const fakeSpawn = (cmd, args) => { spawned.push([cmd, ...args]); return { pid: 1, unref() {}, on() {} } }
+    const runner = (file, args, opts) => (result && file === 'schtasks' && args[0] === '/Query' && args.includes('/V') ? result : null) || (file === 'schtasks' && (args[0] === '/Create' || args[0] === '/Run') ? { status: 0, stdout: '', stderr: '' } : null) || none(file, args, opts)
+    const u = installed(userUnit({ ...withHome(), run: runner, spawn: fakeSpawn }))
+    const r = u.enable({ now })
+    assert.deepEqual([r.code, r.via, r.warn, spawned.length], [0, 'task', undefined, 0], `${name}: nothing is started beside the task`)
+  }
 })
 
 test('W24 which Run value is asight\'s is decided by its tail: the supervised daemon command at the end of the value (blanks after it do not matter); the same words with something after them, or glued to another word, are somebody else\'s and are left', () => {
