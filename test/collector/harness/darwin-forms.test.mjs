@@ -64,12 +64,17 @@ const EXPECT = {
   'hermes': {
     groups: { 'hermes.cli': ['hermes.cli'] },
     forms: {
-      // python3 is every Python of the machine: the agent is the launcher's private CPython with the Hermes bootstrap on its command line (no install path, no PROCESS-NAME)
+      // python3 is every Python of the machine: the agent is the launcher's private CPython with the Hermes bootstrap on its command line (no install path, no PROCESS-NAME).
+      // The exe the facts carry is lsof's real binary, not the launcher's own word: the exec's `bin/python3` is a symlink the resolver turns into the version-named
+      // `python3.14` (the 0.21.5+9145 install: `bin/python3 -> python3.14`) — without that spelling in the form's image list every capture-path
+      // connection was `not-a-process-of-form` and spliced untracked (a gap closed here)
       'hermes.cli': { nameRule: false, yes: [
         { exe: `${U}/.hermes/tools/python-3.12.4/bin/python3`, cmdline: `${U}/.hermes/tools/python-3.12.4/bin/python3 -I -c 'import hermes_bootstrap; import hermes_cli.main as m; m.run()'` },
         { exe: `${U}/.hermes/tools/python-3.12.4/bin/python3`, cmdline: `${U}/.hermes/tools/python-3.12.4/bin/python3 -I -c 'import hermes_bootstrap; import acp_adapter.entry'` },
         { exe: `${U}/.hermes/tools/python-3.12.4/bin/python3`, cmdline: `${U}/.hermes/tools/python-3.12.4/bin/python3 -I -m tui_gateway.entry` },
         { exe: `${U}/.hermes/tools/python-3.12.4/bin/python3`, cmdline: `${U}/.hermes/tools/python-3.12.4/bin/python3 -m tui_gateway.slash_worker` },
+        { exe: `${U}/.hermes/tools/python-3.14.7+20260901-darwin-arm64/bin/python3.14`, cmdline: `${U}/.hermes/tools/python-3.14.7+20260901-darwin-arm64/bin/python3.14 -I -c 'import hermes_bootstrap; import hermes_cli.main as m; m.run()'` },
+        { exe: `${U}/.hermes/tools/python-3.14.7+20260901-darwin-arm64/bin/python3.14`, cmdline: `${U}/.hermes/tools/python-3.14.7+20260901-darwin-arm64/bin/python3.14 -I -m tui_gateway.entry` },
       ] },
       'hermes.desktop': { nameRule: false, yes: [], unmeasured: true },
     },
@@ -242,11 +247,13 @@ test('W3: every install shape the darwin data carries is its form, the same imag
 test('W3: no darwin form is told by the shared editor image (`Code` / `Code Helper`, 4.9 §2.3) — the Kimi extension that owns it on Windows is not measured on macOS; node and python3 are never told by their name, and each is an agent only with the right command line', () => {
   const forms = formsOf().filter((f) => f.match)
   assert.deepEqual(forms.filter((f) => /^code( helper)?$/i.test(f.match.image)).map((f) => f.id), [], 'the shared editor image belongs to no form: the Kimi extension is not measured on macOS (4.6 OPEN ⑦)')
-  for (const f of forms.filter((x) => /^(node|python3)$/i.test(x.match.image))) {
-    assert.equal(f.nameRule, false, `${f.id}: a PROCESS-NAME rule on ${f.match.image} would hand every program of that name to this form`)
-    assert.equal(!!f.match.reportUnknownPath, false, `${f.id}: most ${f.match.image} are no agent, so an odd path is not reported`)
+  // `image` may be a list (one form, several binary names — Hermes's private CPython answers lsof as the version-named python3.14): the shared-interpreter check reads every name
+  const sharedInterpreter = (f) => imagesOf(f).some((n) => /^(node|python3(\.\d+)?)$/i.test(n))
+  for (const f of forms.filter(sharedInterpreter)) {
+    assert.equal(f.nameRule, false, `${f.id}: a PROCESS-NAME rule on ${imagesOf(f).join('/')} would hand every program of that name to this form`)
+    assert.equal(!!f.match.reportUnknownPath, false, `${f.id}: most of ${imagesOf(f).join('/')} are no agent, so an odd path is not reported`)
   }
-  for (const f of forms.filter((x) => /^(node|python3)$/i.test(x.match.image))) assert.ok(f.match.cmdline && !f.match.path, `${f.id}: ${f.match.image} is told by the command line, not by where it is`)
+  for (const f of forms.filter(sharedInterpreter)) assert.ok(f.match.cmdline && !f.match.path, `${f.id}: ${imagesOf(f).join('/')} is told by the command line, not by where it is`)
   const exe = '/usr/local/bin/node'
   assert.deepEqual(matchForm(forms, { exe, cmdline: 'node build.js' }), { kind: 'none' })
   assert.deepEqual(matchForm(forms, { exe, cmdline: null }), { kind: 'none' })
