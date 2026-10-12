@@ -155,7 +155,7 @@ const SPEC_12_FAILURES = [
   ['fallback-active', 'routing'],
   ['forwarder-start-failed', 'forwarder'], ['forwarder-restart', 'forwarder'], ['forwarder-digest-mismatch', 'forwarder'], ['forwarder-binary-missing', 'forwarder'],
   ['forwarder-download-failed', 'forwarder'], // D44 (4.8 §8 ①): the kernel is missing and the `on` that downloads it failed — restored after the 2026-10-07 withdrawal
-  ['gatekeeper', 'forwarder'], // 4.9 §12: the darwin kernel precheck's non-digest half
+  // 'gatekeeper' went with the darwin kernel itself (D47): it was the darwin forwarder's precheck code, and no producer is left anywhere
   ['optin-failed', 'optin'],
   ['socktable-unavailable', 'helper'], ['helper-start-failed', 'helper'],
   ['task-register-failed', 'install'], ['launchd-register-failed', 'install'], // the darwin autostart (4.9 §12)

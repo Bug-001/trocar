@@ -329,7 +329,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
             return m && x ? { ...m, ...x, agent: m.agent ?? x.agent } : m
           },
         } : {}),
-        // the proxy ingress's own answer (4.8 §5.1): the kernel's CONNECT arrives with of.<form> as the user; the redirector's lookupIngress resolves it (a flow's meta, a health probe, or null = refused)
+        // the proxy ingress's own answer (4.8 §5.1): win32's kernel CONNECT arrives with of.<form> as the user, darwin's door lookup with the group id (D47) — the redirector's lookupIngress resolves it (a flow's meta, a health probe, or null = refused)
         ...(typeof redirector.lookupIngress === 'function' ? { lookupIngress: (q) => redirector.lookupIngress(q) } : {}),
       },
       // FlowExtras (plan 3c §2): the harness's WebSocket terminators and this process's own proxies. A throw: the
@@ -340,7 +340,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
         }
       },
       issuer, store, upstreamCa,
-      ...(macIng ? { ingressToken: macIng.ingressToken } : {}), // the kernel's CONNECT authenticates to the ingress with of.<form>:this token (4.8 §3.2); listen({ingress}) refuses without it
+      ...(macIng ? { ingressToken: macIng.ingressToken } : {}), // win32: the kernel's CONNECT authenticates to the ingress with of.<form>:this token (4.8 §3.2); darwin: the doors' own token is each group's listener token, this one the ingress's (D47); listen({ingress}) refuses without it
       policy: (meta, host) => tracker.policy(meta, host),
       isRecording: (meta) => sw.isRecording(meta && meta.agent), // sampled per request, per harness (4.6 §开关): a request after off is never recorded
       retention: (meta, host, method, path) => keep.decide({ harness: harnessIdOfAgent(meta && meta.agent), host, method, endpoint: path }), // sampled with it (D40)
@@ -360,6 +360,15 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       throw e
     })
     const port = macIng ? first.ingressPort ?? null : first.port
+    // D47 (4.9 §3): the darwin engine's own per-group doors — the daemon binds the wiring's slot to the engine the moment both exist, so
+    // the redirector's attach()/detach() can open and close the doors the plan (or the carried set) asks for. `open` is listen({groups})
+    // (idempotent per group id), `close` is closeGroups (stop accepting; in-flight connections drain).
+    if (bag && typeof bag.bindDoors === 'function') {
+      bag.bindDoors({
+        open: (list) => engine.listen({ groups: list }),
+        close: (ids) => Promise.resolve(engine.closeGroups(ids)),
+      })
+    }
     let v6Held = null // the helper steers IPv6 agent connections to [::1]:port: never attach while someone else holds it (M8; darwin has no helper — its agents point at 127.0.0.1 by the entry)
     let v6Error = null // any [::1] failure: status never reports [::1] as listening then (D-10)
     try { await engine.listen({ port: first.port, hosts: ['::1'], ...(first.ingressPort ? { ingress: { port: first.ingressPort } } : {}) }) } catch (e) {

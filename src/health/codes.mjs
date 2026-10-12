@@ -84,8 +84,7 @@ export const ROUTE_EVENTS = Object.freeze(['route-applied', 'forwarder-start', '
 export const ROUTE_CODES = Object.freeze([
   'ingress-auth-failed', 'ingress-unknown', 'engine-port-taken', 'upstream-unavailable', // ingress (`upstream-unavailable`: the group's upstream cannot be dialled at all, no login to dial it with or none to dial: the lookup refused, the agent got a 502)
   'fallback-active', // routing
-  'forwarder-start-failed', 'forwarder-restart', 'forwarder-digest-mismatch', 'forwarder-binary-missing', 'forwarder-download-failed', // forwarder: the kernel is missing and the `on` that downloads it failed at some step of that — curl absent or failed, or the archive or the unpacked exe is not the pinned one (D44, 4.8 §8 ①: the security boundary is the digest check after the download, never curl's exit code alone)
-  'gatekeeper', // forwarder, darwin: the kernel's precheck half that is not the digest (4.9 §3) — a quarantine attribute that could not be self-healed off, or a binary the system still refuses to run; the receipt carries the reinstall command
+  'forwarder-start-failed', 'forwarder-restart', 'forwarder-digest-mismatch', 'forwarder-binary-missing', 'forwarder-download-failed', // forwarder, win32 (4.8 §12 is its table): the kernel is missing and the `on` that downloads it failed at some step of that — curl absent or failed, or the archive or the unpacked exe is not the pinned one (D44, 4.8 §8 ①: the security boundary is the digest check after the download, never curl's exit code alone). darwin produces none of these (D47: no kernel); its `gatekeeper` precheck code went with the darwin forwarder itself.
   'optin-failed', // optin: an item the user named was not done (a refused prompt, a script error); a refused UAC is not this: it is `pending-admin` (1.6 §1.7)
   'socktable-unavailable', 'helper-start-failed', // helper
   'task-register-failed', // install: `on` still succeeds, through the HKCU Run fallback (4.8 §7)

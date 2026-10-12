@@ -15,7 +15,6 @@ import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 import { pinExes, PayloadError, PIN_FILE } from '../../../../scripts/kernel-payload.mjs'
 import { loadPin as loadWinPin } from '../../../../src/collector/arch/win32/forwarder.mjs'
-import { loadPin as loadDarwinPin } from '../../../../src/collector/arch/darwin/forwarder.mjs'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..')
 const sha = (b) => createHash('sha256').update(b).digest('hex')
@@ -72,37 +71,15 @@ test('W75 --pin: two downloads that disagree on the exe are an error; a wrong ar
   for (const x of [split, wrong]) assert.deepEqual([files(x.workRoot), fs.existsSync(x.out)], [[], false], 'no scratch left, nothing written')
 })
 
-// 4.9 验收 3 (D44): the tool reads the darwin pin's own assets — the darwin release is a .gz of the single binary, unpacked with node:zlib, no exec at all.
-test('W75 --pin (darwin): the .gz assets of the darwin pin unpack through node:zlib, no exec; the answer is the same shape', async (t) => {
-  const pin = JSON.parse(JSON.stringify(loadDarwinPin()))
-  const fakes = {}
-  const body = {}
-  for (const arch of Object.keys(pin.assets)) {
-    fakes[arch] = { gz: gzipSync(Buffer.from(`MZ fake darwin ${arch} kernel `.repeat(60))) }
-    pin.assets[arch].sha256 = sha(fakes[arch].gz); pin.assets[arch].size = fakes[arch].gz.length
-    body[pin.assets[arch].url] = fakes[arch].gz
-  }
-  const root = tmpDir('asight-payload-')
-  const calls = { download: [], exec: [] }
-  const r = await pinExes({ pin, download: async (u) => { calls.download.push(u); return body[u] }, exec: async (...a) => { calls.exec.push(a); throw new Error('no exec on the darwin half') }, workRoot: root })
-  for (const arch of Object.keys(pin.assets)) {
-    const raw = Buffer.from(`MZ fake darwin ${arch} kernel `.repeat(60))
-    assert.deepEqual(r[arch], { name: pin.assets[arch].name, size: fakes[arch].gz.length, sha256: sha(fakes[arch].gz), exe: { name: 'asight-forwarder', size: raw.length, sha256: sha(raw) } })
-  }
-  assert.deepEqual(calls.exec, [], 'the gz half never execs: zlib is it')
-  const badGz = Buffer.from(fakes.arm64.gz); badGz[10] ^= 0xff // not the pinned archive any more
-  await assert.rejects(pinExes({ pin, download: async (u) => (u === pin.assets.arm64.url ? badGz : body[u]), exec: async () => { throw new Error('no exec') }, workRoot: root }), (e) => e instanceof PayloadError && e.code === 'zip-digest-mismatch')
-})
-
 test('W75 the shipped package: the pin and LICENSE-mihomo.txt ship (on reads both at runtime), no build tool, no exe; .gitignore has dist/ and *.exe; nothing in src imports the tool', (t) => {
   const scratch = tmpDir('asight-payload-')
   const env = { PATH: process.env.PATH, HOME: scratch, USERPROFILE: scratch, TMPDIR: scratch, npm_config_cache: path.join(scratch, 'cache'), npm_config_update_notifier: 'false', npm_config_offline: 'true', npm_config_fund: 'false', npm_config_audit: 'false' }
   const packed = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { cwd: ROOT, env, encoding: 'utf8' }))[0].files.map((f) => f.path)
   assert.ok(packed.length > 10 && packed.some((p) => p.startsWith('src/collector/arch/win32/')), 'the listing is the real package')
   assert.deepEqual(packed.filter((p) => p.startsWith('scripts/') || /\.exe$/i.test(p)), [], 'no build tool, no exe (the kernel is in no package since D44)')
-  assert.ok(packed.includes('src/collector/arch/win32/mihomo-pin.json') && packed.includes('src/collector/arch/darwin/mihomo-pin.json'), 'the pins ship: they are what `on` reads')
+  assert.ok(packed.includes('src/collector/arch/win32/mihomo-pin.json'), 'the win32 pin ships: it is what `on` reads (darwin\'s went with its kernel, 0.0 D47)')
   assert.ok(packed.includes('LICENSE-mihomo.txt'), 'the licence text ships: kernel-download.mjs places it beside the kernel it downloads (D44)')
-  assert.equal(path.basename(PIN_FILE), 'mihomo-pin.json', 'the default pin file is the win32 one; darwin\'s is named with --pin-file')
+  assert.equal(path.basename(PIN_FILE), 'mihomo-pin.json', 'the default pin file is the win32 one')
   const lines = fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8').split('\n').map((l) => l.trim())
   assert.ok(lines.includes('dist/') && lines.includes('*.exe'))
   const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]))
