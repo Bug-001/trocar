@@ -53,8 +53,7 @@ git clone <this repo> && cd <the repo> && npm install
 node bin/asight.mjs on          # or: npx --no-install asight on
 ```
 
-The first `asight on` lists the files it will touch (on Windows also the mihomo kernel it will
-download, version and sha256 pinned in the repo) and starts after you confirm. Then: `asight status`
+The first `asight on` lists the files it will touch and starts after you confirm. Then: `asight status`
 to see state, `asight off` to take every trace of asight off your agents' path.
 
 From a Release: not published yet.
@@ -166,21 +165,20 @@ recorded call by call), OpenCode, DeepSeek `dsh`, Kimi Code, Hermes and Z-Code. 
 eBPF helper steers only the connections of agent processes you run to a loopback engine, which decrypts
 only for agents that trust the collector CA. Everything else, including other users, goes direct. On
 Windows (RFC 4.8) the same harnesses are captured in proxy mode — Kimi Code only through its opt-in shims.
-`asight on` prints its plan first: the kernel it will run (`asight-forwarder.exe`, mihomo with the
-version and both sha256s pinned in the repo — downloaded by that first `on` when missing, from the
-pinned official release page; it listens on loopback only — no TUN, never the system proxy, nothing
-written into your VPN), one row per agent group with the upstream the kernel will dial for it, Codex's
-WebSocket, Smart App Control, and the autostart task; then it writes the proxy and trust entries in the
+`asight on` prints its plan first — one row per agent group with its upstream, Codex's WebSocket, and
+the autostart task; then it writes the proxy and trust entries in the
 agents' own config files (your prior values recorded, `off` restores them). The forms that reach further
 are opt-in, each named with what it touches — `asight on <harness> --opt-in <form>`: Claude Desktop's
 user-level certificate store, the Kimi / OpenCode PATH shims, the Kimi VS Code extension capture, the
 OpenCode and Z-Code desktop launchers and app settings (the machine-level ones run in the administrator
 step asight shows, never with a password field of its own). `asight off` runs the same undo as on Linux:
-the supervisor, daemon and kernel stopped, every entry and opt-in item taken out — and, as the plan says
-up front, an agent started while it was on still passes through the kernel (forwarded untouched) until
-you restart it. On macOS (RFC 4.9) the same harnesses are captured in proxy mode, with darwin's own
-shape (D47): the collector's engine is itself the local proxy — one loopback door per agent group,
-nothing downloaded, no second kernel at all (`asight on`'s first write is the CA, as on Linux).
+the supervisor and daemon stopped, every entry and opt-in item taken out — and, as the plan says
+up front, an agent started while it was on still passes through its group's door (forwarded untouched) until
+you restart it. On Windows and macOS (RFC 4.8 / 4.9, D47 and its win32 twin) the proxy is the collector's
+own engine — one loopback door per agent group, loopback only, no TUN, never the system proxy, nothing
+written into your VPN; nothing is downloaded and there is no second kernel at all (`asight on`'s first
+write is the CA, as on Linux), and the connection's identity is read from the socket at accept time
+(a targeted owner lookup per connection) rather than from a process scan.
 `asight on` prints its plan first — one row per agent group with its upstream (the engine dials it
 for each connection; loopback only, no TUN, never the system proxy, nothing written into your VPN),
 Codex's WebSocket, and the autostart LaunchAgent (`com.asight.collector` in `~/Library/LaunchAgents`,
