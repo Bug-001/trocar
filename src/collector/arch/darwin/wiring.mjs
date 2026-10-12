@@ -52,9 +52,10 @@ const movedRoute = (a, b) => !a || !b || a.on !== b.on || JSON.stringify(a.upstr
  *   second key, 4.8 §5.4; markerToleranceMs is the plugin marker's fixed tolerance — the daemon hands it to the tracker, confirm.mjs's value). Everything is injected through `deps` for a test. `dir` absent = the lazy shell (the header's LAZY RULE).
  *   failure (where, error, extra)  the daemon's failure recorder · event (record)  its event writer (netenv-change, the watcher's own records)
  *   manifest  () → the manifest as it is NOW (the daemon re-reads it; null reads it here) · desired  () → state.json's `harnesses` (`{ <id>: { desired, extra_hosts } }`)
- *   optIns    () → the groups or forms the user named and asight has the record of (the win line's Task 14; today there is none, so the default is none)
+ *   optIns    () → the groups or forms the user named and asight has the record of; the default (null) DERIVES them from the manifest's `optin-*` entries (4.9 §6.4's wiring arm,
+ *              2026-10-12: without it a daemon that restarts after `on … --opt-in claude-code.desktop` re-plans the group as unnamed → the launcher points at a port with no listener)
  */
-export async function createDarwinCollector({ env = process.env, dir = null, home = env.HOME || os.homedir(), harnesses = [], failure = () => {}, event = () => {}, manifest = null, desired = () => ({}), optIns = () => [], deps = {} } = {}) {
+export async function createDarwinCollector({ env = process.env, dir = null, home = env.HOME || os.homedir(), harnesses = [], failure = () => {}, event = () => {}, manifest = null, desired = () => ({}), optIns = null, deps = {} } = {}) {
   const fs = deps.fs || nodeFs
   const groups = groupsOf(harnesses)
   const forms = groups.flatMap((x) => x.forms)
@@ -112,7 +113,18 @@ export async function createDarwinCollector({ env = process.env, dir = null, hom
   let systemProxy = deps.systemProxy ?? null
   let plan = null
   const ownPorts = () => (ing ? [ing.enginePort, ...Object.values(ing.groupPorts), controller.port] : [])
-  const carriedOf = () => new Set(groups.filter((x) => proxyRecordsOf(manifestNow(), x.group, x.harness).length > 0).map((x) => x.g)) // installed or once on; an opt-in's own record joins with the win line's Task 14
+  // the manifest's opt-in records of one group's forms (confirmed: an entry whose write failed is re-offered, not treated as in effect — planOptIns' own 'done' rule); these say the
+  // group is opted in (the plan's gate) and may stay in the kernel while off (carried, audit F7) — the desktop-launcher's listener lives or dies by this arm (4.9 §6.4)
+  const optinRecordsOf = (m, x) => (m && Array.isArray(m.entries) ? m.entries : []).filter((e) => e && typeof e.kind === 'string' && e.kind.startsWith('optin-') && e.confirmed !== false && e.harness === x.harness && x.forms.some((f) => f.id === e.form))
+  // the named-and-recorded forms (and their groups) the daemon's re-plan treats as opted in: the caller's own list when it brought one, else derived from the manifest — a caller
+  // that passes none (the daemon today) still re-plans a launcher'd group as on (4.9 §6.4's wiring arm)
+  const namedOptIns = () => {
+    const given = optIns ? optIns() : null
+    if (given && given.length) return given
+    const m = manifestNow()
+    return groups.filter((x) => optinRecordsOf(m, x).length > 0).flatMap((x) => [x.g, ...x.forms.map((f) => f.id)])
+  }
+  const carriedOf = () => new Set(groups.filter((x) => proxyRecordsOf(manifestNow(), x.group, x.harness).length > 0 || optinRecordsOf(manifestNow(), x).length > 0).map((x) => x.g)) // installed, once on, or opted in (the opt-in's own record — the desktop launcher's arm, 4.9 §6.4; the win line's Task 14 twin)
   const extraHostsOf = (harness) => { const h = (desired() || {})[harness]; return h && Array.isArray(h.extra_hosts) ? h.extra_hosts : [] }
   const appliedHosts = new Map() // form id → the host set the last plan applied; `status` compares it with a fresh read
   let redirector = null
@@ -121,7 +133,7 @@ export async function createDarwinCollector({ env = process.env, dir = null, hom
    *  same reload the switch's `on` runs — the entries hold the same address, so their write is a no-op and their undo undoes nothing). */
   async function replan({ reload = false } = {}) {
     const carried = carriedOf()
-    const next = planRoutes({ netenv: { systemProxy, ownPorts: ownPorts() }, groups, desired: desired() || {}, optIns: optIns() || [], manifest: manifestNow(), ctx, procs: redirector ? redirector.procs() : [], last: plan })
+    const next = planRoutes({ netenv: { systemProxy, ownPorts: ownPorts() }, groups, desired: desired() || {}, optIns: namedOptIns(), manifest: manifestNow(), ctx, procs: redirector ? redirector.procs() : [], last: plan })
     const moved = plan == null || groups.some((x) => movedRoute(plan[x.g], next[x.g]))
     plan = next
     for (const x of groups) { // the host sets of the forms the kernel carries (on, or carried while off): kept per form, returned in status

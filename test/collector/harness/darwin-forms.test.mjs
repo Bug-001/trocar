@@ -152,7 +152,7 @@ test('every darwin data file has the shape the later tasks read: groups, forms, 
       gids.add(g.g)
       assert.match(g.g, /^[A-Za-z0-9][A-Za-z0-9._-]*$/, `${g.g}: a group id is a Basic user name and a probe path: no colon, no space`)
       assert.ok(g.g.startsWith(`${h}.`), `${g.g}: named after its harness`)
-      assert.ok(g.proxyEntry && ['file', 'shim', 'unmeasured'].includes(g.proxyEntry.kind), `${g.g}: a known darwin entry kind (the win32 policy / launcher / app-setting kinds have no macOS group; 'unmeasured' is the honest marker of a proxy door nobody has measured, 4.9 §6.4)`)
+      assert.ok(g.proxyEntry && ['file', 'shim', 'launcher', 'unmeasured'].includes(g.proxyEntry.kind), `${g.g}: a known darwin entry kind ('launcher' is Claude Desktop's measured door, 4.9 §6.4; 'unmeasured' is the honest marker of a proxy door nobody has measured)`)
       assert.equal(typeof g.auth, 'boolean', `${g.g}: auth`)
       assert.ok(g.followsSystemProxy && [true, false, 'unknown'].includes(g.followsSystemProxy.http) && [true, false, 'unknown'].includes(g.followsSystemProxy.ws), `${g.g}: followsSystemProxy (1.6 §9.7's third value 'unknown' is a darwin cell)`)
       const automatic = g.proxyEntry.kind === 'file'
@@ -285,7 +285,7 @@ test('W23: a form that needs naming has an opt-in item and no automatic entry; t
 const GROUPS = {
   // [follows system proxy http, ws] · noProxyKey · auth · the entry (4.9 §2.3; the entry shapes are 4.8 §2.3's, plus darwin's 'unmeasured')
   'claude-code.settings': { follows: [false, false], auth: true, entry: { kind: 'file', format: 'json-key', key: ['env', 'HTTPS_PROXY'] } },
-  'claude-code.desktop': { follows: ['unknown', 'unknown'], auth: false, entry: { kind: 'unmeasured' } },
+  'claude-code.desktop': { follows: [true, true], auth: false, entry: { kind: 'launcher' } }, // measured 2026-10-12 (4.9 §6.4): the Chromium network service follows the system proxy, and the door is the named launcher
   'codex.env': { follows: [true, false], noProxyKey: 'NO_PROXY', auth: true, entry: { kind: 'file', format: 'dotenv-block', block: { urlVar: 'HTTPS_PROXY', fixed: { NO_PROXY: 'localhost,127.0.0.1,::1' } } } },
   'opencode.cli': { follows: [false, false], auth: true, entry: { kind: 'shim', command: 'opencode' } },
   'kimi-code.cli': { follows: [false, false], auth: true, entry: { kind: 'shim', command: 'kimi' } },
@@ -293,8 +293,8 @@ const GROUPS = {
   'hermes.cli': { follows: [true, false], noProxyKey: 'NO_PROXY', auth: true, entry: { kind: 'file', format: 'dotenv-block', block: { urlVar: 'HTTPS_PROXY', fixed: { NO_PROXY: 'localhost,127.0.0.1,::1' } } } },
   'z-code.cli': { follows: [false, false], auth: true, entry: { kind: 'file', format: 'json-key', key: ['network', 'httpProxy'] } },
 }
-const OPT_IN = { // 4.8 §2.4 · 4.9 §2.4: the item, its scope, and when a machine-level item applies; an automatic group has none. v1 macOS has no machine-level item at all (4.9 §2.4: the win32 dispatcher and launcher items have no macOS counterpart)
-  'claude-code.desktop': [['keychain-login', 'user']],
+const OPT_IN = { // 4.8 §2.4 · 4.9 §2.4 · §6.4: the item, its scope, and when a machine-level item applies; an automatic group has none. v1 macOS has no machine-level item at all (4.9 §2.4: the win32 dispatcher items have no macOS counterpart; the one launcher item is Claude Desktop's measured door, §6.4)
+  'claude-code.desktop': [['keychain-login', 'user'], ['desktop-launcher', 'user']],
   'opencode.cli': [['user-path-shim', 'user']],
   'kimi-code.cli': [['user-path-shim', 'user']],
 }
@@ -329,7 +329,7 @@ test('the proxy export of each harness is 4.9 §2.3 and the CLI plan\'s proxy ta
     const { env, files, systemProxy, schemes, unsupported, branches } = w.proxy
     assert.deepEqual({ env, files, systemProxy, schemes, unsupported, branches }, PROXY_EXPORT[h], h)
   }
-  // the group's own cell and the harness's row agree where the harness has one form class (Claude Code's desktop shell is the one apart, as its own group: its cells stay 'unknown' until MA4, 4.9 §6.4)
+  // the group's own cell and the harness's row agree where the harness has one form class (Claude Code's desktop shell is the one apart, as its own group: its cell is the measured Chromium one, 4.9 §6.4)
   for (const [h, w] of Object.entries(MAC)) for (const g of w.groups.filter((x) => !x.g.endsWith('.desktop') || h === 'hermes')) {
     if (g.proxyEntry.kind === 'app-setting' || g.proxyEntry.kind === 'policy') continue
     assert.deepEqual([g.followsSystemProxy.http, g.followsSystemProxy.ws], [w.proxy.systemProxy.http, w.proxy.systemProxy.ws], `${g.g}: the group's cell is the harness's row`)
@@ -383,8 +383,9 @@ test('a group\'s proxy entry goes into the files its trust entry does (Claude Co
   assert.ok(MAC.hermes.inject(rctx).entries.some((e) => e.format === 'line' && e.path === path.join(rw.home, '.hermes', 'profiles', 'work', 'config.yaml')), 'the chat_completions route itself gets its ssl_ca_cert trust line')
 })
 
-test('no darwin group is an app-setting, a policy or a launcher entry: every form that would carry one (the Z-Code Desktop, the Kimi and Codex extensions, the OpenCode desktop) is not measured on macOS, so it has no group and nothing of it is ever located or written', () => {
-  assert.deepEqual(groupsOf().map((g) => g.proxyEntry.kind).sort(), ['file', 'file', 'file', 'file', 'file', 'shim', 'shim', 'unmeasured'], 'the darwin entry kinds: five files, two shims, one door not measured yet')
+test('no darwin group is an app-setting or a policy entry, and the ONE launcher is Claude Desktop\'s measured door: every form that would carry another (the Z-Code Desktop, the Kimi and Codex extensions, the OpenCode desktop) is not measured on macOS, so it has no group and nothing of it is ever located or written', () => {
+  assert.deepEqual(groupsOf().map((g) => g.proxyEntry.kind).sort(), ['file', 'file', 'file', 'file', 'file', 'launcher', 'shim', 'shim'], 'the darwin entry kinds: five files, two shims, one launcher — Claude Desktop\'s door, measured 2026-10-12 (4.9 §6.4)')
+  assert.deepEqual(groupsOf().filter((g) => g.proxyEntry.kind === 'launcher').map((g) => g.g), ['claude-code.desktop'], 'the launcher group is exactly the desktop one')
   for (const id of ['codex.vscode', 'codex.app', 'opencode.desktop', 'hermes.desktop', 'kimi-code.vscode', 'z-code.desktop']) {
     const f = formsOf().find((x) => x.id === id)
     assert.equal(f.supported.reason, 'not-measured', id)

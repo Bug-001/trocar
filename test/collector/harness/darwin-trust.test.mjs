@@ -465,12 +465,12 @@ for (const c0 of CASES) for (const shape of SHAPES) {
   })
 }
 
-test('W19 proxy entry: Claude Desktop on macOS has no measured door — the group holds the honest marker, not an entry, and its trust is the login-keychain opt-in', () => {
+test('W19 proxy entry: Claude Desktop\'s measured door is the named launcher (4.9 §6.4, 2026-10-12) — no automatic entry is written, and its trust is the login-keychain opt-in', () => {
   const b = box()
   const desktop = only('claude-code')[0].darwin.groups.find((g) => g.g === 'claude-code.desktop')
-  assert.equal(desktop.proxyEntry.kind, 'unmeasured', 'kind:"unmeasured" is not one of the kinds anything writes (4.9 §6.4)')
-  assert.deepEqual(proxyEntries(desktop, ctxOf(b), INGRESS), [], 'no file is written for a door that is not known yet: naming the group installs the CA, not a route')
-  assert.deepEqual(desktop.optIn.map((o) => o.item), ['keychain-login'], 'the login-keychain item is the user\'s to name, never automatic')
+  assert.equal(desktop.proxyEntry.kind, 'launcher', 'the door the lab verdict measured: a named launcher carrying Chromium\'s --proxy-server (env is dead to Desktop\'s Chromium network service)')
+  assert.deepEqual(proxyEntries(desktop, ctxOf(b), INGRESS), [], 'a launcher is not one of the kinds anything writes automatically: naming the ROUTING item writes the launcher, naming the keychain one installs the CA')
+  assert.deepEqual(desktop.optIn.map((o) => o.item), ['keychain-login', 'desktop-launcher'], 'the login-keychain item and the launcher item are the user\'s to name, never automatic')
 })
 
 test('W19 proxy entry: Claude Code and Z-Code write the proxy key beside the trust key in one file, and off takes them out in the opposite order to the original bytes', () => {

@@ -18,8 +18,9 @@ const descs = await loadHarnesses()
 const codex = descs.find((d) => d.name === 'codex')
 
 /** One darwin `on` world: the codex .env a user has, the arch hooks of the flip's seam (`osRoots` a spy over a generated certificate), a daemon that answers.
- *  `prep` / `ensureKernel` are the D44 hooks (read-only preflight, write-phase kernel ensuring) — fakes the same way, so no test here reaches a network. */
-function darwinWorld({ osRoots, prep = null, ensureKernel = null } = {}) {
+ *  `prep` / `ensureKernel` are the D44 hooks (read-only preflight, write-phase kernel ensuring) — fakes the same way, so no test here reaches a network.
+ *  `harness` swaps the one harness in parts (the desktop-hint test runs claude-code); `optInHooks` gives the fake arch an optIn half (plan rows). */
+function darwinWorld({ osRoots, prep = null, ensureKernel = null, harness = codex, optInHooks = null } = {}) {
   const home = tmpDir('asight-darwin-on-')
   // a darwin machine finds the daemon through control.json (4.9 §7); XDG_RUNTIME_DIR is a shape no real mac presents (the 2026-10-11 blind spot)
   fs.mkdirSync(path.join(home, '.asight', 'collector'), { recursive: true })
@@ -32,8 +33,9 @@ function darwinWorld({ osRoots, prep = null, ensureKernel = null } = {}) {
     osRoots: async () => { asked.push(1); if (osRoots === undefined) return { pem: FAKE_OS.certPem }; return osRoots() },
     ...(prep ? { prepare: async () => prep } : {}), // prepare / ensureKernel are the kernel's own hooks (D44); a world that passes none keeps the absent-and-skipped shape
     ...(ensureKernel ? { ensureKernel } : {}),
+    ...(optInHooks ? { optIn: optInHooks } : {}),
   }
-  const parts = { os: 'darwin', osRootsFile: null, harnesses: [codex], scan: async () => [], match: () => ({ agent: null }), arch }
+  const parts = { os: 'darwin', osRootsFile: null, harnesses: [harness], scan: async () => [], match: () => ({ agent: null }), arch }
   const run = async (argv, { platform = 'linux', deps: extraDeps = {} } = {}) => {
     const io = fakeIo()
     const exit = await runOnCli(argv, {
@@ -155,4 +157,26 @@ test('D44 (darwin): the missing kernel is a download line in the plan, and the w
   assert.equal(calls.length, 1, 'the write-phase hook ran exactly once, after the confirmation')
   assert.equal(calls[0].home, w.home, 'with the home the on runs in')
   assert.match(real.text, /the kernel was downloaded and both digests verified/, 'the receipt carries the download\'s own line')
+})
+
+// the Claude Desktop steering hint (4.9 §6.4): the darwin plan says the launcher item exactly while claude-code is a
+// target and the ledger has no done row for it — the win twin is formatWinPlan's codex line (test/cli/win-plan.test.mjs); nothing is ever installed
+// by a hint, and the needs_restart honesty (only instances started through the launcher are steered) rides in the line itself.
+const DESKTOP_HINT = 'macOS 上采 Claude Desktop 需要点名建启动器: asight on claude-code --opt-in claude-code.desktop(写 ~/.asight/collector/bin/claude-desktop-asight;只有经它启动的 Desktop 才被引流,已在跑的 Desktop 不受影响——先退出再用它启动)'
+test('the desktop steering hint on darwin: the plan says it while claude-code is a target without a done row, and goes silent the moment the ledger has one', async () => {
+  const claude = descs.find((d) => d.name === 'claude-code')
+  const rows = (state) => [{ form: 'claude-code.desktop', item: 'desktop-launcher', scope: 'user', kinds: ['optin-desktop-launcher'], impact: 'a launcher that starts Claude Desktop steered at asight\'s listener', command: 'asight on claude-code --opt-in claude-code.desktop', chosen: false, applicable: true, state }]
+  const hooks = (state) => ({ forms: async () => ['claude-code.desktop'], plan: async () => rows(state) })
+  const w = darwinWorld({ harness: claude, optInHooks: hooks('needed') })
+  const r = await w.run(['--yes', 'claude-code'], { platform: 'darwin' })
+  assert.equal(r.exit, 0, r.text)
+  assert.ok(r.text.includes(DESKTOP_HINT), `the hint is in the plan: ${r.text}`)
+  const w2 = darwinWorld({ harness: claude, optInHooks: hooks('done') })
+  const r2 = await w2.run(['--yes', 'claude-code'], { platform: 'darwin' })
+  assert.equal(r2.exit, 0, r2.text)
+  assert.ok(!r2.text.includes(DESKTOP_HINT), 'the done row: the hint has done its job and goes')
+  const w3 = darwinWorld({ optInHooks: { forms: async () => [], plan: async () => [] } })
+  const r3 = await w3.run(['--yes', 'codex'], { platform: 'darwin' })
+  assert.equal(r3.exit, 0, r3.text)
+  assert.ok(!r3.text.includes(DESKTOP_HINT), 'claude-code not a target: nothing to say')
 })

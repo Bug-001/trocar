@@ -14,6 +14,7 @@ import { groupsOf } from '../../../../src/collector/arch/darwin/route-plan.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { installCollector } from '../../../../src/collector/install.mjs'
 import { readManifest } from '../../../../src/collector/core/trust/journal.mjs'
+import { saveManifest } from '../../../../src/off/manifest.mjs'
 import { MARKER_TOLERANCE_MS } from '../../../../src/collector/core/trust/confirm.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 
@@ -224,6 +225,37 @@ test('attach() (through the wiring\'s own gate) writes Codex\'s proxy lines into
   assert.equal(JSON.stringify(last.forms).includes('"on":true'), false, 'no form of it is on')
   const undone = fs.readFileSync(f, 'utf8')
   assert.equal([...undone.matchAll(/^HTTPS_PROXY=/gm)].length, 0, 'and its proxy entry is undone (the plan says off)')
+})
+
+// 4.9 §6.4's wiring arm (2026-10-12): the launcher's ledger entry is what names the group after the CLI run is gone — nobody passes optIns here
+// (the rig passes () => [], the daemon passes nothing), so the manifest's confirmed optin-* record is the only naming there is. Without this arm
+// a daemon that starts after `on … --opt-in claude-code.desktop` re-plans the group as unnamed and the launcher points at a port with no listener.
+test('a manifest-recorded desktop-launcher re-plans the group on with nobody passing optIns; an unconfirmed record names nothing; off keeps the listener (carried)', async () => {
+  const r = await rigged(['claude-code'], { desired: { 'claude-code': { desired: 'on' } } })
+  const entry = { kind: 'optin-desktop-launcher', harness: 'claude-code', form: 'claude-code.desktop', item: 'desktop-launcher', scope: 'user', path: path.join(r.dir, 'bin', 'claude-desktop-asight'), values: { launcher: path.join(r.dir, 'bin', 'claude-desktop-asight') }, confirmed: true, installed_at: new Date().toISOString() }
+  const m = readManifest(r.dir)
+  m.entries.push(entry)
+  saveManifest(r.dir, m)
+  const { plan } = await r.redirector.darwin.replan()
+  const d = plan['claude-code.desktop']
+  assert.deepEqual([d.entry, d.on, d.reason], ['opt-in', true, null], 'the recorded item is the naming: the group is connected')
+  await r.redirector.attach()
+  assert.match(r.kernel.reloads.at(-1).text, /asight-l-claude-code\.desktop/, 'the desktop listener is in the kernel — the launcher has a port to point at')
+  // an UNCONFIRMED record (a write whose read-back failed) names nothing: the group waits to be named again, never half-on
+  const m2 = readManifest(r.dir)
+  m2.entries.find((e) => e.kind === 'optin-desktop-launcher').confirmed = false
+  saveManifest(r.dir, m2)
+  const again = (await r.redirector.darwin.replan()).plan['claude-code.desktop']
+  assert.deepEqual([again.entry, again.on, again.reason], [null, false, 'opt-in-needed'], 'an unconfirmed entry is re-offered, not treated as in effect')
+  // confirmed again, the harness OFF: the launcher is still in the ledger, so the group is carried — its port does not go away (audit F7's third leg)
+  const m3 = readManifest(r.dir)
+  m3.entries.find((e) => e.kind === 'optin-desktop-launcher').confirmed = true
+  saveManifest(r.dir, m3)
+  r.state.desired = { 'claude-code': { desired: 'off' } }
+  await r.redirector.darwin.replan({ reload: true })
+  const last = r.kernel.reloads[r.kernel.reloads.length - 1]
+  assert.match(last.text, /asight-l-claude-code\.desktop/, 'carried while the harness is off — the launcher\'s port does not go away')
+  assert.equal(JSON.stringify(last.forms).includes('"on":true'), false, 'no form of it is on (forward only)')
 })
 
 test('ownImages are the daemon\'s node and the kernel\'s binary, and the host sets of a host-tree form are applied at on and kept for status', async () => {

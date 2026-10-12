@@ -28,7 +28,7 @@ import { asightHome, backupDir, collectorDir } from '../off/paths.mjs'
 import { orphanBackups } from '../off/backup.mjs'
 import { readManifest, manifestPath } from '../off/manifest.mjs'
 import { checkStandalone } from '../off/standalone.mjs'
-import { CODEX_WS_CERT_HINT } from './words.mjs'
+import { CODEX_WS_CERT_HINT, DESKTOP_LAUNCHER_HINT } from './words.mjs'
 
 const USAGE = 'usage: asight doctor [harness…] [--source <ndjson|dir>] [--json]'
 const LIMIT = 5000 // records sampled (the head of the capture)
@@ -174,6 +174,13 @@ export async function runDoctor(argv, { io, env = process.env, home = nodeOs.hom
     let certStoreRecorded = false
     try { const m = readManifest(collectorDir(home), fs); certStoreRecorded = !!(m && !m.unsupported && Array.isArray(m.entries) && m.entries.some((e) => e && e.kind === 'optin-cert-user')) } catch { /* no manifest, or one that will not read: nothing was recorded */ }
     if (!certStoreRecorded) io.out(indent(`⚠ ${CODEX_WS_CERT_HINT}`))
+  }
+  // the Claude Desktop steering hint (4.9 §6.4): on darwin, for claude-code, while the named desktop-launcher opt-in is not
+  // recorded — said, never installed (the codex hint's darwin twin; the line itself carries the needs_restart honesty verbatim)
+  if (platform === 'darwin' && (names.length === 0 || names.includes('claude-code'))) {
+    let launcherRecorded = false
+    try { const m = readManifest(collectorDir(home), fs); launcherRecorded = !!(m && !m.unsupported && Array.isArray(m.entries) && m.entries.some((e) => e && e.kind === 'optin-desktop-launcher' && e.confirmed !== false)) } catch { /* no manifest, or one that will not read: nothing was recorded */ }
+    if (!launcherRecorded) io.out(indent(`⚠ ${DESKTOP_LAUNCHER_HINT}`))
   }
   if (notesError) io.out(indent(`the last install's notes could not be read: ${notesError}`))
   else for (const l of notes) io.out(indent(l))

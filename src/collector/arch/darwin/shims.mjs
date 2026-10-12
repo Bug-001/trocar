@@ -10,15 +10,15 @@ import fs from 'node:fs'
 
 export const SHIM_SOURCES = new URL('./shims/', import.meta.url)
 
-const SH_SLOTS = Object.freeze({ proxy: '__ASIGHT_PROXY__', caFile: '__ASIGHT_CA_FILE__', realBinary: '__ASIGHT_REAL_BINARY__' })
+const SH_SLOTS = Object.freeze({ proxy: '__ASIGHT_PROXY__', proxyBypass: '__ASIGHT_PROXY_BYPASS__', caFile: '__ASIGHT_CA_FILE__', realBinary: '__ASIGHT_REAL_BINARY__' })
 
-/** renderShTemplate(name, { proxy?, caFile?, realBinary? }) → the shim's text. The slots a template names must all be given (a
- *  half-filled shim is refused); a value holding a character the single-quoted shell word must not receive verbatim (a `'`, a newline,
- *  a control character) is refused too. Line endings are the file's own (LF): a POSIX sh reads no other. */
-export function renderShTemplate(name, { proxy = null, caFile = null, realBinary = null } = {}) {
+/** renderShTemplate(name, { proxy?, proxyBypass?, caFile?, realBinary? }) → the shim's text. The slots a template names must all be given (a
+ *  half-filled shim is refused); a value holding a character the single-quoted shell word must not receive verbatim (a `'`, a newline, a control
+ *  character) is refused too. Line endings are the file's own (LF): a POSIX sh reads no other. */
+export function renderShTemplate(name, { proxy = null, proxyBypass = null, caFile = null, realBinary = null } = {}) {
   const src = fs.readFileSync(new URL(name, SHIM_SOURCES), 'utf8')
   let out = src
-  const values = { proxy, caFile, realBinary }
+  const values = { proxy, proxyBypass, caFile, realBinary }
   for (const [k, slot] of Object.entries(SH_SLOTS)) {
     if (values[k] == null) continue
     const v = String(values[k])

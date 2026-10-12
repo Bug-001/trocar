@@ -15,6 +15,13 @@
 //                    `-r trustRoot` form, 1.6's forbidden row), the OS's own authorization dialog carrying the consent (1.6:107; a decline
 //                    is the user's own no, the win32 cert twin's wording); found and removed by fingerprint (§6.4, V56's shape) — the read
 //                    back and the undo both key on the certificate's SHA-256, never on the common name.
+//   desktop-launcher claude-code.desktop — the proxy door the 2026-10-12 lab verdict measured (§6.4): env is dead to Desktop's Chromium
+//                    network service, so the item writes a LAUNCHER, ~/.asight/collector/bin/claude-desktop-asight (0755), which execs the
+//                    real bundle binary with Chromium's --proxy-server at the group's listener plus --proxy-bypass-list. The URL carries no
+//                    password (Chromium ignores embedded credentials anyway; the group is auth:false, 4.8 §3.2), the app binary is
+//                    /Applications/Claude.app's, ~/Applications' as the fallback, and neither being there is a refusal (Desktop is not
+//                    installed). The item steers ONLY instances started through the launcher — a running Desktop is untouched (the impact,
+//                    the summary and the plan hint all say so verbatim). Undo: the launcher file goes (src/off/darwin-optin.mjs).
 // Pure data and injected-exec functions (the win32 twin's rule): no socket, no process, no keychain of its own; a test runs everything
 // against a sandbox HOME and a recording runner. The planOptIns / optinFormsOf core is the win32 twin's same-logic copy (4.9's
 // development boundary: the hoist into core/ is the merge-period coordination, OPEN 3) — if you change what it means, change both.
@@ -37,6 +44,7 @@ const nodeFs = fs
 export const OPTIN_ITEMS = Object.freeze({
   'user-path-shim': { scope: 'user', parts: [{ kind: 'optin-rc-path' }] },
   'keychain-login': { scope: 'user', parts: [{ kind: 'optin-keychain-cert' }] },
+  'desktop-launcher': { scope: 'user', parts: [{ kind: 'optin-desktop-launcher' }] },
 })
 
 /** Whether `kind` is one of this module's (the manifest's KNOWN_KINDS is the wider truth). */
@@ -105,6 +113,13 @@ const INSTALLER_LINE = '^[^#]*\\.kimi-code/bin'
 // Windows; OpenCode's npm install is itself unmeasured, MA4)
 const REAL_BINARY = { kimi: (home) => path.join(home, '.kimi-code', 'bin', 'kimi'), opencode: (home) => path.join(home, '.opencode', 'bin', 'opencode') }
 
+// the desktop-launcher item's own constants (4.9 §6.4, 2026-10-12): the launcher's name, the bypass list carried beside the switch (the two
+// loopback names stay direct, and <-loopback> cancels Chromium's wider implicit link-local bypass so nothing else silently escapes), and the
+// bundle binaries in the order the form's own patterns meet them (/Applications first, ~/Applications as the fallback)
+const LAUNCHER_NAME = 'claude-desktop-asight'
+const PROXY_BYPASS = '127.0.0.1,localhost,<-loopback>'
+const DESKTOP_BINS = (home) => [path.join(path.sep, 'Applications', 'Claude.app', 'Contents', 'MacOS', 'Claude'), path.join(home, 'Applications', 'Claude.app', 'Contents', 'MacOS', 'Claude')]
+
 /** The sentinel PATH line — ONE text for every command (the line is the shared item the reference count is about, 4.9 §2.3's kimi row);
  *  src/off/darwin-optin.mjs carries its own copy and test/collector/arch/darwin/optin.test.mjs holds the two equal. */
 export const rcLineOf = (binDir) => `export PATH="${binDir}:$PATH" ${lineComment('runs kimi / opencode through its asight launch shim')}`
@@ -167,6 +182,7 @@ export async function applyOptIn(args) {
   if (def.scope === 'machine') return { state: 'failed', reason: `the machine-level item ${row.item} has no darwin form in v1 (4.9 §2.4)` }
   if (row.item === 'user-path-shim') return applyUserOne(args, rcPathValues)
   if (row.item === 'keychain-login') return applyUserOne(args, keychainValues)
+  if (row.item === 'desktop-launcher') return applyUserOne(args, desktopLauncherValues)
   return { state: 'failed', reason: `the user item ${row.item} is not built yet` }
 }
 
@@ -206,6 +222,42 @@ function keychainValues(a) {
       return { ok: true }
     },
   }], summary: `the collector CA trusted in the login keychain (${fp256.slice(0, 23)}…), found back by its SHA-256 fingerprint` }
+}
+
+/** Everything the desktop-launcher item needs, read BEFORE anything is written — the win32 twin's valuesOf shape: `{ parts }` (the ledger
+ *  entry + its `do()`), `{ error }`, or `{ refuse: { reason } }` (the world says no: Claude Desktop is not installed — nothing to start).
+ *  The launcher is the proxy door §6.4 measured (env is dead to Desktop's Chromium network service): a shell stub exec'ing the real bundle
+ *  binary with Chromium's --proxy-server at the group's listener. The URL is deliberately WITHOUT credentials (proxyUrl's auth:false form —
+ *  Chromium ignores embedded credentials anyway, so a credentialed group would be a door to nowhere: that mis-declaration is an `error`
+ *  here, not a launcher that silently steers nothing). `deps.ingress` injects the ingress read as ever. */
+function desktopLauncherValues(a) {
+  const { row, groups, dir = null, home, fs: f = nodeFs, deps = {} } = a
+  if (!dir) return { error: 'no collector directory is wired in (the desktop-launcher item cannot be built)' }
+  const g = groupOf(groups, row.form)
+  if (!g) return { error: `the form ${row.form} is not in this on's groups` }
+  if (g.group.auth !== false) return { error: `the group ${g.g} takes credentials at its listener, but Chromium ignores credentials embedded in --proxy-server: the launcher door is only for a group whose listener carries none (4.9 §6.4)` }
+  const desktopBins = deps.desktopBins || DESKTOP_BINS // the world's list, injectable like everything else (a test's sandbox HOME cannot unmake a real /Applications)
+  const appBinary = desktopBins(home).find((p) => f.existsSync(p)) || null
+  if (!appBinary) return { refuse: { reason: `Claude Desktop is not installed (neither /Applications/Claude.app nor ~/Applications/Claude.app holds the bundle binary), so asight writes no launcher — there is nothing for it to start` } }
+  const ku = kernelUrlOf({ group: g, ingress: ingressOf({ dir, deps, fs: f }), what: 'the Claude Desktop launcher' })
+  if (ku.error) return { error: ku.error }
+  const binDir = path.join(dir, 'bin')
+  const launcher = path.join(binDir, LAUNCHER_NAME)
+  const stub = renderShTemplate('claude-desktop.sh.tmpl', { proxy: ku.url, proxyBypass: PROXY_BYPASS, realBinary: appBinary })
+  return { parts: [{
+    kind: 'optin-desktop-launcher',
+    entry: ledgerEntry({ kind: 'optin-desktop-launcher', harness: row.harness, form: row.form, item: row.item, scope: 'user', path: launcher,
+      values: { launcher, appBinary, proxy: ku.url, bypass: PROXY_BYPASS } }),
+    do: () => {
+      f.mkdirSync(binDir, { recursive: true })
+      f.writeFileSync(launcher, stub, { mode: 0o755 })
+      // the read-back: the file on disk holds the switch, the bypass list and the app binary as written, and it is executable
+      const back = f.readFileSync(launcher, 'utf8')
+      if (!back.includes(`--proxy-server='${ku.url}'`) || !back.includes(`--proxy-bypass-list='${PROXY_BYPASS}'`) || !back.includes(`'${appBinary}'`)) return { ok: false, reason: 'the launcher was written, but the read-back does not hold the switch, the bypass list and the app binary as written' }
+      if (!(f.statSync(launcher).mode & 0o111)) return { ok: false, reason: 'the launcher file is not executable' }
+      return { ok: true }
+    },
+  }], summary: `${LAUNCHER_NAME} in ${binDir}, starting ${appBinary} with Chromium's --proxy-server at ${ku.url} (an address with no password: you named the item, the listener binds loopback only, and the engine still judges every process; the launcher steers ONLY Desktop instances started through it — a Desktop that is already running is untouched)` }
 }
 
 /** The user half's driver — the win32 twin's applyUserOne, same logic: refuse / error → nothing written; the part is ledgered BEFORE its

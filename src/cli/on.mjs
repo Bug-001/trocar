@@ -14,6 +14,7 @@ import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
 import { formatOnReceipt, formatPlan, formatWinPlan } from './receipt.mjs'
 import { colors, noColor } from './color.mjs'
+import { DESKTOP_LAUNCHER_HINT } from './words.mjs'
 import { probeNetenv } from '../netenv/index.mjs'
 import { renderCompact } from '../netenv/topology-text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
@@ -141,9 +142,13 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     const winPlan = parts.os === 'win32'
     const planText = (raw) => {
       const adopted = adoption && !adoption.error ? Object.entries(adoption.chains(raw.targets)).filter(([h]) => raw.targets.includes(h)).map(([h, t]) => ({ harness: h, chain: chainText(t) })).filter((x) => /\s→\s/.test(x.chain) || false) : [] // D46: the degenerate one-hop chain says nothing and is not printed
+      // the Claude Desktop steering hint (measured on a macOS test machine): Desktop's Chromium network service ignores every proxy env var, so the
+      // door that works is the NAMED desktop-launcher item — said exactly while claude-code is a target on darwin and the item is not in the
+      // ledger (an optIn row with state 'done'); nothing is ever installed by a hint (the win plan's codex twin, formatWinPlan's own line)
+      const desktopHint = platform === 'darwin' && (raw.targets || []).includes('claude-code') && !(raw.optIn || []).some((x) => x && x.item === 'desktop-launcher' && x.state === 'done')
       return winPlan
         ? formatWinPlan(raw, { home, autostart, netenv, env, adoption: adoption && !adoption.error ? adoption : null, prep, colors: c })
-        : [formatPlan({ ...raw, adopted }, { home, autostart, netenv, platform, colors: c }), ...(prep && prep.notes && prep.notes.length ? ['', ...prep.notes] : [])].join('\n')
+        : [formatPlan({ ...raw, adopted }, { home, autostart, netenv, platform, colors: c }), ...(desktopHint ? ['', DESKTOP_LAUNCHER_HINT] : []), ...(prep && prep.notes && prep.notes.length ? ['', ...prep.notes] : [])].join('\n')
     }
     if (prep && prep.refuse) {
       const rf = prep.refuse

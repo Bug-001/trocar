@@ -9,10 +9,11 @@
 //                                         runs the installed one is MA4's question).
 //   claude-code.desktop                    the /Applications/Claude.app shell (Contents/MacOS/Claude): to be captured but default-off, opened by naming it. Its
 //                                         trust door is the login keychain (§2.4's user-level item; §6.4: one `security add-trusted-cert` in the user domain, the system asks you to
-//                                         confirm, removed again by fingerprint); its proxy door is NOT MEASURED — which entry the shell itself reads on macOS is what MA4 settles
-//                                         (the system proxy is out even by naming, D43⑥, and the 2026-07-21 lesson says the shell then only honoured NODE_EXTRA_CA_CERTS from the
-//                                         login environment, which is never written) — so the group's entry kind says exactly that, and nothing is written for it until the lab
-//                                         names a door.
+//                                         confirm, removed again by fingerprint); its proxy door is MEASURED (§6.4):
+//                                         the model traffic lives in the Chromium network service, every proxy env var is ignored, and the one door that works is the desktop-launcher
+//                                         opt-in item — a named launcher starting the real app with Chromium's --proxy-server at the group's credential-less listener (the system proxy
+//                                         is out even by naming, D43⑥). The kernel's process rules still meet the MAIN binary's path only: the Helper (utility) that owns the model
+//                                         sockets falls to the sub-rule's MATCH→upstream — steering works, decryption's per-process arm is MA4's remaining cell.
 // `claude` and `Claude` are one image name to the matcher (paths compare ignoring case on darwin too), so all three forms are told by their paths alone and none has a
 //   PROCESS-NAME rule. Trust (§6.1): the same one key as on Linux, env.NODE_EXTRA_CA_CERTS in settings.json, so the Linux descriptor's `inject` is used as it is; unlike Windows,
 //   the managed settings directory /Library/Application Support/ClaudeCode (MANAGED_DIR.darwin in the base) IS read on macOS — a NODE_EXTRA_CA_CERTS the administrator put there is
@@ -35,16 +36,20 @@ export default {
     },
     {
       g: 'claude-code.desktop',
-      // the trust door is the login keychain (the opt-in item below); the proxy door is not measured (4.9 §6.4): `kind:'unmeasured'` is not one of the kinds anything writes
-      // (route-plan and forms treat every non-file kind as a user-named item with no automatic entry), it is the honest marker for a door that is not known yet — until MA4
-      // replaces it with the measured kind, naming this group installs the CA into the keychain and writes no proxy entry, so the shell is trusted but not routed
-      proxyEntry: { kind: 'unmeasured' },
-      auth: false, // no door is known that could carry the listener's credentials: until one is measured, this group must not sit on a credentialed upstream (4.8 §3.2)
-      followsSystemProxy: { http: 'unknown', ws: 'unknown' }, // the shell's stack (Node or Chromium) is itself the open question (4.9 §6.4); 1.6 §9.7's third value
-      optIn: [{
-        item: 'keychain-login', scope: 'user',
-        impact: 'asight\'s CA is installed into your login keychain with trust settings (one `security add-trusted-cert` in the user domain, which the system asks you to confirm; removed again by its fingerprint), so every program of yours that reads the keychain trusts it, and its private key can be read by your own processes. The item opens Claude Desktop only, and its proxy door is not measured yet (4.9 §6.4): naming this installs trust and nothing else',
-      }],
+      // the trust door is the login keychain (the first opt-in item below); the proxy door is MEASURED (4.9 §6.4, 2026-10-12, the lab verdict in
+      // the measurement): the model traffic lives in the Chromium network service (`Claude Helper --type=utility`), which
+      // ignores HTTPS_PROXY / NODE_EXTRA_CA_CERTS entirely — the one door that works is the second opt-in item, a named launcher that starts the
+      // real app with Chromium's --proxy-server at this group's listener. `kind:'launcher'` stays a non-file kind (route-plan and forms treat every
+      // non-file kind as a user-named item with no automatic entry): nothing is written for this group's routing outside the launcher item itself
+      proxyEntry: { kind: 'launcher' },
+      auth: false, // Chromium ignores credentials embedded in --proxy-server, so the launcher's listener carries none (4.9 §6.4's decision): its authorization is the user's naming of the item (D43⑥), the loopback-only bind, and the engine's per-process judgment — an upstream that needs a login stays refused here (4.8 §3.2, FormUnsupportedError)
+      followsSystemProxy: { http: true, ws: true }, // measured (2026-10-12): the Chromium network service reads the system proxy on macOS — asight never writes it (D43⑥); the launcher's switch is the door
+      optIn: [
+        { item: 'keychain-login', scope: 'user',
+          impact: 'asight\'s CA is installed into your login keychain with trust settings (one `security add-trusted-cert` in the user domain, which the system asks you to confirm; removed again by its fingerprint), so every program of yours that reads the keychain trusts it, and its private key can be read by your own processes. The item opens Claude Desktop only: it installs trust and nothing else — Desktop\'s routing needs the desktop-launcher item beside it (4.9 §6.4)' },
+        { item: 'desktop-launcher', scope: 'user',
+          impact: 'asight writes ~/.asight/collector/bin/claude-desktop-asight, a launcher that starts Claude Desktop with Chromium\'s --proxy-server pointed at asight\'s loopback listener for this form — the only proxy door the 2026-10-12 lab verdict measured (Desktop\'s Chromium network service ignores proxy env vars). The listener address carries no password: using it is authorized by your naming of this item, by its loopback-only bind, and by the engine judging every process before decrypting (one it does not recognize is only forwarded). The launcher steers ONLY Desktop instances started through it; a Desktop that is already running is untouched — quit it and start it with claude-desktop-asight instead. Decryption also needs the keychain-login item; without it the launcher forwards and captures nothing. `asight off claude-code` removes the launcher' },
+      ],
     },
   ],
   forms: [
@@ -67,6 +72,6 @@ export default {
     unsupported: { socks5: 'fails' },
     branches: ['all'],
     measured: { darwin: 'lab' }, // the trust door (settings env) and the proxy door (HTTPS_PROXY) of the npm CLI are measured live on a macOS test machine
-    restart: { hint: 'a running Claude Code reads its proxy once, at start: restart it (the desktop shell has no measured proxy door on macOS)', processes: ['claude', 'Claude'] },
+    restart: { hint: 'a running Claude Code reads its proxy once, at start: restart it; the desktop shell is steered only by starting it through the claude-desktop-asight launcher (a Desktop that is already running is untouched)', processes: ['claude', 'Claude'] },
   },
 }

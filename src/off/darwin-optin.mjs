@@ -79,15 +79,34 @@ export const DARWIN_UNDO_BY_KIND = {
     try {
       fs.mkdirSync(path.dirname(tmp), { recursive: true, mode: 0o700 })
       fs.writeFileSync(tmp, mine.pem, { mode: 0o600 })
+      // the trust setting goes first — but a HALF-FAILED apply may have imported the certificate without ever setting trust (a dialog declined
+      // mid-way: SecTrustSettingsSetTrustSettings refuses while add-trusted-cert's import half already happened; found live on a test machine,
+      // 2026-10-12). remove-trusted-cert then has nothing to remove while the block itself is still in the keychain: not a stop — the
+      // certificate is deleted either way, and the read-back below is the verdict.
       const t = execTool('security', ['remove-trusted-cert', tmp], { run: exec, env, timeoutMs: 120000 }) // the dialog may ask again
-      if (t.code !== 0) return { ok: false, result: 'failed', reason: `security remove-trusted-cert failed (exit ${t.code ?? 'none'}${t.err ? `: ${t.err.slice(0, 200)}` : ''})` }
+      const errBit = t.err ? `: ${String(t.err).slice(0, 120)}` : ''
+      const notes = t.code !== 0 ? [`the trust setting was not there to remove (exit ${t.code ?? 'none'}${errBit}) — an apply that imported the certificate but never set its trust, most likely`] : []
       const d = execTool('security', ['delete-certificate', '-Z', sha1, v.keychain], { run: exec, env, timeoutMs: 120000 })
       if (d.code !== 0) return { ok: false, result: 'failed', reason: `security delete-certificate -Z failed (exit ${d.code ?? 'none'}${d.err ? `: ${d.err.slice(0, 200)}` : ''})` }
       const back = execTool('security', ['find-certificate', '-a', '-p', v.keychain], { run: exec, env })
       if (back.code === 0 && certBlocks(back.out).some((c) => c.fp === v.fp256)) return { ok: false, result: 'failed', reason: 'the removal ran, but the certificate is still in the login keychain' }
       if (back.code !== 0) return rcOk('undone', `the removal ran; the re-check could not read the login keychain (exit ${back.code ?? 'none'})`)
-      return rcOk('undone')
+      return rcOk('undone', notes.length ? notes.join('; ') : undefined)
     } finally { try { fs.rmSync(tmp, { force: true }) } catch { /* the next run's write replaces it */ } }
+  },
+
+  // the desktop launcher (4.9 §6.4, 2026-10-12): the file goes — that is the whole item (the keychain certificate is the other named item's own
+  // business, the listener's lifetime is the kernel's). The bin directory goes too when this was the last file in it (the rc undo's own rule: a
+  // directory holding another shim — or any file of the user's — stays, said by the files themselves); a launcher already gone is 'absent', never
+  // a failure — `off` is idempotent and the user may have removed it by hand.
+  'optin-desktop-launcher': async ({ entry, fs }) => {
+    const v = entry.values || {}
+    const launcher = v.launcher || (typeof entry.path === 'string' && !entry.path.includes(':') ? entry.path : null)
+    if (!launcher) return { ok: false, result: 'failed', reason: `${entry.path}: the entry holds no launcher path to undo` }
+    if (!fs.existsSync(launcher)) return rcOk('absent', 'the launcher is already gone')
+    try { fs.rmSync(launcher, { force: true }) } catch (e) { return { ok: false, result: 'failed', reason: `the launcher ${launcher} could not be removed (${(e && e.code) || e})` } }
+    try { fs.rmdirSync(path.dirname(launcher)) } catch { /* not empty (another shim, the user's own file) or already gone: said by the files themselves */ }
+    return rcOk('undone', 'the launcher went; Desktop started through it from now on connects directly, and any Desktop running now was never steered by it')
   },
 }
 

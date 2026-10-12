@@ -495,6 +495,12 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       }
       if (r.drops && typeof r.drops === 'object') { lastDrops = r.drops; noteDrops() }
       await tracker.recheck()
+      // 4.9 §6.4's wiring arm, second half (found live on a test machine): the plan a proxy-mode collector runs is a function of the MANIFEST too —
+      // an opt-in's ledger entry names a group — and nothing else re-computes it for a harness that is already on: the switch's `on` answers noop (no attach),
+      // so a launcher applied to a live install pointed at a port no listener was on until the next system-proxy move. The 5 s check re-plans, and when the
+      // plan MOVED it brings the kernel to it — the netenv watcher's own move rule (replan reloads nothing when nothing moved). Darwin's bag carries `replan`;
+      // the win32 twin of this arm is the win line's follow-up (4.9 §6.4's note), so it is scoped to darwin here.
+      if (A.os === 'darwin' && bag && typeof bag.replan === 'function') { try { await bag.replan({ reload: true }) } catch (e) { failure('netenv', e) } }
       // §9.5: the files each harness reads its proxy from, against what `on` found: a change is one `netenv-change` (and one failure when it leaves a harness that is on uncaptured). Read-only: only the operator's
       // `on` writes an agent's setting (D30). The VPN is not probed here (a probe of the controller every 5 s is not a check); `status` and `doctor` compare it live.
       driftCheck({ home: netHome, env, harnesses: harnessList, desired: (h) => (sw.state().harnesses[h] || {}).desired ?? null, appendEvent: (rec) => failure.write(rec), state: drift })

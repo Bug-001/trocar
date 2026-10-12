@@ -293,3 +293,22 @@ test('the codex WebSocket cert hint on win32: said for codex when the cert-store
   r = await doctor(done, ['codex'], { platform: 'win32' })
   assert.ok(!r.out.includes(CODEX_WS_HINT), 'the item in the ledger: the hint has done its job and goes')
 })
+
+// the Claude Desktop steering hint (4.9 §6.4): on darwin, doctor says — for claude-code, when the named desktop-launcher
+// opt-in is not recorded — that capturing Desktop needs the launcher, with the needs_restart honesty riding in the line. Never an install, and nothing
+// to say on other platforms or once the item is in the ledger (the codex hint's darwin twin).
+const DESKTOP_HINT = 'macOS 上采 Claude Desktop 需要点名建启动器: asight on claude-code --opt-in claude-code.desktop(写 ~/.asight/collector/bin/claude-desktop-asight;只有经它启动的 Desktop 才被引流,已在跑的 Desktop 不受影响——先退出再用它启动)'
+test('the Claude Desktop steering hint on darwin: said for claude-code when the desktop-launcher opt-in is not recorded, silent once it is, silent on other platforms', async () => {
+  const noRecord = plain(); manifestWith([])(noRecord.home)
+  let r = await doctor(noRecord, ['claude-code'], { platform: 'darwin' })
+  assert.ok(r.out.includes(DESKTOP_HINT), `the hint is there: ${r.out}`)
+  r = await doctor(noRecord, [], { platform: 'darwin' })
+  assert.ok(r.out.includes(DESKTOP_HINT), 'and when nothing is named')
+  r = await doctor(noRecord, ['codex'], { platform: 'darwin' })
+  assert.ok(!r.out.includes(DESKTOP_HINT), 'not for another harness alone')
+  r = await doctor(noRecord, ['claude-code'], { platform: 'win32' })
+  assert.ok(!r.out.includes(DESKTOP_HINT), 'not on another platform')
+  const done = plain(); manifestWith([{ kind: 'optin-desktop-launcher', harness: 'claude-code', form: 'claude-code.desktop', item: 'desktop-launcher', scope: 'user', path: '/x/bin/claude-desktop-asight', confirmed: true, installed_at: '2026-10-12T00:00:00Z' }])(done.home)
+  r = await doctor(done, ['claude-code'], { platform: 'darwin' })
+  assert.ok(!r.out.includes(DESKTOP_HINT), 'the item in the ledger: the hint has done its job and goes')
+})
