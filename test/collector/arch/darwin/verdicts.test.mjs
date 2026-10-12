@@ -71,10 +71,10 @@ async function sandbox(harnessName, rels = []) {
   return { home, dir, m, pem: ca.certPem, ca, d, t0: Math.max(...m.entries.map((e) => Date.parse(e.installed_at))) }
 }
 
-/** The watcher stand-in and the tracker over a real darwin redirector, wired the way the daemon wires it (the osMatch rule, the layers, the manifest's installed_at, the marker's tolerance). `over` reaches the redirector. */
+/** The tracker over a real darwin redirector, wired the way the daemon wires it (the osMatch rule, the layers, the manifest's installed_at, the marker's tolerance). `over` reaches the redirector. A pid met at a door is told as the redirector's own 'exec' (D47: the scan is gone; the door announces) — the tests drive the same event by hand. */
 function rigged({ descriptors, box: b, marker = false, over = {} }) {
-  const procWatcher = Object.assign(new EventEmitter(), { scan: async () => [], start: async () => true, stop() {}, poll: async () => false, unreadable: () => [] })
-  const redirector = createDarwinRedirector({ procWatcher, groups: groupsOf(descriptors), home: HOME, ...over })
+  const redirector = createDarwinRedirector({ groups: groupsOf(descriptors), home: HOME, ...over })
+  const procWatcher = redirector
   const tracker = createTracker({
     redirector, registry: darwinRegistry(descriptors), trust: createTrustChecker({ caCertPem: b.pem }), home: b.home, alive: () => false, collectorDir: b.dir,
     installedAt: (l) => installedAt(b.m, l),
@@ -84,7 +84,7 @@ function rigged({ descriptors, box: b, marker = false, over = {} }) {
   tracker.start()
   const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r)) }
   return { procWatcher, redirector, tracker, settle }
-}
+} // `procWatcher` is the redirector itself now: emitting 'exec' on it is what a door does when it meets a pid
 
 // ── W76 cell 1: one rule for which form ─────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -215,14 +215,16 @@ test('W76 end to end: a darwin connection of a trusted process is decrypted and 
   const b = await sandbox('claude-code')
   const answers = [{ pid: 20, source: 'socket-table', ms: 4 }, { pid: 21, source: 'socket-table', ms: 4 }, { pid: 55, source: 'socket-table', ms: 4 }]
   const ownerOf = async () => answers.shift() || { pid: null, source: null, ms: 1 }
-  const { procWatcher, redirector, tracker, settle } = rigged({
+  // the targeted facts of the three pids the socket will name (D47: the door asks, the store answers)
+  const known = new Map([
+    [20, facts(20, IMG.ccNative, { startedAt: b.t0 + 5000 })],
+    [21, facts(21, IMG.ccNative, { startedAt: b.t0 - 5000 })],
+    [55, facts(55, IMG.syslogd, { startedAt: b.t0 + 5000 })], // met, but the tracker judges it no agent: its watch is never pushed
+  ])
+  const { redirector, tracker } = rigged({
     descriptors: [b.d], box: b,
-    over: { ownerOf, routes: () => ({ 'claude-code.settings': { entry: 'auto', on: true, reason: null, upstream: { kind: 'direct', source: 'direct' }, bypass: [] } }), ingress: () => ({ enginePort: 18790, groupPorts: { 'claude-code.settings': 18801 }, ingressToken: TOKEN, listenerToken: 'fedcba9876543210fedcba9876543210' }) },
+    over: { ownerOf, factsOf: (pid) => known.get(pid) ?? null, routes: () => ({ 'claude-code.settings': { entry: 'auto', on: true, reason: null, upstream: { kind: 'direct', source: 'direct' }, bypass: [] } }), ingress: () => ({ enginePort: 18790, groupPorts: { 'claude-code.settings': 18801 }, ingressToken: TOKEN, listenerToken: 'fedcba9876543210fedcba9876543210' }) },
   })
-  procWatcher.emit('exec', facts(20, IMG.ccNative, { startedAt: b.t0 + 5000 }))
-  procWatcher.emit('exec', facts(21, IMG.ccNative, { startedAt: b.t0 - 5000 }))
-  procWatcher.emit('exec', facts(55, IMG.syslogd, { startedAt: b.t0 + 5000 })) // in the table, but the tracker judges it no agent: its watch is never pushed
-  await settle()
 
   const privCa = createCa({ commonName: 'private origin CA' })
   const originIssuer = createLeafIssuer(loadCa(privCa))
@@ -237,10 +239,10 @@ test('W76 end to end: a darwin connection of a trusted process is decrypted and 
   const { ingressPort } = await engine.listen({ ingress: { port: 0 } })
   t.after(async () => { origin.close(); await closeWithin(engine) })
   const settled = async ({ envelope = false } = {}) => { for (let i = 0; i < 400 && (flows.length < 1 || (envelope && envelopes.length < 1)); i++) await new Promise((x) => setTimeout(x, 10)) }
-  /** An agent's connection as the kernel hands it over (CONNECT as `of.<form>`), then TLS to the origin trusting `ca`. */
+  /** An agent's connection as the door answers it (CONNECT, the door's group as the user — D47), then TLS to the origin trusting `ca`. */
   async function agent(ca) {
     const sock = net.connect(ingressPort, '127.0.0.1'); sock.on('error', () => {})
-    sock.write(`CONNECT 127.0.0.1:${origin.address().port} HTTP/1.1\r\nHost: x\r\nProxy-Authorization: Basic ${Buffer.from(`of.claude-code.cli:${TOKEN}`).toString('base64')}\r\n\r\n`)
+    sock.write(`CONNECT 127.0.0.1:${origin.address().port} HTTP/1.1\r\nHost: x\r\nProxy-Authorization: Basic ${Buffer.from(`claude-code.settings:${TOKEN}`).toString('base64')}\r\n\r\n`)
     await within(new Promise((res) => { let got = ''; const on = (d) => { got += d.toString('latin1'); if (got.includes('\r\n\r\n')) { sock.removeListener('data', on); res() } }; sock.on('data', on) }), 4000, 'the 200', () => sock.destroy())
     return within(new Promise((resolve) => {
       let issuerOf = null, got = ''
@@ -269,5 +271,5 @@ test('W76 end to end: a darwin connection of a trusted process is decrypted and 
   assert.equal(never.got, RESP)
   assert.match(never.issuer, /private origin CA/)
   await settled()
-  assert.deepEqual([flows[0].decision, flows[0].not_captured, flows[0].reason ?? null], ['splice', 'untracked', null], 'the tracker has no row to say why: the splice is what a missing gate looks like, never a broken connection')
+  assert.deepEqual([flows[0].decision, flows[0].not_captured, flows[0].reason ?? null], ['splice', 'untracked', 'not-a-process-of-form'], 'the tracker has no row to say why, and the door says what the process was not: the splice is what a missing gate looks like, never a broken connection')
 })

@@ -53,7 +53,7 @@ const USER_PROXY = 'http://alice:s3cret@corp.example:3128'
 
 test('groupsOf: the darwin groups of the harness descriptors, each with its harness, its forms and the harness\'s proxy behaviour; a form with no group (not measured) is in none', () => {
   assert.deepEqual(GROUPS.map((x) => [x.harness, x.g, x.forms.map((f) => f.id)]), [
-    ['claude-code', 'claude-code.settings', ['claude-code.cli', 'claude-code.vscode']],
+    ['claude-code', 'claude-code.settings', ['claude-code.native', 'claude-code.cli', 'claude-code.vscode']],
     ['claude-code', 'claude-code.desktop', ['claude-code.desktop']],
     ['codex', 'codex.env', ['codex.cli']],
     ['deepseek-dsh', 'deepseek-dsh.env', ['deepseek-dsh.cli']],
@@ -495,7 +495,7 @@ test('W5 the form results: an elevated process of a form and a process whose pat
   assert.deepEqual(p['deepseek-dsh.env'].forms, { 'deepseek-dsh.cli': { reason: null } }, 'a match that is neither a form nor a path-unknown, and one that is no agent, are nothing yet')
   assert.deepEqual(['entry', 'on', 'reason'].map((k) => p['claude-code.settings'][k]), ['auto', true, null], 'the group is connected: the elevated process is the one that is not captured')
   assert.deepEqual(p['claude-code.desktop'].forms['claude-code.desktop'], { reason: 'opt-in-needed', unknownPaths: ['/tools/claude'] }, 'the group\'s reason is first')
-  assert.deepEqual(plan(b)['claude-code.settings'].forms, { 'claude-code.cli': { reason: null }, 'claude-code.vscode': { reason: null } }, 'nothing seen, nothing said')
+  assert.deepEqual(plan(b)['claude-code.settings'].forms, { 'claude-code.native': { reason: null }, 'claude-code.cli': { reason: null }, 'claude-code.vscode': { reason: null } }, 'nothing seen, nothing said')
 })
 
 test('W71 (plan half): fed its own result as `last`, a system proxy that turned PAC or could not be read leaves the followers on the upstream and the bypass table they had, with a hint; a group that was not routed before stays not routed', () => {

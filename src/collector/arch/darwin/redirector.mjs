@@ -1,165 +1,129 @@
-// redirector.mjs — the macOS implementation of the Redirector contract (RFC 4.9 §1 · §5; the contract itself and every mechanism in it are 4.8 §1's, and core/redirector.mjs says what core asks of an
-// arch adapter). This is the darwin port of `arch/win32/redirector.mjs`, not a same-logic copy like ingress-config.mjs: the trunk — the process table, the verdict table, the judge's three states,
-// `kernelGroupsOf`, `lookupIngress`, the demand-poll, attach's order (zero proxy entries before the kernel has read a group back as on, undone the other way round) — is that file's, carried
-// verbatim; the deltas are what 4.9 §1 names for this row:
-//   · no resident helper. Windows keeps a PowerShell helper because the registry and the socket table need Win32 APIs; macOS's `ps` / `lsof` / `scutil` are plain CLIs asked one question at a
-//     time, so there is nothing to start, nothing to close and no protocol to expect. `start()` takes the process baseline (the watcher's own first poll) and answers the all-null info the
-//     Linux redirector reports when it has no client; `helperInfo()` says the same nulls for ever; `expectedProto` is null and the daemon's `proto !== expectedProto` check passes with nothing
-//     to compare. The one thing the helper's `tcp-table` verb answered on Windows — which of a pid's connections still go direct — `directCount(pid)` reads here from `lsof`, through the
-//     injected `exec` runner (socktable.mjs's shape): the machine stays injected either way, this file execs nothing itself.
-//   · the injected data sources are darwin's: `procWatcher` is procinfo.mjs's ps-by-difference watcher, `ownerOf` is socktable.mjs's lsof questioner (the daemon binds it to the same exec
-//     runner), and the groups it is handed are the harness files' darwin data.
-// macOS has no kernel that steers connections to the engine and no event for "a process started", so what the Linux adapter gets from the kernel this one has from three places: the process
-// snapshot (`procinfo.mjs`: `exec` / `exit` by difference, `facts-update` when a command line arrives late — no not-yet state exists on darwin today, so that event never fires now; the branch
-// and its shape stay for the day one is added), the form tables of the harness files (`forms.mjs`: which form a process is), and the verdicts the tracker pushes through `watch(pid, { decrypt })`
-// (the table 4.8 §5.4 judges by). This file is the first part: the process table. It reads the watcher's answers and writes nothing; it names no harness (arch/ never imports harness/: the
-// daemon hands the groups in).
+// redirector.mjs — the macOS implementation of the Redirector contract (RFC 4.9 §1 · §5, as D47 rewrote it). The ENGINE is the only local
+// proxy on this machine: it listens on one loopback door per entry group (ingress.json's group ports, engine.mjs `listen({groups})`), the
+// agents' entries point straight at those doors, and the engine dials each connection's upstream itself (the mihomo kernel is retired from
+// the capture path — no forwarder process, no kernel config, no read-back; the machinery that existed to feed it is deleted with it).
 //
-// The table holds EVERY process of this session, not only the agents': a form with no process rule in the kernel (a program that is every Node program of the machine) takes every connection of its port, and the
-// connection's owner may be any process (4.8 §3.5), so who owns it can only be told against all of them. What the table says about each is the answer of `matchForm`:
-//   { kind: 'form', id }                 a process of that form · { kind: 'pending', forms }   its command line is not known yet (the watcher says again, `facts-update`) · { kind: 'path-unknown', forms, shape } · { kind: 'none' }
+// What is left of the contract, and where it lives now:
+//   · the doors' lifecycle is `attach()` / `detach()`: a group that is ON (or carried — installed, once on, or opted in — so an agent that
+//     outlives `off` has a port to come back to) gets its door opened on the engine through the injected `doors` half (the wiring's
+//     `bindDoors`, which the daemon binds to `engine.listen({groups})` / `engine.closeGroups`); a group that is off and not carried has NO
+//     listener at all (audit F7: a loopback door nobody is behind is an opening, and the desktop door takes no credentials). ONLY THEN are
+//     the on groups' proxy entries written (the entry is the pointing itself: written before the door stands, an agent would point at a
+//     dead port); `off` undoes the entries and leaves the carried doors forward-only (the plan says off, `lookupIngress` serves, not refuses).
+//   · identity is read FROM THE SOCKET AT ACCEPT TIME (4.9 §5.3, D47): the agent connects to the door itself, so the engine's peer 4-tuple
+//     IS the agent's outbound socket — one targeted `lsof -iTCP@addr:port` answers its pid (socktable.mjs `ownerOfSocket`), one targeted
+//     `ps -p <pid>` + `lsof -p <pid>` answers that pid's facts for the form (procinfo.mjs `factsOfPid`), cached per process life. The
+//     ps-scan table, the lsof candidate sets, the demand poll and its debounce are DELETED (a process scan is beside the point: 「
+//     全扔了」): the peer process is alive by definition — it just connected.
+//   · trust is the tracker's, on the same seam as ever: a pid the verdict table does not hold is ANNOUNCED (`exec`, its targeted facts) and
+//     the lookup waits for the tracker's `watch(pid, …)` — the daemon subscribes to the redirector and judges with the registry's osMatch
+//     rule (the same matchForm this file routes by). A verdict that does not arrive in time is a tombstone, not a wait per connection.
+//   · the upstream is the plan's (route-plan.mjs, re-planned by the wiring when the system proxy or the desired state moves): the engine
+//     dials it for this one connection; a bypass hit goes direct; a credentialed upstream's login is resolved here by `authOf` and travels
+//     in the meta only. A door whose entry takes no login (`auth:false`, the desktop-launcher shape) is refused a credentialed upstream —
+//     a port any process could use must not carry the user's login (4.8 §3.2).
+// This file names no harness (arch/ never imports harness/: the daemon hands the groups in). Node built-ins and the two injected question
+// runners only; nothing here execs anything itself.
 import { EventEmitter } from 'node:events'
 import { matchForm } from './forms.mjs'
 import { bypassHit } from './upstream.mjs'
-import { buildForwarderConfig, processRulesOf } from '../../../netenv/mihomo/rules.mjs'
 
-const FORM_USER = /^of\.(.+)$/ // the name the kernel's outbound to the engine authenticates as (4.8 §3.1): `of.<form id>`
-
-/** The on-demand table refresh before the `no-process-of-form` splice (4.8 §5.3 · §5.4): at most one demand poll in this many ms (the watcher's own interval is 2 s), so a burst of connections
- *  from processes nobody has seen cannot hammer the ps read (each poll is one `ps` process; there is no serial helper to queue behind — 4.9 §1). */
-export const DEMAND_POLL_MIN_MS = 1000
-/** How long a lookup waits for that demand poll: one that does not answer in time changes nothing — the answer is the stale table's, never a guess. */
-export const DEMAND_POLL_WAIT_MS = 1000
-const untracked = (reason) => ({ not_captured: 'untracked', reason }) // the row's code for a connection whose process is not one the table can vouch for (what the tracker says for a pid it does not hold)
+const untracked = (reason) => ({ not_captured: 'untracked', reason }) // the row's code for a connection whose process is not one the table can vouch for
 const msgOf = (e) => String((e && e.message) || e)
 
-/** The login a proxy reference names, for one use: the connection the ingress dials through the proxy, or the kernel's own outbound to it. Not readable is an error with no login in it. */
+/** How long a lookup waits for the tracker's verdict of a pid it just met: the judge is file reads (fast); the cap only bites when the
+ *  judge never answers (a harness turned off mid-lookup, a descriptor that threw), and what it leaves is a tombstone — one wait per pid,
+ *  never one per connection. */
+export const VERDICT_WAIT_MS = 5000/** The login a proxy reference names, for one use: the connection the ingress dials through the proxy. Not readable is an error with no login in it. */
 function loginOf(g, up, authOf) {
   const auth = authOf(up.auth_ref)
   if (!auth) throw Object.assign(new Error(`the login of the upstream proxy of ${g} (${up.auth_ref}) cannot be read, so nothing can be dialled through that proxy`), { code: 'upstream-unavailable', why: 'upstream-credentials-unavailable' })
   return { username: auth.username, password: auth.password }
 }
 
-/** A form as the kernel's config takes it: its process rules (the path patterns, and the image name when the data says the name is the form's alone; none for a form that takes every connection of its port) and, for a form of a host tree,
- *  the hosts whose connections are handed to the engine (4.8 §3.5). A host-tree form with no host would hand the engine every connection of the program: that is refused, not written. */
-function kernelForm(f, hostsOf) {
-  const rules = f.processRules === false ? [] : processRulesOf({ pathPatterns: f.match.path || [], names: f.nameRule ? [f.match.image] : [] })
-  if (!f.hosts) return { f: f.id, rules }
-  const hosts = hostsOf(f)
-  if (!Array.isArray(hosts) || hosts.length === 0) throw new TypeError(`${f.id} is a form of a host tree and has no host to hand to the engine; without them every connection of the program would be handed over (4.8 §3.5): hostsOf(form) gives the set`)
-  return { f: f.id, rules, hosts }
-}
-
 /**
- * kernelGroupsOf({ groups, routes, groupPorts, authOf, hostsOf, skipped, carried }) → the `groups` of `buildForwarderConfig` (rules.mjs, 4.8 §3.1): `[{ g, port, on, upstream, bypass, auth, forms: [{ f, rules, hosts? }] }]`.
- * `groups` is `groupsOf(descriptors)`, `routes` planRoutes' result, `groupPorts` ingress.json's. A group is in the kernel when the plan has an answer for it, it is on or `carried` names it, it has a port, it has a form that can be carried
- * (`supported`) and there is an upstream to forward to — a group with none has no hop to forward an agent that outlives `off` to, and sending it direct would go round the proxy the user's agent needs; and not when its entry takes no login
- * (`auth: false`) while its upstream needs one (a port any process could use must not carry the user's login, 4.8 §3.2). `on` is the plan's. `carried` (an iterable of group ids, optional; the default is none) says which groups may STAY in the
- * kernel while they are off: the ones whose entries may still exist (installed, once on, or opted in — an agent that outlives `off` needs the port to come back to). A group that is off and not in it is not in the kernel at all: it never had a
- * listener, and a loopback listener for a harness the user never enabled — the unauthenticated Claude Desktop port is the sharpest case — is an opening with no user behind it (audit F7). It is not `skipped`: the plan already says why it is off.
- * The login of a credentialed upstream is resolved here, by `authOf`, into the config: the one place besides the manifest it is written.
- * `skipped` (an array, optional): every group the plan has ON and the kernel does not carry is pushed as `{ g, reason }` (`no-upstream` · `no-port` · `no-supported-form` · `login-on-open-port`), so that a group left out is said by whoever
- * asked (`attach()`), never silently.
+ * createDarwinRedirector({ groups, home, ownerOf, factsOf, routes, ingress, authOf, onFailure, doors, entries, gate, exec, carried, now }) → the Redirector (an EventEmitter)
+ *   groups   `groupsOf(descriptors)` (route-plan.mjs): `[{ g, harness, group, forms, proxy }]`, the harness files' darwin data
+ *   home     the user's home directory (`$HOME`): `form-path-unknown` masks the user's name wherever the home is (forms.mjs `formPathShape`)
+ *   ownerOf  `({ peer: { address, port } }) → { pid, source, ms } | null` (socktable.mjs `ownerOfSocket`, bound to the exec runner by the wiring): the
+ *            owner of the accepted socket's peer end — the AGENT's own socket — read targeted at accept time; no candidates, no known table (D47)
+ *   factsOf  `(pid) → ProcFacts | null` (procinfo.mjs `factsOfPid`, bound the same way): the pid's facts — its real executable (lsof's txt record),
+ *            command line and start time — for the form match and the tracker's judgement; null = the pid is gone (not an error)
+ *   routes   `() → planRoutes' result` ({ [group id]: { on, upstream, bypass, … } }): what the plan says NOW; the daemon re-plans when the system proxy
+ *            or `desired` changes, so it is read at every lookup and every attach
+ *   ingress  `() → loadIngressConfig's result` (`{ enginePort, groupPorts, ingressToken, listenerToken }`)
+ *   authOf   `(auth_ref) → { username, password } | null`: the login a reference names (`prior:<group>` — the only shape darwin's plan makes)
+ *   onFailure the failure sink (the daemon's recorder): a record shaped `{ event: 'failure', where, code, reason }`
+ *   doors    `{ open(list), close(ids) }` — the engine's door half, LATE-BOUND by the wiring's `bindDoors` (the daemon owns the engine and calls it
+ *            after both exist): `open([{ id, port, auth, token? }])` binds one loopback listener per group (idempotent per id, engine.mjs),
+ *            `close(ids)` stops accepting on those doors (connections in flight drain). Both may be absent (the lazy shell): `attach()` then
+ *            refuses with its own TypeError, exactly as it always did without a forwarder.
+ *   entries  the proxy entries of the agents, which only this file's order decides WHEN: `write(groups)` / `undo(groups)` / `check(groups)`; a group
+ *            is `{ g, harness, entry }` ('auto' or 'opt-in' for a group that is on, null in the undo / check lists of a group the plan has off)
+ *   gate     `({ g, harness, entry }) → { ok: true } | { ok: false, reason }`, required by `attach()`: asked for each group about to be written; a group
+ *            it refuses is not handed to `entries.write` (Codex's and Hermes's W19 line — the wiring says so, the writer does not have to know)
+ *   exec     the on-demand runner of the OS's read-only CLIs, `exec('lsof', args, { timeoutMs }) → Promise<{ code, out, err }>` (socktable.mjs's shape):
+ *            what `directCount(pid)` asks through; without it there is no answer, only `{ count: null, error: 'no-exec' }` — unknown, never 0 (D-17)
+ *   carried  `() → Iterable<group id> | null` (default: none): the groups whose entries may still exist and may therefore keep a forward-only door
+ *            while the plan has them off (audit F7's other side: the wiring that knows the manifest says which ones; not saying is "no group")
+ * Events: 'exec' ProcFacts — a pid met at a door (source 'accept'), told so the daemon's tracker judges it and answers through `watch()`.
+ *   The old watcher's events ('exit', 'facts-update', 'facts-error', 'poll-error') are gone with the scan: nothing is swept, so nothing
+ *   leaves by a diff. A process that dies simply stops connecting; its verdict row stays until the pid is met again with another start
+ *   time (a wrapped pid is a new life, asked again — the facts cache keys by pid + startedAt).
  */
-export function kernelGroupsOf({ groups, routes, groupPorts, authOf = () => null, hostsOf = () => null, skipped = [], carried = null } = {}) {
-  const out = []
-  const mayCarry = new Set(carried || [])
-  for (const { g, group, forms } of groups) {
-    const r = routes && routes[g]
-    const port = groupPorts && groupPorts[g]
-    const carriedForms = forms.filter((f) => f.supported === true && f.match)
-    if (!r) continue // the plan has no answer yet: nothing to carry and nothing to say
-    if (r.on !== true && !mayCarry.has(g)) continue // off and never installed or opted in: no listener at all (audit F7)
-    const why = !r.upstream ? 'no-upstream' : !Number.isInteger(port) ? 'no-port' : carriedForms.length === 0 ? 'no-supported-form' : group.auth === false && r.upstream.credentialed ? 'login-on-open-port' : null
-    if (why) { skipped.push({ g, reason: why }); continue }
-    const up = r.upstream
-    const upstream = up.kind === 'direct' ? 'direct' : { type: up.kind, host: up.host, port: up.port, ...(up.credentialed ? loginOf(g, up, authOf) : {}) }
-    out.push({ g, port, on: r.on === true, upstream, bypass: r.bypass || [], auth: group.auth !== false, forms: carriedForms.map((f) => kernelForm(f, hostsOf)) })
-  }
-  return out
-}
-
-/** What a kernel that did not do what was asked says, as a code from 4.8 §12 and a reason: the forwarder's own record when it could not start (it has written the failure already), a configuration the kernel refused, or a read-back
- *  that is not the one asked for (a form selecting the re-entry is `fallback-active`; anything else it did not say plainly is not on either). */
-function refusalOf(r) {
-  if (r.code) return { code: r.code, reason: r.reason || r.code }
-  if (r.error) return { code: 'forwarder-start-failed', reason: `the kernel refused the new configuration (status ${r.error.status})` }
-  const forms = r.readBack && r.readBack.forms ? r.readBack.forms : {}
-  const bad = Object.entries(forms).filter(([, v]) => v && v.state !== 'on' && v.state !== 'off')
-  const names = bad.map(([f, v]) => `${f} (${v.state})`).join(', ') || 'the forms'
-  if (bad.some(([, v]) => v.state === 'fallback')) return { code: 'fallback-active', reason: `the kernel selects its re-entry, not the engine, for ${names}: the engine is not reachable from it` }
-  return { code: 'forwarder-start-failed', reason: `the kernel did not read back ${names} as asked` }
-}
-
-/**
- * createDarwinRedirector({ procWatcher, groups, home, ownerOf, exec, routes, ingress, authOf, onFailure, forwarder, entries, gate, ownImages, hostsOf, carried, now }) → the Redirector (an EventEmitter)
- *   procWatcher  `createProcWatcher()` (procinfo.mjs: one `ps` per question through the injected runner — there is no resident helper on darwin, 4.9 §1): the redirector subscribes to its events in this call, so none is lost between the two
- *   groups       `groupsOf(descriptors)` (route-plan.mjs): `[{ g, harness, group, forms, proxy }]`, the harness files' darwin data
- *   home         the user's home directory (`$HOME`): `form-path-unknown` masks the user's name wherever the home is (forms.mjs `formPathShape`)
- *   ownerOf      `({ hop: { port }, candidates: [pid], known: [pid] }) → { pid, source, ms }` (socktable.mjs `ownerOf`, bound to the exec runner by the daemon): which of the candidates holds the connection to the hop, none when a process
- *                the table has no row for holds one too (`known` = the whole table); none given = no pid completion, every connection is judged by its form
- *   exec         the on-demand runner of the OS's read-only CLIs, `exec('lsof', args, { timeoutMs }) → Promise<{ code, out, err }>` (socktable.mjs's shape; injected — this file execs nothing itself): what `directCount(pid)` asks
- *                through; without it there is no answer, only `{ count: null, error: 'no-exec' }` — unknown, never 0 (D-17)
- *   routes       `() → planRoutes' result` ({ [group id]: { on, upstream, bypass, … } }): what the plan says NOW; the daemon re-plans when the system proxy or `desired` changes, so it is read at every lookup
- *   ingress      `() → loadIngressConfig's result` (`{ enginePort, groupPorts, ingressToken, listenerToken }`)
- *   authOf       `(auth_ref) → { username, password } | null`: the login a reference names (`prior:<group>` — the only shape darwin's plan makes, route-plan.mjs `resolveLogin`); only this call turns a reference into a login, and only for one connection that is dialled through the proxy
- *   onFailure    the failure sink (the daemon's recorder): a record shaped `{ event: 'failure', where, code, reason }`
- *   forwarder    `createForwarder()` (forwarder.mjs): `reload({ build, forms })` → `{ ok, readBack, code?, reason? }`, `check()`, `state()`; the kernel's process, config and read-back are its
- *   entries      the proxy entries of the agents, which only this file's order decides WHEN: `write(groups)` / `undo(groups)` → `[{ g, ok, reason? }]`, `check(groups)` → the same; a group is `{ g, harness, entry }` (`entry`: 'auto' or 'opt-in' for a group
- *                that is on, which is what `write` gets; null in the `undo` and `check` lists of a group the plan has off)
- *   gate         `({ g, harness, entry }) → { ok: true } | { ok: false, reason }`, required by `attach()` (a TypeError without it): asked for each group about to be written; a group it refuses is not handed to `entries.write` and is that group's
- *                `{ g, ok: false, gated: true, reason }` in `entries.written`; one that throws is a refusal. Codex's and Hermes's proxy lines join a block the trust entry wrote and may not be written before 4.8 W19's four conditions hold (plan Task 8): the wiring
- *                (daemon.mjs, the one place that knows the harnesses and what the journal can do) says so here, and `entries` is a writer that does not have to know it
- *   ownImages    asight's own images (the engine's node, the kernel's `asight-forwarder` — no `.exe` on darwin, 4.9 §3), for the loop check of the config (rules.mjs: required, `undefined` is a TypeError) · hostsOf  `(form) → [host]`: the host set of a host-tree form (route-plan.mjs `hostSetOf`)
- *   carried      `() → Iterable<group id> | null` (default: none): the groups whose entries may still exist (installed, once on, or opted in) and may therefore stay in the kernel — listener, port, forward-only — while the plan has them off.
- *                A group that is off and not named here is not in the kernel at all (audit F7): the wiring that knows the manifest says which ones; not saying is "no group", the safe side of fewer listeners
- * Events: 'exec' ProcFacts · 'exit' {pid, startedAt} · 'facts-update' ProcFacts (a command line that was not known yet is, or was given up on — no not-yet state exists on darwin today, so this never fires now; the shape is the contract and stays)
- *   · 'facts-error' (a process whose command line is empty, so its image path is not known) — the watcher's, passed on after the table has taken them in, so a listener that asks the table finds the process there · 'helper-error' {reason, code, …}
- *   (the watcher's `poll-error`: the ps read failed, or a listener threw — the code is the closed set's name whatever failed) · 'form-exit' {form, neg_key} (the last process of a form is gone: the engine forgets that form's negative-cache
- *   entries, 4.8 §5.5).
- */
-export function createDarwinRedirector({ procWatcher, groups, home = null, ownerOf = null, exec = null, routes = () => ({}), ingress = () => ({}), authOf = () => null, onFailure = () => {}, forwarder = null, entries = null, gate = null, ownImages, hostsOf = () => null, carried = () => null, now = Date.now } = {}) {
-  if (!procWatcher || typeof procWatcher.on !== 'function') throw new TypeError('createDarwinRedirector needs the process watcher (procinfo.mjs createProcWatcher)')
+export function createDarwinRedirector({ groups, home = null, ownerOf = null, factsOf = null, routes = () => ({}), ingress = () => ({}), authOf = () => null, onFailure = () => {}, doors = null, entries = null, gate = null, exec = null, carried = () => null, now = Date.now, verdictWaitMs = VERDICT_WAIT_MS } = {}) {
   if (!Array.isArray(groups)) throw new TypeError('createDarwinRedirector needs the groups (route-plan.mjs groupsOf)')
   const ev = new EventEmitter()
   const forms = groups.flatMap((x) => x.forms) // in the order the harness files list them: matchForm tries a shared image's forms in that order
-  const procs = new Map() // pid → { exe, ppid, startedAt, elevated, match, seq }
-  const verdicts = new Map() // pid → { decrypt, agent }: what the tracker judged (4.8 §5.4); a process it has not judged has none, which is "not trusted"
+  const byGroup = new Map(groups.map((x) => [x.g, x]))
   const byForm = new Map(groups.flatMap((x) => x.forms.map((f) => [f.id, { form: f, g: x.g, harness: x.harness }])))
-  const harnessOf = new Map(groups.map((x) => [x.g, x.harness]))
-  const info = { pid: null, proto: null, build: null } // no resident helper on darwin (4.9 §1): there is no pid, protocol or build to say, and this never changes
-  let seq = 0
+  const info = { pid: null, proto: null, build: null } // no resident helper (4.9 §1): there is no pid, protocol or build to say, and this never changes
 
-  function ingest(facts) {
-    const match = matchForm(forms, { exe: facts.exe, cmdline: facts.cmdline, cmdlineState: facts.cmdlineState }, { home })
-    procs.set(facts.pid, { exe: facts.exe ?? null, ppid: facts.ppid ?? null, startedAt: facts.startedAt ?? null, elevated: facts.elevated ?? null, match, seq: ++seq })
-  }
-  const pidsOf = (form) => [...procs].filter(([, p]) => p.match.kind === 'form' && p.match.id === form).map(([pid]) => pid)
-  /** The processes a connection under `of.<form>` can be from: the form's own, and the ones whose command line is not known yet and may be (the watcher says again when it is). */
-  const maybeOf = (form) => [...procs].filter(([, p]) => (p.match.kind === 'form' && p.match.id === form) || (p.match.kind === 'pending' && p.match.forms.includes(form))).map(([pid]) => pid)
-  /** The processes a connection to a form with no process rule can be from: every process of the session but the ones of the group's other forms, which their own process rules hand to those forms (a form of another group sharing the port
-   *  would be handed to its own form by its own rule, and its connection held open must not make this form's own unfindable). A process of a form of ANOTHER group stays: nothing hands it to its form here, and it is judged for what it
-   *  is (`not-a-process-of-form`). */
-  function takenBy({ form, g }) {
-    const elsewhere = ([, p]) => p.match.kind === 'form' && p.match.id !== form.id && byForm.get(p.match.id).g === g
-    return [...procs].filter((e) => !elsewhere(e)).map(([pid]) => pid)
-  }
-  /** Forgets a process and its verdict; says `form-exit` when it was the last process of its form (after any `exit` the caller passes on, so a listener of both sees the process leave first). */
-  function drop(pid, { then = () => {} } = {}) {
-    const p = procs.get(pid)
-    procs.delete(pid)
-    verdicts.delete(pid)
-    then()
-    if (p && p.match.kind === 'form' && pidsOf(p.match.id).length === 0) ev.emit('form-exit', { form: p.match.id, neg_key: `of.${p.match.id}` })
+  // ---- identity: the socket at accept time (D47) ------------------------------------------------------------------------------------------------------
+  const factsCache = new Map() // pid → { startedAt, facts } — the last life this pid was met in (for scan() and procs(); nothing sweeps)
+  const factsInflight = new Map() // pid → Promise<facts | null> — concurrent lookups of one new pid share the ask
+  const verdicts = new Map() // pid → { decrypt, agent, startedAt }: what the tracker judged (4.8 §5.4), keyed to the life it judged; a process it has not judged has none, which is "not trusted"
+  const waiting = new Map() // pid → { promise, answer(v) } — the lookups waiting for the tracker's watch() of a pid just met
+  const doorsOpen = new Set() // the group ids whose door the engine holds
+
+  /** The facts of one pid, asked TARGETED every time (procinfo.mjs's two asks: the `ps` row and the `lsof` txt record — nothing sweeps
+   *  the machine): the answer is what THIS connection's process is, never a cached row a wrapped pid could have left behind (a wrong pid
+   *  must never happen, 4.8 W4 — the start time in the fresh answer is what keys the verdict to the life it belongs to). Concurrent
+   *  lookups of the same pid share the one ask. */
+  function factsCached(pid) {
+    if (factsInflight.has(pid)) return factsInflight.get(pid)
+    const ask = Promise.resolve().then(() => (typeof factsOf === 'function' ? factsOf(pid) : null)).then((facts) => {
+      factsCache.set(pid, { startedAt: facts && facts.startedAt != null ? facts.startedAt : null, facts })
+      return facts
+    }).finally(() => { factsInflight.delete(pid) })
+    factsInflight.set(pid, ask)
+    return ask
   }
 
-  procWatcher.on('exec', (facts) => { ingest(facts); ev.emit('exec', facts) })
-  procWatcher.on('facts-update', (facts) => { ingest(facts); ev.emit('facts-update', facts) })
-  procWatcher.on('exit', (x) => drop(x.pid, { then: () => ev.emit('exit', x) }))
-  procWatcher.on('facts-error', (x) => ev.emit('facts-error', x))
-  procWatcher.on('poll-error', (x) => ev.emit('helper-error', { ...x, code: x.cause ?? x.code ?? 'helper-error' }))
+  /** The tracker's verdict of a pid, announced and waited for: a life the verdict table does not hold (never met, or the pid wrapped into
+   *  a new life — another start time) is told as 'exec' (the daemon's tracker judges — registry osMatch, the trust layers — and answers
+   *  through `watch(pid, …)`); this lookup waits up to VERDICT_WAIT_MS. A verdict that never comes is a TOMBSTONE ({ decrypt: false }):
+   *  one wait per life, never one per connection — and a later `watch()` (the tracker judged it after all, a harness came on) overwrites
+   *  it as ever. */
+  function verdictOf(pid, facts) {
+    const at = facts && facts.startedAt != null ? facts.startedAt : null
+    const held = verdicts.get(pid)
+    if (held && (held.startedAt == null || at == null || held.startedAt === at)) return Promise.resolve(held)
+    let w = waiting.get(pid)
+    if (!w) {
+      let answer
+      const promise = new Promise((resolve) => { answer = resolve })
+      const timer = setTimeout(() => { if (waiting.get(pid) === w) { waiting.delete(pid); verdicts.set(pid, { decrypt: false, agent: null, startedAt: at, none: true }); answer(verdicts.get(pid)) } }, verdictWaitMs)
+      if (timer.unref) timer.unref()
+      w = { promise, answer: (v) => { clearTimeout(timer); if (waiting.get(pid) === w) waiting.delete(pid); answer(v) } }
+      waiting.set(pid, w)
+      ev.emit('exec', facts) // the tracker's seam, unchanged: it judges and calls watch()
+    }
+    return w.promise
+  }
 
-  /** The group's upstream for one connection: the hop the agent would have used without asight, with its login resolved (4.8 §2.2, §5.2). A target the group's bypass table hits goes direct, as the agent's did. */
+  /** The group's upstream for one connection: the hop the agent would have used without asight, with its login resolved (4.8 §2.2, §5.2).
+   *  A target the group's bypass table hits goes direct, as the agent's did. */
   function upstreamFor(g, route, host) {
     if (bypassHit(route.bypass, host)) return { kind: 'direct' }
     const up = route.upstream
@@ -170,126 +134,121 @@ export function createDarwinRedirector({ procWatcher, groups, home = null, owner
     return out
   }
 
-  /** Which process owns the connection that reached the group's port, best effort and never wrong (4.8 §5.3): one of `candidates`, or nobody. A form with a process rule in the kernel gets only its own processes there; a form with none takes
-   *  every connection of its port, so it is asked against every process but the other forms' of its group. The table lags the real world by a poll, so a process that started a moment ago has no row here: `known` is every process the table
-   *  has, and the owner is answered only when no process outside it holds a connection to the port (socktable.mjs). A socket table that cannot be asked never costs the connection: it is no pid, and the failure is recorded. */
-  async function owningPid(candidates, port) {
+  /** The owner of the connection the engine just accepted, read from the socket itself (socktable.mjs, targeted): never wrong — no row,
+   *  several rows, a slow or unreadable table all give null, and the connection is judged untracked and spliced (4.8 W4). */
+  async function owningPid(peer) {
     const none = { pid: null, source: null, ms: null }
-    if (!ownerOf || !Number.isInteger(port) || candidates.length === 0) return none
+    if (!ownerOf) return none
     try {
-      const r = await ownerOf({ hop: { port }, candidates, known: [...procs.keys()] })
+      const r = await ownerOf({ peer })
       return { pid: r && r.pid != null ? r.pid : null, source: (r && r.source) || null, ms: r && r.ms != null ? r.ms : null }
     } catch (e) {
-      onFailure({ event: 'failure', where: 'helper', code: 'socktable-unavailable', reason: `the owner of a connection could not be asked for (${msgOf(e)}); the connection is judged by its form` })
+      onFailure({ event: 'failure', where: 'helper', code: 'socktable-unavailable', reason: `the owner of a connection could not be asked for (${msgOf(e)}); the connection is spliced untracked` })
       return none
     }
   }
 
-  /** One on-demand table refresh before a judgement that would otherwise be made without the pid (4.8 §5.3 · §5.4, two seats, each debounced on its own): the `no-process-of-form` splice (no
-   *  candidate at all — seat `'empty'`) and the pid-less answer of the socket table (the holder is a process the table has not seen — it started less than a poll ago, typically a one-shot agent
-   *  beside a long-lived session of the same form; judge()'s form-whole rule would then splice it `pid-unresolved-mixed`, or worse decrypt it on the OLD processes' trust — seat `'pidless'`). It
-   *  asks the watcher for one poll — the same difference step the 2 s timer runs, so the new process is taken in and re-told as `exec`, and a listener that judges (the tracker) judges it now, not
-   *  on the next tick — and the caller asks the owner question AGAIN when the poll changed the candidate set. At most one demand poll a second PER SEAT (a lookup of one seat never spends the
-   *  other's); the lookup waits for it at most DEMAND_POLL_WAIT_MS. A watcher with no `poll`, a poll already in flight (it says false), one that does not answer in time, or one that finds nobody
-   *  changes nothing: the answer is what the stale table says, as it was before. */
-  const demandPolledAt = { empty: -Infinity, pidless: -Infinity }
-  async function refreshTable(seat) {
-    if (now() - demandPolledAt[seat] < DEMAND_POLL_MIN_MS) return false
-    demandPolledAt[seat] = now()
-    if (typeof procWatcher.poll !== 'function') return false
-    try {
-      return (await Promise.race([
-        Promise.resolve(procWatcher.poll()).then(() => true, () => false),
-        new Promise((resolve) => setTimeout(resolve, DEMAND_POLL_WAIT_MS, false)), // ref'd on purpose: the lookup that asked for the poll waits for it, and nothing else may drain the loop out from under that wait
-      ])) === true
-    } catch {
-      return false
-    }
-  }
+  const entryOf = (g) => ({ g, harness: byGroup.get(g).harness, entry: ((routes() || {})[g] || {}).entry ?? null })
 
-  /** Whether the connection is decrypted (4.8 §5.4), and the code its row carries when it is not and the tracker cannot say it by pid. */
-  function judge(form, pid, candidates) {
-    const trusted = (p) => { const v = verdicts.get(p); return !!v && v.decrypt === true }
-    if (form.processRules === false) { // the form's port is every process's: only a process that is positively this form's, and trusted, is decrypted
-      if (pid == null) return { decrypt: false, skip: untracked('pid-unresolved') }
-      const p = procs.get(pid)
-      if (!p || p.match.kind !== 'form' || p.match.id !== form.id) return { decrypt: false, skip: untracked('not-a-process-of-form') }
-      return { decrypt: trusted(pid) }
-    }
-    if (pid != null) return { decrypt: trusted(pid) } // the tracker holds this pid's row and its reason
-    if (candidates.length === 0) return { decrypt: false, skip: untracked('no-process-of-form') }
-    // no pid: the connection is some process of the form's. Decrypting it when one of them does not trust asight's CA would break that process (D31), so only when all of them are trusted
-    return candidates.every(trusted) ? { decrypt: true } : { decrypt: false, skip: { not_captured: 'untrusted', reason: 'pid-unresolved-mixed' } }
-  }
-
-  /** The kernel's side of the plan as it is now: the groups it carries, and which of their forms are on. */
-  function kernelPlan() {
+  /** The doors the engine should hold for the plan as it is now: a group that is on, or carried while off, with a port, a supported form
+   *  and an upstream — and no login on a door whose entry takes none (4.8 §3.2). `skipped` says every group the plan has ON that none of
+   *  this holds, with its reason, so a group left out is said by whoever asked, never silently. */
+  function doorPlan() {
+    const table = routes() || {}
     const ing = ingress() || {}
+    const mayCarry = new Set(carried() || [])
     const skipped = []
-    const planned = kernelGroupsOf({ groups, routes: routes() || {}, groupPorts: ing.groupPorts, authOf, hostsOf, skipped, carried: carried() })
-    return { ing, groups: planned, skipped, forms: planned.flatMap((x) => x.forms.map((f) => ({ f: f.f, on: x.on }))) }
+    const wanted = []
+    for (const x of groups) {
+      const r = table[x.g]
+      if (!r) continue // the plan has no answer yet: nothing to hold and nothing to say
+      if (r.on !== true && !mayCarry.has(x.g)) continue // off and never installed or opted in: no door at all (audit F7)
+      const port = (ing.groupPorts || {})[x.g]
+      const supported = x.forms.some((f) => f.supported === true && f.match)
+      const why = !r.upstream ? 'no-upstream' : !Number.isInteger(port) ? 'no-port' : !supported ? 'no-supported-form' : x.group.auth === false && r.upstream.credentialed ? 'login-on-open-port' : null
+      if (why) { skipped.push({ g: x.g, reason: why }); continue }
+      wanted.push({ g: x.g, port, on: r.on === true, auth: x.group.auth !== false })
+    }
+    return { ing, wanted, skipped }
   }
-  const configOf = (planned, ing, controller) => buildForwarderConfig({ groups: planned, enginePort: ing.enginePort, token: ing.ingressToken, listenerToken: ing.listenerToken, controller, ownImages })
-  const entryOf = (g) => ({ g, harness: harnessOf.get(g), entry: ((routes() || {})[g] || {}).entry ?? null })
 
   return Object.assign(ev, {
-    /** What the proxy ingress asks for each connection a client hands over on purpose (4.8 §5.2, core/redirector.mjs): `user` is `of.<form>` (the ingress has checked the token already), `target` what it asked to reach.
-     *  → the flow's meta; `{ health: true, group }` for the group's own re-entry point (the kernel's probe: the ingress answers it, nothing is dialled or recorded); null for a user it does not know, a group the plan has no answer for, or the probe of a group that is not on
-     *  (the ingress then answers it as an authentication failure, and the kernel's fallback group, which does not get the probe through, keeps the re-entry: the way to the upstream that needs no engine). An AGENT's connection of a group that is not on
-     *  (the plan flipped before the kernel's reload landed) is served, not refused: a spliced meta, no pid asked for, the group's upstream, `skip` = `untracked` · `group-off`; one with nothing to dial is null as before.
-     *  The meta: `pid` (or null) · `agent` the harness · `decrypt` · `capture: 'proxy'` · `form` · `exe` · `upstream` (`{kind:'direct'}`, or the group's with its login: the ingress uses it for this one connection and keeps only whether there was
-     *  one) · `pid_source` · `pid_ms` · `negKey` (the pid, or `of.<form>` when there is none: forms must not poison one another's negative cache, 4.8 §5.5) · `skip`, only when it is not decrypted and the tracker has no row to say why: the code
-     *  the row carries (`untrusted` + `pid-unresolved-mixed`, or `untracked`). Rejects, with `code: 'upstream-unavailable'`, a `why` (`no-upstream`, `upstream-credentials-unavailable`) and no login in the message, when the upstream cannot be dialled: the ingress then writes its own `upstream-unavailable` failure (where `ingress`) with the message and answers 502. */
-    async lookupIngress({ user, target }) {
-      const m = FORM_USER.exec(typeof user === 'string' ? user : '')
-      const hit = m ? byForm.get(m[1]) : null
-      const route = hit && (routes() || {})[hit.g]
-      if (!route || !target) return null
-      const port = ((ingress() || {}).groupPorts || {})[hit.g]
-      const probe = Number.isInteger(port) && target.address === '127.0.0.1' && target.port === port
-      if (route.on !== true) { // the plan has this group off: the kernel's probe is refused (its fallback then keeps the re-entry); an agent's connection that still arrives is the plan flipped before the kernel's reload landed, and is served
-        if (probe || !route.upstream) return null // nothing to serve it with: refused as before
-        return { pid: null, agent: hit.harness, decrypt: false, capture: 'proxy', form: hit.form.id, exe: null, upstream: upstreamFor(hit.g, route, target.address), pid_source: null, pid_ms: null, negKey: `of.${hit.form.id}`, skip: untracked('group-off') }
+    /** What the engine's doors ask for each connection a client handed over on purpose (4.8 §5.2, core/redirector.mjs — the engine's
+     *  ingress calls this with the DOOR's group as `user` and the accepted socket's peer as `peer`, D47): the flow's meta; null for a
+     *  group the plan has no answer for, a door nobody holds, or a target on this machine's own loopback (a loop through the door, not a
+     *  flow — the kernel's health probe is gone with the kernel, and nothing legitimate asks a door to reach itself).
+     *  An AGENT's connection of a group that is not on (the plan flipped before the doors followed) is served, not refused: a spliced
+     *  meta, no identity asked for, the group's upstream, `skip` = `untracked` · `group-off`.
+     *  The meta: `pid` (or null) · `agent` the door's harness · `decrypt` (the tracker's verdict of the pid this socket belongs to — never
+     *  a process the door's own form does not claim) · `capture: 'proxy'` · `form` · `exe` · `upstream` (`{kind:'direct'}`, or the group's
+     *  with its login: the ingress uses it for this one connection and keeps only whether there was one) · `pid_source` · `pid_ms` ·
+     *  `negKey` (the pid, or the door's group when there is none: forms must not poison one another's negative cache, 4.8 §5.5) · `skip`,
+     *  only when it is not decrypted and the table has no verdict to say why.
+     *  Rejects, with `code: 'upstream-unavailable'`, a `why` (`no-upstream`, `upstream-credentials-unavailable`) and no login in the
+     *  message, when the upstream cannot be dialled: the ingress then writes its own `upstream-unavailable` failure and answers 502. */
+    async lookupIngress({ peer, user, target }) {
+      const door = byGroup.get(typeof user === 'string' ? user : '')
+      const route = door && (routes() || {})[door.g]
+      if (!door || !route || !target) return null
+      const ownPort = ((ingress() || {}).groupPorts || {})[door.g]
+      if ((target.address === '127.0.0.1' || target.address === 'localhost') && Number.isInteger(ownPort) && target.port === ownPort) return null // a CONNECT at the door's own address is a loop through the door, not a flow — nothing legitimate asks a door to reach itself, and the kernel's health probe went with the kernel. Any other loopback target (a local model server) is a flow like any other
+      if (route.on !== true) { // the plan has this group off: an agent's connection that still arrives is the plan flipped before the doors followed, and is served
+        if (!route.upstream) return null // nothing to serve it with: refused
+        return { pid: null, agent: door.harness, decrypt: false, capture: 'proxy', form: null, exe: null, upstream: upstreamFor(door.g, route, target.address), pid_source: null, pid_ms: null, negKey: door.g, skip: untracked('group-off') }
       }
-      if (probe) return { health: true, group: hit.form.id }
-      const upstream = upstreamFor(hit.g, route, target.address) // before the table is asked: a connection that cannot be dialled should not wait on it
-      let candidates = hit.form.processRules !== false ? maybeOf(hit.form.id) : takenBy(hit)
-      if (hit.form.processRules !== false && candidates.length === 0 && (await refreshTable('empty'))) candidates = maybeOf(hit.form.id) // the process may have started after the last poll: ask once before splicing it
-      let { pid, source, ms } = await owningPid(candidates, port)
-      if (pid == null && candidates.length > 0 && (await refreshTable('pidless'))) { // a null pid may be a holder the table has not seen (it started less than a poll ago): one poll, and the question again when it changed the candidates
-        const again = hit.form.processRules !== false ? maybeOf(hit.form.id) : takenBy(hit)
-        if (again.length !== candidates.length || again.some((p, i) => p !== candidates[i])) {
-          const r2 = await owningPid(again, port)
-          candidates = again
-          ;({ pid, source, ms } = r2)
+      const upstream = upstreamFor(door.g, route, target.address) // before the identity is asked: a connection that cannot be dialled should not wait on it (and one with nothing to dial is refused with its own why)
+      const { pid, source, ms } = await owningPid(peer)
+      let form = null
+      let exe = null
+      let decrypt = false
+      if (pid != null) {
+        const facts = await factsCached(pid)
+        if (facts) {
+          exe = facts.exe // the row says whose connection it was, whichever way it is judged
+          const m = matchForm(forms, { exe: facts.exe, cmdline: facts.cmdline }, { home })
+          const row = m.kind === 'form' ? byForm.get(m.id) : null
+          if (row && row.g === door.g) { // this door's own form: the connection is this process's to decrypt (another group's form at this door — the open desktop door's shape — is forwarded, untracked)
+            form = row.form
+            const v = await verdictOf(pid, facts)
+            decrypt = !!(v && v.decrypt === true)
+          }
         }
       }
-      const { decrypt, skip } = judge(hit.form, pid, candidates)
+      // a connection this door's own form owns but its process does not trust is spliced with the tracker's own reason (the engine's
+      // policy arm, flow.mjs skipOf): only a connection with no pid to vouch for, or one whose process is not this door's form, carries
+      // the table's untracked code here
+      const why = pid == null ? 'pid-unresolved' : form ? null : 'not-a-process-of-form'
       return {
-        pid, agent: hit.harness, decrypt, capture: 'proxy', form: hit.form.id, exe: pid != null && procs.has(pid) ? procs.get(pid).exe : null,
-        upstream, pid_source: source, pid_ms: ms, negKey: pid != null ? String(pid) : `of.${hit.form.id}`, ...(skip ? { skip } : {}),
+        pid, agent: door.harness, decrypt, capture: 'proxy',
+        ...(form ? { form: form.id } : {}), exe,
+        upstream, pid_source: source, pid_ms: ms, negKey: pid != null ? String(pid) : door.g,
+        ...(!decrypt && why ? { skip: untracked(why) } : {}),
       }
     },
 
-    /** `on`: the kernel gets the whole config for the plan as it is now (the groups that are on with the engine outbound and a fallback group per form, the others forward only) and the read-back says whether each form is on; ONLY THEN are the
-     *  proxy entries of the groups that are on written, and the entries of the groups the plan says are off undone (the entry is the pointing itself: written before the kernel is on, an agent would point at a port with nothing behind it, 4.8 §2.1).
-     *  A kernel that cannot start or does not read back as asked: rejects with its code (`forwarder-start-failed` · `forwarder-binary-missing` · `forwarder-digest-mismatch` · `fallback-active`) and `readBack`, and not one entry was
-     *  written or undone. A crash between the read-back and the entries is `on` again: the same reload, the same entries (the writer is idempotent). Resolves `{ ok, kernel, entries: { written, undone, skipped } }`; an entry that could not be written is
-     *  that group's `{ ok: false, reason }`, not an exception: the kernel and the other groups stand. A group the plan has no answer for is neither written nor undone: a plan that is not there yet must not take entries away; a group the plan has ON that the kernel does not carry (no port, no form it can carry, no
-     *  upstream, a login on a port that takes none) is not written either, and is said: `entries.skipped: [{ g, reason }]` and `ok: false`. */
+    /** `on`: the doors first, then the entries (the pointing itself — written before the door stands, an agent would point at a port with
+     *  nothing behind it, 4.8 §2.1). A door the engine cannot bind (the port is held) rejects with its code and NOT ONE entry was written
+     *  or undone. A crash between the doors and the entries is `on` again: the same doors (idempotent per group), the same entries (the
+     *  writer is idempotent). The groups the plan has off are undone, and a door nobody carries any more (its group went off and its
+     *  records went with an uninstall) is closed. Resolves `{ ok, doors, entries: { written, undone, skipped } }`; an entry that could
+     *  not be written is that group's `{ ok: false, reason }`, not an exception: the doors and the other groups stand. A group the plan
+     *  has ON that gets no door (no port, no form it can carry, no upstream, a login on a port that takes none) is not written either,
+     *  and is said: `entries.skipped: [{ g, reason }]` and `ok: false`. */
     async attach() {
-      if (!forwarder || !entries) throw new TypeError('attach needs the forwarder and the entries')
+      if (!doors || !entries) throw new TypeError('attach needs the doors and the entries')
       if (typeof gate !== 'function') throw new TypeError('attach needs the gate: which groups may have their proxy entry written is the wiring\'s to say, and not saying is not "all of them" (a proxy line that joins a block the trust entry wrote may not be written before the W19 conditions of 4.8 hold)')
-      const plan = kernelPlan()
+      const plan = doorPlan()
       const table = routes() || {}
-      let kernel = null
-      if (plan.groups.length > 0) {
-        kernel = await forwarder.reload({ build: (controller) => configOf(plan.groups, plan.ing, controller), forms: plan.forms })
-        if (!kernel.ok) { const why = refusalOf(kernel); throw Object.assign(new Error(`${why.reason}; no proxy entry was written`), { code: why.code, readBack: kernel.readBack ?? null }) }
+      const wantIds = new Set(plan.wanted.map((x) => x.g))
+      const toClose = [...doorsOpen].filter((g) => !wantIds.has(g))
+      if (toClose.length) { await doors.close(toClose); for (const g of toClose) doorsOpen.delete(g) }
+      if (plan.wanted.length) {
+        await doors.open(plan.wanted.map((x) => ({ id: x.g, port: x.port, auth: x.auth, ...(x.auth ? { token: plan.ing.listenerToken } : {}) })))
+        for (const x of plan.wanted) doorsOpen.add(x.g)
       }
       const open = []
       const refused = []
-      for (const e of plan.groups.filter((x) => x.on).map((x) => entryOf(x.g))) {
+      for (const e of plan.wanted.filter((x) => x.on).map((x) => entryOf(x.g))) {
         let v
         try { v = await gate(e) } catch (err) { v = { ok: false, reason: `the gate could not say: ${msgOf(err)}` } }
         if (v && v.ok === true) open.push(e)
@@ -298,41 +257,39 @@ export function createDarwinRedirector({ procWatcher, groups, home = null, owner
       const off = groups.filter((x) => table[x.g] && table[x.g].on !== true).map((x) => entryOf(x.g))
       const written = [...(open.length ? (await entries.write(open)) || [] : []), ...refused]
       const undone = off.length ? (await entries.undo(off)) || [] : []
-      const left = plan.skipped.filter((x) => (table[x.g] || {}).on === true) // the plan says on, nothing carries it: not written, not undone, and said (D38)
-      return { ok: [...written, ...undone].every((x) => x.ok !== false) && left.length === 0, kernel, entries: { written, undone, skipped: left } }
+      const left = plan.skipped.filter((x) => (table[x.g] || {}).on === true) // the plan says on, no door carries it: not written, not undone, and said (D38)
+      return { ok: [...written, ...undone].every((x) => x.ok !== false) && left.length === 0, doors: { open: [...doorsOpen], closed: toClose }, entries: { written, undone, skipped: left } }
     },
-    /** `off`, the other way (4.8 §4.1): the kernel switched to forward only and read back, THEN every group's proxy entry undone — the planned or not, the writer undoes only what asight wrote. A kernel that is not running is left alone (nothing
-     *  can point at it); one that cannot be switched, or a plan that cannot be built, does not keep the entries: they are undone anyway and then this rejects with the kernel's code (`off` always undoes by hand, 4.3). */
+
+    /** `off`, the other way (4.8 §4.1): every group's proxy entry undone — the planned or not, the writer undoes only what asight wrote —
+     *  and the doors brought to the carried set: a group whose records may still exist keeps its door FORWARD-ONLY (an agent that outlives
+     *  `off` — its env still points here — keeps flowing to the upstream, nothing decrypted, nothing recorded); a door nobody carries is
+     *  closed (connections in flight drain in the engine). */
     async detach() {
-      if (!forwarder || !entries) throw new TypeError('detach needs the forwarder and the entries')
-      let kernel = null
-      let refusal = null
-      try {
-        const plan = kernelPlan()
-        if (plan.groups.length > 0 && forwarder.state().phase !== 'stopped') {
-          const forward = plan.groups.map((x) => ({ ...x, on: false }))
-          kernel = await forwarder.reload({ build: (controller) => configOf(forward, plan.ing, controller), forms: plan.forms.map((f) => ({ f: f.f, on: false })) })
-          if (!kernel.ok) refusal = { ...refusalOf(kernel), readBack: kernel.readBack ?? null }
-        }
-      } catch (e) { refusal = { code: e && e.code, reason: msgOf(e), error: e } }
+      if (!doors || !entries) throw new TypeError('detach needs the doors and the entries')
       const undone = (await entries.undo(groups.map((x) => entryOf(x.g)))) || []
-      if (refusal) throw Object.assign(new Error(`${refusal.reason}; the proxy entries were undone anyway`), { code: refusal.code, readBack: refusal.readBack ?? null, entries: undone })
-      return { ok: undone.every((x) => x.ok !== false), kernel, entries: { undone } }
+      const mayCarry = new Set(carried() || [])
+      const toClose = [...doorsOpen].filter((g) => !mayCarry.has(g))
+      if (toClose.length) { await doors.close(toClose); for (const g of toClose) doorsOpen.delete(g) }
+      return { ok: undone.every((x) => x.ok !== false), doors: { open: [...doorsOpen], closed: toClose }, entries: { undone } }
     },
-    /** What the kernel says now (forwarder.check(): each form read back) and the entries' own check: expected against actual (4.6 §开关语义). `attached` is the kernel's: some form reads back on and the read-back is the one asked for. */
+
+    /** What stands now (4.6 §开关语义): the doors of the groups the plan has on, and the entries' own check against the same plan.
+     *  `attached` is true when at least one such door is open — the kernel's read-back answer, told by the only proxy there is. */
     async status() {
-      if (!forwarder) throw new TypeError('status needs the forwarder')
-      const kernel = await forwarder.check()
-      const live = Object.entries((kernel && kernel.forms) || {}).filter(([, v]) => v && v.state === 'on').map(([f]) => f)
+      if (!entries) throw new TypeError('status needs the entries')
       const table = routes() || {}
+      const live = groups.filter((x) => table[x.g] && table[x.g].on === true && doorsOpen.has(x.g))
       const should = groups.filter((x) => table[x.g] && table[x.g].on === true).map((x) => entryOf(x.g))
-      return { attached: !!kernel && kernel.ok === true && live.length > 0, links: live.map((name) => ({ name })), hb_age_ms: null, drops: null, kernel, forwarder: forwarder.state(), entries: entries && typeof entries.check === 'function' ? await entries.check(should) : null }
+      return { attached: live.length > 0, links: live.map((x) => ({ name: x.g })), hb_age_ms: null, drops: null, doors: [...doorsOpen], entries: typeof entries.check === 'function' ? await entries.check(should) : null }
     },
-    /** How many of the process's established connections do not go to a group's listener on loopback — what `status` shows as "still going direct" (4.6 §开关语义). The Windows twin asks its resident helper's `tcp-table` verb; darwin
-     *  has no helper (4.9 §1), and the table is `lsof -nP -Fpcn -iTCP -sTCP:ESTABLISHED` — the same record stream socktable.mjs reads (the whole table, not a pid-targeted read: [本机] 实验② measured both at ~28 ms), with
-     *  the state in the command so the stream holds established connections only. `exec` is the injected on-demand runner (socktable.mjs's shape: `exec('lsof', args, { timeoutMs })` → Promise<{ code, out, err }>); one that is not
-     *  there is `{ count: null, error: 'no-exec' }` — unknown, never 0 (D-17). A row with no foreign end (a listening or unconnected socket: no `->`) holds no connection and is not counted, whatever gave it to the stream; a read
-     *  that fails, is killed at its timeout or answers nothing is `{ count: null, error }`, never 0. */
+
+    /** How many of the process's established connections do not go to a group's door on loopback — what `status` shows as "still going
+     *  direct" (4.6 §开关语义). The table is `lsof -nP -Fpcn -iTCP -sTCP:ESTABLISHED` — the same record stream socktable.mjs reads, with
+     *  the state in the command so the stream holds established connections only. `exec` is the injected on-demand runner (socktable.mjs's
+     *  shape); one that is not there is `{ count: null, error: 'no-exec' }` — unknown, never 0 (D-17). A row with no foreign end (a
+     *  listening or unconnected socket: no `->`) holds no connection and is not counted; a read that fails, is killed at its timeout or
+     *  answers nothing is `{ count: null, error }`, never 0. */
     async directCount(pid) {
       if (!exec || typeof exec !== 'function') return { count: null, error: 'no-exec' }
       const ports = new Set(Object.values((ingress() || {}).groupPorts || {}))
@@ -355,48 +312,51 @@ export function createDarwinRedirector({ procWatcher, groups, home = null, owner
       } catch (e) { return { count: null, error: (e && e.code) || msgOf(e) } }
     },
 
-    /** The daemon's `redirector.configure(enginePort)` (core/redirector.mjs): the port the engine listens on. The kernel's config gets it from `ingress()` (ingress.json: `enginePort`, which the daemon listens on), so there is nothing to tell the
-     *  kernel here; accepted so that the daemon's call is not a TypeError at the first `on`. */
+    /** The daemon's `redirector.configure(enginePort)` (core/redirector.mjs): the port the engine listens on. The doors' ports come from
+     *  `ingress()` (ingress.json: groupPorts), so there is nothing to tell the engine here; accepted so that the daemon's call is not a
+     *  TypeError at the first `on`. */
     async configure() {},
-    /** Takes the process baseline (the watcher's own first poll — there is no helper to wait for on darwin, 4.9 §1) and answers the all-null info. Rejects when the watcher cannot start: that failure is already recorded by its own sink. */
+    /** Nothing to start (the scan is deleted, D47 — there is no watcher, no kernel, no helper): answers the all-null info. */
     async start() {
-      await procWatcher.start()
       return { ...info }
     },
-    /** Stops the watcher (the daemon's stop). Nothing is steered by a resident process on macOS, so the watcher's stop is all of it. */
-    async close() {
-      procWatcher.stop()
-    },
-    heartbeat() {}, // nothing is gated on a heartbeat: when the engine is gone the kernel falls back on its own health check (4.8 §3.3)
-    setBeatGate() {}, // the daemon's per-harness gate (1.6 §1.5) is asked before each automatic heartbeat; there are none here, and the daemon's own 5 s check re-reads state.json (core/redirector.mjs)
-    helperInfo: () => ({ ...info }), // { pid: null, proto: null, build: null } for ever: no resident helper exists to say anything about (the Linux redirector reports the same nulls when it has no client)
+    /** Nothing to stop: the daemon's stop closes the engine (the doors go with it) and the wiring's netenv watcher (its own close). */
+    async close() {},
+    heartbeat() {}, // nothing is gated on a heartbeat: the engine is the proxy, and when it is gone the doors are gone with it (launchd restarts the daemon, 4.9 §7)
+    setBeatGate() {}, // the daemon's per-harness gate (1.6 §1.5) is asked before each automatic heartbeat; there are none here
+    helperInfo: () => ({ ...info }), // { pid: null, proto: null, build: null } for ever: no resident helper exists to say anything about
     expectedProto: null, // no companion process, no protocol to expect; the daemon's `proto !== expectedProto` check passes with nothing to compare
 
-    /** The live processes of this session as facts; the table is taken from them: a process that was in it, is not in the scan, and was not seen after the scan began has gone (a process that started after the
-     *  scan's own snapshot is an `exec` and stays). */
+    /** The live processes the doors have MET, as facts — the table is what connections taught (nothing is swept, D47): a rescan re-judges
+     *  exactly the pids that are still connecting, and a pid nobody meets anymore is forgotten by the same rule. */
     async scan() {
-      const begun = seq
-      const live = await procWatcher.scan()
-      const seen = new Set()
-      for (const f of live) { seen.add(f.pid); ingest(f) }
-      for (const [pid, p] of [...procs]) if (!seen.has(pid) && p.seq <= begun) drop(pid)
-      return live
+      return [...factsCache.values()].map((x) => x.facts).filter(Boolean)
     },
-    unreadable: () => procWatcher.unreadable(),
+    unreadable: () => [], // no table of unreadable rows exists any more: the targeted ask either answers a row or the pid is gone
 
-    /** The tracker's verdict for a process (4.8 §5.4: the decrypt table): `decrypt` true only for one it confirmed trusts asight's CA. */
-    watch(pid, verdict) { verdicts.set(pid, { decrypt: !!(verdict && verdict.decrypt === true), agent: (verdict && verdict.agent) || null }) },
+    /** The tracker's verdict for a process (4.8 §5.4: the decrypt table): `decrypt` true only for one it confirmed trusts asight's CA. The
+     *  row carries the start time it was judged for, so a wrapped pid (another life) is judged again instead of inheriting a dead
+     *  process's verdict. */
+    watch(pid, verdict) {
+      const held = verdicts.get(pid)
+      verdicts.set(pid, { decrypt: !!(verdict && verdict.decrypt === true), agent: (verdict && verdict.agent) || null, ...(held && held.startedAt != null ? { startedAt: held.startedAt } : {}) })
+      const w = waiting.get(pid)
+      if (w) w.answer(verdicts.get(pid))
+    },
     unwatch(pid) { verdicts.delete(pid) },
     verdictOf: (pid) => (verdicts.has(pid) ? { ...verdicts.get(pid) } : null),
 
-    /** The pids of the processes that are `form` (the live ones the table has taken in), and what `planRoutes` takes as `procs`: `[{ pid, match, elevated }]` for every process that is, or might be, a form's. */
-    pidsOf,
-    procs: () => [...procs].filter(([, p]) => p.match.kind !== 'none').map(([pid, p]) => ({ pid, match: p.match, elevated: p.elevated })),
+    /** The pids of the processes that are `form`, and what `planRoutes` takes as `procs`: `[{ pid, match, elevated }]` for every process
+     *  the doors have met that is, or might be, a form's. */
+    pidsOf: (form) => [...factsCache.entries()].filter(([, x]) => { const m = x.facts ? matchForm(forms, { exe: x.facts.exe, cmdline: x.facts.cmdline }, { home }) : null; return m && m.kind === 'form' && m.id === form }).map(([pid]) => pid),
+    procs: () => [...factsCache.entries()].map(([pid, x]) => ({ pid, match: x.facts ? matchForm(forms, { exe: x.facts.exe, cmdline: x.facts.cmdline }, { home }) : { kind: 'none' }, elevated: x.facts ? x.facts.elevated : null })).filter((p) => p.match.kind !== 'none'),
   })
 }
 
-/** The foreign end of an `n` record's `local->foreign` — the hop's end of a connection. Socktable.mjs's `remoteEnd`, copied for the same record stream this file's `directCount` reads (not exported there; the two parses are the same
- *  words on the same bytes, and a change to the stream's shape is a change to both). A listening or unconnected socket has no `->` and holds no connection; a foreign end without a readable `host:port` is not one either. */
+/** The foreign end of an `n` record's `local->foreign` — the hop's end of a connection. Socktable.mjs's parse, copied for the same record
+ *  stream this file's `directCount` reads (not exported there; the two parses are the same words on the same bytes, and a change to the
+ *  stream's shape is a change to both). A listening or unconnected socket has no `->` and holds no connection; a foreign end without a
+ *  readable `host:port` is not one either. */
 function remoteEndOf(name) {
   const arrow = name.lastIndexOf('->')
   if (arrow < 0) return null

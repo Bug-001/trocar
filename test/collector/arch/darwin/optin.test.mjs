@@ -12,8 +12,7 @@ import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { loadArch } from '../../../../src/collector/arch/index.mjs'
 import { planOptIns, optinFormsOf, applyOptIn, rcLineOf, OPTIN_ITEMS } from '../../../../src/collector/arch/darwin/optin.mjs'
 import { groupsOf } from '../../../../src/collector/arch/darwin/route-plan.mjs'
-import { kernelGroupsOf } from '../../../../src/collector/arch/darwin/redirector.mjs'
-import { buildForwarderConfig } from '../../../../src/netenv/mihomo/rules.mjs'
+import { createDarwinRedirector } from '../../../../src/collector/arch/darwin/redirector.mjs'
 import { DARWIN_UNDO_BY_KIND, undoDarwinOptIns, rcLineOf as rcLineOfOff } from '../../../../src/off/darwin-optin.mjs'
 import { KNOWN_KINDS } from '../../../../src/off/manifest.mjs'
 import { readManifest, saveManifest, newManifest } from '../../../../src/off/manifest.mjs'
@@ -319,27 +318,23 @@ test('the desktop-launcher undo: the launcher goes, the bin directory with it wh
   assert.equal(u2.results[0].result, 'absent', 'already gone: said, not guessed')
 })
 
-// the no-auth listener of the group the launcher points at (L4\'s unit half): over the REAL harness data, the kernel config carries the desktop
-// group\'s listener with NO users and loopback only, while the credentialed group beside it keeps its two users — the generator\'s existing
-// auth:false arm (4.8 §3.2) is what 4.9 §6.4\'s decision rides; this pins that it holds for this group
-test('the forwarder config: the desktop group\'s listener carries no users and binds loopback only; the settings group\'s keeps its credentials', () => {
+// the no-auth DOOR of the group the launcher points at (L4\'s unit half, as D47 rewrote it): over the REAL harness data, the engine\'s door of
+// the desktop group takes NO credentials (the desktop-launcher item\'s address is bare — its authorization is the naming, the loopback bind and
+// the engine\'s per-process judgment), while the credentialed group beside it carries the listener token (4.8 §3.2\'s auth:false arm is what
+// 4.9 §6.4\'s decision rides; the kernel config that carried it is retired with the kernel)
+test('the doors the engine is asked for: the desktop group\'s door takes no credentials; the settings group\'s carries the listener token', async () => {
   const groups = groupsOf([byName('claude-code')])
   const routes = Object.fromEntries(groups.map((x) => [x.g, { on: true, upstream: { kind: 'direct' } }]))
   const ports = { 'claude-code.settings': GROUP_PORT, 'claude-code.desktop': DESKTOP_PORT }
-  const planned = kernelGroupsOf({ groups, routes, groupPorts: ports })
-  const desktop = planned.find((x) => x.g === 'claude-code.desktop')
-  assert.ok(desktop, 'the desktop group is carried (it is on)')
-  assert.equal(desktop.auth, false)
-  const cfg = JSON.parse(buildForwarderConfig({ groups: planned, enginePort: 17990, token: 'a'.repeat(32), listenerToken: LISTENER_TOKEN, controller: { port: 19001, secret: 'c'.repeat(24) }, ownImages: ['/usr/local/bin/node', '/x/asight-forwarder'] }))
-  const l = cfg.listeners.find((x) => x.name === 'asight-l-claude-code.desktop')
-  assert.ok(l, 'the listener exists')
-  assert.equal(l.listen, '127.0.0.1')
-  assert.equal(l.port, DESKTOP_PORT)
-  assert.ok(!('users' in l), 'NO users: the launcher\'s address is bare (its authorization is the naming, the loopback bind and the engine\'s per-process judgment)')
-  assert.equal(cfg['bind-address'], '127.0.0.1')
-  assert.equal(cfg['allow-lan'], false)
-  const settings = cfg.listeners.find((x) => x.name === 'asight-l-claude-code.settings')
-  assert.equal(settings.users.length, 2, 'the credentialed group beside it keeps its <g> and re.<g> users')
+  const opened = []
+  const doors = { open: async (list) => { opened.push(list.map(({ id, port, auth, token }) => ({ id, port, auth, token: token ?? null }))); return list.map((x) => ({ [x.id]: x.port })) }, close: async () => {} }
+  const entries = { write: async (l) => l.map((x) => ({ g: x.g, ok: true })), undo: async () => [], check: async () => [] }
+  const r = createDarwinRedirector({ groups, home: '/Users/u', routes: () => routes, ingress: () => ({ enginePort: 17990, groupPorts: ports, ingressToken: 'a'.repeat(32), listenerToken: LISTENER_TOKEN }), doors, entries, gate: () => ({ ok: true }) })
+  await r.attach()
+  assert.deepEqual(opened, [[
+    { id: 'claude-code.settings', port: GROUP_PORT, auth: true, token: LISTENER_TOKEN },
+    { id: 'claude-code.desktop', port: DESKTOP_PORT, auth: false, token: null },
+  ]], 'one loopback door per group (engine.listen binds 127.0.0.1): the desktop door takes NO credentials — the launcher\'s address is bare — and the settings door\'s password is the listener token the entries hold')
 })
 
 // the inline-copy contract: the arch side's line and the off side's are one text, and every kind the apply can produce has an undo

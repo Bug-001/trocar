@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
-import { matchForm, entryGate } from '../../../src/collector/arch/darwin/forms.mjs'
+import { matchForm, entryGate, imagesOf } from '../../../src/collector/arch/darwin/forms.mjs'
 import { processRulesOf } from '../../../src/netenv/mihomo/rules.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 
@@ -23,13 +23,18 @@ const groupsOf = () => Object.values(MAC).flatMap((w) => w.groups)
 // carries, or without the command line that tells it (form-path-unknown)
 const EXPECT = {
   'claude-code': {
-    groups: { 'claude-code.settings': ['claude-code.cli', 'claude-code.vscode'], 'claude-code.desktop': ['claude-code.desktop'] },
+    groups: { 'claude-code.settings': ['claude-code.native', 'claude-code.cli', 'claude-code.vscode'], 'claude-code.desktop': ['claude-code.desktop'] },
     forms: {
-      'claude-code.cli': { nameRule: false, yes: [`${U}/.local/share/claude/versions/2.1.289/claude`, `${U}/.local/bin/claude`, `${U}/.nvm/versions/node/v22.20.0/lib/node_modules/@anthropic-ai/claude-code/bin/claude`] },
+      // the native installer's version-named FILE (versions/2.1.296 is the executable, its basename is the version) is the
+      // PATH-ONLY form claude-code.native — no image gate can name it; the shapes that end in /claude stay the cli form's
+      'claude-code.native': { nameRule: false, yes: [`${U}/.local/share/claude/versions/2.1.296`, `${U}/.local/share/claude/versions/2.1.289/claude`] },
+      'claude-code.cli': { nameRule: false, yes: [`${U}/.local/bin/claude`, `${U}/.nvm/versions/node/v22.20.0/lib/node_modules/@anthropic-ai/claude-code/bin/claude`] },
       'claude-code.vscode': { nameRule: false, yes: [`${U}/.vscode/extensions/anthropic.claude-code-2.1.292-darwin-arm64/resources/native-binary/claude`] },
-      'claude-code.desktop': { nameRule: false, yes: ['/Applications/Claude.app/Contents/MacOS/Claude', `${U}/Applications/Claude.app/Contents/MacOS/Claude`], optIn: true },
+      // the Helper family is the measured owner of the model sockets (`Claude Helper --type=utility`, the Chromium network service — §6.4):
+      // the form's paths cover the whole family conservatively (bare Helper + Renderer + GPU under Frameworks/), image names exactly, one by one
+      'claude-code.desktop': { nameRule: false, yes: ['/Applications/Claude.app/Contents/MacOS/Claude', `${U}/Applications/Claude.app/Contents/MacOS/Claude`, '/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper', `${U}/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper`, '/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)', '/Applications/Claude.app/Contents/Frameworks/Claude Helper (GPU).app/Contents/MacOS/Claude Helper (GPU)'], optIn: true },
     },
-    unknown: ['/opt/tools/claude'],
+    unknown: ['/opt/tools/claude', '/opt/tools/Claude Helper'],
   },
   'codex': {
     groups: { 'codex.env': ['codex.cli'] },
@@ -114,7 +119,7 @@ test('all seven harnesses have macOS data, and the table above covers every one 
   const seven = ['claude-code', 'codex', 'deepseek-dsh', 'hermes', 'kimi-code', 'opencode', 'z-code']
   assert.deepEqual(Object.keys(MAC).sort(), seven)
   assert.deepEqual(Object.keys(EXPECT).sort(), seven)
-  assert.equal(formsOf().length, 15, 'the 15 forms the darwin data carries (dsh has no macOS desktop form — 4.9 §2.3 names none; the six unmeasured ones are listed so status says unknown · not measured)')
+  assert.equal(formsOf().length, 16, 'the 16 forms the darwin data carries (dsh has no macOS desktop form — 4.9 §2.3 names none; claude-code.native is the version-named file\'s path-only shape; the six unmeasured ones are listed so status says unknown · not measured)')
 })
 
 test('the pattern lint accepts the subset and rejects what JavaScript and .NET read differently, so the real data passing it means something', () => {
@@ -176,7 +181,8 @@ test('every darwin data file has the shape the later tasks read: groups, forms, 
         continue
       }
       assert.ok(gids.has(f.g), `${f.id}: its group ${f.g} exists`)
-      assert.match(f.match.image, /^[^/]+$/, `${f.id}: a file name — the image on darwin is the first word of the command line as invoked, no separator in it`)
+      if (f.match.image == null) { assert.ok(Array.isArray(f.match.path) && f.match.path.length > 0, `${f.id}: a path-only form (4.9 §2.3) declares its paths — they are its alone, and no image gate can name a version-named file`); continue }
+      for (const n of Array.isArray(f.match.image) ? f.match.image : [f.match.image]) assert.match(n, /^[^/]+$/, `${f.id}: a file name — the image on darwin is the first word of the command line as invoked, no separator in it${Array.isArray(f.match.image) ? ' (a family form names each member exactly — 4.9 §2.3)' : ''}`)
       for (const p of [...(f.match.path || []), ...(f.match.cmdline || [])]) {
         assert.deepEqual(lintPattern(p), [], `${f.id}: ${p}`)
         assert.doesNotThrow(() => new RegExp(p, 'i'))
@@ -192,7 +198,7 @@ test('every darwin data file has the shape the later tasks read: groups, forms, 
 })
 
 test('the group table: the one shared group holds its forms, the env groups of codex and dsh hold their one measured form each (an unmeasured form has no group), and a group has at most one form without a process rule', () => {
-  const shared = { 'claude-code.settings': ['claude-code.cli', 'claude-code.vscode'], 'codex.env': ['codex.cli'], 'deepseek-dsh.env': ['deepseek-dsh.cli'] }
+  const shared = { 'claude-code.settings': ['claude-code.native', 'claude-code.cli', 'claude-code.vscode'], 'codex.env': ['codex.cli'], 'deepseek-dsh.env': ['deepseek-dsh.cli'] }
   for (const [h, w] of Object.entries(MAC)) {
     for (const g of w.groups) {
       const members = w.forms.filter((f) => f.g === g.g).map((f) => f.id)
@@ -228,7 +234,7 @@ test('W3: every install shape the darwin data carries is its form, the same imag
       const { exe, cmdline = null } = typeof unk === 'string' ? { exe: unk } : unk
       const r = matchForm(forms, { exe, cmdline })
       assert.equal(r.kind, 'path-unknown', exe)
-      assert.deepEqual(r.forms.sort(), forms.filter((x) => x.match && x.match.reportUnknownPath && x.match.image.toLowerCase() === path.posix.basename(exe).toLowerCase()).map((x) => x.id).sort())
+      assert.deepEqual(r.forms.sort(), forms.filter((x) => x.match && x.match.reportUnknownPath && imagesOf(x).some((n) => n.toLowerCase() === path.posix.basename(exe).toLowerCase())).map((x) => x.id).sort())
     }
   }
 })
@@ -266,7 +272,7 @@ test('W23: a form that needs naming has an opt-in item and no automatic entry; t
   assert.deepEqual(entryGate(desktop, { optedIn: true, upstreamCredentialed: true }), { ok: false, reason: 'form-unsupported' }, 'no measured door could carry the listener\'s credentials, and a port without credentials is open to every process of the machine (4.8 §3.2 · 4.9 §6.4)')
   assert.equal(desktop.auth, false)
   for (const g of groupsOf().filter((x) => !(x.optIn && x.optIn.length))) assert.deepEqual(entryGate(g), { ok: true }, g.g)
-  const IMAGES = ['/Applications/Claude.app/Contents/MacOS/Claude', `${U}/Applications/Claude.app/Contents/MacOS/Claude`, '/Applications/Visual Studio Code.app/Contents/MacOS/Electron', '/Applications/Visual Studio Code.app/Contents/Resources/app/Code Helper.app/Contents/MacOS/Code Helper']
+  const IMAGES = ['/Applications/Claude.app/Contents/MacOS/Claude', `${U}/Applications/Claude.app/Contents/MacOS/Claude`, '/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper', '/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)', '/Applications/Visual Studio Code.app/Contents/MacOS/Electron', '/Applications/Visual Studio Code.app/Contents/Resources/app/Code Helper.app/Contents/MacOS/Code Helper']
   for (const w of Object.values(MAC)) {
     for (const g of w.groups.filter((x) => !(x.optIn && x.optIn.length))) {
       const own = w.forms.filter((f) => f.g === g.g && f.processRules)
@@ -277,6 +283,24 @@ test('W23: a form that needs naming has an opt-in item and no automatic entry; t
         assert.ok(!hit, `${g.g}: ${r} must not reach ${exe}`)
       }
     }
+  }
+})
+
+test('W3/§6.4: the desktop form\'s OWN kernel process rules meet the Chromium Helper family — the measured owner of the model sockets (`Claude Helper --type=utility`: the Helper fell to MATCH→upstream and the owningPid candidates never held it → untracked splice) — and stay inside Claude.app', () => {
+  const f = MAC['claude-code'].forms.find((x) => x.id === 'claude-code.desktop')
+  const rules = processRulesOf({ pathPatterns: f.match.path || [], names: f.nameRule ? [].concat(f.match.image) : [] })
+  const payload = (r) => /PROCESS-PATH-REGEX,(.*)/s.exec(r)[1]
+  const family = [
+    '/Applications/Claude.app/Contents/MacOS/Claude',
+    `${U}/Applications/Claude.app/Contents/MacOS/Claude`,
+    '/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper',
+    `${U}/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper`,
+    '/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)',
+    '/Applications/Claude.app/Contents/Frameworks/Claude Helper (GPU).app/Contents/MacOS/Claude Helper (GPU)',
+  ]
+  for (const exe of family) assert.ok(rules.some((r) => new RegExp(payload(r), 'i').test(exe)), `${exe}: a PROCESS-PATH-REGEX of claude-code.desktop meets it (the kernel hands it to asight-fb-claude-code.desktop, the decrypt half\'s per-process arm)`)
+  for (const elsewhere of ['/opt/tools/Claude Helper', '/Applications/Other.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper']) {
+    assert.ok(!rules.some((r) => new RegExp(payload(r), 'i').test(elsewhere)), `${elsewhere}: a Helper of another app is not Claude Desktop`)
   }
 })
 

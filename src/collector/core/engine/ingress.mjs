@@ -200,12 +200,16 @@ async function viaSocks5(sock, up, target, deadline) {
  *   failure          (rec) the engine's failure sink; the ingress writes where:'ingress' records through it
  *   refuse           (meta, info) — the flows/ row of a connection the upstream refused or could not be reached (no flow started)
  *   timing           {ingressOpenerMs = 10000, ingressHealthIdleMs = 30000, ingressDialMs = 0 (no limit), upstreamSlowMs = 5000 (one upstream-slow event while a proxy has not answered)}
+ * The connection handlers take an optional DOOR (D47, 4.9 §3): `null` = the engine's own ingress (the global token, the client's own user),
+ * `{ user, token, open }` = one of the engine's per-group doors — `user` is the group id the lookup is asked with (whoever the client did or did
+ * not authenticate as), `token` that door's password (the listener token), `open:true` a door that takes no credentials at all (the desktop
+ * launcher's `auth:false` group: a CONNECT with no Proxy-Authorization is accepted; SOCKS5 keeps requiring its handshake, so an open door serves CONNECT).
  */
 export function createIngress({ token, lookupIngress, handleFlow, connectUpstream, failure, timing = {}, refuse = () => {} }) {
   if (typeof token !== 'string' || token.length < 16) throw new TypeError('the ingress needs the install\'s token (a string of at least 16 characters)')
   for (const [n, f] of Object.entries({ lookupIngress, handleFlow, connectUpstream, failure })) if (typeof f !== 'function') throw new TypeError(`createIngress: ${n} is required`)
   const tokenHash = sha(token)
-  const tokenOk = (given) => crypto.timingSafeEqual(sha(String(given)), tokenHash)
+  const tokenOk = (given, against = tokenHash) => crypto.timingSafeEqual(sha(String(given)), against)
   // Who a record says tried: a name shaped like "<route>.<group>" that does not hold the token. Anything else is a client that put something else in
   // the username field, and when that is the token (a generator that swapped username and password, a credential with no colon) it must not be written
   // to flows/: no token, right or wrong, is in any record (§5.1).
@@ -214,7 +218,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
   const counters = { connections: 0, flows: 0, health: 0, authFailed: 0, unknown: 0, refused: 0, unreachable: 0 }
   const idle = new Set() // sockets that are not a flow: still in the handshake, or a health tunnel (closeIdle ends them; flows finish on their own)
 
-  async function handle(socket) {
+  async function handle(socket, door = null) {
     counters.connections++
     idle.add(socket); socket.once('close', () => idle.delete(socket))
     socket.on('error', () => {}) // ours from accept: a reset while we answer is this connection's end, never an uncaught exception (handleFlow adds its own once it owns the socket)
@@ -224,13 +228,14 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     const r = reader(socket, { onTooMuch: () => { unknown('the client sent more than 256 KiB before the tunnel was open'); socket.destroy() } })
     const w = { up: 0, down: 0 } // the opener's bytes in, and asight's answers out: not the agent's (§5.6)
     const say = (b) => { w.down += b.length; if (!socket.destroyed) socket.write(b) }
-    try { await serve(socket, r, peer, w, say, unknown, authFailed) } catch (e) {
+    try { await serve(socket, r, peer, w, say, unknown, authFailed, door) } catch (e) {
       socket.destroy()
       failure({ code: 'engine-error', peer, reason: `the proxy ingress failed on a connection: ${msgOf(e)}` })
     }
   }
 
-  async function serve(socket, r, peer, w, say, unknown, authFailed) {
+  async function serve(socket, r, peer, w, say, unknown, authFailed, door = null) {
+    const doorHash = door && typeof door.token === 'string' && door.token.length > 0 ? sha(door.token) : null
     const deadline = Date.now() + openerMs
     const first = await r.take(sniffOpener, deadline)
     if (first.gone) return void r.detach()
@@ -264,7 +269,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
       if (a.gone) return void r.detach()
       if (a.timeout || a.invalid) { unknown(a.invalid || `no complete SOCKS5 credentials within ${openerMs} ms`); r.detach(); return socket.destroy() }
       w.up += a.length
-      if (!tokenOk(a.pass)) { say(Buffer.from([1, 1])); authFailed(a.user, 'token mismatch'); r.detach(); return socket.end() }
+      if (!tokenOk(a.pass, doorHash ?? tokenHash)) { say(Buffer.from([1, 1])); authFailed(a.user, 'token mismatch'); r.detach(); return socket.end() }
       say(Buffer.from([1, 0]))
       const q = await r.take(socks5Request, deadline)
       if (q.gone) return void r.detach()
@@ -281,12 +286,16 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
       }
     }
 
-    // 2. the token, in constant time; a connection that did not present one never gets as far as a lookup
-    if (!o.authed && (o.pass === null || !tokenOk(o.pass))) { authFailed(o.user, o.pass === null ? 'no Proxy-Authorization' : 'token mismatch'); r.detach(); return o.denied() }
+    // 2. the token, in constant time; a connection that did not present one never gets as far as a lookup. A door of an `auth:false` group
+    //    (D47) takes no credentials at all: the connection is judged by its process, not by a password any process could copy.
+    if (!o.authed && !(door && door.open) && (o.pass === null || !tokenOk(o.pass, doorHash ?? tokenHash))) { authFailed(o.user, o.pass === null ? 'no Proxy-Authorization' : 'token mismatch'); r.detach(); return o.denied() }
+    // who this connection is for: a door names its group (the client's own user is only the engine's own ingress's to say), and the lookup
+    // answers it with the process the socket belongs to, not with anything the credentials claim
+    const who = door && typeof door.user === 'string' && door.user !== '' ? door.user : o.user
     // 3. who is this
     const dst = { address: o.target.host, port: o.target.port, ...(net.isIP(o.target.host) ? { family: net.isIP(o.target.host) } : {}) }
     let meta
-    try { meta = await lookupIngress({ peer, user: o.user, target: dst }) } catch (e) {
+    try { meta = await lookupIngress({ peer, user: who, target: dst }) } catch (e) {
       if (e && e.code === 'upstream-unavailable') { // the redirector would not hand over a connection it cannot dial (no login for the upstream, none to dial): asight's own code and the ingress's own part, not a lookup that failed (4.8 §12)
         failure({ where: 'ingress', code: 'upstream-unavailable', peer, ...(typeof e.why === 'string' ? { why: e.why } : {}), reason: `the upstream of the connection of ${shownUser(o.user)} to ${o.target.host}:${o.target.port} cannot be dialled (${msgOf(e)}); it was refused with a 502` })
       } else {
@@ -303,8 +312,8 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     if (meta.health) return healthTunnel(socket, r, o, meta.group, unknown)
 
     // 5. the upstream
-    const i = o.user.indexOf('.')
-    const route = i < 0 ? o.user : o.user.slice(0, i), group = i < 0 ? '' : o.user.slice(i + 1)
+    const i = who.indexOf('.')
+    const route = i < 0 ? who : who.slice(0, i), group = i < 0 ? '' : who.slice(i + 1)
     const up = meta.upstream || { kind: 'direct' }
     let current = null
     r.whenGone(() => { if (current) current.destroy() })
@@ -315,7 +324,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     const shown = { kind: up.kind || 'direct', ...(up.host ? { host: up.host } : {}), ...(up.port != null ? { port: up.port } : {}) }
     // The negative cache's key is part of the lookup's contract (§5.5); one that comes without it is keyed here the way the contract says, so a lookup that
     // forgets it cannot make every connection without a pid share the key "null" and poison one another's hosts.
-    const base = { ...meta, dst: meta.dst ?? dst, ingress: meta.ingress ?? { route, group }, negKey: meta.negKey ?? (meta.pid != null ? String(meta.pid) : o.user) }
+    const base = { ...meta, dst: meta.dst ?? dst, ingress: meta.ingress ?? { route, group }, negKey: meta.negKey ?? (meta.pid != null ? String(meta.pid) : who) }
     if (!d.ok) {
       r.detach()
       if (d.kind === 'refused') { counters.refused++; refuse({ ...base, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}) } }, { decision: 'tunnel', not_captured: 'proxy-refused', reason: d.reason }); return o.refusedBy(d) }
@@ -383,8 +392,9 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     }
   }
 
-  // the 'connection' listener: handle() reports its own failures; this is only the last resort, so a throw never goes unhandled
-  const connection = (s) => { handle(s).catch((e) => { s.destroy(); failure({ code: 'engine-error', reason: `the proxy ingress failed: ${msgOf(e)}` }) }) }
+  // the 'connection' listener: handle() reports its own failures; this is only the last resort, so a throw never goes unhandled. `door` is the
+  // per-group context of the listener this connection arrived on (D47), or null on the engine's own ingress.
+  const connection = (s, door = null) => { handle(s, door).catch((e) => { s.destroy(); failure({ code: 'engine-error', reason: `the proxy ingress failed: ${msgOf(e)}` }) }) }
   return {
     attach(server) { server.on('connection', connection) },
     connection,
