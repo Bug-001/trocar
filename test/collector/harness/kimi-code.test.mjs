@@ -142,7 +142,38 @@ test('kimi-code through install / uninstall: the shim runs kimi with the CA file
 
 test('kimi after uninstall, as data: untilEnviron names the variable the shim sets, so the manifest liveness snapshot carries "only a kimi started through the shim is reported, until it restarts" without the descriptor (4.6 step 5, 1.6 R3; test/off/off.test.mjs runs it)', async () => {
   const { livenessOf } = await import('../../../src/collector/core/registry.mjs')
-  assert.equal(kimi.trust.untilEnviron, kimi.trust.chain[0].var)
+  assert.equal(kimi.trust.untilEnviron, 'NODE_EXTRA_CA_CERTS')
+  assert.ok(kimi.trust.chain.some((e) => e.var === kimi.trust.untilEnviron), 'untilEnviron is one of the chain\'s doors (the marker entry, 2026-10-12, sits first — dsh\'s ordering)')
   assert.deepEqual(livenessOf(kimi, 'linux').until_environ, 'NODE_EXTRA_CA_CERTS')
   assert.deepEqual([livenessOf(kimi, 'linux').until, livenessOf(kimi, 'linux').rereads], ['restart', false])
+})
+
+test('kimi-code on an OS that cannot read the environment (macOS, the 2026-10-12 macOS test-machine gap): the shim\'s per-pid launch marker is the trust door; a stale marker is not', async () => {
+  const { createTrustChecker, markerLayer, MARKER_VAR } = await import('../../../src/collector/core/trust/confirm.mjs')
+  const s = sandbox()
+  try {
+    const dir = path.join(s.home, '.asight', 'collector')
+    const pem = s.put('.asight/collector/ca/asight-ca.pem', CA.certPem)
+    s.put('.asight/collector/bin/kimi', '#!/bin/sh\n') // the shim is installed (the opt-in's job on darwin)
+    const readText = (f) => { try { return fs.readFileSync(f, 'utf8') } catch { return null } }
+    const check = createTrustChecker({ caCertPem: CA.certPem })
+    const startedAt = Date.now()
+    const at = (environ, layers) => check.check(kimi.trust, { environ, layers, cwd: '/', startedAt, argv: ['kimi-code'], extra: { readText, collectorDir: dir, exe: SEA } })
+    // the darwin reality: environ empty (never read), the tracker builds the marker layer from the shim's file
+    assert.equal(at(new Map(), []).reason, 'kimi-not-via-shim', 'with no marker and no environment the reason is the shim\'s')
+    const markers = s.put('.asight/collector/run/trust/.keep', '')
+    const markerDir = path.dirname(markers)
+    const layerOf = () => markerLayer({ dir: markerDir, pid: 4242, startTicks: String(startedAt), caPem: pem, readText, toleranceMs: 2000 })
+    assert.equal(layerOf(), null, 'no marker file, no layer (a kimi not started by the shim writes none)')
+    fs.writeFileSync(path.join(markerDir, '4242'), `${startedAt + 500}\n`)
+    const layer = layerOf()
+    assert.equal(layer && layer.vars[MARKER_VAR], pem, 'the marker names the CA file (the layer the tracker pushes)')
+    assert.equal(at(new Map(), [layer]).trusted, true, 'a fresh marker trusts where the environment cannot be read')
+    assert.equal(kimi.trust.chain[0].var, MARKER_VAR, 'the chain\'s first door is the marker (dsh\'s ordering)')
+    fs.writeFileSync(path.join(markerDir, '4242'), `${startedAt - 90000}\n`)
+    const stale = layerOf()
+    assert.equal(stale.ignored, 'marker-stale', 'a reused pid\'s marker reads stale')
+    assert.equal(at(new Map(), [stale]).trusted, false, 'a stale marker never trusts (this life was not the shim\'s)')
+    assert.deepEqual(kimi.layers({}), [], 'the descriptor declares the layers contract (darwin\'s osLayers calls it — an absent one threw "own is not a function" in the live judge)')
+  } finally { s.done() }
 })

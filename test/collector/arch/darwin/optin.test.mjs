@@ -99,6 +99,10 @@ test('the rc-path apply: the shim carries the kernel listener and the CA; the li
   const text = fs.readFileSync(shim, 'utf8')
   assert.match(text, /HTTPS_PROXY='http:\/\/kimi-code\.cli:b{32}@127\.0\.0\.1:17992'/, 'the kernel listener, quoted for the shell')
   assert.match(text, new RegExp(`NODE_EXTRA_CA_CERTS='${path.join(w.dir, 'ca', 'asight-ca.pem')}'`), 'the CA file Node reads')
+  // the per-pid launch marker (the 2026-10-12 mac-lab gap: macOS never reads another process's env, so the shim's marker —
+  // <collector>/run/trust/<pid>, the start time in ms, the plugin markers' door — is the trust the tracker can confirm)
+  assert.match(text, new RegExp(`_m="\\$\\(dirname "\\$\\(dirname '${path.join(w.dir, 'ca', 'asight-ca.pem')}'\\)"\\)/run/trust"`), 'the marker directory, derived from the CA file\'s collector dir')
+  assert.match(text, /echo "\$\(date \+%s\)000" > "\$_m\/\$\$" 2>\/dev\/null/, 'the marker write: the start time in ms under the shim\'s own pid, failures swallowed')
   assert.match(text, new RegExp(`'${path.join(w.home, '.kimi-code', 'bin', 'kimi')}'`), 'the real binary it forwards to')
   assert.ok(fs.statSync(shim).mode & 0o111, 'executable')
   const zshrc = fs.readFileSync(path.join(w.home, '.zshrc'), 'utf8')

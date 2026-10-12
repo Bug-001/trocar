@@ -190,9 +190,10 @@ test('every darwin data file has the shape the later tasks read: groups, forms, 
     }
     const proxy = w.proxy
     assert.deepEqual(Object.keys(proxy).sort(), ['branches', 'env', 'files', 'measured', 'restart', 'schemes', 'systemProxy', 'unsupported'], `${h}: the proxy export has the 1.6 §9.7 fields`)
-    // cc and codex measured live on macOS (the 4.9 smoke: the trust door written, the agent's CONNECT through the pinned kernel, the decrypted flow row); the other
-    // five still ride the Linux/Windows labs' rows read through the darwin doors — nothing of them is measured on macOS yet (MA4)
-    assert.deepEqual(proxy.measured, { darwin: h === 'claude-code' || h === 'codex' ? 'lab' : 'inferred' }, `${h}: measured on macOS only where the lab smoke ran it`)
+    // cc and codex measured live on macOS (the 4.9 smoke: the trust door written, the agent's CONNECT through the pinned kernel, the decrypted flow row); kimi's env
+    // door measured 2026-10-12 (kimi 2.1.1 darwin: HTTPS_PROXY at spawn moves the client — CONNECT with Basic proxy-authorization, the credentialed door URL honored);
+    // the other four still ride the Linux/Windows labs' rows read through the darwin doors — nothing more of them is measured on macOS (MA4)
+    assert.deepEqual(proxy.measured, { darwin: h === 'claude-code' || h === 'codex' || h === 'kimi-code' ? 'lab' : 'inferred' }, `${h}: measured on macOS only where the lab smoke ran it`)
   }
 })
 
