@@ -106,19 +106,28 @@ const kernelUrlOf = ({ group, ingress, what }) => {
 // the zsh rc files the PATH line goes in (4.9 §2.3's kimi row): zsh reads a different subset per shell kind — a line only in .zshrc is
 // invisible to a non-interactive or login-only shell — so every one of the four that exists is lined
 const RC_FILES = ['.zshrc', '.zshenv', '.zprofile', '.zlogin']
-// the anchor: in a file that holds the Kimi installer's own PATH line, asight's goes after it (within a file the later export wins, so
-// the shim comes first in every read order — the base's ordering rule, harness/kimi-code.mjs's)
-const INSTALLER_LINE = '^[^#]*\\.kimi-code/bin'
+// where in a file the line goes: after the LAST line that sets PATH (an installer's own PATH line is one). Within a file the later export
+// wins, so the line must sit below every PATH-setting line or the installer's export shadows the shim — measured on a macOS test machine
+// (the opencode gap ledger): a real ~/.zshrc held kimi's PATH line ABOVE opencode's, the insert anchored at kimi's landed between them, and
+// `opencode run` resolved the real binary (no HTTPS_PROXY) straight to the relay — `unable to verify the first certificate`.
+const PATH_LINE = '^[^#]*(export[ \t]+)?PATH='
 // the real binary each command's shim forwards to: the native installs' own paths (the npm kimi build has no shim entry, as on Linux and
 // Windows; OpenCode's npm install is itself unmeasured, MA4)
 const REAL_BINARY = { kimi: (home) => path.join(home, '.kimi-code', 'bin', 'kimi'), opencode: (home) => path.join(home, '.opencode', 'bin', 'opencode') }
 
 // the desktop-launcher item's own constants (4.9 §6.4, 2026-10-12): the launcher's name, the bypass list carried beside the switch (the two
-// loopback names stay direct, and <-loopback> cancels Chromium's wider implicit link-local bypass so nothing else silently escapes), and the
-// bundle binaries in the order the form's own patterns meet them (/Applications first, ~/Applications as the fallback)
+// loopback names stay direct, and <-loopback> cancels Chromium's wider implicit link-local bypass so nothing else silently escapes), and
+// the bundle binaries in the order the form's own patterns meet them (/Applications first, ~/Applications as the fallback)
 const LAUNCHER_NAME = 'claude-desktop-asight'
 const PROXY_BYPASS = '127.0.0.1,localhost,<-loopback>'
 const DESKTOP_BINS = (home) => [path.join(path.sep, 'Applications', 'Claude.app', 'Contents', 'MacOS', 'Claude'), path.join(home, 'Applications', 'Claude.app', 'Contents', 'MacOS', 'Claude')]
+// the apps the launcher item serves (each row: its own stub name and its own bundle binaries). Claude Desktop's door is §6.4's measured one;
+// the dsh desktop's is measured: ~/.dsh/.env is NOT its door — a launcher key (DEEPSEEK_BASE_URL) in it is
+// FATAL to the app's dsh core, a proxy key in it is ignored by its Chromium network service — while Chromium's --proxy-server steers it live
+const LAUNCHERS = {
+  'claude-code.desktop': { name: LAUNCHER_NAME, bins: DESKTOP_BINS, app: 'Claude Desktop', binsNamed: '/Applications/Claude.app nor ~/Applications/Claude.app' },
+  'deepseek-dsh.desktop': { name: 'dsh-desktop-asight', app: 'DeepSeek Harness (the desktop app)', binsNamed: '/Applications/DeepSeek Harness.app nor ~/Applications/DeepSeek Harness.app', bins: (home) => [path.join(path.sep, 'Applications', 'DeepSeek Harness.app', 'Contents', 'MacOS', 'DeepSeek Harness'), path.join(home, 'Applications', 'DeepSeek Harness.app', 'Contents', 'MacOS', 'DeepSeek Harness')] },
+}
 
 /** The sentinel PATH line — ONE text for every command (the line is the shared item the reference count is about, 4.9 §2.3's kimi row);
  *  src/off/darwin-optin.mjs carries its own copy and test/collector/arch/darwin/optin.test.mjs holds the two equal. */
@@ -159,7 +168,7 @@ function rcPathValues(a) {
       for (const rc of rcs) {
         const text = f.readFileSync(rc, 'utf8')
         if (text.includes(line)) { done.push({ file: rc, lined: 'already' }); continue } // the other command's item, or an earlier run: the line is the shared item, written once
-        const anchor = command === 'kimi' && new RegExp(INSTALLER_LINE, 'm').test(text) ? INSTALLER_LINE : null
+        const anchor = new RegExp(PATH_LINE, 'm').test(text) ? PATH_LINE : null // after the last PATH-setting line; a file without one gets the line at its end
         const r = insertLine(text, { line, after: anchor })
         const backup = writeBackup({ home, file: rc, data: Buffer.from(text, 'utf8'), now: now(), fs: f }) // R2: before the change
         f.writeFileSync(rc, r.text)
@@ -236,13 +245,14 @@ function desktopLauncherValues(a) {
   const g = groupOf(groups, row.form)
   if (!g) return { error: `the form ${row.form} is not in this on's groups` }
   if (g.group.auth !== false) return { error: `the group ${g.g} takes credentials at its listener, but Chromium ignores credentials embedded in --proxy-server: the launcher door is only for a group whose listener carries none (4.9 §6.4)` }
-  const desktopBins = deps.desktopBins || DESKTOP_BINS // the world's list, injectable like everything else (a test's sandbox HOME cannot unmake a real /Applications)
+  const spec = LAUNCHERS[row.form] || { name: LAUNCHER_NAME, app: 'the desktop app', binsNamed: 'its expected location', bins: DESKTOP_BINS }
+  const desktopBins = deps.desktopBins || spec.bins || DESKTOP_BINS // the world's injectable first (a test's sandbox HOME cannot unmake a real /Applications), the app's own list (LAUNCHERS) second
   const appBinary = desktopBins(home).find((p) => f.existsSync(p)) || null
-  if (!appBinary) return { refuse: { reason: `Claude Desktop is not installed (neither /Applications/Claude.app nor ~/Applications/Claude.app holds the bundle binary), so asight writes no launcher — there is nothing for it to start` } }
-  const ku = kernelUrlOf({ group: g, ingress: ingressOf({ dir, deps, fs: f }), what: 'the Claude Desktop launcher' })
+  if (!appBinary) return { refuse: { reason: `${spec.app} is not installed (neither ${spec.binsNamed} holds the bundle binary), so asight writes no launcher — there is nothing for it to start` } }
+  const ku = kernelUrlOf({ group: g, ingress: ingressOf({ dir, deps, fs: f }), what: `the ${spec.app} launcher` })
   if (ku.error) return { error: ku.error }
   const binDir = path.join(dir, 'bin')
-  const launcher = path.join(binDir, LAUNCHER_NAME)
+  const launcher = path.join(binDir, spec.name)
   const stub = renderShTemplate('claude-desktop.sh.tmpl', { proxy: ku.url, proxyBypass: PROXY_BYPASS, realBinary: appBinary })
   return { parts: [{
     kind: 'optin-desktop-launcher',
@@ -257,7 +267,7 @@ function desktopLauncherValues(a) {
       if (!(f.statSync(launcher).mode & 0o111)) return { ok: false, reason: 'the launcher file is not executable' }
       return { ok: true }
     },
-  }], summary: `${LAUNCHER_NAME} in ${binDir}, starting ${appBinary} with Chromium's --proxy-server at ${ku.url} (an address with no password: you named the item, the listener binds loopback only, and the engine still judges every process; the launcher steers ONLY Desktop instances started through it — a Desktop that is already running is untouched)` }
+  }], summary: `${spec.name} in ${binDir}, starting ${appBinary} with Chromium's --proxy-server at ${ku.url} (an address with no password: you named the item, the listener binds loopback only, and the engine still judges every process; the launcher steers ONLY instances started through it — one that is already running is untouched)` }
 }
 
 /** The user half's driver — the win32 twin's applyUserOne, same logic: refuse / error → nothing written; the part is ledgered BEFORE its

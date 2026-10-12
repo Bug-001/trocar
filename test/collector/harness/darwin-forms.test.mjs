@@ -36,10 +36,11 @@ const EXPECT = {
     unknown: ['/opt/tools/claude', '/opt/tools/Claude Helper'],
   },
   'codex': {
-    groups: { 'codex.env': ['codex.cli'] },
+    groups: { 'codex.env': ['codex.cli', 'codex.vscode'] },
     forms: {
       'codex.cli': { nameRule: false, yes: [`${U}/.nvm/versions/node/v22.20.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex`, '/opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-x64/vendor/x86_64-apple-darwin/bin/codex', `${U}/.codex/packages/app-server-daemon/releases/0.0.1234-abcd/bin/codex`] },
-      'codex.vscode': { nameRule: false, yes: [], unmeasured: true }, // the editor extension's codex (4.6 OPEN ①)
+      // the extension's own binary, measured on macOS (openai.chatgpt 26.1002.51308-darwin-aarch64): it reads the same $CODEX_HOME the cli form does, so it joins the one entry group
+      'codex.vscode': { nameRule: false, yes: [`${U}/.vscode/extensions/openai.chatgpt-26.1002.51308-darwin-aarch64/bin/macos-aarch64/codex`] },
       'codex.app': { nameRule: false, yes: [], unmeasured: true }, // the desktop app's codex (4.6 OPEN ①)
     },
     unknown: ['/opt/tools/codex'],
@@ -54,10 +55,18 @@ const EXPECT = {
     unknown: ['/opt/tools/opencode'],
   },
   'deepseek-dsh': {
-    groups: { 'deepseek-dsh.env': ['deepseek-dsh.cli'] },
+    groups: { 'deepseek-dsh.env': ['deepseek-dsh.cli'], 'deepseek-dsh.desktop': ['deepseek-dsh.desktop'] },
     forms: {
       // the agent is node with dsh's entry script in its command line (…/@deepseek-ai/dsh/lib/bin.js, or …/bin/dsh — the global npm symlink); there is no macOS desktop form (4.9 §2.3's row names none)
       'deepseek-dsh.cli': { nameRule: false, yes: [{ exe: '/usr/local/bin/node', cmdline: `/usr/local/bin/node ${U}/.nvm/versions/node/v22.20.0/lib/node_modules/@deepseek-ai/dsh/lib/bin.js` }, { exe: `${U}/.nvm/versions/node/v22.20.0/bin/node`, cmdline: `${U}/.nvm/versions/node/v22.20.0/bin/node ${U}/.nvm/versions/node/v22.20.0/bin/dsh` }] },
+      // the desktop app (dmg 0.2.0-rc.2, measured on macOS): the bundle's main binary and its Chromium Helper family — the
+      // network utility Helper owns the sockets; ~/.dsh/.env is READ but a launcher key in it is fatal to the core and a proxy key in it is
+      // ignored by the network service, so the door is the LAUNCHER (Chromium's --proxy-server), not the CLI's shared .env group
+      'deepseek-dsh.desktop': { nameRule: false, optIn: true, yes: [
+        '/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness', `${U}/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness`,
+        '/Applications/DeepSeek Harness.app/Contents/Frameworks/DeepSeek Harness Helper.app/Contents/MacOS/DeepSeek Harness Helper',
+        '/Applications/DeepSeek Harness.app/Contents/Frameworks/DeepSeek Harness Helper (Renderer).app/Contents/MacOS/DeepSeek Harness Helper (Renderer)',
+      ] },
     },
     unknown: [],
   },
@@ -123,7 +132,7 @@ test('all seven harnesses have macOS data, and the table above covers every one 
   const seven = ['claude-code', 'codex', 'deepseek-dsh', 'hermes', 'kimi-code', 'opencode', 'z-code']
   assert.deepEqual(Object.keys(MAC).sort(), seven)
   assert.deepEqual(Object.keys(EXPECT).sort(), seven)
-  assert.equal(formsOf().length, 16, 'the 16 forms the darwin data carries (dsh has no macOS desktop form — 4.9 §2.3 names none; claude-code.native is the version-named file\'s path-only shape; the six unmeasured ones are listed so status says unknown · not measured)')
+  assert.equal(formsOf().length, 17, 'the 17 forms the darwin data carries (claude-code.native is the version-named file\'s path-only shape; dsh\'s desktop is the dmg app, measured 2026-10-12; the five unmeasured ones are listed so status says unknown · not measured)')
 })
 
 test('the pattern lint accepts the subset and rejects what JavaScript and .NET read differently, so the real data passing it means something', () => {
@@ -202,8 +211,8 @@ test('every darwin data file has the shape the later tasks read: groups, forms, 
   }
 })
 
-test('the group table: the one shared group holds its forms, the env groups of codex and dsh hold their one measured form each (an unmeasured form has no group), and a group has at most one form without a process rule', () => {
-  const shared = { 'claude-code.settings': ['claude-code.native', 'claude-code.cli', 'claude-code.vscode'], 'codex.env': ['codex.cli'], 'deepseek-dsh.env': ['deepseek-dsh.cli'] }
+test('the group table: the one shared group holds its forms, the env groups of codex and dsh hold their measured forms (an unmeasured form has no group), and a group has at most one form without a process rule', () => {
+  const shared = { 'claude-code.settings': ['claude-code.native', 'claude-code.cli', 'claude-code.vscode'], 'codex.env': ['codex.cli', 'codex.vscode'], 'deepseek-dsh.env': ['deepseek-dsh.cli'], 'deepseek-dsh.desktop': ['deepseek-dsh.desktop'] }
   for (const [h, w] of Object.entries(MAC)) {
     for (const g of w.groups) {
       const members = w.forms.filter((f) => f.g === g.g).map((f) => f.id)
@@ -320,11 +329,13 @@ const GROUPS = {
   'opencode.cli': { follows: [false, false], auth: true, entry: { kind: 'shim', command: 'opencode' } },
   'kimi-code.cli': { follows: [false, false], auth: true, entry: { kind: 'shim', command: 'kimi' } },
   'deepseek-dsh.env': { follows: [false, false], auth: true, entry: { kind: 'file', format: 'dotenv-block', block: { urlVar: 'HTTPS_PROXY', fixed: {} } } },
+  'deepseek-dsh.desktop': { follows: ['unknown', 'unknown'], auth: false, entry: { kind: 'launcher' } }, // the dmg app, measured 2026-10-12: .env is not its door (launcher keys fatal, proxy keys ignored), Chromium's --proxy-server at a credential-less launcher is — the Claude Desktop §6.4 shape; whether it follows the SYSTEM proxy is unmeasured
   'hermes.cli': { follows: [true, false], noProxyKey: 'NO_PROXY', auth: true, entry: { kind: 'file', format: 'dotenv-block', block: { urlVar: 'HTTPS_PROXY', fixed: { NO_PROXY: 'localhost,127.0.0.1,::1' } } } },
   'z-code.cli': { follows: [false, false], auth: true, entry: { kind: 'file', format: 'json-key', key: ['network', 'httpProxy'] } },
 }
-const OPT_IN = { // 4.8 §2.4 · 4.9 §2.4 · §6.4: the item, its scope, and when a machine-level item applies; an automatic group has none. v1 macOS has no machine-level item at all (4.9 §2.4: the win32 dispatcher items have no macOS counterpart; the one launcher item is Claude Desktop's measured door, §6.4)
+const OPT_IN = { // 4.8 §2.4 · 4.9 §2.4 · §6.4: the item, its scope, and when a machine-level item applies; an automatic group has none. v1 macOS has no machine-level item at all (4.9 §2.4: the win32 dispatcher items have no macOS counterpart; the two launcher items are Claude Desktop's measured door and dsh's, §6.4's shape measured 2026-10-12)
   'claude-code.desktop': [['keychain-login', 'user'], ['desktop-launcher', 'user']],
+  'deepseek-dsh.desktop': [['desktop-launcher', 'user']],
   'opencode.cli': [['user-path-shim', 'user']],
   'kimi-code.cli': [['user-path-shim', 'user']],
 }
@@ -413,10 +424,10 @@ test('a group\'s proxy entry goes into the files its trust entry does (Claude Co
   assert.ok(MAC.hermes.inject(rctx).entries.some((e) => e.format === 'line' && e.path === path.join(rw.home, '.hermes', 'profiles', 'work', 'config.yaml')), 'the chat_completions route itself gets its ssl_ca_cert trust line')
 })
 
-test('no darwin group is an app-setting or a policy entry, and the ONE launcher is Claude Desktop\'s measured door: every form that would carry another (the Z-Code Desktop, the Kimi and Codex extensions, the OpenCode desktop) is not measured on macOS, so it has no group and nothing of it is ever located or written', () => {
-  assert.deepEqual(groupsOf().map((g) => g.proxyEntry.kind).sort(), ['file', 'file', 'file', 'file', 'file', 'launcher', 'shim', 'shim'], 'the darwin entry kinds: five files, two shims, one launcher — Claude Desktop\'s door, measured 2026-10-12 (4.9 §6.4)')
-  assert.deepEqual(groupsOf().filter((g) => g.proxyEntry.kind === 'launcher').map((g) => g.g), ['claude-code.desktop'], 'the launcher group is exactly the desktop one')
-  for (const id of ['codex.vscode', 'codex.app', 'opencode.desktop', 'hermes.desktop', 'kimi-code.vscode', 'z-code.desktop']) {
+test('no darwin group is an app-setting or a policy entry, and the TWO launchers are Claude Desktop\'s and the dsh desktop\'s measured doors: every form that would carry another (the Z-Code Desktop, the Kimi extension, the Codex app, the OpenCode desktop) is not measured on macOS, so it has no group and nothing of it is ever located or written', () => {
+  assert.deepEqual(groupsOf().map((g) => g.proxyEntry.kind).sort(), ['file', 'file', 'file', 'file', 'file', 'launcher', 'launcher', 'shim', 'shim'], 'the darwin entry kinds: five files, two shims, two launchers — Claude Desktop\'s door (measured 2026-10-12, 4.9 §6.4) and the dsh desktop\'s (the dmg app, measured 2026-10-12: .env is not its door)')
+  assert.deepEqual(groupsOf().filter((g) => g.proxyEntry.kind === 'launcher').map((g) => g.g), ['claude-code.desktop', 'deepseek-dsh.desktop'], 'the launcher groups are exactly the two desktops')
+  for (const id of ['codex.app', 'opencode.desktop', 'hermes.desktop', 'kimi-code.vscode', 'z-code.desktop']) {
     const f = formsOf().find((x) => x.id === id)
     assert.equal(f.supported.reason, 'not-measured', id)
     assert.equal(f.g, null, `${id}: no group, so there is no entry of it to locate`)

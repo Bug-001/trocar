@@ -46,9 +46,9 @@ test('the catalog: the darwin harness data\'s opt-in items surface as plan rows,
   const m = newManifest(new Date())
   m.entries.push({ kind: 'optin-rc-path', harness: 'kimi-code', form: 'kimi-code.cli', item: 'user-path-shim', scope: 'user', path: '/x', confirmed: true })
   assert.equal(planOptIns({ groups: groupsOf([byName('kimi-code')]), manifest: m }).find((r) => r.form === 'kimi-code.cli').state, 'done')
-  assert.deepEqual(optinFormsOf(groupsOf(descs)).sort(), ['claude-code.desktop', 'kimi-code.cli', 'opencode.cli'])
+  assert.deepEqual(optinFormsOf(groupsOf(descs)).sort(), ['claude-code.desktop', 'deepseek-dsh.desktop', 'kimi-code.cli', 'opencode.cli'])
   // the arch object exposes the same hooks the CLI reaches (forms / plan / apply — the flip checklist ④'s seam)
-  assert.deepEqual(darwin.optIn.forms({ harnesses: descs }).sort(), ['claude-code.desktop', 'kimi-code.cli', 'opencode.cli'])
+  assert.deepEqual(darwin.optIn.forms({ harnesses: descs }).sort(), ['claude-code.desktop', 'deepseek-dsh.desktop', 'kimi-code.cli', 'opencode.cli'])
   const viaArch = darwin.optIn.plan({ harnesses: descs, optIn: [] })
   assert.equal(viaArch.length, rows.length)
 })
@@ -63,7 +63,7 @@ function world({ commands = ['kimi'] } = {}) {
   fs.mkdirSync(path.join(dir, 'ca'), { recursive: true })
   const ca = createCa({ commonName: 'optin test CA' })
   fs.writeFileSync(path.join(dir, 'ca', 'asight-ca.pem'), ca.certPem)
-  fs.writeFileSync(path.join(dir, 'ingress.json'), JSON.stringify({ enginePort: 17990, groupPorts: { 'kimi-code.cli': GROUP_PORT, 'opencode.cli': GROUP_PORT + 1, 'claude-code.desktop': DESKTOP_PORT }, ingressToken: 'a'.repeat(32), listenerToken: LISTENER_TOKEN }))
+  fs.writeFileSync(path.join(dir, 'ingress.json'), JSON.stringify({ enginePort: 17990, groupPorts: { 'kimi-code.cli': GROUP_PORT, 'opencode.cli': GROUP_PORT + 1, 'claude-code.desktop': DESKTOP_PORT, 'deepseek-dsh.desktop': DESKTOP_PORT + 1 }, ingressToken: 'a'.repeat(32), listenerToken: LISTENER_TOKEN }))
   fs.mkdirSync(path.join(home, '.kimi-code', 'bin'), { recursive: true })
   fs.writeFileSync(path.join(home, '.kimi-code', 'bin', 'kimi'), '#!/bin/sh\nexec the-real-kimi "$@"\n', { mode: 0o755 })
   fs.mkdirSync(path.join(home, '.opencode', 'bin'), { recursive: true })
@@ -141,6 +141,22 @@ test('the rc-path apply: a second command over the same rc files adds no second 
   assert.equal(r2.results[0].result, 'undone', JSON.stringify(r2))
   assert.deepEqual([fs.readFileSync(path.join(w.home, '.zshrc'), 'utf8'), fs.readFileSync(path.join(w.home, '.zshenv'), 'utf8')], [zshrcBefore, zshenvBefore], 'byte for byte, via the backups (V56)')
   assert.ok(!fs.existsSync(path.join(w.dir, 'bin')), 'the shim directory went with the last shim')
+})
+
+// the 2026-10-12 mac-lab incident (the opencode gap ledger): a real ~/.zshrc holds SEVERAL installers' PATH lines — kimi's ABOVE opencode's — and
+// the anchored insert (after kimi's line only) landed BETWEEN them: opencode's own later export then shadowed the shim, `opencode run` resolved the
+// real binary (no HTTPS_PROXY) and refused the relay with `unable to verify the first certificate`. Within a file the LATER export wins, so the line
+// must sit after EVERY line that sets PATH — the last one, not just the named installer's.
+test('the rc line goes after EVERY line that sets PATH, not only the named installer\'s — a second installer\'s PATH line below kimi\'s must not shadow the shim (the 2026-10-12 opencode gap)', async () => {
+  const w = world({ commands: ['kimi', 'opencode'] })
+  fs.writeFileSync(path.join(w.home, '.zshrc'), '# kimi-code\nexport PATH="$HOME/.kimi-code/bin:$PATH"\n\n# opencode\nexport PATH=$HOME/.opencode/bin:$PATH\n')
+  const { out } = await w.apply('kimi-code', 'kimi-code.cli', 'user-path-shim') // the shared line is written by whichever item lands first
+  assert.equal(out.state, 'done')
+  const zshrc = fs.readFileSync(path.join(w.home, '.zshrc'), 'utf8')
+  const line = rcLineOf(path.join(w.dir, 'bin'))
+  const at = (needle) => zshrc.indexOf(needle)
+  assert.ok(at(line) > at('.kimi-code/bin'), 'after kimi\'s installer line — its export loses to the later one')
+  assert.ok(at(line) > at('.opencode/bin'), 'after the OTHER installer\'s PATH line too — within a file the later export wins, so nothing below the line can shadow the shim (asight\'s bin first in every read order)')
 })
 
 test('the rc-path undo: a file the user edited since keeps their edits — only asight\'s line goes (D28)', async () => {
@@ -304,10 +320,32 @@ test('the desktop-launcher apply refuses what it must, writing nothing: no Claud
   const w = world()
   fs.rmSync(path.join(w.home, 'Applications', 'Claude.app'), { recursive: true, force: true })
   const a = await w.apply('claude-code', 'claude-code.desktop', 'desktop-launcher')
-  assert.deepEqual([a.out.state, a.entry], ['failed', undefined], JSON.stringify(a.out))
+  assert.deepEqual([a.out.state, a.entry], ["failed", undefined], JSON.stringify(a.out))
   assert.match(a.out.reason, /Claude Desktop is not installed/)
   assert.ok(!fs.existsSync(path.join(w.dir, 'bin')), 'no launcher was written')
   assert.ok(w.wrote.failures.some((f) => f.code === 'optin-failed' && f.item === 'desktop-launcher'), 'the refusal is recorded, not silent (D38)')
+})
+
+// the SECOND launcher (the dsh desktop, measured on macOS: ~/.dsh/.env is not its door — a launcher key there is fatal to
+// its dsh core and a proxy key there is ignored by its Chromium network service — Chromium's --proxy-server at a credential-less listener is):
+// the same item, the app's own bundle binary, its own launcher name, the group's own port
+test('the desktop-launcher apply for the dsh desktop: a stub that execs DeepSeek Harness with the same switch shape at ITS group\'s port (the 2026-10-12 measurement)', async () => {
+  const w = world()
+  fs.mkdirSync(path.join(w.home, 'Applications', 'DeepSeek Harness.app', 'Contents', 'MacOS'), { recursive: true })
+  const dshApp = path.join(w.home, 'Applications', 'DeepSeek Harness.app', 'Contents', 'MacOS', 'DeepSeek Harness')
+  fs.writeFileSync(dshApp, '#!/bin/sh\nexec the-real-dsh-desktop "$@"\n', { mode: 0o755 })
+  const { out, entry } = await w.apply('deepseek-dsh', 'deepseek-dsh.desktop', 'desktop-launcher', { desktopBins: () => [dshApp] })
+  assert.deepEqual([out.state, out.reason], ['done', undefined], JSON.stringify(out))
+  const launcher = path.join(w.dir, 'bin', 'dsh-desktop-asight')
+  const text = fs.readFileSync(launcher, 'utf8')
+  assert.match(text, new RegExp(`exec '${dshApp}' --proxy-server='http://127\\.0\\.0\\.1:${DESKTOP_PORT + 1}'`), 'the dsh group\'s own no-credentials listener')
+  assert.ok(!text.includes(LISTENER_TOKEN), 'NO credentials here either')
+  assert.ok(fs.statSync(launcher).mode & 0o111, 'executable')
+  assert.deepEqual([entry.form, entry.item], ['deepseek-dsh.desktop', 'desktop-launcher'])
+  // the Claude launcher is untouched beside it — two apps, two stubs, one shape
+  const claude = await w.apply('claude-code', 'claude-code.desktop', 'desktop-launcher')
+  assert.equal(claude.out.state, 'done')
+  assert.ok(fs.existsSync(path.join(w.dir, 'bin', 'claude-desktop-asight')) && fs.existsSync(launcher), 'both launchers coexist')
 })
 
 test('the desktop-launcher undo: the launcher goes, the bin directory with it when empty — and a second undo says absent, never fails', async () => {
